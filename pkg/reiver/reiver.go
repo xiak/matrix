@@ -26,7 +26,7 @@ func DefaultReiver(course string) *Reiver {
 
 	return &Reiver{
 		Name: 	"Reiver - Http",
-		T:		ship.Purifier,
+		T:		ship.Reiver,
 		Course: course,
 		Equipment: e,
 	}

@@ -2,7 +2,7 @@ package base
 
 import (
 	"sync/atomic"
-	"time"
+	"github.com/xiak/matrix/pkg/ship"
 )
 
 /**
@@ -13,10 +13,8 @@ import (
  * @DispatchTask 发布任务
  */
 type Base interface {
-	ShipFactory()
-	EngineFactory()
-	PublishQuest(quest Quest)
-	TakeQuest(quest Quest)
+	PublishQuest()
+	ConsumeQuest()
 }
 
 /**

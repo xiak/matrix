@@ -278,6 +278,7 @@ func (s *HttpSpoil)GetCourse() string {
 }
 
 type HttpTransformer struct {
+	Course  string
 	Storage []byte
 }
 

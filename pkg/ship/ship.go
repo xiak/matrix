@@ -24,6 +24,7 @@ type Spoil interface {
 type Equipment interface {
 	Weapon
 	Collector
+	Transformer
 }
 
 // 飞船接口
