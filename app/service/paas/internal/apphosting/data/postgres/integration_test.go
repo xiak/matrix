@@ -1046,6 +1046,11 @@ func assertOperationQueue(
 	if err != nil {
 		t.Fatalf("create Operation queue repository: %v", err)
 	}
+	readiness, err := repository.Readiness(ctx)
+	if err != nil || readiness.State != paasv1.ReadinessReady ||
+		paasv1.ValidateReadiness(readiness) != nil {
+		t.Fatalf("read PaaS worker readiness: value=%#v err=%v", readiness, err)
+	}
 	queue, err := operationqueue.NewQueue(
 		repository,
 		operationqueue.Config{LeaseDuration: 30 * time.Second},

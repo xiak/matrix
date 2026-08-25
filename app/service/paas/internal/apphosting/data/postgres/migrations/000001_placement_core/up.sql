@@ -1747,6 +1747,28 @@ $function$;
 REVOKE ALL ON FUNCTION paas.readiness() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION paas.readiness() TO matrix_paas_api;
 
+CREATE OR REPLACE FUNCTION paas.worker_readiness()
+RETURNS TABLE (ready boolean, schema_version bigint, checked_at timestamptz)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+    SELECT
+        to_regclass('paas.operations') IS NOT NULL
+        AND to_regclass('paas.execution_targets') IS NOT NULL
+        AND to_regclass('paas.adapter_commands') IS NOT NULL
+        AND to_regprocedure('paas.claim_operation(text,integer)') IS NOT NULL
+        AND to_regprocedure(
+            'paas.advance_operation(text,text,bigint,text,jsonb,timestamptz,boolean)'
+        ) IS NOT NULL,
+        1::bigint,
+        transaction_timestamp()
+$function$;
+
+REVOKE ALL ON FUNCTION paas.worker_readiness() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paas.worker_readiness() TO matrix_paas_worker;
+
 CREATE OR REPLACE FUNCTION paas.claim_operation(
     requested_worker_id text,
     requested_lease_seconds integer

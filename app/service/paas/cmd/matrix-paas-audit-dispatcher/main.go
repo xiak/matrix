@@ -13,6 +13,7 @@ import (
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/internal/processconfig"
+	"github.com/xiak/matrix/app/service/internal/processhttp"
 	audithttp "github.com/xiak/matrix/app/service/paas/internal/apphosting/data/audithttp"
 	paaspostgres "github.com/xiak/matrix/app/service/paas/internal/apphosting/data/postgres"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/auditdispatch"
@@ -23,6 +24,7 @@ const (
 	auditEndpointEnvironment   = "MATRIX_PAAS_AUDIT_ENDPOINT"
 	credentialFileEnvironment  = "MATRIX_PAAS_AUDIT_CREDENTIAL_FILE"
 	workerIDEnvironment        = "MATRIX_PAAS_AUDIT_WORKER_ID"
+	listenAddressEnvironment   = "MATRIX_PAAS_AUDIT_LISTEN_ADDRESS"
 	pollInterval               = 250 * time.Millisecond
 )
 
@@ -31,6 +33,7 @@ type configuration struct {
 	auditEndpoint   string
 	credentialFile  string
 	workerID        string
+	listenAddress   string
 }
 
 func main() {
@@ -93,6 +96,34 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	readiness := func(readinessContext context.Context) error {
+		snapshot, checkErr := dispatcher.Snapshot(readinessContext)
+		if checkErr != nil || snapshot.DeadLetter != 0 {
+			return errors.New("PaaS Audit dispatcher database readiness failed")
+		}
+		if checkErr := ingestor.Ready(readinessContext); checkErr != nil {
+			return errors.New("PaaS Audit dispatcher target readiness failed")
+		}
+		return nil
+	}
+	if err := readiness(ctx); err != nil {
+		return err
+	}
+	handler, err := processhttp.NewReadinessHandler(readiness)
+	if err != nil {
+		return err
+	}
+	return processhttp.ServeWithBackground(
+		ctx,
+		config.listenAddress,
+		handler,
+		func(dispatchContext context.Context) error {
+			return runDispatchLoop(dispatchContext, dispatcher)
+		},
+	)
+}
+
+func runDispatchLoop(ctx context.Context, dispatcher *auditdispatch.Usecase) error {
 	for {
 		result, err := dispatcher.DispatchOnce(ctx)
 		if err != nil {
@@ -122,9 +153,11 @@ func loadConfiguration() (configuration, error) {
 		auditEndpoint:   os.Getenv(auditEndpointEnvironment),
 		credentialFile:  os.Getenv(credentialFileEnvironment),
 		workerID:        os.Getenv(workerIDEnvironment),
+		listenAddress:   os.Getenv(listenAddressEnvironment),
 	}
 	if config.databaseDSNFile == "" || config.auditEndpoint == "" ||
-		config.credentialFile == "" || config.workerID == "" {
+		config.credentialFile == "" || config.workerID == "" ||
+		config.listenAddress == "" {
 		return configuration{}, errors.New("PaaS Audit dispatcher configuration is incomplete")
 	}
 	return config, nil

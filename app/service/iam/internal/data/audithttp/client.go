@@ -38,6 +38,33 @@ func NewClient(config Config) (*Client, error) {
 	return &Client{http: httpClient, credential: config.Credential}, nil
 }
 
+func (client *Client) Ready(ctx context.Context) error {
+	if client == nil || client.http == nil || ctx == nil {
+		return auditdispatch.ErrIngestUnavailable
+	}
+	response, err := client.http.Do(
+		ctx,
+		http.MethodGet,
+		"/ready",
+		nil,
+		"",
+		client.credential,
+		iamv1.Secret{},
+	)
+	if err != nil {
+		return auditdispatch.ErrIngestUnavailable
+	}
+	defer response.Body.Close()
+	var readiness auditv1.Readiness
+	if response.StatusCode != http.StatusOK || !authorityhttp.ResponseIsJSON(response) ||
+		auditv1.DecodeRequest(response.Body, &readiness) != nil ||
+		auditv1.ValidateReadiness(readiness) != nil ||
+		readiness.State != auditv1.ReadinessReady {
+		return auditdispatch.ErrIngestUnavailable
+	}
+	return nil
+}
+
 func (client *Client) Ingest(ctx context.Context, event auditv1.Event) error {
 	if client == nil || client.http == nil {
 		return auditdispatch.ErrIngestUnavailable

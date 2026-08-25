@@ -62,6 +62,25 @@ func NewLocalRuntime() *LocalRuntime {
 	return &LocalRuntime{}
 }
 
+// Ready proves that both the local Docker Engine and the Compose plugin can
+// accept commands. Version/profile admission remains the installation
+// preflight's responsibility; the worker only needs a live effect boundary.
+func (*LocalRuntime) Ready(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("Docker Compose readiness context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, err := runDocker(ctx, nil, "version", "--format", "{{.Server.Version}}"); err != nil {
+		return ErrRuntimeUnavailable
+	}
+	if _, err := runDocker(ctx, nil, "compose", "version", "--short"); err != nil {
+		return ErrRuntimeUnavailable
+	}
+	return nil
+}
+
 func (*LocalRuntime) Apply(ctx context.Context, project RuntimeProject) error {
 	if err := validateRuntimeProject(project); err != nil {
 		return err

@@ -46,12 +46,51 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	portCount := 0
 	foundExecutorRoot := false
 	foundDockerSocket := false
+	expectedEntrypoints := map[string]string{
+		"audit":                 "/matrix/bin/matrix-audit",
+		"iam":                   "/matrix/bin/matrix-iam",
+		"iam-audit-dispatcher":  "/matrix/bin/matrix-iam-audit-dispatcher",
+		"paas-api":              "/matrix/bin/matrix-paas",
+		"paas-audit-dispatcher": "/matrix/bin/matrix-paas-audit-dispatcher",
+		"paas-worker":           "/matrix/bin/matrix-paas-worker",
+	}
+	expectedEnvironmentKeys := map[string][]string{
+		"audit": {
+			"MATRIX_AUDIT_CURSOR_KEY_FILE", "MATRIX_AUDIT_DATABASE_DSN_FILE",
+			"MATRIX_AUDIT_IAM_ENDPOINT", "MATRIX_AUDIT_LISTEN_ADDRESS",
+			"MATRIX_AUDIT_SERVICE_CREDENTIAL_FILE",
+		},
+		"iam": {
+			"MATRIX_IAM_BOOTSTRAP_FILE", "MATRIX_IAM_DATABASE_DSN_FILE",
+			"MATRIX_IAM_LISTEN_ADDRESS",
+		},
+		"iam-audit-dispatcher": {
+			"MATRIX_IAM_AUDIT_CREDENTIAL_FILE", "MATRIX_IAM_AUDIT_DATABASE_DSN_FILE",
+			"MATRIX_IAM_AUDIT_ENDPOINT", "MATRIX_IAM_AUDIT_LISTEN_ADDRESS",
+			"MATRIX_IAM_AUDIT_WORKER_ID",
+		},
+		"paas-api": {
+			"MATRIX_PAAS_DATABASE_DSN_FILE", "MATRIX_PAAS_IAM_ENDPOINT",
+			"MATRIX_PAAS_LISTEN_ADDRESS", "MATRIX_PAAS_SERVICE_CREDENTIAL_FILE",
+		},
+		"paas-audit-dispatcher": {
+			"MATRIX_PAAS_AUDIT_CREDENTIAL_FILE", "MATRIX_PAAS_AUDIT_DATABASE_DSN_FILE",
+			"MATRIX_PAAS_AUDIT_ENDPOINT", "MATRIX_PAAS_AUDIT_LISTEN_ADDRESS",
+			"MATRIX_PAAS_AUDIT_WORKER_ID",
+		},
+		"paas-worker": {
+			"MATRIX_PAAS_WORKER_ARTIFACT_CATALOG_FILE", "MATRIX_PAAS_WORKER_BINDING_REF",
+			"MATRIX_PAAS_WORKER_BINDING_ROOT", "MATRIX_PAAS_WORKER_DATABASE_DSN_FILE",
+			"MATRIX_PAAS_WORKER_ID", "MATRIX_PAAS_WORKER_LISTEN_ADDRESS",
+			"MATRIX_PAAS_WORKER_SECRET_ROOT",
+		},
+	}
 	for name, raw := range services {
 		service, ok := raw.(map[string]any)
 		if !ok || service["pull_policy"] != "never" {
 			t.Fatalf("service %q is not pull-never", name)
 		}
-		for _, forbidden := range []string{"build", "privileged", "env_file", "network_mode"} {
+		for _, forbidden := range []string{"build", "command", "privileged", "env_file", "network_mode"} {
 			if _, found := service[forbidden]; found {
 				t.Fatalf("service %q expresses forbidden capability %q", name, forbidden)
 			}
@@ -59,6 +98,35 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 		image, ok := service["image"].(string)
 		if !ok || !strings.HasPrefix(image, "sha256:") {
 			t.Fatalf("service %q image is not immutable: %#v", name, service["image"])
+		}
+		if binary, expected := expectedEntrypoints[name]; expected {
+			entrypoint, ok := service["entrypoint"].([]any)
+			if !ok || len(entrypoint) != 1 || entrypoint[0] != binary {
+				t.Fatalf("service %q entrypoint=%#v want=%q", name, service["entrypoint"], binary)
+			}
+		}
+		if keys, expected := expectedEnvironmentKeys[name]; expected {
+			environment, ok := service["environment"].(map[string]any)
+			if !ok {
+				t.Fatalf("service %q has no environment", name)
+			}
+			actualKeys := make([]string, 0, len(environment))
+			for key := range environment {
+				actualKeys = append(actualKeys, key)
+			}
+			slices.Sort(actualKeys)
+			if !slices.Equal(actualKeys, keys) {
+				t.Fatalf("service %q environment keys=%v want=%v", name, actualKeys, keys)
+			}
+		}
+		if name != "postgres" {
+			health, ok := service["healthcheck"].(map[string]any)
+			test, testOK := health["test"].([]any)
+			if !ok || !testOK || len(test) != 3 || test[0] != "CMD" ||
+				test[1] != "/matrix/bin/matrix-health" ||
+				!strings.HasPrefix(test[2].(string), "http://127.0.0.1:") {
+				t.Fatalf("service %q health contract=%#v", name, service["healthcheck"])
+			}
 		}
 		if ports, found := service["ports"].([]any); found {
 			portCount += len(ports)

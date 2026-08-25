@@ -17,6 +17,29 @@ import (
 
 const testPaaSAuditCredential = "mx1.PaaSAuditCredential00000000000000000000001"
 
+func TestClientRequiresExactAuditReadiness(t *testing.T) {
+	state := auditv1.ReadinessReady
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet || request.URL.Path != "/ready" {
+			t.Fatalf("Audit readiness request=%s %s", request.Method, request.URL)
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(response).Encode(auditv1.Readiness{
+			APIVersion: auditv1.APIVersion, Kind: "Readiness", State: state,
+			SchemaVersion: 1, CheckedAt: time.Date(2026, 8, 26, 2, 0, 0, 0, time.UTC),
+		})
+	}))
+	defer server.Close()
+	client := newAuditClient(t, server.URL)
+	if err := client.Ready(context.Background()); err != nil {
+		t.Fatalf("ready Audit client: %v", err)
+	}
+	state = auditv1.ReadinessNotReady
+	if err := client.Ready(context.Background()); !errors.Is(err, port.ErrAuditUnavailable) {
+		t.Fatalf("not-ready Audit error=%v", err)
+	}
+}
+
 func TestClientAcceptsNewAndEqualReplayUsingClosedAuditEvent(t *testing.T) {
 	for _, scenario := range []struct {
 		status  int

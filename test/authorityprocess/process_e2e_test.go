@@ -156,6 +156,8 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	iamAddress := freeAddress(t)
 	auditAddress := freeAddress(t)
 	paasAddress := freeAddress(t)
+	iamDispatcherAddress := freeAddress(t)
+	paasDispatcherAddress := freeAddress(t)
 	iamEndpoint := "http://" + iamAddress
 	auditEndpoint := "http://" + auditAddress
 	paasEndpoint := "http://" + paasAddress
@@ -177,6 +179,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 			"MATRIX_IAM_AUDIT_ENDPOINT=" + auditEndpoint,
 			"MATRIX_IAM_AUDIT_CREDENTIAL_FILE=" + credentialPath,
 			"MATRIX_IAM_AUDIT_WORKER_ID=" + workerID,
+			"MATRIX_IAM_AUDIT_LISTEN_ADDRESS=" + iamDispatcherAddress,
 		}
 	}
 	paasEnvironment := []string{
@@ -191,6 +194,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 			"MATRIX_PAAS_AUDIT_ENDPOINT=" + auditEndpoint,
 			"MATRIX_PAAS_AUDIT_CREDENTIAL_FILE=" + credentialPath,
 			"MATRIX_PAAS_AUDIT_WORKER_ID=" + workerID,
+			"MATRIX_PAAS_AUDIT_LISTEN_ADDRESS=" + paasDispatcherAddress,
 		}
 	}
 	children := make([]*childProcess, 0)
@@ -245,6 +249,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		binaries.dispatcher,
 		iamDispatcherEnvironment(iamCredentialPath, "iam-audit-worker-a"),
 	)
+	waitHTTPStatus(t, ctx, dispatcher, "http://"+iamDispatcherAddress+"/ready", http.StatusOK)
 	waitAllIAMOutboxDelivered(t, ctx, admin)
 	assertIAMEventsStoredOnce(t, ctx, admin)
 	paasProcess := start(binaries.paas, paasEnvironment)
@@ -253,6 +258,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		binaries.paasDispatcher,
 		paasDispatcherEnvironment(paasCredentialPath, "paas-audit-worker-a"),
 	)
+	waitHTTPStatus(t, ctx, paasDispatcher, "http://"+paasDispatcherAddress+"/ready", http.StatusOK)
 
 	adminLogin := loginIAM(t, iamEndpoint, "admin", initialAdminPassword, "request-admin-login")
 	sensitive = append(sensitive, adminLogin.Credential)

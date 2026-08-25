@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"path/filepath"
+	"runtime"
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
@@ -25,11 +27,23 @@ type FileSecretResolver struct {
 }
 
 func NewFileSecretResolver(root string) (*FileSecretResolver, error) {
-	prepared, err := prepareManagedRoot(root)
-	if err != nil {
+	if root == "" || len(root) > 4096 || !filepath.IsAbs(root) ||
+		filepath.Clean(root) != root || isVolumeRoot(root) {
 		return nil, errors.New("secret root is invalid or cannot be secured")
 	}
-	return &FileSecretResolver{root: prepared}, nil
+	info, err := validateExistingPath(root, true)
+	if err != nil || !info.IsDir() {
+		return nil, errors.New("secret root is invalid or cannot be secured")
+	}
+	if runtime.GOOS == "windows" {
+		if err := securePermissions(root, true); err != nil {
+			return nil, errors.New("secret root is invalid or cannot be secured")
+		}
+	}
+	if err := verifySecurePermissions(root, true); err != nil {
+		return nil, errors.New("secret root permissions are unsafe")
+	}
+	return &FileSecretResolver{root: root}, nil
 }
 
 func (resolver *FileSecretResolver) ResolveSecret(
@@ -62,15 +76,22 @@ func (resolver *FileSecretResolver) ResolveSecret(
 	if _, err := validateExistingPath(directory, true); err != nil {
 		return nil, errors.New("secret version is unavailable")
 	}
-	if err := securePermissions(directory, true); err != nil {
-		return nil, errors.New("secret version permissions cannot be enforced")
+	if runtime.GOOS == "windows" {
+		if err := securePermissions(directory, true); err != nil {
+			return nil, errors.New("secret version permissions cannot be enforced")
+		}
+	}
+	if err := verifySecurePermissions(directory, true); err != nil {
+		return nil, errors.New("secret version permissions are unsafe")
 	}
 	info, err := validateExistingPath(path, false)
 	if err != nil || !info.Mode().IsRegular() {
 		return nil, errors.New("secret version is unavailable")
 	}
-	if err := securePermissions(path, false); err != nil {
-		return nil, errors.New("secret version permissions cannot be enforced")
+	if runtime.GOOS == "windows" {
+		if err := securePermissions(path, false); err != nil {
+			return nil, errors.New("secret version permissions cannot be enforced")
+		}
 	}
 	if err := verifySecurePermissions(path, false); err != nil {
 		return nil, errors.New("secret version permissions are unsafe")

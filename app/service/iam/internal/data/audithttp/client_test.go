@@ -15,6 +15,35 @@ import (
 	"github.com/xiak/matrix/app/service/iam/internal/usecase/auditdispatch"
 )
 
+func TestClientRequiresExactAuditReadiness(t *testing.T) {
+	state := auditv1.ReadinessReady
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet || request.URL.Path != "/ready" {
+			t.Fatalf("Audit readiness request=%s %s", request.Method, request.URL)
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(response).Encode(auditv1.Readiness{
+			APIVersion: auditv1.APIVersion, Kind: "Readiness", State: state,
+			SchemaVersion: 1, CheckedAt: time.Date(2026, 8, 26, 19, 0, 0, 0, time.UTC),
+		})
+	}))
+	defer server.Close()
+	client, err := NewClient(Config{
+		Endpoint: server.URL, Credential: auditClientSecret(t, "iam-producer-credential"),
+		HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatalf("create Audit HTTP client: %v", err)
+	}
+	if err := client.Ready(context.Background()); err != nil {
+		t.Fatalf("ready Audit client: %v", err)
+	}
+	state = auditv1.ReadinessNotReady
+	if err := client.Ready(context.Background()); !errors.Is(err, auditdispatch.ErrIngestUnavailable) {
+		t.Fatalf("not-ready Audit error=%v", err)
+	}
+}
+
 func TestClientDeliversIAMEventAndAcceptsOnlyExactAuditResult(t *testing.T) {
 	event, record := auditFixture(t)
 	outcome := auditv1.IngestionAccepted

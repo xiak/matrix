@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/netip"
 	"path"
-	"slices"
 	"strings"
 
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
@@ -41,8 +40,8 @@ type contract struct {
 }
 
 var platformServiceNames = []string{
-	"apisix", "audit", "iam", "paas-api", "paas-audit-dispatcher",
-	"paas-ui", "paas-worker", "postgres",
+	"apisix", "audit", "iam", "iam-audit-dispatcher", "paas-api",
+	"paas-audit-dispatcher", "paas-ui", "paas-worker", "postgres",
 }
 
 func ContractDigest() string {
@@ -145,7 +144,7 @@ type serviceConfig struct {
 	Restart     string                `json:"restart"`
 	ReadOnly    bool                  `json:"read_only,omitempty"`
 	Init        bool                  `json:"init,omitempty"`
-	Command     []string              `json:"command,omitempty"`
+	Entrypoint  []string              `json:"entrypoint,omitempty"`
 	Environment map[string]string     `json:"environment,omitempty"`
 	DependsOn   map[string]dependency `json:"depends_on,omitempty"`
 	Networks    []string              `json:"networks"`
@@ -202,32 +201,48 @@ func compileServices(
 	options Options,
 ) map[string]serviceConfig {
 	root := options.Root
-	postgresPassword := path.Join(root, "secrets/postgres-password")
-	iamCredential := path.Join(root, "secrets/iam-service-credential")
-	auditCredential := path.Join(root, "secrets/audit-service-credential")
-	bootstrapIAM := path.Join(root, "secrets/iam-bootstrap")
+	postgresPassword := path.Join(root, "secrets/database/postgres-superuser-password")
+	iamAPIDSN := path.Join(root, "secrets/database/iam-api-dsn")
+	iamWorkerDSN := path.Join(root, "secrets/database/iam-worker-dsn")
+	auditRuntimeDSN := path.Join(root, "secrets/database/audit-runtime-dsn")
+	paasAPIDSN := path.Join(root, "secrets/database/paas-api-dsn")
+	paasWorkerDSN := path.Join(root, "secrets/database/paas-worker-dsn")
+	bootstrapIAM := path.Join(root, "secrets/authority/iam-bootstrap.json")
+	auditIAMCredential := path.Join(root, "secrets/authority/audit-iam-credential")
+	iamAuditCredential := path.Join(root, "secrets/authority/iam-audit-credential")
+	paasIAMCredential := path.Join(root, "secrets/authority/paas-iam-credential")
+	paasAuditCredential := path.Join(root, "secrets/authority/paas-audit-credential")
+	auditCursorKey := path.Join(root, "secrets/authority/audit-cursor-key")
+	apisixIAMCredential := path.Join(root, "secrets/gateway/apisix-iam-credential")
+	artifactCatalog := path.Join(root, "config/artifact-catalog.json")
 	executorRoot := path.Join(root, "runtime/executor")
-	baseEnvironment := map[string]string{
-		"MATRIX_INSTALLATION_ID": options.InstallationID,
-		"MATRIX_POSTGRES_HOST":   "postgres",
-		"MATRIX_POSTGRES_PORT":   "5432",
-		"MATRIX_POSTGRES_USER":   "matrix",
-		"MATRIX_POSTGRES_DB":     "matrix",
-	}
-	service := func(name, image string, networks []string, command []string, cpu, memory string) serviceConfig {
+	workloadSecretRoot := path.Join(root, "secrets/workloads")
+	service := func(
+		name string,
+		image string,
+		networks []string,
+		entrypoint []string,
+		cpu string,
+		memory string,
+		readinessURL string,
+	) serviceConfig {
 		return serviceConfig{
 			Image: image, PullPolicy: "never", Restart: "unless-stopped", ReadOnly: true, Init: true,
-			Command: command, Networks: networks, Tmpfs: []string{"/tmp:rw,noexec,nosuid,size=64m"},
+			Entrypoint: entrypoint, Networks: networks, Tmpfs: []string{"/tmp:rw,noexec,nosuid,size=64m"},
 			SecurityOpt: []string{"no-new-privileges:true"}, CapDrop: []string{"ALL"},
 			Healthcheck: healthcheck{
-				Test: []string{"CMD", "/matrix/bin/health", name}, Interval: "10s", Timeout: "3s",
+				Test:     []string{"CMD", "/matrix/bin/matrix-health", readinessURL},
+				Interval: "10s", Timeout: "3s",
 				Retries: 12, StartPeriod: "10s",
 			},
 			Deploy: deploy{Resources: resources{Limits: limits{CPUs: cpu, Memory: memory}}},
 			Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, name),
 		}
 	}
-	postgres := service("postgres", images["postgres"], []string{"control"}, nil, "2.0", "2G")
+	postgres := service(
+		"postgres", images["postgres"], []string{"control"}, nil,
+		"2.0", "2G", "",
+	)
 	postgres.ReadOnly = false
 	postgres.Init = false
 	postgres.Environment = map[string]string{
@@ -241,74 +256,133 @@ func compileServices(
 	postgres.Tmpfs = []string{"/tmp:rw,noexec,nosuid,size=64m", "/var/run/postgresql:rw,nosuid,size=16m"}
 	postgres.Healthcheck.Test = []string{"CMD", "pg_isready", "-U", "matrix", "-d", "matrix"}
 
-	iam := service("iam", images["iam"], []string{"control"}, nil, "1.0", "512M")
-	iam.Environment = cloneEnvironment(baseEnvironment, map[string]string{
-		"MATRIX_POSTGRES_PASSWORD_FILE": "/run/secrets/postgres-password",
-		"MATRIX_IAM_BOOTSTRAP_FILE":     "/run/secrets/iam-bootstrap",
-	})
+	iam := service(
+		"iam", images["iam"], []string{"control"}, []string{"/matrix/bin/matrix-iam"},
+		"1.0", "512M", "http://127.0.0.1:8080/ready",
+	)
+	iam.Environment = map[string]string{
+		"MATRIX_IAM_DATABASE_DSN_FILE": "/run/matrix/iam-api-dsn",
+		"MATRIX_IAM_BOOTSTRAP_FILE":    "/run/matrix/iam-bootstrap.json",
+		"MATRIX_IAM_LISTEN_ADDRESS":    "0.0.0.0:8080",
+	}
 	iam.Volumes = []mount{
-		bind(postgresPassword, "/run/secrets/postgres-password", true),
-		bind(bootstrapIAM, "/run/secrets/iam-bootstrap", true),
+		bind(iamAPIDSN, "/run/matrix/iam-api-dsn", true),
+		bind(bootstrapIAM, "/run/matrix/iam-bootstrap.json", true),
 	}
 	iam.DependsOn = healthy("postgres")
 
-	audit := service("audit", images["audit"], []string{"control"}, nil, "1.0", "512M")
-	audit.Environment = cloneEnvironment(baseEnvironment, map[string]string{
-		"MATRIX_POSTGRES_PASSWORD_FILE": "/run/secrets/postgres-password",
-		"MATRIX_AUDIT_CREDENTIAL_FILE":  "/run/secrets/audit-service-credential",
-	})
-	audit.Volumes = []mount{
-		bind(postgresPassword, "/run/secrets/postgres-password", true),
-		bind(auditCredential, "/run/secrets/audit-service-credential", true),
-	}
-	audit.DependsOn = healthy("postgres")
-
-	paasEnvironment := cloneEnvironment(baseEnvironment, map[string]string{
-		"MATRIX_POSTGRES_PASSWORD_FILE": "/run/secrets/postgres-password",
-		"MATRIX_IAM_URL":                "http://iam:8080",
-		"MATRIX_IAM_CREDENTIAL_FILE":    "/run/secrets/iam-service-credential",
-		"MATRIX_AUDIT_URL":              "http://audit:8080",
-		"MATRIX_AUDIT_CREDENTIAL_FILE":  "/run/secrets/audit-service-credential",
-	})
-	paasSecrets := []mount{
-		bind(postgresPassword, "/run/secrets/postgres-password", true),
-		bind(iamCredential, "/run/secrets/iam-service-credential", true),
-		bind(auditCredential, "/run/secrets/audit-service-credential", true),
-	}
-	paasAPI := service("paas-api", images["paas"], []string{"control"}, []string{"api"}, "1.0", "768M")
-	paasAPI.Environment = paasEnvironment
-	paasAPI.Volumes = slices.Clone(paasSecrets)
-	paasAPI.DependsOn = healthy("postgres", "iam", "audit")
-
-	paasWorker := service("paas-worker", images["paas"], []string{"control"}, []string{"worker"}, "2.0", "1G")
-	paasWorker.Environment = cloneEnvironment(paasEnvironment, map[string]string{
-		"MATRIX_EXECUTOR_ROOT": executorRoot,
-	})
-	paasWorker.Volumes = append(slices.Clone(paasSecrets),
-		bind(executorRoot, executorRoot, false),
-		bind("/var/run/docker.sock", "/var/run/docker.sock", false),
+	audit := service(
+		"audit", images["audit"], []string{"control"}, []string{"/matrix/bin/matrix-audit"},
+		"1.0", "512M", "http://127.0.0.1:8080/ready",
 	)
-	paasWorker.DependsOn = healthy("postgres", "iam", "audit")
+	audit.Environment = map[string]string{
+		"MATRIX_AUDIT_DATABASE_DSN_FILE":       "/run/matrix/audit-runtime-dsn",
+		"MATRIX_AUDIT_IAM_ENDPOINT":            "http://iam:8080",
+		"MATRIX_AUDIT_SERVICE_CREDENTIAL_FILE": "/run/matrix/audit-iam-credential",
+		"MATRIX_AUDIT_CURSOR_KEY_FILE":         "/run/matrix/audit-cursor-key",
+		"MATRIX_AUDIT_LISTEN_ADDRESS":          "0.0.0.0:8080",
+	}
+	audit.Volumes = []mount{
+		bind(auditRuntimeDSN, "/run/matrix/audit-runtime-dsn", true),
+		bind(auditIAMCredential, "/run/matrix/audit-iam-credential", true),
+		bind(auditCursorKey, "/run/matrix/audit-cursor-key", true),
+	}
+	audit.DependsOn = healthy("postgres", "iam")
+
+	iamAudit := service(
+		"iam-audit-dispatcher", images["iam"], []string{"control"},
+		[]string{"/matrix/bin/matrix-iam-audit-dispatcher"},
+		"0.5", "384M", "http://127.0.0.1:8080/ready",
+	)
+	iamAudit.Environment = map[string]string{
+		"MATRIX_IAM_AUDIT_DATABASE_DSN_FILE": "/run/matrix/iam-worker-dsn",
+		"MATRIX_IAM_AUDIT_ENDPOINT":          "http://audit:8080",
+		"MATRIX_IAM_AUDIT_CREDENTIAL_FILE":   "/run/matrix/iam-audit-credential",
+		"MATRIX_IAM_AUDIT_WORKER_ID":         "iam-audit-" + strings.TrimPrefix(options.InstallationID, "mxi-"),
+		"MATRIX_IAM_AUDIT_LISTEN_ADDRESS":    "0.0.0.0:8080",
+	}
+	iamAudit.Volumes = []mount{
+		bind(iamWorkerDSN, "/run/matrix/iam-worker-dsn", true),
+		bind(iamAuditCredential, "/run/matrix/iam-audit-credential", true),
+	}
+	iamAudit.DependsOn = healthy("postgres", "audit")
+
+	paasAPI := service(
+		"paas-api", images["paas"], []string{"control"}, []string{"/matrix/bin/matrix-paas"},
+		"1.0", "768M", "http://127.0.0.1:8080/ready",
+	)
+	paasAPI.Environment = map[string]string{
+		"MATRIX_PAAS_DATABASE_DSN_FILE":       "/run/matrix/paas-api-dsn",
+		"MATRIX_PAAS_IAM_ENDPOINT":            "http://iam:8080",
+		"MATRIX_PAAS_SERVICE_CREDENTIAL_FILE": "/run/matrix/paas-iam-credential",
+		"MATRIX_PAAS_LISTEN_ADDRESS":          "0.0.0.0:8080",
+	}
+	paasAPI.Volumes = []mount{
+		bind(paasAPIDSN, "/run/matrix/paas-api-dsn", true),
+		bind(paasIAMCredential, "/run/matrix/paas-iam-credential", true),
+	}
+	paasAPI.DependsOn = healthy("postgres", "iam")
+
+	paasWorker := service(
+		"paas-worker", images["paas"], []string{"control"},
+		[]string{"/matrix/bin/matrix-paas-worker"},
+		"2.0", "1G", "http://127.0.0.1:8080/ready",
+	)
+	paasWorker.Environment = map[string]string{
+		"MATRIX_PAAS_WORKER_DATABASE_DSN_FILE":     "/run/matrix/paas-worker-dsn",
+		"MATRIX_PAAS_WORKER_ID":                    "paas-worker-" + strings.TrimPrefix(options.InstallationID, "mxi-"),
+		"MATRIX_PAAS_WORKER_BINDING_REF":           "compose-local-v1",
+		"MATRIX_PAAS_WORKER_BINDING_ROOT":          executorRoot,
+		"MATRIX_PAAS_WORKER_SECRET_ROOT":           workloadSecretRoot,
+		"MATRIX_PAAS_WORKER_ARTIFACT_CATALOG_FILE": "/run/matrix/artifact-catalog.json",
+		"MATRIX_PAAS_WORKER_LISTEN_ADDRESS":        "0.0.0.0:8080",
+	}
+	paasWorker.Volumes = []mount{
+		bind(paasWorkerDSN, "/run/matrix/paas-worker-dsn", true),
+		bind(artifactCatalog, "/run/matrix/artifact-catalog.json", true),
+		bind(executorRoot, executorRoot, false),
+		bind(workloadSecretRoot, workloadSecretRoot, true),
+		bind("/var/run/docker.sock", "/var/run/docker.sock", false),
+	}
+	paasWorker.DependsOn = healthy("postgres")
 
 	paasAudit := service(
-		"paas-audit-dispatcher", images["paas"], []string{"control"}, []string{"audit-dispatch"}, "0.5", "384M",
+		"paas-audit-dispatcher", images["paas"], []string{"control"},
+		[]string{"/matrix/bin/matrix-paas-audit-dispatcher"},
+		"0.5", "384M", "http://127.0.0.1:8080/ready",
 	)
-	paasAudit.Environment = paasEnvironment
-	paasAudit.Volumes = slices.Clone(paasSecrets)
+	paasAudit.Environment = map[string]string{
+		"MATRIX_PAAS_AUDIT_DATABASE_DSN_FILE": "/run/matrix/paas-worker-dsn",
+		"MATRIX_PAAS_AUDIT_ENDPOINT":          "http://audit:8080",
+		"MATRIX_PAAS_AUDIT_CREDENTIAL_FILE":   "/run/matrix/paas-audit-credential",
+		"MATRIX_PAAS_AUDIT_WORKER_ID":         "paas-audit-" + strings.TrimPrefix(options.InstallationID, "mxi-"),
+		"MATRIX_PAAS_AUDIT_LISTEN_ADDRESS":    "0.0.0.0:8080",
+	}
+	paasAudit.Volumes = []mount{
+		bind(paasWorkerDSN, "/run/matrix/paas-worker-dsn", true),
+		bind(paasAuditCredential, "/run/matrix/paas-audit-credential", true),
+	}
 	paasAudit.DependsOn = healthy("postgres", "audit")
 
-	ui := service("paas-ui", images["paas-ui"], []string{"web"}, nil, "0.5", "256M")
+	ui := service(
+		"paas-ui", images["paas-ui"], []string{"web"}, nil,
+		"0.5", "256M", "http://127.0.0.1:8080/ready",
+	)
 
-	apisix := service("apisix", images["apisix"], []string{"control", "web"}, nil, "1.0", "512M")
+	apisix := service(
+		"apisix", images["apisix"], []string{"control", "web"}, nil,
+		"1.0", "512M", "http://127.0.0.1:9080/ready",
+	)
 	apisix.Ports = []string{net.JoinHostPort(options.Listener, fmt.Sprint(options.Port)) + ":9080/tcp"}
 	apisix.Volumes = []mount{
 		bind(path.Join(root, "config/apisix.yaml"), "/usr/local/apisix/conf/apisix.yaml", true),
-		bind(iamCredential, "/run/secrets/iam-service-credential", true),
+		bind(apisixIAMCredential, "/run/matrix/apisix-iam-credential", true),
 	}
-	apisix.DependsOn = healthy("iam", "paas-api", "paas-ui")
+	apisix.DependsOn = healthy("audit", "iam", "paas-api", "paas-ui")
 
 	return map[string]serviceConfig{
-		"apisix": apisix, "audit": audit, "iam": iam, "paas-api": paasAPI,
+		"apisix": apisix, "audit": audit, "iam": iam,
+		"iam-audit-dispatcher": iamAudit, "paas-api": paasAPI,
 		"paas-audit-dispatcher": paasAudit, "paas-ui": ui, "paas-worker": paasWorker,
 		"postgres": postgres,
 	}
@@ -322,17 +396,6 @@ func healthy(names ...string) map[string]dependency {
 	result := make(map[string]dependency, len(names))
 	for _, name := range names {
 		result[name] = dependency{Condition: "service_healthy"}
-	}
-	return result
-}
-
-func cloneEnvironment(base, additions map[string]string) map[string]string {
-	result := make(map[string]string, len(base)+len(additions))
-	for key, value := range base {
-		result[key] = value
-	}
-	for key, value := range additions {
-		result[key] = value
 	}
 	return result
 }

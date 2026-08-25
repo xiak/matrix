@@ -240,6 +240,10 @@ BEGIN
                 ''
             ),
             (
+                'worker_readiness',
+                ''
+            ),
+            (
                 'claim_operation',
                 'requested_worker_id text, requested_lease_seconds integer'
             ),
@@ -541,6 +545,16 @@ BEGIN
        )
        OR NOT has_function_privilege(
             'matrix_paas_worker',
+            'paas.worker_readiness()',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_paas_api',
+            'paas.worker_readiness()',
+            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_paas_worker',
             'paas.claim_operation(text, integer)',
             'EXECUTE'
        )
@@ -560,6 +574,7 @@ BEGIN
                     'paas.claim_audit_event(text, integer)',
                     'paas.complete_audit_event(text, text, text, bigint, text, timestamptz, text)',
                     'paas.audit_outbox_snapshot()',
+                    'paas.worker_readiness()',
                     'paas.claim_operation(text, integer)',
                     'paas.advance_operation(text, text, bigint, text, jsonb, timestamptz, boolean)',
                     'paas.assert_current_operation_lease(text, text, bigint)',

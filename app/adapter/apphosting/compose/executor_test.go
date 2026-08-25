@@ -324,6 +324,47 @@ func TestFileSecretResolverRejectsLinkedVersions(t *testing.T) {
 	}
 }
 
+func TestFileSecretResolverConsumesProvisionedReadOnlyTreeWithoutMutatingModes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows validates protected ACLs rather than POSIX read-only modes")
+	}
+	root := t.TempDir()
+	reference := paasv1.SecretVersionReference{SecretID: "secret-read-only", Version: "version-one"}
+	directory := filepath.Join(root, string(reference.SecretID))
+	if err := os.Mkdir(directory, 0o500); err != nil {
+		t.Fatalf("create read-only secret directory: %v", err)
+	}
+	file := filepath.Join(directory, reference.Version)
+	if err := os.WriteFile(file, []byte("read-only-secret"), 0o400); err != nil {
+		t.Fatalf("write read-only secret: %v", err)
+	}
+	if err := os.Chmod(root, 0o500); err != nil {
+		t.Fatalf("protect read-only secret root: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(root, 0o700)
+		_ = os.Chmod(directory, 0o700)
+		_ = os.Chmod(file, 0o600)
+	})
+	resolver, err := NewFileSecretResolver(root)
+	if err != nil {
+		t.Fatalf("create read-only SecretResolver: %v", err)
+	}
+	content, err := resolver.ResolveSecret(context.Background(), reference)
+	if err != nil || string(content) != "read-only-secret" {
+		t.Fatalf("resolve read-only secret content=%q err=%v", content, err)
+	}
+	for target, want := range map[string]os.FileMode{root: 0o500, directory: 0o500, file: 0o400} {
+		info, statErr := os.Stat(target)
+		if statErr != nil {
+			t.Fatalf("read-only secret mode %s unavailable: %v", target, statErr)
+		}
+		if info.Mode().Perm() != want {
+			t.Fatalf("read-only secret mode %s=%#o want=%#o", target, info.Mode().Perm(), want)
+		}
+	}
+}
+
 func TestManagedRootRejectsVolumeRoot(t *testing.T) {
 	root := string(filepath.Separator)
 	if volume := filepath.VolumeName(t.TempDir()); volume != "" {

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
 
@@ -15,12 +17,29 @@ func (repository *ApplicationRepository) Readiness(
 	if repository == nil || repository.pool == nil || ctx == nil {
 		return paasv1.Readiness{}, errors.New("PaaS readiness repository is unavailable")
 	}
+	return readReadiness(ctx, repository.pool, "SELECT * FROM paas.readiness()")
+}
+
+func (repository *OperationQueueRepository) Readiness(
+	ctx context.Context,
+) (paasv1.Readiness, error) {
+	if repository == nil || repository.pool == nil || ctx == nil {
+		return paasv1.Readiness{}, errors.New("PaaS worker readiness repository is unavailable")
+	}
+	return readReadiness(ctx, repository.pool, "SELECT * FROM paas.worker_readiness()")
+}
+
+func readReadiness(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	query string,
+) (paasv1.Readiness, error) {
 	var (
 		ready         bool
 		schemaVersion int64
 		checkedAt     time.Time
 	)
-	if err := repository.pool.QueryRow(ctx, "SELECT * FROM paas.readiness()").Scan(
+	if err := pool.QueryRow(ctx, query).Scan(
 		&ready,
 		&schemaVersion,
 		&checkedAt,
