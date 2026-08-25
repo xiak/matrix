@@ -1,0 +1,57 @@
+{
+  "apiVersion": "matrix.paas.io/paas/v1",
+  "kind": "RuntimeTarget",
+  "metadata": {
+    "id": "target-local-001",
+    "name": "local-001",
+    "scope": {
+      "kind": "PLATFORM"
+    },
+    "labels": {
+      "location": "local",
+      "runtime": "compose"
+    },
+    "resourceVersion": 1,
+    "createdAt": "2026-08-25T08:00:00Z",
+    "updatedAt": "2026-08-25T08:00:00Z"
+  },
+  "spec": {
+    "resourcePoolId": "pool-local",
+    "infrastructureAdapter": {
+      "kind": "INFRASTRUCTURE",
+      "name": "localmachine",
+      "contractVersion": "v1"
+    },
+    "runtimeAdapter": {
+      "kind": "RUNTIME",
+      "name": "compose",
+      "contractVersion": "v1"
+    },
+    "gatewayAdapter": {
+      "kind": "GATEWAY",
+      "name": "apisix",
+      "contractVersion": "v1"
+    },
+    "desiredState": "ACTIVE"
+  },
+  "status": {
+    "health": "READY",
+    "capacity": {
+      "cpuMillis": 8000,
+      "memoryBytes": 17179869184,
+      "storageBytes": 536870912000,
+      "workloadSlots": 32
+    },
+    "allocatable": {
+      "cpuMillis": 6000,
+      "memoryBytes": 12884901888,
+      "storageBytes": 429496729600,
+      "workloadSlots": 24
+    },
+    "supportedIsolationClasses": [
+      "SHARED_COMPOSE",
+      "DEDICATED_COMPOSE"
+    ],
+    "observedAt": "2026-08-25T08:00:00Z"
+  }
+}

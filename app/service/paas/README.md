@@ -1,20 +1,18 @@
 # PaaS service
 
-This service will own the control-plane and worker processes.
+This service owns the control-plane and worker processes.
 
-Planned internal layout:
+FEAT-001 has admitted the following service-owned packages:
 
 ```text
-cmd/
-  control-plane/
-  worker/
 internal/
-  api/
-  operation/
-  placement/
   port/          # interfaces required by the service
-  runtime/
+  runtime/       # lifecycle and external command identity
 ```
+
+FEAT-002 through FEAT-006 add the `cmd/` composition roots and the
+infrastructure, placement, operation persistence, and transport use cases only
+when their acceptance slices are executable.
 
 The control plane owns RuntimeTarget, PlacementPolicy, PlacementDecision,
 WorkloadRelease, and Operation. It delegates identity to IAM, unified audit to

@@ -1,0 +1,9 @@
+{
+  "apiVersion": "matrix.paas.io/paas/v1",
+  "kind": "Tenant",
+  "id": "tenant-a",
+  "displayName": "Tenant A",
+  "status": "ACTIVE",
+  "iamResourceVersion": "iam-rv-1",
+  "observedAt": "2026-08-25T08:00:00Z"
+}

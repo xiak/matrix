@@ -2,10 +2,10 @@
 
 This directory owns the public, versioned contracts of Matrix PaaS.
 
-Planned contract groups:
+Contract groups:
 
 - `iam/v1` and `audit/v1` integration contracts;
-- `paas/v1` control-plane APIs;
+- [`paas/v1`](paas/v1/) control-plane resources and adapter envelopes;
 - runtime target, placement, workload release, and operation schemas;
 - adapter contracts and audit event envelopes.
 

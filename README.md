@@ -41,9 +41,11 @@ avoided.
 
 ## Current phase
 
-The repository is in P0: product-boundary and repository-baseline formation.
-No runtime capability is considered implemented until it is present here,
-tested here, and released from this repository.
+The repository is implementing Local Compose Runtime v0.1 in independently
+accepted slices. FEAT-001 has established the vendor-neutral resources,
+state machines, adapter ports, errors, idempotency identity, and evidence
+contract. It does not yet deploy a workload; LocalMachine, placement, Compose,
+IAM/Audit, and northbound delivery follow in FEAT-002 through FEAT-006.
 
 See [the architecture index](docs/architecture/README.md) and
-[the adoption policy](docs/adoption/README.md).
+[the feature index](docs/features/README.md).

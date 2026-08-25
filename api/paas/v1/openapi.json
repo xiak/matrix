@@ -1,0 +1,1562 @@
+{
+  "openapi": "3.1.0",
+  "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
+  "info": {
+    "title": "Matrix PaaS Runtime API",
+    "version": "1.0.0",
+    "description": "Vendor-neutral Runtime v1 resources. Northbound paths are added by FEAT-006."
+  },
+  "paths": {},
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    },
+    "parameters": {
+      "IdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "description": "Scoped to authenticated tenant, principal, route, and action.",
+        "schema": {
+          "type": "string",
+          "minLength": 16,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$"
+        }
+      },
+      "IfMatch": {
+        "name": "If-Match",
+        "in": "header",
+        "required": true,
+        "description": "Required for every mutable resource update.",
+        "schema": {
+          "type": "string",
+          "pattern": "^\"[1-9][0-9]*\"$"
+        }
+      }
+    },
+    "headers": {
+      "ETag": {
+        "description": "Quoted resourceVersion for optimistic concurrency.",
+        "schema": {
+          "type": "string",
+          "pattern": "^\"[1-9][0-9]*\"$"
+        }
+      }
+    },
+    "responses": {
+      "ProblemResponse": {
+        "description": "Normalized Matrix PaaS error.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "ID": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+      },
+      "Name": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 63,
+        "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+      },
+      "Digest": {
+        "type": "string",
+        "pattern": "^sha256:[0-9a-f]{64}$"
+      },
+      "Timestamp": {
+        "type": "string",
+        "format": "date-time",
+        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,6})?Z$"
+      },
+      "Labels": {
+        "type": "object",
+        "maxProperties": 64,
+        "propertyNames": {
+          "$ref": "#/components/schemas/Name"
+        },
+        "additionalProperties": {
+          "type": "string",
+          "maxLength": 128
+        }
+      },
+      "AuthorityKind": {
+        "type": "string",
+        "enum": [
+          "PLATFORM",
+          "TENANT"
+        ]
+      },
+      "ResourceScope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/AuthorityKind"
+          },
+          "tenantId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "TENANT"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            },
+            "then": {
+              "required": [
+                "tenantId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "PLATFORM"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            },
+            "then": {
+              "properties": {
+                "tenantId": false
+              }
+            }
+          }
+        ]
+      },
+      "ResourceMetadata": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "scope",
+          "resourceVersion",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "name": {
+            "$ref": "#/components/schemas/Name"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ResourceScope"
+          },
+          "labels": {
+            "$ref": "#/components/schemas/Labels"
+          },
+          "resourceVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        }
+      },
+      "TenantStatus": {
+        "type": "string",
+        "enum": [
+          "ACTIVE",
+          "SUSPENDED",
+          "DEACTIVATED"
+        ]
+      },
+      "Tenant": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "kind",
+          "id",
+          "displayName",
+          "status",
+          "iamResourceVersion",
+          "observedAt"
+        ],
+        "properties": {
+          "apiVersion": {
+            "const": "matrix.paas.io/paas/v1"
+          },
+          "kind": {
+            "const": "Tenant"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "status": {
+            "$ref": "#/components/schemas/TenantStatus"
+          },
+          "iamResourceVersion": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "observedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        }
+      },
+      "IsolationClass": {
+        "type": "string",
+        "enum": [
+          "SHARED_COMPOSE",
+          "DEDICATED_COMPOSE",
+          "DEDICATED_HOST",
+          "K8S_NAMESPACE",
+          "PHYSICAL_HOST"
+        ]
+      },
+      "LabelSelector": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "matchLabels": {
+            "$ref": "#/components/schemas/Labels"
+          }
+        }
+      },
+      "ResourcePoolPhase": {
+        "type": "string",
+        "enum": [
+          "READY",
+          "DEGRADED",
+          "UNAVAILABLE"
+        ]
+      },
+      "ResourcePoolSpec": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "targetSelector",
+          "allowedIsolationClasses"
+        ],
+        "properties": {
+          "targetSelector": {
+            "$ref": "#/components/schemas/LabelSelector"
+          },
+          "allowedIsolationClasses": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/IsolationClass"
+            }
+          }
+        }
+      },
+      "ResourcePoolStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "phase",
+          "targetCount",
+          "readyTargetCount",
+          "observedAt"
+        ],
+        "properties": {
+          "phase": {
+            "$ref": "#/components/schemas/ResourcePoolPhase"
+          },
+          "targetCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "readyTargetCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "observedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        }
+      },
+      "ResourcePool": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "kind",
+          "metadata",
+          "spec",
+          "status"
+        ],
+        "properties": {
+          "apiVersion": {
+            "const": "matrix.paas.io/paas/v1"
+          },
+          "kind": {
+            "const": "ResourcePool"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/ResourceMetadata"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/ResourcePoolSpec"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ResourcePoolStatus"
+          }
+        }
+      },
+      "AdapterKind": {
+        "type": "string",
+        "enum": [
+          "INFRASTRUCTURE",
+          "RUNTIME",
+          "GATEWAY"
+        ]
+      },
+      "AdapterRef": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "name",
+          "contractVersion"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/AdapterKind"
+          },
+          "name": {
+            "$ref": "#/components/schemas/Name"
+          },
+          "contractVersion": {
+            "type": "string",
+            "pattern": "^v[1-9][0-9]*$"
+          }
+        }
+      },
+      "Capacity": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "cpuMillis",
+          "memoryBytes",
+          "storageBytes",
+          "workloadSlots"
+        ],
+        "properties": {
+          "cpuMillis": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "memoryBytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "storageBytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "workloadSlots": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        }
+      },
+      "TargetDesiredState": {
+        "type": "string",
+        "enum": [
+          "ACTIVE",
+          "DRAINING"
+        ]
+      },
+      "TargetHealth": {
+        "type": "string",
+        "enum": [
+          "UNKNOWN",
+          "READY",
+          "DEGRADED",
+          "UNAVAILABLE"
+        ]
+      },
+      "RuntimeTargetSpec": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "resourcePoolId",
+          "infrastructureAdapter",
+          "runtimeAdapter",
+          "desiredState"
+        ],
+        "properties": {
+          "resourcePoolId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "infrastructureAdapter": {
+            "$ref": "#/components/schemas/AdapterRef"
+          },
+          "runtimeAdapter": {
+            "$ref": "#/components/schemas/AdapterRef"
+          },
+          "gatewayAdapter": {
+            "$ref": "#/components/schemas/AdapterRef"
+          },
+          "desiredState": {
+            "$ref": "#/components/schemas/TargetDesiredState"
+          }
+        }
+      },
+      "RuntimeTargetStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "health",
+          "capacity",
+          "allocatable",
+          "supportedIsolationClasses",
+          "observedAt"
+        ],
+        "properties": {
+          "health": {
+            "$ref": "#/components/schemas/TargetHealth"
+          },
+          "capacity": {
+            "$ref": "#/components/schemas/Capacity"
+          },
+          "allocatable": {
+            "$ref": "#/components/schemas/Capacity"
+          },
+          "supportedIsolationClasses": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/IsolationClass"
+            }
+          },
+          "observedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        }
+      },
+      "RuntimeTarget": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "kind",
+          "metadata",
+          "spec",
+          "status"
+        ],
+        "properties": {
+          "apiVersion": {
+            "const": "matrix.paas.io/paas/v1"
+          },
+          "kind": {
+            "const": "RuntimeTarget"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/ResourceMetadata"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/RuntimeTargetSpec"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RuntimeTargetStatus"
+          }
+        }
+      },
+      "PlacementStrategy": {
+        "type": "string",
+        "enum": [
+          "FIRST_FIT",
+          "SPREAD",
+          "BIN_PACK"
+        ]
+      },
+      "PlacementPolicySpec": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "requiredIsolationClass",
+          "eligibleResourcePoolIds",
+          "targetSelector",
+          "strategy"
+        ],
+        "properties": {
+          "requiredIsolationClass": {
+            "$ref": "#/components/schemas/IsolationClass"
+          },
+          "eligibleResourcePoolIds": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/ID"
+            }
+          },
+          "targetSelector": {
+            "$ref": "#/components/schemas/LabelSelector"
+          },
+          "strategy": {
+            "$ref": "#/components/schemas/PlacementStrategy"
+          }
+        }
+      },
+      "PlacementPolicy": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "kind",
+          "metadata",
+          "spec"
+        ],
+        "properties": {
+          "apiVersion": {
+            "const": "matrix.paas.io/paas/v1"
+          },
+          "kind": {
+            "const": "PlacementPolicy"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/ResourceMetadata"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/PlacementPolicySpec"
+          }
+        }
+      },
+      "ErrorCode": {
+        "type": "string",
+        "enum": [
+          "INVALID_ARGUMENT",
+          "UNAUTHENTICATED",
+          "PERMISSION_DENIED",
+          "NOT_FOUND",
+          "ALREADY_EXISTS",
+          "CONFLICT",
+          "RESOURCE_VERSION_CONFLICT",
+          "IDEMPOTENCY_CONFLICT",
+          "UNSCHEDULABLE",
+          "CAPABILITY_UNSUPPORTED",
+          "TARGET_UNAVAILABLE",
+          "ADAPTER_UNAVAILABLE",
+          "ADAPTER_REJECTED",
+          "ADAPTER_OUTCOME_UNKNOWN",
+          "DEADLINE_EXCEEDED",
+          "OPERATION_FAILED",
+          "MANUAL_INTERVENTION_REQUIRED",
+          "RATE_LIMITED",
+          "INTERNAL"
+        ]
+      },
+      "FieldViolation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "field",
+          "description"
+        ],
+        "properties": {
+          "field": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        }
+      },
+      "Problem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code",
+          "detail",
+          "traceId",
+          "retryable"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "format": "uri-reference",
+            "maxLength": 512
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "status": {
+            "type": "integer",
+            "minimum": 400,
+            "maximum": 599
+          },
+          "code": {
+            "$ref": "#/components/schemas/ErrorCode"
+          },
+          "detail": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "instance": {
+            "type": "string",
+            "format": "uri-reference",
+            "maxLength": 512
+          },
+          "traceId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "violations": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {
+              "$ref": "#/components/schemas/FieldViolation"
+            }
+          }
+        }
+      },
+      "PlacementOutcome": {
+        "type": "string",
+        "enum": [
+          "SCHEDULED",
+          "UNSCHEDULABLE"
+        ]
+      },
+      "PlacementDecision": {
+        "type": "object",
+        "additionalProperties": false,
+        "x-matrix-immutable": true,
+        "required": [
+          "apiVersion",
+          "kind",
+          "metadata",
+          "workloadReleaseId",
+          "placementPolicyId",
+          "policyResourceVersion",
+          "requestedIsolationClass",
+          "outcome",
+          "candidateSetDigest",
+          "decidedAt"
+        ],
+        "properties": {
+          "apiVersion": {
+            "const": "matrix.paas.io/paas/v1"
+          },
+          "kind": {
+            "const": "PlacementDecision"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/ResourceMetadata"
+          },
+          "workloadReleaseId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "placementPolicyId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "policyResourceVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "requestedIsolationClass": {
+            "$ref": "#/components/schemas/IsolationClass"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/PlacementOutcome"
+          },
+          "runtimeTargetId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "grantedIsolationClass": {
+            "$ref": "#/components/schemas/IsolationClass"
+          },
+          "candidateSetDigest": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/Problem"
+          },
+          "decidedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "outcome": {
+                  "const": "SCHEDULED"
+                }
+              },
+              "required": [
+                "outcome"
+              ]
+            },
+            "then": {
+              "required": [
+                "runtimeTargetId",
+                "grantedIsolationClass"
+              ],
+              "properties": {
+                "reason": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "outcome": {
+                  "const": "UNSCHEDULABLE"
+                }
+              },
+              "required": [
+                "outcome"
+              ]
+            },
+            "then": {
+              "required": [
+                "reason"
+              ],
+              "properties": {
+                "runtimeTargetId": false,
+                "grantedIsolationClass": false
+              }
+            }
+          }
+        ]
+      },
+      "ArtifactKind": {
+        "type": "string",
+        "enum": [
+          "OCI_IMAGE",
+          "OCI_ARTIFACT",
+          "RELEASE_BUNDLE"
+        ]
+      },
+      "ArtifactRef": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "locator",
+          "digest"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/ArtifactKind"
+          },
+          "locator": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "digest": {
+            "$ref": "#/components/schemas/Digest"
+          }
+        }
+      },
+      "SecretReference": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "resourceId"
+        ],
+        "properties": {
+          "name": {
+            "$ref": "#/components/schemas/Name"
+          },
+          "resourceId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        }
+      },
+      "ResourceRequirements": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "cpuMillis",
+          "memoryBytes"
+        ],
+        "properties": {
+          "cpuMillis": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "memoryBytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        }
+      },
+      "EndpointProtocol": {
+        "type": "string",
+        "enum": [
+          "HTTP",
+          "GRPC",
+          "TCP"
+        ]
+      },
+      "EndpointVisibility": {
+        "type": "string",
+        "enum": [
+          "PRIVATE",
+          "PUBLIC"
+        ]
+      },
+      "WorkloadEndpoint": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "port",
+          "protocol",
+          "visibility"
+        ],
+        "properties": {
+          "name": {
+            "$ref": "#/components/schemas/Name"
+          },
+          "port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "protocol": {
+            "$ref": "#/components/schemas/EndpointProtocol"
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/EndpointVisibility"
+          }
+        }
+      },
+      "WorkloadComponent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "artifact",
+          "replicas",
+          "resources"
+        ],
+        "properties": {
+          "name": {
+            "$ref": "#/components/schemas/Name"
+          },
+          "artifact": {
+            "$ref": "#/components/schemas/ArtifactRef"
+          },
+          "replicas": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000
+          },
+          "resources": {
+            "$ref": "#/components/schemas/ResourceRequirements"
+          },
+          "configurationRefs": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/ID"
+            }
+          },
+          "secretReferences": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/SecretReference"
+            }
+          },
+          "endpoints": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/WorkloadEndpoint"
+            }
+          }
+        }
+      },
+      "WorkloadReleaseSpec": {
+        "type": "object",
+        "additionalProperties": false,
+        "x-matrix-immutable": true,
+        "required": [
+          "workloadId",
+          "revision",
+          "contentDigest",
+          "components"
+        ],
+        "properties": {
+          "workloadId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "contentDigest": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "components": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 256,
+            "items": {
+              "$ref": "#/components/schemas/WorkloadComponent"
+            }
+          }
+        }
+      },
+      "ReleasePhase": {
+        "type": "string",
+        "enum": [
+          "PENDING",
+          "PLACING",
+          "APPLYING",
+          "READY",
+          "DEGRADED",
+          "FAILED",
+          "STOPPING",
+          "STOPPED"
+        ]
+      },
+      "WorkloadReleaseStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "phase",
+          "readyComponents",
+          "observedAt"
+        ],
+        "properties": {
+          "phase": {
+            "$ref": "#/components/schemas/ReleasePhase"
+          },
+          "placementDecisionId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "currentOperationId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "readyComponents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "observedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        }
+      },
+      "WorkloadRelease": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "kind",
+          "metadata",
+          "spec",
+          "status"
+        ],
+        "properties": {
+          "apiVersion": {
+            "const": "matrix.paas.io/paas/v1"
+          },
+          "kind": {
+            "const": "WorkloadRelease"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/ResourceMetadata"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/WorkloadReleaseSpec"
+          },
+          "status": {
+            "$ref": "#/components/schemas/WorkloadReleaseStatus"
+          }
+        }
+      },
+      "SubjectType": {
+        "type": "string",
+        "enum": [
+          "USER",
+          "SERVICE_ACCOUNT",
+          "AGENT",
+          "SYSTEM_USER"
+        ]
+      },
+      "SubjectRef": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "type",
+          "id"
+        ],
+        "properties": {
+          "type": {
+            "$ref": "#/components/schemas/SubjectType"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          }
+        }
+      },
+      "ResourceRef": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "id"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          }
+        }
+      },
+      "OperationAction": {
+        "type": "string",
+        "enum": [
+          "CREATE_RESOURCE_POOL",
+          "REGISTER_TARGET",
+          "CREATE_PLACEMENT",
+          "DEPLOY",
+          "UPDATE",
+          "STOP",
+          "ROLLBACK"
+        ]
+      },
+      "OperationState": {
+        "type": "string",
+        "enum": [
+          "ACCEPTED",
+          "PLANNING",
+          "QUEUED",
+          "EXECUTING",
+          "VERIFYING",
+          "RECONCILING",
+          "SUCCEEDED",
+          "FAILED",
+          "CANCELLED",
+          "MANUAL_INTERVENTION"
+        ],
+        "x-matrix-terminal-values": [
+          "SUCCEEDED",
+          "FAILED",
+          "CANCELLED",
+          "MANUAL_INTERVENTION"
+        ]
+      },
+      "Operation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "kind",
+          "id",
+          "tenantId",
+          "action",
+          "target",
+          "requestedBy",
+          "idempotencyFingerprint",
+          "requestDigest",
+          "state",
+          "attempt",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "apiVersion": {
+            "const": "matrix.paas.io/paas/v1"
+          },
+          "kind": {
+            "const": "Operation"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "tenantId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "action": {
+            "$ref": "#/components/schemas/OperationAction"
+          },
+          "target": {
+            "$ref": "#/components/schemas/ResourceRef"
+          },
+          "requestedBy": {
+            "$ref": "#/components/schemas/SubjectRef"
+          },
+          "idempotencyFingerprint": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "requestDigest": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "state": {
+            "$ref": "#/components/schemas/OperationState"
+          },
+          "attempt": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4294967295
+          },
+          "error": {
+            "$ref": "#/components/schemas/Problem"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "terminalAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "state"
+              ],
+              "properties": {
+                "state": {
+                  "enum": [
+                    "SUCCEEDED",
+                    "FAILED",
+                    "CANCELLED",
+                    "MANUAL_INTERVENTION"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "terminalAt"
+              ]
+            },
+            "else": {
+              "not": {
+                "required": [
+                  "terminalAt"
+                ]
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "state"
+              ],
+              "properties": {
+                "state": {
+                  "enum": [
+                    "FAILED",
+                    "MANUAL_INTERVENTION"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "error"
+              ]
+            },
+            "else": {
+              "not": {
+                "required": [
+                  "error"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "EvidenceType": {
+        "type": "string",
+        "enum": [
+          "POLICY_DECISION",
+          "PLACEMENT_DECISION",
+          "ADAPTER_COMMAND",
+          "ADAPTER_RESULT",
+          "OBSERVATION",
+          "VERIFICATION",
+          "AUDIT_DISPATCH"
+        ]
+      },
+      "EvidenceSeverity": {
+        "type": "string",
+        "enum": [
+          "INFO",
+          "WARNING",
+          "ERROR"
+        ]
+      },
+      "Evidence": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "apiVersion",
+          "kind",
+          "id",
+          "tenantId",
+          "operationId",
+          "sequence",
+          "type",
+          "source",
+          "severity",
+          "code",
+          "message",
+          "contentDigest",
+          "occurredAt"
+        ],
+        "properties": {
+          "apiVersion": {
+            "const": "matrix.paas.io/paas/v1"
+          },
+          "kind": {
+            "const": "Evidence"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "tenantId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "operationId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "sequence": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "type": {
+            "$ref": "#/components/schemas/EvidenceType"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/EvidenceSeverity"
+          },
+          "code": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "attributes": {
+            "type": "object",
+            "maxProperties": 64,
+            "propertyNames": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          "previousDigest": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "contentDigest": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "occurredAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        }
+      },
+      "AdapterAction": {
+        "type": "string",
+        "enum": [
+          "CAPABILITIES",
+          "INSPECT_TARGET",
+          "OBSERVE_TARGET",
+          "VALIDATE_RELEASE",
+          "APPLY",
+          "OBSERVE",
+          "STOP",
+          "ROLLBACK",
+          "RECONCILE_ROUTES",
+          "OBSERVE_ROUTES",
+          "DELETE_ROUTES"
+        ]
+      },
+      "AdapterCapabilitiesContract": {
+        "type": "object",
+        "additionalProperties": false,
+        "x-matrix-visibility": "internal",
+        "required": [
+          "adapter",
+          "actions",
+          "observedAt"
+        ],
+        "properties": {
+          "adapter": {
+            "$ref": "#/components/schemas/AdapterRef"
+          },
+          "actions": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/AdapterAction"
+            }
+          },
+          "isolationClasses": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/IsolationClass"
+            }
+          },
+          "observedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        }
+      },
+      "AdapterCommandEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "x-matrix-visibility": "internal",
+        "required": [
+          "operationId",
+          "commandId",
+          "attempt",
+          "action",
+          "tenantId",
+          "runtimeTargetId",
+          "requestDigest",
+          "bindingRef",
+          "deadline"
+        ],
+        "properties": {
+          "operationId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "commandId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "attempt": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4294967295
+          },
+          "action": {
+            "$ref": "#/components/schemas/AdapterAction"
+          },
+          "tenantId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "workloadId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "releaseId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "runtimeTargetId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "requestDigest": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "bindingRef": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "deadline": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "traceparent": {
+            "type": "string",
+            "maxLength": 55
+          }
+        }
+      },
+      "AdapterErrorClass": {
+        "type": "string",
+        "enum": [
+          "VALIDATION",
+          "CONFLICT",
+          "PERMISSION_DENIED",
+          "QUOTA_EXCEEDED",
+          "RATE_LIMITED",
+          "TRANSIENT",
+          "UNAVAILABLE",
+          "TIMEOUT",
+          "NOT_FOUND",
+          "UNKNOWN_OUTCOME",
+          "INTERNAL"
+        ]
+      },
+      "NormalizedAdapterError": {
+        "type": "object",
+        "additionalProperties": false,
+        "x-matrix-visibility": "internal",
+        "required": [
+          "class",
+          "code",
+          "message",
+          "retryable"
+        ],
+        "properties": {
+          "class": {
+            "$ref": "#/components/schemas/AdapterErrorClass"
+          },
+          "code": {
+            "$ref": "#/components/schemas/ErrorCode"
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "retryAfterSeconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 86400
+          }
+        }
+      },
+      "AdapterResultState": {
+        "type": "string",
+        "enum": [
+          "SUCCEEDED",
+          "IN_PROGRESS",
+          "FAILED",
+          "UNKNOWN"
+        ]
+      },
+      "AdapterResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "x-matrix-visibility": "internal",
+        "required": [
+          "commandId",
+          "state",
+          "replayed",
+          "observedAt"
+        ],
+        "properties": {
+          "commandId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "state": {
+            "$ref": "#/components/schemas/AdapterResultState"
+          },
+          "receipt": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "replayed": {
+            "type": "boolean"
+          },
+          "error": {
+            "$ref": "#/components/schemas/NormalizedAdapterError"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Evidence"
+            }
+          },
+          "observedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "state"
+              ],
+              "properties": {
+                "state": {
+                  "enum": [
+                    "FAILED",
+                    "UNKNOWN"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "error"
+              ]
+            },
+            "else": {
+              "not": {
+                "required": [
+                  "error"
+                ]
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

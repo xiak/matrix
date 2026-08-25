@@ -1,0 +1,18 @@
+{
+  "apiVersion": "matrix.paas.io/paas/v1",
+  "kind": "Evidence",
+  "id": "evidence-a-0001",
+  "tenantId": "tenant-a",
+  "operationId": "operation-a-0001",
+  "sequence": 1,
+  "type": "POLICY_DECISION",
+  "source": "paas-control-plane",
+  "severity": "INFO",
+  "code": "PLACEMENT_POLICY_ACCEPTED",
+  "message": "Placement policy was accepted for evaluation.",
+  "attributes": {
+    "isolation_class": "DEDICATED_COMPOSE"
+  },
+  "contentDigest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "occurredAt": "2026-08-25T08:03:00Z"
+}

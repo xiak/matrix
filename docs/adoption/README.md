@@ -18,3 +18,7 @@ capability and admitted into its owning service; the directory is not copied
 wholesale into Matrix PaaS.
 
 See [sources.yaml](sources.yaml) for the initial fixed inputs.
+
+Feature reviews:
+
+- [FEAT-001 Runtime contracts](FEAT-001-runtime-contracts.md)

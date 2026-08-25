@@ -1,0 +1,30 @@
+{
+  "apiVersion": "matrix.paas.io/paas/v1",
+  "kind": "PlacementPolicy",
+  "metadata": {
+    "id": "placement-policy-a",
+    "name": "dedicated-local",
+    "scope": {
+      "kind": "TENANT",
+      "tenantId": "tenant-a"
+    },
+    "labels": {
+      "purpose": "default"
+    },
+    "resourceVersion": 1,
+    "createdAt": "2026-08-25T08:01:00Z",
+    "updatedAt": "2026-08-25T08:01:00Z"
+  },
+  "spec": {
+    "requiredIsolationClass": "DEDICATED_COMPOSE",
+    "eligibleResourcePoolIds": [
+      "pool-local"
+    ],
+    "targetSelector": {
+      "matchLabels": {
+        "runtime": "compose"
+      }
+    },
+    "strategy": "FIRST_FIT"
+  }
+}

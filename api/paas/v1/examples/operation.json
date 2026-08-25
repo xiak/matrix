@@ -1,0 +1,21 @@
+{
+  "apiVersion": "matrix.paas.io/paas/v1",
+  "kind": "Operation",
+  "id": "operation-a-0001",
+  "tenantId": "tenant-a",
+  "action": "DEPLOY",
+  "target": {
+    "kind": "WorkloadRelease",
+    "id": "release-a-0001"
+  },
+  "requestedBy": {
+    "type": "USER",
+    "id": "user-a"
+  },
+  "idempotencyFingerprint": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "requestDigest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "state": "ACCEPTED",
+  "attempt": 1,
+  "createdAt": "2026-08-25T08:03:00Z",
+  "updatedAt": "2026-08-25T08:03:00Z"
+}

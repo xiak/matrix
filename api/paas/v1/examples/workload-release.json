@@ -1,0 +1,60 @@
+{
+  "apiVersion": "matrix.paas.io/paas/v1",
+  "kind": "WorkloadRelease",
+  "metadata": {
+    "id": "release-a-0001",
+    "name": "demo-v1",
+    "scope": {
+      "kind": "TENANT",
+      "tenantId": "tenant-a"
+    },
+    "labels": {
+      "app": "demo"
+    },
+    "resourceVersion": 1,
+    "createdAt": "2026-08-25T08:01:00Z",
+    "updatedAt": "2026-08-25T08:01:00Z"
+  },
+  "spec": {
+    "workloadId": "workload-demo",
+    "revision": "rev-0001",
+    "contentDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "components": [
+      {
+        "name": "web",
+        "artifact": {
+          "kind": "OCI_IMAGE",
+          "locator": "registry.example.invalid/demo/web",
+          "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "replicas": 1,
+        "resources": {
+          "cpuMillis": 100,
+          "memoryBytes": 134217728
+        },
+        "configurationRefs": [
+          "config-demo-v1"
+        ],
+        "secretReferences": [
+          {
+            "name": "database",
+            "resourceId": "secret-demo-db"
+          }
+        ],
+        "endpoints": [
+          {
+            "name": "http",
+            "port": 8080,
+            "protocol": "HTTP",
+            "visibility": "PUBLIC"
+          }
+        ]
+      }
+    ]
+  },
+  "status": {
+    "phase": "PENDING",
+    "readyComponents": 0,
+    "observedAt": "2026-08-25T08:01:00Z"
+  }
+}
