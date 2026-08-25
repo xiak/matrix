@@ -119,6 +119,14 @@
   closed events, immutable Audit rows, Go/SQL hash agreement, database event,
   session, and lease time, lease recovery, and stale-fence rejection. Full
   generation, unit, architecture, vet, race, ten-run, and PG18 race gates pass.
+  The pre-Gate-B identity correction is pushed in `1beb2d0`: bootstrap owns
+  five independent IAM, PaaS, Audit, APISIX, and verifier credentials, and
+  `GET /v1/service-identity` returns only the organization, principal, and
+  purpose bound to the current service Bearer. It accepts no selector, so
+  Audit can derive a closed producer source without shared credentials,
+  caller headers, or cross-schema reads. Generation, full unit/vet/race and
+  ten-run gates, four-target builds, documentation/dependency checks, and a
+  fresh real PostgreSQL 18 race gate all pass after the correction.
 - The FEAT-004 accepted worktree passed its schema and real-runtime gates.
   Clean PostgreSQL 18 runs applied the migration twice, ran the verifier, used
   non-bypass API/worker logins, attacked RLS and cross-role privileges,
