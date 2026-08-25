@@ -1,6 +1,6 @@
 # FEAT-005: Offline platform distribution and lifecycle
 
-- Status: Target design fixed; adoption review and implementation pending
+- Status: Target design and adoption review complete; Gate A implementation pending
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
 - Release contract version: `v1`
