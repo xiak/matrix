@@ -5,18 +5,23 @@ This adapter represents explicitly configured machines as normalized
 bounded labels, CPU/memory/storage capacity, health, and the exact Compose
 isolation classes currently available. It never deploys a workload.
 
-Current release gate:
+Accepted FEAT-002 capabilities:
 
 - local Windows, Linux, and macOS host metrics;
 - stable platform machine identity with no raw machine ID in observations;
 - fixed Docker Engine and Compose capability probes;
 - `READY` only when both Docker Engine and Compose are available;
 - server-owned binding allowlists and optional expected-identity pin;
+- pinned remote Linux SSH with an opaque credential resolver;
+- public-key authentication only, with mandatory SHA-256 host-key pinning;
+- a closed eight-probe command set with per-probe deadlines and bounded output;
 - normalized, sanitized adapter failures.
 
-Pinned remote Linux SSH is the second FEAT-002 gate and is not yet advertised
-by the adapter. An SSH binding therefore returns `CAPABILITY_UNSUPPORTED`
-without attempting a connection.
+Remote probing is enabled only when the composition root supplies an
+`SSHHostProbe`. Without it, an SSH binding still fails closed with
+`CAPABILITY_UNSUPPORTED` and no connection attempt. Credentials, endpoints,
+usernames, host paths, commands, and raw probe output never enter the
+versioned observation contract.
 
 The adapter imports only [`api/paas/v1`](../../../../api/paas/v1/) data
 contracts. It does not import PaaS service internals. See the

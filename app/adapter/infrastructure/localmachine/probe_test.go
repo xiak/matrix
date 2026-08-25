@@ -3,7 +3,9 @@ package localmachine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -61,6 +63,18 @@ func TestExecCapabilityCheckerRejectsUnknownProbeWithoutExecution(t *testing.T) 
 	checker := execCapabilityChecker{timeout: time.Second}
 	if checker.Available(context.Background(), CapabilityProbeID("caller-command")) {
 		t.Fatal("unknown capability probe must fail closed")
+	}
+}
+
+func TestHostFactsFormattingRedactsRawMachineIdentity(t *testing.T) {
+	facts := validHostFacts()
+	facts.MachineID = "secret-machine-id-must-not-leak"
+	rendered := fmt.Sprintf("%v %#v", facts, facts)
+	if strings.Contains(rendered, facts.MachineID) {
+		t.Fatalf("host facts formatting leaked raw machine ID: %q", rendered)
+	}
+	if !strings.Contains(rendered, "<redacted>") {
+		t.Fatalf("host facts formatting is not visibly redacted: %q", rendered)
 	}
 }
 

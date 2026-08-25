@@ -42,10 +42,13 @@ avoided.
 ## Current phase
 
 The repository is implementing Local Compose Runtime v0.1 in independently
-accepted slices. FEAT-001 has established the vendor-neutral resources,
-state machines, adapter ports, errors, idempotency identity, and evidence
-contract. It does not yet deploy a workload; LocalMachine, placement, Compose,
-IAM/Audit, and northbound delivery follow in FEAT-002 through FEAT-006.
+accepted slices. FEAT-001 established the vendor-neutral resources, state
+machines, adapter ports, errors, idempotency identity, and evidence contract.
+FEAT-002 now admits explicit local machines and pinned-SSH remote Linux
+machines through normalized observations without exposing access material.
+It does not yet deploy a workload; tenant placement is the next slice, followed
+by Compose runtime, IAM/Audit integration, and northbound delivery in
+FEAT-003 through FEAT-006.
 
 See [the architecture index](docs/architecture/README.md) and
 [the feature index](docs/features/README.md).

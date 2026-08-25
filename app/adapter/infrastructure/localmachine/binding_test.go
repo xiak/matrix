@@ -3,6 +3,7 @@ package localmachine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -129,6 +130,9 @@ func TestSSHBindingRequiresPinnedReferenceOnlyConfiguration(t *testing.T) {
 		"relative remote storage": func(value *MachineBindingSpec) {
 			value.StoragePath = "var/lib/matrix"
 		},
+		"oversized remote storage": func(value *MachineBindingSpec) {
+			value.StoragePath = "/" + strings.Repeat("a", 4096)
+		},
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -138,6 +142,29 @@ func TestSSHBindingRequiresPinnedReferenceOnlyConfiguration(t *testing.T) {
 				t.Fatal("unsafe SSH binding must be rejected")
 			}
 		})
+	}
+}
+
+func TestMachineBindingFormattingRedactsAccessMaterial(t *testing.T) {
+	binding := mustSSHBinding(
+		t,
+		"secret-node.example.internal:2222",
+		pinnedTestHostKey(),
+		"/secret/storage",
+	)
+	rendered := fmt.Sprintf("%v %#v", binding, binding)
+	for _, forbidden := range []string{
+		"secret-node.example.internal",
+		"credential-node-1",
+		pinnedTestHostKey(),
+		"/secret/storage",
+	} {
+		if strings.Contains(rendered, forbidden) {
+			t.Fatalf("binding formatting leaked %q: %q", forbidden, rendered)
+		}
+	}
+	if !strings.Contains(rendered, "<redacted>") {
+		t.Fatalf("binding formatting is not visibly redacted: %q", rendered)
 	}
 }
 

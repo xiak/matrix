@@ -25,6 +25,7 @@ const (
 var (
 	hostKeyFingerprintPattern = regexp.MustCompile(`^SHA256:[A-Za-z0-9+/]{43}$`)
 	dnsLabelPattern           = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+	posixAbsolutePathPattern  = regexp.MustCompile(`^/(?:[A-Za-z0-9._@+-]+(?:/[A-Za-z0-9._@+-]+)*)?$`)
 )
 
 var reservedLabels = map[string]struct{}{
@@ -126,7 +127,9 @@ func ValidateMachineBinding(value MachineBinding) error {
 			)
 		}
 		if value.storagePath != "" &&
-			(!path.IsAbs(value.storagePath) ||
+			(len(value.storagePath) > 4096 ||
+				!path.IsAbs(value.storagePath) ||
+				!posixAbsolutePathPattern.MatchString(value.storagePath) ||
 				path.Clean(value.storagePath) != value.storagePath) {
 			problems = append(
 				problems,
@@ -141,6 +144,20 @@ func ValidateMachineBinding(value MachineBinding) error {
 
 func (value MachineBinding) ID() string {
 	return value.id
+}
+
+func (value MachineBinding) String() string {
+	return fmt.Sprintf(
+		"MachineBinding{id:%q kind:%q access:<redacted> labels:%d isolationClasses:%d}",
+		value.id,
+		value.kind,
+		len(value.labels),
+		len(value.allowedIsolationClasses),
+	)
+}
+
+func (value MachineBinding) GoString() string {
+	return value.String()
 }
 
 func (value MachineBinding) Kind() BindingKind {

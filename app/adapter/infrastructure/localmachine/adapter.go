@@ -18,15 +18,17 @@ const (
 type Clock func() time.Time
 
 type Config struct {
-	Bindings   BindingResolver
-	LocalProbe HostProbe
-	Clock      Clock
+	Bindings    BindingResolver
+	LocalProbe  HostProbe
+	RemoteProbe RemoteHostProbe
+	Clock       Clock
 }
 
 type Adapter struct {
-	bindings   BindingResolver
-	localProbe HostProbe
-	clock      Clock
+	bindings    BindingResolver
+	localProbe  HostProbe
+	remoteProbe RemoteHostProbe
+	clock       Clock
 }
 
 func New(config Config) (*Adapter, error) {
@@ -40,9 +42,10 @@ func New(config Config) (*Adapter, error) {
 		config.Clock = time.Now
 	}
 	return &Adapter{
-		bindings:   config.Bindings,
-		localProbe: config.LocalProbe,
-		clock:      config.Clock,
+		bindings:    config.Bindings,
+		localProbe:  config.LocalProbe,
+		remoteProbe: config.RemoteProbe,
+		clock:       config.Clock,
 	}, nil
 }
 
@@ -108,10 +111,18 @@ func (adapter *Adapter) inspect(
 	if err := ValidateMachineBinding(binding); err != nil {
 		return paasv1.TargetObservation{}, invalidBindingFault(binding.id)
 	}
-	if binding.kind != BindingLocal {
-		return paasv1.TargetObservation{}, unsupportedBindingFault(binding.id)
+	var facts HostFacts
+	switch binding.kind {
+	case BindingLocal:
+		facts, err = adapter.localProbe.Inspect(operationContext, binding.storagePath)
+	case BindingSSH:
+		if adapter.remoteProbe == nil {
+			return paasv1.TargetObservation{}, unsupportedBindingFault(binding.id)
+		}
+		facts, err = adapter.remoteProbe.Inspect(operationContext, binding)
+	default:
+		return paasv1.TargetObservation{}, invalidBindingFault(binding.id)
 	}
-	facts, err := adapter.localProbe.Inspect(operationContext, binding.storagePath)
 	if err != nil {
 		return paasv1.TargetObservation{}, normalizeProbeFault(binding.id, err)
 	}
@@ -281,6 +292,20 @@ func normalizeProbeFault(id string, err error) paasv1.AdapterFault {
 			paasv1.ErrorTargetUnavailable,
 			fmt.Sprintf("machine binding %s is unavailable", id),
 			true,
+		)
+	case ProbeFailurePermission:
+		return newAdapterFault(
+			paasv1.AdapterErrorPermissionDenied,
+			paasv1.ErrorPermissionDenied,
+			fmt.Sprintf("machine binding %s credential was rejected", id),
+			false,
+		)
+	case ProbeFailureHostKey:
+		return newAdapterFault(
+			paasv1.AdapterErrorPermissionDenied,
+			paasv1.ErrorAdapterRejected,
+			fmt.Sprintf("machine binding %s host identity was rejected", id),
+			false,
 		)
 	default:
 		return newAdapterFault(

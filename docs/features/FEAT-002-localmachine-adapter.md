@@ -1,6 +1,6 @@
 # FEAT-002: LocalMachine infrastructure adapter
 
-- Status: Gate A accepted; Gate B implementation pending
+- Status: Accepted
 - Target release: Local Compose Runtime v0.1
 - Adapter contract version: `v1`
 - Target design date: 2026-08-25
@@ -226,6 +226,35 @@ Accepted on 2026-08-25 with:
    normalized table.
 4. A remote observation is byte-for-byte equivalent in normalized shape to a
    local observation with the same safe facts.
+
+#### Gate B acceptance result
+
+Accepted on 2026-08-25 with:
+
+- a real loopback ephemeral SSH server exercising the complete adapter path
+  and all eight adapter-owned probes;
+- mandatory SHA-256 host-key pinning and public-key authentication, with wrong
+  pins and rejected credentials proven to execute zero commands;
+- unknown, empty, and duplicate probe sets rejected before a network
+  connection is opened;
+- context cancellation proven to interrupt both a stalled SSH handshake and a
+  stalled exec request promptly;
+- stdout and stderr bounded while reading, with oversized, malformed,
+  control-character, secret-shaped, overflow, and impossible capacity output
+  rejected without leaking native details;
+- parsed signer storage, generic credential errors, and redacted debug
+  formatting for credentials, bindings, and raw machine identity;
+- 39 top-level LocalMachine tests in total, including the real local-host and
+  ephemeral-SSH integration paths;
+- native Windows tests plus successful Windows amd64, Linux amd64/arm64, and
+  Darwin arm64 test-binary compilation;
+- `go test ./...`, `go vet ./...`, `go test -race ./...`,
+  `go test -count=10 ./...`, architecture tests, schema tests, and
+  `git diff --check` passing.
+
+The implementation adds `golang.org/x/crypto/ssh` as the only new direct
+runtime dependency. Neither donor repository is linked, copied, or required
+at build or runtime.
 
 ### Common gates
 

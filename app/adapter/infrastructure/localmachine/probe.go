@@ -39,6 +39,10 @@ func (value HostFacts) String() string {
 	)
 }
 
+func (value HostFacts) GoString() string {
+	return value.String()
+}
+
 type HostProbe interface {
 	Inspect(context.Context, string) (HostFacts, error)
 }
@@ -49,6 +53,8 @@ const (
 	ProbeFailureValidation  ProbeFailureKind = "VALIDATION"
 	ProbeFailureTimeout     ProbeFailureKind = "TIMEOUT"
 	ProbeFailureUnavailable ProbeFailureKind = "UNAVAILABLE"
+	ProbeFailurePermission  ProbeFailureKind = "PERMISSION_DENIED"
+	ProbeFailureHostKey     ProbeFailureKind = "HOST_KEY_MISMATCH"
 	ProbeFailureInternal    ProbeFailureKind = "INTERNAL"
 )
 
