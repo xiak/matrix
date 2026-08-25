@@ -336,7 +336,10 @@ func compileServices(
 		"MATRIX_PAAS_WORKER_BINDING_ROOT":          executorRoot,
 		"MATRIX_PAAS_WORKER_SECRET_ROOT":           workloadSecretRoot,
 		"MATRIX_PAAS_WORKER_ARTIFACT_CATALOG_FILE": "/run/matrix/artifact-catalog.json",
+		"MATRIX_PAAS_WORKER_EXECUTION_TENANT_ID":   "organization-default",
+		"MATRIX_PAAS_WORKER_MACHINE_BINDING_REF":   "local-machine-v1",
 		"MATRIX_PAAS_WORKER_LISTEN_ADDRESS":        "0.0.0.0:8080",
+		"DOCKER_HOST":                              "unix:///var/run/docker.sock",
 	}
 	paasWorker.Volumes = []mount{
 		bind(paasWorkerDSN, "/run/matrix/paas-worker-dsn", true),

@@ -106,6 +106,20 @@ func TestValidateExecutionTargetFailsClosedOnCapacityAndCapabilities(t *testing.
 	}
 }
 
+func TestValidateExecutionTargetCapabilityRequirementFollowsHealth(t *testing.T) {
+	var target ExecutionTarget
+	decodeStrictJSON(t, "examples/execution-target.json", &target)
+	target.Status.Health = ExecutionTargetHealthDegraded
+	target.Status.SupportedIsolationGuarantees = nil
+	if err := ValidateExecutionTarget(target); err != nil {
+		t.Fatalf("degraded target without advertised isolation = %v", err)
+	}
+	target.Status.Health = ExecutionTargetHealthReady
+	if err := ValidateExecutionTarget(target); err == nil {
+		t.Fatal("ready target without advertised isolation was accepted")
+	}
+}
+
 func TestValidatePlacementPolicyRejectsDuplicateExecutionPools(t *testing.T) {
 	var policy PlacementPolicy
 	decodeStrictJSON(t, "examples/placement-policy.json", &policy)

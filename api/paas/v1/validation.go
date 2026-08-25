@@ -182,7 +182,7 @@ func ValidateExecutionTarget(value ExecutionTarget) error {
 			"status.supportedIsolationGuarantees",
 			value.Status.SupportedIsolationGuarantees,
 			IsolationGuarantees(),
-			true,
+			value.Status.Health == ExecutionTargetHealthReady,
 		),
 		validateContractTime("status.observedAt", value.Status.ObservedAt),
 	)

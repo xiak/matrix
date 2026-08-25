@@ -282,6 +282,10 @@ BEGIN
             (
                 'transition_capacity_reservation',
                 'requested_operation_id text, requested_worker_id text, expected_fencing_token bigint, requested_reservation_id text, requested_action text, expected_resource_version bigint'
+            ),
+            (
+                'reconcile_local_execution_profile',
+                'expected_pool_version bigint, submitted_pool jsonb, expected_target_version bigint, submitted_target jsonb, expected_policy_version bigint, submitted_policy jsonb'
             )
       ) AS required(name, identity_arguments)
      WHERE NOT EXISTS (
@@ -434,6 +438,26 @@ BEGIN
             'matrix_paas_worker',
             'paas.capacity_reservations',
             'INSERT, UPDATE, DELETE'
+       )
+       OR has_table_privilege(
+            'matrix_paas_worker',
+            'paas.execution_pools',
+            'INSERT, UPDATE, DELETE'
+       )
+       OR has_table_privilege(
+            'matrix_paas_worker',
+            'paas.execution_targets',
+            'INSERT, UPDATE, DELETE'
+       )
+       OR has_table_privilege(
+            'matrix_paas_worker',
+            'paas.placement_policies',
+            'INSERT, UPDATE, DELETE'
+       )
+       OR has_table_privilege(
+            'matrix_paas_worker',
+            'paas.execution_target_allocations',
+            'INSERT, DELETE'
        ) THEN
         RAISE EXCEPTION 'worker role can rewrite authoritative or immutable input';
     END IF;
@@ -506,6 +530,11 @@ BEGIN
        OR NOT has_function_privilege(
             'matrix_paas_worker',
             'paas.transition_capacity_reservation(text, text, bigint, text, text, bigint)',
+            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_paas_worker',
+            'paas.reconcile_local_execution_profile(bigint, jsonb, bigint, jsonb, bigint, jsonb)',
             'EXECUTE'
        )
        OR NOT has_function_privilege(
@@ -584,7 +613,8 @@ BEGIN
                     'paas.record_adapter_receipt(text, text, bigint, text, text, text, text, jsonb, jsonb, timestamptz)',
                     'paas.record_deployment_observation(text, text, bigint, text, jsonb)',
                     'paas.release_operation_lease(text, text, bigint, timestamptz)',
-                    'paas.transition_capacity_reservation(text, text, bigint, text, text, bigint)'
+                    'paas.transition_capacity_reservation(text, text, bigint, text, text, bigint)',
+                    'paas.reconcile_local_execution_profile(bigint, jsonb, bigint, jsonb, bigint, jsonb)'
                    ]) AS worker_function(signature)
              WHERE has_function_privilege(
                     'matrix_paas_api',

@@ -1412,6 +1412,27 @@
       },
       "ExecutionTargetStatus": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "health": {
+                  "const": "READY"
+                }
+              },
+              "required": [
+                "health"
+              ]
+            },
+            "then": {
+              "properties": {
+                "supportedIsolationGuarantees": {
+                  "minItems": 1
+                }
+              }
+            }
+          }
+        ],
         "properties": {
           "allocatable": {
             "$ref": "#/components/schemas/Capacity"
@@ -1429,7 +1450,6 @@
             "items": {
               "$ref": "#/components/schemas/IsolationGuarantee"
             },
-            "minItems": 1,
             "type": "array",
             "uniqueItems": true
           }

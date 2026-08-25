@@ -14,6 +14,7 @@ import (
 	apphostingv1 "github.com/xiak/matrix/api/adapter/apphosting/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	composeadapter "github.com/xiak/matrix/app/adapter/apphosting/compose"
+	localmachineadapter "github.com/xiak/matrix/app/adapter/infrastructure/localmachine"
 	"github.com/xiak/matrix/app/service/internal/processconfig"
 	"github.com/xiak/matrix/app/service/internal/processhttp"
 	paaspostgres "github.com/xiak/matrix/app/service/paas/internal/apphosting/data/postgres"
@@ -21,6 +22,7 @@ import (
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/createplacement"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/operationqueue"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/reconciledeployment"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/refreshexecutionprofile"
 )
 
 const (
@@ -30,8 +32,13 @@ const (
 	bindingRootEnvironment      = "MATRIX_PAAS_WORKER_BINDING_ROOT"
 	secretRootEnvironment       = "MATRIX_PAAS_WORKER_SECRET_ROOT"
 	artifactCatalogEnvironment  = "MATRIX_PAAS_WORKER_ARTIFACT_CATALOG_FILE"
+	executionTenantEnvironment  = "MATRIX_PAAS_WORKER_EXECUTION_TENANT_ID"
+	machineBindingEnvironment   = "MATRIX_PAAS_WORKER_MACHINE_BINDING_REF"
 	listenAddressEnvironment    = "MATRIX_PAAS_WORKER_LISTEN_ADDRESS"
 	pollInterval                = 250 * time.Millisecond
+	executionTargetRefresh      = time.Minute
+	executionTargetMaximumAge   = 5 * time.Minute
+	executionTargetTimeout      = 5 * time.Second
 	operationLeaseDuration      = 30 * time.Second
 	effectTimeout               = 20 * time.Second
 	reconcileBackoff            = time.Second
@@ -48,7 +55,15 @@ type configuration struct {
 	bindingRoot     string
 	secretRoot      string
 	artifactCatalog string
+	executionTenant paasv1.TenantID
+	machineBinding  string
 	listenAddress   string
+}
+
+var localExecutionProfileIDs = refreshexecutionprofile.IDs{
+	PoolID:   "execution-pool-local",
+	TargetID: "execution-target-local",
+	PolicyID: "placement-policy-local",
 }
 
 func main() {
@@ -80,6 +95,13 @@ func run(ctx context.Context) error {
 	defer pool.Close()
 	if err := pool.Ping(ctx); err != nil {
 		return errors.New("PaaS worker database is unavailable")
+	}
+	executionProfile, err := newLocalExecutionProfile(config, pool)
+	if err != nil {
+		return err
+	}
+	if err := executionProfile.Refresh(ctx); err != nil {
+		return errors.New("PaaS local execution profile cannot start")
 	}
 
 	catalogContent, err := processconfig.ReadFile(
@@ -174,6 +196,9 @@ func run(ctx context.Context) error {
 		if checkErr := runtime.Ready(readinessContext); checkErr != nil {
 			return errors.New("PaaS worker Compose readiness failed")
 		}
+		if checkErr := executionProfile.Ready(readinessContext); checkErr != nil {
+			return errors.New("PaaS worker execution profile readiness failed")
+		}
 		return nil
 	}
 	if err := readiness(ctx); err != nil {
@@ -188,7 +213,56 @@ func run(ctx context.Context) error {
 		config.listenAddress,
 		handler,
 		func(workerContext context.Context) error {
-			return runWorkerLoop(workerContext, worker.ProcessNext, config.workerID)
+			return runWorkerLoop(
+				workerContext,
+				worker.ProcessNext,
+				executionProfile.Refresh,
+				config.workerID,
+			)
+		},
+	)
+}
+
+func newLocalExecutionProfile(
+	config configuration,
+	pool *pgxpool.Pool,
+) (*refreshexecutionprofile.Service, error) {
+	binding, err := localmachineadapter.NewMachineBinding(
+		localmachineadapter.MachineBindingSpec{
+			ID: config.machineBinding, Kind: localmachineadapter.BindingLocal,
+			Labels: map[string]string{"location": "local"},
+			AllowedIsolationGuarantees: []paasv1.IsolationGuarantee{
+				paasv1.IsolationWorkload,
+			},
+			StoragePath: config.bindingRoot,
+		},
+	)
+	if err != nil {
+		return nil, errors.New("PaaS worker machine binding is invalid")
+	}
+	bindings, err := localmachineadapter.NewStaticBindingResolver(binding)
+	if err != nil {
+		return nil, errors.New("PaaS worker machine binding cannot start")
+	}
+	infrastructure, err := localmachineadapter.New(localmachineadapter.Config{
+		Bindings: bindings, LocalProbe: localmachineadapter.NewDockerHostProbe(),
+	})
+	if err != nil {
+		return nil, errors.New("PaaS worker infrastructure adapter cannot start")
+	}
+	repository, err := paaspostgres.NewExecutionProfileRepository(pool)
+	if err != nil {
+		return nil, err
+	}
+	return refreshexecutionprofile.New(
+		infrastructure,
+		repository,
+		refreshexecutionprofile.Config{
+			TenantID: config.executionTenant, IDs: localExecutionProfileIDs,
+			MachineBindingRef:      config.machineBinding,
+			ObservationTimeout:     executionTargetTimeout,
+			MaximumObservationAge:  executionTargetMaximumAge,
+			MaxTransactionAttempts: 5,
 		},
 	)
 }
@@ -196,12 +270,23 @@ func run(ctx context.Context) error {
 func runWorkerLoop(
 	ctx context.Context,
 	processNext func(context.Context, string) (bool, error),
+	refreshExecutionTarget func(context.Context) error,
 	workerID string,
 ) error {
-	if ctx == nil || processNext == nil {
+	if ctx == nil || processNext == nil || refreshExecutionTarget == nil {
 		return errors.New("PaaS worker loop configuration is invalid")
 	}
+	nextRefresh := time.Now().Add(executionTargetRefresh)
 	for {
+		if !time.Now().Before(nextRefresh) {
+			if err := refreshExecutionTarget(ctx); err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
+				return errors.New("PaaS execution target refresh failed")
+			}
+			nextRefresh = time.Now().Add(executionTargetRefresh)
+		}
 		processed, err := processNext(ctx, workerID)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -212,7 +297,14 @@ func runWorkerLoop(
 		if processed {
 			continue
 		}
-		timer := time.NewTimer(pollInterval)
+		wait := pollInterval
+		if untilRefresh := time.Until(nextRefresh); untilRefresh < wait {
+			wait = untilRefresh
+		}
+		if wait <= 0 {
+			continue
+		}
+		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
 			if !timer.Stop() {
@@ -232,16 +324,21 @@ func loadConfiguration() (configuration, error) {
 		bindingRoot:     os.Getenv(bindingRootEnvironment),
 		secretRoot:      os.Getenv(secretRootEnvironment),
 		artifactCatalog: os.Getenv(artifactCatalogEnvironment),
+		executionTenant: paasv1.TenantID(os.Getenv(executionTenantEnvironment)),
+		machineBinding:  os.Getenv(machineBindingEnvironment),
 		listenAddress:   os.Getenv(listenAddressEnvironment),
 	}
 	if config.databaseDSNFile == "" || config.workerID == "" ||
 		config.bindingRef == "" || config.bindingRoot == "" ||
 		config.secretRoot == "" || config.artifactCatalog == "" ||
+		config.executionTenant == "" || config.machineBinding == "" ||
 		config.listenAddress == "" {
 		return configuration{}, errors.New("PaaS worker configuration is incomplete")
 	}
 	if paasv1.ValidateID("workerId", config.workerID) != nil ||
-		paasv1.ValidateID("bindingRef", config.bindingRef) != nil {
+		paasv1.ValidateID("bindingRef", config.bindingRef) != nil ||
+		paasv1.ValidateID("executionTenantId", string(config.executionTenant)) != nil ||
+		paasv1.ValidateID("machineBindingRef", config.machineBinding) != nil {
 		return configuration{}, errors.New("PaaS worker identity configuration is invalid")
 	}
 	return config, nil

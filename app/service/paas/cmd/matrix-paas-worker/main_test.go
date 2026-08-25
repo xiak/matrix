@@ -31,7 +31,14 @@ func TestWorkerLoopProcessesAvailableWorkAndStopsWithContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	worker := &loopWorker{}
 	result := make(chan error, 1)
-	go func() { result <- runWorkerLoop(ctx, worker.ProcessNext, "worker-a") }()
+	go func() {
+		result <- runWorkerLoop(
+			ctx,
+			worker.ProcessNext,
+			func(context.Context) error { return nil },
+			"worker-a",
+		)
+	}()
 	deadline := time.After(2 * time.Second)
 	for {
 		worker.mu.Lock()
@@ -56,7 +63,12 @@ func TestWorkerLoopProcessesAvailableWorkAndStopsWithContext(t *testing.T) {
 func TestWorkerLoopNormalizesCycleFailure(t *testing.T) {
 	native := errors.New("database password and /host/path must not escape")
 	worker := &loopWorker{failure: native}
-	err := runWorkerLoop(context.Background(), worker.ProcessNext, "worker-a")
+	err := runWorkerLoop(
+		context.Background(),
+		worker.ProcessNext,
+		func(context.Context) error { return nil },
+		"worker-a",
+	)
 	if err == nil || errors.Is(err, native) || err.Error() != "PaaS Deployment reconciliation cycle failed" {
 		t.Fatalf("worker loop error = %v", err)
 	}

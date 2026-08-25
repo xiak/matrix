@@ -3285,6 +3285,225 @@ GRANT EXECUTE ON FUNCTION paas.transition_capacity_reservation(
 )
     TO matrix_paas_worker;
 
+CREATE OR REPLACE FUNCTION paas.reconcile_local_execution_profile(
+    expected_pool_version bigint,
+    submitted_pool jsonb,
+    expected_target_version bigint,
+    submitted_target jsonb,
+    expected_policy_version bigint,
+    submitted_policy jsonb
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text;
+    pool_id text;
+    target_id text;
+    policy_id text;
+    next_pool_version bigint;
+    next_target_version bigint;
+    next_policy_version bigint;
+    affected_rows bigint;
+    current_target jsonb;
+    current_policy jsonb;
+BEGIN
+    effective_tenant_id := paas.current_tenant_id();
+    IF effective_tenant_id IS NULL
+       OR jsonb_typeof(submitted_pool) <> 'object'
+       OR jsonb_typeof(submitted_target) <> 'object'
+       OR jsonb_typeof(submitted_policy) <> 'object'
+       OR expected_pool_version IS NULL
+       OR expected_pool_version NOT BETWEEN 0 AND 9007199254740991
+       OR expected_target_version IS NULL
+       OR expected_target_version NOT BETWEEN 0 AND 9007199254740991
+       OR expected_policy_version IS NULL
+       OR expected_policy_version NOT BETWEEN 0 AND 9007199254740991 THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'local execution profile input is invalid';
+    END IF;
+    pool_id := submitted_pool#>>'{metadata,id}';
+    target_id := submitted_target#>>'{metadata,id}';
+    policy_id := submitted_policy#>>'{metadata,id}';
+    next_pool_version := CASE
+        WHEN expected_pool_version = 0 THEN 1
+        ELSE expected_pool_version + 1
+    END;
+    next_target_version := CASE
+        WHEN expected_target_version = 0 THEN 1
+        ELSE expected_target_version + 1
+    END;
+    next_policy_version := CASE
+        WHEN expected_policy_version = 0 THEN 1
+        ELSE expected_policy_version
+    END;
+    IF pool_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR target_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR policy_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR next_pool_version NOT BETWEEN 1 AND 9007199254740991
+       OR next_target_version NOT BETWEEN 1 AND 9007199254740991
+       OR next_policy_version NOT BETWEEN 1 AND 9007199254740991
+       OR submitted_pool->>'apiVersion' <> 'paas.matrix.xiak.com/v1'
+       OR submitted_pool->>'kind' <> 'ExecutionPool'
+       OR submitted_pool#>>'{metadata,name}' <> 'local'
+       OR submitted_pool#>>'{metadata,scope,kind}' <> 'PLATFORM'
+       OR submitted_pool#>'{metadata,labels}'
+            <> '{"matrix-profile":"local-compose"}'::jsonb
+       OR submitted_pool#>'{spec,executionTargetSelector,matchLabels}'
+            <> '{"matrix-profile":"local-compose"}'::jsonb
+       OR submitted_pool#>'{spec,allowedIsolationGuarantees}'
+            <> '["WORKLOAD"]'::jsonb
+       OR submitted_pool#>>'{metadata,resourceVersion}' <> next_pool_version::text
+       OR submitted_target->>'apiVersion' <> 'paas.matrix.xiak.com/v1'
+       OR submitted_target->>'kind' <> 'ExecutionTarget'
+       OR submitted_target#>>'{metadata,name}' <> 'local'
+       OR submitted_target#>>'{metadata,scope,kind}' <> 'PLATFORM'
+       OR submitted_target#>>'{metadata,labels,matrix-profile}' <> 'local-compose'
+       OR submitted_target#>>'{metadata,labels,matrix-machine-fingerprint}'
+            COLLATE "C" !~ '^sha256:[0-9a-f]{64}$'
+       OR submitted_target#>>'{metadata,resourceVersion}' <> next_target_version::text
+       OR submitted_target#>>'{spec,executionPoolId}' <> pool_id
+       OR submitted_target#>>'{spec,infrastructureAdapter,kind}' <> 'INFRASTRUCTURE'
+       OR submitted_target#>>'{spec,infrastructureAdapter,name}' <> 'localmachine'
+       OR submitted_target#>>'{spec,infrastructureAdapter,contractVersion}' <> 'v1'
+       OR submitted_target#>>'{spec,deploymentExecutor,kind}' <> 'DEPLOYMENT_EXECUTOR'
+       OR submitted_target#>>'{spec,deploymentExecutor,name}' <> 'compose'
+       OR submitted_target#>>'{spec,deploymentExecutor,contractVersion}' <> 'v1'
+       OR submitted_target#>'{spec,gatewayAdapter}' IS NOT NULL
+       OR submitted_target#>>'{spec,desiredState}' <> 'ACTIVE'
+       OR (CASE submitted_target#>>'{status,health}'
+            WHEN 'READY' THEN
+                submitted_target#>'{status,supportedIsolationGuarantees}'
+                    <> '["WORKLOAD"]'::jsonb
+            WHEN 'DEGRADED' THEN
+                submitted_target#>'{status,supportedIsolationGuarantees}' <> '[]'::jsonb
+            WHEN 'UNAVAILABLE' THEN
+                submitted_target#>'{status,supportedIsolationGuarantees}' <> '[]'::jsonb
+            WHEN 'UNKNOWN' THEN
+                submitted_target#>'{status,supportedIsolationGuarantees}' <> '[]'::jsonb
+            ELSE true
+          END)
+       OR submitted_policy->>'apiVersion' <> 'paas.matrix.xiak.com/v1'
+       OR submitted_policy->>'kind' <> 'PlacementPolicy'
+       OR submitted_policy#>>'{metadata,name}' <> 'default-local'
+       OR submitted_policy#>>'{metadata,scope,kind}' <> 'TENANT'
+       OR submitted_policy#>>'{metadata,scope,tenantId}' <> effective_tenant_id
+       OR submitted_policy#>'{metadata,labels}'
+            <> '{"matrix-profile":"local-compose","purpose":"default"}'::jsonb
+       OR submitted_policy#>>'{spec,requiredIsolationGuarantee}' <> 'WORKLOAD'
+       OR submitted_policy#>'{spec,eligibleExecutionPoolIds}'
+            <> jsonb_build_array(pool_id)
+       OR submitted_policy#>'{spec,executionTargetSelector,matchLabels}'
+            <> '{"matrix-profile":"local-compose"}'::jsonb
+       OR submitted_policy#>>'{spec,strategy}' <> 'FIRST_FIT'
+       OR submitted_policy#>>'{metadata,resourceVersion}' <> next_policy_version::text THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'local execution profile document is invalid';
+    END IF;
+
+    IF expected_pool_version = 0 THEN
+        INSERT INTO paas.execution_pools (id, resource_version, document)
+        VALUES (pool_id, 1, submitted_pool)
+        ON CONFLICT DO NOTHING;
+    ELSE
+        UPDATE paas.execution_pools AS pool
+           SET resource_version = next_pool_version,
+               document = submitted_pool
+         WHERE pool.id = pool_id
+           AND pool.resource_version = expected_pool_version;
+    END IF;
+    GET DIAGNOSTICS affected_rows = ROW_COUNT;
+    IF affected_rows <> 1 THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '40001',
+            MESSAGE = 'local execution pool changed concurrently';
+    END IF;
+
+    IF expected_target_version = 0 THEN
+        INSERT INTO paas.execution_targets (
+            id, execution_pool_id, resource_version, document
+        ) VALUES (target_id, pool_id, 1, submitted_target)
+        ON CONFLICT DO NOTHING;
+    ELSE
+        SELECT target.document
+          INTO current_target
+          FROM paas.execution_targets AS target
+         WHERE target.id = target_id
+           AND target.resource_version = expected_target_version
+         FOR UPDATE;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '40001',
+                MESSAGE = 'local execution target changed concurrently';
+        END IF;
+        IF current_target#>>'{metadata,labels,matrix-machine-fingerprint}' <>
+           submitted_target#>>'{metadata,labels,matrix-machine-fingerprint}' THEN
+            RAISE EXCEPTION USING
+                ERRCODE = 'MX409',
+                MESSAGE = 'local execution target identity changed';
+        END IF;
+        UPDATE paas.execution_targets AS target
+           SET resource_version = next_target_version,
+               document = submitted_target
+         WHERE target.id = target_id
+           AND target.resource_version = expected_target_version;
+    END IF;
+    GET DIAGNOSTICS affected_rows = ROW_COUNT;
+    IF affected_rows <> 1 THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '40001',
+            MESSAGE = 'local execution target changed concurrently';
+    END IF;
+
+    IF expected_policy_version = 0 THEN
+        INSERT INTO paas.placement_policies (
+            tenant_id, id, resource_version, document
+        ) VALUES (effective_tenant_id, policy_id, 1, submitted_policy)
+        ON CONFLICT DO NOTHING;
+        GET DIAGNOSTICS affected_rows = ROW_COUNT;
+        IF affected_rows <> 1 THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '40001',
+                MESSAGE = 'local placement policy changed concurrently';
+        END IF;
+    ELSE
+        SELECT policy.document
+          INTO current_policy
+          FROM paas.placement_policies AS policy
+         WHERE policy.tenant_id = effective_tenant_id
+           AND policy.id = policy_id
+           AND policy.resource_version = expected_policy_version
+         FOR UPDATE;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '40001',
+                MESSAGE = 'local placement policy changed concurrently';
+        END IF;
+        IF current_policy <> submitted_policy THEN
+            RAISE EXCEPTION USING
+                ERRCODE = 'MX409',
+                MESSAGE = 'local placement policy conflicts';
+        END IF;
+    END IF;
+
+    INSERT INTO paas.execution_target_allocations (execution_target_id)
+    VALUES (target_id)
+    ON CONFLICT DO NOTHING;
+    RETURN true;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.reconcile_local_execution_profile(
+    bigint, jsonb, bigint, jsonb, bigint, jsonb
+) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paas.reconcile_local_execution_profile(
+    bigint, jsonb, bigint, jsonb, bigint, jsonb
+) TO matrix_paas_worker;
+
 REVOKE ALL ON ALL TABLES IN SCHEMA paas FROM PUBLIC;
 REVOKE ALL ON ALL TABLES IN SCHEMA paas
     FROM matrix_paas_api, matrix_paas_worker;

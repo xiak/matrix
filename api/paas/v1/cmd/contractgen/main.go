@@ -518,7 +518,17 @@ func applySemanticOverlays(schemas map[string]any) {
 	)
 
 	setArrayMinimum(schemas, "ExecutionPoolSpec", "allowedIsolationGuarantees", 1)
-	setArrayMinimum(schemas, "ExecutionTargetStatus", "supportedIsolationGuarantees", 1)
+	setArrayUnique(schemas, "ExecutionTargetStatus", "supportedIsolationGuarantees")
+	executionTargetStatus := object(schemas["ExecutionTargetStatus"])
+	executionTargetStatus["allOf"] = []any{schema{
+		"if": schema{
+			"properties": schema{"health": schema{"const": string(paasv1.ExecutionTargetHealthReady)}},
+			"required":   []string{"health"},
+		},
+		"then": schema{
+			"properties": schema{"supportedIsolationGuarantees": schema{"minItems": 1}},
+		},
+	}}
 	setArrayMinimum(schemas, "PlacementPolicySpec", "eligibleExecutionPoolIds", 1)
 	setArrayMinimum(schemas, "ApplicationRevisionSpec", "components", 1)
 	setArrayMinimum(schemas, "DeploymentSpec", "components", 1)
@@ -603,8 +613,13 @@ func applySemanticOverlays(schemas map[string]any) {
 }
 
 func setArrayMinimum(schemas map[string]any, owner, property string, minimum int) {
+	setArrayUnique(schemas, owner, property)
 	properties := object(schemas[owner])["properties"].(schema)
 	object(properties[property])["minItems"] = minimum
+}
+
+func setArrayUnique(schemas map[string]any, owner, property string) {
+	properties := object(schemas[owner])["properties"].(schema)
 	object(properties[property])["uniqueItems"] = true
 }
 

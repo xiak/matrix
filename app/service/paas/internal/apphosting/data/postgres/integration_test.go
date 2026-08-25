@@ -24,6 +24,7 @@ import (
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/createplacement"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/operationqueue"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/refreshexecutionprofile"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/transitionreservation"
 	paasmigration "github.com/xiak/matrix/app/service/paas/migration"
 )
@@ -70,6 +71,7 @@ func TestPostgresIntegration(t *testing.T) {
 	defer workerPool.Close()
 
 	prefix := fmt.Sprintf("integration-%x", time.Now().UnixNano())
+	assertExecutionProfileRefresh(t, ctx, admin, workerPool, prefix)
 	fixture := seedIntegrationFixture(t, ctx, admin, prefix)
 	applicationResult := assertApplicationLifecycle(t, ctx, admin, apiPool, fixture, prefix)
 	assertAuditPersistenceAndFencing(t, ctx, admin, apiPool, workerPool, applicationResult)
@@ -349,6 +351,145 @@ func openWorkerPool(
 		t.Fatalf("ping worker PostgreSQL pool: %v", err)
 	}
 	return pool
+}
+
+type integrationExecutionTargetAdapter struct {
+	observation paasv1.ExecutionTargetObservation
+}
+
+func (adapter *integrationExecutionTargetAdapter) Capabilities(
+	context.Context,
+) (paasv1.AdapterCapabilitiesContract, error) {
+	return paasv1.AdapterCapabilitiesContract{}, nil
+}
+
+func (adapter *integrationExecutionTargetAdapter) InspectExecutionTarget(
+	context.Context,
+	paasv1.InspectExecutionTargetRequest,
+) (paasv1.ExecutionTargetObservation, error) {
+	return paasv1.ExecutionTargetObservation{}, errors.New("unexpected target inspection")
+}
+
+func (adapter *integrationExecutionTargetAdapter) ObserveExecutionTarget(
+	_ context.Context,
+	request paasv1.ObserveExecutionTargetRequest,
+) (paasv1.ExecutionTargetObservation, error) {
+	if paasv1.ValidateObserveExecutionTargetRequest(request) != nil ||
+		request.Command.ExecutionTargetID != adapter.observation.ExecutionTargetID {
+		return paasv1.ExecutionTargetObservation{}, errors.New("invalid target observation request")
+	}
+	return adapter.observation, nil
+}
+
+func assertExecutionProfileRefresh(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	workerPool *pgxpool.Pool,
+	prefix string,
+) {
+	t.Helper()
+	tenantID := paasv1.TenantID(prefix + "-profile-tenant")
+	ids := refreshexecutionprofile.IDs{
+		PoolID:   paasv1.ResourceID(prefix + "-profile-pool"),
+		TargetID: paasv1.ResourceID(prefix + "-profile-target"),
+		PolicyID: paasv1.ResourceID(prefix + "-profile-policy"),
+	}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	adapter := &integrationExecutionTargetAdapter{observation: paasv1.ExecutionTargetObservation{
+		ExecutionTargetID:   ids.TargetID,
+		IdentityFingerprint: integrationDigest(prefix + "-machine"),
+		Labels:              map[string]string{"matrix-os": "linux", "matrix-arch": "amd64"},
+		Capacity: paasv1.Capacity{
+			CPUMillis: 4000, MemoryBytes: 8 * 1024 * 1024 * 1024,
+			StorageBytes: 100 * 1024 * 1024 * 1024, WorkloadSlots: 4,
+		},
+		Allocatable: paasv1.Capacity{
+			CPUMillis: 4000, MemoryBytes: 4 * 1024 * 1024 * 1024,
+			StorageBytes: 50 * 1024 * 1024 * 1024, WorkloadSlots: 4,
+		},
+		Health: paasv1.ExecutionTargetHealthReady,
+		SupportedIsolationGuarantees: []paasv1.IsolationGuarantee{
+			paasv1.IsolationWorkload,
+		},
+		ObservedAt: now,
+	}}
+	repository, err := NewExecutionProfileRepository(workerPool)
+	if err != nil {
+		t.Fatalf("create execution profile repository: %v", err)
+	}
+	service, err := refreshexecutionprofile.New(
+		adapter,
+		repository,
+		refreshexecutionprofile.Config{
+			TenantID: tenantID, IDs: ids, MachineBindingRef: "local-machine-v1",
+			ObservationTimeout: 5 * time.Second, MaximumObservationAge: 5 * time.Minute,
+			MaxTransactionAttempts: 5,
+		},
+	)
+	if err != nil {
+		t.Fatalf("create execution profile service: %v", err)
+	}
+	if err := service.Refresh(ctx); err != nil {
+		t.Fatalf("create execution profile through worker boundary: %v", err)
+	}
+	if err := service.Ready(ctx); err != nil {
+		t.Fatalf("created execution profile readiness: %v", err)
+	}
+	adapter.observation.ObservedAt = time.Now().UTC().Truncate(time.Microsecond)
+	if err := service.Refresh(ctx); err != nil {
+		t.Fatalf("refresh execution profile through worker boundary: %v", err)
+	}
+	var poolVersion, targetVersion, policyVersion uint64
+	if err := admin.QueryRow(
+		ctx,
+		`SELECT pool.resource_version,
+		        target.resource_version,
+		        policy.resource_version
+		   FROM paas.execution_pools AS pool
+		   JOIN paas.execution_targets AS target
+		     ON target.execution_pool_id = pool.id
+		   JOIN paas.placement_policies AS policy
+		     ON policy.tenant_id = $1
+		    AND policy.id = $2
+		  WHERE pool.id = $3
+		    AND target.id = $4`,
+		tenantID,
+		ids.PolicyID,
+		ids.PoolID,
+		ids.TargetID,
+	).Scan(&poolVersion, &targetVersion, &policyVersion); err != nil {
+		t.Fatalf("read reconciled execution profile: %v", err)
+	}
+	if poolVersion != 2 || targetVersion != 2 || policyVersion != 1 {
+		t.Fatalf(
+			"execution profile versions pool=%d target=%d policy=%d",
+			poolVersion,
+			targetVersion,
+			policyVersion,
+		)
+	}
+	if _, err := workerPool.Exec(
+		ctx,
+		"UPDATE paas.execution_targets SET resource_version = resource_version WHERE id = $1",
+		ids.TargetID,
+	); err == nil {
+		t.Fatal("worker login bypassed the execution profile function")
+	}
+	adapter.observation.ObservedAt = time.Now().UTC().Truncate(time.Microsecond)
+	adapter.observation.Health = paasv1.ExecutionTargetHealthDegraded
+	adapter.observation.SupportedIsolationGuarantees = nil
+	if err := service.Refresh(ctx); err != nil {
+		t.Fatalf("persist degraded execution profile through worker boundary: %v", err)
+	}
+	if err := service.Ready(ctx); err == nil {
+		t.Fatal("persisted degraded execution profile reported ready")
+	}
+	adapter.observation.ObservedAt = time.Now().UTC().Truncate(time.Microsecond)
+	adapter.observation.IdentityFingerprint = integrationDigest(prefix + "-other-machine")
+	if err := service.Refresh(ctx); !errors.Is(err, refreshexecutionprofile.ErrConflict) {
+		t.Fatalf("execution target identity change error = %v", err)
+	}
 }
 
 func seedIntegrationFixture(
