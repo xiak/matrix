@@ -8,9 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"reflect"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -27,6 +25,7 @@ import (
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/createplacement"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/operationqueue"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/transitionreservation"
+	paasmigration "github.com/xiak/matrix/app/service/paas/migration"
 )
 
 const (
@@ -227,34 +226,14 @@ func integrationAuthorization(
 
 func applyMigrationTwiceAndVerify(t *testing.T, ctx context.Context, admin *pgx.Conn) {
 	t.Helper()
-	_, currentFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("locate PostgreSQL integration test source")
-	}
-	migrationRoot := filepath.Join(
-		filepath.Dir(currentFile),
-		"migrations",
-		"000001_placement_core",
-	)
-	up := readIntegrationFile(t, filepath.Join(migrationRoot, "up.sql"))
-	verify := readIntegrationFile(t, filepath.Join(migrationRoot, "verify.sql"))
 	for attempt := 1; attempt <= 2; attempt++ {
-		if _, err := admin.Exec(ctx, up); err != nil {
+		if err := paasmigration.Up(ctx, admin); err != nil {
 			t.Fatalf("apply placement migration attempt %d: %v", attempt, err)
 		}
 	}
-	if _, err := admin.Exec(ctx, verify); err != nil {
+	if err := paasmigration.Verify(ctx, admin); err != nil {
 		t.Fatalf("verify placement migration: %v", err)
 	}
-}
-
-func readIntegrationFile(t *testing.T, path string) string {
-	t.Helper()
-	content, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	return string(content)
 }
 
 func ensureAPITestRole(t *testing.T, ctx context.Context, admin *pgx.Conn) {

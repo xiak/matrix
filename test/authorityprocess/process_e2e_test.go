@@ -24,6 +24,9 @@ import (
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
+	auditmigration "github.com/xiak/matrix/app/service/audit/migration"
+	iammigration "github.com/xiak/matrix/app/service/iam/migration"
+	paasmigration "github.com/xiak/matrix/app/service/paas/migration"
 )
 
 const (
@@ -71,7 +74,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	defer func() { _ = admin.Close(context.Background()) }()
 	assertPostgres18(t, ctx, admin)
 	assertCleanSchemas(t, ctx, admin)
-	applyPlatformSchemas(t, ctx, admin, root)
+	applyPlatformSchemas(t, ctx, admin)
 	createProcessLogins(t, ctx, admin)
 	assertCrossSchemaIsolation(t, ctx, adminConfig)
 
@@ -1828,40 +1831,31 @@ func applyPlatformSchemas(
 	t *testing.T,
 	ctx context.Context,
 	admin *pgx.Conn,
-	root string,
 ) {
 	t.Helper()
-	authorityPath := func(service string, file string) string {
-		return filepath.Join(
-			root,
-			"app", "service", service, "internal", "data", "postgres",
-			"migrations", "000001_authority", file,
-		)
+	if err := iammigration.Bootstrap(ctx, admin); err != nil {
+		t.Fatalf("bootstrap platform IAM schema: %v", err)
 	}
-	paasPath := func(file string) string {
-		return filepath.Join(
-			root,
-			"app", "service", "paas", "internal", "apphosting", "data", "postgres",
-			"migrations", "000001_placement_core", file,
-		)
+	if err := auditmigration.Bootstrap(ctx, admin); err != nil {
+		t.Fatalf("bootstrap platform Audit schema: %v", err)
 	}
-	for _, path := range []string{
-		authorityPath("iam", "bootstrap.sql"),
-		authorityPath("audit", "bootstrap.sql"),
-		authorityPath("iam", "up.sql"),
-		authorityPath("audit", "up.sql"),
-		paasPath("up.sql"),
-		authorityPath("iam", "verify.sql"),
-		authorityPath("audit", "verify.sql"),
-		paasPath("verify.sql"),
-	} {
-		source, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("read platform process migration: %v", err)
-		}
-		if _, err := admin.Exec(ctx, string(source)); err != nil {
-			t.Fatalf("apply platform process migration %s: %v", filepath.Base(path), err)
-		}
+	if err := iammigration.Up(ctx, admin); err != nil {
+		t.Fatalf("apply platform IAM schema: %v", err)
+	}
+	if err := auditmigration.Up(ctx, admin); err != nil {
+		t.Fatalf("apply platform Audit schema: %v", err)
+	}
+	if err := paasmigration.Up(ctx, admin); err != nil {
+		t.Fatalf("apply platform PaaS schema: %v", err)
+	}
+	if err := iammigration.Verify(ctx, admin); err != nil {
+		t.Fatalf("verify platform IAM schema: %v", err)
+	}
+	if err := auditmigration.Verify(ctx, admin); err != nil {
+		t.Fatalf("verify platform Audit schema: %v", err)
+	}
+	if err := paasmigration.Verify(ctx, admin); err != nil {
+		t.Fatalf("verify platform PaaS schema: %v", err)
 	}
 }
 

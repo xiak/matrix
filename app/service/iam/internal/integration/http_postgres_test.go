@@ -8,8 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +19,7 @@ import (
 	iampostgres "github.com/xiak/matrix/app/service/iam/internal/data/postgres"
 	iamhttp "github.com/xiak/matrix/app/service/iam/internal/service/nethttp"
 	"github.com/xiak/matrix/app/service/iam/internal/usecase/identityaccess"
+	iammigration "github.com/xiak/matrix/app/service/iam/migration"
 )
 
 const (
@@ -477,23 +476,14 @@ func assertCleanIAMSchema(t *testing.T, ctx context.Context, admin *pgx.Conn) {
 
 func applyIAMSchema(t *testing.T, ctx context.Context, admin *pgx.Conn) {
 	t.Helper()
-	_, currentFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve IAM integration source path")
+	if err := iammigration.Bootstrap(ctx, admin); err != nil {
+		t.Fatalf("bootstrap IAM migration: %v", err)
 	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", "..", "..", "..", ".."))
-	migrationRoot := filepath.Join(
-		root,
-		"app", "service", "iam", "internal", "data", "postgres", "migrations", "000001_authority",
-	)
-	for _, name := range []string{"bootstrap.sql", "up.sql", "verify.sql"} {
-		source, err := os.ReadFile(filepath.Join(migrationRoot, name))
-		if err != nil {
-			t.Fatalf("read IAM migration %s: %v", name, err)
-		}
-		if _, err := admin.Exec(ctx, string(source)); err != nil {
-			t.Fatalf("apply IAM migration %s: %v", name, err)
-		}
+	if err := iammigration.Up(ctx, admin); err != nil {
+		t.Fatalf("apply IAM migration: %v", err)
+	}
+	if err := iammigration.Verify(ctx, admin); err != nil {
+		t.Fatalf("verify IAM migration: %v", err)
 	}
 }
 

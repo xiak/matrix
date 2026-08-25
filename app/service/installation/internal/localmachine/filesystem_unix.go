@@ -5,6 +5,7 @@ package localmachine
 import (
 	"errors"
 	"os"
+	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -30,7 +31,7 @@ func verifyManagedPermissions(path string, directory bool) error {
 		(directory && info.Mode().Perm()&0o100 == 0) {
 		return errors.New("managed path permissions are unsafe")
 	}
-	stat, ok := info.Sys().(*unix.Stat_t)
+	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || uint64(stat.Uid) != uint64(unix.Geteuid()) {
 		return errors.New("managed path owner is unsafe")
 	}

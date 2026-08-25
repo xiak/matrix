@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -191,6 +192,68 @@ func TestLoadInstallImagesKeepsStartedFailureOutcomeUnknown(t *testing.T) {
 	}
 }
 
+func TestMigrateInstallationUsesFixedGoBinariesWithoutCredentialArguments(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine migration effects target Linux")
+	}
+	plan := newInstallPlan(t)
+	if err := stageInstallation(plan, rand.Reader); err != nil {
+		t.Fatalf("stage installation: %v", err)
+	}
+	images := newImageRuntime(plan.Bundle.Manifest, true)
+	if err := configureInstallation(context.Background(), images, plan); err != nil {
+		t.Fatalf("configure installation: %v", err)
+	}
+	compiled, err := topology.Compile(plan.Bundle.Manifest, topology.Options{
+		InstallationID: plan.InstallationID, Root: plan.Root,
+		Listener: plan.Listener, Port: plan.Port,
+	})
+	if err != nil {
+		t.Fatalf("compile migration topology: %v", err)
+	}
+	runtimeBoundary := newMigrationRuntime(plan, compiled.ProjectName)
+	if err := migrateInstallation(context.Background(), runtimeBoundary, plan); err != nil {
+		t.Fatalf("migrate installation: %v", err)
+	}
+	if runtimeBoundary.composeCalls != 1 || len(runtimeBoundary.runs) != 6 {
+		t.Fatalf("migration provider calls compose=%d run=%d", runtimeBoundary.composeCalls, len(runtimeBoundary.runs))
+	}
+	wantModes := []string{"apply", "apply", "apply", "verify", "verify", "verify"}
+	wantEntrypoints := []string{
+		"/matrix/bin/matrix-iam-migrate",
+		"/matrix/bin/matrix-audit-migrate",
+		"/matrix/bin/matrix-paas-migrate",
+		"/matrix/bin/matrix-iam-migrate",
+		"/matrix/bin/matrix-audit-migrate",
+		"/matrix/bin/matrix-paas-migrate",
+	}
+	secretValues := [][]byte{
+		readTestFile(t, plan.Root, layout.PostgresMigration),
+		readTestFile(t, plan.Root, layout.IAMAPI),
+		readTestFile(t, plan.Root, layout.IAMWorker),
+		readTestFile(t, plan.Root, layout.AuditRuntime),
+		readTestFile(t, plan.Root, layout.PaaSAPI),
+		readTestFile(t, plan.Root, layout.PaaSWorker),
+	}
+	for index, arguments := range runtimeBoundary.runs {
+		joined := strings.Join(arguments, " ")
+		if arguments[len(arguments)-1] != wantModes[index] ||
+			!hasArgumentPair(arguments, "--entrypoint", wantEntrypoints[index]) ||
+			!hasArgumentPair(arguments, "--pull", "never") ||
+			!slices.Contains(arguments, "--read-only") ||
+			strings.Contains(joined, "docker.sock") ||
+			strings.Contains(joined, "--privileged") ||
+			strings.Contains(joined, "--network host") {
+			t.Fatalf("migration command %d violates fixed isolation: %q", index, joined)
+		}
+		for _, secret := range secretValues {
+			if bytes.Contains([]byte(joined), secret) {
+				t.Fatalf("migration command %d contains database credential material", index)
+			}
+		}
+	}
+}
+
 func TestRejectProjectCollisionRequiresExactInstallationOwnership(t *testing.T) {
 	foreign := &scriptedRuntime{run: func(arguments []string) ([]byte, bool, error) {
 		switch {
@@ -277,8 +340,12 @@ func newInstallPlan(t *testing.T) platformcommand.InstallPlan {
 	if err != nil {
 		t.Fatalf("verify release fixture: %v", err)
 	}
+	root := filepath.Clean(t.TempDir())
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatalf("protect installation fixture root: %v", err)
+	}
 	return platformcommand.InstallPlan{
-		Root: filepath.Clean(t.TempDir()), InstallationID: "mxi-11111111111111111111111111111111",
+		Root: root, InstallationID: "mxi-11111111111111111111111111111111",
 		Listener: "0.0.0.0", Port: 8080, Bundle: bundle,
 		Trust: fixture.Trust, TrustBytes: trustBytes,
 	}
@@ -389,6 +456,75 @@ func (runtimeBoundary *imageRuntime) Run(
 
 type scriptedRuntime struct {
 	run func([]string) ([]byte, bool, error)
+}
+
+type migrationRuntime struct {
+	images         map[string]bool
+	project        string
+	installation   string
+	release        string
+	composeCalls   int
+	runs           [][]string
+	controlNetwork string
+}
+
+func newMigrationRuntime(plan platformcommand.InstallPlan, project string) *migrationRuntime {
+	images := make(map[string]bool, len(plan.Bundle.Manifest.Images))
+	for _, image := range plan.Bundle.Manifest.Images {
+		images[image.ImageID] = true
+	}
+	return &migrationRuntime{
+		images: images, project: project, installation: plan.InstallationID,
+		release:        plan.Bundle.Manifest.Release.ID,
+		controlNetwork: strings.Repeat("a", 64),
+	}
+}
+
+func (runtimeBoundary *migrationRuntime) Run(
+	_ context.Context,
+	input io.Reader,
+	arguments ...string,
+) ([]byte, bool, error) {
+	if input != nil || len(arguments) == 0 {
+		return nil, false, errors.New("migration Docker invocation is invalid")
+	}
+	switch arguments[0] {
+	case "compose":
+		if !hasArgumentPair(arguments, "--pull", "never") ||
+			!slices.Contains(arguments, "--no-build") ||
+			arguments[len(arguments)-1] != "postgres" {
+			return nil, true, errors.New("PostgreSQL Compose start is not offline")
+		}
+		runtimeBoundary.composeCalls++
+		return nil, true, nil
+	case "network":
+		if len(arguments) >= 2 && arguments[1] == "ls" {
+			return []byte(runtimeBoundary.controlNetwork + "\n"), true, nil
+		}
+		if len(arguments) >= 2 && arguments[1] == "inspect" {
+			return []byte(fmt.Sprintf(
+				`{"com.xiak.matrix.managed":"true","com.xiak.matrix.installation":%q,"com.xiak.matrix.release":%q,"com.xiak.matrix.role":"network-control","com.docker.compose.project":%q,"com.docker.compose.network":"control"}`,
+				runtimeBoundary.installation, runtimeBoundary.release, runtimeBoundary.project,
+			)), true, nil
+		}
+	case "image":
+		if len(arguments) == 5 && arguments[1] == "inspect" && runtimeBoundary.images[arguments[4]] {
+			return []byte(arguments[4] + "|linux|amd64\n"), true, nil
+		}
+	case "run":
+		runtimeBoundary.runs = append(runtimeBoundary.runs, slices.Clone(arguments))
+		return nil, true, nil
+	}
+	return nil, false, fmt.Errorf("unexpected migration Docker command: %q", strings.Join(arguments, " "))
+}
+
+func hasArgumentPair(arguments []string, name, value string) bool {
+	for index := 0; index+1 < len(arguments); index++ {
+		if arguments[index] == name && arguments[index+1] == value {
+			return true
+		}
+	}
+	return false
 }
 
 func (runtimeBoundary *scriptedRuntime) Run(

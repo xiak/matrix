@@ -8,8 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -21,6 +19,8 @@ import (
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	auditauthority "github.com/xiak/matrix/app/service/audit/internal/authority"
+	auditmigration "github.com/xiak/matrix/app/service/audit/migration"
+	iammigration "github.com/xiak/matrix/app/service/iam/migration"
 )
 
 const (
@@ -72,8 +72,7 @@ func TestPostgresAuthorityIntegration(t *testing.T) {
 
 	assertPostgres18(t, ctx, admin)
 	assertCleanAuthoritySchemas(t, ctx, admin)
-	repositoryRoot := authorityRepositoryRoot(t)
-	applyAuthorityBootstraps(t, ctx, admin, repositoryRoot)
+	applyAuthorityBootstraps(t, ctx, admin)
 
 	ensureAuthorityLoginRole(t, ctx, admin, iamMigratorTestRole, "matrix_iam_migrator")
 	ensureAuthorityLoginRole(t, ctx, admin, iamAPITestRole, "matrix_iam_api")
@@ -88,7 +87,7 @@ func TestPostgresAuthorityIntegration(t *testing.T) {
 	assertLeastPrivilegeLogin(t, ctx, iamMigrator, "matrix_iam_migrator")
 	assertLeastPrivilegeLogin(t, ctx, auditMigrator, "matrix_audit_migrator")
 	applyAuthorityMigrationsTwice(
-		t, ctx, admin, iamMigrator, auditMigrator, repositoryRoot,
+		t, ctx, admin, iamMigrator, auditMigrator,
 	)
 
 	iamAPI := openAuthorityConnection(t, ctx, adminConfig, iamAPITestRole)
@@ -295,15 +294,14 @@ func applyAuthorityBootstraps(
 	t *testing.T,
 	ctx context.Context,
 	admin *pgx.Conn,
-	repositoryRoot string,
 ) {
 	t.Helper()
-	for _, service := range []string{"iam", "audit"} {
-		bootstrap := readAuthorityMigration(t, repositoryRoot, service, "bootstrap.sql")
-		for attempt := 1; attempt <= 2; attempt++ {
-			if _, err := admin.Exec(ctx, bootstrap); err != nil {
-				t.Fatalf("apply %s PostgreSQL bootstrap attempt %d: %v", service, attempt, err)
-			}
+	for attempt := 1; attempt <= 2; attempt++ {
+		if err := iammigration.Bootstrap(ctx, admin); err != nil {
+			t.Fatalf("apply IAM PostgreSQL bootstrap attempt %d: %v", attempt, err)
+		}
+		if err := auditmigration.Bootstrap(ctx, admin); err != nil {
+			t.Fatalf("apply Audit PostgreSQL bootstrap attempt %d: %v", attempt, err)
 		}
 	}
 }
@@ -314,73 +312,21 @@ func applyAuthorityMigrationsTwice(
 	admin *pgx.Conn,
 	iamMigrator *pgx.Conn,
 	auditMigrator *pgx.Conn,
-	repositoryRoot string,
 ) {
 	t.Helper()
-	for _, migration := range []struct {
-		service    string
-		connection *pgx.Conn
-	}{
-		{service: "iam", connection: iamMigrator},
-		{service: "audit", connection: auditMigrator},
-	} {
-		up := readAuthorityMigration(t, repositoryRoot, migration.service, "up.sql")
-		for attempt := 1; attempt <= 2; attempt++ {
-			if _, err := migration.connection.Exec(ctx, up); err != nil {
-				t.Fatalf(
-					"apply %s authority migration as non-superuser attempt %d: %v",
-					migration.service,
-					attempt,
-					err,
-				)
-			}
+	for attempt := 1; attempt <= 2; attempt++ {
+		if err := iammigration.Up(ctx, iamMigrator); err != nil {
+			t.Fatalf("apply IAM authority migration as non-superuser attempt %d: %v", attempt, err)
+		}
+		if err := auditmigration.Up(ctx, auditMigrator); err != nil {
+			t.Fatalf("apply Audit authority migration as non-superuser attempt %d: %v", attempt, err)
 		}
 	}
-	for _, service := range []string{"iam", "audit"} {
-		verify := readAuthorityMigration(t, repositoryRoot, service, "verify.sql")
-		if _, err := admin.Exec(ctx, verify); err != nil {
-			t.Fatalf("verify %s authority migration: %v", service, err)
-		}
+	if err := iammigration.Verify(ctx, admin); err != nil {
+		t.Fatalf("verify IAM authority migration: %v", err)
 	}
-}
-
-func readAuthorityMigration(t *testing.T, repositoryRoot, service, name string) string {
-	t.Helper()
-	path := filepath.Join(
-		repositoryRoot,
-		"app",
-		"service",
-		service,
-		"internal",
-		"data",
-		"postgres",
-		"migrations",
-		"000001_authority",
-		name,
-	)
-	content, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read authority migration %s: %v", path, err)
-	}
-	return string(content)
-}
-
-func authorityRepositoryRoot(t *testing.T) string {
-	t.Helper()
-	_, currentFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("locate authority integration test source")
-	}
-	directory := filepath.Dir(currentFile)
-	for {
-		if _, err := os.Stat(filepath.Join(directory, "go.mod")); err == nil {
-			return directory
-		}
-		parent := filepath.Dir(directory)
-		if parent == directory {
-			t.Fatal("locate repository root from authority integration test")
-		}
-		directory = parent
+	if err := auditmigration.Verify(ctx, admin); err != nil {
+		t.Fatalf("verify Audit authority migration: %v", err)
 	}
 }
 

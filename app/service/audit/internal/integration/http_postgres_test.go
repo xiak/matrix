@@ -10,8 +10,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +23,7 @@ import (
 	auditpostgres "github.com/xiak/matrix/app/service/audit/internal/data/postgres"
 	audithttp "github.com/xiak/matrix/app/service/audit/internal/service/nethttp"
 	"github.com/xiak/matrix/app/service/audit/internal/usecase/auditlog"
+	auditmigration "github.com/xiak/matrix/app/service/audit/migration"
 )
 
 const (
@@ -442,23 +441,14 @@ func assertCleanAuditSchema(t *testing.T, ctx context.Context, admin *pgx.Conn) 
 
 func applyAuditSchema(t *testing.T, ctx context.Context, admin *pgx.Conn) {
 	t.Helper()
-	_, currentFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve Audit integration source path")
+	if err := auditmigration.Bootstrap(ctx, admin); err != nil {
+		t.Fatalf("bootstrap Audit migration: %v", err)
 	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", "..", "..", "..", ".."))
-	migrationRoot := filepath.Join(
-		root,
-		"app", "service", "audit", "internal", "data", "postgres", "migrations", "000001_authority",
-	)
-	for _, name := range []string{"bootstrap.sql", "up.sql", "verify.sql"} {
-		source, err := os.ReadFile(filepath.Join(migrationRoot, name))
-		if err != nil {
-			t.Fatalf("read Audit migration %s: %v", name, err)
-		}
-		if _, err := admin.Exec(ctx, string(source)); err != nil {
-			t.Fatalf("apply Audit migration %s: %v", name, err)
-		}
+	if err := auditmigration.Up(ctx, admin); err != nil {
+		t.Fatalf("apply Audit migration: %v", err)
+	}
+	if err := auditmigration.Verify(ctx, admin); err != nil {
+		t.Fatalf("verify Audit migration: %v", err)
 	}
 }
 

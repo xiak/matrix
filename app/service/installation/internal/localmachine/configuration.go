@@ -19,15 +19,8 @@ func configureInstallation(
 	runtimeBoundary dockerRuntime,
 	plan platformcommand.InstallPlan,
 ) error {
-	root, err := managedPath(
-		plan.Root,
-		filepath.FromSlash(layout.ReleaseDirectory(plan.Bundle.Manifest.Release.ID)),
-	)
+	staged, err := verifiedStagedBundle(plan)
 	if err != nil {
-		return errors.Join(platformcommand.ErrEffectVerification, err)
-	}
-	staged, err := release.VerifyDirectory(root, plan.TrustBytes)
-	if err != nil || staged.ManifestSHA256 != plan.Bundle.ManifestSHA256 {
 		return errors.Join(
 			platformcommand.ErrEffectVerification,
 			errors.New("staged release cannot supply configuration"),
