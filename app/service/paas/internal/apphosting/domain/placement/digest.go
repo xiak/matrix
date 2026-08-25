@@ -69,6 +69,7 @@ func (planner *Planner) candidateSetDigest(
 
 	deployment := input.Snapshot.Deployment
 	encoder.string("deployment-id", string(deployment.Metadata.ID))
+	encoder.uint64("deployment-generation", deployment.Generation)
 	encoder.uint64("deployment-resource-version", deployment.Metadata.ResourceVersion)
 
 	revision := input.Snapshot.ApplicationRevision

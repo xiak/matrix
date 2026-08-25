@@ -286,6 +286,9 @@ func ValidatePlacementDecision(value PlacementDecision) error {
 	if value.DeploymentResourceVersion == 0 {
 		problems = append(problems, errors.New("deploymentResourceVersion must be positive"))
 	}
+	if value.DeploymentGeneration == 0 {
+		problems = append(problems, errors.New("deploymentGeneration must be positive"))
+	}
 	if !contains(IsolationGuarantees(), value.RequestedIsolationGuarantee) {
 		problems = append(problems, errors.New("requested isolation guarantee is invalid"))
 	}
@@ -491,21 +494,275 @@ func ValidateDeployment(value Deployment) error {
 	}
 	problems = append(problems,
 		ValidateResourceMetadata(value.Metadata),
-		ValidateID("spec.applicationRevisionId", string(value.Spec.ApplicationRevisionID)),
-		ValidateID("spec.placementPolicyId", string(value.Spec.PlacementPolicyID)),
+		validateDeploymentSpec(value.Spec),
 		validateContractTime("status.observedAt", value.Status.ObservedAt),
 	)
 	if value.Metadata.Scope.Kind != AuthorityTenant {
 		problems = append(problems, errors.New("deployment must be tenant scoped"))
 	}
-	if !contains([]DeploymentDesiredState{DeploymentDesiredRunning, DeploymentDesiredStopped}, value.Spec.DesiredState) {
-		problems = append(problems, fmt.Errorf("unknown deployment desired state %q", value.Spec.DesiredState))
+	if value.Generation == 0 {
+		problems = append(problems, errors.New("deployment generation must be positive"))
 	}
-	if len(value.Spec.Components) == 0 {
+	if value.Status.ObservedGeneration > value.Generation {
+		problems = append(problems, errors.New("observedGeneration cannot exceed generation"))
+	}
+	if value.Status.ObservedGeneration == 0 {
+		if value.Status.ObservedApplicationRevisionID != "" || value.Status.ReadyComponents != 0 {
+			problems = append(problems, errors.New("unobserved deployment cannot contain observed revision or ready components"))
+		}
+	} else if value.Status.ObservedApplicationRevisionID == "" {
+		problems = append(problems, errors.New("observed deployment requires observedApplicationRevisionId"))
+	}
+	if !contains(DeploymentPhases(), value.Status.Phase) {
+		problems = append(problems, fmt.Errorf("unknown deployment phase %q", value.Status.Phase))
+	}
+	if value.Status.ReadyComponents > uint32(len(value.Spec.Components)) {
+		problems = append(problems, errors.New("readyComponents cannot exceed component count"))
+	}
+	if value.Status.PlacementDecisionID != "" {
+		problems = append(problems, ValidateID("status.placementDecisionId", string(value.Status.PlacementDecisionID)))
+	}
+	if value.Status.CurrentOperationID != "" {
+		problems = append(problems, ValidateID("status.currentOperationId", string(value.Status.CurrentOperationID)))
+	}
+	if value.Status.ObservedApplicationRevisionID != "" {
+		problems = append(problems, ValidateID("status.observedApplicationRevisionId", string(value.Status.ObservedApplicationRevisionID)))
+	}
+	if value.Status.Phase == DeploymentReady {
+		if value.Status.ObservedGeneration != value.Generation ||
+			value.Status.ObservedApplicationRevisionID != value.Spec.ApplicationRevisionID ||
+			value.Status.ReadyComponents != uint32(len(value.Spec.Components)) {
+			problems = append(problems, errors.New("ready deployment must fully observe its current generation"))
+		}
+	}
+	if value.Status.Phase == DeploymentStopped {
+		if value.Status.ObservedGeneration != value.Generation || value.Status.ReadyComponents != 0 {
+			problems = append(problems, errors.New("stopped deployment must observe its current generation with no ready components"))
+		}
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateDeploymentGeneration(value DeploymentGeneration) error {
+	var problems []error
+	if value.APIVersion != APIVersion || value.Kind != "DeploymentGeneration" {
+		problems = append(problems, errors.New("deployment generation type metadata is invalid"))
+	}
+	problems = append(problems,
+		ValidateResourceScope(value.Scope),
+		ValidateID("deploymentId", string(value.DeploymentID)),
+		validateDeploymentSpec(value.Spec),
+		ValidateDigest("contentDigest", value.ContentDigest),
+		ValidateID("createdByOperationId", string(value.CreatedByOperationID)),
+		validateContractTime("createdAt", value.CreatedAt),
+	)
+	if value.Scope.Kind != AuthorityTenant {
+		problems = append(problems, errors.New("deployment generation must be tenant scoped"))
+	}
+	if value.Generation == 0 {
+		problems = append(problems, errors.New("deployment generation must be positive"))
+	}
+	if value.ContentDigest != DeploymentSpecContentDigest(value.Spec) {
+		problems = append(problems, errors.New("contentDigest does not match canonical deployment spec"))
+	}
+	return errors.Join(problems...)
+}
+
+// ValidateDeploymentAgainstRevision checks the cross-resource shape before a
+// deployment can enter placement. Repository-level validation separately
+// proves tenant and application ownership for every referenced resource.
+func ValidateDeploymentAgainstRevision(deployment Deployment, revision ApplicationRevision) error {
+	var problems []error
+	if err := ValidateDeployment(deployment); err != nil {
+		problems = append(problems, err)
+	}
+	if err := ValidateApplicationRevision(revision); err != nil {
+		problems = append(problems, err)
+	}
+	problems = append(problems, validateDeploymentSpecAgainstRevision(deployment.Spec, revision))
+	return errors.Join(problems...)
+}
+
+func ValidateDeploymentGenerationAgainstRevision(
+	generation DeploymentGeneration,
+	revision ApplicationRevision,
+) error {
+	var problems []error
+	if err := ValidateDeploymentGeneration(generation); err != nil {
+		problems = append(problems, err)
+	}
+	if err := ValidateApplicationRevision(revision); err != nil {
+		problems = append(problems, err)
+	}
+	if generation.Scope != revision.Metadata.Scope {
+		problems = append(problems, errors.New("deployment generation and application revision scopes differ"))
+	}
+	problems = append(problems, validateDeploymentSpecAgainstRevision(generation.Spec, revision))
+	return errors.Join(problems...)
+}
+
+func ValidateDeploymentExecutionRequest(value DeploymentExecutionRequest) error {
+	var problems []error
+	problems = append(problems,
+		ValidateAdapterCommand(value.Command),
+		ValidateDeploymentGenerationAgainstRevision(value.Generation, value.ApplicationRevision),
+		ValidatePlacementDecision(value.Placement),
+	)
+	if !contains([]AdapterAction{
+		AdapterValidateDeployment,
+		AdapterApplyDeployment,
+		AdapterStopDeployment,
+		AdapterRollbackDeployment,
+	}, value.Command.Action) {
+		problems = append(problems, fmt.Errorf("deployment execution request action %q is invalid", value.Command.Action))
+	}
+	if value.Placement.Outcome != PlacementScheduled {
+		problems = append(problems, errors.New("deployment execution requires a scheduled placement"))
+	}
+	if value.Command.Scope != value.Generation.Scope ||
+		value.Command.Scope != value.ApplicationRevision.Metadata.Scope ||
+		value.Command.Scope != value.Placement.Metadata.Scope {
+		problems = append(problems, errors.New("deployment execution resource scopes differ"))
+	}
+	if value.Command.DeploymentID != value.Generation.DeploymentID ||
+		value.Command.DeploymentID != value.Placement.DeploymentID {
+		problems = append(problems, errors.New("deployment execution identities differ"))
+	}
+	if value.Command.ApplicationRevisionID != value.ApplicationRevision.Metadata.ID ||
+		value.Command.ApplicationRevisionID != value.Generation.Spec.ApplicationRevisionID ||
+		value.Command.ApplicationRevisionID != value.Placement.ApplicationRevisionID {
+		problems = append(problems, errors.New("deployment execution application revision identities differ"))
+	}
+	if value.Command.ApplicationID != value.ApplicationRevision.Spec.ApplicationID {
+		problems = append(problems, errors.New("deployment execution application identities differ"))
+	}
+	if value.Command.OperationID != value.Generation.CreatedByOperationID {
+		problems = append(problems, errors.New("deployment execution operation and generation identities differ"))
+	}
+	if value.Command.ExecutionTargetID != value.Placement.ExecutionTargetID {
+		problems = append(problems, errors.New("deployment execution target identities differ"))
+	}
+	if value.Generation.Generation != value.Placement.DeploymentGeneration ||
+		value.Generation.Spec.PlacementPolicyID != value.Placement.PlacementPolicyID {
+		problems = append(problems, errors.New("deployment execution generation and placement differ"))
+	}
+
+	expectedConfigurations := make(map[ResourceID]struct{})
+	for _, component := range value.Generation.Spec.Components {
+		for _, binding := range component.Bindings {
+			if binding.ConfigurationRevisionID != "" {
+				expectedConfigurations[binding.ConfigurationRevisionID] = struct{}{}
+			}
+		}
+	}
+	seenConfigurations := make(map[ResourceID]struct{}, len(value.ConfigurationRevisions))
+	for index, revision := range value.ConfigurationRevisions {
+		if err := ValidateConfigurationRevision(revision); err != nil {
+			problems = append(problems, fmt.Errorf("configurationRevisions[%d]: %w", index, err))
+		}
+		if revision.Metadata.Scope != value.Command.Scope {
+			problems = append(problems, fmt.Errorf("configurationRevisions[%d] has another scope", index))
+		}
+		if _, duplicate := seenConfigurations[revision.Metadata.ID]; duplicate {
+			problems = append(problems, fmt.Errorf("configurationRevisions[%d] is duplicated", index))
+		}
+		seenConfigurations[revision.Metadata.ID] = struct{}{}
+		if _, required := expectedConfigurations[revision.Metadata.ID]; !required {
+			problems = append(problems, fmt.Errorf("configurationRevisions[%d] is not bound", index))
+		}
+	}
+	for revisionID := range expectedConfigurations {
+		if _, found := seenConfigurations[revisionID]; !found {
+			problems = append(problems, fmt.Errorf("bound configuration revision %q is missing", revisionID))
+		}
+	}
+	if value.Command.RequestDigest != DeploymentExecutionRequestDigest(value) {
+		problems = append(problems, errors.New("command requestDigest does not match canonical execution input"))
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateObserveDeploymentRequest(value ObserveDeploymentRequest) error {
+	var problems []error
+	problems = append(problems,
+		ValidateAdapterCommand(value.Command),
+		ValidateDigest("expectedContentDigest", value.ExpectedContentDigest),
+	)
+	if value.Command.Action != AdapterObserveDeployment {
+		problems = append(problems, fmt.Errorf("observe deployment request action = %q, want %q", value.Command.Action, AdapterObserveDeployment))
+	}
+	if value.Generation == 0 {
+		problems = append(problems, errors.New("observe deployment generation must be positive"))
+	}
+	if value.Command.RequestDigest != ObserveDeploymentRequestDigest(value) {
+		problems = append(problems, errors.New("command requestDigest does not match canonical observation input"))
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateDeploymentObservation(value DeploymentObservation) error {
+	var problems []error
+	problems = append(problems,
+		ValidateID("deploymentId", string(value.DeploymentID)),
+		ValidateID("applicationRevisionId", string(value.ApplicationRevisionID)),
+		ValidateDigest("receiptDigest", value.ReceiptDigest),
+		validateContractTime("observedAt", value.ObservedAt),
+	)
+	if value.Generation == 0 {
+		problems = append(problems, errors.New("deployment observation generation must be positive"))
+	}
+	if !contains([]DeploymentPhase{
+		DeploymentApplying,
+		DeploymentReady,
+		DeploymentDegraded,
+		DeploymentFailed,
+		DeploymentStopping,
+		DeploymentStopped,
+	}, value.Phase) {
+		problems = append(problems, fmt.Errorf("deployment observation phase %q is invalid", value.Phase))
+	}
+	seenEndpoints := make(map[string]struct{}, len(value.Endpoints))
+	for index, endpoint := range value.Endpoints {
+		path := fmt.Sprintf("endpoints[%d]", index)
+		if !namePattern.MatchString(endpoint.ComponentName) ||
+			!namePattern.MatchString(endpoint.EndpointName) ||
+			!namePattern.MatchString(endpoint.Address) {
+			problems = append(problems, fmt.Errorf("%s contains an invalid network-local name", path))
+		}
+		if endpoint.Port == 0 {
+			problems = append(problems, fmt.Errorf("%s.port must be positive", path))
+		}
+		if !contains([]EndpointProtocol{EndpointHTTP, EndpointGRPC, EndpointTCP}, endpoint.Protocol) {
+			problems = append(problems, fmt.Errorf("%s.protocol is invalid", path))
+		}
+		identity := endpoint.ComponentName + "\x00" + endpoint.EndpointName
+		if _, duplicate := seenEndpoints[identity]; duplicate {
+			problems = append(problems, fmt.Errorf("%s is duplicated", path))
+		}
+		seenEndpoints[identity] = struct{}{}
+	}
+	for index, evidence := range value.Evidence {
+		if err := ValidateEvidence(evidence); err != nil {
+			problems = append(problems, fmt.Errorf("evidence[%d]: %w", index, err))
+		}
+	}
+	return errors.Join(problems...)
+}
+
+func validateDeploymentSpec(value DeploymentSpec) error {
+	var problems []error
+	problems = append(problems,
+		ValidateID("spec.applicationRevisionId", string(value.ApplicationRevisionID)),
+		ValidateID("spec.placementPolicyId", string(value.PlacementPolicyID)),
+	)
+	if !contains([]DeploymentDesiredState{DeploymentDesiredRunning, DeploymentDesiredStopped}, value.DesiredState) {
+		problems = append(problems, fmt.Errorf("unknown deployment desired state %q", value.DesiredState))
+	}
+	if len(value.Components) == 0 {
 		problems = append(problems, errors.New("deployment must contain at least one component"))
 	}
-	componentNames := make(map[string]struct{}, len(value.Spec.Components))
-	for componentIndex, component := range value.Spec.Components {
+	componentNames := make(map[string]struct{}, len(value.Components))
+	for componentIndex, component := range value.Components {
 		path := fmt.Sprintf("components[%d]", componentIndex)
 		if !namePattern.MatchString(component.Name) {
 			problems = append(problems, fmt.Errorf("%s.name is invalid", path))
@@ -543,46 +800,22 @@ func ValidateDeployment(value Deployment) error {
 			}
 		}
 	}
-	if !contains(DeploymentPhases(), value.Status.Phase) {
-		problems = append(problems, fmt.Errorf("unknown deployment phase %q", value.Status.Phase))
-	}
-	if value.Status.ReadyComponents > uint32(len(value.Spec.Components)) {
-		problems = append(problems, errors.New("readyComponents cannot exceed component count"))
-	}
-	if value.Status.PlacementDecisionID != "" {
-		problems = append(problems, ValidateID("status.placementDecisionId", string(value.Status.PlacementDecisionID)))
-	}
-	if value.Status.CurrentOperationID != "" {
-		problems = append(problems, ValidateID("status.currentOperationId", string(value.Status.CurrentOperationID)))
-	}
-	if value.Status.ObservedApplicationRevisionID != "" {
-		problems = append(problems, ValidateID("status.observedApplicationRevisionId", string(value.Status.ObservedApplicationRevisionID)))
-	}
 	return errors.Join(problems...)
 }
 
-// ValidateDeploymentAgainstRevision checks the cross-resource shape before a
-// deployment can enter placement. Repository-level validation separately
-// proves tenant and application ownership for every referenced resource.
-func ValidateDeploymentAgainstRevision(deployment Deployment, revision ApplicationRevision) error {
+func validateDeploymentSpecAgainstRevision(value DeploymentSpec, revision ApplicationRevision) error {
 	var problems []error
-	if err := ValidateDeployment(deployment); err != nil {
-		problems = append(problems, err)
-	}
-	if err := ValidateApplicationRevision(revision); err != nil {
-		problems = append(problems, err)
-	}
-	if deployment.Spec.ApplicationRevisionID != revision.Metadata.ID {
+	if value.ApplicationRevisionID != revision.Metadata.ID {
 		problems = append(problems, errors.New("deployment references another application revision"))
 	}
 	revisionComponents := make(map[string]ApplicationRevisionComponent, len(revision.Spec.Components))
 	for _, component := range revision.Spec.Components {
 		revisionComponents[component.Name] = component
 	}
-	if len(deployment.Spec.Components) != len(revision.Spec.Components) {
+	if len(value.Components) != len(revision.Spec.Components) {
 		problems = append(problems, errors.New("deployment component set must exactly match application revision"))
 	}
-	for _, component := range deployment.Spec.Components {
+	for _, component := range value.Components {
 		revisionComponent, found := revisionComponents[component.Name]
 		if !found {
 			problems = append(problems, fmt.Errorf("deployment component %q is not declared by the application revision", component.Name))

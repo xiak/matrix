@@ -167,6 +167,7 @@ func createPlacementSnapshot() placement.Snapshot {
 			APIVersion: paasv1.APIVersion,
 			Kind:       "Deployment",
 			Metadata:   createMetadata("deployment-a", paasv1.AuthorityTenant, "tenant-a", 2),
+			Generation: 1,
 			Spec: paasv1.DeploymentSpec{
 				ApplicationRevisionID: "revision-a",
 				PlacementPolicyID:     "policy-a",
@@ -176,9 +177,9 @@ func createPlacementSnapshot() placement.Snapshot {
 				},
 			},
 			Status: paasv1.DeploymentStatus{
-				Phase:                         paasv1.DeploymentPending,
-				ObservedApplicationRevisionID: "revision-a",
-				ObservedAt:                    createPlacementTime.Add(-time.Minute),
+				Phase:              paasv1.DeploymentPending,
+				ObservedGeneration: 0,
+				ObservedAt:         createPlacementTime.Add(-time.Minute),
 			},
 		},
 		ApplicationRevision: paasv1.ApplicationRevision{
@@ -264,6 +265,7 @@ func scheduledDecision(command Command) paasv1.PlacementDecision {
 		Kind:                           "PlacementDecision",
 		Metadata:                       createMetadata(command.DecisionID, paasv1.AuthorityTenant, command.TenantID, 1),
 		DeploymentID:                   command.DeploymentID,
+		DeploymentGeneration:           1,
 		DeploymentResourceVersion:      2,
 		ApplicationRevisionID:          "revision-a",
 		PlacementPolicyID:              "policy-a",

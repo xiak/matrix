@@ -480,6 +480,7 @@ func seedDeployment(
 			now,
 			false,
 		),
+		Generation: 1,
 		Spec: paasv1.DeploymentSpec{
 			ApplicationRevisionID: fixture.revisionID,
 			PlacementPolicyID:     fixture.policyID,

@@ -34,15 +34,18 @@ func (*replayDeploymentExecutor) Capabilities(context.Context) (paasv1.AdapterCa
 
 func (*replayDeploymentExecutor) ValidateDeployment(
 	context.Context,
-	DeploymentRequest,
+	paasv1.DeploymentExecutionRequest,
 ) (paasv1.AdapterResult, error) {
 	return paasv1.AdapterResult{}, nil
 }
 
 func (adapter *replayDeploymentExecutor) ApplyDeployment(
 	_ context.Context,
-	request DeploymentRequest,
+	request paasv1.DeploymentExecutionRequest,
 ) (paasv1.AdapterResult, error) {
+	if err := paasv1.ValidateDeploymentExecutionRequest(request); err != nil {
+		return paasv1.AdapterResult{}, err
+	}
 	adapter.mu.Lock()
 	defer adapter.mu.Unlock()
 
@@ -77,28 +80,28 @@ func (adapter *replayDeploymentExecutor) ApplyDeployment(
 
 func (*replayDeploymentExecutor) ObserveDeployment(
 	context.Context,
-	ObserveDeploymentRequest,
-) (DeploymentObservation, error) {
-	return DeploymentObservation{}, nil
+	paasv1.ObserveDeploymentRequest,
+) (paasv1.DeploymentObservation, error) {
+	return paasv1.DeploymentObservation{}, nil
 }
 
 func (*replayDeploymentExecutor) StopDeployment(
 	context.Context,
-	DeploymentRequest,
+	paasv1.DeploymentExecutionRequest,
 ) (paasv1.AdapterResult, error) {
 	return paasv1.AdapterResult{}, nil
 }
 
 func (*replayDeploymentExecutor) RollbackDeployment(
 	context.Context,
-	DeploymentRequest,
+	paasv1.DeploymentExecutionRequest,
 ) (paasv1.AdapterResult, error) {
 	return paasv1.AdapterResult{}, nil
 }
 
 func TestDeploymentExecutorReplaysOneEffectForSameCommand(t *testing.T) {
 	adapter := newReplayDeploymentExecutor()
-	request := replayRequest("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	request := replayRequest(1)
 
 	first, err := adapter.ApplyDeployment(context.Background(), request)
 	if err != nil {
@@ -125,12 +128,12 @@ func TestDeploymentExecutorReplaysOneEffectForSameCommand(t *testing.T) {
 
 func TestDeploymentExecutorRejectsConflictingReplay(t *testing.T) {
 	adapter := newReplayDeploymentExecutor()
-	first := replayRequest("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	first := replayRequest(1)
 	if _, err := adapter.ApplyDeployment(context.Background(), first); err != nil {
 		t.Fatalf("first ApplyDeployment() error = %v", err)
 	}
 
-	conflict := replayRequest("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	conflict := replayRequest(2)
 	_, err := adapter.ApplyDeployment(context.Background(), conflict)
 	if err == nil {
 		t.Fatal("conflicting replay must fail")
@@ -176,24 +179,75 @@ func TestAdapterCommandEnvelopeCannotCarryRawAccessMaterial(t *testing.T) {
 	}
 }
 
-func replayRequest(digest string) DeploymentRequest {
-	return DeploymentRequest{
+func replayRequest(replicas uint32) paasv1.DeploymentExecutionRequest {
+	createdAt := time.Date(2026, 8, 25, 11, 55, 0, 0, time.UTC)
+	scope := paasv1.ResourceScope{
+		Kind:     paasv1.AuthorityTenant,
+		TenantID: "tenant-001",
+	}
+	metadata := paasv1.ResourceMetadata{
+		ID: "revision-001", Name: "revision-001", Scope: scope,
+		ResourceVersion: 1, CreatedAt: createdAt, UpdatedAt: createdAt,
+	}
+	spec := paasv1.DeploymentSpec{
+		ApplicationRevisionID: "revision-001",
+		PlacementPolicyID:     "policy-001",
+		DesiredState:          paasv1.DeploymentDesiredRunning,
+		Components: []paasv1.DeploymentComponent{{
+			Name: "web", Replicas: replicas,
+		}},
+	}
+	request := paasv1.DeploymentExecutionRequest{
 		Command: paasv1.AdapterCommandEnvelope{
-			OperationID: "operation-001",
-			CommandID:   "command-001",
-			Attempt:     1,
-			Action:      paasv1.AdapterApplyDeployment,
-			Scope: paasv1.ResourceScope{
-				Kind:     paasv1.AuthorityTenant,
-				TenantID: "tenant-001",
-			},
+			OperationID:           "operation-001",
+			CommandID:             "command-001",
+			Attempt:               1,
+			Action:                paasv1.AdapterApplyDeployment,
+			Scope:                 scope,
 			ApplicationID:         "application-001",
 			ApplicationRevisionID: "revision-001",
 			DeploymentID:          "deployment-001",
 			ExecutionTargetID:     "target-local-001",
-			RequestDigest:         digest,
 			BindingRef:            "binding-local-001",
 			Deadline:              time.Date(2026, 8, 25, 12, 5, 0, 0, time.UTC),
 		},
+		Generation: paasv1.DeploymentGeneration{
+			APIVersion: paasv1.APIVersion, Kind: "DeploymentGeneration", Scope: scope,
+			DeploymentID: "deployment-001", Generation: 1, Spec: spec,
+			CreatedByOperationID: "operation-001", CreatedAt: createdAt,
+		},
+		ApplicationRevision: paasv1.ApplicationRevision{
+			APIVersion: paasv1.APIVersion, Kind: "ApplicationRevision", Metadata: metadata,
+			Spec: paasv1.ApplicationRevisionSpec{
+				ApplicationID: "application-001", Revision: "revision-001",
+				ContentDigest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+				Components: []paasv1.ApplicationRevisionComponent{{
+					Name: "web",
+					Artifact: paasv1.ArtifactRef{
+						Kind: paasv1.ArtifactOCIImage, Locator: "registry.example.invalid/web",
+						Digest: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+					},
+					Resources: paasv1.ResourceRequirements{CPUMillis: 100, MemoryBytes: 1024},
+				}},
+			},
+		},
+		Placement: paasv1.PlacementDecision{
+			APIVersion: paasv1.APIVersion, Kind: "PlacementDecision",
+			Metadata: paasv1.ResourceMetadata{
+				ID: "decision-001", Name: "decision-001", Scope: scope,
+				ResourceVersion: 1, CreatedAt: createdAt, UpdatedAt: createdAt,
+			},
+			DeploymentID: "deployment-001", DeploymentGeneration: 1,
+			DeploymentResourceVersion: 1, ApplicationRevisionID: "revision-001",
+			PlacementPolicyID: "policy-001", PolicyResourceVersion: 1,
+			RequestedIsolationGuarantee: paasv1.IsolationWorkload,
+			Outcome:                     paasv1.PlacementScheduled, ExecutionTargetID: "target-local-001",
+			ExecutionTargetResourceVersion: 1, GrantedIsolationGuarantee: paasv1.IsolationWorkload,
+			CandidateSetDigest: "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+			DecidedAt:          createdAt,
+		},
 	}
+	request.Generation.ContentDigest = paasv1.DeploymentSpecContentDigest(request.Generation.Spec)
+	request.Command.RequestDigest = paasv1.DeploymentExecutionRequestDigest(request)
+	return request
 }

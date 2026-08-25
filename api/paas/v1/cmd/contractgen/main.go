@@ -146,10 +146,11 @@ func structContracts() map[string]reflect.Type {
 		paasv1.SecretVersionReference{}, paasv1.ComponentBinding{}, paasv1.Application{}, paasv1.Configuration{},
 		paasv1.ConfigurationRevisionSpec{}, paasv1.ConfigurationRevision{}, paasv1.ApplicationRevisionComponent{},
 		paasv1.ApplicationRevisionSpec{}, paasv1.ApplicationRevision{}, paasv1.DeploymentComponent{}, paasv1.DeploymentSpec{},
-		paasv1.DeploymentStatus{}, paasv1.Deployment{}, paasv1.SubjectRef{}, paasv1.ResourceRef{}, paasv1.FieldViolation{},
+		paasv1.DeploymentStatus{}, paasv1.Deployment{}, paasv1.DeploymentGeneration{}, paasv1.SubjectRef{}, paasv1.ResourceRef{}, paasv1.FieldViolation{},
 		paasv1.Problem{}, paasv1.Operation{}, paasv1.Evidence{}, paasv1.AdapterCapabilitiesContract{},
 		paasv1.AdapterCommandEnvelope{}, paasv1.InspectExecutionTargetRequest{}, paasv1.ObserveExecutionTargetRequest{},
-		paasv1.ExecutionTargetObservation{}, paasv1.NormalizedAdapterError{}, paasv1.AdapterResult{},
+		paasv1.DeploymentExecutionRequest{}, paasv1.ObserveDeploymentRequest{}, paasv1.DeploymentEndpointObservation{},
+		paasv1.DeploymentObservation{}, paasv1.ExecutionTargetObservation{}, paasv1.NormalizedAdapterError{}, paasv1.AdapterResult{},
 	}
 	result := make(map[string]reflect.Type, len(values))
 	for _, value := range values {
@@ -186,6 +187,10 @@ func structSchema(contract reflect.Type) schema {
 }
 
 func schemaForField(owner string, field reflect.StructField, jsonName string) schema {
+	if owner == "DeploymentEndpointObservation" &&
+		(field.Name == "ComponentName" || field.Name == "EndpointName" || field.Name == "Address") {
+		return ref("Name")
+	}
 	if field.Name == "Labels" || field.Name == "MatchLabels" {
 		return ref("Labels")
 	}
@@ -260,7 +265,8 @@ func applySemanticOverlays(schemas map[string]any) {
 	resourceKinds := map[string]string{
 		"Application": "Application", "Configuration": "Configuration",
 		"ConfigurationRevision": "ConfigurationRevision", "ApplicationRevision": "ApplicationRevision",
-		"Deployment": "Deployment", "ExecutionPool": "ExecutionPool", "ExecutionTarget": "ExecutionTarget",
+		"Deployment": "Deployment", "DeploymentGeneration": "DeploymentGeneration",
+		"ExecutionPool": "ExecutionPool", "ExecutionTarget": "ExecutionTarget",
 		"PlacementPolicy": "PlacementPolicy", "PlacementDecision": "PlacementDecision",
 		"Operation": "Operation", "Evidence": "Evidence",
 	}
@@ -274,12 +280,14 @@ func applySemanticOverlays(schemas map[string]any) {
 		}
 	}
 
-	for _, name := range []string{"ConfigurationRevisionSpec", "ApplicationRevisionSpec", "PlacementDecision"} {
+	for _, name := range []string{"ConfigurationRevisionSpec", "ApplicationRevisionSpec", "DeploymentGeneration", "PlacementDecision"} {
 		object(schemas[name])["x-matrix-immutable"] = true
 	}
 	for _, name := range []string{
 		"AdapterCapabilitiesContract", "AdapterCommandEnvelope", "InspectExecutionTargetRequest",
-		"ObserveExecutionTargetRequest", "ExecutionTargetObservation", "NormalizedAdapterError", "AdapterResult",
+		"ObserveExecutionTargetRequest", "DeploymentExecutionRequest", "ObserveDeploymentRequest",
+		"DeploymentEndpointObservation", "DeploymentObservation", "ExecutionTargetObservation",
+		"NormalizedAdapterError", "AdapterResult",
 	} {
 		object(schemas[name])["x-matrix-visibility"] = "internal"
 	}
@@ -295,6 +303,14 @@ func applySemanticOverlays(schemas map[string]any) {
 	setArrayMinimum(schemas, "ApplicationRevisionSpec", "components", 1)
 	setArrayMinimum(schemas, "DeploymentSpec", "components", 1)
 	setArrayMinimum(schemas, "AdapterCapabilitiesContract", "actions", 1)
+	setIntegerMinimum(schemas, "ApplicationEndpoint", "port", 1)
+	setIntegerMinimum(schemas, "DeploymentComponent", "replicas", 1)
+	setIntegerMinimum(schemas, "Deployment", "generation", 1)
+	setIntegerMinimum(schemas, "DeploymentGeneration", "generation", 1)
+	setIntegerMinimum(schemas, "PlacementDecision", "deploymentGeneration", 1)
+	setIntegerMinimum(schemas, "ObserveDeploymentRequest", "generation", 1)
+	setIntegerMinimum(schemas, "DeploymentEndpointObservation", "port", 1)
+	setIntegerMinimum(schemas, "DeploymentObservation", "generation", 1)
 
 	componentBinding := object(schemas["ComponentBinding"])
 	componentBinding["oneOf"] = []any{
@@ -319,6 +335,28 @@ func applySemanticOverlays(schemas map[string]any) {
 			"then": schema{"properties": schema{"injection": schema{"const": string(paasv1.InjectionFile)}}},
 		},
 	}
+
+	executionRequest := object(schemas["DeploymentExecutionRequest"])
+	executionProperties := executionRequest["properties"].(schema)
+	executionProperties["command"] = schema{"allOf": []any{
+		ref("AdapterCommandEnvelope"),
+		schema{"properties": schema{"action": schema{"enum": stringsOf(
+			paasv1.AdapterValidateDeployment,
+			paasv1.AdapterApplyDeployment,
+			paasv1.AdapterStopDeployment,
+			paasv1.AdapterRollbackDeployment,
+		)}}},
+	}}
+	executionProperties["placement"] = schema{"allOf": []any{
+		ref("PlacementDecision"),
+		schema{"properties": schema{"outcome": schema{"const": string(paasv1.PlacementScheduled)}}},
+	}}
+	observeRequest := object(schemas["ObserveDeploymentRequest"])
+	observeProperties := observeRequest["properties"].(schema)
+	observeProperties["command"] = schema{"allOf": []any{
+		ref("AdapterCommandEnvelope"),
+		schema{"properties": schema{"action": schema{"const": string(paasv1.AdapterObserveDeployment)}}},
+	}}
 
 	placement := object(schemas["PlacementDecision"])
 	placement["allOf"] = []any{
@@ -346,6 +384,11 @@ func setArrayMinimum(schemas map[string]any, owner, property string, minimum int
 	properties := object(schemas[owner])["properties"].(schema)
 	object(properties[property])["minItems"] = minimum
 	object(properties[property])["uniqueItems"] = true
+}
+
+func setIntegerMinimum(schemas map[string]any, owner, property string, minimum int) {
+	properties := object(schemas[owner])["properties"].(schema)
+	object(properties[property])["minimum"] = minimum
 }
 
 func object(value any) schema {

@@ -1,6 +1,6 @@
 # FEAT-004: Compose application execution
 
-- Status: Donor review complete; implementation pending
+- Status: Gate A accepted; Gate B implementation pending
 - Target release: Private Application PaaS v0.1
 - Executor contract version: `v1`
 - Target design date: 2026-08-25
@@ -224,6 +224,24 @@ real-PostgreSQL, real-Compose, cross-platform build, Markdown-link, stale-term,
 and `git diff --check` gates must pass on one worktree. Tests assert behavior
 and current schema invariants rather than Compose JSON formatting, SQL text,
 file layout, command call order, or implementation counts.
+
+## Implementation evidence
+
+- `api/paas/v1` owns immutable Deployment generation, exact execution request,
+  observation, generation-aware placement, and canonical content/request
+  digests in both Go and generated OpenAPI.
+- The service-owned `DeploymentExecutor` now uses those versioned method-data
+  schemas; the replaced service-internal request and observation types were
+  deleted rather than retained as aliases.
+- `app/adapter/apphosting/compose` compiles a deterministic closed Compose
+  profile from verified local image digests, ordinary ENV configuration, and
+  derived read-only secret-file grants. It has no caller-controlled build,
+  pull, command, host-port, host-path, privileged, or host-network field.
+- Gate A completed on 2026-08-25 on one worktree with generation drift, unit,
+  vet, race, ten-run, schema, architecture, a real PostgreSQL 18 regression,
+  placement fuzz, four OS/architecture builds, and repository-diff checks
+  passing. Gate B database, Operation, worker, and northbound behavior and Gate
+  C real Compose effects remain unaccepted.
 
 ## Deferred
 

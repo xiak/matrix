@@ -269,7 +269,7 @@
           },
           "port": {
             "maximum": 65535,
-            "minimum": 0,
+            "minimum": 1,
             "type": "integer"
           },
           "protocol": {
@@ -623,6 +623,11 @@
           "apiVersion": {
             "const": "paas.matrix.xiak.com/v1"
           },
+          "generation": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
           "kind": {
             "const": "Deployment"
           },
@@ -640,6 +645,7 @@
           "apiVersion",
           "kind",
           "metadata",
+          "generation",
           "spec",
           "status"
         ],
@@ -659,7 +665,7 @@
           },
           "replicas": {
             "maximum": 4294967295,
-            "minimum": 0,
+            "minimum": 1,
             "type": "integer"
           }
         },
@@ -675,6 +681,196 @@
           "STOPPED"
         ],
         "type": "string"
+      },
+      "DeploymentEndpointObservation": {
+        "additionalProperties": false,
+        "properties": {
+          "address": {
+            "$ref": "#/components/schemas/Name"
+          },
+          "componentName": {
+            "$ref": "#/components/schemas/Name"
+          },
+          "endpointName": {
+            "$ref": "#/components/schemas/Name"
+          },
+          "port": {
+            "maximum": 65535,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "protocol": {
+            "$ref": "#/components/schemas/EndpointProtocol"
+          }
+        },
+        "required": [
+          "componentName",
+          "endpointName",
+          "protocol",
+          "address",
+          "port"
+        ],
+        "type": "object",
+        "x-matrix-visibility": "internal"
+      },
+      "DeploymentExecutionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "applicationRevision": {
+            "$ref": "#/components/schemas/ApplicationRevision"
+          },
+          "command": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdapterCommandEnvelope"
+              },
+              {
+                "properties": {
+                  "action": {
+                    "enum": [
+                      "VALIDATE_DEPLOYMENT",
+                      "APPLY_DEPLOYMENT",
+                      "STOP_DEPLOYMENT",
+                      "ROLLBACK_DEPLOYMENT"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          "configurationRevisions": {
+            "items": {
+              "$ref": "#/components/schemas/ConfigurationRevision"
+            },
+            "type": "array"
+          },
+          "generation": {
+            "$ref": "#/components/schemas/DeploymentGeneration"
+          },
+          "placement": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PlacementDecision"
+              },
+              {
+                "properties": {
+                  "outcome": {
+                    "const": "SCHEDULED"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "required": [
+          "command",
+          "generation",
+          "applicationRevision",
+          "configurationRevisions",
+          "placement"
+        ],
+        "type": "object",
+        "x-matrix-visibility": "internal"
+      },
+      "DeploymentGeneration": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "paas.matrix.xiak.com/v1"
+          },
+          "contentDigest": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "createdByOperationId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "deploymentId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "generation": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "kind": {
+            "const": "DeploymentGeneration"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ResourceScope"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/DeploymentSpec"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "scope",
+          "deploymentId",
+          "generation",
+          "spec",
+          "contentDigest",
+          "createdByOperationId",
+          "createdAt"
+        ],
+        "type": "object",
+        "x-matrix-immutable": true
+      },
+      "DeploymentObservation": {
+        "additionalProperties": false,
+        "properties": {
+          "applicationRevisionId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "deploymentId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "endpoints": {
+            "items": {
+              "$ref": "#/components/schemas/DeploymentEndpointObservation"
+            },
+            "type": "array"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/Evidence"
+            },
+            "type": "array"
+          },
+          "generation": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "observedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "phase": {
+            "$ref": "#/components/schemas/DeploymentPhase"
+          },
+          "readyComponents": {
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "receiptDigest": {
+            "$ref": "#/components/schemas/Digest"
+          }
+        },
+        "required": [
+          "deploymentId",
+          "generation",
+          "applicationRevisionId",
+          "phase",
+          "readyComponents",
+          "receiptDigest",
+          "observedAt"
+        ],
+        "type": "object",
+        "x-matrix-visibility": "internal"
       },
       "DeploymentPhase": {
         "enum": [
@@ -730,6 +926,11 @@
           "observedAt": {
             "$ref": "#/components/schemas/Timestamp"
           },
+          "observedGeneration": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
           "phase": {
             "$ref": "#/components/schemas/DeploymentPhase"
           },
@@ -744,6 +945,7 @@
         },
         "required": [
           "phase",
+          "observedGeneration",
           "readyComponents",
           "observedAt"
         ],
@@ -1231,6 +1433,40 @@
         "type": "object",
         "x-matrix-visibility": "internal"
       },
+      "ObserveDeploymentRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdapterCommandEnvelope"
+              },
+              {
+                "properties": {
+                  "action": {
+                    "const": "OBSERVE_DEPLOYMENT"
+                  }
+                }
+              }
+            ]
+          },
+          "expectedContentDigest": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "generation": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "command",
+          "generation",
+          "expectedContentDigest"
+        ],
+        "type": "object",
+        "x-matrix-visibility": "internal"
+      },
       "ObserveExecutionTargetRequest": {
         "additionalProperties": false,
         "properties": {
@@ -1406,6 +1642,11 @@
           "decidedAt": {
             "$ref": "#/components/schemas/Timestamp"
           },
+          "deploymentGeneration": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
           "deploymentId": {
             "$ref": "#/components/schemas/ID"
           },
@@ -1454,6 +1695,7 @@
           "kind",
           "metadata",
           "deploymentId",
+          "deploymentGeneration",
           "deploymentResourceVersion",
           "applicationRevisionId",
           "placementPolicyId",

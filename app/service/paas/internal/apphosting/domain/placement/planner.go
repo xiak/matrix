@@ -316,6 +316,7 @@ func newDecision(input Input, candidateDigest string) paasv1.PlacementDecision {
 			UpdatedAt:       input.DecidedAt,
 		},
 		DeploymentID:                input.Snapshot.Deployment.Metadata.ID,
+		DeploymentGeneration:        input.Snapshot.Deployment.Generation,
 		DeploymentResourceVersion:   input.Snapshot.Deployment.Metadata.ResourceVersion,
 		ApplicationRevisionID:       input.Snapshot.ApplicationRevision.Metadata.ID,
 		PlacementPolicyID:           input.Snapshot.Policy.Metadata.ID,

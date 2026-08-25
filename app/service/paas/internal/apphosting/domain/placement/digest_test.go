@@ -102,7 +102,7 @@ func TestCandidateDigestGoldenAndDecisionRelevantSensitivity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("baseline plan: %v", err)
 	}
-	const golden = "sha256:be0e44069d5e8cffb23e3ecf5a1927964cafbe70e5f1f9a8df4473b6bfae9b47"
+	const golden = "sha256:86d9d98742ffad5308107dc248717e30142215285b09b063688cbb178e8b0147"
 	if baseline.Decision.CandidateSetDigest != golden {
 		t.Fatalf(
 			"candidate digest = %q, update golden %q",
@@ -116,6 +116,7 @@ func TestCandidateDigestGoldenAndDecisionRelevantSensitivity(t *testing.T) {
 		mutate func(*Input)
 	}{
 		{name: "deployment resource version", mutate: func(value *Input) { value.Snapshot.Deployment.Metadata.ResourceVersion++ }},
+		{name: "deployment generation", mutate: func(value *Input) { value.Snapshot.Deployment.Generation++ }},
 		{name: "deployment replicas", mutate: func(value *Input) { value.Snapshot.Deployment.Spec.Components[0].Replicas++ }},
 		{name: "application revision identity", mutate: func(value *Input) {
 			value.Snapshot.ApplicationRevision.Metadata.ID = "revision-b"

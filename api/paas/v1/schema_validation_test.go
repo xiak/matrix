@@ -2,8 +2,10 @@ package paasv1
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
@@ -86,6 +88,84 @@ func TestPlacementDecisionSchemaBindsSelectedTargetVersion(t *testing.T) {
 	if err := schema.Validate(unschedulable); err == nil {
 		t.Fatal("unschedulable placement with target resource version must fail schema validation")
 	}
+}
+
+func TestExecutionAdapterValuesValidateAgainstOpenAPISchemas(t *testing.T) {
+	document := loadOpenAPI(t)
+	request := validDeploymentExecutionRequest(t)
+	observe := ObserveDeploymentRequest{
+		Command:               request.Command,
+		Generation:            request.Generation.Generation,
+		ExpectedContentDigest: request.Generation.ContentDigest,
+	}
+	observe.Command.Action = AdapterObserveDeployment
+	observe.Command.CommandID = "command-observe-001"
+	observe.Command.RequestDigest = ObserveDeploymentRequestDigest(observe)
+	observation := DeploymentObservation{
+		DeploymentID:          request.Generation.DeploymentID,
+		Generation:            request.Generation.Generation,
+		ApplicationRevisionID: request.ApplicationRevision.Metadata.ID,
+		Phase:                 DeploymentReady,
+		ReadyComponents:       1,
+		Endpoints: []DeploymentEndpointObservation{{
+			ComponentName: "web", EndpointName: "http", Protocol: EndpointHTTP,
+			Address: "web", Port: 8080,
+		}},
+		ReceiptDigest: testExecutionDigest('f'),
+		ObservedAt:    request.Generation.CreatedAt.Add(time.Minute),
+	}
+	values := map[string]any{
+		"DeploymentGeneration":       request.Generation,
+		"DeploymentExecutionRequest": request,
+		"ObserveDeploymentRequest":   observe,
+		"DeploymentObservation":      observation,
+	}
+	for schemaName, value := range values {
+		t.Run(schemaName, func(t *testing.T) {
+			encoded, err := json.Marshal(value)
+			if err != nil {
+				t.Fatalf("encode %s: %v", schemaName, err)
+			}
+			instance, err := jsonschema.UnmarshalJSON(bytes.NewReader(encoded))
+			if err != nil {
+				t.Fatalf("decode %s JSON: %v", schemaName, err)
+			}
+			if err := compileOpenAPISchema(t, document, schemaName).Validate(instance); err != nil {
+				t.Fatalf("%s does not satisfy OpenAPI schema: %v", schemaName, err)
+			}
+		})
+	}
+
+	executionSchema := compileOpenAPISchema(t, document, "DeploymentExecutionRequest")
+	wrongAction := schemaInstance(t, request).(map[string]any)
+	wrongAction["command"].(map[string]any)["action"] = string(AdapterObserveDeployment)
+	if err := executionSchema.Validate(wrongAction); err == nil {
+		t.Fatal("execution request schema must reject an observation action")
+	}
+	unscheduled := schemaInstance(t, request).(map[string]any)
+	unscheduled["placement"] = loadSchemaExample(t, "examples/placement-unschedulable.json")
+	if err := executionSchema.Validate(unscheduled); err == nil {
+		t.Fatal("execution request schema must reject an unscheduled placement")
+	}
+	observeSchema := compileOpenAPISchema(t, document, "ObserveDeploymentRequest")
+	wrongObserveAction := schemaInstance(t, observe).(map[string]any)
+	wrongObserveAction["command"].(map[string]any)["action"] = string(AdapterApplyDeployment)
+	if err := observeSchema.Validate(wrongObserveAction); err == nil {
+		t.Fatal("observe request schema must reject an execution action")
+	}
+}
+
+func schemaInstance(t *testing.T, value any) any {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("encode schema instance: %v", err)
+	}
+	instance, err := jsonschema.UnmarshalJSON(bytes.NewReader(encoded))
+	if err != nil {
+		t.Fatalf("decode schema instance: %v", err)
+	}
+	return instance
 }
 
 func loadSchemaExample(t *testing.T, path string) map[string]any {

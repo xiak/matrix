@@ -112,6 +112,7 @@ type PlacementDecision struct {
 	Kind                           string             `json:"kind"`
 	Metadata                       ResourceMetadata   `json:"metadata"`
 	DeploymentID                   ResourceID         `json:"deploymentId"`
+	DeploymentGeneration           uint64             `json:"deploymentGeneration"`
 	DeploymentResourceVersion      uint64             `json:"deploymentResourceVersion"`
 	ApplicationRevisionID          ResourceID         `json:"applicationRevisionId"`
 	PlacementPolicyID              ResourceID         `json:"placementPolicyId"`
@@ -228,6 +229,7 @@ type DeploymentSpec struct {
 
 type DeploymentStatus struct {
 	Phase                         DeploymentPhase `json:"phase"`
+	ObservedGeneration            uint64          `json:"observedGeneration"`
 	PlacementDecisionID           ResourceID      `json:"placementDecisionId,omitempty"`
 	CurrentOperationID            OperationID     `json:"currentOperationId,omitempty"`
 	ObservedApplicationRevisionID ResourceID      `json:"observedApplicationRevisionId,omitempty"`
@@ -239,8 +241,24 @@ type Deployment struct {
 	APIVersion string           `json:"apiVersion"`
 	Kind       string           `json:"kind"`
 	Metadata   ResourceMetadata `json:"metadata"`
+	Generation uint64           `json:"generation"`
 	Spec       DeploymentSpec   `json:"spec"`
 	Status     DeploymentStatus `json:"status"`
+}
+
+// DeploymentGeneration is the immutable desired-state snapshot executed by
+// an adapter. ResourceVersion remains on the mutable Deployment and is not an
+// execution identity.
+type DeploymentGeneration struct {
+	APIVersion           string         `json:"apiVersion"`
+	Kind                 string         `json:"kind"`
+	Scope                ResourceScope  `json:"scope"`
+	DeploymentID         ResourceID     `json:"deploymentId"`
+	Generation           uint64         `json:"generation"`
+	Spec                 DeploymentSpec `json:"spec"`
+	ContentDigest        string         `json:"contentDigest"`
+	CreatedByOperationID OperationID    `json:"createdByOperationId"`
+	CreatedAt            time.Time      `json:"createdAt"`
 }
 
 type SubjectRef struct {
@@ -335,6 +353,43 @@ type InspectExecutionTargetRequest struct {
 
 type ObserveExecutionTargetRequest struct {
 	Command AdapterCommandEnvelope `json:"command"`
+}
+
+// DeploymentExecutionRequest is internal-visible adapter input. It contains
+// exact immutable references and resolved ordinary configuration documents,
+// but never secret material or provider-native options.
+type DeploymentExecutionRequest struct {
+	Command                AdapterCommandEnvelope  `json:"command"`
+	Generation             DeploymentGeneration    `json:"generation"`
+	ApplicationRevision    ApplicationRevision     `json:"applicationRevision"`
+	ConfigurationRevisions []ConfigurationRevision `json:"configurationRevisions"`
+	Placement              PlacementDecision       `json:"placement"`
+}
+
+type ObserveDeploymentRequest struct {
+	Command               AdapterCommandEnvelope `json:"command"`
+	Generation            uint64                 `json:"generation"`
+	ExpectedContentDigest string                 `json:"expectedContentDigest"`
+}
+
+type DeploymentEndpointObservation struct {
+	ComponentName string           `json:"componentName"`
+	EndpointName  string           `json:"endpointName"`
+	Protocol      EndpointProtocol `json:"protocol"`
+	Address       string           `json:"address"`
+	Port          uint16           `json:"port"`
+}
+
+type DeploymentObservation struct {
+	DeploymentID          ResourceID                      `json:"deploymentId"`
+	Generation            uint64                          `json:"generation"`
+	ApplicationRevisionID ResourceID                      `json:"applicationRevisionId"`
+	Phase                 DeploymentPhase                 `json:"phase"`
+	ReadyComponents       uint32                          `json:"readyComponents"`
+	Endpoints             []DeploymentEndpointObservation `json:"endpoints,omitempty"`
+	ReceiptDigest         string                          `json:"receiptDigest"`
+	Evidence              []Evidence                      `json:"evidence,omitempty"`
+	ObservedAt            time.Time                       `json:"observedAt"`
 }
 
 type ExecutionTargetObservation struct {

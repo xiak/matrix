@@ -26,6 +26,7 @@ func TestOpenAPIContractDefinesApplicationPaaSV1(t *testing.T) {
 		"ConfigurationRevision",
 		"ApplicationRevision",
 		"Deployment",
+		"DeploymentGeneration",
 		"ExecutionPool",
 		"ExecutionTarget",
 		"PlacementPolicy",
@@ -37,6 +38,10 @@ func TestOpenAPIContractDefinesApplicationPaaSV1(t *testing.T) {
 		"AdapterCommandEnvelope",
 		"InspectExecutionTargetRequest",
 		"ObserveExecutionTargetRequest",
+		"DeploymentExecutionRequest",
+		"ObserveDeploymentRequest",
+		"DeploymentEndpointObservation",
+		"DeploymentObservation",
 		"ExecutionTargetObservation",
 		"AdapterResult",
 	}
@@ -222,12 +227,36 @@ func TestImmutableSchemasAreExplicit(t *testing.T) {
 	for _, name := range []string{
 		"ConfigurationRevisionSpec",
 		"ApplicationRevisionSpec",
+		"DeploymentGeneration",
 		"PlacementDecision",
 	} {
 		schema := schemaObject(t, schemas, name)
 		if schema["x-matrix-immutable"] != true {
 			t.Errorf("%s must declare x-matrix-immutable", name)
 		}
+	}
+}
+
+func TestExecutionAdapterSchemasExposeReferencesNotProviderControls(t *testing.T) {
+	schemas := openAPISchemas(t, loadOpenAPI(t))
+	for _, name := range []string{
+		"DeploymentExecutionRequest",
+		"ObserveDeploymentRequest",
+		"DeploymentEndpointObservation",
+		"DeploymentObservation",
+	} {
+		schema := schemaObject(t, schemas, name)
+		if schema["x-matrix-visibility"] != "internal" {
+			t.Errorf("%s must remain internal-visible", name)
+		}
+	}
+	secretReference := schemaObject(t, schemas, "SecretVersionReference")
+	properties := object(t, secretReference["properties"], "SecretVersionReference.properties")
+	if len(properties) != 2 || properties["secretId"] == nil || properties["version"] == nil {
+		t.Fatalf("SecretVersionReference must contain only exact identity fields: %#v", properties)
+	}
+	if secretReference["additionalProperties"] != false {
+		t.Fatal("SecretVersionReference must reject secret material extensions")
 	}
 }
 
@@ -266,6 +295,7 @@ func TestOpenAPIStructPropertiesAndRequiredFieldsMatchGoTypes(t *testing.T) {
 		"DeploymentSpec":                reflect.TypeOf(DeploymentSpec{}),
 		"DeploymentStatus":              reflect.TypeOf(DeploymentStatus{}),
 		"Deployment":                    reflect.TypeOf(Deployment{}),
+		"DeploymentGeneration":          reflect.TypeOf(DeploymentGeneration{}),
 		"SubjectRef":                    reflect.TypeOf(SubjectRef{}),
 		"ResourceRef":                   reflect.TypeOf(ResourceRef{}),
 		"FieldViolation":                reflect.TypeOf(FieldViolation{}),
@@ -276,6 +306,10 @@ func TestOpenAPIStructPropertiesAndRequiredFieldsMatchGoTypes(t *testing.T) {
 		"AdapterCommandEnvelope":        reflect.TypeOf(AdapterCommandEnvelope{}),
 		"InspectExecutionTargetRequest": reflect.TypeOf(InspectExecutionTargetRequest{}),
 		"ObserveExecutionTargetRequest": reflect.TypeOf(ObserveExecutionTargetRequest{}),
+		"DeploymentExecutionRequest":    reflect.TypeOf(DeploymentExecutionRequest{}),
+		"ObserveDeploymentRequest":      reflect.TypeOf(ObserveDeploymentRequest{}),
+		"DeploymentEndpointObservation": reflect.TypeOf(DeploymentEndpointObservation{}),
+		"DeploymentObservation":         reflect.TypeOf(DeploymentObservation{}),
 		"ExecutionTargetObservation":    reflect.TypeOf(ExecutionTargetObservation{}),
 		"NormalizedAdapterError":        reflect.TypeOf(NormalizedAdapterError{}),
 		"AdapterResult":                 reflect.TypeOf(AdapterResult{}),

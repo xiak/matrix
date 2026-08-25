@@ -138,6 +138,7 @@ func testDeployment() paasv1.Deployment {
 		APIVersion: paasv1.APIVersion,
 		Kind:       "Deployment",
 		Metadata:   testMetadata("deployment-a", "deployment-a", paasv1.AuthorityTenant, "tenant-a", 2),
+		Generation: 1,
 		Spec: paasv1.DeploymentSpec{
 			ApplicationRevisionID: "revision-a",
 			PlacementPolicyID:     "policy-a",
@@ -148,9 +149,9 @@ func testDeployment() paasv1.Deployment {
 			},
 		},
 		Status: paasv1.DeploymentStatus{
-			Phase:                         paasv1.DeploymentPending,
-			ObservedApplicationRevisionID: "revision-a",
-			ObservedAt:                    fixtureTime.Add(-2 * time.Minute),
+			Phase:              paasv1.DeploymentPending,
+			ObservedGeneration: 0,
+			ObservedAt:         fixtureTime.Add(-2 * time.Minute),
 		},
 	}
 }

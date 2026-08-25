@@ -15,33 +15,13 @@ type InfrastructureAdapter interface {
 	ObserveExecutionTarget(context.Context, paasv1.ObserveExecutionTargetRequest) (paasv1.ExecutionTargetObservation, error)
 }
 
-type DeploymentRequest struct {
-	Command             paasv1.AdapterCommandEnvelope
-	ApplicationRevision paasv1.ApplicationRevision
-	Deployment          paasv1.Deployment
-	Placement           paasv1.PlacementDecision
-}
-
-type ObserveDeploymentRequest struct {
-	Command paasv1.AdapterCommandEnvelope
-}
-
-type DeploymentObservation struct {
-	DeploymentID          paasv1.ResourceID
-	ApplicationRevisionID paasv1.ResourceID
-	Phase                 paasv1.DeploymentPhase
-	ReadyComponents       uint32
-	Evidence              []paasv1.Evidence
-	ObservedAt            time.Time
-}
-
 type DeploymentExecutor interface {
 	Capabilities(context.Context) (paasv1.AdapterCapabilitiesContract, error)
-	ValidateDeployment(context.Context, DeploymentRequest) (paasv1.AdapterResult, error)
-	ApplyDeployment(context.Context, DeploymentRequest) (paasv1.AdapterResult, error)
-	ObserveDeployment(context.Context, ObserveDeploymentRequest) (DeploymentObservation, error)
-	StopDeployment(context.Context, DeploymentRequest) (paasv1.AdapterResult, error)
-	RollbackDeployment(context.Context, DeploymentRequest) (paasv1.AdapterResult, error)
+	ValidateDeployment(context.Context, paasv1.DeploymentExecutionRequest) (paasv1.AdapterResult, error)
+	ApplyDeployment(context.Context, paasv1.DeploymentExecutionRequest) (paasv1.AdapterResult, error)
+	ObserveDeployment(context.Context, paasv1.ObserveDeploymentRequest) (paasv1.DeploymentObservation, error)
+	StopDeployment(context.Context, paasv1.DeploymentExecutionRequest) (paasv1.AdapterResult, error)
+	RollbackDeployment(context.Context, paasv1.DeploymentExecutionRequest) (paasv1.AdapterResult, error)
 }
 
 type Route struct {

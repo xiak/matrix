@@ -39,24 +39,35 @@
   tenant-neutral capacity claims, tenant-owned reservation links, bounded
   serializable retries, exact replay, and one security-definer reservation
   transition boundary.
+- FEAT-004 Gate A is Accepted. Deployment and placement bind an exact positive
+  generation; versioned internal-visible executor schemas carry the immutable
+  generation, exact ApplicationRevision and ConfigurationRevision documents,
+  scheduled PlacementDecision, and normalized observation without secret
+  bytes or provider-native controls.
+- The Compose compiler deterministically admits only verified local image
+  digests, WORKLOAD isolation, resource limits, ordinary ENV configuration,
+  derived read-only secret grants, and the project default network. Its model
+  has no caller-controlled build, pull, command, host port/path, privileged, or
+  host-network capability.
 - The same worktree passed generation drift, unit, vet, race, ten-run, schema,
   architecture, placement fuzz, four OS/architecture builds, Markdown-link,
   and diff gates. A disposable PostgreSQL 18 test applied the migration twice,
   ran the verifier, raced capacity, attacked RLS, injected rollback failure,
   and exercised activate/release/expiry under the race detector.
-- No Compose DeploymentExecutor, northbound application workflow, offline
-  distribution, verified install/operations path, or platform
-  upgrade/rollback E2E exists yet. The Phase 1 goal is therefore active.
+- No effecting Compose DeploymentExecutor, durable application Operation,
+  northbound application workflow, offline distribution, verified
+  install/operations path, or platform upgrade/rollback E2E exists yet. The
+  Phase 1 goal is therefore active.
 
 ## Next concrete work
 
-1. Write the smallest FEAT target for the Compose application-execution
-   vertical slice before donor inspection: authoritative application,
-   configuration, revision, Deployment and Operation persistence; generated
-   Compose owned by the adapter; ENV configuration; read-only secret files;
-   apply/observe/stop/rollback reconciliation.
-2. Implement and accept that slice with real Docker Compose behavior, then add
-   the minimal northbound workflow needed to drive it.
+1. Implement FEAT-004 Gate B: authoritative application, configuration,
+   immutable Deployment generation and Operation persistence; minimal
+   northbound mutations; lease/fencing worker; apply/observe/stop/rollback
+   state transitions and fault/replay/RLS verification on real PostgreSQL 18.
+2. Implement and accept Gate C with real Docker Compose behavior, including
+   exact secret-file resolution, reconciliation, update, rollback, network
+   probe, and stop cleanup without registry or Internet access.
 3. Package digest-pinned offline installation and prove clean-host install,
    verification, operations, platform upgrade, rollback, and application
    rollback without registry or Internet access.

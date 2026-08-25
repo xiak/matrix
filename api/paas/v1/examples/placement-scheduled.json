@@ -10,6 +10,7 @@
     "updatedAt": "2026-08-25T08:02:00Z"
   },
   "deploymentId": "deployment-a-0001",
+  "deploymentGeneration": 1,
   "deploymentResourceVersion": 1,
   "applicationRevisionId": "revision-a-0001",
   "placementPolicyId": "placement-policy-a",

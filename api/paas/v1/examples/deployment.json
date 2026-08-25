@@ -9,6 +9,7 @@
     "createdAt": "2026-08-25T08:02:00Z",
     "updatedAt": "2026-08-25T08:02:00Z"
   },
+  "generation": 1,
   "spec": {
     "applicationRevisionId": "revision-a-0001",
     "placementPolicyId": "placement-policy-a",
@@ -26,7 +27,7 @@
   },
   "status": {
     "phase": "PENDING",
-    "observedApplicationRevisionId": "revision-a-0001",
+    "observedGeneration": 0,
     "readyComponents": 0,
     "observedAt": "2026-08-25T08:02:00Z"
   }
