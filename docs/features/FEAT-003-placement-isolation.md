@@ -1,11 +1,17 @@
 # FEAT-003: tenant placement and isolation policy
 
-- Status: Gate A accepted; Gate B implementation pending
+- Status: Gate A evidence retained; model correction and Gate B pending
 - Target release: Local Compose Runtime v0.1
 - Placement algorithm version: `placement-v1`
 - Target design date: 2026-08-25
 
 ## Outcome
+
+> Pre-Gate-B amendment: the deterministic planner, digest, strategies, and
+> capacity accounting remain accepted evidence. Its `WorkloadRelease`,
+> `RuntimeTarget`, and technology-shaped isolation vocabulary must migrate to
+> provider-neutral apphosting terms before transactional Gate B can be
+> accepted.
 
 Given an authenticated tenant scope, an immutable `WorkloadRelease`, a
 tenant-owned `PlacementPolicy`, and the current platform target snapshot, the
@@ -72,7 +78,11 @@ distribution.
 
 ## Authority and boundaries
 
-Placement is service policy under `app/service/paas/internal/placement`.
+Placement is a pure domain service under
+`app/service/paas/internal/runtime/domain/placement`. Transaction and replay
+coordination belong to the `runtime/usecase/createplacement` application use
+case. PostgreSQL implements that use case's repository contract and cannot
+select a target or weaken isolation.
 Infrastructure and runtime adapters cannot select a target, tenant, strategy,
 or isolation class.
 
@@ -312,7 +322,7 @@ placement request.
 ## Gate A implementation evidence
 
 The pure core is implemented under
-`app/service/paas/internal/placement`. It imports only the public PaaS v1
+`app/service/paas/internal/runtime/domain/placement`. It imports only the public PaaS v1
 contract and an explicit standard-library allowlist; an architecture test
 prevents repositories, adapters, drivers, processes, or third-party libraries
 from entering this package. Decision time is an explicit value input.
@@ -342,7 +352,7 @@ go test ./...
 go vet ./...
 go test -race ./...
 go test -count=10 ./...
-go test -run '^$' -fuzz '^FuzzPlanOrderInvariant$' -fuzztime=5s ./app/service/paas/internal/placement
+go test -run '^$' -fuzz '^FuzzPlanOrderInvariant$' -fuzztime=5s ./app/service/paas/internal/runtime/domain/placement
 GOOS/GOARCH builds: windows/amd64, linux/amd64, linux/arm64, darwin/arm64
 git diff --check
 ```

@@ -1,8 +1,10 @@
 # Matrix PaaS
 
-Matrix PaaS is an independent platform product. It provides identity, audit,
-control-plane, placement, runtime execution, and user-experience capabilities
-without embedding customer business applications.
+Matrix PaaS is a Docker-first enterprise Application PaaS for private
+delivery. It provides identity, audit, durable operations, application
+hosting, placement, execution, offline installation/upgrade, and
+user-experience capabilities without embedding customer business
+applications.
 
 ## Product boundary
 
@@ -13,8 +15,8 @@ The product distribution includes:
 - Audit as the unified audit authority;
 - the PaaS control plane and worker;
 - the independent PaaS UI;
-- infrastructure, runtime, and gateway adapters;
-- a minimal Compose-based local distribution.
+- infrastructure, application-executor, and gateway adapters;
+- a digest-pinned, offline-capable Compose-based private distribution.
 
 Backend, building, analysis, SenatriaAI, agent business features, and other
 customer workloads do not belong in this repository. They may be managed by
@@ -26,10 +28,11 @@ Matrix PaaS through versioned APIs and adapters.
 | --- | --- |
 | `api/` | Versioned public API, event, and schema contracts. |
 | `app/service/` | Independently runnable IAM, Audit, and PaaS services. |
-| `app/adapter/` | Replaceable infrastructure, runtime, and gateway integrations. |
+| `app/adapter/` | Replaceable infrastructure, application-executor, and gateway integrations. |
 | `app/ui/paas/` | Independent Next.js/React PaaS console. |
 | `deploy/` | Local and release deployment composition. |
-| `docs/` | Architecture decisions, adoption records, and product design. |
+| `docs/` | Formal architecture, FEAT, adoption, and verified runbook documents. |
+| `notes/codex/` | Non-authoritative, Git-portable Codex task checkpoint. |
 | `test/` | Cross-component contract, integration, and end-to-end tests. |
 | `tools/` | Repository-owned development and release tooling. |
 
@@ -39,16 +42,10 @@ real consumers justify a specifically named SDK or foundation. Root-level
 catch-all `pkg/`, `platform/`, and `infra/` directories are deliberately
 avoided.
 
-## Current phase
+## Development
 
-The repository is implementing Local Compose Runtime v0.1 in independently
-accepted slices. FEAT-001 established the vendor-neutral resources, state
-machines, adapter ports, errors, idempotency identity, and evidence contract.
-FEAT-002 now admits explicit local machines and pinned-SSH remote Linux
-machines through normalized observations without exposing access material.
-It does not yet deploy a workload; tenant placement is the next slice, followed
-by Compose runtime, IAM/Audit integration, and northbound delivery in
-FEAT-003 through FEAT-006.
-
-See [the architecture index](docs/architecture/README.md) and
-[the feature index](docs/features/README.md).
+The owning FEAT document is the only source for its requirements, design,
+implementation status, acceptance criteria, and evidence. Start from the
+[feature links](docs/features/README.md). Read an
+[architecture decision](docs/architecture/README.md) only for a cross-FEAT
+boundary change.

@@ -1,11 +1,19 @@
 # FEAT-001: Runtime domain and versioned contracts
 
-- Status: Accepted
+- Status: Pre-v1 model correction in progress
 - Target release: Local Compose Runtime v0.1
 - Contract version: `matrix.paas.io/paas/v1`
 - Target design date: 2026-08-25
 
 ## Outcome
+
+> Architecture amendment: the executable mechanisms and tests in this FEAT
+> remain evidence, but its published vocabulary is not release-ready.
+> The accepted product boundary requires Application, immutable
+> ApplicationRevision, Deployment,
+> ExecutionPool/ExecutionTarget, a domain-local DeploymentExecutor, and
+> provider-neutral isolation before Gate B. No northbound v1 API has shipped,
+> so compatibility aliases are forbidden.
 
 Define the smallest stable control-plane contract that can place and operate a
 tenant workload on a local machine today without coupling the product to
