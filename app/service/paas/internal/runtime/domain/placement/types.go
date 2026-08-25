@@ -8,12 +8,12 @@ import (
 
 const AlgorithmVersion = "placement-v1"
 
-type ReservationState string
+type CapacityClaimState string
 
 const (
-	ReservationPending  ReservationState = "PENDING"
-	ReservationActive   ReservationState = "ACTIVE"
-	ReservationReleased ReservationState = "RELEASED"
+	CapacityClaimPending  CapacityClaimState = "PENDING"
+	CapacityClaimActive   CapacityClaimState = "ACTIVE"
+	CapacityClaimReleased CapacityClaimState = "RELEASED"
 )
 
 // Resources is the capacity FEAT-003 reserves. Storage is intentionally not
@@ -24,25 +24,25 @@ type Resources struct {
 	WorkloadSlots int64
 }
 
-type Reservation struct {
-	ID                paasv1.ResourceID
-	TenantID          paasv1.TenantID
-	WorkloadReleaseID paasv1.ResourceID
-	DecisionID        paasv1.ResourceID
-	RuntimeTargetID   paasv1.ResourceID
-	Isolation         paasv1.IsolationClass
-	Resources         Resources
-	State             ReservationState
-	LeaseExpiresAt    time.Time
-	ResourceVersion   uint64
+// CapacityClaim is the tenant-neutral scheduling projection of consumed
+// capacity. Tenant reservation ownership remains behind the repository's RLS
+// boundary and is not needed by the Compose v0.1 placement policies.
+type CapacityClaim struct {
+	ID              paasv1.ResourceID
+	RuntimeTargetID paasv1.ResourceID
+	Isolation       paasv1.IsolationClass
+	Resources       Resources
+	State           CapacityClaimState
+	LeaseExpiresAt  time.Time
+	ResourceVersion uint64
 }
 
 type Snapshot struct {
-	Release      paasv1.WorkloadRelease
-	Policy       paasv1.PlacementPolicy
-	Pools        []paasv1.ResourcePool
-	Targets      []paasv1.RuntimeTarget
-	Reservations []Reservation
+	Release        paasv1.WorkloadRelease
+	Policy         paasv1.PlacementPolicy
+	Pools          []paasv1.ResourcePool
+	Targets        []paasv1.RuntimeTarget
+	CapacityClaims []CapacityClaim
 }
 
 // Input contains identities owned by the placement operation plus a single
@@ -89,7 +89,7 @@ type IsolationContext struct {
 	ReleaseContentDigest string
 	RuntimeTargetID      paasv1.ResourceID
 	TargetLabels         map[string]string
-	Reservations         []Reservation
+	CapacityClaims       []CapacityClaim
 }
 
 // IsolationPolicy is version-qualified service policy. Implementations must

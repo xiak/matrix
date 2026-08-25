@@ -20,8 +20,8 @@ func (planner *Planner) Plan(input Input) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	consuming := consumingReservations(input.Snapshot.Reservations, input.DecidedAt)
-	reservedByTarget, err := aggregateReservations(consuming)
+	consuming := consumingCapacityClaims(input.Snapshot.CapacityClaims, input.DecidedAt)
+	reservedByTarget, err := aggregateCapacityClaims(consuming)
 	if err != nil {
 		return Result{}, err
 	}
@@ -57,7 +57,7 @@ func (planner *Planner) Plan(input Input) (Result, error) {
 			target,
 			pool,
 			reserved,
-			reservationsForTarget(consuming, target.Metadata.ID),
+			capacityClaimsForTarget(consuming, target.Metadata.ID),
 			requirements,
 		)
 		evaluations = append(evaluations, evaluation)
@@ -100,7 +100,7 @@ func (planner *Planner) evaluateCandidate(
 	target paasv1.RuntimeTarget,
 	pool paasv1.ResourcePool,
 	reserved Resources,
-	reservations []Reservation,
+	claims []CapacityClaim,
 	requirements Resources,
 ) RejectionCode {
 	if _, eligible := eligiblePools[pool.Metadata.ID]; !eligible {
@@ -141,7 +141,7 @@ func (planner *Planner) evaluateCandidate(
 		ReleaseContentDigest: input.Snapshot.Release.Spec.ContentDigest,
 		RuntimeTargetID:      target.Metadata.ID,
 		TargetLabels:         cloneLabels(target.Metadata.Labels),
-		Reservations:         append([]Reservation(nil), reservations...),
+		CapacityClaims:       append([]CapacityClaim(nil), claims...),
 	}) {
 		return RejectIsolationPolicy
 	}
@@ -177,60 +177,54 @@ func aggregateRequirements(release paasv1.WorkloadRelease) (Resources, error) {
 	return result, nil
 }
 
-func consumingReservations(values []Reservation, decidedAt time.Time) []Reservation {
-	result := make([]Reservation, 0, len(values))
-	for _, reservation := range values {
-		if reservation.State == ReservationActive ||
-			(reservation.State == ReservationPending && reservation.LeaseExpiresAt.After(decidedAt)) {
-			result = append(result, reservation)
+func consumingCapacityClaims(values []CapacityClaim, decidedAt time.Time) []CapacityClaim {
+	result := make([]CapacityClaim, 0, len(values))
+	for _, claim := range values {
+		if claim.State == CapacityClaimActive ||
+			(claim.State == CapacityClaimPending && claim.LeaseExpiresAt.After(decidedAt)) {
+			result = append(result, claim)
 		}
 	}
 	sort.Slice(result, func(left, right int) bool {
-		return reservationLess(result[left], result[right])
+		return capacityClaimLess(result[left], result[right])
 	})
 	return result
 }
 
-func reservationLess(left, right Reservation) bool {
+func capacityClaimLess(left, right CapacityClaim) bool {
 	if left.RuntimeTargetID != right.RuntimeTargetID {
 		return left.RuntimeTargetID < right.RuntimeTargetID
 	}
-	if left.TenantID != right.TenantID {
-		return left.TenantID < right.TenantID
-	}
-	if left.ID != right.ID {
-		return left.ID < right.ID
-	}
-	return left.DecisionID < right.DecisionID
+	return left.ID < right.ID
 }
 
-func aggregateReservations(values []Reservation) (map[paasv1.ResourceID]Resources, error) {
+func aggregateCapacityClaims(values []CapacityClaim) (map[paasv1.ResourceID]Resources, error) {
 	result := make(map[paasv1.ResourceID]Resources)
-	for _, reservation := range values {
-		current := result[reservation.RuntimeTargetID]
+	for _, claim := range values {
+		current := result[claim.RuntimeTargetID]
 		var ok bool
-		if current.CPUMillis, ok = checkedAdd(current.CPUMillis, reservation.Resources.CPUMillis); !ok {
+		if current.CPUMillis, ok = checkedAdd(current.CPUMillis, claim.Resources.CPUMillis); !ok {
 			return nil, errors.New("reserved cpu capacity overflows")
 		}
-		if current.MemoryBytes, ok = checkedAdd(current.MemoryBytes, reservation.Resources.MemoryBytes); !ok {
+		if current.MemoryBytes, ok = checkedAdd(current.MemoryBytes, claim.Resources.MemoryBytes); !ok {
 			return nil, errors.New("reserved memory capacity overflows")
 		}
-		if current.WorkloadSlots, ok = checkedAdd(current.WorkloadSlots, reservation.Resources.WorkloadSlots); !ok {
+		if current.WorkloadSlots, ok = checkedAdd(current.WorkloadSlots, claim.Resources.WorkloadSlots); !ok {
 			return nil, errors.New("reserved workload slots overflow")
 		}
-		result[reservation.RuntimeTargetID] = current
+		result[claim.RuntimeTargetID] = current
 	}
 	return result, nil
 }
 
-func reservationsForTarget(
-	values []Reservation,
+func capacityClaimsForTarget(
+	values []CapacityClaim,
 	targetID paasv1.ResourceID,
-) []Reservation {
-	result := make([]Reservation, 0)
-	for _, reservation := range values {
-		if reservation.RuntimeTargetID == targetID {
-			result = append(result, reservation)
+) []CapacityClaim {
+	result := make([]CapacityClaim, 0)
+	for _, claim := range values {
+		if claim.RuntimeTargetID == targetID {
+			result = append(result, claim)
 		}
 	}
 	return result

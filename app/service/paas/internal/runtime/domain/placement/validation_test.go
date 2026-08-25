@@ -9,7 +9,7 @@ import (
 	paasv1 "matrix/api/paas/v1"
 )
 
-func TestRequirementAndReservationArithmeticRejectsOverflow(t *testing.T) {
+func TestRequirementAndCapacityClaimArithmeticRejectsOverflow(t *testing.T) {
 	t.Run("component multiplication", func(t *testing.T) {
 		input := singleTargetInput()
 		input.Snapshot.Release.Spec.Components[0].Resources.CPUMillis = math.MaxInt64
@@ -34,21 +34,21 @@ func TestRequirementAndReservationArithmeticRejectsOverflow(t *testing.T) {
 		}
 	})
 
-	t.Run("reservation addition", func(t *testing.T) {
+	t.Run("capacity claim addition", func(t *testing.T) {
 		input := singleTargetInput()
 		input.Snapshot.Targets[0].Status.Capacity.CPUMillis = math.MaxInt64
 		input.Snapshot.Targets[0].Status.Allocatable.CPUMillis = math.MaxInt64
-		input.Snapshot.Reservations = []Reservation{
-			testReservation("reservation-a", "tenant-a", "target-a", Resources{
+		input.Snapshot.CapacityClaims = []CapacityClaim{
+			testCapacityClaim("claim-a", "target-a", Resources{
 				CPUMillis: math.MaxInt64, WorkloadSlots: 1,
 			}),
-			testReservation("reservation-b", "tenant-b", "target-a", Resources{
+			testCapacityClaim("claim-b", "target-a", Resources{
 				CPUMillis: math.MaxInt64, WorkloadSlots: 1,
 			}),
 		}
 		if _, err := mustPlanner(t).Plan(input); err == nil ||
 			!strings.Contains(err.Error(), "reserved cpu capacity overflows") {
-			t.Fatalf("expected reservation overflow, got %v", err)
+			t.Fatalf("expected capacity claim overflow, got %v", err)
 		}
 	})
 }
@@ -96,16 +96,15 @@ func TestInvalidSnapshotsFailBeforeSelection(t *testing.T) {
 			match: "after decidedAt",
 		},
 		{
-			name: "pending reservation without lease",
+			name: "pending capacity claim without lease",
 			mutate: func(input *Input) {
-				reservation := testReservation(
-					"reservation-a",
-					"tenant-b",
+				claim := testCapacityClaim(
+					"claim-a",
 					"target-a",
 					Resources{WorkloadSlots: 1},
 				)
-				reservation.State = ReservationPending
-				input.Snapshot.Reservations = []Reservation{reservation}
+				claim.State = CapacityClaimPending
+				input.Snapshot.CapacityClaims = []CapacityClaim{claim}
 			},
 			match: "leaseExpiresAt",
 		},

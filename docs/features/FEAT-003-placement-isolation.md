@@ -1,6 +1,6 @@
 # FEAT-003: tenant placement and isolation policy
 
-- Status: Gate A evidence retained; model correction and Gate B pending
+- Status: Gate B foundation implemented; model correction and acceptance pending
 - Target release: Local Compose Runtime v0.1
 - Placement algorithm version: `placement-v1`
 - Target design date: 2026-08-25
@@ -359,6 +359,28 @@ git diff --check
 
 Gate A makes no persistence, capacity-locking, replay, or PostgreSQL RLS
 claim. Those remain Gate B acceptance requirements.
+
+## Gate B foundation implementation status
+
+The current branch adds the transactional boundary without claiming Gate B
+acceptance:
+
+- `runtime/usecase/createplacement` owns database-time planning, exact replay,
+  bounded serializable retries, and atomic decision/reservation creation;
+- `runtime/data/postgres` implements the use-case-owned transaction contract;
+- capacity is represented by tenant-neutral claims plus tenant-owned
+  reservation links, so global accounting does not expose tenant identity;
+- migration `000001_placement_core` creates constraints, canonical target lock
+  rows, a non-login/non-`BYPASSRLS` runtime role, and forced RLS for
+  tenant-owned rows.
+
+Unit, architecture, vet, race, repeated, and fuzz gates pass. The migration
+also applies twice to PostgreSQL 18 and its structural verifier passes.
+Gate B is still unaccepted: real repository integration, concurrent
+overcommit, cross-tenant runtime-role SQL, injected atomic-failure, and
+activate/release tests are missing. The pre-v1 apphosting model correction
+must also migrate this schema and code before those acceptance tests become
+authoritative.
 
 ## Deferred
 

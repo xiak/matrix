@@ -34,10 +34,14 @@ Local checkout paths are machine-specific and must never be relied upon.
 - The product-boundary correction is recorded: the target model is
   Application, immutable ApplicationRevision, Deployment,
   ExecutionPool/ExecutionTarget, and a domain-local DeploymentExecutor.
-- PostgreSQL Gate B, the application code model correction, and the Compose
-  vertical slice are not part of this portable checkpoint yet.
-- The last committed implementation baseline passed `go test ./...`; rerun the
-  owning FEAT gates after pulling before relying on that result.
+- A Gate B foundation now exists: tactical DDD package boundaries, a
+  transaction-owned create-placement use case, tenant-neutral capacity claims
+  with tenant-owned reservation links, a pgx repository, and a forced-RLS
+  PostgreSQL migration/verifier. Gate B is not accepted yet.
+- For this checkpoint, unit, vet, race, ten-run, placement fuzz, architecture,
+  `git diff --check`, and PostgreSQL 18 migration apply-twice/verify gates
+  passed. Real repository, concurrency, RLS-behavior, and fault-injection
+  integration tests remain absent.
 - The current public draft still uses WorkloadRelease, RuntimeTarget, and
   technology-shaped isolation values and must be corrected before Gate B.
 
@@ -45,8 +49,10 @@ Local checkout paths are machine-specific and must never be relied upon.
 
 1. Correct the apphosting ApplicationRevision/Deployment and
    ExecutionPool/ExecutionTarget model without compatibility aliases.
-2. Re-run unit, architecture, vet, race, migration, and PostgreSQL gates.
-3. Complete Gate B, then build the real Compose vertical slice and offline
+2. Migrate the Gate B schema/repository/use case to that corrected model and
+   add real PostgreSQL concurrency, tenant-isolation, replay, and atomicity
+   integration tests.
+3. Accept Gate B, then build the real Compose vertical slice and offline
    installation/upgrade/rollback release gate.
 
 ## Fixed donor baselines

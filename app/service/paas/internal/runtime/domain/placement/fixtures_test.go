@@ -26,8 +26,8 @@ func (policy testIsolationPolicy) Version() string {
 func (policy testIsolationPolicy) Admit(context IsolationContext) bool {
 	if policy.mutate {
 		context.TargetLabels["runtime"] = "mutated"
-		if len(context.Reservations) > 0 {
-			context.Reservations[0].ID = "mutated"
+		if len(context.CapacityClaims) > 0 {
+			context.CapacityClaims[0].ID = "mutated"
 		}
 	}
 	return policy.admit
@@ -252,22 +252,18 @@ func testMetadata(
 	}
 }
 
-func testReservation(
+func testCapacityClaim(
 	id paasv1.ResourceID,
-	tenantID paasv1.TenantID,
 	targetID paasv1.ResourceID,
 	resources Resources,
-) Reservation {
-	return Reservation{
-		ID:                id,
-		TenantID:          tenantID,
-		WorkloadReleaseID: paasv1.ResourceID("release-" + string(id)),
-		DecisionID:        paasv1.ResourceID("decision-" + string(id)),
-		RuntimeTargetID:   targetID,
-		Isolation:         paasv1.IsolationSharedCompose,
-		Resources:         resources,
-		State:             ReservationActive,
-		ResourceVersion:   1,
+) CapacityClaim {
+	return CapacityClaim{
+		ID:              id,
+		RuntimeTargetID: targetID,
+		Isolation:       paasv1.IsolationSharedCompose,
+		Resources:       resources,
+		State:           CapacityClaimActive,
+		ResourceVersion: 1,
 	}
 }
 
@@ -319,7 +315,10 @@ func cloneInput(value Input) Input {
 			result.Snapshot.Targets[index].Spec.GatewayAdapter = &adapter
 		}
 	}
-	result.Snapshot.Reservations = append([]Reservation(nil), value.Snapshot.Reservations...)
+	result.Snapshot.CapacityClaims = append(
+		[]CapacityClaim(nil),
+		value.Snapshot.CapacityClaims...,
+	)
 	return result
 }
 

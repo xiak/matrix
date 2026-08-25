@@ -59,7 +59,16 @@ func TestSourceDependenciesFollowRepositoryBoundaries(t *testing.T) {
 
 func TestPlacementCoreKeepsItsPureDependencyBoundary(t *testing.T) {
 	root := repositoryRoot(t)
-	placementRoot := filepath.Join(root, "app", "service", "paas", "internal", "placement")
+	placementRoot := filepath.Join(
+		root,
+		"app",
+		"service",
+		"paas",
+		"internal",
+		"runtime",
+		"domain",
+		"placement",
+	)
 	allowed := map[string]struct{}{
 		"crypto/sha256":      {},
 		"encoding/binary":    {},
@@ -109,6 +118,106 @@ func TestPlacementCoreKeepsItsPureDependencyBoundary(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("inspect placement dependencies: %v", err)
+	}
+}
+
+func TestPaaSRuntimeUsesPragmaticDDDDependencies(t *testing.T) {
+	root := repositoryRoot(t)
+	runtimeRoot := filepath.Join(root, "app", "service", "paas", "internal", "runtime")
+	err := filepath.WalkDir(runtimeRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || filepath.Ext(path) != ".go" {
+			return nil
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		relative = filepath.ToSlash(relative)
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+		if err != nil {
+			return err
+		}
+		for _, declaration := range file.Imports {
+			imported, err := strconv.Unquote(declaration.Path.Value)
+			if err != nil {
+				return err
+			}
+			assertRuntimeDDDDependency(t, relative, imported)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("inspect PaaS runtime DDD dependencies: %v", err)
+	}
+}
+
+func TestPaaSRuntimeBusinessTypesAvoidAmbiguousNames(t *testing.T) {
+	root := repositoryRoot(t)
+	runtimeRoot := filepath.Join(root, "app", "service", "paas", "internal", "runtime")
+	forbiddenSuffixes := []string{"Manager", "Helper", "Logic", "DAO", "Model", "DTO"}
+	err := filepath.WalkDir(runtimeRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		if err != nil {
+			return err
+		}
+		for _, declaration := range file.Decls {
+			general, ok := declaration.(*ast.GenDecl)
+			if !ok || general.Tok != token.TYPE {
+				continue
+			}
+			for _, specification := range general.Specs {
+				typeSpec, ok := specification.(*ast.TypeSpec)
+				if !ok || !ast.IsExported(typeSpec.Name.Name) {
+					continue
+				}
+				for _, suffix := range forbiddenSuffixes {
+					if strings.HasSuffix(typeSpec.Name.Name, suffix) {
+						t.Errorf(
+							"%s: exported business type %q has ambiguous DDD suffix %q",
+							filepath.ToSlash(relative),
+							typeSpec.Name.Name,
+							suffix,
+						)
+					}
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("inspect PaaS runtime business names: %v", err)
+	}
+}
+
+func assertRuntimeDDDDependency(t *testing.T, source, imported string) {
+	t.Helper()
+	const contextPrefix = modulePath + "app/service/paas/internal/runtime/"
+
+	if strings.HasPrefix(source, "app/service/paas/internal/runtime/domain/") &&
+		(strings.HasPrefix(imported, contextPrefix+"usecase/") ||
+			strings.HasPrefix(imported, contextPrefix+"data/") ||
+			strings.HasPrefix(imported, contextPrefix+"port/") ||
+			strings.HasPrefix(imported, modulePath+"app/adapter/")) {
+		t.Errorf("%s: domain cannot import %q", source, imported)
+	}
+
+	if strings.HasPrefix(source, "app/service/paas/internal/runtime/usecase/") &&
+		(strings.HasPrefix(imported, contextPrefix+"data/") ||
+			strings.HasPrefix(imported, modulePath+"app/adapter/")) {
+		t.Errorf("%s: use case cannot import concrete adapter %q", source, imported)
 	}
 }
 

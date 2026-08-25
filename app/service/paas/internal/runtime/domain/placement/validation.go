@@ -70,27 +70,20 @@ func (planner *Planner) validateInput(input Input) error {
 		}
 	}
 
-	reservationKeys := make(map[string]struct{}, len(input.Snapshot.Reservations))
-	decisionKeys := make(map[string]struct{}, len(input.Snapshot.Reservations))
-	for index, reservation := range input.Snapshot.Reservations {
-		if err := validateReservation(reservation); err != nil {
-			problems = append(problems, fmt.Errorf("reservations[%d]: %w", index, err))
+	claimIDs := make(map[paasv1.ResourceID]struct{}, len(input.Snapshot.CapacityClaims))
+	for index, claim := range input.Snapshot.CapacityClaims {
+		if err := validateCapacityClaim(claim); err != nil {
+			problems = append(problems, fmt.Errorf("capacityClaims[%d]: %w", index, err))
 		}
-		key := string(reservation.TenantID) + "\x00" + string(reservation.ID)
-		if _, duplicate := reservationKeys[key]; duplicate {
-			problems = append(problems, fmt.Errorf("reservations[%d] tenant/id is duplicated", index))
+		if _, duplicate := claimIDs[claim.ID]; duplicate {
+			problems = append(problems, fmt.Errorf("capacityClaims[%d].id is duplicated", index))
 		}
-		reservationKeys[key] = struct{}{}
-		decisionKey := string(reservation.TenantID) + "\x00" + string(reservation.DecisionID)
-		if _, duplicate := decisionKeys[decisionKey]; duplicate {
-			problems = append(problems, fmt.Errorf("reservations[%d] tenant/decision is duplicated", index))
-		}
-		decisionKeys[decisionKey] = struct{}{}
-		if reservation.State != ReservationReleased {
-			if _, found := targets[reservation.RuntimeTargetID]; !found {
+		claimIDs[claim.ID] = struct{}{}
+		if claim.State != CapacityClaimReleased {
+			if _, found := targets[claim.RuntimeTargetID]; !found {
 				problems = append(
 					problems,
-					fmt.Errorf("reservations[%d] references a missing runtime target", index),
+					fmt.Errorf("capacityClaims[%d] references a missing runtime target", index),
 				)
 			}
 		}
@@ -99,13 +92,10 @@ func (planner *Planner) validateInput(input Input) error {
 	return errors.Join(problems...)
 }
 
-func validateReservation(value Reservation) error {
+func validateCapacityClaim(value CapacityClaim) error {
 	var problems []error
 	problems = append(problems,
 		paasv1.ValidateID("id", string(value.ID)),
-		paasv1.ValidateID("tenantId", string(value.TenantID)),
-		paasv1.ValidateID("workloadReleaseId", string(value.WorkloadReleaseID)),
-		paasv1.ValidateID("decisionId", string(value.DecisionID)),
 		paasv1.ValidateID("runtimeTargetId", string(value.RuntimeTargetID)),
 		validateResources(value.Resources),
 	)
@@ -116,14 +106,14 @@ func validateReservation(value Reservation) error {
 		problems = append(problems, errors.New("resourceVersion must be positive"))
 	}
 	switch value.State {
-	case ReservationPending:
+	case CapacityClaimPending:
 		problems = append(problems, validateContractTime("leaseExpiresAt", value.LeaseExpiresAt))
-	case ReservationActive, ReservationReleased:
+	case CapacityClaimActive, CapacityClaimReleased:
 		if !value.LeaseExpiresAt.IsZero() {
-			problems = append(problems, errors.New("only pending reservations may have leaseExpiresAt"))
+			problems = append(problems, errors.New("only pending capacity claims may have leaseExpiresAt"))
 		}
 	default:
-		problems = append(problems, fmt.Errorf("unknown reservation state %q", value.State))
+		problems = append(problems, fmt.Errorf("unknown capacity claim state %q", value.State))
 	}
 	return errors.Join(problems...)
 }

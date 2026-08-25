@@ -59,7 +59,7 @@ func (planner *Planner) candidateSetDigest(
 	input Input,
 	requirements Resources,
 	evaluations []candidateEvaluation,
-	reservations []Reservation,
+	claims []CapacityClaim,
 ) string {
 	encoder := newCanonicalEncoder()
 	encoder.string("stream", "matrix-placement-candidate-set")
@@ -124,22 +124,19 @@ func (planner *Planner) candidateSetDigest(
 		encoder.string("target-evaluation", string(evaluation.rejection))
 	}
 
-	encoder.uint64("reservation-count", uint64(len(reservations)))
-	for _, reservation := range reservations {
-		encoder.string("reservation-tenant-id", string(reservation.TenantID))
-		encoder.string("reservation-id", string(reservation.ID))
-		encoder.string("reservation-release-id", string(reservation.WorkloadReleaseID))
-		encoder.string("reservation-decision-id", string(reservation.DecisionID))
-		encoder.string("reservation-target-id", string(reservation.RuntimeTargetID))
-		encoder.string("reservation-isolation", string(reservation.Isolation))
-		writeResources(encoder, "reservation-resources", reservation.Resources)
-		encoder.string("reservation-state", string(reservation.State))
-		if reservation.State == ReservationPending {
-			encoder.timestamp("reservation-lease-expires-at", reservation.LeaseExpiresAt)
+	encoder.uint64("capacity-claim-count", uint64(len(claims)))
+	for _, claim := range claims {
+		encoder.string("capacity-claim-id", string(claim.ID))
+		encoder.string("capacity-claim-target-id", string(claim.RuntimeTargetID))
+		encoder.string("capacity-claim-isolation", string(claim.Isolation))
+		writeResources(encoder, "capacity-claim-resources", claim.Resources)
+		encoder.string("capacity-claim-state", string(claim.State))
+		if claim.State == CapacityClaimPending {
+			encoder.timestamp("capacity-claim-lease-expires-at", claim.LeaseExpiresAt)
 		} else {
-			encoder.int64("reservation-lease-expires-at", 0)
+			encoder.int64("capacity-claim-lease-expires-at", 0)
 		}
-		encoder.uint64("reservation-resource-version", reservation.ResourceVersion)
+		encoder.uint64("capacity-claim-resource-version", claim.ResourceVersion)
 	}
 	return encoder.digest()
 }

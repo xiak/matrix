@@ -196,11 +196,11 @@ func TestUnsupportedIsolationNeverDowngradesToCompose(t *testing.T) {
 
 func TestPlacementStrategiesUseExactReservedUtilization(t *testing.T) {
 	input := baseInput()
-	input.Snapshot.Reservations = []Reservation{
-		testReservation("reservation-a", "tenant-a", "target-a", Resources{
+	input.Snapshot.CapacityClaims = []CapacityClaim{
+		testCapacityClaim("claim-a", "target-a", Resources{
 			CPUMillis: 800, WorkloadSlots: 1,
 		}),
-		testReservation("reservation-b", "tenant-b", "target-b", Resources{
+		testCapacityClaim("claim-b", "target-b", Resources{
 			CPUMillis: 100, WorkloadSlots: 1,
 		}),
 	}
@@ -268,8 +268,8 @@ func TestExactRationalComparisonDoesNotRound(t *testing.T) {
 
 func TestPlannerDoesNotMutateCallerOwnedInput(t *testing.T) {
 	input := baseInput()
-	input.Snapshot.Reservations = []Reservation{
-		testReservation("reservation-a", "tenant-b", "target-a", Resources{
+	input.Snapshot.CapacityClaims = []CapacityClaim{
+		testCapacityClaim("claim-a", "target-a", Resources{
 			CPUMillis: 100, MemoryBytes: 1024, WorkloadSlots: 1,
 		}),
 	}

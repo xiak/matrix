@@ -10,11 +10,11 @@ import (
 
 func TestPlanningIsInvariantToCollectionAndMapOrder(t *testing.T) {
 	input := baseInput()
-	input.Snapshot.Reservations = []Reservation{
-		testReservation("reservation-a", "tenant-a", "target-a", Resources{
+	input.Snapshot.CapacityClaims = []CapacityClaim{
+		testCapacityClaim("claim-a", "target-a", Resources{
 			CPUMillis: 100, MemoryBytes: 1024, WorkloadSlots: 1,
 		}),
-		testReservation("reservation-b", "tenant-b", "target-b", Resources{
+		testCapacityClaim("claim-b", "target-b", Resources{
 			CPUMillis: 200, MemoryBytes: 2048, WorkloadSlots: 1,
 		}),
 	}
@@ -35,9 +35,9 @@ func TestPlanningIsInvariantToCollectionAndMapOrder(t *testing.T) {
 			candidate.Snapshot.Targets[left], candidate.Snapshot.Targets[right] =
 				candidate.Snapshot.Targets[right], candidate.Snapshot.Targets[left]
 		})
-		random.Shuffle(len(candidate.Snapshot.Reservations), func(left, right int) {
-			candidate.Snapshot.Reservations[left], candidate.Snapshot.Reservations[right] =
-				candidate.Snapshot.Reservations[right], candidate.Snapshot.Reservations[left]
+		random.Shuffle(len(candidate.Snapshot.CapacityClaims), func(left, right int) {
+			candidate.Snapshot.CapacityClaims[left], candidate.Snapshot.CapacityClaims[right] =
+				candidate.Snapshot.CapacityClaims[right], candidate.Snapshot.CapacityClaims[left]
 		})
 		random.Shuffle(
 			len(candidate.Snapshot.Policy.Spec.EligibleResourcePools),
@@ -89,21 +89,20 @@ func TestPlanningIsInvariantToCollectionAndMapOrder(t *testing.T) {
 
 func TestCandidateDigestGoldenAndDecisionRelevantSensitivity(t *testing.T) {
 	input := baseInput()
-	reservation := testReservation(
-		"reservation-a",
-		"tenant-b",
+	claim := testCapacityClaim(
+		"claim-a",
 		"target-b",
 		Resources{CPUMillis: 100, MemoryBytes: 1024, WorkloadSlots: 1},
 	)
-	reservation.State = ReservationPending
-	reservation.LeaseExpiresAt = fixtureTime.Add(10 * time.Minute)
-	input.Snapshot.Reservations = []Reservation{reservation}
+	claim.State = CapacityClaimPending
+	claim.LeaseExpiresAt = fixtureTime.Add(10 * time.Minute)
+	input.Snapshot.CapacityClaims = []CapacityClaim{claim}
 	planner := mustPlanner(t)
 	baseline, err := planner.Plan(input)
 	if err != nil {
 		t.Fatalf("baseline plan: %v", err)
 	}
-	const golden = "sha256:207786b43381af04e8ab90b0159de9d9ec74351ef170f0384303acdec2d5d3e7"
+	const golden = "sha256:23519e8e4bc1bbb603e7f17be414378cd6b33bdcf2ec6efb9a3c410916aae64f"
 	if baseline.Decision.CandidateSetDigest != golden {
 		t.Fatalf(
 			"candidate digest = %q, update golden %q",
@@ -143,10 +142,10 @@ func TestCandidateDigestGoldenAndDecisionRelevantSensitivity(t *testing.T) {
 		{name: "target isolation", mutate: func(value *Input) {
 			value.Snapshot.Targets[0].Status.SupportedIsolationClasses = []paasv1.IsolationClass{paasv1.IsolationSharedCompose}
 		}},
-		{name: "reservation resources", mutate: func(value *Input) { value.Snapshot.Reservations[0].Resources.CPUMillis++ }},
-		{name: "reservation version", mutate: func(value *Input) { value.Snapshot.Reservations[0].ResourceVersion++ }},
-		{name: "reservation expiry", mutate: func(value *Input) {
-			value.Snapshot.Reservations[0].LeaseExpiresAt = value.Snapshot.Reservations[0].LeaseExpiresAt.Add(time.Microsecond)
+		{name: "capacity claim resources", mutate: func(value *Input) { value.Snapshot.CapacityClaims[0].Resources.CPUMillis++ }},
+		{name: "capacity claim version", mutate: func(value *Input) { value.Snapshot.CapacityClaims[0].ResourceVersion++ }},
+		{name: "capacity claim expiry", mutate: func(value *Input) {
+			value.Snapshot.CapacityClaims[0].LeaseExpiresAt = value.Snapshot.CapacityClaims[0].LeaseExpiresAt.Add(time.Microsecond)
 		}},
 	}
 	for _, test := range tests {

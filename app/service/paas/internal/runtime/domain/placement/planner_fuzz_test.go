@@ -8,11 +8,11 @@ func FuzzPlanOrderInvariant(f *testing.F) {
 	f.Fuzz(func(t *testing.T, order []byte) {
 		planner := mustPlanner(t)
 		input := baseInput()
-		input.Snapshot.Reservations = []Reservation{
-			testReservation("reservation-a", "tenant-a", "target-a", Resources{
+		input.Snapshot.CapacityClaims = []CapacityClaim{
+			testCapacityClaim("claim-a", "target-a", Resources{
 				CPUMillis: 100, WorkloadSlots: 1,
 			}),
-			testReservation("reservation-b", "tenant-b", "target-b", Resources{
+			testCapacityClaim("claim-b", "target-b", Resources{
 				CPUMillis: 200, WorkloadSlots: 1,
 			}),
 		}
@@ -31,8 +31,8 @@ func FuzzPlanOrderInvariant(f *testing.F) {
 					candidate.Snapshot.Targets[1], candidate.Snapshot.Targets[0]
 			}
 			if value%5 == 0 {
-				candidate.Snapshot.Reservations[0], candidate.Snapshot.Reservations[1] =
-					candidate.Snapshot.Reservations[1], candidate.Snapshot.Reservations[0]
+				candidate.Snapshot.CapacityClaims[0], candidate.Snapshot.CapacityClaims[1] =
+					candidate.Snapshot.CapacityClaims[1], candidate.Snapshot.CapacityClaims[0]
 			}
 			candidate.Snapshot.Targets[index%2].Metadata.Labels = reorderedLabels(
 				candidate.Snapshot.Targets[index%2].Metadata.Labels,
