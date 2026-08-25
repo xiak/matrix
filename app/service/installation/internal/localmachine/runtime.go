@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 )
 
 const maximumDockerOutput = 4 * 1024 * 1024
@@ -34,11 +35,7 @@ func (localDockerRuntime) Run(
 	command.Stdin = input
 	command.Stdout = &output
 	command.Stderr = io.Discard
-	command.Env = append(os.Environ(),
-		"COMPOSE_MENU=0",
-		"COMPOSE_INTERACTIVE_NO_CLI=1",
-		"DOCKER_CLI_HINTS=false",
-	)
+	command.Env = localDockerEnvironment(os.Environ())
 	if err := command.Start(); err != nil {
 		return nil, false, err
 	}
@@ -47,6 +44,34 @@ func (localDockerRuntime) Run(
 		return nil, true, errors.New("Docker command output exceeds its bound")
 	}
 	return append([]byte(nil), output.Bytes()...), true, err
+}
+
+func localDockerEnvironment(source []string) []string {
+	result := make([]string, 0, len(source)+5)
+	for _, entry := range source {
+		key, _, found := strings.Cut(entry, "=")
+		if !found {
+			continue
+		}
+		switch strings.ToUpper(key) {
+		case "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_API_VERSION",
+			"DOCKER_CERT_PATH", "DOCKER_TLS_VERIFY", "DOCKER_DEFAULT_PLATFORM",
+			"COMPOSE_FILE", "COMPOSE_PROJECT_NAME", "COMPOSE_PROFILES",
+			"COMPOSE_ENV_FILES", "COMPOSE_DISABLE_ENV_FILE", "COMPOSE_PATH_SEPARATOR",
+			"COMPOSE_CONVERT_WINDOWS_PATHS", "COMPOSE_REMOVE_ORPHANS", "COMPOSE_IGNORE_ORPHANS",
+			"COMPOSE_MENU", "COMPOSE_INTERACTIVE_NO_CLI", "DOCKER_CLI_HINTS":
+			continue
+		}
+		result = append(result, entry)
+	}
+	return append(result,
+		"DOCKER_HOST=unix:///var/run/docker.sock",
+		"COMPOSE_MENU=0",
+		"COMPOSE_INTERACTIVE_NO_CLI=1",
+		"DOCKER_CLI_HINTS=false",
+		"COMPOSE_DISABLE_ENV_FILE=1",
+		"COMPOSE_REMOVE_ORPHANS=false",
+	)
 }
 
 type boundedOutput struct {

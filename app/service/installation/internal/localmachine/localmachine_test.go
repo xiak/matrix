@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -254,6 +256,105 @@ func TestMigrateInstallationUsesFixedGoBinariesWithoutCredentialArguments(t *tes
 	}
 }
 
+func TestStartInstallationObservesThenConvergesFixedOfflineTopology(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine platform start effects target Linux")
+	}
+	plan, expectation := configuredPlatformStartFixture(t)
+	runtimeBoundary := newPlatformStartRuntime(plan, expectation)
+	if err := startInstallation(context.Background(), runtimeBoundary, plan); err != nil {
+		t.Fatalf("start installation: %v", err)
+	}
+	if runtimeBoundary.composeCalls != 1 || runtimeBoundary.observationsBeforeStart == 0 {
+		t.Fatalf(
+			"platform convergence compose=%d observations-before-start=%d",
+			runtimeBoundary.composeCalls,
+			runtimeBoundary.observationsBeforeStart,
+		)
+	}
+	joined := strings.Join(runtimeBoundary.composeArguments, " ")
+	if !hasArgumentPair(runtimeBoundary.composeArguments, "--pull", "never") ||
+		!slices.Contains(runtimeBoundary.composeArguments, "--no-build") ||
+		strings.Contains(joined, "registry") || strings.Contains(joined, "--privileged") {
+		t.Fatalf("platform start command is not fixed offline input: %q", joined)
+	}
+	if err := startInstallation(context.Background(), runtimeBoundary, plan); err != nil {
+		t.Fatalf("replay platform start: %v", err)
+	}
+	if runtimeBoundary.composeCalls != 1 {
+		t.Fatal("healthy platform start replay invoked Compose again")
+	}
+}
+
+func TestStartInstallationRejectsObservedRuntimeDriftWithoutRecreating(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine platform start effects target Linux")
+	}
+	plan, expectation := configuredPlatformStartFixture(t)
+	runtimeBoundary := newPlatformStartRuntime(plan, expectation)
+	runtimeBoundary.started = true
+	runtimeBoundary.resourceDriftService = "paas-worker"
+	err := startInstallation(context.Background(), runtimeBoundary, plan)
+	if !errors.Is(err, platformcommand.ErrEffectVerification) ||
+		runtimeBoundary.composeCalls != 0 {
+		t.Fatalf("observed platform drift err=%v compose=%d", err, runtimeBoundary.composeCalls)
+	}
+}
+
+func TestStartInstallationConvergesRecoverableComposeConfigurationDrift(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine platform start effects target Linux")
+	}
+	plan, expectation := configuredPlatformStartFixture(t)
+	runtimeBoundary := newPlatformStartRuntime(plan, expectation)
+	runtimeBoundary.started = true
+	runtimeBoundary.configHashDriftService = "paas-api"
+	if err := startInstallation(context.Background(), runtimeBoundary, plan); err != nil {
+		t.Fatalf("converge recoverable platform configuration drift: %v", err)
+	}
+	if runtimeBoundary.composeCalls != 1 {
+		t.Fatalf("recoverable platform drift Compose calls = %d", runtimeBoundary.composeCalls)
+	}
+}
+
+func TestStartInstallationMarksUnobservedSuccessfulEffectUnknown(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine platform start effects target Linux")
+	}
+	plan, expectation := configuredPlatformStartFixture(t)
+	runtimeBoundary := newPlatformStartRuntime(plan, expectation)
+	runtimeBoundary.failObservationAfterStart = true
+	err := startInstallation(context.Background(), runtimeBoundary, plan)
+	if !errors.Is(err, platformcommand.ErrEffectOutcomeUnknown) ||
+		errors.Is(err, platformcommand.ErrEffectVerification) ||
+		runtimeBoundary.composeCalls != 1 {
+		t.Fatalf("unobserved successful start err=%v compose=%d", err, runtimeBoundary.composeCalls)
+	}
+}
+
+func configuredPlatformStartFixture(
+	t *testing.T,
+) (platformcommand.InstallPlan, platformComposeExpectation) {
+	t.Helper()
+	plan := newInstallPlan(t)
+	if err := stageInstallation(plan, rand.Reader); err != nil {
+		t.Fatalf("stage installation: %v", err)
+	}
+	images := newImageRuntime(plan.Bundle.Manifest, true)
+	if err := configureInstallation(context.Background(), images, plan); err != nil {
+		t.Fatalf("configure installation: %v", err)
+	}
+	installation, err := verifiedInstallationConfiguration(plan)
+	if err != nil {
+		t.Fatalf("verify installation configuration: %v", err)
+	}
+	expectation, err := decodePlatformExpectation(installation.topology.ComposeJSON)
+	if err != nil {
+		t.Fatalf("decode platform expectation: %v", err)
+	}
+	return plan, expectation
+}
+
 func TestRejectProjectCollisionRequiresExactInstallationOwnership(t *testing.T) {
 	foreign := &scriptedRuntime{run: func(arguments []string) ([]byte, bool, error) {
 		switch {
@@ -305,6 +406,37 @@ func TestCompareProviderVersionUsesSemanticComponents(t *testing.T) {
 		if got := compareProviderVersion(test.actual, test.minimum); got != test.want {
 			t.Errorf("compareProviderVersion(%q, %q) = %d, want %d", test.actual, test.minimum, got, test.want)
 		}
+	}
+}
+
+func TestLocalDockerEnvironmentPinsThePhaseOneEngineAndComposeInput(t *testing.T) {
+	environment := localDockerEnvironment([]string{
+		"PATH=/usr/bin",
+		"DOCKER_HOST=tcp://remote.example:2376",
+		"docker_context=remote",
+		"DOCKER_API_VERSION=1.20",
+		"COMPOSE_FILE=/tmp/untrusted.yaml",
+		"COMPOSE_PROJECT_NAME=untrusted",
+		"COMPOSE_ENV_FILES=/tmp/untrusted.env",
+		"COMPOSE_DISABLE_ENV_FILE=0",
+		"COMPOSE_REMOVE_ORPHANS=1",
+	})
+	values := make(map[string][]string)
+	for _, entry := range environment {
+		key, value, found := strings.Cut(entry, "=")
+		if !found {
+			t.Fatalf("Docker environment entry is malformed: %q", entry)
+		}
+		values[strings.ToUpper(key)] = append(values[strings.ToUpper(key)], value)
+	}
+	if !slices.Equal(values["PATH"], []string{"/usr/bin"}) ||
+		!slices.Equal(values["DOCKER_HOST"], []string{"unix:///var/run/docker.sock"}) ||
+		len(values["DOCKER_CONTEXT"]) != 0 || len(values["DOCKER_API_VERSION"]) != 0 ||
+		len(values["COMPOSE_FILE"]) != 0 || len(values["COMPOSE_PROJECT_NAME"]) != 0 ||
+		len(values["COMPOSE_ENV_FILES"]) != 0 ||
+		!slices.Equal(values["COMPOSE_DISABLE_ENV_FILE"], []string{"1"}) ||
+		!slices.Equal(values["COMPOSE_REMOVE_ORPHANS"], []string{"false"}) {
+		t.Fatalf("fixed Docker command environment = %#v", values)
 	}
 }
 
@@ -466,6 +598,214 @@ type migrationRuntime struct {
 	composeCalls   int
 	runs           [][]string
 	controlNetwork string
+}
+
+type platformStartRuntime struct {
+	expectation               platformComposeExpectation
+	images                    map[string]bool
+	started                   bool
+	resourceDriftService      string
+	configHashDriftService    string
+	failObservationAfterStart bool
+	composeCalls              int
+	observationsBeforeStart   int
+	composeArguments          []string
+}
+
+const platformTestConfigHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+func newPlatformStartRuntime(
+	plan platformcommand.InstallPlan,
+	expectation platformComposeExpectation,
+) *platformStartRuntime {
+	images := make(map[string]bool, len(plan.Bundle.Manifest.Images))
+	for _, image := range plan.Bundle.Manifest.Images {
+		images[image.ImageID] = true
+	}
+	return &platformStartRuntime{expectation: expectation, images: images}
+}
+
+func (runtimeBoundary *platformStartRuntime) Run(
+	_ context.Context,
+	input io.Reader,
+	arguments ...string,
+) ([]byte, bool, error) {
+	if input != nil || len(arguments) == 0 {
+		return nil, false, errors.New("platform start Docker invocation is invalid")
+	}
+	if len(arguments) == 5 && arguments[0] == "image" && arguments[1] == "inspect" {
+		imageID := arguments[4]
+		if !runtimeBoundary.images[imageID] {
+			return nil, true, errors.New("platform image is absent")
+		}
+		return []byte(imageID + "|linux|amd64\n"), true, nil
+	}
+	if arguments[0] == "compose" && slices.Contains(arguments, "config") {
+		services := make([]string, 0, len(runtimeBoundary.expectation.Services))
+		for service := range runtimeBoundary.expectation.Services {
+			services = append(services, service+" "+platformTestConfigHash)
+		}
+		slices.Sort(services)
+		return []byte(strings.Join(services, "\n") + "\n"), true, nil
+	}
+	if arguments[0] == "compose" {
+		if !hasArgumentPair(arguments, "--pull", "never") ||
+			!slices.Contains(arguments, "--no-build") ||
+			!slices.Contains(arguments, "up") {
+			return nil, true, errors.New("platform Compose invocation is not fixed offline input")
+		}
+		runtimeBoundary.composeCalls++
+		runtimeBoundary.composeArguments = slices.Clone(arguments)
+		runtimeBoundary.started = true
+		return nil, true, nil
+	}
+	if len(arguments) >= 2 && arguments[1] == "ls" {
+		if !runtimeBoundary.started {
+			runtimeBoundary.observationsBeforeStart++
+			return nil, true, nil
+		}
+		if runtimeBoundary.failObservationAfterStart {
+			return nil, true, errors.New("platform observation is temporarily unavailable")
+		}
+		switch arguments[0] {
+		case "container":
+			services := make([]string, 0, len(runtimeBoundary.expectation.Services))
+			for service := range runtimeBoundary.expectation.Services {
+				services = append(services, "container-"+service)
+			}
+			slices.Sort(services)
+			return []byte(strings.Join(services, "\n") + "\n"), true, nil
+		case "network":
+			networks := make([]string, 0, len(runtimeBoundary.expectation.Networks))
+			for network := range runtimeBoundary.expectation.Networks {
+				networks = append(networks, "network-"+network)
+			}
+			slices.Sort(networks)
+			return []byte(strings.Join(networks, "\n") + "\n"), true, nil
+		case "volume":
+			return nil, true, nil
+		}
+	}
+	if len(arguments) >= 2 && arguments[1] == "inspect" {
+		switch arguments[0] {
+		case "network":
+			return runtimeBoundary.inspectNetwork(arguments[len(arguments)-1])
+		case "container":
+			return runtimeBoundary.inspectContainer(arguments[len(arguments)-1])
+		}
+	}
+	return nil, false, fmt.Errorf("unexpected platform Docker command: %q", strings.Join(arguments, " "))
+}
+
+func (runtimeBoundary *platformStartRuntime) inspectNetwork(
+	identity string,
+) ([]byte, bool, error) {
+	logicalName := strings.TrimPrefix(identity, "network-")
+	expected, found := runtimeBoundary.expectation.Networks[logicalName]
+	if !found {
+		return nil, true, errors.New("platform test network is unknown")
+	}
+	labels := cloneTestLabels(expected.Labels)
+	labels["com.docker.compose.network"] = logicalName
+	content, err := json.Marshal(map[string]any{
+		"Id": identity, "Internal": expected.Internal, "Labels": labels,
+	})
+	return content, true, err
+}
+
+func (runtimeBoundary *platformStartRuntime) inspectContainer(
+	identity string,
+) ([]byte, bool, error) {
+	serviceName := strings.TrimPrefix(identity, "container-")
+	expected, found := runtimeBoundary.expectation.Services[serviceName]
+	if !found {
+		return nil, true, errors.New("platform test service is unknown")
+	}
+	labels := cloneTestLabels(expected.Labels)
+	labels["com.docker.compose.project"] = runtimeBoundary.expectation.Name
+	labels["com.docker.compose.service"] = serviceName
+	labels["com.docker.compose.oneoff"] = "False"
+	labels["com.docker.compose.config-hash"] = platformTestConfigHash
+	if runtimeBoundary.configHashDriftService == serviceName &&
+		runtimeBoundary.composeCalls == 0 {
+		labels["com.docker.compose.config-hash"] = strings.Repeat("b", 64)
+	}
+	imageID := expected.Image
+	mounts := make([]map[string]any, 0, len(expected.Volumes))
+	for _, mount := range expected.Volumes {
+		mounts = append(mounts, map[string]any{
+			"Type": mount.Type, "Source": mount.Source,
+			"Destination": mount.Target, "RW": !mount.ReadOnly,
+		})
+	}
+	networks := make(map[string]any, len(expected.Networks))
+	for _, network := range expected.Networks {
+		networks[runtimeBoundary.expectation.Name+"_"+network] = map[string]any{
+			"NetworkID": "network-" + network,
+		}
+	}
+	ports, err := testPortBindings(expected.Ports)
+	if err != nil {
+		return nil, true, err
+	}
+	initEnabled := expected.Init
+	nanoCPUs, memory, err := expectedResourceLimits(expected.Deploy)
+	if err != nil {
+		return nil, true, err
+	}
+	if runtimeBoundary.resourceDriftService == serviceName {
+		memory++
+	}
+	tmpfs, err := expectedTmpfsInventory(expected.Tmpfs)
+	if err != nil {
+		return nil, true, err
+	}
+	content, err := json.Marshal(map[string]any{
+		"Id": identity, "Image": imageID,
+		"Config": map[string]any{"Labels": labels},
+		"State": map[string]any{
+			"Status": "running", "Running": true,
+			"Health": map[string]any{"Status": "healthy"},
+		},
+		"HostConfig": map[string]any{
+			"Privileged": false, "ReadonlyRootfs": expected.ReadOnly,
+			"Init": &initEnabled, "Memory": memory, "NanoCpus": nanoCPUs,
+			"CapDrop": []string{"ALL"}, "Tmpfs": tmpfs,
+			"SecurityOpt":   []string{"no-new-privileges:true"},
+			"PortBindings":  ports,
+			"RestartPolicy": map[string]any{"Name": expected.Restart},
+		},
+		"Mounts":          mounts,
+		"NetworkSettings": map[string]any{"Networks": networks},
+	})
+	return content, true, err
+}
+
+func testPortBindings(values []string) (map[string][]map[string]string, error) {
+	result := make(map[string][]map[string]string, len(values))
+	for _, value := range values {
+		separator := strings.LastIndexByte(value, ':')
+		if separator < 1 || separator == len(value)-1 {
+			return nil, errors.New("platform test port binding is invalid")
+		}
+		hostIP, hostPort, err := net.SplitHostPort(value[:separator])
+		if err != nil {
+			return nil, err
+		}
+		containerPort := value[separator+1:]
+		result[containerPort] = append(result[containerPort], map[string]string{
+			"HostIp": hostIP, "HostPort": hostPort,
+		})
+	}
+	return result, nil
+}
+
+func cloneTestLabels(source map[string]string) map[string]string {
+	result := make(map[string]string, len(source)+3)
+	for key, value := range source {
+		result[key] = value
+	}
+	return result
 }
 
 func newMigrationRuntime(plan platformcommand.InstallPlan, project string) *migrationRuntime {

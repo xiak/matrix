@@ -120,7 +120,7 @@ func validateOptions(options Options) error {
 	problems = append(problems, lifecycle.ValidateInstallationID(options.InstallationID))
 	if options.Root == "" || len(options.Root) > 4096 || !path.IsAbs(options.Root) ||
 		path.Clean(options.Root) != options.Root || options.Root == "/" ||
-		strings.ContainsAny(options.Root, "\\\x00\r\n") {
+		strings.ContainsAny(options.Root, "\\$\x00\r\n") {
 		problems = append(problems, errors.New("platform installation root is invalid"))
 	}
 	address, err := netip.ParseAddr(options.Listener)

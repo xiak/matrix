@@ -1,7 +1,6 @@
 package localmachine
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,7 +9,6 @@ import (
 
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
-	"github.com/xiak/matrix/app/service/installation/internal/topology"
 )
 
 const migrationWaitSeconds = "120"
@@ -59,33 +57,14 @@ func migrateInstallation(
 	runtimeBoundary dockerRuntime,
 	plan platformcommand.InstallPlan,
 ) error {
-	staged, err := verifiedStagedBundle(plan)
-	if err != nil {
-		return errors.Join(platformcommand.ErrEffectVerification, err)
-	}
-	compiled, err := topology.Compile(staged.Manifest, topology.Options{
-		InstallationID: plan.InstallationID, Root: plan.Root,
-		Listener: plan.Listener, Port: plan.Port,
-	})
-	if err != nil {
-		return errors.Join(platformcommand.ErrEffectVerification, err)
-	}
-	compose, err := readManagedFile(
-		plan.Root, filepath.FromSlash(layout.Compose), maximumManagedFileBytes,
-	)
-	if err != nil || !bytes.Equal(compose, compiled.ComposeJSON) {
-		return errors.Join(
-			platformcommand.ErrEffectVerification,
-			errors.New("generated Compose topology differs from authenticated release input"),
-		)
-	}
-	composePath, err := managedPath(plan.Root, filepath.FromSlash(layout.Compose))
+	installation, err := verifiedInstallationConfiguration(plan)
 	if err != nil {
 		return errors.Join(platformcommand.ErrEffectVerification, err)
 	}
 	_, started, err := runtimeBoundary.Run(
 		ctx, nil,
-		"compose", "--file", composePath, "--project-name", compiled.ProjectName,
+		"compose", "--file", installation.composePath,
+		"--project-name", installation.topology.ProjectName,
 		"up", "--detach", "--wait", "--wait-timeout", migrationWaitSeconds,
 		"--no-build", "--pull", "never", "postgres",
 	)
@@ -96,14 +75,14 @@ func migrateInstallation(
 		return errors.Join(platformcommand.ErrEffectUnavailable, err)
 	}
 	networkID, err := controlNetworkID(
-		ctx, runtimeBoundary, compiled.ProjectName, plan.InstallationID,
-		staged.Manifest.Release.ID,
+		ctx, runtimeBoundary, installation.topology.ProjectName, plan.InstallationID,
+		installation.bundle.Manifest.Release.ID,
 	)
 	if err != nil {
 		return err
 	}
-	images := make(map[string]string, len(staged.Manifest.Images))
-	for _, image := range staged.Manifest.Images {
+	images := make(map[string]string, len(installation.bundle.Manifest.Images))
+	for _, image := range installation.bundle.Manifest.Images {
 		images[image.Component] = image.ImageID
 	}
 	for _, mode := range []string{"apply", "verify"} {
@@ -126,7 +105,7 @@ func migrateInstallation(
 				)
 			}
 			arguments, err := migrationArguments(
-				plan, compiled.ProjectName, networkID, imageID, migration, mode,
+				plan, installation.topology.ProjectName, networkID, imageID, migration, mode,
 			)
 			if err != nil {
 				return errors.Join(platformcommand.ErrEffectVerification, err)

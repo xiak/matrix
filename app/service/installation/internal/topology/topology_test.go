@@ -179,9 +179,10 @@ func TestCompileRejectsUntrustedTopologyInputs(t *testing.T) {
 		"root traversal": func(value *Options) {
 			value.Root = "/srv/../matrix"
 		},
-		"listener hostname":  func(value *Options) { value.Listener = "localhost" },
-		"listener multicast": func(value *Options) { value.Listener = "224.0.0.1" },
-		"listener port":      func(value *Options) { value.Port = 0 },
+		"Compose interpolation root": func(value *Options) { value.Root = "/srv/$matrix" },
+		"listener hostname":          func(value *Options) { value.Listener = "localhost" },
+		"listener multicast":         func(value *Options) { value.Listener = "224.0.0.1" },
+		"listener port":              func(value *Options) { value.Port = 0 },
 		"installation ID": func(value *Options) {
 			value.InstallationID = "customer"
 		},
