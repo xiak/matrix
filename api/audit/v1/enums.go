@@ -9,6 +9,7 @@ type IngestionOutcome string
 type RetentionPolicy string
 type VerificationState string
 type ReadinessState string
+type InstallationVerificationState string
 
 const (
 	SourceIAM   Source = "IAM"
@@ -79,6 +80,11 @@ const VerificationVerified VerificationState = "VERIFIED"
 const (
 	ReadinessReady    ReadinessState = "READY"
 	ReadinessNotReady ReadinessState = "NOT_READY"
+)
+
+const (
+	InstallationVerificationPending  InstallationVerificationState = "PENDING"
+	InstallationVerificationVerified InstallationVerificationState = "VERIFIED"
 )
 
 // ActionContract is the closed Phase 1 Audit event union. Source is authority

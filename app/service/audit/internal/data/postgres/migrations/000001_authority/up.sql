@@ -75,6 +75,9 @@ CREATE INDEX IF NOT EXISTS records_tenant_action_desc_idx
     ON audit.records (tenant_id, (event_document->>'action'), sequence DESC);
 CREATE INDEX IF NOT EXISTS records_tenant_actor_desc_idx
     ON audit.records (tenant_id, (event_document#>>'{actor,id}'), sequence DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS records_paas_operation_uq
+    ON audit.records (tenant_id, (event_document->>'operationId'))
+    WHERE source = 'PAAS';
 
 CREATE TABLE IF NOT EXISTS audit.event_registry (
     source text COLLATE "C" NOT NULL,
@@ -670,6 +673,33 @@ BEGIN
 END
 $function$;
 
+CREATE OR REPLACE FUNCTION audit.lookup_paas_operation_record(
+    submitted_tenant_id text,
+    submitted_operation_id text
+)
+RETURNS SETOF audit.records
+LANGUAGE plpgsql
+SECURITY DEFINER
+STABLE
+SET search_path = pg_catalog, pg_temp
+AS $function$
+BEGIN
+    IF COALESCE(submitted_tenant_id, '') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR COALESCE(submitted_operation_id, '') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'PaaS Audit operation lookup is invalid';
+    END IF;
+    PERFORM set_config('matrix.audit_tenant_id', submitted_tenant_id, true);
+    RETURN QUERY
+    SELECT record.*
+      FROM audit.records AS record
+     WHERE record.tenant_id = submitted_tenant_id
+       AND record.source = 'PAAS'
+       AND record.event_document->>'operationId' = submitted_operation_id;
+END
+$function$;
+
 CREATE OR REPLACE FUNCTION audit.read_chain(
     submitted_tenant_id text,
     submitted_from_sequence bigint,
@@ -722,6 +752,8 @@ GRANT EXECUTE ON FUNCTION audit.read_records(
 )
     TO matrix_audit_runtime;
 GRANT EXECUTE ON FUNCTION audit.read_checkpoint(text, bigint)
+    TO matrix_audit_runtime;
+GRANT EXECUTE ON FUNCTION audit.lookup_paas_operation_record(text, text)
     TO matrix_audit_runtime;
 GRANT EXECUTE ON FUNCTION audit.read_chain(text, bigint, integer)
     TO matrix_audit_runtime;

@@ -315,6 +315,31 @@ func (client *auditIAM) Authorize(
 	return decision, nil
 }
 
+func (client *auditIAM) VerifyInstallation(
+	_ context.Context,
+	_ iamv1.Secret,
+	request iamv1.AuthorizationRequest,
+) (iamv1.AuthorizationDecision, error) {
+	client.decisions++
+	decision := iamv1.AuthorizationDecision{
+		APIVersion: iamv1.APIVersion, Kind: "AuthorizationDecision",
+		ID:      iamv1.DecisionID(fmt.Sprintf("decision-%d", client.decisions)),
+		Allowed: !client.deny, Reason: iamv1.DecisionAllowed,
+		TenantID: "organization-example",
+		Subject: &iamv1.Subject{
+			Type: iamv1.PrincipalServiceAccount, ID: "service-installation-verifier",
+		},
+		Action: request.Action, Resource: request.Resource,
+		RequestID: request.RequestID, DecidedAt: client.now,
+	}
+	if client.deny {
+		decision.Reason = iamv1.DecisionDenied
+		decision.TenantID = ""
+		decision.Subject = nil
+	}
+	return decision, nil
+}
+
 type auditTransaction struct {
 	now      time.Time
 	records  map[auditv1.TenantID][]auditv1.AuditRecord
@@ -450,6 +475,19 @@ func (transaction *auditTransaction) ReadChain(
 	start := int(fromSequence - 1)
 	end := min(start+maximumRecords, len(records))
 	return append([]auditv1.AuditRecord(nil), records[start:end]...), nil
+}
+
+func (transaction *auditTransaction) LookupPaaSOperationRecord(
+	_ context.Context,
+	tenantID auditv1.TenantID,
+	operationID auditv1.OperationID,
+) (auditv1.AuditRecord, bool, error) {
+	for _, record := range transaction.records[tenantID] {
+		if record.Source == auditv1.SourcePaaS && record.Event.OperationID == operationID {
+			return record, true, nil
+		}
+	}
+	return auditv1.AuditRecord{}, false, nil
 }
 
 func (transaction *auditTransaction) Readiness(context.Context) (ReadinessSnapshot, error) {

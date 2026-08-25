@@ -85,6 +85,23 @@ func TestAuditHTTPExposesCredentialBoundRoutes(t *testing.T) {
 		t.Fatalf("Audit verify status=%d calls=%d requestId=%q body=%s", verifyResponse.Code, workflow.verifyCalls, workflow.verifyRequestID, verifyResponse.Body.String())
 	}
 
+	installationResponse := exerciseJSON(
+		t,
+		handler,
+		http.MethodPost,
+		"/v1/installation:verify",
+		auditv1.VerifyInstallationRequest{
+			InstallationID: "mxi-0123456789abcdef0123456789abcdef",
+			OperationID:    "operation-verification",
+			DeploymentID:   "deployment-verification",
+		},
+		"installation-verifier-credential",
+	)
+	if installationResponse.Code != http.StatusOK || workflow.installationVerifyCalls != 1 ||
+		workflow.installationVerifyRequestID != "request-http-test" || !workflow.verifyCredentialPresent {
+		t.Fatalf("Audit installation verify status=%d calls=%d requestId=%q body=%s", installationResponse.Code, workflow.installationVerifyCalls, workflow.installationVerifyRequestID, installationResponse.Body.String())
+	}
+
 	missingCredential := httptest.NewRequest(
 		http.MethodPost,
 		"/v1/records:query",
@@ -165,6 +182,20 @@ func TestAuditHTTPRejectsAmbiguousInputAndRedactsFailures(t *testing.T) {
 		t.Fatalf("duplicate credential status=%d calls=%d", duplicateResponse.Code, workflow.queryCalls)
 	}
 
+	subjectVerifier := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/installation:verify",
+		strings.NewReader(`{"installationId":"mxi-0123456789abcdef0123456789abcdef","operationId":"operation-verification","deploymentId":"deployment-verification"}`),
+	)
+	subjectVerifier.Header.Set("Content-Type", "application/json")
+	subjectVerifier.Header.Set("Authorization", "Bearer installation-verifier-credential")
+	subjectVerifier.Header.Set("Matrix-Subject-Credential", "user-session")
+	subjectVerifierResponse := httptest.NewRecorder()
+	handler.ServeHTTP(subjectVerifierResponse, subjectVerifier)
+	if subjectVerifierResponse.Code != http.StatusBadRequest || workflow.installationVerifyCalls != 0 {
+		t.Fatalf("subject verifier status=%d calls=%d", subjectVerifierResponse.Code, workflow.installationVerifyCalls)
+	}
+
 	workflow.queryErr = errors.New("native failure contains user-session-credential and C:\\secret")
 	failureResponse := exerciseJSON(
 		t,
@@ -231,22 +262,25 @@ func exerciseJSON(
 }
 
 type httpWorkflow struct {
-	now                     time.Time
-	event                   auditv1.Event
-	ingestion               auditv1.IngestionResult
-	page                    auditv1.RecordPage
-	verification            auditv1.ChainVerification
-	readiness               auditv1.Readiness
-	queryErr                error
-	readinessCalls          int
-	ingestCalls             int
-	queryCalls              int
-	verifyCalls             int
-	ingestCredentialPresent bool
-	queryCredentialPresent  bool
-	verifyCredentialPresent bool
-	queryRequestID          string
-	verifyRequestID         string
+	now                         time.Time
+	event                       auditv1.Event
+	ingestion                   auditv1.IngestionResult
+	page                        auditv1.RecordPage
+	verification                auditv1.ChainVerification
+	installationVerification    auditv1.InstallationVerification
+	readiness                   auditv1.Readiness
+	queryErr                    error
+	readinessCalls              int
+	ingestCalls                 int
+	queryCalls                  int
+	verifyCalls                 int
+	installationVerifyCalls     int
+	ingestCredentialPresent     bool
+	queryCredentialPresent      bool
+	verifyCredentialPresent     bool
+	queryRequestID              string
+	verifyRequestID             string
+	installationVerifyRequestID string
 }
 
 func newHTTPWorkflow(t *testing.T) *httpWorkflow {
@@ -305,6 +339,12 @@ func newHTTPWorkflow(t *testing.T) *httpWorkflow {
 			Complete:          true,
 			VerifiedAt:        now,
 		},
+		installationVerification: auditv1.InstallationVerification{
+			APIVersion: auditv1.APIVersion, Kind: "InstallationVerification",
+			InstallationID: "mxi-0123456789abcdef0123456789abcdef",
+			OperationID:    "operation-verification", DeploymentID: "deployment-verification",
+			State: auditv1.InstallationVerificationPending, CheckedAt: now,
+		},
 		readiness: auditv1.Readiness{
 			APIVersion:    auditv1.APIVersion,
 			Kind:          "Readiness",
@@ -355,4 +395,16 @@ func (workflow *httpWorkflow) VerifyChain(
 	workflow.verifyCredentialPresent = credential.Present()
 	workflow.verifyRequestID = requestID
 	return workflow.verification, nil
+}
+
+func (workflow *httpWorkflow) VerifyInstallation(
+	_ context.Context,
+	credential iamv1.Secret,
+	requestID string,
+	_ auditv1.VerifyInstallationRequest,
+) (auditv1.InstallationVerification, error) {
+	workflow.installationVerifyCalls++
+	workflow.installationVerifyRequestID = requestID
+	workflow.verifyCredentialPresent = credential.Present()
+	return workflow.installationVerification, workflow.queryErr
 }

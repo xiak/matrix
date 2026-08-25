@@ -248,6 +248,29 @@ func (value *transaction) ReadChain(
 	return records, nil
 }
 
+func (value *transaction) LookupPaaSOperationRecord(
+	ctx context.Context,
+	tenantID auditv1.TenantID,
+	operationID auditv1.OperationID,
+) (auditv1.AuditRecord, bool, error) {
+	record, _, err := scanAuditRecord(value.tx.QueryRow(
+		ctx,
+		`SELECT tenant_id, sequence, source, event_id, event_document,
+			   canonical_document, content_digest, previous_hash, record_hash,
+			   ingested_at, retention
+		  FROM audit.lookup_paas_operation_record($1, $2)`,
+		string(tenantID),
+		string(operationID),
+	))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return auditv1.AuditRecord{}, false, nil
+	}
+	if err != nil {
+		return auditv1.AuditRecord{}, false, mapDatabaseError("lookup PaaS Audit operation", err)
+	}
+	return record, true, nil
+}
+
 func (value *transaction) Readiness(
 	ctx context.Context,
 ) (auditlog.ReadinessSnapshot, error) {

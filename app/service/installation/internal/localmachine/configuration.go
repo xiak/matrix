@@ -120,6 +120,20 @@ func apisixStandaloneConfig() []byte {
       nodes:
         "iam:8080": 1
   -
+    id: matrix-audit-installation-verification
+    uri: /api/audit/v1/installation:verify
+    priority: 100
+    plugins:
+      proxy-rewrite:
+        uri: /v1/installation:verify
+        headers:
+          remove:
+            - Matrix-Subject-Credential
+    upstream:
+      type: roundrobin
+      nodes:
+        "audit:8080": 1
+  -
     id: matrix-audit
     uri: /api/audit/*
     plugin_config_id: matrix-service-auth
@@ -132,6 +146,20 @@ func apisixStandaloneConfig() []byte {
       type: roundrobin
       nodes:
         "audit:8080": 1
+  -
+    id: matrix-paas-installation-verification
+    uri: /api/paas/v1/installation:verify
+    priority: 100
+    plugins:
+      proxy-rewrite:
+        uri: /v1/installation:verify
+        headers:
+          remove:
+            - Matrix-Subject-Credential
+    upstream:
+      type: roundrobin
+      nodes:
+        "paas-api:8080": 1
   -
     id: matrix-paas
     uri: /api/paas/*

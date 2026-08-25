@@ -134,6 +134,10 @@ BEGIN
             'matrix_audit_runtime', 'audit.read_checkpoint(text,bigint)', 'EXECUTE'
        )
        OR NOT has_function_privilege(
+            'matrix_audit_runtime',
+            'audit.lookup_paas_operation_record(text,text)', 'EXECUTE'
+       )
+       OR NOT has_function_privilege(
             'matrix_audit_runtime', 'audit.read_chain(text,bigint,integer)', 'EXECUTE'
        )
        OR has_function_privilege(
@@ -145,6 +149,10 @@ BEGIN
             'EXECUTE'
        ) THEN
         RAISE EXCEPTION 'Audit runtime function authority is invalid';
+    END IF;
+
+    IF to_regclass('audit.records_paas_operation_uq') IS NULL THEN
+        RAISE EXCEPTION 'Audit PaaS operation identity is not unique';
     END IF;
 
     IF to_regnamespace('iam') IS NOT NULL

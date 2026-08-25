@@ -121,6 +121,60 @@ func ValidateReadiness(value Readiness) error {
 	return errors.Join(problems...)
 }
 
+func ValidateVerifyInstallationRequest(value VerifyInstallationRequest) error {
+	return errors.Join(
+		ValidateID("installationId", value.InstallationID),
+		ValidateID("releaseId", value.ReleaseID),
+	)
+}
+
+func ValidateInstallationVerification(value InstallationVerification) error {
+	var problems []error
+	if value.APIVersion != APIVersion || value.Kind != "InstallationVerification" {
+		problems = append(problems, errors.New("installation verification type metadata is invalid"))
+	}
+	problems = append(problems,
+		ValidateID("installationId", value.InstallationID),
+		ValidateID("releaseId", value.ReleaseID),
+		ValidateID("deploymentId", string(value.DeploymentID)),
+		ValidateID("operationId", string(value.OperationID)),
+		validateContractTime("checkedAt", value.CheckedAt),
+	)
+	if value.Generation == 0 {
+		problems = append(problems, errors.New("installation verification generation must be positive"))
+	}
+	if !contains(OperationStates(), value.OperationState) {
+		problems = append(problems, errors.New("installation verification operation state is invalid"))
+	}
+	if !contains(DeploymentPhases(), value.DeploymentPhase) {
+		problems = append(problems, errors.New("installation verification Deployment phase is invalid"))
+	}
+	terminal := value.OperationState == OperationSucceeded ||
+		value.OperationState == OperationFailed ||
+		value.OperationState == OperationCancelled ||
+		value.OperationState == OperationManualIntervention
+	switch value.State {
+	case InstallationVerificationPending:
+		if terminal {
+			problems = append(problems, errors.New("pending installation verification cannot contain a terminal Operation"))
+		}
+	case InstallationVerificationReady:
+		if value.OperationState != OperationSucceeded || value.DeploymentPhase != DeploymentReady {
+			problems = append(problems, errors.New("ready installation verification requires a ready successful Deployment"))
+		}
+	case InstallationVerificationFailed:
+		if !terminal || (value.OperationState == OperationSucceeded &&
+			value.DeploymentPhase != DeploymentDegraded &&
+			value.DeploymentPhase != DeploymentFailed &&
+			value.DeploymentPhase != DeploymentStopped) {
+			problems = append(problems, errors.New("failed installation verification requires a terminal failed result"))
+		}
+	default:
+		problems = append(problems, errors.New("installation verification state is invalid"))
+	}
+	return errors.Join(problems...)
+}
+
 func ValidateExecutionPool(value ExecutionPool) error {
 	var problems []error
 	if value.APIVersion != APIVersion || value.Kind != "ExecutionPool" {

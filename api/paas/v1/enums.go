@@ -201,6 +201,18 @@ const (
 	ReadinessNotReady ReadinessState = "NOT_READY"
 )
 
+// InstallationVerificationState is intentionally smaller than the generic
+// Deployment state machine. The fixed verifier endpoint either waits for its
+// built-in probe, establishes the complete probe result, or reports a
+// terminal probe failure.
+type InstallationVerificationState string
+
+const (
+	InstallationVerificationPending InstallationVerificationState = "PENDING"
+	InstallationVerificationReady   InstallationVerificationState = "READY"
+	InstallationVerificationFailed  InstallationVerificationState = "FAILED"
+)
+
 type ErrorCode string
 
 const (

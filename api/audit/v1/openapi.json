@@ -1439,6 +1439,119 @@
         ],
         "type": "object"
       },
+      "InstallationVerification": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "PENDING"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "eventId": false,
+                "fromSequence": false,
+                "iamDecisionId": false,
+                "recordHash": false,
+                "recordSequence": false,
+                "toSequence": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "VERIFIED"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "required": [
+                "eventId",
+                "iamDecisionId",
+                "recordSequence",
+                "fromSequence",
+                "toSequence",
+                "recordHash"
+              ]
+            }
+          }
+        ],
+        "properties": {
+          "apiVersion": {
+            "const": "audit.matrix.xiak.com/v1"
+          },
+          "checkedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "deploymentId": {
+            "type": "string"
+          },
+          "eventId": {
+            "$ref": "#/components/schemas/EventID"
+          },
+          "fromSequence": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "iamDecisionId": {
+            "$ref": "#/components/schemas/DecisionID"
+          },
+          "installationId": {
+            "type": "string"
+          },
+          "kind": {
+            "const": "InstallationVerification"
+          },
+          "operationId": {
+            "$ref": "#/components/schemas/OperationID"
+          },
+          "recordHash": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "recordSequence": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/components/schemas/InstallationVerificationState"
+          },
+          "toSequence": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "checkedAt",
+          "deploymentId",
+          "installationId",
+          "kind",
+          "operationId",
+          "state"
+        ],
+        "type": "object"
+      },
+      "InstallationVerificationState": {
+        "enum": [
+          "PENDING",
+          "VERIFIED"
+        ],
+        "type": "string"
+      },
       "OperationID": {
         "allOf": [
           {
@@ -1670,9 +1783,34 @@
           "maximumRecords"
         ],
         "type": "object"
+      },
+      "VerifyInstallationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "deploymentId": {
+            "type": "string"
+          },
+          "installationId": {
+            "type": "string"
+          },
+          "operationId": {
+            "$ref": "#/components/schemas/OperationID"
+          }
+        },
+        "required": [
+          "deploymentId",
+          "installationId",
+          "operationId"
+        ],
+        "type": "object"
       }
     },
     "securitySchemes": {
+      "InstallationVerifier": {
+        "description": "Narrow installation-verifier service credential authorized by IAM installation.verify.",
+        "scheme": "bearer",
+        "type": "http"
+      },
       "ServiceCredential": {
         "description": "Opaque IAM service credential that determines the Audit event source.",
         "scheme": "bearer",
@@ -1781,6 +1919,66 @@
           }
         ],
         "summary": "Ingest a sanitized event from its authenticated source"
+      }
+    },
+    "/v1/installation:verify": {
+      "post": {
+        "operationId": "verifyInstallationAudit",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyInstallationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstallationVerification"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [
+          {
+            "InstallationVerifier": []
+          }
+        ],
+        "summary": "Verify the exact fixed PaaS probe Audit fact and chain"
       }
     },
     "/v1/integrity:verify": {

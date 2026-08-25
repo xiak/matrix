@@ -15,8 +15,9 @@ import (
 )
 
 const (
-	testServiceCredential = "mx1.PaaSServiceCredential000000000000000000001"
-	testSubjectCredential = "mx1.PaaSSubjectCredential000000000000000000001"
+	testServiceCredential  = "mx1.PaaSServiceCredential000000000000000000001"
+	testSubjectCredential  = "mx1.PaaSSubjectCredential000000000000000000001"
+	testVerifierCredential = "mx1.PaaSVerifierCredential0000000000000000001"
 )
 
 func TestClientMapsAllowedIAMDecisionWithoutTrustingCallerAuthority(t *testing.T) {
@@ -141,6 +142,53 @@ func TestClientRejectsMalformedBearerBeforeIAMCall(t *testing.T) {
 	}
 	if calls != 0 {
 		t.Fatalf("malformed credentials reached IAM %d times", calls)
+	}
+}
+
+func TestClientAuthorizesCredentialBoundInstallationVerifier(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/installation:verify" ||
+			request.Header.Get("Authorization") != "Bearer "+testVerifierCredential ||
+			request.Header.Get("Matrix-Subject-Credential") != "" {
+			t.Fatalf("IAM verifier request path=%s headers=%#v", request.URL.Path, request.Header)
+		}
+		var body iamv1.AuthorizationRequest
+		if iamv1.DecodeRequest(request.Body, &body) != nil ||
+			body.Action != iamv1.ActionInstallationVerify ||
+			body.Resource != (iamv1.ResourceReference{
+				Kind: iamv1.ResourceInstallation,
+				ID:   "mxi-0123456789abcdef0123456789abcdef",
+			}) || body.RequestID != "request-installation-verify" {
+			t.Fatalf("IAM installation verification request=%#v", body)
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(response).Encode(iamv1.AuthorizationDecision{
+			APIVersion: iamv1.APIVersion, Kind: "AuthorizationDecision",
+			ID: "decision-installation-verify", Allowed: true, Reason: iamv1.DecisionAllowed,
+			TenantID: "organization-default",
+			Subject: &iamv1.Subject{
+				Type: iamv1.PrincipalServiceAccount, ID: "service-installation-verifier",
+			},
+			Action: body.Action, Resource: body.Resource, RequestID: body.RequestID,
+			DecidedAt: time.Date(2026, 8, 26, 1, 2, 3, 456_000, time.UTC),
+		})
+	}))
+	defer server.Close()
+
+	authorization, err := newTestClient(t, server.URL).VerifyInstallation(
+		context.Background(),
+		"Bearer "+testVerifierCredential,
+		"mxi-0123456789abcdef0123456789abcdef",
+		"request-installation-verify",
+	)
+	if err != nil {
+		t.Fatalf("authorize installation verifier: %v", err)
+	}
+	if authorization.TenantID != "organization-default" ||
+		authorization.Subject != (paasv1.SubjectRef{
+			Type: paasv1.SubjectServiceAccount, ID: "service-installation-verifier",
+		}) || authorization.DecisionID != "decision-installation-verify" {
+		t.Fatalf("installation verifier authorization=%#v", authorization)
 	}
 }
 

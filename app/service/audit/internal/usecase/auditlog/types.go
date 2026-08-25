@@ -32,6 +32,11 @@ type IAM interface {
 		iamv1.Secret,
 		iamv1.AuthorizationRequest,
 	) (iamv1.AuthorizationDecision, error)
+	VerifyInstallation(
+		context.Context,
+		iamv1.Secret,
+		iamv1.AuthorizationRequest,
+	) (iamv1.AuthorizationDecision, error)
 }
 
 type Repository interface {
@@ -50,6 +55,11 @@ type Transaction interface {
 	ReadRecords(context.Context, RecordQuery) ([]auditv1.AuditRecord, error)
 	ReadCheckpoint(context.Context, auditv1.TenantID, uint64) (authority.Checkpoint, bool, error)
 	ReadChain(context.Context, auditv1.TenantID, uint64, int) ([]auditv1.AuditRecord, error)
+	LookupPaaSOperationRecord(
+		context.Context,
+		auditv1.TenantID,
+		auditv1.OperationID,
+	) (auditv1.AuditRecord, bool, error)
 	Readiness(context.Context) (ReadinessSnapshot, error)
 }
 

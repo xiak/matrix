@@ -96,6 +96,30 @@ type ChainVerification struct {
 	VerifiedAt        time.Time         `json:"verifiedAt"`
 }
 
+// VerifyInstallationRequest identifies one exact PaaS Deployment acceptance
+// fact. Tenant and verifier actor remain IAM authority.
+type VerifyInstallationRequest struct {
+	InstallationID string      `json:"installationId"`
+	OperationID    OperationID `json:"operationId"`
+	DeploymentID   string      `json:"deploymentId"`
+}
+
+type InstallationVerification struct {
+	APIVersion     string                        `json:"apiVersion"`
+	Kind           string                        `json:"kind"`
+	InstallationID string                        `json:"installationId"`
+	OperationID    OperationID                   `json:"operationId"`
+	DeploymentID   string                        `json:"deploymentId"`
+	State          InstallationVerificationState `json:"state"`
+	EventID        EventID                       `json:"eventId,omitempty"`
+	IAMDecisionID  DecisionID                    `json:"iamDecisionId,omitempty"`
+	RecordSequence uint64                        `json:"recordSequence,omitempty"`
+	FromSequence   uint64                        `json:"fromSequence,omitempty"`
+	ToSequence     uint64                        `json:"toSequence,omitempty"`
+	RecordHash     string                        `json:"recordHash,omitempty"`
+	CheckedAt      time.Time                     `json:"checkedAt"`
+}
+
 type Readiness struct {
 	APIVersion    string         `json:"apiVersion"`
 	Kind          string         `json:"kind"`

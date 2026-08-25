@@ -40,6 +40,8 @@ func TestOpenAPIContractDefinesApplicationPaaSV1(t *testing.T) {
 		"Operation",
 		"Evidence",
 		"Readiness",
+		"VerifyInstallationRequest",
+		"InstallationVerification",
 		"Problem",
 		"AdapterCapabilitiesContract",
 		"AdapterCommandEnvelope",
@@ -97,6 +99,7 @@ func TestOpenAPINorthboundSurfaceUsesMatrixIAM(t *testing.T) {
 		"/v1/deployments/{deploymentId}/rollback":                 {"post"},
 		"/v1/deployments/{deploymentId}/generations/{generation}": {"get"},
 		"/v1/operations/{operationId}":                            {"get"},
+		"/v1/installation:verify":                                 {"post"},
 	}
 	paths := object(t, document["paths"], "paths")
 	if len(paths) != len(want) {
@@ -114,6 +117,20 @@ func TestOpenAPINorthboundSurfaceUsesMatrixIAM(t *testing.T) {
 			if path == "/ready" {
 				if !overridesSecurity || len(securityOverride.([]any)) != 0 {
 					t.Errorf("%s %s must explicitly allow unauthenticated health checks", method, path)
+				}
+			} else if path == "/v1/installation:verify" {
+				if !overridesSecurity {
+					t.Errorf("%s %s must override generic MatrixIAM security", method, path)
+					continue
+				}
+				verificationSecurity := securityOverride.([]any)
+				if len(verificationSecurity) != 1 {
+					t.Errorf("%s %s security = %#v", method, path, verificationSecurity)
+					continue
+				}
+				verificationRequirement := object(t, verificationSecurity[0], "installation verifier security")
+				if len(verificationRequirement) != 1 || verificationRequirement["MatrixInstallationVerifier"] == nil {
+					t.Errorf("%s %s must require only MatrixInstallationVerifier", method, path)
 				}
 			} else if overridesSecurity {
 				t.Errorf("%s %s must inherit MatrixIAM", method, path)
@@ -168,6 +185,11 @@ func TestOpenAPIEnumsMatchGoContract(t *testing.T) {
 	assertExactEnum(t, schemas, "ReadinessState", stringify([]ReadinessState{
 		ReadinessReady,
 		ReadinessNotReady,
+	}))
+	assertExactEnum(t, schemas, "InstallationVerificationState", stringify([]InstallationVerificationState{
+		InstallationVerificationPending,
+		InstallationVerificationReady,
+		InstallationVerificationFailed,
 	}))
 	assertExactEnum(t, schemas, "ArtifactKind", stringify([]ArtifactKind{
 		ArtifactOCIImage,

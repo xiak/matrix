@@ -14,6 +14,7 @@ import (
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/verifyinstallation"
 )
 
 func TestHandlerReadinessIsOperationalAndSanitized(t *testing.T) {
@@ -22,7 +23,7 @@ func TestHandlerReadinessIsOperationalAndSanitized(t *testing.T) {
 		APIVersion: paasv1.APIVersion, Kind: "Readiness", State: paasv1.ReadinessReady,
 		SchemaVersion: 1, CheckedAt: time.Date(2026, 8, 26, 3, 4, 5, 678_000, time.UTC),
 	}
-	handler, err := NewHandler(&fakeAuthorizer{}, &fakeWorkflow{}, Config{
+	handler, err := NewHandler(&fakeAuthorizer{}, &fakeWorkflow{}, &fakeInstallationVerifier{}, Config{
 		Readiness: func(context.Context) (paasv1.Readiness, error) {
 			return readiness, readyErr
 		},
@@ -45,6 +46,51 @@ func TestHandlerReadinessIsOperationalAndSanitized(t *testing.T) {
 	if response.Code != http.StatusServiceUnavailable ||
 		strings.Contains(response.Body.String(), "credential") {
 		t.Fatalf("not-ready response=%d body=%q", response.Code, response.Body.String())
+	}
+}
+
+func TestHandlerUsesOnlyVerifierCredentialForFixedInstallationProbe(t *testing.T) {
+	authorizer := &fakeAuthorizer{}
+	verifier := &fakeInstallationVerifier{result: paasv1.InstallationVerification{
+		APIVersion: paasv1.APIVersion, Kind: "InstallationVerification",
+		InstallationID: "mxi-0123456789abcdef0123456789abcdef",
+		ReleaseID:      "matrix-v0.1.0-001", State: paasv1.InstallationVerificationReady,
+		DeploymentID: "installation-verification-deployment", Generation: 1,
+		OperationID:     "operation-installation-verification",
+		OperationState:  paasv1.OperationSucceeded,
+		DeploymentPhase: paasv1.DeploymentReady,
+		CheckedAt:       time.Date(2026, 8, 26, 3, 4, 5, 678_000, time.UTC),
+	}}
+	handler := mustHandlerWithVerifier(t, authorizer, &fakeWorkflow{}, verifier)
+	request := jsonRequest(t, http.MethodPost, "/v1/installation:verify", paasv1.VerifyInstallationRequest{
+		InstallationID: "mxi-0123456789abcdef0123456789abcdef",
+		ReleaseID:      "matrix-v0.1.0-001",
+	})
+	request.Header.Set("Authorization", "Bearer verifier-credential")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("installation verification status=%d body=%s", response.Code, response.Body.String())
+	}
+	if verifier.calls != 1 || verifier.command.Credential != "Bearer verifier-credential" ||
+		verifier.command.RequestID != "request-test" ||
+		verifier.command.Request.InstallationID != "mxi-0123456789abcdef0123456789abcdef" {
+		t.Fatalf("installation verification command=%#v", verifier.command)
+	}
+	if authorizer.request != (port.AuthorizationRequest{}) {
+		t.Fatalf("fixed verifier route used generic user Authorizer: %#v", authorizer.request)
+	}
+
+	request = jsonRequest(t, http.MethodPost, "/v1/installation:verify", paasv1.VerifyInstallationRequest{
+		InstallationID: "mxi-0123456789abcdef0123456789abcdef",
+		ReleaseID:      "matrix-v0.1.0-001",
+	})
+	request.Header.Set("Authorization", "Bearer verifier-credential")
+	request.Header.Set("Matrix-Subject-Credential", "user-session")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || verifier.calls != 1 {
+		t.Fatalf("subject-bearing verifier status=%d calls=%d", response.Code, verifier.calls)
 	}
 }
 
@@ -296,6 +342,22 @@ type fakeWorkflow struct {
 	readID                 paasv1.ResourceID
 }
 
+type fakeInstallationVerifier struct {
+	calls   int
+	command verifyinstallation.Command
+	result  paasv1.InstallationVerification
+	err     error
+}
+
+func (value *fakeInstallationVerifier) VerifyInstallation(
+	_ context.Context,
+	command verifyinstallation.Command,
+) (paasv1.InstallationVerification, error) {
+	value.calls++
+	value.command = command
+	return value.result, value.err
+}
+
 func (workflow *fakeWorkflow) CreateApplication(
 	_ context.Context,
 	command applicationlifecycle.CreateApplicationCommand,
@@ -393,8 +455,17 @@ func (workflow *fakeWorkflow) GetOperation(context.Context, port.Authorization, 
 }
 
 func mustHandler(t *testing.T, authorizer port.Authorizer, workflow Workflow) http.Handler {
+	return mustHandlerWithVerifier(t, authorizer, workflow, &fakeInstallationVerifier{})
+}
+
+func mustHandlerWithVerifier(
+	t *testing.T,
+	authorizer port.Authorizer,
+	workflow Workflow,
+	verifier InstallationVerifier,
+) http.Handler {
 	t.Helper()
-	handler, err := NewHandler(authorizer, workflow, Config{
+	handler, err := NewHandler(authorizer, workflow, verifier, Config{
 		NewRequestID: func() (string, error) { return "request-test", nil },
 		Readiness: func(context.Context) (paasv1.Readiness, error) {
 			return paasv1.Readiness{

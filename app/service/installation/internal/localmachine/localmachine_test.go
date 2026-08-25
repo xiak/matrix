@@ -130,11 +130,22 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 	if !slices.Equal(catalog.Entries, expected) {
 		t.Fatalf("workload catalog = %#v, want %#v", catalog.Entries, expected)
 	}
+	apisix := readTestFile(t, plan.Root, layout.APISIX)
+	for _, required := range []string{
+		"uri: /api/audit/v1/installation:verify",
+		"uri: /api/paas/v1/installation:verify",
+		"priority: 100",
+		"uri: /v1/installation:verify",
+	} {
+		if !bytes.Contains(apisix, []byte(required)) {
+			t.Fatalf("APISIX configuration lacks fixed verifier route %q", required)
+		}
+	}
 
 	publicConfiguration := bytes.Join([][]byte{
 		readTestFile(t, plan.Root, layout.Compose),
 		catalogBytes,
-		readTestFile(t, plan.Root, layout.APISIX),
+		apisix,
 	}, nil)
 	secrets := [][]byte{administrator, readTestFile(t, plan.Root, layout.PostgresPassword)}
 	for _, credential := range serviceCredentials {

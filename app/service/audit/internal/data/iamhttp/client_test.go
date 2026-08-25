@@ -61,6 +61,27 @@ func TestClientBindsProducerAndSubjectCredentialsToExactIAMRoutes(t *testing.T) 
 				RequestID:  authorization.RequestID,
 				DecidedAt:  now,
 			})
+		case "/v1/installation:verify":
+			if request.Method != http.MethodPost || request.URL.RawQuery != "" ||
+				request.Header.Get("Authorization") != "Bearer installation-verifier-credential" ||
+				request.Header.Get("Matrix-Subject-Credential") != "" ||
+				request.Header.Get("Content-Type") != "application/json" {
+				t.Errorf("IAM verifier request method=%s url=%s headers=%#v", request.Method, request.URL, request.Header)
+			}
+			var authorization iamv1.AuthorizationRequest
+			if err := iamv1.DecodeRequest(request.Body, &authorization); err != nil {
+				t.Errorf("decode IAM verifier request: %v", err)
+			}
+			_ = json.NewEncoder(response).Encode(iamv1.AuthorizationDecision{
+				APIVersion: iamv1.APIVersion, Kind: "AuthorizationDecision",
+				ID: "decision-installation-verifier", Allowed: true, Reason: iamv1.DecisionAllowed,
+				TenantID: "organization-example",
+				Subject: &iamv1.Subject{
+					Type: iamv1.PrincipalServiceAccount, ID: "service-installation-verifier",
+				},
+				Action: authorization.Action, Resource: authorization.Resource,
+				RequestID: authorization.RequestID, DecidedAt: now,
+			})
 		default:
 			http.NotFound(response, request)
 		}
@@ -97,6 +118,24 @@ func TestClientBindsProducerAndSubjectCredentialsToExactIAMRoutes(t *testing.T) 
 	if err != nil || !decision.Allowed || decision.Action != authorization.Action ||
 		decision.RequestID != authorization.RequestID {
 		t.Fatalf("IAM authorization decision=%#v err=%v", decision, err)
+	}
+	verificationRequest := iamv1.AuthorizationRequest{
+		Action: iamv1.ActionInstallationVerify,
+		Resource: iamv1.ResourceReference{
+			Kind: iamv1.ResourceInstallation,
+			ID:   "mxi-0123456789abcdef0123456789abcdef",
+		},
+		RequestID:     "request-installation-verifier",
+		CorrelationID: "request-installation-verifier",
+	}
+	decision, err = client.VerifyInstallation(
+		context.Background(),
+		clientSecret(t, "installation-verifier-credential"),
+		verificationRequest,
+	)
+	if err != nil || !decision.Allowed || decision.Subject == nil ||
+		decision.Subject.Type != iamv1.PrincipalServiceAccount {
+		t.Fatalf("IAM verifier decision=%#v err=%v", decision, err)
 	}
 }
 

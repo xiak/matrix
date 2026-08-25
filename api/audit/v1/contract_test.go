@@ -103,6 +103,7 @@ func TestAuditWireTypesHaveNoArbitraryPayloadEscapeHatch(t *testing.T) {
 		reflect.TypeOf(Event{}), reflect.TypeOf(AuditRecord{}), reflect.TypeOf(IngestionResult{}),
 		reflect.TypeOf(QueryRecordsRequest{}), reflect.TypeOf(RecordPage{}),
 		reflect.TypeOf(VerifyChainRequest{}), reflect.TypeOf(ChainVerification{}),
+		reflect.TypeOf(VerifyInstallationRequest{}), reflect.TypeOf(InstallationVerification{}),
 	}
 	seen := map[reflect.Type]bool{}
 	for _, root := range roots {
@@ -116,6 +117,7 @@ func TestAuditOpenAPISecurityDerivesSourceAndTenantFromCredentials(t *testing.T)
 	assertAuditSecurity(t, paths, "/v1/events", "ServiceCredential")
 	assertAuditSecurity(t, paths, "/v1/records:query", "UserSession")
 	assertAuditSecurity(t, paths, "/v1/integrity:verify", "UserSession")
+	assertAuditSecurity(t, paths, "/v1/installation:verify", "InstallationVerifier")
 
 	schemas := auditOpenAPISchemas(t, document)
 	eventProperties := mustAuditObject(t, mustAuditObject(t, schemas["Event"], "event schema")["properties"], "event properties")

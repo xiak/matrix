@@ -166,6 +166,29 @@ Responses expose the sanitized event, sequence, hashes, ingestion time, and
 retention policy only. Reading or verifying Audit writes a local sanitized
 access record without recursively calling the ingestion API.
 
+### Fixed installation verification
+
+`POST /v1/installation:verify` on the PaaS is the only platform mutation path
+available to the installation verifier. The request selects only the exact
+installation and release already bound into the running PaaS process. The
+PaaS calls IAM's fixed verifier endpoint on every request, then composes the
+ordinary application lifecycle to converge one deterministic private probe
+Deployment. Artifact locator and signed digest, workload shape, resource
+limits, fixed local PlacementPolicy, and the two non-secret environment values
+are process-owned; the caller cannot submit an image, command, configuration,
+Secret, provider control, placement selector, or generic PaaS action. The
+response exposes only the exact Deployment generation and Operation state
+needed for bounded polling.
+
+`POST /v1/installation:verify` on Audit uses the same verifier credential and
+accepts only that PaaS Operation and Deployment identity. It returns `PENDING`
+until the durable PaaS Audit dispatcher has delivered the accepted mutation
+fact. A verified result requires the exact verifier service actor, original IAM
+decision, accepted Deployment create/update action, tenant, Operation, and
+Deployment target, then recomputes the bounded hash-chain segment ending at
+that immutable record. It appends one sanitized local integrity-access fact;
+it neither acquires a producer lease nor owns a fencing token.
+
 ## Cross-process contracts and service behavior
 
 Versioned Go contracts and generated OpenAPI own:
@@ -174,7 +197,10 @@ Versioned Go contracts and generated OpenAPI own:
   organization/principal and binding commands, authorization request/decision,
   and readiness;
 - Audit ingest/replay result, bounded query page/cursor, chain verification,
-  health, and normalized RFC 9457-style problems.
+  fixed installation verification, health, and normalized RFC 9457-style
+  problems;
+- PaaS fixed installation verification request/result in addition to the
+  existing generic application lifecycle contracts.
 
 Decoders reject unknown fields, duplicate/non-canonical identity, trailing
 JSON, oversized input, unsafe external text, and unsupported enum values.

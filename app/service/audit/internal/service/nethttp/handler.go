@@ -33,6 +33,12 @@ type Workflow interface {
 		string,
 		auditv1.VerifyChainRequest,
 	) (auditv1.ChainVerification, error)
+	VerifyInstallation(
+		context.Context,
+		iamv1.Secret,
+		string,
+		auditv1.VerifyInstallationRequest,
+	) (auditv1.InstallationVerification, error)
 }
 
 type Config struct {
@@ -60,9 +66,46 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/events", value.ingest)
 	routes.HandleFunc("/v1/records:query", value.queryRecords)
 	routes.HandleFunc("/v1/integrity:verify", value.verifyChain)
+	routes.HandleFunc("/v1/installation:verify", value.verifyInstallation)
 	routes.HandleFunc("/", value.notFound)
 	value.routes = routes
 	return value, nil
+}
+
+func (value *handler) verifyInstallation(response http.ResponseWriter, request *http.Request) {
+	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+		return
+	}
+	if len(request.Header.Values("Matrix-Subject-Credential")) != 0 {
+		writeProblem(
+			response,
+			requestID(request),
+			http.StatusBadRequest,
+			"audit.header.unsupported",
+			"Audit header unsupported",
+		)
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	body, ok := decodeJSON[auditv1.VerifyInstallationRequest](response, request)
+	if !ok {
+		return
+	}
+	verification, err := value.workflow.VerifyInstallation(
+		request.Context(), credential, requestID(request), body,
+	)
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	if auditv1.ValidateInstallationVerification(verification) != nil {
+		value.writeError(response, request, auditlog.ErrUnavailable)
+		return
+	}
+	writeJSON(response, http.StatusOK, verification)
 }
 
 func (value *handler) ServeHTTP(response http.ResponseWriter, request *http.Request) {

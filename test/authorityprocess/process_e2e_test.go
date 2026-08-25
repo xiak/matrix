@@ -49,6 +49,7 @@ const (
 	iamServiceCredential   = "mx1.ProcessIAMServiceCredential00000000000000001"
 	paasServiceCredential  = "mx1.ProcessPaaSServiceCredential0000000000000001"
 	auditServiceCredential = "mx1.ProcessAuditServiceCredential000000000000001"
+	verifierCredential     = "mx1.ProcessVerifierCredential0000000000000001"
 )
 
 func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
@@ -77,6 +78,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	applyPlatformSchemas(t, ctx, admin)
 	createProcessLogins(t, ctx, admin)
 	assertCrossSchemaIsolation(t, ctx, adminConfig)
+	seedProcessExecutionProfile(t, ctx, adminConfig)
 
 	temporary := t.TempDir()
 	binaries := buildAuthorityBinaries(t, ctx, root, temporary)
@@ -190,6 +192,9 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		"MATRIX_PAAS_IAM_ENDPOINT=" + iamEndpoint,
 		"MATRIX_PAAS_SERVICE_CREDENTIAL_FILE=" + paasCredentialPath,
 		"MATRIX_PAAS_LISTEN_ADDRESS=" + paasAddress,
+		"MATRIX_PAAS_INSTALLATION_ID=" + bootstrap.InstallationID,
+		"MATRIX_PAAS_RELEASE_ID=matrix-v0.1.0-process",
+		"MATRIX_PAAS_VERIFICATION_ARTIFACT_DIGEST=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 	}
 	paasDispatcherEnvironment := func(credentialPath string, workerID string) []string {
 		return []string{
@@ -215,7 +220,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		auditServiceCredential,
 		"mx1.ProcessWrongIAMCredential000000000000000001",
 		"mx1.ProcessAPISIXCredential0000000000000000001",
-		"mx1.ProcessVerifierCredential0000000000000001",
+		verifierCredential,
 	}
 	start := func(binary string, environment []string) *childProcess {
 		child := startChild(t, root, binary, environment)
@@ -262,6 +267,36 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		paasDispatcherEnvironment(paasCredentialPath, "paas-audit-worker-a"),
 	)
 	waitHTTPStatus(t, ctx, paasDispatcher, "http://"+paasDispatcherAddress+"/ready", http.StatusOK)
+	paasInstallationVerification := verifyPaaSInstallation(
+		t,
+		paasEndpoint,
+		verifierCredential,
+		paasv1.VerifyInstallationRequest{
+			InstallationID: bootstrap.InstallationID,
+			ReleaseID:      "matrix-v0.1.0-process",
+		},
+	)
+	if paasInstallationVerification.State != paasv1.InstallationVerificationPending {
+		t.Fatalf("fixed PaaS installation verification=%#v", paasInstallationVerification)
+	}
+	waitAllIAMOutboxDelivered(t, ctx, admin)
+	waitAllPaaSOutboxDelivered(t, ctx, admin)
+	auditInstallationVerification := verifyAuditInstallation(
+		t,
+		auditEndpoint,
+		verifierCredential,
+		auditv1.VerifyInstallationRequest{
+			InstallationID: bootstrap.InstallationID,
+			OperationID:    auditv1.OperationID(paasInstallationVerification.OperationID),
+			DeploymentID:   string(paasInstallationVerification.DeploymentID),
+		},
+	)
+	if auditInstallationVerification.State != auditv1.InstallationVerificationVerified ||
+		auditInstallationVerification.OperationID != auditv1.OperationID(paasInstallationVerification.OperationID) ||
+		auditInstallationVerification.DeploymentID != string(paasInstallationVerification.DeploymentID) {
+		t.Fatalf("fixed Audit installation verification=%#v", auditInstallationVerification)
+	}
+	assertAuditAccessRecorded(t, ctx, admin, auditv1.ActionAuditIntegrityVerified, "service-verifier")
 
 	adminLogin := loginIAM(t, iamEndpoint, "admin", initialAdminPassword, "request-admin-login")
 	sensitive = append(sensitive, adminLogin.Credential)
@@ -1334,6 +1369,56 @@ func verifyAudit(
 	return verification
 }
 
+func verifyPaaSInstallation(
+	t *testing.T,
+	endpoint string,
+	bearer string,
+	request paasv1.VerifyInstallationRequest,
+) paasv1.InstallationVerification {
+	t.Helper()
+	response := performJSON(
+		t,
+		http.MethodPost,
+		endpoint+"/v1/installation:verify",
+		bearer,
+		request,
+	)
+	if response.Status != http.StatusOK {
+		t.Fatalf("verify PaaS installation status=%d body=%s", response.Status, response.Body)
+	}
+	var verification paasv1.InstallationVerification
+	if err := json.Unmarshal(response.Body, &verification); err != nil ||
+		paasv1.ValidateInstallationVerification(verification) != nil {
+		t.Fatalf("decode PaaS installation verification: %v", err)
+	}
+	return verification
+}
+
+func verifyAuditInstallation(
+	t *testing.T,
+	endpoint string,
+	bearer string,
+	request auditv1.VerifyInstallationRequest,
+) auditv1.InstallationVerification {
+	t.Helper()
+	response := performJSON(
+		t,
+		http.MethodPost,
+		endpoint+"/v1/installation:verify",
+		bearer,
+		request,
+	)
+	if response.Status != http.StatusOK {
+		t.Fatalf("verify installation Audit status=%d body=%s", response.Status, response.Body)
+	}
+	var verification auditv1.InstallationVerification
+	if err := json.Unmarshal(response.Body, &verification); err != nil ||
+		auditv1.ValidateInstallationVerification(verification) != nil {
+		t.Fatalf("decode installation Audit verification: %v", err)
+	}
+	return verification
+}
+
 func waitAllIAMOutboxDelivered(t *testing.T, ctx context.Context, admin *pgx.Conn) {
 	t.Helper()
 	waitDatabase(t, ctx, "IAM Audit outbox delivery", func() (bool, error) {
@@ -1777,7 +1862,7 @@ func processBootstrap(t *testing.T) iamv1.BootstrapDocument {
 			service(iamv1.ServicePaaS, "service-paas", paasServiceCredential),
 			service(iamv1.ServiceAudit, "service-audit", auditServiceCredential),
 			service(iamv1.ServiceAPISIX, "service-apisix", "mx1.ProcessAPISIXCredential0000000000000000001"),
-			service(iamv1.ServiceInstallationVerifier, "service-verifier", "mx1.ProcessVerifierCredential0000000000000001"),
+			service(iamv1.ServiceInstallationVerifier, "service-verifier", verifierCredential),
 		},
 	}
 }
@@ -1891,6 +1976,150 @@ func createProcessLogins(t *testing.T, ctx context.Context, admin *pgx.Conn) {
 		if _, err := admin.Exec(ctx, statement); err != nil {
 			t.Fatalf("create authority process login %s: %v", binding.login, err)
 		}
+	}
+}
+
+func seedProcessExecutionProfile(
+	t *testing.T,
+	ctx context.Context,
+	adminConfig *pgx.ConnConfig,
+) {
+	t.Helper()
+	config := adminConfig.Copy()
+	config.User = paasWorkerLogin
+	config.Password = processDBPassword
+	config.DefaultQueryExecMode = pgx.QueryExecModeCacheStatement
+	connection, err := pgx.ConnectConfig(ctx, config)
+	if err != nil {
+		t.Fatalf("connect PaaS worker execution-profile fixture: %v", err)
+	}
+	defer func() { _ = connection.Close(context.Background()) }()
+	transaction, err := connection.BeginTx(ctx, pgx.TxOptions{
+		IsoLevel: pgx.Serializable, AccessMode: pgx.ReadWrite,
+	})
+	if err != nil {
+		t.Fatalf("begin PaaS execution-profile fixture: %v", err)
+	}
+	defer func() { _ = transaction.Rollback(context.Background()) }()
+	var tenantSetting string
+	var observedAt time.Time
+	if err := transaction.QueryRow(
+		ctx,
+		"SELECT set_config('matrix.tenant_id', $1, true), transaction_timestamp()",
+		"organization-process",
+	).Scan(&tenantSetting, &observedAt); err != nil || tenantSetting != "organization-process" {
+		t.Fatalf("bind PaaS execution-profile tenant: setting=%q err=%v", tenantSetting, err)
+	}
+	observedAt = observedAt.UTC().Truncate(time.Microsecond)
+	platformScope := paasv1.ResourceScope{Kind: paasv1.AuthorityPlatform}
+	tenantScope := paasv1.ResourceScope{
+		Kind: paasv1.AuthorityTenant, TenantID: "organization-process",
+	}
+	pool := paasv1.ExecutionPool{
+		APIVersion: paasv1.APIVersion,
+		Kind:       "ExecutionPool",
+		Metadata: paasv1.ResourceMetadata{
+			ID: "execution-pool-local", Name: "local", Scope: platformScope,
+			Labels:          map[string]string{"matrix-profile": "local-compose"},
+			ResourceVersion: 1, CreatedAt: observedAt, UpdatedAt: observedAt,
+		},
+		Spec: paasv1.ExecutionPoolSpec{
+			ExecutionTargetSelector: paasv1.LabelSelector{MatchLabels: map[string]string{
+				"matrix-profile": "local-compose",
+			}},
+			AllowedIsolationGuarantees: []paasv1.IsolationGuarantee{paasv1.IsolationWorkload},
+		},
+		Status: paasv1.ExecutionPoolStatus{
+			Phase: paasv1.ExecutionPoolReady, ExecutionTargetCount: 1,
+			ReadyExecutionTargetCount: 1, ObservedAt: observedAt,
+		},
+	}
+	capacity := paasv1.Capacity{
+		CPUMillis: 8000, MemoryBytes: 16 * 1024 * 1024 * 1024,
+		StorageBytes: 100 * 1024 * 1024 * 1024, WorkloadSlots: 8,
+	}
+	target := paasv1.ExecutionTarget{
+		APIVersion: paasv1.APIVersion,
+		Kind:       "ExecutionTarget",
+		Metadata: paasv1.ResourceMetadata{
+			ID: "execution-target-local", Name: "local", Scope: platformScope,
+			Labels: map[string]string{
+				"matrix-profile":             "local-compose",
+				"matrix-machine-fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			},
+			ResourceVersion: 1, CreatedAt: observedAt, UpdatedAt: observedAt,
+		},
+		Spec: paasv1.ExecutionTargetSpec{
+			ExecutionPoolID: "execution-pool-local",
+			InfrastructureAdapter: paasv1.AdapterRef{
+				Kind: paasv1.AdapterInfrastructure, Name: "localmachine", ContractVersion: "v1",
+			},
+			DeploymentExecutor: paasv1.AdapterRef{
+				Kind: paasv1.AdapterDeploymentExecutor, Name: "compose", ContractVersion: "v1",
+			},
+			DesiredState: paasv1.ExecutionTargetActive,
+		},
+		Status: paasv1.ExecutionTargetStatus{
+			Health:   paasv1.ExecutionTargetHealthReady,
+			Capacity: capacity, Allocatable: capacity,
+			SupportedIsolationGuarantees: []paasv1.IsolationGuarantee{paasv1.IsolationWorkload},
+			ObservedAt:                   observedAt,
+		},
+	}
+	policy := paasv1.PlacementPolicy{
+		APIVersion: paasv1.APIVersion,
+		Kind:       "PlacementPolicy",
+		Metadata: paasv1.ResourceMetadata{
+			ID: "placement-policy-local", Name: "default-local", Scope: tenantScope,
+			Labels: map[string]string{
+				"matrix-profile": "local-compose", "purpose": "default",
+			},
+			ResourceVersion: 1, CreatedAt: observedAt, UpdatedAt: observedAt,
+		},
+		Spec: paasv1.PlacementPolicySpec{
+			RequiredIsolationGuarantee: paasv1.IsolationWorkload,
+			EligibleExecutionPoolIDs:   []paasv1.ResourceID{"execution-pool-local"},
+			ExecutionTargetSelector: paasv1.LabelSelector{MatchLabels: map[string]string{
+				"matrix-profile": "local-compose",
+			}},
+			Strategy: paasv1.PlacementFirstFit,
+		},
+	}
+	for name, validation := range map[string]error{
+		"pool":   paasv1.ValidateExecutionPool(pool),
+		"target": paasv1.ValidateExecutionTarget(target),
+		"policy": paasv1.ValidatePlacementPolicy(policy),
+	} {
+		if validation != nil {
+			t.Fatalf("validate PaaS %s execution-profile fixture: %v", name, validation)
+		}
+	}
+	poolDocument, err := json.Marshal(pool)
+	if err != nil {
+		t.Fatalf("encode PaaS pool fixture: %v", err)
+	}
+	targetDocument, err := json.Marshal(target)
+	if err != nil {
+		t.Fatalf("encode PaaS target fixture: %v", err)
+	}
+	policyDocument, err := json.Marshal(policy)
+	if err != nil {
+		t.Fatalf("encode PaaS policy fixture: %v", err)
+	}
+	var reconciled bool
+	if err := transaction.QueryRow(
+		ctx,
+		`SELECT paas.reconcile_local_execution_profile(
+		     0, $1::jsonb, 0, $2::jsonb, 0, $3::jsonb
+		 )`,
+		poolDocument,
+		targetDocument,
+		policyDocument,
+	).Scan(&reconciled); err != nil || !reconciled {
+		t.Fatalf("reconcile PaaS execution-profile fixture: reconciled=%t err=%v", reconciled, err)
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		t.Fatalf("commit PaaS execution-profile fixture: %v", err)
 	}
 }
 

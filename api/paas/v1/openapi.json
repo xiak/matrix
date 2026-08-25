@@ -1512,6 +1512,68 @@
         "type": "object",
         "x-matrix-visibility": "internal"
       },
+      "InstallationVerification": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "paas.matrix.xiak.com/v1"
+          },
+          "checkedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "deploymentId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "deploymentPhase": {
+            "$ref": "#/components/schemas/DeploymentPhase"
+          },
+          "generation": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "installationId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "kind": {
+            "const": "InstallationVerification"
+          },
+          "operationId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "operationState": {
+            "$ref": "#/components/schemas/OperationState"
+          },
+          "releaseId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "state": {
+            "$ref": "#/components/schemas/InstallationVerificationState"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "installationId",
+          "releaseId",
+          "state",
+          "deploymentId",
+          "generation",
+          "operationId",
+          "operationState",
+          "deploymentPhase",
+          "checkedAt"
+        ],
+        "type": "object"
+      },
+      "InstallationVerificationState": {
+        "enum": [
+          "PENDING",
+          "READY",
+          "FAILED"
+        ],
+        "type": "string"
+      },
       "IsolationGuarantee": {
         "enum": [
           "WORKLOAD",
@@ -2198,11 +2260,32 @@
         "format": "date-time",
         "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,6})?Z$",
         "type": "string"
+      },
+      "VerifyInstallationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "installationId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "releaseId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "installationId",
+          "releaseId"
+        ],
+        "type": "object"
       }
     },
     "securitySchemes": {
       "MatrixIAM": {
         "description": "Matrix IAM credential resolved by the server-side Authorizer.",
+        "scheme": "bearer",
+        "type": "http"
+      },
+      "MatrixInstallationVerifier": {
+        "description": "Narrow installation-verifier service credential resolved through IAM installation.verify.",
         "scheme": "bearer",
         "type": "http"
       }
@@ -3277,6 +3360,60 @@
           }
         },
         "summary": "Roll back Deployment"
+      }
+    },
+    "/v1/installation:verify": {
+      "post": {
+        "operationId": "verifyInstallation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyInstallationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstallationVerification"
+                }
+              }
+            },
+            "description": "Current fixed installation probe state."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [
+          {
+            "MatrixInstallationVerifier": []
+          }
+        ],
+        "summary": "Run the fixed no-secret installation application probe"
       }
     },
     "/v1/operations/{operationId}": {

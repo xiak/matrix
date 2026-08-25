@@ -123,12 +123,20 @@ func sourceForIdentity(identity iamv1.ServiceIdentity) (auditv1.Source, error) {
 }
 
 func actorForDecision(decision iamv1.AuthorizationDecision) (auditv1.ActorReference, error) {
-	if iamv1.ValidateAuthorizationDecision(decision) != nil || !decision.Allowed || decision.Subject == nil ||
-		decision.Subject.Type != iamv1.PrincipalUser {
+	if iamv1.ValidateAuthorizationDecision(decision) != nil || !decision.Allowed || decision.Subject == nil {
+		return auditv1.ActorReference{}, ErrUnavailable
+	}
+	var actorType auditv1.ActorType
+	switch decision.Subject.Type {
+	case iamv1.PrincipalUser:
+		actorType = auditv1.ActorUser
+	case iamv1.PrincipalServiceAccount:
+		actorType = auditv1.ActorServiceAccount
+	default:
 		return auditv1.ActorReference{}, ErrUnavailable
 	}
 	actor := auditv1.ActorReference{
-		Type: auditv1.ActorUser,
+		Type: actorType,
 		ID:   auditv1.ActorID(decision.Subject.ID),
 	}
 	if auditv1.ValidateActor(actor) != nil {

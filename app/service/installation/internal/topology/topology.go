@@ -65,6 +65,10 @@ func contractDescription() contract {
 	images := make(map[string]string, len(release.RequiredImages()))
 	for _, requirement := range release.RequiredImages() {
 		images[requirement.Component] = "sha256:" + strings.Repeat("0", 64)
+		manifest.Images = append(manifest.Images, release.Image{
+			Component: requirement.Component, Purpose: requirement.Purpose,
+			SourceDigest: "sha256:" + strings.Repeat("0", 64),
+		})
 	}
 	document := composeDocument{
 		Name:     "matrix-00000000000000000000000000000000",
@@ -78,7 +82,7 @@ func contractDescription() contract {
 		Version: ContractVersion,
 		Substitutions: []string{
 			"installationId", "installationRoot", "listenerAddress", "listenerPort",
-			"releaseId", "signedImageIds",
+			"releaseId", "signedImageIds", "verificationArtifactDigest",
 		},
 		Compose: document,
 	}
@@ -313,10 +317,13 @@ func compileServices(
 		"1.0", "768M", "http://127.0.0.1:8080/ready",
 	)
 	paasAPI.Environment = map[string]string{
-		"MATRIX_PAAS_DATABASE_DSN_FILE":       "/run/matrix/paas-api-dsn",
-		"MATRIX_PAAS_IAM_ENDPOINT":            "http://iam:8080",
-		"MATRIX_PAAS_SERVICE_CREDENTIAL_FILE": "/run/matrix/paas-iam-credential",
-		"MATRIX_PAAS_LISTEN_ADDRESS":          "0.0.0.0:8080",
+		"MATRIX_PAAS_DATABASE_DSN_FILE":            "/run/matrix/paas-api-dsn",
+		"MATRIX_PAAS_IAM_ENDPOINT":                 "http://iam:8080",
+		"MATRIX_PAAS_INSTALLATION_ID":              options.InstallationID,
+		"MATRIX_PAAS_RELEASE_ID":                   manifest.Release.ID,
+		"MATRIX_PAAS_SERVICE_CREDENTIAL_FILE":      "/run/matrix/paas-iam-credential",
+		"MATRIX_PAAS_VERIFICATION_ARTIFACT_DIGEST": verificationArtifactDigest(manifest),
+		"MATRIX_PAAS_LISTEN_ADDRESS":               "0.0.0.0:8080",
 	}
 	paasAPI.Volumes = []mount{
 		bind(paasAPIDSN, "/run/matrix/paas-api-dsn", true),
@@ -391,6 +398,15 @@ func compileServices(
 		"paas-audit-dispatcher": paasAudit, "paas-ui": ui, "paas-worker": paasWorker,
 		"postgres": postgres,
 	}
+}
+
+func verificationArtifactDigest(manifest release.Manifest) string {
+	for _, image := range manifest.Images {
+		if image.Component == "verification" && image.Purpose == release.ImageWorkload {
+			return image.SourceDigest
+		}
+	}
+	return ""
 }
 
 func bind(source, target string, readOnly bool) mount {

@@ -18,6 +18,7 @@ import (
 	paaspostgres "github.com/xiak/matrix/app/service/paas/internal/apphosting/data/postgres"
 	paashttp "github.com/xiak/matrix/app/service/paas/internal/apphosting/service/nethttp"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/verifyinstallation"
 )
 
 const (
@@ -25,6 +26,9 @@ const (
 	iamEndpointEnvironment           = "MATRIX_PAAS_IAM_ENDPOINT"
 	serviceCredentialFileEnvironment = "MATRIX_PAAS_SERVICE_CREDENTIAL_FILE"
 	listenAddressEnvironment         = "MATRIX_PAAS_LISTEN_ADDRESS"
+	installationIDEnvironment        = "MATRIX_PAAS_INSTALLATION_ID"
+	releaseIDEnvironment             = "MATRIX_PAAS_RELEASE_ID"
+	verificationDigestEnvironment    = "MATRIX_PAAS_VERIFICATION_ARTIFACT_DIGEST"
 )
 
 type configuration struct {
@@ -32,6 +36,9 @@ type configuration struct {
 	iamEndpoint           string
 	serviceCredentialFile string
 	listenAddress         string
+	installationID        string
+	releaseID             string
+	verificationDigest    string
 }
 
 func main() {
@@ -94,7 +101,19 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	handler, err := paashttp.NewHandler(authorizer, workflow, paashttp.Config{
+	installationVerifier, err := verifyinstallation.NewService(
+		authorizer,
+		workflow,
+		verifyinstallation.Config{
+			InstallationID: config.installationID,
+			ReleaseID:      config.releaseID,
+			ArtifactDigest: config.verificationDigest,
+		},
+	)
+	if err != nil {
+		return err
+	}
+	handler, err := paashttp.NewHandler(authorizer, workflow, installationVerifier, paashttp.Config{
 		Readiness: func(readinessContext context.Context) (paasv1.Readiness, error) {
 			readiness, err := repository.Readiness(readinessContext)
 			if err != nil || readiness.State != paasv1.ReadinessReady {
@@ -118,9 +137,14 @@ func loadConfiguration() (configuration, error) {
 		iamEndpoint:           os.Getenv(iamEndpointEnvironment),
 		serviceCredentialFile: os.Getenv(serviceCredentialFileEnvironment),
 		listenAddress:         os.Getenv(listenAddressEnvironment),
+		installationID:        os.Getenv(installationIDEnvironment),
+		releaseID:             os.Getenv(releaseIDEnvironment),
+		verificationDigest:    os.Getenv(verificationDigestEnvironment),
 	}
 	if config.databaseDSNFile == "" || config.iamEndpoint == "" ||
-		config.serviceCredentialFile == "" || config.listenAddress == "" {
+		config.serviceCredentialFile == "" || config.listenAddress == "" ||
+		config.installationID == "" || config.releaseID == "" ||
+		config.verificationDigest == "" {
 		return configuration{}, errors.New("PaaS process configuration is incomplete")
 	}
 	return config, nil

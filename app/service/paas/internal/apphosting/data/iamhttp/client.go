@@ -12,9 +12,11 @@ import (
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/internal/authorityhttp"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/verifyinstallation"
 )
 
 var _ port.Authorizer = (*Client)(nil)
+var _ verifyinstallation.IAM = (*Client)(nil)
 
 type Config struct {
 	Endpoint          string
@@ -115,6 +117,85 @@ func (client *Client) Authorize(
 		decision.RequestID != iamRequest.RequestID {
 		return port.Authorization{}, port.ErrAuthorizationUnavailable
 	}
+	authorization, err := authorizationFromDecision(decision)
+	if err != nil {
+		return port.Authorization{}, err
+	}
+	if port.ValidateAuthorizationForRequest(authorization, request) != nil {
+		return port.Authorization{}, port.ErrAuthorizationUnavailable
+	}
+	return authorization, nil
+}
+
+func (client *Client) VerifyInstallation(
+	ctx context.Context,
+	credential string,
+	installationID string,
+	requestID string,
+) (port.Authorization, error) {
+	if client == nil || client.http == nil {
+		return port.Authorization{}, port.ErrAuthorizationUnavailable
+	}
+	verifierCredential, err := parseBearer(credential)
+	if err != nil || ctx == nil {
+		return port.Authorization{}, port.ErrUnauthenticated
+	}
+	iamRequest := iamv1.AuthorizationRequest{
+		Action: iamv1.ActionInstallationVerify,
+		Resource: iamv1.ResourceReference{
+			Kind: iamv1.ResourceInstallation,
+			ID:   installationID,
+		},
+		RequestID:     requestID,
+		CorrelationID: requestID,
+	}
+	if iamv1.ValidateAuthorizationRequest(iamRequest) != nil {
+		return port.Authorization{}, port.ErrUnauthenticated
+	}
+	body, err := json.Marshal(iamRequest)
+	if err != nil {
+		return port.Authorization{}, port.ErrAuthorizationUnavailable
+	}
+	defer clear(body)
+	response, err := client.http.Do(
+		ctx,
+		http.MethodPost,
+		"/v1/installation:verify",
+		bytes.NewReader(body),
+		"application/json",
+		verifierCredential,
+		iamv1.Secret{},
+	)
+	if err != nil {
+		return port.Authorization{}, port.ErrAuthorizationUnavailable
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return port.Authorization{}, authorizationStatusError(response.StatusCode)
+	}
+	var decision iamv1.AuthorizationDecision
+	if !authorityhttp.ResponseIsJSON(response) ||
+		iamv1.DecodeRequest(response.Body, &decision) != nil ||
+		iamv1.ValidateAuthorizationDecision(decision) != nil ||
+		decision.Action != iamRequest.Action ||
+		decision.Resource != iamRequest.Resource ||
+		decision.RequestID != iamRequest.RequestID {
+		return port.Authorization{}, port.ErrAuthorizationUnavailable
+	}
+	authorization, err := authorizationFromDecision(decision)
+	if err != nil {
+		return port.Authorization{}, err
+	}
+	if authorization.Subject.Type != paasv1.SubjectServiceAccount ||
+		authorization.RequestID != requestID {
+		return port.Authorization{}, port.ErrAuthorizationUnavailable
+	}
+	return authorization, nil
+}
+
+func authorizationFromDecision(
+	decision iamv1.AuthorizationDecision,
+) (port.Authorization, error) {
 	if !decision.Allowed {
 		return port.Authorization{}, port.ErrPermissionDenied
 	}
@@ -131,7 +212,7 @@ func (client *Client) Authorize(
 		DecisionID: string(decision.ID),
 		RequestID:  decision.RequestID,
 	}
-	if port.ValidateAuthorizationForRequest(authorization, request) != nil {
+	if port.ValidateAuthorization(authorization) != nil {
 		return port.Authorization{}, port.ErrAuthorizationUnavailable
 	}
 	return authorization, nil

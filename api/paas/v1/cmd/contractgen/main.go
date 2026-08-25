@@ -56,6 +56,10 @@ func buildDocument() schema {
 					"type": "http", "scheme": "bearer",
 					"description": "Matrix IAM credential resolved by the server-side Authorizer.",
 				},
+				"MatrixInstallationVerifier": schema{
+					"type": "http", "scheme": "bearer",
+					"description": "Narrow installation-verifier service credential resolved through IAM installation.verify.",
+				},
 			},
 			"parameters": schema{
 				"IdempotencyKey": schema{
@@ -161,6 +165,31 @@ func buildPaths() schema {
 	}
 	paths["/v1/operations/{operationId}"] = schema{
 		"get": readOperation("getOperation", "Get Operation", "operationId", "Operation"),
+	}
+	paths["/v1/installation:verify"] = schema{
+		"post": schema{
+			"operationId": "verifyInstallation",
+			"summary":     "Run the fixed no-secret installation application probe",
+			"security": []any{schema{
+				"MatrixInstallationVerifier": []string{},
+			}},
+			"requestBody": jsonRequestBody("VerifyInstallationRequest"),
+			"responses": schema{
+				"200": schema{
+					"description": "Current fixed installation probe state.",
+					"content": schema{
+						"application/json": schema{"schema": ref("InstallationVerification")},
+					},
+				},
+				"400": componentRef("#/components/responses/ProblemResponse"),
+				"401": componentRef("#/components/responses/ProblemResponse"),
+				"403": componentRef("#/components/responses/ProblemResponse"),
+				"409": componentRef("#/components/responses/ProblemResponse"),
+				"415": componentRef("#/components/responses/ProblemResponse"),
+				"500": componentRef("#/components/responses/ProblemResponse"),
+				"503": componentRef("#/components/responses/ProblemResponse"),
+			},
+		},
 	}
 	return paths
 }
@@ -324,32 +353,33 @@ func scalarSchemas() map[string]any {
 
 func enumSchemas() map[string][]string {
 	return map[string][]string{
-		"AuthorityKind":               stringsOf(paasv1.AuthorityPlatform, paasv1.AuthorityTenant),
-		"TenantStatus":                stringsOf(paasv1.TenantActive, paasv1.TenantSuspended, paasv1.TenantDeactivated),
-		"ExecutionPoolPhase":          stringsOf(paasv1.ExecutionPoolReady, paasv1.ExecutionPoolDegraded, paasv1.ExecutionPoolUnavailable),
-		"ExecutionTargetHealth":       stringsOf(paasv1.ExecutionTargetHealthUnknown, paasv1.ExecutionTargetHealthReady, paasv1.ExecutionTargetHealthDegraded, paasv1.ExecutionTargetHealthUnavailable),
-		"ExecutionTargetDesiredState": stringsOf(paasv1.ExecutionTargetActive, paasv1.ExecutionTargetDraining),
-		"IsolationGuarantee":          stringsOfSlice(paasv1.IsolationGuarantees()),
-		"PlacementStrategy":           stringsOf(paasv1.PlacementFirstFit, paasv1.PlacementSpread, paasv1.PlacementBinPack),
-		"PlacementOutcome":            stringsOf(paasv1.PlacementScheduled, paasv1.PlacementUnschedulable),
-		"DeploymentDesiredState":      stringsOf(paasv1.DeploymentDesiredRunning, paasv1.DeploymentDesiredStopped),
-		"DeploymentPhase":             stringsOfSlice(paasv1.DeploymentPhases()),
-		"OperationAction":             stringsOfSlice(paasv1.OperationActions()),
-		"OperationState":              stringsOfSlice(paasv1.OperationStates()),
-		"EvidenceType":                stringsOf(paasv1.EvidencePolicyDecision, paasv1.EvidencePlacementDecision, paasv1.EvidenceAdapterCommand, paasv1.EvidenceAdapterResult, paasv1.EvidenceObservation, paasv1.EvidenceVerification, paasv1.EvidenceAuditDispatch),
-		"EvidenceSeverity":            stringsOf(paasv1.EvidenceInfo, paasv1.EvidenceWarning, paasv1.EvidenceError),
-		"SubjectType":                 stringsOf(paasv1.SubjectUser, paasv1.SubjectServiceAccount, paasv1.SubjectAgent, paasv1.SubjectSystemUser),
-		"ReadinessState":              stringsOf(paasv1.ReadinessReady, paasv1.ReadinessNotReady),
-		"ErrorCode":                   stringsOfSlice(paasv1.ErrorCodes()),
-		"AdapterKind":                 stringsOf(paasv1.AdapterInfrastructure, paasv1.AdapterDeploymentExecutor, paasv1.AdapterGateway),
-		"AdapterAction":               stringsOf(paasv1.AdapterCapabilities, paasv1.AdapterInspectExecutionTarget, paasv1.AdapterObserveExecutionTarget, paasv1.AdapterValidateDeployment, paasv1.AdapterApplyDeployment, paasv1.AdapterObserveDeployment, paasv1.AdapterStopDeployment, paasv1.AdapterRollbackDeployment, paasv1.AdapterReconcileRoutes, paasv1.AdapterObserveRoutes, paasv1.AdapterDeleteRoutes),
-		"AdapterResultState":          stringsOf(paasv1.AdapterResultSucceeded, paasv1.AdapterResultInProgress, paasv1.AdapterResultFailed, paasv1.AdapterResultUnknown),
-		"AdapterErrorClass":           stringsOf(paasv1.AdapterErrorValidation, paasv1.AdapterErrorConflict, paasv1.AdapterErrorPermissionDenied, paasv1.AdapterErrorQuotaExceeded, paasv1.AdapterErrorRateLimited, paasv1.AdapterErrorTransient, paasv1.AdapterErrorUnavailable, paasv1.AdapterErrorTimeout, paasv1.AdapterErrorNotFound, paasv1.AdapterErrorUnknownOutcome, paasv1.AdapterErrorInternal),
-		"ArtifactKind":                stringsOf(paasv1.ArtifactOCIImage, paasv1.ArtifactOCIArtifact, paasv1.ArtifactReleaseBundle),
-		"InputKind":                   stringsOf(paasv1.InputConfiguration, paasv1.InputSecret),
-		"InjectionMode":               stringsOf(paasv1.InjectionEnvironment, paasv1.InjectionFile),
-		"EndpointProtocol":            stringsOf(paasv1.EndpointHTTP, paasv1.EndpointGRPC, paasv1.EndpointTCP),
-		"EndpointVisibility":          stringsOf(paasv1.EndpointPrivate, paasv1.EndpointPublic),
+		"AuthorityKind":                 stringsOf(paasv1.AuthorityPlatform, paasv1.AuthorityTenant),
+		"TenantStatus":                  stringsOf(paasv1.TenantActive, paasv1.TenantSuspended, paasv1.TenantDeactivated),
+		"ExecutionPoolPhase":            stringsOf(paasv1.ExecutionPoolReady, paasv1.ExecutionPoolDegraded, paasv1.ExecutionPoolUnavailable),
+		"ExecutionTargetHealth":         stringsOf(paasv1.ExecutionTargetHealthUnknown, paasv1.ExecutionTargetHealthReady, paasv1.ExecutionTargetHealthDegraded, paasv1.ExecutionTargetHealthUnavailable),
+		"ExecutionTargetDesiredState":   stringsOf(paasv1.ExecutionTargetActive, paasv1.ExecutionTargetDraining),
+		"IsolationGuarantee":            stringsOfSlice(paasv1.IsolationGuarantees()),
+		"PlacementStrategy":             stringsOf(paasv1.PlacementFirstFit, paasv1.PlacementSpread, paasv1.PlacementBinPack),
+		"PlacementOutcome":              stringsOf(paasv1.PlacementScheduled, paasv1.PlacementUnschedulable),
+		"DeploymentDesiredState":        stringsOf(paasv1.DeploymentDesiredRunning, paasv1.DeploymentDesiredStopped),
+		"DeploymentPhase":               stringsOfSlice(paasv1.DeploymentPhases()),
+		"OperationAction":               stringsOfSlice(paasv1.OperationActions()),
+		"OperationState":                stringsOfSlice(paasv1.OperationStates()),
+		"EvidenceType":                  stringsOf(paasv1.EvidencePolicyDecision, paasv1.EvidencePlacementDecision, paasv1.EvidenceAdapterCommand, paasv1.EvidenceAdapterResult, paasv1.EvidenceObservation, paasv1.EvidenceVerification, paasv1.EvidenceAuditDispatch),
+		"EvidenceSeverity":              stringsOf(paasv1.EvidenceInfo, paasv1.EvidenceWarning, paasv1.EvidenceError),
+		"SubjectType":                   stringsOf(paasv1.SubjectUser, paasv1.SubjectServiceAccount, paasv1.SubjectAgent, paasv1.SubjectSystemUser),
+		"ReadinessState":                stringsOf(paasv1.ReadinessReady, paasv1.ReadinessNotReady),
+		"InstallationVerificationState": stringsOf(paasv1.InstallationVerificationPending, paasv1.InstallationVerificationReady, paasv1.InstallationVerificationFailed),
+		"ErrorCode":                     stringsOfSlice(paasv1.ErrorCodes()),
+		"AdapterKind":                   stringsOf(paasv1.AdapterInfrastructure, paasv1.AdapterDeploymentExecutor, paasv1.AdapterGateway),
+		"AdapterAction":                 stringsOf(paasv1.AdapterCapabilities, paasv1.AdapterInspectExecutionTarget, paasv1.AdapterObserveExecutionTarget, paasv1.AdapterValidateDeployment, paasv1.AdapterApplyDeployment, paasv1.AdapterObserveDeployment, paasv1.AdapterStopDeployment, paasv1.AdapterRollbackDeployment, paasv1.AdapterReconcileRoutes, paasv1.AdapterObserveRoutes, paasv1.AdapterDeleteRoutes),
+		"AdapterResultState":            stringsOf(paasv1.AdapterResultSucceeded, paasv1.AdapterResultInProgress, paasv1.AdapterResultFailed, paasv1.AdapterResultUnknown),
+		"AdapterErrorClass":             stringsOf(paasv1.AdapterErrorValidation, paasv1.AdapterErrorConflict, paasv1.AdapterErrorPermissionDenied, paasv1.AdapterErrorQuotaExceeded, paasv1.AdapterErrorRateLimited, paasv1.AdapterErrorTransient, paasv1.AdapterErrorUnavailable, paasv1.AdapterErrorTimeout, paasv1.AdapterErrorNotFound, paasv1.AdapterErrorUnknownOutcome, paasv1.AdapterErrorInternal),
+		"ArtifactKind":                  stringsOf(paasv1.ArtifactOCIImage, paasv1.ArtifactOCIArtifact, paasv1.ArtifactReleaseBundle),
+		"InputKind":                     stringsOf(paasv1.InputConfiguration, paasv1.InputSecret),
+		"InjectionMode":                 stringsOf(paasv1.InjectionEnvironment, paasv1.InjectionFile),
+		"EndpointProtocol":              stringsOf(paasv1.EndpointHTTP, paasv1.EndpointGRPC, paasv1.EndpointTCP),
+		"EndpointVisibility":            stringsOf(paasv1.EndpointPrivate, paasv1.EndpointPublic),
 	}
 }
 
@@ -366,6 +396,7 @@ func structContracts() map[string]reflect.Type {
 		paasv1.ApplicationRevision{}, paasv1.CreateApplicationRevisionRequest{}, paasv1.DeploymentComponent{}, paasv1.DeploymentSpec{},
 		paasv1.DeploymentStatus{}, paasv1.Deployment{}, paasv1.CreateDeploymentRequest{}, paasv1.RollbackDeploymentRequest{},
 		paasv1.DeploymentGeneration{}, paasv1.SubjectRef{}, paasv1.ResourceRef{}, paasv1.FieldViolation{}, paasv1.Readiness{},
+		paasv1.VerifyInstallationRequest{}, paasv1.InstallationVerification{},
 		paasv1.Problem{}, paasv1.Operation{}, paasv1.Evidence{}, paasv1.AdapterCapabilitiesContract{},
 		paasv1.AdapterCommandEnvelope{}, paasv1.InspectExecutionTargetRequest{}, paasv1.ObserveExecutionTargetRequest{},
 		paasv1.DeploymentExecutionRequest{}, paasv1.ObserveDeploymentRequest{}, paasv1.DeploymentEndpointObservation{},
@@ -488,7 +519,7 @@ func applySemanticOverlays(schemas map[string]any) {
 		"ExecutionPool": "ExecutionPool", "ExecutionTarget": "ExecutionTarget",
 		"PlacementPolicy": "PlacementPolicy", "PlacementDecision": "PlacementDecision",
 		"Operation": "Operation", "Evidence": "Evidence",
-		"Readiness": "Readiness",
+		"Readiness": "Readiness", "InstallationVerification": "InstallationVerification",
 	}
 	for name, kind := range resourceKinds {
 		properties := object(schemas[name])["properties"].(schema)
@@ -543,6 +574,7 @@ func applySemanticOverlays(schemas map[string]any) {
 	setIntegerMinimum(schemas, "DeploymentObservation", "generation", 1)
 	setIntegerMinimum(schemas, "RollbackDeploymentRequest", "sourceGeneration", 1)
 	setIntegerMinimum(schemas, "Readiness", "schemaVersion", 1)
+	setIntegerMinimum(schemas, "InstallationVerification", "generation", 1)
 
 	componentBinding := object(schemas["ComponentBinding"])
 	componentBinding["oneOf"] = []any{

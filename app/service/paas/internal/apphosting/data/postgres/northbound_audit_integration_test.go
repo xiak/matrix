@@ -21,6 +21,7 @@ import (
 	apphttp "github.com/xiak/matrix/app/service/paas/internal/apphosting/service/nethttp"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/auditdispatch"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/verifyinstallation"
 )
 
 func assertAuditPersistenceAndFencing(
@@ -436,6 +437,7 @@ func newIntegrationHTTPHandler(
 	handler, err := apphttp.NewHandler(
 		integrationHTTPAuthorizer{tenantID: tenantID},
 		workflow,
+		integrationInstallationVerifier{},
 		apphttp.Config{
 			NewRequestID: func() (string, error) {
 				sequence++
@@ -454,6 +456,15 @@ func newIntegrationHTTPHandler(
 		t.Fatalf("create northbound HTTP handler: %v", err)
 	}
 	return handler
+}
+
+type integrationInstallationVerifier struct{}
+
+func (integrationInstallationVerifier) VerifyInstallation(
+	context.Context,
+	verifyinstallation.Command,
+) (paasv1.InstallationVerification, error) {
+	return paasv1.InstallationVerification{}, errors.New("unexpected installation verification")
 }
 
 func doIntegrationHTTP[T any](

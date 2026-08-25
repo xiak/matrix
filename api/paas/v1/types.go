@@ -324,6 +324,29 @@ type Readiness struct {
 	CheckedAt     time.Time      `json:"checkedAt"`
 }
 
+// VerifyInstallationRequest selects only the installation/release already
+// bound into the running PaaS process by the authenticated offline release.
+// Artifact, workload, configuration, placement, and provider controls are not
+// caller input.
+type VerifyInstallationRequest struct {
+	InstallationID string `json:"installationId"`
+	ReleaseID      string `json:"releaseId"`
+}
+
+type InstallationVerification struct {
+	APIVersion      string                        `json:"apiVersion"`
+	Kind            string                        `json:"kind"`
+	InstallationID  string                        `json:"installationId"`
+	ReleaseID       string                        `json:"releaseId"`
+	State           InstallationVerificationState `json:"state"`
+	DeploymentID    ResourceID                    `json:"deploymentId"`
+	Generation      uint64                        `json:"generation"`
+	OperationID     OperationID                   `json:"operationId"`
+	OperationState  OperationState                `json:"operationState"`
+	DeploymentPhase DeploymentPhase               `json:"deploymentPhase"`
+	CheckedAt       time.Time                     `json:"checkedAt"`
+}
+
 type Problem struct {
 	Type       string           `json:"type"`
 	Title      string           `json:"title"`

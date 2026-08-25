@@ -27,14 +27,16 @@ import (
 )
 
 const (
-	auditHTTPPostgresDSN  = "MATRIX_AUDIT_HTTP_POSTGRES_TEST_DSN"
-	auditHTTPTestRole     = "matrix_audit_http_test_runtime"
-	auditHTTPTestPassword = "matrix-audit-http-test-only"
-	producerCredentialA   = "mx1.AuditHTTPProducerCredentialA000000000000001"
-	producerCredentialB   = "mx1.AuditHTTPProducerCredentialB000000000000001"
-	readerCredentialA     = "mx1.AuditHTTPReaderCredentialA0000000000000001"
-	readerCredentialB     = "mx1.AuditHTTPReaderCredentialB0000000000000001"
-	deniedCredential      = "mx1.AuditHTTPDeniedCredential00000000000000001"
+	auditHTTPPostgresDSN   = "MATRIX_AUDIT_HTTP_POSTGRES_TEST_DSN"
+	auditHTTPTestRole      = "matrix_audit_http_test_runtime"
+	auditHTTPTestPassword  = "matrix-audit-http-test-only"
+	producerCredentialA    = "mx1.AuditHTTPProducerCredentialA000000000000001"
+	producerCredentialB    = "mx1.AuditHTTPProducerCredentialB000000000000001"
+	paasProducerCredential = "mx1.AuditHTTPPaaSProducerCredential0000000000001"
+	readerCredentialA      = "mx1.AuditHTTPReaderCredentialA0000000000000001"
+	readerCredentialB      = "mx1.AuditHTTPReaderCredentialB0000000000000001"
+	deniedCredential       = "mx1.AuditHTTPDeniedCredential00000000000000001"
+	verifierCredential     = "mx1.AuditHTTPVerifierCredential0000000000000001"
 )
 
 func TestAuditHTTPPostgresVerticalSlice(t *testing.T) {
@@ -245,6 +247,44 @@ func TestAuditHTTPPostgresVerticalSlice(t *testing.T) {
 		auditv1.QueryRecordsRequest{PageSize: 10},
 		http.StatusForbidden,
 	)
+	installationRequest := auditv1.VerifyInstallationRequest{
+		InstallationID: "mxi-0123456789abcdef0123456789abcdef",
+		OperationID:    "operation-installation-probe",
+		DeploymentID:   "deployment-installation-probe",
+	}
+	pendingInstallation := verifyInstallationAudit(
+		t, handler, verifierCredential, installationRequest, http.StatusOK,
+	)
+	if pendingInstallation.State != auditv1.InstallationVerificationPending {
+		t.Fatalf("pending installation Audit verification=%#v", pendingInstallation)
+	}
+	paasEvent := integrationEvent(
+		"event-installation-probe",
+		"organization-a",
+		auditv1.ActionPaaSDeploymentCreated,
+		auditv1.TargetDeployment,
+		installationRequest.DeploymentID,
+		iam.now,
+	)
+	paasEvent.Actor = auditv1.ActorReference{
+		Type: auditv1.ActorServiceAccount, ID: "service-installation-verifier",
+	}
+	paasEvent.IAMDecisionID = "decision-paas-installation-probe"
+	paasEvent.Result = auditv1.ResultAccepted
+	paasEvent.OperationID = installationRequest.OperationID
+	paasAccepted := ingestAuditEvent(t, handler, paasProducerCredential, paasEvent, http.StatusCreated)
+	if paasAccepted.Record.Sequence == 0 || paasAccepted.Record.Source != auditv1.SourcePaaS {
+		t.Fatalf("PaaS installation Audit record=%#v", paasAccepted.Record)
+	}
+	verifiedInstallation := verifyInstallationAudit(
+		t, handler, verifierCredential, installationRequest, http.StatusOK,
+	)
+	if verifiedInstallation.State != auditv1.InstallationVerificationVerified ||
+		verifiedInstallation.EventID != paasEvent.EventID ||
+		verifiedInstallation.RecordSequence != paasAccepted.Record.Sequence ||
+		verifiedInstallation.RecordHash != paasAccepted.Record.RecordHash {
+		t.Fatalf("verified installation Audit result=%#v", verifiedInstallation)
+	}
 
 	assertAuditFacts(t, ctx, admin)
 	assertAuditRuntimeBoundary(t, ctx, pool)
@@ -254,9 +294,11 @@ func TestAuditHTTPPostgresVerticalSlice(t *testing.T) {
 		admin,
 		producerCredentialA,
 		producerCredentialB,
+		paasProducerCredential,
 		readerCredentialA,
 		readerCredentialB,
 		deniedCredential,
+		verifierCredential,
 	)
 
 	iam.failure = errors.New("native IAM failure contains " + readerCredentialA + " and C:\\secret")
@@ -273,6 +315,35 @@ func TestAuditHTTPPostgresVerticalSlice(t *testing.T) {
 		bytes.Contains(failure.Body.Bytes(), []byte(`C:\secret`)) {
 		t.Fatalf("Audit IAM outage leaked native data: status=%d body=%s", failure.Code, failure.Body.String())
 	}
+}
+
+func verifyInstallationAudit(
+	t *testing.T,
+	handler http.Handler,
+	credential string,
+	request auditv1.VerifyInstallationRequest,
+	status int,
+) auditv1.InstallationVerification {
+	t.Helper()
+	response := performAuditRequest(
+		handler,
+		http.MethodPost,
+		"/v1/installation:verify",
+		credential,
+		mustJSON(t, request),
+	)
+	if response.Code != status {
+		t.Fatalf("installation Audit verification status=%d want=%d body=%s", response.Code, status, response.Body.String())
+	}
+	if status != http.StatusOK {
+		return auditv1.InstallationVerification{}
+	}
+	var verification auditv1.InstallationVerification
+	if err := json.Unmarshal(response.Body.Bytes(), &verification); err != nil ||
+		auditv1.ValidateInstallationVerification(verification) != nil {
+		t.Fatalf("decode installation Audit verification=%#v err=%v", verification, err)
+	}
+	return verification
 }
 
 func integrationEvent(
@@ -471,36 +542,50 @@ func createAuditHTTPRole(t *testing.T, ctx context.Context, admin *pgx.Conn) {
 
 func assertAuditFacts(t *testing.T, ctx context.Context, admin *pgx.Conn) {
 	t.Helper()
-	var tenantA, tenantB, accessA, accessB int
+	var tenantA, tenantB, unexpectedTenants, accessA, accessB, verifierAccess, verifierAccessWithoutDecision int
 	if err := admin.QueryRow(
 		ctx,
 		`SELECT
 			count(*) FILTER (WHERE tenant_id = 'organization-a'),
 			count(*) FILTER (WHERE tenant_id = 'organization-b'),
+			count(*) FILTER (WHERE tenant_id NOT IN ('organization-a', 'organization-b')),
 			count(*) FILTER (
 				WHERE tenant_id = 'organization-a' AND source = 'AUDIT'
 			),
 			count(*) FILTER (
 				WHERE tenant_id = 'organization-b' AND source = 'AUDIT'
+			),
+			count(*) FILTER (
+				WHERE tenant_id = 'organization-a'
+				  AND source = 'AUDIT'
+				  AND event_document->>'action' = $1
+				  AND event_document#>>'{actor,type}' = 'SERVICE_ACCOUNT'
+				  AND event_document#>>'{actor,id}' = 'service-installation-verifier'
+				  AND event_document#>>'{target,id}' = 'installation-verification'
+			),
+			count(*) FILTER (
+				WHERE tenant_id = 'organization-a'
+				  AND source = 'AUDIT'
+				  AND event_document->>'action' = $1
+				  AND event_document#>>'{actor,id}' = 'service-installation-verifier'
+				  AND COALESCE(event_document->>'iamDecisionId', '') = ''
 			)
 		 FROM audit.records`,
-	).Scan(&tenantA, &tenantB, &accessA, &accessB); err != nil {
+		string(auditv1.ActionAuditIntegrityVerified),
+	).Scan(
+		&tenantA, &tenantB, &unexpectedTenants, &accessA, &accessB,
+		&verifierAccess, &verifierAccessWithoutDecision,
+	); err != nil {
 		t.Fatalf("inspect Audit HTTP facts: %v", err)
 	}
-	if tenantA != 6 || tenantB != 2 || accessA != 4 || accessB != 1 {
-		t.Fatalf("Audit facts tenantA=%d tenantB=%d accessA=%d accessB=%d", tenantA, tenantB, accessA, accessB)
-	}
-	var action, decisionID string
-	if err := admin.QueryRow(
-		ctx,
-		`SELECT event_document->>'action', event_document->>'iamDecisionId'
-		   FROM audit.records
-		  WHERE tenant_id = 'organization-a' AND sequence = 6`,
-	).Scan(&action, &decisionID); err != nil {
-		t.Fatalf("inspect Audit verification access fact: %v", err)
-	}
-	if action != string(auditv1.ActionAuditIntegrityVerified) || decisionID == "" {
-		t.Fatalf("Audit verification access action=%q decision=%q", action, decisionID)
+	if tenantA == 0 || tenantB == 0 || unexpectedTenants != 0 ||
+		accessA == 0 || accessB == 0 || verifierAccess != 1 ||
+		verifierAccessWithoutDecision != 0 {
+		t.Fatalf(
+			"Audit facts tenantA=%d tenantB=%d unexpected=%d accessA=%d accessB=%d verifierAccess=%d verifierMissingDecision=%d",
+			tenantA, tenantB, unexpectedTenants, accessA, accessB,
+			verifierAccess, verifierAccessWithoutDecision,
+		)
 	}
 }
 
@@ -573,6 +658,12 @@ func (client *integrationIAM) ServiceIdentity(
 		organizationID = "organization-a"
 	case secretEquals(credential, producerCredentialB):
 		organizationID = "organization-b"
+	case secretEquals(credential, paasProducerCredential):
+		return iamv1.ServiceIdentity{
+			APIVersion: iamv1.APIVersion, Kind: "ServiceIdentity",
+			OrganizationID: "organization-a", PrincipalID: "service-paas",
+			Purpose: iamv1.ServicePaaS,
+		}, nil
 	default:
 		return iamv1.ServiceIdentity{}, auditlog.ErrUnauthenticated
 	}
@@ -619,6 +710,31 @@ func (client *integrationIAM) Authorize(
 		return iamv1.AuthorizationDecision{}, auditlog.ErrUnauthenticated
 	}
 	return decision, nil
+}
+
+func (client *integrationIAM) VerifyInstallation(
+	_ context.Context,
+	credential iamv1.Secret,
+	request iamv1.AuthorizationRequest,
+) (iamv1.AuthorizationDecision, error) {
+	if client.failure != nil {
+		return iamv1.AuthorizationDecision{}, client.failure
+	}
+	if !secretEquals(credential, verifierCredential) {
+		return iamv1.AuthorizationDecision{}, auditlog.ErrUnauthenticated
+	}
+	client.sequence++
+	return iamv1.AuthorizationDecision{
+		APIVersion: iamv1.APIVersion, Kind: "AuthorizationDecision",
+		ID:      iamv1.DecisionID(fmt.Sprintf("decision-http-%d", client.sequence)),
+		Allowed: true, Reason: iamv1.DecisionAllowed,
+		TenantID: "organization-a",
+		Subject: &iamv1.Subject{
+			Type: iamv1.PrincipalServiceAccount, ID: "service-installation-verifier",
+		},
+		Action: request.Action, Resource: request.Resource,
+		RequestID: request.RequestID, DecidedAt: client.now,
+	}, nil
 }
 
 func secretEquals(secret iamv1.Secret, expected string) bool {

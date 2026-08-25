@@ -18,6 +18,7 @@ import (
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/verifyinstallation"
 )
 
 const defaultMaximumBodyBytes = int64(16 * 1024 * 1024)
@@ -56,20 +57,29 @@ type Config struct {
 	Readiness        func(context.Context) (paasv1.Readiness, error)
 }
 
+type InstallationVerifier interface {
+	VerifyInstallation(
+		context.Context,
+		verifyinstallation.Command,
+	) (paasv1.InstallationVerification, error)
+}
+
 type handler struct {
-	authorizer port.Authorizer
-	workflow   Workflow
-	config     Config
-	routes     *http.ServeMux
+	authorizer           port.Authorizer
+	workflow             Workflow
+	installationVerifier InstallationVerifier
+	config               Config
+	routes               *http.ServeMux
 }
 
 func NewHandler(
 	authorizer port.Authorizer,
 	workflow Workflow,
+	installationVerifier InstallationVerifier,
 	config Config,
 ) (http.Handler, error) {
-	if authorizer == nil || workflow == nil {
-		return nil, errors.New("HTTP Authorizer and workflow are required")
+	if authorizer == nil || workflow == nil || installationVerifier == nil {
+		return nil, errors.New("HTTP Authorizer, workflow, and installation verifier are required")
 	}
 	if config.Readiness == nil {
 		return nil, errors.New("HTTP readiness check is required")
@@ -83,7 +93,10 @@ func NewHandler(
 	if config.NewRequestID == nil {
 		config.NewRequestID = newRequestID
 	}
-	value := &handler{authorizer: authorizer, workflow: workflow, config: config}
+	value := &handler{
+		authorizer: authorizer, workflow: workflow,
+		installationVerifier: installationVerifier, config: config,
+	}
 	routes := http.NewServeMux()
 	routes.HandleFunc("GET /ready", value.ready)
 	routes.HandleFunc("POST /v1/applications", value.createApplication)
@@ -100,8 +113,71 @@ func NewHandler(
 	routes.HandleFunc("POST /v1/deployments/{deploymentId}/rollback", value.rollbackDeployment)
 	routes.HandleFunc("GET /v1/deployments/{deploymentId}/generations/{generation}", value.getDeploymentGeneration)
 	routes.HandleFunc("GET /v1/operations/{operationId}", value.getOperation)
+	routes.HandleFunc("POST /v1/installation:verify", value.verifyInstallation)
 	value.routes = routes
 	return value, nil
+}
+
+func (value *handler) verifyInstallation(response http.ResponseWriter, request *http.Request) {
+	requestID, ok := value.beginRequest(response)
+	if !ok {
+		return
+	}
+	if request.URL.RawQuery != "" {
+		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "installation verification accepts no query", false)
+		return
+	}
+	if len(request.Header.Values("Matrix-Subject-Credential")) != 0 {
+		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "installation verification accepts no subject credential", false)
+		return
+	}
+	credential := request.Header.Get("Authorization")
+	if credential == "" {
+		writeProblem(response, requestID, http.StatusUnauthorized, paasv1.ErrorUnauthenticated, "Unauthenticated", "a verifier service credential is required", false)
+		return
+	}
+	body, ok := decodeJSON[paasv1.VerifyInstallationRequest](value, response, request, requestID)
+	if !ok {
+		return
+	}
+	verification, err := value.installationVerifier.VerifyInstallation(
+		request.Context(),
+		verifyinstallation.Command{
+			Credential: credential, RequestID: requestID, Request: body,
+		},
+	)
+	if err != nil {
+		value.writeInstallationVerificationError(response, requestID, err)
+		return
+	}
+	if paasv1.ValidateInstallationVerification(verification) != nil {
+		writeProblem(response, requestID, http.StatusInternalServerError, paasv1.ErrorInternal, "Internal error", "installation verification returned an invalid result", true)
+		return
+	}
+	writeJSON(response, http.StatusOK, verification)
+}
+
+func (*handler) writeInstallationVerificationError(
+	response http.ResponseWriter,
+	requestID string,
+	err error,
+) {
+	switch {
+	case errors.Is(err, port.ErrUnauthenticated):
+		writeProblem(response, requestID, http.StatusUnauthorized, paasv1.ErrorUnauthenticated, "Unauthenticated", "verifier authentication failed", false)
+	case errors.Is(err, port.ErrPermissionDenied):
+		writeProblem(response, requestID, http.StatusForbidden, paasv1.ErrorPermissionDenied, "Permission denied", "IAM denied installation verification", false)
+	case errors.Is(err, port.ErrAuthorizationUnavailable):
+		writeProblem(response, requestID, http.StatusServiceUnavailable, paasv1.ErrorIdentityUnavailable, "Identity unavailable", "IAM installation verification is unavailable", true)
+	case errors.Is(err, verifyinstallation.ErrInvalidArgument):
+		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "installation verification request is invalid", false)
+	case errors.Is(err, verifyinstallation.ErrConflict):
+		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorConflict, "Verification conflict", "installation verification does not match the running release", false)
+	case errors.Is(err, context.DeadlineExceeded):
+		writeProblem(response, requestID, http.StatusGatewayTimeout, paasv1.ErrorDeadlineExceeded, "Deadline exceeded", "installation verification deadline was exceeded", true)
+	default:
+		writeProblem(response, requestID, http.StatusServiceUnavailable, paasv1.ErrorInternal, "PaaS unavailable", "installation verification is unavailable", true)
+	}
 }
 
 func (value *handler) ready(response http.ResponseWriter, request *http.Request) {

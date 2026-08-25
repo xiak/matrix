@@ -115,6 +115,51 @@ func (client *Client) Authorize(
 	return decision, nil
 }
 
+func (client *Client) VerifyInstallation(
+	ctx context.Context,
+	verifierCredential iamv1.Secret,
+	authorization iamv1.AuthorizationRequest,
+) (iamv1.AuthorizationDecision, error) {
+	if client == nil || client.http == nil {
+		return iamv1.AuthorizationDecision{}, auditlog.ErrUnavailable
+	}
+	if ctx == nil || !verifierCredential.Present() ||
+		iamv1.ValidateAuthorizationRequest(authorization) != nil ||
+		authorization.Action != iamv1.ActionInstallationVerify ||
+		authorization.Resource.Kind != iamv1.ResourceInstallation {
+		return iamv1.AuthorizationDecision{}, auditlog.ErrInvalidArgument
+	}
+	body, err := json.Marshal(authorization)
+	if err != nil {
+		return iamv1.AuthorizationDecision{}, auditlog.ErrUnavailable
+	}
+	defer clear(body)
+	response, err := client.http.Do(
+		ctx,
+		http.MethodPost,
+		"/v1/installation:verify",
+		bytes.NewReader(body),
+		"application/json",
+		verifierCredential,
+		iamv1.Secret{},
+	)
+	if err != nil {
+		return iamv1.AuthorizationDecision{}, fmt.Errorf("call IAM authority: %w", auditlog.ErrUnavailable)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return iamv1.AuthorizationDecision{}, statusError(response.StatusCode)
+	}
+	var decision iamv1.AuthorizationDecision
+	if !authorityhttp.ResponseIsJSON(response) || iamv1.DecodeRequest(response.Body, &decision) != nil ||
+		iamv1.ValidateAuthorizationDecision(decision) != nil ||
+		decision.Action != authorization.Action || decision.Resource != authorization.Resource ||
+		decision.RequestID != authorization.RequestID {
+		return iamv1.AuthorizationDecision{}, auditlog.ErrUnavailable
+	}
+	return decision, nil
+}
+
 func statusError(status int) error {
 	switch status {
 	case http.StatusUnauthorized:

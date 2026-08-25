@@ -44,6 +44,10 @@ func buildDocument() object {
 				"type": "http", "scheme": "bearer",
 				"description": "Opaque IAM service credential that determines the Audit event source.",
 			},
+			"InstallationVerifier": object{
+				"type": "http", "scheme": "bearer",
+				"description": "Narrow installation-verifier service credential authorized by IAM installation.verify.",
+			},
 		},
 		Responses: object{
 			"ProblemResponse": object{
@@ -76,6 +80,11 @@ func buildPaths() object {
 			"verifyAuditChain", "Verify a bounded segment of the IAM-derived tenant's chain",
 			"VerifyChainRequest", "ChainVerification", "200",
 			[]any{object{"UserSession": []string{}}},
+		)},
+		"/v1/installation:verify": object{"post": mutationOperation(
+			"verifyInstallationAudit", "Verify the exact fixed PaaS probe Audit fact and chain",
+			"VerifyInstallationRequest", "InstallationVerification", "200",
+			[]any{object{"InstallationVerifier": []string{}}},
 		)},
 	}
 }
@@ -160,31 +169,34 @@ func enumSchemas() map[string][]string {
 		}
 	}
 	return map[string][]string{
-		"Source":            sources,
-		"ActorType":         {string(auditv1.ActorUser), string(auditv1.ActorServiceAccount), string(auditv1.ActorSystem)},
-		"Action":            openapi31.StringValues(auditv1.AllActions()),
-		"TargetKind":        targets,
-		"Result":            results,
-		"IngestionOutcome":  {string(auditv1.IngestionAccepted), string(auditv1.IngestionDuplicate)},
-		"RetentionPolicy":   {string(auditv1.RetentionIndefinite)},
-		"VerificationState": {string(auditv1.VerificationVerified)},
-		"ReadinessState":    {string(auditv1.ReadinessReady), string(auditv1.ReadinessNotReady)},
+		"Source":                        sources,
+		"ActorType":                     {string(auditv1.ActorUser), string(auditv1.ActorServiceAccount), string(auditv1.ActorSystem)},
+		"Action":                        openapi31.StringValues(auditv1.AllActions()),
+		"TargetKind":                    targets,
+		"Result":                        results,
+		"IngestionOutcome":              {string(auditv1.IngestionAccepted), string(auditv1.IngestionDuplicate)},
+		"RetentionPolicy":               {string(auditv1.RetentionIndefinite)},
+		"VerificationState":             {string(auditv1.VerificationVerified)},
+		"ReadinessState":                {string(auditv1.ReadinessReady), string(auditv1.ReadinessNotReady)},
+		"InstallationVerificationState": {string(auditv1.InstallationVerificationPending), string(auditv1.InstallationVerificationVerified)},
 	}
 }
 
 func structContracts() map[string]reflect.Type {
 	return map[string]reflect.Type{
-		"ActorReference":      openapi31.StructType[auditv1.ActorReference](),
-		"TargetReference":     openapi31.StructType[auditv1.TargetReference](),
-		"Event":               openapi31.StructType[auditv1.Event](),
-		"AuditRecord":         openapi31.StructType[auditv1.AuditRecord](),
-		"IngestionResult":     openapi31.StructType[auditv1.IngestionResult](),
-		"QueryRecordsRequest": openapi31.StructType[auditv1.QueryRecordsRequest](),
-		"RecordPage":          openapi31.StructType[auditv1.RecordPage](),
-		"VerifyChainRequest":  openapi31.StructType[auditv1.VerifyChainRequest](),
-		"ChainVerification":   openapi31.StructType[auditv1.ChainVerification](),
-		"Readiness":           openapi31.StructType[auditv1.Readiness](),
-		"Problem":             openapi31.StructType[auditv1.Problem](),
+		"ActorReference":            openapi31.StructType[auditv1.ActorReference](),
+		"TargetReference":           openapi31.StructType[auditv1.TargetReference](),
+		"Event":                     openapi31.StructType[auditv1.Event](),
+		"AuditRecord":               openapi31.StructType[auditv1.AuditRecord](),
+		"IngestionResult":           openapi31.StructType[auditv1.IngestionResult](),
+		"QueryRecordsRequest":       openapi31.StructType[auditv1.QueryRecordsRequest](),
+		"RecordPage":                openapi31.StructType[auditv1.RecordPage](),
+		"VerifyChainRequest":        openapi31.StructType[auditv1.VerifyChainRequest](),
+		"ChainVerification":         openapi31.StructType[auditv1.ChainVerification](),
+		"VerifyInstallationRequest": openapi31.StructType[auditv1.VerifyInstallationRequest](),
+		"InstallationVerification":  openapi31.StructType[auditv1.InstallationVerification](),
+		"Readiness":                 openapi31.StructType[auditv1.Readiness](),
+		"Problem":                   openapi31.StructType[auditv1.Problem](),
 	}
 }
 
@@ -207,7 +219,7 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 	case "maximumRecords", "recordCount":
 		base["minimum"] = 1
 		base["maximum"] = auditv1.MaxVerifyRecords
-	case "sequence", "fromSequence", "toSequence", "nextSequence", "schemaVersion":
+	case "sequence", "recordSequence", "fromSequence", "toSequence", "nextSequence", "schemaVersion":
 		base["minimum"] = 1
 	case "status":
 		if owner == "Problem" {
@@ -227,6 +239,7 @@ func applySemanticOverlays(schemas object) {
 		"Event": "AuditEvent", "AuditRecord": "AuditRecord",
 		"IngestionResult": "IngestionResult", "RecordPage": "AuditRecordPage",
 		"ChainVerification": "ChainVerification", "Readiness": "Readiness",
+		"InstallationVerification": "InstallationVerification",
 	}
 	for owner, kind := range kinds {
 		properties := schemas[owner].(object)["properties"].(object)
@@ -250,6 +263,29 @@ func applySemanticOverlays(schemas object) {
 		object{
 			"if":   object{"properties": object{"complete": object{"const": false}}, "required": []string{"complete"}},
 			"then": object{"required": []string{"nextSequence"}},
+		},
+	}
+
+	installation := schemas["InstallationVerification"].(object)
+	installation["allOf"] = []any{
+		object{
+			"if": object{
+				"properties": object{"state": object{"const": string(auditv1.InstallationVerificationPending)}},
+				"required":   []string{"state"},
+			},
+			"then": object{"properties": object{
+				"eventId": false, "iamDecisionId": false, "recordSequence": false,
+				"fromSequence": false, "toSequence": false, "recordHash": false,
+			}},
+		},
+		object{
+			"if": object{
+				"properties": object{"state": object{"const": string(auditv1.InstallationVerificationVerified)}},
+				"required":   []string{"state"},
+			},
+			"then": object{"required": []string{
+				"eventId", "iamDecisionId", "recordSequence", "fromSequence", "toSequence", "recordHash",
+			}},
 		},
 	}
 }

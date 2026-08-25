@@ -231,6 +231,48 @@ func ValidateChainVerification(value ChainVerification) error {
 	return errors.Join(problems...)
 }
 
+func ValidateVerifyInstallationRequest(value VerifyInstallationRequest) error {
+	return errors.Join(
+		ValidateID("installationId", value.InstallationID),
+		ValidateID("operationId", string(value.OperationID)),
+		ValidateID("deploymentId", value.DeploymentID),
+	)
+}
+
+func ValidateInstallationVerification(value InstallationVerification) error {
+	var problems []error
+	if value.APIVersion != APIVersion || value.Kind != "InstallationVerification" {
+		problems = append(problems, errors.New("installation verification type metadata is invalid"))
+	}
+	problems = append(problems,
+		ValidateID("installationId", value.InstallationID),
+		ValidateID("operationId", string(value.OperationID)),
+		ValidateID("deploymentId", value.DeploymentID),
+		validateTimestamp("checkedAt", value.CheckedAt),
+	)
+	switch value.State {
+	case InstallationVerificationPending:
+		if value.EventID != "" || value.IAMDecisionID != "" ||
+			value.RecordSequence != 0 || value.FromSequence != 0 ||
+			value.ToSequence != 0 || value.RecordHash != "" {
+			problems = append(problems, errors.New("pending installation verification cannot claim an Audit record"))
+		}
+	case InstallationVerificationVerified:
+		problems = append(problems,
+			ValidateID("eventId", string(value.EventID)),
+			ValidateID("iamDecisionId", string(value.IAMDecisionID)),
+			ValidateDigest("recordHash", value.RecordHash),
+		)
+		if value.RecordSequence == 0 || value.FromSequence == 0 ||
+			value.ToSequence != value.RecordSequence || value.RecordSequence < value.FromSequence {
+			problems = append(problems, errors.New("verified installation Audit range is invalid"))
+		}
+	default:
+		problems = append(problems, errors.New("installation verification state is invalid"))
+	}
+	return errors.Join(problems...)
+}
+
 func ValidateReadiness(value Readiness) error {
 	var problems []error
 	if value.APIVersion != APIVersion || value.Kind != "Readiness" {
