@@ -301,16 +301,27 @@ not archive layout, Compose text, SQL text, command call order, or line counts.
   then refreshes the observation every minute. Readiness fails closed on a
   stale, future, degraded, identity-changed, or structurally drifted profile;
   a degraded target advertises no Compose isolation.
-- The same worktree passed generation drift, full unit tests, vet, race,
+- Commit `0a0ba1f` adds observation-before-effect and convergence for the fixed
+  platform Compose project. It reauthenticates staged release content, pins
+  the local Docker socket and Compose inputs, verifies exact images and
+  installation ownership, rejects isolation/resource/mount/network/port
+  drift, converges recoverable configuration drift without pull or build, and
+  preserves unknown outcomes when a started effect cannot be observed.
+- The accepted implementation through `3323741` passed generation drift, full
+  unit tests, vet, race,
   ten-run repetition, architecture boundaries, placement fuzz, four-target
   builds, Markdown links, donor-dependency and tenant-authority scans, and
   repository-diff checks. The `8d6bed4` slice additionally passed full unit
   tests, vet, Linux/amd64 and Darwin/arm64 builds, and repository-diff checks.
   The exact `3323741` worktree additionally passed real PostgreSQL 18 profile
   creation/refresh, a network-disabled real Docker Engine-host probe, ten-run
-  repetition, placement fuzz, and Windows/Linux/Darwin builds. Gate B/C real
-  platform start and verification, installation, service integration,
-  upgrade, rollback, recovery, and clean offline E2E remain unaccepted.
+  repetition, placement fuzz, and Windows/Linux/Darwin builds. The exact
+  `0a0ba1f` worktree passed generation drift, full unit/vet/race and
+  architecture gates, relevant ten-run repetition, network-disabled
+  Linux/amd64 platform start behavior ten times, real Docker normalization
+  probes, Windows/Linux/Darwin builds, and repository-diff checks. Gate B/C
+  full platform verification, installation, service integration, upgrade,
+  rollback, recovery, and clean offline E2E remain unaccepted.
 
 ## Deferred
 

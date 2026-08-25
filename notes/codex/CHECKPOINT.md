@@ -137,8 +137,15 @@
   no isolation while degraded. Its exact committed worktree passed generation
   drift, full unit/vet/race, ten-run repetition, placement fuzz, four-target
   builds, clean PostgreSQL 18, and a real network-disabled Docker Engine-host
-  probe. Compose start/verification/cleanup effects, the concrete provider
-  runner, `mx` wiring, and platform image assembly remain unwired.
+  probe. Commit `0a0ba1f` adds ownership-safe observation and convergence of
+  the fixed Compose project, exact runtime/isolation/resource checks, a pinned
+  local Docker/Compose environment, offline-only start, replay, recoverable
+  config-drift convergence, and unknown-outcome classification. Its exact
+  worktree passed generation, full unit/vet/race, ten-run repetition,
+  network-disabled Linux/amd64 start behavior ten times, real Docker
+  normalization probes, and four-target builds. Full platform verification
+  and cleanup, the concrete provider runner, `mx` wiring, and platform image
+  assembly remain unwired.
 - FEAT-006 Gate A and Gate B are Accepted. Target design and fixed-donor
   adoption remain `506f6d7` and `932252e`; the accepted authority contracts,
   pure behavior, and separate IAM/Audit PostgreSQL owners, migrators, runtime
@@ -170,9 +177,9 @@
 
 ## Next concrete work
 
-1. Complete Compose start/observation, full IAM/Audit/application
-   verification, and ownership-safe install cleanup; then complete the
-   concrete provider runner and wire it behind `mx`.
+1. Complete full IAM/Audit/application verification and ownership-safe install
+   cleanup; then complete the concrete provider runner and wire it behind
+   `mx`.
 2. Assemble the real IAM, Audit, PaaS, dispatcher, APISIX, UI, PostgreSQL, and
    verification images plus signed releases A/B from exact release content.
 3. Prove the external-network-disabled Compose
