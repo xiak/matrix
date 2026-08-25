@@ -294,28 +294,79 @@ BEGIN
 END
 $function$;
 
-CREATE OR REPLACE FUNCTION audit.lookup_event(
+CREATE OR REPLACE FUNCTION audit.readiness()
+RETURNS TABLE (ready boolean, schema_version bigint, checked_at timestamptz)
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+    SELECT
+        to_regclass('audit.tenant_heads') IS NOT NULL
+        AND to_regclass('audit.records') IS NOT NULL
+        AND to_regclass('audit.event_registry') IS NOT NULL,
+        1::bigint,
+        transaction_timestamp()
+$function$;
+
+CREATE OR REPLACE FUNCTION audit.lock_event(
     submitted_source text,
     submitted_event_id text
 )
-RETURNS TABLE (
-    tenant_id text,
-    sequence bigint,
-    canonical_document text,
-    content_digest text,
-    record_hash text
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+BEGIN
+    IF submitted_source NOT IN ('IAM', 'PAAS', 'AUDIT')
+       OR COALESCE(submitted_event_id, '') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'Audit event identity is invalid';
+    END IF;
+    PERFORM pg_advisory_xact_lock(
+        hashtextextended(
+            'matrix.audit.event.v1:' || submitted_source || ':' || submitted_event_id,
+            0
+        )
+    );
+END
+$function$;
+
+DROP FUNCTION IF EXISTS audit.lookup_event(text, text);
+CREATE OR REPLACE FUNCTION audit.lookup_record(
+    submitted_source text,
+    submitted_event_id text
 )
-LANGUAGE sql
+RETURNS SETOF audit.records
+LANGUAGE plpgsql
 SECURITY DEFINER
 STABLE
 SET search_path = pg_catalog, pg_temp
 AS $function$
-    SELECT registry.tenant_id, registry.sequence,
-           registry.canonical_document, registry.content_digest,
-           registry.record_hash
+DECLARE
+    stored_tenant_id text;
+    stored_sequence bigint;
+BEGIN
+    IF submitted_source NOT IN ('IAM', 'PAAS', 'AUDIT')
+       OR COALESCE(submitted_event_id, '') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'Audit event identity is invalid';
+    END IF;
+    SELECT registry.tenant_id, registry.sequence
+      INTO stored_tenant_id, stored_sequence
       FROM audit.event_registry AS registry
      WHERE registry.source = submitted_source
-       AND registry.event_id = submitted_event_id
+       AND registry.event_id = submitted_event_id;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+    PERFORM set_config('matrix.audit_tenant_id', stored_tenant_id, true);
+    RETURN QUERY
+    SELECT record.*
+      FROM audit.records AS record
+     WHERE record.tenant_id = stored_tenant_id
+       AND record.sequence = stored_sequence;
+END
 $function$;
 
 CREATE OR REPLACE FUNCTION audit.calculate_record_hash(
@@ -518,10 +569,16 @@ BEGIN
 END
 $function$;
 
+DROP FUNCTION IF EXISTS audit.read_records(text, bigint, integer);
 CREATE OR REPLACE FUNCTION audit.read_records(
     submitted_tenant_id text,
     submitted_before_sequence bigint,
-    submitted_page_size integer
+    submitted_page_size integer,
+    submitted_from timestamptz,
+    submitted_to timestamptz,
+    submitted_action text,
+    submitted_actor_type text,
+    submitted_actor_id text
 )
 RETURNS SETOF audit.records
 LANGUAGE plpgsql
@@ -532,9 +589,29 @@ BEGIN
     IF COALESCE(submitted_tenant_id, '') COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR submitted_before_sequence IS NULL
-       OR submitted_before_sequence NOT BETWEEN 1 AND 9007199254740991
+       OR submitted_before_sequence NOT BETWEEN 1 AND 9007199254740992
        OR submitted_page_size IS NULL
-       OR submitted_page_size NOT BETWEEN 1 AND 200 THEN
+       OR submitted_page_size NOT BETWEEN 1 AND 201
+       OR (submitted_from IS NOT NULL AND submitted_to IS NOT NULL
+            AND submitted_to < submitted_from)
+       OR (submitted_action IS NOT NULL AND submitted_action NOT IN (
+            'iam.bootstrap.applied', 'iam.session.issued',
+            'iam.session.revoked', 'iam.password.changed',
+            'iam.principal.created', 'iam.role-binding.put',
+            'iam.role-binding.revoked', 'iam.authorization.decided',
+            'paas.application.created', 'paas.configuration.created',
+            'paas.configuration-revision.created',
+            'paas.application-revision.created', 'paas.deployment.created',
+            'paas.deployment.updated', 'paas.deployment.stopped',
+            'paas.deployment.rolled-back', 'audit.records.read',
+            'audit.integrity.verified'
+       ))
+       OR ((submitted_actor_type IS NULL) <> (submitted_actor_id IS NULL))
+       OR (submitted_actor_type IS NOT NULL AND submitted_actor_type NOT IN (
+            'USER', 'SERVICE_ACCOUNT', 'SYSTEM'
+       ))
+       OR (submitted_actor_id IS NOT NULL AND submitted_actor_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$') THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'Audit query input is invalid';
     END IF;
     PERFORM set_config('matrix.audit_tenant_id', submitted_tenant_id, true);
@@ -543,8 +620,84 @@ BEGIN
       FROM audit.records AS record
      WHERE record.tenant_id = submitted_tenant_id
        AND record.sequence < submitted_before_sequence
+       AND (
+            submitted_from IS NULL
+            OR (record.event_document->>'occurredAt')::timestamptz >= submitted_from
+       )
+       AND (
+            submitted_to IS NULL
+            OR (record.event_document->>'occurredAt')::timestamptz <= submitted_to
+       )
+       AND (
+            submitted_action IS NULL
+            OR record.event_document->>'action' = submitted_action
+       )
+       AND (
+            submitted_actor_type IS NULL
+            OR (
+                record.event_document#>>'{actor,type}' = submitted_actor_type
+                AND record.event_document#>>'{actor,id}' = submitted_actor_id
+            )
+       )
      ORDER BY record.sequence DESC
      LIMIT submitted_page_size;
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION audit.read_checkpoint(
+    submitted_tenant_id text,
+    submitted_sequence bigint
+)
+RETURNS TABLE (record_hash text)
+LANGUAGE plpgsql
+SECURITY DEFINER
+STABLE
+SET search_path = pg_catalog, pg_temp
+AS $function$
+BEGIN
+    IF COALESCE(submitted_tenant_id, '') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_sequence IS NULL
+       OR submitted_sequence NOT BETWEEN 1 AND 9007199254740991 THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'Audit checkpoint input is invalid';
+    END IF;
+    PERFORM set_config('matrix.audit_tenant_id', submitted_tenant_id, true);
+    RETURN QUERY
+    SELECT record.record_hash
+      FROM audit.records AS record
+     WHERE record.tenant_id = submitted_tenant_id
+       AND record.sequence = submitted_sequence;
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION audit.read_chain(
+    submitted_tenant_id text,
+    submitted_from_sequence bigint,
+    submitted_maximum_records integer
+)
+RETURNS SETOF audit.records
+LANGUAGE plpgsql
+SECURITY DEFINER
+STABLE
+SET search_path = pg_catalog, pg_temp
+AS $function$
+BEGIN
+    IF COALESCE(submitted_tenant_id, '') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_from_sequence IS NULL
+       OR submitted_from_sequence NOT BETWEEN 1 AND 9007199254740991
+       OR submitted_maximum_records IS NULL
+       OR submitted_maximum_records NOT BETWEEN 1 AND 10001 THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'Audit chain input is invalid';
+    END IF;
+    PERFORM set_config('matrix.audit_tenant_id', submitted_tenant_id, true);
+    RETURN QUERY
+    SELECT record.*
+      FROM audit.records AS record
+     WHERE record.tenant_id = submitted_tenant_id
+       AND record.sequence >= submitted_from_sequence
+     ORDER BY record.sequence
+     LIMIT submitted_maximum_records;
 END
 $function$;
 
@@ -553,14 +706,24 @@ REVOKE ALL ON ALL FUNCTIONS IN SCHEMA audit FROM PUBLIC;
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA audit FROM matrix_audit_runtime;
 REVOKE ALL ON SCHEMA audit FROM matrix_audit_runtime;
 GRANT USAGE ON SCHEMA audit TO matrix_audit_runtime;
-GRANT EXECUTE ON FUNCTION audit.lookup_event(text, text)
+GRANT EXECUTE ON FUNCTION audit.readiness()
+    TO matrix_audit_runtime;
+GRANT EXECUTE ON FUNCTION audit.lock_event(text, text)
+    TO matrix_audit_runtime;
+GRANT EXECUTE ON FUNCTION audit.lookup_record(text, text)
     TO matrix_audit_runtime;
 GRANT EXECUTE ON FUNCTION audit.lock_tenant_head(text)
     TO matrix_audit_runtime;
 GRANT EXECUTE ON FUNCTION audit.append_record(
     text, text, text, bigint, jsonb, text, text, text, text, timestamptz
 ) TO matrix_audit_runtime;
-GRANT EXECUTE ON FUNCTION audit.read_records(text, bigint, integer)
+GRANT EXECUTE ON FUNCTION audit.read_records(
+    text, bigint, integer, timestamptz, timestamptz, text, text, text
+)
+    TO matrix_audit_runtime;
+GRANT EXECUTE ON FUNCTION audit.read_checkpoint(text, bigint)
+    TO matrix_audit_runtime;
+GRANT EXECUTE ON FUNCTION audit.read_chain(text, bigint, integer)
     TO matrix_audit_runtime;
 
 ALTER DEFAULT PRIVILEGES FOR ROLE matrix_audit_owner IN SCHEMA audit

@@ -542,7 +542,7 @@ func assertAuthorityDatabaseAttackSurface(
 	assertAuthorityPostgresCode(t, err, "42501")
 	err = iamAPI.QueryRow(
 		ctx,
-		"SELECT count(*) FROM audit.lookup_event('IAM', 'event-never')",
+		"SELECT count(*) FROM audit.lookup_record('IAM', 'event-never')",
 	).Scan(&count)
 	assertAuthorityPostgresCode(t, err, "42501")
 
@@ -1117,7 +1117,7 @@ func readAuditRecords(
 		`SELECT tenant_id, sequence, source, event_id, event_document,
 			   canonical_document, content_digest, previous_hash, record_hash,
 			   ingested_at, retention
-		  FROM audit.read_records($1, $2, $3)`,
+		  FROM audit.read_records($1, $2, $3, NULL, NULL, NULL, NULL, NULL)`,
 		string(tenantID),
 		authorityMaximumSequence,
 		200,

@@ -107,8 +107,15 @@ BEGIN
         RAISE EXCEPTION 'Audit schema contains arbitrary or sensitive payload columns';
     END IF;
 
-    IF NOT has_function_privilege(
-            'matrix_audit_runtime', 'audit.lookup_event(text,text)', 'EXECUTE'
+    IF to_regprocedure('audit.lookup_event(text,text)') IS NOT NULL
+       OR NOT has_function_privilege(
+            'matrix_audit_runtime', 'audit.readiness()', 'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_audit_runtime', 'audit.lock_event(text,text)', 'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_audit_runtime', 'audit.lookup_record(text,text)', 'EXECUTE'
        )
        OR NOT has_function_privilege(
             'matrix_audit_runtime', 'audit.lock_tenant_head(text)', 'EXECUTE'
@@ -119,7 +126,15 @@ BEGIN
             'EXECUTE'
        )
        OR NOT has_function_privilege(
-            'matrix_audit_runtime', 'audit.read_records(text,bigint,integer)', 'EXECUTE'
+            'matrix_audit_runtime',
+            'audit.read_records(text,bigint,integer,timestamptz,timestamptz,text,text,text)',
+            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_audit_runtime', 'audit.read_checkpoint(text,bigint)', 'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_audit_runtime', 'audit.read_chain(text,bigint,integer)', 'EXECUTE'
        )
        OR has_function_privilege(
             'matrix_audit_runtime', 'audit.assert_event(text,text,text,jsonb)', 'EXECUTE'

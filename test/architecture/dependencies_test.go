@@ -204,48 +204,53 @@ func TestAuthorityDomainsKeepPureDependencies(t *testing.T) {
 	}
 }
 
-func TestIAMUsesPragmaticDDDDependencies(t *testing.T) {
+func TestAuthoritiesUsePragmaticDDDDependencies(t *testing.T) {
 	root := repositoryRoot(t)
-	iamRoot := filepath.Join(root, "app", "service", "iam", "internal")
-	err := filepath.WalkDir(iamRoot, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() || filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		relative, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		relative = filepath.ToSlash(relative)
-		file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
-		if err != nil {
-			return err
-		}
-		for _, declaration := range file.Imports {
-			imported, err := strconv.Unquote(declaration.Path.Value)
+	for _, boundedContext := range []string{"iam", "audit"} {
+		t.Run(boundedContext, func(t *testing.T) {
+			contextRoot := filepath.Join(root, "app", "service", boundedContext, "internal")
+			err := filepath.WalkDir(contextRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+				if walkErr != nil {
+					return walkErr
+				}
+				if entry.IsDir() || filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
+					return nil
+				}
+				relative, err := filepath.Rel(root, path)
+				if err != nil {
+					return err
+				}
+				relative = filepath.ToSlash(relative)
+				file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+				if err != nil {
+					return err
+				}
+				contextPrefix := modulePath + "app/service/" + boundedContext + "/internal/"
+				sourcePrefix := "app/service/" + boundedContext + "/internal/"
+				for _, declaration := range file.Imports {
+					imported, err := strconv.Unquote(declaration.Path.Value)
+					if err != nil {
+						return err
+					}
+					switch {
+					case strings.HasPrefix(relative, sourcePrefix+"usecase/") &&
+						(strings.HasPrefix(imported, contextPrefix+"data/") ||
+							strings.HasPrefix(imported, contextPrefix+"service/")):
+						t.Errorf("%s: authority use case cannot import %q", relative, imported)
+					case strings.HasPrefix(relative, sourcePrefix+"service/") &&
+						strings.HasPrefix(imported, contextPrefix+"data/"):
+						t.Errorf("%s: authority transport cannot import data adapter %q", relative, imported)
+					case strings.HasPrefix(relative, sourcePrefix+"data/") &&
+						strings.HasPrefix(imported, contextPrefix+"service/"):
+						t.Errorf("%s: authority data adapter cannot import transport %q", relative, imported)
+					}
+				}
+				return nil
+			})
 			if err != nil {
-				return err
+				t.Fatalf("inspect %s DDD dependencies: %v", boundedContext, err)
 			}
-			const contextPrefix = modulePath + "app/service/iam/internal/"
-			switch {
-			case strings.HasPrefix(relative, "app/service/iam/internal/usecase/") &&
-				(strings.HasPrefix(imported, contextPrefix+"data/") ||
-					strings.HasPrefix(imported, contextPrefix+"service/")):
-				t.Errorf("%s: IAM use case cannot import %q", relative, imported)
-			case strings.HasPrefix(relative, "app/service/iam/internal/service/") &&
-				strings.HasPrefix(imported, contextPrefix+"data/"):
-				t.Errorf("%s: IAM transport cannot import data adapter %q", relative, imported)
-			case strings.HasPrefix(relative, "app/service/iam/internal/data/") &&
-				strings.HasPrefix(imported, contextPrefix+"service/"):
-				t.Errorf("%s: IAM data adapter cannot import transport %q", relative, imported)
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("inspect IAM DDD dependencies: %v", err)
+		})
 	}
 }
 
