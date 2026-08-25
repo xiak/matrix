@@ -25,8 +25,8 @@
 
 ## Portable branch state
 
-- The branch contains commit `001d889` and uses the fixed donor baselines
-  listed below.
+- The branch contains commit `001d889`; FEAT-004 Gate C is accepted and pushed
+  in `2b7e398`. The fixed donor baselines remain those listed below.
 - FEAT-001, FEAT-002, and FEAT-003 Gate A/Gate B are Accepted. The public model
   is Application, immutable ApplicationRevision, Deployment,
   ExecutionPool/ExecutionTarget, provider-neutral PlacementPolicy, and an
@@ -78,23 +78,30 @@
   generation is observed READY; stop reuses the current target without a new
   claim; manual intervention conservatively retains capacity for an uncertain
   effect.
+- FEAT-004 Gate C is Accepted. The effecting Go Compose executor confines
+  state below one protected binding root, rejects links and reparse points,
+  applies atomic durable writes and an OS file lock, resolves exact secret
+  versions with a 1 MiB limit, forms only fixed non-interactive Docker Compose
+  commands, and retains sealed sanitized receipts.
+- A purpose-built static Linux fixture is imported directly into Docker with
+  no Dockerfile, registry, pull, build, or Internet dependency. Real Compose
+  coverage proves ENV and read-only secret injection, project-network access,
+  no host port, update, unknown-outcome observation before retry, rollback,
+  stop cleanup, and absence of secret/native/path leakage.
 - The same worktree passed generation drift, unit, vet, race, ten-run, schema,
   architecture, placement fuzz, four OS/architecture builds, Markdown-link,
-  stale-term, and diff gates. A clean PostgreSQL 18 test applied the migration
-  twice, ran the verifier, used non-bypass API/worker logins, attacked RLS and
-  cross-role privileges, injected transaction and delivery failures, and
-  proved HTTP-to-IAM-to-PostgreSQL identity, Audit sanitation/retry,
-  lease/fencing, deployment reconciliation, and reservation consistency.
-- No effecting Compose DeploymentExecutor, real Compose Gate C, offline
-  distribution, verified install/operations path, or platform
-  upgrade/rollback E2E exists yet. The Phase 1 goal is therefore active.
+  stale-term, donor-dependency, tenant-authority, and diff gates. Clean
+  PostgreSQL 18 runs applied the migration twice, ran the verifier, used
+  non-bypass API/worker logins, attacked RLS and cross-role privileges,
+  injected transaction, delivery, and unknown-effect failures, and connected
+  the real Compose executor through the durable worker and capacity workflow.
+- No offline distribution, verified clean-host installation/operations path,
+  or platform upgrade/rollback E2E exists yet. The Phase 1 goal is therefore
+  active.
 
 ## Next concrete work
 
-1. Implement and accept Gate C with real Docker Compose behavior, including
-   exact secret-file resolution, reconciliation, update, rollback, network
-   probe, and stop cleanup without registry or Internet access.
-2. Package digest-pinned offline installation and prove clean-host install,
+1. Package digest-pinned offline installation and prove clean-host install,
    verification, operations, platform upgrade, rollback, and application
    rollback without registry or Internet access.
 
