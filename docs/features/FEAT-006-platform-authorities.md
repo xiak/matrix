@@ -1,6 +1,6 @@
 # FEAT-006: Platform IAM and Audit authorities
 
-- Status: Target and donor adoption complete; Gate A pending
+- Status: Contracts and pure domain complete; Gate A PostgreSQL authority pending
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
 - IAM API contract: `iam.matrix.xiak.com/v1`

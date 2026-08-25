@@ -20,8 +20,8 @@
   contracts, invariants, security boundaries, or supported runtime behavior;
   they do not snapshot SQL text, file layout, incidental order, or stale
   features.
-- The Go module is `github.com/xiak/matrix`. The public API group is
-  `paas.matrix.xiak.com/v1`; it is an identifier, not a customer DNS lookup.
+- The Go module is `github.com/xiak/matrix`. Public API groups use
+  `*.matrix.xiak.com/v1`; they are identifiers, not customer DNS lookups.
 
 ## Portable branch state
 
@@ -104,6 +104,17 @@
   link/reparse, ownership, permission, interruption, and tamper rejection.
   Native Windows and network-disabled Linux tests pass; provider effects and
   platform services are not wired yet.
+- FEAT-006 target and fixed-donor adoption are pushed in `506f6d7` and
+  `932252e`. Strict generated IAM/Audit Go and OpenAPI 3.1 contracts are pushed
+  in `9f50b6c`; they reject authority selectors, ambiguous JSON, enum/union
+  drift, arbitrary Audit payloads, and accidental credential serialization.
+  Pure authority behavior is pushed in `0437fbf`: fixed-profile Argon2id,
+  binding-scoped opaque credential digests, database-time session checks,
+  fixed RBAC and bootstrap replay; plus authenticated-source canonical Audit
+  facts, exact replay/conflict, per-tenant sequence/hash chains, indefinite
+  retention, and tenant/filter-bound HMAC cursors. Full unit, generation,
+  architecture, vet, race, and ten-run gates pass. Gate A remains open only on
+  the clean PostgreSQL 18 authority proof.
 - The FEAT-004 accepted worktree passed its schema and real-runtime gates.
   Clean PostgreSQL 18 runs applied the migration twice, ran the verifier, used
   non-bypass API/worker logins, attacked RLS and cross-role privileges,
@@ -116,13 +127,18 @@
 
 ## Next concrete work
 
-1. Implement FEAT-005 Gate B from the accepted contracts: host and Docker
-   providers, bundle image load/inspect, generated configuration/secrets,
-   migrations, backup, and real IAM, Audit, APISIX, PostgreSQL, PaaS
-   API/worker/dispatcher, and UI composition.
-2. Assemble releases A/B and prove clean-host install, verification,
-   operations, upgrade failure, explicit platform/application rollback,
-   recovery, and sanitized support evidence without registry or Internet.
+1. Complete FEAT-006 Gate A with clean PostgreSQL 18 IAM/Audit schemas applied
+   twice and behavioral attacks proving separate owners/migration/runtime
+   roles, forced tenant isolation, immutable Audit rows, database-time
+   session/lease behavior, and stale-fence rejection.
+2. Complete FEAT-006 Gate B with independently running IAM/Audit HTTP services,
+   real PaaS clients, bootstrap/login/RBAC/revocation, transactional outboxes,
+   exact Audit replay/query/verification, outage retry, and cross-boundary
+   security attacks.
+3. Resume FEAT-005 Gate B provider effects and fixed platform composition,
+   then assemble releases A/B and prove the network-disabled Compose install,
+   verification, operations, upgrade, rollback, recovery, and support-evidence
+   E2E required by both FEATs.
 
 ## Fixed donor baselines
 
