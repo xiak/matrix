@@ -98,22 +98,28 @@
   generation drift, unit, vet, race, ten-run, architecture, placement fuzz,
   four-target build, documentation, dependency, authority, and diff gates
   passed on that Gate A worktree.
+- FEAT-005 Gate B has started. Commit `9a31558` adds the real installation
+  journal boundary: a restrictive root, cross-process OS lock, random local
+  HMAC key, canonical sealed state, monotonic writes, atomic durability, and
+  link/reparse, ownership, permission, interruption, and tamper rejection.
+  Native Windows and network-disabled Linux tests pass; provider effects and
+  platform services are not wired yet.
 - The FEAT-004 accepted worktree passed its schema and real-runtime gates.
   Clean PostgreSQL 18 runs applied the migration twice, ran the verifier, used
   non-bypass API/worker logins, attacked RLS and cross-role privileges,
   injected transaction, delivery, and unknown-effect failures, and connected
   the real Compose executor through the durable worker and capacity workflow.
-- No assembled offline release, durable installation journal/provider runner,
-  real IAM/Audit/APISIX/UI service composition, or verified clean-host
+- No assembled offline release, installation provider runner, real
+  IAM/Audit/APISIX/UI service composition, or verified clean-host
   install/upgrade/rollback/recovery E2E exists yet. The Phase 1 goal is
   therefore active.
 
 ## Next concrete work
 
-1. Implement FEAT-005 Gate B from the accepted contracts: protected durable
-   journal/lock, host and Docker providers, bundle image load/inspect,
-   generated configuration/secrets, migrations, backup, and real IAM, Audit,
-   APISIX, PostgreSQL, PaaS API/worker/dispatcher, and UI composition.
+1. Implement FEAT-005 Gate B from the accepted contracts: host and Docker
+   providers, bundle image load/inspect, generated configuration/secrets,
+   migrations, backup, and real IAM, Audit, APISIX, PostgreSQL, PaaS
+   API/worker/dispatcher, and UI composition.
 2. Assemble releases A/B and prove clean-host install, verification,
    operations, upgrade failure, explicit platform/application rollback,
    recovery, and sanitized support evidence without registry or Internet.
