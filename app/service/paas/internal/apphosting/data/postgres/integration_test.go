@@ -28,8 +28,8 @@ import (
 
 const (
 	postgresIntegrationDSN = "MATRIX_PAAS_POSTGRES_TEST_DSN"
-	runtimeTestRole        = "matrix_paas_test_runtime"
-	runtimeTestPassword    = "matrix-test-only"
+	workerTestRole         = "matrix_paas_test_worker"
+	workerTestPassword     = "matrix-test-only"
 )
 
 func TestPostgresGateBIntegration(t *testing.T) {
@@ -58,9 +58,9 @@ func TestPostgresGateBIntegration(t *testing.T) {
 	defer func() { _ = admin.Close(context.Background()) }()
 
 	applyMigrationTwiceAndVerify(t, ctx, admin)
-	ensureRuntimeTestRole(t, ctx, admin)
-	runtimePool := openRuntimePool(t, ctx, adminConfig)
-	defer runtimePool.Close()
+	ensureWorkerTestRole(t, ctx, admin)
+	workerPool := openWorkerPool(t, ctx, adminConfig)
+	defer workerPool.Close()
 
 	prefix := fmt.Sprintf("gateb-%x", time.Now().UnixNano())
 	fixture := seedGateBFixture(t, ctx, admin, prefix)
@@ -68,7 +68,7 @@ func TestPostgresGateBIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create placement planner: %v", err)
 	}
-	placementRepository, err := NewPlacementRepository(runtimePool)
+	placementRepository, err := NewPlacementRepository(workerPool)
 	if err != nil {
 		t.Fatalf("create placement repository: %v", err)
 	}
@@ -105,9 +105,9 @@ func TestPostgresGateBIntegration(t *testing.T) {
 		fixture.tenantA,
 		scheduledDecision.Metadata.ID,
 	)
-	assertRuntimeRLS(t, ctx, runtimePool, fixture, scheduledDecision.Metadata.ID, reservationID, claimID)
+	assertWorkerRLS(t, ctx, workerPool, fixture, scheduledDecision.Metadata.ID, reservationID, claimID)
 
-	reservationRepository, err := NewCapacityReservationRepository(runtimePool)
+	reservationRepository, err := NewCapacityReservationRepository(workerPool)
 	if err != nil {
 		t.Fatalf("create capacity reservation repository: %v", err)
 	}
@@ -206,42 +206,42 @@ func readIntegrationFile(t *testing.T, path string) string {
 	return string(content)
 }
 
-func ensureRuntimeTestRole(t *testing.T, ctx context.Context, admin *pgx.Conn) {
+func ensureWorkerTestRole(t *testing.T, ctx context.Context, admin *pgx.Conn) {
 	t.Helper()
 	var exists bool
 	if err := admin.QueryRow(
 		ctx,
 		"SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = $1)",
-		runtimeTestRole,
+		workerTestRole,
 	).Scan(&exists); err != nil {
-		t.Fatalf("inspect runtime test role: %v", err)
+		t.Fatalf("inspect worker test role: %v", err)
 	}
 	if !exists {
 		if _, err := admin.Exec(
 			ctx,
-			`CREATE ROLE matrix_paas_test_runtime
+			`CREATE ROLE matrix_paas_test_worker
 			 LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS
 			 PASSWORD 'matrix-test-only'`,
 		); err != nil {
-			t.Fatalf("create runtime test role: %v", err)
+			t.Fatalf("create worker test role: %v", err)
 		}
 	} else if _, err := admin.Exec(
 		ctx,
-		`ALTER ROLE matrix_paas_test_runtime
+		`ALTER ROLE matrix_paas_test_worker
 		 LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS
 		 PASSWORD 'matrix-test-only'`,
 	); err != nil {
-		t.Fatalf("reset runtime test role: %v", err)
+		t.Fatalf("reset worker test role: %v", err)
 	}
 	if _, err := admin.Exec(
 		ctx,
-		"GRANT matrix_paas_runtime TO matrix_paas_test_runtime",
+		"GRANT matrix_paas_worker TO matrix_paas_test_worker",
 	); err != nil {
-		t.Fatalf("grant runtime test membership: %v", err)
+		t.Fatalf("grant worker test membership: %v", err)
 	}
 }
 
-func openRuntimePool(
+func openWorkerPool(
 	t *testing.T,
 	ctx context.Context,
 	adminConfig *pgx.ConnConfig,
@@ -249,18 +249,18 @@ func openRuntimePool(
 	t.Helper()
 	config, err := pgxpool.ParseConfig(adminConfig.ConnString())
 	if err != nil {
-		t.Fatalf("parse runtime pool DSN: %v", err)
+		t.Fatalf("parse worker pool DSN: %v", err)
 	}
-	config.ConnConfig.User = runtimeTestRole
-	config.ConnConfig.Password = runtimeTestPassword
+	config.ConnConfig.User = workerTestRole
+	config.ConnConfig.Password = workerTestPassword
 	config.MaxConns = 8
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
-		t.Fatalf("create runtime PostgreSQL pool: %v", err)
+		t.Fatalf("create worker PostgreSQL pool: %v", err)
 	}
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
-		t.Fatalf("ping runtime PostgreSQL pool: %v", err)
+		t.Fatalf("ping worker PostgreSQL pool: %v", err)
 	}
 	return pool
 }
@@ -468,6 +468,58 @@ func seedDeployment(
 	now time.Time,
 ) {
 	t.Helper()
+	creationOperationID := paasv1.OperationID(string(deploymentID) + "-create")
+	terminalAt := now
+	operation := paasv1.Operation{
+		APIVersion: paasv1.APIVersion,
+		Kind:       "Operation",
+		ID:         creationOperationID,
+		Scope: paasv1.ResourceScope{
+			Kind:     paasv1.AuthorityTenant,
+			TenantID: fixture.tenantA,
+		},
+		Action: paasv1.OperationDeploy,
+		Target: paasv1.ResourceRef{
+			Kind: "Deployment",
+			ID:   deploymentID,
+		},
+		RequestedBy: paasv1.SubjectRef{
+			Type: paasv1.SubjectSystemUser,
+			ID:   "system",
+		},
+		IdempotencyFingerprint: integrationDigest(string(deploymentID) + "-idempotency"),
+		RequestDigest:          integrationDigest(string(deploymentID) + "-request"),
+		State:                  paasv1.OperationSucceeded,
+		Attempt:                1,
+		CreatedAt:              now,
+		UpdatedAt:              now,
+		TerminalAt:             &terminalAt,
+	}
+	if err := paasv1.ValidateOperation(operation); err != nil {
+		t.Fatalf("invalid creation Operation fixture: %v", err)
+	}
+	execDocument(t, ctx, admin,
+		`INSERT INTO paas.operations (
+		     tenant_id, id, action, target_kind, target_id,
+		     idempotency_fingerprint, request_digest, state, attempt,
+		     next_attempt_at, fencing_token, created_at, updated_at,
+		     terminal_at, document
+		 ) VALUES (
+		     $1, $2, $3, $4, $5, $6, $7, $8, $9,
+		     $10, 0, $10, $10, $10, $11::jsonb
+		 )`,
+		fixture.tenantA,
+		operation.ID,
+		operation.Action,
+		operation.Target.Kind,
+		operation.Target.ID,
+		operation.IdempotencyFingerprint,
+		operation.RequestDigest,
+		operation.State,
+		operation.Attempt,
+		now,
+		integrationJSON(t, operation),
+	)
 	deployment := paasv1.Deployment{
 		APIVersion: paasv1.APIVersion,
 		Kind:       "Deployment",
@@ -500,14 +552,44 @@ func seedDeployment(
 	}
 	execDocument(t, ctx, admin,
 		`INSERT INTO paas.deployments
-		 (tenant_id, id, application_revision_id, policy_id, resource_version, document)
-		 VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
+		 (tenant_id, id, generation, application_revision_id, policy_id, resource_version, document)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)`,
 		fixture.tenantA,
 		deploymentID,
+		deployment.Generation,
 		fixture.revisionID,
 		fixture.policyID,
 		1,
 		integrationJSON(t, deployment),
+	)
+	generation := paasv1.DeploymentGeneration{
+		APIVersion:           paasv1.APIVersion,
+		Kind:                 "DeploymentGeneration",
+		Scope:                deployment.Metadata.Scope,
+		DeploymentID:         deployment.Metadata.ID,
+		Generation:           deployment.Generation,
+		Spec:                 deployment.Spec,
+		CreatedByOperationID: creationOperationID,
+		CreatedAt:            now,
+	}
+	generation.ContentDigest = paasv1.DeploymentSpecContentDigest(generation.Spec)
+	if err := paasv1.ValidateDeploymentGeneration(generation); err != nil {
+		t.Fatalf("invalid DeploymentGeneration fixture: %v", err)
+	}
+	execDocument(t, ctx, admin,
+		`INSERT INTO paas.deployment_generations (
+		     tenant_id, deployment_id, generation, application_revision_id,
+		     policy_id, content_digest, created_by_operation_id, created_at, document
+		 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)`,
+		fixture.tenantA,
+		generation.DeploymentID,
+		generation.Generation,
+		generation.Spec.ApplicationRevisionID,
+		generation.Spec.PlacementPolicyID,
+		generation.ContentDigest,
+		generation.CreatedByOperationID,
+		generation.CreatedAt,
+		integrationJSON(t, generation),
 	)
 }
 
@@ -712,7 +794,7 @@ func reservationIdentity(
 	return paasv1.ResourceID(reservationID), claimID
 }
 
-func assertRuntimeRLS(
+func assertWorkerRLS(
 	t *testing.T,
 	ctx context.Context,
 	pool *pgxpool.Pool,
@@ -722,7 +804,7 @@ func assertRuntimeRLS(
 	claimID string,
 ) {
 	t.Helper()
-	withRuntimeTenant(t, ctx, pool, fixture.tenantB, func(tx pgx.Tx) {
+	withWorkerTenant(t, ctx, pool, fixture.tenantB, func(tx pgx.Tx) {
 		for _, query := range []struct {
 			statement string
 			identity  any
@@ -741,7 +823,7 @@ func assertRuntimeRLS(
 		}
 	})
 
-	withRuntimeTenant(t, ctx, pool, fixture.tenantB, func(tx pgx.Tx) {
+	withWorkerTenant(t, ctx, pool, fixture.tenantB, func(tx pgx.Tx) {
 		_, err := tx.Exec(
 			ctx,
 			"DELETE FROM paas.placement_decisions WHERE id = $1",
@@ -749,7 +831,7 @@ func assertRuntimeRLS(
 		)
 		assertPostgresCode(t, err, "42501")
 	})
-	withRuntimeTenant(t, ctx, pool, fixture.tenantA, func(tx pgx.Tx) {
+	withWorkerTenant(t, ctx, pool, fixture.tenantA, func(tx pgx.Tx) {
 		_, err := tx.Exec(
 			ctx,
 			"UPDATE paas.capacity_claims SET state = 'RELEASED' WHERE id = $1::uuid",
@@ -1040,7 +1122,7 @@ func assertPendingExpiry(
 	}
 }
 
-func withRuntimeTenant(
+func withWorkerTenant(
 	t *testing.T,
 	ctx context.Context,
 	pool *pgxpool.Pool,
@@ -1050,7 +1132,7 @@ func withRuntimeTenant(
 	t.Helper()
 	tx, err := pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadWrite})
 	if err != nil {
-		t.Fatalf("begin direct runtime transaction: %v", err)
+		t.Fatalf("begin direct worker transaction: %v", err)
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
 	if _, err := tx.Exec(
@@ -1058,7 +1140,7 @@ func withRuntimeTenant(
 		"SELECT set_config('matrix.tenant_id', $1, true)",
 		string(tenantID),
 	); err != nil {
-		t.Fatalf("set direct runtime tenant: %v", err)
+		t.Fatalf("set direct worker tenant: %v", err)
 	}
 	callback(tx)
 }

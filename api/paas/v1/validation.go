@@ -922,7 +922,7 @@ func ValidateOperation(value Operation) error {
 		if value.Scope.Kind != AuthorityPlatform {
 			problems = append(problems, errors.New("platform operation action requires platform scope"))
 		}
-	case OperationCreatePlacement, OperationDeploy, OperationStop, OperationRollback:
+	case OperationCreatePlacement, OperationDeploy, OperationUpdate, OperationStop, OperationRollback:
 		if value.Scope.Kind != AuthorityTenant {
 			problems = append(problems, errors.New("tenant operation action requires tenant scope"))
 		}

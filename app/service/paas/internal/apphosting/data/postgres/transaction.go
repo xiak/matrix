@@ -135,19 +135,20 @@ func (transaction *placementTransaction) loadDeployment(
 	ctx context.Context,
 	id paasv1.ResourceID,
 ) (paasv1.Deployment, error) {
+	var generation uint64
 	var applicationRevisionID string
 	var policyID string
 	var resourceVersion uint64
 	var document []byte
 	err := transaction.tx.QueryRow(
 		ctx,
-		`SELECT application_revision_id, policy_id, resource_version, document
+		`SELECT generation, application_revision_id, policy_id, resource_version, document
 		   FROM paas.deployments
 		  WHERE tenant_id = $1
 		    AND id = $2`,
 		string(transaction.tenantID),
 		string(id),
-	).Scan(&applicationRevisionID, &policyID, &resourceVersion, &document)
+	).Scan(&generation, &applicationRevisionID, &policyID, &resourceVersion, &document)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return paasv1.Deployment{}, errors.New("deployment not found in tenant scope")
 	}
@@ -163,6 +164,7 @@ func (transaction *placementTransaction) loadDeployment(
 	}
 	if deployment.Metadata.ID != id ||
 		deployment.Metadata.Scope.TenantID != transaction.tenantID ||
+		deployment.Generation != generation ||
 		deployment.Metadata.ResourceVersion != resourceVersion ||
 		string(deployment.Spec.ApplicationRevisionID) != applicationRevisionID ||
 		string(deployment.Spec.PlacementPolicyID) != policyID {

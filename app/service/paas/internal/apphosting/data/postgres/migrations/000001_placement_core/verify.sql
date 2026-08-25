@@ -7,33 +7,44 @@ BEGIN
       FROM (
         VALUES
             ('applications'),
+            ('configurations'),
+            ('configuration_revisions'),
             ('application_revisions'),
             ('placement_policies'),
             ('deployments'),
+            ('deployment_generations'),
+            ('operations'),
             ('execution_pools'),
             ('execution_targets'),
             ('execution_target_allocations'),
+            ('adapter_commands'),
+            ('adapter_receipts'),
+            ('deployment_observations'),
             ('placement_decisions'),
             ('capacity_claims'),
             ('capacity_reservations')
       ) AS required(name)
      WHERE to_regclass('paas.' || required.name) IS NULL;
     IF missing IS NOT NULL THEN
-        RAISE EXCEPTION 'missing FEAT-003 tables: %', missing;
+        RAISE EXCEPTION 'missing apphosting tables: %', missing;
     END IF;
 
-    IF NOT EXISTS (
+    SELECT string_agg(required.name, ', ' ORDER BY required.name)
+      INTO missing
+      FROM (VALUES ('matrix_paas_api'), ('matrix_paas_worker')) AS required(name)
+     WHERE NOT EXISTS (
         SELECT 1
-          FROM pg_catalog.pg_roles
-         WHERE rolname = 'matrix_paas_runtime'
-           AND NOT rolsuper
-           AND NOT rolcreatedb
-           AND NOT rolcreaterole
-           AND NOT rolreplication
-           AND NOT rolbypassrls
-           AND NOT rolcanlogin
-    ) THEN
-        RAISE EXCEPTION 'matrix_paas_runtime role is missing or overprivileged';
+          FROM pg_catalog.pg_roles AS role
+         WHERE role.rolname = required.name
+           AND NOT role.rolsuper
+           AND NOT role.rolcreatedb
+           AND NOT role.rolcreaterole
+           AND NOT role.rolreplication
+           AND NOT role.rolbypassrls
+           AND NOT role.rolcanlogin
+    );
+    IF missing IS NOT NULL THEN
+        RAISE EXCEPTION 'missing or overprivileged apphosting roles: %', missing;
     END IF;
 
     SELECT string_agg(class.relname, ', ' ORDER BY class.relname)
@@ -44,9 +55,16 @@ BEGIN
      WHERE namespace.nspname = 'paas'
        AND class.relname IN (
             'applications',
+            'configurations',
+            'configuration_revisions',
             'application_revisions',
             'placement_policies',
             'deployments',
+            'deployment_generations',
+            'operations',
+            'adapter_commands',
+            'adapter_receipts',
+            'deployment_observations',
             'placement_decisions',
             'capacity_reservations'
        )
@@ -59,13 +77,30 @@ BEGIN
       INTO missing
       FROM (
         VALUES
+            ('configurations_application_fk'),
+            ('configuration_revisions_configuration_fk'),
             ('application_revisions_application_fk'),
             ('deployments_revision_fk'),
             ('deployments_policy_fk'),
+            ('deployment_generations_deployment_fk'),
+            ('deployment_generations_revision_fk'),
+            ('deployment_generations_policy_fk'),
+            ('deployment_generations_operation_fk'),
+            ('operations_idempotency_uq'),
             ('execution_targets_pool_fk'),
             ('execution_target_allocations_target_fk'),
+            ('adapter_commands_operation_action_uq'),
+            ('adapter_commands_operation_fk'),
+            ('adapter_commands_generation_fk'),
+            ('adapter_commands_revision_fk'),
+            ('adapter_commands_target_fk'),
+            ('adapter_receipts_command_fk'),
+            ('deployment_observations_command_fk'),
+            ('deployment_observations_generation_fk'),
+            ('deployment_observations_revision_fk'),
             ('placement_decisions_operation_uq'),
             ('placement_decisions_deployment_fk'),
+            ('placement_decisions_generation_fk'),
             ('placement_decisions_revision_fk'),
             ('placement_decisions_policy_fk'),
             ('placement_decisions_target_fk'),
@@ -83,18 +118,26 @@ BEGIN
            AND connamespace = 'paas'::regnamespace
     );
     IF missing IS NOT NULL THEN
-        RAISE EXCEPTION 'missing FEAT-003 constraints: %', missing;
+        RAISE EXCEPTION 'missing apphosting constraints: %', missing;
     END IF;
 
-    IF NOT EXISTS (
+    SELECT string_agg(required.name, ', ' ORDER BY required.name)
+      INTO missing
+      FROM (
+        VALUES
+            ('capacity_claims_reservation_fk'),
+            ('deployment_generations_operation_fk')
+      ) AS required(name)
+     WHERE NOT EXISTS (
         SELECT 1
           FROM pg_catalog.pg_constraint
-         WHERE conname = 'capacity_claims_reservation_fk'
+         WHERE conname = required.name
            AND connamespace = 'paas'::regnamespace
            AND condeferrable
            AND condeferred
-    ) THEN
-        RAISE EXCEPTION 'capacity claim ownership link is not initially deferred';
+    );
+    IF missing IS NOT NULL THEN
+        RAISE EXCEPTION 'required deferred ownership links are unsafe: %', missing;
     END IF;
 
     SELECT string_agg(required.table_name, ', ' ORDER BY required.table_name)
@@ -102,9 +145,16 @@ BEGIN
       FROM (
         VALUES
             ('applications'),
+            ('configurations'),
+            ('configuration_revisions'),
             ('application_revisions'),
             ('placement_policies'),
             ('deployments'),
+            ('deployment_generations'),
+            ('operations'),
+            ('adapter_commands'),
+            ('adapter_receipts'),
+            ('deployment_observations'),
             ('placement_decisions'),
             ('capacity_reservations')
       ) AS required(table_name)
@@ -116,7 +166,7 @@ BEGIN
            AND policyname = 'tenant_isolation'
     );
     IF missing IS NOT NULL THEN
-        RAISE EXCEPTION 'missing FEAT-003 tenant policies: %', missing;
+        RAISE EXCEPTION 'missing apphosting tenant policies: %', missing;
     END IF;
 
     IF EXISTS (
@@ -128,9 +178,9 @@ BEGIN
             ON owner_role.oid = class.relowner
          WHERE namespace.nspname = 'paas'
            AND class.relkind IN ('r', 'p')
-           AND owner_role.rolname = 'matrix_paas_runtime'
+           AND owner_role.rolname IN ('matrix_paas_api', 'matrix_paas_worker')
     ) THEN
-        RAISE EXCEPTION 'runtime role must not own PaaS tables';
+        RAISE EXCEPTION 'application roles must not own PaaS tables';
     END IF;
 
     IF EXISTS (
@@ -163,64 +213,95 @@ BEGIN
         RAISE EXCEPTION 'tenant-scoped capacity transition function is missing or unsafe';
     END IF;
 
-    IF has_schema_privilege('matrix_paas_runtime', 'paas', 'CREATE')
+    IF has_schema_privilege('matrix_paas_api', 'paas', 'CREATE')
+       OR has_schema_privilege('matrix_paas_worker', 'paas', 'CREATE')
        OR has_table_privilege(
-            'matrix_paas_runtime',
+            'matrix_paas_api',
             'paas.placement_decisions',
-            'DELETE, TRUNCATE, REFERENCES, TRIGGER'
+            'SELECT, INSERT, UPDATE, DELETE'
        )
        OR has_table_privilege(
-            'matrix_paas_runtime',
-            'paas.capacity_claims',
-            'DELETE, TRUNCATE, REFERENCES, TRIGGER'
+            'matrix_paas_api',
+            'paas.adapter_commands',
+            'SELECT, INSERT, UPDATE, DELETE'
        )
        OR has_table_privilege(
-            'matrix_paas_runtime',
-            'paas.capacity_reservations',
-            'DELETE, TRUNCATE, REFERENCES, TRIGGER'
+            'matrix_paas_api',
+            'paas.adapter_receipts',
+            'SELECT, INSERT, UPDATE, DELETE'
        )
-       OR has_any_column_privilege(
-            'matrix_paas_runtime',
-            'paas.capacity_claims',
-            'UPDATE'
-       )
-       OR has_any_column_privilege(
-            'matrix_paas_runtime',
-            'paas.capacity_reservations',
-            'UPDATE'
+       OR has_table_privilege(
+            'matrix_paas_api',
+            'paas.deployment_observations',
+            'SELECT, INSERT, UPDATE, DELETE'
        ) THEN
-        RAISE EXCEPTION 'runtime role has forbidden DDL, destructive, or direct claim mutation privileges';
+        RAISE EXCEPTION 'API role can access worker-owned execution state';
     END IF;
 
-    IF has_table_privilege('matrix_paas_runtime', 'paas.applications', 'INSERT, UPDATE, DELETE')
+    IF has_table_privilege(
+            'matrix_paas_worker',
+            'paas.applications',
+            'INSERT, UPDATE, DELETE'
+       )
        OR has_table_privilege(
-            'matrix_paas_runtime',
+            'matrix_paas_worker',
+            'paas.configurations',
+            'INSERT, UPDATE, DELETE'
+       )
+       OR has_table_privilege(
+            'matrix_paas_worker',
+            'paas.configuration_revisions',
+            'INSERT, UPDATE, DELETE'
+       )
+       OR has_table_privilege(
+            'matrix_paas_worker',
             'paas.application_revisions',
             'INSERT, UPDATE, DELETE'
        )
        OR has_table_privilege(
-            'matrix_paas_runtime',
-            'paas.placement_policies',
+            'matrix_paas_worker',
+            'paas.deployment_generations',
             'INSERT, UPDATE, DELETE'
        )
-       OR has_table_privilege('matrix_paas_runtime', 'paas.deployments', 'INSERT, UPDATE, DELETE') THEN
-        RAISE EXCEPTION 'placement runtime role can mutate authoritative input resources';
+       OR has_table_privilege(
+            'matrix_paas_worker',
+            'paas.operations',
+            'INSERT, UPDATE, DELETE'
+       ) THEN
+        RAISE EXCEPTION 'worker role can rewrite authoritative or immutable input';
     END IF;
 
     IF NOT has_table_privilege(
-        'matrix_paas_runtime',
-        'paas.capacity_claims',
-        'SELECT, INSERT'
-    ) OR NOT has_table_privilege(
-        'matrix_paas_runtime',
-        'paas.capacity_reservations',
-        'SELECT, INSERT'
-    ) OR NOT has_function_privilege(
-        'matrix_paas_runtime',
-        'paas.transition_capacity_reservation(text, text, bigint)',
-        'EXECUTE'
-    ) THEN
-        RAISE EXCEPTION 'runtime role lacks required capacity accounting privileges';
+            'matrix_paas_api',
+            'paas.applications',
+            'SELECT, INSERT'
+       )
+       OR NOT has_table_privilege(
+            'matrix_paas_api',
+            'paas.configuration_revisions',
+            'SELECT, INSERT'
+       )
+       OR NOT has_table_privilege(
+            'matrix_paas_api',
+            'paas.operations',
+            'SELECT, INSERT'
+       )
+       OR NOT has_table_privilege(
+            'matrix_paas_worker',
+            'paas.adapter_commands',
+            'SELECT, INSERT'
+       )
+       OR NOT has_table_privilege(
+            'matrix_paas_worker',
+            'paas.placement_decisions',
+            'SELECT, INSERT'
+       )
+       OR NOT has_function_privilege(
+            'matrix_paas_worker',
+            'paas.transition_capacity_reservation(text, text, bigint)',
+            'EXECUTE'
+       ) THEN
+        RAISE EXCEPTION 'application roles lack required current privileges';
     END IF;
 END
 $matrix_verify$;
