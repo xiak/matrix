@@ -75,7 +75,14 @@ func TestIAMCoreUsecasesBindCredentialsAndRecordClosedAuthorization(t *testing.T
 		t.Fatalf("initial administrator decision = %#v err=%v, want deny", decision, err)
 	}
 
-	repository.transaction.mustChangePassword = false
+	changed, err := service.ChangePassword(context.Background(), login.Credential, iamv1.ChangePasswordRequest{
+		CurrentPassword: document.Administrator.Password,
+		NewPassword:     coreSecret(t, "Changed-Admin-Password-73!"),
+		RequestID:       "request-admin-password-change",
+	})
+	if err != nil || !changed.BootstrapFileRetirable || changed.ChangedAt != repository.transaction.now {
+		t.Fatalf("change bootstrap administrator password: response=%#v err=%v", changed, err)
+	}
 	request.RequestID = "request-authorize-allowed"
 	request.CorrelationID = "correlation-authorize-allowed"
 	decision, err = service.Authorize(
@@ -100,8 +107,93 @@ func TestIAMCoreUsecasesBindCredentialsAndRecordClosedAuthorization(t *testing.T
 	if err != nil || decision.Allowed {
 		t.Fatalf("Audit-to-PaaS decision = %#v err=%v, want deny", decision, err)
 	}
-	if len(repository.transaction.authorizations) != 3 {
-		t.Fatalf("stored authorization decisions=%d want=3", len(repository.transaction.authorizations))
+
+	created, err := service.CreateUser(context.Background(), login.Credential, iamv1.CreateUserRequest{
+		LoginName:       "developer",
+		DisplayName:     "Platform Developer",
+		InitialPassword: coreSecret(t, "Initial-Developer-Password-84!"),
+		RequestID:       "request-create-developer",
+	})
+	if err != nil || created.LoginName != "developer" || !created.MustChangePassword {
+		t.Fatalf("create organization user: principal=%#v err=%v", created, err)
+	}
+	binding, err := service.PutRoleBinding(context.Background(), login.Credential, iamv1.PutRoleBindingRequest{
+		PrincipalID: created.ID,
+		Role:        iamv1.RolePaaSDeveloper,
+		RequestID:   "request-bind-developer",
+	})
+	if err != nil || binding.PrincipalID != created.ID || binding.Role != iamv1.RolePaaSDeveloper {
+		t.Fatalf("bind organization user: binding=%#v err=%v", binding, err)
+	}
+	developerLogin, err := service.Login(context.Background(), iamv1.LoginRequest{
+		LoginName: "developer",
+		Password:  coreSecret(t, "Initial-Developer-Password-84!"),
+		RequestID: "request-login-developer",
+	})
+	if err != nil {
+		t.Fatalf("log in organization user: %v", err)
+	}
+	request.RequestID = "request-developer-before-password"
+	request.CorrelationID = request.RequestID
+	decision, err = service.Authorize(context.Background(), paasCredential, developerLogin.Credential, request)
+	if err != nil || decision.Allowed {
+		t.Fatalf("initial developer decision=%#v err=%v, want deny", decision, err)
+	}
+	developerPassword, err := service.ChangePassword(
+		context.Background(),
+		developerLogin.Credential,
+		iamv1.ChangePasswordRequest{
+			CurrentPassword: coreSecret(t, "Initial-Developer-Password-84!"),
+			NewPassword:     coreSecret(t, "Changed-Developer-Password-95!"),
+			RequestID:       "request-developer-password-change",
+		},
+	)
+	if err != nil || developerPassword.BootstrapFileRetirable {
+		t.Fatalf("change organization user password: response=%#v err=%v", developerPassword, err)
+	}
+	request.RequestID = "request-developer-allowed"
+	request.CorrelationID = request.RequestID
+	decision, err = service.Authorize(context.Background(), paasCredential, developerLogin.Credential, request)
+	if err != nil || !decision.Allowed || decision.Subject == nil || decision.Subject.ID != created.ID {
+		t.Fatalf("developer decision=%#v err=%v, want allowed", decision, err)
+	}
+	revokedBinding, err := service.RevokeRoleBinding(
+		context.Background(),
+		login.Credential,
+		binding.ID,
+		iamv1.RevokeRoleBindingRequest{RequestID: "request-revoke-developer-binding"},
+	)
+	if err != nil || revokedBinding.ID != string(binding.ID) || revokedBinding.ResourceVersion != 2 {
+		t.Fatalf("revoke developer binding: revocation=%#v err=%v", revokedBinding, err)
+	}
+	request.RequestID = "request-developer-after-binding-revoke"
+	request.CorrelationID = request.RequestID
+	decision, err = service.Authorize(context.Background(), paasCredential, developerLogin.Credential, request)
+	if err != nil || decision.Allowed {
+		t.Fatalf("revoked-role decision=%#v err=%v, want deny", decision, err)
+	}
+	revokedSession, err := service.RevokeSession(
+		context.Background(),
+		login.Credential,
+		developerLogin.Session.ID,
+		iamv1.RevokeSessionRequest{RequestID: "request-revoke-developer-session"},
+	)
+	if err != nil || revokedSession.ID != string(developerLogin.Session.ID) {
+		t.Fatalf("revoke developer session: revocation=%#v err=%v", revokedSession, err)
+	}
+	request.RequestID = "request-developer-after-session-revoke"
+	request.CorrelationID = request.RequestID
+	if _, err := service.Authorize(context.Background(), paasCredential, developerLogin.Credential, request); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("revoked developer session error=%v, want unauthenticated", err)
+	}
+	logout, err := service.Logout(
+		context.Background(), login.Credential, iamv1.LogoutRequest{RequestID: "request-admin-logout"},
+	)
+	if err != nil || logout.RevokedAt != repository.transaction.now {
+		t.Fatalf("logout administrator: response=%#v err=%v", logout, err)
+	}
+	if len(repository.transaction.authorizations) != 10 {
+		t.Fatalf("stored authorization decisions=%d want=10", len(repository.transaction.authorizations))
 	}
 	for _, mutation := range repository.transaction.authorizations {
 		if mutation.AuditEvent.IAMDecisionID != auditv1.DecisionID(mutation.Decision.ID) ||
@@ -131,20 +223,26 @@ type coreTransaction struct {
 	now                time.Time
 	status             iamv1.BootstrapStatus
 	contentDigest      string
-	account            LoginAccount
 	organization       iamv1.Organization
 	principal          iamv1.Principal
-	mustChangePassword bool
 	services           map[string]ServiceCredential
 	sessions           map[string]SessionCredential
 	authorizations     []AuthorizationMutation
+	passwords          map[iamv1.PrincipalID]authority.PasswordHash
+	users              map[iamv1.PrincipalID]iamv1.Principal
+	bindings           map[iamv1.RoleBindingID]iamv1.RoleBinding
+	bindingRevocations map[iamv1.RoleBindingID]iamv1.Revocation
 }
 
 func newCoreTransaction() *coreTransaction {
 	return &coreTransaction{
-		now:      time.Date(2026, 8, 26, 8, 9, 10, 123000, time.UTC),
-		services: make(map[string]ServiceCredential),
-		sessions: make(map[string]SessionCredential),
+		now:                time.Date(2026, 8, 26, 8, 9, 10, 123000, time.UTC),
+		services:           make(map[string]ServiceCredential),
+		sessions:           make(map[string]SessionCredential),
+		passwords:          make(map[iamv1.PrincipalID]authority.PasswordHash),
+		users:              make(map[iamv1.PrincipalID]iamv1.Principal),
+		bindings:           make(map[iamv1.RoleBindingID]iamv1.RoleBinding),
+		bindingRevocations: make(map[iamv1.RoleBindingID]iamv1.Revocation),
 	}
 }
 
@@ -208,14 +306,13 @@ func (transaction *coreTransaction) ApplyBootstrap(
 		CreatedAt:          transaction.now,
 		UpdatedAt:          transaction.now,
 	}
-	transaction.mustChangePassword = true
-	transaction.account = LoginAccount{
-		OrganizationID:     mutation.Organization.ID,
-		PrincipalID:        mutation.Administrator.ID,
-		PasswordHash:       mutation.Administrator.PasswordHash,
-		OrganizationStatus: iamv1.OrganizationActive,
-		PrincipalStatus:    iamv1.PrincipalActive,
-		MustChangePassword: true,
+	transaction.passwords[mutation.Administrator.ID] = mutation.Administrator.PasswordHash
+	transaction.users[mutation.Administrator.ID] = transaction.principal
+	transaction.bindings["bootstrap-admin-binding"] = iamv1.RoleBinding{
+		APIVersion: iamv1.APIVersion, Kind: "RoleBinding", ID: "bootstrap-admin-binding",
+		OrganizationID: mutation.Organization.ID, PrincipalID: mutation.Administrator.ID,
+		Role: iamv1.RoleOrganizationAdmin, ResourceVersion: 1,
+		CreatedAt: transaction.now, UpdatedAt: transaction.now,
 	}
 	for _, service := range mutation.Services {
 		transaction.services[service.LookupDigest] = ServiceCredential{
@@ -236,22 +333,42 @@ func (transaction *coreTransaction) LookupLogin(
 	_ context.Context,
 	loginName string,
 ) (LoginAccount, bool, error) {
-	if loginName != transaction.principal.LoginName {
-		return LoginAccount{}, false, nil
+	for principalID, principal := range transaction.users {
+		if principal.LoginName != loginName {
+			continue
+		}
+		return LoginAccount{
+			OrganizationID:     principal.OrganizationID,
+			PrincipalID:        principalID,
+			PasswordHash:       transaction.passwords[principalID],
+			OrganizationStatus: transaction.organization.Status,
+			PrincipalStatus:    principal.Status,
+			MustChangePassword: principal.MustChangePassword,
+		}, true, nil
 	}
-	return transaction.account, true, nil
+	return LoginAccount{}, false, nil
 }
 
 func (transaction *coreTransaction) IssueSession(
 	_ context.Context,
 	mutation SessionMutation,
 ) (iamv1.Session, error) {
+	principal, found := transaction.users[mutation.Session.PrincipalID]
+	if !found {
+		return iamv1.Session{}, ErrUnauthenticated
+	}
+	roles := make([]iamv1.BuiltinRole, 0)
+	for _, binding := range transaction.bindings {
+		if binding.PrincipalID == principal.ID {
+			roles = append(roles, binding.Role)
+		}
+	}
 	transaction.sessions[mutation.LookupDigest] = SessionCredential{
 		Subject: authority.SubjectContext{
 			Organization: transaction.organization,
-			Principal:    transaction.principal,
+			Principal:    principal,
 			Session:      mutation.Session,
-			Roles:        []iamv1.BuiltinRole{iamv1.RoleOrganizationAdmin},
+			Roles:        roles,
 		},
 		VerificationDigest: mutation.VerificationDigest,
 	}
@@ -266,8 +383,33 @@ func (transaction *coreTransaction) LookupSession(
 	if !found {
 		return SessionCredential{}, false, nil
 	}
-	binding.Subject.Principal.MustChangePassword = transaction.mustChangePassword
+	if binding.Subject.Session.Status != iamv1.SessionActive {
+		return SessionCredential{}, false, nil
+	}
+	principal, found := transaction.users[binding.Subject.Principal.ID]
+	if !found {
+		return SessionCredential{}, false, nil
+	}
+	binding.Subject.Principal = principal
+	binding.Subject.Roles = nil
+	for _, roleBinding := range transaction.bindings {
+		if roleBinding.PrincipalID == principal.ID {
+			binding.Subject.Roles = append(binding.Subject.Roles, roleBinding.Role)
+		}
+	}
 	return binding, true, nil
+}
+
+func (transaction *coreTransaction) LookupPassword(
+	_ context.Context,
+	organizationID iamv1.OrganizationID,
+	principalID iamv1.PrincipalID,
+) (authority.PasswordHash, bool, error) {
+	if organizationID != transaction.organization.ID {
+		return "", false, nil
+	}
+	password, found := transaction.passwords[principalID]
+	return password, found, nil
 }
 
 func (transaction *coreTransaction) LookupService(
@@ -284,6 +426,103 @@ func (transaction *coreTransaction) RecordAuthorization(
 ) error {
 	transaction.authorizations = append(transaction.authorizations, mutation)
 	return nil
+}
+
+func (transaction *coreTransaction) ChangePassword(
+	_ context.Context,
+	mutation PasswordMutation,
+) (iamv1.ChangePasswordResponse, error) {
+	if transaction.passwords[mutation.PrincipalID] != mutation.ExpectedPasswordHash {
+		return iamv1.ChangePasswordResponse{}, ErrRetryableTransaction
+	}
+	transaction.passwords[mutation.PrincipalID] = mutation.NewPasswordHash
+	principal := transaction.users[mutation.PrincipalID]
+	principal.MustChangePassword = false
+	principal.ResourceVersion++
+	principal.UpdatedAt = transaction.now
+	transaction.users[mutation.PrincipalID] = principal
+	if mutation.PrincipalID == transaction.principal.ID {
+		transaction.principal = principal
+	}
+	return iamv1.ChangePasswordResponse{
+		ChangedAt: transaction.now, BootstrapFileRetirable: mutation.PrincipalID == transaction.principal.ID,
+	}, nil
+}
+
+func (transaction *coreTransaction) RevokeSession(
+	_ context.Context,
+	mutation SessionRevocationMutation,
+) (iamv1.Revocation, bool, error) {
+	for lookup, binding := range transaction.sessions {
+		if binding.Subject.Session.ID != mutation.SessionID {
+			continue
+		}
+		if binding.Subject.Session.Status == iamv1.SessionRevoked {
+			return iamv1.Revocation{
+				APIVersion: iamv1.APIVersion, Kind: "Revocation", ID: string(mutation.SessionID),
+				ResourceVersion: 2, RevokedAt: *binding.Subject.Session.RevokedAt,
+			}, false, nil
+		}
+		revokedAt := transaction.now
+		binding.Subject.Session.Status = iamv1.SessionRevoked
+		binding.Subject.Session.RevokedAt = &revokedAt
+		transaction.sessions[lookup] = binding
+		return iamv1.Revocation{
+			APIVersion: iamv1.APIVersion, Kind: "Revocation", ID: string(mutation.SessionID),
+			ResourceVersion: 2, RevokedAt: revokedAt,
+		}, true, nil
+	}
+	return iamv1.Revocation{}, false, ErrForbidden
+}
+
+func (transaction *coreTransaction) CreateUser(
+	_ context.Context,
+	mutation UserMutation,
+) (iamv1.Principal, error) {
+	for _, existing := range transaction.users {
+		if existing.LoginName == mutation.Principal.LoginName {
+			return iamv1.Principal{}, ErrConflict
+		}
+	}
+	transaction.users[mutation.Principal.ID] = mutation.Principal
+	transaction.passwords[mutation.Principal.ID] = mutation.PasswordHash
+	return mutation.Principal, nil
+}
+
+func (transaction *coreTransaction) PutRoleBinding(
+	_ context.Context,
+	mutation RoleBindingMutation,
+) (iamv1.RoleBinding, bool, error) {
+	if _, found := transaction.users[mutation.Binding.PrincipalID]; !found {
+		return iamv1.RoleBinding{}, false, ErrForbidden
+	}
+	for _, existing := range transaction.bindings {
+		if existing.PrincipalID == mutation.Binding.PrincipalID && existing.Role == mutation.Binding.Role {
+			return existing, false, nil
+		}
+	}
+	transaction.bindings[mutation.Binding.ID] = mutation.Binding
+	return mutation.Binding, true, nil
+}
+
+func (transaction *coreTransaction) RevokeRoleBinding(
+	_ context.Context,
+	mutation RoleBindingRevocationMutation,
+) (iamv1.Revocation, bool, error) {
+	if revoked, found := transaction.bindingRevocations[mutation.RoleBindingID]; found {
+		return revoked, false, nil
+	}
+	binding, found := transaction.bindings[mutation.RoleBindingID]
+	if !found {
+		return iamv1.Revocation{}, false, ErrForbidden
+	}
+	delete(transaction.bindings, mutation.RoleBindingID)
+	revocation := iamv1.Revocation{
+		APIVersion: iamv1.APIVersion, Kind: "Revocation", ID: string(binding.ID),
+		ResourceVersion: binding.ResourceVersion + 1, RevokedAt: transaction.now,
+	}
+	transaction.bindingRevocations[mutation.RoleBindingID] = revocation
+	return revocation, true, nil
 }
 
 func (transaction *coreTransaction) Readiness(context.Context) (ReadinessSnapshot, error) {

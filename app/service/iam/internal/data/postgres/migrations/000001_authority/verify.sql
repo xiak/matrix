@@ -117,10 +117,26 @@ BEGIN
        )
        OR NOT has_function_privilege('matrix_iam_api', 'iam.lookup_session(text)', 'EXECUTE')
        OR NOT has_function_privilege('matrix_iam_api', 'iam.lookup_service(text)', 'EXECUTE')
+       OR NOT has_function_privilege('matrix_iam_api', 'iam.lookup_password(text,text)', 'EXECUTE')
        OR NOT has_function_privilege(
             'matrix_iam_api',
             'iam.record_authorization(text,text,jsonb,jsonb)',
             'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_iam_api', 'iam.change_password(text,text,text,text,jsonb)', 'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_iam_api', 'iam.revoke_session(text,text,text,text,jsonb)', 'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_iam_api', 'iam.create_user(text,text,text,text,text,text,text,jsonb)', 'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_iam_api', 'iam.put_role_binding(text,text,text,text,text,text,jsonb)', 'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_iam_api', 'iam.revoke_role_binding(text,text,text,text,jsonb)', 'EXECUTE'
        )
        OR NOT has_function_privilege(
             'matrix_iam_worker', 'iam.claim_audit_event(text,integer)', 'EXECUTE'
@@ -137,7 +153,18 @@ BEGIN
             'matrix_iam_worker', 'iam.lookup_login(text)', 'EXECUTE'
        )
        OR has_function_privilege(
+            'matrix_iam_worker',
+            'iam.change_password(text,text,text,text,jsonb)',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
             'matrix_iam_api', 'iam.resource_kind_for_action(text)', 'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_iam_api', 'iam.assert_allowed_decision(text,text,text,text,text,text)', 'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_iam_api', 'iam.assert_user_audit_actor(text,text,jsonb)', 'EXECUTE'
        ) THEN
         RAISE EXCEPTION 'IAM API/worker function authority is invalid';
     END IF;

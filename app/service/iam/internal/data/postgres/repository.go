@@ -84,3 +84,11 @@ func mapSubjectDatabaseError(operation string, err error) error {
 	}
 	return mapDatabaseError(operation, err)
 }
+
+func mapAuthorizationDatabaseError(operation string, err error) error {
+	var postgresError *pgconn.PgError
+	if errors.As(err, &postgresError) && postgresError.Code == "42501" {
+		return fmt.Errorf("%s: %w", operation, identityaccess.ErrForbidden)
+	}
+	return mapDatabaseError(operation, err)
+}

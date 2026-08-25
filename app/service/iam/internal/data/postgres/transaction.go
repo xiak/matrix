@@ -331,6 +331,31 @@ func (value *transaction) LookupService(
 	}, true, nil
 }
 
+func (value *transaction) LookupPassword(
+	ctx context.Context,
+	organizationID iamv1.OrganizationID,
+	principalID iamv1.PrincipalID,
+) (authority.PasswordHash, bool, error) {
+	if iamv1.ValidateID("organizationId", string(organizationID)) != nil ||
+		iamv1.ValidateID("principalId", string(principalID)) != nil {
+		return "", false, identityaccess.ErrInvalidArgument
+	}
+	var passwordHash string
+	err := value.tx.QueryRow(
+		ctx,
+		"SELECT * FROM iam.lookup_password($1, $2)",
+		string(organizationID),
+		string(principalID),
+	).Scan(&passwordHash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, mapDatabaseError("lookup IAM password", err)
+	}
+	return authority.PasswordHash(passwordHash), true, nil
+}
+
 func (value *transaction) RecordAuthorization(
 	ctx context.Context,
 	mutation identityaccess.AuthorizationMutation,
@@ -362,6 +387,228 @@ func (value *transaction) RecordAuthorization(
 		return mapSubjectDatabaseError("record IAM authorization", err)
 	}
 	return nil
+}
+
+func (value *transaction) ChangePassword(
+	ctx context.Context,
+	mutation identityaccess.PasswordMutation,
+) (iamv1.ChangePasswordResponse, error) {
+	if iamv1.ValidateID("organizationId", string(mutation.OrganizationID)) != nil ||
+		iamv1.ValidateID("principalId", string(mutation.PrincipalID)) != nil ||
+		mutation.ExpectedPasswordHash == "" || mutation.NewPasswordHash == "" ||
+		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
+		return iamv1.ChangePasswordResponse{}, identityaccess.ErrInvalidArgument
+	}
+	event, err := json.Marshal(mutation.AuditEvent)
+	if err != nil {
+		return iamv1.ChangePasswordResponse{}, identityaccess.ErrUnavailable
+	}
+	var response iamv1.ChangePasswordResponse
+	err = value.tx.QueryRow(
+		ctx,
+		"SELECT * FROM iam.change_password($1, $2, $3, $4, $5::jsonb)",
+		string(mutation.OrganizationID),
+		string(mutation.PrincipalID),
+		string(mutation.ExpectedPasswordHash),
+		string(mutation.NewPasswordHash),
+		event,
+	).Scan(&response.ChangedAt, &response.BootstrapFileRetirable)
+	clear(event)
+	if err != nil {
+		return iamv1.ChangePasswordResponse{}, mapSubjectDatabaseError("change IAM password", err)
+	}
+	response.ChangedAt = response.ChangedAt.UTC()
+	if iamv1.ValidateChangePasswordResponse(response) != nil ||
+		response.ChangedAt != mutation.AuditEvent.OccurredAt {
+		return iamv1.ChangePasswordResponse{}, identityaccess.ErrUnavailable
+	}
+	return response, nil
+}
+
+func (value *transaction) RevokeSession(
+	ctx context.Context,
+	mutation identityaccess.SessionRevocationMutation,
+) (iamv1.Revocation, bool, error) {
+	if iamv1.ValidateID("organizationId", string(mutation.OrganizationID)) != nil ||
+		iamv1.ValidateID("sessionId", string(mutation.SessionID)) != nil ||
+		iamv1.ValidateID("actorPrincipalId", string(mutation.ActorPrincipalID)) != nil ||
+		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
+		return iamv1.Revocation{}, false, identityaccess.ErrInvalidArgument
+	}
+	var decisionID any
+	if mutation.DecisionID != "" {
+		if iamv1.ValidateID("decisionId", string(mutation.DecisionID)) != nil {
+			return iamv1.Revocation{}, false, identityaccess.ErrInvalidArgument
+		}
+		decisionID = string(mutation.DecisionID)
+	}
+	event, err := json.Marshal(mutation.AuditEvent)
+	if err != nil {
+		return iamv1.Revocation{}, false, identityaccess.ErrUnavailable
+	}
+	var version uint64
+	var revokedAt time.Time
+	var applied bool
+	err = value.tx.QueryRow(
+		ctx,
+		"SELECT * FROM iam.revoke_session($1, $2, $3, $4, $5::jsonb)",
+		string(mutation.OrganizationID),
+		string(mutation.SessionID),
+		string(mutation.ActorPrincipalID),
+		decisionID,
+		event,
+	).Scan(&version, &revokedAt, &applied)
+	clear(event)
+	if err != nil {
+		return iamv1.Revocation{}, false, mapAuthorizationDatabaseError("revoke IAM session", err)
+	}
+	result := iamv1.Revocation{
+		APIVersion:      iamv1.APIVersion,
+		Kind:            "Revocation",
+		ID:              string(mutation.SessionID),
+		ResourceVersion: version,
+		RevokedAt:       revokedAt.UTC(),
+	}
+	if iamv1.ValidateRevocation(result) != nil {
+		return iamv1.Revocation{}, false, identityaccess.ErrUnavailable
+	}
+	return result, applied, nil
+}
+
+func (value *transaction) CreateUser(
+	ctx context.Context,
+	mutation identityaccess.UserMutation,
+) (iamv1.Principal, error) {
+	if iamv1.ValidatePrincipal(mutation.Principal) != nil ||
+		iamv1.ValidateID("actorPrincipalId", string(mutation.ActorPrincipalID)) != nil ||
+		iamv1.ValidateID("decisionId", string(mutation.DecisionID)) != nil ||
+		mutation.PasswordHash == "" ||
+		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
+		return iamv1.Principal{}, identityaccess.ErrInvalidArgument
+	}
+	event, err := json.Marshal(mutation.AuditEvent)
+	if err != nil {
+		return iamv1.Principal{}, identityaccess.ErrUnavailable
+	}
+	var createdAt, updatedAt time.Time
+	err = value.tx.QueryRow(
+		ctx,
+		"SELECT * FROM iam.create_user($1, $2, $3, $4, $5, $6, $7, $8::jsonb)",
+		string(mutation.Principal.OrganizationID),
+		string(mutation.Principal.ID),
+		mutation.Principal.LoginName,
+		mutation.Principal.DisplayName,
+		string(mutation.PasswordHash),
+		string(mutation.ActorPrincipalID),
+		string(mutation.DecisionID),
+		event,
+	).Scan(&createdAt, &updatedAt)
+	clear(event)
+	if err != nil {
+		return iamv1.Principal{}, mapAuthorizationDatabaseError("create IAM user", err)
+	}
+	stored := mutation.Principal
+	stored.CreatedAt = createdAt.UTC()
+	stored.UpdatedAt = updatedAt.UTC()
+	if iamv1.ValidatePrincipal(stored) != nil || stored.CreatedAt != mutation.Principal.CreatedAt ||
+		stored.UpdatedAt != mutation.Principal.UpdatedAt {
+		return iamv1.Principal{}, identityaccess.ErrUnavailable
+	}
+	return stored, nil
+}
+
+func (value *transaction) PutRoleBinding(
+	ctx context.Context,
+	mutation identityaccess.RoleBindingMutation,
+) (iamv1.RoleBinding, bool, error) {
+	if iamv1.ValidateRoleBinding(mutation.Binding) != nil ||
+		iamv1.ValidateID("actorPrincipalId", string(mutation.ActorPrincipalID)) != nil ||
+		iamv1.ValidateID("decisionId", string(mutation.DecisionID)) != nil ||
+		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
+		return iamv1.RoleBinding{}, false, identityaccess.ErrInvalidArgument
+	}
+	event, err := json.Marshal(mutation.AuditEvent)
+	if err != nil {
+		return iamv1.RoleBinding{}, false, identityaccess.ErrUnavailable
+	}
+	var id, principalID, role string
+	var version uint64
+	var createdAt, updatedAt time.Time
+	var applied bool
+	err = value.tx.QueryRow(
+		ctx,
+		"SELECT * FROM iam.put_role_binding($1, $2, $3, $4, $5, $6, $7::jsonb)",
+		string(mutation.Binding.OrganizationID),
+		string(mutation.Binding.ID),
+		string(mutation.Binding.PrincipalID),
+		string(mutation.Binding.Role),
+		string(mutation.ActorPrincipalID),
+		string(mutation.DecisionID),
+		event,
+	).Scan(&id, &principalID, &role, &version, &createdAt, &updatedAt, &applied)
+	clear(event)
+	if err != nil {
+		return iamv1.RoleBinding{}, false, mapAuthorizationDatabaseError("put IAM role binding", err)
+	}
+	stored := iamv1.RoleBinding{
+		APIVersion:      iamv1.APIVersion,
+		Kind:            "RoleBinding",
+		ID:              iamv1.RoleBindingID(id),
+		OrganizationID:  mutation.Binding.OrganizationID,
+		PrincipalID:     iamv1.PrincipalID(principalID),
+		Role:            iamv1.BuiltinRole(role),
+		ResourceVersion: version,
+		CreatedAt:       createdAt.UTC(),
+		UpdatedAt:       updatedAt.UTC(),
+	}
+	if iamv1.ValidateRoleBinding(stored) != nil {
+		return iamv1.RoleBinding{}, false, identityaccess.ErrUnavailable
+	}
+	return stored, applied, nil
+}
+
+func (value *transaction) RevokeRoleBinding(
+	ctx context.Context,
+	mutation identityaccess.RoleBindingRevocationMutation,
+) (iamv1.Revocation, bool, error) {
+	if iamv1.ValidateID("organizationId", string(mutation.OrganizationID)) != nil ||
+		iamv1.ValidateID("roleBindingId", string(mutation.RoleBindingID)) != nil ||
+		iamv1.ValidateID("actorPrincipalId", string(mutation.ActorPrincipalID)) != nil ||
+		iamv1.ValidateID("decisionId", string(mutation.DecisionID)) != nil ||
+		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
+		return iamv1.Revocation{}, false, identityaccess.ErrInvalidArgument
+	}
+	event, err := json.Marshal(mutation.AuditEvent)
+	if err != nil {
+		return iamv1.Revocation{}, false, identityaccess.ErrUnavailable
+	}
+	var version uint64
+	var revokedAt time.Time
+	var applied bool
+	err = value.tx.QueryRow(
+		ctx,
+		"SELECT * FROM iam.revoke_role_binding($1, $2, $3, $4, $5::jsonb)",
+		string(mutation.OrganizationID),
+		string(mutation.RoleBindingID),
+		string(mutation.ActorPrincipalID),
+		string(mutation.DecisionID),
+		event,
+	).Scan(&version, &revokedAt, &applied)
+	clear(event)
+	if err != nil {
+		return iamv1.Revocation{}, false, mapAuthorizationDatabaseError("revoke IAM role binding", err)
+	}
+	result := iamv1.Revocation{
+		APIVersion:      iamv1.APIVersion,
+		Kind:            "Revocation",
+		ID:              string(mutation.RoleBindingID),
+		ResourceVersion: version,
+		RevokedAt:       revokedAt.UTC(),
+	}
+	if iamv1.ValidateRevocation(result) != nil {
+		return iamv1.Revocation{}, false, identityaccess.ErrUnavailable
+	}
+	return result, applied, nil
 }
 
 func (value *transaction) Readiness(

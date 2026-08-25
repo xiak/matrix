@@ -22,6 +22,22 @@ type Workflow interface {
 	BootstrapStatus(context.Context, iamv1.Secret) (iamv1.BootstrapStatus, error)
 	ServiceIdentity(context.Context, iamv1.Secret) (iamv1.ServiceIdentity, error)
 	Login(context.Context, iamv1.LoginRequest) (iamv1.LoginResponse, error)
+	Logout(context.Context, iamv1.Secret, iamv1.LogoutRequest) (iamv1.LogoutResponse, error)
+	ChangePassword(context.Context, iamv1.Secret, iamv1.ChangePasswordRequest) (iamv1.ChangePasswordResponse, error)
+	CreateUser(context.Context, iamv1.Secret, iamv1.CreateUserRequest) (iamv1.Principal, error)
+	PutRoleBinding(context.Context, iamv1.Secret, iamv1.PutRoleBindingRequest) (iamv1.RoleBinding, error)
+	RevokeRoleBinding(
+		context.Context,
+		iamv1.Secret,
+		iamv1.RoleBindingID,
+		iamv1.RevokeRoleBindingRequest,
+	) (iamv1.Revocation, error)
+	RevokeSession(
+		context.Context,
+		iamv1.Secret,
+		iamv1.SessionID,
+		iamv1.RevokeSessionRequest,
+	) (iamv1.Revocation, error)
 	Authorize(
 		context.Context,
 		iamv1.Secret,
@@ -55,7 +71,13 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/bootstrap/status", value.bootstrapStatus)
 	routes.HandleFunc("/v1/service-identity", value.serviceIdentity)
 	routes.HandleFunc("/v1/auth/login", value.login)
+	routes.HandleFunc("/v1/auth/logout", value.logout)
+	routes.HandleFunc("/v1/auth/password", value.changePassword)
 	routes.HandleFunc("/v1/authorize", value.authorize)
+	routes.HandleFunc("/v1/principals", value.createUser)
+	routes.HandleFunc("/v1/role-bindings", value.putRoleBinding)
+	routes.HandleFunc("/v1/role-bindings/", value.revokeRoleBinding)
+	routes.HandleFunc("/v1/sessions/", value.revokeSession)
 	routes.HandleFunc("/", value.notFound)
 	value.routes = routes
 	return value, nil
@@ -90,7 +112,7 @@ func (value *handler) bootstrapStatus(response http.ResponseWriter, request *htt
 	if !value.requireMethod(response, request, http.MethodGet) || !rejectQueryAndBody(response, request) {
 		return
 	}
-	credential, ok := serviceBearer(response, request)
+	credential, ok := bearerCredential(response, request)
 	if !ok {
 		return
 	}
@@ -106,7 +128,7 @@ func (value *handler) serviceIdentity(response http.ResponseWriter, request *htt
 	if !value.requireMethod(response, request, http.MethodGet) || !rejectQueryAndBody(response, request) {
 		return
 	}
-	credential, ok := serviceBearer(response, request)
+	credential, ok := bearerCredential(response, request)
 	if !ok {
 		return
 	}
@@ -139,11 +161,137 @@ func (value *handler) login(response http.ResponseWriter, request *http.Request)
 	writeEncodedJSON(response, http.StatusOK, encoded)
 }
 
+func (value *handler) logout(response http.ResponseWriter, request *http.Request) {
+	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	body, ok := decodeJSON[iamv1.LogoutRequest](value, response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.Logout(request.Context(), credential, body)
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) changePassword(response http.ResponseWriter, request *http.Request) {
+	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	body, ok := decodeJSON[iamv1.ChangePasswordRequest](value, response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.ChangePassword(request.Context(), credential, body)
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) createUser(response http.ResponseWriter, request *http.Request) {
+	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	body, ok := decodeJSON[iamv1.CreateUserRequest](value, response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.CreateUser(request.Context(), credential, body)
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusCreated, result)
+}
+
+func (value *handler) putRoleBinding(response http.ResponseWriter, request *http.Request) {
+	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	body, ok := decodeJSON[iamv1.PutRoleBindingRequest](value, response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.PutRoleBinding(request.Context(), credential, body)
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) revokeRoleBinding(response http.ResponseWriter, request *http.Request) {
+	id, ok := commandPathID(response, request, "/v1/role-bindings/", ":revoke", "roleBindingId")
+	if !ok || !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	body, ok := decodeJSON[iamv1.RevokeRoleBindingRequest](value, response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.RevokeRoleBinding(
+		request.Context(), credential, iamv1.RoleBindingID(id), body,
+	)
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) revokeSession(response http.ResponseWriter, request *http.Request) {
+	id, ok := commandPathID(response, request, "/v1/sessions/", ":revoke", "sessionId")
+	if !ok || !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	body, ok := decodeJSON[iamv1.RevokeSessionRequest](value, response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.RevokeSession(
+		request.Context(), credential, iamv1.SessionID(id), body,
+	)
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
 func (value *handler) authorize(response http.ResponseWriter, request *http.Request) {
 	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
 		return
 	}
-	serviceCredential, ok := serviceBearer(response, request)
+	serviceCredential, ok := bearerCredential(response, request)
 	if !ok {
 		return
 	}
@@ -229,7 +377,7 @@ func decodeJSON[T any](
 	return body, true
 }
 
-func serviceBearer(response http.ResponseWriter, request *http.Request) (iamv1.Secret, bool) {
+func bearerCredential(response http.ResponseWriter, request *http.Request) (iamv1.Secret, bool) {
 	values := request.Header.Values("Authorization")
 	if len(values) != 1 || !strings.HasPrefix(values[0], "Bearer ") {
 		writeAuthenticationProblem(response, request)
@@ -246,6 +394,26 @@ func serviceBearer(response http.ResponseWriter, request *http.Request) (iamv1.S
 		return iamv1.Secret{}, false
 	}
 	return credential, true
+}
+
+func commandPathID(
+	response http.ResponseWriter,
+	request *http.Request,
+	prefix string,
+	suffix string,
+	name string,
+) (string, bool) {
+	id, found := strings.CutPrefix(request.URL.Path, prefix)
+	if !found {
+		writeProblem(response, requestID(request), http.StatusNotFound, "iam.route.notfound", "IAM route not found")
+		return "", false
+	}
+	id, found = strings.CutSuffix(id, suffix)
+	if !found || strings.Contains(id, "/") || iamv1.ValidateID(name, id) != nil {
+		writeProblem(response, requestID(request), http.StatusNotFound, "iam.route.notfound", "IAM route not found")
+		return "", false
+	}
+	return id, true
 }
 
 func subjectBearer(response http.ResponseWriter, request *http.Request) (iamv1.Secret, bool) {

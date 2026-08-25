@@ -147,6 +147,79 @@ func TestIAMHTTPStrictDecodingAndRedactedProblems(t *testing.T) {
 	}
 }
 
+func TestIAMHTTPManagementCommandsRequireCurrentSession(t *testing.T) {
+	workflow := newHTTPWorkflow(t)
+	handler := newTestHandler(t, workflow)
+	requests := []struct {
+		name   string
+		target string
+		body   string
+		status int
+	}{
+		{
+			name: "change password", target: "/v1/auth/password", status: http.StatusOK,
+			body: `{"currentPassword":"Initial-Admin-Password-49!","newPassword":"Changed-Admin-Password-73!","requestId":"request-password"}`,
+		},
+		{
+			name: "create user", target: "/v1/principals", status: http.StatusCreated,
+			body: `{"loginName":"developer","displayName":"Developer","initialPassword":"Initial-Developer-Password-84!","requestId":"request-user"}`,
+		},
+		{
+			name: "put binding", target: "/v1/role-bindings", status: http.StatusOK,
+			body: `{"principalId":"principal-user","role":"PAAS_DEVELOPER","requestId":"request-binding"}`,
+		},
+		{
+			name: "revoke binding", target: "/v1/role-bindings/binding-user:revoke", status: http.StatusOK,
+			body: `{"requestId":"request-binding-revoke"}`,
+		},
+		{
+			name: "revoke session", target: "/v1/sessions/session-user:revoke", status: http.StatusOK,
+			body: `{"requestId":"request-session-revoke"}`,
+		},
+		{
+			name: "logout", target: "/v1/auth/logout", status: http.StatusOK,
+			body: `{"requestId":"request-logout"}`,
+		},
+	}
+	for _, test := range requests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, test.target, strings.NewReader(test.body))
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Authorization", "Bearer user-session-credential")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != test.status || bytes.Contains(response.Body.Bytes(), []byte("Password-")) {
+				t.Fatalf("management response status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+
+	missingCredential := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/principals",
+		strings.NewReader(`{"loginName":"developer","displayName":"Developer","initialPassword":"Initial-Developer-Password-84!","requestId":"request-user"}`),
+	)
+	missingCredential.Header.Set("Content-Type", "application/json")
+	missingResponse := httptest.NewRecorder()
+	handler.ServeHTTP(missingResponse, missingCredential)
+	if missingResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("missing management credential status=%d body=%s", missingResponse.Code, missingResponse.Body.String())
+	}
+
+	invalidPath := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/sessions/not/one-id:revoke",
+		strings.NewReader(`{"requestId":"request-session-revoke"}`),
+	)
+	invalidPath.Header.Set("Content-Type", "application/json")
+	invalidPath.Header.Set("Authorization", "Bearer user-session-credential")
+	invalidResponse := httptest.NewRecorder()
+	handler.ServeHTTP(invalidResponse, invalidPath)
+	if invalidResponse.Code != http.StatusNotFound {
+		t.Fatalf("invalid command path status=%d body=%s", invalidResponse.Code, invalidResponse.Body.String())
+	}
+}
+
 type httpWorkflow struct {
 	readiness      iamv1.Readiness
 	status         iamv1.BootstrapStatus
@@ -240,6 +313,75 @@ func (workflow *httpWorkflow) Login(context.Context, iamv1.LoginRequest) (iamv1.
 		return iamv1.LoginResponse{}, workflow.loginErr
 	}
 	return workflow.login, nil
+}
+
+func (workflow *httpWorkflow) Logout(
+	context.Context,
+	iamv1.Secret,
+	iamv1.LogoutRequest,
+) (iamv1.LogoutResponse, error) {
+	return iamv1.LogoutResponse{RevokedAt: workflow.login.Session.IssuedAt}, nil
+}
+
+func (workflow *httpWorkflow) ChangePassword(
+	context.Context,
+	iamv1.Secret,
+	iamv1.ChangePasswordRequest,
+) (iamv1.ChangePasswordResponse, error) {
+	return iamv1.ChangePasswordResponse{
+		ChangedAt: workflow.login.Session.IssuedAt, BootstrapFileRetirable: true,
+	}, nil
+}
+
+func (workflow *httpWorkflow) CreateUser(
+	context.Context,
+	iamv1.Secret,
+	iamv1.CreateUserRequest,
+) (iamv1.Principal, error) {
+	now := workflow.login.Session.IssuedAt
+	return iamv1.Principal{
+		APIVersion: iamv1.APIVersion, Kind: "Principal", ID: "principal-user",
+		OrganizationID: "organization-example", Type: iamv1.PrincipalUser,
+		LoginName: "developer", DisplayName: "Developer", Status: iamv1.PrincipalActive,
+		MustChangePassword: true, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now,
+	}, nil
+}
+
+func (workflow *httpWorkflow) PutRoleBinding(
+	context.Context,
+	iamv1.Secret,
+	iamv1.PutRoleBindingRequest,
+) (iamv1.RoleBinding, error) {
+	now := workflow.login.Session.IssuedAt
+	return iamv1.RoleBinding{
+		APIVersion: iamv1.APIVersion, Kind: "RoleBinding", ID: "binding-user",
+		OrganizationID: "organization-example", PrincipalID: "principal-user",
+		Role: iamv1.RolePaaSDeveloper, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now,
+	}, nil
+}
+
+func (workflow *httpWorkflow) RevokeRoleBinding(
+	_ context.Context,
+	_ iamv1.Secret,
+	id iamv1.RoleBindingID,
+	_ iamv1.RevokeRoleBindingRequest,
+) (iamv1.Revocation, error) {
+	return iamv1.Revocation{
+		APIVersion: iamv1.APIVersion, Kind: "Revocation", ID: string(id),
+		ResourceVersion: 2, RevokedAt: workflow.login.Session.IssuedAt,
+	}, nil
+}
+
+func (workflow *httpWorkflow) RevokeSession(
+	_ context.Context,
+	_ iamv1.Secret,
+	id iamv1.SessionID,
+	_ iamv1.RevokeSessionRequest,
+) (iamv1.Revocation, error) {
+	return iamv1.Revocation{
+		APIVersion: iamv1.APIVersion, Kind: "Revocation", ID: string(id),
+		ResourceVersion: 2, RevokedAt: workflow.login.Session.IssuedAt,
+	}, nil
 }
 
 func (workflow *httpWorkflow) Authorize(

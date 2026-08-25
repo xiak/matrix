@@ -39,8 +39,14 @@ type Transaction interface {
 	LookupLogin(context.Context, string) (LoginAccount, bool, error)
 	IssueSession(context.Context, SessionMutation) (iamv1.Session, error)
 	LookupSession(context.Context, string) (SessionCredential, bool, error)
+	LookupPassword(context.Context, iamv1.OrganizationID, iamv1.PrincipalID) (authority.PasswordHash, bool, error)
 	LookupService(context.Context, string) (ServiceCredential, bool, error)
 	RecordAuthorization(context.Context, AuthorizationMutation) error
+	ChangePassword(context.Context, PasswordMutation) (iamv1.ChangePasswordResponse, error)
+	RevokeSession(context.Context, SessionRevocationMutation) (iamv1.Revocation, bool, error)
+	CreateUser(context.Context, UserMutation) (iamv1.Principal, error)
+	PutRoleBinding(context.Context, RoleBindingMutation) (iamv1.RoleBinding, bool, error)
+	RevokeRoleBinding(context.Context, RoleBindingRevocationMutation) (iamv1.Revocation, bool, error)
 	Readiness(context.Context) (ReadinessSnapshot, error)
 }
 
@@ -98,6 +104,45 @@ type AuthorizationMutation struct {
 	PrincipalID    iamv1.PrincipalID
 	Decision       iamv1.AuthorizationDecision
 	AuditEvent     auditv1.Event
+}
+
+type PasswordMutation struct {
+	OrganizationID       iamv1.OrganizationID
+	PrincipalID          iamv1.PrincipalID
+	ExpectedPasswordHash authority.PasswordHash
+	NewPasswordHash      authority.PasswordHash
+	AuditEvent           auditv1.Event
+}
+
+type SessionRevocationMutation struct {
+	OrganizationID   iamv1.OrganizationID
+	SessionID        iamv1.SessionID
+	ActorPrincipalID iamv1.PrincipalID
+	DecisionID       iamv1.DecisionID
+	AuditEvent       auditv1.Event
+}
+
+type UserMutation struct {
+	Principal        iamv1.Principal
+	PasswordHash     authority.PasswordHash
+	ActorPrincipalID iamv1.PrincipalID
+	DecisionID       iamv1.DecisionID
+	AuditEvent       auditv1.Event
+}
+
+type RoleBindingMutation struct {
+	Binding          iamv1.RoleBinding
+	ActorPrincipalID iamv1.PrincipalID
+	DecisionID       iamv1.DecisionID
+	AuditEvent       auditv1.Event
+}
+
+type RoleBindingRevocationMutation struct {
+	OrganizationID   iamv1.OrganizationID
+	RoleBindingID    iamv1.RoleBindingID
+	ActorPrincipalID iamv1.PrincipalID
+	DecisionID       iamv1.DecisionID
+	AuditEvent       auditv1.Event
 }
 
 type ReadinessSnapshot struct {

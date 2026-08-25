@@ -49,11 +49,11 @@ func (hasher *PasswordHasher) Hash(password iamv1.Secret) (PasswordHash, error) 
 	if hasher == nil || hasher.entropy == nil {
 		return "", ErrPasswordHashing
 	}
-	plaintext := password.CopyBytes()
-	defer clear(plaintext)
-	if err := validatePasswordPolicy(plaintext); err != nil {
+	if err := ValidatePassword(password); err != nil {
 		return "", err
 	}
+	plaintext := password.CopyBytes()
+	defer clear(plaintext)
 	salt := make([]byte, passwordSaltBytes)
 	if _, err := io.ReadFull(hasher.entropy, salt); err != nil {
 		clear(salt)
@@ -78,6 +78,15 @@ func (hasher *PasswordHasher) Hash(password iamv1.Secret) (PasswordHash, error) 
 	clear(salt)
 	clear(derived)
 	return PasswordHash(encoded), nil
+}
+
+// ValidatePassword applies the fixed Phase 1 password policy without hashing.
+// Use cases call it before authentication so malformed input is rejected
+// cheaply, then hash only after the caller has authenticated.
+func ValidatePassword(password iamv1.Secret) error {
+	plaintext := password.CopyBytes()
+	defer clear(plaintext)
+	return validatePasswordPolicy(plaintext)
 }
 
 func (hasher *PasswordHasher) Verify(password iamv1.Secret, stored PasswordHash) (bool, error) {

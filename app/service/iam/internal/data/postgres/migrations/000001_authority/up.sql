@@ -23,10 +23,12 @@ CREATE TABLE IF NOT EXISTS iam.bootstrap_receipts (
     installation_id text COLLATE "C" NOT NULL UNIQUE,
     content_digest text COLLATE "C" NOT NULL,
     organization_id text COLLATE "C" NOT NULL,
+    administrator_principal_id text COLLATE "C" NOT NULL,
     applied_at timestamptz(6) NOT NULL,
     CONSTRAINT bootstrap_receipts_identity_valid CHECK (
         installation_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND organization_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND administrator_principal_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND content_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
     )
 );
@@ -177,6 +179,7 @@ CREATE TABLE IF NOT EXISTS iam.sessions (
     principal_id text COLLATE "C" NOT NULL,
     verification_digest text COLLATE "C" NOT NULL,
     status text COLLATE "C" NOT NULL,
+    resource_version bigint NOT NULL,
     issued_at timestamptz(6) NOT NULL,
     expires_at timestamptz(6) NOT NULL,
     revoked_at timestamptz(6),
@@ -188,6 +191,7 @@ CREATE TABLE IF NOT EXISTS iam.sessions (
         AND principal_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND verification_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
         AND status IN ('ACTIVE', 'REVOKED')
+        AND resource_version BETWEEN 1 AND 9007199254740991
         AND expires_at > issued_at
         AND (
             (status = 'ACTIVE' AND revoked_at IS NULL)
@@ -590,10 +594,11 @@ BEGIN
         END IF;
     END LOOP;
     INSERT INTO iam.bootstrap_receipts (
-        installation_id, content_digest, organization_id, applied_at
+        installation_id, content_digest, organization_id,
+        administrator_principal_id, applied_at
     ) VALUES (
         submitted_installation_id, submitted_content_digest,
-        submitted_organization_id, effective_now
+        submitted_organization_id, submitted_administrator_id, effective_now
     );
     INSERT INTO iam.audit_outbox (
         tenant_id, event_id, event_document, next_attempt_at,
@@ -772,11 +777,11 @@ BEGIN
         'iam.session.issued', 'SESSION', submitted_session_id, 'SUCCEEDED'
     );
     INSERT INTO iam.sessions (
-        tenant_id, id, principal_id, verification_digest, status,
+        tenant_id, id, principal_id, verification_digest, status, resource_version,
         issued_at, expires_at
     ) VALUES (
         submitted_tenant_id, submitted_session_id, submitted_principal_id,
-        submitted_verification_digest, 'ACTIVE', effective_now,
+        submitted_verification_digest, 'ACTIVE', 1, effective_now,
         effective_expires_at
     );
     INSERT INTO iam.session_index (lookup_digest, tenant_id, session_id)
@@ -1049,6 +1054,489 @@ BEGIN
 END
 $function$;
 
+CREATE OR REPLACE FUNCTION iam.assert_allowed_decision(
+    submitted_tenant_id text,
+    submitted_actor_principal_id text,
+    submitted_decision_id text,
+    submitted_action text,
+    submitted_target_kind text,
+    submitted_target_id text
+)
+RETURNS void
+LANGUAGE plpgsql
+SET search_path = pg_catalog, pg_temp
+AS $function$
+BEGIN
+    IF submitted_tenant_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_actor_principal_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_decision_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_target_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'authorization reference is invalid';
+    END IF;
+    PERFORM set_config('matrix.iam_tenant_id', submitted_tenant_id, true);
+    IF NOT EXISTS (
+        SELECT 1
+          FROM iam.authorization_decisions AS decision
+         WHERE decision.tenant_id = submitted_tenant_id
+           AND decision.id = submitted_decision_id
+           AND decision.principal_id = submitted_actor_principal_id
+           AND decision.allowed
+           AND decision.action_name = submitted_action
+           AND decision.target_kind = submitted_target_kind
+           AND decision.target_id = submitted_target_id
+           AND decision.decided_at = transaction_timestamp()
+    ) THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'authorization decision is unavailable';
+    END IF;
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION iam.assert_user_audit_actor(
+    submitted_tenant_id text,
+    submitted_actor_principal_id text,
+    submitted_audit_event jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+SET search_path = pg_catalog, pg_temp
+AS $function$
+BEGIN
+    PERFORM set_config('matrix.iam_tenant_id', submitted_tenant_id, true);
+    IF submitted_audit_event#>>'{actor,type}' IS DISTINCT FROM 'USER'
+       OR submitted_audit_event#>>'{actor,id}' IS DISTINCT FROM submitted_actor_principal_id
+       OR NOT EXISTS (
+            SELECT 1
+              FROM iam.principals AS principal
+             WHERE principal.tenant_id = submitted_tenant_id
+               AND principal.id = submitted_actor_principal_id
+               AND principal.principal_type = 'USER'
+               AND principal.status = 'ACTIVE'
+       ) THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'Audit actor is unavailable';
+    END IF;
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION iam.lookup_password(
+    submitted_tenant_id text,
+    submitted_principal_id text
+)
+RETURNS TABLE (password_hash text)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+BEGIN
+    IF submitted_tenant_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_principal_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'password subject is invalid';
+    END IF;
+    PERFORM set_config('matrix.iam_tenant_id', submitted_tenant_id, true);
+    RETURN QUERY
+    SELECT credential.password_hash
+      FROM iam.user_credentials AS credential
+      JOIN iam.organizations AS organization ON organization.id = credential.tenant_id
+      JOIN iam.principals AS principal
+        ON principal.tenant_id = credential.tenant_id
+       AND principal.id = credential.principal_id
+     WHERE credential.tenant_id = submitted_tenant_id
+       AND credential.principal_id = submitted_principal_id
+       AND organization.status = 'ACTIVE'
+       AND principal.principal_type = 'USER'
+       AND principal.status = 'ACTIVE';
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION iam.change_password(
+    submitted_tenant_id text,
+    submitted_principal_id text,
+    submitted_expected_password_hash text,
+    submitted_new_password_hash text,
+    submitted_audit_event jsonb
+)
+RETURNS TABLE (changed_at timestamptz, bootstrap_file_retirable boolean)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_now timestamptz(6) := transaction_timestamp();
+    changed integer;
+    retirable boolean;
+BEGIN
+    IF submitted_tenant_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_principal_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_expected_password_hash NOT LIKE '$matrix-iam-v1$argon2id$v=19$%'
+       OR submitted_new_password_hash NOT LIKE '$matrix-iam-v1$argon2id$v=19$%'
+       OR submitted_expected_password_hash = submitted_new_password_hash THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'password mutation is invalid';
+    END IF;
+    PERFORM set_config('matrix.iam_tenant_id', submitted_tenant_id, true);
+    PERFORM iam.assert_audit_event(
+        submitted_audit_event, submitted_tenant_id,
+        'iam.password.changed', 'PRINCIPAL', submitted_principal_id, 'SUCCEEDED'
+    );
+    PERFORM iam.assert_user_audit_actor(
+        submitted_tenant_id, submitted_principal_id, submitted_audit_event
+    );
+    UPDATE iam.user_credentials AS credential
+       SET password_hash = submitted_new_password_hash,
+           changed_at = effective_now
+     WHERE credential.tenant_id = submitted_tenant_id
+       AND credential.principal_id = submitted_principal_id
+       AND credential.password_hash = submitted_expected_password_hash;
+    GET DIAGNOSTICS changed = ROW_COUNT;
+    IF changed <> 1 THEN
+        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'password changed concurrently';
+    END IF;
+    UPDATE iam.principals AS principal
+       SET must_change_password = false,
+           resource_version = principal.resource_version + 1,
+           updated_at = effective_now
+     WHERE principal.tenant_id = submitted_tenant_id
+       AND principal.id = submitted_principal_id
+       AND principal.principal_type = 'USER'
+       AND principal.status = 'ACTIVE';
+    GET DIAGNOSTICS changed = ROW_COUNT;
+    IF changed <> 1 THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'password subject is unavailable';
+    END IF;
+    SELECT EXISTS (
+        SELECT 1
+          FROM iam.bootstrap_receipts AS receipt
+         WHERE receipt.singleton
+           AND receipt.organization_id = submitted_tenant_id
+           AND receipt.administrator_principal_id = submitted_principal_id
+    ) INTO retirable;
+    INSERT INTO iam.audit_outbox (
+        tenant_id, event_id, event_document, next_attempt_at,
+        created_at, updated_at
+    ) VALUES (
+        submitted_tenant_id, submitted_audit_event->>'eventId',
+        submitted_audit_event, effective_now, effective_now, effective_now
+    );
+    RETURN QUERY SELECT effective_now, retirable;
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION iam.revoke_session(
+    submitted_tenant_id text,
+    submitted_session_id text,
+    submitted_actor_principal_id text,
+    submitted_decision_id text,
+    submitted_audit_event jsonb
+)
+RETURNS TABLE (resource_version bigint, revoked_at timestamptz, applied boolean)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_now timestamptz(6) := transaction_timestamp();
+    stored iam.sessions%ROWTYPE;
+BEGIN
+    IF submitted_tenant_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_session_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_actor_principal_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR (submitted_decision_id IS NOT NULL AND submitted_decision_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$') THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'session revocation is invalid';
+    END IF;
+    PERFORM set_config('matrix.iam_tenant_id', submitted_tenant_id, true);
+    SELECT * INTO stored
+      FROM iam.sessions AS session
+     WHERE session.tenant_id = submitted_tenant_id
+       AND session.id = submitted_session_id
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'session is unavailable';
+    END IF;
+    IF submitted_decision_id IS NULL THEN
+        IF stored.principal_id <> submitted_actor_principal_id
+           OR submitted_audit_event ? 'iamDecisionId' THEN
+            RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'session self-revocation is forbidden';
+        END IF;
+    ELSE
+        PERFORM iam.assert_allowed_decision(
+            submitted_tenant_id, submitted_actor_principal_id,
+            submitted_decision_id, 'iam.session.revoke', 'SESSION', submitted_session_id
+        );
+        IF submitted_audit_event->>'iamDecisionId' IS DISTINCT FROM submitted_decision_id THEN
+            RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'session decision correlation is invalid';
+        END IF;
+    END IF;
+    IF stored.status = 'REVOKED' THEN
+        RETURN QUERY SELECT stored.resource_version, stored.revoked_at, false;
+        RETURN;
+    END IF;
+    PERFORM iam.assert_audit_event(
+        submitted_audit_event, submitted_tenant_id,
+        'iam.session.revoked', 'SESSION', submitted_session_id, 'SUCCEEDED'
+    );
+    PERFORM iam.assert_user_audit_actor(
+        submitted_tenant_id, submitted_actor_principal_id, submitted_audit_event
+    );
+    UPDATE iam.sessions AS session
+       SET status = 'REVOKED',
+           resource_version = session.resource_version + 1,
+           revoked_at = effective_now
+     WHERE session.tenant_id = submitted_tenant_id
+       AND session.id = submitted_session_id;
+    INSERT INTO iam.audit_outbox (
+        tenant_id, event_id, event_document, next_attempt_at,
+        created_at, updated_at
+    ) VALUES (
+        submitted_tenant_id, submitted_audit_event->>'eventId',
+        submitted_audit_event, effective_now, effective_now, effective_now
+    );
+    RETURN QUERY SELECT stored.resource_version + 1, effective_now, true;
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION iam.create_user(
+    submitted_tenant_id text,
+    submitted_principal_id text,
+    submitted_login_name text,
+    submitted_display_name text,
+    submitted_password_hash text,
+    submitted_actor_principal_id text,
+    submitted_decision_id text,
+    submitted_audit_event jsonb
+)
+RETURNS TABLE (created_at timestamptz, updated_at timestamptz)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_now timestamptz(6) := transaction_timestamp();
+BEGIN
+    IF submitted_tenant_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_principal_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_login_name COLLATE "C" !~ '^[a-z][a-z0-9._-]{2,63}$'
+       OR length(submitted_display_name) NOT BETWEEN 1 AND 128
+       OR btrim(submitted_display_name) <> submitted_display_name
+       OR submitted_password_hash NOT LIKE '$matrix-iam-v1$argon2id$v=19$%' THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'user mutation is invalid';
+    END IF;
+    PERFORM iam.assert_allowed_decision(
+        submitted_tenant_id, submitted_actor_principal_id,
+        submitted_decision_id, 'iam.principal.create', 'ORGANIZATION', submitted_tenant_id
+    );
+    PERFORM iam.assert_audit_event(
+        submitted_audit_event, submitted_tenant_id,
+        'iam.principal.created', 'PRINCIPAL', submitted_principal_id, 'SUCCEEDED'
+    );
+    PERFORM iam.assert_user_audit_actor(
+        submitted_tenant_id, submitted_actor_principal_id, submitted_audit_event
+    );
+    IF submitted_audit_event->>'iamDecisionId' IS DISTINCT FROM submitted_decision_id THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'user decision correlation is invalid';
+    END IF;
+    INSERT INTO iam.principals (
+        tenant_id, id, principal_type, login_name, display_name, status,
+        must_change_password, resource_version, created_at, updated_at
+    ) VALUES (
+        submitted_tenant_id, submitted_principal_id, 'USER', submitted_login_name,
+        submitted_display_name, 'ACTIVE', true, 1, effective_now, effective_now
+    );
+    INSERT INTO iam.user_credentials (
+        tenant_id, principal_id, password_hash, changed_at
+    ) VALUES (
+        submitted_tenant_id, submitted_principal_id,
+        submitted_password_hash, effective_now
+    );
+    INSERT INTO iam.login_index (login_name, tenant_id, principal_id)
+    VALUES (submitted_login_name, submitted_tenant_id, submitted_principal_id);
+    INSERT INTO iam.audit_outbox (
+        tenant_id, event_id, event_document, next_attempt_at,
+        created_at, updated_at
+    ) VALUES (
+        submitted_tenant_id, submitted_audit_event->>'eventId',
+        submitted_audit_event, effective_now, effective_now, effective_now
+    );
+    RETURN QUERY SELECT effective_now, effective_now;
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION iam.put_role_binding(
+    submitted_tenant_id text,
+    submitted_role_binding_id text,
+    submitted_principal_id text,
+    submitted_role_name text,
+    submitted_actor_principal_id text,
+    submitted_decision_id text,
+    submitted_audit_event jsonb
+)
+RETURNS TABLE (
+    role_binding_id text,
+    principal_id text,
+    role_name text,
+    resource_version bigint,
+    created_at timestamptz,
+    updated_at timestamptz,
+    applied boolean
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_now timestamptz(6) := transaction_timestamp();
+    stored iam.role_bindings%ROWTYPE;
+    changed integer;
+BEGIN
+    IF submitted_tenant_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_role_binding_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_principal_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_role_name NOT IN (
+            'ORGANIZATION_ADMIN', 'PAAS_DEVELOPER', 'PAAS_VIEWER',
+            'AUDIT_READER', 'INSTALLATION_VERIFIER'
+       ) THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'role binding mutation is invalid';
+    END IF;
+    PERFORM iam.assert_allowed_decision(
+        submitted_tenant_id, submitted_actor_principal_id,
+        submitted_decision_id, 'iam.role-binding.put', 'PRINCIPAL', submitted_principal_id
+    );
+    PERFORM set_config('matrix.iam_tenant_id', submitted_tenant_id, true);
+    IF NOT EXISTS (
+        SELECT 1 FROM iam.principals AS principal
+         WHERE principal.tenant_id = submitted_tenant_id
+           AND principal.id = submitted_principal_id
+           AND principal.status = 'ACTIVE'
+    ) THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'role binding principal is unavailable';
+    END IF;
+    PERFORM iam.assert_audit_event(
+        submitted_audit_event, submitted_tenant_id,
+        'iam.role-binding.put', 'ROLE_BINDING', submitted_role_binding_id, 'SUCCEEDED'
+    );
+    PERFORM iam.assert_user_audit_actor(
+        submitted_tenant_id, submitted_actor_principal_id, submitted_audit_event
+    );
+    IF submitted_audit_event->>'iamDecisionId' IS DISTINCT FROM submitted_decision_id THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'role binding decision correlation is invalid';
+    END IF;
+    INSERT INTO iam.role_bindings (
+        tenant_id, id, principal_id, role_name, resource_version,
+        created_at, updated_at
+    ) VALUES (
+        submitted_tenant_id, submitted_role_binding_id, submitted_principal_id,
+        submitted_role_name, 1, effective_now, effective_now
+    ) ON CONFLICT ON CONSTRAINT role_bindings_active_uq DO NOTHING;
+    GET DIAGNOSTICS changed = ROW_COUNT;
+    IF changed = 0 THEN
+        SELECT * INTO stored
+          FROM iam.role_bindings AS binding
+         WHERE binding.tenant_id = submitted_tenant_id
+           AND binding.principal_id = submitted_principal_id
+           AND binding.role_name = submitted_role_name
+           AND binding.revoked_at IS NULL;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'role binding changed concurrently';
+        END IF;
+        RETURN QUERY SELECT stored.id, stored.principal_id, stored.role_name,
+                            stored.resource_version, stored.created_at,
+                            stored.updated_at, false;
+        RETURN;
+    END IF;
+    INSERT INTO iam.audit_outbox (
+        tenant_id, event_id, event_document, next_attempt_at,
+        created_at, updated_at
+    ) VALUES (
+        submitted_tenant_id, submitted_audit_event->>'eventId',
+        submitted_audit_event, effective_now, effective_now, effective_now
+    );
+    RETURN QUERY SELECT submitted_role_binding_id, submitted_principal_id,
+                        submitted_role_name, 1::bigint,
+                        effective_now, effective_now, true;
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION iam.revoke_role_binding(
+    submitted_tenant_id text,
+    submitted_role_binding_id text,
+    submitted_actor_principal_id text,
+    submitted_decision_id text,
+    submitted_audit_event jsonb
+)
+RETURNS TABLE (resource_version bigint, revoked_at timestamptz, applied boolean)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_now timestamptz(6) := transaction_timestamp();
+    stored iam.role_bindings%ROWTYPE;
+BEGIN
+    IF submitted_tenant_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_role_binding_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'role binding revocation is invalid';
+    END IF;
+    PERFORM iam.assert_allowed_decision(
+        submitted_tenant_id, submitted_actor_principal_id,
+        submitted_decision_id, 'iam.role-binding.revoke',
+        'ROLE_BINDING', submitted_role_binding_id
+    );
+    PERFORM set_config('matrix.iam_tenant_id', submitted_tenant_id, true);
+    SELECT * INTO stored
+      FROM iam.role_bindings AS binding
+     WHERE binding.tenant_id = submitted_tenant_id
+       AND binding.id = submitted_role_binding_id
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'role binding is unavailable';
+    END IF;
+    IF stored.revoked_at IS NOT NULL THEN
+        RETURN QUERY SELECT stored.resource_version, stored.revoked_at, false;
+        RETURN;
+    END IF;
+    PERFORM iam.assert_audit_event(
+        submitted_audit_event, submitted_tenant_id,
+        'iam.role-binding.revoked', 'ROLE_BINDING', submitted_role_binding_id, 'SUCCEEDED'
+    );
+    PERFORM iam.assert_user_audit_actor(
+        submitted_tenant_id, submitted_actor_principal_id, submitted_audit_event
+    );
+    IF submitted_audit_event->>'iamDecisionId' IS DISTINCT FROM submitted_decision_id THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'role binding decision correlation is invalid';
+    END IF;
+    UPDATE iam.role_bindings AS binding
+       SET resource_version = binding.resource_version + 1,
+           updated_at = effective_now,
+           revoked_at = effective_now
+     WHERE binding.tenant_id = submitted_tenant_id
+       AND binding.id = submitted_role_binding_id;
+    INSERT INTO iam.audit_outbox (
+        tenant_id, event_id, event_document, next_attempt_at,
+        created_at, updated_at
+    ) VALUES (
+        submitted_tenant_id, submitted_audit_event->>'eventId',
+        submitted_audit_event, effective_now, effective_now, effective_now
+    );
+    RETURN QUERY SELECT stored.resource_version + 1, effective_now, true;
+END
+$function$;
+
 CREATE OR REPLACE FUNCTION iam.claim_audit_event(
     submitted_worker_id text,
     submitted_lease_seconds integer
@@ -1187,8 +1675,24 @@ GRANT EXECUTE ON FUNCTION iam.issue_session(
 ) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.lookup_session(text) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.lookup_service(text) TO matrix_iam_api;
+GRANT EXECUTE ON FUNCTION iam.lookup_password(text, text) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.record_authorization(
     text, text, jsonb, jsonb
+) TO matrix_iam_api;
+GRANT EXECUTE ON FUNCTION iam.change_password(
+    text, text, text, text, jsonb
+) TO matrix_iam_api;
+GRANT EXECUTE ON FUNCTION iam.revoke_session(
+    text, text, text, text, jsonb
+) TO matrix_iam_api;
+GRANT EXECUTE ON FUNCTION iam.create_user(
+    text, text, text, text, text, text, text, jsonb
+) TO matrix_iam_api;
+GRANT EXECUTE ON FUNCTION iam.put_role_binding(
+    text, text, text, text, text, text, jsonb
+) TO matrix_iam_api;
+GRANT EXECUTE ON FUNCTION iam.revoke_role_binding(
+    text, text, text, text, jsonb
 ) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.claim_audit_event(text, integer) TO matrix_iam_worker;
 GRANT EXECUTE ON FUNCTION iam.complete_audit_event(
