@@ -48,9 +48,7 @@ func ValidateBootstrapDocument(value BootstrapDocument) error {
 	if !value.Administrator.Password.Present() {
 		problems = append(problems, ErrInvalidSecret)
 	}
-	expected := []ServicePurpose{
-		ServicePaaS, ServiceAudit, ServiceAPISIX, ServiceInstallationVerifier,
-	}
+	expected := AllServicePurposes()
 	if len(value.Services) != len(expected) {
 		problems = append(problems, errors.New("bootstrap service inventory is invalid"))
 	} else {
@@ -68,6 +66,21 @@ func ValidateBootstrapDocument(value BootstrapDocument) error {
 				problems = append(problems, ErrInvalidSecret)
 			}
 		}
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateServiceIdentity(value ServiceIdentity) error {
+	var problems []error
+	if value.APIVersion != APIVersion || value.Kind != "ServiceIdentity" {
+		problems = append(problems, errors.New("service identity type metadata is invalid"))
+	}
+	problems = append(problems,
+		ValidateID("serviceIdentity.organizationId", string(value.OrganizationID)),
+		ValidateID("serviceIdentity.principalId", string(value.PrincipalID)),
+	)
+	if !knownServicePurpose(value.Purpose) {
+		problems = append(problems, errors.New("service identity purpose is invalid"))
 	}
 	return errors.Join(problems...)
 }
@@ -371,6 +384,15 @@ func knownAction(value Action) bool {
 
 func knownRole(value BuiltinRole) bool {
 	for _, candidate := range allBuiltinRoles {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func knownServicePurpose(value ServicePurpose) bool {
+	for _, candidate := range allServicePurposes {
 		if value == candidate {
 			return true
 		}

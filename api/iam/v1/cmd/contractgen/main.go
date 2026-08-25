@@ -75,6 +75,10 @@ func buildPaths() object {
 			"getBootstrapStatus", "Get bootstrap status", "BootstrapStatus",
 			[]any{object{"ServiceCredential": []string{}}}, nil,
 		)},
+		"/v1/service-identity": object{"get": readOperation(
+			"getServiceIdentity", "Get the identity bound to the current service credential", "ServiceIdentity",
+			[]any{object{"ServiceCredential": []string{}}}, nil,
+		)},
 		"/v1/auth/login": object{"post": mutationOperation(
 			"login", "Log in with a password", "LoginRequest", "LoginResponse", "200", []any{}, nil,
 		)},
@@ -189,10 +193,7 @@ func enumSchemas() map[string][]string {
 		},
 		"DecisionReason": {string(iamv1.DecisionAllowed), string(iamv1.DecisionDenied)},
 		"BootstrapState": {string(iamv1.BootstrapUninitialized), string(iamv1.BootstrapReady)},
-		"ServicePurpose": {
-			string(iamv1.ServicePaaS), string(iamv1.ServiceAudit), string(iamv1.ServiceAPISIX),
-			string(iamv1.ServiceInstallationVerifier),
-		},
+		"ServicePurpose": openapi31.StringValues(iamv1.AllServicePurposes()),
 		"ReadinessState": {string(iamv1.ReadinessReady), string(iamv1.ReadinessNotReady)},
 	}
 }
@@ -210,6 +211,7 @@ func structContracts() map[string]reflect.Type {
 		"BootstrapServiceCredential": openapi31.StructType[iamv1.BootstrapServiceCredential](),
 		"BootstrapDocument":          openapi31.StructType[iamv1.BootstrapDocument](),
 		"BootstrapStatus":            openapi31.StructType[iamv1.BootstrapStatus](),
+		"ServiceIdentity":            openapi31.StructType[iamv1.ServiceIdentity](),
 		"LoginRequest":               openapi31.StructType[iamv1.LoginRequest](),
 		"LoginResponse":              openapi31.StructType[iamv1.LoginResponse](),
 		"LogoutRequest":              openapi31.StructType[iamv1.LogoutRequest](),
@@ -250,7 +252,8 @@ func applySemanticOverlays(schemas object) {
 	kinds := map[string]string{
 		"Organization": "Organization", "Principal": "Principal", "RoleBinding": "RoleBinding",
 		"Session": "Session", "BootstrapDocument": "IAMBootstrap", "BootstrapStatus": "BootstrapStatus",
-		"Revocation": "Revocation", "AuthorizationDecision": "AuthorizationDecision",
+		"ServiceIdentity": "ServiceIdentity",
+		"Revocation":      "Revocation", "AuthorizationDecision": "AuthorizationDecision",
 		"Readiness": "Readiness",
 	}
 	for owner, kind := range kinds {
@@ -266,12 +269,7 @@ func applySemanticOverlays(schemas object) {
 
 	bootstrap := schemas["BootstrapDocument"].(object)
 	bootstrapProperties := bootstrap["properties"].(object)
-	servicePurposes := []iamv1.ServicePurpose{
-		iamv1.ServicePaaS,
-		iamv1.ServiceAudit,
-		iamv1.ServiceAPISIX,
-		iamv1.ServiceInstallationVerifier,
-	}
+	servicePurposes := iamv1.AllServicePurposes()
 	prefixItems := make([]any, len(servicePurposes))
 	for index, purpose := range servicePurposes {
 		prefixItems[index] = object{

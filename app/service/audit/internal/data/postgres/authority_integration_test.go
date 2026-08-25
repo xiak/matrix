@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	auditauthority "github.com/xiak/matrix/app/service/audit/internal/authority"
 )
 
@@ -604,12 +605,13 @@ func applyIAMBootstrap(
 		PasswordHash: "$matrix-iam-v1$argon2id$v=19$m=65536,t=3,p=1$" +
 			strings.Repeat("A", 22) + "$" + strings.Repeat("A", 43),
 	}
-	for _, purpose := range []string{"PAAS", "AUDIT", "APISIX", "INSTALLATION_VERIFIER"} {
+	for _, purpose := range iamv1.AllServicePurposes() {
+		purposeText := string(purpose)
 		fixture.Services = append(fixture.Services, iamBootstrapService{
-			Purpose:            purpose,
-			PrincipalID:        "service-" + strings.ToLower(strings.ReplaceAll(purpose, "_", "-")),
-			LookupDigest:       authorityDigest("lookup-" + purpose),
-			VerificationDigest: authorityDigest("verify-" + purpose),
+			Purpose:            purposeText,
+			PrincipalID:        "service-" + strings.ToLower(strings.ReplaceAll(purposeText, "_", "-")),
+			LookupDigest:       authorityDigest("lookup-" + purposeText),
+			VerificationDigest: authorityDigest("verify-" + purposeText),
 		})
 	}
 	fixture.AuditEvent = authorityAuditEvent(
@@ -725,24 +727,25 @@ func assertIAMLookupBoundaries(
 			mustChangePassword,
 		)
 	}
-	paasService := fixture.Services[0]
-	var purpose, verificationDigest string
-	if err := iamAPI.QueryRow(
-		ctx,
-		"SELECT * FROM iam.lookup_service($1)",
-		paasService.LookupDigest,
-	).Scan(&tenantID, &principalID, &purpose, &verificationDigest); err != nil {
-		t.Fatalf("lookup IAM service credential: %v", err)
-	}
-	if tenantID != string(fixture.TenantID) || principalID != paasService.PrincipalID ||
-		purpose != paasService.Purpose || verificationDigest != paasService.VerificationDigest {
-		t.Fatalf(
-			"IAM service lookup tenant=%q principal=%q purpose=%q digest=%q",
-			tenantID,
-			principalID,
-			purpose,
-			verificationDigest,
-		)
+	for _, service := range fixture.Services {
+		var purpose, verificationDigest string
+		if err := iamAPI.QueryRow(
+			ctx,
+			"SELECT * FROM iam.lookup_service($1)",
+			service.LookupDigest,
+		).Scan(&tenantID, &principalID, &purpose, &verificationDigest); err != nil {
+			t.Fatalf("lookup IAM %s service credential: %v", service.Purpose, err)
+		}
+		if tenantID != string(fixture.TenantID) || principalID != service.PrincipalID ||
+			purpose != service.Purpose || verificationDigest != service.VerificationDigest {
+			t.Fatalf(
+				"IAM service lookup tenant=%q principal=%q purpose=%q digest=%q",
+				tenantID,
+				principalID,
+				purpose,
+				verificationDigest,
+			)
+		}
 	}
 }
 

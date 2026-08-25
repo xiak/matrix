@@ -152,7 +152,7 @@ CREATE TABLE IF NOT EXISTS iam.service_credentials (
         REFERENCES iam.principals (tenant_id, id),
     CONSTRAINT service_credentials_purpose_uq UNIQUE (tenant_id, purpose),
     CONSTRAINT service_credentials_values_valid CHECK (
-        purpose IN ('PAAS', 'AUDIT', 'APISIX', 'INSTALLATION_VERIFIER')
+        purpose IN ('IAM', 'PAAS', 'AUDIT', 'APISIX', 'INSTALLATION_VERIFIER')
         AND lookup_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
         AND verification_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
         AND lookup_digest <> verification_digest
@@ -491,7 +491,7 @@ BEGIN
        OR submitted_content_digest COLLATE "C" !~ '^sha256:[0-9a-f]{64}$'
        OR submitted_password_hash NOT LIKE '$matrix-iam-v1$argon2id$v=19$%'
        OR jsonb_typeof(submitted_services) <> 'array'
-       OR jsonb_array_length(submitted_services) <> 4 THEN
+       OR jsonb_array_length(submitted_services) <> 5 THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'IAM bootstrap input is invalid';
     END IF;
     PERFORM set_config('matrix.iam_tenant_id', submitted_organization_id, true);
@@ -536,10 +536,10 @@ BEGIN
         submitted_administrator_id, 'ORGANIZATION_ADMIN', 1,
         effective_now, effective_now
     );
-    FOR index IN 0..3 LOOP
+    FOR index IN 0..4 LOOP
         service := submitted_services->index;
         expected_purpose := (ARRAY[
-            'PAAS', 'AUDIT', 'APISIX', 'INSTALLATION_VERIFIER'
+            'IAM', 'PAAS', 'AUDIT', 'APISIX', 'INSTALLATION_VERIFIER'
         ])[index + 1];
         IF jsonb_typeof(service) <> 'object'
            OR NOT (service ?& ARRAY[

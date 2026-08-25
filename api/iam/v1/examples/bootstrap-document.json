@@ -14,6 +14,11 @@
   },
   "services": [
     {
+      "purpose": "IAM",
+      "principalId": "service-iam",
+      "credential": "example-only-iam-credential-00000000000000001"
+    },
+    {
       "purpose": "PAAS",
       "principalId": "service-paas",
       "credential": "example-only-paas-credential-0000000000000001"

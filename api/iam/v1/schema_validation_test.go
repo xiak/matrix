@@ -45,6 +45,7 @@ func TestIAMExamplesValidateAgainstOpenAPISchemas(t *testing.T) {
 		"examples/role-binding.json":                   "RoleBinding",
 		"examples/bootstrap-document.json":             "BootstrapDocument",
 		"examples/bootstrap-status.json":               "BootstrapStatus",
+		"examples/service-identity.json":               "ServiceIdentity",
 		"examples/login-request.json":                  "LoginRequest",
 		"examples/login-response.json":                 "LoginResponse",
 		"examples/logout-request.json":                 "LogoutRequest",

@@ -95,6 +95,7 @@ const (
 )
 
 const (
+	ServiceIAM                  ServicePurpose = "IAM"
 	ServicePaaS                 ServicePurpose = "PAAS"
 	ServiceAudit                ServicePurpose = "AUDIT"
 	ServiceAPISIX               ServicePurpose = "APISIX"
@@ -112,6 +113,12 @@ func AllActions() []Action {
 
 func AllBuiltinRoles() []BuiltinRole {
 	return append([]BuiltinRole(nil), allBuiltinRoles...)
+}
+
+// AllServicePurposes returns the exact installer bootstrap order. The order is
+// part of the IAMBootstrap wire contract, not merely an enum inventory.
+func AllServicePurposes() []ServicePurpose {
+	return append([]ServicePurpose(nil), allServicePurposes...)
 }
 
 var allActions = []Action{
@@ -145,4 +152,12 @@ var allBuiltinRoles = []BuiltinRole{
 	RolePaaSViewer,
 	RoleAuditReader,
 	RoleInstallationVerifier,
+}
+
+var allServicePurposes = []ServicePurpose{
+	ServiceIAM,
+	ServicePaaS,
+	ServiceAudit,
+	ServiceAPISIX,
+	ServiceInstallationVerifier,
 }

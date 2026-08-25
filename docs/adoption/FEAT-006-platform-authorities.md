@@ -85,8 +85,10 @@ release.
    credentials, database time, exact bootstrap replay, and transactionally
    coupled IAM Audit outbox facts.
 4. Admit a closed sanitized Audit event union authenticated by service
-   identity. Canonicalize once, classify exact replay, and append the immutable
-   per-tenant sequence/hash chain in one database transaction.
+   identity derived by IAM from the producer's own current credential; do not
+   accept a source selector or shared producer credential. Canonicalize once,
+   classify exact replay, and append the immutable per-tenant sequence/hash
+   chain in one database transaction.
 5. Keep Audit delivery lease/fencing inside each producer's outbox mechanism.
    Audit owns ingested records, integrity, retention, and query—not PaaS or IAM
    worker lifecycle.

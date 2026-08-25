@@ -21,6 +21,7 @@ func TestIAMExamplesPassDomainValidation(t *testing.T) {
 		{"principal", validIAMExample[Principal]("examples/principal.json", ValidatePrincipal)},
 		{"role binding", validIAMExample[RoleBinding]("examples/role-binding.json", ValidateRoleBinding)},
 		{"bootstrap status", validIAMExample[BootstrapStatus]("examples/bootstrap-status.json", ValidateBootstrapStatus)},
+		{"service identity", validIAMExample[ServiceIdentity]("examples/service-identity.json", ValidateServiceIdentity)},
 		{"login request", validIAMExample[LoginRequest]("examples/login-request.json", ValidateLoginRequest)},
 		{"login response", validIAMExample[LoginResponse]("examples/login-response.json", ValidateLoginResponse)},
 		{"logout request", validIAMExample[LogoutRequest]("examples/logout-request.json", ValidateLogoutRequest)},
@@ -158,7 +159,7 @@ func TestIAMCredentialsRequireExplicitEncoding(t *testing.T) {
 	}
 }
 
-func TestIAMOpenAPIAuthorizeRequiresCallingServiceAndSubjectCredential(t *testing.T) {
+func TestIAMOpenAPICredentialBoundaries(t *testing.T) {
 	document := loadIAMOpenAPI(t)
 	paths := mustIAMObject(t, document["paths"], "paths")
 	authorizePath := mustIAMObject(t, paths["/v1/authorize"], "authorize path")
@@ -170,6 +171,23 @@ func TestIAMOpenAPIAuthorizeRequiresCallingServiceAndSubjectCredential(t *testin
 	requirement := mustIAMObject(t, security[0], "authorize security requirement")
 	if len(requirement) != 2 || requirement["ServiceCredential"] == nil || requirement["SubjectCredential"] == nil {
 		t.Fatalf("authorize security = %#v, want service and subject credentials", requirement)
+	}
+
+	identityPath := mustIAMObject(t, paths["/v1/service-identity"], "service identity path")
+	identity := mustIAMObject(t, identityPath["get"], "service identity operation")
+	identitySecurity, ok := identity["security"].([]any)
+	if !ok || len(identitySecurity) != 1 {
+		t.Fatalf("service identity security = %#v, want one requirement", identity["security"])
+	}
+	identityRequirement := mustIAMObject(t, identitySecurity[0], "service identity security requirement")
+	if len(identityRequirement) != 1 || identityRequirement["ServiceCredential"] == nil {
+		t.Fatalf("service identity security = %#v, want only current service credential", identityRequirement)
+	}
+	if _, exists := identity["requestBody"]; exists {
+		t.Fatal("service identity endpoint accepts a request body selector")
+	}
+	if parameters, exists := identity["parameters"]; exists {
+		t.Fatalf("service identity endpoint exposes selector parameters: %#v", parameters)
 	}
 
 	authorizationRequest := mustIAMObject(t, iamOpenAPISchemas(t, document)["AuthorizationRequest"], "authorization request schema")

@@ -1326,9 +1326,23 @@
           },
           "services": {
             "items": false,
-            "maxItems": 4,
-            "minItems": 4,
+            "maxItems": 5,
+            "minItems": 5,
             "prefixItems": [
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/BootstrapServiceCredential"
+                  },
+                  {
+                    "properties": {
+                      "purpose": {
+                        "const": "IAM"
+                      }
+                    }
+                  }
+                ]
+              },
               {
                 "allOf": [
                   {
@@ -2104,8 +2118,37 @@
         "type": "string",
         "x-matrix-sensitive": true
       },
+      "ServiceIdentity": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "iam.matrix.xiak.com/v1"
+          },
+          "kind": {
+            "const": "ServiceIdentity"
+          },
+          "organizationId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "principalId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "purpose": {
+            "$ref": "#/components/schemas/ServicePurpose"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "organizationId",
+          "principalId",
+          "purpose"
+        ],
+        "type": "object"
+      },
       "ServicePurpose": {
         "enum": [
+          "IAM",
           "PAAS",
           "AUDIT",
           "APISIX",
@@ -2711,6 +2754,41 @@
           }
         },
         "summary": "Revoke a role binding"
+      }
+    },
+    "/v1/service-identity": {
+      "get": {
+        "operationId": "getServiceIdentity",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceIdentity"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [
+          {
+            "ServiceCredential": []
+          }
+        ],
+        "summary": "Get the identity bound to the current service credential"
       }
     },
     "/v1/sessions/{sessionId}:revoke": {

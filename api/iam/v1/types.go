@@ -108,6 +108,16 @@ type BootstrapStatus struct {
 	AppliedAt      *time.Time     `json:"appliedAt,omitempty"`
 }
 
+// ServiceIdentity is the identity bound to the current authenticated service
+// credential. The endpoint exposing it accepts no identity or tenant selector.
+type ServiceIdentity struct {
+	APIVersion     string         `json:"apiVersion"`
+	Kind           string         `json:"kind"`
+	OrganizationID OrganizationID `json:"organizationId"`
+	PrincipalID    PrincipalID    `json:"principalId"`
+	Purpose        ServicePurpose `json:"purpose"`
+}
+
 type LoginRequest struct {
 	LoginName string `json:"loginName"`
 	Password  Secret `json:"password"`

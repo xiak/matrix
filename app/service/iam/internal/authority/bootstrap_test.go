@@ -66,6 +66,7 @@ func authorityBootstrap(t *testing.T) iamv1.BootstrapDocument {
 			Password: authoritySecret(t, "Initial-Admin-Password-49!"),
 		},
 		Services: []iamv1.BootstrapServiceCredential{
+			service(iamv1.ServiceIAM, "service-iam", "mx1.IAMExampleCredential000000000000000000001"),
 			service(iamv1.ServicePaaS, "service-paas", "mx1.PaaSExampleCredential00000000000000000001"),
 			service(iamv1.ServiceAudit, "service-audit", "mx1.AuditExampleCredential0000000000000000001"),
 			service(iamv1.ServiceAPISIX, "service-apisix", "mx1.APISIXExampleCredential000000000000000001"),

@@ -56,12 +56,12 @@ IAM owns these Phase 1 resources:
 
 The installer generates one restrictive, non-manifest bootstrap file with an
 installation identity, initial organization, initial administrator, random
-administrator password, and exact service-account credentials for the PaaS,
-Audit, APISIX, and installation verifier. IAM persists only password hashes,
-credential hashes, and the bootstrap content digest. Equal bootstrap replay is
-success; changed content for the same installation identity conflicts. A
-bootstrap secret, password, service credential, or bearer token is never
-returned by health, status, Audit, support evidence, or native errors.
+administrator password, and exact service-account credentials for IAM itself,
+the PaaS, Audit, APISIX, and installation verifier. IAM persists only password
+hashes, credential hashes, and the bootstrap content digest. Equal bootstrap
+replay is success; changed content for the same installation identity
+conflicts. A bootstrap secret, password, service credential, or bearer token
+is never returned by health, status, Audit, support evidence, or native errors.
 
 The initial administrator is marked to change its password. Installation and
 recurring verification use the narrowly authorized verifier service account,
@@ -87,6 +87,13 @@ correlation ID; tenant and subject come only from the current session or
 service binding. It returns one immutable decision ID and either an exact
 authorized tenant/subject or a normalized denial. Authentication, policy, or
 database uncertainty fails closed.
+
+An authenticated service can read only the identity bound to its current
+Bearer through `GET /v1/service-identity`. The endpoint accepts no request
+body, tenant, principal, purpose, source, or other selector. Audit uses that
+IAM-derived purpose to admit only IAM, PaaS, or Audit producers and maps it to
+the corresponding closed Audit source; caller-supplied source headers and
+shared producer credentials are forbidden.
 
 Built-in organization roles are:
 
@@ -155,8 +162,9 @@ access record without recursively calling the ingestion API.
 
 Versioned Go contracts and generated OpenAPI own:
 
-- IAM bootstrap status, login/logout/password change, organization/principal
-  and binding commands, authorization request/decision, and readiness;
+- IAM bootstrap status, current service identity, login/logout/password change,
+  organization/principal and binding commands, authorization request/decision,
+  and readiness;
 - Audit ingest/replay result, bounded query page/cursor, chain verification,
   health, and normalized RFC 9457-style problems.
 
@@ -227,10 +235,11 @@ tests pass.
 ## Implementation evidence
 
 - Gate A was accepted on 2026-08-26. Strict generated Go/OpenAPI contracts,
-  fixed Argon2id and opaque-credential behavior, closed RBAC decisions,
-  bootstrap and Audit replay classification, canonical facts, independent
-  tenant hash chains, indefinite retention, and tenant/filter-bound cursors
-  pass generation, schema, architecture, unit, race, and repeated gates.
+  current-credential-only service identity, fixed Argon2id and
+  opaque-credential behavior, closed RBAC decisions, bootstrap and Audit replay
+  classification, canonical facts, independent tenant hash chains, indefinite
+  retention, and tenant/filter-bound cursors pass generation, schema,
+  architecture, unit, race, and repeated gates.
 - A clean PostgreSQL 18 database applies both role bootstraps and both schemas
   twice through separate non-superuser migration identities. The behavioral
   integration gate uses only the granted API/worker/runtime functions and

@@ -1,0 +1,7 @@
+{
+  "apiVersion": "iam.matrix.xiak.com/v1",
+  "kind": "ServiceIdentity",
+  "organizationId": "organization-example",
+  "principalId": "service-paas",
+  "purpose": "PAAS"
+}
