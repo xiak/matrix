@@ -307,6 +307,13 @@ not archive layout, Compose text, SQL text, command call order, or line counts.
   installation ownership, rejects isolation/resource/mount/network/port
   drift, converges recoverable configuration drift without pull or build, and
   preserves unknown outcomes when a started effect cannot be observed.
+- Commit `40cc917` adds failed-install cleanup without a broad Compose teardown.
+  It first proves exact project, installation, release, role, image, migration
+  name, and provider identities; removes only those containers and networks;
+  reobserves after each destructive boundary; and leaves images, staged
+  release content, data, credentials, and the sealed journal intact. A missing
+  Docker dependency or uncertain removal remains replayable instead of being
+  prematurely committed as manual intervention.
 - The accepted implementation through `3323741` passed generation drift, full
   unit tests, vet, race,
   ten-run repetition, architecture boundaries, placement fuzz, four-target
@@ -319,8 +326,11 @@ not archive layout, Compose text, SQL text, command call order, or line counts.
   `0a0ba1f` worktree passed generation drift, full unit/vet/race and
   architecture gates, relevant ten-run repetition, network-disabled
   Linux/amd64 platform start behavior ten times, real Docker normalization
-  probes, Windows/Linux/Darwin builds, and repository-diff checks. Gate B/C
-  full platform verification, installation, service integration, upgrade,
+  probes, Windows/Linux/Darwin builds, and repository-diff checks.
+  The exact `40cc917` worktree passed generation drift, full unit/vet/race,
+  relevant ten-run repetition, network-disabled Linux/amd64 start and cleanup
+  behavior ten times, four-target builds, and repository-diff checks. Full
+  platform verification, installation, service integration, upgrade,
   rollback, recovery, and clean offline E2E remain unaccepted.
 
 ## Deferred

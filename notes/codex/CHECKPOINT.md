@@ -27,7 +27,7 @@
 
 - The branch contains commit `001d889`; FEAT-004 Gate C is accepted and pushed
   in `2b7e398`, FEAT-005 Gate A is accepted and pushed in `83502b0`, and the
-  current durable implementation head is `3323741`. The fixed donor baselines
+  current durable implementation head is `40cc917`. The fixed donor baselines
   remain those listed below.
 - FEAT-001, FEAT-002, and FEAT-003 Gate A/Gate B are Accepted. The public model
   is Application, immutable ApplicationRevision, Deployment,
@@ -143,9 +143,15 @@
   config-drift convergence, and unknown-outcome classification. Its exact
   worktree passed generation, full unit/vet/race, ten-run repetition,
   network-disabled Linux/amd64 start behavior ten times, real Docker
-  normalization probes, and four-target builds. Full platform verification
-  and cleanup, the concrete provider runner, `mx` wiring, and platform image
-  assembly remain unwired.
+  normalization probes, and four-target builds. Commit `40cc917` adds
+  ownership-safe failed-install cleanup: it proves exact platform and
+  migration identities before deletion, removes containers before networks,
+  reobserves uncertain effects, preserves installation data and diagnostics,
+  and keeps dependency-unavailable rollback replayable. Its exact worktree
+  passed generation, full unit/vet/race, relevant ten-run repetition,
+  network-disabled Linux/amd64 start and cleanup behavior ten times, and
+  four-target builds. Full platform verification, the concrete provider
+  runner, `mx` wiring, and platform image assembly remain unwired.
 - FEAT-006 Gate A and Gate B are Accepted. Target design and fixed-donor
   adoption remain `506f6d7` and `932252e`; the accepted authority contracts,
   pure behavior, and separate IAM/Audit PostgreSQL owners, migrators, runtime
@@ -177,9 +183,8 @@
 
 ## Next concrete work
 
-1. Complete full IAM/Audit/application verification and ownership-safe install
-   cleanup; then complete the concrete provider runner and wire it behind
-   `mx`.
+1. Complete full IAM/Audit/application verification; then complete the
+   concrete provider runner and wire it behind `mx`.
 2. Assemble the real IAM, Audit, PaaS, dispatcher, APISIX, UI, PostgreSQL, and
    verification images plus signed releases A/B from exact release content.
 3. Prove the external-network-disabled Compose
