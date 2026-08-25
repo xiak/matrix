@@ -127,6 +127,15 @@
   caller headers, or cross-schema reads. Generation, full unit/vet/race and
   ten-run gates, four-target builds, documentation/dependency checks, and a
   fresh real PostgreSQL 18 race gate all pass after the correction.
+  The first Gate B IAM runtime slice is pushed in `df24b2f`: production
+  use-case, PostgreSQL, and strict standard-library HTTP adapters now execute
+  bootstrap/status, readiness, current service identity, login, and
+  authorization. Calling services are confined to their owned action family;
+  IAM decisions and sanitized events commit atomically. A fresh PostgreSQL 18
+  race-tested HTTP-to-database run proves credential binding, initial-password
+  denial, digest-only secret storage, and the IAM Audit outbox fact. IAM
+  management commands, the runnable process, Audit delivery/service, and PaaS
+  clients remain pending, so Gate B is not accepted.
 - The FEAT-004 accepted worktree passed its schema and real-runtime gates.
   Clean PostgreSQL 18 runs applied the migration twice, ran the verifier, used
   non-bypass API/worker logins, attacked RLS and cross-role privileges,
