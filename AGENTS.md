@@ -62,6 +62,13 @@ For cross-machine handoff, the checkpoint describes only work committed and
 pushed on the current feature branch. Absolute checkout paths and uncommitted
 machine-local state are not portable memory.
 
+Keep a persistent Codex goal short and outcome-only. It may name the
+repository, release outcome, adoption rule, and final release gate, but it
+must not duplicate FEAT inventories, resource/type vocabularies, acceptance
+tables, implementation status, or next steps. Those details belong to their
+existing FEAT owner or the rolling checkpoint. A one-time resume prompt points
+to these files instead of restating them.
+
 ## GitHub workflow
 
 Use GitHub's free repository capabilities when they protect a real delivery
