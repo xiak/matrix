@@ -108,19 +108,20 @@ type PlacementPolicy struct {
 }
 
 type PlacementDecision struct {
-	APIVersion            string           `json:"apiVersion"`
-	Kind                  string           `json:"kind"`
-	Metadata              ResourceMetadata `json:"metadata"`
-	WorkloadReleaseID     ResourceID       `json:"workloadReleaseId"`
-	PlacementPolicyID     ResourceID       `json:"placementPolicyId"`
-	PolicyResourceVersion uint64           `json:"policyResourceVersion"`
-	RequestedIsolation    IsolationClass   `json:"requestedIsolationClass"`
-	Outcome               PlacementOutcome `json:"outcome"`
-	RuntimeTargetID       ResourceID       `json:"runtimeTargetId,omitempty"`
-	GrantedIsolation      IsolationClass   `json:"grantedIsolationClass,omitempty"`
-	CandidateSetDigest    string           `json:"candidateSetDigest"`
-	Reason                *Problem         `json:"reason,omitempty"`
-	DecidedAt             time.Time        `json:"decidedAt"`
+	APIVersion                   string           `json:"apiVersion"`
+	Kind                         string           `json:"kind"`
+	Metadata                     ResourceMetadata `json:"metadata"`
+	WorkloadReleaseID            ResourceID       `json:"workloadReleaseId"`
+	PlacementPolicyID            ResourceID       `json:"placementPolicyId"`
+	PolicyResourceVersion        uint64           `json:"policyResourceVersion"`
+	RequestedIsolation           IsolationClass   `json:"requestedIsolationClass"`
+	Outcome                      PlacementOutcome `json:"outcome"`
+	RuntimeTargetID              ResourceID       `json:"runtimeTargetId,omitempty"`
+	RuntimeTargetResourceVersion uint64           `json:"runtimeTargetResourceVersion,omitempty"`
+	GrantedIsolation             IsolationClass   `json:"grantedIsolationClass,omitempty"`
+	CandidateSetDigest           string           `json:"candidateSetDigest"`
+	Reason                       *Problem         `json:"reason,omitempty"`
+	DecidedAt                    time.Time        `json:"decidedAt"`
 }
 
 type ArtifactRef struct {

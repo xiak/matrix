@@ -310,6 +310,10 @@ func TestExamplesDecodeAndValidate(t *testing.T) {
 			target: &WorkloadRelease{},
 		},
 		{
+			path:   "examples/placement-scheduled.json",
+			target: &PlacementDecision{},
+		},
+		{
 			path:   "examples/placement-unschedulable.json",
 			target: &PlacementDecision{},
 		},

@@ -274,6 +274,12 @@ func ValidatePlacementDecision(value PlacementDecision) error {
 	switch value.Outcome {
 	case PlacementScheduled:
 		problems = append(problems, ValidateID("runtimeTargetId", string(value.RuntimeTargetID)))
+		if value.RuntimeTargetResourceVersion == 0 {
+			problems = append(
+				problems,
+				errors.New("runtimeTargetResourceVersion must be positive for a scheduled decision"),
+			)
+		}
 		if value.GrantedIsolation != value.RequestedIsolation {
 			problems = append(problems, errors.New("granted isolation must exactly equal requested isolation"))
 		}
@@ -281,8 +287,13 @@ func ValidatePlacementDecision(value PlacementDecision) error {
 			problems = append(problems, errors.New("scheduled decision cannot contain a reason"))
 		}
 	case PlacementUnschedulable:
-		if value.RuntimeTargetID != "" || value.GrantedIsolation != "" {
-			problems = append(problems, errors.New("unschedulable decision cannot select a target or grant isolation"))
+		if value.RuntimeTargetID != "" ||
+			value.RuntimeTargetResourceVersion != 0 ||
+			value.GrantedIsolation != "" {
+			problems = append(
+				problems,
+				errors.New("unschedulable decision cannot select or version a target or grant isolation"),
+			)
 		}
 		if value.Reason == nil ||
 			(value.Reason.Code != ErrorUnschedulable &&

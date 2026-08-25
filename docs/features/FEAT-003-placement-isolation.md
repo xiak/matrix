@@ -1,6 +1,6 @@
 # FEAT-003: tenant placement and isolation policy
 
-- Status: Donor review complete; Gate A implementation pending
+- Status: Gate A accepted; Gate B implementation pending
 - Target release: Local Compose Runtime v0.1
 - Placement algorithm version: `placement-v1`
 - Target design date: 2026-08-25
@@ -22,6 +22,8 @@ amendment.
 
 ### Gate A: deterministic planning core
 
+Status: Accepted on 2026-08-25.
+
 Gate A is a pure, side-effect-free scheduler usable by FEAT-004 tests:
 
 1. Validate tenant, release, policy, pool, target, and reservation snapshots
@@ -40,6 +42,8 @@ Gate A is a pure, side-effect-free scheduler usable by FEAT-004 tests:
 Gate A does not claim durable persistence or concurrency safety.
 
 ### Gate B: tenant-safe transactional placement
+
+Status: Pending.
 
 Gate B completes FEAT-003:
 
@@ -304,6 +308,47 @@ placement request.
 - Unit, property/fuzz, race, architecture, migration, PostgreSQL integration,
   schema, and `git diff --check` gates pass.
 - No donor repository is a build or runtime dependency.
+
+## Gate A implementation evidence
+
+The pure core is implemented under
+`app/service/paas/internal/placement`. It imports only the public PaaS v1
+contract and an explicit standard-library allowlist; an architecture test
+prevents repositories, adapters, drivers, processes, or third-party libraries
+from entering this package. Decision time is an explicit value input.
+
+Delivered behavior:
+
+- checked aggregate CPU, memory, and workload-slot requirements;
+- canonical evaluation of pool, desired state, health, selectors, freshness,
+  exact isolation, isolation policy, and effective capacity;
+- version-qualified `SHARED_COMPOSE` and `DEDICATED_COMPOSE` policy
+  implementations, with host, Kubernetes, and physical isolation failing as
+  `CAPABILITY_UNSUPPORTED` without downgrade;
+- exact-rational `FIRST_FIT`, `SPREAD`, and `BIN_PACK` selection;
+- active/unexpired-pending reservation accounting with clamped availability;
+- a length-prefixed `placement-v1` SHA-256 candidate-set digest and golden
+  vector;
+- valid immutable scheduled/unschedulable v1 decisions. Scheduled decisions
+  bind both the target ID and `runtimeTargetResourceVersion`.
+
+Acceptance evidence includes per-filter negative tables, checked-arithmetic
+overflow cases, 100 shuffled-order repetitions, caller-input immutability,
+concurrent planner calls, reservation expiry boundaries, schema conditionals,
+and a real fuzz run. The following gates passed:
+
+```text
+go test ./...
+go vet ./...
+go test -race ./...
+go test -count=10 ./...
+go test -run '^$' -fuzz '^FuzzPlanOrderInvariant$' -fuzztime=5s ./app/service/paas/internal/placement
+GOOS/GOARCH builds: windows/amd64, linux/amd64, linux/arm64, darwin/arm64
+git diff --check
+```
+
+Gate A makes no persistence, capacity-locking, replay, or PostgreSQL RLS
+claim. Those remain Gate B acceptance requirements.
 
 ## Deferred
 

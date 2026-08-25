@@ -119,6 +119,44 @@ func TestValidatePlacementPolicyRejectsDuplicateResourcePools(t *testing.T) {
 	}
 }
 
+func TestValidatePlacementDecisionBindsSelectedTargetVersion(t *testing.T) {
+	var decision PlacementDecision
+	decodeStrictJSON(t, "examples/placement-unschedulable.json", &decision)
+	decision.Outcome = PlacementScheduled
+	decision.RequestedIsolation = IsolationSharedCompose
+	decision.RuntimeTargetID = "target-local-001"
+	decision.RuntimeTargetResourceVersion = 7
+	decision.GrantedIsolation = IsolationSharedCompose
+	decision.Reason = nil
+	if err := ValidatePlacementDecision(decision); err != nil {
+		t.Fatalf("version-bound scheduled decision must validate: %v", err)
+	}
+
+	decision.RuntimeTargetResourceVersion = 0
+	if err := ValidatePlacementDecision(decision); err == nil ||
+		!strings.Contains(err.Error(), "runtimeTargetResourceVersion") {
+		t.Fatalf("scheduled decision without target version must fail, got %v", err)
+	}
+
+	decision.Outcome = PlacementUnschedulable
+	decision.RuntimeTargetID = ""
+	decision.RuntimeTargetResourceVersion = 7
+	decision.GrantedIsolation = ""
+	decision.Reason = &Problem{
+		Type:      "/problems/unschedulable",
+		Title:     "Workload cannot be scheduled",
+		Status:    422,
+		Code:      ErrorUnschedulable,
+		Detail:    "No eligible runtime target currently satisfies the placement policy.",
+		TraceID:   "trace-0001",
+		Retryable: true,
+	}
+	if err := ValidatePlacementDecision(decision); err == nil ||
+		!strings.Contains(err.Error(), "cannot select or version") {
+		t.Fatalf("unschedulable decision with target version must fail, got %v", err)
+	}
+}
+
 func TestValidateAdapterCommandRejectsUnknownAction(t *testing.T) {
 	command := validAdapterCommand()
 	command.Action = AdapterAction("FUTURE_ACTION")

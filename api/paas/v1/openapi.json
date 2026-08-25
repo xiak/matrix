@@ -715,6 +715,11 @@
           "runtimeTargetId": {
             "$ref": "#/components/schemas/ID"
           },
+          "runtimeTargetResourceVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
           "grantedIsolationClass": {
             "$ref": "#/components/schemas/IsolationClass"
           },
@@ -743,6 +748,7 @@
             "then": {
               "required": [
                 "runtimeTargetId",
+                "runtimeTargetResourceVersion",
                 "grantedIsolationClass"
               ],
               "properties": {
@@ -767,6 +773,7 @@
               ],
               "properties": {
                 "runtimeTargetId": false,
+                "runtimeTargetResourceVersion": false,
                 "grantedIsolationClass": false
               }
             }

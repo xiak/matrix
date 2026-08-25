@@ -57,6 +57,61 @@ func TestSourceDependenciesFollowRepositoryBoundaries(t *testing.T) {
 	}
 }
 
+func TestPlacementCoreKeepsItsPureDependencyBoundary(t *testing.T) {
+	root := repositoryRoot(t)
+	placementRoot := filepath.Join(root, "app", "service", "paas", "internal", "placement")
+	allowed := map[string]struct{}{
+		"crypto/sha256":      {},
+		"encoding/binary":    {},
+		"encoding/hex":       {},
+		"errors":             {},
+		"fmt":                {},
+		"hash":               {},
+		"math":               {},
+		"math/big":           {},
+		"matrix/api/paas/v1": {},
+		"sort":               {},
+		"time":               {},
+	}
+	err := filepath.WalkDir(placementRoot, func(
+		path string,
+		entry fs.DirEntry,
+		walkErr error,
+	) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+		if err != nil {
+			return err
+		}
+		for _, declaration := range file.Imports {
+			imported, err := strconv.Unquote(declaration.Path.Value)
+			if err != nil {
+				return err
+			}
+			if _, found := allowed[imported]; !found {
+				relative, relativeErr := filepath.Rel(root, path)
+				if relativeErr != nil {
+					return relativeErr
+				}
+				t.Errorf(
+					"%s: pure placement core cannot import %q",
+					filepath.ToSlash(relative),
+					imported,
+				)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("inspect placement dependencies: %v", err)
+	}
+}
+
 func assertAllowedDependency(
 	t *testing.T,
 	source string,
