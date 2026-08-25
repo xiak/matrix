@@ -113,7 +113,19 @@
   executable entrypoints, and the Go `matrix-health` probe. Full generation,
   unit, vet, race, repeated, architecture, four-target build, fresh PG18
   process, real Compose executor, and fresh PG18-to-Compose worker gates pass.
-  The `mx` provider backend and platform image assembly remain unwired.
+  Commit `8d6bed4` adds the production install workflow backend and the first
+  local-machine effects without exposing the incomplete provider through
+  `mx`. Release trust and exact content digests are pinned into the sealed
+  journal; effect intent precedes each phase; unknown outcomes resume under
+  the durable command; definitive failures persist rollback intent first.
+  Authenticated release content is resumably staged, image archives stream to
+  fixed `docker image load` stdin and are reverified by exact local identity,
+  and restrictive IAM/database credentials plus deterministic
+  Compose/APISIX/catalog files are generated. The versioned catalog now
+  contains only the signed verification WORKLOAD image, never platform
+  images. Full unit/vet and Linux/amd64 plus Darwin/arm64 build gates pass.
+  Go-owned migrations, start/verification/cleanup effects, the concrete
+  provider runner, `mx` wiring, and platform image assembly remain unwired.
 - FEAT-006 Gate A and Gate B are Accepted. Target design and fixed-donor
   adoption remain `506f6d7` and `932252e`; the accepted authority contracts,
   pure behavior, and separate IAM/Audit PostgreSQL owners, migrators, runtime
@@ -145,10 +157,9 @@
 
 ## Next concrete work
 
-1. Implement the FEAT-005 lifecycle provider behind `mx`, including host
-   preflight, exact image load/identity verification, restrictive generated
-   files, Go-owned migrations, Compose start/observation, and ownership-safe
-   rollback/recovery effects.
+1. Implement Go-owned IAM/Audit/PaaS migrations, Compose start/observation,
+   full IAM/Audit/application verification, and ownership-safe install cleanup;
+   then complete the concrete provider runner and wire it behind `mx`.
 2. Assemble the real IAM, Audit, PaaS, dispatcher, APISIX, UI, PostgreSQL, and
    verification images plus signed releases A/B from exact release content.
 3. Prove the external-network-disabled Compose

@@ -273,11 +273,29 @@ not archive layout, Compose text, SQL text, command call order, or line counts.
   formerly missing IAM Audit dispatcher, contains no pseudo process command,
   gives only the PaaS worker the Docker socket, and uses the internal Go
   `matrix-health` probe for HTTP components.
+- Commit `8d6bed4` adds the production install workflow behind the CLI backend
+  boundary without exposing the still-incomplete provider through `mx`. It
+  authenticates the trust root, release, fixed topology, and exact manifest
+  digest before creating an installation; pins signer identity and release
+  content into the sealed journal; persists every phase intent before its
+  effect; resumes unknown outcomes under the same durable command; and records
+  rollback intent before cleanup after a definitive failure.
+- The same commit implements the first local-machine effects: Linux/amd64
+  Docker/Compose/free-space/listener and project-ownership preflight,
+  resumable authenticated release staging, exact image archive streaming to
+  `docker image load` through the verified file descriptor, post-load image
+  identity checks, restrictive generated IAM/database credentials, and the
+  fixed Compose/APISIX/catalog files. The catalog is now a versioned
+  cross-process contract and contains only the signed verification WORKLOAD
+  image; IAM, Audit, PostgreSQL, gateway, UI, and PaaS platform images cannot
+  be selected as tenant artifacts.
 - The same worktree passed generation drift, full unit tests, vet, race,
   ten-run repetition, architecture boundaries, placement fuzz, four-target
   builds, Markdown links, donor-dependency and tenant-authority scans, and
-  repository-diff checks. Gate B/C real installation, service integration,
-  upgrade, rollback, recovery, and clean offline E2E remain unaccepted.
+  repository-diff checks. The `8d6bed4` slice additionally passed full unit
+  tests, vet, Linux/amd64 and Darwin/arm64 builds, and repository-diff checks.
+  Gate B/C real migration, installation, service integration, upgrade,
+  rollback, recovery, and clean offline E2E remain unaccepted.
 
 ## Deferred
 
