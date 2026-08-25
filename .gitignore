@@ -1,0 +1,34 @@
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+secrets/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Go
+bin/
+coverage.out
+*.test
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+coverage/
+
+# Generated and local runtime state
+build/
+dist/
+tmp/
+.cache/
+state/
+test-results/
+playwright-report/
