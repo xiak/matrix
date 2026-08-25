@@ -39,6 +39,17 @@ type SecretFile struct {
 	Reference    paasv1.SecretVersionReference
 }
 
+// PlannedService contains only the non-secret declaration needed to validate
+// provider observations. Configuration values remain in the effecting Compose
+// document and secret material is resolved only while the executor holds the
+// project lock.
+type PlannedService struct {
+	Name      string
+	Image     string
+	Replicas  uint32
+	Endpoints []paasv1.DeploymentEndpointObservation
+}
+
 type ExecutionPlan struct {
 	ProjectName    string
 	DeploymentID   paasv1.ResourceID
@@ -47,6 +58,7 @@ type ExecutionPlan struct {
 	Document       []byte
 	DocumentDigest string
 	SecretFiles    []SecretFile
+	Services       []PlannedService
 }
 
 type Compiler struct {
@@ -153,16 +165,29 @@ func (compiler *Compiler) Compile(
 		}
 
 		exposed := make([]string, 0, len(revisionComponent.Endpoints))
+		endpoints := make([]paasv1.DeploymentEndpointObservation, 0, len(revisionComponent.Endpoints))
 		for _, endpoint := range revisionComponent.Endpoints {
 			exposed = append(exposed, strconv.FormatUint(uint64(endpoint.Port), 10))
+			endpoints = append(endpoints, paasv1.DeploymentEndpointObservation{
+				ComponentName: component.Name,
+				EndpointName:  endpoint.Name,
+				Protocol:      endpoint.Protocol,
+				Address:       component.Name,
+				Port:          endpoint.Port,
+			})
 		}
 		slices.Sort(exposed)
+		slices.SortFunc(endpoints, func(left, right paasv1.DeploymentEndpointObservation) int {
+			return strings.Compare(left.EndpointName, right.EndpointName)
+		})
 		slices.SortFunc(grants, func(left, right composeSecretGrant) int {
 			return strings.Compare(left.Target, right.Target)
 		})
 		preparedServices = append(preparedServices, preparedService{
-			Name:     component.Name,
-			Artifact: revisionComponent.Artifact,
+			Name:      component.Name,
+			Artifact:  revisionComponent.Artifact,
+			Replicas:  component.Replicas,
+			Endpoints: endpoints,
 			Service: composeService{
 				PullPolicy:  "never",
 				Environment: environment,
@@ -186,6 +211,7 @@ func (compiler *Compiler) Compile(
 			},
 		})
 	}
+	plannedServices := make([]PlannedService, 0, len(preparedServices))
 	for _, prepared := range preparedServices {
 		image, err := compiler.artifacts.ResolveVerifiedImage(ctx, prepared.Artifact)
 		if err != nil {
@@ -197,6 +223,10 @@ func (compiler *Compiler) Compile(
 		}
 		prepared.Service.Image = image.LocalReference
 		document.Services[prepared.Name] = prepared.Service
+		plannedServices = append(plannedServices, PlannedService{
+			Name: prepared.Name, Image: image.LocalReference,
+			Replicas: prepared.Replicas, Endpoints: prepared.Endpoints,
+		})
 	}
 	if len(document.Secrets) == 0 {
 		document.Secrets = nil
@@ -220,6 +250,7 @@ func (compiler *Compiler) Compile(
 		Document:       encoded,
 		DocumentDigest: "sha256:" + hex.EncodeToString(documentHash[:]),
 		SecretFiles:    secretFiles,
+		Services:       plannedServices,
 	}, nil
 }
 
@@ -229,9 +260,11 @@ type composeDocument struct {
 }
 
 type preparedService struct {
-	Name     string
-	Artifact paasv1.ArtifactRef
-	Service  composeService
+	Name      string
+	Artifact  paasv1.ArtifactRef
+	Replicas  uint32
+	Endpoints []paasv1.DeploymentEndpointObservation
+	Service   composeService
 }
 
 type composeService struct {

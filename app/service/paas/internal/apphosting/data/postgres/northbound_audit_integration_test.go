@@ -138,7 +138,7 @@ func assertNorthboundIAMAudit(
 	admin *pgx.Conn,
 	apiPool *pgxpool.Pool,
 	workerPool *pgxpool.Pool,
-	fixture gateBFixture,
+	fixture integrationFixture,
 	prefix string,
 ) {
 	t.Helper()

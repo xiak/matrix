@@ -1,6 +1,6 @@
 # FEAT-004: Compose application execution
 
-- Status: Gate A and Gate B accepted; Gate C implementation pending
+- Status: Gate A, Gate B, and Gate C accepted
 - Target release: Private Application PaaS v0.1
 - Executor contract version: `v1`
 - Target design date: 2026-08-25
@@ -261,10 +261,26 @@ file layout, command call order, or implementation counts.
   commits each accepted mutation with a fixed sanitized Audit outbox event.
   PostgreSQL 18 apply-twice verification and non-bypass logins prove API/worker
   privilege separation, RLS, exact replay/conflict, transactional rollback,
-  at-least-once Audit retry, lease recovery, and stale-fence rejection. The
-  combined generation, unit, vet, race, ten-run, schema, architecture, fuzz,
-  cross-platform build, Markdown-link, stale-term, and diff gates pass on the
-  same worktree. Gate C real Compose effects remain unaccepted.
+  at-least-once Audit retry, lease recovery, and stale-fence rejection.
+- Gate C completed on 2026-08-25. The Go Compose executor confines durable
+  state below one protected root, rejects links and reparse points, resolves
+  exact secrets with a 1 MiB bound, uses atomic durable writes and an OS file
+  lock, forms only fixed non-interactive Compose commands, and seals sanitized
+  generation receipts without secret bytes, native failures, or external
+  paths.
+- The real-runtime gate cross-compiled a static Linux fixture and imported its
+  root filesystem directly into Docker without a Dockerfile, registry, pull,
+  or network dependency. Docker Compose started the exact local image ID,
+  injected ordinary ENV and a read-only secret, exposed no host port, served a
+  project-network probe, reconciled an unknown outcome before retry, applied an
+  update and rollback, and removed the project and secret material on stop.
+- A clean PostgreSQL 18 run connected the same executor to the non-bypass
+  worker and proved durable RECONCILING, observe-before-retry, reservation
+  handover, rollback, stop capacity release, and sanitized PostgreSQL/Audit
+  state. Generation, unit, vet, race (including real Compose), ten-run, schema,
+  architecture, placement fuzz, four-target build, Markdown-link, stale-term,
+  donor-dependency, tenant-authority, and repository-diff gates passed on the
+  same worktree.
 
 ## Deferred
 

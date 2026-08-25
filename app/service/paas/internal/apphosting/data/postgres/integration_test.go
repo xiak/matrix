@@ -37,21 +37,21 @@ const (
 	workerTestPassword     = "matrix-test-only"
 )
 
-func TestPostgresGateBIntegration(t *testing.T) {
+func TestPostgresIntegration(t *testing.T) {
 	dsn := os.Getenv(postgresIntegrationDSN)
 	if dsn == "" {
 		t.Skipf("set %s to a disposable PostgreSQL 18 database", postgresIntegrationDSN)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
 	adminConfig, err := pgx.ParseConfig(dsn)
 	if err != nil {
 		t.Fatalf("parse PostgreSQL integration DSN: %v", err)
 	}
-	if !strings.HasPrefix(adminConfig.Database, "matrix_paas_gateb") {
+	if !strings.HasPrefix(adminConfig.Database, "matrix_paas_") {
 		t.Fatalf(
-			"refusing to mutate database %q; integration database name must start with matrix_paas_gateb",
+			"refusing to mutate database %q; integration database name must start with matrix_paas_",
 			adminConfig.Database,
 		)
 	}
@@ -70,8 +70,8 @@ func TestPostgresGateBIntegration(t *testing.T) {
 	workerPool := openWorkerPool(t, ctx, adminConfig)
 	defer workerPool.Close()
 
-	prefix := fmt.Sprintf("gateb-%x", time.Now().UnixNano())
-	fixture := seedGateBFixture(t, ctx, admin, prefix)
+	prefix := fmt.Sprintf("integration-%x", time.Now().UnixNano())
+	fixture := seedIntegrationFixture(t, ctx, admin, prefix)
 	applicationResult := assertApplicationLifecycle(t, ctx, admin, apiPool, fixture, prefix)
 	assertAuditPersistenceAndFencing(t, ctx, admin, apiPool, workerPool, applicationResult)
 	assertOperationQueue(t, ctx, admin, workerPool, applicationResult)
@@ -156,6 +156,11 @@ func TestPostgresGateBIntegration(t *testing.T) {
 		fixture,
 		prefix,
 	)
+	if os.Getenv("MATRIX_COMPOSE_E2E") == "1" {
+		assertRealComposeWorkerWorkflow(
+			t, ctx, admin, apiPool, workerPool, placementUsecase, fixture, prefix,
+		)
+	}
 	assertDeploymentWorkerWorkflow(
 		t,
 		ctx,
@@ -169,7 +174,7 @@ func TestPostgresGateBIntegration(t *testing.T) {
 	assertNorthboundIAMAudit(t, ctx, admin, apiPool, workerPool, fixture, prefix)
 }
 
-type gateBFixture struct {
+type integrationFixture struct {
 	tenantA                  paasv1.TenantID
 	tenantB                  paasv1.TenantID
 	applicationID            paasv1.ResourceID
@@ -183,7 +188,7 @@ type gateBFixture struct {
 	observedAt               time.Time
 }
 
-func (fixture gateBFixture) placementCommand(
+func (fixture integrationFixture) placementCommand(
 	deploymentID paasv1.ResourceID,
 	operationID string,
 	decisionID string,
@@ -367,15 +372,15 @@ func openWorkerPool(
 	return pool
 }
 
-func seedGateBFixture(
+func seedIntegrationFixture(
 	t *testing.T,
 	ctx context.Context,
 	admin *pgx.Conn,
 	prefix string,
-) gateBFixture {
+) integrationFixture {
 	t.Helper()
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	fixture := gateBFixture{
+	fixture := integrationFixture{
 		tenantA:         paasv1.TenantID(prefix + "-tenant-a"),
 		tenantB:         paasv1.TenantID(prefix + "-tenant-b"),
 		applicationID:   paasv1.ResourceID(prefix + "-application"),
@@ -423,7 +428,10 @@ func seedGateBFixture(
 	}
 	configurationRevisions := make([]paasv1.ConfigurationRevision, 0, 2)
 	for index, value := range []string{"one", "two"} {
-		values := map[string]string{"MESSAGE": value}
+		values := map[string]string{
+			"MATRIX_SETTING":    value,
+			"MATRIX_GENERATION": fmt.Sprintf("%d", index+1),
+		}
 		configurationRevisions = append(configurationRevisions, paasv1.ConfigurationRevision{
 			APIVersion: paasv1.APIVersion,
 			Kind:       "ConfigurationRevision",
@@ -463,18 +471,27 @@ func seedGateBFixture(
 				Name: "web",
 				Artifact: paasv1.ArtifactRef{
 					Kind:    paasv1.ArtifactOCIImage,
-					Locator: "registry.invalid/matrix/gateb-web",
+					Locator: "registry.invalid/matrix/integration-web",
 					Digest:  integrationDigest(prefix + "-artifact"),
 				},
 				Resources: paasv1.ResourceRequirements{
 					CPUMillis:   100,
-					MemoryBytes: 1024 * 1024,
+					MemoryBytes: 32 * 1024 * 1024,
 				},
-				Inputs: []paasv1.ComponentInput{{
-					Name:      "settings",
-					Kind:      paasv1.InputConfiguration,
-					Injection: paasv1.InjectionEnvironment,
+				Endpoints: []paasv1.ApplicationEndpoint{{
+					Name: "ready", Port: 8080, Protocol: paasv1.EndpointHTTP,
+					Visibility: paasv1.EndpointPrivate,
 				}},
+				Inputs: []paasv1.ComponentInput{
+					{
+						Name: "settings", Kind: paasv1.InputConfiguration,
+						Injection: paasv1.InjectionEnvironment,
+					},
+					{
+						Name: "credential", Kind: paasv1.InputSecret,
+						Injection: paasv1.InjectionFile,
+					},
+				},
 			}},
 		},
 	}
@@ -522,7 +539,7 @@ func seedGateBFixture(
 	}
 	capacity := paasv1.Capacity{
 		CPUMillis:     100,
-		MemoryBytes:   1024 * 1024,
+		MemoryBytes:   32 * 1024 * 1024,
 		WorkloadSlots: 1,
 	}
 	target := paasv1.ExecutionTarget{
@@ -646,7 +663,7 @@ func seedDeployment(
 	t *testing.T,
 	ctx context.Context,
 	admin *pgx.Conn,
-	fixture gateBFixture,
+	fixture integrationFixture,
 	deploymentID paasv1.ResourceID,
 	creationOperationID paasv1.OperationID,
 	now time.Time,
@@ -872,7 +889,7 @@ func assertApplicationLifecycle(
 	ctx context.Context,
 	admin *pgx.Conn,
 	apiPool *pgxpool.Pool,
-	fixture gateBFixture,
+	fixture integrationFixture,
 	prefix string,
 ) applicationlifecycle.Result {
 	t.Helper()
@@ -1126,7 +1143,7 @@ func assertOperationQueue(
 }
 
 func applicationIntegrationSpec(
-	fixture gateBFixture,
+	fixture integrationFixture,
 	configurationRevisionID paasv1.ResourceID,
 ) paasv1.DeploymentSpec {
 	return paasv1.DeploymentSpec{
@@ -1139,6 +1156,12 @@ func applicationIntegrationSpec(
 			Bindings: []paasv1.ComponentBinding{{
 				Name:                    "settings",
 				ConfigurationRevisionID: configurationRevisionID,
+			}, {
+				Name: "credential",
+				SecretVersion: &paasv1.SecretVersionReference{
+					SecretID: paasv1.ResourceID(string(fixture.applicationID) + "-credential"),
+					Version:  "version-0001",
+				},
 			}},
 		}},
 	}
@@ -1197,7 +1220,7 @@ func assertCapacityDidNotOvercommit(
 	t *testing.T,
 	ctx context.Context,
 	admin *pgx.Conn,
-	fixture gateBFixture,
+	fixture integrationFixture,
 	results []createplacement.Result,
 ) {
 	t.Helper()
@@ -1221,7 +1244,22 @@ func assertCapacityDidNotOvercommit(
 	).Scan(&consumingClaims, &cpuMillis, &memoryBytes, &workloadSlots); err != nil {
 		t.Fatalf("read consuming capacity claims: %v", err)
 	}
-	if consumingClaims != 1 || cpuMillis > 100 || memoryBytes > 1024*1024 || workloadSlots > 1 {
+	var targetDocument []byte
+	if err := admin.QueryRow(
+		ctx,
+		"SELECT document FROM paas.execution_targets WHERE id = $1",
+		fixture.targetID,
+	).Scan(&targetDocument); err != nil {
+		t.Fatalf("read execution target capacity: %v", err)
+	}
+	var target paasv1.ExecutionTarget
+	if err := decodeDocument("ExecutionTarget", targetDocument, &target); err != nil {
+		t.Fatalf("decode execution target capacity: %v", err)
+	}
+	if consumingClaims != 1 ||
+		cpuMillis > target.Status.Capacity.CPUMillis ||
+		memoryBytes > target.Status.Capacity.MemoryBytes ||
+		workloadSlots > target.Status.Capacity.WorkloadSlots {
 		t.Fatalf(
 			"capacity overcommit: claims=%d cpu=%d memory=%d slots=%d",
 			consumingClaims,
@@ -1301,7 +1339,7 @@ func assertWorkerRLS(
 	t *testing.T,
 	ctx context.Context,
 	pool *pgxpool.Pool,
-	fixture gateBFixture,
+	fixture integrationFixture,
 	decisionID paasv1.ResourceID,
 	reservationID paasv1.ResourceID,
 	claimID string,
@@ -1349,7 +1387,7 @@ func assertReservationTransitions(
 	ctx context.Context,
 	admin *pgx.Conn,
 	usecase *transitionreservation.Usecase,
-	fixture gateBFixture,
+	fixture integrationFixture,
 	guard operationqueue.LeaseGuard,
 	reservationID paasv1.ResourceID,
 	claimID string,
@@ -1480,7 +1518,7 @@ func assertAtomicRollbackAfterWrites(
 	admin *pgx.Conn,
 	planner *placement.Planner,
 	repository *PlacementRepository,
-	fixture gateBFixture,
+	fixture integrationFixture,
 	prefix string,
 ) {
 	t.Helper()
@@ -1567,7 +1605,7 @@ func assertPendingExpiry(
 	planner *placement.Planner,
 	repository *PlacementRepository,
 	transitionUsecase *transitionreservation.Usecase,
-	fixture gateBFixture,
+	fixture integrationFixture,
 	prefix string,
 ) {
 	t.Helper()

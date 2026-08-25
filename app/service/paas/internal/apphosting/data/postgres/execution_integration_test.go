@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/createplacement"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/operationqueue"
@@ -23,58 +24,21 @@ func assertDeploymentWorkerWorkflow(
 	apiPool *pgxpool.Pool,
 	workerPool *pgxpool.Pool,
 	placementUsecase *createplacement.Usecase,
-	fixture gateBFixture,
+	fixture integrationFixture,
 	prefix string,
 ) {
 	t.Helper()
 	expandExecutionTargetCapacity(t, ctx, admin, fixture.targetID)
-
-	applicationRepository, err := NewApplicationRepository(apiPool)
-	if err != nil {
-		t.Fatalf("create worker application repository: %v", err)
-	}
-	applicationUsecase, err := applicationlifecycle.NewUsecase(
-		applicationRepository,
-		applicationlifecycle.Config{MaxTransactionAttempts: 5},
-	)
-	if err != nil {
-		t.Fatalf("create worker application lifecycle use case: %v", err)
-	}
-	queueRepository, err := NewOperationQueueRepository(workerPool)
-	if err != nil {
-		t.Fatalf("create worker Operation queue repository: %v", err)
-	}
-	queue, err := operationqueue.NewQueue(
-		queueRepository,
-		operationqueue.Config{LeaseDuration: 30 * time.Second},
-	)
-	if err != nil {
-		t.Fatalf("create worker Operation queue: %v", err)
-	}
-	executionRepository, err := NewDeploymentExecutionRepository(workerPool)
-	if err != nil {
-		t.Fatalf("create Deployment execution repository: %v", err)
-	}
 	executor := &postgresWorkerExecutor{
 		t: t, ctx: ctx, admin: admin, fixture: fixture,
 		plans: make(map[paasv1.OperationID]*postgresWorkerPlan),
 	}
-	worker, err := reconciledeployment.NewWorker(
-		queue,
-		placementUsecase,
-		executionRepository,
-		executor,
-		reconciledeployment.Config{
-			BindingRef: "compose-local", EffectTimeout: 10 * time.Second,
-			ReconcileBackoff: time.Millisecond, MaxAttempts: 3,
-			Clock: func() time.Time {
-				return time.Now().UTC().Truncate(time.Microsecond)
-			},
-		},
+	workerFixture := newDeploymentWorkerFixture(
+		t, apiPool, workerPool, placementUsecase, executor, "compose-local", 10*time.Second,
 	)
-	if err != nil {
-		t.Fatalf("create Deployment reconciliation worker: %v", err)
-	}
+	applicationUsecase := workerFixture.application
+	worker := workerFixture.worker
+	executionRepository := workerFixture.repository
 
 	requestedBy := paasv1.SubjectRef{
 		Type: paasv1.SubjectUser,
@@ -336,6 +300,69 @@ func assertDeploymentWorkerWorkflow(
 	assertConsumingClaims(t, ctx, admin, fixture.targetID, 2)
 }
 
+type deploymentWorkerFixture struct {
+	application *applicationlifecycle.Usecase
+	worker      *reconciledeployment.Worker
+	repository  *DeploymentExecutionRepository
+}
+
+func newDeploymentWorkerFixture(
+	t *testing.T,
+	apiPool *pgxpool.Pool,
+	workerPool *pgxpool.Pool,
+	placementUsecase *createplacement.Usecase,
+	executor port.DeploymentExecutor,
+	bindingRef string,
+	effectTimeout time.Duration,
+) deploymentWorkerFixture {
+	t.Helper()
+	applicationRepository, err := NewApplicationRepository(apiPool)
+	if err != nil {
+		t.Fatalf("create worker application repository: %v", err)
+	}
+	applicationUsecase, err := applicationlifecycle.NewUsecase(
+		applicationRepository,
+		applicationlifecycle.Config{MaxTransactionAttempts: 5},
+	)
+	if err != nil {
+		t.Fatalf("create worker application lifecycle use case: %v", err)
+	}
+	queueRepository, err := NewOperationQueueRepository(workerPool)
+	if err != nil {
+		t.Fatalf("create worker Operation queue repository: %v", err)
+	}
+	queue, err := operationqueue.NewQueue(
+		queueRepository,
+		operationqueue.Config{LeaseDuration: 30 * time.Second},
+	)
+	if err != nil {
+		t.Fatalf("create worker Operation queue: %v", err)
+	}
+	executionRepository, err := NewDeploymentExecutionRepository(workerPool)
+	if err != nil {
+		t.Fatalf("create Deployment execution repository: %v", err)
+	}
+	worker, err := reconciledeployment.NewWorker(
+		queue,
+		placementUsecase,
+		executionRepository,
+		executor,
+		reconciledeployment.Config{
+			BindingRef: bindingRef, EffectTimeout: effectTimeout,
+			ReconcileBackoff: time.Millisecond, MaxAttempts: 3,
+			Clock: func() time.Time {
+				return time.Now().UTC().Truncate(time.Microsecond)
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("create Deployment reconciliation worker: %v", err)
+	}
+	return deploymentWorkerFixture{
+		application: applicationUsecase, worker: worker, repository: executionRepository,
+	}
+}
+
 func submitWorkerDeployment(
 	t *testing.T,
 	ctx context.Context,
@@ -413,7 +440,7 @@ func expandExecutionTargetCapacity(
 	target.Metadata.ResourceVersion = resourceVersion + 1
 	target.Metadata.UpdatedAt = now
 	target.Status.Capacity = paasv1.Capacity{
-		CPUMillis: 200, MemoryBytes: 2 * 1024 * 1024, WorkloadSlots: 2,
+		CPUMillis: 200, MemoryBytes: 64 * 1024 * 1024, WorkloadSlots: 2,
 	}
 	target.Status.Allocatable = target.Status.Capacity
 	target.Status.ObservedAt = now
@@ -507,11 +534,23 @@ func workerConfigurationRevisionID(
 	deployment paasv1.Deployment,
 ) paasv1.ResourceID {
 	t.Helper()
-	if len(deployment.Spec.Components) != 1 ||
-		len(deployment.Spec.Components[0].Bindings) != 1 {
+	if len(deployment.Spec.Components) != 1 {
 		t.Fatalf("worker Deployment bindings = %#v", deployment.Spec.Components)
 	}
-	return deployment.Spec.Components[0].Bindings[0].ConfigurationRevisionID
+	var found paasv1.ResourceID
+	for _, binding := range deployment.Spec.Components[0].Bindings {
+		if binding.ConfigurationRevisionID == "" {
+			continue
+		}
+		if found != "" {
+			t.Fatalf("worker Deployment has multiple configuration bindings: %#v", deployment.Spec.Components)
+		}
+		found = binding.ConfigurationRevisionID
+	}
+	if found == "" {
+		t.Fatalf("worker Deployment has no configuration binding: %#v", deployment.Spec.Components)
+	}
+	return found
 }
 
 func assertReservationState(
@@ -701,7 +740,7 @@ type postgresWorkerExecutor struct {
 	t       *testing.T
 	ctx     context.Context
 	admin   *pgx.Conn
-	fixture gateBFixture
+	fixture integrationFixture
 	plans   map[paasv1.OperationID]*postgresWorkerPlan
 }
 

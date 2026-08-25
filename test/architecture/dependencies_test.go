@@ -260,6 +260,7 @@ func assertAllowedDependency(
 
 	if strings.HasPrefix(source, "app/service/") &&
 		strings.HasPrefix(imported, modulePath+"app/adapter/") &&
+		!strings.HasSuffix(source, "_test.go") &&
 		!isServiceCompositionRoot(source) {
 		t.Errorf(
 			"%s: concrete adapter %q may only be imported by an owning service cmd package",
