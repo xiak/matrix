@@ -28,6 +28,53 @@ type VerifiedBundle struct {
 	ManifestSHA256 string
 }
 
+// OpenVerifiedPayload returns one authenticated payload on the same open file
+// description that was hashed. Callers can pass it directly to a fixed
+// provider command without trusting a path lookup or archive filename.
+func (bundle VerifiedBundle) OpenVerifiedPayload(relative string) (*os.File, File, error) {
+	var declaration *File
+	for index := range bundle.Manifest.Files {
+		if bundle.Manifest.Files[index].Path == relative {
+			declaration = &bundle.Manifest.Files[index]
+			break
+		}
+	}
+	if declaration == nil {
+		return nil, File{}, errors.New("release payload is not declared")
+	}
+	target, err := confinedBundlePath(bundle.Root, declaration.Path)
+	if err != nil {
+		return nil, File{}, err
+	}
+	info, err := validateBundlePath(target)
+	if err != nil || !info.Mode().IsRegular() || info.Size() < 0 ||
+		uint64(info.Size()) != declaration.Size ||
+		!executableModeMatches(info.Mode(), declaration.Executable) {
+		return nil, File{}, errors.New("release payload is unsafe")
+	}
+	file, err := openRegularNoFollow(target)
+	if err != nil {
+		return nil, File{}, errors.New("open release payload failed")
+	}
+	hasher := sha256.New()
+	written, err := io.Copy(hasher, io.LimitReader(file, int64(declaration.Size)+1))
+	openedInfo, statErr := file.Stat()
+	expected, digestErr := hex.DecodeString(strings.TrimPrefix(declaration.SHA256, "sha256:"))
+	if err != nil || written != int64(declaration.Size) || statErr != nil ||
+		!openedInfo.Mode().IsRegular() || !os.SameFile(info, openedInfo) ||
+		uint64(openedInfo.Size()) != declaration.Size || digestErr != nil ||
+		len(expected) != sha256.Size ||
+		subtle.ConstantTimeCompare(hasher.Sum(nil), expected) != 1 {
+		_ = file.Close()
+		return nil, File{}, errors.New("release payload verification failed")
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		_ = file.Close()
+		return nil, File{}, errors.New("rewind verified release payload failed")
+	}
+	return file, *declaration, nil
+}
+
 // VerifyDirectory verifies a fully extracted offline bundle without following
 // a symbolic link or reparse point. Archives are extracted by a separately
 // bounded release-builder path; installation consumes this regular-file-only

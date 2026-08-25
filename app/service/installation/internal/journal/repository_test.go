@@ -242,7 +242,12 @@ func initializedRoot(t *testing.T) string {
 
 func activeInstallJournal(t *testing.T) lifecycle.Journal {
 	t.Helper()
-	value, err := lifecycle.New("mxi-" + strings.Repeat("a", 32))
+	value, err := lifecycle.New(
+		"mxi-"+strings.Repeat("a", 32),
+		lifecycle.ReleaseTrust{
+			KeyID: "xiak-release-2026", Fingerprint: "sha256:" + strings.Repeat("f", 64),
+		},
+	)
 	if err != nil {
 		t.Fatalf("create lifecycle journal: %v", err)
 	}

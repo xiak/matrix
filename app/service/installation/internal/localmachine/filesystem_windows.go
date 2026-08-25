@@ -1,6 +1,6 @@
 //go:build windows
 
-package release
+package localmachine
 
 import (
 	"errors"
@@ -9,13 +9,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func syncReleaseDirectory(string) error { return nil }
-
-func ownerOnlyMode(mode os.FileMode, directory bool) bool {
-	return directory == mode.IsDir() && mode&os.ModeSymlink == 0
-}
-
-func pathComponentIsLink(path string, info os.FileInfo) bool {
+func managedPathIsLink(path string, info os.FileInfo) bool {
 	if info.Mode()&os.ModeSymlink != 0 {
 		return true
 	}
@@ -27,19 +21,26 @@ func pathComponentIsLink(path string, info os.FileInfo) bool {
 	return err != nil || attributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 
-func openRegularNoFollow(path string) (*os.File, error) {
+func protectManagedPath(string, bool) error { return nil }
+
+func verifyManagedPermissions(path string, directory bool) error {
+	info, err := os.Lstat(path)
+	if err != nil || managedPathIsLink(path, info) || directory != info.IsDir() {
+		return errors.New("managed path type is unsafe")
+	}
+	return nil
+}
+
+func syncManagedDirectory(string) error { return nil }
+
+func openManagedRegularNoFollow(path string) (*os.File, error) {
 	name, err := windows.UTF16PtrFromString(path)
 	if err != nil {
 		return nil, err
 	}
 	handle, err := windows.CreateFile(
-		name,
-		windows.GENERIC_READ,
-		windows.FILE_SHARE_READ,
-		nil,
-		windows.OPEN_EXISTING,
-		windows.FILE_ATTRIBUTE_NORMAL|windows.FILE_FLAG_OPEN_REPARSE_POINT,
-		0,
+		name, windows.GENERIC_READ, windows.FILE_SHARE_READ, nil, windows.OPEN_EXISTING,
+		windows.FILE_ATTRIBUTE_NORMAL|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0,
 	)
 	if err != nil {
 		return nil, err
@@ -52,14 +53,7 @@ func openRegularNoFollow(path string) (*os.File, error) {
 	if information.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 ||
 		information.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0 {
 		windows.CloseHandle(handle)
-		return nil, errors.New("opened release path is not a regular file")
+		return nil, errors.New("opened managed path is not regular")
 	}
 	return os.NewFile(uintptr(handle), path), nil
-}
-
-// Windows has no portable executable permission bit. Executable identity is
-// still content-addressed and is enforced when the bundle is installed on the
-// supported Linux target.
-func executableModeMatches(_ os.FileMode, _ bool) bool {
-	return true
 }

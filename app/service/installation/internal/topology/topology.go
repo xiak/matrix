@@ -14,6 +14,7 @@ import (
 	"path"
 	"strings"
 
+	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
 	"github.com/xiak/matrix/app/service/installation/internal/release"
 )
@@ -61,9 +62,9 @@ func contractDescription() contract {
 		Port:           1,
 	}
 	manifest := release.Manifest{Release: release.ReleaseIdentity{ID: "matrix-v0.0.0-000000000000"}}
-	images := make(map[string]string, len(release.RequiredImageComponents()))
-	for _, component := range release.RequiredImageComponents() {
-		images[component] = "sha256:" + strings.Repeat("0", 64)
+	images := make(map[string]string, len(release.RequiredImages()))
+	for _, requirement := range release.RequiredImages() {
+		images[requirement.Component] = "sha256:" + strings.Repeat("0", 64)
 	}
 	document := composeDocument{
 		Name:     "matrix-00000000000000000000000000000000",
@@ -201,22 +202,22 @@ func compileServices(
 	options Options,
 ) map[string]serviceConfig {
 	root := options.Root
-	postgresPassword := path.Join(root, "secrets/database/postgres-superuser-password")
-	iamAPIDSN := path.Join(root, "secrets/database/iam-api-dsn")
-	iamWorkerDSN := path.Join(root, "secrets/database/iam-worker-dsn")
-	auditRuntimeDSN := path.Join(root, "secrets/database/audit-runtime-dsn")
-	paasAPIDSN := path.Join(root, "secrets/database/paas-api-dsn")
-	paasWorkerDSN := path.Join(root, "secrets/database/paas-worker-dsn")
-	bootstrapIAM := path.Join(root, "secrets/authority/iam-bootstrap.json")
-	auditIAMCredential := path.Join(root, "secrets/authority/audit-iam-credential")
-	iamAuditCredential := path.Join(root, "secrets/authority/iam-audit-credential")
-	paasIAMCredential := path.Join(root, "secrets/authority/paas-iam-credential")
-	paasAuditCredential := path.Join(root, "secrets/authority/paas-audit-credential")
-	auditCursorKey := path.Join(root, "secrets/authority/audit-cursor-key")
-	apisixIAMCredential := path.Join(root, "secrets/gateway/apisix-iam-credential")
-	artifactCatalog := path.Join(root, "config/artifact-catalog.json")
-	executorRoot := path.Join(root, "runtime/executor")
-	workloadSecretRoot := path.Join(root, "secrets/workloads")
+	postgresPassword := path.Join(root, layout.PostgresPassword)
+	iamAPIDSN := path.Join(root, layout.IAMAPI)
+	iamWorkerDSN := path.Join(root, layout.IAMWorker)
+	auditRuntimeDSN := path.Join(root, layout.AuditRuntime)
+	paasAPIDSN := path.Join(root, layout.PaaSAPI)
+	paasWorkerDSN := path.Join(root, layout.PaaSWorker)
+	bootstrapIAM := path.Join(root, layout.IAMBootstrap)
+	auditIAMCredential := path.Join(root, layout.AuditIAMCredential)
+	iamAuditCredential := path.Join(root, layout.IAMAuditCredential)
+	paasIAMCredential := path.Join(root, layout.PaaSIAMCredential)
+	paasAuditCredential := path.Join(root, layout.PaaSAuditCredential)
+	auditCursorKey := path.Join(root, layout.AuditCursorKey)
+	apisixIAMCredential := path.Join(root, layout.APISIXIAMCredential)
+	artifactCatalog := path.Join(root, layout.ArtifactCatalog)
+	executorRoot := path.Join(root, layout.ExecutorRoot)
+	workloadSecretRoot := path.Join(root, layout.WorkloadSecretRoot)
 	service := func(
 		name string,
 		image string,
@@ -250,7 +251,7 @@ func compileServices(
 		"POSTGRES_PASSWORD_FILE": "/run/secrets/postgres-password",
 	}
 	postgres.Volumes = []mount{
-		bind(path.Join(root, "data/postgres"), "/var/lib/postgresql/data", false),
+		bind(path.Join(root, layout.PostgresData), "/var/lib/postgresql/data", false),
 		bind(postgresPassword, "/run/secrets/postgres-password", true),
 	}
 	postgres.Tmpfs = []string{"/tmp:rw,noexec,nosuid,size=64m", "/var/run/postgresql:rw,nosuid,size=16m"}
@@ -373,9 +374,10 @@ func compileServices(
 		"apisix", images["apisix"], []string{"control", "web"}, nil,
 		"1.0", "512M", "http://127.0.0.1:9080/ready",
 	)
+	apisix.Environment = map[string]string{"APISIX_STAND_ALONE": "true"}
 	apisix.Ports = []string{net.JoinHostPort(options.Listener, fmt.Sprint(options.Port)) + ":9080/tcp"}
 	apisix.Volumes = []mount{
-		bind(path.Join(root, "config/apisix.yaml"), "/usr/local/apisix/conf/apisix.yaml", true),
+		bind(path.Join(root, layout.APISIX), "/usr/local/apisix/conf/apisix.yaml", true),
 		bind(apisixIAMCredential, "/run/matrix/apisix-iam-credential", true),
 	}
 	apisix.DependsOn = healthy("audit", "iam", "paas-api", "paas-ui")

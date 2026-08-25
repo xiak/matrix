@@ -62,13 +62,27 @@ type File struct {
 }
 
 type Image struct {
-	Component      string `json:"component"`
-	ArchivePath    string `json:"archivePath"`
-	ImageID        string `json:"imageId"`
-	SourceDigest   string `json:"sourceDigest"`
-	OS             string `json:"os"`
-	Architecture   string `json:"architecture"`
-	HealthContract string `json:"healthContract"`
+	Component      string       `json:"component"`
+	Purpose        ImagePurpose `json:"purpose"`
+	ArchivePath    string       `json:"archivePath"`
+	ImageID        string       `json:"imageId"`
+	SourceDigest   string       `json:"sourceDigest"`
+	OS             string       `json:"os"`
+	Architecture   string       `json:"architecture"`
+	HealthContract string       `json:"healthContract"`
+}
+
+type ImagePurpose string
+
+const (
+	ImagePlatform ImagePurpose = "PLATFORM"
+	ImageWorkload ImagePurpose = "WORKLOAD"
+)
+
+type ImageRequirement struct {
+	Component      string
+	Purpose        ImagePurpose
+	HealthContract string
 }
 
 type TrustRoot struct {
@@ -80,6 +94,14 @@ type TrustRoot struct {
 	PublicKeyFingerprint string `json:"publicKeyFingerprint"`
 }
 
-func RequiredImageComponents() []string {
-	return []string{"apisix", "audit", "iam", "paas", "paas-ui", "postgres"}
+func RequiredImages() []ImageRequirement {
+	return []ImageRequirement{
+		{Component: "apisix", Purpose: ImagePlatform, HealthContract: "northbound-ready-v1"},
+		{Component: "audit", Purpose: ImagePlatform, HealthContract: "audit-ready-deduplicate-v1"},
+		{Component: "iam", Purpose: ImagePlatform, HealthContract: "iam-ready-authorize-v1"},
+		{Component: "paas", Purpose: ImagePlatform, HealthContract: "paas-ready-worker-compose-v1"},
+		{Component: "paas-ui", Purpose: ImagePlatform, HealthContract: "paas-ui-ready-v1"},
+		{Component: "postgres", Purpose: ImagePlatform, HealthContract: "postgres-ready-schema-v1"},
+		{Component: "verification", Purpose: ImageWorkload, HealthContract: "application-probe-v1"},
+	}
 }

@@ -218,25 +218,21 @@ func topologyManifest() release.Manifest {
 		Path: "bin/mx", MediaType: "application/vnd.matrix.executable",
 		Size: 1024, SHA256: digest('1'), Executable: true,
 	}}
-	health := map[string]string{
-		"apisix": "northbound-ready-v1", "audit": "audit-ready-deduplicate-v1",
-		"iam": "iam-ready-authorize-v1", "paas": "paas-ready-worker-compose-v1",
-		"paas-ui": "paas-ui-ready-v1", "postgres": "postgres-ready-schema-v1",
-	}
-	images := make([]release.Image, 0, len(release.RequiredImageComponents()))
-	fileDigests := "234567"
-	imageDigests := "89abcd"
-	sourceDigests := "ef0123"
-	for index, component := range release.RequiredImageComponents() {
-		archive := "images/" + component + ".tar"
+	required := release.RequiredImages()
+	images := make([]release.Image, 0, len(required))
+	fileDigests := "2345678"
+	imageDigests := "89abcde"
+	sourceDigests := "ef01234"
+	for index, requirement := range required {
+		archive := "images/" + requirement.Component + ".tar"
 		files = append(files, release.File{
 			Path: archive, MediaType: "application/vnd.docker.image.archive",
 			Size: 1024 + uint64(index), SHA256: digest(fileDigests[index]),
 		})
 		images = append(images, release.Image{
-			Component: component, ArchivePath: archive,
+			Component: requirement.Component, Purpose: requirement.Purpose, ArchivePath: archive,
 			ImageID: digest(imageDigests[index]), SourceDigest: digest(sourceDigests[index]),
-			OS: "linux", Architecture: "amd64", HealthContract: health[component],
+			OS: "linux", Architecture: "amd64", HealthContract: requirement.HealthContract,
 		})
 	}
 	slices.SortFunc(files, func(left, right release.File) int {

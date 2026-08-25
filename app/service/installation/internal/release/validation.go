@@ -36,15 +36,6 @@ var (
 	pathPartPattern    = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$`)
 )
 
-var healthContracts = map[string]string{
-	"apisix":   "northbound-ready-v1",
-	"audit":    "audit-ready-deduplicate-v1",
-	"iam":      "iam-ready-authorize-v1",
-	"paas":     "paas-ready-worker-compose-v1",
-	"paas-ui":  "paas-ui-ready-v1",
-	"postgres": "postgres-ready-schema-v1",
-}
-
 func EncodeCanonical(manifest Manifest) ([]byte, error) {
 	if err := ValidateManifest(manifest); err != nil {
 		return nil, err
@@ -194,8 +185,8 @@ func validateFiles(files []File) error {
 }
 
 func validateImages(images []Image, files []File) error {
-	components := RequiredImageComponents()
-	if len(images) != len(components) {
+	required := RequiredImages()
+	if len(images) != len(required) {
 		return errors.New("release image inventory is incomplete")
 	}
 	fileByPath := make(map[string]File, len(files))
@@ -203,12 +194,13 @@ func validateImages(images []Image, files []File) error {
 		fileByPath[file.Path] = file
 	}
 	for index, image := range images {
-		component := components[index]
-		if image.Component != component || image.ArchivePath != "images/"+component+".tar" ||
+		requirement := required[index]
+		if image.Component != requirement.Component || image.Purpose != requirement.Purpose ||
+			image.ArchivePath != "images/"+requirement.Component+".tar" ||
 			!digestPattern.MatchString(image.ImageID) ||
 			!digestPattern.MatchString(image.SourceDigest) ||
 			image.OS != "linux" || image.Architecture != "amd64" ||
-			image.HealthContract != healthContracts[component] {
+			image.HealthContract != requirement.HealthContract {
 			return errors.New("release image declaration is invalid")
 		}
 		file, found := fileByPath[image.ArchivePath]

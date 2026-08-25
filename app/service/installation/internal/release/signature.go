@@ -8,6 +8,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
+	"os"
+	"path/filepath"
 	"regexp"
 )
 
@@ -39,6 +42,39 @@ func DecodeTrustRoot(content []byte) (TrustRoot, error) {
 		return TrustRoot{}, errors.New("release trust root is not canonical")
 	}
 	return value, nil
+}
+
+// ReadTrustRootFile reads the public out-of-band trust root without following
+// a link or reparse point. The returned bytes are the exact canonical bytes
+// used to authenticate a release and later pinned into the installation.
+func ReadTrustRootFile(target string) ([]byte, TrustRoot, error) {
+	if target == "" || len(target) > 4096 || !filepath.IsAbs(target) ||
+		filepath.Clean(target) != target || isFilesystemRoot(target) {
+		return nil, TrustRoot{}, errors.New("release trust root path is invalid")
+	}
+	info, err := validateBundlePath(target)
+	if err != nil || !info.Mode().IsRegular() || info.Size() < 0 ||
+		uint64(info.Size()) > maximumTrustBytes {
+		return nil, TrustRoot{}, errors.New("release trust root file is unsafe")
+	}
+	file, err := openRegularNoFollow(target)
+	if err != nil {
+		return nil, TrustRoot{}, errors.New("open release trust root failed")
+	}
+	defer file.Close()
+	content, err := io.ReadAll(io.LimitReader(file, maximumTrustBytes+1))
+	if err != nil || len(content) == 0 || uint64(len(content)) > maximumTrustBytes {
+		return nil, TrustRoot{}, errors.New("read release trust root failed")
+	}
+	openedInfo, err := file.Stat()
+	if err != nil || !openedInfo.Mode().IsRegular() || !os.SameFile(info, openedInfo) {
+		return nil, TrustRoot{}, errors.New("release trust root changed while opened")
+	}
+	trust, err := DecodeTrustRoot(content)
+	if err != nil {
+		return nil, TrustRoot{}, err
+	}
+	return content, trust, nil
 }
 
 func Verify(manifestBytes, signature, trustBytes []byte) (Manifest, error) {

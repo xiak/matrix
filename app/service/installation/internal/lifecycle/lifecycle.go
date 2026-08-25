@@ -76,25 +76,37 @@ type Command struct {
 }
 
 type Execution struct {
-	Command       Command   `json:"command"`
-	Phase         Phase     `json:"phase"`
-	Outcome       Outcome   `json:"outcome,omitempty"`
-	FailureCode   string    `json:"failureCode,omitempty"`
-	StartedAt     time.Time `json:"startedAt"`
-	UpdatedAt     time.Time `json:"updatedAt"`
-	CompletedAt   time.Time `json:"completedAt,omitempty"`
-	SourceRelease string    `json:"sourceRelease,omitempty"`
-	Destination   string    `json:"destinationRelease,omitempty"`
+	Command           Command   `json:"command"`
+	Phase             Phase     `json:"phase"`
+	Outcome           Outcome   `json:"outcome,omitempty"`
+	FailureCode       string    `json:"failureCode,omitempty"`
+	StartedAt         time.Time `json:"startedAt"`
+	UpdatedAt         time.Time `json:"updatedAt"`
+	CompletedAt       time.Time `json:"completedAt,omitempty"`
+	SourceRelease     string    `json:"sourceRelease,omitempty"`
+	SourceDigest      string    `json:"sourceDigest,omitempty"`
+	Destination       string    `json:"destinationRelease,omitempty"`
+	DestinationDigest string    `json:"destinationDigest,omitempty"`
 }
 
 type Journal struct {
-	APIVersion       string     `json:"apiVersion"`
-	Version          uint64     `json:"version"`
-	InstallationID   string     `json:"installationId"`
-	CurrentReleaseID string     `json:"currentReleaseId,omitempty"`
-	PreviousRelease  string     `json:"previousReleaseId,omitempty"`
-	Active           *Execution `json:"active,omitempty"`
-	Last             *Execution `json:"last,omitempty"`
+	APIVersion            string       `json:"apiVersion"`
+	Version               uint64       `json:"version"`
+	InstallationID        string       `json:"installationId"`
+	ReleaseTrust          ReleaseTrust `json:"releaseTrust"`
+	CurrentReleaseID      string       `json:"currentReleaseId,omitempty"`
+	CurrentReleaseDigest  string       `json:"currentReleaseDigest,omitempty"`
+	PreviousRelease       string       `json:"previousReleaseId,omitempty"`
+	PreviousReleaseDigest string       `json:"previousReleaseDigest,omitempty"`
+	Active                *Execution   `json:"active,omitempty"`
+	Last                  *Execution   `json:"last,omitempty"`
+}
+
+// ReleaseTrust pins the out-of-band public trust root for the complete
+// installation lifetime. Upgrade cannot replace either identity.
+type ReleaseTrust struct {
+	KeyID       string `json:"keyId"`
+	Fingerprint string `json:"fingerprint"`
 }
 
 type StartResult struct {
@@ -104,16 +116,21 @@ type StartResult struct {
 }
 
 var (
-	installationIDPattern = regexp.MustCompile(`^mxi-[0-9a-f]{32}$`)
-	commandIDPattern      = regexp.MustCompile(`^cmd-[0-9a-f]{32}$`)
-	releaseIDPattern      = regexp.MustCompile(`^matrix-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z](?:[0-9A-Za-z.-]{0,62}[0-9A-Za-z])?)?-[0-9a-f]{12}$`)
-	backupIDPattern       = regexp.MustCompile(`^backup-[0-9a-f]{32}$`)
-	digestPattern         = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
-	failureCodePattern    = regexp.MustCompile(`^[A-Z][A-Z0-9_]{2,63}$`)
+	installationIDPattern   = regexp.MustCompile(`^mxi-[0-9a-f]{32}$`)
+	commandIDPattern        = regexp.MustCompile(`^cmd-[0-9a-f]{32}$`)
+	releaseIDPattern        = regexp.MustCompile(`^matrix-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z](?:[0-9A-Za-z.-]{0,62}[0-9A-Za-z])?)?-[0-9a-f]{12}$`)
+	backupIDPattern         = regexp.MustCompile(`^backup-[0-9a-f]{32}$`)
+	digestPattern           = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	failureCodePattern      = regexp.MustCompile(`^[A-Z][A-Z0-9_]{2,63}$`)
+	trustKeyIDPattern       = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9._@+-]{0,126}[A-Za-z0-9])?$`)
+	trustFingerprintPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 )
 
-func New(installationID string) (Journal, error) {
-	journal := Journal{APIVersion: APIVersion, Version: 1, InstallationID: installationID}
+func New(installationID string, trust ReleaseTrust) (Journal, error) {
+	journal := Journal{
+		APIVersion: APIVersion, Version: 1, InstallationID: installationID,
+		ReleaseTrust: trust,
+	}
 	if err := ValidateJournal(journal); err != nil {
 		return Journal{}, err
 	}
@@ -158,10 +175,16 @@ func Start(journal Journal, command Command) (StartResult, error) {
 		StartedAt:     command.RequestedAt,
 		UpdatedAt:     command.RequestedAt,
 		SourceRelease: journal.CurrentReleaseID,
+		SourceDigest:  journal.CurrentReleaseDigest,
 		Destination:   command.TargetReleaseID,
+	}
+	if command.Action == ActionInstall || command.Action == ActionUpgrade ||
+		command.Action == ActionRecover {
+		execution.DestinationDigest = command.InputDigest
 	}
 	if command.Action == ActionRollback {
 		execution.Destination = journal.PreviousRelease
+		execution.DestinationDigest = journal.PreviousReleaseDigest
 	}
 	journal.Version++
 	journal.Active = &execution
@@ -256,16 +279,25 @@ func ValidateJournal(journal Journal) error {
 		!installationIDPattern.MatchString(journal.InstallationID) {
 		problems = append(problems, errors.New("installation journal identity is invalid"))
 	}
-	if journal.CurrentReleaseID != "" && !releaseIDPattern.MatchString(journal.CurrentReleaseID) {
+	if !trustKeyIDPattern.MatchString(journal.ReleaseTrust.KeyID) ||
+		!trustFingerprintPattern.MatchString(journal.ReleaseTrust.Fingerprint) {
+		problems = append(problems, errors.New("installation release trust is invalid"))
+	}
+	if (journal.CurrentReleaseID == "") != (journal.CurrentReleaseDigest == "") ||
+		(journal.CurrentReleaseID != "" && (!releaseIDPattern.MatchString(journal.CurrentReleaseID) ||
+			!digestPattern.MatchString(journal.CurrentReleaseDigest))) {
 		problems = append(problems, errors.New("current release identity is invalid"))
 	}
-	if journal.PreviousRelease != "" && (!releaseIDPattern.MatchString(journal.PreviousRelease) ||
-		journal.PreviousRelease == journal.CurrentReleaseID || journal.CurrentReleaseID == "") {
+	if (journal.PreviousRelease == "") != (journal.PreviousReleaseDigest == "") ||
+		(journal.PreviousRelease != "" && (!releaseIDPattern.MatchString(journal.PreviousRelease) ||
+			!digestPattern.MatchString(journal.PreviousReleaseDigest) ||
+			journal.PreviousRelease == journal.CurrentReleaseID || journal.CurrentReleaseID == "")) {
 		problems = append(problems, errors.New("previous release identity is invalid"))
 	}
 	if journal.Active != nil {
 		problems = append(problems, validateExecution(*journal.Active, false))
-		if journal.CurrentReleaseID != journal.Active.SourceRelease {
+		if journal.CurrentReleaseID != journal.Active.SourceRelease ||
+			journal.CurrentReleaseDigest != journal.Active.SourceDigest {
 			problems = append(problems, errors.New("active command source does not match the current release"))
 		}
 	}
@@ -291,7 +323,8 @@ func validateCommand(command Command) error {
 			return errors.New("release-changing command input is invalid")
 		}
 	case ActionRecover:
-		if command.InputDigest != "" || !releaseIDPattern.MatchString(command.TargetReleaseID) ||
+		if !digestPattern.MatchString(command.InputDigest) ||
+			!releaseIDPattern.MatchString(command.TargetReleaseID) ||
 			!backupIDPattern.MatchString(command.BackupID) {
 			return errors.New("recovery command input is invalid")
 		}
@@ -337,22 +370,34 @@ func validateExecution(execution Execution, completed bool) error {
 		execution.StartedAt != execution.Command.RequestedAt || execution.UpdatedAt.Before(execution.StartedAt) {
 		problems = append(problems, errors.New("installation execution time is invalid"))
 	}
-	if execution.SourceRelease != "" && !releaseIDPattern.MatchString(execution.SourceRelease) {
+	if (execution.SourceRelease == "") != (execution.SourceDigest == "") ||
+		(execution.SourceRelease != "" && (!releaseIDPattern.MatchString(execution.SourceRelease) ||
+			!digestPattern.MatchString(execution.SourceDigest))) {
 		problems = append(problems, errors.New("installation source release is invalid"))
 	}
 	switch execution.Command.Action {
-	case ActionInstall, ActionUpgrade, ActionRecover:
+	case ActionInstall, ActionUpgrade:
 		if execution.Destination != execution.Command.TargetReleaseID ||
-			!releaseIDPattern.MatchString(execution.Destination) {
+			execution.DestinationDigest != execution.Command.InputDigest ||
+			!releaseIDPattern.MatchString(execution.Destination) ||
+			!digestPattern.MatchString(execution.DestinationDigest) {
+			problems = append(problems, errors.New("installation destination release is invalid"))
+		}
+	case ActionRecover:
+		if execution.Destination != execution.Command.TargetReleaseID ||
+			execution.DestinationDigest != execution.Command.InputDigest ||
+			!releaseIDPattern.MatchString(execution.Destination) ||
+			!digestPattern.MatchString(execution.DestinationDigest) {
 			problems = append(problems, errors.New("installation destination release is invalid"))
 		}
 	case ActionRollback:
 		if !releaseIDPattern.MatchString(execution.Destination) ||
+			!digestPattern.MatchString(execution.DestinationDigest) ||
 			execution.Destination == execution.SourceRelease {
 			problems = append(problems, errors.New("rollback destination release is invalid"))
 		}
 	default:
-		if execution.Destination != "" {
+		if execution.Destination != "" || execution.DestinationDigest != "" {
 			problems = append(problems, errors.New("non-release command has a destination release"))
 		}
 	}
@@ -445,16 +490,24 @@ func applySuccessfulPointerChange(journal *Journal, execution Execution) {
 	switch execution.Command.Action {
 	case ActionInstall:
 		journal.CurrentReleaseID = execution.Destination
+		journal.CurrentReleaseDigest = execution.DestinationDigest
 		journal.PreviousRelease = ""
+		journal.PreviousReleaseDigest = ""
 	case ActionUpgrade:
 		journal.PreviousRelease = execution.SourceRelease
+		journal.PreviousReleaseDigest = execution.SourceDigest
 		journal.CurrentReleaseID = execution.Destination
+		journal.CurrentReleaseDigest = execution.DestinationDigest
 	case ActionRollback:
 		journal.CurrentReleaseID = execution.Destination
+		journal.CurrentReleaseDigest = execution.DestinationDigest
 		journal.PreviousRelease = ""
+		journal.PreviousReleaseDigest = ""
 	case ActionRecover:
 		journal.CurrentReleaseID = execution.Destination
+		journal.CurrentReleaseDigest = execution.DestinationDigest
 		journal.PreviousRelease = ""
+		journal.PreviousReleaseDigest = ""
 	}
 }
 
@@ -463,15 +516,19 @@ func validateCompletedPointers(journal Journal, execution Execution) error {
 	case OutcomeSucceeded:
 		switch execution.Command.Action {
 		case ActionInstall, ActionUpgrade, ActionRollback, ActionRecover:
-			if journal.CurrentReleaseID != execution.Destination {
+			if journal.CurrentReleaseID != execution.Destination ||
+				journal.CurrentReleaseDigest != execution.DestinationDigest {
 				return errors.New("successful command destination is not current")
 			}
 		default:
-			if journal.CurrentReleaseID != execution.SourceRelease {
+			if journal.CurrentReleaseID != execution.SourceRelease ||
+				journal.CurrentReleaseDigest != execution.SourceDigest {
 				return errors.New("read-only command changed the current release")
 			}
 		}
-		if execution.Command.Action == ActionUpgrade && journal.PreviousRelease != execution.SourceRelease {
+		if execution.Command.Action == ActionUpgrade &&
+			(journal.PreviousRelease != execution.SourceRelease ||
+				journal.PreviousReleaseDigest != execution.SourceDigest) {
 			return errors.New("successful upgrade did not retain its source release")
 		}
 		if (execution.Command.Action == ActionInstall || execution.Command.Action == ActionRollback ||
@@ -479,7 +536,8 @@ func validateCompletedPointers(journal Journal, execution Execution) error {
 			return errors.New("successful command retained an invalid previous release")
 		}
 	case OutcomeFailed, OutcomeRolledBack:
-		if journal.CurrentReleaseID != execution.SourceRelease {
+		if journal.CurrentReleaseID != execution.SourceRelease ||
+			journal.CurrentReleaseDigest != execution.SourceDigest {
 			return errors.New("failed command changed the current release")
 		}
 	}

@@ -5,11 +5,54 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
 )
+
+func TestStageDirectoryPublishesOnlyExactAuthenticatedContent(t *testing.T) {
+	fixture := writeBundleFixture(t)
+	verified, err := VerifyDirectory(fixture.root, fixture.trust)
+	if err != nil {
+		t.Fatalf("verify source bundle: %v", err)
+	}
+	parent := t.TempDir()
+	destination := filepath.Join(parent, fixture.manifest.Release.ID)
+	staging := destination + ".staging"
+	if err := os.Mkdir(staging, 0o700); err != nil {
+		t.Fatalf("create interrupted staging directory: %v", err)
+	}
+	partial := filepath.Join(staging, "bin", "mx.partial")
+	if err := os.MkdirAll(filepath.Dir(partial), 0o700); err != nil {
+		t.Fatalf("create interrupted payload parent: %v", err)
+	}
+	if err := os.WriteFile(partial, []byte("interrupted"), 0o600); err != nil {
+		t.Fatalf("write interrupted payload: %v", err)
+	}
+
+	staged, err := StageDirectory(verified, fixture.trust, destination)
+	if err != nil {
+		t.Fatalf("stage authenticated release: %v", err)
+	}
+	if staged.Root != destination || staged.ManifestSHA256 != verified.ManifestSHA256 {
+		t.Fatalf("staged release = %#v", staged)
+	}
+	replayed, err := StageDirectory(verified, fixture.trust, destination)
+	if err != nil || replayed.ManifestSHA256 != staged.ManifestSHA256 {
+		t.Fatalf("replay staged release = %#v / %v", replayed, err)
+	}
+
+	target := filepath.Join(destination, "images", "apisix.tar")
+	if err := os.WriteFile(target, []byte("changed"), 0o600); err != nil {
+		t.Fatalf("tamper staged release: %v", err)
+	}
+	if _, err := StageDirectory(verified, fixture.trust, destination); !errors.Is(err, ErrStageConflict) {
+		t.Fatalf("tampered staged release error = %v", err)
+	}
+}
 
 func TestVerifyDirectoryAuthenticatesExactRegularFileInventory(t *testing.T) {
 	fixture := writeBundleFixture(t)
@@ -20,6 +63,18 @@ func TestVerifyDirectoryAuthenticatesExactRegularFileInventory(t *testing.T) {
 	if verified.Manifest.Release.ID != fixture.manifest.Release.ID ||
 		verified.Root != fixture.root || verified.ManifestSHA256 == "" {
 		t.Fatalf("verified bundle = %#v", verified)
+	}
+	payload, declaration, err := verified.OpenVerifiedPayload("images/apisix.tar")
+	if err != nil {
+		t.Fatalf("open verified payload: %v", err)
+	}
+	content, err := io.ReadAll(payload)
+	if closeErr := payload.Close(); err != nil || closeErr != nil ||
+		uint64(len(content)) != declaration.Size {
+		t.Fatalf("read verified payload = %d / %v / %v", len(content), err, closeErr)
+	}
+	if _, _, err := verified.OpenVerifiedPayload("images/missing.tar"); err == nil {
+		t.Fatal("undeclared payload must fail")
 	}
 
 	t.Run("payload tamper", func(t *testing.T) {

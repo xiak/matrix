@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	apphostingv1 "github.com/xiak/matrix/api/adapter/apphosting/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	composeadapter "github.com/xiak/matrix/app/adapter/apphosting/compose"
 	"github.com/xiak/matrix/app/service/internal/processconfig"
@@ -89,7 +90,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	catalog, err := composeadapter.DecodeArtifactCatalog(catalogContent)
+	catalog, err := apphostingv1.DecodeArtifactCatalog(catalogContent)
 	clear(catalogContent)
 	if err != nil {
 		return err

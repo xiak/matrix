@@ -4,11 +4,44 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestReadTrustRootFileUsesExactCanonicalRegularFile(t *testing.T) {
+	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate release key: %v", err)
+	}
+	trust, err := NewTrustRoot("xiak-release-2026", publicKey)
+	if err != nil {
+		t.Fatalf("create release trust root: %v", err)
+	}
+	content, err := EncodeTrustRoot(trust)
+	if err != nil {
+		t.Fatalf("encode release trust root: %v", err)
+	}
+	target := filepath.Join(t.TempDir(), "release-trust.json")
+	if err := os.WriteFile(target, content, 0o600); err != nil {
+		t.Fatalf("write release trust root: %v", err)
+	}
+	read, decoded, err := ReadTrustRootFile(target)
+	if err != nil || !slices.Equal(read, content) || decoded != trust {
+		t.Fatalf("read trust root = %#v / %v", decoded, err)
+	}
+
+	link := filepath.Join(t.TempDir(), "release-trust.json")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symbolic links are unavailable to this test user: %v", err)
+	}
+	if _, _, err := ReadTrustRootFile(link); err == nil {
+		t.Fatal("linked trust root must fail")
+	}
+}
 
 func TestManifestCanonicalSignatureAndTamperRejection(t *testing.T) {
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
@@ -99,6 +132,9 @@ func TestManifestRejectsUnsafeOrIncompleteInventory(t *testing.T) {
 		"health contract": func(value *Manifest) {
 			value.Images[1].HealthContract = "ready"
 		},
+		"image purpose": func(value *Manifest) {
+			value.Images[0].Purpose = ImageWorkload
+		},
 		"previous release": func(value *Manifest) {
 			value.Release.PreviousID = "matrix-v0.0.9-0123456789ab"
 		},
@@ -161,20 +197,21 @@ func validManifest() Manifest {
 		Path: "bin/mx", MediaType: mediaExecutable,
 		Size: 1024, SHA256: digest('1'), Executable: true,
 	}}
-	images := make([]Image, 0, len(RequiredImageComponents()))
-	fileDigests := "234567"
-	imageDigests := "89abcd"
-	sourceDigests := "ef0123"
-	for index, component := range RequiredImageComponents() {
-		archive := "images/" + component + ".tar"
+	required := RequiredImages()
+	images := make([]Image, 0, len(required))
+	fileDigests := "2345678"
+	imageDigests := "89abcde"
+	sourceDigests := "ef01234"
+	for index, requirement := range required {
+		archive := "images/" + requirement.Component + ".tar"
 		files = append(files, File{
 			Path: archive, MediaType: mediaDockerArchive,
 			Size: 1024 + uint64(index), SHA256: digest(fileDigests[index]),
 		})
 		images = append(images, Image{
-			Component: component, ArchivePath: archive,
+			Component: requirement.Component, Purpose: requirement.Purpose, ArchivePath: archive,
 			ImageID: digest(imageDigests[index]), SourceDigest: digest(sourceDigests[index]),
-			OS: "linux", Architecture: "amd64", HealthContract: healthContracts[component],
+			OS: "linux", Architecture: "amd64", HealthContract: requirement.HealthContract,
 		})
 	}
 	slices.SortFunc(files, func(left, right File) int {

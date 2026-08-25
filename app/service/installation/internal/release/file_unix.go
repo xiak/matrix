@@ -9,6 +9,22 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func syncReleaseDirectory(path string) error {
+	directory, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
+}
+
+func ownerOnlyMode(mode os.FileMode, directory bool) bool {
+	if directory != mode.IsDir() || mode&os.ModeSymlink != 0 || mode.Perm()&0o077 != 0 {
+		return false
+	}
+	return !directory || mode.Perm()&0o100 != 0
+}
+
 func pathComponentIsLink(_ string, info os.FileInfo) bool {
 	return info.Mode()&os.ModeSymlink != 0
 }

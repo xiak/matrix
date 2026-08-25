@@ -35,7 +35,8 @@ func TestInstallUsesExactReplayAndPublishesOnlyAfterReady(t *testing.T) {
 	}
 
 	completed := completeActive(t, started.Journal)
-	if completed.CurrentReleaseID != releaseA || completed.PreviousRelease != "" ||
+	if completed.CurrentReleaseID != releaseA || completed.CurrentReleaseDigest != digest('1') ||
+		completed.PreviousRelease != "" || completed.PreviousReleaseDigest != "" ||
 		completed.Active != nil || completed.Last == nil || completed.Last.Outcome != OutcomeSucceeded {
 		t.Fatalf("completed install journal = %#v", completed)
 	}
@@ -81,7 +82,8 @@ func TestSuccessfulUpgradeAndExplicitRollbackMaintainNMinusOne(t *testing.T) {
 		t.Fatalf("start upgrade: %v", err)
 	}
 	upgraded := completeActive(t, started.Journal)
-	if upgraded.CurrentReleaseID != releaseB || upgraded.PreviousRelease != releaseA {
+	if upgraded.CurrentReleaseID != releaseB || upgraded.CurrentReleaseDigest != digest('2') ||
+		upgraded.PreviousRelease != releaseA || upgraded.PreviousReleaseDigest != digest('1') {
 		t.Fatalf("upgrade pointers = %q / %q", upgraded.CurrentReleaseID, upgraded.PreviousRelease)
 	}
 	rollback := lifecycleCommand(ActionRollback, "", 0, 30)
@@ -90,8 +92,25 @@ func TestSuccessfulUpgradeAndExplicitRollbackMaintainNMinusOne(t *testing.T) {
 		t.Fatalf("start rollback = %#v / %v", started, err)
 	}
 	rolledBack := completeActive(t, started.Journal)
-	if rolledBack.CurrentReleaseID != releaseA || rolledBack.PreviousRelease != "" {
+	if rolledBack.CurrentReleaseID != releaseA || rolledBack.CurrentReleaseDigest != digest('1') ||
+		rolledBack.PreviousRelease != "" || rolledBack.PreviousReleaseDigest != "" {
 		t.Fatalf("explicit rollback pointers = %q / %q", rolledBack.CurrentReleaseID, rolledBack.PreviousRelease)
+	}
+}
+
+func TestJournalRejectsUnboundReleaseContentAndTrust(t *testing.T) {
+	installed := installedJournal(t)
+
+	missingDigest := installed
+	missingDigest.CurrentReleaseDigest = ""
+	if err := ValidateJournal(missingDigest); err == nil {
+		t.Fatal("release identity without its manifest digest must fail")
+	}
+
+	changedTrust := installed
+	changedTrust.ReleaseTrust.Fingerprint = "sha256:invalid"
+	if err := ValidateJournal(changedTrust); err == nil {
+		t.Fatal("invalid pinned trust fingerprint must fail")
 	}
 }
 
@@ -128,7 +147,10 @@ const (
 
 func newJournal(t *testing.T) Journal {
 	t.Helper()
-	journal, err := New("mxi-" + strings.Repeat("a", 32))
+	journal, err := New(
+		"mxi-"+strings.Repeat("a", 32),
+		ReleaseTrust{KeyID: "xiak-release-2026", Fingerprint: "sha256:" + strings.Repeat("f", 64)},
+	)
 	if err != nil {
 		t.Fatalf("create journal: %v", err)
 	}
