@@ -286,6 +286,9 @@ func (backend *Backend) handleRollbackFailure(
 	if errors.Is(effectErr, ErrEffectOutcomeUnknown) {
 		return fault(cli.FaultUnavailable, "ROLLBACK_OUTCOME_UNKNOWN")
 	}
+	if errors.Is(effectErr, ErrEffectUnavailable) {
+		return fault(cli.FaultUnavailable, "ROLLBACK_DEPENDENCY_UNAVAILABLE")
+	}
 	manual, err := lifecycle.Fail(
 		state, execution.Command.ID, "ROLLBACK_FAILED",
 		nextJournalTime(backend.now(), execution.UpdatedAt),

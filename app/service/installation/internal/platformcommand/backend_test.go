@@ -129,6 +129,35 @@ func TestInstallRollsBackDefinitiveFailureAndPermitsANewAttempt(t *testing.T) {
 	}
 }
 
+func TestInstallKeepsRollbackActiveWhileItsDependencyIsUnavailable(t *testing.T) {
+	fixture := writeReleaseFixture(t)
+	effects := &installEffects{
+		failPhase:        lifecycle.PhaseStarting,
+		failErr:          ErrEffectVerification,
+		rollbackErr:      ErrEffectUnavailable,
+		rollbackFailOnce: true,
+	}
+	backend := newTestBackend(t, effects)
+	root := filepath.Join(t.TempDir(), "matrix")
+	request := installRequest(root, fixture)
+
+	_, err := backend.Run(context.Background(), request)
+	assertFault(t, err, cli.FaultUnavailable, "ROLLBACK_DEPENDENCY_UNAVAILABLE")
+	interrupted := readJournal(t, root)
+	if interrupted.Active == nil || interrupted.Active.Phase != lifecycle.PhaseRollingBack ||
+		interrupted.CurrentReleaseID != "" {
+		t.Fatalf("unavailable rollback journal = %#v", interrupted)
+	}
+
+	_, err = backend.Run(context.Background(), request)
+	assertFault(t, err, cli.FaultVerification, "START_VERIFICATION_FAILED")
+	completed := readJournal(t, root)
+	if completed.Active != nil || completed.Last == nil ||
+		completed.Last.Outcome != lifecycle.OutcomeRolledBack || effects.rollbackCalls != 2 {
+		t.Fatalf("resumed rollback journal = %#v / calls=%d", completed, effects.rollbackCalls)
+	}
+}
+
 func TestInstallRejectsAValidBundleFromAnotherTrustRoot(t *testing.T) {
 	first := writeReleaseFixture(t)
 	second := writeReleaseFixture(t)
@@ -144,12 +173,15 @@ func TestInstallRejectsAValidBundleFromAnotherTrustRoot(t *testing.T) {
 }
 
 type installEffects struct {
-	calls         map[lifecycle.Phase]int
-	failPhase     lifecycle.Phase
-	failErr       error
-	failOnce      bool
-	failed        bool
-	rollbackCalls int
+	calls            map[lifecycle.Phase]int
+	failPhase        lifecycle.Phase
+	failErr          error
+	failOnce         bool
+	failed           bool
+	rollbackCalls    int
+	rollbackErr      error
+	rollbackFailOnce bool
+	rollbackFailed   bool
 }
 
 func (effects *installEffects) ApplyInstallPhase(
@@ -174,6 +206,10 @@ func (effects *installEffects) ApplyInstallPhase(
 
 func (effects *installEffects) RollbackInstall(context.Context, InstallPlan) error {
 	effects.rollbackCalls++
+	if effects.rollbackErr != nil && (!effects.rollbackFailOnce || !effects.rollbackFailed) {
+		effects.rollbackFailed = true
+		return effects.rollbackErr
+	}
 	return nil
 }
 

@@ -332,6 +332,86 @@ func TestStartInstallationMarksUnobservedSuccessfulEffectUnknown(t *testing.T) {
 	}
 }
 
+func TestRollbackInstallationRemovesOnlyProvedOwnedObjectsAndReplays(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine platform cleanup effects target Linux")
+	}
+	plan, expectation := configuredPlatformStartFixture(t)
+	runtimeBoundary := newPlatformCleanupRuntime(t, plan, expectation)
+	wantContainers := len(expectation.Services) + 1
+	wantNetworks := len(expectation.Networks)
+
+	if err := rollbackInstallation(context.Background(), runtimeBoundary, plan); err != nil {
+		t.Fatalf("rollback installation: %v", err)
+	}
+	if len(runtimeBoundary.containers) != 0 || len(runtimeBoundary.networks) != 0 ||
+		runtimeBoundary.containerRemovals != wantContainers ||
+		runtimeBoundary.networkRemovals != wantNetworks ||
+		runtimeBoundary.unexpectedRemovals != 0 {
+		t.Fatalf(
+			"cleanup inventory containers=%d networks=%d removals=%d/%d unexpected=%d",
+			len(runtimeBoundary.containers), len(runtimeBoundary.networks),
+			runtimeBoundary.containerRemovals, runtimeBoundary.networkRemovals,
+			runtimeBoundary.unexpectedRemovals,
+		)
+	}
+
+	if err := rollbackInstallation(context.Background(), runtimeBoundary, plan); err != nil {
+		t.Fatalf("replay rollback installation: %v", err)
+	}
+	if runtimeBoundary.containerRemovals != wantContainers ||
+		runtimeBoundary.networkRemovals != wantNetworks {
+		t.Fatal("cleanup replay removed additional provider objects")
+	}
+}
+
+func TestRollbackInstallationRejectsUnprovedOwnershipBeforeRemoval(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine platform cleanup effects target Linux")
+	}
+	plan, expectation := configuredPlatformStartFixture(t)
+	runtimeBoundary := newPlatformCleanupRuntime(t, plan, expectation)
+	migration := runtimeBoundary.containers[runtimeBoundary.migrationID]
+	migration.Config.Labels["com.xiak.matrix.release"] = "sha256:" + strings.Repeat("f", 64)
+	runtimeBoundary.containers[runtimeBoundary.migrationID] = migration
+
+	err := rollbackInstallation(context.Background(), runtimeBoundary, plan)
+	if !errors.Is(err, platformcommand.ErrEffectConflict) ||
+		runtimeBoundary.containerRemovals != 0 || runtimeBoundary.networkRemovals != 0 {
+		t.Fatalf(
+			"unproved cleanup err=%v removals=%d/%d",
+			err, runtimeBoundary.containerRemovals, runtimeBoundary.networkRemovals,
+		)
+	}
+}
+
+func TestRollbackInstallationReplaysAStartedRemovalWithUnknownOutcome(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine platform cleanup effects target Linux")
+	}
+	plan, expectation := configuredPlatformStartFixture(t)
+	runtimeBoundary := newPlatformCleanupRuntime(t, plan, expectation)
+	runtimeBoundary.failStartedRemovalOnce = true
+
+	err := rollbackInstallation(context.Background(), runtimeBoundary, plan)
+	if !errors.Is(err, platformcommand.ErrEffectOutcomeUnknown) ||
+		runtimeBoundary.containerRemovals != 1 {
+		t.Fatalf("started cleanup err=%v removals=%d", err, runtimeBoundary.containerRemovals)
+	}
+	if err := rollbackInstallation(context.Background(), runtimeBoundary, plan); err != nil {
+		t.Fatalf("replay uncertain rollback: %v", err)
+	}
+	if len(runtimeBoundary.containers) != 0 || len(runtimeBoundary.networks) != 0 ||
+		runtimeBoundary.containerRemovals != len(expectation.Services)+1 ||
+		runtimeBoundary.networkRemovals != len(expectation.Networks) {
+		t.Fatalf(
+			"replayed cleanup inventory=%d/%d removals=%d/%d",
+			len(runtimeBoundary.containers), len(runtimeBoundary.networks),
+			runtimeBoundary.containerRemovals, runtimeBoundary.networkRemovals,
+		)
+	}
+}
+
 func configuredPlatformStartFixture(
 	t *testing.T,
 ) (platformcommand.InstallPlan, platformComposeExpectation) {
@@ -612,6 +692,19 @@ type platformStartRuntime struct {
 	composeArguments          []string
 }
 
+type platformCleanupRuntime struct {
+	expectation            platformComposeExpectation
+	installation           string
+	containers             map[string]platformContainerInspection
+	networks               map[string]platformNetworkInspection
+	migrationID            string
+	containerRemovals      int
+	networkRemovals        int
+	unexpectedRemovals     int
+	failStartedRemovalOnce bool
+	failedStartedRemoval   bool
+}
+
 const platformTestConfigHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 func newPlatformStartRuntime(
@@ -623,6 +716,175 @@ func newPlatformStartRuntime(
 		images[image.ImageID] = true
 	}
 	return &platformStartRuntime{expectation: expectation, images: images}
+}
+
+func newPlatformCleanupRuntime(
+	t *testing.T,
+	plan platformcommand.InstallPlan,
+	expectation platformComposeExpectation,
+) *platformCleanupRuntime {
+	t.Helper()
+	runtimeBoundary := &platformCleanupRuntime{
+		expectation:  expectation,
+		installation: plan.InstallationID,
+		containers:   make(map[string]platformContainerInspection, len(expectation.Services)+1),
+		networks:     make(map[string]platformNetworkInspection, len(expectation.Networks)),
+		migrationID:  "migration-test-container",
+	}
+	for serviceName, expected := range expectation.Services {
+		identity := "container-" + serviceName
+		labels := cloneTestLabels(expected.Labels)
+		labels["com.docker.compose.project"] = expectation.Name
+		labels["com.docker.compose.service"] = serviceName
+		labels["com.docker.compose.oneoff"] = "False"
+		runtimeBoundary.containers[identity] = platformContainerInspection{
+			ID: identity, Name: "/" + expectation.Name + "-" + serviceName + "-1",
+			Image: expected.Image, Config: platformContainerConfig{Labels: labels},
+		}
+	}
+	for logicalName, expected := range expectation.Networks {
+		identity := "network-" + logicalName
+		labels := cloneTestLabels(expected.Labels)
+		labels["com.docker.compose.project"] = expectation.Name
+		labels["com.docker.compose.network"] = logicalName
+		runtimeBoundary.networks[identity] = platformNetworkInspection{
+			ID: identity, Internal: expected.Internal, Labels: labels,
+		}
+	}
+	migrations, err := expectedMigrationCleanupIdentities(plan, expectation.Name)
+	if err != nil {
+		t.Fatalf("derive cleanup migration identities: %v", err)
+	}
+	names := make([]string, 0, len(migrations))
+	for name := range migrations {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	selected := migrations[names[0]]
+	runtimeBoundary.containers[runtimeBoundary.migrationID] = platformContainerInspection{
+		ID: runtimeBoundary.migrationID, Name: "/" + names[0], Image: selected.imageID,
+		Config: platformContainerConfig{Labels: map[string]string{
+			"com.xiak.matrix.managed":      "true",
+			"com.xiak.matrix.installation": plan.InstallationID,
+			"com.xiak.matrix.release":      plan.Bundle.Manifest.Release.ID,
+			"com.xiak.matrix.role":         selected.role,
+		}},
+	}
+	return runtimeBoundary
+}
+
+func (runtimeBoundary *platformCleanupRuntime) Run(
+	_ context.Context,
+	input io.Reader,
+	arguments ...string,
+) ([]byte, bool, error) {
+	if input != nil || len(arguments) < 2 {
+		return nil, false, errors.New("platform cleanup Docker invocation is invalid")
+	}
+	if arguments[1] == "ls" {
+		switch arguments[0] {
+		case "container":
+			if hasArgumentPair(
+				arguments, "--filter",
+				"label=com.xiak.matrix.installation="+runtimeBoundary.installation,
+			) {
+				return cleanupContainerInventory(runtimeBoundary.containers, "", ""), true, nil
+			}
+			return cleanupContainerInventory(
+				runtimeBoundary.containers,
+				"com.docker.compose.project", runtimeBoundary.expectation.Name,
+			), true, nil
+		case "network":
+			return cleanupNetworkInventory(
+				runtimeBoundary.networks,
+				"com.docker.compose.project", runtimeBoundary.expectation.Name,
+			), true, nil
+		case "volume":
+			return nil, true, nil
+		}
+	}
+	identity := arguments[len(arguments)-1]
+	if arguments[1] == "inspect" {
+		switch arguments[0] {
+		case "container":
+			inspection, found := runtimeBoundary.containers[identity]
+			if !found {
+				return nil, true, errors.New("cleanup test container is absent")
+			}
+			content, err := json.Marshal(inspection)
+			return content, true, err
+		case "network":
+			inspection, found := runtimeBoundary.networks[identity]
+			if !found {
+				return nil, true, errors.New("cleanup test network is absent")
+			}
+			content, err := json.Marshal(inspection)
+			return content, true, err
+		}
+	}
+	if arguments[1] == "rm" {
+		removed := false
+		switch arguments[0] {
+		case "container":
+			if _, found := runtimeBoundary.containers[identity]; found {
+				delete(runtimeBoundary.containers, identity)
+				runtimeBoundary.containerRemovals++
+				removed = true
+			}
+		case "network":
+			if _, found := runtimeBoundary.networks[identity]; found {
+				delete(runtimeBoundary.networks, identity)
+				runtimeBoundary.networkRemovals++
+				removed = true
+			}
+		default:
+			runtimeBoundary.unexpectedRemovals++
+		}
+		if !removed {
+			return nil, true, errors.New("cleanup test object is absent or unsupported")
+		}
+		if runtimeBoundary.failStartedRemovalOnce && !runtimeBoundary.failedStartedRemoval {
+			runtimeBoundary.failedStartedRemoval = true
+			return nil, true, errors.New("cleanup test removal outcome is unknown")
+		}
+		return nil, true, nil
+	}
+	runtimeBoundary.unexpectedRemovals++
+	return nil, false, fmt.Errorf("unexpected cleanup Docker command: %q", strings.Join(arguments, " "))
+}
+
+func cleanupContainerInventory(
+	containers map[string]platformContainerInspection,
+	label, value string,
+) []byte {
+	identities := make([]string, 0, len(containers))
+	for identity, inspection := range containers {
+		if label == "" || inspection.Config.Labels[label] == value {
+			identities = append(identities, identity)
+		}
+	}
+	slices.Sort(identities)
+	if len(identities) == 0 {
+		return nil
+	}
+	return []byte(strings.Join(identities, "\n") + "\n")
+}
+
+func cleanupNetworkInventory(
+	networks map[string]platformNetworkInspection,
+	label, value string,
+) []byte {
+	identities := make([]string, 0, len(networks))
+	for identity, inspection := range networks {
+		if inspection.Labels[label] == value {
+			identities = append(identities, identity)
+		}
+	}
+	slices.Sort(identities)
+	if len(identities) == 0 {
+		return nil
+	}
+	return []byte(strings.Join(identities, "\n") + "\n")
 }
 
 func (runtimeBoundary *platformStartRuntime) Run(
@@ -706,6 +968,7 @@ func (runtimeBoundary *platformStartRuntime) inspectNetwork(
 		return nil, true, errors.New("platform test network is unknown")
 	}
 	labels := cloneTestLabels(expected.Labels)
+	labels["com.docker.compose.project"] = runtimeBoundary.expectation.Name
 	labels["com.docker.compose.network"] = logicalName
 	content, err := json.Marshal(map[string]any{
 		"Id": identity, "Internal": expected.Internal, "Labels": labels,

@@ -61,6 +61,7 @@ type platformMount struct {
 
 type platformContainerInspection struct {
 	ID              string                  `json:"Id"`
+	Name            string                  `json:"Name"`
 	Image           string                  `json:"Image"`
 	Config          platformContainerConfig `json:"Config"`
 	State           platformContainerState  `json:"State"`
@@ -116,6 +117,11 @@ type platformNetworkInspection struct {
 	ID       string            `json:"Id"`
 	Internal bool              `json:"Internal"`
 	Labels   map[string]string `json:"Labels"`
+}
+
+type platformProjectObservation struct {
+	Containers map[string]platformContainerInspection
+	Networks   map[string]platformNetworkInspection
 }
 
 func startInstallation(
@@ -274,50 +280,16 @@ func observePlatformProject(
 	runtimeBoundary dockerRuntime,
 	expectation platformComposeExpectation,
 ) (bool, error) {
-	containers, err := listProjectObjects(ctx, runtimeBoundary, "container", expectation.Name)
-	if err != nil {
+	observation, exists, err := inspectOwnedPlatformProject(
+		ctx, runtimeBoundary, expectation,
+	)
+	if err != nil || !exists {
 		return false, err
 	}
-	networks, err := listProjectObjects(ctx, runtimeBoundary, "network", expectation.Name)
-	if err != nil {
-		return false, err
-	}
-	volumes, err := listProjectObjects(ctx, runtimeBoundary, "volume", expectation.Name)
-	if err != nil {
-		return false, err
-	}
-	if len(containers) == 0 && len(networks) == 0 && len(volumes) == 0 {
-		return false, nil
-	}
-	if len(volumes) != 0 || len(containers) > len(expectation.Services) ||
-		len(networks) > len(expectation.Networks) {
-		return false, errors.Join(
-			platformcommand.ErrEffectConflict,
-			errors.New("platform project contains an unexpected provider object"),
-		)
-	}
-
-	networkIDs := make(map[string]string, len(networks))
-	for _, identity := range networks {
-		inspection, inspectErr := inspectPlatformNetwork(ctx, runtimeBoundary, identity)
-		if inspectErr != nil {
-			return false, inspectErr
-		}
-		logicalName := inspection.Labels["com.docker.compose.network"]
-		expected, found := expectation.Networks[logicalName]
-		if !found || networkIDs[logicalName] != "" {
-			return false, errors.Join(
-				platformcommand.ErrEffectConflict,
-				errors.New("platform project network inventory conflicts"),
-			)
-		}
-		if !ownershipLabelsMatch(inspection.Labels, expected.Labels) {
-			return false, errors.Join(
-				platformcommand.ErrEffectConflict,
-				errors.New("platform project network is not installation-owned"),
-			)
-		}
-		if inspection.Internal != expected.Internal || inspection.ID == "" {
+	networkIDs := make(map[string]string, len(observation.Networks))
+	for logicalName, inspection := range observation.Networks {
+		expected := expectation.Networks[logicalName]
+		if inspection.Internal != expected.Internal {
 			return false, errors.Join(
 				platformcommand.ErrEffectVerification,
 				errors.New("platform project network configuration drifted"),
@@ -326,36 +298,9 @@ func observePlatformProject(
 		networkIDs[logicalName] = inspection.ID
 	}
 
-	seenServices := make(map[string]struct{}, len(containers))
 	allReady := true
-	for _, identity := range containers {
-		inspection, inspectErr := inspectPlatformContainer(ctx, runtimeBoundary, identity)
-		if inspectErr != nil {
-			return false, inspectErr
-		}
-		serviceName := inspection.Config.Labels["com.docker.compose.service"]
-		expected, found := expectation.Services[serviceName]
-		if !found {
-			return false, errors.Join(
-				platformcommand.ErrEffectConflict,
-				errors.New("platform project contains an unexpected service"),
-			)
-		}
-		if _, duplicate := seenServices[serviceName]; duplicate {
-			return false, errors.Join(
-				platformcommand.ErrEffectConflict,
-				errors.New("platform project contains duplicate service containers"),
-			)
-		}
-		seenServices[serviceName] = struct{}{}
-		if !ownershipLabelsMatch(inspection.Config.Labels, expected.Labels) ||
-			inspection.Config.Labels["com.docker.compose.project"] != expectation.Name ||
-			!strings.EqualFold(inspection.Config.Labels["com.docker.compose.oneoff"], "false") {
-			return false, errors.Join(
-				platformcommand.ErrEffectConflict,
-				errors.New("platform service is not installation-owned"),
-			)
-		}
+	for serviceName, inspection := range observation.Containers {
+		expected := expectation.Services[serviceName]
 		if err := validatePlatformContainer(inspection, expected, networkIDs); err != nil {
 			return false, errors.Join(platformcommand.ErrEffectVerification, err)
 		}
@@ -367,8 +312,97 @@ func observePlatformProject(
 			allReady = false
 		}
 	}
-	return len(seenServices) == len(expectation.Services) &&
-		len(networkIDs) == len(expectation.Networks) && allReady, nil
+	return len(observation.Containers) == len(expectation.Services) &&
+		len(observation.Networks) == len(expectation.Networks) && allReady, nil
+}
+
+func inspectOwnedPlatformProject(
+	ctx context.Context,
+	runtimeBoundary dockerRuntime,
+	expectation platformComposeExpectation,
+) (platformProjectObservation, bool, error) {
+	containers, err := listProjectObjects(ctx, runtimeBoundary, "container", expectation.Name)
+	if err != nil {
+		return platformProjectObservation{}, false, err
+	}
+	networks, err := listProjectObjects(ctx, runtimeBoundary, "network", expectation.Name)
+	if err != nil {
+		return platformProjectObservation{}, false, err
+	}
+	volumes, err := listProjectObjects(ctx, runtimeBoundary, "volume", expectation.Name)
+	if err != nil {
+		return platformProjectObservation{}, false, err
+	}
+	if len(containers) == 0 && len(networks) == 0 && len(volumes) == 0 {
+		return platformProjectObservation{}, false, nil
+	}
+	if len(volumes) != 0 || len(containers) > len(expectation.Services) ||
+		len(networks) > len(expectation.Networks) {
+		return platformProjectObservation{}, false, errors.Join(
+			platformcommand.ErrEffectConflict,
+			errors.New("platform project contains an unexpected provider object"),
+		)
+	}
+
+	observedNetworks := make(map[string]platformNetworkInspection, len(networks))
+	for _, identity := range networks {
+		inspection, inspectErr := inspectPlatformNetwork(ctx, runtimeBoundary, identity)
+		if inspectErr != nil {
+			return platformProjectObservation{}, false, inspectErr
+		}
+		logicalName := inspection.Labels["com.docker.compose.network"]
+		expected, found := expectation.Networks[logicalName]
+		if !found || observedNetworks[logicalName].ID != "" {
+			return platformProjectObservation{}, false, errors.Join(
+				platformcommand.ErrEffectConflict,
+				errors.New("platform project network inventory conflicts"),
+			)
+		}
+		if !ownershipLabelsMatch(inspection.Labels, expected.Labels) ||
+			inspection.Labels["com.docker.compose.project"] != expectation.Name {
+			return platformProjectObservation{}, false, errors.Join(
+				platformcommand.ErrEffectConflict,
+				errors.New("platform project network is not installation-owned"),
+			)
+		}
+		observedNetworks[logicalName] = inspection
+	}
+
+	observedContainers := make(map[string]platformContainerInspection, len(containers))
+	for _, identity := range containers {
+		inspection, inspectErr := inspectPlatformContainer(ctx, runtimeBoundary, identity)
+		if inspectErr != nil {
+			return platformProjectObservation{}, false, inspectErr
+		}
+		serviceName := inspection.Config.Labels["com.docker.compose.service"]
+		expected, found := expectation.Services[serviceName]
+		if !found {
+			return platformProjectObservation{}, false, errors.Join(
+				platformcommand.ErrEffectConflict,
+				errors.New("platform project contains an unexpected service"),
+			)
+		}
+		if observedContainers[serviceName].ID != "" {
+			return platformProjectObservation{}, false, errors.Join(
+				platformcommand.ErrEffectConflict,
+				errors.New("platform project contains duplicate service containers"),
+			)
+		}
+		if inspection.Image != expected.Image ||
+			!ownershipLabelsMatch(inspection.Config.Labels, expected.Labels) ||
+			inspection.Config.Labels["com.docker.compose.project"] != expectation.Name ||
+			!strings.EqualFold(inspection.Config.Labels["com.docker.compose.oneoff"], "false") {
+			return platformProjectObservation{}, false, errors.Join(
+				platformcommand.ErrEffectConflict,
+				errors.New("platform service is not installation-owned"),
+			)
+		}
+		observedContainers[serviceName] = inspection
+	}
+	return platformProjectObservation{
+		Containers: observedContainers,
+		Networks:   observedNetworks,
+	}, true, nil
 }
 
 func listProjectObjects(
@@ -419,7 +453,7 @@ func inspectPlatformNetwork(
 		return platformNetworkInspection{}, errors.Join(platformcommand.ErrEffectUnavailable, err)
 	}
 	var inspection platformNetworkInspection
-	if json.Unmarshal(output, &inspection) != nil || inspection.ID == "" || inspection.Labels == nil {
+	if json.Unmarshal(output, &inspection) != nil || inspection.ID != identity || inspection.Labels == nil {
 		return platformNetworkInspection{}, errors.Join(
 			platformcommand.ErrEffectVerification,
 			errors.New("platform network observation is invalid"),
@@ -440,7 +474,7 @@ func inspectPlatformContainer(
 		return platformContainerInspection{}, errors.Join(platformcommand.ErrEffectUnavailable, err)
 	}
 	var inspection platformContainerInspection
-	if json.Unmarshal(output, &inspection) != nil || inspection.ID == "" ||
+	if json.Unmarshal(output, &inspection) != nil || inspection.ID != identity ||
 		inspection.Config.Labels == nil {
 		return platformContainerInspection{}, errors.Join(
 			platformcommand.ErrEffectVerification,
