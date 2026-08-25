@@ -154,6 +154,56 @@ func TestPaaSApphostingUsesPragmaticDDDDependencies(t *testing.T) {
 	}
 }
 
+func TestAuthorityDomainsKeepPureDependencies(t *testing.T) {
+	root := repositoryRoot(t)
+	contexts := map[string]string{
+		"iam":   modulePath + "api/iam/v1",
+		"audit": modulePath + "api/audit/v1",
+	}
+	for context, owningAPI := range contexts {
+		t.Run(context, func(t *testing.T) {
+			authorityRoot := filepath.Join(root, "app", "service", context, "internal", "authority")
+			err := filepath.WalkDir(authorityRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+				if walkErr != nil {
+					return walkErr
+				}
+				if entry.IsDir() || filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
+					return nil
+				}
+				relative, err := filepath.Rel(root, path)
+				if err != nil {
+					return err
+				}
+				file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+				if err != nil {
+					return err
+				}
+				for _, declaration := range file.Imports {
+					imported, err := strconv.Unquote(declaration.Path.Value)
+					if err != nil {
+						return err
+					}
+					if strings.HasPrefix(imported, modulePath) && imported != owningAPI {
+						t.Errorf("%s: authority domain cannot import %q", filepath.ToSlash(relative), imported)
+					}
+					if isThirdPartyImport(imported) && imported != "golang.org/x/crypto/argon2" {
+						t.Errorf("%s: authority domain has unapproved external dependency %q", filepath.ToSlash(relative), imported)
+					}
+					for _, forbidden := range []string{"database/", "net", "os", "syscall"} {
+						if imported == strings.TrimSuffix(forbidden, "/") || strings.HasPrefix(imported, forbidden) {
+							t.Errorf("%s: authority domain cannot import side-effect package %q", filepath.ToSlash(relative), imported)
+						}
+					}
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatalf("inspect %s authority dependencies: %v", context, err)
+			}
+		})
+	}
+}
+
 func TestPaaSApphostingBusinessTypesAvoidAmbiguousNames(t *testing.T) {
 	root := repositoryRoot(t)
 	apphostingRoot := filepath.Join(root, "app", "service", "paas", "internal", "apphosting")
@@ -351,6 +401,14 @@ func assertAllowedDependency(
 			imported,
 		)
 	}
+}
+
+func isThirdPartyImport(imported string) bool {
+	if strings.HasPrefix(imported, modulePath) {
+		return false
+	}
+	first, _, _ := strings.Cut(imported, "/")
+	return strings.Contains(first, ".")
 }
 
 func isServiceCompositionRoot(source string) bool {

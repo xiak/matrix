@@ -2,8 +2,10 @@ package iamv1
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
@@ -14,6 +16,24 @@ func TestEveryIAMOpenAPISchemaCompilesAsJSONSchema202012(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			_ = compileIAMOpenAPISchema(t, document, name)
 		})
+	}
+}
+
+func TestIAMSchemaAcceptsGoUTCSecondEncoding(t *testing.T) {
+	value := Readiness{
+		APIVersion: APIVersion, Kind: "Readiness", State: ReadinessReady,
+		SchemaVersion: 1, CheckedAt: time.Date(2026, 8, 25, 1, 2, 3, 0, time.UTC),
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("encode readiness: %v", err)
+	}
+	instance, err := jsonschema.UnmarshalJSON(bytes.NewReader(encoded))
+	if err != nil {
+		t.Fatalf("decode readiness: %v", err)
+	}
+	if err := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), "Readiness").Validate(instance); err != nil {
+		t.Fatalf("Go-encoded UTC second does not satisfy IAM schema: %v", err)
 	}
 }
 

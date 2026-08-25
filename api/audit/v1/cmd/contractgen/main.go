@@ -127,7 +127,7 @@ func scalarSchemas() object {
 	result := object{
 		"Timestamp": object{
 			"type": "string", "format": "date-time",
-			"pattern": `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}Z$`,
+			"pattern": `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,6})?Z$`,
 		},
 		"ID": id,
 		"Digest": object{
