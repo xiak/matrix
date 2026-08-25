@@ -23,7 +23,7 @@ Matrix PaaS will borrow principles, not directory names wholesale:
 2. Independently runnable products live under `app/service/` and `app/ui/`.
 3. Each Go service owns `cmd/` binaries and `internal/` implementation.
 4. Replaceable integrations live under `app/adapter/`, grouped by
-   infrastructure, runtime, and gateway capability.
+   infrastructure, application-hosting, and gateway capability.
 5. PaaS-owned deployment and ingress configuration lives under `deploy/`.
 6. Shared code stays with its owning service until multiple concrete consumers
    justify a specifically named SDK or foundation; no generic top-level

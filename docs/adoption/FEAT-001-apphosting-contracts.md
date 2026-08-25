@@ -34,8 +34,8 @@ default architecture.
 | Slice at fixed commit | Decision | Rationale |
 | --- | --- | --- |
 | `app/service/iam/api/protos/matrix/iam/v1/common.proto` and `permission.proto` | `ADAPT` | Reuse the authority semantics: PaaS tenant identity maps to IAM `organization_id`, authorization is a server-side permission decision, and decision IDs are auditable. Generated IAM code is not copied into FEAT-001. |
-| `platform/go/sdk/audit/model.go` and `contract.go` | `REFERENCE` | Evidence sanitation follows the Audit contract's bounded attributes, sensitive-key rejection, stable actor/target/action/result vocabulary, and microsecond UTC time. The unified Audit event remains owned by Audit and is integrated in FEAT-005. |
-| `platform/go/sdk/audit/outbox.go` | `REFERENCE` | Preserve atomic business-write/outbox insertion, fencing, immutable event key/fingerprint, replay acceptance, retry, rejection, and dead-letter behavior for FEAT-005. It is not moved into a new top-level `platform/`. |
+| `platform/go/sdk/audit/model.go` and `contract.go` | `REFERENCE` | Evidence sanitation follows the Audit contract's bounded attributes, sensitive-key rejection, stable actor/target/action/result vocabulary, and microsecond UTC time. The unified Audit event remains owned by a later Audit integration FEAT. |
+| `platform/go/sdk/audit/outbox.go` | `REFERENCE` | Preserve atomic business-write/outbox insertion, fencing, immutable event key/fingerprint, replay acceptance, retry, rejection, and dead-letter behavior for the owning Audit integration FEAT. It is not moved into a new top-level `platform/`. |
 | Whole `platform/go/foundation` or `platform/go/sdk` directories | `REJECT` | A generic shared layer has not earned multiple consumers in the new repository. Future adoption is capability-by-capability into its owner or a specifically approved SDK. |
 
 ## Result

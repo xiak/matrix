@@ -57,7 +57,7 @@ cmd/<binary> -> service/usecase + concrete adapters
     adapters cannot own domain decisions.
 14. Business packages and exported business types cannot use ambiguous
     `Manager`, `Helper`, `Logic`, `DAO`, `Model`, or `DTO` names.
-15. Runtime/executor interfaces are owned by one product domain. A Compose,
+15. Deployment-executor interfaces are owned by one product domain. A Compose,
     Kubernetes, VM, function, or cloud-provider schema cannot become a shared
     universal workload contract.
 16. Platform installation and upgrade code cannot use the tenant application

@@ -40,7 +40,7 @@ isolation.
 
 Gate A observes the adapter process host and is immediately usable for a
 host-native control-plane/worker. A containerized worker must not present its
-container identity as the physical host. FEAT-006 composition must explicitly
+container identity as the physical host. Release composition must explicitly
 select the completed pinned-SSH probe or a separately accepted Docker-engine
 or host-agent probe. The injected `HostProbe` boundary allows that replacement
 without changing `ExecutionTarget` or placement contracts.
