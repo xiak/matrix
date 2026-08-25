@@ -26,8 +26,9 @@
 ## Portable branch state
 
 - The branch contains commit `001d889`; FEAT-004 Gate C is accepted and pushed
-  in `2b7e398`, and FEAT-005 Gate A is accepted and pushed in `83502b0`. The
-  fixed donor baselines remain those listed below.
+  in `2b7e398`, FEAT-005 Gate A is accepted and pushed in `83502b0`, and the
+  current durable implementation head is `3323741`. The fixed donor baselines
+  remain those listed below.
 - FEAT-001, FEAT-002, and FEAT-003 Gate A/Gate B are Accepted. The public model
   is Application, immutable ApplicationRevision, Deployment,
   ExecutionPool/ExecutionTarget, provider-neutral PlacementPolicy, and an
@@ -124,8 +125,20 @@
   Compose/APISIX/catalog files are generated. The versioned catalog now
   contains only the signed verification WORKLOAD image, never platform
   images. Full unit/vet and Linux/amd64 plus Darwin/arm64 build gates pass.
-  Go-owned migrations, start/verification/cleanup effects, the concrete
-  provider runner, `mx` wiring, and platform image assembly remain unwired.
+  Commit `97d1c2d` adds installation-owned execution of the IAM, Audit, and
+  PaaS Go migration binaries, observation-before-retry through each owning
+  verifier, and restrictive migration files; clean PostgreSQL 18 apply-twice
+  verification passes for all three schemas. Commit `3323741` replaces a
+  static placement seed with a continuously refreshed default local execution
+  profile. The containerized worker observes the Docker Engine host rather
+  than itself, atomically reconciles one fixed ExecutionPool, ExecutionTarget,
+  tenant PlacementPolicy, and allocation through a worker-only PostgreSQL
+  function, fails closed on identity/profile/freshness drift, and advertises
+  no isolation while degraded. Its exact committed worktree passed generation
+  drift, full unit/vet/race, ten-run repetition, placement fuzz, four-target
+  builds, clean PostgreSQL 18, and a real network-disabled Docker Engine-host
+  probe. Compose start/verification/cleanup effects, the concrete provider
+  runner, `mx` wiring, and platform image assembly remain unwired.
 - FEAT-006 Gate A and Gate B are Accepted. Target design and fixed-donor
   adoption remain `506f6d7` and `932252e`; the accepted authority contracts,
   pure behavior, and separate IAM/Audit PostgreSQL owners, migrators, runtime
@@ -157,9 +170,9 @@
 
 ## Next concrete work
 
-1. Implement Go-owned IAM/Audit/PaaS migrations, Compose start/observation,
-   full IAM/Audit/application verification, and ownership-safe install cleanup;
-   then complete the concrete provider runner and wire it behind `mx`.
+1. Complete Compose start/observation, full IAM/Audit/application
+   verification, and ownership-safe install cleanup; then complete the
+   concrete provider runner and wire it behind `mx`.
 2. Assemble the real IAM, Audit, PaaS, dispatcher, APISIX, UI, PostgreSQL, and
    verification images plus signed releases A/B from exact release content.
 3. Prove the external-network-disabled Compose

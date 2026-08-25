@@ -289,13 +289,28 @@ not archive layout, Compose text, SQL text, command call order, or line counts.
   cross-process contract and contains only the signed verification WORKLOAD
   image; IAM, Audit, PostgreSQL, gateway, UI, and PaaS platform images cannot
   be selected as tenant artifacts.
+- Commit `97d1c2d` runs the IAM, Audit, and PaaS owning Go migration binaries
+  through installation-owned least-privilege files. It records migration
+  intent before effects, observes every schema with its owning verifier before
+  retry, and rejects incompatible or partially migrated state. Clean
+  PostgreSQL 18 applies each migration twice and passes all three verifiers.
+- Commit `3323741` makes the fresh installation schedulable without a static
+  timestamp seed. The PaaS worker observes the Docker Engine host, atomically
+  creates the fixed local ExecutionPool, ExecutionTarget, tenant default
+  PlacementPolicy, and allocation through a worker-only PostgreSQL function,
+  then refreshes the observation every minute. Readiness fails closed on a
+  stale, future, degraded, identity-changed, or structurally drifted profile;
+  a degraded target advertises no Compose isolation.
 - The same worktree passed generation drift, full unit tests, vet, race,
   ten-run repetition, architecture boundaries, placement fuzz, four-target
   builds, Markdown links, donor-dependency and tenant-authority scans, and
   repository-diff checks. The `8d6bed4` slice additionally passed full unit
   tests, vet, Linux/amd64 and Darwin/arm64 builds, and repository-diff checks.
-  Gate B/C real migration, installation, service integration, upgrade,
-  rollback, recovery, and clean offline E2E remain unaccepted.
+  The exact `3323741` worktree additionally passed real PostgreSQL 18 profile
+  creation/refresh, a network-disabled real Docker Engine-host probe, ten-run
+  repetition, placement fuzz, and Windows/Linux/Darwin builds. Gate B/C real
+  platform start and verification, installation, service integration,
+  upgrade, rollback, recovery, and clean offline E2E remain unaccepted.
 
 ## Deferred
 

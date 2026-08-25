@@ -207,6 +207,12 @@ after unbounded output has already been buffered.
 Accepted on 2026-08-25. Unit tests cover binding, identity, capacity,
 capability intersection, health, scope, and normalized errors. A real local
 inspection test exercises the host probe without requiring Docker readiness.
+Release consumption was accepted in commit `3323741`: the containerized PaaS
+worker uses the separately accepted Docker Engine host probe instead of its
+container identity. Fixed bounded `docker info` and Compose commands derive a
+stable Engine-host fingerprint and normalized capacity; a network-disabled
+Linux run against a real mounted Docker socket proves stable repeated identity,
+Compose capability, deadline normalization, and no registry or Internet use.
 
 ### Gate B
 
