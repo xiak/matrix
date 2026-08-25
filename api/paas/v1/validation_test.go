@@ -47,6 +47,46 @@ func TestValidateOperationEnforcesTerminalContract(t *testing.T) {
 	}
 }
 
+func TestValidateOperationDistinguishesPlatformAndTenantScope(t *testing.T) {
+	var operation Operation
+	decodeStrictJSON(t, "examples/operation.json", &operation)
+	operation.Action = OperationRegisterTarget
+	operation.Scope = ResourceScope{Kind: AuthorityPlatform}
+	operation.Target = ResourceRef{Kind: "RuntimeTarget", ID: "target-local-001"}
+	if err := ValidateOperation(operation); err != nil {
+		t.Fatalf("platform target registration must validate: %v", err)
+	}
+
+	operation.Scope = ResourceScope{Kind: AuthorityTenant, TenantID: "tenant-a"}
+	if err := ValidateOperation(operation); err == nil ||
+		!strings.Contains(err.Error(), "platform scope") {
+		t.Fatalf("tenant-scoped target registration must fail, got %v", err)
+	}
+
+	operation.Action = OperationDeploy
+	operation.Scope = ResourceScope{Kind: AuthorityPlatform}
+	if err := ValidateOperation(operation); err == nil ||
+		!strings.Contains(err.Error(), "tenant scope") {
+		t.Fatalf("platform-scoped deploy must fail, got %v", err)
+	}
+}
+
+func TestValidateInfrastructureRequestsRequirePlatformScope(t *testing.T) {
+	var request InspectTargetRequest
+	decodeStrictJSON(t, "examples/inspect-target-request.json", &request)
+	if err := ValidateInspectTargetRequest(request); err != nil {
+		t.Fatalf("platform inspection request must validate: %v", err)
+	}
+	request.Command.Scope = ResourceScope{
+		Kind:     AuthorityTenant,
+		TenantID: "tenant-a",
+	}
+	if err := ValidateInspectTargetRequest(request); err == nil ||
+		!strings.Contains(err.Error(), "platform scope") {
+		t.Fatalf("tenant-scoped target inspection must fail, got %v", err)
+	}
+}
+
 func TestValidateRuntimeTargetFailsClosedOnCapacityAndCapabilities(t *testing.T) {
 	var target RuntimeTarget
 	decodeStrictJSON(t, "examples/runtime-target.json", &target)
@@ -85,6 +125,35 @@ func TestValidateAdapterCommandRejectsUnknownAction(t *testing.T) {
 	if err := ValidateAdapterCommand(command); err == nil ||
 		!strings.Contains(err.Error(), "unknown adapter action") {
 		t.Fatalf("unknown action must fail closed, got %v", err)
+	}
+}
+
+func TestSafeExternalTextRejectsControlAndRawSensitiveMaterial(t *testing.T) {
+	for name, value := range map[string]string{
+		"control":     "line1\nline2",
+		"whitespace":  " untrimmed",
+		"bearer":      "Authorization: Bearer abc",
+		"password":    "password=not-allowed",
+		"private key": "-----BEGIN PRIVATE KEY-----",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := ValidateSafeExternalText("value", value, 256, true); err == nil {
+				t.Fatal("unsafe external text must be rejected")
+			}
+		})
+	}
+	if err := ValidateSafeExternalText("value", "safe normalized text", 256, true); err != nil {
+		t.Fatalf("safe text rejected: %v", err)
+	}
+}
+
+func TestEvidenceRejectsSensitiveAttributeValues(t *testing.T) {
+	var evidence Evidence
+	decodeStrictJSON(t, "examples/evidence.json", &evidence)
+	evidence.Attributes["result"] = "access_token=must-not-leak"
+	if err := ValidateEvidence(evidence); err == nil ||
+		!strings.Contains(err.Error(), "sensitive") {
+		t.Fatalf("sensitive evidence value must be rejected, got %v", err)
 	}
 }
 
@@ -165,11 +234,14 @@ func TestContractTimeRejectsOffsetNanosecondsAndMonotonicValues(t *testing.T) {
 
 func validAdapterCommand() AdapterCommandEnvelope {
 	return AdapterCommandEnvelope{
-		OperationID:     "operation-001",
-		CommandID:       "command-001",
-		Attempt:         1,
-		Action:          AdapterApply,
-		TenantID:        "tenant-001",
+		OperationID: "operation-001",
+		CommandID:   "command-001",
+		Attempt:     1,
+		Action:      AdapterApply,
+		Scope: ResourceScope{
+			Kind:     AuthorityTenant,
+			TenantID: "tenant-001",
+		},
 		WorkloadID:      "workload-001",
 		ReleaseID:       "release-001",
 		RuntimeTargetID: "target-local-001",

@@ -20,14 +20,16 @@ func TestEveryOpenAPISchemaCompilesAsJSONSchema202012(t *testing.T) {
 func TestExamplesValidateAgainstOpenAPISchemas(t *testing.T) {
 	document := loadOpenAPI(t)
 	examples := map[string]string{
-		"examples/tenant.json":                  "Tenant",
-		"examples/resource-pool.json":           "ResourcePool",
-		"examples/runtime-target.json":          "RuntimeTarget",
-		"examples/placement-policy.json":        "PlacementPolicy",
-		"examples/workload-release.json":        "WorkloadRelease",
-		"examples/placement-unschedulable.json": "PlacementDecision",
-		"examples/operation.json":               "Operation",
-		"examples/evidence.json":                "Evidence",
+		"examples/tenant.json":                   "Tenant",
+		"examples/resource-pool.json":            "ResourcePool",
+		"examples/runtime-target.json":           "RuntimeTarget",
+		"examples/placement-policy.json":         "PlacementPolicy",
+		"examples/workload-release.json":         "WorkloadRelease",
+		"examples/placement-unschedulable.json":  "PlacementDecision",
+		"examples/operation.json":                "Operation",
+		"examples/evidence.json":                 "Evidence",
+		"examples/inspect-target-request.json":   "InspectTargetRequest",
+		"examples/target-observation-ready.json": "TargetObservation",
 	}
 	for path, schemaName := range examples {
 		t.Run(path, func(t *testing.T) {

@@ -179,11 +179,14 @@ func TestAdapterCommandEnvelopeCannotCarryRawAccessMaterial(t *testing.T) {
 func replayRequest(digest string) ReleaseRequest {
 	return ReleaseRequest{
 		Command: paasv1.AdapterCommandEnvelope{
-			OperationID:     "operation-001",
-			CommandID:       "command-001",
-			Attempt:         1,
-			Action:          paasv1.AdapterApply,
-			TenantID:        "tenant-001",
+			OperationID: "operation-001",
+			CommandID:   "command-001",
+			Attempt:     1,
+			Action:      paasv1.AdapterApply,
+			Scope: paasv1.ResourceScope{
+				Kind:     paasv1.AuthorityTenant,
+				TenantID: "tenant-001",
+			},
 			WorkloadID:      "workload-001",
 			ReleaseID:       "release-001",
 			RuntimeTargetID: "target-local-001",

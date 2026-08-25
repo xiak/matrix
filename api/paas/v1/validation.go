@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 var (
@@ -30,6 +31,25 @@ var sensitiveKeyFragments = [...]string{
 	"secret",
 	"set-cookie",
 	"token",
+}
+
+var rawSensitiveMaterialMarkers = [...]string{
+	"authorization: bearer",
+	"bearer ",
+	"password=",
+	"passwd=",
+	"secret=",
+	"client_secret=",
+	"token=",
+	"access_token=",
+	"refresh_token=",
+	"id_token=",
+	"api_key=",
+	"private_key=",
+	"-----begin private key-----",
+	"aws_secret_access_key",
+	"credential_material=",
+	"session_cookie=",
 }
 
 func ValidateID(name, value string) error {
@@ -79,13 +99,8 @@ func ValidateResourceMetadata(value ResourceMetadata) error {
 	if value.UpdatedAt.Before(value.CreatedAt) {
 		problems = append(problems, errors.New("metadata.updatedAt cannot precede createdAt"))
 	}
-	if len(value.Labels) > 64 {
-		problems = append(problems, errors.New("metadata labels cannot exceed 64 entries"))
-	}
-	for key, item := range value.Labels {
-		if !namePattern.MatchString(key) || len([]byte(item)) > 128 {
-			problems = append(problems, fmt.Errorf("metadata label %q is invalid", key))
-		}
+	if err := validateLabels("metadata labels", value.Labels); err != nil {
+		problems = append(problems, err)
 	}
 	return errors.Join(problems...)
 }
@@ -225,7 +240,7 @@ func ValidateTenant(value Tenant) error {
 	}
 	problems = append(problems,
 		ValidateID("tenant.id", string(value.ID)),
-		validateBoundedText("tenant.displayName", value.DisplayName, 256, true),
+		ValidateSafeExternalText("tenant.displayName", value.DisplayName, 256, true),
 		ValidateID("tenant.iamResourceVersion", value.IAMResourceVersion),
 		validateContractTime("tenant.observedAt", value.ObservedAt),
 	)
@@ -323,7 +338,7 @@ func ValidateWorkloadRelease(value WorkloadRelease) error {
 		}
 		problems = append(
 			problems,
-			validateBoundedText(
+			ValidateSafeExternalText(
 				fmt.Sprintf("components[%d].artifact.locator", index),
 				component.Artifact.Locator,
 				2048,
@@ -464,9 +479,9 @@ func ValidateProblem(value Problem) error {
 		problems = append(problems, fmt.Errorf("unknown problem code %q", value.Code))
 	}
 	problems = append(problems,
-		validateBoundedText("problem.type", value.Type, 512, true),
-		validateBoundedText("problem.title", value.Title, 256, true),
-		validateBoundedText("problem.detail", value.Detail, 2048, true),
+		ValidateSafeExternalText("problem.type", value.Type, 512, true),
+		ValidateSafeExternalText("problem.title", value.Title, 256, true),
+		ValidateSafeExternalText("problem.detail", value.Detail, 2048, true),
 		ValidateID("problem.traceId", value.TraceID),
 	)
 	if len(value.Violations) > 64 {
@@ -474,13 +489,13 @@ func ValidateProblem(value Problem) error {
 	}
 	for index, violation := range value.Violations {
 		problems = append(problems,
-			validateBoundedText(
+			ValidateSafeExternalText(
 				fmt.Sprintf("problem.violations[%d].field", index),
 				violation.Field,
 				256,
 				true,
 			),
-			validateBoundedText(
+			ValidateSafeExternalText(
 				fmt.Sprintf("problem.violations[%d].description", index),
 				violation.Description,
 				512,
@@ -498,7 +513,7 @@ func ValidateOperation(value Operation) error {
 	}
 	problems = append(problems,
 		ValidateID("operation.id", string(value.ID)),
-		ValidateID("operation.tenantId", string(value.TenantID)),
+		ValidateResourceScope(value.Scope),
 		ValidateID("operation.target.id", string(value.Target.ID)),
 		ValidateID("operation.requestedBy.id", value.RequestedBy.ID),
 		ValidateDigest("operation.idempotencyFingerprint", value.IdempotencyFingerprint),
@@ -522,6 +537,16 @@ func ValidateOperation(value Operation) error {
 		value.Action,
 	) {
 		problems = append(problems, fmt.Errorf("unknown operation action %q", value.Action))
+	}
+	switch value.Action {
+	case OperationCreateResourcePool, OperationRegisterTarget:
+		if value.Scope.Kind != AuthorityPlatform {
+			problems = append(problems, errors.New("platform operation action requires platform scope"))
+		}
+	case OperationCreatePlacement, OperationDeploy, OperationStop, OperationRollback:
+		if value.Scope.Kind != AuthorityTenant {
+			problems = append(problems, errors.New("tenant operation action requires tenant scope"))
+		}
 	}
 	if !contains(OperationStates(), value.State) {
 		problems = append(problems, fmt.Errorf("unknown operation state %q", value.State))
@@ -583,11 +608,11 @@ func ValidateEvidence(value Evidence) error {
 	}
 	problems = append(problems,
 		ValidateID("evidence.id", string(value.ID)),
-		ValidateID("evidence.tenantId", string(value.TenantID)),
+		ValidateResourceScope(value.Scope),
 		ValidateID("evidence.operationId", string(value.OperationID)),
 		ValidateID("evidence.source", value.Source),
 		ValidateID("evidence.code", value.Code),
-		validateBoundedText("evidence.message", value.Message, 1024, true),
+		ValidateSafeExternalText("evidence.message", value.Message, 1024, true),
 		ValidateDigest("evidence.contentDigest", value.ContentDigest),
 		validateContractTime("evidence.occurredAt", value.OccurredAt),
 	)
@@ -629,8 +654,8 @@ func ValidateEvidence(value Evidence) error {
 			}
 		}
 		problems = append(problems,
-			validateBoundedText("evidence attribute key", key, 128, true),
-			validateBoundedText("evidence attribute value", item, 4096, false),
+			ValidateSafeExternalText("evidence attribute key", key, 128, true),
+			ValidateSafeExternalText("evidence attribute value", item, 4096, false),
 		)
 	}
 	return errors.Join(problems...)
@@ -641,7 +666,7 @@ func ValidateAdapterCommand(value AdapterCommandEnvelope) error {
 	problems = append(problems,
 		ValidateID("operationId", string(value.OperationID)),
 		ValidateID("commandId", string(value.CommandID)),
-		ValidateID("tenantId", string(value.TenantID)),
+		ValidateResourceScope(value.Scope),
 		ValidateID("runtimeTargetId", string(value.RuntimeTargetID)),
 		ValidateDigest("requestDigest", value.RequestDigest),
 		ValidateID("bindingRef", value.BindingRef),
@@ -660,7 +685,77 @@ func ValidateAdapterCommand(value AdapterCommandEnvelope) error {
 		problems = append(problems, ValidateID("releaseId", string(value.ReleaseID)))
 	}
 	if value.TraceParent != "" {
-		problems = append(problems, validateBoundedText("traceparent", value.TraceParent, 55, false))
+		problems = append(
+			problems,
+			ValidateSafeExternalText("traceparent", value.TraceParent, 55, false),
+		)
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateInspectTargetRequest(value InspectTargetRequest) error {
+	if err := ValidateAdapterCommand(value.Command); err != nil {
+		return err
+	}
+	if value.Command.Action != AdapterInspectTarget {
+		return fmt.Errorf(
+			"inspect target request action = %q, want %q",
+			value.Command.Action,
+			AdapterInspectTarget,
+		)
+	}
+	if value.Command.Scope.Kind != AuthorityPlatform {
+		return errors.New("inspect target request requires platform scope")
+	}
+	return nil
+}
+
+func ValidateObserveTargetRequest(value ObserveTargetRequest) error {
+	if err := ValidateAdapterCommand(value.Command); err != nil {
+		return err
+	}
+	if value.Command.Action != AdapterObserveTarget {
+		return fmt.Errorf(
+			"observe target request action = %q, want %q",
+			value.Command.Action,
+			AdapterObserveTarget,
+		)
+	}
+	if value.Command.Scope.Kind != AuthorityPlatform {
+		return errors.New("observe target request requires platform scope")
+	}
+	return nil
+}
+
+func ValidateTargetObservation(value TargetObservation) error {
+	var problems []error
+	problems = append(problems,
+		ValidateID("runtimeTargetId", string(value.RuntimeTargetID)),
+		ValidateDigest("identityFingerprint", value.IdentityFingerprint),
+		validateLabels("labels", value.Labels),
+		validateCapacity("capacity", value.Capacity),
+		validateCapacity("allocatable", value.Allocatable),
+		validateUniqueKnown(
+			"supportedIsolationClasses",
+			value.SupportedIsolationClasses,
+			IsolationClasses(),
+			false,
+		),
+		validateContractTime("observedAt", value.ObservedAt),
+	)
+	if !contains(
+		[]TargetHealth{
+			TargetHealthUnknown,
+			TargetHealthReady,
+			TargetHealthDegraded,
+			TargetHealthUnavailable,
+		},
+		value.Health,
+	) {
+		problems = append(problems, fmt.Errorf("unknown target health %q", value.Health))
+	}
+	if exceedsCapacity(value.Allocatable, value.Capacity) {
+		problems = append(problems, errors.New("allocatable resources cannot exceed capacity"))
 	}
 	return errors.Join(problems...)
 }
@@ -712,7 +807,7 @@ func ValidateNormalizedAdapterError(value NormalizedAdapterError) error {
 	}
 	problems = append(
 		problems,
-		validateBoundedText("adapter error message", value.Message, 1024, true),
+		ValidateSafeExternalText("adapter error message", value.Message, 1024, true),
 	)
 	if value.RetryAfterSeconds != nil &&
 		(*value.RetryAfterSeconds == 0 || *value.RetryAfterSeconds > 86400) {
@@ -737,7 +832,7 @@ func ValidateAdapterResult(value AdapterResult) error {
 	var problems []error
 	problems = append(problems,
 		ValidateID("commandId", string(value.CommandID)),
-		validateBoundedText("receipt", value.Receipt, 2048, false),
+		ValidateSafeExternalText("receipt", value.Receipt, 2048, false),
 		validateContractTime("observedAt", value.ObservedAt),
 	)
 	if !contains(
@@ -797,13 +892,26 @@ func validateAdapterRef(name string, value AdapterRef, expected AdapterKind) err
 }
 
 func validateLabelSelector(name string, value LabelSelector) error {
+	return validateLabels(name, value.MatchLabels)
+}
+
+// ValidateLabels validates the bounded portable label contract shared by
+// public resources and internal adapter observations.
+func ValidateLabels(value map[string]string) error {
+	return validateLabels("labels", value)
+}
+
+func validateLabels(name string, value map[string]string) error {
 	var problems []error
-	if len(value.MatchLabels) > 64 {
+	if len(value) > 64 {
 		problems = append(problems, fmt.Errorf("%s cannot exceed 64 entries", name))
 	}
-	for key, item := range value.MatchLabels {
-		if !namePattern.MatchString(key) || len([]byte(item)) > 128 {
+	for key, item := range value {
+		if !namePattern.MatchString(key) {
 			problems = append(problems, fmt.Errorf("%s label %q is invalid", name, key))
+		}
+		if err := ValidateSafeExternalText(name+" label "+key, item, 128, false); err != nil {
+			problems = append(problems, err)
 		}
 	}
 	return errors.Join(problems...)
@@ -913,6 +1021,39 @@ func validateBoundedText(name, value string, limit int, required bool) error {
 	}
 	if len([]byte(value)) > limit {
 		return fmt.Errorf("%s exceeds %d bytes", name, limit)
+	}
+	return nil
+}
+
+// ValidateSafeExternalText rejects unsafe text before it can become a public
+// problem, evidence value, label, or normalized adapter message.
+func ValidateSafeExternalText(
+	name string,
+	value string,
+	maxBytes int,
+	required bool,
+) error {
+	if required && value == "" {
+		return fmt.Errorf("%s is required", name)
+	}
+	if value == "" {
+		return nil
+	}
+	if len([]byte(value)) > maxBytes ||
+		!utf8.ValidString(value) ||
+		strings.TrimSpace(value) != value {
+		return fmt.Errorf("%s must be trimmed UTF-8 of at most %d bytes", name, maxBytes)
+	}
+	for _, character := range value {
+		if character < 0x20 || character == 0x7f {
+			return fmt.Errorf("%s contains a control character", name)
+		}
+	}
+	normalized := strings.ToLower(value)
+	for _, marker := range rawSensitiveMaterialMarkers {
+		if strings.Contains(normalized, marker) {
+			return fmt.Errorf("%s contains recognizable raw sensitive material", name)
+		}
 	}
 	return nil
 }

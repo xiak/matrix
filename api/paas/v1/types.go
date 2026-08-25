@@ -210,7 +210,7 @@ type Operation struct {
 	APIVersion             string          `json:"apiVersion"`
 	Kind                   string          `json:"kind"`
 	ID                     OperationID     `json:"id"`
-	TenantID               TenantID        `json:"tenantId"`
+	Scope                  ResourceScope   `json:"scope"`
 	Action                 OperationAction `json:"action"`
 	Target                 ResourceRef     `json:"target"`
 	RequestedBy            SubjectRef      `json:"requestedBy"`
@@ -228,7 +228,7 @@ type Evidence struct {
 	APIVersion     string            `json:"apiVersion"`
 	Kind           string            `json:"kind"`
 	ID             ResourceID        `json:"id"`
-	TenantID       TenantID          `json:"tenantId"`
+	Scope          ResourceScope     `json:"scope"`
 	OperationID    OperationID       `json:"operationId"`
 	Sequence       uint64            `json:"sequence"`
 	Type           EvidenceType      `json:"type"`
@@ -254,7 +254,7 @@ type AdapterCommandEnvelope struct {
 	CommandID       CommandID     `json:"commandId"`
 	Attempt         uint32        `json:"attempt"`
 	Action          AdapterAction `json:"action"`
-	TenantID        TenantID      `json:"tenantId"`
+	Scope           ResourceScope `json:"scope"`
 	WorkloadID      ResourceID    `json:"workloadId,omitempty"`
 	ReleaseID       ResourceID    `json:"releaseId,omitempty"`
 	RuntimeTargetID ResourceID    `json:"runtimeTargetId"`
@@ -262,6 +262,25 @@ type AdapterCommandEnvelope struct {
 	BindingRef      string        `json:"bindingRef"`
 	Deadline        time.Time     `json:"deadline"`
 	TraceParent     string        `json:"traceparent,omitempty"`
+}
+
+type InspectTargetRequest struct {
+	Command AdapterCommandEnvelope `json:"command"`
+}
+
+type ObserveTargetRequest struct {
+	Command AdapterCommandEnvelope `json:"command"`
+}
+
+type TargetObservation struct {
+	RuntimeTargetID           ResourceID        `json:"runtimeTargetId"`
+	IdentityFingerprint       string            `json:"identityFingerprint"`
+	Labels                    map[string]string `json:"labels"`
+	Capacity                  Capacity          `json:"capacity"`
+	Allocatable               Capacity          `json:"allocatable"`
+	Health                    TargetHealth      `json:"health"`
+	SupportedIsolationClasses []IsolationClass  `json:"supportedIsolationClasses"`
+	ObservedAt                time.Time         `json:"observedAt"`
 }
 
 type NormalizedAdapterError struct {

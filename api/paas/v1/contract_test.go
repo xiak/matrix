@@ -31,6 +31,9 @@ func TestOpenAPIContractDefinesRuntimeV1(t *testing.T) {
 		"Problem",
 		"AdapterCapabilitiesContract",
 		"AdapterCommandEnvelope",
+		"InspectTargetRequest",
+		"ObserveTargetRequest",
+		"TargetObservation",
 		"AdapterResult",
 	}
 	for _, name := range required {
@@ -242,6 +245,9 @@ func TestOpenAPIStructPropertiesAndRequiredFieldsMatchGoTypes(t *testing.T) {
 		"Evidence":                    reflect.TypeOf(Evidence{}),
 		"AdapterCapabilitiesContract": reflect.TypeOf(AdapterCapabilitiesContract{}),
 		"AdapterCommandEnvelope":      reflect.TypeOf(AdapterCommandEnvelope{}),
+		"InspectTargetRequest":        reflect.TypeOf(InspectTargetRequest{}),
+		"ObserveTargetRequest":        reflect.TypeOf(ObserveTargetRequest{}),
+		"TargetObservation":           reflect.TypeOf(TargetObservation{}),
 		"NormalizedAdapterError":      reflect.TypeOf(NormalizedAdapterError{}),
 		"AdapterResult":               reflect.TypeOf(AdapterResult{}),
 	}
@@ -315,6 +321,14 @@ func TestExamplesDecodeAndValidate(t *testing.T) {
 			path:   "examples/evidence.json",
 			target: &Evidence{},
 		},
+		{
+			path:   "examples/inspect-target-request.json",
+			target: &InspectTargetRequest{},
+		},
+		{
+			path:   "examples/target-observation-ready.json",
+			target: &TargetObservation{},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.path, func(t *testing.T) {
@@ -337,6 +351,10 @@ func TestExamplesDecodeAndValidate(t *testing.T) {
 				err = ValidateOperation(*value)
 			case *Evidence:
 				err = ValidateEvidence(*value)
+			case *InspectTargetRequest:
+				err = ValidateInspectTargetRequest(*value)
+			case *TargetObservation:
+				err = ValidateTargetObservation(*value)
 			default:
 				t.Fatalf("unhandled example type %T", test.target)
 			}

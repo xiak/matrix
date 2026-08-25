@@ -167,7 +167,8 @@ never invoke an APISIX or cloud-gateway administration API directly.
 Every side-effecting adapter call carries:
 
 - `operationId`, `commandId`, and `attempt`;
-- `tenantId`, `workloadId`, `releaseId`, and selected `runtimeTargetId`;
+- an explicit `scope` (`PLATFORM` or exact IAM tenant), plus `workloadId`,
+  `releaseId`, and selected `runtimeTargetId`;
 - an absolute deadline and trace context;
 - an opaque internal binding reference where infrastructure access is needed.
 
@@ -244,8 +245,8 @@ FEAT-001 is accepted only when all of the following are present and green:
 
 Accepted on 2026-08-25 with:
 
-- 60 Draft 2020-12 schemas compiled by the repository test suite;
-- eight wire examples validated by both JSON Schema and strict Go decoders;
+- 63 Draft 2020-12 schemas compiled by the repository test suite;
+- ten wire examples validated by both JSON Schema and strict Go decoders;
 - exhaustive Operation and WorkloadRelease transition-table tests;
 - a compiling fake RuntimeAdapter proving one effect for a replay and
   `IDEMPOTENCY_CONFLICT` for a mismatched digest;
@@ -277,3 +278,17 @@ explicit amendments:
 
 The complete comparison and slice decisions are recorded in
 [`docs/adoption/FEAT-001-runtime-contracts.md`](../adoption/FEAT-001-runtime-contracts.md).
+
+## Implementation-informed amendment
+
+The first concrete infrastructure adapter exposed that target registration and
+resource-pool creation are platform operations. Requiring a `tenantId` on every
+`Operation`, `Evidence`, and `AdapterCommandEnvelope` would force those
+operations to invent a tenant authority. Before any v1 release, those fields
+were replaced with the existing `ResourceScope`:
+
+- `PLATFORM` scope carries no tenant ID and is required for target inspection;
+- `TENANT` scope carries the exact IAM organization ID and remains mandatory
+  for tenant workload operations;
+- validators fail closed when a platform-only action is tenant scoped or a
+  tenant-only action is platform scoped.

@@ -2,7 +2,10 @@
   "apiVersion": "matrix.paas.io/paas/v1",
   "kind": "Operation",
   "id": "operation-a-0001",
-  "tenantId": "tenant-a",
+  "scope": {
+    "kind": "TENANT",
+    "tenantId": "tenant-a"
+  },
   "action": "DEPLOY",
   "target": {
     "kind": "WorkloadRelease",

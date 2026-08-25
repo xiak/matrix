@@ -1108,7 +1108,7 @@
           "apiVersion",
           "kind",
           "id",
-          "tenantId",
+          "scope",
           "action",
           "target",
           "requestedBy",
@@ -1129,8 +1129,8 @@
           "id": {
             "$ref": "#/components/schemas/ID"
           },
-          "tenantId": {
-            "$ref": "#/components/schemas/ID"
+          "scope": {
+            "$ref": "#/components/schemas/ResourceScope"
           },
           "action": {
             "$ref": "#/components/schemas/OperationAction"
@@ -1254,7 +1254,7 @@
           "apiVersion",
           "kind",
           "id",
-          "tenantId",
+          "scope",
           "operationId",
           "sequence",
           "type",
@@ -1275,8 +1275,8 @@
           "id": {
             "$ref": "#/components/schemas/ID"
           },
-          "tenantId": {
-            "$ref": "#/components/schemas/ID"
+          "scope": {
+            "$ref": "#/components/schemas/ResourceScope"
           },
           "operationId": {
             "$ref": "#/components/schemas/ID"
@@ -1385,7 +1385,7 @@
           "commandId",
           "attempt",
           "action",
-          "tenantId",
+          "scope",
           "runtimeTargetId",
           "requestDigest",
           "bindingRef",
@@ -1406,8 +1406,8 @@
           "action": {
             "$ref": "#/components/schemas/AdapterAction"
           },
-          "tenantId": {
-            "$ref": "#/components/schemas/ID"
+          "scope": {
+            "$ref": "#/components/schemas/ResourceScope"
           },
           "workloadId": {
             "$ref": "#/components/schemas/ID"
@@ -1430,6 +1430,77 @@
           "traceparent": {
             "type": "string",
             "maxLength": 55
+          }
+        }
+      },
+      "InspectTargetRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "x-matrix-visibility": "internal",
+        "required": [
+          "command"
+        ],
+        "properties": {
+          "command": {
+            "$ref": "#/components/schemas/AdapterCommandEnvelope"
+          }
+        }
+      },
+      "ObserveTargetRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "x-matrix-visibility": "internal",
+        "required": [
+          "command"
+        ],
+        "properties": {
+          "command": {
+            "$ref": "#/components/schemas/AdapterCommandEnvelope"
+          }
+        }
+      },
+      "TargetObservation": {
+        "type": "object",
+        "additionalProperties": false,
+        "x-matrix-visibility": "internal",
+        "required": [
+          "runtimeTargetId",
+          "identityFingerprint",
+          "labels",
+          "capacity",
+          "allocatable",
+          "health",
+          "supportedIsolationClasses",
+          "observedAt"
+        ],
+        "properties": {
+          "runtimeTargetId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "identityFingerprint": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "labels": {
+            "$ref": "#/components/schemas/Labels"
+          },
+          "capacity": {
+            "$ref": "#/components/schemas/Capacity"
+          },
+          "allocatable": {
+            "$ref": "#/components/schemas/Capacity"
+          },
+          "health": {
+            "$ref": "#/components/schemas/TargetHealth"
+          },
+          "supportedIsolationClasses": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/IsolationClass"
+            }
+          },
+          "observedAt": {
+            "$ref": "#/components/schemas/Timestamp"
           }
         }
       },

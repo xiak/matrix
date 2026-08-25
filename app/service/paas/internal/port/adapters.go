@@ -4,31 +4,15 @@ package port
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	paasv1 "matrix/api/paas/v1"
 )
 
-type TargetObservation struct {
-	RuntimeTargetID           paasv1.ResourceID
-	IdentityFingerprint       string
-	Labels                    map[string]string
-	Capacity                  paasv1.Capacity
-	Allocatable               paasv1.Capacity
-	Health                    paasv1.TargetHealth
-	SupportedIsolationClasses []paasv1.IsolationClass
-	ObservedAt                time.Time
-}
-
-type InspectTargetRequest struct {
-	Command paasv1.AdapterCommandEnvelope
-}
-
 type InfrastructureAdapter interface {
 	Capabilities(context.Context) (paasv1.AdapterCapabilitiesContract, error)
-	InspectTarget(context.Context, InspectTargetRequest) (TargetObservation, error)
-	ObserveTarget(context.Context, InspectTargetRequest) (TargetObservation, error)
+	InspectTarget(context.Context, paasv1.InspectTargetRequest) (paasv1.TargetObservation, error)
+	ObserveTarget(context.Context, paasv1.ObserveTargetRequest) (paasv1.TargetObservation, error)
 }
 
 type ReleaseRequest struct {
@@ -85,10 +69,4 @@ type GatewayAdapter interface {
 	DeleteRoutes(context.Context, RouteRequest) (paasv1.AdapterResult, error)
 }
 
-type AdapterFault struct {
-	Normalized paasv1.NormalizedAdapterError
-}
-
-func (fault AdapterFault) Error() string {
-	return fmt.Sprintf("%s: %s", fault.Normalized.Code, fault.Normalized.Message)
-}
+type AdapterFault = paasv1.AdapterFault
