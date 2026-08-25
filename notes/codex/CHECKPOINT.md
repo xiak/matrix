@@ -155,9 +155,17 @@
   equal/changed replay, independent tenant chains, tenant-bound cursors,
   time/action/actor filtering, access recording, integrity verification,
   direct-table/internal-function denial, and credential/native-error
-  non-leakage. The vertical test still uses a controlled IAM port; real IAM
-  HTTP integration, standalone processes, outbox dispatchers, and PaaS clients
-  remain pending, so Gate B is not accepted.
+  non-leakage. Commit `51790b7` replaces the controlled process boundary with
+  a real IAM HTTP client, independently runnable IAM and Audit services, and an
+  IAM-owned Audit outbox dispatcher. A fresh PostgreSQL 18 cross-process race
+  gate proves exact bootstrap restart/conflict, login and password change,
+  role/session revocation on the next Audit request, IAM fact delivery, outage
+  retry/restart, equal replay, changed replay conflict, terminal
+  bad-credential dead letter, unhealthy readiness, and plaintext/native-error
+  non-leakage. The original dual-schema least-privilege PostgreSQL 18 race gate
+  also passes after aligning retry state to carry no persisted error detail.
+  Real PaaS clients/dispatcher and the remaining cross-service attack matrix
+  are still pending, so Gate B is not accepted.
 - The FEAT-004 accepted worktree passed its schema and real-runtime gates.
   Clean PostgreSQL 18 runs applied the migration twice, ran the verifier, used
   non-bypass API/worker logins, attacked RLS and cross-role privileges,
@@ -170,10 +178,10 @@
 
 ## Next concrete work
 
-1. Continue FEAT-006 Gate B with the real IAM HTTP client, independently
-   running IAM/Audit services, IAM and PaaS outbox dispatchers, and real PaaS
-   clients; then prove bootstrap/login/RBAC/revocation, outage retry, exact
-   Audit replay/query/verification, and cross-boundary security attacks.
+1. Continue FEAT-006 Gate B with real PaaS IAM/Audit clients, the PaaS Audit
+   dispatcher and runnable PaaS process; then prove accepted and denied PaaS
+   requests, immediate IAM fail-closed behavior, PaaS outbox outage/restart,
+   exact Audit query/verification, and the remaining cross-boundary attacks.
 2. Resume FEAT-005 Gate B provider effects and fixed platform composition,
    then assemble releases A/B and prove the network-disabled Compose install,
    verification, operations, upgrade, rollback, recovery, and support-evidence
