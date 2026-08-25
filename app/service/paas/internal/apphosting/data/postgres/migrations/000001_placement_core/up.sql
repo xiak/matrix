@@ -405,6 +405,16 @@ CREATE INDEX IF NOT EXISTS operations_claim_idx
 
 DO $matrix_generation_operation_link$
 BEGIN
+	IF NOT EXISTS (
+		SELECT 1
+		FROM pg_catalog.pg_constraint
+		WHERE conname = 'deployment_generations_operation_uq'
+		  AND connamespace = 'paas'::regnamespace
+	) THEN
+		ALTER TABLE paas.deployment_generations
+			ADD CONSTRAINT deployment_generations_operation_uq
+			UNIQUE (tenant_id, created_by_operation_id);
+	END IF;
     IF NOT EXISTS (
         SELECT 1
         FROM pg_catalog.pg_constraint
@@ -897,6 +907,673 @@ BEGIN
     END LOOP;
 END
 $matrix_policy$;
+
+CREATE OR REPLACE FUNCTION paas.submit_deployment(
+    submitted_deployment jsonb,
+    submitted_generation jsonb,
+    submitted_operation jsonb,
+    expected_resource_version bigint
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text;
+    effective_now timestamptz(6);
+    deployment_id text;
+    operation_id text;
+    operation_action text;
+    new_generation bigint;
+    new_resource_version bigint;
+    current_generation bigint;
+    current_resource_version bigint;
+    current_document jsonb;
+BEGIN
+    effective_tenant_id := paas.current_tenant_id();
+    effective_now := transaction_timestamp();
+    IF effective_tenant_id IS NULL THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '42501',
+            MESSAGE = 'valid transaction-local tenant context is required';
+    END IF;
+    IF jsonb_typeof(submitted_deployment) <> 'object'
+       OR jsonb_typeof(submitted_generation) <> 'object'
+       OR jsonb_typeof(submitted_operation) <> 'object' THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'deployment submission documents must be objects';
+    END IF;
+    IF expected_resource_version IS NULL
+       OR expected_resource_version NOT BETWEEN 0 AND 9007199254740991 THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'expected Deployment resource version is invalid';
+    END IF;
+
+    deployment_id := submitted_deployment#>>'{metadata,id}';
+    operation_id := submitted_operation->>'id';
+    operation_action := submitted_operation->>'action';
+    IF deployment_id IS NULL
+       OR deployment_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR operation_id IS NULL
+       OR operation_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_deployment#>>'{metadata,scope,kind}' <> 'TENANT'
+       OR submitted_deployment#>>'{metadata,scope,tenantId}' <> effective_tenant_id
+       OR submitted_generation#>>'{scope,kind}' <> 'TENANT'
+       OR submitted_generation#>>'{scope,tenantId}' <> effective_tenant_id
+       OR submitted_operation#>>'{scope,kind}' <> 'TENANT'
+       OR submitted_operation#>>'{scope,tenantId}' <> effective_tenant_id
+       OR submitted_generation->>'deploymentId' <> deployment_id
+       OR submitted_operation#>>'{target,kind}' <> 'Deployment'
+       OR submitted_operation#>>'{target,id}' <> deployment_id
+       OR submitted_generation->>'createdByOperationId' <> operation_id
+       OR submitted_generation->'spec' IS DISTINCT FROM submitted_deployment->'spec'
+       OR submitted_operation->>'state' <> 'ACCEPTED'
+       OR submitted_operation->'error' IS NOT NULL
+       OR submitted_operation ? 'terminalAt'
+       OR submitted_deployment#>>'{status,phase}' <> 'PENDING'
+       OR submitted_deployment#>>'{status,currentOperationId}' <> operation_id
+       OR submitted_deployment#>'{status}' ? 'placementDecisionId' THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'deployment submission identities or initial state are invalid';
+    END IF;
+    IF submitted_deployment->>'generation' !~ '^[1-9][0-9]*$'
+       OR submitted_generation->>'generation' !~ '^[1-9][0-9]*$'
+       OR submitted_deployment#>>'{metadata,resourceVersion}' !~ '^[1-9][0-9]*$'
+       OR submitted_operation->>'attempt' <> '1' THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'deployment submission versions are invalid';
+    END IF;
+    new_generation := (submitted_deployment->>'generation')::bigint;
+    new_resource_version :=
+        (submitted_deployment#>>'{metadata,resourceVersion}')::bigint;
+    IF (submitted_generation->>'generation')::bigint <> new_generation
+       OR new_generation NOT BETWEEN 1 AND 9007199254740991
+       OR new_resource_version NOT BETWEEN 1 AND 9007199254740991
+       OR submitted_generation->>'contentDigest' COLLATE "C"
+            !~ '^sha256:[0-9a-f]{64}$'
+       OR submitted_operation->>'idempotencyFingerprint' COLLATE "C"
+            !~ '^sha256:[0-9a-f]{64}$'
+       OR submitted_operation->>'requestDigest' COLLATE "C"
+            !~ '^sha256:[0-9a-f]{64}$'
+       OR (submitted_operation->>'createdAt')::timestamptz <> effective_now
+       OR (submitted_operation->>'updatedAt')::timestamptz <> effective_now
+       OR (submitted_generation->>'createdAt')::timestamptz <> effective_now
+       OR (submitted_deployment#>>'{metadata,updatedAt}')::timestamptz <> effective_now THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'deployment submission digest or database time is invalid';
+    END IF;
+
+    SELECT deployment.generation,
+           deployment.resource_version,
+           deployment.document
+      INTO current_generation,
+           current_resource_version,
+           current_document
+      FROM paas.deployments AS deployment
+     WHERE deployment.tenant_id = effective_tenant_id
+       AND deployment.id = deployment_id
+     FOR UPDATE;
+
+    IF NOT FOUND THEN
+        IF expected_resource_version <> 0 THEN
+            RAISE EXCEPTION USING
+                ERRCODE = 'MX409',
+                MESSAGE = 'Deployment resource version conflict';
+        END IF;
+        IF new_generation <> 1
+           OR new_resource_version <> 1
+           OR operation_action <> 'DEPLOY'
+           OR submitted_deployment#>>'{status,observedGeneration}' <> '0'
+           OR submitted_deployment#>>'{status,readyComponents}' <> '0'
+           OR submitted_deployment#>'{status}' ? 'observedApplicationRevisionId'
+           OR (submitted_deployment#>>'{metadata,createdAt}')::timestamptz
+                <> effective_now THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '22023',
+                MESSAGE = 'new Deployment must start at generation and resource version one';
+        END IF;
+    ELSE
+        IF expected_resource_version <> current_resource_version THEN
+            RAISE EXCEPTION USING
+                ERRCODE = 'MX409',
+                MESSAGE = 'Deployment resource version conflict';
+        END IF;
+        IF current_generation = 9007199254740991
+           OR current_resource_version = 9007199254740991
+           OR new_generation <> current_generation + 1
+           OR new_resource_version <> current_resource_version + 1
+           OR operation_action NOT IN ('UPDATE', 'STOP', 'ROLLBACK')
+           OR (operation_action = 'STOP'
+               AND submitted_deployment#>>'{spec,desiredState}' <> 'STOPPED')
+           OR (operation_action IN ('UPDATE', 'ROLLBACK')
+               AND submitted_deployment#>>'{spec,desiredState}' <> 'RUNNING')
+           OR submitted_deployment->'metadata' - ARRAY['resourceVersion', 'updatedAt']
+                IS DISTINCT FROM
+                current_document->'metadata' - ARRAY['resourceVersion', 'updatedAt']
+           OR submitted_deployment->'status' - ARRAY[
+                'phase', 'placementDecisionId', 'currentOperationId'
+              ] IS DISTINCT FROM
+              current_document->'status' - ARRAY[
+                'phase', 'placementDecisionId', 'currentOperationId'
+              ] THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '22023',
+                MESSAGE = 'Deployment update does not preserve immutable identity or observed state';
+        END IF;
+    END IF;
+
+    INSERT INTO paas.operations (
+        tenant_id,
+        id,
+        action,
+        target_kind,
+        target_id,
+        idempotency_fingerprint,
+        request_digest,
+        state,
+        attempt,
+        next_attempt_at,
+        fencing_token,
+        created_at,
+        updated_at,
+        document
+    ) VALUES (
+        effective_tenant_id,
+        operation_id,
+        operation_action,
+        submitted_operation#>>'{target,kind}',
+        deployment_id,
+        submitted_operation->>'idempotencyFingerprint',
+        submitted_operation->>'requestDigest',
+        'ACCEPTED',
+        1,
+        effective_now,
+        0,
+        effective_now,
+        effective_now,
+        submitted_operation
+    );
+
+    IF current_document IS NULL THEN
+        INSERT INTO paas.deployments (
+            tenant_id,
+            id,
+            generation,
+            application_revision_id,
+            policy_id,
+            resource_version,
+            document
+        ) VALUES (
+            effective_tenant_id,
+            deployment_id,
+            new_generation,
+            submitted_deployment#>>'{spec,applicationRevisionId}',
+            submitted_deployment#>>'{spec,placementPolicyId}',
+            new_resource_version,
+            submitted_deployment
+        );
+    ELSE
+        UPDATE paas.deployments AS deployment
+           SET generation = new_generation,
+               application_revision_id =
+                    submitted_deployment#>>'{spec,applicationRevisionId}',
+               policy_id = submitted_deployment#>>'{spec,placementPolicyId}',
+               resource_version = new_resource_version,
+               document = submitted_deployment
+         WHERE deployment.tenant_id = effective_tenant_id
+           AND deployment.id = deployment_id;
+    END IF;
+
+    INSERT INTO paas.deployment_generations (
+        tenant_id,
+        deployment_id,
+        generation,
+        application_revision_id,
+        policy_id,
+        content_digest,
+        created_by_operation_id,
+        created_at,
+        document
+    ) VALUES (
+        effective_tenant_id,
+        deployment_id,
+        new_generation,
+        submitted_generation#>>'{spec,applicationRevisionId}',
+        submitted_generation#>>'{spec,placementPolicyId}',
+        submitted_generation->>'contentDigest',
+        operation_id,
+        effective_now,
+        submitted_generation
+    );
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.submit_deployment(jsonb, jsonb, jsonb, bigint)
+    FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paas.submit_deployment(jsonb, jsonb, jsonb, bigint)
+    TO matrix_paas_api;
+
+CREATE OR REPLACE FUNCTION paas.claim_operation(
+    requested_worker_id text,
+    requested_lease_seconds integer
+)
+RETURNS TABLE (
+    tenant_id text,
+    operation_id text,
+    operation_state text,
+    attempt bigint,
+    fencing_token bigint,
+    lease_expires_at timestamptz,
+    document jsonb
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+BEGIN
+    IF requested_worker_id IS NULL
+       OR requested_worker_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_lease_seconds IS NULL
+       OR requested_lease_seconds NOT BETWEEN 1 AND 300 THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'operation claim parameters are invalid';
+    END IF;
+
+    RETURN QUERY
+    WITH candidate AS MATERIALIZED (
+        SELECT operation.tenant_id,
+               operation.id
+          FROM paas.operations AS operation
+         WHERE operation.state NOT IN (
+                'SUCCEEDED', 'FAILED', 'CANCELLED', 'MANUAL_INTERVENTION'
+               )
+           AND operation.next_attempt_at <= transaction_timestamp()
+           AND (
+                operation.lease_owner IS NULL
+                OR operation.lease_expires_at <= transaction_timestamp()
+               )
+         ORDER BY operation.next_attempt_at,
+                  operation.created_at,
+                  operation.tenant_id COLLATE "C",
+                  operation.id COLLATE "C"
+         FOR UPDATE SKIP LOCKED
+         LIMIT 1
+    ), updated AS (
+        UPDATE paas.operations AS operation
+           SET lease_owner = requested_worker_id,
+               lease_expires_at = transaction_timestamp()
+                    + make_interval(secs => requested_lease_seconds),
+               fencing_token = operation.fencing_token + 1,
+               attempt = CASE
+                    WHEN operation.fencing_token = 0 THEN operation.attempt
+                    ELSE operation.attempt + 1
+               END,
+               updated_at = transaction_timestamp(),
+               document = jsonb_set(
+                    jsonb_set(
+                        operation.document,
+                        '{attempt}',
+                        to_jsonb(CASE
+                            WHEN operation.fencing_token = 0 THEN operation.attempt
+                            ELSE operation.attempt + 1
+                        END),
+                        false
+                    ),
+                    '{updatedAt}',
+                    to_jsonb(to_char(
+                        transaction_timestamp() AT TIME ZONE 'UTC',
+                        'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+                    )),
+                    false
+               )
+          FROM candidate
+         WHERE operation.tenant_id = candidate.tenant_id
+           AND operation.id = candidate.id
+        RETURNING operation.tenant_id,
+                  operation.id,
+                  operation.state,
+                  operation.attempt,
+                  operation.fencing_token,
+                  operation.lease_expires_at,
+                  operation.document
+    )
+    SELECT updated.tenant_id,
+           updated.id,
+           updated.state,
+           updated.attempt,
+           updated.fencing_token,
+           updated.lease_expires_at,
+           updated.document
+      FROM updated;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.claim_operation(text, integer) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paas.claim_operation(text, integer)
+    TO matrix_paas_worker;
+
+CREATE OR REPLACE FUNCTION paas.advance_operation(
+    requested_operation_id text,
+    requested_worker_id text,
+    expected_fencing_token bigint,
+    requested_state text,
+    requested_error jsonb,
+    requested_next_attempt_at timestamptz,
+    release_lease boolean
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text;
+    current_state text;
+    current_worker_id text;
+    current_fencing_token bigint;
+    current_lease_expires_at timestamptz;
+    current_next_attempt_at timestamptz;
+    current_document jsonb;
+    transition_allowed boolean;
+    terminal boolean;
+    next_document jsonb;
+BEGIN
+    effective_tenant_id := paas.current_tenant_id();
+    IF effective_tenant_id IS NULL THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '42501',
+            MESSAGE = 'valid transaction-local tenant context is required';
+    END IF;
+    IF requested_operation_id IS NULL
+       OR requested_operation_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_worker_id IS NULL
+       OR requested_worker_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR expected_fencing_token IS NULL
+       OR expected_fencing_token NOT BETWEEN 1 AND 9007199254740991
+       OR release_lease IS NULL THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'operation transition identity is invalid';
+    END IF;
+
+    SELECT operation.state,
+           operation.lease_owner,
+           operation.fencing_token,
+           operation.lease_expires_at,
+           operation.next_attempt_at,
+           operation.document
+      INTO current_state,
+           current_worker_id,
+           current_fencing_token,
+           current_lease_expires_at,
+           current_next_attempt_at,
+           current_document
+      FROM paas.operations AS operation
+     WHERE operation.tenant_id = effective_tenant_id
+       AND operation.id = requested_operation_id
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = 'Operation not found in tenant scope';
+    END IF;
+    IF current_worker_id IS DISTINCT FROM requested_worker_id
+       OR current_fencing_token <> expected_fencing_token
+       OR current_lease_expires_at IS NULL
+       OR current_lease_expires_at <= transaction_timestamp() THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'MX412',
+            MESSAGE = 'Operation lease or fencing token is stale';
+    END IF;
+
+    transition_allowed :=
+        (current_state = 'ACCEPTED'
+            AND requested_state IN ('PLANNING', 'FAILED', 'CANCELLED'))
+        OR (current_state = 'PLANNING'
+            AND requested_state IN ('QUEUED', 'FAILED', 'CANCELLED'))
+        OR (current_state = 'QUEUED'
+            AND requested_state IN ('EXECUTING', 'FAILED', 'CANCELLED'))
+        OR (current_state = 'EXECUTING'
+            AND requested_state IN (
+                'VERIFYING', 'RECONCILING', 'FAILED', 'CANCELLED'
+            ))
+        OR (current_state = 'VERIFYING'
+            AND requested_state IN ('SUCCEEDED', 'RECONCILING', 'FAILED'))
+        OR (current_state = 'RECONCILING'
+            AND requested_state IN (
+                'EXECUTING', 'VERIFYING', 'FAILED', 'CANCELLED',
+                'MANUAL_INTERVENTION'
+            ));
+    IF NOT transition_allowed THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '55000',
+            MESSAGE = 'Operation state transition is invalid';
+    END IF;
+
+    terminal := requested_state IN (
+        'SUCCEEDED', 'FAILED', 'CANCELLED', 'MANUAL_INTERVENTION'
+    );
+    IF (requested_state IN ('FAILED', 'MANUAL_INTERVENTION')
+            AND (requested_error IS NULL OR jsonb_typeof(requested_error) <> 'object'))
+       OR (requested_state NOT IN ('FAILED', 'MANUAL_INTERVENTION')
+            AND requested_error IS NOT NULL)
+       OR (terminal AND NOT release_lease)
+       OR (terminal AND requested_next_attempt_at IS NOT NULL)
+       OR (NOT terminal AND NOT release_lease
+            AND requested_next_attempt_at IS NOT NULL)
+       OR (NOT terminal AND release_lease
+            AND (requested_next_attempt_at IS NULL
+                OR requested_next_attempt_at < transaction_timestamp())) THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'Operation transition completion fields are invalid';
+    END IF;
+
+    next_document := current_document - 'error' - 'terminalAt';
+    next_document := jsonb_set(
+        jsonb_set(
+            next_document,
+            '{state}',
+            to_jsonb(requested_state),
+            false
+        ),
+        '{updatedAt}',
+        to_jsonb(to_char(
+            transaction_timestamp() AT TIME ZONE 'UTC',
+            'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+        )),
+        false
+    );
+    IF requested_error IS NOT NULL THEN
+        next_document := jsonb_set(
+            next_document,
+            '{error}',
+            requested_error,
+            true
+        );
+    END IF;
+    IF terminal THEN
+        next_document := jsonb_set(
+            next_document,
+            '{terminalAt}',
+            to_jsonb(to_char(
+                transaction_timestamp() AT TIME ZONE 'UTC',
+                'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+            )),
+            true
+        );
+    END IF;
+
+    UPDATE paas.operations AS operation
+       SET state = requested_state,
+           next_attempt_at = CASE
+                WHEN release_lease AND NOT terminal THEN requested_next_attempt_at
+                ELSE current_next_attempt_at
+           END,
+           lease_owner = CASE WHEN release_lease THEN NULL ELSE current_worker_id END,
+           lease_expires_at = CASE
+                WHEN release_lease THEN NULL
+                ELSE current_lease_expires_at
+           END,
+           error = requested_error,
+           updated_at = transaction_timestamp(),
+           terminal_at = CASE WHEN terminal THEN transaction_timestamp() ELSE NULL END,
+           document = next_document
+     WHERE operation.tenant_id = effective_tenant_id
+       AND operation.id = requested_operation_id;
+
+    RETURN next_document;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.advance_operation(
+    text, text, bigint, text, jsonb, timestamptz, boolean
+) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paas.advance_operation(
+    text, text, bigint, text, jsonb, timestamptz, boolean
+) TO matrix_paas_worker;
+
+CREATE OR REPLACE FUNCTION paas.update_deployment_status(
+    requested_deployment_id text,
+    expected_resource_version bigint,
+    expected_generation bigint,
+    submitted_deployment jsonb
+)
+RETURNS bigint
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text;
+    current_generation bigint;
+    current_resource_version bigint;
+    current_phase text;
+    next_phase text;
+    current_observed_generation bigint;
+    next_observed_generation bigint;
+    current_document jsonb;
+    transition_allowed boolean;
+BEGIN
+    effective_tenant_id := paas.current_tenant_id();
+    IF effective_tenant_id IS NULL THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '42501',
+            MESSAGE = 'valid transaction-local tenant context is required';
+    END IF;
+    IF requested_deployment_id IS NULL
+       OR requested_deployment_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR expected_resource_version IS NULL
+       OR expected_resource_version NOT BETWEEN 1 AND 9007199254740991
+       OR expected_generation IS NULL
+       OR expected_generation NOT BETWEEN 1 AND 9007199254740991
+       OR jsonb_typeof(submitted_deployment) <> 'object' THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'Deployment status update identity is invalid';
+    END IF;
+
+    SELECT deployment.generation,
+           deployment.resource_version,
+           deployment.document#>>'{status,phase}',
+           CASE
+                WHEN deployment.document#>>'{status,observedGeneration}'
+                    ~ '^(0|[1-9][0-9]*)$'
+                THEN (deployment.document#>>'{status,observedGeneration}')::bigint
+                ELSE NULL
+           END,
+           deployment.document
+      INTO current_generation,
+           current_resource_version,
+           current_phase,
+           current_observed_generation,
+           current_document
+      FROM paas.deployments AS deployment
+     WHERE deployment.tenant_id = effective_tenant_id
+       AND deployment.id = requested_deployment_id
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = 'Deployment not found in tenant scope';
+    END IF;
+    IF current_resource_version <> expected_resource_version
+       OR current_generation <> expected_generation THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'MX409',
+            MESSAGE = 'Deployment status resource version or generation conflict';
+    END IF;
+    IF current_observed_generation IS NULL
+       OR current_resource_version = 9007199254740991
+       OR submitted_deployment#>>'{metadata,id}' <> requested_deployment_id
+       OR submitted_deployment#>>'{metadata,scope,kind}' <> 'TENANT'
+       OR submitted_deployment#>>'{metadata,scope,tenantId}' <> effective_tenant_id
+       OR submitted_deployment->>'generation' <> current_generation::text
+       OR submitted_deployment->'spec' IS DISTINCT FROM current_document->'spec'
+       OR submitted_deployment->'metadata' - ARRAY['resourceVersion', 'updatedAt']
+            IS DISTINCT FROM
+            current_document->'metadata' - ARRAY['resourceVersion', 'updatedAt']
+       OR submitted_deployment#>>'{metadata,resourceVersion}'
+            <> (current_resource_version + 1)::text
+       OR (submitted_deployment#>>'{metadata,updatedAt}')::timestamptz
+            <> transaction_timestamp()
+       OR submitted_deployment#>>'{status,currentOperationId}'
+            IS DISTINCT FROM current_document#>>'{status,currentOperationId}'
+       OR submitted_deployment#>>'{status,observedGeneration}'
+            !~ '^(0|[1-9][0-9]*)$' THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'Deployment status update attempted to change desired state or identity';
+    END IF;
+
+    next_phase := submitted_deployment#>>'{status,phase}';
+    next_observed_generation :=
+        (submitted_deployment#>>'{status,observedGeneration}')::bigint;
+    transition_allowed := next_phase = current_phase
+        OR (current_phase = 'PENDING'
+            AND next_phase IN ('PLACING', 'STOPPING', 'FAILED'))
+        OR (current_phase = 'PLACING'
+            AND next_phase IN ('APPLYING', 'FAILED'))
+        OR (current_phase = 'APPLYING'
+            AND next_phase IN ('READY', 'DEGRADED', 'FAILED'))
+        OR (current_phase = 'READY'
+            AND next_phase IN ('DEGRADED', 'FAILED', 'STOPPING'))
+        OR (current_phase = 'DEGRADED'
+            AND next_phase IN ('READY', 'FAILED', 'STOPPING'))
+        OR (current_phase = 'STOPPING'
+            AND next_phase IN ('STOPPED', 'FAILED'));
+    IF NOT transition_allowed
+       OR next_observed_generation < current_observed_generation
+       OR next_observed_generation > current_generation THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '55000',
+            MESSAGE = 'Deployment status transition or observation generation is invalid';
+    END IF;
+
+    UPDATE paas.deployments AS deployment
+       SET resource_version = current_resource_version + 1,
+           document = submitted_deployment
+     WHERE deployment.tenant_id = effective_tenant_id
+       AND deployment.id = requested_deployment_id;
+    RETURN current_resource_version + 1;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.update_deployment_status(text, bigint, bigint, jsonb)
+    FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paas.update_deployment_status(text, bigint, bigint, jsonb)
+    TO matrix_paas_worker;
 
 CREATE OR REPLACE FUNCTION paas.transition_capacity_reservation(
     requested_reservation_id text,

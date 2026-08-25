@@ -135,6 +135,23 @@ func (transaction *placementTransaction) loadDeployment(
 	ctx context.Context,
 	id paasv1.ResourceID,
 ) (paasv1.Deployment, error) {
+	deployment, found, err := transaction.findDeployment(ctx, id)
+	if err != nil {
+		return paasv1.Deployment{}, err
+	}
+	if !found {
+		return paasv1.Deployment{}, errors.New("deployment not found in tenant scope")
+	}
+	return deployment, nil
+}
+
+func (transaction *placementTransaction) findDeployment(
+	ctx context.Context,
+	id paasv1.ResourceID,
+) (paasv1.Deployment, bool, error) {
+	if err := paasv1.ValidateID("deploymentId", string(id)); err != nil {
+		return paasv1.Deployment{}, false, err
+	}
 	var generation uint64
 	var applicationRevisionID string
 	var policyID string
@@ -150,17 +167,17 @@ func (transaction *placementTransaction) loadDeployment(
 		string(id),
 	).Scan(&generation, &applicationRevisionID, &policyID, &resourceVersion, &document)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return paasv1.Deployment{}, errors.New("deployment not found in tenant scope")
+		return paasv1.Deployment{}, false, nil
 	}
 	if err != nil {
-		return paasv1.Deployment{}, fmt.Errorf("load Deployment: %w", err)
+		return paasv1.Deployment{}, false, fmt.Errorf("load Deployment: %w", err)
 	}
 	var deployment paasv1.Deployment
 	if err := decodeDocument("Deployment", document, &deployment); err != nil {
-		return paasv1.Deployment{}, err
+		return paasv1.Deployment{}, false, err
 	}
 	if err := paasv1.ValidateDeployment(deployment); err != nil {
-		return paasv1.Deployment{}, fmt.Errorf("validate stored Deployment: %w", err)
+		return paasv1.Deployment{}, false, fmt.Errorf("validate stored Deployment: %w", err)
 	}
 	if deployment.Metadata.ID != id ||
 		deployment.Metadata.Scope.TenantID != transaction.tenantID ||
@@ -168,15 +185,34 @@ func (transaction *placementTransaction) loadDeployment(
 		deployment.Metadata.ResourceVersion != resourceVersion ||
 		string(deployment.Spec.ApplicationRevisionID) != applicationRevisionID ||
 		string(deployment.Spec.PlacementPolicyID) != policyID {
-		return paasv1.Deployment{}, errors.New("stored Deployment relational identity mismatch")
+		return paasv1.Deployment{}, false, errors.New("stored Deployment relational identity mismatch")
 	}
-	return deployment, nil
+	return deployment, true, nil
 }
 
 func (transaction *placementTransaction) loadApplicationRevision(
 	ctx context.Context,
 	id paasv1.ResourceID,
 ) (paasv1.ApplicationRevision, error) {
+	revision, found, err := transaction.findApplicationRevision(ctx, id)
+	if err != nil {
+		return paasv1.ApplicationRevision{}, err
+	}
+	if !found {
+		return paasv1.ApplicationRevision{}, errors.New(
+			"application revision not found in tenant scope",
+		)
+	}
+	return revision, nil
+}
+
+func (transaction *placementTransaction) findApplicationRevision(
+	ctx context.Context,
+	id paasv1.ResourceID,
+) (paasv1.ApplicationRevision, bool, error) {
+	if err := paasv1.ValidateID("applicationRevisionId", string(id)); err != nil {
+		return paasv1.ApplicationRevision{}, false, err
+	}
 	var applicationID string
 	var contentDigest string
 	var resourceVersion uint64
@@ -191,19 +227,17 @@ func (transaction *placementTransaction) loadApplicationRevision(
 		string(id),
 	).Scan(&applicationID, &contentDigest, &resourceVersion, &document)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return paasv1.ApplicationRevision{}, errors.New(
-			"application revision not found in tenant scope",
-		)
+		return paasv1.ApplicationRevision{}, false, nil
 	}
 	if err != nil {
-		return paasv1.ApplicationRevision{}, fmt.Errorf("load ApplicationRevision: %w", err)
+		return paasv1.ApplicationRevision{}, false, fmt.Errorf("load ApplicationRevision: %w", err)
 	}
 	var revision paasv1.ApplicationRevision
 	if err := decodeDocument("ApplicationRevision", document, &revision); err != nil {
-		return paasv1.ApplicationRevision{}, err
+		return paasv1.ApplicationRevision{}, false, err
 	}
 	if err := paasv1.ValidateApplicationRevision(revision); err != nil {
-		return paasv1.ApplicationRevision{}, fmt.Errorf(
+		return paasv1.ApplicationRevision{}, false, fmt.Errorf(
 			"validate stored ApplicationRevision: %w",
 			err,
 		)
@@ -213,17 +247,34 @@ func (transaction *placementTransaction) loadApplicationRevision(
 		revision.Metadata.ResourceVersion != resourceVersion ||
 		string(revision.Spec.ApplicationID) != applicationID ||
 		revision.Spec.ContentDigest != contentDigest {
-		return paasv1.ApplicationRevision{}, errors.New(
+		return paasv1.ApplicationRevision{}, false, errors.New(
 			"stored ApplicationRevision relational identity mismatch",
 		)
 	}
-	return revision, nil
+	return revision, true, nil
 }
 
 func (transaction *placementTransaction) loadPolicy(
 	ctx context.Context,
 	id paasv1.ResourceID,
 ) (paasv1.PlacementPolicy, error) {
+	policy, found, err := transaction.findPolicy(ctx, id)
+	if err != nil {
+		return paasv1.PlacementPolicy{}, err
+	}
+	if !found {
+		return paasv1.PlacementPolicy{}, errors.New("placement policy not found in tenant scope")
+	}
+	return policy, nil
+}
+
+func (transaction *placementTransaction) findPolicy(
+	ctx context.Context,
+	id paasv1.ResourceID,
+) (paasv1.PlacementPolicy, bool, error) {
+	if err := paasv1.ValidateID("placementPolicyId", string(id)); err != nil {
+		return paasv1.PlacementPolicy{}, false, err
+	}
 	var resourceVersion uint64
 	var document []byte
 	err := transaction.tx.QueryRow(
@@ -236,24 +287,24 @@ func (transaction *placementTransaction) loadPolicy(
 		string(id),
 	).Scan(&resourceVersion, &document)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return paasv1.PlacementPolicy{}, errors.New("placement policy not found in tenant scope")
+		return paasv1.PlacementPolicy{}, false, nil
 	}
 	if err != nil {
-		return paasv1.PlacementPolicy{}, fmt.Errorf("load PlacementPolicy: %w", err)
+		return paasv1.PlacementPolicy{}, false, fmt.Errorf("load PlacementPolicy: %w", err)
 	}
 	var policy paasv1.PlacementPolicy
 	if err := decodeDocument("PlacementPolicy", document, &policy); err != nil {
-		return paasv1.PlacementPolicy{}, err
+		return paasv1.PlacementPolicy{}, false, err
 	}
 	if err := paasv1.ValidatePlacementPolicy(policy); err != nil {
-		return paasv1.PlacementPolicy{}, fmt.Errorf("validate stored PlacementPolicy: %w", err)
+		return paasv1.PlacementPolicy{}, false, fmt.Errorf("validate stored PlacementPolicy: %w", err)
 	}
 	if policy.Metadata.ID != id ||
 		policy.Metadata.Scope.TenantID != transaction.tenantID ||
 		policy.Metadata.ResourceVersion != resourceVersion {
-		return paasv1.PlacementPolicy{}, errors.New("stored PlacementPolicy relational identity mismatch")
+		return paasv1.PlacementPolicy{}, false, errors.New("stored PlacementPolicy relational identity mismatch")
 	}
-	return policy, nil
+	return policy, true, nil
 }
 
 func (transaction *placementTransaction) loadPools(

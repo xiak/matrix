@@ -96,6 +96,7 @@ func TestDeploymentTransitionsAreExact(t *testing.T) {
 	allowed := map[paasv1.DeploymentPhase][]paasv1.DeploymentPhase{
 		paasv1.DeploymentPending: {
 			paasv1.DeploymentPlacing,
+			paasv1.DeploymentStopping,
 			paasv1.DeploymentFailed,
 		},
 		paasv1.DeploymentPlacing: {

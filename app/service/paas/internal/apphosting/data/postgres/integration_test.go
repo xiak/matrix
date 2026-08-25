@@ -22,12 +22,16 @@ import (
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/domain/placement"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/createplacement"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/operationqueue"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/transitionreservation"
 )
 
 const (
 	postgresIntegrationDSN = "MATRIX_PAAS_POSTGRES_TEST_DSN"
+	apiTestRole            = "matrix_paas_test_api"
+	apiTestPassword        = "matrix-api-test-only"
 	workerTestRole         = "matrix_paas_test_worker"
 	workerTestPassword     = "matrix-test-only"
 )
@@ -58,12 +62,17 @@ func TestPostgresGateBIntegration(t *testing.T) {
 	defer func() { _ = admin.Close(context.Background()) }()
 
 	applyMigrationTwiceAndVerify(t, ctx, admin)
+	ensureAPITestRole(t, ctx, admin)
 	ensureWorkerTestRole(t, ctx, admin)
+	apiPool := openAPIPool(t, ctx, adminConfig)
+	defer apiPool.Close()
 	workerPool := openWorkerPool(t, ctx, adminConfig)
 	defer workerPool.Close()
 
 	prefix := fmt.Sprintf("gateb-%x", time.Now().UnixNano())
 	fixture := seedGateBFixture(t, ctx, admin, prefix)
+	applicationResult := assertApplicationLifecycle(t, ctx, admin, apiPool, fixture, prefix)
+	assertOperationQueue(t, ctx, admin, workerPool, applicationResult)
 	planner, err := placement.NewV1Planner(5 * time.Minute)
 	if err != nil {
 		t.Fatalf("create placement planner: %v", err)
@@ -147,15 +156,17 @@ func TestPostgresGateBIntegration(t *testing.T) {
 }
 
 type gateBFixture struct {
-	tenantA       paasv1.TenantID
-	tenantB       paasv1.TenantID
-	applicationID paasv1.ResourceID
-	revisionID    paasv1.ResourceID
-	policyID      paasv1.ResourceID
-	poolID        paasv1.ResourceID
-	targetID      paasv1.ResourceID
-	deploymentIDs []paasv1.ResourceID
-	observedAt    time.Time
+	tenantA                  paasv1.TenantID
+	tenantB                  paasv1.TenantID
+	applicationID            paasv1.ResourceID
+	configurationID          paasv1.ResourceID
+	configurationRevisionIDs []paasv1.ResourceID
+	revisionID               paasv1.ResourceID
+	policyID                 paasv1.ResourceID
+	poolID                   paasv1.ResourceID
+	targetID                 paasv1.ResourceID
+	deploymentIDs            []paasv1.ResourceID
+	observedAt               time.Time
 }
 
 func (fixture gateBFixture) placementCommand(
@@ -206,6 +217,38 @@ func readIntegrationFile(t *testing.T, path string) string {
 	return string(content)
 }
 
+func ensureAPITestRole(t *testing.T, ctx context.Context, admin *pgx.Conn) {
+	t.Helper()
+	var exists bool
+	if err := admin.QueryRow(
+		ctx,
+		"SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = $1)",
+		apiTestRole,
+	).Scan(&exists); err != nil {
+		t.Fatalf("inspect API test role: %v", err)
+	}
+	if !exists {
+		if _, err := admin.Exec(
+			ctx,
+			`CREATE ROLE matrix_paas_test_api
+			 LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS
+			 PASSWORD 'matrix-api-test-only'`,
+		); err != nil {
+			t.Fatalf("create API test role: %v", err)
+		}
+	} else if _, err := admin.Exec(
+		ctx,
+		`ALTER ROLE matrix_paas_test_api
+		 LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS
+		 PASSWORD 'matrix-api-test-only'`,
+	); err != nil {
+		t.Fatalf("reset API test role: %v", err)
+	}
+	if _, err := admin.Exec(ctx, "GRANT matrix_paas_api TO matrix_paas_test_api"); err != nil {
+		t.Fatalf("grant API test membership: %v", err)
+	}
+}
+
 func ensureWorkerTestRole(t *testing.T, ctx context.Context, admin *pgx.Conn) {
 	t.Helper()
 	var exists bool
@@ -241,6 +284,30 @@ func ensureWorkerTestRole(t *testing.T, ctx context.Context, admin *pgx.Conn) {
 	}
 }
 
+func openAPIPool(
+	t *testing.T,
+	ctx context.Context,
+	adminConfig *pgx.ConnConfig,
+) *pgxpool.Pool {
+	t.Helper()
+	config, err := pgxpool.ParseConfig(adminConfig.ConnString())
+	if err != nil {
+		t.Fatalf("parse API pool DSN: %v", err)
+	}
+	config.ConnConfig.User = apiTestRole
+	config.ConnConfig.Password = apiTestPassword
+	config.MaxConns = 8
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatalf("create API PostgreSQL pool: %v", err)
+	}
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		t.Fatalf("ping API PostgreSQL pool: %v", err)
+	}
+	return pool
+}
+
 func openWorkerPool(
 	t *testing.T,
 	ctx context.Context,
@@ -274,13 +341,18 @@ func seedGateBFixture(
 	t.Helper()
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	fixture := gateBFixture{
-		tenantA:       paasv1.TenantID(prefix + "-tenant-a"),
-		tenantB:       paasv1.TenantID(prefix + "-tenant-b"),
-		applicationID: paasv1.ResourceID(prefix + "-application"),
-		revisionID:    paasv1.ResourceID(prefix + "-revision"),
-		policyID:      paasv1.ResourceID(prefix + "-policy"),
-		poolID:        paasv1.ResourceID(prefix + "-pool"),
-		targetID:      paasv1.ResourceID(prefix + "-target"),
+		tenantA:         paasv1.TenantID(prefix + "-tenant-a"),
+		tenantB:         paasv1.TenantID(prefix + "-tenant-b"),
+		applicationID:   paasv1.ResourceID(prefix + "-application"),
+		configurationID: paasv1.ResourceID(prefix + "-configuration"),
+		configurationRevisionIDs: []paasv1.ResourceID{
+			paasv1.ResourceID(prefix + "-configuration-revision-a"),
+			paasv1.ResourceID(prefix + "-configuration-revision-b"),
+		},
+		revisionID: paasv1.ResourceID(prefix + "-revision"),
+		policyID:   paasv1.ResourceID(prefix + "-policy"),
+		poolID:     paasv1.ResourceID(prefix + "-pool"),
+		targetID:   paasv1.ResourceID(prefix + "-target"),
 		deploymentIDs: []paasv1.ResourceID{
 			paasv1.ResourceID(prefix + "-deployment-a"),
 			paasv1.ResourceID(prefix + "-deployment-b"),
@@ -299,6 +371,42 @@ func seedGateBFixture(
 			now,
 			false,
 		),
+	}
+	configuration := paasv1.Configuration{
+		APIVersion: paasv1.APIVersion,
+		Kind:       "Configuration",
+		Metadata: integrationMetadata(
+			fixture.configurationID,
+			"configuration",
+			paasv1.AuthorityTenant,
+			fixture.tenantA,
+			1,
+			now,
+			false,
+		),
+		ApplicationID: fixture.applicationID,
+	}
+	configurationRevisions := make([]paasv1.ConfigurationRevision, 0, 2)
+	for index, value := range []string{"one", "two"} {
+		values := map[string]string{"MESSAGE": value}
+		configurationRevisions = append(configurationRevisions, paasv1.ConfigurationRevision{
+			APIVersion: paasv1.APIVersion,
+			Kind:       "ConfigurationRevision",
+			Metadata: integrationMetadata(
+				fixture.configurationRevisionIDs[index],
+				fmt.Sprintf("config-%c", 'a'+rune(index)),
+				paasv1.AuthorityTenant,
+				fixture.tenantA,
+				1,
+				now,
+				true,
+			),
+			Spec: paasv1.ConfigurationRevisionSpec{
+				ConfigurationID: fixture.configurationID,
+				Values:          values,
+				ContentDigest:   paasv1.ConfigurationValuesDigest(values),
+			},
+		})
 	}
 	revision := paasv1.ApplicationRevision{
 		APIVersion: paasv1.APIVersion,
@@ -327,6 +435,11 @@ func seedGateBFixture(
 					CPUMillis:   100,
 					MemoryBytes: 1024 * 1024,
 				},
+				Inputs: []paasv1.ComponentInput{{
+					Name:      "settings",
+					Kind:      paasv1.InputConfiguration,
+					Injection: paasv1.InjectionEnvironment,
+				}},
 			}},
 		},
 	}
@@ -412,12 +525,43 @@ func seedGateBFixture(
 		},
 	}
 	assertContractValid(t, application, revision, policy, pool, target)
+	if err := paasv1.ValidateConfiguration(configuration); err != nil {
+		t.Fatalf("invalid Configuration fixture: %v", err)
+	}
+	for _, configurationRevision := range configurationRevisions {
+		if err := paasv1.ValidateConfigurationRevision(configurationRevision); err != nil {
+			t.Fatalf("invalid ConfigurationRevision fixture: %v", err)
+		}
+	}
 
 	execDocument(t, ctx, admin,
 		`INSERT INTO paas.applications (tenant_id, id, resource_version, document)
 		 VALUES ($1, $2, $3, $4::jsonb)`,
 		fixture.tenantA, fixture.applicationID, 1, integrationJSON(t, application),
 	)
+	execDocument(t, ctx, admin,
+		`INSERT INTO paas.configurations
+		 (tenant_id, id, application_id, resource_version, document)
+		 VALUES ($1, $2, $3, $4, $5::jsonb)`,
+		fixture.tenantA,
+		fixture.configurationID,
+		fixture.applicationID,
+		1,
+		integrationJSON(t, configuration),
+	)
+	for _, configurationRevision := range configurationRevisions {
+		execDocument(t, ctx, admin,
+			`INSERT INTO paas.configuration_revisions
+			 (tenant_id, id, configuration_id, content_digest, resource_version, document)
+			 VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
+			fixture.tenantA,
+			configurationRevision.Metadata.ID,
+			configurationRevision.Spec.ConfigurationID,
+			configurationRevision.Spec.ContentDigest,
+			1,
+			integrationJSON(t, configurationRevision),
+		)
+	}
 	execDocument(t, ctx, admin,
 		`INSERT INTO paas.application_revisions
 		 (tenant_id, id, application_id, content_digest, resource_version, document)
@@ -644,6 +788,316 @@ func integrationMetadata(
 		ResourceVersion: resourceVersion,
 		CreatedAt:       createdAt,
 		UpdatedAt:       updatedAt,
+	}
+}
+
+var errInjectedAfterApplicationWrites = errors.New("injected failure after application writes")
+
+type failAfterApplicationSubmitRepository struct {
+	delegate applicationlifecycle.Repository
+}
+
+func (repository failAfterApplicationSubmitRepository) WithinTransaction(
+	ctx context.Context,
+	tenantID paasv1.TenantID,
+	callback func(context.Context, applicationlifecycle.Transaction) error,
+) error {
+	return repository.delegate.WithinTransaction(
+		ctx,
+		tenantID,
+		func(callbackContext context.Context, transaction applicationlifecycle.Transaction) error {
+			return callback(
+				callbackContext,
+				failAfterApplicationSubmitTransaction{Transaction: transaction},
+			)
+		},
+	)
+}
+
+type failAfterApplicationSubmitTransaction struct {
+	applicationlifecycle.Transaction
+}
+
+func (transaction failAfterApplicationSubmitTransaction) SubmitDeployment(
+	ctx context.Context,
+	submission applicationlifecycle.Submission,
+) error {
+	if err := transaction.Transaction.SubmitDeployment(ctx, submission); err != nil {
+		return err
+	}
+	return errInjectedAfterApplicationWrites
+}
+
+func assertApplicationLifecycle(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	apiPool *pgxpool.Pool,
+	fixture gateBFixture,
+	prefix string,
+) applicationlifecycle.Result {
+	t.Helper()
+	repository, err := NewApplicationRepository(apiPool)
+	if err != nil {
+		t.Fatalf("create application repository: %v", err)
+	}
+	usecase, err := applicationlifecycle.NewUsecase(
+		repository,
+		applicationlifecycle.Config{MaxTransactionAttempts: 5},
+	)
+	if err != nil {
+		t.Fatalf("create application lifecycle use case: %v", err)
+	}
+	deploymentID := paasv1.ResourceID(prefix + "-submitted-deployment")
+	command := applicationlifecycle.SubmitCommand{
+		TenantID:       fixture.tenantA,
+		DeploymentID:   deploymentID,
+		Name:           "submitted",
+		Spec:           applicationIntegrationSpec(fixture, fixture.configurationRevisionIDs[0]),
+		IdempotencyKey: "submit-deployment",
+		RequestedBy: paasv1.SubjectRef{
+			Type: paasv1.SubjectUser,
+			ID:   "integration-user",
+		},
+	}
+	created, err := usecase.Submit(ctx, command)
+	if err != nil {
+		t.Fatalf("submit application Deployment through API login: %v", err)
+	}
+	if created.Deployment.Generation != 1 || created.Operation.State != paasv1.OperationAccepted {
+		t.Fatalf("created application result = %#v", created)
+	}
+	replay, err := usecase.Submit(ctx, command)
+	if err != nil {
+		t.Fatalf("replay application Deployment through API login: %v", err)
+	}
+	if !replay.Replayed || replay.Operation.ID != created.Operation.ID {
+		t.Fatalf("application replay = %#v, want Operation %q", replay, created.Operation.ID)
+	}
+	changed := command
+	changed.Spec = applicationIntegrationSpec(fixture, fixture.configurationRevisionIDs[0])
+	changed.Spec.Components[0].Replicas = 2
+	if _, err := usecase.Submit(ctx, changed); !errors.Is(
+		err,
+		applicationlifecycle.ErrIdempotencyConflict,
+	) {
+		t.Fatalf("changed application replay error = %v", err)
+	}
+	stale := command
+	stale.IdempotencyKey = "stale-create"
+	stale.Spec = applicationIntegrationSpec(fixture, fixture.configurationRevisionIDs[1])
+	if _, err := usecase.Submit(ctx, stale); !errors.Is(
+		err,
+		applicationlifecycle.ErrResourceVersionConflict,
+	) {
+		t.Fatalf("stale application If-Match error = %v", err)
+	}
+
+	if err := repository.WithinTransaction(
+		ctx,
+		fixture.tenantB,
+		func(transactionContext context.Context, transaction applicationlifecycle.Transaction) error {
+			_, found, err := transaction.LoadDeployment(transactionContext, deploymentID)
+			if err != nil {
+				return err
+			}
+			if found {
+				return errors.New("tenant B read tenant A Deployment")
+			}
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("API tenant RLS: %v", err)
+	}
+	permissionErr := withinTenantTransaction(
+		ctx,
+		apiPool,
+		fixture.tenantA,
+		pgx.TxOptions{AccessMode: pgx.ReadWrite},
+		func(tx pgx.Tx) error {
+			_, err := tx.Exec(
+				ctx,
+				`UPDATE paas.deployment_generations
+				    SET content_digest = content_digest
+				  WHERE tenant_id = $1 AND deployment_id = $2 AND generation = 1`,
+				fixture.tenantA,
+				deploymentID,
+			)
+			return err
+		},
+	)
+	assertPostgresCode(t, permissionErr, "42501")
+
+	faultDeploymentID := paasv1.ResourceID(prefix + "-application-fault")
+	faultUsecase, err := applicationlifecycle.NewUsecase(
+		failAfterApplicationSubmitRepository{delegate: repository},
+		applicationlifecycle.Config{MaxTransactionAttempts: 1},
+	)
+	if err != nil {
+		t.Fatalf("create fault-injected application use case: %v", err)
+	}
+	faultCommand := command
+	faultCommand.DeploymentID = faultDeploymentID
+	faultCommand.Name = "fault"
+	faultCommand.IdempotencyKey = "fault-after-submit"
+	if _, err := faultUsecase.Submit(ctx, faultCommand); !errors.Is(
+		err,
+		errInjectedAfterApplicationWrites,
+	) {
+		t.Fatalf("fault-injected application error = %v", err)
+	}
+	var deployments int
+	var generations int
+	var operations int
+	if err := admin.QueryRow(
+		ctx,
+		`SELECT
+		    (SELECT count(*) FROM paas.deployments
+		      WHERE tenant_id = $1 AND id = $2),
+		    (SELECT count(*) FROM paas.deployment_generations
+		      WHERE tenant_id = $1 AND deployment_id = $2),
+		    (SELECT count(*) FROM paas.operations
+		      WHERE tenant_id = $1 AND target_id = $2)`,
+		fixture.tenantA,
+		faultDeploymentID,
+	).Scan(&deployments, &generations, &operations); err != nil {
+		t.Fatalf("inspect rolled-back application submission: %v", err)
+	}
+	if deployments != 0 || generations != 0 || operations != 0 {
+		t.Fatalf(
+			"application transaction leaked rows: deployments=%d generations=%d operations=%d",
+			deployments,
+			generations,
+			operations,
+		)
+	}
+	return created
+}
+
+func assertOperationQueue(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	workerPool *pgxpool.Pool,
+	applicationResult applicationlifecycle.Result,
+) {
+	t.Helper()
+	repository, err := NewOperationQueueRepository(workerPool)
+	if err != nil {
+		t.Fatalf("create Operation queue repository: %v", err)
+	}
+	queue, err := operationqueue.NewQueue(
+		repository,
+		operationqueue.Config{LeaseDuration: 30 * time.Second},
+	)
+	if err != nil {
+		t.Fatalf("create Operation queue: %v", err)
+	}
+	first, found, err := queue.ClaimNext(ctx, "worker-a")
+	if err != nil {
+		t.Fatalf("claim application Operation: %v", err)
+	}
+	if !found || first.Operation.ID != applicationResult.Operation.ID ||
+		first.FencingToken != 1 || first.Operation.Attempt != 1 {
+		t.Fatalf("first Operation lease = %#v", first)
+	}
+	if _, found, err := queue.ClaimNext(ctx, "worker-b"); err != nil || found {
+		t.Fatalf("concurrent Operation claim found/error = %v/%v", found, err)
+	}
+	planning, err := queue.Advance(ctx, operationqueue.Transition{
+		Lease: first,
+		State: paasv1.OperationPlanning,
+	})
+	if err != nil {
+		t.Fatalf("advance Operation to planning: %v", err)
+	}
+	if _, err := admin.Exec(
+		ctx,
+		`UPDATE paas.operations
+		    SET lease_expires_at = transaction_timestamp() - interval '1 second'
+		  WHERE tenant_id = $1 AND id = $2`,
+		planning.TenantID,
+		planning.Operation.ID,
+	); err != nil {
+		t.Fatalf("expire first worker lease: %v", err)
+	}
+	second, found, err := queue.ClaimNext(ctx, "worker-b")
+	if err != nil {
+		t.Fatalf("reclaim expired Operation: %v", err)
+	}
+	if !found || second.FencingToken != 2 || second.Operation.Attempt != 2 ||
+		second.Operation.State != paasv1.OperationPlanning {
+		t.Fatalf("reclaimed Operation lease = %#v", second)
+	}
+	if _, err := queue.Advance(ctx, operationqueue.Transition{
+		Lease: planning,
+		State: paasv1.OperationQueued,
+	}); !errors.Is(err, operationqueue.ErrStaleLease) {
+		t.Fatalf("expired worker transition error = %v, want stale lease", err)
+	}
+	for _, state := range []paasv1.OperationState{
+		paasv1.OperationQueued,
+		paasv1.OperationExecuting,
+		paasv1.OperationReconciling,
+		paasv1.OperationExecuting,
+		paasv1.OperationVerifying,
+	} {
+		second, err = queue.Advance(ctx, operationqueue.Transition{Lease: second, State: state})
+		if err != nil {
+			t.Fatalf("advance Operation to %s: %v", state, err)
+		}
+	}
+	second, err = queue.Advance(ctx, operationqueue.Transition{
+		Lease:        second,
+		State:        paasv1.OperationSucceeded,
+		ReleaseLease: true,
+	})
+	if err != nil {
+		t.Fatalf("complete Operation: %v", err)
+	}
+	if second.Operation.State != paasv1.OperationSucceeded ||
+		second.Operation.TerminalAt == nil || second.WorkerID != "" {
+		t.Fatalf("completed Operation lease = %#v", second)
+	}
+	var attempt uint64
+	var fencingToken uint64
+	var leaseOwner *string
+	if err := admin.QueryRow(
+		ctx,
+		`SELECT attempt, fencing_token, lease_owner
+		   FROM paas.operations
+		  WHERE tenant_id = $1 AND id = $2`,
+		applicationResult.Operation.Scope.TenantID,
+		applicationResult.Operation.ID,
+	).Scan(&attempt, &fencingToken, &leaseOwner); err != nil {
+		t.Fatalf("inspect completed Operation lease: %v", err)
+	}
+	if attempt != 2 || fencingToken != 2 || leaseOwner != nil {
+		t.Fatalf(
+			"completed Operation attempt/fencing/owner = %d/%d/%v",
+			attempt,
+			fencingToken,
+			leaseOwner,
+		)
+	}
+}
+
+func applicationIntegrationSpec(
+	fixture gateBFixture,
+	configurationRevisionID paasv1.ResourceID,
+) paasv1.DeploymentSpec {
+	return paasv1.DeploymentSpec{
+		ApplicationRevisionID: fixture.revisionID,
+		PlacementPolicyID:     fixture.policyID,
+		DesiredState:          paasv1.DeploymentDesiredRunning,
+		Components: []paasv1.DeploymentComponent{{
+			Name:     "web",
+			Replicas: 1,
+			Bindings: []paasv1.ComponentBinding{{
+				Name:                    "settings",
+				ConfigurationRevisionID: configurationRevisionID,
+			}},
+		}},
 	}
 }
 

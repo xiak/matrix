@@ -49,22 +49,35 @@
   derived read-only secret grants, and the project default network. Its model
   has no caller-controlled build, pull, command, host port/path, privileged, or
   host-network capability.
+- PostgreSQL atomically accepts a tenant Deployment mutation together with its
+  immutable generation and durable Operation through an API-only
+  security-definer boundary. The application use case enforces exact replay,
+  changed-payload conflict, optimistic concurrency, configuration ownership,
+  rollback snapshot validity, and bounded serializable retry.
+- A non-bypass worker login claims due Operations with a database lease,
+  monotonically increasing fencing token, and attempt count. The explicit
+  Operation state machine rejects stale workers and supports released retry,
+  unknown-outcome reconciliation, and terminal lease cleanup.
 - The same worktree passed generation drift, unit, vet, race, ten-run, schema,
   architecture, placement fuzz, four OS/architecture builds, Markdown-link,
   and diff gates. A disposable PostgreSQL 18 test applied the migration twice,
   ran the verifier, raced capacity, attacked RLS, injected rollback failure,
-  and exercised activate/release/expiry under the race detector.
-- No effecting Compose DeploymentExecutor, durable application Operation,
-  northbound application workflow, offline distribution, verified
-  install/operations path, or platform upgrade/rollback E2E exists yet. The
-  Phase 1 goal is therefore active.
+  and exercised activate/release/expiry under the race detector. A fresh
+  PostgreSQL 18 test also exercised the API login, application transaction
+  rollback, immutable generations, lease expiry/reclaim, fencing rejection,
+  attempt increment, and reconciliation transitions.
+- No effecting Compose DeploymentExecutor, complete worker reconciliation,
+  northbound HTTP workflow, IAM Authorizer integration, Audit dispatch,
+  offline distribution, verified install/operations path, or platform
+  upgrade/rollback E2E exists yet. PostgreSQL roles and `requestedBy` are not
+  substitutes for IAM or Audit. The Phase 1 goal is therefore active.
 
 ## Next concrete work
 
-1. Implement FEAT-004 Gate B: authoritative application, configuration,
-   immutable Deployment generation and Operation persistence; minimal
-   northbound mutations; lease/fencing worker; apply/observe/stop/rollback
-   state transitions and fault/replay/RLS verification on real PostgreSQL 18.
+1. Complete FEAT-004 Gate B: worker placement/command/receipt/observation and
+   apply/observe/stop/rollback reconciliation; minimal northbound HTTP with
+   IAM authorization and Audit dispatch; then pass every behavior and
+   reservation-consistency case on real PostgreSQL 18.
 2. Implement and accept Gate C with real Docker Compose behavior, including
    exact secret-file resolution, reconciliation, update, rollback, network
    probe, and stop cleanup without registry or Internet access.

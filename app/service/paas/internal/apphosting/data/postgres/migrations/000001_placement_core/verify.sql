@@ -85,6 +85,7 @@ BEGIN
             ('deployment_generations_deployment_fk'),
             ('deployment_generations_revision_fk'),
             ('deployment_generations_policy_fk'),
+            ('deployment_generations_operation_uq'),
             ('deployment_generations_operation_fk'),
             ('operations_idempotency_uq'),
             ('execution_targets_pool_fk'),
@@ -213,6 +214,43 @@ BEGIN
         RAISE EXCEPTION 'tenant-scoped capacity transition function is missing or unsafe';
     END IF;
 
+    SELECT string_agg(required.name, ', ' ORDER BY required.name)
+      INTO missing
+      FROM (
+        VALUES
+            (
+                'submit_deployment',
+                'submitted_deployment jsonb, submitted_generation jsonb, submitted_operation jsonb, expected_resource_version bigint'
+            ),
+            (
+                'claim_operation',
+                'requested_worker_id text, requested_lease_seconds integer'
+            ),
+            (
+                'advance_operation',
+                'requested_operation_id text, requested_worker_id text, expected_fencing_token bigint, requested_state text, requested_error jsonb, requested_next_attempt_at timestamp with time zone, release_lease boolean'
+            ),
+            (
+                'update_deployment_status',
+                'requested_deployment_id text, expected_resource_version bigint, expected_generation bigint, submitted_deployment jsonb'
+            )
+      ) AS required(name, identity_arguments)
+     WHERE NOT EXISTS (
+        SELECT 1
+          FROM pg_catalog.pg_proc AS procedure
+          JOIN pg_catalog.pg_namespace AS namespace
+            ON namespace.oid = procedure.pronamespace
+         WHERE namespace.nspname = 'paas'
+           AND procedure.proname = required.name
+           AND pg_catalog.pg_get_function_identity_arguments(procedure.oid)
+                = required.identity_arguments
+           AND procedure.prosecdef
+           AND 'search_path=pg_catalog, pg_temp' = ANY(procedure.proconfig)
+    );
+    IF missing IS NOT NULL THEN
+        RAISE EXCEPTION 'application transition functions are missing or unsafe: %', missing;
+    END IF;
+
     IF has_schema_privilege('matrix_paas_api', 'paas', 'CREATE')
        OR has_schema_privilege('matrix_paas_worker', 'paas', 'CREATE')
        OR has_table_privilege(
@@ -234,6 +272,16 @@ BEGIN
             'matrix_paas_api',
             'paas.deployment_observations',
             'SELECT, INSERT, UPDATE, DELETE'
+       )
+       OR has_table_privilege(
+            'matrix_paas_api',
+            'paas.deployments',
+            'INSERT, UPDATE, DELETE'
+       )
+       OR has_table_privilege(
+            'matrix_paas_api',
+            'paas.deployment_generations',
+            'INSERT, UPDATE, DELETE'
        ) THEN
         RAISE EXCEPTION 'API role can access worker-owned execution state';
     END IF;
@@ -267,6 +315,11 @@ BEGIN
             'matrix_paas_worker',
             'paas.operations',
             'INSERT, UPDATE, DELETE'
+       )
+       OR has_table_privilege(
+            'matrix_paas_worker',
+            'paas.deployments',
+            'INSERT, UPDATE, DELETE'
        ) THEN
         RAISE EXCEPTION 'worker role can rewrite authoritative or immutable input';
     END IF;
@@ -299,6 +352,36 @@ BEGIN
        OR NOT has_function_privilege(
             'matrix_paas_worker',
             'paas.transition_capacity_reservation(text, text, bigint)',
+            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_paas_api',
+            'paas.submit_deployment(jsonb, jsonb, jsonb, bigint)',
+            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_paas_worker',
+            'paas.claim_operation(text, integer)',
+            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_paas_worker',
+            'paas.advance_operation(text, text, bigint, text, jsonb, timestamptz, boolean)',
+            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_paas_worker',
+            'paas.update_deployment_status(text, bigint, bigint, jsonb)',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_paas_api',
+            'paas.claim_operation(text, integer)',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_paas_worker',
+            'paas.submit_deployment(jsonb, jsonb, jsonb, bigint)',
             'EXECUTE'
        ) THEN
         RAISE EXCEPTION 'application roles lack required current privileges';

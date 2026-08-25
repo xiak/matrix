@@ -84,8 +84,9 @@ func knownOperationState(state paasv1.OperationState) bool {
 
 var deploymentTransitions = map[paasv1.DeploymentPhase]map[paasv1.DeploymentPhase]struct{}{
 	paasv1.DeploymentPending: {
-		paasv1.DeploymentPlacing: {},
-		paasv1.DeploymentFailed:  {},
+		paasv1.DeploymentPlacing:  {},
+		paasv1.DeploymentStopping: {},
+		paasv1.DeploymentFailed:   {},
 	},
 	paasv1.DeploymentPlacing: {
 		paasv1.DeploymentApplying: {},

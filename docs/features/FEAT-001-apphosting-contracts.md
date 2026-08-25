@@ -120,10 +120,13 @@ failures or blindly replayed.
 ### Deployment
 
 ```text
-PENDING -> PLACING -> APPLYING -> READY -> DEGRADED
-              |           |        |          |
-              +-----------+--------+----------+--> FAILED
-                          READY -> STOPPING -> STOPPED
+PENDING -> PLACING -> APPLYING -> READY <-> DEGRADED
+   |          |           |          |          |
+   +----------+-----------+----------+----------+--> FAILED
+   |                                 |          |
+   +-----------> STOPPING <----------+----------+
+                   |
+                   +--> STOPPED
 ```
 
 Rollback is an Operation that selects an earlier immutable accepted snapshot.
