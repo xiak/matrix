@@ -3,7 +3,7 @@
 > Non-authoritative portable memory. Validate it against Git and the owning
 > FEAT before continuing.
 
-- Updated: 2026-08-25
+- Updated: 2026-08-26
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/placement-policy`
 - Active release: Private Application PaaS v0.1, Docker/Compose first
@@ -109,12 +109,16 @@
   in `9f50b6c`; they reject authority selectors, ambiguous JSON, enum/union
   drift, arbitrary Audit payloads, and accidental credential serialization.
   Pure authority behavior is pushed in `0437fbf`: fixed-profile Argon2id,
-  binding-scoped opaque credential digests, database-time session checks,
-  fixed RBAC and bootstrap replay; plus authenticated-source canonical Audit
-  facts, exact replay/conflict, per-tenant sequence/hash chains, indefinite
-  retention, and tenant/filter-bound HMAC cursors. Full unit, generation,
-  architecture, vet, race, and ten-run gates pass. Gate A remains open only on
-  the clean PostgreSQL 18 authority proof.
+  lookup and binding-scoped opaque credential digests, database-time session
+  checks, fixed RBAC and bootstrap replay; plus authenticated-source canonical
+  Audit facts, exact replay/conflict, per-tenant sequence/hash chains,
+  indefinite retention, and tenant/filter-bound HMAC cursors. FEAT-006 Gate A
+  is Accepted and pushed in `9a82568`. Separate IAM/Audit PostgreSQL owners,
+  migrators, and runtime roles apply both clean schemas twice; the real PG18
+  gate proves forced RLS, API-only writes, cross-schema denial, canonical
+  closed events, immutable Audit rows, Go/SQL hash agreement, database event,
+  session, and lease time, lease recovery, and stale-fence rejection. Full
+  generation, unit, architecture, vet, race, ten-run, and PG18 race gates pass.
 - The FEAT-004 accepted worktree passed its schema and real-runtime gates.
   Clean PostgreSQL 18 runs applied the migration twice, ran the verifier, used
   non-bypass API/worker logins, attacked RLS and cross-role privileges,
@@ -127,15 +131,11 @@
 
 ## Next concrete work
 
-1. Complete FEAT-006 Gate A with clean PostgreSQL 18 IAM/Audit schemas applied
-   twice and behavioral attacks proving separate owners/migration/runtime
-   roles, forced tenant isolation, immutable Audit rows, database-time
-   session/lease behavior, and stale-fence rejection.
-2. Complete FEAT-006 Gate B with independently running IAM/Audit HTTP services,
+1. Complete FEAT-006 Gate B with independently running IAM/Audit HTTP services,
    real PaaS clients, bootstrap/login/RBAC/revocation, transactional outboxes,
    exact Audit replay/query/verification, outage retry, and cross-boundary
    security attacks.
-3. Resume FEAT-005 Gate B provider effects and fixed platform composition,
+2. Resume FEAT-005 Gate B provider effects and fixed platform composition,
    then assemble releases A/B and prove the network-disabled Compose install,
    verification, operations, upgrade, rollback, recovery, and support-evidence
    E2E required by both FEATs.
