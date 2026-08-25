@@ -1,5 +1,5 @@
-// Package port owns the interfaces apphosting requires from external
-// infrastructure, deployment-executor, and gateway adapters.
+// Package port owns the interfaces apphosting requires from external IAM,
+// Audit, infrastructure, deployment-executor, and gateway adapters.
 package port
 
 import (

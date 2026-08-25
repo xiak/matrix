@@ -49,11 +49,24 @@
   derived read-only secret grants, and the project default network. Its model
   has no caller-controlled build, pull, command, host port/path, privileged, or
   host-network capability.
-- PostgreSQL atomically accepts a tenant Deployment mutation together with its
-  immutable generation and durable Operation through an API-only
-  security-definer boundary. The application use case enforces exact replay,
-  changed-payload conflict, optimistic concurrency, configuration ownership,
-  rollback snapshot validity, and bounded serializable retry.
+- FEAT-004 Gate B is Accepted. The minimal standard-library HTTP surface
+  creates and reads Application, Configuration, immutable revisions,
+  Deployment generations, and Operations. It admits tenant and subject only
+  from the IAM-facing Authorizer; tenant headers and caller-supplied
+  `requestedBy` are never authority.
+- PostgreSQL atomically accepts each resource or Deployment mutation together
+  with its durable Operation and fixed sanitized Audit outbox event through
+  API-only security-definer boundaries. The application use case enforces
+  exact replay, changed-payload conflict, optimistic concurrency,
+  configuration ownership, rollback snapshot validity, and bounded
+  serializable retry.
+- The Audit dispatcher uses stable event IDs, at-least-once ingestion, bounded
+  retry/dead-letter behavior, database-time lease recovery, and
+  fencing-protected completion. Credentials, request bodies, configuration
+  values, secret bytes, arbitrary attributes, and native delivery errors are
+  absent from its stored event contract. IAM token machinery and Audit
+  retention/query remain outside apphosting behind `Authorizer` and
+  `AuditIngestor` ports.
 - A non-bypass worker login claims due Operations with a database lease,
   monotonically increasing fencing token, and attempt count. The explicit
   Operation state machine rejects stale workers and supports released retry,
@@ -67,33 +80,21 @@
   effect.
 - The same worktree passed generation drift, unit, vet, race, ten-run, schema,
   architecture, placement fuzz, four OS/architecture builds, Markdown-link,
-  and diff gates. A disposable PostgreSQL 18 test applied the migration twice,
-  ran the verifier, raced capacity, attacked RLS, injected rollback failure,
-  and exercised activate/release/expiry under the race detector. A fresh
-  PostgreSQL 18 test also exercised the API login, application transaction
-  rollback, immutable generations, lease expiry/reclaim, fencing rejection,
-  attempt increment, and reconciliation transitions.
-- A fresh PostgreSQL 18 Gate B run now additionally proves persisted intent
-  visibility before effect, deploy, update with conservative double capacity,
-  rollback, stop without a new claim, definitive failure, unknown-outcome
-  observation before retry, bounded manual intervention, stale-fence denial,
-  and atomic reservation/status/Operation outcomes through the non-bypass
-  worker login.
-- No effecting Compose DeploymentExecutor, northbound HTTP workflow, IAM
-  Authorizer integration, transactional Audit outbox/dispatch, offline
+  stale-term, and diff gates. A clean PostgreSQL 18 test applied the migration
+  twice, ran the verifier, used non-bypass API/worker logins, attacked RLS and
+  cross-role privileges, injected transaction and delivery failures, and
+  proved HTTP-to-IAM-to-PostgreSQL identity, Audit sanitation/retry,
+  lease/fencing, deployment reconciliation, and reservation consistency.
+- No effecting Compose DeploymentExecutor, real Compose Gate C, offline
   distribution, verified install/operations path, or platform
-  upgrade/rollback E2E exists yet. PostgreSQL roles and `requestedBy` are not
-  substitutes for IAM or Audit. The Phase 1 goal is therefore active.
+  upgrade/rollback E2E exists yet. The Phase 1 goal is therefore active.
 
 ## Next concrete work
 
-1. Complete FEAT-004 Gate B with the minimal northbound HTTP workflow, IAM
-   authorization, and transactional Audit outbox/dispatch; then rerun every
-   Gate B behavior, privilege, and reservation-consistency gate.
-2. Implement and accept Gate C with real Docker Compose behavior, including
+1. Implement and accept Gate C with real Docker Compose behavior, including
    exact secret-file resolution, reconciliation, update, rollback, network
    probe, and stop cleanup without registry or Internet access.
-3. Package digest-pinned offline installation and prove clean-host install,
+2. Package digest-pinned offline installation and prove clean-host install,
    verification, operations, platform upgrade, rollback, and application
    rollback without registry or Internet access.
 

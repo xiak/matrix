@@ -47,6 +47,16 @@ complete legacy Operation closure. Its GitLab-first projection and staged
 release roadmap target a different product. The dependency warning is
 `REFERENCE`; its runtime sequence and scope are `REJECT` for FEAT-004.
 
+## Senatria IAM and Audit comparison
+
+| Slice at fixed commit | Decision | Rationale |
+| --- | --- | --- |
+| `platform/go/sdk/auth` principal context, permission request, and fail-closed guard | `ADAPT` | Preserve a trusted subject and tenant returned by an IAM-facing Authorizer, a stable action/resource request, decision correlation, and deny-by-default failures. Keep bearer or gateway credentials transient; a handler never accepts tenant or `requestedBy` authority from a client document or tenant header. |
+| `platform/go/sdk/auth/nethttp` middleware | `REFERENCE` | Its protected-path discipline and trusted-context handoff are useful. The donor's gateway assertion format, runtime profiles, Kratos/JWT/JWKS, revocation, and Audit SDK context are Senatria-specific and are not copied into this service. |
+| `platform/go/sdk/audit` recorder and `sqloutbox` transaction sink | `ADAPT` | Persist one fixed, sanitized business event in the same PostgreSQL transaction as an accepted mutation. The event inherits the authorized actor, tenant, IAM decision, and request correlation; it contains no credential, secret, configuration value, request body, provider payload, or arbitrary attributes. |
+| Audit outbox dispatcher and PostgreSQL claim/completion protocol | `ADAPT` | Use an immutable event ID, at-least-once delivery, bounded retry, database-time lease recovery, and fencing-protected completion. The Audit service must deduplicate the stable event ID. Lease and fencing protect dispatcher concurrency only; they are not Audit authority or evidence by themselves. |
+| Complete auth/audit SDK, JWT/JWKS and revocation providers, Kratos/Redis adapters, client credentials, generic taxonomy, archive, retention, and query closure | `REJECT` | IAM authentication/authorization and Audit retention/query remain independently deployable authorities. Importing this closure would make the donor a foundation dependency and recreate the code, test, and documentation surface that Phase 1 deliberately avoids. |
+
 ## Resulting implementation constraints
 
 1. Keep the target's public ApplicationRevision/Deployment model and move only
@@ -67,6 +77,15 @@ release roadmap target a different product. The dependency warning is
 7. Test semantic plans, state transitions, security boundaries, and real
    effects. Do not adopt donor tests tied to YAML text, specific services,
    script layout, line counts, or call sequences.
+8. Admit northbound commands only after an IAM-facing Authorizer returns the
+   trusted tenant, subject, and decision identity. Ignore tenant headers and
+   never decode `requestedBy` from a request body.
+9. Commit a fixed sanitized Audit event and the business mutation together.
+   Dispatch it after commit with a stable event ID, at-least-once semantics,
+   bounded retry, and idempotent ingestion.
+10. Keep IAM token machinery and Audit retention/query outside apphosting.
+    Outbox lease/fencing is a local delivery-safety mechanism, not evidence
+    that IAM or Audit has been integrated.
 
 No donor source is copied and no donor repository is a build or runtime
 dependency.

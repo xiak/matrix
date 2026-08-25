@@ -86,14 +86,14 @@ func assertDeploymentWorkerWorkflow(
 		ctx,
 		applicationUsecase,
 		applicationlifecycle.SubmitCommand{
-			TenantID: fixture.tenantA, DeploymentID: deploymentID,
-			Name: "worker-deployment",
+			Authorization: integrationAuthorization(fixture.tenantA, requestedBy, "worker-deploy"),
+			DeploymentID:  deploymentID,
+			Name:          "worker-deployment",
 			Spec: applicationIntegrationSpec(
 				fixture,
 				fixture.configurationRevisionIDs[0],
 			),
 			IdempotencyKey: "worker-deploy",
-			RequestedBy:    requestedBy,
 		},
 		paasv1.OperationDeploy,
 	)
@@ -120,14 +120,14 @@ func assertDeploymentWorkerWorkflow(
 		ctx,
 		applicationUsecase,
 		applicationlifecycle.SubmitCommand{
-			TenantID: fixture.tenantA, DeploymentID: deploymentID,
+			Authorization: integrationAuthorization(fixture.tenantA, requestedBy, "worker-update"),
+			DeploymentID:  deploymentID,
 			Spec: applicationIntegrationSpec(
 				fixture,
 				fixture.configurationRevisionIDs[1],
 			),
 			ExpectedResourceVersion: ready.Metadata.ResourceVersion,
 			IdempotencyKey:          "worker-update",
-			RequestedBy:             requestedBy,
 		},
 		paasv1.OperationUpdate,
 	)
@@ -151,9 +151,10 @@ func assertDeploymentWorkerWorkflow(
 	assertConsumingClaims(t, ctx, admin, fixture.targetID, 1)
 
 	rolledBack, err := applicationUsecase.Rollback(ctx, applicationlifecycle.RollbackCommand{
-		TenantID: fixture.tenantA, DeploymentID: deploymentID,
+		Authorization:    integrationAuthorization(fixture.tenantA, requestedBy, "worker-rollback"),
+		DeploymentID:     deploymentID,
 		SourceGeneration: 1, ExpectedResourceVersion: ready.Metadata.ResourceVersion,
-		IdempotencyKey: "worker-rollback", RequestedBy: requestedBy,
+		IdempotencyKey: "worker-rollback",
 	})
 	if err != nil {
 		t.Fatalf("submit worker rollback: %v", err)
@@ -186,9 +187,10 @@ func assertDeploymentWorkerWorkflow(
 		ctx,
 		applicationUsecase,
 		applicationlifecycle.SubmitCommand{
-			TenantID: fixture.tenantA, DeploymentID: deploymentID,
-			Spec: stopSpec, ExpectedResourceVersion: ready.Metadata.ResourceVersion,
-			IdempotencyKey: "worker-stop", RequestedBy: requestedBy,
+			Authorization: integrationAuthorization(fixture.tenantA, requestedBy, "worker-stop"),
+			DeploymentID:  deploymentID,
+			Spec:          stopSpec, ExpectedResourceVersion: ready.Metadata.ResourceVersion,
+			IdempotencyKey: "worker-stop",
 		},
 		paasv1.OperationStop,
 	)
@@ -221,9 +223,10 @@ func assertDeploymentWorkerWorkflow(
 		ctx,
 		applicationUsecase,
 		applicationlifecycle.SubmitCommand{
-			TenantID: fixture.tenantA, DeploymentID: failureID, Name: "worker-failure",
+			Authorization: integrationAuthorization(fixture.tenantA, requestedBy, "worker-failure"),
+			DeploymentID:  failureID, Name: "worker-failure",
 			Spec:           applicationIntegrationSpec(fixture, fixture.configurationRevisionIDs[0]),
-			IdempotencyKey: "worker-failure", RequestedBy: requestedBy,
+			IdempotencyKey: "worker-failure",
 		},
 		paasv1.OperationDeploy,
 	)
@@ -248,9 +251,10 @@ func assertDeploymentWorkerWorkflow(
 		ctx,
 		applicationUsecase,
 		applicationlifecycle.SubmitCommand{
-			TenantID: fixture.tenantA, DeploymentID: unknownID, Name: "worker-unknown",
+			Authorization: integrationAuthorization(fixture.tenantA, requestedBy, "worker-unknown"),
+			DeploymentID:  unknownID, Name: "worker-unknown",
 			Spec:           applicationIntegrationSpec(fixture, fixture.configurationRevisionIDs[1]),
-			IdempotencyKey: "worker-unknown", RequestedBy: requestedBy,
+			IdempotencyKey: "worker-unknown",
 		},
 		paasv1.OperationDeploy,
 	)
@@ -296,9 +300,10 @@ func assertDeploymentWorkerWorkflow(
 		ctx,
 		applicationUsecase,
 		applicationlifecycle.SubmitCommand{
-			TenantID: fixture.tenantA, DeploymentID: manualID, Name: "worker-manual",
+			Authorization: integrationAuthorization(fixture.tenantA, requestedBy, "worker-manual"),
+			DeploymentID:  manualID, Name: "worker-manual",
 			Spec:           applicationIntegrationSpec(fixture, fixture.configurationRevisionIDs[0]),
-			IdempotencyKey: "worker-manual", RequestedBy: requestedBy,
+			IdempotencyKey: "worker-manual",
 		},
 		paasv1.OperationDeploy,
 	)

@@ -903,18 +903,7 @@ func ValidateOperation(value Operation) error {
 	if value.Attempt == 0 {
 		problems = append(problems, errors.New("operation attempt must be positive"))
 	}
-	if !contains(
-		[]OperationAction{
-			OperationCreateExecutionPool,
-			OperationRegisterExecutionTarget,
-			OperationCreatePlacement,
-			OperationDeploy,
-			OperationUpdate,
-			OperationStop,
-			OperationRollback,
-		},
-		value.Action,
-	) {
+	if !contains(OperationActions(), value.Action) {
 		problems = append(problems, fmt.Errorf("unknown operation action %q", value.Action))
 	}
 	switch value.Action {
@@ -922,7 +911,15 @@ func ValidateOperation(value Operation) error {
 		if value.Scope.Kind != AuthorityPlatform {
 			problems = append(problems, errors.New("platform operation action requires platform scope"))
 		}
-	case OperationCreatePlacement, OperationDeploy, OperationUpdate, OperationStop, OperationRollback:
+	case OperationCreatePlacement,
+		OperationCreateApplication,
+		OperationCreateConfiguration,
+		OperationCreateConfigurationRevision,
+		OperationCreateApplicationRevision,
+		OperationDeploy,
+		OperationUpdate,
+		OperationStop,
+		OperationRollback:
 		if value.Scope.Kind != AuthorityTenant {
 			problems = append(problems, errors.New("tenant operation action requires tenant scope"))
 		}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 )
 
 var lifecycleTime = time.Date(2026, 8, 25, 16, 0, 0, 123_000, time.UTC)
@@ -48,7 +49,8 @@ func TestSubmitCreatesDeploymentGenerationAndOperationAtomically(t *testing.T) {
 	}
 	if transaction.submission == nil ||
 		transaction.submission.ExpectedResourceVersion != 0 ||
-		transaction.submission.Operation.ID != result.Operation.ID {
+		transaction.submission.Operation.ID != result.Operation.ID ||
+		transaction.submission.AuditEvent.OperationID != result.Operation.ID {
 		t.Fatalf("atomic submission = %#v", transaction.submission)
 	}
 }
@@ -247,12 +249,11 @@ func TestRollbackCopiesAcceptedSnapshotIntoNewGeneration(t *testing.T) {
 		t,
 		&fakeLifecycleRepository{transaction: transaction},
 	).Rollback(context.Background(), RollbackCommand{
-		TenantID:                "tenant-a",
+		Authorization:           lifecycleAuthorization(),
 		DeploymentID:            "deployment-a",
 		SourceGeneration:        1,
 		ExpectedResourceVersion: 5,
 		IdempotencyKey:          "rollback-to-one",
-		RequestedBy:             lifecycleRequester(),
 	})
 	if err != nil {
 		t.Fatalf("rollback Deployment: %v", err)
@@ -274,12 +275,11 @@ func TestRollbackCopiesAcceptedSnapshotIntoNewGeneration(t *testing.T) {
 		t,
 		&fakeLifecycleRepository{transaction: transaction},
 	).Rollback(context.Background(), RollbackCommand{
-		TenantID:                "tenant-a",
+		Authorization:           lifecycleAuthorization(),
 		DeploymentID:            "deployment-a",
 		SourceGeneration:        1,
 		ExpectedResourceVersion: 5,
 		IdempotencyKey:          "rollback-to-stopped",
-		RequestedBy:             lifecycleRequester(),
 	})
 	if err == nil {
 		t.Fatal("Compose v0.1 rollback to a stopped generation must be rejected")
@@ -327,17 +327,27 @@ func (repository *fakeLifecycleRepository) WithinTransaction(
 }
 
 type fakeLifecycleTransaction struct {
-	now                   time.Time
-	deployment            paasv1.Deployment
-	deploymentFound       bool
-	revision              paasv1.ApplicationRevision
-	policy                paasv1.PlacementPolicy
-	storedOperation       paasv1.Operation
-	operationFound        bool
-	acceptedGenerations   map[uint64]paasv1.DeploymentGeneration
-	generationByOperation paasv1.DeploymentGeneration
-	configurationError    error
-	submission            *Submission
+	now                        time.Time
+	deployment                 paasv1.Deployment
+	deploymentFound            bool
+	revision                   paasv1.ApplicationRevision
+	revisionFound              bool
+	policy                     paasv1.PlacementPolicy
+	storedOperation            paasv1.Operation
+	operationFound             bool
+	acceptedGenerations        map[uint64]paasv1.DeploymentGeneration
+	generationByOperation      paasv1.DeploymentGeneration
+	configurationError         error
+	submission                 *Submission
+	application                paasv1.Application
+	applicationFound           bool
+	configuration              paasv1.Configuration
+	configurationFound         bool
+	configurationRevision      paasv1.ConfigurationRevision
+	configurationRevisionFound bool
+	loadedOperation            paasv1.Operation
+	loadedOperationFound       bool
+	resourceSubmission         *ResourceSubmission
 }
 
 func (transaction *fakeLifecycleTransaction) TransactionTime(context.Context) (time.Time, error) {
@@ -355,16 +365,52 @@ func (transaction *fakeLifecycleTransaction) FindOperationByFingerprint(
 }
 
 func (transaction *fakeLifecycleTransaction) LoadDeployment(
-	context.Context,
-	paasv1.ResourceID,
+	_ context.Context,
+	id paasv1.ResourceID,
 ) (paasv1.Deployment, bool, error) {
+	if transaction.deployment.Metadata.ID != id {
+		return paasv1.Deployment{}, false, nil
+	}
 	return transaction.deployment, transaction.deploymentFound, nil
 }
 
+func (transaction *fakeLifecycleTransaction) LoadApplication(
+	_ context.Context,
+	id paasv1.ResourceID,
+) (paasv1.Application, bool, error) {
+	if transaction.application.Metadata.ID != id {
+		return paasv1.Application{}, false, nil
+	}
+	return transaction.application, transaction.applicationFound, nil
+}
+
+func (transaction *fakeLifecycleTransaction) LoadConfiguration(
+	_ context.Context,
+	id paasv1.ResourceID,
+) (paasv1.Configuration, bool, error) {
+	if transaction.configuration.Metadata.ID != id {
+		return paasv1.Configuration{}, false, nil
+	}
+	return transaction.configuration, transaction.configurationFound, nil
+}
+
+func (transaction *fakeLifecycleTransaction) LoadConfigurationRevision(
+	_ context.Context,
+	id paasv1.ResourceID,
+) (paasv1.ConfigurationRevision, bool, error) {
+	if transaction.configurationRevision.Metadata.ID != id {
+		return paasv1.ConfigurationRevision{}, false, nil
+	}
+	return transaction.configurationRevision, transaction.configurationRevisionFound, nil
+}
+
 func (transaction *fakeLifecycleTransaction) LoadApplicationRevision(
-	context.Context,
-	paasv1.ResourceID,
+	_ context.Context,
+	id paasv1.ResourceID,
 ) (paasv1.ApplicationRevision, error) {
+	if !transaction.revisionFound || transaction.revision.Metadata.ID != id {
+		return paasv1.ApplicationRevision{}, ErrNotFound
+	}
 	return transaction.revision, nil
 }
 
@@ -402,6 +448,57 @@ func (transaction *fakeLifecycleTransaction) LoadGenerationByOperation(
 	return transaction.generationByOperation, nil
 }
 
+func (transaction *fakeLifecycleTransaction) LoadOperation(
+	_ context.Context,
+	id paasv1.OperationID,
+) (paasv1.Operation, bool, error) {
+	if transaction.loadedOperation.ID != id {
+		return paasv1.Operation{}, false, nil
+	}
+	return transaction.loadedOperation, transaction.loadedOperationFound, nil
+}
+
+func (transaction *fakeLifecycleTransaction) CreateApplication(
+	_ context.Context,
+	value paasv1.Application,
+	submission ResourceSubmission,
+) error {
+	transaction.application, transaction.applicationFound = value, true
+	transaction.resourceSubmission = &submission
+	return nil
+}
+
+func (transaction *fakeLifecycleTransaction) CreateConfiguration(
+	_ context.Context,
+	value paasv1.Configuration,
+	submission ResourceSubmission,
+) error {
+	transaction.configuration, transaction.configurationFound = value, true
+	transaction.resourceSubmission = &submission
+	return nil
+}
+
+func (transaction *fakeLifecycleTransaction) CreateConfigurationRevision(
+	_ context.Context,
+	value paasv1.ConfigurationRevision,
+	submission ResourceSubmission,
+) error {
+	transaction.configurationRevision, transaction.configurationRevisionFound = value, true
+	transaction.resourceSubmission = &submission
+	return nil
+}
+
+func (transaction *fakeLifecycleTransaction) CreateApplicationRevision(
+	_ context.Context,
+	value paasv1.ApplicationRevision,
+	submission ResourceSubmission,
+) error {
+	transaction.revision = value
+	transaction.revisionFound = true
+	transaction.resourceSubmission = &submission
+	return nil
+}
+
 func (transaction *fakeLifecycleTransaction) SubmitDeployment(
 	_ context.Context,
 	submission Submission,
@@ -423,6 +520,7 @@ func lifecycleTransaction() *fakeLifecycleTransaction {
 	return &fakeLifecycleTransaction{
 		now:                 lifecycleTime,
 		revision:            lifecycleRevision(),
+		revisionFound:       true,
 		policy:              lifecyclePolicy(),
 		acceptedGenerations: make(map[uint64]paasv1.DeploymentGeneration),
 	}
@@ -430,12 +528,11 @@ func lifecycleTransaction() *fakeLifecycleTransaction {
 
 func lifecycleCreateCommand() SubmitCommand {
 	return SubmitCommand{
-		TenantID:       "tenant-a",
+		Authorization:  lifecycleAuthorization(),
 		DeploymentID:   "deployment-a",
 		Name:           "deployment-a",
 		Spec:           lifecycleSpec("config-revision-a"),
 		IdempotencyKey: "create-deployment-a",
-		RequestedBy:    lifecycleRequester(),
 	}
 }
 
@@ -444,12 +541,21 @@ func lifecycleUpdateCommand(
 	configurationRevisionID paasv1.ResourceID,
 ) SubmitCommand {
 	return SubmitCommand{
-		TenantID:                current.Metadata.Scope.TenantID,
+		Authorization:           lifecycleAuthorization(),
 		DeploymentID:            current.Metadata.ID,
 		Spec:                    lifecycleSpec(configurationRevisionID),
 		ExpectedResourceVersion: current.Metadata.ResourceVersion,
 		IdempotencyKey:          "update-deployment-a-" + string(configurationRevisionID),
-		RequestedBy:             lifecycleRequester(),
+	}
+}
+
+func lifecycleAuthorization() port.Authorization {
+	return port.Authorization{
+		TenantID:   "tenant-a",
+		Subject:    lifecycleRequester(),
+		DecisionID: "decision-a",
+		RequestID:  "request-a",
+		AuditID:    "audit-flow-a",
 	}
 }
 

@@ -14,6 +14,7 @@ BEGIN
             ('deployments'),
             ('deployment_generations'),
             ('operations'),
+            ('audit_outbox'),
             ('execution_pools'),
             ('execution_targets'),
             ('execution_target_allocations'),
@@ -62,6 +63,7 @@ BEGIN
             'deployments',
             'deployment_generations',
             'operations',
+            'audit_outbox',
             'adapter_commands',
             'adapter_receipts',
             'deployment_observations',
@@ -88,6 +90,7 @@ BEGIN
             ('deployment_generations_operation_uq'),
             ('deployment_generations_operation_fk'),
             ('operations_idempotency_uq'),
+            ('audit_outbox_operation_fk'),
             ('execution_targets_pool_fk'),
             ('execution_target_allocations_target_fk'),
             ('adapter_commands_operation_action_uq'),
@@ -153,6 +156,7 @@ BEGIN
             ('deployments'),
             ('deployment_generations'),
             ('operations'),
+            ('audit_outbox'),
             ('adapter_commands'),
             ('adapter_receipts'),
             ('deployment_observations'),
@@ -199,13 +203,37 @@ BEGIN
         RAISE EXCEPTION 'platform capacity claims contain tenant ownership columns';
     END IF;
 
+    IF to_regprocedure('paas.submit_deployment(jsonb,jsonb,jsonb,bigint)') IS NOT NULL THEN
+        RAISE EXCEPTION 'removed pre-Audit submit_deployment signature still exists';
+    END IF;
+
     SELECT string_agg(required.name, ', ' ORDER BY required.name)
       INTO missing
       FROM (
         VALUES
             (
+                'append_audit_outbox',
+                'submitted_operation jsonb, submitted_audit_event jsonb'
+            ),
+            (
+                'create_apphosting_resource',
+                'submitted_resource jsonb, submitted_operation jsonb, submitted_audit_event jsonb'
+            ),
+            (
                 'submit_deployment',
-                'submitted_deployment jsonb, submitted_generation jsonb, submitted_operation jsonb, expected_resource_version bigint'
+                'submitted_deployment jsonb, submitted_generation jsonb, submitted_operation jsonb, submitted_audit_event jsonb, expected_resource_version bigint'
+            ),
+            (
+                'claim_audit_event',
+                'requested_worker_id text, requested_lease_seconds integer'
+            ),
+            (
+                'complete_audit_event',
+                'requested_tenant_id text, requested_event_id text, requested_worker_id text, expected_fencing_token bigint, requested_outcome text, requested_retry_at timestamp with time zone, requested_error_code text'
+            ),
+            (
+                'audit_outbox_snapshot',
+                ''
             ),
             (
                 'claim_operation',
@@ -266,6 +294,36 @@ BEGIN
 
     IF has_schema_privilege('matrix_paas_api', 'paas', 'CREATE')
        OR has_schema_privilege('matrix_paas_worker', 'paas', 'CREATE')
+       OR has_table_privilege(
+            'matrix_paas_api',
+            'paas.applications',
+            'INSERT, UPDATE, DELETE'
+       )
+       OR has_table_privilege(
+            'matrix_paas_api',
+            'paas.configurations',
+            'INSERT, UPDATE, DELETE'
+       )
+       OR has_table_privilege(
+            'matrix_paas_api',
+            'paas.configuration_revisions',
+            'INSERT, UPDATE, DELETE'
+       )
+       OR has_table_privilege(
+            'matrix_paas_api',
+            'paas.application_revisions',
+            'INSERT, UPDATE, DELETE'
+       )
+       OR has_table_privilege(
+            'matrix_paas_api',
+            'paas.operations',
+            'INSERT, UPDATE, DELETE'
+       )
+       OR has_table_privilege(
+            'matrix_paas_api',
+            'paas.audit_outbox',
+            'SELECT, INSERT, UPDATE, DELETE'
+       )
        OR has_table_privilege(
             'matrix_paas_api',
             'paas.placement_decisions',
@@ -331,6 +389,11 @@ BEGIN
        )
        OR has_table_privilege(
             'matrix_paas_worker',
+            'paas.audit_outbox',
+            'SELECT, INSERT, UPDATE, DELETE'
+       )
+       OR has_table_privilege(
+            'matrix_paas_worker',
             'paas.deployments',
             'INSERT, UPDATE, DELETE'
        )
@@ -370,17 +433,27 @@ BEGIN
     IF NOT has_table_privilege(
             'matrix_paas_api',
             'paas.applications',
-            'SELECT, INSERT'
+            'SELECT'
+       )
+       OR NOT has_table_privilege(
+            'matrix_paas_api',
+            'paas.configurations',
+            'SELECT'
        )
        OR NOT has_table_privilege(
             'matrix_paas_api',
             'paas.configuration_revisions',
-            'SELECT, INSERT'
+            'SELECT'
+       )
+       OR NOT has_table_privilege(
+            'matrix_paas_api',
+            'paas.application_revisions',
+            'SELECT'
        )
        OR NOT has_table_privilege(
             'matrix_paas_api',
             'paas.operations',
-            'SELECT, INSERT'
+            'SELECT'
        )
        OR NOT has_table_privilege(
             'matrix_paas_worker',
@@ -429,7 +502,27 @@ BEGIN
        )
        OR NOT has_function_privilege(
             'matrix_paas_api',
-            'paas.submit_deployment(jsonb, jsonb, jsonb, bigint)',
+            'paas.create_apphosting_resource(jsonb, jsonb, jsonb)',
+            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_paas_api',
+            'paas.submit_deployment(jsonb, jsonb, jsonb, jsonb, bigint)',
+            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_paas_worker',
+            'paas.claim_audit_event(text, integer)',
+            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_paas_worker',
+            'paas.complete_audit_event(text, text, text, bigint, text, timestamptz, text)',
+            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_paas_worker',
+            'paas.audit_outbox_snapshot()',
             'EXECUTE'
        )
        OR NOT has_function_privilege(
@@ -450,6 +543,9 @@ BEGIN
        OR EXISTS (
             SELECT 1
               FROM unnest(ARRAY[
+                    'paas.claim_audit_event(text, integer)',
+                    'paas.complete_audit_event(text, text, text, bigint, text, timestamptz, text)',
+                    'paas.audit_outbox_snapshot()',
                     'paas.claim_operation(text, integer)',
                     'paas.advance_operation(text, text, bigint, text, jsonb, timestamptz, boolean)',
                     'paas.assert_current_operation_lease(text, text, bigint)',
@@ -469,7 +565,22 @@ BEGIN
        )
        OR has_function_privilege(
             'matrix_paas_worker',
-            'paas.submit_deployment(jsonb, jsonb, jsonb, bigint)',
+            'paas.create_apphosting_resource(jsonb, jsonb, jsonb)',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_paas_worker',
+            'paas.submit_deployment(jsonb, jsonb, jsonb, jsonb, bigint)',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_paas_api',
+            'paas.append_audit_outbox(jsonb, jsonb)',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_paas_worker',
+            'paas.append_audit_outbox(jsonb, jsonb)',
             'EXECUTE'
        ) THEN
         RAISE EXCEPTION 'application roles lack required current privileges';

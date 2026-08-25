@@ -106,14 +106,34 @@ func DeploymentPhases() []DeploymentPhase {
 type OperationAction string
 
 const (
-	OperationCreateExecutionPool     OperationAction = "CREATE_EXECUTION_POOL"
-	OperationRegisterExecutionTarget OperationAction = "REGISTER_EXECUTION_TARGET"
-	OperationCreatePlacement         OperationAction = "CREATE_PLACEMENT"
-	OperationDeploy                  OperationAction = "DEPLOY"
-	OperationUpdate                  OperationAction = "UPDATE"
-	OperationStop                    OperationAction = "STOP"
-	OperationRollback                OperationAction = "ROLLBACK"
+	OperationCreateExecutionPool         OperationAction = "CREATE_EXECUTION_POOL"
+	OperationRegisterExecutionTarget     OperationAction = "REGISTER_EXECUTION_TARGET"
+	OperationCreatePlacement             OperationAction = "CREATE_PLACEMENT"
+	OperationCreateApplication           OperationAction = "CREATE_APPLICATION"
+	OperationCreateConfiguration         OperationAction = "CREATE_CONFIGURATION"
+	OperationCreateConfigurationRevision OperationAction = "CREATE_CONFIGURATION_REVISION"
+	OperationCreateApplicationRevision   OperationAction = "CREATE_APPLICATION_REVISION"
+	OperationDeploy                      OperationAction = "DEPLOY"
+	OperationUpdate                      OperationAction = "UPDATE"
+	OperationStop                        OperationAction = "STOP"
+	OperationRollback                    OperationAction = "ROLLBACK"
 )
+
+func OperationActions() []OperationAction {
+	return []OperationAction{
+		OperationCreateExecutionPool,
+		OperationRegisterExecutionTarget,
+		OperationCreatePlacement,
+		OperationCreateApplication,
+		OperationCreateConfiguration,
+		OperationCreateConfigurationRevision,
+		OperationCreateApplicationRevision,
+		OperationDeploy,
+		OperationUpdate,
+		OperationStop,
+		OperationRollback,
+	}
+}
 
 type OperationState string
 
@@ -180,6 +200,7 @@ const (
 	ErrorInvalidArgument            ErrorCode = "INVALID_ARGUMENT"
 	ErrorUnauthenticated            ErrorCode = "UNAUTHENTICATED"
 	ErrorPermissionDenied           ErrorCode = "PERMISSION_DENIED"
+	ErrorIdentityUnavailable        ErrorCode = "IDENTITY_PROVIDER_UNAVAILABLE"
 	ErrorNotFound                   ErrorCode = "NOT_FOUND"
 	ErrorAlreadyExists              ErrorCode = "ALREADY_EXISTS"
 	ErrorConflict                   ErrorCode = "CONFLICT"
@@ -203,6 +224,7 @@ func ErrorCodes() []ErrorCode {
 		ErrorInvalidArgument,
 		ErrorUnauthenticated,
 		ErrorPermissionDenied,
+		ErrorIdentityUnavailable,
 		ErrorNotFound,
 		ErrorAlreadyExists,
 		ErrorConflict,

@@ -172,11 +172,27 @@ type Application struct {
 	Metadata   ResourceMetadata `json:"metadata"`
 }
 
+// CreateApplicationRequest contains only caller-owned desired fields. Scope,
+// resource version, timestamps, requester, and Audit identity come from the
+// server-side authorization and transaction boundaries.
+type CreateApplicationRequest struct {
+	ID     ResourceID        `json:"id"`
+	Name   string            `json:"name"`
+	Labels map[string]string `json:"labels,omitempty"`
+}
+
 type Configuration struct {
 	APIVersion    string           `json:"apiVersion"`
 	Kind          string           `json:"kind"`
 	Metadata      ResourceMetadata `json:"metadata"`
 	ApplicationID ResourceID       `json:"applicationId"`
+}
+
+type CreateConfigurationRequest struct {
+	ID            ResourceID        `json:"id"`
+	Name          string            `json:"name"`
+	Labels        map[string]string `json:"labels,omitempty"`
+	ApplicationID ResourceID        `json:"applicationId"`
 }
 
 type ConfigurationRevisionSpec struct {
@@ -190,6 +206,13 @@ type ConfigurationRevision struct {
 	Kind       string                    `json:"kind"`
 	Metadata   ResourceMetadata          `json:"metadata"`
 	Spec       ConfigurationRevisionSpec `json:"spec"`
+}
+
+type CreateConfigurationRevisionRequest struct {
+	ID     ResourceID                `json:"id"`
+	Name   string                    `json:"name"`
+	Labels map[string]string         `json:"labels,omitempty"`
+	Spec   ConfigurationRevisionSpec `json:"spec"`
 }
 
 type ApplicationRevisionComponent struct {
@@ -212,6 +235,13 @@ type ApplicationRevision struct {
 	Kind       string                  `json:"kind"`
 	Metadata   ResourceMetadata        `json:"metadata"`
 	Spec       ApplicationRevisionSpec `json:"spec"`
+}
+
+type CreateApplicationRevisionRequest struct {
+	ID     ResourceID              `json:"id"`
+	Name   string                  `json:"name"`
+	Labels map[string]string       `json:"labels,omitempty"`
+	Spec   ApplicationRevisionSpec `json:"spec"`
 }
 
 type DeploymentComponent struct {
@@ -244,6 +274,16 @@ type Deployment struct {
 	Generation uint64           `json:"generation"`
 	Spec       DeploymentSpec   `json:"spec"`
 	Status     DeploymentStatus `json:"status"`
+}
+
+type CreateDeploymentRequest struct {
+	ID   ResourceID     `json:"id"`
+	Name string         `json:"name"`
+	Spec DeploymentSpec `json:"spec"`
+}
+
+type RollbackDeploymentRequest struct {
+	SourceGeneration uint64 `json:"sourceGeneration"`
 }
 
 // DeploymentGeneration is the immutable desired-state snapshot executed by

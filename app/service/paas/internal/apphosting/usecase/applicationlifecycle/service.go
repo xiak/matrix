@@ -11,19 +11,19 @@ import (
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/domain"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 )
 
 const maxResourceVersion = uint64(9007199254740991)
 
 type mutation struct {
-	tenantID                paasv1.TenantID
+	authorization           port.Authorization
 	deploymentID            paasv1.ResourceID
 	name                    string
 	spec                    paasv1.DeploymentSpec
 	sourceGeneration        uint64
 	expectedResourceVersion uint64
 	idempotencyKey          string
-	requestedBy             paasv1.SubjectRef
 	kind                    string
 }
 
@@ -41,7 +41,7 @@ type idempotencyIdentity struct {
 	SubjectType    paasv1.SubjectType `json:"subjectType"`
 	SubjectID      string             `json:"subjectId"`
 	CommandKind    string             `json:"commandKind"`
-	DeploymentID   paasv1.ResourceID  `json:"deploymentId"`
+	TargetID       paasv1.ResourceID  `json:"targetId"`
 	IdempotencyKey string             `json:"idempotencyKey"`
 }
 
@@ -57,31 +57,29 @@ func NewUsecase(repository Repository, config Config) (*Usecase, error) {
 
 func (usecase *Usecase) Submit(ctx context.Context, command SubmitCommand) (Result, error) {
 	if err := validateSubmitCommand(command); err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
 	return usecase.execute(ctx, mutation{
-		tenantID:                command.TenantID,
+		authorization:           command.Authorization,
 		deploymentID:            command.DeploymentID,
 		name:                    command.Name,
 		spec:                    command.Spec,
 		expectedResourceVersion: command.ExpectedResourceVersion,
 		idempotencyKey:          command.IdempotencyKey,
-		requestedBy:             command.RequestedBy,
 		kind:                    "SUBMIT_DEPLOYMENT",
 	})
 }
 
 func (usecase *Usecase) Rollback(ctx context.Context, command RollbackCommand) (Result, error) {
 	if err := validateRollbackCommand(command); err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
 	return usecase.execute(ctx, mutation{
-		tenantID:                command.TenantID,
+		authorization:           command.Authorization,
 		deploymentID:            command.DeploymentID,
 		sourceGeneration:        command.SourceGeneration,
 		expectedResourceVersion: command.ExpectedResourceVersion,
 		idempotencyKey:          command.IdempotencyKey,
-		requestedBy:             command.RequestedBy,
 		kind:                    "ROLLBACK_DEPLOYMENT",
 	})
 }
@@ -104,7 +102,7 @@ func (usecase *Usecase) execute(ctx context.Context, command mutation) (Result, 
 		result = Result{}
 		transactionErr = usecase.repository.WithinTransaction(
 			ctx,
-			command.tenantID,
+			command.authorization.TenantID,
 			func(transactionContext context.Context, transaction Transaction) error {
 				var err error
 				result, err = executeInTransaction(
@@ -249,11 +247,11 @@ func executeInTransaction(
 		ID:         operationID,
 		Scope: paasv1.ResourceScope{
 			Kind:     paasv1.AuthorityTenant,
-			TenantID: command.tenantID,
+			TenantID: command.authorization.TenantID,
 		},
 		Action:                 action,
 		Target:                 paasv1.ResourceRef{Kind: "Deployment", ID: command.deploymentID},
-		RequestedBy:            command.requestedBy,
+		RequestedBy:            command.authorization.Subject,
 		IdempotencyFingerprint: fingerprint,
 		RequestDigest:          requestDigest,
 		State:                  paasv1.OperationAccepted,
@@ -283,11 +281,16 @@ func executeInTransaction(
 	if err := paasv1.ValidateOperation(operation); err != nil {
 		return Result{}, fmt.Errorf("invalid Operation mutation: %w", err)
 	}
+	auditEvent, err := auditEventForOperation(command.authorization, operation, transactionTime)
+	if err != nil {
+		return Result{}, err
+	}
 	if err := transaction.SubmitDeployment(ctx, Submission{
 		ExpectedResourceVersion: command.expectedResourceVersion,
 		Deployment:              deployment,
 		Generation:              generation,
 		Operation:               operation,
+		AuditEvent:              auditEvent,
 	}); err != nil {
 		return Result{}, err
 	}
@@ -308,7 +311,7 @@ func newDeployment(
 			Kind:       "Deployment",
 			Metadata: paasv1.ResourceMetadata{
 				ID: command.deploymentID, Name: command.name,
-				Scope:           paasv1.ResourceScope{Kind: paasv1.AuthorityTenant, TenantID: command.tenantID},
+				Scope:           paasv1.ResourceScope{Kind: paasv1.AuthorityTenant, TenantID: command.authorization.TenantID},
 				ResourceVersion: 1, CreatedAt: transactionTime, UpdatedAt: transactionTime,
 			},
 			Generation: 1,
@@ -350,9 +353,9 @@ func operationAction(command mutation, found bool, spec paasv1.DeploymentSpec) p
 
 func idempotencyFingerprint(command mutation) (string, error) {
 	encoded, err := json.Marshal(idempotencyIdentity{
-		TenantID: command.tenantID, SubjectType: command.requestedBy.Type,
-		SubjectID: command.requestedBy.ID, CommandKind: command.kind,
-		DeploymentID: command.deploymentID, IdempotencyKey: command.idempotencyKey,
+		TenantID: command.authorization.TenantID, SubjectType: command.authorization.Subject.Type,
+		SubjectID: command.authorization.Subject.ID, CommandKind: command.kind,
+		TargetID: command.deploymentID, IdempotencyKey: command.idempotencyKey,
 	})
 	if err != nil {
 		return "", fmt.Errorf("encode idempotency identity: %w", err)
@@ -381,7 +384,7 @@ func operationIDFromFingerprint(fingerprint string) paasv1.OperationID {
 func validateSubmitCommand(command SubmitCommand) error {
 	var problems []error
 	problems = append(problems,
-		validateCommandIdentity(command.TenantID, command.DeploymentID, command.IdempotencyKey, command.RequestedBy),
+		validateCommandIdentity(command.Authorization, command.DeploymentID, command.IdempotencyKey),
 	)
 	if command.ExpectedResourceVersion > maxResourceVersion {
 		problems = append(problems, errors.New("expected resource version exceeds the v1 contract"))
@@ -398,7 +401,7 @@ func validateSubmitCommand(command SubmitCommand) error {
 func validateRollbackCommand(command RollbackCommand) error {
 	var problems []error
 	problems = append(problems,
-		validateCommandIdentity(command.TenantID, command.DeploymentID, command.IdempotencyKey, command.RequestedBy),
+		validateCommandIdentity(command.Authorization, command.DeploymentID, command.IdempotencyKey),
 	)
 	if command.SourceGeneration == 0 || command.SourceGeneration > maxResourceVersion {
 		problems = append(problems, errors.New("rollback source generation is invalid"))
@@ -410,25 +413,67 @@ func validateRollbackCommand(command RollbackCommand) error {
 }
 
 func validateCommandIdentity(
-	tenantID paasv1.TenantID,
+	authorization port.Authorization,
 	deploymentID paasv1.ResourceID,
 	idempotencyKey string,
-	requestedBy paasv1.SubjectRef,
 ) error {
 	var problems []error
 	problems = append(problems,
-		paasv1.ValidateID("tenantId", string(tenantID)),
+		port.ValidateAuthorization(authorization),
 		paasv1.ValidateID("deploymentId", string(deploymentID)),
 		paasv1.ValidateSafeExternalText("Idempotency-Key", idempotencyKey, 128, true),
-		paasv1.ValidateID("requestedBy.id", requestedBy.ID),
 	)
-	if requestedBy.Type != paasv1.SubjectUser &&
-		requestedBy.Type != paasv1.SubjectServiceAccount &&
-		requestedBy.Type != paasv1.SubjectAgent &&
-		requestedBy.Type != paasv1.SubjectSystemUser {
-		problems = append(problems, fmt.Errorf("unknown requester type %q", requestedBy.Type))
-	}
 	return errors.Join(problems...)
+}
+
+func auditEventForOperation(
+	authorization port.Authorization,
+	operation paasv1.Operation,
+	occurredAt time.Time,
+) (port.AuditEvent, error) {
+	action := ""
+	result := port.AuditAccepted
+	switch operation.Action {
+	case paasv1.OperationCreateApplication:
+		action, result = port.AuditApplicationCreated, port.AuditSucceeded
+	case paasv1.OperationCreateConfiguration:
+		action, result = port.AuditConfigurationCreated, port.AuditSucceeded
+	case paasv1.OperationCreateConfigurationRevision:
+		action, result = port.AuditConfigurationRevisionCreated, port.AuditSucceeded
+	case paasv1.OperationCreateApplicationRevision:
+		action, result = port.AuditApplicationRevisionCreated, port.AuditSucceeded
+	case paasv1.OperationDeploy:
+		action = port.AuditDeploymentCreated
+	case paasv1.OperationUpdate:
+		action = port.AuditDeploymentUpdated
+	case paasv1.OperationStop:
+		action = port.AuditDeploymentStopped
+	case paasv1.OperationRollback:
+		action = port.AuditDeploymentRolledBack
+	default:
+		return port.AuditEvent{}, fmt.Errorf("Operation action %q has no Audit contract", operation.Action)
+	}
+	digest := sha256.Sum256([]byte("matrix-paas-audit-event-v1\x00" + string(operation.ID)))
+	event := port.AuditEvent{
+		SchemaVersion: "v1",
+		EventID:       "audit-" + hex.EncodeToString(digest[:]),
+		TenantID:      authorization.TenantID,
+		Actor:         authorization.Subject,
+		IAMDecisionID: authorization.DecisionID,
+		Action:        action,
+		Target:        operation.Target,
+		OperationID:   operation.ID,
+		RequestDigest: operation.RequestDigest,
+		Result:        result,
+		RequestID:     authorization.RequestID,
+		AuditID:       authorization.AuditID,
+		TraceParent:   authorization.TraceParent,
+		OccurredAt:    occurredAt,
+	}
+	if err := port.ValidateAuditEvent(event); err != nil {
+		return port.AuditEvent{}, fmt.Errorf("invalid Audit event: %w", err)
+	}
+	return event, nil
 }
 
 func containsActivePhase(phase paasv1.DeploymentPhase) bool {

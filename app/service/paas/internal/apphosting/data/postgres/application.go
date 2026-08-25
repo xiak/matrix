@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
 )
 
@@ -400,12 +401,17 @@ func (transaction *applicationTransaction) SubmitDeployment(
 	if err != nil {
 		return fmt.Errorf("encode Operation document: %w", err)
 	}
+	auditDocument, err := json.Marshal(submission.AuditEvent)
+	if err != nil {
+		return fmt.Errorf("encode Audit event: %w", err)
+	}
 	if _, err := transaction.tx.Exec(
 		ctx,
-		`SELECT paas.submit_deployment($1::jsonb, $2::jsonb, $3::jsonb, $4)`,
+		`SELECT paas.submit_deployment($1::jsonb, $2::jsonb, $3::jsonb, $4::jsonb, $5)`,
 		deploymentDocument,
 		generationDocument,
 		operationDocument,
+		auditDocument,
 		int64(submission.ExpectedResourceVersion),
 	); err != nil {
 		return fmt.Errorf("submit Deployment generation and Operation: %w", err)
@@ -422,10 +428,12 @@ func validateApplicationSubmission(
 		paasv1.ValidateDeployment(submission.Deployment),
 		paasv1.ValidateDeploymentGeneration(submission.Generation),
 		paasv1.ValidateOperation(submission.Operation),
+		port.ValidateAuditEvent(submission.AuditEvent),
 	)
 	deployment := submission.Deployment
 	generation := submission.Generation
 	operation := submission.Operation
+	auditEvent := submission.AuditEvent
 	if deployment.Metadata.Scope.TenantID != tenantID ||
 		generation.Scope.TenantID != tenantID ||
 		operation.Scope.TenantID != tenantID ||
@@ -434,6 +442,12 @@ func validateApplicationSubmission(
 		generation.CreatedByOperationID != operation.ID ||
 		operation.Target.Kind != "Deployment" ||
 		operation.Target.ID != deployment.Metadata.ID ||
+		auditEvent.TenantID != tenantID ||
+		auditEvent.Target != operation.Target ||
+		auditEvent.OperationID != operation.ID ||
+		auditEvent.Actor != operation.RequestedBy ||
+		auditEvent.RequestDigest != operation.RequestDigest ||
+		!auditEvent.OccurredAt.Equal(operation.CreatedAt) ||
 		generation.ContentDigest != paasv1.DeploymentSpecContentDigest(deployment.Spec) {
 		problems = append(problems, errors.New("application submission identities do not match"))
 	}

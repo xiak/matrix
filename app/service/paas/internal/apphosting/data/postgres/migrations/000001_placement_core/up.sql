@@ -323,6 +323,10 @@ CREATE TABLE IF NOT EXISTS paas.operations (
     ),
     CONSTRAINT operations_action_valid CHECK (
         action IN (
+            'CREATE_APPLICATION',
+            'CREATE_CONFIGURATION',
+            'CREATE_CONFIGURATION_REVISION',
+            'CREATE_APPLICATION_REVISION',
             'DEPLOY',
             'UPDATE',
             'STOP',
@@ -398,6 +402,85 @@ CREATE TABLE IF NOT EXISTS paas.operations (
         END
     )
 );
+
+CREATE TABLE IF NOT EXISTS paas.audit_outbox (
+    tenant_id text COLLATE "C" NOT NULL,
+    event_id text COLLATE "C" NOT NULL,
+    operation_id text COLLATE "C" NOT NULL,
+    status text COLLATE "C" NOT NULL,
+    available_at timestamptz(6) NOT NULL,
+    attempts integer NOT NULL DEFAULT 0,
+    lease_owner text COLLATE "C",
+    lease_expires_at timestamptz(6),
+    fencing_token bigint NOT NULL DEFAULT 0,
+    last_error_code text COLLATE "C",
+    created_at timestamptz(6) NOT NULL,
+    updated_at timestamptz(6) NOT NULL,
+    delivered_at timestamptz(6),
+    document jsonb NOT NULL,
+    PRIMARY KEY (tenant_id, event_id),
+    CONSTRAINT audit_outbox_operation_fk FOREIGN KEY (tenant_id, operation_id)
+        REFERENCES paas.operations (tenant_id, id),
+    CONSTRAINT audit_outbox_ids_valid CHECK (
+        tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND event_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND operation_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND (lease_owner IS NULL OR lease_owner COLLATE "C"
+            ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+        AND (last_error_code IS NULL OR last_error_code COLLATE "C"
+            ~ '^[A-Z][A-Z0-9_]{0,63}$')
+    ),
+    CONSTRAINT audit_outbox_status_valid CHECK (
+        status IN ('PENDING', 'LEASED', 'RETRY', 'DELIVERED', 'DEAD_LETTER')
+    ),
+    CONSTRAINT audit_outbox_attempt_valid CHECK (
+        attempts BETWEEN 0 AND 100
+        AND fencing_token BETWEEN 0 AND 9007199254740991
+    ),
+    CONSTRAINT audit_outbox_lease_valid CHECK (
+        (status = 'LEASED' AND lease_owner IS NOT NULL AND lease_expires_at IS NOT NULL)
+        OR (status <> 'LEASED' AND lease_owner IS NULL AND lease_expires_at IS NULL)
+    ),
+    CONSTRAINT audit_outbox_terminal_valid CHECK (
+        (status = 'DELIVERED' AND delivered_at IS NOT NULL AND last_error_code IS NULL)
+        OR (status = 'DEAD_LETTER' AND delivered_at IS NULL AND last_error_code IS NOT NULL)
+        OR (status NOT IN ('DELIVERED', 'DEAD_LETTER')
+            AND delivered_at IS NULL AND last_error_code IS NULL)
+    ),
+    CONSTRAINT audit_outbox_time_valid CHECK (
+        available_at >= created_at
+        AND updated_at >= created_at
+        AND (delivered_at IS NULL OR delivered_at BETWEEN created_at AND updated_at)
+    ),
+    CONSTRAINT audit_outbox_document_identity CHECK (
+        document->>'schemaVersion' = 'v1'
+        AND document->>'eventId' = event_id
+        AND document->>'tenantId' = tenant_id
+        AND document->>'operationId' = operation_id
+        AND document->>'requestDigest' COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND (document->>'occurredAt')::timestamptz = created_at
+    )
+);
+
+ALTER TABLE paas.operations
+    DROP CONSTRAINT IF EXISTS operations_action_valid;
+ALTER TABLE paas.operations
+    ADD CONSTRAINT operations_action_valid CHECK (
+        action IN (
+            'CREATE_APPLICATION',
+            'CREATE_CONFIGURATION',
+            'CREATE_CONFIGURATION_REVISION',
+            'CREATE_APPLICATION_REVISION',
+            'DEPLOY',
+            'UPDATE',
+            'STOP',
+            'ROLLBACK'
+        )
+    );
+
+CREATE INDEX IF NOT EXISTS audit_outbox_claim_idx
+    ON paas.audit_outbox (available_at, created_at, tenant_id, event_id)
+    WHERE status IN ('PENDING', 'RETRY', 'LEASED');
 
 CREATE INDEX IF NOT EXISTS operations_claim_idx
     ON paas.operations (next_attempt_at, created_at, tenant_id, id)
@@ -859,6 +942,8 @@ ALTER TABLE paas.deployment_generations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE paas.deployment_generations FORCE ROW LEVEL SECURITY;
 ALTER TABLE paas.operations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE paas.operations FORCE ROW LEVEL SECURITY;
+ALTER TABLE paas.audit_outbox ENABLE ROW LEVEL SECURITY;
+ALTER TABLE paas.audit_outbox FORCE ROW LEVEL SECURITY;
 ALTER TABLE paas.adapter_commands ENABLE ROW LEVEL SECURITY;
 ALTER TABLE paas.adapter_commands FORCE ROW LEVEL SECURITY;
 ALTER TABLE paas.adapter_receipts ENABLE ROW LEVEL SECURITY;
@@ -883,6 +968,7 @@ BEGIN
         'deployments',
         'deployment_generations',
         'operations',
+        'audit_outbox',
         'adapter_commands',
         'adapter_receipts',
         'deployment_observations',
@@ -908,10 +994,301 @@ BEGIN
 END
 $matrix_policy$;
 
+CREATE OR REPLACE FUNCTION paas.append_audit_outbox(
+    submitted_operation jsonb,
+    submitted_audit_event jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text;
+    effective_now timestamptz(6);
+    expected_action text;
+    expected_result text;
+BEGIN
+    effective_tenant_id := paas.current_tenant_id();
+    effective_now := transaction_timestamp();
+    IF effective_tenant_id IS NULL THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '42501',
+            MESSAGE = 'valid transaction-local tenant context is required';
+    END IF;
+    IF jsonb_typeof(submitted_operation) <> 'object'
+       OR jsonb_typeof(submitted_audit_event) <> 'object'
+       OR jsonb_typeof(submitted_audit_event->'actor') <> 'object'
+       OR jsonb_typeof(submitted_audit_event->'target') <> 'object'
+       OR NOT (submitted_audit_event ?& ARRAY[
+            'schemaVersion', 'eventId', 'tenantId', 'actor',
+            'iamDecisionId', 'action', 'target', 'operationId',
+            'requestDigest', 'result', 'requestId', 'occurredAt'
+       ])
+       OR NOT ((submitted_audit_event->'actor') ?& ARRAY['type', 'id'])
+       OR NOT ((submitted_audit_event->'target') ?& ARRAY['kind', 'id'])
+       OR (submitted_audit_event - ARRAY[
+            'schemaVersion', 'eventId', 'tenantId', 'actor',
+            'iamDecisionId', 'action', 'target', 'operationId',
+            'requestDigest', 'result', 'requestId', 'auditId',
+            'traceparent', 'occurredAt'
+       ]) <> '{}'::jsonb
+       OR ((submitted_audit_event->'actor') - ARRAY['type', 'id'])
+            <> '{}'::jsonb
+       OR ((submitted_audit_event->'target') - ARRAY['kind', 'id'])
+            <> '{}'::jsonb THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'Audit event contract is invalid';
+    END IF;
+
+    expected_action := CASE submitted_operation->>'action'
+        WHEN 'CREATE_APPLICATION' THEN 'paas.application.created'
+        WHEN 'CREATE_CONFIGURATION' THEN 'paas.configuration.created'
+        WHEN 'CREATE_CONFIGURATION_REVISION'
+            THEN 'paas.configuration-revision.created'
+        WHEN 'CREATE_APPLICATION_REVISION'
+            THEN 'paas.application-revision.created'
+        WHEN 'DEPLOY' THEN 'paas.deployment.created'
+        WHEN 'UPDATE' THEN 'paas.deployment.updated'
+        WHEN 'STOP' THEN 'paas.deployment.stopped'
+        WHEN 'ROLLBACK' THEN 'paas.deployment.rolled-back'
+        ELSE NULL
+    END;
+    expected_result := CASE
+        WHEN submitted_operation->>'action' IN (
+            'CREATE_APPLICATION',
+            'CREATE_CONFIGURATION',
+            'CREATE_CONFIGURATION_REVISION',
+            'CREATE_APPLICATION_REVISION'
+        ) THEN 'SUCCEEDED'
+        ELSE 'ACCEPTED'
+    END;
+    IF expected_action IS NULL
+       OR submitted_audit_event->>'schemaVersion' <> 'v1'
+       OR COALESCE(submitted_audit_event->>'eventId', '') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_audit_event->>'tenantId' <> effective_tenant_id
+       OR COALESCE(submitted_audit_event#>>'{actor,id}', '') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_audit_event#>>'{actor,type}' NOT IN (
+            'USER', 'SERVICE_ACCOUNT', 'AGENT', 'SYSTEM_USER'
+       )
+       OR submitted_audit_event->'actor'
+            IS DISTINCT FROM submitted_operation->'requestedBy'
+       OR COALESCE(submitted_audit_event->>'iamDecisionId', '') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_audit_event->>'action' <> expected_action
+       OR submitted_audit_event->'target'
+            IS DISTINCT FROM submitted_operation->'target'
+       OR submitted_audit_event->>'operationId' <> submitted_operation->>'id'
+       OR submitted_audit_event->>'requestDigest'
+            <> submitted_operation->>'requestDigest'
+       OR submitted_audit_event->>'requestDigest' COLLATE "C"
+            !~ '^sha256:[0-9a-f]{64}$'
+       OR submitted_audit_event->>'result' <> expected_result
+       OR COALESCE(submitted_audit_event->>'requestId', '') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR (submitted_audit_event ? 'auditId'
+            AND COALESCE(submitted_audit_event->>'auditId', '') COLLATE "C"
+                !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+       OR (submitted_audit_event ? 'traceparent'
+            AND (jsonb_typeof(submitted_audit_event->'traceparent') <> 'string'
+                OR octet_length(submitted_audit_event->>'traceparent') > 55))
+       OR (submitted_audit_event->>'occurredAt')::timestamptz <> effective_now
+       OR (submitted_operation->>'createdAt')::timestamptz <> effective_now THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'Audit event identity or correlation is invalid';
+    END IF;
+
+    INSERT INTO paas.audit_outbox (
+        tenant_id,
+        event_id,
+        operation_id,
+        status,
+        available_at,
+        attempts,
+        fencing_token,
+        created_at,
+        updated_at,
+        document
+    ) VALUES (
+        effective_tenant_id,
+        submitted_audit_event->>'eventId',
+        submitted_operation->>'id',
+        'PENDING',
+        effective_now,
+        0,
+        0,
+        effective_now,
+        effective_now,
+        submitted_audit_event
+    );
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.append_audit_outbox(jsonb, jsonb) FROM PUBLIC;
+REVOKE ALL ON FUNCTION paas.append_audit_outbox(jsonb, jsonb)
+    FROM matrix_paas_api, matrix_paas_worker;
+
+CREATE OR REPLACE FUNCTION paas.create_apphosting_resource(
+    submitted_resource jsonb,
+    submitted_operation jsonb,
+    submitted_audit_event jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text;
+    effective_now timestamptz(6);
+    resource_kind text;
+    resource_id text;
+    operation_id text;
+    expected_operation_action text;
+BEGIN
+    effective_tenant_id := paas.current_tenant_id();
+    effective_now := transaction_timestamp();
+    IF effective_tenant_id IS NULL THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '42501',
+            MESSAGE = 'valid transaction-local tenant context is required';
+    END IF;
+    IF jsonb_typeof(submitted_resource) <> 'object'
+       OR jsonb_typeof(submitted_operation) <> 'object'
+       OR jsonb_typeof(submitted_audit_event) <> 'object' THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'resource submission documents must be objects';
+    END IF;
+
+    resource_kind := submitted_resource->>'kind';
+    resource_id := submitted_resource#>>'{metadata,id}';
+    operation_id := submitted_operation->>'id';
+    expected_operation_action := CASE resource_kind
+        WHEN 'Application' THEN 'CREATE_APPLICATION'
+        WHEN 'Configuration' THEN 'CREATE_CONFIGURATION'
+        WHEN 'ConfigurationRevision' THEN 'CREATE_CONFIGURATION_REVISION'
+        WHEN 'ApplicationRevision' THEN 'CREATE_APPLICATION_REVISION'
+        ELSE NULL
+    END;
+    IF submitted_resource->>'apiVersion' <> 'paas.matrix.xiak.com/v1'
+       OR expected_operation_action IS NULL
+       OR COALESCE(resource_id, '') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_resource#>>'{metadata,scope,kind}' <> 'TENANT'
+       OR submitted_resource#>>'{metadata,scope,tenantId}' <> effective_tenant_id
+       OR submitted_resource#>>'{metadata,resourceVersion}' <> '1'
+       OR (submitted_resource#>>'{metadata,createdAt}')::timestamptz <> effective_now
+       OR (submitted_resource#>>'{metadata,updatedAt}')::timestamptz <> effective_now
+       OR COALESCE(operation_id, '') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_operation->>'apiVersion' <> 'paas.matrix.xiak.com/v1'
+       OR submitted_operation->>'kind' <> 'Operation'
+       OR submitted_operation#>>'{scope,kind}' <> 'TENANT'
+       OR submitted_operation#>>'{scope,tenantId}' <> effective_tenant_id
+       OR submitted_operation->>'action' <> expected_operation_action
+       OR submitted_operation#>>'{target,kind}' <> resource_kind
+       OR submitted_operation#>>'{target,id}' <> resource_id
+       OR submitted_operation->>'idempotencyFingerprint' COLLATE "C"
+            !~ '^sha256:[0-9a-f]{64}$'
+       OR submitted_operation->>'requestDigest' COLLATE "C"
+            !~ '^sha256:[0-9a-f]{64}$'
+       OR submitted_operation->>'state' <> 'SUCCEEDED'
+       OR submitted_operation->>'attempt' <> '1'
+       OR submitted_operation->'error' IS NOT NULL
+       OR (submitted_operation->>'createdAt')::timestamptz <> effective_now
+       OR (submitted_operation->>'updatedAt')::timestamptz <> effective_now
+       OR (submitted_operation->>'terminalAt')::timestamptz <> effective_now THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'resource submission identity or state is invalid';
+    END IF;
+
+    INSERT INTO paas.operations (
+        tenant_id, id, action, target_kind, target_id,
+        idempotency_fingerprint, request_digest, state, attempt,
+        next_attempt_at, fencing_token, created_at, updated_at,
+        terminal_at, document
+    ) VALUES (
+        effective_tenant_id,
+        operation_id,
+        expected_operation_action,
+        resource_kind,
+        resource_id,
+        submitted_operation->>'idempotencyFingerprint',
+        submitted_operation->>'requestDigest',
+        'SUCCEEDED',
+        1,
+        effective_now,
+        0,
+        effective_now,
+        effective_now,
+        effective_now,
+        submitted_operation
+    );
+
+    CASE resource_kind
+        WHEN 'Application' THEN
+            INSERT INTO paas.applications (
+                tenant_id, id, resource_version, document
+            ) VALUES (
+                effective_tenant_id, resource_id, 1, submitted_resource
+            );
+        WHEN 'Configuration' THEN
+            INSERT INTO paas.configurations (
+                tenant_id, id, application_id, resource_version, document
+            ) VALUES (
+                effective_tenant_id,
+                resource_id,
+                submitted_resource->>'applicationId',
+                1,
+                submitted_resource
+            );
+        WHEN 'ConfigurationRevision' THEN
+            INSERT INTO paas.configuration_revisions (
+                tenant_id, id, configuration_id, content_digest,
+                resource_version, document
+            ) VALUES (
+                effective_tenant_id,
+                resource_id,
+                submitted_resource#>>'{spec,configurationId}',
+                submitted_resource#>>'{spec,contentDigest}',
+                1,
+                submitted_resource
+            );
+        WHEN 'ApplicationRevision' THEN
+            INSERT INTO paas.application_revisions (
+                tenant_id, id, application_id, content_digest,
+                resource_version, document
+            ) VALUES (
+                effective_tenant_id,
+                resource_id,
+                submitted_resource#>>'{spec,applicationId}',
+                submitted_resource#>>'{spec,contentDigest}',
+                1,
+                submitted_resource
+            );
+    END CASE;
+
+    PERFORM paas.append_audit_outbox(submitted_operation, submitted_audit_event);
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.create_apphosting_resource(jsonb, jsonb, jsonb)
+    FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paas.create_apphosting_resource(jsonb, jsonb, jsonb)
+    TO matrix_paas_api;
+
+DROP FUNCTION IF EXISTS paas.submit_deployment(jsonb, jsonb, jsonb, bigint);
 CREATE OR REPLACE FUNCTION paas.submit_deployment(
     submitted_deployment jsonb,
     submitted_generation jsonb,
     submitted_operation jsonb,
+    submitted_audit_event jsonb,
     expected_resource_version bigint
 )
 RETURNS void
@@ -940,7 +1317,8 @@ BEGIN
     END IF;
     IF jsonb_typeof(submitted_deployment) <> 'object'
        OR jsonb_typeof(submitted_generation) <> 'object'
-       OR jsonb_typeof(submitted_operation) <> 'object' THEN
+       OR jsonb_typeof(submitted_operation) <> 'object'
+       OR jsonb_typeof(submitted_audit_event) <> 'object' THEN
         RAISE EXCEPTION USING
             ERRCODE = '22023',
             MESSAGE = 'deployment submission documents must be objects';
@@ -1148,13 +1526,202 @@ BEGIN
         effective_now,
         submitted_generation
     );
+
+    PERFORM paas.append_audit_outbox(submitted_operation, submitted_audit_event);
 END
 $function$;
 
-REVOKE ALL ON FUNCTION paas.submit_deployment(jsonb, jsonb, jsonb, bigint)
+REVOKE ALL ON FUNCTION paas.submit_deployment(jsonb, jsonb, jsonb, jsonb, bigint)
     FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION paas.submit_deployment(jsonb, jsonb, jsonb, bigint)
+GRANT EXECUTE ON FUNCTION paas.submit_deployment(jsonb, jsonb, jsonb, jsonb, bigint)
     TO matrix_paas_api;
+
+CREATE OR REPLACE FUNCTION paas.claim_audit_event(
+    requested_worker_id text,
+    requested_lease_seconds integer
+)
+RETURNS TABLE (
+    tenant_id text,
+    event_id text,
+    attempts integer,
+    fencing_token bigint,
+    lease_expires_at timestamptz,
+    document jsonb
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+BEGIN
+    IF requested_worker_id IS NULL
+       OR requested_worker_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_lease_seconds IS NULL
+       OR requested_lease_seconds NOT BETWEEN 1 AND 300 THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'Audit claim parameters are invalid';
+    END IF;
+    RETURN QUERY
+    WITH candidate AS (
+        SELECT pending.tenant_id,
+               pending.event_id
+          FROM paas.audit_outbox AS pending
+         WHERE pending.attempts < 100
+           AND (
+                (pending.status IN ('PENDING', 'RETRY')
+                    AND pending.available_at <= transaction_timestamp())
+                OR (pending.status = 'LEASED'
+                    AND pending.lease_expires_at <= transaction_timestamp())
+           )
+         ORDER BY pending.available_at,
+                  pending.created_at,
+                  pending.tenant_id COLLATE "C",
+                  pending.event_id COLLATE "C"
+         LIMIT 1
+         FOR UPDATE SKIP LOCKED
+    )
+    UPDATE paas.audit_outbox AS claimed
+       SET status = 'LEASED',
+           attempts = claimed.attempts + 1,
+           lease_owner = requested_worker_id,
+           lease_expires_at = transaction_timestamp()
+                + make_interval(secs => requested_lease_seconds),
+           fencing_token = claimed.fencing_token + 1,
+           last_error_code = NULL,
+           updated_at = transaction_timestamp()
+      FROM candidate
+     WHERE claimed.tenant_id = candidate.tenant_id
+       AND claimed.event_id = candidate.event_id
+    RETURNING claimed.tenant_id,
+              claimed.event_id,
+              claimed.attempts,
+              claimed.fencing_token,
+              claimed.lease_expires_at,
+              claimed.document;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.claim_audit_event(text, integer) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paas.claim_audit_event(text, integer)
+    TO matrix_paas_worker;
+
+CREATE OR REPLACE FUNCTION paas.complete_audit_event(
+    requested_tenant_id text,
+    requested_event_id text,
+    requested_worker_id text,
+    expected_fencing_token bigint,
+    requested_outcome text,
+    requested_retry_at timestamptz,
+    requested_error_code text
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    affected_rows bigint;
+BEGIN
+    IF requested_tenant_id IS NULL
+       OR requested_tenant_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_event_id IS NULL
+       OR requested_event_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_worker_id IS NULL
+       OR requested_worker_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR expected_fencing_token IS NULL
+       OR expected_fencing_token NOT BETWEEN 1 AND 9007199254740991
+       OR requested_outcome NOT IN ('DELIVERED', 'RETRY', 'DEAD_LETTER')
+       OR (requested_outcome = 'RETRY'
+            AND (requested_retry_at IS NULL
+                OR requested_retry_at <= transaction_timestamp()
+                OR requested_retry_at > transaction_timestamp() + interval '24 hours'))
+       OR (requested_outcome <> 'RETRY' AND requested_retry_at IS NOT NULL)
+       OR (requested_outcome = 'DEAD_LETTER'
+            AND (requested_error_code IS NULL
+                OR requested_error_code COLLATE "C"
+                    !~ '^[A-Z][A-Z0-9_]{0,63}$'))
+       OR (requested_outcome <> 'DEAD_LETTER'
+            AND requested_error_code IS NOT NULL) THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'Audit completion parameters are invalid';
+    END IF;
+
+    UPDATE paas.audit_outbox AS event
+       SET status = requested_outcome,
+           available_at = CASE
+                WHEN requested_outcome = 'RETRY' THEN requested_retry_at
+                ELSE event.available_at
+           END,
+           lease_owner = NULL,
+           lease_expires_at = NULL,
+           last_error_code = CASE
+                WHEN requested_outcome = 'DEAD_LETTER'
+                    THEN requested_error_code
+                ELSE NULL
+           END,
+           delivered_at = CASE
+                WHEN requested_outcome = 'DELIVERED'
+                    THEN transaction_timestamp()
+                ELSE NULL
+           END,
+           updated_at = transaction_timestamp()
+     WHERE event.tenant_id = requested_tenant_id
+       AND event.event_id = requested_event_id
+       AND event.status = 'LEASED'
+       AND event.lease_owner = requested_worker_id
+       AND event.fencing_token = expected_fencing_token
+       AND event.lease_expires_at > clock_timestamp();
+    GET DIAGNOSTICS affected_rows = ROW_COUNT;
+    IF affected_rows <> 1 THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'MX412',
+            MESSAGE = 'Audit event lease or fencing token is stale';
+    END IF;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.complete_audit_event(
+    text, text, text, bigint, text, timestamptz, text
+) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paas.complete_audit_event(
+    text, text, text, bigint, text, timestamptz, text
+) TO matrix_paas_worker;
+
+CREATE OR REPLACE FUNCTION paas.audit_outbox_snapshot()
+RETURNS TABLE (
+    pending_count bigint,
+    leased_count bigint,
+    retry_count bigint,
+    delivered_count bigint,
+    dead_letter_count bigint,
+    expired_lease_count bigint
+)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+    SELECT
+        count(*) FILTER (WHERE status = 'PENDING'),
+        count(*) FILTER (WHERE status = 'LEASED'),
+        count(*) FILTER (WHERE status = 'RETRY'),
+        count(*) FILTER (WHERE status = 'DELIVERED'),
+        count(*) FILTER (WHERE status = 'DEAD_LETTER'),
+        count(*) FILTER (
+            WHERE status = 'LEASED'
+              AND lease_expires_at <= transaction_timestamp()
+        )
+    FROM paas.audit_outbox
+$function$;
+
+REVOKE ALL ON FUNCTION paas.audit_outbox_snapshot() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paas.audit_outbox_snapshot()
+    TO matrix_paas_worker;
 
 CREATE OR REPLACE FUNCTION paas.claim_operation(
     requested_worker_id text,
@@ -2675,14 +3242,14 @@ GRANT EXECUTE ON FUNCTION paas.transition_capacity_reservation(
 REVOKE ALL ON ALL TABLES IN SCHEMA paas FROM PUBLIC;
 REVOKE ALL ON ALL TABLES IN SCHEMA paas
     FROM matrix_paas_api, matrix_paas_worker;
-GRANT SELECT, INSERT ON paas.applications TO matrix_paas_api;
-GRANT SELECT, INSERT ON paas.configurations TO matrix_paas_api;
-GRANT SELECT, INSERT ON paas.configuration_revisions TO matrix_paas_api;
-GRANT SELECT, INSERT ON paas.application_revisions TO matrix_paas_api;
+GRANT SELECT ON paas.applications TO matrix_paas_api;
+GRANT SELECT ON paas.configurations TO matrix_paas_api;
+GRANT SELECT ON paas.configuration_revisions TO matrix_paas_api;
+GRANT SELECT ON paas.application_revisions TO matrix_paas_api;
 GRANT SELECT ON paas.placement_policies TO matrix_paas_api;
 GRANT SELECT ON paas.deployments TO matrix_paas_api;
 GRANT SELECT ON paas.deployment_generations TO matrix_paas_api;
-GRANT SELECT, INSERT ON paas.operations TO matrix_paas_api;
+GRANT SELECT ON paas.operations TO matrix_paas_api;
 
 GRANT SELECT ON paas.applications TO matrix_paas_worker;
 GRANT SELECT ON paas.configurations TO matrix_paas_worker;

@@ -22,10 +22,16 @@ func TestOpenAPIContractDefinesApplicationPaaSV1(t *testing.T) {
 	required := []string{
 		"Tenant",
 		"Application",
+		"CreateApplicationRequest",
 		"Configuration",
+		"CreateConfigurationRequest",
 		"ConfigurationRevision",
+		"CreateConfigurationRevisionRequest",
 		"ApplicationRevision",
+		"CreateApplicationRevisionRequest",
 		"Deployment",
+		"CreateDeploymentRequest",
+		"RollbackDeploymentRequest",
 		"DeploymentGeneration",
 		"ExecutionPool",
 		"ExecutionTarget",
@@ -48,6 +54,57 @@ func TestOpenAPIContractDefinesApplicationPaaSV1(t *testing.T) {
 	for _, name := range required {
 		if _, found := schemas[name]; !found {
 			t.Errorf("required schema %q is missing", name)
+		}
+	}
+}
+
+func TestOpenAPINorthboundSurfaceUsesMatrixIAM(t *testing.T) {
+	document := loadOpenAPI(t)
+	security := document["security"].([]any)
+	if len(security) != 1 {
+		t.Fatalf("top-level security = %#v, want one MatrixIAM requirement", security)
+	}
+	requirement := object(t, security[0], "security[0]")
+	if scopes, found := requirement["MatrixIAM"]; !found || len(scopes.([]any)) != 0 {
+		t.Fatalf("top-level security = %#v, want MatrixIAM bearer requirement", security)
+	}
+	components := object(t, document["components"], "components")
+	schemes := object(t, components["securitySchemes"], "components.securitySchemes")
+	matrixIAM := object(t, schemes["MatrixIAM"], "MatrixIAM")
+	if matrixIAM["type"] != "http" || matrixIAM["scheme"] != "bearer" {
+		t.Fatalf("MatrixIAM = %#v, want HTTP bearer", matrixIAM)
+	}
+
+	want := map[string][]string{
+		"/v1/applications":                                        {"post"},
+		"/v1/applications/{applicationId}":                        {"get"},
+		"/v1/configurations":                                      {"post"},
+		"/v1/configurations/{configurationId}":                    {"get"},
+		"/v1/configuration-revisions":                             {"post"},
+		"/v1/configuration-revisions/{configurationRevisionId}":   {"get"},
+		"/v1/application-revisions":                               {"post"},
+		"/v1/application-revisions/{applicationRevisionId}":       {"get"},
+		"/v1/deployments":                                         {"post"},
+		"/v1/deployments/{deploymentId}":                          {"get", "put"},
+		"/v1/deployments/{deploymentId}/rollback":                 {"post"},
+		"/v1/deployments/{deploymentId}/generations/{generation}": {"get"},
+		"/v1/operations/{operationId}":                            {"get"},
+	}
+	paths := object(t, document["paths"], "paths")
+	if len(paths) != len(want) {
+		t.Fatalf("path count = %d, want %d", len(paths), len(want))
+	}
+	for path, methods := range want {
+		pathItem := object(t, paths[path], path)
+		if len(pathItem) != len(methods) {
+			t.Errorf("%s methods = %#v, want %v", path, pathItem, methods)
+			continue
+		}
+		for _, method := range methods {
+			operation := object(t, pathItem[method], path+" "+method)
+			if _, overridesSecurity := operation["security"]; overridesSecurity {
+				t.Errorf("%s %s must inherit MatrixIAM", method, path)
+			}
 		}
 	}
 }
@@ -123,15 +180,7 @@ func TestOpenAPIEnumsMatchGoContract(t *testing.T) {
 		SubjectAgent,
 		SubjectSystemUser,
 	}))
-	assertExactEnum(t, schemas, "OperationAction", stringify([]OperationAction{
-		OperationCreateExecutionPool,
-		OperationRegisterExecutionTarget,
-		OperationCreatePlacement,
-		OperationDeploy,
-		OperationUpdate,
-		OperationStop,
-		OperationRollback,
-	}))
+	assertExactEnum(t, schemas, "OperationAction", stringify(OperationActions()))
 	assertExactEnum(t, schemas, "EvidenceType", stringify([]EvidenceType{
 		EvidencePolicyDecision,
 		EvidencePlacementDecision,
@@ -210,6 +259,10 @@ func TestMutationAndConcurrencyHeadersAreNormative(t *testing.T) {
 		ifMatch["required"] != true {
 		t.Fatalf("If-Match must be a required header: %#v", ifMatch)
 	}
+	ifMatchSchema := object(t, ifMatch["schema"], "IfMatch.schema")
+	if ifMatchSchema["pattern"] != `^"[1-9][0-9]*"$` {
+		t.Fatalf("If-Match must require a strong positive resource ETag: %#v", ifMatchSchema)
+	}
 	headers := object(t, components["headers"], "components.headers")
 	if _, found := headers["ETag"]; !found {
 		t.Fatal("ETag response header is missing")
@@ -263,56 +316,62 @@ func TestExecutionAdapterSchemasExposeReferencesNotProviderControls(t *testing.T
 func TestOpenAPIStructPropertiesAndRequiredFieldsMatchGoTypes(t *testing.T) {
 	schemas := openAPISchemas(t, loadOpenAPI(t))
 	contracts := map[string]reflect.Type{
-		"ResourceScope":                 reflect.TypeOf(ResourceScope{}),
-		"ResourceMetadata":              reflect.TypeOf(ResourceMetadata{}),
-		"Tenant":                        reflect.TypeOf(Tenant{}),
-		"LabelSelector":                 reflect.TypeOf(LabelSelector{}),
-		"ExecutionPoolSpec":             reflect.TypeOf(ExecutionPoolSpec{}),
-		"ExecutionPoolStatus":           reflect.TypeOf(ExecutionPoolStatus{}),
-		"ExecutionPool":                 reflect.TypeOf(ExecutionPool{}),
-		"AdapterRef":                    reflect.TypeOf(AdapterRef{}),
-		"Capacity":                      reflect.TypeOf(Capacity{}),
-		"ExecutionTargetSpec":           reflect.TypeOf(ExecutionTargetSpec{}),
-		"ExecutionTargetStatus":         reflect.TypeOf(ExecutionTargetStatus{}),
-		"ExecutionTarget":               reflect.TypeOf(ExecutionTarget{}),
-		"PlacementPolicySpec":           reflect.TypeOf(PlacementPolicySpec{}),
-		"PlacementPolicy":               reflect.TypeOf(PlacementPolicy{}),
-		"PlacementDecision":             reflect.TypeOf(PlacementDecision{}),
-		"ArtifactRef":                   reflect.TypeOf(ArtifactRef{}),
-		"ResourceRequirements":          reflect.TypeOf(ResourceRequirements{}),
-		"ApplicationEndpoint":           reflect.TypeOf(ApplicationEndpoint{}),
-		"ComponentInput":                reflect.TypeOf(ComponentInput{}),
-		"SecretVersionReference":        reflect.TypeOf(SecretVersionReference{}),
-		"ComponentBinding":              reflect.TypeOf(ComponentBinding{}),
-		"Application":                   reflect.TypeOf(Application{}),
-		"Configuration":                 reflect.TypeOf(Configuration{}),
-		"ConfigurationRevisionSpec":     reflect.TypeOf(ConfigurationRevisionSpec{}),
-		"ConfigurationRevision":         reflect.TypeOf(ConfigurationRevision{}),
-		"ApplicationRevisionComponent":  reflect.TypeOf(ApplicationRevisionComponent{}),
-		"ApplicationRevisionSpec":       reflect.TypeOf(ApplicationRevisionSpec{}),
-		"ApplicationRevision":           reflect.TypeOf(ApplicationRevision{}),
-		"DeploymentComponent":           reflect.TypeOf(DeploymentComponent{}),
-		"DeploymentSpec":                reflect.TypeOf(DeploymentSpec{}),
-		"DeploymentStatus":              reflect.TypeOf(DeploymentStatus{}),
-		"Deployment":                    reflect.TypeOf(Deployment{}),
-		"DeploymentGeneration":          reflect.TypeOf(DeploymentGeneration{}),
-		"SubjectRef":                    reflect.TypeOf(SubjectRef{}),
-		"ResourceRef":                   reflect.TypeOf(ResourceRef{}),
-		"FieldViolation":                reflect.TypeOf(FieldViolation{}),
-		"Problem":                       reflect.TypeOf(Problem{}),
-		"Operation":                     reflect.TypeOf(Operation{}),
-		"Evidence":                      reflect.TypeOf(Evidence{}),
-		"AdapterCapabilitiesContract":   reflect.TypeOf(AdapterCapabilitiesContract{}),
-		"AdapterCommandEnvelope":        reflect.TypeOf(AdapterCommandEnvelope{}),
-		"InspectExecutionTargetRequest": reflect.TypeOf(InspectExecutionTargetRequest{}),
-		"ObserveExecutionTargetRequest": reflect.TypeOf(ObserveExecutionTargetRequest{}),
-		"DeploymentExecutionRequest":    reflect.TypeOf(DeploymentExecutionRequest{}),
-		"ObserveDeploymentRequest":      reflect.TypeOf(ObserveDeploymentRequest{}),
-		"DeploymentEndpointObservation": reflect.TypeOf(DeploymentEndpointObservation{}),
-		"DeploymentObservation":         reflect.TypeOf(DeploymentObservation{}),
-		"ExecutionTargetObservation":    reflect.TypeOf(ExecutionTargetObservation{}),
-		"NormalizedAdapterError":        reflect.TypeOf(NormalizedAdapterError{}),
-		"AdapterResult":                 reflect.TypeOf(AdapterResult{}),
+		"ResourceScope":                      reflect.TypeOf(ResourceScope{}),
+		"ResourceMetadata":                   reflect.TypeOf(ResourceMetadata{}),
+		"Tenant":                             reflect.TypeOf(Tenant{}),
+		"LabelSelector":                      reflect.TypeOf(LabelSelector{}),
+		"ExecutionPoolSpec":                  reflect.TypeOf(ExecutionPoolSpec{}),
+		"ExecutionPoolStatus":                reflect.TypeOf(ExecutionPoolStatus{}),
+		"ExecutionPool":                      reflect.TypeOf(ExecutionPool{}),
+		"AdapterRef":                         reflect.TypeOf(AdapterRef{}),
+		"Capacity":                           reflect.TypeOf(Capacity{}),
+		"ExecutionTargetSpec":                reflect.TypeOf(ExecutionTargetSpec{}),
+		"ExecutionTargetStatus":              reflect.TypeOf(ExecutionTargetStatus{}),
+		"ExecutionTarget":                    reflect.TypeOf(ExecutionTarget{}),
+		"PlacementPolicySpec":                reflect.TypeOf(PlacementPolicySpec{}),
+		"PlacementPolicy":                    reflect.TypeOf(PlacementPolicy{}),
+		"PlacementDecision":                  reflect.TypeOf(PlacementDecision{}),
+		"ArtifactRef":                        reflect.TypeOf(ArtifactRef{}),
+		"ResourceRequirements":               reflect.TypeOf(ResourceRequirements{}),
+		"ApplicationEndpoint":                reflect.TypeOf(ApplicationEndpoint{}),
+		"ComponentInput":                     reflect.TypeOf(ComponentInput{}),
+		"SecretVersionReference":             reflect.TypeOf(SecretVersionReference{}),
+		"ComponentBinding":                   reflect.TypeOf(ComponentBinding{}),
+		"Application":                        reflect.TypeOf(Application{}),
+		"CreateApplicationRequest":           reflect.TypeOf(CreateApplicationRequest{}),
+		"Configuration":                      reflect.TypeOf(Configuration{}),
+		"CreateConfigurationRequest":         reflect.TypeOf(CreateConfigurationRequest{}),
+		"ConfigurationRevisionSpec":          reflect.TypeOf(ConfigurationRevisionSpec{}),
+		"ConfigurationRevision":              reflect.TypeOf(ConfigurationRevision{}),
+		"CreateConfigurationRevisionRequest": reflect.TypeOf(CreateConfigurationRevisionRequest{}),
+		"ApplicationRevisionComponent":       reflect.TypeOf(ApplicationRevisionComponent{}),
+		"ApplicationRevisionSpec":            reflect.TypeOf(ApplicationRevisionSpec{}),
+		"ApplicationRevision":                reflect.TypeOf(ApplicationRevision{}),
+		"CreateApplicationRevisionRequest":   reflect.TypeOf(CreateApplicationRevisionRequest{}),
+		"DeploymentComponent":                reflect.TypeOf(DeploymentComponent{}),
+		"DeploymentSpec":                     reflect.TypeOf(DeploymentSpec{}),
+		"DeploymentStatus":                   reflect.TypeOf(DeploymentStatus{}),
+		"Deployment":                         reflect.TypeOf(Deployment{}),
+		"CreateDeploymentRequest":            reflect.TypeOf(CreateDeploymentRequest{}),
+		"RollbackDeploymentRequest":          reflect.TypeOf(RollbackDeploymentRequest{}),
+		"DeploymentGeneration":               reflect.TypeOf(DeploymentGeneration{}),
+		"SubjectRef":                         reflect.TypeOf(SubjectRef{}),
+		"ResourceRef":                        reflect.TypeOf(ResourceRef{}),
+		"FieldViolation":                     reflect.TypeOf(FieldViolation{}),
+		"Problem":                            reflect.TypeOf(Problem{}),
+		"Operation":                          reflect.TypeOf(Operation{}),
+		"Evidence":                           reflect.TypeOf(Evidence{}),
+		"AdapterCapabilitiesContract":        reflect.TypeOf(AdapterCapabilitiesContract{}),
+		"AdapterCommandEnvelope":             reflect.TypeOf(AdapterCommandEnvelope{}),
+		"InspectExecutionTargetRequest":      reflect.TypeOf(InspectExecutionTargetRequest{}),
+		"ObserveExecutionTargetRequest":      reflect.TypeOf(ObserveExecutionTargetRequest{}),
+		"DeploymentExecutionRequest":         reflect.TypeOf(DeploymentExecutionRequest{}),
+		"ObserveDeploymentRequest":           reflect.TypeOf(ObserveDeploymentRequest{}),
+		"DeploymentEndpointObservation":      reflect.TypeOf(DeploymentEndpointObservation{}),
+		"DeploymentObservation":              reflect.TypeOf(DeploymentObservation{}),
+		"ExecutionTargetObservation":         reflect.TypeOf(ExecutionTargetObservation{}),
+		"NormalizedAdapterError":             reflect.TypeOf(NormalizedAdapterError{}),
+		"AdapterResult":                      reflect.TypeOf(AdapterResult{}),
 	}
 
 	for name, goType := range contracts {

@@ -48,8 +48,15 @@ func buildDocument() schema {
 			"title":   "Matrix Application PaaS v1 contracts",
 			"version": "0.1.0",
 		},
-		"paths": schema{},
+		"security": []any{schema{"MatrixIAM": []string{}}},
+		"paths":    buildPaths(),
 		"components": schema{
+			"securitySchemes": schema{
+				"MatrixIAM": schema{
+					"type": "http", "scheme": "bearer",
+					"description": "Matrix IAM credential resolved by the server-side Authorizer.",
+				},
+			},
 			"parameters": schema{
 				"IdempotencyKey": schema{
 					"name": "Idempotency-Key", "in": "header", "required": true,
@@ -57,12 +64,24 @@ func buildDocument() schema {
 				},
 				"IfMatch": schema{
 					"name": "If-Match", "in": "header", "required": true,
-					"schema": schema{"type": "string", "minLength": 1, "maxLength": 128},
+					"description": "Strong ETag containing the current positive resourceVersion.",
+					"schema": schema{
+						"type": "string", "minLength": 3, "maxLength": 18,
+						"pattern": `^"[1-9][0-9]*"$`,
+					},
 				},
 			},
 			"headers": schema{
 				"ETag": schema{
 					"description": "Opaque resource version validator.",
+					"schema":      schema{"type": "string"},
+				},
+				"Location": schema{
+					"description": "Canonical resource URI.",
+					"schema":      schema{"type": "string"},
+				},
+				"OperationLocation": schema{
+					"description": "Canonical Operation URI.",
 					"schema":      schema{"type": "string"},
 				},
 			},
@@ -79,6 +98,183 @@ func buildDocument() schema {
 			"schemas": schemas,
 		},
 	}
+}
+
+func buildPaths() schema {
+	paths := schema{}
+	for _, resource := range []struct {
+		collection string
+		parameter  string
+		kind       string
+		createBody string
+		createID   string
+		readID     string
+	}{
+		{collection: "applications", parameter: "applicationId", kind: "Application", createBody: "CreateApplicationRequest", createID: "createApplication", readID: "getApplication"},
+		{collection: "configurations", parameter: "configurationId", kind: "Configuration", createBody: "CreateConfigurationRequest", createID: "createConfiguration", readID: "getConfiguration"},
+		{collection: "configuration-revisions", parameter: "configurationRevisionId", kind: "ConfigurationRevision", createBody: "CreateConfigurationRevisionRequest", createID: "createConfigurationRevision", readID: "getConfigurationRevision"},
+		{collection: "application-revisions", parameter: "applicationRevisionId", kind: "ApplicationRevision", createBody: "CreateApplicationRevisionRequest", createID: "createApplicationRevision", readID: "getApplicationRevision"},
+	} {
+		paths["/v1/"+resource.collection] = schema{
+			"post": mutationOperation(
+				resource.createID,
+				"Create "+resource.kind,
+				resource.createBody,
+				false,
+				"201",
+			),
+		}
+		paths["/v1/"+resource.collection+"/{"+resource.parameter+"}"] = schema{
+			"get": readOperation(resource.readID, "Get "+resource.kind, resource.parameter, resource.kind),
+		}
+	}
+
+	paths["/v1/deployments"] = schema{
+		"post": mutationOperation("createDeployment", "Create Deployment", "CreateDeploymentRequest", false, "202"),
+	}
+	paths["/v1/deployments/{deploymentId}"] = schema{
+		"get": readOperation("getDeployment", "Get Deployment", "deploymentId", "Deployment"),
+		"put": mutationOperationWithPath(
+			"updateDeployment", "Update Deployment", "deploymentId", "DeploymentSpec", true, "202",
+		),
+	}
+	paths["/v1/deployments/{deploymentId}/rollback"] = schema{
+		"post": mutationOperationWithPath(
+			"rollbackDeployment", "Roll back Deployment", "deploymentId", "RollbackDeploymentRequest", true, "202",
+		),
+	}
+	paths["/v1/deployments/{deploymentId}/generations/{generation}"] = schema{
+		"get": schema{
+			"operationId": "getDeploymentGeneration",
+			"summary":     "Get DeploymentGeneration",
+			"parameters": []any{
+				pathIDParameter("deploymentId"),
+				schema{
+					"name": "generation", "in": "path", "required": true,
+					"schema": schema{"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+				},
+			},
+			"responses": readResponses("DeploymentGeneration"),
+		},
+	}
+	paths["/v1/operations/{operationId}"] = schema{
+		"get": readOperation("getOperation", "Get Operation", "operationId", "Operation"),
+	}
+	return paths
+}
+
+func mutationOperation(
+	operationID string,
+	summary string,
+	bodySchema string,
+	requiresIfMatch bool,
+	successStatus string,
+) schema {
+	parameters := []any{componentRef("#/components/parameters/IdempotencyKey")}
+	if requiresIfMatch {
+		parameters = append(parameters, componentRef("#/components/parameters/IfMatch"))
+	}
+	return schema{
+		"operationId": operationID,
+		"summary":     summary,
+		"parameters":  parameters,
+		"requestBody": jsonRequestBody(bodySchema),
+		"responses":   mutationResponses(successStatus),
+	}
+}
+
+func mutationOperationWithPath(
+	operationID string,
+	summary string,
+	pathParameter string,
+	bodySchema string,
+	requiresIfMatch bool,
+	successStatus string,
+) schema {
+	operation := mutationOperation(operationID, summary, bodySchema, requiresIfMatch, successStatus)
+	parameters := []any{pathIDParameter(pathParameter)}
+	parameters = append(parameters, operation["parameters"].([]any)...)
+	operation["parameters"] = parameters
+	return operation
+}
+
+func readOperation(operationID, summary, pathParameter, responseSchema string) schema {
+	return schema{
+		"operationId": operationID,
+		"summary":     summary,
+		"parameters":  []any{pathIDParameter(pathParameter)},
+		"responses":   readResponses(responseSchema),
+	}
+}
+
+func jsonRequestBody(schemaName string) schema {
+	return schema{
+		"required": true,
+		"content": schema{
+			"application/json": schema{"schema": ref(schemaName)},
+		},
+	}
+}
+
+func mutationResponses(successStatus string) schema {
+	responses := schema{
+		"200": schema{
+			"description": "Durable Operation accepted or completed.",
+			"headers": schema{
+				"Location":           componentRef("#/components/headers/Location"),
+				"Operation-Location": componentRef("#/components/headers/OperationLocation"),
+				"ETag":               componentRef("#/components/headers/ETag"),
+			},
+			"content": schema{
+				"application/json": schema{"schema": ref("Operation")},
+			},
+		},
+		"400": componentRef("#/components/responses/ProblemResponse"),
+		"401": componentRef("#/components/responses/ProblemResponse"),
+		"403": componentRef("#/components/responses/ProblemResponse"),
+		"404": componentRef("#/components/responses/ProblemResponse"),
+		"409": componentRef("#/components/responses/ProblemResponse"),
+		"412": componentRef("#/components/responses/ProblemResponse"),
+		"415": componentRef("#/components/responses/ProblemResponse"),
+		"428": componentRef("#/components/responses/ProblemResponse"),
+		"500": componentRef("#/components/responses/ProblemResponse"),
+		"503": componentRef("#/components/responses/ProblemResponse"),
+		"504": componentRef("#/components/responses/ProblemResponse"),
+	}
+	if successStatus != "200" {
+		responses[successStatus] = responses["200"]
+	}
+	return responses
+}
+
+func readResponses(schemaName string) schema {
+	return schema{
+		"200": schema{
+			"description": "Current tenant-scoped resource.",
+			"headers":     schema{"ETag": componentRef("#/components/headers/ETag")},
+			"content": schema{
+				"application/json": schema{"schema": ref(schemaName)},
+			},
+		},
+		"400": componentRef("#/components/responses/ProblemResponse"),
+		"401": componentRef("#/components/responses/ProblemResponse"),
+		"403": componentRef("#/components/responses/ProblemResponse"),
+		"404": componentRef("#/components/responses/ProblemResponse"),
+		"500": componentRef("#/components/responses/ProblemResponse"),
+		"503": componentRef("#/components/responses/ProblemResponse"),
+		"504": componentRef("#/components/responses/ProblemResponse"),
+	}
+}
+
+func pathIDParameter(name string) schema {
+	return schema{
+		"name": name, "in": "path", "required": true,
+		"schema": ref("ID"),
+	}
+}
+
+func componentRef(path string) schema {
+	return schema{"$ref": path}
 }
 
 func scalarSchemas() map[string]any {
@@ -118,7 +314,7 @@ func enumSchemas() map[string][]string {
 		"PlacementOutcome":            stringsOf(paasv1.PlacementScheduled, paasv1.PlacementUnschedulable),
 		"DeploymentDesiredState":      stringsOf(paasv1.DeploymentDesiredRunning, paasv1.DeploymentDesiredStopped),
 		"DeploymentPhase":             stringsOfSlice(paasv1.DeploymentPhases()),
-		"OperationAction":             stringsOf(paasv1.OperationCreateExecutionPool, paasv1.OperationRegisterExecutionTarget, paasv1.OperationCreatePlacement, paasv1.OperationDeploy, paasv1.OperationUpdate, paasv1.OperationStop, paasv1.OperationRollback),
+		"OperationAction":             stringsOfSlice(paasv1.OperationActions()),
 		"OperationState":              stringsOfSlice(paasv1.OperationStates()),
 		"EvidenceType":                stringsOf(paasv1.EvidencePolicyDecision, paasv1.EvidencePlacementDecision, paasv1.EvidenceAdapterCommand, paasv1.EvidenceAdapterResult, paasv1.EvidenceObservation, paasv1.EvidenceVerification, paasv1.EvidenceAuditDispatch),
 		"EvidenceSeverity":            stringsOf(paasv1.EvidenceInfo, paasv1.EvidenceWarning, paasv1.EvidenceError),
@@ -143,10 +339,12 @@ func structContracts() map[string]reflect.Type {
 		paasv1.AdapterRef{}, paasv1.Capacity{}, paasv1.ExecutionTargetSpec{}, paasv1.ExecutionTargetStatus{}, paasv1.ExecutionTarget{},
 		paasv1.PlacementPolicySpec{}, paasv1.PlacementPolicy{}, paasv1.PlacementDecision{},
 		paasv1.ArtifactRef{}, paasv1.ResourceRequirements{}, paasv1.ApplicationEndpoint{}, paasv1.ComponentInput{},
-		paasv1.SecretVersionReference{}, paasv1.ComponentBinding{}, paasv1.Application{}, paasv1.Configuration{},
-		paasv1.ConfigurationRevisionSpec{}, paasv1.ConfigurationRevision{}, paasv1.ApplicationRevisionComponent{},
-		paasv1.ApplicationRevisionSpec{}, paasv1.ApplicationRevision{}, paasv1.DeploymentComponent{}, paasv1.DeploymentSpec{},
-		paasv1.DeploymentStatus{}, paasv1.Deployment{}, paasv1.DeploymentGeneration{}, paasv1.SubjectRef{}, paasv1.ResourceRef{}, paasv1.FieldViolation{},
+		paasv1.SecretVersionReference{}, paasv1.ComponentBinding{}, paasv1.Application{}, paasv1.CreateApplicationRequest{}, paasv1.Configuration{},
+		paasv1.CreateConfigurationRequest{}, paasv1.ConfigurationRevisionSpec{}, paasv1.ConfigurationRevision{},
+		paasv1.CreateConfigurationRevisionRequest{}, paasv1.ApplicationRevisionComponent{}, paasv1.ApplicationRevisionSpec{},
+		paasv1.ApplicationRevision{}, paasv1.CreateApplicationRevisionRequest{}, paasv1.DeploymentComponent{}, paasv1.DeploymentSpec{},
+		paasv1.DeploymentStatus{}, paasv1.Deployment{}, paasv1.CreateDeploymentRequest{}, paasv1.RollbackDeploymentRequest{},
+		paasv1.DeploymentGeneration{}, paasv1.SubjectRef{}, paasv1.ResourceRef{}, paasv1.FieldViolation{},
 		paasv1.Problem{}, paasv1.Operation{}, paasv1.Evidence{}, paasv1.AdapterCapabilitiesContract{},
 		paasv1.AdapterCommandEnvelope{}, paasv1.InspectExecutionTargetRequest{}, paasv1.ObserveExecutionTargetRequest{},
 		paasv1.DeploymentExecutionRequest{}, paasv1.ObserveDeploymentRequest{}, paasv1.DeploymentEndpointObservation{},
@@ -311,6 +509,7 @@ func applySemanticOverlays(schemas map[string]any) {
 	setIntegerMinimum(schemas, "ObserveDeploymentRequest", "generation", 1)
 	setIntegerMinimum(schemas, "DeploymentEndpointObservation", "port", 1)
 	setIntegerMinimum(schemas, "DeploymentObservation", "generation", 1)
+	setIntegerMinimum(schemas, "RollbackDeploymentRequest", "sourceGeneration", 1)
 
 	componentBinding := object(schemas["ComponentBinding"])
 	componentBinding["oneOf"] = []any{

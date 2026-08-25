@@ -22,6 +22,7 @@ import (
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/domain/placement"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/createplacement"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/operationqueue"
@@ -72,6 +73,7 @@ func TestPostgresGateBIntegration(t *testing.T) {
 	prefix := fmt.Sprintf("gateb-%x", time.Now().UnixNano())
 	fixture := seedGateBFixture(t, ctx, admin, prefix)
 	applicationResult := assertApplicationLifecycle(t, ctx, admin, apiPool, fixture, prefix)
+	assertAuditPersistenceAndFencing(t, ctx, admin, apiPool, workerPool, applicationResult)
 	assertOperationQueue(t, ctx, admin, workerPool, applicationResult)
 	planner, err := placement.NewV1Planner(5 * time.Minute)
 	if err != nil {
@@ -164,6 +166,7 @@ func TestPostgresGateBIntegration(t *testing.T) {
 		fixture,
 		prefix,
 	)
+	assertNorthboundIAMAudit(t, ctx, admin, apiPool, workerPool, fixture, prefix)
 }
 
 type gateBFixture struct {
@@ -200,6 +203,20 @@ func integrationPlacementGuard(command createplacement.Command) operationqueue.L
 	return operationqueue.LeaseGuard{
 		TenantID: command.TenantID, OperationID: command.OperationID,
 		WorkerID: "worker-placement", FencingToken: 1,
+	}
+}
+
+func integrationAuthorization(
+	tenantID paasv1.TenantID,
+	subject paasv1.SubjectRef,
+	requestSeed string,
+) port.Authorization {
+	return port.Authorization{
+		TenantID:   tenantID,
+		Subject:    subject,
+		DecisionID: "decision-" + requestSeed,
+		RequestID:  "request-" + requestSeed,
+		AuditID:    "audit-" + requestSeed,
 	}
 }
 
@@ -872,15 +889,15 @@ func assertApplicationLifecycle(
 	}
 	deploymentID := paasv1.ResourceID(prefix + "-submitted-deployment")
 	command := applicationlifecycle.SubmitCommand{
-		TenantID:       fixture.tenantA,
+		Authorization: integrationAuthorization(
+			fixture.tenantA,
+			paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "integration-user"},
+			"submit-deployment",
+		),
 		DeploymentID:   deploymentID,
 		Name:           "submitted",
 		Spec:           applicationIntegrationSpec(fixture, fixture.configurationRevisionIDs[0]),
 		IdempotencyKey: "submit-deployment",
-		RequestedBy: paasv1.SubjectRef{
-			Type: paasv1.SubjectUser,
-			ID:   "integration-user",
-		},
 	}
 	created, err := usecase.Submit(ctx, command)
 	if err != nil {
@@ -971,6 +988,7 @@ func assertApplicationLifecycle(
 	var deployments int
 	var generations int
 	var operations int
+	var auditEvents int
 	if err := admin.QueryRow(
 		ctx,
 		`SELECT
@@ -979,18 +997,21 @@ func assertApplicationLifecycle(
 		    (SELECT count(*) FROM paas.deployment_generations
 		      WHERE tenant_id = $1 AND deployment_id = $2),
 		    (SELECT count(*) FROM paas.operations
-		      WHERE tenant_id = $1 AND target_id = $2)`,
+		      WHERE tenant_id = $1 AND target_id = $2),
+		    (SELECT count(*) FROM paas.audit_outbox
+		      WHERE tenant_id = $1 AND document#>>'{target,id}' = $2)`,
 		fixture.tenantA,
 		faultDeploymentID,
-	).Scan(&deployments, &generations, &operations); err != nil {
+	).Scan(&deployments, &generations, &operations, &auditEvents); err != nil {
 		t.Fatalf("inspect rolled-back application submission: %v", err)
 	}
-	if deployments != 0 || generations != 0 || operations != 0 {
+	if deployments != 0 || generations != 0 || operations != 0 || auditEvents != 0 {
 		t.Fatalf(
-			"application transaction leaked rows: deployments=%d generations=%d operations=%d",
+			"application transaction leaked rows: deployments=%d generations=%d operations=%d audit=%d",
 			deployments,
 			generations,
 			operations,
+			auditEvents,
 		)
 	}
 	return created

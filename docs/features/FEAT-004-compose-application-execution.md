@@ -1,6 +1,6 @@
 # FEAT-004: Compose application execution
 
-- Status: Gate A accepted; Gate B implementation pending
+- Status: Gate A and Gate B accepted; Gate C implementation pending
 - Target release: Private Application PaaS v0.1
 - Executor contract version: `v1`
 - Target design date: 2026-08-25
@@ -58,7 +58,7 @@ implementation tactics only through a recorded adoption decision.
 | Verified digest to local Docker image mapping | `ArtifactResolver` port |
 | Exact secret-version material | `SecretResolver` port |
 | Tenant authentication and authorization | IAM-facing `Authorizer` port |
-| Audit retention and query | Audit-facing port; FEAT-004 retains only sanitized execution evidence |
+| Audit ingestion, retention, and query | Audit-facing `AuditIngestor` port; apphosting retains only its sanitized transactional outbox |
 
 The application use cases are create immutable resource, apply Deployment,
 rollback Deployment, claim/reconcile Operation, and read current state. Their
@@ -179,7 +179,8 @@ and any requested isolation other than WORKLOAD.
 ## Persistence and isolation
 
 A forward migration adds Configuration, ConfigurationRevision, immutable
-Deployment generation, Operation, command, receipt, and observation tables.
+Deployment generation, Operation, transactional Audit outbox, command,
+receipt, and observation tables.
 Tenant-owned tables use tenant-leading keys, explicit predicates, and forced
 RLS. Separate non-login API and worker group roles receive only their required
 columns and functions; neither owns schema objects or bypasses RLS.
@@ -254,9 +255,16 @@ file layout, command call order, or implementation counts.
 - Gate A completed on 2026-08-25 on one worktree with generation drift, unit,
   vet, race, ten-run, schema, architecture, a real PostgreSQL 18 regression,
   placement fuzz, four OS/architecture builds, and repository-diff checks
-  passing. Gate B remains unaccepted until its northbound IAM/Audit boundary
-  and final combined regression pass; Gate C real Compose effects remain
-  unaccepted.
+  passing.
+- Gate B completed on 2026-08-25. The standard-library HTTP surface admits
+  trusted tenant/subject identity only from the IAM-facing Authorizer and
+  commits each accepted mutation with a fixed sanitized Audit outbox event.
+  PostgreSQL 18 apply-twice verification and non-bypass logins prove API/worker
+  privilege separation, RLS, exact replay/conflict, transactional rollback,
+  at-least-once Audit retry, lease recovery, and stale-fence rejection. The
+  combined generation, unit, vet, race, ten-run, schema, architecture, fuzz,
+  cross-platform build, Markdown-link, stale-term, and diff gates pass on the
+  same worktree. Gate C real Compose effects remain unaccepted.
 
 ## Deferred
 
