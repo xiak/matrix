@@ -88,6 +88,14 @@ service binding. It returns one immutable decision ID and either an exact
 authorized tenant/subject or a normalized denial. Authentication, policy, or
 database uncertainty fails closed.
 
+`POST /v1/installation:verify` is the one fixed service-as-subject boundary.
+It accepts only the verifier service Bearer, `installation.verify`, and the
+bootstrap installation resource; a subject credential or another action is
+rejected. IAM reloads the verifier's current service credential, role binding,
+organization, and bootstrap receipt for every decision, so revocation and an
+installation mismatch fail closed without granting the verifier any generic
+PaaS, Audit, or IAM authority.
+
 An authenticated service can read only the identity bound to its current
 Bearer through `GET /v1/service-identity`. The endpoint accepts no request
 body, tenant, principal, purpose, source, or other selector. Audit uses that

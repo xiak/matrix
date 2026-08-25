@@ -172,6 +172,21 @@ func TestIAMOpenAPICredentialBoundaries(t *testing.T) {
 	if len(requirement) != 2 || requirement["ServiceCredential"] == nil || requirement["SubjectCredential"] == nil {
 		t.Fatalf("authorize security = %#v, want service and subject credentials", requirement)
 	}
+	verificationPath := mustIAMObject(t, paths["/v1/installation:verify"], "installation verification path")
+	verification := mustIAMObject(t, verificationPath["post"], "installation verification operation")
+	verificationSecurity, ok := verification["security"].([]any)
+	if !ok || len(verificationSecurity) != 1 {
+		t.Fatalf("installation verification security = %#v, want one requirement", verification["security"])
+	}
+	verificationRequirement := mustIAMObject(
+		t, verificationSecurity[0], "installation verification security requirement",
+	)
+	if len(verificationRequirement) != 1 || verificationRequirement["ServiceCredential"] == nil {
+		t.Fatalf(
+			"installation verification security = %#v, want only verifier service credential",
+			verificationRequirement,
+		)
+	}
 
 	identityPath := mustIAMObject(t, paths["/v1/service-identity"], "service identity path")
 	identity := mustIAMObject(t, identityPath["get"], "service identity operation")

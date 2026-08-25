@@ -44,6 +44,32 @@ func TestIAMCoreUsecasesBindCredentialsAndRecordClosedAuthorization(t *testing.T
 	if err != nil || identity.Purpose != iamv1.ServicePaaS || identity.PrincipalID != "service-paas" {
 		t.Fatalf("resolve PaaS service identity: identity=%#v err=%v", identity, err)
 	}
+	verifierCredential := document.Services[4].Credential
+	verificationRequest := iamv1.AuthorizationRequest{
+		Action: iamv1.ActionInstallationVerify,
+		Resource: iamv1.ResourceReference{
+			Kind: iamv1.ResourceInstallation, ID: document.InstallationID,
+		},
+		RequestID: "request-installation-verify", CorrelationID: "correlation-installation-verify",
+	}
+	verificationDecision, err := service.VerifyInstallation(
+		context.Background(), verifierCredential, verificationRequest,
+	)
+	if err != nil || !verificationDecision.Allowed || verificationDecision.Subject == nil ||
+		verificationDecision.Subject.Type != iamv1.PrincipalServiceAccount ||
+		verificationDecision.Subject.ID != "service-verifier" {
+		t.Fatalf("installation verification decision=%#v err=%v", verificationDecision, err)
+	}
+	verificationRequest.Resource.ID = "installation-other"
+	verificationRequest.RequestID = "request-installation-other"
+	verificationRequest.CorrelationID = verificationRequest.RequestID
+	verificationDecision, err = service.VerifyInstallation(
+		context.Background(), verifierCredential, verificationRequest,
+	)
+	if err != nil || verificationDecision.Allowed {
+		t.Fatalf("cross-installation verification decision=%#v err=%v", verificationDecision, err)
+	}
+	verificationRequest.Resource.ID = document.InstallationID
 
 	wrongPassword := coreSecret(t, "Wrong-Admin-Password-73!")
 	if _, err := service.Login(context.Background(), iamv1.LoginRequest{
@@ -186,14 +212,31 @@ func TestIAMCoreUsecasesBindCredentialsAndRecordClosedAuthorization(t *testing.T
 	if _, err := service.Authorize(context.Background(), paasCredential, developerLogin.Credential, request); !errors.Is(err, ErrUnauthenticated) {
 		t.Fatalf("revoked developer session error=%v, want unauthenticated", err)
 	}
+	verifierRevocation, err := service.RevokeRoleBinding(
+		context.Background(),
+		login.Credential,
+		"bootstrap-verifier-binding",
+		iamv1.RevokeRoleBindingRequest{RequestID: "request-revoke-verifier-binding"},
+	)
+	if err != nil || verifierRevocation.ID != "bootstrap-verifier-binding" {
+		t.Fatalf("revoke installation verifier binding: revocation=%#v err=%v", verifierRevocation, err)
+	}
+	verificationRequest.RequestID = "request-installation-after-role-revoke"
+	verificationRequest.CorrelationID = verificationRequest.RequestID
+	verificationDecision, err = service.VerifyInstallation(
+		context.Background(), verifierCredential, verificationRequest,
+	)
+	if err != nil || verificationDecision.Allowed {
+		t.Fatalf("revoked installation verifier decision=%#v err=%v", verificationDecision, err)
+	}
 	logout, err := service.Logout(
 		context.Background(), login.Credential, iamv1.LogoutRequest{RequestID: "request-admin-logout"},
 	)
 	if err != nil || logout.RevokedAt != repository.transaction.now {
 		t.Fatalf("logout administrator: response=%#v err=%v", logout, err)
 	}
-	if len(repository.transaction.authorizations) != 10 {
-		t.Fatalf("stored authorization decisions=%d want=10", len(repository.transaction.authorizations))
+	if len(repository.transaction.authorizations) != 14 {
+		t.Fatalf("stored authorization decisions=%d want=14", len(repository.transaction.authorizations))
 	}
 	for _, mutation := range repository.transaction.authorizations {
 		if mutation.AuditEvent.IAMDecisionID != auditv1.DecisionID(mutation.Decision.ID) ||
@@ -325,6 +368,14 @@ func (transaction *coreTransaction) ApplyBootstrap(
 			},
 			VerificationDigest: service.VerificationDigest,
 		}
+		if service.Purpose == iamv1.ServiceInstallationVerifier {
+			transaction.bindings["bootstrap-verifier-binding"] = iamv1.RoleBinding{
+				APIVersion: iamv1.APIVersion, Kind: "RoleBinding", ID: "bootstrap-verifier-binding",
+				OrganizationID: mutation.Organization.ID, PrincipalID: service.PrincipalID,
+				Role: iamv1.RoleInstallationVerifier, ResourceVersion: 1,
+				CreatedAt: transaction.now, UpdatedAt: transaction.now,
+			}
+		}
 	}
 	return authority.BootstrapApply, nil
 }
@@ -418,6 +469,23 @@ func (transaction *coreTransaction) LookupService(
 ) (ServiceCredential, bool, error) {
 	binding, found := transaction.services[lookupDigest]
 	return binding, found, nil
+}
+
+func (transaction *coreTransaction) LookupServiceRoles(
+	_ context.Context,
+	organizationID iamv1.OrganizationID,
+	principalID iamv1.PrincipalID,
+) ([]iamv1.BuiltinRole, error) {
+	if organizationID != transaction.organization.ID {
+		return nil, ErrUnavailable
+	}
+	roles := make([]iamv1.BuiltinRole, 0)
+	for _, binding := range transaction.bindings {
+		if binding.OrganizationID == organizationID && binding.PrincipalID == principalID {
+			roles = append(roles, binding.Role)
+		}
+	}
+	return roles, nil
 }
 
 func (transaction *coreTransaction) RecordAuthorization(

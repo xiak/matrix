@@ -44,6 +44,11 @@ type Workflow interface {
 		iamv1.Secret,
 		iamv1.AuthorizationRequest,
 	) (iamv1.AuthorizationDecision, error)
+	VerifyInstallation(
+		context.Context,
+		iamv1.Secret,
+		iamv1.AuthorizationRequest,
+	) (iamv1.AuthorizationDecision, error)
 }
 
 type Config struct {
@@ -74,6 +79,7 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/auth/logout", value.logout)
 	routes.HandleFunc("/v1/auth/password", value.changePassword)
 	routes.HandleFunc("/v1/authorize", value.authorize)
+	routes.HandleFunc("/v1/installation:verify", value.verifyInstallation)
 	routes.HandleFunc("/v1/principals", value.createUser)
 	routes.HandleFunc("/v1/role-bindings", value.putRoleBinding)
 	routes.HandleFunc("/v1/role-bindings/", value.revokeRoleBinding)
@@ -308,6 +314,38 @@ func (value *handler) authorize(response http.ResponseWriter, request *http.Requ
 		serviceCredential,
 		subjectCredential,
 		body,
+	)
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, decision)
+}
+
+func (value *handler) verifyInstallation(response http.ResponseWriter, request *http.Request) {
+	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+		return
+	}
+	if len(request.Header.Values("Matrix-Subject-Credential")) != 0 {
+		writeProblem(
+			response,
+			requestID(request),
+			http.StatusBadRequest,
+			"iam.header.unsupported",
+			"IAM header unsupported",
+		)
+		return
+	}
+	serviceCredential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	body, ok := decodeJSON[iamv1.AuthorizationRequest](value, response, request)
+	if !ok {
+		return
+	}
+	decision, err := value.workflow.VerifyInstallation(
+		request.Context(), serviceCredential, body,
 	)
 	if err != nil {
 		value.writeError(response, request, err)

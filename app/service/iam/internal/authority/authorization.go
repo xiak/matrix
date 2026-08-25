@@ -58,6 +58,53 @@ func Decide(
 	if err := validateSubjectContext(context, databaseTime); err != nil {
 		return iamv1.AuthorizationDecision{}, err
 	}
+	return decide(
+		context.Organization.ID,
+		iamv1.Subject{Type: context.Principal.Type, ID: context.Principal.ID},
+		context.Principal.MustChangePassword,
+		context.Roles,
+		callingService,
+		request,
+		decisionID,
+		databaseTime,
+	)
+}
+
+// DecideService authorizes the credential-bound service as its own subject.
+// The installation verification endpoint is its only Phase 1 consumer.
+func DecideService(
+	identity iamv1.ServiceIdentity,
+	roles []iamv1.BuiltinRole,
+	request iamv1.AuthorizationRequest,
+	decisionID iamv1.DecisionID,
+	databaseTime time.Time,
+) (iamv1.AuthorizationDecision, error) {
+	if iamv1.ValidateServiceIdentity(identity) != nil ||
+		validateAuthorityTime(databaseTime) != nil || validateRoles(roles) != nil {
+		return iamv1.AuthorizationDecision{}, ErrAuthorityUnavailable
+	}
+	return decide(
+		identity.OrganizationID,
+		iamv1.Subject{Type: iamv1.PrincipalServiceAccount, ID: identity.PrincipalID},
+		false,
+		roles,
+		identity.Purpose,
+		request,
+		decisionID,
+		databaseTime,
+	)
+}
+
+func decide(
+	tenantID iamv1.OrganizationID,
+	subject iamv1.Subject,
+	mustChangePassword bool,
+	roles []iamv1.BuiltinRole,
+	callingService iamv1.ServicePurpose,
+	request iamv1.AuthorizationRequest,
+	decisionID iamv1.DecisionID,
+	databaseTime time.Time,
+) (iamv1.AuthorizationDecision, error) {
 	if iamv1.ValidateAuthorizationRequest(request) != nil {
 		return iamv1.AuthorizationDecision{}, ErrInvalidAuthorizationRequest
 	}
@@ -68,8 +115,8 @@ func Decide(
 		return iamv1.AuthorizationDecision{}, ErrAuthorityUnavailable
 	}
 	allowed := false
-	if !context.Principal.MustChangePassword && ServiceCanRequest(callingService, request.Action) {
-		for _, role := range context.Roles {
+	if !mustChangePassword && ServiceCanRequest(callingService, request.Action) {
+		for _, role := range roles {
 			if RoleAllows(role, request.Action) {
 				allowed = true
 				break
@@ -89,8 +136,8 @@ func Decide(
 	}
 	if allowed {
 		decision.Reason = iamv1.DecisionAllowed
-		decision.TenantID = context.Organization.ID
-		decision.Subject = &iamv1.Subject{Type: context.Principal.Type, ID: context.Principal.ID}
+		decision.TenantID = tenantID
+		decision.Subject = &subject
 	}
 	if err := iamv1.ValidateAuthorizationDecision(decision); err != nil {
 		return iamv1.AuthorizationDecision{}, ErrAuthorityUnavailable
@@ -179,8 +226,12 @@ func validateSubjectContext(context SubjectContext, databaseTime time.Time) erro
 		!databaseTime.Before(context.Session.ExpiresAt) {
 		return ErrUnauthenticated
 	}
+	return validateRoles(context.Roles)
+}
+
+func validateRoles(roles []iamv1.BuiltinRole) error {
 	seen := map[iamv1.BuiltinRole]struct{}{}
-	for _, role := range context.Roles {
+	for _, role := range roles {
 		if _, duplicate := seen[role]; duplicate || !knownRole(role) {
 			return ErrAuthorityUnavailable
 		}

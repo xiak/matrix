@@ -331,6 +331,35 @@ func (value *transaction) LookupService(
 	}, true, nil
 }
 
+func (value *transaction) LookupServiceRoles(
+	ctx context.Context,
+	organizationID iamv1.OrganizationID,
+	principalID iamv1.PrincipalID,
+) ([]iamv1.BuiltinRole, error) {
+	if iamv1.ValidateID("organizationId", string(organizationID)) != nil ||
+		iamv1.ValidateID("principalId", string(principalID)) != nil {
+		return nil, identityaccess.ErrInvalidArgument
+	}
+	var stored []string
+	err := value.tx.QueryRow(
+		ctx,
+		"SELECT * FROM iam.lookup_service_roles($1, $2)",
+		string(organizationID),
+		string(principalID),
+	).Scan(&stored)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, identityaccess.ErrUnavailable
+	}
+	if err != nil {
+		return nil, mapDatabaseError("lookup IAM service roles", err)
+	}
+	roles := make([]iamv1.BuiltinRole, 0, len(stored))
+	for _, role := range stored {
+		roles = append(roles, iamv1.BuiltinRole(role))
+	}
+	return roles, nil
+}
+
 func (value *transaction) LookupPassword(
 	ctx context.Context,
 	organizationID iamv1.OrganizationID,

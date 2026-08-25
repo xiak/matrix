@@ -83,6 +83,54 @@ func TestFixedRBACAllowsCurrentBindingAndDeniesWithoutAuthorityLeak(t *testing.T
 	}
 }
 
+func TestInstallationVerifierServiceCanAuthorizeOnlyItsFixedAction(t *testing.T) {
+	now := authorityTestTime()
+	identity := iamv1.ServiceIdentity{
+		APIVersion:     iamv1.APIVersion,
+		Kind:           "ServiceIdentity",
+		OrganizationID: "organization-example",
+		PrincipalID:    "service-installation-verifier",
+		Purpose:        iamv1.ServiceInstallationVerifier,
+	}
+	request := iamv1.AuthorizationRequest{
+		Action: iamv1.ActionInstallationVerify,
+		Resource: iamv1.ResourceReference{
+			Kind: iamv1.ResourceInstallation, ID: "installation-example",
+		},
+		RequestID: "request-installation-verify", CorrelationID: "correlation-installation-verify",
+	}
+	allowed, err := DecideService(
+		identity,
+		[]iamv1.BuiltinRole{iamv1.RoleInstallationVerifier},
+		request,
+		"decision-installation-verify",
+		now,
+	)
+	if err != nil || !allowed.Allowed || allowed.TenantID != identity.OrganizationID ||
+		allowed.Subject == nil || allowed.Subject.Type != iamv1.PrincipalServiceAccount ||
+		allowed.Subject.ID != identity.PrincipalID {
+		t.Fatalf("installation verifier decision=%#v err=%v", allowed, err)
+	}
+
+	withoutRole, err := DecideService(
+		identity, nil, request, "decision-installation-without-role", now,
+	)
+	if err != nil || withoutRole.Allowed || withoutRole.Subject != nil || withoutRole.TenantID != "" {
+		t.Fatalf("unbound installation verifier decision=%#v err=%v", withoutRole, err)
+	}
+	identity.Purpose = iamv1.ServicePaaS
+	wrongPurpose, err := DecideService(
+		identity,
+		[]iamv1.BuiltinRole{iamv1.RoleInstallationVerifier},
+		request,
+		"decision-installation-wrong-purpose",
+		now,
+	)
+	if err != nil || wrongPurpose.Allowed {
+		t.Fatalf("wrong-purpose verifier decision=%#v err=%v", wrongPurpose, err)
+	}
+}
+
 func TestEveryIAMActionHasOnlyFixedRoleAuthority(t *testing.T) {
 	roles := iamv1.AllBuiltinRoles()
 	services := iamv1.AllServicePurposes()

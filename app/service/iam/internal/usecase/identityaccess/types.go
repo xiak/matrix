@@ -41,6 +41,11 @@ type Transaction interface {
 	LookupSession(context.Context, string) (SessionCredential, bool, error)
 	LookupPassword(context.Context, iamv1.OrganizationID, iamv1.PrincipalID) (authority.PasswordHash, bool, error)
 	LookupService(context.Context, string) (ServiceCredential, bool, error)
+	LookupServiceRoles(
+		context.Context,
+		iamv1.OrganizationID,
+		iamv1.PrincipalID,
+	) ([]iamv1.BuiltinRole, error)
 	RecordAuthorization(context.Context, AuthorizationMutation) error
 	ChangePassword(context.Context, PasswordMutation) (iamv1.ChangePasswordResponse, error)
 	RevokeSession(context.Context, SessionRevocationMutation) (iamv1.Revocation, bool, error)

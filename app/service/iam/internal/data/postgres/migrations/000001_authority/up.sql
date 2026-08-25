@@ -910,6 +910,52 @@ BEGIN
 END
 $function$;
 
+CREATE OR REPLACE FUNCTION iam.lookup_service_roles(
+    submitted_tenant_id text,
+    submitted_principal_id text
+)
+RETURNS TABLE (roles text[])
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+BEGIN
+    IF submitted_tenant_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_principal_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'IAM service subject is invalid';
+    END IF;
+    PERFORM set_config('matrix.iam_tenant_id', submitted_tenant_id, true);
+    RETURN QUERY
+    SELECT COALESCE(ARRAY(
+               SELECT binding.role_name
+                 FROM iam.role_bindings AS binding
+                WHERE binding.tenant_id = principal.tenant_id
+                  AND binding.principal_id = principal.id
+                  AND binding.revoked_at IS NULL
+                ORDER BY binding.role_name
+           ), ARRAY[]::text[])
+      FROM iam.organizations AS organization
+      JOIN iam.principals AS principal
+        ON principal.tenant_id = organization.id
+     WHERE organization.id = submitted_tenant_id
+       AND organization.status = 'ACTIVE'
+       AND principal.id = submitted_principal_id
+       AND principal.principal_type = 'SERVICE_ACCOUNT'
+       AND principal.status = 'ACTIVE'
+       AND EXISTS (
+           SELECT 1
+             FROM iam.service_credentials AS credential
+            WHERE credential.tenant_id = principal.tenant_id
+              AND credential.principal_id = principal.id
+              AND credential.revoked_at IS NULL
+       );
+END
+$function$;
+
 CREATE OR REPLACE FUNCTION iam.record_authorization(
     submitted_tenant_id text,
     submitted_principal_id text,
@@ -1713,6 +1759,7 @@ GRANT EXECUTE ON FUNCTION iam.issue_session(
 ) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.lookup_session(text) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.lookup_service(text) TO matrix_iam_api;
+GRANT EXECUTE ON FUNCTION iam.lookup_service_roles(text, text) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.lookup_password(text, text) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.record_authorization(
     text, text, jsonb, jsonb

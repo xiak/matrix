@@ -106,6 +106,10 @@ func buildPaths() object {
 			"authorize", "Authorize a transient subject for one action", "AuthorizationRequest", "AuthorizationDecision", "200",
 			[]any{object{"ServiceCredential": []string{}, "SubjectCredential": []string{}}}, nil,
 		)},
+		"/v1/installation:verify": object{"post": mutationOperation(
+			"verifyInstallation", "Authorize the credential-bound installation verifier", "AuthorizationRequest", "AuthorizationDecision", "200",
+			[]any{object{"ServiceCredential": []string{}}}, nil,
+		)},
 	}
 }
 

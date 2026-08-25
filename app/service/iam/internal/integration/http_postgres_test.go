@@ -32,6 +32,7 @@ const (
 	changedDeveloperPassword = "Changed-Developer-Password-95!"
 	paasCredential           = "mx1.PaaSHTTPIntegrationCredential000000000000001"
 	auditCredential          = "mx1.AuditHTTPIntegrationCredential00000000000001"
+	verifierCredential       = "mx1.VerifierHTTPIntegrationCredential0000000001"
 )
 
 func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
@@ -118,6 +119,33 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 	if err := json.Unmarshal(identity.Body.Bytes(), &serviceIdentity); err != nil ||
 		serviceIdentity.Purpose != iamv1.ServicePaaS || serviceIdentity.PrincipalID != "service-paas" {
 		t.Fatalf("IAM service identity=%#v err=%v", serviceIdentity, err)
+	}
+	verificationBody := []byte(`{"action":"installation.verify","resource":{"kind":"INSTALLATION","id":"installation-http-integration"},"requestId":"request-installation-verify","correlationId":"correlation-installation-verify"}`)
+	verification := performIAMRequest(
+		handler, http.MethodPost, "/v1/installation:verify", verifierCredential, verificationBody,
+	)
+	var verificationDecision iamv1.AuthorizationDecision
+	if verification.Code != http.StatusOK ||
+		json.Unmarshal(verification.Body.Bytes(), &verificationDecision) != nil ||
+		!verificationDecision.Allowed || verificationDecision.Subject == nil ||
+		verificationDecision.Subject.Type != iamv1.PrincipalServiceAccount ||
+		verificationDecision.Subject.ID != "service-verifier" {
+		t.Fatalf(
+			"IAM installation verification status=%d decision=%#v body=%s",
+			verification.Code, verificationDecision, verification.Body.String(),
+		)
+	}
+	verificationBody = []byte(`{"action":"installation.verify","resource":{"kind":"INSTALLATION","id":"installation-other"},"requestId":"request-installation-other","correlationId":"correlation-installation-other"}`)
+	verification = performIAMRequest(
+		handler, http.MethodPost, "/v1/installation:verify", verifierCredential, verificationBody,
+	)
+	if verification.Code != http.StatusOK ||
+		json.Unmarshal(verification.Body.Bytes(), &verificationDecision) != nil ||
+		verificationDecision.Allowed {
+		t.Fatalf(
+			"IAM cross-installation verification status=%d decision=%#v body=%s",
+			verification.Code, verificationDecision, verification.Body.String(),
+		)
 	}
 
 	loginBody := []byte(`{"loginName":"admin","password":"` + adminPassword + `","requestId":"request-login"}`)
@@ -332,6 +360,31 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 	if developerAuthorize.Code != http.StatusUnauthorized {
 		t.Fatalf("IAM revoked session authorize status=%d body=%s", developerAuthorize.Code, developerAuthorize.Body.String())
 	}
+	verifierRevocation := performIAMRequest(
+		handler,
+		http.MethodPost,
+		"/v1/role-bindings/bootstrap-verifier-binding:revoke",
+		loginWire.Credential,
+		[]byte(`{"requestId":"request-revoke-verifier-binding"}`),
+	)
+	if verifierRevocation.Code != http.StatusOK {
+		t.Fatalf(
+			"IAM verifier role revocation status=%d body=%s",
+			verifierRevocation.Code, verifierRevocation.Body.String(),
+		)
+	}
+	verificationBody = []byte(`{"action":"installation.verify","resource":{"kind":"INSTALLATION","id":"installation-http-integration"},"requestId":"request-installation-revoked","correlationId":"correlation-installation-revoked"}`)
+	verification = performIAMRequest(
+		handler, http.MethodPost, "/v1/installation:verify", verifierCredential, verificationBody,
+	)
+	if verification.Code != http.StatusOK ||
+		json.Unmarshal(verification.Body.Bytes(), &verificationDecision) != nil ||
+		verificationDecision.Allowed {
+		t.Fatalf(
+			"IAM revoked verifier status=%d decision=%#v body=%s",
+			verification.Code, verificationDecision, verification.Body.String(),
+		)
+	}
 	wrongService := performIAMRequestWithSubject(handler, authorizeBody, "wrong-service-credential", loginWire.Credential)
 	if wrongService.Code != http.StatusUnauthorized {
 		t.Fatalf("wrong service credential status=%d body=%s", wrongService.Code, wrongService.Body.String())
@@ -353,6 +406,7 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 		admin,
 		paasCredential,
 		auditCredential,
+		verifierCredential,
 		adminPassword,
 		changedAdminPassword,
 		initialDeveloperPassword,
@@ -370,7 +424,7 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 	).Scan(&sessions, &decisions, &outbox); err != nil {
 		t.Fatalf("inspect IAM HTTP facts: %v", err)
 	}
-	if sessions != 2 || decisions != 10 || outbox != 20 {
+	if sessions != 2 || decisions != 14 || outbox != 25 {
 		t.Fatalf("IAM HTTP facts sessions=%d decisions=%d outbox=%d", sessions, decisions, outbox)
 	}
 	var crossTenantBindings int
@@ -564,7 +618,7 @@ func iamHTTPBootstrap(t *testing.T) iamv1.BootstrapDocument {
 			service(iamv1.ServicePaaS, "service-paas", paasCredential),
 			service(iamv1.ServiceAudit, "service-audit", auditCredential),
 			service(iamv1.ServiceAPISIX, "service-apisix", "mx1.APISIXHTTPIntegrationCredential000000000001"),
-			service(iamv1.ServiceInstallationVerifier, "service-verifier", "mx1.VerifierHTTPIntegrationCredential0000000001"),
+			service(iamv1.ServiceInstallationVerifier, "service-verifier", verifierCredential),
 		},
 	}
 }

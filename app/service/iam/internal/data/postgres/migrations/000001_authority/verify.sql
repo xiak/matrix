@@ -117,6 +117,9 @@ BEGIN
        )
        OR NOT has_function_privilege('matrix_iam_api', 'iam.lookup_session(text)', 'EXECUTE')
        OR NOT has_function_privilege('matrix_iam_api', 'iam.lookup_service(text)', 'EXECUTE')
+       OR NOT has_function_privilege(
+            'matrix_iam_api', 'iam.lookup_service_roles(text,text)', 'EXECUTE'
+       )
        OR NOT has_function_privilege('matrix_iam_api', 'iam.lookup_password(text,text)', 'EXECUTE')
        OR NOT has_function_privilege(
             'matrix_iam_api',

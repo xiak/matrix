@@ -73,6 +73,40 @@ func TestIAMHTTPExposesOnlyCredentialBoundCoreRoutes(t *testing.T) {
 	if err := json.Unmarshal(authorizeResponse.Body.Bytes(), &decision); err != nil || !reflect.DeepEqual(decision, workflow.decision) {
 		t.Fatalf("decode authorization decision: decision=%#v err=%v", decision, err)
 	}
+
+	verifyBody := `{"action":"installation.verify","resource":{"kind":"INSTALLATION","id":"installation-example"},"requestId":"request-installation-verify","correlationId":"correlation-installation-verify"}`
+	verifyRequest := httptest.NewRequest(
+		http.MethodPost, "/v1/installation:verify", strings.NewReader(verifyBody),
+	)
+	verifyRequest.Header.Set("Content-Type", "application/json")
+	verifyRequest.Header.Set("Authorization", "Bearer verifier-credential")
+	verifyResponse := httptest.NewRecorder()
+	handler.ServeHTTP(verifyResponse, verifyRequest)
+	if verifyResponse.Code != http.StatusOK || workflow.verifyInstallationCalls != 1 {
+		t.Fatalf(
+			"installation verify status=%d calls=%d body=%s",
+			verifyResponse.Code, workflow.verifyInstallationCalls, verifyResponse.Body.String(),
+		)
+	}
+	if err := json.Unmarshal(verifyResponse.Body.Bytes(), &decision); err != nil ||
+		!reflect.DeepEqual(decision, workflow.verificationDecision) {
+		t.Fatalf("decode installation verification decision: decision=%#v err=%v", decision, err)
+	}
+
+	unexpectedSubject := httptest.NewRequest(
+		http.MethodPost, "/v1/installation:verify", strings.NewReader(verifyBody),
+	)
+	unexpectedSubject.Header.Set("Content-Type", "application/json")
+	unexpectedSubject.Header.Set("Authorization", "Bearer verifier-credential")
+	unexpectedSubject.Header.Set("Matrix-Subject-Credential", "user-session")
+	unexpectedSubjectResponse := httptest.NewRecorder()
+	handler.ServeHTTP(unexpectedSubjectResponse, unexpectedSubject)
+	if unexpectedSubjectResponse.Code != http.StatusBadRequest || workflow.verifyInstallationCalls != 1 {
+		t.Fatalf(
+			"unexpected installation subject status=%d calls=%d",
+			unexpectedSubjectResponse.Code, workflow.verifyInstallationCalls,
+		)
+	}
 }
 
 func TestIAMHTTPStrictDecodingAndRedactedProblems(t *testing.T) {
@@ -221,15 +255,17 @@ func TestIAMHTTPManagementCommandsRequireCurrentSession(t *testing.T) {
 }
 
 type httpWorkflow struct {
-	readiness      iamv1.Readiness
-	status         iamv1.BootstrapStatus
-	identity       iamv1.ServiceIdentity
-	login          iamv1.LoginResponse
-	decision       iamv1.AuthorizationDecision
-	loginErr       error
-	identityCalls  int
-	loginCalls     int
-	authorizeCalls int
+	readiness               iamv1.Readiness
+	status                  iamv1.BootstrapStatus
+	identity                iamv1.ServiceIdentity
+	login                   iamv1.LoginResponse
+	decision                iamv1.AuthorizationDecision
+	verificationDecision    iamv1.AuthorizationDecision
+	loginErr                error
+	identityCalls           int
+	loginCalls              int
+	authorizeCalls          int
+	verifyInstallationCalls int
 }
 
 func newHTTPWorkflow(t *testing.T) *httpWorkflow {
@@ -241,7 +277,7 @@ func newHTTPWorkflow(t *testing.T) *httpWorkflow {
 		t.Fatalf("create HTTP test credential: %v", err)
 	}
 	subject := &iamv1.Subject{Type: iamv1.PrincipalUser, ID: "principal-admin"}
-	return &httpWorkflow{
+	workflow := &httpWorkflow{
 		readiness: iamv1.Readiness{
 			APIVersion:    iamv1.APIVersion,
 			Kind:          "Readiness",
@@ -292,6 +328,25 @@ func newHTTPWorkflow(t *testing.T) *httpWorkflow {
 			DecidedAt:  now,
 		},
 	}
+	verificationSubject := &iamv1.Subject{
+		Type: iamv1.PrincipalServiceAccount, ID: "service-installation-verifier",
+	}
+	workflow.verificationDecision = iamv1.AuthorizationDecision{
+		APIVersion: iamv1.APIVersion,
+		Kind:       "AuthorizationDecision",
+		ID:         "decision-installation-verification",
+		Allowed:    true,
+		Reason:     iamv1.DecisionAllowed,
+		TenantID:   "organization-example",
+		Subject:    verificationSubject,
+		Action:     iamv1.ActionInstallationVerify,
+		Resource: iamv1.ResourceReference{
+			Kind: iamv1.ResourceInstallation, ID: "installation-example",
+		},
+		RequestID: "request-installation-verify",
+		DecidedAt: now,
+	}
+	return workflow
 }
 
 func (workflow *httpWorkflow) Readiness(context.Context) (iamv1.Readiness, error) {
@@ -392,6 +447,15 @@ func (workflow *httpWorkflow) Authorize(
 ) (iamv1.AuthorizationDecision, error) {
 	workflow.authorizeCalls++
 	return workflow.decision, nil
+}
+
+func (workflow *httpWorkflow) VerifyInstallation(
+	context.Context,
+	iamv1.Secret,
+	iamv1.AuthorizationRequest,
+) (iamv1.AuthorizationDecision, error) {
+	workflow.verifyInstallationCalls++
+	return workflow.verificationDecision, nil
 }
 
 func newTestHandler(t *testing.T, workflow Workflow) http.Handler {
