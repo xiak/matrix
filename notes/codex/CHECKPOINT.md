@@ -27,7 +27,7 @@
 
 - The branch contains commit `001d889`; FEAT-004 Gate C is accepted and pushed
   in `2b7e398`, FEAT-005 Gate A is accepted and pushed in `83502b0`, and the
-  current durable implementation head is `40cc917`. The fixed donor baselines
+  current durable implementation head is `13ce031`. The fixed donor baselines
   remain those listed below.
 - FEAT-001, FEAT-002, and FEAT-003 Gate A/Gate B are Accepted. The public model
   is Application, immutable ApplicationRevision, Deployment,
@@ -150,7 +150,10 @@
   and keeps dependency-unavailable rollback replayable. Its exact worktree
   passed generation, full unit/vet/race, relevant ten-run repetition,
   network-disabled Linux/amd64 start and cleanup behavior ten times, and
-  four-target builds. Full platform verification, the concrete provider
+  four-target builds. Commit `13ce031` binds the signed verification WORKLOAD
+  digest and running installation/release identity into the PaaS process and
+  exposes only the fixed no-secret application probe through dedicated APISIX
+  routes. Installation-side verification polling, the concrete provider
   runner, `mx` wiring, and platform image assembly remain unwired.
 - FEAT-006 Gate A and Gate B are Accepted. Target design and fixed-donor
   adoption remain `506f6d7` and `932252e`; the accepted authority contracts,
@@ -169,8 +172,19 @@
   access records, cross-schema denial, and secret/native-error non-leakage.
   Full generation, unit, architecture, vet, race, repeated, four-target build,
   dependency/diff, and independent clean PG18 database gates pass. FEAT-006
-  Gate C remains pending until FEAT-005 consumes these services in the real
-  external-network-disabled release lifecycle.
+  commit `3fe0615` adds the sole fixed verifier-as-subject IAM decision: only
+  the bootstrap installation verifier may request `installation.verify`, and
+  IAM reloads its current credential, role, organization, and bootstrap receipt
+  on every call. Commit `13ce031` composes that decision into deterministic
+  PaaS Application/Configuration revisions and one probe Deployment without
+  caller-controlled artifacts, configuration, Secrets, placement, or provider
+  controls. Audit resolves the exact delivered PaaS Operation fact, verifies
+  the bounded hash-chain segment ending at it, and records one sanitized
+  verifier access fact; producer leases and fencing remain producer-owned.
+  Fresh PostgreSQL 18 race gates pass the Audit migration/HTTP slice and a
+  five-process IAM/PaaS/Audit plus both-dispatcher flow from PaaS `PENDING` to
+  Audit `VERIFIED`. FEAT-006 Gate C remains pending until FEAT-005 consumes
+  these services in the real external-network-disabled release lifecycle.
 - The FEAT-004 accepted worktree passed its schema and real-runtime gates.
   Clean PostgreSQL 18 runs applied the migration twice, ran the verifier, used
   non-bypass API/worker logins, attacked RLS and cross-role privileges,
@@ -183,8 +197,9 @@
 
 ## Next concrete work
 
-1. Complete full IAM/Audit/application verification; then complete the
-   concrete provider runner and wire it behind `mx`.
+1. Add the installation-side fixed PaaS/Audit clients and bounded verification
+   polling; then complete the concrete local-machine provider runner and wire
+   it behind `mx`.
 2. Assemble the real IAM, Audit, PaaS, dispatcher, APISIX, UI, PostgreSQL, and
    verification images plus signed releases A/B from exact release content.
 3. Prove the external-network-disabled Compose
