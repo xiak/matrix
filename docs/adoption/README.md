@@ -6,3 +6,4 @@
 - [FEAT-003 Tenant placement and isolation](FEAT-003-placement-isolation.md)
 - [FEAT-004 Compose application execution](FEAT-004-compose-application-execution.md)
 - [FEAT-005 Offline platform distribution and lifecycle](FEAT-005-offline-platform-lifecycle.md)
+- [FEAT-006 Platform IAM and Audit authorities](FEAT-006-platform-authorities.md)
