@@ -1950,6 +1950,43 @@
         ],
         "type": "object"
       },
+      "Readiness": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "paas.matrix.xiak.com/v1"
+          },
+          "checkedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "kind": {
+            "const": "Readiness"
+          },
+          "schemaVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ReadinessState"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "state",
+          "schemaVersion",
+          "checkedAt"
+        ],
+        "type": "object"
+      },
+      "ReadinessState": {
+        "enum": [
+          "READY",
+          "NOT_READY"
+        ],
+        "type": "string"
+      },
       "ResourceMetadata": {
         "additionalProperties": false,
         "properties": {
@@ -2157,6 +2194,31 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/ready": {
+      "get": {
+        "operationId": "getPaaSReadiness",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Readiness"
+                }
+              }
+            },
+            "description": "PaaS is ready."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [],
+        "summary": "Get PaaS readiness"
+      }
+    },
     "/v1/application-revisions": {
       "post": {
         "operationId": "createApplicationRevision",

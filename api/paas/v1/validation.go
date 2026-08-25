@@ -106,6 +106,21 @@ func ValidateResourceMetadata(value ResourceMetadata) error {
 	return errors.Join(problems...)
 }
 
+func ValidateReadiness(value Readiness) error {
+	var problems []error
+	if value.APIVersion != APIVersion || value.Kind != "Readiness" {
+		problems = append(problems, errors.New("readiness type metadata is invalid"))
+	}
+	if value.State != ReadinessReady && value.State != ReadinessNotReady {
+		problems = append(problems, errors.New("readiness state is invalid"))
+	}
+	if value.SchemaVersion == 0 {
+		problems = append(problems, errors.New("readiness schemaVersion must be positive"))
+	}
+	problems = append(problems, validateContractTime("readiness.checkedAt", value.CheckedAt))
+	return errors.Join(problems...)
+}
+
 func ValidateExecutionPool(value ExecutionPool) error {
 	var problems []error
 	if value.APIVersion != APIVersion || value.Kind != "ExecutionPool" {

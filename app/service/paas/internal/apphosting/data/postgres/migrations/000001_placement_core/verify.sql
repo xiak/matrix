@@ -236,6 +236,10 @@ BEGIN
                 ''
             ),
             (
+                'readiness',
+                ''
+            ),
+            (
                 'claim_operation',
                 'requested_worker_id text, requested_lease_seconds integer'
             ),
@@ -523,6 +527,16 @@ BEGIN
        OR NOT has_function_privilege(
             'matrix_paas_worker',
             'paas.audit_outbox_snapshot()',
+            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_paas_api',
+            'paas.readiness()',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_paas_worker',
+            'paas.readiness()',
             'EXECUTE'
        )
        OR NOT has_function_privilege(

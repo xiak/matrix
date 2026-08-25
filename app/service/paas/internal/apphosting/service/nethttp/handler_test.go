@@ -16,6 +16,38 @@ import (
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
 )
 
+func TestHandlerReadinessIsOperationalAndSanitized(t *testing.T) {
+	readyErr := error(nil)
+	readiness := paasv1.Readiness{
+		APIVersion: paasv1.APIVersion, Kind: "Readiness", State: paasv1.ReadinessReady,
+		SchemaVersion: 1, CheckedAt: time.Date(2026, 8, 26, 3, 4, 5, 678_000, time.UTC),
+	}
+	handler, err := NewHandler(&fakeAuthorizer{}, &fakeWorkflow{}, Config{
+		Readiness: func(context.Context) (paasv1.Readiness, error) {
+			return readiness, readyErr
+		},
+	})
+	if err != nil {
+		t.Fatalf("create readiness handler: %v", err)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/ready", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("ready response=%d body=%q", response.Code, response.Body.String())
+	}
+	var got paasv1.Readiness
+	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil || got != readiness {
+		t.Fatalf("decode readiness=%#v err=%v", got, err)
+	}
+	readyErr = errors.New("database credential=do-not-expose")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/ready", nil))
+	if response.Code != http.StatusServiceUnavailable ||
+		strings.Contains(response.Body.String(), "credential") {
+		t.Fatalf("not-ready response=%d body=%q", response.Code, response.Body.String())
+	}
+}
+
 func TestHandlerUsesAuthorizedTenantAndSubjectInsteadOfClientHeaders(t *testing.T) {
 	authorizer := &fakeAuthorizer{}
 	workflow := &fakeWorkflow{}
@@ -159,6 +191,24 @@ func TestHandlerRequiresExactIfMatchForDeploymentMutation(t *testing.T) {
 	}
 	if workflow.submitCommand.ExpectedResourceVersion != 7 {
 		t.Fatalf("expected resource version = %d", workflow.submitCommand.ExpectedResourceVersion)
+	}
+	if authorizer.request.Action != port.AuthorizeDeploymentUpdate {
+		t.Fatalf("running Deployment authorization action = %q", authorizer.request.Action)
+	}
+
+	request = jsonRequest(t, http.MethodPut, "/v1/deployments/deployment-a", paasv1.DeploymentSpec{
+		DesiredState: paasv1.DeploymentDesiredStopped,
+	})
+	request.Header.Set("Authorization", "Bearer opaque-credential")
+	request.Header.Set("Idempotency-Key", "stop-deployment-a")
+	request.Header.Set("If-Match", `"7"`)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("stop status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if authorizer.request.Action != port.AuthorizeDeploymentStop {
+		t.Fatalf("stopped Deployment authorization action = %q", authorizer.request.Action)
 	}
 }
 
@@ -346,6 +396,12 @@ func mustHandler(t *testing.T, authorizer port.Authorizer, workflow Workflow) ht
 	t.Helper()
 	handler, err := NewHandler(authorizer, workflow, Config{
 		NewRequestID: func() (string, error) { return "request-test", nil },
+		Readiness: func(context.Context) (paasv1.Readiness, error) {
+			return paasv1.Readiness{
+				APIVersion: paasv1.APIVersion, Kind: "Readiness", State: paasv1.ReadinessReady,
+				SchemaVersion: 1, CheckedAt: time.Date(2026, 8, 26, 3, 4, 5, 0, time.UTC),
+			}, nil
+		},
 	})
 	if err != nil {
 		t.Fatalf("create HTTP handler: %v", err)

@@ -53,6 +53,7 @@ type Workflow interface {
 type Config struct {
 	MaximumBodyBytes int64
 	NewRequestID     func() (string, error)
+	Readiness        func(context.Context) (paasv1.Readiness, error)
 }
 
 type handler struct {
@@ -70,6 +71,9 @@ func NewHandler(
 	if authorizer == nil || workflow == nil {
 		return nil, errors.New("HTTP Authorizer and workflow are required")
 	}
+	if config.Readiness == nil {
+		return nil, errors.New("HTTP readiness check is required")
+	}
 	if config.MaximumBodyBytes == 0 {
 		config.MaximumBodyBytes = defaultMaximumBodyBytes
 	}
@@ -81,6 +85,7 @@ func NewHandler(
 	}
 	value := &handler{authorizer: authorizer, workflow: workflow, config: config}
 	routes := http.NewServeMux()
+	routes.HandleFunc("GET /ready", value.ready)
 	routes.HandleFunc("POST /v1/applications", value.createApplication)
 	routes.HandleFunc("GET /v1/applications/{applicationId}", value.getApplication)
 	routes.HandleFunc("POST /v1/configurations", value.createConfiguration)
@@ -97,6 +102,26 @@ func NewHandler(
 	routes.HandleFunc("GET /v1/operations/{operationId}", value.getOperation)
 	value.routes = routes
 	return value, nil
+}
+
+func (value *handler) ready(response http.ResponseWriter, request *http.Request) {
+	requestID, err := value.config.NewRequestID()
+	if err != nil || paasv1.ValidateID("requestId", requestID) != nil {
+		writeProblem(response, "request-unavailable", http.StatusServiceUnavailable, paasv1.ErrorInternal, "PaaS unavailable", "PaaS readiness could not be established", true)
+		return
+	}
+	response.Header().Set("X-Request-ID", requestID)
+	if request.URL.RawQuery != "" || request.ContentLength > 0 || len(request.TransferEncoding) > 0 {
+		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "readiness accepts no query or body", false)
+		return
+	}
+	readiness, err := value.config.Readiness(request.Context())
+	if err != nil || readiness.State != paasv1.ReadinessReady ||
+		paasv1.ValidateReadiness(readiness) != nil {
+		writeProblem(response, requestID, http.StatusServiceUnavailable, paasv1.ErrorInternal, "PaaS unavailable", "PaaS readiness checks failed", true)
+		return
+	}
+	writeJSON(response, http.StatusOK, readiness)
 }
 
 func (value *handler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
@@ -190,15 +215,30 @@ func (value *handler) updateDeployment(response http.ResponseWriter, request *ht
 	if !ok {
 		return
 	}
-	requestID, authorization, ok := value.authorize(response, request, port.AuthorizeDeploymentUpdate, "Deployment", deploymentID)
-	if !ok {
-		return
-	}
-	expected, ok := parseIfMatch(response, request, requestID)
+	requestID, ok := value.beginRequest(response)
 	if !ok {
 		return
 	}
 	body, ok := decodeJSON[paasv1.DeploymentSpec](value, response, request, requestID)
+	if !ok {
+		return
+	}
+	action := port.AuthorizeDeploymentUpdate
+	if body.DesiredState == paasv1.DeploymentDesiredStopped {
+		action = port.AuthorizeDeploymentStop
+	}
+	authorization, ok := value.authorizeRequest(
+		response,
+		request,
+		requestID,
+		action,
+		"Deployment",
+		deploymentID,
+	)
+	if !ok {
+		return
+	}
+	expected, ok := parseIfMatch(response, request, requestID)
 	if !ok {
 		return
 	}
@@ -345,12 +385,32 @@ func (value *handler) authorize(
 	kind string,
 	id paasv1.ResourceID,
 ) (string, port.Authorization, bool) {
+	requestID, ok := value.beginRequest(response)
+	if !ok {
+		return "", port.Authorization{}, false
+	}
+	authorization, ok := value.authorizeRequest(response, request, requestID, action, kind, id)
+	return requestID, authorization, ok
+}
+
+func (value *handler) beginRequest(response http.ResponseWriter) (string, bool) {
 	requestID, err := value.config.NewRequestID()
 	if err != nil || paasv1.ValidateID("requestId", requestID) != nil {
 		writeProblem(response, "request-unavailable", http.StatusInternalServerError, paasv1.ErrorInternal, "Internal error", "request identity could not be established", false)
-		return "", port.Authorization{}, false
+		return "", false
 	}
 	response.Header().Set("X-Request-ID", requestID)
+	return requestID, true
+}
+
+func (value *handler) authorizeRequest(
+	response http.ResponseWriter,
+	request *http.Request,
+	requestID string,
+	action string,
+	kind string,
+	id paasv1.ResourceID,
+) (port.Authorization, bool) {
 	authorizationRequest := port.AuthorizationRequest{
 		Credential: request.Header.Get("Authorization"),
 		Action:     action,
@@ -359,18 +419,18 @@ func (value *handler) authorize(
 	}
 	if err := port.ValidateAuthorizationRequest(authorizationRequest); err != nil {
 		writeProblem(response, requestID, http.StatusUnauthorized, paasv1.ErrorUnauthenticated, "Unauthenticated", "a valid IAM credential is required", false)
-		return requestID, port.Authorization{}, false
+		return port.Authorization{}, false
 	}
 	authorization, err := value.authorizer.Authorize(request.Context(), authorizationRequest)
 	if err != nil {
 		writeAuthorizationError(response, requestID, err)
-		return requestID, port.Authorization{}, false
+		return port.Authorization{}, false
 	}
 	if err := port.ValidateAuthorizationForRequest(authorization, authorizationRequest); err != nil {
 		writeProblem(response, requestID, http.StatusServiceUnavailable, paasv1.ErrorIdentityUnavailable, "Identity unavailable", "IAM returned an invalid authorization decision", true)
-		return requestID, port.Authorization{}, false
+		return port.Authorization{}, false
 	}
-	return requestID, authorization, true
+	return authorization, true
 }
 
 func (value *handler) writeCreation(

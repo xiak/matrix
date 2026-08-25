@@ -76,6 +76,10 @@ func (usecase *Usecase) DispatchOnce(ctx context.Context) (Result, error) {
 	if deliveryErr == nil {
 		completion.Outcome = OutcomeDelivered
 		result.Delivered = true
+	} else if terminalDeliveryError(deliveryErr) {
+		completion.Outcome = OutcomeDeadLetter
+		completion.ErrorCode = "AUDIT_DELIVERY_REJECTED"
+		result.DeadLetter = true
 	} else if claim.Attempts >= usecase.config.MaxAttempts {
 		completion.Outcome = OutcomeDeadLetter
 		completion.ErrorCode = "AUDIT_DELIVERY_EXHAUSTED"
@@ -121,6 +125,12 @@ func validateClaim(claim Claim) error {
 		problems = append(problems, errors.New("Audit claim lease expiry is required"))
 	}
 	return errors.Join(problems...)
+}
+
+func terminalDeliveryError(err error) bool {
+	return errors.Is(err, port.ErrAuditInvalid) ||
+		errors.Is(err, port.ErrAuditUnauthenticated) ||
+		errors.Is(err, port.ErrAuditConflict)
 }
 
 func backoff(config Config, attempts int) time.Duration {

@@ -64,6 +64,30 @@ func TestDispatchOnceDeadLettersAfterBoundedAttempts(t *testing.T) {
 	}
 }
 
+func TestDispatchOnceDeadLettersTerminalAuthorityRejectionsImmediately(t *testing.T) {
+	for _, deliveryErr := range []error{
+		port.ErrAuditInvalid,
+		port.ErrAuditUnauthenticated,
+		port.ErrAuditConflict,
+	} {
+		repository := &fakeAuditRepository{claims: []Claim{auditClaim(1)}}
+		result, err := mustAuditUsecase(
+			t,
+			repository,
+			&fakeAuditIngestor{err: errors.Join(deliveryErr, errors.New("native detail"))},
+			4,
+		).DispatchOnce(context.Background())
+		if err != nil {
+			t.Fatalf("terminal Audit rejection %v: %v", deliveryErr, err)
+		}
+		if !result.DeadLetter || len(repository.completions) != 1 ||
+			repository.completions[0].Outcome != OutcomeDeadLetter ||
+			repository.completions[0].ErrorCode != "AUDIT_DELIVERY_REJECTED" {
+			t.Fatalf("terminal result/completion=%#v / %#v", result, repository.completions)
+		}
+	}
+}
+
 func TestDispatchOnceSurfacesStaleFencingCompletion(t *testing.T) {
 	repository := &fakeAuditRepository{
 		claims: []Claim{auditClaim(1)}, completeErr: ErrStaleLease,

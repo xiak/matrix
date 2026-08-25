@@ -14,6 +14,10 @@ var (
 	ErrUnauthenticated          = errors.New("IAM authentication failed")
 	ErrPermissionDenied         = errors.New("IAM authorization denied")
 	ErrAuthorizationUnavailable = errors.New("IAM authorization unavailable")
+	ErrAuditInvalid             = errors.New("Audit ingestion rejected the PaaS event")
+	ErrAuditUnauthenticated     = errors.New("Audit ingestion authentication failed")
+	ErrAuditConflict            = errors.New("Audit ingestion replay conflicts")
+	ErrAuditUnavailable         = errors.New("Audit ingestion is unavailable")
 )
 
 const (
@@ -27,6 +31,7 @@ const (
 	AuthorizeApplicationRevisionRead     = "paas.application-revision.read"
 	AuthorizeDeploymentCreate            = "paas.deployment.create"
 	AuthorizeDeploymentUpdate            = "paas.deployment.update"
+	AuthorizeDeploymentStop              = "paas.deployment.stop"
 	AuthorizeDeploymentRollback          = "paas.deployment.rollback"
 	AuthorizeDeploymentRead              = "paas.deployment.read"
 	AuthorizeOperationRead               = "paas.operation.read"
@@ -126,6 +131,7 @@ func knownAuthorizationAction(value string) bool {
 		AuthorizeApplicationRevisionRead,
 		AuthorizeDeploymentCreate,
 		AuthorizeDeploymentUpdate,
+		AuthorizeDeploymentStop,
 		AuthorizeDeploymentRollback,
 		AuthorizeDeploymentRead,
 		AuthorizeOperationRead,

@@ -39,6 +39,7 @@ func TestOpenAPIContractDefinesApplicationPaaSV1(t *testing.T) {
 		"PlacementDecision",
 		"Operation",
 		"Evidence",
+		"Readiness",
 		"Problem",
 		"AdapterCapabilitiesContract",
 		"AdapterCommandEnvelope",
@@ -55,6 +56,12 @@ func TestOpenAPIContractDefinesApplicationPaaSV1(t *testing.T) {
 		if _, found := schemas[name]; !found {
 			t.Errorf("required schema %q is missing", name)
 		}
+	}
+	readiness := schemaObject(t, schemas, "Readiness")
+	properties := object(t, readiness["properties"], "Readiness.properties")
+	schemaVersion := object(t, properties["schemaVersion"], "Readiness.schemaVersion")
+	if schemaVersion["minimum"] != json.Number("1") {
+		t.Fatalf("Readiness.schemaVersion must be positive: %#v", schemaVersion)
 	}
 }
 
@@ -76,11 +83,12 @@ func TestOpenAPINorthboundSurfaceUsesMatrixIAM(t *testing.T) {
 	}
 
 	want := map[string][]string{
-		"/v1/applications":                                        {"post"},
-		"/v1/applications/{applicationId}":                        {"get"},
-		"/v1/configurations":                                      {"post"},
-		"/v1/configurations/{configurationId}":                    {"get"},
-		"/v1/configuration-revisions":                             {"post"},
+		"/ready":                               {"get"},
+		"/v1/applications":                     {"post"},
+		"/v1/applications/{applicationId}":     {"get"},
+		"/v1/configurations":                   {"post"},
+		"/v1/configurations/{configurationId}": {"get"},
+		"/v1/configuration-revisions":          {"post"},
 		"/v1/configuration-revisions/{configurationRevisionId}":   {"get"},
 		"/v1/application-revisions":                               {"post"},
 		"/v1/application-revisions/{applicationRevisionId}":       {"get"},
@@ -102,7 +110,12 @@ func TestOpenAPINorthboundSurfaceUsesMatrixIAM(t *testing.T) {
 		}
 		for _, method := range methods {
 			operation := object(t, pathItem[method], path+" "+method)
-			if _, overridesSecurity := operation["security"]; overridesSecurity {
+			securityOverride, overridesSecurity := operation["security"]
+			if path == "/ready" {
+				if !overridesSecurity || len(securityOverride.([]any)) != 0 {
+					t.Errorf("%s %s must explicitly allow unauthenticated health checks", method, path)
+				}
+			} else if overridesSecurity {
 				t.Errorf("%s %s must inherit MatrixIAM", method, path)
 			}
 		}
@@ -151,6 +164,10 @@ func TestOpenAPIEnumsMatchGoContract(t *testing.T) {
 	assertExactEnum(t, schemas, "DeploymentDesiredState", stringify([]DeploymentDesiredState{
 		DeploymentDesiredRunning,
 		DeploymentDesiredStopped,
+	}))
+	assertExactEnum(t, schemas, "ReadinessState", stringify([]ReadinessState{
+		ReadinessReady,
+		ReadinessNotReady,
 	}))
 	assertExactEnum(t, schemas, "ArtifactKind", stringify([]ArtifactKind{
 		ArtifactOCIImage,
@@ -358,6 +375,7 @@ func TestOpenAPIStructPropertiesAndRequiredFieldsMatchGoTypes(t *testing.T) {
 		"SubjectRef":                         reflect.TypeOf(SubjectRef{}),
 		"ResourceRef":                        reflect.TypeOf(ResourceRef{}),
 		"FieldViolation":                     reflect.TypeOf(FieldViolation{}),
+		"Readiness":                          reflect.TypeOf(Readiness{}),
 		"Problem":                            reflect.TypeOf(Problem{}),
 		"Operation":                          reflect.TypeOf(Operation{}),
 		"Evidence":                           reflect.TypeOf(Evidence{}),
@@ -460,6 +478,10 @@ func TestExamplesDecodeAndValidate(t *testing.T) {
 			target: &Operation{},
 		},
 		{
+			path:   "examples/readiness.json",
+			target: &Readiness{},
+		},
+		{
 			path:   "examples/evidence.json",
 			target: &Evidence{},
 		},
@@ -499,6 +521,8 @@ func TestExamplesDecodeAndValidate(t *testing.T) {
 				err = ValidatePlacementDecision(*value)
 			case *Operation:
 				err = ValidateOperation(*value)
+			case *Readiness:
+				err = ValidateReadiness(*value)
 			case *Evidence:
 				err = ValidateEvidence(*value)
 			case *InspectExecutionTargetRequest:

@@ -316,6 +316,14 @@ type FieldViolation struct {
 	Description string `json:"description"`
 }
 
+type Readiness struct {
+	APIVersion    string         `json:"apiVersion"`
+	Kind          string         `json:"kind"`
+	State         ReadinessState `json:"state"`
+	SchemaVersion uint64         `json:"schemaVersion"`
+	CheckedAt     time.Time      `json:"checkedAt"`
+}
+
 type Problem struct {
 	Type       string           `json:"type"`
 	Title      string           `json:"title"`

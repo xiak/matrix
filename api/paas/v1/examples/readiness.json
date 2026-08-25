@@ -1,0 +1,7 @@
+{
+  "apiVersion": "paas.matrix.xiak.com/v1",
+  "kind": "Readiness",
+  "state": "READY",
+  "schemaVersion": 1,
+  "checkedAt": "2026-08-26T03:04:05.000000Z"
+}

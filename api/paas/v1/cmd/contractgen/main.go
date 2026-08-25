@@ -101,7 +101,9 @@ func buildDocument() schema {
 }
 
 func buildPaths() schema {
-	paths := schema{}
+	paths := schema{
+		"/ready": schema{"get": readinessOperation()},
+	}
 	for _, resource := range []struct {
 		collection string
 		parameter  string
@@ -161,6 +163,24 @@ func buildPaths() schema {
 		"get": readOperation("getOperation", "Get Operation", "operationId", "Operation"),
 	}
 	return paths
+}
+
+func readinessOperation() schema {
+	return schema{
+		"operationId": "getPaaSReadiness",
+		"summary":     "Get PaaS readiness",
+		"security":    []any{},
+		"responses": schema{
+			"200": schema{
+				"description": "PaaS is ready.",
+				"content": schema{
+					"application/json": schema{"schema": ref("Readiness")},
+				},
+			},
+			"400": componentRef("#/components/responses/ProblemResponse"),
+			"503": componentRef("#/components/responses/ProblemResponse"),
+		},
+	}
 }
 
 func mutationOperation(
@@ -319,6 +339,7 @@ func enumSchemas() map[string][]string {
 		"EvidenceType":                stringsOf(paasv1.EvidencePolicyDecision, paasv1.EvidencePlacementDecision, paasv1.EvidenceAdapterCommand, paasv1.EvidenceAdapterResult, paasv1.EvidenceObservation, paasv1.EvidenceVerification, paasv1.EvidenceAuditDispatch),
 		"EvidenceSeverity":            stringsOf(paasv1.EvidenceInfo, paasv1.EvidenceWarning, paasv1.EvidenceError),
 		"SubjectType":                 stringsOf(paasv1.SubjectUser, paasv1.SubjectServiceAccount, paasv1.SubjectAgent, paasv1.SubjectSystemUser),
+		"ReadinessState":              stringsOf(paasv1.ReadinessReady, paasv1.ReadinessNotReady),
 		"ErrorCode":                   stringsOfSlice(paasv1.ErrorCodes()),
 		"AdapterKind":                 stringsOf(paasv1.AdapterInfrastructure, paasv1.AdapterDeploymentExecutor, paasv1.AdapterGateway),
 		"AdapterAction":               stringsOf(paasv1.AdapterCapabilities, paasv1.AdapterInspectExecutionTarget, paasv1.AdapterObserveExecutionTarget, paasv1.AdapterValidateDeployment, paasv1.AdapterApplyDeployment, paasv1.AdapterObserveDeployment, paasv1.AdapterStopDeployment, paasv1.AdapterRollbackDeployment, paasv1.AdapterReconcileRoutes, paasv1.AdapterObserveRoutes, paasv1.AdapterDeleteRoutes),
@@ -344,7 +365,7 @@ func structContracts() map[string]reflect.Type {
 		paasv1.CreateConfigurationRevisionRequest{}, paasv1.ApplicationRevisionComponent{}, paasv1.ApplicationRevisionSpec{},
 		paasv1.ApplicationRevision{}, paasv1.CreateApplicationRevisionRequest{}, paasv1.DeploymentComponent{}, paasv1.DeploymentSpec{},
 		paasv1.DeploymentStatus{}, paasv1.Deployment{}, paasv1.CreateDeploymentRequest{}, paasv1.RollbackDeploymentRequest{},
-		paasv1.DeploymentGeneration{}, paasv1.SubjectRef{}, paasv1.ResourceRef{}, paasv1.FieldViolation{},
+		paasv1.DeploymentGeneration{}, paasv1.SubjectRef{}, paasv1.ResourceRef{}, paasv1.FieldViolation{}, paasv1.Readiness{},
 		paasv1.Problem{}, paasv1.Operation{}, paasv1.Evidence{}, paasv1.AdapterCapabilitiesContract{},
 		paasv1.AdapterCommandEnvelope{}, paasv1.InspectExecutionTargetRequest{}, paasv1.ObserveExecutionTargetRequest{},
 		paasv1.DeploymentExecutionRequest{}, paasv1.ObserveDeploymentRequest{}, paasv1.DeploymentEndpointObservation{},
@@ -467,6 +488,7 @@ func applySemanticOverlays(schemas map[string]any) {
 		"ExecutionPool": "ExecutionPool", "ExecutionTarget": "ExecutionTarget",
 		"PlacementPolicy": "PlacementPolicy", "PlacementDecision": "PlacementDecision",
 		"Operation": "Operation", "Evidence": "Evidence",
+		"Readiness": "Readiness",
 	}
 	for name, kind := range resourceKinds {
 		properties := object(schemas[name])["properties"].(schema)
@@ -510,6 +532,7 @@ func applySemanticOverlays(schemas map[string]any) {
 	setIntegerMinimum(schemas, "DeploymentEndpointObservation", "port", 1)
 	setIntegerMinimum(schemas, "DeploymentObservation", "generation", 1)
 	setIntegerMinimum(schemas, "RollbackDeploymentRequest", "sourceGeneration", 1)
+	setIntegerMinimum(schemas, "Readiness", "schemaVersion", 1)
 
 	componentBinding := object(schemas["ComponentBinding"])
 	componentBinding["oneOf"] = []any{

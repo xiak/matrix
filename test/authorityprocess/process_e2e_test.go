@@ -19,9 +19,11 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
+	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
 
 const (
@@ -30,19 +32,23 @@ const (
 	iamAPILogin       = "matrix_authority_process_iam_api"
 	iamWorkerLogin    = "matrix_authority_process_iam_worker"
 	auditRuntimeLogin = "matrix_authority_process_audit_runtime"
+	paasAPILogin      = "matrix_authority_process_paas_api"
+	paasWorkerLogin   = "matrix_authority_process_paas_worker"
 	processDBPassword = "matrix-authority-process-test-only"
 
-	initialAdminPassword  = "Initial-Process-Admin-Password-49!"
-	changedAdminPassword  = "Changed-Process-Admin-Password-73!"
-	initialReaderPassword = "Initial-Process-Reader-Password-84!"
-	changedReaderPassword = "Changed-Process-Reader-Password-95!"
+	initialAdminPassword     = "Initial-Process-Admin-Password-49!"
+	changedAdminPassword     = "Changed-Process-Admin-Password-73!"
+	initialReaderPassword    = "Initial-Process-Reader-Password-84!"
+	changedReaderPassword    = "Changed-Process-Reader-Password-95!"
+	initialDeveloperPassword = "Initial-Process-Developer-Password-57!"
+	changedDeveloperPassword = "Changed-Process-Developer-Password-61!"
 
 	iamServiceCredential   = "mx1.ProcessIAMServiceCredential00000000000000001"
 	paasServiceCredential  = "mx1.ProcessPaaSServiceCredential0000000000000001"
 	auditServiceCredential = "mx1.ProcessAuditServiceCredential000000000000001"
 )
 
-func TestIndependentAuthorityProcessesAndIAMAuditDelivery(t *testing.T) {
+func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	dsn := os.Getenv(authorityProcessDSN)
 	if dsn == "" {
 		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", authorityProcessDSN)
@@ -65,8 +71,9 @@ func TestIndependentAuthorityProcessesAndIAMAuditDelivery(t *testing.T) {
 	defer func() { _ = admin.Close(context.Background()) }()
 	assertPostgres18(t, ctx, admin)
 	assertCleanSchemas(t, ctx, admin)
-	applyAuthoritySchemas(t, ctx, admin, root)
+	applyPlatformSchemas(t, ctx, admin, root)
 	createProcessLogins(t, ctx, admin)
+	assertCrossSchemaIsolation(t, ctx, adminConfig)
 
 	temporary := t.TempDir()
 	binaries := buildAuthorityBinaries(t, ctx, root, temporary)
@@ -103,6 +110,18 @@ func TestIndependentAuthorityProcessesAndIAMAuditDelivery(t *testing.T) {
 		"audit-dsn",
 		[]byte(runtimeDSN(adminConfig, auditRuntimeLogin, processDBPassword)),
 	)
+	paasDSNPath := writeProtectedFile(
+		t,
+		temporary,
+		"paas-dsn",
+		[]byte(runtimeDSN(adminConfig, paasAPILogin, processDBPassword)),
+	)
+	paasWorkerDSNPath := writeProtectedFile(
+		t,
+		temporary,
+		"paas-worker-dsn",
+		[]byte(runtimeDSN(adminConfig, paasWorkerLogin, processDBPassword)),
+	)
 	auditCredentialPath := writeProtectedFile(
 		t,
 		temporary,
@@ -114,6 +133,12 @@ func TestIndependentAuthorityProcessesAndIAMAuditDelivery(t *testing.T) {
 		temporary,
 		"iam-service-credential",
 		[]byte(iamServiceCredential),
+	)
+	paasCredentialPath := writeProtectedFile(
+		t,
+		temporary,
+		"paas-service-credential",
+		[]byte(paasServiceCredential),
 	)
 	wrongCredentialPath := writeProtectedFile(
 		t,
@@ -130,8 +155,10 @@ func TestIndependentAuthorityProcessesAndIAMAuditDelivery(t *testing.T) {
 
 	iamAddress := freeAddress(t)
 	auditAddress := freeAddress(t)
+	paasAddress := freeAddress(t)
 	iamEndpoint := "http://" + iamAddress
 	auditEndpoint := "http://" + auditAddress
+	paasEndpoint := "http://" + paasAddress
 	iamEnvironment := []string{
 		"MATRIX_IAM_DATABASE_DSN_FILE=" + iamDSNPath,
 		"MATRIX_IAM_BOOTSTRAP_FILE=" + bootstrapPath,
@@ -144,12 +171,26 @@ func TestIndependentAuthorityProcessesAndIAMAuditDelivery(t *testing.T) {
 		"MATRIX_AUDIT_CURSOR_KEY_FILE=" + cursorKeyPath,
 		"MATRIX_AUDIT_LISTEN_ADDRESS=" + auditAddress,
 	}
-	dispatcherEnvironment := func(credentialPath string, workerID string) []string {
+	iamDispatcherEnvironment := func(credentialPath string, workerID string) []string {
 		return []string{
 			"MATRIX_IAM_AUDIT_DATABASE_DSN_FILE=" + iamWorkerDSNPath,
 			"MATRIX_IAM_AUDIT_ENDPOINT=" + auditEndpoint,
 			"MATRIX_IAM_AUDIT_CREDENTIAL_FILE=" + credentialPath,
 			"MATRIX_IAM_AUDIT_WORKER_ID=" + workerID,
+		}
+	}
+	paasEnvironment := []string{
+		"MATRIX_PAAS_DATABASE_DSN_FILE=" + paasDSNPath,
+		"MATRIX_PAAS_IAM_ENDPOINT=" + iamEndpoint,
+		"MATRIX_PAAS_SERVICE_CREDENTIAL_FILE=" + paasCredentialPath,
+		"MATRIX_PAAS_LISTEN_ADDRESS=" + paasAddress,
+	}
+	paasDispatcherEnvironment := func(credentialPath string, workerID string) []string {
+		return []string{
+			"MATRIX_PAAS_AUDIT_DATABASE_DSN_FILE=" + paasWorkerDSNPath,
+			"MATRIX_PAAS_AUDIT_ENDPOINT=" + auditEndpoint,
+			"MATRIX_PAAS_AUDIT_CREDENTIAL_FILE=" + credentialPath,
+			"MATRIX_PAAS_AUDIT_WORKER_ID=" + workerID,
 		}
 	}
 	children := make([]*childProcess, 0)
@@ -158,6 +199,8 @@ func TestIndependentAuthorityProcessesAndIAMAuditDelivery(t *testing.T) {
 		changedAdminPassword,
 		initialReaderPassword,
 		changedReaderPassword,
+		initialDeveloperPassword,
+		changedDeveloperPassword,
 		"Initial-Outage-User-Password-68!",
 		"Initial-Dead-Letter-Password-79!",
 		iamServiceCredential,
@@ -194,15 +237,22 @@ func TestIndependentAuthorityProcessesAndIAMAuditDelivery(t *testing.T) {
 	}
 	iamProcess = start(binaries.iam, iamEnvironment)
 	waitHTTPStatus(t, ctx, iamProcess, iamEndpoint+"/ready", http.StatusOK)
+	assertIAMWeakLoginRejected(t, iamEndpoint)
 
 	auditProcess := start(binaries.audit, auditEnvironment)
 	waitHTTPStatus(t, ctx, auditProcess, auditEndpoint+"/ready", http.StatusOK)
 	dispatcher := start(
 		binaries.dispatcher,
-		dispatcherEnvironment(iamCredentialPath, "iam-audit-worker-a"),
+		iamDispatcherEnvironment(iamCredentialPath, "iam-audit-worker-a"),
 	)
 	waitAllIAMOutboxDelivered(t, ctx, admin)
 	assertIAMEventsStoredOnce(t, ctx, admin)
+	paasProcess := start(binaries.paas, paasEnvironment)
+	waitHTTPStatus(t, ctx, paasProcess, paasEndpoint+"/ready", http.StatusOK)
+	paasDispatcher := start(
+		binaries.paasDispatcher,
+		paasDispatcherEnvironment(paasCredentialPath, "paas-audit-worker-a"),
+	)
 
 	adminLogin := loginIAM(t, iamEndpoint, "admin", initialAdminPassword, "request-admin-login")
 	sensitive = append(sensitive, adminLogin.Credential)
@@ -214,11 +264,136 @@ func TestIndependentAuthorityProcessesAndIAMAuditDelivery(t *testing.T) {
 		changedAdminPassword,
 		"request-admin-password",
 	)
+	assertCrossTenantIAMBindingRejected(t, ctx, admin, iamEndpoint, adminLogin.Credential)
 	waitAllIAMOutboxDelivered(t, ctx, admin)
 	adminPage := queryAudit(t, auditEndpoint, adminLogin.Credential, auditv1.QueryRecordsRequest{PageSize: 200}, http.StatusOK)
 	if adminPage.TenantID != "organization-process" || len(adminPage.Records) < 3 {
 		t.Fatalf("administrator Audit page tenant=%s records=%d", adminPage.TenantID, len(adminPage.Records))
 	}
+	assertAuditQueryConfinement(t, auditEndpoint, adminLogin.Credential)
+	developer := createIAMUser(
+		t,
+		iamEndpoint,
+		adminLogin.Credential,
+		"paas.developer",
+		"PaaS Developer",
+		initialDeveloperPassword,
+		"request-create-developer",
+	)
+	developerBinding := putIAMBinding(
+		t,
+		iamEndpoint,
+		adminLogin.Credential,
+		developer.ID,
+		iamv1.RolePaaSDeveloper,
+		"request-bind-developer",
+	)
+	developerLogin := loginIAM(
+		t,
+		iamEndpoint,
+		"paas.developer",
+		initialDeveloperPassword,
+		"request-developer-login",
+	)
+	sensitive = append(sensitive, developerLogin.Credential)
+	changePasswordIAM(
+		t,
+		iamEndpoint,
+		developerLogin.Credential,
+		initialDeveloperPassword,
+		changedDeveloperPassword,
+		"request-developer-password",
+	)
+	developerOperation := createPaaSApplication(
+		t,
+		paasEndpoint,
+		developerLogin.Credential,
+		"application-process",
+		"process-application",
+		"create-application-process",
+		http.StatusCreated,
+	)
+	if developerOperation.Scope != (paasv1.ResourceScope{
+		Kind: paasv1.AuthorityTenant, TenantID: "organization-process",
+	}) || developerOperation.RequestedBy != (paasv1.SubjectRef{
+		Type: paasv1.SubjectUser, ID: string(developer.ID),
+	}) {
+		t.Fatalf("PaaS did not preserve exact IAM authority: %#v", developerOperation)
+	}
+	waitAllIAMOutboxDelivered(t, ctx, admin)
+	waitAllPaaSOutboxDelivered(t, ctx, admin)
+	assertPaaSAuditFact(
+		t,
+		ctx,
+		admin,
+		auditv1.ActionPaaSApplicationCreated,
+		"application-process",
+		string(developer.ID),
+	)
+	revokeIAMBinding(
+		t,
+		iamEndpoint,
+		adminLogin.Credential,
+		developerBinding.ID,
+		"request-revoke-developer-binding",
+	)
+	deniedBefore := countAuditFacts(
+		t,
+		ctx,
+		admin,
+		auditv1.SourceIAM,
+		auditv1.ActionIAMAuthorizationDecided,
+		auditv1.ResultDenied,
+	)
+	createPaaSApplication(
+		t,
+		paasEndpoint,
+		developerLogin.Credential,
+		"application-denied",
+		"denied-application",
+		"create-application-denied",
+		http.StatusForbidden,
+	)
+	assertPaaSApplicationAbsent(t, ctx, admin, "application-denied")
+	waitAllIAMOutboxDelivered(t, ctx, admin)
+	if deniedAfter := countAuditFacts(
+		t,
+		ctx,
+		admin,
+		auditv1.SourceIAM,
+		auditv1.ActionIAMAuthorizationDecided,
+		auditv1.ResultDenied,
+	); deniedAfter != deniedBefore+1 {
+		t.Fatalf("denied IAM Audit facts before=%d after=%d", deniedBefore, deniedAfter)
+	}
+	putIAMBinding(
+		t,
+		iamEndpoint,
+		adminLogin.Credential,
+		developer.ID,
+		iamv1.RolePaaSDeveloper,
+		"request-rebind-developer",
+	)
+	createPaaSConfiguration(
+		t,
+		paasEndpoint,
+		developerLogin.Credential,
+		"configuration-process",
+		"process-configuration",
+		"application-process",
+		"create-configuration-process",
+		http.StatusCreated,
+	)
+	waitAllIAMOutboxDelivered(t, ctx, admin)
+	waitAllPaaSOutboxDelivered(t, ctx, admin)
+	expireIAMSession(t, ctx, admin, developerLogin.Session.ID)
+	getPaaSApplication(
+		t,
+		paasEndpoint,
+		developerLogin.Credential,
+		"application-process",
+		http.StatusUnauthorized,
+	)
 
 	reader := createIAMUser(
 		t,
@@ -253,6 +428,16 @@ func TestIndependentAuthorityProcessesAndIAMAuditDelivery(t *testing.T) {
 		changedReaderPassword,
 		"request-reader-password",
 	)
+	createPaaSApplication(
+		t,
+		paasEndpoint,
+		readerLogin.Credential,
+		"application-reader-denied",
+		"reader-denied-application",
+		"create-application-reader-denied",
+		http.StatusForbidden,
+	)
+	assertPaaSApplicationAbsent(t, ctx, admin, "application-reader-denied")
 	queryAudit(t, auditEndpoint, readerLogin.Credential, auditv1.QueryRecordsRequest{PageSize: 10}, http.StatusOK)
 	revokeIAMBinding(
 		t,
@@ -285,6 +470,48 @@ func TestIndependentAuthorityProcessesAndIAMAuditDelivery(t *testing.T) {
 		verification.State != auditv1.VerificationVerified || verification.RecordCount < 1 {
 		t.Fatalf("cross-process Audit verification=%#v", verification)
 	}
+	assertAuditAccessRecorded(t, ctx, admin, auditv1.ActionAuditRecordsRead, "principal-admin")
+	assertAuditAccessRecorded(t, ctx, admin, auditv1.ActionAuditIntegrityVerified, "principal-admin")
+	iamProcess.stop()
+	waitHTTPStatus(t, ctx, paasProcess, paasEndpoint+"/ready", http.StatusServiceUnavailable)
+	createPaaSApplication(
+		t,
+		paasEndpoint,
+		adminLogin.Credential,
+		"application-iam-unavailable",
+		"iam-unavailable-application",
+		"create-application-iam-unavailable",
+		http.StatusServiceUnavailable,
+	)
+	assertPaaSApplicationAbsent(t, ctx, admin, "application-iam-unavailable")
+	queryAudit(
+		t,
+		auditEndpoint,
+		adminLogin.Credential,
+		auditv1.QueryRecordsRequest{PageSize: 10},
+		http.StatusServiceUnavailable,
+	)
+	iamProcess = start(binaries.iam, iamEnvironment)
+	waitHTTPStatus(t, ctx, iamProcess, iamEndpoint+"/ready", http.StatusOK)
+	waitHTTPStatus(t, ctx, paasProcess, paasEndpoint+"/ready", http.StatusOK)
+	paasProcess.stop()
+	wrongPaaSEnvironment := append([]string(nil), paasEnvironment...)
+	wrongPaaSEnvironment[2] = "MATRIX_PAAS_SERVICE_CREDENTIAL_FILE=" + wrongCredentialPath
+	paasProcess = start(binaries.paas, wrongPaaSEnvironment)
+	waitHTTPStatus(t, ctx, paasProcess, paasEndpoint+"/ready", http.StatusServiceUnavailable)
+	createPaaSApplication(
+		t,
+		paasEndpoint,
+		adminLogin.Credential,
+		"application-wrong-service",
+		"wrong-service-application",
+		"create-application-wrong-service",
+		http.StatusUnauthorized,
+	)
+	assertPaaSApplicationAbsent(t, ctx, admin, "application-wrong-service")
+	paasProcess.stop()
+	paasProcess = start(binaries.paas, paasEnvironment)
+	waitHTTPStatus(t, ctx, paasProcess, paasEndpoint+"/ready", http.StatusOK)
 
 	auditProcess.stop()
 	outageUser := createIAMUser(
@@ -296,10 +523,21 @@ func TestIndependentAuthorityProcessesAndIAMAuditDelivery(t *testing.T) {
 		"Initial-Outage-User-Password-68!",
 		"request-create-outage-user",
 	)
+	createPaaSApplication(
+		t,
+		paasEndpoint,
+		adminLogin.Credential,
+		"application-audit-outage",
+		"audit-outage-application",
+		"create-application-audit-outage",
+		http.StatusCreated,
+	)
 	waitIAMOutboxRetry(t, ctx, admin)
+	waitPaaSOutboxRetry(t, ctx, admin)
 	auditProcess = start(binaries.audit, auditEnvironment)
 	waitHTTPStatus(t, ctx, auditProcess, auditEndpoint+"/ready", http.StatusOK)
 	waitAllIAMOutboxDelivered(t, ctx, admin)
+	waitAllPaaSOutboxDelivered(t, ctx, admin)
 	outageEventID, outageEvent := findIAMEvent(
 		t,
 		ctx,
@@ -341,8 +579,68 @@ func TestIndependentAuthorityProcessesAndIAMAuditDelivery(t *testing.T) {
 		t.Fatalf("changed Audit replay status=%d", response.Status)
 	}
 	assertAuditEventCount(t, ctx, admin, outageEventID, 1)
+	paasEventID, paasEvent := findPaaSEvent(
+		t,
+		ctx,
+		admin,
+		auditv1.ActionPaaSApplicationCreated,
+		"application-audit-outage",
+	)
+	var paasAttemptsBefore int
+	if err := admin.QueryRow(
+		ctx,
+		"SELECT attempts FROM paas.audit_outbox WHERE event_id = $1",
+		paasEventID,
+	).Scan(&paasAttemptsBefore); err != nil {
+		t.Fatalf("inspect PaaS duplicate fixture: %v", err)
+	}
+	if _, err := admin.Exec(
+		ctx,
+		`UPDATE paas.audit_outbox
+		    SET status = 'RETRY', lease_owner = NULL, lease_expires_at = NULL,
+		        available_at = transaction_timestamp(), last_error_code = NULL,
+		        delivered_at = NULL, updated_at = transaction_timestamp()
+		  WHERE event_id = $1 AND status = 'DELIVERED'`,
+		paasEventID,
+	); err != nil {
+		t.Fatalf("inject PaaS duplicate delivery: %v", err)
+	}
+	waitPaaSEventDelivered(t, ctx, admin, paasEventID, paasAttemptsBefore+1)
+	assertAuditSourceEventCount(t, ctx, admin, auditv1.SourcePaaS, paasEventID, 1)
+	changedPaaSEvent := paasEvent
+	changedPaaSEvent.RequestID = "request-changed-paas-replay"
+	response = performJSON(
+		t,
+		http.MethodPost,
+		auditEndpoint+"/v1/events",
+		paasServiceCredential,
+		changedPaaSEvent,
+	)
+	if response.Status != http.StatusConflict {
+		t.Fatalf("changed PaaS Audit replay status=%d", response.Status)
+	}
+	assertAuditSourceEventCount(t, ctx, admin, auditv1.SourcePaaS, paasEventID, 1)
 
 	waitAllIAMOutboxDelivered(t, ctx, admin)
+	waitAllPaaSOutboxDelivered(t, ctx, admin)
+	paasDispatcher.stop()
+	createPaaSApplication(
+		t,
+		paasEndpoint,
+		adminLogin.Credential,
+		"application-dead-letter",
+		"dead-letter-application",
+		"create-application-dead-letter",
+		http.StatusCreated,
+	)
+	wrongPaaSDispatcher := start(
+		binaries.paasDispatcher,
+		paasDispatcherEnvironment(wrongCredentialPath, "paas-audit-worker-wrong"),
+	)
+	waitPaaSDeadLetter(t, ctx, admin)
+	waitHTTPStatus(t, ctx, paasProcess, paasEndpoint+"/ready", http.StatusServiceUnavailable)
+	wrongPaaSDispatcher.stop()
+
 	dispatcher.stop()
 	createIAMUser(
 		t,
@@ -355,7 +653,7 @@ func TestIndependentAuthorityProcessesAndIAMAuditDelivery(t *testing.T) {
 	)
 	wrongDispatcher := start(
 		binaries.dispatcher,
-		dispatcherEnvironment(wrongCredentialPath, "iam-audit-worker-wrong"),
+		iamDispatcherEnvironment(wrongCredentialPath, "iam-audit-worker-wrong"),
 	)
 	waitIAMDeadLetter(t, ctx, admin)
 	waitHTTPStatus(t, ctx, iamProcess, iamEndpoint+"/ready", http.StatusServiceUnavailable)
@@ -368,18 +666,23 @@ func TestIndependentAuthorityProcessesAndIAMAuditDelivery(t *testing.T) {
 		changedAdminPassword,
 		initialReaderPassword,
 		changedReaderPassword,
+		initialDeveloperPassword,
+		changedDeveloperPassword,
 		iamServiceCredential,
 		paasServiceCredential,
 		auditServiceCredential,
 		adminLogin.Credential,
 		readerLogin.Credential,
+		developerLogin.Credential,
 	)
 }
 
 type binarySet struct {
-	iam        string
-	audit      string
-	dispatcher string
+	iam            string
+	audit          string
+	dispatcher     string
+	paas           string
+	paasDispatcher string
 }
 
 func buildAuthorityBinaries(
@@ -404,9 +707,11 @@ func buildAuthorityBinaries(
 		return path
 	}
 	return binarySet{
-		iam:        build("matrix-iam", "./app/service/iam/cmd/matrix-iam"),
-		audit:      build("matrix-audit", "./app/service/audit/cmd/matrix-audit"),
-		dispatcher: build("matrix-iam-audit-dispatcher", "./app/service/iam/cmd/matrix-iam-audit-dispatcher"),
+		iam:            build("matrix-iam", "./app/service/iam/cmd/matrix-iam"),
+		audit:          build("matrix-audit", "./app/service/audit/cmd/matrix-audit"),
+		dispatcher:     build("matrix-iam-audit-dispatcher", "./app/service/iam/cmd/matrix-iam-audit-dispatcher"),
+		paas:           build("matrix-paas", "./app/service/paas/cmd/matrix-paas"),
+		paasDispatcher: build("matrix-paas-audit-dispatcher", "./app/service/paas/cmd/matrix-paas-audit-dispatcher"),
 	}
 }
 
@@ -528,6 +833,18 @@ func performJSON(
 	body any,
 ) processResponse {
 	t.Helper()
+	return performJSONWithIdempotency(t, method, endpoint, bearer, "", body)
+}
+
+func performJSONWithIdempotency(
+	t *testing.T,
+	method string,
+	endpoint string,
+	bearer string,
+	idempotencyKey string,
+	body any,
+) processResponse {
+	t.Helper()
 	var encoded []byte
 	var err error
 	if body != nil {
@@ -545,6 +862,9 @@ func performJSON(
 	}
 	if bearer != "" {
 		request.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	if idempotencyKey != "" {
+		request.Header.Set("Idempotency-Key", idempotencyKey)
 	}
 	response, err := processHTTPClient().Do(request)
 	if err != nil {
@@ -606,6 +926,20 @@ func loginIAM(
 		t.Fatalf("decode IAM login for %s: %v", loginName, err)
 	}
 	return loginResult{Session: wire.Session, Credential: wire.Credential}
+}
+
+func assertIAMWeakLoginRejected(t *testing.T, endpoint string) {
+	t.Helper()
+	const weakPassword = "weak"
+	response := performJSON(t, http.MethodPost, endpoint+"/v1/auth/login", "", struct {
+		LoginName string `json:"loginName"`
+		Password  string `json:"password"`
+		RequestID string `json:"requestId"`
+	}{LoginName: "admin", Password: weakPassword, RequestID: "request-weak-login"})
+	if response.Status != http.StatusUnauthorized ||
+		bytes.Contains(response.Body, []byte(weakPassword)) {
+		t.Fatalf("weak IAM login status=%d body=%s", response.Status, response.Body)
+	}
 }
 
 func changePasswordIAM(
@@ -717,6 +1051,190 @@ func revokeIAMSession(
 	}
 }
 
+func expireIAMSession(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	sessionID iamv1.SessionID,
+) {
+	t.Helper()
+	var expired bool
+	if err := admin.QueryRow(
+		ctx,
+		`UPDATE iam.sessions
+		    SET expires_at = issued_at + interval '1 microsecond'
+		  WHERE tenant_id = 'organization-process'
+		    AND id = $1
+		    AND status = 'ACTIVE'
+		RETURNING expires_at < transaction_timestamp()`,
+		sessionID,
+	).Scan(&expired); err != nil {
+		t.Fatalf("expire IAM session: %v", err)
+	}
+	if !expired {
+		t.Fatal("IAM session fixture did not expire in database time")
+	}
+}
+
+func assertCrossTenantIAMBindingRejected(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	endpoint string,
+	bearer string,
+) {
+	t.Helper()
+	const (
+		crossTenantID    = "organization-process-cross-tenant"
+		crossPrincipalID = "principal-process-cross-tenant"
+	)
+	if _, err := admin.Exec(
+		ctx,
+		`INSERT INTO iam.organizations (
+			id, display_name, status, resource_version, created_at, updated_at
+		) VALUES (
+			$1, 'Process Cross Tenant', 'ACTIVE', 1,
+			transaction_timestamp(), transaction_timestamp()
+		);
+		INSERT INTO iam.principals (
+			tenant_id, id, principal_type, login_name, display_name, status,
+			must_change_password, resource_version, created_at, updated_at
+		) VALUES (
+			$1, $2, 'USER', 'process.cross.tenant', 'Process Cross Tenant User',
+			'ACTIVE', true, 1, transaction_timestamp(), transaction_timestamp()
+		);`,
+		crossTenantID,
+		crossPrincipalID,
+	); err != nil {
+		t.Fatalf("insert cross-tenant IAM process fixture: %v", err)
+	}
+	response := performJSON(
+		t,
+		http.MethodPost,
+		endpoint+"/v1/role-bindings",
+		bearer,
+		iamv1.PutRoleBindingRequest{
+			PrincipalID: crossPrincipalID,
+			Role:        iamv1.RolePaaSDeveloper,
+			RequestID:   "request-process-cross-tenant-binding",
+		},
+	)
+	if response.Status != http.StatusForbidden ||
+		bytes.Contains(response.Body, []byte(crossPrincipalID)) ||
+		bytes.Contains(response.Body, []byte("role binding principal")) {
+		t.Fatalf("cross-tenant IAM binding status=%d body=%s", response.Status, response.Body)
+	}
+	var bindings int
+	if err := admin.QueryRow(
+		ctx,
+		"SELECT count(*) FROM iam.role_bindings WHERE tenant_id = $1",
+		crossTenantID,
+	).Scan(&bindings); err != nil {
+		t.Fatalf("inspect cross-tenant IAM process bindings: %v", err)
+	}
+	if bindings != 0 {
+		t.Fatalf("cross-tenant IAM process bindings=%d want=0", bindings)
+	}
+}
+
+func createPaaSApplication(
+	t *testing.T,
+	endpoint string,
+	bearer string,
+	id paasv1.ResourceID,
+	name string,
+	idempotencyKey string,
+	status int,
+) paasv1.Operation {
+	t.Helper()
+	response := performJSONWithIdempotency(
+		t,
+		http.MethodPost,
+		endpoint+"/v1/applications",
+		bearer,
+		idempotencyKey,
+		paasv1.CreateApplicationRequest{ID: id, Name: name},
+	)
+	if response.Status != status {
+		t.Fatalf("create PaaS application %s status=%d want=%d", id, response.Status, status)
+	}
+	if status != http.StatusCreated && status != http.StatusOK {
+		return paasv1.Operation{}
+	}
+	var operation paasv1.Operation
+	if err := json.Unmarshal(response.Body, &operation); err != nil ||
+		paasv1.ValidateOperation(operation) != nil ||
+		operation.Action != paasv1.OperationCreateApplication ||
+		operation.Target != (paasv1.ResourceRef{Kind: "Application", ID: id}) {
+		t.Fatalf("decode PaaS application operation: operation=%#v err=%v", operation, err)
+	}
+	return operation
+}
+
+func createPaaSConfiguration(
+	t *testing.T,
+	endpoint string,
+	bearer string,
+	id paasv1.ResourceID,
+	name string,
+	applicationID paasv1.ResourceID,
+	idempotencyKey string,
+	status int,
+) {
+	t.Helper()
+	response := performJSONWithIdempotency(
+		t,
+		http.MethodPost,
+		endpoint+"/v1/configurations",
+		bearer,
+		idempotencyKey,
+		paasv1.CreateConfigurationRequest{
+			ID: id, Name: name, ApplicationID: applicationID,
+		},
+	)
+	if response.Status != status {
+		t.Fatalf("create PaaS configuration %s status=%d want=%d", id, response.Status, status)
+	}
+	if status != http.StatusCreated && status != http.StatusOK {
+		return
+	}
+	var operation paasv1.Operation
+	if err := json.Unmarshal(response.Body, &operation); err != nil ||
+		paasv1.ValidateOperation(operation) != nil ||
+		operation.Action != paasv1.OperationCreateConfiguration ||
+		operation.Target != (paasv1.ResourceRef{Kind: "Configuration", ID: id}) {
+		t.Fatalf("decode PaaS configuration operation: operation=%#v err=%v", operation, err)
+	}
+}
+
+func getPaaSApplication(
+	t *testing.T,
+	endpoint string,
+	bearer string,
+	id paasv1.ResourceID,
+	status int,
+) {
+	t.Helper()
+	response := performJSON(
+		t,
+		http.MethodGet,
+		endpoint+"/v1/applications/"+string(id),
+		bearer,
+		nil,
+	)
+	if response.Status != status {
+		t.Fatalf("get PaaS application %s status=%d want=%d", id, response.Status, status)
+	}
+	if status != http.StatusOK {
+		return
+	}
+	var application paasv1.Application
+	if err := json.Unmarshal(response.Body, &application); err != nil ||
+		paasv1.ValidateApplication(application) != nil || application.Metadata.ID != id {
+		t.Fatalf("decode PaaS application: application=%#v err=%v", application, err)
+	}
+}
+
 func queryAudit(
 	t *testing.T,
 	endpoint string,
@@ -738,6 +1256,49 @@ func queryAudit(
 		t.Fatalf("decode Audit page: %v", err)
 	}
 	return page
+}
+
+func assertAuditQueryConfinement(t *testing.T, endpoint string, bearer string) {
+	t.Helper()
+	first := queryAudit(
+		t,
+		endpoint,
+		bearer,
+		auditv1.QueryRecordsRequest{PageSize: 1},
+		http.StatusOK,
+	)
+	if first.NextCursor == "" {
+		t.Fatal("Audit query confinement fixture did not produce a cursor")
+	}
+	changedFilter := performJSON(
+		t,
+		http.MethodPost,
+		endpoint+"/v1/records:query",
+		bearer,
+		auditv1.QueryRecordsRequest{
+			PageSize: 1,
+			Cursor:   first.NextCursor,
+			Action:   auditv1.ActionIAMBootstrapApplied,
+		},
+	)
+	if changedFilter.Status != http.StatusUnprocessableEntity {
+		t.Fatalf("cross-filter Audit cursor status=%d", changedFilter.Status)
+	}
+	const crossTenantID = "organization-process-cross-tenant"
+	tenantSelector := performJSON(
+		t,
+		http.MethodPost,
+		endpoint+"/v1/records:query",
+		bearer,
+		struct {
+			PageSize int    `json:"pageSize"`
+			TenantID string `json:"tenantId"`
+		}{PageSize: 10, TenantID: crossTenantID},
+	)
+	if tenantSelector.Status != http.StatusBadRequest ||
+		bytes.Contains(tenantSelector.Body, []byte(crossTenantID)) {
+		t.Fatalf("tenant-selecting Audit query status=%d body=%s", tenantSelector.Status, tenantSelector.Body)
+	}
 }
 
 func verifyAudit(
@@ -820,6 +1381,62 @@ func waitIAMEventDelivered(
 	})
 }
 
+func waitAllPaaSOutboxDelivered(t *testing.T, ctx context.Context, admin *pgx.Conn) {
+	t.Helper()
+	waitDatabase(t, ctx, "PaaS Audit outbox delivery", func() (bool, error) {
+		var outstanding int
+		err := admin.QueryRow(
+			ctx,
+			"SELECT count(*) FROM paas.audit_outbox WHERE status <> 'DELIVERED'",
+		).Scan(&outstanding)
+		return outstanding == 0, err
+	})
+}
+
+func waitPaaSOutboxRetry(t *testing.T, ctx context.Context, admin *pgx.Conn) {
+	t.Helper()
+	waitDatabase(t, ctx, "PaaS Audit outage retry", func() (bool, error) {
+		var retries int
+		err := admin.QueryRow(
+			ctx,
+			"SELECT count(*) FROM paas.audit_outbox WHERE status = 'RETRY' AND attempts >= 1",
+		).Scan(&retries)
+		return retries > 0, err
+	})
+}
+
+func waitPaaSDeadLetter(t *testing.T, ctx context.Context, admin *pgx.Conn) {
+	t.Helper()
+	waitDatabase(t, ctx, "PaaS Audit dead letter", func() (bool, error) {
+		var dead int
+		err := admin.QueryRow(
+			ctx,
+			"SELECT count(*) FROM paas.audit_outbox WHERE status = 'DEAD_LETTER'",
+		).Scan(&dead)
+		return dead > 0, err
+	})
+}
+
+func waitPaaSEventDelivered(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	eventID string,
+	minimumAttempts int,
+) {
+	t.Helper()
+	waitDatabase(t, ctx, "PaaS Audit duplicate delivery", func() (bool, error) {
+		var status string
+		var attempts int
+		err := admin.QueryRow(
+			ctx,
+			"SELECT status, attempts FROM paas.audit_outbox WHERE event_id = $1",
+			eventID,
+		).Scan(&status, &attempts)
+		return status == "DELIVERED" && attempts >= minimumAttempts, err
+	})
+}
+
 func waitDatabase(
 	t *testing.T,
 	ctx context.Context,
@@ -875,6 +1492,38 @@ func findIAMEvent(
 	return eventID, event
 }
 
+func findPaaSEvent(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	action auditv1.Action,
+	targetID string,
+) (string, auditv1.Event) {
+	t.Helper()
+	var eventID string
+	var document []byte
+	if err := admin.QueryRow(
+		ctx,
+		`SELECT outbox.event_id, record.event_document
+		   FROM paas.audit_outbox AS outbox
+		   JOIN audit.records AS record
+		     ON record.source = 'PAAS' AND record.event_id = outbox.event_id
+		  WHERE outbox.document->>'action' = $1
+		    AND outbox.document#>>'{target,id}' = $2`,
+		string(action),
+		targetID,
+	).Scan(&eventID, &document); err != nil {
+		t.Fatalf("find PaaS Audit event: %v", err)
+	}
+	defer clear(document)
+	var event auditv1.Event
+	if err := auditv1.DecodeRequest(bytes.NewReader(document), &event); err != nil ||
+		auditv1.ValidateEventForSource(auditv1.SourcePaaS, event) != nil {
+		t.Fatalf("decode PaaS Audit event: %v", err)
+	}
+	return eventID, event
+}
+
 func assertIAMEventsStoredOnce(t *testing.T, ctx context.Context, admin *pgx.Conn) {
 	t.Helper()
 	var outbox, records int
@@ -899,16 +1548,140 @@ func assertAuditEventCount(
 	want int,
 ) {
 	t.Helper()
+	assertAuditSourceEventCount(t, ctx, admin, auditv1.SourceIAM, eventID, want)
+}
+
+func assertAuditSourceEventCount(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	source auditv1.Source,
+	eventID string,
+	want int,
+) {
+	t.Helper()
 	var count int
 	if err := admin.QueryRow(
 		ctx,
-		"SELECT count(*) FROM audit.records WHERE source = 'IAM' AND event_id = $1",
+		"SELECT count(*) FROM audit.records WHERE source = $1 AND event_id = $2",
+		string(source),
 		eventID,
 	).Scan(&count); err != nil {
 		t.Fatalf("count Audit event %s: %v", eventID, err)
 	}
 	if count != want {
 		t.Fatalf("Audit event %s count=%d want=%d", eventID, count, want)
+	}
+}
+
+func assertPaaSAuditFact(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	action auditv1.Action,
+	targetID string,
+	actorID string,
+) {
+	t.Helper()
+	var count int
+	if err := admin.QueryRow(
+		ctx,
+		`SELECT count(*)
+		   FROM paas.audit_outbox AS outbox
+		   JOIN iam.authorization_decisions AS decision
+		     ON decision.tenant_id = outbox.tenant_id
+		    AND decision.id = outbox.document->>'iamDecisionId'
+		   JOIN audit.records AS record
+		     ON record.source = 'PAAS'
+		    AND record.event_id = outbox.event_id
+		  WHERE outbox.document->>'action' = $1
+		    AND outbox.document#>>'{target,id}' = $2
+		    AND outbox.document#>>'{actor,id}' = $3
+		    AND decision.allowed
+		    AND decision.principal_id = $3
+		    AND record.event_document->>'iamDecisionId' = decision.id
+		    AND record.event_document#>>'{actor,id}' = decision.principal_id`,
+		string(action),
+		targetID,
+		actorID,
+	).Scan(&count); err != nil {
+		t.Fatalf("inspect PaaS Audit fact: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("PaaS Audit fact action=%s target=%s actor=%s count=%d", action, targetID, actorID, count)
+	}
+}
+
+func countAuditFacts(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	source auditv1.Source,
+	action auditv1.Action,
+	result auditv1.Result,
+) int {
+	t.Helper()
+	var count int
+	if err := admin.QueryRow(
+		ctx,
+		`SELECT count(*)
+		   FROM audit.records
+		  WHERE source = $1
+		    AND event_document->>'action' = $2
+		    AND event_document->>'result' = $3`,
+		string(source),
+		string(action),
+		string(result),
+	).Scan(&count); err != nil {
+		t.Fatalf("count Audit facts source=%s action=%s result=%s: %v", source, action, result, err)
+	}
+	return count
+}
+
+func assertAuditAccessRecorded(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	action auditv1.Action,
+	actorID string,
+) {
+	t.Helper()
+	var count int
+	if err := admin.QueryRow(
+		ctx,
+		`SELECT count(*)
+		   FROM audit.records
+		  WHERE tenant_id = 'organization-process'
+		    AND source = 'AUDIT'
+		    AND event_document->>'action' = $1
+		    AND event_document#>>'{actor,id}' = $2`,
+		string(action),
+		actorID,
+	).Scan(&count); err != nil {
+		t.Fatalf("inspect Audit access fact: %v", err)
+	}
+	if count < 1 {
+		t.Fatalf("Audit access fact action=%s actor=%s count=%d", action, actorID, count)
+	}
+}
+
+func assertPaaSApplicationAbsent(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	id paasv1.ResourceID,
+) {
+	t.Helper()
+	var count int
+	if err := admin.QueryRow(
+		ctx,
+		"SELECT count(*) FROM paas.applications WHERE id = $1",
+		id,
+	).Scan(&count); err != nil {
+		t.Fatalf("inspect absent PaaS application %s: %v", id, err)
+	}
+	if count != 0 {
+		t.Fatalf("denied PaaS application %s was persisted", id)
 	}
 }
 
@@ -927,6 +1700,14 @@ func assertAuthorityPlaintextAbsent(
 				EXISTS (
 					SELECT 1 FROM iam.audit_outbox
 					 WHERE event_document::text LIKE '%' || $1 || '%'
+				)
+				OR EXISTS (
+					SELECT 1 FROM paas.audit_outbox
+					 WHERE document::text LIKE '%' || $1 || '%'
+				)
+				OR EXISTS (
+					SELECT 1 FROM paas.operations
+					 WHERE document::text LIKE '%' || $1 || '%'
 				)
 				OR EXISTS (
 					SELECT 1 FROM audit.records
@@ -1023,46 +1804,57 @@ func assertPostgres18(t *testing.T, ctx context.Context, admin *pgx.Conn) {
 
 func assertCleanSchemas(t *testing.T, ctx context.Context, admin *pgx.Conn) {
 	t.Helper()
-	var iamExists, auditExists bool
+	var iamExists, auditExists, paasExists bool
 	if err := admin.QueryRow(
 		ctx,
-		"SELECT to_regnamespace('iam') IS NOT NULL, to_regnamespace('audit') IS NOT NULL",
-	).Scan(&iamExists, &auditExists); err != nil {
-		t.Fatalf("inspect authority process schemas: %v", err)
+		`SELECT to_regnamespace('iam') IS NOT NULL,
+		        to_regnamespace('audit') IS NOT NULL,
+		        to_regnamespace('paas') IS NOT NULL`,
+	).Scan(&iamExists, &auditExists, &paasExists); err != nil {
+		t.Fatalf("inspect platform process schemas: %v", err)
 	}
-	if iamExists || auditExists {
-		t.Fatal("authority process integration database is not clean")
+	if iamExists || auditExists || paasExists {
+		t.Fatal("platform process integration database is not clean")
 	}
 }
 
-func applyAuthoritySchemas(
+func applyPlatformSchemas(
 	t *testing.T,
 	ctx context.Context,
 	admin *pgx.Conn,
 	root string,
 ) {
 	t.Helper()
-	paths := func(service string, file string) string {
+	authorityPath := func(service string, file string) string {
 		return filepath.Join(
 			root,
 			"app", "service", service, "internal", "data", "postgres",
 			"migrations", "000001_authority", file,
 		)
 	}
+	paasPath := func(file string) string {
+		return filepath.Join(
+			root,
+			"app", "service", "paas", "internal", "apphosting", "data", "postgres",
+			"migrations", "000001_placement_core", file,
+		)
+	}
 	for _, path := range []string{
-		paths("iam", "bootstrap.sql"),
-		paths("audit", "bootstrap.sql"),
-		paths("iam", "up.sql"),
-		paths("audit", "up.sql"),
-		paths("iam", "verify.sql"),
-		paths("audit", "verify.sql"),
+		authorityPath("iam", "bootstrap.sql"),
+		authorityPath("audit", "bootstrap.sql"),
+		authorityPath("iam", "up.sql"),
+		authorityPath("audit", "up.sql"),
+		paasPath("up.sql"),
+		authorityPath("iam", "verify.sql"),
+		authorityPath("audit", "verify.sql"),
+		paasPath("verify.sql"),
 	} {
 		source, err := os.ReadFile(path)
 		if err != nil {
-			t.Fatalf("read authority process migration: %v", err)
+			t.Fatalf("read platform process migration: %v", err)
 		}
 		if _, err := admin.Exec(ctx, string(source)); err != nil {
-			t.Fatalf("apply authority process migration %s: %v", filepath.Base(path), err)
+			t.Fatalf("apply platform process migration %s: %v", filepath.Base(path), err)
 		}
 	}
 }
@@ -1076,6 +1868,8 @@ func createProcessLogins(t *testing.T, ctx context.Context, admin *pgx.Conn) {
 		{iamAPILogin, "matrix_iam_api"},
 		{iamWorkerLogin, "matrix_iam_worker"},
 		{auditRuntimeLogin, "matrix_audit_runtime"},
+		{paasAPILogin, "matrix_paas_api"},
+		{paasWorkerLogin, "matrix_paas_worker"},
 	} {
 		statement := fmt.Sprintf(`DO $matrix_process_role$
 		BEGIN
@@ -1096,6 +1890,40 @@ func createProcessLogins(t *testing.T, ctx context.Context, admin *pgx.Conn) {
 		)
 		if _, err := admin.Exec(ctx, statement); err != nil {
 			t.Fatalf("create authority process login %s: %v", binding.login, err)
+		}
+	}
+}
+
+func assertCrossSchemaIsolation(
+	t *testing.T,
+	ctx context.Context,
+	adminConfig *pgx.ConnConfig,
+) {
+	t.Helper()
+	for _, attack := range []struct {
+		login string
+		query string
+	}{
+		{paasAPILogin, "SELECT * FROM iam.bootstrap_status()"},
+		{paasAPILogin, "SELECT * FROM audit.readiness()"},
+		{paasWorkerLogin, "SELECT * FROM audit.readiness()"},
+		{iamAPILogin, "SELECT * FROM paas.readiness()"},
+		{iamWorkerLogin, "SELECT * FROM paas.audit_outbox_snapshot()"},
+		{auditRuntimeLogin, "SELECT * FROM iam.bootstrap_status()"},
+		{auditRuntimeLogin, "SELECT * FROM paas.readiness()"},
+	} {
+		config := adminConfig.Copy()
+		config.User = attack.login
+		config.Password = processDBPassword
+		connection, err := pgx.ConnectConfig(ctx, config)
+		if err != nil {
+			t.Fatalf("connect cross-schema attack role %s: %v", attack.login, err)
+		}
+		_, attackErr := connection.Exec(ctx, attack.query)
+		_ = connection.Close(context.Background())
+		var postgresError *pgconn.PgError
+		if !errors.As(attackErr, &postgresError) || postgresError.Code != "42501" {
+			t.Fatalf("cross-schema attack role=%s was not denied", attack.login)
 		}
 	}
 }

@@ -194,6 +194,13 @@ const (
 	SubjectSystemUser     SubjectType = "SYSTEM_USER"
 )
 
+type ReadinessState string
+
+const (
+	ReadinessReady    ReadinessState = "READY"
+	ReadinessNotReady ReadinessState = "NOT_READY"
+)
+
 type ErrorCode string
 
 const (

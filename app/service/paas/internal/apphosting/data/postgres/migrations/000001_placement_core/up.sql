@@ -1723,6 +1723,30 @@ REVOKE ALL ON FUNCTION paas.audit_outbox_snapshot() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION paas.audit_outbox_snapshot()
     TO matrix_paas_worker;
 
+CREATE OR REPLACE FUNCTION paas.readiness()
+RETURNS TABLE (ready boolean, schema_version bigint, checked_at timestamptz)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+    SELECT
+        to_regclass('paas.applications') IS NOT NULL
+        AND to_regclass('paas.operations') IS NOT NULL
+        AND to_regclass('paas.audit_outbox') IS NOT NULL
+        AND NOT EXISTS (
+            SELECT 1
+              FROM paas.audit_outbox AS outbox
+             WHERE outbox.status = 'DEAD_LETTER'
+                OR outbox.attempts >= 100
+        ),
+        1::bigint,
+        transaction_timestamp()
+$function$;
+
+REVOKE ALL ON FUNCTION paas.readiness() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paas.readiness() TO matrix_paas_api;
+
 CREATE OR REPLACE FUNCTION paas.claim_operation(
     requested_worker_id text,
     requested_lease_seconds integer

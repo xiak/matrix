@@ -436,10 +436,19 @@ func newIntegrationHTTPHandler(
 	handler, err := apphttp.NewHandler(
 		integrationHTTPAuthorizer{tenantID: tenantID},
 		workflow,
-		apphttp.Config{NewRequestID: func() (string, error) {
-			sequence++
-			return fmt.Sprintf("http-request-%d", sequence), nil
-		}},
+		apphttp.Config{
+			NewRequestID: func() (string, error) {
+				sequence++
+				return fmt.Sprintf("http-request-%d", sequence), nil
+			},
+			Readiness: func(context.Context) (paasv1.Readiness, error) {
+				return paasv1.Readiness{
+					APIVersion: paasv1.APIVersion, Kind: "Readiness",
+					State: paasv1.ReadinessReady, SchemaVersion: 1,
+					CheckedAt: time.Date(2026, 8, 26, 3, 4, 5, 0, time.UTC),
+				}, nil
+			},
+		},
 	)
 	if err != nil {
 		t.Fatalf("create northbound HTTP handler: %v", err)

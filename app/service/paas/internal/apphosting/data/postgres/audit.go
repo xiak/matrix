@@ -205,7 +205,10 @@ func validateAuditCompletion(value auditdispatch.Completion) error {
 			problems = append(problems, errors.New("retry Audit completion is invalid"))
 		}
 	case auditdispatch.OutcomeDeadLetter:
-		if !value.RetryAt.IsZero() || value.ErrorCode == "" {
+		if !value.RetryAt.IsZero() ||
+			value.ErrorCode != "AUDIT_DELIVERY_REJECTED" &&
+				value.ErrorCode != "AUDIT_DELIVERY_EXHAUSTED" &&
+				value.ErrorCode != "CORRUPT_AUDIT_EVENT" {
 			problems = append(problems, errors.New("dead-letter Audit completion is invalid"))
 		}
 	default:
