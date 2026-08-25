@@ -15,47 +15,43 @@ const (
 	TenantDeactivated TenantStatus = "DEACTIVATED"
 )
 
-type ResourcePoolPhase string
+type ExecutionPoolPhase string
 
 const (
-	ResourcePoolReady       ResourcePoolPhase = "READY"
-	ResourcePoolDegraded    ResourcePoolPhase = "DEGRADED"
-	ResourcePoolUnavailable ResourcePoolPhase = "UNAVAILABLE"
+	ExecutionPoolReady       ExecutionPoolPhase = "READY"
+	ExecutionPoolDegraded    ExecutionPoolPhase = "DEGRADED"
+	ExecutionPoolUnavailable ExecutionPoolPhase = "UNAVAILABLE"
 )
 
-type TargetHealth string
+type ExecutionTargetHealth string
 
 const (
-	TargetHealthUnknown     TargetHealth = "UNKNOWN"
-	TargetHealthReady       TargetHealth = "READY"
-	TargetHealthDegraded    TargetHealth = "DEGRADED"
-	TargetHealthUnavailable TargetHealth = "UNAVAILABLE"
+	ExecutionTargetHealthUnknown     ExecutionTargetHealth = "UNKNOWN"
+	ExecutionTargetHealthReady       ExecutionTargetHealth = "READY"
+	ExecutionTargetHealthDegraded    ExecutionTargetHealth = "DEGRADED"
+	ExecutionTargetHealthUnavailable ExecutionTargetHealth = "UNAVAILABLE"
 )
 
-type TargetDesiredState string
+type ExecutionTargetDesiredState string
 
 const (
-	TargetActive   TargetDesiredState = "ACTIVE"
-	TargetDraining TargetDesiredState = "DRAINING"
+	ExecutionTargetActive   ExecutionTargetDesiredState = "ACTIVE"
+	ExecutionTargetDraining ExecutionTargetDesiredState = "DRAINING"
 )
 
-type IsolationClass string
+type IsolationGuarantee string
 
 const (
-	IsolationSharedCompose    IsolationClass = "SHARED_COMPOSE"
-	IsolationDedicatedCompose IsolationClass = "DEDICATED_COMPOSE"
-	IsolationDedicatedHost    IsolationClass = "DEDICATED_HOST"
-	IsolationKubernetesNS     IsolationClass = "K8S_NAMESPACE"
-	IsolationPhysicalHost     IsolationClass = "PHYSICAL_HOST"
+	IsolationWorkload IsolationGuarantee = "WORKLOAD"
+	IsolationTenant   IsolationGuarantee = "TENANT"
+	IsolationHost     IsolationGuarantee = "HOST"
 )
 
-func IsolationClasses() []IsolationClass {
-	return []IsolationClass{
-		IsolationSharedCompose,
-		IsolationDedicatedCompose,
-		IsolationDedicatedHost,
-		IsolationKubernetesNS,
-		IsolationPhysicalHost,
+func IsolationGuarantees() []IsolationGuarantee {
+	return []IsolationGuarantee{
+		IsolationWorkload,
+		IsolationTenant,
+		IsolationHost,
 	}
 }
 
@@ -74,42 +70,49 @@ const (
 	PlacementUnschedulable PlacementOutcome = "UNSCHEDULABLE"
 )
 
-type ReleasePhase string
+type DeploymentDesiredState string
 
 const (
-	ReleasePending  ReleasePhase = "PENDING"
-	ReleasePlacing  ReleasePhase = "PLACING"
-	ReleaseApplying ReleasePhase = "APPLYING"
-	ReleaseReady    ReleasePhase = "READY"
-	ReleaseDegraded ReleasePhase = "DEGRADED"
-	ReleaseFailed   ReleasePhase = "FAILED"
-	ReleaseStopping ReleasePhase = "STOPPING"
-	ReleaseStopped  ReleasePhase = "STOPPED"
+	DeploymentDesiredRunning DeploymentDesiredState = "RUNNING"
+	DeploymentDesiredStopped DeploymentDesiredState = "STOPPED"
 )
 
-func ReleasePhases() []ReleasePhase {
-	return []ReleasePhase{
-		ReleasePending,
-		ReleasePlacing,
-		ReleaseApplying,
-		ReleaseReady,
-		ReleaseDegraded,
-		ReleaseFailed,
-		ReleaseStopping,
-		ReleaseStopped,
+type DeploymentPhase string
+
+const (
+	DeploymentPending  DeploymentPhase = "PENDING"
+	DeploymentPlacing  DeploymentPhase = "PLACING"
+	DeploymentApplying DeploymentPhase = "APPLYING"
+	DeploymentReady    DeploymentPhase = "READY"
+	DeploymentDegraded DeploymentPhase = "DEGRADED"
+	DeploymentFailed   DeploymentPhase = "FAILED"
+	DeploymentStopping DeploymentPhase = "STOPPING"
+	DeploymentStopped  DeploymentPhase = "STOPPED"
+)
+
+func DeploymentPhases() []DeploymentPhase {
+	return []DeploymentPhase{
+		DeploymentPending,
+		DeploymentPlacing,
+		DeploymentApplying,
+		DeploymentReady,
+		DeploymentDegraded,
+		DeploymentFailed,
+		DeploymentStopping,
+		DeploymentStopped,
 	}
 }
 
 type OperationAction string
 
 const (
-	OperationCreateResourcePool OperationAction = "CREATE_RESOURCE_POOL"
-	OperationRegisterTarget     OperationAction = "REGISTER_TARGET"
-	OperationCreatePlacement    OperationAction = "CREATE_PLACEMENT"
-	OperationDeploy             OperationAction = "DEPLOY"
-	OperationUpdate             OperationAction = "UPDATE"
-	OperationStop               OperationAction = "STOP"
-	OperationRollback           OperationAction = "ROLLBACK"
+	OperationCreateExecutionPool     OperationAction = "CREATE_EXECUTION_POOL"
+	OperationRegisterExecutionTarget OperationAction = "REGISTER_EXECUTION_TARGET"
+	OperationCreatePlacement         OperationAction = "CREATE_PLACEMENT"
+	OperationDeploy                  OperationAction = "DEPLOY"
+	OperationUpdate                  OperationAction = "UPDATE"
+	OperationStop                    OperationAction = "STOP"
+	OperationRollback                OperationAction = "ROLLBACK"
 )
 
 type OperationState string
@@ -174,25 +177,25 @@ const (
 type ErrorCode string
 
 const (
-	ErrorInvalidArgument         ErrorCode = "INVALID_ARGUMENT"
-	ErrorUnauthenticated         ErrorCode = "UNAUTHENTICATED"
-	ErrorPermissionDenied        ErrorCode = "PERMISSION_DENIED"
-	ErrorNotFound                ErrorCode = "NOT_FOUND"
-	ErrorAlreadyExists           ErrorCode = "ALREADY_EXISTS"
-	ErrorConflict                ErrorCode = "CONFLICT"
-	ErrorResourceVersionConflict ErrorCode = "RESOURCE_VERSION_CONFLICT"
-	ErrorIdempotencyConflict     ErrorCode = "IDEMPOTENCY_CONFLICT"
-	ErrorUnschedulable           ErrorCode = "UNSCHEDULABLE"
-	ErrorCapabilityUnsupported   ErrorCode = "CAPABILITY_UNSUPPORTED"
-	ErrorTargetUnavailable       ErrorCode = "TARGET_UNAVAILABLE"
-	ErrorAdapterUnavailable      ErrorCode = "ADAPTER_UNAVAILABLE"
-	ErrorAdapterRejected         ErrorCode = "ADAPTER_REJECTED"
-	ErrorAdapterOutcomeUnknown   ErrorCode = "ADAPTER_OUTCOME_UNKNOWN"
-	ErrorDeadlineExceeded        ErrorCode = "DEADLINE_EXCEEDED"
-	ErrorOperationFailed         ErrorCode = "OPERATION_FAILED"
-	ErrorManualIntervention      ErrorCode = "MANUAL_INTERVENTION_REQUIRED"
-	ErrorRateLimited             ErrorCode = "RATE_LIMITED"
-	ErrorInternal                ErrorCode = "INTERNAL"
+	ErrorInvalidArgument            ErrorCode = "INVALID_ARGUMENT"
+	ErrorUnauthenticated            ErrorCode = "UNAUTHENTICATED"
+	ErrorPermissionDenied           ErrorCode = "PERMISSION_DENIED"
+	ErrorNotFound                   ErrorCode = "NOT_FOUND"
+	ErrorAlreadyExists              ErrorCode = "ALREADY_EXISTS"
+	ErrorConflict                   ErrorCode = "CONFLICT"
+	ErrorResourceVersionConflict    ErrorCode = "RESOURCE_VERSION_CONFLICT"
+	ErrorIdempotencyConflict        ErrorCode = "IDEMPOTENCY_CONFLICT"
+	ErrorUnschedulable              ErrorCode = "UNSCHEDULABLE"
+	ErrorCapabilityUnsupported      ErrorCode = "CAPABILITY_UNSUPPORTED"
+	ErrorExecutionTargetUnavailable ErrorCode = "EXECUTION_TARGET_UNAVAILABLE"
+	ErrorAdapterUnavailable         ErrorCode = "ADAPTER_UNAVAILABLE"
+	ErrorAdapterRejected            ErrorCode = "ADAPTER_REJECTED"
+	ErrorAdapterOutcomeUnknown      ErrorCode = "ADAPTER_OUTCOME_UNKNOWN"
+	ErrorDeadlineExceeded           ErrorCode = "DEADLINE_EXCEEDED"
+	ErrorOperationFailed            ErrorCode = "OPERATION_FAILED"
+	ErrorManualIntervention         ErrorCode = "MANUAL_INTERVENTION_REQUIRED"
+	ErrorRateLimited                ErrorCode = "RATE_LIMITED"
+	ErrorInternal                   ErrorCode = "INTERNAL"
 )
 
 func ErrorCodes() []ErrorCode {
@@ -207,7 +210,7 @@ func ErrorCodes() []ErrorCode {
 		ErrorIdempotencyConflict,
 		ErrorUnschedulable,
 		ErrorCapabilityUnsupported,
-		ErrorTargetUnavailable,
+		ErrorExecutionTargetUnavailable,
 		ErrorAdapterUnavailable,
 		ErrorAdapterRejected,
 		ErrorAdapterOutcomeUnknown,
@@ -222,25 +225,25 @@ func ErrorCodes() []ErrorCode {
 type AdapterKind string
 
 const (
-	AdapterInfrastructure AdapterKind = "INFRASTRUCTURE"
-	AdapterRuntime        AdapterKind = "RUNTIME"
-	AdapterGateway        AdapterKind = "GATEWAY"
+	AdapterInfrastructure     AdapterKind = "INFRASTRUCTURE"
+	AdapterDeploymentExecutor AdapterKind = "DEPLOYMENT_EXECUTOR"
+	AdapterGateway            AdapterKind = "GATEWAY"
 )
 
 type AdapterAction string
 
 const (
-	AdapterCapabilities    AdapterAction = "CAPABILITIES"
-	AdapterInspectTarget   AdapterAction = "INSPECT_TARGET"
-	AdapterObserveTarget   AdapterAction = "OBSERVE_TARGET"
-	AdapterValidateRelease AdapterAction = "VALIDATE_RELEASE"
-	AdapterApply           AdapterAction = "APPLY"
-	AdapterObserve         AdapterAction = "OBSERVE"
-	AdapterStop            AdapterAction = "STOP"
-	AdapterRollback        AdapterAction = "ROLLBACK"
-	AdapterReconcileRoutes AdapterAction = "RECONCILE_ROUTES"
-	AdapterObserveRoutes   AdapterAction = "OBSERVE_ROUTES"
-	AdapterDeleteRoutes    AdapterAction = "DELETE_ROUTES"
+	AdapterCapabilities           AdapterAction = "CAPABILITIES"
+	AdapterInspectExecutionTarget AdapterAction = "INSPECT_EXECUTION_TARGET"
+	AdapterObserveExecutionTarget AdapterAction = "OBSERVE_EXECUTION_TARGET"
+	AdapterValidateDeployment     AdapterAction = "VALIDATE_DEPLOYMENT"
+	AdapterApplyDeployment        AdapterAction = "APPLY_DEPLOYMENT"
+	AdapterObserveDeployment      AdapterAction = "OBSERVE_DEPLOYMENT"
+	AdapterStopDeployment         AdapterAction = "STOP_DEPLOYMENT"
+	AdapterRollbackDeployment     AdapterAction = "ROLLBACK_DEPLOYMENT"
+	AdapterReconcileRoutes        AdapterAction = "RECONCILE_ROUTES"
+	AdapterObserveRoutes          AdapterAction = "OBSERVE_ROUTES"
+	AdapterDeleteRoutes           AdapterAction = "DELETE_ROUTES"
 )
 
 type AdapterResultState string
@@ -274,6 +277,20 @@ const (
 	ArtifactOCIImage      ArtifactKind = "OCI_IMAGE"
 	ArtifactOCIArtifact   ArtifactKind = "OCI_ARTIFACT"
 	ArtifactReleaseBundle ArtifactKind = "RELEASE_BUNDLE"
+)
+
+type InputKind string
+
+const (
+	InputConfiguration InputKind = "CONFIGURATION"
+	InputSecret        InputKind = "SECRET"
+)
+
+type InjectionMode string
+
+const (
+	InjectionEnvironment InjectionMode = "ENV"
+	InjectionFile        InjectionMode = "FILE"
 )
 
 type EndpointProtocol string

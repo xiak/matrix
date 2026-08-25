@@ -1,17 +1,17 @@
 # FEAT-002: LocalMachine infrastructure adapter
 
 - Status: Accepted
-- Target release: Local Compose Runtime v0.1
+- Target release: Private Application PaaS v0.1
 - Adapter contract version: `v1`
 - Target design date: 2026-08-25
 
 ## Outcome
 
 Admit an explicitly configured local or remote machine as a normalized
-`RuntimeTarget` without creating infrastructure and without exposing machine
+`ExecutionTarget` without creating infrastructure and without exposing machine
 access material to a public API. The adapter discovers stable machine identity,
-capacity, health, labels, and eligible isolation classes. Later placement and
-runtime features consume only the normalized observation.
+capacity, health, labels, and supported isolation guarantees. Placement and
+DeploymentExecutor features consume only the normalized observation.
 
 This target design is fixed before the FEAT-002 donor implementation review.
 Donor code can change implementation tactics only through a recorded
@@ -24,7 +24,7 @@ amendment.
 Gate A is the first usable backend increment and is sufficient to begin
 FEAT-003 and FEAT-004 development:
 
-1. A deployment-owned binding named `local` selects the current machine.
+1. A platform-installation binding named `local` selects the current machine.
 2. A real cross-platform host probe returns a stable identity fingerprint,
    logical CPU, memory, storage, architecture, and observation time.
 3. Docker Engine and Compose availability are probed through fixed commands;
@@ -43,13 +43,13 @@ host-native control-plane/worker. A containerized worker must not present its
 container identity as the physical host. FEAT-006 composition must explicitly
 select the completed pinned-SSH probe or a separately accepted Docker-engine
 or host-agent probe. The injected `HostProbe` boundary allows that replacement
-without changing `RuntimeTarget` or placement contracts.
+without changing `ExecutionTarget` or placement contracts.
 
 ### Gate B: pinned remote Linux machine
 
 Gate B completes FEAT-002:
 
-1. A deployment-owned SSH binding contains an endpoint, credential reference,
+1. A platform-installation SSH binding contains an endpoint, credential reference,
    expected host-key SHA-256 fingerprint, labels, and isolation allowlist.
 2. The credential reference is resolved inside the composition root or an
    injected secret resolver. Private keys and passwords are never fields of a
@@ -75,11 +75,11 @@ bound machine; it cannot:
 - choose a tenant or placement;
 - authorize a caller;
 - deploy or stop a workload;
-- grant a stronger or weaker isolation class than service policy permits;
+- grant a stronger or weaker isolation guarantee than service policy permits;
 - accept arbitrary SSH options, scripts, environment variables, or paths.
 
-The service owns `RuntimeTarget` identity and desired state. Deployment
-configuration owns connection bindings. IAM owns authorization. The adapter
+The service owns `ExecutionTarget` identity and desired state. Platform
+installation configuration owns connection bindings. IAM owns authorization. The adapter
 returns facts and normalized failures only.
 
 ## Binding model
@@ -95,12 +95,12 @@ Its minimum shape is:
 | `credentialRef` | Forbidden | Required | Opaque reference resolved internally. |
 | `hostKeySHA256` | Forbidden | Required | Exact pinned server key fingerprint. |
 | `expectedMachineFingerprint` | Optional | Optional | Once enrolled, identity changes fail closed. |
-| `labels` | Optional | Optional | Deployment-owned scheduling facts; bounded and sanitized. |
-| `allowedIsolationClasses` | Required | Required | May contain only adapter-supported classes. |
-| `storagePath` | Optional | Optional | Deployment-owned capacity probe root; never caller supplied. |
+| `labels` | Optional | Optional | Operator-owned scheduling facts; bounded and sanitized. |
+| `allowedIsolationGuarantees` | Required | Required | May contain only adapter-supported guarantees. |
+| `storagePath` | Optional | Optional | Installation-owned capacity probe root; never tenant supplied. |
 
 Binding validation occurs before network or process activity. Unknown fields,
-duplicate labels/isolation classes, relative storage roots, missing pins, and
+duplicate labels/isolation guarantees, relative storage roots, missing pins, and
 mixed local/SSH fields are rejected.
 
 ## Versioned adapter data
@@ -109,12 +109,12 @@ Concrete adapters live outside the PaaS service `internal/` tree. Therefore
 all method parameter and result data they must compile against lives in the
 versioned `api/paas/v1` adapter contract:
 
-- `InspectTargetRequest` and `ObserveTargetRequest` carry only the common
+- `InspectExecutionTargetRequest` and `ObserveExecutionTargetRequest` carry only the common
   `AdapterCommandEnvelope`;
-- `TargetObservation` carries fingerprint, normalized labels, capacity,
-  allocatable capacity, health, supported isolation classes, and timestamp;
+- `ExecutionTargetObservation` carries fingerprint, normalized labels,
+  capacity, allocatable capacity, health, supported isolation guarantees, and timestamp;
 - service-owned interfaces remain under
-  `app/service/paas/internal/port` and refer only to versioned data.
+  `app/service/paas/internal/apphosting/port` and refer only to versioned data.
 
 Endpoints, usernames, private keys, raw probe output, and native operating
 system structs are not members of these types. This is a refinement of the
@@ -141,26 +141,25 @@ tenant ID.
 7. Allocatable capacity is policy-derived and cannot exceed capacity.
 8. Adapter and observation timestamps are UTC with microsecond precision.
 9. Labels from the binding and safe discovered labels are merged with
-   deployment labels taking precedence; reserved authority labels cannot be
+   operator labels taking precedence; reserved authority labels cannot be
    overwritten by discovery.
 
 ## Health and isolation
 
 The observation health is deterministic:
 
-| Host probe | Docker Engine | Compose plugin | Health | Compose isolation |
+| Host probe | Docker Engine | Compose plugin | Health | Advertised guarantee |
 | --- | --- | --- | --- | --- |
 | Fails | Any | Any | `UNAVAILABLE` | None |
 | Passes | Fails | Any | `DEGRADED` | None |
 | Passes | Passes | Fails | `DEGRADED` | None |
 | Passes | Passes | Passes | `READY` | Policy intersection |
 
-FEAT-002 may advertise only `SHARED_COMPOSE` and `DEDICATED_COMPOSE`, and only
-when the binding allowlist and discovered Compose capability both contain the
-class. `DEDICATED_HOST`, `K8S_NAMESPACE`, and `PHYSICAL_HOST` are never inferred
-from a machine probe.
+FEAT-002 advertises only `WORKLOAD`, and only when the binding allowlist and
+discovered Compose capability both contain it. `TENANT` and `HOST` are never
+inferred from a machine probe.
 
-`ObserveTarget` does not mutate the target desired state or placement. It
+`ObserveExecutionTarget` does not mutate target desired state or placement. It
 returns a new observation; the service decides whether and how to persist it.
 
 ## Failure normalization
@@ -173,7 +172,7 @@ returns a new observation; the service decides whether and how to persist it.
 | SSH host key mismatch | `PERMISSION_DENIED` | `ADAPTER_REJECTED` | No |
 | Credential reference unavailable | `PERMISSION_DENIED` | `PERMISSION_DENIED` | No |
 | Probe deadline | `TIMEOUT` | `DEADLINE_EXCEEDED` | Yes within operation budget |
-| Transport unavailable | `UNAVAILABLE` | `TARGET_UNAVAILABLE` | Yes |
+| Transport unavailable | `UNAVAILABLE` | `EXECUTION_TARGET_UNAVAILABLE` | Yes |
 | Malformed/oversized probe output | `VALIDATION` | `ADAPTER_REJECTED` | No |
 | Unexpected adapter defect | `INTERNAL` | `INTERNAL` | No |
 
@@ -203,20 +202,11 @@ after unbounded output has already been buffered.
 5. Tests prove public/versioned adapter data has no credential, SSH endpoint,
    arbitrary command, script, or host-path fields.
 
-#### Gate A acceptance result
+#### Gate A evidence
 
-Accepted on 2026-08-25 with:
-
-- 21 top-level LocalMachine tests, including a real Windows host inspection;
-- stable length-prefixed identity hashing and expected-identity conflict tests;
-- fail-closed binding, label, isolation, scope, Docker/Compose health, and
-  normalized-error tests;
-- native Windows tests plus successful Linux amd64/arm64 and Darwin
-  amd64/arm64 test-binary cross-compilation;
-- 63 JSON Schemas and ten examples compiled/validated by the Go suite;
-- `go test ./...`, `go vet ./...`, `go test -race ./...`,
-  `go test -count=10 ./...`, architecture tests, and `git diff --check`
-  passing.
+Accepted on 2026-08-25. Unit tests cover binding, identity, capacity,
+capability intersection, health, scope, and normalized errors. A real local
+inspection test exercises the host probe without requiring Docker readiness.
 
 ### Gate B
 
@@ -227,30 +217,12 @@ Accepted on 2026-08-25 with:
 4. A remote observation is byte-for-byte equivalent in normalized shape to a
    local observation with the same safe facts.
 
-#### Gate B acceptance result
+#### Gate B evidence
 
-Accepted on 2026-08-25 with:
-
-- a real loopback ephemeral SSH server exercising the complete adapter path
-  and all eight adapter-owned probes;
-- mandatory SHA-256 host-key pinning and public-key authentication, with wrong
-  pins and rejected credentials proven to execute zero commands;
-- unknown, empty, and duplicate probe sets rejected before a network
-  connection is opened;
-- context cancellation proven to interrupt both a stalled SSH handshake and a
-  stalled exec request promptly;
-- stdout and stderr bounded while reading, with oversized, malformed,
-  control-character, secret-shaped, overflow, and impossible capacity output
-  rejected without leaking native details;
-- parsed signer storage, generic credential errors, and redacted debug
-  formatting for credentials, bindings, and raw machine identity;
-- 39 top-level LocalMachine tests in total, including the real local-host and
-  ephemeral-SSH integration paths;
-- native Windows tests plus successful Windows amd64, Linux amd64/arm64, and
-  Darwin arm64 test-binary compilation;
-- `go test ./...`, `go vet ./...`, `go test -race ./...`,
-  `go test -count=10 ./...`, architecture tests, schema tests, and
-  `git diff --check` passing.
+Accepted on 2026-08-25. A loopback ephemeral SSH server exercises every fixed
+probe, mandatory host-key pinning, rejected credentials, deadline and
+cancellation behavior, bounded stdout/stderr, malformed output, and redacted
+failures. Unknown probe identifiers are rejected before transport execution.
 
 The implementation adds `golang.org/x/crypto/ssh` as the only new direct
 runtime dependency. Neither donor repository is linked, copied, or required
@@ -266,7 +238,7 @@ at build or runtime.
 
 ## Deferred
 
-Persisting RuntimeTarget and bindings, tenant placement, worker leases,
+Persisting ExecutionTarget and bindings, tenant placement, worker leases,
 Compose effects, IAM/Audit integration, northbound registration endpoints,
 cloud provisioning, Kubernetes discovery, remote Windows, and UI are owned by
 later features.

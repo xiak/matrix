@@ -1,59 +1,65 @@
 # Codex working checkpoint
 
-> Non-authoritative agent memory. Validate every statement against the current
-> Git worktree, executable tests, and the owning FEAT before acting. Formal
-> product documentation lives under `docs/`.
+> Non-authoritative portable memory. Validate it against Git and the owning
+> FEAT before continuing.
 
 - Updated: 2026-08-25
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/placement-policy`
 - Active release: Private Application PaaS v0.1, Docker/Compose first
 
-Local checkout paths are machine-specific and must never be relied upon.
+## Durable constraints
 
-## Durable working constraints
-
-- Use Pragmatic DDD; abstractions must protect a real rule, boundary, side
-  effect, variation, or current complexity.
-- Design the target first, inspect donors only at fixed commits, then classify
-  slices as `REUSE`, `ADAPT`, `REFERENCE`, or `REJECT`.
-- IAM, Audit, and minimal Operation semantics are reusable authorities or
-  mechanisms. The legacy universal ServiceRuntime is not the target product
-  model.
-- Application hosting uses Application, immutable ApplicationRevision, and
-  Deployment. Compose is the first domain-local DeploymentExecutor;
-  Kubernetes may conform later without becoming a universal runtime API.
-- Formal docs use single ownership: one FEAT owns requirement through
-  acceptance; ADRs own cross-FEAT boundaries; adoption records own provenance;
-  runbooks own verified procedures.
+- Use Pragmatic DDD and one current implementation. Git preserves replaced
+  pre-v1 drafts; source, tests, and docs do not retain aliases, compatibility
+  layers, or historical copies without evidence of a real consumer.
+- Design each FEAT target before donor inspection. Review only fixed donor
+  commits and record every relevant slice as `REUSE`, `ADAPT`, `REFERENCE`, or
+  `REJECT`; donors never become build or runtime dependencies.
+- Modify the current owner before adding an artifact. Tests prove current
+  contracts, invariants, security boundaries, or supported runtime behavior;
+  they do not snapshot SQL text, file layout, incidental order, or stale
+  features.
+- The Go module is `github.com/xiak/matrix`. The public API group is
+  `paas.matrix.xiak.com/v1`; it is an identifier, not a customer DNS lookup.
 
 ## Portable branch state
 
-- FEAT-001 and FEAT-002 mechanisms exist; FEAT-003 deterministic placement
-  Gate A evidence exists.
-- The product-boundary correction is recorded: the target model is
-  Application, immutable ApplicationRevision, Deployment,
-  ExecutionPool/ExecutionTarget, and a domain-local DeploymentExecutor.
-- A Gate B foundation now exists: tactical DDD package boundaries, a
-  transaction-owned create-placement use case, tenant-neutral capacity claims
-  with tenant-owned reservation links, a pgx repository, and a forced-RLS
-  PostgreSQL migration/verifier. Gate B is not accepted yet.
-- For this checkpoint, unit, vet, race, ten-run, placement fuzz, architecture,
-  `git diff --check`, and PostgreSQL 18 migration apply-twice/verify gates
-  passed. Real repository, concurrency, RLS-behavior, and fault-injection
-  integration tests remain absent.
-- The current public draft still uses WorkloadRelease, RuntimeTarget, and
-  technology-shaped isolation values and must be corrected before Gate B.
+- The branch contains commit `001d889` and uses the fixed donor baselines
+  listed below.
+- FEAT-001, FEAT-002, and FEAT-003 Gate A/Gate B are Accepted. The public model
+  is Application, immutable ApplicationRevision, Deployment,
+  ExecutionPool/ExecutionTarget, provider-neutral PlacementPolicy, and an
+  apphosting-owned DeploymentExecutor boundary.
+- Configuration is a default PaaS capability. Phase 1 binds immutable
+  ConfigurationRevision values to ENV injection and exact secret versions to
+  read-only FILE injection. Dynamic refresh, structured files, Nacos, and
+  Consul are deferred behind the same provider-neutral binding seam.
+- PostgreSQL placement uses tenant-leading forced-RLS resources,
+  tenant-neutral capacity claims, tenant-owned reservation links, bounded
+  serializable retries, exact replay, and one security-definer reservation
+  transition boundary.
+- The same worktree passed generation drift, unit, vet, race, ten-run, schema,
+  architecture, placement fuzz, four OS/architecture builds, Markdown-link,
+  and diff gates. A disposable PostgreSQL 18 test applied the migration twice,
+  ran the verifier, raced capacity, attacked RLS, injected rollback failure,
+  and exercised activate/release/expiry under the race detector.
+- No Compose DeploymentExecutor, northbound application workflow, offline
+  distribution, verified install/operations path, or platform
+  upgrade/rollback E2E exists yet. The Phase 1 goal is therefore active.
 
 ## Next concrete work
 
-1. Correct the apphosting ApplicationRevision/Deployment and
-   ExecutionPool/ExecutionTarget model without compatibility aliases.
-2. Migrate the Gate B schema/repository/use case to that corrected model and
-   add real PostgreSQL concurrency, tenant-isolation, replay, and atomicity
-   integration tests.
-3. Accept Gate B, then build the real Compose vertical slice and offline
-   installation/upgrade/rollback release gate.
+1. Write the smallest FEAT target for the Compose application-execution
+   vertical slice before donor inspection: authoritative application,
+   configuration, revision, Deployment and Operation persistence; generated
+   Compose owned by the adapter; ENV configuration; read-only secret files;
+   apply/observe/stop/rollback reconciliation.
+2. Implement and accept that slice with real Docker Compose behavior, then add
+   the minimal northbound workflow needed to drive it.
+3. Package digest-pinned offline installation and prove clean-host install,
+   verification, operations, platform upgrade, rollback, and application
+   rollback without registry or Internet access.
 
 ## Fixed donor baselines
 
@@ -61,10 +67,6 @@ Local checkout paths are machine-specific and must never be relied upon.
 - Senatria IAM/Audit foundation:
   `f51d5ed19fd60e8c4e43500af5e669d67ae4ef7d`
 
-Replace this file at milestones or task handoff. Do not append command logs,
-chat transcripts, secrets, raw provider payloads, or historical diaries.
-
-For a cross-machine handoff: finish a coherent slice, run its stated gates,
-replace this checkpoint, commit both the slice and checkpoint, and push the
-same feature branch. On the next machine, pull the branch, confirm a clean
-worktree, read this file once, and validate its claims before continuing.
+Replace this file only at a committed-and-pushed milestone or handoff. Do not
+append command logs, chat transcripts, secrets, raw provider payloads, or
+machine-local paths.

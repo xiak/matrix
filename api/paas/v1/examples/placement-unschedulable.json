@@ -1,21 +1,20 @@
 {
-  "apiVersion": "matrix.paas.io/paas/v1",
+  "apiVersion": "paas.matrix.xiak.com/v1",
   "kind": "PlacementDecision",
   "metadata": {
     "id": "decision-a-0001",
     "name": "demo-placement",
-    "scope": {
-      "kind": "TENANT",
-      "tenantId": "tenant-a"
-    },
+    "scope": { "kind": "TENANT", "tenantId": "tenant-a" },
     "resourceVersion": 1,
     "createdAt": "2026-08-25T08:02:00Z",
     "updatedAt": "2026-08-25T08:02:00Z"
   },
-  "workloadReleaseId": "release-a-0001",
-  "placementPolicyId": "policy-physical",
+  "deploymentId": "deployment-a-0001",
+  "deploymentResourceVersion": 1,
+  "applicationRevisionId": "revision-a-0001",
+  "placementPolicyId": "placement-policy-a",
   "policyResourceVersion": 1,
-  "requestedIsolationClass": "PHYSICAL_HOST",
+  "requestedIsolationGuarantee": "HOST",
   "outcome": "UNSCHEDULABLE",
   "candidateSetDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
   "reason": {
@@ -23,7 +22,7 @@
     "title": "Isolation capability is unavailable",
     "status": 422,
     "code": "CAPABILITY_UNSUPPORTED",
-    "detail": "No eligible runtime target supports the requested isolation class.",
+    "detail": "No eligible execution target supports the requested isolation guarantee.",
     "traceId": "trace-0001",
     "retryable": false
   },

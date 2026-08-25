@@ -59,8 +59,7 @@ own state machines.
 
 ### Application and runtime boundary
 
-Before Gate B and any northbound v1 release, the draft model changes from
-`WorkloadRelease` with mutable status to:
+The application-hosting model is:
 
 ```text
 Application -> immutable ApplicationRevision -> Deployment
@@ -70,9 +69,8 @@ Application -> immutable ApplicationRevision -> Deployment
 
 One revision can be deployed more than once. Deployment owns configuration,
 placement, readiness, health, current Operation, and rollback to a prior
-accepted snapshot. `ResourcePool`, `RuntimeTarget`, and `RuntimeAdapter` become
-`ExecutionPool`, `ExecutionTarget`, and apphosting-owned
-`DeploymentExecutor` concepts.
+accepted snapshot. ExecutionPool and ExecutionTarget describe provider-neutral
+capacity; the apphosting context owns the DeploymentExecutor boundary.
 
 The executor contract is portable only inside the bounded Matrix application
 profile: digest-pinned OCI artifacts, components, endpoints, resource limits,
@@ -119,8 +117,8 @@ remain in the existing FEAT adoption records.
 
 ## Consequences
 
-- FEAT-003 Gate A algorithms remain useful, but pre-v1 names and isolation
-  vocabulary change before Gate B.
+- Application, Deployment, placement, and executor contracts use one
+  provider-neutral vocabulary across Compose v0.1 and later executors.
 - Compose is the shortest path to a usable private PaaS without becoming a
   tenant-facing product concept.
 - Offline delivery and platform rollback are release gates, not later

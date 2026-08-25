@@ -1,4 +1,4 @@
-module matrix
+module github.com/xiak/matrix
 
 go 1.26.0
 

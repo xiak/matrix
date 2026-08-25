@@ -1,25 +1,24 @@
 {
-  "apiVersion": "matrix.paas.io/paas/v1",
+  "apiVersion": "paas.matrix.xiak.com/v1",
   "kind": "PlacementDecision",
   "metadata": {
     "id": "decision-a-0002",
     "name": "demo-placement-ready",
-    "scope": {
-      "kind": "TENANT",
-      "tenantId": "tenant-a"
-    },
+    "scope": { "kind": "TENANT", "tenantId": "tenant-a" },
     "resourceVersion": 1,
     "createdAt": "2026-08-25T08:02:00Z",
     "updatedAt": "2026-08-25T08:02:00Z"
   },
-  "workloadReleaseId": "release-a-0001",
+  "deploymentId": "deployment-a-0001",
+  "deploymentResourceVersion": 1,
+  "applicationRevisionId": "revision-a-0001",
   "placementPolicyId": "placement-policy-a",
   "policyResourceVersion": 1,
-  "requestedIsolationClass": "DEDICATED_COMPOSE",
+  "requestedIsolationGuarantee": "WORKLOAD",
   "outcome": "SCHEDULED",
-  "runtimeTargetId": "target-local-001",
-  "runtimeTargetResourceVersion": 1,
-  "grantedIsolationClass": "DEDICATED_COMPOSE",
+  "executionTargetId": "target-local-001",
+  "executionTargetResourceVersion": 1,
+  "grantedIsolationGuarantee": "WORKLOAD",
   "candidateSetDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
   "decidedAt": "2026-08-25T08:02:00Z"
 }

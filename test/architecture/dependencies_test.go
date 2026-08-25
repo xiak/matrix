@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-const modulePath = "matrix/"
+const modulePath = "github.com/xiak/matrix/"
 
 func TestSourceDependenciesFollowRepositoryBoundaries(t *testing.T) {
 	root := repositoryRoot(t)
@@ -65,22 +65,22 @@ func TestPlacementCoreKeepsItsPureDependencyBoundary(t *testing.T) {
 		"service",
 		"paas",
 		"internal",
-		"runtime",
+		"apphosting",
 		"domain",
 		"placement",
 	)
 	allowed := map[string]struct{}{
-		"crypto/sha256":      {},
-		"encoding/binary":    {},
-		"encoding/hex":       {},
-		"errors":             {},
-		"fmt":                {},
-		"hash":               {},
-		"math":               {},
-		"math/big":           {},
-		"matrix/api/paas/v1": {},
-		"sort":               {},
-		"time":               {},
+		"crypto/sha256":                      {},
+		"encoding/binary":                    {},
+		"encoding/hex":                       {},
+		"errors":                             {},
+		"fmt":                                {},
+		"hash":                               {},
+		"math":                               {},
+		"math/big":                           {},
+		"github.com/xiak/matrix/api/paas/v1": {},
+		"sort":                               {},
+		"time":                               {},
 	}
 	err := filepath.WalkDir(placementRoot, func(
 		path string,
@@ -121,10 +121,10 @@ func TestPlacementCoreKeepsItsPureDependencyBoundary(t *testing.T) {
 	}
 }
 
-func TestPaaSRuntimeUsesPragmaticDDDDependencies(t *testing.T) {
+func TestPaaSApphostingUsesPragmaticDDDDependencies(t *testing.T) {
 	root := repositoryRoot(t)
-	runtimeRoot := filepath.Join(root, "app", "service", "paas", "internal", "runtime")
-	err := filepath.WalkDir(runtimeRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+	apphostingRoot := filepath.Join(root, "app", "service", "paas", "internal", "apphosting")
+	err := filepath.WalkDir(apphostingRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -145,20 +145,20 @@ func TestPaaSRuntimeUsesPragmaticDDDDependencies(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			assertRuntimeDDDDependency(t, relative, imported)
+			assertApphostingDDDDependency(t, relative, imported)
 		}
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("inspect PaaS runtime DDD dependencies: %v", err)
+		t.Fatalf("inspect PaaS apphosting DDD dependencies: %v", err)
 	}
 }
 
-func TestPaaSRuntimeBusinessTypesAvoidAmbiguousNames(t *testing.T) {
+func TestPaaSApphostingBusinessTypesAvoidAmbiguousNames(t *testing.T) {
 	root := repositoryRoot(t)
-	runtimeRoot := filepath.Join(root, "app", "service", "paas", "internal", "runtime")
+	apphostingRoot := filepath.Join(root, "app", "service", "paas", "internal", "apphosting")
 	forbiddenSuffixes := []string{"Manager", "Helper", "Logic", "DAO", "Model", "DTO"}
-	err := filepath.WalkDir(runtimeRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+	err := filepath.WalkDir(apphostingRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -198,15 +198,15 @@ func TestPaaSRuntimeBusinessTypesAvoidAmbiguousNames(t *testing.T) {
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("inspect PaaS runtime business names: %v", err)
+		t.Fatalf("inspect PaaS apphosting business names: %v", err)
 	}
 }
 
-func assertRuntimeDDDDependency(t *testing.T, source, imported string) {
+func assertApphostingDDDDependency(t *testing.T, source, imported string) {
 	t.Helper()
-	const contextPrefix = modulePath + "app/service/paas/internal/runtime/"
+	const contextPrefix = modulePath + "app/service/paas/internal/apphosting/"
 
-	if strings.HasPrefix(source, "app/service/paas/internal/runtime/domain/") &&
+	if strings.HasPrefix(source, "app/service/paas/internal/apphosting/domain/") &&
 		(strings.HasPrefix(imported, contextPrefix+"usecase/") ||
 			strings.HasPrefix(imported, contextPrefix+"data/") ||
 			strings.HasPrefix(imported, contextPrefix+"port/") ||
@@ -214,7 +214,7 @@ func assertRuntimeDDDDependency(t *testing.T, source, imported string) {
 		t.Errorf("%s: domain cannot import %q", source, imported)
 	}
 
-	if strings.HasPrefix(source, "app/service/paas/internal/runtime/usecase/") &&
+	if strings.HasPrefix(source, "app/service/paas/internal/apphosting/usecase/") &&
 		(strings.HasPrefix(imported, contextPrefix+"data/") ||
 			strings.HasPrefix(imported, modulePath+"app/adapter/")) {
 		t.Errorf("%s: use case cannot import concrete adapter %q", source, imported)

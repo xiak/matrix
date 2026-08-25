@@ -21,7 +21,7 @@ acceptance gates were fixed before these source slices were opened.
 | --- | ---: | --- | --- |
 | `runtime/createplacement/contract.go` | 564 lines | `ADAPT` | Preserve strict JSON decoding, exact tenant authority/scope closure, canonical sets, and bounded identifiers. Reject its caller-selected `RuntimeTargetRef`, `ProviderBindingID`, isolation attributes, policy references, and quota references: those bypass a scheduler and expose provider topology to the request. |
 | `runtime/createplacement/plan.go` | 183 lines | `REJECT` as an implementation | Its durable approval boundary is explicit and honest, but `ResolveProtectedOwnerInlinePlanSpec` returns `ErrDurableApprovalGatePlannerRequired`; it is not an implemented placement planner. The target keeps a pure deterministic planner followed by a transactional persistence gate. |
-| `runtime/createplacement/service.go` | 154 lines | `ADAPT` | Preserve closing the proposal and tenant scope before starting a generic operation. The new use case uses a smaller tenant/release/policy scope and does not import ResourceKernel ownership. |
+| `runtime/createplacement/service.go` | 154 lines | `ADAPT` | Preserve closing the proposal and tenant scope before starting a generic operation. The new use case accepts one tenant-scoped Deployment identity and derives revision and policy inside the transaction; it does not import ResourceKernel ownership. |
 | `runtime/data/repo/postgres/createplacement_owner_mutation.go` | 891 lines | `ADAPT` | Preserve authoritative database transaction time, in-transaction revalidation, exact authorized-operation checks, immutable-scope checks, and atomic mutation. Replace the caller-selected target flow with capacity-row locking, planner execution, immutable decision insertion, and reservation insertion. |
 | `createplacement_owner_mutation_integration_test.go` | 1,200 lines | `REFERENCE` | Reuse rollback, commit, exact replay, and retry test categories. It does not test candidate selection, capacity, concurrent overcommit, reservation expiry, or row-level security, so it cannot serve as FEAT-003 acceptance evidence. |
 | Runtime `domain/records.go` and `domain/values.go` | 1,506 lines | `REFERENCE` | Canonical collections, cloning, provider-neutral isolation/topology, and explicit lifecycle modeling are useful. The donor intentionally hydrates an already chosen target and binding; its Project/Environment/Application graph and tenant-authority-owned targets conflict with the target's platform-owned inventory model. |
@@ -54,8 +54,8 @@ security.
 The fixed FEAT-003 design is therefore retained. It is deliberately smaller
 and stronger for this release:
 
-- callers provide tenant, release, and policy identities but never a target or
-  provider binding;
+- callers provide tenant and Deployment identities but never a revision,
+  policy, target, or provider binding independently;
 - the pure planner owns deterministic filtering and strategy selection;
 - the PostgreSQL transaction owns authoritative time, capacity locking,
   decision/reservation atomicity, and exact replay;
@@ -78,7 +78,7 @@ resource boundary:
    evaluation, and persisted transaction facts. Caller time is used only by
    Gate A deterministic tests.
 2. Replay returns a prior decision only after exact semantic request-digest
-   equality. Every target, policy, release, reservation, and tenant assumption
+   equality. Every target, policy, Deployment, revision, reservation, and tenant assumption
    is revalidated inside the placement transaction before a new decision is
    committed.
 3. Composite tenant keys and explicit tenant predicates from the donor are

@@ -1,20 +1,11 @@
 {
-  "apiVersion": "matrix.paas.io/paas/v1",
+  "apiVersion": "paas.matrix.xiak.com/v1",
   "kind": "Operation",
   "id": "operation-a-0001",
-  "scope": {
-    "kind": "TENANT",
-    "tenantId": "tenant-a"
-  },
+  "scope": { "kind": "TENANT", "tenantId": "tenant-a" },
   "action": "DEPLOY",
-  "target": {
-    "kind": "WorkloadRelease",
-    "id": "release-a-0001"
-  },
-  "requestedBy": {
-    "type": "USER",
-    "id": "user-a"
-  },
+  "target": { "kind": "Deployment", "id": "deployment-a-0001" },
+  "requestedBy": { "type": "USER", "id": "user-a" },
   "idempotencyFingerprint": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
   "requestDigest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
   "state": "ACCEPTED",

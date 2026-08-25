@@ -12,6 +12,7 @@ import (
 var (
 	idPattern              = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 	namePattern            = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+	environmentKeyPattern  = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,127}$`)
 	digestPattern          = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 	contractVersionPattern = regexp.MustCompile(`^v[1-9][0-9]*$`)
 )
@@ -105,63 +106,73 @@ func ValidateResourceMetadata(value ResourceMetadata) error {
 	return errors.Join(problems...)
 }
 
-func ValidateResourcePool(value ResourcePool) error {
+func ValidateExecutionPool(value ExecutionPool) error {
 	var problems []error
-	if value.APIVersion != APIVersion || value.Kind != "ResourcePool" {
-		problems = append(problems, errors.New("resource pool type metadata is invalid"))
+	if value.APIVersion != APIVersion || value.Kind != "ExecutionPool" {
+		problems = append(problems, errors.New("execution pool type metadata is invalid"))
 	}
 	problems = append(problems,
 		ValidateResourceMetadata(value.Metadata),
-		validateLabelSelector("spec.targetSelector", value.Spec.TargetSelector),
+		validateLabelSelector(
+			"spec.executionTargetSelector",
+			value.Spec.ExecutionTargetSelector,
+		),
 		validateUniqueKnown(
-			"spec.allowedIsolationClasses",
-			value.Spec.AllowedIsolationClasses,
-			IsolationClasses(),
+			"spec.allowedIsolationGuarantees",
+			value.Spec.AllowedIsolationGuarantees,
+			IsolationGuarantees(),
 			true,
 		),
 		validateContractTime("status.observedAt", value.Status.ObservedAt),
 	)
 	if value.Metadata.Scope.Kind != AuthorityPlatform {
-		problems = append(problems, errors.New("resource pool must be platform scoped"))
+		problems = append(problems, errors.New("execution pool must be platform scoped"))
 	}
 	if !contains(
-		[]ResourcePoolPhase{ResourcePoolReady, ResourcePoolDegraded, ResourcePoolUnavailable},
+		[]ExecutionPoolPhase{ExecutionPoolReady, ExecutionPoolDegraded, ExecutionPoolUnavailable},
 		value.Status.Phase,
 	) {
-		problems = append(problems, fmt.Errorf("unknown resource pool phase %q", value.Status.Phase))
+		problems = append(problems, fmt.Errorf("unknown execution pool phase %q", value.Status.Phase))
 	}
-	if value.Status.ReadyTargetCount > value.Status.TargetCount {
-		problems = append(problems, errors.New("readyTargetCount cannot exceed targetCount"))
+	if value.Status.ReadyExecutionTargetCount > value.Status.ExecutionTargetCount {
+		problems = append(
+			problems,
+			errors.New("readyExecutionTargetCount cannot exceed executionTargetCount"),
+		)
 	}
 	return errors.Join(problems...)
 }
 
-func ValidateRuntimeTarget(value RuntimeTarget) error {
+func ValidateExecutionTarget(value ExecutionTarget) error {
 	var problems []error
-	if value.APIVersion != APIVersion || value.Kind != "RuntimeTarget" {
-		problems = append(problems, errors.New("runtime target type metadata is invalid"))
+	if value.APIVersion != APIVersion || value.Kind != "ExecutionTarget" {
+		problems = append(problems, errors.New("execution target type metadata is invalid"))
 	}
 	problems = append(problems,
 		ValidateResourceMetadata(value.Metadata),
-		ValidateID("spec.resourcePoolId", string(value.Spec.ResourcePoolID)),
+		ValidateID("spec.executionPoolId", string(value.Spec.ExecutionPoolID)),
 		validateAdapterRef(
 			"spec.infrastructureAdapter",
 			value.Spec.InfrastructureAdapter,
 			AdapterInfrastructure,
 		),
-		validateAdapterRef("spec.runtimeAdapter", value.Spec.RuntimeAdapter, AdapterRuntime),
+		validateAdapterRef(
+			"spec.deploymentExecutor",
+			value.Spec.DeploymentExecutor,
+			AdapterDeploymentExecutor,
+		),
 		validateCapacity("status.capacity", value.Status.Capacity),
 		validateCapacity("status.allocatable", value.Status.Allocatable),
 		validateUniqueKnown(
-			"status.supportedIsolationClasses",
-			value.Status.SupportedIsolationClasses,
-			IsolationClasses(),
+			"status.supportedIsolationGuarantees",
+			value.Status.SupportedIsolationGuarantees,
+			IsolationGuarantees(),
 			true,
 		),
 		validateContractTime("status.observedAt", value.Status.ObservedAt),
 	)
 	if value.Metadata.Scope.Kind != AuthorityPlatform {
-		problems = append(problems, errors.New("runtime target must be platform scoped"))
+		problems = append(problems, errors.New("execution target must be platform scoped"))
 	}
 	if value.Spec.GatewayAdapter != nil {
 		problems = append(
@@ -169,15 +180,15 @@ func ValidateRuntimeTarget(value RuntimeTarget) error {
 			validateAdapterRef("spec.gatewayAdapter", *value.Spec.GatewayAdapter, AdapterGateway),
 		)
 	}
-	if !contains([]TargetDesiredState{TargetActive, TargetDraining}, value.Spec.DesiredState) {
+	if !contains([]ExecutionTargetDesiredState{ExecutionTargetActive, ExecutionTargetDraining}, value.Spec.DesiredState) {
 		problems = append(problems, fmt.Errorf("unknown target desired state %q", value.Spec.DesiredState))
 	}
 	if !contains(
-		[]TargetHealth{
-			TargetHealthUnknown,
-			TargetHealthReady,
-			TargetHealthDegraded,
-			TargetHealthUnavailable,
+		[]ExecutionTargetHealth{
+			ExecutionTargetHealthUnknown,
+			ExecutionTargetHealthReady,
+			ExecutionTargetHealthDegraded,
+			ExecutionTargetHealthUnavailable,
 		},
 		value.Status.Health,
 	) {
@@ -196,13 +207,16 @@ func ValidatePlacementPolicy(value PlacementPolicy) error {
 	}
 	problems = append(problems,
 		ValidateResourceMetadata(value.Metadata),
-		validateLabelSelector("spec.targetSelector", value.Spec.TargetSelector),
+		validateLabelSelector(
+			"spec.executionTargetSelector",
+			value.Spec.ExecutionTargetSelector,
+		),
 	)
 	if value.Metadata.Scope.Kind != AuthorityTenant {
 		problems = append(problems, errors.New("placement policy must be tenant scoped"))
 	}
-	if !contains(IsolationClasses(), value.Spec.RequiredIsolationClass) {
-		problems = append(problems, errors.New("required isolation class is invalid"))
+	if !contains(IsolationGuarantees(), value.Spec.RequiredIsolationGuarantee) {
+		problems = append(problems, errors.New("required isolation guarantee is invalid"))
 	}
 	if !contains(
 		[]PlacementStrategy{PlacementFirstFit, PlacementSpread, PlacementBinPack},
@@ -210,25 +224,25 @@ func ValidatePlacementPolicy(value PlacementPolicy) error {
 	) {
 		problems = append(problems, fmt.Errorf("unknown placement strategy %q", value.Spec.Strategy))
 	}
-	if len(value.Spec.EligibleResourcePools) == 0 {
-		problems = append(problems, errors.New("eligibleResourcePoolIds must not be empty"))
+	if len(value.Spec.EligibleExecutionPoolIDs) == 0 {
+		problems = append(problems, errors.New("eligibleExecutionPoolIds must not be empty"))
 	}
-	seen := make(map[ResourceID]struct{}, len(value.Spec.EligibleResourcePools))
-	for index, resourcePoolID := range value.Spec.EligibleResourcePools {
+	seen := make(map[ResourceID]struct{}, len(value.Spec.EligibleExecutionPoolIDs))
+	for index, executionPoolID := range value.Spec.EligibleExecutionPoolIDs {
 		problems = append(
 			problems,
 			ValidateID(
-				fmt.Sprintf("spec.eligibleResourcePoolIds[%d]", index),
-				string(resourcePoolID),
+				fmt.Sprintf("spec.eligibleExecutionPoolIds[%d]", index),
+				string(executionPoolID),
 			),
 		)
-		if _, found := seen[resourcePoolID]; found {
+		if _, found := seen[executionPoolID]; found {
 			problems = append(
 				problems,
-				fmt.Errorf("spec.eligibleResourcePoolIds[%d] is duplicated", index),
+				fmt.Errorf("spec.eligibleExecutionPoolIds[%d] is duplicated", index),
 			)
 		}
-		seen[resourcePoolID] = struct{}{}
+		seen[executionPoolID] = struct{}{}
 	}
 	return errors.Join(problems...)
 }
@@ -257,7 +271,8 @@ func ValidatePlacementDecision(value PlacementDecision) error {
 	}
 	problems = append(problems,
 		ValidateResourceMetadata(value.Metadata),
-		ValidateID("workloadReleaseId", string(value.WorkloadReleaseID)),
+		ValidateID("deploymentId", string(value.DeploymentID)),
+		ValidateID("applicationRevisionId", string(value.ApplicationRevisionID)),
 		ValidateID("placementPolicyId", string(value.PlacementPolicyID)),
 		ValidateDigest("candidateSetDigest", value.CandidateSetDigest),
 		validateContractTime("decidedAt", value.DecidedAt),
@@ -268,28 +283,31 @@ func ValidatePlacementDecision(value PlacementDecision) error {
 	if value.PolicyResourceVersion == 0 {
 		problems = append(problems, errors.New("policyResourceVersion must be positive"))
 	}
-	if !contains(IsolationClasses(), value.RequestedIsolation) {
-		problems = append(problems, errors.New("requested isolation class is invalid"))
+	if value.DeploymentResourceVersion == 0 {
+		problems = append(problems, errors.New("deploymentResourceVersion must be positive"))
+	}
+	if !contains(IsolationGuarantees(), value.RequestedIsolationGuarantee) {
+		problems = append(problems, errors.New("requested isolation guarantee is invalid"))
 	}
 	switch value.Outcome {
 	case PlacementScheduled:
-		problems = append(problems, ValidateID("runtimeTargetId", string(value.RuntimeTargetID)))
-		if value.RuntimeTargetResourceVersion == 0 {
+		problems = append(problems, ValidateID("executionTargetId", string(value.ExecutionTargetID)))
+		if value.ExecutionTargetResourceVersion == 0 {
 			problems = append(
 				problems,
-				errors.New("runtimeTargetResourceVersion must be positive for a scheduled decision"),
+				errors.New("executionTargetResourceVersion must be positive for a scheduled decision"),
 			)
 		}
-		if value.GrantedIsolation != value.RequestedIsolation {
+		if value.GrantedIsolationGuarantee != value.RequestedIsolationGuarantee {
 			problems = append(problems, errors.New("granted isolation must exactly equal requested isolation"))
 		}
 		if value.Reason != nil {
 			problems = append(problems, errors.New("scheduled decision cannot contain a reason"))
 		}
 	case PlacementUnschedulable:
-		if value.RuntimeTargetID != "" ||
-			value.RuntimeTargetResourceVersion != 0 ||
-			value.GrantedIsolation != "" {
+		if value.ExecutionTargetID != "" ||
+			value.ExecutionTargetResourceVersion != 0 ||
+			value.GrantedIsolationGuarantee != "" {
 			problems = append(
 				problems,
 				errors.New("unschedulable decision cannot select or version a target or grant isolation"),
@@ -308,175 +326,292 @@ func ValidatePlacementDecision(value PlacementDecision) error {
 	return errors.Join(problems...)
 }
 
-func ValidateWorkloadRelease(value WorkloadRelease) error {
+func ValidateApplication(value Application) error {
 	var problems []error
-	if value.APIVersion != APIVersion || value.Kind != "WorkloadRelease" {
-		problems = append(problems, errors.New("workload release type metadata is invalid"))
+	if value.APIVersion != APIVersion || value.Kind != "Application" {
+		problems = append(problems, errors.New("application type metadata is invalid"))
+	}
+	problems = append(problems, ValidateResourceMetadata(value.Metadata))
+	if value.Metadata.Scope.Kind != AuthorityTenant {
+		problems = append(problems, errors.New("application must be tenant scoped"))
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateConfiguration(value Configuration) error {
+	var problems []error
+	if value.APIVersion != APIVersion || value.Kind != "Configuration" {
+		problems = append(problems, errors.New("configuration type metadata is invalid"))
 	}
 	problems = append(problems,
 		ValidateResourceMetadata(value.Metadata),
-		ValidateID("spec.workloadId", string(value.Spec.WorkloadID)),
-		ValidateID("spec.revision", value.Spec.Revision),
-		ValidateDigest("spec.contentDigest", value.Spec.ContentDigest),
-		validateContractTime("status.observedAt", value.Status.ObservedAt),
+		ValidateID("applicationId", string(value.ApplicationID)),
 	)
 	if value.Metadata.Scope.Kind != AuthorityTenant {
-		problems = append(problems, errors.New("workload release must be tenant scoped"))
+		problems = append(problems, errors.New("configuration must be tenant scoped"))
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateConfigurationRevision(value ConfigurationRevision) error {
+	var problems []error
+	if value.APIVersion != APIVersion || value.Kind != "ConfigurationRevision" {
+		problems = append(problems, errors.New("configuration revision type metadata is invalid"))
+	}
+	problems = append(problems,
+		ValidateResourceMetadata(value.Metadata),
+		validateImmutableMetadata("configuration revision", value.Metadata),
+		ValidateID("spec.configurationId", string(value.Spec.ConfigurationID)),
+		ValidateDigest("spec.contentDigest", value.Spec.ContentDigest),
+	)
+	if value.Metadata.Scope.Kind != AuthorityTenant {
+		problems = append(problems, errors.New("configuration revision must be tenant scoped"))
+	}
+	if len(value.Spec.Values) > 256 {
+		problems = append(problems, errors.New("configuration values cannot exceed 256 entries"))
+	}
+	for key, item := range value.Spec.Values {
+		if !environmentKeyPattern.MatchString(key) {
+			problems = append(problems, fmt.Errorf("configuration key %q is not a portable environment key", key))
+		}
+		normalizedKey := strings.ToLower(key)
+		for _, fragment := range sensitiveKeyFragments {
+			if strings.Contains(normalizedKey, fragment) {
+				problems = append(problems, fmt.Errorf("configuration key %q is sensitive and must use a secret", key))
+				break
+			}
+		}
+		problems = append(
+			problems,
+			ValidateSafeExternalText("configuration value "+key, item, 32768, false),
+		)
+	}
+	if digest := ConfigurationValuesDigest(value.Spec.Values); value.Spec.ContentDigest != digest {
+		problems = append(problems, errors.New("spec.contentDigest does not match canonical values"))
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateApplicationRevision(value ApplicationRevision) error {
+	var problems []error
+	if value.APIVersion != APIVersion || value.Kind != "ApplicationRevision" {
+		problems = append(problems, errors.New("application revision type metadata is invalid"))
+	}
+	problems = append(problems,
+		ValidateResourceMetadata(value.Metadata),
+		validateImmutableMetadata("application revision", value.Metadata),
+		ValidateID("spec.applicationId", string(value.Spec.ApplicationID)),
+		ValidateID("spec.revision", value.Spec.Revision),
+		ValidateDigest("spec.contentDigest", value.Spec.ContentDigest),
+	)
+	if value.Metadata.Scope.Kind != AuthorityTenant {
+		problems = append(problems, errors.New("application revision must be tenant scoped"))
 	}
 	if len(value.Spec.Components) == 0 {
-		problems = append(problems, errors.New("release must contain at least one component"))
+		problems = append(problems, errors.New("application revision must contain at least one component"))
 	}
-	seen := make(map[string]struct{}, len(value.Spec.Components))
+	componentNames := make(map[string]struct{}, len(value.Spec.Components))
 	for index, component := range value.Spec.Components {
+		path := fmt.Sprintf("components[%d]", index)
 		if !namePattern.MatchString(component.Name) {
-			problems = append(problems, fmt.Errorf("components[%d].name is invalid", index))
+			problems = append(problems, fmt.Errorf("%s.name is invalid", path))
 		}
-		if _, duplicate := seen[component.Name]; duplicate {
-			problems = append(problems, fmt.Errorf("components[%d].name is duplicated", index))
+		if _, duplicate := componentNames[component.Name]; duplicate {
+			problems = append(problems, fmt.Errorf("%s.name is duplicated", path))
 		}
-		seen[component.Name] = struct{}{}
-		if component.Replicas == 0 {
-			problems = append(problems, fmt.Errorf("components[%d].replicas must be positive", index))
-		}
+		componentNames[component.Name] = struct{}{}
 		if component.Resources.CPUMillis < 0 || component.Resources.MemoryBytes < 0 {
-			problems = append(problems, fmt.Errorf("components[%d].resources cannot be negative", index))
+			problems = append(problems, fmt.Errorf("%s.resources cannot be negative", path))
 		}
 		if !contains(
 			[]ArtifactKind{ArtifactOCIImage, ArtifactOCIArtifact, ArtifactReleaseBundle},
 			component.Artifact.Kind,
-		) || strings.TrimSpace(component.Artifact.Locator) == "" {
-			problems = append(problems, fmt.Errorf("components[%d].artifact is incomplete", index))
+		) {
+			problems = append(problems, fmt.Errorf("%s.artifact.kind is invalid", path))
 		}
-		problems = append(
-			problems,
-			ValidateSafeExternalText(
-				fmt.Sprintf("components[%d].artifact.locator", index),
-				component.Artifact.Locator,
-				2048,
-				true,
-			),
+		problems = append(problems,
+			ValidateSafeExternalText(path+".artifact.locator", component.Artifact.Locator, 2048, true),
+			ValidateDigest(path+".artifact.digest", component.Artifact.Digest),
 		)
-		problems = append(
-			problems,
-			ValidateDigest(
-				fmt.Sprintf("components[%d].artifact.digest", index),
-				component.Artifact.Digest,
-			),
-		)
-		configurationRefs := make(map[ResourceID]struct{}, len(component.ConfigurationRefs))
-		for configurationIndex, resourceID := range component.ConfigurationRefs {
-			problems = append(
-				problems,
-				ValidateID(
-					fmt.Sprintf(
-						"components[%d].configurationRefs[%d]",
-						index,
-						configurationIndex,
-					),
-					string(resourceID),
-				),
-			)
-			if _, found := configurationRefs[resourceID]; found {
-				problems = append(
-					problems,
-					fmt.Errorf(
-						"components[%d].configurationRefs[%d] is duplicated",
-						index,
-						configurationIndex,
-					),
-				)
-			}
-			configurationRefs[resourceID] = struct{}{}
-		}
-		secretNames := make(map[string]struct{}, len(component.SecretReferences))
-		for secretIndex, secret := range component.SecretReferences {
-			if !namePattern.MatchString(secret.Name) {
-				problems = append(
-					problems,
-					fmt.Errorf("components[%d].secretReferences[%d].name is invalid", index, secretIndex),
-				)
-			}
-			problems = append(
-				problems,
-				ValidateID(
-					fmt.Sprintf("components[%d].secretReferences[%d].resourceId", index, secretIndex),
-					string(secret.ResourceID),
-				),
-			)
-			if _, found := secretNames[secret.Name]; found {
-				problems = append(
-					problems,
-					fmt.Errorf(
-						"components[%d].secretReferences[%d].name is duplicated",
-						index,
-						secretIndex,
-					),
-				)
-			}
-			secretNames[secret.Name] = struct{}{}
-		}
 		endpointNames := make(map[string]struct{}, len(component.Endpoints))
 		for endpointIndex, endpoint := range component.Endpoints {
+			endpointPath := fmt.Sprintf("%s.endpoints[%d]", path, endpointIndex)
 			if !namePattern.MatchString(endpoint.Name) {
-				problems = append(
-					problems,
-					fmt.Errorf("components[%d].endpoints[%d].name is invalid", index, endpointIndex),
-				)
+				problems = append(problems, fmt.Errorf("%s.name is invalid", endpointPath))
 			}
-			if _, found := endpointNames[endpoint.Name]; found {
-				problems = append(
-					problems,
-					fmt.Errorf(
-						"components[%d].endpoints[%d].name is duplicated",
-						index,
-						endpointIndex,
-					),
-				)
+			if _, duplicate := endpointNames[endpoint.Name]; duplicate {
+				problems = append(problems, fmt.Errorf("%s.name is duplicated", endpointPath))
 			}
 			endpointNames[endpoint.Name] = struct{}{}
 			if endpoint.Port == 0 {
-				problems = append(
-					problems,
-					fmt.Errorf("components[%d].endpoints[%d].port must be positive", index, endpointIndex),
-				)
+				problems = append(problems, fmt.Errorf("%s.port must be positive", endpointPath))
 			}
-			if !contains(
-				[]EndpointProtocol{EndpointHTTP, EndpointGRPC, EndpointTCP},
-				endpoint.Protocol,
-			) {
-				problems = append(
-					problems,
-					fmt.Errorf("components[%d].endpoints[%d].protocol is invalid", index, endpointIndex),
-				)
+			if !contains([]EndpointProtocol{EndpointHTTP, EndpointGRPC, EndpointTCP}, endpoint.Protocol) {
+				problems = append(problems, fmt.Errorf("%s.protocol is invalid", endpointPath))
 			}
-			if !contains(
-				[]EndpointVisibility{EndpointPrivate, EndpointPublic},
-				endpoint.Visibility,
-			) {
-				problems = append(
-					problems,
-					fmt.Errorf("components[%d].endpoints[%d].visibility is invalid", index, endpointIndex),
+			if !contains([]EndpointVisibility{EndpointPrivate, EndpointPublic}, endpoint.Visibility) {
+				problems = append(problems, fmt.Errorf("%s.visibility is invalid", endpointPath))
+			}
+		}
+		inputNames := make(map[string]struct{}, len(component.Inputs))
+		for inputIndex, input := range component.Inputs {
+			inputPath := fmt.Sprintf("%s.inputs[%d]", path, inputIndex)
+			if !namePattern.MatchString(input.Name) {
+				problems = append(problems, fmt.Errorf("%s.name is invalid", inputPath))
+			}
+			if _, duplicate := inputNames[input.Name]; duplicate {
+				problems = append(problems, fmt.Errorf("%s.name is duplicated", inputPath))
+			}
+			inputNames[input.Name] = struct{}{}
+			if !contains([]InputKind{InputConfiguration, InputSecret}, input.Kind) {
+				problems = append(problems, fmt.Errorf("%s.kind is invalid", inputPath))
+			}
+			if !contains([]InjectionMode{InjectionEnvironment, InjectionFile}, input.Injection) {
+				problems = append(problems, fmt.Errorf("%s.injection is invalid", inputPath))
+			}
+			switch input.Kind {
+			case InputConfiguration:
+				if input.Injection != InjectionEnvironment {
+					problems = append(problems, fmt.Errorf("%s CONFIGURATION input must use ENV injection", inputPath))
+				}
+			case InputSecret:
+				if input.Injection != InjectionFile {
+					problems = append(problems, fmt.Errorf("%s SECRET input must use FILE injection", inputPath))
+				}
+			}
+		}
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateDeployment(value Deployment) error {
+	var problems []error
+	if value.APIVersion != APIVersion || value.Kind != "Deployment" {
+		problems = append(problems, errors.New("deployment type metadata is invalid"))
+	}
+	problems = append(problems,
+		ValidateResourceMetadata(value.Metadata),
+		ValidateID("spec.applicationRevisionId", string(value.Spec.ApplicationRevisionID)),
+		ValidateID("spec.placementPolicyId", string(value.Spec.PlacementPolicyID)),
+		validateContractTime("status.observedAt", value.Status.ObservedAt),
+	)
+	if value.Metadata.Scope.Kind != AuthorityTenant {
+		problems = append(problems, errors.New("deployment must be tenant scoped"))
+	}
+	if !contains([]DeploymentDesiredState{DeploymentDesiredRunning, DeploymentDesiredStopped}, value.Spec.DesiredState) {
+		problems = append(problems, fmt.Errorf("unknown deployment desired state %q", value.Spec.DesiredState))
+	}
+	if len(value.Spec.Components) == 0 {
+		problems = append(problems, errors.New("deployment must contain at least one component"))
+	}
+	componentNames := make(map[string]struct{}, len(value.Spec.Components))
+	for componentIndex, component := range value.Spec.Components {
+		path := fmt.Sprintf("components[%d]", componentIndex)
+		if !namePattern.MatchString(component.Name) {
+			problems = append(problems, fmt.Errorf("%s.name is invalid", path))
+		}
+		if _, duplicate := componentNames[component.Name]; duplicate {
+			problems = append(problems, fmt.Errorf("%s.name is duplicated", path))
+		}
+		componentNames[component.Name] = struct{}{}
+		if component.Replicas == 0 {
+			problems = append(problems, fmt.Errorf("%s.replicas must be positive", path))
+		}
+		bindingNames := make(map[string]struct{}, len(component.Bindings))
+		for bindingIndex, binding := range component.Bindings {
+			bindingPath := fmt.Sprintf("%s.bindings[%d]", path, bindingIndex)
+			if !namePattern.MatchString(binding.Name) {
+				problems = append(problems, fmt.Errorf("%s.name is invalid", bindingPath))
+			}
+			if _, duplicate := bindingNames[binding.Name]; duplicate {
+				problems = append(problems, fmt.Errorf("%s.name is duplicated", bindingPath))
+			}
+			bindingNames[binding.Name] = struct{}{}
+			hasConfiguration := binding.ConfigurationRevisionID != ""
+			hasSecret := binding.SecretVersion != nil
+			if hasConfiguration == hasSecret {
+				problems = append(problems, fmt.Errorf("%s must bind exactly one configuration revision or secret version", bindingPath))
+			}
+			if hasConfiguration {
+				problems = append(problems, ValidateID(bindingPath+".configurationRevisionId", string(binding.ConfigurationRevisionID)))
+			}
+			if hasSecret {
+				problems = append(problems,
+					ValidateID(bindingPath+".secretVersion.secretId", string(binding.SecretVersion.SecretID)),
+					ValidateID(bindingPath+".secretVersion.version", binding.SecretVersion.Version),
 				)
 			}
 		}
 	}
-	if !contains(ReleasePhases(), value.Status.Phase) {
-		problems = append(problems, fmt.Errorf("unknown release phase %q", value.Status.Phase))
+	if !contains(DeploymentPhases(), value.Status.Phase) {
+		problems = append(problems, fmt.Errorf("unknown deployment phase %q", value.Status.Phase))
 	}
 	if value.Status.ReadyComponents > uint32(len(value.Spec.Components)) {
 		problems = append(problems, errors.New("readyComponents cannot exceed component count"))
 	}
 	if value.Status.PlacementDecisionID != "" {
-		problems = append(
-			problems,
-			ValidateID("status.placementDecisionId", string(value.Status.PlacementDecisionID)),
-		)
+		problems = append(problems, ValidateID("status.placementDecisionId", string(value.Status.PlacementDecisionID)))
 	}
 	if value.Status.CurrentOperationID != "" {
-		problems = append(
-			problems,
-			ValidateID("status.currentOperationId", string(value.Status.CurrentOperationID)),
-		)
+		problems = append(problems, ValidateID("status.currentOperationId", string(value.Status.CurrentOperationID)))
+	}
+	if value.Status.ObservedApplicationRevisionID != "" {
+		problems = append(problems, ValidateID("status.observedApplicationRevisionId", string(value.Status.ObservedApplicationRevisionID)))
+	}
+	return errors.Join(problems...)
+}
+
+// ValidateDeploymentAgainstRevision checks the cross-resource shape before a
+// deployment can enter placement. Repository-level validation separately
+// proves tenant and application ownership for every referenced resource.
+func ValidateDeploymentAgainstRevision(deployment Deployment, revision ApplicationRevision) error {
+	var problems []error
+	if err := ValidateDeployment(deployment); err != nil {
+		problems = append(problems, err)
+	}
+	if err := ValidateApplicationRevision(revision); err != nil {
+		problems = append(problems, err)
+	}
+	if deployment.Spec.ApplicationRevisionID != revision.Metadata.ID {
+		problems = append(problems, errors.New("deployment references another application revision"))
+	}
+	revisionComponents := make(map[string]ApplicationRevisionComponent, len(revision.Spec.Components))
+	for _, component := range revision.Spec.Components {
+		revisionComponents[component.Name] = component
+	}
+	if len(deployment.Spec.Components) != len(revision.Spec.Components) {
+		problems = append(problems, errors.New("deployment component set must exactly match application revision"))
+	}
+	for _, component := range deployment.Spec.Components {
+		revisionComponent, found := revisionComponents[component.Name]
+		if !found {
+			problems = append(problems, fmt.Errorf("deployment component %q is not declared by the application revision", component.Name))
+			continue
+		}
+		inputs := make(map[string]ComponentInput, len(revisionComponent.Inputs))
+		for _, input := range revisionComponent.Inputs {
+			inputs[input.Name] = input
+		}
+		bound := make(map[string]struct{}, len(component.Bindings))
+		for _, binding := range component.Bindings {
+			input, declared := inputs[binding.Name]
+			if !declared {
+				problems = append(problems, fmt.Errorf("component %q binding %q is not declared", component.Name, binding.Name))
+				continue
+			}
+			bound[binding.Name] = struct{}{}
+			if input.Kind == InputConfiguration && binding.ConfigurationRevisionID == "" {
+				problems = append(problems, fmt.Errorf("component %q input %q requires a configuration revision", component.Name, input.Name))
+			}
+			if input.Kind == InputSecret && binding.SecretVersion == nil {
+				problems = append(problems, fmt.Errorf("component %q input %q requires a secret version", component.Name, input.Name))
+			}
+		}
+		for _, input := range revisionComponent.Inputs {
+			if _, found := bound[input.Name]; input.Required && !found {
+				problems = append(problems, fmt.Errorf("component %q required input %q is unbound", component.Name, input.Name))
+			}
+		}
 	}
 	return errors.Join(problems...)
 }
@@ -537,8 +672,8 @@ func ValidateOperation(value Operation) error {
 	}
 	if !contains(
 		[]OperationAction{
-			OperationCreateResourcePool,
-			OperationRegisterTarget,
+			OperationCreateExecutionPool,
+			OperationRegisterExecutionTarget,
 			OperationCreatePlacement,
 			OperationDeploy,
 			OperationUpdate,
@@ -550,7 +685,7 @@ func ValidateOperation(value Operation) error {
 		problems = append(problems, fmt.Errorf("unknown operation action %q", value.Action))
 	}
 	switch value.Action {
-	case OperationCreateResourcePool, OperationRegisterTarget:
+	case OperationCreateExecutionPool, OperationRegisterExecutionTarget:
 		if value.Scope.Kind != AuthorityPlatform {
 			problems = append(problems, errors.New("platform operation action requires platform scope"))
 		}
@@ -678,7 +813,7 @@ func ValidateAdapterCommand(value AdapterCommandEnvelope) error {
 		ValidateID("operationId", string(value.OperationID)),
 		ValidateID("commandId", string(value.CommandID)),
 		ValidateResourceScope(value.Scope),
-		ValidateID("runtimeTargetId", string(value.RuntimeTargetID)),
+		ValidateID("executionTargetId", string(value.ExecutionTargetID)),
 		ValidateDigest("requestDigest", value.RequestDigest),
 		ValidateID("bindingRef", value.BindingRef),
 		validateContractTime("deadline", value.Deadline),
@@ -689,11 +824,32 @@ func ValidateAdapterCommand(value AdapterCommandEnvelope) error {
 	if !contains(adapterActions(), value.Action) {
 		problems = append(problems, fmt.Errorf("unknown adapter action %q", value.Action))
 	}
-	if value.WorkloadID != "" {
-		problems = append(problems, ValidateID("workloadId", string(value.WorkloadID)))
+	if value.ApplicationID != "" {
+		problems = append(problems, ValidateID("applicationId", string(value.ApplicationID)))
 	}
-	if value.ReleaseID != "" {
-		problems = append(problems, ValidateID("releaseId", string(value.ReleaseID)))
+	if value.ApplicationRevisionID != "" {
+		problems = append(problems, ValidateID("applicationRevisionId", string(value.ApplicationRevisionID)))
+	}
+	if value.DeploymentID != "" {
+		problems = append(problems, ValidateID("deploymentId", string(value.DeploymentID)))
+	}
+	switch value.Action {
+	case AdapterCapabilities, AdapterInspectExecutionTarget, AdapterObserveExecutionTarget:
+		if value.Scope.Kind != AuthorityPlatform {
+			problems = append(problems, errors.New("infrastructure adapter action requires platform scope"))
+		}
+		if value.ApplicationID != "" || value.ApplicationRevisionID != "" || value.DeploymentID != "" {
+			problems = append(problems, errors.New("infrastructure adapter action cannot contain application or deployment identity"))
+		}
+	case AdapterValidateDeployment, AdapterApplyDeployment, AdapterObserveDeployment,
+		AdapterStopDeployment, AdapterRollbackDeployment, AdapterReconcileRoutes,
+		AdapterObserveRoutes, AdapterDeleteRoutes:
+		if value.Scope.Kind != AuthorityTenant {
+			problems = append(problems, errors.New("deployment adapter action requires tenant scope"))
+		}
+		if value.ApplicationID == "" || value.ApplicationRevisionID == "" || value.DeploymentID == "" {
+			problems = append(problems, errors.New("deployment adapter action requires application, revision, and deployment identity"))
+		}
 	}
 	if value.TraceParent != "" {
 		problems = append(
@@ -704,15 +860,15 @@ func ValidateAdapterCommand(value AdapterCommandEnvelope) error {
 	return errors.Join(problems...)
 }
 
-func ValidateInspectTargetRequest(value InspectTargetRequest) error {
+func ValidateInspectExecutionTargetRequest(value InspectExecutionTargetRequest) error {
 	if err := ValidateAdapterCommand(value.Command); err != nil {
 		return err
 	}
-	if value.Command.Action != AdapterInspectTarget {
+	if value.Command.Action != AdapterInspectExecutionTarget {
 		return fmt.Errorf(
 			"inspect target request action = %q, want %q",
 			value.Command.Action,
-			AdapterInspectTarget,
+			AdapterInspectExecutionTarget,
 		)
 	}
 	if value.Command.Scope.Kind != AuthorityPlatform {
@@ -721,15 +877,15 @@ func ValidateInspectTargetRequest(value InspectTargetRequest) error {
 	return nil
 }
 
-func ValidateObserveTargetRequest(value ObserveTargetRequest) error {
+func ValidateObserveExecutionTargetRequest(value ObserveExecutionTargetRequest) error {
 	if err := ValidateAdapterCommand(value.Command); err != nil {
 		return err
 	}
-	if value.Command.Action != AdapterObserveTarget {
+	if value.Command.Action != AdapterObserveExecutionTarget {
 		return fmt.Errorf(
 			"observe target request action = %q, want %q",
 			value.Command.Action,
-			AdapterObserveTarget,
+			AdapterObserveExecutionTarget,
 		)
 	}
 	if value.Command.Scope.Kind != AuthorityPlatform {
@@ -738,28 +894,28 @@ func ValidateObserveTargetRequest(value ObserveTargetRequest) error {
 	return nil
 }
 
-func ValidateTargetObservation(value TargetObservation) error {
+func ValidateExecutionTargetObservation(value ExecutionTargetObservation) error {
 	var problems []error
 	problems = append(problems,
-		ValidateID("runtimeTargetId", string(value.RuntimeTargetID)),
+		ValidateID("executionTargetId", string(value.ExecutionTargetID)),
 		ValidateDigest("identityFingerprint", value.IdentityFingerprint),
 		validateLabels("labels", value.Labels),
 		validateCapacity("capacity", value.Capacity),
 		validateCapacity("allocatable", value.Allocatable),
 		validateUniqueKnown(
-			"supportedIsolationClasses",
-			value.SupportedIsolationClasses,
-			IsolationClasses(),
+			"supportedIsolationGuarantees",
+			value.SupportedIsolationGuarantees,
+			IsolationGuarantees(),
 			false,
 		),
 		validateContractTime("observedAt", value.ObservedAt),
 	)
 	if !contains(
-		[]TargetHealth{
-			TargetHealthUnknown,
-			TargetHealthReady,
-			TargetHealthDegraded,
-			TargetHealthUnavailable,
+		[]ExecutionTargetHealth{
+			ExecutionTargetHealthUnknown,
+			ExecutionTargetHealthReady,
+			ExecutionTargetHealthDegraded,
+			ExecutionTargetHealthUnavailable,
 		},
 		value.Health,
 	) {
@@ -781,11 +937,11 @@ func ValidateAdapterCapabilities(value AdapterCapabilitiesContract) error {
 			adapterActionsForKind(value.Adapter.Kind),
 			true,
 		),
-		validateUniqueKnown("isolationClasses", value.IsolationClasses, IsolationClasses(), false),
+		validateUniqueKnown("isolationGuarantees", value.IsolationGuarantees, IsolationGuarantees(), false),
 		validateContractTime("observedAt", value.ObservedAt),
 	)
 	if !contains(
-		[]AdapterKind{AdapterInfrastructure, AdapterRuntime, AdapterGateway},
+		[]AdapterKind{AdapterInfrastructure, AdapterDeploymentExecutor, AdapterGateway},
 		value.Adapter.Kind,
 	) {
 		problems = append(problems, fmt.Errorf("unknown adapter kind %q", value.Adapter.Kind))
@@ -971,13 +1127,13 @@ func validateUniqueKnown[T comparable](
 func adapterActions() []AdapterAction {
 	return []AdapterAction{
 		AdapterCapabilities,
-		AdapterInspectTarget,
-		AdapterObserveTarget,
-		AdapterValidateRelease,
-		AdapterApply,
-		AdapterObserve,
-		AdapterStop,
-		AdapterRollback,
+		AdapterInspectExecutionTarget,
+		AdapterObserveExecutionTarget,
+		AdapterValidateDeployment,
+		AdapterApplyDeployment,
+		AdapterObserveDeployment,
+		AdapterStopDeployment,
+		AdapterRollbackDeployment,
 		AdapterReconcileRoutes,
 		AdapterObserveRoutes,
 		AdapterDeleteRoutes,
@@ -989,17 +1145,17 @@ func adapterActionsForKind(kind AdapterKind) []AdapterAction {
 	case AdapterInfrastructure:
 		return []AdapterAction{
 			AdapterCapabilities,
-			AdapterInspectTarget,
-			AdapterObserveTarget,
+			AdapterInspectExecutionTarget,
+			AdapterObserveExecutionTarget,
 		}
-	case AdapterRuntime:
+	case AdapterDeploymentExecutor:
 		return []AdapterAction{
 			AdapterCapabilities,
-			AdapterValidateRelease,
-			AdapterApply,
-			AdapterObserve,
-			AdapterStop,
-			AdapterRollback,
+			AdapterValidateDeployment,
+			AdapterApplyDeployment,
+			AdapterObserveDeployment,
+			AdapterStopDeployment,
+			AdapterRollbackDeployment,
 		}
 	case AdapterGateway:
 		return []AdapterAction{
@@ -1024,6 +1180,17 @@ func validateContractTime(name string, value time.Time) error {
 		)
 	}
 	return nil
+}
+
+func validateImmutableMetadata(name string, value ResourceMetadata) error {
+	var problems []error
+	if value.ResourceVersion != 1 {
+		problems = append(problems, fmt.Errorf("%s resourceVersion must remain 1", name))
+	}
+	if !value.UpdatedAt.Equal(value.CreatedAt) {
+		problems = append(problems, fmt.Errorf("%s updatedAt must equal createdAt", name))
+	}
+	return errors.Join(problems...)
 }
 
 func validateBoundedText(name, value string, limit int, required bool) error {

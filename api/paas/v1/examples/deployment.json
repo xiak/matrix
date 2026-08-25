@@ -1,0 +1,33 @@
+{
+  "apiVersion": "paas.matrix.xiak.com/v1",
+  "kind": "Deployment",
+  "metadata": {
+    "id": "deployment-a-0001",
+    "name": "demo-production",
+    "scope": { "kind": "TENANT", "tenantId": "tenant-a" },
+    "resourceVersion": 1,
+    "createdAt": "2026-08-25T08:02:00Z",
+    "updatedAt": "2026-08-25T08:02:00Z"
+  },
+  "spec": {
+    "applicationRevisionId": "revision-a-0001",
+    "placementPolicyId": "placement-policy-a",
+    "desiredState": "RUNNING",
+    "components": [
+      {
+        "name": "web",
+        "replicas": 1,
+        "bindings": [
+          { "name": "environment", "configurationRevisionId": "configuration-revision-demo-0001" },
+          { "name": "database", "secretVersion": { "secretId": "secret-demo-db", "version": "version-0001" } }
+        ]
+      }
+    ]
+  },
+  "status": {
+    "phase": "PENDING",
+    "observedApplicationRevisionId": "revision-a-0001",
+    "readyComponents": 0,
+    "observedAt": "2026-08-25T08:02:00Z"
+  }
+}

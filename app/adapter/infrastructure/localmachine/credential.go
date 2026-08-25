@@ -9,7 +9,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	paasv1 "matrix/api/paas/v1"
+	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
 
 var sshUsernamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9._-]{0,63}$`)

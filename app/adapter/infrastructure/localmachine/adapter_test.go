@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
-	paasv1 "matrix/api/paas/v1"
+	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
 
 type infrastructureContract interface {
 	Capabilities(context.Context) (paasv1.AdapterCapabilitiesContract, error)
-	InspectTarget(context.Context, paasv1.InspectTargetRequest) (paasv1.TargetObservation, error)
-	ObserveTarget(context.Context, paasv1.ObserveTargetRequest) (paasv1.TargetObservation, error)
+	InspectExecutionTarget(context.Context, paasv1.InspectExecutionTargetRequest) (paasv1.ExecutionTargetObservation, error)
+	ObserveExecutionTarget(context.Context, paasv1.ObserveExecutionTargetRequest) (paasv1.ExecutionTargetObservation, error)
 }
 
 var _ infrastructureContract = (*Adapter)(nil)
@@ -51,25 +51,25 @@ func TestAdapterCapabilitiesAreVersionedAndExact(t *testing.T) {
 	}
 	if !reflect.DeepEqual(capabilities.Actions, []paasv1.AdapterAction{
 		paasv1.AdapterCapabilities,
-		paasv1.AdapterInspectTarget,
-		paasv1.AdapterObserveTarget,
+		paasv1.AdapterInspectExecutionTarget,
+		paasv1.AdapterObserveExecutionTarget,
 	}) {
 		t.Fatalf("adapter actions = %v", capabilities.Actions)
 	}
 }
 
-func TestInspectTargetProducesStableReadyObservation(t *testing.T) {
+func TestInspectExecutionTargetProducesStableReadyObservation(t *testing.T) {
 	probe := &fakeHostProbe{facts: validHostFacts()}
 	adapter := mustAdapter(t, mustLocalBinding(t, ""), probe)
-	request := validInspectTargetRequest()
+	request := validInspectExecutionTargetRequest()
 
-	first, err := adapter.InspectTarget(context.Background(), request)
+	first, err := adapter.InspectExecutionTarget(context.Background(), request)
 	if err != nil {
-		t.Fatalf("first InspectTarget() error = %v", err)
+		t.Fatalf("first InspectExecutionTarget() error = %v", err)
 	}
-	second, err := adapter.InspectTarget(context.Background(), request)
+	second, err := adapter.InspectExecutionTarget(context.Background(), request)
 	if err != nil {
-		t.Fatalf("second InspectTarget() error = %v", err)
+		t.Fatalf("second InspectExecutionTarget() error = %v", err)
 	}
 	if !reflect.DeepEqual(first, second) {
 		t.Fatalf("repeated observations differ:\nfirst=%+v\nsecond=%+v", first, second)
@@ -77,25 +77,24 @@ func TestInspectTargetProducesStableReadyObservation(t *testing.T) {
 	if probe.calls != 2 {
 		t.Fatalf("read-only probe calls = %d, want 2", probe.calls)
 	}
-	if err := paasv1.ValidateTargetObservation(first); err != nil {
+	if err := paasv1.ValidateExecutionTargetObservation(first); err != nil {
 		t.Fatalf("target observation is invalid: %v", err)
 	}
-	if first.Health != paasv1.TargetHealthReady {
+	if first.Health != paasv1.ExecutionTargetHealthReady {
 		t.Fatalf("target health = %q, want READY", first.Health)
 	}
-	if first.RuntimeTargetID != request.Command.RuntimeTargetID {
-		t.Fatalf("runtime target id = %q", first.RuntimeTargetID)
+	if first.ExecutionTargetID != request.Command.ExecutionTargetID {
+		t.Fatalf("execution target id = %q", first.ExecutionTargetID)
 	}
 	if first.Labels["location"] != "local" ||
 		first.Labels["matrix-os"] != probe.facts.OperatingSystem ||
 		first.Labels["matrix-arch"] != probe.facts.Architecture {
 		t.Fatalf("normalized labels = %v", first.Labels)
 	}
-	if !reflect.DeepEqual(first.SupportedIsolationClasses, []paasv1.IsolationClass{
-		paasv1.IsolationDedicatedCompose,
-		paasv1.IsolationSharedCompose,
+	if !reflect.DeepEqual(first.SupportedIsolationGuarantees, []paasv1.IsolationGuarantee{
+		paasv1.IsolationWorkload,
 	}) {
-		t.Fatalf("isolation classes = %v", first.SupportedIsolationClasses)
+		t.Fatalf("isolation guarantees = %v", first.SupportedIsolationGuarantees)
 	}
 }
 
@@ -106,14 +105,14 @@ func TestAdapterInspectsTheRealLocalHostThroughVersionedContract(t *testing.T) {
 		mustLocalBinding(t, ""),
 		newLocalHostProbe(checker),
 	)
-	observation, err := adapter.InspectTarget(
+	observation, err := adapter.InspectExecutionTarget(
 		context.Background(),
-		validInspectTargetRequest(),
+		validInspectExecutionTargetRequest(),
 	)
 	if err != nil {
-		t.Fatalf("real local InspectTarget() error = %v", err)
+		t.Fatalf("real local InspectExecutionTarget() error = %v", err)
 	}
-	if err := paasv1.ValidateTargetObservation(observation); err != nil {
+	if err := paasv1.ValidateExecutionTargetObservation(observation); err != nil {
 		t.Fatalf("real local observation is invalid: %v", err)
 	}
 	if observation.IdentityFingerprint == "" ||
@@ -122,37 +121,37 @@ func TestAdapterInspectsTheRealLocalHostThroughVersionedContract(t *testing.T) {
 		observation.Capacity.StorageBytes <= 0 {
 		t.Fatalf("real local observation is incomplete: %+v", observation)
 	}
-	if observation.Health != paasv1.TargetHealthDegraded ||
-		len(observation.SupportedIsolationClasses) != 0 {
+	if observation.Health != paasv1.ExecutionTargetHealthDegraded ||
+		len(observation.SupportedIsolationGuarantees) != 0 {
 		t.Fatalf("disabled Compose capability must fail closed: %+v", observation)
 	}
 }
 
-func TestInspectTargetWithMissingDockerIsDegradedWithoutIsolation(t *testing.T) {
+func TestInspectExecutionTargetWithMissingDockerIsDegradedWithoutIsolation(t *testing.T) {
 	facts := validHostFacts()
 	facts.DockerEngineReady = false
 	adapter := mustAdapter(t, mustLocalBinding(t, ""), &fakeHostProbe{facts: facts})
 
-	observation, err := adapter.InspectTarget(context.Background(), validInspectTargetRequest())
+	observation, err := adapter.InspectExecutionTarget(context.Background(), validInspectExecutionTargetRequest())
 	if err != nil {
-		t.Fatalf("InspectTarget() error = %v", err)
+		t.Fatalf("InspectExecutionTarget() error = %v", err)
 	}
-	if observation.Health != paasv1.TargetHealthDegraded {
+	if observation.Health != paasv1.ExecutionTargetHealthDegraded {
 		t.Fatalf("target health = %q, want DEGRADED", observation.Health)
 	}
-	if len(observation.SupportedIsolationClasses) != 0 {
-		t.Fatalf("degraded target advertised isolation: %v", observation.SupportedIsolationClasses)
+	if len(observation.SupportedIsolationGuarantees) != 0 {
+		t.Fatalf("degraded target advertised isolation: %v", observation.SupportedIsolationGuarantees)
 	}
 }
 
-func TestInspectTargetFailsOnUnexpectedMachineIdentity(t *testing.T) {
+func TestInspectExecutionTargetFailsOnUnexpectedMachineIdentity(t *testing.T) {
 	binding := mustLocalBinding(
 		t,
 		"sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
 	)
 	adapter := mustAdapter(t, binding, &fakeHostProbe{facts: validHostFacts()})
 
-	_, err := adapter.InspectTarget(context.Background(), validInspectTargetRequest())
+	_, err := adapter.InspectExecutionTarget(context.Background(), validInspectExecutionTargetRequest())
 	fault := requireAdapterFault(t, err)
 	if fault.Normalized.Class != paasv1.AdapterErrorConflict ||
 		fault.Normalized.Code != paasv1.ErrorConflict ||
@@ -161,11 +160,11 @@ func TestInspectTargetFailsOnUnexpectedMachineIdentity(t *testing.T) {
 	}
 }
 
-func TestInspectTargetNormalizesBindingAndProbeFailures(t *testing.T) {
+func TestInspectExecutionTargetNormalizesBindingAndProbeFailures(t *testing.T) {
 	adapter := mustAdapter(t, mustLocalBinding(t, ""), &fakeHostProbe{
 		err: errors.New("password=must-not-leak endpoint=10.0.0.9"),
 	})
-	_, err := adapter.InspectTarget(context.Background(), validInspectTargetRequest())
+	_, err := adapter.InspectExecutionTarget(context.Background(), validInspectExecutionTargetRequest())
 	fault := requireAdapterFault(t, err)
 	if fault.Normalized.Code != paasv1.ErrorInternal {
 		t.Fatalf("native probe code = %q, want INTERNAL", fault.Normalized.Code)
@@ -178,7 +177,7 @@ func TestInspectTargetNormalizesBindingAndProbeFailures(t *testing.T) {
 	timeoutAdapter := mustAdapter(t, mustLocalBinding(t, ""), &fakeHostProbe{
 		err: ProbeFailure{Kind: ProbeFailureTimeout, ID: "host"},
 	})
-	_, err = timeoutAdapter.InspectTarget(context.Background(), validInspectTargetRequest())
+	_, err = timeoutAdapter.InspectExecutionTarget(context.Background(), validInspectExecutionTargetRequest())
 	fault = requireAdapterFault(t, err)
 	if fault.Normalized.Class != paasv1.AdapterErrorTimeout ||
 		fault.Normalized.Code != paasv1.ErrorDeadlineExceeded ||
@@ -187,7 +186,7 @@ func TestInspectTargetNormalizesBindingAndProbeFailures(t *testing.T) {
 	}
 }
 
-func TestInspectTargetRejectsUnknownAndUnavailableBindings(t *testing.T) {
+func TestInspectExecutionTargetRejectsUnknownAndUnavailableBindings(t *testing.T) {
 	resolver, err := NewStaticBindingResolver()
 	if err != nil {
 		t.Fatalf("NewStaticBindingResolver() error = %v", err)
@@ -200,7 +199,7 @@ func TestInspectTargetRejectsUnknownAndUnavailableBindings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	_, err = adapter.InspectTarget(context.Background(), validInspectTargetRequest())
+	_, err = adapter.InspectExecutionTarget(context.Background(), validInspectExecutionTargetRequest())
 	fault := requireAdapterFault(t, err)
 	if fault.Normalized.Class != paasv1.AdapterErrorNotFound ||
 		fault.Normalized.Code != paasv1.ErrorNotFound {
@@ -208,18 +207,18 @@ func TestInspectTargetRejectsUnknownAndUnavailableBindings(t *testing.T) {
 	}
 
 	sshBinding, err := NewMachineBinding(MachineBindingSpec{
-		ID:                      "local",
-		Kind:                    BindingSSH,
-		Endpoint:                "node.example.internal:22",
-		CredentialRef:           "credential-node",
-		HostKeySHA256:           "SHA256:" + strings.Repeat("A", 43),
-		AllowedIsolationClasses: []paasv1.IsolationClass{paasv1.IsolationSharedCompose},
+		ID:                         "local",
+		Kind:                       BindingSSH,
+		Endpoint:                   "node.example.internal:22",
+		CredentialRef:              "credential-node",
+		HostKeySHA256:              "SHA256:" + strings.Repeat("A", 43),
+		AllowedIsolationGuarantees: []paasv1.IsolationGuarantee{paasv1.IsolationWorkload},
 	})
 	if err != nil {
 		t.Fatalf("NewMachineBinding(SSH) error = %v", err)
 	}
 	adapter = mustAdapter(t, sshBinding, &fakeHostProbe{facts: validHostFacts()})
-	_, err = adapter.InspectTarget(context.Background(), validInspectTargetRequest())
+	_, err = adapter.InspectExecutionTarget(context.Background(), validInspectExecutionTargetRequest())
 	fault = requireAdapterFault(t, err)
 	if fault.Normalized.Code != paasv1.ErrorCapabilityUnsupported {
 		t.Fatalf("Gate A SSH fault = %+v", fault.Normalized)
@@ -230,22 +229,22 @@ func TestInspectAndObserveRequireTheirExactActions(t *testing.T) {
 	adapter := mustAdapter(t, mustLocalBinding(t, ""), &fakeHostProbe{
 		facts: validHostFacts(),
 	})
-	inspect := validInspectTargetRequest()
-	inspect.Command.Action = paasv1.AdapterObserveTarget
-	_, err := adapter.InspectTarget(context.Background(), inspect)
+	inspect := validInspectExecutionTargetRequest()
+	inspect.Command.Action = paasv1.AdapterObserveExecutionTarget
+	_, err := adapter.InspectExecutionTarget(context.Background(), inspect)
 	if fault := requireAdapterFault(t, err); fault.Normalized.Code != paasv1.ErrorInvalidArgument {
 		t.Fatalf("inspect action fault = %+v", fault.Normalized)
 	}
 
-	observe := paasv1.ObserveTargetRequest{Command: validInspectTargetRequest().Command}
-	observe.Command.Action = paasv1.AdapterObserveTarget
-	if _, err := adapter.ObserveTarget(context.Background(), observe); err != nil {
-		t.Fatalf("ObserveTarget() error = %v", err)
+	observe := paasv1.ObserveExecutionTargetRequest{Command: validInspectExecutionTargetRequest().Command}
+	observe.Command.Action = paasv1.AdapterObserveExecutionTarget
+	if _, err := adapter.ObserveExecutionTarget(context.Background(), observe); err != nil {
+		t.Fatalf("ObserveExecutionTarget() error = %v", err)
 	}
 }
 
 func TestVersionedObservationCannotCarryMachineAccessMaterial(t *testing.T) {
-	observation := reflect.TypeOf(paasv1.TargetObservation{})
+	observation := reflect.TypeOf(paasv1.ExecutionTargetObservation{})
 	forbidden := []string{
 		"endpoint",
 		"credential",
@@ -265,7 +264,7 @@ func TestVersionedObservationCannotCarryMachineAccessMaterial(t *testing.T) {
 		)
 		for _, marker := range forbidden {
 			if strings.Contains(normalized, marker) {
-				t.Errorf("TargetObservation field %q contains forbidden marker %q", field.Name, marker)
+				t.Errorf("ExecutionTargetObservation field %q contains forbidden marker %q", field.Name, marker)
 			}
 		}
 	}
@@ -296,18 +295,18 @@ func fixedClock() time.Time {
 	return time.Date(2026, 8, 25, 12, 0, 0, 123456000, time.UTC)
 }
 
-func validInspectTargetRequest() paasv1.InspectTargetRequest {
-	return paasv1.InspectTargetRequest{
+func validInspectExecutionTargetRequest() paasv1.InspectExecutionTargetRequest {
+	return paasv1.InspectExecutionTargetRequest{
 		Command: paasv1.AdapterCommandEnvelope{
-			OperationID:     "operation-register-target-001",
-			CommandID:       "command-inspect-target-001",
-			Attempt:         1,
-			Action:          paasv1.AdapterInspectTarget,
-			Scope:           paasv1.ResourceScope{Kind: paasv1.AuthorityPlatform},
-			RuntimeTargetID: "target-local-001",
-			RequestDigest:   "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-			BindingRef:      "local",
-			Deadline:        time.Date(2099, 8, 25, 12, 5, 0, 0, time.UTC),
+			OperationID:       "operation-register-target-001",
+			CommandID:         "command-inspect-target-001",
+			Attempt:           1,
+			Action:            paasv1.AdapterInspectExecutionTarget,
+			Scope:             paasv1.ResourceScope{Kind: paasv1.AuthorityPlatform},
+			ExecutionTargetID: "target-local-001",
+			RequestDigest:     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			BindingRef:        "local",
+			Deadline:          time.Date(2099, 8, 25, 12, 5, 0, 0, time.UTC),
 		},
 	}
 }

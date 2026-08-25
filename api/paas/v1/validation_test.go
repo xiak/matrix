@@ -33,7 +33,7 @@ func TestValidateOperationEnforcesTerminalContract(t *testing.T) {
 		Title:     "Operation failed",
 		Status:    500,
 		Code:      ErrorOperationFailed,
-		Detail:    "The runtime adapter rejected the release.",
+		Detail:    "The deployment executor rejected the deployment.",
 		TraceID:   "trace-operation-001",
 		Retryable: false,
 	}
@@ -50,9 +50,9 @@ func TestValidateOperationEnforcesTerminalContract(t *testing.T) {
 func TestValidateOperationDistinguishesPlatformAndTenantScope(t *testing.T) {
 	var operation Operation
 	decodeStrictJSON(t, "examples/operation.json", &operation)
-	operation.Action = OperationRegisterTarget
+	operation.Action = OperationRegisterExecutionTarget
 	operation.Scope = ResourceScope{Kind: AuthorityPlatform}
-	operation.Target = ResourceRef{Kind: "RuntimeTarget", ID: "target-local-001"}
+	operation.Target = ResourceRef{Kind: "ExecutionTarget", ID: "target-local-001"}
 	if err := ValidateOperation(operation); err != nil {
 		t.Fatalf("platform target registration must validate: %v", err)
 	}
@@ -72,31 +72,31 @@ func TestValidateOperationDistinguishesPlatformAndTenantScope(t *testing.T) {
 }
 
 func TestValidateInfrastructureRequestsRequirePlatformScope(t *testing.T) {
-	var request InspectTargetRequest
-	decodeStrictJSON(t, "examples/inspect-target-request.json", &request)
-	if err := ValidateInspectTargetRequest(request); err != nil {
+	var request InspectExecutionTargetRequest
+	decodeStrictJSON(t, "examples/inspect-execution-target-request.json", &request)
+	if err := ValidateInspectExecutionTargetRequest(request); err != nil {
 		t.Fatalf("platform inspection request must validate: %v", err)
 	}
 	request.Command.Scope = ResourceScope{
 		Kind:     AuthorityTenant,
 		TenantID: "tenant-a",
 	}
-	if err := ValidateInspectTargetRequest(request); err == nil ||
+	if err := ValidateInspectExecutionTargetRequest(request); err == nil ||
 		!strings.Contains(err.Error(), "platform scope") {
 		t.Fatalf("tenant-scoped target inspection must fail, got %v", err)
 	}
 }
 
-func TestValidateRuntimeTargetFailsClosedOnCapacityAndCapabilities(t *testing.T) {
-	var target RuntimeTarget
-	decodeStrictJSON(t, "examples/runtime-target.json", &target)
+func TestValidateExecutionTargetFailsClosedOnCapacityAndCapabilities(t *testing.T) {
+	var target ExecutionTarget
+	decodeStrictJSON(t, "examples/execution-target.json", &target)
 	target.Status.Allocatable.CPUMillis = target.Status.Capacity.CPUMillis + 1
-	target.Status.SupportedIsolationClasses = append(
-		target.Status.SupportedIsolationClasses,
-		IsolationSharedCompose,
+	target.Status.SupportedIsolationGuarantees = append(
+		target.Status.SupportedIsolationGuarantees,
+		IsolationWorkload,
 	)
 
-	err := ValidateRuntimeTarget(target)
+	err := ValidateExecutionTarget(target)
 	if err == nil {
 		t.Fatal("overcommitted target with duplicate capabilities must fail")
 	}
@@ -106,16 +106,39 @@ func TestValidateRuntimeTargetFailsClosedOnCapacityAndCapabilities(t *testing.T)
 	}
 }
 
-func TestValidatePlacementPolicyRejectsDuplicateResourcePools(t *testing.T) {
+func TestValidatePlacementPolicyRejectsDuplicateExecutionPools(t *testing.T) {
 	var policy PlacementPolicy
 	decodeStrictJSON(t, "examples/placement-policy.json", &policy)
-	policy.Spec.EligibleResourcePools = append(
-		policy.Spec.EligibleResourcePools,
-		policy.Spec.EligibleResourcePools[0],
+	policy.Spec.EligibleExecutionPoolIDs = append(
+		policy.Spec.EligibleExecutionPoolIDs,
+		policy.Spec.EligibleExecutionPoolIDs[0],
 	)
 	if err := ValidatePlacementPolicy(policy); err == nil ||
 		!strings.Contains(err.Error(), "duplicated") {
-		t.Fatalf("duplicate resource pools must fail, got %v", err)
+		t.Fatalf("duplicate execution pools must fail, got %v", err)
+	}
+}
+
+func TestValidateApplicationRevisionEnforcesPhaseOneInputInjection(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     int
+		injection InjectionMode
+		want      string
+	}{
+		{name: "configuration", input: 0, injection: InjectionFile, want: "must use ENV"},
+		{name: "secret", input: 1, injection: InjectionEnvironment, want: "must use FILE"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var revision ApplicationRevision
+			decodeStrictJSON(t, "examples/application-revision.json", &revision)
+			revision.Spec.Components[0].Inputs[test.input].Injection = test.injection
+			if err := ValidateApplicationRevision(revision); err == nil ||
+				!strings.Contains(err.Error(), test.want) {
+				t.Fatalf("unsupported input injection must fail with %q, got %v", test.want, err)
+			}
+		})
 	}
 }
 
@@ -123,31 +146,31 @@ func TestValidatePlacementDecisionBindsSelectedTargetVersion(t *testing.T) {
 	var decision PlacementDecision
 	decodeStrictJSON(t, "examples/placement-unschedulable.json", &decision)
 	decision.Outcome = PlacementScheduled
-	decision.RequestedIsolation = IsolationSharedCompose
-	decision.RuntimeTargetID = "target-local-001"
-	decision.RuntimeTargetResourceVersion = 7
-	decision.GrantedIsolation = IsolationSharedCompose
+	decision.RequestedIsolationGuarantee = IsolationWorkload
+	decision.ExecutionTargetID = "target-local-001"
+	decision.ExecutionTargetResourceVersion = 7
+	decision.GrantedIsolationGuarantee = IsolationWorkload
 	decision.Reason = nil
 	if err := ValidatePlacementDecision(decision); err != nil {
 		t.Fatalf("version-bound scheduled decision must validate: %v", err)
 	}
 
-	decision.RuntimeTargetResourceVersion = 0
+	decision.ExecutionTargetResourceVersion = 0
 	if err := ValidatePlacementDecision(decision); err == nil ||
-		!strings.Contains(err.Error(), "runtimeTargetResourceVersion") {
+		!strings.Contains(err.Error(), "executionTargetResourceVersion") {
 		t.Fatalf("scheduled decision without target version must fail, got %v", err)
 	}
 
 	decision.Outcome = PlacementUnschedulable
-	decision.RuntimeTargetID = ""
-	decision.RuntimeTargetResourceVersion = 7
-	decision.GrantedIsolation = ""
+	decision.ExecutionTargetID = ""
+	decision.ExecutionTargetResourceVersion = 7
+	decision.GrantedIsolationGuarantee = ""
 	decision.Reason = &Problem{
 		Type:      "/problems/unschedulable",
-		Title:     "Workload cannot be scheduled",
+		Title:     "Deployment cannot be scheduled",
 		Status:    422,
 		Code:      ErrorUnschedulable,
-		Detail:    "No eligible runtime target currently satisfies the placement policy.",
+		Detail:    "No eligible execution target currently satisfies the placement policy.",
 		TraceID:   "trace-0001",
 		Retryable: true,
 	}
@@ -198,18 +221,18 @@ func TestEvidenceRejectsSensitiveAttributeValues(t *testing.T) {
 func TestValidateAdapterCapabilitiesRejectsUnknownAndDuplicateValues(t *testing.T) {
 	capabilities := AdapterCapabilitiesContract{
 		Adapter: AdapterRef{
-			Kind:            AdapterRuntime,
+			Kind:            AdapterDeploymentExecutor,
 			Name:            "compose",
 			ContractVersion: "v1",
 		},
 		Actions: []AdapterAction{
-			AdapterApply,
-			AdapterApply,
+			AdapterApplyDeployment,
+			AdapterApplyDeployment,
 			AdapterAction("FUTURE_ACTION"),
 		},
-		IsolationClasses: []IsolationClass{
-			IsolationSharedCompose,
-			IsolationClass("FUTURE_ISOLATION"),
+		IsolationGuarantees: []IsolationGuarantee{
+			IsolationWorkload,
+			IsolationGuarantee("FUTURE_ISOLATION"),
 		},
 		ObservedAt: time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC),
 	}
@@ -275,16 +298,17 @@ func validAdapterCommand() AdapterCommandEnvelope {
 		OperationID: "operation-001",
 		CommandID:   "command-001",
 		Attempt:     1,
-		Action:      AdapterApply,
+		Action:      AdapterApplyDeployment,
 		Scope: ResourceScope{
 			Kind:     AuthorityTenant,
 			TenantID: "tenant-001",
 		},
-		WorkloadID:      "workload-001",
-		ReleaseID:       "release-001",
-		RuntimeTargetID: "target-local-001",
-		RequestDigest:   "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		BindingRef:      "binding-local-001",
-		Deadline:        time.Date(2026, 8, 25, 12, 5, 0, 0, time.UTC),
+		ApplicationID:         "application-001",
+		ApplicationRevisionID: "revision-001",
+		DeploymentID:          "deployment-001",
+		ExecutionTargetID:     "target-local-001",
+		RequestDigest:         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		BindingRef:            "binding-local-001",
+		Deadline:              time.Date(2026, 8, 25, 12, 5, 0, 0, time.UTC),
 	}
 }

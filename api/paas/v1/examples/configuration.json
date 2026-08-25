@@ -1,0 +1,13 @@
+{
+  "apiVersion": "paas.matrix.xiak.com/v1",
+  "kind": "Configuration",
+  "metadata": {
+    "id": "configuration-demo",
+    "name": "demo-environment",
+    "scope": { "kind": "TENANT", "tenantId": "tenant-a" },
+    "resourceVersion": 1,
+    "createdAt": "2026-08-25T08:00:00Z",
+    "updatedAt": "2026-08-25T08:00:00Z"
+  },
+  "applicationId": "application-demo"
+}

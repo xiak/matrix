@@ -13,7 +13,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	paasv1 "matrix/api/paas/v1"
+	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
 
 type sshServerResponse struct {
@@ -72,17 +72,17 @@ func TestPinnedSSHAdapterInspectsEphemeralLinuxServer(t *testing.T) {
 		"/var/lib/matrix",
 	)
 	adapter := mustRemoteAdapter(t, binding, probe)
-	request := validInspectTargetRequest()
+	request := validInspectExecutionTargetRequest()
 	request.Command.BindingRef = binding.ID()
 
-	observation, err := adapter.InspectTarget(context.Background(), request)
+	observation, err := adapter.InspectExecutionTarget(context.Background(), request)
 	if err != nil {
-		t.Fatalf("InspectTarget() through SSH error = %v", err)
+		t.Fatalf("InspectExecutionTarget() through SSH error = %v", err)
 	}
-	if err := paasv1.ValidateTargetObservation(observation); err != nil {
+	if err := paasv1.ValidateExecutionTargetObservation(observation); err != nil {
 		t.Fatalf("SSH observation is invalid: %v", err)
 	}
-	if observation.Health != paasv1.TargetHealthReady ||
+	if observation.Health != paasv1.ExecutionTargetHealthReady ||
 		observation.IdentityFingerprint == "" ||
 		observation.Capacity.CPUMillis != 4000 ||
 		observation.Capacity.MemoryBytes != 8192*1024 ||

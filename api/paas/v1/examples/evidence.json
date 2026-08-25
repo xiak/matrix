@@ -1,5 +1,5 @@
 {
-  "apiVersion": "matrix.paas.io/paas/v1",
+  "apiVersion": "paas.matrix.xiak.com/v1",
   "kind": "Evidence",
   "id": "evidence-a-0001",
   "scope": {
@@ -14,7 +14,7 @@
   "code": "PLACEMENT_POLICY_ACCEPTED",
   "message": "Placement policy was accepted for evaluation.",
   "attributes": {
-    "isolation_class": "DEDICATED_COMPOSE"
+    "requested_isolation_guarantee": "WORKLOAD"
   },
   "contentDigest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
   "occurredAt": "2026-08-25T08:03:00Z"

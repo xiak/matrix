@@ -1,0 +1,20 @@
+{
+  "executionTargetId": "target-local-001",
+  "identityFingerprint": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  "labels": { "location": "local", "matrix-arch": "amd64", "matrix-os": "windows" },
+  "capacity": {
+    "cpuMillis": 8000,
+    "memoryBytes": 17179869184,
+    "storageBytes": 536870912000,
+    "workloadSlots": 8
+  },
+  "allocatable": {
+    "cpuMillis": 8000,
+    "memoryBytes": 12884901888,
+    "storageBytes": 429496729600,
+    "workloadSlots": 8
+  },
+  "health": "READY",
+  "supportedIsolationGuarantees": ["WORKLOAD"],
+  "observedAt": "2026-08-25T08:05:00Z"
+}

@@ -1,0 +1,17 @@
+{
+  "apiVersion": "paas.matrix.xiak.com/v1",
+  "kind": "ConfigurationRevision",
+  "metadata": {
+    "id": "configuration-revision-demo-0001",
+    "name": "demo-environment-v1",
+    "scope": { "kind": "TENANT", "tenantId": "tenant-a" },
+    "resourceVersion": 1,
+    "createdAt": "2026-08-25T08:01:00Z",
+    "updatedAt": "2026-08-25T08:01:00Z"
+  },
+  "spec": {
+    "configurationId": "configuration-demo",
+    "values": { "LOG_LEVEL": "info", "PORT": "8080" },
+    "contentDigest": "sha256:1f3b7536096483d27af79823d1d8df946ef79d76db9dccde7cb9af2818628e59"
+  }
+}

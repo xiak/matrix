@@ -7,7 +7,7 @@ import (
 	"math"
 	"time"
 
-	paasv1 "matrix/api/paas/v1"
+	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
 
 const (
@@ -63,12 +63,11 @@ func (adapter *Adapter) Capabilities(
 		},
 		Actions: []paasv1.AdapterAction{
 			paasv1.AdapterCapabilities,
-			paasv1.AdapterInspectTarget,
-			paasv1.AdapterObserveTarget,
+			paasv1.AdapterInspectExecutionTarget,
+			paasv1.AdapterObserveExecutionTarget,
 		},
-		IsolationClasses: []paasv1.IsolationClass{
-			paasv1.IsolationDedicatedCompose,
-			paasv1.IsolationSharedCompose,
+		IsolationGuarantees: []paasv1.IsolationGuarantee{
+			paasv1.IsolationWorkload,
 		},
 		ObservedAt: adapter.now(),
 	}
@@ -78,22 +77,22 @@ func (adapter *Adapter) Capabilities(
 	return value, nil
 }
 
-func (adapter *Adapter) InspectTarget(
+func (adapter *Adapter) InspectExecutionTarget(
 	ctx context.Context,
-	request paasv1.InspectTargetRequest,
-) (paasv1.TargetObservation, error) {
-	if err := paasv1.ValidateInspectTargetRequest(request); err != nil {
-		return paasv1.TargetObservation{}, invalidRequestFault()
+	request paasv1.InspectExecutionTargetRequest,
+) (paasv1.ExecutionTargetObservation, error) {
+	if err := paasv1.ValidateInspectExecutionTargetRequest(request); err != nil {
+		return paasv1.ExecutionTargetObservation{}, invalidRequestFault()
 	}
 	return adapter.inspect(ctx, request.Command)
 }
 
-func (adapter *Adapter) ObserveTarget(
+func (adapter *Adapter) ObserveExecutionTarget(
 	ctx context.Context,
-	request paasv1.ObserveTargetRequest,
-) (paasv1.TargetObservation, error) {
-	if err := paasv1.ValidateObserveTargetRequest(request); err != nil {
-		return paasv1.TargetObservation{}, invalidRequestFault()
+	request paasv1.ObserveExecutionTargetRequest,
+) (paasv1.ExecutionTargetObservation, error) {
+	if err := paasv1.ValidateObserveExecutionTargetRequest(request); err != nil {
+		return paasv1.ExecutionTargetObservation{}, invalidRequestFault()
 	}
 	return adapter.inspect(ctx, request.Command)
 }
@@ -101,15 +100,15 @@ func (adapter *Adapter) ObserveTarget(
 func (adapter *Adapter) inspect(
 	ctx context.Context,
 	command paasv1.AdapterCommandEnvelope,
-) (paasv1.TargetObservation, error) {
+) (paasv1.ExecutionTargetObservation, error) {
 	operationContext, cancel := context.WithDeadline(ctx, command.Deadline)
 	defer cancel()
 	binding, err := adapter.bindings.Resolve(operationContext, command.BindingRef)
 	if err != nil {
-		return paasv1.TargetObservation{}, resolveFault(command.BindingRef, err)
+		return paasv1.ExecutionTargetObservation{}, resolveFault(command.BindingRef, err)
 	}
 	if err := ValidateMachineBinding(binding); err != nil {
-		return paasv1.TargetObservation{}, invalidBindingFault(binding.id)
+		return paasv1.ExecutionTargetObservation{}, invalidBindingFault(binding.id)
 	}
 	var facts HostFacts
 	switch binding.kind {
@@ -117,43 +116,43 @@ func (adapter *Adapter) inspect(
 		facts, err = adapter.localProbe.Inspect(operationContext, binding.storagePath)
 	case BindingSSH:
 		if adapter.remoteProbe == nil {
-			return paasv1.TargetObservation{}, unsupportedBindingFault(binding.id)
+			return paasv1.ExecutionTargetObservation{}, unsupportedBindingFault(binding.id)
 		}
 		facts, err = adapter.remoteProbe.Inspect(operationContext, binding)
 	default:
-		return paasv1.TargetObservation{}, invalidBindingFault(binding.id)
+		return paasv1.ExecutionTargetObservation{}, invalidBindingFault(binding.id)
 	}
 	if err != nil {
-		return paasv1.TargetObservation{}, normalizeProbeFault(binding.id, err)
+		return paasv1.ExecutionTargetObservation{}, normalizeProbeFault(binding.id, err)
 	}
-	observation, err := adapter.observation(command.RuntimeTargetID, binding, facts)
+	observation, err := adapter.observation(command.ExecutionTargetID, binding, facts)
 	if err != nil {
-		return paasv1.TargetObservation{}, internalObservationFault(binding.id)
+		return paasv1.ExecutionTargetObservation{}, internalObservationFault(binding.id)
 	}
 	if expected := binding.expectedMachineFingerprint; expected != "" &&
 		expected != observation.IdentityFingerprint {
-		return paasv1.TargetObservation{}, identityConflictFault(binding.id)
+		return paasv1.ExecutionTargetObservation{}, identityConflictFault(binding.id)
 	}
 	return observation, nil
 }
 
 func (adapter *Adapter) observation(
-	runtimeTargetID paasv1.ResourceID,
+	executionTargetID paasv1.ResourceID,
 	binding MachineBinding,
 	facts HostFacts,
-) (paasv1.TargetObservation, error) {
+) (paasv1.ExecutionTargetObservation, error) {
 	if err := validateHostFacts(facts); err != nil {
-		return paasv1.TargetObservation{}, err
+		return paasv1.ExecutionTargetObservation{}, err
 	}
 	if facts.MemoryTotalBytes > math.MaxInt64 ||
 		facts.MemoryAvailableBytes > math.MaxInt64 ||
 		facts.StorageTotalBytes > math.MaxInt64 ||
 		facts.StorageAvailableBytes > math.MaxInt64 {
-		return paasv1.TargetObservation{}, errors.New("host capacity exceeds v1 integer range")
+		return paasv1.ExecutionTargetObservation{}, errors.New("host capacity exceeds v1 integer range")
 	}
 	fingerprint, err := DeriveMachineFingerprint(facts)
 	if err != nil {
-		return paasv1.TargetObservation{}, err
+		return paasv1.ExecutionTargetObservation{}, err
 	}
 	cpuMillis := int64(facts.LogicalCPUs) * 1000
 	workloadSlots := int64(facts.LogicalCPUs)
@@ -164,14 +163,14 @@ func (adapter *Adapter) observation(
 	for key, value := range binding.labels {
 		labels[key] = value
 	}
-	health := paasv1.TargetHealthDegraded
-	var isolationClasses []paasv1.IsolationClass
+	health := paasv1.ExecutionTargetHealthDegraded
+	var isolationGuarantees []paasv1.IsolationGuarantee
 	if facts.DockerEngineReady && facts.ComposePluginReady {
-		health = paasv1.TargetHealthReady
-		isolationClasses = binding.AllowedIsolationClasses()
+		health = paasv1.ExecutionTargetHealthReady
+		isolationGuarantees = binding.AllowedIsolationGuarantees()
 	}
-	value := paasv1.TargetObservation{
-		RuntimeTargetID:     runtimeTargetID,
+	value := paasv1.ExecutionTargetObservation{
+		ExecutionTargetID:   executionTargetID,
 		IdentityFingerprint: fingerprint,
 		Labels:              labels,
 		Capacity: paasv1.Capacity{
@@ -186,12 +185,12 @@ func (adapter *Adapter) observation(
 			StorageBytes:  int64(facts.StorageAvailableBytes),
 			WorkloadSlots: workloadSlots,
 		},
-		Health:                    health,
-		SupportedIsolationClasses: isolationClasses,
-		ObservedAt:                adapter.now(),
+		Health:                       health,
+		SupportedIsolationGuarantees: isolationGuarantees,
+		ObservedAt:                   adapter.now(),
 	}
-	if err := paasv1.ValidateTargetObservation(value); err != nil {
-		return paasv1.TargetObservation{}, err
+	if err := paasv1.ValidateExecutionTargetObservation(value); err != nil {
+		return paasv1.ExecutionTargetObservation{}, err
 	}
 	return value, nil
 }
@@ -259,7 +258,7 @@ func resolveFault(id string, err error) paasv1.AdapterFault {
 	default:
 		return newAdapterFault(
 			paasv1.AdapterErrorUnavailable,
-			paasv1.ErrorTargetUnavailable,
+			paasv1.ErrorExecutionTargetUnavailable,
 			fmt.Sprintf("machine binding %s could not be resolved", id),
 			true,
 		)
@@ -289,7 +288,7 @@ func normalizeProbeFault(id string, err error) paasv1.AdapterFault {
 	case ProbeFailureUnavailable:
 		return newAdapterFault(
 			paasv1.AdapterErrorUnavailable,
-			paasv1.ErrorTargetUnavailable,
+			paasv1.ErrorExecutionTargetUnavailable,
 			fmt.Sprintf("machine binding %s is unavailable", id),
 			true,
 		)

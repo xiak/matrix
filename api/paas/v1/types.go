@@ -36,24 +36,24 @@ type LabelSelector struct {
 	MatchLabels map[string]string `json:"matchLabels,omitempty"`
 }
 
-type ResourcePoolSpec struct {
-	TargetSelector          LabelSelector    `json:"targetSelector"`
-	AllowedIsolationClasses []IsolationClass `json:"allowedIsolationClasses"`
+type ExecutionPoolSpec struct {
+	ExecutionTargetSelector    LabelSelector        `json:"executionTargetSelector"`
+	AllowedIsolationGuarantees []IsolationGuarantee `json:"allowedIsolationGuarantees"`
 }
 
-type ResourcePoolStatus struct {
-	Phase            ResourcePoolPhase `json:"phase"`
-	TargetCount      uint32            `json:"targetCount"`
-	ReadyTargetCount uint32            `json:"readyTargetCount"`
-	ObservedAt       time.Time         `json:"observedAt"`
+type ExecutionPoolStatus struct {
+	Phase                     ExecutionPoolPhase `json:"phase"`
+	ExecutionTargetCount      uint32             `json:"executionTargetCount"`
+	ReadyExecutionTargetCount uint32             `json:"readyExecutionTargetCount"`
+	ObservedAt                time.Time          `json:"observedAt"`
 }
 
-type ResourcePool struct {
-	APIVersion string             `json:"apiVersion"`
-	Kind       string             `json:"kind"`
-	Metadata   ResourceMetadata   `json:"metadata"`
-	Spec       ResourcePoolSpec   `json:"spec"`
-	Status     ResourcePoolStatus `json:"status"`
+type ExecutionPool struct {
+	APIVersion string              `json:"apiVersion"`
+	Kind       string              `json:"kind"`
+	Metadata   ResourceMetadata    `json:"metadata"`
+	Spec       ExecutionPoolSpec   `json:"spec"`
+	Status     ExecutionPoolStatus `json:"status"`
 }
 
 type AdapterRef struct {
@@ -69,35 +69,35 @@ type Capacity struct {
 	WorkloadSlots int64 `json:"workloadSlots"`
 }
 
-type RuntimeTargetSpec struct {
-	ResourcePoolID        ResourceID         `json:"resourcePoolId"`
-	InfrastructureAdapter AdapterRef         `json:"infrastructureAdapter"`
-	RuntimeAdapter        AdapterRef         `json:"runtimeAdapter"`
-	GatewayAdapter        *AdapterRef        `json:"gatewayAdapter,omitempty"`
-	DesiredState          TargetDesiredState `json:"desiredState"`
+type ExecutionTargetSpec struct {
+	ExecutionPoolID       ResourceID                  `json:"executionPoolId"`
+	InfrastructureAdapter AdapterRef                  `json:"infrastructureAdapter"`
+	DeploymentExecutor    AdapterRef                  `json:"deploymentExecutor"`
+	GatewayAdapter        *AdapterRef                 `json:"gatewayAdapter,omitempty"`
+	DesiredState          ExecutionTargetDesiredState `json:"desiredState"`
 }
 
-type RuntimeTargetStatus struct {
-	Health                    TargetHealth     `json:"health"`
-	Capacity                  Capacity         `json:"capacity"`
-	Allocatable               Capacity         `json:"allocatable"`
-	SupportedIsolationClasses []IsolationClass `json:"supportedIsolationClasses"`
-	ObservedAt                time.Time        `json:"observedAt"`
+type ExecutionTargetStatus struct {
+	Health                       ExecutionTargetHealth `json:"health"`
+	Capacity                     Capacity              `json:"capacity"`
+	Allocatable                  Capacity              `json:"allocatable"`
+	SupportedIsolationGuarantees []IsolationGuarantee  `json:"supportedIsolationGuarantees"`
+	ObservedAt                   time.Time             `json:"observedAt"`
 }
 
-type RuntimeTarget struct {
-	APIVersion string              `json:"apiVersion"`
-	Kind       string              `json:"kind"`
-	Metadata   ResourceMetadata    `json:"metadata"`
-	Spec       RuntimeTargetSpec   `json:"spec"`
-	Status     RuntimeTargetStatus `json:"status"`
+type ExecutionTarget struct {
+	APIVersion string                `json:"apiVersion"`
+	Kind       string                `json:"kind"`
+	Metadata   ResourceMetadata      `json:"metadata"`
+	Spec       ExecutionTargetSpec   `json:"spec"`
+	Status     ExecutionTargetStatus `json:"status"`
 }
 
 type PlacementPolicySpec struct {
-	RequiredIsolationClass IsolationClass    `json:"requiredIsolationClass"`
-	EligibleResourcePools  []ResourceID      `json:"eligibleResourcePoolIds"`
-	TargetSelector         LabelSelector     `json:"targetSelector"`
-	Strategy               PlacementStrategy `json:"strategy"`
+	RequiredIsolationGuarantee IsolationGuarantee `json:"requiredIsolationGuarantee"`
+	EligibleExecutionPoolIDs   []ResourceID       `json:"eligibleExecutionPoolIds"`
+	ExecutionTargetSelector    LabelSelector      `json:"executionTargetSelector"`
+	Strategy                   PlacementStrategy  `json:"strategy"`
 }
 
 type PlacementPolicy struct {
@@ -108,20 +108,22 @@ type PlacementPolicy struct {
 }
 
 type PlacementDecision struct {
-	APIVersion                   string           `json:"apiVersion"`
-	Kind                         string           `json:"kind"`
-	Metadata                     ResourceMetadata `json:"metadata"`
-	WorkloadReleaseID            ResourceID       `json:"workloadReleaseId"`
-	PlacementPolicyID            ResourceID       `json:"placementPolicyId"`
-	PolicyResourceVersion        uint64           `json:"policyResourceVersion"`
-	RequestedIsolation           IsolationClass   `json:"requestedIsolationClass"`
-	Outcome                      PlacementOutcome `json:"outcome"`
-	RuntimeTargetID              ResourceID       `json:"runtimeTargetId,omitempty"`
-	RuntimeTargetResourceVersion uint64           `json:"runtimeTargetResourceVersion,omitempty"`
-	GrantedIsolation             IsolationClass   `json:"grantedIsolationClass,omitempty"`
-	CandidateSetDigest           string           `json:"candidateSetDigest"`
-	Reason                       *Problem         `json:"reason,omitempty"`
-	DecidedAt                    time.Time        `json:"decidedAt"`
+	APIVersion                     string             `json:"apiVersion"`
+	Kind                           string             `json:"kind"`
+	Metadata                       ResourceMetadata   `json:"metadata"`
+	DeploymentID                   ResourceID         `json:"deploymentId"`
+	DeploymentResourceVersion      uint64             `json:"deploymentResourceVersion"`
+	ApplicationRevisionID          ResourceID         `json:"applicationRevisionId"`
+	PlacementPolicyID              ResourceID         `json:"placementPolicyId"`
+	PolicyResourceVersion          uint64             `json:"policyResourceVersion"`
+	RequestedIsolationGuarantee    IsolationGuarantee `json:"requestedIsolationGuarantee"`
+	Outcome                        PlacementOutcome   `json:"outcome"`
+	ExecutionTargetID              ResourceID         `json:"executionTargetId,omitempty"`
+	ExecutionTargetResourceVersion uint64             `json:"executionTargetResourceVersion,omitempty"`
+	GrantedIsolationGuarantee      IsolationGuarantee `json:"grantedIsolationGuarantee,omitempty"`
+	CandidateSetDigest             string             `json:"candidateSetDigest"`
+	Reason                         *Problem           `json:"reason,omitempty"`
+	DecidedAt                      time.Time          `json:"decidedAt"`
 }
 
 type ArtifactRef struct {
@@ -130,54 +132,115 @@ type ArtifactRef struct {
 	Digest  string       `json:"digest"`
 }
 
-type SecretReference struct {
-	Name       string     `json:"name"`
-	ResourceID ResourceID `json:"resourceId"`
-}
-
 type ResourceRequirements struct {
 	CPUMillis   int64 `json:"cpuMillis"`
 	MemoryBytes int64 `json:"memoryBytes"`
 }
 
-type WorkloadEndpoint struct {
+type ApplicationEndpoint struct {
 	Name       string             `json:"name"`
 	Port       uint16             `json:"port"`
 	Protocol   EndpointProtocol   `json:"protocol"`
 	Visibility EndpointVisibility `json:"visibility"`
 }
 
-type WorkloadComponent struct {
-	Name              string               `json:"name"`
-	Artifact          ArtifactRef          `json:"artifact"`
-	Replicas          uint32               `json:"replicas"`
-	Resources         ResourceRequirements `json:"resources"`
-	ConfigurationRefs []ResourceID         `json:"configurationRefs,omitempty"`
-	SecretReferences  []SecretReference    `json:"secretReferences,omitempty"`
-	Endpoints         []WorkloadEndpoint   `json:"endpoints,omitempty"`
+// ComponentInput declares one allowlisted, SDK-free injection slot. Executors
+// derive the environment variable or fixed mount path from Name; callers
+// cannot supply a host path or provider-native document.
+type ComponentInput struct {
+	Name      string        `json:"name"`
+	Kind      InputKind     `json:"kind"`
+	Injection InjectionMode `json:"injection"`
+	Required  bool          `json:"required"`
 }
 
-type WorkloadReleaseSpec struct {
-	WorkloadID    ResourceID          `json:"workloadId"`
-	Revision      string              `json:"revision"`
-	ContentDigest string              `json:"contentDigest"`
-	Components    []WorkloadComponent `json:"components"`
+type SecretVersionReference struct {
+	SecretID ResourceID `json:"secretId"`
+	Version  string     `json:"version"`
 }
 
-type WorkloadReleaseStatus struct {
-	Phase               ReleasePhase `json:"phase"`
-	PlacementDecisionID ResourceID   `json:"placementDecisionId,omitempty"`
-	CurrentOperationID  OperationID  `json:"currentOperationId,omitempty"`
-	ReadyComponents     uint32       `json:"readyComponents"`
-	ObservedAt          time.Time    `json:"observedAt"`
+type ComponentBinding struct {
+	Name                    string                  `json:"name"`
+	ConfigurationRevisionID ResourceID              `json:"configurationRevisionId,omitempty"`
+	SecretVersion           *SecretVersionReference `json:"secretVersion,omitempty"`
 }
 
-type WorkloadRelease struct {
-	APIVersion string                `json:"apiVersion"`
-	Kind       string                `json:"kind"`
-	Metadata   ResourceMetadata      `json:"metadata"`
-	Spec       WorkloadReleaseSpec   `json:"spec"`
-	Status     WorkloadReleaseStatus `json:"status"`
+type Application struct {
+	APIVersion string           `json:"apiVersion"`
+	Kind       string           `json:"kind"`
+	Metadata   ResourceMetadata `json:"metadata"`
+}
+
+type Configuration struct {
+	APIVersion    string           `json:"apiVersion"`
+	Kind          string           `json:"kind"`
+	Metadata      ResourceMetadata `json:"metadata"`
+	ApplicationID ResourceID       `json:"applicationId"`
+}
+
+type ConfigurationRevisionSpec struct {
+	ConfigurationID ResourceID        `json:"configurationId"`
+	Values          map[string]string `json:"values"`
+	ContentDigest   string            `json:"contentDigest"`
+}
+
+type ConfigurationRevision struct {
+	APIVersion string                    `json:"apiVersion"`
+	Kind       string                    `json:"kind"`
+	Metadata   ResourceMetadata          `json:"metadata"`
+	Spec       ConfigurationRevisionSpec `json:"spec"`
+}
+
+type ApplicationRevisionComponent struct {
+	Name      string                `json:"name"`
+	Artifact  ArtifactRef           `json:"artifact"`
+	Resources ResourceRequirements  `json:"resources"`
+	Endpoints []ApplicationEndpoint `json:"endpoints,omitempty"`
+	Inputs    []ComponentInput      `json:"inputs,omitempty"`
+}
+
+type ApplicationRevisionSpec struct {
+	ApplicationID ResourceID                     `json:"applicationId"`
+	Revision      string                         `json:"revision"`
+	ContentDigest string                         `json:"contentDigest"`
+	Components    []ApplicationRevisionComponent `json:"components"`
+}
+
+type ApplicationRevision struct {
+	APIVersion string                  `json:"apiVersion"`
+	Kind       string                  `json:"kind"`
+	Metadata   ResourceMetadata        `json:"metadata"`
+	Spec       ApplicationRevisionSpec `json:"spec"`
+}
+
+type DeploymentComponent struct {
+	Name     string             `json:"name"`
+	Replicas uint32             `json:"replicas"`
+	Bindings []ComponentBinding `json:"bindings,omitempty"`
+}
+
+type DeploymentSpec struct {
+	ApplicationRevisionID ResourceID             `json:"applicationRevisionId"`
+	PlacementPolicyID     ResourceID             `json:"placementPolicyId"`
+	DesiredState          DeploymentDesiredState `json:"desiredState"`
+	Components            []DeploymentComponent  `json:"components"`
+}
+
+type DeploymentStatus struct {
+	Phase                         DeploymentPhase `json:"phase"`
+	PlacementDecisionID           ResourceID      `json:"placementDecisionId,omitempty"`
+	CurrentOperationID            OperationID     `json:"currentOperationId,omitempty"`
+	ObservedApplicationRevisionID ResourceID      `json:"observedApplicationRevisionId,omitempty"`
+	ReadyComponents               uint32          `json:"readyComponents"`
+	ObservedAt                    time.Time       `json:"observedAt"`
+}
+
+type Deployment struct {
+	APIVersion string           `json:"apiVersion"`
+	Kind       string           `json:"kind"`
+	Metadata   ResourceMetadata `json:"metadata"`
+	Spec       DeploymentSpec   `json:"spec"`
+	Status     DeploymentStatus `json:"status"`
 }
 
 type SubjectRef struct {
@@ -244,44 +307,45 @@ type Evidence struct {
 }
 
 type AdapterCapabilitiesContract struct {
-	Adapter          AdapterRef       `json:"adapter"`
-	Actions          []AdapterAction  `json:"actions"`
-	IsolationClasses []IsolationClass `json:"isolationClasses,omitempty"`
-	ObservedAt       time.Time        `json:"observedAt"`
+	Adapter             AdapterRef           `json:"adapter"`
+	Actions             []AdapterAction      `json:"actions"`
+	IsolationGuarantees []IsolationGuarantee `json:"isolationGuarantees,omitempty"`
+	ObservedAt          time.Time            `json:"observedAt"`
 }
 
 type AdapterCommandEnvelope struct {
-	OperationID     OperationID   `json:"operationId"`
-	CommandID       CommandID     `json:"commandId"`
-	Attempt         uint32        `json:"attempt"`
-	Action          AdapterAction `json:"action"`
-	Scope           ResourceScope `json:"scope"`
-	WorkloadID      ResourceID    `json:"workloadId,omitempty"`
-	ReleaseID       ResourceID    `json:"releaseId,omitempty"`
-	RuntimeTargetID ResourceID    `json:"runtimeTargetId"`
-	RequestDigest   string        `json:"requestDigest"`
-	BindingRef      string        `json:"bindingRef"`
-	Deadline        time.Time     `json:"deadline"`
-	TraceParent     string        `json:"traceparent,omitempty"`
+	OperationID           OperationID   `json:"operationId"`
+	CommandID             CommandID     `json:"commandId"`
+	Attempt               uint32        `json:"attempt"`
+	Action                AdapterAction `json:"action"`
+	Scope                 ResourceScope `json:"scope"`
+	ApplicationID         ResourceID    `json:"applicationId,omitempty"`
+	ApplicationRevisionID ResourceID    `json:"applicationRevisionId,omitempty"`
+	DeploymentID          ResourceID    `json:"deploymentId,omitempty"`
+	ExecutionTargetID     ResourceID    `json:"executionTargetId"`
+	RequestDigest         string        `json:"requestDigest"`
+	BindingRef            string        `json:"bindingRef"`
+	Deadline              time.Time     `json:"deadline"`
+	TraceParent           string        `json:"traceparent,omitempty"`
 }
 
-type InspectTargetRequest struct {
+type InspectExecutionTargetRequest struct {
 	Command AdapterCommandEnvelope `json:"command"`
 }
 
-type ObserveTargetRequest struct {
+type ObserveExecutionTargetRequest struct {
 	Command AdapterCommandEnvelope `json:"command"`
 }
 
-type TargetObservation struct {
-	RuntimeTargetID           ResourceID        `json:"runtimeTargetId"`
-	IdentityFingerprint       string            `json:"identityFingerprint"`
-	Labels                    map[string]string `json:"labels"`
-	Capacity                  Capacity          `json:"capacity"`
-	Allocatable               Capacity          `json:"allocatable"`
-	Health                    TargetHealth      `json:"health"`
-	SupportedIsolationClasses []IsolationClass  `json:"supportedIsolationClasses"`
-	ObservedAt                time.Time         `json:"observedAt"`
+type ExecutionTargetObservation struct {
+	ExecutionTargetID            ResourceID            `json:"executionTargetId"`
+	IdentityFingerprint          string                `json:"identityFingerprint"`
+	Labels                       map[string]string     `json:"labels"`
+	Capacity                     Capacity              `json:"capacity"`
+	Allocatable                  Capacity              `json:"allocatable"`
+	Health                       ExecutionTargetHealth `json:"health"`
+	SupportedIsolationGuarantees []IsolationGuarantee  `json:"supportedIsolationGuarantees"`
+	ObservedAt                   time.Time             `json:"observedAt"`
 }
 
 type NormalizedAdapterError struct {

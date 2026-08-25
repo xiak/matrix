@@ -8,35 +8,33 @@ import (
 	"strings"
 	"testing"
 
-	paasv1 "matrix/api/paas/v1"
+	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
 
 func TestNewMachineBindingCanonicalizesAndOwnsCollections(t *testing.T) {
 	labels := map[string]string{"location": "local"}
-	isolation := []paasv1.IsolationClass{
-		paasv1.IsolationSharedCompose,
-		paasv1.IsolationDedicatedCompose,
+	isolation := []paasv1.IsolationGuarantee{
+		paasv1.IsolationWorkload,
 	}
 	binding, err := NewMachineBinding(MachineBindingSpec{
-		ID:                      "local",
-		Kind:                    BindingLocal,
-		Labels:                  labels,
-		AllowedIsolationClasses: isolation,
+		ID:                         "local",
+		Kind:                       BindingLocal,
+		Labels:                     labels,
+		AllowedIsolationGuarantees: isolation,
 	})
 	if err != nil {
 		t.Fatalf("NewMachineBinding() error = %v", err)
 	}
 	labels["location"] = "mutated"
-	isolation[0] = paasv1.IsolationPhysicalHost
+	isolation[0] = paasv1.IsolationHost
 
 	if got := binding.Labels()["location"]; got != "local" {
 		t.Fatalf("binding label = %q, want local", got)
 	}
-	if got := binding.AllowedIsolationClasses(); !reflect.DeepEqual(got, []paasv1.IsolationClass{
-		paasv1.IsolationDedicatedCompose,
-		paasv1.IsolationSharedCompose,
+	if got := binding.AllowedIsolationGuarantees(); !reflect.DeepEqual(got, []paasv1.IsolationGuarantee{
+		paasv1.IsolationWorkload,
 	}) {
-		t.Fatalf("canonical isolation classes = %v", got)
+		t.Fatalf("canonical isolation guarantees = %v", got)
 	}
 
 	clonedLabels := binding.Labels()
@@ -49,39 +47,39 @@ func TestNewMachineBindingCanonicalizesAndOwnsCollections(t *testing.T) {
 func TestLocalBindingRejectsMixedOrUnsafeConfiguration(t *testing.T) {
 	tests := map[string]MachineBindingSpec{
 		"ssh fields": {
-			ID:                      "local",
-			Kind:                    BindingLocal,
-			Endpoint:                "example.internal:22",
-			AllowedIsolationClasses: []paasv1.IsolationClass{paasv1.IsolationSharedCompose},
+			ID:                         "local",
+			Kind:                       BindingLocal,
+			Endpoint:                   "example.internal:22",
+			AllowedIsolationGuarantees: []paasv1.IsolationGuarantee{paasv1.IsolationWorkload},
 		},
 		"relative storage": {
-			ID:                      "local",
-			Kind:                    BindingLocal,
-			StoragePath:             "relative",
-			AllowedIsolationClasses: []paasv1.IsolationClass{paasv1.IsolationSharedCompose},
+			ID:                         "local",
+			Kind:                       BindingLocal,
+			StoragePath:                "relative",
+			AllowedIsolationGuarantees: []paasv1.IsolationGuarantee{paasv1.IsolationWorkload},
 		},
 		"reserved label": {
-			ID:                      "local",
-			Kind:                    BindingLocal,
-			Labels:                  map[string]string{"matrix-os": "forged"},
-			AllowedIsolationClasses: []paasv1.IsolationClass{paasv1.IsolationSharedCompose},
+			ID:                         "local",
+			Kind:                       BindingLocal,
+			Labels:                     map[string]string{"matrix-os": "forged"},
+			AllowedIsolationGuarantees: []paasv1.IsolationGuarantee{paasv1.IsolationWorkload},
 		},
 		"sensitive label": {
-			ID:                      "local",
-			Kind:                    BindingLocal,
-			Labels:                  map[string]string{"note": "access_token=not-allowed"},
-			AllowedIsolationClasses: []paasv1.IsolationClass{paasv1.IsolationSharedCompose},
+			ID:                         "local",
+			Kind:                       BindingLocal,
+			Labels:                     map[string]string{"note": "access_token=not-allowed"},
+			AllowedIsolationGuarantees: []paasv1.IsolationGuarantee{paasv1.IsolationWorkload},
 		},
 		"control character": {
-			ID:                      "local",
-			Kind:                    BindingLocal,
-			Labels:                  map[string]string{"note": "line1\nline2"},
-			AllowedIsolationClasses: []paasv1.IsolationClass{paasv1.IsolationSharedCompose},
+			ID:                         "local",
+			Kind:                       BindingLocal,
+			Labels:                     map[string]string{"note": "line1\nline2"},
+			AllowedIsolationGuarantees: []paasv1.IsolationGuarantee{paasv1.IsolationWorkload},
 		},
 		"unsupported isolation": {
-			ID:                      "local",
-			Kind:                    BindingLocal,
-			AllowedIsolationClasses: []paasv1.IsolationClass{paasv1.IsolationPhysicalHost},
+			ID:                         "local",
+			Kind:                       BindingLocal,
+			AllowedIsolationGuarantees: []paasv1.IsolationGuarantee{paasv1.IsolationHost},
 		},
 		"empty isolation": {
 			ID:   "local",
@@ -99,13 +97,13 @@ func TestLocalBindingRejectsMixedOrUnsafeConfiguration(t *testing.T) {
 
 func TestSSHBindingRequiresPinnedReferenceOnlyConfiguration(t *testing.T) {
 	valid := MachineBindingSpec{
-		ID:                      "remote-linux",
-		Kind:                    BindingSSH,
-		Endpoint:                "node-1.example.internal:22",
-		CredentialRef:           "credential-ssh-node-1",
-		HostKeySHA256:           "SHA256:" + strings.Repeat("A", 43),
-		StoragePath:             "/var/lib/matrix",
-		AllowedIsolationClasses: []paasv1.IsolationClass{paasv1.IsolationDedicatedCompose},
+		ID:                         "remote-linux",
+		Kind:                       BindingSSH,
+		Endpoint:                   "node-1.example.internal:22",
+		CredentialRef:              "credential-ssh-node-1",
+		HostKeySHA256:              "SHA256:" + strings.Repeat("A", 43),
+		StoragePath:                "/var/lib/matrix",
+		AllowedIsolationGuarantees: []paasv1.IsolationGuarantee{paasv1.IsolationWorkload},
 	}
 	if _, err := NewMachineBinding(valid); err != nil {
 		t.Fatalf("valid pinned SSH binding rejected: %v", err)
@@ -210,9 +208,8 @@ func mustLocalBinding(t *testing.T, expectedFingerprint string) MachineBinding {
 		Kind:                       BindingLocal,
 		ExpectedMachineFingerprint: expectedFingerprint,
 		Labels:                     map[string]string{"location": "local"},
-		AllowedIsolationClasses: []paasv1.IsolationClass{
-			paasv1.IsolationSharedCompose,
-			paasv1.IsolationDedicatedCompose,
+		AllowedIsolationGuarantees: []paasv1.IsolationGuarantee{
+			paasv1.IsolationWorkload,
 		},
 	})
 	if err != nil {

@@ -13,7 +13,7 @@ import (
 	"testing"
 )
 
-func TestOpenAPIContractDefinesRuntimeV1(t *testing.T) {
+func TestOpenAPIContractDefinesApplicationPaaSV1(t *testing.T) {
 	document := loadOpenAPI(t)
 	if got := document["openapi"]; got != "3.1.0" {
 		t.Fatalf("openapi version = %v, want 3.1.0", got)
@@ -21,19 +21,23 @@ func TestOpenAPIContractDefinesRuntimeV1(t *testing.T) {
 	schemas := openAPISchemas(t, document)
 	required := []string{
 		"Tenant",
-		"ResourcePool",
-		"RuntimeTarget",
+		"Application",
+		"Configuration",
+		"ConfigurationRevision",
+		"ApplicationRevision",
+		"Deployment",
+		"ExecutionPool",
+		"ExecutionTarget",
 		"PlacementPolicy",
 		"PlacementDecision",
-		"WorkloadRelease",
 		"Operation",
 		"Evidence",
 		"Problem",
 		"AdapterCapabilitiesContract",
 		"AdapterCommandEnvelope",
-		"InspectTargetRequest",
-		"ObserveTargetRequest",
-		"TargetObservation",
+		"InspectExecutionTargetRequest",
+		"ObserveExecutionTargetRequest",
+		"ExecutionTargetObservation",
 		"AdapterResult",
 	}
 	for _, name := range required {
@@ -55,22 +59,22 @@ func TestOpenAPIEnumsMatchGoContract(t *testing.T) {
 		TenantSuspended,
 		TenantDeactivated,
 	}))
-	assertExactEnum(t, schemas, "ResourcePoolPhase", stringify([]ResourcePoolPhase{
-		ResourcePoolReady,
-		ResourcePoolDegraded,
-		ResourcePoolUnavailable,
+	assertExactEnum(t, schemas, "ExecutionPoolPhase", stringify([]ExecutionPoolPhase{
+		ExecutionPoolReady,
+		ExecutionPoolDegraded,
+		ExecutionPoolUnavailable,
 	}))
-	assertExactEnum(t, schemas, "TargetHealth", stringify([]TargetHealth{
-		TargetHealthUnknown,
-		TargetHealthReady,
-		TargetHealthDegraded,
-		TargetHealthUnavailable,
+	assertExactEnum(t, schemas, "ExecutionTargetHealth", stringify([]ExecutionTargetHealth{
+		ExecutionTargetHealthUnknown,
+		ExecutionTargetHealthReady,
+		ExecutionTargetHealthDegraded,
+		ExecutionTargetHealthUnavailable,
 	}))
-	assertExactEnum(t, schemas, "TargetDesiredState", stringify([]TargetDesiredState{
-		TargetActive,
-		TargetDraining,
+	assertExactEnum(t, schemas, "ExecutionTargetDesiredState", stringify([]ExecutionTargetDesiredState{
+		ExecutionTargetActive,
+		ExecutionTargetDraining,
 	}))
-	assertExactEnum(t, schemas, "IsolationClass", stringify(IsolationClasses()))
+	assertExactEnum(t, schemas, "IsolationGuarantee", stringify(IsolationGuarantees()))
 	assertExactEnum(t, schemas, "PlacementStrategy", stringify([]PlacementStrategy{
 		PlacementFirstFit,
 		PlacementSpread,
@@ -81,11 +85,23 @@ func TestOpenAPIEnumsMatchGoContract(t *testing.T) {
 		PlacementUnschedulable,
 	}))
 	assertExactEnum(t, schemas, "OperationState", stringify(OperationStates()))
-	assertExactEnum(t, schemas, "ReleasePhase", stringify(ReleasePhases()))
+	assertExactEnum(t, schemas, "DeploymentPhase", stringify(DeploymentPhases()))
+	assertExactEnum(t, schemas, "DeploymentDesiredState", stringify([]DeploymentDesiredState{
+		DeploymentDesiredRunning,
+		DeploymentDesiredStopped,
+	}))
 	assertExactEnum(t, schemas, "ArtifactKind", stringify([]ArtifactKind{
 		ArtifactOCIImage,
 		ArtifactOCIArtifact,
 		ArtifactReleaseBundle,
+	}))
+	assertExactEnum(t, schemas, "InputKind", stringify([]InputKind{
+		InputConfiguration,
+		InputSecret,
+	}))
+	assertExactEnum(t, schemas, "InjectionMode", stringify([]InjectionMode{
+		InjectionEnvironment,
+		InjectionFile,
 	}))
 	assertExactEnum(t, schemas, "EndpointProtocol", stringify([]EndpointProtocol{
 		EndpointHTTP,
@@ -103,8 +119,8 @@ func TestOpenAPIEnumsMatchGoContract(t *testing.T) {
 		SubjectSystemUser,
 	}))
 	assertExactEnum(t, schemas, "OperationAction", stringify([]OperationAction{
-		OperationCreateResourcePool,
-		OperationRegisterTarget,
+		OperationCreateExecutionPool,
+		OperationRegisterExecutionTarget,
 		OperationCreatePlacement,
 		OperationDeploy,
 		OperationUpdate,
@@ -128,7 +144,7 @@ func TestOpenAPIEnumsMatchGoContract(t *testing.T) {
 	assertExactEnum(t, schemas, "ErrorCode", stringify(ErrorCodes()))
 	assertExactEnum(t, schemas, "AdapterKind", stringify([]AdapterKind{
 		AdapterInfrastructure,
-		AdapterRuntime,
+		AdapterDeploymentExecutor,
 		AdapterGateway,
 	}))
 	assertExactEnum(t, schemas, "AdapterAction", stringify(adapterActions()))
@@ -203,7 +219,11 @@ func TestMutationAndConcurrencyHeadersAreNormative(t *testing.T) {
 
 func TestImmutableSchemasAreExplicit(t *testing.T) {
 	schemas := openAPISchemas(t, loadOpenAPI(t))
-	for _, name := range []string{"WorkloadReleaseSpec", "PlacementDecision"} {
+	for _, name := range []string{
+		"ConfigurationRevisionSpec",
+		"ApplicationRevisionSpec",
+		"PlacementDecision",
+	} {
 		schema := schemaObject(t, schemas, name)
 		if schema["x-matrix-immutable"] != true {
 			t.Errorf("%s must declare x-matrix-immutable", name)
@@ -214,42 +234,51 @@ func TestImmutableSchemasAreExplicit(t *testing.T) {
 func TestOpenAPIStructPropertiesAndRequiredFieldsMatchGoTypes(t *testing.T) {
 	schemas := openAPISchemas(t, loadOpenAPI(t))
 	contracts := map[string]reflect.Type{
-		"ResourceScope":               reflect.TypeOf(ResourceScope{}),
-		"ResourceMetadata":            reflect.TypeOf(ResourceMetadata{}),
-		"Tenant":                      reflect.TypeOf(Tenant{}),
-		"LabelSelector":               reflect.TypeOf(LabelSelector{}),
-		"ResourcePoolSpec":            reflect.TypeOf(ResourcePoolSpec{}),
-		"ResourcePoolStatus":          reflect.TypeOf(ResourcePoolStatus{}),
-		"ResourcePool":                reflect.TypeOf(ResourcePool{}),
-		"AdapterRef":                  reflect.TypeOf(AdapterRef{}),
-		"Capacity":                    reflect.TypeOf(Capacity{}),
-		"RuntimeTargetSpec":           reflect.TypeOf(RuntimeTargetSpec{}),
-		"RuntimeTargetStatus":         reflect.TypeOf(RuntimeTargetStatus{}),
-		"RuntimeTarget":               reflect.TypeOf(RuntimeTarget{}),
-		"PlacementPolicySpec":         reflect.TypeOf(PlacementPolicySpec{}),
-		"PlacementPolicy":             reflect.TypeOf(PlacementPolicy{}),
-		"PlacementDecision":           reflect.TypeOf(PlacementDecision{}),
-		"ArtifactRef":                 reflect.TypeOf(ArtifactRef{}),
-		"SecretReference":             reflect.TypeOf(SecretReference{}),
-		"ResourceRequirements":        reflect.TypeOf(ResourceRequirements{}),
-		"WorkloadEndpoint":            reflect.TypeOf(WorkloadEndpoint{}),
-		"WorkloadComponent":           reflect.TypeOf(WorkloadComponent{}),
-		"WorkloadReleaseSpec":         reflect.TypeOf(WorkloadReleaseSpec{}),
-		"WorkloadReleaseStatus":       reflect.TypeOf(WorkloadReleaseStatus{}),
-		"WorkloadRelease":             reflect.TypeOf(WorkloadRelease{}),
-		"SubjectRef":                  reflect.TypeOf(SubjectRef{}),
-		"ResourceRef":                 reflect.TypeOf(ResourceRef{}),
-		"FieldViolation":              reflect.TypeOf(FieldViolation{}),
-		"Problem":                     reflect.TypeOf(Problem{}),
-		"Operation":                   reflect.TypeOf(Operation{}),
-		"Evidence":                    reflect.TypeOf(Evidence{}),
-		"AdapterCapabilitiesContract": reflect.TypeOf(AdapterCapabilitiesContract{}),
-		"AdapterCommandEnvelope":      reflect.TypeOf(AdapterCommandEnvelope{}),
-		"InspectTargetRequest":        reflect.TypeOf(InspectTargetRequest{}),
-		"ObserveTargetRequest":        reflect.TypeOf(ObserveTargetRequest{}),
-		"TargetObservation":           reflect.TypeOf(TargetObservation{}),
-		"NormalizedAdapterError":      reflect.TypeOf(NormalizedAdapterError{}),
-		"AdapterResult":               reflect.TypeOf(AdapterResult{}),
+		"ResourceScope":                 reflect.TypeOf(ResourceScope{}),
+		"ResourceMetadata":              reflect.TypeOf(ResourceMetadata{}),
+		"Tenant":                        reflect.TypeOf(Tenant{}),
+		"LabelSelector":                 reflect.TypeOf(LabelSelector{}),
+		"ExecutionPoolSpec":             reflect.TypeOf(ExecutionPoolSpec{}),
+		"ExecutionPoolStatus":           reflect.TypeOf(ExecutionPoolStatus{}),
+		"ExecutionPool":                 reflect.TypeOf(ExecutionPool{}),
+		"AdapterRef":                    reflect.TypeOf(AdapterRef{}),
+		"Capacity":                      reflect.TypeOf(Capacity{}),
+		"ExecutionTargetSpec":           reflect.TypeOf(ExecutionTargetSpec{}),
+		"ExecutionTargetStatus":         reflect.TypeOf(ExecutionTargetStatus{}),
+		"ExecutionTarget":               reflect.TypeOf(ExecutionTarget{}),
+		"PlacementPolicySpec":           reflect.TypeOf(PlacementPolicySpec{}),
+		"PlacementPolicy":               reflect.TypeOf(PlacementPolicy{}),
+		"PlacementDecision":             reflect.TypeOf(PlacementDecision{}),
+		"ArtifactRef":                   reflect.TypeOf(ArtifactRef{}),
+		"ResourceRequirements":          reflect.TypeOf(ResourceRequirements{}),
+		"ApplicationEndpoint":           reflect.TypeOf(ApplicationEndpoint{}),
+		"ComponentInput":                reflect.TypeOf(ComponentInput{}),
+		"SecretVersionReference":        reflect.TypeOf(SecretVersionReference{}),
+		"ComponentBinding":              reflect.TypeOf(ComponentBinding{}),
+		"Application":                   reflect.TypeOf(Application{}),
+		"Configuration":                 reflect.TypeOf(Configuration{}),
+		"ConfigurationRevisionSpec":     reflect.TypeOf(ConfigurationRevisionSpec{}),
+		"ConfigurationRevision":         reflect.TypeOf(ConfigurationRevision{}),
+		"ApplicationRevisionComponent":  reflect.TypeOf(ApplicationRevisionComponent{}),
+		"ApplicationRevisionSpec":       reflect.TypeOf(ApplicationRevisionSpec{}),
+		"ApplicationRevision":           reflect.TypeOf(ApplicationRevision{}),
+		"DeploymentComponent":           reflect.TypeOf(DeploymentComponent{}),
+		"DeploymentSpec":                reflect.TypeOf(DeploymentSpec{}),
+		"DeploymentStatus":              reflect.TypeOf(DeploymentStatus{}),
+		"Deployment":                    reflect.TypeOf(Deployment{}),
+		"SubjectRef":                    reflect.TypeOf(SubjectRef{}),
+		"ResourceRef":                   reflect.TypeOf(ResourceRef{}),
+		"FieldViolation":                reflect.TypeOf(FieldViolation{}),
+		"Problem":                       reflect.TypeOf(Problem{}),
+		"Operation":                     reflect.TypeOf(Operation{}),
+		"Evidence":                      reflect.TypeOf(Evidence{}),
+		"AdapterCapabilitiesContract":   reflect.TypeOf(AdapterCapabilitiesContract{}),
+		"AdapterCommandEnvelope":        reflect.TypeOf(AdapterCommandEnvelope{}),
+		"InspectExecutionTargetRequest": reflect.TypeOf(InspectExecutionTargetRequest{}),
+		"ObserveExecutionTargetRequest": reflect.TypeOf(ObserveExecutionTargetRequest{}),
+		"ExecutionTargetObservation":    reflect.TypeOf(ExecutionTargetObservation{}),
+		"NormalizedAdapterError":        reflect.TypeOf(NormalizedAdapterError{}),
+		"AdapterResult":                 reflect.TypeOf(AdapterResult{}),
 	}
 
 	for name, goType := range contracts {
@@ -294,20 +323,36 @@ func TestExamplesDecodeAndValidate(t *testing.T) {
 			target: &Tenant{},
 		},
 		{
-			path:   "examples/resource-pool.json",
-			target: &ResourcePool{},
+			path:   "examples/execution-pool.json",
+			target: &ExecutionPool{},
 		},
 		{
-			path:   "examples/runtime-target.json",
-			target: &RuntimeTarget{},
+			path:   "examples/execution-target.json",
+			target: &ExecutionTarget{},
+		},
+		{
+			path:   "examples/application.json",
+			target: &Application{},
+		},
+		{
+			path:   "examples/configuration.json",
+			target: &Configuration{},
+		},
+		{
+			path:   "examples/configuration-revision.json",
+			target: &ConfigurationRevision{},
 		},
 		{
 			path:   "examples/placement-policy.json",
 			target: &PlacementPolicy{},
 		},
 		{
-			path:   "examples/workload-release.json",
-			target: &WorkloadRelease{},
+			path:   "examples/application-revision.json",
+			target: &ApplicationRevision{},
+		},
+		{
+			path:   "examples/deployment.json",
+			target: &Deployment{},
 		},
 		{
 			path:   "examples/placement-scheduled.json",
@@ -326,12 +371,12 @@ func TestExamplesDecodeAndValidate(t *testing.T) {
 			target: &Evidence{},
 		},
 		{
-			path:   "examples/inspect-target-request.json",
-			target: &InspectTargetRequest{},
+			path:   "examples/inspect-execution-target-request.json",
+			target: &InspectExecutionTargetRequest{},
 		},
 		{
-			path:   "examples/target-observation-ready.json",
-			target: &TargetObservation{},
+			path:   "examples/execution-target-observation-ready.json",
+			target: &ExecutionTargetObservation{},
 		},
 	}
 	for _, test := range tests {
@@ -341,24 +386,32 @@ func TestExamplesDecodeAndValidate(t *testing.T) {
 			switch value := test.target.(type) {
 			case *Tenant:
 				err = ValidateTenant(*value)
-			case *ResourcePool:
-				err = ValidateResourcePool(*value)
-			case *RuntimeTarget:
-				err = ValidateRuntimeTarget(*value)
+			case *ExecutionPool:
+				err = ValidateExecutionPool(*value)
+			case *ExecutionTarget:
+				err = ValidateExecutionTarget(*value)
 			case *PlacementPolicy:
 				err = ValidatePlacementPolicy(*value)
-			case *WorkloadRelease:
-				err = ValidateWorkloadRelease(*value)
+			case *Application:
+				err = ValidateApplication(*value)
+			case *Configuration:
+				err = ValidateConfiguration(*value)
+			case *ConfigurationRevision:
+				err = ValidateConfigurationRevision(*value)
+			case *ApplicationRevision:
+				err = ValidateApplicationRevision(*value)
+			case *Deployment:
+				err = ValidateDeployment(*value)
 			case *PlacementDecision:
 				err = ValidatePlacementDecision(*value)
 			case *Operation:
 				err = ValidateOperation(*value)
 			case *Evidence:
 				err = ValidateEvidence(*value)
-			case *InspectTargetRequest:
-				err = ValidateInspectTargetRequest(*value)
-			case *TargetObservation:
-				err = ValidateTargetObservation(*value)
+			case *InspectExecutionTargetRequest:
+				err = ValidateInspectExecutionTargetRequest(*value)
+			case *ExecutionTargetObservation:
+				err = ValidateExecutionTargetObservation(*value)
 			default:
 				t.Fatalf("unhandled example type %T", test.target)
 			}
@@ -373,8 +426,8 @@ func TestPlacementNeverSilentlyDowngradesIsolation(t *testing.T) {
 	var decision PlacementDecision
 	decodeStrictJSON(t, "examples/placement-unschedulable.json", &decision)
 	decision.Outcome = PlacementScheduled
-	decision.RuntimeTargetID = "target-local"
-	decision.GrantedIsolation = IsolationSharedCompose
+	decision.ExecutionTargetID = "target-local"
+	decision.GrantedIsolationGuarantee = IsolationWorkload
 	decision.Reason = nil
 	if err := ValidatePlacementDecision(decision); err == nil ||
 		!strings.Contains(err.Error(), "exactly equal") {
@@ -568,5 +621,5 @@ func decodeStrictJSON(t *testing.T, path string, target any) {
 
 func ExampleAPIVersion() {
 	fmt.Println(APIVersion)
-	// Output: matrix.paas.io/paas/v1
+	// Output: paas.matrix.xiak.com/v1
 }

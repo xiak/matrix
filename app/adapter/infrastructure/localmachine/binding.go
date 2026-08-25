@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"strings"
 
-	paasv1 "matrix/api/paas/v1"
+	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
 
 type BindingKind string
@@ -41,11 +41,11 @@ type MachineBindingSpec struct {
 	HostKeySHA256              string
 	ExpectedMachineFingerprint string
 	Labels                     map[string]string
-	AllowedIsolationClasses    []paasv1.IsolationClass
+	AllowedIsolationGuarantees []paasv1.IsolationGuarantee
 	StoragePath                string
 }
 
-// MachineBinding is deployment-owned access configuration. Its access fields
+// MachineBinding is platform-installation access configuration. Its access fields
 // never cross the versioned adapter observation boundary.
 type MachineBinding struct {
 	id                         string
@@ -55,13 +55,13 @@ type MachineBinding struct {
 	hostKeySHA256              string
 	expectedMachineFingerprint string
 	labels                     map[string]string
-	allowedIsolationClasses    []paasv1.IsolationClass
+	allowedIsolationGuarantees []paasv1.IsolationGuarantee
 	storagePath                string
 }
 
 func NewMachineBinding(spec MachineBindingSpec) (MachineBinding, error) {
-	isolationClasses := slices.Clone(spec.AllowedIsolationClasses)
-	slices.Sort(isolationClasses)
+	isolationGuarantees := slices.Clone(spec.AllowedIsolationGuarantees)
+	slices.Sort(isolationGuarantees)
 	value := MachineBinding{
 		id:                         spec.ID,
 		kind:                       spec.Kind,
@@ -70,7 +70,7 @@ func NewMachineBinding(spec MachineBindingSpec) (MachineBinding, error) {
 		hostKeySHA256:              spec.HostKeySHA256,
 		expectedMachineFingerprint: spec.ExpectedMachineFingerprint,
 		labels:                     cloneLabels(spec.Labels),
-		allowedIsolationClasses:    isolationClasses,
+		allowedIsolationGuarantees: isolationGuarantees,
 		storagePath:                spec.StoragePath,
 	}
 	if err := ValidateMachineBinding(value); err != nil {
@@ -85,7 +85,7 @@ func ValidateMachineBinding(value MachineBinding) error {
 		paasv1.ValidateID("machine binding id", value.id),
 		paasv1.ValidateLabels(value.labels),
 		validateBindingLabels(value.labels),
-		validateAllowedIsolationClasses(value.allowedIsolationClasses),
+		validateAllowedIsolationGuarantees(value.allowedIsolationGuarantees),
 	)
 	if value.expectedMachineFingerprint != "" {
 		problems = append(
@@ -148,11 +148,11 @@ func (value MachineBinding) ID() string {
 
 func (value MachineBinding) String() string {
 	return fmt.Sprintf(
-		"MachineBinding{id:%q kind:%q access:<redacted> labels:%d isolationClasses:%d}",
+		"MachineBinding{id:%q kind:%q access:<redacted> labels:%d isolationGuarantees:%d}",
 		value.id,
 		value.kind,
 		len(value.labels),
-		len(value.allowedIsolationClasses),
+		len(value.allowedIsolationGuarantees),
 	)
 }
 
@@ -168,8 +168,8 @@ func (value MachineBinding) Labels() map[string]string {
 	return cloneLabels(value.labels)
 }
 
-func (value MachineBinding) AllowedIsolationClasses() []paasv1.IsolationClass {
-	return slices.Clone(value.allowedIsolationClasses)
+func (value MachineBinding) AllowedIsolationGuarantees() []paasv1.IsolationGuarantee {
+	return slices.Clone(value.allowedIsolationGuarantees)
 }
 
 func (value MachineBinding) StoragePath() string {
@@ -182,7 +182,7 @@ func (value MachineBinding) ExpectedMachineFingerprint() string {
 
 func (value MachineBinding) clone() MachineBinding {
 	value.labels = cloneLabels(value.labels)
-	value.allowedIsolationClasses = slices.Clone(value.allowedIsolationClasses)
+	value.allowedIsolationGuarantees = slices.Clone(value.allowedIsolationGuarantees)
 	return value
 }
 
@@ -240,24 +240,24 @@ func validateBindingLabels(labels map[string]string) error {
 	return errors.Join(problems...)
 }
 
-func validateAllowedIsolationClasses(values []paasv1.IsolationClass) error {
+func validateAllowedIsolationGuarantees(values []paasv1.IsolationGuarantee) error {
 	if len(values) == 0 {
-		return errors.New("allowed isolation classes must not be empty")
+		return errors.New("allowed isolation guarantees must not be empty")
 	}
 	var problems []error
 	for index, value := range values {
 		switch value {
-		case paasv1.IsolationSharedCompose, paasv1.IsolationDedicatedCompose:
+		case paasv1.IsolationWorkload:
 		default:
 			problems = append(
 				problems,
-				fmt.Errorf("allowed isolation class %q is unsupported", value),
+				fmt.Errorf("allowed isolation guarantee %q is unsupported", value),
 			)
 		}
 		if index > 0 && values[index-1] >= value {
 			problems = append(
 				problems,
-				errors.New("allowed isolation classes must be a canonical unique set"),
+				errors.New("allowed isolation guarantees must be a canonical unique set"),
 			)
 		}
 	}

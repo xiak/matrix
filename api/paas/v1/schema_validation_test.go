@@ -20,17 +20,21 @@ func TestEveryOpenAPISchemaCompilesAsJSONSchema202012(t *testing.T) {
 func TestExamplesValidateAgainstOpenAPISchemas(t *testing.T) {
 	document := loadOpenAPI(t)
 	examples := map[string]string{
-		"examples/tenant.json":                   "Tenant",
-		"examples/resource-pool.json":            "ResourcePool",
-		"examples/runtime-target.json":           "RuntimeTarget",
-		"examples/placement-policy.json":         "PlacementPolicy",
-		"examples/workload-release.json":         "WorkloadRelease",
-		"examples/placement-scheduled.json":      "PlacementDecision",
-		"examples/placement-unschedulable.json":  "PlacementDecision",
-		"examples/operation.json":                "Operation",
-		"examples/evidence.json":                 "Evidence",
-		"examples/inspect-target-request.json":   "InspectTargetRequest",
-		"examples/target-observation-ready.json": "TargetObservation",
+		"examples/tenant.json":                             "Tenant",
+		"examples/execution-pool.json":                     "ExecutionPool",
+		"examples/execution-target.json":                   "ExecutionTarget",
+		"examples/application.json":                        "Application",
+		"examples/configuration.json":                      "Configuration",
+		"examples/configuration-revision.json":             "ConfigurationRevision",
+		"examples/placement-policy.json":                   "PlacementPolicy",
+		"examples/application-revision.json":               "ApplicationRevision",
+		"examples/deployment.json":                         "Deployment",
+		"examples/placement-scheduled.json":                "PlacementDecision",
+		"examples/placement-unschedulable.json":            "PlacementDecision",
+		"examples/operation.json":                          "Operation",
+		"examples/evidence.json":                           "Evidence",
+		"examples/inspect-execution-target-request.json":   "InspectExecutionTargetRequest",
+		"examples/execution-target-observation-ready.json": "ExecutionTargetObservation",
 	}
 	for path, schemaName := range examples {
 		t.Run(path, func(t *testing.T) {
@@ -50,44 +54,55 @@ func TestExamplesValidateAgainstOpenAPISchemas(t *testing.T) {
 	}
 }
 
+func TestComponentInputSchemaEnforcesPhaseOneInjection(t *testing.T) {
+	schema := compileOpenAPISchema(t, loadOpenAPI(t), "ComponentInput")
+	invalid := [][]byte{
+		[]byte(`{"name":"settings","kind":"CONFIGURATION","injection":"FILE","required":true}`),
+		[]byte(`{"name":"credentials","kind":"SECRET","injection":"ENV","required":true}`),
+	}
+	for _, source := range invalid {
+		instance, err := jsonschema.UnmarshalJSON(bytes.NewReader(source))
+		if err != nil {
+			t.Fatalf("decode component input: %v", err)
+		}
+		if err := schema.Validate(instance); err == nil {
+			t.Fatalf("unsupported Phase 1 input injection must fail schema validation: %s", source)
+		}
+	}
+}
+
 func TestPlacementDecisionSchemaBindsSelectedTargetVersion(t *testing.T) {
 	document := loadOpenAPI(t)
 	schema := compileOpenAPISchema(t, document, "PlacementDecision")
-	scheduled, err := os.ReadFile("examples/placement-scheduled.json")
-	if err != nil {
-		t.Fatalf("read scheduled placement: %v", err)
-	}
-	withoutVersion := bytes.Replace(
-		scheduled,
-		[]byte("  \"runtimeTargetResourceVersion\": 1,\n"),
-		nil,
-		1,
-	)
-	instance, err := jsonschema.UnmarshalJSON(bytes.NewReader(withoutVersion))
-	if err != nil {
-		t.Fatalf("decode scheduled placement without version: %v", err)
-	}
-	if err := schema.Validate(instance); err == nil {
+	scheduled := loadSchemaExample(t, "examples/placement-scheduled.json")
+	targetVersion := scheduled["executionTargetResourceVersion"]
+	delete(scheduled, "executionTargetResourceVersion")
+	if err := schema.Validate(scheduled); err == nil {
 		t.Fatal("scheduled placement without target resource version must fail schema validation")
 	}
 
-	unschedulable, err := os.ReadFile("examples/placement-unschedulable.json")
-	if err != nil {
-		t.Fatalf("read unschedulable placement: %v", err)
-	}
-	withVersion := bytes.Replace(
-		unschedulable,
-		[]byte("  \"outcome\": \"UNSCHEDULABLE\",\n"),
-		[]byte("  \"outcome\": \"UNSCHEDULABLE\",\n  \"runtimeTargetResourceVersion\": 1,\n"),
-		1,
-	)
-	instance, err = jsonschema.UnmarshalJSON(bytes.NewReader(withVersion))
-	if err != nil {
-		t.Fatalf("decode unschedulable placement with version: %v", err)
-	}
-	if err := schema.Validate(instance); err == nil {
+	unschedulable := loadSchemaExample(t, "examples/placement-unschedulable.json")
+	unschedulable["executionTargetResourceVersion"] = targetVersion
+	if err := schema.Validate(unschedulable); err == nil {
 		t.Fatal("unschedulable placement with target resource version must fail schema validation")
 	}
+}
+
+func loadSchemaExample(t *testing.T, path string) map[string]any {
+	t.Helper()
+	source, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	instance, err := jsonschema.UnmarshalJSON(bytes.NewReader(source))
+	if err != nil {
+		t.Fatalf("decode %s: %v", path, err)
+	}
+	object, ok := instance.(map[string]any)
+	if !ok {
+		t.Fatalf("%s contains %T, want object", path, instance)
+	}
+	return object
 }
 
 func compileOpenAPISchema(

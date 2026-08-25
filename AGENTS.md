@@ -25,6 +25,27 @@ Deliver independently testable vertical slices. A feature is not accepted
 until its specified unit, architecture, integration, security, and real-runtime
 gates pass.
 
+## Replacement-first pre-v1 changes
+
+- Git history preserves superseded drafts; the working tree does not. When a
+  pre-v1 concept, path, contract, test, or document is replaced or rejected,
+  delete it in the same slice instead of adding an alias, compatibility layer,
+  parallel implementation, or amendment history.
+- Compatibility requires evidence: an already published contract, a real
+  consumer that cannot migrate atomically, or an explicit FEAT requirement.
+  Uncertainty by itself is not evidence and does not justify retaining old
+  code.
+- For a risky replacement, first commit and push the current coherent,
+  verified state, then perform the replacement. Use Git for rollback; never
+  keep duplicate source paths or dead code as an in-tree rollback mechanism.
+- Before adding a file, package, interface, test suite, or document, identify
+  its current owner. Modify that owner unless the new artifact protects a
+  distinct boundary or proves an acceptance gate that has no existing owner.
+- Tests survive only while they prove a current contract, invariant, security
+  boundary, or supported runtime behavior. Delete tests for removed features;
+  replace implementation snapshots such as SQL text, file layout, line counts,
+  and incidental call order with behavior or schema-invariant checks.
+
 ## Documentation ownership and reading route
 
 Every fact has exactly one documentation owner:

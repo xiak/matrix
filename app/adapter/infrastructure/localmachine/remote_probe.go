@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	paasv1 "matrix/api/paas/v1"
+	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
 
 type RemoteHostProbe interface {

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	paasv1 "matrix/api/paas/v1"
+	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
 
 type fakeRemoteProbeExecutor struct {
@@ -230,13 +230,13 @@ func TestAdapterUsesRemoteProbeAndNormalizesRemoteFailures(t *testing.T) {
 	)
 	success := &fakeRemoteHostProbe{facts: validHostFacts()}
 	adapter := mustRemoteAdapter(t, binding, success)
-	request := validInspectTargetRequest()
+	request := validInspectExecutionTargetRequest()
 	request.Command.BindingRef = binding.ID()
-	observation, err := adapter.InspectTarget(context.Background(), request)
+	observation, err := adapter.InspectExecutionTarget(context.Background(), request)
 	if err != nil {
-		t.Fatalf("remote InspectTarget() error = %v", err)
+		t.Fatalf("remote InspectExecutionTarget() error = %v", err)
 	}
-	if success.calls != 1 || observation.Health != paasv1.TargetHealthReady {
+	if success.calls != 1 || observation.Health != paasv1.ExecutionTargetHealthReady {
 		t.Fatalf("remote observation = %+v after %d calls", observation, success.calls)
 	}
 
@@ -262,7 +262,7 @@ func TestAdapterUsesRemoteProbeAndNormalizesRemoteFailures(t *testing.T) {
 			failing := mustRemoteAdapter(t, binding, &fakeRemoteHostProbe{
 				err: ProbeFailure{Kind: kind, ID: "secret-native-probe"},
 			})
-			_, err := failing.InspectTarget(context.Background(), request)
+			_, err := failing.InspectExecutionTarget(context.Background(), request)
 			fault := requireAdapterFault(t, err)
 			if fault.Normalized.Class != want.class ||
 				fault.Normalized.Code != want.code ||
@@ -311,9 +311,8 @@ func mustSSHBinding(
 		CredentialRef: "credential-node-1",
 		HostKeySHA256: hostKeyFingerprint,
 		Labels:        map[string]string{"location": "remote"},
-		AllowedIsolationClasses: []paasv1.IsolationClass{
-			paasv1.IsolationSharedCompose,
-			paasv1.IsolationDedicatedCompose,
+		AllowedIsolationGuarantees: []paasv1.IsolationGuarantee{
+			paasv1.IsolationWorkload,
 		},
 		StoragePath: storagePath,
 	})
