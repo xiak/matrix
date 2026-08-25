@@ -107,6 +107,8 @@ BEGIN
             'iam.apply_bootstrap(text,text,text,text,text,text,text,text,jsonb,jsonb)',
             'EXECUTE'
        )
+       OR NOT has_function_privilege('matrix_iam_api', 'iam.bootstrap_status()', 'EXECUTE')
+       OR NOT has_function_privilege('matrix_iam_api', 'iam.readiness()', 'EXECUTE')
        OR NOT has_function_privilege('matrix_iam_api', 'iam.lookup_login(text)', 'EXECUTE')
        OR NOT has_function_privilege(
             'matrix_iam_api',
@@ -115,6 +117,11 @@ BEGIN
        )
        OR NOT has_function_privilege('matrix_iam_api', 'iam.lookup_session(text)', 'EXECUTE')
        OR NOT has_function_privilege('matrix_iam_api', 'iam.lookup_service(text)', 'EXECUTE')
+       OR NOT has_function_privilege(
+            'matrix_iam_api',
+            'iam.record_authorization(text,text,jsonb,jsonb)',
+            'EXECUTE'
+       )
        OR NOT has_function_privilege(
             'matrix_iam_worker', 'iam.claim_audit_event(text,integer)', 'EXECUTE'
        )
@@ -128,6 +135,9 @@ BEGIN
        )
        OR has_function_privilege(
             'matrix_iam_worker', 'iam.lookup_login(text)', 'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_iam_api', 'iam.resource_kind_for_action(text)', 'EXECUTE'
        ) THEN
         RAISE EXCEPTION 'IAM API/worker function authority is invalid';
     END IF;

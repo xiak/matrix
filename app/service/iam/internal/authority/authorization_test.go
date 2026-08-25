@@ -47,7 +47,7 @@ func TestFixedRBACAllowsCurrentBindingAndDeniesWithoutAuthorityLeak(t *testing.T
 		Resource:  iamv1.ResourceReference{Kind: iamv1.ResourceDeployment, ID: "deployment-example"},
 		RequestID: "request-authorize", CorrelationID: "correlation-authorize",
 	}
-	allowed, err := Decide(context, request, "decision-allowed", now)
+	allowed, err := Decide(context, iamv1.ServicePaaS, request, "decision-allowed", now)
 	if err != nil || !allowed.Allowed || allowed.TenantID != context.Organization.ID ||
 		allowed.Subject == nil || allowed.Subject.ID != context.Principal.ID {
 		t.Fatalf("developer decision = %#v err=%v", allowed, err)
@@ -55,7 +55,7 @@ func TestFixedRBACAllowsCurrentBindingAndDeniesWithoutAuthorityLeak(t *testing.T
 
 	request.Action = iamv1.ActionIAMPrincipalCreate
 	request.Resource.Kind = iamv1.ResourceOrganization
-	denied, err := Decide(context, request, "decision-denied", now)
+	denied, err := Decide(context, iamv1.ServicePaaS, request, "decision-denied", now)
 	if err != nil || denied.Allowed || denied.TenantID != "" || denied.Subject != nil {
 		t.Fatalf("denied decision = %#v err=%v", denied, err)
 	}
@@ -70,14 +70,14 @@ func TestFixedRBACAllowsCurrentBindingAndDeniesWithoutAuthorityLeak(t *testing.T
 	context.Roles = nil
 	request.Action = iamv1.ActionPaaSDeploymentCreate
 	request.Resource.Kind = iamv1.ResourceDeployment
-	afterRevocation, err := Decide(context, request, "decision-after-revocation", now)
+	afterRevocation, err := Decide(context, iamv1.ServicePaaS, request, "decision-after-revocation", now)
 	if err != nil || afterRevocation.Allowed {
 		t.Fatalf("decision after binding revocation = %#v err=%v", afterRevocation, err)
 	}
 
 	context = authoritySubject(now, iamv1.RoleOrganizationAdmin)
 	context.Principal.MustChangePassword = true
-	mustChange, err := Decide(context, request, "decision-must-change", now)
+	mustChange, err := Decide(context, iamv1.ServicePaaS, request, "decision-must-change", now)
 	if err != nil || mustChange.Allowed {
 		t.Fatalf("initial administrator used PaaS before password change: decision=%#v err=%v", mustChange, err)
 	}
@@ -85,6 +85,7 @@ func TestFixedRBACAllowsCurrentBindingAndDeniesWithoutAuthorityLeak(t *testing.T
 
 func TestEveryIAMActionHasOnlyFixedRoleAuthority(t *testing.T) {
 	roles := iamv1.AllBuiltinRoles()
+	services := iamv1.AllServicePurposes()
 	for _, action := range iamv1.AllActions() {
 		owners := 0
 		for _, role := range roles {
@@ -95,11 +96,42 @@ func TestEveryIAMActionHasOnlyFixedRoleAuthority(t *testing.T) {
 		if owners == 0 {
 			t.Fatalf("IAM action %q has no built-in role authority", action)
 		}
+		serviceOwners := 0
+		for _, service := range services {
+			if ServiceCanRequest(service, action) {
+				serviceOwners++
+			}
+		}
+		if serviceOwners != 1 {
+			t.Fatalf("IAM action %q has %d service owners, want exactly one", action, serviceOwners)
+		}
 	}
 	if RoleAllows(iamv1.RoleInstallationVerifier, iamv1.ActionPaaSDeploymentRead) ||
 		RoleAllows(iamv1.RoleAuditReader, iamv1.ActionPaaSApplicationRead) ||
 		RoleAllows(iamv1.BuiltinRole("CUSTOM"), iamv1.ActionPaaSApplicationRead) {
 		t.Fatal("fixed least-privilege roles accepted authority outside their catalog")
+	}
+	if ServiceCanRequest(iamv1.ServiceAPISIX, iamv1.ActionPaaSApplicationRead) {
+		t.Fatal("APISIX was allowed to request product authorization")
+	}
+}
+
+func TestAuthorizationDeniesAServiceOutsideItsProductBoundary(t *testing.T) {
+	now := authorityTestTime()
+	context := authoritySubject(now, iamv1.RolePaaSDeveloper)
+	request := iamv1.AuthorizationRequest{
+		Action: iamv1.ActionPaaSDeploymentCreate,
+		Resource: iamv1.ResourceReference{
+			Kind: iamv1.ResourceDeployment, ID: "deployment-example",
+		},
+		RequestID: "request-authorize", CorrelationID: "correlation-authorize",
+	}
+	decision, err := Decide(context, iamv1.ServiceAudit, request, "decision-wrong-service", now)
+	if err != nil || decision.Allowed {
+		t.Fatalf("cross-service decision = %#v err=%v", decision, err)
+	}
+	if _, err := Decide(context, "UNKNOWN", request, "decision-unknown-service", now); !errors.Is(err, ErrAuthorityUnavailable) {
+		t.Fatalf("unknown calling service error = %v", err)
 	}
 }
 
@@ -112,16 +144,16 @@ func TestAuthorizationFailsClosedOnInconsistentOrInactiveAuthority(t *testing.T)
 	}
 	context := authoritySubject(now, iamv1.RolePaaSViewer)
 	context.Session.OrganizationID = "organization-other"
-	if _, err := Decide(context, request, "decision-mismatch", now); !errors.Is(err, ErrAuthorityUnavailable) {
+	if _, err := Decide(context, iamv1.ServicePaaS, request, "decision-mismatch", now); !errors.Is(err, ErrAuthorityUnavailable) {
 		t.Fatalf("inconsistent authority error = %v", err)
 	}
 	context = authoritySubject(now, iamv1.RolePaaSViewer)
 	context.Organization.Status = iamv1.OrganizationDisabled
-	if _, err := Decide(context, request, "decision-disabled", now); !errors.Is(err, ErrUnauthenticated) {
+	if _, err := Decide(context, iamv1.ServicePaaS, request, "decision-disabled", now); !errors.Is(err, ErrUnauthenticated) {
 		t.Fatalf("disabled organization error = %v", err)
 	}
 	context = authoritySubject(now, iamv1.RolePaaSViewer, iamv1.RolePaaSViewer)
-	if _, err := Decide(context, request, "decision-duplicate-role", now); !errors.Is(err, ErrAuthorityUnavailable) {
+	if _, err := Decide(context, iamv1.ServicePaaS, request, "decision-duplicate-role", now); !errors.Is(err, ErrAuthorityUnavailable) {
 		t.Fatalf("duplicate binding state error = %v", err)
 	}
 }

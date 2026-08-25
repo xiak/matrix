@@ -102,6 +102,7 @@ func TestPostgresAuthorityIntegration(t *testing.T) {
 	assertLeastPrivilegeLogin(t, ctx, auditRuntime, "matrix_audit_runtime")
 	assertAuthorityDatabaseAttackSurface(t, ctx, iamAPI, iamWorker, auditRuntime)
 
+	assertIAMUninitialized(t, ctx, iamAPI)
 	fixture := applyIAMBootstrap(t, ctx, admin, iamAPI)
 	assertIAMLookupBoundaries(t, ctx, iamAPI, fixture)
 
@@ -235,6 +236,7 @@ func TestPostgresAuthorityIntegration(t *testing.T) {
 	)
 	assertAuditImmutability(t, ctx, auditMigrator, bootstrapEvent.TenantID)
 	assertIAMSessionDatabaseTime(t, ctx, admin, iamAPI, fixture)
+	assertIAMAuthorizationCatalog(t, ctx, admin, iamAPI, fixture)
 }
 
 func assertAuditContractCatalog(
@@ -699,6 +701,43 @@ func assertIAMLookupBoundaries(
 	fixture iamBootstrapFixture,
 ) {
 	t.Helper()
+	var state string
+	var installationID, organizationID, contentDigest string
+	var appliedAt time.Time
+	if err := iamAPI.QueryRow(ctx, "SELECT * FROM iam.bootstrap_status()").Scan(
+		&state,
+		&installationID,
+		&organizationID,
+		&contentDigest,
+		&appliedAt,
+	); err != nil {
+		t.Fatalf("read ready IAM bootstrap status: %v", err)
+	}
+	if state != "READY" || installationID != fixture.InstallationID ||
+		organizationID != string(fixture.TenantID) || contentDigest != fixture.ContentDigest ||
+		appliedAt.IsZero() {
+		t.Fatalf(
+			"IAM bootstrap status state=%q installation=%q organization=%q digest=%q applied=%s",
+			state,
+			installationID,
+			organizationID,
+			contentDigest,
+			appliedAt,
+		)
+	}
+	var ready bool
+	var schemaVersion int64
+	var checkedAt time.Time
+	if err := iamAPI.QueryRow(ctx, "SELECT * FROM iam.readiness()").Scan(
+		&ready,
+		&schemaVersion,
+		&checkedAt,
+	); err != nil {
+		t.Fatalf("read IAM readiness: %v", err)
+	}
+	if !ready || schemaVersion != 1 || checkedAt.IsZero() {
+		t.Fatalf("IAM readiness ready=%t schema=%d checked=%s", ready, schemaVersion, checkedAt)
+	}
 	var tenantID, principalID, passwordHash, organizationStatus, principalStatus string
 	var mustChangePassword bool
 	if err := iamAPI.QueryRow(
@@ -746,6 +785,39 @@ func assertIAMLookupBoundaries(
 				verificationDigest,
 			)
 		}
+	}
+}
+
+func assertIAMUninitialized(t *testing.T, ctx context.Context, iamAPI *pgx.Conn) {
+	t.Helper()
+	var state string
+	var installationID, organizationID, contentDigest *string
+	var appliedAt *time.Time
+	if err := iamAPI.QueryRow(ctx, "SELECT * FROM iam.bootstrap_status()").Scan(
+		&state,
+		&installationID,
+		&organizationID,
+		&contentDigest,
+		&appliedAt,
+	); err != nil {
+		t.Fatalf("read uninitialized IAM bootstrap status: %v", err)
+	}
+	if state != "UNINITIALIZED" || installationID != nil || organizationID != nil ||
+		contentDigest != nil || appliedAt != nil {
+		t.Fatalf("uninitialized IAM bootstrap status contains initialized authority")
+	}
+	var ready bool
+	var schemaVersion int64
+	var checkedAt time.Time
+	if err := iamAPI.QueryRow(ctx, "SELECT * FROM iam.readiness()").Scan(
+		&ready,
+		&schemaVersion,
+		&checkedAt,
+	); err != nil {
+		t.Fatalf("read uninitialized IAM readiness: %v", err)
+	}
+	if ready || schemaVersion != 1 || checkedAt.IsZero() {
+		t.Fatalf("uninitialized IAM readiness ready=%t schema=%d checked=%s", ready, schemaVersion, checkedAt)
 	}
 }
 
@@ -1384,7 +1456,9 @@ func assertIAMSessionLookup(
 	var roles []string
 	if err := iamAPI.QueryRow(
 		ctx,
-		"SELECT * FROM iam.lookup_session($1)",
+		`SELECT organization_id, session_id, principal_id, principal_type,
+		        verification_digest, principal_must_change_password, roles
+		   FROM iam.lookup_session($1)`,
 		lookupDigest,
 	).Scan(
 		&tenantID,
@@ -1421,25 +1495,137 @@ func assertNoIAMSession(
 	lookupDigest string,
 ) {
 	t.Helper()
-	var tenantID, sessionID, principalID, principalType, verificationDigest string
-	var mustChangePassword bool
-	var roles []string
+	var count int
 	err := iamAPI.QueryRow(
 		ctx,
-		"SELECT * FROM iam.lookup_session($1)",
+		"SELECT count(*) FROM iam.lookup_session($1)",
 		lookupDigest,
-	).Scan(
-		&tenantID,
-		&sessionID,
-		&principalID,
-		&principalType,
-		&verificationDigest,
-		&mustChangePassword,
-		&roles,
-	)
-	if !errors.Is(err, pgx.ErrNoRows) {
-		t.Fatalf("inactive IAM session lookup error = %v, want no rows", err)
+	).Scan(&count)
+	if err != nil || count != 0 {
+		t.Fatalf("inactive IAM session lookup count=%d err=%v, want zero", count, err)
 	}
+}
+
+func assertIAMAuthorizationCatalog(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	iamAPI *pgx.Conn,
+	fixture iamBootstrapFixture,
+) {
+	t.Helper()
+	for index, action := range iamv1.AllActions() {
+		resourceKind, known := iamv1.ResourceKindForAction(action)
+		if !known {
+			t.Fatalf("IAM action %q has no Go resource contract", action)
+		}
+		decisionID := fmt.Sprintf("decision-catalog-%d", index)
+		requestID := fmt.Sprintf("request-catalog-%d", index)
+		tx, err := iamAPI.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin IAM authorization catalog transaction: %v", err)
+		}
+		var transactionTime time.Time
+		if err := tx.QueryRow(ctx, "SELECT transaction_timestamp()").Scan(&transactionTime); err != nil {
+			_ = tx.Rollback(context.Background())
+			t.Fatalf("read IAM authorization transaction time: %v", err)
+		}
+		decision := iamv1.AuthorizationDecision{
+			APIVersion: iamv1.APIVersion,
+			Kind:       "AuthorizationDecision",
+			ID:         iamv1.DecisionID(decisionID),
+			Allowed:    true,
+			Reason:     iamv1.DecisionAllowed,
+			TenantID:   iamv1.OrganizationID(fixture.TenantID),
+			Subject:    &iamv1.Subject{Type: iamv1.PrincipalUser, ID: iamv1.PrincipalID(fixture.Administrator)},
+			Action:     action,
+			Resource:   iamv1.ResourceReference{Kind: resourceKind, ID: fmt.Sprintf("resource-catalog-%d", index)},
+			RequestID:  requestID,
+			DecidedAt:  transactionTime.UTC(),
+		}
+		event := authorityAuditEvent(
+			fmt.Sprintf("event-authorization-catalog-%d", index),
+			fixture.TenantID,
+			decisionID,
+			auditv1.ActionIAMAuthorizationDecided,
+		)
+		event.Actor = auditv1.ActorReference{
+			Type: auditv1.ActorUser,
+			ID:   auditv1.ActorID(fixture.Administrator),
+		}
+		event.IAMDecisionID = auditv1.DecisionID(decisionID)
+		event.Target.ID = decisionID
+		event.Result = auditv1.ResultAllowed
+		event.RequestID = requestID
+		event.OccurredAt = transactionTime.UTC()
+		_, err = tx.Exec(
+			ctx,
+			"SELECT iam.record_authorization($1, $2, $3::jsonb, $4::jsonb)",
+			string(fixture.TenantID),
+			fixture.Administrator,
+			authorityJSON(t, decision),
+			authorityJSON(t, event),
+		)
+		if err != nil {
+			_ = tx.Rollback(context.Background())
+			t.Fatalf("record IAM authorization action %q: %v", action, err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatalf("commit IAM authorization action %q: %v", action, err)
+		}
+	}
+
+	var decisionCount int
+	if err := admin.QueryRow(ctx, "SELECT count(*) FROM iam.authorization_decisions").Scan(&decisionCount); err != nil {
+		t.Fatalf("count stored IAM authorization decisions: %v", err)
+	}
+	if decisionCount != len(iamv1.AllActions()) {
+		t.Fatalf("stored IAM authorization decisions=%d want=%d", decisionCount, len(iamv1.AllActions()))
+	}
+
+	transaction, err := iamAPI.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin rejected IAM authorization transaction: %v", err)
+	}
+	defer func() { _ = transaction.Rollback(context.Background()) }()
+	var databaseTime time.Time
+	if err := transaction.QueryRow(ctx, "SELECT transaction_timestamp()").Scan(&databaseTime); err != nil {
+		t.Fatalf("read rejected IAM authorization time: %v", err)
+	}
+	decision := iamv1.AuthorizationDecision{
+		APIVersion: iamv1.APIVersion,
+		Kind:       "AuthorizationDecision",
+		ID:         "decision-forged-kind",
+		Allowed:    true,
+		Reason:     iamv1.DecisionAllowed,
+		TenantID:   iamv1.OrganizationID(fixture.TenantID),
+		Subject:    &iamv1.Subject{Type: iamv1.PrincipalUser, ID: iamv1.PrincipalID(fixture.Administrator)},
+		Action:     iamv1.ActionPaaSApplicationRead,
+		Resource:   iamv1.ResourceReference{Kind: iamv1.ResourceDeployment, ID: "application-forged-kind"},
+		RequestID:  "request-forged-kind",
+		DecidedAt:  databaseTime.UTC(),
+	}
+	event := authorityAuditEvent(
+		"event-authorization-forged-kind",
+		fixture.TenantID,
+		string(decision.ID),
+		auditv1.ActionIAMAuthorizationDecided,
+	)
+	event.Actor = auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(fixture.Administrator)}
+	event.IAMDecisionID = auditv1.DecisionID(decision.ID)
+	event.Target.ID = string(decision.ID)
+	event.Result = auditv1.ResultAllowed
+	event.RequestID = decision.RequestID
+	event.OccurredAt = databaseTime.UTC()
+	_, err = transaction.Exec(
+		ctx,
+		"SELECT iam.record_authorization($1, $2, $3::jsonb, $4::jsonb)",
+		string(fixture.TenantID),
+		fixture.Administrator,
+		authorityJSON(t, decision),
+		authorityJSON(t, event),
+	)
+	assertAuthorityPostgresCode(t, err, "22023")
 }
 
 func authorityAuditEvent(

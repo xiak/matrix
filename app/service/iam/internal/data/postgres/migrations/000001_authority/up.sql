@@ -606,6 +606,86 @@ BEGIN
 END
 $function$;
 
+CREATE OR REPLACE FUNCTION iam.bootstrap_status()
+RETURNS TABLE (
+    state text,
+    installation_id text,
+    organization_id text,
+    content_digest text,
+    applied_at timestamptz
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+BEGIN
+    RETURN QUERY
+    SELECT 'READY'::text, receipt.installation_id, receipt.organization_id,
+           receipt.content_digest, receipt.applied_at
+      FROM iam.bootstrap_receipts AS receipt
+     WHERE receipt.singleton;
+    IF NOT FOUND THEN
+        RETURN QUERY SELECT 'UNINITIALIZED'::text, NULL::text, NULL::text,
+                            NULL::text, NULL::timestamptz;
+    END IF;
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION iam.readiness()
+RETURNS TABLE (ready boolean, schema_version bigint, checked_at timestamptz)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+BEGIN
+    PERFORM set_config('matrix.iam_dispatcher', 'trusted', true);
+    RETURN QUERY
+    SELECT EXISTS (
+               SELECT 1 FROM iam.bootstrap_receipts AS receipt
+                WHERE receipt.singleton
+           ) AND NOT EXISTS (
+               SELECT 1 FROM iam.audit_outbox AS outbox
+                WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
+           ),
+           1::bigint,
+           transaction_timestamp();
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION iam.resource_kind_for_action(submitted_action text)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+SET search_path = pg_catalog, pg_temp
+AS $function$
+    SELECT CASE submitted_action
+        WHEN 'iam.principal.create' THEN 'ORGANIZATION'
+        WHEN 'iam.principal.read' THEN 'PRINCIPAL'
+        WHEN 'iam.role-binding.put' THEN 'PRINCIPAL'
+        WHEN 'iam.role-binding.revoke' THEN 'ROLE_BINDING'
+        WHEN 'iam.session.revoke' THEN 'SESSION'
+        WHEN 'paas.application.create' THEN 'APPLICATION'
+        WHEN 'paas.application.read' THEN 'APPLICATION'
+        WHEN 'paas.configuration.create' THEN 'CONFIGURATION'
+        WHEN 'paas.configuration.read' THEN 'CONFIGURATION'
+        WHEN 'paas.configuration-revision.create' THEN 'CONFIGURATION_REVISION'
+        WHEN 'paas.configuration-revision.read' THEN 'CONFIGURATION_REVISION'
+        WHEN 'paas.application-revision.create' THEN 'APPLICATION_REVISION'
+        WHEN 'paas.application-revision.read' THEN 'APPLICATION_REVISION'
+        WHEN 'paas.deployment.create' THEN 'DEPLOYMENT'
+        WHEN 'paas.deployment.update' THEN 'DEPLOYMENT'
+        WHEN 'paas.deployment.rollback' THEN 'DEPLOYMENT'
+        WHEN 'paas.deployment.stop' THEN 'DEPLOYMENT'
+        WHEN 'paas.deployment.read' THEN 'DEPLOYMENT'
+        WHEN 'paas.operation.read' THEN 'OPERATION'
+        WHEN 'audit.record.read' THEN 'AUDIT_RECORD'
+        WHEN 'audit.integrity.verify' THEN 'AUDIT_CHAIN'
+        WHEN 'installation.verify' THEN 'INSTALLATION'
+        ELSE NULL
+    END
+$function$;
+
 CREATE OR REPLACE FUNCTION iam.lookup_login(submitted_login_name text)
 RETURNS TABLE (
     tenant_id text,
@@ -714,12 +794,27 @@ $function$;
 
 CREATE OR REPLACE FUNCTION iam.lookup_session(submitted_lookup_digest text)
 RETURNS TABLE (
-    tenant_id text,
-    session_id text,
+    organization_id text,
+    organization_display_name text,
+    organization_status text,
+    organization_resource_version bigint,
+    organization_created_at timestamptz,
+    organization_updated_at timestamptz,
     principal_id text,
     principal_type text,
+    principal_login_name text,
+    principal_display_name text,
+    principal_status text,
+    principal_must_change_password boolean,
+    principal_resource_version bigint,
+    principal_created_at timestamptz,
+    principal_updated_at timestamptz,
+    session_id text,
+    session_status text,
+    session_issued_at timestamptz,
+    session_expires_at timestamptz,
+    session_revoked_at timestamptz,
     verification_digest text,
-    must_change_password boolean,
     roles text[]
 )
 LANGUAGE plpgsql
@@ -737,30 +832,35 @@ BEGIN
     END IF;
     PERFORM set_config('matrix.iam_tenant_id', indexed.tenant_id, true);
     RETURN QUERY
-    SELECT session.tenant_id, session.id, principal.id,
-           principal.principal_type, session.verification_digest,
-           principal.must_change_password,
-           COALESCE(array_agg(binding.role_name ORDER BY binding.role_name)
-                FILTER (WHERE binding.id IS NOT NULL), ARRAY[]::text[])
+    SELECT organization.id, organization.display_name, organization.status,
+           organization.resource_version, organization.created_at,
+           organization.updated_at,
+           principal.id, principal.principal_type, principal.login_name,
+           principal.display_name, principal.status,
+           principal.must_change_password, principal.resource_version,
+           principal.created_at, principal.updated_at,
+           session.id, session.status, session.issued_at, session.expires_at,
+           session.revoked_at, session.verification_digest,
+           COALESCE(ARRAY(
+               SELECT binding.role_name
+                 FROM iam.role_bindings AS binding
+                WHERE binding.tenant_id = principal.tenant_id
+                  AND binding.principal_id = principal.id
+                  AND binding.revoked_at IS NULL
+                ORDER BY binding.role_name
+           ), ARRAY[]::text[])
       FROM iam.sessions AS session
       JOIN iam.organizations AS organization ON organization.id = session.tenant_id
       JOIN iam.principals AS principal
         ON principal.tenant_id = session.tenant_id
        AND principal.id = session.principal_id
-      LEFT JOIN iam.role_bindings AS binding
-        ON binding.tenant_id = principal.tenant_id
-       AND binding.principal_id = principal.id
-       AND binding.revoked_at IS NULL
      WHERE session.tenant_id = indexed.tenant_id
        AND session.id = indexed.session_id
        AND session.status = 'ACTIVE'
        AND session.revoked_at IS NULL
        AND session.expires_at > transaction_timestamp()
        AND organization.status = 'ACTIVE'
-       AND principal.status = 'ACTIVE'
-     GROUP BY session.tenant_id, session.id, principal.id,
-              principal.principal_type, session.verification_digest,
-              principal.must_change_password;
+       AND principal.status = 'ACTIVE';
 END
 $function$;
 
@@ -798,6 +898,154 @@ BEGIN
        AND credential.revoked_at IS NULL
        AND organization.status = 'ACTIVE'
        AND principal.status = 'ACTIVE';
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION iam.record_authorization(
+    submitted_tenant_id text,
+    submitted_principal_id text,
+    submitted_decision jsonb,
+    submitted_audit_event jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_now timestamptz(6) := transaction_timestamp();
+    actor_type text;
+    expected_kind text;
+    decision_allowed boolean;
+    expected_result text;
+BEGIN
+    IF submitted_tenant_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_principal_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR jsonb_typeof(submitted_decision) <> 'object'
+       OR jsonb_typeof(submitted_decision->'resource') <> 'object'
+       OR jsonb_typeof(submitted_decision->'allowed') <> 'boolean'
+       OR NOT (submitted_decision ?& ARRAY[
+            'apiVersion', 'kind', 'id', 'allowed', 'reason', 'action',
+            'resource', 'requestId', 'decidedAt'
+       ])
+       OR (submitted_decision - ARRAY[
+            'apiVersion', 'kind', 'id', 'allowed', 'reason', 'tenantId',
+            'subject', 'action', 'resource', 'requestId', 'decidedAt'
+       ]) <> '{}'::jsonb
+       OR NOT ((submitted_decision->'resource') ?& ARRAY['kind', 'id'])
+       OR ((submitted_decision->'resource') - ARRAY['kind', 'id']) <> '{}'::jsonb
+       OR submitted_decision->>'apiVersion' IS DISTINCT FROM
+            'iam.matrix.xiak.com/v1'
+       OR submitted_decision->>'kind' IS DISTINCT FROM 'AuthorizationDecision'
+       OR COALESCE(submitted_decision->>'id', '') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR COALESCE(submitted_decision#>>'{resource,id}', '') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR COALESCE(submitted_decision->>'requestId', '') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR COALESCE(submitted_decision->>'decidedAt', '') COLLATE "C"
+            !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,6})?Z$'
+       OR NOT pg_input_is_valid(
+            COALESCE(submitted_decision->>'decidedAt', ''), 'timestamptz'
+       )
+       OR (submitted_decision->>'decidedAt')::timestamptz IS DISTINCT FROM
+            effective_now THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'authorization decision is invalid';
+    END IF;
+
+    expected_kind := iam.resource_kind_for_action(submitted_decision->>'action');
+    IF expected_kind IS NULL
+       OR submitted_decision#>>'{resource,kind}' IS DISTINCT FROM expected_kind THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'authorization action and resource are invalid';
+    END IF;
+
+    PERFORM set_config('matrix.iam_tenant_id', submitted_tenant_id, true);
+    SELECT principal.principal_type INTO actor_type
+      FROM iam.organizations AS organization
+      JOIN iam.principals AS principal
+        ON principal.tenant_id = organization.id
+     WHERE organization.id = submitted_tenant_id
+       AND organization.status = 'ACTIVE'
+       AND principal.id = submitted_principal_id
+       AND principal.status = 'ACTIVE';
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '42501',
+            MESSAGE = 'authorization subject is unavailable';
+    END IF;
+
+    decision_allowed := (submitted_decision->>'allowed')::boolean;
+    expected_result := CASE WHEN decision_allowed THEN 'ALLOWED' ELSE 'DENIED' END;
+    IF submitted_decision->>'reason' IS DISTINCT FROM expected_result
+       OR (decision_allowed AND (
+            NOT (submitted_decision ?& ARRAY['tenantId', 'subject'])
+            OR jsonb_typeof(submitted_decision->'subject') <> 'object'
+            OR ((submitted_decision->'subject') - ARRAY['type', 'id']) <> '{}'::jsonb
+            OR NOT ((submitted_decision->'subject') ?& ARRAY['type', 'id'])
+            OR submitted_decision->>'tenantId' IS DISTINCT FROM submitted_tenant_id
+            OR submitted_decision#>>'{subject,type}' IS DISTINCT FROM actor_type
+            OR submitted_decision#>>'{subject,id}' IS DISTINCT FROM submitted_principal_id
+       ))
+       OR (NOT decision_allowed AND (
+            submitted_decision ? 'tenantId' OR submitted_decision ? 'subject'
+       )) THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'authorization decision authority is invalid';
+    END IF;
+
+    PERFORM iam.assert_audit_event(
+        submitted_audit_event,
+        submitted_tenant_id,
+        'iam.authorization.decided',
+        'AUTHORIZATION_DECISION',
+        submitted_decision->>'id',
+        expected_result
+    );
+    IF submitted_audit_event->>'iamDecisionId' IS DISTINCT FROM
+            submitted_decision->>'id'
+       OR submitted_audit_event->>'requestId' IS DISTINCT FROM
+            submitted_decision->>'requestId'
+       OR submitted_audit_event#>>'{actor,type}' IS DISTINCT FROM actor_type
+       OR submitted_audit_event#>>'{actor,id}' IS DISTINCT FROM
+            submitted_principal_id THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'authorization Audit event authority is invalid';
+    END IF;
+
+    INSERT INTO iam.authorization_decisions (
+        tenant_id, id, principal_id, allowed, action_name, target_kind,
+        target_id, request_id, decided_at, document
+    ) VALUES (
+        submitted_tenant_id,
+        submitted_decision->>'id',
+        submitted_principal_id,
+        decision_allowed,
+        submitted_decision->>'action',
+        submitted_decision#>>'{resource,kind}',
+        submitted_decision#>>'{resource,id}',
+        submitted_decision->>'requestId',
+        effective_now,
+        submitted_decision
+    );
+    INSERT INTO iam.audit_outbox (
+        tenant_id, event_id, event_document, next_attempt_at,
+        created_at, updated_at
+    ) VALUES (
+        submitted_tenant_id,
+        submitted_audit_event->>'eventId',
+        submitted_audit_event,
+        effective_now,
+        effective_now,
+        effective_now
+    );
 END
 $function$;
 
@@ -928,6 +1176,8 @@ REVOKE ALL ON ALL FUNCTIONS IN SCHEMA iam
     FROM matrix_iam_api, matrix_iam_worker;
 REVOKE ALL ON SCHEMA iam FROM matrix_iam_api, matrix_iam_worker;
 GRANT USAGE ON SCHEMA iam TO matrix_iam_api, matrix_iam_worker;
+GRANT EXECUTE ON FUNCTION iam.bootstrap_status() TO matrix_iam_api;
+GRANT EXECUTE ON FUNCTION iam.readiness() TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.lookup_login(text) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.apply_bootstrap(
     text, text, text, text, text, text, text, text, jsonb, jsonb
@@ -937,6 +1187,9 @@ GRANT EXECUTE ON FUNCTION iam.issue_session(
 ) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.lookup_session(text) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.lookup_service(text) TO matrix_iam_api;
+GRANT EXECUTE ON FUNCTION iam.record_authorization(
+    text, text, jsonb, jsonb
+) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.claim_audit_event(text, integer) TO matrix_iam_worker;
 GRANT EXECUTE ON FUNCTION iam.complete_audit_event(
     text, text, bigint, text, integer, text

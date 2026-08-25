@@ -2,6 +2,7 @@ package authority
 
 import (
 	"errors"
+	"strings"
 	"time"
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
@@ -49,6 +50,7 @@ func AuthenticateSession(
 
 func Decide(
 	context SubjectContext,
+	callingService iamv1.ServicePurpose,
 	request iamv1.AuthorizationRequest,
 	decisionID iamv1.DecisionID,
 	databaseTime time.Time,
@@ -62,8 +64,11 @@ func Decide(
 	if iamv1.ValidateID("decisionId", string(decisionID)) != nil {
 		return iamv1.AuthorizationDecision{}, ErrAuthorityUnavailable
 	}
+	if !knownServicePurpose(callingService) {
+		return iamv1.AuthorizationDecision{}, ErrAuthorityUnavailable
+	}
 	allowed := false
-	if !context.Principal.MustChangePassword {
+	if !context.Principal.MustChangePassword && ServiceCanRequest(callingService, request.Action) {
 		for _, role := range context.Roles {
 			if RoleAllows(role, request.Action) {
 				allowed = true
@@ -91,6 +96,29 @@ func Decide(
 		return iamv1.AuthorizationDecision{}, ErrAuthorityUnavailable
 	}
 	return decision, nil
+}
+
+// ServiceCanRequest confines each authorization action to the service that
+// owns its product boundary. APISIX forwards credentials but never asks IAM
+// for product authorization on another service's behalf.
+func ServiceCanRequest(purpose iamv1.ServicePurpose, action iamv1.Action) bool {
+	if !knownAction(action) {
+		return false
+	}
+	switch purpose {
+	case iamv1.ServiceIAM:
+		return strings.HasPrefix(string(action), "iam.")
+	case iamv1.ServicePaaS:
+		return strings.HasPrefix(string(action), "paas.")
+	case iamv1.ServiceAudit:
+		return strings.HasPrefix(string(action), "audit.")
+	case iamv1.ServiceInstallationVerifier:
+		return action == iamv1.ActionInstallationVerify
+	case iamv1.ServiceAPISIX:
+		return false
+	default:
+		return false
+	}
 }
 
 func RoleAllows(role iamv1.BuiltinRole, action iamv1.Action) bool {
@@ -173,6 +201,15 @@ func knownAction(action iamv1.Action) bool {
 func knownRole(role iamv1.BuiltinRole) bool {
 	for _, candidate := range iamv1.AllBuiltinRoles() {
 		if role == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func knownServicePurpose(purpose iamv1.ServicePurpose) bool {
+	for _, candidate := range iamv1.AllServicePurposes() {
+		if purpose == candidate {
 			return true
 		}
 	}
