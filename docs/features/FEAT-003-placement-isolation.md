@@ -1,6 +1,6 @@
 # FEAT-003: tenant placement and isolation policy
 
-- Status: Target design fixed; donor review pending
+- Status: Donor review complete; Gate A implementation pending
 - Target release: Local Compose Runtime v0.1
 - Placement algorithm version: `placement-v1`
 - Target design date: 2026-08-25
@@ -316,4 +316,20 @@ new placement boundary.
 
 ## Donor-informed amendments
 
-Pending fixed-commit donor review.
+The fixed-commit review is recorded in
+[`docs/adoption/FEAT-003-placement-isolation.md`](../adoption/FEAT-003-placement-isolation.md).
+It adds the following implementation constraints without changing the public
+resource model:
+
+1. PostgreSQL transaction time is authoritative for `DecidedAt`, pending-lease
+   evaluation, and persisted transaction facts. Gate A receives time as an
+   explicit deterministic input.
+2. Exact semantic replay and all tenant, release, policy, target, and
+   reservation revalidation occur inside the placement transaction.
+3. Composite tenant keys and explicit tenant predicates are retained, with
+   forced row-level security as an intentional improvement over the donor's
+   storage boundary.
+4. Caller-selected targets/provider bindings and the legacy ResourceKernel,
+   Project, Environment, quota, and approval closure are rejected.
+5. Senatria Audit's versioned-digest and golden-vector pattern is referenced
+   for conformance testing; its audit shard algorithm is not reused.

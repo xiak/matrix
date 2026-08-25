@@ -23,3 +23,4 @@ Feature reviews:
 
 - [FEAT-001 Runtime contracts](FEAT-001-runtime-contracts.md)
 - [FEAT-002 LocalMachine adapter](FEAT-002-localmachine-adapter.md)
+- [FEAT-003 Tenant placement and isolation](FEAT-003-placement-isolation.md)
