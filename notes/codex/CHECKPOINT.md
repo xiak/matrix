@@ -144,6 +144,20 @@
   rejection, digest-only storage, and exact decision/outbox cardinality. IAM
   still lacks its runnable process and Audit dispatcher, and Audit/PaaS remain
   unwired, so Gate B is not accepted.
+  The Audit core runtime is pushed in `9c69954`: production use-case,
+  PostgreSQL, and strict standard-library HTTP adapters now derive producer
+  source from the IAM service-identity port, bind query/verification tenant
+  and actor to IAM decisions, enforce exact replay and tenant sequencing, and
+  append local read/verification access facts in the same Audit transaction.
+  Runtime SQL exposes only readiness, event locking/lookup, append, bounded
+  filtered query, checkpoint, and chain reads; the replaced `lookup_event`
+  surface is removed. A fresh PostgreSQL 18 HTTP-to-database race run proves
+  equal/changed replay, independent tenant chains, tenant-bound cursors,
+  time/action/actor filtering, access recording, integrity verification,
+  direct-table/internal-function denial, and credential/native-error
+  non-leakage. The vertical test still uses a controlled IAM port; real IAM
+  HTTP integration, standalone processes, outbox dispatchers, and PaaS clients
+  remain pending, so Gate B is not accepted.
 - The FEAT-004 accepted worktree passed its schema and real-runtime gates.
   Clean PostgreSQL 18 runs applied the migration twice, ran the verifier, used
   non-bypass API/worker logins, attacked RLS and cross-role privileges,
@@ -156,10 +170,10 @@
 
 ## Next concrete work
 
-1. Complete FEAT-006 Gate B with independently running IAM/Audit HTTP services,
-   real PaaS clients, bootstrap/login/RBAC/revocation, transactional outboxes,
-   exact Audit replay/query/verification, outage retry, and cross-boundary
-   security attacks.
+1. Continue FEAT-006 Gate B with the real IAM HTTP client, independently
+   running IAM/Audit services, IAM and PaaS outbox dispatchers, and real PaaS
+   clients; then prove bootstrap/login/RBAC/revocation, outage retry, exact
+   Audit replay/query/verification, and cross-boundary security attacks.
 2. Resume FEAT-005 Gate B provider effects and fixed platform composition,
    then assemble releases A/B and prove the network-disabled Compose install,
    verification, operations, upgrade, rollback, recovery, and support-evidence
