@@ -1,6 +1,6 @@
 # FEAT-006: Platform IAM and Audit authorities
 
-- Status: Gate A Accepted; Gate B implementation pending
+- Status: Gate A and Gate B Accepted; Gate C pending
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
 - IAM API contract: `iam.matrix.xiak.com/v1`
@@ -247,13 +247,33 @@ tests pass.
   canonical/event disagreement, arbitrary payloads, record hashes, immutable
   update/delete/truncate paths, database session/event/lease time, lease
   recovery, and stale fencing tokens.
-- The same database gate proves exact IAM bootstrap replay/conflict and atomic
-  outbox facts, opaque lookup versus binding digests, expiry/revocation,
-  `(source,eventId)` Audit replay, every current Go Audit action at the SQL
-  boundary, independent tenant sequence one, descending bounded reads, and
-  verification of stored records by the Go hash-chain authority. Real HTTP
-  services, PaaS clients, outage/restart delivery, and Gate C offline release
-  consumption remain unaccepted.
+- Gate B was accepted on 2026-08-26 after implementation commit `255b790`.
+  IAM, Audit, the IAM Audit dispatcher, PaaS, and the PaaS Audit dispatcher run
+  as five independent processes with exact file credentials, least-privilege
+  database logins, and HTTP-only authority integration. PaaS readiness binds
+  its schema and outbox invariants to the live IAM identity of its configured
+  PaaS service credential; there is no header, local allow-list, cached permit,
+  or in-process Audit fallback.
+- A fresh PostgreSQL 18 race gate starts and restarts all five binaries. It
+  proves equal and changed bootstrap, weak login, database-time session expiry,
+  immediate role/session revocation, wrong-role and wrong-service denial,
+  cross-tenant resource rejection, and IAM-unavailable fail-closed behavior.
+  The accepted PaaS Operation carries the exact IAM tenant and subject, and its
+  durable outbox fact joins one immutable IAM decision to one PaaS-source Audit
+  record.
+- The same process gate proves accepted and denied IAM facts, accepted PaaS
+  mutations, Audit outage backlog and restart, equal duplicate delivery,
+  changed replay conflict, terminal bad-credential dead letters, unhealthy
+  readiness, authorized tenant-only Audit query and chain verification, local
+  access facts, strict tenant-selector/cursor filtering, cross-schema denial,
+  and absence of credential or native-error leakage. Independent clean PG18
+  race gates repeat the PaaS, IAM HTTP, Audit HTTP, and dual-schema database
+  attack matrices.
+- The accepted worktree passes deterministic generation, full unit and
+  architecture tests, `go vet`, full race tests, ten repeated critical-package
+  runs, dependency/diff checks, and CGO-disabled builds for Windows/amd64,
+  Linux/amd64, Linux/arm64, and Darwin/arm64. Gate C offline release
+  consumption remains pending under FEAT-005.
 
 ## Deferred
 
@@ -266,4 +286,5 @@ checkpoints, SIEM export, and Audit full-text search remain outside Phase 1.
 The shared product and dependency boundaries remain owned by
 [`ADR-0002`](../architecture/ADR-0002-product-boundary.md) and
 [`DEPENDENCY-RULES`](../architecture/DEPENDENCY-RULES.md). Fixed donor decisions
-will be recorded in the corresponding FEAT-006 adoption record.
+are owned by the
+[`FEAT-006 adoption review`](../adoption/FEAT-006-platform-authorities.md).

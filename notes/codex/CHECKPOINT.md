@@ -104,88 +104,43 @@
   link/reparse, ownership, permission, interruption, and tamper rejection.
   Native Windows and network-disabled Linux tests pass; provider effects and
   platform services are not wired yet.
-- FEAT-006 target and fixed-donor adoption are pushed in `506f6d7` and
-  `932252e`. Strict generated IAM/Audit Go and OpenAPI 3.1 contracts are pushed
-  in `9f50b6c`; they reject authority selectors, ambiguous JSON, enum/union
-  drift, arbitrary Audit payloads, and accidental credential serialization.
-  Pure authority behavior is pushed in `0437fbf`: fixed-profile Argon2id,
-  lookup and binding-scoped opaque credential digests, database-time session
-  checks, fixed RBAC and bootstrap replay; plus authenticated-source canonical
-  Audit facts, exact replay/conflict, per-tenant sequence/hash chains,
-  indefinite retention, and tenant/filter-bound HMAC cursors. FEAT-006 Gate A
-  is Accepted and pushed in `9a82568`. Separate IAM/Audit PostgreSQL owners,
-  migrators, and runtime roles apply both clean schemas twice; the real PG18
-  gate proves forced RLS, API-only writes, cross-schema denial, canonical
-  closed events, immutable Audit rows, Go/SQL hash agreement, database event,
-  session, and lease time, lease recovery, and stale-fence rejection. Full
-  generation, unit, architecture, vet, race, ten-run, and PG18 race gates pass.
-  The pre-Gate-B identity correction is pushed in `1beb2d0`: bootstrap owns
-  five independent IAM, PaaS, Audit, APISIX, and verifier credentials, and
-  `GET /v1/service-identity` returns only the organization, principal, and
-  purpose bound to the current service Bearer. It accepts no selector, so
-  Audit can derive a closed producer source without shared credentials,
-  caller headers, or cross-schema reads. Generation, full unit/vet/race and
-  ten-run gates, four-target builds, documentation/dependency checks, and a
-  fresh real PostgreSQL 18 race gate all pass after the correction.
-  The first Gate B IAM runtime slice is pushed in `df24b2f`: production
-  use-case, PostgreSQL, and strict standard-library HTTP adapters now execute
-  bootstrap/status, readiness, current service identity, login, and
-  authorization. Calling services are confined to their owned action family;
-  IAM decisions and sanitized events commit atomically. A fresh PostgreSQL 18
-  race-tested HTTP-to-database run proves credential binding, initial-password
-  denial, digest-only secret storage, and the IAM Audit outbox fact. IAM
-  management commands, the runnable process, Audit delivery/service, and PaaS
-  clients remain pending, so Gate B is not accepted.
-  IAM management is pushed in `7073479`: all current OpenAPI commands now use
-  the same session/RBAC/use-case/PostgreSQL/HTTP path for logout, password
-  change, user creation, role binding, and binding/session revocation. A fresh
-  PostgreSQL 18 race run proves old-password rejection, first-password gating,
-  immediate role/session revocation, audited role denial, cross-tenant
-  rejection, digest-only storage, and exact decision/outbox cardinality. IAM
-  still lacks its runnable process and Audit dispatcher, and Audit/PaaS remain
-  unwired, so Gate B is not accepted.
-  The Audit core runtime is pushed in `9c69954`: production use-case,
-  PostgreSQL, and strict standard-library HTTP adapters now derive producer
-  source from the IAM service-identity port, bind query/verification tenant
-  and actor to IAM decisions, enforce exact replay and tenant sequencing, and
-  append local read/verification access facts in the same Audit transaction.
-  Runtime SQL exposes only readiness, event locking/lookup, append, bounded
-  filtered query, checkpoint, and chain reads; the replaced `lookup_event`
-  surface is removed. A fresh PostgreSQL 18 HTTP-to-database race run proves
-  equal/changed replay, independent tenant chains, tenant-bound cursors,
-  time/action/actor filtering, access recording, integrity verification,
-  direct-table/internal-function denial, and credential/native-error
-  non-leakage. Commit `51790b7` replaces the controlled process boundary with
-  a real IAM HTTP client, independently runnable IAM and Audit services, and an
-  IAM-owned Audit outbox dispatcher. A fresh PostgreSQL 18 cross-process race
-  gate proves exact bootstrap restart/conflict, login and password change,
-  role/session revocation on the next Audit request, IAM fact delivery, outage
-  retry/restart, equal replay, changed replay conflict, terminal
-  bad-credential dead letter, unhealthy readiness, and plaintext/native-error
-  non-leakage. The original dual-schema least-privilege PostgreSQL 18 race gate
-  also passes after aligning retry state to carry no persisted error detail.
-  Real PaaS clients/dispatcher and the remaining cross-service attack matrix
-  are still pending, so Gate B is not accepted.
+- FEAT-006 Gate A and Gate B are Accepted. Target design and fixed-donor
+  adoption remain `506f6d7` and `932252e`; the accepted authority contracts,
+  pure behavior, and separate IAM/Audit PostgreSQL owners, migrators, runtime
+  roles, RLS, immutable records, database-time sessions/leases, and stale-fence
+  rejection remain authoritative in the FEAT and its owning tests.
+  Commit `51790b7` runs IAM, Audit, and the IAM Audit dispatcher independently.
+  Commit `255b790` adds the real PaaS IAM/Audit clients, independently runnable
+  PaaS and PaaS Audit dispatcher, formal PaaS readiness, terminal delivery
+  classification, exact Deployment stop authorization, and the complete
+  cross-service process gate. A fresh PG18 race run starts five binaries and
+  proves exact bootstrap replay/conflict, weak login, expiry/revocation,
+  wrong-role/service and cross-tenant denial, IAM fail-closed behavior, exact
+  IAM tenant/subject/decision propagation, atomic outboxes, outage/restart,
+  duplicate/conflicting replay, dead letters, tenant-only Audit query/verify,
+  access records, cross-schema denial, and secret/native-error non-leakage.
+  Full generation, unit, architecture, vet, race, repeated, four-target build,
+  dependency/diff, and independent clean PG18 database gates pass. FEAT-006
+  Gate C remains pending until FEAT-005 consumes these services in the real
+  external-network-disabled release lifecycle.
 - The FEAT-004 accepted worktree passed its schema and real-runtime gates.
   Clean PostgreSQL 18 runs applied the migration twice, ran the verifier, used
   non-bypass API/worker logins, attacked RLS and cross-role privileges,
   injected transaction, delivery, and unknown-effect failures, and connected
   the real Compose executor through the durable worker and capacity workflow.
-- No assembled offline release, installation provider runner, real
-  IAM/Audit/APISIX/UI service composition, or verified clean-host
+- No assembled offline release, installation provider runner, APISIX/UI
+  service composition, or verified clean-host
   install/upgrade/rollback/recovery E2E exists yet. The Phase 1 goal is
   therefore active.
 
 ## Next concrete work
 
-1. Continue FEAT-006 Gate B with real PaaS IAM/Audit clients, the PaaS Audit
-   dispatcher and runnable PaaS process; then prove accepted and denied PaaS
-   requests, immediate IAM fail-closed behavior, PaaS outbox outage/restart,
-   exact Audit query/verification, and the remaining cross-boundary attacks.
-2. Resume FEAT-005 Gate B provider effects and fixed platform composition,
-   then assemble releases A/B and prove the network-disabled Compose install,
-   verification, operations, upgrade, rollback, recovery, and support-evidence
-   E2E required by both FEATs.
+1. Resume FEAT-005 Gate B provider effects and fixed platform composition,
+   packaging the accepted IAM, Audit, PaaS, dispatchers, APISIX, PostgreSQL,
+   and verifier boundaries from exact release content and file credentials.
+2. Assemble releases A/B and prove the external-network-disabled Compose
+   install, verification, operations, upgrade, rollback, backup/recovery, and
+   support-evidence E2E required for FEAT-005 Gate B/C and FEAT-006 Gate C.
 
 ## Fixed donor baselines
 
