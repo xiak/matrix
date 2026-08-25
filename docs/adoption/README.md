@@ -12,4 +12,9 @@ Matrix PaaS uses a slice-based adoption process. For every feature:
 Dirty donor worktrees are never adoption baselines. IAM and Audit data are not
 migrated from the legacy embedded PaaS authorities.
 
+Paths in `sources.yaml` identify donor-repository locations, not target
+directories. In particular, legacy `platform/go/*` code is evaluated by
+capability and admitted into its owning service; the directory is not copied
+wholesale into Matrix PaaS.
+
 See [sources.yaml](sources.yaml) for the initial fixed inputs.

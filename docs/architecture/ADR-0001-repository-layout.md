@@ -22,18 +22,22 @@ Matrix PaaS will borrow principles, not directory names wholesale:
 1. Public contracts live in a versioned top-level `api/` boundary.
 2. Independently runnable products live under `app/service/` and `app/ui/`.
 3. Each Go service owns `cmd/` binaries and `internal/` implementation.
-4. Providers are explicit top-level adapters grouped by capability class.
-5. PaaS-owned ingress and deployment assets live in `infra/` and `deploy/`.
-6. Cross-component verification lives in `test/`.
-7. Repository tooling lives in `tools/`; a broad `hack/` directory is not
+4. Replaceable integrations live under `app/adapter/`, grouped by
+   infrastructure, runtime, and gateway capability.
+5. PaaS-owned deployment and ingress configuration lives under `deploy/`.
+6. Shared code stays with its owning service until multiple concrete consumers
+   justify a specifically named SDK or foundation; no generic top-level
+   `platform/` directory is pre-created.
+7. Cross-component verification lives in `test/`.
+8. Repository tooling lives in `tools/`; a broad `hack/` directory is not
    introduced.
-8. `staging/`, vendored dependencies, a root catch-all `pkg/`, and generated
+9. `staging/`, vendored dependencies, a root catch-all `pkg/`, and generated
    publication machinery are deferred until an evidenced need exists.
 
 ## Consequences
 
-- IAM, Audit, control plane, worker, UI, and providers can release separately
-  while remaining in one product repository.
+- IAM, Audit, control plane, and UI retain explicit release boundaries, while
+  adapters remain independently replaceable and testable.
 - Public API stability is visible and enforceable.
 - Early development avoids Kubernetes-scale repository machinery.
 - A future package can move to a dedicated repository without requiring a

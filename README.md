@@ -1,7 +1,7 @@
 # Matrix PaaS
 
 Matrix PaaS is an independent platform product. It provides identity, audit,
-control-plane, placement, runtime-provider, and user-experience capabilities
+control-plane, placement, runtime execution, and user-experience capabilities
 without embedding customer business applications.
 
 ## Product boundary
@@ -13,12 +13,12 @@ The product distribution includes:
 - Audit as the unified audit authority;
 - the PaaS control plane and worker;
 - the independent PaaS UI;
-- infrastructure, runtime, and gateway providers;
+- infrastructure, runtime, and gateway adapters;
 - a minimal Compose-based local distribution.
 
 Backend, building, analysis, SenatriaAI, agent business features, and other
 customer workloads do not belong in this repository. They may be managed by
-Matrix PaaS through versioned APIs and providers.
+Matrix PaaS through versioned APIs and adapters.
 
 ## Repository layout
 
@@ -26,17 +26,18 @@ Matrix PaaS through versioned APIs and providers.
 | --- | --- |
 | `api/` | Versioned public API, event, and schema contracts. |
 | `app/service/` | Independently runnable IAM, Audit, and PaaS services. |
+| `app/adapter/` | Replaceable infrastructure, runtime, and gateway integrations. |
 | `app/ui/paas/` | Independent Next.js/React PaaS console. |
-| `platform/` | Shared, intentionally public foundations and SDKs. |
-| `providers/` | Replaceable infrastructure, runtime, and gateway adapters. |
-| `infra/` | Infrastructure owned by the PaaS distribution itself. |
 | `deploy/` | Local and release deployment composition. |
 | `docs/` | Architecture decisions, adoption records, and product design. |
 | `test/` | Cross-component contract, integration, and end-to-end tests. |
 | `tools/` | Repository-owned development and release tooling. |
 
 Each Go service owns its binaries under `cmd/` and non-public implementation
-under `internal/`. A root-level catch-all `pkg/` is deliberately avoided.
+under `internal/`. Shared code remains with its owning service until multiple
+real consumers justify a specifically named SDK or foundation. Root-level
+catch-all `pkg/`, `platform/`, and `infra/` directories are deliberately
+avoided.
 
 ## Current phase
 

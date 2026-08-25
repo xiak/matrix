@@ -1,6 +1,6 @@
-# Compose runtime provider
+# Compose runtime adapter
 
-The first runtime provider applies immutable WorkloadRelease identities to a
+The first runtime adapter applies immutable WorkloadRelease identities to a
 selected RuntimeTarget using controlled Compose delivery capabilities.
 
 The initial implementation may delegate execution to a GitLab-backed delivery

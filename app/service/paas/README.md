@@ -12,13 +12,13 @@ internal/
   api/
   operation/
   placement/
-  provider/      # registry, policy, and orchestration only
+  port/          # interfaces required by the service
   runtime/
 ```
 
 The control plane owns RuntimeTarget, PlacementPolicy, PlacementDecision,
 WorkloadRelease, and Operation. It delegates identity to IAM, unified audit to
-Audit, and external effects to allowlisted providers.
+Audit, and external effects to allowlisted adapters.
 
-Public provider contracts are versioned under `api/provider/`; they are not
-defined in this service's `internal/` tree.
+Cross-process adapter contracts, when required, are versioned under
+`api/adapter/`. Service-local ports remain owned by this service.

@@ -13,7 +13,7 @@ Senatria and other customer workloads without compiling their business code.
 ## Decision
 
 The Matrix PaaS product includes IAM, Audit, APISIX, the PaaS control plane and
-worker, the PaaS UI, public SDKs, providers, and its own minimal delivery chain.
+worker, the PaaS UI, adapters, and its own minimal delivery chain.
 
 IAM and Audit remain independently deployed bounded services:
 
@@ -24,13 +24,13 @@ IAM and Audit remain independently deployed bounded services:
 
 APISIX has two distinct roles:
 
-- `infra/apisix` protects the PaaS product's northbound APIs and UI;
-- `providers/gateway/apisix` manages workload routes through an internal
-  provider contract.
+- `deploy/compose/apisix` protects the PaaS product's northbound APIs and UI;
+- `app/adapter/gateway/apisix` manages workload routes through an internal
+  adapter contract.
 
 Customer business services, business schemas, and product-specific UIs are
 excluded. They can be onboarded later through Catalog, WorkloadRelease, and
-Provider contracts.
+adapter contracts.
 
 ## Consequences
 
