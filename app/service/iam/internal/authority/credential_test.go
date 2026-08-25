@@ -13,22 +13,26 @@ func TestOpaqueCredentialsAreRandomHashedAndBindingScoped(t *testing.T) {
 		entropy[index] = byte(index + 1)
 	}
 	issuer := NewCredentialIssuer(bytes.NewReader(entropy))
-	sessionCredential, sessionDigest, err := issuer.Issue(CredentialSession, "session-a")
+	session, err := issuer.Issue(CredentialSession, "session-a")
 	if err != nil {
 		t.Fatalf("issue session credential: %v", err)
 	}
-	serviceCredential, serviceDigest, err := issuer.Issue(CredentialService, "service-paas")
+	service, err := issuer.Issue(CredentialService, "service-paas")
 	if err != nil {
 		t.Fatalf("issue service credential: %v", err)
 	}
-	if bytes.Equal(sessionCredential.CopyBytes(), serviceCredential.CopyBytes()) {
+	if bytes.Equal(session.Credential.CopyBytes(), service.Credential.CopyBytes()) {
 		t.Fatal("two issued credentials are equal")
 	}
-	if strings.Contains(sessionDigest, string(sessionCredential.CopyBytes())) ||
-		strings.Contains(serviceDigest, string(serviceCredential.CopyBytes())) {
+	if strings.Contains(session.LookupDigest, string(session.Credential.CopyBytes())) ||
+		strings.Contains(session.VerificationDigest, string(session.Credential.CopyBytes())) ||
+		strings.Contains(service.LookupDigest, string(service.Credential.CopyBytes())) ||
+		strings.Contains(service.VerificationDigest, string(service.Credential.CopyBytes())) {
 		t.Fatal("stored credential digest contains plaintext")
 	}
-	verified, err := VerifyCredential(CredentialSession, "session-a", sessionCredential, sessionDigest)
+	verified, err := VerifyCredential(
+		CredentialSession, "session-a", session.Credential, session.VerificationDigest,
+	)
 	if err != nil || !verified {
 		t.Fatalf("verify bound session credential: verified=%v err=%v", verified, err)
 	}
@@ -40,16 +44,27 @@ func TestOpaqueCredentialsAreRandomHashedAndBindingScoped(t *testing.T) {
 		"other binding": {CredentialSession, "session-b"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			verified, err := VerifyCredential(candidate.credentialType, candidate.bindingID, sessionCredential, sessionDigest)
+			verified, err := VerifyCredential(
+				candidate.credentialType, candidate.bindingID,
+				session.Credential, session.VerificationDigest,
+			)
 			if err != nil || verified {
 				t.Fatalf("cross-bound credential: verified=%v err=%v", verified, err)
 			}
 		})
 	}
+	lookup, err := LookupCredentialDigest(CredentialSession, session.Credential)
+	if err != nil || lookup != session.LookupDigest {
+		t.Fatalf("recompute lookup digest: digest=%q err=%v", lookup, err)
+	}
+	otherTypeLookup, err := LookupCredentialDigest(CredentialService, session.Credential)
+	if err != nil || otherTypeLookup == session.LookupDigest {
+		t.Fatalf("lookup digest is not type-bound: digest=%q err=%v", otherTypeLookup, err)
+	}
 }
 
 func TestCredentialFailuresAreNormalized(t *testing.T) {
-	if _, _, err := NewCredentialIssuer(failingEntropy{}).Issue(CredentialSession, "session-a"); !errors.Is(err, ErrCredentialGeneration) || strings.Contains(err.Error(), "native") {
+	if _, err := NewCredentialIssuer(failingEntropy{}).Issue(CredentialSession, "session-a"); !errors.Is(err, ErrCredentialGeneration) || strings.Contains(err.Error(), "native") {
 		t.Fatalf("credential entropy error was not normalized: %v", err)
 	}
 	credential := authoritySecret(t, "mx1.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")

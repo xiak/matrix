@@ -1,6 +1,6 @@
 # FEAT-006: Platform IAM and Audit authorities
 
-- Status: Contracts and pure domain complete; Gate A PostgreSQL authority pending
+- Status: Gate A Accepted; Gate B implementation pending
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
 - IAM API contract: `iam.matrix.xiak.com/v1`
@@ -223,6 +223,28 @@ clients, and repeat bootstrap, authorization, delivery, query, restart,
 upgrade, rollback, backup, and recovery through APISIX with external network
 disabled. FEAT-006 is not accepted merely because port fakes or direct service
 tests pass.
+
+## Implementation evidence
+
+- Gate A was accepted on 2026-08-26. Strict generated Go/OpenAPI contracts,
+  fixed Argon2id and opaque-credential behavior, closed RBAC decisions,
+  bootstrap and Audit replay classification, canonical facts, independent
+  tenant hash chains, indefinite retention, and tenant/filter-bound cursors
+  pass generation, schema, architecture, unit, race, and repeated gates.
+- A clean PostgreSQL 18 database applies both role bootstraps and both schemas
+  twice through separate non-superuser migration identities. The behavioral
+  integration gate uses only the granted API/worker/runtime functions and
+  attacks direct tables, owner escalation, cross-schema access, forced RLS,
+  canonical/event disagreement, arbitrary payloads, record hashes, immutable
+  update/delete/truncate paths, database session/event/lease time, lease
+  recovery, and stale fencing tokens.
+- The same database gate proves exact IAM bootstrap replay/conflict and atomic
+  outbox facts, opaque lookup versus binding digests, expiry/revocation,
+  `(source,eventId)` Audit replay, every current Go Audit action at the SQL
+  boundary, independent tenant sequence one, descending bounded reads, and
+  verification of stored records by the Go hash-chain authority. Real HTTP
+  services, PaaS clients, outage/restart delivery, and Gate C offline release
+  consumption remain unaccepted.
 
 ## Deferred
 

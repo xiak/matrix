@@ -14,27 +14,27 @@ func TestSessionAuthenticationUsesBindingDigestRevocationAndDatabaseTime(t *test
 	now := authorityTestTime()
 	context := authoritySubject(now, iamv1.RolePaaSDeveloper)
 	entropy := bytes.NewReader(bytes.Repeat([]byte{0x44}, 32))
-	credential, digest, err := NewCredentialIssuer(entropy).Issue(CredentialSession, string(context.Session.ID))
+	issued, err := NewCredentialIssuer(entropy).Issue(CredentialSession, string(context.Session.ID))
 	if err != nil {
 		t.Fatalf("issue session credential: %v", err)
 	}
-	if err := AuthenticateSession(context.Session, digest, credential, now); err != nil {
+	if err := AuthenticateSession(context.Session, issued.VerificationDigest, issued.Credential, now); err != nil {
 		t.Fatalf("authenticate active session: %v", err)
 	}
 	wrong := authoritySecret(t, "mx1.BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB")
-	if err := AuthenticateSession(context.Session, digest, wrong, now); !errors.Is(err, ErrUnauthenticated) {
+	if err := AuthenticateSession(context.Session, issued.VerificationDigest, wrong, now); !errors.Is(err, ErrUnauthenticated) {
 		t.Fatalf("wrong session credential error = %v", err)
 	}
 	expired := context.Session
 	expired.ExpiresAt = now
-	if err := AuthenticateSession(expired, digest, credential, now); !errors.Is(err, ErrUnauthenticated) {
+	if err := AuthenticateSession(expired, issued.VerificationDigest, issued.Credential, now); !errors.Is(err, ErrUnauthenticated) {
 		t.Fatalf("expired session error = %v", err)
 	}
 	revokedAt := now.Add(-time.Minute)
 	revoked := context.Session
 	revoked.Status = iamv1.SessionRevoked
 	revoked.RevokedAt = &revokedAt
-	if err := AuthenticateSession(revoked, digest, credential, now); !errors.Is(err, ErrUnauthenticated) {
+	if err := AuthenticateSession(revoked, issued.VerificationDigest, issued.Credential, now); !errors.Is(err, ErrUnauthenticated) {
 		t.Fatalf("revoked session error = %v", err)
 	}
 }

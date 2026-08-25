@@ -29,6 +29,12 @@ type CredentialIssuer struct {
 	entropy io.Reader
 }
 
+type IssuedCredential struct {
+	Credential         iamv1.Secret
+	LookupDigest       string
+	VerificationDigest string
+}
+
 func NewCredentialIssuer(entropy io.Reader) *CredentialIssuer {
 	if entropy == nil {
 		entropy = rand.Reader
@@ -39,27 +45,53 @@ func NewCredentialIssuer(entropy io.Reader) *CredentialIssuer {
 func (issuer *CredentialIssuer) Issue(
 	credentialType CredentialType,
 	bindingID string,
-) (iamv1.Secret, string, error) {
+) (IssuedCredential, error) {
 	if issuer == nil || issuer.entropy == nil || !knownCredentialType(credentialType) ||
 		iamv1.ValidateID("credential.bindingId", bindingID) != nil {
-		return iamv1.Secret{}, "", ErrCredentialGeneration
+		return IssuedCredential{}, ErrCredentialGeneration
 	}
 	random := make([]byte, 32)
 	if _, err := io.ReadFull(issuer.entropy, random); err != nil {
 		clear(random)
-		return iamv1.Secret{}, "", ErrCredentialGeneration
+		return IssuedCredential{}, ErrCredentialGeneration
 	}
 	encoded := "mx1." + base64.RawURLEncoding.EncodeToString(random)
 	clear(random)
 	credential, err := iamv1.NewSecret(encoded)
 	if err != nil {
-		return iamv1.Secret{}, "", ErrCredentialGeneration
+		return IssuedCredential{}, ErrCredentialGeneration
 	}
-	digest, err := DigestCredential(credentialType, bindingID, credential)
+	lookupDigest, err := LookupCredentialDigest(credentialType, credential)
 	if err != nil {
-		return iamv1.Secret{}, "", ErrCredentialGeneration
+		return IssuedCredential{}, ErrCredentialGeneration
 	}
-	return credential, digest, nil
+	verificationDigest, err := DigestCredential(credentialType, bindingID, credential)
+	if err != nil {
+		return IssuedCredential{}, ErrCredentialGeneration
+	}
+	return IssuedCredential{
+		Credential: credential, LookupDigest: lookupDigest, VerificationDigest: verificationDigest,
+	}, nil
+}
+
+func LookupCredentialDigest(
+	credentialType CredentialType,
+	credential iamv1.Secret,
+) (string, error) {
+	if !knownCredentialType(credentialType) {
+		return "", ErrInvalidCredentialType
+	}
+	if !credential.Present() {
+		return "", ErrInvalidCredentialHash
+	}
+	plaintext := credential.CopyBytes()
+	defer clear(plaintext)
+	digest := sha256.New()
+	digest.Write([]byte("matrix.iam.credential-lookup.v1\x00"))
+	digest.Write([]byte(credentialType))
+	digest.Write([]byte{0})
+	digest.Write(plaintext)
+	return "sha256:" + hex.EncodeToString(digest.Sum(nil)), nil
 }
 
 func DigestCredential(
