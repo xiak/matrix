@@ -146,11 +146,17 @@ BEGIN
             'iam.complete_audit_event(text,text,bigint,text,integer,text)',
             'EXECUTE'
        )
+       OR NOT has_function_privilege(
+            'matrix_iam_worker', 'iam.audit_outbox_snapshot()', 'EXECUTE'
+       )
        OR has_function_privilege(
             'matrix_iam_api', 'iam.claim_audit_event(text,integer)', 'EXECUTE'
        )
        OR has_function_privilege(
             'matrix_iam_worker', 'iam.lookup_login(text)', 'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_iam_api', 'iam.audit_outbox_snapshot()', 'EXECUTE'
        )
        OR has_function_privilege(
             'matrix_iam_worker',

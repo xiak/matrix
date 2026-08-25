@@ -262,6 +262,10 @@ CREATE TABLE IF NOT EXISTS iam.audit_outbox (
         AND updated_at >= created_at
         AND (error_code IS NULL OR error_code COLLATE "C" ~ '^[a-z][a-z0-9.]{2,127}$')
         AND (
+            (status = 'DEAD_LETTER' AND error_code IS NOT NULL)
+            OR (status <> 'DEAD_LETTER' AND error_code IS NULL)
+        )
+        AND (
             (status = 'IN_FLIGHT' AND worker_id IS NOT NULL AND lease_expires_at IS NOT NULL)
             OR (status <> 'IN_FLIGHT' AND worker_id IS NULL AND lease_expires_at IS NULL)
         )
@@ -1627,10 +1631,11 @@ BEGIN
        OR submitted_retry_seconds IS NULL
        OR (submitted_outcome = 'RETRY' AND submitted_retry_seconds NOT BETWEEN 1 AND 86400)
        OR (submitted_outcome <> 'RETRY' AND submitted_retry_seconds <> 0)
-       OR (submitted_outcome = 'DELIVERED' AND submitted_error_code IS NOT NULL)
-       OR (submitted_outcome <> 'DELIVERED'
+       OR (submitted_outcome = 'DEAD_LETTER'
             AND COALESCE(submitted_error_code, '') COLLATE "C"
-                !~ '^[a-z][a-z0-9.]{2,127}$') THEN
+                !~ '^[a-z][a-z0-9.]{2,127}$')
+       OR (submitted_outcome <> 'DEAD_LETTER'
+            AND submitted_error_code IS NOT NULL) THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'Audit completion input is invalid';
     END IF;
     PERFORM set_config('matrix.iam_dispatcher', 'trusted', true);
@@ -1643,7 +1648,10 @@ BEGIN
                     + make_interval(secs => submitted_retry_seconds)
                 ELSE outbox.next_attempt_at
            END,
-           error_code = submitted_error_code,
+           error_code = CASE
+                WHEN submitted_outcome = 'DEAD_LETTER' THEN submitted_error_code
+                ELSE NULL
+           END,
            updated_at = transaction_timestamp()
      WHERE outbox.event_id = submitted_event_id
        AND outbox.status = 'IN_FLIGHT'
@@ -1655,6 +1663,36 @@ BEGIN
             ERRCODE = '40001',
             MESSAGE = 'Audit outbox lease or fencing token is stale';
     END IF;
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION iam.audit_outbox_snapshot()
+RETURNS TABLE (
+    pending_count bigint,
+    leased_count bigint,
+    retry_count bigint,
+    delivered_count bigint,
+    dead_letter_count bigint,
+    expired_lease_count bigint
+)
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+BEGIN
+    PERFORM set_config('matrix.iam_dispatcher', 'trusted', true);
+    RETURN QUERY SELECT
+        count(*) FILTER (WHERE status = 'PENDING'),
+        count(*) FILTER (WHERE status = 'IN_FLIGHT'),
+        count(*) FILTER (WHERE status = 'RETRY'),
+        count(*) FILTER (WHERE status = 'DELIVERED'),
+        count(*) FILTER (WHERE status = 'DEAD_LETTER'),
+        count(*) FILTER (
+            WHERE status = 'IN_FLIGHT'
+              AND lease_expires_at <= transaction_timestamp()
+        )
+    FROM iam.audit_outbox;
 END
 $function$;
 
@@ -1698,6 +1736,7 @@ GRANT EXECUTE ON FUNCTION iam.claim_audit_event(text, integer) TO matrix_iam_wor
 GRANT EXECUTE ON FUNCTION iam.complete_audit_event(
     text, text, bigint, text, integer, text
 ) TO matrix_iam_worker;
+GRANT EXECUTE ON FUNCTION iam.audit_outbox_snapshot() TO matrix_iam_worker;
 
 ALTER DEFAULT PRIVILEGES FOR ROLE matrix_iam_owner IN SCHEMA iam
     REVOKE ALL ON TABLES FROM PUBLIC;
