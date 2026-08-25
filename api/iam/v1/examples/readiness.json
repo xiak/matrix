@@ -1,0 +1,7 @@
+{
+  "apiVersion": "iam.matrix.xiak.com/v1",
+  "kind": "Readiness",
+  "state": "READY",
+  "schemaVersion": 1,
+  "checkedAt": "2026-08-25T02:09:10.000000Z"
+}

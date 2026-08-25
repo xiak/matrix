@@ -1,0 +1,23 @@
+{
+  "apiVersion": "audit.matrix.xiak.com/v1",
+  "kind": "AuditEvent",
+  "eventId": "event-deployment-created",
+  "tenantId": "organization-example",
+  "actor": {
+    "type": "USER",
+    "id": "principal-developer"
+  },
+  "iamDecisionId": "decision-deployment-create",
+  "action": "paas.deployment.created",
+  "target": {
+    "kind": "DEPLOYMENT",
+    "id": "deployment-example"
+  },
+  "result": "ACCEPTED",
+  "requestDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "requestId": "request-deployment-create",
+  "correlationId": "correlation-deployment-create",
+  "operationId": "operation-deployment-create",
+  "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+  "occurredAt": "2026-08-25T03:04:05.000000Z"
+}

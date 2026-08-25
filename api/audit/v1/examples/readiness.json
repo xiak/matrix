@@ -1,0 +1,7 @@
+{
+  "apiVersion": "audit.matrix.xiak.com/v1",
+  "kind": "Readiness",
+  "state": "READY",
+  "schemaVersion": 1,
+  "checkedAt": "2026-08-25T03:07:08.000000Z"
+}

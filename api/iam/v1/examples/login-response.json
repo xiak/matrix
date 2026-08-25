@@ -1,0 +1,13 @@
+{
+  "session": {
+    "apiVersion": "iam.matrix.xiak.com/v1",
+    "kind": "Session",
+    "id": "session-example",
+    "organizationId": "organization-example",
+    "principalId": "principal-admin",
+    "status": "ACTIVE",
+    "issuedAt": "2026-08-25T01:02:03.000000Z",
+    "expiresAt": "2026-08-25T09:02:03.000000Z"
+  },
+  "credential": "example-only-session-credential-0000000000000001"
+}

@@ -1,0 +1,14 @@
+{
+  "apiVersion": "iam.matrix.xiak.com/v1",
+  "kind": "AuthorizationDecision",
+  "id": "decision-denied",
+  "allowed": false,
+  "reason": "DENIED",
+  "action": "paas.deployment.create",
+  "resource": {
+    "kind": "DEPLOYMENT",
+    "id": "deployment-example"
+  },
+  "requestId": "request-authorize-denied",
+  "decidedAt": "2026-08-25T02:08:09.000000Z"
+}

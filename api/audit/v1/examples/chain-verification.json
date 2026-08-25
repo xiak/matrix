@@ -1,0 +1,13 @@
+{
+  "apiVersion": "audit.matrix.xiak.com/v1",
+  "kind": "ChainVerification",
+  "tenantId": "organization-example",
+  "state": "VERIFIED",
+  "fromSequence": 1,
+  "toSequence": 42,
+  "recordCount": 42,
+  "firstPreviousHash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "lastRecordHash": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+  "complete": true,
+  "verifiedAt": "2026-08-25T03:06:07.000000Z"
+}

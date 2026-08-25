@@ -1,0 +1,21 @@
+{
+  "apiVersion": "audit.matrix.xiak.com/v1",
+  "kind": "AuditEvent",
+  "eventId": "event-authorization-denied",
+  "tenantId": "organization-example",
+  "actor": {
+    "type": "USER",
+    "id": "principal-viewer"
+  },
+  "iamDecisionId": "decision-denied",
+  "action": "iam.authorization.decided",
+  "target": {
+    "kind": "AUTHORIZATION_DECISION",
+    "id": "decision-denied"
+  },
+  "result": "DENIED",
+  "requestDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  "requestId": "request-authorization-denied",
+  "correlationId": "correlation-authorization-denied",
+  "occurredAt": "2026-08-25T03:05:06.000000Z"
+}

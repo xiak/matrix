@@ -1,0 +1,10 @@
+{
+  "apiVersion": "iam.matrix.xiak.com/v1",
+  "kind": "Organization",
+  "id": "organization-example",
+  "displayName": "Example Organization",
+  "status": "ACTIVE",
+  "resourceVersion": 1,
+  "createdAt": "2026-08-25T01:02:03.000000Z",
+  "updatedAt": "2026-08-25T01:02:03.000000Z"
+}

@@ -1,0 +1,9 @@
+{
+  "apiVersion": "iam.matrix.xiak.com/v1",
+  "kind": "BootstrapStatus",
+  "state": "READY",
+  "installationId": "installation-example",
+  "organizationId": "organization-example",
+  "contentDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "appliedAt": "2026-08-25T01:02:03.000000Z"
+}

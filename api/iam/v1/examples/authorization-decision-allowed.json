@@ -1,0 +1,19 @@
+{
+  "apiVersion": "iam.matrix.xiak.com/v1",
+  "kind": "AuthorizationDecision",
+  "id": "decision-allowed",
+  "allowed": true,
+  "reason": "ALLOWED",
+  "tenantId": "organization-example",
+  "subject": {
+    "type": "USER",
+    "id": "principal-developer"
+  },
+  "action": "paas.deployment.create",
+  "resource": {
+    "kind": "DEPLOYMENT",
+    "id": "deployment-example"
+  },
+  "requestId": "request-authorize",
+  "decidedAt": "2026-08-25T02:07:08.000000Z"
+}

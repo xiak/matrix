@@ -1,0 +1,37 @@
+{
+  "apiVersion": "iam.matrix.xiak.com/v1",
+  "kind": "IAMBootstrap",
+  "installationId": "installation-example",
+  "organization": {
+    "id": "organization-example",
+    "displayName": "Example Organization"
+  },
+  "administrator": {
+    "id": "principal-admin",
+    "loginName": "admin",
+    "displayName": "Initial Administrator",
+    "password": "Example-Only-Admin-Password-49!"
+  },
+  "services": [
+    {
+      "purpose": "PAAS",
+      "principalId": "service-paas",
+      "credential": "example-only-paas-credential-0000000000000001"
+    },
+    {
+      "purpose": "AUDIT",
+      "principalId": "service-audit",
+      "credential": "example-only-audit-credential-0000000000000001"
+    },
+    {
+      "purpose": "APISIX",
+      "principalId": "service-apisix",
+      "credential": "example-only-apisix-credential-0000000000000001"
+    },
+    {
+      "purpose": "INSTALLATION_VERIFIER",
+      "principalId": "service-installation-verifier",
+      "credential": "example-only-verifier-credential-00000000000001"
+    }
+  ]
+}

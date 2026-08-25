@@ -1,0 +1,7 @@
+{
+  "apiVersion": "iam.matrix.xiak.com/v1",
+  "kind": "Revocation",
+  "id": "binding-developer",
+  "resourceVersion": 2,
+  "revokedAt": "2026-08-25T02:06:07.000000Z"
+}

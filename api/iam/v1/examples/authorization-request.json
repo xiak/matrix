@@ -1,0 +1,9 @@
+{
+  "action": "paas.deployment.create",
+  "resource": {
+    "kind": "DEPLOYMENT",
+    "id": "deployment-example"
+  },
+  "requestId": "request-authorize",
+  "correlationId": "correlation-authorize"
+}

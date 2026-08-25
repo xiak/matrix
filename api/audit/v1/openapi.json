@@ -1,0 +1,1912 @@
+{
+  "components": {
+    "responses": {
+      "ProblemResponse": {
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        },
+        "description": "Normalized RFC 9457-style Audit problem."
+      }
+    },
+    "schemas": {
+      "Action": {
+        "enum": [
+          "iam.bootstrap.applied",
+          "iam.session.issued",
+          "iam.session.revoked",
+          "iam.password.changed",
+          "iam.principal.created",
+          "iam.role-binding.put",
+          "iam.role-binding.revoked",
+          "iam.authorization.decided",
+          "paas.application.created",
+          "paas.configuration.created",
+          "paas.configuration-revision.created",
+          "paas.application-revision.created",
+          "paas.deployment.created",
+          "paas.deployment.updated",
+          "paas.deployment.stopped",
+          "paas.deployment.rolled-back",
+          "audit.records.read",
+          "audit.integrity.verified"
+        ],
+        "type": "string"
+      },
+      "ActorID": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ID"
+          }
+        ]
+      },
+      "ActorReference": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "type": {
+            "$ref": "#/components/schemas/ActorType"
+          }
+        },
+        "required": [
+          "id",
+          "type"
+        ],
+        "type": "object"
+      },
+      "ActorType": {
+        "enum": [
+          "USER",
+          "SERVICE_ACCOUNT",
+          "SYSTEM"
+        ],
+        "type": "string"
+      },
+      "AuditRecord": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.bootstrap.applied"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.session.issued"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.session.revoked"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.password.changed"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.principal.created"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.role-binding.put"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.role-binding.revoked"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.authorization.decided"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "paas.application.created"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "PAAS"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "paas.configuration.created"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "PAAS"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "paas.configuration-revision.created"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "PAAS"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "paas.application-revision.created"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "PAAS"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "paas.deployment.created"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "PAAS"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "paas.deployment.updated"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "PAAS"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "paas.deployment.stopped"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "PAAS"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "paas.deployment.rolled-back"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "PAAS"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "audit.records.read"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "AUDIT"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "audit.integrity.verified"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "AUDIT"
+                }
+              }
+            }
+          }
+        ],
+        "properties": {
+          "apiVersion": {
+            "const": "audit.matrix.xiak.com/v1"
+          },
+          "contentDigest": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "event": {
+            "$ref": "#/components/schemas/Event"
+          },
+          "ingestedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "kind": {
+            "const": "AuditRecord"
+          },
+          "previousHash": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "recordHash": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "retention": {
+            "$ref": "#/components/schemas/RetentionPolicy"
+          },
+          "sequence": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "source": {
+            "$ref": "#/components/schemas/Source"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "contentDigest",
+          "event",
+          "ingestedAt",
+          "kind",
+          "previousHash",
+          "recordHash",
+          "retention",
+          "sequence",
+          "source"
+        ],
+        "type": "object"
+      },
+      "ChainVerification": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "complete": {
+                  "const": true
+                }
+              },
+              "required": [
+                "complete"
+              ]
+            },
+            "then": {
+              "properties": {
+                "nextSequence": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "complete": {
+                  "const": false
+                }
+              },
+              "required": [
+                "complete"
+              ]
+            },
+            "then": {
+              "required": [
+                "nextSequence"
+              ]
+            }
+          }
+        ],
+        "properties": {
+          "apiVersion": {
+            "const": "audit.matrix.xiak.com/v1"
+          },
+          "complete": {
+            "type": "boolean"
+          },
+          "firstPreviousHash": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "fromSequence": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "kind": {
+            "const": "ChainVerification"
+          },
+          "lastRecordHash": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "nextSequence": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "recordCount": {
+            "maximum": 10000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/components/schemas/VerificationState"
+          },
+          "tenantId": {
+            "$ref": "#/components/schemas/TenantID"
+          },
+          "toSequence": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "verifiedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "complete",
+          "firstPreviousHash",
+          "fromSequence",
+          "kind",
+          "lastRecordHash",
+          "recordCount",
+          "state",
+          "tenantId",
+          "toSequence",
+          "verifiedAt"
+        ],
+        "type": "object"
+      },
+      "Cursor": {
+        "maxLength": 4096,
+        "minLength": 64,
+        "pattern": "^v1\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]{43}$",
+        "type": "string"
+      },
+      "DecisionID": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ID"
+          }
+        ]
+      },
+      "Digest": {
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "Event": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.bootstrap.applied"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "iamDecisionId": false,
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "INSTALLATION"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.session.issued"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "iamDecisionId": false,
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "SESSION"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.session.revoked"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "SESSION"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.password.changed"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "iamDecisionId": false,
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "PRINCIPAL"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.principal.created"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "PRINCIPAL"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "iamDecisionId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.role-binding.put"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "ROLE_BINDING"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "iamDecisionId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.role-binding.revoked"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "ROLE_BINDING"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "iamDecisionId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.authorization.decided"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "ALLOWED",
+                    "DENIED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "AUTHORIZATION_DECISION"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "iamDecisionId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.application.created"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "APPLICATION"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "iamDecisionId",
+                "operationId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.configuration.created"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "CONFIGURATION"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "iamDecisionId",
+                "operationId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.configuration-revision.created"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "CONFIGURATION_REVISION"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "iamDecisionId",
+                "operationId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.application-revision.created"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "APPLICATION_REVISION"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "iamDecisionId",
+                "operationId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.deployment.created"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "result": {
+                  "enum": [
+                    "ACCEPTED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "DEPLOYMENT"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "iamDecisionId",
+                "operationId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.deployment.updated"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "result": {
+                  "enum": [
+                    "ACCEPTED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "DEPLOYMENT"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "iamDecisionId",
+                "operationId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.deployment.stopped"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "result": {
+                  "enum": [
+                    "ACCEPTED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "DEPLOYMENT"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "iamDecisionId",
+                "operationId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.deployment.rolled-back"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "result": {
+                  "enum": [
+                    "ACCEPTED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "DEPLOYMENT"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "iamDecisionId",
+                "operationId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "audit.records.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "AUDIT_RECORDS"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "iamDecisionId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "audit.integrity.verified"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "AUDIT_CHAIN"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "iamDecisionId"
+              ]
+            }
+          }
+        ],
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/Action"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/ActorReference"
+          },
+          "apiVersion": {
+            "const": "audit.matrix.xiak.com/v1"
+          },
+          "correlationId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "eventId": {
+            "$ref": "#/components/schemas/EventID"
+          },
+          "iamDecisionId": {
+            "$ref": "#/components/schemas/DecisionID"
+          },
+          "kind": {
+            "const": "AuditEvent"
+          },
+          "occurredAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "operationId": {
+            "$ref": "#/components/schemas/OperationID"
+          },
+          "requestDigest": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "result": {
+            "$ref": "#/components/schemas/Result"
+          },
+          "target": {
+            "$ref": "#/components/schemas/TargetReference"
+          },
+          "tenantId": {
+            "$ref": "#/components/schemas/TenantID"
+          },
+          "traceparent": {
+            "maxLength": 55,
+            "minLength": 55,
+            "pattern": "^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "actor",
+          "apiVersion",
+          "correlationId",
+          "eventId",
+          "kind",
+          "occurredAt",
+          "requestDigest",
+          "requestId",
+          "result",
+          "target",
+          "tenantId"
+        ],
+        "type": "object"
+      },
+      "EventID": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ID"
+          }
+        ]
+      },
+      "ID": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+        "type": "string"
+      },
+      "IngestionOutcome": {
+        "enum": [
+          "ACCEPTED",
+          "DUPLICATE"
+        ],
+        "type": "string"
+      },
+      "IngestionResult": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "audit.matrix.xiak.com/v1"
+          },
+          "kind": {
+            "const": "IngestionResult"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/IngestionOutcome"
+          },
+          "record": {
+            "$ref": "#/components/schemas/AuditRecord"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "outcome",
+          "record"
+        ],
+        "type": "object"
+      },
+      "OperationID": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ID"
+          }
+        ]
+      },
+      "Problem": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "status": {
+            "maximum": 599,
+            "minimum": 400,
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "type": {
+            "format": "uri",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "requestId",
+          "status",
+          "title",
+          "type"
+        ],
+        "type": "object"
+      },
+      "QueryRecordsRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/Action"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/ActorReference"
+          },
+          "cursor": {
+            "$ref": "#/components/schemas/Cursor"
+          },
+          "from": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "pageSize": {
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "to": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "pageSize"
+        ],
+        "type": "object"
+      },
+      "Readiness": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "audit.matrix.xiak.com/v1"
+          },
+          "checkedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "kind": {
+            "const": "Readiness"
+          },
+          "schemaVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ReadinessState"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "checkedAt",
+          "kind",
+          "schemaVersion",
+          "state"
+        ],
+        "type": "object"
+      },
+      "ReadinessState": {
+        "enum": [
+          "READY",
+          "NOT_READY"
+        ],
+        "type": "string"
+      },
+      "RecordPage": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "audit.matrix.xiak.com/v1"
+          },
+          "kind": {
+            "const": "AuditRecordPage"
+          },
+          "nextCursor": {
+            "$ref": "#/components/schemas/Cursor"
+          },
+          "records": {
+            "items": {
+              "$ref": "#/components/schemas/AuditRecord"
+            },
+            "maxItems": 200,
+            "type": "array"
+          },
+          "tenantId": {
+            "$ref": "#/components/schemas/TenantID"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "records",
+          "tenantId"
+        ],
+        "type": "object"
+      },
+      "Result": {
+        "enum": [
+          "SUCCEEDED",
+          "ALLOWED",
+          "DENIED",
+          "ACCEPTED"
+        ],
+        "type": "string"
+      },
+      "RetentionPolicy": {
+        "enum": [
+          "INDEFINITE"
+        ],
+        "type": "string"
+      },
+      "Source": {
+        "enum": [
+          "IAM",
+          "PAAS",
+          "AUDIT"
+        ],
+        "type": "string"
+      },
+      "TargetKind": {
+        "enum": [
+          "INSTALLATION",
+          "SESSION",
+          "PRINCIPAL",
+          "ROLE_BINDING",
+          "AUTHORIZATION_DECISION",
+          "APPLICATION",
+          "CONFIGURATION",
+          "CONFIGURATION_REVISION",
+          "APPLICATION_REVISION",
+          "DEPLOYMENT",
+          "AUDIT_RECORDS",
+          "AUDIT_CHAIN"
+        ],
+        "type": "string"
+      },
+      "TargetReference": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/TargetKind"
+          }
+        },
+        "required": [
+          "id",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "TenantID": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ID"
+          }
+        ]
+      },
+      "Timestamp": {
+        "format": "date-time",
+        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{6}Z$",
+        "type": "string"
+      },
+      "VerificationState": {
+        "enum": [
+          "VERIFIED"
+        ],
+        "type": "string"
+      },
+      "VerifyChainRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "fromSequence": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "maximumRecords": {
+            "maximum": 10000,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "fromSequence",
+          "maximumRecords"
+        ],
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "ServiceCredential": {
+        "description": "Opaque IAM service credential that determines the Audit event source.",
+        "scheme": "bearer",
+        "type": "http"
+      },
+      "UserSession": {
+        "description": "Opaque IAM user session. Audit derives tenant and subject by calling IAM.",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "title": "Matrix Audit v1 contracts",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/ready": {
+      "get": {
+        "operationId": "getAuditReadiness",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Readiness"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [],
+        "summary": "Get Audit readiness"
+      }
+    },
+    "/v1/events": {
+      "post": {
+        "operationId": "ingestAuditEvent",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Event"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestionResult"
+                }
+              }
+            },
+            "description": "Equal event replay."
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestionResult"
+                }
+              }
+            },
+            "description": "New event accepted."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [
+          {
+            "ServiceCredential": []
+          }
+        ],
+        "summary": "Ingest a sanitized event from its authenticated source"
+      }
+    },
+    "/v1/integrity:verify": {
+      "post": {
+        "operationId": "verifyAuditChain",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyChainRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChainVerification"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [
+          {
+            "UserSession": []
+          }
+        ],
+        "summary": "Verify a bounded segment of the IAM-derived tenant's chain"
+      }
+    },
+    "/v1/records:query": {
+      "post": {
+        "operationId": "queryAuditRecords",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueryRecordsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordPage"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [
+          {
+            "UserSession": []
+          }
+        ],
+        "summary": "Query the IAM-derived tenant's Audit records"
+      }
+    }
+  },
+  "security": [
+    {
+      "UserSession": []
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "type": "https://errors.matrix.xiak.com/audit/invalid-request",
+  "title": "Invalid request",
+  "status": 400,
+  "code": "audit.request.invalid",
+  "detail": "The request does not satisfy the Audit v1 contract.",
+  "requestId": "request-invalid"
+}

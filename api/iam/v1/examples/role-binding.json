@@ -1,0 +1,11 @@
+{
+  "apiVersion": "iam.matrix.xiak.com/v1",
+  "kind": "RoleBinding",
+  "id": "binding-developer",
+  "organizationId": "organization-example",
+  "principalId": "principal-developer",
+  "role": "PAAS_DEVELOPER",
+  "resourceVersion": 1,
+  "createdAt": "2026-08-25T02:05:06.000000Z",
+  "updatedAt": "2026-08-25T02:05:06.000000Z"
+}

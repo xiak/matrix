@@ -1,0 +1,14 @@
+{
+  "apiVersion": "iam.matrix.xiak.com/v1",
+  "kind": "Principal",
+  "id": "principal-developer",
+  "organizationId": "organization-example",
+  "type": "USER",
+  "loginName": "developer",
+  "displayName": "Example Developer",
+  "status": "ACTIVE",
+  "mustChangePassword": true,
+  "resourceVersion": 1,
+  "createdAt": "2026-08-25T02:04:05.000000Z",
+  "updatedAt": "2026-08-25T02:04:05.000000Z"
+}

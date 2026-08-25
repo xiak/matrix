@@ -1,0 +1,8 @@
+{
+  "type": "https://errors.matrix.xiak.com/iam/invalid-request",
+  "title": "Invalid request",
+  "status": 400,
+  "code": "iam.request.invalid",
+  "detail": "The request does not satisfy the IAM v1 contract.",
+  "requestId": "request-invalid"
+}
