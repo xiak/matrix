@@ -136,6 +136,14 @@
   denial, digest-only secret storage, and the IAM Audit outbox fact. IAM
   management commands, the runnable process, Audit delivery/service, and PaaS
   clients remain pending, so Gate B is not accepted.
+  IAM management is pushed in `7073479`: all current OpenAPI commands now use
+  the same session/RBAC/use-case/PostgreSQL/HTTP path for logout, password
+  change, user creation, role binding, and binding/session revocation. A fresh
+  PostgreSQL 18 race run proves old-password rejection, first-password gating,
+  immediate role/session revocation, audited role denial, cross-tenant
+  rejection, digest-only storage, and exact decision/outbox cardinality. IAM
+  still lacks its runnable process and Audit dispatcher, and Audit/PaaS remain
+  unwired, so Gate B is not accepted.
 - The FEAT-004 accepted worktree passed its schema and real-runtime gates.
   Clean PostgreSQL 18 runs applied the migration twice, ran the verifier, used
   non-bypass API/worker logins, attacked RLS and cross-role privileges,
