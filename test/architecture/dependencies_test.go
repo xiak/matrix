@@ -202,6 +202,89 @@ func TestPaaSApphostingBusinessTypesAvoidAmbiguousNames(t *testing.T) {
 	}
 }
 
+func TestInstallationKeepsGoOnlyClosedLifecycleBoundaries(t *testing.T) {
+	root := repositoryRoot(t)
+	installationRoot := filepath.Join(root, "app", "service", "installation")
+	allowedExternal := map[string]struct{}{
+		"github.com/spf13/cobra":   {},
+		"github.com/spf13/pflag":   {},
+		"golang.org/x/sys/unix":    {},
+		"golang.org/x/sys/windows": {},
+	}
+	err := filepath.WalkDir(installationRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		relative = filepath.ToSlash(relative)
+		switch strings.ToLower(filepath.Ext(path)) {
+		case ".py", ".sh", ".ps1", ".bat", ".cmd":
+			t.Errorf("%s: installation lifecycle product code must be Go", relative)
+			return nil
+		case ".go":
+		default:
+			return nil
+		}
+
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		if err != nil {
+			return err
+		}
+		osAliases := make(map[string]struct{})
+		for _, declaration := range file.Imports {
+			imported, err := strconv.Unquote(declaration.Path.Value)
+			if err != nil {
+				return err
+			}
+			if strings.HasPrefix(imported, "k8s.io/") {
+				t.Errorf("%s: installation command cannot import Kubernetes CLI closure %q", relative, imported)
+			}
+			if strings.Contains(strings.Split(imported, "/")[0], ".") &&
+				!strings.HasPrefix(imported, modulePath) {
+				if _, allowed := allowedExternal[imported]; !allowed {
+					t.Errorf("%s: installation has unapproved external dependency %q", relative, imported)
+				}
+			}
+			if imported == "os" {
+				alias := "os"
+				if declaration.Name != nil {
+					alias = declaration.Name.Name
+				}
+				osAliases[alias] = struct{}{}
+			}
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			selector, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || selector.Sel.Name != "Exit" {
+				return true
+			}
+			identifier, ok := selector.X.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			if _, isOS := osAliases[identifier.Name]; isOS &&
+				relative != "app/service/installation/cmd/mx/main.go" {
+				t.Errorf("%s: only the mx process entry point may call os.Exit", relative)
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("inspect installation dependencies: %v", err)
+	}
+}
+
 func assertApphostingDDDDependency(t *testing.T, source, imported string) {
 	t.Helper()
 	const contextPrefix = modulePath + "app/service/paas/internal/apphosting/"

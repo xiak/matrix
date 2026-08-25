@@ -1,0 +1,501 @@
+// Package lifecycle owns the compact, provider-neutral installation journal
+// state machine. Provider effects and persistence stay outside this package.
+package lifecycle
+
+import (
+	"errors"
+	"fmt"
+	"regexp"
+	"time"
+)
+
+const APIVersion = "installation.matrix.xiak.com/v1"
+
+var (
+	ErrCommandConflict   = errors.New("installation command identity conflicts with stored input")
+	ErrCommandInProgress = errors.New("another installation command is in progress")
+	ErrInvalidTransition = errors.New("installation phase transition is invalid")
+	ErrPrecondition      = errors.New("installation lifecycle precondition failed")
+)
+
+type Action string
+
+const (
+	ActionInstall  Action = "INSTALL"
+	ActionVerify   Action = "VERIFY"
+	ActionStatus   Action = "STATUS"
+	ActionBackup   Action = "BACKUP"
+	ActionUpgrade  Action = "UPGRADE"
+	ActionRollback Action = "ROLLBACK"
+	ActionRecover  Action = "RECOVER"
+	ActionSupport  Action = "SUPPORT"
+)
+
+type Phase string
+
+const (
+	PhasePreflight          Phase = "PREFLIGHT"
+	PhaseBackingUp          Phase = "BACKING_UP"
+	PhaseStaging            Phase = "STAGING"
+	PhaseLoadingImages      Phase = "LOADING_IMAGES"
+	PhaseConfiguring        Phase = "CONFIGURING"
+	PhaseMigrating          Phase = "MIGRATING"
+	PhaseStarting           Phase = "STARTING"
+	PhaseVerifying          Phase = "VERIFYING"
+	PhaseCommitting         Phase = "COMMITTING"
+	PhaseRollingBack        Phase = "ROLLING_BACK"
+	PhaseRecovering         Phase = "RECOVERING"
+	PhaseReady              Phase = "READY"
+	PhaseManualIntervention Phase = "MANUAL_INTERVENTION"
+)
+
+type Outcome string
+
+const (
+	OutcomeSucceeded          Outcome = "SUCCEEDED"
+	OutcomeFailed             Outcome = "FAILED"
+	OutcomeRolledBack         Outcome = "ROLLED_BACK"
+	OutcomeManualIntervention Outcome = "MANUAL_INTERVENTION"
+)
+
+type Replay string
+
+const (
+	ReplayNone      Replay = "NONE"
+	ReplayActive    Replay = "ACTIVE"
+	ReplayCompleted Replay = "COMPLETED"
+)
+
+type Command struct {
+	ID              string    `json:"id"`
+	Action          Action    `json:"action"`
+	InputDigest     string    `json:"inputDigest,omitempty"`
+	TargetReleaseID string    `json:"targetReleaseId,omitempty"`
+	BackupID        string    `json:"backupId,omitempty"`
+	RequestedAt     time.Time `json:"requestedAt"`
+}
+
+type Execution struct {
+	Command       Command   `json:"command"`
+	Phase         Phase     `json:"phase"`
+	Outcome       Outcome   `json:"outcome,omitempty"`
+	FailureCode   string    `json:"failureCode,omitempty"`
+	StartedAt     time.Time `json:"startedAt"`
+	UpdatedAt     time.Time `json:"updatedAt"`
+	CompletedAt   time.Time `json:"completedAt,omitempty"`
+	SourceRelease string    `json:"sourceRelease,omitempty"`
+	Destination   string    `json:"destinationRelease,omitempty"`
+}
+
+type Journal struct {
+	APIVersion       string     `json:"apiVersion"`
+	Version          uint64     `json:"version"`
+	InstallationID   string     `json:"installationId"`
+	CurrentReleaseID string     `json:"currentReleaseId,omitempty"`
+	PreviousRelease  string     `json:"previousReleaseId,omitempty"`
+	Active           *Execution `json:"active,omitempty"`
+	Last             *Execution `json:"last,omitempty"`
+}
+
+type StartResult struct {
+	Journal   Journal
+	Execution Execution
+	Replay    Replay
+}
+
+var (
+	installationIDPattern = regexp.MustCompile(`^mxi-[0-9a-f]{32}$`)
+	commandIDPattern      = regexp.MustCompile(`^cmd-[0-9a-f]{32}$`)
+	releaseIDPattern      = regexp.MustCompile(`^matrix-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z](?:[0-9A-Za-z.-]{0,62}[0-9A-Za-z])?)?-[0-9a-f]{12}$`)
+	backupIDPattern       = regexp.MustCompile(`^backup-[0-9a-f]{32}$`)
+	digestPattern         = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	failureCodePattern    = regexp.MustCompile(`^[A-Z][A-Z0-9_]{2,63}$`)
+)
+
+func New(installationID string) (Journal, error) {
+	journal := Journal{APIVersion: APIVersion, Version: 1, InstallationID: installationID}
+	if err := ValidateJournal(journal); err != nil {
+		return Journal{}, err
+	}
+	return journal, nil
+}
+
+func ValidateInstallationID(value string) error {
+	if !installationIDPattern.MatchString(value) {
+		return errors.New("installation identity is invalid")
+	}
+	return nil
+}
+
+func Start(journal Journal, command Command) (StartResult, error) {
+	if err := ValidateJournal(journal); err != nil {
+		return StartResult{}, fmt.Errorf("stored installation journal is invalid: %w", err)
+	}
+	if err := validateCommand(command); err != nil {
+		return StartResult{}, err
+	}
+	if journal.Active != nil {
+		if journal.Active.Command.ID != command.ID {
+			return StartResult{}, ErrCommandInProgress
+		}
+		if !sameCommandInput(journal.Active.Command, command) {
+			return StartResult{}, ErrCommandConflict
+		}
+		return StartResult{Journal: journal, Execution: *journal.Active, Replay: ReplayActive}, nil
+	}
+	if journal.Last != nil && journal.Last.Command.ID == command.ID {
+		if !sameCommandInput(journal.Last.Command, command) {
+			return StartResult{}, ErrCommandConflict
+		}
+		return StartResult{Journal: journal, Execution: *journal.Last, Replay: ReplayCompleted}, nil
+	}
+	if err := validateActionPrecondition(journal, command); err != nil {
+		return StartResult{}, err
+	}
+	execution := Execution{
+		Command:       command,
+		Phase:         workflow(command.Action)[0],
+		StartedAt:     command.RequestedAt,
+		UpdatedAt:     command.RequestedAt,
+		SourceRelease: journal.CurrentReleaseID,
+		Destination:   command.TargetReleaseID,
+	}
+	if command.Action == ActionRollback {
+		execution.Destination = journal.PreviousRelease
+	}
+	journal.Version++
+	journal.Active = &execution
+	return StartResult{Journal: journal, Execution: execution, Replay: ReplayNone}, nil
+}
+
+func Advance(journal Journal, commandID string, next Phase, at time.Time) (Journal, error) {
+	if err := ValidateJournal(journal); err != nil {
+		return Journal{}, fmt.Errorf("stored installation journal is invalid: %w", err)
+	}
+	if journal.Active == nil || journal.Active.Command.ID != commandID {
+		return Journal{}, ErrCommandConflict
+	}
+	if !canonicalTime(at) || !at.After(journal.Active.UpdatedAt) {
+		return Journal{}, ErrInvalidTransition
+	}
+	execution := *journal.Active
+	if execution.FailureCode != "" && execution.Phase == PhaseRollingBack {
+		if next != PhaseReady {
+			return Journal{}, ErrInvalidTransition
+		}
+		execution.Phase = next
+		execution.UpdatedAt = at
+		execution.CompletedAt = at
+		execution.Outcome = OutcomeRolledBack
+		journal.Version++
+		journal.Active = nil
+		journal.Last = &execution
+		return journal, nil
+	}
+	sequence := workflow(execution.Command.Action)
+	index := phaseIndex(sequence, execution.Phase)
+	if index < 0 || index+1 >= len(sequence) || sequence[index+1] != next {
+		return Journal{}, ErrInvalidTransition
+	}
+	execution.Phase = next
+	execution.UpdatedAt = at
+	journal.Version++
+	if next == PhaseReady {
+		execution.Outcome = OutcomeSucceeded
+		execution.CompletedAt = at
+		applySuccessfulPointerChange(&journal, execution)
+		journal.Active = nil
+		journal.Last = &execution
+		return journal, nil
+	}
+	journal.Active = &execution
+	return journal, nil
+}
+
+// Fail records a normalized failure. Install and upgrade enter an explicit
+// rollback intent before any cleanup effect. Read-only/backup failures finish
+// without changing release pointers. A failed rollback or recovery requires
+// an operator decision and is terminally recorded as manual intervention.
+func Fail(journal Journal, commandID, failureCode string, at time.Time) (Journal, error) {
+	if err := ValidateJournal(journal); err != nil {
+		return Journal{}, fmt.Errorf("stored installation journal is invalid: %w", err)
+	}
+	if journal.Active == nil || journal.Active.Command.ID != commandID ||
+		!failureCodePattern.MatchString(failureCode) || !canonicalTime(at) ||
+		!at.After(journal.Active.UpdatedAt) {
+		return Journal{}, ErrInvalidTransition
+	}
+	execution := *journal.Active
+	execution.FailureCode = failureCode
+	execution.UpdatedAt = at
+	journal.Version++
+	switch execution.Command.Action {
+	case ActionInstall, ActionUpgrade:
+		if execution.Phase == PhaseCommitting || execution.Phase == PhaseRollingBack {
+			return finishManual(journal, execution, at), nil
+		}
+		execution.Phase = PhaseRollingBack
+		journal.Active = &execution
+		return journal, nil
+	case ActionRollback, ActionRecover:
+		return finishManual(journal, execution, at), nil
+	case ActionVerify, ActionStatus, ActionBackup, ActionSupport:
+		execution.Outcome = OutcomeFailed
+		execution.CompletedAt = at
+		journal.Active = nil
+		journal.Last = &execution
+		return journal, nil
+	default:
+		return Journal{}, ErrInvalidTransition
+	}
+}
+
+func ValidateJournal(journal Journal) error {
+	var problems []error
+	if journal.APIVersion != APIVersion || journal.Version == 0 || journal.Version > 9007199254740991 ||
+		!installationIDPattern.MatchString(journal.InstallationID) {
+		problems = append(problems, errors.New("installation journal identity is invalid"))
+	}
+	if journal.CurrentReleaseID != "" && !releaseIDPattern.MatchString(journal.CurrentReleaseID) {
+		problems = append(problems, errors.New("current release identity is invalid"))
+	}
+	if journal.PreviousRelease != "" && (!releaseIDPattern.MatchString(journal.PreviousRelease) ||
+		journal.PreviousRelease == journal.CurrentReleaseID || journal.CurrentReleaseID == "") {
+		problems = append(problems, errors.New("previous release identity is invalid"))
+	}
+	if journal.Active != nil {
+		problems = append(problems, validateExecution(*journal.Active, false))
+		if journal.CurrentReleaseID != journal.Active.SourceRelease {
+			problems = append(problems, errors.New("active command source does not match the current release"))
+		}
+	}
+	if journal.Last != nil {
+		problems = append(problems, validateExecution(*journal.Last, true))
+		problems = append(problems, validateCompletedPointers(journal, *journal.Last))
+	}
+	if journal.Active != nil && journal.Last != nil &&
+		journal.Active.Command.ID == journal.Last.Command.ID {
+		problems = append(problems, errors.New("active and completed command identities collide"))
+	}
+	return errors.Join(problems...)
+}
+
+func validateCommand(command Command) error {
+	if !commandIDPattern.MatchString(command.ID) || !canonicalTime(command.RequestedAt) {
+		return errors.New("installation command identity or time is invalid")
+	}
+	switch command.Action {
+	case ActionInstall, ActionUpgrade:
+		if !digestPattern.MatchString(command.InputDigest) ||
+			!releaseIDPattern.MatchString(command.TargetReleaseID) || command.BackupID != "" {
+			return errors.New("release-changing command input is invalid")
+		}
+	case ActionRecover:
+		if command.InputDigest != "" || !releaseIDPattern.MatchString(command.TargetReleaseID) ||
+			!backupIDPattern.MatchString(command.BackupID) {
+			return errors.New("recovery command input is invalid")
+		}
+	case ActionVerify, ActionStatus, ActionBackup, ActionRollback, ActionSupport:
+		if command.InputDigest != "" || command.TargetReleaseID != "" || command.BackupID != "" {
+			return errors.New("installation command contains unrelated input")
+		}
+	default:
+		return errors.New("installation command action is unsupported")
+	}
+	return nil
+}
+
+func validateActionPrecondition(journal Journal, command Command) error {
+	switch command.Action {
+	case ActionInstall:
+		if journal.CurrentReleaseID != "" || journal.PreviousRelease != "" {
+			return ErrPrecondition
+		}
+	case ActionUpgrade:
+		if journal.CurrentReleaseID == "" || command.TargetReleaseID == journal.CurrentReleaseID {
+			return ErrPrecondition
+		}
+	case ActionRollback:
+		if journal.CurrentReleaseID == "" || journal.PreviousRelease == "" {
+			return ErrPrecondition
+		}
+	case ActionVerify, ActionStatus, ActionBackup, ActionSupport:
+		if journal.CurrentReleaseID == "" {
+			return ErrPrecondition
+		}
+	case ActionRecover:
+		// Recovery may initialize an empty root from a verified installation-
+		// owned backup or replace an existing damaged installation.
+	}
+	return nil
+}
+
+func validateExecution(execution Execution, completed bool) error {
+	var problems []error
+	problems = append(problems, validateCommand(execution.Command))
+	if !canonicalTime(execution.StartedAt) || !canonicalTime(execution.UpdatedAt) ||
+		execution.StartedAt != execution.Command.RequestedAt || execution.UpdatedAt.Before(execution.StartedAt) {
+		problems = append(problems, errors.New("installation execution time is invalid"))
+	}
+	if execution.SourceRelease != "" && !releaseIDPattern.MatchString(execution.SourceRelease) {
+		problems = append(problems, errors.New("installation source release is invalid"))
+	}
+	switch execution.Command.Action {
+	case ActionInstall, ActionUpgrade, ActionRecover:
+		if execution.Destination != execution.Command.TargetReleaseID ||
+			!releaseIDPattern.MatchString(execution.Destination) {
+			problems = append(problems, errors.New("installation destination release is invalid"))
+		}
+	case ActionRollback:
+		if !releaseIDPattern.MatchString(execution.Destination) ||
+			execution.Destination == execution.SourceRelease {
+			problems = append(problems, errors.New("rollback destination release is invalid"))
+		}
+	default:
+		if execution.Destination != "" {
+			problems = append(problems, errors.New("non-release command has a destination release"))
+		}
+	}
+	if execution.Command.Action == ActionInstall && execution.SourceRelease != "" {
+		problems = append(problems, errors.New("install command has a source release"))
+	}
+	if execution.Command.Action != ActionInstall && execution.Command.Action != ActionRecover &&
+		execution.SourceRelease == "" {
+		problems = append(problems, errors.New("installed command lacks a source release"))
+	}
+	if completed {
+		if execution.Outcome != OutcomeSucceeded && execution.Outcome != OutcomeFailed &&
+			execution.Outcome != OutcomeRolledBack && execution.Outcome != OutcomeManualIntervention {
+			problems = append(problems, errors.New("completed installation outcome is invalid"))
+		}
+		switch execution.Outcome {
+		case OutcomeSucceeded, OutcomeRolledBack:
+			if execution.Phase != PhaseReady {
+				problems = append(problems, errors.New("successful installation execution is not ready"))
+			}
+		case OutcomeFailed:
+			if phaseIndex(workflow(execution.Command.Action), execution.Phase) < 0 || execution.Phase == PhaseReady {
+				problems = append(problems, errors.New("failed installation execution phase is invalid"))
+			}
+		case OutcomeManualIntervention:
+			if execution.Phase != PhaseManualIntervention {
+				problems = append(problems, errors.New("manual installation execution phase is invalid"))
+			}
+		}
+		if !canonicalTime(execution.CompletedAt) || execution.CompletedAt != execution.UpdatedAt {
+			problems = append(problems, errors.New("completed installation time is invalid"))
+		}
+	} else {
+		if phaseIndex(workflow(execution.Command.Action), execution.Phase) < 0 &&
+			execution.Phase != PhaseRollingBack {
+			problems = append(problems, errors.New("active installation execution phase is invalid"))
+		}
+		if execution.Outcome != "" || !execution.CompletedAt.IsZero() {
+			problems = append(problems, errors.New("active installation execution is terminal"))
+		}
+		if execution.Phase == PhaseRollingBack &&
+			(execution.Command.Action == ActionInstall || execution.Command.Action == ActionUpgrade) &&
+			execution.FailureCode == "" {
+			problems = append(problems, errors.New("installation rollback intent lacks a failure"))
+		}
+	}
+	if execution.FailureCode != "" && !failureCodePattern.MatchString(execution.FailureCode) {
+		problems = append(problems, errors.New("installation failure code is invalid"))
+	}
+	return errors.Join(problems...)
+}
+
+func sameCommandInput(left, right Command) bool {
+	return left.ID == right.ID && left.Action == right.Action &&
+		left.InputDigest == right.InputDigest && left.TargetReleaseID == right.TargetReleaseID &&
+		left.BackupID == right.BackupID
+}
+
+func workflow(action Action) []Phase {
+	switch action {
+	case ActionInstall:
+		return []Phase{PhasePreflight, PhaseStaging, PhaseLoadingImages, PhaseConfiguring,
+			PhaseMigrating, PhaseStarting, PhaseVerifying, PhaseCommitting, PhaseReady}
+	case ActionUpgrade:
+		return []Phase{PhasePreflight, PhaseBackingUp, PhaseStaging, PhaseLoadingImages,
+			PhaseConfiguring, PhaseMigrating, PhaseStarting, PhaseVerifying, PhaseCommitting, PhaseReady}
+	case ActionVerify, ActionStatus, ActionSupport:
+		return []Phase{PhaseVerifying, PhaseReady}
+	case ActionBackup:
+		return []Phase{PhaseBackingUp, PhaseReady}
+	case ActionRollback:
+		return []Phase{PhaseRollingBack, PhaseStarting, PhaseVerifying, PhaseCommitting, PhaseReady}
+	case ActionRecover:
+		return []Phase{PhaseRecovering, PhaseStarting, PhaseVerifying, PhaseCommitting, PhaseReady}
+	default:
+		return nil
+	}
+}
+
+func phaseIndex(phases []Phase, phase Phase) int {
+	for index, candidate := range phases {
+		if candidate == phase {
+			return index
+		}
+	}
+	return -1
+}
+
+func applySuccessfulPointerChange(journal *Journal, execution Execution) {
+	switch execution.Command.Action {
+	case ActionInstall:
+		journal.CurrentReleaseID = execution.Destination
+		journal.PreviousRelease = ""
+	case ActionUpgrade:
+		journal.PreviousRelease = execution.SourceRelease
+		journal.CurrentReleaseID = execution.Destination
+	case ActionRollback:
+		journal.CurrentReleaseID = execution.Destination
+		journal.PreviousRelease = ""
+	case ActionRecover:
+		journal.CurrentReleaseID = execution.Destination
+		journal.PreviousRelease = ""
+	}
+}
+
+func validateCompletedPointers(journal Journal, execution Execution) error {
+	switch execution.Outcome {
+	case OutcomeSucceeded:
+		switch execution.Command.Action {
+		case ActionInstall, ActionUpgrade, ActionRollback, ActionRecover:
+			if journal.CurrentReleaseID != execution.Destination {
+				return errors.New("successful command destination is not current")
+			}
+		default:
+			if journal.CurrentReleaseID != execution.SourceRelease {
+				return errors.New("read-only command changed the current release")
+			}
+		}
+		if execution.Command.Action == ActionUpgrade && journal.PreviousRelease != execution.SourceRelease {
+			return errors.New("successful upgrade did not retain its source release")
+		}
+		if (execution.Command.Action == ActionInstall || execution.Command.Action == ActionRollback ||
+			execution.Command.Action == ActionRecover) && journal.PreviousRelease != "" {
+			return errors.New("successful command retained an invalid previous release")
+		}
+	case OutcomeFailed, OutcomeRolledBack:
+		if journal.CurrentReleaseID != execution.SourceRelease {
+			return errors.New("failed command changed the current release")
+		}
+	}
+	return nil
+}
+
+func finishManual(journal Journal, execution Execution, at time.Time) Journal {
+	execution.Phase = PhaseManualIntervention
+	execution.Outcome = OutcomeManualIntervention
+	execution.CompletedAt = at
+	journal.Active = nil
+	journal.Last = &execution
+	return journal
+}
+
+func canonicalTime(value time.Time) bool {
+	return !value.IsZero() && value.Location() == time.UTC && value == value.Round(0) &&
+		value.Nanosecond()%1000 == 0
+}
