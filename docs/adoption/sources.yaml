@@ -1,5 +1,3 @@
-apiVersion: matrix.paas.io/v1alpha1
-kind: AdoptionSources
 sources:
   legacyPaas:
     repository: 'D:\XiaK\project\2026\matrix'

@@ -1,6 +1,6 @@
 # FEAT-004: Compose application execution
 
-- Status: Target design complete; donor review pending
+- Status: Donor review complete; implementation pending
 - Target release: Private Application PaaS v0.1
 - Executor contract version: `v1`
 - Target design date: 2026-08-25
@@ -33,7 +33,7 @@ implementation tactics only through a recorded adoption decision.
    and injected as environment variables. Conflicting keys fail before an
    external effect.
 6. Secret bindings carry only exact SecretVersionReference values. A
-   server-side SecretResolver supplies bounded bytes directly to an
+   server-side SecretResolver supplies at most 1 MiB directly to an
    installation-owned file; plaintext never enters PostgreSQL, Compose JSON,
    Operation, Evidence, receipt, logs, or support output.
 7. OCI artifacts remain identified publicly by digest. An internal
@@ -90,7 +90,7 @@ ApplicationRevision, required ConfigurationRevision documents, accepted
 PlacementDecision, and adapter command envelope. It contains secret references
 but no secret bytes. An observation binds Deployment, generation,
 ApplicationRevision, project receipt, component readiness, and normalized
-loopback endpoint bindings.
+network-local endpoint bindings.
 
 ## Minimal northbound workflow
 
@@ -144,7 +144,9 @@ MANUAL_INTERVENTION rather than infinite retry.
 The adapter derives a non-secret project key from tenant and Deployment IDs
 and confines all state below one validated absolute binding root. It writes
 deterministic Compose JSON and secret files atomically, with restrictive file
-permissions, then invokes only closed command forms.
+permissions, then invokes only closed command forms. It rejects symbolic-link
+components in the managed root, fsyncs atomic state updates, and holds a
+cross-process project lock around mutation and observation.
 
 Apply uses detached, non-interactive Compose with build and pulls disabled,
 orphan removal, a deadline, and readiness wait. Stop removes containers and
@@ -154,10 +156,11 @@ rollback implementation.
 
 Each component becomes one service. Images come only from ArtifactResolver.
 Configuration maps to service environment. Secret inputs mount read-only at
-`/run/secrets/<input-name>`. Public endpoints receive adapter-owned loopback
-ports for a later GatewayAdapter; private endpoints stay on the project
-network. Images may supply Docker health checks; otherwise running replicas are
-the v0.1 readiness fact.
+`/run/secrets/<input-name>`. Endpoints are exposed only on the project network;
+application services never publish host ports. A later GatewayAdapter consumes
+the normalized service/port observation without reading Compose files. Images
+may supply Docker health checks; otherwise running replicas are the v0.1
+readiness fact.
 
 The adapter rejects unsupported artifact kinds, zero replicas for RUNNING,
 duplicate environment keys, unresolved bindings, extra revisions or secrets,
@@ -197,7 +200,7 @@ pre-v1 names.
    supported PostgreSQL database.
 2. API replay, changed-digest conflict, If-Match, tenant RLS, immutable
    generation, worker lease/fencing, and transaction fault injection pass
-   against a non-bypass runtime login.
+   against a non-bypass worker login.
 3. Apply success, definitive failure, unknown outcome reconciliation, stop,
    and rollback drive only valid Operation/Deployment transitions and maintain
    reservation consistency.
@@ -208,7 +211,8 @@ pre-v1 names.
    `--pull never` and no build or registry dependency.
 2. The fixture proves ordinary ENV configuration and a read-only secret file
    without returning secret plaintext.
-3. A new configuration revision creates a new generation and observable value;
+3. A network-scoped probe verifies the fixture without adding a host port. A
+   new configuration revision creates a new generation and observable value;
    rollback creates another generation and restores the earlier value.
 4. Crash/timeout injection followed by observe reconciles without duplicate
    project identity; stop removes containers/network and releases capacity.
@@ -228,3 +232,7 @@ secret authoring, external secret providers, persistent application volumes,
 stateful migrations, jobs/cron, remote Docker execution, Kubernetes, build
 service, automatic image distribution, platform installation/upgrade, and
 support bundles remain outside FEAT-004.
+
+Fixed donor decisions and the resulting implementation constraints are
+recorded in
+[`docs/adoption/FEAT-004-compose-application-execution.md`](../adoption/FEAT-004-compose-application-execution.md).
