@@ -26,7 +26,8 @@
 ## Portable branch state
 
 - The branch contains commit `001d889`; FEAT-004 Gate C is accepted and pushed
-  in `2b7e398`. The fixed donor baselines remain those listed below.
+  in `2b7e398`, and FEAT-005 Gate A is accepted and pushed in `83502b0`. The
+  fixed donor baselines remain those listed below.
 - FEAT-001, FEAT-002, and FEAT-003 Gate A/Gate B are Accepted. The public model
   is Application, immutable ApplicationRevision, Deployment,
   ExecutionPool/ExecutionTarget, provider-neutral PlacementPolicy, and an
@@ -88,28 +89,41 @@
   coverage proves ENV and read-only secret injection, project-network access,
   no host port, update, unknown-outcome observation before retry, rollback,
   stop cleanup, and absence of secret/native/path leakage.
-- The same worktree passed generation drift, unit, vet, race, ten-run, schema,
-  architecture, placement fuzz, four OS/architecture builds, Markdown-link,
-  stale-term, donor-dependency, tenant-authority, and diff gates. Clean
-  PostgreSQL 18 runs applied the migration twice, ran the verifier, used
+- FEAT-005 target design and fixed-donor adoption review are complete. Gate A
+  now owns a canonical Ed25519 release/trust contract, exact streaming
+  regular-file payload verification, a compact replay-safe installation state
+  machine, the alias-free Cobra/pflag `mx platform` surface, and a complete
+  content-hashed fixed Compose topology compiler. Linux no-follow, symlink,
+  and executable-mode behavior passed in a network-disabled local container;
+  generation drift, unit, vet, race, ten-run, architecture, placement fuzz,
+  four-target build, documentation, dependency, authority, and diff gates
+  passed on that Gate A worktree.
+- The FEAT-004 accepted worktree passed its schema and real-runtime gates.
+  Clean PostgreSQL 18 runs applied the migration twice, ran the verifier, used
   non-bypass API/worker logins, attacked RLS and cross-role privileges,
   injected transaction, delivery, and unknown-effect failures, and connected
   the real Compose executor through the durable worker and capacity workflow.
-- No offline distribution, verified clean-host installation/operations path,
-  or platform upgrade/rollback E2E exists yet. The Phase 1 goal is therefore
-  active.
+- No assembled offline release, durable installation journal/provider runner,
+  real IAM/Audit/APISIX/UI service composition, or verified clean-host
+  install/upgrade/rollback/recovery E2E exists yet. The Phase 1 goal is
+  therefore active.
 
 ## Next concrete work
 
-1. Package digest-pinned offline installation and prove clean-host install,
-   verification, operations, platform upgrade, rollback, and application
-   rollback without registry or Internet access.
+1. Implement FEAT-005 Gate B from the accepted contracts: protected durable
+   journal/lock, host and Docker providers, bundle image load/inspect,
+   generated configuration/secrets, migrations, backup, and real IAM, Audit,
+   APISIX, PostgreSQL, PaaS API/worker/dispatcher, and UI composition.
+2. Assemble releases A/B and prove clean-host install, verification,
+   operations, upgrade failure, explicit platform/application rollback,
+   recovery, and sanitized support evidence without registry or Internet.
 
 ## Fixed donor baselines
 
 - Legacy PaaS: `69336e51f94fa98f6aa278fa4c62382e224dbeaf`
 - Senatria IAM/Audit foundation:
   `f51d5ed19fd60e8c4e43500af5e669d67ae4ef7d`
+- PaaS design: `338d9b5fcb820120c32265e380c55e5f171cdb75`
 
 Replace this file only at a committed-and-pushed milestone or handoff. Do not
 append command logs, chat transcripts, secrets, raw provider payloads, or
