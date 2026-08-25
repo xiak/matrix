@@ -98,12 +98,22 @@
   generation drift, unit, vet, race, ten-run, architecture, placement fuzz,
   four-target build, documentation, dependency, authority, and diff gates
   passed on that Gate A worktree.
-- FEAT-005 Gate B has started. Commit `9a31558` adds the real installation
+- FEAT-005 Gate B is in progress. Commit `9a31558` adds the real installation
   journal boundary: a restrictive root, cross-process OS lock, random local
   HMAC key, canonical sealed state, monotonic writes, atomic durability, and
   link/reparse, ownership, permission, interruption, and tamper rejection.
-  Native Windows and network-disabled Linux tests pass; provider effects and
-  platform services are not wired yet.
+  Commit `11ec1f4` replaces the stale draft topology with exact IAM, Audit,
+  both Audit dispatchers, PaaS API, and a newly runnable PaaS Operation worker.
+  The worker composes the accepted lease/fencing, placement, reconciliation,
+  and real Compose executor path; a canonical local artifact catalog maps only
+  admitted content digests to reverified Docker image IDs, while exact Secret
+  versions are consumed from a non-mutating read-only tree. Workers and
+  dispatchers now expose normalized internal readiness, and the fixed topology
+  uses their actual environment/file contracts, least-privilege DSNs, real
+  executable entrypoints, and the Go `matrix-health` probe. Full generation,
+  unit, vet, race, repeated, architecture, four-target build, fresh PG18
+  process, real Compose executor, and fresh PG18-to-Compose worker gates pass.
+  The `mx` provider backend and platform image assembly remain unwired.
 - FEAT-006 Gate A and Gate B are Accepted. Target design and fixed-donor
   adoption remain `506f6d7` and `932252e`; the accepted authority contracts,
   pure behavior, and separate IAM/Audit PostgreSQL owners, migrators, runtime
@@ -135,10 +145,13 @@
 
 ## Next concrete work
 
-1. Resume FEAT-005 Gate B provider effects and fixed platform composition,
-   packaging the accepted IAM, Audit, PaaS, dispatchers, APISIX, PostgreSQL,
-   and verifier boundaries from exact release content and file credentials.
-2. Assemble releases A/B and prove the external-network-disabled Compose
+1. Implement the FEAT-005 lifecycle provider behind `mx`, including host
+   preflight, exact image load/identity verification, restrictive generated
+   files, Go-owned migrations, Compose start/observation, and ownership-safe
+   rollback/recovery effects.
+2. Assemble the real IAM, Audit, PaaS, dispatcher, APISIX, UI, PostgreSQL, and
+   verification images plus signed releases A/B from exact release content.
+3. Prove the external-network-disabled Compose
    install, verification, operations, upgrade, rollback, backup/recovery, and
    support-evidence E2E required for FEAT-005 Gate B/C and FEAT-006 Gate C.
 

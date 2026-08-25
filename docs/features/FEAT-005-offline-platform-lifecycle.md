@@ -1,6 +1,6 @@
 # FEAT-005: Offline platform distribution and lifecycle
 
-- Status: Gate A Accepted; Gate B implementation pending
+- Status: Gate A Accepted; Gate B implementation in progress
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
 - Release contract version: `v1`
@@ -258,6 +258,21 @@ not archive layout, Compose text, SQL text, command call order, or line counts.
   bundle-supplied or caller-selected command, privileged or host-network mode,
   plaintext secret, outside-root mount, unrelated network/service, or second
   host port.
+- Gate B commit `11ec1f4` replaces the draft process topology with the actual
+  IAM, Audit, IAM Audit dispatcher, PaaS API, PaaS Audit dispatcher, and PaaS
+  Operation worker executables and their exact file-based credentials and
+  least-privilege database logins. The real Operation worker composes the
+  accepted database lease/fencing, placement, reconciliation, and Compose
+  executor boundaries; it admits only catalogued artifact digests whose exact
+  local Docker image IDs are reverified, and reads workload Secret versions
+  from a non-mutating read-only source tree.
+- Workers and dispatchers expose one normalized internal readiness contract.
+  Their health proves the relevant database role, exact local images, Docker
+  Engine/Compose effect boundary, Audit target, and absence of dead letters
+  without returning provider errors. The closed topology now includes the
+  formerly missing IAM Audit dispatcher, contains no pseudo process command,
+  gives only the PaaS worker the Docker socket, and uses the internal Go
+  `matrix-health` probe for HTTP components.
 - The same worktree passed generation drift, full unit tests, vet, race,
   ten-run repetition, architecture boundaries, placement fuzz, four-target
   builds, Markdown links, donor-dependency and tenant-authority scans, and
