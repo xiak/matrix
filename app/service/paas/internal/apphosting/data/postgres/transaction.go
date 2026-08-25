@@ -12,13 +12,15 @@ import (
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/domain/placement"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/createplacement"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/operationqueue"
 )
 
 var _ createplacement.Transaction = (*placementTransaction)(nil)
 
 type placementTransaction struct {
-	tx       pgx.Tx
-	tenantID paasv1.TenantID
+	tx         pgx.Tx
+	tenantID   paasv1.TenantID
+	leaseGuard operationqueue.LeaseGuard
 }
 
 func (transaction *placementTransaction) TransactionTime(ctx context.Context) (time.Time, error) {

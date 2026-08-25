@@ -166,7 +166,7 @@ func TestSubmitUpdateAdvancesDesiredIdentityAndPreservesObservation(t *testing.T
 		result.Deployment.Metadata.ResourceVersion != current.Metadata.ResourceVersion+1 ||
 		result.Operation.Action != paasv1.OperationUpdate ||
 		result.Deployment.Status.Phase != paasv1.DeploymentPending ||
-		result.Deployment.Status.PlacementDecisionID != "" {
+		result.Deployment.Status.PlacementDecisionID != current.Status.PlacementDecisionID {
 		t.Fatalf("updated desired identity = %#v", result)
 	}
 	if result.Deployment.Status.ObservedGeneration != current.Status.ObservedGeneration ||
@@ -174,6 +174,52 @@ func TestSubmitUpdateAdvancesDesiredIdentityAndPreservesObservation(t *testing.T
 			current.Status.ObservedApplicationRevisionID ||
 		!result.Deployment.Status.ObservedAt.Equal(current.Status.ObservedAt) {
 		t.Fatalf("update rewrote observed state: %#v", result.Deployment.Status)
+	}
+}
+
+func TestSubmitStopChangesOnlyDesiredStateAndKeepsObservedPlacement(t *testing.T) {
+	current := lifecycleReadyDeployment()
+	command := lifecycleUpdateCommand(current, "config-revision-a")
+	command.IdempotencyKey = "stop-deployment-a"
+	command.Spec.DesiredState = paasv1.DeploymentDesiredStopped
+	transaction := lifecycleTransaction()
+	transaction.deployment = current
+	transaction.deploymentFound = true
+	result, err := mustLifecycleUsecase(
+		t,
+		&fakeLifecycleRepository{transaction: transaction},
+	).Submit(context.Background(), command)
+	if err != nil {
+		t.Fatalf("stop Deployment: %v", err)
+	}
+	if result.Operation.Action != paasv1.OperationStop ||
+		result.Deployment.Status.PlacementDecisionID != current.Status.PlacementDecisionID ||
+		result.Deployment.Spec.DesiredState != paasv1.DeploymentDesiredStopped {
+		t.Fatalf("stop desired mutation = %#v", result)
+	}
+
+	changed := command
+	changed.IdempotencyKey = "stop-and-change-configuration"
+	changed.Spec = lifecycleSpec("config-revision-b")
+	changed.Spec.DesiredState = paasv1.DeploymentDesiredStopped
+	transaction.submission = nil
+	if _, err := mustLifecycleUsecase(
+		t,
+		&fakeLifecycleRepository{transaction: transaction},
+	).Submit(context.Background(), changed); err == nil {
+		t.Fatal("stop unexpectedly accepted another desired-state change")
+	}
+	if transaction.submission != nil {
+		t.Fatalf("invalid stop was persisted: %#v", transaction.submission)
+	}
+
+	createStopped := lifecycleCreateCommand()
+	createStopped.Spec.DesiredState = paasv1.DeploymentDesiredStopped
+	if _, err := mustLifecycleUsecase(
+		t,
+		&fakeLifecycleRepository{transaction: lifecycleTransaction()},
+	).Submit(context.Background(), createStopped); err == nil {
+		t.Fatal("new stopped Deployment unexpectedly succeeded")
 	}
 }
 

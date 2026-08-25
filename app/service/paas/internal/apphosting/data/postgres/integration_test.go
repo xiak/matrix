@@ -130,6 +130,7 @@ func TestPostgresGateBIntegration(t *testing.T) {
 		admin,
 		reservationUsecase,
 		fixture,
+		integrationPlacementGuard(commands[scheduledIndex]),
 		reservationID,
 		claimID,
 	)
@@ -150,6 +151,16 @@ func TestPostgresGateBIntegration(t *testing.T) {
 		planner,
 		placementRepository,
 		reservationUsecase,
+		fixture,
+		prefix,
+	)
+	assertDeploymentWorkerWorkflow(
+		t,
+		ctx,
+		admin,
+		apiPool,
+		workerPool,
+		placementUsecase,
 		fixture,
 		prefix,
 	)
@@ -182,6 +193,13 @@ func (fixture gateBFixture) placementCommand(
 		DeploymentID:  deploymentID,
 		RequestDigest: integrationDigest(requestSeed),
 		TraceID:       "trace-" + requestSeed,
+	}
+}
+
+func integrationPlacementGuard(command createplacement.Command) operationqueue.LeaseGuard {
+	return operationqueue.LeaseGuard{
+		TenantID: command.TenantID, OperationID: command.OperationID,
+		WorkerID: "worker-placement", FencingToken: 1,
 	}
 }
 
@@ -597,8 +615,12 @@ func seedGateBFixture(
 	); err != nil {
 		t.Fatalf("insert execution target allocation: %v", err)
 	}
-	for _, deploymentID := range fixture.deploymentIDs {
-		seedDeployment(t, ctx, admin, fixture, deploymentID, now)
+	for index, deploymentID := range fixture.deploymentIDs {
+		suffix := string(rune('a' + index))
+		seedDeployment(
+			t, ctx, admin, fixture, deploymentID,
+			paasv1.OperationID(prefix+"-operation-"+suffix), now,
+		)
 	}
 	return fixture
 }
@@ -609,11 +631,10 @@ func seedDeployment(
 	admin *pgx.Conn,
 	fixture gateBFixture,
 	deploymentID paasv1.ResourceID,
+	creationOperationID paasv1.OperationID,
 	now time.Time,
 ) {
 	t.Helper()
-	creationOperationID := paasv1.OperationID(string(deploymentID) + "-create")
-	terminalAt := now
 	operation := paasv1.Operation{
 		APIVersion: paasv1.APIVersion,
 		Kind:       "Operation",
@@ -633,11 +654,10 @@ func seedDeployment(
 		},
 		IdempotencyFingerprint: integrationDigest(string(deploymentID) + "-idempotency"),
 		RequestDigest:          integrationDigest(string(deploymentID) + "-request"),
-		State:                  paasv1.OperationSucceeded,
+		State:                  paasv1.OperationPlanning,
 		Attempt:                1,
 		CreatedAt:              now,
 		UpdatedAt:              now,
-		TerminalAt:             &terminalAt,
 	}
 	if err := paasv1.ValidateOperation(operation); err != nil {
 		t.Fatalf("invalid creation Operation fixture: %v", err)
@@ -646,11 +666,12 @@ func seedDeployment(
 		`INSERT INTO paas.operations (
 		     tenant_id, id, action, target_kind, target_id,
 		     idempotency_fingerprint, request_digest, state, attempt,
-		     next_attempt_at, fencing_token, created_at, updated_at,
-		     terminal_at, document
+		     next_attempt_at, lease_owner, lease_expires_at, fencing_token,
+		     created_at, updated_at, document
 		 ) VALUES (
 		     $1, $2, $3, $4, $5, $6, $7, $8, $9,
-		     $10, 0, $10, $10, $10, $11::jsonb
+		     $10, 'worker-placement', $10::timestamptz + interval '10 minutes', 1,
+		     $10, $10, $11::jsonb
 		 )`,
 		fixture.tenantA,
 		operation.ID,
@@ -687,8 +708,9 @@ func seedDeployment(
 			}},
 		},
 		Status: paasv1.DeploymentStatus{
-			Phase:      paasv1.DeploymentPending,
-			ObservedAt: now.Add(-time.Second),
+			Phase:              paasv1.DeploymentPending,
+			CurrentOperationID: creationOperationID,
+			ObservedAt:         now.Add(-time.Second),
 		},
 	}
 	if err := paasv1.ValidateDeployment(deployment); err != nil {
@@ -1117,7 +1139,9 @@ func runConcurrentPlacements(
 		go func(index int) {
 			defer wait.Done()
 			<-start
-			results[index], errs[index] = usecase.CreatePlacement(ctx, commands[index])
+			results[index], errs[index] = usecase.CreatePlacement(
+				ctx, commands[index], integrationPlacementGuard(commands[index]),
+			)
 		}(index)
 	}
 	close(start)
@@ -1207,7 +1231,9 @@ func assertExactReplayAndConflict(
 ) {
 	t.Helper()
 	for index, command := range commands {
-		replay, err := usecase.CreatePlacement(ctx, command)
+		replay, err := usecase.CreatePlacement(
+			ctx, command, integrationPlacementGuard(command),
+		)
 		if err != nil {
 			t.Fatalf("replay placement %d: %v", index, err)
 		}
@@ -1216,7 +1242,9 @@ func assertExactReplayAndConflict(
 		}
 		conflict := command
 		conflict.RequestDigest = integrationDigest(fmt.Sprintf("conflict-%d", index))
-		if _, err := usecase.CreatePlacement(ctx, conflict); !errors.Is(
+		if _, err := usecase.CreatePlacement(
+			ctx, conflict, integrationPlacementGuard(conflict),
+		); !errors.Is(
 			err,
 			createplacement.ErrIdempotencyConflict,
 		) {
@@ -1301,18 +1329,21 @@ func assertReservationTransitions(
 	admin *pgx.Conn,
 	usecase *transitionreservation.Usecase,
 	fixture gateBFixture,
+	guard operationqueue.LeaseGuard,
 	reservationID paasv1.ResourceID,
 	claimID string,
 ) {
 	t.Helper()
+	tenantBGuard := guard
+	tenantBGuard.TenantID = fixture.tenantB
 	_, err := usecase.Transition(ctx, transitionreservation.Command{
 		TenantID:                fixture.tenantB,
 		ReservationID:           reservationID,
 		Action:                  transitionreservation.ActionActivate,
 		ExpectedResourceVersion: 1,
-	})
-	if !errors.Is(err, transitionreservation.ErrNotFound) {
-		t.Fatalf("tenant B transition error = %v, want not found", err)
+	}, tenantBGuard)
+	if !errors.Is(err, transitionreservation.ErrStaleLease) {
+		t.Fatalf("tenant B transition error = %v, want stale lease", err)
 	}
 
 	activate := transitionreservation.Command{
@@ -1321,14 +1352,14 @@ func assertReservationTransitions(
 		Action:                  transitionreservation.ActionActivate,
 		ExpectedResourceVersion: 1,
 	}
-	result, err := usecase.Transition(ctx, activate)
+	result, err := usecase.Transition(ctx, activate, guard)
 	if err != nil {
 		t.Fatalf("activate capacity reservation: %v", err)
 	}
 	if result.State != placement.CapacityClaimActive || result.ResourceVersion != 2 || result.Replayed {
 		t.Fatalf("activate result = %#v", result)
 	}
-	replay, err := usecase.Transition(ctx, activate)
+	replay, err := usecase.Transition(ctx, activate, guard)
 	if err != nil {
 		t.Fatalf("replay activate capacity reservation: %v", err)
 	}
@@ -1342,14 +1373,14 @@ func assertReservationTransitions(
 		Action:                  transitionreservation.ActionRelease,
 		ExpectedResourceVersion: 2,
 	}
-	result, err = usecase.Transition(ctx, release)
+	result, err = usecase.Transition(ctx, release, guard)
 	if err != nil {
 		t.Fatalf("release capacity reservation: %v", err)
 	}
 	if result.State != placement.CapacityClaimReleased || result.ResourceVersion != 3 || result.Replayed {
 		t.Fatalf("release result = %#v", result)
 	}
-	replay, err = usecase.Transition(ctx, release)
+	replay, err = usecase.Transition(ctx, release, guard)
 	if err != nil {
 		t.Fatalf("replay release capacity reservation: %v", err)
 	}
@@ -1395,11 +1426,13 @@ type failAfterCreateRepository struct {
 func (repository failAfterCreateRepository) WithinTransaction(
 	ctx context.Context,
 	tenantID paasv1.TenantID,
+	guard operationqueue.LeaseGuard,
 	callback func(context.Context, createplacement.Transaction) error,
 ) error {
 	return repository.delegate.WithinTransaction(
 		ctx,
 		tenantID,
+		guard,
 		func(callbackContext context.Context, transaction createplacement.Transaction) error {
 			return callback(callbackContext, failAfterCreateTransaction{Transaction: transaction})
 		},
@@ -1431,7 +1464,11 @@ func assertAtomicRollbackAfterWrites(
 ) {
 	t.Helper()
 	deploymentID := paasv1.ResourceID(prefix + "-deployment-fault")
-	seedDeployment(t, ctx, admin, fixture, deploymentID, time.Now().UTC().Truncate(time.Microsecond))
+	seedDeployment(
+		t, ctx, admin, fixture, deploymentID,
+		paasv1.OperationID(prefix+"-operation-fault"),
+		time.Now().UTC().Truncate(time.Microsecond),
+	)
 	var claimsBefore int
 	if err := admin.QueryRow(
 		ctx,
@@ -1457,7 +1494,9 @@ func assertAtomicRollbackAfterWrites(
 		prefix+"-decision-fault",
 		"request-fault",
 	)
-	if _, err := usecase.CreatePlacement(ctx, command); !errors.Is(
+	if _, err := usecase.CreatePlacement(
+		ctx, command, integrationPlacementGuard(command),
+	); !errors.Is(
 		err,
 		errInjectedAfterDecisionWrites,
 	) {
@@ -1512,7 +1551,11 @@ func assertPendingExpiry(
 ) {
 	t.Helper()
 	deploymentID := paasv1.ResourceID(prefix + "-deployment-expiry")
-	seedDeployment(t, ctx, admin, fixture, deploymentID, time.Now().UTC().Truncate(time.Microsecond))
+	seedDeployment(
+		t, ctx, admin, fixture, deploymentID,
+		paasv1.OperationID(prefix+"-operation-expiry"),
+		time.Now().UTC().Truncate(time.Microsecond),
+	)
 	usecase, err := createplacement.NewUsecase(
 		planner,
 		repository,
@@ -1530,7 +1573,9 @@ func assertPendingExpiry(
 		prefix+"-decision-expiry",
 		"request-expiry",
 	)
-	result, err := usecase.CreatePlacement(ctx, command)
+	result, err := usecase.CreatePlacement(
+		ctx, command, integrationPlacementGuard(command),
+	)
 	if err != nil {
 		t.Fatalf("create expiring placement: %v", err)
 	}
@@ -1550,7 +1595,8 @@ func assertPendingExpiry(
 		Action:                  transitionreservation.ActionActivate,
 		ExpectedResourceVersion: 1,
 	}
-	if _, err := transitionUsecase.Transition(ctx, activate); !errors.Is(
+	guard := integrationPlacementGuard(command)
+	if _, err := transitionUsecase.Transition(ctx, activate, guard); !errors.Is(
 		err,
 		transitionreservation.ErrInvalidTransition,
 	) {
@@ -1558,7 +1604,7 @@ func assertPendingExpiry(
 	}
 	expire := activate
 	expire.Action = transitionreservation.ActionExpire
-	expired, err := transitionUsecase.Transition(ctx, expire)
+	expired, err := transitionUsecase.Transition(ctx, expire, guard)
 	if err != nil {
 		t.Fatalf("expire pending reservation: %v", err)
 	}
@@ -1567,7 +1613,7 @@ func assertPendingExpiry(
 		expired.Replayed {
 		t.Fatalf("expire result = %#v", expired)
 	}
-	replay, err := transitionUsecase.Transition(ctx, expire)
+	replay, err := transitionUsecase.Transition(ctx, expire, guard)
 	if err != nil {
 		t.Fatalf("replay pending expiry: %v", err)
 	}

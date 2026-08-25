@@ -114,12 +114,31 @@ func TestAdvancePropagatesStaleFencingFailure(t *testing.T) {
 	}
 }
 
+func TestReleaseSchedulesSameStateReconciliationWithoutTransition(t *testing.T) {
+	lease := queueLease()
+	lease.Operation.State = paasv1.OperationReconciling
+	nextAttemptAt := queueTime.Add(2 * time.Minute)
+	repository := &fakeQueueRepository{}
+	released, err := mustQueue(t, repository).Release(
+		context.Background(), lease, nextAttemptAt,
+	)
+	if err != nil {
+		t.Fatalf("release reconciliation lease: %v", err)
+	}
+	if released.Operation.State != paasv1.OperationReconciling ||
+		released.WorkerID != "" || released.FencingToken != 0 ||
+		!released.LeaseExpiresAt.IsZero() || repository.releaseCalls != 1 {
+		t.Fatalf("released reconciliation lease = %#v", released)
+	}
+}
+
 type fakeQueueRepository struct {
 	lease         Lease
 	found         bool
 	leaseDuration time.Duration
 	advanceError  error
 	advanceCalls  int
+	releaseCalls  int
 }
 
 func (repository *fakeQueueRepository) ClaimOperation(
@@ -147,6 +166,20 @@ func (repository *fakeQueueRepository) AdvanceOperation(
 		terminalAt := operation.UpdatedAt
 		operation.TerminalAt = &terminalAt
 	}
+	return operation, nil
+}
+
+func (repository *fakeQueueRepository) ReleaseOperation(
+	_ context.Context,
+	lease Lease,
+	_ time.Time,
+) (paasv1.Operation, error) {
+	repository.releaseCalls++
+	if repository.advanceError != nil {
+		return paasv1.Operation{}, repository.advanceError
+	}
+	operation := lease.Operation
+	operation.UpdatedAt = queueTime.Add(time.Second)
 	return operation, nil
 }
 

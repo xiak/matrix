@@ -6,6 +6,7 @@ import (
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/domain/placement"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/operationqueue"
 )
 
 type Action string
@@ -20,6 +21,7 @@ var (
 	ErrNotFound                = errors.New("capacity reservation not found")
 	ErrResourceVersionConflict = errors.New("capacity reservation resource version conflict")
 	ErrInvalidTransition       = errors.New("capacity reservation transition is invalid")
+	ErrStaleLease              = errors.New("capacity reservation Operation lease or fencing token is stale")
 )
 
 type Command struct {
@@ -44,7 +46,7 @@ type StoredTransition struct {
 type Repository interface {
 	TransitionCapacityReservation(
 		context.Context,
-		paasv1.TenantID,
+		operationqueue.LeaseGuard,
 		paasv1.ResourceID,
 		Action,
 		uint64,

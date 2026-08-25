@@ -201,6 +201,17 @@ func executeInTransaction(
 	if found && containsActivePhase(current.Status.Phase) {
 		return Result{}, ErrOperationInProgress
 	}
+	if !found && spec.DesiredState == paasv1.DeploymentDesiredStopped {
+		return Result{}, errors.New("a new Deployment must start in RUNNING desired state")
+	}
+	if found && spec.DesiredState == paasv1.DeploymentDesiredStopped {
+		stopSpec := current.Spec
+		stopSpec.DesiredState = paasv1.DeploymentDesiredStopped
+		if paasv1.DeploymentSpecContentDigest(spec) !=
+			paasv1.DeploymentSpecContentDigest(stopSpec) {
+			return Result{}, errors.New("stop can only change Deployment desiredState")
+		}
+	}
 	if command.kind == "ROLLBACK_DEPLOYMENT" &&
 		(!found || command.sourceGeneration >= current.Generation) {
 		return Result{}, errors.New("rollback source must be an earlier accepted generation")
@@ -313,7 +324,6 @@ func newDeployment(
 	metadata.UpdatedAt = transactionTime
 	status := current.Status
 	status.Phase = paasv1.DeploymentPending
-	status.PlacementDecisionID = ""
 	status.CurrentOperationID = operationID
 	return paasv1.Deployment{
 		APIVersion: paasv1.APIVersion,

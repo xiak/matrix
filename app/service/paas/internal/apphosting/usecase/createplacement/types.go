@@ -7,11 +7,13 @@ import (
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/domain/placement"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/operationqueue"
 )
 
 var (
 	ErrRetryableTransaction = errors.New("placement transaction must be retried")
 	ErrIdempotencyConflict  = errors.New("placement operation idempotency conflict")
+	ErrStaleLease           = errors.New("placement Operation lease or fencing token is stale")
 )
 
 type Command struct {
@@ -33,11 +35,23 @@ type StoredDecision struct {
 	Decision      paasv1.PlacementDecision
 }
 
+// StopBinding is the authoritative current placement whose active capacity
+// a STOP Operation reuses. It never accepts a caller-selected target.
+type StopBinding struct {
+	Deployment       paasv1.Deployment
+	Generation       paasv1.DeploymentGeneration
+	Policy           paasv1.PlacementPolicy
+	PreviousDecision paasv1.PlacementDecision
+	ExecutionTarget  paasv1.ExecutionTarget
+	ReservationID    paasv1.ResourceID
+}
+
 type DecisionCreation struct {
-	OperationID   paasv1.OperationID
-	RequestDigest string
-	Decision      paasv1.PlacementDecision
-	Reservation   *CapacityReservationCreation
+	OperationID             paasv1.OperationID
+	RequestDigest           string
+	Decision                paasv1.PlacementDecision
+	Reservation             *CapacityReservationCreation
+	ReusesActiveReservation bool
 }
 
 // CapacityReservationCreation links the tenant-owned decision to the
@@ -66,6 +80,10 @@ type Transaction interface {
 		context.Context,
 		paasv1.ResourceID,
 	) (placement.Snapshot, error)
+	LoadStopBinding(
+		context.Context,
+		paasv1.ResourceID,
+	) (StopBinding, error)
 	CreateDecision(context.Context, DecisionCreation) error
 }
 
@@ -76,6 +94,7 @@ type Repository interface {
 	WithinTransaction(
 		context.Context,
 		paasv1.TenantID,
+		operationqueue.LeaseGuard,
 		func(context.Context, Transaction) error,
 	) error
 }

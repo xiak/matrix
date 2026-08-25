@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/operationqueue"
 )
 
 const maxResourceVersion = 9_007_199_254_740_991
@@ -16,7 +17,11 @@ func NewUsecase(repository Repository) (*Usecase, error) {
 	return &Usecase{repository: repository}, nil
 }
 
-func (usecase *Usecase) Transition(ctx context.Context, command Command) (Result, error) {
+func (usecase *Usecase) Transition(
+	ctx context.Context,
+	command Command,
+	guard operationqueue.LeaseGuard,
+) (Result, error) {
 	if usecase == nil || usecase.repository == nil {
 		return Result{}, errors.New("capacity reservation transition use case is nil")
 	}
@@ -26,9 +31,15 @@ func (usecase *Usecase) Transition(ctx context.Context, command Command) (Result
 	if err := validateCommand(command); err != nil {
 		return Result{}, err
 	}
+	if err := operationqueue.ValidateLeaseGuard(guard); err != nil {
+		return Result{}, err
+	}
+	if guard.TenantID != command.TenantID {
+		return Result{}, errors.New("capacity reservation and Operation lease tenants differ")
+	}
 	stored, err := usecase.repository.TransitionCapacityReservation(
 		ctx,
-		command.TenantID,
+		guard,
 		command.ReservationID,
 		command.Action,
 		command.ExpectedResourceVersion,

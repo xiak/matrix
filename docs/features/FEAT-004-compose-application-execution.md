@@ -106,7 +106,9 @@ The authenticated tenant comes from the Authorizer context and must equal every
 resource scope; a client header is never authority. Every mutation requires
 `Idempotency-Key`; updates and rollback also require `If-Match`. Immutable
 creation may complete its Operation in the request transaction. Deployment
-effects return a queued Operation and never hold an HTTP transaction open.
+effects return a queued Operation and never hold an HTTP transaction open. A
+new Deployment must start RUNNING; stop is an update that changes only
+`desiredState` so it cannot smuggle an unapplied revision or policy change.
 
 Secret create/update APIs, dynamic configuration refresh, mutable aliases,
 arbitrary structured files, Nacos, and Consul are outside this FEAT. The
@@ -127,17 +129,24 @@ The implementation uses one explicit state machine, not a workflow DSL:
 4. the worker stores a deterministic adapter command intent, commits, and
    calls the executor outside the database transaction;
 5. a result is accepted only while the lease/fencing token is current;
-6. successful apply is observed before the reservation is activated and the
-   generation becomes READY;
+6. successful apply is observed before the new reservation is activated and
+   the generation becomes READY; update and rollback retain the previous
+   active reservation until that point, so Phase 1 conservatively requires
+   capacity for both old and new generations during replacement;
 7. definitive pre-effect failure releases a pending reservation and normalizes
    the Operation failure; uncertain effect failure enters RECONCILING;
-8. stop removes the Compose project before capacity release; rollback creates
-   and executes a new generation from an accepted snapshot.
+8. a desired mutation retains the last observed placement until the worker
+   replaces it; stop creates an exact-generation placement binding to the
+   target of the current active reservation without claiming more capacity,
+   removes the Compose project, and only then releases that reservation;
+9. rollback creates and executes a new generation from an accepted snapshot.
 
 Command identity excludes attempt number. Equal command replay returns the
 stored receipt; unequal request digest is `IDEMPOTENCY_CONFLICT`. Expired
 workers cannot commit status. Bounded attempts and deadlines end in FAILED or
-MANUAL_INTERVENTION rather than infinite retry.
+MANUAL_INTERVENTION rather than infinite retry. An uncertain non-stop effect
+that reaches manual intervention conservatively retains active capacity until
+an operator resolves it.
 
 ## Compose execution profile
 
@@ -237,11 +246,17 @@ file layout, command call order, or implementation counts.
   profile from verified local image digests, ordinary ENV configuration, and
   derived read-only secret-file grants. It has no caller-controlled build,
   pull, command, host-port, host-path, privileged, or host-network field.
+- The fenced PostgreSQL worker path persists placement and adapter intent
+  before effects, reconciles stored receipts and observations, and atomically
+  finalizes Deployment status, Operation state, and capacity ownership. Real
+  PostgreSQL 18 coverage includes apply, update, rollback, stop, definitive
+  failure, unknown outcome, and bounded manual intervention.
 - Gate A completed on 2026-08-25 on one worktree with generation drift, unit,
   vet, race, ten-run, schema, architecture, a real PostgreSQL 18 regression,
   placement fuzz, four OS/architecture builds, and repository-diff checks
-  passing. Gate B database, Operation, worker, and northbound behavior and Gate
-  C real Compose effects remain unaccepted.
+  passing. Gate B remains unaccepted until its northbound IAM/Audit boundary
+  and final combined regression pass; Gate C real Compose effects remain
+  unaccepted.
 
 ## Deferred
 

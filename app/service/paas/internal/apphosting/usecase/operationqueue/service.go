@@ -96,6 +96,52 @@ func (queue *Queue) Advance(
 	return next, nil
 }
 
+// Release schedules another reconciliation attempt without inventing a
+// same-state transition. The database rechecks the live lease and fence.
+func (queue *Queue) Release(
+	ctx context.Context,
+	lease Lease,
+	nextAttemptAt time.Time,
+) (Lease, error) {
+	if queue == nil || queue.repository == nil {
+		return Lease{}, errors.New("Operation queue is nil")
+	}
+	if ctx == nil {
+		return Lease{}, errors.New("Operation lease release context is nil")
+	}
+	if err := validateLease(lease); err != nil {
+		return Lease{}, err
+	}
+	if lease.Operation.State != paasv1.OperationReconciling {
+		return Lease{}, errors.New("only a reconciling Operation lease can be released")
+	}
+	if nextAttemptAt.IsZero() ||
+		nextAttemptAt.Location() != time.UTC ||
+		nextAttemptAt != nextAttemptAt.Round(0) ||
+		nextAttemptAt.Nanosecond()%1_000 != 0 ||
+		!nextAttemptAt.After(lease.Operation.UpdatedAt) {
+		return Lease{}, errors.New("Operation next attempt time is invalid")
+	}
+	operation, err := queue.repository.ReleaseOperation(ctx, lease, nextAttemptAt)
+	if err != nil {
+		return Lease{}, err
+	}
+	if err := paasv1.ValidateOperation(operation); err != nil {
+		return Lease{}, fmt.Errorf("repository returned an invalid released Operation: %w", err)
+	}
+	if operation.ID != lease.Operation.ID ||
+		operation.Scope != lease.Operation.Scope ||
+		operation.State != lease.Operation.State ||
+		operation.Attempt != lease.Operation.Attempt {
+		return Lease{}, errors.New("repository returned a mismatched released Operation")
+	}
+	lease.Operation = operation
+	lease.WorkerID = ""
+	lease.FencingToken = 0
+	lease.LeaseExpiresAt = time.Time{}
+	return lease, nil
+}
+
 func validateLease(lease Lease) error {
 	var problems []error
 	problems = append(problems,
@@ -116,6 +162,19 @@ func validateLease(lease Lease) error {
 		lease.LeaseExpiresAt.Nanosecond()%1_000 != 0 ||
 		!lease.LeaseExpiresAt.After(lease.Operation.UpdatedAt) {
 		problems = append(problems, errors.New("Operation lease expiry is invalid"))
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateLeaseGuard(guard LeaseGuard) error {
+	var problems []error
+	problems = append(problems,
+		paasv1.ValidateID("tenantId", string(guard.TenantID)),
+		paasv1.ValidateID("operationId", string(guard.OperationID)),
+		paasv1.ValidateID("workerId", guard.WorkerID),
+	)
+	if guard.FencingToken == 0 || guard.FencingToken > 9007199254740991 {
+		problems = append(problems, errors.New("Operation fencing token is invalid"))
 	}
 	return errors.Join(problems...)
 }

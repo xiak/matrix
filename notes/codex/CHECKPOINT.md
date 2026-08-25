@@ -58,6 +58,13 @@
   monotonically increasing fencing token, and attempt count. The explicit
   Operation state machine rejects stale workers and supports released retry,
   unknown-outcome reconciliation, and terminal lease cleanup.
+- The Deployment worker now owns the complete durable reconciliation path:
+  fenced placement, intent-before-effect commands, hashed receipts,
+  observations, status transitions, and atomic Operation/capacity
+  finalization. Update and rollback keep old capacity active until the new
+  generation is observed READY; stop reuses the current target without a new
+  claim; manual intervention conservatively retains capacity for an uncertain
+  effect.
 - The same worktree passed generation drift, unit, vet, race, ten-run, schema,
   architecture, placement fuzz, four OS/architecture builds, Markdown-link,
   and diff gates. A disposable PostgreSQL 18 test applied the migration twice,
@@ -66,18 +73,23 @@
   PostgreSQL 18 test also exercised the API login, application transaction
   rollback, immutable generations, lease expiry/reclaim, fencing rejection,
   attempt increment, and reconciliation transitions.
-- No effecting Compose DeploymentExecutor, complete worker reconciliation,
-  northbound HTTP workflow, IAM Authorizer integration, Audit dispatch,
-  offline distribution, verified install/operations path, or platform
+- A fresh PostgreSQL 18 Gate B run now additionally proves persisted intent
+  visibility before effect, deploy, update with conservative double capacity,
+  rollback, stop without a new claim, definitive failure, unknown-outcome
+  observation before retry, bounded manual intervention, stale-fence denial,
+  and atomic reservation/status/Operation outcomes through the non-bypass
+  worker login.
+- No effecting Compose DeploymentExecutor, northbound HTTP workflow, IAM
+  Authorizer integration, transactional Audit outbox/dispatch, offline
+  distribution, verified install/operations path, or platform
   upgrade/rollback E2E exists yet. PostgreSQL roles and `requestedBy` are not
   substitutes for IAM or Audit. The Phase 1 goal is therefore active.
 
 ## Next concrete work
 
-1. Complete FEAT-004 Gate B: worker placement/command/receipt/observation and
-   apply/observe/stop/rollback reconciliation; minimal northbound HTTP with
-   IAM authorization and Audit dispatch; then pass every behavior and
-   reservation-consistency case on real PostgreSQL 18.
+1. Complete FEAT-004 Gate B with the minimal northbound HTTP workflow, IAM
+   authorization, and transactional Audit outbox/dispatch; then rerun every
+   Gate B behavior, privilege, and reservation-consistency gate.
 2. Implement and accept Gate C with real Docker Compose behavior, including
    exact secret-file resolution, reconciliation, update, rollback, network
    probe, and stop cleanup without registry or Internet access.

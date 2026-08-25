@@ -21,7 +21,9 @@ func TestCreatePlacementCommitsDecisionAndPendingReservation(t *testing.T) {
 	usecase := mustUsecase(t, repository)
 	command := createPlacementCommand()
 
-	output, err := usecase.CreatePlacement(context.Background(), command)
+	output, err := usecase.CreatePlacement(
+		context.Background(), command, placementLeaseGuard(command),
+	)
 	if err != nil {
 		t.Fatalf("place: %v", err)
 	}
@@ -86,7 +88,9 @@ func TestCreatePlacementExactReplaySkipsPlanningAndMutation(t *testing.T) {
 		},
 	}
 	repository := &fakeRepository{transaction: transaction}
-	output, err := mustUsecase(t, repository).CreatePlacement(context.Background(), command)
+	output, err := mustUsecase(t, repository).CreatePlacement(
+		context.Background(), command, placementLeaseGuard(command),
+	)
 	if err != nil {
 		t.Fatalf("replay: %v", err)
 	}
@@ -135,6 +139,7 @@ func TestCreatePlacementRejectsSemanticIdempotencyConflicts(t *testing.T) {
 			_, err := mustUsecase(t, &fakeRepository{transaction: transaction}).CreatePlacement(
 				context.Background(),
 				baseCommand,
+				placementLeaseGuard(baseCommand),
 			)
 			if !errors.Is(err, ErrIdempotencyConflict) {
 				t.Fatalf("error = %v, want idempotency conflict", err)
@@ -156,9 +161,9 @@ func TestCreatePlacementRetriesOnlyRetryableTransactions(t *testing.T) {
 				ErrRetryableTransaction,
 			},
 		}
+		command := createPlacementCommand()
 		output, err := mustUsecase(t, repository).CreatePlacement(
-			context.Background(),
-			createPlacementCommand(),
+			context.Background(), command, placementLeaseGuard(command),
 		)
 		if err != nil {
 			t.Fatalf("place after retries: %v", err)
@@ -181,7 +186,10 @@ func TestCreatePlacementRetriesOnlyRetryableTransactions(t *testing.T) {
 				ErrRetryableTransaction,
 			},
 		}
-		_, err := mustUsecase(t, repository).CreatePlacement(context.Background(), createPlacementCommand())
+		command := createPlacementCommand()
+		_, err := mustUsecase(t, repository).CreatePlacement(
+			context.Background(), command, placementLeaseGuard(command),
+		)
 		if !errors.Is(err, ErrRetryableTransaction) ||
 			!strings.Contains(err.Error(), "attempts exhausted") ||
 			repository.calls != 3 {
@@ -198,7 +206,10 @@ func TestCreatePlacementRetriesOnlyRetryableTransactions(t *testing.T) {
 			},
 			afterCallbackErrors: []error{terminal},
 		}
-		_, err := mustUsecase(t, repository).CreatePlacement(context.Background(), createPlacementCommand())
+		command := createPlacementCommand()
+		_, err := mustUsecase(t, repository).CreatePlacement(
+			context.Background(), command, placementLeaseGuard(command),
+		)
 		if !errors.Is(err, terminal) || repository.calls != 1 {
 			t.Fatalf("error/calls = %v/%d", err, repository.calls)
 		}
@@ -215,9 +226,9 @@ func TestUnschedulableDecisionHasNoReservation(t *testing.T) {
 		paasv1.IsolationHost,
 	}
 	transaction := &fakeTransaction{time: createPlacementTime, snapshot: snapshot}
+	command := createPlacementCommand()
 	output, err := mustUsecase(t, &fakeRepository{transaction: transaction}).CreatePlacement(
-		context.Background(),
-		createPlacementCommand(),
+		context.Background(), command, placementLeaseGuard(command),
 	)
 	if err != nil {
 		t.Fatalf("place: %v", err)
@@ -232,11 +243,76 @@ func TestUnschedulableDecisionHasNoReservation(t *testing.T) {
 	}
 }
 
+func TestBindStopPlacementReusesCurrentActiveTargetWithoutNewCapacity(t *testing.T) {
+	command := createPlacementCommand()
+	snapshot := createPlacementSnapshot()
+	deployment := snapshot.Deployment
+	deployment.Generation = 2
+	deployment.Metadata.ResourceVersion = 3
+	deployment.Spec.DesiredState = paasv1.DeploymentDesiredStopped
+	deployment.Status = paasv1.DeploymentStatus{
+		Phase:                         paasv1.DeploymentPending,
+		ObservedGeneration:            1,
+		PlacementDecisionID:           "decision-running",
+		CurrentOperationID:            command.OperationID,
+		ObservedApplicationRevisionID: snapshot.ApplicationRevision.Metadata.ID,
+		ReadyComponents:               1,
+		ObservedAt:                    createPlacementTime.Add(-time.Minute),
+	}
+	previousCommand := command
+	previousCommand.DecisionID = "decision-running"
+	previous := scheduledDecision(previousCommand)
+	previous.Metadata.ID = "decision-running"
+	previous.Metadata.Name = "decision-running"
+	previous.DeploymentResourceVersion = 2
+	previous.DecidedAt = createPlacementTime.Add(-time.Minute)
+	previous.Metadata.CreatedAt = previous.DecidedAt
+	previous.Metadata.UpdatedAt = previous.DecidedAt
+	generation := paasv1.DeploymentGeneration{
+		APIVersion: paasv1.APIVersion, Kind: "DeploymentGeneration",
+		Scope: deployment.Metadata.Scope, DeploymentID: deployment.Metadata.ID,
+		Generation: deployment.Generation, Spec: deployment.Spec,
+		CreatedByOperationID: command.OperationID,
+		CreatedAt:            createPlacementTime.Add(-time.Second),
+	}
+	generation.ContentDigest = paasv1.DeploymentSpecContentDigest(generation.Spec)
+	transaction := &fakeTransaction{
+		time: createPlacementTime,
+		stopBinding: StopBinding{
+			Deployment: deployment, Generation: generation, Policy: snapshot.Policy,
+			PreviousDecision: previous, ExecutionTarget: snapshot.Targets[0],
+			ReservationID: "reservation-running",
+		},
+	}
+	result, err := mustUsecase(t, &fakeRepository{transaction: transaction}).BindStopPlacement(
+		context.Background(), command, placementLeaseGuard(command),
+	)
+	if err != nil {
+		t.Fatalf("bind stop placement: %v", err)
+	}
+	if result.Decision.Outcome != paasv1.PlacementScheduled ||
+		result.Decision.DeploymentGeneration != generation.Generation ||
+		result.Decision.ExecutionTargetID != previous.ExecutionTargetID ||
+		transaction.creation.Reservation != nil ||
+		!transaction.creation.ReusesActiveReservation {
+		t.Fatalf("stop placement/result = %#v / %#v", result, transaction.creation)
+	}
+	if transaction.stopLoadCalls != 1 || transaction.insertCalls != 1 {
+		t.Fatalf(
+			"stop placement load/insert calls = %d/%d",
+			transaction.stopLoadCalls,
+			transaction.insertCalls,
+		)
+	}
+}
+
 func TestCreatePlacementValidatesBeforeOpeningTransaction(t *testing.T) {
 	repository := &fakeRepository{transaction: &fakeTransaction{}}
 	command := createPlacementCommand()
 	command.RequestDigest = "not-a-digest"
-	if _, err := mustUsecase(t, repository).CreatePlacement(context.Background(), command); err == nil {
+	if _, err := mustUsecase(t, repository).CreatePlacement(
+		context.Background(), command, placementLeaseGuard(command),
+	); err == nil {
 		t.Fatal("invalid command must fail")
 	}
 	if repository.calls != 0 {

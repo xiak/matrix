@@ -160,6 +160,47 @@ func (repository *OperationQueueRepository) AdvanceOperation(
 	return operation, nil
 }
 
+func (repository *OperationQueueRepository) ReleaseOperation(
+	ctx context.Context,
+	lease operationqueue.Lease,
+	nextAttemptAt time.Time,
+) (paasv1.Operation, error) {
+	if repository == nil || repository.pool == nil {
+		return paasv1.Operation{}, errors.New("Operation queue repository is nil")
+	}
+	if ctx == nil {
+		return paasv1.Operation{}, errors.New("Operation lease release context is nil")
+	}
+	var document []byte
+	err := withinTenantTransaction(
+		ctx,
+		repository.pool,
+		lease.TenantID,
+		pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadWrite},
+		func(tx pgx.Tx) error {
+			return tx.QueryRow(
+				ctx,
+				`SELECT paas.release_operation_lease($1, $2, $3, $4)`,
+				lease.Operation.ID,
+				lease.WorkerID,
+				int64(lease.FencingToken),
+				nextAttemptAt,
+			).Scan(&document)
+		},
+	)
+	if err != nil {
+		return paasv1.Operation{}, mapOperationQueueError(err)
+	}
+	var operation paasv1.Operation
+	if err := decodeDocument("Operation", document, &operation); err != nil {
+		return paasv1.Operation{}, err
+	}
+	if err := paasv1.ValidateOperation(operation); err != nil {
+		return paasv1.Operation{}, fmt.Errorf("validate released Operation: %w", err)
+	}
+	return operation, nil
+}
+
 func mapOperationQueueError(err error) error {
 	var postgresError *pgconn.PgError
 	if errors.As(err, &postgresError) {

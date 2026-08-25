@@ -2,12 +2,14 @@ package createplacement
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/domain/placement"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/operationqueue"
 )
 
 var createPlacementTime = time.Date(2026, 8, 25, 14, 0, 0, 123_000, time.UTC)
@@ -17,15 +19,18 @@ type fakeRepository struct {
 	afterCallbackErrors []error
 	calls               int
 	tenantID            paasv1.TenantID
+	guard               operationqueue.LeaseGuard
 }
 
 func (repository *fakeRepository) WithinTransaction(
 	ctx context.Context,
 	tenantID paasv1.TenantID,
+	guard operationqueue.LeaseGuard,
 	callback func(context.Context, Transaction) error,
 ) error {
 	repository.calls++
 	repository.tenantID = tenantID
+	repository.guard = guard
 	if err := callback(ctx, repository.transaction); err != nil {
 		return err
 	}
@@ -37,14 +42,17 @@ func (repository *fakeRepository) WithinTransaction(
 }
 
 type fakeTransaction struct {
-	time        time.Time
-	snapshot    placement.Snapshot
-	found       bool
-	stored      StoredDecision
-	creation    DecisionCreation
-	timeCalls   int
-	loadCalls   int
-	insertCalls int
+	time           time.Time
+	snapshot       placement.Snapshot
+	stopBinding    StopBinding
+	stopBindingErr error
+	found          bool
+	stored         StoredDecision
+	creation       DecisionCreation
+	timeCalls      int
+	loadCalls      int
+	stopLoadCalls  int
+	insertCalls    int
 }
 
 func (transaction *fakeTransaction) TransactionTime(context.Context) (time.Time, error) {
@@ -65,6 +73,20 @@ func (transaction *fakeTransaction) LoadAndLockSnapshot(
 ) (placement.Snapshot, error) {
 	transaction.loadCalls++
 	return transaction.snapshot, nil
+}
+
+func (transaction *fakeTransaction) LoadStopBinding(
+	context.Context,
+	paasv1.ResourceID,
+) (StopBinding, error) {
+	transaction.stopLoadCalls++
+	if transaction.stopBindingErr != nil {
+		return StopBinding{}, transaction.stopBindingErr
+	}
+	if transaction.stopBinding.Deployment.Metadata.ID == "" {
+		return StopBinding{}, errors.New("unexpected stop binding load")
+	}
+	return transaction.stopBinding, nil
 }
 
 func (transaction *fakeTransaction) CreateDecision(
@@ -100,6 +122,13 @@ func createPlacementCommand() Command {
 		DeploymentID:  "deployment-a",
 		RequestDigest: createDigest('a'),
 		TraceID:       "trace-a",
+	}
+}
+
+func placementLeaseGuard(command Command) operationqueue.LeaseGuard {
+	return operationqueue.LeaseGuard{
+		TenantID: command.TenantID, OperationID: command.OperationID,
+		WorkerID: "worker-a", FencingToken: 1,
 	}
 }
 

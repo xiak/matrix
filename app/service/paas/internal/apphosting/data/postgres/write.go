@@ -5,11 +5,26 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/domain/placement"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/createplacement"
 )
+
+type capacityReservationDocument struct {
+	ID                paasv1.ResourceID            `json:"id"`
+	DecisionID        paasv1.ResourceID            `json:"decisionId"`
+	DeploymentID      paasv1.ResourceID            `json:"deploymentId"`
+	ExecutionTargetID paasv1.ResourceID            `json:"executionTargetId"`
+	Isolation         paasv1.IsolationGuarantee    `json:"isolation"`
+	CPUMillis         int64                        `json:"cpuMillis"`
+	MemoryBytes       int64                        `json:"memoryBytes"`
+	WorkloadSlots     int64                        `json:"workloadSlots"`
+	State             placement.CapacityClaimState `json:"state"`
+	LeaseExpiresAt    time.Time                    `json:"leaseExpiresAt"`
+	ResourceVersion   uint64                       `json:"resourceVersion"`
+}
 
 func (transaction *placementTransaction) CreateDecision(
 	ctx context.Context,
@@ -18,137 +33,45 @@ func (transaction *placementTransaction) CreateDecision(
 	if err := transaction.validateDecisionCreation(creation); err != nil {
 		return err
 	}
-	decision := creation.Decision
-	document, err := json.Marshal(decision)
+	document, err := json.Marshal(creation.Decision)
 	if err != nil {
 		return fmt.Errorf("encode PlacementDecision document: %w", err)
 	}
-	var reasonDocument any
-	if decision.Reason != nil {
-		reasonDocument, err = json.Marshal(decision.Reason)
+	var reservationDocument any
+	if creation.Reservation != nil {
+		reservation := creation.Reservation
+		reservationDocument, err = json.Marshal(capacityReservationDocument{
+			ID:                reservation.ID,
+			DecisionID:        reservation.DecisionID,
+			DeploymentID:      reservation.DeploymentID,
+			ExecutionTargetID: reservation.ExecutionTargetID,
+			Isolation:         reservation.Isolation,
+			CPUMillis:         reservation.Resources.CPUMillis,
+			MemoryBytes:       reservation.Resources.MemoryBytes,
+			WorkloadSlots:     reservation.Resources.WorkloadSlots,
+			State:             reservation.State,
+			LeaseExpiresAt:    reservation.LeaseExpiresAt,
+			ResourceVersion:   reservation.ResourceVersion,
+		})
 		if err != nil {
-			return fmt.Errorf("encode PlacementDecision reason: %w", err)
+			return fmt.Errorf("encode capacity reservation: %w", err)
 		}
 	}
-	var executionTargetID any
-	var executionTargetVersion any
-	var grantedIsolation any
-	if decision.Outcome == paasv1.PlacementScheduled {
-		executionTargetID = string(decision.ExecutionTargetID)
-		executionTargetVersion = int64(decision.ExecutionTargetResourceVersion)
-		grantedIsolation = string(decision.GrantedIsolationGuarantee)
-	}
-
 	_, err = transaction.tx.Exec(
 		ctx,
-		`INSERT INTO paas.placement_decisions (
-             tenant_id,
-             id,
-             operation_id,
-             request_digest,
-		     deployment_id,
-		     deployment_generation,
-		     deployment_resource_version,
-		     application_revision_id,
-		     policy_id,
-             policy_resource_version,
-             requested_isolation,
-             outcome,
-		     execution_target_id,
-		     execution_target_resource_version,
-             granted_isolation,
-             candidate_digest,
-             reason,
-             decided_at,
-             document
-		 ) VALUES (
-		     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-		     $11, $12, $13, $14, $15, $16, $17, $18, $19
+		`SELECT paas.create_placement(
+		     $1, $2, $3, $4, $5::jsonb, $6::jsonb, $7
 		 )`,
-		string(transaction.tenantID),
-		string(decision.Metadata.ID),
-		string(creation.OperationID),
+		creation.OperationID,
+		transaction.leaseGuard.WorkerID,
+		int64(transaction.leaseGuard.FencingToken),
 		creation.RequestDigest,
-		string(decision.DeploymentID),
-		int64(decision.DeploymentGeneration),
-		int64(decision.DeploymentResourceVersion),
-		string(decision.ApplicationRevisionID),
-		string(decision.PlacementPolicyID),
-		int64(decision.PolicyResourceVersion),
-		string(decision.RequestedIsolationGuarantee),
-		string(decision.Outcome),
-		executionTargetID,
-		executionTargetVersion,
-		grantedIsolation,
-		decision.CandidateSetDigest,
-		reasonDocument,
-		decision.DecidedAt,
 		document,
+		reservationDocument,
+		creation.ReusesActiveReservation,
 	)
 	if err != nil {
-		return fmt.Errorf("insert PlacementDecision: %w", err)
-	}
-	if creation.Reservation == nil {
-		return nil
-	}
-
-	reservation := creation.Reservation
-	var claimID string
-	err = transaction.tx.QueryRow(
-		ctx,
-		`INSERT INTO paas.capacity_claims (
-		     execution_target_id,
-             isolation,
-             cpu_millis,
-             memory_bytes,
-             workload_slots,
-             state,
-             lease_expires_at,
-             resource_version,
-             created_at,
-             updated_at
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
-         RETURNING id::text`,
-		string(reservation.ExecutionTargetID),
-		string(reservation.Isolation),
-		reservation.Resources.CPUMillis,
-		reservation.Resources.MemoryBytes,
-		reservation.Resources.WorkloadSlots,
-		string(reservation.State),
-		reservation.LeaseExpiresAt,
-		int64(reservation.ResourceVersion),
-		decision.DecidedAt,
-	).Scan(&claimID)
-	if err != nil {
-		return fmt.Errorf("insert capacity claim: %w", err)
-	}
-
-	_, err = transaction.tx.Exec(
-		ctx,
-		`INSERT INTO paas.capacity_reservations (
-             tenant_id,
-             id,
-             decision_id,
-		     deployment_id,
-		     execution_target_id,
-             isolation,
-             capacity_claim_id,
-             resource_version,
-             created_at,
-             updated_at
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7::uuid, $8, $9, $9)`,
-		string(reservation.TenantID),
-		string(reservation.ID),
-		string(reservation.DecisionID),
-		string(reservation.DeploymentID),
-		string(reservation.ExecutionTargetID),
-		string(reservation.Isolation),
-		claimID,
-		int64(reservation.ResourceVersion),
-		decision.DecidedAt,
-	)
-	if err != nil {
-		return fmt.Errorf("insert tenant capacity reservation: %w", err)
+		return fmt.Errorf("create fenced PlacementDecision: %w", err)
 	}
 	return nil
 }
@@ -166,11 +89,22 @@ func (transaction *placementTransaction) validateDecisionCreation(
 	if decision.Metadata.Scope.TenantID != transaction.tenantID {
 		problems = append(problems, errors.New("PlacementDecision tenant does not match transaction tenant"))
 	}
-	if decision.Outcome == paasv1.PlacementScheduled && creation.Reservation == nil {
-		problems = append(problems, errors.New("scheduled PlacementDecision requires a capacity reservation"))
+	if transaction.leaseGuard.TenantID != transaction.tenantID ||
+		transaction.leaseGuard.OperationID != creation.OperationID {
+		problems = append(problems, errors.New("PlacementDecision lease identity does not match"))
 	}
-	if decision.Outcome == paasv1.PlacementUnschedulable && creation.Reservation != nil {
-		problems = append(problems, errors.New("unschedulable PlacementDecision cannot reserve capacity"))
+	hasReservation := creation.Reservation != nil
+	if decision.Outcome == paasv1.PlacementScheduled &&
+		hasReservation == creation.ReusesActiveReservation {
+		problems = append(problems, errors.New(
+			"scheduled PlacementDecision must create or explicitly reuse one capacity reservation",
+		))
+	}
+	if decision.Outcome == paasv1.PlacementUnschedulable &&
+		(hasReservation || creation.ReusesActiveReservation) {
+		problems = append(problems, errors.New(
+			"unschedulable PlacementDecision cannot reserve or reuse capacity",
+		))
 	}
 	if creation.Reservation == nil {
 		return errors.Join(problems...)

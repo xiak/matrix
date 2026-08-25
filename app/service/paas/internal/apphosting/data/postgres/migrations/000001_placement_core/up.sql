@@ -974,8 +974,7 @@ BEGIN
        OR submitted_operation->'error' IS NOT NULL
        OR submitted_operation ? 'terminalAt'
        OR submitted_deployment#>>'{status,phase}' <> 'PENDING'
-       OR submitted_deployment#>>'{status,currentOperationId}' <> operation_id
-       OR submitted_deployment#>'{status}' ? 'placementDecisionId' THEN
+       OR submitted_deployment#>>'{status,currentOperationId}' <> operation_id THEN
         RAISE EXCEPTION USING
             ERRCODE = '22023',
             MESSAGE = 'deployment submission identities or initial state are invalid';
@@ -1032,6 +1031,7 @@ BEGIN
            OR submitted_deployment#>>'{status,observedGeneration}' <> '0'
            OR submitted_deployment#>>'{status,readyComponents}' <> '0'
            OR submitted_deployment#>'{status}' ? 'observedApplicationRevisionId'
+           OR submitted_deployment#>'{status}' ? 'placementDecisionId'
            OR (submitted_deployment#>>'{metadata,createdAt}')::timestamptz
                 <> effective_now THEN
             RAISE EXCEPTION USING
@@ -1053,15 +1053,12 @@ BEGIN
                AND submitted_deployment#>>'{spec,desiredState}' <> 'STOPPED')
            OR (operation_action IN ('UPDATE', 'ROLLBACK')
                AND submitted_deployment#>>'{spec,desiredState}' <> 'RUNNING')
-           OR submitted_deployment->'metadata' - ARRAY['resourceVersion', 'updatedAt']
+           OR (submitted_deployment->'metadata') - ARRAY['resourceVersion', 'updatedAt']
                 IS DISTINCT FROM
-                current_document->'metadata' - ARRAY['resourceVersion', 'updatedAt']
-           OR submitted_deployment->'status' - ARRAY[
-                'phase', 'placementDecisionId', 'currentOperationId'
-              ] IS DISTINCT FROM
-              current_document->'status' - ARRAY[
-                'phase', 'placementDecisionId', 'currentOperationId'
-              ] THEN
+                (current_document->'metadata') - ARRAY['resourceVersion', 'updatedAt']
+           OR (submitted_deployment->'status') - ARRAY['phase', 'currentOperationId']
+                IS DISTINCT FROM
+              (current_document->'status') - ARRAY['phase', 'currentOperationId'] THEN
             RAISE EXCEPTION USING
                 ERRCODE = '22023',
                 MESSAGE = 'Deployment update does not preserve immutable identity or observed state';
@@ -1281,6 +1278,7 @@ DECLARE
     current_fencing_token bigint;
     current_lease_expires_at timestamptz;
     current_next_attempt_at timestamptz;
+    current_updated_at timestamptz;
     current_document jsonb;
     transition_allowed boolean;
     terminal boolean;
@@ -1311,12 +1309,14 @@ BEGIN
            operation.fencing_token,
            operation.lease_expires_at,
            operation.next_attempt_at,
+           operation.updated_at,
            operation.document
       INTO current_state,
            current_worker_id,
            current_fencing_token,
            current_lease_expires_at,
            current_next_attempt_at,
+           current_updated_at,
            current_document
       FROM paas.operations AS operation
      WHERE operation.tenant_id = effective_tenant_id
@@ -1373,7 +1373,7 @@ BEGIN
             AND requested_next_attempt_at IS NOT NULL)
        OR (NOT terminal AND release_lease
             AND (requested_next_attempt_at IS NULL
-                OR requested_next_attempt_at < transaction_timestamp())) THEN
+                OR requested_next_attempt_at <= current_updated_at)) THEN
         RAISE EXCEPTION USING
             ERRCODE = '22023',
             MESSAGE = 'Operation transition completion fields are invalid';
@@ -1443,7 +1443,542 @@ GRANT EXECUTE ON FUNCTION paas.advance_operation(
     text, text, bigint, text, jsonb, timestamptz, boolean
 ) TO matrix_paas_worker;
 
+CREATE OR REPLACE FUNCTION paas.assert_current_operation_lease(
+    requested_operation_id text,
+    requested_worker_id text,
+    expected_fencing_token bigint
+)
+RETURNS TABLE (
+    operation_action text,
+    deployment_id text,
+    operation_state text
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text;
+BEGIN
+    effective_tenant_id := paas.current_tenant_id();
+    IF effective_tenant_id IS NULL THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '42501',
+            MESSAGE = 'valid transaction-local tenant context is required';
+    END IF;
+    IF requested_operation_id IS NULL
+       OR requested_operation_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_worker_id IS NULL
+       OR requested_worker_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR expected_fencing_token IS NULL
+       OR expected_fencing_token NOT BETWEEN 1 AND 9007199254740991 THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'Operation lease identity is invalid';
+    END IF;
+
+    RETURN QUERY
+    SELECT operation.action,
+           operation.target_id,
+           operation.state
+      FROM paas.operations AS operation
+     WHERE operation.tenant_id = effective_tenant_id
+       AND operation.id = requested_operation_id
+       AND operation.target_kind = 'Deployment'
+       AND operation.lease_owner = requested_worker_id
+       AND operation.fencing_token = expected_fencing_token
+       AND operation.lease_expires_at > clock_timestamp()
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'MX412',
+            MESSAGE = 'Operation lease or fencing token is stale';
+    END IF;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.assert_current_operation_lease(text, text, bigint)
+    FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paas.assert_current_operation_lease(text, text, bigint)
+    TO matrix_paas_worker;
+
+CREATE OR REPLACE FUNCTION paas.create_placement(
+    requested_operation_id text,
+    requested_worker_id text,
+    expected_fencing_token bigint,
+    requested_request_digest text,
+    submitted_decision jsonb,
+    submitted_reservation jsonb,
+    reuses_active_reservation boolean
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text;
+    operation_action text;
+    operation_deployment_id text;
+    operation_state text;
+    decision_id text;
+    decision_outcome text;
+    decision_target_id text;
+    decision_isolation text;
+    decision_generation bigint;
+    decision_revision_id text;
+    decision_policy_id text;
+    decision_time timestamptz(6);
+    current_generation bigint;
+    current_resource_version bigint;
+    generation_revision_id text;
+    generation_policy_id text;
+    claim_id uuid;
+BEGIN
+    effective_tenant_id := paas.current_tenant_id();
+    IF effective_tenant_id IS NULL THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '42501',
+            MESSAGE = 'valid transaction-local tenant context is required';
+    END IF;
+    IF requested_request_digest IS NULL
+       OR requested_request_digest COLLATE "C" !~ '^sha256:[0-9a-f]{64}$'
+       OR jsonb_typeof(submitted_decision) <> 'object'
+       OR (submitted_reservation IS NOT NULL
+           AND jsonb_typeof(submitted_reservation) <> 'object')
+       OR reuses_active_reservation IS NULL THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'placement submission is invalid';
+    END IF;
+
+    SELECT lease.operation_action,
+           lease.deployment_id,
+           lease.operation_state
+      INTO operation_action,
+           operation_deployment_id,
+           operation_state
+      FROM paas.assert_current_operation_lease(
+            requested_operation_id,
+            requested_worker_id,
+            expected_fencing_token
+           ) AS lease;
+    IF operation_state <> 'PLANNING' THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '55000',
+            MESSAGE = 'placement requires a planning Operation';
+    END IF;
+
+    decision_id := submitted_decision#>>'{metadata,id}';
+    decision_outcome := submitted_decision->>'outcome';
+    decision_target_id := submitted_decision->>'executionTargetId';
+    decision_isolation := submitted_decision->>'grantedIsolationGuarantee';
+    decision_revision_id := submitted_decision->>'applicationRevisionId';
+    decision_policy_id := submitted_decision->>'placementPolicyId';
+    IF submitted_decision->>'deploymentGeneration' !~ '^[1-9][0-9]*$'
+       OR submitted_decision#>>'{metadata,resourceVersion}' <> '1'
+       OR submitted_decision->>'deploymentResourceVersion' !~ '^[1-9][0-9]*$'
+       OR submitted_decision->>'policyResourceVersion' !~ '^[1-9][0-9]*$'
+       OR submitted_decision->>'executionTargetResourceVersion'
+            !~ '^[1-9][0-9]*$' AND decision_outcome = 'SCHEDULED'
+       OR submitted_decision#>>'{metadata,scope,kind}' <> 'TENANT'
+       OR submitted_decision#>>'{metadata,scope,tenantId}' <> effective_tenant_id
+       OR submitted_decision->>'deploymentId' <> operation_deployment_id
+       OR decision_id IS NULL
+       OR decision_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_decision->>'candidateSetDigest' COLLATE "C"
+            !~ '^sha256:[0-9a-f]{64}$'
+       OR decision_outcome NOT IN ('SCHEDULED', 'UNSCHEDULABLE') THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'PlacementDecision identity is invalid';
+    END IF;
+    decision_generation := (submitted_decision->>'deploymentGeneration')::bigint;
+    decision_time := (submitted_decision->>'decidedAt')::timestamptz;
+
+    SELECT deployment.generation,
+           deployment.resource_version,
+           generation.application_revision_id,
+           generation.policy_id
+      INTO current_generation,
+           current_resource_version,
+           generation_revision_id,
+           generation_policy_id
+      FROM paas.deployments AS deployment
+      JOIN paas.deployment_generations AS generation
+        ON generation.tenant_id = deployment.tenant_id
+       AND generation.deployment_id = deployment.id
+       AND generation.generation = deployment.generation
+     WHERE deployment.tenant_id = effective_tenant_id
+       AND deployment.id = operation_deployment_id
+       AND generation.created_by_operation_id = requested_operation_id
+     FOR UPDATE OF deployment;
+    IF NOT FOUND
+       OR current_generation <> decision_generation
+       OR current_resource_version
+            <> (submitted_decision->>'deploymentResourceVersion')::bigint
+       OR generation_revision_id <> decision_revision_id
+       OR generation_policy_id <> decision_policy_id
+       OR decision_time <> transaction_timestamp() THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'PlacementDecision does not bind the current Operation generation';
+    END IF;
+
+    IF decision_outcome = 'UNSCHEDULABLE' THEN
+        IF operation_action = 'STOP'
+           OR submitted_reservation IS NOT NULL
+           OR reuses_active_reservation THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '22023',
+                MESSAGE = 'unschedulable placement cannot reserve or reuse capacity';
+        END IF;
+    ELSIF reuses_active_reservation THEN
+        IF operation_action <> 'STOP'
+           OR submitted_reservation IS NOT NULL
+           OR NOT EXISTS (
+                SELECT 1
+                  FROM paas.deployments AS deployment
+                  JOIN paas.placement_decisions AS previous_decision
+                    ON previous_decision.tenant_id = deployment.tenant_id
+                   AND previous_decision.id =
+                        deployment.document#>>'{status,placementDecisionId}'
+                  JOIN paas.capacity_reservations AS reservation
+                    ON reservation.tenant_id = previous_decision.tenant_id
+                   AND reservation.decision_id = previous_decision.id
+                  JOIN paas.capacity_claims AS claim
+                    ON claim.id = reservation.capacity_claim_id
+                 WHERE deployment.tenant_id = effective_tenant_id
+                   AND deployment.id = operation_deployment_id
+                   AND claim.state = 'ACTIVE'
+                   AND previous_decision.execution_target_id = decision_target_id
+                   AND previous_decision.granted_isolation = decision_isolation
+              ) THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '55000',
+                MESSAGE = 'stop placement requires the current active reservation';
+        END IF;
+    ELSE
+        IF operation_action NOT IN ('DEPLOY', 'UPDATE', 'ROLLBACK')
+           OR submitted_reservation IS NULL
+           OR submitted_reservation->>'id' COLLATE "C"
+                !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+           OR submitted_reservation->>'decisionId' <> decision_id
+           OR submitted_reservation->>'deploymentId' <> operation_deployment_id
+           OR submitted_reservation->>'executionTargetId' <> decision_target_id
+           OR submitted_reservation->>'isolation' <> decision_isolation
+           OR submitted_reservation->>'state' <> 'PENDING'
+           OR submitted_reservation->>'resourceVersion' <> '1'
+           OR submitted_reservation->>'cpuMillis' !~ '^(0|[1-9][0-9]*)$'
+           OR submitted_reservation->>'memoryBytes' !~ '^(0|[1-9][0-9]*)$'
+           OR submitted_reservation->>'workloadSlots' !~ '^[1-9][0-9]*$'
+           OR (submitted_reservation->>'leaseExpiresAt')::timestamptz
+                <= transaction_timestamp() THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '22023',
+                MESSAGE = 'scheduled placement reservation is invalid';
+        END IF;
+    END IF;
+
+    INSERT INTO paas.placement_decisions (
+        tenant_id, id, operation_id, request_digest, deployment_id,
+        deployment_generation, deployment_resource_version,
+        application_revision_id, policy_id, policy_resource_version,
+        requested_isolation, outcome, execution_target_id,
+        execution_target_resource_version, granted_isolation,
+        candidate_digest, reason, decided_at, document
+    ) VALUES (
+        effective_tenant_id,
+        decision_id,
+        requested_operation_id,
+        requested_request_digest,
+        operation_deployment_id,
+        decision_generation,
+        (submitted_decision->>'deploymentResourceVersion')::bigint,
+        decision_revision_id,
+        decision_policy_id,
+        (submitted_decision->>'policyResourceVersion')::bigint,
+        submitted_decision->>'requestedIsolationGuarantee',
+        decision_outcome,
+        NULLIF(decision_target_id, ''),
+        CASE WHEN decision_outcome = 'SCHEDULED'
+            THEN (submitted_decision->>'executionTargetResourceVersion')::bigint
+            ELSE NULL END,
+        NULLIF(decision_isolation, ''),
+        submitted_decision->>'candidateSetDigest',
+        submitted_decision->'reason',
+        decision_time,
+        submitted_decision
+    );
+
+    IF submitted_reservation IS NULL THEN
+        RETURN;
+    END IF;
+    INSERT INTO paas.capacity_claims (
+        execution_target_id, isolation, cpu_millis, memory_bytes,
+        workload_slots, state, lease_expires_at, resource_version,
+        created_at, updated_at
+    ) VALUES (
+        decision_target_id,
+        decision_isolation,
+        (submitted_reservation->>'cpuMillis')::bigint,
+        (submitted_reservation->>'memoryBytes')::bigint,
+        (submitted_reservation->>'workloadSlots')::bigint,
+        'PENDING',
+        (submitted_reservation->>'leaseExpiresAt')::timestamptz,
+        1,
+        decision_time,
+        decision_time
+    ) RETURNING id INTO claim_id;
+
+    INSERT INTO paas.capacity_reservations (
+        tenant_id, id, decision_id, deployment_id, execution_target_id,
+        isolation, capacity_claim_id, resource_version, created_at, updated_at
+    ) VALUES (
+        effective_tenant_id,
+        submitted_reservation->>'id',
+        decision_id,
+        operation_deployment_id,
+        decision_target_id,
+        decision_isolation,
+        claim_id,
+        1,
+        decision_time,
+        decision_time
+    );
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.create_placement(
+    text, text, bigint, text, jsonb, jsonb, boolean
+) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paas.create_placement(
+    text, text, bigint, text, jsonb, jsonb, boolean
+) TO matrix_paas_worker;
+
+CREATE OR REPLACE FUNCTION paas.prepare_adapter_command(
+    requested_operation_id text,
+    requested_worker_id text,
+    expected_fencing_token bigint,
+    submitted_command jsonb
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text;
+    operation_action text;
+    operation_deployment_id text;
+    operation_state text;
+    expected_action text;
+    operation_attempt bigint;
+    deployment_generation bigint;
+    application_revision_id text;
+    application_id text;
+    execution_target_id text;
+    submitted_action text;
+    submitted_command_id text;
+    submitted_request_digest text;
+    submitted_binding_ref text;
+    submitted_deadline timestamptz(6);
+    stored_command_id text;
+    stored_deployment_generation bigint;
+    stored_application_revision_id text;
+    stored_execution_target_id text;
+    stored_request_digest text;
+    stored_binding_ref text;
+BEGIN
+    effective_tenant_id := paas.current_tenant_id();
+    IF effective_tenant_id IS NULL THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '42501',
+            MESSAGE = 'valid transaction-local tenant context is required';
+    END IF;
+    IF jsonb_typeof(submitted_command) <> 'object' THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'adapter command must be an object';
+    END IF;
+    SELECT lease.operation_action,
+           lease.deployment_id,
+           lease.operation_state
+      INTO operation_action,
+           operation_deployment_id,
+           operation_state
+      FROM paas.assert_current_operation_lease(
+            requested_operation_id,
+            requested_worker_id,
+            expected_fencing_token
+           ) AS lease;
+
+    submitted_action := submitted_command->>'action';
+    submitted_command_id := submitted_command->>'commandId';
+    submitted_request_digest := submitted_command->>'requestDigest';
+    submitted_binding_ref := submitted_command->>'bindingRef';
+    IF operation_action IN ('DEPLOY', 'UPDATE') THEN
+        expected_action := 'APPLY_DEPLOYMENT';
+    ELSIF operation_action = 'ROLLBACK' THEN
+        expected_action := 'ROLLBACK_DEPLOYMENT';
+    ELSIF operation_action = 'STOP' THEN
+        expected_action := 'STOP_DEPLOYMENT';
+    ELSE
+        RAISE EXCEPTION USING
+            ERRCODE = '55000',
+            MESSAGE = 'Operation action cannot execute a Deployment';
+    END IF;
+    IF submitted_action = 'OBSERVE_DEPLOYMENT' THEN
+        IF operation_state NOT IN ('VERIFYING', 'RECONCILING') THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '55000',
+                MESSAGE = 'observation command requires verifying or reconciling state';
+        END IF;
+    ELSIF submitted_action = expected_action THEN
+        IF operation_state NOT IN ('QUEUED', 'EXECUTING', 'RECONCILING') THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '55000',
+                MESSAGE = 'effect command requires queued, executing, or reconciling state';
+        END IF;
+    ELSE
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'adapter command action does not match Operation';
+    END IF;
+
+    SELECT operation.attempt,
+           generation.generation,
+           generation.application_revision_id,
+           revision.application_id,
+           decision.execution_target_id
+      INTO operation_attempt,
+           deployment_generation,
+           application_revision_id,
+           application_id,
+           execution_target_id
+      FROM paas.deployment_generations AS generation
+      JOIN paas.operations AS operation
+        ON operation.tenant_id = generation.tenant_id
+       AND operation.id = generation.created_by_operation_id
+      JOIN paas.application_revisions AS revision
+        ON revision.tenant_id = generation.tenant_id
+       AND revision.id = generation.application_revision_id
+      JOIN paas.placement_decisions AS decision
+        ON decision.tenant_id = generation.tenant_id
+       AND decision.operation_id = generation.created_by_operation_id
+       AND decision.deployment_id = generation.deployment_id
+       AND decision.deployment_generation = generation.generation
+     WHERE generation.tenant_id = effective_tenant_id
+       AND generation.created_by_operation_id = requested_operation_id
+       AND generation.deployment_id = operation_deployment_id
+       AND decision.outcome = 'SCHEDULED';
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = 'scheduled Operation generation was not found';
+    END IF;
+
+    IF submitted_command_id IS NULL
+       OR submitted_command_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_request_digest IS NULL
+       OR submitted_request_digest COLLATE "C" !~ '^sha256:[0-9a-f]{64}$'
+       OR submitted_binding_ref IS NULL
+       OR submitted_binding_ref COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_command->>'operationId' <> requested_operation_id
+       OR submitted_command#>>'{scope,kind}' <> 'TENANT'
+       OR submitted_command#>>'{scope,tenantId}' <> effective_tenant_id
+       OR submitted_command->>'deploymentId' <> operation_deployment_id
+       OR submitted_command->>'applicationRevisionId' <> application_revision_id
+       OR submitted_command->>'applicationId' <> application_id
+       OR submitted_command->>'executionTargetId' <> execution_target_id
+       OR submitted_command->>'attempt' !~ '^[1-9][0-9]*$'
+       OR (submitted_command->>'attempt')::bigint <> operation_attempt
+       OR submitted_command->>'deadline' IS NULL THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'adapter command identity is invalid';
+    END IF;
+    submitted_deadline := (submitted_command->>'deadline')::timestamptz;
+    IF submitted_deadline <= clock_timestamp() THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'adapter command deadline has expired';
+    END IF;
+
+    SELECT command.id,
+           command.deployment_generation,
+           command.application_revision_id,
+           command.execution_target_id,
+           command.request_digest,
+           command.binding_ref
+      INTO stored_command_id,
+           stored_deployment_generation,
+           stored_application_revision_id,
+           stored_execution_target_id,
+           stored_request_digest,
+           stored_binding_ref
+      FROM paas.adapter_commands AS command
+     WHERE command.tenant_id = effective_tenant_id
+       AND command.operation_id = requested_operation_id
+       AND command.action = submitted_action
+     FOR UPDATE;
+    IF FOUND THEN
+        IF stored_command_id <> submitted_command_id
+           OR stored_deployment_generation <> deployment_generation
+           OR stored_application_revision_id <> application_revision_id
+           OR stored_execution_target_id <> execution_target_id
+           OR stored_request_digest <> submitted_request_digest
+           OR stored_binding_ref <> submitted_binding_ref THEN
+            RAISE EXCEPTION USING
+                ERRCODE = 'MX409',
+                MESSAGE = 'adapter command replay conflicts with stored intent';
+        END IF;
+        UPDATE paas.adapter_commands AS command
+           SET deadline = submitted_deadline,
+               document = submitted_command
+         WHERE command.tenant_id = effective_tenant_id
+           AND command.id = stored_command_id;
+        RETURN submitted_command;
+    END IF;
+
+    INSERT INTO paas.adapter_commands (
+        tenant_id, id, operation_id, action, deployment_id,
+        deployment_generation, application_revision_id, execution_target_id,
+        request_digest, binding_ref, deadline, created_at, document
+    ) VALUES (
+        effective_tenant_id,
+        submitted_command_id,
+        requested_operation_id,
+        submitted_action,
+        operation_deployment_id,
+        deployment_generation,
+        application_revision_id,
+        execution_target_id,
+        submitted_request_digest,
+        submitted_binding_ref,
+        submitted_deadline,
+        transaction_timestamp(),
+        submitted_command
+    );
+    RETURN submitted_command;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.prepare_adapter_command(text, text, bigint, jsonb)
+    FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paas.prepare_adapter_command(text, text, bigint, jsonb)
+    TO matrix_paas_worker;
+
+DROP FUNCTION IF EXISTS paas.update_deployment_status(text, bigint, bigint, jsonb);
+
 CREATE OR REPLACE FUNCTION paas.update_deployment_status(
+    requested_operation_id text,
+    requested_worker_id text,
+    expected_fencing_token bigint,
     requested_deployment_id text,
     expected_resource_version bigint,
     expected_generation bigint,
@@ -1464,6 +1999,9 @@ DECLARE
     next_observed_generation bigint;
     current_document jsonb;
     transition_allowed boolean;
+    operation_action text;
+    operation_deployment_id text;
+    operation_state text;
 BEGIN
     effective_tenant_id := paas.current_tenant_id();
     IF effective_tenant_id IS NULL THEN
@@ -1471,6 +2009,17 @@ BEGIN
             ERRCODE = '42501',
             MESSAGE = 'valid transaction-local tenant context is required';
     END IF;
+    SELECT lease.operation_action,
+           lease.deployment_id,
+           lease.operation_state
+      INTO operation_action,
+           operation_deployment_id,
+           operation_state
+      FROM paas.assert_current_operation_lease(
+            requested_operation_id,
+            requested_worker_id,
+            expected_fencing_token
+           ) AS lease;
     IF requested_deployment_id IS NULL
        OR requested_deployment_id COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
@@ -1482,6 +2031,11 @@ BEGIN
         RAISE EXCEPTION USING
             ERRCODE = '22023',
             MESSAGE = 'Deployment status update identity is invalid';
+    END IF;
+    IF operation_deployment_id <> requested_deployment_id THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '42501',
+            MESSAGE = 'Operation cannot mutate another Deployment';
     END IF;
 
     SELECT deployment.generation,
@@ -1521,15 +2075,17 @@ BEGIN
        OR submitted_deployment#>>'{metadata,scope,tenantId}' <> effective_tenant_id
        OR submitted_deployment->>'generation' <> current_generation::text
        OR submitted_deployment->'spec' IS DISTINCT FROM current_document->'spec'
-       OR submitted_deployment->'metadata' - ARRAY['resourceVersion', 'updatedAt']
+       OR (submitted_deployment->'metadata') - ARRAY['resourceVersion', 'updatedAt']
             IS DISTINCT FROM
-            current_document->'metadata' - ARRAY['resourceVersion', 'updatedAt']
+            (current_document->'metadata') - ARRAY['resourceVersion', 'updatedAt']
        OR submitted_deployment#>>'{metadata,resourceVersion}'
             <> (current_resource_version + 1)::text
        OR (submitted_deployment#>>'{metadata,updatedAt}')::timestamptz
             <> transaction_timestamp()
        OR submitted_deployment#>>'{status,currentOperationId}'
             IS DISTINCT FROM current_document#>>'{status,currentOperationId}'
+       OR current_document#>>'{status,currentOperationId}'
+            <> requested_operation_id
        OR submitted_deployment#>>'{status,observedGeneration}'
             !~ '^(0|[1-9][0-9]*)$' THEN
         RAISE EXCEPTION USING
@@ -1570,12 +2126,385 @@ BEGIN
 END
 $function$;
 
-REVOKE ALL ON FUNCTION paas.update_deployment_status(text, bigint, bigint, jsonb)
+REVOKE ALL ON FUNCTION paas.update_deployment_status(
+    text, text, bigint, text, bigint, bigint, jsonb
+)
     FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION paas.update_deployment_status(text, bigint, bigint, jsonb)
+GRANT EXECUTE ON FUNCTION paas.update_deployment_status(
+    text, text, bigint, text, bigint, bigint, jsonb
+)
     TO matrix_paas_worker;
 
+CREATE OR REPLACE FUNCTION paas.record_adapter_receipt(
+    requested_operation_id text,
+    requested_worker_id text,
+    expected_fencing_token bigint,
+    requested_command_id text,
+    requested_request_digest text,
+    requested_state text,
+    requested_receipt_digest text,
+    requested_normalized_error jsonb,
+    requested_evidence jsonb,
+    requested_observed_at timestamptz
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text;
+    operation_action text;
+    operation_deployment_id text;
+    operation_state text;
+    command_request_digest text;
+    current_state text;
+    current_receipt_digest text;
+    current_normalized_error jsonb;
+    current_evidence jsonb;
+    current_observed_at timestamptz(6);
+BEGIN
+    effective_tenant_id := paas.current_tenant_id();
+    IF effective_tenant_id IS NULL THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '42501',
+            MESSAGE = 'valid transaction-local tenant context is required';
+    END IF;
+    SELECT lease.operation_action,
+           lease.deployment_id,
+           lease.operation_state
+      INTO operation_action,
+           operation_deployment_id,
+           operation_state
+      FROM paas.assert_current_operation_lease(
+            requested_operation_id,
+            requested_worker_id,
+            expected_fencing_token
+           ) AS lease;
+    IF operation_state <> 'EXECUTING' THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '55000',
+            MESSAGE = 'adapter receipt requires an executing Operation';
+    END IF;
+    IF requested_command_id IS NULL
+       OR requested_command_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_request_digest IS NULL
+       OR requested_request_digest COLLATE "C" !~ '^sha256:[0-9a-f]{64}$'
+       OR requested_state NOT IN ('SUCCEEDED', 'IN_PROGRESS', 'FAILED', 'UNKNOWN')
+       OR requested_evidence IS NULL
+       OR jsonb_typeof(requested_evidence) <> 'array'
+       OR requested_observed_at IS NULL
+       OR (requested_receipt_digest IS NOT NULL
+           AND requested_receipt_digest COLLATE "C"
+                !~ '^sha256:[0-9a-f]{64}$')
+       OR (requested_state IN ('FAILED', 'UNKNOWN')
+           AND (requested_normalized_error IS NULL
+                OR jsonb_typeof(requested_normalized_error) <> 'object'))
+       OR (requested_state NOT IN ('FAILED', 'UNKNOWN')
+           AND requested_normalized_error IS NOT NULL)
+       OR (requested_state = 'SUCCEEDED' AND requested_receipt_digest IS NULL) THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'adapter receipt is invalid';
+    END IF;
+
+    SELECT command.request_digest
+      INTO command_request_digest
+      FROM paas.adapter_commands AS command
+     WHERE command.tenant_id = effective_tenant_id
+       AND command.id = requested_command_id
+       AND command.operation_id = requested_operation_id
+       AND command.deployment_id = operation_deployment_id;
+    IF NOT FOUND OR command_request_digest <> requested_request_digest THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'MX409',
+            MESSAGE = 'adapter receipt does not match command intent';
+    END IF;
+
+    SELECT receipt.state,
+           receipt.receipt_digest,
+           receipt.normalized_error,
+           receipt.evidence,
+           receipt.observed_at
+      INTO current_state,
+           current_receipt_digest,
+           current_normalized_error,
+           current_evidence,
+           current_observed_at
+      FROM paas.adapter_receipts AS receipt
+     WHERE receipt.tenant_id = effective_tenant_id
+       AND receipt.command_id = requested_command_id
+     FOR UPDATE;
+    IF FOUND THEN
+        IF current_state = requested_state
+           AND current_receipt_digest IS NOT DISTINCT FROM requested_receipt_digest
+           AND current_normalized_error IS NOT DISTINCT FROM requested_normalized_error
+           AND current_evidence = requested_evidence
+           AND current_observed_at = requested_observed_at THEN
+            RETURN false;
+        END IF;
+        IF current_state IN ('SUCCEEDED', 'FAILED') THEN
+            RAISE EXCEPTION USING
+                ERRCODE = 'MX409',
+                MESSAGE = 'terminal adapter receipt cannot be replaced';
+        END IF;
+        UPDATE paas.adapter_receipts AS receipt
+           SET state = requested_state,
+               receipt_digest = requested_receipt_digest,
+               normalized_error = requested_normalized_error,
+               evidence = requested_evidence,
+               observed_at = requested_observed_at
+         WHERE receipt.tenant_id = effective_tenant_id
+           AND receipt.command_id = requested_command_id;
+        RETURN true;
+    END IF;
+
+    INSERT INTO paas.adapter_receipts (
+        tenant_id, command_id, request_digest, state, receipt_digest,
+        normalized_error, evidence, observed_at
+    ) VALUES (
+        effective_tenant_id,
+        requested_command_id,
+        requested_request_digest,
+        requested_state,
+        requested_receipt_digest,
+        requested_normalized_error,
+        requested_evidence,
+        requested_observed_at
+    );
+    RETURN true;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.record_adapter_receipt(
+    text, text, bigint, text, text, text, text, jsonb, jsonb, timestamptz
+) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paas.record_adapter_receipt(
+    text, text, bigint, text, text, text, text, jsonb, jsonb, timestamptz
+) TO matrix_paas_worker;
+
+CREATE OR REPLACE FUNCTION paas.record_deployment_observation(
+    requested_operation_id text,
+    requested_worker_id text,
+    expected_fencing_token bigint,
+    requested_command_id text,
+    submitted_observation jsonb
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text;
+    operation_action text;
+    operation_deployment_id text;
+    operation_state text;
+    command_generation bigint;
+    command_revision_id text;
+    current_document jsonb;
+    current_observed_at timestamptz(6);
+    submitted_observed_at timestamptz(6);
+BEGIN
+    effective_tenant_id := paas.current_tenant_id();
+    IF effective_tenant_id IS NULL THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '42501',
+            MESSAGE = 'valid transaction-local tenant context is required';
+    END IF;
+    IF jsonb_typeof(submitted_observation) <> 'object' THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'Deployment observation must be an object';
+    END IF;
+    SELECT lease.operation_action,
+           lease.deployment_id,
+           lease.operation_state
+      INTO operation_action,
+           operation_deployment_id,
+           operation_state
+      FROM paas.assert_current_operation_lease(
+            requested_operation_id,
+            requested_worker_id,
+            expected_fencing_token
+           ) AS lease;
+    IF operation_state NOT IN ('VERIFYING', 'RECONCILING') THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '55000',
+            MESSAGE = 'Deployment observation requires verification or reconciliation';
+    END IF;
+    SELECT command.deployment_generation,
+           command.application_revision_id
+      INTO command_generation,
+           command_revision_id
+      FROM paas.adapter_commands AS command
+     WHERE command.tenant_id = effective_tenant_id
+       AND command.id = requested_command_id
+       AND command.operation_id = requested_operation_id
+       AND command.action = 'OBSERVE_DEPLOYMENT'
+       AND command.deployment_id = operation_deployment_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = 'Deployment observation command was not found';
+    END IF;
+    IF submitted_observation->>'deploymentId' <> operation_deployment_id
+       OR submitted_observation->>'generation' !~ '^[1-9][0-9]*$'
+       OR (submitted_observation->>'generation')::bigint <> command_generation
+       OR submitted_observation->>'applicationRevisionId' <> command_revision_id
+       OR submitted_observation->>'phase' NOT IN (
+            'APPLYING', 'READY', 'DEGRADED', 'FAILED', 'STOPPING', 'STOPPED'
+          )
+       OR submitted_observation->>'readyComponents' !~ '^(0|[1-9][0-9]*)$'
+       OR submitted_observation->>'receiptDigest' COLLATE "C"
+            !~ '^sha256:[0-9a-f]{64}$'
+       OR submitted_observation->>'observedAt' IS NULL THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'Deployment observation identity is invalid';
+    END IF;
+    submitted_observed_at := (submitted_observation->>'observedAt')::timestamptz;
+
+    SELECT observation.document,
+           observation.observed_at
+      INTO current_document,
+           current_observed_at
+      FROM paas.deployment_observations AS observation
+     WHERE observation.tenant_id = effective_tenant_id
+       AND observation.command_id = requested_command_id
+     FOR UPDATE;
+    IF FOUND THEN
+        IF current_document = submitted_observation THEN
+            RETURN false;
+        END IF;
+        IF submitted_observed_at <= current_observed_at THEN
+            RAISE EXCEPTION USING
+                ERRCODE = 'MX409',
+                MESSAGE = 'stale Deployment observation cannot replace a newer one';
+        END IF;
+        UPDATE paas.deployment_observations AS observation
+           SET phase = submitted_observation->>'phase',
+               ready_components =
+                    (submitted_observation->>'readyComponents')::bigint,
+               receipt_digest = submitted_observation->>'receiptDigest',
+               observed_at = submitted_observed_at,
+               document = submitted_observation
+         WHERE observation.tenant_id = effective_tenant_id
+           AND observation.command_id = requested_command_id;
+        RETURN true;
+    END IF;
+
+    INSERT INTO paas.deployment_observations (
+        tenant_id, command_id, deployment_id, deployment_generation,
+        application_revision_id, phase, ready_components, receipt_digest,
+        observed_at, document
+    ) VALUES (
+        effective_tenant_id,
+        requested_command_id,
+        operation_deployment_id,
+        command_generation,
+        command_revision_id,
+        submitted_observation->>'phase',
+        (submitted_observation->>'readyComponents')::bigint,
+        submitted_observation->>'receiptDigest',
+        submitted_observed_at,
+        submitted_observation
+    );
+    RETURN true;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.record_deployment_observation(
+    text, text, bigint, text, jsonb
+) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paas.record_deployment_observation(
+    text, text, bigint, text, jsonb
+) TO matrix_paas_worker;
+
+CREATE OR REPLACE FUNCTION paas.release_operation_lease(
+    requested_operation_id text,
+    requested_worker_id text,
+    expected_fencing_token bigint,
+    requested_next_attempt_at timestamptz
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text;
+    operation_action text;
+    operation_deployment_id text;
+    operation_state text;
+    current_updated_at timestamptz;
+    current_document jsonb;
+    next_document jsonb;
+BEGIN
+    effective_tenant_id := paas.current_tenant_id();
+    IF effective_tenant_id IS NULL THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '42501',
+            MESSAGE = 'valid transaction-local tenant context is required';
+    END IF;
+    SELECT lease.operation_action,
+           lease.deployment_id,
+           lease.operation_state
+      INTO operation_action,
+           operation_deployment_id,
+           operation_state
+      FROM paas.assert_current_operation_lease(
+            requested_operation_id,
+            requested_worker_id,
+            expected_fencing_token
+           ) AS lease;
+    SELECT operation.updated_at,
+           operation.document
+      INTO current_updated_at,
+           current_document
+      FROM paas.operations AS operation
+     WHERE operation.tenant_id = effective_tenant_id
+       AND operation.id = requested_operation_id;
+    IF operation_state <> 'RECONCILING'
+       OR requested_next_attempt_at IS NULL
+       OR requested_next_attempt_at <= current_updated_at THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'Operation lease release requires reconciliation backoff';
+    END IF;
+    next_document := jsonb_set(
+        current_document,
+        '{updatedAt}',
+        to_jsonb(to_char(
+            transaction_timestamp() AT TIME ZONE 'UTC',
+            'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+        )),
+        false
+    );
+    UPDATE paas.operations AS operation
+       SET next_attempt_at = requested_next_attempt_at,
+           lease_owner = NULL,
+           lease_expires_at = NULL,
+           updated_at = transaction_timestamp(),
+           document = next_document
+     WHERE operation.tenant_id = effective_tenant_id
+       AND operation.id = requested_operation_id;
+    RETURN next_document;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.release_operation_lease(text, text, bigint, timestamptz)
+    FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paas.release_operation_lease(text, text, bigint, timestamptz)
+    TO matrix_paas_worker;
+
+DROP FUNCTION IF EXISTS paas.transition_capacity_reservation(text, text, bigint);
+
 CREATE OR REPLACE FUNCTION paas.transition_capacity_reservation(
+    requested_operation_id text,
+    requested_worker_id text,
+    expected_fencing_token bigint,
     requested_reservation_id text,
     requested_action text,
     expected_resource_version bigint
@@ -1597,6 +2526,9 @@ DECLARE
     current_claim_version bigint;
     current_reservation_version bigint;
     next_state text;
+    operation_action text;
+    operation_deployment_id text;
+    operation_state text;
 BEGIN
     effective_tenant_id := paas.current_tenant_id();
     IF effective_tenant_id IS NULL THEN
@@ -1604,6 +2536,17 @@ BEGIN
             ERRCODE = '42501',
             MESSAGE = 'valid transaction-local tenant context is required';
     END IF;
+    SELECT lease.operation_action,
+           lease.deployment_id,
+           lease.operation_state
+      INTO operation_action,
+           operation_deployment_id,
+           operation_state
+      FROM paas.assert_current_operation_lease(
+            requested_operation_id,
+            requested_worker_id,
+            expected_fencing_token
+           ) AS lease;
     IF requested_reservation_id IS NULL
        OR requested_reservation_id COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
@@ -1638,6 +2581,7 @@ BEGIN
         ON claim.id = reservation.capacity_claim_id
      WHERE reservation.tenant_id = effective_tenant_id
        AND reservation.id = requested_reservation_id
+       AND reservation.deployment_id = operation_deployment_id
      FOR UPDATE OF reservation, claim;
 
     IF NOT FOUND THEN
@@ -1719,12 +2663,18 @@ BEGIN
 END
 $function$;
 
-REVOKE ALL ON FUNCTION paas.transition_capacity_reservation(text, text, bigint)
+REVOKE ALL ON FUNCTION paas.transition_capacity_reservation(
+    text, text, bigint, text, text, bigint
+)
     FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION paas.transition_capacity_reservation(text, text, bigint)
+GRANT EXECUTE ON FUNCTION paas.transition_capacity_reservation(
+    text, text, bigint, text, text, bigint
+)
     TO matrix_paas_worker;
 
 REVOKE ALL ON ALL TABLES IN SCHEMA paas FROM PUBLIC;
+REVOKE ALL ON ALL TABLES IN SCHEMA paas
+    FROM matrix_paas_api, matrix_paas_worker;
 GRANT SELECT, INSERT ON paas.applications TO matrix_paas_api;
 GRANT SELECT, INSERT ON paas.configurations TO matrix_paas_api;
 GRANT SELECT, INSERT ON paas.configuration_revisions TO matrix_paas_api;
@@ -1746,11 +2696,11 @@ GRANT SELECT ON paas.execution_pools TO matrix_paas_worker;
 GRANT SELECT ON paas.execution_targets TO matrix_paas_worker;
 GRANT SELECT, UPDATE (lock_version)
     ON paas.execution_target_allocations TO matrix_paas_worker;
-GRANT SELECT, INSERT ON paas.adapter_commands TO matrix_paas_worker;
-GRANT SELECT, INSERT ON paas.adapter_receipts TO matrix_paas_worker;
-GRANT SELECT, INSERT ON paas.deployment_observations TO matrix_paas_worker;
-GRANT SELECT, INSERT ON paas.placement_decisions TO matrix_paas_worker;
-GRANT SELECT, INSERT ON paas.capacity_claims TO matrix_paas_worker;
-GRANT SELECT, INSERT ON paas.capacity_reservations TO matrix_paas_worker;
+GRANT SELECT ON paas.adapter_commands TO matrix_paas_worker;
+GRANT SELECT ON paas.adapter_receipts TO matrix_paas_worker;
+GRANT SELECT ON paas.deployment_observations TO matrix_paas_worker;
+GRANT SELECT ON paas.placement_decisions TO matrix_paas_worker;
+GRANT SELECT ON paas.capacity_claims TO matrix_paas_worker;
+GRANT SELECT ON paas.capacity_reservations TO matrix_paas_worker;
 
 COMMIT;

@@ -11,6 +11,7 @@ import (
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/domain/placement"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/operationqueue"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/transitionreservation"
 )
 
@@ -31,7 +32,7 @@ func NewCapacityReservationRepository(
 
 func (repository *CapacityReservationRepository) TransitionCapacityReservation(
 	ctx context.Context,
-	tenantID paasv1.TenantID,
+	guard operationqueue.LeaseGuard,
 	reservationID paasv1.ResourceID,
 	action transitionreservation.Action,
 	expectedResourceVersion uint64,
@@ -46,18 +47,24 @@ func (repository *CapacityReservationRepository) TransitionCapacityReservation(
 			"capacity reservation transition context is nil",
 		)
 	}
+	if err := operationqueue.ValidateLeaseGuard(guard); err != nil {
+		return transitionreservation.StoredTransition{}, err
+	}
 	var result transitionreservation.StoredTransition
 	err := withinTenantTransaction(
 		ctx,
 		repository.pool,
-		tenantID,
+		guard.TenantID,
 		pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadWrite},
 		func(tx pgx.Tx) error {
 			var state string
 			if err := tx.QueryRow(
 				ctx,
 				`SELECT claim_state, claim_resource_version, changed
-				   FROM paas.transition_capacity_reservation($1, $2, $3)`,
+				   FROM paas.transition_capacity_reservation($1, $2, $3, $4, $5, $6)`,
+				string(guard.OperationID),
+				guard.WorkerID,
+				int64(guard.FencingToken),
 				string(reservationID),
 				string(action),
 				int64(expectedResourceVersion),
@@ -78,6 +85,11 @@ func mapReservationTransitionError(err error) error {
 	var postgresError *pgconn.PgError
 	if errors.As(err, &postgresError) {
 		switch postgresError.Code {
+		case "MX412":
+			return fmt.Errorf(
+				"transition capacity reservation: %w",
+				transitionreservation.ErrStaleLease,
+			)
 		case "P0002":
 			return fmt.Errorf("transition capacity reservation: %w", transitionreservation.ErrNotFound)
 		case "40001":

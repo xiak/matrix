@@ -22,6 +22,25 @@ type Lease struct {
 	LeaseExpiresAt time.Time
 }
 
+// LeaseGuard is the minimum database-authoritative write authority passed to
+// another worker use case. Lease expiry is deliberately not copied: every
+// mutation rechecks the current Operation row and database clock.
+type LeaseGuard struct {
+	TenantID     paasv1.TenantID
+	OperationID  paasv1.OperationID
+	WorkerID     string
+	FencingToken uint64
+}
+
+func (lease Lease) Guard() LeaseGuard {
+	return LeaseGuard{
+		TenantID:     lease.TenantID,
+		OperationID:  lease.Operation.ID,
+		WorkerID:     lease.WorkerID,
+		FencingToken: lease.FencingToken,
+	}
+}
+
 type Transition struct {
 	Lease         Lease
 	State         paasv1.OperationState
@@ -33,6 +52,7 @@ type Transition struct {
 type Repository interface {
 	ClaimOperation(context.Context, string, time.Duration) (Lease, bool, error)
 	AdvanceOperation(context.Context, Transition) (paasv1.Operation, error)
+	ReleaseOperation(context.Context, Lease, time.Time) (paasv1.Operation, error)
 }
 
 type Config struct {

@@ -11,6 +11,7 @@ import (
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/createplacement"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/operationqueue"
 )
 
 var _ createplacement.Repository = (*PlacementRepository)(nil)
@@ -31,6 +32,7 @@ func NewPlacementRepository(pool *pgxpool.Pool) (*PlacementRepository, error) {
 func (repository *PlacementRepository) WithinTransaction(
 	ctx context.Context,
 	tenantID paasv1.TenantID,
+	guard operationqueue.LeaseGuard,
 	callback func(context.Context, createplacement.Transaction) error,
 ) error {
 	if repository == nil || repository.pool == nil {
@@ -45,6 +47,12 @@ func (repository *PlacementRepository) WithinTransaction(
 	if err := paasv1.ValidateID("tenantId", string(tenantID)); err != nil {
 		return err
 	}
+	if err := operationqueue.ValidateLeaseGuard(guard); err != nil {
+		return err
+	}
+	if guard.TenantID != tenantID {
+		return errors.New("placement tenant and Operation lease tenant differ")
+	}
 	return mapTransactionError(
 		"execute placement transaction",
 		withinTenantTransaction(
@@ -53,7 +61,9 @@ func (repository *PlacementRepository) WithinTransaction(
 			tenantID,
 			pgx.TxOptions{IsoLevel: pgx.Serializable, AccessMode: pgx.ReadWrite},
 			func(tx pgx.Tx) error {
-				return callback(ctx, &placementTransaction{tx: tx, tenantID: tenantID})
+				return callback(ctx, &placementTransaction{
+					tx: tx, tenantID: tenantID, leaseGuard: guard,
+				})
 			},
 		),
 	)
@@ -106,6 +116,9 @@ func mapTransactionError(action string, err error) error {
 	}
 	var postgresError *pgconn.PgError
 	if errors.As(err, &postgresError) {
+		if postgresError.Code == "MX412" {
+			return fmt.Errorf("%s: %w", action, createplacement.ErrStaleLease)
+		}
 		if postgresError.Code == "40001" || postgresError.Code == "40P01" ||
 			(postgresError.Code == "23505" &&
 				postgresError.ConstraintName == "placement_decisions_operation_uq") {

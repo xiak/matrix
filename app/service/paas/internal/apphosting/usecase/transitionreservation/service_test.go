@@ -7,28 +7,38 @@ import (
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/domain/placement"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/operationqueue"
 )
 
 type fakeRepository struct {
 	result  StoredTransition
 	err     error
 	command Command
+	guard   operationqueue.LeaseGuard
 }
 
 func (repository *fakeRepository) TransitionCapacityReservation(
 	_ context.Context,
-	tenantID paasv1.TenantID,
+	guard operationqueue.LeaseGuard,
 	reservationID paasv1.ResourceID,
 	action Action,
 	expectedResourceVersion uint64,
 ) (StoredTransition, error) {
 	repository.command = Command{
-		TenantID:                tenantID,
+		TenantID:                guard.TenantID,
 		ReservationID:           reservationID,
 		Action:                  action,
 		ExpectedResourceVersion: expectedResourceVersion,
 	}
+	repository.guard = guard
 	return repository.result, repository.err
+}
+
+func reservationGuard(tenantID paasv1.TenantID) operationqueue.LeaseGuard {
+	return operationqueue.LeaseGuard{
+		TenantID: tenantID, OperationID: "operation-a",
+		WorkerID: "worker-a", FencingToken: 1,
+	}
 }
 
 func TestTransitionReturnsPersistedStateAndReplayFact(t *testing.T) {
@@ -47,7 +57,8 @@ func TestTransitionReturnsPersistedStateAndReplayFact(t *testing.T) {
 		Action:                  ActionActivate,
 		ExpectedResourceVersion: 1,
 	}
-	result, err := usecase.Transition(context.Background(), command)
+	guard := reservationGuard(command.TenantID)
+	result, err := usecase.Transition(context.Background(), command, guard)
 	if err != nil {
 		t.Fatalf("transition reservation: %v", err)
 	}
@@ -59,6 +70,9 @@ func TestTransitionReturnsPersistedStateAndReplayFact(t *testing.T) {
 	if repository.command != command {
 		t.Fatalf("repository command = %#v, want %#v", repository.command, command)
 	}
+	if repository.guard != guard {
+		t.Fatalf("repository guard = %#v, want %#v", repository.guard, guard)
+	}
 }
 
 func TestTransitionValidatesCommandBeforeRepository(t *testing.T) {
@@ -67,12 +81,15 @@ func TestTransitionValidatesCommandBeforeRepository(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new transition use case: %v", err)
 	}
-	_, err = usecase.Transition(context.Background(), Command{
+	command := Command{
 		TenantID:                "tenant-a",
 		ReservationID:           "reservation-a",
 		Action:                  "INVALID",
 		ExpectedResourceVersion: 0,
-	})
+	}
+	_, err = usecase.Transition(
+		context.Background(), command, reservationGuard(command.TenantID),
+	)
 	if err == nil {
 		t.Fatal("invalid transition command unexpectedly succeeded")
 	}
@@ -87,12 +104,15 @@ func TestTransitionPreservesRepositoryErrorIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new transition use case: %v", err)
 	}
-	_, err = usecase.Transition(context.Background(), Command{
+	command := Command{
 		TenantID:                "tenant-a",
 		ReservationID:           "reservation-a",
 		Action:                  ActionRelease,
 		ExpectedResourceVersion: 1,
-	})
+	}
+	_, err = usecase.Transition(
+		context.Background(), command, reservationGuard(command.TenantID),
+	)
 	if !errors.Is(err, ErrResourceVersionConflict) {
 		t.Fatalf("error = %v, want resource version conflict", err)
 	}

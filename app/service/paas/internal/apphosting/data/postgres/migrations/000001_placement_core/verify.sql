@@ -199,21 +199,6 @@ BEGIN
         RAISE EXCEPTION 'platform capacity claims contain tenant ownership columns';
     END IF;
 
-    IF NOT EXISTS (
-        SELECT 1
-          FROM pg_catalog.pg_proc AS procedure
-          JOIN pg_catalog.pg_namespace AS namespace
-            ON namespace.oid = procedure.pronamespace
-         WHERE namespace.nspname = 'paas'
-           AND procedure.proname = 'transition_capacity_reservation'
-           AND pg_catalog.pg_get_function_identity_arguments(procedure.oid)
-                = 'requested_reservation_id text, requested_action text, expected_resource_version bigint'
-           AND procedure.prosecdef
-           AND 'search_path=pg_catalog, pg_temp' = ANY(procedure.proconfig)
-    ) THEN
-        RAISE EXCEPTION 'tenant-scoped capacity transition function is missing or unsafe';
-    END IF;
-
     SELECT string_agg(required.name, ', ' ORDER BY required.name)
       INTO missing
       FROM (
@@ -231,8 +216,36 @@ BEGIN
                 'requested_operation_id text, requested_worker_id text, expected_fencing_token bigint, requested_state text, requested_error jsonb, requested_next_attempt_at timestamp with time zone, release_lease boolean'
             ),
             (
+                'assert_current_operation_lease',
+                'requested_operation_id text, requested_worker_id text, expected_fencing_token bigint'
+            ),
+            (
+                'create_placement',
+                'requested_operation_id text, requested_worker_id text, expected_fencing_token bigint, requested_request_digest text, submitted_decision jsonb, submitted_reservation jsonb, reuses_active_reservation boolean'
+            ),
+            (
+                'prepare_adapter_command',
+                'requested_operation_id text, requested_worker_id text, expected_fencing_token bigint, submitted_command jsonb'
+            ),
+            (
                 'update_deployment_status',
-                'requested_deployment_id text, expected_resource_version bigint, expected_generation bigint, submitted_deployment jsonb'
+                'requested_operation_id text, requested_worker_id text, expected_fencing_token bigint, requested_deployment_id text, expected_resource_version bigint, expected_generation bigint, submitted_deployment jsonb'
+            ),
+            (
+                'record_adapter_receipt',
+                'requested_operation_id text, requested_worker_id text, expected_fencing_token bigint, requested_command_id text, requested_request_digest text, requested_state text, requested_receipt_digest text, requested_normalized_error jsonb, requested_evidence jsonb, requested_observed_at timestamp with time zone'
+            ),
+            (
+                'record_deployment_observation',
+                'requested_operation_id text, requested_worker_id text, expected_fencing_token bigint, requested_command_id text, submitted_observation jsonb'
+            ),
+            (
+                'release_operation_lease',
+                'requested_operation_id text, requested_worker_id text, expected_fencing_token bigint, requested_next_attempt_at timestamp with time zone'
+            ),
+            (
+                'transition_capacity_reservation',
+                'requested_operation_id text, requested_worker_id text, expected_fencing_token bigint, requested_reservation_id text, requested_action text, expected_resource_version bigint'
             )
       ) AS required(name, identity_arguments)
      WHERE NOT EXISTS (
@@ -320,6 +333,36 @@ BEGIN
             'matrix_paas_worker',
             'paas.deployments',
             'INSERT, UPDATE, DELETE'
+       )
+       OR has_table_privilege(
+            'matrix_paas_worker',
+            'paas.adapter_commands',
+            'INSERT, UPDATE, DELETE'
+       )
+       OR has_table_privilege(
+            'matrix_paas_worker',
+            'paas.adapter_receipts',
+            'INSERT, UPDATE, DELETE'
+       )
+       OR has_table_privilege(
+            'matrix_paas_worker',
+            'paas.deployment_observations',
+            'INSERT, UPDATE, DELETE'
+       )
+       OR has_table_privilege(
+            'matrix_paas_worker',
+            'paas.placement_decisions',
+            'INSERT, UPDATE, DELETE'
+       )
+       OR has_table_privilege(
+            'matrix_paas_worker',
+            'paas.capacity_claims',
+            'INSERT, UPDATE, DELETE'
+       )
+       OR has_table_privilege(
+            'matrix_paas_worker',
+            'paas.capacity_reservations',
+            'INSERT, UPDATE, DELETE'
        ) THEN
         RAISE EXCEPTION 'worker role can rewrite authoritative or immutable input';
     END IF;
@@ -342,16 +385,46 @@ BEGIN
        OR NOT has_table_privilege(
             'matrix_paas_worker',
             'paas.adapter_commands',
-            'SELECT, INSERT'
+            'SELECT'
        )
        OR NOT has_table_privilege(
             'matrix_paas_worker',
             'paas.placement_decisions',
-            'SELECT, INSERT'
+            'SELECT'
        )
        OR NOT has_function_privilege(
             'matrix_paas_worker',
-            'paas.transition_capacity_reservation(text, text, bigint)',
+            'paas.assert_current_operation_lease(text, text, bigint)',
+            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_paas_worker',
+            'paas.create_placement(text, text, bigint, text, jsonb, jsonb, boolean)',
+            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_paas_worker',
+            'paas.prepare_adapter_command(text, text, bigint, jsonb)',
+            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_paas_worker',
+            'paas.record_adapter_receipt(text, text, bigint, text, text, text, text, jsonb, jsonb, timestamptz)',
+            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_paas_worker',
+            'paas.record_deployment_observation(text, text, bigint, text, jsonb)',
+            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_paas_worker',
+            'paas.release_operation_lease(text, text, bigint, timestamptz)',
+            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_paas_worker',
+            'paas.transition_capacity_reservation(text, text, bigint, text, text, bigint)',
             'EXECUTE'
        )
        OR NOT has_function_privilege(
@@ -371,13 +444,28 @@ BEGIN
        )
        OR NOT has_function_privilege(
             'matrix_paas_worker',
-            'paas.update_deployment_status(text, bigint, bigint, jsonb)',
+            'paas.update_deployment_status(text, text, bigint, text, bigint, bigint, jsonb)',
             'EXECUTE'
        )
-       OR has_function_privilege(
-            'matrix_paas_api',
-            'paas.claim_operation(text, integer)',
-            'EXECUTE'
+       OR EXISTS (
+            SELECT 1
+              FROM unnest(ARRAY[
+                    'paas.claim_operation(text, integer)',
+                    'paas.advance_operation(text, text, bigint, text, jsonb, timestamptz, boolean)',
+                    'paas.assert_current_operation_lease(text, text, bigint)',
+                    'paas.create_placement(text, text, bigint, text, jsonb, jsonb, boolean)',
+                    'paas.prepare_adapter_command(text, text, bigint, jsonb)',
+                    'paas.update_deployment_status(text, text, bigint, text, bigint, bigint, jsonb)',
+                    'paas.record_adapter_receipt(text, text, bigint, text, text, text, text, jsonb, jsonb, timestamptz)',
+                    'paas.record_deployment_observation(text, text, bigint, text, jsonb)',
+                    'paas.release_operation_lease(text, text, bigint, timestamptz)',
+                    'paas.transition_capacity_reservation(text, text, bigint, text, text, bigint)'
+                   ]) AS worker_function(signature)
+             WHERE has_function_privilege(
+                    'matrix_paas_api',
+                    worker_function.signature,
+                    'EXECUTE'
+                   )
        )
        OR has_function_privilege(
             'matrix_paas_worker',
