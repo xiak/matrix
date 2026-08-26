@@ -3,89 +3,57 @@
 > Non-authoritative portable memory. Validate it against Git and the owning
 > FEAT before continuing.
 
-- Updated: 2026-08-26
+- Updated: 2026-08-27
 - Repository: `https://github.com/xiak/matrix.git`
-- Branch: `feat/placement-policy`
-- Release: Private Application PaaS v0.1
-- Phase 1 state: Accepted
+- Branch: `feat/control-plane-console`
+- Phase 2 implementation baseline: `8700095fb60385932fab32ef09d699e46eff48b0`
+- Goal: Matrix PaaS Phase 2 control-plane console
 
-## Durable constraints
+## Authoritative route
 
-- Follow pragmatic DDD and replacement-first pre-v1 changes. Git preserves
-  superseded drafts; the worktree does not retain aliases, compatibility
-  layers, stale tests, duplicate documents, or rollback copies without a real
-  consumer.
-- Each FEAT fixes its enterprise target before donor inspection. Donors are
-  reviewed only at the recorded commits, every relevant slice is classified as
-  `REUSE`, `ADAPT`, `REFERENCE`, or `REJECT`, and no donor is a build or
-  runtime dependency.
-- Product branding is xiak / Matrix, the CLI is `mx`, the Go module is
-  `github.com/xiak/matrix`, and public API groups use
-  `*.matrix.xiak.com/v1`. API groups are identifiers, not customer DNS
-  dependencies.
-- Configuration is a default PaaS capability. Phase 1 supports immutable ENV
-  configuration and exact read-only FILE Secret injection; dynamic refresh,
-  structured files, Nacos, and Consul remain future providers behind the
-  current binding boundary.
-- Repository documentation and generated artifacts contain no machine-local
-  checkout, home, release-artifact, or container-host paths.
+- Requirements, target, implementation status, acceptance gates, and evidence:
+  [`FEAT-007`](../../docs/features/FEAT-007-control-plane-console.md).
+- Fixed-source decisions:
+  [`FEAT-007 adoption review`](../../docs/adoption/FEAT-007-control-plane-console.md).
+- Shared product boundary:
+  [`ADR-0002`](../../docs/architecture/ADR-0002-product-boundary.md).
 
-## Accepted branch state
+Do not restate those owners here. Read this checkpoint only after compaction or
+handoff, then validate it against Git and the linked FEAT.
 
-- The branch contains `001d889`. FEAT-001 through FEAT-006 are Accepted;
-  FEAT-005 Gates A/B/C and FEAT-006 Gate C are closed.
-- Exact accepted runtime source is
-  `c88a84f379afcf94431e2aca7332fe6ec3136dc7`. Compatible signed releases are
-  `matrix-v0.1.0-c88a84f379af` (build `phase1-a13-a-c88a84f`) and
-  `matrix-v0.2.0-c88a84f379af` (build `phase1-a13-b-c88a84f`).
-- A fresh Docker-in-Docker engine with outer network mode `none`, Docker
-  27.5.1, Compose v2.33.0, and no initial inner containers, images, or volumes
-  completed the signed offline lifecycle. It installed A, exercised real
-  APISIX/IAM/Audit application generations, proved failed-candidate automatic
-  rollback, upgraded to B, explicitly rolled the platform back to A, recovered
-  a protected A backup, rolled the application back, stopped it and released
-  capacity, produced bounded support evidence, restarted the entire engine,
-  and passed final status/verify with all nine platform services healthy.
-- The exact source passed generation drift, module verification, full unit,
-  vet and race suites, architecture gates, ten-run critical-package coverage,
-  placement fuzzing, clean PostgreSQL 18 migration/IAM/Audit/PaaS/authority
-  process gates, real Compose adapter and PostgreSQL-to-Compose worker gates,
-  CGO-disabled Windows/Linux/Darwin builds, Markdown links, stale-term and
-  machine-path scans, donor-dependency and tenant-authority checks, and
-  `git diff --check`.
+## Durable pushed state
 
-## Phase 1 execution roadmap
-
-| Slice | Deliverable | State |
-| --- | --- | --- |
-| A1 | Phase boundary, target design, ADRs, and fixed-donor decisions | Accepted |
-| A2 | Application, configuration, deployment, and placement model | Accepted |
-| A3 | PaaS API, Operations, IAM authorization, and Audit boundary | Accepted |
-| A4 | Fenced worker and real Compose workload executor | Accepted |
-| A5 | Signed offline release contract and `mx platform` CLI | Accepted |
-| A6 | Journaled install, migration, start, verify, and cleanup effects | Accepted |
-| A7 | Clean network-disabled Release A install | Accepted |
-| A8 | Status, verify, and restart behavior | Accepted |
-| A9 | Protected backup and bounded support evidence | Accepted |
-| A10 | Authenticated upgrade and automatic rollback | Accepted |
-| A11 | Explicit N-1 platform rollback | Accepted |
-| A12 | Protected backup recovery | Accepted |
-| A13 | Complete clean external-network-disabled lifecycle E2E | Accepted |
-| A14 | Final common gates, documentation convergence, and Phase 1 acceptance | Accepted |
+- Local `main` and `origin/main` are both
+  `a3f71cfebc7f45326b1ec5679fe69333f8139551`; the feature branch contains that
+  commit and is pushed to `origin/feat/control-plane-console`.
+- The complete Discord-style Next.js/React application fixed at
+  `69336e51f94fa98f6aa278fa4c62382e224dbeaf` is the sole UI architecture and
+  visual-style donor. Its component facade is one application layer, not a
+  second donor. The PaaS design record at `338d9b5...` is product-boundary
+  reference only. Neither is a build or runtime dependency.
+- The branch contains the donor-shaped App Router -> route -> provider ->
+  repository -> scene -> renderer -> public-component chain, username/password
+  IAM flow, PostgreSQL catalog and quota activation, read-only local-machine
+  region view, managed installation worker, PostgreSQL 18 provisioner, Audit
+  outbox, and signed offline release integration.
+- `8700095` adds organization-scoped single-resource reads for offerings,
+  regions, quota entitlements, installations, and installation Operations.
+  The UI now polls only active installation resources and refreshes collection
+  state once an Operation becomes terminal. OpenAPI, PostgreSQL RLS reads,
+  HTTP authorization, provider behavior, identity correlation, and generated
+  embedded assets are covered by current tests.
+- The pushed source passed module verification, generation drift, full unit,
+  vet and race suites, repeated critical tests, UI type/lint/architecture/style/
+  test/embed checks, Linux amd64 cross-build, Markdown links, donor dependency
+  and social-term scans, a clean PostgreSQL 18 tenant-isolation journey, and a
+  real fixed-image PostgreSQL lifecycle test.
 
 ## Continuation
 
-Phase 1 has no unfinished implementation slice. Any later capability must begin
-with its owning FEAT and target design rather than extending this checkpoint or
-reviving a superseded Phase 1 draft.
+Continue from the owning FEAT's open acceptance items. Do not recover work from
+old Phase 1 branch names, duplicate the donor application, add fake MySQL/ELK
+products, or move installer-owned machine secrets into the browser.
 
-## Fixed donor baselines
-
-- Legacy PaaS: `69336e51f94fa98f6aa278fa4c62382e224dbeaf`
-- IAM/Audit foundation donor:
-  `f51d5ed19fd60e8c4e43500af5e669d67ae4ef7d`
-- PaaS design: `338d9b5fcb820120c32265e380c55e5f171cdb75`
-
-Replace this file only at a committed-and-pushed milestone or handoff. Do not
-append command logs, chat transcripts, secrets, raw provider payloads, or
-machine-local paths.
+Replace this file only at another committed-and-pushed milestone. Do not append
+command logs, chat transcripts, secrets, raw provider payloads, or machine-local
+paths.

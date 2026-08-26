@@ -291,35 +291,46 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ## Implementation status
 
-- Gate A foundation is implemented: the old page was replaced by the fixed
-  donor-shaped Next.js route/provider/repository/scene/renderer/component
-  chain, seven static routes, memory-only IAM session handling, deterministic
-  Go embedding, strict CSP hashes, responsive shell, and source architecture
-  and style checks. The full installed-browser journey remains a release gate.
-- Gate B authority is implemented for the first vertical slice: the closed
-  managed-service v1 Go/OpenAPI contract, existing-role IAM action matrix,
-  PostgreSQL entitlement/installation/Operation schema, forced organization
-  RLS, serializable quota reservation, idempotent replay, worker leases, and
-  fencing transitions pass unit and real PostgreSQL 18 tests. Quota activation,
-  installation acceptance, and fenced installation readiness now append three
-  sanitized facts in their owning transactions. One shared PaaS Audit
-  dispatcher fairly drains the independent apphosting and managed-service
-  outboxes; real PostgreSQL 18 tests prove source correlation, lease fencing,
-  exact action ingestion, delivery, and the combined readiness snapshot.
-- Gate C execution is implemented through the fixed PostgreSQL 18 image:
+- Gate A implementation is complete: the Phase 1 page was replaced by the
+  complete donor-shaped App Router -> route -> provider -> repository -> scene
+  -> renderer -> public-component chain, seven static routes, memory-only IAM
+  session handling, deterministic Go embedding, strict CSP hashes, responsive
+  four-region shell, and source architecture/style gates. The installed
+  `8700095` candidate served the exact embedded UI, and an isolated browser
+  proved the anonymous login contract, empty password field, no page storage,
+  no external resources, and no horizontal overflow. The authenticated
+  browser interaction remains the final Gate A item.
+- Gate B authority is complete for the admitted PostgreSQL slice: the closed
+  managed-service Go/OpenAPI contract now includes collection and single-
+  resource reads for offerings, regions, quota entitlements, service
+  installations, and installation Operations. Existing-role IAM actions,
+  forced organization RLS, serializable quota reservation, idempotent replay,
+  worker leases, fencing transitions, and transactionally coupled Audit facts
+  pass unit and real PostgreSQL 18 tests. The installed `8700095` candidate
+  completed real IAM-authorized single-resource reads and returned identities
+  equal to their collection resources. The UI polls only active installation
+  resources and reloads quota truth once an Operation becomes terminal.
+- Gate C execution is complete through the fixed PostgreSQL 18 image:
   server-generated file credentials, pull-never/no-build Compose, exact
   ownership labels, persistent bind data, bounded resources, normalized
-  endpoint/credential references, retry, and terminal quota release. A real
-  local-runtime test installed PostgreSQL, connected, wrote data, reconciled
-  the same command, and read the preserved value. Full offline release,
-  upgrade, rollback, backup, recovery, and support-evidence gates remain open.
+  endpoint/credential references, retry, terminal quota release, and
+  uncertain-create reconciliation. The `a83e271` signed release completed a
+  fresh external-network-disabled install, failed-upgrade automatic rollback,
+  successful upgrade, explicit N-1 rollback, protected backup/recovery,
+  support-evidence sanitization, whole-engine restart, negative API paths, and
+  worker-restart reconciliation. The signed `8700095` successor then upgraded
+  from it with external network count zero, passed status/verify, retained two
+  managed PostgreSQL instances, preserved both durable probe rows, and still
+  reported PostgreSQL server version `180004`.
 
-Current repeatable evidence includes `go generate ./api/...`, `go test ./...`,
-the environment-gated platform migration integration test, the managed-service
-PostgreSQL journey, tenant-isolation and three-fact Audit delivery integration
-test, the Audit authority action-catalog PostgreSQL test, and the real local
-PostgreSQL runtime test. Final acceptance must repeat them from the same clean
-committed release candidate.
+The clean pushed `8700095` source passed `go generate ./api/...`, module
+verification, full unit, vet and race suites, repeated critical packages,
+clean PostgreSQL 18 migration/tenant/Audit integration, the real fixed-image
+PostgreSQL lifecycle, Linux amd64 cross-build, all UI type/lint/architecture/
+style/test/embed gates, Markdown links, fixed-donor verification,
+donor-dependency and social-term scans, and `git diff --check`. Final
+acceptance must repeat the release and browser gates from the documentation-
+converged source commit.
 
 ## Deferred
 
