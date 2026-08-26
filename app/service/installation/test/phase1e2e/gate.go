@@ -127,7 +127,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := value.assertWorkload(ctx, value.releases.a.Manifest, application.deployment, 1, settingOne, secretDigest); err != nil {
+	if err := value.assertWorkload(ctx, value.releases.a.Manifest, application.deployment, 1, "1", settingOne, secretDigest); err != nil {
 		return err
 	}
 	if active, err := value.activeCapacityClaims(ctx, state.InstallationID); err != nil || active != 1 {
@@ -139,7 +139,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := value.assertWorkload(ctx, value.releases.a.Manifest, updated, 2, settingTwo, secretDigest); err != nil {
+	if err := value.assertWorkload(ctx, value.releases.a.Manifest, updated, 2, "2", settingTwo, secretDigest); err != nil {
 		return err
 	}
 	emit("application-generation-two")
@@ -188,7 +188,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err := assertNoPlatformReleaseContainers(ctx, value.releases.b.Manifest.Release.ID); err != nil {
 		return err
 	}
-	if err := value.assertWorkload(ctx, value.releases.a.Manifest, updated, 2, settingTwo, secretDigest); err != nil {
+	if err := value.assertWorkload(ctx, value.releases.a.Manifest, updated, 2, "2", settingTwo, secretDigest); err != nil {
 		return err
 	}
 	if err := value.repeatedStatusAndVerify(ctx, value.releases.a, value.releases.a.Manifest.Release.ID, ""); err != nil {
@@ -208,7 +208,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	); err != nil {
 		return err
 	}
-	if err := value.assertWorkload(ctx, value.releases.b.Manifest, updated, 2, settingTwo, secretDigest); err != nil {
+	if err := value.assertWorkload(ctx, value.releases.b.Manifest, updated, 2, "2", settingTwo, secretDigest); err != nil {
 		return err
 	}
 	if err := value.assertApplicationHistory(ctx, bearer, 2); err != nil {
@@ -236,7 +236,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err := assertNoPlatformReleaseContainers(ctx, value.releases.b.Manifest.Release.ID); err != nil {
 		return err
 	}
-	if err := value.assertWorkload(ctx, value.releases.a.Manifest, updated, 2, settingTwo, secretDigest); err != nil {
+	if err := value.assertWorkload(ctx, value.releases.a.Manifest, updated, 2, "2", settingTwo, secretDigest); err != nil {
 		return err
 	}
 	if err := value.repeatedStatusAndVerify(ctx, value.releases.a, value.releases.a.Manifest.Release.ID, ""); err != nil {
@@ -248,7 +248,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := value.assertWorkload(ctx, value.releases.a.Manifest, rolledBack, 3, settingOne, secretDigest); err != nil {
+	if err := value.assertWorkload(ctx, value.releases.a.Manifest, rolledBack, 3, "1", settingOne, secretDigest); err != nil {
 		return err
 	}
 	rollbackAudit, err := value.edge.waitAuditActions(ctx, bearer, map[auditv1.Action]string{
@@ -275,7 +275,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		recovered.Status.Phase != paasv1.DeploymentReady {
 		return fail("recovered-application-state")
 	}
-	if err := value.assertWorkload(ctx, value.releases.a.Manifest, recovered, 2, settingTwo, secretDigest); err != nil {
+	if err := value.assertWorkload(ctx, value.releases.a.Manifest, recovered, 2, "2", settingTwo, secretDigest); err != nil {
 		return err
 	}
 	recoveredAudit, err := value.edge.allAuditRecords(ctx, bearer)
@@ -769,6 +769,7 @@ func (value *gate) assertWorkload(
 	manifest release.Manifest,
 	deployment paasv1.Deployment,
 	generation uint64,
+	configurationGeneration string,
 	setting, secretDigest string,
 ) error {
 	if deployment.Metadata.ID != deploymentID || deployment.Generation != generation ||
@@ -835,7 +836,7 @@ func (value *gate) assertWorkload(
 		ctx, "run", "--rm", "--pull", "never", "--network", network,
 		"--cap-drop", "ALL", "--security-opt", "no-new-privileges=true", "--read-only",
 		"--tmpfs", "/tmp:rw,noexec,nosuid,size=8m", workload.ImageID,
-		"probe", "http://web:8080/ready", setting, secretDigest, generationText(generation),
+		"probe", "http://web:8080/ready", setting, secretDigest, configurationGeneration,
 	); err != nil {
 		return fail("workload-network-probe")
 	}
