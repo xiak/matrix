@@ -60,7 +60,7 @@ type Effects interface {
 	BuildGoBinary(context.Context, string, string, string) error
 	InspectImage(context.Context, string) (ImageMetadata, error)
 	BuildImage(context.Context, string, string) error
-	SaveImage(context.Context, string, string) error
+	SaveImage(context.Context, string, string) (ImageMetadata, error)
 	VerifyPaaSCLI(context.Context, string) error
 	RemoveBuildTag(context.Context, string) error
 }
@@ -241,14 +241,15 @@ func buildImages(
 			return nil, tags, errors.New("release image inventory is incomplete")
 		}
 		archive := filepath.Join(bundle, "images", requirement.Component+".tar")
-		if err := effects.SaveImage(ctx, image.ID, archive); err != nil {
+		loadIdentity, err := effects.SaveImage(ctx, image.ID, archive)
+		if err != nil || validateImageMetadata(loadIdentity) != nil {
 			return nil, tags, errors.New("save fixed release image failed")
 		}
 		images = append(images, installationrelease.Image{
 			Component: requirement.Component, Purpose: requirement.Purpose,
 			ArchivePath: "images/" + requirement.Component + ".tar",
-			ImageID:     image.ID, SourceDigest: image.ID,
-			OS: image.OS, Architecture: image.Architecture,
+			ImageID:     loadIdentity.ID, SourceDigest: image.ID,
+			OS: loadIdentity.OS, Architecture: loadIdentity.Architecture,
 			HealthContract: requirement.HealthContract,
 		})
 	}

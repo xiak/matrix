@@ -20,7 +20,7 @@ type fakeEffects struct {
 	binaries     map[string]struct{}
 	images       map[string]ImageMetadata
 	dockerfiles  map[string]string
-	saved        map[string]struct{}
+	saved        map[string]ImageMetadata
 	removed      map[string]struct{}
 	paasImageID  string
 }
@@ -28,7 +28,7 @@ type fakeEffects struct {
 func newFakeEffects() *fakeEffects {
 	return &fakeEffects{
 		binaries: make(map[string]struct{}), images: make(map[string]ImageMetadata),
-		dockerfiles: make(map[string]string), saved: make(map[string]struct{}),
+		dockerfiles: make(map[string]string), saved: make(map[string]ImageMetadata),
 		removed: make(map[string]struct{}),
 	}
 }
@@ -70,9 +70,12 @@ func (fake *fakeEffects) BuildImage(_ context.Context, contextRoot, tag string) 
 	return nil
 }
 
-func (fake *fakeEffects) SaveImage(_ context.Context, imageID, output string) error {
-	fake.saved[imageID] = struct{}{}
-	return os.WriteFile(output, []byte("docker-archive:"+imageID), 0o600)
+func (fake *fakeEffects) SaveImage(_ context.Context, imageID, output string) (ImageMetadata, error) {
+	identity := ImageMetadata{
+		ID: testDigest("load:" + imageID), OS: "linux", Architecture: "amd64",
+	}
+	fake.saved[imageID] = identity
+	return identity, os.WriteFile(output, []byte("docker-archive:"+imageID), 0o600)
 }
 
 func (fake *fakeEffects) VerifyPaaSCLI(_ context.Context, imageID string) error {
@@ -132,6 +135,12 @@ func TestAssembleProducesAuthenticatedCompleteRelease(t *testing.T) {
 		if strings.Contains(dockerfile, "RUN ") || strings.Contains(dockerfile, "http://") ||
 			strings.Contains(dockerfile, "https://") || !strings.Contains(dockerfile, "COPY --chmod=0555") {
 			t.Fatalf("image %s escaped the fixed offline recipe", component)
+		}
+	}
+	for _, image := range verified.Manifest.Images {
+		loadIdentity, found := effects.saved[image.SourceDigest]
+		if !found || image.ImageID != loadIdentity.ID || image.ImageID == image.SourceDigest {
+			t.Fatalf("image %s did not preserve distinct source and portable load identities", image.Component)
 		}
 	}
 }

@@ -108,23 +108,31 @@ func (effects *LocalEffects) BuildImage(ctx context.Context, contextRoot, tag st
 	return nil
 }
 
-func (effects *LocalEffects) SaveImage(ctx context.Context, imageID, output string) error {
+func (effects *LocalEffects) SaveImage(
+	ctx context.Context,
+	imageID string,
+	output string,
+) (ImageMetadata, error) {
 	if effects == nil || effects.run == nil || validateImageMetadata(ImageMetadata{
 		ID: imageID, OS: "linux", Architecture: "amd64",
 	}) != nil || !filepath.IsAbs(output) || filepath.Ext(output) != ".tar" {
-		return errors.New("Docker image save effect is invalid")
+		return ImageMetadata{}, errors.New("Docker image save effect is invalid")
 	}
 	_, err := effects.run(ctx, localCommand{
 		program: "docker", args: []string{"image", "save", "--output", output, imageID},
 	})
 	if err != nil {
-		return errors.New("Docker image save effect failed")
+		return ImageMetadata{}, errors.New("Docker image save effect failed")
 	}
 	info, statErr := os.Lstat(output)
 	if statErr != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Mode()&os.ModeSymlink != 0 {
-		return errors.New("Docker image archive effect is invalid")
+		return ImageMetadata{}, errors.New("Docker image archive effect is invalid")
 	}
-	return nil
+	identity, inspectErr := inspectImageArchive(output, imageID)
+	if inspectErr != nil {
+		return ImageMetadata{}, errors.New("Docker image archive identity is invalid")
+	}
+	return identity, nil
 }
 
 func (effects *LocalEffects) VerifyPaaSCLI(ctx context.Context, imageID string) error {
