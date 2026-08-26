@@ -7,3 +7,4 @@
 - [FEAT-004 Compose application execution](FEAT-004-compose-application-execution.md)
 - [FEAT-005 Offline platform distribution and lifecycle](FEAT-005-offline-platform-lifecycle.md)
 - [FEAT-006 Platform IAM and Audit authorities](FEAT-006-platform-authorities.md)
+- [FEAT-007 Control-plane console and PostgreSQL service activation](FEAT-007-control-plane-console.md)
