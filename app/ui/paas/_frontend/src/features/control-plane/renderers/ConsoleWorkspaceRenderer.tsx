@@ -15,6 +15,9 @@ import { useControlPlane } from "../application/ControlPlaneProvider";
 import type { ConsoleWorkspaceScene } from "../scenes/consoleScene";
 import styles from "./ConsoleWorkspaceRenderer.module.css";
 
+const installationIDPatternSource = "[a-z0-9][a-z0-9._-]{0,61}[a-z0-9]";
+const installationIDPattern = new RegExp(`^${installationIDPatternSource}$`);
+
 function Field({
   children,
   label
@@ -132,7 +135,7 @@ function InstallationOrder({
   const [id, setId] = useState("postgres-primary");
   const [accepted, setAccepted] = useState(false);
   const selectedEntitlement = scene.entitlementOptions.find((item) => item.entitlementId === entitlementId);
-  const canSubmit = Boolean(selectedEntitlement && regionId && /^[a-z0-9][a-z0-9._-]{0,61}[a-z0-9]$/.test(id) && name.trim());
+  const canSubmit = Boolean(selectedEntitlement && regionId && installationIDPattern.test(id) && name.trim());
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -165,9 +168,9 @@ function InstallationOrder({
         <form className={styles.form} onSubmit={submit}>
           <Field label="实例 ID">
             <Input
-              invalid={Boolean(id) && !/^[a-z0-9][a-z0-9._-]{1,62}$/.test(id)}
+              invalid={Boolean(id) && !installationIDPattern.test(id)}
               onChange={(event) => { setId(event.target.value); setAccepted(false); }}
-              pattern="[a-z0-9][a-z0-9._-]{1,62}"
+              pattern={installationIDPatternSource}
               required
               value={id}
             />
