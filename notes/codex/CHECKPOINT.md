@@ -27,7 +27,7 @@
 
 - The branch contains commit `001d889`; FEAT-004 Gate C is accepted and pushed
   in `2b7e398`, FEAT-005 Gate A is accepted and pushed in `83502b0`, and the
-  current durable implementation head is `c2bcd73`. The fixed donor baselines
+  current durable implementation head is `fbfe4bf`. The fixed donor baselines
   remain those listed below.
 - FEAT-001, FEAT-002, and FEAT-003 Gate A/Gate B are Accepted. The public model
   is Application, immutable ApplicationRevision, Deployment,
@@ -213,8 +213,8 @@
   listener; the signed no-pull verification workload reached Deployment
   `READY` and Operation `SUCCEEDED`; its Audit outbox was delivered; and the
   fixed PaaS and Audit APIs returned `READY` and `VERIFIED` for the same fact
-  and bounded chain. Full backup/upgrade/rollback/recovery/support behavior and
-  complete lifecycle E2E remain pending, so the Phase 1 goal is active.
+  and bounded chain. Full upgrade/rollback/recovery behavior and complete
+  lifecycle E2E remain pending, so the Phase 1 goal is active.
 - Commit `fa303a4` adds durable `status` and `verify`: status cannot create or
   write installation state; verify reauthenticates the sealed current release,
   exact images and owned healthy topology, runs only migration verification,
@@ -225,15 +225,28 @@
   `READY` without changing the release pointer, and an outer DinD restart
   preserved the journal while all nine signed Compose services recovered
   healthy before post-restart status and verify.
+- Commit `fbfe4bf` adds durable protected backup and sanitized support
+  evidence. Backup binds a generated identity into the sealed command,
+  reauthenticates the current release and topology, verifies all three owning
+  schemas, streams and verifies a bounded PostgreSQL custom dump, archives only
+  immutable workload Secret versions, and seals exact artifact commitments
+  with an installation-private HMAC key. Support binds only an output-path
+  digest into the journal and emits normalized release, component, image, and
+  schema evidence without paths, logs, configuration, database rows, or
+  Secrets. Exact `fbfe4bf` passed generation drift, full unit/vet/race,
+  focused ten-run Linux and host repetition, four-target builds, and diff
+  gates. Its exact Linux/amd64 `mx` created a protected backup and `0600`
+  support evidence in the external-network-disabled A7 namespace; value-level
+  scans against every installed Secret and the installation path passed, and
+  subsequent status/verify remained `READY` with all nine services healthy.
 
 ## Next concrete work
 
-1. Implement protected backup creation and bounded no-secret support evidence.
-2. Implement authenticated Release B upgrade with predecessor and backup
+1. Implement authenticated Release B upgrade with predecessor and backup
    preconditions, then prove a failed candidate automatically restores A.
-3. Implement explicit N-1 rollback from B to A without discarding expanded
+2. Implement explicit N-1 rollback from B to A without discarding expanded
    data, followed by protected backup recovery.
-4. Run the complete external-network-disabled Compose install, repeated
+3. Run the complete external-network-disabled Compose install, repeated
    operations, upgrade, automatic and explicit rollback, recovery, and support
    E2E required for FEAT-005 Gate B/C and FEAT-006 Gate C.
 

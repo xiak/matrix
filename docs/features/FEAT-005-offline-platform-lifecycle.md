@@ -354,6 +354,17 @@ not archive layout, Compose text, SQL text, command call order, or line counts.
   release and trust root, checks exact local images and the healthy owned
   Compose topology, runs only schema verification binaries, and reuses the
   fixed PaaS/Audit probe before committing its own replayable journal result.
+- Commit `fbfe4bf` adds replay-safe protected backup and bounded support
+  evidence. Backup verifies the authenticated current release, fixed healthy
+  topology, and all three owning schema verifiers before streaming a
+  password-prompt-disabled PostgreSQL custom dump. It snapshots only immutable
+  workload Secret versions into a bounded Go tar archive, commits artifact
+  sizes and SHA-256 digests in a domain-separated installation-private
+  HMAC-SHA256 manifest, publishes through a restrictive partial directory and
+  atomic rename, and re-verifies the published result. Support writes only a
+  direct installation-owned JSON file containing normalized component/image
+  state and admitted release metadata; its durable command binds a digest of
+  the output path without storing that absolute path.
 - The accepted implementation through `3323741` passed generation drift, full
   unit tests, vet, race,
   ten-run repetition, architecture boundaries, placement fuzz, four-target
@@ -386,9 +397,16 @@ not archive layout, Compose text, SQL text, command call order, or line counts.
   while preserving the release pointer. The same namespace survived a real
   DinD restart with an unchanged journal and every signed Compose service
   healthy before post-restart `status` and `verify`. Real clean offline Release
-  A installation, service integration, verify/status, and restart behavior are
-  accepted; upgrade, rollback, backup/recovery, support evidence, and complete
-  lifecycle E2E remain unaccepted.
+  A installation, service integration, verify/status, restart, backup, and
+  support behavior are accepted. Exact commit `fbfe4bf` passed generation
+  drift, full unit/vet/race, focused ten-run Linux and host repetition,
+  architecture, four-target build, and repository-diff gates. Its exact
+  Linux/amd64 `mx` ran in the same external-network-disabled namespace,
+  verified the three schemas, created and revalidated a restrictive protected
+  backup, emitted `0600` support evidence, passed a value-level scan against
+  every installed Secret and the installation path, and left status/verify
+  `READY`. Upgrade, automatic and explicit rollback, backup recovery, and the
+  complete clean lifecycle E2E remain unaccepted.
 
 ## Deferred
 
