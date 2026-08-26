@@ -22,6 +22,22 @@ func protectManagedPath(path string, directory bool) error {
 	return os.Chmod(path, mode)
 }
 
+func protectPostgresDataRoot(path string) error {
+	return os.Chmod(path, 0o711)
+}
+
+func verifyPostgresDataRoot(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil || managedPathIsLink(path, info) || !info.IsDir() || info.Mode().Perm() != 0o711 {
+		return errors.New("PostgreSQL data root permissions are unsafe")
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || uint64(stat.Uid) != uint64(unix.Geteuid()) {
+		return errors.New("PostgreSQL data root owner is unsafe")
+	}
+	return nil
+}
+
 func verifyManagedPermissions(path string, directory bool) error {
 	info, err := os.Lstat(path)
 	if err != nil || managedPathIsLink(path, info) || directory != info.IsDir() {

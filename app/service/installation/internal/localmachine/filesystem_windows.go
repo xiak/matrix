@@ -23,6 +23,12 @@ func managedPathIsLink(path string, info os.FileInfo) bool {
 
 func protectManagedPath(string, bool) error { return nil }
 
+func protectPostgresDataRoot(string) error { return nil }
+
+func verifyPostgresDataRoot(path string) error {
+	return verifyManagedPermissions(path, true)
+}
+
 func verifyManagedPermissions(path string, directory bool) error {
 	info, err := os.Lstat(path)
 	if err != nil || managedPathIsLink(path, info) || directory != info.IsDir() {

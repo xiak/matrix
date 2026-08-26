@@ -30,6 +30,13 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 	if err := stageInstallation(plan, rand.Reader); err != nil {
 		t.Fatalf("stage installation: %v", err)
 	}
+	if runtime.GOOS != "windows" {
+		postgresRoot, err := managedPath(plan.Root, layout.PostgresData)
+		info, statErr := os.Lstat(postgresRoot)
+		if err != nil || statErr != nil || info.Mode().Perm() != 0o711 {
+			t.Fatalf("PostgreSQL bind root is not private and traversable: %v / %v", err, statErr)
+		}
+	}
 
 	bootstrapBytes := readTestFile(t, plan.Root, layout.IAMBootstrap)
 	bootstrap, err := iamv1.DecodeBootstrapDocument(bytes.NewReader(bootstrapBytes))

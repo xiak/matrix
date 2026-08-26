@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/xiak/matrix/app/service/installation/internal/layout"
 )
 
 const maximumManagedFileBytes = 4 * 1024 * 1024
@@ -64,6 +66,37 @@ func ensureManagedDirectory(root, relative string) (string, error) {
 			verifyManagedPermissions(current, true) != nil:
 			return "", errManagedConflict
 		}
+	}
+	return target, nil
+}
+
+// ensurePostgresDataRoot keeps every parent private while allowing the fixed
+// PostgreSQL UID to traverse the bind-mount root after the official entrypoint
+// drops privileges. The directory cannot be listed by another UID, and its
+// provider-owned children are never treated as Matrix-managed files.
+func ensurePostgresDataRoot(root string) (string, error) {
+	if _, err := ensureManagedDirectory(root, "data"); err != nil {
+		return "", err
+	}
+	target, err := managedPath(root, filepath.FromSlash(layout.PostgresData))
+	if err != nil {
+		return "", err
+	}
+	info, statErr := os.Lstat(target)
+	switch {
+	case errors.Is(statErr, os.ErrNotExist):
+		if err := os.Mkdir(target, 0o700); err != nil ||
+			protectPostgresDataRoot(target) != nil ||
+			syncManagedDirectory(target) != nil ||
+			syncManagedDirectory(filepath.Dir(target)) != nil {
+			return "", errors.New("create PostgreSQL data root failed")
+		}
+	case statErr != nil, managedPathIsLink(target, info), !info.IsDir(),
+		verifyPostgresDataRoot(target) != nil:
+		return "", errManagedConflict
+	}
+	if err := verifyPostgresDataRoot(target); err != nil {
+		return "", errManagedConflict
 	}
 	return target, nil
 }

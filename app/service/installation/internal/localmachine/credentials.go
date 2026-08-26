@@ -28,13 +28,16 @@ func stageInstallation(plan platformcommand.InstallPlan, entropy io.Reader) erro
 		return errors.New("installation entropy is unavailable")
 	}
 	for _, directory := range []string{
-		"releases", "config", "data", layout.PostgresData, "runtime", layout.ExecutorRoot,
+		"releases", "config", "data", "runtime", layout.ExecutorRoot,
 		"secrets", "secrets/database", "secrets/authority", "secrets/gateway",
 		"secrets/operator", layout.WorkloadSecretRoot, "backups", "support",
 	} {
 		if _, err := ensureManagedDirectory(plan.Root, filepath.FromSlash(directory)); err != nil {
 			return err
 		}
+	}
+	if _, err := ensurePostgresDataRoot(plan.Root); err != nil {
+		return err
 	}
 	destination, err := managedPath(
 		plan.Root,
