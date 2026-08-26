@@ -45,12 +45,10 @@ func validateReleasePair(a, b release.VerifiedBundle) error {
 		a.Manifest.Release.SourceCommit != b.Manifest.Release.SourceCommit {
 		return fail("release-pair-contract")
 	}
-	aWorkload, ok := workloadImage(a.Manifest)
-	if !ok {
+	if _, ok := workloadImage(a.Manifest); !ok {
 		return fail("release-a-workload")
 	}
-	bWorkload, ok := workloadImage(b.Manifest)
-	if !ok || bWorkload.SourceDigest != aWorkload.SourceDigest {
+	if _, ok := workloadImage(b.Manifest); !ok {
 		return fail("release-b-workload")
 	}
 	return nil

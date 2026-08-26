@@ -26,6 +26,23 @@ func TestOfflinePhase1Lifecycle(t *testing.T) {
 	}
 }
 
+func TestReleasePairAllowsReleaseSpecificWorkloadImages(t *testing.T) {
+	a := release.VerifiedBundle{Manifest: release.Manifest{
+		Release: release.ReleaseIdentity{ID: "release-a", Version: "v0.1.0", SourceCommit: "commit"},
+		Images:  []release.Image{{Purpose: release.ImageWorkload, SourceDigest: "sha256:a"}},
+	}}
+	b := release.VerifiedBundle{Manifest: release.Manifest{
+		Release: release.ReleaseIdentity{
+			ID: "release-b", Version: "v0.2.0", SourceCommit: "commit",
+			PreviousID: "release-a", PreviousVersion: "v0.1.0",
+		},
+		Images: []release.Image{{Purpose: release.ImageWorkload, SourceDigest: "sha256:b"}},
+	}}
+	if err := validateReleasePair(a, b); err != nil {
+		t.Fatalf("release-specific workload images rejected: %v", err)
+	}
+}
+
 func optionsFromEnvironment() (options, error) {
 	phase := os.Getenv("MATRIX_PHASE1_E2E_PHASE")
 	if phase != "run" && phase != "after-restart" {
