@@ -27,7 +27,7 @@
 
 - The branch contains commit `001d889`; FEAT-004 Gate C is accepted and pushed
   in `2b7e398`, FEAT-005 Gate A is accepted and pushed in `83502b0`, and the
-  current durable implementation head is `0c305a0`. The fixed donor baselines
+  current durable implementation head is `77a02fc`. The fixed donor baselines
   remain those listed below.
 - FEAT-001, FEAT-002, and FEAT-003 Gate A/Gate B are Accepted. The public model
   is Application, immutable ApplicationRevision, Deployment,
@@ -177,6 +177,13 @@
   authenticated source release after a definitive candidate failure. Commit
   `0c305a0` corrects the release-verification Deployment update so it preserves
   the stored name without submitting a forbidden rename input.
+- Commit `77a02fc` adds authenticated explicit N-1 rollback. It verifies the
+  current healthy owned topology before journal mutation, authenticates the
+  exact signed predecessor, reuses the ownership-safe release restoration
+  phases, verifies the previous binaries against the expanded schema without a
+  downward migration, and commits the previous pointer only after its fixed
+  PaaS/Audit probe succeeds. Unknown effects remain replayable under the same
+  command and definitive rollback failure remains manual intervention.
 - FEAT-006 Gate A and Gate B are Accepted. Target design and fixed-donor
   adoption remain `506f6d7` and `932252e`; the accepted authority contracts,
   pure behavior, and separate IAM/Audit PostgreSQL owners, migrators, runtime
@@ -220,8 +227,8 @@
   listener; the signed no-pull verification workload reached Deployment
   `READY` and Operation `SUCCEEDED`; its Audit outbox was delivered; and the
   fixed PaaS and Audit APIs returned `READY` and `VERIFIED` for the same fact
-  and bounded chain. Explicit rollback/recovery behavior and complete lifecycle
-  E2E remain pending, so the Phase 1 goal is active.
+  and bounded chain. Recovery behavior and the complete lifecycle E2E remain
+  pending, so the Phase 1 goal is active.
 - Commit `fa303a4` adds durable `status` and `verify`: status cannot create or
   write installation state; verify reauthenticates the sealed current release,
   exact images and owned healthy topology, runs only migration verification,
@@ -261,10 +268,44 @@
   services, kept the A pointer and existing workload identity, and left
   status/verify `READY` without changing the PostgreSQL data directory identity.
 
+- Exact commit `77a02fc` passed generation drift, full unit/vet/race, host and
+  network-disabled Linux ten-run rollback coverage, four-target builds, and
+  repository-diff gates. Compatible signed A/B releases from that exact source
+  ran in a new outer-network-`none` DinD whose inner Docker 27.5.1 / Compose
+  v2.33.0 initially contained no containers, images, or volumes. Release A
+  installed from an empty root, upgraded to B through protected backup
+  `backup-835a39c14fd802ca347862aeba27df59`, and explicitly rolled back to A.
+  The nine B services were replaced by the nine exact A services with no B
+  platform container left; the verification Deployment advanced 1 to 2 to 3
+  and remained `READY`; all nine Operations succeeded and all nine Audit
+  outboxes were delivered. Both releases' immutable configuration/application
+  revisions and the backup remained present, the PostgreSQL data directory
+  inode stayed `2576113`, and post-rollback status/verify returned `READY` with
+  A current and the N-1 pointer cleared. Explicit rollback is accepted.
+
+## Phase 1 execution roadmap
+
+| Slice | Deliverable | State |
+| --- | --- | --- |
+| A1 | Phase boundary, target design, ADRs, and fixed-donor decisions | Accepted |
+| A2 | Application, configuration, deployment, and placement model | Accepted |
+| A3 | PaaS API, Operations, IAM authorization, and Audit boundary | Accepted |
+| A4 | Fenced worker and real Compose workload executor | Accepted |
+| A5 | Signed offline release contract and `mx platform` CLI | Accepted |
+| A6 | Journaled install, migration, start, verify, and cleanup effects | Accepted |
+| A7 | Clean network-disabled Release A install | Accepted |
+| A8 | Status, verify, and restart behavior | Accepted |
+| A9 | Protected backup and bounded support evidence | Accepted |
+| A10 | Authenticated upgrade and automatic rollback | Accepted |
+| A11 | Explicit N-1 platform rollback | Accepted |
+| A12 | Protected backup recovery | Next |
+| A13 | Complete clean external-network-disabled lifecycle E2E | Pending |
+| A14 | Final common gates, documentation convergence, and Phase 1 acceptance | Pending |
+
 ## Next concrete work
 
-1. Implement explicit N-1 rollback from B to A without discarding expanded
-   data, followed by protected backup recovery.
+1. Implement and validate protected backup recovery without weakening backup
+   ownership, authentication, or explicit destructive-operation boundaries.
 2. Run the complete external-network-disabled Compose install, repeated
    operations, upgrade, automatic and explicit rollback, recovery, and support
    E2E required for FEAT-005 Gate B/C and FEAT-006 Gate C.

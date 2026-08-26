@@ -372,6 +372,16 @@ not archive layout, Compose text, SQL text, command call order, or line counts.
   authenticated source release after a definitive candidate failure. Commit
   `0c305a0` preserves an existing verification Deployment's name without
   submitting it as the forbidden rename input of an update command.
+- Commit `77a02fc` adds explicit authenticated N-1 rollback. It authenticates
+  the sealed current and exact previous releases under the pinned trust root,
+  requires the current manifest to name that immediate predecessor, and
+  refuses to persist rollback intent unless the current owned topology is
+  observed healthy. The existing lifecycle journal drives `ROLLING_BACK`,
+  `STARTING`, `VERIFYING`, and `COMMITTING`; the same ownership-safe release
+  restoration effects serve automatic and explicit rollback. Verification
+  runs the previous binaries against the compatible expanded schema without a
+  downward migration, and only a successful previous-release application and
+  Audit probe can move the current pointer and clear N-1.
 - The accepted implementation through `3323741` passed generation drift, full
   unit tests, vet, race,
   ten-run repetition, architecture boundaries, placement fuzz, four-target
@@ -425,9 +435,24 @@ not archive layout, Compose text, SQL text, command call order, or line counts.
   `matrix-v0.2.0-cb7da457d2ad` failed in VERIFYING and automatically restored
   the A pointer, all nine A services, the existing workload identity, and
   `READY` status/verify without changing the PostgreSQL data directory identity.
-  Authenticated upgrade and automatic rollback are accepted; explicit
-  rollback, backup recovery, and the complete clean lifecycle E2E remain
-  unaccepted.
+  Authenticated upgrade and automatic rollback are accepted. Exact commit
+  `77a02fc` passed generation drift, full unit/vet/race, host and
+  network-disabled Linux ten-run rollback coverage, four-target builds, and
+  repository-diff gates. Compatible signed releases
+  `matrix-v0.1.0-77a02fc6b4c6` and `matrix-v0.2.0-77a02fc6b4c6` then ran in a
+  new DinD namespace whose outer network mode was `none` and whose inner
+  Docker 27.5.1 / Compose v2.33.0 initially had no containers, images, or
+  volumes. A installed from an empty root, upgraded to B through a verified
+  protected backup, and explicitly rolled back to A. All nine platform
+  services first ran the exact B identities and then the exact A identities;
+  no B platform container remained. The verification Deployment advanced
+  from generation 1 to 2 to 3 and stayed `READY`; all nine PaaS Operations
+  succeeded and all nine Audit outbox facts were delivered. Both A and B
+  immutable configuration/application revisions, the protected backup, and
+  the expanded PostgreSQL data remained present, while the PostgreSQL data
+  directory inode was unchanged. Post-rollback `status` and `verify` returned
+  `READY` with A current and no N-1 pointer. Explicit N-1 rollback is accepted;
+  backup recovery and the complete clean lifecycle E2E remain unaccepted.
 
 ## Deferred
 
