@@ -168,6 +168,44 @@ func (effects *Effects) ApplyRollbackPhase(
 	}
 }
 
+func (effects *Effects) ApplyRecoveryPhase(
+	ctx context.Context,
+	plan platformcommand.RecoveryPlan,
+	phase lifecycle.Phase,
+) error {
+	if effects == nil || effects.runtime == nil || effects.verifier == nil || ctx == nil {
+		return errors.Join(
+			platformcommand.ErrEffectUnavailable,
+			errors.New("local-machine recovery effects are unavailable"),
+		)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	switch phase {
+	case lifecycle.PhaseRecovering:
+		streaming, ok := effects.runtime.(streamingDockerRuntime)
+		if !ok {
+			return errors.Join(
+				platformcommand.ErrEffectUnavailable,
+				errors.New("local-machine recovery streaming is unavailable"),
+			)
+		}
+		return recoverBackup(ctx, effects.runtime, streaming, plan)
+	case lifecycle.PhaseStarting:
+		return startInstallation(ctx, effects.runtime, plan.Target)
+	case lifecycle.PhaseVerifying:
+		return verifyRecoveredInstallation(
+			ctx, effects.runtime, effects.verifier, plan,
+		)
+	default:
+		return errors.Join(
+			platformcommand.ErrEffectVerification,
+			errors.New("local-machine recovery phase is invalid"),
+		)
+	}
+}
+
 // ObserveInstallation reads only authenticated installation-owned files and
 // Docker provider state. It never invokes Compose convergence or migrations.
 func (effects *Effects) ObserveInstallation(

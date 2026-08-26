@@ -96,6 +96,27 @@ type RollbackPlan struct {
 	Previous InstalledPlan
 }
 
+// RecoverySource is the authenticated, installation-bound identity committed
+// by a selected protected backup. BackupDigest binds the sealed manifest and
+// its exact artifact commitments into the durable recovery command.
+type RecoverySource struct {
+	InstallationID string
+	BackupID       string
+	BackupDigest   string
+	ReleaseID      string
+	ReleaseDigest  string
+	SchemaVersion  uint64
+}
+
+// RecoveryPlan binds the current committed release, the authenticated release
+// named by the selected backup, and the exact protected backup identity.
+type RecoveryPlan struct {
+	Current      InstallPlan
+	Target       InstallPlan
+	BackupID     string
+	BackupDigest string
+}
+
 // Effects is the closed local-machine lifecycle boundary. Mutating phases are
 // idempotent; status remains observational. If a command may have taken effect
 // without a known result, it returns ErrEffectOutcomeUnknown and observes
@@ -106,6 +127,8 @@ type Effects interface {
 	ApplyUpgradePhase(context.Context, UpgradePlan, lifecycle.Phase) error
 	RollbackUpgrade(context.Context, UpgradePlan) error
 	ApplyRollbackPhase(context.Context, RollbackPlan, lifecycle.Phase) error
+	InspectBackup(context.Context, InstalledPlan, string) (RecoverySource, error)
+	ApplyRecoveryPhase(context.Context, RecoveryPlan, lifecycle.Phase) error
 	VerifyInstallation(context.Context, InstalledPlan) error
 	ObserveInstallation(context.Context, InstalledPlan) (bool, error)
 	CreateBackup(context.Context, BackupPlan) error
@@ -142,6 +165,8 @@ func (backend *Backend) Run(ctx context.Context, request cli.Request) (cli.Resul
 		return backend.upgrade(ctx, request)
 	case lifecycle.ActionRollback:
 		return backend.rollback(ctx, request)
+	case lifecycle.ActionRecover:
+		return backend.recover(ctx, request)
 	case lifecycle.ActionStatus:
 		return backend.status(ctx, request)
 	case lifecycle.ActionVerify, lifecycle.ActionBackup, lifecycle.ActionSupport:
@@ -755,6 +780,120 @@ func (backend *Backend) rollback(
 	)
 }
 
+func (backend *Backend) recover(
+	ctx context.Context,
+	request cli.Request,
+) (result cli.Result, returnErr error) {
+	if lifecycle.ValidateBackupID(request.BackupID) != nil {
+		return cli.Result{}, fault(cli.FaultInvalidArgument, "BACKUP_ID_INVALID")
+	}
+	session, err := journal.AcquireExisting(ctx, request.Root)
+	if err != nil {
+		return cli.Result{}, acquireFault(err)
+	}
+	defer func() {
+		if closeErr := session.Close(); closeErr != nil && returnErr == nil {
+			result = cli.Result{}
+			returnErr = fault(cli.FaultInternal, "INSTALLATION_LOCK_RELEASE_FAILED")
+		}
+	}()
+	state, err := session.Read()
+	if err != nil {
+		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_STATE_INVALID")
+	}
+	if state.Active != nil && state.Active.Command.Action != lifecycle.ActionRecover {
+		return cli.Result{}, lifecycleFault(lifecycle.ErrCommandInProgress)
+	}
+	if state.CurrentReleaseID == "" {
+		return cli.Result{}, fault(cli.FaultPrecondition, "PLATFORM_NOT_INSTALLED")
+	}
+
+	trustPath := filepath.Join(session.Root(), filepath.FromSlash(layout.ReleaseTrust))
+	trustBytes, trust, err := release.ReadTrustRootFile(trustPath)
+	if err != nil || trust.KeyID != state.ReleaseTrust.KeyID ||
+		trust.PublicKeyFingerprint != state.ReleaseTrust.Fingerprint {
+		clear(trustBytes)
+		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_RELEASE_INVALID")
+	}
+	defer clear(trustBytes)
+	currentBundle, err := authenticateJournalRelease(
+		session.Root(), state.CurrentReleaseID, state.CurrentReleaseDigest, trustBytes,
+	)
+	if err != nil {
+		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_RELEASE_INVALID")
+	}
+	source, err := backend.effects.InspectBackup(
+		ctx, installedPlan(session.Root(), state), request.BackupID,
+	)
+	if err != nil {
+		if ctx.Err() != nil {
+			return cli.Result{}, fault(cli.FaultInterrupted, "COMMAND_INTERRUPTED")
+		}
+		return cli.Result{}, effectFault(lifecycle.PhaseRecovering, err)
+	}
+	if source.InstallationID != state.InstallationID || source.BackupID != request.BackupID ||
+		source.ReleaseID == "" || source.ReleaseDigest == "" || source.BackupDigest == "" ||
+		source.SchemaVersion == 0 {
+		return cli.Result{}, fault(cli.FaultVerification, "RECOVERY_SOURCE_INVALID")
+	}
+	targetBundle, err := authenticateJournalRelease(
+		session.Root(), source.ReleaseID, source.ReleaseDigest, trustBytes,
+	)
+	if err != nil || targetBundle.Manifest.Database.SchemaVersion != source.SchemaVersion {
+		return cli.Result{}, fault(cli.FaultVerification, "RECOVERY_RELEASE_INVALID")
+	}
+
+	commandID := ""
+	if state.Active != nil {
+		commandID = state.Active.Command.ID
+	} else {
+		commandID, err = randomIdentity(backend.entropy, "cmd")
+		if err != nil {
+			return cli.Result{}, fault(cli.FaultInternal, "COMMAND_ID_GENERATION_FAILED")
+		}
+	}
+	started, err := lifecycle.Start(state, lifecycle.Command{
+		ID: commandID, Action: lifecycle.ActionRecover,
+		InputDigest: source.ReleaseDigest, BackupDigest: source.BackupDigest,
+		TargetReleaseID: source.ReleaseID, BackupID: source.BackupID,
+		RequestedAt: canonicalNow(backend.now()),
+	})
+	if err != nil {
+		return cli.Result{}, lifecycleFault(err)
+	}
+	if started.Replay == lifecycle.ReplayCompleted {
+		return completedResult(started.Journal, started.Execution, false)
+	}
+	if started.Replay == lifecycle.ReplayNone {
+		if err := session.Write(started.Journal); err != nil {
+			return cli.Result{}, stateWriteFault(err)
+		}
+	}
+	currentPlan := InstallPlan{
+		Root: session.Root(), InstallationID: started.Journal.InstallationID,
+		Listener: defaultListener, Port: defaultPort, Bundle: currentBundle,
+		Trust: trust, TrustBytes: append([]byte(nil), trustBytes...),
+	}
+	defer clear(currentPlan.TrustBytes)
+	targetPlan := InstallPlan{
+		Root: session.Root(), InstallationID: started.Journal.InstallationID,
+		Listener: defaultListener, Port: defaultPort, Bundle: targetBundle,
+		Trust: trust, TrustBytes: append([]byte(nil), trustBytes...),
+	}
+	defer clear(targetPlan.TrustBytes)
+	plan := RecoveryPlan{
+		Current: currentPlan, Target: targetPlan,
+		BackupID: source.BackupID, BackupDigest: source.BackupDigest,
+	}
+	return backend.driveReleaseChange(
+		ctx, session, lifecycle.ActionRecover,
+		func(ctx context.Context, phase lifecycle.Phase) error {
+			return backend.effects.ApplyRecoveryPhase(ctx, plan, phase)
+		},
+		nil,
+	)
+}
+
 func authenticateJournalRelease(
 	root string,
 	releaseID string,
@@ -781,8 +920,8 @@ func (backend *Backend) driveReleaseChange(
 	rollback func(context.Context) error,
 ) (cli.Result, error) {
 	if (action != lifecycle.ActionInstall && action != lifecycle.ActionUpgrade &&
-		action != lifecycle.ActionRollback) || apply == nil ||
-		(action != lifecycle.ActionRollback && rollback == nil) {
+		action != lifecycle.ActionRollback && action != lifecycle.ActionRecover) || apply == nil ||
+		(action != lifecycle.ActionRollback && action != lifecycle.ActionRecover && rollback == nil) {
 		return cli.Result{}, fault(cli.FaultInternal, "INSTALLATION_DRIVER_INVALID")
 	}
 	for {
@@ -955,6 +1094,8 @@ func phaseFailureCode(phase lifecycle.Phase, suffix string) string {
 		return "START_" + suffix
 	case lifecycle.PhaseVerifying:
 		return "PLATFORM_" + suffix
+	case lifecycle.PhaseRecovering:
+		return "RECOVERY_" + suffix
 	default:
 		return "INSTALLATION_" + suffix
 	}

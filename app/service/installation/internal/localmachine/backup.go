@@ -70,6 +70,76 @@ type backupSeal struct {
 	Value     string `json:"value"`
 }
 
+func (effects *Effects) InspectBackup(
+	ctx context.Context,
+	installed platformcommand.InstalledPlan,
+	backupID string,
+) (platformcommand.RecoverySource, error) {
+	if effects == nil || ctx == nil {
+		return platformcommand.RecoverySource{}, errors.Join(
+			platformcommand.ErrEffectUnavailable,
+			errors.New("local-machine backup inspection is unavailable"),
+		)
+	}
+	if err := ctx.Err(); err != nil {
+		return platformcommand.RecoverySource{}, err
+	}
+	if !backupIDPattern.MatchString(backupID) {
+		return platformcommand.RecoverySource{}, errors.Join(
+			platformcommand.ErrEffectPrecondition,
+			errors.New("selected backup identity is invalid"),
+		)
+	}
+	current, err := authenticateInstalledPlan(installed)
+	if err != nil {
+		return platformcommand.RecoverySource{}, errors.Join(
+			platformcommand.ErrEffectVerification, err,
+		)
+	}
+	defer clear(current.TrustBytes)
+	key, err := loadBackupSealKey(installed.Root, nil, false)
+	if err != nil {
+		return platformcommand.RecoverySource{}, err
+	}
+	defer clear(key)
+	relative := filepath.Join(filepath.FromSlash(layout.BackupDirectory), backupID)
+	manifest, manifestDigest, err := readVerifiedBackupDirectory(
+		installed.Root, installed.InstallationID, backupID, relative, key,
+	)
+	if err != nil {
+		return platformcommand.RecoverySource{}, err
+	}
+	targetIdentity := installed
+	targetIdentity.ReleaseID = manifest.ReleaseID
+	targetIdentity.ReleaseDigest = manifest.ReleaseDigest
+	targetIdentity.PreviousID = ""
+	targetIdentity.PreviousDigest = ""
+	target, err := authenticateInstalledPlan(targetIdentity)
+	if err != nil || target.Bundle.Manifest.Database.SchemaVersion != manifest.SchemaVersion {
+		clear(target.TrustBytes)
+		return platformcommand.RecoverySource{}, errors.Join(
+			platformcommand.ErrEffectVerification,
+			errors.New("backup release is unavailable or incompatible"),
+		)
+	}
+	clear(target.TrustBytes)
+	if err := verifyWorkloadSecretRestore(
+		installed.Root, filepath.Join(relative, workloadSecretsFilename), false,
+	); err != nil {
+		return platformcommand.RecoverySource{}, errors.Join(
+			platformcommand.ErrEffectConflict, err,
+		)
+	}
+	return platformcommand.RecoverySource{
+		InstallationID: installed.InstallationID,
+		BackupID:       backupID,
+		BackupDigest:   manifestDigest,
+		ReleaseID:      manifest.ReleaseID,
+		ReleaseDigest:  manifest.ReleaseDigest,
+		SchemaVersion:  manifest.SchemaVersion,
+	}, nil
+}
+
 func (effects *Effects) CreateBackup(
 	ctx context.Context,
 	request platformcommand.BackupPlan,
@@ -475,6 +545,48 @@ func writeWorkloadSecretsArchive(root string, relative string) error {
 }
 
 func verifyWorkloadSecretsArchive(root string, relative string) error {
+	return walkWorkloadSecretsArchive(root, relative, nil)
+}
+
+func verifyWorkloadSecretRestore(root string, relative string, apply bool) error {
+	return walkWorkloadSecretsArchive(root, relative, func(name string, content []byte) error {
+		parts := strings.Split(name, "/")
+		directoryRelative := filepath.Join(
+			filepath.FromSlash(layout.WorkloadSecretRoot), filepath.FromSlash(parts[0]),
+		)
+		_, err := managedDirectoryExists(root, directoryRelative)
+		if err != nil {
+			return errors.New("workload secret restore directory conflicts")
+		}
+		fileRelative := filepath.Join(directoryRelative, filepath.FromSlash(parts[1]))
+		exists, err := managedFileExists(root, fileRelative)
+		if err != nil {
+			return errors.New("workload secret restore target conflicts")
+		}
+		if exists {
+			existing, readErr := readManagedFile(root, fileRelative, 1024*1024)
+			if readErr != nil || subtle.ConstantTimeCompare(existing, content) != 1 {
+				clear(existing)
+				return errors.New("workload secret restore content conflicts")
+			}
+			clear(existing)
+			return nil
+		}
+		if !apply {
+			return nil
+		}
+		if _, err := ensureManagedDirectory(root, directoryRelative); err != nil {
+			return errors.New("workload secret restore directory is unsafe")
+		}
+		return writeRecoveredSecretVersion(root, fileRelative, content)
+	})
+}
+
+func walkWorkloadSecretsArchive(
+	root string,
+	relative string,
+	visit func(string, []byte) error,
+) error {
 	target, err := managedPath(root, relative)
 	if err != nil {
 		return err
@@ -511,9 +623,101 @@ func verifyWorkloadSecretsArchive(root string, relative string) error {
 		if total > maximumWorkloadSecretBytes {
 			return errors.New("workload secret backup exceeds its bound")
 		}
-		if copied, err := io.Copy(io.Discard, archive); err != nil || copied != header.Size {
+		if visit == nil {
+			if copied, err := io.Copy(io.Discard, archive); err != nil || copied != header.Size {
+				return errors.New("workload secret backup content is invalid")
+			}
+			continue
+		}
+		content, readErr := io.ReadAll(io.LimitReader(archive, header.Size+1))
+		if readErr != nil || int64(len(content)) != header.Size {
+			clear(content)
 			return errors.New("workload secret backup content is invalid")
 		}
+		visitErr := visit(header.Name, content)
+		clear(content)
+		if visitErr != nil {
+			return visitErr
+		}
+	}
+	return nil
+}
+
+func writeRecoveredSecretVersion(root string, relative string, content []byte) (returnErr error) {
+	if len(content) > 1024*1024 {
+		return errors.New("recovered workload secret exceeds its bound")
+	}
+	target, err := managedPath(root, relative)
+	if err != nil {
+		return err
+	}
+	if _, err := ensureManagedDirectory(root, filepath.Dir(relative)); err != nil {
+		return err
+	}
+	if info, statErr := os.Lstat(target); statErr == nil {
+		if managedPathIsLink(target, info) || !info.Mode().IsRegular() ||
+			verifyManagedPermissions(target, false) != nil {
+			return errManagedConflict
+		}
+		existing, readErr := readManagedFile(root, relative, 1024*1024)
+		defer clear(existing)
+		if readErr != nil || subtle.ConstantTimeCompare(existing, content) != 1 {
+			return errManagedConflict
+		}
+		return nil
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return errManagedConflict
+	}
+	partial := target + ".recovery-partial"
+	if info, statErr := os.Lstat(partial); statErr == nil {
+		if managedPathIsLink(partial, info) || !info.Mode().IsRegular() ||
+			verifyManagedPermissions(partial, false) != nil || os.Remove(partial) != nil {
+			return errManagedConflict
+		}
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return errManagedConflict
+	}
+	file, err := os.OpenFile(partial, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return errors.New("create recovered workload secret failed")
+	}
+	removePartial := true
+	defer func() {
+		if file != nil {
+			returnErr = errors.Join(returnErr, file.Close())
+		}
+		if removePartial {
+			_ = os.Remove(partial)
+		}
+	}()
+	if err := protectManagedPath(partial, false); err != nil {
+		return errors.New("protect recovered workload secret failed")
+	}
+	if _, err := file.Write(content); err != nil {
+		return errors.New("write recovered workload secret failed")
+	}
+	if err := file.Sync(); err != nil {
+		return errors.New("write recovered workload secret failed")
+	}
+	if err := file.Close(); err != nil {
+		file = nil
+		return errors.New("write recovered workload secret failed")
+	}
+	file = nil
+	if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
+		return errManagedConflict
+	}
+	if err := durableReplaceManaged(partial, target, filepath.Dir(target)); err != nil {
+		return errors.Join(errManagedOutcomeUnknown, err)
+	}
+	removePartial = false
+	if err := verifyManagedPermissions(target, false); err != nil {
+		return errors.Join(errManagedOutcomeUnknown, err)
+	}
+	observed, err := readManagedFile(root, relative, 1024*1024)
+	defer clear(observed)
+	if err != nil || subtle.ConstantTimeCompare(observed, content) != 1 {
+		return errManagedOutcomeUnknown
 	}
 	return nil
 }
@@ -553,13 +757,41 @@ func verifyBackupDirectory(
 	relative string,
 	key []byte,
 ) error {
-	target, err := managedPath(plan.Root, relative)
+	manifest, _, err := readVerifiedBackupDirectory(
+		plan.Root, plan.InstallationID, backupID, relative, key,
+	)
 	if err != nil {
-		return errors.Join(platformcommand.ErrEffectVerification, err)
+		return err
+	}
+	if manifest.ReleaseID != plan.Bundle.Manifest.Release.ID ||
+		manifest.ReleaseDigest != plan.Bundle.ManifestSHA256 ||
+		manifest.SchemaVersion != installation.bundle.Manifest.Database.SchemaVersion ||
+		manifest.CreatedAt != createdAt {
+		return errors.Join(
+			platformcommand.ErrEffectVerification,
+			errors.New("backup manifest identity is invalid"),
+		)
+	}
+	return verifyDatabaseDump(
+		ctx, runtimeBoundary, plan.Root,
+		filepath.Join(relative, databaseDumpFilename), postgresID,
+	)
+}
+
+func readVerifiedBackupDirectory(
+	root string,
+	installationID string,
+	backupID string,
+	relative string,
+	key []byte,
+) (backupManifest, string, error) {
+	target, err := managedPath(root, relative)
+	if err != nil {
+		return backupManifest{}, "", errors.Join(platformcommand.ErrEffectVerification, err)
 	}
 	info, err := validateManagedExistingPath(target)
 	if err != nil || !info.IsDir() || verifyManagedPermissions(target, true) != nil {
-		return errors.Join(
+		return backupManifest{}, "", errors.Join(
 			platformcommand.ErrEffectVerification,
 			errors.New("backup directory is unsafe"),
 		)
@@ -567,7 +799,7 @@ func verifyBackupDirectory(
 	entries, err := os.ReadDir(target)
 	wantNames := []string{backupManifestFilename, databaseDumpFilename, workloadSecretsFilename}
 	if err != nil || len(entries) != len(wantNames) {
-		return errors.Join(
+		return backupManifest{}, "", errors.Join(
 			platformcommand.ErrEffectVerification,
 			errors.New("backup inventory is invalid"),
 		)
@@ -579,30 +811,32 @@ func verifyBackupDirectory(
 	slices.Sort(actualNames)
 	slices.Sort(wantNames)
 	if !slices.Equal(actualNames, wantNames) {
-		return errors.Join(
+		return backupManifest{}, "", errors.Join(
 			platformcommand.ErrEffectVerification,
 			errors.New("backup inventory is invalid"),
 		)
 	}
 	content, err := readManagedFile(
-		plan.Root, filepath.Join(relative, backupManifestFilename), maximumBackupManifestBytes,
+		root, filepath.Join(relative, backupManifestFilename), maximumBackupManifestBytes,
 	)
 	if err != nil {
-		return errors.Join(platformcommand.ErrEffectVerification, err)
+		return backupManifest{}, "", errors.Join(platformcommand.ErrEffectVerification, err)
 	}
 	defer clear(content)
+	manifestDigestValue := sha256.Sum256(content)
+	manifestDigest := "sha256:" + hex.EncodeToString(manifestDigestValue[:])
 	var manifest backupManifest
 	if contractjson.DecodeObjectBytes(content, maximumBackupManifestBytes, &manifest) != nil ||
 		manifest.APIVersion != backupAPIVersion || manifest.Kind != backupKind ||
-		manifest.BackupID != backupID || manifest.InstallationID != plan.InstallationID ||
-		manifest.ReleaseID != plan.Bundle.Manifest.Release.ID ||
-		manifest.ReleaseDigest != plan.Bundle.ManifestSHA256 ||
-		manifest.SchemaVersion != installation.bundle.Manifest.Database.SchemaVersion ||
-		manifest.CreatedAt != createdAt || len(manifest.Artifacts) != 2 ||
-		manifest.Seal == nil || manifest.Seal.Algorithm != backupSealAlgorithm ||
-		manifest.Seal.KeyID != backupSealKeyID ||
-		!validSHA256(manifest.Seal.Value) {
-		return errors.Join(
+		manifest.BackupID != backupID || manifest.InstallationID != installationID ||
+		manifest.ReleaseID == "" || !validSHA256(manifest.ReleaseDigest) ||
+		manifest.SchemaVersion == 0 || manifest.CreatedAt.IsZero() ||
+		manifest.CreatedAt.Location() != time.UTC ||
+		manifest.CreatedAt != manifest.CreatedAt.Truncate(time.Microsecond) ||
+		len(manifest.Artifacts) != 2 || manifest.Seal == nil ||
+		manifest.Seal.Algorithm != backupSealAlgorithm ||
+		manifest.Seal.KeyID != backupSealKeyID || !validSHA256(manifest.Seal.Value) {
+		return backupManifest{}, "", errors.Join(
 			platformcommand.ErrEffectVerification,
 			errors.New("backup manifest identity is invalid"),
 		)
@@ -611,7 +845,7 @@ func verifyBackupDirectory(
 	manifest.Seal = nil
 	canonical, err := json.Marshal(manifest)
 	if err != nil {
-		return errors.Join(platformcommand.ErrEffectVerification, err)
+		return backupManifest{}, "", errors.Join(platformcommand.ErrEffectVerification, err)
 	}
 	defer clear(canonical)
 	mac := hmac.New(sha256.New, key)
@@ -619,10 +853,13 @@ func verifyBackupDirectory(
 	_, _ = mac.Write(canonical)
 	wantSeal := "sha256:" + hex.EncodeToString(mac.Sum(nil))
 	if subtle.ConstantTimeCompare([]byte(sealValue), []byte(wantSeal)) != 1 {
-		return errors.Join(
+		return backupManifest{}, "", errors.Join(
 			platformcommand.ErrEffectVerification,
 			errors.New("backup manifest seal is invalid"),
 		)
+	}
+	manifest.Seal = &backupSeal{
+		Algorithm: backupSealAlgorithm, KeyID: backupSealKeyID, Value: sealValue,
 	}
 	wantArtifacts := []struct {
 		path      string
@@ -636,33 +873,27 @@ func verifyBackupDirectory(
 		artifact := manifest.Artifacts[index]
 		if artifact.Path != want.path || artifact.MediaType != want.mediaType ||
 			artifact.Size == 0 || artifact.Size > want.maximum || !validSHA256(artifact.SHA256) {
-			return errors.Join(
+			return backupManifest{}, "", errors.Join(
 				platformcommand.ErrEffectVerification,
 				errors.New("backup artifact commitment is invalid"),
 			)
 		}
 		observed, err := inspectBackupArtifact(
-			plan.Root, filepath.Join(relative, want.path), want.maximum,
+			root, filepath.Join(relative, want.path), want.maximum,
 		)
 		if err != nil || observed.Size != artifact.Size || observed.SHA256 != artifact.SHA256 {
-			return errors.Join(
+			return backupManifest{}, "", errors.Join(
 				platformcommand.ErrEffectVerification,
 				errors.New("backup artifact differs from its commitment"),
 			)
 		}
 	}
-	if err := verifyDatabaseDump(
-		ctx, runtimeBoundary, plan.Root,
-		filepath.Join(relative, databaseDumpFilename), postgresID,
-	); err != nil {
-		return err
-	}
 	if err := verifyWorkloadSecretsArchive(
-		plan.Root, filepath.Join(relative, workloadSecretsFilename),
+		root, filepath.Join(relative, workloadSecretsFilename),
 	); err != nil {
-		return errors.Join(platformcommand.ErrEffectVerification, err)
+		return backupManifest{}, "", errors.Join(platformcommand.ErrEffectVerification, err)
 	}
-	return nil
+	return manifest, manifestDigest, nil
 }
 
 func publishBackupDirectory(root, partialRelative, finalRelative string) error {

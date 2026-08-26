@@ -21,6 +21,7 @@ import (
 	apphostingv1 "github.com/xiak/matrix/api/adapter/apphosting/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
+	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
 	"github.com/xiak/matrix/app/service/installation/internal/releasetest"
 	"github.com/xiak/matrix/app/service/installation/release"
@@ -720,6 +721,23 @@ func TestCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T) {
 		len(manifest.Artifacts) != 2 || manifest.Seal == nil || manifest.Seal.Value == "" {
 		t.Fatalf("sealed backup manifest = %#v", manifest)
 	}
+	source, err := effects.InspectBackup(
+		context.Background(), request.InstalledPlan, request.BackupID,
+	)
+	if err != nil || source.InstallationID != plan.InstallationID ||
+		source.BackupID != request.BackupID || !validSHA256(source.BackupDigest) ||
+		source.ReleaseID != plan.Bundle.Manifest.Release.ID ||
+		source.ReleaseDigest != plan.Bundle.ManifestSHA256 ||
+		source.SchemaVersion != plan.Bundle.Manifest.Database.SchemaVersion {
+		t.Fatalf("authenticated recovery source = %#v / %v", source, err)
+	}
+	foreign := request.InstalledPlan
+	foreign.InstallationID = "mxi-22222222222222222222222222222222"
+	if _, err := effects.InspectBackup(
+		context.Background(), foreign, request.BackupID,
+	); !errors.Is(err, platformcommand.ErrEffectVerification) {
+		t.Fatalf("cross-installation backup inspection error = %v", err)
+	}
 	archiveFile, err := os.Open(filepath.Join(backupRoot, workloadSecretsFilename))
 	if err != nil {
 		t.Fatalf("open workload secret archive: %v", err)
@@ -755,6 +773,90 @@ func TestCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T) {
 		context.Background(), request,
 	); !errors.Is(err, platformcommand.ErrEffectVerification) {
 		t.Fatalf("tampered backup replay error = %v", err)
+	}
+}
+
+func TestRecoverBackupRestoresSelectedSnapshotAndConvergesTarget(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine recovery effects target Linux")
+	}
+	plan, expectation := configuredPlatformStartFixture(t)
+	secret := []byte("selected-backup-secret")
+	secretRelative := filepath.Join(
+		filepath.FromSlash(layout.WorkloadSecretRoot),
+		"secret-recovery", "version-one",
+	)
+	if err := writeManagedOnce(plan.Root, secretRelative, secret); err != nil {
+		t.Fatalf("provision recovery secret fixture: %v", err)
+	}
+	runtimeBoundary := newPlatformStartRuntime(plan, expectation)
+	runtimeBoundary.started = true
+	verifier := &recordingInstallationVerifier{}
+	effects := &Effects{
+		runtime: runtimeBoundary, entropy: rand.Reader, verifier: verifier,
+	}
+	backup := platformcommand.BackupPlan{
+		InstalledPlan: installedPlanFrom(plan),
+		BackupID:      "backup-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		CreatedAt:     time.Date(2026, 8, 26, 5, 5, 0, 0, time.UTC),
+	}
+	if err := effects.CreateBackup(context.Background(), backup); err != nil {
+		t.Fatalf("create recovery backup: %v", err)
+	}
+	source, err := effects.InspectBackup(
+		context.Background(), backup.InstalledPlan, backup.BackupID,
+	)
+	if err != nil {
+		t.Fatalf("inspect recovery backup: %v", err)
+	}
+	secretPath, err := managedPath(plan.Root, secretRelative)
+	if err != nil {
+		t.Fatalf("resolve recovery secret: %v", err)
+	}
+	if err := os.WriteFile(secretPath, []byte("conflicting-live-secret"), 0o600); err != nil {
+		t.Fatalf("write conflicting live secret: %v", err)
+	}
+	removals := runtimeBoundary.providerRemovals
+	if _, err := effects.InspectBackup(
+		context.Background(), backup.InstalledPlan, backup.BackupID,
+	); !errors.Is(err, platformcommand.ErrEffectConflict) ||
+		runtimeBoundary.providerRemovals != removals {
+		t.Fatalf("conflicting secret recovery preflight = %v / removals=%d", err, runtimeBoundary.providerRemovals)
+	}
+	if err := os.Remove(secretPath); err != nil {
+		t.Fatalf("remove live secret before recovery: %v", err)
+	}
+
+	recovery := platformcommand.RecoveryPlan{
+		Current:      plan,
+		Target:       plan,
+		BackupID:     source.BackupID,
+		BackupDigest: source.BackupDigest,
+	}
+	for _, phase := range []lifecycle.Phase{
+		lifecycle.PhaseRecovering, lifecycle.PhaseStarting, lifecycle.PhaseVerifying,
+	} {
+		if err := effects.ApplyRecoveryPhase(
+			context.Background(), recovery, phase,
+		); err != nil {
+			t.Fatalf("apply recovery phase %s: %v", phase, err)
+		}
+	}
+	restored, err := readManagedFile(plan.Root, secretRelative, 1024*1024)
+	if err != nil || !bytes.Equal(restored, secret) {
+		clear(restored)
+		t.Fatalf("restored secret differs: %v", err)
+	}
+	clear(restored)
+	if runtimeBoundary.recoveryRestores != 1 || runtimeBoundary.postgresOnly ||
+		!runtimeBoundary.started || runtimeBoundary.providerRemovals == removals ||
+		verifier.calls != 1 ||
+		verifier.plan.Bundle.Manifest.Release.ID != plan.Bundle.Manifest.Release.ID {
+		t.Fatalf(
+			"recovery effects = restores:%d postgresOnly:%t started:%t removals:%d verifier:%d",
+			runtimeBoundary.recoveryRestores, runtimeBoundary.postgresOnly,
+			runtimeBoundary.started, runtimeBoundary.providerRemovals, verifier.calls,
+		)
 	}
 }
 
@@ -1353,6 +1455,12 @@ type platformStartRuntime struct {
 	databaseDump              []byte
 	backupStreams             int
 	restoreChecks             int
+	recoveryRestores          int
+	postgresOnly              bool
+	networkCreated            bool
+	removedContainers         map[string]bool
+	removedNetworks           map[string]bool
+	providerRemovals          int
 }
 
 type platformCleanupRuntime struct {
@@ -1594,6 +1702,10 @@ func (runtimeBoundary *platformStartRuntime) Run(
 		runtimeBoundary.composeCalls++
 		runtimeBoundary.composeArguments = slices.Clone(arguments)
 		runtimeBoundary.started = true
+		runtimeBoundary.postgresOnly = arguments[len(arguments)-1] == "postgres"
+		runtimeBoundary.networkCreated = true
+		runtimeBoundary.removedContainers = make(map[string]bool)
+		runtimeBoundary.removedNetworks = make(map[string]bool)
 		return nil, true, nil
 	}
 	if arguments[0] == "run" {
@@ -1603,7 +1715,7 @@ func (runtimeBoundary *platformStartRuntime) Run(
 		return nil, true, nil
 	}
 	if len(arguments) >= 2 && arguments[1] == "ls" {
-		if !runtimeBoundary.started {
+		if !runtimeBoundary.started && !runtimeBoundary.networkCreated {
 			runtimeBoundary.observationsBeforeStart++
 			return nil, true, nil
 		}
@@ -1612,8 +1724,15 @@ func (runtimeBoundary *platformStartRuntime) Run(
 		}
 		switch arguments[0] {
 		case "container":
+			if !runtimeBoundary.started {
+				return nil, true, nil
+			}
 			services := make([]string, 0, len(runtimeBoundary.expectation.Services))
 			for service := range runtimeBoundary.expectation.Services {
+				if (runtimeBoundary.postgresOnly && service != "postgres") ||
+					runtimeBoundary.removedContainers[service] {
+					continue
+				}
 				services = append(services, "container-"+service)
 			}
 			slices.Sort(services)
@@ -1622,10 +1741,16 @@ func (runtimeBoundary *platformStartRuntime) Run(
 			if hasArgumentPair(
 				arguments, "--filter", "label=com.docker.compose.network=control",
 			) {
+				if runtimeBoundary.removedNetworks["control"] {
+					return nil, true, nil
+				}
 				return []byte("network-control\n"), true, nil
 			}
 			networks := make([]string, 0, len(runtimeBoundary.expectation.Networks))
 			for network := range runtimeBoundary.expectation.Networks {
+				if runtimeBoundary.removedNetworks[network] {
+					continue
+				}
 				networks = append(networks, "network-"+network)
 			}
 			slices.Sort(networks)
@@ -1633,6 +1758,54 @@ func (runtimeBoundary *platformStartRuntime) Run(
 		case "volume":
 			return nil, true, nil
 		}
+	}
+	if len(arguments) >= 2 && arguments[1] == "rm" {
+		identity := arguments[len(arguments)-1]
+		switch arguments[0] {
+		case "container":
+			service := strings.TrimPrefix(identity, "container-")
+			_, expected := runtimeBoundary.expectation.Services[service]
+			active := expected && runtimeBoundary.started &&
+				(!runtimeBoundary.postgresOnly || service == "postgres") &&
+				!runtimeBoundary.removedContainers[service]
+			if !active || !slices.Contains(arguments, "--force") ||
+				!slices.Contains(arguments, "--volumes") {
+				return nil, true, errors.New("platform test container removal is invalid")
+			}
+			if !runtimeBoundary.networkCreated {
+				runtimeBoundary.networkCreated = true
+			}
+			if runtimeBoundary.removedContainers == nil {
+				runtimeBoundary.removedContainers = make(map[string]bool)
+			}
+			runtimeBoundary.removedContainers[service] = true
+			activeCount := len(runtimeBoundary.expectation.Services)
+			if runtimeBoundary.postgresOnly {
+				activeCount = 1
+			}
+			if len(runtimeBoundary.removedContainers) == activeCount {
+				runtimeBoundary.started = false
+				runtimeBoundary.postgresOnly = false
+			}
+		case "network":
+			network := strings.TrimPrefix(identity, "network-")
+			_, expected := runtimeBoundary.expectation.Networks[network]
+			if !expected || (!runtimeBoundary.networkCreated && !runtimeBoundary.started) ||
+				runtimeBoundary.removedNetworks[network] {
+				return nil, true, errors.New("platform test network removal is invalid")
+			}
+			if runtimeBoundary.removedNetworks == nil {
+				runtimeBoundary.removedNetworks = make(map[string]bool)
+			}
+			runtimeBoundary.removedNetworks[network] = true
+			if len(runtimeBoundary.removedNetworks) == len(runtimeBoundary.expectation.Networks) {
+				runtimeBoundary.networkCreated = false
+			}
+		default:
+			return nil, false, errors.New("platform test provider removal is unsupported")
+		}
+		runtimeBoundary.providerRemovals++
+		return nil, true, nil
 	}
 	if len(arguments) >= 2 && arguments[1] == "inspect" {
 		switch arguments[0] {
@@ -1665,9 +1838,29 @@ func (runtimeBoundary *platformStartRuntime) RunTo(
 		if err != nil || !bytes.Equal(content, runtimeBoundary.databaseDump) {
 			return true, errors.New("backup verification content is invalid")
 		}
-		runtimeBoundary.restoreChecks++
-		_, err = output.Write([]byte("; Archive created for test\n"))
-		return true, err
+		if slices.Contains(arguments, "--list") {
+			if slices.Contains(arguments, "--clean") {
+				return true, errors.New("backup verification unexpectedly mutates the database")
+			}
+			runtimeBoundary.restoreChecks++
+			_, err = output.Write([]byte("; Archive created for test\n"))
+			return true, err
+		}
+		for _, required := range []string{
+			"--interactive", "--clean", "--if-exists", "--exit-on-error",
+			"--single-transaction", "--no-owner", "--no-privileges", "--no-password",
+		} {
+			if !slices.Contains(arguments, required) {
+				return true, fmt.Errorf("recovery restore lacks %s", required)
+			}
+		}
+		if !hasArgumentPair(arguments, "--user", "postgres") ||
+			!hasArgumentPair(arguments, "--username", "matrix") ||
+			!hasArgumentPair(arguments, "--dbname", "matrix") {
+			return true, errors.New("recovery restore database identity is invalid")
+		}
+		runtimeBoundary.recoveryRestores++
+		return true, nil
 	}
 	if input != nil || !slices.Contains(arguments, "pg_dump") ||
 		!slices.Contains(arguments, "--no-owner") ||

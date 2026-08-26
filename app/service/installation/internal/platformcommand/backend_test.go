@@ -384,6 +384,194 @@ func TestExplicitRollbackRequiresReadyCurrentReleaseBeforePersistingIntent(t *te
 	}
 }
 
+func TestRecoveryBindsSelectedBackupAndResumesUnknownOutcome(t *testing.T) {
+	fixtures := writeReleaseSequence(t, 2)
+	effects := &installEffects{
+		recoveryFailPhase: lifecycle.PhaseRecovering,
+		recoveryFailErr:   ErrEffectOutcomeUnknown,
+		recoveryFailOnce:  true,
+	}
+	backend := newTestBackend(t, effects)
+	root := filepath.Join(t.TempDir(), "matrix")
+	if _, err := backend.Run(
+		context.Background(), installRequest(root, fixtures[0]),
+	); err != nil {
+		t.Fatalf("install recovery source: %v", err)
+	}
+	materializeInstalledRelease(t, root, fixtures[0])
+	if _, err := backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[1].Root,
+	}); err != nil {
+		t.Fatalf("upgrade recovery fixture: %v", err)
+	}
+	materializeInstalledRelease(t, root, fixtures[1])
+	installed := readJournal(t, root)
+	backupID := "backup-" + strings.Repeat("d", 32)
+	backupDigest := "sha256:" + strings.Repeat("e", 64)
+	effects.recoverySource = RecoverySource{
+		InstallationID: installed.InstallationID,
+		BackupID:       backupID,
+		BackupDigest:   backupDigest,
+		ReleaseID:      fixtures[0].Manifest.Release.ID,
+		ReleaseDigest:  fixtures[0].ManifestDigest,
+		SchemaVersion:  fixtures[0].Manifest.Database.SchemaVersion,
+	}
+	request := cli.Request{
+		Action: lifecycle.ActionRecover, Root: root, BackupID: backupID,
+	}
+
+	_, err := backend.Run(context.Background(), request)
+	assertFault(t, err, cli.FaultUnavailable, "EFFECT_OUTCOME_UNKNOWN")
+	active := readJournal(t, root)
+	if active.Active == nil || active.Active.Command.Action != lifecycle.ActionRecover ||
+		active.Active.Phase != lifecycle.PhaseRecovering ||
+		active.Active.Command.BackupID != backupID ||
+		active.Active.Command.BackupDigest != backupDigest ||
+		active.Active.Command.TargetReleaseID != fixtures[0].Manifest.Release.ID ||
+		active.Active.Command.InputDigest != fixtures[0].ManifestDigest ||
+		active.CurrentReleaseID != fixtures[1].Manifest.Release.ID {
+		t.Fatalf("unknown recovery journal = %#v", active)
+	}
+	commandID := active.Active.Command.ID
+
+	effects.recoverySource.BackupDigest = "sha256:" + strings.Repeat("f", 64)
+	_, err = backend.Run(context.Background(), request)
+	assertFault(t, err, cli.FaultConflict, "INSTALLATION_COMMAND_CONFLICT")
+	if changed := readJournal(t, root); !reflect.DeepEqual(changed, active) {
+		t.Fatalf("changed backup altered active recovery: before=%#v after=%#v", active, changed)
+	}
+	effects.recoverySource.BackupDigest = backupDigest
+
+	result, err := backend.Run(context.Background(), request)
+	if err != nil || !result.Changed || result.State != "READY" ||
+		result.ReleaseID != fixtures[0].Manifest.Release.ID || result.PreviousID != "" ||
+		result.BackupID != backupID || result.CorrelationID != commandID {
+		t.Fatalf("resumed recovery result = %#v / %v", result, err)
+	}
+	for _, phase := range []lifecycle.Phase{
+		lifecycle.PhaseRecovering, lifecycle.PhaseStarting, lifecycle.PhaseVerifying,
+	} {
+		want := 1
+		if phase == lifecycle.PhaseRecovering {
+			want = 2
+		}
+		if effects.recoveryCalls[phase] != want {
+			t.Fatalf("recovery phase %s calls = %d, want %d", phase, effects.recoveryCalls[phase], want)
+		}
+	}
+	if effects.recoveryInspectCalls != 3 ||
+		effects.recoveryPlan.Current.Bundle.Manifest.Release.ID != fixtures[1].Manifest.Release.ID ||
+		effects.recoveryPlan.Target.Bundle.Manifest.Release.ID != fixtures[0].Manifest.Release.ID ||
+		effects.recoveryPlan.BackupID != backupID ||
+		effects.recoveryPlan.BackupDigest != backupDigest {
+		t.Fatalf("recovery inspection/plan = calls:%d plan:%#v", effects.recoveryInspectCalls, effects.recoveryPlan)
+	}
+	completed := readJournal(t, root)
+	if completed.CurrentReleaseID != fixtures[0].Manifest.Release.ID ||
+		completed.CurrentReleaseDigest != fixtures[0].ManifestDigest ||
+		completed.PreviousRelease != "" || completed.PreviousReleaseDigest != "" ||
+		completed.Active != nil || completed.Last == nil ||
+		completed.Last.Command.ID != commandID ||
+		completed.Last.Outcome != lifecycle.OutcomeSucceeded {
+		t.Fatalf("completed recovery journal = %#v", completed)
+	}
+}
+
+func TestRecoveryRejectsUntrustedSourceBeforePersistingIntent(t *testing.T) {
+	fixture := writeReleaseFixture(t)
+	effects := &installEffects{}
+	backend := newTestBackend(t, effects)
+	root := filepath.Join(t.TempDir(), "matrix")
+	if _, err := backend.Run(
+		context.Background(), installRequest(root, fixture),
+	); err != nil {
+		t.Fatalf("install cross-install recovery fixture: %v", err)
+	}
+	materializeInstalledRelease(t, root, fixture)
+	before := readJournal(t, root)
+	backupID := "backup-" + strings.Repeat("a", 32)
+
+	_, err := backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionRecover, Root: root, BackupID: "../foreign-backup",
+	})
+	assertFault(t, err, cli.FaultInvalidArgument, "BACKUP_ID_INVALID")
+	if after := readJournal(t, root); !reflect.DeepEqual(after, before) ||
+		effects.recoveryInspectCalls != 0 {
+		t.Fatalf("invalid recovery path changed state: before=%#v after=%#v effects=%#v", before, after, effects)
+	}
+
+	effects.recoverySource = RecoverySource{
+		InstallationID: before.InstallationID,
+		BackupID:       backupID,
+		BackupDigest:   "sha256:" + strings.Repeat("c", 64),
+		ReleaseID:      "matrix-v0.9.9-ffffffffffff",
+		ReleaseDigest:  "sha256:" + strings.Repeat("f", 64),
+		SchemaVersion:  fixture.Manifest.Database.SchemaVersion,
+	}
+	_, err = backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionRecover, Root: root, BackupID: backupID,
+	})
+	assertFault(t, err, cli.FaultVerification, "RECOVERY_RELEASE_INVALID")
+	if after := readJournal(t, root); !reflect.DeepEqual(after, before) ||
+		effects.recoveryInspectCalls != 1 || len(effects.recoveryCalls) != 0 {
+		t.Fatalf("unstaged recovery release changed state: before=%#v after=%#v effects=%#v", before, after, effects)
+	}
+
+	effects.recoverySource.InstallationID = "mxi-" + strings.Repeat("b", 32)
+	effects.recoverySource.ReleaseID = fixture.Manifest.Release.ID
+	effects.recoverySource.ReleaseDigest = fixture.ManifestDigest
+	_, err = backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionRecover, Root: root, BackupID: backupID,
+	})
+	assertFault(t, err, cli.FaultVerification, "RECOVERY_SOURCE_INVALID")
+	if after := readJournal(t, root); !reflect.DeepEqual(after, before) ||
+		effects.recoveryInspectCalls != 2 || len(effects.recoveryCalls) != 0 {
+		t.Fatalf("cross-install recovery changed state: before=%#v after=%#v effects=%#v", before, after, effects)
+	}
+}
+
+func TestRecoveryDefinitiveFailureRequiresManualIntervention(t *testing.T) {
+	fixture := writeReleaseFixture(t)
+	effects := &installEffects{
+		recoveryFailPhase: lifecycle.PhaseRecovering,
+		recoveryFailErr:   ErrEffectVerification,
+	}
+	backend := newTestBackend(t, effects)
+	root := filepath.Join(t.TempDir(), "matrix")
+	if _, err := backend.Run(
+		context.Background(), installRequest(root, fixture),
+	); err != nil {
+		t.Fatalf("install failed-recovery fixture: %v", err)
+	}
+	materializeInstalledRelease(t, root, fixture)
+	before := readJournal(t, root)
+	backupID := "backup-" + strings.Repeat("b", 32)
+	effects.recoverySource = RecoverySource{
+		InstallationID: before.InstallationID,
+		BackupID:       backupID,
+		BackupDigest:   "sha256:" + strings.Repeat("d", 64),
+		ReleaseID:      fixture.Manifest.Release.ID,
+		ReleaseDigest:  fixture.ManifestDigest,
+		SchemaVersion:  fixture.Manifest.Database.SchemaVersion,
+	}
+
+	_, err := backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionRecover, Root: root, BackupID: backupID,
+	})
+	assertFault(t, err, cli.FaultVerification, "RECOVERY_VERIFICATION_FAILED")
+	failed := readJournal(t, root)
+	if failed.CurrentReleaseID != before.CurrentReleaseID ||
+		failed.CurrentReleaseDigest != before.CurrentReleaseDigest ||
+		failed.Active != nil || failed.Last == nil ||
+		failed.Last.Command.Action != lifecycle.ActionRecover ||
+		failed.Last.Outcome != lifecycle.OutcomeManualIntervention ||
+		failed.Last.Phase != lifecycle.PhaseManualIntervention ||
+		failed.Last.FailureCode != "RECOVERY_VERIFICATION_FAILED" ||
+		effects.recoveryCalls[lifecycle.PhaseRecovering] != 1 {
+		t.Fatalf("failed recovery journal = %#v / effects=%#v", failed, effects)
+	}
+}
+
 func TestStatusIsReadOnlyForStableAndActiveInstallations(t *testing.T) {
 	fixture := writeReleaseFixture(t)
 	effects := &installEffects{observeReady: true}
@@ -663,6 +851,15 @@ type installEffects struct {
 	explicitRollbackFailErr   error
 	explicitRollbackFailOnce  bool
 	explicitRollbackFailed    bool
+	recoveryInspectCalls      int
+	recoveryInspectErr        error
+	recoverySource            RecoverySource
+	recoveryCalls             map[lifecycle.Phase]int
+	recoveryPlan              RecoveryPlan
+	recoveryFailPhase         lifecycle.Phase
+	recoveryFailErr           error
+	recoveryFailOnce          bool
+	recoveryFailed            bool
 }
 
 func (effects *installEffects) ApplyInstallPhase(
@@ -741,6 +938,49 @@ func (effects *installEffects) ApplyRollbackPhase(
 		(!effects.explicitRollbackFailOnce || !effects.explicitRollbackFailed) {
 		effects.explicitRollbackFailed = true
 		return effects.explicitRollbackFailErr
+	}
+	return nil
+}
+
+func (effects *installEffects) InspectBackup(
+	_ context.Context,
+	plan InstalledPlan,
+	backupID string,
+) (RecoverySource, error) {
+	effects.recoveryInspectCalls++
+	if plan.Root == "" || plan.InstallationID == "" || plan.ReleaseID == "" ||
+		plan.ReleaseDigest == "" || plan.TrustKeyID == "" || plan.TrustFingerprint == "" ||
+		plan.Port == 0 || backupID == "" {
+		return RecoverySource{}, errors.New("recovery inspection plan is incomplete")
+	}
+	if effects.recoveryInspectErr != nil {
+		return RecoverySource{}, effects.recoveryInspectErr
+	}
+	return effects.recoverySource, nil
+}
+
+func (effects *installEffects) ApplyRecoveryPhase(
+	_ context.Context,
+	plan RecoveryPlan,
+	phase lifecycle.Phase,
+) error {
+	if effects.recoveryCalls == nil {
+		effects.recoveryCalls = make(map[lifecycle.Phase]int)
+	}
+	effects.recoveryCalls[phase]++
+	effects.recoveryPlan = plan
+	if plan.Current.Root == "" || plan.Current.Root != plan.Target.Root ||
+		plan.Current.InstallationID == "" ||
+		plan.Current.InstallationID != plan.Target.InstallationID ||
+		plan.Current.Bundle.Manifest.Release.ID == "" ||
+		plan.Target.Bundle.Manifest.Release.ID == "" ||
+		plan.BackupID == "" || plan.BackupDigest == "" {
+		return errors.New("recovery plan is incomplete")
+	}
+	if phase == effects.recoveryFailPhase && effects.recoveryFailErr != nil &&
+		(!effects.recoveryFailOnce || !effects.recoveryFailed) {
+		effects.recoveryFailed = true
+		return effects.recoveryFailErr
 	}
 	return nil
 }

@@ -70,6 +70,7 @@ type Command struct {
 	ID              string    `json:"id"`
 	Action          Action    `json:"action"`
 	InputDigest     string    `json:"inputDigest,omitempty"`
+	BackupDigest    string    `json:"backupDigest,omitempty"`
 	TargetReleaseID string    `json:"targetReleaseId,omitempty"`
 	BackupID        string    `json:"backupId,omitempty"`
 	RequestedAt     time.Time `json:"requestedAt"`
@@ -140,6 +141,13 @@ func New(installationID string, trust ReleaseTrust) (Journal, error) {
 func ValidateInstallationID(value string) error {
 	if !installationIDPattern.MatchString(value) {
 		return errors.New("installation identity is invalid")
+	}
+	return nil
+}
+
+func ValidateBackupID(value string) error {
+	if !backupIDPattern.MatchString(value) {
+		return errors.New("backup identity is invalid")
 	}
 	return nil
 }
@@ -319,33 +327,37 @@ func validateCommand(command Command) error {
 	switch command.Action {
 	case ActionInstall:
 		if !digestPattern.MatchString(command.InputDigest) ||
-			!releaseIDPattern.MatchString(command.TargetReleaseID) || command.BackupID != "" {
+			!releaseIDPattern.MatchString(command.TargetReleaseID) || command.BackupID != "" ||
+			command.BackupDigest != "" {
 			return errors.New("release-changing command input is invalid")
 		}
 	case ActionUpgrade:
 		if !digestPattern.MatchString(command.InputDigest) ||
 			!releaseIDPattern.MatchString(command.TargetReleaseID) ||
-			!backupIDPattern.MatchString(command.BackupID) {
+			!backupIDPattern.MatchString(command.BackupID) || command.BackupDigest != "" {
 			return errors.New("upgrade command input is invalid")
 		}
 	case ActionRecover:
 		if !digestPattern.MatchString(command.InputDigest) ||
 			!releaseIDPattern.MatchString(command.TargetReleaseID) ||
-			!backupIDPattern.MatchString(command.BackupID) {
+			!backupIDPattern.MatchString(command.BackupID) ||
+			!digestPattern.MatchString(command.BackupDigest) {
 			return errors.New("recovery command input is invalid")
 		}
 	case ActionBackup:
 		if command.InputDigest != "" || command.TargetReleaseID != "" ||
-			!backupIDPattern.MatchString(command.BackupID) {
+			!backupIDPattern.MatchString(command.BackupID) || command.BackupDigest != "" {
 			return errors.New("backup command input is invalid")
 		}
 	case ActionSupport:
 		if !digestPattern.MatchString(command.InputDigest) ||
-			command.TargetReleaseID != "" || command.BackupID != "" {
+			command.TargetReleaseID != "" || command.BackupID != "" ||
+			command.BackupDigest != "" {
 			return errors.New("support command input is invalid")
 		}
 	case ActionVerify, ActionStatus, ActionRollback:
-		if command.InputDigest != "" || command.TargetReleaseID != "" || command.BackupID != "" {
+		if command.InputDigest != "" || command.TargetReleaseID != "" || command.BackupID != "" ||
+			command.BackupDigest != "" {
 			return errors.New("installation command contains unrelated input")
 		}
 	default:
@@ -373,8 +385,9 @@ func validateActionPrecondition(journal Journal, command Command) error {
 			return ErrPrecondition
 		}
 	case ActionRecover:
-		// Recovery may initialize an empty root from a verified installation-
-		// owned backup or replace an existing damaged installation.
+		if journal.CurrentReleaseID == "" {
+			return ErrPrecondition
+		}
 	}
 	return nil
 }
@@ -420,8 +433,7 @@ func validateExecution(execution Execution, completed bool) error {
 	if execution.Command.Action == ActionInstall && execution.SourceRelease != "" {
 		problems = append(problems, errors.New("install command has a source release"))
 	}
-	if execution.Command.Action != ActionInstall && execution.Command.Action != ActionRecover &&
-		execution.SourceRelease == "" {
+	if execution.Command.Action != ActionInstall && execution.SourceRelease == "" {
 		problems = append(problems, errors.New("installed command lacks a source release"))
 	}
 	if completed {
@@ -469,7 +481,7 @@ func validateExecution(execution Execution, completed bool) error {
 func sameCommandInput(left, right Command) bool {
 	return left.ID == right.ID && left.Action == right.Action &&
 		left.InputDigest == right.InputDigest && left.TargetReleaseID == right.TargetReleaseID &&
-		left.BackupID == right.BackupID
+		left.BackupID == right.BackupID && left.BackupDigest == right.BackupDigest
 }
 
 func workflow(action Action) []Phase {
@@ -562,7 +574,7 @@ func validateCompletedPointers(journal Journal, execution Execution) error {
 			execution.Command.Action == ActionRecover) && journal.PreviousRelease != "" {
 			return errors.New("successful command retained an invalid previous release")
 		}
-	case OutcomeFailed, OutcomeRolledBack:
+	case OutcomeFailed, OutcomeRolledBack, OutcomeManualIntervention:
 		if journal.CurrentReleaseID != execution.SourceRelease ||
 			journal.CurrentReleaseDigest != execution.SourceDigest {
 			return errors.New("failed command changed the current release")

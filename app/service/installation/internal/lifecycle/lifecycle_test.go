@@ -103,6 +103,44 @@ func TestSuccessfulUpgradeAndExplicitRollbackMaintainNMinusOne(t *testing.T) {
 	}
 }
 
+func TestRecoveryBindsSelectedBackupAndPublishesOnlyAfterReady(t *testing.T) {
+	journal := installedJournal(t)
+	command := lifecycleCommand(ActionRecover, releaseA, '1', 35)
+	command.BackupID = "backup-" + strings.Repeat("c", 32)
+	command.BackupDigest = digest('b')
+	started, err := Start(journal, command)
+	if err != nil || started.Execution.Phase != PhaseRecovering ||
+		started.Execution.Destination != releaseA ||
+		started.Journal.CurrentReleaseID != releaseA {
+		t.Fatalf("start recovery = %#v / %v", started, err)
+	}
+	changed := command
+	changed.BackupDigest = digest('c')
+	if _, err := Start(started.Journal, changed); !errors.Is(err, ErrCommandConflict) {
+		t.Fatalf("changed recovery replay error = %v", err)
+	}
+	missingSource := started.Journal
+	missingSourceExecution := *missingSource.Active
+	missingSourceExecution.SourceRelease = ""
+	missingSourceExecution.SourceDigest = ""
+	missingSource.Active = &missingSourceExecution
+	if err := ValidateJournal(missingSource); err == nil {
+		t.Fatal("active recovery without its installed source must fail")
+	}
+	recovered := completeActive(t, started.Journal)
+	if recovered.CurrentReleaseID != releaseA ||
+		recovered.CurrentReleaseDigest != digest('1') ||
+		recovered.PreviousRelease != "" || recovered.Active != nil ||
+		recovered.Last == nil || recovered.Last.Outcome != OutcomeSucceeded {
+		t.Fatalf("completed recovery journal = %#v", recovered)
+	}
+
+	empty := newJournal(t)
+	if _, err := Start(empty, command); !errors.Is(err, ErrPrecondition) {
+		t.Fatalf("recovery without an installed identity error = %v", err)
+	}
+}
+
 func TestJournalRejectsUnboundReleaseContentAndTrust(t *testing.T) {
 	installed := installedJournal(t)
 
@@ -142,6 +180,14 @@ func TestInvalidTransitionAndFailedRollbackRequireManualIntervention(t *testing.
 	}
 	if manual.CurrentReleaseID != releaseB || manual.PreviousRelease != releaseA {
 		t.Fatal("manual intervention must retain the last known release pointers")
+	}
+	tampered := manual
+	tampered.CurrentReleaseID = releaseA
+	tampered.CurrentReleaseDigest = digest('1')
+	tampered.PreviousRelease = ""
+	tampered.PreviousReleaseDigest = ""
+	if err := ValidateJournal(tampered); err == nil {
+		t.Fatal("manual intervention journal accepted a changed current release")
 	}
 }
 
