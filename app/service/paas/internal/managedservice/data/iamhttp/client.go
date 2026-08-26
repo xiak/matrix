@@ -107,7 +107,8 @@ func (client *Client) Authorize(
 		return port.Authorization{}, port.ErrAuthorizationUnavailable
 	}
 	authorization := port.Authorization{
-		TenantID: string(decision.TenantID), SubjectID: string(decision.Subject.ID),
+		TenantID: string(decision.TenantID), SubjectType: port.SubjectType(decision.Subject.Type),
+		SubjectID:  string(decision.Subject.ID),
 		DecisionID: string(decision.ID), RequestID: decision.RequestID,
 	}
 	if port.ValidateAuthorizationForRequest(authorization, request) != nil {

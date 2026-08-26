@@ -298,8 +298,12 @@ and `git diff --check` gates must pass on the same committed worktree.
   managed-service v1 Go/OpenAPI contract, existing-role IAM action matrix,
   PostgreSQL entitlement/installation/Operation schema, forced organization
   RLS, serializable quota reservation, idempotent replay, worker leases, and
-  fencing transitions pass unit and real PostgreSQL 18 tests. Managed-service
-  Audit outbox delivery remains before Gate B acceptance.
+  fencing transitions pass unit and real PostgreSQL 18 tests. Quota activation,
+  installation acceptance, and fenced installation readiness now append three
+  sanitized facts in their owning transactions. One shared PaaS Audit
+  dispatcher fairly drains the independent apphosting and managed-service
+  outboxes; real PostgreSQL 18 tests prove source correlation, lease fencing,
+  exact action ingestion, delivery, and the combined readiness snapshot.
 - Gate C execution is implemented through the fixed PostgreSQL 18 image:
   server-generated file credentials, pull-never/no-build Compose, exact
   ownership labels, persistent bind data, bounded resources, normalized
@@ -310,7 +314,8 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 Current repeatable evidence includes `go generate ./api/...`, `go test ./...`,
 the environment-gated platform migration integration test, the managed-service
-PostgreSQL journey and tenant-isolation integration test, and the real local
+PostgreSQL journey, tenant-isolation and three-fact Audit delivery integration
+test, the Audit authority action-catalog PostgreSQL test, and the real local
 PostgreSQL runtime test. Final acceptance must repeat them from the same clean
 committed release candidate.
 

@@ -6,7 +6,7 @@ import (
 	"time"
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
-	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
+	"github.com/xiak/matrix/app/service/paas/internal/audit"
 )
 
 var ErrStaleLease = errors.New("Audit outbox lease or fencing token is stale")
@@ -17,8 +17,16 @@ type Claim struct {
 	Attempts       int
 	FencingToken   int64
 	LeaseExpiresAt time.Time
-	Event          port.AuditEvent
+	Stream         Stream
+	Event          audit.Event
 }
+
+type Stream string
+
+const (
+	StreamAppHosting     Stream = "APPHOSTING"
+	StreamManagedService Stream = "MANAGED_SERVICE"
+)
 
 type Outcome string
 
@@ -31,6 +39,7 @@ const (
 type Completion struct {
 	TenantID     paasv1.TenantID
 	EventID      string
+	Stream       Stream
 	WorkerID     string
 	FencingToken int64
 	Outcome      Outcome
@@ -72,6 +81,6 @@ type Result struct {
 
 type Usecase struct {
 	repository Repository
-	ingestor   port.AuditIngestor
+	ingestor   audit.Ingestor
 	config     Config
 }

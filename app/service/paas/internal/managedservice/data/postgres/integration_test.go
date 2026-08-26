@@ -14,6 +14,9 @@ import (
 
 	managedserviceadapterv1 "github.com/xiak/matrix/api/adapter/managedservice/v1"
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
+	"github.com/xiak/matrix/app/service/paas/internal/audit"
+	auditpostgres "github.com/xiak/matrix/app/service/paas/internal/audit/data/postgres"
+	"github.com/xiak/matrix/app/service/paas/internal/audit/usecase/auditdispatch"
 	managedservicepostgres "github.com/xiak/matrix/app/service/paas/internal/managedservice/data/postgres"
 	"github.com/xiak/matrix/app/service/paas/internal/managedservice/domain"
 	"github.com/xiak/matrix/app/service/paas/internal/managedservice/port"
@@ -131,6 +134,42 @@ func TestManagedServicePostgresJourneyAndTenantIsolation(t *testing.T) {
 	}); !errors.Is(err, reconcileinstallation.ErrQueueUnavailable) {
 		t.Fatalf("stale completion error=%v", err)
 	}
+	auditRepository, err := auditpostgres.NewAuditOutboxRepository(workerPool)
+	if err != nil {
+		t.Fatal("create managed-service Audit outbox repository")
+	}
+	ingestor := &managedServiceAuditIngestor{}
+	dispatcher, err := auditdispatch.NewUsecase(auditRepository, ingestor, auditdispatch.Config{
+		WorkerID: "managed-audit-integration", LeaseDuration: 30 * time.Second,
+		DeliveryTimeout: 5 * time.Second, InitialBackoff: time.Second,
+		MaxBackoff: time.Minute, MaxAttempts: 5,
+		Now: func() time.Time { return time.Date(2026, 8, 26, 12, 1, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatal("create managed-service Audit dispatcher")
+	}
+	for expected := 1; expected <= 3; expected++ {
+		result, dispatchErr := dispatcher.DispatchOnce(ctx)
+		if dispatchErr != nil || !result.Claimed || !result.Delivered {
+			t.Fatalf("dispatch managed-service Audit event %d: result=%#v err=%v", expected, result, dispatchErr)
+		}
+	}
+	if result, dispatchErr := dispatcher.DispatchOnce(ctx); dispatchErr != nil || result.Claimed {
+		t.Fatalf("unexpected fourth managed-service Audit event: result=%#v err=%v", result, dispatchErr)
+	}
+	actions := map[string]int{}
+	for _, event := range ingestor.events {
+		actions[event.Action]++
+	}
+	if actions[audit.QuotaEntitlementActivated] != 1 ||
+		actions[audit.ServiceInstallationCreated] != 1 ||
+		actions[audit.ServiceInstallationReady] != 1 {
+		t.Fatalf("managed-service Audit actions = %#v", actions)
+	}
+	snapshot, err := dispatcher.Snapshot(ctx)
+	if err != nil || snapshot.Delivered != 3 || snapshot.Pending != 0 || snapshot.DeadLetter != 0 {
+		t.Fatalf("combined PaaS Audit snapshot = %#v err=%v", snapshot, err)
+	}
 	quotas, err := service.ListQuotaEntitlements(ctx, authorizationA)
 	if err != nil || len(quotas.Items) != 1 || quotas.Items[0].ReservedCount != 0 ||
 		quotas.Items[0].ConsumedCount != 1 {
@@ -168,7 +207,8 @@ func integrationRuntimeDSN(t *testing.T, adminDSN, role, password string) string
 
 func integrationAuthorization(tenantID string) port.Authorization {
 	return port.Authorization{
-		TenantID: tenantID, SubjectID: "principal-integration",
+		TenantID: tenantID, SubjectType: port.SubjectUser,
+		SubjectID:  "principal-integration",
 		DecisionID: "decision-integration", RequestID: "request-integration",
 	}
 }
@@ -181,4 +221,13 @@ func sequenceSuffix(value uint32) string {
 		return "two"
 	}
 	return "many"
+}
+
+type managedServiceAuditIngestor struct {
+	events []audit.Event
+}
+
+func (ingestor *managedServiceAuditIngestor) Ingest(_ context.Context, event audit.Event) error {
+	ingestor.events = append(ingestor.events, event)
+	return nil
 }

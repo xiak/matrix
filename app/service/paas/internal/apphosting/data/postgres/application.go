@@ -13,8 +13,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
-	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
+	"github.com/xiak/matrix/app/service/paas/internal/audit"
 )
 
 var (
@@ -428,7 +428,7 @@ func validateApplicationSubmission(
 		paasv1.ValidateDeployment(submission.Deployment),
 		paasv1.ValidateDeploymentGeneration(submission.Generation),
 		paasv1.ValidateOperation(submission.Operation),
-		port.ValidateAuditEvent(submission.AuditEvent),
+		audit.ValidateEvent(submission.AuditEvent),
 	)
 	deployment := submission.Deployment
 	generation := submission.Generation

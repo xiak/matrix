@@ -7,12 +7,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
+	"github.com/xiak/matrix/app/service/paas/internal/audit"
 )
 
 func NewUsecase(
 	repository Repository,
-	ingestor port.AuditIngestor,
+	ingestor audit.Ingestor,
 	config Config,
 ) (*Usecase, error) {
 	if repository == nil || ingestor == nil {
@@ -71,7 +71,8 @@ func (usecase *Usecase) DispatchOnce(ctx context.Context) (Result, error) {
 	cancel()
 	completion := Completion{
 		TenantID: claim.TenantID, EventID: claim.EventID,
-		WorkerID: usecase.config.WorkerID, FencingToken: claim.FencingToken,
+		Stream: claim.Stream, WorkerID: usecase.config.WorkerID,
+		FencingToken: claim.FencingToken,
 	}
 	if deliveryErr == nil {
 		completion.Outcome = OutcomeDelivered
@@ -111,7 +112,10 @@ func (usecase *Usecase) Snapshot(ctx context.Context) (Snapshot, error) {
 
 func validateClaim(claim Claim) error {
 	var problems []error
-	problems = append(problems, port.ValidateAuditEvent(claim.Event))
+	problems = append(problems, audit.ValidateEvent(claim.Event))
+	if claim.Stream != StreamAppHosting && claim.Stream != StreamManagedService {
+		problems = append(problems, errors.New("Audit claim stream is invalid"))
+	}
 	if claim.TenantID != claim.Event.TenantID || claim.EventID != claim.Event.EventID {
 		problems = append(problems, errors.New("Audit claim and event identity differ"))
 	}
@@ -128,9 +132,9 @@ func validateClaim(claim Claim) error {
 }
 
 func terminalDeliveryError(err error) bool {
-	return errors.Is(err, port.ErrAuditInvalid) ||
-		errors.Is(err, port.ErrAuditUnauthenticated) ||
-		errors.Is(err, port.ErrAuditConflict)
+	return errors.Is(err, audit.ErrInvalid) ||
+		errors.Is(err, audit.ErrUnauthenticated) ||
+		errors.Is(err, audit.ErrConflict)
 }
 
 func backoff(config Config, attempts int) time.Duration {

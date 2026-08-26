@@ -193,6 +193,9 @@ BEGIN
         ('paas.deployment.updated', 'PAAS', 'DEPLOYMENT', 'ACCEPTED', true, true, true),
         ('paas.deployment.stopped', 'PAAS', 'DEPLOYMENT', 'ACCEPTED', true, true, true),
         ('paas.deployment.rolled-back', 'PAAS', 'DEPLOYMENT', 'ACCEPTED', true, true, true),
+        ('managedservice.quota-entitlement.activated', 'PAAS', 'QUOTA_ENTITLEMENT', 'SUCCEEDED', true, true, false),
+        ('managedservice.service-installation.created', 'PAAS', 'SERVICE_INSTALLATION', 'ACCEPTED', true, true, true),
+        ('managedservice.service-installation.ready', 'PAAS', 'SERVICE_INSTALLATION', 'SUCCEEDED', true, true, false),
         ('audit.records.read', 'AUDIT', 'AUDIT_RECORDS', 'SUCCEEDED', true, true, false),
         ('audit.integrity.verified', 'AUDIT', 'AUDIT_CHAIN', 'SUCCEEDED', true, true, false)
       ) AS contract(
@@ -606,7 +609,10 @@ BEGIN
             'paas.configuration-revision.created',
             'paas.application-revision.created', 'paas.deployment.created',
             'paas.deployment.updated', 'paas.deployment.stopped',
-            'paas.deployment.rolled-back', 'audit.records.read',
+            'paas.deployment.rolled-back',
+            'managedservice.quota-entitlement.activated',
+            'managedservice.service-installation.created',
+            'managedservice.service-installation.ready', 'audit.records.read',
             'audit.integrity.verified'
        ))
        OR ((submitted_actor_type IS NULL) <> (submitted_actor_id IS NULL))

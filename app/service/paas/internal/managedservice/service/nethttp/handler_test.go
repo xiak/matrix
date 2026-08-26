@@ -122,7 +122,8 @@ func (authorizer *stubAuthorizer) Authorize(
 		return port.Authorization{}, authorizer.err
 	}
 	return port.Authorization{
-		TenantID: "organization-test", SubjectID: "principal-test",
+		TenantID: "organization-test", SubjectType: port.SubjectUser,
+		SubjectID:  "principal-test",
 		DecisionID: "decision-test", RequestID: request.RequestID,
 	}, nil
 }

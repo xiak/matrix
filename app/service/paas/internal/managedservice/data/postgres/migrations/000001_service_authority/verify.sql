@@ -4,7 +4,10 @@ DECLARE
 BEGIN
     SELECT string_agg(required.name, ', ' ORDER BY required.name)
       INTO missing
-      FROM (VALUES ('quota_entitlements'), ('service_installations'), ('operations')) AS required(name)
+      FROM (VALUES
+            ('quota_entitlements'), ('service_installations'),
+            ('operations'), ('audit_outbox')
+      ) AS required(name)
      WHERE to_regclass('managedservice.' || required.name) IS NULL;
     IF missing IS NOT NULL THEN
         RAISE EXCEPTION 'missing managed-service tables: %', missing;
@@ -15,7 +18,9 @@ BEGIN
       FROM pg_catalog.pg_class AS class
       JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
      WHERE namespace.nspname = 'managedservice'
-       AND class.relname IN ('quota_entitlements', 'service_installations', 'operations')
+       AND class.relname IN (
+            'quota_entitlements', 'service_installations', 'operations', 'audit_outbox'
+       )
        AND (NOT class.relrowsecurity OR NOT class.relforcerowsecurity);
     IF missing IS NOT NULL THEN
         RAISE EXCEPTION 'managed-service tables missing forced RLS: %', missing;
@@ -28,7 +33,8 @@ BEGIN
             ('service_installations_entitlement_fk'),
             ('operations_installation_uq'),
             ('operations_idempotency_uq'),
-            ('operations_installation_fk')
+            ('operations_installation_fk'),
+            ('managedservice_audit_operation_fk')
       ) AS required(name)
      WHERE NOT EXISTS (
         SELECT 1 FROM pg_catalog.pg_constraint WHERE conname = required.name
@@ -40,6 +46,8 @@ BEGIN
     SELECT string_agg(required.name, ', ' ORDER BY required.name)
       INTO missing
       FROM (VALUES
+            ('append_audit_outbox'), ('claim_audit_event'),
+            ('complete_audit_event'), ('audit_outbox_snapshot'),
             ('claim_operation'), ('complete_operation'),
             ('retry_operation'), ('fail_operation')
       ) AS required(name)
@@ -62,7 +70,9 @@ BEGIN
        OR has_table_privilege('matrix_paas_api', 'managedservice.service_installations', 'UPDATE, DELETE')
        OR has_table_privilege('matrix_paas_worker', 'managedservice.operations', 'INSERT, UPDATE, DELETE')
        OR has_table_privilege('matrix_paas_worker', 'managedservice.service_installations', 'INSERT, UPDATE, DELETE')
-       OR has_table_privilege('matrix_paas_worker', 'managedservice.quota_entitlements', 'INSERT, UPDATE, DELETE') THEN
+       OR has_table_privilege('matrix_paas_worker', 'managedservice.quota_entitlements', 'INSERT, UPDATE, DELETE')
+       OR has_table_privilege('matrix_paas_api', 'managedservice.audit_outbox', 'SELECT, INSERT, UPDATE, DELETE')
+       OR has_table_privilege('matrix_paas_worker', 'managedservice.audit_outbox', 'SELECT, INSERT, UPDATE, DELETE') THEN
         RAISE EXCEPTION 'managed-service runtime roles are overprivileged';
     END IF;
 END

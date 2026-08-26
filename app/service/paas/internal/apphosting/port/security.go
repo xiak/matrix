@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
@@ -14,10 +13,6 @@ var (
 	ErrUnauthenticated          = errors.New("IAM authentication failed")
 	ErrPermissionDenied         = errors.New("IAM authorization denied")
 	ErrAuthorizationUnavailable = errors.New("IAM authorization unavailable")
-	ErrAuditInvalid             = errors.New("Audit ingestion rejected the PaaS event")
-	ErrAuditUnauthenticated     = errors.New("Audit ingestion authentication failed")
-	ErrAuditConflict            = errors.New("Audit ingestion replay conflicts")
-	ErrAuditUnavailable         = errors.New("Audit ingestion is unavailable")
 )
 
 const (
@@ -141,116 +136,4 @@ func knownAuthorizationAction(value string) bool {
 		}
 	}
 	return false
-}
-
-type AuditResult string
-
-const (
-	AuditAccepted  AuditResult = "ACCEPTED"
-	AuditSucceeded AuditResult = "SUCCEEDED"
-)
-
-const (
-	AuditApplicationCreated           = "paas.application.created"
-	AuditConfigurationCreated         = "paas.configuration.created"
-	AuditConfigurationRevisionCreated = "paas.configuration-revision.created"
-	AuditApplicationRevisionCreated   = "paas.application-revision.created"
-	AuditDeploymentCreated            = "paas.deployment.created"
-	AuditDeploymentUpdated            = "paas.deployment.updated"
-	AuditDeploymentStopped            = "paas.deployment.stopped"
-	AuditDeploymentRolledBack         = "paas.deployment.rolled-back"
-)
-
-// AuditEvent is the fixed, sanitized business fact apphosting sends to the
-// Audit authority. It deliberately has no arbitrary attributes or request
-// body field into which configuration, credentials, secrets, or native
-// provider payloads could leak.
-type AuditEvent struct {
-	SchemaVersion string             `json:"schemaVersion"`
-	EventID       string             `json:"eventId"`
-	TenantID      paasv1.TenantID    `json:"tenantId"`
-	Actor         paasv1.SubjectRef  `json:"actor"`
-	IAMDecisionID string             `json:"iamDecisionId"`
-	Action        string             `json:"action"`
-	Target        paasv1.ResourceRef `json:"target"`
-	OperationID   paasv1.OperationID `json:"operationId"`
-	RequestDigest string             `json:"requestDigest"`
-	Result        AuditResult        `json:"result"`
-	RequestID     string             `json:"requestId"`
-	AuditID       string             `json:"auditId,omitempty"`
-	TraceParent   string             `json:"traceparent,omitempty"`
-	OccurredAt    time.Time          `json:"occurredAt"`
-}
-
-// AuditIngestor must deduplicate EventID and treat an equal replay as success.
-// Delivery is at least once because a successful remote call can be followed
-// by a local completion failure.
-type AuditIngestor interface {
-	Ingest(context.Context, AuditEvent) error
-}
-
-func ValidateAuditEvent(value AuditEvent) error {
-	var problems []error
-	if value.SchemaVersion != "v1" {
-		problems = append(problems, errors.New("audit schemaVersion must be v1"))
-	}
-	problems = append(problems,
-		paasv1.ValidateID("audit.eventId", value.EventID),
-		paasv1.ValidateID("audit.tenantId", string(value.TenantID)),
-		paasv1.ValidateID("audit.actor.id", value.Actor.ID),
-		paasv1.ValidateID("audit.iamDecisionId", value.IAMDecisionID),
-		paasv1.ValidateID("audit.target.id", string(value.Target.ID)),
-		paasv1.ValidateID("audit.operationId", string(value.OperationID)),
-		paasv1.ValidateDigest("audit.requestDigest", value.RequestDigest),
-		paasv1.ValidateID("audit.requestId", value.RequestID),
-	)
-	if value.Actor.Type != paasv1.SubjectUser &&
-		value.Actor.Type != paasv1.SubjectServiceAccount &&
-		value.Actor.Type != paasv1.SubjectAgent &&
-		value.Actor.Type != paasv1.SubjectSystemUser {
-		problems = append(problems, fmt.Errorf("unknown audit actor type %q", value.Actor.Type))
-	}
-	if value.AuditID != "" {
-		problems = append(problems, paasv1.ValidateID("audit.auditId", value.AuditID))
-	}
-	if value.TraceParent != "" {
-		problems = append(problems,
-			paasv1.ValidateSafeExternalText("audit.traceparent", value.TraceParent, 55, false),
-		)
-	}
-	expectedKind, expectedResult := auditActionContract(value.Action)
-	if expectedKind == "" {
-		problems = append(problems, fmt.Errorf("unknown audit action %q", value.Action))
-	} else if value.Target.Kind != expectedKind {
-		problems = append(problems, errors.New("audit action and target kind differ"))
-	}
-	if value.Result != expectedResult {
-		problems = append(problems, errors.New("audit action and result differ"))
-	}
-	if value.OccurredAt.IsZero() || value.OccurredAt.Location() != time.UTC ||
-		value.OccurredAt != value.OccurredAt.Round(0) ||
-		value.OccurredAt.Nanosecond()%1_000 != 0 {
-		problems = append(problems, errors.New("audit occurredAt must be UTC with microsecond precision"))
-	}
-	return errors.Join(problems...)
-}
-
-func auditActionContract(action string) (string, AuditResult) {
-	switch action {
-	case AuditApplicationCreated:
-		return "Application", AuditSucceeded
-	case AuditConfigurationCreated:
-		return "Configuration", AuditSucceeded
-	case AuditConfigurationRevisionCreated:
-		return "ConfigurationRevision", AuditSucceeded
-	case AuditApplicationRevisionCreated:
-		return "ApplicationRevision", AuditSucceeded
-	case AuditDeploymentCreated,
-		AuditDeploymentUpdated,
-		AuditDeploymentStopped,
-		AuditDeploymentRolledBack:
-		return "Deployment", AuditAccepted
-	default:
-		return "", ""
-	}
 }

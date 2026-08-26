@@ -12,7 +12,7 @@ import (
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
-	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
+	"github.com/xiak/matrix/app/service/paas/internal/audit"
 )
 
 const testPaaSAuditCredential = "mx1.PaaSAuditCredential00000000000000000000001"
@@ -35,7 +35,7 @@ func TestClientRequiresExactAuditReadiness(t *testing.T) {
 		t.Fatalf("ready Audit client: %v", err)
 	}
 	state = auditv1.ReadinessNotReady
-	if err := client.Ready(context.Background()); !errors.Is(err, port.ErrAuditUnavailable) {
+	if err := client.Ready(context.Background()); !errors.Is(err, audit.ErrUnavailable) {
 		t.Fatalf("not-ready Audit error=%v", err)
 	}
 }
@@ -78,11 +78,11 @@ func TestClientClassifiesTerminalAndRetryableFailures(t *testing.T) {
 		status int
 		want   error
 	}{
-		{status: http.StatusUnauthorized, want: port.ErrAuditUnauthenticated},
-		{status: http.StatusForbidden, want: port.ErrAuditUnauthenticated},
-		{status: http.StatusBadRequest, want: port.ErrAuditInvalid},
-		{status: http.StatusConflict, want: port.ErrAuditConflict},
-		{status: http.StatusServiceUnavailable, want: port.ErrAuditUnavailable},
+		{status: http.StatusUnauthorized, want: audit.ErrUnauthenticated},
+		{status: http.StatusForbidden, want: audit.ErrUnauthenticated},
+		{status: http.StatusBadRequest, want: audit.ErrInvalid},
+		{status: http.StatusConflict, want: audit.ErrConflict},
+		{status: http.StatusServiceUnavailable, want: audit.ErrUnavailable},
 	} {
 		server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 			response.WriteHeader(scenario.status)
@@ -101,7 +101,7 @@ func TestClientRejectsInvalidLocalEventBeforeNetwork(t *testing.T) {
 	defer server.Close()
 	event := testPaaSAuditEvent()
 	event.Target.Kind = "Deployment"
-	if err := newAuditClient(t, server.URL).Ingest(context.Background(), event); !errors.Is(err, port.ErrAuditInvalid) {
+	if err := newAuditClient(t, server.URL).Ingest(context.Background(), event); !errors.Is(err, audit.ErrInvalid) {
 		t.Fatalf("invalid local event error=%v", err)
 	}
 	if calls != 0 {
@@ -122,7 +122,7 @@ func TestClientRejectsMismatchedSuccessAsUnavailable(t *testing.T) {
 	}))
 	defer server.Close()
 	err := newAuditClient(t, server.URL).Ingest(context.Background(), testPaaSAuditEvent())
-	if !errors.Is(err, port.ErrAuditUnavailable) {
+	if !errors.Is(err, audit.ErrUnavailable) {
 		t.Fatalf("mismatched success error=%v", err)
 	}
 }
@@ -140,15 +140,15 @@ func newAuditClient(t *testing.T, endpoint string) *Client {
 	return client
 }
 
-func testPaaSAuditEvent() port.AuditEvent {
-	return port.AuditEvent{
+func testPaaSAuditEvent() audit.Event {
+	return audit.Event{
 		SchemaVersion: "v1", EventID: "audit-paas-application", TenantID: "organization-a",
 		Actor:         paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "principal-developer"},
-		IAMDecisionID: "decision-paas-create", Action: port.AuditApplicationCreated,
+		IAMDecisionID: "decision-paas-create", Action: audit.ApplicationCreated,
 		Target:        paasv1.ResourceRef{Kind: "Application", ID: "application-a"},
 		OperationID:   "operation-paas-create",
 		RequestDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		Result:        port.AuditSucceeded, RequestID: "request-paas-create",
+		Result:        audit.Succeeded, RequestID: "request-paas-create",
 		AuditID: "audit-paas-flow", OccurredAt: time.Date(2026, 8, 26, 2, 3, 4, 567_000, time.UTC),
 	}
 }

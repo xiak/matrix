@@ -7,6 +7,7 @@ import (
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
+	"github.com/xiak/matrix/app/service/paas/internal/audit"
 )
 
 var (
@@ -73,12 +74,12 @@ type Submission struct {
 	Deployment              paasv1.Deployment
 	Generation              paasv1.DeploymentGeneration
 	Operation               paasv1.Operation
-	AuditEvent              port.AuditEvent
+	AuditEvent              audit.Event
 }
 
 type ResourceSubmission struct {
 	Operation  paasv1.Operation
-	AuditEvent port.AuditEvent
+	AuditEvent audit.Event
 }
 
 type Transaction interface {

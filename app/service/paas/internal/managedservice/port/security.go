@@ -34,6 +34,13 @@ type ResourceReference struct {
 	ID   string
 }
 
+type SubjectType string
+
+const (
+	SubjectUser           SubjectType = "USER"
+	SubjectServiceAccount SubjectType = "SERVICE_ACCOUNT"
+)
+
 type AuthorizationRequest struct {
 	Credential string
 	Action     string
@@ -42,10 +49,11 @@ type AuthorizationRequest struct {
 }
 
 type Authorization struct {
-	TenantID   string
-	SubjectID  string
-	DecisionID string
-	RequestID  string
+	TenantID    string
+	SubjectType SubjectType
+	SubjectID   string
+	DecisionID  string
+	RequestID   string
 }
 
 type Authorizer interface {
@@ -53,12 +61,17 @@ type Authorizer interface {
 }
 
 func ValidateAuthorization(value Authorization) error {
-	return errors.Join(
+	var problems []error
+	if value.SubjectType != SubjectUser && value.SubjectType != SubjectServiceAccount {
+		problems = append(problems, errors.New("authorization subject type is invalid"))
+	}
+	problems = append(problems,
 		managedservicev1.ValidateID("authorization.tenantId", value.TenantID),
 		managedservicev1.ValidateID("authorization.subjectId", value.SubjectID),
 		managedservicev1.ValidateID("authorization.decisionId", value.DecisionID),
 		managedservicev1.ValidateID("authorization.requestId", value.RequestID),
 	)
+	return errors.Join(problems...)
 }
 
 func ValidateAuthorizationRequest(value AuthorizationRequest) error {

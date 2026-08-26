@@ -20,8 +20,10 @@ import (
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 	apphttp "github.com/xiak/matrix/app/service/paas/internal/apphosting/service/nethttp"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
-	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/auditdispatch"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/verifyinstallation"
+	"github.com/xiak/matrix/app/service/paas/internal/audit"
+	auditpostgres "github.com/xiak/matrix/app/service/paas/internal/audit/data/postgres"
+	"github.com/xiak/matrix/app/service/paas/internal/audit/usecase/auditdispatch"
 )
 
 func assertAuditPersistenceAndFencing(
@@ -48,15 +50,15 @@ func assertAuditPersistenceAndFencing(
 	if status != "PENDING" {
 		t.Fatalf("new Audit outbox status = %q, want PENDING", status)
 	}
-	event, err := decodeAuditEvent(document)
+	event, err := decodeStoredAuditEvent(document)
 	if err != nil {
 		t.Fatalf("decode transactional Audit event: %v", err)
 	}
 	if event.OperationID != result.Operation.ID ||
 		event.TenantID != result.Operation.Scope.TenantID ||
 		event.Actor != result.Operation.RequestedBy ||
-		event.Action != port.AuditDeploymentCreated ||
-		event.Result != port.AuditAccepted {
+		event.Action != audit.DeploymentCreated ||
+		event.Result != audit.Accepted {
 		t.Fatalf("transactional Audit event = %#v", event)
 	}
 	for _, forbidden := range []string{"Bearer", "credential", "requestBody", "attributes"} {
@@ -66,7 +68,7 @@ func assertAuditPersistenceAndFencing(
 	}
 
 	assertIAMAuditRoleIsolation(t, ctx, apiPool, workerPool)
-	repository, err := NewAuditOutboxRepository(workerPool)
+	repository, err := auditpostgres.NewAuditOutboxRepository(workerPool)
 	if err != nil {
 		t.Fatalf("create Audit outbox repository: %v", err)
 	}
@@ -98,6 +100,7 @@ func assertAuditPersistenceAndFencing(
 	}
 	err = repository.Complete(ctx, auditdispatch.Completion{
 		TenantID: stale.TenantID, EventID: stale.EventID,
+		Stream:   stale.Stream,
 		WorkerID: "audit-worker-stale", FencingToken: stale.FencingToken,
 		Outcome: auditdispatch.OutcomeDelivered,
 	})
@@ -106,6 +109,7 @@ func assertAuditPersistenceAndFencing(
 	}
 	if err := repository.Complete(ctx, auditdispatch.Completion{
 		TenantID: current.TenantID, EventID: current.EventID,
+		Stream:   current.Stream,
 		WorkerID: "audit-worker-current", FencingToken: current.FencingToken,
 		Outcome: auditdispatch.OutcomeDelivered,
 	}); err != nil {
@@ -298,7 +302,7 @@ func dispatchAllAuditEvents(
 	forbiddenValue string,
 ) {
 	t.Helper()
-	repository, err := NewAuditOutboxRepository(workerPool)
+	repository, err := auditpostgres.NewAuditOutboxRepository(workerPool)
 	if err != nil {
 		t.Fatalf("create Audit dispatcher repository: %v", err)
 	}
@@ -519,14 +523,30 @@ func resourceIDsAsStrings(values []paasv1.ResourceID) []string {
 	return result
 }
 
+func decodeStoredAuditEvent(document []byte) (audit.Event, error) {
+	decoder := json.NewDecoder(bytes.NewReader(document))
+	decoder.DisallowUnknownFields()
+	var event audit.Event
+	if err := decoder.Decode(&event); err != nil {
+		return audit.Event{}, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return audit.Event{}, errors.New("stored Audit event contains trailing JSON")
+	}
+	if err := audit.ValidateEvent(event); err != nil {
+		return audit.Event{}, err
+	}
+	return event, nil
+}
+
 type integrationAuditIngestor struct {
-	events            []port.AuditEvent
+	events            []audit.Event
 	failuresRemaining int
 }
 
 func (ingestor *integrationAuditIngestor) Ingest(
 	_ context.Context,
-	event port.AuditEvent,
+	event audit.Event,
 ) error {
 	ingestor.events = append(ingestor.events, event)
 	if ingestor.failuresRemaining > 0 {

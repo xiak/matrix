@@ -148,6 +148,19 @@ result, request/content digest, safe correlation IDs, and UTC occurrence time.
 There is no arbitrary attributes map, request body, configuration value,
 secret, credential, native provider payload, stack trace, or absolute path.
 
+The Phase 2 control-plane slice extends the closed PaaS-source union with only
+`managedservice.quota-entitlement.activated`,
+`managedservice.service-installation.created`, and
+`managedservice.service-installation.ready`. The activation fact targets the
+entitlement, the accepted creation fact joins the installation to its durable
+Operation, and the ready fact targets the installation after the worker's
+fenced completion. The source outbox retains the ready fact's Operation foreign
+key, while its public Audit event deliberately omits `operationId`: one
+Operation has one accepted mutation fact rather than a second synthetic
+acceptance identity. All three retain the original IAM decision, actor,
+request digest, and request correlation without endpoint, credential
+reference, machine binding, provider payload, or native error.
+
 `(source, eventId)` is the idempotency identity. Equal canonical replay returns
 the stored result; different canonical content conflicts. A successful ingest
 serializes one per-tenant sequence and stores canonical event bytes,
@@ -323,6 +336,12 @@ tests pass.
   HTTP, the PaaS worker, and the independent authority-process flow, plus the
   common generation, unit, architecture, vet, race, repeated, build,
   dependency, documentation, stale-term, path-leakage, and diff gates.
+- FEAT-007 extends the accepted Audit authority without changing its source,
+  replay, integrity, or retention boundaries. A shared PaaS dispatcher drains
+  independently owned apphosting and managed-service outboxes with bounded
+  leases and fencing; clean PostgreSQL 18 gates prove the three new actions,
+  their public contracts, source-bound ingestion, transactional correlation,
+  and delivery through the existing immutable Audit chain.
 
 ## Deferred
 

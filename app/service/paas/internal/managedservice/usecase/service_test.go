@@ -10,12 +10,14 @@ import (
 	"time"
 
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
+	"github.com/xiak/matrix/app/service/paas/internal/audit"
 	"github.com/xiak/matrix/app/service/paas/internal/managedservice/domain"
 	"github.com/xiak/matrix/app/service/paas/internal/managedservice/port"
 )
 
 func TestQuotaActivationEqualReplayAndChangedConflict(t *testing.T) {
-	service := newTestService(t, newMemoryRepository())
+	repository := newMemoryRepository()
+	service := newTestService(t, repository)
 	command := ActivateQuotaCommand{
 		Authorization: testAuthorization(), IdempotencyKey: "quota-request-1",
 		Request: managedservicev1.ActivateQuotaRequest{
@@ -33,6 +35,10 @@ func TestQuotaActivationEqualReplayAndChangedConflict(t *testing.T) {
 	command.Request.InstanceCount = 2
 	if _, _, err := service.ActivateQuota(context.Background(), command); !errors.Is(err, ErrIdempotencyConflict) {
 		t.Fatalf("changed replay error=%v", err)
+	}
+	if len(repository.events) != 1 || repository.events[0].Action != audit.QuotaEntitlementActivated ||
+		repository.events[0].Target.ID != audit.ResourceID(created.ID) {
+		t.Fatalf("quota Audit events = %#v", repository.events)
 	}
 }
 
@@ -79,6 +85,9 @@ func TestConcurrentInstallationsCannotExceedQuota(t *testing.T) {
 	if succeeded != 1 || exhausted != 1 {
 		t.Fatalf("succeeded=%d exhausted=%d", succeeded, exhausted)
 	}
+	if len(repository.events) != 2 || repository.events[1].Action != audit.ServiceInstallationCreated {
+		t.Fatalf("transactional Audit events = %#v", repository.events)
+	}
 }
 
 func TestInstallationRejectsUnavailableRegionBeforePersistence(t *testing.T) {
@@ -123,7 +132,8 @@ func newTestService(t *testing.T, repository Repository) *Service {
 
 func testAuthorization() port.Authorization {
 	return port.Authorization{
-		TenantID: "organization-test", SubjectID: "principal-test",
+		TenantID: "organization-test", SubjectType: port.SubjectUser,
+		SubjectID:  "principal-test",
 		DecisionID: "decision-test", RequestID: "request-test",
 	}
 }
@@ -146,6 +156,7 @@ type memoryRepository struct {
 	quotaKeys     map[string]memoryReplay
 	installations map[string]managedservicev1.ServiceInstallation
 	installKeys   map[string]memoryReplay
+	events        []audit.Event
 }
 
 type memoryReplay struct {
@@ -170,6 +181,7 @@ func (repository *memoryRepository) Begin(
 		repository: repository,
 		quotas:     maps.Clone(repository.quotas), quotaKeys: maps.Clone(repository.quotaKeys),
 		installations: maps.Clone(repository.installations), installKeys: maps.Clone(repository.installKeys),
+		events: append([]audit.Event(nil), repository.events...),
 	}, nil
 }
 
@@ -179,6 +191,7 @@ type memoryTransaction struct {
 	quotaKeys     map[string]memoryReplay
 	installations map[string]managedservicev1.ServiceInstallation
 	installKeys   map[string]memoryReplay
+	events        []audit.Event
 	closed        bool
 }
 
@@ -269,6 +282,14 @@ func (transaction *memoryTransaction) ReserveInstallation(
 	return item, nil
 }
 
+func (transaction *memoryTransaction) AppendAuditEvent(_ context.Context, event audit.Event) error {
+	if err := audit.ValidateEvent(event); err != nil {
+		return err
+	}
+	transaction.events = append(transaction.events, event)
+	return nil
+}
+
 func (transaction *memoryTransaction) Commit(context.Context) error {
 	if transaction.closed {
 		return errors.New("transaction already closed")
@@ -277,6 +298,7 @@ func (transaction *memoryTransaction) Commit(context.Context) error {
 	transaction.repository.quotaKeys = transaction.quotaKeys
 	transaction.repository.installations = transaction.installations
 	transaction.repository.installKeys = transaction.installKeys
+	transaction.repository.events = transaction.events
 	transaction.closed = true
 	transaction.repository.mu.Unlock()
 	return nil

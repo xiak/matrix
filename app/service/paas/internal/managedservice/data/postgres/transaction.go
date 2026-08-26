@@ -2,12 +2,14 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
+	"github.com/xiak/matrix/app/service/paas/internal/audit"
 	"github.com/xiak/matrix/app/service/paas/internal/managedservice/usecase"
 )
 
@@ -80,13 +82,15 @@ func (value *transaction) InsertQuotaEntitlement(
 	row := value.tx.QueryRow(ctx, `
 INSERT INTO managedservice.quota_entitlements (
     tenant_id, id, offering_id, quota_shape_id, purchased_count,
-    idempotency_key, request_digest
+    idempotency_key, request_digest, activated_by_type, activated_by_id,
+    iam_decision_id, request_id
 ) VALUES (
-    managedservice.current_tenant_id(), $1, $2, $3, $4, $5, $6
+    managedservice.current_tenant_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
 )
 RETURNING `+quotaColumns,
 		draft.ID, draft.OfferingID, draft.QuotaShapeID, draft.PurchasedCount,
-		draft.IdempotencyKey, draft.RequestDigest,
+		draft.IdempotencyKey, draft.RequestDigest, draft.ActorType, draft.ActorID,
+		draft.IAMDecisionID, draft.RequestID,
 	)
 	item, err := scanQuota(row)
 	if err != nil {
@@ -171,12 +175,14 @@ RETURNING created_at, observed_at`,
 	}
 	err = value.tx.QueryRow(ctx, `
 INSERT INTO managedservice.operations (
-    tenant_id, id, installation_id, idempotency_key, request_digest
+    tenant_id, id, installation_id, idempotency_key, request_digest,
+    requested_by_type, requested_by_id, iam_decision_id, request_id
 ) VALUES (
-    managedservice.current_tenant_id(), $1, $2, $3, $4
+    managedservice.current_tenant_id(), $1, $2, $3, $4, $5, $6, $7, $8
 )
 RETURNING observed_at`,
 		draft.OperationID, draft.ID, draft.IdempotencyKey, draft.RequestDigest,
+		draft.ActorType, draft.ActorID, draft.IAMDecisionID, draft.RequestID,
 	).Scan(&observedAt)
 	if err != nil {
 		return managedservicev1.ServiceInstallation{}, databaseError(ctx, err)
@@ -195,6 +201,25 @@ RETURNING observed_at`,
 		return managedservicev1.ServiceInstallation{}, usecase.ErrRepositoryUnavailable
 	}
 	return result, nil
+}
+
+func (value *transaction) AppendAuditEvent(ctx context.Context, event audit.Event) error {
+	if audit.ValidateEvent(event) != nil {
+		return usecase.ErrRepositoryUnavailable
+	}
+	document, err := json.Marshal(event)
+	if err != nil {
+		return usecase.ErrRepositoryUnavailable
+	}
+	defer clear(document)
+	if _, err := value.tx.Exec(
+		ctx,
+		`SELECT managedservice.append_audit_outbox($1::jsonb)`,
+		document,
+	); err != nil {
+		return databaseError(ctx, err)
+	}
+	return nil
 }
 
 func (value *transaction) ListServiceInstallations(

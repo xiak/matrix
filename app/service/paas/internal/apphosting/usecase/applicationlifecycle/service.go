@@ -12,6 +12,7 @@ import (
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/domain"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
+	"github.com/xiak/matrix/app/service/paas/internal/audit"
 )
 
 const maxResourceVersion = uint64(9007199254740991)
@@ -430,31 +431,31 @@ func auditEventForOperation(
 	authorization port.Authorization,
 	operation paasv1.Operation,
 	occurredAt time.Time,
-) (port.AuditEvent, error) {
+) (audit.Event, error) {
 	action := ""
-	result := port.AuditAccepted
+	result := audit.Accepted
 	switch operation.Action {
 	case paasv1.OperationCreateApplication:
-		action, result = port.AuditApplicationCreated, port.AuditSucceeded
+		action, result = audit.ApplicationCreated, audit.Succeeded
 	case paasv1.OperationCreateConfiguration:
-		action, result = port.AuditConfigurationCreated, port.AuditSucceeded
+		action, result = audit.ConfigurationCreated, audit.Succeeded
 	case paasv1.OperationCreateConfigurationRevision:
-		action, result = port.AuditConfigurationRevisionCreated, port.AuditSucceeded
+		action, result = audit.ConfigurationRevisionCreated, audit.Succeeded
 	case paasv1.OperationCreateApplicationRevision:
-		action, result = port.AuditApplicationRevisionCreated, port.AuditSucceeded
+		action, result = audit.ApplicationRevisionCreated, audit.Succeeded
 	case paasv1.OperationDeploy:
-		action = port.AuditDeploymentCreated
+		action = audit.DeploymentCreated
 	case paasv1.OperationUpdate:
-		action = port.AuditDeploymentUpdated
+		action = audit.DeploymentUpdated
 	case paasv1.OperationStop:
-		action = port.AuditDeploymentStopped
+		action = audit.DeploymentStopped
 	case paasv1.OperationRollback:
-		action = port.AuditDeploymentRolledBack
+		action = audit.DeploymentRolledBack
 	default:
-		return port.AuditEvent{}, fmt.Errorf("Operation action %q has no Audit contract", operation.Action)
+		return audit.Event{}, fmt.Errorf("Operation action %q has no Audit contract", operation.Action)
 	}
 	digest := sha256.Sum256([]byte("matrix-paas-audit-event-v1\x00" + string(operation.ID)))
-	event := port.AuditEvent{
+	event := audit.Event{
 		SchemaVersion: "v1",
 		EventID:       "audit-" + hex.EncodeToString(digest[:]),
 		TenantID:      authorization.TenantID,
@@ -470,8 +471,8 @@ func auditEventForOperation(
 		TraceParent:   authorization.TraceParent,
 		OccurredAt:    occurredAt,
 	}
-	if err := port.ValidateAuditEvent(event); err != nil {
-		return port.AuditEvent{}, fmt.Errorf("invalid Audit event: %w", err)
+	if err := audit.ValidateEvent(event); err != nil {
+		return audit.Event{}, fmt.Errorf("invalid Audit event: %w", err)
 	}
 	return event, nil
 }

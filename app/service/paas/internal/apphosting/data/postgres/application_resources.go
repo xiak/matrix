@@ -9,8 +9,8 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
-	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
+	"github.com/xiak/matrix/app/service/paas/internal/audit"
 )
 
 func (transaction *applicationTransaction) LoadApplication(
@@ -240,7 +240,7 @@ func validateResourceSubmission(
 	operation := submission.Operation
 	auditEvent := submission.AuditEvent
 	var problems []error
-	problems = append(problems, resourceErr, paasv1.ValidateOperation(operation), port.ValidateAuditEvent(auditEvent))
+	problems = append(problems, resourceErr, paasv1.ValidateOperation(operation), audit.ValidateEvent(auditEvent))
 	if operation.Scope.TenantID != tenantID || operation.Target.Kind != kind ||
 		operation.Target.ID != id || operation.Action != expectedAction ||
 		operation.State != paasv1.OperationSucceeded ||

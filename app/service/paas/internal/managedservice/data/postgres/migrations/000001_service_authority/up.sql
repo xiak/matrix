@@ -53,6 +53,10 @@ CREATE TABLE IF NOT EXISTS managedservice.quota_entitlements (
     resource_version bigint NOT NULL DEFAULT 1,
     idempotency_key text COLLATE "C" NOT NULL,
     request_digest text COLLATE "C" NOT NULL,
+    activated_by_type text COLLATE "C" NOT NULL,
+    activated_by_id text COLLATE "C" NOT NULL,
+    iam_decision_id text COLLATE "C" NOT NULL,
+    request_id text COLLATE "C" NOT NULL,
     activated_at timestamptz(6) NOT NULL DEFAULT transaction_timestamp(),
     PRIMARY KEY (tenant_id, id),
     CONSTRAINT quota_entitlements_idempotency_uq
@@ -63,6 +67,10 @@ CREATE TABLE IF NOT EXISTS managedservice.quota_entitlements (
         AND offering_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND quota_shape_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND idempotency_key COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND activated_by_type IN ('USER', 'SERVICE_ACCOUNT')
+        AND activated_by_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND iam_decision_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND request_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
     ),
     CONSTRAINT quota_entitlements_catalog_valid CHECK (
         offering_id = 'postgresql-18'
@@ -135,6 +143,10 @@ CREATE TABLE IF NOT EXISTS managedservice.operations (
     safe_failure_code text COLLATE "C",
     idempotency_key text COLLATE "C" NOT NULL,
     request_digest text COLLATE "C" NOT NULL,
+    requested_by_type text COLLATE "C" NOT NULL,
+    requested_by_id text COLLATE "C" NOT NULL,
+    iam_decision_id text COLLATE "C" NOT NULL,
+    request_id text COLLATE "C" NOT NULL,
     resource_version bigint NOT NULL DEFAULT 1,
     attempts integer NOT NULL DEFAULT 0,
     lease_owner text COLLATE "C",
@@ -153,6 +165,10 @@ CREATE TABLE IF NOT EXISTS managedservice.operations (
         AND id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND installation_id COLLATE "C" ~ '^[a-z0-9][a-z0-9._-]{1,62}$'
         AND idempotency_key COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND requested_by_type IN ('USER', 'SERVICE_ACCOUNT')
+        AND requested_by_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND iam_decision_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND request_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
     ),
     CONSTRAINT managedservice_operations_phase_valid CHECK (
         phase IN ('PENDING', 'PROVISIONING', 'READY', 'FAILED')
@@ -175,19 +191,81 @@ CREATE TABLE IF NOT EXISTS managedservice.operations (
     )
 );
 
+CREATE TABLE IF NOT EXISTS managedservice.audit_outbox (
+    tenant_id text COLLATE "C" NOT NULL,
+    event_id text COLLATE "C" NOT NULL,
+    operation_id text COLLATE "C",
+    status text COLLATE "C" NOT NULL,
+    available_at timestamptz(6) NOT NULL,
+    attempts integer NOT NULL DEFAULT 0,
+    lease_owner text COLLATE "C",
+    lease_expires_at timestamptz(6),
+    fencing_token bigint NOT NULL DEFAULT 0,
+    last_error_code text COLLATE "C",
+    delivered_at timestamptz(6),
+    created_at timestamptz(6) NOT NULL,
+    updated_at timestamptz(6) NOT NULL,
+    document jsonb NOT NULL,
+    PRIMARY KEY (tenant_id, event_id),
+    CONSTRAINT managedservice_audit_operation_fk
+        FOREIGN KEY (tenant_id, operation_id)
+        REFERENCES managedservice.operations (tenant_id, id),
+    CONSTRAINT managedservice_audit_ids_valid CHECK (
+        tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND event_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND (operation_id IS NULL OR operation_id COLLATE "C"
+            ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+    ),
+    CONSTRAINT managedservice_audit_delivery_valid CHECK (
+        status IN ('PENDING', 'LEASED', 'RETRY', 'DELIVERED', 'DEAD_LETTER')
+        AND attempts BETWEEN 0 AND 100
+        AND fencing_token BETWEEN 0 AND 9007199254740991
+        AND ((lease_owner IS NULL) = (lease_expires_at IS NULL))
+        AND (last_error_code IS NULL OR last_error_code COLLATE "C"
+            ~ '^[A-Z][A-Z0-9_]{0,63}$')
+        AND ((status = 'DELIVERED') = (delivered_at IS NOT NULL))
+    ),
+    CONSTRAINT managedservice_audit_document_identity CHECK (
+        document->>'schemaVersion' = 'v1'
+        AND document->>'eventId' = event_id
+        AND document->>'tenantId' = tenant_id
+        AND document->>'action' IN (
+            'managedservice.quota-entitlement.activated',
+            'managedservice.service-installation.created',
+            'managedservice.service-installation.ready'
+        )
+        AND (
+            (operation_id IS NULL
+                AND document->>'action' = 'managedservice.quota-entitlement.activated'
+                AND NOT (document ? 'operationId'))
+            OR (operation_id IS NOT NULL
+                AND document->>'action' = 'managedservice.service-installation.created'
+                AND document->>'operationId' = operation_id)
+            OR (operation_id IS NOT NULL
+                AND document->>'action' = 'managedservice.service-installation.ready'
+                AND NOT (document ? 'operationId'))
+        )
+    )
+);
+
+CREATE INDEX IF NOT EXISTS managedservice_audit_delivery_idx
+    ON managedservice.audit_outbox (status, available_at, created_at);
+
 ALTER TABLE managedservice.quota_entitlements ENABLE ROW LEVEL SECURITY;
 ALTER TABLE managedservice.quota_entitlements FORCE ROW LEVEL SECURITY;
 ALTER TABLE managedservice.service_installations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE managedservice.service_installations FORCE ROW LEVEL SECURITY;
 ALTER TABLE managedservice.operations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE managedservice.operations FORCE ROW LEVEL SECURITY;
+ALTER TABLE managedservice.audit_outbox ENABLE ROW LEVEL SECURITY;
+ALTER TABLE managedservice.audit_outbox FORCE ROW LEVEL SECURITY;
 
 DO $matrix_managedservice_policy$
 DECLARE
     table_name text;
 BEGIN
     FOREACH table_name IN ARRAY ARRAY[
-        'quota_entitlements', 'service_installations', 'operations'
+        'quota_entitlements', 'service_installations', 'operations', 'audit_outbox'
     ]
     LOOP
         IF NOT EXISTS (
@@ -206,6 +284,274 @@ BEGIN
     END LOOP;
 END
 $matrix_managedservice_policy$;
+
+CREATE OR REPLACE FUNCTION managedservice.append_audit_outbox(
+    submitted_audit_event jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text;
+    effective_now timestamptz(6);
+    target_id text;
+    target_operation_id text;
+BEGIN
+    effective_tenant_id := managedservice.current_tenant_id();
+    effective_now := transaction_timestamp();
+    IF effective_tenant_id IS NULL
+       OR jsonb_typeof(submitted_audit_event) <> 'object'
+       OR jsonb_typeof(submitted_audit_event->'actor') <> 'object'
+       OR jsonb_typeof(submitted_audit_event->'target') <> 'object'
+       OR NOT (submitted_audit_event ?& ARRAY[
+            'schemaVersion', 'eventId', 'tenantId', 'actor',
+            'iamDecisionId', 'action', 'target', 'requestDigest',
+            'result', 'requestId', 'occurredAt'
+       ])
+       OR NOT ((submitted_audit_event->'actor') ?& ARRAY['type', 'id'])
+       OR NOT ((submitted_audit_event->'target') ?& ARRAY['kind', 'id'])
+       OR (submitted_audit_event - ARRAY[
+            'schemaVersion', 'eventId', 'tenantId', 'actor',
+            'iamDecisionId', 'action', 'target', 'operationId',
+            'requestDigest', 'result', 'requestId', 'occurredAt'
+       ]) <> '{}'::jsonb
+       OR ((submitted_audit_event->'actor') - ARRAY['type', 'id']) <> '{}'::jsonb
+       OR ((submitted_audit_event->'target') - ARRAY['kind', 'id']) <> '{}'::jsonb THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'managed-service Audit event contract is invalid';
+    END IF;
+
+    target_id := submitted_audit_event#>>'{target,id}';
+    target_operation_id := submitted_audit_event->>'operationId';
+    IF submitted_audit_event->>'schemaVersion' <> 'v1'
+       OR COALESCE(submitted_audit_event->>'eventId', '') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_audit_event->>'tenantId' <> effective_tenant_id
+       OR submitted_audit_event#>>'{actor,type}' NOT IN ('USER', 'SERVICE_ACCOUNT')
+       OR COALESCE(submitted_audit_event#>>'{actor,id}', '') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR COALESCE(submitted_audit_event->>'iamDecisionId', '') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR COALESCE(target_id, '') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR COALESCE(submitted_audit_event->>'requestDigest', '') COLLATE "C"
+            !~ '^sha256:[0-9a-f]{64}$'
+       OR COALESCE(submitted_audit_event->>'requestId', '') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR (submitted_audit_event->>'occurredAt')::timestamptz <> effective_now THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'managed-service Audit event identity is invalid';
+    END IF;
+
+    IF submitted_audit_event->>'action' = 'managedservice.quota-entitlement.activated' THEN
+        IF submitted_audit_event#>>'{target,kind}' <> 'QuotaEntitlement'
+           OR submitted_audit_event->>'result' <> 'SUCCEEDED'
+           OR submitted_audit_event ? 'operationId'
+           OR NOT EXISTS (
+                SELECT 1
+                  FROM managedservice.quota_entitlements AS entitlement
+                 WHERE entitlement.tenant_id = effective_tenant_id
+                   AND entitlement.id = target_id
+                   AND entitlement.request_digest = submitted_audit_event->>'requestDigest'
+                   AND entitlement.activated_by_type = submitted_audit_event#>>'{actor,type}'
+                   AND entitlement.activated_by_id = submitted_audit_event#>>'{actor,id}'
+                   AND entitlement.iam_decision_id = submitted_audit_event->>'iamDecisionId'
+                   AND entitlement.request_id = submitted_audit_event->>'requestId'
+                   AND entitlement.activated_at = effective_now
+           ) THEN
+            RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'quota Audit fact is not transactionally correlated';
+        END IF;
+        target_operation_id := NULL;
+    ELSIF submitted_audit_event->>'action' = 'managedservice.service-installation.created' THEN
+        IF submitted_audit_event#>>'{target,kind}' <> 'ServiceInstallation'
+           OR submitted_audit_event->>'result' <> 'ACCEPTED'
+           OR COALESCE(target_operation_id, '') COLLATE "C"
+                !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+           OR NOT EXISTS (
+                SELECT 1
+                  FROM managedservice.operations AS operation
+                  JOIN managedservice.service_installations AS installation
+                    ON installation.tenant_id = operation.tenant_id
+                   AND installation.id = operation.installation_id
+                 WHERE operation.tenant_id = effective_tenant_id
+                   AND operation.id = target_operation_id
+                   AND operation.installation_id = target_id
+                   AND operation.request_digest = submitted_audit_event->>'requestDigest'
+                   AND operation.requested_by_type = submitted_audit_event#>>'{actor,type}'
+                   AND operation.requested_by_id = submitted_audit_event#>>'{actor,id}'
+                   AND operation.iam_decision_id = submitted_audit_event->>'iamDecisionId'
+                   AND operation.request_id = submitted_audit_event->>'requestId'
+                   AND installation.created_at = effective_now
+           ) THEN
+            RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'installation Audit fact is not transactionally correlated';
+        END IF;
+    ELSE
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'managed-service API cannot append this Audit action';
+    END IF;
+
+    INSERT INTO managedservice.audit_outbox (
+        tenant_id, event_id, operation_id, status, available_at,
+        attempts, fencing_token, created_at, updated_at, document
+    ) VALUES (
+        effective_tenant_id, submitted_audit_event->>'eventId', target_operation_id,
+        'PENDING', effective_now, 0, 0, effective_now, effective_now,
+        submitted_audit_event
+    );
+END
+$function$;
+
+REVOKE ALL ON FUNCTION managedservice.append_audit_outbox(jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION managedservice.append_audit_outbox(jsonb) TO matrix_paas_api;
+
+CREATE OR REPLACE FUNCTION managedservice.claim_audit_event(
+    requested_worker_id text,
+    requested_lease_seconds integer
+)
+RETURNS TABLE (
+    tenant_id text,
+    event_id text,
+    attempts integer,
+    fencing_token bigint,
+    lease_expires_at timestamptz,
+    document jsonb
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+BEGIN
+    IF requested_worker_id IS NULL
+       OR requested_worker_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_lease_seconds IS NULL
+       OR requested_lease_seconds NOT BETWEEN 1 AND 300 THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'Audit claim parameters are invalid';
+    END IF;
+    RETURN QUERY
+    WITH candidate AS (
+        SELECT pending.tenant_id, pending.event_id
+          FROM managedservice.audit_outbox AS pending
+         WHERE pending.attempts < 100
+           AND ((pending.status IN ('PENDING', 'RETRY')
+                    AND pending.available_at <= transaction_timestamp())
+                OR (pending.status = 'LEASED'
+                    AND pending.lease_expires_at <= transaction_timestamp()))
+         ORDER BY pending.available_at, pending.created_at,
+                  pending.tenant_id COLLATE "C", pending.event_id COLLATE "C"
+         LIMIT 1
+         FOR UPDATE SKIP LOCKED
+    )
+    UPDATE managedservice.audit_outbox AS claimed
+       SET status = 'LEASED', attempts = claimed.attempts + 1,
+           lease_owner = requested_worker_id,
+           lease_expires_at = transaction_timestamp()
+                + make_interval(secs => requested_lease_seconds),
+           fencing_token = claimed.fencing_token + 1,
+           last_error_code = NULL, updated_at = transaction_timestamp()
+      FROM candidate
+     WHERE claimed.tenant_id = candidate.tenant_id
+       AND claimed.event_id = candidate.event_id
+    RETURNING claimed.tenant_id, claimed.event_id, claimed.attempts,
+              claimed.fencing_token, claimed.lease_expires_at, claimed.document;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION managedservice.claim_audit_event(text, integer) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION managedservice.claim_audit_event(text, integer) TO matrix_paas_worker;
+
+CREATE OR REPLACE FUNCTION managedservice.complete_audit_event(
+    requested_tenant_id text,
+    requested_event_id text,
+    requested_worker_id text,
+    expected_fencing_token bigint,
+    requested_outcome text,
+    requested_retry_at timestamptz,
+    requested_error_code text
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    affected_rows bigint;
+BEGIN
+    IF requested_tenant_id IS NULL
+       OR requested_tenant_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_event_id IS NULL
+       OR requested_event_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_worker_id IS NULL
+       OR requested_worker_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR expected_fencing_token IS NULL
+       OR expected_fencing_token NOT BETWEEN 1 AND 9007199254740991
+       OR requested_outcome NOT IN ('DELIVERED', 'RETRY', 'DEAD_LETTER')
+       OR (requested_outcome = 'RETRY'
+            AND (requested_retry_at IS NULL
+                OR requested_retry_at <= transaction_timestamp()
+                OR requested_retry_at > transaction_timestamp() + interval '24 hours'))
+       OR (requested_outcome <> 'RETRY' AND requested_retry_at IS NOT NULL)
+       OR (requested_outcome = 'DEAD_LETTER'
+            AND (requested_error_code IS NULL
+                OR requested_error_code COLLATE "C" !~ '^[A-Z][A-Z0-9_]{0,63}$'))
+       OR (requested_outcome <> 'DEAD_LETTER' AND requested_error_code IS NOT NULL) THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'Audit completion parameters are invalid';
+    END IF;
+
+    UPDATE managedservice.audit_outbox AS event
+       SET status = requested_outcome,
+           available_at = CASE WHEN requested_outcome = 'RETRY'
+                THEN requested_retry_at ELSE event.available_at END,
+           lease_owner = NULL, lease_expires_at = NULL,
+           last_error_code = CASE WHEN requested_outcome = 'DEAD_LETTER'
+                THEN requested_error_code ELSE NULL END,
+           delivered_at = CASE WHEN requested_outcome = 'DELIVERED'
+                THEN transaction_timestamp() ELSE NULL END,
+           updated_at = transaction_timestamp()
+     WHERE event.tenant_id = requested_tenant_id
+       AND event.event_id = requested_event_id
+       AND event.status = 'LEASED'
+       AND event.lease_owner = requested_worker_id
+       AND event.fencing_token = expected_fencing_token
+       AND event.lease_expires_at > clock_timestamp();
+    GET DIAGNOSTICS affected_rows = ROW_COUNT;
+    IF affected_rows <> 1 THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX412', MESSAGE = 'Audit event lease or fencing token is stale';
+    END IF;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION managedservice.complete_audit_event(
+    text, text, text, bigint, text, timestamptz, text
+) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION managedservice.complete_audit_event(
+    text, text, text, bigint, text, timestamptz, text
+) TO matrix_paas_worker;
+
+CREATE OR REPLACE FUNCTION managedservice.audit_outbox_snapshot()
+RETURNS TABLE (
+    pending_count bigint,
+    leased_count bigint,
+    retry_count bigint,
+    delivered_count bigint,
+    dead_letter_count bigint,
+    expired_lease_count bigint
+)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+    SELECT count(*) FILTER (WHERE status = 'PENDING'),
+           count(*) FILTER (WHERE status = 'LEASED'),
+           count(*) FILTER (WHERE status = 'RETRY'),
+           count(*) FILTER (WHERE status = 'DELIVERED'),
+           count(*) FILTER (WHERE status = 'DEAD_LETTER'),
+           count(*) FILTER (WHERE status = 'LEASED'
+                AND lease_expires_at <= transaction_timestamp())
+      FROM managedservice.audit_outbox
+$function$;
+
+REVOKE ALL ON FUNCTION managedservice.audit_outbox_snapshot() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION managedservice.audit_outbox_snapshot() TO matrix_paas_worker;
 
 CREATE OR REPLACE FUNCTION managedservice.claim_operation(
     requested_worker_id text,
@@ -357,6 +703,46 @@ BEGIN
            resource_version = resource_version + 1,
            observed_at = transaction_timestamp()
      WHERE tenant_id = requested_tenant_id AND id = requested_operation_id;
+    INSERT INTO managedservice.audit_outbox (
+        tenant_id, event_id, operation_id, status, available_at,
+        attempts, fencing_token, created_at, updated_at, document
+    )
+    SELECT operation.tenant_id,
+           'audit-' || md5('managedservice.service-installation.ready:' || operation.id),
+           operation.id,
+           'PENDING', transaction_timestamp(), 0, 0,
+           transaction_timestamp(), transaction_timestamp(),
+           jsonb_build_object(
+                'schemaVersion', 'v1',
+                'eventId', 'audit-' || md5(
+                    'managedservice.service-installation.ready:' || operation.id
+                ),
+                'tenantId', operation.tenant_id,
+                'actor', jsonb_build_object(
+                    'type', operation.requested_by_type,
+                    'id', operation.requested_by_id
+                ),
+                'iamDecisionId', operation.iam_decision_id,
+                'action', 'managedservice.service-installation.ready',
+                'target', jsonb_build_object(
+                    'kind', 'ServiceInstallation',
+                    'id', operation.installation_id
+                ),
+				'requestDigest', operation.request_digest,
+                'result', 'SUCCEEDED',
+                'requestId', operation.request_id,
+                'occurredAt', to_char(
+                    transaction_timestamp() AT TIME ZONE 'UTC',
+                    'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+                )
+           )
+      FROM managedservice.operations AS operation
+     WHERE operation.tenant_id = requested_tenant_id
+       AND operation.id = requested_operation_id
+       AND operation.phase = 'READY';
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'managed-service ready Audit fact conflicts';
+    END IF;
 END
 $function$;
 

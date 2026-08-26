@@ -33,14 +33,17 @@ const (
 	ActionIAMRoleBindingRevoked   Action = "iam.role-binding.revoked"
 	ActionIAMAuthorizationDecided Action = "iam.authorization.decided"
 
-	ActionPaaSApplicationCreated           Action = "paas.application.created"
-	ActionPaaSConfigurationCreated         Action = "paas.configuration.created"
-	ActionPaaSConfigurationRevisionCreated Action = "paas.configuration-revision.created"
-	ActionPaaSApplicationRevisionCreated   Action = "paas.application-revision.created"
-	ActionPaaSDeploymentCreated            Action = "paas.deployment.created"
-	ActionPaaSDeploymentUpdated            Action = "paas.deployment.updated"
-	ActionPaaSDeploymentStopped            Action = "paas.deployment.stopped"
-	ActionPaaSDeploymentRolledBack         Action = "paas.deployment.rolled-back"
+	ActionPaaSApplicationCreated                  Action = "paas.application.created"
+	ActionPaaSConfigurationCreated                Action = "paas.configuration.created"
+	ActionPaaSConfigurationRevisionCreated        Action = "paas.configuration-revision.created"
+	ActionPaaSApplicationRevisionCreated          Action = "paas.application-revision.created"
+	ActionPaaSDeploymentCreated                   Action = "paas.deployment.created"
+	ActionPaaSDeploymentUpdated                   Action = "paas.deployment.updated"
+	ActionPaaSDeploymentStopped                   Action = "paas.deployment.stopped"
+	ActionPaaSDeploymentRolledBack                Action = "paas.deployment.rolled-back"
+	ActionManagedServiceQuotaEntitlementActivated Action = "managedservice.quota-entitlement.activated"
+	ActionManagedServiceInstallationCreated       Action = "managedservice.service-installation.created"
+	ActionManagedServiceInstallationReady         Action = "managedservice.service-installation.ready"
 
 	ActionAuditRecordsRead       Action = "audit.records.read"
 	ActionAuditIntegrityVerified Action = "audit.integrity.verified"
@@ -57,6 +60,8 @@ const (
 	TargetConfigurationRevision TargetKind = "CONFIGURATION_REVISION"
 	TargetApplicationRevision   TargetKind = "APPLICATION_REVISION"
 	TargetDeployment            TargetKind = "DEPLOYMENT"
+	TargetQuotaEntitlement      TargetKind = "QUOTA_ENTITLEMENT"
+	TargetServiceInstallation   TargetKind = "SERVICE_INSTALLATION"
 	TargetAuditRecords          TargetKind = "AUDIT_RECORDS"
 	TargetAuditChain            TargetKind = "AUDIT_CHAIN"
 )
@@ -128,6 +133,9 @@ var allActions = []Action{
 	ActionPaaSDeploymentUpdated,
 	ActionPaaSDeploymentStopped,
 	ActionPaaSDeploymentRolledBack,
+	ActionManagedServiceQuotaEntitlementActivated,
+	ActionManagedServiceInstallationCreated,
+	ActionManagedServiceInstallationReady,
 	ActionAuditRecordsRead,
 	ActionAuditIntegrityVerified,
 }
@@ -189,6 +197,18 @@ var actionContracts = map[Action]ActionContract{
 	ActionPaaSDeploymentRolledBack: {
 		Source: SourcePaaS, Target: TargetDeployment, Results: []Result{ResultAccepted},
 		IAMDecisionRequired: true, OperationRequired: true,
+	},
+	ActionManagedServiceQuotaEntitlementActivated: {
+		Source: SourcePaaS, Target: TargetQuotaEntitlement, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true,
+	},
+	ActionManagedServiceInstallationCreated: {
+		Source: SourcePaaS, Target: TargetServiceInstallation, Results: []Result{ResultAccepted},
+		IAMDecisionRequired: true, OperationRequired: true,
+	},
+	ActionManagedServiceInstallationReady: {
+		Source: SourcePaaS, Target: TargetServiceInstallation, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true,
 	},
 	ActionAuditRecordsRead: {
 		Source: SourceAudit, Target: TargetAuditRecords, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true,

@@ -10,6 +10,7 @@ import (
 	"fmt"
 
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
+	"github.com/xiak/matrix/app/service/paas/internal/audit"
 	"github.com/xiak/matrix/app/service/paas/internal/managedservice/domain"
 	"github.com/xiak/matrix/app/service/paas/internal/managedservice/port"
 )
@@ -44,6 +45,7 @@ type Transaction interface {
 	FindInstallationReplay(context.Context, string) (managedservicev1.ServiceInstallation, string, bool, error)
 	GetQuotaEntitlementForUpdate(context.Context, string) (managedservicev1.QuotaEntitlement, error)
 	ReserveInstallation(context.Context, InstallationDraft, uint64) (managedservicev1.ServiceInstallation, error)
+	AppendAuditEvent(context.Context, audit.Event) error
 	Commit(context.Context) error
 	Rollback(context.Context) error
 }
@@ -55,6 +57,10 @@ type QuotaDraft struct {
 	PurchasedCount uint32
 	IdempotencyKey string
 	RequestDigest  string
+	ActorType      port.SubjectType
+	ActorID        string
+	IAMDecisionID  string
+	RequestID      string
 }
 
 type InstallationDraft struct {
@@ -67,6 +73,10 @@ type InstallationDraft struct {
 	OperationID        string
 	IdempotencyKey     string
 	RequestDigest      string
+	ActorType          port.SubjectType
+	ActorID            string
+	IAMDecisionID      string
+	RequestID          string
 }
 
 type ActivateQuotaCommand struct {
@@ -207,6 +217,10 @@ func (service *Service) ActivateQuota(
 		ID: id, OfferingID: offering.ID, QuotaShapeID: command.Request.QuotaShapeID,
 		PurchasedCount: command.Request.InstanceCount,
 		IdempotencyKey: command.IdempotencyKey, RequestDigest: digest,
+		ActorType:     command.Authorization.SubjectType,
+		ActorID:       command.Authorization.SubjectID,
+		IAMDecisionID: command.Authorization.DecisionID,
+		RequestID:     command.Authorization.RequestID,
 	}
 	var result managedservicev1.QuotaEntitlement
 	replayed := false
@@ -223,8 +237,18 @@ func (service *Service) ActivateQuota(
 			return nil
 		}
 		created, createErr := transaction.InsertQuotaEntitlement(ctx, draft)
+		if createErr != nil {
+			return createErr
+		}
+		event, eventErr := quotaAuditEvent(command.Authorization, created, digest)
+		if eventErr != nil {
+			return ErrRepositoryUnavailable
+		}
+		if appendErr := transaction.AppendAuditEvent(ctx, event); appendErr != nil {
+			return appendErr
+		}
 		result = created
-		return createErr
+		return nil
 	})
 	if err != nil {
 		return managedservicev1.QuotaEntitlement{}, false, err
@@ -287,9 +311,23 @@ func (service *Service) CreateInstallation(
 			QuotaEntitlementID: entitlement.ID, RegionID: service.region.ID,
 			OperationID: operationID, IdempotencyKey: command.IdempotencyKey,
 			RequestDigest: digest,
+			ActorType:     command.Authorization.SubjectType,
+			ActorID:       command.Authorization.SubjectID,
+			IAMDecisionID: command.Authorization.DecisionID,
+			RequestID:     command.Authorization.RequestID,
 		}, entitlement.ResourceVersion)
+		if createErr != nil {
+			return createErr
+		}
+		event, eventErr := installationAuditEvent(command.Authorization, created, digest)
+		if eventErr != nil {
+			return ErrRepositoryUnavailable
+		}
+		if appendErr := transaction.AppendAuditEvent(ctx, event); appendErr != nil {
+			return appendErr
+		}
 		result = created
-		return createErr
+		return nil
 	})
 	if err != nil {
 		return managedservicev1.ServiceInstallation{}, false, err
@@ -298,6 +336,64 @@ func (service *Service) CreateInstallation(
 		return managedservicev1.ServiceInstallation{}, false, ErrRepositoryUnavailable
 	}
 	return result, replayed, nil
+}
+
+func quotaAuditEvent(
+	authorization port.Authorization,
+	quota managedservicev1.QuotaEntitlement,
+	requestDigest string,
+) (audit.Event, error) {
+	event := audit.Event{
+		SchemaVersion: "v1", EventID: managedAuditEventID(audit.QuotaEntitlementActivated, quota.ID),
+		TenantID: audit.TenantID(authorization.TenantID),
+		Actor:    auditActor(authorization), IAMDecisionID: authorization.DecisionID,
+		Action: audit.QuotaEntitlementActivated,
+		Target: audit.TargetReference{
+			Kind: audit.TargetQuotaEntitlement, ID: audit.ResourceID(quota.ID),
+		},
+		RequestDigest: requestDigest, Result: audit.Succeeded,
+		RequestID: authorization.RequestID, OccurredAt: quota.ActivatedAt,
+	}
+	return event, audit.ValidateEvent(event)
+}
+
+func installationAuditEvent(
+	authorization port.Authorization,
+	installation managedservicev1.ServiceInstallation,
+	requestDigest string,
+) (audit.Event, error) {
+	event := audit.Event{
+		SchemaVersion: "v1",
+		EventID: managedAuditEventID(
+			audit.ServiceInstallationCreated,
+			installation.Operation.ID,
+		),
+		TenantID: audit.TenantID(authorization.TenantID),
+		Actor:    auditActor(authorization), IAMDecisionID: authorization.DecisionID,
+		Action: audit.ServiceInstallationCreated,
+		Target: audit.TargetReference{
+			Kind: audit.TargetServiceInstallation, ID: audit.ResourceID(installation.ID),
+		},
+		OperationID:   audit.OperationID(installation.Operation.ID),
+		RequestDigest: requestDigest, Result: audit.Accepted,
+		RequestID: authorization.RequestID, OccurredAt: installation.CreatedAt,
+	}
+	return event, audit.ValidateEvent(event)
+}
+
+func auditActor(authorization port.Authorization) audit.ActorReference {
+	actorType := audit.ActorUser
+	if authorization.SubjectType == port.SubjectServiceAccount {
+		actorType = audit.ActorServiceAccount
+	}
+	return audit.ActorReference{Type: actorType, ID: authorization.SubjectID}
+}
+
+func managedAuditEventID(action, resourceID string) string {
+	digest := sha256.Sum256([]byte(
+		"matrix-managedservice-audit-event-v1\x00" + action + "\x00" + resourceID,
+	))
+	return "audit-" + hex.EncodeToString(digest[:])
 }
 
 func (service *Service) withWriteRetry(

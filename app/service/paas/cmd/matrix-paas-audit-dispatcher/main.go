@@ -14,9 +14,9 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/internal/processconfig"
 	"github.com/xiak/matrix/app/service/internal/processhttp"
-	audithttp "github.com/xiak/matrix/app/service/paas/internal/apphosting/data/audithttp"
-	paaspostgres "github.com/xiak/matrix/app/service/paas/internal/apphosting/data/postgres"
-	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/auditdispatch"
+	audithttp "github.com/xiak/matrix/app/service/paas/internal/audit/data/audithttp"
+	auditpostgres "github.com/xiak/matrix/app/service/paas/internal/audit/data/postgres"
+	"github.com/xiak/matrix/app/service/paas/internal/audit/usecase/auditdispatch"
 )
 
 const (
@@ -81,7 +81,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	repository, err := paaspostgres.NewAuditOutboxRepository(pool)
+	repository, err := auditpostgres.NewAuditOutboxRepository(pool)
 	if err != nil {
 		return err
 	}

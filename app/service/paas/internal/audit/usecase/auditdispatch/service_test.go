@@ -7,7 +7,7 @@ import (
 	"time"
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
-	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
+	"github.com/xiak/matrix/app/service/paas/internal/audit"
 )
 
 var auditTestTime = time.Date(2026, 8, 25, 18, 0, 0, 123_000, time.UTC)
@@ -66,9 +66,9 @@ func TestDispatchOnceDeadLettersAfterBoundedAttempts(t *testing.T) {
 
 func TestDispatchOnceDeadLettersTerminalAuthorityRejectionsImmediately(t *testing.T) {
 	for _, deliveryErr := range []error{
-		port.ErrAuditInvalid,
-		port.ErrAuditUnauthenticated,
-		port.ErrAuditConflict,
+		audit.ErrInvalid,
+		audit.ErrUnauthenticated,
+		audit.ErrConflict,
 	} {
 		repository := &fakeAuditRepository{claims: []Claim{auditClaim(1)}}
 		result, err := mustAuditUsecase(
@@ -145,11 +145,11 @@ func (repository *fakeAuditRepository) Snapshot(context.Context) (Snapshot, erro
 }
 
 type fakeAuditIngestor struct {
-	events []port.AuditEvent
+	events []audit.Event
 	err    error
 }
 
-func (ingestor *fakeAuditIngestor) Ingest(_ context.Context, event port.AuditEvent) error {
+func (ingestor *fakeAuditIngestor) Ingest(_ context.Context, event audit.Event) error {
 	ingestor.events = append(ingestor.events, event)
 	return ingestor.err
 }
@@ -157,7 +157,7 @@ func (ingestor *fakeAuditIngestor) Ingest(_ context.Context, event port.AuditEve
 func mustAuditUsecase(
 	t *testing.T,
 	repository Repository,
-	ingestor port.AuditIngestor,
+	ingestor audit.Ingestor,
 	maxAttempts int,
 ) *Usecase {
 	t.Helper()
@@ -174,17 +174,18 @@ func mustAuditUsecase(
 }
 
 func auditClaim(attempts int) Claim {
-	event := port.AuditEvent{
+	event := audit.Event{
 		SchemaVersion: "v1", EventID: "audit-event-a", TenantID: "tenant-a",
 		Actor:         paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "user-a"},
-		IAMDecisionID: "decision-a", Action: port.AuditDeploymentCreated,
+		IAMDecisionID: "decision-a", Action: audit.DeploymentCreated,
 		Target:        paasv1.ResourceRef{Kind: "Deployment", ID: "deployment-a"},
 		OperationID:   "operation-a",
 		RequestDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		Result:        port.AuditAccepted, RequestID: "request-a", OccurredAt: auditTestTime,
+		Result:        audit.Accepted, RequestID: "request-a", OccurredAt: auditTestTime,
 	}
 	return Claim{
 		TenantID: "tenant-a", EventID: event.EventID, Attempts: attempts,
-		FencingToken: 7, LeaseExpiresAt: auditTestTime.Add(30 * time.Second), Event: event,
+		FencingToken: 7, LeaseExpiresAt: auditTestTime.Add(30 * time.Second),
+		Stream: StreamAppHosting, Event: event,
 	}
 }
