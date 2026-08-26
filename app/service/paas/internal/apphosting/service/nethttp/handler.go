@@ -143,7 +143,8 @@ func (value *handler) verifyInstallation(response http.ResponseWriter, request *
 	verification, err := value.installationVerifier.VerifyInstallation(
 		request.Context(),
 		verifyinstallation.Command{
-			Credential: credential, RequestID: requestID, Request: body,
+			Credential: credential, RequestID: requestID,
+			IdempotencyKey: request.Header.Get("Idempotency-Key"), Request: body,
 		},
 	)
 	if err != nil {

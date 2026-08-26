@@ -39,3 +39,19 @@ func TestInstallationVerificationContract(t *testing.T) {
 		t.Fatal("verification request must identify the release")
 	}
 }
+
+func TestInstallationVerificationDeploymentIdentityIsStableAndBounded(t *testing.T) {
+	identity, err := InstallationVerificationDeploymentID(
+		"mxi-0123456789abcdef0123456789abcdef",
+	)
+	if err != nil {
+		t.Fatalf("derive installation verification Deployment identity: %v", err)
+	}
+	const expected = "installation-verification-deploy-e49f9e8e2231b7e1e92bf1fe"
+	if identity != expected {
+		t.Fatalf("installation verification Deployment identity = %q, want %q", identity, expected)
+	}
+	if _, err := InstallationVerificationDeploymentID(""); err == nil {
+		t.Fatal("empty installation identity was accepted")
+	}
+}

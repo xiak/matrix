@@ -306,6 +306,17 @@ func TestMutationAndConcurrencyHeadersAreNormative(t *testing.T) {
 	if _, found := headers["ETag"]; !found {
 		t.Fatal("ETag response header is missing")
 	}
+	paths := object(t, document["paths"], "paths")
+	verificationPath := object(t, paths["/v1/installation:verify"], "installation verification path")
+	verification := object(t, verificationPath["post"], "installation verification operation")
+	verificationParameters, ok := verification["parameters"].([]any)
+	if !ok || len(verificationParameters) != 1 {
+		t.Fatalf("installation verification must require one idempotency header: %#v", verification["parameters"])
+	}
+	verificationIdempotency := object(t, verificationParameters[0], "installation verification idempotency header")
+	if verificationIdempotency["$ref"] != "#/components/parameters/IdempotencyKey" {
+		t.Fatalf("installation verification idempotency header = %#v", verificationIdempotency)
+	}
 	responses := object(t, components["responses"], "components.responses")
 	problem := object(t, responses["ProblemResponse"], "ProblemResponse")
 	content := object(t, problem["content"], "ProblemResponse.content")

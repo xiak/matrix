@@ -171,6 +171,42 @@ func TestExecutorRunsRetrySafeApplyRollbackObserveAndStop(t *testing.T) {
 	assertTreeExcludes(t, root, string((&secretFixture{content: []byte("database-password")}).content))
 }
 
+func TestInspectRunningProjectStateProvesExactStoredDocumentsWithoutCreatingState(t *testing.T) {
+	executor, request, _, root, _ := executorFixture(t)
+	inspection, exists, err := InspectRunningProjectState(
+		root, request.Command.Scope.TenantID, request.Command.DeploymentID,
+	)
+	if err != nil || exists || inspection.ProjectName != projectName(
+		request.Command.Scope.TenantID, request.Command.DeploymentID,
+	) {
+		t.Fatalf("absent running project inspection = %#v / %t / %v", inspection, exists, err)
+	}
+	if _, err := os.Stat(inspection.Directory); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("absent project inspection created state: %v", err)
+	}
+	if _, err := executor.ApplyDeployment(context.Background(), request); err != nil {
+		t.Fatalf("apply project for inspection: %v", err)
+	}
+	inspection, exists, err = InspectRunningProjectState(
+		root, request.Command.Scope.TenantID, request.Command.DeploymentID,
+	)
+	if err != nil || !exists || inspection.Generation != request.Generation.Generation ||
+		inspection.ApplicationRevisionID != request.ApplicationRevision.Metadata.ID ||
+		inspection.ContentDigest != request.Generation.ContentDigest ||
+		len(inspection.Services) != len(request.Generation.Spec.Components) ||
+		inspection.SecretFileCount != 1 {
+		t.Fatalf("running project inspection = %#v / %t / %v", inspection, exists, err)
+	}
+	if err := os.WriteFile(inspection.ObservationDocument, []byte(`{"services":{}}`), 0o600); err != nil {
+		t.Fatalf("tamper observation document: %v", err)
+	}
+	if _, _, err := InspectRunningProjectState(
+		root, request.Command.Scope.TenantID, request.Command.DeploymentID,
+	); err == nil {
+		t.Fatal("tampered observation document was accepted")
+	}
+}
+
 func TestExecutorReconcilesUnknownEffectWithoutPersistingNativeError(t *testing.T) {
 	executor, request, runtime, root, now := executorFixture(t)
 	nativePayload := "password=native-must-not-enter-state"

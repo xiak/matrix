@@ -75,7 +75,7 @@ func TestServiceUsesCurrentResourceVersionForReleaseUpdate(t *testing.T) {
 		InstallationID: testInstallationID,
 		ReleaseID:      "matrix-v0.0.9-001",
 		ArtifactDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-	})
+	}, "verify-old-release")
 	if err != nil {
 		t.Fatalf("compile old resources: %v", err)
 	}
@@ -115,6 +115,64 @@ func TestServiceUsesCurrentResourceVersionForReleaseUpdate(t *testing.T) {
 	}
 }
 
+func TestServiceUsesAStableVerificationEpochAndReappliesTheCurrentRelease(t *testing.T) {
+	first, err := compileFixedResources(Config{
+		InstallationID: testInstallationID,
+		ReleaseID:      testReleaseID,
+		ArtifactDigest: testArtifactDigest,
+	}, "verify-first")
+	if err != nil {
+		t.Fatalf("compile first verification resources: %v", err)
+	}
+	second, err := compileFixedResources(Config{
+		InstallationID: testInstallationID,
+		ReleaseID:      testReleaseID,
+		ArtifactDigest: testArtifactDigest,
+	}, "verify-second")
+	if err != nil {
+		t.Fatalf("compile second verification resources: %v", err)
+	}
+	if first.applicationRevision.ID != second.applicationRevision.ID ||
+		first.configurationRevision.ID == second.configurationRevision.ID ||
+		paasv1.DeploymentSpecContentDigest(first.deploymentSpec) ==
+			paasv1.DeploymentSpecContentDigest(second.deploymentSpec) {
+		t.Fatalf("verification epochs did not isolate only the configuration binding")
+	}
+	authorization := port.Authorization{
+		TenantID: "organization-default",
+		Subject: paasv1.SubjectRef{
+			Type: paasv1.SubjectServiceAccount, ID: "service-installation-verifier",
+		},
+		DecisionID: "decision-first", RequestID: "request-first",
+	}
+	current := deploymentResult(
+		first.deploymentID,
+		first.deploymentName,
+		first.deploymentSpec,
+		authorization,
+		4,
+		3,
+		paasv1.OperationSucceeded,
+	).Deployment
+	applications := &verificationApplications{
+		current: &current, operationState: paasv1.OperationAccepted,
+	}
+	service := newVerificationService(t, &verificationIAM{}, applications)
+	command := verificationCommand()
+	command.IdempotencyKey = "verify-second"
+	verification, err := service.VerifyInstallation(context.Background(), command)
+	if err != nil {
+		t.Fatalf("verify current release again: %v", err)
+	}
+	if verification.State != paasv1.InstallationVerificationPending ||
+		len(applications.submissions) != 1 ||
+		applications.submissions[0].ExpectedResourceVersion != 4 ||
+		applications.submissions[0].Spec.Components[0].Bindings[0].ConfigurationRevisionID !=
+			second.configurationRevision.ID {
+		t.Fatalf("repeated verification did not submit one current-release update")
+	}
+}
+
 func TestServiceRejectsAnotherRunningReleaseBeforeIAMOrApplicationMutation(t *testing.T) {
 	iam := &verificationIAM{}
 	applications := &verificationApplications{}
@@ -127,6 +185,25 @@ func TestServiceRejectsAnotherRunningReleaseBeforeIAMOrApplicationMutation(t *te
 	}
 	if iam.calls != 0 || applications.callCount() != 0 {
 		t.Fatalf("mismatched release reached effects: IAM=%d workflow=%d", iam.calls, applications.callCount())
+	}
+}
+
+func TestServiceRejectsMissingOrUnsafeVerificationEpochBeforeEffects(t *testing.T) {
+	for _, key := range []string{"", "unsafe\nkey", strings.Repeat("x", 129)} {
+		t.Run(strings.ReplaceAll(key, "\n", "-newline-"), func(t *testing.T) {
+			iam := &verificationIAM{}
+			applications := &verificationApplications{}
+			service := newVerificationService(t, iam, applications)
+			command := verificationCommand()
+			command.IdempotencyKey = key
+			_, err := service.VerifyInstallation(context.Background(), command)
+			if !errors.Is(err, ErrInvalidArgument) {
+				t.Fatalf("verification epoch error=%v", err)
+			}
+			if iam.calls != 0 || applications.callCount() != 0 {
+				t.Fatalf("invalid verification epoch reached effects: IAM=%d workflow=%d", iam.calls, applications.callCount())
+			}
+		})
 	}
 }
 
@@ -340,8 +417,9 @@ func newVerificationService(
 
 func verificationCommand() Command {
 	return Command{
-		Credential: "Bearer verifier-credential",
-		RequestID:  "request-installation-verify",
+		Credential:     "Bearer verifier-credential",
+		RequestID:      "request-installation-verify",
+		IdempotencyKey: "verify-current-release",
 		Request: paasv1.VerifyInstallationRequest{
 			InstallationID: testInstallationID,
 			ReleaseID:      testReleaseID,

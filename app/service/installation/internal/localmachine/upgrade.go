@@ -181,7 +181,8 @@ func verifyPreviousRelease(
 	); err != nil {
 		return err
 	}
-	return verifier.Verify(ctx, source)
+	_, err = verifier.Verify(ctx, source)
+	return err
 }
 
 func validateUpgradeIdentity(
@@ -190,6 +191,7 @@ func validateUpgradeIdentity(
 ) error {
 	if source.Root != target.Root ||
 		source.InstallationID != target.InstallationID ||
+		source.CorrelationID == "" || source.CorrelationID != target.CorrelationID ||
 		source.Listener != target.Listener || source.Port != target.Port ||
 		source.Trust != target.Trust ||
 		!bytes.Equal(source.TrustBytes, target.TrustBytes) ||

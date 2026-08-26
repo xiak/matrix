@@ -80,6 +80,7 @@ type platformContainerInspection struct {
 type platformContainerConfig struct {
 	Labels map[string]string `json:"Labels"`
 	User   string            `json:"User"`
+	Env    []string          `json:"Env"`
 }
 
 type platformContainerState struct {
@@ -93,6 +94,7 @@ type platformContainerState struct {
 type platformHostConfig struct {
 	Privileged     bool                             `json:"Privileged"`
 	ReadonlyRootfs bool                             `json:"ReadonlyRootfs"`
+	NetworkMode    string                           `json:"NetworkMode"`
 	Init           *bool                            `json:"Init"`
 	Memory         int64                            `json:"Memory"`
 	NanoCPUs       int64                            `json:"NanoCpus"`
@@ -120,6 +122,7 @@ type platformPortBinding struct {
 
 type platformNetworkInspection struct {
 	ID       string            `json:"Id"`
+	Name     string            `json:"Name"`
 	Internal bool              `json:"Internal"`
 	Labels   map[string]string `json:"Labels"`
 }

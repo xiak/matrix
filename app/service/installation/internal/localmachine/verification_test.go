@@ -31,6 +31,11 @@ func TestHTTPInstallationVerifierPollsExactPaaSAndAuditFacts(t *testing.T) {
 	}
 	credential := readTestFile(t, plan.Root, layout.InstallationVerifierCredential)
 	defer clear(credential)
+	verificationKey := "verify-" + plan.CorrelationID
+	deploymentID, err := paasv1.InstallationVerificationDeploymentID(plan.InstallationID)
+	if err != nil {
+		t.Fatalf("derive fixed verification Deployment identity: %v", err)
+	}
 	paasCalls := 0
 	auditCalls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
@@ -44,6 +49,11 @@ func TestHTTPInstallationVerifierPollsExactPaaSAndAuditFacts(t *testing.T) {
 		response.Header().Set("Content-Type", "application/json")
 		switch request.URL.Path {
 		case paasVerificationPath:
+			if request.Header.Get("Idempotency-Key") != verificationKey {
+				t.Errorf("PaaS verification idempotency key=%q", request.Header.Get("Idempotency-Key"))
+				response.WriteHeader(http.StatusBadRequest)
+				return
+			}
 			paasCalls++
 			var body paasv1.VerifyInstallationRequest
 			if err := json.NewDecoder(request.Body).Decode(&body); err != nil ||
@@ -64,19 +74,24 @@ func TestHTTPInstallationVerifierPollsExactPaaSAndAuditFacts(t *testing.T) {
 			_ = json.NewEncoder(response).Encode(paasv1.InstallationVerification{
 				APIVersion: paasv1.APIVersion, Kind: "InstallationVerification",
 				InstallationID: body.InstallationID, ReleaseID: body.ReleaseID,
-				State: state, DeploymentID: "deployment-verification",
+				State: state, DeploymentID: deploymentID,
 				Generation: 1, OperationID: "operation-verification",
 				OperationState: operationState, DeploymentPhase: deploymentPhase,
 				CheckedAt: verificationTestTime,
 			})
 		case auditVerificationPath:
+			if request.Header.Get("Idempotency-Key") != "" {
+				t.Errorf("Audit verification received PaaS idempotency key")
+				response.WriteHeader(http.StatusBadRequest)
+				return
+			}
 			auditCalls++
 			var body auditv1.VerifyInstallationRequest
 			if err := json.NewDecoder(request.Body).Decode(&body); err != nil ||
 				body != (auditv1.VerifyInstallationRequest{
 					InstallationID: plan.InstallationID,
 					OperationID:    "operation-verification",
-					DeploymentID:   "deployment-verification",
+					DeploymentID:   string(deploymentID),
 				}) {
 				t.Errorf("Audit verification request=%#v err=%v", body, err)
 				response.WriteHeader(http.StatusBadRequest)
@@ -109,10 +124,12 @@ func TestHTTPInstallationVerifierPollsExactPaaSAndAuditFacts(t *testing.T) {
 	verifier := newHTTPInstallationVerifier(server.Client())
 	verifier.maximumPolls = 4
 	verifier.wait = func(context.Context, time.Duration) error { return nil }
-	if err := verifier.Verify(context.Background(), plan); err != nil {
+	result, err := verifier.Verify(context.Background(), plan)
+	if err != nil {
 		t.Fatalf("verify fixed installation flow: %v", err)
 	}
-	if paasCalls != 2 || auditCalls != 2 {
+	if paasCalls != 2 || auditCalls != 2 || result.DeploymentID != deploymentID ||
+		result.Generation != 1 {
 		t.Fatalf("verification calls PaaS=%d Audit=%d", paasCalls, auditCalls)
 	}
 }
@@ -137,7 +154,7 @@ func TestHTTPInstallationVerifierNormalizesUnavailableProviderOutput(t *testing.
 	verifier := newHTTPInstallationVerifier(server.Client())
 	verifier.maximumPolls = 2
 	verifier.wait = func(context.Context, time.Duration) error { return nil }
-	err := verifier.Verify(context.Background(), plan)
+	_, err := verifier.Verify(context.Background(), plan)
 	if !errors.Is(err, platformcommand.ErrEffectUnavailable) || calls != 2 ||
 		strings.Contains(err.Error(), native) ||
 		bytes.Contains([]byte(err.Error()), credential) ||
@@ -155,7 +172,7 @@ func TestHTTPInstallationVerifierRejectsMismatchedPaaSIdentity(t *testing.T) {
 		response.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(response).Encode(paasv1.InstallationVerification{
 			APIVersion: paasv1.APIVersion, Kind: "InstallationVerification",
-			InstallationID: plan.InstallationID, ReleaseID: "different-release",
+			InstallationID: plan.InstallationID, ReleaseID: plan.Bundle.Manifest.Release.ID,
 			State: paasv1.InstallationVerificationReady, DeploymentID: "deployment-verification",
 			Generation: 1, OperationID: "operation-verification",
 			OperationState: paasv1.OperationSucceeded, DeploymentPhase: paasv1.DeploymentReady,
@@ -166,7 +183,7 @@ func TestHTTPInstallationVerifierRejectsMismatchedPaaSIdentity(t *testing.T) {
 	plan.Port = testServerPort(t, server.URL)
 	verifier := newHTTPInstallationVerifier(server.Client())
 	verifier.maximumPolls = 1
-	if err := verifier.Verify(
+	if _, err := verifier.Verify(
 		context.Background(), plan,
 	); !errors.Is(err, platformcommand.ErrEffectVerification) {
 		t.Fatalf("mismatched PaaS verification error=%v", err)
@@ -195,17 +212,23 @@ func TestEffectsOwnsTheFixedVerificationPhase(t *testing.T) {
 }
 
 type recordingInstallationVerifier struct {
-	calls int
-	plan  platformcommand.InstallPlan
+	calls  int
+	plan   platformcommand.InstallPlan
+	result paasv1.InstallationVerification
+	err    error
+	after  func(platformcommand.InstallPlan) (paasv1.InstallationVerification, error)
 }
 
 func (verifier *recordingInstallationVerifier) Verify(
 	_ context.Context,
 	plan platformcommand.InstallPlan,
-) error {
+) (paasv1.InstallationVerification, error) {
 	verifier.calls++
 	verifier.plan = plan
-	return nil
+	if verifier.after != nil {
+		return verifier.after(plan)
+	}
+	return verifier.result, verifier.err
 }
 
 func testServerPort(t *testing.T, rawURL string) uint16 {

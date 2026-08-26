@@ -6,15 +6,69 @@ import (
 	"errors"
 	"io"
 	"path/filepath"
+	"strconv"
+	"strings"
 
+	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
+	"github.com/xiak/matrix/app/service/installation/release"
 )
+
+const (
+	recoveryVerificationTenantID    = paasv1.TenantID("organization-default")
+	recoveryVerificationComponent   = "probe"
+	recoveryVerificationDownTimeout = "30"
+)
+
+type recoveryVerificationParticipant struct {
+	release release.ReleaseIdentity
+	imageID string
+}
+
+type recoveryVerificationInventory struct {
+	container *platformContainerInspection
+	network   *platformNetworkInspection
+	volumes   int
+}
+
+// RecoveryProjectInspector is the installation-owned, read-only port used to
+// prove one exact verification workload before recovery may remove it.
+type RecoveryProjectInspector interface {
+	InspectRecoveryProject(
+		bindingRoot string,
+		tenantID paasv1.TenantID,
+		deploymentID paasv1.ResourceID,
+	) (RecoveryProjectState, bool, error)
+}
+
+// RecoveryProjectState is provider-normalized, non-secret evidence for the
+// fixed verification workload. Provider documents remain adapter-owned.
+type RecoveryProjectState struct {
+	ProjectName           string
+	Directory             string
+	EffectDocument        string
+	ObservationDocument   string
+	TenantID              paasv1.TenantID
+	DeploymentID          paasv1.ResourceID
+	Generation            uint64
+	ApplicationRevisionID paasv1.ResourceID
+	ContentDigest         string
+	Services              []RecoveryProjectService
+	SecretFileCount       int
+}
+
+type RecoveryProjectService struct {
+	Name     string
+	Image    string
+	Replicas uint32
+}
 
 func recoverBackup(
 	ctx context.Context,
 	runtimeBoundary dockerRuntime,
 	streaming streamingDockerRuntime,
+	projectInspector RecoveryProjectInspector,
 	plan platformcommand.RecoveryPlan,
 ) error {
 	current, target, manifest, err := authenticateRecoveryPlan(plan)
@@ -49,6 +103,11 @@ func recoverBackup(
 		if err := rollbackInstallation(ctx, runtimeBoundary, participant); err != nil {
 			return err
 		}
+	}
+	if err := removeRecoveredVerificationProject(
+		ctx, runtimeBoundary, projectInspector, current, target,
+	); err != nil {
+		return err
 	}
 	if err := replaceReleaseConfiguration(
 		plan.Current, current.Bundle.Manifest, target.Bundle.Manifest,
@@ -92,12 +151,460 @@ func recoverBackup(
 	return migrateInstallation(ctx, runtimeBoundary, target)
 }
 
+func removeRecoveredVerificationProject(
+	ctx context.Context,
+	runtimeBoundary dockerRuntime,
+	projectInspector RecoveryProjectInspector,
+	current platformcommand.InstallPlan,
+	target platformcommand.InstallPlan,
+) error {
+	deploymentID, err := paasv1.InstallationVerificationDeploymentID(current.InstallationID)
+	if err != nil {
+		return recoveryVerificationConflict()
+	}
+	executorRoot, err := managedPath(
+		current.Root, filepath.FromSlash(layout.ExecutorRoot),
+	)
+	if err != nil {
+		return recoveryVerificationConflict()
+	}
+	state, exists, err := projectInspector.InspectRecoveryProject(
+		executorRoot, recoveryVerificationTenantID, deploymentID,
+	)
+	if err != nil || validateRecoveryProjectIdentity(
+		executorRoot, state, recoveryVerificationTenantID, deploymentID,
+	) != nil {
+		return recoveryVerificationConflict()
+	}
+	inventory, err := inspectRecoveryVerificationInventory(
+		ctx, runtimeBoundary, state.ProjectName,
+	)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		if inventory.container != nil || inventory.network != nil || inventory.volumes != 0 {
+			return recoveryVerificationConflict()
+		}
+		return nil
+	}
+	participants, err := recoveryVerificationParticipants(current, target)
+	if err != nil || validateRecoveryVerificationState(state, participants) != nil {
+		return recoveryVerificationConflict()
+	}
+	if err := validateRecoveryVerificationInventory(
+		ctx, runtimeBoundary, current.InstallationID, state, inventory, participants, false,
+	); err != nil {
+		return err
+	}
+	if inventory.container != nil || inventory.network != nil {
+		_, started, downErr := runtimeBoundary.Run(
+			ctx, nil,
+			"compose", "--ansi", "never", "--progress", "quiet",
+			"--project-name", state.ProjectName,
+			"--project-directory", state.Directory,
+			"--file", state.ObservationDocument,
+			"down", "--remove-orphans", "--timeout", recoveryVerificationDownTimeout,
+		)
+		remaining, observeErr := inspectRecoveryVerificationInventory(
+			ctx, runtimeBoundary, state.ProjectName,
+		)
+		if observeErr != nil {
+			if started {
+				return errors.Join(
+					platformcommand.ErrEffectOutcomeUnknown,
+					errors.New("verification project cleanup outcome is unknown"),
+				)
+			}
+			return observeErr
+		}
+		if remaining.container != nil || remaining.network != nil || remaining.volumes != 0 {
+			if started {
+				return errors.Join(
+					platformcommand.ErrEffectOutcomeUnknown,
+					errors.New("verification project cleanup outcome is unknown"),
+				)
+			}
+			return errors.Join(
+				platformcommand.ErrEffectUnavailable,
+				errors.New("verification project cleanup did not start"),
+			)
+		}
+		if downErr != nil && !started {
+			return errors.Join(
+				platformcommand.ErrEffectUnavailable,
+				errors.New("verification project cleanup did not start"),
+			)
+		}
+	}
+	return removeRecoveredVerificationState(
+		current.Root, executorRoot, projectInspector, state,
+	)
+}
+
+func verifyRecoveredVerificationProject(
+	ctx context.Context,
+	runtimeBoundary dockerRuntime,
+	projectInspector RecoveryProjectInspector,
+	target platformcommand.InstallPlan,
+	verification paasv1.InstallationVerification,
+) error {
+	expectedDeploymentID, err := paasv1.InstallationVerificationDeploymentID(target.InstallationID)
+	if err != nil || verification.DeploymentID != expectedDeploymentID ||
+		verification.Generation == 0 {
+		return recoveryVerificationFailure()
+	}
+	executorRoot, err := managedPath(
+		target.Root, filepath.FromSlash(layout.ExecutorRoot),
+	)
+	if err != nil {
+		return recoveryVerificationFailure()
+	}
+	state, exists, err := projectInspector.InspectRecoveryProject(
+		executorRoot, recoveryVerificationTenantID, expectedDeploymentID,
+	)
+	if err != nil || validateRecoveryProjectIdentity(
+		executorRoot, state, recoveryVerificationTenantID, expectedDeploymentID,
+	) != nil || !exists || state.Generation != verification.Generation {
+		return recoveryVerificationFailure()
+	}
+	participants, err := recoveryVerificationParticipants(target)
+	if err != nil || validateRecoveryVerificationState(state, participants) != nil {
+		return recoveryVerificationFailure()
+	}
+	inventory, err := inspectRecoveryVerificationInventory(
+		ctx, runtimeBoundary, state.ProjectName,
+	)
+	if err != nil {
+		return err
+	}
+	if inventory.container == nil || inventory.network == nil || inventory.volumes != 0 {
+		return recoveryVerificationFailure()
+	}
+	if err := validateRecoveryVerificationInventory(
+		ctx, runtimeBoundary, target.InstallationID, state, inventory, participants, true,
+	); err != nil {
+		return err
+	}
+	return nil
+}
+
+func recoveryVerificationParticipants(
+	plans ...platformcommand.InstallPlan,
+) ([]recoveryVerificationParticipant, error) {
+	participants := make([]recoveryVerificationParticipant, 0, len(plans))
+	seen := make(map[string]struct{}, len(plans))
+	for _, plan := range plans {
+		imageID := ""
+		for _, image := range plan.Bundle.Manifest.Images {
+			if image.Component != "verification" {
+				continue
+			}
+			if imageID != "" || image.ImageID == "" {
+				return nil, errors.New("verification release image identity conflicts")
+			}
+			imageID = image.ImageID
+		}
+		if imageID == "" {
+			return nil, errors.New("verification release image identity is absent")
+		}
+		key := plan.Bundle.Manifest.Release.ID + "\x00" + imageID
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		participants = append(participants, recoveryVerificationParticipant{
+			release: plan.Bundle.Manifest.Release,
+			imageID: imageID,
+		})
+	}
+	if len(participants) == 0 {
+		return nil, errors.New("verification recovery participant is absent")
+	}
+	return participants, nil
+}
+
+func validateRecoveryProjectIdentity(
+	executorRoot string,
+	state RecoveryProjectState,
+	tenantID paasv1.TenantID,
+	deploymentID paasv1.ResourceID,
+) error {
+	if state.TenantID != tenantID || state.DeploymentID != deploymentID ||
+		state.ProjectName == "" || state.ProjectName == "." || state.ProjectName == ".." ||
+		filepath.Base(state.ProjectName) != state.ProjectName ||
+		paasv1.ValidateSafeExternalText(
+			"projectName", state.ProjectName, 128, true,
+		) != nil {
+		return errors.New("verification project identity conflicts")
+	}
+	directory := filepath.Join(executorRoot, "projects", state.ProjectName)
+	if state.Directory != directory || filepath.Clean(state.Directory) != state.Directory ||
+		state.EffectDocument != filepath.Join(directory, "compose.json") ||
+		state.ObservationDocument != filepath.Join(directory, "observe.json") {
+		return errors.New("verification project path conflicts")
+	}
+	return nil
+}
+
+func validateRecoveryVerificationState(
+	state RecoveryProjectState,
+	participants []recoveryVerificationParticipant,
+) error {
+	if state.TenantID != recoveryVerificationTenantID || state.Generation == 0 ||
+		state.SecretFileCount != 0 || len(state.Services) != 1 ||
+		state.Services[0].Name != recoveryVerificationComponent ||
+		state.Services[0].Replicas != 1 {
+		return errors.New("verification project state conflicts")
+	}
+	for _, participant := range participants {
+		if state.Services[0].Image == participant.imageID {
+			return nil
+		}
+	}
+	return errors.New("verification project image is not a recovery participant")
+}
+
+func inspectRecoveryVerificationInventory(
+	ctx context.Context,
+	runtimeBoundary dockerRuntime,
+	project string,
+) (recoveryVerificationInventory, error) {
+	containers, err := listProjectObjects(ctx, runtimeBoundary, "container", project)
+	if err != nil {
+		return recoveryVerificationInventory{}, err
+	}
+	networks, err := listProjectObjects(ctx, runtimeBoundary, "network", project)
+	if err != nil {
+		return recoveryVerificationInventory{}, err
+	}
+	volumes, err := listProjectObjects(ctx, runtimeBoundary, "volume", project)
+	if err != nil {
+		return recoveryVerificationInventory{}, err
+	}
+	if len(containers) > 1 || len(networks) > 1 || len(volumes) != 0 ||
+		(len(containers) == 1 && len(networks) != 1) {
+		return recoveryVerificationInventory{}, recoveryVerificationConflict()
+	}
+	result := recoveryVerificationInventory{volumes: len(volumes)}
+	if len(containers) == 1 {
+		inspection, err := inspectPlatformContainer(ctx, runtimeBoundary, containers[0])
+		if err != nil {
+			return recoveryVerificationInventory{}, err
+		}
+		result.container = &inspection
+	}
+	if len(networks) == 1 {
+		inspection, err := inspectPlatformNetwork(ctx, runtimeBoundary, networks[0])
+		if err != nil {
+			return recoveryVerificationInventory{}, err
+		}
+		result.network = &inspection
+	}
+	return result, nil
+}
+
+func validateRecoveryVerificationInventory(
+	ctx context.Context,
+	runtimeBoundary dockerRuntime,
+	installationID string,
+	state RecoveryProjectState,
+	inventory recoveryVerificationInventory,
+	participants []recoveryVerificationParticipant,
+	requireReady bool,
+) error {
+	if inventory.volumes != 0 {
+		return recoveryVerificationFailure()
+	}
+	if inventory.network != nil && validateRecoveryVerificationNetwork(
+		state, *inventory.network,
+	) != nil {
+		return recoveryVerificationConflict()
+	}
+	if inventory.container == nil {
+		if requireReady {
+			return recoveryVerificationFailure()
+		}
+		return nil
+	}
+	if inventory.network == nil {
+		return recoveryVerificationConflict()
+	}
+	services := map[string]platformExpectedService{
+		recoveryVerificationComponent: {Image: state.Services[0].Image},
+	}
+	if err := loadPlatformServiceHashes(
+		ctx, runtimeBoundary, state.EffectDocument, state.ProjectName, services,
+	); err != nil {
+		return err
+	}
+	if err := validateRecoveryVerificationContainer(
+		installationID, state, *inventory.container, *inventory.network,
+		participants, services[recoveryVerificationComponent].ConfigHash, requireReady,
+	); err != nil {
+		if requireReady {
+			return recoveryVerificationFailure()
+		}
+		return recoveryVerificationConflict()
+	}
+	return nil
+}
+
+func validateRecoveryVerificationContainer(
+	installationID string,
+	state RecoveryProjectState,
+	container platformContainerInspection,
+	network platformNetworkInspection,
+	participants []recoveryVerificationParticipant,
+	configHash string,
+	requireReady bool,
+) error {
+	labels := container.Config.Labels
+	if container.Image != state.Services[0].Image ||
+		labels["com.docker.compose.project"] != state.ProjectName ||
+		labels["com.docker.compose.service"] != recoveryVerificationComponent ||
+		!strings.EqualFold(labels["com.docker.compose.oneoff"], "false") ||
+		labels["com.docker.compose.container-number"] != "1" ||
+		labels["com.docker.compose.project.config_files"] != state.EffectDocument ||
+		labels["com.docker.compose.project.working_dir"] != state.Directory ||
+		labels["com.docker.compose.config-hash"] != configHash ||
+		labels["com.xiak.matrix.application-revision-id"] != string(state.ApplicationRevisionID) ||
+		labels["com.xiak.matrix.component"] != recoveryVerificationComponent ||
+		labels["com.xiak.matrix.content-digest"] != state.ContentDigest ||
+		labels["com.xiak.matrix.deployment-id"] != string(state.DeploymentID) ||
+		labels["com.xiak.matrix.generation"] != strconv.FormatUint(state.Generation, 10) ||
+		labels["com.xiak.matrix.tenant-id"] != string(state.TenantID) {
+		return errors.New("verification container identity conflicts")
+	}
+	participant, found := recoveryVerificationContainerParticipant(
+		installationID, container, participants,
+	)
+	if !found {
+		return errors.New("verification container release identity conflicts")
+	}
+	for key, value := range release.BuiltImageLabels(participant.release, "verification") {
+		if key == release.BuiltImageLabelComponent {
+			continue
+		}
+		if labels[key] != value {
+			return errors.New("verification container build identity conflicts")
+		}
+	}
+	if container.HostConfig.Privileged || len(container.Mounts) != 0 ||
+		container.HostConfig.NetworkMode != state.ProjectName+"_default" ||
+		container.HostConfig.NanoCPUs != 50*1_000_000 ||
+		container.HostConfig.Memory != 64*1024*1024 ||
+		len(platformPortInventory(container.HostConfig.PortBindings)) != 0 ||
+		len(platformPortInventory(container.NetworkSettings.Ports)) != 0 {
+		return errors.New("verification container isolation conflicts")
+	}
+	if len(container.NetworkSettings.Networks) != 1 {
+		return errors.New("verification project network identity conflicts")
+	}
+	for name, attachment := range container.NetworkSettings.Networks {
+		if name != network.Name || attachment.NetworkID != network.ID {
+			return errors.New("verification container network membership conflicts")
+		}
+	}
+	if requireReady && (!container.State.Running || container.State.Status != "running" ||
+		container.State.Health == nil || container.State.Health.Status != "healthy") {
+		return errors.New("verification container is not ready")
+	}
+	return nil
+}
+
+func validateRecoveryVerificationNetwork(
+	state RecoveryProjectState,
+	network platformNetworkInspection,
+) error {
+	if network.Name != state.ProjectName+"_default" || network.Internal ||
+		network.Labels["com.docker.compose.project"] != state.ProjectName ||
+		network.Labels["com.docker.compose.network"] != "default" {
+		return errors.New("verification project network identity conflicts")
+	}
+	return nil
+}
+
+func recoveryVerificationContainerParticipant(
+	installationID string,
+	container platformContainerInspection,
+	participants []recoveryVerificationParticipant,
+) (recoveryVerificationParticipant, bool) {
+	values := make(map[string]string)
+	for _, entry := range container.Config.Env {
+		key, value, found := strings.Cut(entry, "=")
+		if !found || !strings.HasPrefix(key, "MATRIX_") {
+			continue
+		}
+		if _, duplicate := values[key]; duplicate {
+			return recoveryVerificationParticipant{}, false
+		}
+		values[key] = value
+	}
+	if len(values) != 2 || values["MATRIX_INSTALLATION_ID"] != installationID {
+		return recoveryVerificationParticipant{}, false
+	}
+	for _, participant := range participants {
+		if participant.imageID == container.Image &&
+			participant.release.ID == values["MATRIX_RELEASE_ID"] {
+			return participant, true
+		}
+	}
+	return recoveryVerificationParticipant{}, false
+}
+
+func removeRecoveredVerificationState(
+	installationRoot string,
+	executorRoot string,
+	projectInspector RecoveryProjectInspector,
+	state RecoveryProjectState,
+) error {
+	relative, err := filepath.Rel(installationRoot, state.Directory)
+	if err != nil || relative != filepath.Join(
+		filepath.FromSlash(layout.ExecutorRoot), "projects", state.ProjectName,
+	) {
+		return recoveryVerificationConflict()
+	}
+	if err := removeManagedTree(installationRoot, relative); err != nil {
+		return errors.Join(
+			platformcommand.ErrEffectOutcomeUnknown,
+			errors.New("verification project state cleanup outcome is unknown"),
+		)
+	}
+	verificationState, exists, err := projectInspector.InspectRecoveryProject(
+		executorRoot, state.TenantID, state.DeploymentID,
+	)
+	if err != nil || exists || verificationState.ProjectName != state.ProjectName {
+		return errors.Join(
+			platformcommand.ErrEffectOutcomeUnknown,
+			errors.New("verification project state cleanup outcome is unknown"),
+		)
+	}
+	return nil
+}
+
+func recoveryVerificationConflict() error {
+	return errors.Join(
+		platformcommand.ErrEffectConflict,
+		errors.New("verification project is not the fixed recovery probe"),
+	)
+}
+
+func recoveryVerificationFailure() error {
+	return errors.Join(
+		platformcommand.ErrEffectVerification,
+		errors.New("recovered verification project did not converge"),
+	)
+}
+
 func authenticateRecoveryPlan(
 	plan platformcommand.RecoveryPlan,
 ) (platformcommand.InstallPlan, platformcommand.InstallPlan, backupManifest, error) {
 	if plan.Current.Root == "" || plan.Current.Root != plan.Target.Root ||
 		plan.Current.InstallationID == "" ||
 		plan.Current.InstallationID != plan.Target.InstallationID ||
+		plan.Current.CorrelationID == "" ||
+		plan.Current.CorrelationID != plan.Target.CorrelationID ||
 		plan.Current.Listener != plan.Target.Listener || plan.Current.Port != plan.Target.Port ||
 		plan.Current.Trust != plan.Target.Trust ||
 		!bytes.Equal(plan.Current.TrustBytes, plan.Target.TrustBytes) ||
@@ -280,6 +787,7 @@ func verifyRecoveredInstallation(
 	ctx context.Context,
 	runtimeBoundary dockerRuntime,
 	verifier installationVerifier,
+	projectInspector RecoveryProjectInspector,
 	plan platformcommand.RecoveryPlan,
 ) error {
 	current, target, _, err := authenticateRecoveryPlan(plan)
@@ -299,5 +807,11 @@ func verifyRecoveredInstallation(
 	); err != nil {
 		return err
 	}
-	return verifier.Verify(ctx, target)
+	verification, err := verifier.Verify(ctx, target)
+	if err != nil {
+		return err
+	}
+	return verifyRecoveredVerificationProject(
+		ctx, runtimeBoundary, projectInspector, target, verification,
+	)
 }

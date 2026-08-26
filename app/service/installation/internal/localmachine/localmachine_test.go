@@ -20,6 +20,7 @@ import (
 
 	apphostingv1 "github.com/xiak/matrix/api/adapter/apphosting/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
+	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
@@ -791,9 +792,18 @@ func TestRecoverBackupRestoresSelectedSnapshotAndConvergesTarget(t *testing.T) {
 	}
 	runtimeBoundary := newPlatformStartRuntime(plan, expectation)
 	runtimeBoundary.started = true
+	projectInspector := newRecoveryProbeInspector(t, plan)
 	verifier := &recordingInstallationVerifier{}
+	verifier.after = func(verifiedPlan platformcommand.InstallPlan) (paasv1.InstallationVerification, error) {
+		state := projectInspector.provision(t, 2)
+		runtimeBoundary.probe = newRecoveryProbeRuntime(t, verifiedPlan, state)
+		return paasv1.InstallationVerification{
+			DeploymentID: state.DeploymentID, Generation: state.Generation,
+		}, nil
+	}
 	effects := &Effects{
 		runtime: runtimeBoundary, entropy: rand.Reader, verifier: verifier,
+		projectInspector: projectInspector,
 	}
 	backup := platformcommand.BackupPlan{
 		InstalledPlan: installedPlanFrom(plan),
@@ -1237,7 +1247,8 @@ func newInstallPlan(t *testing.T) platformcommand.InstallPlan {
 	}
 	return platformcommand.InstallPlan{
 		Root: root, InstallationID: "mxi-11111111111111111111111111111111",
-		Listener: "0.0.0.0", Port: 8080, Bundle: bundle,
+		CorrelationID: "cmd-11111111111111111111111111111111",
+		Listener:      "0.0.0.0", Port: 8080, Bundle: bundle,
 		Trust: fixture.Trust, TrustBytes: trustBytes,
 	}
 }
@@ -1265,7 +1276,8 @@ func newUpgradePlan(t *testing.T) platformcommand.UpgradePlan {
 	}
 	source := platformcommand.InstallPlan{
 		Root: root, InstallationID: "mxi-11111111111111111111111111111111",
-		Listener: "0.0.0.0", Port: 8080, Bundle: bundles[0],
+		CorrelationID: "cmd-11111111111111111111111111111111",
+		Listener:      "0.0.0.0", Port: 8080, Bundle: bundles[0],
 		Trust: fixtures[0].Trust, TrustBytes: trustBytes,
 	}
 	if err := stageInstallation(source, rand.Reader); err != nil {
@@ -1312,7 +1324,8 @@ func assertReleaseConfiguration(t *testing.T, plan platformcommand.InstallPlan) 
 func installedPlanFrom(plan platformcommand.InstallPlan) platformcommand.InstalledPlan {
 	return platformcommand.InstalledPlan{
 		Root: plan.Root, InstallationID: plan.InstallationID,
-		Listener: plan.Listener, Port: plan.Port,
+		CorrelationID: plan.CorrelationID,
+		Listener:      plan.Listener, Port: plan.Port,
 		ReleaseID:        plan.Bundle.Manifest.Release.ID,
 		ReleaseDigest:    plan.Bundle.ManifestSHA256,
 		TrustKeyID:       plan.Trust.KeyID,
@@ -1461,6 +1474,7 @@ type platformStartRuntime struct {
 	removedContainers         map[string]bool
 	removedNetworks           map[string]bool
 	providerRemovals          int
+	probe                     *recoveryProbeRuntime
 }
 
 type platformCleanupRuntime struct {
@@ -1666,6 +1680,18 @@ func (runtimeBoundary *platformStartRuntime) Run(
 	input io.Reader,
 	arguments ...string,
 ) ([]byte, bool, error) {
+	if runtimeBoundary.probe != nil && runtimeBoundary.probe.handles(arguments) {
+		return runtimeBoundary.probe.Run(context.Background(), input, arguments...)
+	}
+	if len(arguments) >= 2 && arguments[1] == "ls" {
+		for _, argument := range arguments {
+			const prefix = "label=com.docker.compose.project="
+			if strings.HasPrefix(argument, prefix) &&
+				strings.TrimPrefix(argument, prefix) != runtimeBoundary.expectation.Name {
+				return nil, true, nil
+			}
+		}
+	}
 	if len(arguments) == 0 {
 		return nil, false, errors.New("platform start Docker invocation is invalid")
 	}

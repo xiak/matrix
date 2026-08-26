@@ -43,6 +43,7 @@ var (
 type InstallPlan struct {
 	Root           string
 	InstallationID string
+	CorrelationID  string
 	Listener       string
 	Port           uint16
 	Bundle         release.VerifiedBundle
@@ -56,6 +57,7 @@ type InstallPlan struct {
 type InstalledPlan struct {
 	Root             string
 	InstallationID   string
+	CorrelationID    string
 	Listener         string
 	Port             uint16
 	ReleaseID        string
@@ -268,6 +270,7 @@ func (backend *Backend) operation(
 		}
 	}
 	installed := installedPlan(session.Root(), started.Journal)
+	installed.CorrelationID = command.ID
 	var effectErr error
 	switch request.Action {
 	case lifecycle.ActionVerify:
@@ -523,7 +526,8 @@ func (backend *Backend) install(
 
 	plan := InstallPlan{
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
-		Listener: defaultListener, Port: defaultPort, Bundle: verified,
+		CorrelationID: commandID,
+		Listener:      defaultListener, Port: defaultPort, Bundle: verified,
 		Trust: trust, TrustBytes: append([]byte(nil), trustBytes...),
 	}
 	defer clear(plan.TrustBytes)
@@ -649,12 +653,15 @@ func (backend *Backend) upgrade(
 	}
 	targetPlan := InstallPlan{
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
-		Listener: defaultListener, Port: defaultPort, Bundle: targetBundle,
+		CorrelationID: commandID,
+		Listener:      defaultListener, Port: defaultPort, Bundle: targetBundle,
 		Trust: trust, TrustBytes: append([]byte(nil), trustBytes...),
 	}
 	defer clear(targetPlan.TrustBytes)
+	sourcePlan := installedPlan(session.Root(), started.Journal)
+	sourcePlan.CorrelationID = commandID
 	plan := UpgradePlan{
-		Source: installedPlan(session.Root(), started.Journal), Target: targetPlan,
+		Source: sourcePlan, Target: targetPlan,
 		BackupID: backupID, CreatedAt: started.Execution.StartedAt,
 	}
 	return backend.driveReleaseChange(
@@ -763,13 +770,15 @@ func (backend *Backend) rollback(
 	}
 	currentPlan := InstallPlan{
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
-		Listener: defaultListener, Port: defaultPort, Bundle: currentBundle,
+		CorrelationID: commandID,
+		Listener:      defaultListener, Port: defaultPort, Bundle: currentBundle,
 		Trust: trust, TrustBytes: append([]byte(nil), trustBytes...),
 	}
 	defer clear(currentPlan.TrustBytes)
+	previousPlan := previousInstalledPlan(session.Root(), started.Journal)
+	previousPlan.CorrelationID = commandID
 	plan := RollbackPlan{
-		Current:  currentPlan,
-		Previous: previousInstalledPlan(session.Root(), started.Journal),
+		Current: currentPlan, Previous: previousPlan,
 	}
 	return backend.driveReleaseChange(
 		ctx, session, lifecycle.ActionRollback,
@@ -871,13 +880,15 @@ func (backend *Backend) recover(
 	}
 	currentPlan := InstallPlan{
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
-		Listener: defaultListener, Port: defaultPort, Bundle: currentBundle,
+		CorrelationID: commandID,
+		Listener:      defaultListener, Port: defaultPort, Bundle: currentBundle,
 		Trust: trust, TrustBytes: append([]byte(nil), trustBytes...),
 	}
 	defer clear(currentPlan.TrustBytes)
 	targetPlan := InstallPlan{
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
-		Listener: defaultListener, Port: defaultPort, Bundle: targetBundle,
+		CorrelationID: commandID,
+		Listener:      defaultListener, Port: defaultPort, Bundle: targetBundle,
 		Trust: trust, TrustBytes: append([]byte(nil), trustBytes...),
 	}
 	defer clear(targetPlan.TrustBytes)

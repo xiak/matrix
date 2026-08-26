@@ -4,10 +4,31 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"hash"
 	"slices"
 	"strconv"
 )
+
+// InstallationVerificationDeploymentID returns the stable Deployment identity
+// shared by the fixed PaaS probe and the authenticated installation lifecycle.
+// Keeping this derivation in the wire-contract package prevents lifecycle
+// recovery from copying an internal PaaS resource algorithm.
+func InstallationVerificationDeploymentID(installationID string) (ResourceID, error) {
+	if ValidateID("installationId", installationID) != nil {
+		return "", errors.New("installation verification identity is invalid")
+	}
+	digest := sha256.Sum256([]byte(
+		"matrix.installation.verification.v1\x00installation\x00" + installationID,
+	))
+	identity := ResourceID(
+		"installation-verification-deploy-" + hex.EncodeToString(digest[:12]),
+	)
+	if ValidateID("deploymentId", string(identity)) != nil {
+		return "", errors.New("installation verification identity is invalid")
+	}
+	return identity, nil
+}
 
 // ConfigurationValuesDigest returns a deterministic digest without relying
 // on map iteration or ambiguous delimiter escaping.

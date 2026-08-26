@@ -75,9 +75,10 @@ type Config struct {
 }
 
 type Command struct {
-	Credential string
-	RequestID  string
-	Request    paasv1.VerifyInstallationRequest
+	Credential     string
+	RequestID      string
+	IdempotencyKey string
+	Request        paasv1.VerifyInstallationRequest
 }
 
 type Service struct {
@@ -96,6 +97,7 @@ type fixedResources struct {
 	deploymentSpec        paasv1.DeploymentSpec
 	installationToken     string
 	releaseToken          string
+	verificationToken     string
 }
 
 func NewService(iam IAM, applications ApplicationWorkflow, config Config) (*Service, error) {
@@ -122,6 +124,9 @@ func (service *Service) VerifyInstallation(
 	}
 	if ctx == nil || command.Credential == "" ||
 		paasv1.ValidateID("requestId", command.RequestID) != nil ||
+		paasv1.ValidateSafeExternalText(
+			"Idempotency-Key", command.IdempotencyKey, 128, true,
+		) != nil ||
 		paasv1.ValidateVerifyInstallationRequest(command.Request) != nil {
 		return paasv1.InstallationVerification{}, ErrInvalidArgument
 	}
@@ -144,7 +149,7 @@ func (service *Service) VerifyInstallation(
 		return paasv1.InstallationVerification{}, ErrUnavailable
 	}
 
-	resources, err := compileFixedResources(service.config)
+	resources, err := compileFixedResources(service.config, command.IdempotencyKey)
 	if err != nil {
 		return paasv1.InstallationVerification{}, ErrUnavailable
 	}
@@ -195,7 +200,7 @@ func (service *Service) ensureResources(
 		applicationlifecycle.CreateConfigurationRevisionCommand{
 			Authorization:  authorization,
 			Request:        resources.configurationRevision,
-			IdempotencyKey: "verify-" + resources.releaseToken + "-configuration-revision",
+			IdempotencyKey: "verify-" + resources.verificationToken + "-configuration-revision",
 		},
 	); err != nil {
 		return err
@@ -225,7 +230,7 @@ func (service *Service) ensureDeployment(
 			DeploymentID:   resources.deploymentID,
 			Name:           resources.deploymentName,
 			Spec:           resources.deploymentSpec,
-			IdempotencyKey: "verify-" + resources.releaseToken + "-deployment-create",
+			IdempotencyKey: "verify-" + resources.verificationToken + "-deployment-create",
 		})
 		return &result, submitErr
 	}
@@ -246,7 +251,7 @@ func (service *Service) ensureDeployment(
 		ExpectedResourceVersion: current.Metadata.ResourceVersion,
 		IdempotencyKey: fmt.Sprintf(
 			"verify-%s-deployment-rv-%d",
-			resources.releaseToken,
+			resources.verificationToken,
 			current.Metadata.ResourceVersion,
 		),
 	})
@@ -336,15 +341,28 @@ func (service *Service) observe(
 	}, nil
 }
 
-func compileFixedResources(config Config) (fixedResources, error) {
+func compileFixedResources(config Config, idempotencyKey string) (fixedResources, error) {
+	if paasv1.ValidateSafeExternalText(
+		"Idempotency-Key", idempotencyKey, 128, true,
+	) != nil {
+		return fixedResources{}, ErrInvalidArgument
+	}
 	installationToken := identityToken("installation", config.InstallationID)
 	releaseToken := identityToken(
 		"release",
 		config.InstallationID+"\x00"+config.ReleaseID+"\x00"+config.ArtifactDigest,
 	)
+	verificationToken := identityToken(
+		"verification",
+		config.InstallationID+"\x00"+config.ReleaseID+"\x00"+idempotencyKey,
+	)
+	deploymentID, err := paasv1.InstallationVerificationDeploymentID(config.InstallationID)
+	if err != nil {
+		return fixedResources{}, err
+	}
 	applicationID := paasv1.ResourceID("installation-verification-app-" + installationToken)
 	configurationID := paasv1.ResourceID("installation-verification-config-" + installationToken)
-	configurationRevisionID := paasv1.ResourceID("installation-verification-config-rev-" + releaseToken)
+	configurationRevisionID := paasv1.ResourceID("installation-verification-config-rev-" + verificationToken)
 	applicationRevisionID := paasv1.ResourceID("installation-verification-app-rev-" + releaseToken)
 	values := map[string]string{
 		"MATRIX_INSTALLATION_ID": config.InstallationID,
@@ -395,7 +413,7 @@ func compileFixedResources(config Config) (fixedResources, error) {
 		},
 		configurationRevision: paasv1.CreateConfigurationRevisionRequest{
 			ID:   configurationRevisionID,
-			Name: "verification-config-" + releaseToken[:12],
+			Name: "verification-config-" + verificationToken[:12],
 			Spec: configurationSpec,
 		},
 		applicationRevision: paasv1.CreateApplicationRevisionRequest{
@@ -403,10 +421,11 @@ func compileFixedResources(config Config) (fixedResources, error) {
 			Name: "verification-app-" + releaseToken[:12],
 			Spec: applicationSpec,
 		},
-		deploymentID:      paasv1.ResourceID("installation-verification-deploy-" + installationToken),
+		deploymentID:      deploymentID,
 		deploymentName:    "installation-verification",
 		installationToken: installationToken,
 		releaseToken:      releaseToken,
+		verificationToken: verificationToken,
 	}
 	result.deploymentSpec = paasv1.DeploymentSpec{
 		ApplicationRevisionID: applicationRevisionID,

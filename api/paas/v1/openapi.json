@@ -3365,6 +3365,11 @@
     "/v1/installation:verify": {
       "post": {
         "operationId": "verifyInstallation",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {

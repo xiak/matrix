@@ -170,6 +170,9 @@ func buildPaths() schema {
 		"post": schema{
 			"operationId": "verifyInstallation",
 			"summary":     "Run the fixed no-secret installation application probe",
+			"parameters": []any{
+				componentRef("#/components/parameters/IdempotencyKey"),
+			},
 			"security": []any{schema{
 				"MatrixInstallationVerifier": []string{},
 			}},

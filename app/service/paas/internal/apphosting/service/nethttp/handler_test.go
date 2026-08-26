@@ -67,6 +67,7 @@ func TestHandlerUsesOnlyVerifierCredentialForFixedInstallationProbe(t *testing.T
 		ReleaseID:      "matrix-v0.1.0-001",
 	})
 	request.Header.Set("Authorization", "Bearer verifier-credential")
+	request.Header.Set("Idempotency-Key", "verify-installation-test")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
@@ -74,6 +75,7 @@ func TestHandlerUsesOnlyVerifierCredentialForFixedInstallationProbe(t *testing.T
 	}
 	if verifier.calls != 1 || verifier.command.Credential != "Bearer verifier-credential" ||
 		verifier.command.RequestID != "request-test" ||
+		verifier.command.IdempotencyKey != "verify-installation-test" ||
 		verifier.command.Request.InstallationID != "mxi-0123456789abcdef0123456789abcdef" {
 		t.Fatalf("installation verification command=%#v", verifier.command)
 	}
@@ -86,6 +88,7 @@ func TestHandlerUsesOnlyVerifierCredentialForFixedInstallationProbe(t *testing.T
 		ReleaseID:      "matrix-v0.1.0-001",
 	})
 	request.Header.Set("Authorization", "Bearer verifier-credential")
+	request.Header.Set("Idempotency-Key", "verify-installation-test")
 	request.Header.Set("Matrix-Subject-Credential", "user-session")
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)

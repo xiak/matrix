@@ -14,15 +14,17 @@ import (
 // It owns no lifecycle policy; every method delegates one journaled phase to
 // its existing idempotent effect boundary.
 type Effects struct {
-	runtime  dockerRuntime
-	entropy  io.Reader
-	verifier installationVerifier
+	runtime          dockerRuntime
+	entropy          io.Reader
+	verifier         installationVerifier
+	projectInspector RecoveryProjectInspector
 }
 
-func NewEffects() *Effects {
+func NewEffects(projectInspector RecoveryProjectInspector) *Effects {
 	return &Effects{
 		runtime: localDockerRuntime{}, entropy: rand.Reader,
-		verifier: newHTTPInstallationVerifier(nil),
+		verifier:         newHTTPInstallationVerifier(nil),
+		projectInspector: projectInspector,
 	}
 }
 
@@ -55,7 +57,8 @@ func (effects *Effects) ApplyInstallPhase(
 	case lifecycle.PhaseStarting:
 		return startInstallation(ctx, effects.runtime, plan)
 	case lifecycle.PhaseVerifying:
-		return effects.verifier.Verify(ctx, plan)
+		_, err := effects.verifier.Verify(ctx, plan)
+		return err
 	default:
 		return errors.Join(
 			platformcommand.ErrEffectVerification,
@@ -114,7 +117,8 @@ func (effects *Effects) ApplyUpgradePhase(
 	case lifecycle.PhaseStarting:
 		return startUpgrade(ctx, effects.runtime, plan)
 	case lifecycle.PhaseVerifying:
-		return effects.verifier.Verify(ctx, plan.Target)
+		_, err := effects.verifier.Verify(ctx, plan.Target)
+		return err
 	default:
 		return errors.Join(
 			platformcommand.ErrEffectVerification,
@@ -173,7 +177,8 @@ func (effects *Effects) ApplyRecoveryPhase(
 	plan platformcommand.RecoveryPlan,
 	phase lifecycle.Phase,
 ) error {
-	if effects == nil || effects.runtime == nil || effects.verifier == nil || ctx == nil {
+	if effects == nil || effects.runtime == nil || effects.verifier == nil ||
+		effects.projectInspector == nil || ctx == nil {
 		return errors.Join(
 			platformcommand.ErrEffectUnavailable,
 			errors.New("local-machine recovery effects are unavailable"),
@@ -191,12 +196,14 @@ func (effects *Effects) ApplyRecoveryPhase(
 				errors.New("local-machine recovery streaming is unavailable"),
 			)
 		}
-		return recoverBackup(ctx, effects.runtime, streaming, plan)
+		return recoverBackup(
+			ctx, effects.runtime, streaming, effects.projectInspector, plan,
+		)
 	case lifecycle.PhaseStarting:
 		return startInstallation(ctx, effects.runtime, plan.Target)
 	case lifecycle.PhaseVerifying:
 		return verifyRecoveredInstallation(
-			ctx, effects.runtime, effects.verifier, plan,
+			ctx, effects.runtime, effects.verifier, effects.projectInspector, plan,
 		)
 	default:
 		return errors.Join(
@@ -259,7 +266,8 @@ func (effects *Effects) VerifyInstallation(
 	); err != nil {
 		return err
 	}
-	return effects.verifier.Verify(ctx, plan)
+	_, err = effects.verifier.Verify(ctx, plan)
+	return err
 }
 
 var _ platformcommand.Effects = (*Effects)(nil)

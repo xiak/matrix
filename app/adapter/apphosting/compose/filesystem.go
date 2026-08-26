@@ -1,6 +1,7 @@
 package compose
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -281,7 +282,11 @@ func decodeManagedJSON(root, target string, value any) error {
 	if err != nil {
 		return err
 	}
-	decoder := json.NewDecoder(strings.NewReader(string(content)))
+	return decodeStrictJSON(content, value)
+}
+
+func decodeStrictJSON(content []byte, value any) error {
+	decoder := json.NewDecoder(bytes.NewReader(content))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(value); err != nil {
 		return errors.New("managed state is invalid")
@@ -290,6 +295,18 @@ func decodeManagedJSON(root, target string, value any) error {
 		return errors.New("managed state has trailing content")
 	}
 	return nil
+}
+
+func inspectManagedRoot(root string) (string, error) {
+	if root == "" || len(root) > 4096 || !filepath.IsAbs(root) ||
+		filepath.Clean(root) != root || isVolumeRoot(root) {
+		return "", errors.New("binding root is invalid")
+	}
+	info, err := validateExistingPath(root, true)
+	if err != nil || !info.IsDir() || verifySecurePermissions(root, true) != nil {
+		return "", errors.New("binding root is unsafe")
+	}
+	return root, nil
 }
 
 func removeManagedFile(root, target string) error {

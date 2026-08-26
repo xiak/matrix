@@ -872,7 +872,8 @@ func (effects *installEffects) ApplyInstallPhase(
 	}
 	effects.calls[phase]++
 	if plan.Root == "" || plan.InstallationID == "" || plan.Bundle.Manifest.Release.ID == "" ||
-		plan.Trust.KeyID == "" || len(plan.TrustBytes) == 0 || plan.Port == 0 {
+		plan.CorrelationID == "" || plan.Trust.KeyID == "" ||
+		len(plan.TrustBytes) == 0 || plan.Port == 0 {
 		return errors.New("install plan is incomplete")
 	}
 	if phase == effects.failPhase && effects.failErr != nil && (!effects.failOnce || !effects.failed) {
@@ -903,7 +904,8 @@ func (effects *installEffects) ApplyUpgradePhase(
 	effects.upgradePlan = plan
 	if plan.Source.ReleaseID == "" || plan.Source.ReleaseDigest == "" ||
 		plan.Target.Bundle.Manifest.Release.ID == "" || plan.BackupID == "" ||
-		plan.CreatedAt.IsZero() {
+		plan.CreatedAt.IsZero() || plan.Source.CorrelationID == "" ||
+		plan.Source.CorrelationID != plan.Target.CorrelationID {
 		return errors.New("upgrade plan is incomplete")
 	}
 	if phase == effects.upgradeFailPhase && effects.upgradeFailErr != nil &&
@@ -930,7 +932,9 @@ func (effects *installEffects) ApplyRollbackPhase(
 	effects.explicitRollbackCalls[phase]++
 	effects.explicitRollbackPlan = plan
 	if plan.Current.Bundle.Manifest.Release.ID == "" ||
-		plan.Previous.ReleaseID == "" || plan.Previous.ReleaseDigest == "" {
+		plan.Previous.ReleaseID == "" || plan.Previous.ReleaseDigest == "" ||
+		plan.Current.CorrelationID == "" ||
+		plan.Current.CorrelationID != plan.Previous.CorrelationID {
 		return errors.New("explicit rollback plan is incomplete")
 	}
 	if phase == effects.explicitRollbackFailPhase &&
@@ -974,7 +978,9 @@ func (effects *installEffects) ApplyRecoveryPhase(
 		plan.Current.InstallationID != plan.Target.InstallationID ||
 		plan.Current.Bundle.Manifest.Release.ID == "" ||
 		plan.Target.Bundle.Manifest.Release.ID == "" ||
-		plan.BackupID == "" || plan.BackupDigest == "" {
+		plan.BackupID == "" || plan.BackupDigest == "" ||
+		plan.Current.CorrelationID == "" ||
+		plan.Current.CorrelationID != plan.Target.CorrelationID {
 		return errors.New("recovery plan is incomplete")
 	}
 	if phase == effects.recoveryFailPhase && effects.recoveryFailErr != nil &&
@@ -1005,7 +1011,7 @@ func (effects *installEffects) VerifyInstallation(
 	effects.verifyCalls++
 	if plan.Root == "" || plan.InstallationID == "" || plan.ReleaseID == "" ||
 		plan.ReleaseDigest == "" || plan.TrustKeyID == "" || plan.TrustFingerprint == "" ||
-		plan.Port == 0 {
+		plan.Port == 0 || plan.CorrelationID == "" {
 		return errors.New("installed plan is incomplete")
 	}
 	return effects.verifyErr

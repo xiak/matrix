@@ -47,7 +47,8 @@ func authenticateInstalledPlan(
 	}
 	return platformcommand.InstallPlan{
 		Root: installed.Root, InstallationID: installed.InstallationID,
-		Listener: installed.Listener, Port: installed.Port,
+		CorrelationID: installed.CorrelationID,
+		Listener:      installed.Listener, Port: installed.Port,
 		Bundle: bundle, Trust: trust, TrustBytes: trustBytes,
 	}, nil
 }

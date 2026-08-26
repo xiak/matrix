@@ -51,6 +51,30 @@ type projectService struct {
 	Endpoints []paasv1.DeploymentEndpointObservation `json:"endpoints,omitempty"`
 }
 
+// RunningProjectState is the bounded, non-secret proof needed by an
+// installation recovery boundary before it may remove one exact Compose
+// project. Provider-native configuration and ordinary configuration values
+// remain private to the adapter-owned documents.
+type RunningProjectState struct {
+	ProjectName           string
+	Directory             string
+	EffectDocument        string
+	ObservationDocument   string
+	TenantID              paasv1.TenantID
+	DeploymentID          paasv1.ResourceID
+	Generation            uint64
+	ApplicationRevisionID paasv1.ResourceID
+	ContentDigest         string
+	Services              []RunningProjectService
+	SecretFileCount       int
+}
+
+type RunningProjectService struct {
+	Name     string
+	Image    string
+	Replicas uint32
+}
+
 type commandState struct {
 	SchemaVersion string                         `json:"schemaVersion"`
 	CommandID     paasv1.CommandID               `json:"commandId"`
@@ -286,6 +310,134 @@ func loadProjectState(root, path string) (projectState, error) {
 		return projectState{}, errors.New("stored Compose project state is invalid")
 	}
 	return state, nil
+}
+
+// InspectRunningProjectState validates the private binding root, deterministic
+// project identity, current state receipt, and both exact Compose documents.
+// An absent project is reported without creating any filesystem object.
+func InspectRunningProjectState(
+	bindingRoot string,
+	tenantID paasv1.TenantID,
+	deploymentID paasv1.ResourceID,
+) (RunningProjectState, bool, error) {
+	if paasv1.ValidateID("tenantId", string(tenantID)) != nil ||
+		paasv1.ValidateID("deploymentId", string(deploymentID)) != nil {
+		return RunningProjectState{}, false, errors.New("Compose project identity is invalid")
+	}
+	root, err := inspectManagedRoot(bindingRoot)
+	if err != nil {
+		return RunningProjectState{}, false, err
+	}
+	project := projectName(tenantID, deploymentID)
+	directory, err := safeJoin(root, "projects", project)
+	if err != nil {
+		return RunningProjectState{}, false, errors.New("Compose project path is invalid")
+	}
+	result := RunningProjectState{
+		ProjectName: project, Directory: directory,
+		EffectDocument:      filepath.Join(directory, "compose.json"),
+		ObservationDocument: filepath.Join(directory, "observe.json"),
+		TenantID:            tenantID, DeploymentID: deploymentID,
+	}
+	if _, err := validateExistingPath(directory, true); errors.Is(err, os.ErrNotExist) {
+		return result, false, nil
+	} else if err != nil || verifySecurePermissions(directory, true) != nil {
+		return RunningProjectState{}, false, errors.New("stored Compose project is unsafe")
+	}
+	_, composePath, observePath, statePath, err := existingProjectPaths(root, project)
+	if err != nil {
+		return RunningProjectState{}, false, errors.New("stored Compose project is unsafe")
+	}
+	state, err := loadProjectState(root, statePath)
+	if err != nil || state.ProjectName != project || state.TenantID != tenantID ||
+		state.DeploymentID != deploymentID ||
+		state.DesiredState != paasv1.DeploymentDesiredRunning {
+		return RunningProjectState{}, false, errors.New("stored Compose project identity conflicts")
+	}
+	if err := validateRunningProjectDocuments(root, composePath, observePath, state); err != nil {
+		return RunningProjectState{}, false, err
+	}
+	services := make([]RunningProjectService, 0, len(state.Services))
+	for _, service := range state.Services {
+		services = append(services, RunningProjectService{
+			Name: service.Name, Image: service.Image, Replicas: service.Replicas,
+		})
+	}
+	result.Generation = state.Generation
+	result.ApplicationRevisionID = state.ApplicationRevisionID
+	result.ContentDigest = state.ContentDigest
+	result.Services = services
+	result.SecretFileCount = len(state.SecretFiles)
+	return result, true, nil
+}
+
+func validateRunningProjectDocuments(
+	root string,
+	composePath string,
+	observePath string,
+	state projectState,
+) error {
+	effectContent, err := readManagedFile(root, composePath, maxManagedStateBytes)
+	if err != nil {
+		return errors.New("stored Compose effect document is unsafe")
+	}
+	effectDigest := sha256.Sum256(effectContent)
+	if state.DocumentDigest != "sha256:"+hex.EncodeToString(effectDigest[:]) {
+		return errors.New("stored Compose effect document conflicts")
+	}
+	var effect composeDocument
+	if decodeStrictJSON(effectContent, &effect) != nil ||
+		len(effect.Services) != len(state.Services) ||
+		len(effect.Secrets) != len(state.SecretFiles) {
+		return errors.New("stored Compose effect document conflicts")
+	}
+	observationContent, err := readManagedFile(root, observePath, maxManagedStateBytes)
+	if err != nil {
+		return errors.New("stored Compose observation document is unsafe")
+	}
+	var observation observationDocument
+	if decodeStrictJSON(observationContent, &observation) != nil ||
+		len(observation.Services) != len(state.Services) {
+		return errors.New("stored Compose observation document conflicts")
+	}
+	for _, service := range state.Services {
+		effectService, found := effect.Services[service.Name]
+		observedService, observed := observation.Services[service.Name]
+		if !found || !observed || effectService.Image != service.Image ||
+			effectService.PullPolicy != "never" ||
+			effectService.Deploy.Replicas != service.Replicas ||
+			observedService.Image != service.Image || observedService.PullPolicy != "never" ||
+			!runningProjectLabelsMatch(effectService.Labels, state, service.Name) {
+			return errors.New("stored Compose service document conflicts")
+		}
+	}
+	secretPaths := make(map[string]struct{}, len(state.SecretFiles))
+	for _, relative := range state.SecretFiles {
+		secretPaths[relative] = struct{}{}
+	}
+	for name, secret := range effect.Secrets {
+		if secret.File != "secrets/"+name {
+			return errors.New("stored Compose secret document conflicts")
+		}
+		if _, found := secretPaths[secret.File]; !found {
+			return errors.New("stored Compose secret document conflicts")
+		}
+	}
+	return nil
+}
+
+func runningProjectLabelsMatch(
+	labels map[string]string,
+	state projectState,
+	serviceName string,
+) bool {
+	return len(labels) == 6 &&
+		labels["com.xiak.matrix.application-revision-id"] == string(state.ApplicationRevisionID) &&
+		labels["com.xiak.matrix.component"] == serviceName &&
+		labels["com.xiak.matrix.content-digest"] == state.ContentDigest &&
+		labels["com.xiak.matrix.deployment-id"] == string(state.DeploymentID) &&
+		labels["com.xiak.matrix.generation"] == strconv.FormatUint(state.Generation, 10) &&
+		labels["com.xiak.matrix.tenant-id"] == string(state.TenantID)
 }
 
 func commandFile(root, projectDirectory string, commandID paasv1.CommandID) (string, error) {

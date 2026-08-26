@@ -35,7 +35,10 @@ var (
 )
 
 type installationVerifier interface {
-	Verify(context.Context, platformcommand.InstallPlan) error
+	Verify(
+		context.Context,
+		platformcommand.InstallPlan,
+	) (paasv1.InstallationVerification, error)
 }
 
 type verificationCallOutcome uint8
@@ -74,18 +77,19 @@ func newHTTPInstallationVerifier(client *http.Client) *httpInstallationVerifier 
 func (verifier *httpInstallationVerifier) Verify(
 	ctx context.Context,
 	plan platformcommand.InstallPlan,
-) error {
+) (paasv1.InstallationVerification, error) {
 	if verifier == nil || verifier.client == nil || verifier.wait == nil ||
 		verifier.pollInterval <= 0 || verifier.maximumPolls <= 0 || ctx == nil {
-		return errors.Join(
+		return paasv1.InstallationVerification{}, errors.Join(
 			platformcommand.ErrEffectUnavailable,
 			errVerificationEndpointUnavailable,
 		)
 	}
 	if paasv1.ValidateID("installationId", plan.InstallationID) != nil ||
 		paasv1.ValidateID("releaseId", plan.Bundle.Manifest.Release.ID) != nil ||
+		paasv1.ValidateID("correlationId", plan.CorrelationID) != nil ||
 		plan.Port == 0 {
-		return errors.Join(
+		return paasv1.InstallationVerification{}, errors.Join(
 			platformcommand.ErrEffectVerification,
 			errInstallationVerificationFailed,
 		)
@@ -97,24 +101,37 @@ func (verifier *httpInstallationVerifier) Verify(
 	)
 	if err != nil || !validGeneratedCredential(credential, "mx1.", false) {
 		clear(credential)
-		return errors.Join(
+		return paasv1.InstallationVerification{}, errors.Join(
 			platformcommand.ErrEffectVerification,
 			errInstallationVerificationFailed,
 		)
 	}
 	defer clear(credential)
 	endpoint := "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(int(plan.Port)))
+	idempotencyKey := "verify-" + plan.CorrelationID
+	if paasv1.ValidateSafeExternalText(
+		"Idempotency-Key", idempotencyKey, 128, true,
+	) != nil {
+		return paasv1.InstallationVerification{}, verificationFailure()
+	}
 
-	paasResult, err := verifier.pollPaaS(ctx, endpoint, credential, plan)
+	paasResult, err := verifier.pollPaaS(ctx, endpoint, credential, plan, idempotencyKey)
 	if err != nil {
-		return err
+		return paasv1.InstallationVerification{}, err
+	}
+	expectedDeploymentID, err := paasv1.InstallationVerificationDeploymentID(plan.InstallationID)
+	if err != nil || paasResult.DeploymentID != expectedDeploymentID {
+		return paasv1.InstallationVerification{}, verificationFailure()
 	}
 	auditRequest := auditv1.VerifyInstallationRequest{
 		InstallationID: plan.InstallationID,
 		OperationID:    auditv1.OperationID(paasResult.OperationID),
 		DeploymentID:   string(paasResult.DeploymentID),
 	}
-	return verifier.pollAudit(ctx, endpoint, credential, auditRequest)
+	if err := verifier.pollAudit(ctx, endpoint, credential, auditRequest); err != nil {
+		return paasv1.InstallationVerification{}, err
+	}
+	return paasResult, nil
 }
 
 func (verifier *httpInstallationVerifier) pollPaaS(
@@ -122,6 +139,7 @@ func (verifier *httpInstallationVerifier) pollPaaS(
 	endpoint string,
 	credential []byte,
 	plan platformcommand.InstallPlan,
+	idempotencyKey string,
 ) (paasv1.InstallationVerification, error) {
 	request := paasv1.VerifyInstallationRequest{
 		InstallationID: plan.InstallationID,
@@ -131,7 +149,7 @@ func (verifier *httpInstallationVerifier) pollPaaS(
 	for attempt := 0; attempt < verifier.maximumPolls; attempt++ {
 		var result paasv1.InstallationVerification
 		outcome, err := verifier.postJSON(
-			ctx, endpoint+paasVerificationPath, credential, request, &result,
+			ctx, endpoint+paasVerificationPath, credential, idempotencyKey, request, &result,
 		)
 		if err != nil {
 			return paasv1.InstallationVerification{}, err
@@ -180,7 +198,7 @@ func (verifier *httpInstallationVerifier) pollAudit(
 	for attempt := 0; attempt < verifier.maximumPolls; attempt++ {
 		var result auditv1.InstallationVerification
 		outcome, err := verifier.postJSON(
-			ctx, endpoint+auditVerificationPath, credential, request, &result,
+			ctx, endpoint+auditVerificationPath, credential, "", request, &result,
 		)
 		if err != nil {
 			return err
@@ -219,6 +237,7 @@ func (verifier *httpInstallationVerifier) postJSON(
 	ctx context.Context,
 	endpoint string,
 	credential []byte,
+	idempotencyKey string,
 	requestBody any,
 	responseBody any,
 ) (verificationCallOutcome, error) {
@@ -239,7 +258,11 @@ func (verifier *httpInstallationVerifier) postJSON(
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", "Bearer "+string(credential))
+	if idempotencyKey != "" {
+		request.Header.Set("Idempotency-Key", idempotencyKey)
+	}
 	defer request.Header.Del("Authorization")
+	defer request.Header.Del("Idempotency-Key")
 	response, err := verifier.client.Do(request)
 	if err != nil {
 		if ctx.Err() != nil {
