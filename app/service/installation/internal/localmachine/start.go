@@ -25,6 +25,7 @@ type platformComposeExpectation struct {
 type platformExpectedService struct {
 	Image       string                 `json:"image"`
 	Restart     string                 `json:"restart"`
+	User        string                 `json:"user"`
 	ReadOnly    bool                   `json:"read_only"`
 	Init        bool                   `json:"init"`
 	Networks    []string               `json:"networks"`
@@ -77,6 +78,7 @@ type platformContainerInspection struct {
 
 type platformContainerConfig struct {
 	Labels map[string]string `json:"Labels"`
+	User   string            `json:"User"`
 }
 
 type platformContainerState struct {
@@ -499,7 +501,8 @@ func validatePlatformContainer(
 	if err != nil {
 		return errors.New("platform expected tmpfs inventory is invalid")
 	}
-	if inspection.Image != expected.Image || inspection.HostConfig.Privileged ||
+	if inspection.Image != expected.Image || inspection.Config.User != expected.User ||
+		inspection.HostConfig.Privileged ||
 		inspection.HostConfig.ReadonlyRootfs != expected.ReadOnly ||
 		inspection.HostConfig.RestartPolicy.Name != expected.Restart ||
 		platformInitEnabled(inspection.HostConfig.Init) != expected.Init ||

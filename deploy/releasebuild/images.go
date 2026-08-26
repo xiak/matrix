@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	installationrelease "github.com/xiak/matrix/app/service/installation/release"
 )
 
 func writeImageContext(
@@ -41,12 +43,19 @@ func encodeDockerfile(recipe imageRecipe, config Config) ([]byte, error) {
 	document.WriteString("FROM ")
 	document.WriteString(recipe.baseReference)
 	document.WriteByte('\n')
-	document.WriteString("LABEL com.xiak.matrix.release-build=\"true\" ")
-	document.WriteString("com.xiak.matrix.component=\"")
+	document.WriteString("LABEL ")
+	document.WriteString(installationrelease.BuiltImageLabelReleaseBuild)
+	document.WriteString("=\"true\" ")
+	document.WriteString(installationrelease.BuiltImageLabelComponent)
+	document.WriteString("=\"")
 	document.WriteString(recipe.component)
-	document.WriteString("\" com.xiak.matrix.source-commit=\"")
+	document.WriteString("\" ")
+	document.WriteString(installationrelease.BuiltImageLabelSourceCommit)
+	document.WriteString("=\"")
 	document.WriteString(config.SourceCommit)
-	document.WriteString("\" com.xiak.matrix.build-id=\"")
+	document.WriteString("\" ")
+	document.WriteString(installationrelease.BuiltImageLabelBuildID)
+	document.WriteString("=\"")
 	document.WriteString(config.BuildID)
 	document.WriteString("\"\n")
 	for _, name := range recipe.binaries {

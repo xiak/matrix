@@ -61,7 +61,10 @@ func contractDescription() contract {
 		Listener:       "0.0.0.0",
 		Port:           1,
 	}
-	manifest := release.Manifest{Release: release.ReleaseIdentity{ID: "matrix-v0.0.0-000000000000"}}
+	manifest := release.Manifest{Release: release.ReleaseIdentity{
+		ID: "matrix-v0.0.0-000000000000", SourceCommit: strings.Repeat("0", 40),
+		BuildID: "matrix-release-build",
+	}}
 	images := make(map[string]string, len(release.RequiredImages()))
 	for _, requirement := range release.RequiredImages() {
 		images[requirement.Component] = "sha256:" + strings.Repeat("0", 64)
@@ -82,7 +85,8 @@ func contractDescription() contract {
 		Version: ContractVersion,
 		Substitutions: []string{
 			"installationId", "installationRoot", "listenerAddress", "listenerPort",
-			"releaseId", "signedImageIds", "verificationArtifactDigest",
+			"releaseId", "releaseBuildId", "sourceCommit", "signedImageIds",
+			"verificationArtifactDigest",
 		},
 		Compose: document,
 	}
@@ -147,6 +151,7 @@ type serviceConfig struct {
 	Image       string                `json:"image"`
 	PullPolicy  string                `json:"pull_policy"`
 	Restart     string                `json:"restart"`
+	User        string                `json:"user,omitempty"`
 	ReadOnly    bool                  `json:"read_only,omitempty"`
 	Init        bool                  `json:"init,omitempty"`
 	Entrypoint  []string              `json:"entrypoint,omitempty"`
@@ -220,11 +225,16 @@ func compileServices(
 	paasAuditCredential := path.Join(root, layout.PaaSAuditCredential)
 	auditCursorKey := path.Join(root, layout.AuditCursorKey)
 	apisixIAMCredential := path.Join(root, layout.APISIXIAMCredential)
+	apisixRoutes := path.Join(root, layout.APISIXRoutes)
+	apisixConfig := path.Join(root, layout.APISIXConfig)
+	apisixUID := path.Join(root, layout.APISIXUID)
+	apisixNginx := path.Join(root, layout.APISIXNginx)
 	artifactCatalog := path.Join(root, layout.ArtifactCatalog)
 	executorRoot := path.Join(root, layout.ExecutorRoot)
 	workloadSecretRoot := path.Join(root, layout.WorkloadSecretRoot)
 	service := func(
 		name string,
+		component string,
 		image string,
 		networks []string,
 		entrypoint []string,
@@ -242,11 +252,11 @@ func compileServices(
 				Retries: 12, StartPeriod: "10s",
 			},
 			Deploy: deploy{Resources: resources{Limits: limits{CPUs: cpu, Memory: memory}}},
-			Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, name),
+			Labels: platformServiceLabels(options.InstallationID, manifest, component, name),
 		}
 	}
 	postgres := service(
-		"postgres", images["postgres"], []string{"control"}, nil,
+		"postgres", "postgres", images["postgres"], []string{"control"}, nil,
 		"2.0", "2G", "",
 	)
 	postgres.ReadOnly = false
@@ -266,7 +276,7 @@ func compileServices(
 	postgres.Healthcheck.Test = []string{"CMD", "pg_isready", "-U", "matrix", "-d", "matrix"}
 
 	iam := service(
-		"iam", images["iam"], []string{"control"}, []string{"/matrix/bin/matrix-iam"},
+		"iam", "iam", images["iam"], []string{"control"}, []string{"/matrix/bin/matrix-iam"},
 		"1.0", "512M", "http://127.0.0.1:8080/ready",
 	)
 	iam.Environment = map[string]string{
@@ -281,7 +291,7 @@ func compileServices(
 	iam.DependsOn = healthy("postgres")
 
 	audit := service(
-		"audit", images["audit"], []string{"control"}, []string{"/matrix/bin/matrix-audit"},
+		"audit", "audit", images["audit"], []string{"control"}, []string{"/matrix/bin/matrix-audit"},
 		"1.0", "512M", "http://127.0.0.1:8080/ready",
 	)
 	audit.Environment = map[string]string{
@@ -299,7 +309,7 @@ func compileServices(
 	audit.DependsOn = healthy("postgres", "iam")
 
 	iamAudit := service(
-		"iam-audit-dispatcher", images["iam"], []string{"control"},
+		"iam-audit-dispatcher", "iam", images["iam"], []string{"control"},
 		[]string{"/matrix/bin/matrix-iam-audit-dispatcher"},
 		"0.5", "384M", "http://127.0.0.1:8080/ready",
 	)
@@ -317,7 +327,7 @@ func compileServices(
 	iamAudit.DependsOn = healthy("postgres", "audit")
 
 	paasAPI := service(
-		"paas-api", images["paas"], []string{"control"}, []string{"/matrix/bin/matrix-paas"},
+		"paas-api", "paas", images["paas"], []string{"control"}, []string{"/matrix/bin/matrix-paas"},
 		"1.0", "768M", "http://127.0.0.1:8080/ready",
 	)
 	paasAPI.Environment = map[string]string{
@@ -333,10 +343,11 @@ func compileServices(
 		bind(paasAPIDSN, "/run/matrix/paas-api-dsn", true),
 		bind(paasIAMCredential, "/run/matrix/paas-iam-credential", true),
 	}
+	paasAPI.Tmpfs = append(paasAPI.Tmpfs, "/var/lib/docker:rw,noexec,nosuid,size=16m")
 	paasAPI.DependsOn = healthy("postgres", "iam")
 
 	paasWorker := service(
-		"paas-worker", images["paas"], []string{"control"},
+		"paas-worker", "paas", images["paas"], []string{"control"},
 		[]string{"/matrix/bin/matrix-paas-worker"},
 		"2.0", "1G", "http://127.0.0.1:8080/ready",
 	)
@@ -360,10 +371,11 @@ func compileServices(
 		bind(workloadSecretRoot, workloadSecretRoot, true),
 		bind("/var/run/docker.sock", "/var/run/docker.sock", false),
 	}
+	paasWorker.Tmpfs = append(paasWorker.Tmpfs, "/var/lib/docker:rw,noexec,nosuid,size=16m")
 	paasWorker.DependsOn = healthy("postgres")
 
 	paasAudit := service(
-		"paas-audit-dispatcher", images["paas"], []string{"control"},
+		"paas-audit-dispatcher", "paas", images["paas"], []string{"control"},
 		[]string{"/matrix/bin/matrix-paas-audit-dispatcher"},
 		"0.5", "384M", "http://127.0.0.1:8080/ready",
 	)
@@ -378,10 +390,11 @@ func compileServices(
 		bind(paasWorkerDSN, "/run/matrix/paas-worker-dsn", true),
 		bind(paasAuditCredential, "/run/matrix/paas-audit-credential", true),
 	}
+	paasAudit.Tmpfs = append(paasAudit.Tmpfs, "/var/lib/docker:rw,noexec,nosuid,size=16m")
 	paasAudit.DependsOn = healthy("postgres", "audit")
 
 	ui := service(
-		"paas-ui", images["paas-ui"], []string{"web"},
+		"paas-ui", "paas-ui", images["paas-ui"], []string{"web"},
 		[]string{"/matrix/bin/matrix-paas-ui"},
 		"0.5", "256M", "http://127.0.0.1:8080/ready",
 	)
@@ -390,15 +403,24 @@ func compileServices(
 	}
 
 	apisix := service(
-		"apisix", images["apisix"], []string{"control", "web"}, nil,
+		"apisix", "apisix", images["apisix"], []string{"control", "web"}, nil,
 		"1.0", "512M", "http://127.0.0.1:9080/ready",
 	)
+	apisix.User = "0:0"
 	apisix.Environment = map[string]string{"APISIX_STAND_ALONE": "true"}
 	apisix.Ports = []string{net.JoinHostPort(options.Listener, fmt.Sprint(options.Port)) + ":9080/tcp"}
 	apisix.Volumes = []mount{
-		bind(path.Join(root, layout.APISIX), "/usr/local/apisix/conf/apisix.yaml", true),
+		bind(apisixConfig, "/usr/local/apisix/conf/config.yaml", true),
+		bind(apisixRoutes, "/usr/local/apisix/conf/apisix.yaml", true),
+		bind(apisixUID, "/usr/local/apisix/conf/apisix.uid", true),
+		bind(apisixNginx, "/usr/local/apisix/conf/nginx.conf", false),
 		bind(apisixIAMCredential, "/run/matrix/apisix-iam-credential", true),
 	}
+	apisix.Tmpfs = append(
+		apisix.Tmpfs,
+		"/usr/local/apisix/logs:rw,nosuid,size=16m,mode=0700,uid=0,gid=0",
+	)
+	apisix.CapAdd = []string{"CAP_CHOWN", "CAP_SETGID", "CAP_SETUID"}
 	apisix.DependsOn = healthy("audit", "iam", "paas-api", "paas-ui")
 
 	return map[string]serviceConfig{
@@ -407,6 +429,22 @@ func compileServices(
 		"paas-audit-dispatcher": paasAudit, "paas-ui": ui, "paas-worker": paasWorker,
 		"postgres": postgres,
 	}
+}
+
+func platformServiceLabels(
+	installationID string,
+	manifest release.Manifest,
+	component string,
+	role string,
+) map[string]string {
+	labels := ownershipLabels(installationID, manifest.Release.ID, role)
+	if component == "postgres" {
+		return labels
+	}
+	for key, value := range release.BuiltImageLabels(manifest.Release, component) {
+		labels[key] = value
+	}
+	return labels
 }
 
 func verificationArtifactDigest(manifest release.Manifest) string {

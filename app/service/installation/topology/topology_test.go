@@ -2,12 +2,14 @@ package topology
 
 import (
 	"encoding/json"
+	"path"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/release"
 )
 
@@ -47,6 +49,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	foundExecutorRoot := false
 	foundDockerSocket := false
 	foundPostgresData := false
+	foundAPISIXRuntimeBoundary := false
 	expectedEntrypoints := map[string]string{
 		"audit":                 "/matrix/bin/matrix-audit",
 		"iam":                   "/matrix/bin/matrix-iam",
@@ -92,6 +95,12 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			"MATRIX_PAAS_WORKER_SECRET_ROOT",
 		},
 	}
+	expectedImageComponents := map[string]string{
+		"apisix": "apisix", "audit": "audit", "iam": "iam",
+		"iam-audit-dispatcher": "iam", "paas-api": "paas",
+		"paas-audit-dispatcher": "paas", "paas-ui": "paas-ui",
+		"paas-worker": "paas",
+	}
 	for name, raw := range services {
 		service, ok := raw.(map[string]any)
 		if !ok || service["pull_policy"] != "never" {
@@ -105,6 +114,34 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 		image, ok := service["image"].(string)
 		if !ok || !strings.HasPrefix(image, "sha256:") {
 			t.Fatalf("service %q image is not immutable: %#v", name, service["image"])
+		}
+		if name == "apisix" {
+			if service["user"] != "0:0" {
+				t.Fatalf("APISIX runtime user=%#v", service["user"])
+			}
+		} else if _, found := service["user"]; found {
+			t.Fatalf("service %q unexpectedly overrides its image user", name)
+		}
+		labels, ok := service["labels"].(map[string]any)
+		if !ok || labels["com.xiak.matrix.managed"] != "true" ||
+			labels["com.xiak.matrix.installation"] != options.InstallationID ||
+			labels["com.xiak.matrix.release"] != manifest.Release.ID ||
+			labels["com.xiak.matrix.role"] != name {
+			t.Fatalf("service %q ownership labels=%#v", name, service["labels"])
+		}
+		if component, built := expectedImageComponents[name]; built {
+			if labels[release.BuiltImageLabelReleaseBuild] != "true" ||
+				labels[release.BuiltImageLabelComponent] != component ||
+				labels[release.BuiltImageLabelSourceCommit] != manifest.Release.SourceCommit ||
+				labels[release.BuiltImageLabelBuildID] != manifest.Release.BuildID {
+				t.Fatalf("service %q signed build labels=%#v", name, labels)
+			}
+		} else {
+			for key := range release.BuiltImageLabels(manifest.Release, "postgres") {
+				if _, found := labels[key]; found {
+					t.Fatalf("upstream PostgreSQL declares Matrix build label %q", key)
+				}
+			}
 		}
 		if binary, expected := expectedEntrypoints[name]; expected {
 			entrypoint, ok := service["entrypoint"].([]any)
@@ -126,18 +163,8 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 				t.Fatalf("service %q environment keys=%v want=%v", name, actualKeys, keys)
 			}
 		}
-		if name != "postgres" {
-			if _, found := service["cap_add"]; found {
-				t.Fatalf("service %q has unnecessary added capabilities", name)
-			}
-			health, ok := service["healthcheck"].(map[string]any)
-			test, testOK := health["test"].([]any)
-			if !ok || !testOK || len(test) != 3 || test[0] != "CMD" ||
-				test[1] != "/matrix/bin/matrix-health" ||
-				!strings.HasPrefix(test[2].(string), "http://127.0.0.1:") {
-				t.Fatalf("service %q health contract=%#v", name, service["healthcheck"])
-			}
-		} else {
+		switch name {
+		case "postgres":
 			actual := make([]string, 0)
 			for _, value := range service["cap_add"].([]any) {
 				actual = append(actual, value.(string))
@@ -148,6 +175,46 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			if !slices.Equal(actual, expected) {
 				t.Fatalf("PostgreSQL bootstrap capabilities=%v want=%v", actual, expected)
 			}
+		case "apisix":
+			actual := make([]string, 0)
+			for _, value := range service["cap_add"].([]any) {
+				actual = append(actual, value.(string))
+			}
+			expected := []string{"CAP_CHOWN", "CAP_SETGID", "CAP_SETUID"}
+			if !slices.Equal(actual, expected) {
+				t.Fatalf("APISIX bootstrap capabilities=%v want=%v", actual, expected)
+			}
+		default:
+			if _, found := service["cap_add"]; found {
+				t.Fatalf("service %q has unnecessary added capabilities", name)
+			}
+		}
+		if name != "postgres" {
+			health, ok := service["healthcheck"].(map[string]any)
+			test, testOK := health["test"].([]any)
+			if !ok || !testOK || len(test) != 3 || test[0] != "CMD" ||
+				test[1] != "/matrix/bin/matrix-health" ||
+				!strings.HasPrefix(test[2].(string), "http://127.0.0.1:") {
+				t.Fatalf("service %q health contract=%#v", name, service["healthcheck"])
+			}
+		}
+		tmpfsValues := make([]string, 0)
+		for _, value := range service["tmpfs"].([]any) {
+			tmpfsValues = append(tmpfsValues, value.(string))
+		}
+		hasDockerStateTmpfs := slices.Contains(
+			tmpfsValues, "/var/lib/docker:rw,noexec,nosuid,size=16m",
+		)
+		paasImageService := name == "paas-api" || name == "paas-worker" ||
+			name == "paas-audit-dispatcher"
+		if hasDockerStateTmpfs != paasImageService {
+			t.Fatalf("service %q Docker image-volume suppression=%t", name, hasDockerStateTmpfs)
+		}
+		if (name == "apisix") != slices.Contains(
+			tmpfsValues,
+			"/usr/local/apisix/logs:rw,nosuid,size=16m,mode=0700,uid=0,gid=0",
+		) {
+			t.Fatalf("service %q APISIX log runtime boundary=%v", name, tmpfsValues)
 		}
 		if ports, found := service["ports"].([]any); found {
 			portCount += len(ports)
@@ -177,12 +244,49 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 					foundPostgresData = target == "/var/lib/postgresql" && mount["read_only"] != true
 				}
 			}
+			if name == "apisix" {
+				expected := map[string]struct {
+					source   string
+					readOnly bool
+				}{
+					"/usr/local/apisix/conf/config.yaml": {
+						path.Join(options.Root, layout.APISIXConfig), true,
+					},
+					"/usr/local/apisix/conf/apisix.yaml": {
+						path.Join(options.Root, layout.APISIXRoutes), true,
+					},
+					"/usr/local/apisix/conf/apisix.uid": {
+						path.Join(options.Root, layout.APISIXUID), true,
+					},
+					"/usr/local/apisix/conf/nginx.conf": {
+						path.Join(options.Root, layout.APISIXNginx), false,
+					},
+					"/run/matrix/apisix-iam-credential": {
+						path.Join(options.Root, layout.APISIXIAMCredential), true,
+					},
+				}
+				if len(volumes) != len(expected) {
+					t.Fatalf("APISIX mount count=%d want=%d", len(volumes), len(expected))
+				}
+				for _, rawMount := range volumes {
+					mount := rawMount.(map[string]any)
+					target := mount["target"].(string)
+					want, found := expected[target]
+					readOnly, _ := mount["read_only"].(bool)
+					if !found || mount["source"] != want.source || readOnly != want.readOnly {
+						t.Fatalf("APISIX mount=%#v", mount)
+					}
+				}
+				foundAPISIXRuntimeBoundary = true
+			}
 		}
 	}
-	if portCount != 1 || !foundExecutorRoot || !foundDockerSocket || !foundPostgresData {
+	if portCount != 1 || !foundExecutorRoot || !foundDockerSocket || !foundPostgresData ||
+		!foundAPISIXRuntimeBoundary {
 		t.Fatalf(
-			"platform capability closure: ports=%d executor=%t socket=%t postgres-data=%t",
+			"platform capability closure: ports=%d executor=%t socket=%t postgres-data=%t apisix=%t",
 			portCount, foundExecutorRoot, foundDockerSocket, foundPostgresData,
+			foundAPISIXRuntimeBoundary,
 		)
 	}
 	encoded := string(result.ComposeJSON)

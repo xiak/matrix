@@ -7,12 +7,13 @@ import (
 	"strings"
 
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
+	"github.com/xiak/matrix/app/service/installation/release"
 	"github.com/xiak/matrix/app/service/installation/topology"
 )
 
 type migrationCleanupIdentity struct {
 	imageID string
-	role    string
+	labels  map[string]string
 }
 
 func rollbackInstallation(
@@ -153,12 +154,7 @@ func inspectOwnedMigrationContainers(
 		cleanup, found := expected[name]
 		if !found || inspection.Name != "/"+name || inspection.Image != cleanup.imageID ||
 			inspection.Config.Labels["com.docker.compose.project"] != "" ||
-			!ownershipLabelsMatch(inspection.Config.Labels, map[string]string{
-				"com.xiak.matrix.managed":      "true",
-				"com.xiak.matrix.installation": plan.InstallationID,
-				"com.xiak.matrix.release":      plan.Bundle.Manifest.Release.ID,
-				"com.xiak.matrix.role":         cleanup.role,
-			}) {
+			!ownershipLabelsMatch(inspection.Config.Labels, cleanup.labels) {
 			return nil, errors.Join(
 				platformcommand.ErrEffectConflict,
 				errors.New("installation container is not a current migration effect"),
@@ -195,9 +191,21 @@ func expectedMigrationCleanupIdentities(
 				projectName,
 				"migration", migration.name, mode,
 			}, "-")
+			role := "migration-" + migration.name
+			labels := map[string]string{
+				"com.xiak.matrix.managed":      "true",
+				"com.xiak.matrix.installation": plan.InstallationID,
+				"com.xiak.matrix.release":      plan.Bundle.Manifest.Release.ID,
+				"com.xiak.matrix.role":         role,
+			}
+			for key, value := range release.BuiltImageLabels(
+				plan.Bundle.Manifest.Release, migration.component,
+			) {
+				labels[key] = value
+			}
 			result[name] = migrationCleanupIdentity{
 				imageID: imageID,
-				role:    "migration-" + migration.name,
+				labels:  labels,
 			}
 		}
 	}
@@ -221,7 +229,7 @@ func removeOwnedProviderObjects(
 	for _, identity := range identities {
 		arguments := []string{objectType, "rm"}
 		if objectType == "container" {
-			arguments = append(arguments, "--force")
+			arguments = append(arguments, "--force", "--volumes")
 		}
 		arguments = append(arguments, identity)
 		_, started, err := runtimeBoundary.Run(ctx, nil, arguments...)

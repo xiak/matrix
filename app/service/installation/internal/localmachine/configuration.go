@@ -59,6 +59,39 @@ func publishInstallationConfiguration(
 		return errors.Join(platformcommand.ErrEffectConflict, err)
 	}
 
+	catalog, err := artifactCatalogConfig(manifest)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	if err := writeManagedOnce(
+		root, filepath.FromSlash(layout.ArtifactCatalog), catalog,
+	); err != nil {
+		return errors.Join(platformcommand.ErrEffectConflict, err)
+	}
+	if err := writeManagedOnce(
+		root, filepath.FromSlash(layout.APISIXRoutes), apisixStandaloneConfig(),
+	); err != nil {
+		return errors.Join(platformcommand.ErrEffectConflict, err)
+	}
+	if err := writeManagedOnce(
+		root, filepath.FromSlash(layout.APISIXConfig), apisixMainConfig(),
+	); err != nil {
+		return errors.Join(platformcommand.ErrEffectConflict, err)
+	}
+	if err := writeManagedOnce(
+		root, filepath.FromSlash(layout.APISIXUID), []byte(compiled.ProjectName),
+	); err != nil {
+		return errors.Join(platformcommand.ErrEffectConflict, err)
+	}
+	if err := ensureManagedMutableFile(
+		root, filepath.FromSlash(layout.APISIXNginx), []byte("\n"),
+	); err != nil {
+		return errors.Join(platformcommand.ErrEffectConflict, err)
+	}
+	return nil
+}
+
+func artifactCatalogConfig(manifest release.Manifest) ([]byte, error) {
 	entries := make([]apphostingv1.ArtifactCatalogEntry, 0)
 	for _, image := range manifest.Images {
 		if image.Purpose == release.ImageWorkload {
@@ -76,19 +109,32 @@ func publishInstallationConfiguration(
 		Entries:    entries,
 	})
 	if err != nil {
-		return errors.Join(platformcommand.ErrEffectVerification, err)
+		return nil, err
 	}
-	if err := writeManagedOnce(
-		root, filepath.FromSlash(layout.ArtifactCatalog), catalog,
-	); err != nil {
-		return errors.Join(platformcommand.ErrEffectConflict, err)
-	}
-	if err := writeManagedOnce(
-		root, filepath.FromSlash(layout.APISIX), apisixStandaloneConfig(),
-	); err != nil {
-		return errors.Join(platformcommand.ErrEffectConflict, err)
-	}
-	return nil
+	return catalog, nil
+}
+
+func apisixMainConfig() []byte {
+	return []byte(`deployment:
+  role: data_plane
+  role_data_plane:
+    config_provider: yaml
+plugins:
+  - proxy-rewrite
+  - serverless-pre-function
+stream_plugins: []
+nginx_config:
+  user: root
+  error_log: /dev/stderr
+  http:
+    access_log: /dev/stdout
+  http_configuration_snippet: |
+    client_body_temp_path /tmp/client_body_temp;
+    proxy_temp_path /tmp/proxy_temp;
+    fastcgi_temp_path /tmp/fastcgi_temp;
+    uwsgi_temp_path /tmp/uwsgi_temp;
+    scgi_temp_path /tmp/scgi_temp;
+`)
 }
 
 func apisixStandaloneConfig() []byte {
@@ -96,16 +142,17 @@ func apisixStandaloneConfig() []byte {
   -
     id: matrix-ready
     uri: /ready
+    priority: 1000
     plugins:
-      proxy-rewrite:
-        headers:
-          remove:
-            - Authorization
-            - Matrix-Subject-Credential
-    upstream:
-      type: roundrobin
-      nodes:
-        "paas-ui:8080": 1
+      serverless-pre-function:
+        phase: rewrite
+        functions:
+          - |
+            return function()
+              ngx.header["Content-Type"] = "application/json"
+              ngx.say('{"status":"ready"}')
+              return ngx.exit(200)
+            end
   -
     id: matrix-iam
     uri: /api/iam/*

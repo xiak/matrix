@@ -49,15 +49,34 @@ func verifiedInstallationConfiguration(
 	if err != nil {
 		return verifiedInstallation{}, err
 	}
-	compose, err := readManagedFile(
-		plan.Root,
-		filepath.FromSlash(layout.Compose),
-		maximumManagedFileBytes,
-	)
-	if err != nil || !bytes.Equal(compose, compiled.ComposeJSON) {
-		return verifiedInstallation{}, errors.New(
-			"generated Compose topology differs from authenticated release input",
+	catalog, err := artifactCatalogConfig(staged.Manifest)
+	if err != nil {
+		return verifiedInstallation{}, errors.New("generated artifact catalog is invalid")
+	}
+	expectedFiles := []struct {
+		path    string
+		content []byte
+	}{
+		{layout.Compose, compiled.ComposeJSON},
+		{layout.ArtifactCatalog, catalog},
+		{layout.APISIXRoutes, apisixStandaloneConfig()},
+		{layout.APISIXConfig, apisixMainConfig()},
+		{layout.APISIXUID, []byte(compiled.ProjectName)},
+	}
+	for _, expected := range expectedFiles {
+		content, readErr := readManagedFile(
+			plan.Root, filepath.FromSlash(expected.path), maximumManagedFileBytes,
 		)
+		if readErr != nil || !bytes.Equal(content, expected.content) {
+			return verifiedInstallation{}, errors.New(
+				"generated installation configuration differs from authenticated input",
+			)
+		}
+	}
+	if _, err := readManagedFile(
+		plan.Root, filepath.FromSlash(layout.APISIXNginx), maximumManagedFileBytes,
+	); err != nil {
+		return verifiedInstallation{}, errors.New("APISIX runtime configuration is unsafe")
 	}
 	composePath, err := managedPath(plan.Root, filepath.FromSlash(layout.Compose))
 	if err != nil {

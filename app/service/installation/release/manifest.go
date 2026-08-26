@@ -10,6 +10,11 @@ const (
 	TrustAPIVersion    = "installation.matrix.xiak.com/v1"
 	TrustKind          = "ReleaseTrustRoot"
 	SignatureAlgorithm = "Ed25519"
+
+	BuiltImageLabelReleaseBuild = "com.xiak.matrix.release-build"
+	BuiltImageLabelComponent    = "com.xiak.matrix.component"
+	BuiltImageLabelSourceCommit = "com.xiak.matrix.source-commit"
+	BuiltImageLabelBuildID      = "com.xiak.matrix.build-id"
 )
 
 type Manifest struct {
@@ -103,5 +108,17 @@ func RequiredImages() []ImageRequirement {
 		{Component: "paas-ui", Purpose: ImagePlatform, HealthContract: "paas-ui-ready-v1"},
 		{Component: "postgres", Purpose: ImagePlatform, HealthContract: "postgres-ready-schema-v1"},
 		{Component: "verification", Purpose: ImageWorkload, HealthContract: "application-probe-v1"},
+	}
+}
+
+// BuiltImageLabels is the authenticated build-metadata surface inherited by
+// every Matrix-built release image. The fixed upstream PostgreSQL image is not
+// Matrix-built and callers intentionally do not apply these labels to it.
+func BuiltImageLabels(identity ReleaseIdentity, component string) map[string]string {
+	return map[string]string{
+		BuiltImageLabelReleaseBuild: "true",
+		BuiltImageLabelComponent:    component,
+		BuiltImageLabelSourceCommit: identity.SourceCommit,
+		BuiltImageLabelBuildID:      identity.BuildID,
 	}
 }

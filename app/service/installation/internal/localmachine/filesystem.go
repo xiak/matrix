@@ -163,6 +163,35 @@ func writeManagedOnce(root, relative string, content []byte) error {
 	return verifyManagedPermissions(target, false)
 }
 
+// ensureManagedMutableFile creates a private provider-owned runtime file once.
+// Replays prove its type, owner, mode, containment, and size without comparing
+// content because the fixed provider is expected to rewrite it in place.
+func ensureManagedMutableFile(root, relative string, initial []byte) error {
+	if len(initial) == 0 || len(initial) > maximumManagedFileBytes {
+		return errors.New("installation-owned mutable content exceeds its bound")
+	}
+	target, err := managedPath(root, relative)
+	if err != nil {
+		return err
+	}
+	if _, err := ensureManagedDirectory(root, filepath.Dir(relative)); err != nil {
+		return err
+	}
+	info, err := os.Lstat(target)
+	if errors.Is(err, os.ErrNotExist) {
+		return writeManagedOnce(root, relative, initial)
+	}
+	if err != nil || managedPathIsLink(target, info) || !info.Mode().IsRegular() ||
+		info.Size() < 0 || info.Size() > maximumManagedFileBytes ||
+		verifyManagedPermissions(target, false) != nil {
+		return errManagedConflict
+	}
+	if _, err := readManagedFile(root, relative, maximumManagedFileBytes); err != nil {
+		return errManagedConflict
+	}
+	return nil
+}
+
 func readManagedFile(root, relative string, maximum int64) ([]byte, error) {
 	if maximum <= 0 || maximum > maximumManagedFileBytes {
 		return nil, errors.New("installation-owned read bound is invalid")

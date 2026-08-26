@@ -7,7 +7,10 @@ const (
 	ReleaseTrust    = "config/release-trust.json"
 	Compose         = "config/compose.json"
 	ArtifactCatalog = "config/artifact-catalog.json"
-	APISIX          = "config/apisix.yaml"
+	APISIXRoutes    = "config/apisix.yaml"
+	APISIXConfig    = "config/apisix-config.yaml"
+	APISIXUID       = "config/apisix.uid"
+	APISIXNginx     = "runtime/apisix/nginx.conf"
 
 	PostgresPassword  = "secrets/database/postgres-superuser-password"
 	PostgresMigration = "secrets/database/postgres-migration-dsn"
