@@ -27,7 +27,7 @@
 
 - The branch contains commit `001d889`; FEAT-004 Gate C is accepted and pushed
   in `2b7e398`, FEAT-005 Gate A is accepted and pushed in `83502b0`, and the
-  current durable implementation head is `13ce031`. The fixed donor baselines
+  current durable implementation head is `aef5ee5`. The fixed donor baselines
   remain those listed below.
 - FEAT-001, FEAT-002, and FEAT-003 Gate A/Gate B are Accepted. The public model
   is Application, immutable ApplicationRevision, Deployment,
@@ -153,8 +153,14 @@
   four-target builds. Commit `13ce031` binds the signed verification WORKLOAD
   digest and running installation/release identity into the PaaS process and
   exposes only the fixed no-secret application probe through dedicated APISIX
-  routes. Installation-side verification polling, the concrete provider
-  runner, `mx` wiring, and platform image assembly remain unwired.
+  routes. Commit `aef5ee5` adds the installation-side loopback APISIX client:
+  it reads only the protected verifier credential, polls the exact PaaS
+  release-bound Deployment/Operation, then polls Audit for that delivered fact
+  and bounded chain proof with strict response and leakage bounds. The concrete
+  local-machine Effects compose the existing journaled phases, and the real
+  `mx` process now wires install, signal handling, normalized streams, and
+  stable exits. Platform image/release assembly and the non-install lifecycle
+  actions remain unwired.
 - FEAT-006 Gate A and Gate B are Accepted. Target design and fixed-donor
   adoption remain `506f6d7` and `932252e`; the accepted authority contracts,
   pure behavior, and separate IAM/Audit PostgreSQL owners, migrators, runtime
@@ -197,12 +203,13 @@
 
 ## Next concrete work
 
-1. Add the installation-side fixed PaaS/Audit clients and bounded verification
-   polling; then complete the concrete local-machine provider runner and wire
-   it behind `mx`.
-2. Assemble the real IAM, Audit, PaaS, dispatcher, APISIX, UI, PostgreSQL, and
-   verification images plus signed releases A/B from exact release content.
-3. Prove the external-network-disabled Compose
+1. Assemble the real IAM, Audit, PaaS, dispatcher, APISIX, UI, PostgreSQL, and
+   verification images plus a signed release A from exact release content;
+   prove a clean external-network-disabled install reaches the fixed
+   PaaS/Audit verification result.
+2. Implement the remaining durable verify/status/backup/upgrade/rollback/
+   recovery/support actions, then assemble release B and failed candidates.
+3. Prove the complete external-network-disabled Compose
    install, verification, operations, upgrade, rollback, backup/recovery, and
    support-evidence E2E required for FEAT-005 Gate B/C and FEAT-006 Gate C.
 
