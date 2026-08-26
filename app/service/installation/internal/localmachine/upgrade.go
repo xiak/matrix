@@ -81,33 +81,50 @@ func rollbackUpgrade(
 	verifier installationVerifier,
 	plan platformcommand.UpgradePlan,
 ) error {
-	source, err := authenticateInstalledPlan(plan.Source)
+	rollback := platformcommand.RollbackPlan{
+		Current: plan.Target, Previous: plan.Source,
+	}
+	if err := prepareReleaseRollback(ctx, runtimeBoundary, rollback); err != nil {
+		return err
+	}
+	if err := startPreviousRelease(ctx, runtimeBoundary, rollback); err != nil {
+		return err
+	}
+	return verifyPreviousRelease(ctx, runtimeBoundary, verifier, rollback)
+}
+
+func prepareReleaseRollback(
+	ctx context.Context,
+	runtimeBoundary dockerRuntime,
+	plan platformcommand.RollbackPlan,
+) error {
+	source, err := authenticateInstalledPlan(plan.Previous)
 	if err != nil {
 		return errors.Join(platformcommand.ErrEffectVerification, err)
 	}
 	defer clear(source.TrustBytes)
-	if err := validateUpgradeIdentity(source, plan.Target); err != nil {
+	if err := validateUpgradeIdentity(source, plan.Current); err != nil {
 		return errors.Join(platformcommand.ErrEffectVerification, err)
 	}
 
-	state, err := inspectUpgradeProject(ctx, runtimeBoundary, source, plan.Target)
+	state, err := inspectUpgradeProject(ctx, runtimeBoundary, source, plan.Current)
 	if err != nil {
 		return err
 	}
 	switch state.releaseID {
-	case plan.Target.Bundle.Manifest.Release.ID:
-		staged, verifyErr := verifiedStagedBundle(plan.Target)
+	case plan.Current.Bundle.Manifest.Release.ID:
+		staged, verifyErr := verifiedStagedBundle(plan.Current)
 		if verifyErr != nil {
 			return errors.Join(platformcommand.ErrEffectVerification, verifyErr)
 		}
-		target := plan.Target
+		target := plan.Current
 		target.Bundle = staged
 		if err := rollbackInstallation(ctx, runtimeBoundary, target); err != nil {
 			return err
 		}
 	case source.Bundle.Manifest.Release.ID, "":
 		if err := removeUpgradeMigrationContainers(
-			ctx, runtimeBoundary, plan.Target, state.projectName, state.project,
+			ctx, runtimeBoundary, plan.Current, state.projectName, state.project,
 		); err != nil {
 			return err
 		}
@@ -118,11 +135,40 @@ func rollbackUpgrade(
 		)
 	}
 
-	if err := restoreUpgradeConfiguration(plan); err != nil {
-		return err
+	return restoreUpgradeConfiguration(platformcommand.UpgradePlan{
+		Source: plan.Previous, Target: plan.Current,
+	})
+}
+
+func startPreviousRelease(
+	ctx context.Context,
+	runtimeBoundary dockerRuntime,
+	plan platformcommand.RollbackPlan,
+) error {
+	source, err := authenticateInstalledPlan(plan.Previous)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, err)
 	}
-	if err := startInstallation(ctx, runtimeBoundary, source); err != nil {
-		return err
+	defer clear(source.TrustBytes)
+	if err := validateUpgradeIdentity(source, plan.Current); err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	return startInstallation(ctx, runtimeBoundary, source)
+}
+
+func verifyPreviousRelease(
+	ctx context.Context,
+	runtimeBoundary dockerRuntime,
+	verifier installationVerifier,
+	plan platformcommand.RollbackPlan,
+) error {
+	source, err := authenticateInstalledPlan(plan.Previous)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	defer clear(source.TrustBytes)
+	if err := validateUpgradeIdentity(source, plan.Current); err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, err)
 	}
 	installation, _, _, err := inspectReadyInstalledPlatform(
 		ctx, runtimeBoundary, source,

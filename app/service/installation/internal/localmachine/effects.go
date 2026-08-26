@@ -139,6 +139,35 @@ func (effects *Effects) RollbackUpgrade(
 	return rollbackUpgrade(ctx, effects.runtime, effects.verifier, plan)
 }
 
+func (effects *Effects) ApplyRollbackPhase(
+	ctx context.Context,
+	plan platformcommand.RollbackPlan,
+	phase lifecycle.Phase,
+) error {
+	if effects == nil || effects.runtime == nil || effects.verifier == nil || ctx == nil {
+		return errors.Join(
+			platformcommand.ErrEffectUnavailable,
+			errors.New("local-machine explicit rollback is unavailable"),
+		)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	switch phase {
+	case lifecycle.PhaseRollingBack:
+		return prepareReleaseRollback(ctx, effects.runtime, plan)
+	case lifecycle.PhaseStarting:
+		return startPreviousRelease(ctx, effects.runtime, plan)
+	case lifecycle.PhaseVerifying:
+		return verifyPreviousRelease(ctx, effects.runtime, effects.verifier, plan)
+	default:
+		return errors.Join(
+			platformcommand.ErrEffectVerification,
+			errors.New("local-machine rollback phase is invalid"),
+		)
+	}
+}
+
 // ObserveInstallation reads only authenticated installation-owned files and
 // Docker provider state. It never invokes Compose convergence or migrations.
 func (effects *Effects) ObserveInstallation(

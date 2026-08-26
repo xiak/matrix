@@ -287,6 +287,103 @@ func TestUpgradeRejectsSkippedPredecessorWithoutStartingACommand(t *testing.T) {
 	}
 }
 
+func TestExplicitRollbackReplaysUnknownOutcomeAndCommitsOnlyTheSignedPredecessor(t *testing.T) {
+	fixtures := writeReleaseSequence(t, 2)
+	effects := &installEffects{
+		observeReady:              true,
+		explicitRollbackFailPhase: lifecycle.PhaseRollingBack,
+		explicitRollbackFailErr:   ErrEffectOutcomeUnknown,
+		explicitRollbackFailOnce:  true,
+	}
+	backend := newTestBackend(t, effects)
+	root := filepath.Join(t.TempDir(), "matrix")
+	if _, err := backend.Run(
+		context.Background(), installRequest(root, fixtures[0]),
+	); err != nil {
+		t.Fatalf("install rollback source: %v", err)
+	}
+	materializeInstalledRelease(t, root, fixtures[0])
+	if _, err := backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[1].Root,
+	}); err != nil {
+		t.Fatalf("upgrade rollback fixture: %v", err)
+	}
+	materializeInstalledRelease(t, root, fixtures[1])
+
+	request := cli.Request{Action: lifecycle.ActionRollback, Root: root}
+	_, err := backend.Run(context.Background(), request)
+	assertFault(t, err, cli.FaultUnavailable, "EFFECT_OUTCOME_UNKNOWN")
+	active := readJournal(t, root)
+	if active.Active == nil || active.Active.Command.Action != lifecycle.ActionRollback ||
+		active.Active.Phase != lifecycle.PhaseRollingBack ||
+		active.CurrentReleaseID != fixtures[1].Manifest.Release.ID ||
+		active.PreviousRelease != fixtures[0].Manifest.Release.ID {
+		t.Fatalf("unknown rollback journal = %#v", active)
+	}
+	commandID := active.Active.Command.ID
+
+	result, err := backend.Run(context.Background(), request)
+	if err != nil || !result.Changed || result.State != "READY" ||
+		result.ReleaseID != fixtures[0].Manifest.Release.ID || result.PreviousID != "" ||
+		result.CorrelationID != commandID {
+		t.Fatalf("resumed rollback result = %#v / %v", result, err)
+	}
+	for _, phase := range []lifecycle.Phase{
+		lifecycle.PhaseRollingBack, lifecycle.PhaseStarting, lifecycle.PhaseVerifying,
+	} {
+		want := 1
+		if phase == lifecycle.PhaseRollingBack {
+			want = 2
+		}
+		if effects.explicitRollbackCalls[phase] != want {
+			t.Fatalf("rollback phase %s calls = %d, want %d", phase, effects.explicitRollbackCalls[phase], want)
+		}
+	}
+	if effects.observeCalls != 1 ||
+		effects.explicitRollbackPlan.Current.Bundle.Manifest.Release.ID != fixtures[1].Manifest.Release.ID ||
+		effects.explicitRollbackPlan.Previous.ReleaseID != fixtures[0].Manifest.Release.ID {
+		t.Fatalf("rollback preflight/plan = calls:%d plan:%#v", effects.observeCalls, effects.explicitRollbackPlan)
+	}
+	completed := readJournal(t, root)
+	if completed.CurrentReleaseID != fixtures[0].Manifest.Release.ID ||
+		completed.CurrentReleaseDigest != fixtures[0].ManifestDigest ||
+		completed.PreviousRelease != "" || completed.PreviousReleaseDigest != "" ||
+		completed.Active != nil || completed.Last == nil ||
+		completed.Last.Command.ID != commandID ||
+		completed.Last.Outcome != lifecycle.OutcomeSucceeded {
+		t.Fatalf("completed rollback journal = %#v", completed)
+	}
+}
+
+func TestExplicitRollbackRequiresReadyCurrentReleaseBeforePersistingIntent(t *testing.T) {
+	fixtures := writeReleaseSequence(t, 2)
+	effects := &installEffects{}
+	backend := newTestBackend(t, effects)
+	root := filepath.Join(t.TempDir(), "matrix")
+	if _, err := backend.Run(
+		context.Background(), installRequest(root, fixtures[0]),
+	); err != nil {
+		t.Fatalf("install rollback preflight source: %v", err)
+	}
+	materializeInstalledRelease(t, root, fixtures[0])
+	if _, err := backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[1].Root,
+	}); err != nil {
+		t.Fatalf("upgrade rollback preflight fixture: %v", err)
+	}
+	materializeInstalledRelease(t, root, fixtures[1])
+	before := readJournal(t, root)
+
+	_, err := backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionRollback, Root: root,
+	})
+	assertFault(t, err, cli.FaultPrecondition, "ROLLBACK_SOURCE_NOT_READY")
+	if after := readJournal(t, root); !reflect.DeepEqual(after, before) ||
+		len(effects.explicitRollbackCalls) != 0 {
+		t.Fatalf("rollback precondition changed state: before=%#v after=%#v calls=%#v", before, after, effects.explicitRollbackCalls)
+	}
+}
+
 func TestStatusIsReadOnlyForStableAndActiveInstallations(t *testing.T) {
 	fixture := writeReleaseFixture(t)
 	effects := &installEffects{observeReady: true}
@@ -532,34 +629,40 @@ func TestSupportBindsOwnedOutputWithoutPersistingItsPath(t *testing.T) {
 }
 
 type installEffects struct {
-	calls                map[lifecycle.Phase]int
-	failPhase            lifecycle.Phase
-	failErr              error
-	failOnce             bool
-	failed               bool
-	rollbackCalls        int
-	rollbackErr          error
-	rollbackFailOnce     bool
-	rollbackFailed       bool
-	observeCalls         int
-	observeReady         bool
-	observeErr           error
-	verifyCalls          int
-	verifyErr            error
-	backupCalls          int
-	backupErr            error
-	backupPlan           BackupPlan
-	supportCalls         int
-	supportErr           error
-	supportPlan          SupportPlan
-	upgradeCalls         map[lifecycle.Phase]int
-	upgradePlan          UpgradePlan
-	upgradeFailPhase     lifecycle.Phase
-	upgradeFailErr       error
-	upgradeFailOnce      bool
-	upgradeFailed        bool
-	upgradeRollbackCalls int
-	upgradeRollbackErr   error
+	calls                     map[lifecycle.Phase]int
+	failPhase                 lifecycle.Phase
+	failErr                   error
+	failOnce                  bool
+	failed                    bool
+	rollbackCalls             int
+	rollbackErr               error
+	rollbackFailOnce          bool
+	rollbackFailed            bool
+	observeCalls              int
+	observeReady              bool
+	observeErr                error
+	verifyCalls               int
+	verifyErr                 error
+	backupCalls               int
+	backupErr                 error
+	backupPlan                BackupPlan
+	supportCalls              int
+	supportErr                error
+	supportPlan               SupportPlan
+	upgradeCalls              map[lifecycle.Phase]int
+	upgradePlan               UpgradePlan
+	upgradeFailPhase          lifecycle.Phase
+	upgradeFailErr            error
+	upgradeFailOnce           bool
+	upgradeFailed             bool
+	upgradeRollbackCalls      int
+	upgradeRollbackErr        error
+	explicitRollbackCalls     map[lifecycle.Phase]int
+	explicitRollbackPlan      RollbackPlan
+	explicitRollbackFailPhase lifecycle.Phase
+	explicitRollbackFailErr   error
+	explicitRollbackFailOnce  bool
+	explicitRollbackFailed    bool
 }
 
 func (effects *installEffects) ApplyInstallPhase(
@@ -617,6 +720,29 @@ func (effects *installEffects) ApplyUpgradePhase(
 func (effects *installEffects) RollbackUpgrade(context.Context, UpgradePlan) error {
 	effects.upgradeRollbackCalls++
 	return effects.upgradeRollbackErr
+}
+
+func (effects *installEffects) ApplyRollbackPhase(
+	_ context.Context,
+	plan RollbackPlan,
+	phase lifecycle.Phase,
+) error {
+	if effects.explicitRollbackCalls == nil {
+		effects.explicitRollbackCalls = make(map[lifecycle.Phase]int)
+	}
+	effects.explicitRollbackCalls[phase]++
+	effects.explicitRollbackPlan = plan
+	if plan.Current.Bundle.Manifest.Release.ID == "" ||
+		plan.Previous.ReleaseID == "" || plan.Previous.ReleaseDigest == "" {
+		return errors.New("explicit rollback plan is incomplete")
+	}
+	if phase == effects.explicitRollbackFailPhase &&
+		effects.explicitRollbackFailErr != nil &&
+		(!effects.explicitRollbackFailOnce || !effects.explicitRollbackFailed) {
+		effects.explicitRollbackFailed = true
+		return effects.explicitRollbackFailErr
+	}
+	return nil
 }
 
 func (effects *installEffects) ObserveInstallation(

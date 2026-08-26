@@ -88,6 +88,14 @@ type UpgradePlan struct {
 	CreatedAt time.Time
 }
 
+// RollbackPlan binds the authenticated current release and its exact signed
+// predecessor. Current remains an InstallPlan because automatic upgrade
+// rollback may need the verified candidate before it has been staged.
+type RollbackPlan struct {
+	Current  InstallPlan
+	Previous InstalledPlan
+}
+
 // Effects is the closed local-machine lifecycle boundary. Mutating phases are
 // idempotent; status remains observational. If a command may have taken effect
 // without a known result, it returns ErrEffectOutcomeUnknown and observes
@@ -97,6 +105,7 @@ type Effects interface {
 	RollbackInstall(context.Context, InstallPlan) error
 	ApplyUpgradePhase(context.Context, UpgradePlan, lifecycle.Phase) error
 	RollbackUpgrade(context.Context, UpgradePlan) error
+	ApplyRollbackPhase(context.Context, RollbackPlan, lifecycle.Phase) error
 	VerifyInstallation(context.Context, InstalledPlan) error
 	ObserveInstallation(context.Context, InstalledPlan) (bool, error)
 	CreateBackup(context.Context, BackupPlan) error
@@ -131,6 +140,8 @@ func (backend *Backend) Run(ctx context.Context, request cli.Request) (cli.Resul
 		return backend.install(ctx, request)
 	case lifecycle.ActionUpgrade:
 		return backend.upgrade(ctx, request)
+	case lifecycle.ActionRollback:
+		return backend.rollback(ctx, request)
 	case lifecycle.ActionStatus:
 		return backend.status(ctx, request)
 	case lifecycle.ActionVerify, lifecycle.ActionBackup, lifecycle.ActionSupport:
@@ -346,6 +357,16 @@ func installedPlan(root string, state lifecycle.Journal) InstalledPlan {
 		Listener: defaultListener, Port: defaultPort,
 		ReleaseID: state.CurrentReleaseID, ReleaseDigest: state.CurrentReleaseDigest,
 		PreviousID: state.PreviousRelease, PreviousDigest: state.PreviousReleaseDigest,
+		TrustKeyID:       state.ReleaseTrust.KeyID,
+		TrustFingerprint: state.ReleaseTrust.Fingerprint,
+	}
+}
+
+func previousInstalledPlan(root string, state lifecycle.Journal) InstalledPlan {
+	return InstalledPlan{
+		Root: root, InstallationID: state.InstallationID,
+		Listener: defaultListener, Port: defaultPort,
+		ReleaseID: state.PreviousRelease, ReleaseDigest: state.PreviousReleaseDigest,
 		TrustKeyID:       state.ReleaseTrust.KeyID,
 		TrustFingerprint: state.ReleaseTrust.Fingerprint,
 	}
@@ -622,6 +643,118 @@ func (backend *Backend) upgrade(
 	)
 }
 
+func (backend *Backend) rollback(
+	ctx context.Context,
+	request cli.Request,
+) (result cli.Result, returnErr error) {
+	session, err := journal.AcquireExisting(ctx, request.Root)
+	if err != nil {
+		return cli.Result{}, acquireFault(err)
+	}
+	defer func() {
+		if closeErr := session.Close(); closeErr != nil && returnErr == nil {
+			result = cli.Result{}
+			returnErr = fault(cli.FaultInternal, "INSTALLATION_LOCK_RELEASE_FAILED")
+		}
+	}()
+	state, err := session.Read()
+	if err != nil {
+		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_STATE_INVALID")
+	}
+	if state.Active != nil && state.Active.Command.Action != lifecycle.ActionRollback {
+		return cli.Result{}, lifecycleFault(lifecycle.ErrCommandInProgress)
+	}
+	if state.CurrentReleaseID == "" || state.PreviousRelease == "" {
+		return cli.Result{}, fault(cli.FaultPrecondition, "ROLLBACK_PREDECESSOR_UNAVAILABLE")
+	}
+
+	trustPath := filepath.Join(session.Root(), filepath.FromSlash(layout.ReleaseTrust))
+	trustBytes, trust, err := release.ReadTrustRootFile(trustPath)
+	if err != nil || trust.KeyID != state.ReleaseTrust.KeyID ||
+		trust.PublicKeyFingerprint != state.ReleaseTrust.Fingerprint {
+		clear(trustBytes)
+		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_RELEASE_INVALID")
+	}
+	defer clear(trustBytes)
+	currentBundle, err := authenticateJournalRelease(
+		session.Root(), state.CurrentReleaseID, state.CurrentReleaseDigest, trustBytes,
+	)
+	if err != nil {
+		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_RELEASE_INVALID")
+	}
+	previousBundle, err := authenticateJournalRelease(
+		session.Root(), state.PreviousRelease, state.PreviousReleaseDigest, trustBytes,
+	)
+	if err != nil {
+		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_RELEASE_INVALID")
+	}
+	if currentBundle.Manifest.Release.PreviousID != previousBundle.Manifest.Release.ID ||
+		currentBundle.Manifest.Release.PreviousVersion != previousBundle.Manifest.Release.Version {
+		return cli.Result{}, fault(cli.FaultPrecondition, "ROLLBACK_PREDECESSOR_MISMATCH")
+	}
+	if previousBundle.Manifest.Database.SchemaVersion >
+		currentBundle.Manifest.Database.SchemaVersion {
+		return cli.Result{}, fault(cli.FaultPrecondition, "ROLLBACK_SCHEMA_INCOMPATIBLE")
+	}
+
+	if state.Active == nil {
+		ready, observeErr := backend.effects.ObserveInstallation(
+			ctx, installedPlan(session.Root(), state),
+		)
+		if observeErr != nil {
+			if ctx.Err() != nil {
+				return cli.Result{}, fault(cli.FaultInterrupted, "COMMAND_INTERRUPTED")
+			}
+			return cli.Result{}, effectFault(lifecycle.PhaseVerifying, observeErr)
+		}
+		if !ready {
+			return cli.Result{}, fault(cli.FaultPrecondition, "ROLLBACK_SOURCE_NOT_READY")
+		}
+	}
+
+	commandID := ""
+	if state.Active != nil {
+		commandID = state.Active.Command.ID
+	} else {
+		commandID, err = randomIdentity(backend.entropy, "cmd")
+		if err != nil {
+			return cli.Result{}, fault(cli.FaultInternal, "COMMAND_ID_GENERATION_FAILED")
+		}
+	}
+	started, err := lifecycle.Start(state, lifecycle.Command{
+		ID: commandID, Action: lifecycle.ActionRollback,
+		RequestedAt: canonicalNow(backend.now()),
+	})
+	if err != nil {
+		return cli.Result{}, lifecycleFault(err)
+	}
+	if started.Replay == lifecycle.ReplayCompleted {
+		return completedResult(started.Journal, started.Execution, false)
+	}
+	if started.Replay == lifecycle.ReplayNone {
+		if err := session.Write(started.Journal); err != nil {
+			return cli.Result{}, stateWriteFault(err)
+		}
+	}
+	currentPlan := InstallPlan{
+		Root: session.Root(), InstallationID: started.Journal.InstallationID,
+		Listener: defaultListener, Port: defaultPort, Bundle: currentBundle,
+		Trust: trust, TrustBytes: append([]byte(nil), trustBytes...),
+	}
+	defer clear(currentPlan.TrustBytes)
+	plan := RollbackPlan{
+		Current:  currentPlan,
+		Previous: previousInstalledPlan(session.Root(), started.Journal),
+	}
+	return backend.driveReleaseChange(
+		ctx, session, lifecycle.ActionRollback,
+		func(ctx context.Context, phase lifecycle.Phase) error {
+			return backend.effects.ApplyRollbackPhase(ctx, plan, phase)
+		},
+		nil,
+	)
+}
+
 func authenticateJournalRelease(
 	root string,
 	releaseID string,
@@ -647,8 +780,9 @@ func (backend *Backend) driveReleaseChange(
 	apply func(context.Context, lifecycle.Phase) error,
 	rollback func(context.Context) error,
 ) (cli.Result, error) {
-	if action != lifecycle.ActionInstall && action != lifecycle.ActionUpgrade ||
-		apply == nil || rollback == nil {
+	if (action != lifecycle.ActionInstall && action != lifecycle.ActionUpgrade &&
+		action != lifecycle.ActionRollback) || apply == nil ||
+		(action != lifecycle.ActionRollback && rollback == nil) {
 		return cli.Result{}, fault(cli.FaultInternal, "INSTALLATION_DRIVER_INVALID")
 	}
 	for {
@@ -667,7 +801,7 @@ func (backend *Backend) driveReleaseChange(
 			return cli.Result{}, fault(cli.FaultConflict, "INSTALLATION_COMMAND_CONFLICT")
 		}
 
-		if execution.Phase == lifecycle.PhaseRollingBack {
+		if execution.Phase == lifecycle.PhaseRollingBack && execution.FailureCode != "" {
 			if err := rollback(ctx); err != nil {
 				return cli.Result{}, backend.handleRollbackFailure(ctx, session, state, execution, err)
 			}

@@ -262,6 +262,60 @@ func TestUpgradeConfigurationReplacesOnlyReleaseDerivedFilesAndReplaysBothWays(t
 	}
 }
 
+func TestPrepareReleaseRollbackRemovesOnlyCurrentAndRestoresPreviousConfiguration(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine release rollback targets Linux")
+	}
+	upgrade := newUpgradePlan(t)
+	previous, err := authenticateInstalledPlan(upgrade.Source)
+	if err != nil {
+		t.Fatalf("authenticate rollback predecessor: %v", err)
+	}
+	defer clear(previous.TrustBytes)
+	if err := configureUpgrade(
+		context.Background(), newImageRuntime(upgrade.Target.Bundle.Manifest, true), upgrade,
+	); err != nil {
+		t.Fatalf("configure rollback current release: %v", err)
+	}
+	expectation, err := compileUpgradeExpectation(upgrade.Target)
+	if err != nil {
+		t.Fatalf("compile rollback current expectation: %v", err)
+	}
+	runtimeBoundary := newPlatformCleanupRuntime(t, upgrade.Target, expectation)
+	rollback := platformcommand.RollbackPlan{
+		Current: upgrade.Target, Previous: upgrade.Source,
+	}
+
+	if err := prepareReleaseRollback(
+		context.Background(), runtimeBoundary, rollback,
+	); err != nil {
+		t.Fatalf("prepare explicit release rollback: %v", err)
+	}
+	assertReleaseConfiguration(t, previous)
+	wantContainers := len(expectation.Services) + 1
+	wantNetworks := len(expectation.Networks)
+	if len(runtimeBoundary.containers) != 0 || len(runtimeBoundary.networks) != 0 ||
+		runtimeBoundary.containerRemovals != wantContainers ||
+		runtimeBoundary.networkRemovals != wantNetworks ||
+		runtimeBoundary.unexpectedRemovals != 0 {
+		t.Fatalf(
+			"release rollback inventory=%d/%d removals=%d/%d unexpected=%d",
+			len(runtimeBoundary.containers), len(runtimeBoundary.networks),
+			runtimeBoundary.containerRemovals, runtimeBoundary.networkRemovals,
+			runtimeBoundary.unexpectedRemovals,
+		)
+	}
+	if err := prepareReleaseRollback(
+		context.Background(), runtimeBoundary, rollback,
+	); err != nil {
+		t.Fatalf("replay explicit release rollback: %v", err)
+	}
+	if runtimeBoundary.containerRemovals != wantContainers ||
+		runtimeBoundary.networkRemovals != wantNetworks {
+		t.Fatal("release rollback replay removed additional provider objects")
+	}
+}
+
 func TestLoadInstallImagesUsesAuthenticatedStdinAndExactIdentities(t *testing.T) {
 	plan := newInstallPlan(t)
 	if err := stageInstallation(plan, rand.Reader); err != nil {
