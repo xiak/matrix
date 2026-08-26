@@ -17,13 +17,15 @@ import (
 )
 
 const (
-	maximumMigrationSQL = 4 * 1024 * 1024
-	maximumDSNBytes     = 16 * 1024
+	maximumMigrationSQL  = 4 * 1024 * 1024
+	maximumDSNBytes      = 16 * 1024
+	maximumApplyAttempts = 3
 )
 
 var (
 	migrationContextPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{1,62}[a-z0-9]$`)
 	roleNamePattern         = regexp.MustCompile(`^matrix_[a-z][a-z0-9_]{2,62}$`)
+	retryableApplyFailure   = errors.New("PostgreSQL migration apply failed")
 )
 
 type Executor interface {
@@ -62,6 +64,9 @@ func Up(ctx context.Context, executor Executor, source Source) error {
 		return errors.New("PostgreSQL migration apply input is invalid")
 	}
 	if _, err := executor.Exec(ctx, source.UpSQL); err != nil {
+		if retryableMigrationConflict(err) {
+			return retryableApplyFailure
+		}
 		return errors.New("PostgreSQL migration apply failed")
 	}
 	return nil
@@ -94,7 +99,9 @@ func Apply(ctx context.Context, adminDSN string, source Source, logins []Login) 
 	if err := Bootstrap(ctx, connection, source); err != nil {
 		return err
 	}
-	if err := applyUnderRole(ctx, connection, source); err != nil {
+	if err := retryMigrationApply(func() error {
+		return applyUnderRole(ctx, connection, source)
+	}); err != nil {
 		return err
 	}
 	for _, login := range logins {
@@ -166,25 +173,52 @@ func openAdministrator(
 }
 
 func applyUnderRole(ctx context.Context, connection *pgx.Conn, source Source) error {
-	if source.ExecutionRole == "" {
-		return Up(ctx, connection, source)
-	}
-	role := pgx.Identifier{source.ExecutionRole}.Sanitize()
-	if _, err := connection.Exec(ctx, "SET ROLE "+role); err != nil {
-		return errors.New("PostgreSQL migration execution role is unavailable")
+	roleSet := source.ExecutionRole != ""
+	if roleSet {
+		role := pgx.Identifier{source.ExecutionRole}.Sanitize()
+		if _, err := connection.Exec(ctx, "SET ROLE "+role); err != nil {
+			return errors.New("PostgreSQL migration execution role is unavailable")
+		}
 	}
 	reset := func() error {
-		_, _ = connection.Exec(context.Background(), "ROLLBACK")
-		if _, err := connection.Exec(context.Background(), "RESET ROLE"); err != nil {
-			return errors.New("PostgreSQL migration execution role cannot reset")
+		if _, err := connection.Exec(context.Background(), "ROLLBACK"); err != nil {
+			return errors.New("PostgreSQL migration transaction cannot reset")
+		}
+		if roleSet {
+			if _, err := connection.Exec(context.Background(), "RESET ROLE"); err != nil {
+				return errors.New("PostgreSQL migration execution role cannot reset")
+			}
 		}
 		return nil
 	}
 	if err := Up(ctx, connection, source); err != nil {
-		_ = reset()
+		if resetErr := reset(); resetErr != nil {
+			return resetErr
+		}
 		return err
 	}
-	return reset()
+	if roleSet {
+		if err := reset(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func retryMigrationApply(apply func() error) error {
+	var err error
+	for range maximumApplyAttempts {
+		err = apply()
+		if err == nil || !errors.Is(err, retryableApplyFailure) {
+			return err
+		}
+	}
+	return err
+}
+
+func retryableMigrationConflict(err error) bool {
+	var databaseError *pgconn.PgError
+	return errors.As(err, &databaseError) && databaseError.Code == "40P01"
 }
 
 func ensureLogin(
