@@ -275,7 +275,12 @@ func compileServices(
 		"CAP_CHOWN", "CAP_DAC_OVERRIDE", "CAP_FOWNER", "CAP_SETGID", "CAP_SETUID",
 	}
 	postgres.Tmpfs = []string{"/tmp:rw,noexec,nosuid,size=64m", "/var/run/postgresql:rw,nosuid,size=16m"}
-	postgres.Healthcheck.Test = []string{"CMD", "pg_isready", "-U", "matrix", "-d", "matrix"}
+	// The PostgreSQL image's temporary initialization server listens only on
+	// Unix sockets. A TCP probe prevents migrations from starting until the
+	// final server has taken over.
+	postgres.Healthcheck.Test = []string{
+		"CMD", "pg_isready", "-h", "127.0.0.1", "-U", "matrix", "-d", "matrix",
+	}
 
 	iam := service(
 		"iam", "iam", images["iam"], []string{"control"}, []string{"/matrix/bin/matrix-iam"},

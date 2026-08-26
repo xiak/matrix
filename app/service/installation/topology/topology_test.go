@@ -232,7 +232,27 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 				t.Fatalf("service %q has unnecessary added capabilities", name)
 			}
 		}
-		if name != "postgres" {
+		if name == "postgres" {
+			health, ok := service["healthcheck"].(map[string]any)
+			test, testOK := health["test"].([]any)
+			arguments := make([]string, 0, len(test))
+			for _, raw := range test {
+				value, valid := raw.(string)
+				if !valid {
+					t.Fatalf("PostgreSQL health argument is invalid: %#v", raw)
+				}
+				arguments = append(arguments, value)
+			}
+			host := slices.Index(arguments, "-h")
+			if !ok || !testOK || len(arguments) < 4 || arguments[0] != "CMD" ||
+				arguments[1] != "pg_isready" || host < 2 || host+1 >= len(arguments) ||
+				arguments[host+1] != "127.0.0.1" {
+				t.Fatalf(
+					"PostgreSQL health contract can admit its temporary init server: %#v",
+					service["healthcheck"],
+				)
+			}
+		} else {
 			health, ok := service["healthcheck"].(map[string]any)
 			test, testOK := health["test"].([]any)
 			if !ok || !testOK || len(test) != 3 || test[0] != "CMD" ||
