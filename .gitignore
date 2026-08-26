@@ -23,6 +23,7 @@ node_modules/
 .next/
 out/
 coverage/
+*.tsbuildinfo
 
 # Generated and local runtime state
 build/

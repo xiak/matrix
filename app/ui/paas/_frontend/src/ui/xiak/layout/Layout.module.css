@@ -1,0 +1,40 @@
+.layout {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+.header {
+  z-index: var(--xiak-z-header);
+  display: flex;
+  min-height: var(--xiak-layout-header-height);
+  align-items: center;
+  border-bottom: var(--xiak-border-subtle);
+  background: var(--xiak-color-bg-header);
+  color: var(--xiak-color-text-base);
+  box-shadow: var(--xiak-shadow-header);
+}
+
+.content {
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+  background: var(--xiak-color-bg-content);
+}
+
+.workspace {
+  display: none;
+  width: var(--xiak-layout-workspace-width);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-left: var(--xiak-border-subtle);
+  background: var(--xiak-color-bg-panel);
+}
+
+.workspace[data-visible="true"] {
+  display: flex;
+}

@@ -1,0 +1,125 @@
+.workspace {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--xiak-spacing-roomy);
+  overflow: auto;
+  padding: var(--xiak-spacing-roomy);
+}
+
+.heading {
+  display: flex;
+  align-items: center;
+  gap: var(--xiak-spacing-default);
+}
+
+.heading > div:last-child {
+  display: grid;
+  gap: var(--xiak-spacing-narrow);
+}
+
+.headingIcon {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border-radius: var(--xiak-radius-panel);
+  background: var(--xiak-color-status-info-bg);
+  color: var(--xiak-color-status-info);
+}
+
+.headingIcon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.form,
+.field {
+  display: grid;
+}
+
+.form {
+  gap: var(--xiak-spacing-comfortable);
+}
+
+.field {
+  gap: var(--xiak-spacing-tight);
+}
+
+.field > span {
+  color: var(--xiak-color-text-muted);
+  font-size: var(--xiak-font-size-small);
+  font-weight: var(--xiak-font-weight-semibold);
+}
+
+.resourceSummary {
+  display: flex;
+  align-items: center;
+  gap: var(--xiak-spacing-default);
+  border: var(--xiak-border-subtle);
+  border-radius: var(--xiak-radius-control);
+  padding: var(--xiak-spacing-default);
+  background: var(--xiak-color-bg-input);
+}
+
+.resourceSummary > svg {
+  width: 20px;
+  height: 20px;
+  color: var(--xiak-color-status-info);
+}
+
+.resourceSummary div {
+  display: grid;
+  gap: var(--xiak-spacing-narrow);
+}
+
+.resourceSummary span {
+  color: var(--xiak-color-text-subtle);
+  font-size: var(--xiak-font-size-caption);
+}
+
+.notice {
+  border: var(--xiak-border-subtle);
+  border-radius: var(--xiak-radius-control);
+  padding: var(--xiak-spacing-default);
+  background: var(--xiak-color-bg-input);
+  color: var(--xiak-color-text-muted);
+  font-size: var(--xiak-font-size-small);
+  line-height: 1.6;
+}
+
+.accepted {
+  display: flex;
+  align-items: center;
+  gap: var(--xiak-spacing-tight);
+  color: var(--xiak-color-status-success);
+  font-size: var(--xiak-font-size-small);
+}
+
+.accepted svg {
+  width: 17px;
+  height: 17px;
+}
+
+.statusList {
+  display: grid;
+  gap: var(--xiak-spacing-tight);
+}
+
+.statusItem {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: var(--xiak-spacing-default);
+  align-items: center;
+  border-bottom: var(--xiak-border-subtle);
+  padding-block: var(--xiak-spacing-default);
+}
+
+.statusItem > svg {
+  width: 18px;
+  height: 18px;
+  color: var(--xiak-color-text-subtle);
+}

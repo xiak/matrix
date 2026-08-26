@@ -1,0 +1,56 @@
+.sider {
+  position: relative;
+  display: flex;
+  width: var(--xiak-layout-sider-width);
+  min-width: var(--xiak-layout-sider-width);
+  min-height: 0;
+  overflow: visible;
+  background: var(--xiak-color-bg-sider);
+}
+
+.rail {
+  z-index: var(--xiak-z-rail);
+  display: flex;
+  width: var(--xiak-layout-rail-width);
+  min-width: var(--xiak-layout-rail-width);
+  min-height: 0;
+  flex-direction: column;
+  align-items: center;
+  overflow: hidden auto;
+  border-right: var(--xiak-border-subtle);
+  background: var(--xiak-color-bg-rail);
+  scrollbar-width: none;
+}
+
+.context {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--xiak-color-bg-sider);
+}
+
+.resizeHandle {
+  position: absolute;
+  inset: 0 0 0 auto;
+  z-index: var(--xiak-z-resize);
+  width: var(--xiak-resize-hit-width);
+  transform: translateX(50%);
+  cursor: col-resize;
+}
+
+.resizeHandle::after {
+  position: absolute;
+  inset: 0 auto 0 50%;
+  width: var(--xiak-resize-line-width);
+  background: var(--xiak-color-border-focus);
+  content: "";
+  opacity: 0;
+  transition: opacity var(--xiak-motion-fast) var(--xiak-ease-standard);
+}
+
+.resizeHandle:hover::after {
+  opacity: 1;
+}

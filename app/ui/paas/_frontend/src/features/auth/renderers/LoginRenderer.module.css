@@ -1,0 +1,135 @@
+.loginPage {
+  position: relative;
+  display: grid;
+  width: min(1120px, calc(100% - var(--xiak-spacing-section) * 2));
+  min-height: 100dvh;
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 430px);
+  gap: clamp(var(--xiak-spacing-section), 8vw, 112px);
+  align-items: center;
+  margin: 0 auto;
+  padding-block: var(--xiak-spacing-section);
+}
+
+.brandPanel {
+  display: grid;
+  max-width: 620px;
+  gap: var(--xiak-spacing-comfortable);
+}
+
+.brandMark,
+.mobileMark {
+  display: grid;
+  width: 52px;
+  height: 52px;
+  place-items: center;
+  border: var(--xiak-border-subtle);
+  border-radius: var(--xiak-radius-panel);
+  background: var(--xiak-color-bg-panel);
+  color: var(--xiak-color-accent-text);
+  box-shadow: var(--xiak-shadow-panel);
+}
+
+.brandMark svg,
+.mobileMark svg {
+  width: 26px;
+  height: 26px;
+}
+
+.lead {
+  max-width: 570px;
+  color: var(--xiak-color-text-muted);
+  font-size: var(--xiak-font-size-subtitle);
+  line-height: 1.75;
+}
+
+.capabilities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--xiak-spacing-tight);
+  margin-top: var(--xiak-spacing-tight);
+}
+
+.capabilities div {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--xiak-spacing-tight);
+  border: var(--xiak-border-subtle);
+  border-radius: var(--xiak-radius-pill);
+  padding: var(--xiak-spacing-tight) var(--xiak-spacing-default);
+  background: var(--xiak-color-bg-panel);
+  color: var(--xiak-color-text-muted);
+  font-size: var(--xiak-font-size-small);
+}
+
+.capabilities svg {
+  width: 15px;
+  height: 15px;
+  color: var(--xiak-color-status-success);
+}
+
+.loginCard {
+  display: grid;
+  gap: var(--xiak-spacing-roomy);
+  border: var(--xiak-border-subtle);
+  border-radius: var(--xiak-radius-panel);
+  padding: var(--xiak-spacing-generous);
+  background: var(--xiak-color-bg-panel);
+  box-shadow: var(--xiak-shadow-elevated);
+}
+
+.mobileMark {
+  display: none;
+}
+
+.cardHeading,
+.form {
+  display: grid;
+  gap: var(--xiak-spacing-tight);
+}
+
+.form {
+  gap: var(--xiak-spacing-comfortable);
+}
+
+.field {
+  display: grid;
+  gap: var(--xiak-spacing-tight);
+  color: var(--xiak-color-text-muted);
+  font-size: var(--xiak-font-size-small);
+  font-weight: var(--xiak-font-weight-semibold);
+}
+
+.error {
+  border: var(--xiak-border-width) var(--xiak-border-style) var(--xiak-color-danger);
+  border-radius: var(--xiak-radius-control);
+  padding: var(--xiak-spacing-default);
+  background: var(--xiak-color-status-danger-bg);
+  color: var(--xiak-color-danger-text);
+  font-size: var(--xiak-font-size-small);
+}
+
+.securityNote {
+  color: var(--xiak-color-text-subtle);
+  font-size: var(--xiak-font-size-caption);
+  line-height: 1.6;
+}
+
+@media (max-width: 780px) {
+  .loginPage {
+    width: min(100% - var(--xiak-spacing-roomy) * 2, 440px);
+    grid-template-columns: 1fr;
+    padding-block: var(--xiak-spacing-roomy);
+  }
+
+  .brandPanel {
+    display: none;
+  }
+
+  .mobileMark {
+    display: grid;
+  }
+
+  .loginCard {
+    padding: var(--xiak-spacing-roomy);
+  }
+}

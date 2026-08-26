@@ -1,66 +1,85 @@
 package web
 
 import (
-	"encoding/json"
+	"crypto/sha256"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
-
-	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
 
-func TestHandlerServesFunctionalConfigurationUI(t *testing.T) {
+func TestHandlerServesNextControlPlane(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
 	response := httptest.NewRecorder()
 	NewHandler().ServeHTTP(response, request)
 	if response.Code != http.StatusOK ||
 		!strings.HasPrefix(response.Header().Get("Content-Type"), "text/html") ||
 		response.Header().Get("Content-Security-Policy") == "" {
-		t.Fatalf("functional UI response is incomplete: status=%d headers=%v", response.Code, response.Header())
+		t.Fatalf("control-plane response is incomplete: status=%d headers=%v", response.Code, response.Header())
 	}
 	body := response.Body.String()
-	for _, required := range []string{"login-form", "configuration-form", "/assets/app.js"} {
+	for _, required := range []string{"login-form", "Matrix Control Plane", "/_next/static/"} {
 		if !strings.Contains(body, required) {
-			t.Fatalf("functional UI is missing %q", required)
+			t.Fatalf("control plane is missing %q", required)
 		}
 	}
-	if strings.Contains(body, "https://") || strings.Contains(body, "http://") {
-		t.Fatal("offline UI references an external asset")
+	forbiddenRemoteAsset := regexp.MustCompile(`(?i)(?:src|href)=["']https?://`)
+	if forbiddenRemoteAsset.MatchString(body) {
+		t.Fatal("offline control plane references an external asset")
 	}
 }
 
-func TestConfigurationDigestUsesPublicPaaSContract(t *testing.T) {
-	values := map[string]string{"APP_ENV": "production", "LOG_LEVEL": "info"}
-	payload, err := json.Marshal(map[string]any{"values": values})
-	if err != nil {
-		t.Fatal(err)
+func TestHandlerServesNestedRouteAndHashedAsset(t *testing.T) {
+	handler := NewHandler()
+	page := httptest.NewRecorder()
+	handler.ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/console/quotas/", nil))
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Matrix Control Plane") {
+		t.Fatalf("nested Next route status=%d body=%s", page.Code, page.Body.String())
 	}
-	request := httptest.NewRequest(http.MethodPost, "/ui/v1/configuration-digest", strings.NewReader(string(payload)))
-	request.Header.Set("Content-Type", "application/json")
-	response := httptest.NewRecorder()
-	NewHandler().ServeHTTP(response, request)
-	if response.Code != http.StatusOK {
-		t.Fatalf("digest status=%d body=%s", response.Code, response.Body.String())
+	assetPattern := regexp.MustCompile(`(?:src|href)="(/_next/static/[^"]+\.(?:js|css))"`)
+	match := assetPattern.FindStringSubmatch(page.Body.String())
+	if len(match) != 2 {
+		t.Fatal("nested route does not reference a hashed static asset")
 	}
-	var result digestResponse
-	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
-		t.Fatal(err)
-	}
-	if result.APIVersion != APIVersion || result.Kind != "ConfigurationDigest" ||
-		result.ContentDigest != paasv1.ConfigurationValuesDigest(values) {
-		t.Fatalf("unexpected digest response: %+v", result)
+	asset := httptest.NewRecorder()
+	handler.ServeHTTP(asset, httptest.NewRequest(http.MethodGet, match[1], nil))
+	if asset.Code != http.StatusOK ||
+		asset.Header().Get("Cache-Control") != "public, max-age=31536000, immutable" {
+		t.Fatalf("hashed asset response status=%d headers=%v", asset.Code, asset.Header())
 	}
 }
 
-func TestConfigurationDigestRejectsSecretsWithoutReflectingValues(t *testing.T) {
-	secret := "must-never-be-reflected"
-	request := httptest.NewRequest(http.MethodPost, "/ui/v1/configuration-digest",
-		strings.NewReader(`{"values":{"DATABASE_PASSWORD":"`+secret+`"}}`))
-	request.Header.Set("Content-Type", "application/json")
+func TestContentSecurityPolicyAllowsOnlyExactInlineScripts(t *testing.T) {
 	response := httptest.NewRecorder()
-	NewHandler().ServeHTTP(response, request)
-	if response.Code != http.StatusBadRequest || strings.Contains(response.Body.String(), secret) {
-		t.Fatalf("invalid configuration response leaked or succeeded: status=%d body=%s", response.Code, response.Body.String())
+	NewHandler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
+	policy := response.Header().Get("Content-Security-Policy")
+	if strings.Contains(policy, "'unsafe-inline'") || strings.Contains(policy, "'unsafe-eval'") {
+		t.Fatalf("control-plane CSP is unsafe: %s", policy)
+	}
+	for _, match := range inlineScript.FindAllStringSubmatch(response.Body.String(), -1) {
+		if len(match) != 2 || match[1] == "" {
+			continue
+		}
+		digest := sha256.Sum256([]byte(match[1]))
+		hash := "'sha256-" + base64.StdEncoding.EncodeToString(digest[:]) + "'"
+		if !strings.Contains(policy, hash) {
+			t.Fatalf("CSP does not allow an exact embedded Next script: %s", hash)
+		}
+	}
+}
+
+func TestHandlerRejectsAmbiguousStaticRequestAndUnknownAsset(t *testing.T) {
+	handler := NewHandler()
+	query := httptest.NewRecorder()
+	handler.ServeHTTP(query, httptest.NewRequest(http.MethodGet, "/?unexpected=true", nil))
+	if query.Code != http.StatusBadRequest {
+		t.Fatalf("unexpected query status=%d", query.Code)
+	}
+	missing := httptest.NewRecorder()
+	handler.ServeHTTP(missing, httptest.NewRequest(http.MethodGet, "/_next/static/missing.js", nil))
+	if missing.Code != http.StatusNotFound || !strings.HasPrefix(missing.Header().Get("Content-Type"), "text/plain") {
+		t.Fatalf("missing asset status=%d headers=%v", missing.Code, missing.Header())
 	}
 }

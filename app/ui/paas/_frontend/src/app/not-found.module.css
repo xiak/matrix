@@ -1,0 +1,30 @@
+.notFound {
+  position: relative;
+  display: grid;
+  min-height: 100dvh;
+  place-items: center;
+  align-content: center;
+  gap: var(--xiak-spacing-default);
+  padding: var(--xiak-spacing-roomy);
+  text-align: center;
+}
+
+.notFound > svg {
+  width: 48px;
+  height: 48px;
+  color: var(--xiak-color-accent-text);
+}
+
+.notFound a {
+  margin-top: var(--xiak-spacing-default);
+  border-radius: var(--xiak-radius-control);
+  padding: var(--xiak-spacing-default) var(--xiak-spacing-comfortable);
+  background: var(--xiak-color-accent-primary);
+  color: var(--xiak-color-text-on-accent);
+  font-weight: var(--xiak-font-weight-semibold);
+  outline: none;
+}
+
+.notFound a:focus-visible {
+  box-shadow: var(--xiak-shadow-focus);
+}

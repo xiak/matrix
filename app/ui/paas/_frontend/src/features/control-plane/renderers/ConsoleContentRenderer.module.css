@@ -1,0 +1,344 @@
+.metricGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--xiak-spacing-default);
+}
+
+.metricHeading,
+.productTopline,
+.regionHeading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--xiak-spacing-default);
+}
+
+.metric strong {
+  display: block;
+  margin-top: var(--xiak-spacing-comfortable);
+  color: var(--xiak-color-text-strong);
+  font-size: 2rem;
+  letter-spacing: var(--xiak-letter-spacing-heading);
+}
+
+.metric p,
+.featureCard p,
+.productDescription,
+.regionCard p {
+  margin-top: var(--xiak-spacing-tight);
+  color: var(--xiak-color-text-muted);
+  line-height: 1.6;
+}
+
+.textLink,
+.primaryLink {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--xiak-spacing-narrow);
+  color: var(--xiak-color-accent-text);
+  font-size: var(--xiak-font-size-small);
+  font-weight: var(--xiak-font-weight-semibold);
+  outline: none;
+}
+
+.textLink:hover,
+.primaryLink:hover {
+  color: var(--xiak-color-text-strong);
+}
+
+.textLink:focus-visible,
+.primaryLink:focus-visible {
+  border-radius: var(--xiak-radius-small);
+  box-shadow: var(--xiak-shadow-focus);
+}
+
+.textLink svg,
+.primaryLink svg {
+  width: 15px;
+  height: 15px;
+}
+
+.featureCard {
+  background:
+    radial-gradient(circle at 100% 0, var(--xiak-color-accent-haze), transparent 58%),
+    var(--xiak-color-bg-panel);
+}
+
+.featureCardBody,
+.productCardBody {
+  display: grid;
+  gap: var(--xiak-spacing-default);
+}
+
+.databaseIcon,
+.regionIcon {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border-radius: var(--xiak-radius-panel);
+  background: var(--xiak-color-status-info-bg);
+  color: var(--xiak-color-status-info);
+}
+
+.databaseIcon svg,
+.regionIcon svg {
+  width: 22px;
+  height: 22px;
+}
+
+.featureMeta {
+  display: grid;
+  gap: var(--xiak-spacing-tight);
+  margin-block: var(--xiak-spacing-tight);
+}
+
+.featureMeta span,
+.regionFacts span {
+  display: flex;
+  align-items: center;
+  gap: var(--xiak-spacing-tight);
+  color: var(--xiak-color-text-muted);
+  font-size: var(--xiak-font-size-small);
+}
+
+.featureMeta svg,
+.regionFacts svg {
+  width: 15px;
+  height: 15px;
+  color: var(--xiak-color-status-success);
+}
+
+.catalogGrid,
+.regionGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--xiak-spacing-comfortable);
+}
+
+.productCard {
+  min-height: 380px;
+}
+
+.productFacts {
+  display: grid;
+  gap: var(--xiak-spacing-tight);
+  margin: var(--xiak-spacing-tight) 0 0;
+}
+
+.productFacts div {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: var(--xiak-spacing-default);
+  border-top: var(--xiak-border-subtle);
+  padding-top: var(--xiak-spacing-tight);
+}
+
+.productFacts dt {
+  color: var(--xiak-color-text-subtle);
+}
+
+.productFacts dd {
+  margin: 0;
+  color: var(--xiak-color-text-base);
+}
+
+.cardList {
+  display: grid;
+  gap: var(--xiak-spacing-default);
+}
+
+.quotaRow {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto minmax(140px, auto);
+  gap: var(--xiak-spacing-roomy);
+  align-items: center;
+}
+
+.quotaIdentity {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--xiak-spacing-default);
+}
+
+.quotaIdentity > svg {
+  width: 24px;
+  height: 24px;
+  color: var(--xiak-color-status-info);
+}
+
+.quotaIdentity div,
+.quotaStatus {
+  display: grid;
+  min-width: 0;
+  gap: var(--xiak-spacing-narrow);
+}
+
+.quotaIdentity span,
+.quotaStatus small {
+  color: var(--xiak-color-text-subtle);
+  font-size: var(--xiak-font-size-small);
+}
+
+.quotaNumbers {
+  display: flex;
+  gap: var(--xiak-spacing-generous);
+}
+
+.quotaNumbers div {
+  display: grid;
+  gap: var(--xiak-spacing-narrow);
+  text-align: center;
+}
+
+.quotaNumbers small {
+  color: var(--xiak-color-text-subtle);
+}
+
+.quotaNumbers strong {
+  color: var(--xiak-color-text-strong);
+  font-size: var(--xiak-font-size-title);
+}
+
+.quotaStatus {
+  justify-items: end;
+}
+
+.tableWrap {
+  width: 100%;
+  overflow: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.table th,
+.table td {
+  border-bottom: var(--xiak-border-subtle);
+  padding: var(--xiak-spacing-default) var(--xiak-spacing-comfortable);
+  color: var(--xiak-color-text-muted);
+  white-space: nowrap;
+}
+
+.table th {
+  color: var(--xiak-color-text-subtle);
+  font-size: var(--xiak-font-size-caption);
+  letter-spacing: var(--xiak-letter-spacing-eyebrow);
+  text-transform: uppercase;
+}
+
+.table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.table td strong,
+.table td small {
+  display: block;
+}
+
+.table td strong {
+  color: var(--xiak-color-text-strong);
+}
+
+.table td small {
+  margin-top: var(--xiak-spacing-narrow);
+  color: var(--xiak-color-text-subtle);
+}
+
+.empty {
+  display: grid;
+  min-height: 320px;
+  place-items: center;
+  align-content: center;
+  gap: var(--xiak-spacing-tight);
+  border: var(--xiak-border-subtle);
+  border-radius: var(--xiak-radius-panel);
+  padding: var(--xiak-spacing-roomy);
+  background: var(--xiak-color-bg-panel);
+  text-align: center;
+}
+
+.empty > svg {
+  width: 36px;
+  height: 36px;
+  margin-bottom: var(--xiak-spacing-tight);
+  color: var(--xiak-color-text-subtle);
+}
+
+.empty span {
+  max-width: 520px;
+  line-height: 1.6;
+}
+
+.regionCard {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--xiak-spacing-default);
+}
+
+.regionHeading,
+.regionFacts,
+.regionCard p {
+  grid-column: 2;
+}
+
+.regionHeading > div {
+  display: grid;
+  gap: var(--xiak-spacing-narrow);
+}
+
+.regionHeading span {
+  color: var(--xiak-color-text-subtle);
+  font-size: var(--xiak-font-size-small);
+}
+
+.regionFacts {
+  display: grid;
+  gap: var(--xiak-spacing-tight);
+  padding-block: var(--xiak-spacing-tight);
+}
+
+@media (max-width: 1240px) {
+  .metricGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .quotaRow {
+    grid-template-columns: minmax(220px, 1fr) auto;
+  }
+
+  .quotaStatus {
+    grid-column: 1 / -1;
+    grid-template-columns: auto 1fr;
+    justify-items: start;
+  }
+}
+
+@media (max-width: 860px) {
+  .catalogGrid,
+  .regionGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 600px) {
+  .metricGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .quotaRow {
+    grid-template-columns: 1fr;
+  }
+
+  .quotaNumbers {
+    justify-content: space-between;
+  }
+
+  .quotaStatus {
+    grid-column: auto;
+  }
+}

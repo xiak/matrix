@@ -1,0 +1,46 @@
+.badge {
+  display: inline-flex;
+  min-height: var(--xiak-badge-height);
+  align-items: center;
+  gap: var(--xiak-spacing-narrow);
+  border: var(--xiak-border-transparent);
+  border-radius: var(--xiak-radius-pill);
+  padding: 0 var(--xiak-spacing-tight);
+  font-size: var(--xiak-font-size-caption);
+  font-weight: var(--xiak-font-weight-semibold);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.badge::before {
+  width: var(--xiak-status-dot-size);
+  height: var(--xiak-status-dot-size);
+  border-radius: var(--xiak-radius-pill);
+  background: currentColor;
+  content: "";
+}
+
+.neutral {
+  background: var(--xiak-color-status-neutral-bg);
+  color: var(--xiak-color-status-neutral);
+}
+
+.info {
+  background: var(--xiak-color-status-info-bg);
+  color: var(--xiak-color-status-info);
+}
+
+.success {
+  background: var(--xiak-color-status-success-bg);
+  color: var(--xiak-color-status-success);
+}
+
+.warning {
+  background: var(--xiak-color-status-warning-bg);
+  color: var(--xiak-color-status-warning);
+}
+
+.danger {
+  background: var(--xiak-color-status-danger-bg);
+  color: var(--xiak-color-status-danger);
+}

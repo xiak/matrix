@@ -1,0 +1,93 @@
+.button {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: var(--xiak-spacing-tight);
+  border: var(--xiak-border-transparent);
+  border-radius: var(--xiak-radius-control);
+  font: inherit;
+  font-weight: var(--xiak-font-weight-semibold);
+  line-height: 1;
+  cursor: pointer;
+  outline: none;
+  transition:
+    background var(--xiak-motion-fast) var(--xiak-ease-standard),
+    border-color var(--xiak-motion-fast) var(--xiak-ease-standard),
+    color var(--xiak-motion-fast) var(--xiak-ease-standard),
+    transform var(--xiak-motion-fast) var(--xiak-ease-standard);
+}
+
+.button:focus-visible {
+  box-shadow: var(--xiak-shadow-focus);
+}
+
+.button:active:not(:disabled) {
+  transform: translateY(var(--xiak-press-offset));
+}
+
+.button:disabled {
+  cursor: not-allowed;
+  opacity: var(--xiak-opacity-disabled);
+}
+
+.small {
+  min-height: var(--xiak-control-height-small);
+  padding: 0 var(--xiak-spacing-default);
+  font-size: var(--xiak-font-size-small);
+}
+
+.default {
+  min-height: var(--xiak-control-height);
+  padding: 0 var(--xiak-spacing-comfortable);
+  font-size: var(--xiak-font-size-body);
+}
+
+.large {
+  min-height: var(--xiak-control-height-large);
+  padding: 0 var(--xiak-spacing-roomy);
+  font-size: var(--xiak-font-size-body);
+}
+
+.primary {
+  border-color: var(--xiak-color-accent-primary);
+  background: var(--xiak-color-accent-primary);
+  color: var(--xiak-color-text-on-accent);
+}
+
+.primary:hover:not(:disabled) {
+  border-color: var(--xiak-color-accent-hover);
+  background: var(--xiak-color-accent-hover);
+}
+
+.secondary {
+  border-color: var(--xiak-color-border-control);
+  background: var(--xiak-color-bg-control);
+  color: var(--xiak-color-text-base);
+}
+
+.secondary:hover:not(:disabled),
+.ghost:hover:not(:disabled) {
+  background: var(--xiak-color-bg-control-hover);
+  color: var(--xiak-color-text-strong);
+}
+
+.ghost {
+  background: transparent;
+  color: var(--xiak-color-text-muted);
+}
+
+.danger {
+  border-color: var(--xiak-color-danger);
+  background: var(--xiak-color-danger);
+  color: var(--xiak-color-text-on-danger);
+}
+
+.danger:hover:not(:disabled) {
+  border-color: var(--xiak-color-danger-hover);
+  background: var(--xiak-color-danger-hover);
+}
+
+.block {
+  width: 100%;
+}

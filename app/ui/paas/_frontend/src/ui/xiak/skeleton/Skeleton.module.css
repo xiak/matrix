@@ -1,0 +1,24 @@
+.skeleton {
+  min-height: var(--xiak-control-height);
+  border-radius: var(--xiak-radius-control);
+  background: linear-gradient(
+    90deg,
+    var(--xiak-color-bg-skeleton),
+    var(--xiak-color-bg-skeleton-active),
+    var(--xiak-color-bg-skeleton)
+  );
+  background-size: 220% 100%;
+  animation: shimmer var(--xiak-motion-skeleton) linear infinite;
+}
+
+@keyframes shimmer {
+  to {
+    background-position: -220% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+  }
+}

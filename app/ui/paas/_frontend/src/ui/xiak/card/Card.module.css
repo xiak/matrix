@@ -1,0 +1,29 @@
+.card {
+  min-width: 0;
+  overflow: hidden;
+  border: var(--xiak-border-subtle);
+  border-radius: var(--xiak-radius-panel);
+  background: var(--xiak-color-bg-panel);
+  box-shadow: var(--xiak-shadow-panel);
+}
+
+.header,
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--xiak-spacing-default);
+  padding: var(--xiak-spacing-default) var(--xiak-spacing-comfortable);
+}
+
+.header {
+  border-bottom: var(--xiak-border-subtle);
+}
+
+.footer {
+  border-top: var(--xiak-border-subtle);
+}
+
+.body {
+  padding: var(--xiak-spacing-comfortable);
+}

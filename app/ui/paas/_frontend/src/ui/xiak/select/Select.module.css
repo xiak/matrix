@@ -1,0 +1,17 @@
+.select {
+  width: 100%;
+  min-width: 0;
+  min-height: var(--xiak-control-height);
+  border: var(--xiak-border-control);
+  border-radius: var(--xiak-radius-control);
+  padding: 0 var(--xiak-spacing-default);
+  background: var(--xiak-color-bg-input);
+  color: var(--xiak-color-text-strong);
+  font: inherit;
+  outline: none;
+}
+
+.select:focus {
+  border-color: var(--xiak-color-border-focus);
+  box-shadow: var(--xiak-shadow-focus);
+}

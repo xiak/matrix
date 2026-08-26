@@ -1,0 +1,19 @@
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 320px);
+  gap: var(--xiak-spacing-roomy);
+  align-items: start;
+}
+
+.main,
+.aside {
+  display: grid;
+  min-width: 0;
+  gap: var(--xiak-spacing-default);
+}
+
+@media (max-width: 1080px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
