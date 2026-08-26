@@ -211,6 +211,23 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 		decision.TenantID != "organization-http-integration" {
 		t.Fatalf("administrator allowed decision=%#v err=%v", decision, err)
 	}
+	managedServiceAuthorizeBody := []byte(`{"action":"managedservice.offering.read","resource":{"kind":"SERVICE_OFFERING","id":"collection"},"requestId":"request-managedservice-offering","correlationId":"correlation-managedservice-offering"}`)
+	managedServiceAuthorize := performIAMRequestWithSubject(
+		handler, managedServiceAuthorizeBody, paasCredential, loginWire.Credential,
+	)
+	if managedServiceAuthorize.Code != http.StatusOK {
+		t.Fatalf(
+			"IAM managed-service authorize status=%d body=%s",
+			managedServiceAuthorize.Code,
+			managedServiceAuthorize.Body.String(),
+		)
+	}
+	if err := json.Unmarshal(managedServiceAuthorize.Body.Bytes(), &decision); err != nil ||
+		!decision.Allowed || decision.Action != iamv1.ActionManagedServiceOfferingRead ||
+		decision.Resource.Kind != iamv1.ResourceServiceOffering ||
+		decision.TenantID != "organization-http-integration" {
+		t.Fatalf("managed-service administrator decision=%#v err=%v", decision, err)
+	}
 	insertCrossTenantPrincipal(t, ctx, admin)
 	crossTenantBinding := performIAMRequest(
 		handler,
@@ -424,8 +441,26 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 	).Scan(&sessions, &decisions, &outbox); err != nil {
 		t.Fatalf("inspect IAM HTTP facts: %v", err)
 	}
-	if sessions != 2 || decisions != 14 || outbox != 25 {
+	if sessions != 2 || decisions != 15 || outbox != 26 {
 		t.Fatalf("IAM HTTP facts sessions=%d decisions=%d outbox=%d", sessions, decisions, outbox)
+	}
+	var managedServiceFacts int
+	if err := admin.QueryRow(
+		ctx,
+		`SELECT count(*)
+		   FROM iam.authorization_decisions AS decision
+		   JOIN iam.audit_outbox AS outbox
+		     ON outbox.tenant_id = decision.tenant_id
+		    AND outbox.event_document->>'iamDecisionId' = decision.id
+		  WHERE decision.action_name = 'managedservice.offering.read'
+		    AND decision.target_kind = 'SERVICE_OFFERING'
+		    AND decision.target_id = 'collection'
+		    AND decision.allowed`,
+	).Scan(&managedServiceFacts); err != nil {
+		t.Fatalf("inspect managed-service authorization facts: %v", err)
+	}
+	if managedServiceFacts != 1 {
+		t.Fatalf("managed-service authorization facts=%d want=1", managedServiceFacts)
 	}
 	var crossTenantBindings int
 	if err := admin.QueryRow(
