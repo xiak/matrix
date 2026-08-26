@@ -42,6 +42,11 @@
   line-height: 1.75;
 }
 
+.brandTitle span {
+  display: block;
+  white-space: nowrap;
+}
+
 .capabilities {
   display: flex;
   flex-wrap: wrap;

@@ -65,8 +65,9 @@ export function LoginRenderer() {
                 <Boxes />
               </div>
               <Typography.Eyebrow>Matrix PaaS Control Plane</Typography.Eyebrow>
-              <Typography.Title id="login-heading">
-                把平台能力放进一个清晰的控制面
+              <Typography.Title className={styles.brandTitle} id="login-heading">
+                <span>把平台能力放进</span>
+                <span>一个清晰的控制面</span>
               </Typography.Title>
               <p className={styles.lead}>
                 在统一控制台中选择服务、激活配额并部署到受管区域。Phase 2
