@@ -80,6 +80,65 @@ func (effects *Effects) RollbackInstall(
 	return rollbackInstallation(ctx, effects.runtime, plan)
 }
 
+func (effects *Effects) ApplyUpgradePhase(
+	ctx context.Context,
+	plan platformcommand.UpgradePlan,
+	phase lifecycle.Phase,
+) error {
+	if effects == nil || effects.runtime == nil || effects.entropy == nil ||
+		effects.verifier == nil || ctx == nil {
+		return errors.Join(
+			platformcommand.ErrEffectUnavailable,
+			errors.New("local-machine upgrade effects are unavailable"),
+		)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	switch phase {
+	case lifecycle.PhasePreflight:
+		return preflightUpgrade(ctx, effects.runtime, plan)
+	case lifecycle.PhaseBackingUp:
+		return effects.CreateBackup(ctx, platformcommand.BackupPlan{
+			InstalledPlan: plan.Source, BackupID: plan.BackupID,
+			CreatedAt: plan.CreatedAt,
+		})
+	case lifecycle.PhaseStaging:
+		return stageInstallation(plan.Target, effects.entropy)
+	case lifecycle.PhaseLoadingImages:
+		return loadInstallImages(ctx, effects.runtime, plan.Target)
+	case lifecycle.PhaseConfiguring:
+		return configureUpgrade(ctx, effects.runtime, plan)
+	case lifecycle.PhaseMigrating:
+		return migrateUpgrade(ctx, effects.runtime, plan)
+	case lifecycle.PhaseStarting:
+		return startUpgrade(ctx, effects.runtime, plan)
+	case lifecycle.PhaseVerifying:
+		return effects.verifier.Verify(ctx, plan.Target)
+	default:
+		return errors.Join(
+			platformcommand.ErrEffectVerification,
+			errors.New("local-machine upgrade phase is invalid"),
+		)
+	}
+}
+
+func (effects *Effects) RollbackUpgrade(
+	ctx context.Context,
+	plan platformcommand.UpgradePlan,
+) error {
+	if effects == nil || effects.runtime == nil || effects.verifier == nil || ctx == nil {
+		return errors.Join(
+			platformcommand.ErrEffectUnavailable,
+			errors.New("local-machine upgrade rollback is unavailable"),
+		)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return rollbackUpgrade(ctx, effects.runtime, effects.verifier, plan)
+}
+
 // ObserveInstallation reads only authenticated installation-owned files and
 // Docker provider state. It never invokes Compose convergence or migrations.
 func (effects *Effects) ObserveInstallation(

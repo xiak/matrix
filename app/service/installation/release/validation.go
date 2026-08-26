@@ -102,13 +102,118 @@ func validateReleaseIdentity(value ReleaseIdentity) error {
 	} else if hasPreviousID {
 		prefix := "matrix-" + value.PreviousVersion + "-"
 		shortCommit := strings.TrimPrefix(value.PreviousID, prefix)
+		forward, comparable := compareReleaseVersions(value.Version, value.PreviousVersion)
 		if !versionPattern.MatchString(value.PreviousVersion) || value.PreviousID == value.ID ||
 			value.PreviousVersion == value.Version || !strings.HasPrefix(value.PreviousID, prefix) ||
-			!shortCommitPattern.MatchString(shortCommit) {
+			!shortCommitPattern.MatchString(shortCommit) || !comparable || forward <= 0 {
 			problems = append(problems, errors.New("previous release constraint is invalid"))
 		}
 	}
 	return errors.Join(problems...)
+}
+
+// compareReleaseVersions applies Semantic Version precedence to the closed
+// release-version grammar. Build metadata is deliberately not admitted by the
+// manifest contract, so only core and prerelease identifiers participate.
+func compareReleaseVersions(left, right string) (int, bool) {
+	leftCore, leftPrerelease, leftOK := splitReleaseVersion(left)
+	rightCore, rightPrerelease, rightOK := splitReleaseVersion(right)
+	if !leftOK || !rightOK {
+		return 0, false
+	}
+	for index := range leftCore {
+		if compared := compareNumericVersionIdentifier(
+			leftCore[index], rightCore[index],
+		); compared != 0 {
+			return compared, true
+		}
+	}
+	switch {
+	case len(leftPrerelease) == 0 && len(rightPrerelease) == 0:
+		return 0, true
+	case len(leftPrerelease) == 0:
+		return 1, true
+	case len(rightPrerelease) == 0:
+		return -1, true
+	}
+	limit := min(len(leftPrerelease), len(rightPrerelease))
+	for index := 0; index < limit; index++ {
+		leftIdentifier := leftPrerelease[index]
+		rightIdentifier := rightPrerelease[index]
+		leftNumeric := allDecimalDigits(leftIdentifier)
+		rightNumeric := allDecimalDigits(rightIdentifier)
+		switch {
+		case leftNumeric && rightNumeric:
+			if compared := compareNumericVersionIdentifier(
+				leftIdentifier, rightIdentifier,
+			); compared != 0 {
+				return compared, true
+			}
+		case leftNumeric:
+			return -1, true
+		case rightNumeric:
+			return 1, true
+		default:
+			if compared := strings.Compare(leftIdentifier, rightIdentifier); compared != 0 {
+				return compared, true
+			}
+		}
+	}
+	switch {
+	case len(leftPrerelease) < len(rightPrerelease):
+		return -1, true
+	case len(leftPrerelease) > len(rightPrerelease):
+		return 1, true
+	default:
+		return 0, true
+	}
+}
+
+func splitReleaseVersion(value string) ([3]string, []string, bool) {
+	if !versionPattern.MatchString(value) {
+		return [3]string{}, nil, false
+	}
+	value = strings.TrimPrefix(value, "v")
+	coreText, prereleaseText, hasPrerelease := strings.Cut(value, "-")
+	core := strings.Split(coreText, ".")
+	if len(core) != 3 {
+		return [3]string{}, nil, false
+	}
+	result := [3]string{core[0], core[1], core[2]}
+	if !hasPrerelease {
+		return result, nil, true
+	}
+	return result, strings.Split(prereleaseText, "."), true
+}
+
+func compareNumericVersionIdentifier(left, right string) int {
+	left = strings.TrimLeft(left, "0")
+	right = strings.TrimLeft(right, "0")
+	if left == "" {
+		left = "0"
+	}
+	if right == "" {
+		right = "0"
+	}
+	if len(left) < len(right) {
+		return -1
+	}
+	if len(left) > len(right) {
+		return 1
+	}
+	return strings.Compare(left, right)
+}
+
+func allDecimalDigits(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, character := range value {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func validateSigner(value Signer) error {

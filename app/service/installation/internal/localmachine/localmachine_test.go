@@ -219,6 +219,49 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 	}
 }
 
+func TestUpgradeConfigurationReplacesOnlyReleaseDerivedFilesAndReplaysBothWays(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine upgrade configuration targets Linux")
+	}
+	plan := newUpgradePlan(t)
+	source, err := authenticateInstalledPlan(plan.Source)
+	if err != nil {
+		t.Fatalf("authenticate upgrade source: %v", err)
+	}
+	defer clear(source.TrustBytes)
+	credentials := snapshotManagedCredentials(t, source.Root)
+	runtimeBoundary := newImageRuntime(plan.Target.Bundle.Manifest, true)
+
+	if err := configureUpgrade(context.Background(), runtimeBoundary, plan); err != nil {
+		t.Fatalf("configure upgrade: %v", err)
+	}
+	assertReleaseConfiguration(t, plan.Target)
+	if after := snapshotManagedCredentials(t, source.Root); !equalSnapshots(credentials, after) {
+		t.Fatal("upgrade configuration changed installation credentials")
+	}
+	if err := configureUpgrade(context.Background(), runtimeBoundary, plan); err != nil {
+		t.Fatalf("replay upgrade configuration: %v", err)
+	}
+
+	if err := restoreUpgradeConfiguration(plan); err != nil {
+		t.Fatalf("restore source configuration: %v", err)
+	}
+	assertReleaseConfiguration(t, source)
+	if err := restoreUpgradeConfiguration(plan); err != nil {
+		t.Fatalf("replay source configuration restore: %v", err)
+	}
+
+	composePath := filepath.Join(source.Root, filepath.FromSlash(layout.Compose))
+	if err := os.WriteFile(composePath, []byte(`{"unowned":true}`), 0o600); err != nil {
+		t.Fatalf("drift upgrade configuration: %v", err)
+	}
+	if err := configureUpgrade(
+		context.Background(), runtimeBoundary, plan,
+	); !errors.Is(err, platformcommand.ErrEffectConflict) {
+		t.Fatalf("unrelated configuration drift error = %v", err)
+	}
+}
+
 func TestLoadInstallImagesUsesAuthenticatedStdinAndExactIdentities(t *testing.T) {
 	plan := newInstallPlan(t)
 	if err := stageInstallation(plan, rand.Reader); err != nil {
@@ -347,6 +390,64 @@ func TestMigrateInstallationUsesFixedGoBinariesWithoutCredentialArguments(t *tes
 		if arguments[len(arguments)-1] != "verify" {
 			t.Fatalf("migration verification applied state: %q", strings.Join(arguments, " "))
 		}
+	}
+}
+
+func TestMigrateUpgradeUsesTargetBinariesOnTheOwnedSourceNetwork(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine migration effects target Linux")
+	}
+	plan := newUpgradePlan(t)
+	source, err := authenticateInstalledPlan(plan.Source)
+	if err != nil {
+		t.Fatalf("authenticate migration upgrade source: %v", err)
+	}
+	defer clear(source.TrustBytes)
+	compiled, err := topology.Compile(plan.Target.Bundle.Manifest, topology.Options{
+		InstallationID: plan.Target.InstallationID, Root: plan.Target.Root,
+		Listener: plan.Target.Listener, Port: plan.Target.Port,
+	})
+	if err != nil {
+		t.Fatalf("compile migration upgrade target: %v", err)
+	}
+	runtimeBoundary := newMigrationRuntime(plan.Target, compiled.ProjectName)
+	runtimeBoundary.release = source.Bundle.Manifest.Release.ID
+	if err := configureUpgrade(context.Background(), runtimeBoundary, plan); err != nil {
+		t.Fatalf("configure migration upgrade: %v", err)
+	}
+	if err := migrateUpgrade(context.Background(), runtimeBoundary, plan); err != nil {
+		t.Fatalf("migrate upgrade: %v", err)
+	}
+	if runtimeBoundary.composeCalls != 0 {
+		t.Fatal("upgrade migration recreated PostgreSQL from target Compose configuration")
+	}
+	want := make(map[string]struct{}, len(platformMigrations)*2)
+	for _, migration := range platformMigrations {
+		for _, mode := range []string{"apply", "verify"} {
+			want[migration.name+"/"+mode] = struct{}{}
+		}
+	}
+	for _, arguments := range runtimeBoundary.runs {
+		mode := arguments[len(arguments)-1]
+		name := ""
+		for _, migration := range platformMigrations {
+			if hasArgumentPair(arguments, "--entrypoint", migration.entrypoint) {
+				name = migration.name
+				break
+			}
+		}
+		if _, found := want[name+"/"+mode]; !found ||
+			!hasArgumentPair(arguments, "--network", runtimeBoundary.controlNetwork) ||
+			!hasArgumentPair(
+				arguments, "--label",
+				"com.xiak.matrix.release="+plan.Target.Bundle.Manifest.Release.ID,
+			) {
+			t.Fatalf("upgrade migration escaped its target/source binding: %q", strings.Join(arguments, " "))
+		}
+		delete(want, name+"/"+mode)
+	}
+	if len(want) != 0 {
+		t.Fatalf("upgrade migration modes are incomplete: %#v", want)
 	}
 }
 
@@ -791,6 +892,49 @@ func TestRollbackInstallationReplaysAStartedRemovalWithUnknownOutcome(t *testing
 	}
 }
 
+func TestUpgradeProjectClassificationRejectsMixedReleaseOwnership(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine platform ownership effects target Linux")
+	}
+	plan := newUpgradePlan(t)
+	source, err := authenticateInstalledPlan(plan.Source)
+	if err != nil {
+		t.Fatalf("authenticate classification source: %v", err)
+	}
+	defer clear(source.TrustBytes)
+	expectation, err := compileUpgradeExpectation(source)
+	if err != nil {
+		t.Fatalf("compile classification source: %v", err)
+	}
+	runtimeBoundary := newPlatformCleanupRuntime(t, source, expectation)
+	state, err := inspectUpgradeProject(
+		context.Background(), runtimeBoundary, source, plan.Target,
+	)
+	if err != nil || state.releaseID != source.Bundle.Manifest.Release.ID {
+		t.Fatalf("source project classification = %#v / %v", state, err)
+	}
+
+	services := make([]string, 0, len(expectation.Services))
+	for service := range expectation.Services {
+		services = append(services, service)
+	}
+	slices.Sort(services)
+	identity := "container-" + services[0]
+	inspection := runtimeBoundary.containers[identity]
+	inspection.Config.Labels["com.xiak.matrix.release"] = plan.Target.Bundle.Manifest.Release.ID
+	runtimeBoundary.containers[identity] = inspection
+	_, err = inspectUpgradeProject(
+		context.Background(), runtimeBoundary, source, plan.Target,
+	)
+	if !errors.Is(err, platformcommand.ErrEffectConflict) ||
+		runtimeBoundary.containerRemovals != 0 || runtimeBoundary.networkRemovals != 0 {
+		t.Fatalf(
+			"mixed release classification err=%v removals=%d/%d",
+			err, runtimeBoundary.containerRemovals, runtimeBoundary.networkRemovals,
+		)
+	}
+}
+
 func configuredPlatformStartFixture(
 	t *testing.T,
 ) (platformcommand.InstallPlan, platformComposeExpectation) {
@@ -939,6 +1083,73 @@ func newInstallPlan(t *testing.T) platformcommand.InstallPlan {
 		Root: root, InstallationID: "mxi-11111111111111111111111111111111",
 		Listener: "0.0.0.0", Port: 8080, Bundle: bundle,
 		Trust: fixture.Trust, TrustBytes: trustBytes,
+	}
+}
+
+func newUpgradePlan(t *testing.T) platformcommand.UpgradePlan {
+	t.Helper()
+	fixtures, err := releasetest.WriteSequence(t.TempDir(), 2)
+	if err != nil {
+		t.Fatalf("write upgrade release fixtures: %v", err)
+	}
+	trustBytes, err := os.ReadFile(fixtures[0].TrustPath)
+	if err != nil {
+		t.Fatalf("read upgrade release trust: %v", err)
+	}
+	bundles := make([]release.VerifiedBundle, len(fixtures))
+	for index, fixture := range fixtures {
+		bundles[index], err = release.VerifyDirectory(fixture.Root, trustBytes)
+		if err != nil {
+			t.Fatalf("verify upgrade release %d: %v", index, err)
+		}
+	}
+	root := filepath.Clean(t.TempDir())
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatalf("protect upgrade fixture root: %v", err)
+	}
+	source := platformcommand.InstallPlan{
+		Root: root, InstallationID: "mxi-11111111111111111111111111111111",
+		Listener: "0.0.0.0", Port: 8080, Bundle: bundles[0],
+		Trust: fixtures[0].Trust, TrustBytes: trustBytes,
+	}
+	if err := stageInstallation(source, rand.Reader); err != nil {
+		t.Fatalf("stage upgrade source: %v", err)
+	}
+	if err := configureInstallation(
+		context.Background(), newImageRuntime(source.Bundle.Manifest, true), source,
+	); err != nil {
+		t.Fatalf("configure upgrade source: %v", err)
+	}
+	target := source
+	target.Bundle = bundles[1]
+	if err := stageInstallation(target, rand.Reader); err != nil {
+		t.Fatalf("stage upgrade target: %v", err)
+	}
+	return platformcommand.UpgradePlan{
+		Source: installedPlanFrom(source), Target: target,
+		BackupID:  "backup-11111111111111111111111111111111",
+		CreatedAt: time.Date(2026, 8, 26, 6, 0, 0, 0, time.UTC),
+	}
+}
+
+func assertReleaseConfiguration(t *testing.T, plan platformcommand.InstallPlan) {
+	t.Helper()
+	compiled, err := topology.Compile(plan.Bundle.Manifest, topology.Options{
+		InstallationID: plan.InstallationID, Root: plan.Root,
+		Listener: plan.Listener, Port: plan.Port,
+	})
+	if err != nil {
+		t.Fatalf("compile expected release configuration: %v", err)
+	}
+	if actual := readTestFile(t, plan.Root, layout.Compose); !bytes.Equal(actual, compiled.ComposeJSON) {
+		t.Fatal("installed Compose configuration differs from authenticated release")
+	}
+	catalog, err := artifactCatalogConfig(plan.Bundle.Manifest)
+	if err != nil {
+		t.Fatalf("compile expected artifact catalog: %v", err)
+	}
+	if actual := readTestFile(t, plan.Root, layout.ArtifactCatalog); !bytes.Equal(actual, catalog) {
+		t.Fatal("installed artifact catalog differs from authenticated release")
 	}
 }
 

@@ -48,6 +48,121 @@ func configureInstallation(
 	return publishInstallationConfiguration(plan.Root, staged.Manifest, compiled)
 }
 
+func configureUpgrade(
+	ctx context.Context,
+	runtimeBoundary dockerRuntime,
+	plan platformcommand.UpgradePlan,
+) error {
+	source, err := authenticateInstalledPlan(plan.Source)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	defer clear(source.TrustBytes)
+	if err := validateUpgradeIdentity(source, plan.Target); err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	target, err := verifiedStagedBundle(plan.Target)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	for _, image := range target.Manifest.Images {
+		present, err := inspectExactImage(ctx, runtimeBoundary, image.ImageID)
+		if err != nil {
+			return err
+		}
+		if !present {
+			return errors.Join(
+				platformcommand.ErrEffectVerification,
+				errors.New("upgrade image identity is absent"),
+			)
+		}
+	}
+	return replaceReleaseConfiguration(
+		plan.Target, source.Bundle.Manifest, target.Manifest,
+	)
+}
+
+func restoreUpgradeConfiguration(plan platformcommand.UpgradePlan) error {
+	source, err := authenticateInstalledPlan(plan.Source)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	defer clear(source.TrustBytes)
+	if err := validateUpgradeIdentity(source, plan.Target); err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	return replaceReleaseConfiguration(
+		plan.Target, plan.Target.Bundle.Manifest, source.Bundle.Manifest,
+	)
+}
+
+func replaceReleaseConfiguration(
+	plan platformcommand.InstallPlan,
+	before release.Manifest,
+	after release.Manifest,
+) error {
+	options := topology.Options{
+		InstallationID: plan.InstallationID, Root: plan.Root,
+		Listener: plan.Listener, Port: plan.Port,
+	}
+	beforeTopology, err := topology.Compile(before, options)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	afterTopology, err := topology.Compile(after, options)
+	if err != nil || afterTopology.ProjectName != beforeTopology.ProjectName {
+		return errors.Join(
+			platformcommand.ErrEffectVerification,
+			errors.New("release configuration project identity changed"),
+		)
+	}
+	beforeCatalog, err := artifactCatalogConfig(before)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	afterCatalog, err := artifactCatalogConfig(after)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	for _, replacement := range []struct {
+		path          string
+		before, after []byte
+	}{
+		{layout.Compose, beforeTopology.ComposeJSON, afterTopology.ComposeJSON},
+		{layout.ArtifactCatalog, beforeCatalog, afterCatalog},
+	} {
+		if err := replaceManagedExpected(
+			plan.Root, filepath.FromSlash(replacement.path),
+			replacement.before, replacement.after,
+		); err != nil {
+			if errors.Is(err, errManagedOutcomeUnknown) {
+				return errors.Join(platformcommand.ErrEffectOutcomeUnknown, err)
+			}
+			return errors.Join(platformcommand.ErrEffectConflict, err)
+		}
+	}
+	for _, fixed := range []struct {
+		path    string
+		content []byte
+	}{
+		{layout.APISIXRoutes, apisixStandaloneConfig()},
+		{layout.APISIXConfig, apisixMainConfig()},
+		{layout.APISIXUID, []byte(afterTopology.ProjectName)},
+	} {
+		if err := writeManagedOnce(
+			plan.Root, filepath.FromSlash(fixed.path), fixed.content,
+		); err != nil {
+			return errors.Join(platformcommand.ErrEffectConflict, err)
+		}
+	}
+	if err := ensureManagedMutableFile(
+		plan.Root, filepath.FromSlash(layout.APISIXNginx), []byte("\n"),
+	); err != nil {
+		return errors.Join(platformcommand.ErrEffectConflict, err)
+	}
+	return nil
+}
+
 func publishInstallationConfiguration(
 	root string,
 	manifest release.Manifest,

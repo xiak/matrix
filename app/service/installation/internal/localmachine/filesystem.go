@@ -1,6 +1,7 @@
 package localmachine
 
 import (
+	"bytes"
 	"crypto/subtle"
 	"errors"
 	"io"
@@ -15,7 +16,10 @@ import (
 
 const maximumManagedFileBytes = 4 * 1024 * 1024
 
-var errManagedConflict = errors.New("installation-owned file conflicts with expected content")
+var (
+	errManagedConflict       = errors.New("installation-owned file conflicts with expected content")
+	errManagedOutcomeUnknown = errors.New("installation-owned file replacement outcome is unknown")
+)
 
 func managedFileExists(root, relative string) (bool, error) {
 	target, err := managedPath(root, relative)
@@ -161,6 +165,87 @@ func writeManagedOnce(root, relative string, content []byte) error {
 	}
 	removePartial = false
 	return verifyManagedPermissions(target, false)
+}
+
+func replaceManagedExpected(root, relative string, before, after []byte) error {
+	if len(before) == 0 || len(after) == 0 ||
+		len(before) > maximumManagedFileBytes || len(after) > maximumManagedFileBytes {
+		return errors.New("installation-owned replacement content exceeds its bound")
+	}
+	if bytes.Equal(before, after) {
+		return writeManagedOnce(root, relative, after)
+	}
+	target, err := managedPath(root, relative)
+	if err != nil {
+		return err
+	}
+	if _, err := ensureManagedDirectory(root, filepath.Dir(relative)); err != nil {
+		return err
+	}
+	current, err := readManagedFile(root, relative, maximumManagedFileBytes)
+	if err != nil {
+		return errManagedConflict
+	}
+	switch {
+	case bytes.Equal(current, after):
+		clear(current)
+		return nil
+	case !bytes.Equal(current, before):
+		clear(current)
+		return errManagedConflict
+	default:
+		clear(current)
+	}
+
+	partial := target + ".replacement"
+	if info, statErr := os.Lstat(partial); statErr == nil {
+		if managedPathIsLink(partial, info) || !info.Mode().IsRegular() ||
+			verifyManagedPermissions(partial, false) != nil || os.Remove(partial) != nil {
+			return errManagedConflict
+		}
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return errManagedConflict
+	}
+	file, err := os.OpenFile(partial, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return errors.New("create installation-owned replacement failed")
+	}
+	removePartial := true
+	defer func() {
+		_ = file.Close()
+		if removePartial {
+			_ = os.Remove(partial)
+		}
+	}()
+	if err := protectManagedPath(partial, false); err != nil {
+		return errors.New("protect installation-owned replacement failed")
+	}
+	if _, err := file.Write(after); err != nil || file.Sync() != nil || file.Close() != nil {
+		return errors.New("write installation-owned replacement failed")
+	}
+	current, err = readManagedFile(root, relative, maximumManagedFileBytes)
+	if err != nil {
+		return errManagedConflict
+	}
+	if bytes.Equal(current, after) {
+		clear(current)
+		return nil
+	}
+	if !bytes.Equal(current, before) {
+		clear(current)
+		return errManagedConflict
+	}
+	clear(current)
+	if err := durableReplaceManaged(partial, target, filepath.Dir(target)); err != nil {
+		return errors.Join(errManagedOutcomeUnknown, err)
+	}
+	removePartial = false
+	current, err = readManagedFile(root, relative, maximumManagedFileBytes)
+	defer clear(current)
+	if err != nil || !bytes.Equal(current, after) {
+		return errManagedOutcomeUnknown
+	}
+	return nil
 }
 
 // ensureManagedMutableFile creates a private provider-owned runtime file once.

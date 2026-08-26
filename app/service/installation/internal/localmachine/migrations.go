@@ -88,6 +88,35 @@ func verifyInstallationMigrations(
 	return runMigrationModes(ctx, runtimeBoundary, plan, installation, "verify")
 }
 
+func migrateUpgrade(
+	ctx context.Context,
+	runtimeBoundary dockerRuntime,
+	plan platformcommand.UpgradePlan,
+) error {
+	source, err := authenticateInstalledPlan(plan.Source)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	defer clear(source.TrustBytes)
+	if err := validateUpgradeIdentity(source, plan.Target); err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	target, err := verifiedInstallationConfiguration(plan.Target)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	networkID, err := controlNetworkID(
+		ctx, runtimeBoundary, target.topology.ProjectName,
+		source.InstallationID, source.Bundle.Manifest.Release.ID,
+	)
+	if err != nil {
+		return err
+	}
+	return runMigrationModesOnNetwork(
+		ctx, runtimeBoundary, plan.Target, target, networkID, "apply", "verify",
+	)
+}
+
 func runMigrationModes(
 	ctx context.Context,
 	runtimeBoundary dockerRuntime,
@@ -101,6 +130,25 @@ func runMigrationModes(
 	)
 	if err != nil {
 		return err
+	}
+	return runMigrationModesOnNetwork(
+		ctx, runtimeBoundary, plan, installation, networkID, modes...,
+	)
+}
+
+func runMigrationModesOnNetwork(
+	ctx context.Context,
+	runtimeBoundary dockerRuntime,
+	plan platformcommand.InstallPlan,
+	installation verifiedInstallation,
+	networkID string,
+	modes ...string,
+) error {
+	if !providerIdentity.MatchString(networkID) {
+		return errors.Join(
+			platformcommand.ErrEffectVerification,
+			errors.New("migration network identity is invalid"),
+		)
 	}
 	images := make(map[string]string, len(installation.bundle.Manifest.Images))
 	for _, image := range installation.bundle.Manifest.Images {

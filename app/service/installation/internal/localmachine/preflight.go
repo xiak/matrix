@@ -33,6 +33,36 @@ func preflightInstall(
 	runtimeBoundary dockerRuntime,
 	plan platformcommand.InstallPlan,
 ) error {
+	return preflightRelease(ctx, runtimeBoundary, plan, true)
+}
+
+func preflightUpgrade(
+	ctx context.Context,
+	runtimeBoundary dockerRuntime,
+	plan platformcommand.UpgradePlan,
+) error {
+	source, err := authenticateInstalledPlan(plan.Source)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	defer clear(source.TrustBytes)
+	if err := validateUpgradeIdentity(source, plan.Target); err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	if _, _, _, err := inspectReadyInstalledPlatform(
+		ctx, runtimeBoundary, source,
+	); err != nil {
+		return err
+	}
+	return preflightRelease(ctx, runtimeBoundary, plan.Target, false)
+}
+
+func preflightRelease(
+	ctx context.Context,
+	runtimeBoundary dockerRuntime,
+	plan platformcommand.InstallPlan,
+	requireFreeListener bool,
+) error {
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		return errors.Join(
 			platformcommand.ErrEffectPrecondition,
@@ -99,15 +129,19 @@ func preflightInstall(
 		_ = present
 	}
 
-	listener, err := net.Listen("tcp4", net.JoinHostPort(plan.Listener, strconv.Itoa(int(plan.Port))))
-	if err != nil {
-		return errors.Join(
-			platformcommand.ErrEffectConflict,
-			errors.New("northbound listener is unavailable"),
+	if requireFreeListener {
+		listener, err := net.Listen(
+			"tcp4", net.JoinHostPort(plan.Listener, strconv.Itoa(int(plan.Port))),
 		)
-	}
-	if err := listener.Close(); err != nil {
-		return errors.Join(platformcommand.ErrEffectUnavailable, err)
+		if err != nil {
+			return errors.Join(
+				platformcommand.ErrEffectConflict,
+				errors.New("northbound listener is unavailable"),
+			)
+		}
+		if err := listener.Close(); err != nil {
+			return errors.Join(platformcommand.ErrEffectUnavailable, err)
+		}
 	}
 	return nil
 }

@@ -79,6 +79,15 @@ type SupportPlan struct {
 	GeneratedAt   time.Time
 }
 
+// UpgradePlan binds the authenticated committed source, signed immediate
+// successor, and the backup identity persisted before any upgrade effect.
+type UpgradePlan struct {
+	Source    InstalledPlan
+	Target    InstallPlan
+	BackupID  string
+	CreatedAt time.Time
+}
+
 // Effects is the closed local-machine lifecycle boundary. Mutating phases are
 // idempotent; status remains observational. If a command may have taken effect
 // without a known result, it returns ErrEffectOutcomeUnknown and observes
@@ -86,6 +95,8 @@ type SupportPlan struct {
 type Effects interface {
 	ApplyInstallPhase(context.Context, InstallPlan, lifecycle.Phase) error
 	RollbackInstall(context.Context, InstallPlan) error
+	ApplyUpgradePhase(context.Context, UpgradePlan, lifecycle.Phase) error
+	RollbackUpgrade(context.Context, UpgradePlan) error
 	VerifyInstallation(context.Context, InstalledPlan) error
 	ObserveInstallation(context.Context, InstalledPlan) (bool, error)
 	CreateBackup(context.Context, BackupPlan) error
@@ -118,6 +129,8 @@ func (backend *Backend) Run(ctx context.Context, request cli.Request) (cli.Resul
 	switch request.Action {
 	case lifecycle.ActionInstall:
 		return backend.install(ctx, request)
+	case lifecycle.ActionUpgrade:
+		return backend.upgrade(ctx, request)
 	case lifecycle.ActionStatus:
 		return backend.status(ctx, request)
 	case lifecycle.ActionVerify, lifecycle.ActionBackup, lifecycle.ActionSupport:
@@ -467,17 +480,177 @@ func (backend *Backend) install(
 		Listener: defaultListener, Port: defaultPort, Bundle: verified,
 		Trust: trust, TrustBytes: append([]byte(nil), trustBytes...),
 	}
+	defer clear(plan.TrustBytes)
 	if started.Replay == lifecycle.ReplayCompleted {
 		return completedResult(started.Journal, started.Execution, false)
 	}
-	return backend.driveInstall(ctx, session, plan)
+	return backend.driveReleaseChange(
+		ctx, session, lifecycle.ActionInstall,
+		func(ctx context.Context, phase lifecycle.Phase) error {
+			return backend.effects.ApplyInstallPhase(ctx, plan, phase)
+		},
+		func(ctx context.Context) error {
+			return backend.effects.RollbackInstall(ctx, plan)
+		},
+	)
 }
 
-func (backend *Backend) driveInstall(
+func (backend *Backend) upgrade(
+	ctx context.Context,
+	request cli.Request,
+) (result cli.Result, returnErr error) {
+	session, err := journal.AcquireExisting(ctx, request.Root)
+	if err != nil {
+		return cli.Result{}, acquireFault(err)
+	}
+	defer func() {
+		if closeErr := session.Close(); closeErr != nil && returnErr == nil {
+			result = cli.Result{}
+			returnErr = fault(cli.FaultInternal, "INSTALLATION_LOCK_RELEASE_FAILED")
+		}
+	}()
+	state, err := session.Read()
+	if err != nil {
+		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_STATE_INVALID")
+	}
+	if state.Active != nil && state.Active.Command.Action != lifecycle.ActionUpgrade {
+		return cli.Result{}, lifecycleFault(lifecycle.ErrCommandInProgress)
+	}
+	if state.CurrentReleaseID == "" {
+		return cli.Result{}, fault(cli.FaultPrecondition, "PLATFORM_NOT_INSTALLED")
+	}
+
+	trustPath := filepath.Join(session.Root(), filepath.FromSlash(layout.ReleaseTrust))
+	trustBytes, trust, err := release.ReadTrustRootFile(trustPath)
+	if err != nil || trust.KeyID != state.ReleaseTrust.KeyID ||
+		trust.PublicKeyFingerprint != state.ReleaseTrust.Fingerprint {
+		clear(trustBytes)
+		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_RELEASE_INVALID")
+	}
+	defer clear(trustBytes)
+	sourceBundle, err := authenticateJournalRelease(
+		session.Root(), state.CurrentReleaseID, state.CurrentReleaseDigest, trustBytes,
+	)
+	if err != nil {
+		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_RELEASE_INVALID")
+	}
+	targetBundle, err := release.VerifyDirectory(request.Bundle, trustBytes)
+	if err != nil {
+		return cli.Result{}, fault(cli.FaultVerification, "RELEASE_BUNDLE_INVALID")
+	}
+	if targetBundle.Manifest.TopologyDigest != topology.ContractDigest() {
+		return cli.Result{}, fault(cli.FaultVerification, "TOPOLOGY_CONTRACT_UNSUPPORTED")
+	}
+	if state.Active == nil && targetBundle.Manifest.Release.ID == state.CurrentReleaseID {
+		if targetBundle.ManifestSHA256 != state.CurrentReleaseDigest {
+			return cli.Result{}, fault(cli.FaultConflict, "RELEASE_CONTENT_CONFLICT")
+		}
+		correlationID := ""
+		backupID := ""
+		if state.Last != nil {
+			correlationID = state.Last.Command.ID
+			if state.Last.Command.Action == lifecycle.ActionUpgrade {
+				backupID = state.Last.Command.BackupID
+			}
+		}
+		return cli.Result{
+			State: "READY", ReleaseID: state.CurrentReleaseID,
+			PreviousID: state.PreviousRelease, BackupID: backupID,
+			Changed: false, CorrelationID: correlationID,
+		}, nil
+	}
+	if targetBundle.Manifest.Release.PreviousID != state.CurrentReleaseID ||
+		targetBundle.Manifest.Release.PreviousVersion != sourceBundle.Manifest.Release.Version {
+		return cli.Result{}, fault(cli.FaultPrecondition, "UPGRADE_PREDECESSOR_MISMATCH")
+	}
+	if targetBundle.Manifest.Database.SchemaVersion <
+		sourceBundle.Manifest.Database.SchemaVersion {
+		return cli.Result{}, fault(cli.FaultPrecondition, "UPGRADE_SCHEMA_INCOMPATIBLE")
+	}
+
+	commandID := ""
+	backupID := ""
+	if state.Active != nil {
+		commandID = state.Active.Command.ID
+		backupID = state.Active.Command.BackupID
+	} else {
+		commandID, err = randomIdentity(backend.entropy, "cmd")
+		if err != nil {
+			return cli.Result{}, fault(cli.FaultInternal, "COMMAND_ID_GENERATION_FAILED")
+		}
+		backupID, err = randomIdentity(backend.entropy, "backup")
+		if err != nil {
+			return cli.Result{}, fault(cli.FaultInternal, "BACKUP_ID_GENERATION_FAILED")
+		}
+	}
+	started, err := lifecycle.Start(state, lifecycle.Command{
+		ID: commandID, Action: lifecycle.ActionUpgrade,
+		InputDigest:     targetBundle.ManifestSHA256,
+		TargetReleaseID: targetBundle.Manifest.Release.ID,
+		BackupID:        backupID,
+		RequestedAt:     canonicalNow(backend.now()),
+	})
+	if err != nil {
+		return cli.Result{}, lifecycleFault(err)
+	}
+	if started.Replay == lifecycle.ReplayCompleted {
+		return completedResult(started.Journal, started.Execution, false)
+	}
+	if started.Replay == lifecycle.ReplayNone {
+		if err := session.Write(started.Journal); err != nil {
+			return cli.Result{}, stateWriteFault(err)
+		}
+	}
+	targetPlan := InstallPlan{
+		Root: session.Root(), InstallationID: started.Journal.InstallationID,
+		Listener: defaultListener, Port: defaultPort, Bundle: targetBundle,
+		Trust: trust, TrustBytes: append([]byte(nil), trustBytes...),
+	}
+	defer clear(targetPlan.TrustBytes)
+	plan := UpgradePlan{
+		Source: installedPlan(session.Root(), started.Journal), Target: targetPlan,
+		BackupID: backupID, CreatedAt: started.Execution.StartedAt,
+	}
+	return backend.driveReleaseChange(
+		ctx, session, lifecycle.ActionUpgrade,
+		func(ctx context.Context, phase lifecycle.Phase) error {
+			return backend.effects.ApplyUpgradePhase(ctx, plan, phase)
+		},
+		func(ctx context.Context) error {
+			return backend.effects.RollbackUpgrade(ctx, plan)
+		},
+	)
+}
+
+func authenticateJournalRelease(
+	root string,
+	releaseID string,
+	digest string,
+	trustBytes []byte,
+) (release.VerifiedBundle, error) {
+	releaseRoot := filepath.Join(
+		root, filepath.FromSlash(layout.ReleaseDirectory(releaseID)),
+	)
+	bundle, err := release.VerifyDirectory(releaseRoot, trustBytes)
+	if err != nil || bundle.Manifest.Release.ID != releaseID ||
+		bundle.ManifestSHA256 != digest ||
+		bundle.Manifest.TopologyDigest != topology.ContractDigest() {
+		return release.VerifiedBundle{}, errors.New("committed release authentication failed")
+	}
+	return bundle, nil
+}
+
+func (backend *Backend) driveReleaseChange(
 	ctx context.Context,
 	session *journal.Session,
-	plan InstallPlan,
+	action lifecycle.Action,
+	apply func(context.Context, lifecycle.Phase) error,
+	rollback func(context.Context) error,
 ) (cli.Result, error) {
+	if action != lifecycle.ActionInstall && action != lifecycle.ActionUpgrade ||
+		apply == nil || rollback == nil {
+		return cli.Result{}, fault(cli.FaultInternal, "INSTALLATION_DRIVER_INVALID")
+	}
 	for {
 		state, err := session.Read()
 		if err != nil {
@@ -490,12 +663,12 @@ func (backend *Backend) driveInstall(
 			return completedResult(state, *state.Last, true)
 		}
 		execution := *state.Active
-		if execution.Command.Action != lifecycle.ActionInstall {
+		if execution.Command.Action != action {
 			return cli.Result{}, fault(cli.FaultConflict, "INSTALLATION_COMMAND_CONFLICT")
 		}
 
 		if execution.Phase == lifecycle.PhaseRollingBack {
-			if err := backend.effects.RollbackInstall(ctx, plan); err != nil {
+			if err := rollback(ctx); err != nil {
 				return cli.Result{}, backend.handleRollbackFailure(ctx, session, state, execution, err)
 			}
 			ready, err := lifecycle.Advance(
@@ -510,7 +683,7 @@ func (backend *Backend) driveInstall(
 
 		var effectErr error
 		if execution.Phase != lifecycle.PhaseCommitting {
-			effectErr = backend.effects.ApplyInstallPhase(ctx, plan, execution.Phase)
+			effectErr = apply(ctx, execution.Phase)
 		}
 		if effectErr != nil {
 			if ctx.Err() != nil {
@@ -530,7 +703,7 @@ func (backend *Backend) driveInstall(
 			continue
 		}
 
-		next, ok := nextInstallPhase(execution.Phase)
+		next, ok := lifecycle.NextPhase(action, execution.Phase)
 		if !ok {
 			return cli.Result{}, fault(cli.FaultInternal, "INSTALLATION_PHASE_INVALID")
 		}
@@ -573,29 +746,6 @@ func (backend *Backend) handleRollbackFailure(
 	return fault(cli.FaultInternal, "ROLLBACK_FAILED")
 }
 
-func nextInstallPhase(phase lifecycle.Phase) (lifecycle.Phase, bool) {
-	switch phase {
-	case lifecycle.PhasePreflight:
-		return lifecycle.PhaseStaging, true
-	case lifecycle.PhaseStaging:
-		return lifecycle.PhaseLoadingImages, true
-	case lifecycle.PhaseLoadingImages:
-		return lifecycle.PhaseConfiguring, true
-	case lifecycle.PhaseConfiguring:
-		return lifecycle.PhaseMigrating, true
-	case lifecycle.PhaseMigrating:
-		return lifecycle.PhaseStarting, true
-	case lifecycle.PhaseStarting:
-		return lifecycle.PhaseVerifying, true
-	case lifecycle.PhaseVerifying:
-		return lifecycle.PhaseCommitting, true
-	case lifecycle.PhaseCommitting:
-		return lifecycle.PhaseReady, true
-	default:
-		return "", false
-	}
-}
-
 func completedResult(
 	state lifecycle.Journal,
 	execution lifecycle.Execution,
@@ -604,11 +754,15 @@ func completedResult(
 	if execution.Outcome != lifecycle.OutcomeSucceeded {
 		return cli.Result{}, storedFailure(&execution)
 	}
-	return cli.Result{
+	result := cli.Result{
 		State: "READY", ReleaseID: state.CurrentReleaseID,
 		PreviousID: state.PreviousRelease, Changed: changed,
 		CorrelationID: execution.Command.ID,
-	}, nil
+	}
+	if execution.Command.BackupID != "" {
+		result.BackupID = execution.Command.BackupID
+	}
+	return result, nil
 }
 
 func storedFailure(execution *lifecycle.Execution) error {

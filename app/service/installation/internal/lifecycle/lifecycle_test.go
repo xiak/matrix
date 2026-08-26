@@ -72,6 +72,11 @@ func TestUpgradeFailureRollsBackWithoutPublishingCandidate(t *testing.T) {
 		rolledBack.Last == nil || rolledBack.Last.Outcome != OutcomeRolledBack {
 		t.Fatalf("rolled-back upgrade journal = %#v", rolledBack)
 	}
+	changed := command
+	changed.BackupID = "backup-" + strings.Repeat("f", 32)
+	if _, err := Start(started.Journal, changed); !errors.Is(err, ErrCommandConflict) {
+		t.Fatalf("changed upgrade backup replay error = %v", err)
+	}
 }
 
 func TestSuccessfulUpgradeAndExplicitRollbackMaintainNMinusOne(t *testing.T) {
@@ -222,6 +227,9 @@ func lifecycleCommand(action Action, target string, digestByte byte, offset int)
 	}
 	if digestByte != 0 {
 		command.InputDigest = digest(digestByte)
+	}
+	if action == ActionUpgrade {
+		command.BackupID = "backup-" + strings.Repeat(string("fedcba9876543210"[offset%16]), 32)
 	}
 	return command
 }

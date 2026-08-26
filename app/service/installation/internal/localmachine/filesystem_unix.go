@@ -63,6 +63,13 @@ func syncManagedDirectory(path string) error {
 	return directory.Sync()
 }
 
+func durableReplaceManaged(temporary, target, parent string) error {
+	if err := os.Rename(temporary, target); err != nil {
+		return err
+	}
+	return syncManagedDirectory(parent)
+}
+
 func openManagedRegularNoFollow(path string) (*os.File, error) {
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {

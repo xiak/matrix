@@ -14,6 +14,7 @@ import (
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
 	"github.com/xiak/matrix/app/service/installation/internal/releasetest"
+	"github.com/xiak/matrix/app/service/installation/release"
 )
 
 func TestInstallCommitsPinnedReleaseOnlyAfterEffectsAndReplays(t *testing.T) {
@@ -174,6 +175,116 @@ func TestInstallRejectsAValidBundleFromAnotherTrustRoot(t *testing.T) {
 
 	_, err := backend.Run(context.Background(), installRequest(root, second))
 	assertFault(t, err, cli.FaultConflict, "RELEASE_TRUST_CONFLICT")
+}
+
+func TestUpgradeBindsImmediatePredecessorAndBackupBeforePublishing(t *testing.T) {
+	fixtures := writeReleaseSequence(t, 2)
+	effects := &installEffects{}
+	backend := newTestBackend(t, effects)
+	root := filepath.Join(t.TempDir(), "matrix")
+	if _, err := backend.Run(
+		context.Background(), installRequest(root, fixtures[0]),
+	); err != nil {
+		t.Fatalf("install upgrade source: %v", err)
+	}
+	materializeInstalledRelease(t, root, fixtures[0])
+
+	result, err := backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[1].Root,
+	})
+	if err != nil || result.ReleaseID != fixtures[1].Manifest.Release.ID ||
+		result.PreviousID != fixtures[0].Manifest.Release.ID ||
+		!result.Changed || result.BackupID == "" {
+		t.Fatalf("upgrade result = %#v / %v", result, err)
+	}
+	wantPhases := []lifecycle.Phase{
+		lifecycle.PhasePreflight, lifecycle.PhaseBackingUp, lifecycle.PhaseStaging,
+		lifecycle.PhaseLoadingImages, lifecycle.PhaseConfiguring,
+		lifecycle.PhaseMigrating, lifecycle.PhaseStarting, lifecycle.PhaseVerifying,
+	}
+	for _, phase := range wantPhases {
+		if effects.upgradeCalls[phase] != 1 {
+			t.Fatalf("upgrade phase %s calls = %d", phase, effects.upgradeCalls[phase])
+		}
+	}
+	if effects.upgradePlan.Source.ReleaseID != fixtures[0].Manifest.Release.ID ||
+		effects.upgradePlan.Target.Bundle.Manifest.Release.ID != fixtures[1].Manifest.Release.ID ||
+		effects.upgradePlan.BackupID != result.BackupID ||
+		effects.upgradePlan.CreatedAt.IsZero() {
+		t.Fatalf("upgrade plan = %#v", effects.upgradePlan)
+	}
+	state := readJournal(t, root)
+	if state.CurrentReleaseID != fixtures[1].Manifest.Release.ID ||
+		state.CurrentReleaseDigest != fixtures[1].ManifestDigest ||
+		state.PreviousRelease != fixtures[0].Manifest.Release.ID ||
+		state.PreviousReleaseDigest != fixtures[0].ManifestDigest ||
+		state.Last == nil || state.Last.Command.BackupID != result.BackupID {
+		t.Fatalf("upgraded journal = %#v", state)
+	}
+}
+
+func TestUpgradeUnknownOutcomeResumesAndDefinitiveFailureRestoresSource(t *testing.T) {
+	fixtures := writeReleaseSequence(t, 2)
+	effects := &installEffects{
+		upgradeFailPhase: lifecycle.PhaseLoadingImages,
+		upgradeFailErr:   ErrEffectOutcomeUnknown,
+		upgradeFailOnce:  true,
+	}
+	backend := newTestBackend(t, effects)
+	root := filepath.Join(t.TempDir(), "matrix")
+	if _, err := backend.Run(
+		context.Background(), installRequest(root, fixtures[0]),
+	); err != nil {
+		t.Fatalf("install upgrade replay source: %v", err)
+	}
+	materializeInstalledRelease(t, root, fixtures[0])
+	request := cli.Request{
+		Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[1].Root,
+	}
+	_, err := backend.Run(context.Background(), request)
+	assertFault(t, err, cli.FaultUnavailable, "EFFECT_OUTCOME_UNKNOWN")
+	active := readJournal(t, root)
+	if active.Active == nil || active.Active.Phase != lifecycle.PhaseLoadingImages {
+		t.Fatalf("unknown upgrade journal = %#v", active)
+	}
+	commandID := active.Active.Command.ID
+	backupID := active.Active.Command.BackupID
+
+	effects.upgradeFailPhase = lifecycle.PhaseStarting
+	effects.upgradeFailErr = ErrEffectVerification
+	effects.upgradeFailOnce = false
+	_, err = backend.Run(context.Background(), request)
+	assertFault(t, err, cli.FaultVerification, "START_VERIFICATION_FAILED")
+	restored := readJournal(t, root)
+	if restored.CurrentReleaseID != fixtures[0].Manifest.Release.ID ||
+		restored.PreviousRelease != "" || restored.Active != nil || restored.Last == nil ||
+		restored.Last.Command.ID != commandID || restored.Last.Command.BackupID != backupID ||
+		restored.Last.Outcome != lifecycle.OutcomeRolledBack ||
+		effects.upgradeRollbackCalls != 1 ||
+		effects.upgradeCalls[lifecycle.PhaseLoadingImages] != 2 {
+		t.Fatalf("automatically restored upgrade = %#v / effects=%#v", restored, effects)
+	}
+}
+
+func TestUpgradeRejectsSkippedPredecessorWithoutStartingACommand(t *testing.T) {
+	fixtures := writeReleaseSequence(t, 3)
+	effects := &installEffects{}
+	backend := newTestBackend(t, effects)
+	root := filepath.Join(t.TempDir(), "matrix")
+	if _, err := backend.Run(
+		context.Background(), installRequest(root, fixtures[0]),
+	); err != nil {
+		t.Fatalf("install predecessor source: %v", err)
+	}
+	materializeInstalledRelease(t, root, fixtures[0])
+	before := readJournal(t, root)
+	_, err := backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[2].Root,
+	})
+	assertFault(t, err, cli.FaultPrecondition, "UPGRADE_PREDECESSOR_MISMATCH")
+	if !reflect.DeepEqual(readJournal(t, root), before) || len(effects.upgradeCalls) != 0 {
+		t.Fatal("skipped predecessor changed state or reached upgrade effects")
+	}
 }
 
 func TestStatusIsReadOnlyForStableAndActiveInstallations(t *testing.T) {
@@ -421,26 +532,34 @@ func TestSupportBindsOwnedOutputWithoutPersistingItsPath(t *testing.T) {
 }
 
 type installEffects struct {
-	calls            map[lifecycle.Phase]int
-	failPhase        lifecycle.Phase
-	failErr          error
-	failOnce         bool
-	failed           bool
-	rollbackCalls    int
-	rollbackErr      error
-	rollbackFailOnce bool
-	rollbackFailed   bool
-	observeCalls     int
-	observeReady     bool
-	observeErr       error
-	verifyCalls      int
-	verifyErr        error
-	backupCalls      int
-	backupErr        error
-	backupPlan       BackupPlan
-	supportCalls     int
-	supportErr       error
-	supportPlan      SupportPlan
+	calls                map[lifecycle.Phase]int
+	failPhase            lifecycle.Phase
+	failErr              error
+	failOnce             bool
+	failed               bool
+	rollbackCalls        int
+	rollbackErr          error
+	rollbackFailOnce     bool
+	rollbackFailed       bool
+	observeCalls         int
+	observeReady         bool
+	observeErr           error
+	verifyCalls          int
+	verifyErr            error
+	backupCalls          int
+	backupErr            error
+	backupPlan           BackupPlan
+	supportCalls         int
+	supportErr           error
+	supportPlan          SupportPlan
+	upgradeCalls         map[lifecycle.Phase]int
+	upgradePlan          UpgradePlan
+	upgradeFailPhase     lifecycle.Phase
+	upgradeFailErr       error
+	upgradeFailOnce      bool
+	upgradeFailed        bool
+	upgradeRollbackCalls int
+	upgradeRollbackErr   error
 }
 
 func (effects *installEffects) ApplyInstallPhase(
@@ -470,6 +589,34 @@ func (effects *installEffects) RollbackInstall(context.Context, InstallPlan) err
 		return effects.rollbackErr
 	}
 	return nil
+}
+
+func (effects *installEffects) ApplyUpgradePhase(
+	_ context.Context,
+	plan UpgradePlan,
+	phase lifecycle.Phase,
+) error {
+	if effects.upgradeCalls == nil {
+		effects.upgradeCalls = make(map[lifecycle.Phase]int)
+	}
+	effects.upgradeCalls[phase]++
+	effects.upgradePlan = plan
+	if plan.Source.ReleaseID == "" || plan.Source.ReleaseDigest == "" ||
+		plan.Target.Bundle.Manifest.Release.ID == "" || plan.BackupID == "" ||
+		plan.CreatedAt.IsZero() {
+		return errors.New("upgrade plan is incomplete")
+	}
+	if phase == effects.upgradeFailPhase && effects.upgradeFailErr != nil &&
+		(!effects.upgradeFailOnce || !effects.upgradeFailed) {
+		effects.upgradeFailed = true
+		return effects.upgradeFailErr
+	}
+	return nil
+}
+
+func (effects *installEffects) RollbackUpgrade(context.Context, UpgradePlan) error {
+	effects.upgradeRollbackCalls++
+	return effects.upgradeRollbackErr
 }
 
 func (effects *installEffects) ObserveInstallation(
@@ -581,4 +728,48 @@ func writeReleaseFixture(t *testing.T) releasetest.Fixture {
 		t.Fatalf("write release fixture: %v", err)
 	}
 	return fixture
+}
+
+func writeReleaseSequence(t *testing.T, count int) []releasetest.Fixture {
+	t.Helper()
+	fixtures, err := releasetest.WriteSequence(t.TempDir(), count)
+	if err != nil {
+		t.Fatalf("write release fixture sequence: %v", err)
+	}
+	return fixtures
+}
+
+func materializeInstalledRelease(
+	t *testing.T,
+	root string,
+	fixture releasetest.Fixture,
+) {
+	t.Helper()
+	trustBytes, err := os.ReadFile(fixture.TrustPath)
+	if err != nil {
+		t.Fatalf("read fixture trust: %v", err)
+	}
+	verified, err := release.VerifyDirectory(fixture.Root, trustBytes)
+	if err != nil {
+		t.Fatalf("verify fixture release: %v", err)
+	}
+	releases := filepath.Join(root, "releases")
+	if err := os.MkdirAll(releases, 0o700); err != nil {
+		t.Fatalf("create installed release directory: %v", err)
+	}
+	trustTarget := filepath.Join(root, filepath.FromSlash(layout.ReleaseTrust))
+	if err := os.MkdirAll(filepath.Dir(trustTarget), 0o700); err != nil {
+		t.Fatalf("create installed trust directory: %v", err)
+	}
+	if err := os.WriteFile(
+		trustTarget, trustBytes, 0o600,
+	); err != nil {
+		t.Fatalf("write installed trust: %v", err)
+	}
+	if _, err := release.StageDirectory(
+		verified, trustBytes,
+		filepath.Join(root, filepath.FromSlash(layout.ReleaseDirectory(fixture.Manifest.Release.ID))),
+	); err != nil {
+		t.Fatalf("stage installed release: %v", err)
+	}
 }

@@ -317,10 +317,16 @@ func validateCommand(command Command) error {
 		return errors.New("installation command identity or time is invalid")
 	}
 	switch command.Action {
-	case ActionInstall, ActionUpgrade:
+	case ActionInstall:
 		if !digestPattern.MatchString(command.InputDigest) ||
 			!releaseIDPattern.MatchString(command.TargetReleaseID) || command.BackupID != "" {
 			return errors.New("release-changing command input is invalid")
+		}
+	case ActionUpgrade:
+		if !digestPattern.MatchString(command.InputDigest) ||
+			!releaseIDPattern.MatchString(command.TargetReleaseID) ||
+			!backupIDPattern.MatchString(command.BackupID) {
+			return errors.New("upgrade command input is invalid")
 		}
 	case ActionRecover:
 		if !digestPattern.MatchString(command.InputDigest) ||
@@ -485,6 +491,17 @@ func workflow(action Action) []Phase {
 	default:
 		return nil
 	}
+}
+
+// NextPhase exposes only the next admitted transition in the closed lifecycle
+// workflow so orchestration does not duplicate the state machine sequence.
+func NextPhase(action Action, current Phase) (Phase, bool) {
+	sequence := workflow(action)
+	index := phaseIndex(sequence, current)
+	if index < 0 || index+1 >= len(sequence) {
+		return "", false
+	}
+	return sequence[index+1], true
 }
 
 func phaseIndex(phases []Phase, phase Phase) int {

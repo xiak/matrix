@@ -160,6 +160,34 @@ func TestManifestRejectsUnsafeOrIncompleteInventory(t *testing.T) {
 	}
 }
 
+func TestManifestAdmitsOnlyForwardSemanticSuccessors(t *testing.T) {
+	tests := []struct {
+		name     string
+		previous string
+		target   string
+		valid    bool
+	}{
+		{name: "minor", previous: "v0.1.0", target: "v0.2.0", valid: true},
+		{name: "downgrade", previous: "v0.2.0", target: "v0.1.0"},
+		{name: "stable to prerelease", previous: "v0.2.0", target: "v0.2.0-rc.1"},
+		{name: "prerelease to stable", previous: "v0.2.0-rc.1", target: "v0.2.0", valid: true},
+		{name: "prerelease increment", previous: "v0.2.0-rc.1", target: "v0.2.0-rc.2", valid: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			manifest := validManifest()
+			manifest.Release.Version = test.target
+			manifest.Release.ID = "matrix-" + test.target + "-" + manifest.Release.SourceCommit[:12]
+			manifest.Release.PreviousVersion = test.previous
+			manifest.Release.PreviousID = "matrix-" + test.previous + "-0123456789ab"
+			_, err := EncodeCanonical(manifest)
+			if (err == nil) != test.valid {
+				t.Fatalf("successor validation error = %v, valid=%t", err, test.valid)
+			}
+		})
+	}
+}
+
 func TestManifestStrictDecodersRejectUnknownMetadataAndSignatureShape(t *testing.T) {
 	manifestBytes, err := EncodeCanonical(validManifest())
 	if err != nil {
