@@ -322,6 +322,15 @@ not archive layout, Compose text, SQL text, command call order, or line counts.
   controls, and provider response leakage. The concrete local-machine Effects
   now compose the existing idempotent phase boundaries, and the real `mx`
   process owns signal handling, normalized streams, and stable exit codes.
+- Commit `6825876` adds the real independently runnable PaaS UI and signed
+  verification workload. The Go-served offline UI uses only public IAM/PaaS
+  routes, keeps its session credential in page memory, and supports creation
+  of applications, configurations, and immutable ENV configuration revisions.
+  The workload fails closed unless the exact installation/release bindings are
+  valid and exposes their no-secret readiness result. The fixed topology owns
+  both executable contracts; release and topology packages were moved once to
+  the installation build boundary so `deploy` can assemble them without a
+  copied manifest or compatibility alias.
 - The accepted implementation through `3323741` passed generation drift, full
   unit tests, vet, race,
   ten-run repetition, architecture boundaries, placement fuzz, four-target
@@ -340,7 +349,10 @@ not archive layout, Compose text, SQL text, command call order, or line counts.
   behavior ten times, four-target builds, and repository-diff checks. The
   installation verifier/client and concrete runner slice passes full
   unit/vet, focused race and ten-run tests, architecture gates, normalized
-  provider-output checks, and Linux amd64/arm64 plus Darwin/arm64 builds. Real
+  provider-output checks, and Linux amd64/arm64 plus Darwin/arm64 builds. The
+  exact `6825876` worktree additionally passed generation drift, full
+  unit/vet/race, architecture and JavaScript syntax gates, plus Linux
+  amd64/arm64 and Darwin/arm64 UI/workload builds. Real
   assembled-release installation, service integration, upgrade, rollback,
   recovery, and clean offline E2E remain unaccepted.
 

@@ -27,7 +27,7 @@
 
 - The branch contains commit `001d889`; FEAT-004 Gate C is accepted and pushed
   in `2b7e398`, FEAT-005 Gate A is accepted and pushed in `83502b0`, and the
-  current durable implementation head is `aef5ee5`. The fixed donor baselines
+  current durable implementation head is `6825876`. The fixed donor baselines
   remain those listed below.
 - FEAT-001, FEAT-002, and FEAT-003 Gate A/Gate B are Accepted. The public model
   is Application, immutable ApplicationRevision, Deployment,
@@ -159,8 +159,13 @@
   and bounded chain proof with strict response and leakage bounds. The concrete
   local-machine Effects compose the existing journaled phases, and the real
   `mx` process now wires install, signal handling, normalized streams, and
-  stable exits. Platform image/release assembly and the non-install lifecycle
-  actions remain unwired.
+  stable exits. Commit `6825876` adds a real independent Go-served PaaS UI for
+  IAM login and immutable ENV configuration revisions, plus the real signed
+  verification workload that validates its installation/release bindings.
+  The closed topology owns both exact executable entries. Release and topology
+  packages are now the single installation build boundary consumed by the
+  pending `deploy` assembler; no internal/public alias was retained. Platform
+  image/release assembly and the non-install lifecycle actions remain unwired.
 - FEAT-006 Gate A and Gate B are Accepted. Target design and fixed-donor
   adoption remain `506f6d7` and `932252e`; the accepted authority contracts,
   pure behavior, and separate IAM/Audit PostgreSQL owners, migrators, runtime
@@ -196,10 +201,8 @@
   non-bypass API/worker logins, attacked RLS and cross-role privileges,
   injected transaction, delivery, and unknown-effect failures, and connected
   the real Compose executor through the durable worker and capacity workflow.
-- No assembled offline release, installation provider runner, APISIX/UI
-  service composition, or verified clean-host
-  install/upgrade/rollback/recovery E2E exists yet. The Phase 1 goal is
-  therefore active.
+- No assembled offline release or verified clean-host install/upgrade/
+  rollback/recovery E2E exists yet. The Phase 1 goal is therefore active.
 
 ## Next concrete work
 
