@@ -141,7 +141,10 @@ The local PostgreSQL provisioner uses only the release-owned digest-pinned
 artifact and server-generated restrictive credential material. It performs no
 pull or build, never executes caller input, and owns only objects labeled with
 the exact installation identity. Persistent storage is installation-owned and
-must survive process restart and compatible platform upgrade. A terminal
+must survive process restart and compatible platform upgrade. The outer
+installation-owned directory remains restrictive while its PostgreSQL 18 bind
+mount root preserves the fixed image's sticky traversal contract; PGDATA below
+that root remains owned and confined by PostgreSQL. A terminal
 provisioning failure releases only the reservation proven to belong to that
 installation; retry or equal command replay cannot create a second instance.
 

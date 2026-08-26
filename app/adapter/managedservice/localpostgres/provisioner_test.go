@@ -46,6 +46,16 @@ func TestEnsureUsesOnlyFixedArtifactAndFileCredential(t *testing.T) {
 	if err != nil || string(password) != string(secret) {
 		t.Fatalf("credential file does not contain the generated secret: err=%v", err)
 	}
+	if os.PathSeparator == '/' {
+		dataPath := strings.TrimSuffix(runtime.project.EffectDocument, "compose.json") + "data"
+		info, statErr := os.Stat(dataPath)
+		if statErr != nil {
+			t.Fatalf("inspect PostgreSQL 18 data mount: %v", statErr)
+		}
+		if info.Mode().Perm() != 0o777 || info.Mode()&os.ModeSticky == 0 {
+			t.Fatalf("PostgreSQL 18 data mount mode=%v", info.Mode())
+		}
+	}
 	second, err := provisioner.Ensure(context.Background(), testProvisionRequest())
 	if err != nil || second != result || runtime.applyCalls != 1 {
 		t.Fatalf("equal ensure=%#v err=%v applyCalls=%d", second, err, runtime.applyCalls)

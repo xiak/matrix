@@ -122,7 +122,7 @@ func (provisioner *Provisioner) prepareProject(
 		return composeadapter.RuntimeProject{}, "", "", err
 	}
 	dataDirectory := filepath.Join(directory, "data")
-	if err := prepareOwnedDirectory(provisioner.root, dataDirectory); err != nil {
+	if err := preparePostgresDataDirectory(provisioner.root, dataDirectory); err != nil {
 		return composeadapter.RuntimeProject{}, "", "", err
 	}
 	passwordPath := filepath.Join(directory, "postgres-password")
@@ -283,6 +283,22 @@ func prepareOwnedDirectory(root, path string) error {
 	info, err := os.Lstat(path)
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return errors.New("local PostgreSQL directory conflicts")
+	}
+	return nil
+}
+
+func preparePostgresDataDirectory(root, path string) error {
+	if err := prepareOwnedDirectory(root, path); err != nil {
+		return err
+	}
+	if os.PathSeparator != '/' {
+		return nil
+	}
+	// The fixed PostgreSQL 18 image owns /var/lib/postgresql as a sticky
+	// mount root, then creates and confines PGDATA below it as the postgres
+	// user. The project directory above this bind source remains mode 0700.
+	if err := os.Chmod(path, os.ModeSticky|0o777); err != nil {
+		return errors.New("local PostgreSQL data mount mode cannot be set")
 	}
 	return nil
 }
