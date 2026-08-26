@@ -27,7 +27,7 @@
 
 - The branch contains commit `001d889`; FEAT-004 Gate C is accepted and pushed
   in `2b7e398`, FEAT-005 Gate A is accepted and pushed in `83502b0`, and the
-  current durable implementation head is `6825876`. The fixed donor baselines
+  current durable implementation head is `c2bcd73`. The fixed donor baselines
   remain those listed below.
 - FEAT-001, FEAT-002, and FEAT-003 Gate A/Gate B are Accepted. The public model
   is Application, immutable ApplicationRevision, Deployment,
@@ -163,9 +163,13 @@
   IAM login and immutable ENV configuration revisions, plus the real signed
   verification workload that validates its installation/release bindings.
   The closed topology owns both exact executable entries. Release and topology
-  packages are now the single installation build boundary consumed by the
-  pending `deploy` assembler; no internal/public alias was retained. Platform
-  image/release assembly and the non-install lifecycle actions remain unwired.
+  packages are the single installation build boundary; no internal/public
+  alias was retained. Commit `28d1448` adds the repository-owned offline
+  release assembler and fixed network-disabled image builds, while `5489bcf`
+  signs portable image identities. Commits `127beb7`, `bab7416`, `12ccc02`,
+  `1490a93`, and `c2bcd73` close the PostgreSQL 18 contract and bind-ownership
+  boundaries, converge the fixed runtimes, expose only the APISIX edge
+  listener, and support the declared minimum Compose v2.33.0 runtime.
 - FEAT-006 Gate A and Gate B are Accepted. Target design and fixed-donor
   adoption remain `506f6d7` and `932252e`; the accepted authority contracts,
   pure behavior, and separate IAM/Audit PostgreSQL owners, migrators, runtime
@@ -201,18 +205,23 @@
   non-bypass API/worker logins, attacked RLS and cross-role privileges,
   injected transaction, delivery, and unknown-effect failures, and connected
   the real Compose executor through the durable worker and capacity workflow.
-- No assembled offline release or verified clean-host install/upgrade/
-  rollback/recovery E2E exists yet. The Phase 1 goal is therefore active.
+- Release A `matrix-v0.1.0-c2bcd738a753` was assembled from exact clean commit
+  `c2bcd73` as build `phase1-a-20260826-07`. A brand-new privileged DinD with
+  outer network mode `none`, Docker 27.5.1, Compose v2.33.0, and no inner
+  containers, images, or volumes loaded all seven signed images and completed
+  `mx platform install` as `READY`. APISIX was healthy on its real loopback
+  listener; the signed no-pull verification workload reached Deployment
+  `READY` and Operation `SUCCEEDED`; its Audit outbox was delivered; and the
+  fixed PaaS and Audit APIs returned `READY` and `VERIFIED` for the same fact
+  and bounded chain. Full verify/status/backup/upgrade/rollback/recovery/
+  support behavior and complete lifecycle E2E remain pending, so the Phase 1
+  goal is active.
 
 ## Next concrete work
 
-1. Assemble the real IAM, Audit, PaaS, dispatcher, APISIX, UI, PostgreSQL, and
-   verification images plus a signed release A from exact release content;
-   prove a clean external-network-disabled install reaches the fixed
-   PaaS/Audit verification result.
-2. Implement the remaining durable verify/status/backup/upgrade/rollback/
+1. Implement the remaining durable verify/status/backup/upgrade/rollback/
    recovery/support actions, then assemble release B and failed candidates.
-3. Prove the complete external-network-disabled Compose
+2. Prove the complete external-network-disabled Compose
    install, verification, operations, upgrade, rollback, backup/recovery, and
    support-evidence E2E required for FEAT-005 Gate B/C and FEAT-006 Gate C.
 

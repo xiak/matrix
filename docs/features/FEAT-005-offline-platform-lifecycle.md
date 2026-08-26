@@ -332,6 +332,21 @@ not archive layout, Compose text, SQL text, command call order, or line counts.
   both executable contracts; release and topology packages were moved once to
   the installation build boundary so `deploy` can assemble them without a
   copied manifest or compatibility alias.
+- Commit `28d1448` adds the repository-owned offline release assembler and
+  fixed network-disabled image builds; `5489bcf` makes the signed image
+  identities portable across Docker Engines. Commits `127beb7`, `bab7416`,
+  `12ccc02`, `1490a93`, and `c2bcd73` close the PostgreSQL 18 runtime and bind
+  ownership boundaries, converge exact platform runtimes, publish only the
+  APISIX edge listener, and keep workload effects compatible with the declared
+  minimum Compose v2.33.0.
+- Exact clean commit `c2bcd73` assembled signed Release A
+  `matrix-v0.1.0-c2bcd738a753`. A brand-new network-disabled DinD with Docker
+  27.5.1, Compose v2.33.0, and no initial inner containers, images, or volumes
+  loaded all seven signed images and completed `mx platform install` as
+  `READY`. The real APISIX loopback listener was healthy; the signed no-pull
+  verification workload reached Deployment `READY` and Operation `SUCCEEDED`;
+  its Audit outbox was delivered; and the fixed PaaS/Audit endpoints returned
+  `READY` and `VERIFIED` for the same fact and bounded chain.
 - The accepted implementation through `3323741` passed generation drift, full
   unit tests, vet, race,
   ten-run repetition, architecture boundaries, placement fuzz, four-target
@@ -353,9 +368,13 @@ not archive layout, Compose text, SQL text, command call order, or line counts.
   provider-output checks, and Linux amd64/arm64 plus Darwin/arm64 builds. The
   exact `6825876` worktree additionally passed generation drift, full
   unit/vet/race, architecture and JavaScript syntax gates, plus Linux
-  amd64/arm64 and Darwin/arm64 UI/workload builds. Real
-  assembled-release installation, service integration, upgrade, rollback,
-  recovery, and clean offline E2E remain unaccepted.
+  amd64/arm64 and Darwin/arm64 UI/workload builds. The exact `c2bcd73` worktree
+  passed generation drift, full unit/vet/race, focused ten-run repetition,
+  Windows/Linux/Darwin builds, and the real network-disabled Compose executor
+  E2E against Compose v2.33.0. Real clean offline Release A installation and
+  service integration are accepted; verify/status, upgrade, rollback,
+  backup/recovery, support evidence, and complete lifecycle E2E remain
+  unaccepted.
 
 ## Deferred
 
