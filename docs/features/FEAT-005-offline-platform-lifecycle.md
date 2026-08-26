@@ -314,6 +314,14 @@ not archive layout, Compose text, SQL text, command call order, or line counts.
   release content, data, credentials, and the sealed journal intact. A missing
   Docker dependency or uncertain removal remains replayable instead of being
   prematurely committed as manual intervention.
+- The installation verification slice reads only the protected verifier
+  credential, calls the fixed PaaS probe through loopback APISIX, waits for its
+  exact release-bound Deployment/Operation, then asks Audit to verify the exact
+  delivered fact and chain endpoint. Calls are bounded, reject redirects,
+  compressed or ambiguous JSON, mismatched identities, caller-selected
+  controls, and provider response leakage. The concrete local-machine Effects
+  now compose the existing idempotent phase boundaries, and the real `mx`
+  process owns signal handling, normalized streams, and stable exit codes.
 - The accepted implementation through `3323741` passed generation drift, full
   unit tests, vet, race,
   ten-run repetition, architecture boundaries, placement fuzz, four-target
@@ -329,9 +337,12 @@ not archive layout, Compose text, SQL text, command call order, or line counts.
   probes, Windows/Linux/Darwin builds, and repository-diff checks.
   The exact `40cc917` worktree passed generation drift, full unit/vet/race,
   relevant ten-run repetition, network-disabled Linux/amd64 start and cleanup
-  behavior ten times, four-target builds, and repository-diff checks. Full
-  platform verification, installation, service integration, upgrade,
-  rollback, recovery, and clean offline E2E remain unaccepted.
+  behavior ten times, four-target builds, and repository-diff checks. The
+  installation verifier/client and concrete runner slice passes full
+  unit/vet, focused race and ten-run tests, architecture gates, normalized
+  provider-output checks, and Linux amd64/arm64 plus Darwin/arm64 builds. Real
+  assembled-release installation, service integration, upgrade, rollback,
+  recovery, and clean offline E2E remain unaccepted.
 
 ## Deferred
 
