@@ -282,6 +282,21 @@
   revisions and the backup remained present, the PostgreSQL data directory
   inode stayed `2576113`, and post-rollback status/verify returned `READY` with
   A current and the N-1 pointer cleared. Explicit rollback is accepted.
+- Exact commit `0783f85`, building on the bounded recovery implementation and
+  portable Matrix branding/donor cleanup, passed generation drift, full
+  unit/vet/race, focused host and network-disabled read-only Linux ten-run
+  coverage, architecture, four-target build, portability, and diff gates. Its
+  compatible signed A/B releases ran in a fresh outer-network-`none` DinD with
+  an empty installation root and no inner Docker objects. A installed and made
+  a restrictive sealed backup, B upgraded and advanced the verification
+  Deployment to generation 4, and recovery of the selected A backup returned
+  `READY`. Recovery committed A with no previous pointer, left all nine A
+  services healthy and no B platform container, and converged the restored
+  database and provider at generation 3. Independent post-recovery verify
+  advanced both to generation 4; all eleven PaaS Audit outboxes were delivered,
+  PostgreSQL directory identity/ownership stayed unchanged, and bounded `0600`
+  support evidence passed Secret-value and native/path/backup leakage scans.
+  Protected backup recovery is accepted.
 
 ## Phase 1 execution roadmap
 
@@ -298,17 +313,17 @@
 | A9 | Protected backup and bounded support evidence | Accepted |
 | A10 | Authenticated upgrade and automatic rollback | Accepted |
 | A11 | Explicit N-1 platform rollback | Accepted |
-| A12 | Protected backup recovery | Next |
-| A13 | Complete clean external-network-disabled lifecycle E2E | Pending |
+| A12 | Protected backup recovery | Accepted |
+| A13 | Complete clean external-network-disabled lifecycle E2E | Next |
 | A14 | Final common gates, documentation convergence, and Phase 1 acceptance | Pending |
 
 ## Next concrete work
 
-1. Implement and validate protected backup recovery without weakening backup
-   ownership, authentication, or explicit destructive-operation boundaries.
-2. Run the complete external-network-disabled Compose install, repeated
-   operations, upgrade, automatic and explicit rollback, recovery, and support
-   E2E required for FEAT-005 Gate B/C and FEAT-006 Gate C.
+1. Run the complete external-network-disabled Compose application and platform
+   lifecycle, including repeated configuration operations, injected automatic
+   rollback, explicit rollback, recovery, restart, support, and stop behavior.
+2. Run the final common gates, converge the owning documents, and complete
+   FEAT-005 Gate B/C plus FEAT-006 Gate C evidence.
 
 ## Fixed donor baselines
 

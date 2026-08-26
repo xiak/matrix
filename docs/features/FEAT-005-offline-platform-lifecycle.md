@@ -452,7 +452,25 @@ not archive layout, Compose text, SQL text, command call order, or line counts.
   the expanded PostgreSQL data remained present, while the PostgreSQL data
   directory inode was unchanged. Post-rollback `status` and `verify` returned
   `READY` with A current and no N-1 pointer. Explicit N-1 rollback is accepted;
-  backup recovery and the complete clean lifecycle E2E remain unaccepted.
+  backup recovery remained unaccepted at that milestone. Exact commit
+  `0783f85` passed generation drift, full unit/vet/race, host and
+  network-disabled read-only Linux ten-run recovery coverage, architecture,
+  four-target build, portability, and repository-diff gates. Signed releases
+  `matrix-v0.1.0-0783f85e3f0e` and `matrix-v0.2.0-0783f85e3f0e` then ran in a
+  new outer-network-`none` DinD whose inner Docker and installation root were
+  empty. A installed, created restrictive sealed backup
+  `backup-2f20369050b1b3a768de4a6779793ee5`, and upgraded to B. The verification
+  Deployment advanced from backup generation 2 to B generation 4 before the
+  selected backup recovered A and converged both database and provider at
+  generation 3. An independent post-recovery verify advanced both to
+  generation 4. All nine A services were healthy, no B platform container
+  remained, the sealed journal committed A with no previous pointer, all
+  eleven PaaS Audit outbox facts were delivered, both immutable releases and
+  both protected backups remained present, and the PostgreSQL data directory
+  identity and ownership were unchanged. Repeated status passed; `0600`
+  support evidence passed value-level Secret plus native/path/backup leakage
+  scans. Protected backup recovery is accepted; the complete clean lifecycle
+  E2E remains unaccepted.
 
 ## Deferred
 
