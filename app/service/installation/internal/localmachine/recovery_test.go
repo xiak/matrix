@@ -94,11 +94,14 @@ func TestRecoveryRefusesUnboundedVerificationProjectBeforeProviderAccess(t *test
 	}
 }
 
-func TestRecoveredVerificationRequiresTheExactProviderGeneration(t *testing.T) {
+func TestRecoveredVerificationRequiresExactProviderGenerationAndReadiness(t *testing.T) {
 	plan := newInstallPlan(t)
 	inspector := newRecoveryProbeInspector(t, plan)
 	state := inspector.provision(t, 4)
 	runtimeBoundary := newRecoveryProbeRuntime(t, plan, state)
+	// Application Compose treats a running container with no healthcheck as
+	// ready; recovery must use the same provider contract.
+	runtimeBoundary.container.State.Health = nil
 	verification := paasv1.InstallationVerification{
 		DeploymentID: state.DeploymentID, Generation: state.Generation,
 	}
@@ -112,6 +115,15 @@ func TestRecoveredVerificationRequiresTheExactProviderGeneration(t *testing.T) {
 		context.Background(), runtimeBoundary, inspector, plan, verification,
 	); !errors.Is(err, platformcommand.ErrEffectVerification) {
 		t.Fatalf("stale recovered provider generation error=%v", err)
+	}
+	verification.Generation = state.Generation
+	runtimeBoundary.container.State.Health = &struct {
+		Status string `json:"Status"`
+	}{Status: "unhealthy"}
+	if err := verifyRecoveredVerificationProject(
+		context.Background(), runtimeBoundary, inspector, plan, verification,
+	); !errors.Is(err, platformcommand.ErrEffectVerification) {
+		t.Fatalf("unhealthy recovered provider generation error=%v", err)
 	}
 }
 

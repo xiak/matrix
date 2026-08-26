@@ -507,7 +507,7 @@ func validateRecoveryVerificationContainer(
 		}
 	}
 	if requireReady && (!container.State.Running || container.State.Status != "running" ||
-		container.State.Health == nil || container.State.Health.Status != "healthy") {
+		(container.State.Health != nil && container.State.Health.Status != "healthy")) {
 		return errors.New("verification container is not ready")
 	}
 	return nil
