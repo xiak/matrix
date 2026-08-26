@@ -242,7 +242,6 @@ func (service *Service) ensureDeployment(
 	result, err := service.applications.Submit(ctx, applicationlifecycle.SubmitCommand{
 		Authorization:           authorization,
 		DeploymentID:            resources.deploymentID,
-		Name:                    current.Metadata.Name,
 		Spec:                    resources.deploymentSpec,
 		ExpectedResourceVersion: current.Metadata.ResourceVersion,
 		IdempotencyKey: fmt.Sprintf(

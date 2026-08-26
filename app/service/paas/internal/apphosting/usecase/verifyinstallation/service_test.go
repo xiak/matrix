@@ -108,7 +108,7 @@ func TestServiceUsesCurrentResourceVersionForReleaseUpdate(t *testing.T) {
 		t.Fatalf("upgrade verification=%#v submissions=%d", verification, len(applications.submissions))
 	}
 	submission := applications.submissions[0]
-	if submission.ExpectedResourceVersion != 7 ||
+	if submission.Name != "" || submission.ExpectedResourceVersion != 7 ||
 		!strings.HasSuffix(submission.IdempotencyKey, "-deployment-rv-7") ||
 		submission.Spec.ApplicationRevisionID == current.Spec.ApplicationRevisionID {
 		t.Fatalf("upgrade verification submission=%#v", submission)
@@ -206,13 +206,15 @@ func (value *verificationApplications) Submit(
 ) (applicationlifecycle.Result, error) {
 	value.submissions = append(value.submissions, command)
 	resourceVersion, generation := uint64(1), uint64(1)
+	name := command.Name
 	if value.current != nil {
 		resourceVersion = value.current.Metadata.ResourceVersion + 1
 		generation = value.current.Generation + 1
+		name = value.current.Metadata.Name
 	}
 	return deploymentResult(
 		command.DeploymentID,
-		command.Name,
+		name,
 		command.Spec,
 		command.Authorization,
 		resourceVersion,
