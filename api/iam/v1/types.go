@@ -127,8 +127,9 @@ type LoginRequest struct {
 // LoginResponse contains the one-time plaintext session credential. Ordinary
 // JSON marshaling is intentionally forbidden; use EncodeLoginResponse.
 type LoginResponse struct {
-	Session    Session `json:"session"`
-	Credential Secret  `json:"credential"`
+	Session            Session `json:"session"`
+	Credential         Secret  `json:"credential"`
+	MustChangePassword bool    `json:"mustChangePassword"`
 }
 
 type LogoutRequest struct {

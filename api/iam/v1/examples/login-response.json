@@ -9,5 +9,6 @@
     "issuedAt": "2026-08-25T01:02:03.000000Z",
     "expiresAt": "2026-08-25T09:02:03.000000Z"
   },
-  "credential": "example-only-session-credential-0000000000000001"
+  "credential": "example-only-session-credential-0000000000000001",
+  "mustChangePassword": true
 }

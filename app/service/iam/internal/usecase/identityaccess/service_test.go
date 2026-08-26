@@ -85,6 +85,9 @@ func TestIAMCoreUsecasesBindCredentialsAndRecordClosedAuthorization(t *testing.T
 	if err != nil {
 		t.Fatalf("log in initial administrator: %v", err)
 	}
+	if !login.MustChangePassword {
+		t.Fatal("initial administrator login did not require a password change")
+	}
 	request := iamv1.AuthorizationRequest{
 		Action:        iamv1.ActionPaaSApplicationCreate,
 		Resource:      iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-example"},
@@ -158,6 +161,9 @@ func TestIAMCoreUsecasesBindCredentialsAndRecordClosedAuthorization(t *testing.T
 	})
 	if err != nil {
 		t.Fatalf("log in organization user: %v", err)
+	}
+	if !developerLogin.MustChangePassword {
+		t.Fatal("initial organization user login did not require a password change")
 	}
 	request.RequestID = "request-developer-before-password"
 	request.CorrelationID = request.RequestID

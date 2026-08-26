@@ -157,6 +157,31 @@ func TestIAMCredentialsRequireExplicitEncoding(t *testing.T) {
 	if !bytes.Equal(decodedLogin.Credential.CopyBytes(), login.Credential.CopyBytes()) {
 		t.Fatal("explicit login response encoding changed session credential")
 	}
+	if decodedLogin.MustChangePassword != login.MustChangePassword {
+		t.Fatal("explicit login response encoding changed the password-change requirement")
+	}
+}
+
+func TestIAMLoginResponsePublishesPasswordChangeRequirement(t *testing.T) {
+	document := loadIAMOpenAPI(t)
+	login := mustIAMObject(t, iamOpenAPISchemas(t, document)["LoginResponse"], "login response schema")
+	properties := mustIAMObject(t, login["properties"], "login response properties")
+	if _, exists := properties["mustChangePassword"]; !exists {
+		t.Fatal("login response does not publish the password-change requirement")
+	}
+	required, ok := login["required"].([]any)
+	if !ok {
+		t.Fatalf("login response required fields = %#v", login["required"])
+	}
+	found := false
+	for _, field := range required {
+		if field == "mustChangePassword" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("login response password-change requirement is optional")
+	}
 }
 
 func TestIAMOpenAPICredentialBoundaries(t *testing.T) {

@@ -13,16 +13,29 @@ function Probe() {
       <span data-testid="principal">{session.current?.loginName ?? "none"}</span>
       <span data-testid="error">{session.error ?? "none"}</span>
       <button onClick={() => void session.login("admin", "password")} type="button">login</button>
+      <button
+        onClick={() => void session.changePassword("Initial-Admin-Password-49!", "Changed-Admin-Password-73!")}
+        type="button"
+      >change</button>
       <button onClick={() => void session.logout()} type="button">logout</button>
     </div>
   );
 }
 
-function repository(logoutFailure = false): IamRepository {
+function repository({
+  mustChangePassword = false,
+  logoutFailure = false,
+  passwordFailure = false
+}: {
+  mustChangePassword?: boolean;
+  logoutFailure?: boolean;
+  passwordFailure?: boolean;
+} = {}): IamRepository {
   return {
     async login() {
       return {
         credential: secretCredential,
+        mustChangePassword,
         session: {
           id: "session-test",
           organizationId: "organization-test",
@@ -32,6 +45,9 @@ function repository(logoutFailure = false): IamRepository {
           expiresAt: "2099-08-26T20:00:00Z"
         }
       };
+    },
+    async changePassword() {
+      if (passwordFailure) throw new Error("unavailable");
     },
     async logout() {
       if (logoutFailure) throw new Error("unavailable");
@@ -56,7 +72,7 @@ describe("SessionProvider", () => {
   });
 
   it("does not forget a session when IAM revocation fails", async () => {
-    const screen = render(<SessionProvider repository={repository(true)}><Probe /></SessionProvider>);
+    const screen = render(<SessionProvider repository={repository({ logoutFailure: true })}><Probe /></SessionProvider>);
     await act(async () => fireEvent.click(screen.getByText("login")));
     await waitFor(() => expect(screen.getByTestId("phase").textContent).toBe("authenticated"));
     await act(async () => fireEvent.click(screen.getByText("logout")));
@@ -72,5 +88,32 @@ describe("SessionProvider", () => {
     await act(async () => fireEvent.click(screen.getByText("logout")));
     await waitFor(() => expect(screen.getByTestId("phase").textContent).toBe("anonymous"));
     expect(screen.getByTestId("principal").textContent).toBe("none");
+  });
+
+  it("requires a first-login password change before authenticating", async () => {
+    const screen = render(
+      <SessionProvider repository={repository({ mustChangePassword: true })}>
+        <Probe />
+      </SessionProvider>
+    );
+    await act(async () => fireEvent.click(screen.getByText("login")));
+    await waitFor(() => expect(screen.getByTestId("phase").textContent).toBe("password-change-required"));
+    expect(screen.getByTestId("principal").textContent).toBe("admin");
+    expect(screen.container.textContent).not.toContain(secretCredential);
+    await act(async () => fireEvent.click(screen.getByText("change")));
+    await waitFor(() => expect(screen.getByTestId("phase").textContent).toBe("authenticated"));
+  });
+
+  it("keeps a failed first-login password change inside the required scene", async () => {
+    const screen = render(
+      <SessionProvider repository={repository({ mustChangePassword: true, passwordFailure: true })}>
+        <Probe />
+      </SessionProvider>
+    );
+    await act(async () => fireEvent.click(screen.getByText("login")));
+    await waitFor(() => expect(screen.getByTestId("phase").textContent).toBe("password-change-required"));
+    await act(async () => fireEvent.click(screen.getByText("change")));
+    await waitFor(() => expect(screen.getByTestId("phase").textContent).toBe("password-change-required"));
+    expect(screen.getByTestId("error").textContent).toContain("无法更新密码");
   });
 });

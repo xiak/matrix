@@ -341,7 +341,10 @@ export function ConsoleShellRenderer({
   selection: ControlPlaneRouteSelection;
 }) {
   const session = useSession();
-  if (!session.current || session.phase === "anonymous" || session.phase === "authenticating") {
+  if (
+    !session.current ||
+    (session.phase !== "authenticated" && session.phase !== "revoking")
+  ) {
     return <LoginRenderer />;
   }
   return (

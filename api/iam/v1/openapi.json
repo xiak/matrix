@@ -1981,12 +1981,16 @@
             "$ref": "#/components/schemas/Secret",
             "readOnly": true
           },
+          "mustChangePassword": {
+            "type": "boolean"
+          },
           "session": {
             "$ref": "#/components/schemas/Session"
           }
         },
         "required": [
           "credential",
+          "mustChangePassword",
           "session"
         ],
         "type": "object"

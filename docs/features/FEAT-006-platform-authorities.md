@@ -74,7 +74,8 @@ only that installation-owned file.
 User passwords are bounded and hashed with a versioned Argon2id profile and a
 unique random salt. A user principal belongs to exactly one organization;
 login accepts no organization selector and returns a cryptographically random
-opaque bearer session. The database stores only its digest, absolute
+opaque bearer session plus the non-secret current password-change requirement.
+The database stores only its digest, absolute
 database-time expiry, revocation, principal, and exact organization. Phase 1
 has no JWT, external IdP, LDAP, SAML, OIDC, social login, API-key query
 parameter, or tenant-selection header.

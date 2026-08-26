@@ -24,8 +24,11 @@ generic provider schemas before a real second implementation exists.
 
 1. The browser loads the independent Matrix control console through APISIX.
 2. A user logs in with only `loginName` and `password`. IAM derives the
-   organization and returns one opaque session; there is no organization
-   selector, JWT, external identity provider, or social-login branch.
+   organization and returns one opaque session plus the non-secret
+   password-change requirement. A first-login user must replace the initial
+   password in the same memory-only session before entering the console;
+   there is no organization selector, JWT, external identity provider, or
+   social-login branch.
 3. The authenticated console shows an overview, service catalog, quota,
    service installations, and local-region configuration allowed by the
    user's fixed IAM role.
@@ -229,8 +232,8 @@ request.
    boundary, and a drift gate proves generated assets match source without a
    network fetch or a production Next.js server.
 3. Real IAM login and logout work through APISIX with credentials only in page
-   memory. Reload requires login; storage and DOM inspection find no bearer or
-   password.
+   memory. First-login password replacement is a real IAM workflow, reload
+   requires login, and storage and DOM inspection find no bearer or password.
 4. The app shell, catalog, quota configurator, region view, and installation
    review render through the semantic scene-to-public-component chain. No UI
    action reports a purchased quota or installed service before a real API

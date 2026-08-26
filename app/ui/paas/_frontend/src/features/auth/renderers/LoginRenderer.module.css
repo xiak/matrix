@@ -82,7 +82,8 @@
 }
 
 .cardHeading,
-.form {
+.form,
+.actions {
   display: grid;
   gap: var(--xiak-spacing-tight);
 }
@@ -106,6 +107,16 @@
   background: var(--xiak-color-status-danger-bg);
   color: var(--xiak-color-danger-text);
   font-size: var(--xiak-font-size-small);
+}
+
+.policy {
+  color: var(--xiak-color-text-subtle);
+  font-size: var(--xiak-font-size-caption);
+  line-height: 1.6;
+}
+
+.actions {
+  gap: var(--xiak-spacing-default);
 }
 
 .securityNote {

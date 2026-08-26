@@ -122,7 +122,8 @@ func TestIAMHTTPStrictDecodingAndRedactedProblems(t *testing.T) {
 	loginResponse := httptest.NewRecorder()
 	handler.ServeHTTP(loginResponse, loginRequest)
 	if loginResponse.Code != http.StatusOK || workflow.loginCalls != 1 ||
-		!bytes.Contains(loginResponse.Body.Bytes(), []byte("issued-session-credential")) {
+		!bytes.Contains(loginResponse.Body.Bytes(), []byte("issued-session-credential")) ||
+		!bytes.Contains(loginResponse.Body.Bytes(), []byte(`"mustChangePassword":true`)) {
 		t.Fatalf("login status=%d calls=%d body=%s", loginResponse.Code, workflow.loginCalls, loginResponse.Body.String())
 	}
 
@@ -312,7 +313,8 @@ func newHTTPWorkflow(t *testing.T) *httpWorkflow {
 				IssuedAt:       now,
 				ExpiresAt:      now.Add(time.Hour),
 			},
-			Credential: credential,
+			Credential:         credential,
+			MustChangePassword: true,
 		},
 		decision: iamv1.AuthorizationDecision{
 			APIVersion: iamv1.APIVersion,

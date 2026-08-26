@@ -82,9 +82,14 @@ func EncodeLoginResponse(response LoginResponse) ([]byte, error) {
 		return nil, err
 	}
 	wire := struct {
-		Session    Session `json:"session"`
-		Credential string  `json:"credential"`
-	}{Session: response.Session, Credential: response.Credential.reveal()}
+		Session            Session `json:"session"`
+		Credential         string  `json:"credential"`
+		MustChangePassword bool    `json:"mustChangePassword"`
+	}{
+		Session:            response.Session,
+		Credential:         response.Credential.reveal(),
+		MustChangePassword: response.MustChangePassword,
+	}
 	encoded, err := json.Marshal(wire)
 	if err != nil {
 		return nil, ErrEncodingFailed

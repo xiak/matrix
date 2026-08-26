@@ -163,6 +163,9 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 	if err := iamv1.DecodeRequest(bytes.NewReader(login.Body.Bytes()), &loginResult); err != nil {
 		t.Fatalf("decode IAM login response contract: %v", err)
 	}
+	if !loginResult.MustChangePassword {
+		t.Fatal("initial administrator login did not publish the password-change requirement")
+	}
 	authorizeBody := []byte(`{"action":"paas.application.create","resource":{"kind":"APPLICATION","id":"application-example"},"requestId":"request-authorize","correlationId":"correlation-authorize"}`)
 	authorize := performIAMRequestWithSubject(handler, authorizeBody, paasCredential, loginWire.Credential)
 	if authorize.Code != http.StatusOK {
@@ -287,11 +290,12 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 		t.Fatalf("IAM developer login status=%d body=%s", developerLogin.Code, developerLogin.Body.String())
 	}
 	var developerWire struct {
-		Session    iamv1.Session `json:"session"`
-		Credential string        `json:"credential"`
+		Session            iamv1.Session `json:"session"`
+		Credential         string        `json:"credential"`
+		MustChangePassword bool          `json:"mustChangePassword"`
 	}
 	if err := json.Unmarshal(developerLogin.Body.Bytes(), &developerWire); err != nil ||
-		developerWire.Credential == "" {
+		developerWire.Credential == "" || !developerWire.MustChangePassword {
 		t.Fatalf("decode IAM developer login=%#v err=%v", developerWire.Session, err)
 	}
 	developerAuthorizeBody := []byte(`{"action":"paas.application.create","resource":{"kind":"APPLICATION","id":"application-developer"},"requestId":"request-developer-before-password","correlationId":"correlation-developer-before-password"}`)

@@ -1,5 +1,10 @@
 import { requestJSON, requestToken } from "@/infrastructure/http/jsonRequest";
-import type { IamRepository, LoginCommand, LoginResult } from "./iamRepository";
+import type {
+  ChangePasswordCommand,
+  IamRepository,
+  LoginCommand,
+  LoginResult
+} from "./iamRepository";
 
 type LoginWire = {
   session?: {
@@ -11,6 +16,12 @@ type LoginWire = {
     expiresAt?: unknown;
   };
   credential?: unknown;
+  mustChangePassword?: unknown;
+};
+
+type ChangePasswordWire = {
+  changedAt?: unknown;
+  bootstrapFileRetirable?: unknown;
 };
 
 function parseLogin(value: LoginWire): LoginResult {
@@ -24,13 +35,15 @@ function parseLogin(value: LoginWire): LoginResult {
     typeof session.issuedAt !== "string" ||
     typeof session.expiresAt !== "string" ||
     typeof value.credential !== "string" ||
-    value.credential.length === 0
+    value.credential.length === 0 ||
+    typeof value.mustChangePassword !== "boolean"
   ) {
     throw new Error("INVALID_IAM_RESPONSE");
   }
 
   return {
     credential: value.credential,
+    mustChangePassword: value.mustChangePassword,
     session: {
       id: session.id,
       organizationId: session.organizationId,
@@ -54,6 +67,30 @@ export const httpIamRepository: IamRepository = {
       })
     });
     return parseLogin(wire);
+  },
+
+  async changePassword(
+    credential: string,
+    command: ChangePasswordCommand
+  ): Promise<void> {
+    const wire = await requestJSON<ChangePasswordWire>("/api/iam/v1/auth/password", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${credential}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        currentPassword: command.currentPassword,
+        newPassword: command.newPassword,
+        requestId: requestToken("ui-password-")
+      })
+    });
+    if (
+      typeof wire.changedAt !== "string" ||
+      typeof wire.bootstrapFileRetirable !== "boolean"
+    ) {
+      throw new Error("INVALID_IAM_RESPONSE");
+    }
   },
 
   async logout(credential: string): Promise<void> {

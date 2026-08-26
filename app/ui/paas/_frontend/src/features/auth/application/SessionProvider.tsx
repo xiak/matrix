@@ -10,7 +10,11 @@ import {
   type ReactNode
 } from "react";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
-import type { AuthenticatedSession, SessionPhase } from "../domain/session";
+import type {
+  AuthenticatedSession,
+  LoginOutcome,
+  SessionPhase
+} from "../domain/session";
 import { httpIamRepository } from "../repositories/httpIamRepository";
 import type { IamRepository } from "../repositories/iamRepository";
 
@@ -18,7 +22,8 @@ type SessionContextValue = {
   phase: SessionPhase;
   current: AuthenticatedSession | null;
   error: string | null;
-  login(loginName: string, password: string): Promise<boolean>;
+  login(loginName: string, password: string): Promise<LoginOutcome | null>;
+  changePassword(currentPassword: string, newPassword: string): Promise<boolean>;
   logout(): Promise<boolean>;
 };
 
@@ -37,6 +42,19 @@ function authenticationMessage(error: unknown): string {
     return "登录尝试过于频繁，请稍后重试";
   }
   return "IAM 暂时不可用，请稍后重试";
+}
+
+function passwordChangeMessage(error: unknown): string {
+  if (error instanceof HttpProblem && error.status === 401) {
+    return "当前密码不正确，或登录会话已经失效";
+  }
+  if (error instanceof HttpProblem && error.status === 422) {
+    return "新密码需为 14–128 字节，且至少包含三类：大写字母、小写字母、数字、符号";
+  }
+  if (error instanceof HttpProblem && error.status === 409) {
+    return "密码已在其他会话中更新，请退出后重新登录";
+  }
+  return "IAM 暂时无法更新密码，请稍后重试";
 }
 
 export function SessionProvider({
@@ -75,16 +93,39 @@ export function SessionProvider({
       const result = await repository.login({ loginName, password });
       setCredential(result.credential);
       setCurrent({ loginName, session: result.session });
-      setPhase("authenticated");
-      return true;
+      const outcome: LoginOutcome = result.mustChangePassword
+        ? "password-change-required"
+        : "authenticated";
+      setPhase(outcome);
+      return outcome;
     } catch (loginError) {
       setCredential(null);
       setCurrent(null);
       setError(authenticationMessage(loginError));
       setPhase("anonymous");
-      return false;
+      return null;
     }
   }, [repository]);
+
+  const changePassword = useCallback(async (
+    currentPassword: string,
+    newPassword: string
+  ) => {
+    if (!credential || !current || phase !== "password-change-required") {
+      return false;
+    }
+    setPhase("changing-password");
+    setError(null);
+    try {
+      await repository.changePassword(credential, { currentPassword, newPassword });
+      setPhase("authenticated");
+      return true;
+    } catch (changeError) {
+      setError(passwordChangeMessage(changeError));
+      setPhase("password-change-required");
+      return false;
+    }
+  }, [credential, current, phase, repository]);
 
   const logout = useCallback(async () => {
     if (!credential) {
@@ -99,18 +140,23 @@ export function SessionProvider({
       return true;
     } catch {
       setError("IAM 注销失败，会话仍保留在当前页面内存中");
-      setPhase("authenticated");
+      setPhase(
+        phase === "password-change-required" || phase === "changing-password"
+          ? "password-change-required"
+          : "authenticated"
+      );
       return false;
     }
-  }, [credential, forget, repository]);
+  }, [credential, forget, phase, repository]);
 
   const sessionValue = useMemo<SessionContextValue>(() => ({
     phase,
     current,
     error,
     login,
+    changePassword,
     logout
-  }), [current, error, login, logout, phase]);
+  }), [changePassword, current, error, login, logout, phase]);
   const credentialValue = useMemo(() => ({ credential }), [credential]);
 
   return (

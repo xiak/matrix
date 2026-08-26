@@ -106,7 +106,11 @@ func (service *Authority) Login(
 		if err != nil {
 			return err
 		}
-		response = iamv1.LoginResponse{Session: storedSession, Credential: issued.Credential}
+		response = iamv1.LoginResponse{
+			Session:            storedSession,
+			Credential:         issued.Credential,
+			MustChangePassword: account.MustChangePassword,
+		}
 		return nil
 	})
 	if err != nil {

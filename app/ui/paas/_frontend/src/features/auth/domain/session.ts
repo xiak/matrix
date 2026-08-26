@@ -12,8 +12,12 @@ export type AuthenticatedSession = {
   session: SessionSummary;
 };
 
+export type LoginOutcome = "authenticated" | "password-change-required";
+
 export type SessionPhase =
   | "anonymous"
   | "authenticating"
+  | "password-change-required"
+  | "changing-password"
   | "authenticated"
   | "revoking";
