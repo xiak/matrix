@@ -411,7 +411,7 @@ func streamDatabaseDump(
 	writer := &boundedBackupWriter{writer: file, maximum: maximum}
 	started, runErr := runtimeBoundary.RunTo(
 		ctx, nil, writer, "exec", "--user", "postgres", postgresID,
-		"pg_dump", "--format=custom", "--no-owner", "--no-privileges",
+		"pg_dump", "--format=custom", "--no-privileges",
 		"--no-password", "--lock-wait-timeout=5s", "--username=matrix", "--dbname=matrix",
 	)
 	syncErr := file.Sync()

@@ -1848,11 +1848,14 @@ func (runtimeBoundary *platformStartRuntime) RunTo(
 		}
 		for _, required := range []string{
 			"--interactive", "--clean", "--if-exists", "--exit-on-error",
-			"--single-transaction", "--no-owner", "--no-privileges", "--no-password",
+			"--single-transaction", "--no-privileges", "--no-password",
 		} {
 			if !slices.Contains(arguments, required) {
 				return true, fmt.Errorf("recovery restore lacks %s", required)
 			}
+		}
+		if slices.Contains(arguments, "--no-owner") {
+			return true, errors.New("recovery restore suppresses database ownership")
 		}
 		if !hasArgumentPair(arguments, "--user", "postgres") ||
 			!hasArgumentPair(arguments, "--username", "matrix") ||
@@ -1863,7 +1866,7 @@ func (runtimeBoundary *platformStartRuntime) RunTo(
 		return true, nil
 	}
 	if input != nil || !slices.Contains(arguments, "pg_dump") ||
-		!slices.Contains(arguments, "--no-owner") ||
+		slices.Contains(arguments, "--no-owner") ||
 		!slices.Contains(arguments, "--no-privileges") ||
 		!slices.Contains(arguments, "--no-password") {
 		return false, errors.New("platform backup streaming invocation is invalid")

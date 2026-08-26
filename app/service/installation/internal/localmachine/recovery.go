@@ -254,7 +254,11 @@ func restoreDatabaseDump(
 		ctx, file, io.Discard,
 		"exec", "--interactive", "--user", "postgres", postgresID,
 		"pg_restore", "--clean", "--if-exists", "--exit-on-error",
-		"--single-transaction", "--no-owner", "--no-privileges", "--no-password",
+		// The authenticated custom archive carries the exact IAM/Audit owner
+		// roles. Restoring those owners is required before their non-superuser
+		// migrators can converge functions and tables. ACLs remain release-owned
+		// and are intentionally reapplied by the target migration binaries.
+		"--single-transaction", "--no-privileges", "--no-password",
 		"--username", "matrix", "--dbname", "matrix",
 	)
 	if err == nil {
