@@ -281,6 +281,33 @@ real-PostgreSQL, real-local-runtime, cross-platform build, Markdown-link,
 stale-term, donor-dependency, tenant-authority, secret/path-leakage, browser,
 and `git diff --check` gates must pass on the same committed worktree.
 
+## Implementation status
+
+- Gate A foundation is implemented: the old page was replaced by the fixed
+  donor-shaped Next.js route/provider/repository/scene/renderer/component
+  chain, seven static routes, memory-only IAM session handling, deterministic
+  Go embedding, strict CSP hashes, responsive shell, and source architecture
+  and style checks. The full installed-browser journey remains a release gate.
+- Gate B authority is implemented for the first vertical slice: the closed
+  managed-service v1 Go/OpenAPI contract, existing-role IAM action matrix,
+  PostgreSQL entitlement/installation/Operation schema, forced organization
+  RLS, serializable quota reservation, idempotent replay, worker leases, and
+  fencing transitions pass unit and real PostgreSQL 18 tests. Managed-service
+  Audit outbox delivery remains before Gate B acceptance.
+- Gate C execution is implemented through the fixed PostgreSQL 18 image:
+  server-generated file credentials, pull-never/no-build Compose, exact
+  ownership labels, persistent bind data, bounded resources, normalized
+  endpoint/credential references, retry, and terminal quota release. A real
+  local-runtime test installed PostgreSQL, connected, wrote data, reconciled
+  the same command, and read the preserved value. Full offline release,
+  upgrade, rollback, backup, recovery, and support-evidence gates remain open.
+
+Current repeatable evidence includes `go generate ./api/...`, `go test ./...`,
+the environment-gated platform migration integration test, the managed-service
+PostgreSQL journey and tenant-isolation integration test, and the real local
+PostgreSQL runtime test. Final acceptance must repeat them from the same clean
+committed release candidate.
+
 ## Deferred
 
 Money movement, invoices, tax, discounts, metering-based billing, marketplace

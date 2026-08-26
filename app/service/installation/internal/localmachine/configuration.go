@@ -342,6 +342,21 @@ func apisixStandaloneConfig() []byte {
       nodes:
         "paas-api:8080": 1
   -
+    id: matrix-managed-services
+    uri: /api/managed-services/*
+    plugins:
+      proxy-rewrite:
+        regex_uri:
+          - "^/api/managed-services/(.*)"
+          - "/managed-services/$1"
+        headers:
+          remove:
+            - Matrix-Subject-Credential
+    upstream:
+      type: roundrobin
+      nodes:
+        "paas-api:8080": 1
+  -
     id: matrix-ui
     uri: /*
     plugins:

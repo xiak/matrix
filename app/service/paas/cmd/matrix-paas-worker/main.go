@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	composeadapter "github.com/xiak/matrix/app/adapter/apphosting/compose"
 	localmachineadapter "github.com/xiak/matrix/app/adapter/infrastructure/localmachine"
+	localpostgresadapter "github.com/xiak/matrix/app/adapter/managedservice/localpostgres"
 	"github.com/xiak/matrix/app/service/internal/processconfig"
 	"github.com/xiak/matrix/app/service/internal/processhttp"
 	paaspostgres "github.com/xiak/matrix/app/service/paas/internal/apphosting/data/postgres"
@@ -23,41 +25,46 @@ import (
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/operationqueue"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/reconciledeployment"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/refreshexecutionprofile"
+	managedservicepostgres "github.com/xiak/matrix/app/service/paas/internal/managedservice/data/postgres"
+	"github.com/xiak/matrix/app/service/paas/internal/managedservice/domain"
+	"github.com/xiak/matrix/app/service/paas/internal/managedservice/usecase/reconcileinstallation"
 )
 
 const (
-	databaseDSNFileEnvironment  = "MATRIX_PAAS_WORKER_DATABASE_DSN_FILE"
-	workerIDEnvironment         = "MATRIX_PAAS_WORKER_ID"
-	bindingRefEnvironment       = "MATRIX_PAAS_WORKER_BINDING_REF"
-	bindingRootEnvironment      = "MATRIX_PAAS_WORKER_BINDING_ROOT"
-	secretRootEnvironment       = "MATRIX_PAAS_WORKER_SECRET_ROOT"
-	artifactCatalogEnvironment  = "MATRIX_PAAS_WORKER_ARTIFACT_CATALOG_FILE"
-	executionTenantEnvironment  = "MATRIX_PAAS_WORKER_EXECUTION_TENANT_ID"
-	machineBindingEnvironment   = "MATRIX_PAAS_WORKER_MACHINE_BINDING_REF"
-	listenAddressEnvironment    = "MATRIX_PAAS_WORKER_LISTEN_ADDRESS"
-	pollInterval                = 250 * time.Millisecond
-	executionTargetRefresh      = time.Minute
-	executionTargetMaximumAge   = 5 * time.Minute
-	executionTargetTimeout      = 5 * time.Second
-	operationLeaseDuration      = 30 * time.Second
-	effectTimeout               = 20 * time.Second
-	reconcileBackoff            = time.Second
-	maximumOperationAttempts    = 10
-	placementDecisionTTL        = 5 * time.Minute
-	pendingCapacityClaimTTL     = 10 * time.Minute
-	maximumArtifactCatalogBytes = 1024 * 1024
+	databaseDSNFileEnvironment      = "MATRIX_PAAS_WORKER_DATABASE_DSN_FILE"
+	workerIDEnvironment             = "MATRIX_PAAS_WORKER_ID"
+	bindingRefEnvironment           = "MATRIX_PAAS_WORKER_BINDING_REF"
+	bindingRootEnvironment          = "MATRIX_PAAS_WORKER_BINDING_ROOT"
+	secretRootEnvironment           = "MATRIX_PAAS_WORKER_SECRET_ROOT"
+	artifactCatalogEnvironment      = "MATRIX_PAAS_WORKER_ARTIFACT_CATALOG_FILE"
+	executionTenantEnvironment      = "MATRIX_PAAS_WORKER_EXECUTION_TENANT_ID"
+	machineBindingEnvironment       = "MATRIX_PAAS_WORKER_MACHINE_BINDING_REF"
+	listenAddressEnvironment        = "MATRIX_PAAS_WORKER_LISTEN_ADDRESS"
+	managedPostgresImageEnvironment = "MATRIX_PAAS_WORKER_MANAGED_POSTGRES_IMAGE"
+	pollInterval                    = 250 * time.Millisecond
+	executionTargetRefresh          = time.Minute
+	executionTargetMaximumAge       = 5 * time.Minute
+	executionTargetTimeout          = 5 * time.Second
+	operationLeaseDuration          = 30 * time.Second
+	effectTimeout                   = 20 * time.Second
+	reconcileBackoff                = time.Second
+	maximumOperationAttempts        = 10
+	placementDecisionTTL            = 5 * time.Minute
+	pendingCapacityClaimTTL         = 10 * time.Minute
+	maximumArtifactCatalogBytes     = 1024 * 1024
 )
 
 type configuration struct {
-	databaseDSNFile string
-	workerID        string
-	bindingRef      string
-	bindingRoot     string
-	secretRoot      string
-	artifactCatalog string
-	executionTenant paasv1.TenantID
-	machineBinding  string
-	listenAddress   string
+	databaseDSNFile      string
+	workerID             string
+	bindingRef           string
+	bindingRoot          string
+	secretRoot           string
+	artifactCatalog      string
+	executionTenant      paasv1.TenantID
+	machineBinding       string
+	listenAddress        string
+	managedPostgresImage string
 }
 
 var localExecutionProfileIDs = refreshexecutionprofile.IDs{
@@ -133,6 +140,29 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	managedServiceRepository, err := managedservicepostgres.NewRepository(pool)
+	if err != nil {
+		return err
+	}
+	managedPostgres, err := localpostgresadapter.New(localpostgresadapter.Config{
+		Root:    filepath.Join(config.bindingRoot, "managed-postgres"),
+		ImageID: config.managedPostgresImage, Runtime: runtime,
+	})
+	if err != nil {
+		return err
+	}
+	managedServiceWorker, err := reconcileinstallation.NewService(
+		managedServiceRepository,
+		managedPostgres,
+		reconcileinstallation.Config{
+			Catalog: domain.DefaultCatalog(), LeaseDuration: 3 * time.Minute,
+			EffectTimeout: 2 * time.Minute, RetryBackoff: 2 * time.Second,
+			MaximumAttempts: 10,
+		},
+	)
+	if err != nil {
+		return err
+	}
 
 	queueRepository, err := paaspostgres.NewOperationQueueRepository(pool)
 	if err != nil {
@@ -199,6 +229,9 @@ func run(ctx context.Context) error {
 		if checkErr := executionProfile.Ready(readinessContext); checkErr != nil {
 			return errors.New("PaaS worker execution profile readiness failed")
 		}
+		if checkErr := managedServiceWorker.Ready(readinessContext); checkErr != nil {
+			return errors.New("PaaS managed-service provisioner readiness failed")
+		}
 		return nil
 	}
 	if err := readiness(ctx); err != nil {
@@ -213,9 +246,21 @@ func run(ctx context.Context) error {
 		config.listenAddress,
 		handler,
 		func(workerContext context.Context) error {
+			preferManagedService := true
 			return runWorkerLoop(
 				workerContext,
-				worker.ProcessNext,
+				func(cycleContext context.Context, workerID string) (bool, error) {
+					first, second := managedServiceWorker.ProcessNext, worker.ProcessNext
+					if !preferManagedService {
+						first, second = worker.ProcessNext, managedServiceWorker.ProcessNext
+					}
+					preferManagedService = !preferManagedService
+					processed, cycleErr := first(cycleContext, workerID)
+					if cycleErr != nil || processed {
+						return processed, cycleErr
+					}
+					return second(cycleContext, workerID)
+				},
 				executionProfile.Refresh,
 				config.workerID,
 			)
@@ -292,7 +337,7 @@ func runWorkerLoop(
 			if ctx.Err() != nil {
 				return nil
 			}
-			return errors.New("PaaS Deployment reconciliation cycle failed")
+			return errors.New("PaaS reconciliation cycle failed")
 		}
 		if processed {
 			continue
@@ -318,21 +363,22 @@ func runWorkerLoop(
 
 func loadConfiguration() (configuration, error) {
 	config := configuration{
-		databaseDSNFile: os.Getenv(databaseDSNFileEnvironment),
-		workerID:        os.Getenv(workerIDEnvironment),
-		bindingRef:      os.Getenv(bindingRefEnvironment),
-		bindingRoot:     os.Getenv(bindingRootEnvironment),
-		secretRoot:      os.Getenv(secretRootEnvironment),
-		artifactCatalog: os.Getenv(artifactCatalogEnvironment),
-		executionTenant: paasv1.TenantID(os.Getenv(executionTenantEnvironment)),
-		machineBinding:  os.Getenv(machineBindingEnvironment),
-		listenAddress:   os.Getenv(listenAddressEnvironment),
+		databaseDSNFile:      os.Getenv(databaseDSNFileEnvironment),
+		workerID:             os.Getenv(workerIDEnvironment),
+		bindingRef:           os.Getenv(bindingRefEnvironment),
+		bindingRoot:          os.Getenv(bindingRootEnvironment),
+		secretRoot:           os.Getenv(secretRootEnvironment),
+		artifactCatalog:      os.Getenv(artifactCatalogEnvironment),
+		executionTenant:      paasv1.TenantID(os.Getenv(executionTenantEnvironment)),
+		machineBinding:       os.Getenv(machineBindingEnvironment),
+		listenAddress:        os.Getenv(listenAddressEnvironment),
+		managedPostgresImage: os.Getenv(managedPostgresImageEnvironment),
 	}
 	if config.databaseDSNFile == "" || config.workerID == "" ||
 		config.bindingRef == "" || config.bindingRoot == "" ||
 		config.secretRoot == "" || config.artifactCatalog == "" ||
 		config.executionTenant == "" || config.machineBinding == "" ||
-		config.listenAddress == "" {
+		config.listenAddress == "" || config.managedPostgresImage == "" {
 		return configuration{}, errors.New("PaaS worker configuration is incomplete")
 	}
 	if paasv1.ValidateID("workerId", config.workerID) != nil ||

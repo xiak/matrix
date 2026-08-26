@@ -34,6 +34,12 @@
           "paas.deployment.stop",
           "paas.deployment.read",
           "paas.operation.read",
+          "managedservice.offering.read",
+          "managedservice.region.read",
+          "managedservice.quota-entitlement.activate",
+          "managedservice.quota-entitlement.read",
+          "managedservice.service-installation.create",
+          "managedservice.service-installation.read",
           "audit.record.read",
           "audit.integrity.verify",
           "installation.verify"
@@ -572,6 +578,162 @@
                   "properties": {
                     "kind": {
                       "const": "OPERATION"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "managedservice.offering.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "SERVICE_OFFERING"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "managedservice.region.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "REGION"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "managedservice.quota-entitlement.activate"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "QUOTA_ENTITLEMENT"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "managedservice.quota-entitlement.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "QUOTA_ENTITLEMENT"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "managedservice.service-installation.create"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "SERVICE_INSTALLATION"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "managedservice.service-installation.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "SERVICE_INSTALLATION"
                     }
                   },
                   "required": [
@@ -1196,6 +1358,162 @@
                   "properties": {
                     "kind": {
                       "const": "OPERATION"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "managedservice.offering.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "SERVICE_OFFERING"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "managedservice.region.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "REGION"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "managedservice.quota-entitlement.activate"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "QUOTA_ENTITLEMENT"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "managedservice.quota-entitlement.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "QUOTA_ENTITLEMENT"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "managedservice.service-installation.create"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "SERVICE_INSTALLATION"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "managedservice.service-installation.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "SERVICE_INSTALLATION"
                     }
                   },
                   "required": [
@@ -1969,6 +2287,10 @@
           "APPLICATION_REVISION",
           "DEPLOYMENT",
           "OPERATION",
+          "SERVICE_OFFERING",
+          "REGION",
+          "QUOTA_ENTITLEMENT",
+          "SERVICE_INSTALLATION",
           "AUDIT_RECORD",
           "AUDIT_CHAIN",
           "INSTALLATION"

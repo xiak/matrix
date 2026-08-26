@@ -164,6 +164,34 @@ func TestEveryIAMActionHasOnlyFixedRoleAuthority(t *testing.T) {
 	}
 }
 
+func TestManagedServiceUsesTheExistingClosedPaaSRoleMatrix(t *testing.T) {
+	readActions := []iamv1.Action{
+		iamv1.ActionManagedServiceOfferingRead,
+		iamv1.ActionManagedServiceRegionRead,
+		iamv1.ActionManagedServiceQuotaEntitlementRead,
+		iamv1.ActionManagedServiceInstallationRead,
+	}
+	for _, action := range readActions {
+		if !RoleAllows(iamv1.RoleOrganizationAdmin, action) ||
+			!RoleAllows(iamv1.RolePaaSDeveloper, action) ||
+			!RoleAllows(iamv1.RolePaaSViewer, action) ||
+			!ServiceCanRequest(iamv1.ServicePaaS, action) {
+			t.Fatalf("managed-service read action %q is not mapped to the fixed roles", action)
+		}
+	}
+	for _, action := range []iamv1.Action{
+		iamv1.ActionManagedServiceQuotaEntitlementActivate,
+		iamv1.ActionManagedServiceInstallationCreate,
+	} {
+		if !RoleAllows(iamv1.RoleOrganizationAdmin, action) ||
+			!RoleAllows(iamv1.RolePaaSDeveloper, action) ||
+			RoleAllows(iamv1.RolePaaSViewer, action) ||
+			!ServiceCanRequest(iamv1.ServicePaaS, action) {
+			t.Fatalf("managed-service mutation action %q has an invalid role mapping", action)
+		}
+	}
+}
+
 func TestAuthorizationDeniesAServiceOutsideItsProductBoundary(t *testing.T) {
 	now := authorityTestTime()
 	context := authoritySubject(now, iamv1.RolePaaSDeveloper)

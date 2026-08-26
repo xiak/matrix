@@ -1,0 +1,846 @@
+{
+  "components": {
+    "parameters": {
+      "IdempotencyKey": {
+        "in": "header",
+        "name": "Idempotency-Key",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/ID"
+        }
+      }
+    },
+    "responses": {
+      "ProblemResponse": {
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        },
+        "description": "Normalized managed-service problem."
+      }
+    },
+    "schemas": {
+      "ActivateQuotaRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "instanceCount": {
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offeringId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "quotaShapeId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "instanceCount",
+          "offeringId",
+          "quotaShapeId"
+        ],
+        "type": "object"
+      },
+      "CreateInstallationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Name"
+          },
+          "name": {
+            "type": "string"
+          },
+          "offeringId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "quotaEntitlementId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "regionId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "offeringId",
+          "quotaEntitlementId",
+          "regionId"
+        ],
+        "type": "object"
+      },
+      "ErrorCode": {
+        "enum": [
+          "INVALID_ARGUMENT",
+          "UNAUTHENTICATED",
+          "PERMISSION_DENIED",
+          "IDENTITY_UNAVAILABLE",
+          "NOT_FOUND",
+          "ALREADY_EXISTS",
+          "IDEMPOTENCY_CONFLICT",
+          "QUOTA_EXHAUSTED",
+          "REGION_UNAVAILABLE",
+          "INTERNAL"
+        ],
+        "type": "string"
+      },
+      "FieldViolation": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "field": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "description",
+          "field"
+        ],
+        "type": "object"
+      },
+      "ID": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+        "type": "string"
+      },
+      "InstallationOperation": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "observedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "phase": {
+            "$ref": "#/components/schemas/InstallationPhase"
+          },
+          "safeFailureCode": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "observedAt",
+          "phase"
+        ],
+        "type": "object"
+      },
+      "InstallationPhase": {
+        "enum": [
+          "PENDING",
+          "PROVISIONING",
+          "READY",
+          "FAILED"
+        ],
+        "type": "string"
+      },
+      "Name": {
+        "maxLength": 63,
+        "minLength": 2,
+        "pattern": "^[a-z0-9](?:[a-z0-9._-]{0,61}[a-z0-9])?$",
+        "type": "string"
+      },
+      "OfferingKind": {
+        "enum": [
+          "POSTGRESQL"
+        ],
+        "type": "string"
+      },
+      "OfferingState": {
+        "enum": [
+          "AVAILABLE",
+          "UNAVAILABLE"
+        ],
+        "type": "string"
+      },
+      "Problem": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/ErrorCode"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "status": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "traceId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "type": {
+            "type": "string"
+          },
+          "violations": {
+            "items": {
+              "$ref": "#/components/schemas/FieldViolation"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "code",
+          "detail",
+          "retryable",
+          "status",
+          "title",
+          "traceId",
+          "type"
+        ],
+        "type": "object"
+      },
+      "QuotaEntitlement": {
+        "additionalProperties": false,
+        "properties": {
+          "activatedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "consumedCount": {
+            "maximum": 100,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "offeringId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "purchasedCount": {
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "quotaShapeId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "reservedCount": {
+            "maximum": 100,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "resourceVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "activatedAt",
+          "consumedCount",
+          "id",
+          "offeringId",
+          "purchasedCount",
+          "quotaShapeId",
+          "reservedCount",
+          "resourceVersion"
+        ],
+        "type": "object"
+      },
+      "QuotaEntitlementList": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/QuotaEntitlement"
+            },
+            "maxItems": 1000,
+            "type": "array"
+          },
+          "kind": {
+            "const": "QuotaEntitlementList"
+          }
+        },
+        "required": [
+          "items",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "QuotaShape": {
+        "additionalProperties": false,
+        "properties": {
+          "cpuMillicores": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "memoryMiB": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "storageGiB": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cpuMillicores",
+          "displayName",
+          "id",
+          "memoryMiB",
+          "storageGiB"
+        ],
+        "type": "object"
+      },
+      "Region": {
+        "additionalProperties": false,
+        "properties": {
+          "capacity": {
+            "$ref": "#/components/schemas/RegionCapacity"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "inspectedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/RegionProfile"
+          },
+          "state": {
+            "$ref": "#/components/schemas/RegionState"
+          }
+        },
+        "required": [
+          "capacity",
+          "displayName",
+          "id",
+          "profile",
+          "state"
+        ],
+        "type": "object"
+      },
+      "RegionCapacity": {
+        "additionalProperties": false,
+        "properties": {
+          "cpuMillicores": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "memoryMiB": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "storageGiB": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cpuMillicores",
+          "memoryMiB",
+          "storageGiB"
+        ],
+        "type": "object"
+      },
+      "RegionList": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Region"
+            },
+            "maxItems": 1000,
+            "type": "array"
+          },
+          "kind": {
+            "const": "RegionList"
+          }
+        },
+        "required": [
+          "items",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "RegionProfile": {
+        "enum": [
+          "LOCAL_MACHINE"
+        ],
+        "type": "string"
+      },
+      "RegionState": {
+        "enum": [
+          "READY",
+          "STALE",
+          "UNAVAILABLE"
+        ],
+        "type": "string"
+      },
+      "ServiceInstallation": {
+        "additionalProperties": false,
+        "properties": {
+          "createdAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "credentialReference": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "engineVersion": {
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/Name"
+          },
+          "name": {
+            "type": "string"
+          },
+          "offeringId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "operation": {
+            "$ref": "#/components/schemas/InstallationOperation"
+          },
+          "phase": {
+            "$ref": "#/components/schemas/InstallationPhase"
+          },
+          "quotaEntitlementId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "regionId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "createdAt",
+          "engineVersion",
+          "id",
+          "name",
+          "offeringId",
+          "operation",
+          "phase",
+          "quotaEntitlementId",
+          "regionId"
+        ],
+        "type": "object"
+      },
+      "ServiceInstallationList": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ServiceInstallation"
+            },
+            "maxItems": 1000,
+            "type": "array"
+          },
+          "kind": {
+            "const": "ServiceInstallationList"
+          }
+        },
+        "required": [
+          "items",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "ServiceOffering": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "engineFamily": {
+            "type": "string"
+          },
+          "engineVersion": {
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/OfferingKind"
+          },
+          "quotaShapes": {
+            "items": {
+              "$ref": "#/components/schemas/QuotaShape"
+            },
+            "maxItems": 16,
+            "minItems": 1,
+            "type": "array"
+          },
+          "state": {
+            "$ref": "#/components/schemas/OfferingState"
+          }
+        },
+        "required": [
+          "description",
+          "displayName",
+          "engineFamily",
+          "engineVersion",
+          "id",
+          "kind",
+          "quotaShapes",
+          "state"
+        ],
+        "type": "object"
+      },
+      "ServiceOfferingList": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ServiceOffering"
+            },
+            "maxItems": 1000,
+            "type": "array"
+          },
+          "kind": {
+            "const": "ServiceOfferingList"
+          }
+        },
+        "required": [
+          "items",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "Timestamp": {
+        "format": "date-time",
+        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,6})?Z$",
+        "type": "string"
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "title": "Matrix Managed Service API",
+    "version": "v1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/v1/offerings": {
+      "get": {
+        "operationId": "listServiceOfferings",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceOfferingList"
+                }
+              }
+            },
+            "description": "Current organization-scoped collection."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "List the closed service catalog."
+      }
+    },
+    "/v1/quota-entitlements": {
+      "get": {
+        "operationId": "listQuotaEntitlements",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuotaEntitlementList"
+                }
+              }
+            },
+            "description": "Current organization-scoped collection."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "List organization quota entitlements."
+      },
+      "post": {
+        "operationId": "activateQuota",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActivateQuotaRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuotaEntitlement"
+                }
+              }
+            },
+            "description": "Equal idempotent replay."
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuotaEntitlement"
+                }
+              }
+            },
+            "description": "Durable managed-service result."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Activate a bounded product entitlement."
+      }
+    },
+    "/v1/regions": {
+      "get": {
+        "operationId": "listRegions",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegionList"
+                }
+              }
+            },
+            "description": "Current organization-scoped collection."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "List eligible operator-owned regions."
+      }
+    },
+    "/v1/service-installations": {
+      "get": {
+        "operationId": "listServiceInstallations",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceInstallationList"
+                }
+              }
+            },
+            "description": "Current organization-scoped collection."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "List organization service installations."
+      },
+      "post": {
+        "operationId": "createServiceInstallation",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInstallationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceInstallation"
+                }
+              }
+            },
+            "description": "Equal idempotent replay."
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceInstallation"
+                }
+              }
+            },
+            "description": "Durable managed-service result."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Reserve quota and submit an installation."
+      }
+    }
+  },
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "servers": [
+    {
+      "url": "/managed-services"
+    }
+  ]
+}

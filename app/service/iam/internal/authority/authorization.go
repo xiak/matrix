@@ -156,7 +156,8 @@ func ServiceCanRequest(purpose iamv1.ServicePurpose, action iamv1.Action) bool {
 	case iamv1.ServiceIAM:
 		return strings.HasPrefix(string(action), "iam.")
 	case iamv1.ServicePaaS:
-		return strings.HasPrefix(string(action), "paas.")
+		return strings.HasPrefix(string(action), "paas.") ||
+			strings.HasPrefix(string(action), "managedservice.")
 	case iamv1.ServiceAudit:
 		return strings.HasPrefix(string(action), "audit.")
 	case iamv1.ServiceInstallationVerifier:
@@ -185,7 +186,13 @@ func RoleAllows(role iamv1.BuiltinRole, action iamv1.Action) bool {
 			iamv1.ActionPaaSDeploymentRollback,
 			iamv1.ActionPaaSDeploymentStop,
 			iamv1.ActionPaaSDeploymentRead,
-			iamv1.ActionPaaSOperationRead:
+			iamv1.ActionPaaSOperationRead,
+			iamv1.ActionManagedServiceOfferingRead,
+			iamv1.ActionManagedServiceRegionRead,
+			iamv1.ActionManagedServiceQuotaEntitlementActivate,
+			iamv1.ActionManagedServiceQuotaEntitlementRead,
+			iamv1.ActionManagedServiceInstallationCreate,
+			iamv1.ActionManagedServiceInstallationRead:
 			return true
 		}
 	case iamv1.RolePaaSViewer:
@@ -195,7 +202,11 @@ func RoleAllows(role iamv1.BuiltinRole, action iamv1.Action) bool {
 			iamv1.ActionPaaSConfigurationRevisionRead,
 			iamv1.ActionPaaSApplicationRevisionRead,
 			iamv1.ActionPaaSDeploymentRead,
-			iamv1.ActionPaaSOperationRead:
+			iamv1.ActionPaaSOperationRead,
+			iamv1.ActionManagedServiceOfferingRead,
+			iamv1.ActionManagedServiceRegionRead,
+			iamv1.ActionManagedServiceQuotaEntitlementRead,
+			iamv1.ActionManagedServiceInstallationRead:
 			return true
 		}
 	case iamv1.RoleAuditReader:

@@ -132,7 +132,7 @@ function InstallationOrder({
   const [id, setId] = useState("postgres-primary");
   const [accepted, setAccepted] = useState(false);
   const selectedEntitlement = scene.entitlementOptions.find((item) => item.entitlementId === entitlementId);
-  const canSubmit = Boolean(selectedEntitlement && regionId && /^[a-z0-9][a-z0-9._-]{1,62}$/.test(id) && name.trim());
+  const canSubmit = Boolean(selectedEntitlement && regionId && /^[a-z0-9][a-z0-9._-]{0,61}[a-z0-9]$/.test(id) && name.trim());
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

@@ -439,6 +439,16 @@ func ResourceKindForAction(action Action) (ResourceKind, bool) {
 		return ResourceDeployment, true
 	case ActionPaaSOperationRead:
 		return ResourceOperation, true
+	case ActionManagedServiceOfferingRead:
+		return ResourceServiceOffering, true
+	case ActionManagedServiceRegionRead:
+		return ResourceRegion, true
+	case ActionManagedServiceQuotaEntitlementActivate,
+		ActionManagedServiceQuotaEntitlementRead:
+		return ResourceQuotaEntitlement, true
+	case ActionManagedServiceInstallationCreate,
+		ActionManagedServiceInstallationRead:
+		return ResourceServiceInstallation, true
 	case ActionAuditRecordRead:
 		return ResourceAuditRecord, true
 	case ActionAuditIntegrityVerify:

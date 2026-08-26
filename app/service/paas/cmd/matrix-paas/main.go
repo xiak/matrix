@@ -4,13 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
+	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/internal/processconfig"
 	"github.com/xiak/matrix/app/service/internal/processhttp"
@@ -19,6 +22,11 @@ import (
 	paashttp "github.com/xiak/matrix/app/service/paas/internal/apphosting/service/nethttp"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/verifyinstallation"
+	managedserviceiam "github.com/xiak/matrix/app/service/paas/internal/managedservice/data/iamhttp"
+	managedservicepostgres "github.com/xiak/matrix/app/service/paas/internal/managedservice/data/postgres"
+	"github.com/xiak/matrix/app/service/paas/internal/managedservice/domain"
+	managedservicehttp "github.com/xiak/matrix/app/service/paas/internal/managedservice/service/nethttp"
+	managedserviceusecase "github.com/xiak/matrix/app/service/paas/internal/managedservice/usecase"
 )
 
 const (
@@ -90,6 +98,12 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	managedServiceAuthorizer, err := managedserviceiam.NewClient(managedserviceiam.Config{
+		Endpoint: config.iamEndpoint, ServiceCredential: credential,
+	})
+	if err != nil {
+		return err
+	}
 	repository, err := paaspostgres.NewApplicationRepository(pool)
 	if err != nil {
 		return err
@@ -113,7 +127,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	handler, err := paashttp.NewHandler(authorizer, workflow, installationVerifier, paashttp.Config{
+	apphostingHandler, err := paashttp.NewHandler(authorizer, workflow, installationVerifier, paashttp.Config{
 		Readiness: func(readinessContext context.Context) (paasv1.Readiness, error) {
 			readiness, err := repository.Readiness(readinessContext)
 			if err != nil || readiness.State != paasv1.ReadinessReady {
@@ -128,6 +142,37 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	managedServiceRepository, err := managedservicepostgres.NewRepository(pool)
+	if err != nil {
+		return err
+	}
+	inspectedAt := time.Now().UTC().Truncate(time.Microsecond)
+	managedServiceWorkflow, err := managedserviceusecase.NewService(
+		managedServiceRepository,
+		managedserviceusecase.Config{
+			Catalog: domain.DefaultCatalog(),
+			Region: managedservicev1.Region{
+				ID: "local-primary", DisplayName: "本机主区域",
+				Profile: managedservicev1.RegionLocalMachine,
+				State:   managedservicev1.RegionReady, InspectedAt: &inspectedAt,
+				Capacity: managedservicev1.RegionCapacity{
+					CPUMillicores: 4000, MemoryMiB: 8192, StorageGiB: 100,
+				},
+			},
+		},
+	)
+	if err != nil {
+		return err
+	}
+	managedServiceHandler, err := managedservicehttp.NewHandler(
+		managedServiceAuthorizer, managedServiceWorkflow, managedservicehttp.Config{},
+	)
+	if err != nil {
+		return err
+	}
+	handler := http.NewServeMux()
+	handler.Handle("/managed-services/", managedServiceHandler)
+	handler.Handle("/", apphostingHandler)
 	return processhttp.Serve(ctx, config.listenAddress, handler)
 }
 

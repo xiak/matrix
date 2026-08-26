@@ -42,6 +42,7 @@ func TestPlatformMigrationIntegration(t *testing.T) {
 		`SELECT to_regnamespace('iam') IS NULL
 		        AND to_regnamespace('audit') IS NULL
 		        AND to_regnamespace('paas') IS NULL
+		        AND to_regnamespace('managedservice') IS NULL
 		        AND NOT EXISTS (
 		            SELECT 1 FROM pg_catalog.pg_roles
 		             WHERE rolname IN (
@@ -83,14 +84,14 @@ func TestPlatformMigrationIntegration(t *testing.T) {
 
 	for _, runtime := range []struct {
 		dsn     string
-		allowed string
+		allowed []string
 		denied  []string
 	}{
-		{iamAPI, "iam", []string{"audit", "paas"}},
-		{iamWorker, "iam", []string{"audit", "paas"}},
-		{auditRuntime, "audit", []string{"iam", "paas"}},
-		{paasAPI, "paas", []string{"iam", "audit"}},
-		{paasWorker, "paas", []string{"iam", "audit"}},
+		{iamAPI, []string{"iam"}, []string{"audit", "paas", "managedservice"}},
+		{iamWorker, []string{"iam"}, []string{"audit", "paas", "managedservice"}},
+		{auditRuntime, []string{"audit"}, []string{"iam", "paas", "managedservice"}},
+		{paasAPI, []string{"managedservice", "paas"}, []string{"iam", "audit"}},
+		{paasWorker, []string{"managedservice", "paas"}, []string{"iam", "audit"}},
 	} {
 		assertSchemaBoundary(t, ctx, runtime.dsn, runtime.allowed, runtime.denied)
 	}
@@ -117,26 +118,31 @@ func assertSchemaBoundary(
 	t *testing.T,
 	ctx context.Context,
 	dsn string,
-	allowed string,
+	allowed []string,
 	denied []string,
 ) {
 	t.Helper()
 	connection, err := pgx.Connect(ctx, dsn)
 	if err != nil {
-		t.Fatalf("connect runtime login for %s", allowed)
+		t.Fatalf("connect runtime login for %v", allowed)
 	}
 	defer connection.Close(context.Background())
-	for _, schema := range append([]string{allowed}, denied...) {
+	allowedSet := make(map[string]struct{}, len(allowed))
+	for _, schema := range allowed {
+		allowedSet[schema] = struct{}{}
+	}
+	for _, schema := range append(append([]string(nil), allowed...), denied...) {
 		var admitted bool
 		if err := connection.QueryRow(
 			ctx,
 			"SELECT pg_catalog.has_schema_privilege(current_user, $1, 'USAGE')",
 			schema,
 		).Scan(&admitted); err != nil {
-			t.Fatalf("inspect runtime schema boundary for %s", allowed)
+			t.Fatalf("inspect runtime schema boundary for %v", allowed)
 		}
-		if admitted != (schema == allowed) {
-			t.Fatalf("runtime schema boundary allowed=%s schema=%s admitted=%t", allowed, schema, admitted)
+		_, expected := allowedSet[schema]
+		if admitted != expected {
+			t.Fatalf("runtime schema boundary allowed=%v schema=%s admitted=%t", allowed, schema, admitted)
 		}
 	}
 }

@@ -69,7 +69,7 @@ func TestWorkerLoopNormalizesCycleFailure(t *testing.T) {
 		func(context.Context) error { return nil },
 		"worker-a",
 	)
-	if err == nil || errors.Is(err, native) || err.Error() != "PaaS Deployment reconciliation cycle failed" {
+	if err == nil || errors.Is(err, native) || err.Error() != "PaaS reconciliation cycle failed" {
 		t.Fatalf("worker loop error = %v", err)
 	}
 }

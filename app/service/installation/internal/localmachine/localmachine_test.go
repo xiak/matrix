@@ -144,6 +144,8 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 	for _, required := range []string{
 		"uri: /api/audit/v1/installation:verify",
 		"uri: /api/paas/v1/installation:verify",
+		"uri: /api/managed-services/*",
+		`- "/managed-services/$1"`,
 		"priority: 100",
 		"uri: /v1/installation:verify",
 	} {

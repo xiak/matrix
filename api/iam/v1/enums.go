@@ -63,6 +63,13 @@ const (
 	ActionPaaSDeploymentRead              Action = "paas.deployment.read"
 	ActionPaaSOperationRead               Action = "paas.operation.read"
 
+	ActionManagedServiceOfferingRead             Action = "managedservice.offering.read"
+	ActionManagedServiceRegionRead               Action = "managedservice.region.read"
+	ActionManagedServiceQuotaEntitlementActivate Action = "managedservice.quota-entitlement.activate"
+	ActionManagedServiceQuotaEntitlementRead     Action = "managedservice.quota-entitlement.read"
+	ActionManagedServiceInstallationCreate       Action = "managedservice.service-installation.create"
+	ActionManagedServiceInstallationRead         Action = "managedservice.service-installation.read"
+
 	ActionAuditRecordRead      Action = "audit.record.read"
 	ActionAuditIntegrityVerify Action = "audit.integrity.verify"
 	ActionInstallationVerify   Action = "installation.verify"
@@ -79,6 +86,10 @@ const (
 	ResourceApplicationRevision   ResourceKind = "APPLICATION_REVISION"
 	ResourceDeployment            ResourceKind = "DEPLOYMENT"
 	ResourceOperation             ResourceKind = "OPERATION"
+	ResourceServiceOffering       ResourceKind = "SERVICE_OFFERING"
+	ResourceRegion                ResourceKind = "REGION"
+	ResourceQuotaEntitlement      ResourceKind = "QUOTA_ENTITLEMENT"
+	ResourceServiceInstallation   ResourceKind = "SERVICE_INSTALLATION"
 	ResourceAuditRecord           ResourceKind = "AUDIT_RECORD"
 	ResourceAuditChain            ResourceKind = "AUDIT_CHAIN"
 	ResourceInstallation          ResourceKind = "INSTALLATION"
@@ -140,6 +151,12 @@ var allActions = []Action{
 	ActionPaaSDeploymentStop,
 	ActionPaaSDeploymentRead,
 	ActionPaaSOperationRead,
+	ActionManagedServiceOfferingRead,
+	ActionManagedServiceRegionRead,
+	ActionManagedServiceQuotaEntitlementActivate,
+	ActionManagedServiceQuotaEntitlementRead,
+	ActionManagedServiceInstallationCreate,
+	ActionManagedServiceInstallationRead,
 	ActionAuditRecordRead,
 	ActionAuditIntegrityVerify,
 	ActionInstallationVerify,

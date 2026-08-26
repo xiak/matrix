@@ -4,12 +4,12 @@ import { buildConsoleScene } from "./buildConsoleScene";
 
 const snapshot: ControlPlaneSnapshot = {
   offerings: [{
-    id: "postgresql-16",
+    id: "postgresql-18",
     kind: "POSTGRESQL",
     displayName: "PostgreSQL",
     description: "托管关系数据库",
     engineFamily: "PostgreSQL",
-    engineVersion: "16",
+    engineVersion: "18",
     state: "AVAILABLE",
     quotaShapes: [{
       id: "development",
@@ -29,7 +29,7 @@ const snapshot: ControlPlaneSnapshot = {
   }],
   entitlements: [{
     id: "quota-postgres-dev",
-    offeringId: "postgresql-16",
+    offeringId: "postgresql-18",
     quotaShapeId: "development",
     purchasedCount: 2,
     reservedCount: 0,
@@ -40,8 +40,8 @@ const snapshot: ControlPlaneSnapshot = {
   installations: [{
     id: "postgres-primary",
     name: "Primary database",
-    offeringId: "postgresql-16",
-    engineVersion: "16",
+    offeringId: "postgresql-18",
+    engineVersion: "18",
     quotaEntitlementId: "quota-postgres-dev",
     regionId: "local-primary",
     phase: "READY",
@@ -81,7 +81,7 @@ describe("buildConsoleScene", () => {
       kind: "installation-order",
       entitlementOptions: [{
         entitlementId: "quota-postgres-dev",
-        offeringId: "postgresql-16",
+        offeringId: "postgresql-18",
         available: 1
       }],
       regionOptions: [{ id: "local-primary", label: "本机主区域" }]
