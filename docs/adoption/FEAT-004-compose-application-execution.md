@@ -9,9 +9,9 @@
 
 | Donor | Commit | Worktree policy |
 | --- | --- | --- |
-| `D:\XiaK\project\2026\matrix` | `69336e51f94fa98f6aa278fa4c62382e224dbeaf` | Read only through Git object commands; exclude its worktree. |
-| `D:\XiaK\project\2026\senatria\matrix` | `f51d5ed19fd60e8c4e43500af5e669d67ae4ef7d` | Read only through Git object commands; exclude its worktree. |
-| `D:\XiaK\project\2026\senatria\matrix` design | `338d9b5fcb820120c32265e380c55e5f171cdb75` | Read only through Git object commands; use as rationale, not executable evidence. |
+| Legacy PaaS donor | `69336e51f94fa98f6aa278fa4c62382e224dbeaf` | Read only through Git object commands; exclude its worktree. |
+| IAM/Audit foundation donor | `f51d5ed19fd60e8c4e43500af5e669d67ae4ef7d` | Read only through Git object commands; exclude its worktree. |
+| PaaS design donor | `338d9b5fcb820120c32265e380c55e5f171cdb75` | Read only through Git object commands; use as rationale, not executable evidence. |
 
 The FEAT-004 resource boundary, generation model, minimal Operation protocol,
 ports, Compose profile, and real-runtime gates were committed before these
@@ -27,17 +27,17 @@ slices were opened.
 | Event-lease domain and PostgreSQL statements | 563 lines | `REFERENCE` | Database time, lease ownership, CAS/fencing, bounded acquisition, and stale-writer rejection inform the worker protocol. FEAT-004 does not import event publication, projector, topology, or the generalized lease framework. |
 | Complete Operation, EventLease, AuditEvidence, ResourceKernel, policy, approval, and contract-schema closure | Thousands of files/lines | `REJECT` | It is a different governance platform and would recreate the code, test, and documentation explosion this new repository avoids. One explicit Operation table and apphosting workflow satisfy the current release. |
 
-## Senatria comparison
+## Delivery foundation donor comparison
 
 | Slice at fixed commit | Size | Decision | Rationale |
 | --- | ---: | --- | --- |
 | `component_target_config_service.py` and its tests | 175 implementation lines | `ADAPT` | Preserve deterministic iteration, path confinement, regular-file/no-symlink checks, a 1 MiB secret bound, restrictive permissions, and value/key collision rejection. Replace environment-variable authority, property patch files, business component metadata, and best-effort permission failure with exact ConfigurationRevision/SecretVersionReference bindings and fail-closed writes. |
 | Compose package config/image/port/network contract services | 272 implementation lines | `ADAPT` | Preserve digest-required images, service-owned configuration, no application host ports, bounded network attachment, and loopback-only debug intent. Generate typed Compose JSON and validate behavior; reject regex parsing of YAML, hard-coded services, debug overrides, and file-presence snapshots. |
 | `compose_release_state.py` | 1,302 lines | `REFERENCE` | Regular-file and symlink defenses, bounded canonical state, digest seals, atomic/fsynced writes, current/last-successful identity, and pre-transition verification are strong receipt patterns. It controls platform release packages rather than tenant Deployment generations, so no code is copied. |
-| `run-compose-deployment.sh` and `rollback-compose-release.sh` | 3,527 lines | `REJECT` as implementations | Cross-process locking, readiness observation, source-state restoration, and explicit rollback-compensation failure are useful behavior categories. The scripts execute a Senatria-wide release graph, source shell environments, mutate shared directories, and depend on Python and business-specific recovery steps. |
+| `run-compose-deployment.sh` and `rollback-compose-release.sh` | 3,527 lines | `REJECT` as implementations | Cross-process locking, readiness observation, source-state restoration, and explicit rollback-compensation failure are useful behavior categories. The scripts execute a donor-wide release graph, source shell environments, mutate shared directories, and depend on Python and business-specific recovery steps. |
 | `prepare-deployment-env.py` | 141 lines | `REJECT` | Collision checks and digest references are covered by the target compiler. Shell-quoted environment files, tags, CI variables, and affected-component selection are not PaaS authority. |
 | `compose_runtime_source.py` | 276 lines | `ADAPT` | Preserve a fixed observation command, shared locking, declaration validation, bounded output, normalized workload/health/image facts, and rejection of unknown records. Implement local Go process execution over generated project state; reject arbitrary SSH script transport and Audit-specific operational probes. |
-| Checked-in product Compose files and DevOps release/catalog closure | Large | `REJECT` | They describe Senatria platform and business delivery, not a tenant-neutral executor. They are neither templates nor runtime dependencies for Matrix PaaS. |
+| Checked-in product Compose files and DevOps release/catalog closure | Large | `REJECT` | They describe the donor platform and business delivery, not a tenant-neutral executor. They are neither templates nor runtime dependencies for Matrix PaaS. |
 
 ## PaaS design comparison
 
@@ -47,12 +47,12 @@ complete legacy Operation closure. Its GitLab-first projection and staged
 release roadmap target a different product. The dependency warning is
 `REFERENCE`; its runtime sequence and scope are `REJECT` for FEAT-004.
 
-## Senatria IAM and Audit comparison
+## IAM and Audit foundation donor comparison
 
 | Slice at fixed commit | Decision | Rationale |
 | --- | --- | --- |
 | `platform/go/sdk/auth` principal context, permission request, and fail-closed guard | `ADAPT` | Preserve a trusted subject and tenant returned by an IAM-facing Authorizer, a stable action/resource request, decision correlation, and deny-by-default failures. Keep bearer or gateway credentials transient; a handler never accepts tenant or `requestedBy` authority from a client document or tenant header. |
-| `platform/go/sdk/auth/nethttp` middleware | `REFERENCE` | Its protected-path discipline and trusted-context handoff are useful. The donor's gateway assertion format, runtime profiles, Kratos/JWT/JWKS, revocation, and Audit SDK context are Senatria-specific and are not copied into this service. |
+| `platform/go/sdk/auth/nethttp` middleware | `REFERENCE` | Its protected-path discipline and trusted-context handoff are useful. The donor's gateway assertion format, runtime profiles, Kratos/JWT/JWKS, revocation, and Audit SDK context are donor-specific and are not copied into this service. |
 | `platform/go/sdk/audit` recorder and `sqloutbox` transaction sink | `ADAPT` | Persist one fixed, sanitized business event in the same PostgreSQL transaction as an accepted mutation. The event inherits the authorized actor, tenant, IAM decision, and request correlation; it contains no credential, secret, configuration value, request body, provider payload, or arbitrary attributes. |
 | Audit outbox dispatcher and PostgreSQL claim/completion protocol | `ADAPT` | Use an immutable event ID, at-least-once delivery, bounded retry, database-time lease recovery, and fencing-protected completion. The Audit service must deduplicate the stable event ID. Lease and fencing protect dispatcher concurrency only; they are not Audit authority or evidence by themselves. |
 | Complete auth/audit SDK, JWT/JWKS and revocation providers, Kratos/Redis adapters, client credentials, generic taxonomy, archive, retention, and query closure | `REJECT` | IAM authentication/authorization and Audit retention/query remain independently deployable authorities. Importing this closure would make the donor a foundation dependency and recreate the code, test, and documentation surface that Phase 1 deliberately avoids. |

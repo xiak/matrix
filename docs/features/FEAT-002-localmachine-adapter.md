@@ -256,9 +256,9 @@ implementation details:
 
 1. Reuse the legacy PaaS external-text rule: control characters and recognizable
    raw secret material fail closed even in fields otherwise considered safe.
-2. Improve on the Senatria OpenSSH helper by enforcing output limits during
-   the read itself. Its configuration and quoting tests are useful, but its
-   optional insecure host checking, raw environment private key, arbitrary
+2. Improve on the delivery donor's OpenSSH helper by enforcing output limits
+   during the read itself. Its configuration and quoting tests are useful, but
+   its optional insecure host checking, raw environment private key, arbitrary
    script API, and post-buffer size check are not admitted.
 
 The complete comparison is recorded in

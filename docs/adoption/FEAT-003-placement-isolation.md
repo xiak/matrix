@@ -9,8 +9,8 @@
 
 | Donor | Commit | Worktree policy |
 | --- | --- | --- |
-| `D:\XiaK\project\2026\matrix` | `69336e51f94fa98f6aa278fa4c62382e224dbeaf` | Read only with Git object commands. The current dirty worktree is excluded. |
-| `D:\XiaK\project\2026\senatria\matrix` | `f51d5ed19fd60e8c4e43500af5e669d67ae4ef7d` | Read only with Git object commands. The current worktree is excluded. |
+| Legacy PaaS donor | `69336e51f94fa98f6aa278fa4c62382e224dbeaf` | Read only with Git object commands. Its worktree is excluded. |
+| Delivery foundation donor | `f51d5ed19fd60e8c4e43500af5e669d67ae4ef7d` | Read only with Git object commands. The current worktree is excluded. |
 
 The FEAT-003 target algorithm, isolation seam, transaction boundary, and
 acceptance gates were fixed before these source slices were opened.
@@ -32,14 +32,14 @@ acceptance gates were fixed before these source slices were opened.
 | `ADR-004-platform-wide-ddd-discipline.md`, `ARCH-021-tactical-ddd-implementation-boundary-model.md`, and IAM DDD naming conventions | 93 + 236 + reference lines | `ADAPT` | Retain bounded-context/source-of-truth ownership, domain-pure rules, usecase-owned transactions and ports, anti-corruption mappings, and role-revealing names. Apply them pragmatically to the smaller `apphosting` context without the legacy governance graph, speculative layers, or duplicate models. |
 | ResourceKernel, Project, Environment, ProviderRegistry, quota, and approval graph closure | Thousands of lines | `REJECT` | It is a mature but materially different product graph. Importing it would recreate the legacy PaaS authority model before the Local Compose runtime needs it and would make physical/provider concerns part of tenant placement. |
 
-## Senatria comparison
+## Delivery foundation donor comparison
 
 | Slice at fixed commit | Size | Decision | Rationale |
 | --- | ---: | --- | --- |
 | `devops/application/catalog/component_target_config_service.py` | 175 lines | `REJECT` for FEAT-003 | It renders deployment configuration after a target is selected from environment naming. Its path, value, and secret-metadata safeguards are useful later for FEAT-004, but it has no tenant, isolation, capacity, or scheduler boundary. |
 | `devops/cd/deploy/prepare-compose-target-config.sh` | 216 lines | `REJECT` for FEAT-003 | It is release tooling driven by an environment-selected deploy target, not a policy or capacity planner. It remains possible FEAT-004 behavior evidence and is not copied. |
 | `api/auditcontract/placement.go`, generated contract vectors, and Audit placement deriver | 280+ lines | `REFERENCE` | Here “placement” is deterministic Audit virtual-slot/shard derivation, not workload runtime placement. Reuse only the version-qualified digest contract, canonical golden vectors, and fail-closed conformance-test pattern; reject the shard algorithm and Audit vocabulary. |
-| Senatria business release and environment model | Large DevOps closure | `REJECT` | The independent PaaS must not absorb Senatria business services, environment authority, or deployment naming. FEAT-004 will consume an already authorized placement decision through its own runtime contract. |
+| Donor business release and environment model | Large DevOps closure | `REJECT` | The independent PaaS must not absorb donor business services, environment authority, or deployment naming. FEAT-004 will consume an already authorized placement decision through its own runtime contract. |
 
 ## Design comparison result
 
@@ -87,6 +87,6 @@ resource boundary:
 4. Caller-selected targets, provider bindings, ResourceKernel ownership,
    Project/Environment closure, and inline durable-plan placeholders are not
    admitted.
-5. Senatria Audit's versioned digest and golden-vector conformance pattern is
+5. The foundation donor's Audit versioned-digest and golden-vector pattern is
    referenced for candidate-digest tests. Its audit shard calculation is not a
    runtime placement algorithm.

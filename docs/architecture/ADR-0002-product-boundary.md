@@ -5,26 +5,29 @@
 
 ## Context
 
-Matrix is first a ToB PaaS delivered into a customer's private environment.
-It must install and operate without Internet access, use customer-provided
-machines, and support application deployment, operations, upgrade, rollback,
-recovery, identity, and audit. Docker Engine is the default v0.1 substrate;
-Docker Compose is the first application executor. Kubernetes may be added
-later.
+`xiak` is an invented brand word inspired by the Chinese word “侠客”, with
+`xiak.com` as its domain. Matrix is the umbrella product and may contain
+multiple independently bounded subproducts. Phase 1 delivers its ToB private
+Application PaaS subproduct. That subproduct must install and operate without
+Internet access, use customer-provided machines, and support application
+deployment, operations, upgrade, rollback, recovery, identity, and audit.
+Docker Engine is the default v0.1 substrate; Docker Compose is the first
+application executor. Kubernetes may be added later.
 
-Matrix may eventually grow into a cloud platform. That future must not make
-the current product a universal API spanning containers, virtual machines,
-functions, Kubernetes-native resources, and managed services.
+The Matrix product family may eventually grow into a broader cloud platform.
+That future must not turn the current PaaS subproduct into a universal API
+spanning containers, virtual machines, functions, Kubernetes-native resources,
+and managed services.
 
 ## Decision
 
 ### Product boundary
 
-Matrix is a privately delivered **Application PaaS**. Its distribution
-contains IAM, Audit, APISIX, the PaaS control plane and worker, the independent
-PaaS UI, approved adapters, PostgreSQL, and an offline-capable Compose
-deployment. Customer business code, schemas, and product-specific UIs remain
-external workloads.
+The Phase 1 boundary is the privately delivered **Matrix Application PaaS**
+subproduct. Its distribution contains IAM, Audit, APISIX, the PaaS control
+plane and worker, the independent PaaS UI, approved adapters, PostgreSQL, and
+an offline-capable Compose deployment. Customer business code, schemas, and
+product-specific UIs remain external workloads.
 
 APISIX protects northbound APIs and may implement application routing, but the
 two roles use separate internal bindings and credentials. Its Admin API is

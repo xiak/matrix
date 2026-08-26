@@ -301,7 +301,7 @@ func TestAuditHTTPPostgresVerticalSlice(t *testing.T) {
 		verifierCredential,
 	)
 
-	iam.failure = errors.New("native IAM failure contains " + readerCredentialA + " and C:\\secret")
+	iam.failure = errors.New("native IAM failure contains " + readerCredentialA + " and native-provider-path")
 	failure := performAuditRequest(
 		handler,
 		http.MethodPost,
@@ -312,7 +312,7 @@ func TestAuditHTTPPostgresVerticalSlice(t *testing.T) {
 	if failure.Code != http.StatusServiceUnavailable ||
 		bytes.Contains(failure.Body.Bytes(), []byte(readerCredentialA)) ||
 		bytes.Contains(failure.Body.Bytes(), []byte("native IAM failure")) ||
-		bytes.Contains(failure.Body.Bytes(), []byte(`C:\secret`)) {
+		bytes.Contains(failure.Body.Bytes(), []byte(`native-provider-path`)) {
 		t.Fatalf("Audit IAM outage leaked native data: status=%d body=%s", failure.Code, failure.Body.String())
 	}
 }

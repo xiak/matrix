@@ -313,7 +313,7 @@
 ## Fixed donor baselines
 
 - Legacy PaaS: `69336e51f94fa98f6aa278fa4c62382e224dbeaf`
-- Senatria IAM/Audit foundation:
+- IAM/Audit foundation donor:
   `f51d5ed19fd60e8c4e43500af5e669d67ae4ef7d`
 - PaaS design: `338d9b5fcb820120c32265e380c55e5f171cdb75`
 

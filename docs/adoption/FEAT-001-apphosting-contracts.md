@@ -9,8 +9,8 @@
 
 | Donor | Commit | Worktree policy |
 | --- | --- | --- |
-| `D:\XiaK\project\2026\matrix` | `69336e51f94fa98f6aa278fa4c62382e224dbeaf` | Read with Git object commands only; approximately 187 current worktree changes are excluded. |
-| `D:\XiaK\project\2026\senatria\matrix` | `f51d5ed19fd60e8c4e43500af5e669d67ae4ef7d` | Read with Git object commands only; current worktree state is excluded. |
+| Legacy PaaS donor | `69336e51f94fa98f6aa278fa4c62382e224dbeaf` | Read with Git object commands only; exclude its worktree. |
+| IAM/Audit foundation donor | `f51d5ed19fd60e8c4e43500af5e669d67ae4ef7d` | Read with Git object commands only; current worktree state is excluded. |
 
 The target design was fixed before these slices were opened. Decisions below
 compare each slice to that target instead of treating donor code as the

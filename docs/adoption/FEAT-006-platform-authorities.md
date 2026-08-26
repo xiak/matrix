@@ -10,7 +10,7 @@
 | Donor | Commit | Worktree policy |
 | --- | --- | --- |
 | Legacy PaaS | `69336e51f94fa98f6aa278fa4c62382e224dbeaf` | Read only through Git object commands; exclude its worktree. |
-| Senatria IAM/Audit foundation | `f51d5ed19fd60e8c4e43500af5e669d67ae4ef7d` | Read only through Git object commands; exclude its worktree. |
+| IAM/Audit foundation donor | `f51d5ed19fd60e8c4e43500af5e669d67ae4ef7d` | Read only through Git object commands; exclude its worktree. |
 | PaaS design | `338d9b5fcb820120c32265e380c55e5f171cdb75` | Read only through Git object commands; use as rationale, not executable evidence. |
 
 The independent authority target, closed Phase 1 roles and actions, bootstrap
@@ -30,7 +30,7 @@ acceptance gates were committed before any of these slices was opened.
 No legacy user, session, role, audit record, header protocol, or database is a
 migration source or fallback authority.
 
-## Senatria IAM comparison
+## IAM foundation donor comparison
 
 The fixed IAM tree contains 658 files, including generated Ent persistence,
 protobuf/gRPC surfaces, JWT/JWKS, Redis-backed identity state, Wire
@@ -47,7 +47,7 @@ composition, scripts, and BMS-specific policy.
 | IAM protobuf/OpenAPI surface and auth SDK | `REFERENCE` for endpoint and failure categories; `REJECT` as an implementation | Login/logout, session revocation, explicit action decisions, strict enum handling, and normalized unavailable/denied outcomes inform tests. Protobuf, gRPC, Kratos, JWT, refresh tokens, organization hints, custom roles/conditions, ABAC maps, caller-supplied subject/tenant, Redis revocation, and local authorization fallback are outside or contradict the target. |
 | Ent-generated data layer, remaining use cases, commands, scripts, configs, and deployment closure | `REJECT` | The generated and framework closure is substantially larger than the accepted vertical slice and would create duplicate models, APIs, tests, and operational paths. |
 
-## Senatria Audit comparison
+## Audit foundation donor comparison
 
 The fixed Audit implementation contains 1,258 files below `internal`, thirteen
 Audit proto contracts, fifty-one migrations, and large projection, retention,

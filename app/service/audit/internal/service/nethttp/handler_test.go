@@ -196,7 +196,7 @@ func TestAuditHTTPRejectsAmbiguousInputAndRedactsFailures(t *testing.T) {
 		t.Fatalf("subject verifier status=%d calls=%d", subjectVerifierResponse.Code, workflow.installationVerifyCalls)
 	}
 
-	workflow.queryErr = errors.New("native failure contains user-session-credential and C:\\secret")
+	workflow.queryErr = errors.New("native failure contains user-session-credential and native-provider-path")
 	failureResponse := exerciseJSON(
 		t,
 		handler,
@@ -208,7 +208,7 @@ func TestAuditHTTPRejectsAmbiguousInputAndRedactsFailures(t *testing.T) {
 	if failureResponse.Code != http.StatusServiceUnavailable ||
 		bytes.Contains(failureResponse.Body.Bytes(), []byte("user-session-credential")) ||
 		bytes.Contains(failureResponse.Body.Bytes(), []byte("native failure")) ||
-		bytes.Contains(failureResponse.Body.Bytes(), []byte(`C:\secret`)) {
+		bytes.Contains(failureResponse.Body.Bytes(), []byte(`native-provider-path`)) {
 		t.Fatalf("Audit failure leaked internal data: status=%d body=%s", failureResponse.Code, failureResponse.Body.String())
 	}
 	var problem auditv1.Problem

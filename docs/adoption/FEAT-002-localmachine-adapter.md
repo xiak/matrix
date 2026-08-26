@@ -9,8 +9,8 @@
 
 | Donor | Commit | Worktree policy |
 | --- | --- | --- |
-| `D:\XiaK\project\2026\matrix` | `69336e51f94fa98f6aa278fa4c62382e224dbeaf` | Read only with Git object commands. The current dirty worktree is excluded. |
-| `D:\XiaK\project\2026\senatria\matrix` | `f51d5ed19fd60e8c4e43500af5e669d67ae4ef7d` | Read only with Git object commands. The current worktree is excluded. |
+| Legacy PaaS donor | `69336e51f94fa98f6aa278fa4c62382e224dbeaf` | Read only with Git object commands. Its worktree is excluded. |
+| Delivery foundation donor | `f51d5ed19fd60e8c4e43500af5e669d67ae4ef7d` | Read only with Git object commands. The current worktree is excluded. |
 
 The FEAT-002 target design and release gates were written before these source
 slices were opened.
@@ -25,14 +25,14 @@ slices were opened.
 | `runtime/domain/records.go` and `values.go` | 1,645 lines | `REFERENCE` | Preserve provider-neutral target health, desired/observed separation, UTC microsecond rules, canonical sets, control-character rejection, and raw-sensitive-material detection. Docker/Compose-shaped public target vocabulary and the donor Project/Environment/Application/Service topology remain rejected. |
 | Entire legacy ProviderRegistry and Runtime aggregate closure | Thousands of lines | `REJECT` | There is no LocalMachine host probe or SSH transport at this commit. Pulling the aggregate closure would add policy, persistence, and product hierarchy without implementing FEAT-002. |
 
-## Senatria DevOps comparison
+## Delivery foundation donor comparison
 
 | Slice at fixed commit | Size | Decision | Rationale |
 | --- | ---: | --- | --- |
 | `devops/infrastructure/remoteexecution/deployment_target.py` | 185 lines | `ADAPT` | Preserve bounded target names, explicit required settings, port validation, safe absolute paths, strict checking by default, and structured configuration errors. Reject raw private keys in environment-backed target objects and reject the option to disable host verification. |
 | `devops/infrastructure/remoteexecution/ssh.py` | 217 lines | `ADAPT` | Preserve non-shell local process launch, batch/identity-only behavior, deadlines, per-file permissions, Windows ACL failure handling, argument control-character rejection, and output limits. The new Go transport uses an injected credential resolver and pinned host-key callback; it does not expose arbitrary script/argument execution. Output is bounded while reading, rather than after an unbounded `capture_output` allocation. |
 | `test_deployment_target.py` and `test_ssh.py` | 192 lines | `REFERENCE` | Reuse the negative-test categories for missing pins, unsafe ports/paths, control characters, quoting, and injection-shaped values. Add an actual ephemeral SSH server, wrong-pin behavior, deadline, and streaming-size tests absent from the donor. |
-| `bootstrap-compose-target-ssh.sh` and `deploy-compose-ssh.sh` | 427 lines | `REJECT` | These are CI deployment scripts, not infrastructure observations. They accept raw keys through environment variables, may disable strict host checking, construct remote shell commands, mutate hosts, upload payloads, and contain Senatria release assumptions. None enter FEAT-002. |
+| `bootstrap-compose-target-ssh.sh` and `deploy-compose-ssh.sh` | 427 lines | `REJECT` | These are CI deployment scripts, not infrastructure observations. They accept raw keys through environment variables, may disable strict host checking, construct remote shell commands, mutate hosts, upload payloads, and contain donor-product release assumptions. None enter FEAT-002. |
 | Compose packaging, release-state, and target-config code | Large DevOps closure | `REJECT` for FEAT-002 | Useful later as FEAT-004 behavior evidence, but it deploys business releases and does not define a safe machine observation boundary. |
 
 ## Design comparison result

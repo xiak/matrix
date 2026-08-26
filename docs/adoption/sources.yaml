@@ -1,13 +1,13 @@
 sources:
   legacyPaas:
-    repository: 'D:\XiaK\project\2026\matrix'
+    repository: legacy-paas-donor
     commit: 69336e51f94fa98f6aa278fa4c62382e224dbeaf
     paths:
       - app/service/paas
       - app/ui/src/ui/xiak
     mode: selective-slices
-  senatriaFoundation:
-    repository: 'D:\XiaK\project\2026\senatria\matrix'
+  iamAuditFoundation:
+    repository: iam-audit-foundation-donor
     commit: f51d5ed19fd60e8c4e43500af5e669d67ae4ef7d
     paths:
       - app/service/iam
@@ -17,7 +17,7 @@ sources:
       - deploy/compose
     mode: minimal-dependency-extraction
   paasDesign:
-    repository: 'D:\XiaK\project\2026\senatria\matrix'
+    repository: paas-design-donor
     commit: 338d9b5fcb820120c32265e380c55e5f171cdb75
     paths:
       - docs/paas
