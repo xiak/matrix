@@ -80,4 +80,72 @@ func (effects *Effects) RollbackInstall(
 	return rollbackInstallation(ctx, effects.runtime, plan)
 }
 
+// ObserveInstallation reads only authenticated installation-owned files and
+// Docker provider state. It never invokes Compose convergence or migrations.
+func (effects *Effects) ObserveInstallation(
+	ctx context.Context,
+	installed platformcommand.InstalledPlan,
+) (bool, error) {
+	if effects == nil || effects.runtime == nil || ctx == nil {
+		return false, errors.Join(
+			platformcommand.ErrEffectUnavailable,
+			errors.New("local-machine observation is unavailable"),
+		)
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	plan, err := authenticateInstalledPlan(installed)
+	if err != nil {
+		return false, errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	defer clear(plan.TrustBytes)
+	return observeInstalledPlatform(ctx, effects.runtime, plan)
+}
+
+// VerifyInstallation reauthenticates the current release, checks the exact
+// healthy Compose topology, verifies schema compatibility without applying
+// migrations, and then executes the fixed PaaS/Audit application probe.
+func (effects *Effects) VerifyInstallation(
+	ctx context.Context,
+	installed platformcommand.InstalledPlan,
+) error {
+	if effects == nil || effects.runtime == nil || effects.verifier == nil || ctx == nil {
+		return errors.Join(
+			platformcommand.ErrEffectUnavailable,
+			errors.New("local-machine verification is unavailable"),
+		)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	plan, err := authenticateInstalledPlan(installed)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	defer clear(plan.TrustBytes)
+	installation, expectation, err := preparePlatformObservation(
+		ctx, effects.runtime, plan,
+	)
+	if err != nil {
+		return err
+	}
+	ready, err := observePlatformProject(ctx, effects.runtime, expectation)
+	if err != nil {
+		return err
+	}
+	if !ready {
+		return errors.Join(
+			platformcommand.ErrEffectVerification,
+			errors.New("platform is not in its fixed healthy topology"),
+		)
+	}
+	if err := verifyInstallationMigrations(
+		ctx, effects.runtime, plan, installation,
+	); err != nil {
+		return err
+	}
+	return effects.verifier.Verify(ctx, plan)
+}
+
 var _ platformcommand.Effects = (*Effects)(nil)

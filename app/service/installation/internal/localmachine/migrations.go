@@ -74,6 +74,27 @@ func migrateInstallation(
 		}
 		return errors.Join(platformcommand.ErrEffectUnavailable, err)
 	}
+	return runMigrationModes(
+		ctx, runtimeBoundary, plan, installation, "apply", "verify",
+	)
+}
+
+func verifyInstallationMigrations(
+	ctx context.Context,
+	runtimeBoundary dockerRuntime,
+	plan platformcommand.InstallPlan,
+	installation verifiedInstallation,
+) error {
+	return runMigrationModes(ctx, runtimeBoundary, plan, installation, "verify")
+}
+
+func runMigrationModes(
+	ctx context.Context,
+	runtimeBoundary dockerRuntime,
+	plan platformcommand.InstallPlan,
+	installation verifiedInstallation,
+	modes ...string,
+) error {
 	networkID, err := controlNetworkID(
 		ctx, runtimeBoundary, installation.topology.ProjectName, plan.InstallationID,
 		installation.bundle.Manifest.Release.ID,
@@ -85,7 +106,13 @@ func migrateInstallation(
 	for _, image := range installation.bundle.Manifest.Images {
 		images[image.Component] = image.ImageID
 	}
-	for _, mode := range []string{"apply", "verify"} {
+	for _, mode := range modes {
+		if mode != "apply" && mode != "verify" {
+			return errors.Join(
+				platformcommand.ErrEffectVerification,
+				errors.New("migration action is unsupported"),
+			)
+		}
 		for _, migration := range platformMigrations {
 			imageID, found := images[migration.component]
 			if !found {

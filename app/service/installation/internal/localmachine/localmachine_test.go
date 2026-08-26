@@ -320,6 +320,28 @@ func TestMigrateInstallationUsesFixedGoBinariesWithoutCredentialArguments(t *tes
 			}
 		}
 	}
+	installation, err := verifiedInstallationConfiguration(plan)
+	if err != nil {
+		t.Fatalf("authenticate migration verification fixture: %v", err)
+	}
+	runtimeBoundary.composeCalls = 0
+	runtimeBoundary.runs = nil
+	if err := verifyInstallationMigrations(
+		context.Background(), runtimeBoundary, plan, installation,
+	); err != nil {
+		t.Fatalf("verify installation migrations: %v", err)
+	}
+	if runtimeBoundary.composeCalls != 0 || len(runtimeBoundary.runs) != len(platformMigrations) {
+		t.Fatalf(
+			"verify-only migration provider calls compose=%d run=%d",
+			runtimeBoundary.composeCalls, len(runtimeBoundary.runs),
+		)
+	}
+	for _, arguments := range runtimeBoundary.runs {
+		if arguments[len(arguments)-1] != "verify" {
+			t.Fatalf("migration verification applied state: %q", strings.Join(arguments, " "))
+		}
+	}
 }
 
 func TestStartInstallationObservesThenConvergesFixedOfflineTopology(t *testing.T) {
@@ -407,6 +429,85 @@ func TestStartInstallationMarksUnobservedSuccessfulEffectUnknown(t *testing.T) {
 		errors.Is(err, platformcommand.ErrEffectVerification) ||
 		runtimeBoundary.composeCalls != 1 {
 		t.Fatalf("unobserved successful start err=%v compose=%d", err, runtimeBoundary.composeCalls)
+	}
+}
+
+func TestOperationalEffectsObserveAndVerifyWithoutComposeConvergence(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine operational effects target Linux")
+	}
+	plan, expectation := configuredPlatformStartFixture(t)
+	runtimeBoundary := newPlatformStartRuntime(plan, expectation)
+	runtimeBoundary.started = true
+	verifier := &recordingInstallationVerifier{}
+	effects := &Effects{
+		runtime: runtimeBoundary, entropy: rand.Reader, verifier: verifier,
+	}
+	installed := installedPlanFrom(plan)
+
+	ready, err := effects.ObserveInstallation(context.Background(), installed)
+	if err != nil || !ready || runtimeBoundary.composeCalls != 0 ||
+		len(runtimeBoundary.migrationRuns) != 0 || verifier.calls != 0 {
+		t.Fatalf(
+			"read-only observation ready=%t err=%v compose=%d migrations=%d verifier=%d",
+			ready, err, runtimeBoundary.composeCalls,
+			len(runtimeBoundary.migrationRuns), verifier.calls,
+		)
+	}
+	if err := effects.VerifyInstallation(context.Background(), installed); err != nil {
+		t.Fatalf("verify installed platform: %v", err)
+	}
+	if runtimeBoundary.composeCalls != 0 ||
+		len(runtimeBoundary.migrationRuns) != len(platformMigrations) || verifier.calls != 1 {
+		t.Fatalf(
+			"verification provider calls compose=%d migrations=%d verifier=%d",
+			runtimeBoundary.composeCalls, len(runtimeBoundary.migrationRuns), verifier.calls,
+		)
+	}
+	for _, arguments := range runtimeBoundary.migrationRuns {
+		if arguments[len(arguments)-1] != "verify" {
+			t.Fatalf("operational verification applied migration state: %q", strings.Join(arguments, " "))
+		}
+	}
+}
+
+func TestAuthenticateInstalledPlanPinsSealedTrustAndRelease(t *testing.T) {
+	plan := newInstallPlan(t)
+	if err := stageInstallation(plan, rand.Reader); err != nil {
+		t.Fatalf("stage authentication fixture: %v", err)
+	}
+	installed := installedPlanFrom(plan)
+	authenticated, err := authenticateInstalledPlan(installed)
+	if err != nil {
+		t.Fatalf("authenticate sealed current release: %v", err)
+	}
+	clear(authenticated.TrustBytes)
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*platformcommand.InstalledPlan)
+	}{
+		{
+			name: "trust fingerprint",
+			mutate: func(value *platformcommand.InstalledPlan) {
+				value.TrustFingerprint = "sha256:" + strings.Repeat("e", 64)
+			},
+		},
+		{
+			name: "release digest",
+			mutate: func(value *platformcommand.InstalledPlan) {
+				value.ReleaseDigest = "sha256:" + strings.Repeat("d", 64)
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			drifted := installed
+			test.mutate(&drifted)
+			if authenticated, err := authenticateInstalledPlan(drifted); err == nil {
+				clear(authenticated.TrustBytes)
+				t.Fatal("sealed installation drift was accepted")
+			}
+		})
 	}
 }
 
@@ -645,6 +746,17 @@ func newInstallPlan(t *testing.T) platformcommand.InstallPlan {
 	}
 }
 
+func installedPlanFrom(plan platformcommand.InstallPlan) platformcommand.InstalledPlan {
+	return platformcommand.InstalledPlan{
+		Root: plan.Root, InstallationID: plan.InstallationID,
+		Listener: plan.Listener, Port: plan.Port,
+		ReleaseID:        plan.Bundle.Manifest.Release.ID,
+		ReleaseDigest:    plan.Bundle.ManifestSHA256,
+		TrustKeyID:       plan.Trust.KeyID,
+		TrustFingerprint: plan.Trust.PublicKeyFingerprint,
+	}
+}
+
 func readTestFile(t *testing.T, root, relative string) []byte {
 	t.Helper()
 	content, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(relative)))
@@ -774,6 +886,7 @@ type platformStartRuntime struct {
 	composeCalls              int
 	observationsBeforeStart   int
 	composeArguments          []string
+	migrationRuns             [][]string
 }
 
 type platformCleanupRuntime struct {
@@ -1005,6 +1118,12 @@ func (runtimeBoundary *platformStartRuntime) Run(
 		runtimeBoundary.started = true
 		return nil, true, nil
 	}
+	if arguments[0] == "run" {
+		runtimeBoundary.migrationRuns = append(
+			runtimeBoundary.migrationRuns, slices.Clone(arguments),
+		)
+		return nil, true, nil
+	}
 	if len(arguments) >= 2 && arguments[1] == "ls" {
 		if !runtimeBoundary.started {
 			runtimeBoundary.observationsBeforeStart++
@@ -1022,6 +1141,11 @@ func (runtimeBoundary *platformStartRuntime) Run(
 			slices.Sort(services)
 			return []byte(strings.Join(services, "\n") + "\n"), true, nil
 		case "network":
+			if hasArgumentPair(
+				arguments, "--filter", "label=com.docker.compose.network=control",
+			) {
+				return []byte("network-control\n"), true, nil
+			}
 			networks := make([]string, 0, len(runtimeBoundary.expectation.Networks))
 			for network := range runtimeBoundary.expectation.Networks {
 				networks = append(networks, "network-"+network)
@@ -1035,12 +1159,30 @@ func (runtimeBoundary *platformStartRuntime) Run(
 	if len(arguments) >= 2 && arguments[1] == "inspect" {
 		switch arguments[0] {
 		case "network":
+			if hasArgumentPair(arguments, "--format", "{{json .Labels}}") {
+				return runtimeBoundary.inspectNetworkLabels(arguments[len(arguments)-1])
+			}
 			return runtimeBoundary.inspectNetwork(arguments[len(arguments)-1])
 		case "container":
 			return runtimeBoundary.inspectContainer(arguments[len(arguments)-1])
 		}
 	}
 	return nil, false, fmt.Errorf("unexpected platform Docker command: %q", strings.Join(arguments, " "))
+}
+
+func (runtimeBoundary *platformStartRuntime) inspectNetworkLabels(
+	identity string,
+) ([]byte, bool, error) {
+	logicalName := strings.TrimPrefix(identity, "network-")
+	expected, found := runtimeBoundary.expectation.Networks[logicalName]
+	if !found {
+		return nil, true, errors.New("platform test network is unknown")
+	}
+	labels := cloneTestLabels(expected.Labels)
+	labels["com.docker.compose.project"] = runtimeBoundary.expectation.Name
+	labels["com.docker.compose.network"] = logicalName
+	content, err := json.Marshal(labels)
+	return content, true, err
 }
 
 func (runtimeBoundary *platformStartRuntime) inspectNetwork(

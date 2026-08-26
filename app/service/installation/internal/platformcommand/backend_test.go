@@ -3,7 +3,9 @@ package platformcommand
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/xiak/matrix/app/service/installation/internal/cli"
@@ -172,6 +174,153 @@ func TestInstallRejectsAValidBundleFromAnotherTrustRoot(t *testing.T) {
 	assertFault(t, err, cli.FaultConflict, "RELEASE_TRUST_CONFLICT")
 }
 
+func TestStatusIsReadOnlyForStableAndActiveInstallations(t *testing.T) {
+	fixture := writeReleaseFixture(t)
+	effects := &installEffects{observeReady: true}
+	backend := newTestBackend(t, effects)
+	root := filepath.Join(t.TempDir(), "matrix")
+	if _, err := backend.Run(context.Background(), installRequest(root, fixture)); err != nil {
+		t.Fatalf("install status fixture: %v", err)
+	}
+	before := readJournal(t, root)
+
+	result, err := backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionStatus, Root: root,
+	})
+	if err != nil || result.State != "READY" || result.Changed ||
+		result.ReleaseID != before.CurrentReleaseID || effects.observeCalls != 1 {
+		t.Fatalf("ready status = %#v / %v / calls=%d", result, err, effects.observeCalls)
+	}
+	effects.observeReady = false
+	result, err = backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionStatus, Root: root,
+	})
+	if err != nil || result.State != "NOT_READY" || effects.observeCalls != 2 {
+		t.Fatalf("not-ready status = %#v / %v / calls=%d", result, err, effects.observeCalls)
+	}
+	if after := readJournal(t, root); !reflect.DeepEqual(after, before) {
+		t.Fatalf("status changed the sealed journal: before=%#v after=%#v", before, after)
+	}
+
+	activeEffects := &installEffects{
+		failPhase: lifecycle.PhaseLoadingImages,
+		failErr:   ErrEffectOutcomeUnknown,
+		failOnce:  true,
+	}
+	activeBackend := newTestBackend(t, activeEffects)
+	activeRoot := filepath.Join(t.TempDir(), "matrix")
+	_, err = activeBackend.Run(
+		context.Background(), installRequest(activeRoot, writeReleaseFixture(t)),
+	)
+	assertFault(t, err, cli.FaultUnavailable, "EFFECT_OUTCOME_UNKNOWN")
+	activeBefore := readJournal(t, activeRoot)
+	result, err = activeBackend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionStatus, Root: activeRoot,
+	})
+	if err != nil || activeBefore.Active == nil ||
+		result.State != string(activeBefore.Active.Phase) ||
+		result.CorrelationID != activeBefore.Active.Command.ID ||
+		activeEffects.observeCalls != 0 {
+		t.Fatalf("active status = %#v / %v / journal=%#v", result, err, activeBefore)
+	}
+	if after := readJournal(t, activeRoot); !reflect.DeepEqual(after, activeBefore) {
+		t.Fatal("active status changed the sealed journal")
+	}
+}
+
+func TestStatusDoesNotCreateAMissingInstallation(t *testing.T) {
+	effects := &installEffects{}
+	backend := newTestBackend(t, effects)
+	root := filepath.Join(t.TempDir(), "matrix")
+	_, err := backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionStatus, Root: root,
+	})
+	assertFault(t, err, cli.FaultPrecondition, "PLATFORM_NOT_INSTALLED")
+	if _, err := os.Lstat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("status created installation state: %v", err)
+	}
+}
+
+func TestVerifyCommitsOnlyItsExecutionAndResumesUnknownOutcome(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		fixture := writeReleaseFixture(t)
+		effects := &installEffects{}
+		backend := newTestBackend(t, effects)
+		root := filepath.Join(t.TempDir(), "matrix")
+		if _, err := backend.Run(context.Background(), installRequest(root, fixture)); err != nil {
+			t.Fatalf("install verification fixture: %v", err)
+		}
+		before := readJournal(t, root)
+		result, err := backend.Run(context.Background(), cli.Request{
+			Action: lifecycle.ActionVerify, Root: root,
+		})
+		if err != nil || result.State != "READY" || result.Changed ||
+			result.ReleaseID != before.CurrentReleaseID || effects.verifyCalls != 1 {
+			t.Fatalf("verification result = %#v / %v / calls=%d", result, err, effects.verifyCalls)
+		}
+		after := readJournal(t, root)
+		if after.CurrentReleaseID != before.CurrentReleaseID ||
+			after.CurrentReleaseDigest != before.CurrentReleaseDigest ||
+			after.PreviousRelease != before.PreviousRelease ||
+			after.PreviousReleaseDigest != before.PreviousReleaseDigest ||
+			after.Active != nil || after.Last == nil ||
+			after.Last.Command.Action != lifecycle.ActionVerify ||
+			after.Last.Outcome != lifecycle.OutcomeSucceeded {
+			t.Fatalf("verified journal = %#v", after)
+		}
+	})
+
+	t.Run("definitive failure", func(t *testing.T) {
+		fixture := writeReleaseFixture(t)
+		effects := &installEffects{verifyErr: ErrEffectVerification}
+		backend := newTestBackend(t, effects)
+		root := filepath.Join(t.TempDir(), "matrix")
+		if _, err := backend.Run(context.Background(), installRequest(root, fixture)); err != nil {
+			t.Fatalf("install failure fixture: %v", err)
+		}
+		before := readJournal(t, root)
+		_, err := backend.Run(context.Background(), cli.Request{
+			Action: lifecycle.ActionVerify, Root: root,
+		})
+		assertFault(t, err, cli.FaultVerification, "PLATFORM_VERIFICATION_FAILED")
+		after := readJournal(t, root)
+		if after.CurrentReleaseID != before.CurrentReleaseID ||
+			after.CurrentReleaseDigest != before.CurrentReleaseDigest ||
+			after.Active != nil || after.Last == nil ||
+			after.Last.Command.Action != lifecycle.ActionVerify ||
+			after.Last.Outcome != lifecycle.OutcomeFailed {
+			t.Fatalf("failed verification journal = %#v", after)
+		}
+	})
+
+	t.Run("unknown outcome", func(t *testing.T) {
+		fixture := writeReleaseFixture(t)
+		effects := &installEffects{verifyErr: ErrEffectOutcomeUnknown}
+		backend := newTestBackend(t, effects)
+		root := filepath.Join(t.TempDir(), "matrix")
+		if _, err := backend.Run(context.Background(), installRequest(root, fixture)); err != nil {
+			t.Fatalf("install replay fixture: %v", err)
+		}
+		_, err := backend.Run(context.Background(), cli.Request{
+			Action: lifecycle.ActionVerify, Root: root,
+		})
+		assertFault(t, err, cli.FaultUnavailable, "EFFECT_OUTCOME_UNKNOWN")
+		active := readJournal(t, root)
+		if active.Active == nil || active.Active.Command.Action != lifecycle.ActionVerify ||
+			active.Active.Phase != lifecycle.PhaseVerifying {
+			t.Fatalf("unknown verification journal = %#v", active)
+		}
+		commandID := active.Active.Command.ID
+		effects.verifyErr = nil
+		result, err := backend.Run(context.Background(), cli.Request{
+			Action: lifecycle.ActionVerify, Root: root,
+		})
+		if err != nil || result.CorrelationID != commandID || effects.verifyCalls != 2 {
+			t.Fatalf("resumed verification = %#v / %v / calls=%d", result, err, effects.verifyCalls)
+		}
+	})
+}
+
 type installEffects struct {
 	calls            map[lifecycle.Phase]int
 	failPhase        lifecycle.Phase
@@ -182,6 +331,11 @@ type installEffects struct {
 	rollbackErr      error
 	rollbackFailOnce bool
 	rollbackFailed   bool
+	observeCalls     int
+	observeReady     bool
+	observeErr       error
+	verifyCalls      int
+	verifyErr        error
 }
 
 func (effects *installEffects) ApplyInstallPhase(
@@ -211,6 +365,32 @@ func (effects *installEffects) RollbackInstall(context.Context, InstallPlan) err
 		return effects.rollbackErr
 	}
 	return nil
+}
+
+func (effects *installEffects) ObserveInstallation(
+	_ context.Context,
+	plan InstalledPlan,
+) (bool, error) {
+	effects.observeCalls++
+	if plan.Root == "" || plan.InstallationID == "" || plan.ReleaseID == "" ||
+		plan.ReleaseDigest == "" || plan.TrustKeyID == "" || plan.TrustFingerprint == "" ||
+		plan.Port == 0 {
+		return false, errors.New("installed plan is incomplete")
+	}
+	return effects.observeReady, effects.observeErr
+}
+
+func (effects *installEffects) VerifyInstallation(
+	_ context.Context,
+	plan InstalledPlan,
+) error {
+	effects.verifyCalls++
+	if plan.Root == "" || plan.InstallationID == "" || plan.ReleaseID == "" ||
+		plan.ReleaseDigest == "" || plan.TrustKeyID == "" || plan.TrustFingerprint == "" ||
+		plan.Port == 0 {
+		return errors.New("installed plan is incomplete")
+	}
+	return effects.verifyErr
 }
 
 func effectingInstallPhases() []lifecycle.Phase {

@@ -74,8 +74,12 @@ func openRegularNoFollow(path string) (*os.File, error) {
 	return file, nil
 }
 
-func openLockFileNoFollow(path string) (*os.File, error) {
-	fd, err := unix.Open(path, unix.O_RDWR|unix.O_CREAT|unix.O_CLOEXEC|unix.O_NOFOLLOW, managedFileMode)
+func openLockFileNoFollow(path string, create bool) (*os.File, error) {
+	flags := unix.O_RDWR | unix.O_CLOEXEC | unix.O_NOFOLLOW
+	if create {
+		flags |= unix.O_CREAT
+	}
+	fd, err := unix.Open(path, flags, managedFileMode)
 	if err != nil {
 		return nil, err
 	}

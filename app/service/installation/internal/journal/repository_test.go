@@ -175,6 +175,38 @@ func TestAcquireSerializesProcessesAndHonorsContext(t *testing.T) {
 	}
 }
 
+func TestAcquireExistingNeverInitializesState(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing-installation")
+	if _, err := AcquireExisting(context.Background(), missing); !errors.Is(err, ErrNotInitialized) {
+		t.Fatalf("missing installation error = %v", err)
+	}
+	if _, err := os.Lstat(missing); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("read-only acquisition created the missing root: %v", err)
+	}
+
+	root := initializedRoot(t)
+	journalPath := filepath.Join(root, stateDirectoryName, journalFilename)
+	before, err := os.ReadFile(journalPath)
+	if err != nil {
+		t.Fatalf("read journal before existing acquisition: %v", err)
+	}
+	session, err := AcquireExisting(context.Background(), root)
+	if err != nil {
+		t.Fatalf("acquire initialized installation: %v", err)
+	}
+	if _, err := session.Read(); err != nil {
+		_ = session.Close()
+		t.Fatalf("read initialized installation: %v", err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("close existing installation: %v", err)
+	}
+	after, err := os.ReadFile(journalPath)
+	if err != nil || !reflect.DeepEqual(after, before) {
+		t.Fatalf("read-only acquisition changed the sealed journal: %v", err)
+	}
+}
+
 func TestAcquireRejectsOwnershipLinksAndUnsafePermissions(t *testing.T) {
 	t.Run("foreign object", func(t *testing.T) {
 		root := filepath.Join(t.TempDir(), "installation")

@@ -11,6 +11,47 @@ import (
 	"github.com/xiak/matrix/app/service/installation/topology"
 )
 
+func authenticateInstalledPlan(
+	installed platformcommand.InstalledPlan,
+) (platformcommand.InstallPlan, error) {
+	trustPath, err := managedPath(
+		installed.Root, filepath.FromSlash(layout.ReleaseTrust),
+	)
+	if err != nil {
+		return platformcommand.InstallPlan{}, err
+	}
+	trustBytes, trust, err := release.ReadTrustRootFile(trustPath)
+	if err != nil || trust.KeyID != installed.TrustKeyID ||
+		trust.PublicKeyFingerprint != installed.TrustFingerprint {
+		clear(trustBytes)
+		return platformcommand.InstallPlan{}, errors.New(
+			"installed release trust differs from the sealed journal",
+		)
+	}
+	releaseRoot, err := managedPath(
+		installed.Root,
+		filepath.FromSlash(layout.ReleaseDirectory(installed.ReleaseID)),
+	)
+	if err != nil {
+		clear(trustBytes)
+		return platformcommand.InstallPlan{}, err
+	}
+	bundle, err := release.VerifyDirectory(releaseRoot, trustBytes)
+	if err != nil || bundle.Manifest.Release.ID != installed.ReleaseID ||
+		bundle.ManifestSHA256 != installed.ReleaseDigest ||
+		bundle.Manifest.TopologyDigest != topology.ContractDigest() {
+		clear(trustBytes)
+		return platformcommand.InstallPlan{}, errors.New(
+			"installed release differs from the sealed current pointer",
+		)
+	}
+	return platformcommand.InstallPlan{
+		Root: installed.Root, InstallationID: installed.InstallationID,
+		Listener: installed.Listener, Port: installed.Port,
+		Bundle: bundle, Trust: trust, TrustBytes: trustBytes,
+	}, nil
+}
+
 func verifiedStagedBundle(plan platformcommand.InstallPlan) (release.VerifiedBundle, error) {
 	root, err := managedPath(
 		plan.Root,

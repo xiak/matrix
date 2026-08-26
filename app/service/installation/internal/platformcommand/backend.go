@@ -47,12 +47,29 @@ type InstallPlan struct {
 	TrustBytes     []byte
 }
 
-// Effects is the closed local-machine boundary for install. Each phase must
-// be idempotent. If a command may have taken effect without a known result,
-// it returns ErrEffectOutcomeUnknown and observes ownership on replay.
+// InstalledPlan is the sealed identity of the currently committed release.
+// Local-machine effects must reauthenticate installation-owned files against
+// these values before trusting provider state.
+type InstalledPlan struct {
+	Root             string
+	InstallationID   string
+	Listener         string
+	Port             uint16
+	ReleaseID        string
+	ReleaseDigest    string
+	TrustKeyID       string
+	TrustFingerprint string
+}
+
+// Effects is the closed local-machine lifecycle boundary. Mutating phases are
+// idempotent; status remains observational. If a command may have taken effect
+// without a known result, it returns ErrEffectOutcomeUnknown and observes
+// ownership on replay.
 type Effects interface {
 	ApplyInstallPhase(context.Context, InstallPlan, lifecycle.Phase) error
 	RollbackInstall(context.Context, InstallPlan) error
+	VerifyInstallation(context.Context, InstalledPlan) error
+	ObserveInstallation(context.Context, InstalledPlan) (bool, error)
 }
 
 type Backend struct {
@@ -78,10 +95,159 @@ func (backend *Backend) Run(ctx context.Context, request cli.Request) (cli.Resul
 	if err := ctx.Err(); err != nil {
 		return cli.Result{}, fault(cli.FaultInterrupted, "COMMAND_INTERRUPTED")
 	}
-	if request.Action != lifecycle.ActionInstall {
+	switch request.Action {
+	case lifecycle.ActionInstall:
+		return backend.install(ctx, request)
+	case lifecycle.ActionVerify:
+		return backend.verify(ctx, request)
+	case lifecycle.ActionStatus:
+		return backend.status(ctx, request)
+	default:
 		return cli.Result{}, fault(cli.FaultPrecondition, "LIFECYCLE_ACTION_NOT_READY")
 	}
-	return backend.install(ctx, request)
+}
+
+func (backend *Backend) status(
+	ctx context.Context,
+	request cli.Request,
+) (result cli.Result, returnErr error) {
+	session, err := journal.AcquireExisting(ctx, request.Root)
+	if err != nil {
+		return cli.Result{}, acquireFault(err)
+	}
+	defer func() {
+		if closeErr := session.Close(); closeErr != nil && returnErr == nil {
+			result = cli.Result{}
+			returnErr = fault(cli.FaultInternal, "INSTALLATION_LOCK_RELEASE_FAILED")
+		}
+	}()
+	state, err := session.Read()
+	if err != nil {
+		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_STATE_INVALID")
+	}
+	result = statusResult(state)
+	if state.Active != nil {
+		return result, nil
+	}
+	if state.CurrentReleaseID == "" {
+		return cli.Result{}, fault(cli.FaultPrecondition, "PLATFORM_NOT_INSTALLED")
+	}
+	if state.Last != nil && state.Last.Outcome == lifecycle.OutcomeManualIntervention {
+		return result, nil
+	}
+	ready, err := backend.effects.ObserveInstallation(ctx, installedPlan(session.Root(), state))
+	if err != nil {
+		if ctx.Err() != nil {
+			return cli.Result{}, fault(cli.FaultInterrupted, "COMMAND_INTERRUPTED")
+		}
+		return cli.Result{}, effectFault(lifecycle.PhaseVerifying, err)
+	}
+	if ready {
+		result.State = "READY"
+	} else {
+		result.State = "NOT_READY"
+	}
+	return result, nil
+}
+
+func (backend *Backend) verify(
+	ctx context.Context,
+	request cli.Request,
+) (result cli.Result, returnErr error) {
+	session, err := journal.AcquireExisting(ctx, request.Root)
+	if err != nil {
+		return cli.Result{}, acquireFault(err)
+	}
+	defer func() {
+		if closeErr := session.Close(); closeErr != nil && returnErr == nil {
+			result = cli.Result{}
+			returnErr = fault(cli.FaultInternal, "INSTALLATION_LOCK_RELEASE_FAILED")
+		}
+	}()
+	state, err := session.Read()
+	if err != nil {
+		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_STATE_INVALID")
+	}
+	commandID := ""
+	if state.Active != nil {
+		commandID = state.Active.Command.ID
+	} else {
+		commandID, err = randomIdentity(backend.entropy, "cmd")
+		if err != nil {
+			return cli.Result{}, fault(cli.FaultInternal, "COMMAND_ID_GENERATION_FAILED")
+		}
+	}
+	started, err := lifecycle.Start(state, lifecycle.Command{
+		ID: commandID, Action: lifecycle.ActionVerify,
+		RequestedAt: canonicalNow(backend.now()),
+	})
+	if err != nil {
+		return cli.Result{}, lifecycleFault(err)
+	}
+	if started.Replay == lifecycle.ReplayCompleted {
+		return completedResult(started.Journal, started.Execution, false)
+	}
+	if started.Replay == lifecycle.ReplayNone {
+		if err := session.Write(started.Journal); err != nil {
+			return cli.Result{}, stateWriteFault(err)
+		}
+	}
+	plan := installedPlan(session.Root(), started.Journal)
+	if err := backend.effects.VerifyInstallation(ctx, plan); err != nil {
+		if ctx.Err() != nil {
+			return cli.Result{}, fault(cli.FaultInterrupted, "COMMAND_INTERRUPTED")
+		}
+		if errors.Is(err, ErrEffectOutcomeUnknown) {
+			return cli.Result{}, fault(cli.FaultUnavailable, "EFFECT_OUTCOME_UNKNOWN")
+		}
+		normalized := effectFault(lifecycle.PhaseVerifying, err)
+		failed, failErr := lifecycle.Fail(
+			started.Journal, commandID, normalized.Code,
+			nextJournalTime(backend.now(), started.Execution.UpdatedAt),
+		)
+		if failErr != nil || session.Write(failed) != nil {
+			return cli.Result{}, fault(cli.FaultInternal, "FAILURE_STATE_COMMIT_FAILED")
+		}
+		return cli.Result{}, normalized
+	}
+	ready, err := lifecycle.Advance(
+		started.Journal, commandID, lifecycle.PhaseReady,
+		nextJournalTime(backend.now(), started.Execution.UpdatedAt),
+	)
+	if err != nil || session.Write(ready) != nil {
+		return cli.Result{}, fault(cli.FaultInternal, "VERIFICATION_STATE_COMMIT_FAILED")
+	}
+	return completedResult(ready, *ready.Last, false)
+}
+
+func installedPlan(root string, state lifecycle.Journal) InstalledPlan {
+	return InstalledPlan{
+		Root: root, InstallationID: state.InstallationID,
+		Listener: defaultListener, Port: defaultPort,
+		ReleaseID: state.CurrentReleaseID, ReleaseDigest: state.CurrentReleaseDigest,
+		TrustKeyID:       state.ReleaseTrust.KeyID,
+		TrustFingerprint: state.ReleaseTrust.Fingerprint,
+	}
+}
+
+func statusResult(state lifecycle.Journal) cli.Result {
+	result := cli.Result{
+		ReleaseID: state.CurrentReleaseID, PreviousID: state.PreviousRelease,
+	}
+	switch {
+	case state.Active != nil:
+		result.State = string(state.Active.Phase)
+		result.CorrelationID = state.Active.Command.ID
+	case state.Last != nil && state.Last.Outcome == lifecycle.OutcomeManualIntervention:
+		result.State = string(lifecycle.PhaseManualIntervention)
+		result.CorrelationID = state.Last.Command.ID
+	case state.Last != nil:
+		result.State = string(state.Last.Phase)
+		result.CorrelationID = state.Last.Command.ID
+	default:
+		result.State = "NOT_READY"
+	}
+	return result
 }
 
 func (backend *Backend) install(
@@ -412,6 +578,8 @@ func acquireFault(err error) error {
 	switch {
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return fault(cli.FaultInterrupted, "COMMAND_INTERRUPTED")
+	case errors.Is(err, journal.ErrNotInitialized):
+		return fault(cli.FaultPrecondition, "PLATFORM_NOT_INSTALLED")
 	case errors.Is(err, journal.ErrOwnershipConflict):
 		return fault(cli.FaultConflict, "INSTALLATION_ROOT_CONFLICT")
 	case errors.Is(err, journal.ErrIntegrity):

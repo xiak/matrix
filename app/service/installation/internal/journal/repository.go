@@ -38,14 +38,25 @@ type Session struct {
 // lock until Session.Close. The caller must authenticate and verify a release
 // bundle before calling Acquire for a fresh installation.
 func Acquire(ctx context.Context, root string) (*Session, error) {
+	return acquire(ctx, root, true)
+}
+
+// AcquireExisting opens and locks an initialized installation without
+// creating its root, state directory, or lock file. Read-only commands use
+// this boundary so a status lookup cannot turn a missing path into state.
+func AcquireExisting(ctx context.Context, root string) (*Session, error) {
+	return acquire(ctx, root, false)
+}
+
+func acquire(ctx context.Context, root string, create bool) (*Session, error) {
 	if ctx == nil {
 		return nil, errors.New("installation lock context is nil")
 	}
-	cleanRoot, err := prepareRoot(root)
+	cleanRoot, err := resolveRoot(root, create)
 	if err != nil {
 		return nil, err
 	}
-	state, err := prepareStateDirectory(cleanRoot)
+	state, err := resolveStateDirectory(cleanRoot, create)
 	if err != nil {
 		return nil, err
 	}
@@ -55,7 +66,10 @@ func Acquire(ctx context.Context, root string) (*Session, error) {
 	if statErr != nil && !createdLock {
 		return nil, errors.New("inspect installation lock failed")
 	}
-	lockFile, err := openLockFileNoFollow(lockPath)
+	if createdLock && !create {
+		return nil, ErrIntegrity
+	}
+	lockFile, err := openLockFileNoFollow(lockPath, create)
 	if err != nil {
 		return nil, errors.New("open installation lock failed")
 	}
@@ -203,7 +217,7 @@ func (session *Session) validateOpen() error {
 	return nil
 }
 
-func prepareRoot(root string) (string, error) {
+func resolveRoot(root string, create bool) (string, error) {
 	if root == "" || len(root) > 4096 || !filepath.IsAbs(root) || filepath.Clean(root) != root ||
 		isVolumeRoot(root) {
 		return "", errors.New("installation root must be a clean absolute non-volume-root path")
@@ -211,6 +225,9 @@ func prepareRoot(root string) (string, error) {
 	info, err := os.Lstat(root)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
+		if !create {
+			return "", ErrNotInitialized
+		}
 		parent := filepath.Dir(root)
 		parentInfo, parentErr := validateExistingPath(parent)
 		if parentErr != nil || !parentInfo.IsDir() {
@@ -234,11 +251,14 @@ func prepareRoot(root string) (string, error) {
 	return root, nil
 }
 
-func prepareStateDirectory(root string) (string, error) {
+func resolveStateDirectory(root string, create bool) (string, error) {
 	state := filepath.Join(root, stateDirectoryName)
 	info, err := os.Lstat(state)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
+		if !create {
+			return "", ErrNotInitialized
+		}
 		entries, readErr := os.ReadDir(root)
 		if readErr != nil || len(entries) != 0 {
 			return "", ErrOwnershipConflict

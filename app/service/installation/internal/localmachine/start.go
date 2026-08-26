@@ -134,37 +134,11 @@ func startInstallation(
 	runtimeBoundary dockerRuntime,
 	plan platformcommand.InstallPlan,
 ) error {
-	installation, err := verifiedInstallationConfiguration(plan)
+	installation, expectation, err := preparePlatformObservation(
+		ctx, runtimeBoundary, plan,
+	)
 	if err != nil {
-		return errors.Join(platformcommand.ErrEffectVerification, err)
-	}
-	expectation, err := decodePlatformExpectation(installation.topology.ComposeJSON)
-	if err != nil || expectation.Name != installation.topology.ProjectName {
-		return errors.Join(
-			platformcommand.ErrEffectVerification,
-			errors.New("compiled platform topology cannot be observed"),
-		)
-	}
-	if err := loadPlatformServiceHashes(
-		ctx,
-		runtimeBoundary,
-		installation.composePath,
-		installation.topology.ProjectName,
-		expectation.Services,
-	); err != nil {
 		return err
-	}
-	for _, image := range installation.bundle.Manifest.Images {
-		present, inspectErr := inspectExactImage(ctx, runtimeBoundary, image.ImageID)
-		if inspectErr != nil {
-			return inspectErr
-		}
-		if !present {
-			return errors.Join(
-				platformcommand.ErrEffectVerification,
-				errors.New("platform image identity is absent before start"),
-			)
-		}
 	}
 
 	complete, err := observePlatformProject(ctx, runtimeBoundary, expectation)
@@ -220,6 +194,60 @@ func startInstallation(
 		)
 	}
 	return nil
+}
+
+func observeInstalledPlatform(
+	ctx context.Context,
+	runtimeBoundary dockerRuntime,
+	plan platformcommand.InstallPlan,
+) (bool, error) {
+	_, expectation, err := preparePlatformObservation(ctx, runtimeBoundary, plan)
+	if err != nil {
+		return false, err
+	}
+	return observePlatformProject(ctx, runtimeBoundary, expectation)
+}
+
+func preparePlatformObservation(
+	ctx context.Context,
+	runtimeBoundary dockerRuntime,
+	plan platformcommand.InstallPlan,
+) (verifiedInstallation, platformComposeExpectation, error) {
+	installation, err := verifiedInstallationConfiguration(plan)
+	if err != nil {
+		return verifiedInstallation{}, platformComposeExpectation{}, errors.Join(
+			platformcommand.ErrEffectVerification, err,
+		)
+	}
+	expectation, err := decodePlatformExpectation(installation.topology.ComposeJSON)
+	if err != nil || expectation.Name != installation.topology.ProjectName {
+		return verifiedInstallation{}, platformComposeExpectation{}, errors.Join(
+			platformcommand.ErrEffectVerification,
+			errors.New("compiled platform topology cannot be observed"),
+		)
+	}
+	if err := loadPlatformServiceHashes(
+		ctx,
+		runtimeBoundary,
+		installation.composePath,
+		installation.topology.ProjectName,
+		expectation.Services,
+	); err != nil {
+		return verifiedInstallation{}, platformComposeExpectation{}, err
+	}
+	for _, image := range installation.bundle.Manifest.Images {
+		present, inspectErr := inspectExactImage(ctx, runtimeBoundary, image.ImageID)
+		if inspectErr != nil {
+			return verifiedInstallation{}, platformComposeExpectation{}, inspectErr
+		}
+		if !present {
+			return verifiedInstallation{}, platformComposeExpectation{}, errors.Join(
+				platformcommand.ErrEffectVerification,
+				errors.New("platform image identity is absent"),
+			)
+		}
+	}
+	return installation, expectation, nil
 }
 
 func loadPlatformServiceHashes(
