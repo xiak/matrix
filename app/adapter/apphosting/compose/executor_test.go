@@ -275,6 +275,9 @@ func TestExecutorRejectsProviderHostPorts(t *testing.T) {
 
 func TestFileSecretResolverRejectsOversizeVersions(t *testing.T) {
 	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatalf("protect secret root: %v", err)
+	}
 	resolver, err := NewFileSecretResolver(root)
 	if err != nil {
 		t.Fatalf("new file secret resolver: %v", err)
@@ -305,6 +308,9 @@ func TestFileSecretResolverRejectsOversizeVersions(t *testing.T) {
 
 func TestFileSecretResolverRejectsLinkedVersions(t *testing.T) {
 	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatalf("protect secret root: %v", err)
+	}
 	resolver, err := NewFileSecretResolver(root)
 	if err != nil {
 		t.Fatalf("new file secret resolver: %v", err)

@@ -48,6 +48,9 @@ func assertRealComposeWorkerWorkflow(
 	spec := applicationIntegrationSpec(fixture, fixture.configurationRevisionIDs[0])
 	secretReference := *spec.Components[0].Bindings[1].SecretVersion
 	secretSource := t.TempDir()
+	if err := os.Chmod(secretSource, 0o700); err != nil {
+		t.Fatalf("protect worker secret root: %v", err)
+	}
 	secretResolver, err := composeadapter.NewFileSecretResolver(secretSource)
 	if err != nil {
 		t.Fatalf("create worker file SecretResolver: %v", err)

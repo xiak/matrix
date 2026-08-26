@@ -93,7 +93,6 @@ func (*LocalRuntime) Apply(ctx context.Context, project RuntimeProject) error {
 		"--remove-orphans",
 		"--wait",
 		"--wait-timeout", strconv.FormatUint(uint64(project.TimeoutSeconds), 10),
-		"--yes",
 		"--no-color",
 	)
 	started, err := runDocker(ctx, nil, arguments...)

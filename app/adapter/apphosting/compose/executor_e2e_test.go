@@ -37,6 +37,9 @@ func TestRealComposeExecutorOfflineVerticalSlice(t *testing.T) {
 	})
 
 	secretSource := t.TempDir()
+	if err := os.Chmod(secretSource, 0o700); err != nil {
+		t.Fatalf("protect exact-version secret root: %v", err)
+	}
 	secretResolver, err := NewFileSecretResolver(secretSource)
 	if err != nil {
 		t.Fatalf("create exact-version file SecretResolver: %v", err)
