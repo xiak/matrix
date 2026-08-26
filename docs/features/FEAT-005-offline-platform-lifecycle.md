@@ -347,6 +347,13 @@ not archive layout, Compose text, SQL text, command call order, or line counts.
   verification workload reached Deployment `READY` and Operation `SUCCEEDED`;
   its Audit outbox was delivered; and the fixed PaaS/Audit endpoints returned
   `READY` and `VERIFIED` for the same fact and bounded chain.
+- Commit `fa303a4` adds the durable operational `status` and `verify`
+  boundaries. `status` opens only an existing protected root, never creates or
+  writes installation state, and reports active recovery phases without
+  executing provider effects. `verify` reauthenticates the sealed current
+  release and trust root, checks exact local images and the healthy owned
+  Compose topology, runs only schema verification binaries, and reuses the
+  fixed PaaS/Audit probe before committing its own replayable journal result.
 - The accepted implementation through `3323741` passed generation drift, full
   unit tests, vet, race,
   ten-run repetition, architecture boundaries, placement fuzz, four-target
@@ -371,10 +378,17 @@ not archive layout, Compose text, SQL text, command call order, or line counts.
   amd64/arm64 and Darwin/arm64 UI/workload builds. The exact `c2bcd73` worktree
   passed generation drift, full unit/vet/race, focused ten-run repetition,
   Windows/Linux/Darwin builds, and the real network-disabled Compose executor
-  E2E against Compose v2.33.0. Real clean offline Release A installation and
-  service integration are accepted; verify/status, upgrade, rollback,
-  backup/recovery, support evidence, and complete lifecycle E2E remain
-  unaccepted.
+  E2E against Compose v2.33.0. Exact commit `fa303a4` passed generation drift,
+  full unit/vet/race, focused ten-run repetition, four-target builds, and
+  repository-diff checks. Its Linux/amd64 `mx` binary ran against the existing
+  external-network-disabled Release A installation: repeated `status` returned
+  `READY` without changing the sealed journal, and `verify` returned `READY`
+  while preserving the release pointer. The same namespace survived a real
+  DinD restart with an unchanged journal and every signed Compose service
+  healthy before post-restart `status` and `verify`. Real clean offline Release
+  A installation, service integration, verify/status, and restart behavior are
+  accepted; upgrade, rollback, backup/recovery, support evidence, and complete
+  lifecycle E2E remain unaccepted.
 
 ## Deferred
 

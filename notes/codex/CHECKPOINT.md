@@ -213,17 +213,29 @@
   listener; the signed no-pull verification workload reached Deployment
   `READY` and Operation `SUCCEEDED`; its Audit outbox was delivered; and the
   fixed PaaS and Audit APIs returned `READY` and `VERIFIED` for the same fact
-  and bounded chain. Full verify/status/backup/upgrade/rollback/recovery/
-  support behavior and complete lifecycle E2E remain pending, so the Phase 1
-  goal is active.
+  and bounded chain. Full backup/upgrade/rollback/recovery/support behavior and
+  complete lifecycle E2E remain pending, so the Phase 1 goal is active.
+- Commit `fa303a4` adds durable `status` and `verify`: status cannot create or
+  write installation state; verify reauthenticates the sealed current release,
+  exact images and owned healthy topology, runs only migration verification,
+  then repeats the fixed PaaS/Audit probe. Exact `fa303a4` passed generation
+  drift, full unit/vet/race, focused ten-run, four-target build, and diff gates.
+  Its Linux/amd64 `mx` ran in the existing network-disabled A7 namespace: two
+  status calls returned `READY` with an unchanged journal, verify returned
+  `READY` without changing the release pointer, and an outer DinD restart
+  preserved the journal while all nine signed Compose services recovered
+  healthy before post-restart status and verify.
 
 ## Next concrete work
 
-1. Implement the remaining durable verify/status/backup/upgrade/rollback/
-   recovery/support actions, then assemble release B and failed candidates.
-2. Prove the complete external-network-disabled Compose
-   install, verification, operations, upgrade, rollback, backup/recovery, and
-   support-evidence E2E required for FEAT-005 Gate B/C and FEAT-006 Gate C.
+1. Implement protected backup creation and bounded no-secret support evidence.
+2. Implement authenticated Release B upgrade with predecessor and backup
+   preconditions, then prove a failed candidate automatically restores A.
+3. Implement explicit N-1 rollback from B to A without discarding expanded
+   data, followed by protected backup recovery.
+4. Run the complete external-network-disabled Compose install, repeated
+   operations, upgrade, automatic and explicit rollback, recovery, and support
+   E2E required for FEAT-005 Gate B/C and FEAT-006 Gate C.
 
 ## Fixed donor baselines
 
