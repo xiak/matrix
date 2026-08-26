@@ -6,10 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/xiak/matrix/app/service/installation/internal/cli"
 	"github.com/xiak/matrix/app/service/installation/internal/journal"
+	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
 	"github.com/xiak/matrix/app/service/installation/internal/releasetest"
 )
@@ -321,6 +323,103 @@ func TestVerifyCommitsOnlyItsExecutionAndResumesUnknownOutcome(t *testing.T) {
 	})
 }
 
+func TestBackupBindsItsIdentityAndResumesUnknownOutcome(t *testing.T) {
+	fixture := writeReleaseFixture(t)
+	effects := &installEffects{backupErr: ErrEffectOutcomeUnknown}
+	backend := newTestBackend(t, effects)
+	root := filepath.Join(t.TempDir(), "matrix")
+	if _, err := backend.Run(context.Background(), installRequest(root, fixture)); err != nil {
+		t.Fatalf("install backup fixture: %v", err)
+	}
+	before := readJournal(t, root)
+
+	_, err := backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionBackup, Root: root,
+	})
+	assertFault(t, err, cli.FaultUnavailable, "EFFECT_OUTCOME_UNKNOWN")
+	active := readJournal(t, root)
+	if active.Active == nil || active.Active.Command.Action != lifecycle.ActionBackup ||
+		active.Active.Phase != lifecycle.PhaseBackingUp ||
+		active.Active.Command.BackupID == "" ||
+		effects.backupPlan.BackupID != active.Active.Command.BackupID {
+		t.Fatalf("active backup journal=%#v plan=%#v", active, effects.backupPlan)
+	}
+	commandID := active.Active.Command.ID
+	backupID := active.Active.Command.BackupID
+	effects.backupErr = nil
+	result, err := backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionBackup, Root: root,
+	})
+	if err != nil || result.State != "READY" || !result.Changed ||
+		result.CorrelationID != commandID || result.BackupID != backupID ||
+		effects.backupCalls != 2 {
+		t.Fatalf("resumed backup result=%#v err=%v calls=%d", result, err, effects.backupCalls)
+	}
+	after := readJournal(t, root)
+	if after.CurrentReleaseID != before.CurrentReleaseID ||
+		after.CurrentReleaseDigest != before.CurrentReleaseDigest ||
+		after.Active != nil || after.Last == nil ||
+		after.Last.Command.BackupID != backupID ||
+		after.Last.Outcome != lifecycle.OutcomeSucceeded {
+		t.Fatalf("completed backup journal = %#v", after)
+	}
+}
+
+func TestSupportBindsOwnedOutputWithoutPersistingItsPath(t *testing.T) {
+	fixture := writeReleaseFixture(t)
+	effects := &installEffects{supportErr: ErrEffectOutcomeUnknown}
+	backend := newTestBackend(t, effects)
+	root := filepath.Join(t.TempDir(), "matrix")
+	if _, err := backend.Run(context.Background(), installRequest(root, fixture)); err != nil {
+		t.Fatalf("install support fixture: %v", err)
+	}
+	before := readJournal(t, root)
+	outside := filepath.Join(filepath.Dir(root), "support.json")
+	_, err := backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionSupport, Root: root, SupportOutput: outside,
+	})
+	assertFault(t, err, cli.FaultInvalidArgument, "SUPPORT_OUTPUT_INVALID")
+	if effects.supportCalls != 0 || !reflect.DeepEqual(readJournal(t, root), before) {
+		t.Fatal("invalid support output reached effects or changed the journal")
+	}
+
+	output := filepath.Join(root, filepath.FromSlash(layout.SupportDirectory), "evidence.json")
+	_, err = backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionSupport, Root: root, SupportOutput: output,
+	})
+	assertFault(t, err, cli.FaultUnavailable, "EFFECT_OUTCOME_UNKNOWN")
+	active := readJournal(t, root)
+	if active.Active == nil || active.Active.Command.Action != lifecycle.ActionSupport ||
+		active.Active.Command.InputDigest == "" ||
+		strings.Contains(active.Active.Command.InputDigest, output) ||
+		effects.supportPlan.Output != output {
+		t.Fatalf("active support journal=%#v plan=%#v", active, effects.supportPlan)
+	}
+	commandID := active.Active.Command.ID
+	changedOutput := filepath.Join(root, filepath.FromSlash(layout.SupportDirectory), "different.json")
+	_, err = backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionSupport, Root: root, SupportOutput: changedOutput,
+	})
+	assertFault(t, err, cli.FaultConflict, "INSTALLATION_COMMAND_CONFLICT")
+
+	effects.supportErr = nil
+	result, err := backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionSupport, Root: root, SupportOutput: output,
+	})
+	if err != nil || result.State != "READY" || !result.Changed ||
+		result.CorrelationID != commandID || effects.supportCalls != 2 {
+		t.Fatalf("resumed support result=%#v err=%v calls=%d", result, err, effects.supportCalls)
+	}
+	after := readJournal(t, root)
+	if after.CurrentReleaseID != before.CurrentReleaseID ||
+		after.CurrentReleaseDigest != before.CurrentReleaseDigest ||
+		after.Active != nil || after.Last == nil ||
+		after.Last.Command.Action != lifecycle.ActionSupport ||
+		after.Last.Outcome != lifecycle.OutcomeSucceeded {
+		t.Fatalf("completed support journal = %#v", after)
+	}
+}
+
 type installEffects struct {
 	calls            map[lifecycle.Phase]int
 	failPhase        lifecycle.Phase
@@ -336,6 +435,12 @@ type installEffects struct {
 	observeErr       error
 	verifyCalls      int
 	verifyErr        error
+	backupCalls      int
+	backupErr        error
+	backupPlan       BackupPlan
+	supportCalls     int
+	supportErr       error
+	supportPlan      SupportPlan
 }
 
 func (effects *installEffects) ApplyInstallPhase(
@@ -391,6 +496,32 @@ func (effects *installEffects) VerifyInstallation(
 		return errors.New("installed plan is incomplete")
 	}
 	return effects.verifyErr
+}
+
+func (effects *installEffects) CreateBackup(
+	_ context.Context,
+	plan BackupPlan,
+) error {
+	effects.backupCalls++
+	effects.backupPlan = plan
+	if plan.Root == "" || plan.InstallationID == "" || plan.ReleaseID == "" ||
+		plan.BackupID == "" || plan.CreatedAt.IsZero() {
+		return errors.New("backup plan is incomplete")
+	}
+	return effects.backupErr
+}
+
+func (effects *installEffects) WriteSupportEvidence(
+	_ context.Context,
+	plan SupportPlan,
+) error {
+	effects.supportCalls++
+	effects.supportPlan = plan
+	if plan.Root == "" || plan.InstallationID == "" || plan.ReleaseID == "" ||
+		plan.Output == "" || plan.CorrelationID == "" || plan.GeneratedAt.IsZero() {
+		return errors.New("support plan is incomplete")
+	}
+	return effects.supportErr
 }
 
 func effectingInstallPhases() []lifecycle.Phase {

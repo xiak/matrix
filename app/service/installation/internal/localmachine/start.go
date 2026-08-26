@@ -213,6 +213,32 @@ func preparePlatformObservation(
 	runtimeBoundary dockerRuntime,
 	plan platformcommand.InstallPlan,
 ) (verifiedInstallation, platformComposeExpectation, error) {
+	installation, expectation, err := preparePlatformExpectation(
+		ctx, runtimeBoundary, plan,
+	)
+	if err != nil {
+		return verifiedInstallation{}, platformComposeExpectation{}, err
+	}
+	for _, image := range installation.bundle.Manifest.Images {
+		present, inspectErr := inspectExactImage(ctx, runtimeBoundary, image.ImageID)
+		if inspectErr != nil {
+			return verifiedInstallation{}, platformComposeExpectation{}, inspectErr
+		}
+		if !present {
+			return verifiedInstallation{}, platformComposeExpectation{}, errors.Join(
+				platformcommand.ErrEffectVerification,
+				errors.New("platform image identity is absent"),
+			)
+		}
+	}
+	return installation, expectation, nil
+}
+
+func preparePlatformExpectation(
+	ctx context.Context,
+	runtimeBoundary dockerRuntime,
+	plan platformcommand.InstallPlan,
+) (verifiedInstallation, platformComposeExpectation, error) {
 	installation, err := verifiedInstallationConfiguration(plan)
 	if err != nil {
 		return verifiedInstallation{}, platformComposeExpectation{}, errors.Join(
@@ -235,19 +261,33 @@ func preparePlatformObservation(
 	); err != nil {
 		return verifiedInstallation{}, platformComposeExpectation{}, err
 	}
-	for _, image := range installation.bundle.Manifest.Images {
-		present, inspectErr := inspectExactImage(ctx, runtimeBoundary, image.ImageID)
-		if inspectErr != nil {
-			return verifiedInstallation{}, platformComposeExpectation{}, inspectErr
-		}
-		if !present {
-			return verifiedInstallation{}, platformComposeExpectation{}, errors.Join(
-				platformcommand.ErrEffectVerification,
-				errors.New("platform image identity is absent"),
-			)
-		}
-	}
 	return installation, expectation, nil
+}
+
+func inspectReadyInstalledPlatform(
+	ctx context.Context,
+	runtimeBoundary dockerRuntime,
+	plan platformcommand.InstallPlan,
+) (verifiedInstallation, platformComposeExpectation, platformProjectObservation, error) {
+	installation, expectation, err := preparePlatformObservation(ctx, runtimeBoundary, plan)
+	if err != nil {
+		return verifiedInstallation{}, platformComposeExpectation{}, platformProjectObservation{}, err
+	}
+	observation, exists, err := inspectOwnedPlatformProject(ctx, runtimeBoundary, expectation)
+	if err != nil {
+		return verifiedInstallation{}, platformComposeExpectation{}, platformProjectObservation{}, err
+	}
+	ready, err := validatePlatformObservation(observation, exists, expectation)
+	if err != nil {
+		return verifiedInstallation{}, platformComposeExpectation{}, platformProjectObservation{}, err
+	}
+	if !ready {
+		return verifiedInstallation{}, platformComposeExpectation{}, platformProjectObservation{}, errors.Join(
+			platformcommand.ErrEffectVerification,
+			errors.New("platform is not in its fixed healthy topology"),
+		)
+	}
+	return installation, expectation, observation, nil
 }
 
 func loadPlatformServiceHashes(
@@ -316,8 +356,19 @@ func observePlatformProject(
 	observation, exists, err := inspectOwnedPlatformProject(
 		ctx, runtimeBoundary, expectation,
 	)
-	if err != nil || !exists {
+	if err != nil {
 		return false, err
+	}
+	return validatePlatformObservation(observation, exists, expectation)
+}
+
+func validatePlatformObservation(
+	observation platformProjectObservation,
+	exists bool,
+	expectation platformComposeExpectation,
+) (bool, error) {
+	if !exists {
+		return false, nil
 	}
 	networkIDs := make(map[string]string, len(observation.Networks))
 	for logicalName, inspection := range observation.Networks {

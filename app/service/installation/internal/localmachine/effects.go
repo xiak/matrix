@@ -124,21 +124,9 @@ func (effects *Effects) VerifyInstallation(
 		return errors.Join(platformcommand.ErrEffectVerification, err)
 	}
 	defer clear(plan.TrustBytes)
-	installation, expectation, err := preparePlatformObservation(
-		ctx, effects.runtime, plan,
-	)
+	installation, _, _, err := inspectReadyInstalledPlatform(ctx, effects.runtime, plan)
 	if err != nil {
 		return err
-	}
-	ready, err := observePlatformProject(ctx, effects.runtime, expectation)
-	if err != nil {
-		return err
-	}
-	if !ready {
-		return errors.Join(
-			platformcommand.ErrEffectVerification,
-			errors.New("platform is not in its fixed healthy topology"),
-		)
 	}
 	if err := verifyInstallationMigrations(
 		ctx, effects.runtime, plan, installation,

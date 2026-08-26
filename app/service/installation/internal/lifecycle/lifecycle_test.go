@@ -140,6 +140,32 @@ func TestInvalidTransitionAndFailedRollbackRequireManualIntervention(t *testing.
 	}
 }
 
+func TestOperationalCommandsBindBackupAndSupportInputs(t *testing.T) {
+	installed := installedJournal(t)
+	backup := lifecycleCommand(ActionBackup, "", 0, 60)
+	backup.BackupID = "backup-" + strings.Repeat("b", 32)
+	started, err := Start(installed, backup)
+	if err != nil || started.Execution.Phase != PhaseBackingUp {
+		t.Fatalf("start bound backup = %#v / %v", started, err)
+	}
+	changedBackup := backup
+	changedBackup.BackupID = "backup-" + strings.Repeat("c", 32)
+	if _, err := Start(started.Journal, changedBackup); !errors.Is(err, ErrCommandConflict) {
+		t.Fatalf("changed backup replay error = %v", err)
+	}
+
+	support := lifecycleCommand(ActionSupport, "", 'd', 61)
+	started, err = Start(installed, support)
+	if err != nil || started.Execution.Phase != PhaseVerifying {
+		t.Fatalf("start bound support = %#v / %v", started, err)
+	}
+	changedSupport := support
+	changedSupport.InputDigest = digest('e')
+	if _, err := Start(started.Journal, changedSupport); !errors.Is(err, ErrCommandConflict) {
+		t.Fatalf("changed support replay error = %v", err)
+	}
+}
+
 const (
 	releaseA = "matrix-v0.1.0-aaaaaaaaaaaa"
 	releaseB = "matrix-v0.1.1-bbbbbbbbbbbb"

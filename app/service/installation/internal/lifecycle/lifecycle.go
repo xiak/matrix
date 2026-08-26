@@ -328,7 +328,17 @@ func validateCommand(command Command) error {
 			!backupIDPattern.MatchString(command.BackupID) {
 			return errors.New("recovery command input is invalid")
 		}
-	case ActionVerify, ActionStatus, ActionBackup, ActionRollback, ActionSupport:
+	case ActionBackup:
+		if command.InputDigest != "" || command.TargetReleaseID != "" ||
+			!backupIDPattern.MatchString(command.BackupID) {
+			return errors.New("backup command input is invalid")
+		}
+	case ActionSupport:
+		if !digestPattern.MatchString(command.InputDigest) ||
+			command.TargetReleaseID != "" || command.BackupID != "" {
+			return errors.New("support command input is invalid")
+		}
+	case ActionVerify, ActionStatus, ActionRollback:
 		if command.InputDigest != "" || command.TargetReleaseID != "" || command.BackupID != "" {
 			return errors.New("installation command contains unrelated input")
 		}

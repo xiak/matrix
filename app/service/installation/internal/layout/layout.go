@@ -27,12 +27,15 @@ const (
 	PaaSAuditCredential            = "secrets/authority/paas-audit-credential"
 	InstallationVerifierCredential = "secrets/authority/installation-verifier-iam-credential"
 	AuditCursorKey                 = "secrets/authority/audit-cursor-key"
+	BackupSealKey                  = "secrets/authority/backup-seal-key"
 	APISIXIAMCredential            = "secrets/gateway/apisix-iam-credential"
 	InitialAdministratorPassword   = "secrets/operator/initial-admin-password"
 
 	PostgresData       = "data/postgres"
 	ExecutorRoot       = "runtime/executor"
 	WorkloadSecretRoot = "secrets/workloads"
+	BackupDirectory    = "backups"
+	SupportDirectory   = "support"
 )
 
 func ReleaseDirectory(releaseID string) string {

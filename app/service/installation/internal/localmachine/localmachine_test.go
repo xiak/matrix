@@ -1,6 +1,7 @@
 package localmachine
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -15,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	apphostingv1 "github.com/xiak/matrix/api/adapter/apphosting/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
@@ -192,7 +194,11 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		apisix,
 		mainConfig,
 	}, nil)
-	secrets := [][]byte{administrator, readTestFile(t, plan.Root, layout.PostgresPassword)}
+	secrets := [][]byte{
+		administrator,
+		readTestFile(t, plan.Root, layout.PostgresPassword),
+		readTestFile(t, plan.Root, layout.BackupSealKey),
+	}
 	for _, credential := range serviceCredentials {
 		secrets = append(secrets, credential)
 	}
@@ -511,6 +517,196 @@ func TestAuthenticateInstalledPlanPinsSealedTrustAndRelease(t *testing.T) {
 	}
 }
 
+func TestCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine backup effects target Linux")
+	}
+	plan, expectation := configuredPlatformStartFixture(t)
+	secret := []byte("backup-secret-value-that-must-not-enter-metadata")
+	secretRelative := filepath.Join(
+		filepath.FromSlash(layout.WorkloadSecretRoot),
+		"secret-backup", "version-one",
+	)
+	if err := writeManagedOnce(plan.Root, secretRelative, secret); err != nil {
+		t.Fatalf("provision workload secret fixture: %v", err)
+	}
+	runtimeBoundary := newPlatformStartRuntime(plan, expectation)
+	runtimeBoundary.started = true
+	effects := &Effects{
+		runtime: runtimeBoundary, entropy: rand.Reader,
+		verifier: &recordingInstallationVerifier{},
+	}
+	request := platformcommand.BackupPlan{
+		InstalledPlan: installedPlanFrom(plan),
+		BackupID:      "backup-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		CreatedAt:     time.Date(2026, 8, 26, 5, 0, 0, 0, time.UTC),
+	}
+	if err := effects.CreateBackup(context.Background(), request); err != nil {
+		t.Fatalf("create protected backup: %v", err)
+	}
+	backupRoot := filepath.Join(
+		plan.Root, filepath.FromSlash(layout.BackupDirectory), request.BackupID,
+	)
+	manifestContent, err := os.ReadFile(filepath.Join(backupRoot, backupManifestFilename))
+	if err != nil {
+		t.Fatalf("read backup manifest: %v", err)
+	}
+	sealKey := readTestFile(t, plan.Root, layout.BackupSealKey)
+	for _, forbidden := range [][]byte{secret, sealKey, []byte(plan.Root)} {
+		if bytes.Contains(manifestContent, forbidden) {
+			t.Fatal("backup manifest contains secret or absolute-path material")
+		}
+	}
+	var manifest backupManifest
+	if json.Unmarshal(manifestContent, &manifest) != nil ||
+		manifest.BackupID != request.BackupID ||
+		manifest.InstallationID != plan.InstallationID ||
+		manifest.ReleaseDigest != plan.Bundle.ManifestSHA256 ||
+		len(manifest.Artifacts) != 2 || manifest.Seal == nil || manifest.Seal.Value == "" {
+		t.Fatalf("sealed backup manifest = %#v", manifest)
+	}
+	archiveFile, err := os.Open(filepath.Join(backupRoot, workloadSecretsFilename))
+	if err != nil {
+		t.Fatalf("open workload secret archive: %v", err)
+	}
+	archive := tar.NewReader(archiveFile)
+	header, err := archive.Next()
+	if err != nil || header.Name != "secret-backup/version-one" {
+		_ = archiveFile.Close()
+		t.Fatalf("workload secret archive header=%#v err=%v", header, err)
+	}
+	archivedSecret, err := io.ReadAll(archive)
+	if closeErr := archiveFile.Close(); err != nil || closeErr != nil ||
+		!bytes.Equal(archivedSecret, secret) {
+		t.Fatalf("workload secret snapshot differs: read=%v close=%v", err, closeErr)
+	}
+	streams := runtimeBoundary.backupStreams
+	if streams == 0 || runtimeBoundary.restoreChecks == 0 ||
+		len(runtimeBoundary.migrationRuns) != len(platformMigrations) {
+		t.Fatal("backup did not verify the schema and PostgreSQL custom dump")
+	}
+	if err := effects.CreateBackup(context.Background(), request); err != nil {
+		t.Fatalf("replay protected backup: %v", err)
+	}
+	if runtimeBoundary.backupStreams != streams {
+		t.Fatal("backup replay streamed a second database snapshot")
+	}
+
+	dumpPath := filepath.Join(backupRoot, databaseDumpFilename)
+	if err := os.WriteFile(dumpPath, []byte("tampered-dump"), 0o600); err != nil {
+		t.Fatalf("tamper backup dump: %v", err)
+	}
+	if err := effects.CreateBackup(
+		context.Background(), request,
+	); !errors.Is(err, platformcommand.ErrEffectVerification) {
+		t.Fatalf("tampered backup replay error = %v", err)
+	}
+}
+
+func TestSupportEvidenceIsBoundedSanitizedAndUsefulWhenDegraded(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine support effects target Linux")
+	}
+	plan, expectation := configuredPlatformStartFixture(t)
+	secret := []byte("support-secret-value-that-must-never-be-emitted")
+	if err := writeManagedOnce(
+		plan.Root,
+		filepath.Join(
+			filepath.FromSlash(layout.WorkloadSecretRoot),
+			"secret-support", "version-one",
+		),
+		secret,
+	); err != nil {
+		t.Fatalf("provision support secret fixture: %v", err)
+	}
+	runtimeBoundary := newPlatformStartRuntime(plan, expectation)
+	runtimeBoundary.started = true
+	effects := &Effects{
+		runtime: runtimeBoundary, entropy: rand.Reader,
+		verifier: &recordingInstallationVerifier{},
+	}
+	request := platformcommand.SupportPlan{
+		InstalledPlan: installedPlanFrom(plan),
+		Output: filepath.Join(
+			plan.Root, filepath.FromSlash(layout.SupportDirectory), "healthy.json",
+		),
+		CorrelationID: "cmd-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		GeneratedAt:   time.Date(2026, 8, 26, 5, 10, 0, 0, time.UTC),
+	}
+	if err := effects.WriteSupportEvidence(context.Background(), request); err != nil {
+		t.Fatalf("write healthy support evidence: %v", err)
+	}
+	content, err := os.ReadFile(request.Output)
+	if err != nil {
+		t.Fatalf("read support evidence: %v", err)
+	}
+	for _, forbidden := range [][]byte{
+		secret,
+		readTestFile(t, plan.Root, layout.BackupSealKey),
+		readTestFile(t, plan.Root, layout.PaaSAPI),
+		[]byte(plan.Root),
+		[]byte(request.Output),
+	} {
+		if bytes.Contains(content, forbidden) {
+			t.Fatal("support evidence contains secret, native configuration, or absolute path")
+		}
+	}
+	var healthy supportEvidence
+	if json.Unmarshal(content, &healthy) != nil || healthy.State != supportStateReady ||
+		healthy.ReleaseDigest != plan.Bundle.ManifestSHA256 ||
+		healthy.DatabaseSchemaVersion != plan.Bundle.Manifest.Database.SchemaVersion ||
+		len(healthy.Components) != len(expectation.Services) ||
+		len(healthy.Images) != len(plan.Bundle.Manifest.Images) {
+		t.Fatalf("healthy support evidence = %#v", healthy)
+	}
+	contradictory := healthy
+	contradictory.State = supportStateNotReady
+	contradictoryContent, err := json.Marshal(contradictory)
+	if err != nil || verifySupportEvidence(
+		contradictoryContent, request, plan, expectation,
+	) == nil {
+		t.Fatal("support evidence accepted a state that contradicted its components")
+	}
+	if runtimeBoundary.composeCalls != 0 || len(runtimeBoundary.migrationRuns) != 0 ||
+		runtimeBoundary.backupStreams != 0 {
+		t.Fatal("support evidence invoked a mutating platform effect")
+	}
+	if err := effects.WriteSupportEvidence(context.Background(), request); err != nil {
+		t.Fatalf("replay healthy support evidence: %v", err)
+	}
+
+	runtimeBoundary.unhealthyService = "paas-worker"
+	degraded := request
+	degraded.Output = filepath.Join(
+		plan.Root, filepath.FromSlash(layout.SupportDirectory), "degraded.json",
+	)
+	degraded.CorrelationID = "cmd-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	degraded.GeneratedAt = degraded.GeneratedAt.Add(time.Minute)
+	if err := effects.WriteSupportEvidence(context.Background(), degraded); err != nil {
+		t.Fatalf("write degraded support evidence: %v", err)
+	}
+	content, err = os.ReadFile(degraded.Output)
+	if err != nil {
+		t.Fatalf("read degraded support evidence: %v", err)
+	}
+	var observed supportEvidence
+	if json.Unmarshal(content, &observed) != nil || observed.State != supportStateNotReady {
+		t.Fatalf("degraded support evidence = %#v", observed)
+	}
+	workerFound := false
+	for _, component := range observed.Components {
+		if component.Name == "paas-worker" {
+			workerFound = true
+			if component.State != supportStateNotReady {
+				t.Fatalf("degraded worker evidence = %#v", component)
+			}
+		}
+	}
+	if !workerFound {
+		t.Fatal("degraded support evidence omitted the affected component")
+	}
+}
+
 func TestRollbackInstallationRemovesUnhealthyOnlyProvedOwnedObjectsAndReplays(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("local-machine platform cleanup effects target Linux")
@@ -772,6 +968,7 @@ func snapshotManagedCredentials(t *testing.T, root string) map[string]string {
 		layout.ReleaseTrust, layout.IAMBootstrap, layout.AuditIAMCredential,
 		layout.IAMAuditCredential, layout.PaaSIAMCredential, layout.PaaSAuditCredential,
 		layout.InstallationVerifierCredential, layout.AuditCursorKey,
+		layout.BackupSealKey,
 		layout.APISIXIAMCredential, layout.InitialAdministratorPassword,
 		layout.PostgresPassword, layout.PostgresMigration, layout.IAMAPI,
 		layout.IAMWorker, layout.AuditRuntime, layout.PaaSAPI, layout.PaaSWorker,
@@ -882,11 +1079,15 @@ type platformStartRuntime struct {
 	userDriftService          string
 	portDriftService          string
 	configHashDriftService    string
+	unhealthyService          string
 	failObservationAfterStart bool
 	composeCalls              int
 	observationsBeforeStart   int
 	composeArguments          []string
 	migrationRuns             [][]string
+	databaseDump              []byte
+	backupStreams             int
+	restoreChecks             int
 }
 
 type platformCleanupRuntime struct {
@@ -912,7 +1113,10 @@ func newPlatformStartRuntime(
 	for _, image := range plan.Bundle.Manifest.Images {
 		images[image.ImageID] = true
 	}
-	return &platformStartRuntime{expectation: expectation, images: images}
+	return &platformStartRuntime{
+		expectation: expectation, images: images,
+		databaseDump: []byte("matrix-postgresql-custom-backup-fixture"),
+	}
 }
 
 func newPlatformCleanupRuntime(
@@ -1089,8 +1293,17 @@ func (runtimeBoundary *platformStartRuntime) Run(
 	input io.Reader,
 	arguments ...string,
 ) ([]byte, bool, error) {
-	if input != nil || len(arguments) == 0 {
+	if len(arguments) == 0 {
 		return nil, false, errors.New("platform start Docker invocation is invalid")
+	}
+	if input != nil {
+		return nil, false, errors.New("platform start Docker invocation has unexpected stdin")
+	}
+	if arguments[0] == "exec" && slices.Contains(arguments, "psql") {
+		if !slices.Contains(arguments, "--no-password") {
+			return nil, false, errors.New("platform database observation may prompt for a password")
+		}
+		return []byte("1048576\n"), true, nil
 	}
 	if len(arguments) == 5 && arguments[0] == "image" && arguments[1] == "inspect" {
 		imageID := arguments[4]
@@ -1168,6 +1381,38 @@ func (runtimeBoundary *platformStartRuntime) Run(
 		}
 	}
 	return nil, false, fmt.Errorf("unexpected platform Docker command: %q", strings.Join(arguments, " "))
+}
+
+func (runtimeBoundary *platformStartRuntime) RunTo(
+	_ context.Context,
+	input io.Reader,
+	output io.Writer,
+	arguments ...string,
+) (bool, error) {
+	if output == nil {
+		return false, errors.New("platform backup streaming invocation is invalid")
+	}
+	if slices.Contains(arguments, "pg_restore") {
+		if input == nil {
+			return false, errors.New("backup verification stdin is absent")
+		}
+		content, err := io.ReadAll(input)
+		if err != nil || !bytes.Equal(content, runtimeBoundary.databaseDump) {
+			return true, errors.New("backup verification content is invalid")
+		}
+		runtimeBoundary.restoreChecks++
+		_, err = output.Write([]byte("; Archive created for test\n"))
+		return true, err
+	}
+	if input != nil || !slices.Contains(arguments, "pg_dump") ||
+		!slices.Contains(arguments, "--no-owner") ||
+		!slices.Contains(arguments, "--no-privileges") ||
+		!slices.Contains(arguments, "--no-password") {
+		return false, errors.New("platform backup streaming invocation is invalid")
+	}
+	runtimeBoundary.backupStreams++
+	_, err := output.Write(runtimeBoundary.databaseDump)
+	return true, err
 }
 
 func (runtimeBoundary *platformStartRuntime) inspectNetworkLabels(
@@ -1257,12 +1502,16 @@ func (runtimeBoundary *platformStartRuntime) inspectContainer(
 	if runtimeBoundary.userDriftService == serviceName {
 		user = "636:636"
 	}
+	health := "healthy"
+	if runtimeBoundary.unhealthyService == serviceName {
+		health = "unhealthy"
+	}
 	content, err := json.Marshal(map[string]any{
 		"Id": identity, "Image": imageID,
 		"Config": map[string]any{"Labels": labels, "User": user},
 		"State": map[string]any{
 			"Status": "running", "Running": true,
-			"Health": map[string]any{"Status": "healthy"},
+			"Health": map[string]any{"Status": health},
 		},
 		"HostConfig": map[string]any{
 			"Privileged": false, "ReadonlyRootfs": expected.ReadOnly,

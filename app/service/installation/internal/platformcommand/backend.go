@@ -6,14 +6,17 @@ package platformcommand
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"io"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/xiak/matrix/app/service/installation/internal/cli"
 	"github.com/xiak/matrix/app/service/installation/internal/journal"
+	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
 	"github.com/xiak/matrix/app/service/installation/release"
 	"github.com/xiak/matrix/app/service/installation/topology"
@@ -57,8 +60,23 @@ type InstalledPlan struct {
 	Port             uint16
 	ReleaseID        string
 	ReleaseDigest    string
+	PreviousID       string
+	PreviousDigest   string
 	TrustKeyID       string
 	TrustFingerprint string
+}
+
+type BackupPlan struct {
+	InstalledPlan
+	BackupID  string
+	CreatedAt time.Time
+}
+
+type SupportPlan struct {
+	InstalledPlan
+	Output        string
+	CorrelationID string
+	GeneratedAt   time.Time
 }
 
 // Effects is the closed local-machine lifecycle boundary. Mutating phases are
@@ -70,6 +88,8 @@ type Effects interface {
 	RollbackInstall(context.Context, InstallPlan) error
 	VerifyInstallation(context.Context, InstalledPlan) error
 	ObserveInstallation(context.Context, InstalledPlan) (bool, error)
+	CreateBackup(context.Context, BackupPlan) error
+	WriteSupportEvidence(context.Context, SupportPlan) error
 }
 
 type Backend struct {
@@ -98,10 +118,10 @@ func (backend *Backend) Run(ctx context.Context, request cli.Request) (cli.Resul
 	switch request.Action {
 	case lifecycle.ActionInstall:
 		return backend.install(ctx, request)
-	case lifecycle.ActionVerify:
-		return backend.verify(ctx, request)
 	case lifecycle.ActionStatus:
 		return backend.status(ctx, request)
+	case lifecycle.ActionVerify, lifecycle.ActionBackup, lifecycle.ActionSupport:
+		return backend.operation(ctx, request)
 	default:
 		return cli.Result{}, fault(cli.FaultPrecondition, "LIFECYCLE_ACTION_NOT_READY")
 	}
@@ -150,10 +170,21 @@ func (backend *Backend) status(
 	return result, nil
 }
 
-func (backend *Backend) verify(
+func (backend *Backend) operation(
 	ctx context.Context,
 	request cli.Request,
 ) (result cli.Result, returnErr error) {
+	supportOutput := ""
+	supportDigest := ""
+	if request.Action == lifecycle.ActionSupport {
+		var err error
+		supportOutput, supportDigest, err = supportOutputBinding(
+			request.Root, request.SupportOutput,
+		)
+		if err != nil {
+			return cli.Result{}, fault(cli.FaultInvalidArgument, "SUPPORT_OUTPUT_INVALID")
+		}
+	}
 	session, err := journal.AcquireExisting(ctx, request.Root)
 	if err != nil {
 		return cli.Result{}, acquireFault(err)
@@ -168,41 +199,51 @@ func (backend *Backend) verify(
 	if err != nil {
 		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_STATE_INVALID")
 	}
-	commandID := ""
-	if state.Active != nil {
-		commandID = state.Active.Command.ID
-	} else {
-		commandID, err = randomIdentity(backend.entropy, "cmd")
-		if err != nil {
-			return cli.Result{}, fault(cli.FaultInternal, "COMMAND_ID_GENERATION_FAILED")
-		}
+	if state.Active != nil && state.Active.Command.Action != request.Action {
+		return cli.Result{}, lifecycleFault(lifecycle.ErrCommandInProgress)
 	}
-	started, err := lifecycle.Start(state, lifecycle.Command{
-		ID: commandID, Action: lifecycle.ActionVerify,
-		RequestedAt: canonicalNow(backend.now()),
-	})
+	command, err := backend.operationCommand(state, request.Action, supportDigest)
+	if err != nil {
+		return cli.Result{}, err
+	}
+	started, err := lifecycle.Start(state, command)
 	if err != nil {
 		return cli.Result{}, lifecycleFault(err)
 	}
 	if started.Replay == lifecycle.ReplayCompleted {
-		return completedResult(started.Journal, started.Execution, false)
+		return operationResult(started.Journal, started.Execution, false)
 	}
 	if started.Replay == lifecycle.ReplayNone {
 		if err := session.Write(started.Journal); err != nil {
 			return cli.Result{}, stateWriteFault(err)
 		}
 	}
-	plan := installedPlan(session.Root(), started.Journal)
-	if err := backend.effects.VerifyInstallation(ctx, plan); err != nil {
+	installed := installedPlan(session.Root(), started.Journal)
+	var effectErr error
+	switch request.Action {
+	case lifecycle.ActionVerify:
+		effectErr = backend.effects.VerifyInstallation(ctx, installed)
+	case lifecycle.ActionBackup:
+		effectErr = backend.effects.CreateBackup(ctx, BackupPlan{
+			InstalledPlan: installed, BackupID: command.BackupID,
+			CreatedAt: started.Execution.StartedAt,
+		})
+	case lifecycle.ActionSupport:
+		effectErr = backend.effects.WriteSupportEvidence(ctx, SupportPlan{
+			InstalledPlan: installed, Output: supportOutput,
+			CorrelationID: command.ID, GeneratedAt: started.Execution.StartedAt,
+		})
+	}
+	if effectErr != nil {
 		if ctx.Err() != nil {
 			return cli.Result{}, fault(cli.FaultInterrupted, "COMMAND_INTERRUPTED")
 		}
-		if errors.Is(err, ErrEffectOutcomeUnknown) {
+		if errors.Is(effectErr, ErrEffectOutcomeUnknown) {
 			return cli.Result{}, fault(cli.FaultUnavailable, "EFFECT_OUTCOME_UNKNOWN")
 		}
-		normalized := effectFault(lifecycle.PhaseVerifying, err)
+		normalized := effectFault(started.Execution.Phase, effectErr)
 		failed, failErr := lifecycle.Fail(
-			started.Journal, commandID, normalized.Code,
+			started.Journal, command.ID, normalized.Code,
 			nextJournalTime(backend.now(), started.Execution.UpdatedAt),
 		)
 		if failErr != nil || session.Write(failed) != nil {
@@ -211,13 +252,79 @@ func (backend *Backend) verify(
 		return cli.Result{}, normalized
 	}
 	ready, err := lifecycle.Advance(
-		started.Journal, commandID, lifecycle.PhaseReady,
+		started.Journal, command.ID, lifecycle.PhaseReady,
 		nextJournalTime(backend.now(), started.Execution.UpdatedAt),
 	)
 	if err != nil || session.Write(ready) != nil {
-		return cli.Result{}, fault(cli.FaultInternal, "VERIFICATION_STATE_COMMIT_FAILED")
+		return cli.Result{}, fault(cli.FaultInternal, "OPERATION_STATE_COMMIT_FAILED")
 	}
-	return completedResult(ready, *ready.Last, false)
+	return operationResult(ready, *ready.Last, true)
+}
+
+func (backend *Backend) operationCommand(
+	state lifecycle.Journal,
+	action lifecycle.Action,
+	supportDigest string,
+) (lifecycle.Command, error) {
+	if state.Active != nil {
+		command := state.Active.Command
+		if action == lifecycle.ActionSupport {
+			command.InputDigest = supportDigest
+		}
+		return command, nil
+	}
+	commandID, err := randomIdentity(backend.entropy, "cmd")
+	if err != nil {
+		return lifecycle.Command{}, fault(cli.FaultInternal, "COMMAND_ID_GENERATION_FAILED")
+	}
+	command := lifecycle.Command{
+		ID: commandID, Action: action, RequestedAt: canonicalNow(backend.now()),
+	}
+	switch action {
+	case lifecycle.ActionBackup:
+		command.BackupID, err = randomIdentity(backend.entropy, "backup")
+		if err != nil {
+			return lifecycle.Command{}, fault(cli.FaultInternal, "BACKUP_ID_GENERATION_FAILED")
+		}
+	case lifecycle.ActionSupport:
+		command.InputDigest = supportDigest
+	}
+	return command, nil
+}
+
+func operationResult(
+	state lifecycle.Journal,
+	execution lifecycle.Execution,
+	changed bool,
+) (cli.Result, error) {
+	if execution.Outcome != lifecycle.OutcomeSucceeded {
+		return cli.Result{}, storedFailure(&execution)
+	}
+	result := cli.Result{
+		State: "READY", ReleaseID: state.CurrentReleaseID,
+		PreviousID: state.PreviousRelease, CorrelationID: execution.Command.ID,
+		Changed: changed && execution.Command.Action != lifecycle.ActionVerify,
+	}
+	if execution.Command.Action == lifecycle.ActionBackup {
+		result.BackupID = execution.Command.BackupID
+	}
+	return result, nil
+}
+
+func supportOutputBinding(root, output string) (string, string, error) {
+	if root == "" || output == "" || len(output) > 4096 ||
+		!filepath.IsAbs(output) || filepath.Clean(output) != output {
+		return "", "", errors.New("support output path is invalid")
+	}
+	supportRoot := filepath.Join(root, filepath.FromSlash(layout.SupportDirectory))
+	name := filepath.Base(output)
+	if filepath.Dir(output) != supportRoot || name == "." || name == ".." ||
+		len(name) > 128 || strings.HasPrefix(name, ".") ||
+		!strings.EqualFold(filepath.Ext(name), ".json") {
+		return "", "", errors.New("support output is outside its owned directory")
+	}
+	digest := sha256.Sum256([]byte(output))
+	return output, "sha256:" + hex.EncodeToString(digest[:]), nil
 }
 
 func installedPlan(root string, state lifecycle.Journal) InstalledPlan {
@@ -225,6 +332,7 @@ func installedPlan(root string, state lifecycle.Journal) InstalledPlan {
 		Root: root, InstallationID: state.InstallationID,
 		Listener: defaultListener, Port: defaultPort,
 		ReleaseID: state.CurrentReleaseID, ReleaseDigest: state.CurrentReleaseDigest,
+		PreviousID: state.PreviousRelease, PreviousDigest: state.PreviousReleaseDigest,
 		TrustKeyID:       state.ReleaseTrust.KeyID,
 		TrustFingerprint: state.ReleaseTrust.Fingerprint,
 	}
@@ -545,6 +653,8 @@ func phaseFailureCode(phase lifecycle.Phase, suffix string) string {
 	switch phase {
 	case lifecycle.PhasePreflight:
 		return "PREFLIGHT_" + suffix
+	case lifecycle.PhaseBackingUp:
+		return "BACKUP_" + suffix
 	case lifecycle.PhaseStaging:
 		return "STAGING_" + suffix
 	case lifecycle.PhaseLoadingImages:

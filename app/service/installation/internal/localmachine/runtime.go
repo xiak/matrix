@@ -16,6 +16,11 @@ type dockerRuntime interface {
 	Run(context.Context, io.Reader, ...string) ([]byte, bool, error)
 }
 
+type streamingDockerRuntime interface {
+	dockerRuntime
+	RunTo(context.Context, io.Reader, io.Writer, ...string) (bool, error)
+}
+
 type localDockerRuntime struct{}
 
 func (localDockerRuntime) Run(
@@ -44,6 +49,29 @@ func (localDockerRuntime) Run(
 		return nil, true, errors.New("Docker command output exceeds its bound")
 	}
 	return append([]byte(nil), output.Bytes()...), true, err
+}
+
+func (localDockerRuntime) RunTo(
+	ctx context.Context,
+	input io.Reader,
+	output io.Writer,
+	arguments ...string,
+) (bool, error) {
+	if ctx == nil || output == nil {
+		return false, errors.New("Docker streaming command boundary is unavailable")
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	command := exec.CommandContext(ctx, "docker", arguments...)
+	command.Stdin = input
+	command.Stdout = output
+	command.Stderr = io.Discard
+	command.Env = localDockerEnvironment(os.Environ())
+	if err := command.Start(); err != nil {
+		return false, err
+	}
+	return true, command.Wait()
 }
 
 func localDockerEnvironment(source []string) []string {
