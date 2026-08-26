@@ -244,21 +244,6 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	}
 	emit("explicit-platform-rollback")
 
-	rolledBack, err := value.rollbackApplication(ctx, bearer, updated)
-	if err != nil {
-		return err
-	}
-	if err := value.assertWorkload(ctx, value.releases.a.Manifest, rolledBack, 3, "1", settingOne, secretDigest); err != nil {
-		return err
-	}
-	rollbackAudit, err := value.edge.waitAuditActions(ctx, bearer, map[auditv1.Action]string{
-		auditv1.ActionPaaSDeploymentRolledBack: string(deploymentID),
-	})
-	if err != nil || !containsAuditHistory(rollbackAudit, backupBaseline) {
-		return fail("application-rollback-audit")
-	}
-	emit("application-rollback")
-
 	value.workloadRunning = ""
 	recovery, err := runMX(ctx, value.releases.a, "recover", []string{
 		"--root", value.config.root, "--backup", backup.BackupID,
@@ -287,11 +272,26 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	}
 	emit("backup-recovery")
 
-	stopped, err := value.stopApplication(ctx, bearer, recovered)
+	rolledBack, err := value.rollbackApplication(ctx, bearer, recovered)
 	if err != nil {
 		return err
 	}
-	if stopped.Status.Phase != paasv1.DeploymentStopped || stopped.Status.ObservedGeneration != 3 {
+	if err := value.assertWorkload(ctx, value.releases.a.Manifest, rolledBack, 3, "1", settingOne, secretDigest); err != nil {
+		return err
+	}
+	rollbackAudit, err := value.edge.waitAuditActions(ctx, bearer, map[auditv1.Action]string{
+		auditv1.ActionPaaSDeploymentRolledBack: string(deploymentID),
+	})
+	if err != nil || !containsAuditHistory(rollbackAudit, backupBaseline) {
+		return fail("application-rollback-audit")
+	}
+	emit("application-rollback")
+
+	stopped, err := value.stopApplication(ctx, bearer, rolledBack)
+	if err != nil {
+		return err
+	}
+	if stopped.Status.Phase != paasv1.DeploymentStopped || stopped.Status.ObservedGeneration != 4 {
 		return fail("stopped-application-state")
 	}
 	if err := value.assertWorkloadRemoved(ctx); err != nil {
