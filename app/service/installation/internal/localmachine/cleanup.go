@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
-	"github.com/xiak/matrix/app/service/installation/internal/topology"
+	"github.com/xiak/matrix/app/service/installation/topology"
 )
 
 type migrationCleanupIdentity struct {

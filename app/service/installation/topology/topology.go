@@ -16,7 +16,7 @@ import (
 
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
-	"github.com/xiak/matrix/app/service/installation/internal/release"
+	"github.com/xiak/matrix/app/service/installation/release"
 )
 
 const ContractVersion = "matrix-platform-compose/v1"
@@ -376,9 +376,13 @@ func compileServices(
 	paasAudit.DependsOn = healthy("postgres", "audit")
 
 	ui := service(
-		"paas-ui", images["paas-ui"], []string{"web"}, nil,
+		"paas-ui", images["paas-ui"], []string{"web"},
+		[]string{"/matrix/bin/matrix-paas-ui"},
 		"0.5", "256M", "http://127.0.0.1:8080/ready",
 	)
+	ui.Environment = map[string]string{
+		"MATRIX_PAAS_UI_LISTEN_ADDRESS": "0.0.0.0:8080",
+	}
 
 	apisix := service(
 		"apisix", images["apisix"], []string{"control", "web"}, nil,

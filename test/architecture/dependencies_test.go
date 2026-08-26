@@ -374,7 +374,8 @@ func TestInstallationKeepsGoOnlyClosedLifecycleBoundaries(t *testing.T) {
 			}
 			if _, isOS := osAliases[identifier.Name]; isOS &&
 				relative != "app/service/installation/cmd/mx/main.go" &&
-				relative != "app/service/installation/cmd/matrix-health/main.go" {
+				relative != "app/service/installation/cmd/matrix-health/main.go" &&
+				relative != "app/service/installation/cmd/matrix-verification/main.go" {
 				t.Errorf("%s: only installation process entry points may call os.Exit", relative)
 			}
 			return true

@@ -10,8 +10,8 @@ import (
 	apphostingv1 "github.com/xiak/matrix/api/adapter/apphosting/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
-	"github.com/xiak/matrix/app/service/installation/internal/release"
-	"github.com/xiak/matrix/app/service/installation/internal/topology"
+	"github.com/xiak/matrix/app/service/installation/release"
+	"github.com/xiak/matrix/app/service/installation/topology"
 )
 
 func configureInstallation(

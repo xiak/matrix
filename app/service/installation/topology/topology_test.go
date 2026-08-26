@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xiak/matrix/app/service/installation/internal/release"
+	"github.com/xiak/matrix/app/service/installation/release"
 )
 
 func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {

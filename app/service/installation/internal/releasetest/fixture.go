@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xiak/matrix/app/service/installation/internal/release"
-	"github.com/xiak/matrix/app/service/installation/internal/topology"
+	"github.com/xiak/matrix/app/service/installation/release"
+	"github.com/xiak/matrix/app/service/installation/topology"
 )
 
 type Fixture struct {

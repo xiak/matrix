@@ -15,8 +15,8 @@ import (
 	"github.com/xiak/matrix/app/service/installation/internal/cli"
 	"github.com/xiak/matrix/app/service/installation/internal/journal"
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
-	"github.com/xiak/matrix/app/service/installation/internal/release"
-	"github.com/xiak/matrix/app/service/installation/internal/topology"
+	"github.com/xiak/matrix/app/service/installation/release"
+	"github.com/xiak/matrix/app/service/installation/topology"
 )
 
 const (

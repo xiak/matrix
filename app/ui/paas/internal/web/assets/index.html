@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Matrix PaaS</title>
+  <link rel="stylesheet" href="/assets/app.css">
+  <script defer src="/assets/app.js"></script>
+</head>
+<body>
+  <header><span class="mark">MX</span><div><strong>Matrix PaaS</strong><small>企业应用平台</small></div></header>
+  <main>
+    <section class="intro">
+      <p class="eyebrow">CONFIGURATION WORKSPACE</p>
+      <h1>让环境配置成为平台能力</h1>
+      <p>登录后创建应用配置，并发布不可变配置修订。凭据只保留在当前页面内存中。</p>
+    </section>
+    <section class="card" id="login-panel">
+      <div class="section-title"><span>01</span><div><h2>登录</h2><p>使用 Matrix IAM 会话。</p></div></div>
+      <form id="login-form">
+        <label>登录名<input id="login-name" name="loginName" value="admin" required autocomplete="username"></label>
+        <label>密码<input id="password" name="password" type="password" required autocomplete="current-password"></label>
+        <div class="actions"><button type="submit">建立会话</button><button type="button" class="secondary" id="forget-session" disabled>清除会话</button></div>
+      </form>
+    </section>
+    <section class="card locked" id="configuration-panel">
+      <div class="section-title"><span>02</span><div><h2>配置工作区</h2><p>普通配置通过 ENV 注入；敏感值请使用 Secret。</p></div></div>
+      <form id="configuration-form">
+        <div class="grid">
+          <label>应用 ID<input id="application-id" value="example-app" required pattern="[a-z0-9][a-z0-9._-]+"></label>
+          <label>应用名称<input id="application-name" value="Example application" required></label>
+          <label>配置 ID<input id="configuration-id" value="example-app-runtime" required pattern="[a-z0-9][a-z0-9._-]+"></label>
+          <label>配置名称<input id="configuration-name" value="Runtime environment" required></label>
+        </div>
+        <button type="button" id="create-workspace">创建应用与配置</button>
+        <hr>
+        <div class="grid">
+          <label>修订 ID<input id="revision-id" value="example-app-runtime-r1" required pattern="[a-z0-9][a-z0-9._-]+"></label>
+          <label>修订名称<input id="revision-name" value="Runtime revision 1" required></label>
+        </div>
+        <label>环境变量（每行 KEY=value）<textarea id="configuration-values" rows="7" spellcheck="false">APP_ENV=production
+LOG_LEVEL=info</textarea></label>
+        <button type="submit">发布配置修订</button>
+      </form>
+    </section>
+    <section class="status" aria-live="polite"><span id="status-dot"></span><p id="status">尚未登录</p></section>
+  </main>
+</body>
+</html>

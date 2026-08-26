@@ -439,10 +439,22 @@ func ValidateConfigurationRevision(value ConfigurationRevision) error {
 	if value.Metadata.Scope.Kind != AuthorityTenant {
 		problems = append(problems, errors.New("configuration revision must be tenant scoped"))
 	}
-	if len(value.Spec.Values) > 256 {
+	problems = append(problems, ValidateConfigurationValues(value.Spec.Values))
+	if digest := ConfigurationValuesDigest(value.Spec.Values); value.Spec.ContentDigest != digest {
+		problems = append(problems, errors.New("spec.contentDigest does not match canonical values"))
+	}
+	return errors.Join(problems...)
+}
+
+// ValidateConfigurationValues applies the Phase 1 SDK-free ENV configuration
+// boundary independently of resource metadata. It is shared by public clients
+// that must calculate the exact immutable revision digest before submission.
+func ValidateConfigurationValues(values map[string]string) error {
+	var problems []error
+	if len(values) > 256 {
 		problems = append(problems, errors.New("configuration values cannot exceed 256 entries"))
 	}
-	for key, item := range value.Spec.Values {
+	for key, item := range values {
 		if !environmentKeyPattern.MatchString(key) {
 			problems = append(problems, fmt.Errorf("configuration key %q is not a portable environment key", key))
 		}
@@ -457,9 +469,6 @@ func ValidateConfigurationRevision(value ConfigurationRevision) error {
 			problems,
 			ValidateSafeExternalText("configuration value "+key, item, 32768, false),
 		)
-	}
-	if digest := ConfigurationValuesDigest(value.Spec.Values); value.Spec.ContentDigest != digest {
-		problems = append(problems, errors.New("spec.contentDigest does not match canonical values"))
 	}
 	return errors.Join(problems...)
 }
