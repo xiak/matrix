@@ -100,12 +100,40 @@ export function ControlPlaneProvider({
   }, [credential, repository]);
 
   useEffect(() => {
-    if (!credential || !snapshot?.installations.some(
+    if (!credential) return;
+    const pending = snapshot?.installations.filter(
       (item) => item.phase === "PENDING" || item.phase === "PROVISIONING"
-    )) return;
-    const timer = window.setTimeout(() => void reload(), 4_000);
-    return () => window.clearTimeout(timer);
-  }, [credential, reload, snapshot]);
+    ) ?? [];
+    if (pending.length === 0) return;
+    let active = true;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const updates = await Promise.all(
+            pending.map((item) => repository.getInstallation(credential, item.id))
+          );
+          if (!active) return;
+          setError(null);
+          const byId = new Map(updates.map((item) => [item.id, item]));
+          setSnapshot((current) => current ? {
+            ...current,
+            installations: current.installations.map((item) => byId.get(item.id) ?? item)
+          } : current);
+          if (!updates.some((item) => item.phase === "READY" || item.phase === "FAILED")) {
+            return;
+          }
+          const refreshed = await repository.load(credential);
+          if (active) setSnapshot(refreshed);
+        } catch (pollError: unknown) {
+          if (active) setError(loadMessage(pollError));
+        }
+      })();
+    }, 4_000);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [credential, repository, snapshot]);
 
   const activateQuota = useCallback(async (command: ActivateQuotaCommand) => {
     if (!credential) return false;

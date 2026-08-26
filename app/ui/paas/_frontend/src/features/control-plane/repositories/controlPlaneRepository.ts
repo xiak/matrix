@@ -8,6 +8,7 @@ import type {
 
 export interface ControlPlaneRepository {
   load(credential: string): Promise<ControlPlaneSnapshot>;
+  getInstallation(credential: string, installationId: string): Promise<ServiceInstallation>;
   activateQuota(
     credential: string,
     command: ActivateQuotaCommand

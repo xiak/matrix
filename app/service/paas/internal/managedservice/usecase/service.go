@@ -39,7 +39,9 @@ type Repository interface {
 
 type Transaction interface {
 	ListQuotaEntitlements(context.Context) ([]managedservicev1.QuotaEntitlement, error)
+	GetQuotaEntitlement(context.Context, string) (managedservicev1.QuotaEntitlement, error)
 	ListServiceInstallations(context.Context) ([]managedservicev1.ServiceInstallation, error)
+	GetServiceInstallation(context.Context, string) (managedservicev1.ServiceInstallation, error)
 	FindQuotaReplay(context.Context, string) (managedservicev1.QuotaEntitlement, string, bool, error)
 	InsertQuotaEntitlement(context.Context, QuotaDraft) (managedservicev1.QuotaEntitlement, error)
 	FindInstallationReplay(context.Context, string) (managedservicev1.ServiceInstallation, string, bool, error)
@@ -144,6 +146,23 @@ func (service *Service) ListOfferings(
 	return managedservicev1.ServiceOfferingList{Kind: "ServiceOfferingList", Items: service.catalog.List()}, nil
 }
 
+func (service *Service) GetOffering(
+	ctx context.Context,
+	authorization port.Authorization,
+	id string,
+) (managedservicev1.ServiceOffering, error) {
+	if ctx == nil || port.ValidateAuthorization(authorization) != nil ||
+		managedservicev1.ValidateID("offeringId", id) != nil {
+		return managedservicev1.ServiceOffering{}, ErrInvalidArgument
+	}
+	for _, offering := range service.catalog.List() {
+		if offering.ID == id {
+			return offering, nil
+		}
+	}
+	return managedservicev1.ServiceOffering{}, ErrNotFound
+}
+
 func (service *Service) ListRegions(
 	_ context.Context,
 	authorization port.Authorization,
@@ -152,6 +171,21 @@ func (service *Service) ListRegions(
 		return managedservicev1.RegionList{}, ErrInvalidArgument
 	}
 	return managedservicev1.RegionList{Kind: "RegionList", Items: []managedservicev1.Region{service.region}}, nil
+}
+
+func (service *Service) GetRegion(
+	ctx context.Context,
+	authorization port.Authorization,
+	id string,
+) (managedservicev1.Region, error) {
+	if ctx == nil || port.ValidateAuthorization(authorization) != nil ||
+		managedservicev1.ValidateID("regionId", id) != nil {
+		return managedservicev1.Region{}, ErrInvalidArgument
+	}
+	if id != service.region.ID {
+		return managedservicev1.Region{}, ErrNotFound
+	}
+	return service.region, nil
 }
 
 func (service *Service) ListQuotaEntitlements(
@@ -173,6 +207,27 @@ func (service *Service) ListQuotaEntitlements(
 	return managedservicev1.QuotaEntitlementList{Kind: "QuotaEntitlementList", Items: items}, nil
 }
 
+func (service *Service) GetQuotaEntitlement(
+	ctx context.Context,
+	authorization port.Authorization,
+	id string,
+) (managedservicev1.QuotaEntitlement, error) {
+	if ctx == nil || port.ValidateAuthorization(authorization) != nil ||
+		managedservicev1.ValidateID("quotaEntitlementId", id) != nil {
+		return managedservicev1.QuotaEntitlement{}, ErrInvalidArgument
+	}
+	var result managedservicev1.QuotaEntitlement
+	err := service.withTransaction(ctx, authorization.TenantID, ReadOnly, func(transaction Transaction) error {
+		var err error
+		result, err = transaction.GetQuotaEntitlement(ctx, id)
+		return err
+	})
+	if err != nil {
+		return managedservicev1.QuotaEntitlement{}, err
+	}
+	return result, nil
+}
+
 func (service *Service) ListServiceInstallations(
 	ctx context.Context,
 	authorization port.Authorization,
@@ -190,6 +245,39 @@ func (service *Service) ListServiceInstallations(
 		return managedservicev1.ServiceInstallationList{}, err
 	}
 	return managedservicev1.ServiceInstallationList{Kind: "ServiceInstallationList", Items: items}, nil
+}
+
+func (service *Service) GetServiceInstallation(
+	ctx context.Context,
+	authorization port.Authorization,
+	id string,
+) (managedservicev1.ServiceInstallation, error) {
+	if ctx == nil || port.ValidateAuthorization(authorization) != nil ||
+		managedservicev1.ValidateInstallationID(id) != nil {
+		return managedservicev1.ServiceInstallation{}, ErrInvalidArgument
+	}
+	var result managedservicev1.ServiceInstallation
+	err := service.withTransaction(ctx, authorization.TenantID, ReadOnly, func(transaction Transaction) error {
+		var err error
+		result, err = transaction.GetServiceInstallation(ctx, id)
+		return err
+	})
+	if err != nil {
+		return managedservicev1.ServiceInstallation{}, err
+	}
+	return result, nil
+}
+
+func (service *Service) GetInstallationOperation(
+	ctx context.Context,
+	authorization port.Authorization,
+	installationID string,
+) (managedservicev1.InstallationOperation, error) {
+	installation, err := service.GetServiceInstallation(ctx, authorization, installationID)
+	if err != nil {
+		return managedservicev1.InstallationOperation{}, err
+	}
+	return installation.Operation, nil
 }
 
 func (service *Service) ActivateQuota(

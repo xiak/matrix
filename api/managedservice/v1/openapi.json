@@ -8,6 +8,47 @@
         "schema": {
           "$ref": "#/components/schemas/ID"
         }
+      },
+      "InstallationID": {
+        "in": "path",
+        "name": "installationId",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/Name"
+        }
+      },
+      "OfferingID": {
+        "in": "path",
+        "name": "offeringId",
+        "required": true,
+        "schema": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "type": "string"
+        }
+      },
+      "QuotaEntitlementID": {
+        "in": "path",
+        "name": "quotaEntitlementId",
+        "required": true,
+        "schema": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "type": "string"
+        }
+      },
+      "RegionID": {
+        "in": "path",
+        "name": "regionId",
+        "required": true,
+        "schema": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "type": "string"
+        }
       }
     },
     "responses": {
@@ -588,6 +629,50 @@
         "summary": "List the closed service catalog."
       }
     },
+    "/v1/offerings/{offeringId}": {
+      "get": {
+        "operationId": "getServiceOffering",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/OfferingID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceOffering"
+                }
+              }
+            },
+            "description": "Current organization-scoped resource."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Read one closed service offering."
+      }
+    },
     "/v1/quota-entitlements": {
       "get": {
         "operationId": "listQuotaEntitlements",
@@ -692,6 +777,50 @@
         "summary": "Activate a bounded product entitlement."
       }
     },
+    "/v1/quota-entitlements/{quotaEntitlementId}": {
+      "get": {
+        "operationId": "getQuotaEntitlement",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/QuotaEntitlementID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuotaEntitlement"
+                }
+              }
+            },
+            "description": "Current organization-scoped resource."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Read one organization quota entitlement."
+      }
+    },
     "/v1/regions": {
       "get": {
         "operationId": "listRegions",
@@ -726,6 +855,50 @@
           }
         },
         "summary": "List eligible operator-owned regions."
+      }
+    },
+    "/v1/regions/{regionId}": {
+      "get": {
+        "operationId": "getRegion",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RegionID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Region"
+                }
+              }
+            },
+            "description": "Current organization-scoped resource."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Read one eligible operator-owned region."
       }
     },
     "/v1/service-installations": {
@@ -830,6 +1003,94 @@
           }
         },
         "summary": "Reserve quota and submit an installation."
+      }
+    },
+    "/v1/service-installations/{installationId}": {
+      "get": {
+        "operationId": "getServiceInstallation",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/InstallationID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceInstallation"
+                }
+              }
+            },
+            "description": "Current organization-scoped resource."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Read one organization service installation."
+      }
+    },
+    "/v1/service-installations/{installationId}/operation": {
+      "get": {
+        "operationId": "getInstallationOperation",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/InstallationID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstallationOperation"
+                }
+              }
+            },
+            "description": "Current organization-scoped resource."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Read the current installation Operation."
       }
     }
   },

@@ -9,14 +9,21 @@
 
 | Donor | Commit | Worktree policy |
 | --- | --- | --- |
-| Legacy PaaS and UI | `69336e51f94fa98f6aa278fa4c62382e224dbeaf` | Read only through Git object commands; exclude its worktree. |
-| PaaS design | `338d9b5fcb820120c32265e380c55e5f171cdb75` | Read only through Git object commands; use as rationale, not executable evidence. |
+| Complete Discord-style Next.js UI | `69336e51f94fa98f6aa278fa4c62382e224dbeaf` | Sole architecture and visual-style donor; read only through Git object commands and exclude its worktree. |
+| PaaS product-design record | `338d9b5fcb820120c32265e380c55e5f171cdb75` | Product-boundary reference only; it is not a second UI architecture or style donor. |
 
 The FEAT-007 outcome, user journey, ownership, model, authority boundary, and
 three acceptance gates were fixed before the following adoption decisions.
 The earlier FEAT-006 rejection of the legacy UI applied only to the IAM/Audit
 authority slice; it created no compatibility obligation and does not decide a
 new UI-owned feature.
+
+Architecture and visual style come from exactly one project: the complete
+Discord-style Next.js/React application at `69336e51...`. Its `@ui/xiak`
+facade is one layer of that application, not a separate component-library
+donor. The PaaS design record below only helps confirm product and runtime
+boundaries; when it overlaps UI structure or styling, the complete application
+is authoritative.
 
 ## Legacy UI comparison
 
@@ -45,7 +52,7 @@ pattern and shell style are selectively transplanted, while every admitted
 component is owned under the target's PaaS props, tokens, accessibility, and
 import contracts and must pass its own public-export and visual gate.
 
-## PaaS design comparison
+## PaaS product-design reference
 
 The fixed design donor owns only `docs/paas/README.md` and its adoption
 manifest at the reviewed commit. Its UI conclusions remain useful even though
@@ -54,10 +61,10 @@ Matrix Phase 1 product.
 
 | Design slice | Decision | Rationale |
 | --- | --- | --- |
-| Independent `app/ui/paas`, selective `xiak` adoption, no dependency on the donor UI, explicit APISIX routes, and separately verifiable UI delivery | `REUSE` | These boundaries already align with ADR-0002 and the accepted Phase 1 Go UI process. FEAT-007 replaces the page inside that independent delivery unit rather than integrating another product UI. |
-| First-candidate primitive list, layout redesign list, and exclusion of groups/chat/social | `ADAPT` | Use only components needed by the first complete console chain and require type, architecture, accessibility, browser, and visual evidence before admission. |
-| Next.js 16 and React 19 as the application baseline | `ADAPT` | Use the same App Router architecture and static-export the application into the existing Go embed boundary. Installation still performs no package-manager or framework-server work. |
-| transport parser -> view model -> page, unknown/stale/error states, server-side authorization, and no provider secrets in UI | `ADAPT` | Replace generic view models with the FEAT-007 `ConsoleScene` and internal renderers, preserve explicit uncertainty, and keep the service as final authority. |
+| Independent `app/ui/paas`, no runtime dependency on donor source, explicit APISIX routes, and separately verifiable UI delivery | `REFERENCE` | These product and deployment boundaries align with ADR-0002 and the accepted Phase 1 Go UI process. The complete UI donor, not this record, supplies the application architecture and style. |
+| First-candidate primitive list, layout redesign list, and exclusion of groups/chat/social | `REFERENCE` | Use only as a scope cross-check. Component semantics, shell composition, tokens, and interaction style are adapted from the complete UI donor. |
+| Next.js 16 and React 19 as a proposed baseline | `REFERENCE` | This corroborates the selected framework family, but the fixed complete application owns the adopted App Router pattern. Installation still performs no package-manager or framework-server work. |
+| transport parser -> view model -> page, unknown/stale/error states, server-side authorization, and no provider secrets in UI | `REFERENCE` | These are product constraints. The actual route -> provider -> repository -> scene -> renderer chain is adapted only from the complete UI donor. |
 | legacy component projections, GitLab Provider, current DevOps scripts as source of truth, signed web assertion, and CLI/GitLab escape-hatch roadmap | `REJECT` | Phase 1 now owns application hosting, IAM, Audit, Operations, installation, and Compose execution inside this repository. Reintroducing the legacy execution authority or its compatibility routes would contradict the accepted product boundary. |
 
 ## Resulting implementation constraints
@@ -69,6 +76,8 @@ Matrix Phase 1 product.
    App Router entry, route parser, `ControlPlaneProvider`, real
    `ControlPlaneRepository`, `ConsoleScene`, internal shell renderer, and
    public `@ui/xiak` primitives.
+   The primitives and the chain are two layers adapted from the same complete
+   donor application, never two competing UI sources.
 3. Keep public components semantic and feature-agnostic. Wire objects, scene
    types, renderers, IAM details, managed-service fields, and DOM-derived names
    cannot leak into the facade.

@@ -57,6 +57,23 @@ SELECT `+quotaColumns+`
 	return result, nil
 }
 
+func (value *transaction) GetQuotaEntitlement(
+	ctx context.Context,
+	id string,
+) (managedservicev1.QuotaEntitlement, error) {
+	item, err := scanQuota(value.tx.QueryRow(ctx, `
+SELECT `+quotaColumns+`
+  FROM managedservice.quota_entitlements
+ WHERE id = $1`, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return managedservicev1.QuotaEntitlement{}, usecase.ErrNotFound
+	}
+	if err != nil {
+		return managedservicev1.QuotaEntitlement{}, databaseError(ctx, err)
+	}
+	return item, nil
+}
+
 func (value *transaction) FindQuotaReplay(
 	ctx context.Context,
 	idempotencyKey string,
@@ -248,6 +265,26 @@ SELECT `+installationColumns+`
 		return nil, databaseError(ctx, err)
 	}
 	return result, nil
+}
+
+func (value *transaction) GetServiceInstallation(
+	ctx context.Context,
+	id string,
+) (managedservicev1.ServiceInstallation, error) {
+	item, err := scanInstallation(value.tx.QueryRow(ctx, `
+SELECT `+installationColumns+`
+  FROM managedservice.service_installations AS installation
+  JOIN managedservice.operations AS operation
+    ON operation.tenant_id = installation.tenant_id
+   AND operation.installation_id = installation.id
+ WHERE installation.id = $1`, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return managedservicev1.ServiceInstallation{}, usecase.ErrNotFound
+	}
+	if err != nil {
+		return managedservicev1.ServiceInstallation{}, databaseError(ctx, err)
+	}
+	return item, nil
 }
 
 func (value *transaction) Commit(ctx context.Context) error {

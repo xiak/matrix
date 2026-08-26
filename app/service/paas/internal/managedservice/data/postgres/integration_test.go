@@ -180,12 +180,31 @@ func TestManagedServicePostgresJourneyAndTenantIsolation(t *testing.T) {
 		installations.Items[0].Phase != managedservicev1.InstallationReady {
 		t.Fatalf("tenant A installations=%#v err=%v", installations, err)
 	}
+	currentQuota, err := service.GetQuotaEntitlement(ctx, authorizationA, quota.ID)
+	if err != nil || currentQuota.ConsumedCount != 1 || currentQuota.ReservedCount != 0 {
+		t.Fatalf("tenant A quota resource=%#v err=%v", currentQuota, err)
+	}
+	currentInstallation, err := service.GetServiceInstallation(ctx, authorizationA, installation.ID)
+	if err != nil || currentInstallation.Phase != managedservicev1.InstallationReady {
+		t.Fatalf("tenant A installation resource=%#v err=%v", currentInstallation, err)
+	}
+	currentOperation, err := service.GetInstallationOperation(ctx, authorizationA, installation.ID)
+	if err != nil || currentOperation.ID != installation.Operation.ID ||
+		currentOperation.Phase != managedservicev1.InstallationReady {
+		t.Fatalf("tenant A operation resource=%#v err=%v", currentOperation, err)
+	}
 	authorizationB := integrationAuthorization("organization-b")
 	otherQuotas, quotaErr := service.ListQuotaEntitlements(ctx, authorizationB)
 	otherInstallations, installationErr := service.ListServiceInstallations(ctx, authorizationB)
 	if quotaErr != nil || installationErr != nil || len(otherQuotas.Items) != 0 || len(otherInstallations.Items) != 0 {
 		t.Fatalf("tenant B observed tenant A state: quotas=%#v installations=%#v errors=%v/%v",
 			otherQuotas, otherInstallations, quotaErr, installationErr)
+	}
+	if _, err := service.GetQuotaEntitlement(ctx, authorizationB, quota.ID); !errors.Is(err, usecase.ErrNotFound) {
+		t.Fatalf("tenant B quota resource error=%v", err)
+	}
+	if _, err := service.GetServiceInstallation(ctx, authorizationB, installation.ID); !errors.Is(err, usecase.ErrNotFound) {
+		t.Fatalf("tenant B installation resource error=%v", err)
 	}
 	installationCommand.Authorization = authorizationB
 	installationCommand.Request.ID = "postgres-cross-tenant"

@@ -43,6 +43,13 @@ func buildDocument() object {
 				"name": "Idempotency-Key", "in": "header", "required": true,
 				"schema": openapi31.Ref("ID"),
 			},
+			"OfferingID":         openapi31.PathIDParameter("offeringId"),
+			"RegionID":           openapi31.PathIDParameter("regionId"),
+			"QuotaEntitlementID": openapi31.PathIDParameter("quotaEntitlementId"),
+			"InstallationID": object{
+				"name": "installationId", "in": "path", "required": true,
+				"schema": openapi31.Ref("Name"),
+			},
 		},
 		Responses: object{
 			"ProblemResponse": object{
@@ -89,16 +96,31 @@ func paths() object {
 		"/v1/offerings": object{
 			"get": readOperation("listServiceOfferings", "List the closed service catalog.", "ServiceOfferingList"),
 		},
+		"/v1/offerings/{offeringId}": object{
+			"get": readResourceOperation("getServiceOffering", "Read one closed service offering.", "OfferingID", "ServiceOffering"),
+		},
 		"/v1/regions": object{
 			"get": readOperation("listRegions", "List eligible operator-owned regions.", "RegionList"),
+		},
+		"/v1/regions/{regionId}": object{
+			"get": readResourceOperation("getRegion", "Read one eligible operator-owned region.", "RegionID", "Region"),
 		},
 		"/v1/quota-entitlements": object{
 			"get":  readOperation("listQuotaEntitlements", "List organization quota entitlements.", "QuotaEntitlementList"),
 			"post": mutationOperation("activateQuota", "Activate a bounded product entitlement.", "ActivateQuotaRequest", "QuotaEntitlement", "201"),
 		},
+		"/v1/quota-entitlements/{quotaEntitlementId}": object{
+			"get": readResourceOperation("getQuotaEntitlement", "Read one organization quota entitlement.", "QuotaEntitlementID", "QuotaEntitlement"),
+		},
 		"/v1/service-installations": object{
 			"get":  readOperation("listServiceInstallations", "List organization service installations.", "ServiceInstallationList"),
 			"post": mutationOperation("createServiceInstallation", "Reserve quota and submit an installation.", "CreateInstallationRequest", "ServiceInstallation", "202"),
+		},
+		"/v1/service-installations/{installationId}": object{
+			"get": readResourceOperation("getServiceInstallation", "Read one organization service installation.", "InstallationID", "ServiceInstallation"),
+		},
+		"/v1/service-installations/{installationId}/operation": object{
+			"get": readResourceOperation("getInstallationOperation", "Read the current installation Operation.", "InstallationID", "InstallationOperation"),
 		},
 	}
 }
@@ -107,6 +129,16 @@ func readOperation(operationID, summary, responseSchema string) object {
 	responses := openapi31.ProblemResponses("400", "401", "403", "500", "503", "504")
 	responses["200"] = openapi31.JSONResponse("Current organization-scoped collection.", responseSchema)
 	return object{"operationId": operationID, "summary": summary, "responses": responses}
+}
+
+func readResourceOperation(operationID, summary, parameter, responseSchema string) object {
+	responses := openapi31.ProblemResponses("400", "401", "403", "404", "500", "503", "504")
+	responses["200"] = openapi31.JSONResponse("Current organization-scoped resource.", responseSchema)
+	return object{
+		"operationId": operationID, "summary": summary,
+		"parameters": []any{openapi31.ComponentRef("#/components/parameters/" + parameter)},
+		"responses":  responses,
+	}
 }
 
 func mutationOperation(operationID, summary, requestSchema, responseSchema, createdStatus string) object {

@@ -115,10 +115,12 @@ capability observation. Tenant users select only a region ID. They cannot see
 or set an endpoint, host key, credential reference, Docker socket, host path,
 provider payload, or target ID.
 
-The organization administrator UI may edit a bounded local-region display
-configuration and trigger a fresh capability inspection. Sensitive machine
-binding material remains installer-owned exact configuration; the browser
-never accepts a private key or plaintext machine credential.
+Phase 2 exposes a read-only local-machine configuration view to organization
+administrators. Region registration, its display name, and capability
+inspection remain installer-owned exact configuration. A browser mutation or
+inspection trigger is deferred until a real infrastructure authority owns that
+workflow; the browser never accepts a private key, plaintext machine
+credential, endpoint, socket, or host path.
 
 ### Service installation
 
@@ -210,11 +212,11 @@ The managed-service API provides only the bounded routes needed by the journey:
 - activate and list/get quota entitlements;
 - create and list/get service installations;
 - get the installation Operation;
-- inspect or update the non-secret local-region display configuration for an
-  organization administrator.
+- inspect the non-secret local-machine region configuration as an organization
+  administrator.
 
-Every mutation requires `Idempotency-Key`; mutable updates also require
-`If-Match`. Collection queries are bounded and deterministically ordered.
+Every admitted mutation requires `Idempotency-Key`. Phase 2 has no mutable
+region endpoint. Collection queries are bounded and deterministically ordered.
 Organization, user, and role come only from IAM. Public resource IDs cannot
 select another organization, and PostgreSQL row-level security is forced on
 every organization-owned table.

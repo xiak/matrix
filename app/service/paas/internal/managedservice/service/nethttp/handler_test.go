@@ -86,6 +86,47 @@ func TestCreateInstallationReturnsOnlyNormalizedPendingState(t *testing.T) {
 	}
 }
 
+func TestGetInstallationOperationAuthorizesTheExactInstallation(t *testing.T) {
+	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	authorizer := &stubAuthorizer{}
+	workflow := &stubWorkflow{operation: managedservicev1.InstallationOperation{
+		ID: "operation-1", Phase: managedservicev1.InstallationProvisioning, ObservedAt: now,
+	}}
+	handler := testHandler(t, authorizer, workflow)
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/managed-services/v1/service-installations/postgres-primary/operation",
+		nil,
+	)
+	request.Header.Set("Authorization", "Bearer session-secret")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if authorizer.request.Action != port.AuthorizeInstallationRead ||
+		authorizer.request.Resource.Kind != port.ResourceServiceInstallation ||
+		authorizer.request.Resource.ID != "postgres-primary" || workflow.operationReads != 1 {
+		t.Fatalf("authorization=%#v operationReads=%d", authorizer.request, workflow.operationReads)
+	}
+	var result managedservicev1.InstallationOperation
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || result.ID != "operation-1" {
+		t.Fatalf("response=%#v err=%v", result, err)
+	}
+}
+
+func TestResourceReadRejectsMalformedIdentityBeforeWorkflow(t *testing.T) {
+	workflow := &stubWorkflow{}
+	handler := testHandler(t, &stubAuthorizer{}, workflow)
+	request := httptest.NewRequest(http.MethodGet, "/managed-services/v1/offerings/%20", nil)
+	request.Header.Set("Authorization", "Bearer session-secret")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || workflow.offeringReads != 0 {
+		t.Fatalf("status=%d reads=%d body=%s", response.Code, workflow.offeringReads, response.Body.String())
+	}
+}
+
 func TestAuthorizationDenialFailsClosed(t *testing.T) {
 	handler := testHandler(t, &stubAuthorizer{err: port.ErrPermissionDenied}, &stubWorkflow{})
 	request := httptest.NewRequest(http.MethodGet, "/managed-services/v1/regions", nil)
@@ -129,26 +170,54 @@ func (authorizer *stubAuthorizer) Authorize(
 }
 
 type stubWorkflow struct {
-	offerings     managedservicev1.ServiceOfferingList
-	installation  managedservicev1.ServiceInstallation
-	activateCalls int
-	createCalls   int
+	offerings      managedservicev1.ServiceOfferingList
+	installation   managedservicev1.ServiceInstallation
+	operation      managedservicev1.InstallationOperation
+	offeringReads  int
+	operationReads int
+	activateCalls  int
+	createCalls    int
 }
 
 func (workflow *stubWorkflow) ListOfferings(context.Context, port.Authorization) (managedservicev1.ServiceOfferingList, error) {
 	return workflow.offerings, nil
 }
 
+func (workflow *stubWorkflow) GetOffering(context.Context, port.Authorization, string) (managedservicev1.ServiceOffering, error) {
+	workflow.offeringReads++
+	if len(workflow.offerings.Items) == 0 {
+		return managedservicev1.ServiceOffering{}, usecase.ErrNotFound
+	}
+	return workflow.offerings.Items[0], nil
+}
+
 func (workflow *stubWorkflow) ListRegions(context.Context, port.Authorization) (managedservicev1.RegionList, error) {
 	return managedservicev1.RegionList{Kind: "RegionList", Items: []managedservicev1.Region{}}, nil
+}
+
+func (workflow *stubWorkflow) GetRegion(context.Context, port.Authorization, string) (managedservicev1.Region, error) {
+	return managedservicev1.Region{}, usecase.ErrNotFound
 }
 
 func (workflow *stubWorkflow) ListQuotaEntitlements(context.Context, port.Authorization) (managedservicev1.QuotaEntitlementList, error) {
 	return managedservicev1.QuotaEntitlementList{Kind: "QuotaEntitlementList", Items: []managedservicev1.QuotaEntitlement{}}, nil
 }
 
+func (workflow *stubWorkflow) GetQuotaEntitlement(context.Context, port.Authorization, string) (managedservicev1.QuotaEntitlement, error) {
+	return managedservicev1.QuotaEntitlement{}, usecase.ErrNotFound
+}
+
 func (workflow *stubWorkflow) ListServiceInstallations(context.Context, port.Authorization) (managedservicev1.ServiceInstallationList, error) {
 	return managedservicev1.ServiceInstallationList{Kind: "ServiceInstallationList", Items: []managedservicev1.ServiceInstallation{}}, nil
+}
+
+func (workflow *stubWorkflow) GetServiceInstallation(context.Context, port.Authorization, string) (managedservicev1.ServiceInstallation, error) {
+	return workflow.installation, nil
+}
+
+func (workflow *stubWorkflow) GetInstallationOperation(context.Context, port.Authorization, string) (managedservicev1.InstallationOperation, error) {
+	workflow.operationReads++
+	return workflow.operation, nil
 }
 
 func (workflow *stubWorkflow) ActivateQuota(

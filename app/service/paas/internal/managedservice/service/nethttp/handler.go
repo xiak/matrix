@@ -19,9 +19,14 @@ import (
 
 type Workflow interface {
 	ListOfferings(context.Context, port.Authorization) (managedservicev1.ServiceOfferingList, error)
+	GetOffering(context.Context, port.Authorization, string) (managedservicev1.ServiceOffering, error)
 	ListRegions(context.Context, port.Authorization) (managedservicev1.RegionList, error)
+	GetRegion(context.Context, port.Authorization, string) (managedservicev1.Region, error)
 	ListQuotaEntitlements(context.Context, port.Authorization) (managedservicev1.QuotaEntitlementList, error)
+	GetQuotaEntitlement(context.Context, port.Authorization, string) (managedservicev1.QuotaEntitlement, error)
 	ListServiceInstallations(context.Context, port.Authorization) (managedservicev1.ServiceInstallationList, error)
+	GetServiceInstallation(context.Context, port.Authorization, string) (managedservicev1.ServiceInstallation, error)
+	GetInstallationOperation(context.Context, port.Authorization, string) (managedservicev1.InstallationOperation, error)
 	ActivateQuota(context.Context, usecase.ActivateQuotaCommand) (managedservicev1.QuotaEntitlement, bool, error)
 	CreateInstallation(context.Context, usecase.CreateInstallationCommand) (managedservicev1.ServiceInstallation, bool, error)
 }
@@ -46,11 +51,16 @@ func NewHandler(authorizer port.Authorizer, workflow Workflow, config Config) (h
 	value := &handler{authorizer: authorizer, workflow: workflow, config: config}
 	routes := http.NewServeMux()
 	routes.HandleFunc("GET /managed-services/v1/offerings", value.listOfferings)
+	routes.HandleFunc("GET /managed-services/v1/offerings/{offeringId}", value.getOffering)
 	routes.HandleFunc("GET /managed-services/v1/regions", value.listRegions)
+	routes.HandleFunc("GET /managed-services/v1/regions/{regionId}", value.getRegion)
 	routes.HandleFunc("GET /managed-services/v1/quota-entitlements", value.listQuotaEntitlements)
 	routes.HandleFunc("POST /managed-services/v1/quota-entitlements", value.activateQuota)
+	routes.HandleFunc("GET /managed-services/v1/quota-entitlements/{quotaEntitlementId}", value.getQuotaEntitlement)
 	routes.HandleFunc("GET /managed-services/v1/service-installations", value.listServiceInstallations)
 	routes.HandleFunc("POST /managed-services/v1/service-installations", value.createInstallation)
+	routes.HandleFunc("GET /managed-services/v1/service-installations/{installationId}", value.getServiceInstallation)
+	routes.HandleFunc("GET /managed-services/v1/service-installations/{installationId}/operation", value.getInstallationOperation)
 	return routes, nil
 }
 
@@ -65,6 +75,18 @@ func (value *handler) listOfferings(response http.ResponseWriter, request *http.
 	writeResult(response, requestID, result, err)
 }
 
+func (value *handler) getOffering(response http.ResponseWriter, request *http.Request) {
+	id := request.PathValue("offeringId")
+	authorization, requestID, ok := value.authorizeResource(
+		response, request, port.AuthorizeOfferingRead, port.ResourceServiceOffering, id,
+	)
+	if !ok || !acceptsNoInput(response, request, requestID) {
+		return
+	}
+	result, err := value.workflow.GetOffering(request.Context(), authorization, id)
+	writeResult(response, requestID, result, err)
+}
+
 func (value *handler) listRegions(response http.ResponseWriter, request *http.Request) {
 	authorization, requestID, ok := value.authorizeCollection(
 		response, request, port.AuthorizeRegionRead, port.ResourceRegion,
@@ -76,6 +98,18 @@ func (value *handler) listRegions(response http.ResponseWriter, request *http.Re
 	writeResult(response, requestID, result, err)
 }
 
+func (value *handler) getRegion(response http.ResponseWriter, request *http.Request) {
+	id := request.PathValue("regionId")
+	authorization, requestID, ok := value.authorizeResource(
+		response, request, port.AuthorizeRegionRead, port.ResourceRegion, id,
+	)
+	if !ok || !acceptsNoInput(response, request, requestID) {
+		return
+	}
+	result, err := value.workflow.GetRegion(request.Context(), authorization, id)
+	writeResult(response, requestID, result, err)
+}
+
 func (value *handler) listQuotaEntitlements(response http.ResponseWriter, request *http.Request) {
 	authorization, requestID, ok := value.authorizeCollection(
 		response, request, port.AuthorizeQuotaEntitlementRead, port.ResourceQuotaEntitlement,
@@ -84,6 +118,18 @@ func (value *handler) listQuotaEntitlements(response http.ResponseWriter, reques
 		return
 	}
 	result, err := value.workflow.ListQuotaEntitlements(request.Context(), authorization)
+	writeResult(response, requestID, result, err)
+}
+
+func (value *handler) getQuotaEntitlement(response http.ResponseWriter, request *http.Request) {
+	id := request.PathValue("quotaEntitlementId")
+	authorization, requestID, ok := value.authorizeResource(
+		response, request, port.AuthorizeQuotaEntitlementRead, port.ResourceQuotaEntitlement, id,
+	)
+	if !ok || !acceptsNoInput(response, request, requestID) {
+		return
+	}
+	result, err := value.workflow.GetQuotaEntitlement(request.Context(), authorization, id)
 	writeResult(response, requestID, result, err)
 }
 
@@ -125,6 +171,30 @@ func (value *handler) listServiceInstallations(response http.ResponseWriter, req
 	writeResult(response, requestID, result, err)
 }
 
+func (value *handler) getServiceInstallation(response http.ResponseWriter, request *http.Request) {
+	id := request.PathValue("installationId")
+	authorization, requestID, ok := value.authorizeResource(
+		response, request, port.AuthorizeInstallationRead, port.ResourceServiceInstallation, id,
+	)
+	if !ok || !acceptsNoInput(response, request, requestID) {
+		return
+	}
+	result, err := value.workflow.GetServiceInstallation(request.Context(), authorization, id)
+	writeResult(response, requestID, result, err)
+}
+
+func (value *handler) getInstallationOperation(response http.ResponseWriter, request *http.Request) {
+	id := request.PathValue("installationId")
+	authorization, requestID, ok := value.authorizeResource(
+		response, request, port.AuthorizeInstallationRead, port.ResourceServiceInstallation, id,
+	)
+	if !ok || !acceptsNoInput(response, request, requestID) {
+		return
+	}
+	result, err := value.workflow.GetInstallationOperation(request.Context(), authorization, id)
+	writeResult(response, requestID, result, err)
+}
+
 func (value *handler) createInstallation(response http.ResponseWriter, request *http.Request) {
 	authorization, requestID, ok := value.authorizeCollection(
 		response, request, port.AuthorizeInstallationCreate, port.ResourceServiceInstallation,
@@ -158,6 +228,16 @@ func (value *handler) authorizeCollection(
 	action string,
 	resourceKind string,
 ) (port.Authorization, string, bool) {
+	return value.authorizeResource(response, request, action, resourceKind, "collection")
+}
+
+func (value *handler) authorizeResource(
+	response http.ResponseWriter,
+	request *http.Request,
+	action string,
+	resourceKind string,
+	resourceID string,
+) (port.Authorization, string, bool) {
 	requestID, err := value.config.NewRequestID()
 	if err != nil || managedservicev1.ValidateID("requestId", requestID) != nil {
 		writeProblem(response, "request-unavailable", http.StatusInternalServerError,
@@ -165,9 +245,14 @@ func (value *handler) authorizeCollection(
 		return port.Authorization{}, "", false
 	}
 	response.Header().Set("X-Request-ID", requestID)
+	if managedservicev1.ValidateID("resourceId", resourceID) != nil {
+		writeProblem(response, requestID, http.StatusBadRequest,
+			managedservicev1.ErrorInvalidArgument, "Invalid argument", "resource identity is invalid", false)
+		return port.Authorization{}, requestID, false
+	}
 	authorizationRequest := port.AuthorizationRequest{
 		Credential: request.Header.Get("Authorization"), Action: action,
-		Resource:  port.ResourceReference{Kind: resourceKind, ID: "collection"},
+		Resource:  port.ResourceReference{Kind: resourceKind, ID: resourceID},
 		RequestID: requestID,
 	}
 	if port.ValidateAuthorizationRequest(authorizationRequest) != nil {
@@ -216,7 +301,7 @@ func acceptsNoInput(
 ) bool {
 	if request.URL.RawQuery != "" || request.ContentLength > 0 {
 		writeProblem(response, requestID, http.StatusBadRequest,
-			managedservicev1.ErrorInvalidArgument, "Invalid argument", "collection read accepts no query or body", false)
+			managedservicev1.ErrorInvalidArgument, "Invalid argument", "resource read accepts no query or body", false)
 		return false
 	}
 	return true

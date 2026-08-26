@@ -111,6 +111,58 @@ func TestInstallationRejectsUnavailableRegionBeforePersistence(t *testing.T) {
 	}
 }
 
+func TestSingleResourceReadsReturnCurrentStateAndNotFound(t *testing.T) {
+	repository := newMemoryRepository()
+	service := newTestService(t, repository)
+	authorization := testAuthorization()
+	offering, err := service.GetOffering(context.Background(), authorization, domain.PostgreSQLOfferingID)
+	if err != nil || offering.ID != domain.PostgreSQLOfferingID {
+		t.Fatalf("get offering=%#v err=%v", offering, err)
+	}
+	region, err := service.GetRegion(context.Background(), authorization, "local-primary")
+	if err != nil || region.Profile != managedservicev1.RegionLocalMachine {
+		t.Fatalf("get region=%#v err=%v", region, err)
+	}
+	quota, _, err := service.ActivateQuota(context.Background(), ActivateQuotaCommand{
+		Authorization: authorization, IdempotencyKey: "quota-single-read",
+		Request: managedservicev1.ActivateQuotaRequest{
+			OfferingID: domain.PostgreSQLOfferingID, QuotaShapeID: "pg-small", InstanceCount: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("activate quota: %v", err)
+	}
+	readQuota, err := service.GetQuotaEntitlement(context.Background(), authorization, quota.ID)
+	if err != nil || readQuota != quota {
+		t.Fatalf("get quota=%#v want=%#v err=%v", readQuota, quota, err)
+	}
+	installation, _, err := service.CreateInstallation(context.Background(), CreateInstallationCommand{
+		Authorization: authorization, IdempotencyKey: "installation-single-read",
+		Request: managedservicev1.CreateInstallationRequest{
+			ID: "postgres-single", Name: "Postgres single",
+			OfferingID: domain.PostgreSQLOfferingID, QuotaEntitlementID: quota.ID,
+			RegionID: "local-primary",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create installation: %v", err)
+	}
+	readInstallation, err := service.GetServiceInstallation(context.Background(), authorization, installation.ID)
+	if err != nil || readInstallation.ID != installation.ID {
+		t.Fatalf("get installation=%#v err=%v", readInstallation, err)
+	}
+	operation, err := service.GetInstallationOperation(context.Background(), authorization, installation.ID)
+	if err != nil || operation.ID != installation.Operation.ID {
+		t.Fatalf("get operation=%#v err=%v", operation, err)
+	}
+	if _, err := service.GetQuotaEntitlement(context.Background(), authorization, "quota-absent"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("absent quota error=%v", err)
+	}
+	if _, err := service.GetServiceInstallation(context.Background(), authorization, "postgres-absent"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("absent installation error=%v", err)
+	}
+}
+
 func newTestService(t *testing.T, repository Repository) *Service {
 	t.Helper()
 	var operationSequence atomic.Uint32
@@ -203,12 +255,34 @@ func (transaction *memoryTransaction) ListQuotaEntitlements(context.Context) ([]
 	return result, nil
 }
 
+func (transaction *memoryTransaction) GetQuotaEntitlement(
+	_ context.Context,
+	id string,
+) (managedservicev1.QuotaEntitlement, error) {
+	item, found := transaction.quotas[id]
+	if !found {
+		return managedservicev1.QuotaEntitlement{}, ErrNotFound
+	}
+	return item, nil
+}
+
 func (transaction *memoryTransaction) ListServiceInstallations(context.Context) ([]managedservicev1.ServiceInstallation, error) {
 	result := make([]managedservicev1.ServiceInstallation, 0, len(transaction.installations))
 	for _, item := range transaction.installations {
 		result = append(result, item)
 	}
 	return result, nil
+}
+
+func (transaction *memoryTransaction) GetServiceInstallation(
+	_ context.Context,
+	id string,
+) (managedservicev1.ServiceInstallation, error) {
+	item, found := transaction.installations[id]
+	if !found {
+		return managedservicev1.ServiceInstallation{}, ErrNotFound
+	}
+	return item, nil
 }
 
 func (transaction *memoryTransaction) FindQuotaReplay(

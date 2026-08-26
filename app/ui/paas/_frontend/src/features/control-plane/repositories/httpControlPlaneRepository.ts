@@ -164,6 +164,18 @@ export const httpControlPlaneRepository: ControlPlaneRepository = {
     };
   },
 
+  async getInstallation(credential, installationId) {
+    const value = await requestJSON<unknown>(
+      `/api/managed-services/v1/service-installations/${encodeURIComponent(installationId)}`,
+      { headers: authorization(credential) }
+    );
+    const installation = parseInstallation(value);
+    if (installation.id !== installationId) {
+      throw new Error("INVALID_INSTALLATION_ID_RESPONSE");
+    }
+    return installation;
+  },
+
   async activateQuota(credential, command: ActivateQuotaCommand) {
     const value = await requestJSON<unknown>("/api/managed-services/v1/quota-entitlements", {
       method: "POST",
