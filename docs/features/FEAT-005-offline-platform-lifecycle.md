@@ -113,10 +113,11 @@ Install performs:
 5. database initialization and forward migration through the owning Go
    migration boundary;
 6. generation of a closed Compose document with immutable images,
-   `pull_policy: never`, no build, bounded resources, internal networks,
-   read-only exact secret files, exact installation-root mounts, the fixed
-   Docker Engine socket needed by the worker, and one validated northbound
-   listener;
+   `pull_policy: never`, no build, bounded resources, internal control/web
+   networks, one fixed APISIX-only edge network as the sole non-internal
+   network, read-only exact secret files, exact installation-root mounts, the
+   fixed Docker Engine socket needed by the worker, and one validated
+   northbound listener;
 7. detached non-interactive start, component health verification, IAM-backed
    authorization, Audit ingestion, and an Application PaaS smoke Deployment;
 8. atomic commit of the current release only after every verification passes.

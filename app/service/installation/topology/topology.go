@@ -78,6 +78,7 @@ func contractDescription() contract {
 		Services: compileServices(manifest, images, options),
 		Networks: map[string]networkConfig{
 			"control": {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-control")},
+			"edge":    {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-edge")},
 			"web":     {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-web")},
 		},
 	}
@@ -111,6 +112,7 @@ func Compile(manifest release.Manifest, options Options) (Result, error) {
 		Services: compileServices(manifest, images, options),
 		Networks: map[string]networkConfig{
 			"control": {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-control")},
+			"edge":    {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-edge")},
 			"web":     {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-web")},
 		},
 	}
@@ -403,7 +405,7 @@ func compileServices(
 	}
 
 	apisix := service(
-		"apisix", "apisix", images["apisix"], []string{"control", "web"}, nil,
+		"apisix", "apisix", images["apisix"], []string{"control", "edge", "web"}, nil,
 		"1.0", "512M", "http://127.0.0.1:9080/ready",
 	)
 	apisix.User = "0:0"

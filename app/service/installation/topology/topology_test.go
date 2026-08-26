@@ -44,6 +44,29 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	if !slices.Equal(actualServices, expectedServices) {
 		t.Fatalf("compiled services = %v, want %v", actualServices, expectedServices)
 	}
+	networks, ok := document["networks"].(map[string]any)
+	if !ok {
+		t.Fatal("compiled topology has no networks object")
+	}
+	expectedNetworks := map[string]bool{"control": true, "edge": false, "web": true}
+	actualNetworks := make([]string, 0, len(networks))
+	for name, raw := range networks {
+		network, valid := raw.(map[string]any)
+		internal, hasInternal := network["internal"].(bool)
+		labels, hasLabels := network["labels"].(map[string]any)
+		if !valid || !hasInternal || internal != expectedNetworks[name] || !hasLabels ||
+			labels["com.xiak.matrix.managed"] != "true" ||
+			labels["com.xiak.matrix.installation"] != options.InstallationID ||
+			labels["com.xiak.matrix.release"] != manifest.Release.ID ||
+			labels["com.xiak.matrix.role"] != "network-"+name {
+			t.Fatalf("network %q violates the fixed ingress/isolation boundary: %#v", name, raw)
+		}
+		actualNetworks = append(actualNetworks, name)
+	}
+	slices.Sort(actualNetworks)
+	if !slices.Equal(actualNetworks, []string{"control", "edge", "web"}) {
+		t.Fatalf("compiled networks = %v", actualNetworks)
+	}
 
 	portCount := 0
 	foundExecutorRoot := false
@@ -121,6 +144,26 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			}
 		} else if _, found := service["user"]; found {
 			t.Fatalf("service %q unexpectedly overrides its image user", name)
+		}
+		serviceNetworks, ok := service["networks"].([]any)
+		if !ok {
+			t.Fatalf("service %q has no fixed network inventory", name)
+		}
+		actualServiceNetworks := make([]string, 0, len(serviceNetworks))
+		for _, network := range serviceNetworks {
+			value, valid := network.(string)
+			if !valid {
+				t.Fatalf("service %q network is invalid: %#v", name, network)
+			}
+			actualServiceNetworks = append(actualServiceNetworks, value)
+		}
+		slices.Sort(actualServiceNetworks)
+		if name == "apisix" {
+			if !slices.Equal(actualServiceNetworks, []string{"control", "edge", "web"}) {
+				t.Fatalf("APISIX network boundary=%v", actualServiceNetworks)
+			}
+		} else if slices.Contains(actualServiceNetworks, "edge") {
+			t.Fatalf("service %q can join the northbound edge network", name)
 		}
 		labels, ok := service["labels"].(map[string]any)
 		if !ok || labels["com.xiak.matrix.managed"] != "true" ||

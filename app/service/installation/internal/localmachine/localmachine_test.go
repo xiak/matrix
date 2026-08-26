@@ -362,6 +362,7 @@ func TestStartInstallationRejectsObservedRuntimeDriftWithoutRecreating(t *testin
 	}{
 		{"resource limit", func(value *platformStartRuntime) { value.resourceDriftService = "paas-worker" }},
 		{"runtime user", func(value *platformStartRuntime) { value.userDriftService = "apisix" }},
+		{"inactive published port", func(value *platformStartRuntime) { value.portDriftService = "apisix" }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -767,6 +768,7 @@ type platformStartRuntime struct {
 	started                   bool
 	resourceDriftService      string
 	userDriftService          string
+	portDriftService          string
 	configHashDriftService    string
 	failObservationAfterStart bool
 	composeCalls              int
@@ -1093,6 +1095,10 @@ func (runtimeBoundary *platformStartRuntime) inspectContainer(
 	if err != nil {
 		return nil, true, err
 	}
+	publishedPorts := ports
+	if runtimeBoundary.portDriftService == serviceName {
+		publishedPorts = map[string][]map[string]string{}
+	}
 	initEnabled := expected.Init
 	nanoCPUs, memory, err := expectedResourceLimits(expected.Deploy)
 	if err != nil {
@@ -1125,7 +1131,7 @@ func (runtimeBoundary *platformStartRuntime) inspectContainer(
 			"RestartPolicy": map[string]any{"Name": expected.Restart},
 		},
 		"Mounts":          mounts,
-		"NetworkSettings": map[string]any{"Networks": networks},
+		"NetworkSettings": map[string]any{"Networks": networks, "Ports": publishedPorts},
 	})
 	return content, true, err
 }

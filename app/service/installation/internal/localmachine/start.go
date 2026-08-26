@@ -73,6 +73,7 @@ type platformContainerInspection struct {
 		Networks map[string]struct {
 			NetworkID string `json:"NetworkID"`
 		} `json:"Networks"`
+		Ports map[string][]platformPortBinding `json:"Ports"`
 	} `json:"NetworkSettings"`
 }
 
@@ -540,8 +541,10 @@ func validatePlatformContainer(
 	expectedPorts, err := expectedPortInventory(expected.Ports)
 	if err != nil || !slices.Equal(
 		platformPortInventory(inspection.HostConfig.PortBindings), expectedPorts,
+	) || !slices.Equal(
+		platformPortInventory(inspection.NetworkSettings.Ports), expectedPorts,
 	) {
-		return errors.New("platform container port binding drifted")
+		return errors.New("platform container port binding is absent or drifted")
 	}
 	return nil
 }
