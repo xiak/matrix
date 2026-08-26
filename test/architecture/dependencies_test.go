@@ -387,6 +387,31 @@ func TestInstallationKeepsGoOnlyClosedLifecycleBoundaries(t *testing.T) {
 	}
 }
 
+func TestOfflineReleaseAssemblyUsesGoOrchestration(t *testing.T) {
+	root := repositoryRoot(t)
+	deployRoot := filepath.Join(root, "deploy")
+	err := filepath.WalkDir(deployRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		switch strings.ToLower(filepath.Ext(path)) {
+		case ".py", ".sh", ".ps1", ".bat", ".cmd":
+			t.Errorf("%s: offline release orchestration must be Go", filepath.ToSlash(relative))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("inspect offline release assembly: %v", err)
+	}
+}
+
 func assertApphostingDDDDependency(t *testing.T, source, imported string) {
 	t.Helper()
 	const contextPrefix = modulePath + "app/service/paas/internal/apphosting/"

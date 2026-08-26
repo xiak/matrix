@@ -193,6 +193,8 @@ func validateImages(images []Image, files []File) error {
 	for _, file := range files {
 		fileByPath[file.Path] = file
 	}
+	seenImageIDs := make(map[string]struct{}, len(images))
+	seenSourceDigests := make(map[string]struct{}, len(images))
 	for index, image := range images {
 		requirement := required[index]
 		if image.Component != requirement.Component || image.Purpose != requirement.Purpose ||
@@ -207,6 +209,14 @@ func validateImages(images []Image, files []File) error {
 		if !found || file.MediaType != mediaDockerArchive {
 			return errors.New("release image archive is absent from payload inventory")
 		}
+		if _, duplicate := seenImageIDs[image.ImageID]; duplicate {
+			return errors.New("release image identities are duplicated")
+		}
+		if _, duplicate := seenSourceDigests[image.SourceDigest]; duplicate {
+			return errors.New("release image source identities are duplicated")
+		}
+		seenImageIDs[image.ImageID] = struct{}{}
+		seenSourceDigests[image.SourceDigest] = struct{}{}
 	}
 	return nil
 }

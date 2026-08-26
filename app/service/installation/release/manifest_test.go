@@ -123,6 +123,12 @@ func TestManifestRejectsUnsafeOrIncompleteInventory(t *testing.T) {
 		"source identity": func(value *Manifest) {
 			value.Images[0].SourceDigest = "apisix:latest"
 		},
+		"duplicate image identity": func(value *Manifest) {
+			value.Images[1].ImageID = value.Images[0].ImageID
+		},
+		"duplicate source identity": func(value *Manifest) {
+			value.Images[1].SourceDigest = value.Images[0].SourceDigest
+		},
 		"architecture": func(value *Manifest) {
 			value.Host.Architecture = "arm64"
 		},

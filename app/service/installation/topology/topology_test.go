@@ -52,6 +52,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 		"iam-audit-dispatcher":  "/matrix/bin/matrix-iam-audit-dispatcher",
 		"paas-api":              "/matrix/bin/matrix-paas",
 		"paas-audit-dispatcher": "/matrix/bin/matrix-paas-audit-dispatcher",
+		"paas-ui":               "/matrix/bin/matrix-paas-ui",
 		"paas-worker":           "/matrix/bin/matrix-paas-worker",
 	}
 	expectedEnvironmentKeys := map[string][]string{
@@ -80,8 +81,9 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			"MATRIX_PAAS_AUDIT_ENDPOINT", "MATRIX_PAAS_AUDIT_LISTEN_ADDRESS",
 			"MATRIX_PAAS_AUDIT_WORKER_ID",
 		},
+		"paas-ui": {"MATRIX_PAAS_UI_LISTEN_ADDRESS"},
 		"paas-worker": {
-			"DOCKER_HOST",
+			"DOCKER_CONFIG", "DOCKER_HOST",
 			"MATRIX_PAAS_WORKER_ARTIFACT_CATALOG_FILE", "MATRIX_PAAS_WORKER_BINDING_REF",
 			"MATRIX_PAAS_WORKER_BINDING_ROOT", "MATRIX_PAAS_WORKER_DATABASE_DSN_FILE",
 			"MATRIX_PAAS_WORKER_EXECUTION_TENANT_ID", "MATRIX_PAAS_WORKER_ID",
