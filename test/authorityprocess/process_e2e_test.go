@@ -219,7 +219,6 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		paasServiceCredential,
 		auditServiceCredential,
 		"mx1.ProcessWrongIAMCredential000000000000000001",
-		"mx1.ProcessAPISIXCredential0000000000000000001",
 		verifierCredential,
 	}
 	start := func(binary string, environment []string) *childProcess {
@@ -1376,11 +1375,12 @@ func verifyPaaSInstallation(
 	request paasv1.VerifyInstallationRequest,
 ) paasv1.InstallationVerification {
 	t.Helper()
-	response := performJSON(
+	response := performJSONWithIdempotency(
 		t,
 		http.MethodPost,
 		endpoint+"/v1/installation:verify",
 		bearer,
+		"verify-process-installation",
 		request,
 	)
 	if response.Status != http.StatusOK {
