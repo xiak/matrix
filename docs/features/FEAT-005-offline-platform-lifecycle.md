@@ -365,6 +365,13 @@ not archive layout, Compose text, SQL text, command call order, or line counts.
   direct installation-owned JSON file containing normalized component/image
   state and admitted release metadata; its durable command binds a digest of
   the output path without storing that absolute path.
+- Commit `cb7da45` adds authenticated immediate-successor upgrade with a
+  verified pre-upgrade backup, target staging/loading/configuration/migration,
+  exact source-or-target Compose ownership classification, atomic replacement
+  of release-derived configuration, and automatic restoration of the
+  authenticated source release after a definitive candidate failure. Commit
+  `0c305a0` preserves an existing verification Deployment's name without
+  submitting it as the forbidden rename input of an update command.
 - The accepted implementation through `3323741` passed generation drift, full
   unit tests, vet, race,
   ten-run repetition, architecture boundaries, placement fuzz, four-target
@@ -405,8 +412,22 @@ not archive layout, Compose text, SQL text, command call order, or line counts.
   verified the three schemas, created and revalidated a restrictive protected
   backup, emitted `0600` support evidence, passed a value-level scan against
   every installed Secret and the installation path, and left status/verify
-  `READY`. Upgrade, automatic and explicit rollback, backup recovery, and the
-  complete clean lifecycle E2E remain unaccepted.
+  `READY`. Exact commit `0c305a0` passed generation drift, full unit/vet/race,
+  release-verification ten-run repetition, architecture, four-target build,
+  and repository-diff gates. Signed Release B
+  `matrix-v0.2.0-0c305a03e725` upgraded the existing external-network-disabled
+  Release A namespace through the authenticated immediate-predecessor and
+  protected-backup path. All nine B services were healthy, the verification
+  Deployment advanced from generation 1 to generation 2 and stayed `READY`,
+  DEPLOY and UPDATE Audit facts were delivered, immutable revision history was
+  preserved, repeated status/verify succeeded, and the PostgreSQL data
+  directory identity was unchanged. Before the correction, signed candidate
+  `matrix-v0.2.0-cb7da457d2ad` failed in VERIFYING and automatically restored
+  the A pointer, all nine A services, the existing workload identity, and
+  `READY` status/verify without changing the PostgreSQL data directory identity.
+  Authenticated upgrade and automatic rollback are accepted; explicit
+  rollback, backup recovery, and the complete clean lifecycle E2E remain
+  unaccepted.
 
 ## Deferred
 
