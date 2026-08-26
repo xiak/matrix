@@ -32,6 +32,7 @@ type platformExpectedService struct {
 	Volumes     []platformMount        `json:"volumes"`
 	Tmpfs       []string               `json:"tmpfs"`
 	SecurityOpt []string               `json:"security_opt"`
+	CapAdd      []string               `json:"cap_add"`
 	CapDrop     []string               `json:"cap_drop"`
 	Deploy      platformExpectedDeploy `json:"deploy"`
 	Labels      map[string]string      `json:"labels"`
@@ -92,6 +93,7 @@ type platformHostConfig struct {
 	Init           *bool                            `json:"Init"`
 	Memory         int64                            `json:"Memory"`
 	NanoCPUs       int64                            `json:"NanoCpus"`
+	CapAdd         []string                         `json:"CapAdd"`
 	CapDrop        []string                         `json:"CapDrop"`
 	SecurityOpt    []string                         `json:"SecurityOpt"`
 	Tmpfs          map[string]string                `json:"Tmpfs"`
@@ -504,6 +506,7 @@ func validatePlatformContainer(
 		inspection.HostConfig.NanoCPUs != expectedNanoCPUs ||
 		inspection.HostConfig.Memory != expectedMemory ||
 		!equalStringMaps(inspection.HostConfig.Tmpfs, expectedTmpfs) ||
+		!equalStringInventory(inspection.HostConfig.CapAdd, expected.CapAdd, true) ||
 		!equalStringInventory(inspection.HostConfig.CapDrop, expected.CapDrop, true) ||
 		!equalStringInventory(inspection.HostConfig.SecurityOpt, expected.SecurityOpt, false) {
 		return errors.New("platform container isolation or image identity drifted")

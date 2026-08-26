@@ -157,6 +157,7 @@ type serviceConfig struct {
 	Volumes     []mount               `json:"volumes,omitempty"`
 	Tmpfs       []string              `json:"tmpfs,omitempty"`
 	SecurityOpt []string              `json:"security_opt"`
+	CapAdd      []string              `json:"cap_add,omitempty"`
 	CapDrop     []string              `json:"cap_drop"`
 	Healthcheck healthcheck           `json:"healthcheck"`
 	Deploy      deploy                `json:"deploy"`
@@ -255,8 +256,11 @@ func compileServices(
 		"POSTGRES_PASSWORD_FILE": "/run/secrets/postgres-password",
 	}
 	postgres.Volumes = []mount{
-		bind(path.Join(root, layout.PostgresData), "/var/lib/postgresql/data", false),
+		bind(path.Join(root, layout.PostgresData), "/var/lib/postgresql", false),
 		bind(postgresPassword, "/run/secrets/postgres-password", true),
+	}
+	postgres.CapAdd = []string{
+		"CAP_CHOWN", "CAP_DAC_OVERRIDE", "CAP_FOWNER", "CAP_SETGID", "CAP_SETUID",
 	}
 	postgres.Tmpfs = []string{"/tmp:rw,noexec,nosuid,size=64m", "/var/run/postgresql:rw,nosuid,size=16m"}
 	postgres.Healthcheck.Test = []string{"CMD", "pg_isready", "-U", "matrix", "-d", "matrix"}

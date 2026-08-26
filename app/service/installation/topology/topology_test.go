@@ -46,6 +46,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	portCount := 0
 	foundExecutorRoot := false
 	foundDockerSocket := false
+	foundPostgresData := false
 	expectedEntrypoints := map[string]string{
 		"audit":                 "/matrix/bin/matrix-audit",
 		"iam":                   "/matrix/bin/matrix-iam",
@@ -126,12 +127,26 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			}
 		}
 		if name != "postgres" {
+			if _, found := service["cap_add"]; found {
+				t.Fatalf("service %q has unnecessary added capabilities", name)
+			}
 			health, ok := service["healthcheck"].(map[string]any)
 			test, testOK := health["test"].([]any)
 			if !ok || !testOK || len(test) != 3 || test[0] != "CMD" ||
 				test[1] != "/matrix/bin/matrix-health" ||
 				!strings.HasPrefix(test[2].(string), "http://127.0.0.1:") {
 				t.Fatalf("service %q health contract=%#v", name, service["healthcheck"])
+			}
+		} else {
+			actual := make([]string, 0)
+			for _, value := range service["cap_add"].([]any) {
+				actual = append(actual, value.(string))
+			}
+			expected := []string{
+				"CAP_CHOWN", "CAP_DAC_OVERRIDE", "CAP_FOWNER", "CAP_SETGID", "CAP_SETUID",
+			}
+			if !slices.Equal(actual, expected) {
+				t.Fatalf("PostgreSQL bootstrap capabilities=%v want=%v", actual, expected)
 			}
 		}
 		if ports, found := service["ports"].([]any); found {
@@ -158,11 +173,17 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 				if name == "paas-worker" && source == "/var/run/docker.sock" {
 					foundDockerSocket = target == source
 				}
+				if name == "postgres" && source == options.Root+"/data/postgres" {
+					foundPostgresData = target == "/var/lib/postgresql" && mount["read_only"] != true
+				}
 			}
 		}
 	}
-	if portCount != 1 || !foundExecutorRoot || !foundDockerSocket {
-		t.Fatalf("platform capability closure: ports=%d executor=%t socket=%t", portCount, foundExecutorRoot, foundDockerSocket)
+	if portCount != 1 || !foundExecutorRoot || !foundDockerSocket || !foundPostgresData {
+		t.Fatalf(
+			"platform capability closure: ports=%d executor=%t socket=%t postgres-data=%t",
+			portCount, foundExecutorRoot, foundDockerSocket, foundPostgresData,
+		)
 	}
 	encoded := string(result.ComposeJSON)
 	for _, forbidden := range []string{"latest", "secret-value", "dockerfile", "registry"} {
