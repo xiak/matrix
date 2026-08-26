@@ -741,7 +741,7 @@ func (value *gate) failedUpgrade(
 			"--filter", "label=com.xiak.matrix.role=apisix",
 		)
 		if listErr == nil && len(ids) == 1 {
-			if _, stopErr := docker(upgradeContext, "container", "stop", "--time", "0", ids[0]); stopErr == nil {
+			if _, removeErr := docker(upgradeContext, "container", "remove", "--force", ids[0]); removeErr == nil {
 				injected = true
 				break
 			}
