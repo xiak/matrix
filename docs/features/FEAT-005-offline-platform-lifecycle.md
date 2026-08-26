@@ -1,6 +1,6 @@
 # FEAT-005: Offline platform distribution and lifecycle
 
-- Status: Gate A Accepted; Gate B implementation in progress
+- Status: Accepted
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
 - Release contract version: `v1`
@@ -236,241 +236,53 @@ not archive layout, Compose text, SQL text, command call order, or line counts.
 
 ## Implementation evidence
 
-- Gate A was accepted on 2026-08-25. The release contract strictly decodes and
-  canonically encodes the fixed manifest and trust root, pins Ed25519 signer
-  identity, rejects unsafe or colliding paths and incomplete image inventory,
-  and streams exact regular-file payload lengths and SHA-256 digests without
-  following links or reparse points. A network-disabled Linux container run
-  additionally exercised the Unix no-follow, symlink, and executable-mode
-  cases.
-- The compact installation journal admits only the eight lifecycle actions and
-  their explicit phase sequences. It publishes a release pointer only after
-  verification and commit, returns exact active/completed replay, rejects a
-  changed input under the same command identity, automatically records failed
-  install/upgrade rollback, and preserves an explicit manual-intervention
-  result for failed rollback or recovery.
-- Cobra `v1.10.2` and pflag `v1.0.10` implement the single alias-free
-  `mx platform` surface with injected streams and context. Unit tests cover all
-  commands, versioned JSON, fixed exit classes, usage, interruption, and
-  suppression of provider-native errors.
-- The topology compiler hashes its complete canonical fixed template and
-  substitutes only signed image identities, installation identity/root, and
-  one validated listener. Its input and output cannot add a pull, build,
-  bundle-supplied or caller-selected command, privileged or host-network mode,
-  plaintext secret, outside-root mount, unrelated network/service, or second
-  host port.
-- Gate B commit `11ec1f4` replaces the draft process topology with the actual
-  IAM, Audit, IAM Audit dispatcher, PaaS API, PaaS Audit dispatcher, and PaaS
-  Operation worker executables and their exact file-based credentials and
-  least-privilege database logins. The real Operation worker composes the
-  accepted database lease/fencing, placement, reconciliation, and Compose
-  executor boundaries; it admits only catalogued artifact digests whose exact
-  local Docker image IDs are reverified, and reads workload Secret versions
-  from a non-mutating read-only source tree.
-- Workers and dispatchers expose one normalized internal readiness contract.
-  Their health proves the relevant database role, exact local images, Docker
-  Engine/Compose effect boundary, Audit target, and absence of dead letters
-  without returning provider errors. The closed topology now includes the
-  formerly missing IAM Audit dispatcher, contains no pseudo process command,
-  gives only the PaaS worker the Docker socket, and uses the internal Go
-  `matrix-health` probe for HTTP components.
-- Commit `8d6bed4` adds the production install workflow behind the CLI backend
-  boundary without exposing the still-incomplete provider through `mx`. It
-  authenticates the trust root, release, fixed topology, and exact manifest
-  digest before creating an installation; pins signer identity and release
-  content into the sealed journal; persists every phase intent before its
-  effect; resumes unknown outcomes under the same durable command; and records
-  rollback intent before cleanup after a definitive failure.
-- The same commit implements the first local-machine effects: Linux/amd64
-  Docker/Compose/free-space/listener and project-ownership preflight,
-  resumable authenticated release staging, exact image archive streaming to
-  `docker image load` through the verified file descriptor, post-load image
-  identity checks, restrictive generated IAM/database credentials, and the
-  fixed Compose/APISIX/catalog files. The catalog is now a versioned
-  cross-process contract and contains only the signed verification WORKLOAD
-  image; IAM, Audit, PostgreSQL, gateway, UI, and PaaS platform images cannot
-  be selected as tenant artifacts.
-- Commit `97d1c2d` runs the IAM, Audit, and PaaS owning Go migration binaries
-  through installation-owned least-privilege files. It records migration
-  intent before effects, observes every schema with its owning verifier before
-  retry, and rejects incompatible or partially migrated state. Clean
-  PostgreSQL 18 applies each migration twice and passes all three verifiers.
-- Commit `3323741` makes the fresh installation schedulable without a static
-  timestamp seed. The PaaS worker observes the Docker Engine host, atomically
-  creates the fixed local ExecutionPool, ExecutionTarget, tenant default
-  PlacementPolicy, and allocation through a worker-only PostgreSQL function,
-  then refreshes the observation every minute. Readiness fails closed on a
-  stale, future, degraded, identity-changed, or structurally drifted profile;
-  a degraded target advertises no Compose isolation.
-- Commit `0a0ba1f` adds observation-before-effect and convergence for the fixed
-  platform Compose project. It reauthenticates staged release content, pins
-  the local Docker socket and Compose inputs, verifies exact images and
-  installation ownership, rejects isolation/resource/mount/network/port
-  drift, converges recoverable configuration drift without pull or build, and
-  preserves unknown outcomes when a started effect cannot be observed.
-- Commit `40cc917` adds failed-install cleanup without a broad Compose teardown.
-  It first proves exact project, installation, release, role, image, migration
-  name, and provider identities; removes only those containers and networks;
-  reobserves after each destructive boundary; and leaves images, staged
-  release content, data, credentials, and the sealed journal intact. A missing
-  Docker dependency or uncertain removal remains replayable instead of being
-  prematurely committed as manual intervention.
-- The installation verification slice reads only the protected verifier
-  credential, calls the fixed PaaS probe through loopback APISIX, waits for its
-  exact release-bound Deployment/Operation, then asks Audit to verify the exact
-  delivered fact and chain endpoint. Calls are bounded, reject redirects,
-  compressed or ambiguous JSON, mismatched identities, caller-selected
-  controls, and provider response leakage. The concrete local-machine Effects
-  now compose the existing idempotent phase boundaries, and the real `mx`
-  process owns signal handling, normalized streams, and stable exit codes.
-- Commit `6825876` adds the real independently runnable PaaS UI and signed
-  verification workload. The Go-served offline UI uses only public IAM/PaaS
-  routes, keeps its session credential in page memory, and supports creation
-  of applications, configurations, and immutable ENV configuration revisions.
-  The workload fails closed unless the exact installation/release bindings are
-  valid and exposes their no-secret readiness result. The fixed topology owns
-  both executable contracts; release and topology packages were moved once to
-  the installation build boundary so `deploy` can assemble them without a
-  copied manifest or compatibility alias.
-- Commit `28d1448` adds the repository-owned offline release assembler and
-  fixed network-disabled image builds; `5489bcf` makes the signed image
-  identities portable across Docker Engines. Commits `127beb7`, `bab7416`,
-  `12ccc02`, `1490a93`, and `c2bcd73` close the PostgreSQL 18 runtime and bind
-  ownership boundaries, converge exact platform runtimes, publish only the
-  APISIX edge listener, and keep workload effects compatible with the declared
-  minimum Compose v2.33.0.
-- Exact clean commit `c2bcd73` assembled signed Release A
-  `matrix-v0.1.0-c2bcd738a753`. A brand-new network-disabled DinD with Docker
-  27.5.1, Compose v2.33.0, and no initial inner containers, images, or volumes
-  loaded all seven signed images and completed `mx platform install` as
-  `READY`. The real APISIX loopback listener was healthy; the signed no-pull
-  verification workload reached Deployment `READY` and Operation `SUCCEEDED`;
-  its Audit outbox was delivered; and the fixed PaaS/Audit endpoints returned
-  `READY` and `VERIFIED` for the same fact and bounded chain.
-- Commit `fa303a4` adds the durable operational `status` and `verify`
-  boundaries. `status` opens only an existing protected root, never creates or
-  writes installation state, and reports active recovery phases without
-  executing provider effects. `verify` reauthenticates the sealed current
-  release and trust root, checks exact local images and the healthy owned
-  Compose topology, runs only schema verification binaries, and reuses the
-  fixed PaaS/Audit probe before committing its own replayable journal result.
-- Commit `fbfe4bf` adds replay-safe protected backup and bounded support
-  evidence. Backup verifies the authenticated current release, fixed healthy
-  topology, and all three owning schema verifiers before streaming a
-  password-prompt-disabled PostgreSQL custom dump. It snapshots only immutable
-  workload Secret versions into a bounded Go tar archive, commits artifact
-  sizes and SHA-256 digests in a domain-separated installation-private
-  HMAC-SHA256 manifest, publishes through a restrictive partial directory and
-  atomic rename, and re-verifies the published result. Support writes only a
-  direct installation-owned JSON file containing normalized component/image
-  state and admitted release metadata; its durable command binds a digest of
-  the output path without storing that absolute path.
-- Commit `cb7da45` adds authenticated immediate-successor upgrade with a
-  verified pre-upgrade backup, target staging/loading/configuration/migration,
-  exact source-or-target Compose ownership classification, atomic replacement
-  of release-derived configuration, and automatic restoration of the
-  authenticated source release after a definitive candidate failure. Commit
-  `0c305a0` preserves an existing verification Deployment's name without
-  submitting it as the forbidden rename input of an update command.
-- Commit `77a02fc` adds explicit authenticated N-1 rollback. It authenticates
-  the sealed current and exact previous releases under the pinned trust root,
-  requires the current manifest to name that immediate predecessor, and
-  refuses to persist rollback intent unless the current owned topology is
-  observed healthy. The existing lifecycle journal drives `ROLLING_BACK`,
-  `STARTING`, `VERIFYING`, and `COMMITTING`; the same ownership-safe release
-  restoration effects serve automatic and explicit rollback. Verification
-  runs the previous binaries against the compatible expanded schema without a
-  downward migration, and only a successful previous-release application and
-  Audit probe can move the current pointer and clear N-1.
-- The accepted implementation through `3323741` passed generation drift, full
-  unit tests, vet, race,
-  ten-run repetition, architecture boundaries, placement fuzz, four-target
-  builds, Markdown links, donor-dependency and tenant-authority scans, and
-  repository-diff checks. The `8d6bed4` slice additionally passed full unit
-  tests, vet, Linux/amd64 and Darwin/arm64 builds, and repository-diff checks.
-  The exact `3323741` worktree additionally passed real PostgreSQL 18 profile
-  creation/refresh, a network-disabled real Docker Engine-host probe, ten-run
-  repetition, placement fuzz, and Windows/Linux/Darwin builds. The exact
-  `0a0ba1f` worktree passed generation drift, full unit/vet/race and
-  architecture gates, relevant ten-run repetition, network-disabled
-  Linux/amd64 platform start behavior ten times, real Docker normalization
-  probes, Windows/Linux/Darwin builds, and repository-diff checks.
-  The exact `40cc917` worktree passed generation drift, full unit/vet/race,
-  relevant ten-run repetition, network-disabled Linux/amd64 start and cleanup
-  behavior ten times, four-target builds, and repository-diff checks. The
-  installation verifier/client and concrete runner slice passes full
-  unit/vet, focused race and ten-run tests, architecture gates, normalized
-  provider-output checks, and Linux amd64/arm64 plus Darwin/arm64 builds. The
-  exact `6825876` worktree additionally passed generation drift, full
-  unit/vet/race, architecture and JavaScript syntax gates, plus Linux
-  amd64/arm64 and Darwin/arm64 UI/workload builds. The exact `c2bcd73` worktree
-  passed generation drift, full unit/vet/race, focused ten-run repetition,
-  Windows/Linux/Darwin builds, and the real network-disabled Compose executor
-  E2E against Compose v2.33.0. Exact commit `fa303a4` passed generation drift,
-  full unit/vet/race, focused ten-run repetition, four-target builds, and
-  repository-diff checks. Its Linux/amd64 `mx` binary ran against the existing
-  external-network-disabled Release A installation: repeated `status` returned
-  `READY` without changing the sealed journal, and `verify` returned `READY`
-  while preserving the release pointer. The same namespace survived a real
-  DinD restart with an unchanged journal and every signed Compose service
-  healthy before post-restart `status` and `verify`. Real clean offline Release
-  A installation, service integration, verify/status, restart, backup, and
-  support behavior are accepted. Exact commit `fbfe4bf` passed generation
-  drift, full unit/vet/race, focused ten-run Linux and host repetition,
-  architecture, four-target build, and repository-diff gates. Its exact
-  Linux/amd64 `mx` ran in the same external-network-disabled namespace,
-  verified the three schemas, created and revalidated a restrictive protected
-  backup, emitted `0600` support evidence, passed a value-level scan against
-  every installed Secret and the installation path, and left status/verify
-  `READY`. Exact commit `0c305a0` passed generation drift, full unit/vet/race,
-  release-verification ten-run repetition, architecture, four-target build,
-  and repository-diff gates. Signed Release B
-  `matrix-v0.2.0-0c305a03e725` upgraded the existing external-network-disabled
-  Release A namespace through the authenticated immediate-predecessor and
-  protected-backup path. All nine B services were healthy, the verification
-  Deployment advanced from generation 1 to generation 2 and stayed `READY`,
-  DEPLOY and UPDATE Audit facts were delivered, immutable revision history was
-  preserved, repeated status/verify succeeded, and the PostgreSQL data
-  directory identity was unchanged. Before the correction, signed candidate
-  `matrix-v0.2.0-cb7da457d2ad` failed in VERIFYING and automatically restored
-  the A pointer, all nine A services, the existing workload identity, and
-  `READY` status/verify without changing the PostgreSQL data directory identity.
-  Authenticated upgrade and automatic rollback are accepted. Exact commit
-  `77a02fc` passed generation drift, full unit/vet/race, host and
-  network-disabled Linux ten-run rollback coverage, four-target builds, and
-  repository-diff gates. Compatible signed releases
-  `matrix-v0.1.0-77a02fc6b4c6` and `matrix-v0.2.0-77a02fc6b4c6` then ran in a
-  new DinD namespace whose outer network mode was `none` and whose inner
-  Docker 27.5.1 / Compose v2.33.0 initially had no containers, images, or
-  volumes. A installed from an empty root, upgraded to B through a verified
-  protected backup, and explicitly rolled back to A. All nine platform
-  services first ran the exact B identities and then the exact A identities;
-  no B platform container remained. The verification Deployment advanced
-  from generation 1 to 2 to 3 and stayed `READY`; all nine PaaS Operations
-  succeeded and all nine Audit outbox facts were delivered. Both A and B
-  immutable configuration/application revisions, the protected backup, and
-  the expanded PostgreSQL data remained present, while the PostgreSQL data
-  directory inode was unchanged. Post-rollback `status` and `verify` returned
-  `READY` with A current and no N-1 pointer. Explicit N-1 rollback is accepted;
-  backup recovery remained unaccepted at that milestone. Exact commit
-  `0783f85` passed generation drift, full unit/vet/race, host and
-  network-disabled read-only Linux ten-run recovery coverage, architecture,
-  four-target build, portability, and repository-diff gates. Signed releases
-  `matrix-v0.1.0-0783f85e3f0e` and `matrix-v0.2.0-0783f85e3f0e` then ran in a
-  new outer-network-`none` DinD whose inner Docker and installation root were
-  empty. A installed, created restrictive sealed backup
-  `backup-2f20369050b1b3a768de4a6779793ee5`, and upgraded to B. The verification
-  Deployment advanced from backup generation 2 to B generation 4 before the
-  selected backup recovered A and converged both database and provider at
-  generation 3. An independent post-recovery verify advanced both to
-  generation 4. All nine A services were healthy, no B platform container
-  remained, the sealed journal committed A with no previous pointer, all
-  eleven PaaS Audit outbox facts were delivered, both immutable releases and
-  both protected backups remained present, and the PostgreSQL data directory
-  identity and ownership were unchanged. Repeated status passed; `0600`
-  support evidence passed value-level Secret plus native/path/backup leakage
-  scans. Protected backup recovery is accepted; the complete clean lifecycle
-  E2E remains unaccepted.
+- Gate A's accepted implementation authenticates a strict canonical Ed25519
+  manifest and every regular-file payload, pins signer and content identity in
+  a sealed replay-safe journal, exposes only the alias-free `mx platform`
+  command tree, and compiles a content-hashed closed topology that cannot
+  express online pulls, builds, arbitrary commands, plaintext secrets,
+  unrelated Docker objects, or paths outside the installation boundary.
+- Gate B's accepted implementation packages the real PostgreSQL, APISIX, IAM,
+  Audit, IAM Audit dispatcher, PaaS API, PaaS Audit dispatcher, Operation
+  worker, UI, and signed verification workload. Go owns install, migration,
+  readiness, verification, backup, support, upgrade, rollback, recovery, and
+  unknown-outcome observation. The worker composes PostgreSQL lease/fencing,
+  placement, immutable artifact/Secret resolution, and the real Compose
+  executor without a legacy, Python, shell-orchestration, or donor dependency.
+- Exact accepted runtime source
+  `c88a84f379afcf94431e2aca7332fe6ec3136dc7` assembled compatible signed
+  Release A `matrix-v0.1.0-c88a84f379af` and Release B
+  `matrix-v0.2.0-c88a84f379af`. Their six Matrix-built image identities are
+  distinct while the fixed PostgreSQL identity remains immutable, and B names
+  A as its immediate predecessor.
+- Gate C ran those exact releases in a fresh privileged Docker-in-Docker host
+  whose outer network mode was `none`. Inner Docker 27.5.1 and Compose v2.33.0
+  began with zero containers, images, and volumes, loaded all seven signed
+  images from the bundles, and installed A from an empty root without a
+  registry, pull, build, package manager, or Internet access.
+- Through the real APISIX edge, IAM authenticated and authorized a user,
+  immutable application/configuration revisions produced generations 1 and 2,
+  the signed workload proved ENV, read-only Secret, and network behavior, and
+  both IAM and PaaS facts reached the queryable integrity-verified Audit
+  authority. A deliberately failed B candidate automatically restored A; a
+  successful B upgrade preserved state; explicit platform rollback returned to
+  A; protected-backup recovery restored the selected coherent snapshot;
+  application rollback produced generation 3; and stop produced generation 4,
+  removed the workload project, and released capacity.
+- Repeated status/verify, restrictive backup and support artifacts, and
+  value-level Secret plus native-error, path, and backup leakage scans passed.
+  Restarting the entire outer Docker-in-Docker container preserved the sealed
+  installation and recovered all nine platform services healthy; post-restart
+  status/verify completed the offline lifecycle.
+- The exact source passed deterministic generation with no tracked drift,
+  `go mod verify`, full unit/vet/race suites, architecture tests, ten-run
+  critical-package repetition, placement fuzzing, clean PostgreSQL 18
+  migration/IAM/Audit/PaaS/authority-process race gates, real Compose adapter
+  and PostgreSQL-to-Compose worker gates, CGO-disabled Windows/amd64,
+  Linux/amd64, Linux/arm64, and Darwin/arm64 builds, Markdown links,
+  stale-brand and machine-path scans, donor-dependency and tenant-authority
+  checks, and `git diff --check`. The fixed donor commits and every adoption
+  decision remain owned by the FEAT-005 adoption record.
 
 ## Deferred
 
@@ -484,4 +296,5 @@ Relevant costly boundaries are owned by
 [`ADR-0001`](../architecture/ADR-0001-repository-layout.md),
 [`ADR-0002`](../architecture/ADR-0002-product-boundary.md), and
 [`ADR-0003`](../architecture/ADR-0003-command-line.md). Fixed donor decisions
-will be recorded in the corresponding FEAT-005 adoption record.
+are owned by the
+[`FEAT-005 adoption review`](../adoption/FEAT-005-offline-platform-lifecycle.md).

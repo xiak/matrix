@@ -1,6 +1,6 @@
 # FEAT-006: Platform IAM and Audit authorities
 
-- Status: Gate A and Gate B Accepted; Gate C pending
+- Status: Accepted
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
 - IAM API contract: `iam.matrix.xiak.com/v1`
@@ -309,11 +309,19 @@ tests pass.
   and absence of credential or native-error leakage. Independent clean PG18
   race gates repeat the PaaS, IAM HTTP, Audit HTTP, and dual-schema database
   attack matrices.
-- The accepted worktree passes deterministic generation, full unit and
-  architecture tests, `go vet`, full race tests, ten repeated critical-package
-  runs, dependency/diff checks, and CGO-disabled builds for Windows/amd64,
-  Linux/amd64, Linux/arm64, and Darwin/arm64. Gate C offline release
-  consumption remains pending under FEAT-005.
+- Gate C was accepted from exact source commit `c88a84f`. Compatible signed
+  releases ran the complete lifecycle in a fresh Docker-in-Docker engine whose
+  outer network was disabled and whose inner engine initially contained no
+  containers, images, or volumes. Through APISIX, real IAM authenticated the
+  user and authorized application mutations; the IAM and PaaS dispatchers
+  delivered immutable facts to Audit; tenant-bound Audit query and integrity
+  verification passed across configuration changes, failed and successful
+  upgrade, explicit rollback, protected-backup recovery, application rollback,
+  stop, support collection, and a full engine restart. The same source passed
+  clean PostgreSQL 18 race gates for migration, IAM HTTP, Audit persistence and
+  HTTP, the PaaS worker, and the independent authority-process flow, plus the
+  common generation, unit, architecture, vet, race, repeated, build,
+  dependency, documentation, stale-term, path-leakage, and diff gates.
 
 ## Deferred
 
