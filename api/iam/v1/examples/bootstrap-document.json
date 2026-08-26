@@ -29,11 +29,6 @@
       "credential": "example-only-audit-credential-0000000000000001"
     },
     {
-      "purpose": "APISIX",
-      "principalId": "service-apisix",
-      "credential": "example-only-apisix-credential-0000000000000001"
-    },
-    {
       "purpose": "INSTALLATION_VERIFIER",
       "principalId": "service-installation-verifier",
       "credential": "example-only-verifier-credential-00000000000001"

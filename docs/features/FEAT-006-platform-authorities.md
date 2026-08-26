@@ -57,7 +57,7 @@ IAM owns these Phase 1 resources:
 The installer generates one restrictive, non-manifest bootstrap file with an
 installation identity, initial organization, initial administrator, random
 administrator password, and exact service-account credentials for IAM itself,
-the PaaS, Audit, APISIX, and installation verifier. IAM persists only password
+the PaaS, Audit, and installation verifier. IAM persists only password
 hashes, credential hashes, and the bootstrap content digest. Equal bootstrap
 replay is success; changed content for the same installation identity
 conflicts. A bootstrap secret, password, service credential, or bearer token
@@ -87,6 +87,12 @@ correlation ID; tenant and subject come only from the current session or
 service binding. It returns one immutable decision ID and either an exact
 authorized tenant/subject or a normalized denial. Authentication, policy, or
 database uncertainty fails closed.
+
+APISIX preserves the user's opaque Bearer credential on public IAM, Audit, and
+PaaS routes and removes any caller-supplied internal subject header. Each
+business service authenticates itself to IAM with its own file credential when
+requesting an authorization decision; the gateway is routing authority, not an
+identity or product-authorization principal.
 
 `POST /v1/installation:verify` is the one fixed service-as-subject boundary.
 It accepts only the verifier service Bearer, `installation.verify`, and the

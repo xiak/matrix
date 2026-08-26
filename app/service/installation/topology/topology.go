@@ -226,7 +226,6 @@ func compileServices(
 	paasIAMCredential := path.Join(root, layout.PaaSIAMCredential)
 	paasAuditCredential := path.Join(root, layout.PaaSAuditCredential)
 	auditCursorKey := path.Join(root, layout.AuditCursorKey)
-	apisixIAMCredential := path.Join(root, layout.APISIXIAMCredential)
 	apisixRoutes := path.Join(root, layout.APISIXRoutes)
 	apisixConfig := path.Join(root, layout.APISIXConfig)
 	apisixUID := path.Join(root, layout.APISIXUID)
@@ -421,7 +420,6 @@ func compileServices(
 		bind(apisixRoutes, "/usr/local/apisix/conf/apisix.yaml", true),
 		bind(apisixUID, "/usr/local/apisix/conf/apisix.uid", true),
 		bind(apisixNginx, "/usr/local/apisix/conf/nginx.conf", false),
-		bind(apisixIAMCredential, "/run/matrix/apisix-iam-credential", true),
 	}
 	apisix.Tmpfs = append(
 		apisix.Tmpfs,

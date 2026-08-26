@@ -1326,8 +1326,8 @@
           },
           "services": {
             "items": false,
-            "maxItems": 5,
-            "minItems": 5,
+            "maxItems": 4,
+            "minItems": 4,
             "prefixItems": [
               {
                 "allOf": [
@@ -1366,20 +1366,6 @@
                     "properties": {
                       "purpose": {
                         "const": "AUDIT"
-                      }
-                    }
-                  }
-                ]
-              },
-              {
-                "allOf": [
-                  {
-                    "$ref": "#/components/schemas/BootstrapServiceCredential"
-                  },
-                  {
-                    "properties": {
-                      "purpose": {
-                        "const": "APISIX"
                       }
                     }
                   }
@@ -2151,7 +2137,6 @@
           "IAM",
           "PAAS",
           "AUDIT",
-          "APISIX",
           "INSTALLATION_VERIFIER"
         ],
         "type": "string"

@@ -271,12 +271,14 @@ func apisixStandaloneConfig() []byte {
   -
     id: matrix-iam
     uri: /api/iam/*
-    plugin_config_id: matrix-service-auth
     plugins:
       proxy-rewrite:
         regex_uri:
           - "^/api/iam/(.*)"
           - "/$1"
+        headers:
+          remove:
+            - Matrix-Subject-Credential
     upstream:
       type: roundrobin
       nodes:
@@ -298,12 +300,14 @@ func apisixStandaloneConfig() []byte {
   -
     id: matrix-audit
     uri: /api/audit/*
-    plugin_config_id: matrix-service-auth
     plugins:
       proxy-rewrite:
         regex_uri:
           - "^/api/audit/(.*)"
           - "/$1"
+        headers:
+          remove:
+            - Matrix-Subject-Credential
     upstream:
       type: roundrobin
       nodes:
@@ -350,38 +354,6 @@ func apisixStandaloneConfig() []byte {
       type: roundrobin
       nodes:
         "paas-ui:8080": 1
-plugin_configs:
-  -
-    id: matrix-service-auth
-    plugins:
-      serverless-pre-function:
-        phase: rewrite
-        functions:
-          - |
-            local credential
-            return function()
-              local headers = ngx.req.get_headers()
-              local authorization = headers["authorization"]
-              ngx.req.clear_header("Matrix-Subject-Credential")
-              if authorization then
-                local subject = string.match(authorization, "^Bearer ([^%s]+)$")
-                if subject then
-                  ngx.req.set_header("Matrix-Subject-Credential", subject)
-                end
-              end
-              if not credential then
-                local file = io.open("/run/matrix/apisix-iam-credential", "r")
-                if not file then return ngx.exit(503) end
-                credential = file:read("*a")
-                file:close()
-                if not credential or #credential == 0 or #credential > 16384 or
-                   string.find(credential, "[%z\r\n]") then
-                  credential = nil
-                  return ngx.exit(503)
-                end
-              end
-              ngx.req.set_header("Authorization", "Bearer " .. credential)
-            end
 #END
 `)
 }

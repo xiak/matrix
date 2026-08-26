@@ -324,9 +324,6 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 					"/usr/local/apisix/conf/nginx.conf": {
 						path.Join(options.Root, layout.APISIXNginx), false,
 					},
-					"/run/matrix/apisix-iam-credential": {
-						path.Join(options.Root, layout.APISIXIAMCredential), true,
-					},
 				}
 				if len(volumes) != len(expected) {
 					t.Fatalf("APISIX mount count=%d want=%d", len(volumes), len(expected))

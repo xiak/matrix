@@ -161,8 +161,6 @@ func ServiceCanRequest(purpose iamv1.ServicePurpose, action iamv1.Action) bool {
 		return strings.HasPrefix(string(action), "audit.")
 	case iamv1.ServiceInstallationVerifier:
 		return action == iamv1.ActionInstallationVerify
-	case iamv1.ServiceAPISIX:
-		return false
 	default:
 		return false
 	}

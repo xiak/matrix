@@ -66,7 +66,6 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		iamv1.ServiceIAM:                  {layout.IAMAuditCredential},
 		iamv1.ServicePaaS:                 {layout.PaaSIAMCredential, layout.PaaSAuditCredential},
 		iamv1.ServiceAudit:                {layout.AuditIAMCredential},
-		iamv1.ServiceAPISIX:               {layout.APISIXIAMCredential},
 		iamv1.ServiceInstallationVerifier: {layout.InstallationVerifierCredential},
 	}
 	for purpose, paths := range serviceFiles {
@@ -151,6 +150,10 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		if !bytes.Contains(apisix, []byte(required)) {
 			t.Fatalf("APISIX configuration lacks fixed verifier route %q", required)
 		}
+	}
+	if bytes.Contains(apisix, []byte("matrix-service-auth")) ||
+		bytes.Contains(apisix, []byte("apisix-iam-credential")) {
+		t.Fatal("APISIX must preserve user Bearer credentials for IAM and Audit")
 	}
 	readyStart := bytes.Index(apisix, []byte("id: matrix-ready"))
 	readyEnd := bytes.Index(apisix, []byte("id: matrix-iam"))
@@ -1349,7 +1352,7 @@ func snapshotManagedCredentials(t *testing.T, root string) map[string]string {
 		layout.IAMAuditCredential, layout.PaaSIAMCredential, layout.PaaSAuditCredential,
 		layout.InstallationVerifierCredential, layout.AuditCursorKey,
 		layout.BackupSealKey,
-		layout.APISIXIAMCredential, layout.InitialAdministratorPassword,
+		layout.InitialAdministratorPassword,
 		layout.PostgresPassword, layout.PostgresMigration, layout.IAMAPI,
 		layout.IAMWorker, layout.AuditRuntime, layout.PaaSAPI, layout.PaaSWorker,
 	}

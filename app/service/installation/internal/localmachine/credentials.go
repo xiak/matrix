@@ -29,7 +29,7 @@ func stageInstallation(plan platformcommand.InstallPlan, entropy io.Reader) erro
 	}
 	for _, directory := range []string{
 		"releases", "config", "data", "runtime", layout.ExecutorRoot,
-		"secrets", "secrets/database", "secrets/authority", "secrets/gateway",
+		"secrets", "secrets/database", "secrets/authority",
 		"secrets/operator", layout.WorkloadSecretRoot, "backups", "support",
 	} {
 		if _, err := ensureManagedDirectory(plan.Root, filepath.FromSlash(directory)); err != nil {
@@ -67,7 +67,6 @@ func stageInstallation(plan platformcommand.InstallPlan, entropy io.Reader) erro
 		iamv1.ServiceIAM:                  {layout.IAMAuditCredential},
 		iamv1.ServicePaaS:                 {layout.PaaSIAMCredential, layout.PaaSAuditCredential},
 		iamv1.ServiceAudit:                {layout.AuditIAMCredential},
-		iamv1.ServiceAPISIX:               {layout.APISIXIAMCredential},
 		iamv1.ServiceInstallationVerifier: {layout.InstallationVerifierCredential},
 	}
 	for purpose, paths := range serviceFiles {
@@ -225,8 +224,6 @@ func servicePrincipalID(purpose iamv1.ServicePurpose) iamv1.PrincipalID {
 		return "service-paas"
 	case iamv1.ServiceAudit:
 		return "service-audit"
-	case iamv1.ServiceAPISIX:
-		return "service-apisix"
 	case iamv1.ServiceInstallationVerifier:
 		return "service-installation-verifier"
 	default:

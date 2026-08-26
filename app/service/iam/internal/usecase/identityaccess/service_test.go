@@ -35,7 +35,7 @@ func TestIAMCoreUsecasesBindCredentialsAndRecordClosedAuthorization(t *testing.T
 		t.Fatalf("replay IAM bootstrap: status=%#v err=%v", replayed, err)
 	}
 
-	paasCredential := document.Services[1].Credential
+	paasCredential := coreServiceCredential(t, document, iamv1.ServicePaaS)
 	storedStatus, err := service.BootstrapStatus(context.Background(), paasCredential)
 	if err != nil || storedStatus != status {
 		t.Fatalf("read IAM bootstrap status: status=%#v err=%v", storedStatus, err)
@@ -44,7 +44,7 @@ func TestIAMCoreUsecasesBindCredentialsAndRecordClosedAuthorization(t *testing.T
 	if err != nil || identity.Purpose != iamv1.ServicePaaS || identity.PrincipalID != "service-paas" {
 		t.Fatalf("resolve PaaS service identity: identity=%#v err=%v", identity, err)
 	}
-	verifierCredential := document.Services[4].Credential
+	verifierCredential := coreServiceCredential(t, document, iamv1.ServiceInstallationVerifier)
 	verificationRequest := iamv1.AuthorizationRequest{
 		Action: iamv1.ActionInstallationVerify,
 		Resource: iamv1.ResourceReference{
@@ -126,7 +126,7 @@ func TestIAMCoreUsecasesBindCredentialsAndRecordClosedAuthorization(t *testing.T
 	request.CorrelationID = "correlation-authorize-wrong-service"
 	decision, err = service.Authorize(
 		context.Background(),
-		document.Services[2].Credential,
+		coreServiceCredential(t, document, iamv1.ServiceAudit),
 		login.Credential,
 		request,
 	)
@@ -625,10 +625,24 @@ func coreBootstrap(t *testing.T) iamv1.BootstrapDocument {
 			service(iamv1.ServiceIAM, "service-iam", "mx1.IAMCoreCredential00000000000000000000001"),
 			service(iamv1.ServicePaaS, "service-paas", "mx1.PaaSCoreCredential0000000000000000000001"),
 			service(iamv1.ServiceAudit, "service-audit", "mx1.AuditCoreCredential000000000000000000001"),
-			service(iamv1.ServiceAPISIX, "service-apisix", "mx1.APISIXCoreCredential0000000000000000001"),
 			service(iamv1.ServiceInstallationVerifier, "service-verifier", "mx1.VerifierCoreCredential000000000000000001"),
 		},
 	}
+}
+
+func coreServiceCredential(
+	t *testing.T,
+	document iamv1.BootstrapDocument,
+	purpose iamv1.ServicePurpose,
+) iamv1.Secret {
+	t.Helper()
+	for _, service := range document.Services {
+		if service.Purpose == purpose {
+			return service.Credential
+		}
+	}
+	t.Fatalf("bootstrap service purpose %q is absent", purpose)
+	return iamv1.Secret{}
 }
 
 func coreSecret(t *testing.T, value string) iamv1.Secret {

@@ -98,7 +98,6 @@ const (
 	ServiceIAM                  ServicePurpose = "IAM"
 	ServicePaaS                 ServicePurpose = "PAAS"
 	ServiceAudit                ServicePurpose = "AUDIT"
-	ServiceAPISIX               ServicePurpose = "APISIX"
 	ServiceInstallationVerifier ServicePurpose = "INSTALLATION_VERIFIER"
 )
 
@@ -158,6 +157,5 @@ var allServicePurposes = []ServicePurpose{
 	ServiceIAM,
 	ServicePaaS,
 	ServiceAudit,
-	ServiceAPISIX,
 	ServiceInstallationVerifier,
 }

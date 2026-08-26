@@ -168,7 +168,7 @@ func TestAuditUsecasesFailClosedBeforeMutation(t *testing.T) {
 	if _, err := service.Ingest(context.Background(), producerCredential, wrongTenant); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("cross-tenant producer error=%v, want invalid argument", err)
 	}
-	iam.identity.Purpose = iamv1.ServiceAPISIX
+	iam.identity.Purpose = iamv1.ServiceInstallationVerifier
 	if _, err := service.Ingest(context.Background(), producerCredential, event); !errors.Is(err, ErrUnauthenticated) {
 		t.Fatalf("unsupported producer error=%v, want unauthenticated", err)
 	}

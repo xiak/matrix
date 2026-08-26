@@ -1,7 +1,7 @@
-// Package composefixture owns the purpose-built image used by real offline
-// Compose acceptance tests. It builds a static Linux Go binary and imports a
-// root filesystem directly into the already-running Docker Engine; no
-// Dockerfile, registry, pull, or network access is involved.
+// Package composefixture imports the release-owned verification workload used
+// by real offline Compose acceptance tests. It builds a static Linux Go binary
+// and imports a root filesystem directly into the already-running Docker
+// Engine; no Dockerfile, registry, pull, or network access is involved.
 package composefixture
 
 import (
@@ -54,7 +54,9 @@ func Import(ctx context.Context) (*Image, error) {
 	if !ok {
 		return nil, errors.New("resolve fixture source failed")
 	}
-	sourceDirectory := filepath.Join(filepath.Dir(sourceFile), "testdata", "fixture")
+	sourceDirectory := filepath.Join(
+		filepath.Dir(sourceFile), "..", "..", "app", "service", "installation", "cmd", "matrix-verification",
+	)
 	command := exec.CommandContext(
 		ctx, "go", "build", "-trimpath", "-ldflags=-s -w", "-o", binaryPath,
 		sourceDirectory,

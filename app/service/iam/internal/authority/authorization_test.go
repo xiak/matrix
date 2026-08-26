@@ -159,8 +159,8 @@ func TestEveryIAMActionHasOnlyFixedRoleAuthority(t *testing.T) {
 		RoleAllows(iamv1.BuiltinRole("CUSTOM"), iamv1.ActionPaaSApplicationRead) {
 		t.Fatal("fixed least-privilege roles accepted authority outside their catalog")
 	}
-	if ServiceCanRequest(iamv1.ServiceAPISIX, iamv1.ActionPaaSApplicationRead) {
-		t.Fatal("APISIX was allowed to request product authorization")
+	if ServiceCanRequest(iamv1.ServiceIAM, iamv1.ActionPaaSApplicationRead) {
+		t.Fatal("IAM was allowed to request PaaS authorization")
 	}
 }
 
