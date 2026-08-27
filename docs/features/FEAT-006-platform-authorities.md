@@ -617,6 +617,11 @@ lifecycle gates where their contracts change.
    exact replay, changed replay, unknown/wrong-installation tenant, wrong
    producer purpose, and IAM outage are covered without weakening immutable
    Audit chains or allowing platform operators to read tenant data.
+   Shared application/configuration IDs and idempotency keys remain
+   tenant-local. A configuration or revision cannot reference another tenant's
+   application or configuration; rejected references leave no resource,
+   Operation or accepted outbox fact. Distinct configuration values and their
+   Operations are read only through the corresponding tenant session.
 4. **Restart, single-tenant upgrade, and rollback.** The existing offline
    lifecycle owner upgrades an actual populated single-tenant installation,
    not only a fresh schema. Credentials, resources, Audit chains, and revoked
@@ -811,6 +816,18 @@ restoration and creator disable preserve their ownership, original actor and
 accepted content. Real outboxes deliver one quota fact and two creation facts
 per tenant with the original IAM authority. These are pending service records,
 not claims that a PostgreSQL workload has been provisioned.
+
+The same real-process gate also creates applications, configurations and
+configuration revisions with matching IDs and idempotency keys in both
+tenants. Equal replay preserves the local Operation; changed replay conflicts.
+Distinct configuration values survive spoofed tenant/subject headers and URL
+selectors without crossing tenants. Foreign application/configuration
+references leave no resource, Operation or accepted outbox fact. Each
+Operation remains readable only in its tenant; platform-only and revoked
+roles cannot read or mutate these resources. Every delivered creation fact
+joins its original tenant, actor, IAM decision, target and Operation exactly
+once, without configuration values entering Audit. The bounded PG18
+five-process race gate passes with these checks on 2026-08-27.
 
 The task-local real-runtime gate on 2026-08-27 additionally runs the production
 PaaS executor with the independent IAM/Audit/PaaS/UI processes, both dispatchers
