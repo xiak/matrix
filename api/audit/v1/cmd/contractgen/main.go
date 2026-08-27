@@ -81,6 +81,16 @@ func buildPaths() object {
 			"VerifyChainRequest", "ChainVerification", "200",
 			[]any{object{"UserSession": []string{}}},
 		)},
+		"/v1/platform/records:query": object{"post": mutationOperation(
+			"queryPlatformAuditRecords", "Query the IAM-derived installation's Audit records",
+			"QueryRecordsRequest", "RecordPage", "200",
+			[]any{object{"UserSession": []string{}}},
+		)},
+		"/v1/platform/integrity:verify": object{"post": mutationOperation(
+			"verifyPlatformAuditChain", "Verify a bounded segment of the IAM-derived installation's chain",
+			"VerifyChainRequest", "ChainVerification", "200",
+			[]any{object{"UserSession": []string{}}},
+		)},
 		"/v1/installation:verify": object{"post": mutationOperation(
 			"verifyInstallationAudit", "Verify the exact fixed PaaS probe Audit fact and chain",
 			"VerifyInstallationRequest", "InstallationVerification", "200",
@@ -202,7 +212,7 @@ func structContracts() map[string]reflect.Type {
 
 func fieldOverlay(owner string, field reflect.StructField, jsonName string, base object) object {
 	switch jsonName {
-	case "id", "requestId", "correlationId":
+	case "id", "requestId", "correlationId", "installationId":
 		if field.Type.Kind() == reflect.String {
 			base = openapi31.Ref("ID")
 		}
@@ -265,6 +275,12 @@ func applySemanticOverlays(schemas object) {
 			"then": object{"required": []string{"nextSequence"}},
 		},
 	}
+	for _, owner := range []string{"RecordPage", "ChainVerification"} {
+		schemas[owner].(object)["oneOf"] = []any{
+			object{"required": []string{"tenantId"}, "properties": object{"installationId": false}},
+			object{"required": []string{"installationId"}, "properties": object{"tenantId": false}},
+		}
+	}
 
 	installation := schemas["InstallationVerification"].(object)
 	installation["allOf"] = []any{
@@ -304,6 +320,14 @@ func actionRules() (eventRules []any, recordRules []any) {
 			"result": object{"enum": openapi31.StringValues(contract.Results)},
 		}
 		thenRequired := []string{}
+		if contract.PlatformOnly {
+			thenRequired = append(thenRequired, "installationId")
+			thenProperties["tenantId"] = false
+			thenProperties["actor"] = object{"properties": object{"type": object{"const": string(auditv1.ActorUser)}}}
+		} else {
+			thenRequired = append(thenRequired, "tenantId")
+			thenProperties["installationId"] = false
+		}
 		if contract.IAMDecisionRequired {
 			thenRequired = append(thenRequired, "iamDecisionId")
 		} else if !contract.IAMDecisionPermitted {

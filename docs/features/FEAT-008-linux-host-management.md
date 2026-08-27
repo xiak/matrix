@@ -74,6 +74,12 @@ generation while offline.
 
 ### Admission and execution
 
+- Pool creation and target registration are platform-authorized use cases.
+  A registration selects an opaque, installation-owned node binding, never a
+  caller-provided endpoint, certificate or host path. The configured
+  installation, target and identity pin must agree with the real node probe.
+  Extend the existing Operation/outbox owner with an explicit installation
+  authority partition; do not represent platform resources as a fake tenant.
 - Resolve bindings server-side and probe outside transactions; atomically
   commit accepted identity, pool/target, Operation and audit event. Exact
   idempotency replay succeeds; changed input, identity collisions and binding
@@ -217,11 +223,14 @@ gates in the existing [verification workflow](../../.github/workflows/verificati
 No implementation iteration or complete Phase 3 gate is accepted.
 Next in P3-1: control-plane admission/refresh and signed offline node startup.
 The node observation chain alone is not the completed observability product.
-The prerequisite installation-scoped IAM role/decision boundary and its
+The prerequisite installation-scoped IAM and Audit boundaries and their
 verification are owned by
-[FEAT-006](FEAT-006-platform-authorities.md#installation-scoped-platform-authorization).
+[FEAT-006](FEAT-006-platform-authorities.md).
 Platform host mutations, their Operation/Audit integration and explicit
 authorization when upgrading an older installation remain unaccepted.
+Retained-data schema migration alone does not establish runnable N-1
+compatibility; the release's schema profile and rollback admission still need
+the complete offline lifecycle gate.
 
 ## Adoption
 

@@ -49,6 +49,8 @@
           "managedservice.service-installation.read",
           "audit.record.read",
           "audit.integrity.verify",
+          "audit.platform-record.read",
+          "audit.platform-integrity.verify",
           "installation.verify"
         ],
         "type": "string"
@@ -130,7 +132,9 @@
                       "paas.execution-pool.read",
                       "paas.execution-target.register",
                       "paas.execution-target.read",
-                      "paas.platform-operation.read"
+                      "paas.platform-operation.read",
+                      "audit.platform-record.read",
+                      "audit.platform-integrity.verify"
                     ]
                   }
                 },
@@ -1018,6 +1022,58 @@
               "properties": {
                 "action": {
                   "const": "audit.integrity.verify"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "AUDIT_CHAIN"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "audit.platform-record.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "AUDIT_RECORD"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "audit.platform-integrity.verify"
                 }
               },
               "required": [
@@ -2008,6 +2064,58 @@
             "if": {
               "properties": {
                 "action": {
+                  "const": "audit.platform-record.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "AUDIT_RECORD"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "audit.platform-integrity.verify"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "AUDIT_CHAIN"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
                   "const": "installation.verify"
                 }
               },
@@ -2868,6 +2976,9 @@
           "apiVersion": {
             "const": "iam.matrix.xiak.com/v1"
           },
+          "installationId": {
+            "$ref": "#/components/schemas/ID"
+          },
           "kind": {
             "const": "ServiceIdentity"
           },
@@ -2883,6 +2994,7 @@
         },
         "required": [
           "apiVersion",
+          "installationId",
           "kind",
           "organizationId",
           "principalId",

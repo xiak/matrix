@@ -50,14 +50,14 @@ type Transaction interface {
 	TransactionTime(context.Context) (time.Time, error)
 	LockEvent(context.Context, auditv1.Source, auditv1.EventID) error
 	LookupRecord(context.Context, auditv1.Source, auditv1.EventID) (StoredRecord, bool, error)
-	LockTenantHead(context.Context, auditv1.TenantID) (authority.Checkpoint, time.Time, error)
+	LockChainHead(context.Context, authority.ChainID) (authority.Checkpoint, time.Time, error)
 	AppendRecord(context.Context, AppendMutation) (auditv1.IngestionOutcome, error)
 	ReadRecords(context.Context, RecordQuery) ([]auditv1.AuditRecord, error)
-	ReadCheckpoint(context.Context, auditv1.TenantID, uint64) (authority.Checkpoint, bool, error)
-	ReadChain(context.Context, auditv1.TenantID, uint64, int) ([]auditv1.AuditRecord, error)
+	ReadCheckpoint(context.Context, authority.ChainID, uint64) (authority.Checkpoint, bool, error)
+	ReadChain(context.Context, authority.ChainID, uint64, int) ([]auditv1.AuditRecord, error)
 	LookupPaaSOperationRecord(
 		context.Context,
-		auditv1.TenantID,
+		authority.ChainID,
 		auditv1.OperationID,
 	) (auditv1.AuditRecord, bool, error)
 	Readiness(context.Context) (ReadinessSnapshot, error)
@@ -74,7 +74,7 @@ type AppendMutation struct {
 }
 
 type RecordQuery struct {
-	TenantID       auditv1.TenantID
+	ChainID        authority.ChainID
 	BeforeSequence uint64
 	Limit          int
 	From           *time.Time

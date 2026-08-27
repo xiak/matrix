@@ -374,6 +374,7 @@ func (transaction *coreTransaction) ApplyBootstrap(
 			Identity: iamv1.ServiceIdentity{
 				APIVersion:     iamv1.APIVersion,
 				Kind:           "ServiceIdentity",
+				InstallationID: mutation.InstallationID,
 				OrganizationID: mutation.Organization.ID,
 				PrincipalID:    service.PrincipalID,
 				Purpose:        service.Purpose,

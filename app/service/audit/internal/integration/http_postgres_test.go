@@ -661,6 +661,7 @@ func (client *integrationIAM) ServiceIdentity(
 	case secretEquals(credential, paasProducerCredential):
 		return iamv1.ServiceIdentity{
 			APIVersion: iamv1.APIVersion, Kind: "ServiceIdentity",
+			InstallationID: "installation-example",
 			OrganizationID: "organization-a", PrincipalID: "service-paas",
 			Purpose: iamv1.ServicePaaS,
 		}, nil
@@ -670,6 +671,7 @@ func (client *integrationIAM) ServiceIdentity(
 	return iamv1.ServiceIdentity{
 		APIVersion:     iamv1.APIVersion,
 		Kind:           "ServiceIdentity",
+		InstallationID: "installation-example",
 		OrganizationID: organizationID,
 		PrincipalID:    "service-iam",
 		Purpose:        iamv1.ServiceIAM,

@@ -31,6 +31,7 @@ func TestClientBindsProducerAndSubjectCredentialsToExactIAMRoutes(t *testing.T) 
 				t.Errorf("IAM identity request body=%q err=%v", body, err)
 			}
 			_ = json.NewEncoder(response).Encode(iamv1.ServiceIdentity{
+				InstallationID: "installation-example",
 				APIVersion:     iamv1.APIVersion,
 				Kind:           "ServiceIdentity",
 				OrganizationID: "organization-example",

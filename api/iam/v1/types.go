@@ -113,6 +113,7 @@ type BootstrapStatus struct {
 type ServiceIdentity struct {
 	APIVersion     string         `json:"apiVersion"`
 	Kind           string         `json:"kind"`
+	InstallationID string         `json:"installationId"`
 	OrganizationID OrganizationID `json:"organizationId"`
 	PrincipalID    PrincipalID    `json:"principalId"`
 	Purpose        ServicePurpose `json:"purpose"`

@@ -57,6 +57,7 @@ func (service *Service) VerifyInstallation(
 	}
 
 	tenantID := auditv1.TenantID(decision.TenantID)
+	chainID := authority.TenantChain(tenantID)
 	var verification auditv1.InstallationVerification
 	err = service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
 		now, err := transactionTime(transactionContext, transaction)
@@ -73,7 +74,7 @@ func (service *Service) VerifyInstallation(
 			CheckedAt:      now,
 		}
 		record, found, err := transaction.LookupPaaSOperationRecord(
-			transactionContext, tenantID, request.OperationID,
+			transactionContext, chainID, request.OperationID,
 		)
 		if err != nil || !found {
 			return err
@@ -88,14 +89,14 @@ func (service *Service) VerifyInstallation(
 		}
 		var checkpoint authority.Checkpoint
 		if fromSequence == 1 {
-			checkpoint, err = authority.GenesisCheckpoint(tenantID)
+			checkpoint, err = authority.GenesisCheckpoint(chainID)
 			if err != nil {
 				return ErrUnavailable
 			}
 		} else {
 			var checkpointFound bool
 			checkpoint, checkpointFound, err = transaction.ReadCheckpoint(
-				transactionContext, tenantID, fromSequence-1,
+				transactionContext, chainID, fromSequence-1,
 			)
 			if err != nil {
 				return err
@@ -105,7 +106,7 @@ func (service *Service) VerifyInstallation(
 			}
 		}
 		records, err := transaction.ReadChain(
-			transactionContext, tenantID, fromSequence, auditv1.MaxVerifyRecords,
+			transactionContext, chainID, fromSequence, auditv1.MaxVerifyRecords,
 		)
 		if err != nil {
 			return err

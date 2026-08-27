@@ -101,3 +101,34 @@ func TestAuditOpenAPIEnforcesClosedEventUnion(t *testing.T) {
 		t.Fatal("complete verification with nextSequence must fail schema validation")
 	}
 }
+
+func TestAuditSchemaRequiresTheActionAuthorityAndPlatformUser(t *testing.T) {
+	schema := compileAuditOpenAPISchema(t, loadAuditOpenAPI(t), "Event")
+	event := loadAuditSchemaExample(t, "examples/event-paas.json")
+	delete(event, "tenantId")
+	event["installationId"] = "installation-example"
+	event["action"], event["result"] = string(ActionPaaSExecutionPoolCreated), string(ResultSucceeded)
+	event["target"].(map[string]any)["kind"] = string(TargetExecutionPool)
+	event["actor"].(map[string]any)["type"] = string(ActorUser)
+	if err := schema.Validate(event); err != nil {
+		t.Fatalf("platform event rejected: %v", err)
+	}
+	event["tenantId"] = "installation-example"
+	if schema.Validate(event) == nil {
+		t.Fatal("both authority IDs accepted")
+	}
+	delete(event, "tenantId")
+	event["actor"].(map[string]any)["type"] = string(ActorSystem)
+	if schema.Validate(event) == nil {
+		t.Fatal("platform event accepted a non-user actor")
+	}
+	event["actor"].(map[string]any)["type"] = string(ActorUser)
+	delete(event, "installationId")
+	if schema.Validate(event) == nil {
+		t.Fatal("no authority accepted")
+	}
+	event["tenantId"] = "installation-example"
+	if schema.Validate(event) == nil {
+		t.Fatal("platform action accepted tenant authority")
+	}
+}

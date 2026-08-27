@@ -296,6 +296,7 @@ func newHTTPWorkflow(t *testing.T) *httpWorkflow {
 			AppliedAt:      &appliedAt,
 		},
 		identity: iamv1.ServiceIdentity{
+			InstallationID: "installation-example",
 			APIVersion:     iamv1.APIVersion,
 			Kind:           "ServiceIdentity",
 			OrganizationID: "organization-example",

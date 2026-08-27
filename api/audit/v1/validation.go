@@ -33,6 +33,18 @@ func ValidateDigest(name, value string) error {
 	return nil
 }
 
+// ValidateAuthority requires exactly one explicit resource authority. A
+// platform installation is never represented by an organization's tenant ID.
+func ValidateAuthority(tenantID TenantID, installationID string) error {
+	if (tenantID == "") == (installationID == "") {
+		return errors.New("Audit authority must be exactly one tenant or installation")
+	}
+	if installationID != "" {
+		return ValidateID("installationId", installationID)
+	}
+	return ValidateID("tenantId", string(tenantID))
+}
+
 func ValidateEvent(value Event) error {
 	var problems []error
 	if value.APIVersion != APIVersion || value.Kind != "AuditEvent" {
@@ -40,7 +52,7 @@ func ValidateEvent(value Event) error {
 	}
 	problems = append(problems,
 		ValidateID("eventId", string(value.EventID)),
-		ValidateID("tenantId", string(value.TenantID)),
+		ValidateAuthority(value.TenantID, value.InstallationID),
 		ValidateActor(value.Actor),
 		ValidateID("target.id", value.Target.ID),
 		ValidateDigest("requestDigest", value.RequestDigest),
@@ -52,6 +64,10 @@ func ValidateEvent(value Event) error {
 	if !known {
 		problems = append(problems, errors.New("Audit action is invalid"))
 	} else {
+		if contract.PlatformOnly != (value.InstallationID != "") ||
+			contract.PlatformOnly && value.Actor.Type != ActorUser {
+			problems = append(problems, errors.New("Audit action and authority differ"))
+		}
 		if value.Target.Kind != contract.Target {
 			problems = append(problems, errors.New("Audit action and target kind differ"))
 		}
@@ -173,14 +189,14 @@ func ValidateRecordPage(value RecordPage) error {
 	if value.APIVersion != APIVersion || value.Kind != "AuditRecordPage" {
 		problems = append(problems, errors.New("Audit record page type metadata is invalid"))
 	}
-	problems = append(problems, ValidateID("tenantId", string(value.TenantID)))
+	problems = append(problems, ValidateAuthority(value.TenantID, value.InstallationID))
 	if len(value.Records) > MaxPageSize {
 		problems = append(problems, errors.New("Audit record page is too large"))
 	}
 	for index, record := range value.Records {
 		problems = append(problems, ValidateAuditRecord(record))
-		if record.Event.TenantID != value.TenantID {
-			problems = append(problems, errors.New("Audit page contains another tenant"))
+		if record.Event.TenantID != value.TenantID || record.Event.InstallationID != value.InstallationID {
+			problems = append(problems, errors.New("Audit page contains another authority"))
 		}
 		if index > 0 && value.Records[index-1].Sequence <= record.Sequence {
 			problems = append(problems, errors.New("Audit page sequence order is invalid"))
@@ -210,7 +226,7 @@ func ValidateChainVerification(value ChainVerification) error {
 		problems = append(problems, errors.New("chain verification state is invalid"))
 	}
 	problems = append(problems,
-		ValidateID("tenantId", string(value.TenantID)),
+		ValidateAuthority(value.TenantID, value.InstallationID),
 		validatePositiveSequence("fromSequence", value.FromSequence),
 		validatePositiveSequence("toSequence", value.ToSequence),
 		ValidateDigest("firstPreviousHash", value.FirstPreviousHash),

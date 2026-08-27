@@ -5,7 +5,7 @@
 - Target design date: 2026-08-25
 - IAM API contract: `iam.matrix.xiak.com/v1`
 - Audit API contract: `audit.matrix.xiak.com/v1`
-- Phase 3 extension: installation-scoped IAM authority implemented; host-resource consumption and offline upgrade acceptance remain in FEAT-008
+- Phase 3 extension: installation-scoped IAM and Audit implemented; host-resource consumption and offline upgrade acceptance remain in FEAT-008
 
 ## Outcome
 
@@ -130,8 +130,8 @@ upload policy languages, expressions, scripts, or provider-native documents.
 
 FEAT-008's host admission uses the separate `PLATFORM_OPERATOR` role for
 execution-pool create/read, execution-target register/read, platform Operation
-read, and platform-role grant/revoke. Organization administration never grants
-these actions; the platform role does not implicitly grant tenant application
+read, platform Audit read/verify, and platform-role grant/revoke. Organization
+administration never grants these actions; the platform role does not implicitly grant tenant application
 or organization administration. Platform bindings admit user principals only.
 The existing role-binding commands select their IAM action from the actual
 role, including retained revoked bindings, so replay cannot change authority.
@@ -168,8 +168,32 @@ payload leakage.
 
 ### Ingestion and integrity
 
+Phase 3 platform host facts use `installationId` instead of `tenantId`.
+The closed action selects the authority class; mixed or missing authority is
+invalid. IAM binds each producer service to the sealed installation as well as
+its organization. Installation and tenant chains, cursors, RLS and Operation
+uniqueness are disjoint even if their textual IDs are equal. Existing tenant
+canonical bytes and record hashes remain unchanged. The same ingestion,
+replay, integrity and retention implementation serves both partitions; no
+synthetic tenant or parallel Audit service is introduced. Platform query and
+verification require distinct installation-scoped IAM actions and record their
+own access facts. `api/audit/v1.CanonicalizeEvent` owns the pure canonical event
+encoding and content digest; Audit's chain implementation reuses that function.
+
+Audit readiness requires schema version 2; the service-identity extension keeps
+IAM at version 1. The existing Audit migration upgrades retained tenant storage
+atomically without rewriting event documents, canonical bytes or hashes. Its
+exclusive table locks cover foreign-key validation and restore forced RLS
+before commit. No old SQL aliases or second Audit implementation remain.
+Retained-data migration is not proof of compatibility with an older executable
+or of the offline release's upgrade/rollback policy.
+
+This slice still confines tenant ingestion to the producer's IAM organization.
+Installation binding alone is not permission to publish another tenant's facts;
+that requires the separately verified IAM historical producer-proof contract.
+
 Audit admits only authenticated service identities and a closed versioned
-event union for IAM and PaaS facts. Every event has source, event ID, tenant,
+event union for IAM and PaaS facts. Every event has source, event ID, authority,
 actor, IAM decision correlation where applicable, fixed action, typed target,
 result, request/content digest, safe correlation IDs, and UTC occurrence time.
 There is no arbitrary attributes map, request body, configuration value,
@@ -190,10 +214,10 @@ reference, machine binding, provider payload, or native error.
 
 `(source, eventId)` is the idempotency identity. Equal canonical replay returns
 the stored result; different canonical content conflicts. A successful ingest
-serializes one per-tenant sequence and stores canonical event bytes,
+serializes one per-authority sequence and stores canonical event bytes,
 content SHA-256, previous record hash, and a domain-separated record hash. The
 database runtime role cannot update a record, rewrite a sequence, or delete a
-record. Verification recomputes the selected tenant chain from an accepted
+record. Verification recomputes the selected authority chain from an accepted
 checkpoint and fails on a gap, changed content, or changed predecessor.
 
 Phase 1 retention is `INDEFINITE`: there is no purge, overwrite, truncate, or
@@ -209,6 +233,9 @@ Audit query requires a user bearer credential and calls IAM for
 authority; a tenant header, query filter, cursor, actor, or record body cannot
 change it. Queries use bounded page sizes, deterministic descending sequence,
 an opaque tenant-bound cursor, and optional bounded time/action/actor filters.
+The separate `/v1/platform/records:query` and `/v1/platform/integrity:verify`
+routes require `audit.platform-record.read` and `audit.platform-integrity.verify`;
+their scope and cursors are bound to the IAM-derived installation instead.
 Responses expose the sanitized event, sequence, hashes, ingestion time, and
 retention policy only. Reading or verifying Audit writes a local sanitized
 access record without recursively calling the ingestion API.
@@ -381,6 +408,17 @@ tests pass.
   verification, stable generation, ten repeated IAM runs, Linux builds and
   [independent CI](https://github.com/xiak/matrix/actions/runs/33046535740),
   including the existing real node/collector process regression.
+- The Phase 3 Audit extension passes clean PostgreSQL 18 apply-twice, immutable
+  storage and privilege attacks, and an upgrade from the actual `9fd45b0` SQL
+  with retained tenant records. Equal tenant/installation IDs and Operation IDs
+  remain separate; old canonical bytes, record hashes and replay survive.
+  IAM/Audit HTTP and the five-process race gate prove platform-only access,
+  next-request revocation, no restart regrant, wrong producer installation and
+  purpose rejection, and unchanged platform replay after Audit restart. The
+  platform fixture tests producer/Audit authority, not a completed host mutation
+  or PaaS Operation. PaaS database regressions, full-repository race/architecture,
+  vet, module verification, stable generation, ten repeated focused runs, Linux
+  builds, modified documentation links and diff checks also pass locally.
 
 ## Deferred
 

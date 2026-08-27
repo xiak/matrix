@@ -76,6 +76,7 @@ func ValidateServiceIdentity(value ServiceIdentity) error {
 		problems = append(problems, errors.New("service identity type metadata is invalid"))
 	}
 	problems = append(problems,
+		ValidateID("serviceIdentity.installationId", value.InstallationID),
 		ValidateID("serviceIdentity.organizationId", string(value.OrganizationID)),
 		ValidateID("serviceIdentity.principalId", string(value.PrincipalID)),
 	)
@@ -463,9 +464,9 @@ func ResourceKindForAction(action Action) (ResourceKind, bool) {
 	case ActionManagedServiceInstallationCreate,
 		ActionManagedServiceInstallationRead:
 		return ResourceServiceInstallation, true
-	case ActionAuditRecordRead:
+	case ActionAuditRecordRead, ActionAuditPlatformRecordRead:
 		return ResourceAuditRecord, true
-	case ActionAuditIntegrityVerify:
+	case ActionAuditIntegrityVerify, ActionAuditPlatformIntegrityVerify:
 		return ResourceAuditChain, true
 	case ActionInstallationVerify:
 		return ResourceInstallation, true

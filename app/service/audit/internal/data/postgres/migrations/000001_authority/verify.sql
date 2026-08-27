@@ -37,7 +37,7 @@ BEGIN
 
     SELECT string_agg(required.name, ', ' ORDER BY required.name)
       INTO missing
-      FROM (VALUES ('tenant_heads'), ('records'), ('event_registry')) AS required(name)
+      FROM (VALUES ('chain_heads'), ('records'), ('event_registry')) AS required(name)
      WHERE to_regclass('audit.' || required.name) IS NULL;
     IF missing IS NOT NULL THEN
         RAISE EXCEPTION 'missing Audit tables: %', missing;
@@ -57,7 +57,7 @@ BEGIN
 
     SELECT string_agg(required.name, ', ' ORDER BY required.name)
       INTO missing
-      FROM (VALUES ('tenant_heads'), ('records')) AS required(name)
+      FROM (VALUES ('chain_heads'), ('records')) AS required(name)
      WHERE NOT EXISTS (
         SELECT 1
           FROM pg_catalog.pg_class AS class
@@ -67,7 +67,7 @@ BEGIN
            AND class.relrowsecurity AND class.relforcerowsecurity
      );
     IF missing IS NOT NULL THEN
-        RAISE EXCEPTION 'Audit tenant tables missing forced RLS: %', missing;
+        RAISE EXCEPTION 'Audit authority tables missing forced RLS: %', missing;
     END IF;
 
     IF EXISTS (
@@ -108,6 +108,8 @@ BEGIN
     END IF;
 
     IF to_regprocedure('audit.lookup_event(text,text)') IS NOT NULL
+       OR to_regprocedure('audit.lock_tenant_head(text)') IS NOT NULL
+       OR to_regprocedure('audit.current_tenant_id()') IS NOT NULL
        OR NOT has_function_privilege(
             'matrix_audit_runtime', 'audit.readiness()', 'EXECUTE'
        )
@@ -118,7 +120,7 @@ BEGIN
             'matrix_audit_runtime', 'audit.lookup_record(text,text)', 'EXECUTE'
        )
        OR NOT has_function_privilege(
-            'matrix_audit_runtime', 'audit.lock_tenant_head(text)', 'EXECUTE'
+            'matrix_audit_runtime', 'audit.lock_chain_head(text)', 'EXECUTE'
        )
        OR NOT has_function_privilege(
             'matrix_audit_runtime',
@@ -153,6 +155,22 @@ BEGIN
 
     IF to_regclass('audit.records_paas_operation_uq') IS NULL THEN
         RAISE EXCEPTION 'Audit PaaS operation identity is not unique';
+    END IF;
+
+    SELECT string_agg(required.name, ', ' ORDER BY required.name)
+      INTO missing
+      FROM (VALUES ('chain_heads'), ('records'), ('event_registry')) AS required(name)
+     WHERE NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'audit' AND table_name = required.name
+           AND column_name = 'chain_id' AND is_generated = 'ALWAYS'
+     ) OR NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_constraint
+         WHERE conrelid = ('audit.' || required.name)::regclass
+           AND conname = required.name || '_authority_valid' AND convalidated
+     );
+    IF missing IS NOT NULL THEN
+        RAISE EXCEPTION 'Audit exclusive authority partitions are invalid: %', missing;
     END IF;
 
     IF to_regnamespace('iam') IS NOT NULL

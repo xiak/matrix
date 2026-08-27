@@ -3,7 +3,7 @@ SET LOCAL ROLE matrix_audit_owner;
 
 REVOKE ALL ON SCHEMA audit FROM PUBLIC;
 
-CREATE OR REPLACE FUNCTION audit.current_tenant_id()
+CREATE OR REPLACE FUNCTION audit.current_chain_id()
 RETURNS text
 LANGUAGE sql
 STABLE
@@ -11,33 +11,86 @@ PARALLEL SAFE
 SET search_path = pg_catalog, pg_temp
 AS $function$
     SELECT CASE
-        WHEN current_setting('matrix.audit_tenant_id', true)
-            COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-        THEN current_setting('matrix.audit_tenant_id', true)
+        WHEN current_setting('matrix.audit_chain_id', true)
+            COLLATE "C" ~ '^(tenant:|installation:)[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        THEN current_setting('matrix.audit_chain_id', true)
         ELSE NULL
     END
 $function$;
 
-CREATE TABLE IF NOT EXISTS audit.tenant_heads (
-    tenant_id text COLLATE "C" PRIMARY KEY,
+-- Existing tenant facts retain their bytes, sequence and hashes. Only storage
+-- partition metadata changes; immutable records are never updated or copied.
+DO $matrix_audit_partition_upgrade$
+BEGIN
+    IF to_regclass('audit.tenant_heads') IS NOT NULL THEN
+        ALTER TABLE audit.tenant_heads RENAME TO chain_heads;
+    END IF;
+    IF to_regclass('audit.records') IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'audit' AND table_name = 'records'
+           AND column_name = 'chain_id'
+    ) THEN
+        ALTER TABLE audit.event_registry DROP CONSTRAINT event_registry_record_fk;
+        ALTER TABLE audit.records DROP CONSTRAINT records_pkey;
+        ALTER TABLE audit.chain_heads DROP CONSTRAINT tenant_heads_pkey;
+        ALTER TABLE audit.chain_heads DROP CONSTRAINT tenant_heads_values_valid;
+        ALTER TABLE audit.records DROP CONSTRAINT records_values_valid;
+        ALTER TABLE audit.event_registry DROP CONSTRAINT event_registry_values_valid;
+        ALTER TABLE audit.chain_heads
+            ALTER COLUMN tenant_id DROP NOT NULL,
+            ADD COLUMN installation_id text COLLATE "C",
+            ADD COLUMN chain_id text COLLATE "C" GENERATED ALWAYS AS (
+                CASE WHEN installation_id IS NOT NULL THEN 'installation:' || installation_id
+                     ELSE 'tenant:' || tenant_id END
+            ) STORED;
+        ALTER TABLE audit.records
+            ALTER COLUMN tenant_id DROP NOT NULL,
+            ADD COLUMN installation_id text COLLATE "C",
+            ADD COLUMN chain_id text COLLATE "C" GENERATED ALWAYS AS (
+                CASE WHEN installation_id IS NOT NULL THEN 'installation:' || installation_id
+                     ELSE 'tenant:' || tenant_id END
+            ) STORED;
+        ALTER TABLE audit.event_registry
+            ALTER COLUMN tenant_id DROP NOT NULL,
+            ADD COLUMN installation_id text COLLATE "C",
+            ADD COLUMN chain_id text COLLATE "C" GENERATED ALWAYS AS (
+                CASE WHEN installation_id IS NOT NULL THEN 'installation:' || installation_id
+                     ELSE 'tenant:' || tenant_id END
+            ) STORED;
+        ALTER TABLE audit.chain_heads ADD PRIMARY KEY (chain_id);
+        ALTER TABLE audit.records ADD PRIMARY KEY (chain_id, sequence);
+        -- The preceding DDL holds ACCESS EXCLUSIVE locks until COMMIT. The
+        -- non-superuser owner must see every retained row to validate the FK;
+        -- restore forced RLS before another connection can access the table.
+        ALTER TABLE audit.records NO FORCE ROW LEVEL SECURITY;
+        ALTER TABLE audit.event_registry ADD CONSTRAINT event_registry_record_fk
+            FOREIGN KEY (chain_id, sequence) REFERENCES audit.records (chain_id, sequence);
+        ALTER TABLE audit.records FORCE ROW LEVEL SECURITY;
+        DROP INDEX IF EXISTS audit.records_paas_operation_uq;
+    END IF;
+END
+$matrix_audit_partition_upgrade$;
+
+CREATE TABLE IF NOT EXISTS audit.chain_heads (
+    tenant_id text COLLATE "C",
+    installation_id text COLLATE "C",
+    chain_id text COLLATE "C" GENERATED ALWAYS AS (
+        CASE WHEN installation_id IS NOT NULL THEN 'installation:' || installation_id
+             ELSE 'tenant:' || tenant_id END
+    ) STORED PRIMARY KEY,
     last_sequence bigint NOT NULL DEFAULT 0,
     last_record_hash text COLLATE "C" NOT NULL DEFAULT
         'sha256:0000000000000000000000000000000000000000000000000000000000000000',
-    updated_at timestamptz(6) NOT NULL,
-    CONSTRAINT tenant_heads_values_valid CHECK (
-        tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-        AND last_sequence BETWEEN 0 AND 9007199254740991
-        AND last_record_hash COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
-        AND (
-            last_sequence > 0
-            OR last_record_hash =
-                'sha256:0000000000000000000000000000000000000000000000000000000000000000'
-        )
-    )
+    updated_at timestamptz(6) NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS audit.records (
-    tenant_id text COLLATE "C" NOT NULL,
+    tenant_id text COLLATE "C",
+    installation_id text COLLATE "C",
+    chain_id text COLLATE "C" GENERATED ALWAYS AS (
+        CASE WHEN installation_id IS NOT NULL THEN 'installation:' || installation_id
+             ELSE 'tenant:' || tenant_id END
+    ) STORED,
     sequence bigint NOT NULL,
     source text COLLATE "C" NOT NULL,
     event_id text COLLATE "C" NOT NULL,
@@ -48,85 +101,144 @@ CREATE TABLE IF NOT EXISTS audit.records (
     record_hash text COLLATE "C" NOT NULL,
     ingested_at timestamptz(6) NOT NULL,
     retention text COLLATE "C" NOT NULL,
-    PRIMARY KEY (tenant_id, sequence),
-    CONSTRAINT records_event_uq UNIQUE (source, event_id),
-    CONSTRAINT records_values_valid CHECK (
-        tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-        AND sequence BETWEEN 1 AND 9007199254740991
-        AND source IN ('IAM', 'PAAS', 'AUDIT')
-        AND event_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-        AND length(canonical_document) BETWEEN 1 AND 131072
-        AND canonical_document LIKE
-            '{"canonicalVersion":"matrix.audit.canonical-event.v1",%'
-        AND content_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
-        AND previous_hash COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
-        AND record_hash COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
-        AND retention = 'INDEFINITE'
-        AND event_document->>'apiVersion' = 'audit.matrix.xiak.com/v1'
-        AND event_document->>'kind' = 'AuditEvent'
-        AND event_document->>'eventId' = event_id
-        AND event_document->>'tenantId' = tenant_id
-    )
+    PRIMARY KEY (chain_id, sequence),
+    CONSTRAINT records_event_uq UNIQUE (source, event_id)
 );
-
-CREATE INDEX IF NOT EXISTS records_tenant_time_desc_idx
-    ON audit.records (tenant_id, ingested_at DESC, sequence DESC);
-CREATE INDEX IF NOT EXISTS records_tenant_action_desc_idx
-    ON audit.records (tenant_id, (event_document->>'action'), sequence DESC);
-CREATE INDEX IF NOT EXISTS records_tenant_actor_desc_idx
-    ON audit.records (tenant_id, (event_document#>>'{actor,id}'), sequence DESC);
-CREATE UNIQUE INDEX IF NOT EXISTS records_paas_operation_uq
-    ON audit.records (tenant_id, (event_document->>'operationId'))
-    WHERE source = 'PAAS';
 
 CREATE TABLE IF NOT EXISTS audit.event_registry (
     source text COLLATE "C" NOT NULL,
     event_id text COLLATE "C" NOT NULL,
-    tenant_id text COLLATE "C" NOT NULL,
+    tenant_id text COLLATE "C",
+    installation_id text COLLATE "C",
+    chain_id text COLLATE "C" GENERATED ALWAYS AS (
+        CASE WHEN installation_id IS NOT NULL THEN 'installation:' || installation_id
+             ELSE 'tenant:' || tenant_id END
+    ) STORED,
     sequence bigint NOT NULL,
     canonical_document text COLLATE "C" NOT NULL,
     content_digest text COLLATE "C" NOT NULL,
     record_hash text COLLATE "C" NOT NULL,
     PRIMARY KEY (source, event_id),
     CONSTRAINT event_registry_record_fk FOREIGN KEY (
-        tenant_id, sequence
-    ) REFERENCES audit.records (tenant_id, sequence),
-    CONSTRAINT event_registry_values_valid CHECK (
-        source IN ('IAM', 'PAAS', 'AUDIT')
-        AND event_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-        AND tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-        AND sequence BETWEEN 1 AND 9007199254740991
-        AND content_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
-        AND record_hash COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
-    )
+        chain_id, sequence
+    ) REFERENCES audit.records (chain_id, sequence)
 );
 
-ALTER TABLE audit.tenant_heads ENABLE ROW LEVEL SECURITY;
-ALTER TABLE audit.tenant_heads FORCE ROW LEVEL SECURITY;
+DO $matrix_audit_values$
+DECLARE
+    table_name text;
+BEGIN
+    FOREACH table_name IN ARRAY ARRAY['chain_heads', 'records', 'event_registry']
+    LOOP
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_catalog.pg_constraint
+             WHERE conrelid = ('audit.' || table_name)::regclass
+               AND conname = table_name || '_authority_valid'
+        ) THEN
+            EXECUTE format(
+                'ALTER TABLE audit.%I ADD CONSTRAINT %I CHECK ('
+                '((tenant_id IS NULL) <> (installation_id IS NULL)) '
+                'AND (tenant_id IS NULL OR tenant_id COLLATE "C" ~ '
+                '''^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'') '
+                'AND (installation_id IS NULL OR installation_id COLLATE "C" ~ '
+                '''^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$''))',
+                table_name, table_name || '_authority_valid'
+            );
+        END IF;
+    END LOOP;
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint
+        WHERE conrelid = 'audit.chain_heads'::regclass AND conname = 'chain_heads_values_valid') THEN
+        ALTER TABLE audit.chain_heads ADD CONSTRAINT chain_heads_values_valid CHECK (
+            last_sequence BETWEEN 0 AND 9007199254740991
+            AND last_record_hash COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+            AND (last_sequence > 0 OR last_record_hash =
+                'sha256:0000000000000000000000000000000000000000000000000000000000000000')
+        );
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint
+        WHERE conrelid = 'audit.records'::regclass AND conname = 'records_values_valid') THEN
+        ALTER TABLE audit.records ADD CONSTRAINT records_values_valid CHECK ((
+            sequence BETWEEN 1 AND 9007199254740991
+            AND source IN ('IAM', 'PAAS', 'AUDIT')
+            AND event_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+            AND length(canonical_document) BETWEEN 1 AND 131072
+            AND canonical_document LIKE '{"canonicalVersion":"matrix.audit.canonical-event.v1",%'
+            AND content_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+            AND previous_hash COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+            AND record_hash COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+            AND retention = 'INDEFINITE'
+            AND event_document->>'apiVersion' = 'audit.matrix.xiak.com/v1'
+            AND event_document->>'kind' = 'AuditEvent'
+            AND event_document->>'eventId' = event_id
+            AND (event_document->>'tenantId') IS NOT DISTINCT FROM tenant_id
+            AND (event_document->>'installationId') IS NOT DISTINCT FROM installation_id
+            AND (event_document ? 'tenantId') = (tenant_id IS NOT NULL)
+            AND (event_document ? 'installationId') = (installation_id IS NOT NULL)
+        ) IS TRUE);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint
+        WHERE conrelid = 'audit.event_registry'::regclass AND conname = 'event_registry_values_valid') THEN
+        ALTER TABLE audit.event_registry ADD CONSTRAINT event_registry_values_valid CHECK (
+            source IN ('IAM', 'PAAS', 'AUDIT')
+            AND event_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+            AND sequence BETWEEN 1 AND 9007199254740991
+            AND content_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+            AND record_hash COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        );
+    END IF;
+END
+$matrix_audit_values$;
+
+DROP INDEX IF EXISTS audit.records_tenant_time_desc_idx;
+DROP INDEX IF EXISTS audit.records_tenant_action_desc_idx;
+DROP INDEX IF EXISTS audit.records_tenant_actor_desc_idx;
+CREATE INDEX IF NOT EXISTS records_chain_time_desc_idx
+    ON audit.records (chain_id, ingested_at DESC, sequence DESC);
+CREATE INDEX IF NOT EXISTS records_chain_action_desc_idx
+    ON audit.records (chain_id, (event_document->>'action'), sequence DESC);
+CREATE INDEX IF NOT EXISTS records_chain_actor_desc_idx
+    ON audit.records (chain_id, (event_document#>>'{actor,id}'), sequence DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS records_paas_operation_uq
+    ON audit.records (chain_id, (event_document->>'operationId')) WHERE source = 'PAAS';
+
+ALTER TABLE audit.chain_heads ENABLE ROW LEVEL SECURITY;
+ALTER TABLE audit.chain_heads FORCE ROW LEVEL SECURITY;
 ALTER TABLE audit.records ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit.records FORCE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS tenant_isolation ON audit.chain_heads;
+DROP POLICY IF EXISTS tenant_isolation ON audit.records;
+DROP FUNCTION IF EXISTS audit.current_tenant_id();
 DO $matrix_audit_policies$
 DECLARE
     table_name text;
 BEGIN
-    FOREACH table_name IN ARRAY ARRAY['tenant_heads', 'records']
+    FOREACH table_name IN ARRAY ARRAY['chain_heads', 'records']
     LOOP
         IF NOT EXISTS (
             SELECT 1 FROM pg_catalog.pg_policies
              WHERE schemaname = 'audit' AND tablename = table_name
-               AND policyname = 'tenant_isolation'
+               AND policyname = 'authority_isolation'
         ) THEN
             EXECUTE format(
-                'CREATE POLICY tenant_isolation ON audit.%I '
-                'USING (tenant_id = audit.current_tenant_id()) '
-                'WITH CHECK (tenant_id = audit.current_tenant_id())',
+                'CREATE POLICY authority_isolation ON audit.%I '
+                'USING (chain_id = audit.current_chain_id()) '
+                'WITH CHECK (chain_id = audit.current_chain_id())',
                 table_name
             );
         END IF;
     END LOOP;
 END
 $matrix_audit_policies$;
+
+DROP FUNCTION IF EXISTS audit.lock_tenant_head(text);
+DROP FUNCTION IF EXISTS audit.assert_event(text, text, text, jsonb);
+DROP FUNCTION IF EXISTS audit.calculate_record_hash(text, bigint, text, text, timestamptz, text);
+DROP FUNCTION IF EXISTS audit.append_record(text, text, text, bigint, jsonb, text, text, text, text, timestamptz);
+DROP FUNCTION IF EXISTS audit.read_records(text, bigint, integer, timestamptz, timestamptz, text, text, text);
+DROP FUNCTION IF EXISTS audit.read_checkpoint(text, bigint);
+DROP FUNCTION IF EXISTS audit.lookup_paas_operation_record(text, text);
+DROP FUNCTION IF EXISTS audit.read_chain(text, bigint, integer);
 
 CREATE OR REPLACE FUNCTION audit.reject_record_mutation()
 RETURNS trigger
@@ -153,7 +265,7 @@ FOR EACH STATEMENT EXECUTE FUNCTION audit.reject_record_mutation();
 CREATE OR REPLACE FUNCTION audit.assert_event(
     submitted_source text,
     submitted_event_id text,
-    submitted_tenant_id text,
+    submitted_chain_id text,
     submitted_event jsonb
 )
 RETURNS void
@@ -168,8 +280,13 @@ DECLARE
     iam_decision_required boolean;
     operation_required boolean;
     action_name text;
+    platform_only boolean;
 BEGIN
     action_name := submitted_event->>'action';
+    platform_only := action_name IN (
+        'paas.execution-pool.created', 'paas.execution-target.registered',
+        'audit.platform-records.read', 'audit.platform-integrity.verified'
+    );
     SELECT contract.source, contract.target_kind, contract.result,
            contract.iam_permitted, contract.iam_required,
            contract.operation_required
@@ -197,7 +314,11 @@ BEGIN
         ('managedservice.service-installation.created', 'PAAS', 'SERVICE_INSTALLATION', 'ACCEPTED', true, true, true),
         ('managedservice.service-installation.ready', 'PAAS', 'SERVICE_INSTALLATION', 'SUCCEEDED', true, true, false),
         ('audit.records.read', 'AUDIT', 'AUDIT_RECORDS', 'SUCCEEDED', true, true, false),
-        ('audit.integrity.verified', 'AUDIT', 'AUDIT_CHAIN', 'SUCCEEDED', true, true, false)
+        ('audit.integrity.verified', 'AUDIT', 'AUDIT_CHAIN', 'SUCCEEDED', true, true, false),
+        ('paas.execution-pool.created', 'PAAS', 'EXECUTION_POOL', 'SUCCEEDED', true, true, true),
+        ('paas.execution-target.registered', 'PAAS', 'EXECUTION_TARGET', 'SUCCEEDED', true, true, true),
+        ('audit.platform-records.read', 'AUDIT', 'AUDIT_RECORDS', 'SUCCEEDED', true, true, false),
+        ('audit.platform-integrity.verified', 'AUDIT', 'AUDIT_CHAIN', 'SUCCEEDED', true, true, false)
       ) AS contract(
         action, source, target_kind, result, iam_permitted,
         iam_required, operation_required
@@ -214,7 +335,6 @@ BEGIN
        OR jsonb_typeof(submitted_event->'apiVersion') <> 'string'
        OR jsonb_typeof(submitted_event->'kind') <> 'string'
        OR jsonb_typeof(submitted_event->'eventId') <> 'string'
-       OR jsonb_typeof(submitted_event->'tenantId') <> 'string'
        OR jsonb_typeof(submitted_event->'action') <> 'string'
        OR jsonb_typeof(submitted_event->'result') <> 'string'
        OR jsonb_typeof(submitted_event->'requestDigest') <> 'string'
@@ -222,14 +342,14 @@ BEGIN
        OR jsonb_typeof(submitted_event->'correlationId') <> 'string'
        OR jsonb_typeof(submitted_event->'occurredAt') <> 'string'
        OR NOT (submitted_event ?& ARRAY[
-            'apiVersion', 'kind', 'eventId', 'tenantId', 'actor', 'action',
+            'apiVersion', 'kind', 'eventId', 'actor', 'action',
             'target', 'result', 'requestDigest', 'requestId',
             'correlationId', 'occurredAt'
        ])
        OR NOT ((submitted_event->'actor') ?& ARRAY['type', 'id'])
        OR NOT ((submitted_event->'target') ?& ARRAY['kind', 'id'])
        OR (submitted_event - ARRAY[
-            'apiVersion', 'kind', 'eventId', 'tenantId', 'actor',
+            'apiVersion', 'kind', 'eventId', 'tenantId', 'installationId', 'actor',
             'iamDecisionId', 'action', 'target', 'result', 'requestDigest',
             'requestId', 'correlationId', 'operationId', 'traceparent',
             'occurredAt'
@@ -250,14 +370,26 @@ BEGIN
        OR submitted_event->>'apiVersion' IS DISTINCT FROM 'audit.matrix.xiak.com/v1'
        OR submitted_event->>'kind' IS DISTINCT FROM 'AuditEvent'
        OR submitted_event->>'eventId' IS DISTINCT FROM submitted_event_id
-       OR submitted_event->>'tenantId' IS DISTINCT FROM submitted_tenant_id
+       OR (platform_only AND (
+            left(submitted_chain_id, 13) IS DISTINCT FROM 'installation:'
+            OR jsonb_typeof(submitted_event->'installationId') IS DISTINCT FROM 'string'
+            OR submitted_event->>'installationId' IS DISTINCT FROM substr(submitted_chain_id, 14)
+            OR submitted_event ? 'tenantId'
+            OR submitted_event#>>'{actor,type}' IS DISTINCT FROM 'USER'
+          ))
+       OR (NOT platform_only AND (
+            left(submitted_chain_id, 7) IS DISTINCT FROM 'tenant:'
+            OR jsonb_typeof(submitted_event->'tenantId') IS DISTINCT FROM 'string'
+            OR submitted_event->>'tenantId' IS DISTINCT FROM substr(submitted_chain_id, 8)
+            OR submitted_event ? 'installationId'
+          ))
        OR submitted_source IS DISTINCT FROM expected_source
        OR submitted_event#>>'{target,kind}' IS DISTINCT FROM expected_target_kind
        OR submitted_event->>'result' IS DISTINCT FROM expected_result
        OR COALESCE(submitted_event_id, '') COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-       OR COALESCE(submitted_tenant_id, '') COLLATE "C"
-            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR COALESCE(submitted_chain_id, '') COLLATE "C"
+            !~ '^(tenant:|installation:)[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR COALESCE(submitted_event#>>'{actor,id}', '') COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR submitted_event#>>'{actor,type}' NOT IN ('USER', 'SERVICE_ACCOUNT', 'SYSTEM')
@@ -307,10 +439,10 @@ SECURITY DEFINER
 SET search_path = pg_catalog, pg_temp
 AS $function$
     SELECT
-        to_regclass('audit.tenant_heads') IS NOT NULL
+        to_regclass('audit.chain_heads') IS NOT NULL
         AND to_regclass('audit.records') IS NOT NULL
         AND to_regclass('audit.event_registry') IS NOT NULL,
-        1::bigint,
+        2::bigint,
         transaction_timestamp()
 $function$;
 
@@ -350,7 +482,7 @@ STABLE
 SET search_path = pg_catalog, pg_temp
 AS $function$
 DECLARE
-    stored_tenant_id text;
+    stored_chain_id text;
     stored_sequence bigint;
 BEGIN
     IF submitted_source NOT IN ('IAM', 'PAAS', 'AUDIT')
@@ -358,25 +490,25 @@ BEGIN
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'Audit event identity is invalid';
     END IF;
-    SELECT registry.tenant_id, registry.sequence
-      INTO stored_tenant_id, stored_sequence
+    SELECT registry.chain_id, registry.sequence
+      INTO stored_chain_id, stored_sequence
       FROM audit.event_registry AS registry
      WHERE registry.source = submitted_source
        AND registry.event_id = submitted_event_id;
     IF NOT FOUND THEN
         RETURN;
     END IF;
-    PERFORM set_config('matrix.audit_tenant_id', stored_tenant_id, true);
+    PERFORM set_config('matrix.audit_chain_id', stored_chain_id, true);
     RETURN QUERY
     SELECT record.*
       FROM audit.records AS record
-     WHERE record.tenant_id = stored_tenant_id
+     WHERE record.chain_id = stored_chain_id
        AND record.sequence = stored_sequence;
 END
 $function$;
 
 CREATE OR REPLACE FUNCTION audit.calculate_record_hash(
-    submitted_tenant_id text,
+    submitted_chain_id text,
     submitted_sequence bigint,
     submitted_content_digest text,
     submitted_previous_hash text,
@@ -391,9 +523,11 @@ SET search_path = pg_catalog, pg_temp
 AS $function$
     SELECT 'sha256:' || encode(
         sha256(
-            convert_to('matrix.audit.record.v1', 'UTF8') || decode('00', 'hex')
-            || int4send(octet_length(submitted_tenant_id))
-            || convert_to(submitted_tenant_id, 'UTF8')
+            convert_to(CASE WHEN left(submitted_chain_id, 13) = 'installation:'
+                THEN 'matrix.audit.record.platform.v1' ELSE 'matrix.audit.record.v1' END, 'UTF8')
+            || decode('00', 'hex')
+            || int4send(octet_length(substr(submitted_chain_id, strpos(submitted_chain_id, ':') + 1)))
+            || convert_to(substr(submitted_chain_id, strpos(submitted_chain_id, ':') + 1), 'UTF8')
             || int8send(submitted_sequence)
             || decode(substr(submitted_content_digest, 8), 'hex')
             || decode(substr(submitted_previous_hash, 8), 'hex')
@@ -412,7 +546,7 @@ AS $function$
     )
 $function$;
 
-CREATE OR REPLACE FUNCTION audit.lock_tenant_head(submitted_tenant_id text)
+CREATE OR REPLACE FUNCTION audit.lock_chain_head(submitted_chain_id text)
 RETURNS TABLE (
     last_sequence bigint,
     last_record_hash text,
@@ -423,23 +557,25 @@ SECURITY DEFINER
 SET search_path = pg_catalog, pg_temp
 AS $function$
 BEGIN
-    IF COALESCE(submitted_tenant_id, '') COLLATE "C"
-            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
-        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'tenant identity is invalid';
+    IF COALESCE(submitted_chain_id, '') COLLATE "C"
+            !~ '^(tenant:|installation:)[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'Audit authority identity is invalid';
     END IF;
-    PERFORM set_config('matrix.audit_tenant_id', submitted_tenant_id, true);
-    INSERT INTO audit.tenant_heads (
-        tenant_id, last_sequence, last_record_hash, updated_at
+    PERFORM set_config('matrix.audit_chain_id', submitted_chain_id, true);
+    INSERT INTO audit.chain_heads (
+        tenant_id, installation_id, last_sequence, last_record_hash, updated_at
     ) VALUES (
-        submitted_tenant_id, 0,
+        CASE WHEN left(submitted_chain_id, 7) = 'tenant:' THEN substr(submitted_chain_id, 8) END,
+        CASE WHEN left(submitted_chain_id, 13) = 'installation:' THEN substr(submitted_chain_id, 14) END,
+        0,
         'sha256:0000000000000000000000000000000000000000000000000000000000000000',
         transaction_timestamp()
-    ) ON CONFLICT (tenant_id) DO NOTHING;
+    ) ON CONFLICT (chain_id) DO NOTHING;
     RETURN QUERY
     SELECT head.last_sequence, head.last_record_hash,
            transaction_timestamp()
-      FROM audit.tenant_heads AS head
-     WHERE head.tenant_id = submitted_tenant_id
+      FROM audit.chain_heads AS head
+     WHERE head.chain_id = submitted_chain_id
      FOR UPDATE;
 END
 $function$;
@@ -447,7 +583,7 @@ $function$;
 CREATE OR REPLACE FUNCTION audit.append_record(
     submitted_source text,
     submitted_event_id text,
-    submitted_tenant_id text,
+    submitted_chain_id text,
     submitted_sequence bigint,
     submitted_event_document jsonb,
     submitted_canonical_document text,
@@ -467,15 +603,24 @@ SET search_path = pg_catalog, pg_temp
 AS $function$
 DECLARE
     existing audit.event_registry%ROWTYPE;
-    head audit.tenant_heads%ROWTYPE;
+    head audit.chain_heads%ROWTYPE;
     canonical jsonb;
 BEGIN
+    PERFORM audit.assert_event(
+        submitted_source, submitted_event_id,
+        submitted_chain_id, submitted_event_document
+    );
     SELECT * INTO existing
       FROM audit.event_registry
      WHERE source = submitted_source AND event_id = submitted_event_id;
     IF FOUND THEN
-        IF existing.canonical_document = submitted_canonical_document
-           AND existing.content_digest = submitted_content_digest THEN
+        IF existing.chain_id = submitted_chain_id
+           AND existing.canonical_document = submitted_canonical_document
+           AND existing.content_digest = submitted_content_digest
+           AND ((existing.canonical_document::jsonb->'event') - 'occurredAt') =
+               (submitted_event_document - 'occurredAt')
+           AND (existing.canonical_document::jsonb#>>'{event,occurredAt}')::timestamptz =
+               (submitted_event_document->>'occurredAt')::timestamptz THEN
             RETURN QUERY SELECT 'DUPLICATE', existing.sequence, existing.record_hash;
             RETURN;
         END IF;
@@ -483,10 +628,6 @@ BEGIN
             ERRCODE = '23505',
             MESSAGE = 'Audit event replay content conflicts';
     END IF;
-    PERFORM audit.assert_event(
-        submitted_source, submitted_event_id,
-        submitted_tenant_id, submitted_event_document
-    );
     IF NOT pg_input_is_valid(submitted_canonical_document, 'jsonb') THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'Audit canonical document is invalid';
     END IF;
@@ -509,7 +650,6 @@ BEGIN
             'matrix.audit.canonical-event.v1'
        OR canonical->>'source' IS DISTINCT FROM submitted_source
        OR canonical#>>'{event,eventId}' IS DISTINCT FROM submitted_event_id
-       OR canonical#>>'{event,tenantId}' IS DISTINCT FROM submitted_tenant_id
        OR ((canonical->'event') - 'occurredAt') IS DISTINCT FROM
             (submitted_event_document - 'occurredAt')
        OR COALESCE(canonical#>>'{event,occurredAt}', '') COLLATE "C"
@@ -523,7 +663,7 @@ BEGIN
        )
        OR submitted_ingested_at IS NULL
        OR submitted_record_hash IS DISTINCT FROM audit.calculate_record_hash(
-            submitted_tenant_id,
+            submitted_chain_id,
             submitted_sequence,
             submitted_content_digest,
             submitted_previous_hash,
@@ -537,47 +677,48 @@ BEGIN
        (submitted_event_document->>'occurredAt')::timestamptz THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'Audit event time is not canonical';
     END IF;
-    PERFORM set_config('matrix.audit_tenant_id', submitted_tenant_id, true);
+    PERFORM set_config('matrix.audit_chain_id', submitted_chain_id, true);
     SELECT * INTO head
-      FROM audit.tenant_heads
-     WHERE tenant_id = submitted_tenant_id
+      FROM audit.chain_heads
+     WHERE chain_id = submitted_chain_id
      FOR UPDATE;
     IF NOT FOUND
        OR submitted_sequence <> head.last_sequence + 1
        OR submitted_previous_hash <> head.last_record_hash THEN
-        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'Audit tenant head is stale';
+        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'Audit chain head is stale';
     END IF;
     INSERT INTO audit.records (
-        tenant_id, sequence, source, event_id, event_document,
+        tenant_id, installation_id, sequence, source, event_id, event_document,
         canonical_document, content_digest, previous_hash, record_hash,
         ingested_at, retention
     ) VALUES (
-        submitted_tenant_id, submitted_sequence, submitted_source,
-        submitted_event_id, submitted_event_document,
+        submitted_event_document->>'tenantId', submitted_event_document->>'installationId',
+        submitted_sequence, submitted_source, submitted_event_id, submitted_event_document,
         submitted_canonical_document, submitted_content_digest,
         submitted_previous_hash, submitted_record_hash,
         submitted_ingested_at, 'INDEFINITE'
     );
     INSERT INTO audit.event_registry (
-        source, event_id, tenant_id, sequence, canonical_document,
+        source, event_id, tenant_id, installation_id, sequence, canonical_document,
         content_digest, record_hash
     ) VALUES (
-        submitted_source, submitted_event_id, submitted_tenant_id,
+        submitted_source, submitted_event_id,
+        submitted_event_document->>'tenantId', submitted_event_document->>'installationId',
         submitted_sequence, submitted_canonical_document,
         submitted_content_digest, submitted_record_hash
     );
-    UPDATE audit.tenant_heads
+    UPDATE audit.chain_heads
        SET last_sequence = submitted_sequence,
            last_record_hash = submitted_record_hash,
            updated_at = submitted_ingested_at
-     WHERE tenant_id = submitted_tenant_id;
+     WHERE chain_id = submitted_chain_id;
     RETURN QUERY SELECT 'ACCEPTED', submitted_sequence, submitted_record_hash;
 END
 $function$;
 
 DROP FUNCTION IF EXISTS audit.read_records(text, bigint, integer);
 CREATE OR REPLACE FUNCTION audit.read_records(
-    submitted_tenant_id text,
+    submitted_chain_id text,
     submitted_before_sequence bigint,
     submitted_page_size integer,
     submitted_from timestamptz,
@@ -592,8 +733,8 @@ SECURITY DEFINER
 SET search_path = pg_catalog, pg_temp
 AS $function$
 BEGIN
-    IF COALESCE(submitted_tenant_id, '') COLLATE "C"
-            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    IF COALESCE(submitted_chain_id, '') COLLATE "C"
+            !~ '^(tenant:|installation:)[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR submitted_before_sequence IS NULL
        OR submitted_before_sequence NOT BETWEEN 1 AND 9007199254740992
        OR submitted_page_size IS NULL
@@ -613,7 +754,9 @@ BEGIN
             'managedservice.quota-entitlement.activated',
             'managedservice.service-installation.created',
             'managedservice.service-installation.ready', 'audit.records.read',
-            'audit.integrity.verified'
+            'audit.integrity.verified',
+            'paas.execution-pool.created', 'paas.execution-target.registered',
+            'audit.platform-records.read', 'audit.platform-integrity.verified'
        ))
        OR ((submitted_actor_type IS NULL) <> (submitted_actor_id IS NULL))
        OR (submitted_actor_type IS NOT NULL AND submitted_actor_type NOT IN (
@@ -623,11 +766,11 @@ BEGIN
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$') THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'Audit query input is invalid';
     END IF;
-    PERFORM set_config('matrix.audit_tenant_id', submitted_tenant_id, true);
+    PERFORM set_config('matrix.audit_chain_id', submitted_chain_id, true);
     RETURN QUERY
     SELECT record.*
       FROM audit.records AS record
-     WHERE record.tenant_id = submitted_tenant_id
+     WHERE record.chain_id = submitted_chain_id
        AND record.sequence < submitted_before_sequence
        AND (
             submitted_from IS NULL
@@ -654,7 +797,7 @@ END
 $function$;
 
 CREATE OR REPLACE FUNCTION audit.read_checkpoint(
-    submitted_tenant_id text,
+    submitted_chain_id text,
     submitted_sequence bigint
 )
 RETURNS TABLE (record_hash text)
@@ -664,23 +807,23 @@ STABLE
 SET search_path = pg_catalog, pg_temp
 AS $function$
 BEGIN
-    IF COALESCE(submitted_tenant_id, '') COLLATE "C"
-            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    IF COALESCE(submitted_chain_id, '') COLLATE "C"
+            !~ '^(tenant:|installation:)[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR submitted_sequence IS NULL
        OR submitted_sequence NOT BETWEEN 1 AND 9007199254740991 THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'Audit checkpoint input is invalid';
     END IF;
-    PERFORM set_config('matrix.audit_tenant_id', submitted_tenant_id, true);
+    PERFORM set_config('matrix.audit_chain_id', submitted_chain_id, true);
     RETURN QUERY
     SELECT record.record_hash
       FROM audit.records AS record
-     WHERE record.tenant_id = submitted_tenant_id
+     WHERE record.chain_id = submitted_chain_id
        AND record.sequence = submitted_sequence;
 END
 $function$;
 
 CREATE OR REPLACE FUNCTION audit.lookup_paas_operation_record(
-    submitted_tenant_id text,
+    submitted_chain_id text,
     submitted_operation_id text
 )
 RETURNS SETOF audit.records
@@ -690,24 +833,24 @@ STABLE
 SET search_path = pg_catalog, pg_temp
 AS $function$
 BEGIN
-    IF COALESCE(submitted_tenant_id, '') COLLATE "C"
-            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    IF COALESCE(submitted_chain_id, '') COLLATE "C"
+            !~ '^(tenant:|installation:)[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR COALESCE(submitted_operation_id, '') COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'PaaS Audit operation lookup is invalid';
     END IF;
-    PERFORM set_config('matrix.audit_tenant_id', submitted_tenant_id, true);
+    PERFORM set_config('matrix.audit_chain_id', submitted_chain_id, true);
     RETURN QUERY
     SELECT record.*
       FROM audit.records AS record
-     WHERE record.tenant_id = submitted_tenant_id
+     WHERE record.chain_id = submitted_chain_id
        AND record.source = 'PAAS'
        AND record.event_document->>'operationId' = submitted_operation_id;
 END
 $function$;
 
 CREATE OR REPLACE FUNCTION audit.read_chain(
-    submitted_tenant_id text,
+    submitted_chain_id text,
     submitted_from_sequence bigint,
     submitted_maximum_records integer
 )
@@ -718,19 +861,19 @@ STABLE
 SET search_path = pg_catalog, pg_temp
 AS $function$
 BEGIN
-    IF COALESCE(submitted_tenant_id, '') COLLATE "C"
-            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    IF COALESCE(submitted_chain_id, '') COLLATE "C"
+            !~ '^(tenant:|installation:)[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR submitted_from_sequence IS NULL
        OR submitted_from_sequence NOT BETWEEN 1 AND 9007199254740991
        OR submitted_maximum_records IS NULL
        OR submitted_maximum_records NOT BETWEEN 1 AND 10001 THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'Audit chain input is invalid';
     END IF;
-    PERFORM set_config('matrix.audit_tenant_id', submitted_tenant_id, true);
+    PERFORM set_config('matrix.audit_chain_id', submitted_chain_id, true);
     RETURN QUERY
     SELECT record.*
       FROM audit.records AS record
-     WHERE record.tenant_id = submitted_tenant_id
+     WHERE record.chain_id = submitted_chain_id
        AND record.sequence >= submitted_from_sequence
      ORDER BY record.sequence
      LIMIT submitted_maximum_records;
@@ -748,7 +891,7 @@ GRANT EXECUTE ON FUNCTION audit.lock_event(text, text)
     TO matrix_audit_runtime;
 GRANT EXECUTE ON FUNCTION audit.lookup_record(text, text)
     TO matrix_audit_runtime;
-GRANT EXECUTE ON FUNCTION audit.lock_tenant_head(text)
+GRANT EXECUTE ON FUNCTION audit.lock_chain_head(text)
     TO matrix_audit_runtime;
 GRANT EXECUTE ON FUNCTION audit.append_record(
     text, text, text, bigint, jsonb, text, text, text, text, timestamptz

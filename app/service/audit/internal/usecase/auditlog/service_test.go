@@ -20,6 +20,7 @@ func TestAuditUsecasesBindIAMAndAuditEveryAuthorizedRead(t *testing.T) {
 	repository := &auditRepository{transaction: transaction}
 	iam := &auditIAM{
 		identity: iamv1.ServiceIdentity{
+			InstallationID: "installation-example",
 			APIVersion:     iamv1.APIVersion,
 			Kind:           "ServiceIdentity",
 			OrganizationID: "organization-example",
@@ -124,7 +125,7 @@ func TestAuditUsecasesBindIAMAndAuditEveryAuthorizedRead(t *testing.T) {
 	assertLastAccessRecord(t, transaction, 6, auditv1.ActionAuditIntegrityVerified, "decision-4")
 	readiness, err := service.Readiness(context.Background())
 	if err != nil || readiness.State != auditv1.ReadinessReady ||
-		readiness.CheckedAt != transaction.now || readiness.SchemaVersion != 1 {
+		readiness.CheckedAt != transaction.now || readiness.SchemaVersion != 2 {
 		t.Fatalf("read Audit readiness: readiness=%#v err=%v", readiness, err)
 	}
 }
@@ -133,6 +134,7 @@ func TestAuditUsecasesFailClosedBeforeMutation(t *testing.T) {
 	transaction := newAuditTransaction()
 	iam := &auditIAM{
 		identity: iamv1.ServiceIdentity{
+			InstallationID: "installation-example",
 			APIVersion:     iamv1.APIVersion,
 			Kind:           "ServiceIdentity",
 			OrganizationID: "organization-example",
@@ -172,14 +174,14 @@ func TestAuditUsecasesFailClosedBeforeMutation(t *testing.T) {
 	if _, err := service.Ingest(context.Background(), producerCredential, event); !errors.Is(err, ErrUnauthenticated) {
 		t.Fatalf("unsupported producer error=%v, want unauthenticated", err)
 	}
-	if len(transaction.records["organization-example"]) != 0 {
+	if len(transaction.records[authority.TenantChain("organization-example")]) != 0 {
 		t.Fatal("rejected producer mutated Audit records")
 	}
 	iam.identity.Purpose = iamv1.ServiceIAM
 	if _, err := service.Ingest(context.Background(), producerCredential, event); err != nil {
 		t.Fatalf("seed Audit record: %v", err)
 	}
-	before := len(transaction.records["organization-example"])
+	before := len(transaction.records[authority.TenantChain("organization-example")])
 	iam.deny = true
 	if _, err := service.QueryRecords(
 		context.Background(),
@@ -189,7 +191,7 @@ func TestAuditUsecasesFailClosedBeforeMutation(t *testing.T) {
 	); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("denied Audit query error=%v, want forbidden", err)
 	}
-	if len(transaction.records["organization-example"]) != before {
+	if len(transaction.records[authority.TenantChain("organization-example")]) != before {
 		t.Fatal("denied Audit query appended an access record")
 	}
 	iam.deny = false
@@ -202,7 +204,7 @@ func TestAuditUsecasesFailClosedBeforeMutation(t *testing.T) {
 	); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("malformed IAM decision error=%v, want unavailable", err)
 	}
-	if len(transaction.records["organization-example"]) != before {
+	if len(transaction.records[authority.TenantChain("organization-example")]) != before {
 		t.Fatal("malformed IAM decision appended an access record")
 	}
 }
@@ -230,6 +232,91 @@ func auditEvent(
 	}
 }
 
+func TestPlatformAuditUsesInstallationAuthorityAndCannotReadTenantChain(t *testing.T) {
+	transaction := newAuditTransaction()
+	iam := &auditIAM{now: transaction.now, identity: iamv1.ServiceIdentity{
+		APIVersion: iamv1.APIVersion, Kind: "ServiceIdentity",
+		InstallationID: "organization-example", OrganizationID: "organization-example",
+		PrincipalID: "service-paas", Purpose: iamv1.ServicePaaS,
+	}}
+	nextID := 0
+	service, err := NewService(&auditRepository{transaction: transaction}, iam, Config{
+		CursorKey: bytes.Repeat([]byte{0x53}, 32),
+		NewID: func(prefix string) (string, error) {
+			nextID++
+			return fmt.Sprintf("%s-platform-%d", prefix, nextID), nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	credential := auditSecret(t, "test-platform-credential")
+	var platformEvent auditv1.Event
+	for index := 0; index < 2; index++ {
+		for _, platform := range []bool{false, true} {
+			event := auditEvent(auditv1.EventID(fmt.Sprintf("event-%t-%d", platform, index)),
+				auditv1.ActionPaaSApplicationCreated, auditv1.TargetApplication, "application-example", transaction.now)
+			event.Actor = auditv1.ActorReference{Type: auditv1.ActorUser, ID: "principal-reader"}
+			event.IAMDecisionID = "decision-original"
+			event.OperationID = auditv1.OperationID("operation-" + string(event.EventID))
+			if platform {
+				event.Action, event.Target.Kind = auditv1.ActionPaaSExecutionPoolCreated, auditv1.TargetExecutionPool
+				event.TenantID, event.InstallationID = "", iam.identity.InstallationID
+				platformEvent = event
+			}
+			accepted, err := service.Ingest(ctx, credential, event)
+			if err != nil || accepted.Record.Sequence != uint64(index+1) {
+				t.Fatalf("seed platform=%t sequence=%d: %v", platform, accepted.Record.Sequence, err)
+			}
+		}
+	}
+	wrong := platformEvent
+	wrong.InstallationID = "another-installation"
+	if _, err := service.Ingest(ctx, credential, wrong); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("wrong-installation producer accepted: %v", err)
+	}
+	query := auditv1.QueryRecordsRequest{PageSize: 1}
+	platformPage, err := service.QueryPlatformRecords(ctx, credential, "request-platform-read", query)
+	if err != nil || platformPage.InstallationID != iam.identity.InstallationID || platformPage.TenantID != "" ||
+		len(platformPage.Records) != 1 || platformPage.NextCursor == "" || platformPage.Records[0].Event != platformEvent {
+		t.Fatalf("platform page failed: %#v %v", platformPage, err)
+	}
+	tenantPage, err := service.QueryRecords(ctx, credential, "request-tenant-read", query)
+	if err != nil || tenantPage.TenantID != "organization-example" || tenantPage.InstallationID != "" || tenantPage.NextCursor == "" {
+		t.Fatalf("tenant page failed: %#v %v", tenantPage, err)
+	}
+	query.Cursor = platformPage.NextCursor
+	if _, err := service.QueryRecords(ctx, credential, "request-cross-tenant-cursor", query); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("platform cursor entered tenant chain: %v", err)
+	}
+	query.Cursor = tenantPage.NextCursor
+	if _, err := service.QueryPlatformRecords(ctx, credential, "request-cross-platform-cursor", query); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("tenant cursor entered platform chain: %v", err)
+	}
+	verification, err := service.VerifyPlatformChain(ctx, credential, "request-platform-verify",
+		auditv1.VerifyChainRequest{FromSequence: 1, MaximumRecords: 10})
+	if err != nil || verification.InstallationID != iam.identity.InstallationID || verification.TenantID != "" || verification.RecordCount != 3 {
+		t.Fatalf("platform chain verification failed: %#v %v", verification, err)
+	}
+	platformRecords := transaction.records[authority.InstallationChain(iam.identity.InstallationID)]
+	if len(platformRecords) != 4 || platformRecords[2].Event.Action != auditv1.ActionAuditPlatformRecordsRead ||
+		platformRecords[3].Event.Action != auditv1.ActionAuditPlatformIntegrityVerified ||
+		len(transaction.records[authority.TenantChain("organization-example")]) != 3 {
+		t.Fatal("platform access auditing crossed authority boundary")
+	}
+	iam.deny = true
+	if _, err := service.QueryPlatformRecords(ctx, credential, "request-revoked-platform", auditv1.QueryRecordsRequest{PageSize: 10}); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("revoked platform query accepted: %v", err)
+	}
+	if _, err := service.VerifyPlatformChain(ctx, credential, "request-revoked-platform-verify", auditv1.VerifyChainRequest{FromSequence: 1, MaximumRecords: 10}); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("revoked platform verification accepted: %v", err)
+	}
+	if len(transaction.records[authority.InstallationChain(iam.identity.InstallationID)]) != 4 {
+		t.Fatal("denied platform read changed the chain")
+	}
+}
+
 func auditSecret(t *testing.T, plaintext string) iamv1.Secret {
 	t.Helper()
 	secret, err := iamv1.NewSecret(plaintext)
@@ -247,7 +334,7 @@ func assertLastAccessRecord(
 	decisionID auditv1.DecisionID,
 ) {
 	t.Helper()
-	records := transaction.records["organization-example"]
+	records := transaction.records[authority.TenantChain("organization-example")]
 	if len(records) != int(sequence) {
 		t.Fatalf("stored Audit records=%d want=%d", len(records), sequence)
 	}
@@ -304,9 +391,13 @@ func (client *auditIAM) Authorize(
 		RequestID:  request.RequestID,
 		DecidedAt:  client.now,
 	}
+	if iamv1.IsPlatformAction(request.Action) {
+		decision.TenantID, decision.InstallationID = "", client.identity.InstallationID
+	}
 	if client.deny {
 		decision.Reason = iamv1.DecisionDenied
 		decision.TenantID = ""
+		decision.InstallationID = ""
 		decision.Subject = nil
 	}
 	if client.malformed {
@@ -342,14 +433,14 @@ func (client *auditIAM) VerifyInstallation(
 
 type auditTransaction struct {
 	now      time.Time
-	records  map[auditv1.TenantID][]auditv1.AuditRecord
+	records  map[authority.ChainID][]auditv1.AuditRecord
 	registry map[string]StoredRecord
 }
 
 func newAuditTransaction() *auditTransaction {
 	return &auditTransaction{
 		now:      time.Date(2026, 8, 26, 12, 13, 14, 123000, time.UTC),
-		records:  make(map[auditv1.TenantID][]auditv1.AuditRecord),
+		records:  make(map[authority.ChainID][]auditv1.AuditRecord),
 		registry: make(map[string]StoredRecord),
 	}
 }
@@ -375,18 +466,18 @@ func (transaction *auditTransaction) LookupRecord(
 	return record, found, nil
 }
 
-func (transaction *auditTransaction) LockTenantHead(
+func (transaction *auditTransaction) LockChainHead(
 	_ context.Context,
-	tenantID auditv1.TenantID,
+	chainID authority.ChainID,
 ) (authority.Checkpoint, time.Time, error) {
-	records := transaction.records[tenantID]
+	records := transaction.records[chainID]
 	if len(records) == 0 {
-		checkpoint, err := authority.GenesisCheckpoint(tenantID)
+		checkpoint, err := authority.GenesisCheckpoint(chainID)
 		return checkpoint, transaction.now, err
 	}
 	last := records[len(records)-1]
 	return authority.Checkpoint{
-		TenantID: tenantID, Sequence: last.Sequence, RecordHash: last.RecordHash,
+		ChainID: chainID, Sequence: last.Sequence, RecordHash: last.RecordHash,
 	}, transaction.now, nil
 }
 
@@ -402,15 +493,15 @@ func (transaction *auditTransaction) AppendRecord(
 		}
 		return "", ErrConflict
 	}
-	head, _, err := transaction.LockTenantHead(context.Background(), mutation.Record.Event.TenantID)
+	head, _, err := transaction.LockChainHead(context.Background(), authority.ChainFor(mutation.Record.Event.TenantID, mutation.Record.Event.InstallationID))
 	if err != nil {
 		return "", err
 	}
 	if _, err := authority.VerifyChain(head, []auditv1.AuditRecord{mutation.Record}); err != nil {
 		return "", ErrUnavailable
 	}
-	transaction.records[mutation.Record.Event.TenantID] = append(
-		transaction.records[mutation.Record.Event.TenantID],
+	transaction.records[authority.ChainFor(mutation.Record.Event.TenantID, mutation.Record.Event.InstallationID)] = append(
+		transaction.records[authority.ChainFor(mutation.Record.Event.TenantID, mutation.Record.Event.InstallationID)],
 		mutation.Record,
 	)
 	transaction.registry[key] = StoredRecord{
@@ -429,11 +520,11 @@ func (transaction *auditTransaction) ReadRecords(
 	_ context.Context,
 	query RecordQuery,
 ) ([]auditv1.AuditRecord, error) {
-	stored := transaction.records[query.TenantID]
+	stored := transaction.records[query.ChainID]
 	result := make([]auditv1.AuditRecord, 0, query.Limit)
 	for index := len(stored) - 1; index >= 0 && len(result) < query.Limit; index-- {
 		record := stored[index]
-		if record.Sequence >= query.BeforeSequence || !recordMatchesQuery(record, query.TenantID, auditv1.QueryRecordsRequest{
+		if record.Sequence >= query.BeforeSequence || !recordMatchesQuery(record, query.ChainID, auditv1.QueryRecordsRequest{
 			PageSize: query.Limit,
 			From:     query.From,
 			To:       query.To,
@@ -449,26 +540,26 @@ func (transaction *auditTransaction) ReadRecords(
 
 func (transaction *auditTransaction) ReadCheckpoint(
 	_ context.Context,
-	tenantID auditv1.TenantID,
+	chainID authority.ChainID,
 	sequence uint64,
 ) (authority.Checkpoint, bool, error) {
-	records := transaction.records[tenantID]
+	records := transaction.records[chainID]
 	if sequence == 0 || sequence > uint64(len(records)) {
 		return authority.Checkpoint{}, false, nil
 	}
 	record := records[sequence-1]
 	return authority.Checkpoint{
-		TenantID: tenantID, Sequence: sequence, RecordHash: record.RecordHash,
+		ChainID: chainID, Sequence: sequence, RecordHash: record.RecordHash,
 	}, true, nil
 }
 
 func (transaction *auditTransaction) ReadChain(
 	_ context.Context,
-	tenantID auditv1.TenantID,
+	chainID authority.ChainID,
 	fromSequence uint64,
 	maximumRecords int,
 ) ([]auditv1.AuditRecord, error) {
-	records := transaction.records[tenantID]
+	records := transaction.records[chainID]
 	if fromSequence == 0 || fromSequence > uint64(len(records)) {
 		return nil, nil
 	}
@@ -479,10 +570,10 @@ func (transaction *auditTransaction) ReadChain(
 
 func (transaction *auditTransaction) LookupPaaSOperationRecord(
 	_ context.Context,
-	tenantID auditv1.TenantID,
+	chainID authority.ChainID,
 	operationID auditv1.OperationID,
 ) (auditv1.AuditRecord, bool, error) {
-	for _, record := range transaction.records[tenantID] {
+	for _, record := range transaction.records[chainID] {
 		if record.Source == auditv1.SourcePaaS && record.Event.OperationID == operationID {
 			return record, true, nil
 		}
@@ -491,7 +582,7 @@ func (transaction *auditTransaction) LookupPaaSOperationRecord(
 }
 
 func (transaction *auditTransaction) Readiness(context.Context) (ReadinessSnapshot, error) {
-	return ReadinessSnapshot{Ready: true, SchemaVersion: 1, CheckedAt: transaction.now}, nil
+	return ReadinessSnapshot{Ready: true, SchemaVersion: 2, CheckedAt: transaction.now}, nil
 }
 
 func registryKey(source auditv1.Source, eventID auditv1.EventID) string {

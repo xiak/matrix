@@ -79,9 +79,11 @@ const (
 	ActionManagedServiceInstallationCreate       Action = "managedservice.service-installation.create"
 	ActionManagedServiceInstallationRead         Action = "managedservice.service-installation.read"
 
-	ActionAuditRecordRead      Action = "audit.record.read"
-	ActionAuditIntegrityVerify Action = "audit.integrity.verify"
-	ActionInstallationVerify   Action = "installation.verify"
+	ActionAuditRecordRead              Action = "audit.record.read"
+	ActionAuditIntegrityVerify         Action = "audit.integrity.verify"
+	ActionAuditPlatformRecordRead      Action = "audit.platform-record.read"
+	ActionAuditPlatformIntegrityVerify Action = "audit.platform-integrity.verify"
+	ActionInstallationVerify           Action = "installation.verify"
 )
 
 const (
@@ -177,6 +179,8 @@ var allActions = []Action{
 	ActionManagedServiceInstallationRead,
 	ActionAuditRecordRead,
 	ActionAuditIntegrityVerify,
+	ActionAuditPlatformRecordRead,
+	ActionAuditPlatformIntegrityVerify,
 	ActionInstallationVerify,
 }
 
@@ -203,7 +207,7 @@ func IsPlatformAction(action Action) bool {
 	case ActionIAMPlatformRoleBindingPut, ActionIAMPlatformRoleBindingRevoke,
 		ActionPaaSExecutionPoolCreate, ActionPaaSExecutionPoolRead,
 		ActionPaaSExecutionTargetRegister, ActionPaaSExecutionTargetRead,
-		ActionPaaSPlatformOperationRead:
+		ActionPaaSPlatformOperationRead, ActionAuditPlatformRecordRead, ActionAuditPlatformIntegrityVerify:
 		return true
 	default:
 		return false

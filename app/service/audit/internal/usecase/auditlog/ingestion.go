@@ -23,7 +23,8 @@ func (service *Service) Ingest(
 		return auditv1.IngestionResult{}, err
 	}
 	if auditv1.ValidateEventForSource(source, event) != nil ||
-		event.TenantID != auditv1.TenantID(identity.OrganizationID) {
+		(event.InstallationID != "" && event.InstallationID != identity.InstallationID) ||
+		(event.InstallationID == "" && event.TenantID != auditv1.TenantID(identity.OrganizationID)) {
 		return auditv1.IngestionResult{}, ErrInvalidArgument
 	}
 	var result auditv1.IngestionResult
@@ -52,7 +53,9 @@ func (service *Service) Ingest(
 			}
 			return nil
 		}
-		head, ingestedAt, err := transaction.LockTenantHead(transactionContext, event.TenantID)
+		head, ingestedAt, err := transaction.LockChainHead(
+			transactionContext, authority.ChainFor(event.TenantID, event.InstallationID),
+		)
 		if err != nil {
 			return err
 		}

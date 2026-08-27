@@ -302,12 +302,13 @@ func (value *transaction) LookupService(
 	ctx context.Context,
 	lookupDigest string,
 ) (identityaccess.ServiceCredential, bool, error) {
-	var organizationID, principalID, purpose, verificationDigest string
+	var organizationID, principalID, purpose, verificationDigest, installationID string
 	err := value.tx.QueryRow(ctx, "SELECT * FROM iam.lookup_service($1)", lookupDigest).Scan(
 		&organizationID,
 		&principalID,
 		&purpose,
 		&verificationDigest,
+		&installationID,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return identityaccess.ServiceCredential{}, false, nil
@@ -318,6 +319,7 @@ func (value *transaction) LookupService(
 	identity := iamv1.ServiceIdentity{
 		APIVersion:     iamv1.APIVersion,
 		Kind:           "ServiceIdentity",
+		InstallationID: installationID,
 		OrganizationID: iamv1.OrganizationID(organizationID),
 		PrincipalID:    iamv1.PrincipalID(principalID),
 		Purpose:        iamv1.ServicePurpose(purpose),

@@ -1,6 +1,8 @@
 package auditv1
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"reflect"
 	"strings"
@@ -9,6 +11,28 @@ import (
 
 	"github.com/xiak/matrix/api/contractjson"
 )
+
+func TestCanonicalEventPreservesTenantBytesAndDigest(t *testing.T) {
+	event := Event{
+		APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-example",
+		TenantID: "organization-example", Actor: ActorReference{Type: ActorUser, ID: "principal-example"},
+		IAMDecisionID: "decision-example", Action: ActionPaaSDeploymentCreated,
+		Target: TargetReference{Kind: TargetDeployment, ID: "deployment-example"}, Result: ResultAccepted,
+		RequestDigest: "sha256:" + strings.Repeat("1", 64), RequestID: "request-example",
+		CorrelationID: "correlation-example", OperationID: "operation-example",
+		OccurredAt: time.Date(2026, 8, 25, 3, 4, 5, 0, time.UTC),
+	}
+	// This is the accepted tenant canonical wire format, not an implementation snapshot.
+	const expected = `{"canonicalVersion":"matrix.audit.canonical-event.v1","source":"PAAS","event":{"apiVersion":"audit.matrix.xiak.com/v1","kind":"AuditEvent","eventId":"event-example","tenantId":"organization-example","actor":{"type":"USER","id":"principal-example"},"iamDecisionId":"decision-example","action":"paas.deployment.created","target":{"kind":"DEPLOYMENT","id":"deployment-example"},"result":"ACCEPTED","requestDigest":"sha256:1111111111111111111111111111111111111111111111111111111111111111","requestId":"request-example","correlationId":"correlation-example","operationId":"operation-example","occurredAt":"2026-08-25T03:04:05.000000Z"}}`
+	document, digest, err := CanonicalizeEvent(SourcePaaS, event)
+	expectedDigest := sha256.Sum256([]byte(expected))
+	if err != nil || document != expected || digest != "sha256:"+hex.EncodeToString(expectedDigest[:]) {
+		t.Fatalf("historical tenant canonical bytes/digest changed: %v", err)
+	}
+	if _, _, err := CanonicalizeEvent(SourceIAM, event); err == nil {
+		t.Fatal("canonical encoder accepted another producer source")
+	}
+}
 
 func TestAuditExamplesPassDomainValidation(t *testing.T) {
 	tests := []struct {
@@ -86,11 +110,24 @@ func TestAuditActionCatalogIsClosedAndSourceBound(t *testing.T) {
 		if contract.OperationRequired {
 			event.OperationID = "operation-example"
 		}
+		if contract.PlatformOnly {
+			event.TenantID, event.InstallationID = "", "installation-example"
+			event.Actor.Type = ActorUser
+		}
 		if err := ValidateEventForSource(contract.Source, event); err != nil {
 			t.Fatalf("valid action contract %q rejected: %v", action, err)
 		}
 		if err := ValidateEventForSource(otherAuditSource(contract.Source), event); err == nil {
 			t.Fatalf("action %q accepted a forged source", action)
+		}
+		wrongAuthority := event
+		if contract.PlatformOnly {
+			wrongAuthority.TenantID, wrongAuthority.InstallationID = TenantID(event.InstallationID), ""
+		} else {
+			wrongAuthority.TenantID, wrongAuthority.InstallationID = "", string(event.TenantID)
+		}
+		if ValidateEvent(wrongAuthority) == nil {
+			t.Fatalf("action %q accepted another authority namespace", action)
 		}
 	}
 	if _, known := ContractForAction(Action("audit.unregistered")); known {
@@ -117,6 +154,8 @@ func TestAuditOpenAPISecurityDerivesSourceAndTenantFromCredentials(t *testing.T)
 	assertAuditSecurity(t, paths, "/v1/events", "ServiceCredential")
 	assertAuditSecurity(t, paths, "/v1/records:query", "UserSession")
 	assertAuditSecurity(t, paths, "/v1/integrity:verify", "UserSession")
+	assertAuditSecurity(t, paths, "/v1/platform/records:query", "UserSession")
+	assertAuditSecurity(t, paths, "/v1/platform/integrity:verify", "UserSession")
 	assertAuditSecurity(t, paths, "/v1/installation:verify", "InstallationVerifier")
 
 	schemas := auditOpenAPISchemas(t, document)
@@ -126,7 +165,7 @@ func TestAuditOpenAPISecurityDerivesSourceAndTenantFromCredentials(t *testing.T)
 	}
 	for _, schemaName := range []string{"QueryRecordsRequest", "VerifyChainRequest"} {
 		properties := mustAuditObject(t, mustAuditObject(t, schemas[schemaName], schemaName)["properties"], schemaName+" properties")
-		for _, forbidden := range []string{"tenantId", "organizationId", "subject", "source"} {
+		for _, forbidden := range []string{"tenantId", "installationId", "organizationId", "subject", "source"} {
 			if _, exists := properties[forbidden]; exists {
 				t.Fatalf("%s exposes authority selector %q", schemaName, forbidden)
 			}

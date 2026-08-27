@@ -22,21 +22,22 @@ type TargetReference struct {
 // Event contains one sanitized fact. Source is deliberately absent: the
 // ingestion boundary derives it exclusively from the service credential.
 type Event struct {
-	APIVersion    string          `json:"apiVersion"`
-	Kind          string          `json:"kind"`
-	EventID       EventID         `json:"eventId"`
-	TenantID      TenantID        `json:"tenantId"`
-	Actor         ActorReference  `json:"actor"`
-	IAMDecisionID DecisionID      `json:"iamDecisionId,omitempty"`
-	Action        Action          `json:"action"`
-	Target        TargetReference `json:"target"`
-	Result        Result          `json:"result"`
-	RequestDigest string          `json:"requestDigest"`
-	RequestID     string          `json:"requestId"`
-	CorrelationID string          `json:"correlationId"`
-	OperationID   OperationID     `json:"operationId,omitempty"`
-	TraceParent   string          `json:"traceparent,omitempty"`
-	OccurredAt    time.Time       `json:"occurredAt"`
+	APIVersion     string          `json:"apiVersion"`
+	Kind           string          `json:"kind"`
+	EventID        EventID         `json:"eventId"`
+	TenantID       TenantID        `json:"tenantId,omitempty"`
+	InstallationID string          `json:"installationId,omitempty"`
+	Actor          ActorReference  `json:"actor"`
+	IAMDecisionID  DecisionID      `json:"iamDecisionId,omitempty"`
+	Action         Action          `json:"action"`
+	Target         TargetReference `json:"target"`
+	Result         Result          `json:"result"`
+	RequestDigest  string          `json:"requestDigest"`
+	RequestID      string          `json:"requestId"`
+	CorrelationID  string          `json:"correlationId"`
+	OperationID    OperationID     `json:"operationId,omitempty"`
+	TraceParent    string          `json:"traceparent,omitempty"`
+	OccurredAt     time.Time       `json:"occurredAt"`
 }
 
 type AuditRecord struct {
@@ -69,11 +70,12 @@ type QueryRecordsRequest struct {
 }
 
 type RecordPage struct {
-	APIVersion string        `json:"apiVersion"`
-	Kind       string        `json:"kind"`
-	TenantID   TenantID      `json:"tenantId"`
-	Records    []AuditRecord `json:"records"`
-	NextCursor Cursor        `json:"nextCursor,omitempty"`
+	APIVersion     string        `json:"apiVersion"`
+	Kind           string        `json:"kind"`
+	TenantID       TenantID      `json:"tenantId,omitempty"`
+	InstallationID string        `json:"installationId,omitempty"`
+	Records        []AuditRecord `json:"records"`
+	NextCursor     Cursor        `json:"nextCursor,omitempty"`
 }
 
 type VerifyChainRequest struct {
@@ -84,7 +86,8 @@ type VerifyChainRequest struct {
 type ChainVerification struct {
 	APIVersion        string            `json:"apiVersion"`
 	Kind              string            `json:"kind"`
-	TenantID          TenantID          `json:"tenantId"`
+	TenantID          TenantID          `json:"tenantId,omitempty"`
+	InstallationID    string            `json:"installationId,omitempty"`
 	State             VerificationState `json:"state"`
 	FromSequence      uint64            `json:"fromSequence"`
 	ToSequence        uint64            `json:"toSequence"`
