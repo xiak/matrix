@@ -5,6 +5,7 @@
 - Target design date: 2026-08-25
 - IAM API contract: `iam.matrix.xiak.com/v1`
 - Audit API contract: `audit.matrix.xiak.com/v1`
+- Phase 3 extension: installation-scoped IAM authority implemented; host-resource consumption and offline upgrade acceptance remain in FEAT-008
 
 ## Outcome
 
@@ -124,6 +125,32 @@ The action catalog includes the accepted PaaS `Authorizer` actions plus the
 minimal IAM administration, Audit read/verify, and installation-probe actions.
 Roles and actions are code-owned closed values in Phase 1; customers cannot
 upload policy languages, expressions, scripts, or provider-native documents.
+
+### Installation-scoped platform authorization
+
+FEAT-008's host admission uses the separate `PLATFORM_OPERATOR` role for
+execution-pool create/read, execution-target register/read, platform Operation
+read, and platform-role grant/revoke. Organization administration never grants
+these actions; the platform role does not implicitly grant tenant application
+or organization administration. Platform bindings admit user principals only.
+The existing role-binding commands select their IAM action from the actual
+role, including retained revoked bindings, so replay cannot change authority.
+
+Allowed platform decisions contain the exact `installationId` from IAM's
+sealed bootstrap receipt and no `tenantId`. Allowed tenant decisions contain
+only `tenantId`; denials expose neither authority nor subject. The calling
+service must still own the action. IAM reloads the current session, roles and
+receipt on every request and rejects incomplete identity or password-change
+state. SQL guards enforce the same installation/user/active-role boundary.
+IAM authorization Audit facts remain in the actor's organization because their
+target is the IAM decision, not the platform resource.
+
+A fresh bootstrap grants the initial administrator two independent bindings:
+organization administrator and platform operator. Neither equal bootstrap
+replay nor schema reapplication repairs or regrants a revoked platform role.
+Older installations without a platform binding require an explicit authorized
+upgrade/recovery path; that offline lifecycle remains unaccepted. No migration
+silently promotes organization administrators.
 
 ### IAM transactions and Audit
 
@@ -342,6 +369,14 @@ tests pass.
   leases and fencing; clean PostgreSQL 18 gates prove the three new actions,
   their public contracts, source-bound ingestion, transactional correlation,
   and delivery through the existing immutable Audit chain.
+- The Phase 3 IAM extension passes the existing strict contract, role matrix,
+  real PostgreSQL HTTP and database attack gates. The existing independent
+  IAM/Audit/PaaS process gate proves explicit platform grants, next-request
+  revocation, rejected organization-admin self-grant, and no authority
+  resurrection after IAM restart with equal bootstrap. Each tested allowed
+  or denied platform decision joins exactly one delivered immutable IAM Audit
+  fact. These checks do not accept platform-resource mutations or the offline
+  upgrade/recovery path.
 
 ## Deferred
 

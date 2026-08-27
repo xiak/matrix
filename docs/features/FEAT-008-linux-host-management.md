@@ -217,6 +217,11 @@ gates in the existing [verification workflow](../../.github/workflows/verificati
 No implementation iteration or complete Phase 3 gate is accepted.
 Next in P3-1: control-plane admission/refresh and signed offline node startup.
 The node observation chain alone is not the completed observability product.
+The prerequisite installation-scoped IAM role/decision boundary and its
+verification are owned by
+[FEAT-006](FEAT-006-platform-authorities.md#installation-scoped-platform-authorization).
+Platform host mutations, their Operation/Audit integration and explicit
+authorization when upgrading an older installation remain unaccepted.
 
 ## Adoption
 

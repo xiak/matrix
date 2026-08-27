@@ -192,6 +192,56 @@ func TestManagedServiceUsesTheExistingClosedPaaSRoleMatrix(t *testing.T) {
 	}
 }
 
+func TestPlatformAuthorityRequiresAnExplicitRoleAndInstallationBinding(t *testing.T) {
+	now := authorityTestTime()
+	for _, action := range iamv1.AllActions() {
+		if !iamv1.IsPlatformAction(action) {
+			if RoleAllows(iamv1.RolePlatformOperator, action) {
+				t.Fatalf("platform operator received unrelated authority %s", action)
+			}
+			continue
+		}
+		t.Run(string(action), func(t *testing.T) {
+			kind, _ := iamv1.ResourceKindForAction(action)
+			request := iamv1.AuthorizationRequest{Action: action,
+				Resource:  iamv1.ResourceReference{Kind: kind, ID: "resource-example"},
+				RequestID: "request-platform", CorrelationID: "request-platform"}
+			service := iamv1.ServicePaaS
+			if ServiceCanRequest(iamv1.ServiceIAM, action) {
+				service = iamv1.ServiceIAM
+			}
+			for _, role := range iamv1.AllBuiltinRoles() {
+				context := authoritySubject(now, role)
+				context.InstallationID = "installation-example"
+				decision, err := Decide(context, service, request, "decision-platform", now)
+				if err != nil || decision.Allowed != (role == iamv1.RolePlatformOperator) {
+					t.Fatalf("role=%s decision=%+v error=%v", role, decision, err)
+				}
+				if decision.Allowed {
+					if decision.InstallationID != context.InstallationID || decision.TenantID != "" || decision.Subject == nil {
+						t.Fatal("platform decision was not bound exclusively to the installation")
+					}
+				} else if decision.InstallationID != "" || decision.TenantID != "" || decision.Subject != nil {
+					t.Fatal("denied platform decision exposed authority")
+				}
+			}
+			for _, mutation := range []func(*SubjectContext){
+				func(context *SubjectContext) { context.InstallationID = "" },
+				func(context *SubjectContext) { context.Principal.MustChangePassword = true },
+				func(context *SubjectContext) { context.Roles = nil },
+			} {
+				context := authoritySubject(now, iamv1.RolePlatformOperator)
+				context.InstallationID = "installation-example"
+				mutation(&context)
+				decision, err := Decide(context, service, request, "decision-platform-denied", now)
+				if err != nil || decision.Allowed {
+					t.Fatalf("incomplete or revoked platform authority accepted: decision=%+v error=%v", decision, err)
+				}
+			}
+		})
+	}
+}
+
 func TestAuthorizationDeniesAServiceOutsideItsProductBoundary(t *testing.T) {
 	now := authorityTestTime()
 	context := authoritySubject(now, iamv1.RolePaaSDeveloper)

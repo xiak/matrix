@@ -203,5 +203,18 @@ func (service *Authority) authenticateSession(
 		}
 		return SessionCredential{}, ErrUnavailable
 	}
+	binding.Subject.InstallationID = ""
+	for _, role := range binding.Subject.Roles {
+		if role != iamv1.RolePlatformOperator {
+			continue
+		}
+		status, err := transaction.BootstrapStatus(ctx)
+		if err != nil || iamv1.ValidateBootstrapStatus(status) != nil ||
+			status.State != iamv1.BootstrapReady || status.OrganizationID != binding.Subject.Organization.ID {
+			return SessionCredential{}, ErrUnavailable
+		}
+		binding.Subject.InstallationID = status.InstallationID
+		break
+	}
 	return binding, nil
 }

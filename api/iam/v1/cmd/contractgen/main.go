@@ -197,6 +197,7 @@ func enumSchemas() map[string][]string {
 			string(iamv1.ResourceQuotaEntitlement), string(iamv1.ResourceServiceInstallation),
 			string(iamv1.ResourceAuditRecord),
 			string(iamv1.ResourceAuditChain), string(iamv1.ResourceInstallation),
+			string(iamv1.ResourceExecutionPool), string(iamv1.ResourceExecutionTarget),
 		},
 		"DecisionReason": {string(iamv1.DecisionAllowed), string(iamv1.DecisionDenied)},
 		"BootstrapState": {string(iamv1.BootstrapUninitialized), string(iamv1.BootstrapReady)},
@@ -322,17 +323,33 @@ func applySemanticOverlays(schemas object) {
 		object{
 			"if": object{"properties": object{"allowed": object{"const": true}}, "required": []string{"allowed"}},
 			"then": object{
-				"required":   []string{"tenantId", "subject"},
+				"required":   []string{"subject"},
 				"properties": object{"reason": object{"const": string(iamv1.DecisionAllowed)}},
 			},
 		},
 		object{
 			"if": object{"properties": object{"allowed": object{"const": false}}, "required": []string{"allowed"}},
 			"then": object{"properties": object{
-				"reason": object{"const": string(iamv1.DecisionDenied)}, "tenantId": false, "subject": false,
+				"reason": object{"const": string(iamv1.DecisionDenied)}, "tenantId": false, "installationId": false, "subject": false,
 			}},
 		},
 	}
+	var platformActions []string
+	for _, action := range iamv1.AllActions() {
+		if iamv1.IsPlatformAction(action) {
+			platformActions = append(platformActions, string(action))
+		}
+	}
+	decisionRules = append(decisionRules, object{
+		"if": object{"properties": object{"allowed": object{"const": true}}, "required": []string{"allowed"}},
+		"then": object{
+			"if": object{"properties": object{"action": object{"enum": platformActions}}, "required": []string{"action"}},
+			"then": object{"required": []string{"installationId"}, "properties": object{
+				"tenantId": false, "subject": object{"properties": object{"type": object{"const": string(iamv1.PrincipalUser)}}},
+			}},
+			"else": object{"required": []string{"tenantId"}, "properties": object{"installationId": false}},
+		},
+	})
 	decision["allOf"] = append(decisionRules, actionResourceRules()...)
 	schemas["AuthorizationRequest"].(object)["allOf"] = actionResourceRules()
 

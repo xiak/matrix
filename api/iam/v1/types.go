@@ -191,17 +191,20 @@ type AuthorizationRequest struct {
 }
 
 type AuthorizationDecision struct {
-	APIVersion string            `json:"apiVersion"`
-	Kind       string            `json:"kind"`
-	ID         DecisionID        `json:"id"`
-	Allowed    bool              `json:"allowed"`
-	Reason     DecisionReason    `json:"reason"`
-	TenantID   OrganizationID    `json:"tenantId,omitempty"`
-	Subject    *Subject          `json:"subject,omitempty"`
-	Action     Action            `json:"action"`
-	Resource   ResourceReference `json:"resource"`
-	RequestID  string            `json:"requestId"`
-	DecidedAt  time.Time         `json:"decidedAt"`
+	APIVersion string         `json:"apiVersion"`
+	Kind       string         `json:"kind"`
+	ID         DecisionID     `json:"id"`
+	Allowed    bool           `json:"allowed"`
+	Reason     DecisionReason `json:"reason"`
+	TenantID   OrganizationID `json:"tenantId,omitempty"`
+	// Platform decisions bind the installed authority and omit tenantId. The
+	// principal's home organization is not ownership of a platform resource.
+	InstallationID string            `json:"installationId,omitempty"`
+	Subject        *Subject          `json:"subject,omitempty"`
+	Action         Action            `json:"action"`
+	Resource       ResourceReference `json:"resource"`
+	RequestID      string            `json:"requestId"`
+	DecidedAt      time.Time         `json:"decidedAt"`
 }
 
 type Readiness struct {

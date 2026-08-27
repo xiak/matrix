@@ -596,6 +596,32 @@ func (value *transaction) PutRoleBinding(
 	return stored, applied, nil
 }
 
+func (value *transaction) LookupRoleBindingRole(
+	ctx context.Context,
+	organizationID iamv1.OrganizationID,
+	bindingID iamv1.RoleBindingID,
+) (iamv1.BuiltinRole, bool, error) {
+	if iamv1.ValidateID("organizationId", string(organizationID)) != nil ||
+		iamv1.ValidateID("roleBindingId", string(bindingID)) != nil {
+		return "", false, identityaccess.ErrInvalidArgument
+	}
+	var role iamv1.BuiltinRole
+	err := value.tx.QueryRow(ctx, "SELECT role_name FROM iam.lookup_role_binding_role($1, $2)",
+		string(organizationID), string(bindingID)).Scan(&role)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, mapDatabaseError("look up IAM role binding authority", err)
+	}
+	for _, known := range iamv1.AllBuiltinRoles() {
+		if role == known {
+			return role, true, nil
+		}
+	}
+	return "", false, identityaccess.ErrUnavailable
+}
+
 func (value *transaction) RevokeRoleBinding(
 	ctx context.Context,
 	mutation identityaccess.RoleBindingRevocationMutation,

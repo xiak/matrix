@@ -102,19 +102,21 @@ CREATE TABLE IF NOT EXISTS iam.role_bindings (
         REFERENCES iam.principals (tenant_id, id),
     CONSTRAINT role_bindings_active_uq UNIQUE NULLS NOT DISTINCT (
         tenant_id, principal_id, role_name, revoked_at
-    ),
-    CONSTRAINT role_bindings_values_valid CHECK (
+    )
+);
+
+ALTER TABLE iam.role_bindings DROP CONSTRAINT IF EXISTS role_bindings_values_valid;
+ALTER TABLE iam.role_bindings ADD CONSTRAINT role_bindings_values_valid CHECK (
         id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND principal_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND role_name IN (
             'ORGANIZATION_ADMIN', 'PAAS_DEVELOPER', 'PAAS_VIEWER',
-            'AUDIT_READER', 'INSTALLATION_VERIFIER'
+            'AUDIT_READER', 'INSTALLATION_VERIFIER', 'PLATFORM_OPERATOR'
         )
         AND resource_version BETWEEN 1 AND 9007199254740991
         AND updated_at >= created_at
         AND (revoked_at IS NULL OR revoked_at >= created_at)
-    )
-);
+    );
 
 CREATE TABLE IF NOT EXISTS iam.user_credentials (
     tenant_id text COLLATE "C" NOT NULL,
@@ -544,6 +546,14 @@ BEGIN
         submitted_administrator_id, 'ORGANIZATION_ADMIN', 1,
         effective_now, effective_now
     );
+    INSERT INTO iam.role_bindings (
+        tenant_id, id, principal_id, role_name, resource_version,
+        created_at, updated_at
+    ) VALUES (
+        submitted_organization_id, 'bootstrap-platform-operator-binding',
+        submitted_administrator_id, 'PLATFORM_OPERATOR', 1,
+        effective_now, effective_now
+    );
     FOR index IN 0..3 LOOP
         service := submitted_services->index;
         expected_purpose := (ARRAY[
@@ -673,7 +683,14 @@ AS $function$
         WHEN 'iam.principal.read' THEN 'PRINCIPAL'
         WHEN 'iam.role-binding.put' THEN 'PRINCIPAL'
         WHEN 'iam.role-binding.revoke' THEN 'ROLE_BINDING'
+        WHEN 'iam.platform-role-binding.put' THEN 'PRINCIPAL'
+        WHEN 'iam.platform-role-binding.revoke' THEN 'ROLE_BINDING'
         WHEN 'iam.session.revoke' THEN 'SESSION'
+        WHEN 'paas.execution-pool.create' THEN 'EXECUTION_POOL'
+        WHEN 'paas.execution-pool.read' THEN 'EXECUTION_POOL'
+        WHEN 'paas.execution-target.register' THEN 'EXECUTION_TARGET'
+        WHEN 'paas.execution-target.read' THEN 'EXECUTION_TARGET'
+        WHEN 'paas.platform-operation.read' THEN 'OPERATION'
         WHEN 'paas.application.create' THEN 'APPLICATION'
         WHEN 'paas.application.read' THEN 'APPLICATION'
         WHEN 'paas.configuration.create' THEN 'CONFIGURATION'
@@ -688,11 +705,32 @@ AS $function$
         WHEN 'paas.deployment.stop' THEN 'DEPLOYMENT'
         WHEN 'paas.deployment.read' THEN 'DEPLOYMENT'
         WHEN 'paas.operation.read' THEN 'OPERATION'
+        WHEN 'managedservice.offering.read' THEN 'SERVICE_OFFERING'
+        WHEN 'managedservice.region.read' THEN 'REGION'
+        WHEN 'managedservice.quota-entitlement.activate' THEN 'QUOTA_ENTITLEMENT'
+        WHEN 'managedservice.quota-entitlement.read' THEN 'QUOTA_ENTITLEMENT'
+        WHEN 'managedservice.service-installation.create' THEN 'SERVICE_INSTALLATION'
+        WHEN 'managedservice.service-installation.read' THEN 'SERVICE_INSTALLATION'
         WHEN 'audit.record.read' THEN 'AUDIT_RECORD'
         WHEN 'audit.integrity.verify' THEN 'AUDIT_CHAIN'
         WHEN 'installation.verify' THEN 'INSTALLATION'
         ELSE NULL
     END
+$function$;
+
+CREATE OR REPLACE FUNCTION iam.is_platform_action(submitted_action text)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+SET search_path = pg_catalog, pg_temp
+AS $function$
+    SELECT COALESCE(submitted_action IN (
+        'iam.platform-role-binding.put', 'iam.platform-role-binding.revoke',
+        'paas.execution-pool.create', 'paas.execution-pool.read',
+        'paas.execution-target.register', 'paas.execution-target.read',
+        'paas.platform-operation.read'
+    ), false)
 $function$;
 
 CREATE OR REPLACE FUNCTION iam.lookup_login(submitted_login_name text)
@@ -973,6 +1011,7 @@ DECLARE
     expected_kind text;
     decision_allowed boolean;
     expected_result text;
+    platform_action boolean;
 BEGIN
     IF submitted_tenant_id COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
@@ -987,7 +1026,7 @@ BEGIN
        ])
        OR (submitted_decision - ARRAY[
             'apiVersion', 'kind', 'id', 'allowed', 'reason', 'tenantId',
-            'subject', 'action', 'resource', 'requestId', 'decidedAt'
+            'subject', 'installationId', 'action', 'resource', 'requestId', 'decidedAt'
        ]) <> '{}'::jsonb
        OR NOT ((submitted_decision->'resource') ?& ARRAY['kind', 'id'])
        OR ((submitted_decision->'resource') - ARRAY['kind', 'id']) <> '{}'::jsonb
@@ -1036,19 +1075,43 @@ BEGIN
     END IF;
 
     decision_allowed := (submitted_decision->>'allowed')::boolean;
+    platform_action := iam.is_platform_action(submitted_decision->>'action');
     expected_result := CASE WHEN decision_allowed THEN 'ALLOWED' ELSE 'DENIED' END;
     IF submitted_decision->>'reason' IS DISTINCT FROM expected_result
        OR (decision_allowed AND (
-            NOT (submitted_decision ?& ARRAY['tenantId', 'subject'])
+            NOT (submitted_decision ? 'subject')
             OR jsonb_typeof(submitted_decision->'subject') <> 'object'
             OR ((submitted_decision->'subject') - ARRAY['type', 'id']) <> '{}'::jsonb
             OR NOT ((submitted_decision->'subject') ?& ARRAY['type', 'id'])
-            OR submitted_decision->>'tenantId' IS DISTINCT FROM submitted_tenant_id
             OR submitted_decision#>>'{subject,type}' IS DISTINCT FROM actor_type
             OR submitted_decision#>>'{subject,id}' IS DISTINCT FROM submitted_principal_id
-       ))
-       OR (NOT decision_allowed AND (
-            submitted_decision ? 'tenantId' OR submitted_decision ? 'subject'
+            OR (NOT platform_action AND (
+                submitted_decision ? 'installationId'
+                OR submitted_decision->>'tenantId' IS DISTINCT FROM submitted_tenant_id
+            ))
+            OR (platform_action AND (
+                submitted_decision ? 'tenantId'
+                OR jsonb_typeof(submitted_decision->'installationId') IS DISTINCT FROM 'string'
+                OR actor_type <> 'USER'
+                OR NOT EXISTS (
+                    SELECT 1 FROM iam.bootstrap_receipts AS receipt
+                     WHERE receipt.organization_id = submitted_tenant_id
+                       AND receipt.installation_id = submitted_decision->>'installationId'
+                )
+                OR NOT EXISTS (
+                    SELECT 1 FROM iam.role_bindings AS binding
+                    JOIN iam.principals AS principal
+                      ON principal.tenant_id = binding.tenant_id AND principal.id = binding.principal_id
+                     WHERE binding.tenant_id = submitted_tenant_id
+                       AND binding.principal_id = submitted_principal_id
+                       AND binding.role_name = 'PLATFORM_OPERATOR'
+                       AND binding.revoked_at IS NULL
+                       AND NOT principal.must_change_password
+                )
+            ))
+        ))
+        OR (NOT decision_allowed AND (
+            submitted_decision ? 'tenantId' OR submitted_decision ? 'installationId' OR submitted_decision ? 'subject'
        )) THEN
         RAISE EXCEPTION USING
             ERRCODE = '22023',
@@ -1457,13 +1520,16 @@ BEGIN
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR submitted_role_name NOT IN (
             'ORGANIZATION_ADMIN', 'PAAS_DEVELOPER', 'PAAS_VIEWER',
-            'AUDIT_READER', 'INSTALLATION_VERIFIER'
+            'AUDIT_READER', 'INSTALLATION_VERIFIER', 'PLATFORM_OPERATOR'
        ) THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'role binding mutation is invalid';
     END IF;
     PERFORM iam.assert_allowed_decision(
         submitted_tenant_id, submitted_actor_principal_id,
-        submitted_decision_id, 'iam.role-binding.put', 'PRINCIPAL', submitted_principal_id
+        submitted_decision_id,
+        CASE WHEN submitted_role_name = 'PLATFORM_OPERATOR'
+             THEN 'iam.platform-role-binding.put' ELSE 'iam.role-binding.put' END,
+        'PRINCIPAL', submitted_principal_id
     );
     PERFORM set_config('matrix.iam_tenant_id', submitted_tenant_id, true);
     IF NOT EXISTS (
@@ -1471,6 +1537,7 @@ BEGIN
          WHERE principal.tenant_id = submitted_tenant_id
            AND principal.id = submitted_principal_id
            AND principal.status = 'ACTIVE'
+           AND (submitted_role_name <> 'PLATFORM_OPERATOR' OR principal.principal_type = 'USER')
     ) THEN
         RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'role binding principal is unavailable';
     END IF;
@@ -1520,6 +1587,29 @@ BEGIN
 END
 $function$;
 
+-- Retain the role of revoked bindings so replay cannot switch authority class.
+CREATE OR REPLACE FUNCTION iam.lookup_role_binding_role(
+    submitted_tenant_id text,
+    submitted_role_binding_id text
+)
+RETURNS TABLE (role_name text)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+BEGIN
+    IF COALESCE(submitted_tenant_id, '') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR COALESCE(submitted_role_binding_id, '') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'role binding reference is invalid';
+    END IF;
+    PERFORM set_config('matrix.iam_tenant_id', submitted_tenant_id, true);
+    RETURN QUERY SELECT binding.role_name FROM iam.role_bindings AS binding
+     WHERE binding.tenant_id = submitted_tenant_id AND binding.id = submitted_role_binding_id;
+END
+$function$;
+
 CREATE OR REPLACE FUNCTION iam.revoke_role_binding(
     submitted_tenant_id text,
     submitted_role_binding_id text,
@@ -1542,11 +1632,6 @@ BEGIN
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'role binding revocation is invalid';
     END IF;
-    PERFORM iam.assert_allowed_decision(
-        submitted_tenant_id, submitted_actor_principal_id,
-        submitted_decision_id, 'iam.role-binding.revoke',
-        'ROLE_BINDING', submitted_role_binding_id
-    );
     PERFORM set_config('matrix.iam_tenant_id', submitted_tenant_id, true);
     SELECT * INTO stored
       FROM iam.role_bindings AS binding
@@ -1556,6 +1641,12 @@ BEGIN
     IF NOT FOUND THEN
         RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'role binding is unavailable';
     END IF;
+    PERFORM iam.assert_allowed_decision(
+        submitted_tenant_id, submitted_actor_principal_id, submitted_decision_id,
+        CASE WHEN stored.role_name = 'PLATFORM_OPERATOR'
+             THEN 'iam.platform-role-binding.revoke' ELSE 'iam.role-binding.revoke' END,
+        'ROLE_BINDING', submitted_role_binding_id
+    );
     IF stored.revoked_at IS NOT NULL THEN
         RETURN QUERY SELECT stored.resource_version, stored.revoked_at, false;
         RETURN;
@@ -1776,6 +1867,7 @@ GRANT EXECUTE ON FUNCTION iam.create_user(
 GRANT EXECUTE ON FUNCTION iam.put_role_binding(
     text, text, text, text, text, text, jsonb
 ) TO matrix_iam_api;
+GRANT EXECUTE ON FUNCTION iam.lookup_role_binding_role(text, text) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.revoke_role_binding(
     text, text, text, text, jsonb
 ) TO matrix_iam_api;

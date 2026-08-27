@@ -232,8 +232,18 @@ func ValidateAuthorizationDecision(value AuthorizationDecision) error {
 		} else {
 			problems = append(problems, ValidateSubject(*value.Subject))
 		}
-		problems = append(problems, ValidateID("tenantId", string(value.TenantID)))
-	} else if value.Reason != DecisionDenied || value.Subject != nil || value.TenantID != "" {
+		if IsPlatformAction(value.Action) {
+			problems = append(problems, ValidateID("installationId", value.InstallationID))
+			if value.TenantID != "" || value.Subject != nil && value.Subject.Type != PrincipalUser {
+				problems = append(problems, errors.New("platform decision contains invalid authority"))
+			}
+		} else {
+			problems = append(problems, ValidateID("tenantId", string(value.TenantID)))
+			if value.InstallationID != "" {
+				problems = append(problems, errors.New("tenant decision contains platform authority"))
+			}
+		}
+	} else if value.Reason != DecisionDenied || value.Subject != nil || value.TenantID != "" || value.InstallationID != "" {
 		problems = append(problems, errors.New("denied decision exposes authority data"))
 	}
 	return errors.Join(problems...)
@@ -420,9 +430,9 @@ func ResourceKindForAction(action Action) (ResourceKind, bool) {
 	switch action {
 	case ActionIAMPrincipalCreate:
 		return ResourceOrganization, true
-	case ActionIAMPrincipalRead, ActionIAMRoleBindingPut:
+	case ActionIAMPrincipalRead, ActionIAMRoleBindingPut, ActionIAMPlatformRoleBindingPut:
 		return ResourcePrincipal, true
-	case ActionIAMRoleBindingRevoke:
+	case ActionIAMRoleBindingRevoke, ActionIAMPlatformRoleBindingRevoke:
 		return ResourceRoleBinding, true
 	case ActionIAMSessionRevoke:
 		return ResourceSession, true
@@ -437,8 +447,12 @@ func ResourceKindForAction(action Action) (ResourceKind, bool) {
 	case ActionPaaSDeploymentCreate, ActionPaaSDeploymentUpdate,
 		ActionPaaSDeploymentRollback, ActionPaaSDeploymentStop, ActionPaaSDeploymentRead:
 		return ResourceDeployment, true
-	case ActionPaaSOperationRead:
+	case ActionPaaSOperationRead, ActionPaaSPlatformOperationRead:
 		return ResourceOperation, true
+	case ActionPaaSExecutionPoolCreate, ActionPaaSExecutionPoolRead:
+		return ResourceExecutionPool, true
+	case ActionPaaSExecutionTargetRegister, ActionPaaSExecutionTargetRead:
+		return ResourceExecutionTarget, true
 	case ActionManagedServiceOfferingRead:
 		return ResourceServiceOffering, true
 	case ActionManagedServiceRegionRead:

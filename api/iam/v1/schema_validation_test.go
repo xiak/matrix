@@ -100,6 +100,23 @@ func TestIAMOpenAPIEnforcesAuthorizationAndBootstrapSemantics(t *testing.T) {
 	if err := decisionSchema.Validate(denied); err == nil {
 		t.Fatal("denied decision exposing subject data must fail schema validation")
 	}
+	platform := loadIAMSchemaExample(t, "examples/authorization-decision-allowed.json")
+	delete(platform, "tenantId")
+	platform["action"] = string(ActionPaaSExecutionTargetRegister)
+	platform["resource"].(map[string]any)["kind"] = string(ResourceExecutionTarget)
+	platform["installationId"] = "installation-example"
+	if err := decisionSchema.Validate(platform); err != nil {
+		t.Fatalf("installation-bound platform decision failed schema validation: %v", err)
+	}
+	platform["tenantId"] = "organization-example"
+	if decisionSchema.Validate(platform) == nil {
+		t.Fatal("mixed platform and tenant authority passed schema validation")
+	}
+	delete(platform, "tenantId")
+	delete(platform, "installationId")
+	if decisionSchema.Validate(platform) == nil {
+		t.Fatal("platform decision without installation binding passed schema validation")
+	}
 
 	bootstrapSchema := compileIAMOpenAPISchema(t, document, "BootstrapDocument")
 	bootstrap := loadIAMSchemaExample(t, "examples/bootstrap-document.json")

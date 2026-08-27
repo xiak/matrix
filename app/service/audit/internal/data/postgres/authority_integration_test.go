@@ -1420,7 +1420,7 @@ func assertIAMSessionLookup(
 	if tenantID != string(fixture.TenantID) || storedSessionID != sessionID ||
 		principalID != fixture.Administrator || principalType != "USER" ||
 		storedVerification != verificationDigest || !mustChangePassword ||
-		len(roles) != 1 || roles[0] != "ORGANIZATION_ADMIN" {
+		len(roles) != 2 || roles[0] != "ORGANIZATION_ADMIN" || roles[1] != "PLATFORM_OPERATOR" {
 		t.Fatalf(
 			"IAM session lookup tenant=%q session=%q principal=%q type=%q digest=%q mustChange=%t roles=%v",
 			tenantID,
@@ -1460,6 +1460,27 @@ func assertIAMAuthorizationCatalog(
 	fixture iamBootstrapFixture,
 ) {
 	t.Helper()
+	passwordTransaction, err := iamAPI.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var passwordTime time.Time
+	if err := passwordTransaction.QueryRow(ctx, "SELECT transaction_timestamp()").Scan(&passwordTime); err != nil {
+		_ = passwordTransaction.Rollback(ctx)
+		t.Fatal(err)
+	}
+	passwordEvent := authorityAuditEvent("event-catalog-password", fixture.TenantID, fixture.Administrator, auditv1.ActionIAMPasswordChanged)
+	passwordEvent.Actor = auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(fixture.Administrator)}
+	passwordEvent.OccurredAt = passwordTime.UTC()
+	if _, err := passwordTransaction.Exec(ctx, "SELECT * FROM iam.change_password($1,$2,$3,$4,$5::jsonb)",
+		string(fixture.TenantID), fixture.Administrator, fixture.PasswordHash,
+		strings.TrimSuffix(fixture.PasswordHash, strings.Repeat("A", 43))+strings.Repeat("B", 42)+"A", authorityJSON(t, passwordEvent)); err != nil {
+		_ = passwordTransaction.Rollback(ctx)
+		t.Fatalf("prepare current platform authority through the password mutation: %v", err)
+	}
+	if err := passwordTransaction.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
 	for index, action := range iamv1.AllActions() {
 		resourceKind, known := iamv1.ResourceKindForAction(action)
 		if !known {
@@ -1488,6 +1509,9 @@ func assertIAMAuthorizationCatalog(
 			Resource:   iamv1.ResourceReference{Kind: resourceKind, ID: fmt.Sprintf("resource-catalog-%d", index)},
 			RequestID:  requestID,
 			DecidedAt:  transactionTime.UTC(),
+		}
+		if iamv1.IsPlatformAction(action) {
+			decision.TenantID, decision.InstallationID = "", fixture.InstallationID
 		}
 		event := authorityAuditEvent(
 			fmt.Sprintf("event-authorization-catalog-%d", index),
@@ -1572,6 +1596,40 @@ func assertIAMAuthorizationCatalog(
 		authorityJSON(t, event),
 	)
 	assertAuthorityPostgresCode(t, err, "22023")
+	if err := transaction.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, attack := range []string{"mixed authority", "wrong installation", "revoked platform role"} {
+		if attack == "revoked platform role" {
+			if _, err := admin.Exec(ctx, `UPDATE iam.role_bindings SET revoked_at = transaction_timestamp(), updated_at = transaction_timestamp(), resource_version = resource_version + 1
+				WHERE tenant_id = $1 AND principal_id = $2 AND role_name = 'PLATFORM_OPERATOR' AND revoked_at IS NULL`,
+				string(fixture.TenantID), fixture.Administrator); err != nil {
+				t.Fatal(err)
+			}
+		}
+		tx, err := iamAPI.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := tx.QueryRow(ctx, "SELECT transaction_timestamp()").Scan(&databaseTime); err != nil {
+			_ = tx.Rollback(ctx)
+			t.Fatal(err)
+		}
+		decision.Action = iamv1.ActionPaaSExecutionTargetRegister
+		decision.Resource.Kind = iamv1.ResourceExecutionTarget
+		decision.TenantID, decision.InstallationID = "", fixture.InstallationID
+		decision.DecidedAt, event.OccurredAt = databaseTime.UTC(), databaseTime.UTC()
+		if attack == "mixed authority" {
+			decision.TenantID = iamv1.OrganizationID(fixture.TenantID)
+		}
+		if attack == "wrong installation" {
+			decision.InstallationID = "installation-other"
+		}
+		_, err = tx.Exec(ctx, "SELECT iam.record_authorization($1,$2,$3::jsonb,$4::jsonb)",
+			string(fixture.TenantID), fixture.Administrator, authorityJSON(t, decision), authorityJSON(t, event))
+		_ = tx.Rollback(ctx)
+		assertAuthorityPostgresCode(t, err, "22023")
+	}
 }
 
 func authorityAuditEvent(

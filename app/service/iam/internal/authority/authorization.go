@@ -19,6 +19,10 @@ type SubjectContext struct {
 	Principal    iamv1.Principal
 	Session      iamv1.Session
 	Roles        []iamv1.BuiltinRole
+	// InstallationID is read from the sealed IAM bootstrap receipt, not a
+	// request field or an organization ID. Empty context cannot grant platform
+	// authority even when a role name has been supplied.
+	InstallationID string
 }
 
 func AuthenticateSession(
@@ -60,6 +64,7 @@ func Decide(
 	}
 	return decide(
 		context.Organization.ID,
+		context.InstallationID,
 		iamv1.Subject{Type: context.Principal.Type, ID: context.Principal.ID},
 		context.Principal.MustChangePassword,
 		context.Roles,
@@ -85,6 +90,7 @@ func DecideService(
 	}
 	return decide(
 		identity.OrganizationID,
+		"",
 		iamv1.Subject{Type: iamv1.PrincipalServiceAccount, ID: identity.PrincipalID},
 		false,
 		roles,
@@ -97,6 +103,7 @@ func DecideService(
 
 func decide(
 	tenantID iamv1.OrganizationID,
+	installationID string,
 	subject iamv1.Subject,
 	mustChangePassword bool,
 	roles []iamv1.BuiltinRole,
@@ -115,7 +122,9 @@ func decide(
 		return iamv1.AuthorizationDecision{}, ErrAuthorityUnavailable
 	}
 	allowed := false
-	if !mustChangePassword && ServiceCanRequest(callingService, request.Action) {
+	platform := iamv1.IsPlatformAction(request.Action)
+	platformContext := !platform || subject.Type == iamv1.PrincipalUser && iamv1.ValidateID("installationId", installationID) == nil
+	if !mustChangePassword && platformContext && ServiceCanRequest(callingService, request.Action) {
 		for _, role := range roles {
 			if RoleAllows(role, request.Action) {
 				allowed = true
@@ -136,7 +145,11 @@ func decide(
 	}
 	if allowed {
 		decision.Reason = iamv1.DecisionAllowed
-		decision.TenantID = tenantID
+		if platform {
+			decision.InstallationID = installationID
+		} else {
+			decision.TenantID = tenantID
+		}
 		decision.Subject = &subject
 	}
 	if err := iamv1.ValidateAuthorizationDecision(decision); err != nil {
@@ -170,7 +183,9 @@ func ServiceCanRequest(purpose iamv1.ServicePurpose, action iamv1.Action) bool {
 func RoleAllows(role iamv1.BuiltinRole, action iamv1.Action) bool {
 	switch role {
 	case iamv1.RoleOrganizationAdmin:
-		return action != iamv1.ActionInstallationVerify && knownAction(action)
+		return action != iamv1.ActionInstallationVerify && !iamv1.IsPlatformAction(action) && knownAction(action)
+	case iamv1.RolePlatformOperator:
+		return iamv1.IsPlatformAction(action)
 	case iamv1.RolePaaSDeveloper:
 		switch action {
 		case iamv1.ActionPaaSApplicationCreate,

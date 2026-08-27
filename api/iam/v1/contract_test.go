@@ -12,6 +12,45 @@ import (
 	"github.com/xiak/matrix/api/contractjson"
 )
 
+func TestPlatformDecisionsCannotMasqueradeAsTenantAuthority(t *testing.T) {
+	source, err := os.ReadFile("examples/authorization-decision-allowed.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var valid AuthorizationDecision
+	if err := json.Unmarshal(source, &valid); err != nil {
+		t.Fatal(err)
+	}
+	valid.Action, valid.Resource.Kind = ActionPaaSExecutionTargetRegister, ResourceExecutionTarget
+	valid.TenantID, valid.InstallationID = "", "installation-example"
+	if err := ValidateAuthorizationDecision(valid); err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*AuthorizationDecision){
+		"missing installation": func(value *AuthorizationDecision) { value.InstallationID = "" },
+		"mixed authorities":    func(value *AuthorizationDecision) { value.TenantID = "organization-example" },
+		"tenant action": func(value *AuthorizationDecision) {
+			value.Action, value.Resource.Kind = ActionPaaSApplicationRead, ResourceApplication
+		},
+		"denial leak": func(value *AuthorizationDecision) {
+			value.Allowed, value.Reason, value.Subject = false, DecisionDenied, nil
+		},
+		"service authority": func(value *AuthorizationDecision) {
+			subject := *value.Subject
+			subject.Type = PrincipalServiceAccount
+			value.Subject = &subject
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := valid
+			mutate(&value)
+			if ValidateAuthorizationDecision(value) == nil {
+				t.Fatal("invalid platform authority accepted")
+			}
+		})
+	}
+}
+
 func TestIAMExamplesPassDomainValidation(t *testing.T) {
 	tests := []struct {
 		name string

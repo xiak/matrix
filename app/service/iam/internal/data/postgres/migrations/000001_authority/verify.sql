@@ -138,6 +138,8 @@ BEGIN
        OR NOT has_function_privilege(
             'matrix_iam_api', 'iam.put_role_binding(text,text,text,text,text,text,jsonb)', 'EXECUTE'
        )
+       OR NOT has_function_privilege('matrix_iam_api', 'iam.lookup_role_binding_role(text,text)', 'EXECUTE')
+       OR has_function_privilege('matrix_iam_worker', 'iam.lookup_role_binding_role(text,text)', 'EXECUTE')
        OR NOT has_function_privilege(
             'matrix_iam_api', 'iam.revoke_role_binding(text,text,text,text,jsonb)', 'EXECUTE'
        )
@@ -169,6 +171,7 @@ BEGIN
        OR has_function_privilege(
             'matrix_iam_api', 'iam.resource_kind_for_action(text)', 'EXECUTE'
        )
+       OR has_function_privilege('matrix_iam_api', 'iam.is_platform_action(text)', 'EXECUTE')
        OR has_function_privilege(
             'matrix_iam_api', 'iam.assert_allowed_decision(text,text,text,text,text,text)', 'EXECUTE'
        )
@@ -183,6 +186,21 @@ BEGIN
         OR has_schema_privilege('matrix_iam_worker', 'audit', 'USAGE')
     ) THEN
         RAISE EXCEPTION 'IAM runtime roles can access Audit schema';
+    END IF;
+
+    IF iam.resource_kind_for_action('managedservice.offering.read') IS DISTINCT FROM 'SERVICE_OFFERING'
+       OR iam.resource_kind_for_action('managedservice.region.read') IS DISTINCT FROM 'REGION'
+       OR iam.resource_kind_for_action('managedservice.quota-entitlement.activate') IS DISTINCT FROM 'QUOTA_ENTITLEMENT'
+       OR iam.resource_kind_for_action('managedservice.quota-entitlement.read') IS DISTINCT FROM 'QUOTA_ENTITLEMENT'
+       OR iam.resource_kind_for_action('managedservice.service-installation.create') IS DISTINCT FROM 'SERVICE_INSTALLATION'
+       OR iam.resource_kind_for_action('managedservice.service-installation.read') IS DISTINCT FROM 'SERVICE_INSTALLATION'
+       OR iam.resource_kind_for_action('paas.execution-target.register') IS DISTINCT FROM 'EXECUTION_TARGET'
+       OR iam.resource_kind_for_action('paas.execution-pool.create') IS DISTINCT FROM 'EXECUTION_POOL'
+       OR iam.resource_kind_for_action('unsupported') IS NOT NULL
+       OR NOT iam.is_platform_action('paas.execution-target.register')
+       OR iam.is_platform_action('paas.application.create')
+       OR iam.is_platform_action('unsupported') THEN
+        RAISE EXCEPTION 'IAM authorization action mapping is invalid';
     END IF;
 END
 $matrix_iam_verify$;

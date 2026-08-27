@@ -286,11 +286,15 @@ func (service *Authority) PutRoleBinding(
 		if err != nil {
 			return err
 		}
+		action := iamv1.ActionIAMRoleBindingPut
+		if request.Role == iamv1.RolePlatformOperator {
+			action = iamv1.ActionIAMPlatformRoleBindingPut
+		}
 		decision, err := service.managementDecision(
 			transactionContext,
 			transaction,
 			subject,
-			iamv1.ActionIAMRoleBindingPut,
+			action,
 			iamv1.ResourceReference{Kind: iamv1.ResourcePrincipal, ID: string(request.PrincipalID)},
 			request.RequestID,
 			now,
@@ -456,11 +460,22 @@ func (service *Authority) revokeManagedResource(
 		if err != nil {
 			return err
 		}
+		resolvedAction := action
+		if action == iamv1.ActionIAMRoleBindingRevoke {
+			role, found, err := transaction.LookupRoleBindingRole(transactionContext,
+				subject.Subject.Organization.ID, iamv1.RoleBindingID(resource.ID))
+			if err != nil {
+				return err
+			}
+			if found && role == iamv1.RolePlatformOperator {
+				resolvedAction = iamv1.ActionIAMPlatformRoleBindingRevoke
+			}
+		}
 		decision, err := service.managementDecision(
 			transactionContext,
 			transaction,
 			subject,
-			action,
+			resolvedAction,
 			resource,
 			requestID,
 			now,

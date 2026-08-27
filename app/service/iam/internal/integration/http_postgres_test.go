@@ -344,6 +344,12 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 		!decision.Allowed || decision.Subject == nil || decision.Subject.ID != developer.ID {
 		t.Fatalf("developer allowed decision=%#v err=%v", decision, err)
 	}
+	assertPlatformAuthorityHTTP(t, handler, loginWire.Credential, developerWire.Credential, developer.ID)
+	if _, err := workflow.Bootstrap(ctx, document); err != nil {
+		t.Fatalf("replay bootstrap after platform role revocation: %v", err)
+	}
+	applyIAMSchema(t, ctx, admin)
+	assertPlatformDecisionHTTP(t, handler, loginWire.Credential, paasCredential, false)
 
 	revokeBinding := performIAMRequest(
 		handler,
@@ -435,18 +441,28 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 		loginWire.Credential,
 		developerWire.Credential,
 	)
-	var sessions, decisions, outbox int
+	var sessions int
+	var decisionsHaveAudit bool
 	if err := admin.QueryRow(
 		ctx,
 		`SELECT
 			(SELECT count(*) FROM iam.sessions),
-			(SELECT count(*) FROM iam.authorization_decisions),
-			(SELECT count(*) FROM iam.audit_outbox)`,
-	).Scan(&sessions, &decisions, &outbox); err != nil {
+			NOT EXISTS (
+				SELECT 1 FROM iam.authorization_decisions AS decision
+				WHERE (SELECT count(*) FROM iam.audit_outbox AS event
+					WHERE event.tenant_id = decision.tenant_id
+					AND event.event_document->>'action' = 'iam.authorization.decided'
+					AND event.event_document->>'iamDecisionId' = decision.id
+					AND event.event_document#>>'{actor,id}' = decision.principal_id
+					AND event.event_document->>'requestId' = decision.request_id
+					AND event.event_document->>'result' = CASE WHEN decision.allowed THEN 'ALLOWED' ELSE 'DENIED' END
+				) <> 1
+			)`,
+	).Scan(&sessions, &decisionsHaveAudit); err != nil {
 		t.Fatalf("inspect IAM HTTP facts: %v", err)
 	}
-	if sessions != 2 || decisions != 15 || outbox != 26 {
-		t.Fatalf("IAM HTTP facts sessions=%d decisions=%d outbox=%d", sessions, decisions, outbox)
+	if sessions != 2 || !decisionsHaveAudit {
+		t.Fatalf("IAM HTTP facts sessions=%d every decision has exact Audit=%t", sessions, decisionsHaveAudit)
 	}
 	var managedServiceFacts int
 	if err := admin.QueryRow(
@@ -508,6 +524,64 @@ func insertCrossTenantPrincipal(t *testing.T, ctx context.Context, admin *pgx.Co
 		);`,
 	); err != nil {
 		t.Fatalf("insert cross-tenant IAM fixture: %v", err)
+	}
+}
+
+func assertPlatformAuthorityHTTP(t *testing.T, handler http.Handler, administrator, member string, memberID iamv1.PrincipalID) {
+	t.Helper()
+	put := func(actor string, principalID iamv1.PrincipalID, role iamv1.BuiltinRole, expected int) iamv1.RoleBinding {
+		t.Helper()
+		body, err := json.Marshal(iamv1.PutRoleBindingRequest{PrincipalID: principalID, Role: role, RequestID: "request-platform-role-put"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := performIAMRequest(handler, http.MethodPost, "/v1/role-bindings", actor, body)
+		if response.Code != expected {
+			t.Fatalf("platform role grant status=%d expected=%d body=%s", response.Code, expected, response.Body.String())
+		}
+		var binding iamv1.RoleBinding
+		if expected == http.StatusOK && (json.Unmarshal(response.Body.Bytes(), &binding) != nil || iamv1.ValidateRoleBinding(binding) != nil) {
+			t.Fatal("platform role grant returned an invalid binding")
+		}
+		return binding
+	}
+	revoke := func(actor string, id iamv1.RoleBindingID, expected int) {
+		t.Helper()
+		response := performIAMRequest(handler, http.MethodPost, "/v1/role-bindings/"+string(id)+":revoke", actor,
+			[]byte(`{"requestId":"request-platform-role-revoke"}`))
+		if response.Code != expected {
+			t.Fatalf("platform role revocation status=%d expected=%d body=%s", response.Code, expected, response.Body.String())
+		}
+	}
+	assertPlatformDecisionHTTP(t, handler, administrator, paasCredential, true)
+	assertPlatformDecisionHTTP(t, handler, administrator, auditCredential, false)
+	assertPlatformDecisionHTTP(t, handler, member, paasCredential, false)
+	organizationBinding := put(administrator, memberID, iamv1.RoleOrganizationAdmin, http.StatusOK)
+	assertPlatformDecisionHTTP(t, handler, member, paasCredential, false)
+	put(member, memberID, iamv1.RolePlatformOperator, http.StatusForbidden)
+	revoke(member, "bootstrap-platform-operator-binding", http.StatusForbidden)
+	put(administrator, "service-paas", iamv1.RolePlatformOperator, http.StatusForbidden)
+	platformBinding := put(administrator, memberID, iamv1.RolePlatformOperator, http.StatusOK)
+	assertPlatformDecisionHTTP(t, handler, member, paasCredential, true)
+	revoke(administrator, platformBinding.ID, http.StatusOK)
+	revoke(administrator, platformBinding.ID, http.StatusOK)
+	assertPlatformDecisionHTTP(t, handler, member, paasCredential, false)
+	revoke(administrator, organizationBinding.ID, http.StatusOK)
+	revoke(administrator, "bootstrap-platform-operator-binding", http.StatusOK)
+	assertPlatformDecisionHTTP(t, handler, administrator, paasCredential, false)
+}
+
+func assertPlatformDecisionHTTP(t *testing.T, handler http.Handler, subject, caller string, allowed bool) {
+	t.Helper()
+	body := []byte(`{"action":"paas.execution-target.register","resource":{"kind":"EXECUTION_TARGET","id":"target-example"},"requestId":"request-node-register","correlationId":"request-node-register"}`)
+	response := performIAMRequestWithSubject(handler, body, caller, subject)
+	var decision iamv1.AuthorizationDecision
+	if response.Code != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body.Bytes()), &decision) != nil ||
+		iamv1.ValidateAuthorizationDecision(decision) != nil || decision.Allowed != allowed || decision.TenantID != "" {
+		t.Fatalf("platform authorization status=%d allowed=%t body=%s", response.Code, allowed, response.Body.String())
+	}
+	if allowed && (decision.InstallationID != "installation-http-integration" || decision.Subject == nil) {
+		t.Fatal("platform decision lost the sealed installation identity")
 	}
 }
 

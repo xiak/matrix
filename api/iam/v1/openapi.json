@@ -20,6 +20,13 @@
           "iam.role-binding.put",
           "iam.role-binding.revoke",
           "iam.session.revoke",
+          "iam.platform-role-binding.put",
+          "iam.platform-role-binding.revoke",
+          "paas.execution-pool.create",
+          "paas.execution-pool.read",
+          "paas.execution-target.register",
+          "paas.execution-target.read",
+          "paas.platform-operation.read",
           "paas.application.create",
           "paas.application.read",
           "paas.configuration.create",
@@ -67,7 +74,6 @@
                 }
               },
               "required": [
-                "tenantId",
                 "subject"
               ]
             }
@@ -85,11 +91,67 @@
             },
             "then": {
               "properties": {
+                "installationId": false,
                 "reason": {
                   "const": "DENIED"
                 },
                 "subject": false,
                 "tenantId": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "allowed": {
+                  "const": true
+                }
+              },
+              "required": [
+                "allowed"
+              ]
+            },
+            "then": {
+              "else": {
+                "properties": {
+                  "installationId": false
+                },
+                "required": [
+                  "tenantId"
+                ]
+              },
+              "if": {
+                "properties": {
+                  "action": {
+                    "enum": [
+                      "iam.platform-role-binding.put",
+                      "iam.platform-role-binding.revoke",
+                      "paas.execution-pool.create",
+                      "paas.execution-pool.read",
+                      "paas.execution-target.register",
+                      "paas.execution-target.read",
+                      "paas.platform-operation.read"
+                    ]
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "subject": {
+                    "properties": {
+                      "type": {
+                        "const": "USER"
+                      }
+                    }
+                  },
+                  "tenantId": false
+                },
+                "required": [
+                  "installationId"
+                ]
               }
             }
           },
@@ -214,6 +276,188 @@
                   "properties": {
                     "kind": {
                       "const": "SESSION"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.platform-role-binding.put"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "PRINCIPAL"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.platform-role-binding.revoke"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ROLE_BINDING"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.execution-pool.create"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "EXECUTION_POOL"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.execution-pool.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "EXECUTION_POOL"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.execution-target.register"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "EXECUTION_TARGET"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.execution-target.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "EXECUTION_TARGET"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.platform-operation.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "OPERATION"
                     }
                   },
                   "required": [
@@ -838,6 +1082,9 @@
           "id": {
             "$ref": "#/components/schemas/ID"
           },
+          "installationId": {
+            "$ref": "#/components/schemas/ID"
+          },
           "kind": {
             "const": "AuthorizationDecision"
           },
@@ -994,6 +1241,188 @@
                   "properties": {
                     "kind": {
                       "const": "SESSION"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.platform-role-binding.put"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "PRINCIPAL"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.platform-role-binding.revoke"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ROLE_BINDING"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.execution-pool.create"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "EXECUTION_POOL"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.execution-pool.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "EXECUTION_POOL"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.execution-target.register"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "EXECUTION_TARGET"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.execution-target.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "EXECUTION_TARGET"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.platform-operation.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "OPERATION"
                     }
                   },
                   "required": [
@@ -1822,6 +2251,7 @@
       "BuiltinRole": {
         "enum": [
           "ORGANIZATION_ADMIN",
+          "PLATFORM_OPERATOR",
           "PAAS_DEVELOPER",
           "PAAS_VIEWER",
           "AUDIT_READER",
@@ -2297,7 +2727,9 @@
           "SERVICE_INSTALLATION",
           "AUDIT_RECORD",
           "AUDIT_CHAIN",
-          "INSTALLATION"
+          "INSTALLATION",
+          "EXECUTION_POOL",
+          "EXECUTION_TARGET"
         ],
         "type": "string"
       },

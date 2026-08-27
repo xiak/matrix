@@ -308,6 +308,9 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		"request-admin-password",
 	)
 	assertCrossTenantIAMBindingRejected(t, ctx, admin, iamEndpoint, adminLogin.Credential)
+	platformDecisions := []iamv1.AuthorizationDecision{
+		assertPlatformAuthorization(t, iamEndpoint, adminLogin.Credential, "principal-admin", "request-platform-admin", true),
+	}
 	waitAllIAMOutboxDelivered(t, ctx, admin)
 	adminPage := queryAudit(t, auditEndpoint, adminLogin.Credential, auditv1.QueryRecordsRequest{PageSize: 200}, http.StatusOK)
 	if adminPage.TenantID != "organization-process" || len(adminPage.Records) < 3 {
@@ -346,6 +349,18 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		initialDeveloperPassword,
 		changedDeveloperPassword,
 		"request-developer-password",
+	)
+	platformDecisions = append(platformDecisions,
+		assertPlatformAuthorization(t, iamEndpoint, developerLogin.Credential, string(developer.ID), "request-platform-developer-denied", false),
+	)
+	platformBinding := putIAMBinding(t, iamEndpoint, adminLogin.Credential, developer.ID,
+		iamv1.RolePlatformOperator, "request-bind-platform-operator")
+	platformDecisions = append(platformDecisions,
+		assertPlatformAuthorization(t, iamEndpoint, developerLogin.Credential, string(developer.ID), "request-platform-developer-granted", true),
+	)
+	revokeIAMBinding(t, iamEndpoint, adminLogin.Credential, platformBinding.ID, "request-revoke-platform-operator")
+	platformDecisions = append(platformDecisions,
+		assertPlatformAuthorization(t, iamEndpoint, developerLogin.Credential, string(developer.ID), "request-platform-developer-revoked", false),
 	)
 	developerOperation := createPaaSApplication(
 		t,
@@ -515,6 +530,15 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	}
 	assertAuditAccessRecorded(t, ctx, admin, auditv1.ActionAuditRecordsRead, "principal-admin")
 	assertAuditAccessRecorded(t, ctx, admin, auditv1.ActionAuditIntegrityVerified, "principal-admin")
+	revokeIAMBinding(t, iamEndpoint, adminLogin.Credential, "bootstrap-platform-operator-binding", "request-revoke-bootstrap-platform")
+	platformDecisions = append(platformDecisions,
+		assertPlatformAuthorization(t, iamEndpoint, adminLogin.Credential, "principal-admin", "request-platform-admin-revoked", false),
+	)
+	selfGrant := performJSON(t, http.MethodPost, iamEndpoint+"/v1/role-bindings", adminLogin.Credential,
+		iamv1.PutRoleBindingRequest{PrincipalID: "principal-admin", Role: iamv1.RolePlatformOperator, RequestID: "request-platform-self-grant"})
+	if selfGrant.Status != http.StatusForbidden {
+		t.Fatalf("organization administrator restored its platform authority: status=%d", selfGrant.Status)
+	}
 	iamProcess.stop()
 	waitHTTPStatus(t, ctx, paasProcess, paasEndpoint+"/ready", http.StatusServiceUnavailable)
 	createPaaSApplication(
@@ -537,6 +561,11 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	iamProcess = start(binaries.iam, iamEnvironment)
 	waitHTTPStatus(t, ctx, iamProcess, iamEndpoint+"/ready", http.StatusOK)
 	waitHTTPStatus(t, ctx, paasProcess, paasEndpoint+"/ready", http.StatusOK)
+	platformDecisions = append(platformDecisions,
+		assertPlatformAuthorization(t, iamEndpoint, adminLogin.Credential, "principal-admin", "request-platform-admin-restarted", false),
+	)
+	waitAllIAMOutboxDelivered(t, ctx, admin)
+	assertPlatformDecisionAuditFacts(t, ctx, admin, platformDecisions)
 	paasProcess.stop()
 	wrongPaaSEnvironment := append([]string(nil), paasEnvironment...)
 	wrongPaaSEnvironment[2] = "MATRIX_PAAS_SERVICE_CREDENTIAL_FILE=" + wrongCredentialPath
@@ -983,6 +1012,48 @@ func assertIAMWeakLoginRejected(t *testing.T, endpoint string) {
 		bytes.Contains(response.Body, []byte(weakPassword)) {
 		t.Fatalf("weak IAM login status=%d body=%s", response.Status, response.Body)
 	}
+}
+
+func assertPlatformAuthorization(
+	t *testing.T,
+	endpoint, credential, principalID, requestID string,
+	allowed bool,
+) iamv1.AuthorizationDecision {
+	t.Helper()
+	resource := iamv1.ResourceReference{Kind: iamv1.ResourceExecutionTarget, ID: "execution-target-process"}
+	body, err := json.Marshal(iamv1.AuthorizationRequest{
+		Action: iamv1.ActionPaaSExecutionTargetRegister, Resource: resource,
+		RequestID: requestID, CorrelationID: requestID,
+	})
+	if err != nil {
+		t.Fatalf("encode platform authorization request: %v", err)
+	}
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, endpoint+"/v1/authorize", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("create platform authorization request: %v", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer "+paasServiceCredential)
+	request.Header.Set("Matrix-Subject-Credential", credential)
+	response, err := processHTTPClient().Do(request)
+	if err != nil {
+		t.Fatalf("request platform authorization: %v", err)
+	}
+	defer response.Body.Close()
+	var decision iamv1.AuthorizationDecision
+	if response.StatusCode != http.StatusOK ||
+		iamv1.DecodeRequest(response.Body, &decision) != nil ||
+		iamv1.ValidateAuthorizationDecision(decision) != nil ||
+		decision.Allowed != allowed || decision.TenantID != "" ||
+		decision.RequestID != requestID || decision.Action != iamv1.ActionPaaSExecutionTargetRegister ||
+		decision.Resource != resource {
+		t.Fatalf("invalid platform authorization: status=%d allowed=%t request=%s", response.StatusCode, allowed, requestID)
+	}
+	if allowed && (decision.InstallationID != "installation-process" || decision.Subject == nil ||
+		decision.Subject.Type != iamv1.PrincipalUser || string(decision.Subject.ID) != principalID) {
+		t.Fatal("platform authorization lost the exact installation or user identity")
+	}
+	return decision
 }
 
 func changePasswordIAM(
@@ -1703,6 +1774,40 @@ func assertPaaSAuditFact(
 	}
 	if count != 1 {
 		t.Fatalf("PaaS Audit fact action=%s target=%s actor=%s count=%d", action, targetID, actorID, count)
+	}
+}
+
+func assertPlatformDecisionAuditFacts(t *testing.T, ctx context.Context, admin *pgx.Conn, decisions []iamv1.AuthorizationDecision) {
+	t.Helper()
+	for _, decision := range decisions {
+		expectedResult := auditv1.ResultDenied
+		if decision.Allowed {
+			expectedResult = auditv1.ResultAllowed
+		}
+		var count int
+		if err := admin.QueryRow(ctx, `SELECT count(*)
+			FROM iam.authorization_decisions AS decision
+			JOIN iam.audit_outbox AS outbox
+			  ON outbox.tenant_id = decision.tenant_id
+			 AND outbox.event_document->>'iamDecisionId' = decision.id
+			JOIN audit.records AS record
+			  ON record.source = 'IAM' AND record.event_id = outbox.event_id
+			WHERE decision.tenant_id = 'organization-process'
+			  AND decision.id = $1 AND decision.request_id = $2
+			  AND decision.allowed = $3
+			  AND outbox.event_document->>'action' = 'iam.authorization.decided'
+			  AND outbox.event_document#>>'{target,id}' = decision.id
+			  AND outbox.event_document#>>'{actor,id}' = decision.principal_id
+			  AND outbox.event_document->>'result' = $4
+			  AND record.tenant_id = decision.tenant_id
+			  AND record.event_document = outbox.event_document`,
+			string(decision.ID), decision.RequestID, decision.Allowed, string(expectedResult),
+		).Scan(&count); err != nil {
+			t.Fatalf("inspect platform authorization Audit fact: %v", err)
+		}
+		if count != 1 {
+			t.Fatalf("platform decision %s has %d correlated Audit facts", decision.ID, count)
+		}
 	}
 }
 

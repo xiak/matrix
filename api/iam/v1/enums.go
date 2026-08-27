@@ -35,6 +35,7 @@ const (
 
 const (
 	RoleOrganizationAdmin    BuiltinRole = "ORGANIZATION_ADMIN"
+	RolePlatformOperator     BuiltinRole = "PLATFORM_OPERATOR"
 	RolePaaSDeveloper        BuiltinRole = "PAAS_DEVELOPER"
 	RolePaaSViewer           BuiltinRole = "PAAS_VIEWER"
 	RoleAuditReader          BuiltinRole = "AUDIT_READER"
@@ -42,11 +43,19 @@ const (
 )
 
 const (
-	ActionIAMPrincipalCreate   Action = "iam.principal.create"
-	ActionIAMPrincipalRead     Action = "iam.principal.read"
-	ActionIAMRoleBindingPut    Action = "iam.role-binding.put"
-	ActionIAMRoleBindingRevoke Action = "iam.role-binding.revoke"
-	ActionIAMSessionRevoke     Action = "iam.session.revoke"
+	ActionIAMPrincipalCreate           Action = "iam.principal.create"
+	ActionIAMPrincipalRead             Action = "iam.principal.read"
+	ActionIAMRoleBindingPut            Action = "iam.role-binding.put"
+	ActionIAMRoleBindingRevoke         Action = "iam.role-binding.revoke"
+	ActionIAMSessionRevoke             Action = "iam.session.revoke"
+	ActionIAMPlatformRoleBindingPut    Action = "iam.platform-role-binding.put"
+	ActionIAMPlatformRoleBindingRevoke Action = "iam.platform-role-binding.revoke"
+
+	ActionPaaSExecutionPoolCreate     Action = "paas.execution-pool.create"
+	ActionPaaSExecutionPoolRead       Action = "paas.execution-pool.read"
+	ActionPaaSExecutionTargetRegister Action = "paas.execution-target.register"
+	ActionPaaSExecutionTargetRead     Action = "paas.execution-target.read"
+	ActionPaaSPlatformOperationRead   Action = "paas.platform-operation.read"
 
 	ActionPaaSApplicationCreate           Action = "paas.application.create"
 	ActionPaaSApplicationRead             Action = "paas.application.read"
@@ -93,6 +102,8 @@ const (
 	ResourceAuditRecord           ResourceKind = "AUDIT_RECORD"
 	ResourceAuditChain            ResourceKind = "AUDIT_CHAIN"
 	ResourceInstallation          ResourceKind = "INSTALLATION"
+	ResourceExecutionPool         ResourceKind = "EXECUTION_POOL"
+	ResourceExecutionTarget       ResourceKind = "EXECUTION_TARGET"
 )
 
 const (
@@ -137,6 +148,13 @@ var allActions = []Action{
 	ActionIAMRoleBindingPut,
 	ActionIAMRoleBindingRevoke,
 	ActionIAMSessionRevoke,
+	ActionIAMPlatformRoleBindingPut,
+	ActionIAMPlatformRoleBindingRevoke,
+	ActionPaaSExecutionPoolCreate,
+	ActionPaaSExecutionPoolRead,
+	ActionPaaSExecutionTargetRegister,
+	ActionPaaSExecutionTargetRead,
+	ActionPaaSPlatformOperationRead,
 	ActionPaaSApplicationCreate,
 	ActionPaaSApplicationRead,
 	ActionPaaSConfigurationCreate,
@@ -164,6 +182,7 @@ var allActions = []Action{
 
 var allBuiltinRoles = []BuiltinRole{
 	RoleOrganizationAdmin,
+	RolePlatformOperator,
 	RolePaaSDeveloper,
 	RolePaaSViewer,
 	RoleAuditReader,
@@ -175,4 +194,18 @@ var allServicePurposes = []ServicePurpose{
 	ServicePaaS,
 	ServiceAudit,
 	ServiceInstallationVerifier,
+}
+
+// IsPlatformAction identifies installation authority, never the subject's
+// organization membership. Unknown actions grant neither kind of authority.
+func IsPlatformAction(action Action) bool {
+	switch action {
+	case ActionIAMPlatformRoleBindingPut, ActionIAMPlatformRoleBindingRevoke,
+		ActionPaaSExecutionPoolCreate, ActionPaaSExecutionPoolRead,
+		ActionPaaSExecutionTargetRegister, ActionPaaSExecutionTargetRead,
+		ActionPaaSPlatformOperationRead:
+		return true
+	default:
+		return false
+	}
 }

@@ -363,6 +363,12 @@ func (transaction *coreTransaction) ApplyBootstrap(
 		Role: iamv1.RoleOrganizationAdmin, ResourceVersion: 1,
 		CreatedAt: transaction.now, UpdatedAt: transaction.now,
 	}
+	transaction.bindings["bootstrap-platform-operator-binding"] = iamv1.RoleBinding{
+		APIVersion: iamv1.APIVersion, Kind: "RoleBinding", ID: "bootstrap-platform-operator-binding",
+		OrganizationID: mutation.Organization.ID, PrincipalID: mutation.Administrator.ID,
+		Role: iamv1.RolePlatformOperator, ResourceVersion: 1,
+		CreatedAt: transaction.now, UpdatedAt: transaction.now,
+	}
 	for _, service := range mutation.Services {
 		transaction.services[service.LookupDigest] = ServiceCredential{
 			Identity: iamv1.ServiceIdentity{
@@ -416,6 +422,9 @@ func (transaction *coreTransaction) IssueSession(
 	}
 	roles := make([]iamv1.BuiltinRole, 0)
 	for _, binding := range transaction.bindings {
+		if _, revoked := transaction.bindingRevocations[binding.ID]; revoked {
+			continue
+		}
 		if binding.PrincipalID == principal.ID {
 			roles = append(roles, binding.Role)
 		}
@@ -450,6 +459,9 @@ func (transaction *coreTransaction) LookupSession(
 	binding.Subject.Principal = principal
 	binding.Subject.Roles = nil
 	for _, roleBinding := range transaction.bindings {
+		if _, revoked := transaction.bindingRevocations[roleBinding.ID]; revoked {
+			continue
+		}
 		if roleBinding.PrincipalID == principal.ID {
 			binding.Subject.Roles = append(binding.Subject.Roles, roleBinding.Role)
 		}
@@ -487,6 +499,9 @@ func (transaction *coreTransaction) LookupServiceRoles(
 	}
 	roles := make([]iamv1.BuiltinRole, 0)
 	for _, binding := range transaction.bindings {
+		if _, revoked := transaction.bindingRevocations[binding.ID]; revoked {
+			continue
+		}
 		if binding.OrganizationID == organizationID && binding.PrincipalID == principalID {
 			roles = append(roles, binding.Role)
 		}
@@ -571,12 +586,27 @@ func (transaction *coreTransaction) PutRoleBinding(
 		return iamv1.RoleBinding{}, false, ErrForbidden
 	}
 	for _, existing := range transaction.bindings {
+		if _, revoked := transaction.bindingRevocations[existing.ID]; revoked {
+			continue
+		}
 		if existing.PrincipalID == mutation.Binding.PrincipalID && existing.Role == mutation.Binding.Role {
 			return existing, false, nil
 		}
 	}
 	transaction.bindings[mutation.Binding.ID] = mutation.Binding
 	return mutation.Binding, true, nil
+}
+
+func (transaction *coreTransaction) LookupRoleBindingRole(
+	_ context.Context,
+	organizationID iamv1.OrganizationID,
+	bindingID iamv1.RoleBindingID,
+) (iamv1.BuiltinRole, bool, error) {
+	binding, found := transaction.bindings[bindingID]
+	if !found || binding.OrganizationID != organizationID {
+		return "", false, nil
+	}
+	return binding.Role, true, nil
 }
 
 func (transaction *coreTransaction) RevokeRoleBinding(
@@ -590,7 +620,6 @@ func (transaction *coreTransaction) RevokeRoleBinding(
 	if !found {
 		return iamv1.Revocation{}, false, ErrForbidden
 	}
-	delete(transaction.bindings, mutation.RoleBindingID)
 	revocation := iamv1.Revocation{
 		APIVersion: iamv1.APIVersion, Kind: "Revocation", ID: string(binding.ID),
 		ResourceVersion: binding.ResourceVersion + 1, RevokedAt: transaction.now,

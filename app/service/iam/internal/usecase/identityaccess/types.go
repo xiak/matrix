@@ -51,6 +51,7 @@ type Transaction interface {
 	RevokeSession(context.Context, SessionRevocationMutation) (iamv1.Revocation, bool, error)
 	CreateUser(context.Context, UserMutation) (iamv1.Principal, error)
 	PutRoleBinding(context.Context, RoleBindingMutation) (iamv1.RoleBinding, bool, error)
+	LookupRoleBindingRole(context.Context, iamv1.OrganizationID, iamv1.RoleBindingID) (iamv1.BuiltinRole, bool, error)
 	RevokeRoleBinding(context.Context, RoleBindingRevocationMutation) (iamv1.Revocation, bool, error)
 	Readiness(context.Context) (ReadinessSnapshot, error)
 }
