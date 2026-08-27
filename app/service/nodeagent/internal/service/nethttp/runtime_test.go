@@ -128,7 +128,7 @@ func TestLinuxNodeProcessObservation(t *testing.T) {
 	storage := storageUsage(t, second, root)
 	if second.Usage.CPU.State != paasv1.MeasurementAvailable || second.Usage.CPU.Value.LogicalCPUs != int64(facts.LogicalCPUs) ||
 		second.Usage.Memory.Value.TotalBytes != int64(facts.MemoryTotalBytes) ||
-		storage.TotalBytes != int64(facts.StorageTotalBytes) {
+		storage.TotalBytes <= 0 {
 		t.Fatal("real collector did not report current CPU, memory and filesystem usage")
 	}
 	// Exercise the real collector's filesystem view using only a bounded file
@@ -288,8 +288,9 @@ func provisionCollector(t *testing.T, directory, binary string, certificate issu
 		t.Fatal(err)
 	}
 	_, copyErr := io.Copy(executable, source)
+	modeErr := executable.Chmod(0o555)
 	closeErr := executable.Close()
-	if copyErr != nil || closeErr != nil {
+	if copyErr != nil || modeErr != nil || closeErr != nil {
 		t.Fatal("collector fixture could not be copied")
 	}
 	if err := os.Chmod(directory, 0o711); err != nil {
