@@ -11,3 +11,11 @@ export function parseControlPlaneRoute(
   }
   return { section: "overview" };
 }
+
+export function parseControlPlanePathname(
+  pathname: string
+): ControlPlaneRouteSelection {
+  const segments = pathname.split("/").filter(Boolean);
+  if (segments[0] !== "console") return { section: "overview" };
+  return parseControlPlaneRoute(segments.slice(1));
+}

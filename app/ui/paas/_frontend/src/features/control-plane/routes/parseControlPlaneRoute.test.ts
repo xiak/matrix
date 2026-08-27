@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { parseControlPlaneRoute } from "./parseControlPlaneRoute";
+import {
+  parseControlPlanePathname,
+  parseControlPlaneRoute
+} from "./parseControlPlaneRoute";
 
 describe("parseControlPlaneRoute", () => {
   it.each([
@@ -12,5 +15,17 @@ describe("parseControlPlaneRoute", () => {
     [["unknown"], "overview"]
   ] as const)("maps %j to %s", (segments, section) => {
     expect(parseControlPlaneRoute(segments ? [...segments] : undefined)).toEqual({ section });
+  });
+
+  it.each([
+    ["/console/", "overview"],
+    ["/console/catalog/", "catalog"],
+    ["/console/quotas", "quotas"],
+    ["/console/installations/", "installations"],
+    ["/console/regions/", "regions"],
+    ["/console/unknown/", "overview"],
+    ["/", "overview"]
+  ] as const)("maps pathname %s to %s", (pathname, section) => {
+    expect(parseControlPlanePathname(pathname)).toEqual({ section });
   });
 });
