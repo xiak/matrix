@@ -1,6 +1,6 @@
 # FEAT-008: existing Linux hosts and remote application delivery
 
-- Status: Target fixed; donor review and implementation pending
+- Status: Target and initial donor review complete; P3-1 implementation in progress
 - Target: Matrix PaaS Phase 3
 - Design date: 2026-08-27
 - Branch: `feat/linux-host-management`
@@ -34,8 +34,8 @@ exercise combines these capabilities rather than introducing them late.
 
 | Iteration | Usable outcome | Required evidence | State |
 | --- | --- | --- | --- |
-| P3-0: design and adoption | Fixed scope, isolated branch and donor decisions | Target committed before fixed-source review; no donor dependency | Design fixed; review pending |
-| P3-1: one managed host | Secure resident agent enrollment, identity, heartbeat and continuously refreshed basic CPU/memory/filesystem status through the control plane | Real authenticated Linux node; wrong identity denied; stale/disconnected state; restart and signed offline startup | Pending |
+| P3-0: design and adoption | Fixed scope, isolated branch and donor decisions | Target committed before fixed-source review; no donor dependency | Complete for the initial node slice |
+| P3-1: one managed host | Secure resident agent enrollment, identity, heartbeat and continuously refreshed basic CPU/memory/filesystem status through the control plane | Real authenticated Linux node; wrong identity denied; stale/disconnected state; restart and signed offline startup | In progress |
 | P3-2: remote application loop | Deploy, observe, update, stop and roll back a real application on that host | IAM/Audit/Operation/accounting integration; exact routing; ENV/Secret behavior; replay and lost-response recovery | Pending |
 | P3-3: interactive operations | Live host/container UI and terminal in the selected running instance | Successive measurements without reload; real terminal I/O, resize, expiry, disconnect, authorization and audit | Pending |
 | P3-4: multiple hosts | Pool placement, drain, unavailable-node handling and safe removal across two independent hosts | No cross-host/local fallback; identity collision, tenant isolation and concurrent capacity checks | Pending |
@@ -173,8 +173,10 @@ executed commands; one checkpoint contains portable resume pointers.
 
 ## Implementation evidence
 
-Design and roadmap only. No implementation iteration or Phase 3 gate is
-accepted. Review fixed donor slices next, then implement P3-1.
+The target/roadmap were fixed in `fbdb250` before the initial fixed-source
+review. No implementation iteration or Phase 3 gate is accepted. P3-1 starts
+with authenticated node observations; its full runtime/telemetry and offline
+startup evidence are still required.
 
 ## Adoption
 
