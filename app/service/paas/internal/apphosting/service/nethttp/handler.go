@@ -9,15 +9,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"mime"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"github.com/xiak/matrix/api/contractjson"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/executionadmission"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/verifyinstallation"
 )
 
@@ -67,6 +68,7 @@ type InstallationVerifier interface {
 type handler struct {
 	authorizer           port.Authorizer
 	workflow             Workflow
+	execution            ExecutionWorkflow
 	installationVerifier InstallationVerifier
 	config               Config
 	routes               *http.ServeMux
@@ -75,11 +77,12 @@ type handler struct {
 func NewHandler(
 	authorizer port.Authorizer,
 	workflow Workflow,
+	execution ExecutionWorkflow,
 	installationVerifier InstallationVerifier,
 	config Config,
 ) (http.Handler, error) {
-	if authorizer == nil || workflow == nil || installationVerifier == nil {
-		return nil, errors.New("HTTP Authorizer, workflow, and installation verifier are required")
+	if authorizer == nil || workflow == nil || execution == nil || installationVerifier == nil {
+		return nil, errors.New("HTTP Authorizer, application and execution workflows, and installation verifier are required")
 	}
 	if config.Readiness == nil {
 		return nil, errors.New("HTTP readiness check is required")
@@ -94,11 +97,16 @@ func NewHandler(
 		config.NewRequestID = newRequestID
 	}
 	value := &handler{
-		authorizer: authorizer, workflow: workflow,
+		authorizer: authorizer, workflow: workflow, execution: execution,
 		installationVerifier: installationVerifier, config: config,
 	}
 	routes := http.NewServeMux()
 	routes.HandleFunc("GET /ready", value.ready)
+	routes.HandleFunc("POST /v1/execution-pools", value.createExecutionPool)
+	routes.HandleFunc("GET /v1/execution-pools/{executionPoolId}", value.getExecutionPool)
+	routes.HandleFunc("POST /v1/execution-targets", value.registerExecutionTarget)
+	routes.HandleFunc("GET /v1/execution-targets/{executionTargetId}", value.getExecutionTarget)
+	routes.HandleFunc("GET /v1/platform/operations/{operationId}", value.getPlatformOperation)
 	routes.HandleFunc("POST /v1/applications", value.createApplication)
 	routes.HandleFunc("GET /v1/applications/{applicationId}", value.getApplication)
 	routes.HandleFunc("POST /v1/configurations", value.createConfiguration)
@@ -566,15 +574,9 @@ func decodeJSON[T any](
 		return zero, false
 	}
 	request.Body = http.MaxBytesReader(response, request.Body, handler.config.MaximumBodyBytes)
-	decoder := json.NewDecoder(request.Body)
-	decoder.DisallowUnknownFields()
 	var value T
-	if err := decoder.Decode(&value); err != nil {
+	if err := contractjson.DecodeObject(request.Body, handler.config.MaximumBodyBytes, &value); err != nil {
 		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "request body is not valid JSON", false)
-		return zero, false
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "request body must contain one JSON document", false)
 		return zero, false
 	}
 	return value, true
@@ -630,6 +632,9 @@ func writeOperation(
 ) {
 	response.Header().Set("Location", location)
 	response.Header().Set("Operation-Location", "/v1/operations/"+string(operation.ID))
+	if operation.Scope.Kind == paasv1.AuthorityPlatform {
+		response.Header().Set("Operation-Location", "/v1/platform/operations/"+string(operation.ID))
+	}
 	response.Header().Set("ETag", resourceVersionETag(resourceVersion))
 	writeJSON(response, status, operation)
 }
@@ -670,13 +675,21 @@ func writeAuthorizationError(response http.ResponseWriter, requestID string, err
 
 func writeWorkflowError(response http.ResponseWriter, requestID string, err error) {
 	switch {
-	case errors.Is(err, applicationlifecycle.ErrInvalidArgument):
+	case errors.Is(err, port.ErrPermissionDenied):
+		writeAuthorizationError(response, requestID, err)
+	case errors.Is(err, executionadmission.ErrUnavailable), errors.Is(err, executionadmission.ErrRetryableTransaction):
+		writeProblem(response, requestID, http.StatusServiceUnavailable, paasv1.ErrorExecutionTargetUnavailable, "Execution target unavailable", "the execution target cannot be observed or admitted now", true)
+	case errors.Is(err, executionadmission.ErrConflict):
+		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorConflict, "Execution admission conflict", "the request conflicts with the registered execution authority", false)
+	case errors.Is(err, executionadmission.ErrNotFound):
+		writeProblem(response, requestID, http.StatusNotFound, paasv1.ErrorNotFound, "Not found", "the requested installation resource does not exist", false)
+	case errors.Is(err, applicationlifecycle.ErrInvalidArgument), errors.Is(err, executionadmission.ErrInvalidArgument):
 		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "request violates the apphosting contract", false)
 	case errors.Is(err, applicationlifecycle.ErrNotFound):
 		writeProblem(response, requestID, http.StatusNotFound, paasv1.ErrorNotFound, "Not found", "the requested tenant resource does not exist", false)
 	case errors.Is(err, applicationlifecycle.ErrAlreadyExists):
 		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorAlreadyExists, "Already exists", "the resource already exists", false)
-	case errors.Is(err, applicationlifecycle.ErrIdempotencyConflict):
+	case errors.Is(err, applicationlifecycle.ErrIdempotencyConflict), errors.Is(err, executionadmission.ErrIdempotencyConflict):
 		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorIdempotencyConflict, "Idempotency conflict", "Idempotency-Key was already used for different content", false)
 	case errors.Is(err, applicationlifecycle.ErrResourceVersionConflict):
 		writeProblem(response, requestID, http.StatusPreconditionFailed, paasv1.ErrorResourceVersionConflict, "Resource version conflict", "If-Match does not identify the current resource version", false)

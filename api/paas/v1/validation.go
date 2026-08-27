@@ -213,6 +213,35 @@ func ValidateExecutionPool(value ExecutionPool) error {
 	return errors.Join(problems...)
 }
 
+func ValidateCreateExecutionPoolRequest(value CreateExecutionPoolRequest) error {
+	problems := []error{
+		ValidateID("id", string(value.ID)),
+		validateLabels("labels", value.Labels),
+		validateLabelSelector("spec.executionTargetSelector", value.Spec.ExecutionTargetSelector),
+		validateUniqueKnown("spec.allowedIsolationGuarantees", value.Spec.AllowedIsolationGuarantees, IsolationGuarantees(), true),
+	}
+	if !namePattern.MatchString(value.Name) {
+		problems = append(problems, errors.New("name must be a DNS label"))
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateRegisterExecutionTargetRequest(value RegisterExecutionTargetRequest) error {
+	problems := []error{
+		ValidateID("id", string(value.ID)),
+		ValidateID("executionPoolId", string(value.ExecutionPoolID)),
+		ValidateID("bindingRef", value.BindingRef),
+		validateLabels("labels", value.Labels),
+	}
+	if !namePattern.MatchString(value.Name) {
+		problems = append(problems, errors.New("name must be a DNS label"))
+	}
+	if _, supplied := value.Labels["matrix-machine-fingerprint"]; supplied {
+		problems = append(problems, errors.New("node identity label is installation-owned"))
+	}
+	return errors.Join(problems...)
+}
+
 func ValidateExecutionTarget(value ExecutionTarget) error {
 	var problems []error
 	if value.APIVersion != APIVersion || value.Kind != "ExecutionTarget" {
@@ -990,8 +1019,16 @@ func ValidateOperation(value Operation) error {
 	}
 	switch value.Action {
 	case OperationCreateExecutionPool, OperationRegisterExecutionTarget:
-		if value.Scope.Kind != AuthorityPlatform {
-			problems = append(problems, errors.New("platform operation action requires platform scope"))
+		problems = append(problems, ValidateID("operation.installationId", value.InstallationID))
+		if value.Scope.Kind != AuthorityPlatform || value.RequestedBy.Type != SubjectUser {
+			problems = append(problems, errors.New("platform operation requires installation scope and a user"))
+		}
+		expectedTarget := "ExecutionPool"
+		if value.Action == OperationRegisterExecutionTarget {
+			expectedTarget = "ExecutionTarget"
+		}
+		if value.Target.Kind != expectedTarget {
+			problems = append(problems, errors.New("platform operation target kind differs from its action"))
 		}
 	case OperationCreatePlacement,
 		OperationCreateApplication,
@@ -1002,7 +1039,7 @@ func ValidateOperation(value Operation) error {
 		OperationUpdate,
 		OperationStop,
 		OperationRollback:
-		if value.Scope.Kind != AuthorityTenant {
+		if value.Scope.Kind != AuthorityTenant || value.InstallationID != "" {
 			problems = append(problems, errors.New("tenant operation action requires tenant scope"))
 		}
 	}

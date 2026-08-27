@@ -47,7 +47,7 @@ func readReadiness(
 		return paasv1.Readiness{}, fmt.Errorf("read PaaS readiness: %w", err)
 	}
 	checkedAt = databaseTime(checkedAt)
-	if schemaVersion != 1 || checkedAt.IsZero() ||
+	if schemaVersion != 2 || checkedAt.IsZero() ||
 		checkedAt.Location() != time.UTC || checkedAt.Nanosecond()%1_000 != 0 {
 		return paasv1.Readiness{}, errors.New("PaaS readiness state is invalid")
 	}

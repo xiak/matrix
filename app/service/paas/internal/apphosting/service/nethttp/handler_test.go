@@ -14,6 +14,7 @@ import (
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/executionadmission"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/verifyinstallation"
 )
 
@@ -23,7 +24,7 @@ func TestHandlerReadinessIsOperationalAndSanitized(t *testing.T) {
 		APIVersion: paasv1.APIVersion, Kind: "Readiness", State: paasv1.ReadinessReady,
 		SchemaVersion: 1, CheckedAt: time.Date(2026, 8, 26, 3, 4, 5, 678_000, time.UTC),
 	}
-	handler, err := NewHandler(&fakeAuthorizer{}, &fakeWorkflow{}, &fakeInstallationVerifier{}, Config{
+	handler, err := NewHandler(&fakeAuthorizer{}, &fakeWorkflow{}, &fakeExecutionWorkflow{}, &fakeInstallationVerifier{}, Config{
 		Readiness: func(context.Context) (paasv1.Readiness, error) {
 			return readiness, readyErr
 		},
@@ -46,6 +47,57 @@ func TestHandlerReadinessIsOperationalAndSanitized(t *testing.T) {
 	if response.Code != http.StatusServiceUnavailable ||
 		strings.Contains(response.Body.String(), "credential") {
 		t.Fatalf("not-ready response=%d body=%q", response.Code, response.Body.String())
+	}
+}
+
+func TestExecutionAdmissionAuthorizesTheActualResourceAndInstallation(t *testing.T) {
+	authorization := port.Authorization{InstallationID: "installation-a", Subject: paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "platform-user"}, DecisionID: "decision-platform", RequestID: "request-test"}
+	authorizer, workflow := &fakeAuthorizer{result: &authorization}, &fakeExecutionWorkflow{}
+	handler, err := NewHandler(authorizer, &fakeWorkflow{}, workflow, &fakeInstallationVerifier{}, Config{
+		NewRequestID: func() (string, error) { return "request-test", nil }, Readiness: func(context.Context) (paasv1.Readiness, error) { return paasv1.Readiness{}, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := jsonRequest(t, http.MethodPost, "/v1/execution-targets", paasv1.RegisterExecutionTargetRequest{ID: "node-a", Name: "host-a", ExecutionPoolID: "pool-a", BindingRef: "protected-a"})
+	request.Header.Set("Authorization", "Bearer platform-user")
+	request.Header.Set("Idempotency-Key", "register-a")
+	request.Header.Set("X-Tenant-ID", "attacker-tenant")
+	request.Header.Set("X-Installation-ID", "attacker-installation")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated || workflow.registerCalls != 1 ||
+		authorizer.request.Action != port.AuthorizeExecutionTargetRegister || authorizer.request.Resource != (paasv1.ResourceRef{Kind: "ExecutionTarget", ID: "node-a"}) ||
+		workflow.registerCommand.Authorization.InstallationID != "installation-a" || workflow.registerCommand.Authorization.TenantID != "" ||
+		response.Header().Get("Operation-Location") != "/v1/platform/operations/operation-a" {
+		t.Fatalf("host admission identity mismatch: status=%d body=%s request=%#v", response.Code, response.Body.String(), authorizer.request)
+	}
+
+	for _, body := range []string{
+		`{"id":"node-a","id":"node-b","name":"host-a","executionPoolId":"pool-a","bindingRef":"protected-a"}`,
+		`{"Id":"node-a","name":"host-a","executionPoolId":"pool-a","bindingRef":"protected-a"}`,
+		`{"id":"node-a","name":"host-a","executionPoolId":"pool-a","bindingRef":"protected-a","installationId":"attacker"}`,
+		`{"id":"node-a","name":"host-a","executionPoolId":"pool-a","bindingRef":"protected-a","endpoint":"https://attacker:443"}`,
+		`{"id":"node-a","name":"host-a","executionPoolId":"pool-a","bindingRef":"protected-a","labels":{"matrix-machine-fingerprint":"forged"}}`,
+		`{"id":"node-a","name":"host-a","executionPoolId":"pool-a","bindingRef":"protected-a"} {}`,
+	} {
+		authorizer.request = port.AuthorizationRequest{}
+		request = httptest.NewRequest(http.MethodPost, "/v1/execution-targets", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Authorization", "Bearer platform-user")
+		response = httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest || workflow.registerCalls != 1 || authorizer.request != (port.AuthorizationRequest{}) {
+			t.Fatalf("ambiguous node admission reached authorization/workflow: status=%d body=%s", response.Code, response.Body.String())
+		}
+	}
+	authorizer.err = port.ErrPermissionDenied
+	request = jsonRequest(t, http.MethodPost, "/v1/execution-pools", paasv1.CreateExecutionPoolRequest{ID: "pool-a", Name: "hosts", Spec: paasv1.ExecutionPoolSpec{AllowedIsolationGuarantees: []paasv1.IsolationGuarantee{paasv1.IsolationWorkload}}})
+	request.Header.Set("Authorization", "Bearer tenant-admin")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden || workflow.createCalls != 0 {
+		t.Fatal("tenant administrator could create a platform pool")
 	}
 }
 
@@ -468,7 +520,7 @@ func mustHandlerWithVerifier(
 	verifier InstallationVerifier,
 ) http.Handler {
 	t.Helper()
-	handler, err := NewHandler(authorizer, workflow, verifier, Config{
+	handler, err := NewHandler(authorizer, workflow, &fakeExecutionWorkflow{}, verifier, Config{
 		NewRequestID: func() (string, error) { return "request-test", nil },
 		Readiness: func(context.Context) (paasv1.Readiness, error) {
 			return paasv1.Readiness{
@@ -501,6 +553,37 @@ func testMetadata(id paasv1.ResourceID, name string) paasv1.ResourceMetadata {
 		Scope:           paasv1.ResourceScope{Kind: paasv1.AuthorityTenant, TenantID: "tenant-authorized"},
 		ResourceVersion: 1, CreatedAt: now, UpdatedAt: now,
 	}
+}
+
+type fakeExecutionWorkflow struct {
+	createCommand   executionadmission.CreatePoolCommand
+	registerCommand executionadmission.RegisterTargetCommand
+	createCalls     int
+	registerCalls   int
+}
+
+func (workflow *fakeExecutionWorkflow) CreatePool(_ context.Context, command executionadmission.CreatePoolCommand) (paasv1.ExecutionPool, paasv1.Operation, bool, error) {
+	workflow.createCommand, workflow.createCalls = command, workflow.createCalls+1
+	operation := testOperation("ExecutionPool", command.Request.ID, paasv1.OperationCreateExecutionPool, paasv1.OperationSucceeded)
+	operation.Scope, operation.InstallationID = paasv1.ResourceScope{Kind: paasv1.AuthorityPlatform}, command.Authorization.InstallationID
+	return paasv1.ExecutionPool{Metadata: testMetadata(command.Request.ID, command.Request.Name)}, operation, false, nil
+}
+
+func (workflow *fakeExecutionWorkflow) RegisterTarget(_ context.Context, command executionadmission.RegisterTargetCommand) (paasv1.ExecutionTarget, paasv1.Operation, bool, error) {
+	workflow.registerCommand, workflow.registerCalls = command, workflow.registerCalls+1
+	operation := testOperation("ExecutionTarget", command.Request.ID, paasv1.OperationRegisterExecutionTarget, paasv1.OperationSucceeded)
+	operation.Scope, operation.InstallationID = paasv1.ResourceScope{Kind: paasv1.AuthorityPlatform}, command.Authorization.InstallationID
+	return paasv1.ExecutionTarget{Metadata: testMetadata(command.Request.ID, command.Request.Name)}, operation, false, nil
+}
+
+func (*fakeExecutionWorkflow) GetPool(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.ExecutionPool, error) {
+	return paasv1.ExecutionPool{}, executionadmission.ErrNotFound
+}
+func (*fakeExecutionWorkflow) GetTarget(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.ExecutionTarget, error) {
+	return paasv1.ExecutionTarget{}, executionadmission.ErrNotFound
+}
+func (*fakeExecutionWorkflow) GetOperation(context.Context, port.Authorization, paasv1.OperationID) (paasv1.Operation, error) {
+	return paasv1.Operation{}, executionadmission.ErrNotFound
 }
 
 func testOperation(

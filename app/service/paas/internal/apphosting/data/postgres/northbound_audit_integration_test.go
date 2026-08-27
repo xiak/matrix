@@ -20,6 +20,7 @@ import (
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 	apphttp "github.com/xiak/matrix/app/service/paas/internal/apphosting/service/nethttp"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/executionadmission"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/verifyinstallation"
 	"github.com/xiak/matrix/app/service/paas/internal/audit"
 	auditpostgres "github.com/xiak/matrix/app/service/paas/internal/audit/data/postgres"
@@ -438,9 +439,20 @@ func newIntegrationHTTPHandler(
 		t.Fatalf("create northbound application workflow: %v", err)
 	}
 	sequence := 0
+	executionRepository, err := NewExecutionAdmissionRepository(apiPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	execution, err := executionadmission.New(executionRepository, executionadmission.Config{
+		InstallationID: "integration-installation", ObservationTimeout: time.Second, MaximumObservationAge: 15 * time.Second, MaxTransactionAttempts: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	handler, err := apphttp.NewHandler(
 		integrationHTTPAuthorizer{tenantID: tenantID},
 		workflow,
+		execution,
 		integrationInstallationVerifier{},
 		apphttp.Config{
 			NewRequestID: func() (string, error) {

@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/audit"
 	"github.com/xiak/matrix/app/service/paas/internal/audit/usecase/auditdispatch"
@@ -79,10 +80,14 @@ func (repository *AuditOutboxRepository) claimStream(
 	}
 	var claim auditdispatch.Claim
 	var document []byte
-	err = repository.pool.QueryRow(ctx, `SELECT tenant_id, event_id, attempts,
+	installationColumn := "''::text"
+	if stream == auditdispatch.StreamAppHosting {
+		installationColumn = "COALESCE(installation_id, '')"
+	}
+	err = repository.pool.QueryRow(ctx, `SELECT COALESCE(tenant_id, ''), `+installationColumn+`, event_id, attempts,
 		fencing_token, lease_expires_at, document FROM `+function+`($1, $2)`,
 		workerID, int(leaseDuration/time.Second)).Scan(
-		&claim.TenantID, &claim.EventID, &claim.Attempts, &claim.FencingToken,
+		&claim.TenantID, &claim.InstallationID, &claim.EventID, &claim.Attempts, &claim.FencingToken,
 		&claim.LeaseExpiresAt, &document,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -96,7 +101,8 @@ func (repository *AuditOutboxRepository) claimStream(
 	event, decodeErr := decodeAuditEvent(document)
 	if decodeErr != nil {
 		completionErr := repository.Complete(ctx, auditdispatch.Completion{
-			TenantID: claim.TenantID, EventID: claim.EventID, Stream: stream, WorkerID: workerID,
+			TenantID: claim.TenantID, InstallationID: claim.InstallationID,
+			EventID: claim.EventID, Stream: stream, WorkerID: workerID,
 			FencingToken: claim.FencingToken, Outcome: auditdispatch.OutcomeDeadLetter,
 			ErrorCode: "CORRUPT_AUDIT_EVENT",
 		})
@@ -132,17 +138,15 @@ func (repository *AuditOutboxRepository) Complete(
 	if err != nil {
 		return err
 	}
-	_, err = repository.pool.Exec(
-		ctx,
-		`SELECT `+function+`($1, $2, $3, $4, $5, $6, $7)`,
-		completion.TenantID,
-		completion.EventID,
-		completion.WorkerID,
-		completion.FencingToken,
-		completion.Outcome,
-		retryAt,
-		errorCode,
-	)
+	arguments := []any{completion.TenantID}
+	parameters := "($1, $2, $3, $4, $5, $6, $7)"
+	if completion.Stream == auditdispatch.StreamAppHosting {
+		arguments = append(arguments, completion.InstallationID)
+		parameters = "($1, $2, $3, $4, $5, $6, $7, $8)"
+	}
+	arguments = append(arguments, completion.EventID, completion.WorkerID,
+		completion.FencingToken, completion.Outcome, retryAt, errorCode)
+	_, err = repository.pool.Exec(ctx, `SELECT `+function+parameters, arguments...)
 	if err != nil {
 		var postgresError *pgconn.PgError
 		if errors.As(err, &postgresError) && postgresError.Code == "MX412" {
@@ -230,13 +234,16 @@ func auditFunction(stream auditdispatch.Stream, name string) (string, error) {
 func validateAuditCompletion(value auditdispatch.Completion) error {
 	var problems []error
 	problems = append(problems,
-		paasv1.ValidateID("audit.tenantId", string(value.TenantID)),
+		auditv1.ValidateAuthority(auditv1.TenantID(value.TenantID), value.InstallationID),
 		paasv1.ValidateID("audit.eventId", value.EventID),
 		paasv1.ValidateID("audit.workerId", value.WorkerID),
 	)
 	if value.Stream != auditdispatch.StreamAppHosting &&
 		value.Stream != auditdispatch.StreamManagedService {
 		problems = append(problems, errors.New("Audit completion stream is invalid"))
+	}
+	if value.Stream == auditdispatch.StreamManagedService && value.InstallationID != "" {
+		problems = append(problems, errors.New("managed-service Audit completion must be tenant-scoped"))
 	}
 	if value.FencingToken < 1 {
 		problems = append(problems, errors.New("Audit completion fencing token is invalid"))

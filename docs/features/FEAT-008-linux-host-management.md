@@ -221,13 +221,54 @@ and full Phase 1/2/3 release exercises were not implied by that default run.
 on `540dc10`, including the full Linux Go/race and real node/collector process
 gates in the existing [verification workflow](../../.github/workflows/verification.yml).
 No implementation iteration or complete Phase 3 gate is accepted.
-Next in P3-1: control-plane admission/refresh and signed offline node startup.
 The node observation chain alone is not the completed observability product.
 The prerequisite installation-scoped IAM and Audit boundaries and their
 verification are owned by
 [FEAT-006](FEAT-006-platform-authorities.md).
-Platform host mutations, their Operation/Audit integration and explicit
-authorization when upgrading an older installation remain unaccepted.
+
+Control-plane pool creation, target registration and current-state queries now
+use the existing apphosting authority. A protected installation file selects
+the node's endpoint, mTLS controller credentials and exact identity pin;
+northbound input contains only its opaque binding reference. Admission probes
+outside the transaction, then atomically stores the pool/target, identity,
+terminal installation Operation and Audit outbox fact. Current IAM permission
+is required even for exact replay; a committed replay does not need a reachable
+node or rewrite the original decision. Tenant and installation Operation/outbox
+partitions remain distinct even when their authority IDs have identical text.
+
+The PaaS process refreshes admitted hosts from a five-second background loop
+without UI readers, with at most two concurrent probes and 128 configured
+targets. This bounds work; it is not a multi-host latency guarantee. Refresh
+preserves scheduling intent, labels, accepted identity and reservations.
+Metric-only samples do not advance the placement resource version; changed
+health/capacity does. Lost connectivity retains last capacity and source times,
+marks the target unavailable and lets usage expire. Reconnection restores fresh
+observations without re-enrollment. GET does not renew source measurements.
+
+The existing [PostgreSQL gate](../../app/service/paas/internal/apphosting/data/postgres/execution_admission_integration_test.go)
+passed with concurrent admission/replay, identity collisions, forced RLS,
+cross-partition rejection, atomic rollback, refresh and outbox fencing. The
+[five-process gate](../../test/authorityprocess/process_e2e_test.go) now obtains
+host facts through real IAM-authorized PaaS HTTP mutations and its dispatcher,
+not a hand-made host Audit event. It passed background no-reader sampling,
+wrong node identity, outage/recovery, exact Operation/Audit correlation and
+next-request denial after platform revocation and IAM restart. Its node peer is
+a closed wire fixture reached by the production mTLS client; physical Linux
+collection evidence remains the separate node process gate above.
+
+The [retained-data upgrade gate](../../app/service/paas/internal/apphosting/data/postgres/upgrade_integration_test.go)
+executes the fixed `3916644` PaaS schema 1 and seeds tenant work through its
+transaction functions. Applying the new schema twice preserved Operations,
+immutable generations, Audit documents and in-flight leases; retained work and
+Audit completion continued afterward. Legacy execution pools were not silently
+enrolled. PaaS API/worker readiness now requires schema 2 and rejects schema 1.
+Fresh PostgreSQL and upgrade tests, the five-process gate and the full Go
+race/vet suite passed locally. Independent CI for this increment remains
+pending until its fixed commit is pushed and verified.
+
+Next in P3-1: combine real Linux enrollment/refresh with signed offline node
+startup and explicit platform authorization when upgrading an older installation.
+P3-1 and the complete Phase 3 release remain unaccepted.
 Retained-data schema migration alone does not establish runnable N-1
 compatibility; the release's schema profile and rollback admission still need
 the complete offline lifecycle gate.

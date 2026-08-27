@@ -22,11 +22,13 @@ type Config struct {
 	Endpoint          string
 	ServiceCredential iamv1.Secret
 	HTTPClient        *http.Client
+	InstallationID    string
 }
 
 type Client struct {
 	http              *authorityhttp.Client
 	serviceCredential iamv1.Secret
+	installationID    string
 }
 
 func NewClient(config Config) (*Client, error) {
@@ -34,10 +36,10 @@ func NewClient(config Config) (*Client, error) {
 	if err != nil {
 		return nil, errors.New("IAM endpoint is invalid")
 	}
-	if !config.ServiceCredential.Present() {
-		return nil, errors.New("PaaS service credential is required")
+	if !config.ServiceCredential.Present() || paasv1.ValidateID("installationId", config.InstallationID) != nil {
+		return nil, errors.New("PaaS installation and service credential are required")
 	}
-	return &Client{http: httpClient, serviceCredential: config.ServiceCredential}, nil
+	return &Client{http: httpClient, serviceCredential: config.ServiceCredential, installationID: config.InstallationID}, nil
 }
 
 func (client *Client) Ready(ctx context.Context) error {
@@ -64,7 +66,7 @@ func (client *Client) Ready(ctx context.Context) error {
 	if !authorityhttp.ResponseIsJSON(response) ||
 		iamv1.DecodeRequest(response.Body, &identity) != nil ||
 		iamv1.ValidateServiceIdentity(identity) != nil ||
-		identity.Purpose != iamv1.ServicePaaS {
+		identity.Purpose != iamv1.ServicePaaS || identity.InstallationID != client.installationID {
 		return port.ErrAuthorizationUnavailable
 	}
 	return nil
@@ -122,6 +124,9 @@ func (client *Client) Authorize(
 		return port.Authorization{}, err
 	}
 	if port.ValidateAuthorizationForRequest(authorization, request) != nil {
+		return port.Authorization{}, port.ErrAuthorizationUnavailable
+	}
+	if authorization.InstallationID != "" && authorization.InstallationID != client.installationID {
 		return port.Authorization{}, port.ErrAuthorizationUnavailable
 	}
 	return authorization, nil
@@ -207,12 +212,17 @@ func authorizationFromDecision(
 		return port.Authorization{}, port.ErrAuthorizationUnavailable
 	}
 	authorization := port.Authorization{
-		TenantID:   paasv1.TenantID(decision.TenantID),
-		Subject:    paasv1.SubjectRef{Type: subjectType, ID: string(decision.Subject.ID)},
-		DecisionID: string(decision.ID),
-		RequestID:  decision.RequestID,
+		TenantID:       paasv1.TenantID(decision.TenantID),
+		InstallationID: decision.InstallationID,
+		Subject:        paasv1.SubjectRef{Type: subjectType, ID: string(decision.Subject.ID)},
+		DecisionID:     string(decision.ID),
+		RequestID:      decision.RequestID,
 	}
-	if port.ValidateAuthorization(authorization) != nil {
+	validate := port.ValidateAuthorization
+	if iamv1.IsPlatformAction(decision.Action) {
+		validate = port.ValidatePlatformAuthorization
+	}
+	if validate(authorization) != nil {
 		return port.Authorization{}, port.ErrAuthorizationUnavailable
 	}
 	return authorization, nil
@@ -258,6 +268,10 @@ func toIAMResourceKind(kind string) (iamv1.ResourceKind, error) {
 		return iamv1.ResourceDeployment, nil
 	case "Operation":
 		return iamv1.ResourceOperation, nil
+	case "ExecutionPool":
+		return iamv1.ResourceExecutionPool, nil
+	case "ExecutionTarget":
+		return iamv1.ResourceExecutionTarget, nil
 	default:
 		return "", errors.New("PaaS authorization resource kind is invalid")
 	}

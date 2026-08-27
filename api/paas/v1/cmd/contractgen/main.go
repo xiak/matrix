@@ -116,6 +116,8 @@ func buildPaths() schema {
 		createID   string
 		readID     string
 	}{
+		{collection: "execution-pools", parameter: "executionPoolId", kind: "ExecutionPool", createBody: "CreateExecutionPoolRequest", createID: "createExecutionPool", readID: "getExecutionPool"},
+		{collection: "execution-targets", parameter: "executionTargetId", kind: "ExecutionTarget", createBody: "RegisterExecutionTargetRequest", createID: "registerExecutionTarget", readID: "getExecutionTarget"},
 		{collection: "applications", parameter: "applicationId", kind: "Application", createBody: "CreateApplicationRequest", createID: "createApplication", readID: "getApplication"},
 		{collection: "configurations", parameter: "configurationId", kind: "Configuration", createBody: "CreateConfigurationRequest", createID: "createConfiguration", readID: "getConfiguration"},
 		{collection: "configuration-revisions", parameter: "configurationRevisionId", kind: "ConfigurationRevision", createBody: "CreateConfigurationRevisionRequest", createID: "createConfigurationRevision", readID: "getConfigurationRevision"},
@@ -165,6 +167,9 @@ func buildPaths() schema {
 	}
 	paths["/v1/operations/{operationId}"] = schema{
 		"get": readOperation("getOperation", "Get Operation", "operationId", "Operation"),
+	}
+	paths["/v1/platform/operations/{operationId}"] = schema{
+		"get": readOperation("getPlatformOperation", "Get an installation-scoped Operation", "operationId", "Operation"),
 	}
 	paths["/v1/installation:verify"] = schema{
 		"post": schema{
@@ -391,6 +396,7 @@ func structContracts() map[string]reflect.Type {
 	values := []any{
 		paasv1.ResourceScope{}, paasv1.ResourceMetadata{}, paasv1.Tenant{},
 		paasv1.LabelSelector{}, paasv1.ExecutionPoolSpec{}, paasv1.ExecutionPoolStatus{}, paasv1.ExecutionPool{},
+		paasv1.CreateExecutionPoolRequest{}, paasv1.RegisterExecutionTargetRequest{},
 		paasv1.AdapterRef{}, paasv1.Capacity{}, paasv1.ExecutionTargetSpec{}, paasv1.ExecutionTargetStatus{}, paasv1.ExecutionTarget{},
 		paasv1.ExecutionTargetUsage{}, paasv1.CPUUsage{}, paasv1.CPUUsageValue{}, paasv1.MemoryUsage{}, paasv1.MemoryUsageValue{},
 		paasv1.FilesystemUsage{}, paasv1.FilesystemUsageValue{},
@@ -443,6 +449,9 @@ func structSchema(contract reflect.Type) schema {
 }
 
 func schemaForField(owner string, field reflect.StructField, jsonName string) schema {
+	if field.Name == "BindingRef" {
+		return ref("ID")
+	}
 	if owner == "DeploymentEndpointObservation" &&
 		(field.Name == "ComponentName" || field.Name == "EndpointName" || field.Name == "Address") {
 		return ref("Name")
@@ -520,6 +529,8 @@ func schemaForType(contract reflect.Type, jsonName string) schema {
 }
 
 func applySemanticOverlays(schemas map[string]any) {
+	registrationLabels := object(schemas["RegisterExecutionTargetRequest"])["properties"].(schema)["labels"].(schema)
+	registrationLabels["not"] = schema{"required": []string{"matrix-machine-fingerprint"}}
 	resourceKinds := map[string]string{
 		"Application": "Application", "Configuration": "Configuration",
 		"ConfigurationRevision": "ConfigurationRevision", "ApplicationRevision": "ApplicationRevision",
@@ -555,6 +566,30 @@ func applySemanticOverlays(schemas map[string]any) {
 		paasv1.OperationSucceeded, paasv1.OperationFailed,
 		paasv1.OperationCancelled, paasv1.OperationManualIntervention,
 	)
+	object(schemas["Operation"])["allOf"] = []any{schema{
+		"if": schema{"properties": schema{"action": schema{"enum": stringsOf(paasv1.OperationCreateExecutionPool, paasv1.OperationRegisterExecutionTarget)}}},
+		"then": schema{
+			"required": []string{"installationId"},
+			"properties": schema{
+				"scope":       schema{"properties": schema{"kind": schema{"const": string(paasv1.AuthorityPlatform)}, "tenantId": false}},
+				"requestedBy": schema{"properties": schema{"type": schema{"const": string(paasv1.SubjectUser)}}},
+			},
+		},
+		"else": schema{"properties": schema{"installationId": false, "scope": schema{"properties": schema{"kind": schema{"const": string(paasv1.AuthorityTenant)}}, "required": []string{"tenantId"}}}},
+	}}
+	for _, target := range []struct {
+		action paasv1.OperationAction
+		kind   string
+	}{
+		{paasv1.OperationCreateExecutionPool, "ExecutionPool"},
+		{paasv1.OperationRegisterExecutionTarget, "ExecutionTarget"},
+	} {
+		operation := object(schemas["Operation"])
+		operation["allOf"] = append(operation["allOf"].([]any), schema{
+			"if":   schema{"properties": schema{"action": schema{"const": string(target.action)}}},
+			"then": schema{"properties": schema{"target": schema{"properties": schema{"kind": schema{"const": target.kind}}}}},
+		})
+	}
 
 	setArrayMinimum(schemas, "ExecutionPoolSpec", "allowedIsolationGuarantees", 1)
 	usageProperties := object(schemas["ExecutionTargetUsage"])["properties"].(schema)

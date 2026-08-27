@@ -83,6 +83,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	temporary := t.TempDir()
 	binaries := buildAuthorityBinaries(t, ctx, root, temporary)
 	bootstrap := processBootstrap(t)
+	node := newProcessNodeFixture(t, temporary, bootstrap.InstallationID)
 	bootstrapBytes, err := iamv1.EncodeBootstrapDocument(bootstrap)
 	if err != nil {
 		t.Fatalf("encode authority process bootstrap: %v", err)
@@ -195,6 +196,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		"MATRIX_PAAS_INSTALLATION_ID=" + bootstrap.InstallationID,
 		"MATRIX_PAAS_RELEASE_ID=matrix-v0.1.0-process",
 		"MATRIX_PAAS_VERIFICATION_ARTIFACT_DIGEST=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"MATRIX_PAAS_NODE_CONNECTIONS_FILE=" + node.configurationPath,
 	}
 	paasDispatcherEnvironment := func(credentialPath string, workerID string) []string {
 		return []string{
@@ -311,7 +313,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	platformDecisions := []iamv1.AuthorizationDecision{
 		assertPlatformAuthorization(t, iamEndpoint, adminLogin.Credential, "principal-admin", "request-platform-admin", true),
 	}
-	platformAuditRecord := ingestPlatformAuditFixture(t, auditEndpoint, platformDecisions[0])
+	platformAuditRecord := createPlatformHost(t, ctx, admin, paasEndpoint, auditEndpoint, adminLogin.Credential, node)
 	assertPlatformAuditAccess(t, auditEndpoint, adminLogin.Credential, http.StatusOK)
 	waitAllIAMOutboxDelivered(t, ctx, admin)
 	adminPage := queryAudit(t, auditEndpoint, adminLogin.Credential, auditv1.QueryRecordsRequest{PageSize: 200}, http.StatusOK)
@@ -356,6 +358,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		assertPlatformAuthorization(t, iamEndpoint, developerLogin.Credential, string(developer.ID), "request-platform-developer-denied", false),
 	)
 	assertPlatformAuditAccess(t, auditEndpoint, developerLogin.Credential, http.StatusForbidden)
+	assertProcessHostAccess(t, paasEndpoint, developerLogin.Credential, http.StatusForbidden)
 	platformBinding := putIAMBinding(t, iamEndpoint, adminLogin.Credential, developer.ID,
 		iamv1.RolePlatformOperator, "request-bind-platform-operator")
 	platformDecisions = append(platformDecisions,
@@ -368,6 +371,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		assertPlatformAuthorization(t, iamEndpoint, developerLogin.Credential, string(developer.ID), "request-platform-developer-revoked", false),
 	)
 	assertPlatformAuditAccess(t, auditEndpoint, developerLogin.Credential, http.StatusForbidden)
+	assertProcessHostAccess(t, paasEndpoint, developerLogin.Credential, http.StatusForbidden)
 	developerOperation := createPaaSApplication(
 		t,
 		paasEndpoint,
@@ -541,6 +545,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		assertPlatformAuthorization(t, iamEndpoint, adminLogin.Credential, "principal-admin", "request-platform-admin-revoked", false),
 	)
 	assertPlatformAuditAccess(t, auditEndpoint, adminLogin.Credential, http.StatusForbidden)
+	assertProcessHostAccess(t, paasEndpoint, adminLogin.Credential, http.StatusForbidden)
 	selfGrant := performJSON(t, http.MethodPost, iamEndpoint+"/v1/role-bindings", adminLogin.Credential,
 		iamv1.PutRoleBindingRequest{PrincipalID: "principal-admin", Role: iamv1.RolePlatformOperator, RequestID: "request-platform-self-grant"})
 	if selfGrant.Status != http.StatusForbidden {
@@ -548,6 +553,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	}
 	iamProcess.stop()
 	waitHTTPStatus(t, ctx, paasProcess, paasEndpoint+"/ready", http.StatusServiceUnavailable)
+	assertProcessHostAccess(t, paasEndpoint, adminLogin.Credential, http.StatusServiceUnavailable)
 	createPaaSApplication(
 		t,
 		paasEndpoint,
@@ -572,6 +578,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		assertPlatformAuthorization(t, iamEndpoint, adminLogin.Credential, "principal-admin", "request-platform-admin-restarted", false),
 	)
 	assertPlatformAuditAccess(t, auditEndpoint, adminLogin.Credential, http.StatusForbidden)
+	assertProcessHostAccess(t, paasEndpoint, adminLogin.Credential, http.StatusForbidden)
 	waitAllIAMOutboxDelivered(t, ctx, admin)
 	assertPlatformDecisionAuditFacts(t, ctx, admin, platformDecisions)
 	paasProcess.stop()
@@ -1071,37 +1078,6 @@ func assertPlatformAuthorization(
 		t.Fatal("platform authorization lost the exact installation or user identity")
 	}
 	return decision
-}
-
-func ingestPlatformAuditFixture(t *testing.T, endpoint string, decision iamv1.AuthorizationDecision) auditv1.AuditRecord {
-	t.Helper()
-	// This tests the authenticated producer/Audit boundary, not host admission
-	// or a PaaS Operation; those effects have their own real-runtime gates.
-	event := auditv1.Event{
-		APIVersion: auditv1.APIVersion, Kind: "AuditEvent", EventID: "event-platform-process",
-		InstallationID: decision.InstallationID,
-		Actor:          auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(decision.Subject.ID)},
-		IAMDecisionID:  auditv1.DecisionID(decision.ID), Action: auditv1.ActionPaaSExecutionTargetRegistered,
-		Target: auditv1.TargetReference{Kind: auditv1.TargetExecutionTarget, ID: decision.Resource.ID},
-		Result: auditv1.ResultSucceeded, RequestDigest: "sha256:" + strings.Repeat("1", 64),
-		RequestID: decision.RequestID, CorrelationID: decision.RequestID,
-		OperationID: "operation-platform-audit-fixture", OccurredAt: decision.DecidedAt,
-	}
-	response := performJSON(t, http.MethodPost, endpoint+"/v1/events", paasServiceCredential, event)
-	var result auditv1.IngestionResult
-	if response.Status != http.StatusCreated || json.Unmarshal(response.Body, &result) != nil ||
-		auditv1.ValidateIngestionResult(result) != nil || result.Record.Sequence != 1 || result.Record.Event != event {
-		t.Fatalf("platform Audit ingestion failed: status=%d", response.Status)
-	}
-	wrong := event
-	wrong.EventID, wrong.InstallationID = "event-wrong-platform", "another-installation"
-	if got := performJSON(t, http.MethodPost, endpoint+"/v1/events", paasServiceCredential, wrong); got.Status != http.StatusUnprocessableEntity {
-		t.Fatalf("wrong installation Audit ingestion status=%d", got.Status)
-	}
-	if got := performJSON(t, http.MethodPost, endpoint+"/v1/events", iamServiceCredential, event); got.Status != http.StatusUnprocessableEntity {
-		t.Fatalf("wrong producer purpose emitted platform PaaS event: status=%d", got.Status)
-	}
-	return result.Record
 }
 
 func assertPlatformAuditAccess(t *testing.T, endpoint, credential string, status int) {

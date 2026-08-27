@@ -73,6 +73,46 @@ func TestComponentInputSchemaEnforcesPhaseOneInjection(t *testing.T) {
 	}
 }
 
+func TestHostAdmissionSchemasKeepCallerInputAndAuthoritySeparate(t *testing.T) {
+	document := loadOpenAPI(t)
+	request := RegisterExecutionTargetRequest{ID: "target-a", Name: "host-a", ExecutionPoolID: "pool-a", BindingRef: "binding-a"}
+	schema := compileOpenAPISchema(t, document, "RegisterExecutionTargetRequest")
+	if err := schema.Validate(schemaInstance(t, request)); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"installationId", "tenantId", "endpoint", "certificate", "identityFingerprint"} {
+		value := schemaInstance(t, request).(map[string]any)
+		value[field] = "caller-value"
+		if err := schema.Validate(value); err == nil {
+			t.Fatalf("host admission accepts caller %s", field)
+		}
+	}
+	forgedLabel := schemaInstance(t, request).(map[string]any)
+	forgedLabel["labels"] = map[string]any{"matrix-machine-fingerprint": "forged"}
+	if err := schema.Validate(forgedLabel); err == nil {
+		t.Fatal("host admission schema accepts a caller identity pin")
+	}
+	operation := loadSchemaExample(t, "examples/operation.json")
+	operation["scope"] = map[string]any{"kind": "PLATFORM"}
+	operation["installationId"] = "installation-a"
+	operation["action"] = string(OperationRegisterExecutionTarget)
+	operation["target"] = map[string]any{"kind": "ExecutionTarget", "id": "target-a"}
+	operation["requestedBy"] = map[string]any{"type": "USER", "id": "platform-user"}
+	operationSchema := compileOpenAPISchema(t, document, "Operation")
+	if err := operationSchema.Validate(operation); err != nil {
+		t.Fatal(err)
+	}
+	delete(operation, "installationId")
+	if err := operationSchema.Validate(operation); err == nil {
+		t.Fatal("platform Operation schema lost its installation")
+	}
+	operation["installationId"] = "installation-a"
+	operation["scope"] = map[string]any{"kind": "TENANT", "tenantId": "installation-a"}
+	if err := operationSchema.Validate(operation); err == nil {
+		t.Fatal("platform Operation schema accepts a fake tenant")
+	}
+}
+
 func TestPlacementDecisionSchemaBindsSelectedTargetVersion(t *testing.T) {
 	document := loadOpenAPI(t)
 	schema := compileOpenAPISchema(t, document, "PlacementDecision")

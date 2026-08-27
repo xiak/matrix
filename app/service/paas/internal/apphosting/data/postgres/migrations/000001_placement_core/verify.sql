@@ -64,6 +64,8 @@ BEGIN
             'deployment_generations',
             'operations',
             'audit_outbox',
+            'execution_pools',
+            'execution_targets',
             'adapter_commands',
             'adapter_receipts',
             'deployment_observations',
@@ -90,8 +92,16 @@ BEGIN
             ('deployment_generations_operation_uq'),
             ('deployment_generations_operation_fk'),
             ('operations_idempotency_uq'),
+            ('operations_tenant_identity_uq'),
+            ('operations_ids_valid'),
+            ('operations_document_identity'),
             ('audit_outbox_operation_fk'),
+            ('audit_outbox_ids_valid'),
+            ('audit_outbox_document_identity'),
             ('execution_targets_pool_fk'),
+            ('execution_targets_installation_pool_fk'),
+            ('execution_targets_installation_identity_valid'),
+            ('execution_pools_installation_valid'),
             ('execution_target_allocations_target_fk'),
             ('adapter_commands_operation_action_uq'),
             ('adapter_commands_operation_fk'),
@@ -168,7 +178,8 @@ BEGIN
           FROM pg_catalog.pg_policies
          WHERE schemaname = 'paas'
            AND tablename = required.table_name
-           AND policyname = 'tenant_isolation'
+           AND policyname = CASE WHEN required.table_name IN ('operations', 'audit_outbox')
+                THEN 'authority_isolation' ELSE 'tenant_isolation' END
     );
     IF missing IS NOT NULL THEN
         RAISE EXCEPTION 'missing apphosting tenant policies: %', missing;
@@ -207,6 +218,11 @@ BEGIN
         RAISE EXCEPTION 'removed pre-Audit submit_deployment signature still exists';
     END IF;
 
+    IF to_regprocedure('paas.complete_audit_event(text,text,text,bigint,text,timestamptz,text)') IS NOT NULL
+       OR to_regprocedure('paas.current_installation_id()') IS NULL THEN
+        RAISE EXCEPTION 'Operation authority function contract is invalid';
+    END IF;
+
     SELECT string_agg(required.name, ', ' ORDER BY required.name)
       INTO missing
       FROM (
@@ -220,6 +236,18 @@ BEGIN
                 'submitted_resource jsonb, submitted_operation jsonb, submitted_audit_event jsonb'
             ),
             (
+                'admit_execution_resource',
+                'submitted_resource jsonb, submitted_operation jsonb, submitted_audit_event jsonb, submitted_binding_ref text, submitted_identity_fingerprint text, expected_pool_version bigint, submitted_pool jsonb'
+            ),
+            (
+                'refresh_execution_target',
+                'expected_target_version bigint, submitted_target jsonb, expected_pool_version bigint, submitted_pool jsonb'
+            ),
+            (
+                'store_execution_pool_observation',
+                'expected_resource_version bigint, submitted_pool jsonb'
+            ),
+            (
                 'submit_deployment',
                 'submitted_deployment jsonb, submitted_generation jsonb, submitted_operation jsonb, submitted_audit_event jsonb, expected_resource_version bigint'
             ),
@@ -229,7 +257,7 @@ BEGIN
             ),
             (
                 'complete_audit_event',
-                'requested_tenant_id text, requested_event_id text, requested_worker_id text, expected_fencing_token bigint, requested_outcome text, requested_retry_at timestamp with time zone, requested_error_code text'
+                'requested_tenant_id text, requested_installation_id text, requested_event_id text, requested_worker_id text, expected_fencing_token bigint, requested_outcome text, requested_retry_at timestamp with time zone, requested_error_code text'
             ),
             (
                 'audit_outbox_snapshot',
@@ -331,6 +359,8 @@ BEGIN
             'paas.operations',
             'INSERT, UPDATE, DELETE'
        )
+       OR has_table_privilege('matrix_paas_api', 'paas.execution_pools', 'INSERT, UPDATE, DELETE')
+       OR has_table_privilege('matrix_paas_api', 'paas.execution_targets', 'INSERT, UPDATE, DELETE')
        OR has_table_privilege(
             'matrix_paas_api',
             'paas.audit_outbox',
@@ -462,7 +492,13 @@ BEGIN
         RAISE EXCEPTION 'worker role can rewrite authoritative or immutable input';
     END IF;
 
-    IF NOT has_table_privilege(
+    IF NOT has_function_privilege('matrix_paas_api', 'paas.admit_execution_resource(jsonb,jsonb,jsonb,text,text,bigint,jsonb)', 'EXECUTE')
+       OR NOT has_function_privilege('matrix_paas_api', 'paas.refresh_execution_target(bigint,jsonb,bigint,jsonb)', 'EXECUTE')
+       OR has_function_privilege('matrix_paas_worker', 'paas.admit_execution_resource(jsonb,jsonb,jsonb,text,text,bigint,jsonb)', 'EXECUTE')
+       OR has_function_privilege('matrix_paas_worker', 'paas.refresh_execution_target(bigint,jsonb,bigint,jsonb)', 'EXECUTE')
+       OR has_function_privilege('matrix_paas_api', 'paas.store_execution_pool_observation(bigint,jsonb)', 'EXECUTE')
+       OR has_function_privilege('matrix_paas_worker', 'paas.store_execution_pool_observation(bigint,jsonb)', 'EXECUTE')
+       OR NOT has_table_privilege(
             'matrix_paas_api',
             'paas.applications',
             'SELECT'
@@ -554,7 +590,7 @@ BEGIN
        )
        OR NOT has_function_privilege(
             'matrix_paas_worker',
-            'paas.complete_audit_event(text, text, text, bigint, text, timestamptz, text)',
+            'paas.complete_audit_event(text, text, text, text, bigint, text, timestamptz, text)',
             'EXECUTE'
        )
        OR NOT has_function_privilege(
@@ -601,7 +637,7 @@ BEGIN
             SELECT 1
               FROM unnest(ARRAY[
                     'paas.claim_audit_event(text, integer)',
-                    'paas.complete_audit_event(text, text, text, bigint, text, timestamptz, text)',
+                    'paas.complete_audit_event(text, text, text, text, bigint, text, timestamptz, text)',
                     'paas.audit_outbox_snapshot()',
                     'paas.worker_readiness()',
                     'paas.claim_operation(text, integer)',

@@ -59,6 +59,13 @@ type ExecutionPool struct {
 	Status     ExecutionPoolStatus `json:"status"`
 }
 
+type CreateExecutionPoolRequest struct {
+	ID     ResourceID        `json:"id"`
+	Name   string            `json:"name"`
+	Labels map[string]string `json:"labels,omitempty"`
+	Spec   ExecutionPoolSpec `json:"spec"`
+}
+
 type AdapterRef struct {
 	Kind            AdapterKind `json:"kind"`
 	Name            string      `json:"name"`
@@ -192,6 +199,16 @@ type ExecutionTarget struct {
 	Metadata   ResourceMetadata      `json:"metadata"`
 	Spec       ExecutionTargetSpec   `json:"spec"`
 	Status     ExecutionTargetStatus `json:"status"`
+}
+
+// RegisterExecutionTargetRequest selects one protected installation binding.
+// Endpoints, identity pins, certificates and host paths are never caller input.
+type RegisterExecutionTargetRequest struct {
+	ID              ResourceID        `json:"id"`
+	Name            string            `json:"name"`
+	Labels          map[string]string `json:"labels,omitempty"`
+	ExecutionPoolID ResourceID        `json:"executionPoolId"`
+	BindingRef      string            `json:"bindingRef"`
 }
 
 type PlacementPolicySpec struct {
@@ -465,6 +482,7 @@ type Operation struct {
 	Kind                   string          `json:"kind"`
 	ID                     OperationID     `json:"id"`
 	Scope                  ResourceScope   `json:"scope"`
+	InstallationID         string          `json:"installationId,omitempty"`
 	Action                 OperationAction `json:"action"`
 	Target                 ResourceRef     `json:"target"`
 	RequestedBy            SubjectRef      `json:"requestedBy"`

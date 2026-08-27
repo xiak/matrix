@@ -30,6 +30,11 @@ const (
 	AuthorizeDeploymentRollback          = "paas.deployment.rollback"
 	AuthorizeDeploymentRead              = "paas.deployment.read"
 	AuthorizeOperationRead               = "paas.operation.read"
+	AuthorizeExecutionPoolCreate         = "paas.execution-pool.create"
+	AuthorizeExecutionPoolRead           = "paas.execution-pool.read"
+	AuthorizeExecutionTargetRegister     = "paas.execution-target.register"
+	AuthorizeExecutionTargetRead         = "paas.execution-target.read"
+	AuthorizePlatformOperationRead       = "paas.platform-operation.read"
 )
 
 // AuthorizationRequest carries transient credential material to the IAM
@@ -41,15 +46,16 @@ type AuthorizationRequest struct {
 	RequestID  string
 }
 
-// Authorization is the trusted IAM result consumed by apphosting. Tenant and
-// subject are never reconstructed from HTTP headers or request documents.
+// Authorization is the trusted IAM result consumed by apphosting. Exactly one
+// tenant or installation is authority; neither is reconstructed from HTTP input.
 type Authorization struct {
-	TenantID    paasv1.TenantID
-	Subject     paasv1.SubjectRef
-	DecisionID  string
-	RequestID   string
-	AuditID     string
-	TraceParent string
+	TenantID       paasv1.TenantID
+	InstallationID string
+	Subject        paasv1.SubjectRef
+	DecisionID     string
+	RequestID      string
+	AuditID        string
+	TraceParent    string
 }
 
 // Authorizer is implemented by the independently deployable IAM boundary.
@@ -82,7 +88,11 @@ func ValidateAuthorizationForRequest(
 	value Authorization,
 	request AuthorizationRequest,
 ) error {
-	problems := []error{ValidateAuthorization(value)}
+	validate := ValidateAuthorization
+	if isPlatformAuthorizationAction(request.Action) {
+		validate = ValidatePlatformAuthorization
+	}
+	problems := []error{validate(value)}
 	if value.RequestID != request.RequestID {
 		problems = append(problems, errors.New("IAM authorization request correlation mismatch"))
 	}
@@ -90,9 +100,30 @@ func ValidateAuthorizationForRequest(
 }
 
 func ValidateAuthorization(value Authorization) error {
+	problems := []error{
+		validateAuthorizedIdentity(value),
+		paasv1.ValidateID("authorization.tenantId", string(value.TenantID)),
+	}
+	if value.InstallationID != "" {
+		problems = append(problems, errors.New("tenant authorization cannot carry an installation"))
+	}
+	return errors.Join(problems...)
+}
+
+func ValidatePlatformAuthorization(value Authorization) error {
+	problems := []error{
+		validateAuthorizedIdentity(value),
+		paasv1.ValidateID("authorization.installationId", value.InstallationID),
+	}
+	if value.TenantID != "" || value.Subject.Type != paasv1.SubjectUser {
+		problems = append(problems, errors.New("platform authorization requires only an installation and a user"))
+	}
+	return errors.Join(problems...)
+}
+
+func validateAuthorizedIdentity(value Authorization) error {
 	var problems []error
 	problems = append(problems,
-		paasv1.ValidateID("authorization.tenantId", string(value.TenantID)),
 		paasv1.ValidateID("authorization.subject.id", value.Subject.ID),
 		paasv1.ValidateID("authorization.decisionId", value.DecisionID),
 		paasv1.ValidateID("authorization.requestId", value.RequestID),
@@ -130,10 +161,26 @@ func knownAuthorizationAction(value string) bool {
 		AuthorizeDeploymentRollback,
 		AuthorizeDeploymentRead,
 		AuthorizeOperationRead,
+		AuthorizeExecutionPoolCreate,
+		AuthorizeExecutionPoolRead,
+		AuthorizeExecutionTargetRegister,
+		AuthorizeExecutionTargetRead,
+		AuthorizePlatformOperationRead,
 	} {
 		if value == candidate {
 			return true
 		}
 	}
 	return false
+}
+
+func isPlatformAuthorizationAction(value string) bool {
+	switch value {
+	case AuthorizeExecutionPoolCreate, AuthorizeExecutionPoolRead,
+		AuthorizeExecutionTargetRegister, AuthorizeExecutionTargetRead,
+		AuthorizePlatformOperationRead:
+		return true
+	default:
+		return false
+	}
 }

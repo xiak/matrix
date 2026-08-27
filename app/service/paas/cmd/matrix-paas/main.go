@@ -21,6 +21,7 @@ import (
 	paaspostgres "github.com/xiak/matrix/app/service/paas/internal/apphosting/data/postgres"
 	paashttp "github.com/xiak/matrix/app/service/paas/internal/apphosting/service/nethttp"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/executionadmission"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/verifyinstallation"
 	managedserviceiam "github.com/xiak/matrix/app/service/paas/internal/managedservice/data/iamhttp"
 	managedservicepostgres "github.com/xiak/matrix/app/service/paas/internal/managedservice/data/postgres"
@@ -37,6 +38,7 @@ const (
 	installationIDEnvironment        = "MATRIX_PAAS_INSTALLATION_ID"
 	releaseIDEnvironment             = "MATRIX_PAAS_RELEASE_ID"
 	verificationDigestEnvironment    = "MATRIX_PAAS_VERIFICATION_ARTIFACT_DIGEST"
+	nodeConnectionsFileEnvironment   = "MATRIX_PAAS_NODE_CONNECTIONS_FILE"
 )
 
 type configuration struct {
@@ -47,6 +49,7 @@ type configuration struct {
 	installationID        string
 	releaseID             string
 	verificationDigest    string
+	nodeConnectionsFile   string
 }
 
 func main() {
@@ -93,7 +96,7 @@ func run(ctx context.Context) error {
 		return errors.New("PaaS service credential is invalid")
 	}
 	authorizer, err := iamhttp.NewClient(iamhttp.Config{
-		Endpoint: config.iamEndpoint, ServiceCredential: credential,
+		Endpoint: config.iamEndpoint, ServiceCredential: credential, InstallationID: config.installationID,
 	})
 	if err != nil {
 		return err
@@ -127,7 +130,39 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	apphostingHandler, err := paashttp.NewHandler(authorizer, workflow, installationVerifier, paashttp.Config{
+	bindings, closeBindings, err := loadNodeBindings(config.nodeConnectionsFile, config.installationID)
+	if err != nil {
+		return err
+	}
+	defer closeBindings()
+	executionRepository, err := paaspostgres.NewExecutionAdmissionRepository(pool)
+	if err != nil {
+		return err
+	}
+	execution, err := executionadmission.New(executionRepository, executionadmission.Config{
+		InstallationID: config.installationID, Bindings: bindings, ObservationTimeout: 5 * time.Second,
+		MaximumObservationAge: 15 * time.Second, MaxTransactionAttempts: 5,
+	})
+	if err != nil {
+		return err
+	}
+	refreshContext, stopRefresh := context.WithCancel(ctx)
+	refreshDone := make(chan struct{})
+	go func() {
+		defer close(refreshDone)
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			_ = execution.Refresh(refreshContext)
+			select {
+			case <-refreshContext.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	defer func() { stopRefresh(); <-refreshDone }()
+	apphostingHandler, err := paashttp.NewHandler(authorizer, workflow, execution, installationVerifier, paashttp.Config{
 		Readiness: func(readinessContext context.Context) (paasv1.Readiness, error) {
 			readiness, err := repository.Readiness(readinessContext)
 			if err != nil || readiness.State != paasv1.ReadinessReady {
@@ -185,6 +220,7 @@ func loadConfiguration() (configuration, error) {
 		installationID:        os.Getenv(installationIDEnvironment),
 		releaseID:             os.Getenv(releaseIDEnvironment),
 		verificationDigest:    os.Getenv(verificationDigestEnvironment),
+		nodeConnectionsFile:   os.Getenv(nodeConnectionsFileEnvironment),
 	}
 	if config.databaseDSNFile == "" || config.iamEndpoint == "" ||
 		config.serviceCredentialFile == "" || config.listenAddress == "" ||

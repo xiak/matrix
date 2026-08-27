@@ -123,7 +123,7 @@
             "type": "integer"
           },
           "bindingRef": {
-            "type": "string"
+            "$ref": "#/components/schemas/ID"
           },
           "commandId": {
             "$ref": "#/components/schemas/ID"
@@ -839,6 +839,29 @@
           },
           "spec": {
             "$ref": "#/components/schemas/DeploymentSpec"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "spec"
+        ],
+        "type": "object"
+      },
+      "CreateExecutionPoolRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "labels": {
+            "$ref": "#/components/schemas/Labels"
+          },
+          "name": {
+            "$ref": "#/components/schemas/Name"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/ExecutionPoolSpec"
           }
         },
         "required": [
@@ -2172,6 +2195,97 @@
       },
       "Operation": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "else": {
+              "properties": {
+                "installationId": false,
+                "scope": {
+                  "properties": {
+                    "kind": {
+                      "const": "TENANT"
+                    }
+                  },
+                  "required": [
+                    "tenantId"
+                  ]
+                }
+              }
+            },
+            "if": {
+              "properties": {
+                "action": {
+                  "enum": [
+                    "CREATE_EXECUTION_POOL",
+                    "REGISTER_EXECUTION_TARGET"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "requestedBy": {
+                  "properties": {
+                    "type": {
+                      "const": "USER"
+                    }
+                  }
+                },
+                "scope": {
+                  "properties": {
+                    "kind": {
+                      "const": "PLATFORM"
+                    },
+                    "tenantId": false
+                  }
+                }
+              },
+              "required": [
+                "installationId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "CREATE_EXECUTION_POOL"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "ExecutionPool"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "REGISTER_EXECUTION_TARGET"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "ExecutionTarget"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ],
         "properties": {
           "action": {
             "$ref": "#/components/schemas/OperationAction"
@@ -2195,6 +2309,9 @@
           },
           "idempotencyFingerprint": {
             "$ref": "#/components/schemas/Digest"
+          },
+          "installationId": {
+            "$ref": "#/components/schemas/ID"
           },
           "kind": {
             "const": "Operation"
@@ -2553,6 +2670,38 @@
           "NOT_READY"
         ],
         "type": "string"
+      },
+      "RegisterExecutionTargetRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "bindingRef": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "executionPoolId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "labels": {
+            "$ref": "#/components/schemas/Labels",
+            "not": {
+              "required": [
+                "matrix-machine-fingerprint"
+              ]
+            }
+          },
+          "name": {
+            "$ref": "#/components/schemas/Name"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "executionPoolId",
+          "bindingRef"
+        ],
+        "type": "object"
       },
       "ResourceMetadata": {
         "additionalProperties": false,
@@ -3847,6 +3996,310 @@
         "summary": "Roll back Deployment"
       }
     },
+    "/v1/execution-pools": {
+      "post": {
+        "operationId": "createExecutionPool",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateExecutionPoolRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operation"
+                }
+              }
+            },
+            "description": "Durable Operation accepted or completed.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              },
+              "Operation-Location": {
+                "$ref": "#/components/headers/OperationLocation"
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operation"
+                }
+              }
+            },
+            "description": "Durable Operation accepted or completed.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              },
+              "Operation-Location": {
+                "$ref": "#/components/headers/OperationLocation"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "428": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Create ExecutionPool"
+      }
+    },
+    "/v1/execution-pools/{executionPoolId}": {
+      "get": {
+        "operationId": "getExecutionPool",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "executionPoolId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionPool"
+                }
+              }
+            },
+            "description": "Current tenant-scoped resource.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Get ExecutionPool"
+      }
+    },
+    "/v1/execution-targets": {
+      "post": {
+        "operationId": "registerExecutionTarget",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterExecutionTargetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operation"
+                }
+              }
+            },
+            "description": "Durable Operation accepted or completed.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              },
+              "Operation-Location": {
+                "$ref": "#/components/headers/OperationLocation"
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operation"
+                }
+              }
+            },
+            "description": "Durable Operation accepted or completed.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              },
+              "Operation-Location": {
+                "$ref": "#/components/headers/OperationLocation"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "428": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Create ExecutionTarget"
+      }
+    },
+    "/v1/execution-targets/{executionTargetId}": {
+      "get": {
+        "operationId": "getExecutionTarget",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "executionTargetId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionTarget"
+                }
+              }
+            },
+            "description": "Current tenant-scoped resource.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Get ExecutionTarget"
+      }
+    },
     "/v1/installation:verify": {
       "post": {
         "operationId": "verifyInstallation",
@@ -3958,6 +4411,60 @@
           }
         },
         "summary": "Get Operation"
+      }
+    },
+    "/v1/platform/operations/{operationId}": {
+      "get": {
+        "operationId": "getPlatformOperation",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "operationId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operation"
+                }
+              }
+            },
+            "description": "Current tenant-scoped resource.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Get an installation-scoped Operation"
       }
     }
   },

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -193,10 +194,12 @@ func TestClientAuthorizesCredentialBoundInstallationVerifier(t *testing.T) {
 }
 
 func TestClientReadinessRequiresPaaSServiceIdentity(t *testing.T) {
+	var installationID atomic.Value
+	installationID.Store("installation-example")
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(response).Encode(iamv1.ServiceIdentity{
-			InstallationID: "installation-example",
+			InstallationID: installationID.Load().(string),
 			APIVersion:     iamv1.APIVersion, Kind: "ServiceIdentity",
 			OrganizationID: "organization-a", PrincipalID: "service-paas",
 			Purpose: iamv1.ServicePaaS,
@@ -206,6 +209,35 @@ func TestClientReadinessRequiresPaaSServiceIdentity(t *testing.T) {
 	if err := newTestClient(t, server.URL).Ready(context.Background()); err != nil {
 		t.Fatalf("PaaS IAM readiness: %v", err)
 	}
+	installationID.Store("different-installation")
+	if err := newTestClient(t, server.URL).Ready(context.Background()); !errors.Is(err, port.ErrAuthorizationUnavailable) {
+		t.Fatalf("PaaS accepted another installation's service identity: %v", err)
+	}
+}
+
+func TestPlatformIAMDecisionKeepsActualResourceAndInstallation(t *testing.T) {
+	var installationID atomic.Value
+	installationID.Store("installation-example")
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		var body iamv1.AuthorizationRequest
+		if iamv1.DecodeRequest(request.Body, &body) != nil || body.Action != iamv1.ActionPaaSExecutionTargetRegister ||
+			body.Resource != (iamv1.ResourceReference{Kind: iamv1.ResourceExecutionTarget, ID: "target-a"}) {
+			t.Fatal("platform request lost its actual resource")
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(response).Encode(iamv1.AuthorizationDecision{APIVersion: iamv1.APIVersion, Kind: "AuthorizationDecision", ID: "decision-platform", Allowed: true, Reason: iamv1.DecisionAllowed,
+			InstallationID: installationID.Load().(string), Subject: &iamv1.Subject{Type: iamv1.PrincipalUser, ID: "platform-user"}, Action: body.Action, Resource: body.Resource, RequestID: body.RequestID, DecidedAt: time.Now().UTC().Truncate(time.Microsecond)})
+	}))
+	defer server.Close()
+	request := port.AuthorizationRequest{Credential: "Bearer " + testSubjectCredential, Action: port.AuthorizeExecutionTargetRegister, Resource: paasv1.ResourceRef{Kind: "ExecutionTarget", ID: "target-a"}, RequestID: "request-platform"}
+	authorization, err := newTestClient(t, server.URL).Authorize(context.Background(), request)
+	if err != nil || authorization.InstallationID != "installation-example" || authorization.TenantID != "" || authorization.Subject.ID != "platform-user" {
+		t.Fatalf("platform authorization = %#v %v", authorization, err)
+	}
+	installationID.Store("different-installation")
+	if _, err := newTestClient(t, server.URL).Authorize(context.Background(), request); !errors.Is(err, port.ErrAuthorizationUnavailable) {
+		t.Fatalf("cross-installation authorization = %v", err)
+	}
 }
 
 func newTestClient(t *testing.T, endpoint string) *Client {
@@ -214,7 +246,7 @@ func newTestClient(t *testing.T, endpoint string) *Client {
 	if err != nil {
 		t.Fatalf("create PaaS service credential: %v", err)
 	}
-	client, err := NewClient(Config{Endpoint: endpoint, ServiceCredential: credential})
+	client, err := NewClient(Config{Endpoint: endpoint, ServiceCredential: credential, InstallationID: "installation-example"})
 	if err != nil {
 		t.Fatalf("create PaaS IAM client: %v", err)
 	}

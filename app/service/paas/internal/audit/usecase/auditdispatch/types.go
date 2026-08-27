@@ -13,6 +13,7 @@ var ErrStaleLease = errors.New("Audit outbox lease or fencing token is stale")
 
 type Claim struct {
 	TenantID       paasv1.TenantID
+	InstallationID string
 	EventID        string
 	Attempts       int
 	FencingToken   int64
@@ -37,14 +38,15 @@ const (
 )
 
 type Completion struct {
-	TenantID     paasv1.TenantID
-	EventID      string
-	Stream       Stream
-	WorkerID     string
-	FencingToken int64
-	Outcome      Outcome
-	RetryAt      time.Time
-	ErrorCode    string
+	TenantID       paasv1.TenantID
+	InstallationID string
+	EventID        string
+	Stream         Stream
+	WorkerID       string
+	FencingToken   int64
+	Outcome        Outcome
+	RetryAt        time.Time
+	ErrorCode      string
 }
 
 type Snapshot struct {

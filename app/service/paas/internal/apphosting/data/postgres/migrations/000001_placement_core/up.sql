@@ -39,6 +39,7 @@ AS $function$
     SELECT CASE
         WHEN current_setting('matrix.tenant_id', true)
             COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+            AND COALESCE(current_setting('matrix.installation_id', true), '') = ''
         THEN current_setting('matrix.tenant_id', true)
         ELSE NULL
     END
@@ -46,6 +47,26 @@ $function$;
 
 REVOKE ALL ON FUNCTION paas.current_tenant_id() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION paas.current_tenant_id()
+    TO matrix_paas_api, matrix_paas_worker;
+
+CREATE OR REPLACE FUNCTION paas.current_installation_id()
+RETURNS text
+LANGUAGE sql
+STABLE
+PARALLEL SAFE
+SET search_path = pg_catalog, pg_temp
+AS $function$
+    SELECT CASE
+        WHEN current_setting('matrix.installation_id', true)
+            COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+            AND COALESCE(current_setting('matrix.tenant_id', true), '') = ''
+        THEN current_setting('matrix.installation_id', true)
+        ELSE NULL
+    END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.current_installation_id() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paas.current_installation_id()
     TO matrix_paas_api, matrix_paas_worker;
 
 CREATE TABLE IF NOT EXISTS paas.applications (
@@ -289,8 +310,62 @@ CREATE TABLE IF NOT EXISTS paas.deployment_generations (
     )
 );
 
+-- Change only authority metadata; retained tenant Operations and outbox facts
+-- keep their documents and identities. Existing tenant foreign keys remain
+-- tenant-only and cannot reference an installation Operation.
+DO $matrix_operation_authority_upgrade$
+BEGIN
+    IF to_regclass('paas.operations') IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'paas' AND table_name = 'operations'
+           AND column_name = 'installation_id'
+    ) THEN
+        ALTER TABLE paas.audit_outbox DROP CONSTRAINT audit_outbox_operation_fk;
+        ALTER TABLE paas.deployment_generations DROP CONSTRAINT IF EXISTS deployment_generations_operation_fk;
+        IF to_regclass('paas.adapter_commands') IS NOT NULL THEN
+            ALTER TABLE paas.adapter_commands DROP CONSTRAINT adapter_commands_operation_fk;
+        END IF;
+        ALTER TABLE paas.operations
+            DROP CONSTRAINT operations_pkey,
+            DROP CONSTRAINT operations_idempotency_uq,
+            ALTER COLUMN tenant_id DROP NOT NULL,
+            ADD COLUMN installation_id text COLLATE "C",
+            ADD COLUMN authority_key text COLLATE "C" GENERATED ALWAYS AS (
+                CASE WHEN installation_id IS NOT NULL THEN 'installation:' || installation_id
+                     ELSE 'tenant:' || tenant_id END
+            ) STORED,
+            ADD PRIMARY KEY (authority_key, id),
+            ADD CONSTRAINT operations_tenant_identity_uq UNIQUE (tenant_id, id),
+            ADD CONSTRAINT operations_idempotency_uq UNIQUE (authority_key, idempotency_fingerprint);
+        -- ACCESS EXCLUSIVE remains held through COMMIT. Validate retained FKs
+        -- as owner, then restore forced RLS in the shared policy section below.
+        ALTER TABLE paas.operations NO FORCE ROW LEVEL SECURITY;
+        ALTER TABLE paas.audit_outbox
+            DROP CONSTRAINT audit_outbox_pkey,
+            ALTER COLUMN tenant_id DROP NOT NULL,
+            ADD COLUMN installation_id text COLLATE "C",
+            ADD COLUMN authority_key text COLLATE "C" GENERATED ALWAYS AS (
+                CASE WHEN installation_id IS NOT NULL THEN 'installation:' || installation_id
+                     ELSE 'tenant:' || tenant_id END
+            ) STORED,
+            ADD PRIMARY KEY (authority_key, event_id),
+            ADD CONSTRAINT audit_outbox_operation_fk FOREIGN KEY (authority_key, operation_id)
+                REFERENCES paas.operations (authority_key, id);
+        IF to_regclass('paas.adapter_commands') IS NOT NULL THEN
+            ALTER TABLE paas.adapter_commands ADD CONSTRAINT adapter_commands_operation_fk
+                FOREIGN KEY (tenant_id, operation_id) REFERENCES paas.operations (tenant_id, id);
+        END IF;
+    END IF;
+END
+$matrix_operation_authority_upgrade$;
+
 CREATE TABLE IF NOT EXISTS paas.operations (
-    tenant_id text COLLATE "C" NOT NULL,
+    tenant_id text COLLATE "C",
+    installation_id text COLLATE "C",
+    authority_key text COLLATE "C" GENERATED ALWAYS AS (
+        CASE WHEN installation_id IS NOT NULL THEN 'installation:' || installation_id
+             ELSE 'tenant:' || tenant_id END
+    ) STORED,
     id text COLLATE "C" NOT NULL,
     action text COLLATE "C" NOT NULL,
     target_kind text COLLATE "C" NOT NULL,
@@ -308,30 +383,12 @@ CREATE TABLE IF NOT EXISTS paas.operations (
     updated_at timestamptz(6) NOT NULL,
     terminal_at timestamptz(6),
     document jsonb NOT NULL,
-    PRIMARY KEY (tenant_id, id),
-    CONSTRAINT operations_idempotency_uq UNIQUE (tenant_id, idempotency_fingerprint),
-    CONSTRAINT operations_ids_valid CHECK (
-        tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-        AND id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-        AND target_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-        AND (lease_owner IS NULL OR lease_owner COLLATE "C"
-            ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
-    ),
+    PRIMARY KEY (authority_key, id),
+    CONSTRAINT operations_tenant_identity_uq UNIQUE (tenant_id, id),
+    CONSTRAINT operations_idempotency_uq UNIQUE (authority_key, idempotency_fingerprint),
     CONSTRAINT operations_digests_valid CHECK (
         idempotency_fingerprint COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
         AND request_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
-    ),
-    CONSTRAINT operations_action_valid CHECK (
-        action IN (
-            'CREATE_APPLICATION',
-            'CREATE_CONFIGURATION',
-            'CREATE_CONFIGURATION_REVISION',
-            'CREATE_APPLICATION_REVISION',
-            'DEPLOY',
-            'UPDATE',
-            'STOP',
-            'ROLLBACK'
-        )
     ),
     CONSTRAINT operations_state_valid CHECK (
         state IN (
@@ -375,36 +432,16 @@ CREATE TABLE IF NOT EXISTS paas.operations (
         updated_at >= created_at
         AND next_attempt_at >= created_at
         AND (terminal_at IS NULL OR terminal_at BETWEEN created_at AND updated_at)
-    ),
-    CONSTRAINT operations_document_identity CHECK (
-        document->>'apiVersion' = 'paas.matrix.xiak.com/v1'
-        AND document->>'kind' = 'Operation'
-        AND document->>'id' = id
-        AND document#>>'{scope,kind}' = 'TENANT'
-        AND document#>>'{scope,tenantId}' = tenant_id
-        AND document->>'action' = action
-        AND document#>>'{target,kind}' = target_kind
-        AND document#>>'{target,id}' = target_id
-        AND document->>'idempotencyFingerprint' = idempotency_fingerprint
-        AND document->>'requestDigest' = request_digest
-        AND document->>'state' = state
-        AND document->'error' IS NOT DISTINCT FROM error
-        AND (document->>'createdAt')::timestamptz = created_at
-        AND (document->>'updatedAt')::timestamptz = updated_at
-        AND (
-            (terminal_at IS NULL AND NOT (document ? 'terminalAt'))
-            OR (document->>'terminalAt')::timestamptz = terminal_at
-        )
-        AND CASE
-            WHEN document->>'attempt' ~ '^[1-9][0-9]*$'
-            THEN (document->>'attempt')::numeric = attempt
-            ELSE false
-        END
     )
 );
 
 CREATE TABLE IF NOT EXISTS paas.audit_outbox (
-    tenant_id text COLLATE "C" NOT NULL,
+    tenant_id text COLLATE "C",
+    installation_id text COLLATE "C",
+    authority_key text COLLATE "C" GENERATED ALWAYS AS (
+        CASE WHEN installation_id IS NOT NULL THEN 'installation:' || installation_id
+             ELSE 'tenant:' || tenant_id END
+    ) STORED,
     event_id text COLLATE "C" NOT NULL,
     operation_id text COLLATE "C" NOT NULL,
     status text COLLATE "C" NOT NULL,
@@ -418,18 +455,9 @@ CREATE TABLE IF NOT EXISTS paas.audit_outbox (
     updated_at timestamptz(6) NOT NULL,
     delivered_at timestamptz(6),
     document jsonb NOT NULL,
-    PRIMARY KEY (tenant_id, event_id),
-    CONSTRAINT audit_outbox_operation_fk FOREIGN KEY (tenant_id, operation_id)
-        REFERENCES paas.operations (tenant_id, id),
-    CONSTRAINT audit_outbox_ids_valid CHECK (
-        tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-        AND event_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-        AND operation_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-        AND (lease_owner IS NULL OR lease_owner COLLATE "C"
-            ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
-        AND (last_error_code IS NULL OR last_error_code COLLATE "C"
-            ~ '^[A-Z][A-Z0-9_]{0,63}$')
-    ),
+    PRIMARY KEY (authority_key, event_id),
+    CONSTRAINT audit_outbox_operation_fk FOREIGN KEY (authority_key, operation_id)
+        REFERENCES paas.operations (authority_key, id),
     CONSTRAINT audit_outbox_status_valid CHECK (
         status IN ('PENDING', 'LEASED', 'RETRY', 'DELIVERED', 'DEAD_LETTER')
     ),
@@ -451,35 +479,89 @@ CREATE TABLE IF NOT EXISTS paas.audit_outbox (
         available_at >= created_at
         AND updated_at >= created_at
         AND (delivered_at IS NULL OR delivered_at BETWEEN created_at AND updated_at)
-    ),
-    CONSTRAINT audit_outbox_document_identity CHECK (
-        document->>'schemaVersion' = 'v1'
-        AND document->>'eventId' = event_id
-        AND document->>'tenantId' = tenant_id
-        AND document->>'operationId' = operation_id
-        AND document->>'requestDigest' COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
-        AND (document->>'occurredAt')::timestamptz = created_at
     )
 );
 
 ALTER TABLE paas.operations
-    DROP CONSTRAINT IF EXISTS operations_action_valid;
+    DROP CONSTRAINT IF EXISTS operations_action_valid,
+    DROP CONSTRAINT IF EXISTS operations_ids_valid,
+    DROP CONSTRAINT IF EXISTS operations_document_identity;
 ALTER TABLE paas.operations
     ADD CONSTRAINT operations_action_valid CHECK (
-        action IN (
-            'CREATE_APPLICATION',
-            'CREATE_CONFIGURATION',
-            'CREATE_CONFIGURATION_REVISION',
-            'CREATE_APPLICATION_REVISION',
-            'DEPLOY',
-            'UPDATE',
-            'STOP',
-            'ROLLBACK'
-        )
-    );
+        (installation_id IS NULL AND action IN (
+            'CREATE_APPLICATION', 'CREATE_CONFIGURATION', 'CREATE_CONFIGURATION_REVISION',
+            'CREATE_APPLICATION_REVISION', 'DEPLOY', 'UPDATE', 'STOP', 'ROLLBACK'
+        )) OR (installation_id IS NOT NULL AND action IN (
+            'CREATE_EXECUTION_POOL', 'REGISTER_EXECUTION_TARGET'
+        ) AND state = 'SUCCEEDED' AND lease_owner IS NULL AND attempt = 1)
+    ),
+    ADD CONSTRAINT operations_ids_valid CHECK (
+        (tenant_id IS NULL) <> (installation_id IS NULL)
+        AND (tenant_id IS NULL OR tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+        AND (installation_id IS NULL OR installation_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+        AND id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND target_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND (lease_owner IS NULL OR lease_owner COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+    ),
+    ADD CONSTRAINT operations_document_identity CHECK ((
+        document->>'apiVersion' = 'paas.matrix.xiak.com/v1'
+        AND document->>'kind' = 'Operation'
+        AND document->>'id' = id
+        AND ((tenant_id IS NOT NULL
+            AND document#>>'{scope,kind}' = 'TENANT'
+            AND document#>>'{scope,tenantId}' = tenant_id
+            AND NOT (document ? 'installationId'))
+          OR (installation_id IS NOT NULL
+            AND document#>>'{scope,kind}' = 'PLATFORM'
+            AND NOT (document#>'{scope}' ? 'tenantId')
+            AND document->>'installationId' = installation_id
+            AND document#>>'{requestedBy,type}' = 'USER'
+            AND target_kind = CASE action
+                WHEN 'CREATE_EXECUTION_POOL' THEN 'ExecutionPool'
+                WHEN 'REGISTER_EXECUTION_TARGET' THEN 'ExecutionTarget' END))
+        AND document->>'action' = action
+        AND document#>>'{target,kind}' = target_kind
+        AND document#>>'{target,id}' = target_id
+        AND document->>'idempotencyFingerprint' = idempotency_fingerprint
+        AND document->>'requestDigest' = request_digest
+        AND document->>'state' = state
+        AND document->'error' IS NOT DISTINCT FROM error
+        AND (document->>'createdAt')::timestamptz = created_at
+        AND (document->>'updatedAt')::timestamptz = updated_at
+        AND ((terminal_at IS NULL AND NOT (document ? 'terminalAt'))
+             OR (document->>'terminalAt')::timestamptz = terminal_at)
+        AND CASE WHEN document->>'attempt' ~ '^[1-9][0-9]*$'
+            THEN (document->>'attempt')::numeric = attempt ELSE false END
+    ) IS TRUE);
 
-CREATE INDEX IF NOT EXISTS audit_outbox_claim_idx
-    ON paas.audit_outbox (available_at, created_at, tenant_id, event_id)
+ALTER TABLE paas.audit_outbox
+    DROP CONSTRAINT IF EXISTS audit_outbox_ids_valid,
+    DROP CONSTRAINT IF EXISTS audit_outbox_document_identity;
+ALTER TABLE paas.audit_outbox
+    ADD CONSTRAINT audit_outbox_ids_valid CHECK (
+        (tenant_id IS NULL) <> (installation_id IS NULL)
+        AND (tenant_id IS NULL OR tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+        AND (installation_id IS NULL OR installation_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+        AND event_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND operation_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND (lease_owner IS NULL OR lease_owner COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+        AND (last_error_code IS NULL OR last_error_code COLLATE "C" ~ '^[A-Z][A-Z0-9_]{0,63}$')
+    ),
+    ADD CONSTRAINT audit_outbox_document_identity CHECK ((
+        document->>'schemaVersion' = 'v1'
+        AND document->>'eventId' = event_id
+        AND (document->>'tenantId') IS NOT DISTINCT FROM tenant_id
+        AND (document->>'installationId') IS NOT DISTINCT FROM installation_id
+        AND (document ? 'tenantId') = (tenant_id IS NOT NULL)
+        AND (document ? 'installationId') = (installation_id IS NOT NULL)
+        AND document->>'operationId' = operation_id
+        AND document->>'requestDigest' COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND (document->>'occurredAt')::timestamptz = created_at
+    ) IS TRUE);
+
+DROP INDEX IF EXISTS paas.audit_outbox_claim_idx;
+CREATE INDEX audit_outbox_claim_idx
+    ON paas.audit_outbox (available_at, created_at, authority_key, event_id)
     WHERE status IN ('PENDING', 'RETRY', 'LEASED');
 
 CREATE INDEX IF NOT EXISTS operations_claim_idx
@@ -567,6 +649,53 @@ CREATE TABLE IF NOT EXISTS paas.execution_targets (
 
 CREATE INDEX IF NOT EXISTS execution_targets_pool_idx
     ON paas.execution_targets (execution_pool_id, id);
+
+-- Retained Phase 1 local-profile rows have no enrolled-node identity. They
+-- cannot be claimed or rewritten by installation admission/refresh commands.
+ALTER TABLE paas.execution_pools ADD COLUMN IF NOT EXISTS installation_id text COLLATE "C";
+ALTER TABLE paas.execution_targets
+    ADD COLUMN IF NOT EXISTS installation_id text COLLATE "C",
+    ADD COLUMN IF NOT EXISTS binding_ref text COLLATE "C",
+    ADD COLUMN IF NOT EXISTS identity_fingerprint text COLLATE "C";
+CREATE UNIQUE INDEX IF NOT EXISTS execution_pools_installation_identity_uq
+    ON paas.execution_pools (installation_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS execution_targets_binding_uq
+    ON paas.execution_targets (installation_id, binding_ref);
+CREATE UNIQUE INDEX IF NOT EXISTS execution_targets_fingerprint_uq
+    ON paas.execution_targets (installation_id, identity_fingerprint);
+ALTER TABLE paas.execution_pools DROP CONSTRAINT IF EXISTS execution_pools_installation_valid;
+ALTER TABLE paas.execution_pools ADD CONSTRAINT execution_pools_installation_valid CHECK (
+    installation_id IS NULL OR installation_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+);
+ALTER TABLE paas.execution_targets
+    DROP CONSTRAINT IF EXISTS execution_targets_installation_identity_valid,
+    DROP CONSTRAINT IF EXISTS execution_targets_installation_pool_fk;
+ALTER TABLE paas.execution_targets
+    ADD CONSTRAINT execution_targets_installation_pool_fk FOREIGN KEY (installation_id, execution_pool_id)
+        REFERENCES paas.execution_pools (installation_id, id),
+    ADD CONSTRAINT execution_targets_installation_identity_valid CHECK ((
+        (installation_id IS NULL AND binding_ref IS NULL AND identity_fingerprint IS NULL)
+        OR (installation_id IS NOT NULL AND binding_ref IS NOT NULL AND identity_fingerprint IS NOT NULL
+            AND installation_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+            AND binding_ref COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+            AND identity_fingerprint COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+            AND document#>>'{metadata,labels,matrix-machine-fingerprint}' = identity_fingerprint)
+    ) IS TRUE);
+
+ALTER TABLE paas.execution_pools ENABLE ROW LEVEL SECURITY;
+ALTER TABLE paas.execution_pools FORCE ROW LEVEL SECURITY;
+ALTER TABLE paas.execution_targets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE paas.execution_targets FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS installation_read ON paas.execution_pools;
+DROP POLICY IF EXISTS installation_read ON paas.execution_targets;
+DROP POLICY IF EXISTS placement_read ON paas.execution_pools;
+DROP POLICY IF EXISTS placement_read ON paas.execution_targets;
+CREATE POLICY installation_read ON paas.execution_pools FOR SELECT TO matrix_paas_api
+    USING (installation_id = paas.current_installation_id());
+CREATE POLICY installation_read ON paas.execution_targets FOR SELECT TO matrix_paas_api
+    USING (installation_id = paas.current_installation_id());
+CREATE POLICY placement_read ON paas.execution_pools FOR SELECT TO matrix_paas_worker USING (true);
+CREATE POLICY placement_read ON paas.execution_targets FOR SELECT TO matrix_paas_worker USING (true);
 
 CREATE TABLE IF NOT EXISTS paas.execution_target_allocations (
     execution_target_id text COLLATE "C" PRIMARY KEY,
@@ -967,8 +1096,6 @@ BEGIN
         'placement_policies',
         'deployments',
         'deployment_generations',
-        'operations',
-        'audit_outbox',
         'adapter_commands',
         'adapter_receipts',
         'deployment_observations',
@@ -994,6 +1121,30 @@ BEGIN
 END
 $matrix_policy$;
 
+DROP POLICY IF EXISTS tenant_isolation ON paas.operations;
+DROP POLICY IF EXISTS tenant_isolation ON paas.audit_outbox;
+DO $matrix_operation_authority_policies$
+DECLARE
+    table_name text;
+BEGIN
+    FOREACH table_name IN ARRAY ARRAY['operations', 'audit_outbox']
+    LOOP
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_catalog.pg_policies
+             WHERE schemaname = 'paas' AND tablename = table_name
+               AND policyname = 'authority_isolation'
+        ) THEN
+            EXECUTE format(
+                'CREATE POLICY authority_isolation ON paas.%I '
+                'USING (tenant_id = paas.current_tenant_id() OR installation_id = paas.current_installation_id()) '
+                'WITH CHECK (tenant_id = paas.current_tenant_id() OR installation_id = paas.current_installation_id())',
+                table_name
+            );
+        END IF;
+    END LOOP;
+END
+$matrix_operation_authority_policies$;
+
 CREATE OR REPLACE FUNCTION paas.append_audit_outbox(
     submitted_operation jsonb,
     submitted_audit_event jsonb
@@ -1005,30 +1156,32 @@ SET search_path = pg_catalog, pg_temp
 AS $function$
 DECLARE
     effective_tenant_id text;
+    effective_installation_id text;
     effective_now timestamptz(6);
     expected_action text;
     expected_result text;
 BEGIN
     effective_tenant_id := paas.current_tenant_id();
+    effective_installation_id := paas.current_installation_id();
     effective_now := transaction_timestamp();
-    IF effective_tenant_id IS NULL THEN
+    IF effective_tenant_id IS NULL AND effective_installation_id IS NULL THEN
         RAISE EXCEPTION USING
             ERRCODE = '42501',
-            MESSAGE = 'valid transaction-local tenant context is required';
+            MESSAGE = 'exactly one transaction-local authority context is required';
     END IF;
-    IF jsonb_typeof(submitted_operation) <> 'object'
-       OR jsonb_typeof(submitted_audit_event) <> 'object'
-       OR jsonb_typeof(submitted_audit_event->'actor') <> 'object'
-       OR jsonb_typeof(submitted_audit_event->'target') <> 'object'
+    IF jsonb_typeof(submitted_operation) IS DISTINCT FROM 'object'
+       OR jsonb_typeof(submitted_audit_event) IS DISTINCT FROM 'object'
+       OR jsonb_typeof(submitted_audit_event->'actor') IS DISTINCT FROM 'object'
+       OR jsonb_typeof(submitted_audit_event->'target') IS DISTINCT FROM 'object'
        OR NOT (submitted_audit_event ?& ARRAY[
-            'schemaVersion', 'eventId', 'tenantId', 'actor',
+            'schemaVersion', 'eventId', 'actor',
             'iamDecisionId', 'action', 'target', 'operationId',
             'requestDigest', 'result', 'requestId', 'occurredAt'
        ])
        OR NOT ((submitted_audit_event->'actor') ?& ARRAY['type', 'id'])
        OR NOT ((submitted_audit_event->'target') ?& ARRAY['kind', 'id'])
        OR (submitted_audit_event - ARRAY[
-            'schemaVersion', 'eventId', 'tenantId', 'actor',
+            'schemaVersion', 'eventId', 'tenantId', 'installationId', 'actor',
             'iamDecisionId', 'action', 'target', 'operationId',
             'requestDigest', 'result', 'requestId', 'auditId',
             'traceparent', 'occurredAt'
@@ -1053,6 +1206,8 @@ BEGIN
         WHEN 'UPDATE' THEN 'paas.deployment.updated'
         WHEN 'STOP' THEN 'paas.deployment.stopped'
         WHEN 'ROLLBACK' THEN 'paas.deployment.rolled-back'
+        WHEN 'CREATE_EXECUTION_POOL' THEN 'paas.execution-pool.created'
+        WHEN 'REGISTER_EXECUTION_TARGET' THEN 'paas.execution-target.registered'
         ELSE NULL
     END;
     expected_result := CASE
@@ -1060,15 +1215,25 @@ BEGIN
             'CREATE_APPLICATION',
             'CREATE_CONFIGURATION',
             'CREATE_CONFIGURATION_REVISION',
-            'CREATE_APPLICATION_REVISION'
+            'CREATE_APPLICATION_REVISION',
+            'CREATE_EXECUTION_POOL',
+            'REGISTER_EXECUTION_TARGET'
         ) THEN 'SUCCEEDED'
         ELSE 'ACCEPTED'
     END;
     IF expected_action IS NULL
-       OR submitted_audit_event->>'schemaVersion' <> 'v1'
+       OR submitted_audit_event->>'schemaVersion' IS DISTINCT FROM 'v1'
        OR COALESCE(submitted_audit_event->>'eventId', '') COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-       OR submitted_audit_event->>'tenantId' <> effective_tenant_id
+       OR submitted_audit_event->>'tenantId' IS DISTINCT FROM effective_tenant_id
+       OR submitted_audit_event->>'installationId' IS DISTINCT FROM effective_installation_id
+       OR (submitted_audit_event ? 'tenantId') <> (effective_tenant_id IS NOT NULL)
+       OR (submitted_audit_event ? 'installationId') <> (effective_installation_id IS NOT NULL)
+       OR ((effective_installation_id IS NOT NULL) <> (submitted_operation->>'action' IN (
+            'CREATE_EXECUTION_POOL', 'REGISTER_EXECUTION_TARGET'
+       )))
+       OR (effective_installation_id IS NOT NULL
+            AND submitted_audit_event#>>'{actor,type}' IS DISTINCT FROM 'USER')
        OR COALESCE(submitted_audit_event#>>'{actor,id}', '') COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR submitted_audit_event#>>'{actor,type}' NOT IN (
@@ -1078,7 +1243,7 @@ BEGIN
             IS DISTINCT FROM submitted_operation->'requestedBy'
        OR COALESCE(submitted_audit_event->>'iamDecisionId', '') COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-       OR submitted_audit_event->>'action' <> expected_action
+       OR submitted_audit_event->>'action' IS DISTINCT FROM expected_action
        OR submitted_audit_event->'target'
             IS DISTINCT FROM submitted_operation->'target'
        OR submitted_audit_event->>'operationId' <> submitted_operation->>'id'
@@ -1086,7 +1251,7 @@ BEGIN
             <> submitted_operation->>'requestDigest'
        OR submitted_audit_event->>'requestDigest' COLLATE "C"
             !~ '^sha256:[0-9a-f]{64}$'
-       OR submitted_audit_event->>'result' <> expected_result
+       OR submitted_audit_event->>'result' IS DISTINCT FROM expected_result
        OR COALESCE(submitted_audit_event->>'requestId', '') COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR (submitted_audit_event ? 'auditId'
@@ -1104,6 +1269,7 @@ BEGIN
 
     INSERT INTO paas.audit_outbox (
         tenant_id,
+        installation_id,
         event_id,
         operation_id,
         status,
@@ -1115,6 +1281,7 @@ BEGIN
         document
     ) VALUES (
         effective_tenant_id,
+        effective_installation_id,
         submitted_audit_event->>'eventId',
         submitted_operation->>'id',
         'PENDING',
@@ -1131,6 +1298,203 @@ $function$;
 REVOKE ALL ON FUNCTION paas.append_audit_outbox(jsonb, jsonb) FROM PUBLIC;
 REVOKE ALL ON FUNCTION paas.append_audit_outbox(jsonb, jsonb)
     FROM matrix_paas_api, matrix_paas_worker;
+
+CREATE OR REPLACE FUNCTION paas.store_execution_pool_observation(
+    expected_resource_version bigint, submitted_pool jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    current_pool paas.execution_pools%ROWTYPE;
+    effective_installation_id text := paas.current_installation_id();
+    total_count bigint;
+    maximum_ready_count bigint;
+    ready_count bigint;
+    next_version bigint;
+BEGIN
+    IF effective_installation_id IS NULL THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'installation context is required';
+    END IF;
+    SELECT * INTO current_pool FROM paas.execution_pools
+     WHERE installation_id = effective_installation_id AND id = submitted_pool#>>'{metadata,id}' FOR UPDATE;
+    IF NOT FOUND OR current_pool.resource_version IS DISTINCT FROM expected_resource_version THEN
+        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'execution pool changed concurrently';
+    END IF;
+    SELECT count(*), count(*) FILTER (
+        WHERE document#>>'{status,health}' = 'READY' AND document#>>'{spec,desiredState}' = 'ACTIVE'
+          AND (document#>>'{status,observedAt}')::timestamptz > transaction_timestamp() - interval '15 seconds'
+          AND (document#>>'{status,observedAt}')::timestamptz <= transaction_timestamp() + interval '2 seconds'
+    ) INTO total_count, maximum_ready_count FROM paas.execution_targets
+     WHERE installation_id = effective_installation_id AND execution_pool_id = current_pool.id;
+    ready_count := (submitted_pool#>>'{status,readyExecutionTargetCount}')::bigint;
+    next_version := expected_resource_version + CASE
+        WHEN ((current_pool.document->'status') - 'observedAt') IS DISTINCT FROM ((submitted_pool->'status') - 'observedAt') THEN 1 ELSE 0 END;
+    IF NOT ((
+        (((current_pool.document #- '{metadata,resourceVersion}') #- '{metadata,updatedAt}') - 'status')
+            = (((submitted_pool #- '{metadata,resourceVersion}') #- '{metadata,updatedAt}') - 'status')
+        AND submitted_pool#>>'{metadata,resourceVersion}' = next_version::text
+        AND (submitted_pool#>>'{metadata,updatedAt}')::timestamptz = transaction_timestamp()
+        AND (submitted_pool#>>'{status,observedAt}')::timestamptz = transaction_timestamp()
+        AND submitted_pool#>>'{status,executionTargetCount}' = total_count::text
+        AND ready_count BETWEEN 0 AND maximum_ready_count
+        AND submitted_pool#>>'{status,phase}' = CASE WHEN ready_count = 0 THEN 'UNAVAILABLE'
+            WHEN ready_count = total_count THEN 'READY' ELSE 'DEGRADED' END
+        AND ((submitted_pool->'status') - ARRAY['phase','executionTargetCount','readyExecutionTargetCount','observedAt']) = '{}'::jsonb
+    ) IS TRUE) THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'execution pool observation cannot change desired authority';
+    END IF;
+    UPDATE paas.execution_pools SET resource_version = next_version, document = submitted_pool WHERE id = current_pool.id;
+END
+$function$;
+REVOKE ALL ON FUNCTION paas.store_execution_pool_observation(bigint, jsonb) FROM PUBLIC, matrix_paas_api, matrix_paas_worker;
+
+CREATE OR REPLACE FUNCTION paas.admit_execution_resource(
+    submitted_resource jsonb, submitted_operation jsonb, submitted_audit_event jsonb,
+    submitted_binding_ref text, submitted_identity_fingerprint text,
+    expected_pool_version bigint, submitted_pool jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_installation_id text := paas.current_installation_id();
+    resource_kind text := submitted_resource->>'kind';
+    resource_id text := submitted_resource#>>'{metadata,id}';
+    expected_action text;
+BEGIN
+    IF effective_installation_id IS NULL THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'installation context is required';
+    END IF;
+    expected_action := CASE resource_kind WHEN 'ExecutionPool' THEN 'CREATE_EXECUTION_POOL'
+        WHEN 'ExecutionTarget' THEN 'REGISTER_EXECUTION_TARGET' END;
+    IF NOT ((
+        expected_action IS NOT NULL
+        AND jsonb_typeof(submitted_resource) = 'object'
+        AND jsonb_typeof(submitted_operation) = 'object'
+        AND submitted_resource->>'apiVersion' = 'paas.matrix.xiak.com/v1'
+        AND resource_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND submitted_resource#>>'{metadata,scope,kind}' = 'PLATFORM'
+        AND NOT (submitted_resource#>'{metadata,scope}' ? 'tenantId')
+        AND submitted_resource#>>'{metadata,resourceVersion}' = '1'
+        AND (submitted_resource#>>'{metadata,createdAt}')::timestamptz = transaction_timestamp()
+        AND (submitted_resource#>>'{metadata,updatedAt}')::timestamptz = transaction_timestamp()
+        AND submitted_operation->>'installationId' = effective_installation_id
+        AND submitted_operation->>'action' = expected_action
+        AND submitted_operation#>>'{target,kind}' = resource_kind
+        AND submitted_operation#>>'{target,id}' = resource_id
+        AND submitted_operation->>'state' = 'SUCCEEDED'
+        AND submitted_operation->>'attempt' = '1'
+        AND NOT (submitted_operation ? 'error')
+        AND (submitted_operation->>'createdAt')::timestamptz = transaction_timestamp()
+        AND (submitted_operation->>'updatedAt')::timestamptz = transaction_timestamp()
+        AND (submitted_operation->>'terminalAt')::timestamptz = transaction_timestamp()
+    ) IS TRUE) THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'execution admission identity or operation is invalid';
+    END IF;
+    IF resource_kind = 'ExecutionPool' THEN
+        IF submitted_binding_ref IS NOT NULL OR submitted_identity_fingerprint IS NOT NULL
+           OR expected_pool_version IS NOT NULL OR submitted_pool IS NOT NULL
+           OR submitted_resource->'status' IS DISTINCT FROM jsonb_build_object(
+               'phase', 'UNAVAILABLE', 'executionTargetCount', 0, 'readyExecutionTargetCount', 0,
+               'observedAt', submitted_resource#>'{metadata,createdAt}') THEN
+            RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'new execution pool must be empty';
+        END IF;
+        INSERT INTO paas.execution_pools (id, installation_id, resource_version, document)
+            VALUES (resource_id, effective_installation_id, 1, submitted_resource);
+    ELSE
+        -- Pool locking serializes registration and observation updates. Global
+        -- unique target IDs preserve existing placement FKs; installation and
+        -- binding constraints prevent borrowing another installation's node.
+        PERFORM 1 FROM paas.execution_pools WHERE installation_id = effective_installation_id
+            AND id = submitted_resource#>>'{spec,executionPoolId}' FOR UPDATE;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION USING ERRCODE = 'MX404', MESSAGE = 'execution pool is not registered';
+        END IF;
+        IF NOT ((
+            submitted_binding_ref IS NOT NULL AND submitted_identity_fingerprint IS NOT NULL
+            AND submitted_resource#>>'{spec,desiredState}' = 'ACTIVE'
+            AND submitted_resource#>>'{status,health}' = 'READY'
+            AND submitted_resource#>>'{metadata,labels,matrix-machine-fingerprint}' = submitted_identity_fingerprint
+            AND (submitted_resource#>>'{status,observedAt}')::timestamptz > transaction_timestamp() - interval '15 seconds'
+            AND (submitted_resource#>>'{status,observedAt}')::timestamptz <= transaction_timestamp() + interval '2 seconds'
+            AND submitted_pool#>>'{metadata,id}' = submitted_resource#>>'{spec,executionPoolId}'
+        ) IS TRUE) THEN
+            RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'node registration requires a fresh identity-bound observation';
+        END IF;
+        IF (SELECT count(*) FROM paas.execution_targets WHERE installation_id = effective_installation_id) >= 128 THEN
+            RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'execution target admission limit reached';
+        END IF;
+        INSERT INTO paas.execution_targets (id, installation_id, execution_pool_id, binding_ref, identity_fingerprint, resource_version, document)
+            VALUES (resource_id, effective_installation_id, submitted_resource#>>'{spec,executionPoolId}',
+                submitted_binding_ref, submitted_identity_fingerprint, 1, submitted_resource);
+        INSERT INTO paas.execution_target_allocations (execution_target_id) VALUES (resource_id);
+        PERFORM paas.store_execution_pool_observation(expected_pool_version, submitted_pool);
+    END IF;
+    INSERT INTO paas.operations (installation_id, id, action, target_kind, target_id, idempotency_fingerprint,
+        request_digest, state, attempt, next_attempt_at, fencing_token, created_at, updated_at, terminal_at, document)
+        VALUES (effective_installation_id, submitted_operation->>'id', expected_action, resource_kind, resource_id,
+            submitted_operation->>'idempotencyFingerprint', submitted_operation->>'requestDigest', 'SUCCEEDED', 1,
+            transaction_timestamp(), 0, transaction_timestamp(), transaction_timestamp(), transaction_timestamp(), submitted_operation);
+    PERFORM paas.append_audit_outbox(submitted_operation, submitted_audit_event);
+END
+$function$;
+REVOKE ALL ON FUNCTION paas.admit_execution_resource(jsonb,jsonb,jsonb,text,text,bigint,jsonb) FROM PUBLIC, matrix_paas_worker;
+GRANT EXECUTE ON FUNCTION paas.admit_execution_resource(jsonb,jsonb,jsonb,text,text,bigint,jsonb) TO matrix_paas_api;
+
+CREATE OR REPLACE FUNCTION paas.refresh_execution_target(
+    expected_target_version bigint, submitted_target jsonb,
+    expected_pool_version bigint, submitted_pool jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_installation_id text := paas.current_installation_id();
+    current_target paas.execution_targets%ROWTYPE;
+    next_version bigint;
+BEGIN
+    IF effective_installation_id IS NULL THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'installation context is required';
+    END IF;
+    PERFORM 1 FROM paas.execution_pools WHERE installation_id = effective_installation_id
+        AND id = submitted_pool#>>'{metadata,id}' FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX404', MESSAGE = 'execution pool is not registered';
+    END IF;
+    SELECT * INTO current_target FROM paas.execution_targets
+        WHERE installation_id = effective_installation_id AND id = submitted_target#>>'{metadata,id}' FOR UPDATE;
+    IF NOT FOUND OR current_target.resource_version IS DISTINCT FROM expected_target_version THEN
+        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'execution target changed concurrently';
+    END IF;
+    next_version := expected_target_version + CASE
+        WHEN ((current_target.document->'status') - ARRAY['observedAt','usage'])
+            IS DISTINCT FROM ((submitted_target->'status') - ARRAY['observedAt','usage']) THEN 1 ELSE 0 END;
+    IF NOT ((
+        (((current_target.document #- '{metadata,resourceVersion}') #- '{metadata,updatedAt}') - 'status')
+            = (((submitted_target #- '{metadata,resourceVersion}') #- '{metadata,updatedAt}') - 'status')
+        AND submitted_target#>>'{metadata,resourceVersion}' = next_version::text
+        AND (submitted_target#>>'{metadata,updatedAt}')::timestamptz = transaction_timestamp()
+        AND current_target.execution_pool_id = submitted_pool#>>'{metadata,id}'
+        AND (submitted_target#>>'{status,observedAt}')::timestamptz >= (current_target.document#>>'{status,observedAt}')::timestamptz
+        AND (submitted_target#>>'{status,observedAt}')::timestamptz <= transaction_timestamp() + interval '2 seconds'
+        AND (submitted_target#>>'{status,health}' = 'UNAVAILABLE'
+             OR (submitted_target#>>'{status,observedAt}')::timestamptz > transaction_timestamp() - interval '15 seconds')
+    ) IS TRUE) THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'node refresh cannot change desired authority or identity';
+    END IF;
+    UPDATE paas.execution_targets SET resource_version = next_version, document = submitted_target WHERE id = current_target.id;
+    PERFORM paas.store_execution_pool_observation(expected_pool_version, submitted_pool);
+END
+$function$;
+REVOKE ALL ON FUNCTION paas.refresh_execution_target(bigint,jsonb,bigint,jsonb) FROM PUBLIC, matrix_paas_worker;
+GRANT EXECUTE ON FUNCTION paas.refresh_execution_target(bigint,jsonb,bigint,jsonb) TO matrix_paas_api;
 
 CREATE OR REPLACE FUNCTION paas.create_apphosting_resource(
     submitted_resource jsonb,
@@ -1536,12 +1900,14 @@ REVOKE ALL ON FUNCTION paas.submit_deployment(jsonb, jsonb, jsonb, jsonb, bigint
 GRANT EXECUTE ON FUNCTION paas.submit_deployment(jsonb, jsonb, jsonb, jsonb, bigint)
     TO matrix_paas_api;
 
-CREATE OR REPLACE FUNCTION paas.claim_audit_event(
+DROP FUNCTION IF EXISTS paas.claim_audit_event(text, integer);
+CREATE FUNCTION paas.claim_audit_event(
     requested_worker_id text,
     requested_lease_seconds integer
 )
 RETURNS TABLE (
     tenant_id text,
+    installation_id text,
     event_id text,
     attempts integer,
     fencing_token bigint,
@@ -1564,7 +1930,7 @@ BEGIN
     END IF;
     RETURN QUERY
     WITH candidate AS (
-        SELECT pending.tenant_id,
+        SELECT pending.authority_key,
                pending.event_id
           FROM paas.audit_outbox AS pending
          WHERE pending.attempts < 100
@@ -1576,7 +1942,7 @@ BEGIN
            )
          ORDER BY pending.available_at,
                   pending.created_at,
-                  pending.tenant_id COLLATE "C",
+                  pending.authority_key COLLATE "C",
                   pending.event_id COLLATE "C"
          LIMIT 1
          FOR UPDATE SKIP LOCKED
@@ -1591,9 +1957,10 @@ BEGIN
            last_error_code = NULL,
            updated_at = transaction_timestamp()
       FROM candidate
-     WHERE claimed.tenant_id = candidate.tenant_id
+     WHERE claimed.authority_key = candidate.authority_key
        AND claimed.event_id = candidate.event_id
     RETURNING claimed.tenant_id,
+              claimed.installation_id,
               claimed.event_id,
               claimed.attempts,
               claimed.fencing_token,
@@ -1606,8 +1973,10 @@ REVOKE ALL ON FUNCTION paas.claim_audit_event(text, integer) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION paas.claim_audit_event(text, integer)
     TO matrix_paas_worker;
 
+DROP FUNCTION IF EXISTS paas.complete_audit_event(text, text, text, bigint, text, timestamptz, text);
 CREATE OR REPLACE FUNCTION paas.complete_audit_event(
     requested_tenant_id text,
+    requested_installation_id text,
     requested_event_id text,
     requested_worker_id text,
     expected_fencing_token bigint,
@@ -1622,10 +1991,15 @@ SET search_path = pg_catalog, pg_temp
 AS $function$
 DECLARE
     affected_rows bigint;
+    effective_authority_key text;
 BEGIN
-    IF requested_tenant_id IS NULL
-       OR requested_tenant_id COLLATE "C"
-            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    requested_tenant_id := NULLIF(requested_tenant_id, '');
+    requested_installation_id := NULLIF(requested_installation_id, '');
+    IF (requested_tenant_id IS NULL) = (requested_installation_id IS NULL)
+       OR (requested_tenant_id IS NOT NULL AND requested_tenant_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+       OR (requested_installation_id IS NOT NULL AND requested_installation_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
        OR requested_event_id IS NULL
        OR requested_event_id COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
@@ -1634,6 +2008,7 @@ BEGIN
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR expected_fencing_token IS NULL
        OR expected_fencing_token NOT BETWEEN 1 AND 9007199254740991
+       OR requested_outcome IS NULL
        OR requested_outcome NOT IN ('DELIVERED', 'RETRY', 'DEAD_LETTER')
        OR (requested_outcome = 'RETRY'
             AND (requested_retry_at IS NULL
@@ -1651,6 +2026,8 @@ BEGIN
             MESSAGE = 'Audit completion parameters are invalid';
     END IF;
 
+    effective_authority_key := CASE WHEN requested_installation_id IS NOT NULL
+        THEN 'installation:' || requested_installation_id ELSE 'tenant:' || requested_tenant_id END;
     UPDATE paas.audit_outbox AS event
        SET status = requested_outcome,
            available_at = CASE
@@ -1670,7 +2047,7 @@ BEGIN
                 ELSE NULL
            END,
            updated_at = transaction_timestamp()
-     WHERE event.tenant_id = requested_tenant_id
+     WHERE event.authority_key = effective_authority_key
        AND event.event_id = requested_event_id
        AND event.status = 'LEASED'
        AND event.lease_owner = requested_worker_id
@@ -1686,10 +2063,10 @@ END
 $function$;
 
 REVOKE ALL ON FUNCTION paas.complete_audit_event(
-    text, text, text, bigint, text, timestamptz, text
+    text, text, text, text, bigint, text, timestamptz, text
 ) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION paas.complete_audit_event(
-    text, text, text, bigint, text, timestamptz, text
+    text, text, text, text, bigint, text, timestamptz, text
 ) TO matrix_paas_worker;
 
 CREATE OR REPLACE FUNCTION paas.audit_outbox_snapshot()
@@ -1734,13 +2111,17 @@ AS $function$
         to_regclass('paas.applications') IS NOT NULL
         AND to_regclass('paas.operations') IS NOT NULL
         AND to_regclass('paas.audit_outbox') IS NOT NULL
+        AND to_regprocedure('paas.current_installation_id()') IS NOT NULL
+        AND to_regprocedure('paas.complete_audit_event(text,text,text,text,bigint,text,timestamptz,text)') IS NOT NULL
+        AND to_regprocedure('paas.admit_execution_resource(jsonb,jsonb,jsonb,text,text,bigint,jsonb)') IS NOT NULL
+        AND to_regprocedure('paas.refresh_execution_target(bigint,jsonb,bigint,jsonb)') IS NOT NULL
         AND NOT EXISTS (
             SELECT 1
               FROM paas.audit_outbox AS outbox
              WHERE outbox.status = 'DEAD_LETTER'
                 OR outbox.attempts >= 100
         ),
-        1::bigint,
+        2::bigint,
         transaction_timestamp()
 $function$;
 
@@ -1758,11 +2139,12 @@ AS $function$
         to_regclass('paas.operations') IS NOT NULL
         AND to_regclass('paas.execution_targets') IS NOT NULL
         AND to_regclass('paas.adapter_commands') IS NOT NULL
+        AND to_regprocedure('paas.current_installation_id()') IS NOT NULL
         AND to_regprocedure('paas.claim_operation(text,integer)') IS NOT NULL
         AND to_regprocedure(
             'paas.advance_operation(text,text,bigint,text,jsonb,timestamptz,boolean)'
         ) IS NOT NULL,
-        1::bigint,
+        2::bigint,
         transaction_timestamp()
 $function$;
 
@@ -3414,6 +3796,7 @@ BEGIN
            SET resource_version = next_pool_version,
                document = submitted_pool
          WHERE pool.id = pool_id
+           AND pool.installation_id IS NULL
            AND pool.resource_version = expected_pool_version;
     END IF;
     GET DIAGNOSTICS affected_rows = ROW_COUNT;
@@ -3433,6 +3816,7 @@ BEGIN
           INTO current_target
           FROM paas.execution_targets AS target
          WHERE target.id = target_id
+           AND target.installation_id IS NULL
            AND target.resource_version = expected_target_version
          FOR UPDATE;
         IF NOT FOUND THEN
@@ -3450,6 +3834,7 @@ BEGIN
            SET resource_version = next_target_version,
                document = submitted_target
          WHERE target.id = target_id
+           AND target.installation_id IS NULL
            AND target.resource_version = expected_target_version;
     END IF;
     GET DIAGNOSTICS affected_rows = ROW_COUNT;
@@ -3515,6 +3900,8 @@ GRANT SELECT ON paas.placement_policies TO matrix_paas_api;
 GRANT SELECT ON paas.deployments TO matrix_paas_api;
 GRANT SELECT ON paas.deployment_generations TO matrix_paas_api;
 GRANT SELECT ON paas.operations TO matrix_paas_api;
+GRANT SELECT ON paas.execution_pools TO matrix_paas_api;
+GRANT SELECT ON paas.execution_targets TO matrix_paas_api;
 
 GRANT SELECT ON paas.applications TO matrix_paas_worker;
 GRANT SELECT ON paas.configurations TO matrix_paas_worker;
