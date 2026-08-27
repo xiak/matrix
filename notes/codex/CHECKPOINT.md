@@ -5,7 +5,7 @@
 - Updated: 2026-08-27
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/iam-xxx`
-- Pushed implementation milestone: `cdc6209a4b88685aeac2518d02aafa4510eee745`
+- Pushed implementation milestone: `26f3569269ba6e8bf3ac55b3c596c55590e1144a`
 
 ## Resume route
 
@@ -16,13 +16,22 @@
 3. [ADR-0002](../../docs/architecture/ADR-0002-product-boundary.md) owns the
    cloud-platform direction and optional-provider boundary.
 
-The milestone adapts fixed account source `6a0f417` onto `9fd45b0` and
-preserves platform-role separation. Its own real PG18 authority/process gates
-are recorded in the FEAT; it is not full multi-tenant or release acceptance.
-Continue the first unfinished vertical slice there. Phase 2 owns its console
-branch; Phase 3 owns installation identity, public Audit partitioning, and
-host/Operation work. Integrate shared changes only from mutually confirmed
-verified fixed commits, never another worktree's uncommitted state. Work and
-push only this feature branch with task-owned test resources.
+The milestone retains fixed account source `6a0f417` on baseline `9fd45b0`,
+the primary/platform credential guard in `686efca`, and adapts public
+installation/Audit source `6401e96`. Event-bound historical producer proof,
+real retained IAM/Audit upgrades and independent process gates are recorded
+in the FEAT. IAM and Audit schemas are independently version 2; this is not
+a release profile or offline downgrade acceptance.
+
+The user chose Alibaba-style protected primary ownership plus revocable
+child administrators. Daily handoff never transfers primary identity; online
+tenant recovery must not recover a platform-bound identity. Continue the
+unfinished tenant lifecycle/primary recovery slice in FEAT-006, then its own
+console/browser and remaining release gates. Phase 2 owns its console branch;
+Phase 3 owns host/Operation work and the offline schema-profile boundary. The
+IAM/Audit lifecycle contract edit window is coordinated with that owner.
+Integrate only mutually confirmed verified fixed commits, never another
+worktree's uncommitted state. Work and push only this feature branch with
+task-owned test resources; do not start extra agents or user tasks.
 
 Replace this checkpoint only at another committed-and-pushed milestone.
