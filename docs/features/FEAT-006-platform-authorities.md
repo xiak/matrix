@@ -793,6 +793,8 @@ On 2026-08-27, this branch passed the corrected PG18 race gate for all five
 processes and for the actual fixed `9fd45b0` IAM executable's populated
 upgrade/restart. Other Phase branches must adapt and rerun their own gates;
 these results do not certify their binaries.
+The correction at `cf003e47449a554bba19486bb5050d09aeb7a988` also passed all
+three [independent CI jobs](https://github.com/xiak/matrix/actions/runs/33060772852).
 
 The resource-isolation increment in the same gate uses two actual tenant
 sessions with matching child login names, idempotency keys and database
@@ -809,8 +811,9 @@ per tenant with the original IAM authority. These are pending service records,
 not claims that a PostgreSQL workload has been provisioned.
 
 These are verified backend slices, not acceptance of the full multi-tenant
-target. The console still needs this branch's lifecycle adaptation and real
-browser gate. Live-workload preservation and signed populated offline
+target. The console still needs this branch's real browser acceptance in
+[FEAT-007](FEAT-007-control-plane-console.md). Live-workload preservation and
+signed populated offline
 upgrade/rollback/backup/recovery gates remain unaccepted. The latter require
 the concrete release schema profile owned by FEAT-005/008; these retained-data
 process gates are not a substitute. Prior foundation evidence below covers

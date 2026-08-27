@@ -83,7 +83,7 @@ function parseAccountIdentity(value: unknown): AccountIdentity {
   const principal = parseAccountPrincipal(wire.principal);
   const roles = wire.roles.map(parseIdentityRole);
   if (account.organization.id !== principal.organizationId || new Set(roles).size !== roles.length ||
-      (wire.canCreateOrganizations && (principal.id !== account.primaryPrincipalId || principal.mustChangePassword || !roles.includes("ORGANIZATION_ADMIN")))) throw new Error("INVALID_IAM_RESPONSE");
+      (wire.canCreateOrganizations && (principal.mustChangePassword || !roles.includes("PLATFORM_OPERATOR")))) throw new Error("INVALID_IAM_RESPONSE");
   return { account, principal, roles, canCreateOrganizations: wire.canCreateOrganizations };
 }
 
@@ -121,6 +121,8 @@ export const httpAccountRepository: AccountRepository = {
     switch (command.kind) {
       case "create-user": path = "/api/iam/v1/principals"; body = { loginName: command.loginName, displayName: command.displayName, initialPassword: command.initialPassword, initialRole: command.initialRole }; break;
       case "create-organization": path = "/api/iam/v1/organizations"; body = { id: command.id, displayName: command.displayName, administratorLoginName: command.administratorLoginName, administratorDisplayName: command.administratorDisplayName, initialPassword: command.initialPassword }; break;
+      case "set-organization-status": path = `/api/iam/v1/organizations/${encodeURIComponent(command.organizationId)}:set-status`; body = { status: command.status, resourceVersion: command.resourceVersion }; break;
+      case "recover-primary": path = `/api/iam/v1/organizations/${encodeURIComponent(command.organizationId)}:recover-administrator`; body = { principalId: command.principalId, initialPassword: command.initialPassword, resourceVersion: command.resourceVersion }; break;
       case "set-alias": path = "/api/iam/v1/organization:alias"; body = { alias: command.alias, resourceVersion: command.resourceVersion }; break;
       case "set-status": path = `/api/iam/v1/principals/${encodeURIComponent(command.principalId)}:set-status`; body = { status: command.status, resourceVersion: command.resourceVersion }; break;
       case "reset-password": path = `/api/iam/v1/principals/${encodeURIComponent(command.principalId)}:reset-password`; body = { initialPassword: command.initialPassword, resourceVersion: command.resourceVersion }; break;
@@ -128,10 +130,14 @@ export const httpAccountRepository: AccountRepository = {
       case "revoke-role": path = `/api/iam/v1/role-bindings/${encodeURIComponent(command.bindingId)}:revoke`; body = {}; break;
     }
     const result = await requestJSON<unknown>(path, { method: "POST", headers: { ...accountHeaders(credential), "Content-Type": "application/json" }, body: JSON.stringify({ ...body, requestId }) });
-    if (command.kind === "create-organization" || command.kind === "set-alias") {
+    if (command.kind === "create-organization" || command.kind === "set-alias" || command.kind === "set-organization-status" || command.kind === "recover-primary") {
       const account = parseAccount(result);
       if (command.kind === "create-organization" && (account.organization.id !== command.id || account.primaryLoginName !== command.administratorLoginName)) throw new Error("INVALID_IAM_RESPONSE");
       if (command.kind === "set-alias" && (account.loginAlias !== command.alias || account.organization.resourceVersion <= command.resourceVersion)) throw new Error("INVALID_IAM_RESPONSE");
+      if ((command.kind === "set-organization-status" || command.kind === "recover-primary") &&
+          (account.organization.id !== command.organizationId || account.organization.resourceVersion <= command.resourceVersion)) throw new Error("INVALID_IAM_RESPONSE");
+      if (command.kind === "set-organization-status" && account.organization.status !== command.status) throw new Error("INVALID_IAM_RESPONSE");
+      if (command.kind === "recover-primary" && account.primaryPrincipalId !== command.principalId) throw new Error("INVALID_IAM_RESPONSE");
       return;
     }
     if (command.kind === "grant-role") {

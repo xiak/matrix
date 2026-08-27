@@ -80,7 +80,10 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         setSuccess("操作已完成。");
         setLoading(true); setRevision((current) => current + 1);
         return true;
-      } catch (failure) { setError(accountError(failure)); return false; }
+      } catch (failure) {
+        if (failure instanceof HttpProblem && failure.status === 401) setScene(null);
+        setError(accountError(failure)); return false;
+      }
       finally { mutationPending.current = false; setBusy(false); }
     }
   }), [busy, credential, error, loading, repository, scene, success]);

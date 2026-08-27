@@ -33,6 +33,8 @@ export type DirectoryPage<T> = { items: T[]; nextAfter: string | null };
 export type AccountCommand =
   | { kind: "create-user"; loginName: string; displayName: string; initialPassword: string; initialRole?: UserRole }
   | { kind: "create-organization"; id: string; displayName: string; administratorLoginName: string; administratorDisplayName: string; initialPassword: string }
+  | { kind: "set-organization-status"; organizationId: string; status: "ACTIVE" | "DISABLED"; resourceVersion: number }
+  | { kind: "recover-primary"; organizationId: string; principalId: string; initialPassword: string; resourceVersion: number }
   | { kind: "set-alias"; alias: string; resourceVersion: number }
   | { kind: "set-status"; principalId: string; status: "ACTIVE" | "DISABLED"; resourceVersion: number }
   | { kind: "reset-password"; principalId: string; initialPassword: string; resourceVersion: number }

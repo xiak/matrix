@@ -234,6 +234,43 @@ introduce a customer policy language or a UI-only authorization shortcut. An
 expired, revoked, malformed, or unavailable session fails closed on the next
 request.
 
+### Account access extension
+
+The existing `/console/access` route consumes the account and lifecycle
+authority in [FEAT-006](FEAT-006-platform-authorities.md). Platform tenant
+management and tenant-member management are independent capabilities: a
+platform-only operator must be able to open and manage tenant metadata without
+querying that tenant's users or resources. The original primary user is shown
+separately from the tenant resource owner and from revocable child
+administrators; this route offers no primary transfer or platform-role grant.
+
+The lifecycle controls use the returned organization version and explicit
+confirmation. Suspension explains that access freezes without destroying data
+or stopping workloads. Recovery fixes its target to the original primary user,
+clears the submitted temporary password, and cannot implicitly resume a
+suspended tenant. Protected platform credentials remain an offline recovery
+boundary. Conflict, revocation, and unavailable responses must not look like
+successful changes.
+
+Acceptance on the isolated IAM branch requires adapter/component gates and a
+real browser against its own IAM/PaaS/Audit environment: a platform-only user
+opens and manages a tenant; tenant administrators create and authorize child
+users; matching child names log into separate tenants and see only permitted
+resources; status/recovery, forced password replacement, logout/reload,
+permission denial and stale-session behavior work. Keyboard and 360-pixel
+checks cover these controls. Source checks or another Phase's browser evidence
+do not accept this extension, and do not replace the installed-release gate.
+
+This branch's adaptation passes type checking, lint, architecture, the 20
+contrast checks, 60 frontend tests, Go embed checks and two bounded,
+two-worker production exports matching all 59 embedded files. Adapter and
+component gates cover platform-only navigation, version-bound lifecycle
+requests, original-primary recovery while paused, password clearing on
+conflict, disabled platform-credential protection, and removal of protected
+content after a failed session. Task-local real IAM login reaches the forced
+password-replacement screen; the subsequent lifecycle/browser, keyboard and
+360-pixel paths are not yet accepted.
+
 ## Incremental acceptance
 
 ### Gate A: control-console foundation

@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { SessionProvider, useSession } from "../application/SessionProvider";
-import type { AccountIdentity, AccountPrincipal, AccountUser } from "../domain/accounts";
+import type { Account, AccountIdentity, AccountPrincipal, AccountUser } from "../domain/accounts";
 import type { AccountRepository, IamRepository } from "../repositories/iamRepository";
 import { AccountAccessRenderer } from "./AccountAccessRenderer";
 import { LoginRenderer } from "./LoginRenderer";
@@ -14,9 +14,11 @@ const credential = "account-test-only-memory-credential";
 const principal: AccountPrincipal = { id: "primary-a", organizationId: "tenant-a", loginName: "admin", displayName: "Account owner", status: "ACTIVE", resourceVersion: 2, mustChangePassword: false };
 const identity: AccountIdentity = {
   account: { organization: { id: "tenant-a", displayName: "Team A", status: "ACTIVE", resourceVersion: 1 }, primaryPrincipalId: "primary-a", primaryLoginName: "admin", loginAlias: null },
-  principal, roles: ["ORGANIZATION_ADMIN"], canCreateOrganizations: true
+  principal, roles: ["ORGANIZATION_ADMIN", "PLATFORM_OPERATOR"], canCreateOrganizations: true
 };
 const child: AccountUser = { principal: { ...principal, id: "child-a", loginName: "developer", displayName: "Developer A" }, roleBindings: [{ id: "binding-child", organizationId: "tenant-a", principalId: "child-a", role: "PAAS_VIEWER" }] };
+const customer: Account = { organization: { id: "tenant-b", displayName: "Team B", status: "ACTIVE", resourceVersion: 4 }, primaryPrincipalId: "primary-b", primaryLoginName: "owner-b", loginAlias: null };
+const platformIdentity: AccountIdentity = { ...identity, principal: child.principal, roles: ["PLATFORM_OPERATOR"] };
 
 function iam(overrides: Partial<IamRepository> = {}, id = "primary-a"): IamRepository {
   return {
@@ -90,7 +92,7 @@ describe("account access", () => {
     const { user, repository, view } = await openAccess();
     await screen.findByText("Developer A");
     expect(screen.queryByRole("button", { name: "管理 admin" })).toBeNull();
-    expect(screen.getByText("所属账号 · 资源归属")).toBeTruthy();
+    expect(screen.getByText("所属租户 · 资源归属")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "创建用户" }));
     await user.type(screen.getByLabelText(/^子用户名/), "new.developer");
     await user.type(screen.getByLabelText("用户显示名称"), "New Developer");
@@ -155,6 +157,95 @@ describe("account access", () => {
     await user.click(screen.getByRole("button", { name: "确认重置密码" }));
     await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "reset-password", principalId: "child-a", initialPassword: "Reset-Only-Test-Password-74!", resourceVersion: 2 }));
     expect(screen.queryByDisplayValue("Reset-Only-Test-Password-74!")).toBeNull();
+  });
+
+  it("lets a platform-only child manage tenants without loading a tenant user directory", async () => {
+    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue(platformIdentity) });
+    const { user } = await openAccess(repository, iam({}, "child-a"));
+    await screen.findByRole("button", { name: "开通租户" });
+    expect(repository.listUsers).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "用户" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "用户设置" }));
+    expect(screen.queryByRole("button", { name: "保存别名" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "租户管理" }));
+    await user.click(screen.getByRole("button", { name: "开通租户" }));
+    await user.type(screen.getByLabelText(/^租户 ID/), "tenant-b");
+    await user.type(screen.getByLabelText("租户名称"), "Team B");
+    await user.type(screen.getByLabelText(/^主账号登录名/), "owner-b");
+    await user.type(screen.getByLabelText("用户显示名称"), "Owner B");
+    await user.type(screen.getByLabelText(/^初始密码/), "Primary-Test-Password-49!");
+    await user.click(screen.getByRole("button", { name: "确认开通" }));
+    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, {
+      kind: "create-organization", id: "tenant-b", displayName: "Team B",
+      administratorLoginName: "owner-b", administratorDisplayName: "Owner B", initialPassword: "Primary-Test-Password-49!"
+    }));
+    expect(screen.queryByDisplayValue("Primary-Test-Password-49!")).toBeNull();
+  });
+
+  it("confirms tenant suspension and resumes with the refreshed organization version", async () => {
+    const suspended: Account = { ...customer, organization: { ...customer.organization, status: "DISABLED", resourceVersion: 5 } };
+    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue(platformIdentity),
+      listAccounts: vi.fn().mockResolvedValueOnce({ items: [customer], nextAfter: null }).mockResolvedValue({ items: [suspended], nextAfter: null }) });
+    const { user } = await openAccess(repository, iam({}, "child-a"));
+    await user.click(await screen.findByRole("button", { name: "管理租户 tenant-b" }));
+    await user.click(screen.getByRole("button", { name: "停用租户" }));
+    expect(repository.execute).not.toHaveBeenCalled();
+    expect(screen.getByText(/不删除数据、不停止已有工作负载/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "确认停用租户" }));
+    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "set-organization-status", organizationId: "tenant-b", status: "DISABLED", resourceVersion: 4 }));
+    await user.click(await screen.findByRole("button", { name: "恢复租户访问" }));
+    expect(repository.execute).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "确认恢复访问" }));
+    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "set-organization-status", organizationId: "tenant-b", status: "ACTIVE", resourceVersion: 5 }));
+  });
+
+  it("recovers only the original primary of a suspended tenant and clears secrets even on a conflict", async () => {
+    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue(platformIdentity),
+      listAccounts: vi.fn().mockResolvedValue({ items: [{ ...customer, organization: { ...customer.organization, status: "DISABLED" } }], nextAfter: null }),
+      execute: vi.fn().mockRejectedValue(new HttpProblem(409, "PRIVATE conflict")) });
+    const { user, view } = await openAccess(repository, iam({}, "child-a"));
+    await user.click(await screen.findByRole("button", { name: "管理租户 tenant-b" }));
+    await user.click(screen.getByRole("button", { name: "恢复原主账号" }));
+    expect(screen.getByText("primary-b")).toBeTruthy();
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(screen.getByText(/不会自动恢复租户访问/)).toBeTruthy();
+    expect(repository.execute).not.toHaveBeenCalled();
+    await user.type(screen.getByLabelText(/^初始密码/), "Recovery-Only-Password-74!");
+    await user.click(screen.getByRole("button", { name: "确认恢复原主账号" }));
+    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "recover-primary", organizationId: "tenant-b", principalId: "primary-b", initialPassword: "Recovery-Only-Password-74!", resourceVersion: 4 }));
+    expect((await screen.findByRole("alert")).textContent).toContain("资源已变化");
+    expect(screen.queryByText("操作已完成。")).toBeNull();
+    expect(screen.queryByDisplayValue("Recovery-Only-Password-74!")).toBeNull();
+    expect(view.container.textContent).not.toContain("PRIVATE");
+    expect(localStorage.length + sessionStorage.length).toBe(0);
+  });
+
+  it("does not offer credential changes for a disabled platform-bound user", async () => {
+    const protectedChild = { ...child, principal: { ...child.principal, status: "DISABLED" as const },
+      roleBindings: [...child.roleBindings, { id: "platform-child", organizationId: "tenant-a", principalId: "child-a", role: "PLATFORM_OPERATOR" as const }] };
+    const repository = accounts({ listUsers: vi.fn().mockResolvedValue({ items: [protectedChild], nextAfter: null }) });
+    const { user } = await openAccess(repository);
+    await user.click(await screen.findByRole("button", { name: "管理 developer" }));
+    expect(screen.getByText(/即使已禁用/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "启用用户" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "重置密码" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "撤销平台运营者" })).toBeNull();
+    expect(screen.queryByRole("option", { name: "平台运营者" })).toBeNull();
+    expect(screen.getByRole("button", { name: "撤销只读用户" })).toBeTruthy();
+  });
+
+  it("clears protected content when a lifecycle command discovers a revoked session", async () => {
+    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue(platformIdentity),
+      listAccounts: vi.fn().mockResolvedValue({ items: [customer], nextAfter: null }),
+      execute: vi.fn().mockRejectedValue(new HttpProblem(401, "PRIVATE revoked")) });
+    const { user } = await openAccess(repository, iam({}, "child-a"));
+    await user.click(await screen.findByRole("button", { name: "管理租户 tenant-b" }));
+    await user.click(screen.getByRole("button", { name: "停用租户" }));
+    await user.click(screen.getByRole("button", { name: "确认停用租户" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("会话已失效");
+    expect(screen.queryByText("Team B")).toBeNull();
+    expect(screen.queryByRole("button", { name: "开通租户" })).toBeNull();
+    expect(screen.queryByText("操作已完成。")).toBeNull();
   });
 
   it.each(["identity", "directory", "principal"])("fails closed on a mismatched %s instead of showing another subject", async (mismatch) => {
