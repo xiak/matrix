@@ -399,6 +399,8 @@ subaccounts, same-key quota replay, same-ID database resources, cross-tenant
 Operation denial, dual outboxes and the existing host registration/refresh/
 revocation/Audit path. Database-service records remain pending in this gate;
 it does not claim engine provisioning.
+The corrected authority-process gate also passed on consuming source
+`1ff7f16` in [independent CI](https://github.com/xiak/matrix/actions/runs/33063053971).
 
 The account/proof integration also passed full-repository race/vet, ten
 repeated focused runs, stable generation, module verification and Linux builds.

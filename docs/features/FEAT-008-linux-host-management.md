@@ -271,9 +271,11 @@ Docker access. Its separate PostgreSQL 18 fixture had no network or published
 port and used only a fixture-owned local socket. Executables and the
 pinned collector were hash-checked before the run. Existing host services and
 containers were not changed. The transient processes, test database/image,
-socket and experiment files were removed afterward. This proves real observation
+socket and native experiment files were removed afterward. This proves real observation
 through the control plane, not remote application execution or signed node
 installation.
+The combined node gate passed on source `1ff7f16` in the existing
+[independent CI node-process job](https://github.com/xiak/matrix/actions/runs/33063053971).
 
 The [retained-data upgrade gate](../../app/service/paas/internal/apphosting/data/postgres/upgrade_integration_test.go)
 executes the fixed `3916644` PaaS schema 1 and seeds tenant work through its
