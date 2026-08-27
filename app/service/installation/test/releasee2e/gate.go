@@ -1,4 +1,4 @@
-package phase1e2e
+package releasee2e
 
 import (
 	"bytes"
@@ -19,6 +19,7 @@ import (
 
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
+	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
@@ -46,6 +47,7 @@ type gate struct {
 	sensitive       [][]byte
 	workloadProject string
 	workloadRunning string
+	managed         managedservicev1.ServiceInstallation
 }
 
 func newGate(config options, releases releasePair) *gate {
@@ -54,6 +56,7 @@ func newGate(config options, releases releasePair) *gate {
 
 func (value *gate) beforeRestart(ctx context.Context) error {
 	defer value.edge.close()
+	defer value.clearSensitive()
 	if err := value.assertFreshHost(ctx); err != nil {
 		return err
 	}
@@ -123,6 +126,11 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	defer clear(secret)
 	value.edge.addForbidden(secret)
 	value.sensitive = [][]byte{initialPassword, newPassword, firstSession, bearer, secret}
+	value.edge.addForbidden(value.pathLeakage()...)
+	if err := value.createManagedPostgres(ctx, bearer, state.InstallationID); err != nil {
+		return err
+	}
+	emit("managed-postgresql-through-apisix")
 	application, err := value.createApplication(ctx, bearer)
 	if err != nil {
 		return err
@@ -194,6 +202,9 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err := value.repeatedStatusAndVerify(ctx, value.releases.a, value.releases.a.Manifest.Release.ID, ""); err != nil {
 		return err
 	}
+	if err := value.assertManagedPostgres(ctx, bearer, 1); err != nil {
+		return err
+	}
 	emit("automatic-upgrade-rollback")
 
 	upgrade, err := runMX(ctx, value.releases.a, "upgrade", []string{
@@ -223,6 +234,12 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	); err != nil {
 		return err
 	}
+	if err := value.writeManagedProbe(ctx, 2); err != nil {
+		return err
+	}
+	if err := value.assertManagedPostgres(ctx, bearer, 2); err != nil {
+		return err
+	}
 	emit("release-b-upgrade-preservation")
 
 	rollback, err := runMX(ctx, value.releases.b, "rollback", []string{"--root", value.config.root}, value.forbidden(secret, newPassword, bearer))
@@ -240,6 +257,9 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return err
 	}
 	if err := value.repeatedStatusAndVerify(ctx, value.releases.a, value.releases.a.Manifest.Release.ID, ""); err != nil {
+		return err
+	}
+	if err := value.assertManagedPostgres(ctx, bearer, 2); err != nil {
 		return err
 	}
 	emit("explicit-platform-rollback")
@@ -268,6 +288,9 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return fail("recovered-audit-history")
 	}
 	if err := value.repeatedStatusAndVerify(ctx, value.releases.a, value.releases.a.Manifest.Release.ID, ""); err != nil {
+		return err
+	}
+	if err := value.assertManagedPostgres(ctx, bearer, 2); err != nil {
 		return err
 	}
 	emit("backup-recovery")
@@ -311,6 +334,10 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err := value.edge.logout(ctx, bearer); err != nil {
 		return fail("iam-logout-current")
 	}
+	if err := value.expectManagedProblem(ctx, http.MethodGet, "/service-installations/"+managedInstallationID,
+		bearer, nil, "", http.StatusUnauthorized, managedservicev1.ErrorUnauthenticated); err != nil {
+		return err
+	}
 	emit("application-stop-capacity-release")
 
 	if err := value.writeAndScanSupport(ctx, value.releases.a, "phase1-before-restart.json", backup.BackupID, secret, newPassword, bearer); err != nil {
@@ -330,11 +357,22 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 
 func (value *gate) afterRestart(ctx context.Context) error {
 	defer value.edge.close()
+	defer value.clearSensitive()
 	if err := assertNoExternalRoute(); err != nil {
 		return err
 	}
 	if _, err := os.Stat(value.config.root); err != nil {
 		return fail("restart-installation-root")
+	}
+	ready, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	for {
+		if _, err := assertPlatform(ready, value.config.root, value.releases.a.Manifest, ""); err == nil {
+			break
+		}
+		if !waitPoll(ready, 200*time.Millisecond) {
+			return fail("post-restart-platform-readiness")
+		}
 	}
 	if err := value.repeatedStatusAndVerify(ctx, value.releases.a, value.releases.a.Manifest.Release.ID, ""); err != nil {
 		return err
@@ -349,6 +387,10 @@ func (value *gate) afterRestart(ctx context.Context) error {
 	if active, err := value.activeCapacityClaims(ctx, state.InstallationID); err != nil || active != 0 {
 		return fail("restart-capacity-release")
 	}
+	if err := value.assertManagedProbe(ctx, 2); err != nil {
+		return err
+	}
+	emit("post-restart-managed-postgresql")
 	if err := value.writeAndScanSupport(ctx, value.releases.a, "phase1-after-restart.json", nil); err != nil {
 		return err
 	}
@@ -358,6 +400,12 @@ func (value *gate) afterRestart(ctx context.Context) error {
 	emit("post-restart-status-verify")
 	emit("complete-offline-lifecycle")
 	return nil
+}
+
+func (value *gate) clearSensitive() {
+	for _, secret := range value.sensitive {
+		clear(secret)
+	}
 }
 
 func (value *gate) assertFreshHost(ctx context.Context) error {

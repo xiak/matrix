@@ -1,4 +1,4 @@
-package phase1e2e
+package releasee2e
 
 import (
 	"bytes"
@@ -105,9 +105,13 @@ func (client *edgeClient) json(
 	}
 	defer response.Body.Close()
 	mediaType, _, mediaErr := mime.ParseMediaType(response.Header.Get("Content-Type"))
+	expectedMediaType := "application/json"
+	if strings.HasPrefix(path, managedServicePath) && response.StatusCode >= 400 {
+		expectedMediaType = "application/problem+json"
+	}
 	content, readErr := io.ReadAll(io.LimitReader(response.Body, maximumHTTPBody+1))
 	if readErr != nil || len(content) > maximumHTTPBody || mediaErr != nil ||
-		mediaType != "application/json" || response.Header.Get("Content-Encoding") != "" ||
+		mediaType != expectedMediaType || response.Header.Get("Content-Encoding") != "" ||
 		containsAny(content, client.forbidden) {
 		clear(content)
 		return httpResult{}, errors.New("HTTP response contract failed")

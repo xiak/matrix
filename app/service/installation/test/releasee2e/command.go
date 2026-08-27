@@ -1,4 +1,4 @@
-package phase1e2e
+package releasee2e
 
 import (
 	"bytes"
@@ -54,10 +54,14 @@ func (value *boundedBuffer) Write(content []byte) (int, error) {
 }
 
 func runProcess(ctx context.Context, executable string, arguments ...string) (commandOutput, error) {
+	return runProcessInput(ctx, nil, executable, arguments...)
+}
+
+func runProcessInput(ctx context.Context, input io.Reader, executable string, arguments ...string) (commandOutput, error) {
 	stdout := newBoundedBuffer(maximumCommandOutput)
 	stderr := newBoundedBuffer(maximumCommandOutput)
 	command := exec.CommandContext(ctx, executable, arguments...)
-	command.Stdin = nil
+	command.Stdin = input
 	command.Stdout = stdout
 	command.Stderr = stderr
 	err := command.Run()
@@ -305,6 +309,8 @@ type containerInspection struct {
 	} `json:"State"`
 	HostConfig struct {
 		PortBindings map[string][]json.RawMessage `json:"PortBindings"`
+		Memory       int64                        `json:"Memory"`
+		NanoCPUs     int64                        `json:"NanoCpus"`
 	} `json:"HostConfig"`
 	NetworkSettings struct {
 		Ports    map[string][]json.RawMessage `json:"Ports"`
@@ -313,6 +319,7 @@ type containerInspection struct {
 		} `json:"Networks"`
 	} `json:"NetworkSettings"`
 	Mounts []struct {
+		Source      string `json:"Source"`
 		Destination string `json:"Destination"`
 		RW          bool   `json:"RW"`
 	} `json:"Mounts"`

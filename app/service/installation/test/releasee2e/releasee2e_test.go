@@ -1,4 +1,4 @@
-package phase1e2e
+package releasee2e
 
 import (
 	"context"
@@ -11,9 +11,9 @@ import (
 	"github.com/xiak/matrix/app/service/installation/release"
 )
 
-func TestOfflinePhase1Lifecycle(t *testing.T) {
-	if os.Getenv("MATRIX_PHASE1_E2E") != "1" {
-		t.Skip("set MATRIX_PHASE1_E2E=1 inside a clean external-network-disabled Linux Docker host")
+func TestOfflinePlatformLifecycle(t *testing.T) {
+	if os.Getenv("MATRIX_RELEASE_E2E") != "1" {
+		t.Skip("set MATRIX_RELEASE_E2E=1 inside a clean external-network-disabled Linux Docker host")
 	}
 	config, err := optionsFromEnvironment()
 	if err != nil {
@@ -44,15 +44,15 @@ func TestReleasePairAllowsReleaseSpecificWorkloadImages(t *testing.T) {
 }
 
 func optionsFromEnvironment() (options, error) {
-	phase := os.Getenv("MATRIX_PHASE1_E2E_PHASE")
+	phase := os.Getenv("MATRIX_RELEASE_E2E_PHASE")
 	if phase != "run" && phase != "after-restart" {
 		return options{}, fail("command-input")
 	}
 	config := options{
-		root:       os.Getenv("MATRIX_PHASE1_ROOT"),
-		releaseA:   os.Getenv("MATRIX_PHASE1_RELEASE_A"),
-		releaseB:   os.Getenv("MATRIX_PHASE1_RELEASE_B"),
-		trustKey:   os.Getenv("MATRIX_PHASE1_TRUST_KEY"),
+		root:       os.Getenv("MATRIX_RELEASE_ROOT"),
+		releaseA:   os.Getenv("MATRIX_RELEASE_A"),
+		releaseB:   os.Getenv("MATRIX_RELEASE_B"),
+		trustKey:   os.Getenv("MATRIX_RELEASE_TRUST_KEY"),
 		edge:       defaultEdgeEndpoint,
 		afterStart: phase == "after-restart",
 	}

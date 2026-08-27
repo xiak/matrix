@@ -306,8 +306,9 @@ and `git diff --check` gates must pass on the same committed worktree.
   Source gates cover the light theme, 20 semantic contrast pairs, and 31
   frontend tests, including visible failed revocation, logout during failed
   or pending resource loads, keyboard workspace sizing, and native instance-ID
-  validation. The installed `8700095` candidate previously proved anonymous
-  login, offline assets, and no horizontal overflow. The current source still
+  validation. The installed `f5ce412` candidate proves the light login page,
+  local-only asset URLs, no browser errors, and no horizontal overflow at
+  1280 pixels. The current source still
   requires final installed-release browser verification of authentication,
   route transitions, keyboard use, and 360-pixel layouts; source and component
   checks do not substitute for that acceptance.
@@ -317,31 +318,46 @@ and `git diff --check` gates must pass on the same committed worktree.
   installations, and installation Operations. Existing-role IAM actions,
   forced organization RLS, serializable quota reservation, idempotent replay,
   worker leases, fencing transitions, and transactionally coupled Audit facts
-  pass unit and real PostgreSQL 18 tests. The installed `8700095` candidate
-  completed real IAM-authorized single-resource reads and returned identities
-  equal to their collection resources. The UI polls only active installation
-  resources and reloads quota truth once an Operation becomes terminal.
+  pass unit and real PostgreSQL 18 tests. The installed `f5ce412` candidate
+  completed real IAM-authorized single-resource reads, quota and installation
+  equal replay, changed-request rejection, unsupported-offering rejection,
+  exhausted-quota rejection, and revoked-session rejection. Resource and
+  Operation reads retained their identities across platform lifecycle changes.
+  The UI polls only active installation resources and reloads quota truth once
+  an Operation becomes terminal.
 - Gate C execution is complete through the fixed PostgreSQL 18 image:
   server-generated file credentials, pull-never/no-build Compose, exact
   ownership labels, persistent bind data, bounded resources, normalized
   endpoint/credential references, retry, terminal quota release, and
-  uncertain-create reconciliation. The `a83e271` signed release completed a
-  fresh external-network-disabled install, failed-upgrade automatic rollback,
-  successful upgrade, explicit N-1 rollback, protected backup/recovery,
-  support-evidence sanitization, whole-engine restart, negative API paths, and
-  worker-restart reconciliation. The signed `8700095` successor then upgraded
-  from it with external network count zero, passed status/verify, retained two
-  managed PostgreSQL instances, preserved both durable probe rows, and still
-  reported PostgreSQL server version `180004`.
+  uncertain-create reconciliation. Signed runtime source
+  `f5ce412ff795abdaf5ba8e5fe112378f1cd1af41` produced Release A
+  `matrix-v1.3.0-f5ce412ff795` and Release B `matrix-v1.4.0-f5ce412ff795`.
+  An empty, external-network-disabled Docker namespace installed A, resumed a
+  durable managed-service request after worker restart, and completed failed-
+  upgrade automatic rollback, successful upgrade, explicit N-1 rollback,
+  protected platform backup/recovery, and sanitized support evidence. The
+  existing PostgreSQL installation retained its endpoint, credential reference,
+  consumed quota, Audit facts, and both pre- and post-upgrade probe rows.
+  Whole-engine restart followed by authenticated SQL reads and repeated
+  status/verify also passed. This proves in-place preservation of an existing
+  managed database, not a managed-database backup or cross-host migration.
 
-The clean pushed `8700095` source passed `go generate ./api/...`, module
+The clean pushed `f5ce412` runtime source passed `go generate ./api/...`, module
 verification, full unit, vet and race suites, repeated critical packages,
 clean PostgreSQL 18 migration/tenant/Audit integration, the real fixed-image
 PostgreSQL lifecycle, Linux amd64 cross-build, all UI type/lint/architecture/
 style/test/embed gates, Markdown links, fixed-donor verification,
-donor-dependency and social-term scans, and `git diff --check`. Final
-acceptance must repeat the release and browser gates from the documentation-
-converged source commit.
+donor-dependency and social-term scans, and `git diff --check`.
+
+The former Phase 1-only release test owner is now
+`app/service/installation/test/releasee2e`. Its one platform journey includes
+the application and managed-PostgreSQL checks; PostgreSQL probes use the
+release-owned client with passwords on standard input, not an installation
+dependency or a credential-bearing command argument. Restart checks wait for
+bounded platform readiness before asserting stable status and verification.
+Final acceptance still requires the complete unified release test on the final
+candidate, the authenticated browser and 360-pixel keyboard journeys, and
+recovery coverage for an installation created after the selected backup.
 
 ## Deferred
 

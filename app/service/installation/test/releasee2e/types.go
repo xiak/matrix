@@ -1,4 +1,4 @@
-package phase1e2e
+package releasee2e
 
 import (
 	"errors"
@@ -29,9 +29,9 @@ type safeError struct {
 
 func (value *safeError) Error() string {
 	if value == nil {
-		return "phase1 gate failed"
+		return "release gate failed"
 	}
-	return "phase1 gate failed at " + value.step
+	return "release gate failed at " + value.step
 }
 
 func fail(step string) error { return &safeError{step: step} }
