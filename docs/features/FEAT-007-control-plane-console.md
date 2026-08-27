@@ -160,9 +160,9 @@ backup that includes the current inventory. A concurrent inventory change
 during recovery fails closed before database restore. Managed PostgreSQL data
 is preserved in place, not rewound by the platform snapshot. If the change is
 detected only after shutdown, the existing recovery failure contract requires
-operator intervention; automatic availability recovery is not claimed. Backups lacking
-this required witness are rejected rather than interpreted as an empty
-inventory.
+operator intervention; automatic availability recovery is not claimed.
+Backups lacking this required witness are rejected rather than interpreted as
+an empty inventory.
 
 ## Console architecture
 
@@ -322,10 +322,12 @@ and `git diff --check` gates must pass on the same committed worktree.
   or pending resource loads, keyboard workspace sizing, and native instance-ID
   validation. The installed `44fa1c7` candidate proves the light login page,
   local-only asset URLs, no browser errors, and no horizontal overflow at
-  1280 pixels. The current source still requires installed-release browser
-  verification of authentication,
-  route transitions, keyboard use, and 360-pixel layouts; source and component
-  checks do not substitute for that acceptance.
+  1280 pixels. Direct anonymous visits to all five console entry routes render
+  the login form without console navigation, overflow, or browser warnings and
+  errors. The current source still requires installed-release browser
+  verification of authentication, route transitions, keyboard use, and
+  360-pixel layouts; source and component checks do not substitute for that
+  acceptance.
 - Gate B authority is complete for the admitted PostgreSQL slice: the closed
   managed-service Go/OpenAPI contract now includes collection and single-
   resource reads for offerings, regions, quota entitlements, service
