@@ -107,6 +107,74 @@ func TestIAMActionCatalogHasOneResourceKind(t *testing.T) {
 	}
 }
 
+func TestQualifiedLoginIsAnAccountNamespaceNotAnEmail(t *testing.T) {
+	for _, name := range []string{"admin", "developer@acme", "developer@123456789", "developer@tenant-prod", "developer@tenant.example", "dev.user@tenant:region-1"} {
+		if err := ValidateLoginIdentifier(name); err != nil {
+			t.Errorf("valid login %q rejected: %v", name, err)
+		}
+	}
+	for _, name := range []string{"developer@", "@acme", "developer@@acme", "developer@acme@other", "developer@ acme", " developer@acme", "developer@acme ", "Dev@acme", "developer@主账号", "developer@acme/other"} {
+		if ValidateLoginIdentifier(name) == nil {
+			t.Errorf("invalid login %q accepted", name)
+		}
+	}
+	for _, alias := range []string{"acme", "team-42", "a" + strings.Repeat("b", 61) + "9"} {
+		if ValidateAccountAlias(alias) != nil {
+			t.Errorf("valid alias %q rejected", alias)
+		}
+	}
+	for _, alias := range []string{"", "ab", "Acme", "123", "team-", "-team", "team.example", "team_name", strings.Repeat("a", 64)} {
+		if ValidateAccountAlias(alias) == nil {
+			t.Errorf("invalid alias %q accepted", alias)
+		}
+	}
+	create := decodeIAMExample[CreateUserRequest](t, "examples/create-user-request.json")
+	create.LoginName = "developer@acme"
+	if ValidateCreateUserRequest(create) == nil {
+		t.Fatal("user creation accepted a qualified local username")
+	}
+	create.LoginName = "developer"
+	if ValidateCreateUserRequest(create) != nil {
+		t.Fatal("creation without an initial role must be accepted")
+	}
+	for _, role := range AllBuiltinRoles() {
+		create.InitialRole = &role
+		if (ValidateCreateUserRequest(create) == nil) != (role != RoleInstallationVerifier) {
+			t.Errorf("initial role assignability is wrong for %s", role)
+		}
+	}
+}
+
+func TestAccountDirectoryContractsRejectCrossTenantAuthority(t *testing.T) {
+	principal := decodeIAMExample[Principal](t, "examples/principal.json")
+	binding := decodeIAMExample[RoleBinding](t, "examples/role-binding.json")
+	binding.PrincipalID, binding.OrganizationID = principal.ID, principal.OrganizationID
+	list := PrincipalList{APIVersion: APIVersion, Kind: "PrincipalList", Items: []PrincipalAccess{{Principal: principal, RoleBindings: []RoleBinding{binding}}}}
+	if err := ValidatePrincipalList(list); err != nil {
+		t.Fatalf("valid directory: %v", err)
+	}
+	list.Items[0].RoleBindings[0].OrganizationID = "organization-other"
+	if ValidatePrincipalList(list) == nil {
+		t.Fatal("directory accepted a cross-tenant role binding")
+	}
+	list.Items[0].RoleBindings = []RoleBinding{}
+	list.NextAfter = "different-principal"
+	if ValidatePrincipalList(list) == nil {
+		t.Fatal("directory accepted an unrelated cursor")
+	}
+	list.NextAfter = ""
+	list.Items = append(list.Items, list.Items[0])
+	if ValidatePrincipalList(list) == nil {
+		t.Fatal("directory accepted duplicate principals")
+	}
+	if ValidateSetAccountAliasRequest(SetAccountAliasRequest{Alias: "acme", RequestID: "request-alias"}) == nil {
+		t.Fatal("alias mutation accepted no concurrency version")
+	}
+	if ValidateSetPrincipalStatusRequest(SetPrincipalStatusRequest{Status: "REMOVED", ResourceVersion: 1, RequestID: "request-status"}) == nil {
+		t.Fatal("unsupported status accepted")
+	}
+}
+
 func TestIAMCredentialsRequireExplicitEncoding(t *testing.T) {
 	plaintext := "Example-Only-Secret-49!"
 	secret, err := NewSecret(plaintext)

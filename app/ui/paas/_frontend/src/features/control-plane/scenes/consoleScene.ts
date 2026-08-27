@@ -1,11 +1,12 @@
 import type { ConsoleSection } from "../domain/selection";
 
-export type RailIconKind = "overview" | "database";
+export type RailIconKind = "overview" | "database" | "access";
 export type NavigationIconKind =
   | "catalog"
   | "quota"
   | "installation"
-  | "region";
+  | "region"
+  | "access";
 export type SceneStatus = "neutral" | "info" | "success" | "warning" | "danger";
 
 export type ProductRailItemScene = {
@@ -105,7 +106,8 @@ export type ConsoleContentScene =
   | { kind: "catalog"; offerings: OfferingScene[] }
   | { kind: "quotas"; entitlements: EntitlementScene[] }
   | { kind: "installations"; installations: InstallationScene[] }
-  | { kind: "regions"; regions: RegionScene[] };
+  | { kind: "regions"; regions: RegionScene[] }
+  | { kind: "access" };
 
 export type ConsoleWorkspaceScene =
   | {

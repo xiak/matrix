@@ -25,9 +25,13 @@ generic provider schemas before a real second implementation exists.
 1. The browser loads the independent Matrix control console through APISIX.
 2. A user logs in with only `loginName` and `password`. IAM derives the
    organization and returns one opaque session plus the non-secret
-   password-change requirement. A first-login user must replace the initial
+   password-change requirement. Primary-account and subaccount entries switch
+   inside the same login card. Subaccounts use one `username@account-alias`
+   (or `username@organization-id`) field plus password; no separate tenant
+   selector, email verification, DNS resolution, or preliminary user lookup is
+   introduced. A first-login user must replace the initial
    password in the same memory-only session before entering the console;
-   there is no organization selector, JWT, external identity provider, or
+   there is no post-login organization selector, JWT, external identity provider, or
    social-login branch.
 3. The authenticated console shows an overview, service catalog, quota,
    service installations, and local-region configuration allowed by the
@@ -51,6 +55,30 @@ generic provider schemas before a real second implementation exists.
 9. Logout revokes the IAM session before the browser forgets it. The bearer
    credential otherwise exists only in page memory and is never placed in a
    URL, cookie, local storage, session storage, log, or rendered DOM.
+10. The access-control view shows the current tenant and login identity, and
+    provides real tenant-scoped subaccount creation, role bindings, status,
+    and password reset. Its user-settings section allows an organization
+    administrator to set/change the separate primary-account login alias and
+    shows the stable account ID and both qualified-login forms. Only the
+    bootstrap-bound administrator sees tenant
+    account opening. IAM owns the account rules and acceptance in FEAT-006;
+    this view preserves the existing provider/repository/scene/renderer chain,
+    light theme, native keyboard controls, and memory-only secret handling.
+    Switching the anonymous login mode clears password/error state. The child
+    identifier input is text, not HTML email, and accepts the IAM-qualified
+    identifier grammar. No test fixture or local state substitutes for an IAM
+    result, and unavailable backend capabilities are never shown as success.
+    The view separates resource-owning account identity from the current
+    operator. The user directory contains IAM subusers, not independent
+    tenants; primary-account details belong to user settings. Creation defaults
+    to no business authorization. The permissions view describes current
+    tenant-wide built-in roles and does not imply creator-only resource
+    visibility, custom policies, user groups, or cross-account role switching.
+    Account settings follow the
+    [Tencent alias workflow](https://cloud.tencent.com/document/product/598/118709);
+    the qualified-login convention is also documented by
+    [Alibaba RAM](https://help.aliyun.com/zh/ram/support/faq-about-ram-users).
+    These are product semantics references, not additional UI-framework donors.
 
 ## Ownership and boundaries
 
@@ -314,10 +342,10 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 - Gate A implementation replaces the Phase 1 page with the complete donor-
   shaped App Router -> route -> provider -> repository -> scene -> renderer ->
-  public-component chain, seven static routes, memory-only IAM sessions,
+  public-component chain, eight static routes, memory-only IAM sessions,
   deterministic Go embedding, strict CSP hashes, and a four-region shell.
   The console layout retains its provider across child-route navigation.
-  Source gates cover the light theme, 20 semantic contrast pairs, and 31
+  Source gates cover the light theme, 20 semantic contrast pairs, and 51
   frontend tests, including visible failed revocation, logout during failed
   or pending resource loads, keyboard workspace sizing, and native instance-ID
   validation. The installed `44fa1c7` candidate proves the light login page,
@@ -328,6 +356,23 @@ and `git diff --check` gates must pass on the same committed worktree.
   verification of authentication, route transitions, keyboard use, and
   360-pixel layouts; source and component checks do not substitute for that
   acceptance.
+- The tenant-account UI adds an independently loadable `/console/access/`
+  route with user, permissions, user-settings, and bootstrap-only tenant
+  management views. One qualified child-login field replaces a tenant selector;
+  current account ownership and operator identity are displayed separately.
+  Creation defaults to no role, every subsequent grant requires an explicit
+  role selection, and disable/revoke/reset actions use real IAM contracts.
+  Source, type, lint, architecture, contrast, component, and HTTP-adapter gates
+  cover these changes. A desktop browser against the real IAM/PostgreSQL test
+  instance completed primary login, no-role child creation, qualified child
+  login and mandatory first password change, live role refresh, independent
+  alias modification, old-alias rejection/new-alias login, disable/session
+  invalidation, and logout after server-side revocation. The same browser
+  verified that IAM remains navigable when the PaaS upstream is unavailable.
+  Browser inspection informed the explicit-choice grant default. This is a
+  development-runtime IAM gate, not the installed-release PaaS purchase/deploy
+  journey; 360-pixel and full keyboard acceptance remain open. Backend account
+  and isolation evidence belongs to FEAT-006.
 - Gate B authority is complete for the admitted PostgreSQL slice: the closed
   managed-service Go/OpenAPI contract now includes collection and single-
   resource reads for offerings, regions, quota entitlements, service
@@ -393,6 +438,10 @@ drift before effects and again after stopping writers; an authenticated backup
 without the required witness is rejected; and replay cannot replace the
 original backup's witness. Provider inventory failures remain normalized and
 do not expose native details.
+
+The new account slice has not been applied to the existing running
+installation; its IAM and Audit schemas and binaries must be upgraded together.
+No permission application/approval or expiring-grant UI is implemented.
 
 Final acceptance still requires the authenticated installed-release browser
 journey, client-side route transitions, keyboard use, and 360-pixel layouts.

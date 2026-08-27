@@ -8,6 +8,12 @@ PARALLEL SAFE
 SET search_path = pg_catalog, pg_temp
 AS $function$
     SELECT CASE submitted_action
+        WHEN 'iam.organization.create' THEN 'ORGANIZATION'
+        WHEN 'iam.organization.read' THEN 'ORGANIZATION'
+        WHEN 'iam.account-alias.set' THEN 'ORGANIZATION'
+        WHEN 'iam.principal.list' THEN 'ORGANIZATION'
+        WHEN 'iam.principal.set-status' THEN 'PRINCIPAL'
+        WHEN 'iam.password.reset' THEN 'PRINCIPAL'
         WHEN 'iam.principal.create' THEN 'ORGANIZATION'
         WHEN 'iam.principal.read' THEN 'PRINCIPAL'
         WHEN 'iam.role-binding.put' THEN 'PRINCIPAL'

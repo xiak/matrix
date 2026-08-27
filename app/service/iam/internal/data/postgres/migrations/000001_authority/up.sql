@@ -431,7 +431,9 @@ BEGIN
        ) AND submitted_event ? 'iamDecisionId')
        OR (expected_action IN (
             'iam.principal.created', 'iam.role-binding.put',
-            'iam.role-binding.revoked', 'iam.authorization.decided'
+            'iam.role-binding.revoked', 'iam.authorization.decided',
+            'iam.organization.created', 'iam.account-alias.set',
+            'iam.principal.status-set', 'iam.password.reset'
        ) AND NOT (submitted_event ? 'iamDecisionId'))
        OR (expected_action = 'iam.authorization.decided'
             AND submitted_event#>>'{target,id}' IS DISTINCT FROM
@@ -531,10 +533,10 @@ BEGIN
         submitted_organization_id, submitted_administrator_id,
         submitted_password_hash, effective_now
     );
-    INSERT INTO iam.login_index (login_name, tenant_id, principal_id)
+    INSERT INTO iam.login_index (login_name, tenant_id, principal_id, account_owner)
     VALUES (
         submitted_login_name, submitted_organization_id,
-        submitted_administrator_id
+        submitted_administrator_id, true
     );
     INSERT INTO iam.role_bindings (
         tenant_id, id, principal_id, role_name, resource_version,
@@ -1470,8 +1472,9 @@ BEGIN
         SELECT 1 FROM iam.principals AS principal
          WHERE principal.tenant_id = submitted_tenant_id
            AND principal.id = submitted_principal_id
+           AND principal.principal_type = 'USER'
            AND principal.status = 'ACTIVE'
-    ) THEN
+    ) OR submitted_role_name = 'INSTALLATION_VERIFIER' THEN
         RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'role binding principal is unavailable';
     END IF;
     PERFORM iam.assert_audit_event(
@@ -1555,6 +1558,10 @@ BEGIN
      FOR UPDATE;
     IF NOT FOUND THEN
         RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'role binding is unavailable';
+    END IF;
+    IF EXISTS (SELECT 1 FROM iam.login_index AS login
+        WHERE login.tenant_id = submitted_tenant_id AND login.principal_id = stored.principal_id AND login.account_owner) THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'primary role binding is protected';
     END IF;
     IF stored.revoked_at IS NOT NULL THEN
         RETURN QUERY SELECT stored.resource_version, stored.revoked_at, false;

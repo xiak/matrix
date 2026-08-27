@@ -15,10 +15,11 @@ var (
 )
 
 type SubjectContext struct {
-	Organization iamv1.Organization
-	Principal    iamv1.Principal
-	Session      iamv1.Session
-	Roles        []iamv1.BuiltinRole
+	Organization           iamv1.Organization
+	Principal              iamv1.Principal
+	Session                iamv1.Session
+	Roles                  []iamv1.BuiltinRole
+	BootstrapAdministrator bool
 }
 
 func AuthenticateSession(
@@ -58,11 +59,15 @@ func Decide(
 	if err := validateSubjectContext(context, databaseTime); err != nil {
 		return iamv1.AuthorizationDecision{}, err
 	}
+	roles := context.Roles
+	if (request.Action == iamv1.ActionIAMOrganizationCreate || request.Action == iamv1.ActionIAMOrganizationRead) && !context.BootstrapAdministrator {
+		roles = nil
+	}
 	return decide(
 		context.Organization.ID,
 		iamv1.Subject{Type: context.Principal.Type, ID: context.Principal.ID},
 		context.Principal.MustChangePassword,
-		context.Roles,
+		roles,
 		callingService,
 		request,
 		decisionID,

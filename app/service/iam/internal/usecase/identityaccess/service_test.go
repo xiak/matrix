@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -155,7 +156,7 @@ func TestIAMCoreUsecasesBindCredentialsAndRecordClosedAuthorization(t *testing.T
 		t.Fatalf("bind organization user: binding=%#v err=%v", binding, err)
 	}
 	developerLogin, err := service.Login(context.Background(), iamv1.LoginRequest{
-		LoginName: "developer",
+		LoginName: "developer@organization-example",
 		Password:  coreSecret(t, "Initial-Developer-Password-84!"),
 		RequestID: "request-login-developer",
 	})
@@ -269,6 +270,7 @@ func (repository *coreRepository) WithinTransaction(
 }
 
 type coreTransaction struct {
+	Transaction
 	now                time.Time
 	status             iamv1.BootstrapStatus
 	contentDigest      string
@@ -390,8 +392,10 @@ func (transaction *coreTransaction) LookupLogin(
 	_ context.Context,
 	loginName string,
 ) (LoginAccount, bool, error) {
+	localName, suffix, qualified := strings.Cut(loginName, "@")
 	for principalID, principal := range transaction.users {
-		if principal.LoginName != loginName {
+		primary := principalID == transaction.principal.ID
+		if principal.LoginName != localName || qualified == primary || (qualified && suffix != string(principal.OrganizationID)) {
 			continue
 		}
 		return LoginAccount{
@@ -422,10 +426,11 @@ func (transaction *coreTransaction) IssueSession(
 	}
 	transaction.sessions[mutation.LookupDigest] = SessionCredential{
 		Subject: authority.SubjectContext{
-			Organization: transaction.organization,
-			Principal:    principal,
-			Session:      mutation.Session,
-			Roles:        roles,
+			Organization:           transaction.organization,
+			Principal:              principal,
+			Session:                mutation.Session,
+			Roles:                  roles,
+			BootstrapAdministrator: principal.ID == transaction.principal.ID,
 		},
 		VerificationDigest: mutation.VerificationDigest,
 	}

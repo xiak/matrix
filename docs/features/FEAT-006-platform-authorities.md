@@ -1,7 +1,7 @@
 # FEAT-006: Platform IAM and Audit authorities
 
-- Status: Accepted
-- Target release: Private Application PaaS v0.1
+- Status: In progress
+- Target release: Matrix PaaS Phase 2 tenant accounts
 - Target design date: 2026-08-25
 - IAM API contract: `iam.matrix.xiak.com/v1`
 - Audit API contract: `audit.matrix.xiak.com/v1`
@@ -72,9 +72,14 @@ only that installation-owned file.
 ### Authentication and authorization
 
 User passwords are bounded and hashed with a versioned Argon2id profile and a
-unique random salt. A user principal belongs to exactly one organization;
-login accepts no organization selector and returns a cryptographically random
-opaque bearer session plus the non-secret current password-change requirement.
+unique random salt. A user principal belongs to exactly one organization.
+Primary-account login accepts the globally unique primary login name;
+subaccount login accepts `username@account-alias` or `username@organization-id`
+in the same `loginName` field. The suffix is a credential lookup namespace,
+not an email address, DNS dependency, tenant-selection header, or permission.
+The authenticated credential, never a later request selector, determines the
+organization. Login returns a cryptographically random opaque bearer session
+plus the non-secret current password-change requirement.
 The database stores only its digest, absolute
 database-time expiry, revocation, principal, and exact organization. Phase 1
 has no JWT, external IdP, LDAP, SAML, OIDC, social login, API-key query
@@ -105,10 +110,20 @@ PaaS, Audit, or IAM authority.
 
 An authenticated service can read only the identity bound to its current
 Bearer through `GET /v1/service-identity`. The endpoint accepts no request
-body, tenant, principal, purpose, source, or other selector. Audit uses that
-IAM-derived purpose to admit only IAM, PaaS, or Audit producers and maps it to
-the corresponding closed Audit source; caller-supplied source headers and
-shared producer credentials are forbidden.
+body, tenant, principal, purpose, source, or other selector.
+
+Audit resolves each producer through `POST /v1/audit-producer:resolve`. IAM
+authenticates the current service credential, checks its exact bootstrap
+installation binding and IAM/PaaS/Audit purpose, and verifies that the proposed
+event organization is an existing account in that installation. The response
+binds that organization to the authenticated producer without changing the
+producer's own organization. Only this append-only producer boundary may span
+the installation's tenants; it grants no user, query, or resource access.
+Unknown organizations, user credentials, verifier credentials, and caller
+purpose/subject selectors fail closed. Existing disabled organizations may
+still receive their committed historical outbox facts. Audit derives the closed
+event source from the verified producer purpose and checks the returned target
+against the event. Shared producer credentials and source headers are forbidden.
 
 Built-in organization roles are:
 
@@ -124,6 +139,75 @@ The action catalog includes the accepted PaaS `Authorizer` actions plus the
 minimal IAM administration, Audit read/verify, and installation-probe actions.
 Roles and actions are code-owned closed values in Phase 1; customers cannot
 upload policy languages, expressions, scripts, or provider-native documents.
+
+### Tenant accounts and subaccounts
+
+The IAM organization is the cloud-account-shaped resource owner, not an AWS
+Organizations-style parent of accounts. A primary principal is its protected
+owner login; a subaccount is a tenant-bound user, not another resource owner.
+Resources and quota remain organization-owned regardless of which user creates
+them. Organization boundaries isolate tenants; fixed role authorization
+controls access among users of the same tenant. The current roles apply to the
+whole tenant, not only to resources created by a particular user. User groups,
+resource groups, per-project/per-instance policies, cross-account role trust,
+SSO, and MFA are outside this password-only slice. IAM isolation is not a claim
+of dedicated host, storage, or network isolation.
+
+This product mapping follows the distinction between
+[AWS accounts and IAM users](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_users.html),
+[Tencent CAM user types](https://cloud.tencent.com/document/product/598/13665),
+and [Alibaba RAM users](https://help.aliyun.com/zh/ram/user-guide/overview-of-ram-users).
+[AWS account isolation](https://docs.aws.amazon.com/accounts/latest/reference/welcome-multiple-accounts.html)
+is a boundary reference, not a claim that Matrix implements AWS Organizations.
+
+Each organization has one immutable primary account and organization ID.
+Its optional login alias is a separately managed, globally unique lowercase
+identifier, not the primary user's login name or an email/DNS ownership claim.
+An organization administrator sets it through access-management user settings.
+Alias changes use optimistic concurrency, affect subsequent login lookup only,
+and never change resource ownership, organization ID, or a session's tenant.
+The former alias stops authenticating and remains reserved to its organization
+against reassignment; the stable organization-ID form continues to work.
+Child login names are unique inside an
+organization and may repeat across organizations. The two login forms share
+the password/session mechanism, but an unqualified child login is rejected.
+Malformed, ambiguous, unknown, disabled, and wrong-password identities do not
+reveal whether a tenant or user exists. There is no public identity-discovery
+or username-only "next step" endpoint.
+
+The exact installer-created administrator may open another tenant account
+with its own primary account and initial password. This capability is bound
+to the bootstrap identity, not to the general `ORGANIZATION_ADMIN` role; it
+cannot be granted through tenant role bindings and grants no read or mutation
+authority over another tenant's PaaS resources. Tenant creation is atomic and
+audited. Public self-registration, payment, organization deletion, impersonation,
+cross-tenant session switching, and host administration are outside this slice.
+
+An organization administrator can list its users and active role bindings,
+create a subaccount with no business permissions by default or an explicitly
+selected initial fixed role, grant/revoke tenant roles,
+disable/re-enable a subaccount, and reset its password. Initial-role creation
+is one transaction. Disable and password reset revoke all of that user's
+sessions; re-enable cannot revive an old session. Password reset requires
+replacement at the next login. Primary accounts, internal service identities,
+and the acting administrator cannot be disabled or reset through subaccount
+management. Primary administrator bindings cannot be removed. The installation
+verifier role is never assignable to a user.
+
+Directory reads are bounded and scoped by the current session; pagination
+cannot select another tenant. Current-identity reads expose only the current
+organization, principal, fixed roles, and the bootstrap-bound tenant-opening
+capability. No password, hash, session credential, service credential, or host
+binding enters those responses or Audit facts.
+
+Acceptance requires two real tenants with the same child login name, correct
+qualified login, wrong-suffix and unqualified-login denial, tenant-confined
+directory and role operations, viewer mutation denial, primary-account
+protection, immediate role/session revocation, and no resurrection after
+re-enable. Real PostgreSQL and HTTP gates must exercise these paths without
+direct-table writes as a substitute for tenant onboarding. Existing bootstrap
+accounts, credentials, resources, and audit records must survive migration;
+only the global child-login namespace is replaced.
 
 ### IAM transactions and Audit
 
@@ -213,7 +297,7 @@ it neither acquires a producer lease nor owns a fencing token.
 
 Versioned Go contracts and generated OpenAPI own:
 
-- IAM bootstrap status, current service identity, login/logout/password change,
+- IAM bootstrap status, current service identity, audit-producer resolution, login/logout/password change,
   organization/principal and binding commands, authorization request/decision,
   and readiness;
 - Audit ingest/replay result, bounded query page/cursor, chain verification,
@@ -288,6 +372,29 @@ tests pass.
 
 ## Implementation evidence
 
+The Phase 2 tenant-account extension is implemented but not release-accepted.
+On 2026-08-27 its generated contracts, full repository unit/architecture tests,
+vet, and IAM/Audit race suites passed. The IAM HTTP gate on real PostgreSQL 18
+proves two accounts with repeated child names, ID/alias login, old-alias
+reservation, concurrent alias acquisition, bounded directories, explicit
+initial grants, protected primary identities, tenant confinement, role
+revocation, disable/re-enable, all-session password reset, and populated-schema
+replay. A fresh database repeat passed with the race detector enabled.
+
+The Audit HTTP and dual-schema PostgreSQL gates passed, including all four new
+account actions, tenant-bound filters and cursors, chain integrity, runtime
+privileges, and immutable records. The independent IAM/PaaS/Audit process gate
+now creates the second tenant through HTTP rather than direct-table fixtures:
+its child creates a PaaS resource, both outboxes deliver to that tenant, the
+bootstrap owner cannot read the resource or its audit, and the second tenant's
+chain verifies. User and verifier credentials cannot become audit producers;
+the producer contract verifies registered target organizations through IAM.
+
+These results do not replace Gate C. The account extension has not yet run the
+signed, network-disabled install/upgrade/rollback/backup/recovery journey or
+been applied to the user's existing installation. The prior accepted
+foundation evidence below covers only its named source revisions.
+
 - Gate A was accepted on 2026-08-26. Strict generated Go/OpenAPI contracts,
   current-credential-only service identity, fixed Argon2id and
   opaque-credential behavior, closed RBAC decisions, bootstrap and Audit replay
@@ -344,6 +451,10 @@ tests pass.
   and delivery through the existing immutable Audit chain.
 
 ## Deferred
+
+Permission-request approval workflows and time-limited grants are not part of
+the current direct-administrator-grant contract. Database engine/data access
+also remains separate from PaaS control-plane authorization.
 
 External identity providers, LDAP, SAML, OIDC, MFA/WebAuthn, SCIM, customer
 policy languages, custom roles, multi-organization principals, token signing

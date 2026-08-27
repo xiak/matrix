@@ -22,6 +22,7 @@ type SessionContextValue = {
   phase: SessionPhase;
   current: AuthenticatedSession | null;
   error: string | null;
+  clearError(): void;
   login(loginName: string, password: string): Promise<LoginOutcome | null>;
   changePassword(currentPassword: string, newPassword: string): Promise<boolean>;
   logout(): Promise<boolean>;
@@ -36,7 +37,7 @@ const CredentialContext = createContext<CredentialContextValue | null>(null);
 
 function authenticationMessage(error: unknown): string {
   if (error instanceof HttpProblem && error.status === 401) {
-    return "登录名或密码不正确";
+    return "账号、主账号标识或密码不正确";
   }
   if (error instanceof HttpProblem && error.status === 429) {
     return "登录尝试过于频繁，请稍后重试";
@@ -68,6 +69,7 @@ export function SessionProvider({
   const [current, setCurrent] = useState<AuthenticatedSession | null>(null);
   const [credential, setCredential] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const clearError = useCallback(() => { setError(null); }, []);
 
   const forget = useCallback(() => {
     setCredential(null);
@@ -138,7 +140,11 @@ export function SessionProvider({
       await repository.logout(credential);
       forget();
       return true;
-    } catch {
+    } catch (logoutError) {
+      if (logoutError instanceof HttpProblem && logoutError.status === 401) {
+        forget();
+        return true;
+      }
       setError("IAM 注销失败，会话仍保留在当前页面内存中");
       setPhase(
         phase === "password-change-required" || phase === "changing-password"
@@ -153,10 +159,11 @@ export function SessionProvider({
     phase,
     current,
     error,
+    clearError,
     login,
     changePassword,
     logout
-  }), [changePassword, current, error, login, logout, phase]);
+  }), [changePassword, clearError, current, error, login, logout, phase]);
   const credentialValue = useMemo(() => ({ credential }), [credential]);
 
   return (

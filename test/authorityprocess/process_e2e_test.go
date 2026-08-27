@@ -307,7 +307,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		changedAdminPassword,
 		"request-admin-password",
 	)
-	assertCrossTenantIAMBindingRejected(t, ctx, admin, iamEndpoint, adminLogin.Credential)
+	sensitive = append(sensitive, proveTenantAccountProcesses(t, ctx, admin, iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential)...)
 	waitAllIAMOutboxDelivered(t, ctx, admin)
 	adminPage := queryAudit(t, auditEndpoint, adminLogin.Credential, auditv1.QueryRecordsRequest{PageSize: 200}, http.StatusOK)
 	if adminPage.TenantID != "organization-process" || len(adminPage.Records) < 3 {
@@ -334,7 +334,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	developerLogin := loginIAM(
 		t,
 		iamEndpoint,
-		"paas.developer",
+		"paas.developer@organization-process",
 		initialDeveloperPassword,
 		"request-developer-login",
 	)
@@ -458,7 +458,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	readerLogin := loginIAM(
 		t,
 		iamEndpoint,
-		"audit.reader",
+		"audit.reader@organization-process",
 		initialReaderPassword,
 		"request-reader-login",
 	)
@@ -701,23 +701,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	waitIAMDeadLetter(t, ctx, admin)
 	waitHTTPStatus(t, ctx, iamProcess, iamEndpoint+"/ready", http.StatusServiceUnavailable)
 	wrongDispatcher.stop()
-	assertAuthorityPlaintextAbsent(
-		t,
-		ctx,
-		admin,
-		initialAdminPassword,
-		changedAdminPassword,
-		initialReaderPassword,
-		changedReaderPassword,
-		initialDeveloperPassword,
-		changedDeveloperPassword,
-		iamServiceCredential,
-		paasServiceCredential,
-		auditServiceCredential,
-		adminLogin.Credential,
-		readerLogin.Credential,
-		developerLogin.Credential,
-	)
+	assertAuthorityPlaintextAbsent(t, ctx, admin, sensitive...)
 }
 
 type binarySet struct {
@@ -1119,65 +1103,91 @@ func expireIAMSession(
 	}
 }
 
-func assertCrossTenantIAMBindingRejected(
+func proveTenantAccountProcesses(
 	t *testing.T,
 	ctx context.Context,
 	admin *pgx.Conn,
 	endpoint string,
+	auditEndpoint string,
+	paasEndpoint string,
 	bearer string,
-) {
+) []string {
 	t.Helper()
 	const (
-		crossTenantID    = "organization-process-cross-tenant"
-		crossPrincipalID = "principal-process-cross-tenant"
+		crossTenantID = "organization-process-customer"
+		initial       = "Customer-Process-Initial-Password-48!"
+		changed       = "Customer-Process-Changed-Password-59!"
 	)
-	if _, err := admin.Exec(
-		ctx,
-		`INSERT INTO iam.organizations (
-			id, display_name, status, resource_version, created_at, updated_at
-		) VALUES (
-			$1, 'Process Cross Tenant', 'ACTIVE', 1,
-			transaction_timestamp(), transaction_timestamp()
-		);
-		INSERT INTO iam.principals (
-			tenant_id, id, principal_type, login_name, display_name, status,
-			must_change_password, resource_version, created_at, updated_at
-		) VALUES (
-			$1, $2, 'USER', 'process.cross.tenant', 'Process Cross Tenant User',
-			'ACTIVE', true, 1, transaction_timestamp(), transaction_timestamp()
-		);`,
-		crossTenantID,
-		crossPrincipalID,
-	); err != nil {
-		t.Fatalf("insert cross-tenant IAM process fixture: %v", err)
+	opened := performJSON(t, http.MethodPost, endpoint+"/v1/organizations", bearer, map[string]any{
+		"id": crossTenantID, "displayName": "Process customer", "administratorLoginName": "customer.primary",
+		"administratorDisplayName": "Customer owner", "initialPassword": initial, "requestId": "request-open-customer",
+	})
+	var account iamv1.OrganizationAccount
+	if opened.Status != http.StatusCreated || json.Unmarshal(opened.Body, &account) != nil || iamv1.ValidateOrganizationAccount(account) != nil {
+		t.Fatalf("tenant HTTP onboarding status=%d", opened.Status)
 	}
+	primary := loginIAM(t, endpoint, "customer.primary", initial, "request-customer-login")
+	changePasswordIAM(t, endpoint, primary.Credential, initial, changed, "request-customer-password")
+	alias := performJSON(t, http.MethodPost, endpoint+"/v1/organization:alias", primary.Credential, iamv1.SetAccountAliasRequest{
+		Alias: "process-company", ResourceVersion: account.Organization.ResourceVersion, RequestID: "request-customer-alias",
+	})
+	if alias.Status != http.StatusOK {
+		t.Fatalf("customer alias status=%d", alias.Status)
+	}
+	child := createIAMUser(t, endpoint, primary.Credential, "account.user", "Customer developer", initial, "request-customer-user")
+	putIAMBinding(t, endpoint, primary.Credential, child.ID, iamv1.RolePaaSDeveloper, "request-customer-role")
+	childLogin := loginIAM(t, endpoint, "account.user@process-company", initial, "request-customer-child-login")
+	changePasswordIAM(t, endpoint, childLogin.Credential, initial, changed, "request-customer-child-password")
+	operation := createPaaSApplication(t, paasEndpoint, childLogin.Credential, "application-customer-only", "customer-only", "create-customer-application", http.StatusCreated)
+	if operation.Scope.TenantID != crossTenantID || operation.RequestedBy.ID != string(child.ID) {
+		t.Fatal("new tenant PaaS mutation lost its IAM identity")
+	}
+	getPaaSApplication(t, paasEndpoint, childLogin.Credential, "application-customer-only", http.StatusOK)
+	getPaaSApplication(t, paasEndpoint, bearer, "application-customer-only", http.StatusNotFound)
 	response := performJSON(
 		t,
 		http.MethodPost,
 		endpoint+"/v1/role-bindings",
 		bearer,
 		iamv1.PutRoleBindingRequest{
-			PrincipalID: crossPrincipalID,
+			PrincipalID: child.ID,
 			Role:        iamv1.RolePaaSDeveloper,
 			RequestID:   "request-process-cross-tenant-binding",
 		},
 	)
 	if response.Status != http.StatusForbidden ||
-		bytes.Contains(response.Body, []byte(crossPrincipalID)) ||
+		bytes.Contains(response.Body, []byte(child.ID)) ||
 		bytes.Contains(response.Body, []byte("role binding principal")) {
 		t.Fatalf("cross-tenant IAM binding status=%d body=%s", response.Status, response.Body)
 	}
-	var bindings int
-	if err := admin.QueryRow(
-		ctx,
-		"SELECT count(*) FROM iam.role_bindings WHERE tenant_id = $1",
-		crossTenantID,
-	).Scan(&bindings); err != nil {
-		t.Fatalf("inspect cross-tenant IAM process bindings: %v", err)
+	waitAllIAMOutboxDelivered(t, ctx, admin)
+	waitAllPaaSOutboxDelivered(t, ctx, admin)
+	for _, action := range []auditv1.Action{auditv1.ActionIAMAccountAliasSet, auditv1.ActionIAMPrincipalCreated, auditv1.ActionPaaSApplicationCreated} {
+		page := queryAudit(t, auditEndpoint, primary.Credential, auditv1.QueryRecordsRequest{PageSize: 100, Action: action}, http.StatusOK)
+		if page.TenantID != crossTenantID || len(page.Records) != 1 || page.Records[0].Event.TenantID != crossTenantID {
+			t.Fatalf("new tenant audit action=%s was not delivered exactly once within its account", action)
+		}
+		other := queryAudit(t, auditEndpoint, bearer, auditv1.QueryRecordsRequest{PageSize: 100, Action: action}, http.StatusOK)
+		for _, record := range other.Records {
+			if record.Event.TenantID != "organization-process" {
+				t.Fatal("bootstrap owner read another tenant's audit")
+			}
+		}
 	}
-	if bindings != 0 {
-		t.Fatalf("cross-tenant IAM process bindings=%d want=0", bindings)
+	page := queryAudit(t, auditEndpoint, primary.Credential, auditv1.QueryRecordsRequest{PageSize: 1}, http.StatusOK)
+	if page.NextCursor == "" {
+		t.Fatal("new tenant audit page has no continuation")
 	}
+	queryAudit(t, auditEndpoint, bearer, auditv1.QueryRecordsRequest{PageSize: 1, Cursor: page.NextCursor}, http.StatusUnprocessableEntity)
+	chain := verifyAudit(t, auditEndpoint, primary.Credential)
+	if chain.TenantID != crossTenantID || chain.State != auditv1.VerificationVerified || !chain.Complete {
+		t.Fatal("new tenant audit chain failed verification")
+	}
+	userProducer := performJSON(t, http.MethodPost, auditEndpoint+"/v1/events", primary.Credential, page.Records[0].Event)
+	if userProducer.Status != http.StatusUnauthorized {
+		t.Fatal("tenant owner gained audit producer authority")
+	}
+	return []string{initial, changed, primary.Credential, childLogin.Credential}
 }
 
 func createPaaSApplication(

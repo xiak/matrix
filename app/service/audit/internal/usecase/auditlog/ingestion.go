@@ -14,16 +14,23 @@ func (service *Service) Ingest(
 	serviceCredential iamv1.Secret,
 	event auditv1.Event,
 ) (auditv1.IngestionResult, error) {
-	identity, err := service.iam.ServiceIdentity(ctx, serviceCredential)
+	if auditv1.ValidateEvent(event) != nil {
+		return auditv1.IngestionResult{}, ErrInvalidArgument
+	}
+	producer, err := service.iam.ResolveAuditProducer(ctx, serviceCredential, iamv1.ResolveAuditProducerRequest{
+		OrganizationID: iamv1.OrganizationID(event.TenantID),
+	})
 	if err != nil {
 		return auditv1.IngestionResult{}, err
 	}
-	source, err := sourceForIdentity(identity)
+	if iamv1.ValidateAuditProducerAuthorization(producer) != nil || producer.OrganizationID != iamv1.OrganizationID(event.TenantID) {
+		return auditv1.IngestionResult{}, ErrUnavailable
+	}
+	source, err := sourceForIdentity(producer.Producer)
 	if err != nil {
 		return auditv1.IngestionResult{}, err
 	}
-	if auditv1.ValidateEventForSource(source, event) != nil ||
-		event.TenantID != auditv1.TenantID(identity.OrganizationID) {
+	if auditv1.ValidateEventForSource(source, event) != nil {
 		return auditv1.IngestionResult{}, ErrInvalidArgument
 	}
 	var result auditv1.IngestionResult

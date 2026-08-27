@@ -70,7 +70,7 @@ func mapDatabaseError(operation string, err error) error {
 		switch postgresError.Code {
 		case "40001", "40P01":
 			return fmt.Errorf("%s: %w", operation, identityaccess.ErrRetryableTransaction)
-		case "23505":
+		case "23505", "P0002":
 			return fmt.Errorf("%s: %w", operation, identityaccess.ErrConflict)
 		}
 	}

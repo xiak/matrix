@@ -19,7 +19,7 @@ import type {
 import type { ControlPlaneRouteSelection } from "../domain/selection";
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
 import { httpControlPlaneRepository } from "../repositories/httpControlPlaneRepository";
-import { buildConsoleScene } from "../scenes/buildConsoleScene";
+import { buildAccessConsoleScene, buildConsoleScene } from "../scenes/buildConsoleScene";
 import type { ConsoleScene } from "../scenes/consoleScene";
 
 type MutationKind = "quota" | "installation" | null;
@@ -56,6 +56,7 @@ export function ControlPlaneProvider({
   selection: ControlPlaneRouteSelection;
 }) {
   const credential = useSessionCredential();
+  const isAccess = selection.section === "access";
   const [snapshot, setSnapshot] = useState<ControlPlaneSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -80,7 +81,7 @@ export function ControlPlaneProvider({
   }, [credential, repository]);
 
   useEffect(() => {
-    if (!credential) return;
+    if (!credential || isAccess) return;
     let active = true;
     repository.load(credential).then(
       (loaded) => {
@@ -97,10 +98,10 @@ export function ControlPlaneProvider({
       if (active) setLoading(false);
     });
     return () => { active = false; };
-  }, [credential, repository]);
+  }, [credential, isAccess, repository]);
 
   useEffect(() => {
-    if (!credential) return;
+    if (!credential || isAccess) return;
     const pending = snapshot?.installations.filter(
       (item) => item.phase === "PENDING" || item.phase === "PROVISIONING"
     ) ?? [];
@@ -133,7 +134,7 @@ export function ControlPlaneProvider({
       active = false;
       window.clearTimeout(timer);
     };
-  }, [credential, repository, snapshot]);
+  }, [credential, isAccess, repository, snapshot]);
 
   const activateQuota = useCallback(async (command: ActivateQuotaCommand) => {
     if (!credential) return false;
@@ -174,18 +175,18 @@ export function ControlPlaneProvider({
   }, [credential, repository]);
 
   const scene = useMemo(
-    () => snapshot ? buildConsoleScene(selection.section, snapshot) : null,
-    [selection.section, snapshot]
+    () => isAccess ? buildAccessConsoleScene() : snapshot ? buildConsoleScene(selection.section, snapshot) : null,
+    [isAccess, selection.section, snapshot]
   );
   const value = useMemo<ControlPlaneContextValue>(() => ({
     scene,
     loading,
-    error,
+    error: isAccess ? null : error,
     mutation,
     reload,
     activateQuota,
     createInstallation
-  }), [activateQuota, createInstallation, error, loading, mutation, reload, scene]);
+  }), [activateQuota, createInstallation, error, isAccess, loading, mutation, reload, scene]);
 
   return (
     <ControlPlaneContext.Provider value={value}>

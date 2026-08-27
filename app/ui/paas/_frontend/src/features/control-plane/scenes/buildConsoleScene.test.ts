@@ -60,12 +60,13 @@ const snapshot: ControlPlaneSnapshot = {
 describe("buildConsoleScene", () => {
   it("projects real resources into the complete console shell", () => {
     const scene = buildConsoleScene("overview", snapshot);
-    expect(scene.rail.map((item) => item.label)).toEqual(["控制面概览", "托管数据库"]);
+    expect(scene.rail.map((item) => item.label)).toEqual(["控制面概览", "托管数据库", "访问管理"]);
     expect(scene.navigation.map((item) => item.id)).toEqual([
       "catalog",
       "quotas",
       "installations",
-      "regions"
+      "regions",
+      "access"
     ]);
     expect(scene.content.kind).toBe("overview");
     if (scene.content.kind === "overview") {

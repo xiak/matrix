@@ -12,6 +12,7 @@ describe("parseControlPlaneRoute", () => {
     [["quotas"], "quotas"],
     [["installations"], "installations"],
     [["regions"], "regions"],
+    [["access"], "access"],
     [["unknown"], "overview"]
   ] as const)("maps %j to %s", (segments, section) => {
     expect(parseControlPlaneRoute(segments ? [...segments] : undefined)).toEqual({ section });
@@ -23,6 +24,7 @@ describe("parseControlPlaneRoute", () => {
     ["/console/quotas", "quotas"],
     ["/console/installations/", "installations"],
     ["/console/regions/", "regions"],
+    ["/console/access/", "access"],
     ["/console/unknown/", "overview"],
     ["/", "overview"]
   ] as const)("maps pathname %s to %s", (pathname, section) => {

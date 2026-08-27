@@ -118,6 +118,19 @@ type ServiceIdentity struct {
 	Purpose        ServicePurpose `json:"purpose"`
 }
 
+type ResolveAuditProducerRequest struct {
+	OrganizationID OrganizationID `json:"organizationId"`
+}
+
+// AuditProducerAuthorization permits only appending a closed event for the
+// verified organization. It is not a user or resource authorization decision.
+type AuditProducerAuthorization struct {
+	APIVersion     string          `json:"apiVersion"`
+	Kind           string          `json:"kind"`
+	Producer       ServiceIdentity `json:"producer"`
+	OrganizationID OrganizationID  `json:"organizationId"`
+}
+
 type LoginRequest struct {
 	LoginName string `json:"loginName"`
 	Password  Secret `json:"password"`
@@ -152,9 +165,74 @@ type ChangePasswordResponse struct {
 }
 
 type CreateUserRequest struct {
-	LoginName       string `json:"loginName"`
-	DisplayName     string `json:"displayName"`
+	LoginName       string       `json:"loginName"`
+	DisplayName     string       `json:"displayName"`
+	InitialPassword Secret       `json:"initialPassword"`
+	InitialRole     *BuiltinRole `json:"initialRole,omitempty"`
+	RequestID       string       `json:"requestId"`
+}
+
+// OrganizationAccount is the non-secret account boundary used for login and
+// tenant administration. The alias is independent of the primary login name.
+type OrganizationAccount struct {
+	Organization       Organization `json:"organization"`
+	PrimaryPrincipalID PrincipalID  `json:"primaryPrincipalId"`
+	PrimaryLoginName   string       `json:"primaryLoginName"`
+	LoginAlias         *string      `json:"loginAlias"`
+}
+
+type CurrentIdentity struct {
+	APIVersion             string              `json:"apiVersion"`
+	Kind                   string              `json:"kind"`
+	Account                OrganizationAccount `json:"account"`
+	Principal              Principal           `json:"principal"`
+	Roles                  []BuiltinRole       `json:"roles"`
+	CanCreateOrganizations bool                `json:"canCreateOrganizations"`
+}
+
+type PrincipalAccess struct {
+	Principal    Principal     `json:"principal"`
+	RoleBindings []RoleBinding `json:"roleBindings"`
+}
+
+type PrincipalList struct {
+	APIVersion string            `json:"apiVersion"`
+	Kind       string            `json:"kind"`
+	Items      []PrincipalAccess `json:"items"`
+	NextAfter  string            `json:"nextAfter,omitempty"`
+}
+
+type OrganizationAccountList struct {
+	APIVersion string                `json:"apiVersion"`
+	Kind       string                `json:"kind"`
+	Items      []OrganizationAccount `json:"items"`
+	NextAfter  string                `json:"nextAfter,omitempty"`
+}
+
+type CreateOrganizationRequest struct {
+	ID                       OrganizationID `json:"id"`
+	DisplayName              string         `json:"displayName"`
+	AdministratorLoginName   string         `json:"administratorLoginName"`
+	AdministratorDisplayName string         `json:"administratorDisplayName"`
+	InitialPassword          Secret         `json:"initialPassword"`
+	RequestID                string         `json:"requestId"`
+}
+
+type SetAccountAliasRequest struct {
+	Alias           string `json:"alias"`
+	ResourceVersion uint64 `json:"resourceVersion"`
+	RequestID       string `json:"requestId"`
+}
+
+type SetPrincipalStatusRequest struct {
+	Status          PrincipalStatus `json:"status"`
+	ResourceVersion uint64          `json:"resourceVersion"`
+	RequestID       string          `json:"requestId"`
+}
+
+type ResetUserPasswordRequest struct {
 	InitialPassword Secret `json:"initialPassword"`
+	ResourceVersion uint64 `json:"resourceVersion"`
 	RequestID       string `json:"requestId"`
 }
 

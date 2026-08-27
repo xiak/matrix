@@ -10,6 +10,7 @@ import styles from "./LoginRenderer.module.css";
 export function LoginRenderer() {
   const router = useRouter();
   const session = useSession();
+  const [loginMode, setLoginMode] = useState<"primary" | "subaccount">("primary");
   const [loginName, setLoginName] = useState("admin");
   const [password, setPassword] = useState("");
   const [currentPassword, setCurrentPassword] = useState("");
@@ -23,9 +24,14 @@ export function LoginRenderer() {
   async function submitLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setFormError(null);
-    const outcome = await session.login(loginName.trim(), password);
+    const identifier = loginName.trim();
+    if ((loginMode === "subaccount") !== identifier.includes("@")) {
+      setFormError(loginMode === "subaccount" ? "请输入 子用户名@主账号ID或别名" : "请使用主账号登录名；子账号请切换登录方式");
+      return;
+    }
+    const outcome = await session.login(identifier, password);
     setPassword("");
-    if (outcome === "authenticated") router.replace("/console/");
+    if (outcome === "authenticated") router.replace(loginMode === "subaccount" ? "/console/access/" : "/console/");
   }
 
   async function submitPasswordChange(event: FormEvent<HTMLFormElement>) {
@@ -40,7 +46,7 @@ export function LoginRenderer() {
     if (accepted) {
       setNewPassword("");
       setConfirmedPassword("");
-      router.replace("/console/");
+      router.replace(session.current?.loginName.includes("@") ? "/console/access/" : "/console/");
     }
   }
 
@@ -175,23 +181,36 @@ export function LoginRenderer() {
               ) : (
                 <>
                   <div className={styles.cardHeading}>
-                    <Typography.Title as="h2" level={2}>欢迎回来</Typography.Title>
+                    <Typography.Title as="h2" level={2}>{loginMode === "primary" ? "主账号登录" : "子账号登录"}</Typography.Title>
                     <Typography.Text tone="muted">
-                      登录 Matrix，管理你的服务与资源
+                      {loginMode === "primary" ? "登录 Matrix，管理你的服务与资源" : "使用所属主账号的 ID 或专属别名登录"}
                     </Typography.Text>
+                  </div>
+                  <div aria-label="登录方式" className={styles.loginModes} role="group">
+                    {(["primary", "subaccount"] as const).map((mode) => (
+                      <Button aria-pressed={loginMode === mode} disabled={session.phase === "authenticating"} key={mode}
+                        onClick={() => { setLoginMode(mode); setLoginName(""); setPassword(""); setFormError(null); session.clearError(); }}
+                        variant={loginMode === mode ? "secondary" : "ghost"}>
+                        {mode === "primary" ? "主账号" : "IAM 子账号"}
+                      </Button>
+                    ))}
                   </div>
                   <form id="login-form" className={styles.form} onSubmit={submitLogin}>
                     <label className={styles.field}>
-                      <span>登录名</span>
+                      <span>{loginMode === "primary" ? "登录名" : "子账号登录名"}</span>
                       <Input
                         autoComplete="username"
+                        aria-describedby={loginMode === "subaccount" ? "subaccount-login-help" : undefined}
+                        maxLength={loginMode === "primary" ? 64 : 193}
                         name="loginName"
                         onChange={(event) => setLoginName(event.target.value)}
-                        placeholder="请输入用户名"
+                        placeholder={loginMode === "primary" ? "请输入主账号用户名" : "username@主账号ID或别名"}
                         required
+                        type="text"
                         value={loginName}
                       />
                     </label>
+                    {loginMode === "subaccount" ? <p className={styles.policy} id="subaccount-login-help">例如 developer@acme。别名可由管理员在「访问管理 → 用户设置」中设置，不是邮箱地址。</p> : null}
                     <label className={styles.field}>
                       <span>密码</span>
                       <Input
@@ -205,8 +224,8 @@ export function LoginRenderer() {
                         value={password}
                       />
                     </label>
-                    {session.error ? (
-                      <p className={styles.error} role="alert">{session.error}</p>
+                    {formError || session.error ? (
+                      <p className={styles.error} role="alert">{formError ?? session.error}</p>
                     ) : null}
                     <Button
                       block

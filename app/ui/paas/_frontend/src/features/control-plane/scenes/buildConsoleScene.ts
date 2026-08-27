@@ -44,6 +44,11 @@ const sectionCopy: Record<ConsoleSection, {
     title: "区域与基础设施",
     eyebrow: "Regions",
     description: "Phase 2 使用薄 IaaS：仅显示安装器受管的本机区域能力。"
+  },
+  access: {
+    title: "访问管理",
+    eyebrow: "Identity and access",
+    description: "管理当前租户的子账号、角色与主账号专属别名。"
   }
 };
 
@@ -130,13 +135,27 @@ function regionScenes(snapshot: ControlPlaneSnapshot): RegionScene[] {
   }));
 }
 
-function navigation(section: ConsoleSection, snapshot: ControlPlaneSnapshot): ConsoleNavigationItemScene[] {
+function navigation(section: ConsoleSection, snapshot?: ControlPlaneSnapshot): ConsoleNavigationItemScene[] {
   return [
-    { id: "catalog", label: "服务目录", description: "可用产品", href: "/console/catalog/", icon: "catalog", selected: section === "catalog", count: snapshot.offerings.length },
-    { id: "quotas", label: "服务配额", description: "组织额度", href: "/console/quotas/", icon: "quota", selected: section === "quotas", count: snapshot.entitlements.length },
-    { id: "installations", label: "服务实例", description: "安装与运行", href: "/console/installations/", icon: "installation", selected: section === "installations", count: snapshot.installations.length },
-    { id: "regions", label: "区域配置", description: "薄 IaaS 能力", href: "/console/regions/", icon: "region", selected: section === "regions", count: snapshot.regions.length }
+    { id: "catalog", label: "服务目录", description: "可用产品", href: "/console/catalog/", icon: "catalog", selected: section === "catalog", count: snapshot?.offerings.length },
+    { id: "quotas", label: "服务配额", description: "组织额度", href: "/console/quotas/", icon: "quota", selected: section === "quotas", count: snapshot?.entitlements.length },
+    { id: "installations", label: "服务实例", description: "安装与运行", href: "/console/installations/", icon: "installation", selected: section === "installations", count: snapshot?.installations.length },
+    { id: "regions", label: "区域配置", description: "薄 IaaS 能力", href: "/console/regions/", icon: "region", selected: section === "regions", count: snapshot?.regions.length },
+    { id: "access", label: "访问管理", description: "账号与权限", href: "/console/access/", icon: "access", selected: section === "access" }
   ];
+}
+
+function productRail(section: ConsoleSection): ConsoleScene["rail"] {
+  return [
+    { id: "overview", label: "控制面概览", href: "/console/", icon: "overview", selected: section === "overview" },
+    { id: "managed-database", label: "托管数据库", href: "/console/catalog/", icon: "database", selected: section !== "overview" && section !== "access" },
+    { id: "access", label: "访问管理", href: "/console/access/", icon: "access", selected: section === "access" }
+  ];
+}
+
+// IAM navigation must remain available without permission to read PaaS resources.
+export function buildAccessConsoleScene(): ConsoleScene {
+  return { section: "access", ...sectionCopy.access, rail: productRail("access"), navigation: navigation("access"), content: { kind: "access" }, workspace: null };
 }
 
 function content(section: ConsoleSection, snapshot: ControlPlaneSnapshot): ConsoleContentScene {
@@ -170,6 +189,7 @@ export function buildConsoleScene(
   section: ConsoleSection,
   snapshot: ControlPlaneSnapshot
 ): ConsoleScene {
+  if (section === "access") return buildAccessConsoleScene();
   const copy = sectionCopy[section];
   const installations = installationScenes(snapshot);
   const activeOperations = snapshot.installations.filter(
@@ -190,10 +210,7 @@ export function buildConsoleScene(
   return {
     section,
     ...copy,
-    rail: [
-      { id: "overview", label: "控制面概览", href: "/console/", icon: "overview", selected: section === "overview" },
-      { id: "managed-database", label: "托管数据库", href: "/console/catalog/", icon: "database", selected: section !== "overview" }
-    ],
+    rail: productRail(section),
     navigation: navigation(section, snapshot),
     content: content(section, snapshot),
     workspace: section === "quotas"

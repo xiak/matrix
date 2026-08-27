@@ -42,11 +42,17 @@ const (
 )
 
 const (
-	ActionIAMPrincipalCreate   Action = "iam.principal.create"
-	ActionIAMPrincipalRead     Action = "iam.principal.read"
-	ActionIAMRoleBindingPut    Action = "iam.role-binding.put"
-	ActionIAMRoleBindingRevoke Action = "iam.role-binding.revoke"
-	ActionIAMSessionRevoke     Action = "iam.session.revoke"
+	ActionIAMOrganizationCreate Action = "iam.organization.create"
+	ActionIAMOrganizationRead   Action = "iam.organization.read"
+	ActionIAMAccountAliasSet    Action = "iam.account-alias.set"
+	ActionIAMPrincipalList      Action = "iam.principal.list"
+	ActionIAMPrincipalSetStatus Action = "iam.principal.set-status"
+	ActionIAMPasswordReset      Action = "iam.password.reset"
+	ActionIAMPrincipalCreate    Action = "iam.principal.create"
+	ActionIAMPrincipalRead      Action = "iam.principal.read"
+	ActionIAMRoleBindingPut     Action = "iam.role-binding.put"
+	ActionIAMRoleBindingRevoke  Action = "iam.role-binding.revoke"
+	ActionIAMSessionRevoke      Action = "iam.session.revoke"
 
 	ActionPaaSApplicationCreate           Action = "paas.application.create"
 	ActionPaaSApplicationRead             Action = "paas.application.read"
@@ -132,6 +138,12 @@ func AllServicePurposes() []ServicePurpose {
 }
 
 var allActions = []Action{
+	ActionIAMOrganizationCreate,
+	ActionIAMOrganizationRead,
+	ActionIAMAccountAliasSet,
+	ActionIAMPrincipalList,
+	ActionIAMPrincipalSetStatus,
+	ActionIAMPasswordReset,
 	ActionIAMPrincipalCreate,
 	ActionIAMPrincipalRead,
 	ActionIAMRoleBindingPut,
