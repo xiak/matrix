@@ -47,12 +47,16 @@ func TestLinuxNodeProcessObservation(t *testing.T) {
 	if !filepath.IsAbs(binary) || !filepath.IsAbs(collectorBinary) {
 		t.Fatal("MATRIX_NODE_AGENT_BINARY and MATRIX_NODE_EXPORTER_BINARY must select the verified Linux executables")
 	}
+	// The prerequisite probe must inspect the same local engine as the node,
+	// regardless of the caller's inherited Docker endpoint or CLI context.
+	t.Setenv("DOCKER_HOST", "unix:///var/run/docker.sock")
+	t.Setenv("DOCKER_CONTEXT", "")
 	root := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	facts, err := localmachine.NewLocalHostProbe().Inspect(ctx, root)
 	cancel()
 	if err != nil || !facts.DockerEngineReady || !facts.ComposePluginReady {
-		t.Fatalf("real node prerequisites unavailable: %v", err)
+		t.Fatalf("real node prerequisites unavailable: docker=%t compose=%t error=%v", facts.DockerEngineReady, facts.ComposePluginReady, err)
 	}
 	fingerprint, err := localmachine.DeriveMachineFingerprint(facts)
 	if err != nil {

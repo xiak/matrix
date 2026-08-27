@@ -54,6 +54,12 @@ jobs:
         with:
           go-version: '1.26.x'
           cache-dependency-path: go.sum
+      - name: Prepare the isolated runner's local Docker prerequisites
+        run: |
+          sudo timeout 30s systemctl start docker
+          sudo env -u DOCKER_CONTEXT DOCKER_HOST=unix:///var/run/docker.sock \
+            timeout 30s docker info --format '{{.ServerVersion}}'
+          sudo timeout 10s docker compose version --short
       - name: Fetch authenticated collector fixture
         run: |
           curl --fail --location --proto '=https' --tlsv1.3 --max-time 90 \
