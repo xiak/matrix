@@ -4,6 +4,7 @@ package nethttp
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/json"
@@ -15,7 +16,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -44,8 +47,9 @@ func TestLinuxNodeProcessObservation(t *testing.T) {
 	if !filepath.IsAbs(binary) || !filepath.IsAbs(collectorBinary) {
 		t.Fatal("MATRIX_NODE_AGENT_BINARY and MATRIX_NODE_EXPORTER_BINARY must select the verified Linux executables")
 	}
+	root := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	facts, err := localmachine.NewLocalHostProbe().Inspect(ctx, "/")
+	facts, err := localmachine.NewLocalHostProbe().Inspect(ctx, root)
 	cancel()
 	if err != nil || !facts.DockerEngineReady || !facts.ComposePluginReady {
 		t.Fatalf("real node prerequisites unavailable: %v", err)
@@ -67,9 +71,8 @@ func TestLinuxNodeProcessObservation(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(collectorDirectory) })
 	collectorAddress := unusedLoopbackAddress(t)
-	provisionCollector(t, collectorDirectory, collectorCertificate, authority.pem, nodeURI)
-	stopCollector := startCollectorProcess(t, collectorBinary, collectorAddress, collectorDirectory)
-	root := t.TempDir()
+	provisionCollector(t, collectorDirectory, collectorBinary, collectorCertificate, authority.pem, nodeURI)
+	stopCollector := startCollectorProcess(t, collectorAddress, collectorDirectory, root)
 	certificatePath := filepath.Join(root, "node.crt")
 	keyPath := filepath.Join(root, "node.key")
 	trustPath := filepath.Join(root, "trust.crt")
@@ -91,7 +94,7 @@ func TestLinuxNodeProcessObservation(t *testing.T) {
 	configuration, err := json.Marshal(map[string]any{
 		"apiVersion": "node.installation.matrix.xiak.com/v1", "kind": "NodeConfiguration",
 		"identity": nodeIdentity, "controllerId": controllerID, "bindingRef": "binding-a",
-		"expectedFingerprint": fingerprint, "listenAddress": address, "storagePath": "/",
+		"expectedFingerprint": fingerprint, "listenAddress": address, "storagePath": root,
 		"collectorEndpoint": "https://" + collectorAddress,
 		"certificateFile":   certificatePath, "privateKeyFile": keyPath, "trustFile": trustPath,
 		"systemReserve": paasv1.Capacity{MemoryBytes: 256 * 1024 * 1024},
@@ -122,10 +125,10 @@ func TestLinuxNodeProcessObservation(t *testing.T) {
 	timer := time.NewTimer(6 * time.Second)
 	<-timer.C
 	second := awaitObservation(t, client, first.ObservedAt, paasv1.MeasurementAvailable)
+	storage := storageUsage(t, second, root)
 	if second.Usage.CPU.State != paasv1.MeasurementAvailable || second.Usage.CPU.Value.LogicalCPUs != int64(facts.LogicalCPUs) ||
 		second.Usage.Memory.Value.TotalBytes != int64(facts.MemoryTotalBytes) ||
-		second.Usage.FilesystemsState != paasv1.MeasurementAvailable || len(second.Usage.Filesystems) != 1 ||
-		second.Usage.Filesystems[0].MountPoint != "/" || second.Usage.Filesystems[0].Value == nil {
+		storage.TotalBytes != int64(facts.StorageTotalBytes) {
 		t.Fatal("real collector did not report current CPU, memory and filesystem usage")
 	}
 	// Exercise the real collector's filesystem view using only a bounded file
@@ -137,6 +140,12 @@ func TestLinuxNodeProcessObservation(t *testing.T) {
 	}
 	block := make([]byte, 1024*1024)
 	for index := 0; index < 32; index++ {
+		// Incompressible data exercises allocated space on compressed filesystems
+		// as well as ext4; repeated zero blocks need not occupy physical space.
+		if _, err := rand.Read(block); err != nil {
+			_ = activity.Close()
+			t.Fatal(err)
+		}
 		if _, err := activity.Write(block); err != nil {
 			_ = activity.Close()
 			t.Fatal(err)
@@ -163,7 +172,7 @@ func TestLinuxNodeProcessObservation(t *testing.T) {
 	<-cpuDone
 	activityAt := time.Now().UTC()
 	activitySample := awaitObservation(t, client, activityAt, paasv1.MeasurementAvailable)
-	if activitySample.Usage.Filesystems[0].Value.UsedBytes <= second.Usage.Filesystems[0].Value.UsedBytes {
+	if storageUsage(t, activitySample, root).UsedBytes <= storage.UsedBytes {
 		t.Fatal("real filesystem measurement did not respond to the gate's file activity")
 	}
 	if activitySample.Usage.CPU.Value == nil || activitySample.Usage.CPU.Value.UtilizationRatio <= 0 ||
@@ -176,7 +185,7 @@ func TestLinuxNodeProcessObservation(t *testing.T) {
 		unavailable.Usage.Memory.Value != nil || unavailable.Usage.CPU.Value != nil {
 		t.Fatal("collector failure changed placement capacity or fabricated usage")
 	}
-	stopCollector = startCollectorProcess(t, collectorBinary, collectorAddress, collectorDirectory)
+	stopCollector = startCollectorProcess(t, collectorAddress, collectorDirectory, root)
 	recovered := awaitObservation(t, client, unavailable.ObservedAt, paasv1.MeasurementAvailable)
 	stop()
 	command := observationCommand()
@@ -244,7 +253,7 @@ func unusedLoopbackAddress(t *testing.T) string {
 	return address
 }
 
-func provisionCollector(t *testing.T, directory string, certificate issuedCertificate, trust []byte, nodeURI string) {
+func provisionCollector(t *testing.T, directory, binary string, certificate issuedCertificate, trust []byte, nodeURI string) {
 	t.Helper()
 	key, err := x509.MarshalPKCS8PrivateKey(certificate.pair.PrivateKey)
 	if err != nil {
@@ -266,21 +275,63 @@ func provisionCollector(t *testing.T, directory string, certificate issuedCertif
 			t.Fatal(err)
 		}
 	}
-	if err := os.Chown(directory, 65534, 65534); err != nil {
+	// The verified source artifact may live below a root-only build directory.
+	// Copy it into this fixture without granting the collector write access to
+	// its executable or loosening any existing directory's permissions.
+	source, err := os.Open(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	executable, err := os.OpenFile(filepath.Join(directory, "node_exporter"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o555)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, copyErr := io.Copy(executable, source)
+	closeErr := executable.Close()
+	if copyErr != nil || closeErr != nil {
+		t.Fatal("collector fixture could not be copied")
+	}
+	if err := os.Chmod(directory, 0o711); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func startCollectorProcess(t *testing.T, binary, address, directory string) func() {
+func startCollectorProcess(t *testing.T, address, directory, storagePath string) func() {
 	t.Helper()
-	command := exec.Command(binary,
+	var parents []string
+	for path := storagePath; ; path = filepath.Dir(path) {
+		parents = append(parents, regexp.QuoteMeta(path))
+		if path == "/" {
+			break
+		}
+	}
+	command := exec.Command(filepath.Join(directory, "node_exporter"),
 		"--web.listen-address="+address, "--web.config.file="+filepath.Join(directory, "web.yml"),
 		"--web.disable-exporter-metrics", "--web.max-requests=2", "--collector.disable-defaults",
 		"--collector.cpu", "--collector.loadavg", "--collector.meminfo", "--collector.filesystem",
-		"--collector.filesystem.mount-points-include=^/$", "--collector.filesystem.fs-types-exclude=^$",
+		"--collector.filesystem.mount-points-include=^("+strings.Join(parents, "|")+")$", "--collector.filesystem.fs-types-exclude=^$",
 		"--collector.filesystem.mount-timeout=1s")
 	command.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: 65534, Gid: 65534, Groups: []uint32{}}}
 	return startRuntimeProcess(t, command, true)
+}
+
+func storageUsage(t *testing.T, observation paasv1.ExecutionTargetObservation, path string) paasv1.FilesystemUsageValue {
+	t.Helper()
+	var selected *paasv1.FilesystemUsage
+	for index := range observation.Usage.Filesystems {
+		filesystem := &observation.Usage.Filesystems[index]
+		prefix := strings.TrimSuffix(filesystem.MountPoint, "/") + "/"
+		if (path == filesystem.MountPoint || strings.HasPrefix(path, prefix)) &&
+			(selected == nil || len(filesystem.MountPoint) > len(selected.MountPoint)) {
+			selected = filesystem
+		}
+	}
+	if observation.Usage.FilesystemsState != paasv1.MeasurementAvailable || selected == nil ||
+		selected.State != paasv1.MeasurementAvailable || selected.Value == nil {
+		t.Fatal("collector did not report the experiment's actual storage filesystem")
+	}
+	return *selected.Value
 }
 
 func awaitObservation(t *testing.T, client *nodehttps.Client, after time.Time, memoryState paasv1.MeasurementState) paasv1.ExecutionTargetObservation {
