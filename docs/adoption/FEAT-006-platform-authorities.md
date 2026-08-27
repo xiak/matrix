@@ -12,7 +12,8 @@
 | Legacy PaaS | `69336e51f94fa98f6aa278fa4c62382e224dbeaf` | Read only through Git object commands; exclude its worktree. |
 | IAM/Audit foundation donor | `f51d5ed19fd60e8c4e43500af5e669d67ae4ef7d` | Read only through Git object commands; exclude its worktree. |
 | PaaS design | `338d9b5fcb820120c32265e380c55e5f171cdb75` | Read only through Git object commands; use as rationale, not executable evidence. |
-| Matrix IAM account and historical-proof slice | `26f3569269ba6e8bf3ac55b3c596c55590e1144a` | Same-repository fixed, independently verified source; do not read its worktree or import later lifecycle work. |
+| Matrix IAM account and historical-proof slice | `26f3569269ba6e8bf3ac55b3c596c55590e1144a` | Same-repository fixed source; do not read its worktree or import later lifecycle work. |
+| Matrix process-login and resource-isolation test repair | `cf003e47449a554bba19486bb5050d09aeb7a988` | Fixed test slice only; retain this branch's host gate and exclude donor lifecycle, checkpoint and acceptance state. |
 
 The independent authority target, closed Phase 1 roles and actions, bootstrap
 contract, opaque credentials, Audit event union, indefinite retention, and
@@ -77,13 +78,14 @@ release.
 
 ## Same-repository authority integration
 
-| Slice at `26f3569` | Decision | Rationale |
+| Fixed slice | Decision | Rationale |
 | --- | --- | --- |
-| Qualified subaccount login, primary identity, aliases, member management and console | `ADAPT` | Reuse the existing account path and UI. Organization.ID remains TenantID; primary ownership is distinct from revocable administrator roles. Preserve the platform-credential guard and serialize grant/reset/status on the principal. |
-| Event-bound producer resolution and historical IAM evidence | `ADAPT` | Replace producer-home equality with exact IAM outbox or historical allowed-decision evidence, using the existing endpoint and canonical encoder. Current producer validity remains mandatory; old user authority is not reevaluated. |
-| Public canonical encoder and sealed ServiceIdentity installation | `REUSE` | Already integrated from `6401e96`; do not copy another encoder, change lookup_service column order, or reintroduce the weak organization selector. |
-| Dual-tenant, retained-data and independent-process tests | `ADAPT` | Extend existing gate owners while preserving this branch's actual host admission/Operation/outbox flow. Do not restore the superseded hand-made host Audit fixture. |
-| Task checkpoint, Phase 3 status and generated UI artifacts | `REJECT` as imported state | Keep this branch's checkpoint and FEAT-008 evidence; regenerate the UI export from admitted source. No moving branch, redundant action-catalog migration, or donor runtime dependency is introduced. |
+| `26f3569`: qualified subaccount login, primary identity, aliases, member management and console | `ADAPT` | Reuse the existing account path and UI. Organization.ID remains TenantID; primary ownership is distinct from revocable administrator roles. Preserve the platform-credential guard and serialize grant/reset/status on the principal. |
+| `26f3569`: event-bound producer resolution and historical IAM evidence | `ADAPT` | Replace producer-home equality with exact IAM outbox or historical allowed-decision evidence, using the existing endpoint and canonical encoder. Current producer validity remains mandatory; old user authority is not reevaluated. |
+| `26f3569`: public canonical encoder and sealed ServiceIdentity installation | `REUSE` | Already integrated from `6401e96`; do not copy another encoder, change lookup_service column order, or reintroduce the weak organization selector. |
+| `26f3569`: dual-tenant, retained-data and independent-process tests | `ADAPT` | Extend existing gate owners while preserving this branch's actual host admission/Operation/outbox flow. Do not restore the superseded hand-made host Audit fixture. |
+| `cf003e4`: URL DSN, actual process login checks and dual-tenant managed-service attacks | `ADAPT` | Replace the broken configuration-field serialization in the same process gate. Bind runtime credentials and a two-connection pool; distinguish independent identity probes from real process sessions. Keep same-name users, same-key quota replay, same-ID database and Operation isolation; defer lifecycle-dependent assertions until that implementation is admitted. |
+| Donor checkpoint, Phase 3 status and generated UI artifacts | `REJECT` as imported state | Keep this branch's checkpoint and FEAT-008 evidence; regenerate the UI export from admitted source. No moving branch, redundant action-catalog migration, or donor runtime dependency is introduced. |
 
 The fixed slice retains exact-bootstrap-only tenant opening. Its platform
 tenant lifecycle replacement is a separate IAM increment, not inferred from

@@ -253,8 +253,27 @@ host facts through real IAM-authorized PaaS HTTP mutations and its dispatcher,
 not a hand-made host Audit event. It passed background no-reader sampling,
 wrong node identity, outage/recovery, exact Operation/Audit correlation and
 next-request denial after platform revocation and IAM restart. Its node peer is
-a closed wire fixture reached by the production mTLS client; physical Linux
-collection evidence remains the separate node process gate above.
+a closed wire fixture reached by the production mTLS client. Runtime database
+login evidence uses the corrected gate owned by
+[FEAT-006](FEAT-006-platform-authorities.md), not the earlier DSN assumption.
+
+The [Linux variant of that same gate](../../test/authorityprocess/node_runtime_linux_test.go)
+connects the real node and pinned collector to all five authority processes.
+Native Ubuntu/ZFS runs received the actual machine fingerprint, OS CPU/memory,
+filesystem measurements and reserve policy through the PaaS API. The same
+admission, no-reader refresh, wrong-identity rejection, outage/restart,
+Operation and Audit assertions run against those processes. Shared filesystem
+capacity may change between samples; the resource version must remain monotonic,
+while the controlled wire peer still proves metric-only version stability.
+The native gate ran with one CPU, a 1 GiB ceiling, protected system/home paths
+and loopback-only network access. The collector ran as UID/GID 65534 without
+Docker access. Its separate PostgreSQL 18 fixture had no network or published
+port and used only a fixture-owned local socket. Executables and the
+pinned collector were hash-checked before the run. Existing host services and
+containers were not changed. The transient processes, test database/image,
+socket and experiment files were removed afterward. This proves real observation
+through the control plane, not remote application execution or signed node
+installation.
 
 The [retained-data upgrade gate](../../app/service/paas/internal/apphosting/data/postgres/upgrade_integration_test.go)
 executes the fixed `3916644` PaaS schema 1 and seeds tenant work through its
@@ -272,8 +291,8 @@ node/collector process jobs.
 The fixed account/historical-producer-proof integration has passed this
 branch's host admission regression; its authority evidence is owned by
 [FEAT-006](FEAT-006-platform-authorities.md).
-Next in P3-1: combine real Linux enrollment/refresh with signed offline node
-startup and explicit platform authorization when upgrading an older installation.
+Next in P3-1: signed offline node startup and explicit platform authorization
+when upgrading an older installation.
 P3-1 and the complete Phase 3 release remain unaccepted.
 Retained-data schema migration alone does not establish runnable N-1
 compatibility; the release's schema profile and rollback admission still need

@@ -30,23 +30,77 @@ import (
 const processHostPool = "execution-pool-process"
 const processHostTarget = "execution-target-process"
 const processHostFingerprint = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+const processHostController = "process-controller"
+const processHostBinding = "process-node-binding"
 
-// The five real authority processes use the production mTLS node client
-// against this closed wire fixture. OS/collector effects remain in the real
-// Linux node process gate, not simulated as physical evidence here.
+// Both node peers exercise the same authority/Operation/outbox flow. The
+// portable peer below is a wire fixture; only the opt-in Linux peer proves
+// physical OS/collector behavior.
 type processNodeFixture struct {
 	configurationPath string
-	unavailable       atomic.Bool
-	wrongIdentity     atomic.Bool
-	samples           atomic.Uint64
+	constantCapacity  bool
+	setUnavailable    func(bool)
+	setWrongIdentity  func(bool)
+	assertTarget      func(paasv1.ExecutionTarget)
 }
 
 func newProcessNodeFixture(t *testing.T, directory, installationID string) *processNodeFixture {
 	t.Helper()
 	identity := nodev1.Identity{InstallationID: installationID, ExecutionTargetID: processHostTarget}
-	controllerID := "process-controller"
+	controllerID := processHostController
 	nodeURI, _ := nodev1.NodeURI(identity)
 	controllerURI, _ := nodev1.ControllerURI(installationID, controllerID)
+	trust, certificate := newProcessNodeAuthority(t)
+	nodeCertificate, nodeKey := certificate(2, nodeURI, x509.ExtKeyUsageServerAuth)
+	controllerCertificate, controllerKey := certificate(3, controllerURI, x509.ExtKeyUsageClientAuth)
+	defer clear(nodeKey)
+	defer clear(controllerKey)
+	credentials, err := nodehttps.NewCredentials(nodeCertificate, nodeKey, trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	security, err := nodehttps.ServerTLS(credentials, identity, controllerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var unavailable, wrongIdentity atomic.Bool
+	var samples atomic.Uint64
+	fixture := &processNodeFixture{constantCapacity: true, setUnavailable: unavailable.Store, setWrongIdentity: wrongIdentity.Store}
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost || request.URL.Path != nodev1.ObservationPath {
+			response.WriteHeader(http.StatusNotFound)
+			return
+		}
+		body, err := nodev1.DecodeObservationRequest(request.Body)
+		if err != nil || body.Identity != identity || body.Command.BindingRef != processHostBinding {
+			response.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if unavailable.Load() {
+			response.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		sequence := samples.Add(1)
+		now := time.Now().UTC().Truncate(time.Microsecond)
+		fingerprint := processHostFingerprint
+		if wrongIdentity.Load() {
+			fingerprint = "sha256:" + strings.Repeat("d", 64)
+		}
+		observation := paasv1.ExecutionTargetObservation{ExecutionTargetID: processHostTarget, IdentityFingerprint: fingerprint, Health: paasv1.ExecutionTargetHealthReady,
+			Capacity: paasv1.Capacity{CPUMillis: 4000, MemoryBytes: 8 << 30, StorageBytes: 100 << 30, WorkloadSlots: 32}, Allocatable: paasv1.Capacity{CPUMillis: 3000, MemoryBytes: 6 << 30, StorageBytes: 80 << 30, WorkloadSlots: 24}, SupportedIsolationGuarantees: []paasv1.IsolationGuarantee{paasv1.IsolationWorkload}, ObservedAt: now,
+			Usage: &paasv1.ExecutionTargetUsage{ObservedAt: now, ValidUntil: now.Add(15 * time.Second), CPU: paasv1.CPUUsage{State: paasv1.MeasurementAvailable, Value: &paasv1.CPUUsageValue{LogicalCPUs: 4, WindowMillis: 5000, UtilizationRatio: float64(sequence%100) / 100}}, Memory: paasv1.MemoryUsage{State: paasv1.MeasurementAvailable, Value: &paasv1.MemoryUsageValue{TotalBytes: 8 << 30, AvailableBytes: 6 << 30, UsedBytes: 2 << 30}}, FilesystemsState: paasv1.MeasurementUnavailable}}
+		response.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(response).Encode(nodev1.ObservationResponse{APIVersion: nodev1.APIVersion, Kind: nodev1.ObservationResponseKind, Identity: identity, CommandID: body.Command.CommandID, Observation: observation})
+	}))
+	server.TLS = security
+	server.StartTLS()
+	t.Cleanup(server.Close)
+	fixture.configurationPath = writeProcessNodeConnection(t, directory, installationID, server.URL, processHostFingerprint, controllerCertificate, controllerKey, trust)
+	return fixture
+}
+
+func newProcessNodeAuthority(t *testing.T) ([]byte, func(int64, string, ...x509.ExtKeyUsage) ([]byte, []byte)) {
+	t.Helper()
 	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -61,7 +115,8 @@ func newProcessNodeFixture(t *testing.T, directory, installationID string) *proc
 		t.Fatal(err)
 	}
 	trust := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
-	certificate := func(serial int64, uri string, usage x509.ExtKeyUsage) ([]byte, []byte) {
+	certificate := func(serial int64, uri string, usage ...x509.ExtKeyUsage) ([]byte, []byte) {
+		t.Helper()
 		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if err != nil {
 			t.Fatal(err)
@@ -70,7 +125,7 @@ func newProcessNodeFixture(t *testing.T, directory, installationID string) *proc
 		if err != nil {
 			t.Fatal(err)
 		}
-		template := &x509.Certificate{SerialNumber: big.NewInt(serial), NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{usage}, URIs: []*url.URL{identityURI}, IPAddresses: []net.IP{net.ParseIP("127.0.0.1")}}
+		template := &x509.Certificate{SerialNumber: big.NewInt(serial), NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: usage, URIs: []*url.URL{identityURI}, IPAddresses: []net.IP{net.ParseIP("127.0.0.1")}}
 		der, err := x509.CreateCertificate(rand.Reader, template, ca, &key.PublicKey, caKey)
 		if err != nil {
 			t.Fatal(err)
@@ -81,61 +136,23 @@ func newProcessNodeFixture(t *testing.T, directory, installationID string) *proc
 		}
 		return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
 	}
-	nodeCertificate, nodeKey := certificate(2, nodeURI, x509.ExtKeyUsageServerAuth)
-	controllerCertificate, controllerKey := certificate(3, controllerURI, x509.ExtKeyUsageClientAuth)
-	defer clear(nodeKey)
-	defer clear(controllerKey)
-	credentials, err := nodehttps.NewCredentials(nodeCertificate, nodeKey, trust)
-	if err != nil {
-		t.Fatal(err)
-	}
-	security, err := nodehttps.ServerTLS(credentials, identity, controllerID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fixture := &processNodeFixture{}
-	server := httptest.NewUnstartedServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.Method != http.MethodPost || request.URL.Path != nodev1.ObservationPath {
-			response.WriteHeader(http.StatusNotFound)
-			return
-		}
-		body, err := nodev1.DecodeObservationRequest(request.Body)
-		if err != nil || body.Identity != identity || body.Command.BindingRef != "process-node-binding" {
-			response.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		if fixture.unavailable.Load() {
-			response.WriteHeader(http.StatusServiceUnavailable)
-			return
-		}
-		sequence := fixture.samples.Add(1)
-		now := time.Now().UTC().Truncate(time.Microsecond)
-		fingerprint := processHostFingerprint
-		if fixture.wrongIdentity.Load() {
-			fingerprint = "sha256:" + strings.Repeat("d", 64)
-		}
-		observation := paasv1.ExecutionTargetObservation{ExecutionTargetID: processHostTarget, IdentityFingerprint: fingerprint, Health: paasv1.ExecutionTargetHealthReady,
-			Capacity: paasv1.Capacity{CPUMillis: 4000, MemoryBytes: 8 << 30, StorageBytes: 100 << 30, WorkloadSlots: 32}, Allocatable: paasv1.Capacity{CPUMillis: 3000, MemoryBytes: 6 << 30, StorageBytes: 80 << 30, WorkloadSlots: 24}, SupportedIsolationGuarantees: []paasv1.IsolationGuarantee{paasv1.IsolationWorkload}, ObservedAt: now,
-			Usage: &paasv1.ExecutionTargetUsage{ObservedAt: now, ValidUntil: now.Add(15 * time.Second), CPU: paasv1.CPUUsage{State: paasv1.MeasurementAvailable, Value: &paasv1.CPUUsageValue{LogicalCPUs: 4, WindowMillis: 5000, UtilizationRatio: float64(sequence%100) / 100}}, Memory: paasv1.MemoryUsage{State: paasv1.MeasurementAvailable, Value: &paasv1.MemoryUsageValue{TotalBytes: 8 << 30, AvailableBytes: 6 << 30, UsedBytes: 2 << 30}}, FilesystemsState: paasv1.MeasurementUnavailable}}
-		response.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(response).Encode(nodev1.ObservationResponse{APIVersion: nodev1.APIVersion, Kind: nodev1.ObservationResponseKind, Identity: identity, CommandID: body.Command.CommandID, Observation: observation})
-	}))
-	server.TLS = security
-	server.StartTLS()
-	t.Cleanup(server.Close)
-	configuration := map[string]any{"installationId": installationID, "controllerId": controllerID,
+	return trust, certificate
+}
+
+func writeProcessNodeConnection(t *testing.T, directory, installationID, endpoint, fingerprint string, controllerCertificate, controllerKey, trust []byte) string {
+	t.Helper()
+	configuration := map[string]any{"installationId": installationID, "controllerId": processHostController,
 		"certificateFile": writeProtectedFile(t, directory, "node-controller.crt", controllerCertificate), "privateKeyFile": writeProtectedFile(t, directory, "node-controller.key", controllerKey), "trustFile": writeProtectedFile(t, directory, "node-trust.crt", trust),
-		"nodes": []any{map[string]any{"bindingRef": "process-node-binding", "targetId": processHostTarget, "endpoint": server.URL, "identityFingerprint": processHostFingerprint}}}
+		"nodes": []any{map[string]any{"bindingRef": processHostBinding, "targetId": processHostTarget, "endpoint": endpoint, "identityFingerprint": fingerprint}}}
 	document, err := json.Marshal(configuration)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixture.configurationPath = writeProtectedFile(t, directory, "node-connections.json", document)
-	return fixture
+	return writeProtectedFile(t, directory, "node-connections.json", document)
 }
 
 func processHostRegistration() paasv1.RegisterExecutionTargetRequest {
-	return paasv1.RegisterExecutionTargetRequest{ID: processHostTarget, Name: "process-node", ExecutionPoolID: processHostPool, BindingRef: "process-node-binding"}
+	return paasv1.RegisterExecutionTargetRequest{ID: processHostTarget, Name: "process-node", ExecutionPoolID: processHostPool, BindingRef: processHostBinding}
 }
 
 func createPlatformHost(t *testing.T, ctx context.Context, admin *pgx.Conn, paasEndpoint, auditEndpoint, credential string, node *processNodeFixture) auditv1.AuditRecord {
@@ -146,7 +163,7 @@ func createPlatformHost(t *testing.T, ctx context.Context, admin *pgx.Conn, paas
 	if created.Status != http.StatusCreated || json.Unmarshal(created.Body, &poolOperation) != nil || paasv1.ValidateOperation(poolOperation) != nil || poolOperation.InstallationID != "installation-process" {
 		t.Fatalf("real PaaS pool admission: status=%d body=%s", created.Status, created.Body)
 	}
-	node.wrongIdentity.Store(true)
+	node.setWrongIdentity(true)
 	wrong := performJSONWithIdempotency(t, http.MethodPost, paasEndpoint+"/v1/execution-targets", credential, "register-process-node", processHostRegistration())
 	if wrong.Status != http.StatusServiceUnavailable {
 		t.Fatalf("wrong node identity reached admission: status=%d", wrong.Status)
@@ -155,7 +172,7 @@ func createPlatformHost(t *testing.T, ctx context.Context, admin *pgx.Conn, paas
 	if err := admin.QueryRow(ctx, `SELECT (SELECT count(*) FROM paas.execution_targets WHERE id=$1)+(SELECT count(*) FROM paas.operations WHERE installation_id='installation-process' AND target_id=$1)`, processHostTarget).Scan(&partial); err != nil || partial != 0 {
 		t.Fatalf("wrong node identity left partial authority: rows=%d err=%v", partial, err)
 	}
-	node.wrongIdentity.Store(false)
+	node.setWrongIdentity(false)
 	created = performJSONWithIdempotency(t, http.MethodPost, paasEndpoint+"/v1/execution-targets", credential, "register-process-node", processHostRegistration())
 	var operation paasv1.Operation
 	if created.Status != http.StatusCreated || json.Unmarshal(created.Body, &operation) != nil || paasv1.ValidateOperation(operation) != nil || operation.InstallationID != "installation-process" || operation.Scope.TenantID != "" || operation.Action != paasv1.OperationRegisterExecutionTarget || operation.Target.ID != processHostTarget {
@@ -168,19 +185,27 @@ func createPlatformHost(t *testing.T, ctx context.Context, admin *pgx.Conn, paas
 		t.Fatalf("tenant Operation route read platform Operation=%d", got.Status)
 	}
 	initial := readProcessHost(t, paasEndpoint, credential)
+	if node.assertTarget != nil {
+		node.assertTarget(initial)
+	}
 	waitDatabase(t, ctx, "background node refresh without a reader", func() (bool, error) {
 		var observed time.Time
 		err := admin.QueryRow(ctx, `SELECT (document#>>'{status,usage,observedAt}')::timestamptz FROM paas.execution_targets WHERE id=$1`, processHostTarget).Scan(&observed)
 		return observed.After(initial.Status.Usage.ObservedAt), err
 	})
 	measured := readProcessHost(t, paasEndpoint, credential)
-	if measured.Metadata.ResourceVersion != initial.Metadata.ResourceVersion || !measured.Status.Usage.ObservedAt.After(initial.Status.Usage.ObservedAt) {
+	capacityChanged := measured.Status.Capacity != initial.Status.Capacity || measured.Status.Allocatable != initial.Status.Allocatable
+	// Shared storage can change and return to its earlier capacity between reads.
+	// Only the controlled wire peer guarantees a metric-only interval.
+	if measured.Metadata.ResourceVersion < initial.Metadata.ResourceVersion ||
+		(node.constantCapacity && measured.Metadata.ResourceVersion != initial.Metadata.ResourceVersion) ||
+		(capacityChanged && measured.Metadata.ResourceVersion <= initial.Metadata.ResourceVersion) || !measured.Status.Usage.ObservedAt.After(initial.Status.Usage.ObservedAt) {
 		t.Fatal("background node samples changed placement version or stopped")
 	}
-	node.unavailable.Store(true)
+	node.setUnavailable(true)
 	waitProcessHostHealth(t, ctx, admin, "UNAVAILABLE")
 	unavailable := readProcessHost(t, paasEndpoint, credential)
-	if unavailable.Status.Capacity != measured.Status.Capacity || unavailable.Status.ObservedAt.Before(measured.Status.ObservedAt) {
+	if (unavailable.Status.ObservedAt.Equal(measured.Status.ObservedAt) && unavailable.Status.Capacity != measured.Status.Capacity) || unavailable.Status.ObservedAt.Before(measured.Status.ObservedAt) {
 		t.Fatal("node outage fabricated capacity or lost retained observation")
 	}
 	replay := performJSONWithIdempotency(t, http.MethodPost, paasEndpoint+"/v1/execution-targets", credential, "register-process-node", processHostRegistration())
@@ -188,7 +213,7 @@ func createPlatformHost(t *testing.T, ctx context.Context, admin *pgx.Conn, paas
 	if replay.Status != http.StatusOK || json.Unmarshal(replay.Body, &replayOperation) != nil || replayOperation.ID != operation.ID {
 		t.Fatal("node outage broke committed admission replay")
 	}
-	node.unavailable.Store(false)
+	node.setUnavailable(false)
 	waitProcessHostHealth(t, ctx, admin, "READY")
 	waitAllPaaSOutboxDelivered(t, ctx, admin)
 	response := performJSON(t, http.MethodPost, auditEndpoint+"/v1/platform/records:query", credential, auditv1.QueryRecordsRequest{PageSize: 200})

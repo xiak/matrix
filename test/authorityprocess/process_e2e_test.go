@@ -11,9 +11,11 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -21,9 +23,11 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
+	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	auditmigration "github.com/xiak/matrix/app/service/audit/migration"
 	iammigration "github.com/xiak/matrix/app/service/iam/migration"
@@ -52,6 +56,23 @@ const (
 	auditServiceCredential = "mx1.ProcessAuditServiceCredential000000000000001"
 	verifierCredential     = "mx1.ProcessVerifierCredential0000000000000001"
 )
+
+func TestRuntimeDSNBindsLeastPrivilegeLogin(t *testing.T) {
+	admin, err := pgx.ParseConfig("postgres://migration:admin-password@127.0.0.1:55432/matrix_authority_process_unit?sslmode=disable&user=postgres&password=query-admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const password = "runtime@:/?#% & password"
+	actual, err := pgxpool.ParseConfig(runtimeDSN(t, admin, paasAPILogin, password))
+	if err != nil || actual.ConnConfig.User != paasAPILogin || actual.ConnConfig.Password != password ||
+		actual.ConnConfig.Host != admin.Host || actual.ConnConfig.Port != admin.Port || actual.ConnConfig.Database != admin.Database ||
+		actual.ConnConfig.TLSConfig != nil || actual.MaxConns != 2 || actual.ConnConfig.RuntimeParams["application_name"] != "matrix-authority-process:"+paasAPILogin {
+		t.Fatal("process DSN retained a migration credential or lost its bounded target")
+	}
+	if admin.User != "postgres" || admin.Password != "query-admin" {
+		t.Fatal("runtime DSN mutated migration configuration")
+	}
+}
 
 func TestIAMRetainedAccountProcessUpgrade(t *testing.T) {
 	const variable = "MATRIX_IAM_UPGRADE_POSTGRES_TEST_DSN"
@@ -94,7 +115,7 @@ func TestIAMRetainedAccountProcessUpgrade(t *testing.T) {
 	}
 	bootstrapPath := writeProtectedFile(t, temporary, "iam-bootstrap.json", bootstrapBytes)
 	clear(bootstrapBytes)
-	dsnPath := writeProtectedFile(t, temporary, "iam-dsn", []byte(runtimeDSN(config, iamAPILogin, processDBPassword)))
+	dsnPath := writeProtectedFile(t, temporary, "iam-dsn", []byte(runtimeDSN(t, config, iamAPILogin, processDBPassword)))
 	address := freeAddress(t)
 	endpoint := "http://" + address
 	environment := []string{"MATRIX_IAM_DATABASE_DSN_FILE=" + dsnPath, "MATRIX_IAM_BOOTSTRAP_FILE=" + bootstrapPath, "MATRIX_IAM_LISTEN_ADDRESS=" + address}
@@ -109,6 +130,7 @@ func TestIAMRetainedAccountProcessUpgrade(t *testing.T) {
 		child := startChild(t, root, binary, environment)
 		children = append(children, child)
 		waitHTTPStatus(t, ctx, child, endpoint+"/ready", http.StatusOK)
+		assertRuntimeProcessLogins(t, ctx, admin, iamAPILogin)
 		return child
 	}
 	old := start(oldBinary)
@@ -250,13 +272,21 @@ func extractFixedIAMSource(t *testing.T, ctx context.Context, root, temporary st
 }
 
 func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
-	dsn := os.Getenv(authorityProcessDSN)
+	runAuthorityProcesses(t, authorityProcessDSN, newProcessNodeFixture)
+}
+
+func runAuthorityProcesses(t *testing.T, dsnVariable string, nodeFixture func(*testing.T, string, string) *processNodeFixture) {
+	t.Helper()
+	dsn := os.Getenv(dsnVariable)
 	if dsn == "" {
-		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", authorityProcessDSN)
+		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", dsnVariable)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
-	root := repositoryRoot(t)
+	root := os.Getenv("MATRIX_AUTHORITY_PROCESS_BINARY_DIR")
+	if root == "" {
+		root = repositoryRoot(t)
+	}
 	adminConfig, err := pgx.ParseConfig(dsn)
 	if err != nil {
 		t.Fatalf("parse authority process DSN: %v", err)
@@ -280,7 +310,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	temporary := t.TempDir()
 	binaries := buildAuthorityBinaries(t, ctx, root, temporary)
 	bootstrap := processBootstrap(t)
-	node := newProcessNodeFixture(t, temporary, bootstrap.InstallationID)
+	node := nodeFixture(t, temporary, bootstrap.InstallationID)
 	bootstrapBytes, err := iamv1.EncodeBootstrapDocument(bootstrap)
 	if err != nil {
 		t.Fatalf("encode authority process bootstrap: %v", err)
@@ -299,31 +329,31 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		t,
 		temporary,
 		"iam-dsn",
-		[]byte(runtimeDSN(adminConfig, iamAPILogin, processDBPassword)),
+		[]byte(runtimeDSN(t, adminConfig, iamAPILogin, processDBPassword)),
 	)
 	iamWorkerDSNPath := writeProtectedFile(
 		t,
 		temporary,
 		"iam-worker-dsn",
-		[]byte(runtimeDSN(adminConfig, iamWorkerLogin, processDBPassword)),
+		[]byte(runtimeDSN(t, adminConfig, iamWorkerLogin, processDBPassword)),
 	)
 	auditDSNPath := writeProtectedFile(
 		t,
 		temporary,
 		"audit-dsn",
-		[]byte(runtimeDSN(adminConfig, auditRuntimeLogin, processDBPassword)),
+		[]byte(runtimeDSN(t, adminConfig, auditRuntimeLogin, processDBPassword)),
 	)
 	paasDSNPath := writeProtectedFile(
 		t,
 		temporary,
 		"paas-dsn",
-		[]byte(runtimeDSN(adminConfig, paasAPILogin, processDBPassword)),
+		[]byte(runtimeDSN(t, adminConfig, paasAPILogin, processDBPassword)),
 	)
 	paasWorkerDSNPath := writeProtectedFile(
 		t,
 		temporary,
 		"paas-worker-dsn",
-		[]byte(runtimeDSN(adminConfig, paasWorkerLogin, processDBPassword)),
+		[]byte(runtimeDSN(t, adminConfig, paasWorkerLogin, processDBPassword)),
 	)
 	auditCredentialPath := writeProtectedFile(
 		t,
@@ -465,6 +495,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		paasDispatcherEnvironment(paasCredentialPath, "paas-audit-worker-a"),
 	)
 	waitHTTPStatus(t, ctx, paasDispatcher, "http://"+paasDispatcherAddress+"/ready", http.StatusOK)
+	assertRuntimeProcessLogins(t, ctx, admin, iamAPILogin, iamWorkerLogin, auditRuntimeLogin, paasAPILogin, paasWorkerLogin)
 	paasInstallationVerification := verifyPaaSInstallation(
 		t,
 		paasEndpoint,
@@ -985,6 +1016,17 @@ func buildAuthorityBinaries(
 ) binarySet {
 	t.Helper()
 	build := func(name, packagePath string) string {
+		if directory := os.Getenv("MATRIX_AUTHORITY_PROCESS_BINARY_DIR"); directory != "" {
+			if runtime.GOOS == "windows" {
+				name += ".exe"
+			}
+			path := filepath.Join(directory, name)
+			info, err := os.Lstat(path)
+			if !filepath.IsAbs(directory) || err != nil || !info.Mode().IsRegular() {
+				t.Fatal("authority gate requires exact verified prebuilt executables")
+			}
+			return path
+		}
 		return buildAuthorityBinary(t, ctx, root, temporary, name, packagePath)
 	}
 	return binarySet{
@@ -1030,16 +1072,26 @@ func startChild(
 	environment []string,
 ) *childProcess {
 	t.Helper()
-	child := &childProcess{done: make(chan error, 1)}
-	child.command = exec.Command(binary)
-	child.command.Dir = root
-	child.command.Env = append(append(os.Environ(), environment...), "GOMAXPROCS=2", "GOMEMLIMIT=512MiB")
+	command := exec.Command(binary)
+	command.Dir = root
+	command.Env = append(os.Environ(), environment...)
+	return startChildCommand(t, command)
+}
+
+func startChildCommand(t *testing.T, command *exec.Cmd) *childProcess {
+	t.Helper()
+	child := &childProcess{command: command, done: make(chan error, 1)}
+	if command.Env == nil {
+		command.Env = os.Environ()
+	}
+	command.Env = append(command.Env, "GOMAXPROCS=2", "GOMEMLIMIT=512MiB")
 	child.command.Stdout = &child.stdout
 	child.command.Stderr = &child.stderr
 	if err := child.command.Start(); err != nil {
 		t.Fatalf("start authority process: %v", err)
 	}
 	go func() { child.done <- child.command.Wait() }()
+	t.Cleanup(child.stop)
 	return child
 }
 
@@ -1142,6 +1194,11 @@ func performJSONWithIdempotency(
 	body any,
 ) processResponse {
 	t.Helper()
+	return performJSONWithHeaders(t, method, endpoint, bearer, idempotencyKey, body, nil)
+}
+
+func performJSONWithHeaders(t *testing.T, method, endpoint, bearer, idempotencyKey string, body any, headers map[string]string) processResponse {
+	t.Helper()
 	var encoded []byte
 	var err error
 	if body != nil {
@@ -1162,6 +1219,9 @@ func performJSONWithIdempotency(
 	}
 	if idempotencyKey != "" {
 		request.Header.Set("Idempotency-Key", idempotencyKey)
+	}
+	for name, value := range headers {
+		request.Header.Set(name, value)
 	}
 	response, err := processHTTPClient().Do(request)
 	if err != nil {
@@ -1501,6 +1561,7 @@ func proveTenantAccountProcesses(
 	putIAMBinding(t, endpoint, primary.Credential, child.ID, iamv1.RolePaaSDeveloper, "request-customer-role")
 	childLogin := loginIAM(t, endpoint, "account.user@process-company", initial, "request-customer-child-login")
 	changePasswordIAM(t, endpoint, childLogin.Credential, initial, changed, "request-customer-child-password")
+	managedSecrets := proveManagedServiceTenantProcesses(t, ctx, admin, endpoint, auditEndpoint, paasEndpoint, bearer, primary.Credential, childLogin.Credential, child.ID)
 	operation := createPaaSApplication(t, paasEndpoint, childLogin.Credential, "application-customer-only", "customer-only", "create-customer-application", http.StatusCreated)
 	if operation.Scope.TenantID != crossTenantID || operation.RequestedBy.ID != string(child.ID) {
 		t.Fatal("new tenant PaaS mutation lost its IAM identity")
@@ -1556,7 +1617,170 @@ func proveTenantAccountProcesses(
 	if userProducer.Status != http.StatusUnauthorized {
 		t.Fatal("tenant owner gained audit producer authority")
 	}
-	return []string{initial, changed, primary.Credential, childLogin.Credential}
+	return append(managedSecrets, initial, changed, primary.Credential, childLogin.Credential)
+}
+
+// These are real admitted database-service records and reserved quota. The
+// local provisioner gate, not this five-process test, proves a running engine.
+func proveManagedServiceTenantProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, iamEndpoint, auditEndpoint, paasEndpoint, homeBearer, customerBearer, customerMember string, customerMemberID iamv1.PrincipalID) []string {
+	t.Helper()
+	base := paasEndpoint + "/managed-services/v1"
+	homeUser := createIAMUser(t, iamEndpoint, homeBearer, "account.user", "Home resource member", initialDeveloperPassword, "request-home-resource-member")
+	home := loginIAM(t, iamEndpoint, "account.user@organization-process", initialDeveloperPassword, "request-home-resource-login")
+	changePasswordIAM(t, iamEndpoint, home.Credential, initialDeveloperPassword, changedDeveloperPassword, "request-home-resource-password")
+	developerBinding := putIAMBinding(t, iamEndpoint, homeBearer, homeUser.ID, iamv1.RolePaaSDeveloper, "request-home-resource-role")
+	platformUser := createIAMUser(t, iamEndpoint, homeBearer, "resource.platform", "Platform only", initialDeveloperPassword, "request-resource-platform-member")
+	platform := loginIAM(t, iamEndpoint, "resource.platform@organization-process", initialDeveloperPassword, "request-resource-platform-login")
+	changePasswordIAM(t, iamEndpoint, platform.Credential, initialDeveloperPassword, changedDeveloperPassword, "request-resource-platform-password")
+	putIAMBinding(t, iamEndpoint, homeBearer, platformUser.ID, iamv1.RolePlatformOperator, "request-resource-platform-role")
+	tenants := []struct {
+		id, owner, member string
+		memberID          iamv1.PrincipalID
+		quota             managedservicev1.QuotaEntitlement
+		shared, unique    managedservicev1.ServiceInstallation
+	}{
+		{id: "organization-process", owner: homeBearer, member: home.Credential, memberID: homeUser.ID},
+		{id: "organization-process-customer", owner: customerBearer, member: customerMember, memberID: customerMemberID},
+	}
+	assertStatus := func(response processResponse, status int, action string) {
+		t.Helper()
+		if response.Status != status {
+			t.Fatalf("managed-service %s status=%d want=%d", action, response.Status, status)
+		}
+	}
+	activation := managedservicev1.ActivateQuotaRequest{OfferingID: "postgresql-18", QuotaShapeID: "pg-small", InstanceCount: 2}
+	for i := range tenants {
+		tenant := &tenants[i]
+		response := performJSONWithIdempotency(t, http.MethodPost, base+"/quota-entitlements", tenant.member, "shared-tenant-quota-key", activation)
+		assertStatus(response, http.StatusCreated, "activate quota")
+		if json.Unmarshal(response.Body, &tenant.quota) != nil || managedservicev1.ValidateQuotaEntitlement(tenant.quota) != nil {
+			t.Fatal("invalid real quota")
+		}
+		replay := performJSONWithIdempotency(t, http.MethodPost, base+"/quota-entitlements", tenant.member, "shared-tenant-quota-key", activation)
+		assertStatus(replay, http.StatusOK, "quota replay")
+		var replayed managedservicev1.QuotaEntitlement
+		if json.Unmarshal(replay.Body, &replayed) != nil || replayed.ID != tenant.quota.ID {
+			t.Fatal("tenant quota replay changed identity")
+		}
+		changed := activation
+		changed.InstanceCount = 3
+		assertStatus(performJSONWithIdempotency(t, http.MethodPost, base+"/quota-entitlements", tenant.member, "shared-tenant-quota-key", changed), http.StatusConflict, "changed quota replay")
+		for j, target := range []*managedservicev1.ServiceInstallation{&tenant.shared, &tenant.unique} {
+			id := "postgres-shared-id"
+			if j == 1 {
+				id = "postgres-only-" + tenant.id
+			}
+			command := managedservicev1.CreateInstallationRequest{ID: id, Name: "Database for " + tenant.id, OfferingID: "postgresql-18", QuotaEntitlementID: tenant.quota.ID, RegionID: "local-primary"}
+			key := fmt.Sprintf("shared-installation-key-%d", j)
+			response := performJSONWithIdempotency(t, http.MethodPost, base+"/service-installations", tenant.member, key, command)
+			assertStatus(response, http.StatusAccepted, "create installation")
+			if json.Unmarshal(response.Body, target) != nil || managedservicev1.ValidateServiceInstallation(*target) != nil || target.ID != id || target.QuotaEntitlementID != tenant.quota.ID || target.Phase != managedservicev1.InstallationPending || target.Endpoint != nil || target.CredentialReference != nil {
+				t.Fatal("database acceptance fabricated provisioning or changed its quota identity")
+			}
+			replay := performJSONWithIdempotency(t, http.MethodPost, base+"/service-installations", tenant.member, key, command)
+			assertStatus(replay, http.StatusOK, "installation replay")
+			var replayed managedservicev1.ServiceInstallation
+			if json.Unmarshal(replay.Body, &replayed) != nil || replayed.Operation.ID != target.Operation.ID {
+				t.Fatal("installation replay changed Operation")
+			}
+			command.Name = "Changed accepted installation"
+			assertStatus(performJSONWithIdempotency(t, http.MethodPost, base+"/service-installations", tenant.member, key, command), http.StatusConflict, "changed installation replay")
+		}
+		full := managedservicev1.CreateInstallationRequest{ID: "postgres-over-quota", Name: "Over quota", OfferingID: "postgresql-18", QuotaEntitlementID: tenant.quota.ID, RegionID: "local-primary"}
+		assertStatus(performJSONWithIdempotency(t, http.MethodPost, base+"/service-installations", tenant.member, "over-quota-key", full), http.StatusConflict, "quota exhausted")
+	}
+	if tenants[0].quota.ID == tenants[1].quota.ID || tenants[0].shared.Operation.ID == tenants[1].shared.Operation.ID {
+		t.Fatal("cross-tenant idempotency merged independent quota or Operations")
+	}
+	for i := range tenants {
+		tenant, other := &tenants[i], &tenants[1-i]
+		for _, path := range []string{"/quota-entitlements/" + other.quota.ID, "/service-installations/" + other.unique.ID, "/service-installations/" + other.unique.ID + "/operation"} {
+			assertStatus(performJSON(t, http.MethodGet, base+path, tenant.member, nil), http.StatusNotFound, "foreign resource ID")
+		}
+		foreign := managedservicev1.CreateInstallationRequest{ID: "postgres-foreign-quota", Name: "Foreign quota", OfferingID: "postgresql-18", QuotaEntitlementID: other.quota.ID, RegionID: "local-primary"}
+		assertStatus(performJSONWithIdempotency(t, http.MethodPost, base+"/service-installations", tenant.member, "foreign-quota-key", foreign), http.StatusNotFound, "foreign quota reservation")
+		for _, field := range []string{"tenantId", "organizationId", "requestedBy"} {
+			body := map[string]any{"offeringId": "postgresql-18", "quotaShapeId": "pg-small", "instanceCount": 1, field: other.id}
+			assertStatus(performJSONWithIdempotency(t, http.MethodPost, base+"/quota-entitlements", tenant.member, "forged-"+field, body), http.StatusBadRequest, "forged authority body")
+		}
+		for _, path := range []string{"/quota-entitlements", "/service-installations", "/service-installations/" + tenant.shared.ID + "/operation"} {
+			for _, query := range []string{"?tenantId=" + other.id, "?cursor=" + other.unique.ID, "?after=" + other.quota.ID} {
+				assertStatus(performJSON(t, http.MethodGet, base+path+query, tenant.member, nil), http.StatusBadRequest, "unsupported selector or cursor")
+			}
+			assertStatus(performJSON(t, http.MethodGet, base+path, platform.Credential, nil), http.StatusForbidden, "platform-only tenant read")
+		}
+		response := performJSONWithHeaders(t, http.MethodGet, base+"/service-installations/"+tenant.shared.ID, tenant.member, "", nil,
+			map[string]string{"X-Tenant-ID": other.id, "Matrix-Tenant-ID": other.id, "Matrix-Subject-Credential": other.member})
+		assertStatus(response, http.StatusOK, "caller header isolation")
+		var current managedservicev1.ServiceInstallation
+		if json.Unmarshal(response.Body, &current) != nil || current.Name != tenant.shared.Name || current.Operation.ID != tenant.shared.Operation.ID {
+			t.Fatal("tenant headers selected the other same-ID database")
+		}
+		response = performJSON(t, http.MethodGet, base+"/service-installations", tenant.owner, nil)
+		var list managedservicev1.ServiceInstallationList
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &list) != nil || len(list.Items) != 2 {
+			t.Fatal("tenant service directory changed after cross-tenant or quota attacks")
+		}
+		for _, item := range list.Items {
+			if item.QuotaEntitlementID != tenant.quota.ID || item.Name != tenant.shared.Name {
+				t.Fatal("service directory exposed foreign tenant data")
+			}
+		}
+		response = performJSON(t, http.MethodGet, base+"/quota-entitlements", tenant.owner, nil)
+		var quotas managedservicev1.QuotaEntitlementList
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &quotas) != nil || len(quotas.Items) != 1 || quotas.Items[0].ID != tenant.quota.ID || quotas.Items[0].PurchasedCount != 2 || quotas.Items[0].ReservedCount != 2 || quotas.Items[0].ConsumedCount != 0 {
+			t.Fatal("quota replay/attack left a partial reservation or exposed another tenant")
+		}
+		tenant.quota = quotas.Items[0]
+		assertManagedServiceRetained(t, paasEndpoint, tenant.owner, tenant.quota, tenant.shared)
+	}
+	assertStatus(performJSONWithIdempotency(t, http.MethodPost, base+"/quota-entitlements", platform.Credential, "platform-quota-attempt", activation), http.StatusForbidden, "platform-only tenant write")
+	revokeIAMBinding(t, iamEndpoint, homeBearer, developerBinding.ID, "request-resource-developer-revoked")
+	viewerBinding := putIAMBinding(t, iamEndpoint, homeBearer, homeUser.ID, iamv1.RolePaaSViewer, "request-resource-viewer")
+	assertStatus(performJSON(t, http.MethodGet, base+"/service-installations", home.Credential, nil), http.StatusOK, "viewer read")
+	assertStatus(performJSONWithIdempotency(t, http.MethodPost, base+"/quota-entitlements", home.Credential, "viewer-quota-attempt", activation), http.StatusForbidden, "viewer write")
+	revokeIAMBinding(t, iamEndpoint, homeBearer, viewerBinding.ID, "request-resource-viewer-revoked")
+	assertStatus(performJSON(t, http.MethodGet, base+"/service-installations", home.Credential, nil), http.StatusForbidden, "next-request role revocation")
+	waitAllIAMOutboxDelivered(t, ctx, admin)
+	waitAllPaaSOutboxDelivered(t, ctx, admin)
+	for _, tenant := range tenants {
+		for _, action := range []auditv1.Action{auditv1.ActionManagedServiceQuotaEntitlementActivated, auditv1.ActionManagedServiceInstallationCreated} {
+			page := queryAudit(t, auditEndpoint, tenant.owner, auditv1.QueryRecordsRequest{PageSize: 100, Action: action}, http.StatusOK)
+			expected := 1
+			if action == auditv1.ActionManagedServiceInstallationCreated {
+				expected = 2
+			}
+			if page.TenantID != auditv1.TenantID(tenant.id) || len(page.Records) != expected {
+				t.Fatal("managed-service audit replay or tenant isolation failed")
+			}
+			for _, record := range page.Records {
+				if record.Source != auditv1.SourcePaaS || record.Event.Actor.ID != auditv1.ActorID(tenant.memberID) || record.Event.IAMDecisionID == "" || record.Event.TenantID != auditv1.TenantID(tenant.id) {
+					t.Fatal("managed-service fact lost its original tenant/actor/authority")
+				}
+			}
+		}
+	}
+	return []string{home.Credential, platform.Credential}
+}
+
+func assertManagedServiceRetained(t *testing.T, endpoint, bearer string, quota managedservicev1.QuotaEntitlement, installation managedservicev1.ServiceInstallation) {
+	t.Helper()
+	base := endpoint + "/managed-services/v1"
+	for _, resource := range []struct {
+		path  string
+		value any
+	}{
+		{"/quota-entitlements/" + quota.ID, quota},
+		{"/service-installations/" + installation.ID, installation},
+		{"/service-installations/" + installation.ID + "/operation", installation.Operation},
+	} {
+		response := performJSON(t, http.MethodGet, base+resource.path, bearer, nil)
+		encoded, err := json.Marshal(resource.value)
+		var expected, actual any
+		if err != nil || response.Status != http.StatusOK || json.Unmarshal(encoded, &expected) != nil || json.Unmarshal(response.Body, &actual) != nil || !reflect.DeepEqual(actual, expected) {
+			t.Fatal("identity lifecycle changed retained quota, database service or Operation")
+		}
+	}
 }
 
 func createPaaSApplication(
@@ -1860,7 +2084,7 @@ func waitAllPaaSOutboxDelivered(t *testing.T, ctx context.Context, admin *pgx.Co
 		var outstanding int
 		err := admin.QueryRow(
 			ctx,
-			"SELECT count(*) FROM paas.audit_outbox WHERE status <> 'DELIVERED'",
+			"SELECT (SELECT count(*) FROM paas.audit_outbox WHERE status <> 'DELIVERED') + (SELECT count(*) FROM managedservice.audit_outbox WHERE status <> 'DELIVERED')",
 		).Scan(&outstanding)
 		return outstanding == 0, err
 	})
@@ -2215,6 +2439,14 @@ func assertAuthorityPlaintextAbsent(
 				OR EXISTS (
 					SELECT 1 FROM paas.operations
 					 WHERE document::text LIKE '%' || $1 || '%'
+				)
+				OR EXISTS (
+					SELECT 1 FROM managedservice.audit_outbox
+					 WHERE document::text LIKE '%' || $1 || '%'
+				)
+				OR EXISTS (
+					SELECT 1 FROM managedservice.operations AS operation
+					 WHERE row_to_json(operation)::text LIKE '%' || $1 || '%'
 				)
 				OR EXISTS (
 					SELECT 1 FROM audit.records
@@ -2578,12 +2810,52 @@ func quoteLiteral(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 }
 
-func runtimeDSN(admin *pgx.ConnConfig, user string, password string) string {
-	config := admin.Copy()
-	config.User = user
-	config.Password = password
-	config.DefaultQueryExecMode = pgx.QueryExecModeCacheStatement
-	return config.ConnString()
+func runtimeDSN(t *testing.T, admin *pgx.ConnConfig, user string, password string) string {
+	t.Helper()
+	// ConnString returns the original parse input, not changes to Config fields.
+	value, err := url.Parse(admin.ConnString())
+	if err != nil || (value.Scheme != "postgres" && value.Scheme != "postgresql") || value.Host == "" {
+		t.Fatal("authority process gate requires an explicit PostgreSQL URL")
+	}
+	value.User = url.UserPassword(user, password)
+	query := value.Query()
+	query.Del("user")
+	query.Del("password")
+	query.Set("application_name", "matrix-authority-process:"+user)
+	query.Set("pool_max_conns", "2")
+	value.RawQuery = query.Encode()
+	return value.String()
+}
+
+func assertRuntimeProcessLogins(t *testing.T, ctx context.Context, admin *pgx.Conn, users ...string) {
+	t.Helper()
+	for _, user := range users {
+		config, err := pgxpool.ParseConfig(runtimeDSN(t, admin.Config(), user, processDBPassword))
+		if err != nil {
+			t.Fatal("parse authority process identity probe")
+		}
+		// The probe must not satisfy the independent running-process assertion.
+		config.ConnConfig.RuntimeParams["application_name"] += ":identity-probe"
+		probe, err := pgx.ConnectConfig(ctx, config.ConnConfig)
+		if err != nil {
+			t.Fatalf("connect authority identity probe for %s", user)
+		}
+		var sessionUser, currentUser string
+		var limited bool
+		probeErr := probe.QueryRow(ctx, `SELECT session_user, current_user, NOT rolsuper AND NOT rolbypassrls
+            FROM pg_roles WHERE rolname=current_user`).Scan(&sessionUser, &currentUser, &limited)
+		_ = probe.Close(context.Background())
+		if probeErr != nil || sessionUser != user || currentUser != user || !limited {
+			t.Fatalf("authority identity probe for %s used an unexpected or privileged role", user)
+		}
+		var connections int
+		var confined bool
+		if err := admin.QueryRow(ctx, `SELECT count(*), COALESCE(bool_and(activity.usename=$2 AND NOT role.rolsuper AND NOT role.rolbypassrls),false)
+            FROM pg_stat_activity AS activity JOIN pg_roles AS role ON role.rolname=activity.usename
+			WHERE activity.datname=current_database() AND activity.application_name=$1`, "matrix-authority-process:"+user, user).Scan(&connections, &confined); err != nil || connections == 0 || connections > 2 || !confined {
+			t.Fatalf("running authority %s did not use its bounded non-superuser database login", user)
+		}
+	}
 }
 
 func writeProtectedFile(

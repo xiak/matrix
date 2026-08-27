@@ -94,6 +94,17 @@ jobs:
     env:
       NODE_EXPORTER_VERSION: '1.12.1'
       NODE_EXPORTER_SHA256: b51d8a76aa2a9156a55d501aca6276fae09e262259a5e4e831d2c2222f084e63
+    services:
+      postgres:
+        image: postgres@sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a
+        env:
+          POSTGRES_PASSWORD: matrix-node-authority-ci-test-only
+        ports:
+          - 5432
+        options: >-
+          --cpus 1 --memory 768m --pids-limit 192
+          --health-cmd pg_isready --health-interval 10s
+          --health-timeout 5s --health-retries 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -129,3 +140,20 @@ jobs:
             "MATRIX_NODE_AGENT_BINARY=$MATRIX_NODE_AGENT_BINARY" \
             "MATRIX_NODE_EXPORTER_BINARY=$RUNNER_TEMP/node_exporter-$NODE_EXPORTER_VERSION.linux-amd64/node_exporter" \
             "$RUNNER_TEMP/node-runtime.test" -test.v -test.count=1 -test.timeout=90s -test.run='^TestLinuxNodeProcessObservation$'
+      - name: Verify the real node through independent platform authorities
+        env:
+          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+          MATRIX_NODE_AUTHORITY_PROCESS_POSTGRES_TEST_DSN: postgres://postgres:matrix-node-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports[5432] }}/matrix_authority_process_node_ci?sslmode=disable
+        run: |
+          docker exec "$POSTGRES_CONTAINER_ID" createdb -U postgres matrix_authority_process_node_ci
+          go build -p 2 -trimpath -o "$RUNNER_TEMP/" \
+            ./app/service/iam/cmd/matrix-iam ./app/service/iam/cmd/matrix-iam-audit-dispatcher \
+            ./app/service/audit/cmd/matrix-audit ./app/service/paas/cmd/matrix-paas \
+            ./app/service/paas/cmd/matrix-paas-audit-dispatcher
+          go test -c -p 2 -o "$RUNNER_TEMP/authority-process.test" ./test/authorityprocess
+          sudo env GOMAXPROCS=2 GOMEMLIMIT=512MiB \
+            "MATRIX_AUTHORITY_PROCESS_BINARY_DIR=$RUNNER_TEMP" \
+            "MATRIX_NODE_AGENT_BINARY=$RUNNER_TEMP/matrix-node-agent" \
+            "MATRIX_NODE_EXPORTER_BINARY=$RUNNER_TEMP/node_exporter-$NODE_EXPORTER_VERSION.linux-amd64/node_exporter" \
+            "MATRIX_NODE_AUTHORITY_PROCESS_POSTGRES_TEST_DSN=$MATRIX_NODE_AUTHORITY_PROCESS_POSTGRES_TEST_DSN" \
+            "$RUNNER_TEMP/authority-process.test" -test.v -test.count=1 -test.timeout=180s -test.run='^TestLinuxNodeAuthorityProcesses$'

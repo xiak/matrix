@@ -379,22 +379,33 @@ tests pass.
 
 ## Implementation evidence
 
-The fixed `26f3569` account/proof slice is integrated and locally verified with
-this branch's existing host admission. Fresh PostgreSQL 18 race gates passed
-IAM/Audit HTTP, dual-schema privilege and immutable-storage attacks, retained
-Audit/PaaS upgrades, and an actual `9fd45b0` IAM executable's populated upgrade
-and restart. The five-process gate passed HTTP tenant opening, qualified
-subaccount login, dual outboxes, cross-tenant binding/cursor denial, historical
-replay and revoked-producer rejection while retaining real PaaS host
-registration and its Operation/Audit correlation. Full-repository race/vet,
-ten repeated focused runs, stable generation, module verification and Linux
-builds passed; the existing console's 52 tests and two bounded static builds
-passed with matching embedded assets. Equal-text tenant/installation identities
-remain disjoint, old tenant canonical bytes/hashes survive, and platform
-revocation takes effect on the next request without restart regrant.
-Consuming source `09474c9` passed all three
-[independent CI jobs](https://github.com/xiak/matrix/actions/runs/33058627543),
-including the real Linux node/collector regression.
+The fixed `26f3569` account/proof slice is integrated with this branch's host
+admission. Fresh PostgreSQL 18 race gates passed IAM/Audit HTTP, dual-schema
+privilege and immutable-storage attacks, and retained Audit/PaaS upgrades.
+These direct-config connection gates are distinct from executable-process
+evidence: the former process DSN builder returned pgx's original admin URL
+instead of serializing changed runtime credentials. Earlier process results,
+including `09474c9`'s green CI, do not prove runtime-login or RLS confinement.
+
+The existing process gate now adapts fixed `cf003e4`: runtime credentials
+replace URL and query credentials, each pool is bounded to two connections,
+and actual child-process sessions are checked through `pg_stat_activity` for
+their expected non-superuser, non-BYPASSRLS login. Separate probes verify
+`session_user` and `current_user` without counting as process sessions. The
+default round-trip test covers special-character passwords and the exact
+database target. Fresh PostgreSQL 18 race runs passed the corrected populated
+`9fd45b0` executable upgrade/restart and five-process flow, including same-name
+subaccounts, same-key quota replay, same-ID database resources, cross-tenant
+Operation denial, dual outboxes and the existing host registration/refresh/
+revocation/Audit path. Database-service records remain pending in this gate;
+it does not claim engine provisioning.
+
+The account/proof integration also passed full-repository race/vet, ten
+repeated focused runs, stable generation, module verification and Linux builds.
+The existing console's 52 tests and two bounded static builds passed with
+matching embedded assets. Equal-text tenant/installation identities remain
+disjoint, old tenant canonical bytes/hashes survive, and platform revocation
+takes effect on the next request without restart regrant.
 
 Exact-bootstrap-only tenant opening remains until the separately verified IAM
 platform-lifecycle replacement. New tenants do not inherit platform roles;
@@ -414,10 +425,11 @@ not accept the complete multi-tenant or offline release extension.
   canonical/event disagreement, arbitrary payloads, record hashes, immutable
   update/delete/truncate paths, database session/event/lease time, lease
   recovery, and stale fencing tokens.
-- Gate B was accepted on 2026-08-26 after implementation commit `255b790`.
-  IAM, Audit, the IAM Audit dispatcher, PaaS, and the PaaS Audit dispatcher run
-  as five independent processes with exact file credentials, least-privilege
-  database logins, and HTTP-only authority integration. PaaS readiness binds
+- Gate B runs IAM, Audit, the IAM Audit dispatcher, PaaS, and the PaaS Audit
+  dispatcher as five independent processes with exact file credentials,
+  verified runtime database logins, and HTTP-only authority integration. The
+  corrected process evidence above replaces the earlier login assumption.
+  PaaS readiness binds
   its schema and outbox invariants to the live IAM identity of its configured
   PaaS service credential; there is no header, local allow-list, cached permit,
   or in-process Audit fallback.
