@@ -2,7 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { Boxes, KeyRound, LockKeyhole, Network, ShieldCheck } from "lucide-react";
+import { Boxes, Database, Gauge, KeyRound, LockKeyhole, MapPin, ShieldCheck } from "lucide-react";
 import { App, Button, Input, Typography } from "@ui/xiak";
 import { useSession } from "../application/SessionProvider";
 import styles from "./LoginRenderer.module.css";
@@ -64,19 +64,19 @@ export function LoginRenderer() {
               <div className={styles.brandMark} aria-hidden="true">
                 <Boxes />
               </div>
-              <Typography.Eyebrow>Matrix PaaS Control Plane</Typography.Eyebrow>
+              <Typography.Eyebrow>Matrix · Cloud Console</Typography.Eyebrow>
               <Typography.Title className={styles.brandTitle} id="login-heading">
-                <span>把平台能力放进</span>
-                <span>一个清晰的控制面</span>
+                <span>让服务部署</span>
+                <span>简单而有序</span>
               </Typography.Title>
               <p className={styles.lead}>
-                在统一控制台中选择服务、激活配额并部署到受管区域。Phase 2
-                首先交付可真实安装的 PostgreSQL 服务。
+                集中管理数据库、服务配额与部署区域。
+                从一个 PostgreSQL 实例开始。
               </p>
               <div className={styles.capabilities}>
-                <div><Network aria-hidden="true" /><span>区域与资源边界</span></div>
-                <div><ShieldCheck aria-hidden="true" /><span>IAM 闭环授权</span></div>
-                <div><KeyRound aria-hidden="true" /><span>凭据仅驻留页面内存</span></div>
+                <div><Database aria-hidden="true" /><span>托管数据库</span></div>
+                <div><Gauge aria-hidden="true" /><span>按需开通配额</span></div>
+                <div><MapPin aria-hidden="true" /><span>选择区域部署</span></div>
               </div>
             </section>
 
@@ -177,7 +177,7 @@ export function LoginRenderer() {
                   <div className={styles.cardHeading}>
                     <Typography.Title as="h2" level={2}>欢迎回来</Typography.Title>
                     <Typography.Text tone="muted">
-                      使用 Matrix IAM 用户名和密码继续
+                      登录 Matrix，管理你的服务与资源
                     </Typography.Text>
                   </div>
                   <form id="login-form" className={styles.form} onSubmit={submitLogin}>
@@ -187,6 +187,7 @@ export function LoginRenderer() {
                         autoComplete="username"
                         name="loginName"
                         onChange={(event) => setLoginName(event.target.value)}
+                        placeholder="请输入用户名"
                         required
                         value={loginName}
                       />
@@ -198,6 +199,7 @@ export function LoginRenderer() {
                         maxLength={128}
                         name="password"
                         onChange={(event) => setPassword(event.target.value)}
+                        placeholder="请输入密码"
                         required
                         type="password"
                         value={password}
@@ -219,7 +221,8 @@ export function LoginRenderer() {
                 </>
               )}
               <p className={styles.securityNote}>
-                刷新页面会清除会话；控制台不会把密码或 bearer 写入浏览器存储。
+                <ShieldCheck aria-hidden="true" />
+                <span>会话仅在当前页面保留，刷新后需重新登录。</span>
               </p>
             </section>
           </main>

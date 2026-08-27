@@ -1,6 +1,6 @@
 .layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(240px, 320px);
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 280px);
   gap: var(--xiak-spacing-roomy);
   align-items: start;
 }
@@ -9,10 +9,10 @@
 .aside {
   display: grid;
   min-width: 0;
-  gap: var(--xiak-spacing-default);
+  gap: var(--xiak-spacing-roomy);
 }
 
-@media (max-width: 1080px) {
+@container matrix-page-content (max-width: 1080px) {
   .layout {
     grid-template-columns: minmax(0, 1fr);
   }

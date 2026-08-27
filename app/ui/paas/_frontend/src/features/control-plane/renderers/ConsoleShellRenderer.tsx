@@ -25,7 +25,6 @@ import { LoginRenderer } from "@/features/auth/renderers/LoginRenderer";
 import { useSession } from "@/features/auth/application/SessionProvider";
 import {
   App,
-  Badge,
   Button,
   ContentPage,
   Layout,
@@ -68,7 +67,13 @@ function ShellFrame({ children }: { children: React.ReactNode }) {
   );
 }
 
-function LoadingShell({ error, retry }: { error: string | null; retry(): void }) {
+function LoadingShell({ error, logout, retry, revoking, sessionError }: {
+  error: string | null;
+  logout(): void;
+  retry(): void;
+  revoking: boolean;
+  sessionError: string | null;
+}) {
   return (
     <ShellFrame>
       <App>
@@ -76,14 +81,24 @@ function LoadingShell({ error, retry }: { error: string | null; retry(): void })
           <Layout.Header className={styles.topbar}>
             <div className={styles.topbarBrand}><Boxes aria-hidden="true" /><strong>Matrix</strong></div>
             <div className={styles.topbarPath}><span>Control Plane</span><ChevronRight aria-hidden="true" /><span>Managed Services</span></div>
+            <Button
+              aria-label="注销并撤销 IAM 会话"
+              className={styles.loadingLogout}
+              disabled={revoking}
+              onClick={logout}
+              size="small"
+              variant="ghost"
+            >
+              <LogOut aria-hidden="true" />{revoking ? "正在注销…" : "注销"}
+            </Button>
           </Layout.Header>
           <Layout>
-            <Sider>
+            <Sider className={styles.sider}>
               <Sider.RailMenu className={styles.railLoading}>
                 <div className={styles.railLogo}><Boxes aria-hidden="true" /></div>
                 <Skeleton /><Skeleton />
               </Sider.RailMenu>
-              <Sider.ContextMenu className={styles.contextLoading}>
+              <Sider.ContextMenu className={`${styles.contextMenu} ${styles.contextLoading}`}>
                 <Skeleton />
                 <Skeleton />
                 <Skeleton />
@@ -94,6 +109,11 @@ function LoadingShell({ error, retry }: { error: string | null; retry(): void })
               <ContentPage>
                 <ContentPage.Header><Skeleton className={styles.headerSkeleton} /></ContentPage.Header>
                 <ContentPage.Body>
+                  {sessionError ? (
+                    <div className={styles.errorBanner} role="alert">
+                      <ShieldCheck aria-hidden="true" /><span>{sessionError}</span>
+                    </div>
+                  ) : null}
                   {error ? (
                     <div className={styles.unavailable} role="alert">
                       <ServerCog aria-hidden="true" />
@@ -143,16 +163,24 @@ function ConsoleShell() {
     return () => window.removeEventListener("keydown", escape);
   }, [closeSidebar, closeWorkspace, sidebarOverlayOpen, workspaceOpen]);
 
+  async function logout() {
+    if (await session.logout()) router.replace("/");
+  }
+
   if (!scene) {
-    return <LoadingShell error={controlPlane.error} retry={() => void controlPlane.reload()} />;
+    return (
+      <LoadingShell
+        error={controlPlane.error}
+        logout={() => void logout()}
+        retry={() => void controlPlane.reload()}
+        revoking={session.phase === "revoking"}
+        sessionError={session.error}
+      />
+    );
   }
 
   const workspaceVisible = Boolean(scene.workspace && workspaceOpen);
   const principal = session.current;
-
-  async function logout() {
-    if (await session.logout()) router.replace("/");
-  }
 
   function resizeWorkspace(event: ReactPointerEvent<HTMLDivElement>) {
     event.preventDefault();
@@ -182,8 +210,6 @@ function ConsoleShell() {
               <span>Control Plane</span><ChevronRight aria-hidden="true" /><strong>{scene.title}</strong>
             </div>
             <div className={styles.topbarStatus}>
-              <Badge status="success">APISIX</Badge>
-              <span className={styles.topbarDivider} />
               <ShieldCheck aria-hidden="true" />
               <span>{principal?.session.organizationId ?? "organization"}</span>
             </div>
@@ -218,7 +244,7 @@ function ConsoleShell() {
 
               <Sider.ContextMenu className={styles.contextMenu}>
                 <div className={styles.contextHeader}>
-                  <div><Typography.Eyebrow>Product</Typography.Eyebrow><strong>托管数据库</strong></div>
+                  <div><Typography.Eyebrow>Managed services</Typography.Eyebrow><strong>托管数据库</strong></div>
                   <Database aria-hidden="true" />
                 </div>
                 <nav aria-label="托管服务导航" className={styles.contextNavigation}>
@@ -243,7 +269,7 @@ function ConsoleShell() {
                 </nav>
                 <div className={styles.contextCallout}>
                   <CircleGauge aria-hidden="true" />
-                  <div><strong>Phase 2</strong><span>PostgreSQL + 本机区域</span></div>
+                  <div><strong>本机部署</strong><span>PostgreSQL · 托管服务</span></div>
                 </div>
                 <div className={styles.userDock}>
                   <div className={styles.avatar} aria-hidden="true">
@@ -277,19 +303,31 @@ function ConsoleShell() {
                     <div><Typography.Eyebrow>{scene.eyebrow}</Typography.Eyebrow><Typography.Title as="h1" level={2}>{scene.title}</Typography.Title></div>
                   </div>
                   <div className={styles.pageActions}>
-                    <Button disabled={controlPlane.loading} onClick={() => void controlPlane.reload()} size="small" variant="ghost">
-                      <RefreshCcw aria-hidden="true" />刷新
+                    <Button aria-label="刷新" disabled={controlPlane.loading} onClick={() => void controlPlane.reload()} size="small" variant="ghost">
+                      <RefreshCcw aria-hidden="true" /><span>刷新</span>
                     </Button>
                     {scene.workspace ? (
-                      <Button onClick={toggleWorkspace} size="small" variant={workspaceVisible ? "secondary" : "ghost"}>
+                      <Button
+                        aria-controls="console-workspace"
+                        aria-expanded={workspaceVisible}
+                        aria-label={workspaceVisible ? "收起面板" : "打开面板"}
+                        onClick={toggleWorkspace}
+                        size="small"
+                        variant={workspaceVisible ? "secondary" : "ghost"}
+                      >
                         {workspaceVisible ? <PanelRightClose aria-hidden="true" /> : <PanelRightOpen aria-hidden="true" />}
-                        {workspaceVisible ? "收起面板" : "打开面板"}
+                        <span>{workspaceVisible ? "收起面板" : "打开面板"}</span>
                       </Button>
                     ) : null}
                   </div>
                 </ContentPage.Header>
                 <ContentPage.Body>
                   <div className={styles.pageIntro}>{scene.description}</div>
+                  {session.error ? (
+                    <div className={styles.errorBanner} role="alert">
+                      <ShieldCheck aria-hidden="true" /><span>{session.error}</span>
+                    </div>
+                  ) : null}
                   {controlPlane.error ? (
                     <div className={styles.errorBanner} role="alert">
                       <ServerCog aria-hidden="true" /><span>{controlPlane.error}</span>
@@ -305,6 +343,7 @@ function ConsoleShell() {
               className={styles.workspacePane}
               data-size={workspaceSize}
               data-visible={workspaceVisible ? "true" : "false"}
+              id="console-workspace"
             >
               <div
                 aria-label="调整上下文面板宽度"
@@ -314,6 +353,8 @@ function ConsoleShell() {
                 aria-valuenow={workspaceSize === "compact" ? 1 : workspaceSize === "wide" ? 3 : 2}
                 className={styles.workspaceResizeHandle}
                 onKeyDown={(event) => {
+                  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                  event.preventDefault();
                   if (event.key === "ArrowLeft") setWorkspaceSize(workspaceSize === "compact" ? "medium" : "wide");
                   if (event.key === "ArrowRight") setWorkspaceSize(workspaceSize === "wide" ? "medium" : "compact");
                   if (event.key === "Home") setWorkspaceSize("compact");

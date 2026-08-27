@@ -15,7 +15,7 @@ import { useControlPlane } from "../application/ControlPlaneProvider";
 import type { ConsoleWorkspaceScene } from "../scenes/consoleScene";
 import styles from "./ConsoleWorkspaceRenderer.module.css";
 
-const installationIDPatternSource = "[a-z0-9][a-z0-9._-]{0,61}[a-z0-9]";
+const installationIDPatternSource = "[a-z0-9][a-z0-9._\\-]{0,61}[a-z0-9]";
 const installationIDPattern = new RegExp(`^${installationIDPatternSource}$`);
 
 function Field({

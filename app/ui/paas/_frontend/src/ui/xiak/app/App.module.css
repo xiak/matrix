@@ -9,9 +9,7 @@
 .background {
   position: absolute;
   inset: 0;
-  background:
-    radial-gradient(circle at 74% -18%, var(--xiak-color-accent-haze), transparent 42%),
-    linear-gradient(145deg, var(--xiak-color-bg-canvas), var(--xiak-color-bg-deep));
+  background: var(--xiak-color-bg-canvas);
   pointer-events: none;
 }
 
@@ -30,6 +28,10 @@
 .app,
 .base {
   height: 100dvh;
+}
+
+.layer {
+  overflow: auto;
 }
 
 .base {

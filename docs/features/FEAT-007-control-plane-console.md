@@ -197,6 +197,13 @@ reset and the palette-to-functional-to-semantic theme tokens; components use
 scoped styles and functional tokens instead of donor hash classes, inline
 styles, or raw theme colors.
 
+The initial theme uses neutral light surfaces, one restrained blue accent,
+subtle panel borders, and low-elevation shadows. Public controls share sizing,
+radii, focus, disabled, and semantic status treatments. Content grids respond
+to the available content width so opening the workspace does not compress the
+overview into unreadable columns. The style gate checks normal text, status,
+input boundary, and focus contrast against the theme's resolved color tokens.
+
 The desktop shell has a product sider, stable header, primary content, and an
 optional contextual panel. Compact mode uses one overlay at a time and leaves
 the active task reachable. The login route and every authenticated route must
@@ -291,15 +298,19 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ## Implementation status
 
-- Gate A implementation is complete: the Phase 1 page was replaced by the
-  complete donor-shaped App Router -> route -> provider -> repository -> scene
-  -> renderer -> public-component chain, seven static routes, memory-only IAM
-  session handling, deterministic Go embedding, strict CSP hashes, responsive
-  four-region shell, and source architecture/style gates. The installed
-  `8700095` candidate served the exact embedded UI, and an isolated browser
-  proved the anonymous login contract, empty password field, no page storage,
-  no external resources, and no horizontal overflow. The authenticated
-  browser interaction remains the final Gate A item.
+- Gate A implementation replaces the Phase 1 page with the complete donor-
+  shaped App Router -> route -> provider -> repository -> scene -> renderer ->
+  public-component chain, seven static routes, memory-only IAM sessions,
+  deterministic Go embedding, strict CSP hashes, and a four-region shell.
+  The console layout retains its provider across child-route navigation.
+  Source gates cover the light theme, 20 semantic contrast pairs, and 31
+  frontend tests, including visible failed revocation, logout during failed
+  or pending resource loads, keyboard workspace sizing, and native instance-ID
+  validation. The installed `8700095` candidate previously proved anonymous
+  login, offline assets, and no horizontal overflow. The current source still
+  requires final installed-release browser verification of authentication,
+  route transitions, keyboard use, and 360-pixel layouts; source and component
+  checks do not substitute for that acceptance.
 - Gate B authority is complete for the admitted PostgreSQL slice: the closed
   managed-service Go/OpenAPI contract now includes collection and single-
   resource reads for offerings, regions, quota entitlements, service

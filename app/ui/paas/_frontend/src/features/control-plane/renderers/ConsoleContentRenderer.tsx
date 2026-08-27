@@ -5,9 +5,11 @@ import {
   CheckCircle2,
   Cpu,
   Database,
+  Gauge,
   HardDrive,
   MapPin,
   PackageCheck,
+  PackageSearch,
   Server
 } from "lucide-react";
 import {
@@ -22,6 +24,13 @@ import type {
   SceneStatus
 } from "../scenes/consoleScene";
 import styles from "./ConsoleContentRenderer.module.css";
+
+const metricIcons: Record<string, typeof Database> = {
+  offerings: PackageSearch,
+  quota: Gauge,
+  services: Database,
+  regions: MapPin
+};
 
 function phaseLabel(value: string): string {
   const labels: Record<string, string> = {
@@ -62,7 +71,7 @@ function InstallationRows({ items }: { items: InstallationScene[] }) {
     );
   }
   return (
-    <div className={styles.tableWrap}>
+    <div aria-label="服务实例列表" className={styles.tableWrap} role="region" tabIndex={0}>
       <table className={styles.table}>
         <thead>
           <tr><th>实例</th><th>区域</th><th>状态</th><th>端点</th><th>最近观察</th></tr>
@@ -88,18 +97,21 @@ function OverviewContent({ scene }: { scene: Extract<ConsoleContentScene, { kind
     <ContentLayout>
       <ContentLayout.Main>
         <section className={styles.metricGrid} aria-label="平台指标">
-          {scene.metrics.map((metric) => (
-            <Card className={styles.metric} key={metric.id}>
-              <Card.Body>
-                <div className={styles.metricHeading}>
-                  <span>{metric.label}</span>
-                  <Badge status={metric.status}>{metric.status === "success" ? "正常" : "状态"}</Badge>
-                </div>
-                <strong>{metric.value}</strong>
-                <p>{metric.detail}</p>
-              </Card.Body>
-            </Card>
-          ))}
+          {scene.metrics.map((metric) => {
+            const Icon = metricIcons[metric.id] ?? Box;
+            return (
+              <Card className={styles.metric} key={metric.id}>
+                <Card.Body>
+                  <div className={styles.metricHeading}>
+                    <span>{metric.label}</span>
+                    <Icon aria-hidden="true" data-status={metric.status} />
+                  </div>
+                  <strong>{metric.value}</strong>
+                  <p>{metric.detail}</p>
+                </Card.Body>
+              </Card>
+            );
+          })}
         </section>
 
         <Card>
@@ -165,7 +177,7 @@ function CatalogContent({ scene }: { scene: Extract<ConsoleContentScene, { kind:
             </dl>
           </Card.Body>
           <Card.Footer>
-            <Typography.Text tone="subtle">配额激活不代表模拟付款</Typography.Text>
+            <Typography.Text tone="subtle">配额激活不涉及付款</Typography.Text>
             <Link className={styles.primaryLink} href="/console/quotas/">
               配置配额 <ArrowRight aria-hidden="true" />
             </Link>

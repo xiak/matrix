@@ -4,10 +4,11 @@
   align-items: center;
   gap: var(--xiak-spacing-narrow);
   border: var(--xiak-border-transparent);
-  border-radius: var(--xiak-radius-pill);
+  border-radius: var(--xiak-radius-control);
   padding: 0 var(--xiak-spacing-tight);
   font-size: var(--xiak-font-size-caption);
   font-weight: var(--xiak-font-weight-semibold);
+  font-variant-numeric: tabular-nums;
   line-height: 1;
   white-space: nowrap;
 }

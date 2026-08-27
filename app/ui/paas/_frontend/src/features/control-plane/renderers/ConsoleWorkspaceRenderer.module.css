@@ -14,6 +14,7 @@
   display: flex;
   align-items: center;
   gap: var(--xiak-spacing-default);
+  padding-right: var(--xiak-spacing-roomy);
 }
 
 .heading > div:last-child {
@@ -23,10 +24,11 @@
 
 .headingIcon {
   display: grid;
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
+  flex: none;
   place-items: center;
-  border-radius: var(--xiak-radius-panel);
+  border-radius: var(--xiak-radius-control);
   background: var(--xiak-color-status-info-bg);
   color: var(--xiak-color-status-info);
 }
@@ -42,7 +44,7 @@
 }
 
 .form {
-  gap: var(--xiak-spacing-comfortable);
+  gap: var(--xiak-spacing-roomy);
 }
 
 .field {
@@ -62,18 +64,20 @@
   border: var(--xiak-border-subtle);
   border-radius: var(--xiak-radius-control);
   padding: var(--xiak-spacing-default);
-  background: var(--xiak-color-bg-input);
+  background: var(--xiak-color-bg-canvas);
 }
 
 .resourceSummary > svg {
   width: 20px;
   height: 20px;
+  flex: none;
   color: var(--xiak-color-status-info);
 }
 
 .resourceSummary div {
   display: grid;
   gap: var(--xiak-spacing-narrow);
+  min-width: 0;
 }
 
 .resourceSummary span {
@@ -82,10 +86,9 @@
 }
 
 .notice {
-  border: var(--xiak-border-subtle);
   border-radius: var(--xiak-radius-control);
   padding: var(--xiak-spacing-default);
-  background: var(--xiak-color-bg-input);
+  background: var(--xiak-color-bg-canvas);
   color: var(--xiak-color-text-muted);
   font-size: var(--xiak-font-size-small);
   line-height: 1.6;
@@ -106,7 +109,6 @@
 
 .statusList {
   display: grid;
-  gap: var(--xiak-spacing-tight);
 }
 
 .statusItem {

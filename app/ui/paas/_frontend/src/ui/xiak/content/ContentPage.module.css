@@ -11,15 +11,18 @@
 .header {
   display: flex;
   min-height: var(--xiak-content-header-height);
+  flex: none;
   align-items: center;
   justify-content: space-between;
   gap: var(--xiak-spacing-default);
   border-bottom: var(--xiak-border-subtle);
   padding: 0 var(--xiak-spacing-roomy);
-  background: var(--xiak-color-bg-content);
+  background: var(--xiak-color-bg-header);
 }
 
 .body {
+  container-name: matrix-page-content;
+  container-type: inline-size;
   min-width: 0;
   min-height: 0;
   flex: 1;

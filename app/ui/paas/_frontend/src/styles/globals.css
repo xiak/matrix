@@ -24,6 +24,7 @@ body {
   color: var(--xiak-color-text-base);
   font-family: var(--xiak-font-sans);
   font-size: var(--xiak-font-size-body);
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -47,6 +48,10 @@ a {
 
 p {
   margin: 0;
+}
+
+strong {
+  font-weight: var(--xiak-font-weight-semibold);
 }
 
 ::selection {

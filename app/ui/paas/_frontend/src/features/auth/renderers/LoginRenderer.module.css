@@ -1,10 +1,10 @@
 .loginPage {
   position: relative;
   display: grid;
-  width: min(1120px, calc(100% - var(--xiak-spacing-section) * 2));
+  width: min(1060px, calc(100% - var(--xiak-spacing-section) * 2));
   min-height: 100dvh;
   grid-template-columns: minmax(0, 1fr) minmax(340px, 430px);
-  gap: clamp(var(--xiak-spacing-section), 8vw, 112px);
+  gap: clamp(var(--xiak-spacing-section), 8vw, 120px);
   align-items: center;
   margin: 0 auto;
   padding-block: var(--xiak-spacing-section);
@@ -12,8 +12,8 @@
 
 .brandPanel {
   display: grid;
-  max-width: 620px;
-  gap: var(--xiak-spacing-comfortable);
+  max-width: 480px;
+  gap: var(--xiak-spacing-roomy);
 }
 
 .brandMark,
@@ -22,11 +22,9 @@
   width: 52px;
   height: 52px;
   place-items: center;
-  border: var(--xiak-border-subtle);
   border-radius: var(--xiak-radius-panel);
-  background: var(--xiak-color-bg-panel);
+  background: var(--xiak-color-accent-haze);
   color: var(--xiak-color-accent-text);
-  box-shadow: var(--xiak-shadow-panel);
 }
 
 .brandMark svg,
@@ -36,7 +34,7 @@
 }
 
 .lead {
-  max-width: 570px;
+  max-width: 380px;
   color: var(--xiak-color-text-muted);
   font-size: var(--xiak-font-size-subtitle);
   line-height: 1.75;
@@ -44,24 +42,25 @@
 
 .brandTitle span {
   display: block;
-  white-space: nowrap;
+}
+
+.brandTitle span:last-child {
+  color: var(--xiak-color-accent-text);
 }
 
 .capabilities {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--xiak-spacing-tight);
-  margin-top: var(--xiak-spacing-tight);
+  gap: var(--xiak-spacing-comfortable) var(--xiak-spacing-roomy);
+  margin-top: var(--xiak-spacing-default);
+  border-top: var(--xiak-border-subtle);
+  padding-top: var(--xiak-spacing-roomy);
 }
 
 .capabilities div {
   display: inline-flex;
   align-items: center;
   gap: var(--xiak-spacing-tight);
-  border: var(--xiak-border-subtle);
-  border-radius: var(--xiak-radius-pill);
-  padding: var(--xiak-spacing-tight) var(--xiak-spacing-default);
-  background: var(--xiak-color-bg-panel);
   color: var(--xiak-color-text-muted);
   font-size: var(--xiak-font-size-small);
 }
@@ -69,12 +68,12 @@
 .capabilities svg {
   width: 15px;
   height: 15px;
-  color: var(--xiak-color-status-success);
+  color: var(--xiak-color-text-subtle);
 }
 
 .loginCard {
   display: grid;
-  gap: var(--xiak-spacing-roomy);
+  gap: var(--xiak-spacing-generous);
   border: var(--xiak-border-subtle);
   border-radius: var(--xiak-radius-panel);
   padding: var(--xiak-spacing-generous);
@@ -94,7 +93,12 @@
 }
 
 .form {
-  gap: var(--xiak-spacing-comfortable);
+  gap: var(--xiak-spacing-roomy);
+}
+
+.form input {
+  min-height: var(--xiak-control-height-large);
+  font-weight: var(--xiak-font-weight-medium);
 }
 
 .field {
@@ -125,9 +129,20 @@
 }
 
 .securityNote {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--xiak-spacing-tight);
+  border-top: var(--xiak-border-subtle);
+  padding-top: var(--xiak-spacing-roomy);
   color: var(--xiak-color-text-subtle);
   font-size: var(--xiak-font-size-caption);
   line-height: 1.6;
+}
+
+.securityNote svg {
+  width: 15px;
+  height: 18px;
+  flex: none;
 }
 
 @media (max-width: 780px) {

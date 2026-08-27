@@ -1,7 +1,7 @@
 .metricGrid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--xiak-spacing-default);
+  gap: var(--xiak-spacing-comfortable);
 }
 
 .metricHeading,
@@ -13,11 +13,30 @@
   gap: var(--xiak-spacing-default);
 }
 
+.metricHeading {
+  color: var(--xiak-color-text-muted);
+  font-size: var(--xiak-font-size-small);
+}
+
+.metricHeading svg {
+  width: 17px;
+  height: 17px;
+  flex: none;
+  color: var(--xiak-color-text-subtle);
+  stroke-width: 1.75;
+}
+
+.metricHeading svg[data-status="warning"] {
+  color: var(--xiak-color-status-warning);
+}
+
 .metric strong {
   display: block;
   margin-top: var(--xiak-spacing-comfortable);
   color: var(--xiak-color-text-strong);
   font-size: 2rem;
+  font-weight: var(--xiak-font-weight-semibold);
+  font-variant-numeric: tabular-nums;
   letter-spacing: var(--xiak-letter-spacing-heading);
 }
 
@@ -28,6 +47,10 @@
   margin-top: var(--xiak-spacing-tight);
   color: var(--xiak-color-text-muted);
   line-height: 1.6;
+}
+
+.metric p {
+  font-size: var(--xiak-font-size-caption);
 }
 
 .textLink,
@@ -43,7 +66,9 @@
 
 .textLink:hover,
 .primaryLink:hover {
-  color: var(--xiak-color-text-strong);
+  color: var(--xiak-color-accent-text-hover);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .textLink:focus-visible,
@@ -59,9 +84,7 @@
 }
 
 .featureCard {
-  background:
-    radial-gradient(circle at 100% 0, var(--xiak-color-accent-haze), transparent 58%),
-    var(--xiak-color-bg-panel);
+  background: var(--xiak-color-bg-panel);
 }
 
 .featureCardBody,
@@ -77,8 +100,8 @@
   height: 44px;
   place-items: center;
   border-radius: var(--xiak-radius-panel);
-  background: var(--xiak-color-status-info-bg);
-  color: var(--xiak-color-status-info);
+  background: var(--xiak-color-accent-haze);
+  color: var(--xiak-color-accent-text);
 }
 
 .databaseIcon svg,
@@ -106,18 +129,18 @@
 .regionFacts svg {
   width: 15px;
   height: 15px;
-  color: var(--xiak-color-status-success);
+  color: var(--xiak-color-text-subtle);
 }
 
 .catalogGrid,
 .regionGrid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--xiak-spacing-comfortable);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+  gap: var(--xiak-spacing-roomy);
 }
 
 .productCard {
-  min-height: 380px;
+  max-width: 640px;
 }
 
 .productFacts {
@@ -150,7 +173,7 @@
 
 .quotaRow {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) auto minmax(140px, auto);
+  grid-template-columns: minmax(180px, 1fr) auto minmax(120px, auto);
   gap: var(--xiak-spacing-roomy);
   align-items: center;
 }
@@ -165,6 +188,7 @@
 .quotaIdentity > svg {
   width: 24px;
   height: 24px;
+  flex: none;
   color: var(--xiak-color-status-info);
 }
 
@@ -199,6 +223,7 @@
 .quotaNumbers strong {
   color: var(--xiak-color-text-strong);
   font-size: var(--xiak-font-size-title);
+  font-variant-numeric: tabular-nums;
 }
 
 .quotaStatus {
@@ -208,6 +233,12 @@
 .tableWrap {
   width: 100%;
   overflow: auto;
+  outline: none;
+}
+
+.tableWrap:focus-visible {
+  outline: 2px solid var(--xiak-color-border-focus);
+  outline-offset: -2px;
 }
 
 .table {
@@ -219,16 +250,22 @@
 .table th,
 .table td {
   border-bottom: var(--xiak-border-subtle);
-  padding: var(--xiak-spacing-default) var(--xiak-spacing-comfortable);
+  padding: var(--xiak-spacing-comfortable) var(--xiak-spacing-roomy);
   color: var(--xiak-color-text-muted);
+  font-size: var(--xiak-font-size-small);
   white-space: nowrap;
 }
 
 .table th {
+  padding-block: var(--xiak-spacing-default);
+  background: var(--xiak-color-bg-canvas);
   color: var(--xiak-color-text-subtle);
   font-size: var(--xiak-font-size-caption);
-  letter-spacing: var(--xiak-letter-spacing-eyebrow);
-  text-transform: uppercase;
+  font-weight: var(--xiak-font-weight-medium);
+}
+
+.table tbody tr:hover {
+  background: var(--xiak-color-bg-panel-hover);
 }
 
 .table tbody tr:last-child td {
@@ -242,20 +279,21 @@
 
 .table td strong {
   color: var(--xiak-color-text-strong);
+  font-size: var(--xiak-font-size-body);
 }
 
 .table td small {
   margin-top: var(--xiak-spacing-narrow);
   color: var(--xiak-color-text-subtle);
+  font-size: var(--xiak-font-size-caption);
 }
 
 .empty {
   display: grid;
-  min-height: 320px;
+  min-height: 280px;
   place-items: center;
   align-content: center;
   gap: var(--xiak-spacing-tight);
-  border: var(--xiak-border-subtle);
   border-radius: var(--xiak-radius-panel);
   padding: var(--xiak-spacing-roomy);
   background: var(--xiak-color-bg-panel);
@@ -291,6 +329,10 @@
   gap: var(--xiak-spacing-narrow);
 }
 
+.regionHeading {
+  flex-wrap: wrap;
+}
+
 .regionHeading span {
   color: var(--xiak-color-text-subtle);
   font-size: var(--xiak-font-size-small);
@@ -302,13 +344,13 @@
   padding-block: var(--xiak-spacing-tight);
 }
 
-@media (max-width: 1240px) {
+@container matrix-page-content (max-width: 900px) {
   .metricGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .quotaRow {
-    grid-template-columns: minmax(220px, 1fr) auto;
+    grid-template-columns: minmax(180px, 1fr) auto;
   }
 
   .quotaStatus {
@@ -318,18 +360,14 @@
   }
 }
 
-@media (max-width: 860px) {
+@container matrix-page-content (max-width: 760px) {
   .catalogGrid,
   .regionGrid {
     grid-template-columns: 1fr;
   }
 }
 
-@media (max-width: 600px) {
-  .metricGrid {
-    grid-template-columns: 1fr;
-  }
-
+@container matrix-page-content (max-width: 560px) {
   .quotaRow {
     grid-template-columns: 1fr;
   }
@@ -340,5 +378,26 @@
 
   .quotaStatus {
     grid-column: auto;
+    grid-template-columns: 1fr;
+  }
+}
+
+@container matrix-page-content (max-width: 420px) {
+  .metricGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .regionCard {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .regionHeading,
+  .regionFacts,
+  .regionCard p {
+    grid-column: 1;
+  }
+
+  .productFacts div {
+    grid-template-columns: 88px minmax(0, 1fr);
   }
 }

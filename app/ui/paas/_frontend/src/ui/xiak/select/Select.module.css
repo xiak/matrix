@@ -9,9 +9,23 @@
   color: var(--xiak-color-text-strong);
   font: inherit;
   outline: none;
+  cursor: pointer;
+  transition:
+    border-color var(--xiak-motion-fast) var(--xiak-ease-standard),
+    box-shadow var(--xiak-motion-fast) var(--xiak-ease-standard);
+}
+
+.select:hover:not(:disabled) {
+  border-color: var(--xiak-color-border-control-hover);
 }
 
 .select:focus {
   border-color: var(--xiak-color-border-focus);
   box-shadow: var(--xiak-shadow-focus);
+}
+
+.select:disabled {
+  background: var(--xiak-color-bg-control-hover);
+  color: var(--xiak-color-text-disabled);
+  cursor: not-allowed;
 }

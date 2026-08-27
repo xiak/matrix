@@ -27,8 +27,17 @@
 }
 
 .button:disabled {
+  border-color: var(--xiak-color-border-subtle);
+  background: var(--xiak-color-bg-control-hover);
+  color: var(--xiak-color-text-disabled);
   cursor: not-allowed;
-  opacity: var(--xiak-opacity-disabled);
+}
+
+.button > svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  stroke-width: 1.75;
 }
 
 .small {
@@ -61,7 +70,7 @@
 }
 
 .secondary {
-  border-color: var(--xiak-color-border-control);
+  border-color: var(--xiak-color-border-subtle);
   background: var(--xiak-color-bg-control);
   color: var(--xiak-color-text-base);
 }

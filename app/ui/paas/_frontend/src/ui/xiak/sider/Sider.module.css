@@ -5,6 +5,7 @@
   min-width: var(--xiak-layout-sider-width);
   min-height: 0;
   overflow: visible;
+  border-right: var(--xiak-border-subtle);
   background: var(--xiak-color-bg-sider);
 }
 

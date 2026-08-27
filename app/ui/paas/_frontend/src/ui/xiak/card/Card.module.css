@@ -13,7 +13,7 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--xiak-spacing-default);
-  padding: var(--xiak-spacing-default) var(--xiak-spacing-comfortable);
+  padding: var(--xiak-spacing-comfortable) var(--xiak-spacing-roomy);
 }
 
 .header {
@@ -22,8 +22,10 @@
 
 .footer {
   border-top: var(--xiak-border-subtle);
+  flex-wrap: wrap;
+  background: var(--xiak-color-bg-panel-hover);
 }
 
 .body {
-  padding: var(--xiak-spacing-comfortable);
+  padding: var(--xiak-spacing-roomy);
 }

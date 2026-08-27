@@ -27,12 +27,12 @@
 
 .level1 {
   font-size: var(--xiak-font-size-title-large);
-  line-height: 1.12;
+  line-height: 1.35;
 }
 
 .level2 {
   font-size: var(--xiak-font-size-title);
-  line-height: 1.2;
+  line-height: 1.4;
 }
 
 .level3 {
@@ -41,7 +41,7 @@
 }
 
 .eyebrow {
-  color: var(--xiak-color-accent-text);
+  color: var(--xiak-color-text-subtle);
   font-size: var(--xiak-font-size-caption);
   font-weight: var(--xiak-font-weight-bold);
   letter-spacing: var(--xiak-letter-spacing-eyebrow);
