@@ -140,18 +140,19 @@ function InstallationOrder({
   const [id, setId] = useState("postgres-primary");
   const [accepted, setAccepted] = useState(false);
   const selectedEntitlement = scene.entitlementOptions.find((item) => item.entitlementId === entitlementId);
-  const canSubmit = Boolean(selectedEntitlement && regionId && installationIDPattern.test(id) && name.trim());
+  const selectedRegion = scene.regionOptions.find((item) => item.id === regionId);
+  const canSubmit = Boolean(selectedEntitlement && selectedRegion && installationIDPattern.test(id) && name.trim());
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!selectedEntitlement) return;
+    if (!selectedEntitlement || !selectedRegion) return;
     setAccepted(false);
     const success = await controlPlane.createInstallation({
       id,
       name: name.trim(),
       offeringId: selectedEntitlement.offeringId,
-      quotaEntitlementId: entitlementId,
-      regionId
+      quotaEntitlementId: selectedEntitlement.entitlementId,
+      regionId: selectedRegion.id
     });
     setAccepted(success);
   }
@@ -185,7 +186,8 @@ function InstallationOrder({
             <Input onChange={(event) => { setName(event.target.value); setAccepted(false); }} required value={name} />
           </Field>
           <Field label="配额">
-            <Select onChange={(event) => { setEntitlementId(event.target.value); setAccepted(false); }} value={entitlementId}>
+            <Select onChange={(event) => { setEntitlementId(event.target.value); setAccepted(false); }} required value={selectedEntitlement?.entitlementId ?? ""}>
+              <option disabled value="">请选择可用配额</option>
               {scene.entitlementOptions.map((item) => (
                 <option key={item.entitlementId} value={item.entitlementId}>
                   {item.label} · 可用 {item.available}
@@ -194,7 +196,8 @@ function InstallationOrder({
             </Select>
           </Field>
           <Field label="安装区域">
-            <Select onChange={(event) => { setRegionId(event.target.value); setAccepted(false); }} value={regionId}>
+            <Select onChange={(event) => { setRegionId(event.target.value); setAccepted(false); }} required value={selectedRegion?.id ?? ""}>
+              <option disabled value="">请选择就绪区域</option>
               {scene.regionOptions.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
             </Select>
           </Field>

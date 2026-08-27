@@ -215,6 +215,11 @@ behind its compact-mode overlay. Closing the panel preserves the same notice
 in the main content; reopening it restores the notice in the panel without
 duplicating live alerts. This behavior requires component and real 360-pixel
 installed-release checks, not just a successful backend permission denial.
+Refreshed installation choices must match the IDs that a submit would send.
+When an initially unavailable or previously selected quota/region becomes
+available or invalid, the form must explicitly request a selection rather
+than displaying an option it has not selected or silently changing the target.
+Refreshing these choices preserves the user's instance ID and display name.
 
 ## Public API and authority
 
@@ -268,7 +273,7 @@ checks cover these controls. Source checks or another Phase's browser evidence
 do not accept this extension, and do not replace the installed-release gate.
 
 This branch's adaptation passes type checking, lint, architecture, the 20
-contrast checks, 71 frontend tests, Go embed checks and two bounded,
+contrast checks, 75 frontend tests, Go embed checks and two bounded,
 two-worker production exports matching all 59 embedded files. Adapter and
 component gates cover platform-only navigation, version-bound lifecycle
 requests, original-primary recovery while paused, password clearing on
@@ -281,8 +286,12 @@ behavior regressions fail before these corrections and pass afterward.
 The quota and installation denial regressions additionally prove one live
 notice in the active context panel, preserving it in the main content when
 closed and restoring it when reopened. Both fail with the old main-only notice
-and pass with the renderer correction; its installed-release narrow-screen
-check remains pending until the corrected signed UI is exercised.
+and pass with the renderer correction and installed-release check below.
+Four further regressions cover quota/region choices appearing or becoming
+invalid after refresh: the visible placeholder requires explicit selection,
+invalid choices cannot submit, instance inputs survive, and the submitted IDs
+match the new choices. These fail before the selection correction and pass
+afterward; its signed-runtime refresh check remains pending.
 
 On 2026-08-27 this branch's real APISIX/IAM/Audit/PaaS browser environment
 passes the account/lifecycle path: a platform-only child opens two tenants,
@@ -313,6 +322,46 @@ keyboard tests do not certify that gate. The complete installed-release
 browser gate also remains open. The signed offline profile/lifecycle evidence
 belongs to [FEAT-005](FEAT-005-offline-platform-lifecycle.md); neither changes
 another Phase's acceptance state.
+
+### Installed-release browser evidence
+
+On 2026-08-27 the browser consumes real signed Release A
+`matrix-v0.1.0-b3a6f8145098` after the populated offline lifecycle gate. An
+installation operator opens another tenant through the console. Its original
+primary completes the initial password change, creates a child, assigns a
+fixed tenant role and sets the account alias. That child completes its own
+forced password change. It and the identically named child of the existing
+second tenant sign in through distinct realms and each creates a real
+PostgreSQL 18 installation with the same public resource ID. Each browser
+lists only its tenant's instance. Both independent databases accept SQL and
+retain distinct marker rows under their own bounded workload containers.
+
+Tenant suspension invalidates the child's next protected read without
+stopping either database. Online primary recovery keeps the original USER ID
+and suspended tenant state. Only explicit tenant restoration followed by the
+primary's forced password change restores access; the old password fails and
+no platform role appears. Revoking the child's developer role and retaining
+only the viewer role preserves its permitted reads and refuses writes.
+
+Signed Release C `matrix-v0.3.0-464910f0df23` contains fixed renderer source
+`464910f0df23d79264fb59b35324a915a8a21335`, whose independent Verification
+`33074008639` passes all three jobs. The release is installed through the
+profile-checked upgrade in FEAT-005, not a development-server replacement.
+At measured 360-by-800 CSS pixels, both quota and installation write denials
+are visible inside the open panel; closing and reopening preserves one
+notice, with no horizontal page overflow. The installation denial has an
+available quota and an otherwise valid form, so it is a real authority
+refusal rather than a disabled-input check.
+
+On that signed release, member disable, password reset while disabled,
+explicit enable, rejection of the old password and old session, and forced
+password replacement complete through the browser. The child retains only its
+viewer role. The two database container IDs, start times and SQL marker rows
+remain unchanged across tenant/member lifecycle actions and the UI release
+upgrade. Password changes are performed by the acceptance driver, not left as
+manual work for the user. This is pointer-driven real-browser evidence;
+keyboard-only acceptance remains open and is not inferred from component
+keyboard tests.
 
 ## Incremental acceptance
 

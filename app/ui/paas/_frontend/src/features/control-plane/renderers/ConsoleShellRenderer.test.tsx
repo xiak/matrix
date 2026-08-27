@@ -106,6 +106,72 @@ afterEach(() => {
 
 describe("ConsoleShellRenderer", () => {
   it.each([
+    { missing: "quota", label: "配额", value: "quota-primary" },
+    { missing: "region", label: "安装区域", value: "local-primary" }
+  ] as const)("requires an explicit selection for $missing choices that arrive after reload", async ({ missing, label, value }) => {
+    const load = vi.fn().mockResolvedValue({
+      ...snapshot,
+      ...(missing === "quota" ? { entitlements: [] } : { regions: [] })
+    });
+    const { user, repository } = await renderConsole({ section: "installations", load });
+    expect(screen.queryByRole("button", { name: "提交安装任务" })).toBeNull();
+    load.mockResolvedValue(snapshot);
+    await user.click(screen.getByRole("button", { name: "刷新" }));
+
+    const select = await screen.findByRole("combobox", { name: label }) as HTMLSelectElement;
+    const submit = screen.getByRole("button", { name: "提交安装任务" }) as HTMLButtonElement;
+    expect(select.value).toBe("");
+    expect(submit.disabled).toBe(true);
+    await user.selectOptions(select, value);
+    expect(submit.disabled).toBe(false);
+    vi.mocked(repository.createInstallation).mockRejectedValue(new HttpProblem(403, "DENIED"));
+    await user.click(submit);
+    expect(repository.createInstallation).toHaveBeenCalledWith("renderer-test-memory-only-session", {
+      id: "postgres-primary", name: "postgres-primary", offeringId: "postgresql-18",
+      quotaEntitlementId: "quota-primary", regionId: "local-primary"
+    });
+  });
+
+  it.each([
+    { replaced: "quota", label: "配额", value: "quota-secondary" },
+    { replaced: "region", label: "安装区域", value: "local-secondary" }
+  ] as const)("never silently rebinds a selected $replaced when refreshed choices change", async ({ replaced, label, value }) => {
+    const load = vi.fn().mockResolvedValue(snapshot);
+    const { user, repository } = await renderConsole({ section: "installations", load });
+    await user.clear(await screen.findByLabelText("实例 ID"));
+    await user.type(screen.getByLabelText("实例 ID"), "retained-instance");
+    await user.clear(screen.getByLabelText("显示名称"));
+    await user.type(screen.getByLabelText("显示名称"), "Retained input");
+    load.mockResolvedValue({
+      ...snapshot,
+      ...(replaced === "quota" ? {
+        entitlements: [{ ...snapshot.entitlements[0], id: value }]
+      } : {
+        regions: [{ ...snapshot.regions[0], id: value }]
+      })
+    });
+    await user.click(screen.getByRole("button", { name: "刷新" }));
+
+    const select = screen.getByRole("combobox", { name: label }) as HTMLSelectElement;
+    const submit = screen.getByRole("button", { name: "提交安装任务" }) as HTMLButtonElement;
+    await waitFor(() => expect(select.value).toBe(""));
+    expect(submit.disabled).toBe(true);
+    expect((screen.getByLabelText("实例 ID") as HTMLInputElement).value).toBe("retained-instance");
+    expect((screen.getByLabelText("显示名称") as HTMLInputElement).value).toBe("Retained input");
+    await user.click(submit);
+    expect(repository.createInstallation).not.toHaveBeenCalled();
+    await user.selectOptions(select, value);
+    expect(submit.disabled).toBe(false);
+    vi.mocked(repository.createInstallation).mockRejectedValue(new HttpProblem(403, "DENIED"));
+    await user.click(submit);
+    expect(repository.createInstallation).toHaveBeenCalledWith("renderer-test-memory-only-session", {
+      id: "retained-instance", name: "Retained input", offeringId: "postgresql-18",
+      quotaEntitlementId: replaced === "quota" ? value : "quota-primary",
+      regionId: replaced === "region" ? value : "local-primary"
+    });
+  });
+
+  it.each([
     { section: "quotas", mutation: "activateQuota", heading: "激活服务配额", submit: "确认激活配额", success: "配额已由平台确认" },
     { section: "installations", mutation: "createInstallation", heading: "安装 PostgreSQL", submit: "提交安装任务", success: "安装任务已由平台接受" }
   ] as const)("keeps a denied $section command visible in the active panel without duplicate alerts", async ({ section, mutation, heading, submit, success }) => {

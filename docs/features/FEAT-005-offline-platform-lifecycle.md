@@ -279,6 +279,18 @@ owned by FEAT-007. The gate's negative HTTP client also checks the proper
 `application/problem+json` contract, so expected authentication and access
 denials are not mistaken for malformed success responses.
 
+The installed-browser follow-up also assembles signed Release C
+`matrix-v0.3.0-464910f0df23` from fixed source
+`464910f0df23d79264fb59b35324a915a8a21335`, declaring A as its predecessor and
+the same complete `2/2/1` revision 2 profile. An actual protected backup,
+A-to-C upgrade and subsequent `mx platform verify` succeed on the populated
+owned installation. This particular source change is confined to console
+rendering/tests and embedded assets; it is not evidence for an arbitrary
+schema-changing or cross-profile N-1 upgrade. FEAT-007 owns the installed
+browser and preserved workload observations. The browser's task-owned
+loopback network is attached only after the network-disabled offline gates;
+it is not presented as part of their offline-network proof.
+
 ### Gate A: release and CLI contract
 
 1. Canonical manifest/signature verification rejects byte, path, metadata,
