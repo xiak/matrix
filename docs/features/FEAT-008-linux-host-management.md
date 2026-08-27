@@ -199,12 +199,19 @@ measurements, inode support and bounded failures. The
 passed twice with built executables in an egress-disabled Linux Docker-in-Docker
 fixture: separate collector UID, no-reader refresh, controlled CPU/file activity,
 collector failure/recovery, disconnection, persisted identity and node restart.
+It also passed twice on an authorized native Ubuntu/ZFS host, with all test
+files below the operator-selected experiment directory. The transient service
+was verified active with a one-CPU quota, 512 MiB memory ceiling, private
+network/devices and protected home directories. Existing containers and their
+collector were not changed. Storage assertions follow the experiment's actual
+mount and verify reserve policy against each current capacity sample; shared
+pool capacity is not assumed constant between observations.
 The default Go suite, architecture, vet, module verification, generation drift,
 this slice's race checks and ten repeated runs passed locally. Opt-in database
 and full Phase 1/2/3 release exercises were not implied by that default run.
 
 [Independent CI](../../.github/workflows/verification.yml) reuses these tests.
-The telemetry extension also requires its independent Linux Go/race and
+The final telemetry gate still requires its independent Linux Go/race and
 real node/collector process run; local success does not substitute for it.
 No implementation iteration or complete Phase 3 gate is accepted.
 Next in P3-1: control-plane admission/refresh and signed offline node startup.

@@ -91,13 +91,14 @@ func TestLinuxNodeProcessObservation(t *testing.T) {
 		}
 	}
 	address := unusedLoopbackAddress(t)
+	systemReserve := paasv1.Capacity{MemoryBytes: 256 * 1024 * 1024}
 	configuration, err := json.Marshal(map[string]any{
 		"apiVersion": "node.installation.matrix.xiak.com/v1", "kind": "NodeConfiguration",
 		"identity": nodeIdentity, "controllerId": controllerID, "bindingRef": "binding-a",
 		"expectedFingerprint": fingerprint, "listenAddress": address, "storagePath": root,
 		"collectorEndpoint": "https://" + collectorAddress,
 		"certificateFile":   certificatePath, "privateKeyFile": keyPath, "trustFile": trustPath,
-		"systemReserve": paasv1.Capacity{MemoryBytes: 256 * 1024 * 1024},
+		"systemReserve": systemReserve,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -117,7 +118,7 @@ func TestLinuxNodeProcessObservation(t *testing.T) {
 	stop := startAgentProcess(t, binary, configurationPath)
 	first := awaitObservation(t, client, time.Time{}, paasv1.MeasurementAvailable)
 	if first.Health != paasv1.ExecutionTargetHealthReady || first.Capacity.MemoryBytes != int64(facts.MemoryTotalBytes) ||
-		first.Allocatable.MemoryBytes != first.Capacity.MemoryBytes-256*1024*1024 {
+		first.Allocatable.MemoryBytes != first.Capacity.MemoryBytes-systemReserve.MemoryBytes {
 		t.Fatal("real node did not report its OS capacity and installation reserve")
 	}
 	// No observer is connected during this interval; the resident sampler must
@@ -181,9 +182,16 @@ func TestLinuxNodeProcessObservation(t *testing.T) {
 	}
 	stopCollector()
 	unavailable := awaitObservation(t, client, activitySample.ObservedAt, paasv1.MeasurementUnavailable)
-	if unavailable.Health != paasv1.ExecutionTargetHealthReady || unavailable.Allocatable != second.Allocatable ||
+	// Shared storage pools can change reported capacity between observations.
+	// The invariant is reserve policy against this sample, not a frozen capacity.
+	expectedAllocatable := unavailable.Capacity
+	expectedAllocatable.MemoryBytes -= systemReserve.MemoryBytes
+	if unavailable.Health != paasv1.ExecutionTargetHealthReady || unavailable.Allocatable != expectedAllocatable ||
 		unavailable.Usage.Memory.Value != nil || unavailable.Usage.CPU.Value != nil {
-		t.Fatal("collector failure changed placement capacity or fabricated usage")
+		t.Fatalf("collector outage: health=%s capacity=%+v allocatable=%+v expected=%+v cpu=%s/%t memory=%s/%t",
+			unavailable.Health, unavailable.Capacity, unavailable.Allocatable, expectedAllocatable,
+			unavailable.Usage.CPU.State, unavailable.Usage.CPU.Value != nil,
+			unavailable.Usage.Memory.State, unavailable.Usage.Memory.Value != nil)
 	}
 	stopCollector = startCollectorProcess(t, collectorAddress, collectorDirectory, root)
 	recovered := awaitObservation(t, client, unavailable.ObservedAt, paasv1.MeasurementAvailable)
