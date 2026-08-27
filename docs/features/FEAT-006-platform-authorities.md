@@ -6,6 +6,7 @@
 - IAM API contract: `iam.matrix.xiak.com/v1`
 - Audit API contract: `audit.matrix.xiak.com/v1`
 - Phase 3 extension: installation-scoped IAM authority implemented; host-resource consumption and offline upgrade acceptance remain in FEAT-008
+- Multi-tenant extension: target and acceptance defined; implementation and acceptance pending integration ownership
 
 ## Outcome
 
@@ -268,6 +269,184 @@ schema compatibility and the service's own invariants. It is not a health-only
 placeholder and does not claim downstream PaaS success.
 
 ## Incremental acceptance
+
+### Multi-tenant extension target
+
+The accepted Phase 1 evidence below does not accept tenant lifecycle or a
+multi-tenant installation. This extension keeps `iam` as the existing owner;
+it does not introduce an Account service, a second tenant aggregate, or a
+public-cloud IAM platform. Its smallest enterprise outcome is an operator
+opening a tenant, that tenant's administrator managing independently
+credentialed members, and those members using only their authorized tenant
+resources through real IAM, PaaS, Audit, and the existing console.
+
+The application workflows and transactions remain in `identityaccess`, pure
+credential/role rules in `authority`, database enforcement in the existing
+IAM PostgreSQL adapter, and HTTP contracts in `api/iam/v1`. Cross-service
+authorization and Audit ingestion use the existing service-owned HTTP ports;
+no service reads another context's tables. Each security mutation and its
+sanitized fact commit together through the existing IAM outbox.
+
+| Boundary | Required invariant |
+| --- | --- |
+| Resource ownership | `Organization.ID` is `TenantID`. Applications, service installations, quota entitlements, Operations, and tenant Audit records belong to that tenant, not their creator. Disabling a member cannot transfer or delete them. |
+| Membership | A member is a `USER` principal with independent credentials and tenant-local built-in role bindings, not a child tenant. A service identity cannot log in as a user or receive user/platform roles through member management. |
+| Login realm | The pre-authentication realm resolves exactly one immutable organization. `(tenant, loginName)` is unique; the same login name in two tenants is supported. There is no ambiguous cross-tenant fallback, public realm/member discovery, or realm switch inside an existing session. Reuse the console owner's qualified `loginName` namespace rather than add a second realm protocol; any retained unqualified installation login is a lookup rule, not privileged authority. |
+| Business authority | Every protected request reloads current IAM identity and role state. Headers, resource IDs, URLs, bodies, and cursors never replace IAM-derived tenant authority. A platform tenant ID is a management target, never an impersonation selector. |
+| Platform separation | `PLATFORM_OPERATOR` manages tenant lifecycle through explicit platform actions, without generic tenant application, Secret, Audit-read, or terminal access. `ORGANIZATION_ADMIN` manages only its tenant's members and tenant roles and cannot grant a platform role. New-tenant initialization grants only its initial organization administrator; it never calls installation bootstrap. |
+| Service production | A service's installation binding, producer purpose, and permission to target a tenant are separate facts. Multi-tenant ingestion requires a positive IAM-owned target-tenant/installation check as well as the existing closed source/action checks; removing the producer-tenant equality check alone is forbidden. |
+| Suspension | Member or tenant suspension freezes subsequent protected access and new changes, not data or running workloads. Restoration does not regrant revoked roles or resurrect revoked sessions. Accepted durable Operations and outbox deliveries may finish; the extension does not claim cancellation of already accepted work or instantaneous termination of open streams. New requests fail closed during IAM uncertainty. |
+
+Unauthenticated unknown realm, unknown member, disabled tenant/member, and
+wrong-password cases must have the same normalized authentication failure and
+bounded password-verification work. Passwords, temporary credentials, realm
+existence hints, and native errors cannot enter responses, logs, Audit facts,
+or ordinary JSON marshaling. Strict contract validation remains separate from
+authentication failure. The installer, console login, password-change, logout,
+and protected bootstrap-file retirement must use the same realm semantics.
+
+Tenant administrators can create/list/read members, suspend/restore them, and
+grant/revoke the closed tenant roles. Member reads and binding lists are
+bounded and tenant-confined; no admin API exposes credential digests or
+plaintext. The last usable administrator is protected against both member
+suspension and role revocation, including concurrent requests. An ordinary
+handoff first establishes and verifies another independently credentialed
+administrator before removing the predecessor. Credential recovery is an
+explicit, auditable workflow with fresh temporary credentials, required
+password change, and revocation of prior sessions; it is not bootstrap replay,
+a direct SQL repair, or a hidden generic impersonation capability. Any new
+platform recovery authority and protection of the installation's own authority
+realm require an agreed contract before implementation.
+
+Installation-scoped Audit partitioning remains the FEAT-008 owner's shared
+implementation. Tenant lifecycle facts use that agreed platform scope;
+tenant member/role/session facts stay in the tenant chain. The extension must
+preserve existing canonical bytes, `(source,eventId)` replay classification,
+immutable records, sequence/hash chains, and delayed outbox delivery after a
+tenant is suspended. Historical accepted facts are not reauthorized as new
+tenant mutations when replayed. Installation identity alone must not permit
+forging another installation's tenant or inventing a tenant.
+
+The producer proof extends the one existing `/v1/audit-producer:resolve`
+endpoint. Its input is the exact closed Audit event, not an independently
+selected tenant/source/purpose. Its output binds the current producer,
+validated tenant-or-installation scope, and the existing canonical event
+content digest to this append only. It is never cached as a permit or exposed
+as user resource/read authority. IAM-source facts must exactly match IAM's
+own committed outbox document, including denied decisions, bootstrap,
+session, and password facts that have no allowed business decision.
+
+For PaaS/Audit sources, an immutable original decision proves historical
+authority, actor, action, request, and scope. The event and decision must have
+the same actor and request correlation; the current producer purpose and
+installation must match the source and original authority. The mapping is
+closed, with no action-prefix fallback:
+
+| Audit event | Original IAM decision | Resource constraint |
+| --- | --- | --- |
+| `paas.application.created` | `paas.application.create` | `APPLICATION`, `collection` |
+| `paas.configuration.created` | `paas.configuration.create` | `CONFIGURATION`, `collection` |
+| `paas.configuration-revision.created` | `paas.configuration-revision.create` | `CONFIGURATION_REVISION`, `collection` |
+| `paas.application-revision.created` | `paas.application-revision.create` | `APPLICATION_REVISION`, `collection` |
+| `paas.deployment.created` | `paas.deployment.create` | `DEPLOYMENT`, `collection` |
+| `paas.deployment.updated` | `paas.deployment.update` | `DEPLOYMENT`, exact event target ID |
+| `paas.deployment.stopped` | `paas.deployment.stop` | `DEPLOYMENT`, exact event target ID |
+| `paas.deployment.rolled-back` | `paas.deployment.rollback` | `DEPLOYMENT`, exact event target ID |
+| `managedservice.quota-entitlement.activated` | `managedservice.quota-entitlement.activate` | `QUOTA_ENTITLEMENT`, `collection` |
+| `managedservice.service-installation.created` | `managedservice.service-installation.create` | `SERVICE_INSTALLATION`, `collection` |
+| `managedservice.service-installation.ready` | Original `managedservice.service-installation.create` | Retained create decision; the producing worker/outbox owns final target/Operation correlation |
+| `audit.records.read` | `audit.record.read` | `AUDIT_RECORD`, `records` |
+| `audit.integrity.verified` | `audit.integrity.verify` | `AUDIT_CHAIN`, `chain` |
+
+The existing fixed installation verifier is a separate closed exception:
+`installation.verify` must name the sealed installation and its original
+verifier service actor, not any service principal. Its PaaS facts are limited
+to fixed-probe application/configuration/revision creation and Deployment
+create/update; its Audit integrity fact targets `installation-verification`.
+It cannot authorize managed-service quota/purchase, arbitrary user resource
+mutations, another tenant, or another installation. The fixed-probe owner
+continues to enforce its process-owned resources and payloads.
+
+An original collection-create decision does not contain the final resource
+ID, Operation ID, or business request digest. This proof therefore does not
+claim independent proof of a specific committed business payload: the source
+context's existing transaction/outbox still owns that fact. No generic
+receipt framework or cross-service payload lookup is added. Negative gates
+must substitute tenant/installation, actor, decision, request, action, exact
+resource target, event digest, and producer purpose independently; absent or
+uncertain evidence fails closed. Historical user/session/role revocation or
+tenant suspension cannot invalidate a previously committed fact, while the
+producer credential itself must still be current and effective. Canonical
+encoding/hash computation has one public Audit contract owner, never a copy
+inside IAM or an import of Audit's internal implementation.
+
+Tenant deletion/data destruction, billing, organization trees, custom roles or
+policy DSL, SSO/multiple identity providers, and cross-organization people are
+excluded. Host observation, execution-pool/target implementation, platform
+Operations, terminals, and general installation Audit are not reimplemented
+here. No real-time stream revocation or public-cloud isolation claim is made.
+
+### Multi-tenant vertical gates (not yet accepted)
+
+Existing owners are extended rather than adding a parallel test framework.
+Contract/unit/architecture/security checks precede each focused PostgreSQL
+gate; the existing independent authority-process gate proves cross-service
+behavior at each backend milestone, followed by the console and offline
+lifecycle gates where their contracts change.
+
+1. **Tenant opening and authentication.** A real platform operator creates two
+   independent tenants and their initial administrators without rerunning
+   bootstrap or gaining tenant roles. Platform list/detail and suspend/restore
+   work; tenant administrators and ordinary members cannot invoke them.
+   Both tenants contain an administrator and ordinary member with matching
+   login names. Correct realm/password login, initial password change, logout,
+   bad/unknown/disabled realm/member failures, and unavailable IAM are proven
+   through real HTTP. Tenant suspension affects the next protected request
+   across IAM, PaaS, and Audit. The installation authority/service credentials
+   cannot be accidentally disabled by suspending an ordinary tenant.
+2. **Member and administrator lifecycle.** In each tenant, the administrator
+   lists/reads/creates/suspends/restores members and grants/revokes permitted
+   built-in roles. Next-request member, role, session, password-reset, and
+   tenant revocation behavior is tested. Cross-tenant member/binding/session
+   IDs, cursor reuse, service-principal substitution, platform self-grant,
+   revoked-binding replay, and concurrent removal of the final administrator
+   fail safely. A tested handoff and explicitly authorized recovery preserve
+   an independent administrator and produce correlated sanitized facts.
+3. **Resource and Audit isolation.** Both tenants create/read their own
+   applications, database/service installations, quota entitlements, and
+   Operations. Cross-tenant resource IDs, filters, headers, bodies, cursors,
+   and roles never expose or mutate the other tenant. Disabling a creator or
+   tenant preserves tenant ownership and existing workloads. Separately
+   running IAM, Audit, PaaS, and dispatchers deliver each accepted mutation's
+   tenant/actor/decision correlation through real PG18. Delayed delivery,
+   exact replay, changed replay, unknown/wrong-installation tenant, wrong
+   producer purpose, and IAM outage are covered without weakening immutable
+   Audit chains or allowing platform operators to read tenant data.
+4. **Restart, single-tenant upgrade, and rollback.** The existing offline
+   lifecycle owner upgrades an actual populated single-tenant installation,
+   not only a fresh schema. Credentials, resources, Audit chains, and revoked
+   identities/roles/sessions survive equal bootstrap and migration replay plus
+   process restart. A verified rollback either preserves the supported
+   contract or explicitly refuses an unsafe downgrade before modifying data;
+   it must never revive credentials, discard a second tenant, or rewrite Audit
+   history. The release topology's realm-aware clients must work through
+   APISIX after upgrade and protected-backup recovery.
+5. **Operable console.** Reuse the accepted control-plane components and
+   navigation. In this task's isolated environment, a real browser opens a
+   tenant as platform operator, manages members as tenant administrator,
+   logs in as members in both realms, and sees only permitted resources.
+   Reload/logout and forbidden/stale-session responses are exercised; a mock,
+   empty screen, health response, or component test does not accept this gate.
+
+At baseline `9fd45b0`, login accepts no realm and `iam.login_index` is globally
+keyed by login name; there are no tenant opening/status or member-query/status
+HTTP workflows. Audit ingestion confines a producer to its home organization.
+The existing process gate proves a single bootstrap tenant plus isolation
+attacks, not two independently provisioned tenants. These are gaps, not
+accepted multi-tenant behavior. The existing console owner's overlapping
+tenant/account work and the installation Audit owner's shared contracts must
+have explicit implementation ownership and verified fixed commits before
+integration; uncommitted work is not a donor or acceptance evidence.
 
 ### Gate A: contracts, domain, and database authority
 

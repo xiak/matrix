@@ -12,6 +12,8 @@
 | Legacy PaaS | `69336e51f94fa98f6aa278fa4c62382e224dbeaf` | Read only through Git object commands; exclude its worktree. |
 | IAM/Audit foundation donor | `f51d5ed19fd60e8c4e43500af5e669d67ae4ef7d` | Read only through Git object commands; exclude its worktree. |
 | PaaS design | `338d9b5fcb820120c32265e380c55e5f171cdb75` | Read only through Git object commands; use as rationale, not executable evidence. |
+| Matrix platform-authority baseline | `9fd45b03ea398828fa3e74bf99961d2348c68299` | Existing target implementation; preserve its accepted installation/tenant authority separation. |
+| Matrix Phase 2 tenant/account slice | `6a0f417743948a5303d3a3342cb1e8902c9d17f2` | Same-repository fixed functional patch; selective adaptation only, excluding its task checkpoint and other branch state. |
 
 The independent authority target, closed Phase 1 roles and actions, bootstrap
 contract, opaque credentials, Audit event union, indefinite retention, and
@@ -73,6 +75,21 @@ projection release roadmap, embedded legacy evidence graph, and expectation
 that already-existing IAM/Audit services can be reused are `REJECT`: this
 repository must deliver the two real authorities inside its own offline
 release.
+
+## Multi-tenant fixed-slice comparison
+
+The multi-tenant target in FEAT-006 precedes the following focused recheck.
+The new Matrix source is not a legacy dependency and is not adopted as an
+entire moving branch.
+
+| Fixed slice | Decision | Rationale |
+| --- | --- | --- |
+| Matrix `9fd45b0` IAM decisions, current-credential checks, platform-role guards, outboxes, and existing authority-process gate | `REUSE` | They own the current security boundaries and behavioral test harness. Tenant work must preserve platform actions and their restart/revocation regression. |
+| Matrix `6a0f417` qualified login, alias reservation, tenant opening, member/query/password-reset workflows, and account-access console | `ADAPT` | Reuse the implemented tenant-local credential and member paths. Replace exact-bootstrap-only platform permission and the untransferable-primary guard with the agreed platform-role and effective-administrator invariants; do not create a second realm/member UI or a new tenant resource identity. |
+| Matrix `6a0f417` producer-resolution endpoint | `ADAPT` | Keep one append-only endpoint and its authenticated producer identity. Registered-tenant membership alone is insufficient: add immutable IAM fact or historical decision evidence without reevaluating the original user's current authority. |
+| Matrix `6a0f417` changes to `000002_managedservice_actions` | `REJECT` | The target's existing `000001` already owns these actions plus the accepted platform actions. Restoring a second overriding catalog would remove platform authority; the distinct `000003_tenant_accounts` storage slice can be adapted independently. |
+| Legacy `69336e51` `checkaccess/trustedsession/resolver.go` and `checkaccess/domain/evaluation_source_validation.go` | `REFERENCE` for lineage attacks; `REJECT` as code | The trusted actor/service lineage and exact applicable-source checks inform substituted-tenant/decision tests. Embedded context injection, policy/evidence graphs, grant snapshots, and delegation modes are not the target HTTP authority proof. |
+| Legacy `69336e51` `authsession/contract/authorization_basis.go` | `REFERENCE` for explicit recovery authority; `REJECT` as code | Recovery cannot be an implicit ordinary session privilege. Its delegated-support/break-glass ownership graph is not required for the target's auditable tenant-administrator recovery and must not enter this implementation. |
 
 ## Resulting implementation constraints
 
