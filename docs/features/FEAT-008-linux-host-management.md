@@ -158,9 +158,12 @@ The signed release manifest names IAM, Audit and PaaS schema versions
 individually. New bundles use manifest v2 and the closed authority profile;
 the current source requires IAM 2, Audit 2 and PaaS 2. A separate contract
 revision binds the compatible function/wire boundary: changing a return-column
-shape without changing schema numbers still changes this profile. Its initial
-revision covers the event-bound producer proof and host admission, before the
-pending tenant-lifecycle integration. The published Phase 1 v1 manifest and
+shape without changing schema numbers still changes this profile. Revision 1
+covers the event-bound producer proof and host admission. Revision 2 is reserved
+for the pending tenant-lifecycle integration, including the seven-column IAM
+Audit claim contract; adoption must verify that exact shape. Equal revisions
+with different authority schema tuples still cannot admit a transition.
+The published Phase 1 v1 manifest and
 sealed backup formats remain verifiable without changing their bytes; this is
 not admission of an older platform topology or implicit platform permissions.
 Their former single schema number is not evidence that a newer authority can
