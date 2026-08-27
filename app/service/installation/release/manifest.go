@@ -5,11 +5,14 @@ package release
 import "time"
 
 const (
-	ManifestAPIVersion = "installation.matrix.xiak.com/v1"
-	ManifestKind       = "OfflineRelease"
-	TrustAPIVersion    = "installation.matrix.xiak.com/v1"
-	TrustKind          = "ReleaseTrustRoot"
-	SignatureAlgorithm = "Ed25519"
+	ManifestAPIVersion = "installation.matrix.xiak.com/v2"
+	// LegacyManifestAPIVersion is the published Phase 1 signed format. Its
+	// canonical bytes remain valid, but its scalar is not a new schema profile.
+	LegacyManifestAPIVersion = "installation.matrix.xiak.com/v1"
+	ManifestKind             = "OfflineRelease"
+	TrustAPIVersion          = "installation.matrix.xiak.com/v1"
+	TrustKind                = "ReleaseTrustRoot"
+	SignatureAlgorithm       = "Ed25519"
 
 	BuiltImageLabelReleaseBuild = "com.xiak.matrix.release-build"
 	BuiltImageLabelComponent    = "com.xiak.matrix.component"
@@ -54,8 +57,30 @@ type HostProfile struct {
 }
 
 type DatabaseProfile struct {
-	SchemaVersion uint64 `json:"schemaVersion"`
-	Compatibility string `json:"compatibility"`
+	SchemaVersion    uint64           `json:"schemaVersion,omitempty"`
+	Compatibility    string           `json:"compatibility"`
+	Authorities      AuthoritySchemas `json:"authorities,omitzero"`
+	ContractRevision uint64           `json:"contractRevision,omitempty"`
+}
+
+// AuthoritySchemas keeps the independently owned databases explicit. It is
+// not a promise that a binary can use another version's schema or functions.
+type AuthoritySchemas struct {
+	IAM   uint64 `json:"iam"`
+	Audit uint64 `json:"audit"`
+	PaaS  uint64 `json:"paas"`
+}
+
+// CurrentDatabaseProfile is the release composition supported by this source.
+// Cross-profile upgrades need a separately proven retained-data/N-1 path.
+// ContractRevision changes for incompatible function/wire contracts even when
+// their owning services retain the same schema-version numbers.
+func CurrentDatabaseProfile() DatabaseProfile {
+	return DatabaseProfile{
+		Compatibility:    "identical-authority-profile",
+		Authorities:      AuthoritySchemas{IAM: 2, Audit: 2, PaaS: 2},
+		ContractRevision: 1,
+	}
 }
 
 type File struct {

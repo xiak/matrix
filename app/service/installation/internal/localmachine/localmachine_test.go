@@ -4,7 +4,10 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -734,7 +737,7 @@ func TestCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T) {
 		source.BackupID != request.BackupID || !validSHA256(source.BackupDigest) ||
 		source.ReleaseID != plan.Bundle.Manifest.Release.ID ||
 		source.ReleaseDigest != plan.Bundle.ManifestSHA256 ||
-		source.SchemaVersion != plan.Bundle.Manifest.Database.SchemaVersion {
+		source.Database != plan.Bundle.Manifest.Database {
 		t.Fatalf("authenticated recovery source = %#v / %v", source, err)
 	}
 	foreign := request.InstalledPlan
@@ -769,6 +772,18 @@ func TestCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T) {
 	}
 	if runtimeBoundary.backupStreams != streams {
 		t.Fatal("backup replay streamed a second database snapshot")
+	}
+	for _, scalar := range []string{"0", "null"} {
+		ambiguous := append([]byte(`{"schemaVersion":`+scalar+`,`), manifestContent[1:]...)
+		if err := os.WriteFile(filepath.Join(backupRoot, backupManifestFilename), ambiguous, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := effects.InspectBackup(context.Background(), request.InstalledPlan, request.BackupID); !errors.Is(err, platformcommand.ErrEffectVerification) {
+			t.Fatal("v2 backup accepted an empty legacy schema selector without changing its seal")
+		}
+	}
+	if err := os.WriteFile(filepath.Join(backupRoot, backupManifestFilename), manifestContent, 0o600); err != nil {
+		t.Fatal(err)
 	}
 
 	dumpPath := filepath.Join(backupRoot, databaseDumpFilename)
@@ -875,6 +890,98 @@ func TestRecoverBackupRestoresSelectedSnapshotAndConvergesTarget(t *testing.T) {
 	}
 }
 
+func TestPublishedBackupSealRemainsReadableAndProfileCannotBeSubstituted(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine backup effects target Linux")
+	}
+	legacy := release.DatabaseProfile{SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one"}
+	plan, expectation := configuredPlatformStartFixture(t, legacy)
+	runtimeBoundary := newPlatformStartRuntime(plan, expectation)
+	runtimeBoundary.started = true
+	effects := &Effects{runtime: runtimeBoundary, entropy: rand.Reader, verifier: &recordingInstallationVerifier{}}
+	request := platformcommand.BackupPlan{
+		InstalledPlan: installedPlanFrom(plan), BackupID: "backup-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		CreatedAt: time.Date(2026, 8, 26, 5, 0, 0, 0, time.UTC),
+	}
+	if err := effects.CreateBackup(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	backupPath := filepath.Join(plan.Root, filepath.FromSlash(layout.BackupDirectory), request.BackupID, backupManifestFilename)
+	content, err := os.ReadFile(backupPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest backupManifest
+	if err := json.Unmarshal(content, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifest.APIVersion, manifest.SchemaVersion, manifest.Database = legacyBackupAPIVersion, 1, release.DatabaseProfile{}
+	key, err := loadBackupSealKey(plan.Root, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(key)
+	artifacts, err := json.Marshal(manifest.Artifacts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Freeze the published v1 HMAC input independently of the new Go struct.
+	canonical := []byte(fmt.Sprintf(`{"apiVersion":"installation.matrix.xiak.com/v1","kind":"PlatformBackup","backupId":%q,"installationId":%q,"releaseId":%q,"releaseDigest":%q,"schemaVersion":1,"createdAt":"2026-08-26T05:00:00Z","artifacts":%s}`,
+		manifest.BackupID, manifest.InstallationID, manifest.ReleaseID, manifest.ReleaseDigest, artifacts))
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write([]byte("matrix-platform-backup-v1\x00"))
+	_, _ = mac.Write(canonical)
+	sealed := append(append([]byte(nil), canonical[:len(canonical)-1]...),
+		[]byte(fmt.Sprintf(`,"seal":{"algorithm":"HMAC-SHA256","keyId":"installation-backup-v1","value":"sha256:%s"}}`+"\n", hex.EncodeToString(mac.Sum(nil))))...)
+	roundTrip, err := sealBackupManifest(manifest, key)
+	if err != nil || !bytes.Equal(roundTrip, sealed) {
+		t.Fatalf("published backup seal changed: %v", err)
+	}
+	if err := os.WriteFile(backupPath, sealed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source, err := effects.InspectBackup(context.Background(), request.InstalledPlan, request.BackupID)
+	if err != nil || source.Database != legacy {
+		t.Fatalf("read published backup: %#v / %v", source.Database, err)
+	}
+	if err := effects.CreateBackup(context.Background(), request); err != nil {
+		t.Fatalf("replay published backup: %v", err)
+	}
+	retained, err := os.ReadFile(backupPath)
+	if err != nil || !bytes.Equal(retained, sealed) {
+		t.Fatal("legacy backup replay rewrote its sealed bytes")
+	}
+
+	manifest.APIVersion, manifest.SchemaVersion, manifest.Database = backupAPIVersion, 0, release.CurrentDatabaseProfile()
+	substituted, err := sealBackupManifest(manifest, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(backupPath, substituted, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := effects.InspectBackup(context.Background(), request.InstalledPlan, request.BackupID); !errors.Is(err, platformcommand.ErrEffectVerification) {
+		t.Fatalf("validly sealed different profile masked the backup release: %v", err)
+	}
+}
+
+func TestBackupProfileRejectsMissingAndAmbiguousVersions(t *testing.T) {
+	for _, manifest := range []backupManifest{
+		{APIVersion: backupAPIVersion},
+		{APIVersion: legacyBackupAPIVersion},
+		{APIVersion: legacyBackupAPIVersion, SchemaVersion: 1, Database: release.CurrentDatabaseProfile()},
+		{APIVersion: backupAPIVersion, SchemaVersion: 1, Database: release.CurrentDatabaseProfile()},
+		{APIVersion: "installation.matrix.xiak.com/v3", Database: release.CurrentDatabaseProfile()},
+	} {
+		if _, err := manifest.databaseProfile(); err == nil {
+			t.Fatal("ambiguous backup profile accepted")
+		}
+		if _, err := sealBackupManifest(manifest, bytes.Repeat([]byte{1}, sha256.Size)); err == nil {
+			t.Fatal("ambiguous backup profile was sealed")
+		}
+	}
+}
+
 func TestSupportEvidenceIsBoundedSanitizedAndUsefulWhenDegraded(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("local-machine support effects target Linux")
@@ -926,7 +1033,7 @@ func TestSupportEvidenceIsBoundedSanitizedAndUsefulWhenDegraded(t *testing.T) {
 	var healthy supportEvidence
 	if json.Unmarshal(content, &healthy) != nil || healthy.State != supportStateReady ||
 		healthy.ReleaseDigest != plan.Bundle.ManifestSHA256 ||
-		healthy.DatabaseSchemaVersion != plan.Bundle.Manifest.Database.SchemaVersion ||
+		healthy.Database != plan.Bundle.Manifest.Database ||
 		len(healthy.Components) != len(expectation.Services) ||
 		len(healthy.Images) != len(plan.Bundle.Manifest.Images) {
 		t.Fatalf("healthy support evidence = %#v", healthy)
@@ -1108,9 +1215,10 @@ func TestUpgradeProjectClassificationRejectsMixedReleaseOwnership(t *testing.T) 
 
 func configuredPlatformStartFixture(
 	t *testing.T,
+	profiles ...release.DatabaseProfile,
 ) (platformcommand.InstallPlan, platformComposeExpectation) {
 	t.Helper()
-	plan := newInstallPlan(t)
+	plan := newInstallPlan(t, profiles...)
 	if err := stageInstallation(plan, rand.Reader); err != nil {
 		t.Fatalf("stage installation: %v", err)
 	}
@@ -1232,12 +1340,13 @@ func TestGeneratedCredentialKindsCannotBeSubstituted(t *testing.T) {
 	}
 }
 
-func newInstallPlan(t *testing.T) platformcommand.InstallPlan {
+func newInstallPlan(t *testing.T, profiles ...release.DatabaseProfile) platformcommand.InstallPlan {
 	t.Helper()
-	fixture, err := releasetest.Write(t.TempDir())
+	fixtures, err := releasetest.WriteSequence(t.TempDir(), 1, profiles...)
 	if err != nil {
 		t.Fatalf("write release fixture: %v", err)
 	}
+	fixture := fixtures[0]
 	trustBytes, err := os.ReadFile(fixture.TrustPath)
 	if err != nil {
 		t.Fatalf("read release trust: %v", err)

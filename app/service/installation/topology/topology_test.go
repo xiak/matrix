@@ -443,10 +443,8 @@ func topologyManifest() release.Manifest {
 			MinimumCompose: "2.40.0", CommandContract: "v1",
 		},
 		MinimumFreeBytes: 1 << 30,
-		Database: release.DatabaseProfile{
-			SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one",
-		},
-		TopologyDigest: ContractDigest(), Files: files, Images: images,
+		Database:         release.CurrentDatabaseProfile(),
+		TopologyDigest:   ContractDigest(), Files: files, Images: images,
 	}
 }
 

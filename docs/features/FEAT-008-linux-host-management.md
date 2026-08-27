@@ -154,6 +154,24 @@ Operations have distinct lifecycles.
 
 ### Offline lifecycle
 
+The signed release manifest names IAM, Audit and PaaS schema versions
+individually. New bundles use manifest v2 and the closed authority profile;
+the current source requires IAM 2, Audit 2 and PaaS 2. A separate contract
+revision binds the compatible function/wire boundary: changing a return-column
+shape without changing schema numbers still changes this profile. Its initial
+revision covers the event-bound producer proof and host admission, before the
+pending tenant-lifecycle integration. The published Phase 1 v1 manifest and
+sealed backup formats remain verifiable without changing their bytes; this is
+not admission of an older platform topology or implicit platform permissions.
+Their former single schema number is not evidence that a newer authority can
+run after rollback. Upgrade and data-preserving rollback initially admit only
+identical complete database profiles; a different profile is rejected before
+backup, migration, process replacement or journal advancement. Admitting a
+future cross-profile transition requires its retained-data and actual N-1
+runtime gates, not an increasing version number. Backup/recovery and sanitized
+support carry the same complete profile. This admission rule does not by itself
+prove an offline release compatible or accepted.
+
 Authenticate signed executable/collector/image payloads and protocol
 compatibility before effects. Stage, verify images/ownership, start supervised
 processes, verify real behavior, then commit the release. Replay/restart
@@ -293,12 +311,35 @@ node/collector process jobs.
 The fixed account/historical-producer-proof integration has passed this
 branch's host admission regression; its authority evidence is owned by
 [FEAT-006](FEAT-006-platform-authorities.md).
+
+The release builder now emits the explicit authority profile and contract
+revision. Existing [lifecycle gates](../../app/service/installation/internal/platformcommand/backend_test.go)
+prove rejection of an unproved profile before any effect or journal change,
+including equal schema numbers with a different contract revision and an
+incompatible predecessor already present in sealed state. An actual `mx` built
+from the published `c88a84f` source authenticated the v1 format and rejected v2
+before effects in an egress-disabled Linux fixture. This does not demonstrate
+that the older executable can run the current platform topology.
+The existing [backup/recovery gates](../../app/service/installation/internal/localmachine/localmachine_test.go)
+proved unchanged v1 canonical seals, no rewrite on replay, complete profile
+binding, rejection of substituted profiles and zero/null legacy selectors,
+and retained sanitized support behavior. The real PostgreSQL 18 five-process
+gate checks each authority's HTTP schema version against the release profile,
+alongside the existing host, tenant-isolation and runtime-login assertions.
+The process fixture ran on its own internal bridge without published ports;
+its process and database containers each had a verified one-CPU ceiling and
+bounded memory/PIDs. Release, lifecycle and local-machine tests passed ten
+repetitions in network-disabled Linux containers. Full Go race/vet, Linux
+builds/vet, module verification and stable generation passed. These tests
+establish admission and format boundaries, not a signed offline release or
+runnable cross-profile N-1 compatibility.
+
 Next in P3-1: signed offline node startup and explicit platform authorization
 when upgrading an older installation.
 P3-1 and the complete Phase 3 release remain unaccepted.
 Retained-data schema migration alone does not establish runnable N-1
-compatibility; the release's schema profile and rollback admission still need
-the complete offline lifecycle gate.
+compatibility; the complete offline lifecycle gate must still prove an actual
+signed release pair against retained state.
 
 ## Adoption
 

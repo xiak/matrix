@@ -31,6 +31,7 @@ import (
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	auditmigration "github.com/xiak/matrix/app/service/audit/migration"
 	iammigration "github.com/xiak/matrix/app/service/iam/migration"
+	installationrelease "github.com/xiak/matrix/app/service/installation/release"
 	paasmigration "github.com/xiak/matrix/app/service/paas/migration"
 )
 
@@ -490,6 +491,25 @@ func runAuthorityProcesses(t *testing.T, dsnVariable string, nodeFixture func(*t
 	assertIAMEventsStoredOnce(t, ctx, admin)
 	paasProcess := start(binaries.paas, paasEnvironment)
 	waitHTTPStatus(t, ctx, paasProcess, paasEndpoint+"/ready", http.StatusOK)
+	profile := installationrelease.CurrentDatabaseProfile().Authorities
+	for _, authority := range []struct {
+		name, endpoint string
+		version        uint64
+	}{
+		{"IAM", iamEndpoint, profile.IAM},
+		{"Audit", auditEndpoint, profile.Audit},
+		{"PaaS", paasEndpoint, profile.PaaS},
+	} {
+		response := performJSON(t, http.MethodGet, authority.endpoint+"/ready", "", nil)
+		var readiness struct {
+			SchemaVersion uint64 `json:"schemaVersion"`
+		}
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &readiness) != nil ||
+			readiness.SchemaVersion != authority.version {
+			t.Fatalf("%s runtime schema=%d does not match release profile=%d (status=%d)",
+				authority.name, readiness.SchemaVersion, authority.version, response.Status)
+		}
+	}
 	paasDispatcher := start(
 		binaries.paasDispatcher,
 		paasDispatcherEnvironment(paasCredentialPath, "paas-audit-worker-a"),

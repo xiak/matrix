@@ -142,7 +142,8 @@ func recoverBackup(
 		}
 		return errors.Join(platformcommand.ErrEffectConflict, err)
 	}
-	if manifest.SchemaVersion != target.Bundle.Manifest.Database.SchemaVersion {
+	profile, profileErr := manifest.databaseProfile()
+	if profileErr != nil || profile != target.Bundle.Manifest.Database {
 		return errors.Join(
 			platformcommand.ErrEffectVerification,
 			errors.New("recovery schema identity changed"),
@@ -644,10 +645,11 @@ func authenticateRecoveryPlan(
 	manifest, digest, err := readVerifiedBackupDirectory(
 		plan.Current.Root, plan.Current.InstallationID, plan.BackupID, relative, key,
 	)
-	if err != nil || digest != plan.BackupDigest ||
+	profile, profileErr := manifest.databaseProfile()
+	if err != nil || profileErr != nil || digest != plan.BackupDigest ||
 		manifest.ReleaseID != target.Bundle.Manifest.Release.ID ||
 		manifest.ReleaseDigest != target.Bundle.ManifestSHA256 ||
-		manifest.SchemaVersion != target.Bundle.Manifest.Database.SchemaVersion {
+		profile != target.Bundle.Manifest.Database {
 		clear(current.TrustBytes)
 		clear(target.TrustBytes)
 		return platformcommand.InstallPlan{}, platformcommand.InstallPlan{}, backupManifest{},

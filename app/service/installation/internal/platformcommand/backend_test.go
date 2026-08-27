@@ -2,12 +2,15 @@ package platformcommand
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xiak/matrix/app/service/installation/internal/cli"
 	"github.com/xiak/matrix/app/service/installation/internal/journal"
@@ -355,6 +358,150 @@ func TestExplicitRollbackReplaysUnknownOutcomeAndCommitsOnlyTheSignedPredecessor
 	}
 }
 
+func TestDifferentDatabaseProfilesRejectBeforeEffectsOrJournalChange(t *testing.T) {
+	current := release.CurrentDatabaseProfile()
+	legacy := release.DatabaseProfile{SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one"}
+	revised := current
+	revised.ContractRevision++
+	profiles := []struct {
+		name           string
+		source, target release.DatabaseProfile
+	}{
+		{name: "published scalar to authorities", source: legacy, target: current},
+		{name: "legacy scalar increase", source: legacy, target: release.DatabaseProfile{SchemaVersion: 2, Compatibility: legacy.Compatibility}},
+		{name: "same schemas different authority contract", source: current, target: revised},
+	}
+	for _, authority := range []string{"IAM", "Audit", "PaaS"} {
+		target := current
+		switch authority {
+		case "IAM":
+			target.Authorities.IAM++
+		case "Audit":
+			target.Authorities.Audit++
+		case "PaaS":
+			target.Authorities.PaaS++
+		}
+		profiles = append(profiles, struct {
+			name           string
+			source, target release.DatabaseProfile
+		}{name: authority + " only", source: current, target: target})
+	}
+	for _, profile := range profiles {
+		for _, action := range []lifecycle.Action{lifecycle.ActionUpgrade, lifecycle.ActionRollback} {
+			t.Run(profile.name+"/"+string(action), func(t *testing.T) {
+				fixtures, err := releasetest.WriteSequence(t.TempDir(), 2, profile.source, profile.target)
+				if err != nil {
+					t.Fatal(err)
+				}
+				effects := &installEffects{observeReady: true}
+				backend := newTestBackend(t, effects)
+				root := filepath.Join(t.TempDir(), "matrix")
+				if _, err := backend.Run(context.Background(), installRequest(root, fixtures[0])); err != nil {
+					t.Fatal(err)
+				}
+				materializeInstalledRelease(t, root, fixtures[0])
+				if action == lifecycle.ActionRollback {
+					materializeInstalledRelease(t, root, fixtures[1])
+					// A prior installer may have committed an unproved transition.
+					// Even a valid sealed predecessor is not a rollback permit.
+					state := readJournal(t, root)
+					state.PreviousRelease, state.PreviousReleaseDigest = state.CurrentReleaseID, state.CurrentReleaseDigest
+					state.CurrentReleaseID, state.CurrentReleaseDigest = fixtures[1].Manifest.Release.ID, fixtures[1].ManifestDigest
+					state.Last = nil
+					state.Version++
+					session, err := journal.AcquireExisting(context.Background(), root)
+					if err != nil {
+						t.Fatal(err)
+					}
+					writeErr := session.Write(state)
+					closeErr := session.Close()
+					if writeErr != nil || closeErr != nil {
+						t.Fatalf("seed committed predecessor: %v / %v", writeErr, closeErr)
+					}
+				}
+				before := readJournal(t, root)
+				_, err = backend.Run(context.Background(), cli.Request{Action: action, Root: root, Bundle: fixtures[1].Root})
+				assertFault(t, err, cli.FaultPrecondition, string(action)+"_SCHEMA_INCOMPATIBLE")
+				if !reflect.DeepEqual(readJournal(t, root), before) || len(effects.upgradeCalls) != 0 ||
+					len(effects.explicitRollbackCalls) != 0 || effects.observeCalls != 0 {
+					t.Fatal("incompatible profile changed state or reached lifecycle effects")
+				}
+			})
+		}
+	}
+}
+
+func TestPublishedScalarProfileStillAllowsItsOwnReleasePair(t *testing.T) {
+	legacy := release.DatabaseProfile{SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one"}
+	fixtures, err := releasetest.WriteSequence(t.TempDir(), 2, legacy, legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := newTestBackend(t, &installEffects{observeReady: true})
+	root := filepath.Join(t.TempDir(), "matrix")
+	if _, err := backend.Run(context.Background(), installRequest(root, fixtures[0])); err != nil {
+		t.Fatal(err)
+	}
+	materializeInstalledRelease(t, root, fixtures[0])
+	if _, err := backend.Run(context.Background(), cli.Request{Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[1].Root}); err != nil {
+		t.Fatalf("upgrade published profile pair: %v", err)
+	}
+	materializeInstalledRelease(t, root, fixtures[1])
+	result, err := backend.Run(context.Background(), cli.Request{Action: lifecycle.ActionRollback, Root: root})
+	if err != nil || result.ReleaseID != fixtures[0].Manifest.Release.ID {
+		t.Fatalf("rollback published profile pair: %#v / %v", result, err)
+	}
+}
+
+func TestPublishedExecutableRejectsNewManifestBeforeEffects(t *testing.T) {
+	binary := os.Getenv("MATRIX_INSTALLATION_LEGACY_MX_BINARY")
+	if binary == "" {
+		t.Skip("requires the mx executable built from published commit c88a84f")
+	}
+	info, err := os.Lstat(binary)
+	if err != nil || !filepath.IsAbs(binary) || !info.Mode().IsRegular() {
+		t.Fatal("legacy mx must be an absolute regular executable")
+	}
+	legacy := release.DatabaseProfile{SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one"}
+	fixtures, err := releasetest.WriteSequence(t.TempDir(), 2, legacy, release.CurrentDatabaseProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(t.TempDir(), "not-an-installation")
+	const sentinel = "unowned file must remain intact"
+	if err := os.WriteFile(root, []byte(sentinel), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for index, fixture := range fixtures {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		command := exec.CommandContext(ctx, binary, "platform", "install", "--format", "json",
+			"--root", root, "--bundle", fixture.Root, "--trust-key", fixture.TrustPath)
+		output, runErr := command.CombinedOutput()
+		cancel()
+		var failure struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		if runErr == nil || json.Unmarshal(output, &failure) != nil {
+			t.Fatalf("legacy CLI did not reject safely: %v", runErr)
+		}
+		if index == 0 {
+			// Both checks are after signature/payload authentication. Current
+			// topology need not be a supported runtime for the published mx.
+			if failure.Error.Code != "INSTALLATION_ROOT_INVALID" && failure.Error.Code != "TOPOLOGY_CONTRACT_UNSUPPORTED" {
+				t.Fatalf("legacy manifest did not authenticate: %s", failure.Error.Code)
+			}
+		} else if failure.Error.Code != "RELEASE_BUNDLE_INVALID" {
+			t.Fatalf("published mx accepted the new manifest format: %s", failure.Error.Code)
+		}
+		retained, err := os.ReadFile(root)
+		if err != nil || string(retained) != sentinel {
+			t.Fatal("legacy CLI changed the unowned root")
+		}
+	}
+}
+
 func TestExplicitRollbackRequiresReadyCurrentReleaseBeforePersistingIntent(t *testing.T) {
 	fixtures := writeReleaseSequence(t, 2)
 	effects := &installEffects{}
@@ -414,7 +561,7 @@ func TestRecoveryBindsSelectedBackupAndResumesUnknownOutcome(t *testing.T) {
 		BackupDigest:   backupDigest,
 		ReleaseID:      fixtures[0].Manifest.Release.ID,
 		ReleaseDigest:  fixtures[0].ManifestDigest,
-		SchemaVersion:  fixtures[0].Manifest.Database.SchemaVersion,
+		Database:       fixtures[0].Manifest.Database,
 	}
 	request := cli.Request{
 		Action: lifecycle.ActionRecover, Root: root, BackupID: backupID,
@@ -506,7 +653,7 @@ func TestRecoveryRejectsUntrustedSourceBeforePersistingIntent(t *testing.T) {
 		BackupDigest:   "sha256:" + strings.Repeat("c", 64),
 		ReleaseID:      "matrix-v0.9.9-ffffffffffff",
 		ReleaseDigest:  "sha256:" + strings.Repeat("f", 64),
-		SchemaVersion:  fixture.Manifest.Database.SchemaVersion,
+		Database:       fixture.Manifest.Database,
 	}
 	_, err = backend.Run(context.Background(), cli.Request{
 		Action: lifecycle.ActionRecover, Root: root, BackupID: backupID,
@@ -527,6 +674,15 @@ func TestRecoveryRejectsUntrustedSourceBeforePersistingIntent(t *testing.T) {
 	if after := readJournal(t, root); !reflect.DeepEqual(after, before) ||
 		effects.recoveryInspectCalls != 2 || len(effects.recoveryCalls) != 0 {
 		t.Fatalf("cross-install recovery changed state: before=%#v after=%#v effects=%#v", before, after, effects)
+	}
+	effects.recoverySource.InstallationID = before.InstallationID
+	effects.recoverySource.Database.Authorities.Audit++
+	_, err = backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionRecover, Root: root, BackupID: backupID,
+	})
+	assertFault(t, err, cli.FaultVerification, "RECOVERY_RELEASE_INVALID")
+	if !reflect.DeepEqual(readJournal(t, root), before) || len(effects.recoveryCalls) != 0 {
+		t.Fatal("backup profile substitution reached destructive recovery")
 	}
 }
 
@@ -552,7 +708,7 @@ func TestRecoveryDefinitiveFailureRequiresManualIntervention(t *testing.T) {
 		BackupDigest:   "sha256:" + strings.Repeat("d", 64),
 		ReleaseID:      fixture.Manifest.Release.ID,
 		ReleaseDigest:  fixture.ManifestDigest,
-		SchemaVersion:  fixture.Manifest.Database.SchemaVersion,
+		Database:       fixture.Manifest.Database,
 	}
 
 	_, err := backend.Run(context.Background(), cli.Request{

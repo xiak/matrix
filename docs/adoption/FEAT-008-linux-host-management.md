@@ -39,3 +39,10 @@ No source file is copied and no donor is a build/runtime dependency. Existing
 accepted Matrix adapters, validators, journals and tests retain their owners.
 Any additional source needed by a later iteration is reviewed here at its
 fixed commit before use, rather than opening the whole donor in advance.
+
+For the offline compatibility slice, the accepted Matrix Phase 1 source
+`c88a84f379afcf94431e2aca7332fe6ec3136dc7` is `REFERENCE` for the published v1
+manifest/backup bytes and `REUSE` as a separately built legacy `mx` consumer in
+the format-rejection gate. This inspection followed the FEAT-008 profile
+design. No older installer implementation is copied into the working tree,
+and the old scalar schema comparison is not reused for new authority profiles.

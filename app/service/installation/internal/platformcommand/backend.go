@@ -107,7 +107,7 @@ type RecoverySource struct {
 	BackupDigest   string
 	ReleaseID      string
 	ReleaseDigest  string
-	SchemaVersion  uint64
+	Database       release.DatabaseProfile
 }
 
 // RecoveryPlan binds the current committed release, the authenticated release
@@ -613,8 +613,7 @@ func (backend *Backend) upgrade(
 		targetBundle.Manifest.Release.PreviousVersion != sourceBundle.Manifest.Release.Version {
 		return cli.Result{}, fault(cli.FaultPrecondition, "UPGRADE_PREDECESSOR_MISMATCH")
 	}
-	if targetBundle.Manifest.Database.SchemaVersion <
-		sourceBundle.Manifest.Database.SchemaVersion {
+	if targetBundle.Manifest.Database != sourceBundle.Manifest.Database {
 		return cli.Result{}, fault(cli.FaultPrecondition, "UPGRADE_SCHEMA_INCOMPATIBLE")
 	}
 
@@ -724,8 +723,7 @@ func (backend *Backend) rollback(
 		currentBundle.Manifest.Release.PreviousVersion != previousBundle.Manifest.Release.Version {
 		return cli.Result{}, fault(cli.FaultPrecondition, "ROLLBACK_PREDECESSOR_MISMATCH")
 	}
-	if previousBundle.Manifest.Database.SchemaVersion >
-		currentBundle.Manifest.Database.SchemaVersion {
+	if previousBundle.Manifest.Database != currentBundle.Manifest.Database {
 		return cli.Result{}, fault(cli.FaultPrecondition, "ROLLBACK_SCHEMA_INCOMPATIBLE")
 	}
 
@@ -842,13 +840,13 @@ func (backend *Backend) recover(
 	}
 	if source.InstallationID != state.InstallationID || source.BackupID != request.BackupID ||
 		source.ReleaseID == "" || source.ReleaseDigest == "" || source.BackupDigest == "" ||
-		source.SchemaVersion == 0 {
+		release.ValidateDatabaseProfile(source.Database) != nil {
 		return cli.Result{}, fault(cli.FaultVerification, "RECOVERY_SOURCE_INVALID")
 	}
 	targetBundle, err := authenticateJournalRelease(
 		session.Root(), source.ReleaseID, source.ReleaseDigest, trustBytes,
 	)
-	if err != nil || targetBundle.Manifest.Database.SchemaVersion != source.SchemaVersion {
+	if err != nil || targetBundle.Manifest.Database != source.Database {
 		return cli.Result{}, fault(cli.FaultVerification, "RECOVERY_RELEASE_INVALID")
 	}
 
