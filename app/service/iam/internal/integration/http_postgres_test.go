@@ -20,6 +20,7 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	iampostgres "github.com/xiak/matrix/app/service/iam/internal/data/postgres"
 	iamhttp "github.com/xiak/matrix/app/service/iam/internal/service/nethttp"
+	"github.com/xiak/matrix/app/service/iam/internal/usecase/auditdispatch"
 	"github.com/xiak/matrix/app/service/iam/internal/usecase/identityaccess"
 	iammigration "github.com/xiak/matrix/app/service/iam/migration"
 )
@@ -27,6 +28,7 @@ import (
 const (
 	iamHTTPPostgresDSN       = "MATRIX_IAM_HTTP_POSTGRES_TEST_DSN"
 	iamHTTPTestRole          = "matrix_iam_http_test_api"
+	iamHTTPWorkerRole        = "matrix_iam_http_test_worker"
 	iamHTTPTestPassword      = "matrix-iam-http-test-only"
 	adminPassword            = "Initial-Admin-Password-49!"
 	changedAdminPassword     = "Changed-Admin-Password-73!"
@@ -334,12 +336,18 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 		!decision.Allowed || decision.Subject == nil || decision.Subject.ID != developer.ID {
 		t.Fatalf("developer allowed decision=%#v err=%v", decision, err)
 	}
+	t.Run("tenant accounts and subusers", func(t *testing.T) {
+		proveTenantAccounts(t, ctx, handler, admin, loginWire.Credential)
+	})
 	assertPlatformAuthorityHTTP(t, ctx, handler, admin, loginWire.Credential, developerWire.Credential, developer.ID)
 	if _, err := workflow.Bootstrap(ctx, document); err != nil {
 		t.Fatalf("replay bootstrap after platform role revocation: %v", err)
 	}
 	applyIAMSchema(t, ctx, admin)
 	assertPlatformDecisionHTTP(t, handler, loginWire.Credential, paasCredential, false)
+	if response := performIAMRequest(handler, http.MethodGet, "/v1/organizations", loginWire.Credential, nil); response.Code != http.StatusForbidden {
+		t.Fatal("revoked bootstrap platform role retained tenant lifecycle authority")
+	}
 
 	revokeBinding := performIAMRequest(
 		handler,
@@ -377,9 +385,6 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 	if developerAuthorize.Code != http.StatusUnauthorized {
 		t.Fatalf("IAM revoked session authorize status=%d body=%s", developerAuthorize.Code, developerAuthorize.Body.String())
 	}
-	t.Run("tenant accounts and subusers", func(t *testing.T) {
-		proveTenantAccounts(t, ctx, handler, admin, loginWire.Credential)
-	})
 	verifierRevocation := performIAMRequest(
 		handler,
 		http.MethodPost,
@@ -482,6 +487,94 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 	}
 	if deniedUsers != 0 {
 		t.Fatalf("denied IAM users=%d want=0", deniedUsers)
+	}
+	t.Run("outbox physical owner and sealed chain", func(t *testing.T) {
+		proveIAMOutboxClaims(t, ctx, admin, poolConfig, handler)
+	})
+}
+
+func proveIAMOutboxClaims(t *testing.T, ctx context.Context, admin *pgx.Conn, config *pgxpool.Config, handler http.Handler) {
+	t.Helper()
+	workerConfig := config.Copy()
+	workerConfig.ConnConfig.User = iamHTTPWorkerRole
+	workerConfig.MaxConns = 2
+	pool, err := pgxpool.NewWithConfig(ctx, workerConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository, err := iampostgres.NewAuditOutboxRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tenantClaim, platformClaim auditdispatch.Claim
+	// This gate tests claim/completion persistence only. The separate five-process
+	// gate proves actual HTTP delivery of these events, without a fake ingestor.
+	for count := 0; ; count++ {
+		if count >= 2048 {
+			t.Fatal("IAM claim fixture exceeded its bounded event budget")
+		}
+		claim, found, err := repository.Claim(ctx, "iam-http-scope-worker", 10*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !found {
+			break
+		}
+		if claim.Event.InstallationID != "" {
+			if claim.OrganizationID != "organization-http-integration" || claim.InstallationID != "installation-http-integration" || claim.Event.TenantID != "" {
+				t.Fatal("installation claim did not retain its sealed physical owner")
+			}
+			platformClaim = claim
+		} else {
+			if string(claim.OrganizationID) != string(claim.Event.TenantID) {
+				t.Fatal("tenant claim changed owner")
+			}
+			tenantClaim = claim
+		}
+		if err := repository.Complete(ctx, auditdispatch.Completion{EventID: claim.EventID,
+			WorkerID: "iam-http-scope-worker", FencingToken: claim.FencingToken, Outcome: auditdispatch.OutcomeDelivered}); err != nil {
+			t.Fatal(err)
+		}
+		var completed bool
+		if err := admin.QueryRow(ctx, "SELECT status='DELIVERED' FROM iam.audit_outbox WHERE tenant_id=$1 AND event_id=$2",
+			claim.OrganizationID, claim.EventID).Scan(&completed); err != nil || !completed {
+			t.Fatal("claim completion used event scope instead of the physical owner")
+		}
+	}
+	if tenantClaim.EventID == "" || platformClaim.EventID == "" {
+		t.Fatal("claim gate did not exercise both tenant and installation facts")
+	}
+	for _, claim := range []auditdispatch.Claim{tenantClaim, platformClaim} {
+		event := claim.Event
+		event.EventID += "-forged-scope"
+		if event.InstallationID != "" {
+			event.InstallationID = "installation-forged"
+		} else {
+			event.TenantID = "organization-forged"
+		}
+		encoded, err := json.Marshal(event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Deliberately corrupt storage as the test administrator, not through a
+		// product command. The runtime worker must dead-letter it before delivery.
+		if _, err := admin.Exec(ctx, `INSERT INTO iam.audit_outbox(tenant_id,event_id,event_document,next_attempt_at,created_at,updated_at)
+			VALUES($1,$2,$3::jsonb,transaction_timestamp(),transaction_timestamp(),transaction_timestamp())`,
+			claim.OrganizationID, event.EventID, string(encoded)); err != nil {
+			t.Fatal(err)
+		}
+		if _, found, err := repository.Claim(ctx, "iam-http-scope-worker", 10*time.Second); err == nil || found {
+			t.Fatal("forged chain scope escaped the claimed-event boundary")
+		}
+		var rejected bool
+		if err := admin.QueryRow(ctx, "SELECT status='DEAD_LETTER' AND error_code='audit.event.corrupt' FROM iam.audit_outbox WHERE tenant_id=$1 AND event_id=$2",
+			claim.OrganizationID, event.EventID).Scan(&rejected); err != nil || !rejected {
+			t.Fatal("invalid scope was lost instead of retaining its owner-bound dead letter")
+		}
+	}
+	if response := performIAMRequest(handler, http.MethodGet, "/ready", "", nil); response.Code != http.StatusServiceUnavailable {
+		t.Fatal("corrupt outbox claims did not make readiness unhealthy")
 	}
 }
 
@@ -786,13 +879,348 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 		setAlias(actor.bearer, actor.alias, identity(actor.bearer).Account.Organization.ResourceVersion, http.StatusOK)
 	}
 
-	for _, action := range []string{"iam.organization.created", "iam.account-alias.set", "iam.principal.status-set", "iam.password.reset"} {
+	for _, action := range []string{"iam.tenant.created", "iam.account-alias.set", "iam.principal.status-set", "iam.password.reset"} {
 		var correlated bool
 		if err := admin.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM iam.audit_outbox AS event JOIN iam.authorization_decisions AS decision ON decision.tenant_id=event.tenant_id AND decision.id=event.event_document->>'iamDecisionId' WHERE event.event_document->>'action'=$1 AND decision.allowed)`, action).Scan(&correlated); err != nil || !correlated {
 			t.Fatalf("account mutation %s lacks atomic audit decision: %v", action, err)
 		}
 	}
 	assertIAMSecretsAbsent(t, ctx, admin, primaryBPassword, primaryBChanged, childPassword, childChangedA, childChangedB, resetPassword, primaryB, childSessionA, childSessionB, activeOne, activeTwo, resetSession)
+	t.Run("platform tenant lifecycle and original primary recovery", func(t *testing.T) {
+		proveTenantLifecycleHTTP(t, ctx, handler, admin, root, primaryB, tenant.PrimaryPrincipalID)
+	})
+}
+
+func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, root, otherPrimary string, otherPrimaryID iamv1.PrincipalID) {
+	t.Helper()
+	const home = "organization-http-integration"
+	const tenantID = "organization-lifecycle"
+	const initial = "Lifecycle-Initial-Password-38!"
+	const changed = "Lifecycle-Changed-Password-49!"
+	const recovered = "Lifecycle-Recovered-Password-57!"
+	request := func(method, path, bearer string, body any, expected int) *httptest.ResponseRecorder {
+		t.Helper()
+		var encoded []byte
+		if body != nil {
+			var err error
+			encoded, err = json.Marshal(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		response := performIAMRequest(handler, method, path, bearer, encoded)
+		if response.Code != expected {
+			t.Fatalf("lifecycle %s %s: status=%d want=%d body=%s", method, path, response.Code, expected, response.Body.String())
+		}
+		return response
+	}
+	login := func(name, password string, expected int) string {
+		t.Helper()
+		response := request(http.MethodPost, "/v1/auth/login", "", map[string]any{"loginName": name, "password": password, "requestId": "request-lifecycle-login"}, expected)
+		if expected != http.StatusOK {
+			return ""
+		}
+		var wire struct {
+			Credential string `json:"credential"`
+		}
+		if json.Unmarshal(response.Body.Bytes(), &wire) != nil || wire.Credential == "" {
+			t.Fatal("missing lifecycle credential")
+		}
+		return wire.Credential
+	}
+	changePassword := func(bearer, previous, next string) {
+		request(http.MethodPost, "/v1/auth/password", bearer, map[string]any{"currentPassword": previous, "newPassword": next, "requestId": "request-lifecycle-password"}, http.StatusOK)
+	}
+	createMember := func(bearer, name string, role iamv1.BuiltinRole) iamv1.Principal {
+		t.Helper()
+		body := map[string]any{"loginName": name, "displayName": "Lifecycle member", "initialPassword": initial, "requestId": "request-lifecycle-member"}
+		if role != "" {
+			body["initialRole"] = role
+		}
+		response := request(http.MethodPost, "/v1/principals", bearer, body, http.StatusCreated)
+		var result iamv1.Principal
+		if json.Unmarshal(response.Body.Bytes(), &result) != nil {
+			t.Fatal("invalid lifecycle member")
+		}
+		return result
+	}
+	operatorUser := createMember(root, "lifecycle.operator", "")
+	operator := login("lifecycle.operator@"+home, initial, http.StatusOK)
+	changePassword(operator, initial, changed)
+	request(http.MethodPost, "/v1/role-bindings", root, map[string]any{"principalId": operatorUser.ID, "role": iamv1.RolePlatformOperator, "requestId": "request-lifecycle-platform-grant"}, http.StatusOK)
+	operatorIdentity := request(http.MethodGet, "/v1/auth/me", operator, nil, http.StatusOK)
+	var identity iamv1.CurrentIdentity
+	if json.Unmarshal(operatorIdentity.Body.Bytes(), &identity) != nil || !identity.CanCreateOrganizations || len(identity.Roles) != 1 || identity.Principal.ID == identity.Account.PrimaryPrincipalID {
+		t.Fatal("tenant lifecycle still requires bootstrap/primary or tenant-admin identity")
+	}
+	request(http.MethodGet, "/v1/principals", operator, nil, http.StatusForbidden)
+	created := request(http.MethodPost, "/v1/organizations", operator, map[string]any{
+		"id": tenantID, "displayName": "Lifecycle tenant", "administratorLoginName": "lifecycle.primary", "administratorDisplayName": "Lifecycle owner", "initialPassword": initial, "requestId": "request-lifecycle-create"}, http.StatusCreated)
+	var account iamv1.OrganizationAccount
+	if json.Unmarshal(created.Body.Bytes(), &account) != nil || account.Organization.ID != tenantID {
+		t.Fatal("platform operator could not onboard tenant")
+	}
+	primaryID := account.PrimaryPrincipalID
+	primary := login("lifecycle.primary", initial, http.StatusOK)
+	changePassword(primary, initial, changed)
+	member := createMember(primary, "shared.user", iamv1.RolePaaSViewer)
+	memberSession := login("shared.user@"+tenantID, initial, http.StatusOK)
+	changePassword(memberSession, initial, changed)
+	readAccount := func(id string) iamv1.OrganizationAccount {
+		t.Helper()
+		response := request(http.MethodGet, "/v1/organizations/"+id, operator, nil, http.StatusOK)
+		var result iamv1.OrganizationAccount
+		if json.Unmarshal(response.Body.Bytes(), &result) != nil || iamv1.ValidateOrganizationAccount(result) != nil {
+			t.Fatal("invalid platform tenant detail")
+		}
+		return result
+	}
+	status := func(id string, next iamv1.OrganizationStatus, version uint64, expected int) {
+		request(http.MethodPost, "/v1/organizations/"+id+":set-status", operator,
+			map[string]any{"status": next, "resourceVersion": version, "requestId": "request-lifecycle-status"}, expected)
+	}
+	recoverPrimary := func(id string, principal iamv1.PrincipalID, version uint64, expected int) {
+		request(http.MethodPost, "/v1/organizations/"+id+":recover-administrator", operator,
+			map[string]any{"principalId": principal, "initialPassword": recovered, "resourceVersion": version, "requestId": "request-lifecycle-recover"}, expected)
+	}
+	// Compare credential, session, role and lifecycle-success state, not SQL text
+	// or incidental request/decision ordering. Denied decisions may be audited.
+	securityState := func() string {
+		t.Helper()
+		var state string
+		err := database.QueryRow(ctx, `SELECT jsonb_build_object(
+			'organizations',(SELECT jsonb_agg(jsonb_build_array(o.id,o.status,o.resource_version) ORDER BY o.id) FROM iam.organizations AS o),
+			'principals',(SELECT jsonb_agg(jsonb_build_array(p.tenant_id,p.id,p.status,p.must_change_password,p.resource_version,c.password_hash) ORDER BY p.tenant_id,p.id) FROM iam.principals AS p LEFT JOIN iam.user_credentials AS c ON c.tenant_id=p.tenant_id AND c.principal_id=p.id),
+			'sessions',(SELECT jsonb_agg(jsonb_build_array(s.tenant_id,s.id,s.status,s.resource_version,s.revoked_at) ORDER BY s.tenant_id,s.id) FROM iam.sessions AS s),
+			'bindings',(SELECT jsonb_agg(jsonb_build_array(b.tenant_id,b.id,b.principal_id,b.role_name,b.resource_version,b.revoked_at) ORDER BY b.tenant_id,b.id) FROM iam.role_bindings AS b),
+			'successes',(SELECT jsonb_agg(jsonb_build_array(e.event_id,e.event_document) ORDER BY e.event_id) FROM iam.audit_outbox AS e WHERE e.event_document->>'result'='SUCCEEDED')
+		)::text`).Scan(&state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return state
+	}
+	unchanged := func(attempt func()) {
+		t.Helper()
+		before := securityState()
+		attempt()
+		if securityState() != before {
+			t.Fatal("denied/conflicting lifecycle command partially changed security state or success facts")
+		}
+	}
+	for _, actor := range []string{primary, otherPrimary, memberSession} {
+		request(http.MethodGet, "/v1/organizations/"+tenantID, actor, nil, http.StatusForbidden)
+		request(http.MethodPost, "/v1/organizations/"+tenantID+":set-status", actor,
+			map[string]any{"status": "DISABLED", "resourceVersion": 1, "requestId": "request-lifecycle-tenant-attack"}, http.StatusForbidden)
+		request(http.MethodPost, "/v1/organizations/"+tenantID+":recover-administrator", actor,
+			map[string]any{"principalId": primaryID, "initialPassword": recovered, "resourceVersion": 1, "requestId": "request-lifecycle-recovery-attack"}, http.StatusForbidden)
+	}
+	unchanged(func() {
+		status(home, iamv1.OrganizationDisabled, readAccount(home).Organization.ResourceVersion, http.StatusForbidden)
+	})
+	unchanged(func() { status(tenantID, iamv1.OrganizationDisabled, 99, http.StatusConflict) })
+	unchanged(func() { recoverPrimary(tenantID, primaryID, 99, http.StatusConflict) })
+	for _, wrong := range []iamv1.PrincipalID{member.ID, otherPrimaryID, "service-paas", "principal-admin"} {
+		unchanged(func() { recoverPrimary(tenantID, wrong, 1, http.StatusForbidden) })
+	}
+	unchanged(func() {
+		recoverPrimary("organization-customer-b", primaryID, readAccount("organization-customer-b").Organization.ResourceVersion, http.StatusForbidden)
+	})
+	unchanged(func() {
+		recoverPrimary(home, "principal-admin", readAccount(home).Organization.ResourceVersion, http.StatusForbidden)
+	})
+	// A legacy disabled platform primary remains protected by the binding, not
+	// by a current effective-permissions calculation.
+	if _, err := database.Exec(ctx, "UPDATE iam.principals SET status='DISABLED' WHERE tenant_id=$1 AND id='principal-admin'", home); err != nil {
+		t.Fatal(err)
+	}
+	unchanged(func() {
+		recoverPrimary(home, "principal-admin", readAccount(home).Organization.ResourceVersion, http.StatusForbidden)
+	})
+	if _, err := database.Exec(ctx, "UPDATE iam.principals SET status='ACTIVE' WHERE tenant_id=$1 AND id='principal-admin'", home); err != nil {
+		t.Fatal(err)
+	}
+	request(http.MethodGet, "/v1/auth/me", primary, nil, http.StatusOK)
+	request(http.MethodGet, "/v1/auth/me", memberSession, nil, http.StatusOK)
+	// Seed a legacy damaged primary only as an adversarial fixture. Recovery
+	// itself must go through HTTP and must not resurrect the old revoked binding.
+	if _, err := database.Exec(ctx, `WITH revoked AS (
+		UPDATE iam.role_bindings SET revoked_at=transaction_timestamp(),updated_at=transaction_timestamp(),resource_version=resource_version+1
+		WHERE tenant_id=$1 AND principal_id=$2 AND role_name='ORGANIZATION_ADMIN' AND revoked_at IS NULL RETURNING id)
+		UPDATE iam.principals SET status='DISABLED',updated_at=transaction_timestamp(),resource_version=resource_version+1
+		WHERE tenant_id=$1 AND id=$2`, tenantID, primaryID); err != nil {
+		t.Fatal(err)
+	}
+	recoverPrimary(tenantID, primaryID, 1, http.StatusOK)
+	if fresh := readAccount(tenantID); fresh.PrimaryPrincipalID != primaryID || fresh.Organization.ResourceVersion != 2 {
+		t.Fatal("primary recovery transferred ownership")
+	}
+	var retainedRevocation, repaired bool
+	if err := database.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM iam.role_bindings WHERE tenant_id=$1 AND id='primary-admin-binding' AND revoked_at IS NOT NULL),
+		(SELECT count(*)=1 FROM iam.role_bindings WHERE tenant_id=$1 AND principal_id=$2 AND role_name='ORGANIZATION_ADMIN' AND revoked_at IS NULL)`,
+		tenantID, primaryID).Scan(&retainedRevocation, &repaired); err != nil || !retainedRevocation || !repaired {
+		t.Fatal("primary recovery revived an old binding or did not restore exactly one tenant-admin binding")
+	}
+	request(http.MethodGet, "/v1/auth/me", primary, nil, http.StatusUnauthorized)
+	request(http.MethodGet, "/v1/auth/me", memberSession, nil, http.StatusOK)
+	login("lifecycle.primary", changed, http.StatusUnauthorized)
+	primary = login("lifecycle.primary", recovered, http.StatusOK)
+	current := request(http.MethodGet, "/v1/auth/me", primary, nil, http.StatusOK)
+	if json.Unmarshal(current.Body.Bytes(), &identity) != nil || !identity.Principal.MustChangePassword || identity.CanCreateOrganizations || len(identity.Roles) != 1 || identity.Roles[0] != iamv1.RoleOrganizationAdmin {
+		t.Fatal("primary recovery gained platform access or skipped required password change")
+	}
+	request(http.MethodGet, "/v1/principals", primary, nil, http.StatusForbidden)
+	changePassword(primary, recovered, changed)
+	// A delegated administrator is revocable; the primary is not replaced by it.
+	delegate := createMember(primary, "daily.admin", iamv1.RoleOrganizationAdmin)
+	delegateSession := login("daily.admin@"+tenantID, initial, http.StatusOK)
+	changePassword(delegateSession, initial, changed)
+	directory := request(http.MethodGet, "/v1/principals", primary, nil, http.StatusOK)
+	var users iamv1.PrincipalList
+	if json.Unmarshal(directory.Body.Bytes(), &users) != nil {
+		t.Fatal("invalid lifecycle directory")
+	}
+	for _, user := range users.Items {
+		if user.Principal.ID == delegate.ID {
+			for _, binding := range user.RoleBindings {
+				request(http.MethodPost, "/v1/role-bindings/"+string(binding.ID)+":revoke", primary, map[string]any{"requestId": "request-daily-admin-handoff"}, http.StatusOK)
+			}
+		}
+	}
+	request(http.MethodGet, "/v1/principals", delegateSession, nil, http.StatusForbidden)
+	unchanged(func() {
+		request(http.MethodPost, "/v1/role-bindings/primary-admin-binding:revoke", primary, map[string]any{"requestId": "request-primary-handoff-attack"}, http.StatusForbidden)
+	})
+	knownPassword := changed
+	for _, next := range []iamv1.OrganizationStatus{iamv1.OrganizationDisabled, iamv1.OrganizationActive} {
+		fresh := readAccount(tenantID)
+		if fresh.Organization.Status == next {
+			opposite := iamv1.OrganizationActive
+			if next == iamv1.OrganizationActive {
+				opposite = iamv1.OrganizationDisabled
+			}
+			status(tenantID, opposite, fresh.Organization.ResourceVersion, http.StatusOK)
+			fresh = readAccount(tenantID)
+		}
+		var oldHash string
+		if err := database.QueryRow(ctx, "SELECT password_hash FROM iam.user_credentials WHERE tenant_id=$1 AND principal_id=$2", tenantID, primaryID).Scan(&oldHash); err != nil {
+			t.Fatal(err)
+		}
+		recoveryJSON, _ := json.Marshal(map[string]any{"principalId": primaryID, "initialPassword": recovered, "resourceVersion": fresh.Organization.ResourceVersion, "requestId": "request-race-recover-" + string(next)})
+		statusJSON, _ := json.Marshal(map[string]any{"status": next, "resourceVersion": fresh.Organization.ResourceVersion, "requestId": "request-race-status-" + string(next)})
+		start := make(chan struct{})
+		results := make(chan struct {
+			recovery bool
+			status   int
+		}, 2)
+		go func() {
+			<-start
+			results <- struct {
+				recovery bool
+				status   int
+			}{true, performIAMRequest(handler, http.MethodPost, "/v1/organizations/"+tenantID+":recover-administrator", operator, recoveryJSON).Code}
+		}()
+		go func() {
+			<-start
+			results <- struct {
+				recovery bool
+				status   int
+			}{false, performIAMRequest(handler, http.MethodPost, "/v1/organizations/"+tenantID+":set-status", operator, statusJSON).Code}
+		}()
+		close(start)
+		first, second := <-results, <-results
+		if !((first.status == http.StatusOK && second.status == http.StatusConflict) || (second.status == http.StatusOK && first.status == http.StatusConflict)) {
+			t.Fatalf("same-version lifecycle race statuses=%d/%d", first.status, second.status)
+		}
+		recoveryWon := first.recovery && first.status == http.StatusOK || second.recovery && second.status == http.StatusOK
+		freshAfter := readAccount(tenantID)
+		if freshAfter.PrimaryPrincipalID != primaryID || freshAfter.Organization.ResourceVersion != fresh.Organization.ResourceVersion+1 {
+			t.Fatal("race consumed a version twice or changed primary")
+		}
+		if recoveryWon {
+			knownPassword = recovered
+			if freshAfter.Organization.Status != fresh.Organization.Status {
+				t.Fatal("recovery also changed tenant status")
+			}
+		} else {
+			var passwordUnchanged bool
+			if err := database.QueryRow(ctx, "SELECT password_hash=$3 FROM iam.user_credentials WHERE tenant_id=$1 AND principal_id=$2", tenantID, primaryID, oldHash).Scan(&passwordUnchanged); err != nil || !passwordUnchanged || freshAfter.Organization.Status != next {
+				t.Fatal("losing recovery changed credentials or status winner was lost")
+			}
+		}
+		for _, outcome := range []struct {
+			requestID string
+			expected  bool
+		}{{"request-race-recover-" + string(next), recoveryWon}, {"request-race-status-" + string(next), !recoveryWon}} {
+			var committed bool
+			if err := database.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM iam.audit_outbox WHERE event_document->>'requestId'=$1 AND event_document->>'result'='SUCCEEDED')", outcome.requestID).Scan(&committed); err != nil || committed != outcome.expected {
+				t.Fatal("losing lifecycle race committed a success fact")
+			}
+		}
+		if freshAfter.Organization.Status == iamv1.OrganizationDisabled {
+			status(tenantID, iamv1.OrganizationActive, freshAfter.Organization.ResourceVersion, http.StatusOK)
+		}
+		primary = login("lifecycle.primary", knownPassword, http.StatusOK)
+		if recoveryWon {
+			changePassword(primary, recovered, changed)
+			knownPassword = changed
+		}
+	}
+	oldPrimary := primary
+	status(tenantID, iamv1.OrganizationDisabled, readAccount(tenantID).Organization.ResourceVersion, http.StatusOK)
+	for _, bearer := range []string{oldPrimary, memberSession, delegateSession} {
+		request(http.MethodGet, "/v1/auth/me", bearer, nil, http.StatusUnauthorized)
+	}
+	login("lifecycle.primary", knownPassword, http.StatusUnauthorized)
+	login("shared.user@"+tenantID, changed, http.StatusUnauthorized)
+	recoverPrimary(tenantID, primaryID, readAccount(tenantID).Organization.ResourceVersion, http.StatusOK)
+	if readAccount(tenantID).Organization.Status != iamv1.OrganizationDisabled {
+		t.Fatal("recovery implicitly resumed tenant")
+	}
+	login("lifecycle.primary", recovered, http.StatusUnauthorized)
+	applyIAMSchema(t, ctx, database)
+	if readAccount(tenantID).Organization.Status != iamv1.OrganizationDisabled {
+		t.Fatal("migration replay revived suspended tenant")
+	}
+	status(tenantID, iamv1.OrganizationActive, readAccount(tenantID).Organization.ResourceVersion, http.StatusOK)
+	request(http.MethodGet, "/v1/auth/me", oldPrimary, nil, http.StatusUnauthorized)
+	request(http.MethodGet, "/v1/auth/me", memberSession, nil, http.StatusUnauthorized)
+	login("lifecycle.primary", knownPassword, http.StatusUnauthorized)
+	primary = login("lifecycle.primary", recovered, http.StatusOK)
+	changePassword(primary, recovered, changed)
+	status(tenantID, iamv1.OrganizationDisabled, readAccount(tenantID).Organization.ResourceVersion, http.StatusOK)
+	rows, err := database.Query(ctx, "SELECT event_document FROM iam.audit_outbox WHERE event_document->>'action'=ANY($1::text[])", []string{"iam.tenant.created", "iam.tenant.disabled", "iam.tenant.enabled", "iam.tenant-administrator.recovered"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var facts []auditv1.Event
+	for rows.Next() {
+		var encoded []byte
+		var event auditv1.Event
+		if rows.Scan(&encoded) != nil || json.Unmarshal(encoded, &event) != nil {
+			t.Fatal("invalid lifecycle fact")
+		}
+		facts = append(facts, event)
+	}
+	rows.Close()
+	if rows.Err() != nil || len(facts) == 0 {
+		t.Fatal("missing lifecycle facts")
+	}
+	for _, event := range facts {
+		if event.TenantID != "" || event.InstallationID != "installation-http-integration" || auditv1.ValidateEventForSource(auditv1.SourceIAM, event) != nil {
+			t.Fatal("lifecycle event entered a tenant chain")
+		}
+		if event.Action == auditv1.ActionIAMTenantAdministratorRecovered && (event.Target.ID != string(primaryID) || event.Target.TenantID != tenantID) {
+			t.Fatal("recovery fact did not bind original primary and tenant")
+		}
+		request(http.MethodPost, "/v1/audit-producer:resolve", iamProducerCredential, map[string]any{"event": event}, http.StatusOK)
+		if event.Action == auditv1.ActionIAMTenantAdministratorRecovered {
+			event.Target.TenantID = "organization-customer-b"
+			request(http.MethodPost, "/v1/audit-producer:resolve", iamProducerCredential, map[string]any{"event": event}, http.StatusForbidden)
+		}
+	}
+	assertIAMSecretsAbsent(t, ctx, database, initial, changed, recovered, operator, primary, memberSession, delegateSession)
 }
 
 func proveHistoricalProducerHTTP(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, tenants map[string]string) {
@@ -1193,9 +1621,14 @@ func createIAMHTTPRole(t *testing.T, ctx context.Context, admin *pgx.Conn) {
 			CREATE ROLE ` + iamHTTPTestRole + ` LOGIN PASSWORD '` + iamHTTPTestPassword + `'
 				NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
 		END IF;
+		IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = '` + iamHTTPWorkerRole + `') THEN
+			CREATE ROLE ` + iamHTTPWorkerRole + ` LOGIN PASSWORD '` + iamHTTPTestPassword + `'
+				NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+		END IF;
 	END
 	$matrix_iam_http_role$;
-	GRANT matrix_iam_api TO ` + iamHTTPTestRole + `;`
+	GRANT matrix_iam_api TO ` + iamHTTPTestRole + `;
+	GRANT matrix_iam_worker TO ` + iamHTTPWorkerRole + `;`
 	if _, err := admin.Exec(ctx, statement); err != nil {
 		t.Fatalf("create IAM HTTP runtime role: %v", err)
 	}

@@ -38,6 +38,58 @@ func decodeAccount(encoded []byte) (iamv1.OrganizationAccount, error) {
 	return result, nil
 }
 
+func (value *transaction) ReadOrganization(ctx context.Context, read identityaccess.AccountRead, id iamv1.OrganizationID) (iamv1.OrganizationAccount, error) {
+	var encoded []byte
+	if err := value.tx.QueryRow(ctx, "SELECT iam.read_organization($1,$2,$3,$4)", read.OrganizationID, read.ActorPrincipalID, read.DecisionID, id).Scan(&encoded); err != nil {
+		return iamv1.OrganizationAccount{}, mapAuthorizationDatabaseError("read IAM organization", err)
+	}
+	result, err := decodeAccount(encoded)
+	if err != nil || result.Organization.ID != id {
+		return iamv1.OrganizationAccount{}, identityaccess.ErrUnavailable
+	}
+	return result, nil
+}
+
+func (value *transaction) SetOrganizationStatus(ctx context.Context, mutation identityaccess.OrganizationStatusMutation) (iamv1.OrganizationAccount, error) {
+	event, err := json.Marshal(mutation.AuditEvent)
+	if err != nil {
+		return iamv1.OrganizationAccount{}, identityaccess.ErrUnavailable
+	}
+	defer clear(event)
+	var encoded []byte
+	err = value.tx.QueryRow(ctx, "SELECT iam.set_organization_status($1,$2,$3,$4,$5,$6,$7::jsonb)",
+		mutation.ActorOrganizationID, mutation.ActorPrincipalID, mutation.DecisionID, mutation.OrganizationID,
+		mutation.Status, mutation.ResourceVersion, event).Scan(&encoded)
+	if err != nil {
+		return iamv1.OrganizationAccount{}, mapAuthorizationDatabaseError("set IAM organization status", err)
+	}
+	result, err := decodeAccount(encoded)
+	if err != nil || result.Organization.ID != mutation.OrganizationID || result.Organization.Status != mutation.Status {
+		return iamv1.OrganizationAccount{}, identityaccess.ErrUnavailable
+	}
+	return result, nil
+}
+
+func (value *transaction) RecoverOrganizationAdministrator(ctx context.Context, mutation identityaccess.OrganizationAdministratorRecovery) (iamv1.OrganizationAccount, error) {
+	event, err := json.Marshal(mutation.AuditEvent)
+	if err != nil {
+		return iamv1.OrganizationAccount{}, identityaccess.ErrUnavailable
+	}
+	defer clear(event)
+	var encoded []byte
+	err = value.tx.QueryRow(ctx, "SELECT iam.recover_organization_administrator($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)",
+		mutation.ActorOrganizationID, mutation.ActorPrincipalID, mutation.DecisionID, mutation.OrganizationID,
+		mutation.PrincipalID, mutation.ResourceVersion, string(mutation.PasswordHash), mutation.BindingID, event).Scan(&encoded)
+	if err != nil {
+		return iamv1.OrganizationAccount{}, mapAuthorizationDatabaseError("recover IAM organization administrator", err)
+	}
+	result, err := decodeAccount(encoded)
+	if err != nil || result.Organization.ID != mutation.OrganizationID || result.PrimaryPrincipalID != mutation.PrincipalID {
+		return iamv1.OrganizationAccount{}, identityaccess.ErrUnavailable
+	}
+	return result, nil
+}
+
 func (value *transaction) ListPrincipals(ctx context.Context, read identityaccess.AccountRead) (iamv1.PrincipalList, error) {
 	var encoded []byte
 	if err := value.tx.QueryRow(ctx, "SELECT iam.list_principals($1,$2,$3,$4)", read.OrganizationID, read.ActorPrincipalID, read.DecisionID, read.After).Scan(&encoded); err != nil {

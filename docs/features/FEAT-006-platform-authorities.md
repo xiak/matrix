@@ -6,7 +6,7 @@
 - IAM API contract: `iam.matrix.xiak.com/v1`
 - Audit API contract: `audit.matrix.xiak.com/v1`
 - Phase 3 extension: installation-scoped IAM authority implemented; host-resource consumption and offline upgrade acceptance remain in FEAT-008
-- Multi-tenant extension: account integration, primary/platform credential protection, historical producer proof and retained IAM/Audit upgrade gates verified; tenant lifecycle, primary recovery, console and release acceptance remain in progress
+- Multi-tenant extension: accounts, primary/platform credential protection, historical producer proof, tenant lifecycle and original-primary recovery pass the backend gates; task-local console and release acceptance remain in progress
 
 ## Outcome
 
@@ -206,13 +206,15 @@ Malformed, ambiguous, unknown, disabled, and wrong-password identities do not
 reveal whether a tenant or user exists. There is no public identity-discovery
 or username-only "next step" endpoint.
 
-The exact installer-created administrator may open another tenant account
-with its own primary account and initial password. This capability is bound
-to the bootstrap identity, not to the general `ORGANIZATION_ADMIN` role; it
-cannot be granted through tenant role bindings and grants no read or mutation
-authority over another tenant's PaaS resources. Tenant creation is atomic and
-audited. Public self-registration, payment, organization deletion, impersonation,
-cross-tenant session switching, and host administration are outside this slice.
+An explicitly bound `PLATFORM_OPERATOR` may open another tenant account with
+its own primary account and initial password, list/read tenant metadata,
+suspend/restore access, and recover that tenant's original primary credentials.
+These are installation-scoped actions, not `ORGANIZATION_ADMIN` privileges or
+an exception for the bootstrap person. Tenant creation is atomic and grants
+only the new primary's protected tenant-administrator binding; it neither
+reruns bootstrap nor grants platform or cross-tenant resource permissions.
+Public self-registration, payment, organization deletion, impersonation and
+cross-tenant session switching are outside this slice.
 
 An organization administrator can list its users and active role bindings,
 create a subaccount with no business permissions by default or an explicitly
@@ -227,7 +229,7 @@ verifier role is never assignable to a user.
 
 Directory reads are bounded and scoped by the current session; pagination
 cannot select another tenant. Current-identity reads expose only the current
-organization, principal, fixed roles, and the bootstrap-bound tenant-opening
+organization, principal, fixed roles, and the platform-role tenant-opening
 capability. No password, hash, session credential, service credential, or host
 binding enters those responses or Audit facts.
 
@@ -438,6 +440,59 @@ already disabled. Platform grants and credential changes serialize on the
 same principal; a platform grantee must have completed initial/reset password
 change. Tenant administration cannot become platform credential takeover.
 Platform recovery remains the installation owner's separate lifecycle.
+
+The platform lifecycle slice extends the existing account command owner:
+
+| HTTP route | IAM action | Target |
+| --- | --- | --- |
+| `POST /v1/organizations` | `iam.organization.create` | New organization ID |
+| `GET /v1/organizations` | `iam.organization.read` | Organization collection `organizations` |
+| `GET /v1/organizations/{organizationId}` | `iam.organization.read` | Exact organization ID |
+| `POST /v1/organizations/{organizationId}:set-status` | `iam.organization.set-status` | Exact organization ID |
+| `POST /v1/organizations/{organizationId}:recover-administrator` | `iam.organization-administrator.recover` | Original primary USER ID, checked inside the named tenant |
+
+The URL is a platform command's target, never the caller's tenant. Status and
+recovery requests require the current organization's `resourceVersion`;
+recovery additionally names its exact `principalId` and a new temporary
+password. The response is the existing non-secret `OrganizationAccount`.
+Stale versions and redundant status transitions conflict without changing data;
+concurrent status/recovery commands cannot both consume the same version.
+Recovery preserves primary ID/login and tenant ownership, enables that USER,
+restores only its protected `ORGANIZATION_ADMIN` binding if absent, forces a
+password change and revokes all of its old sessions. It does not enable a
+suspended tenant. A child, service identity, other tenant's primary, or any
+primary with an unrevoked platform binding is refused under the same principal
+lock used for platform grants. This online workflow cannot recover the
+installation operator; that remains the offline lifecycle boundary.
+
+Suspension revokes every active tenant session and freezes subsequent access
+and command admission. Restoration does not revive any session or revoked
+binding. The sealed service-home organization cannot be suspended, preserving
+normal current-credential checks for its producers and operators. Neither
+command mutates PaaS resources, quota, accepted Operations or existing
+workloads. Work admitted before suspension may finish through its existing
+worker/outbox; in-flight requests are not retrospectively canceled. This is
+next-request revocation, not an implemented real-time long-connection kill.
+
+New lifecycle events are `iam.tenant.created`, `iam.tenant.disabled`,
+`iam.tenant.enabled` and `iam.tenant-administrator.recovered` in the installation
+chain. The first three target the real organization ID; recovery targets the
+original primary USER and requires `target.tenantId`. That target field is
+only a resource namespace and is forbidden on every other action. It cannot
+change chain, query or role scope. Existing `iam.organization.created` facts
+remain tenant-scoped with unchanged canonical bytes and hashes; neither
+migration nor replay reclassifies them. Each successful lifecycle mutation
+and its sanitized fact commit atomically with the current platform decision.
+
+IAM outbox storage remains owned by the producing organization. The worker's
+claim keeps its original six columns and appends `installation_id` from that
+physical owner's sealed bootstrap receipt, never from the event. Tenant facts
+must still match their storage owner; installation facts must match that seal.
+Completion and fencing use the claimed row identity, not a chain selector.
+Readiness and migration verification check the exact result-column contract;
+malformed scope is retained as a dead letter before delivery. Sharing schema
+version 2 with an earlier proof increment is not an N-1 dispatcher or release
+compatibility claim.
 
 Installation-scoped Audit partitioning remains the FEAT-008 owner's shared
 implementation. Tenant lifecycle facts use that agreed platform scope;
@@ -666,7 +721,7 @@ The independent five-process regression, focused IAM/contracts/architecture
 tests, and vet pass. Primary-member and primary-role protection remain intact;
 no online platform recovery or primary-ownership transfer was introduced.
 
-The next increment adapts the public installation contract from fixed source
+The historical-proof increment adapts the public installation contract from fixed source
 `6401e9602d2a5313cdc31f38363b86f404505894`, retaining the account integration
 and the `686efca` credential-protection rollback point. This branch's own
 fresh PG18 gates pass for IAM/Audit HTTP, separated database privileges,
@@ -680,6 +735,8 @@ process gate verifies both real tenant outboxes, the fixed verifier, Audit
 outage/restart, equal replay, changed-authority denial, changed-business-payload
 replay conflict, and current producer credential revocation. Unit gates cover
 every closed action mapping and the explicitly unproved create payload.
+It also passed [independent CI](https://github.com/xiak/matrix/actions/runs/33054487149)
+at `26f3569269ba6e8bf3ac55b3c596c55590e1144a`.
 
 The existing process-test owner also builds and runs the actual IAM executable
 from fixed `9fd45b0` against its original schema. HTTP creates and changes
@@ -693,11 +750,36 @@ and installation IDs in separate chains, and rejects immutable-record writes.
 IAM's readiness version is 2 and Audit's is 2; no equality or single global
 schema number is used as release-compatibility evidence.
 
-This is a verified integration checkpoint, not acceptance of the full
-multi-tenant target. Exact-bootstrap-only tenant opening is still the current
-behavior, pending its platform lifecycle replacement. Task-local browser,
-tenant suspension/primary recovery, and signed populated offline
-upgrade/rollback/backup/recovery gates remain unaccepted. The latter require
+The platform lifecycle increment passes this branch's real PG18 IAM HTTP,
+Audit HTTP, separated-schema and retained-record upgrade gates. A non-primary
+user with only an explicit platform role opens a tenant; tenant administrators
+and ordinary members cannot use platform metadata or lifecycle commands.
+Wrong versions, non-primary users, foreign-tenant targets and even a disabled
+platform-bound primary leave credentials, sessions, bindings and success facts
+unchanged. Same-version status/recovery races commit exactly one transition.
+Recovery can repair a legacy disabled primary's missing active tenant-admin
+binding without reviving its old revoked binding or transferring ownership.
+The worker gate completes both tenant and installation claims and rejects
+forged scopes into owner-bound dead letters; every Audit action is exercised
+through both append and filtered query.
+Full-repository unit/architecture tests and vet, IAM/Audit contract and service
+race tests, stable generation and Linux amd64 builds also pass.
+
+The independent five-process gate opens the second tenant over HTTP, admits a
+real PaaS mutation during an Audit outage, then suspends the tenant. Both
+outboxes deliver after Audit returns while old IAM/PaaS/Audit sessions remain
+denied. Original-primary recovery, equal-bootstrap IAM restart and explicit
+tenant restoration preserve forced password change and old-session revocation.
+Disabling the resource creator changes neither the application document nor
+the accepted Operation's tenant and original actor. All four lifecycle facts
+arrive in the installation chain; tenant audit bytes, replay and verification
+remain separate. This gate does not run a workload executor and therefore does
+not by itself prove continued execution of a live container.
+
+These are verified backend slices, not acceptance of the full multi-tenant
+target. The console still needs this branch's lifecycle adaptation and real
+browser gate. The complete database/quota isolation matrix and signed populated
+offline upgrade/rollback/backup/recovery gates remain unaccepted. The latter require
 the concrete release schema profile owned by FEAT-005/008; these retained-data
 process gates are not a substitute. Prior foundation evidence below covers
 only its named source revisions.

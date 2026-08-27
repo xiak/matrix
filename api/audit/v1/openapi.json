@@ -16,6 +16,10 @@
       "Action": {
         "enum": [
           "iam.organization.created",
+          "iam.tenant.created",
+          "iam.tenant.disabled",
+          "iam.tenant.enabled",
+          "iam.tenant-administrator.recovered",
           "iam.account-alias.set",
           "iam.principal.status-set",
           "iam.password.reset",
@@ -88,6 +92,110 @@
                   "properties": {
                     "action": {
                       "const": "iam.organization.created"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.tenant.created"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.tenant.disabled"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.tenant.enabled"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.tenant-administrator.recovered"
                     }
                   },
                   "required": [
@@ -1047,7 +1155,8 @@
                   "properties": {
                     "kind": {
                       "const": "ORGANIZATION"
-                    }
+                    },
+                    "tenantId": false
                   },
                   "required": [
                     "kind"
@@ -1056,6 +1165,186 @@
               },
               "required": [
                 "tenantId",
+                "iamDecisionId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.tenant.created"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "type": {
+                      "const": "USER"
+                    }
+                  }
+                },
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "ORGANIZATION"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                },
+                "tenantId": false
+              },
+              "required": [
+                "installationId",
+                "iamDecisionId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.tenant.disabled"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "type": {
+                      "const": "USER"
+                    }
+                  }
+                },
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "ORGANIZATION"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                },
+                "tenantId": false
+              },
+              "required": [
+                "installationId",
+                "iamDecisionId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.tenant.enabled"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "type": {
+                      "const": "USER"
+                    }
+                  }
+                },
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "ORGANIZATION"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                },
+                "tenantId": false
+              },
+              "required": [
+                "installationId",
+                "iamDecisionId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.tenant-administrator.recovered"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "type": {
+                      "const": "USER"
+                    }
+                  }
+                },
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "PRINCIPAL"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "tenantId"
+                  ]
+                },
+                "tenantId": false
+              },
+              "required": [
+                "installationId",
                 "iamDecisionId"
               ]
             }
@@ -1084,7 +1373,8 @@
                   "properties": {
                     "kind": {
                       "const": "ORGANIZATION"
-                    }
+                    },
+                    "tenantId": false
                   },
                   "required": [
                     "kind"
@@ -1121,7 +1411,8 @@
                   "properties": {
                     "kind": {
                       "const": "PRINCIPAL"
-                    }
+                    },
+                    "tenantId": false
                   },
                   "required": [
                     "kind"
@@ -1158,7 +1449,8 @@
                   "properties": {
                     "kind": {
                       "const": "PRINCIPAL"
-                    }
+                    },
+                    "tenantId": false
                   },
                   "required": [
                     "kind"
@@ -1196,7 +1488,8 @@
                   "properties": {
                     "kind": {
                       "const": "INSTALLATION"
-                    }
+                    },
+                    "tenantId": false
                   },
                   "required": [
                     "kind"
@@ -1233,7 +1526,8 @@
                   "properties": {
                     "kind": {
                       "const": "SESSION"
-                    }
+                    },
+                    "tenantId": false
                   },
                   "required": [
                     "kind"
@@ -1269,7 +1563,8 @@
                   "properties": {
                     "kind": {
                       "const": "SESSION"
-                    }
+                    },
+                    "tenantId": false
                   },
                   "required": [
                     "kind"
@@ -1306,7 +1601,8 @@
                   "properties": {
                     "kind": {
                       "const": "PRINCIPAL"
-                    }
+                    },
+                    "tenantId": false
                   },
                   "required": [
                     "kind"
@@ -1342,7 +1638,8 @@
                   "properties": {
                     "kind": {
                       "const": "PRINCIPAL"
-                    }
+                    },
+                    "tenantId": false
                   },
                   "required": [
                     "kind"
@@ -1379,7 +1676,8 @@
                   "properties": {
                     "kind": {
                       "const": "ROLE_BINDING"
-                    }
+                    },
+                    "tenantId": false
                   },
                   "required": [
                     "kind"
@@ -1416,7 +1714,8 @@
                   "properties": {
                     "kind": {
                       "const": "ROLE_BINDING"
-                    }
+                    },
+                    "tenantId": false
                   },
                   "required": [
                     "kind"
@@ -1454,7 +1753,8 @@
                   "properties": {
                     "kind": {
                       "const": "AUTHORIZATION_DECISION"
-                    }
+                    },
+                    "tenantId": false
                   },
                   "required": [
                     "kind"
@@ -1490,7 +1790,8 @@
                   "properties": {
                     "kind": {
                       "const": "APPLICATION"
-                    }
+                    },
+                    "tenantId": false
                   },
                   "required": [
                     "kind"
@@ -1527,7 +1828,8 @@
                   "properties": {
                     "kind": {
                       "const": "CONFIGURATION"
-                    }
+                    },
+                    "tenantId": false
                   },
                   "required": [
                     "kind"
@@ -1564,7 +1866,8 @@
                   "properties": {
                     "kind": {
                       "const": "CONFIGURATION_REVISION"
-                    }
+                    },
+                    "tenantId": false
                   },
                   "required": [
                     "kind"
@@ -1601,7 +1904,8 @@
                   "properties": {
                     "kind": {
                       "const": "APPLICATION_REVISION"
-                    }
+                    },
+                    "tenantId": false
                   },
                   "required": [
                     "kind"
@@ -1638,7 +1942,8 @@
                   "properties": {
                     "kind": {
                       "const": "DEPLOYMENT"
-                    }
+                    },
+                    "tenantId": false
                   },
                   "required": [
                     "kind"
@@ -1675,7 +1980,8 @@
                   "properties": {
                     "kind": {
                       "const": "DEPLOYMENT"
-                    }
+                    },
+                    "tenantId": false
                   },
                   "required": [
                     "kind"
@@ -1712,7 +2018,8 @@
                   "properties": {
                     "kind": {
                       "const": "DEPLOYMENT"
-                    }
+                    },
+                    "tenantId": false
                   },
                   "required": [
                     "kind"
@@ -1749,7 +2056,8 @@
                   "properties": {
                     "kind": {
                       "const": "DEPLOYMENT"
-                    }
+                    },
+                    "tenantId": false
                   },
                   "required": [
                     "kind"
@@ -1792,7 +2100,8 @@
                   "properties": {
                     "kind": {
                       "const": "EXECUTION_POOL"
-                    }
+                    },
+                    "tenantId": false
                   },
                   "required": [
                     "kind"
@@ -1836,7 +2145,8 @@
                   "properties": {
                     "kind": {
                       "const": "EXECUTION_TARGET"
-                    }
+                    },
+                    "tenantId": false
                   },
                   "required": [
                     "kind"
@@ -1875,7 +2185,8 @@
                   "properties": {
                     "kind": {
                       "const": "QUOTA_ENTITLEMENT"
-                    }
+                    },
+                    "tenantId": false
                   },
                   "required": [
                     "kind"
@@ -1911,7 +2222,8 @@
                   "properties": {
                     "kind": {
                       "const": "SERVICE_INSTALLATION"
-                    }
+                    },
+                    "tenantId": false
                   },
                   "required": [
                     "kind"
@@ -1949,7 +2261,8 @@
                   "properties": {
                     "kind": {
                       "const": "SERVICE_INSTALLATION"
-                    }
+                    },
+                    "tenantId": false
                   },
                   "required": [
                     "kind"
@@ -1986,7 +2299,8 @@
                   "properties": {
                     "kind": {
                       "const": "AUDIT_RECORDS"
-                    }
+                    },
+                    "tenantId": false
                   },
                   "required": [
                     "kind"
@@ -2023,7 +2337,8 @@
                   "properties": {
                     "kind": {
                       "const": "AUDIT_CHAIN"
-                    }
+                    },
+                    "tenantId": false
                   },
                   "required": [
                     "kind"
@@ -2066,7 +2381,8 @@
                   "properties": {
                     "kind": {
                       "const": "AUDIT_RECORDS"
-                    }
+                    },
+                    "tenantId": false
                   },
                   "required": [
                     "kind"
@@ -2110,7 +2426,8 @@
                   "properties": {
                     "kind": {
                       "const": "AUDIT_CHAIN"
-                    }
+                    },
+                    "tenantId": false
                   },
                   "required": [
                     "kind"
@@ -2561,6 +2878,9 @@
           },
           "kind": {
             "$ref": "#/components/schemas/TargetKind"
+          },
+          "tenantId": {
+            "$ref": "#/components/schemas/TenantID"
           }
         },
         "required": [

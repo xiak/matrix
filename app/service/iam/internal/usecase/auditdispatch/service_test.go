@@ -7,6 +7,7 @@ import (
 	"time"
 
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 )
 
 func TestDispatchClassifiesDeliveryWithoutLosingTheClaim(t *testing.T) {
@@ -73,6 +74,58 @@ func TestDispatchLeavesFencingFailuresVisible(t *testing.T) {
 	}
 }
 
+func TestDispatchBindsTenantAndInstallationChainsToTheStoredOwner(t *testing.T) {
+	platform := dispatchClaim(1)
+	platform.InstallationID = "installation-example"
+	platform.Event.TenantID = ""
+	platform.Event.InstallationID = platform.InstallationID
+	platform.Event.Action = auditv1.ActionIAMTenantDisabled
+	platform.Event.Actor = auditv1.ActorReference{Type: auditv1.ActorUser, ID: "platform-operator"}
+	platform.Event.IAMDecisionID = "decision-disable-tenant"
+	platform.Event.Target = auditv1.TargetReference{Kind: auditv1.TargetOrganization, ID: "another-tenant"}
+	for _, test := range []struct {
+		name  string
+		claim Claim
+		edit  func(*Claim)
+		valid bool
+	}{
+		{name: "tenant fact", claim: dispatchClaim(1), valid: true},
+		{name: "installation lifecycle fact", claim: platform, valid: true},
+		{name: "wrong tenant owner", claim: dispatchClaim(1), edit: func(claim *Claim) { claim.OrganizationID = "another-tenant" }},
+		{name: "unsealed installation", claim: platform, edit: func(claim *Claim) { claim.InstallationID = "" }},
+		{name: "wrong installation", claim: platform, edit: func(claim *Claim) { claim.InstallationID = "installation-other" }},
+		{name: "missing storage owner", claim: platform, edit: func(claim *Claim) { claim.OrganizationID = "" }},
+		{name: "tenant cannot replace installation", claim: platform, edit: func(claim *Claim) { claim.Event.TenantID = "another-tenant"; claim.Event.InstallationID = "" }},
+		{name: "mixed chain scopes", claim: platform, edit: func(claim *Claim) { claim.Event.TenantID = "another-tenant" }},
+		{name: "wrong action scope", claim: platform, edit: func(claim *Claim) { claim.Event.Action = auditv1.ActionIAMOrganizationCreated }},
+		{name: "substituted event", claim: platform, edit: func(claim *Claim) { claim.EventID = "event-other" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if test.edit != nil {
+				test.edit(&test.claim)
+			}
+			repository := &dispatchRepository{claim: test.claim}
+			ingestor := &dispatchIngestor{}
+			usecase, err := NewUsecase(repository, ingestor, Config{
+				WorkerID: "iam-audit-worker", LeaseDuration: 10 * time.Second,
+				DeliveryTimeout: 5 * time.Second, InitialBackoff: time.Second,
+				MaxBackoff: 4 * time.Second, MaxAttempts: 3,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := usecase.DispatchOnce(context.Background())
+			if test.valid {
+				if err != nil || !result.Delivered || ingestor.events != 1 || len(repository.completions) != 1 {
+					t.Fatalf("valid scoped claim: result=%#v error=%v deliveries=%d", result, err, ingestor.events)
+				}
+			} else if err == nil || ingestor.events != 0 || len(repository.completions) != 0 {
+				t.Fatalf("invalid scope reached delivery: result=%#v error=%v deliveries=%d", result, err, ingestor.events)
+			}
+		})
+	}
+}
+
 type dispatchRepository struct {
 	claim       Claim
 	completeErr error
@@ -127,7 +180,7 @@ func dispatchClaim(attempts int) Claim {
 		OccurredAt:    now,
 	}
 	return Claim{
-		TenantID: event.TenantID, EventID: event.EventID, Attempts: attempts,
+		OrganizationID: iamv1.OrganizationID(event.TenantID), EventID: event.EventID, Attempts: attempts,
 		FencingToken: uint64(attempts), LeaseExpiresAt: now.Add(10 * time.Second), Event: event,
 	}
 }

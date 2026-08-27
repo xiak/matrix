@@ -74,6 +74,7 @@ func (service *Authority) Bootstrap(
 		event, err := newAuditEvent(
 			eventID,
 			document.Organization.ID,
+			"",
 			auditv1.ActorReference{Type: auditv1.ActorSystem, ID: "iam-bootstrap"},
 			auditv1.ActionIAMBootstrapApplied,
 			auditv1.TargetReference{Kind: auditv1.TargetInstallation, ID: document.InstallationID},

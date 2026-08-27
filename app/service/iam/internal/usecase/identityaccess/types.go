@@ -57,7 +57,10 @@ type Transaction interface {
 	ReadAccount(context.Context, iamv1.OrganizationID, iamv1.PrincipalID) (iamv1.OrganizationAccount, error)
 	ListPrincipals(context.Context, AccountRead) (iamv1.PrincipalList, error)
 	ListAccounts(context.Context, AccountRead) (iamv1.OrganizationAccountList, error)
+	ReadOrganization(context.Context, AccountRead, iamv1.OrganizationID) (iamv1.OrganizationAccount, error)
 	CreateOrganization(context.Context, OrganizationMutation) (iamv1.OrganizationAccount, error)
+	SetOrganizationStatus(context.Context, OrganizationStatusMutation) (iamv1.OrganizationAccount, error)
+	RecoverOrganizationAdministrator(context.Context, OrganizationAdministratorRecovery) (iamv1.OrganizationAccount, error)
 	SetAccountAlias(context.Context, AccountAliasMutation) (iamv1.OrganizationAccount, error)
 	ChangeSubaccount(context.Context, SubaccountMutation) (iamv1.Principal, error)
 	Readiness(context.Context) (ReadinessSnapshot, error)
@@ -86,6 +89,28 @@ type AccountAliasMutation struct {
 	Alias            string
 	ResourceVersion  uint64
 	AuditEvent       auditv1.Event
+}
+
+type OrganizationStatusMutation struct {
+	ActorOrganizationID iamv1.OrganizationID
+	ActorPrincipalID    iamv1.PrincipalID
+	DecisionID          iamv1.DecisionID
+	OrganizationID      iamv1.OrganizationID
+	Status              iamv1.OrganizationStatus
+	ResourceVersion     uint64
+	AuditEvent          auditv1.Event
+}
+
+type OrganizationAdministratorRecovery struct {
+	ActorOrganizationID iamv1.OrganizationID
+	ActorPrincipalID    iamv1.PrincipalID
+	DecisionID          iamv1.DecisionID
+	OrganizationID      iamv1.OrganizationID
+	PrincipalID         iamv1.PrincipalID
+	ResourceVersion     uint64
+	PasswordHash        authority.PasswordHash
+	BindingID           iamv1.RoleBindingID
+	AuditEvent          auditv1.Event
 }
 
 type SubaccountMutation struct {

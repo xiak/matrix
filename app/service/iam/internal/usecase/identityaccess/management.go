@@ -566,6 +566,7 @@ func (service *Authority) managementDecision(
 	event, err := newAuditEvent(
 		eventID,
 		subject.Subject.Organization.ID,
+		"",
 		auditv1.ActorReference{
 			Type: auditv1.ActorType(subject.Subject.Principal.Type),
 			ID:   auditv1.ActorID(subject.Subject.Principal.ID),
@@ -610,6 +611,7 @@ func (service *Authority) newManagementEvent(
 	return newAuditEvent(
 		eventID,
 		subject.Subject.Organization.ID,
+		"",
 		auditv1.ActorReference{
 			Type: auditv1.ActorType(subject.Subject.Principal.Type),
 			ID:   auditv1.ActorID(subject.Subject.Principal.ID),

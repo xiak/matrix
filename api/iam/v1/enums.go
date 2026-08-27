@@ -43,12 +43,14 @@ const (
 )
 
 const (
-	ActionIAMOrganizationCreate Action = "iam.organization.create"
-	ActionIAMOrganizationRead   Action = "iam.organization.read"
-	ActionIAMAccountAliasSet    Action = "iam.account-alias.set"
-	ActionIAMPrincipalList      Action = "iam.principal.list"
-	ActionIAMPrincipalSetStatus Action = "iam.principal.set-status"
-	ActionIAMPasswordReset      Action = "iam.password.reset"
+	ActionIAMOrganizationCreate               Action = "iam.organization.create"
+	ActionIAMOrganizationRead                 Action = "iam.organization.read"
+	ActionIAMOrganizationSetStatus            Action = "iam.organization.set-status"
+	ActionIAMOrganizationAdministratorRecover Action = "iam.organization-administrator.recover"
+	ActionIAMAccountAliasSet                  Action = "iam.account-alias.set"
+	ActionIAMPrincipalList                    Action = "iam.principal.list"
+	ActionIAMPrincipalSetStatus               Action = "iam.principal.set-status"
+	ActionIAMPasswordReset                    Action = "iam.password.reset"
 
 	ActionIAMPrincipalCreate           Action = "iam.principal.create"
 	ActionIAMPrincipalRead             Action = "iam.principal.read"
@@ -154,6 +156,8 @@ func AllServicePurposes() []ServicePurpose {
 var allActions = []Action{
 	ActionIAMOrganizationCreate,
 	ActionIAMOrganizationRead,
+	ActionIAMOrganizationSetStatus,
+	ActionIAMOrganizationAdministratorRecover,
 	ActionIAMAccountAliasSet,
 	ActionIAMPrincipalList,
 	ActionIAMPrincipalSetStatus,
@@ -217,7 +221,9 @@ var allServicePurposes = []ServicePurpose{
 // organization membership. Unknown actions grant neither kind of authority.
 func IsPlatformAction(action Action) bool {
 	switch action {
-	case ActionIAMPlatformRoleBindingPut, ActionIAMPlatformRoleBindingRevoke,
+	case ActionIAMOrganizationCreate, ActionIAMOrganizationRead,
+		ActionIAMOrganizationSetStatus, ActionIAMOrganizationAdministratorRecover,
+		ActionIAMPlatformRoleBindingPut, ActionIAMPlatformRoleBindingRevoke,
 		ActionPaaSExecutionPoolCreate, ActionPaaSExecutionPoolRead,
 		ActionPaaSExecutionTargetRegister, ActionPaaSExecutionTargetRead,
 		ActionPaaSPlatformOperationRead, ActionAuditPlatformRecordRead, ActionAuditPlatformIntegrityVerify:

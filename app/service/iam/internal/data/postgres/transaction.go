@@ -207,9 +207,8 @@ func (value *transaction) LookupSession(
 		sessionRevokedAt                                            *time.Time
 		verificationDigest                                          string
 		roles                                                       []string
-		bootstrapAdministrator                                      bool
 	)
-	err := value.tx.QueryRow(ctx, "SELECT session.*, iam.is_bootstrap_administrator(session.organization_id, session.principal_id) FROM iam.lookup_session($1) AS session", lookupDigest).Scan(
+	err := value.tx.QueryRow(ctx, "SELECT * FROM iam.lookup_session($1)", lookupDigest).Scan(
 		&organizationID,
 		&organizationDisplayName,
 		&organizationStatus,
@@ -232,7 +231,6 @@ func (value *transaction) LookupSession(
 		&sessionRevokedAt,
 		&verificationDigest,
 		&roles,
-		&bootstrapAdministrator,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return identityaccess.SessionCredential{}, false, nil
@@ -250,7 +248,6 @@ func (value *transaction) LookupSession(
 		revokedAt = &converted
 	}
 	subject := authority.SubjectContext{
-		BootstrapAdministrator: bootstrapAdministrator,
 		Organization: iamv1.Organization{
 			APIVersion:      iamv1.APIVersion,
 			Kind:            "Organization",

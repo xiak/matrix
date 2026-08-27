@@ -237,6 +237,20 @@ type SetPrincipalStatusRequest struct {
 	RequestID       string          `json:"requestId"`
 }
 
+type SetOrganizationStatusRequest struct {
+	Status          OrganizationStatus `json:"status"`
+	ResourceVersion uint64             `json:"resourceVersion"`
+	RequestID       string             `json:"requestId"`
+}
+
+// Recovery names the existing primary USER; it cannot select a new owner.
+type RecoverOrganizationAdministratorRequest struct {
+	PrincipalID     PrincipalID `json:"principalId"`
+	InitialPassword Secret      `json:"initialPassword"`
+	ResourceVersion uint64      `json:"resourceVersion"`
+	RequestID       string      `json:"requestId"`
+}
+
 type ResetUserPasswordRequest struct {
 	InitialPassword Secret `json:"initialPassword"`
 	ResourceVersion uint64 `json:"resourceVersion"`

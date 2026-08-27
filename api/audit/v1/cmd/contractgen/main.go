@@ -320,6 +320,12 @@ func actionRules() (eventRules []any, recordRules []any) {
 			"result": object{"enum": openapi31.StringValues(contract.Results)},
 		}
 		thenRequired := []string{}
+		target := thenProperties["target"].(object)
+		if action == auditv1.ActionIAMTenantAdministratorRecovered {
+			target["required"] = []string{"kind", "tenantId"}
+		} else {
+			target["properties"].(object)["tenantId"] = false
+		}
 		if contract.PlatformOnly {
 			thenRequired = append(thenRequired, "installationId")
 			thenProperties["tenantId"] = false

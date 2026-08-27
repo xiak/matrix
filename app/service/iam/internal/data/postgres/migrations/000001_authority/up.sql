@@ -352,6 +352,9 @@ RETURNS void
 LANGUAGE plpgsql
 SET search_path = pg_catalog, pg_temp
 AS $function$
+DECLARE
+    platform_lifecycle boolean := expected_action IN (
+        'iam.tenant.created','iam.tenant.disabled','iam.tenant.enabled','iam.tenant-administrator.recovered');
 BEGIN
     IF jsonb_typeof(submitted_event) <> 'object'
        OR jsonb_typeof(submitted_event->'actor') <> 'object'
@@ -359,7 +362,6 @@ BEGIN
        OR jsonb_typeof(submitted_event->'apiVersion') <> 'string'
        OR jsonb_typeof(submitted_event->'kind') <> 'string'
        OR jsonb_typeof(submitted_event->'eventId') <> 'string'
-       OR jsonb_typeof(submitted_event->'tenantId') <> 'string'
        OR jsonb_typeof(submitted_event->'action') <> 'string'
        OR jsonb_typeof(submitted_event->'result') <> 'string'
        OR jsonb_typeof(submitted_event->'requestDigest') <> 'string'
@@ -367,20 +369,25 @@ BEGIN
        OR jsonb_typeof(submitted_event->'correlationId') <> 'string'
        OR jsonb_typeof(submitted_event->'occurredAt') <> 'string'
        OR NOT (submitted_event ?& ARRAY[
-            'apiVersion', 'kind', 'eventId', 'tenantId', 'actor', 'action',
+            'apiVersion', 'kind', 'eventId', 'actor', 'action',
             'target', 'result', 'requestDigest', 'requestId',
             'correlationId', 'occurredAt'
        ])
        OR NOT ((submitted_event->'actor') ?& ARRAY['type', 'id'])
        OR NOT ((submitted_event->'target') ?& ARRAY['kind', 'id'])
        OR (submitted_event - ARRAY[
-            'apiVersion', 'kind', 'eventId', 'tenantId', 'actor',
+            'apiVersion', 'kind', 'eventId', 'tenantId', 'installationId', 'actor',
             'iamDecisionId', 'action', 'target', 'result', 'requestDigest',
             'requestId', 'correlationId', 'operationId', 'traceparent',
             'occurredAt'
        ]) <> '{}'::jsonb
        OR ((submitted_event->'actor') - ARRAY['type', 'id']) <> '{}'::jsonb
-       OR ((submitted_event->'target') - ARRAY['kind', 'id']) <> '{}'::jsonb
+       OR ((submitted_event->'target') - ARRAY['kind', 'id', 'tenantId']) <> '{}'::jsonb
+       OR (expected_action = 'iam.tenant-administrator.recovered' AND (
+            jsonb_typeof(submitted_event#>'{target,tenantId}') IS DISTINCT FROM 'string'
+            OR COALESCE(submitted_event#>>'{target,tenantId}','') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+          ))
+       OR (expected_action <> 'iam.tenant-administrator.recovered' AND (submitted_event->'target') ? 'tenantId')
        OR jsonb_typeof(submitted_event#>'{actor,type}') <> 'string'
        OR jsonb_typeof(submitted_event#>'{actor,id}') <> 'string'
        OR jsonb_typeof(submitted_event#>'{target,kind}') <> 'string'
@@ -394,7 +401,18 @@ BEGIN
        OR octet_length(submitted_event::text) > 131072
        OR submitted_event->>'apiVersion' IS DISTINCT FROM 'audit.matrix.xiak.com/v1'
        OR submitted_event->>'kind' IS DISTINCT FROM 'AuditEvent'
-       OR submitted_event->>'tenantId' IS DISTINCT FROM expected_tenant_id
+       OR (NOT platform_lifecycle AND (
+            jsonb_typeof(submitted_event->'tenantId') IS DISTINCT FROM 'string'
+            OR submitted_event->>'tenantId' IS DISTINCT FROM expected_tenant_id
+            OR submitted_event ? 'installationId'
+          ))
+       OR (platform_lifecycle AND (
+            submitted_event ? 'tenantId'
+            OR jsonb_typeof(submitted_event->'installationId') IS DISTINCT FROM 'string'
+            OR submitted_event#>>'{actor,type}' IS DISTINCT FROM 'USER'
+            OR NOT EXISTS(SELECT 1 FROM iam.bootstrap_receipts AS receipt
+                WHERE receipt.organization_id=expected_tenant_id AND receipt.installation_id=submitted_event->>'installationId')
+          ))
        OR submitted_event->>'action' IS DISTINCT FROM expected_action
        OR submitted_event#>>'{target,kind}' IS DISTINCT FROM expected_target_kind
        OR submitted_event#>>'{target,id}' IS DISTINCT FROM expected_target_id
@@ -435,7 +453,8 @@ BEGIN
             'iam.principal.created', 'iam.role-binding.put',
             'iam.role-binding.revoked', 'iam.authorization.decided',
             'iam.organization.created', 'iam.account-alias.set',
-            'iam.principal.status-set', 'iam.password.reset'
+            'iam.principal.status-set', 'iam.password.reset',
+            'iam.tenant.created', 'iam.tenant.disabled', 'iam.tenant.enabled', 'iam.tenant-administrator.recovered'
        ) AND NOT (submitted_event ? 'iamDecisionId'))
        OR (expected_action = 'iam.authorization.decided'
             AND submitted_event#>>'{target,id}' IS DISTINCT FROM
@@ -664,7 +683,20 @@ BEGIN
     SELECT EXISTS (
                SELECT 1 FROM iam.bootstrap_receipts AS receipt
                 WHERE receipt.singleton
-           ) AND to_regprocedure('iam.read_audit_evidence(text,text,text,text,jsonb)') IS NOT NULL AND NOT EXISTS (
+           ) AND to_regprocedure('iam.read_audit_evidence(text,text,text,text,jsonb)') IS NOT NULL
+           AND to_regprocedure('iam.set_organization_status(text,text,text,text,text,bigint,jsonb)') IS NOT NULL
+           AND to_regprocedure('iam.recover_organization_administrator(text,text,text,text,text,bigint,text,text,jsonb)') IS NOT NULL
+           AND EXISTS (
+               SELECT 1 FROM pg_catalog.pg_proc AS claim
+                WHERE claim.oid = to_regprocedure('iam.claim_audit_event(text,integer)')
+                  AND claim.proallargtypes = ARRAY['text'::regtype::oid, 'integer'::regtype::oid,
+                      'text'::regtype::oid, 'text'::regtype::oid, 'jsonb'::regtype::oid,
+                      'integer'::regtype::oid, 'bigint'::regtype::oid, 'timestamptz'::regtype::oid, 'text'::regtype::oid]
+                  AND claim.proargnames[3:9] = ARRAY['tenant_id','event_id','event_document','attempts',
+                      'fencing_token','lease_expires_at','installation_id']
+                  AND claim.proargmodes[3:9] = ARRAY['t','t','t','t','t','t','t']::"char"[]
+           )
+           AND NOT EXISTS (
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
@@ -683,6 +715,8 @@ AS $function$
     SELECT CASE submitted_action
         WHEN 'iam.organization.create' THEN 'ORGANIZATION'
         WHEN 'iam.organization.read' THEN 'ORGANIZATION'
+        WHEN 'iam.organization.set-status' THEN 'ORGANIZATION'
+        WHEN 'iam.organization-administrator.recover' THEN 'PRINCIPAL'
         WHEN 'iam.account-alias.set' THEN 'ORGANIZATION'
         WHEN 'iam.principal.list' THEN 'ORGANIZATION'
         WHEN 'iam.principal.set-status' THEN 'PRINCIPAL'
@@ -736,6 +770,8 @@ PARALLEL SAFE
 SET search_path = pg_catalog, pg_temp
 AS $function$
     SELECT COALESCE(submitted_action IN (
+        'iam.organization.create', 'iam.organization.read',
+        'iam.organization.set-status', 'iam.organization-administrator.recover',
         'iam.platform-role-binding.put', 'iam.platform-role-binding.revoke',
         'paas.execution-pool.create', 'paas.execution-pool.read',
         'paas.execution-target.register', 'paas.execution-target.read',
@@ -1697,7 +1733,8 @@ BEGIN
 END
 $function$;
 
-CREATE OR REPLACE FUNCTION iam.claim_audit_event(
+DROP FUNCTION IF EXISTS iam.claim_audit_event(text, integer);
+CREATE FUNCTION iam.claim_audit_event(
     submitted_worker_id text,
     submitted_lease_seconds integer
 )
@@ -1707,7 +1744,8 @@ RETURNS TABLE (
     event_document jsonb,
     attempts integer,
     fencing_token bigint,
-    lease_expires_at timestamptz
+    lease_expires_at timestamptz,
+    installation_id text
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -1755,8 +1793,11 @@ BEGIN
         RETURNING outbox.*
     )
     SELECT claimed.tenant_id, claimed.event_id, claimed.event_document,
-           claimed.attempts, claimed.fencing_token, claimed.lease_expires_at
-      FROM claimed;
+           claimed.attempts, claimed.fencing_token, claimed.lease_expires_at,
+           COALESCE(receipt.installation_id, '')
+      FROM claimed
+      LEFT JOIN iam.bootstrap_receipts AS receipt
+        ON receipt.organization_id = claimed.tenant_id;
 END
 $function$;
 

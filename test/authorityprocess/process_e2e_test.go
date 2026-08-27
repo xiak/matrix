@@ -507,7 +507,17 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	platformDecisions := []iamv1.AuthorizationDecision{
 		assertPlatformAuthorization(t, iamEndpoint, adminLogin.Credential, "principal-admin", "request-platform-admin", true),
 	}
-	sensitive = append(sensitive, proveTenantAccountProcesses(t, ctx, admin, iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential)...)
+	sensitive = append(sensitive, proveTenantAccountProcesses(t, ctx, admin, iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential,
+		func(admit func()) {
+			auditProcess.stop()
+			admit()
+			auditProcess = start(binaries.audit, auditEnvironment)
+			waitHTTPStatus(t, ctx, auditProcess, auditEndpoint+"/ready", http.StatusOK)
+		}, func() {
+			iamProcess.stop()
+			iamProcess = start(binaries.iam, iamEnvironment)
+			waitHTTPStatus(t, ctx, iamProcess, iamEndpoint+"/ready", http.StatusOK)
+		})...)
 	platformAuditRecord := ingestPlatformAuditFixture(t, auditEndpoint, platformDecisions[0])
 	assertPlatformAuditAccess(t, auditEndpoint, adminLogin.Credential, http.StatusOK)
 	waitAllIAMOutboxDelivered(t, ctx, admin)
@@ -1291,7 +1301,7 @@ func ingestPlatformAuditFixture(t *testing.T, endpoint string, decision iamv1.Au
 	response := performJSON(t, http.MethodPost, endpoint+"/v1/events", paasServiceCredential, event)
 	var result auditv1.IngestionResult
 	if response.Status != http.StatusCreated || json.Unmarshal(response.Body, &result) != nil ||
-		auditv1.ValidateIngestionResult(result) != nil || result.Record.Sequence != 1 || result.Record.Event != event {
+		auditv1.ValidateIngestionResult(result) != nil || result.Record.Event != event {
 		t.Fatalf("platform Audit ingestion failed: status=%d", response.Status)
 	}
 	wrong := event
@@ -1498,6 +1508,8 @@ func proveTenantAccountProcesses(
 	auditEndpoint string,
 	paasEndpoint string,
 	bearer string,
+	withAuditOutage func(func()),
+	restartIAM func(),
 ) []string {
 	t.Helper()
 	const (
@@ -1580,7 +1592,122 @@ func proveTenantAccountProcesses(
 	if userProducer.Status != http.StatusUnauthorized {
 		t.Fatal("tenant owner gained audit producer authority")
 	}
-	return []string{initial, changed, primary.Credential, childLogin.Credential}
+	sensitive := []string{initial, changed, primary.Credential, childLogin.Credential}
+	readAccount := func(id string) iamv1.OrganizationAccount {
+		t.Helper()
+		response := performJSON(t, http.MethodGet, endpoint+"/v1/organizations/"+id, bearer, nil)
+		var account iamv1.OrganizationAccount
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &account) != nil || iamv1.ValidateOrganizationAccount(account) != nil {
+			t.Fatalf("platform tenant detail status=%d", response.Status)
+		}
+		return account
+	}
+	setStatus := func(id string, status iamv1.OrganizationStatus, expected int) {
+		t.Helper()
+		current := readAccount(id)
+		response := performJSON(t, http.MethodPost, endpoint+"/v1/organizations/"+id+":set-status", bearer, iamv1.SetOrganizationStatusRequest{Status: status, ResourceVersion: current.Organization.ResourceVersion, RequestID: "request-process-tenant-status"})
+		if response.Status != expected {
+			t.Fatalf("set tenant status=%d want=%d", response.Status, expected)
+		}
+	}
+	setStatus("organization-process", iamv1.OrganizationDisabled, http.StatusForbidden)
+	var retainedApplication string
+	if err := admin.QueryRow(ctx, "SELECT document::text FROM paas.applications WHERE tenant_id=$1 AND id='application-customer-only'", crossTenantID).Scan(&retainedApplication); err != nil {
+		t.Fatal(err)
+	}
+	withAuditOutage(func() {
+		createPaaSApplication(t, paasEndpoint, childLogin.Credential, "application-before-tenant-pause", "before-tenant-pause", "create-before-tenant-pause", http.StatusCreated)
+		setStatus(crossTenantID, iamv1.OrganizationDisabled, http.StatusOK)
+		createPaaSApplication(t, paasEndpoint, childLogin.Credential, "application-after-tenant-pause", "after-tenant-pause", "create-after-tenant-pause", http.StatusUnauthorized)
+		assertPaaSApplicationAbsent(t, ctx, admin, "application-after-tenant-pause")
+	})
+	waitAllIAMOutboxDelivered(t, ctx, admin)
+	waitAllPaaSOutboxDelivered(t, ctx, admin)
+	_, historical := findPaaSEvent(t, ctx, admin, auditv1.ActionPaaSApplicationCreated, "application-before-tenant-pause")
+	if historical.TenantID != crossTenantID || historical.Actor.ID != auditv1.ActorID(child.ID) {
+		t.Fatal("paused tenant historical outbox lost identity")
+	}
+	replayed := performJSON(t, http.MethodPost, auditEndpoint+"/v1/events", paasServiceCredential, historical)
+	var replay auditv1.IngestionResult
+	if replayed.Status != http.StatusOK || json.Unmarshal(replayed.Body, &replay) != nil || replay.Outcome != auditv1.IngestionDuplicate {
+		t.Fatal("suspended tenant lost committed historical audit delivery")
+	}
+	for _, credential := range []string{primary.Credential, childLogin.Credential} {
+		if response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", credential, nil); response.Status != http.StatusUnauthorized {
+			t.Fatal("tenant suspension missed IAM")
+		}
+		getPaaSApplication(t, paasEndpoint, credential, "application-customer-only", http.StatusUnauthorized)
+		queryAudit(t, auditEndpoint, credential, auditv1.QueryRecordsRequest{PageSize: 10}, http.StatusUnauthorized)
+	}
+	const recoveryPassword = "Primary-Process-Recovered-Password-68!"
+	current := readAccount(crossTenantID)
+	recovery := performJSON(t, http.MethodPost, endpoint+"/v1/organizations/"+crossTenantID+":recover-administrator", bearer, map[string]any{
+		"principalId": account.PrimaryPrincipalID, "initialPassword": recoveryPassword, "resourceVersion": current.Organization.ResourceVersion, "requestId": "request-process-primary-recovery"})
+	if recovery.Status != http.StatusOK {
+		t.Fatalf("recover paused tenant primary status=%d", recovery.Status)
+	}
+	restartIAM()
+	if readAccount(crossTenantID).Organization.Status != iamv1.OrganizationDisabled {
+		t.Fatal("recovery or equal-bootstrap restart revived tenant")
+	}
+	if response := performJSON(t, http.MethodPost, endpoint+"/v1/auth/login", "", map[string]any{"loginName": "customer.primary", "password": recoveryPassword, "requestId": "request-paused-primary-login"}); response.Status != http.StatusUnauthorized {
+		t.Fatal("recovered primary bypassed tenant suspension")
+	}
+	setStatus(crossTenantID, iamv1.OrganizationActive, http.StatusOK)
+	getPaaSApplication(t, paasEndpoint, childLogin.Credential, "application-customer-only", http.StatusUnauthorized)
+	if response := performJSON(t, http.MethodPost, endpoint+"/v1/auth/login", "", map[string]any{"loginName": "customer.primary", "password": changed, "requestId": "request-old-primary-login"}); response.Status != http.StatusUnauthorized {
+		t.Fatal("primary recovery retained old password")
+	}
+	primary = loginIAM(t, endpoint, "customer.primary", recoveryPassword, "request-recovered-primary-login")
+	sensitive = append(sensitive, recoveryPassword, primary.Credential)
+	createPaaSApplication(t, paasEndpoint, primary.Credential, "application-before-recovery-change", "before-recovery-change", "create-before-recovery-change", http.StatusForbidden)
+	changePasswordIAM(t, endpoint, primary.Credential, recoveryPassword, changed, "request-recovered-primary-password")
+	getPaaSApplication(t, paasEndpoint, primary.Credential, "application-customer-only", http.StatusOK)
+	getPaaSApplication(t, paasEndpoint, bearer, "application-customer-only", http.StatusNotFound)
+	childLogin = loginIAM(t, endpoint, "account.user@process-company", changed, "request-resumed-child-login")
+	sensitive = append(sensitive, childLogin.Credential)
+	memberDisabled := performJSON(t, http.MethodPost, endpoint+"/v1/principals/"+string(child.ID)+":set-status", primary.Credential, iamv1.SetPrincipalStatusRequest{Status: iamv1.PrincipalDisabled, ResourceVersion: 2, RequestID: "request-process-creator-disabled"})
+	if memberDisabled.Status != http.StatusOK {
+		t.Fatalf("disable resource creator status=%d", memberDisabled.Status)
+	}
+	getPaaSApplication(t, paasEndpoint, childLogin.Credential, "application-customer-only", http.StatusUnauthorized)
+	getPaaSApplication(t, paasEndpoint, primary.Credential, "application-customer-only", http.StatusOK)
+	var unchanged bool
+	if err := admin.QueryRow(ctx, "SELECT document::text=$2 FROM paas.applications WHERE tenant_id=$1 AND id='application-customer-only'", crossTenantID, retainedApplication).Scan(&unchanged); err != nil || !unchanged {
+		t.Fatal("identity lifecycle changed tenant resource ownership or content")
+	}
+	operationResponse := performJSON(t, http.MethodGet, paasEndpoint+"/v1/operations/"+string(operation.ID), primary.Credential, nil)
+	var retainedOperation paasv1.Operation
+	if operationResponse.Status != http.StatusOK || json.Unmarshal(operationResponse.Body, &retainedOperation) != nil || retainedOperation.Scope.TenantID != crossTenantID || retainedOperation.RequestedBy.ID != string(child.ID) {
+		t.Fatal("creator suspension changed accepted Operation ownership")
+	}
+	if response := performJSON(t, http.MethodGet, paasEndpoint+"/v1/operations/"+string(operation.ID), bearer, nil); response.Status != http.StatusNotFound {
+		t.Fatal("platform identity read another tenant's Operation")
+	}
+	waitAllIAMOutboxDelivered(t, ctx, admin)
+	for _, action := range []auditv1.Action{auditv1.ActionIAMTenantCreated, auditv1.ActionIAMTenantDisabled, auditv1.ActionIAMTenantEnabled, auditv1.ActionIAMTenantAdministratorRecovered} {
+		response := performJSON(t, http.MethodPost, auditEndpoint+"/v1/platform/records:query", bearer, auditv1.QueryRecordsRequest{PageSize: 100, Action: action})
+		var records auditv1.RecordPage
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &records) != nil || len(records.Records) != 1 || records.InstallationID != "installation-process" || records.TenantID != "" {
+			t.Fatalf("lifecycle platform audit action=%s status=%d", action, response.Status)
+		}
+		event := records.Records[0].Event
+		if action == auditv1.ActionIAMTenantAdministratorRecovered && (event.Target.TenantID != crossTenantID || event.Target.ID != string(account.PrimaryPrincipalID)) {
+			t.Fatal("delivered recovery fact substituted its primary tenant")
+		}
+	}
+	assertPlatformAuditAccess(t, auditEndpoint, primary.Credential, http.StatusForbidden)
+	chain = verifyAudit(t, auditEndpoint, primary.Credential)
+	if chain.TenantID != crossTenantID || !chain.Complete {
+		t.Fatal("recovery broke original tenant audit chain")
+	}
+	setStatus(crossTenantID, iamv1.OrganizationDisabled, http.StatusOK)
+	restartIAM()
+	getPaaSApplication(t, paasEndpoint, primary.Credential, "application-customer-only", http.StatusUnauthorized)
+	if readAccount(crossTenantID).Organization.Status != iamv1.OrganizationDisabled {
+		t.Fatal("restart revived paused tenant access")
+	}
+	return sensitive
 }
 
 func createPaaSApplication(

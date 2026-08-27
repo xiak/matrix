@@ -257,21 +257,21 @@ func TestIAMHTTPManagementCommandsRequireCurrentSession(t *testing.T) {
 
 func TestIAMAccountRoutesRejectSelectorsAndMissingCredentialsBeforeWorkflow(t *testing.T) {
 	handler := newTestHandler(t, newHTTPWorkflow(t))
-	for _, target := range []string{"/v1/auth/me", "/v1/principals", "/v1/organizations"} {
+	for _, target := range []string{"/v1/auth/me", "/v1/principals", "/v1/organizations", "/v1/organizations/tenant-a"} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, target, nil))
 		if response.Code != http.StatusUnauthorized {
 			t.Errorf("anonymous %s status=%d", target, response.Code)
 		}
 	}
-	for _, target := range []string{"/v1/organization:alias", "/v1/organizations", "/v1/principals/user-a:set-status", "/v1/principals/user-a:reset-password"} {
+	for _, target := range []string{"/v1/organization:alias", "/v1/organizations", "/v1/principals/user-a:set-status", "/v1/principals/user-a:reset-password", "/v1/organizations/tenant-a:set-status", "/v1/organizations/tenant-a:recover-administrator"} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, target, strings.NewReader(`{}`)))
 		if response.Code != http.StatusUnauthorized {
 			t.Errorf("anonymous %s status=%d", target, response.Code)
 		}
 	}
-	for _, target := range []string{"/v1/auth/me?tenantId=forged", "/v1/principals?tenantId=forged", "/v1/organizations?after=a&after=b", "/v1/principals?after=", "/v1/principals?after=%2f", "/v1/principals?after=" + strings.Repeat("a", 513)} {
+	for _, target := range []string{"/v1/auth/me?tenantId=forged", "/v1/principals?tenantId=forged", "/v1/organizations/tenant-a?tenantId=forged", "/v1/organizations?after=a&after=b", "/v1/principals?after=", "/v1/principals?after=%2f", "/v1/principals?after=" + strings.Repeat("a", 513)} {
 		request := httptest.NewRequest(http.MethodGet, target, nil)
 		request.Header.Set("Authorization", "Bearer only-test-credential")
 		response := httptest.NewRecorder()

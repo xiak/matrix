@@ -3,6 +3,7 @@ package iamv1
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -35,6 +36,46 @@ func TestIAMSchemaAcceptsGoUTCSecondEncoding(t *testing.T) {
 	}
 	if err := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), "Readiness").Validate(instance); err != nil {
 		t.Fatalf("Go-encoded UTC second does not satisfy IAM schema: %v", err)
+	}
+}
+
+func TestIAMTenantLifecycleRequestsBindVersionAndOriginalPrimary(t *testing.T) {
+	document := loadIAMOpenAPI(t)
+	status := map[string]any{"status": "DISABLED", "resourceVersion": float64(1), "requestId": "request-status"}
+	recovery := map[string]any{"principalId": "primary-original", "initialPassword": "Recovery-Temporary-Password-79!", "resourceVersion": float64(1), "requestId": "request-recovery"}
+	for name, instance := range map[string]map[string]any{"SetOrganizationStatusRequest": status, "RecoverOrganizationAdministratorRequest": recovery} {
+		schema := compileIAMOpenAPISchema(t, document, name)
+		if err := schema.Validate(instance); err != nil {
+			t.Fatalf("valid %s: %v", name, err)
+		}
+		for _, selector := range []string{"tenantId", "installationId", "organizationId", "newPrimaryId", "role"} {
+			instance[selector] = "forged"
+			if schema.Validate(instance) == nil {
+				t.Fatalf("%s accepted selector %s", name, selector)
+			}
+			delete(instance, selector)
+		}
+		instance["resourceVersion"] = float64(0)
+		if schema.Validate(instance) == nil {
+			t.Fatalf("%s accepted missing concurrency authority", name)
+		}
+		instance["resourceVersion"] = float64(1)
+	}
+	encoded, _ := json.Marshal(recovery)
+	var request RecoverOrganizationAdministratorRequest
+	if err := DecodeRequest(bytes.NewReader(encoded), &request); err != nil || ValidateRecoverOrganizationAdministratorRequest(request) != nil {
+		t.Fatal("valid primary recovery request rejected")
+	}
+	if _, err := json.Marshal(request); !errors.Is(err, ErrSecretSerialization) {
+		t.Fatal("primary recovery serialized its temporary credential")
+	}
+	request.PrincipalID = ""
+	if ValidateRecoverOrganizationAdministratorRequest(request) == nil {
+		t.Fatal("recovery accepted missing original principal")
+	}
+	delete(recovery, "principalId")
+	if compileIAMOpenAPISchema(t, document, "RecoverOrganizationAdministratorRequest").Validate(recovery) == nil {
+		t.Fatal("recovery schema accepted missing original principal")
 	}
 }
 

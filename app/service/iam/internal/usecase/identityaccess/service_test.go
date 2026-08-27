@@ -615,11 +615,10 @@ func (transaction *coreTransaction) IssueSession(
 	}
 	transaction.sessions[mutation.LookupDigest] = SessionCredential{
 		Subject: authority.SubjectContext{
-			Organization:           transaction.organization,
-			Principal:              principal,
-			Session:                mutation.Session,
-			Roles:                  roles,
-			BootstrapAdministrator: principal.ID == transaction.principal.ID,
+			Organization: transaction.organization,
+			Principal:    principal,
+			Session:      mutation.Session,
+			Roles:        roles,
 		},
 		VerificationDigest: mutation.VerificationDigest,
 	}
