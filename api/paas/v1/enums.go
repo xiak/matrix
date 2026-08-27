@@ -34,6 +34,16 @@ const (
 
 type ExecutionTargetDesiredState string
 
+type MeasurementState string
+
+const (
+	MeasurementAvailable   MeasurementState = "AVAILABLE"
+	MeasurementWarmingUp   MeasurementState = "WARMING_UP"
+	MeasurementUnavailable MeasurementState = "UNAVAILABLE"
+	MeasurementUnsupported MeasurementState = "UNSUPPORTED"
+	MeasurementStale       MeasurementState = "STALE"
+)
+
 const (
 	ExecutionTargetActive   ExecutionTargetDesiredState = "ACTIVE"
 	ExecutionTargetDraining ExecutionTargetDesiredState = "DRAINING"

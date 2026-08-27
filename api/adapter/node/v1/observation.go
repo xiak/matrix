@@ -13,13 +13,14 @@ import (
 )
 
 const (
-	APIVersion                 = "node.adapter.matrix.xiak.com/v1"
-	ObservationRequestKind     = "ExecutionTargetObservationRequest"
-	ObservationResponseKind    = "ExecutionTargetObservationResponse"
-	ObservationPath            = "/adapter/node/v1/observation"
-	MaximumObservationBytes    = 64 * 1024
-	MaximumObservationDuration = 30 * time.Second
-	MaximumObservationAge      = 15 * time.Second
+	APIVersion                      = "node.adapter.matrix.xiak.com/v1"
+	ObservationRequestKind          = "ExecutionTargetObservationRequest"
+	ObservationResponseKind         = "ExecutionTargetObservationResponse"
+	ObservationPath                 = "/adapter/node/v1/observation"
+	MaximumObservationRequestBytes  = 64 * 1024
+	MaximumObservationResponseBytes = 256 * 1024
+	MaximumObservationDuration      = 30 * time.Second
+	MaximumObservationAge           = 15 * time.Second
 )
 
 var ErrInvalidObservation = errors.New("node observation document is invalid")
@@ -60,6 +61,13 @@ func NodeURI(value Identity) (string, error) {
 		return "", ErrInvalidObservation
 	}
 	return identityURI(value.InstallationID, "nodes", string(value.ExecutionTargetID)), nil
+}
+
+func CollectorURI(value Identity) (string, error) {
+	if ValidateIdentity(value) != nil {
+		return "", ErrInvalidObservation
+	}
+	return identityURI(value.InstallationID, "collectors", string(value.ExecutionTargetID)), nil
 }
 
 func ControllerURI(installationID, controllerID string) (string, error) {
@@ -108,6 +116,7 @@ func ValidateObservationResponse(value ObservationResponse) error {
 		ValidateIdentity(value.Identity) != nil ||
 		paasv1.ValidateID("commandId", string(value.CommandID)) != nil ||
 		value.Observation.ExecutionTargetID != value.Identity.ExecutionTargetID ||
+		value.Observation.Usage == nil ||
 		paasv1.ValidateExecutionTargetObservation(value.Observation) != nil {
 		return ErrInvalidObservation
 	}
@@ -116,7 +125,7 @@ func ValidateObservationResponse(value ObservationResponse) error {
 
 func DecodeObservationRequest(reader io.Reader) (ObservationRequest, error) {
 	var value ObservationRequest
-	if err := contractjson.DecodeObject(reader, MaximumObservationBytes, &value); err != nil {
+	if err := contractjson.DecodeObject(reader, MaximumObservationRequestBytes, &value); err != nil {
 		return ObservationRequest{}, ErrInvalidObservation
 	}
 	if err := ValidateObservationRequest(value); err != nil {
@@ -127,7 +136,7 @@ func DecodeObservationRequest(reader io.Reader) (ObservationRequest, error) {
 
 func DecodeObservationResponse(reader io.Reader) (ObservationResponse, error) {
 	var value ObservationResponse
-	if err := contractjson.DecodeObject(reader, MaximumObservationBytes, &value); err != nil {
+	if err := contractjson.DecodeObject(reader, MaximumObservationResponseBytes, &value); err != nil {
 		return ObservationResponse{}, ErrInvalidObservation
 	}
 	if err := ValidateObservationResponse(value); err != nil {

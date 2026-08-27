@@ -20,6 +20,10 @@ type HostObserver interface {
 	ObserveExecutionTarget(context.Context, paasv1.ObserveExecutionTargetRequest) (paasv1.ExecutionTargetObservation, error)
 }
 
+type UsageObserver interface {
+	ObserveExecutionTargetUsage(context.Context) (paasv1.ExecutionTargetUsage, error)
+}
+
 type Config struct {
 	Identity            nodev1.Identity
 	BindingRef          string
@@ -35,6 +39,7 @@ type Config struct {
 
 type Service struct {
 	host      HostObserver
+	usage     UsageObserver
 	config    Config
 	mu        sync.RWMutex
 	current   paasv1.ExecutionTargetObservation
@@ -42,7 +47,7 @@ type Service struct {
 	refreshMu sync.Mutex
 }
 
-func New(host HostObserver, config Config) (*Service, error) {
+func New(host HostObserver, usage UsageObserver, config Config) (*Service, error) {
 	if config.Interval == 0 {
 		config.Interval = 5 * time.Second
 	}
@@ -56,7 +61,7 @@ func New(host HostObserver, config Config) (*Service, error) {
 		config.Clock = time.Now
 	}
 	reserve := config.SystemReserve
-	if host == nil || nodev1.ValidateIdentity(config.Identity) != nil ||
+	if host == nil || usage == nil || nodev1.ValidateIdentity(config.Identity) != nil ||
 		paasv1.ValidateID("bindingRef", config.BindingRef) != nil ||
 		paasv1.ValidateDigest("expectedFingerprint", config.ExpectedFingerprint) != nil ||
 		config.Interval < time.Second || config.Interval > 30*time.Second ||
@@ -65,7 +70,7 @@ func New(host HostObserver, config Config) (*Service, error) {
 		reserve.CPUMillis < 0 || reserve.MemoryBytes < 0 || reserve.StorageBytes < 0 || reserve.WorkloadSlots < 0 {
 		return nil, errors.New("node sampling configuration is invalid")
 	}
-	return &Service{host: host, config: config}, nil
+	return &Service{host: host, usage: usage, config: config}, nil
 }
 
 // Run samples without any request or open UI. A failed observation makes the
@@ -89,6 +94,15 @@ func (service *Service) Refresh(ctx context.Context) error {
 	defer service.refreshMu.Unlock()
 	probeContext, cancel := context.WithTimeout(ctx, service.config.ProbeTimeout)
 	defer cancel()
+	type usageResult struct {
+		value paasv1.ExecutionTargetUsage
+		err   error
+	}
+	usageDone := make(chan usageResult, 1)
+	go func() {
+		value, err := service.usage.ObserveExecutionTargetUsage(probeContext)
+		usageDone <- usageResult{value: value, err: err}
+	}()
 	digest := sha256.Sum256([]byte(service.config.Identity.InstallationID + "\x00" +
 		string(service.config.Identity.ExecutionTargetID) + "\x00" + service.config.BindingRef))
 	id := hex.EncodeToString(digest[:])
@@ -100,8 +114,15 @@ func (service *Service) Refresh(ctx context.Context) error {
 		RequestDigest: "sha256:" + id, Deadline: service.now().Add(service.config.ProbeTimeout).Truncate(time.Microsecond),
 	}
 	value, err := service.host.ObserveExecutionTarget(probeContext, paasv1.ObserveExecutionTargetRequest{Command: command})
+	hostAvailable := err == nil && probeContext.Err() == nil
+	var usage usageResult
+	select {
+	case usage = <-usageDone:
+	case <-probeContext.Done():
+		usage.err = ErrUnavailable
+	}
 	now := service.now()
-	valid := err == nil && probeContext.Err() == nil && paasv1.ValidateExecutionTargetObservation(value) == nil &&
+	valid := hostAvailable && ctx.Err() == nil && paasv1.ValidateExecutionTargetObservation(value) == nil &&
 		value.ExecutionTargetID == service.config.Identity.ExecutionTargetID &&
 		value.IdentityFingerprint == service.config.ExpectedFingerprint &&
 		!value.ObservedAt.After(now) && now.Before(value.ObservedAt.Add(service.config.MaximumAge))
@@ -117,6 +138,21 @@ func (service *Service) Refresh(ctx context.Context) error {
 		}
 		valid = paasv1.ValidateExecutionTargetObservation(value) == nil
 	}
+	// A metrics outage is not an infrastructure identity failure and never
+	// changes capacity/reservations or stops accepted workloads.
+	if usage.err != nil || paasv1.ValidateExecutionTargetUsage(usage.value) != nil ||
+		usage.value.ObservedAt.After(now) || !now.Before(usage.value.ValidUntil) ||
+		!now.Before(usage.value.ObservedAt.Add(service.config.MaximumAge)) {
+		usage.value = paasv1.ExecutionTargetUsage{
+			ObservedAt: now, ValidUntil: now.Add(service.config.MaximumAge),
+			CPU:              paasv1.CPUUsage{State: paasv1.MeasurementUnavailable},
+			Memory:           paasv1.MemoryUsage{State: paasv1.MeasurementUnavailable},
+			FilesystemsState: paasv1.MeasurementUnavailable,
+		}
+	} else if maximum := usage.value.ObservedAt.Add(service.config.MaximumAge); usage.value.ValidUntil.After(maximum) {
+		usage.value.ValidUntil = maximum
+	}
+	value.Usage = &usage.value
 	service.mu.Lock()
 	defer service.mu.Unlock()
 	service.available = valid
@@ -138,7 +174,12 @@ func (service *Service) Current(ctx context.Context) (paasv1.ExecutionTargetObse
 		!now.Before(service.current.ObservedAt.Add(service.config.MaximumAge)) {
 		return paasv1.ExecutionTargetObservation{}, ErrUnavailable
 	}
-	return cloneObservation(service.current), nil
+	value := cloneObservation(service.current)
+	if value.Usage != nil {
+		usage := value.Usage.Snapshot(now)
+		value.Usage = &usage
+	}
+	return value, nil
 }
 
 func (service *Service) now() time.Time {
@@ -148,5 +189,9 @@ func (service *Service) now() time.Time {
 func cloneObservation(value paasv1.ExecutionTargetObservation) paasv1.ExecutionTargetObservation {
 	value.Labels = maps.Clone(value.Labels)
 	value.SupportedIsolationGuarantees = slices.Clone(value.SupportedIsolationGuarantees)
+	if value.Usage != nil {
+		usage := value.Usage.Snapshot(value.Usage.ObservedAt)
+		value.Usage = &usage
+	}
 	return value
 }

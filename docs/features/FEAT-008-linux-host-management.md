@@ -116,6 +116,15 @@ Idle CPU or metrics failure never releases reservations. Resource pressure
 may prevent new placement. Full APM, arbitrary log search, BMC/SMART and a
 custom alerting language are outside this release.
 
+P3-1 uses a pinned [node_exporter v1.12.1](https://github.com/prometheus/node_exporter/releases/tag/v1.12.1)
+process under a separate unprivileged UID, without Docker access. The node
+scrapes only a loopback mTLS listener with distinct collector/node certificate
+roles. CPU rates need two samples and exclude I/O wait from busy time; guest
+time is not counted twice. Memory used is total minus available. Filesystem
+used is total minus free, not total minus space available to non-root users.
+Unreported inode capacity is explicitly unsupported or unavailable. Source
+timestamps/expiry survive reads; failure never becomes a fabricated zero.
+
 ### Interactive container access
 
 UI selection resolves server-side to the authorized tenant, exact Deployment
@@ -174,28 +183,32 @@ executed commands; one checkpoint contains portable resume pointers.
 ## Implementation evidence
 
 The target/roadmap were fixed in `fbdb250` before the initial fixed-source
-review. P3-1's initial node communication slice now has a versioned protocol,
-mTLS client/listener and a resident process reusing the host probe. Background
-capacity/health samples expire and preserve the configured host identity pin;
-allocatable capacity excludes installation reserve, not measured free memory.
+review. P3-1 now has a versioned observation protocol, mTLS client/listener,
+resident host probe and bounded collector adapter. Background capacity/health
+and actual CPU/memory/filesystem samples preserve the configured identity pin.
+Allocatable capacity excludes installation reserve, not measured free memory;
+a collector outage leaves infrastructure capacity intact and usage unavailable.
 
 The [protocol/security tests](../../app/service/nodeagent/internal/service/nethttp/handler_test.go)
 verify actual TLS admission, exact peers and correlations, malformed/bounded
-requests, freshness, concurrency and sanitized errors. The
+requests, freshness, concurrency, collector roles and sanitized errors. The
+[collector tests](../../app/adapter/infrastructure/nodeexporter/collector_test.go)
+cover real HTTP parsing, counter resets/gaps, missing/duplicate/nonfinite
+measurements, inode support and bounded failures. The
 [process gate](../../app/service/nodeagent/internal/service/nethttp/runtime_test.go)
-passed with the built executable in an egress-disabled Linux Docker-in-Docker
-fixture: no-reader refresh, disconnection, persisted identity and restart.
+passed twice with built executables in an egress-disabled Linux Docker-in-Docker
+fixture: separate collector UID, no-reader refresh, controlled CPU/file activity,
+collector failure/recovery, disconnection, persisted identity and node restart.
 The default Go suite, architecture, vet, module verification, generation drift,
 this slice's race checks and ten repeated runs passed locally. Opt-in database
 and full Phase 1/2/3 release exercises were not implied by that default run.
 
 [Independent CI](../../.github/workflows/verification.yml) reuses these tests.
-[Verification at d2935d8](https://github.com/xiak/matrix/actions/runs/33040772022)
-passed the full default Linux Go/race suite and the real node-process gate.
+The telemetry extension also requires its independent Linux Go/race and
+real node/collector process run; local success does not substitute for it.
 No implementation iteration or complete Phase 3 gate is accepted.
-Next in P3-1: actual CPU/memory/filesystem usage,
-control-plane admission/refresh and signed offline node startup. This initial
-capacity/health chain is not the completed observability product.
+Next in P3-1: control-plane admission/refresh and signed offline node startup.
+The node observation chain alone is not the completed observability product.
 
 ## Adoption
 

@@ -118,7 +118,7 @@ func (client *Client) observe(ctx context.Context, command paasv1.AdapterCommand
 	operationContext, cancel := context.WithDeadline(ctx, command.Deadline)
 	defer cancel()
 	body, err := json.Marshal(request)
-	if err != nil || len(body) > nodev1.MaximumObservationBytes {
+	if err != nil || len(body) > nodev1.MaximumObservationRequestBytes {
 		return empty, fault(paasv1.ErrorInvalidArgument)
 	}
 	httpRequest, err := http.NewRequestWithContext(operationContext, http.MethodPost, client.endpoint, bytes.NewReader(body))
@@ -147,12 +147,16 @@ func (client *Client) observe(ctx context.Context, command paasv1.AdapterCommand
 	}
 	if err != nil || value.Identity != client.identity || value.CommandID != command.CommandID ||
 		value.Observation.IdentityFingerprint != client.expectedFingerprint ||
-		value.Observation.ObservedAt.After(time.Now().Add(2*time.Second)) {
+		value.Observation.ObservedAt.After(time.Now().Add(2*time.Second)) || value.Observation.Usage == nil ||
+		value.Observation.Usage.ObservedAt.After(time.Now().Add(2*time.Second)) ||
+		value.Observation.Usage.ValidUntil.Sub(value.Observation.Usage.ObservedAt) > nodev1.MaximumObservationAge {
 		return empty, fault(paasv1.ErrorAdapterRejected)
 	}
 	if !time.Now().Before(value.Observation.ObservedAt.Add(nodev1.MaximumObservationAge)) {
 		return empty, fault(paasv1.ErrorExecutionTargetUnavailable)
 	}
+	usage := value.Observation.Usage.Snapshot(time.Now())
+	value.Observation.Usage = &usage
 	return value.Observation, nil
 }
 

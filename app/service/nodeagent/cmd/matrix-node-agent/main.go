@@ -16,6 +16,7 @@ import (
 	"github.com/xiak/matrix/api/contractjson"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/adapter/infrastructure/localmachine"
+	"github.com/xiak/matrix/app/adapter/infrastructure/nodeexporter"
 	nodehttps "github.com/xiak/matrix/app/adapter/node/https"
 	"github.com/xiak/matrix/app/service/internal/processconfig"
 	"github.com/xiak/matrix/app/service/internal/processhttp"
@@ -33,6 +34,7 @@ type configuration struct {
 	BindingRef          string          `json:"bindingRef"`
 	ExpectedFingerprint string          `json:"expectedFingerprint"`
 	ListenAddress       string          `json:"listenAddress"`
+	CollectorEndpoint   string          `json:"collectorEndpoint"`
 	StoragePath         string          `json:"storagePath"`
 	CertificateFile     string          `json:"certificateFile"`
 	PrivateKeyFile      string          `json:"privateKeyFile"`
@@ -86,7 +88,14 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	sampler, err := observehost.New(adapter, observehost.Config{
+	collector, err := nodeexporter.New(nodeexporter.Config{
+		Endpoint: config.CollectorEndpoint, Identity: config.Identity, Credentials: credentials,
+	})
+	if err != nil {
+		return err
+	}
+	defer collector.Close()
+	sampler, err := observehost.New(adapter, collector, observehost.Config{
 		Identity: config.Identity, BindingRef: config.BindingRef,
 		ExpectedFingerprint: config.ExpectedFingerprint, SystemReserve: config.SystemReserve,
 	})

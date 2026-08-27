@@ -422,6 +422,115 @@
         ],
         "type": "string"
       },
+      "CPUUsage": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "AVAILABLE"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "required": [
+                "value"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "UNAVAILABLE",
+                    "UNSUPPORTED",
+                    "WARMING_UP"
+                  ]
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "value": false
+              }
+            }
+          }
+        ],
+        "properties": {
+          "state": {
+            "enum": [
+              "AVAILABLE",
+              "UNAVAILABLE",
+              "UNSUPPORTED",
+              "STALE",
+              "WARMING_UP"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/CPUUsageValue"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      "CPUUsageValue": {
+        "additionalProperties": false,
+        "properties": {
+          "ioWaitRatio": {
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "load1": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "load15": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "load5": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "logicalCpus": {
+            "maximum": 4096,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "utilizationRatio": {
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "windowMillis": {
+            "maximum": 60000,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "logicalCpus",
+          "windowMillis",
+          "utilizationRatio",
+          "ioWaitRatio",
+          "load1",
+          "load5",
+          "load15"
+        ],
+        "type": "object"
+      },
       "Capacity": {
         "additionalProperties": false,
         "properties": {
@@ -1368,6 +1477,9 @@
               "$ref": "#/components/schemas/IsolationGuarantee"
             },
             "type": "array"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/ExecutionTargetUsage"
           }
         },
         "required": [
@@ -1452,6 +1564,9 @@
             },
             "type": "array",
             "uniqueItems": true
+          },
+          "usage": {
+            "$ref": "#/components/schemas/ExecutionTargetUsage"
           }
         },
         "required": [
@@ -1460,6 +1575,88 @@
           "allocatable",
           "supportedIsolationGuarantees",
           "observedAt"
+        ],
+        "type": "object"
+      },
+      "ExecutionTargetUsage": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "filesystemsState": {
+                  "const": "AVAILABLE"
+                }
+              },
+              "required": [
+                "filesystemsState"
+              ]
+            },
+            "then": {
+              "required": [
+                "filesystems"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "filesystemsState": {
+                  "enum": [
+                    "UNAVAILABLE",
+                    "UNSUPPORTED",
+                    "WARMING_UP"
+                  ]
+                }
+              },
+              "required": [
+                "filesystemsState"
+              ]
+            },
+            "then": {
+              "properties": {
+                "filesystems": false
+              }
+            }
+          }
+        ],
+        "properties": {
+          "cpu": {
+            "$ref": "#/components/schemas/CPUUsage"
+          },
+          "filesystems": {
+            "items": {
+              "$ref": "#/components/schemas/FilesystemUsage"
+            },
+            "maxItems": 128,
+            "minItems": 1,
+            "type": "array"
+          },
+          "filesystemsState": {
+            "enum": [
+              "AVAILABLE",
+              "UNAVAILABLE",
+              "UNSUPPORTED",
+              "STALE"
+            ],
+            "type": "string"
+          },
+          "memory": {
+            "$ref": "#/components/schemas/MemoryUsage"
+          },
+          "observedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "validUntil": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "observedAt",
+          "validUntil",
+          "cpu",
+          "memory",
+          "filesystemsState"
         ],
         "type": "object"
       },
@@ -1476,6 +1673,185 @@
         "required": [
           "field",
           "description"
+        ],
+        "type": "object"
+      },
+      "FilesystemUsage": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "AVAILABLE"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "required": [
+                "value"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "UNAVAILABLE",
+                    "UNSUPPORTED",
+                    "WARMING_UP"
+                  ]
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "value": false
+              }
+            }
+          }
+        ],
+        "properties": {
+          "device": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "filesystemType": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          },
+          "mountPoint": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "AVAILABLE",
+              "UNAVAILABLE",
+              "UNSUPPORTED",
+              "STALE"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/FilesystemUsageValue"
+          }
+        },
+        "required": [
+          "device",
+          "mountPoint",
+          "filesystemType",
+          "state"
+        ],
+        "type": "object"
+      },
+      "FilesystemUsageValue": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "inodesState": {
+                  "const": "AVAILABLE"
+                }
+              },
+              "required": [
+                "inodesState"
+              ]
+            },
+            "then": {
+              "required": [
+                "totalInodes",
+                "freeInodes"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "inodesState": {
+                  "enum": [
+                    "UNAVAILABLE",
+                    "UNSUPPORTED",
+                    "WARMING_UP"
+                  ]
+                }
+              },
+              "required": [
+                "inodesState"
+              ]
+            },
+            "then": {
+              "properties": {
+                "freeInodes": false,
+                "totalInodes": false
+              }
+            }
+          }
+        ],
+        "dependentRequired": {
+          "freeInodes": [
+            "totalInodes"
+          ],
+          "totalInodes": [
+            "freeInodes"
+          ]
+        },
+        "properties": {
+          "availableBytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "freeInodes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "inodesState": {
+            "enum": [
+              "AVAILABLE",
+              "UNAVAILABLE",
+              "UNSUPPORTED",
+              "STALE"
+            ],
+            "type": "string"
+          },
+          "readOnly": {
+            "type": "boolean"
+          },
+          "totalBytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "totalInodes": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "usedBytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "totalBytes",
+          "usedBytes",
+          "availableBytes",
+          "inodesState",
+          "readOnly"
         ],
         "type": "object"
       },
@@ -1600,6 +1976,115 @@
         "propertyNames": {
           "$ref": "#/components/schemas/Name"
         },
+        "type": "object"
+      },
+      "MeasurementState": {
+        "enum": [
+          "AVAILABLE",
+          "WARMING_UP",
+          "UNAVAILABLE",
+          "UNSUPPORTED",
+          "STALE"
+        ],
+        "type": "string"
+      },
+      "MemoryUsage": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "AVAILABLE"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "required": [
+                "value"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "UNAVAILABLE",
+                    "UNSUPPORTED",
+                    "WARMING_UP"
+                  ]
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "value": false
+              }
+            }
+          }
+        ],
+        "properties": {
+          "state": {
+            "enum": [
+              "AVAILABLE",
+              "UNAVAILABLE",
+              "UNSUPPORTED",
+              "STALE"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/MemoryUsageValue"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      "MemoryUsageValue": {
+        "additionalProperties": false,
+        "properties": {
+          "availableBytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "swapFreeBytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "swapTotalBytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "totalBytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "usedBytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "totalBytes",
+          "availableBytes",
+          "usedBytes",
+          "swapTotalBytes",
+          "swapFreeBytes"
+        ],
         "type": "object"
       },
       "Name": {

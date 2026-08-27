@@ -37,7 +37,7 @@ func TestObservationContractRejectsForeignOrAmbiguousInput(t *testing.T) {
 		"target mismatch":  strings.Replace(string(encoded), `"executionTargetId":"target-a"`, `"executionTargetId":"target-b"`, 1),
 		"different action": strings.Replace(string(encoded), `"OBSERVE_EXECUTION_TARGET"`, `"APPLY_DEPLOYMENT"`, 1),
 		"trailing":         string(encoded) + `{}`,
-		"size":             string(encoded) + strings.Repeat(" ", MaximumObservationBytes),
+		"size":             string(encoded) + strings.Repeat(" ", MaximumObservationRequestBytes),
 		"version":          strings.Replace(string(encoded), APIVersion, "node.adapter.matrix.xiak.com/v2", 1),
 	} {
 		t.Run(name, func(t *testing.T) {

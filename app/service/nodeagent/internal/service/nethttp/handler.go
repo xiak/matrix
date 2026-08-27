@@ -59,7 +59,7 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 	if request.URL.Path != nodev1.ObservationPath || request.URL.RawPath != "" ||
 		request.URL.RawQuery != "" || request.URL.ForceQuery || request.Method != http.MethodPost ||
 		request.Header.Get("Content-Type") != "application/json" ||
-		request.Header.Get("Content-Encoding") != "" || request.ContentLength > nodev1.MaximumObservationBytes {
+		request.Header.Get("Content-Encoding") != "" || request.ContentLength > nodev1.MaximumObservationRequestBytes {
 		reject(response, http.StatusBadRequest)
 		return
 	}
@@ -108,7 +108,7 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 		return
 	}
 	encoded, err := json.Marshal(result)
-	if err != nil || len(encoded) > nodev1.MaximumObservationBytes {
+	if err != nil || len(encoded) > nodev1.MaximumObservationResponseBytes {
 		reject(response, http.StatusServiceUnavailable)
 		return
 	}

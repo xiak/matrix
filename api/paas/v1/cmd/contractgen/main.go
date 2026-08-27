@@ -360,6 +360,7 @@ func enumSchemas() map[string][]string {
 		"TenantStatus":                  stringsOf(paasv1.TenantActive, paasv1.TenantSuspended, paasv1.TenantDeactivated),
 		"ExecutionPoolPhase":            stringsOf(paasv1.ExecutionPoolReady, paasv1.ExecutionPoolDegraded, paasv1.ExecutionPoolUnavailable),
 		"ExecutionTargetHealth":         stringsOf(paasv1.ExecutionTargetHealthUnknown, paasv1.ExecutionTargetHealthReady, paasv1.ExecutionTargetHealthDegraded, paasv1.ExecutionTargetHealthUnavailable),
+		"MeasurementState":              stringsOf(paasv1.MeasurementAvailable, paasv1.MeasurementWarmingUp, paasv1.MeasurementUnavailable, paasv1.MeasurementUnsupported, paasv1.MeasurementStale),
 		"ExecutionTargetDesiredState":   stringsOf(paasv1.ExecutionTargetActive, paasv1.ExecutionTargetDraining),
 		"IsolationGuarantee":            stringsOfSlice(paasv1.IsolationGuarantees()),
 		"PlacementStrategy":             stringsOf(paasv1.PlacementFirstFit, paasv1.PlacementSpread, paasv1.PlacementBinPack),
@@ -391,6 +392,8 @@ func structContracts() map[string]reflect.Type {
 		paasv1.ResourceScope{}, paasv1.ResourceMetadata{}, paasv1.Tenant{},
 		paasv1.LabelSelector{}, paasv1.ExecutionPoolSpec{}, paasv1.ExecutionPoolStatus{}, paasv1.ExecutionPool{},
 		paasv1.AdapterRef{}, paasv1.Capacity{}, paasv1.ExecutionTargetSpec{}, paasv1.ExecutionTargetStatus{}, paasv1.ExecutionTarget{},
+		paasv1.ExecutionTargetUsage{}, paasv1.CPUUsage{}, paasv1.CPUUsageValue{}, paasv1.MemoryUsage{}, paasv1.MemoryUsageValue{},
+		paasv1.FilesystemUsage{}, paasv1.FilesystemUsageValue{},
 		paasv1.PlacementPolicySpec{}, paasv1.PlacementPolicy{}, paasv1.PlacementDecision{},
 		paasv1.ArtifactRef{}, paasv1.ResourceRequirements{}, paasv1.ApplicationEndpoint{}, paasv1.ComponentInput{},
 		paasv1.SecretVersionReference{}, paasv1.ComponentBinding{}, paasv1.Application{}, paasv1.CreateApplicationRequest{}, paasv1.Configuration{},
@@ -496,6 +499,8 @@ func schemaForType(contract reflect.Type, jsonName string) schema {
 		return schema{"type": "string"}
 	case reflect.Bool:
 		return schema{"type": "boolean"}
+	case reflect.Float64:
+		return schema{"type": "number", "minimum": 0}
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		return schema{"type": "integer", "minimum": 0, "maximum": 9007199254740991}
 	case reflect.Uint16:
@@ -552,6 +557,53 @@ func applySemanticOverlays(schemas map[string]any) {
 	)
 
 	setArrayMinimum(schemas, "ExecutionPoolSpec", "allowedIsolationGuarantees", 1)
+	usageProperties := object(schemas["ExecutionTargetUsage"])["properties"].(schema)
+	usageProperties["filesystems"].(schema)["maxItems"] = paasv1.MaximumObservedFilesystems
+	usageProperties["filesystems"].(schema)["minItems"] = 1
+	for _, measurement := range []struct {
+		name, state string
+		values      []string
+		warming     bool
+	}{
+		{"CPUUsage", "state", []string{"value"}, true},
+		{"MemoryUsage", "state", []string{"value"}, false},
+		{"FilesystemUsage", "state", []string{"value"}, false},
+		{"FilesystemUsageValue", "inodesState", []string{"totalInodes", "freeInodes"}, false},
+		{"ExecutionTargetUsage", "filesystemsState", []string{"filesystems"}, false},
+	} {
+		states := stringsOf(paasv1.MeasurementAvailable, paasv1.MeasurementUnavailable, paasv1.MeasurementUnsupported, paasv1.MeasurementStale)
+		if measurement.warming {
+			states = append(states, string(paasv1.MeasurementWarmingUp))
+		}
+		properties := object(schemas[measurement.name])["properties"].(schema)
+		properties[measurement.state] = schema{"type": "string", "enum": states}
+		absent := schema{}
+		for _, field := range measurement.values {
+			absent[field] = false
+		}
+		object(schemas[measurement.name])["allOf"] = []any{
+			schema{
+				"if":   schema{"properties": schema{measurement.state: schema{"const": string(paasv1.MeasurementAvailable)}}, "required": []string{measurement.state}},
+				"then": schema{"required": measurement.values},
+			},
+			schema{
+				"if":   schema{"properties": schema{measurement.state: schema{"enum": stringsOf(paasv1.MeasurementUnavailable, paasv1.MeasurementUnsupported, paasv1.MeasurementWarmingUp)}}, "required": []string{measurement.state}},
+				"then": schema{"properties": absent},
+			},
+		}
+	}
+	object(schemas["FilesystemUsageValue"])["dependentRequired"] = schema{"totalInodes": []string{"freeInodes"}, "freeInodes": []string{"totalInodes"}}
+	setIntegerMinimum(schemas, "FilesystemUsageValue", "totalInodes", 1)
+	cpuProperties := object(schemas["CPUUsageValue"])["properties"].(schema)
+	for _, field := range []string{"utilizationRatio", "ioWaitRatio"} {
+		cpuProperties[field].(schema)["maximum"] = 1
+	}
+	cpuProperties["logicalCpus"] = schema{"type": "integer", "minimum": 1, "maximum": 4096}
+	cpuProperties["windowMillis"] = schema{"type": "integer", "minimum": 1, "maximum": 60000}
+	filesystemProperties := object(schemas["FilesystemUsage"])["properties"].(schema)
+	for field, maximum := range map[string]int{"device": 256, "mountPoint": 1024, "filesystemType": 64} {
+		filesystemProperties[field] = schema{"type": "string", "minLength": 1, "maxLength": maximum}
+	}
 	setArrayUnique(schemas, "ExecutionTargetStatus", "supportedIsolationGuarantees")
 	executionTargetStatus := object(schemas["ExecutionTargetStatus"])
 	executionTargetStatus["allOf"] = []any{schema{

@@ -13,6 +13,72 @@ import (
 
 type hostFunc func(context.Context, paasv1.ObserveExecutionTargetRequest) (paasv1.ExecutionTargetObservation, error)
 
+type usageFunc func(context.Context) (paasv1.ExecutionTargetUsage, error)
+
+func (fn usageFunc) ObserveExecutionTargetUsage(ctx context.Context) (paasv1.ExecutionTargetUsage, error) {
+	return fn(ctx)
+}
+
+var noUsage = usageFunc(func(context.Context) (paasv1.ExecutionTargetUsage, error) {
+	return paasv1.ExecutionTargetUsage{}, errors.New("collector unavailable")
+})
+
+func TestUsageFailureAndRecoveryDoNotChangeHostCapacity(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	config := samplingConfig()
+	config.Clock = func() time.Time { return now }
+	var fail bool
+	usage := usageFunc(func(context.Context) (paasv1.ExecutionTargetUsage, error) {
+		if fail {
+			return paasv1.ExecutionTargetUsage{}, errors.New("collector /private/key unavailable")
+		}
+		return paasv1.ExecutionTargetUsage{
+			ObservedAt: now, ValidUntil: now.Add(time.Second),
+			CPU:              paasv1.CPUUsage{State: paasv1.MeasurementWarmingUp},
+			Memory:           paasv1.MemoryUsage{State: paasv1.MeasurementAvailable, Value: &paasv1.MemoryUsageValue{TotalBytes: 8000, AvailableBytes: 1000, UsedBytes: 7000}},
+			FilesystemsState: paasv1.MeasurementUnavailable,
+		}, nil
+	})
+	service, err := New(hostFunc(func(context.Context, paasv1.ObserveExecutionTargetRequest) (paasv1.ExecutionTargetObservation, error) {
+		return sample(now), nil
+	}), usage, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := service.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	first, err := service.Current(ctx)
+	if err != nil || first.Usage.Memory.Value.UsedBytes != 7000 || first.Allocatable.MemoryBytes != 7800 {
+		t.Fatal("usage replaced the placement budget")
+	}
+	first.Usage.Memory.Value.UsedBytes = 0
+	now = now.Add(time.Second)
+	stale, err := service.Current(ctx)
+	if err != nil || stale.Usage.Memory.State != paasv1.MeasurementStale || stale.Usage.Memory.Value.UsedBytes != 7000 {
+		t.Fatal("usage freshness was hidden by a healthy host or reader mutation")
+	}
+	fail = true
+	if err := service.Refresh(ctx); err != nil {
+		t.Fatal("metrics failure made the host unavailable")
+	}
+	missing, err := service.Current(ctx)
+	if err != nil || missing.Health != paasv1.ExecutionTargetHealthReady || missing.Allocatable != first.Allocatable ||
+		missing.Usage.Memory.State != paasv1.MeasurementUnavailable || missing.Usage.Memory.Value != nil {
+		t.Fatal("failed metrics fabricated zero usage or changed host capacity")
+	}
+	fail = false
+	now = now.Add(time.Second)
+	if err := service.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := service.Current(ctx)
+	if err != nil || recovered.Usage.Memory.State != paasv1.MeasurementAvailable || !recovered.Usage.ObservedAt.After(stale.Usage.ObservedAt) {
+		t.Fatal("collector did not recover with a new measurement")
+	}
+}
+
 func (fn hostFunc) ObserveExecutionTarget(ctx context.Context, request paasv1.ObserveExecutionTargetRequest) (paasv1.ExecutionTargetObservation, error) {
 	return fn(ctx, request)
 }
@@ -49,7 +115,7 @@ func TestCurrentPreservesFreshnessIdentityAndSchedulingBudget(t *testing.T) {
 			t.Fatal("sampler did not preserve the local binding contract")
 		}
 		return value, nativeError
-	}), config)
+	}), noUsage, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +163,7 @@ func TestCurrentPreservesFreshnessIdentityAndSchedulingBudget(t *testing.T) {
 	// A new process uses the persisted installation pin, never a new first-use
 	// fingerprint learned from the restarted host.
 	value.IdentityFingerprint = "sha256:" + strings.Repeat("c", 64)
-	restarted, err := New(service.host, config)
+	restarted, err := New(service.host, service.usage, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +180,7 @@ func TestSamplingContinuesWithoutAnyReaders(t *testing.T) {
 		value := sample(time.Now().UTC().Truncate(time.Microsecond))
 		samples <- value.ObservedAt
 		return value, nil
-	}), config)
+	}), noUsage, config)
 	if err != nil {
 		t.Fatal(err)
 	}

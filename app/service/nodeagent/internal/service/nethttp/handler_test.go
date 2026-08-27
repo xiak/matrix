@@ -25,6 +25,7 @@ import (
 
 	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
+	"github.com/xiak/matrix/app/adapter/infrastructure/nodeexporter"
 	nodehttps "github.com/xiak/matrix/app/adapter/node/https"
 )
 
@@ -40,11 +41,17 @@ func (fn sourceFunc) Current(ctx context.Context) (paasv1.ExecutionTargetObserva
 
 func observedTarget() paasv1.ExecutionTargetObservation {
 	capacity := paasv1.Capacity{CPUMillis: 2000, MemoryBytes: 8000, StorageBytes: 10000, WorkloadSlots: 2}
+	now := time.Now().UTC().Truncate(time.Microsecond)
 	return paasv1.ExecutionTargetObservation{
 		ExecutionTargetID: nodeIdentity.ExecutionTargetID, IdentityFingerprint: "sha256:" + strings.Repeat("a", 64),
 		Labels: map[string]string{"matrix-os": "linux"}, Capacity: capacity, Allocatable: capacity,
 		Health: paasv1.ExecutionTargetHealthReady, SupportedIsolationGuarantees: []paasv1.IsolationGuarantee{paasv1.IsolationWorkload},
-		ObservedAt: time.Now().UTC().Truncate(time.Microsecond),
+		ObservedAt: now,
+		Usage: &paasv1.ExecutionTargetUsage{
+			ObservedAt: now, ValidUntil: now.Add(nodev1.MaximumObservationAge),
+			CPU:    paasv1.CPUUsage{State: paasv1.MeasurementUnavailable},
+			Memory: paasv1.MemoryUsage{State: paasv1.MeasurementUnavailable}, FilesystemsState: paasv1.MeasurementUnavailable,
+		},
 	}
 }
 
@@ -133,7 +140,7 @@ func TestAuthenticatedRequestsRejectInvalidInputBeforeReadingTheHost(t *testing.
 		"wrong installation": strings.Replace(valid, "installation-a", "installation-b", 1),
 		"tenant identity":    strings.Replace(valid, `"kind":"PLATFORM"`, `"kind":"TENANT","tenantId":"tenant-a"`, 1),
 		"expired":            string(requestBody(t, expired)), "distant deadline": string(requestBody(t, distant)),
-		"oversize": valid + strings.Repeat(" ", nodev1.MaximumObservationBytes),
+		"oversize": valid + strings.Repeat(" ", nodev1.MaximumObservationRequestBytes),
 		"deep":     `{"command":` + strings.Repeat(`[`, 64) + `0` + strings.Repeat(`]`, 64) + `}`,
 		"trailing": valid + `{}`,
 	} {
@@ -226,7 +233,7 @@ func TestClientRejectsUncorrelatedResponsesAndRedirects(t *testing.T) {
 	controllerURI, _ := nodev1.ControllerURI(nodeIdentity.InstallationID, controllerID)
 	node := authority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false)
 	controller := authority.issue(t, controllerURI, x509.ExtKeyUsageClientAuth, false)
-	for _, problem := range []string{"command", "identity", "fingerprint", "future", "stale", "unknown", "oversize", "redirect"} {
+	for _, problem := range []string{"command", "identity", "fingerprint", "future", "stale", "missing usage", "future usage", "unknown", "oversize", "redirect"} {
 		t.Run(problem, func(t *testing.T) {
 			handler := http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 				if problem == "redirect" {
@@ -254,13 +261,18 @@ func TestClientRejectsUncorrelatedResponsesAndRedirects(t *testing.T) {
 					value.Observation.ObservedAt = time.Now().UTC().Add(time.Hour).Truncate(time.Microsecond)
 				case "stale":
 					value.Observation.ObservedAt = time.Now().UTC().Add(-nodev1.MaximumObservationAge).Truncate(time.Microsecond)
+				case "missing usage":
+					value.Observation.Usage = nil
+				case "future usage":
+					value.Observation.Usage.ObservedAt = time.Now().UTC().Add(time.Hour).Truncate(time.Microsecond)
+					value.Observation.Usage.ValidUntil = value.Observation.Usage.ObservedAt.Add(time.Second)
 				}
 				body, _ := json.Marshal(value)
 				if problem == "unknown" {
 					body = append([]byte(`{"privateKey":"secret",`), body[1:]...)
 				}
 				if problem == "oversize" {
-					body = append(body, bytes.Repeat([]byte(" "), nodev1.MaximumObservationBytes)...)
+					body = append(body, bytes.Repeat([]byte(" "), nodev1.MaximumObservationResponseBytes)...)
 				}
 				response.Header().Set("Content-Type", "application/json")
 				_, _ = response.Write(body)
@@ -277,6 +289,65 @@ func TestClientRejectsUncorrelatedResponsesAndRedirects(t *testing.T) {
 				t.Fatalf("untrusted response accepted or leaked: %v", err)
 			}
 		})
+	}
+}
+
+func TestCollectorTransportRequiresTheExactLocalCollectorAndNodeIdentities(t *testing.T) {
+	authority := newAuthority(t)
+	nodeURI, _ := nodev1.NodeURI(nodeIdentity)
+	collectorURI, _ := nodev1.CollectorURI(nodeIdentity)
+	controllerURI, _ := nodev1.ControllerURI(nodeIdentity.InstallationID, controllerID)
+	node := authority.issue(t, nodeURI, x509.ExtKeyUsageClientAuth, false)
+	controller := authority.issue(t, controllerURI, x509.ExtKeyUsageClientAuth, false)
+	foreign := newAuthority(t).issue(t, collectorURI, x509.ExtKeyUsageServerAuth, false)
+	for name, certificate := range map[string]issuedCertificate{
+		"selected collector": authority.issue(t, collectorURI, x509.ExtKeyUsageServerAuth, false),
+		"node role":          authority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false),
+		"untrusted":          foreign,
+		"expired":            authority.issue(t, collectorURI, x509.ExtKeyUsageServerAuth, true),
+	} {
+		t.Run(name, func(t *testing.T) {
+			var calls atomic.Int64
+			server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls.Add(1)
+				w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+				_, _ = w.Write([]byte("# TYPE node_scrape_collector_success gauge\nnode_scrape_collector_success{collector=\"cpu\"} 0\n"))
+			}))
+			server.TLS = &tls.Config{
+				MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{certificate.pair},
+				ClientCAs: authority.roots, ClientAuth: tls.RequireAndVerifyClientCert,
+				VerifyConnection: func(state tls.ConnectionState) error {
+					if !nodev1.MatchesIdentity(state.PeerCertificates[0].URIs, nodeURI) {
+						return errors.New("wrong node identity")
+					}
+					return nil
+				},
+			}
+			server.Config.ErrorLog = log.New(io.Discard, "", 0)
+			server.StartTLS()
+			defer server.Close()
+			collector, err := nodeexporter.New(nodeexporter.Config{Endpoint: server.URL, Identity: nodeIdentity, Credentials: node.credentials})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer collector.Close()
+			_, err = collector.ObserveExecutionTargetUsage(context.Background())
+			if name == "selected collector" {
+				if err != nil || calls.Load() != 1 {
+					t.Fatalf("authenticated collector rejected: %v", err)
+				}
+			} else if err != nodeexporter.ErrUnavailable || calls.Load() != 0 {
+				t.Fatal("collector identity was not checked before HTTP")
+			}
+			if _, err := nodeexporter.New(nodeexporter.Config{Endpoint: server.URL, Identity: nodeIdentity, Credentials: controller.credentials}); err == nil {
+				t.Fatal("controller identity can act as a node collector client")
+			}
+		})
+	}
+	for _, endpoint := range []string{"http://127.0.0.1:9100", "https://192.168.1.3:9100", "https://localhost:9100", "https://127.0.0.1:9100/metrics", "https://127.0.0.1:9100?target=other"} {
+		if _, err := nodeexporter.New(nodeexporter.Config{Endpoint: endpoint, Identity: nodeIdentity, Credentials: node.credentials}); err == nil {
+			t.Fatal("collector accepted a nonlocal or request-shaped endpoint")
+		}
 	}
 }
 
@@ -361,7 +432,7 @@ func newAuthority(t *testing.T) testAuthority {
 	return testAuthority{certificate: certificate, key: key, pem: encoded, roots: roots}
 }
 
-func (authority testAuthority) issue(t *testing.T, identity string, purpose x509.ExtKeyUsage, expired bool) issuedCertificate {
+func (authority testAuthority) issue(t *testing.T, identity string, purpose x509.ExtKeyUsage, expired bool, additionalPurposes ...x509.ExtKeyUsage) issuedCertificate {
 	t.Helper()
 	public, key, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -380,6 +451,7 @@ func (authority testAuthority) issue(t *testing.T, identity string, purpose x509
 		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{purpose}, URIs: []*url.URL{uri},
 		IPAddresses: []net.IP{net.ParseIP("127.0.0.1")},
 	}
+	certificate.ExtKeyUsage = append(certificate.ExtKeyUsage, additionalPurposes...)
 	if expired {
 		certificate.NotAfter = time.Now().Add(-time.Minute)
 	}

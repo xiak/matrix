@@ -3,6 +3,7 @@ package paasv1
 import (
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"strings"
 	"time"
@@ -265,6 +266,9 @@ func ValidateExecutionTarget(value ExecutionTarget) error {
 	}
 	if exceedsCapacity(value.Status.Allocatable, value.Status.Capacity) {
 		problems = append(problems, errors.New("allocatable resources cannot exceed capacity"))
+	}
+	if value.Status.Usage != nil {
+		problems = append(problems, ValidateExecutionTargetUsage(*value.Status.Usage))
 	}
 	return errors.Join(problems...)
 }
@@ -1232,7 +1236,101 @@ func ValidateExecutionTargetObservation(value ExecutionTargetObservation) error 
 	if exceedsCapacity(value.Allocatable, value.Capacity) {
 		problems = append(problems, errors.New("allocatable resources cannot exceed capacity"))
 	}
+	if value.Usage != nil {
+		problems = append(problems, ValidateExecutionTargetUsage(*value.Usage))
+	}
 	return errors.Join(problems...)
+}
+
+const MaximumObservedFilesystems = 128
+
+func ValidateExecutionTargetUsage(value ExecutionTargetUsage) error {
+	invalid := errors.New("execution target usage is invalid")
+	if validateContractTime("observedAt", value.ObservedAt) != nil ||
+		validateContractTime("validUntil", value.ValidUntil) != nil ||
+		!value.ValidUntil.After(value.ObservedAt) || value.ValidUntil.Sub(value.ObservedAt) > time.Minute ||
+		!validMeasurement(value.CPU.State, value.CPU.Value != nil, true) ||
+		!validMeasurement(value.Memory.State, value.Memory.Value != nil, false) ||
+		!validMeasurement(value.FilesystemsState, len(value.Filesystems) > 0, false) ||
+		len(value.Filesystems) > MaximumObservedFilesystems {
+		return invalid
+	}
+	if cpu := value.CPU.Value; cpu != nil {
+		if cpu.LogicalCPUs < 1 || cpu.LogicalCPUs > 4096 || cpu.WindowMillis < 1 || cpu.WindowMillis > 60000 ||
+			!finiteNonnegative(cpu.UtilizationRatio) || !finiteNonnegative(cpu.IOWaitRatio) ||
+			cpu.UtilizationRatio > 1 || cpu.IOWaitRatio > 1 ||
+			cpu.UtilizationRatio+cpu.IOWaitRatio > 1.000000001 ||
+			!finiteNonnegative(cpu.Load1) || !finiteNonnegative(cpu.Load5) || !finiteNonnegative(cpu.Load15) {
+			return invalid
+		}
+	}
+	if memory := value.Memory.Value; memory != nil {
+		if !safeMeasurementInteger(memory.TotalBytes, memory.AvailableBytes, memory.UsedBytes,
+			memory.SwapTotalBytes, memory.SwapFreeBytes) || memory.TotalBytes == 0 ||
+			memory.AvailableBytes > memory.TotalBytes || memory.UsedBytes != memory.TotalBytes-memory.AvailableBytes ||
+			memory.SwapFreeBytes > memory.SwapTotalBytes {
+			return invalid
+		}
+	}
+	seen := make(map[string]bool, len(value.Filesystems))
+	for _, filesystem := range value.Filesystems {
+		if !measurementLabel(filesystem.Device, 256) || !measurementLabel(filesystem.MountPoint, 1024) ||
+			!strings.HasPrefix(filesystem.MountPoint, "/") || !measurementLabel(filesystem.FilesystemType, 64) ||
+			!validMeasurement(filesystem.State, filesystem.Value != nil, false) {
+			return invalid
+		}
+		key := filesystem.Device + "\x00" + filesystem.MountPoint + "\x00" + filesystem.FilesystemType
+		if seen[key] {
+			return invalid
+		}
+		seen[key] = true
+		if usage := filesystem.Value; usage != nil {
+			if !safeMeasurementInteger(usage.TotalBytes, usage.UsedBytes, usage.AvailableBytes) ||
+				usage.UsedBytes > usage.TotalBytes || usage.AvailableBytes > usage.TotalBytes-usage.UsedBytes ||
+				(usage.TotalInodes == nil) != (usage.FreeInodes == nil) ||
+				!validMeasurement(usage.InodesState, usage.TotalInodes != nil, false) {
+				return invalid
+			}
+			if usage.TotalInodes != nil && (!safeMeasurementInteger(*usage.TotalInodes, *usage.FreeInodes) ||
+				*usage.TotalInodes == 0 || *usage.FreeInodes > *usage.TotalInodes) {
+				return invalid
+			}
+		}
+	}
+	return nil
+}
+
+func validMeasurement(state MeasurementState, present, warming bool) bool {
+	switch state {
+	case MeasurementAvailable:
+		return present
+	case MeasurementStale:
+		return true // Last known values may be retained, but never restamped.
+	case MeasurementUnavailable, MeasurementUnsupported:
+		return !present
+	case MeasurementWarmingUp:
+		return warming && !present
+	default:
+		return false
+	}
+}
+
+func finiteNonnegative(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0) && value >= 0
+}
+
+func safeMeasurementInteger(values ...int64) bool {
+	for _, value := range values {
+		if value < 0 || value > 9007199254740991 {
+			return false
+		}
+	}
+	return true
+}
+
+func measurementLabel(value string, maximum int) bool {
+	return value != "" && len(value) <= maximum && utf8.ValidString(value) &&
+		strings.IndexFunc(value, func(r rune) bool { return r < 32 || r == 127 }) < 0
 }
 
 func ValidateAdapterCapabilities(value AdapterCapabilitiesContract) error {

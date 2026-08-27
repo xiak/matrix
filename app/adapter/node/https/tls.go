@@ -93,6 +93,24 @@ func clientTLS(credentials Credentials, identity nodev1.Identity, controllerID s
 	}, nil
 }
 
+// CollectorClientTLS authenticates the node to its separately privileged local
+// collector. A collector identity cannot impersonate a node or controller.
+func CollectorClientTLS(credentials Credentials, identity nodev1.Identity) (*tls.Config, error) {
+	ownURI, err := nodev1.NodeURI(identity)
+	if err != nil || !credentials.validFor(ownURI, x509.ExtKeyUsageClientAuth) {
+		return nil, errTLSIdentity
+	}
+	peerURI, err := nodev1.CollectorURI(identity)
+	if err != nil {
+		return nil, errTLSIdentity
+	}
+	return &tls.Config{
+		MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{credentials.certificate},
+		RootCAs: credentials.roots.Clone(), NextProtos: []string{"http/1.1"},
+		VerifyConnection: func(state tls.ConnectionState) error { return verifyPeer(state, peerURI) },
+	}, nil
+}
+
 func (credentials Credentials) validFor(identity string, purpose x509.ExtKeyUsage) bool {
 	leaf := credentials.certificate.Leaf
 	now := time.Now()

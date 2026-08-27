@@ -1,6 +1,9 @@
 package paasv1
 
-import "time"
+import (
+	"slices"
+	"time"
+)
 
 type TenantID string
 type ResourceID string
@@ -69,6 +72,103 @@ type Capacity struct {
 	WorkloadSlots int64 `json:"workloadSlots"`
 }
 
+// ExecutionTargetUsage is measured OS usage, never placement capacity or a
+// reservation. Missing measurements have no value; expired values retain their
+// original timestamps and must not be presented as current.
+type ExecutionTargetUsage struct {
+	ObservedAt       time.Time         `json:"observedAt"`
+	ValidUntil       time.Time         `json:"validUntil"`
+	CPU              CPUUsage          `json:"cpu"`
+	Memory           MemoryUsage       `json:"memory"`
+	FilesystemsState MeasurementState  `json:"filesystemsState"`
+	Filesystems      []FilesystemUsage `json:"filesystems,omitempty"`
+}
+
+// Snapshot returns an independent value for a reader. It never renews the
+// source timestamp, including after a control-plane or node disconnection.
+func (usage ExecutionTargetUsage) Snapshot(now time.Time) ExecutionTargetUsage {
+	if usage.CPU.Value != nil {
+		value := *usage.CPU.Value
+		usage.CPU.Value = &value
+	}
+	if usage.Memory.Value != nil {
+		value := *usage.Memory.Value
+		usage.Memory.Value = &value
+	}
+	usage.Filesystems = slices.Clone(usage.Filesystems)
+	for index := range usage.Filesystems {
+		if usage.Filesystems[index].Value != nil {
+			value := *usage.Filesystems[index].Value
+			if value.TotalInodes != nil {
+				total := *value.TotalInodes
+				value.TotalInodes = &total
+			}
+			if value.FreeInodes != nil {
+				free := *value.FreeInodes
+				value.FreeInodes = &free
+			}
+			usage.Filesystems[index].Value = &value
+		}
+	}
+	if now.Before(usage.ObservedAt) || !now.Before(usage.ValidUntil) {
+		usage.CPU.State, usage.Memory.State = MeasurementStale, MeasurementStale
+		usage.FilesystemsState = MeasurementStale
+		for index := range usage.Filesystems {
+			usage.Filesystems[index].State = MeasurementStale
+			if value := usage.Filesystems[index].Value; value != nil && value.InodesState == MeasurementAvailable {
+				value.InodesState = MeasurementStale
+			}
+		}
+	}
+	return usage
+}
+
+type CPUUsage struct {
+	State MeasurementState `json:"state"`
+	Value *CPUUsageValue   `json:"value,omitempty"`
+}
+
+type CPUUsageValue struct {
+	LogicalCPUs      int64   `json:"logicalCpus"`
+	WindowMillis     int64   `json:"windowMillis"`
+	UtilizationRatio float64 `json:"utilizationRatio"`
+	IOWaitRatio      float64 `json:"ioWaitRatio"`
+	Load1            float64 `json:"load1"`
+	Load5            float64 `json:"load5"`
+	Load15           float64 `json:"load15"`
+}
+
+type MemoryUsage struct {
+	State MeasurementState  `json:"state"`
+	Value *MemoryUsageValue `json:"value,omitempty"`
+}
+
+type MemoryUsageValue struct {
+	TotalBytes     int64 `json:"totalBytes"`
+	AvailableBytes int64 `json:"availableBytes"`
+	UsedBytes      int64 `json:"usedBytes"`
+	SwapTotalBytes int64 `json:"swapTotalBytes"`
+	SwapFreeBytes  int64 `json:"swapFreeBytes"`
+}
+
+type FilesystemUsage struct {
+	Device         string                `json:"device"`
+	MountPoint     string                `json:"mountPoint"`
+	FilesystemType string                `json:"filesystemType"`
+	State          MeasurementState      `json:"state"`
+	Value          *FilesystemUsageValue `json:"value,omitempty"`
+}
+
+type FilesystemUsageValue struct {
+	TotalBytes     int64            `json:"totalBytes"`
+	UsedBytes      int64            `json:"usedBytes"`
+	AvailableBytes int64            `json:"availableBytes"`
+	InodesState    MeasurementState `json:"inodesState"`
+	TotalInodes    *int64           `json:"totalInodes,omitempty"`
+	FreeInodes     *int64           `json:"freeInodes,omitempty"`
+	ReadOnly       bool             `json:"readOnly"`
+}
+
 type ExecutionTargetSpec struct {
 	ExecutionPoolID       ResourceID                  `json:"executionPoolId"`
 	InfrastructureAdapter AdapterRef                  `json:"infrastructureAdapter"`
@@ -83,6 +183,7 @@ type ExecutionTargetStatus struct {
 	Allocatable                  Capacity              `json:"allocatable"`
 	SupportedIsolationGuarantees []IsolationGuarantee  `json:"supportedIsolationGuarantees"`
 	ObservedAt                   time.Time             `json:"observedAt"`
+	Usage                        *ExecutionTargetUsage `json:"usage,omitempty"`
 }
 
 type ExecutionTarget struct {
@@ -472,6 +573,7 @@ type ExecutionTargetObservation struct {
 	Health                       ExecutionTargetHealth `json:"health"`
 	SupportedIsolationGuarantees []IsolationGuarantee  `json:"supportedIsolationGuarantees"`
 	ObservedAt                   time.Time             `json:"observedAt"`
+	Usage                        *ExecutionTargetUsage `json:"usage,omitempty"`
 }
 
 type NormalizedAdapterError struct {

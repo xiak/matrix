@@ -1,10 +1,63 @@
 package paasv1
 
 import (
+	"math"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestUsageValuesCannotHideMissingSamplesOrRenewExpiredMeasurements(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	value := ExecutionTargetUsage{
+		ObservedAt: now, ValidUntil: now.Add(15 * time.Second),
+		CPU: CPUUsage{State: MeasurementAvailable, Value: &CPUUsageValue{
+			LogicalCPUs: 2, WindowMillis: 5000, UtilizationRatio: 0.25, IOWaitRatio: 0.1,
+		}},
+		Memory:           MemoryUsage{State: MeasurementAvailable, Value: &MemoryUsageValue{TotalBytes: 100, AvailableBytes: 60, UsedBytes: 40}},
+		FilesystemsState: MeasurementUnavailable,
+	}
+	if err := ValidateExecutionTargetUsage(value); err != nil {
+		t.Fatal(err)
+	}
+	schema := compileOpenAPISchema(t, loadOpenAPI(t), "ExecutionTargetUsage")
+	if err := schema.Validate(schemaInstance(t, value)); err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*ExecutionTargetUsage){
+		"missing CPU":            func(v *ExecutionTargetUsage) { v.CPU.Value = nil },
+		"unavailable with value": func(v *ExecutionTargetUsage) { v.Memory.State = MeasurementUnavailable },
+		"counter without window": func(v *ExecutionTargetUsage) { v.CPU.Value.WindowMillis = 0 },
+		"invalid ratio":          func(v *ExecutionTargetUsage) { v.CPU.Value.UtilizationRatio = 1.5 },
+		"nonfinite":              func(v *ExecutionTargetUsage) { v.CPU.Value.Load1 = math.NaN() },
+		"wrong used memory":      func(v *ExecutionTargetUsage) { v.Memory.Value.UsedBytes = 10 },
+		"too large integer":      func(v *ExecutionTargetUsage) { v.Memory.Value.TotalBytes = 9007199254740992 },
+		"no expiry":              func(v *ExecutionTargetUsage) { v.ValidUntil = v.ObservedAt },
+		"missing filesystems":    func(v *ExecutionTargetUsage) { v.FilesystemsState = MeasurementAvailable },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := value.Snapshot(now)
+			mutate(&candidate)
+			if ValidateExecutionTargetUsage(candidate) == nil {
+				t.Fatal("invalid usage accepted")
+			}
+		})
+	}
+	expired := value.Snapshot(value.ValidUntil)
+	if expired.CPU.State != MeasurementStale || expired.Memory.State != MeasurementStale ||
+		expired.ObservedAt != value.ObservedAt || expired.ValidUntil != value.ValidUntil || expired.Memory.Value.UsedBytes != 40 {
+		t.Fatal("expired sample was lost, restamped or presented as current")
+	}
+	expired.Memory.Value.UsedBytes = 1
+	if value.Memory.Value.UsedBytes != 40 || value.Memory.State != MeasurementAvailable {
+		t.Fatal("reader mutated the source sample")
+	}
+	warming := value.Snapshot(now)
+	warming.CPU = CPUUsage{State: MeasurementWarmingUp}
+	if ValidateExecutionTargetUsage(warming) != nil || schema.Validate(schemaInstance(t, warming)) != nil {
+		t.Fatal("explicit CPU priming state rejected")
+	}
+}
 
 func TestValidateOperationEnforcesTerminalContract(t *testing.T) {
 	var operation Operation
