@@ -392,15 +392,37 @@ and protected bootstrap-file retirement must use the same realm semantics.
 Tenant administrators can create/list/read members, suspend/restore them, and
 grant/revoke the closed tenant roles. Member reads and binding lists are
 bounded and tenant-confined; no admin API exposes credential digests or
-plaintext. The last usable administrator is protected against both member
-suspension and role revocation, including concurrent requests. An ordinary
-handoff first establishes and verifies another independently credentialed
-administrator before removing the predecessor. Credential recovery is an
-explicit, auditable workflow with fresh temporary credentials, required
-password change, and revocation of prior sessions; it is not bootstrap replay,
-a direct SQL repair, or a hidden generic impersonation capability. Any new
-platform recovery authority and protection of the installation's own authority
-realm require an agreed contract before implementation.
+plaintext. Each tenant retains its one primary user's protected administrator
+binding, including during concurrent member and role changes. Delegated
+administrator roles remain revocable; ordinary handoff grants a child user
+daily administration without transferring primary ownership. Credential
+recovery is an explicit, auditable workflow with fresh temporary credentials,
+required password change, and revocation of prior sessions; it is not bootstrap
+replay, a direct SQL repair, or a hidden generic impersonation capability.
+The installation's service-home organization cannot be suspended through
+tenant management, and online tenant recovery cannot recover platform
+credentials or grant platform roles.
+
+Daily administrator handoff is not primary/root ownership transfer. The
+primary user's tenant-administrator binding remains protected; another
+tenant administrator cannot disable or reset that identity through member
+commands. A successor's password change can prove readiness for daily
+administration, but cannot authorize removing primary-account protection.
+Primary credential recovery is an explicit separate workflow, not promotion
+of a child user to account owner. This distinction follows the separate
+root and delegated-administrator boundaries in the
+[AWS root-user documentation](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_root-user.html)
+and [Alibaba RAM administrator documentation](https://www.alibabacloud.com/help/en/ram/create-admin-user).
+Resources remain owned by the existing organization, not the primary person.
+The Alibaba-style model here adopts this identity boundary, not Alibaba's
+billing, identity-provider, account-ownership transfer, or policy products.
+
+An unrevoked `PLATFORM_OPERATOR` binding also protects its user's credentials
+from ordinary tenant member status/password commands, even if that user is
+already disabled. Platform grants and credential changes serialize on the
+same principal; a platform grantee must have completed initial/reset password
+change. Tenant administration cannot become platform credential takeover.
+Platform recovery remains the installation owner's separate lifecycle.
 
 Installation-scoped Audit partitioning remains the FEAT-008 owner's shared
 implementation. Tenant lifecycle facts use that agreed platform scope;
@@ -493,9 +515,12 @@ lifecycle gates where their contracts change.
    built-in roles. Next-request member, role, session, password-reset, and
    tenant revocation behavior is tested. Cross-tenant member/binding/session
    IDs, cursor reuse, service-principal substitution, platform self-grant,
-   revoked-binding replay, and concurrent removal of the final administrator
-   fail safely. A tested handoff and explicitly authorized recovery preserve
-   an independent administrator and produce correlated sanitized facts.
+   revoked-binding replay, and concurrent attempts to remove the primary
+   administrator fail safely. Daily child-administrator handoff and explicit
+   primary credential recovery preserve primary identity, never promote a
+   child to root, and produce correlated sanitized facts. An unrevoked platform
+   binding protects even a disabled user's credentials; concurrent platform
+   grant versus tenant password reset/status changes cannot permit takeover.
 3. **Resource and Audit isolation.** Both tenants create/read their own
    applications, database/service installations, quota entitlements, and
    Operations. Cross-tenant resource IDs, filters, headers, bodies, cursors,
@@ -602,10 +627,20 @@ two-worker production build, and all 59 embedded files' export equality pass.
 Full-repository tests and vet, IAM/Audit contract and service race tests,
 stable contract generation, and Linux amd64 IAM/Audit/PaaS/UI builds also pass.
 
+The primary/platform credential-protection increment also passed the fresh
+PG18 IAM HTTP race gate, including a plain tenant administrator racing a
+platform grant against password reset or member suspension, and rejecting
+reset/enable of a pre-existing disabled platform user. Initial/reset-password
+users cannot receive a platform binding until they change that password.
+The independent five-process regression, focused IAM/contracts/architecture
+tests, and vet pass. Primary-member and primary-role protection remain intact;
+no online platform recovery or primary-ownership transfer was introduced.
+
 This is a verified integration checkpoint, not acceptance of the multi-tenant
-target. Exact-bootstrap-only tenant opening, primary-account protection, and
-registered-tenant-only producer resolution are still the adopted behavior;
-their planned replacements above are not yet implemented. No task-local
+target. Primary-account protection remains required. Exact-bootstrap-only
+tenant opening and registered-tenant-only producer resolution are still the
+adopted behavior; their planned replacements above are not yet implemented.
+No task-local
 browser, tenant suspension/recovery, historical proof, or signed populated
 offline upgrade/rollback/backup/recovery gate is claimed. Prior accepted
 foundation evidence below covers only its named source revisions.

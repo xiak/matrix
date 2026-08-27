@@ -68,6 +68,7 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 	}
 	poolConfig.ConnConfig.User = iamHTTPTestRole
 	poolConfig.ConnConfig.Password = iamHTTPTestPassword
+	poolConfig.MaxConns = 4
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		t.Fatalf("open IAM HTTP runtime pool: %v", err)
@@ -331,7 +332,7 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 		!decision.Allowed || decision.Subject == nil || decision.Subject.ID != developer.ID {
 		t.Fatalf("developer allowed decision=%#v err=%v", decision, err)
 	}
-	assertPlatformAuthorityHTTP(t, handler, loginWire.Credential, developerWire.Credential, developer.ID)
+	assertPlatformAuthorityHTTP(t, ctx, handler, admin, loginWire.Credential, developerWire.Credential, developer.ID)
 	if _, err := workflow.Bootstrap(ctx, document); err != nil {
 		t.Fatalf("replay bootstrap after platform role revocation: %v", err)
 	}
@@ -798,7 +799,7 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 	assertIAMSecretsAbsent(t, ctx, admin, primaryBPassword, primaryBChanged, childPassword, childChangedA, childChangedB, resetPassword, primaryB, childSessionA, childSessionB, activeOne, activeTwo, resetSession)
 }
 
-func assertPlatformAuthorityHTTP(t *testing.T, handler http.Handler, administrator, member string, memberID iamv1.PrincipalID) {
+func assertPlatformAuthorityHTTP(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, administrator, member string, memberID iamv1.PrincipalID) {
 	t.Helper()
 	put := func(actor string, principalID iamv1.PrincipalID, role iamv1.BuiltinRole, expected int) iamv1.RoleBinding {
 		t.Helper()
@@ -834,12 +835,131 @@ func assertPlatformAuthorityHTTP(t *testing.T, handler http.Handler, administrat
 	put(administrator, "service-paas", iamv1.RolePlatformOperator, http.StatusForbidden)
 	platformBinding := put(administrator, memberID, iamv1.RolePlatformOperator, http.StatusOK)
 	assertPlatformDecisionHTTP(t, handler, member, paasCredential, true)
+	for _, command := range []struct{ suffix, body string }{
+		{":set-status", `{"status":"DISABLED","resourceVersion":2,"requestId":"request-protect-platform-status"}`},
+		{":reset-password", `{"initialPassword":"Platform-Reset-Attack-Password-39!","resourceVersion":2,"requestId":"request-protect-platform-password"}`},
+	} {
+		response := performIAMRequest(handler, http.MethodPost, "/v1/principals/"+string(memberID)+command.suffix, administrator, []byte(command.body))
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("tenant command took over platform identity: status=%d", response.Code)
+		}
+	}
+	assertPlatformDecisionHTTP(t, handler, member, paasCredential, true)
 	revoke(administrator, platformBinding.ID, http.StatusOK)
 	revoke(administrator, platformBinding.ID, http.StatusOK)
 	assertPlatformDecisionHTTP(t, handler, member, paasCredential, false)
+	t.Run("platform grant serializes with credential mutations", func(t *testing.T) {
+		provePlatformCredentialProtection(t, ctx, handler, database, administrator, member)
+	})
 	revoke(administrator, organizationBinding.ID, http.StatusOK)
 	revoke(administrator, "bootstrap-platform-operator-binding", http.StatusOK)
 	assertPlatformDecisionHTTP(t, handler, administrator, paasCredential, false)
+}
+
+func provePlatformCredentialProtection(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, operator, tenantAdministrator string) {
+	t.Helper()
+	const initial = "Platform-Race-Initial-Password-36!"
+	const changed = "Platform-Race-Changed-Password-47!"
+	const reset = "Platform-Race-Reset-Password-58!"
+	request := func(path, bearer string, body any) *httptest.ResponseRecorder {
+		t.Helper()
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return performIAMRequest(handler, http.MethodPost, path, bearer, encoded)
+	}
+	for _, mutation := range []string{"reset-password", "set-status", "legacy-disabled"} {
+		t.Run(mutation, func(t *testing.T) {
+			created := request("/v1/principals", operator, map[string]any{
+				"loginName": "platform.race." + mutation, "displayName": "Platform race user",
+				"initialPassword": initial, "requestId": "request-race-create-" + mutation,
+			})
+			var principal iamv1.Principal
+			if created.Code != http.StatusCreated || json.Unmarshal(created.Body.Bytes(), &principal) != nil {
+				t.Fatalf("create platform race user status=%d", created.Code)
+			}
+			grantBody := map[string]any{"principalId": principal.ID, "role": iamv1.RolePlatformOperator, "requestId": "request-race-grant-" + mutation}
+			if response := request("/v1/role-bindings", operator, grantBody); response.Code != http.StatusForbidden {
+				t.Fatal("unconfirmed initial password gained platform authority")
+			}
+			login := request("/v1/auth/login", "", map[string]any{
+				"loginName": principal.LoginName + "@" + string(principal.OrganizationID), "password": initial, "requestId": "request-race-login-" + mutation,
+			})
+			var session struct {
+				Credential string `json:"credential"`
+			}
+			if login.Code != http.StatusOK || json.Unmarshal(login.Body.Bytes(), &session) != nil || session.Credential == "" {
+				t.Fatalf("login platform race user status=%d", login.Code)
+			}
+			if response := request("/v1/auth/password", session.Credential, map[string]any{
+				"currentPassword": initial, "newPassword": changed, "requestId": "request-race-password-" + mutation,
+			}); response.Code != http.StatusOK {
+				t.Fatalf("initialize platform race user status=%d", response.Code)
+			}
+			if mutation == "legacy-disabled" {
+				if response := request("/v1/role-bindings", operator, grantBody); response.Code != http.StatusOK {
+					t.Fatalf("grant legacy platform fixture status=%d", response.Code)
+				}
+				// Model a disabled platform user from an older installation. New
+				// tenant commands cannot create this state or recover its credentials.
+				var version uint64
+				if err := database.QueryRow(ctx, `UPDATE iam.principals SET status='DISABLED',resource_version=resource_version+1
+					WHERE tenant_id=$1 AND id=$2 RETURNING resource_version`, principal.OrganizationID, principal.ID).Scan(&version); err != nil {
+					t.Fatal(err)
+				}
+				for _, body := range []map[string]any{
+					{"status": "ACTIVE", "resourceVersion": version, "requestId": "request-disabled-platform-enable"},
+					{"initialPassword": reset, "resourceVersion": version, "requestId": "request-disabled-platform-reset"},
+				} {
+					suffix := ":set-status"
+					if _, ok := body["initialPassword"]; ok {
+						suffix = ":reset-password"
+					}
+					if response := request("/v1/principals/"+string(principal.ID)+suffix, tenantAdministrator, body); response.Code != http.StatusForbidden {
+						t.Fatalf("tenant administrator recovered a disabled platform identity: %d", response.Code)
+					}
+				}
+				return
+			}
+			changeBody := map[string]any{"resourceVersion": 2, "requestId": "request-race-change-" + mutation}
+			if mutation == "reset-password" {
+				changeBody["initialPassword"] = reset
+			} else {
+				changeBody["status"] = "DISABLED"
+			}
+			grantJSON, _ := json.Marshal(grantBody)
+			changeJSON, _ := json.Marshal(changeBody)
+			start := make(chan struct{})
+			grants, changes := make(chan int, 1), make(chan int, 1)
+			go func() {
+				<-start
+				grants <- performIAMRequest(handler, http.MethodPost, "/v1/role-bindings", operator, grantJSON).Code
+			}()
+			go func() {
+				<-start
+				changes <- performIAMRequest(handler, http.MethodPost, "/v1/principals/"+string(principal.ID)+":"+mutation, tenantAdministrator, changeJSON).Code
+			}()
+			close(start)
+			grantStatus, changeStatus := <-grants, <-changes
+			if !((grantStatus == http.StatusOK && changeStatus == http.StatusForbidden) ||
+				(grantStatus == http.StatusForbidden && changeStatus == http.StatusOK)) {
+				t.Fatalf("platform grant/mutation race statuses=%d/%d", grantStatus, changeStatus)
+			}
+			var activePlatform bool
+			var status string
+			var mustChange bool
+			if err := database.QueryRow(ctx, `SELECT p.status,p.must_change_password,
+				EXISTS(SELECT 1 FROM iam.role_bindings AS b WHERE b.tenant_id=p.tenant_id AND b.principal_id=p.id AND b.role_name='PLATFORM_OPERATOR' AND b.revoked_at IS NULL)
+				FROM iam.principals AS p WHERE p.tenant_id=$1 AND p.id=$2`, principal.OrganizationID, principal.ID).Scan(&status, &mustChange, &activePlatform); err != nil {
+				t.Fatal(err)
+			}
+			if activePlatform != (grantStatus == http.StatusOK) || activePlatform && (status != "ACTIVE" || mustChange) {
+				t.Fatal("platform grant raced past disabled or replaced credentials")
+			}
+		})
+	}
+	assertIAMSecretsAbsent(t, ctx, database, initial, changed, reset)
 }
 
 func assertPlatformDecisionHTTP(t *testing.T, handler http.Handler, subject, caller string, allowed bool) {

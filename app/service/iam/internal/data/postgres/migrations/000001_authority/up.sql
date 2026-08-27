@@ -1540,13 +1540,14 @@ BEGIN
         'PRINCIPAL', submitted_principal_id
     );
     PERFORM set_config('matrix.iam_tenant_id', submitted_tenant_id, true);
-    IF NOT EXISTS (
-        SELECT 1 FROM iam.principals AS principal
+    PERFORM 1 FROM iam.principals AS principal
          WHERE principal.tenant_id = submitted_tenant_id
            AND principal.id = submitted_principal_id
            AND principal.principal_type = 'USER'
            AND principal.status = 'ACTIVE'
-    ) OR submitted_role_name = 'INSTALLATION_VERIFIER' THEN
+           AND (submitted_role_name <> 'PLATFORM_OPERATOR' OR NOT principal.must_change_password)
+         FOR UPDATE;
+    IF NOT FOUND OR submitted_role_name = 'INSTALLATION_VERIFIER' THEN
         RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'role binding principal is unavailable';
     END IF;
     PERFORM iam.assert_audit_event(

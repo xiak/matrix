@@ -265,7 +265,10 @@ BEGIN
     PERFORM set_config('matrix.iam_tenant_id',tenant,true);
     SELECT * INTO stored FROM iam.principals AS p WHERE p.tenant_id=tenant AND p.id=principal FOR UPDATE;
     IF NOT FOUND OR stored.principal_type <> 'USER' OR principal=actor
-        OR EXISTS(SELECT 1 FROM iam.login_index AS login WHERE login.tenant_id=tenant AND login.principal_id=principal AND login.account_owner) THEN
+        OR EXISTS(SELECT 1 FROM iam.login_index AS login WHERE login.tenant_id=tenant AND login.principal_id=principal AND login.account_owner)
+        OR EXISTS(SELECT 1 FROM iam.role_bindings AS binding
+            WHERE binding.tenant_id=tenant AND binding.principal_id=principal
+              AND binding.role_name='PLATFORM_OPERATOR' AND binding.revoked_at IS NULL) THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='subaccount is not manageable';
     END IF;
     IF expected_version IS NULL OR expected_version < 1 OR expected_version <> stored.resource_version THEN
