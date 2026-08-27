@@ -189,9 +189,11 @@ The default Go suite, architecture, vet, module verification, generation drift,
 this slice's race checks and ten repeated runs passed locally. Opt-in database
 and full Phase 1/2/3 release exercises were not implied by that default run.
 
-[Independent CI](../../.github/workflows/verification.yml) reuses these tests;
-its remote result is not yet accepted. No implementation iteration or complete
-Phase 3 gate is accepted. Next in P3-1: actual CPU/memory/filesystem usage,
+[Independent CI](../../.github/workflows/verification.yml) reuses these tests.
+[Verification at d2935d8](https://github.com/xiak/matrix/actions/runs/33040772022)
+passed the full default Linux Go/race suite and the real node-process gate.
+No implementation iteration or complete Phase 3 gate is accepted.
+Next in P3-1: actual CPU/memory/filesystem usage,
 control-plane admission/refresh and signed offline node startup. This initial
 capacity/health chain is not the completed observability product.
 
