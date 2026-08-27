@@ -274,6 +274,8 @@ type httpWorkflow struct {
 	ingestCalls                 int
 	queryCalls                  int
 	verifyCalls                 int
+	platformQueryCalls          int
+	platformVerifyCalls         int
 	installationVerifyCalls     int
 	ingestCredentialPresent     bool
 	queryCredentialPresent      bool
@@ -303,7 +305,7 @@ func newHTTPWorkflow(t *testing.T) *httpWorkflow {
 		CorrelationID: "correlation-event-http",
 		OccurredAt:    now.Add(-time.Minute),
 	}
-	checkpoint, err := authority.GenesisCheckpoint(event.TenantID)
+	checkpoint, err := authority.GenesisCheckpoint(authority.TenantChain(event.TenantID))
 	if err != nil {
 		t.Fatalf("create Audit HTTP checkpoint: %v", err)
 	}
@@ -407,4 +409,18 @@ func (workflow *httpWorkflow) VerifyInstallation(
 	workflow.installationVerifyRequestID = requestID
 	workflow.verifyCredentialPresent = credential.Present()
 	return workflow.installationVerification, workflow.queryErr
+}
+
+func (workflow *httpWorkflow) QueryPlatformRecords(
+	ctx context.Context, credential iamv1.Secret, requestID string, request auditv1.QueryRecordsRequest,
+) (auditv1.RecordPage, error) {
+	workflow.platformQueryCalls++
+	return workflow.QueryRecords(ctx, credential, requestID, request)
+}
+
+func (workflow *httpWorkflow) VerifyPlatformChain(
+	ctx context.Context, credential iamv1.Secret, requestID string, request auditv1.VerifyChainRequest,
+) (auditv1.ChainVerification, error) {
+	workflow.platformVerifyCalls++
+	return workflow.VerifyChain(ctx, credential, requestID, request)
 }

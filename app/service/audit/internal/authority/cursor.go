@@ -35,16 +35,16 @@ func NewCursorCodec(key []byte) (CursorCodec, error) {
 }
 
 func (codec CursorCodec) Encode(
-	tenantID auditv1.TenantID,
+	chainID ChainID,
 	query auditv1.QueryRecordsRequest,
 	beforeSequence uint64,
 ) (auditv1.Cursor, error) {
-	if err := validateCursorInput(tenantID, query, beforeSequence); err != nil {
+	if err := validateCursorInput(chainID, query, beforeSequence); err != nil {
 		return "", err
 	}
 	payload := make([]byte, cursorPayloadBytes)
 	payload[0] = 1
-	copy(payload[1:17], codec.tenantBinding(tenantID))
+	copy(payload[1:17], codec.chainBinding(chainID))
 	filter := filterDigest(query)
 	copy(payload[17:49], filter[:])
 	binary.BigEndian.PutUint64(payload[49:], beforeSequence)
@@ -58,12 +58,12 @@ func (codec CursorCodec) Encode(
 
 func (codec CursorCodec) Decode(
 	cursor auditv1.Cursor,
-	tenantID auditv1.TenantID,
+	chainID ChainID,
 	query auditv1.QueryRecordsRequest,
 ) (uint64, error) {
 	validated := query
 	validated.Cursor = cursor
-	if auditv1.ValidateID("tenantId", string(tenantID)) != nil ||
+	if chainID.Validate() != nil ||
 		auditv1.ValidateQueryRecordsRequest(validated) != nil {
 		return 0, ErrInvalidCursor
 	}
@@ -88,9 +88,9 @@ func (codec CursorCodec) Decode(
 	if !hmac.Equal(tag, expectedTag) {
 		return 0, ErrInvalidCursor
 	}
-	tenantBinding := codec.tenantBinding(tenantID)
-	defer clear(tenantBinding)
-	if subtle.ConstantTimeCompare(payload[1:17], tenantBinding) != 1 {
+	chainBinding := codec.chainBinding(chainID)
+	defer clear(chainBinding)
+	if subtle.ConstantTimeCompare(payload[1:17], chainBinding) != 1 {
 		return 0, ErrInvalidCursor
 	}
 	filter := filterDigest(query)
@@ -104,10 +104,15 @@ func (codec CursorCodec) Decode(
 	return beforeSequence, nil
 }
 
-func (codec CursorCodec) tenantBinding(tenantID auditv1.TenantID) []byte {
+func (codec CursorCodec) chainBinding(chainID ChainID) []byte {
 	digest := hmac.New(sha256.New, codec.key[:])
-	digest.Write([]byte("matrix.audit.cursor.tenant.v1\x00"))
-	digest.Write([]byte(tenantID))
+	if installationID := chainID.InstallationID(); installationID != "" {
+		digest.Write([]byte("matrix.audit.cursor.installation.v1\x00"))
+		digest.Write([]byte(installationID))
+	} else {
+		digest.Write([]byte("matrix.audit.cursor.tenant.v1\x00"))
+		digest.Write([]byte(chainID.TenantID()))
+	}
 	return append([]byte(nil), digest.Sum(nil)[:16]...)
 }
 
@@ -119,11 +124,11 @@ func (codec CursorCodec) tag(payload []byte) []byte {
 }
 
 func validateCursorInput(
-	tenantID auditv1.TenantID,
+	chainID ChainID,
 	query auditv1.QueryRecordsRequest,
 	beforeSequence uint64,
 ) error {
-	if auditv1.ValidateID("tenantId", string(tenantID)) != nil ||
+	if chainID.Validate() != nil ||
 		auditv1.ValidateQueryRecordsRequest(query) != nil ||
 		beforeSequence == 0 || beforeSequence > 9007199254740991 {
 		return ErrInvalidCursor

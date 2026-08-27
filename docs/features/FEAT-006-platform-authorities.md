@@ -6,7 +6,7 @@
 - IAM API contract: `iam.matrix.xiak.com/v1`
 - Audit API contract: `audit.matrix.xiak.com/v1`
 - Phase 3 extension: installation-scoped IAM authority implemented; host-resource consumption and offline upgrade acceptance remain in FEAT-008
-- Multi-tenant extension: fixed-source account integration verified; tenant lifecycle, administrator handoff/recovery, historical producer proof, and release acceptance remain in progress
+- Multi-tenant extension: account integration, primary/platform credential protection, historical producer proof and retained IAM/Audit upgrade gates verified; tenant lifecycle, primary recovery, console and release acceptance remain in progress
 
 ## Outcome
 
@@ -112,20 +112,23 @@ PaaS, Audit, or IAM authority.
 
 An authenticated service can read only the identity bound to its current
 Bearer through `GET /v1/service-identity`. The endpoint accepts no request
-body, tenant, principal, purpose, source, or other selector.
+body, tenant, principal, purpose, source, or other selector. The required
+`installationId` comes from its current credential's sealed installation;
+`organizationId` still identifies its service-home tenant, not every tenant
+that it may serve.
 
 Audit resolves each producer through `POST /v1/audit-producer:resolve`. IAM
-authenticates the current service credential, checks its exact bootstrap
-installation binding and IAM/PaaS/Audit purpose, and verifies that the proposed
-event organization is an existing account in that installation. The response
-binds that organization to the authenticated producer without changing the
-producer's own organization. Only this append-only producer boundary may span
-the installation's tenants; it grants no user, query, or resource access.
-Unknown organizations, user credentials, verifier credentials, and caller
-purpose/subject selectors fail closed. Existing disabled organizations may
-still receive their committed historical outbox facts. Audit derives the closed
-event source from the verified producer purpose and checks the returned target
-against the event. Shared producer credentials and source headers are forbidden.
+authenticates the current service credential, checks its sealed installation
+and IAM/PaaS/Audit purpose, and proves the exact submitted event against its
+committed IAM fact or original authorization evidence. The closed mapping and
+its source-payload limitation are specified in the multi-tenant target below.
+The response binds the event's scope and canonical digest without changing
+the producer's identity. This one-append result grants no reusable permit,
+user, query, or resource access. Unknown scopes, substituted evidence, user
+or verifier producer credentials, and caller source/purpose selectors fail
+closed. Current user/session/role state does not invalidate a committed fact;
+current producer credential validity remains required. Audit derives source
+from purpose and verifies scope/digest before touching its record registry.
 
 Built-in organization roles are:
 
@@ -254,7 +257,8 @@ payload leakage.
 ### Ingestion and integrity
 
 Audit admits only authenticated service identities and a closed versioned
-event union for IAM and PaaS facts. Every event has source, event ID, tenant,
+event union for IAM, PaaS and Audit facts. Every event has source, event ID,
+exactly one tenant or installation chain scope,
 actor, IAM decision correlation where applicable, fixed action, typed target,
 result, request/content digest, safe correlation IDs, and UTC occurrence time.
 There is no arbitrary attributes map, request body, configuration value,
@@ -273,13 +277,17 @@ acceptance identity. All three retain the original IAM decision, actor,
 request digest, and request correlation without endpoint, credential
 reference, machine binding, provider payload, or native error.
 
-`(source, eventId)` is the idempotency identity. Equal canonical replay returns
-the stored result; different canonical content conflicts. A successful ingest
-serializes one per-tenant sequence and stores canonical event bytes,
+`(source, eventId)` is the idempotency identity. After producer proof, equal
+canonical replay returns the stored result; different canonical content
+conflicts. Unproved or changed historical authority is denied before registry
+lookup. A successful ingest serializes one chain sequence and stores canonical event bytes,
 content SHA-256, previous record hash, and a domain-separated record hash. The
 database runtime role cannot update a record, rewrite a sequence, or delete a
 record. Verification recomputes the selected tenant chain from an accepted
 checkpoint and fails on a gap, changed content, or changed predecessor.
+Internal `tenant:` and `installation:` chain keys keep equal raw IDs separate.
+Existing tenant canonical bytes, hashes and cursors remain unchanged. The one
+public `auditv1.CanonicalizeEvent` encoder serves ingestion, replay and proof.
 
 Phase 1 retention is `INDEFINITE`: there is no purge, overwrite, truncate, or
 tenant deletion path. Configurable expiry, archive tiers, legal hold, and
@@ -294,6 +302,13 @@ Audit query requires a user bearer credential and calls IAM for
 authority; a tenant header, query filter, cursor, actor, or record body cannot
 change it. Queries use bounded page sizes, deterministic descending sequence,
 an opaque tenant-bound cursor, and optional bounded time/action/actor filters.
+
+Platform records use `/v1/platform/records:query` and
+`/v1/platform/integrity:verify`, backed by the separate
+`audit.platform-record.read` / `audit.platform-integrity.verify` IAM actions.
+Their installation comes from the current IAM decision, not a query selector;
+platform access does not authorize a tenant chain. Tenant and installation
+page/verification responses expose exactly their authorized scope.
 Responses expose the sanitized event, sequence, hashes, ingestion time, and
 retention policy only. Reading or verifying Audit writes a local sanitized
 access record without recursively calling the ingestion API.
@@ -442,6 +457,15 @@ as user resource/read authority. IAM-source facts must exactly match IAM's
 own committed outbox document, including denied decisions, bootstrap,
 session, and password facts that have no allowed business decision.
 
+The existing IAM `identityaccess` use-case boundary owns `audit_producer.go`:
+historical cross-context evidence is separate from current identity-domain
+evaluation. Its PostgreSQL adapter reads only IAM's own committed records.
+`api/iam/v1` references the public Audit event and its generated schema in
+one direction; it does not copy the event schema or import Audit internals.
+IAM schema/readiness version 2 requires this proof boundary; Audit's independent
+partition schema is also version 2, while PaaS remains at its own version.
+These numbers do not constitute a release compatibility or downgrade claim.
+
 For PaaS/Audit sources, an immutable original decision proves historical
 authority, actor, action, request, and scope. The event and decision must have
 the same actor and request correlation; the current producer purpose and
@@ -458,11 +482,15 @@ closed, with no action-prefix fallback:
 | `paas.deployment.updated` | `paas.deployment.update` | `DEPLOYMENT`, exact event target ID |
 | `paas.deployment.stopped` | `paas.deployment.stop` | `DEPLOYMENT`, exact event target ID |
 | `paas.deployment.rolled-back` | `paas.deployment.rollback` | `DEPLOYMENT`, exact event target ID |
+| `paas.execution-pool.created` | `paas.execution-pool.create` | `EXECUTION_POOL`, actual requested target ID; installation scope |
+| `paas.execution-target.registered` | `paas.execution-target.register` | `EXECUTION_TARGET`, actual requested target ID; installation scope |
 | `managedservice.quota-entitlement.activated` | `managedservice.quota-entitlement.activate` | `QUOTA_ENTITLEMENT`, `collection` |
 | `managedservice.service-installation.created` | `managedservice.service-installation.create` | `SERVICE_INSTALLATION`, `collection` |
 | `managedservice.service-installation.ready` | Original `managedservice.service-installation.create` | Retained create decision; the producing worker/outbox owns final target/Operation correlation |
 | `audit.records.read` | `audit.record.read` | `AUDIT_RECORD`, `records` |
 | `audit.integrity.verified` | `audit.integrity.verify` | `AUDIT_CHAIN`, `chain` |
+| `audit.platform-records.read` | `audit.platform-record.read` | `AUDIT_RECORD`, `records`; installation scope |
+| `audit.platform-integrity.verified` | `audit.platform-integrity.verify` | `AUDIT_CHAIN`, `chain`; installation scope |
 
 The existing fixed installation verifier is a separate closed exception:
 `installation.verify` must name the sealed installation and its original
@@ -471,7 +499,9 @@ to fixed-probe application/configuration/revision creation and Deployment
 create/update; its Audit integrity fact targets `installation-verification`.
 It cannot authorize managed-service quota/purchase, arbitrary user resource
 mutations, another tenant, or another installation. The fixed-probe owner
-continues to enforce its process-owned resources and payloads.
+continues to enforce its exact process-owned resources and payloads. IAM proves
+the sealed verifier, original installation decision, closed action and fixed
+24-hex probe namespace, not the release/artifact-derived exact probe payload.
 
 An original collection-create decision does not contain the final resource
 ID, Operation ID, or business request digest. This proof therefore does not
@@ -636,14 +666,41 @@ The independent five-process regression, focused IAM/contracts/architecture
 tests, and vet pass. Primary-member and primary-role protection remain intact;
 no online platform recovery or primary-ownership transfer was introduced.
 
-This is a verified integration checkpoint, not acceptance of the multi-tenant
-target. Primary-account protection remains required. Exact-bootstrap-only
-tenant opening and registered-tenant-only producer resolution are still the
-adopted behavior; their planned replacements above are not yet implemented.
-No task-local
-browser, tenant suspension/recovery, historical proof, or signed populated
-offline upgrade/rollback/backup/recovery gate is claimed. Prior accepted
-foundation evidence below covers only its named source revisions.
+The next increment adapts the public installation contract from fixed source
+`6401e9602d2a5313cdc31f38363b86f404505894`, retaining the account integration
+and the `686efca` credential-protection rollback point. This branch's own
+fresh PG18 gates pass for IAM/Audit HTTP, separated database privileges,
+immutable records, and all five independent authority/dispatcher processes.
+The resolve endpoint now accepts only the event-bound request and verifies
+the historical evidence specified above. Real HTTP tests reject independent
+tenant selectors, substituted actor/decision/request/correlation/scope and
+wrong producer purpose; exact IAM facts reject any content change. Historical
+facts still resolve after the original user logs out and is disabled. The
+process gate verifies both real tenant outboxes, the fixed verifier, Audit
+outage/restart, equal replay, changed-authority denial, changed-business-payload
+replay conflict, and current producer credential revocation. Unit gates cover
+every closed action mapping and the explicitly unproved create payload.
+
+The existing process-test owner also builds and runs the actual IAM executable
+from fixed `9fd45b0` against its original schema. HTTP creates and changes
+credentials, revokes a role/session and the platform binding, then the current
+schema is applied twice and the new executable starts and restarts. Primary
+identity, changed passwords, qualified child login, revocations and original
+IAM facts are retained; the new binary rejects the unmigrated old schema
+before bootstrap. The independent Audit upgrade gate retains original tenant
+documents, canonical bytes and hashes from `9fd45b0`, keeps identical raw tenant
+and installation IDs in separate chains, and rejects immutable-record writes.
+IAM's readiness version is 2 and Audit's is 2; no equality or single global
+schema number is used as release-compatibility evidence.
+
+This is a verified integration checkpoint, not acceptance of the full
+multi-tenant target. Exact-bootstrap-only tenant opening is still the current
+behavior, pending its platform lifecycle replacement. Task-local browser,
+tenant suspension/primary recovery, and signed populated offline
+upgrade/rollback/backup/recovery gates remain unaccepted. The latter require
+the concrete release schema profile owned by FEAT-005/008; these retained-data
+process gates are not a substitute. Prior foundation evidence below covers
+only its named source revisions.
 
 - Gate A was accepted on 2026-08-26. Strict generated Go/OpenAPI contracts,
   current-credential-only service identity, fixed Argon2id and

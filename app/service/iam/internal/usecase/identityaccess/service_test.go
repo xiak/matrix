@@ -13,6 +13,185 @@ import (
 	"github.com/xiak/matrix/app/service/iam/internal/authority"
 )
 
+func TestAuditProofClosedHistoricalMappings(t *testing.T) {
+	for _, mapping := range []struct {
+		event    auditv1.Action
+		action   iamv1.Action
+		resource string
+	}{
+		{auditv1.ActionPaaSApplicationCreated, iamv1.ActionPaaSApplicationCreate, "collection"},
+		{auditv1.ActionPaaSConfigurationCreated, iamv1.ActionPaaSConfigurationCreate, "collection"},
+		{auditv1.ActionPaaSConfigurationRevisionCreated, iamv1.ActionPaaSConfigurationRevisionCreate, "collection"},
+		{auditv1.ActionPaaSApplicationRevisionCreated, iamv1.ActionPaaSApplicationRevisionCreate, "collection"},
+		{auditv1.ActionPaaSDeploymentCreated, iamv1.ActionPaaSDeploymentCreate, "collection"},
+		{auditv1.ActionPaaSDeploymentUpdated, iamv1.ActionPaaSDeploymentUpdate, "resource-proof"},
+		{auditv1.ActionPaaSDeploymentStopped, iamv1.ActionPaaSDeploymentStop, "resource-proof"},
+		{auditv1.ActionPaaSDeploymentRolledBack, iamv1.ActionPaaSDeploymentRollback, "resource-proof"},
+		{auditv1.ActionPaaSExecutionPoolCreated, iamv1.ActionPaaSExecutionPoolCreate, "resource-proof"},
+		{auditv1.ActionPaaSExecutionTargetRegistered, iamv1.ActionPaaSExecutionTargetRegister, "resource-proof"},
+		{auditv1.ActionManagedServiceQuotaEntitlementActivated, iamv1.ActionManagedServiceQuotaEntitlementActivate, "collection"},
+		{auditv1.ActionManagedServiceInstallationCreated, iamv1.ActionManagedServiceInstallationCreate, "collection"},
+		{auditv1.ActionManagedServiceInstallationReady, iamv1.ActionManagedServiceInstallationCreate, "collection"},
+		{auditv1.ActionAuditRecordsRead, iamv1.ActionAuditRecordRead, "records"},
+		{auditv1.ActionAuditIntegrityVerified, iamv1.ActionAuditIntegrityVerify, "chain"},
+		{auditv1.ActionAuditPlatformRecordsRead, iamv1.ActionAuditPlatformRecordRead, "records"},
+		{auditv1.ActionAuditPlatformIntegrityVerified, iamv1.ActionAuditPlatformIntegrityVerify, "chain"},
+	} {
+		t.Run(string(mapping.event), func(t *testing.T) {
+			identity, event, evidence := historicalAuditFixture(mapping.event, mapping.action, mapping.resource)
+			_, expected, err := auditv1.CanonicalizeEvent(mustAuditSource(t, mapping.event), event)
+			got, proofErr := auditContentDigest(identity, event, evidence)
+			if err != nil || proofErr != nil || got != expected {
+				t.Fatalf("valid historical proof rejected: %v/%v", err, proofErr)
+			}
+			for name, attack := range map[string]func(*iamv1.ServiceIdentity, *auditv1.Event, *AuditEvidence){
+				"producer purpose": func(i *iamv1.ServiceIdentity, e *auditv1.Event, a *AuditEvidence) {
+					i.Purpose = iamv1.ServiceInstallationVerifier
+				},
+				"producer installation": func(i *iamv1.ServiceIdentity, e *auditv1.Event, a *AuditEvidence) {
+					i.InstallationID = "installation-other"
+				},
+				"historical installation": func(i *iamv1.ServiceIdentity, e *auditv1.Event, a *AuditEvidence) {
+					a.InstallationID = "installation-other"
+				},
+				"event scope": func(i *iamv1.ServiceIdentity, e *auditv1.Event, a *AuditEvidence) {
+					if e.InstallationID != "" {
+						e.InstallationID = "installation-other"
+					} else {
+						e.TenantID = "tenant-other"
+					}
+				},
+				"actor": func(i *iamv1.ServiceIdentity, e *auditv1.Event, a *AuditEvidence) { e.Actor.ID = "principal-forged" },
+				"decision id": func(i *iamv1.ServiceIdentity, e *auditv1.Event, a *AuditEvidence) {
+					e.IAMDecisionID = "decision-forged"
+				},
+				"request": func(i *iamv1.ServiceIdentity, e *auditv1.Event, a *AuditEvidence) { e.RequestID = "request-forged" },
+				"correlation": func(i *iamv1.ServiceIdentity, e *auditv1.Event, a *AuditEvidence) {
+					e.CorrelationID = "correlation-forged"
+				},
+				"original decision": func(i *iamv1.ServiceIdentity, e *auditv1.Event, a *AuditEvidence) { a.Decision = nil },
+				"original fact": func(i *iamv1.ServiceIdentity, e *auditv1.Event, a *AuditEvidence) {
+					a.Event.Target.ID = "decision-forged"
+				},
+				"before authority": func(i *iamv1.ServiceIdentity, e *auditv1.Event, a *AuditEvidence) {
+					e.OccurredAt = a.Decision.DecidedAt.Add(-time.Microsecond)
+				},
+			} {
+				t.Run(name, func(t *testing.T) {
+					i, e, a := identity, event, evidence
+					attack(&i, &e, &a)
+					if _, err := auditContentDigest(i, e, a); !errors.Is(err, ErrForbidden) {
+						t.Fatalf("forged proof error=%v", err)
+					}
+				})
+			}
+			wrongTarget := event
+			wrongTarget.Target.ID = "resource-forged"
+			_, err = auditContentDigest(identity, wrongTarget, evidence)
+			if mapping.resource == "resource-proof" && !errors.Is(err, ErrForbidden) {
+				t.Fatal("exact-target decision admitted a substituted resource")
+			}
+			if mapping.resource == "collection" && err != nil {
+				t.Fatal("collection authority was incorrectly claimed to bind a final target")
+			}
+			// This is intentionally not a source transaction/payload receipt. The
+			// immutable authority is proved; payload/Operation truth stays at source.
+			changedPayload := event
+			changedPayload.RequestDigest = "sha256:" + strings.Repeat("b", 64)
+			if _, err := auditContentDigest(identity, changedPayload, evidence); err != nil {
+				t.Fatal("proof exceeded its declared historical authority boundary")
+			}
+		})
+	}
+}
+
+func TestAuditProofVerifierIsNotGenericServiceAuthority(t *testing.T) {
+	for _, probe := range []struct {
+		event  auditv1.Action
+		target string
+	}{
+		{auditv1.ActionPaaSApplicationCreated, "installation-verification-app-"},
+		{auditv1.ActionPaaSConfigurationCreated, "installation-verification-config-"},
+		{auditv1.ActionPaaSConfigurationRevisionCreated, "installation-verification-config-rev-"},
+		{auditv1.ActionPaaSApplicationRevisionCreated, "installation-verification-app-rev-"},
+		{auditv1.ActionPaaSDeploymentCreated, "installation-verification-deploy-"},
+		{auditv1.ActionPaaSDeploymentUpdated, "installation-verification-deploy-"},
+		{auditv1.ActionAuditIntegrityVerified, "installation-verification"},
+	} {
+		t.Run(string(probe.event), func(t *testing.T) {
+			identity, event, evidence := historicalAuditFixture(probe.event, iamv1.ActionInstallationVerify, "installation-proof")
+			event.TenantID = auditv1.TenantID(identity.OrganizationID)
+			event.Actor = auditv1.ActorReference{Type: auditv1.ActorServiceAccount, ID: "service-verifier"}
+			event.Target.ID = probe.target
+			if probe.event != auditv1.ActionAuditIntegrityVerified {
+				event.Target.ID += strings.Repeat("a", 24)
+			}
+			evidence.Decision.TenantID = identity.OrganizationID
+			evidence.Decision.Subject = &iamv1.Subject{Type: iamv1.PrincipalServiceAccount, ID: "service-verifier"}
+			evidence.Event.TenantID = event.TenantID
+			evidence.Event.Actor = event.Actor
+			evidence.VerifierPrincipalID = "service-verifier"
+			if _, err := auditContentDigest(identity, event, evidence); err != nil {
+				t.Fatalf("fixed verifier fact rejected: %v", err)
+			}
+			wrong := event
+			wrong.Target.ID = "arbitrary-business-resource"
+			if _, err := auditContentDigest(identity, wrong, evidence); !errors.Is(err, ErrForbidden) {
+				t.Fatal("probe authorized ordinary business target")
+			}
+			evidence.VerifierPrincipalID = "service-arbitrary"
+			if _, err := auditContentDigest(identity, event, evidence); !errors.Is(err, ErrForbidden) {
+				t.Fatal("ordinary service impersonated installation verifier")
+			}
+		})
+	}
+}
+
+func historicalAuditFixture(eventAction auditv1.Action, decisionAction iamv1.Action, resource string) (iamv1.ServiceIdentity, auditv1.Event, AuditEvidence) {
+	now := time.Date(2026, 8, 27, 5, 6, 7, 0, time.UTC)
+	contract, _ := auditv1.ContractForAction(eventAction)
+	resourceKind, _ := iamv1.ResourceKindForAction(decisionAction)
+	identity := iamv1.ServiceIdentity{APIVersion: iamv1.APIVersion, Kind: "ServiceIdentity", InstallationID: "installation-proof", OrganizationID: "tenant-platform", PrincipalID: "service-producer", Purpose: iamv1.ServicePaaS}
+	if contract.Source == auditv1.SourceAudit {
+		identity.Purpose = iamv1.ServiceAudit
+	}
+	decision := iamv1.AuthorizationDecision{APIVersion: iamv1.APIVersion, Kind: "AuthorizationDecision", ID: "decision-proof", Allowed: true, Reason: iamv1.DecisionAllowed, TenantID: "tenant-customer", Subject: &iamv1.Subject{Type: iamv1.PrincipalUser, ID: "principal-actor"}, Action: decisionAction, Resource: iamv1.ResourceReference{Kind: resourceKind, ID: resource}, RequestID: "request-proof", DecidedAt: now}
+	event := auditv1.Event{APIVersion: auditv1.APIVersion, Kind: "AuditEvent", EventID: "event-proof", TenantID: auditv1.TenantID(decision.TenantID), Actor: auditv1.ActorReference{Type: auditv1.ActorUser, ID: "principal-actor"}, IAMDecisionID: "decision-proof", Action: eventAction, Target: auditv1.TargetReference{Kind: contract.Target, ID: "resource-proof"}, Result: contract.Results[0], RequestDigest: "sha256:" + strings.Repeat("a", 64), RequestID: "request-proof", CorrelationID: "correlation-proof", OccurredAt: now.Add(time.Second)}
+	if contract.OperationRequired {
+		event.OperationID = "operation-proof"
+	}
+	if resource == "records" || resource == "chain" {
+		event.Target.ID = resource
+	}
+	if contract.PlatformOnly {
+		event.TenantID = ""
+		event.InstallationID = identity.InstallationID
+		decision.TenantID = ""
+		decision.InstallationID = identity.InstallationID
+	}
+	original := event
+	original.EventID = "event-original"
+	original.Action = auditv1.ActionIAMAuthorizationDecided
+	original.Target = auditv1.TargetReference{Kind: auditv1.TargetAuthorizationDecision, ID: "decision-proof"}
+	original.Result = auditv1.ResultAllowed
+	original.OperationID = ""
+	original.OccurredAt = now
+	original.InstallationID = ""
+	if contract.PlatformOnly {
+		original.TenantID = auditv1.TenantID(identity.OrganizationID)
+	}
+	return identity, event, AuditEvidence{InstallationID: identity.InstallationID, Event: original, Decision: &decision}
+}
+
+func mustAuditSource(t *testing.T, action auditv1.Action) auditv1.Source {
+	t.Helper()
+	contract, known := auditv1.ContractForAction(action)
+	if !known {
+		t.Fatal("unknown Audit action")
+	}
+	return contract.Source
+}
+
 func TestIAMCoreUsecasesBindCredentialsAndRecordClosedAuthorization(t *testing.T) {
 	repository := &coreRepository{transaction: newCoreTransaction()}
 	sequence := 0
@@ -376,6 +555,7 @@ func (transaction *coreTransaction) ApplyBootstrap(
 			Identity: iamv1.ServiceIdentity{
 				APIVersion:     iamv1.APIVersion,
 				Kind:           "ServiceIdentity",
+				InstallationID: mutation.InstallationID,
 				OrganizationID: mutation.Organization.ID,
 				PrincipalID:    service.PrincipalID,
 				Purpose:        service.Purpose,
@@ -636,7 +816,7 @@ func (transaction *coreTransaction) RevokeRoleBinding(
 func (transaction *coreTransaction) Readiness(context.Context) (ReadinessSnapshot, error) {
 	return ReadinessSnapshot{
 		Ready:         transaction.status.State == iamv1.BootstrapReady,
-		SchemaVersion: 1,
+		SchemaVersion: 2,
 		CheckedAt:     transaction.now,
 	}, nil
 }

@@ -73,7 +73,8 @@ func (client *Client) ResolveAuditProducer(
 	}
 	var identity iamv1.AuditProducerAuthorization
 	if !authorityhttp.ResponseIsJSON(response) || iamv1.DecodeRequest(response.Body, &identity) != nil ||
-		iamv1.ValidateAuditProducerAuthorization(identity) != nil || identity.OrganizationID != request.OrganizationID {
+		iamv1.ValidateAuditProducerAuthorization(identity) != nil || identity.TenantID != iamv1.OrganizationID(request.Event.TenantID) ||
+		identity.InstallationID != request.Event.InstallationID {
 		return iamv1.AuditProducerAuthorization{}, auditlog.ErrUnavailable
 	}
 	return identity, nil

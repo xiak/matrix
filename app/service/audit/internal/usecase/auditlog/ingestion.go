@@ -18,20 +18,25 @@ func (service *Service) Ingest(
 		return auditv1.IngestionResult{}, ErrInvalidArgument
 	}
 	producer, err := service.iam.ResolveAuditProducer(ctx, serviceCredential, iamv1.ResolveAuditProducerRequest{
-		OrganizationID: iamv1.OrganizationID(event.TenantID),
+		Event: event,
 	})
 	if err != nil {
 		return auditv1.IngestionResult{}, err
 	}
-	if iamv1.ValidateAuditProducerAuthorization(producer) != nil || producer.OrganizationID != iamv1.OrganizationID(event.TenantID) {
+	if iamv1.ValidateAuditProducerAuthorization(producer) != nil || producer.TenantID != iamv1.OrganizationID(event.TenantID) ||
+		producer.InstallationID != event.InstallationID {
 		return auditv1.IngestionResult{}, ErrUnavailable
 	}
 	source, err := sourceForIdentity(producer.Producer)
 	if err != nil {
 		return auditv1.IngestionResult{}, err
 	}
-	if auditv1.ValidateEventForSource(source, event) != nil {
+	_, digest, err := auditv1.CanonicalizeEvent(source, event)
+	if err != nil {
 		return auditv1.IngestionResult{}, ErrInvalidArgument
+	}
+	if digest != producer.ContentDigest {
+		return auditv1.IngestionResult{}, ErrUnavailable
 	}
 	var result auditv1.IngestionResult
 	err = service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
@@ -59,7 +64,9 @@ func (service *Service) Ingest(
 			}
 			return nil
 		}
-		head, ingestedAt, err := transaction.LockTenantHead(transactionContext, event.TenantID)
+		head, ingestedAt, err := transaction.LockChainHead(
+			transactionContext, authority.ChainFor(event.TenantID, event.InstallationID),
+		)
 		if err != nil {
 			return err
 		}

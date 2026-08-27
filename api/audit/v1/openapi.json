@@ -35,11 +35,15 @@
           "paas.deployment.updated",
           "paas.deployment.stopped",
           "paas.deployment.rolled-back",
+          "paas.execution-pool.created",
+          "paas.execution-target.registered",
           "managedservice.quota-entitlement.activated",
           "managedservice.service-installation.created",
           "managedservice.service-installation.ready",
           "audit.records.read",
-          "audit.integrity.verified"
+          "audit.integrity.verified",
+          "audit.platform-records.read",
+          "audit.platform-integrity.verified"
         ],
         "type": "string"
       },
@@ -603,6 +607,58 @@
                 "event": {
                   "properties": {
                     "action": {
+                      "const": "paas.execution-pool.created"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "PAAS"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "paas.execution-target.registered"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "PAAS"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
                       "const": "managedservice.quota-entitlement.activated"
                     }
                   },
@@ -726,6 +782,58 @@
                 }
               }
             }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "audit.platform-records.read"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "AUDIT"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "audit.platform-integrity.verified"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "AUDIT"
+                }
+              }
+            }
           }
         ],
         "properties": {
@@ -814,6 +922,24 @@
             }
           }
         ],
+        "oneOf": [
+          {
+            "properties": {
+              "installationId": false
+            },
+            "required": [
+              "tenantId"
+            ]
+          },
+          {
+            "properties": {
+              "tenantId": false
+            },
+            "required": [
+              "installationId"
+            ]
+          }
+        ],
         "properties": {
           "apiVersion": {
             "const": "audit.matrix.xiak.com/v1"
@@ -828,6 +954,9 @@
             "maximum": 9007199254740991,
             "minimum": 1,
             "type": "integer"
+          },
+          "installationId": {
+            "$ref": "#/components/schemas/ID"
           },
           "kind": {
             "const": "ChainVerification"
@@ -869,7 +998,6 @@
           "lastRecordHash",
           "recordCount",
           "state",
-          "tenantId",
           "toSequence",
           "verifiedAt"
         ],
@@ -908,6 +1036,7 @@
             },
             "then": {
               "properties": {
+                "installationId": false,
                 "operationId": false,
                 "result": {
                   "enum": [
@@ -926,6 +1055,7 @@
                 }
               },
               "required": [
+                "tenantId",
                 "iamDecisionId"
               ]
             }
@@ -943,6 +1073,7 @@
             },
             "then": {
               "properties": {
+                "installationId": false,
                 "operationId": false,
                 "result": {
                   "enum": [
@@ -961,6 +1092,7 @@
                 }
               },
               "required": [
+                "tenantId",
                 "iamDecisionId"
               ]
             }
@@ -978,6 +1110,7 @@
             },
             "then": {
               "properties": {
+                "installationId": false,
                 "operationId": false,
                 "result": {
                   "enum": [
@@ -996,6 +1129,7 @@
                 }
               },
               "required": [
+                "tenantId",
                 "iamDecisionId"
               ]
             }
@@ -1013,6 +1147,7 @@
             },
             "then": {
               "properties": {
+                "installationId": false,
                 "operationId": false,
                 "result": {
                   "enum": [
@@ -1031,6 +1166,7 @@
                 }
               },
               "required": [
+                "tenantId",
                 "iamDecisionId"
               ]
             }
@@ -1049,6 +1185,7 @@
             "then": {
               "properties": {
                 "iamDecisionId": false,
+                "installationId": false,
                 "operationId": false,
                 "result": {
                   "enum": [
@@ -1065,7 +1202,10 @@
                     "kind"
                   ]
                 }
-              }
+              },
+              "required": [
+                "tenantId"
+              ]
             }
           },
           {
@@ -1082,6 +1222,7 @@
             "then": {
               "properties": {
                 "iamDecisionId": false,
+                "installationId": false,
                 "operationId": false,
                 "result": {
                   "enum": [
@@ -1098,7 +1239,10 @@
                     "kind"
                   ]
                 }
-              }
+              },
+              "required": [
+                "tenantId"
+              ]
             }
           },
           {
@@ -1114,6 +1258,7 @@
             },
             "then": {
               "properties": {
+                "installationId": false,
                 "operationId": false,
                 "result": {
                   "enum": [
@@ -1130,7 +1275,10 @@
                     "kind"
                   ]
                 }
-              }
+              },
+              "required": [
+                "tenantId"
+              ]
             }
           },
           {
@@ -1147,6 +1295,7 @@
             "then": {
               "properties": {
                 "iamDecisionId": false,
+                "installationId": false,
                 "operationId": false,
                 "result": {
                   "enum": [
@@ -1163,7 +1312,10 @@
                     "kind"
                   ]
                 }
-              }
+              },
+              "required": [
+                "tenantId"
+              ]
             }
           },
           {
@@ -1179,6 +1331,7 @@
             },
             "then": {
               "properties": {
+                "installationId": false,
                 "operationId": false,
                 "result": {
                   "enum": [
@@ -1197,6 +1350,7 @@
                 }
               },
               "required": [
+                "tenantId",
                 "iamDecisionId"
               ]
             }
@@ -1214,6 +1368,7 @@
             },
             "then": {
               "properties": {
+                "installationId": false,
                 "operationId": false,
                 "result": {
                   "enum": [
@@ -1232,6 +1387,7 @@
                 }
               },
               "required": [
+                "tenantId",
                 "iamDecisionId"
               ]
             }
@@ -1249,6 +1405,7 @@
             },
             "then": {
               "properties": {
+                "installationId": false,
                 "operationId": false,
                 "result": {
                   "enum": [
@@ -1267,6 +1424,7 @@
                 }
               },
               "required": [
+                "tenantId",
                 "iamDecisionId"
               ]
             }
@@ -1284,6 +1442,7 @@
             },
             "then": {
               "properties": {
+                "installationId": false,
                 "operationId": false,
                 "result": {
                   "enum": [
@@ -1303,6 +1462,7 @@
                 }
               },
               "required": [
+                "tenantId",
                 "iamDecisionId"
               ]
             }
@@ -1320,6 +1480,7 @@
             },
             "then": {
               "properties": {
+                "installationId": false,
                 "result": {
                   "enum": [
                     "SUCCEEDED"
@@ -1337,6 +1498,7 @@
                 }
               },
               "required": [
+                "tenantId",
                 "iamDecisionId",
                 "operationId"
               ]
@@ -1355,6 +1517,7 @@
             },
             "then": {
               "properties": {
+                "installationId": false,
                 "result": {
                   "enum": [
                     "SUCCEEDED"
@@ -1372,6 +1535,7 @@
                 }
               },
               "required": [
+                "tenantId",
                 "iamDecisionId",
                 "operationId"
               ]
@@ -1390,6 +1554,7 @@
             },
             "then": {
               "properties": {
+                "installationId": false,
                 "result": {
                   "enum": [
                     "SUCCEEDED"
@@ -1407,6 +1572,7 @@
                 }
               },
               "required": [
+                "tenantId",
                 "iamDecisionId",
                 "operationId"
               ]
@@ -1425,6 +1591,7 @@
             },
             "then": {
               "properties": {
+                "installationId": false,
                 "result": {
                   "enum": [
                     "SUCCEEDED"
@@ -1442,6 +1609,7 @@
                 }
               },
               "required": [
+                "tenantId",
                 "iamDecisionId",
                 "operationId"
               ]
@@ -1460,6 +1628,7 @@
             },
             "then": {
               "properties": {
+                "installationId": false,
                 "result": {
                   "enum": [
                     "ACCEPTED"
@@ -1477,6 +1646,7 @@
                 }
               },
               "required": [
+                "tenantId",
                 "iamDecisionId",
                 "operationId"
               ]
@@ -1495,6 +1665,7 @@
             },
             "then": {
               "properties": {
+                "installationId": false,
                 "result": {
                   "enum": [
                     "ACCEPTED"
@@ -1512,6 +1683,7 @@
                 }
               },
               "required": [
+                "tenantId",
                 "iamDecisionId",
                 "operationId"
               ]
@@ -1530,6 +1702,7 @@
             },
             "then": {
               "properties": {
+                "installationId": false,
                 "result": {
                   "enum": [
                     "ACCEPTED"
@@ -1547,6 +1720,7 @@
                 }
               },
               "required": [
+                "tenantId",
                 "iamDecisionId",
                 "operationId"
               ]
@@ -1565,6 +1739,7 @@
             },
             "then": {
               "properties": {
+                "installationId": false,
                 "result": {
                   "enum": [
                     "ACCEPTED"
@@ -1582,6 +1757,95 @@
                 }
               },
               "required": [
+                "tenantId",
+                "iamDecisionId",
+                "operationId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.execution-pool.created"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "type": {
+                      "const": "USER"
+                    }
+                  }
+                },
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "EXECUTION_POOL"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                },
+                "tenantId": false
+              },
+              "required": [
+                "installationId",
+                "iamDecisionId",
+                "operationId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.execution-target.registered"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "type": {
+                      "const": "USER"
+                    }
+                  }
+                },
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "EXECUTION_TARGET"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                },
+                "tenantId": false
+              },
+              "required": [
+                "installationId",
                 "iamDecisionId",
                 "operationId"
               ]
@@ -1600,6 +1864,7 @@
             },
             "then": {
               "properties": {
+                "installationId": false,
                 "operationId": false,
                 "result": {
                   "enum": [
@@ -1618,6 +1883,7 @@
                 }
               },
               "required": [
+                "tenantId",
                 "iamDecisionId"
               ]
             }
@@ -1635,6 +1901,7 @@
             },
             "then": {
               "properties": {
+                "installationId": false,
                 "result": {
                   "enum": [
                     "ACCEPTED"
@@ -1652,6 +1919,7 @@
                 }
               },
               "required": [
+                "tenantId",
                 "iamDecisionId",
                 "operationId"
               ]
@@ -1670,6 +1938,7 @@
             },
             "then": {
               "properties": {
+                "installationId": false,
                 "operationId": false,
                 "result": {
                   "enum": [
@@ -1688,6 +1957,7 @@
                 }
               },
               "required": [
+                "tenantId",
                 "iamDecisionId"
               ]
             }
@@ -1705,6 +1975,7 @@
             },
             "then": {
               "properties": {
+                "installationId": false,
                 "operationId": false,
                 "result": {
                   "enum": [
@@ -1723,6 +1994,7 @@
                 }
               },
               "required": [
+                "tenantId",
                 "iamDecisionId"
               ]
             }
@@ -1740,6 +2012,7 @@
             },
             "then": {
               "properties": {
+                "installationId": false,
                 "operationId": false,
                 "result": {
                   "enum": [
@@ -1758,6 +2031,95 @@
                 }
               },
               "required": [
+                "tenantId",
+                "iamDecisionId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "audit.platform-records.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "type": {
+                      "const": "USER"
+                    }
+                  }
+                },
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "AUDIT_RECORDS"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                },
+                "tenantId": false
+              },
+              "required": [
+                "installationId",
+                "iamDecisionId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "audit.platform-integrity.verified"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "type": {
+                      "const": "USER"
+                    }
+                  }
+                },
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "AUDIT_CHAIN"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                },
+                "tenantId": false
+              },
+              "required": [
+                "installationId",
                 "iamDecisionId"
               ]
             }
@@ -1781,6 +2143,9 @@
           },
           "iamDecisionId": {
             "$ref": "#/components/schemas/DecisionID"
+          },
+          "installationId": {
+            "$ref": "#/components/schemas/ID"
           },
           "kind": {
             "const": "AuditEvent"
@@ -1824,8 +2189,7 @@
           "requestDigest",
           "requestId",
           "result",
-          "target",
-          "tenantId"
+          "target"
         ],
         "type": "object"
       },
@@ -1943,7 +2307,7 @@
             "$ref": "#/components/schemas/DecisionID"
           },
           "installationId": {
-            "type": "string"
+            "$ref": "#/components/schemas/ID"
           },
           "kind": {
             "const": "InstallationVerification"
@@ -2095,9 +2459,30 @@
       },
       "RecordPage": {
         "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "installationId": false
+            },
+            "required": [
+              "tenantId"
+            ]
+          },
+          {
+            "properties": {
+              "tenantId": false
+            },
+            "required": [
+              "installationId"
+            ]
+          }
+        ],
         "properties": {
           "apiVersion": {
             "const": "audit.matrix.xiak.com/v1"
+          },
+          "installationId": {
+            "$ref": "#/components/schemas/ID"
           },
           "kind": {
             "const": "AuditRecordPage"
@@ -2119,8 +2504,7 @@
         "required": [
           "apiVersion",
           "kind",
-          "records",
-          "tenantId"
+          "records"
         ],
         "type": "object"
       },
@@ -2160,6 +2544,8 @@
           "CONFIGURATION_REVISION",
           "APPLICATION_REVISION",
           "DEPLOYMENT",
+          "EXECUTION_POOL",
+          "EXECUTION_TARGET",
           "QUOTA_ENTITLEMENT",
           "SERVICE_INSTALLATION",
           "AUDIT_RECORDS",
@@ -2228,7 +2614,7 @@
             "type": "string"
           },
           "installationId": {
-            "type": "string"
+            "$ref": "#/components/schemas/ID"
           },
           "operationId": {
             "$ref": "#/components/schemas/OperationID"
@@ -2476,6 +2862,126 @@
           }
         ],
         "summary": "Verify a bounded segment of the IAM-derived tenant's chain"
+      }
+    },
+    "/v1/platform/integrity:verify": {
+      "post": {
+        "operationId": "verifyPlatformAuditChain",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyChainRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChainVerification"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [
+          {
+            "UserSession": []
+          }
+        ],
+        "summary": "Verify a bounded segment of the IAM-derived installation's chain"
+      }
+    },
+    "/v1/platform/records:query": {
+      "post": {
+        "operationId": "queryPlatformAuditRecords",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueryRecordsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordPage"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [
+          {
+            "UserSession": []
+          }
+        ],
+        "summary": "Query the IAM-derived installation's Audit records"
       }
     },
     "/v1/records:query": {

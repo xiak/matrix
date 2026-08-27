@@ -9,6 +9,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	auditv1 "github.com/xiak/matrix/api/audit/v1"
 )
 
 var (
@@ -77,6 +79,7 @@ func ValidateServiceIdentity(value ServiceIdentity) error {
 		problems = append(problems, errors.New("service identity type metadata is invalid"))
 	}
 	problems = append(problems,
+		ValidateID("serviceIdentity.installationId", value.InstallationID),
 		ValidateID("serviceIdentity.organizationId", string(value.OrganizationID)),
 		ValidateID("serviceIdentity.principalId", string(value.PrincipalID)),
 	)
@@ -87,7 +90,7 @@ func ValidateServiceIdentity(value ServiceIdentity) error {
 }
 
 func ValidateResolveAuditProducerRequest(value ResolveAuditProducerRequest) error {
-	return ValidateID("organizationId", string(value.OrganizationID))
+	return auditv1.ValidateEvent(value.Event)
 }
 
 func ValidateAuditProducerAuthorization(value AuditProducerAuthorization) error {
@@ -95,7 +98,15 @@ func ValidateAuditProducerAuthorization(value AuditProducerAuthorization) error 
 		(value.Producer.Purpose != ServiceIAM && value.Producer.Purpose != ServicePaaS && value.Producer.Purpose != ServiceAudit) {
 		return errors.New("audit producer authorization is invalid")
 	}
-	return errors.Join(ValidateServiceIdentity(value.Producer), ValidateID("organizationId", string(value.OrganizationID)))
+	if (value.TenantID == "") == (value.InstallationID == "") ||
+		(value.InstallationID != "" && value.InstallationID != value.Producer.InstallationID) {
+		return errors.New("audit producer scope is invalid")
+	}
+	scope := value.InstallationID
+	if value.TenantID != "" {
+		scope = string(value.TenantID)
+	}
+	return errors.Join(ValidateServiceIdentity(value.Producer), ValidateID("scope", scope), ValidateDigest("contentDigest", value.ContentDigest))
 }
 
 func ValidateBootstrapStatus(value BootstrapStatus) error {
@@ -481,9 +492,9 @@ func ResourceKindForAction(action Action) (ResourceKind, bool) {
 	case ActionManagedServiceInstallationCreate,
 		ActionManagedServiceInstallationRead:
 		return ResourceServiceInstallation, true
-	case ActionAuditRecordRead:
+	case ActionAuditRecordRead, ActionAuditPlatformRecordRead:
 		return ResourceAuditRecord, true
-	case ActionAuditIntegrityVerify:
+	case ActionAuditIntegrityVerify, ActionAuditPlatformIntegrityVerify:
 		return ResourceAuditChain, true
 	case ActionInstallationVerify:
 		return ResourceInstallation, true

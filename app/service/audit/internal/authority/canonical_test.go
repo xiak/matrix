@@ -85,5 +85,8 @@ func auditAuthorityEvent(eventID, tenantID string, action auditv1.Action) auditv
 	if contract.OperationRequired {
 		event.OperationID = "operation-example"
 	}
+	if contract.PlatformOnly {
+		event.TenantID, event.InstallationID = "", tenantID
+	}
 	return event
 }

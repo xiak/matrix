@@ -80,7 +80,7 @@ func buildPaths() object {
 			[]any{object{"ServiceCredential": []string{}}}, nil,
 		)},
 		"/v1/audit-producer:resolve": object{"post": mutationOperation(
-			"resolveAuditProducer", "Verify a platform audit producer and its event organization", "ResolveAuditProducerRequest", "AuditProducerAuthorization", "200",
+			"resolveAuditProducer", "Prove one Audit event against committed IAM authority", "ResolveAuditProducerRequest", "AuditProducerAuthorization", "200",
 			[]any{object{"ServiceCredential": []string{}}}, nil,
 		)},
 		"/v1/auth/login": object{"post": mutationOperation(
@@ -178,6 +178,7 @@ func scalarSchemas() object {
 		"pattern": `^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`,
 	}
 	result := object{
+		"Event": object{"$ref": "../../audit/v1/openapi.json#/components/schemas/Event"},
 		"Timestamp": object{
 			"type": "string", "format": "date-time",
 			"pattern": `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,6})?Z$`,
@@ -266,6 +267,9 @@ func structContracts() map[string]reflect.Type {
 }
 
 func fieldOverlay(owner string, field reflect.StructField, jsonName string, base object) object {
+	if jsonName == "contentDigest" {
+		base = object{"type": "string", "pattern": `^sha256:[0-9a-f]{64}$`}
+	}
 	if jsonName == "loginName" || jsonName == "administratorLoginName" || jsonName == "primaryLoginName" {
 		base = object{"type": "string", "pattern": `^[a-z][a-z0-9._-]{2,63}$`, "minLength": 3, "maxLength": 64}
 		if owner == "LoginRequest" {
@@ -309,6 +313,10 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 }
 
 func applySemanticOverlays(schemas object) {
+	schemas["AuditProducerAuthorization"].(object)["oneOf"] = []any{
+		object{"required": []string{"tenantId"}, "properties": object{"installationId": false}},
+		object{"required": []string{"installationId"}, "properties": object{"tenantId": false}},
+	}
 	kinds := map[string]string{
 		"CurrentIdentity": "CurrentIdentity", "PrincipalList": "PrincipalList", "OrganizationAccountList": "OrganizationAccountList",
 		"Organization": "Organization", "Principal": "Principal", "RoleBinding": "RoleBinding",

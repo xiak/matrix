@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/audit/internal/usecase/auditlog"
 )
@@ -26,14 +27,16 @@ func TestClientBindsProducerAndSubjectCredentialsToExactIAMRoutes(t *testing.T) 
 				t.Errorf("IAM identity request method=%s url=%s headers=%#v", request.Method, request.URL, request.Header)
 			}
 			var body iamv1.ResolveAuditProducerRequest
-			if err := iamv1.DecodeRequest(request.Body, &body); err != nil || body.OrganizationID != "organization-second" {
+			if err := iamv1.DecodeRequest(request.Body, &body); err != nil || body.Event != clientEvent() {
 				t.Errorf("IAM producer request=%#v err=%v", body, err)
 			}
+			_, digest, _ := auditv1.CanonicalizeEvent(auditv1.SourcePaaS, body.Event)
 			_ = json.NewEncoder(response).Encode(iamv1.AuditProducerAuthorization{
 				APIVersion: iamv1.APIVersion, Kind: "AuditProducerAuthorization",
-				OrganizationID: body.OrganizationID,
+				TenantID: iamv1.OrganizationID(body.Event.TenantID), ContentDigest: digest,
 				Producer: iamv1.ServiceIdentity{
 					APIVersion: iamv1.APIVersion, Kind: "ServiceIdentity",
+					InstallationID: "installation-example",
 					OrganizationID: "organization-example", PrincipalID: "service-paas", Purpose: iamv1.ServicePaaS,
 				},
 			})
@@ -99,10 +102,10 @@ func TestClientBindsProducerAndSubjectCredentialsToExactIAMRoutes(t *testing.T) 
 	identity, err := client.ResolveAuditProducer(
 		context.Background(),
 		clientSecret(t, "producer-credential"),
-		iamv1.ResolveAuditProducerRequest{OrganizationID: "organization-second"},
+		iamv1.ResolveAuditProducerRequest{Event: clientEvent()},
 	)
 	if err != nil || identity.Producer.Purpose != iamv1.ServicePaaS ||
-		identity.Producer.OrganizationID != "organization-example" || identity.OrganizationID != "organization-second" {
+		identity.Producer.OrganizationID != "organization-example" || identity.TenantID != "organization-second" {
 		t.Fatalf("IAM service identity=%#v err=%v", identity, err)
 	}
 	authorization := iamv1.AuthorizationRequest{
@@ -171,7 +174,7 @@ func TestClientFailsClosedWithoutFollowingCredentialRedirects(t *testing.T) {
 		t.Fatalf("create IAM HTTP client: %v", err)
 	}
 	credential := clientSecret(t, "producer-credential")
-	request := iamv1.ResolveAuditProducerRequest{OrganizationID: "organization-example"}
+	request := iamv1.ResolveAuditProducerRequest{Event: clientEvent()}
 	if _, err := client.ResolveAuditProducer(context.Background(), credential, request); !errors.Is(err, auditlog.ErrUnavailable) || redirectCalls != 0 {
 		t.Fatalf("redirect IAM error=%v redirectCalls=%d", err, redirectCalls)
 	}
@@ -201,6 +204,15 @@ func TestClientFailsClosedWithoutFollowingCredentialRedirects(t *testing.T) {
 			t.Fatalf("accepted unsafe IAM endpoint %q", endpoint)
 		}
 	}
+}
+
+func clientEvent() auditv1.Event {
+	return auditv1.Event{APIVersion: auditv1.APIVersion, Kind: "AuditEvent", EventID: "event-proof",
+		TenantID: "organization-second", Actor: auditv1.ActorReference{Type: auditv1.ActorUser, ID: "principal-example"},
+		IAMDecisionID: "decision-proof", Action: auditv1.ActionPaaSApplicationCreated,
+		Target: auditv1.TargetReference{Kind: auditv1.TargetApplication, ID: "application-example"}, Result: auditv1.ResultSucceeded,
+		RequestDigest: "sha256:" + strings.Repeat("1", 64), RequestID: "request-proof", CorrelationID: "request-proof", OperationID: "operation-proof",
+		OccurredAt: time.Date(2026, 8, 26, 17, 18, 19, 123000, time.UTC)}
 }
 
 func clientSecret(t *testing.T, value string) iamv1.Secret {

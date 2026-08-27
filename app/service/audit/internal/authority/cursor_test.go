@@ -24,7 +24,7 @@ func TestCursorIsOpaqueTenantAndFilterBound(t *testing.T) {
 		Action: auditv1.ActionPaaSDeploymentCreated,
 		Actor:  &auditv1.ActorReference{Type: auditv1.ActorUser, ID: "principal-example"},
 	}
-	cursor, err := codec.Encode("organization-example", query, 42)
+	cursor, err := codec.Encode(TenantChain("organization-example"), query, 42)
 	if err != nil {
 		t.Fatalf("encode cursor: %v", err)
 	}
@@ -33,7 +33,7 @@ func TestCursorIsOpaqueTenantAndFilterBound(t *testing.T) {
 	if err := auditv1.ValidateQueryRecordsRequest(queryWithCursor); err != nil {
 		t.Fatalf("encoded cursor violates Audit contract: %v", err)
 	}
-	sequence, err := codec.Decode(cursor, "organization-example", query)
+	sequence, err := codec.Decode(cursor, TenantChain("organization-example"), query)
 	if err != nil || sequence != 42 {
 		t.Fatalf("decode cursor: sequence=%d err=%v", sequence, err)
 	}
@@ -46,16 +46,16 @@ func TestCursorIsOpaqueTenantAndFilterBound(t *testing.T) {
 		t.Fatal("cursor exposes tenant identity")
 	}
 
-	if _, err := codec.Decode(cursor, "organization-other", query); !errors.Is(err, ErrInvalidCursor) {
+	if _, err := codec.Decode(cursor, TenantChain("organization-other"), query); !errors.Is(err, ErrInvalidCursor) {
 		t.Fatalf("cross-tenant cursor error = %v", err)
 	}
 	changed := query
 	changed.PageSize++
-	if _, err := codec.Decode(cursor, "organization-example", changed); !errors.Is(err, ErrInvalidCursor) {
+	if _, err := codec.Decode(cursor, TenantChain("organization-example"), changed); !errors.Is(err, ErrInvalidCursor) {
 		t.Fatalf("cross-filter cursor error = %v", err)
 	}
 	otherCodec, _ := NewCursorCodec(bytes.Repeat([]byte{0x6b}, 32))
-	if _, err := otherCodec.Decode(cursor, "organization-example", query); !errors.Is(err, ErrInvalidCursor) {
+	if _, err := otherCodec.Decode(cursor, TenantChain("organization-example"), query); !errors.Is(err, ErrInvalidCursor) {
 		t.Fatalf("cursor signed by another key error = %v", err)
 	}
 }
@@ -66,7 +66,7 @@ func TestCursorRejectsTamperingUnboundedInputAndInvalidKeys(t *testing.T) {
 	}
 	codec, _ := NewCursorCodec(bytes.Repeat([]byte{0x5a}, 32))
 	query := auditv1.QueryRecordsRequest{PageSize: 20}
-	cursor, err := codec.Encode("organization-example", query, 42)
+	cursor, err := codec.Encode(TenantChain("organization-example"), query, 42)
 	if err != nil {
 		t.Fatalf("encode cursor: %v", err)
 	}
@@ -76,14 +76,36 @@ func TestCursorRejectsTamperingUnboundedInputAndInvalidKeys(t *testing.T) {
 	} else {
 		tampered[len(tampered)-1] = 'A'
 	}
-	if _, err := codec.Decode(auditv1.Cursor(tampered), "organization-example", query); !errors.Is(err, ErrInvalidCursor) {
+	if _, err := codec.Decode(auditv1.Cursor(tampered), TenantChain("organization-example"), query); !errors.Is(err, ErrInvalidCursor) {
 		t.Fatalf("tampered cursor error = %v", err)
 	}
 	query.PageSize = auditv1.MaxPageSize + 1
-	if _, err := codec.Encode("organization-example", query, 42); !errors.Is(err, ErrInvalidCursor) {
+	if _, err := codec.Encode(TenantChain("organization-example"), query, 42); !errors.Is(err, ErrInvalidCursor) {
 		t.Fatalf("unbounded filter cursor error = %v", err)
 	}
-	if _, err := codec.Decode("organization-example:42", "organization-example", auditv1.QueryRecordsRequest{PageSize: 20}); !errors.Is(err, ErrInvalidCursor) {
+	if _, err := codec.Decode("organization-example:42", TenantChain("organization-example"), auditv1.QueryRecordsRequest{PageSize: 20}); !errors.Is(err, ErrInvalidCursor) {
 		t.Fatalf("transparent unsigned cursor error = %v", err)
+	}
+}
+
+func TestCursorCannotCrossAuthorityNamespaceOrInstallation(t *testing.T) {
+	codec, _ := NewCursorCodec(bytes.Repeat([]byte{0x5a}, 32))
+	query := auditv1.QueryRecordsRequest{PageSize: 20}
+	platform := InstallationChain("same-authority")
+	cursor, err := codec.Encode(platform, query, 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sequence, err := codec.Decode(cursor, platform, query); err != nil || sequence != 42 {
+		t.Fatalf("installation cursor failed: sequence=%d err=%v", sequence, err)
+	}
+	for _, other := range []ChainID{TenantChain("same-authority"), InstallationChain("another-installation")} {
+		if _, err := codec.Decode(cursor, other, query); !errors.Is(err, ErrInvalidCursor) {
+			t.Fatalf("installation cursor crossed into %s: %v", other, err)
+		}
+	}
+	tenantCursor, _ := codec.Encode(TenantChain("same-authority"), query, 42)
+	if _, err := codec.Decode(tenantCursor, platform, query); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatalf("tenant cursor crossed into installation: %v", err)
 	}
 }

@@ -664,11 +664,11 @@ BEGIN
     SELECT EXISTS (
                SELECT 1 FROM iam.bootstrap_receipts AS receipt
                 WHERE receipt.singleton
-           ) AND NOT EXISTS (
+           ) AND to_regprocedure('iam.read_audit_evidence(text,text,text,text,jsonb)') IS NOT NULL AND NOT EXISTS (
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-           1::bigint,
+           2::bigint,
            transaction_timestamp();
 END
 $function$;
@@ -721,6 +721,8 @@ AS $function$
         WHEN 'managedservice.service-installation.read' THEN 'SERVICE_INSTALLATION'
         WHEN 'audit.record.read' THEN 'AUDIT_RECORD'
         WHEN 'audit.integrity.verify' THEN 'AUDIT_CHAIN'
+        WHEN 'audit.platform-record.read' THEN 'AUDIT_RECORD'
+        WHEN 'audit.platform-integrity.verify' THEN 'AUDIT_CHAIN'
         WHEN 'installation.verify' THEN 'INSTALLATION'
         ELSE NULL
     END
@@ -737,7 +739,8 @@ AS $function$
         'iam.platform-role-binding.put', 'iam.platform-role-binding.revoke',
         'paas.execution-pool.create', 'paas.execution-pool.read',
         'paas.execution-target.register', 'paas.execution-target.read',
-        'paas.platform-operation.read'
+        'paas.platform-operation.read', 'audit.platform-record.read',
+        'audit.platform-integrity.verify'
     ), false)
 $function$;
 
@@ -919,12 +922,14 @@ BEGIN
 END
 $function$;
 
-CREATE OR REPLACE FUNCTION iam.lookup_service(submitted_lookup_digest text)
+DROP FUNCTION IF EXISTS iam.lookup_service(text);
+CREATE FUNCTION iam.lookup_service(submitted_lookup_digest text)
 RETURNS TABLE (
     tenant_id text,
     principal_id text,
     purpose text,
-    verification_digest text
+    verification_digest text,
+    installation_id text
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -942,12 +947,13 @@ BEGIN
     PERFORM set_config('matrix.iam_tenant_id', indexed.tenant_id, true);
     RETURN QUERY
     SELECT credential.tenant_id, credential.principal_id,
-           credential.purpose, credential.verification_digest
+           credential.purpose, credential.verification_digest, receipt.installation_id
       FROM iam.service_credentials AS credential
       JOIN iam.organizations AS organization ON organization.id = credential.tenant_id
       JOIN iam.principals AS principal
         ON principal.tenant_id = credential.tenant_id
        AND principal.id = credential.principal_id
+      JOIN iam.bootstrap_receipts AS receipt ON receipt.organization_id = credential.tenant_id
      WHERE credential.tenant_id = indexed.tenant_id
        AND credential.principal_id = indexed.principal_id
        AND credential.revoked_at IS NULL

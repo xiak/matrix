@@ -27,12 +27,14 @@ type Workflow interface {
 		string,
 		auditv1.QueryRecordsRequest,
 	) (auditv1.RecordPage, error)
+	QueryPlatformRecords(context.Context, iamv1.Secret, string, auditv1.QueryRecordsRequest) (auditv1.RecordPage, error)
 	VerifyChain(
 		context.Context,
 		iamv1.Secret,
 		string,
 		auditv1.VerifyChainRequest,
 	) (auditv1.ChainVerification, error)
+	VerifyPlatformChain(context.Context, iamv1.Secret, string, auditv1.VerifyChainRequest) (auditv1.ChainVerification, error)
 	VerifyInstallation(
 		context.Context,
 		iamv1.Secret,
@@ -66,6 +68,8 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/events", value.ingest)
 	routes.HandleFunc("/v1/records:query", value.queryRecords)
 	routes.HandleFunc("/v1/integrity:verify", value.verifyChain)
+	routes.HandleFunc("/v1/platform/records:query", value.queryRecords)
+	routes.HandleFunc("/v1/platform/integrity:verify", value.verifyChain)
 	routes.HandleFunc("/v1/installation:verify", value.verifyInstallation)
 	routes.HandleFunc("/", value.notFound)
 	value.routes = routes
@@ -178,7 +182,11 @@ func (value *handler) queryRecords(response http.ResponseWriter, request *http.R
 	if !ok {
 		return
 	}
-	page, err := value.workflow.QueryRecords(
+	query := value.workflow.QueryRecords
+	if request.URL.Path == "/v1/platform/records:query" {
+		query = value.workflow.QueryPlatformRecords
+	}
+	page, err := query(
 		request.Context(),
 		credential,
 		requestID(request),
@@ -203,7 +211,11 @@ func (value *handler) verifyChain(response http.ResponseWriter, request *http.Re
 	if !ok {
 		return
 	}
-	verification, err := value.workflow.VerifyChain(
+	verify := value.workflow.VerifyChain
+	if request.URL.Path == "/v1/platform/integrity:verify" {
+		verify = value.workflow.VerifyPlatformChain
+	}
+	verification, err := verify(
 		request.Context(),
 		credential,
 		requestID(request),

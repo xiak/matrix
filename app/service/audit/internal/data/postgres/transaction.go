@@ -54,7 +54,7 @@ func (value *transaction) LookupRecord(
 ) (auditlog.StoredRecord, bool, error) {
 	record, canonicalDocument, err := scanAuditRecord(value.tx.QueryRow(
 		ctx,
-		`SELECT tenant_id, sequence, source, event_id, event_document,
+		`SELECT chain_id, sequence, source, event_id, event_document,
 			   canonical_document, content_digest, previous_hash, record_hash,
 			   ingested_at, retention
 		  FROM audit.lookup_record($1, $2)`,
@@ -78,25 +78,25 @@ func (value *transaction) LookupRecord(
 	}, true, nil
 }
 
-func (value *transaction) LockTenantHead(
+func (value *transaction) LockChainHead(
 	ctx context.Context,
-	tenantID auditv1.TenantID,
+	chainID authority.ChainID,
 ) (authority.Checkpoint, time.Time, error) {
 	var sequence int64
 	var recordHash string
 	var ingestedAt time.Time
 	if err := value.tx.QueryRow(
 		ctx,
-		"SELECT * FROM audit.lock_tenant_head($1)",
-		string(tenantID),
+		"SELECT * FROM audit.lock_chain_head($1)",
+		string(chainID),
 	).Scan(&sequence, &recordHash, &ingestedAt); err != nil {
-		return authority.Checkpoint{}, time.Time{}, mapDatabaseError("lock Audit tenant head", err)
+		return authority.Checkpoint{}, time.Time{}, mapDatabaseError("lock Audit chain head", err)
 	}
 	if sequence < 0 || uint64(sequence) > maximumAuditSequence {
 		return authority.Checkpoint{}, time.Time{}, auditlog.ErrUnavailable
 	}
 	return authority.Checkpoint{
-		TenantID: tenantID, Sequence: uint64(sequence), RecordHash: recordHash,
+		ChainID: chainID, Sequence: uint64(sequence), RecordHash: recordHash,
 	}, ingestedAt.UTC(), nil
 }
 
@@ -119,7 +119,7 @@ func (value *transaction) AppendRecord(
 		)`,
 		string(mutation.Record.Source),
 		string(mutation.Record.Event.EventID),
-		string(mutation.Record.Event.TenantID),
+		string(authority.ChainFor(mutation.Record.Event.TenantID, mutation.Record.Event.InstallationID)),
 		int64(mutation.Record.Sequence),
 		eventDocument,
 		mutation.Fact.Document,
@@ -160,11 +160,11 @@ func (value *transaction) ReadRecords(
 	}
 	rows, err := value.tx.Query(
 		ctx,
-		`SELECT tenant_id, sequence, source, event_id, event_document,
+		`SELECT chain_id, sequence, source, event_id, event_document,
 			   canonical_document, content_digest, previous_hash, record_hash,
 			   ingested_at, retention
 		  FROM audit.read_records($1, $2, $3, $4, $5, $6, $7, $8)`,
-		string(query.TenantID),
+		string(query.ChainID),
 		int64(query.BeforeSequence),
 		query.Limit,
 		query.From,
@@ -193,14 +193,14 @@ func (value *transaction) ReadRecords(
 
 func (value *transaction) ReadCheckpoint(
 	ctx context.Context,
-	tenantID auditv1.TenantID,
+	chainID authority.ChainID,
 	sequence uint64,
 ) (authority.Checkpoint, bool, error) {
 	var recordHash string
 	err := value.tx.QueryRow(
 		ctx,
 		"SELECT record_hash FROM audit.read_checkpoint($1, $2)",
-		string(tenantID),
+		string(chainID),
 		int64(sequence),
 	).Scan(&recordHash)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -210,23 +210,23 @@ func (value *transaction) ReadCheckpoint(
 		return authority.Checkpoint{}, false, mapDatabaseError("read Audit checkpoint", err)
 	}
 	return authority.Checkpoint{
-		TenantID: tenantID, Sequence: sequence, RecordHash: recordHash,
+		ChainID: chainID, Sequence: sequence, RecordHash: recordHash,
 	}, true, nil
 }
 
 func (value *transaction) ReadChain(
 	ctx context.Context,
-	tenantID auditv1.TenantID,
+	chainID authority.ChainID,
 	fromSequence uint64,
 	maximumRecords int,
 ) ([]auditv1.AuditRecord, error) {
 	rows, err := value.tx.Query(
 		ctx,
-		`SELECT tenant_id, sequence, source, event_id, event_document,
+		`SELECT chain_id, sequence, source, event_id, event_document,
 			   canonical_document, content_digest, previous_hash, record_hash,
 			   ingested_at, retention
 		  FROM audit.read_chain($1, $2, $3)`,
-		string(tenantID),
+		string(chainID),
 		int64(fromSequence),
 		maximumRecords,
 	)
@@ -250,16 +250,16 @@ func (value *transaction) ReadChain(
 
 func (value *transaction) LookupPaaSOperationRecord(
 	ctx context.Context,
-	tenantID auditv1.TenantID,
+	chainID authority.ChainID,
 	operationID auditv1.OperationID,
 ) (auditv1.AuditRecord, bool, error) {
 	record, _, err := scanAuditRecord(value.tx.QueryRow(
 		ctx,
-		`SELECT tenant_id, sequence, source, event_id, event_document,
+		`SELECT chain_id, sequence, source, event_id, event_document,
 			   canonical_document, content_digest, previous_hash, record_hash,
 			   ingested_at, retention
 		  FROM audit.lookup_paas_operation_record($1, $2)`,
-		string(tenantID),
+		string(chainID),
 		string(operationID),
 	))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -283,7 +283,7 @@ func (value *transaction) Readiness(
 		return auditlog.ReadinessSnapshot{}, mapDatabaseError("read Audit readiness", err)
 	}
 	snapshot.CheckedAt = snapshot.CheckedAt.UTC()
-	if snapshot.SchemaVersion == 0 || snapshot.CheckedAt.IsZero() {
+	if snapshot.SchemaVersion != 2 || snapshot.CheckedAt.IsZero() {
 		return auditlog.ReadinessSnapshot{}, auditlog.ErrUnavailable
 	}
 	return snapshot, nil
@@ -294,12 +294,12 @@ type auditRecordScanner interface {
 }
 
 func scanAuditRecord(scanner auditRecordScanner) (auditv1.AuditRecord, string, error) {
-	var tenantID, source, eventID, canonicalDocument string
+	var chainID, source, eventID, canonicalDocument string
 	var eventDocument []byte
 	var sequence int64
 	var record auditv1.AuditRecord
 	if err := scanner.Scan(
-		&tenantID,
+		&chainID,
 		&sequence,
 		&source,
 		&eventID,
@@ -316,7 +316,7 @@ func scanAuditRecord(scanner auditRecordScanner) (auditv1.AuditRecord, string, e
 	defer clear(eventDocument)
 	if sequence < 1 || uint64(sequence) > maximumAuditSequence ||
 		auditv1.DecodeRequest(bytes.NewReader(eventDocument), &record.Event) != nil ||
-		record.Event.TenantID != auditv1.TenantID(tenantID) ||
+		authority.ChainFor(record.Event.TenantID, record.Event.InstallationID) != authority.ChainID(chainID) ||
 		record.Event.EventID != auditv1.EventID(eventID) {
 		return auditv1.AuditRecord{}, "", auditlog.ErrUnavailable
 	}

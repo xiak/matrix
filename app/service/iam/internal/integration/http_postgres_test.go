@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	iampostgres "github.com/xiak/matrix/app/service/iam/internal/data/postgres"
 	iamhttp "github.com/xiak/matrix/app/service/iam/internal/service/nethttp"
@@ -34,6 +35,7 @@ const (
 	paasCredential           = "mx1.PaaSHTTPIntegrationCredential000000000000001"
 	auditCredential          = "mx1.AuditHTTPIntegrationCredential00000000000001"
 	verifierCredential       = "mx1.VerifierHTTPIntegrationCredential0000000001"
+	iamProducerCredential    = "mx1.IAMHTTPIntegrationCredential0000000000000001"
 )
 
 func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
@@ -587,27 +589,11 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 		t.Fatal("new primary inherited platform account-opening capability")
 	}
 	passwordChange(primaryB, primaryBPassword, primaryBChanged)
-	for _, producer := range []string{paasCredential, auditCredential} {
-		for _, target := range []string{tenantA, tenantB} {
-			response := request(http.MethodPost, "/v1/audit-producer:resolve", producer,
-				iamv1.ResolveAuditProducerRequest{OrganizationID: iamv1.OrganizationID(target)}, http.StatusOK)
-			var resolved iamv1.AuditProducerAuthorization
-			if json.Unmarshal(response.Body.Bytes(), &resolved) != nil || iamv1.ValidateAuditProducerAuthorization(resolved) != nil ||
-				resolved.OrganizationID != iamv1.OrganizationID(target) || resolved.Producer.OrganizationID != tenantA {
-				t.Fatal("audit producer target was not IAM-bound independently from its own account")
-			}
-		}
-		request(http.MethodPost, "/v1/audit-producer:resolve", producer,
-			iamv1.ResolveAuditProducerRequest{OrganizationID: "unknown-account"}, http.StatusForbidden)
-	}
-	request(http.MethodPost, "/v1/audit-producer:resolve", verifierCredential,
-		iamv1.ResolveAuditProducerRequest{OrganizationID: tenantB}, http.StatusForbidden)
-	request(http.MethodPost, "/v1/audit-producer:resolve", root,
-		iamv1.ResolveAuditProducerRequest{OrganizationID: tenantB}, http.StatusUnauthorized)
-	request(http.MethodPost, "/v1/audit-producer:resolve", primaryB,
-		iamv1.ResolveAuditProducerRequest{OrganizationID: tenantA}, http.StatusUnauthorized)
+	t.Run("event-bound historical producer authority", func(t *testing.T) {
+		proveHistoricalProducerHTTP(t, ctx, handler, admin, map[string]string{tenantA: root, tenantB: primaryB})
+	})
 	request(http.MethodPost, "/v1/audit-producer:resolve", paasCredential,
-		map[string]any{"organizationId": tenantB, "purpose": "IAM"}, http.StatusBadRequest)
+		map[string]any{"organizationId": tenantB}, http.StatusBadRequest)
 	request(http.MethodGet, "/v1/organizations", primaryB, nil, http.StatusForbidden)
 	request(http.MethodPost, "/v1/organizations", primaryB, newTenantBody, http.StatusForbidden)
 	setAlias(root, "customer-a", rootIdentity.Account.Organization.ResourceVersion, http.StatusOK)
@@ -740,8 +726,18 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 		t.Fatal("migration replay did not preserve account state")
 	}
 	login("shared.user@customer-b", childChangedB, http.StatusOK)
+	beforePaging := request(http.MethodGet, "/v1/principals", primaryB, nil, http.StatusOK)
+	var existingUsers iamv1.PrincipalList
+	if json.Unmarshal(beforePaging.Body.Bytes(), &existingUsers) != nil || existingUsers.NextAfter != "" {
+		t.Fatal("unable to establish the directory before pagination")
+	}
+	expectedUsers := map[iamv1.PrincipalID]bool{}
+	for _, entry := range existingUsers.Items {
+		expectedUsers[entry.Principal.ID] = true
+	}
 	for i := 0; i < 101; i++ {
-		createUser(primaryB, fmt.Sprintf("page.user.%03d", i), "", http.StatusCreated)
+		created := createUser(primaryB, fmt.Sprintf("page.user.%03d", i), "", http.StatusCreated)
+		expectedUsers[created.ID] = true
 	}
 	pageOne := request(http.MethodGet, "/v1/principals", primaryB, nil, http.StatusOK)
 	var first, second iamv1.PrincipalList
@@ -749,17 +745,17 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 		t.Fatal("principal page is not bounded")
 	}
 	pageTwo := request(http.MethodGet, "/v1/principals?after="+first.NextAfter, primaryB, nil, http.StatusOK)
-	if json.Unmarshal(pageTwo.Body.Bytes(), &second) != nil || len(second.Items) != 3 || second.NextAfter != "" {
+	if json.Unmarshal(pageTwo.Body.Bytes(), &second) != nil || len(second.Items) > 100 || second.NextAfter != "" {
 		t.Fatal("principal continuation is incomplete")
 	}
 	seen := map[iamv1.PrincipalID]bool{}
 	for _, entry := range append(first.Items, second.Items...) {
-		if seen[entry.Principal.ID] || entry.Principal.OrganizationID != tenantB {
+		if seen[entry.Principal.ID] || entry.Principal.OrganizationID != tenantB || !expectedUsers[entry.Principal.ID] {
 			t.Fatal("directory cursor duplicated or crossed tenants")
 		}
 		seen[entry.Principal.ID] = true
 	}
-	if len(seen) != 103 {
+	if len(seen) != len(expectedUsers) {
 		t.Fatal("directory lost users across pages")
 	}
 	accountPage := request(http.MethodGet, "/v1/organizations", root, nil, http.StatusOK)
@@ -797,6 +793,150 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 		}
 	}
 	assertIAMSecretsAbsent(t, ctx, admin, primaryBPassword, primaryBChanged, childPassword, childChangedA, childChangedB, resetPassword, primaryB, childSessionA, childSessionB, activeOne, activeTwo, resetSession)
+}
+
+func proveHistoricalProducerHTTP(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, tenants map[string]string) {
+	t.Helper()
+	post := func(path, bearer string, body any, status int) *httptest.ResponseRecorder {
+		t.Helper()
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := performIAMRequest(handler, http.MethodPost, path, bearer, encoded)
+		if response.Code != status {
+			t.Fatalf("proof path=%s status=%d want=%d body=%s", path, response.Code, status, response.Body.String())
+		}
+		return response
+	}
+	resolve := func(credential string, event auditv1.Event, status int) {
+		t.Helper()
+		response := post("/v1/audit-producer:resolve", credential, iamv1.ResolveAuditProducerRequest{Event: event}, status)
+		if status != http.StatusOK {
+			return
+		}
+		var proof iamv1.AuditProducerAuthorization
+		contract, _ := auditv1.ContractForAction(event.Action)
+		_, digest, err := auditv1.CanonicalizeEvent(contract.Source, event)
+		if json.Unmarshal(response.Body.Bytes(), &proof) != nil || iamv1.ValidateAuditProducerAuthorization(proof) != nil || err != nil ||
+			proof.TenantID != iamv1.OrganizationID(event.TenantID) || proof.InstallationID != event.InstallationID || proof.ContentDigest != digest ||
+			proof.Producer.OrganizationID != "organization-http-integration" || proof.Producer.InstallationID != "installation-http-integration" {
+			t.Fatal("producer proof lost event, installation or credential binding")
+		}
+	}
+	const initial = "Proof-Actor-Initial-Password-93!"
+	const changed = "Proof-Actor-Changed-Password-84!"
+	for tenant, root := range tenants {
+		created := post("/v1/principals", root, map[string]any{"loginName": "proof.actor", "displayName": "Proof actor", "initialPassword": initial, "initialRole": iamv1.RoleOrganizationAdmin, "requestId": "request-proof-actor"}, http.StatusCreated)
+		var principal iamv1.Principal
+		if json.Unmarshal(created.Body.Bytes(), &principal) != nil {
+			t.Fatal("decode proof actor")
+		}
+		loggedIn := post("/v1/auth/login", "", map[string]any{"loginName": "proof.actor@" + tenant, "password": initial, "requestId": "request-proof-login"}, http.StatusOK)
+		var session struct {
+			Credential string `json:"credential"`
+		}
+		if json.Unmarshal(loggedIn.Body.Bytes(), &session) != nil {
+			t.Fatal("decode proof login")
+		}
+		post("/v1/auth/password", session.Credential, map[string]any{"currentPassword": initial, "newPassword": changed, "requestId": "request-proof-password"}, http.StatusOK)
+		var historical []struct {
+			credential string
+			event      auditv1.Event
+		}
+		for _, producer := range []struct {
+			credential  string
+			action      iamv1.Action
+			eventAction auditv1.Action
+			kind        iamv1.ResourceKind
+			targetKind  auditv1.TargetKind
+			target      string
+		}{
+			{paasCredential, iamv1.ActionPaaSApplicationCreate, auditv1.ActionPaaSApplicationCreated, iamv1.ResourceApplication, auditv1.TargetApplication, "collection"},
+			{auditCredential, iamv1.ActionAuditRecordRead, auditv1.ActionAuditRecordsRead, iamv1.ResourceAuditRecord, auditv1.TargetAuditRecords, "records"},
+		} {
+			body, _ := json.Marshal(iamv1.AuthorizationRequest{Action: producer.action, Resource: iamv1.ResourceReference{Kind: producer.kind, ID: producer.target}, RequestID: "request-proof-business", CorrelationID: "correlation-proof-business"})
+			response := performIAMRequestWithSubject(handler, body, producer.credential, session.Credential)
+			var decision iamv1.AuthorizationDecision
+			if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &decision) != nil || !decision.Allowed || decision.Subject == nil {
+				t.Fatal("proof actor lacked real original authority")
+			}
+			event := auditv1.Event{APIVersion: auditv1.APIVersion, Kind: "AuditEvent", EventID: auditv1.EventID("event-" + string(decision.ID)), TenantID: auditv1.TenantID(tenant),
+				Actor: auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(principal.ID)}, IAMDecisionID: auditv1.DecisionID(decision.ID), Action: producer.eventAction,
+				Target: auditv1.TargetReference{Kind: producer.targetKind, ID: producer.target}, Result: auditv1.ResultSucceeded, RequestDigest: "sha256:" + strings.Repeat("a", 64),
+				RequestID: decision.RequestID, CorrelationID: "correlation-proof-business", OccurredAt: decision.DecidedAt.Add(time.Microsecond)}
+			if producer.credential == paasCredential {
+				event.Target.ID = "application-proof"
+				event.OperationID = "operation-proof"
+			}
+			resolve(producer.credential, event, http.StatusOK)
+			for _, attack := range []func(*auditv1.Event){
+				func(e *auditv1.Event) { e.TenantID = "unknown-account" },
+				func(e *auditv1.Event) {
+					for other := range tenants {
+						if other != tenant {
+							e.TenantID = auditv1.TenantID(other)
+							break
+						}
+					}
+				},
+				func(e *auditv1.Event) { e.Actor.ID = "principal-forged" },
+				func(e *auditv1.Event) { e.IAMDecisionID = "decision-forged" },
+				func(e *auditv1.Event) { e.RequestID = "request-forged" },
+				func(e *auditv1.Event) { e.CorrelationID = "correlation-forged" },
+				func(e *auditv1.Event) { e.OccurredAt = decision.DecidedAt.Add(-time.Microsecond) },
+			} {
+				forged := event
+				attack(&forged)
+				resolve(producer.credential, forged, http.StatusForbidden)
+			}
+			resolve(verifierCredential, event, http.StatusForbidden)
+			resolve(root, event, http.StatusUnauthorized)
+			otherProducer := paasCredential
+			if otherProducer == producer.credential {
+				otherProducer = auditCredential
+			}
+			resolve(otherProducer, event, http.StatusForbidden)
+			historical = append(historical, struct {
+				credential string
+				event      auditv1.Event
+			}{producer.credential, event})
+		}
+		post("/v1/auth/logout", session.Credential, map[string]any{"requestId": "request-proof-logout"}, http.StatusOK)
+		post("/v1/principals/"+string(principal.ID)+":set-status", root, map[string]any{"status": "DISABLED", "resourceVersion": 2, "requestId": "request-proof-disable"}, http.StatusOK)
+		for _, fact := range historical {
+			resolve(fact.credential, fact.event, http.StatusOK)
+		}
+		if response := performIAMRequest(handler, http.MethodGet, "/v1/auth/me", session.Credential, nil); response.Code != http.StatusUnauthorized {
+			t.Fatal("historical proof revived revoked session")
+		}
+	}
+	rows, err := database.Query(ctx, `SELECT DISTINCT ON (event_document->>'action') event_document FROM iam.audit_outbox ORDER BY event_document->>'action',event_id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ownFacts []auditv1.Event
+	for rows.Next() {
+		var raw []byte
+		var event auditv1.Event
+		if rows.Scan(&raw) != nil || json.Unmarshal(raw, &event) != nil {
+			rows.Close()
+			t.Fatal("decode own committed IAM fact")
+		}
+		event.OccurredAt = event.OccurredAt.UTC()
+		ownFacts = append(ownFacts, event)
+	}
+	rows.Close()
+	if rows.Err() != nil || len(ownFacts) == 0 {
+		t.Fatal("missing committed IAM evidence")
+	}
+	for _, event := range ownFacts {
+		resolve(iamProducerCredential, event, http.StatusOK)
+		forged := event
+		forged.RequestDigest = "sha256:" + strings.Repeat("b", 64)
+		resolve(iamProducerCredential, forged, http.StatusForbidden)
+	}
+	assertIAMSecretsAbsent(t, ctx, database, initial, changed)
 }
 
 func assertPlatformAuthorityHTTP(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, administrator, member string, memberID iamv1.PrincipalID) {
@@ -1118,7 +1258,7 @@ func iamHTTPBootstrap(t *testing.T) iamv1.BootstrapDocument {
 			Password:    iamHTTPSecret(t, adminPassword),
 		},
 		Services: []iamv1.BootstrapServiceCredential{
-			service(iamv1.ServiceIAM, "service-iam", "mx1.IAMHTTPIntegrationCredential0000000000000001"),
+			service(iamv1.ServiceIAM, "service-iam", iamProducerCredential),
 			service(iamv1.ServicePaaS, "service-paas", paasCredential),
 			service(iamv1.ServiceAudit, "service-audit", auditCredential),
 			service(iamv1.ServiceInstallationVerifier, "service-verifier", verifierCredential),

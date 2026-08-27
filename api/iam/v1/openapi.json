@@ -55,21 +55,45 @@
           "managedservice.service-installation.read",
           "audit.record.read",
           "audit.integrity.verify",
+          "audit.platform-record.read",
+          "audit.platform-integrity.verify",
           "installation.verify"
         ],
         "type": "string"
       },
       "AuditProducerAuthorization": {
         "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "installationId": false
+            },
+            "required": [
+              "tenantId"
+            ]
+          },
+          {
+            "properties": {
+              "tenantId": false
+            },
+            "required": [
+              "installationId"
+            ]
+          }
+        ],
         "properties": {
           "apiVersion": {
             "const": "iam.matrix.xiak.com/v1"
           },
+          "contentDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "installationId": {
+            "$ref": "#/components/schemas/ID"
+          },
           "kind": {
             "const": "AuditProducerAuthorization"
-          },
-          "organizationId": {
-            "$ref": "#/components/schemas/ID"
           },
           "producer": {
             "allOf": [
@@ -88,12 +112,15 @@
                 }
               }
             ]
+          },
+          "tenantId": {
+            "$ref": "#/components/schemas/ID"
           }
         },
         "required": [
           "apiVersion",
+          "contentDigest",
           "kind",
-          "organizationId",
           "producer"
         ],
         "type": "object"
@@ -175,7 +202,9 @@
                       "paas.execution-pool.read",
                       "paas.execution-target.register",
                       "paas.execution-target.read",
-                      "paas.platform-operation.read"
+                      "paas.platform-operation.read",
+                      "audit.platform-record.read",
+                      "audit.platform-integrity.verify"
                     ]
                   }
                 },
@@ -1219,6 +1248,58 @@
               "properties": {
                 "action": {
                   "const": "audit.integrity.verify"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "AUDIT_CHAIN"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "audit.platform-record.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "AUDIT_RECORD"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "audit.platform-integrity.verify"
                 }
               },
               "required": [
@@ -2365,6 +2446,58 @@
             "if": {
               "properties": {
                 "action": {
+                  "const": "audit.platform-record.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "AUDIT_RECORD"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "audit.platform-integrity.verify"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "AUDIT_CHAIN"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
                   "const": "installation.verify"
                 }
               },
@@ -2583,6 +2716,7 @@
             "$ref": "#/components/schemas/Timestamp"
           },
           "contentDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
             "type": "string"
           },
           "installationId": {
@@ -2775,6 +2909,9 @@
           "DENIED"
         ],
         "type": "string"
+      },
+      "Event": {
+        "$ref": "../../audit/v1/openapi.json#/components/schemas/Event"
       },
       "ID": {
         "maxLength": 128,
@@ -3300,12 +3437,12 @@
       "ResolveAuditProducerRequest": {
         "additionalProperties": false,
         "properties": {
-          "organizationId": {
-            "$ref": "#/components/schemas/ID"
+          "event": {
+            "$ref": "#/components/schemas/Event"
           }
         },
         "required": [
-          "organizationId"
+          "event"
         ],
         "type": "object"
       },
@@ -3468,6 +3605,9 @@
           "apiVersion": {
             "const": "iam.matrix.xiak.com/v1"
           },
+          "installationId": {
+            "$ref": "#/components/schemas/ID"
+          },
           "kind": {
             "const": "ServiceIdentity"
           },
@@ -3483,6 +3623,7 @@
         },
         "required": [
           "apiVersion",
+          "installationId",
           "kind",
           "organizationId",
           "principalId",
@@ -3763,7 +3904,7 @@
             "ServiceCredential": []
           }
         ],
-        "summary": "Verify a platform audit producer and its event organization"
+        "summary": "Prove one Audit event against committed IAM authority"
       }
     },
     "/v1/auth/login": {

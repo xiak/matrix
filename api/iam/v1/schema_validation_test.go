@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
+	auditv1 "github.com/xiak/matrix/api/audit/v1"
 )
 
 func TestEveryIAMOpenAPISchemaCompilesAsJSONSchema202012(t *testing.T) {
@@ -86,11 +87,12 @@ func TestIAMAccountSchemasPreserveQualifiedLoginAndExplicitGrant(t *testing.T) {
 func TestAuditProducerSchemaKeepsAppendAuthoritySeparate(t *testing.T) {
 	document := loadIAMOpenAPI(t)
 	requestSchema := compileIAMOpenAPISchema(t, document, "ResolveAuditProducerRequest")
-	request := map[string]any{"organizationId": "organization-customer"}
+	event := loadIAMSchemaExample(t, "../../audit/v1/examples/event-paas.json")
+	request := map[string]any{"event": event}
 	if err := requestSchema.Validate(request); err != nil {
 		t.Fatal(err)
 	}
-	for _, selector := range []string{"purpose", "principalId", "subject", "source"} {
+	for _, selector := range []string{"organizationId", "tenantId", "installationId", "purpose", "principalId", "subject", "source"} {
 		request[selector] = "forged"
 		if requestSchema.Validate(request) == nil {
 			t.Fatalf("producer request accepted %s", selector)
@@ -99,19 +101,36 @@ func TestAuditProducerSchemaKeepsAppendAuthoritySeparate(t *testing.T) {
 	}
 	schema := compileIAMOpenAPISchema(t, document, "AuditProducerAuthorization")
 	producer := loadIAMSchemaExample(t, "examples/service-identity.json")
-	response := map[string]any{"apiVersion": APIVersion, "kind": "AuditProducerAuthorization", "producer": producer, "organizationId": "organization-customer"}
+	var typedEvent auditv1.Event
+	encodedEvent, _ := json.Marshal(event)
+	if json.Unmarshal(encodedEvent, &typedEvent) != nil {
+		t.Fatal("invalid Audit example")
+	}
+	_, digest, err := auditv1.CanonicalizeEvent(auditv1.SourcePaaS, typedEvent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := map[string]any{"apiVersion": APIVersion, "kind": "AuditProducerAuthorization", "producer": producer, "tenantId": "organization-customer", "contentDigest": digest}
 	for _, purpose := range []ServicePurpose{ServiceIAM, ServicePaaS, ServiceAudit} {
 		producer["purpose"] = string(purpose)
 		if err := schema.Validate(response); err != nil {
 			t.Fatal(err)
 		}
 	}
+	response["installationId"] = "installation-example"
+	if schema.Validate(response) == nil {
+		t.Fatal("mixed scope passed producer schema")
+	}
+	delete(response, "tenantId")
+	if err := schema.Validate(response); err != nil {
+		t.Fatal(err)
+	}
 	producer["purpose"] = string(ServiceInstallationVerifier)
 	if schema.Validate(response) == nil {
 		t.Fatal("verifier gained producer authority in the schema")
 	}
-	value := AuditProducerAuthorization{APIVersion: APIVersion, Kind: "AuditProducerAuthorization", OrganizationID: "organization-customer",
-		Producer: ServiceIdentity{APIVersion: APIVersion, Kind: "ServiceIdentity", OrganizationID: "organization-platform", PrincipalID: "service-iam", Purpose: ServiceIAM}}
+	value := AuditProducerAuthorization{APIVersion: APIVersion, Kind: "AuditProducerAuthorization", TenantID: "organization-customer", ContentDigest: digest,
+		Producer: ServiceIdentity{APIVersion: APIVersion, Kind: "ServiceIdentity", InstallationID: "installation-example", OrganizationID: "organization-platform", PrincipalID: "service-iam", Purpose: ServiceIAM}}
 	if err := ValidateAuditProducerAuthorization(value); err != nil {
 		t.Fatal(err)
 	}

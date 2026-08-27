@@ -1,6 +1,10 @@
 package iamv1
 
-import "time"
+import (
+	"time"
+
+	auditv1 "github.com/xiak/matrix/api/audit/v1"
+)
 
 type OrganizationID string
 type PrincipalID string
@@ -113,22 +117,25 @@ type BootstrapStatus struct {
 type ServiceIdentity struct {
 	APIVersion     string         `json:"apiVersion"`
 	Kind           string         `json:"kind"`
+	InstallationID string         `json:"installationId"`
 	OrganizationID OrganizationID `json:"organizationId"`
 	PrincipalID    PrincipalID    `json:"principalId"`
 	Purpose        ServicePurpose `json:"purpose"`
 }
 
 type ResolveAuditProducerRequest struct {
-	OrganizationID OrganizationID `json:"organizationId"`
+	Event auditv1.Event `json:"event"`
 }
 
-// AuditProducerAuthorization permits only appending a closed event for the
-// verified organization. It is not a user or resource authorization decision.
+// AuditProducerAuthorization binds one append to the current producer and the
+// historical event's scope and canonical digest. It is never a reusable permit.
 type AuditProducerAuthorization struct {
 	APIVersion     string          `json:"apiVersion"`
 	Kind           string          `json:"kind"`
 	Producer       ServiceIdentity `json:"producer"`
-	OrganizationID OrganizationID  `json:"organizationId"`
+	TenantID       OrganizationID  `json:"tenantId,omitempty"`
+	InstallationID string          `json:"installationId,omitempty"`
+	ContentDigest  string          `json:"contentDigest"`
 }
 
 type LoginRequest struct {

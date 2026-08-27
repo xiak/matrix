@@ -689,14 +689,23 @@ func (client *integrationIAM) ResolveAuditProducer(
 	default:
 		return iamv1.AuditProducerAuthorization{}, auditlog.ErrUnauthenticated
 	}
-	if request.OrganizationID != "organization-a" && request.OrganizationID != "organization-b" {
+	if request.Event.TenantID != "organization-a" && request.Event.TenantID != "organization-b" {
 		return iamv1.AuditProducerAuthorization{}, auditlog.ErrForbidden
+	}
+	source := auditv1.SourceIAM
+	if purpose == iamv1.ServicePaaS {
+		source = auditv1.SourcePaaS
+	}
+	_, digest, err := auditv1.CanonicalizeEvent(source, request.Event)
+	if err != nil {
+		return iamv1.AuditProducerAuthorization{}, auditlog.ErrInvalidArgument
 	}
 	return iamv1.AuditProducerAuthorization{
 		APIVersion: iamv1.APIVersion, Kind: "AuditProducerAuthorization",
-		OrganizationID: request.OrganizationID,
+		TenantID: iamv1.OrganizationID(request.Event.TenantID), ContentDigest: digest,
 		Producer: iamv1.ServiceIdentity{
 			APIVersion: iamv1.APIVersion, Kind: "ServiceIdentity",
+			InstallationID: "installation-example",
 			OrganizationID: organizationID, PrincipalID: principalID, Purpose: purpose,
 		},
 	}, nil

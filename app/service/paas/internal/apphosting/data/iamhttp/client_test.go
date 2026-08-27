@@ -196,7 +196,8 @@ func TestClientReadinessRequiresPaaSServiceIdentity(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(response).Encode(iamv1.ServiceIdentity{
-			APIVersion: iamv1.APIVersion, Kind: "ServiceIdentity",
+			InstallationID: "installation-example",
+			APIVersion:     iamv1.APIVersion, Kind: "ServiceIdentity",
 			OrganizationID: "organization-a", PrincipalID: "service-paas",
 			Purpose: iamv1.ServicePaaS,
 		})

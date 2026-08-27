@@ -16,15 +16,38 @@ func (service *Service) QueryRecords(
 	requestID string,
 	request auditv1.QueryRecordsRequest,
 ) (auditv1.RecordPage, error) {
+	return service.queryRecords(ctx, subjectCredential, requestID, request, false)
+}
+
+func (service *Service) QueryPlatformRecords(
+	ctx context.Context,
+	subjectCredential iamv1.Secret,
+	requestID string,
+	request auditv1.QueryRecordsRequest,
+) (auditv1.RecordPage, error) {
+	return service.queryRecords(ctx, subjectCredential, requestID, request, true)
+}
+
+func (service *Service) queryRecords(
+	ctx context.Context,
+	subjectCredential iamv1.Secret,
+	requestID string,
+	request auditv1.QueryRecordsRequest,
+	platform bool,
+) (auditv1.RecordPage, error) {
 	if auditv1.ValidateID("requestId", requestID) != nil ||
 		auditv1.ValidateQueryRecordsRequest(request) != nil {
 		return auditv1.RecordPage{}, ErrInvalidArgument
+	}
+	action, accessAction := iamv1.ActionAuditRecordRead, auditv1.ActionAuditRecordsRead
+	if platform {
+		action, accessAction = iamv1.ActionAuditPlatformRecordRead, auditv1.ActionAuditPlatformRecordsRead
 	}
 	decision, err := service.authorize(
 		ctx,
 		subjectCredential,
 		requestID,
-		iamv1.ActionAuditRecordRead,
+		action,
 		iamv1.ResourceReference{Kind: iamv1.ResourceAuditRecord, ID: "records"},
 	)
 	if err != nil {
@@ -34,10 +57,10 @@ func (service *Service) QueryRecords(
 	if err != nil {
 		return auditv1.RecordPage{}, err
 	}
-	tenantID := auditv1.TenantID(decision.TenantID)
+	chainID := authority.ChainFor(auditv1.TenantID(decision.TenantID), decision.InstallationID)
 	beforeSequence := maximumSequence + 1
 	if request.Cursor != "" {
-		beforeSequence, err = service.cursors.Decode(request.Cursor, tenantID, request)
+		beforeSequence, err = service.cursors.Decode(request.Cursor, chainID, request)
 		if err != nil {
 			return auditv1.RecordPage{}, ErrInvalidArgument
 		}
@@ -53,7 +76,7 @@ func (service *Service) QueryRecords(
 			return err
 		}
 		records, err := transaction.ReadRecords(transactionContext, RecordQuery{
-			TenantID:       tenantID,
+			ChainID:        chainID,
 			BeforeSequence: beforeSequence,
 			Limit:          request.PageSize + 1,
 			From:           request.From,
@@ -68,7 +91,7 @@ func (service *Service) QueryRecords(
 			return ErrUnavailable
 		}
 		for _, record := range records {
-			if !recordMatchesQuery(record, tenantID, request) {
+			if !recordMatchesQuery(record, chainID, request) {
 				return ErrUnavailable
 			}
 		}
@@ -77,14 +100,15 @@ func (service *Service) QueryRecords(
 			visible = visible[:request.PageSize]
 		}
 		page = auditv1.RecordPage{
-			APIVersion: auditv1.APIVersion,
-			Kind:       "AuditRecordPage",
-			TenantID:   tenantID,
-			Records:    append([]auditv1.AuditRecord(nil), visible...),
+			APIVersion:     auditv1.APIVersion,
+			Kind:           "AuditRecordPage",
+			TenantID:       chainID.TenantID(),
+			InstallationID: chainID.InstallationID(),
+			Records:        append([]auditv1.AuditRecord(nil), visible...),
 		}
 		if len(records) > request.PageSize {
 			page.NextCursor, err = service.cursors.Encode(
-				tenantID,
+				chainID,
 				request,
 				visible[len(visible)-1].Sequence,
 			)
@@ -97,7 +121,7 @@ func (service *Service) QueryRecords(
 			transaction,
 			decision,
 			actor,
-			auditv1.ActionAuditRecordsRead,
+			accessAction,
 			auditv1.TargetAuditRecords,
 			"records",
 			requestDigest,
@@ -120,15 +144,38 @@ func (service *Service) VerifyChain(
 	requestID string,
 	request auditv1.VerifyChainRequest,
 ) (auditv1.ChainVerification, error) {
+	return service.verifyChain(ctx, subjectCredential, requestID, request, false)
+}
+
+func (service *Service) VerifyPlatformChain(
+	ctx context.Context,
+	subjectCredential iamv1.Secret,
+	requestID string,
+	request auditv1.VerifyChainRequest,
+) (auditv1.ChainVerification, error) {
+	return service.verifyChain(ctx, subjectCredential, requestID, request, true)
+}
+
+func (service *Service) verifyChain(
+	ctx context.Context,
+	subjectCredential iamv1.Secret,
+	requestID string,
+	request auditv1.VerifyChainRequest,
+	platform bool,
+) (auditv1.ChainVerification, error) {
 	if auditv1.ValidateID("requestId", requestID) != nil ||
 		auditv1.ValidateVerifyChainRequest(request) != nil {
 		return auditv1.ChainVerification{}, ErrInvalidArgument
+	}
+	action, accessAction := iamv1.ActionAuditIntegrityVerify, auditv1.ActionAuditIntegrityVerified
+	if platform {
+		action, accessAction = iamv1.ActionAuditPlatformIntegrityVerify, auditv1.ActionAuditPlatformIntegrityVerified
 	}
 	decision, err := service.authorize(
 		ctx,
 		subjectCredential,
 		requestID,
-		iamv1.ActionAuditIntegrityVerify,
+		action,
 		iamv1.ResourceReference{Kind: iamv1.ResourceAuditChain, ID: "chain"},
 	)
 	if err != nil {
@@ -138,7 +185,7 @@ func (service *Service) VerifyChain(
 	if err != nil {
 		return auditv1.ChainVerification{}, err
 	}
-	tenantID := auditv1.TenantID(decision.TenantID)
+	chainID := authority.ChainFor(auditv1.TenantID(decision.TenantID), decision.InstallationID)
 	requestDigest, err := digestSanitized("chain-verify", request)
 	if err != nil {
 		return auditv1.ChainVerification{}, err
@@ -151,7 +198,7 @@ func (service *Service) VerifyChain(
 		}
 		var checkpoint authority.Checkpoint
 		if request.FromSequence == 1 {
-			checkpoint, err = authority.GenesisCheckpoint(tenantID)
+			checkpoint, err = authority.GenesisCheckpoint(chainID)
 			if err != nil {
 				return ErrUnavailable
 			}
@@ -159,7 +206,7 @@ func (service *Service) VerifyChain(
 			var found bool
 			checkpoint, found, err = transaction.ReadCheckpoint(
 				transactionContext,
-				tenantID,
+				chainID,
 				request.FromSequence-1,
 			)
 			if err != nil {
@@ -171,7 +218,7 @@ func (service *Service) VerifyChain(
 		}
 		records, err := transaction.ReadChain(
 			transactionContext,
-			tenantID,
+			chainID,
 			request.FromSequence,
 			request.MaximumRecords+1,
 		)
@@ -197,7 +244,8 @@ func (service *Service) VerifyChain(
 		verification = auditv1.ChainVerification{
 			APIVersion:        auditv1.APIVersion,
 			Kind:              "ChainVerification",
-			TenantID:          tenantID,
+			TenantID:          chainID.TenantID(),
+			InstallationID:    chainID.InstallationID(),
 			State:             auditv1.VerificationVerified,
 			FromSequence:      request.FromSequence,
 			ToSequence:        last.Sequence,
@@ -219,7 +267,7 @@ func (service *Service) VerifyChain(
 			transaction,
 			decision,
 			actor,
-			auditv1.ActionAuditIntegrityVerified,
+			accessAction,
 			auditv1.TargetAuditChain,
 			"chain",
 			requestDigest,
@@ -274,19 +322,20 @@ func (service *Service) appendAccessEvent(
 		return ErrUnavailable
 	}
 	event := auditv1.Event{
-		APIVersion:    auditv1.APIVersion,
-		Kind:          "AuditEvent",
-		EventID:       auditv1.EventID(eventID),
-		TenantID:      auditv1.TenantID(decision.TenantID),
-		Actor:         actor,
-		IAMDecisionID: auditv1.DecisionID(decision.ID),
-		Action:        action,
-		Target:        auditv1.TargetReference{Kind: targetKind, ID: targetID},
-		Result:        auditv1.ResultSucceeded,
-		RequestDigest: requestDigest,
-		RequestID:     requestID,
-		CorrelationID: requestID,
-		OccurredAt:    now,
+		APIVersion:     auditv1.APIVersion,
+		Kind:           "AuditEvent",
+		EventID:        auditv1.EventID(eventID),
+		TenantID:       auditv1.TenantID(decision.TenantID),
+		InstallationID: decision.InstallationID,
+		Actor:          actor,
+		IAMDecisionID:  auditv1.DecisionID(decision.ID),
+		Action:         action,
+		Target:         auditv1.TargetReference{Kind: targetKind, ID: targetID},
+		Result:         auditv1.ResultSucceeded,
+		RequestDigest:  requestDigest,
+		RequestID:      requestID,
+		CorrelationID:  requestID,
+		OccurredAt:     now,
 	}
 	if auditv1.ValidateEventForSource(auditv1.SourceAudit, event) != nil {
 		return ErrUnavailable
@@ -299,7 +348,7 @@ func (service *Service) appendAccessEvent(
 	} else if found {
 		return ErrUnavailable
 	}
-	head, ingestedAt, err := transaction.LockTenantHead(ctx, event.TenantID)
+	head, ingestedAt, err := transaction.LockChainHead(ctx, authority.ChainFor(event.TenantID, event.InstallationID))
 	if err != nil {
 		return err
 	}
@@ -328,10 +377,10 @@ func (service *Service) appendAccessEvent(
 
 func recordMatchesQuery(
 	record auditv1.AuditRecord,
-	tenantID auditv1.TenantID,
+	chainID authority.ChainID,
 	request auditv1.QueryRecordsRequest,
 ) bool {
-	if auditv1.ValidateAuditRecord(record) != nil || record.Event.TenantID != tenantID {
+	if auditv1.ValidateAuditRecord(record) != nil || authority.ChainFor(record.Event.TenantID, record.Event.InstallationID) != chainID {
 		return false
 	}
 	if request.From != nil && record.Event.OccurredAt.Before(*request.From) {

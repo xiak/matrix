@@ -41,7 +41,7 @@ type Transaction interface {
 	LookupSession(context.Context, string) (SessionCredential, bool, error)
 	LookupPassword(context.Context, iamv1.OrganizationID, iamv1.PrincipalID) (authority.PasswordHash, bool, error)
 	LookupService(context.Context, string) (ServiceCredential, bool, error)
-	CanProduceAudit(context.Context, iamv1.ServiceIdentity, iamv1.OrganizationID) (bool, error)
+	ReadAuditEvidence(context.Context, iamv1.ServiceIdentity, auditv1.Event) (AuditEvidence, bool, error)
 	LookupServiceRoles(
 		context.Context,
 		iamv1.OrganizationID,

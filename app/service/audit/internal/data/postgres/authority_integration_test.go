@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"testing"
@@ -261,7 +262,155 @@ func assertAuditContractCatalog(
 		if record.Sequence != 1 || record.PreviousHash != auditauthority.GenesisHash {
 			t.Fatalf("Audit catalog action %q record = %#v", action, record)
 		}
+		if contract.PlatformOnly {
+			for _, mutation := range []string{"both", "tenant", "actor", "installation"} {
+				candidate := event
+				candidate.EventID += auditv1.EventID("-" + mutation)
+				candidate.OperationID = auditv1.OperationID("operation-" + string(candidate.EventID))
+				if !contract.OperationRequired {
+					candidate.OperationID = ""
+				}
+				assertRejectedAuditAppend(t, ctx, runtimeConnection, contract.Source, candidate, func(submission *auditSubmission) {
+					forged := candidate
+					switch mutation {
+					case "both":
+						forged.TenantID = auditv1.TenantID(forged.InstallationID)
+					case "tenant":
+						forged.TenantID, forged.InstallationID = auditv1.TenantID(forged.InstallationID), ""
+					case "actor":
+						forged.Actor.Type = auditv1.ActorSystem
+					case "installation":
+						forged.InstallationID = "other-installation"
+					}
+					submission.EventDocument = authorityJSON(t, forged)
+				}, "22023")
+			}
+		}
 	}
+}
+
+func TestAuditRetainedTenantPartitionUpgrade(t *testing.T) {
+	const variable = "MATRIX_AUDIT_UPGRADE_POSTGRES_TEST_DSN"
+	dsn := os.Getenv(variable)
+	if dsn == "" {
+		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", variable)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	config, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(config.Database, "matrix_audit_upgrade_") {
+		t.Fatal("upgrade fixture requires a dedicated matrix_audit_upgrade_ database")
+	}
+	config.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	admin, err := pgx.ConnectConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = admin.Close(context.Background()) }()
+	assertPostgres18(t, ctx, admin)
+	assertCleanAuthoritySchemas(t, ctx, admin)
+	if err := auditmigration.Bootstrap(ctx, admin); err != nil {
+		t.Fatal(err)
+	}
+	ensureAuthorityLoginRole(t, ctx, admin, auditMigratorTestRole, "matrix_audit_migrator")
+	ensureAuthorityLoginRole(t, ctx, admin, auditRuntimeTestRole, "matrix_audit_runtime")
+	migrator := openAuthorityConnection(t, ctx, config, auditMigratorTestRole)
+	defer func() { _ = migrator.Close(context.Background()) }()
+	runtimeConnection := openAuthorityConnection(t, ctx, config, auditRuntimeTestRole)
+	defer func() { _ = runtimeConnection.Close(context.Background()) }()
+
+	// Git owns the superseded schema. This opt-in upgrade gate executes the
+	// accepted fixed baseline, without keeping a second DDL implementation.
+	baseline, err := exec.CommandContext(ctx, "git", "show",
+		"9fd45b03ea398828fa3e74bf99961d2348c68299:app/service/audit/internal/data/postgres/migrations/000001_authority/up.sql").Output()
+	if err != nil {
+		t.Fatalf("read fixed pre-partition Audit migration: %v", err)
+	}
+	if _, err := migrator.Exec(ctx, string(baseline)); err != nil {
+		t.Fatalf("apply fixed baseline: %v", err)
+	}
+	event := authorityAuditEvent("event-retained", "shared-authority", "application-retained", auditv1.ActionPaaSApplicationCreated)
+	tx, err := runtimeConnection.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	var sequence int64
+	var previousHash string
+	var ingestedAt time.Time
+	if err := tx.QueryRow(ctx, "SELECT * FROM audit.lock_tenant_head($1)", string(event.TenantID)).Scan(&sequence, &previousHash, &ingestedAt); err != nil {
+		t.Fatal(err)
+	}
+	retained, fact, err := auditauthority.AppendRecord(auditauthority.Checkpoint{
+		ChainID: auditauthority.TenantChain(event.TenantID), Sequence: uint64(sequence), RecordHash: previousHash,
+	}, uint64(sequence+1), auditv1.SourcePaaS, event, ingestedAt.UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var outcome, storedHash string
+	var storedSequence int64
+	if err := tx.QueryRow(ctx, `SELECT * FROM audit.append_record($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10)`,
+		string(retained.Source), string(event.EventID), string(event.TenantID), int64(retained.Sequence),
+		authorityJSON(t, event), fact.Document, fact.ContentDigest, retained.PreviousHash, retained.RecordHash, retained.IngestedAt,
+	).Scan(&outcome, &storedSequence, &storedHash); err != nil || outcome != "ACCEPTED" || storedHash != retained.RecordHash {
+		t.Fatalf("seed immutable retained record through old SQL API: outcome=%s err=%v", outcome, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var beforeDocument, beforeCanonical, beforeDigest, beforeHash string
+	if err := admin.QueryRow(ctx, `SELECT event_document::text, canonical_document, content_digest, record_hash
+		FROM audit.records WHERE tenant_id=$1 AND sequence=1`, string(event.TenantID)).Scan(
+		&beforeDocument, &beforeCanonical, &beforeDigest, &beforeHash); err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := auditmigration.Up(ctx, migrator); err != nil {
+			t.Fatalf("upgrade attempt %d: %v", attempt+1, err)
+		}
+		if err := auditmigration.Verify(ctx, migrator); err != nil {
+			t.Fatalf("verify upgrade: %v", err)
+		}
+	}
+	var afterDocument, afterCanonical, afterDigest, afterHash string
+	if err := admin.QueryRow(ctx, `SELECT event_document::text, canonical_document, content_digest, record_hash
+		FROM audit.records WHERE tenant_id=$1 AND sequence=1`, string(event.TenantID)).Scan(
+		&afterDocument, &afterCanonical, &afterDigest, &afterHash); err != nil {
+		t.Fatal(err)
+	}
+	if beforeDocument != afterDocument || beforeCanonical != afterCanonical || beforeDigest != afterDigest || beforeHash != afterHash {
+		t.Fatal("upgrade rewrote immutable Audit content or hashes")
+	}
+	retainedRows := readAuditRecords(t, ctx, runtimeConnection, event.TenantID)
+	if len(retainedRows) != 1 || retainedRows[0] != retained {
+		t.Fatal("upgraded tenant record differs")
+	}
+	genesis, _ := auditauthority.GenesisCheckpoint(auditauthority.TenantChain(event.TenantID))
+	if _, err := auditauthority.VerifyChain(genesis, retainedRows); err != nil {
+		t.Fatal(err)
+	}
+	assertEqualAndChangedAuditReplay(t, ctx, runtimeConnection, retained, fact)
+
+	platformEvent := authorityAuditEvent("event-new-platform", event.TenantID, "execution-pool-upgrade", auditv1.ActionPaaSExecutionPoolCreated)
+	platformEvent.OperationID = event.OperationID
+	platformRecord, _ := appendAcceptedAuditRecord(t, ctx, runtimeConnection, auditv1.SourcePaaS, platformEvent)
+	platformRows := readAuditChainRecords(t, ctx, runtimeConnection, auditauthority.InstallationChain(string(event.TenantID)))
+	if len(platformRows) != 1 || platformRows[0] != platformRecord || platformRecord.Sequence != 1 ||
+		platformRecord.Event.TenantID != "" || len(readAuditRecords(t, ctx, runtimeConnection, event.TenantID)) != 1 {
+		t.Fatal("equal tenant/installation IDs or Operations shared a storage partition")
+	}
+	for _, chain := range []auditauthority.ChainID{auditauthority.TenantChain(event.TenantID), auditauthority.InstallationChain(string(event.TenantID))} {
+		if count := ownerTenantCount(t, ctx, migrator, "matrix_audit_owner", "matrix.audit_chain_id", "audit.records", string(chain)); count != 1 {
+			t.Fatalf("forced RLS for %s returned %d rows", chain, count)
+		}
+	}
+	if count := ownerTenantCount(t, ctx, migrator, "matrix_audit_owner", "matrix.audit_chain_id", "audit.records", string(event.TenantID)); count != 0 {
+		t.Fatal("unnamespaced authority bypassed RLS")
+	}
+	assertAuditImmutability(t, ctx, migrator, event.TenantID)
 }
 
 func assertPostgres18(t *testing.T, ctx context.Context, connection *pgx.Conn) {
@@ -681,7 +830,7 @@ func assertIAMLookupBoundaries(
 	); err != nil {
 		t.Fatalf("read IAM readiness: %v", err)
 	}
-	if !ready || schemaVersion != 1 || checkedAt.IsZero() {
+	if !ready || schemaVersion != 2 || checkedAt.IsZero() {
 		t.Fatalf("IAM readiness ready=%t schema=%d checked=%s", ready, schemaVersion, checkedAt)
 	}
 	var tenantID, principalID, passwordHash, organizationStatus, principalStatus string
@@ -713,16 +862,16 @@ func assertIAMLookupBoundaries(
 		)
 	}
 	for _, service := range fixture.Services {
-		var purpose, verificationDigest string
+		var purpose, verificationDigest, installationID string
 		if err := iamAPI.QueryRow(
 			ctx,
 			"SELECT * FROM iam.lookup_service($1)",
 			service.LookupDigest,
-		).Scan(&tenantID, &principalID, &purpose, &verificationDigest); err != nil {
+		).Scan(&tenantID, &principalID, &purpose, &verificationDigest, &installationID); err != nil {
 			t.Fatalf("lookup IAM %s service credential: %v", service.Purpose, err)
 		}
 		if tenantID != string(fixture.TenantID) || principalID != service.PrincipalID ||
-			purpose != service.Purpose || verificationDigest != service.VerificationDigest {
+			purpose != service.Purpose || verificationDigest != service.VerificationDigest || installationID != fixture.InstallationID {
 			t.Fatalf(
 				"IAM service lookup tenant=%q principal=%q purpose=%q digest=%q",
 				tenantID,
@@ -762,7 +911,7 @@ func assertIAMUninitialized(t *testing.T, ctx context.Context, iamAPI *pgx.Conn)
 	); err != nil {
 		t.Fatalf("read uninitialized IAM readiness: %v", err)
 	}
-	if ready || schemaVersion != 1 || checkedAt.IsZero() {
+	if ready || schemaVersion != 2 || checkedAt.IsZero() {
 		t.Fatalf("uninitialized IAM readiness ready=%t schema=%d checked=%s", ready, schemaVersion, checkedAt)
 	}
 }
@@ -866,15 +1015,15 @@ func prepareAuditSubmission(
 	var ingestedAt time.Time
 	if err := tx.QueryRow(
 		ctx,
-		"SELECT * FROM audit.lock_tenant_head($1)",
-		string(event.TenantID),
+		"SELECT * FROM audit.lock_chain_head($1)",
+		string(auditauthority.ChainFor(event.TenantID, event.InstallationID)),
 	).Scan(&lastSequence, &lastRecordHash, &ingestedAt); err != nil {
 		t.Fatalf("lock Audit tenant head: %v", err)
 	}
 	ingestedAt = ingestedAt.UTC()
 	record, fact, err := auditauthority.AppendRecord(
 		auditauthority.Checkpoint{
-			TenantID:   event.TenantID,
+			ChainID:    auditauthority.ChainFor(event.TenantID, event.InstallationID),
 			Sequence:   uint64(lastSequence),
 			RecordHash: lastRecordHash,
 		},
@@ -968,7 +1117,7 @@ func submitAuditRecord(
 		)`,
 		string(submission.Source),
 		string(submission.Record.Event.EventID),
-		string(submission.Record.Event.TenantID),
+		string(auditauthority.ChainFor(submission.Record.Event.TenantID, submission.Record.Event.InstallationID)),
 		int64(submission.Record.Sequence),
 		submission.EventDocument,
 		submission.Fact.Document,
@@ -1011,6 +1160,9 @@ func assertEqualAndChangedAuditReplay(
 	}
 	changed := record.Event
 	changed.RequestDigest = authorityDigest("changed-replay-content")
+	submission.EventDocument = authorityJSON(t, changed)
+	_, _, _, err = submitAuditRecord(ctx, runtimeConnection, submission)
+	assertAuthorityPostgresCode(t, err, "23505")
 	changedFact, err := auditauthority.Canonicalize(record.Source, changed)
 	if err != nil {
 		t.Fatalf("canonicalize changed Audit replay: %v", err)
@@ -1034,7 +1186,7 @@ func assertStoredAuditChains(
 		t.Fatalf("tenant A descending Audit records = %#v", tenantARecords)
 	}
 	ascending := []auditv1.AuditRecord{tenantARecords[1], tenantARecords[0]}
-	genesis, err := auditauthority.GenesisCheckpoint(tenantA)
+	genesis, err := auditauthority.GenesisCheckpoint(auditauthority.TenantChain(tenantA))
 	if err != nil {
 		t.Fatalf("create tenant A Audit genesis: %v", err)
 	}
@@ -1058,13 +1210,23 @@ func readAuditRecords(
 	tenantID auditv1.TenantID,
 ) []auditv1.AuditRecord {
 	t.Helper()
+	return readAuditChainRecords(t, ctx, runtimeConnection, auditauthority.TenantChain(tenantID))
+}
+
+func readAuditChainRecords(
+	t *testing.T,
+	ctx context.Context,
+	runtimeConnection *pgx.Conn,
+	chainID auditauthority.ChainID,
+) []auditv1.AuditRecord {
+	t.Helper()
 	rows, err := runtimeConnection.Query(
 		ctx,
-		`SELECT tenant_id, sequence, source, event_id, event_document,
+		`SELECT chain_id, sequence, source, event_id, event_document,
 			   canonical_document, content_digest, previous_hash, record_hash,
 			   ingested_at, retention
 		  FROM audit.read_records($1, $2, $3, NULL, NULL, NULL, NULL, NULL)`,
-		string(tenantID),
+		string(chainID),
 		authorityMaximumSequence,
 		200,
 	)
@@ -1096,7 +1258,7 @@ func readAuditRecords(
 		event := decodeAuthorityEvent(t, eventDocument)
 		fact, err := auditauthority.Canonicalize(auditv1.Source(source), event)
 		if err != nil || fact.Document != canonicalDocument || fact.ContentDigest != contentDigest ||
-			storedTenantID != string(event.TenantID) || eventID != string(event.EventID) {
+			storedTenantID != string(auditauthority.ChainFor(event.TenantID, event.InstallationID)) || eventID != string(event.EventID) {
 			t.Fatalf(
 				"stored Audit canonical fact tenant=%q event=%q fact=%#v err=%v",
 				storedTenantID,
@@ -1149,14 +1311,14 @@ func assertForcedTenantIsolation(
 		t.Fatalf("IAM owner cross-tenant row count = %d, want 0", count)
 	}
 	if count := ownerTenantCount(
-		t, ctx, auditMigrator, "matrix_audit_owner", "matrix.audit_tenant_id",
-		"audit.records", string(tenantA),
+		t, ctx, auditMigrator, "matrix_audit_owner", "matrix.audit_chain_id",
+		"audit.records", string(auditauthority.TenantChain(tenantA)),
 	); count != 2 {
 		t.Fatalf("Audit owner tenant A row count = %d, want 2", count)
 	}
 	if count := ownerTenantCount(
-		t, ctx, auditMigrator, "matrix_audit_owner", "matrix.audit_tenant_id",
-		"audit.records", "organization-b",
+		t, ctx, auditMigrator, "matrix_audit_owner", "matrix.audit_chain_id",
+		"audit.records", "tenant:organization-b",
 	); count != 1 {
 		t.Fatalf("Audit owner tenant B row count = %d, want 1", count)
 	}
@@ -1219,8 +1381,8 @@ func assertAuditImmutability(
 			}
 			if _, err := tx.Exec(
 				ctx,
-				"SELECT set_config('matrix.audit_tenant_id', $1, true)",
-				string(tenantID),
+				"SELECT set_config('matrix.audit_chain_id', $1, true)",
+				string(auditauthority.TenantChain(tenantID)),
 			); err != nil {
 				t.Fatalf("set Audit immutability tenant: %v", err)
 			}
@@ -1664,6 +1826,10 @@ func authorityAuditEvent(
 	}
 	if contract.OperationRequired {
 		event.OperationID = auditv1.OperationID("operation-" + eventID)
+	}
+	if contract.PlatformOnly {
+		event.TenantID, event.InstallationID = "", string(tenantID)
+		event.Actor.Type = auditv1.ActorUser
 	}
 	return event
 }

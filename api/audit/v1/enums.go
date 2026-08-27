@@ -45,12 +45,16 @@ const (
 	ActionPaaSDeploymentUpdated                   Action = "paas.deployment.updated"
 	ActionPaaSDeploymentStopped                   Action = "paas.deployment.stopped"
 	ActionPaaSDeploymentRolledBack                Action = "paas.deployment.rolled-back"
+	ActionPaaSExecutionPoolCreated                Action = "paas.execution-pool.created"
+	ActionPaaSExecutionTargetRegistered           Action = "paas.execution-target.registered"
 	ActionManagedServiceQuotaEntitlementActivated Action = "managedservice.quota-entitlement.activated"
 	ActionManagedServiceInstallationCreated       Action = "managedservice.service-installation.created"
 	ActionManagedServiceInstallationReady         Action = "managedservice.service-installation.ready"
 
-	ActionAuditRecordsRead       Action = "audit.records.read"
-	ActionAuditIntegrityVerified Action = "audit.integrity.verified"
+	ActionAuditRecordsRead               Action = "audit.records.read"
+	ActionAuditIntegrityVerified         Action = "audit.integrity.verified"
+	ActionAuditPlatformRecordsRead       Action = "audit.platform-records.read"
+	ActionAuditPlatformIntegrityVerified Action = "audit.platform-integrity.verified"
 )
 
 const (
@@ -65,6 +69,8 @@ const (
 	TargetConfigurationRevision TargetKind = "CONFIGURATION_REVISION"
 	TargetApplicationRevision   TargetKind = "APPLICATION_REVISION"
 	TargetDeployment            TargetKind = "DEPLOYMENT"
+	TargetExecutionPool         TargetKind = "EXECUTION_POOL"
+	TargetExecutionTarget       TargetKind = "EXECUTION_TARGET"
 	TargetQuotaEntitlement      TargetKind = "QUOTA_ENTITLEMENT"
 	TargetServiceInstallation   TargetKind = "SERVICE_INSTALLATION"
 	TargetAuditRecords          TargetKind = "AUDIT_RECORDS"
@@ -97,7 +103,7 @@ const (
 	InstallationVerificationVerified InstallationVerificationState = "VERIFIED"
 )
 
-// ActionContract is the closed Phase 1 Audit event union. Source is authority
+// ActionContract is the closed Audit event union. Source is authority
 // context supplied by authentication and is never accepted from event JSON.
 type ActionContract struct {
 	Source               Source
@@ -106,6 +112,7 @@ type ActionContract struct {
 	IAMDecisionPermitted bool
 	IAMDecisionRequired  bool
 	OperationRequired    bool
+	PlatformOnly         bool
 }
 
 func AllActions() []Action {
@@ -142,11 +149,15 @@ var allActions = []Action{
 	ActionPaaSDeploymentUpdated,
 	ActionPaaSDeploymentStopped,
 	ActionPaaSDeploymentRolledBack,
+	ActionPaaSExecutionPoolCreated,
+	ActionPaaSExecutionTargetRegistered,
 	ActionManagedServiceQuotaEntitlementActivated,
 	ActionManagedServiceInstallationCreated,
 	ActionManagedServiceInstallationReady,
 	ActionAuditRecordsRead,
 	ActionAuditIntegrityVerified,
+	ActionAuditPlatformRecordsRead,
+	ActionAuditPlatformIntegrityVerified,
 }
 
 var actionContracts = map[Action]ActionContract{
@@ -219,6 +230,14 @@ var actionContracts = map[Action]ActionContract{
 		Source: SourcePaaS, Target: TargetDeployment, Results: []Result{ResultAccepted},
 		IAMDecisionRequired: true, OperationRequired: true,
 	},
+	ActionPaaSExecutionPoolCreated: {
+		Source: SourcePaaS, Target: TargetExecutionPool, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, OperationRequired: true, PlatformOnly: true,
+	},
+	ActionPaaSExecutionTargetRegistered: {
+		Source: SourcePaaS, Target: TargetExecutionTarget, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, OperationRequired: true, PlatformOnly: true,
+	},
 	ActionManagedServiceQuotaEntitlementActivated: {
 		Source: SourcePaaS, Target: TargetQuotaEntitlement, Results: []Result{ResultSucceeded},
 		IAMDecisionRequired: true,
@@ -236,5 +255,13 @@ var actionContracts = map[Action]ActionContract{
 	},
 	ActionAuditIntegrityVerified: {
 		Source: SourceAudit, Target: TargetAuditChain, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true,
+	},
+	ActionAuditPlatformRecordsRead: {
+		Source: SourceAudit, Target: TargetAuditRecords, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, PlatformOnly: true,
+	},
+	ActionAuditPlatformIntegrityVerified: {
+		Source: SourceAudit, Target: TargetAuditChain, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, PlatformOnly: true,
 	},
 }

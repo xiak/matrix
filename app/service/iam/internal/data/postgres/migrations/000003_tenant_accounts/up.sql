@@ -68,21 +68,55 @@ BEGIN
 END
 $function$;
 
--- Installation services produce audit for all registered accounts, but retain
--- their own identity. This function grants no user or resource authority.
-CREATE OR REPLACE FUNCTION iam.can_produce_audit(origin_tenant text, producer text, producer_purpose text, event_tenant text)
-RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $function$
+-- A registered tenant alone is not append authority. Historical facts are
+-- read from this IAM installation only; current producer credentials remain
+-- mandatory, while original user/session/tenant activation is not reevaluated.
+DROP FUNCTION IF EXISTS iam.can_produce_audit(text,text,text,text);
+CREATE INDEX IF NOT EXISTS audit_outbox_decision_fact_idx
+ON iam.audit_outbox (tenant_id,(event_document->>'iamDecisionId'))
+WHERE event_document->>'action'='iam.authorization.decided';
+CREATE OR REPLACE FUNCTION iam.read_audit_evidence(origin_tenant text, producer text,
+    producer_purpose text, producer_installation text, event jsonb)
+RETURNS TABLE (installation_id text, event_document jsonb, decision_document jsonb, verifier_principal_id text)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $function$
+DECLARE
+    proof_tenant text;
+    sealed_installation text;
+    verifier_id text;
 BEGIN
     PERFORM set_config('matrix.iam_tenant_id',origin_tenant,true);
-    RETURN producer_purpose IN ('IAM','PAAS','AUDIT')
-        AND EXISTS(SELECT 1 FROM iam.bootstrap_receipts AS receipt WHERE receipt.organization_id=origin_tenant)
-        AND EXISTS(SELECT 1 FROM iam.service_credentials AS credential
+    SELECT receipt.installation_id INTO sealed_installation FROM iam.bootstrap_receipts AS receipt
+    WHERE receipt.organization_id=origin_tenant AND receipt.installation_id=producer_installation;
+    IF NOT FOUND OR producer_purpose NOT IN ('IAM','PAAS','AUDIT')
+        OR NOT EXISTS(SELECT 1 FROM iam.service_credentials AS credential
             JOIN iam.principals AS principal ON principal.tenant_id=credential.tenant_id AND principal.id=credential.principal_id
             JOIN iam.organizations AS organization ON organization.id=credential.tenant_id
             WHERE credential.tenant_id=origin_tenant AND credential.principal_id=producer
                 AND credential.purpose=producer_purpose AND credential.revoked_at IS NULL
-                AND principal.principal_type='SERVICE_ACCOUNT' AND principal.status='ACTIVE' AND organization.status='ACTIVE')
-        AND EXISTS(SELECT 1 FROM iam.login_index AS login WHERE login.tenant_id=event_tenant AND login.account_owner);
+                AND principal.principal_type='SERVICE_ACCOUNT' AND principal.status='ACTIVE' AND organization.status='ACTIVE') THEN RETURN; END IF;
+    IF event ? 'installationId' THEN
+        IF event ? 'tenantId' OR event->>'installationId' IS DISTINCT FROM sealed_installation THEN RETURN; END IF;
+        proof_tenant := origin_tenant;
+    ELSE
+        proof_tenant := event->>'tenantId';
+        IF NOT EXISTS(SELECT 1 FROM iam.login_index AS login WHERE login.tenant_id=proof_tenant AND login.account_owner) THEN RETURN; END IF;
+    END IF;
+    -- The original verifier actor remains historical evidence even after its
+    -- own credential is revoked. It is never the producer's current credential.
+    SELECT credential.principal_id INTO verifier_id FROM iam.service_credentials AS credential
+    WHERE credential.tenant_id=origin_tenant AND credential.purpose='INSTALLATION_VERIFIER';
+    PERFORM set_config('matrix.iam_tenant_id',proof_tenant,true);
+    IF producer_purpose='IAM' THEN
+        RETURN QUERY SELECT sealed_installation, outbox.event_document, NULL::jsonb, verifier_id
+        FROM iam.audit_outbox AS outbox WHERE outbox.tenant_id=proof_tenant AND outbox.event_id=event->>'eventId';
+    ELSE
+        RETURN QUERY SELECT sealed_installation, outbox.event_document, decision.document, verifier_id
+        FROM iam.authorization_decisions AS decision
+        JOIN iam.audit_outbox AS outbox ON outbox.tenant_id=decision.tenant_id
+            AND outbox.event_document->>'action'='iam.authorization.decided'
+            AND outbox.event_document->>'iamDecisionId'=decision.id
+        WHERE decision.tenant_id=proof_tenant AND decision.id=event->>'iamDecisionId' AND decision.allowed;
+    END IF;
 END
 $function$;
 
@@ -296,13 +330,13 @@ REVOKE ALL ON ALL TABLES IN SCHEMA iam FROM PUBLIC, matrix_iam_api, matrix_iam_w
 REVOKE ALL ON FUNCTION iam.account_snapshot(text), iam.principal_snapshot(text,text),
     iam.append_account_event(text,text,text,text,text,text,jsonb) FROM PUBLIC, matrix_iam_api, matrix_iam_worker;
 REVOKE ALL ON FUNCTION iam.is_bootstrap_administrator(text,text), iam.read_account(text,text),
-    iam.can_produce_audit(text,text,text,text),
+    iam.read_audit_evidence(text,text,text,text,jsonb),
     iam.list_principals(text,text,text,text), iam.list_accounts(text,text,text,text),
     iam.create_organization(text,text,text,text,text,text,text,text,text,jsonb),
     iam.set_account_alias(text,text,text,text,bigint,jsonb),
     iam.change_subaccount(text,text,text,text,bigint,text,text,jsonb) FROM PUBLIC, matrix_iam_worker;
 GRANT EXECUTE ON FUNCTION iam.is_bootstrap_administrator(text,text), iam.read_account(text,text),
-    iam.can_produce_audit(text,text,text,text),
+    iam.read_audit_evidence(text,text,text,text,jsonb),
     iam.list_principals(text,text,text,text), iam.list_accounts(text,text,text,text),
     iam.create_organization(text,text,text,text,text,text,text,text,text,jsonb),
     iam.set_account_alias(text,text,text,text,bigint,jsonb),

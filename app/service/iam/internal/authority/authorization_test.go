@@ -86,6 +86,7 @@ func TestFixedRBACAllowsCurrentBindingAndDeniesWithoutAuthorityLeak(t *testing.T
 func TestInstallationVerifierServiceCanAuthorizeOnlyItsFixedAction(t *testing.T) {
 	now := authorityTestTime()
 	identity := iamv1.ServiceIdentity{
+		InstallationID: "installation-example",
 		APIVersion:     iamv1.APIVersion,
 		Kind:           "ServiceIdentity",
 		OrganizationID: "organization-example",
@@ -209,6 +210,8 @@ func TestPlatformAuthorityRequiresAnExplicitRoleAndInstallationBinding(t *testin
 			service := iamv1.ServicePaaS
 			if ServiceCanRequest(iamv1.ServiceIAM, action) {
 				service = iamv1.ServiceIAM
+			} else if ServiceCanRequest(iamv1.ServiceAudit, action) {
+				service = iamv1.ServiceAudit
 			}
 			for _, role := range iamv1.AllBuiltinRoles() {
 				context := authoritySubject(now, role)

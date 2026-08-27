@@ -141,42 +141,6 @@ func (service *Authority) ServiceIdentity(
 	return identity, nil
 }
 
-func (service *Authority) ResolveAuditProducer(
-	ctx context.Context,
-	credential iamv1.Secret,
-	request iamv1.ResolveAuditProducerRequest,
-) (iamv1.AuditProducerAuthorization, error) {
-	if iamv1.ValidateResolveAuditProducerRequest(request) != nil {
-		return iamv1.AuditProducerAuthorization{}, ErrInvalidArgument
-	}
-	var result iamv1.AuditProducerAuthorization
-	err := service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
-		binding, err := service.authenticateService(transactionContext, transaction, credential)
-		if err != nil {
-			return err
-		}
-		if binding.Identity.Purpose != iamv1.ServiceIAM && binding.Identity.Purpose != iamv1.ServicePaaS && binding.Identity.Purpose != iamv1.ServiceAudit {
-			return ErrForbidden
-		}
-		allowed, err := transaction.CanProduceAudit(transactionContext, binding.Identity, request.OrganizationID)
-		if err != nil {
-			return err
-		}
-		if !allowed {
-			return ErrForbidden
-		}
-		result = iamv1.AuditProducerAuthorization{
-			APIVersion: iamv1.APIVersion, Kind: "AuditProducerAuthorization",
-			Producer: binding.Identity, OrganizationID: request.OrganizationID,
-		}
-		return nil
-	})
-	if err != nil {
-		return iamv1.AuditProducerAuthorization{}, err
-	}
-	return result, nil
-}
-
 func (service *Authority) authenticateService(
 	ctx context.Context,
 	transaction Transaction,

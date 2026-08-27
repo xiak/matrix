@@ -69,6 +69,10 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	schema, err := workflow.Readiness(ctx)
+	if err != nil || schema.SchemaVersion != identityaccess.SchemaVersion {
+		return errors.New("IAM schema is incompatible")
+	}
 	bootstrapBytes, err := processconfig.ReadFile(
 		config.bootstrapFile,
 		iamv1.MaxBootstrapBytes,
