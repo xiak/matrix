@@ -44,3 +44,23 @@ func TestLocalGoBuildRejectsUnownedPackage(t *testing.T) {
 		t.Fatal("rejected Go package reached the provider effect")
 	}
 }
+
+func TestLocalGoBuildSupportsTheClosedNodePayloads(t *testing.T) {
+	root := t.TempDir()
+	for _, packagePath := range []string{"./app/service/installation/cmd/mx", "./app/service/nodeagent/cmd/matrix-node-agent"} {
+		called := false
+		effects := &LocalEffects{run: func(_ context.Context, command localCommand) ([]byte, error) {
+			called = true
+			if command.program != "go" || command.dir != root ||
+				!slices.Contains(command.args, "-mod=readonly") || !slices.Contains(command.args, "-buildvcs=true") ||
+				!slices.Contains(command.args, packagePath) || !slices.Contains(command.env, "GOOS=linux") ||
+				!slices.Contains(command.env, "GOARCH=amd64") || !slices.Contains(command.env, "CGO_ENABLED=0") {
+				t.Fatal("node payload build lost its source or target constraints")
+			}
+			return nil, nil
+		}}
+		if err := effects.BuildGoBinary(context.Background(), root, packagePath, filepath.Join(root, "binary")); err != nil || !called {
+			t.Fatalf("owned node payload was not built: %v", err)
+		}
+	}
+}

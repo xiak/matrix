@@ -19,22 +19,32 @@ type Streams struct {
 	ErrOut io.Writer
 }
 
+type Subject string
+
+const (
+	SubjectPlatform Subject = "PLATFORM"
+	SubjectNode     Subject = "NODE"
+)
+
 type Request struct {
+	Subject       Subject
 	Action        lifecycle.Action
 	Root          string
 	Bundle        string
 	TrustKey      string
 	BackupID      string
 	SupportOutput string
+	Configuration string
 }
 
 type Result struct {
-	State         string `json:"state"`
-	ReleaseID     string `json:"releaseId,omitempty"`
-	PreviousID    string `json:"previousId,omitempty"`
-	BackupID      string `json:"backupId,omitempty"`
-	Changed       bool   `json:"changed"`
-	CorrelationID string `json:"correlationId,omitempty"`
+	State             string `json:"state"`
+	ReleaseID         string `json:"releaseId,omitempty"`
+	PreviousID        string `json:"previousId,omitempty"`
+	BackupID          string `json:"backupId,omitempty"`
+	Changed           bool   `json:"changed"`
+	CorrelationID     string `json:"correlationId,omitempty"`
+	ExecutionTargetID string `json:"executionTargetId,omitempty"`
 }
 
 type Backend interface {
@@ -94,6 +104,7 @@ func validateResult(result Result) error {
 	for label, value := range map[string]string{
 		"release": result.ReleaseID, "previous release": result.PreviousID,
 		"backup": result.BackupID, "correlation": result.CorrelationID,
+		"execution target": result.ExecutionTargetID,
 	} {
 		if value != "" && !safeIDPattern.MatchString(value) {
 			problems = append(problems, fmt.Errorf("platform result %s identity is invalid", label))

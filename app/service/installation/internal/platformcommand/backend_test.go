@@ -387,7 +387,7 @@ func TestDifferentDatabaseProfilesRejectBeforeEffectsOrJournalChange(t *testing.
 		}{name: authority + " only", source: current, target: target})
 	}
 	for _, profile := range profiles {
-		for _, action := range []lifecycle.Action{lifecycle.ActionUpgrade, lifecycle.ActionRollback} {
+		for _, action := range []lifecycle.Action{lifecycle.ActionUpgrade, lifecycle.ActionRollback, lifecycle.ActionRecover} {
 			t.Run(profile.name+"/"+string(action), func(t *testing.T) {
 				fixtures, err := releasetest.WriteSequence(t.TempDir(), 2, profile.source, profile.target)
 				if err != nil {
@@ -400,10 +400,10 @@ func TestDifferentDatabaseProfilesRejectBeforeEffectsOrJournalChange(t *testing.
 					t.Fatal(err)
 				}
 				materializeInstalledRelease(t, root, fixtures[0])
-				if action == lifecycle.ActionRollback {
+				if action == lifecycle.ActionRollback || action == lifecycle.ActionRecover {
 					materializeInstalledRelease(t, root, fixtures[1])
 					// A prior installer may have committed an unproved transition.
-					// Even a valid sealed predecessor is not a rollback permit.
+					// A sealed predecessor/backup does not admit another profile.
 					state := readJournal(t, root)
 					state.PreviousRelease, state.PreviousReleaseDigest = state.CurrentReleaseID, state.CurrentReleaseDigest
 					state.CurrentReleaseID, state.CurrentReleaseDigest = fixtures[1].Manifest.Release.ID, fixtures[1].ManifestDigest
@@ -420,10 +420,22 @@ func TestDifferentDatabaseProfilesRejectBeforeEffectsOrJournalChange(t *testing.
 					}
 				}
 				before := readJournal(t, root)
-				_, err = backend.Run(context.Background(), cli.Request{Action: action, Root: root, Bundle: fixtures[1].Root})
-				assertFault(t, err, cli.FaultPrecondition, string(action)+"_SCHEMA_INCOMPATIBLE")
+				request := cli.Request{Action: action, Root: root, Bundle: fixtures[1].Root}
+				failureCode := string(action) + "_SCHEMA_INCOMPATIBLE"
+				if action == lifecycle.ActionRecover {
+					request.BackupID = "backup-" + strings.Repeat("d", 32)
+					effects.recoverySource = RecoverySource{
+						InstallationID: before.InstallationID, BackupID: request.BackupID,
+						BackupDigest: "sha256:" + strings.Repeat("e", 64),
+						ReleaseID:    fixtures[0].Manifest.Release.ID, ReleaseDigest: fixtures[0].ManifestDigest,
+						Database: fixtures[0].Manifest.Database,
+					}
+					failureCode = "RECOVERY_SCHEMA_INCOMPATIBLE"
+				}
+				_, err = backend.Run(context.Background(), request)
+				assertFault(t, err, cli.FaultPrecondition, failureCode)
 				if !reflect.DeepEqual(readJournal(t, root), before) || len(effects.upgradeCalls) != 0 ||
-					len(effects.explicitRollbackCalls) != 0 || effects.observeCalls != 0 {
+					len(effects.explicitRollbackCalls) != 0 || len(effects.recoveryCalls) != 0 || effects.observeCalls != 0 {
 					t.Fatal("incompatible profile changed state or reached lifecycle effects")
 				}
 			})

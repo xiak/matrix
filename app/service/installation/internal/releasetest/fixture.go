@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
+	"github.com/xiak/matrix/app/service/installation/nodeconfig"
 	"github.com/xiak/matrix/app/service/installation/release"
 	"github.com/xiak/matrix/app/service/installation/topology"
 )
@@ -34,6 +36,35 @@ func Write(base string) (Fixture, error) {
 		return Fixture{}, err
 	}
 	return fixtures[0], nil
+}
+
+func WriteNode(base string) (Fixture, error) {
+	fixtures, err := writeManifests(base, []release.Manifest{NodeManifest()})
+	if err != nil {
+		return Fixture{}, err
+	}
+	return fixtures[0], nil
+}
+
+func NodeManifest() release.Manifest {
+	manifest := Manifest()
+	manifest.Kind = release.NodeManifestKind
+	manifest.Database, manifest.Images = release.DatabaseProfile{}, nil
+	manifest.Node = &release.NodeProfile{ProtocolAPIVersion: nodev1.APIVersion,
+		RuntimeRevision: nodeconfig.RuntimeRevision, CollectorVersion: nodeconfig.CollectorVersion}
+	manifest.Host.MinimumSystemd = nodeconfig.MinimumSystemd
+	manifest.Host.MinimumDocker = nodeconfig.MinimumDocker
+	manifest.Host.MinimumCompose = nodeconfig.MinimumCompose
+	manifest.TopologyDigest = nodeconfig.ContractDigest()
+	manifest.Files = nil
+	for _, name := range []string{"bin/matrix-node-agent", "bin/mx", "bin/node-exporter", "licenses/node-exporter-license.txt", "licenses/node-exporter-notice.txt"} {
+		file := release.File{Path: name, MediaType: "text/plain", Size: 1, SHA256: stableDigest(name)}
+		if strings.HasPrefix(name, "bin/") {
+			file.MediaType, file.Executable = "application/vnd.matrix.executable", true
+		}
+		manifest.Files = append(manifest.Files, file)
+	}
+	return manifest
 }
 
 // WriteSequence creates signed immediate-successor fixtures under one trust

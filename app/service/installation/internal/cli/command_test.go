@@ -30,6 +30,7 @@ func TestPlatformCommandSurfaceBuildsExactRequests(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			test.want.Subject = SubjectPlatform
 			var got Request
 			backend := backendFunc(func(_ context.Context, request Request) (Result, error) {
 				got = request
@@ -80,6 +81,48 @@ func TestPlatformCommandNamesHaveNoCompatibilityAliases(t *testing.T) {
 	}
 	if command.PersistentFlags().Lookup("output") != nil || command.PersistentFlags().Lookup("format") == nil {
 		t.Fatal("global output contract must use --format and not support's --output")
+	}
+}
+
+func TestNodeCommandsStaySeparateAndRequireProtectedEnrollment(t *testing.T) {
+	for _, action := range []string{"install", "start", "verify", "status"} {
+		t.Run(action, func(t *testing.T) {
+			var request Request
+			backend := backendFunc(func(_ context.Context, value Request) (Result, error) {
+				request = value
+				return Result{State: "READY", ExecutionTargetID: "target-a"}, nil
+			})
+			args := []string{"--format", "json", "node", action, "--root", "/srv/node"}
+			if action == "install" {
+				args = append(args, "--bundle", "/media/node", "--trust-key", "/media/trust.json", "--configuration", "/private/enrollment.json")
+			}
+			var out, errOut bytes.Buffer
+			exit := Run(context.Background(), args, Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut}, backend)
+			if exit != ExitSuccess || request.Subject != SubjectNode || request.Action != lifecycle.Action(strings.ToUpper(action)) {
+				t.Fatalf("node request not routed: %d / %#v / %s", exit, request, errOut.String())
+			}
+			var result successEnvelope
+			if json.Unmarshal(out.Bytes(), &result) != nil || result.Kind != "NodeCommandResult" || result.Result.ExecutionTargetID != "target-a" {
+				t.Fatal("node result lost its scope")
+			}
+		})
+	}
+	for _, args := range [][]string{
+		{"node", "install", "--root", "/srv/node", "--bundle", "/media/node", "--trust-key", "/media/trust.json"},
+		{"node", "backup", "--root", "/srv/node"},
+		{"node", "recover", "--root", "/srv/node"},
+		{"node", "start", "--root", "/srv/node", "--configuration", "/private/other.json"},
+		{"platform", "install", "--root", "/srv/platform", "--configuration", "/private/enrollment.json"},
+	} {
+		var out, errOut bytes.Buffer
+		exit := Run(context.Background(), append([]string{"--format", "json"}, args...), Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut},
+			backendFunc(func(context.Context, Request) (Result, error) {
+				t.Fatal("invalid command reached backend")
+				return Result{}, nil
+			}))
+		if exit != ExitInvalidInput || out.Len() != 0 {
+			t.Fatalf("invalid node input accepted: %v", args)
+		}
 	}
 }
 

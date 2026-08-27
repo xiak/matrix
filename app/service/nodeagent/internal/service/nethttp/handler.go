@@ -25,6 +25,7 @@ type Config struct {
 type Handler struct {
 	identity      nodev1.Identity
 	controllerURI string
+	selfURI       string
 	bindingRef    string
 	source        ObservationSource
 	slots         chan struct{}
@@ -32,6 +33,7 @@ type Handler struct {
 
 func New(source ObservationSource, config Config) (*Handler, error) {
 	controllerURI, err := nodev1.ControllerURI(config.Identity.InstallationID, config.ControllerID)
+	selfURI, _ := nodev1.NodeURI(config.Identity)
 	if config.MaximumConcurrent == 0 {
 		config.MaximumConcurrent = 8
 	}
@@ -41,7 +43,7 @@ func New(source ObservationSource, config Config) (*Handler, error) {
 		return nil, errors.New("node HTTP configuration is invalid")
 	}
 	return &Handler{
-		identity: config.Identity, controllerURI: controllerURI, bindingRef: config.BindingRef,
+		identity: config.Identity, controllerURI: controllerURI, selfURI: selfURI, bindingRef: config.BindingRef,
 		source: source, slots: make(chan struct{}, config.MaximumConcurrent),
 	}, nil
 }
@@ -52,8 +54,16 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 	response.Header().Set("X-Content-Type-Options", "nosniff")
 	// Keep this guard even though the listener requires mTLS: accidentally
 	// mounting this handler on a plain HTTP server must never authorize a node.
-	if !handler.authenticated(request) {
+	peerURI := handler.controllerURI
+	if request.URL.Path == nodev1.ReadinessPath {
+		peerURI = handler.selfURI
+	}
+	if !handler.authenticated(request, peerURI) {
 		reject(response, http.StatusForbidden)
+		return
+	}
+	if request.URL.Path == nodev1.ReadinessPath {
+		handler.readiness(response, request)
 		return
 	}
 	if request.URL.Path != nodev1.ObservationPath || request.URL.RawPath != "" ||
@@ -116,7 +126,62 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 	_, _ = response.Write(encoded)
 }
 
-func (handler *Handler) authenticated(request *http.Request) bool {
+func (handler *Handler) readiness(response http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet || request.URL.RawPath != "" || request.URL.RawQuery != "" ||
+		request.URL.ForceQuery || request.ContentLength != 0 || len(request.TransferEncoding) != 0 ||
+		request.Header.Get("Content-Encoding") != "" {
+		reject(response, http.StatusBadRequest)
+		return
+	}
+	select {
+	case handler.slots <- struct{}{}:
+		defer func() { <-handler.slots }()
+	default:
+		reject(response, http.StatusTooManyRequests)
+		return
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), 5*time.Second)
+	defer cancel()
+	observation, err := handler.source.Current(ctx)
+	now := time.Now()
+	if err != nil || ctx.Err() != nil || observation.ExecutionTargetID != handler.identity.ExecutionTargetID ||
+		paasv1.ValidateExecutionTargetObservation(observation) != nil || observation.Health != paasv1.ExecutionTargetHealthReady ||
+		observation.ObservedAt.After(now) || !now.Before(observation.ObservedAt.Add(nodev1.MaximumObservationAge)) ||
+		observation.Usage == nil || observation.Usage.ObservedAt.After(now) ||
+		!now.Before(observation.Usage.ValidUntil) ||
+		!now.Before(observation.Usage.ObservedAt.Add(nodev1.MaximumObservationAge)) ||
+		observation.Usage.CPU.State != paasv1.MeasurementAvailable ||
+		observation.Usage.Memory.State != paasv1.MeasurementAvailable ||
+		observation.Usage.FilesystemsState != paasv1.MeasurementAvailable {
+		reject(response, http.StatusServiceUnavailable)
+		return
+	}
+	observedAt := observation.ObservedAt
+	if observation.Usage.ObservedAt.Before(observedAt) {
+		observedAt = observation.Usage.ObservedAt
+	}
+	validUntil := observedAt.Add(nodev1.MaximumObservationAge)
+	if observation.Usage.ValidUntil.Before(validUntil) {
+		validUntil = observation.Usage.ValidUntil
+	}
+	value := nodev1.Readiness{
+		APIVersion: nodev1.APIVersion, Kind: nodev1.ReadinessResponseKind, Identity: handler.identity,
+		IdentityFingerprint: observation.IdentityFingerprint, ObservedAt: observedAt, ValidUntil: validUntil,
+	}
+	if nodev1.ValidateReadiness(value) != nil {
+		reject(response, http.StatusServiceUnavailable)
+		return
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil || len(encoded) > nodev1.MaximumReadinessResponseBytes {
+		reject(response, http.StatusServiceUnavailable)
+		return
+	}
+	response.WriteHeader(http.StatusOK)
+	_, _ = response.Write(encoded)
+}
+
+func (handler *Handler) authenticated(request *http.Request, peerURI string) bool {
 	state := request.TLS
 	if state == nil || len(state.VerifiedChains) == 0 || len(state.PeerCertificates) == 0 {
 		return false
@@ -124,7 +189,7 @@ func (handler *Handler) authenticated(request *http.Request) bool {
 	leaf := state.PeerCertificates[0]
 	now := time.Now()
 	return !leaf.IsCA && !now.Before(leaf.NotBefore) && now.Before(leaf.NotAfter) &&
-		nodev1.MatchesIdentity(leaf.URIs, handler.controllerURI)
+		nodev1.MatchesIdentity(leaf.URIs, peerURI)
 }
 
 func reject(response http.ResponseWriter, status int) {

@@ -11,7 +11,69 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
+	"github.com/xiak/matrix/app/service/installation/nodeconfig"
 )
+
+func TestNodeReleaseHasNoPlatformAuthorityAndKeepsStrictCanonicalBytes(t *testing.T) {
+	manifest := validNodeManifest()
+	encoded, err := EncodeCanonical(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte(`"database"`)) || bytes.Contains(encoded, []byte(`"images"`)) {
+		t.Fatal("node release contains a fictitious platform inventory")
+	}
+	decoded, err := DecodeCanonical(encoded)
+	if err != nil || decoded.Kind != NodeManifestKind || decoded.Node == nil {
+		t.Fatal("node release did not round trip")
+	}
+	for name, change := range map[string]func(*Manifest){
+		"database":                 func(value *Manifest) { value.Database = CurrentDatabaseProfile() },
+		"platform image":           func(value *Manifest) { value.Images = validManifest().Images },
+		"missing protocol":         func(value *Manifest) { value.Node.ProtocolAPIVersion = "" },
+		"missing runtime revision": func(value *Manifest) { value.Node.RuntimeRevision = 0 },
+		"missing supervision":      func(value *Manifest) { value.Host.MinimumSystemd = 0 },
+		"legacy envelope":          func(value *Manifest) { value.APIVersion = LegacyManifestAPIVersion },
+		"missing collector":        func(value *Manifest) { value.Files = slices.Delete(value.Files, 2, 3) },
+		"missing attribution":      func(value *Manifest) { value.Files = value.Files[:4] },
+		"wrong executable":         func(value *Manifest) { value.Files[0].Path = "bin/arbitrary-shell" },
+		"platform substitution":    func(value *Manifest) { value.Kind = ManifestKind },
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := validNodeManifest()
+			change(&value)
+			if _, err := EncodeCanonical(value); err == nil {
+				t.Fatal("invalid node release admitted")
+			}
+		})
+	}
+	for _, field := range []string{`"database":null,`, `"database":{},`, `"images":[],`, `"node":null,`} {
+		altered := append([]byte("{"+field), encoded[1:]...)
+		if _, err := DecodeCanonical(altered); err == nil {
+			t.Fatal("ambiguous node selector admitted")
+		}
+	}
+}
+
+func validNodeManifest() Manifest {
+	value := validManifest()
+	value.Kind, value.Database, value.Images = NodeManifestKind, DatabaseProfile{}, nil
+	value.Node = &NodeProfile{ProtocolAPIVersion: nodev1.APIVersion, RuntimeRevision: nodeconfig.RuntimeRevision, CollectorVersion: nodeconfig.CollectorVersion}
+	value.Host.MinimumSystemd = nodeconfig.MinimumSystemd
+	value.Host.MinimumDocker, value.Host.MinimumCompose = nodeconfig.MinimumDocker, nodeconfig.MinimumCompose
+	value.TopologyDigest = nodeconfig.ContractDigest()
+	value.Files = nil
+	for _, name := range []string{"bin/matrix-node-agent", "bin/mx", "bin/node-exporter", "licenses/node-exporter-license.txt", "licenses/node-exporter-notice.txt"} {
+		file := File{Path: name, MediaType: mediaPlainText, Size: 1, SHA256: digest('a')}
+		if strings.HasPrefix(name, "bin/") {
+			file.MediaType, file.Executable = mediaExecutable, true
+		}
+		value.Files = append(value.Files, file)
+	}
+	return value
+}
 
 func TestReadTrustRootFileUsesExactCanonicalRegularFile(t *testing.T) {
 	publicKey, _, err := ed25519.GenerateKey(rand.Reader)

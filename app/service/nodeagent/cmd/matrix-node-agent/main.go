@@ -4,20 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"runtime"
-	"strconv"
 	"syscall"
 
-	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
-	"github.com/xiak/matrix/api/contractjson"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/adapter/infrastructure/localmachine"
 	"github.com/xiak/matrix/app/adapter/infrastructure/nodeexporter"
 	nodehttps "github.com/xiak/matrix/app/adapter/node/https"
+	"github.com/xiak/matrix/app/service/installation/nodeconfig"
 	"github.com/xiak/matrix/app/service/internal/processconfig"
 	"github.com/xiak/matrix/app/service/internal/processhttp"
 	"github.com/xiak/matrix/app/service/nodeagent/internal/service/nethttp"
@@ -25,22 +21,6 @@ import (
 )
 
 const configurationEnvironment = "MATRIX_NODE_CONFIGURATION_FILE"
-
-type configuration struct {
-	APIVersion          string          `json:"apiVersion"`
-	Kind                string          `json:"kind"`
-	Identity            nodev1.Identity `json:"identity"`
-	ControllerID        string          `json:"controllerId"`
-	BindingRef          string          `json:"bindingRef"`
-	ExpectedFingerprint string          `json:"expectedFingerprint"`
-	ListenAddress       string          `json:"listenAddress"`
-	CollectorEndpoint   string          `json:"collectorEndpoint"`
-	StoragePath         string          `json:"storagePath"`
-	CertificateFile     string          `json:"certificateFile"`
-	PrivateKeyFile      string          `json:"privateKeyFile"`
-	TrustFile           string          `json:"trustFile"`
-	SystemReserve       paasv1.Capacity `json:"systemReserve"`
-}
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -111,40 +91,16 @@ func run(ctx context.Context) error {
 	return processhttp.ServeTLSWithBackground(ctx, config.ListenAddress, handler, security, sampler.Run)
 }
 
-func loadConfiguration(path string) (configuration, error) {
-	empty := configuration{}
-	source, err := processconfig.ReadFile(path, 64*1024, true)
+func loadConfiguration(path string) (nodeconfig.Configuration, error) {
+	source, err := processconfig.ReadFile(path, nodeconfig.MaximumBytes, true)
 	if err != nil {
-		return empty, errors.New("node configuration is unavailable")
+		return nodeconfig.Configuration{}, errors.New("node configuration is unavailable")
 	}
 	defer clear(source)
-	var value configuration
-	if contractjson.DecodeObjectBytes(source, 64*1024, &value) != nil ||
-		value.APIVersion != "node.installation.matrix.xiak.com/v1" || value.Kind != "NodeConfiguration" ||
-		nodev1.ValidateIdentity(value.Identity) != nil ||
-		paasv1.ValidateID("controllerId", value.ControllerID) != nil ||
-		paasv1.ValidateID("bindingRef", value.BindingRef) != nil ||
-		paasv1.ValidateDigest("expectedFingerprint", value.ExpectedFingerprint) != nil ||
-		!privateListenAddress(value.ListenAddress) {
-		return empty, errors.New("node configuration is invalid")
-	}
-	for _, name := range []string{value.StoragePath, value.CertificateFile, value.PrivateKeyFile, value.TrustFile} {
-		if !filepath.IsAbs(name) || filepath.Clean(name) != name {
-			return empty, errors.New("node configuration is invalid")
-		}
-	}
-	return value, nil
+	return nodeconfig.DecodeConfiguration(source)
 }
 
-func privateListenAddress(address string) bool {
-	host, portText, err := net.SplitHostPort(address)
-	port, portErr := strconv.ParseUint(portText, 10, 16)
-	addressIP := net.ParseIP(host)
-	return err == nil && portErr == nil && port > 0 && addressIP != nil &&
-		(addressIP.IsLoopback() || addressIP.IsPrivate())
-}
-
-func loadCredentials(config configuration) (nodehttps.Credentials, error) {
+func loadCredentials(config nodeconfig.Configuration) (nodehttps.Credentials, error) {
 	empty := nodehttps.Credentials{}
 	certificate, err := processconfig.ReadFile(config.CertificateFile, 64*1024, false)
 	if err != nil {

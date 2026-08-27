@@ -200,7 +200,13 @@ func (effects *Effects) ApplyRecoveryPhase(
 			ctx, effects.runtime, streaming, effects.projectInspector, plan,
 		)
 	case lifecycle.PhaseStarting:
-		return startInstallation(ctx, effects.runtime, plan.Target)
+		current, target, _, err := authenticateRecoveryPlan(plan)
+		if err != nil {
+			return err
+		}
+		defer clear(current.TrustBytes)
+		defer clear(target.TrustBytes)
+		return startInstallation(ctx, effects.runtime, target)
 	case lifecycle.PhaseVerifying:
 		return verifyRecoveredInstallation(
 			ctx, effects.runtime, effects.verifier, effects.projectInspector, plan,

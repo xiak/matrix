@@ -228,9 +228,11 @@ func commandEnvironment(overrides []string) []string {
 }
 
 func allowedBinaryPackage(value string) bool {
-	for _, specification := range binarySpecifications {
-		if specification.packagePath == value {
-			return true
+	for _, specifications := range [][]binarySpecification{binarySpecifications, nodeBinarySpecifications} {
+		for _, specification := range specifications {
+			if specification.packagePath == value {
+				return true
+			}
 		}
 	}
 	return false

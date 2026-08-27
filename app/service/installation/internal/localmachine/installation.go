@@ -37,7 +37,7 @@ func authenticateInstalledPlan(
 		return platformcommand.InstallPlan{}, err
 	}
 	bundle, err := release.VerifyDirectory(releaseRoot, trustBytes)
-	if err != nil || bundle.Manifest.Release.ID != installed.ReleaseID ||
+	if err != nil || bundle.Manifest.Kind != release.ManifestKind || bundle.Manifest.Release.ID != installed.ReleaseID ||
 		bundle.ManifestSHA256 != installed.ReleaseDigest ||
 		bundle.Manifest.TopologyDigest != topology.ContractDigest() {
 		clear(trustBytes)
@@ -62,7 +62,7 @@ func verifiedStagedBundle(plan platformcommand.InstallPlan) (release.VerifiedBun
 		return release.VerifiedBundle{}, err
 	}
 	staged, err := release.VerifyDirectory(root, plan.TrustBytes)
-	if err != nil || staged.ManifestSHA256 != plan.Bundle.ManifestSHA256 ||
+	if err != nil || staged.Manifest.Kind != release.ManifestKind || staged.ManifestSHA256 != plan.Bundle.ManifestSHA256 ||
 		staged.Manifest.Release.ID != plan.Bundle.Manifest.Release.ID {
 		return release.VerifiedBundle{}, errors.New("staged release differs from the installation plan")
 	}

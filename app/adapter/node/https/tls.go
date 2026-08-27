@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"net"
 	"slices"
 	"time"
 
@@ -73,8 +74,76 @@ func ServerTLS(credentials Credentials, identity nodev1.Identity, controllerID s
 		Certificates: []tls.Certificate{credentials.certificate},
 		ClientCAs:    credentials.roots.Clone(), ClientAuth: tls.RequireAndVerifyClientCert,
 		NextProtos: []string{"http/1.1"}, SessionTicketsDisabled: true,
-		VerifyConnection: func(state tls.ConnectionState) error { return verifyPeer(state, peerURI) },
+		// HTTP keeps a separate action guard: self identity is only admitted to
+		// installation readiness, never the controller command surface.
+		VerifyConnection: func(state tls.ConnectionState) error {
+			if verifyPeer(state, peerURI) == nil {
+				return nil
+			}
+			return verifyPeer(state, ownURI)
+		},
 	}, nil
+}
+
+func readinessClientTLS(credentials Credentials, identity nodev1.Identity) (*tls.Config, error) {
+	uri, err := nodev1.NodeURI(identity)
+	if err != nil || !credentials.validFor(uri, x509.ExtKeyUsageClientAuth) {
+		return nil, errTLSIdentity
+	}
+	return &tls.Config{
+		MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{credentials.certificate},
+		RootCAs: credentials.roots.Clone(), NextProtos: []string{"http/1.1"},
+		VerifyConnection: func(state tls.ConnectionState) error { return verifyPeer(state, uri) },
+	}, nil
+}
+
+// ValidateEnrollment authenticates both installation-issued roles and server
+// addresses before the installer writes state or starts either service.
+// The node needs client auth for its collector and self-readiness, not a
+// controller certificate. Each chain is checked for its exact required EKU.
+func ValidateEnrollment(node, collector Credentials, identity nodev1.Identity, nodeAddress, collectorAddress string) error {
+	nodeURI, err := nodev1.NodeURI(identity)
+	if err != nil {
+		return errTLSIdentity
+	}
+	collectorURI, err := nodev1.CollectorURI(identity)
+	if err != nil {
+		return errTLSIdentity
+	}
+	for _, check := range []struct {
+		credentials Credentials
+		roots       *x509.CertPool
+		uri         string
+		address     string
+		purpose     x509.ExtKeyUsage
+	}{
+		{node, node.roots, nodeURI, nodeAddress, x509.ExtKeyUsageServerAuth},
+		{node, collector.roots, nodeURI, nodeAddress, x509.ExtKeyUsageClientAuth},
+		{collector, node.roots, collectorURI, collectorAddress, x509.ExtKeyUsageServerAuth},
+	} {
+		if check.roots == nil || !check.credentials.validFor(check.uri, check.purpose) {
+			return errTLSIdentity
+		}
+		host, _, err := net.SplitHostPort(check.address)
+		if err != nil || net.ParseIP(host) == nil {
+			return errTLSIdentity
+		}
+		intermediates := x509.NewCertPool()
+		for _, encoded := range check.credentials.certificate.Certificate[1:] {
+			certificate, err := x509.ParseCertificate(encoded)
+			if err != nil {
+				return errTLSIdentity
+			}
+			intermediates.AddCert(certificate)
+		}
+		if _, err := check.credentials.certificate.Leaf.Verify(x509.VerifyOptions{
+			Roots: check.roots, Intermediates: intermediates,
+			DNSName: host, KeyUsages: []x509.ExtKeyUsage{check.purpose},
+		}); err != nil {
+			return errTLSIdentity
+		}
+	}
+	return nil
 }
 
 func clientTLS(credentials Credentials, identity nodev1.Identity, controllerID string) (*tls.Config, error) {

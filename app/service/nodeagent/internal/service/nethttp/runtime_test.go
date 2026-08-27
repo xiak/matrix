@@ -3,10 +3,12 @@
 package nethttp
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -28,7 +30,452 @@ import (
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/adapter/infrastructure/localmachine"
 	nodehttps "github.com/xiak/matrix/app/adapter/node/https"
+	"github.com/xiak/matrix/app/service/installation/nodeconfig"
+	"github.com/xiak/matrix/app/service/installation/release"
 )
+
+// This extends the existing process gate with the real mx lifecycle, signed
+// native payloads, systemd ownership and self-readiness. It never installs a
+// package or changes an existing Docker object or system service.
+func TestLinuxSignedNodeStartup(t *testing.T) {
+	if os.Getenv("MATRIX_NODE_INSTALLATION_REAL_RUNTIME") != "1" {
+		t.Skip("set MATRIX_NODE_INSTALLATION_REAL_RUNTIME=1 on an isolated native systemd host")
+	}
+	if os.Geteuid() != 0 || runtime.GOARCH != "amd64" {
+		t.Fatal("signed node gate requires native Linux/amd64 root")
+	}
+	bundle, releaseTrust := os.Getenv("MATRIX_NODE_RELEASE_BUNDLE"), os.Getenv("MATRIX_NODE_RELEASE_TRUST")
+	for _, path := range []string{bundle, releaseTrust} {
+		if !filepath.IsAbs(path) {
+			t.Fatal("signed node gate requires a release-builder bundle and its trust root")
+		}
+	}
+	trustBytes, _, err := release.ReadTrustRootFile(releaseTrust)
+	if err != nil {
+		t.Fatal("signed node trust root is unavailable")
+	}
+	verified, err := release.VerifyDirectory(bundle, trustBytes)
+	if err != nil || verified.Manifest.Kind != release.NodeManifestKind {
+		t.Fatal("node gate release did not authenticate")
+	}
+	installer := filepath.Join(bundle, "bin", "mx")
+	t.Setenv("DOCKER_HOST", "unix:///var/run/docker.sock")
+	t.Setenv("DOCKER_CONTEXT", "")
+	base := t.TempDir()
+	root := filepath.Join(base, "installation")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	facts, err := localmachine.NewLocalHostProbe().Inspect(ctx, base)
+	cancel()
+	if err != nil || !facts.DockerEngineReady || !facts.ComposePluginReady {
+		t.Fatal("node gate host prerequisites unavailable")
+	}
+	fingerprint, err := localmachine.DeriveMachineFingerprint(facts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var identityEntropy [16]byte
+	if _, err := rand.Read(identityEntropy[:]); err != nil {
+		t.Fatal(err)
+	}
+	identity := nodev1.Identity{InstallationID: "mxi-" + hex.EncodeToString(identityEntropy[:]), ExecutionTargetID: nodeIdentity.ExecutionTargetID}
+	collectorUnit, _ := nodeconfig.ServiceName(identity, true)
+	nodeUnit, _ := nodeconfig.ServiceName(identity, false)
+	units := []string{nodeUnit, collectorUnit}
+	for _, unit := range units {
+		load := nativeUnitProperty(t, unit, "LoadState")
+		if load != "not-found" {
+			t.Fatal("node gate unit identity already exists")
+		}
+	}
+	t.Cleanup(func() {
+		for _, unit := range units {
+			description := nativeUnitProperty(t, unit, "Description")
+			if description == unit || description == "" {
+				continue
+			}
+			if !strings.HasPrefix(description, "Matrix node ") && !strings.HasPrefix(description, "Matrix collector ") {
+				t.Error("node gate refuses to clean a foreign service")
+				continue
+			}
+			nativeSystemctl(t, "stop", unit)
+			// A successful stop may have already garbage-collected the unit.
+			if nativeUnitProperty(t, unit, "LoadState") == "loaded" {
+				nativeSystemctl(t, "reset-failed", unit)
+			}
+		}
+	})
+	authority := newAuthority(t)
+	nodeURI, _ := nodev1.NodeURI(identity)
+	collectorURI, _ := nodev1.CollectorURI(identity)
+	controllerURI, _ := nodev1.ControllerURI(identity.InstallationID, controllerID)
+	node := authority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false, x509.ExtKeyUsageClientAuth)
+	collector := authority.issue(t, collectorURI, x509.ExtKeyUsageServerAuth, false)
+	controller := authority.issue(t, controllerURI, x509.ExtKeyUsageClientAuth, false)
+	certificateFile, keyFile := nativeCertificateFiles(t, base, "node", node)
+	collectorCertificate, collectorKey := nativeCertificateFiles(t, base, "collector", collector)
+	trustFile := filepath.Join(base, "trust.pem")
+	if err := os.WriteFile(trustFile, authority.pem, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config := nodeconfig.Configuration{
+		APIVersion: nodeconfig.APIVersion, Kind: nodeconfig.ConfigurationKind, Identity: identity,
+		ControllerID: controllerID, BindingRef: "binding-a", ExpectedFingerprint: fingerprint,
+		ListenAddress: unusedLoopbackAddress(t), CollectorEndpoint: "https://" + unusedLoopbackAddress(t),
+		StoragePath: filepath.Join(root, "runtime", "executor"), CertificateFile: certificateFile, PrivateKeyFile: keyFile, TrustFile: trustFile,
+		SystemReserve: paasv1.Capacity{MemoryBytes: 256 * 1024 * 1024},
+	}
+	enrollment := nodeconfig.Enrollment{APIVersion: nodeconfig.APIVersion, Kind: nodeconfig.EnrollmentKind,
+		Node: config, CollectorCertificateFile: collectorCertificate, CollectorPrivateKeyFile: collectorKey}
+	enrollmentBytes, err := json.Marshal(enrollment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enrollmentFile := filepath.Join(base, "enrollment.json")
+	if err := os.WriteFile(enrollmentFile, enrollmentBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	diagnosticContext, stopDiagnostic := context.WithCancel(context.Background())
+	defer stopDiagnostic()
+	diagnostic := make(chan string, 1)
+	go func() {
+		select {
+		case <-diagnosticContext.Done():
+			return
+		case <-time.After(10 * time.Second):
+		}
+		var summary strings.Builder
+		for _, unit := range units {
+			ctx, cancel := context.WithTimeout(diagnosticContext, 3*time.Second)
+			output, _ := exec.CommandContext(ctx, "systemctl", "show", "--property=ActiveState,SubState,MainPID,ExecMainCode,ExecMainStatus,NRestarts", unit).Output()
+			cancel()
+			if len(output) < 4096 {
+				summary.WriteString(string(output))
+			}
+		}
+		client, err := nodehttps.New(nodehttps.Config{Endpoint: "https://" + config.ListenAddress, Identity: identity,
+			ControllerID: controllerID, BindingRef: config.BindingRef, ExpectedFingerprint: fingerprint, Credentials: controller.credentials})
+		if err == nil {
+			defer client.Close()
+			ctx, cancel := context.WithTimeout(diagnosticContext, 3*time.Second)
+			defer cancel()
+			command := observationCommand()
+			command.Deadline = time.Now().UTC().Add(2 * time.Second).Truncate(time.Microsecond)
+			value, err := client.ObserveExecutionTarget(ctx, paasv1.ObserveExecutionTargetRequest{Command: command})
+			fmt.Fprintf(&summary, "health=%s usage=%t error=%v", value.Health, value.Usage != nil, err)
+			if value.Usage != nil {
+				fmt.Fprintf(&summary, " cpu=%s memory=%s filesystems=%s", value.Usage.CPU.State, value.Usage.Memory.State, value.Usage.FilesystemsState)
+			}
+		}
+		diagnostic <- summary.String()
+	}()
+	t.Cleanup(func() {
+		if !t.Failed() {
+			return
+		}
+		select {
+		case summary := <-diagnostic:
+			t.Logf("startup snapshot: %s", summary)
+		default:
+		}
+		client, err := nodehttps.New(nodehttps.Config{Endpoint: "https://" + config.ListenAddress, Identity: identity,
+			ControllerID: controllerID, BindingRef: config.BindingRef, ExpectedFingerprint: fingerprint, Credentials: controller.credentials})
+		if err != nil {
+			return
+		}
+		defer client.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		command := observationCommand()
+		command.Deadline = time.Now().UTC().Add(2 * time.Second).Truncate(time.Microsecond)
+		value, err := client.ObserveExecutionTarget(ctx, paasv1.ObserveExecutionTargetRequest{Command: command})
+		t.Logf("node observation diagnostic: health=%s usage=%t error=%v", value.Health, value.Usage != nil, err)
+		if value.Usage != nil {
+			t.Logf("node measurement states: cpu=%s memory=%s filesystems=%s", value.Usage.CPU.State, value.Usage.Memory.State, value.Usage.FilesystemsState)
+		}
+	})
+	installArgs := []string{"node", "install", "--root", root, "--bundle", bundle, "--trust-key", releaseTrust, "--configuration", enrollmentFile}
+	// A role substitution fails before creating a root or touching services.
+	wrong := enrollment
+	wrong.Node.PrivateKeyFile = collectorKey
+	wrongBytes, _ := json.Marshal(wrong)
+	if err := os.WriteFile(enrollmentFile, wrongBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	nativeMX(t, installer, false, installArgs...)
+	if _, err := os.Lstat(root); !os.IsNotExist(err) {
+		t.Fatal("invalid enrollment created an installation root")
+	}
+	if err := os.WriteFile(enrollmentFile, enrollmentBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	installed := nativeMX(t, installer, true, installArgs...)
+	if installed.State != "READY" || !installed.Changed || installed.ExecutionTargetID != string(identity.ExecutionTargetID) ||
+		installed.ReleaseID != verified.Manifest.Release.ID {
+		t.Fatal("signed node install did not commit real readiness")
+	}
+	journalPath := filepath.Join(root, "state", "journal.json")
+	before, err := os.ReadFile(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstPID := nativeUnitProperty(t, nodeUnit, "MainPID")
+	collectorPID := nativeUnitProperty(t, collectorUnit, "MainPID")
+	if firstPID == "" || firstPID == "0" || collectorPID == "" || collectorPID == "0" || nativeUnitProperty(t, collectorUnit, "DynamicUser") != "yes" {
+		t.Fatal("native supervision or separate collector UID absent")
+	}
+	collectorProcess, err := os.Stat("/proc/" + collectorPID)
+	if err != nil || collectorProcess.Sys().(*syscall.Stat_t).Uid == 0 {
+		t.Fatal("collector is privileged")
+	}
+	uid := collectorProcess.Sys().(*syscall.Stat_t).Uid
+	denied := exec.Command("/usr/bin/test", "-r", filepath.Join(root, "secrets", "node", "node-key.pem"))
+	denied.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uid, Gid: uid, Groups: []uint32{}}}
+	if denied.Run() == nil {
+		t.Fatal("collector UID can read node credentials")
+	}
+	denied = exec.Command("/usr/bin/test", "-w", "/var/run/docker.sock")
+	denied.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uid, Gid: uid, Groups: []uint32{}}}
+	if denied.Run() == nil {
+		t.Fatal("collector UID can access Docker")
+	}
+	replayed := nativeMX(t, installer, true, installArgs...)
+	if replayed.Changed || nativeUnitProperty(t, nodeUnit, "MainPID") != firstPID {
+		t.Fatal("install replay replaced a running node")
+	}
+	nativeMX(t, installer, false, "platform", "status", "--root", root)
+	after, err := os.ReadFile(journalPath)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("install replay or platform directory misuse changed sealed state")
+	}
+	client, err := nodehttps.New(nodehttps.Config{Endpoint: "https://" + config.ListenAddress, Identity: identity,
+		ControllerID: controllerID, BindingRef: config.BindingRef, ExpectedFingerprint: fingerprint, Credentials: controller.credentials})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	first := awaitObservation(t, client, time.Time{}, paasv1.MeasurementAvailable)
+	if first.Capacity.MemoryBytes != int64(facts.MemoryTotalBytes) || first.Usage.CPU.Value == nil {
+		t.Fatal("signed node is not observing the real host")
+	}
+	storageUsage(t, first, config.StoragePath)
+	// No UI reader or mx poll is needed for the next source sample.
+	<-time.After(6 * time.Second)
+	second := awaitObservation(t, client, first.ObservedAt, paasv1.MeasurementAvailable)
+	if !second.Usage.ObservedAt.After(first.Usage.ObservedAt) {
+		t.Fatal("signed node observations did not advance without readers")
+	}
+	// A changed staged executable is rejected before process replacement.
+	staged := filepath.Join(root, "releases", installed.ReleaseID, "bin", "matrix-node-agent")
+	original, err := os.ReadFile(staged)
+	if err != nil || len(original) == 0 {
+		t.Fatal("read owned staged payload")
+	}
+	original[0] ^= 0xff
+	if os.WriteFile(staged+".tamper", original, 0o700) != nil || os.Rename(staged+".tamper", staged) != nil {
+		t.Fatal("replace gate-owned staged payload")
+	}
+	nativeMX(t, installer, false, "node", "start", "--root", root)
+	if nativeUnitProperty(t, nodeUnit, "MainPID") != firstPID {
+		t.Fatal("tampered release changed the running node")
+	}
+	original[0] ^= 0xff
+	if os.WriteFile(staged+".tamper", original, 0o700) != nil || os.Rename(staged+".tamper", staged) != nil {
+		t.Fatal("restore gate-owned staged payload")
+	}
+	clear(original)
+	// A same-name service with changed policy is not installation-owned merely
+	// because its process is still healthy. Reject it before replacement/stop.
+	memoryLimit := nativeUnitProperty(t, collectorUnit, "MemoryMax")
+	nativeSystemctl(t, "set-property", "--runtime", collectorUnit, "MemoryMax=67108864")
+	nativeMX(t, installer, false, "node", "start", "--root", root)
+	if nativeUnitProperty(t, nodeUnit, "MainPID") != firstPID || nativeUnitProperty(t, collectorUnit, "MainPID") != collectorPID {
+		t.Fatal("changed service ownership partially replaced or stopped the node")
+	}
+	nativeSystemctl(t, "set-property", "--runtime", collectorUnit, "MemoryMax="+memoryLimit)
+	// A stopped collector makes readiness false without affecting reservations
+	// or pretending the old source sample has a new timestamp.
+	nativeSystemctl(t, "stop", collectorUnit)
+	status := nativeMX(t, installer, true, "node", "status", "--root", root)
+	if status.State != "NOT_READY" {
+		t.Fatal("stopped collector reported ready")
+	}
+	started := nativeMX(t, installer, true, "node", "start", "--root", root)
+	if started.State != "READY" || nativeUnitProperty(t, nodeUnit, "MainPID") != firstPID {
+		t.Fatal("collector reconciliation replaced the healthy node")
+	}
+	// Supervision, not mx polling, restarts a crashed resident process.
+	nativeSystemctl(t, "kill", "--kill-who=main", "--signal=KILL", nodeUnit)
+	deadline := time.Now().Add(15 * time.Second)
+	for nativeUnitProperty(t, nodeUnit, "MainPID") == firstPID || nativeUnitProperty(t, nodeUnit, "MainPID") == "0" {
+		if time.Now().After(deadline) {
+			t.Fatal("systemd did not restart the owned node")
+		}
+		<-time.After(200 * time.Millisecond)
+	}
+	nativeMX(t, installer, true, "node", "verify", "--root", root)
+	// Simulate loss of both resident processes, retaining the sealed root.
+	for _, unit := range units {
+		nativeSystemctl(t, "stop", unit)
+	}
+	// Hold collector readiness while the real mx process is interrupted. The
+	// systemd-owned services must survive and a fresh mx must resume the exact
+	// durable command, not start a new operation or replace either process.
+	startContext, cancelStart := context.WithTimeout(context.Background(), 90*time.Second)
+	interrupted := exec.CommandContext(startContext, installer, "--format", "json", "node", "start", "--root", root)
+	var interruptionOutput bytes.Buffer
+	interrupted.Stdout, interrupted.Stderr = &interruptionOutput, &interruptionOutput
+	if err := interrupted.Start(); err != nil {
+		cancelStart()
+		t.Fatal("start interruptible node command")
+	}
+	done := make(chan struct{})
+	var interruptedErr error
+	go func() {
+		interruptedErr = interrupted.Wait()
+		close(done)
+	}()
+	defer func() {
+		cancelStart()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("interrupted mx did not exit")
+		}
+	}()
+	deadline = time.Now().Add(15 * time.Second)
+	for {
+		if pid := nativeUnitProperty(t, collectorUnit, "MainPID"); pid != "" && pid != "0" {
+			break
+		}
+		select {
+		case <-done:
+			t.Fatal("mx exited before starting the collector")
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("collector was not started before interruption")
+		}
+		<-time.After(100 * time.Millisecond)
+	}
+	for {
+		if pid := nativeUnitProperty(t, nodeUnit, "MainPID"); pid != "" && pid != "0" {
+			break
+		}
+		select {
+		case <-done:
+			if interruptionOutput.Len() <= 4096 {
+				t.Logf("interruption startup result: %s", interruptionOutput.Bytes())
+			}
+			t.Fatal("mx exited before starting the node")
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("node was not started before interruption")
+		}
+		<-time.After(100 * time.Millisecond)
+	}
+	// MainPID can be assigned before a Type=exec service has exec'd. Wait for
+	// both services before pausing collection, so this does not stall systemd's
+	// own startup job instead of exercising the installer's readiness phase.
+	nativeSystemctl(t, "kill", "--kill-who=main", "--signal=STOP", collectorUnit)
+	paused := true
+	defer func() {
+		if paused {
+			nativeSystemctl(t, "kill", "--kill-who=main", "--signal=CONT", collectorUnit)
+		}
+	}()
+	retainedNodePID, retainedCollectorPID := nativeUnitProperty(t, nodeUnit, "MainPID"), nativeUnitProperty(t, collectorUnit, "MainPID")
+	if err := interrupted.Process.Kill(); err != nil {
+		t.Fatal("mx completed before the interruption gate")
+	}
+	<-done
+	if interruptedErr == nil {
+		t.Fatal("interrupted mx reported successful completion")
+	}
+	pending := nativeMX(t, installer, true, "node", "status", "--root", root)
+	if (pending.State != "STARTING" && pending.State != "VERIFYING") || pending.CorrelationID == "" {
+		t.Fatal("interruption did not retain the in-flight command")
+	}
+	nativeSystemctl(t, "kill", "--kill-who=main", "--signal=CONT", collectorUnit)
+	paused = false
+	started = nativeMX(t, installer, true, "node", "start", "--root", root)
+	if started.State != "READY" || started.ReleaseID != installed.ReleaseID || started.CorrelationID != pending.CorrelationID ||
+		nativeUnitProperty(t, nodeUnit, "MainPID") != retainedNodePID || nativeUnitProperty(t, collectorUnit, "MainPID") != retainedCollectorPID {
+		t.Fatal("node replay lost its command, committed release or running processes")
+	}
+}
+
+type nativeMXResult struct {
+	State             string `json:"state"`
+	CorrelationID     string `json:"correlationId"`
+	ReleaseID         string `json:"releaseId"`
+	ExecutionTargetID string `json:"executionTargetId"`
+	Changed           bool   `json:"changed"`
+}
+
+func nativeMX(t *testing.T, binary string, success bool, arguments ...string) nativeMXResult {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, binary, append([]string{"--format", "json"}, arguments...)...)
+	output, err := command.CombinedOutput()
+	if (err == nil) != success || len(output) > 4096 {
+		t.Fatalf("native mx %s failed: %s / %v", arguments[1], output, err)
+	}
+	var envelope struct {
+		Kind   string         `json:"kind"`
+		Status string         `json:"status"`
+		Result nativeMXResult `json:"result"`
+	}
+	if json.Unmarshal(output, &envelope) != nil {
+		t.Fatal("native mx output is not a bounded contract")
+	}
+	if success && (envelope.Kind != "NodeCommandResult" || envelope.Status != "SUCCEEDED") {
+		t.Fatal("native mx did not return node success")
+	}
+	if !success && envelope.Status != "FAILED" {
+		t.Fatal("native mx did not report failure")
+	}
+	return envelope.Result
+}
+
+func nativeSystemctl(t *testing.T, arguments ...string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, "systemctl", arguments...)
+	if command.Run() != nil {
+		t.Error("fixture-owned systemd operation failed")
+	}
+}
+
+func nativeUnitProperty(t *testing.T, unit, property string) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, "systemctl", "show", "--value", "--property="+property, unit).Output()
+	if err != nil || len(output) > 4096 {
+		t.Fatal("cannot read fixture unit property")
+	}
+	return strings.TrimSpace(string(output))
+}
+
+func nativeCertificateFiles(t *testing.T, root, name string, certificate issuedCertificate) (string, string) {
+	t.Helper()
+	der, err := x509.MarshalPKCS8PrivateKey(certificate.pair.PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(der)
+	key := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+	defer clear(key)
+	certificatePath, keyPath := filepath.Join(root, name+".pem"), filepath.Join(root, name+"-key.pem")
+	if os.WriteFile(certificatePath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate.pair.Certificate[0]}), 0o600) != nil ||
+		os.WriteFile(keyPath, key, 0o600) != nil {
+		t.Fatal("write native gate certificate")
+	}
+	return certificatePath, keyPath
+}
 
 // This opt-in gate uses an actual Linux host, Docker/Compose and the built
 // node executable. Unit tests never start or modify a caller's Docker engine.

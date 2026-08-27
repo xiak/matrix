@@ -192,7 +192,7 @@ func (backend *Backend) status(
 			returnErr = fault(cli.FaultInternal, "INSTALLATION_LOCK_RELEASE_FAILED")
 		}
 	}()
-	state, err := session.Read()
+	state, err := readPlatformJournal(session)
 	if err != nil {
 		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_STATE_INVALID")
 	}
@@ -246,7 +246,7 @@ func (backend *Backend) operation(
 			returnErr = fault(cli.FaultInternal, "INSTALLATION_LOCK_RELEASE_FAILED")
 		}
 	}()
-	state, err := session.Read()
+	state, err := readPlatformJournal(session)
 	if err != nil {
 		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_STATE_INVALID")
 	}
@@ -432,6 +432,9 @@ func (backend *Backend) install(
 	if err != nil {
 		return cli.Result{}, fault(cli.FaultVerification, "RELEASE_BUNDLE_INVALID")
 	}
+	if verified.Manifest.Kind != release.ManifestKind {
+		return cli.Result{}, fault(cli.FaultVerification, "RELEASE_PROFILE_UNSUPPORTED")
+	}
 	if verified.Manifest.TopologyDigest != topology.ContractDigest() {
 		return cli.Result{}, fault(cli.FaultVerification, "TOPOLOGY_CONTRACT_UNSUPPORTED")
 	}
@@ -457,7 +460,7 @@ func (backend *Backend) install(
 	}
 	var state lifecycle.Journal
 	if initialized {
-		state, err = session.Read()
+		state, err = readPlatformJournal(session)
 		if err != nil {
 			return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_STATE_INVALID")
 		}
@@ -559,7 +562,7 @@ func (backend *Backend) upgrade(
 			returnErr = fault(cli.FaultInternal, "INSTALLATION_LOCK_RELEASE_FAILED")
 		}
 	}()
-	state, err := session.Read()
+	state, err := readPlatformJournal(session)
 	if err != nil {
 		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_STATE_INVALID")
 	}
@@ -587,6 +590,9 @@ func (backend *Backend) upgrade(
 	targetBundle, err := release.VerifyDirectory(request.Bundle, trustBytes)
 	if err != nil {
 		return cli.Result{}, fault(cli.FaultVerification, "RELEASE_BUNDLE_INVALID")
+	}
+	if targetBundle.Manifest.Kind != release.ManifestKind {
+		return cli.Result{}, fault(cli.FaultVerification, "RELEASE_PROFILE_UNSUPPORTED")
 	}
 	if targetBundle.Manifest.TopologyDigest != topology.ContractDigest() {
 		return cli.Result{}, fault(cli.FaultVerification, "TOPOLOGY_CONTRACT_UNSUPPORTED")
@@ -688,7 +694,7 @@ func (backend *Backend) rollback(
 			returnErr = fault(cli.FaultInternal, "INSTALLATION_LOCK_RELEASE_FAILED")
 		}
 	}()
-	state, err := session.Read()
+	state, err := readPlatformJournal(session)
 	if err != nil {
 		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_STATE_INVALID")
 	}
@@ -804,7 +810,7 @@ func (backend *Backend) recover(
 			returnErr = fault(cli.FaultInternal, "INSTALLATION_LOCK_RELEASE_FAILED")
 		}
 	}()
-	state, err := session.Read()
+	state, err := readPlatformJournal(session)
 	if err != nil {
 		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_STATE_INVALID")
 	}
@@ -848,6 +854,9 @@ func (backend *Backend) recover(
 	)
 	if err != nil || targetBundle.Manifest.Database != source.Database {
 		return cli.Result{}, fault(cli.FaultVerification, "RECOVERY_RELEASE_INVALID")
+	}
+	if currentBundle.Manifest.Database != targetBundle.Manifest.Database {
+		return cli.Result{}, fault(cli.FaultPrecondition, "RECOVERY_SCHEMA_INCOMPATIBLE")
 	}
 
 	commandID := ""
@@ -903,6 +912,14 @@ func (backend *Backend) recover(
 	)
 }
 
+func readPlatformJournal(session *journal.Session) (lifecycle.Journal, error) {
+	state, err := session.Read()
+	if err != nil || state.Node != nil {
+		return lifecycle.Journal{}, errors.New("installation root is not a sealed platform")
+	}
+	return state, nil
+}
+
 func authenticateJournalRelease(
 	root string,
 	releaseID string,
@@ -913,7 +930,7 @@ func authenticateJournalRelease(
 		root, filepath.FromSlash(layout.ReleaseDirectory(releaseID)),
 	)
 	bundle, err := release.VerifyDirectory(releaseRoot, trustBytes)
-	if err != nil || bundle.Manifest.Release.ID != releaseID ||
+	if err != nil || bundle.Manifest.Kind != release.ManifestKind || bundle.Manifest.Release.ID != releaseID ||
 		bundle.ManifestSHA256 != digest ||
 		bundle.Manifest.TopologyDigest != topology.ContractDigest() {
 		return release.VerifiedBundle{}, errors.New("committed release authentication failed")
@@ -934,7 +951,7 @@ func (backend *Backend) driveReleaseChange(
 		return cli.Result{}, fault(cli.FaultInternal, "INSTALLATION_DRIVER_INVALID")
 	}
 	for {
-		state, err := session.Read()
+		state, err := readPlatformJournal(session)
 		if err != nil {
 			return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_STATE_INVALID")
 		}
@@ -985,7 +1002,7 @@ func (backend *Backend) driveReleaseChange(
 			continue
 		}
 
-		next, ok := lifecycle.NextPhase(action, execution.Phase)
+		next, ok := lifecycle.NextPhase(state)
 		if !ok {
 			return cli.Result{}, fault(cli.FaultInternal, "INSTALLATION_PHASE_INVALID")
 		}

@@ -182,6 +182,87 @@ func TestAuthenticatedRequestsRejectInvalidInputBeforeReadingTheHost(t *testing.
 	}
 }
 
+func TestSelfReadinessRequiresFreshCollectorButCannotReadControllerSurface(t *testing.T) {
+	authority := newAuthority(t)
+	nodeURI, _ := nodev1.NodeURI(nodeIdentity)
+	node := authority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false, x509.ExtKeyUsageClientAuth)
+	var available atomic.Bool
+	var calls atomic.Int32
+	value := observedTarget()
+	value.Usage.CPU = paasv1.CPUUsage{State: paasv1.MeasurementAvailable,
+		Value: &paasv1.CPUUsageValue{LogicalCPUs: 2, WindowMillis: 5000}}
+	value.Usage.Memory = paasv1.MemoryUsage{State: paasv1.MeasurementAvailable,
+		Value: &paasv1.MemoryUsageValue{TotalBytes: 8000, AvailableBytes: 6000, UsedBytes: 2000}}
+	value.Usage.FilesystemsState = paasv1.MeasurementAvailable
+	value.Usage.Filesystems = []paasv1.FilesystemUsage{{Device: "disk-a", MountPoint: "/", FilesystemType: "ext4",
+		State: paasv1.MeasurementAvailable, Value: &paasv1.FilesystemUsageValue{
+			TotalBytes: 10000, UsedBytes: 1000, AvailableBytes: 9000, InodesState: paasv1.MeasurementUnsupported}}}
+	if err := paasv1.ValidateExecutionTargetObservation(value); err != nil {
+		t.Fatal(err)
+	}
+	server := startNode(t, node, sourceFunc(func(context.Context) (paasv1.ExecutionTargetObservation, error) {
+		calls.Add(1)
+		if available.Load() {
+			return value, nil
+		}
+		return observedTarget(), nil
+	}), 2)
+	client, err := nodehttps.NewReadinessClient(server.URL, nodeIdentity, value.IdentityFingerprint, node.credentials)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(client.Close)
+	if _, err := client.Verify(context.Background()); err == nil {
+		t.Fatal("missing collector was reported as a ready installation")
+	}
+	available.Store(true)
+	first, err := client.Verify(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := client.Verify(context.Background())
+	if err != nil || first != second || first.ObservedAt != value.ObservedAt || first.ValidUntil != value.Usage.ValidUntil {
+		t.Fatalf("readiness changed observation freshness: %#v, %#v, %v", first, second, err)
+	}
+	raw := authority.rawClient(&node.pair)
+	defer raw.CloseIdleConnections()
+	before := calls.Load()
+	response, err := raw.Post(server.URL+nodev1.ObservationPath, "application/json", bytes.NewReader(requestBody(t, observationCommand())))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusForbidden || calls.Load() != before {
+		t.Fatal("self readiness credential gained controller observation authority")
+	}
+	for _, suffix := range []string{"?", "?command=execute", "/extra"} {
+		response, err := raw.Get(server.URL + nodev1.ReadinessPath + suffix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode < 400 || calls.Load() != before {
+			t.Fatal("request-shaped readiness was admitted")
+		}
+	}
+	otherURI, _ := nodev1.NodeURI(nodev1.Identity{InstallationID: nodeIdentity.InstallationID, ExecutionTargetID: "target-b"})
+	other := authority.issue(t, otherURI, x509.ExtKeyUsageClientAuth, false)
+	wrong := authority.rawClient(&other.pair)
+	defer wrong.CloseIdleConnections()
+	response, err = wrong.Get(server.URL + nodev1.ReadinessPath)
+	if response != nil {
+		response.Body.Close()
+	}
+	if err == nil || calls.Load() != before {
+		t.Fatal("another node identity reached self readiness")
+	}
+	controllerURI, _ := nodev1.ControllerURI(nodeIdentity.InstallationID, controllerID)
+	controller := authority.issue(t, controllerURI, x509.ExtKeyUsageClientAuth, false)
+	if _, err := nodehttps.NewReadinessClient(server.URL, nodeIdentity, value.IdentityFingerprint, controller.credentials); err == nil {
+		t.Fatal("readiness accepts a controller credential")
+	}
+}
+
 func TestNodeBoundsConcurrencyAndNeverSerializesProviderErrors(t *testing.T) {
 	authority := newAuthority(t)
 	nodeURI, _ := nodev1.NodeURI(nodeIdentity)
@@ -287,6 +368,40 @@ func TestClientRejectsUncorrelatedResponsesAndRedirects(t *testing.T) {
 			}
 			if !errors.As(err, &fault) || fault.Normalized.Code != want || strings.Contains(err.Error(), "privateKey") {
 				t.Fatalf("untrusted response accepted or leaked: %v", err)
+			}
+		})
+	}
+}
+
+func TestEnrollmentAuthenticatesRolesAddressesAndMutualTrustBeforeEffects(t *testing.T) {
+	authority := newAuthority(t)
+	nodeURI, _ := nodev1.NodeURI(nodeIdentity)
+	collectorURI, _ := nodev1.CollectorURI(nodeIdentity)
+	node := authority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false, x509.ExtKeyUsageClientAuth)
+	collector := authority.issue(t, collectorURI, x509.ExtKeyUsageServerAuth, false)
+	if err := nodehttps.ValidateEnrollment(node.credentials, collector.credentials, nodeIdentity, "127.0.0.1:16443", "127.0.0.1:19100"); err != nil {
+		t.Fatal("valid mutually trusted enrollment was rejected")
+	}
+	for _, test := range []struct {
+		name                          string
+		node, collector               nodehttps.Credentials
+		nodeAddress, collectorAddress string
+	}{
+		{"untrusted collector", node.credentials, newAuthority(t).issue(t, collectorURI, x509.ExtKeyUsageServerAuth, false).credentials, "127.0.0.1:16443", "127.0.0.1:19100"},
+		{"untrusted node", newAuthority(t).issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false, x509.ExtKeyUsageClientAuth).credentials, collector.credentials, "127.0.0.1:16443", "127.0.0.1:19100"},
+		{"node lacks client role", authority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false).credentials, collector.credentials, "127.0.0.1:16443", "127.0.0.1:19100"},
+		{"collector lacks server role", node.credentials, authority.issue(t, collectorURI, x509.ExtKeyUsageClientAuth, false).credentials, "127.0.0.1:16443", "127.0.0.1:19100"},
+		{"collector cannot act as node", collector.credentials, collector.credentials, "127.0.0.1:16443", "127.0.0.1:19100"},
+		{"node cannot act as collector", node.credentials, node.credentials, "127.0.0.1:16443", "127.0.0.1:19100"},
+		{"expired node", authority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, true, x509.ExtKeyUsageClientAuth).credentials, collector.credentials, "127.0.0.1:16443", "127.0.0.1:19100"},
+		{"expired collector", node.credentials, authority.issue(t, collectorURI, x509.ExtKeyUsageServerAuth, true).credentials, "127.0.0.1:16443", "127.0.0.1:19100"},
+		{"node address not in certificate", node.credentials, collector.credentials, "127.0.0.2:16443", "127.0.0.1:19100"},
+		{"collector address not in certificate", node.credentials, collector.credentials, "127.0.0.1:16443", "127.0.0.2:19100"},
+		{"DNS listener", node.credentials, collector.credentials, "localhost:16443", "127.0.0.1:19100"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := nodehttps.ValidateEnrollment(test.node, test.collector, nodeIdentity, test.nodeAddress, test.collectorAddress); err == nil {
+				t.Fatal("incompatible enrollment was admitted")
 			}
 		})
 	}

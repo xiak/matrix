@@ -348,7 +348,11 @@ func TestInstallationKeepsGoOnlyClosedLifecycleBoundaries(t *testing.T) {
 			if strings.Contains(strings.Split(imported, "/")[0], ".") &&
 				!strings.HasPrefix(imported, modulePath) {
 				if _, allowed := allowedExternal[imported]; !allowed {
-					t.Errorf("%s: installation has unapproved external dependency %q", relative, imported)
+					nativeSupervisor := strings.HasPrefix(relative, "app/service/installation/internal/localmachine/") &&
+						(imported == "github.com/coreos/go-systemd/v22/dbus" || imported == "github.com/godbus/dbus/v5")
+					if !nativeSupervisor {
+						t.Errorf("%s: installation has unapproved external dependency %q", relative, imported)
+					}
 				}
 			}
 			if imported == "os" {

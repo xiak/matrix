@@ -32,12 +32,13 @@ const (
 )
 
 type invocationError struct {
-	action lifecycle.Action
-	usage  bool
-	err    error
+	subject Subject
+	action  lifecycle.Action
+	usage   bool
+	err     error
 }
 
-func (value *invocationError) Error() string { return "platform command failed" }
+func (value *invocationError) Error() string { return "Matrix command failed" }
 func (value *invocationError) Unwrap() error { return value.err }
 
 type commandOptions struct {
@@ -46,6 +47,7 @@ type commandOptions struct {
 	trustKey      string
 	backupID      string
 	supportOutput string
+	configuration string
 }
 
 func NewCommand(streams Streams, backend Backend) (*cobra.Command, error) {
@@ -53,12 +55,12 @@ func NewCommand(streams Streams, backend Backend) (*cobra.Command, error) {
 		return nil, err
 	}
 	if backend == nil {
-		return nil, errors.New("platform CLI backend is required")
+		return nil, errors.New("Matrix CLI backend is required")
 	}
 	format := string(formatHuman)
 	root := &cobra.Command{
 		Use:           "mx",
-		Short:         "Operate the Matrix platform",
+		Short:         "Operate the Matrix platform and its nodes",
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,
 		SilenceUsage:  true,
@@ -71,43 +73,46 @@ func NewCommand(streams Streams, backend Backend) (*cobra.Command, error) {
 	root.SetErr(streams.ErrOut)
 	root.PersistentFlags().StringVar(&format, "format", string(formatHuman), "output format: human or json")
 	root.SetFlagErrorFunc(func(command *cobra.Command, err error) error {
-		return &invocationError{action: actionForCommand(command), usage: true, err: err}
+		return &invocationError{subject: subjectForCommand(command), action: actionForCommand(command), usage: true, err: err}
 	})
 
-	platform := &cobra.Command{
-		Use:   "platform",
-		Short: "Install and operate the private Matrix platform",
-		Args:  cobra.NoArgs,
-		PersistentPreRunE: func(command *cobra.Command, _ []string) error {
-			if outputFormat(format) != formatHuman && outputFormat(format) != formatJSON {
-				return &invocationError{
-					action: actionForCommand(command), usage: true,
-					err: errors.New("output format must be human or json"),
-				}
+	root.PersistentPreRunE = func(command *cobra.Command, _ []string) error {
+		if outputFormat(format) != formatHuman && outputFormat(format) != formatJSON {
+			return &invocationError{
+				subject: subjectForCommand(command), action: actionForCommand(command), usage: true,
+				err: errors.New("output format must be human or json"),
 			}
-			return nil
-		},
+		}
+		return nil
+	}
+	platform := &cobra.Command{
+		Use: "platform", Short: "Install and operate the private Matrix platform", Args: cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
 			return command.Help()
 		},
 	}
 	root.AddCommand(platform)
-	platform.AddCommand(
-		newPlatformCommand(streams.Out, backend, lifecycle.ActionInstall, &format),
-		newPlatformCommand(streams.Out, backend, lifecycle.ActionVerify, &format),
-		newPlatformCommand(streams.Out, backend, lifecycle.ActionStatus, &format),
-		newPlatformCommand(streams.Out, backend, lifecycle.ActionBackup, &format),
-		newPlatformCommand(streams.Out, backend, lifecycle.ActionUpgrade, &format),
-		newPlatformCommand(streams.Out, backend, lifecycle.ActionRollback, &format),
-		newPlatformCommand(streams.Out, backend, lifecycle.ActionRecover, &format),
-		newPlatformCommand(streams.Out, backend, lifecycle.ActionSupport, &format),
-	)
+	for _, action := range []lifecycle.Action{lifecycle.ActionInstall, lifecycle.ActionVerify,
+		lifecycle.ActionStatus, lifecycle.ActionBackup, lifecycle.ActionUpgrade,
+		lifecycle.ActionRollback, lifecycle.ActionRecover, lifecycle.ActionSupport} {
+		platform.AddCommand(newLifecycleCommand(streams.Out, backend, SubjectPlatform, action, &format))
+	}
+	node := &cobra.Command{
+		Use: "node", Short: "Enroll and supervise an existing Linux execution node", Args: cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error { return command.Help() },
+	}
+	root.AddCommand(node)
+	for _, action := range []lifecycle.Action{lifecycle.ActionInstall, lifecycle.ActionStart,
+		lifecycle.ActionVerify, lifecycle.ActionStatus} {
+		node.AddCommand(newLifecycleCommand(streams.Out, backend, SubjectNode, action, &format))
+	}
 	return root, nil
 }
 
-func newPlatformCommand(
+func newLifecycleCommand(
 	out io.Writer,
 	backend Backend,
+	subject Subject,
 	action lifecycle.Action,
 	format *string,
 ) *cobra.Command {
@@ -115,39 +120,43 @@ func newPlatformCommand(
 	name := strings.ToLower(string(action))
 	command := &cobra.Command{
 		Use:   name,
-		Short: commandDescription(action),
+		Short: commandDescription(subject, action),
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
-			if err := validateCommandFlags(action, options); err != nil {
-				return &invocationError{action: action, usage: true, err: err}
+			if err := validateCommandFlags(subject, action, options); err != nil {
+				return &invocationError{subject: subject, action: action, usage: true, err: err}
 			}
 			request := Request{
-				Action: action, Root: options.root, Bundle: options.bundle, TrustKey: options.trustKey,
+				Subject: subject, Action: action, Root: options.root, Bundle: options.bundle, TrustKey: options.trustKey,
 				BackupID: options.backupID, SupportOutput: options.supportOutput,
+				Configuration: options.configuration,
 			}
 			result, err := backend.Run(command.Context(), request)
 			if err != nil {
-				return &invocationError{action: action, err: err}
+				return &invocationError{subject: subject, action: action, err: err}
 			}
 			if err := validateResult(result); err != nil {
-				return &invocationError{action: action, err: err}
+				return &invocationError{subject: subject, action: action, err: err}
 			}
-			if err := writeSuccess(out, outputFormat(*format), action, result); err != nil {
-				return &invocationError{action: action, err: err}
+			if err := writeSuccess(out, outputFormat(*format), subject, action, result); err != nil {
+				return &invocationError{subject: subject, action: action, err: err}
 			}
 			return nil
 		},
 	}
-	bindCommandFlags(command.Flags(), action, options)
+	bindCommandFlags(command.Flags(), subject, action, options)
 	return command
 }
 
-func bindCommandFlags(flags *pflag.FlagSet, action lifecycle.Action, options *commandOptions) {
+func bindCommandFlags(flags *pflag.FlagSet, subject Subject, action lifecycle.Action, options *commandOptions) {
 	flags.StringVar(&options.root, "root", "", "absolute Matrix installation root")
 	switch action {
 	case lifecycle.ActionInstall:
 		flags.StringVar(&options.bundle, "bundle", "", "verified offline release bundle directory")
 		flags.StringVar(&options.trustKey, "trust-key", "", "out-of-band release trust root")
+		if subject == SubjectNode {
+			flags.StringVar(&options.configuration, "configuration", "", "protected node enrollment file")
+		}
 	case lifecycle.ActionUpgrade:
 		flags.StringVar(&options.bundle, "bundle", "", "verified offline release bundle directory")
 	case lifecycle.ActionRecover:
@@ -157,7 +166,7 @@ func bindCommandFlags(flags *pflag.FlagSet, action lifecycle.Action, options *co
 	}
 }
 
-func validateCommandFlags(action lifecycle.Action, options *commandOptions) error {
+func validateCommandFlags(subject Subject, action lifecycle.Action, options *commandOptions) error {
 	if options == nil || strings.TrimSpace(options.root) == "" {
 		return errors.New("installation root is required")
 	}
@@ -165,6 +174,9 @@ func validateCommandFlags(action lifecycle.Action, options *commandOptions) erro
 	case lifecycle.ActionInstall:
 		if strings.TrimSpace(options.bundle) == "" || strings.TrimSpace(options.trustKey) == "" {
 			return errors.New("offline bundle and trust key are required")
+		}
+		if subject == SubjectNode && strings.TrimSpace(options.configuration) == "" {
+			return errors.New("protected node enrollment is required")
 		}
 	case lifecycle.ActionUpgrade:
 		if strings.TrimSpace(options.bundle) == "" {
@@ -182,7 +194,19 @@ func validateCommandFlags(action lifecycle.Action, options *commandOptions) erro
 	return nil
 }
 
-func commandDescription(action lifecycle.Action) string {
+func commandDescription(subject Subject, action lifecycle.Action) string {
+	if subject == SubjectNode {
+		switch action {
+		case lifecycle.ActionInstall:
+			return "Install an authenticated offline node release"
+		case lifecycle.ActionStart:
+			return "Start or reconcile the sealed node and collector services"
+		case lifecycle.ActionVerify:
+			return "Verify the sealed node and fresh collector observations"
+		case lifecycle.ActionStatus:
+			return "Read node supervision and readiness status"
+		}
+	}
 	switch action {
 	case lifecycle.ActionInstall:
 		return "Install an authenticated offline Matrix release"
@@ -212,6 +236,8 @@ func actionForCommand(command *cobra.Command) lifecycle.Action {
 	switch command.Name() {
 	case "install":
 		return lifecycle.ActionInstall
+	case "start":
+		return lifecycle.ActionStart
 	case "verify":
 		return lifecycle.ActionVerify
 	case "status":
@@ -231,6 +257,18 @@ func actionForCommand(command *cobra.Command) lifecycle.Action {
 	}
 }
 
+func subjectForCommand(command *cobra.Command) Subject {
+	for current := command; current != nil; current = current.Parent() {
+		if current.Name() == "node" {
+			return SubjectNode
+		}
+		if current.Name() == "platform" {
+			return SubjectPlatform
+		}
+	}
+	return SubjectPlatform
+}
+
 // Run is the process boundary used by cmd/mx. Subcommands return errors; this
 // boundary alone renders a normalized failure and selects the stable exit
 // class.
@@ -246,7 +284,7 @@ func Run(ctx context.Context, arguments []string, streams Streams, backend Backe
 		return ExitInternal
 	}
 	command.SetArgs(arguments)
-	err = command.ExecuteContext(ctx)
+	executed, err := command.ExecuteContextC(ctx)
 	if err == nil {
 		return ExitSuccess
 	}
@@ -255,7 +293,12 @@ func Run(ctx context.Context, arguments []string, streams Streams, backend Backe
 		format = string(formatHuman)
 	}
 	action, fault := normalizeFailure(err, ctx)
-	if writeErr := writeFailure(streams.ErrOut, outputFormat(format), action, fault); writeErr != nil {
+	subject := subjectForCommand(executed)
+	var invocation *invocationError
+	if errors.As(err, &invocation) && invocation.subject != "" {
+		subject = invocation.subject
+	}
+	if writeErr := writeFailure(streams.ErrOut, outputFormat(format), subject, action, fault); writeErr != nil {
 		return ExitInternal
 	}
 	return exitCode(fault.Class)
@@ -330,10 +373,14 @@ type failureBody struct {
 	Message string     `json:"message"`
 }
 
-func writeSuccess(out io.Writer, format outputFormat, action lifecycle.Action, result Result) error {
+func writeSuccess(out io.Writer, format outputFormat, subject Subject, action lifecycle.Action, result Result) error {
+	kind := "PlatformCommandResult"
+	if subject == SubjectNode {
+		kind = "NodeCommandResult"
+	}
 	if format == formatJSON {
 		return writeJSONLine(out, successEnvelope{
-			APIVersion: OutputAPIVersion, Kind: "PlatformCommandResult", Action: action,
+			APIVersion: OutputAPIVersion, Kind: kind, Action: action,
 			Status: "SUCCEEDED", Result: result,
 		})
 	}
@@ -344,17 +391,25 @@ func writeSuccess(out io.Writer, format outputFormat, action lifecycle.Action, r
 	if err == nil && result.BackupID != "" {
 		_, err = fmt.Fprintf(out, " backup=%s", result.BackupID)
 	}
+	if err == nil && result.ExecutionTargetID != "" {
+		_, err = fmt.Fprintf(out, " target=%s", result.ExecutionTargetID)
+	}
 	if err == nil {
 		_, err = io.WriteString(out, "\n")
 	}
 	return err
 }
 
-func writeFailure(out io.Writer, format outputFormat, action lifecycle.Action, fault *Fault) error {
+func writeFailure(out io.Writer, format outputFormat, subject Subject, action lifecycle.Action, fault *Fault) error {
 	message := faultMessage(fault.Class)
+	kind := "PlatformCommandFailure"
+	if subject == SubjectNode {
+		kind = "NodeCommandFailure"
+		message = strings.ReplaceAll(strings.ReplaceAll(message, "Platform", "Node"), "platform", "node")
+	}
 	if format == formatJSON {
 		return writeJSONLine(out, failureEnvelope{
-			APIVersion: OutputAPIVersion, Kind: "PlatformCommandFailure", Action: action,
+			APIVersion: OutputAPIVersion, Kind: kind, Action: action,
 			Status: "FAILED", Error: failureBody{Class: fault.Class, Code: fault.Code, Message: message},
 		})
 	}

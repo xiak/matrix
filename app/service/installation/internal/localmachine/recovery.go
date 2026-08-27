@@ -626,6 +626,11 @@ func authenticateRecoveryPlan(
 		return platformcommand.InstallPlan{}, platformcommand.InstallPlan{}, backupManifest{},
 			errors.Join(platformcommand.ErrEffectVerification, err)
 	}
+	if currentBundle.Manifest.Database != targetBundle.Manifest.Database {
+		return platformcommand.InstallPlan{}, platformcommand.InstallPlan{}, backupManifest{},
+			errors.Join(platformcommand.ErrEffectPrecondition,
+				errors.New("cross-profile recovery is not admitted"))
+	}
 	current := plan.Current
 	current.Bundle = currentBundle
 	current.TrustBytes = append([]byte(nil), plan.Current.TrustBytes...)

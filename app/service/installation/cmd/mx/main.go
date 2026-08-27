@@ -8,12 +8,60 @@ import (
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	composeadapter "github.com/xiak/matrix/app/adapter/apphosting/compose"
+	nodehttps "github.com/xiak/matrix/app/adapter/node/https"
 	"github.com/xiak/matrix/app/service/installation/internal/cli"
 	"github.com/xiak/matrix/app/service/installation/internal/localmachine"
+	"github.com/xiak/matrix/app/service/installation/internal/nodecommand"
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
+	"github.com/xiak/matrix/app/service/installation/nodeconfig"
 )
 
 type composeRecoveryProjectInspector struct{}
+
+type nodeInstallationVerifier struct{}
+
+func (nodeInstallationVerifier) Validate(config nodeconfig.Configuration, material nodecommand.Credentials) error {
+	node, err := nodehttps.NewCredentials(material.Certificate, material.PrivateKey, material.Trust)
+	if err != nil {
+		return err
+	}
+	collector, err := nodehttps.NewCredentials(material.CollectorCertificate, material.CollectorPrivateKey, material.Trust)
+	if err != nil {
+		return err
+	}
+	address, err := nodeconfig.CollectorListenAddress(config)
+	if err != nil {
+		return err
+	}
+	return nodehttps.ValidateEnrollment(node, collector, config.Identity, config.ListenAddress, address)
+}
+
+func (nodeInstallationVerifier) Verify(ctx context.Context, config nodeconfig.Configuration, material nodecommand.Credentials) error {
+	credentials, err := nodehttps.NewCredentials(material.Certificate, material.PrivateKey, material.Trust)
+	if err != nil {
+		return err
+	}
+	client, err := nodehttps.NewReadinessClient("https://"+config.ListenAddress, config.Identity, config.ExpectedFingerprint, credentials)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	_, err = client.Verify(ctx)
+	return err
+}
+
+type lifecycleCommands struct{ platform, node cli.Backend }
+
+func (commands lifecycleCommands) Run(ctx context.Context, request cli.Request) (cli.Result, error) {
+	if request.Subject == cli.SubjectNode {
+		return commands.node.Run(ctx, request)
+	}
+	if request.Subject == cli.SubjectPlatform {
+		return commands.platform.Run(ctx, request)
+	}
+	fault, _ := cli.NewFault(cli.FaultInvalidArgument, "COMMAND_SUBJECT_INVALID")
+	return cli.Result{}, fault
+}
 
 func (composeRecoveryProjectInspector) InspectRecoveryProject(
 	bindingRoot string,
@@ -50,7 +98,7 @@ func (composeRecoveryProjectInspector) InspectRecoveryProject(
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 
-	backend, err := platformcommand.NewBackend(
+	platform, err := platformcommand.NewBackend(
 		localmachine.NewEffects(composeRecoveryProjectInspector{}),
 	)
 	if err != nil {
@@ -58,9 +106,15 @@ func main() {
 		_, _ = os.Stderr.WriteString("Matrix CLI initialization failed\n")
 		os.Exit(cli.ExitInternal)
 	}
+	node, err := nodecommand.NewBackend(localmachine.NewNodeEffects(nodeInstallationVerifier{}))
+	if err != nil {
+		stop()
+		_, _ = os.Stderr.WriteString("Matrix CLI initialization failed\n")
+		os.Exit(cli.ExitInternal)
+	}
 	exitCode := cli.Run(ctx, os.Args[1:], cli.Streams{
 		In: os.Stdin, Out: os.Stdout, ErrOut: os.Stderr,
-	}, backend)
+	}, lifecycleCommands{platform: platform, node: node})
 	stop()
 	os.Exit(exitCode)
 }

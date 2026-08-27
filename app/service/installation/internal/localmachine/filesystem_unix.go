@@ -54,6 +54,18 @@ func verifyManagedPermissions(path string, directory bool) error {
 	return nil
 }
 
+func verifyNodeExecutableOwner(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || (info.Mode().Perm() != 0o555 && info.Mode().Perm() != 0o600) {
+		return errors.New("node executable permissions are unsafe")
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || uint64(stat.Uid) != uint64(unix.Geteuid()) {
+		return errors.New("node executable owner is unsafe")
+	}
+	return nil
+}
+
 func syncManagedDirectory(path string) error {
 	directory, err := os.Open(path)
 	if err != nil {

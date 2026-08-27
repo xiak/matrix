@@ -11,6 +11,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
 )
 
 const (
@@ -65,20 +67,30 @@ func DecodeCanonical(content []byte) (Manifest, error) {
 func ValidateManifest(manifest Manifest) error {
 	var problems []error
 	if (manifest.APIVersion != ManifestAPIVersion && manifest.APIVersion != LegacyManifestAPIVersion) ||
-		manifest.Kind != ManifestKind {
+		(manifest.Kind != ManifestKind && manifest.Kind != NodeManifestKind) {
 		problems = append(problems, errors.New("release type is unsupported"))
 	}
-	if (manifest.APIVersion == LegacyManifestAPIVersion) != (manifest.Database.SchemaVersion != 0) {
-		problems = append(problems, errors.New("release database profile differs from its manifest version"))
+	if manifest.Kind == NodeManifestKind {
+		if manifest.APIVersion != ManifestAPIVersion || manifest.Database != (DatabaseProfile{}) ||
+			manifest.Node == nil || manifest.Node.ProtocolAPIVersion != nodev1.APIVersion ||
+			manifest.Node.RuntimeRevision == 0 || manifest.Node.RuntimeRevision > 9007199254740991 ||
+			!versionPattern.MatchString("v"+manifest.Node.CollectorVersion) || len(manifest.Images) != 0 ||
+			manifest.Host.MinimumSystemd < 247 || manifest.Host.MinimumSystemd > 9999 {
+			problems = append(problems, errors.New("node release profile is invalid"))
+		}
+	} else {
+		if (manifest.APIVersion == LegacyManifestAPIVersion) != (manifest.Database.SchemaVersion != 0) ||
+			manifest.Node != nil || manifest.Host.MinimumSystemd != 0 {
+			problems = append(problems, errors.New("release database profile differs from its manifest version"))
+		}
+		problems = append(problems, ValidateDatabaseProfile(manifest.Database), validateImages(manifest.Images, manifest.Files))
 	}
 	problems = append(problems,
 		validateReleaseIdentity(manifest.Release),
 		validateSigner(manifest.Signer),
 		validateHost(manifest.Host),
-		ValidateDatabaseProfile(manifest.Database),
 		validateDigest("topologyDigest", manifest.TopologyDigest),
-		validateFiles(manifest.Files),
-		validateImages(manifest.Images, manifest.Files),
+		validateFiles(manifest.Files, manifest.Kind == NodeManifestKind),
 	)
 	if manifest.MinimumFreeBytes < minimumFreeBytes || manifest.MinimumFreeBytes > maximumFreeBytes {
 		problems = append(problems, errors.New("minimum free space is outside the supported range"))
@@ -258,8 +270,12 @@ func ValidateDatabaseProfile(value DatabaseProfile) error {
 	return nil
 }
 
-func validateFiles(files []File) error {
-	if len(files) < 7 || len(files) > 128 {
+func validateFiles(files []File, node bool) error {
+	minimum := 7
+	if node {
+		minimum = 5
+	}
+	if len(files) < minimum || len(files) > 128 {
 		return errors.New("release payload inventory size is invalid")
 	}
 	seen := make(map[string]struct{}, len(files))
@@ -279,12 +295,12 @@ func validateFiles(files []File) error {
 			return errors.New("release payload metadata is invalid")
 		}
 		switch {
-		case file.Path == "bin/mx":
+		case file.Path == "bin/mx" || (node && (file.Path == "bin/matrix-node-agent" || file.Path == "bin/node-exporter")):
 			if file.MediaType != mediaExecutable || !file.Executable {
 				return errors.New("release mx payload is invalid")
 			}
-			foundExecutable = true
-		case strings.HasPrefix(file.Path, "images/") && strings.HasSuffix(file.Path, ".tar"):
+			foundExecutable = foundExecutable || file.Path == "bin/mx"
+		case !node && strings.HasPrefix(file.Path, "images/") && strings.HasSuffix(file.Path, ".tar"):
 			if file.MediaType != mediaDockerArchive || file.Executable {
 				return errors.New("release image archive payload is invalid")
 			}
@@ -302,6 +318,13 @@ func validateFiles(files []File) error {
 	}
 	if !foundExecutable {
 		return errors.New("release mx payload is missing")
+	}
+	if node {
+		for _, required := range []string{"bin/matrix-node-agent", "bin/node-exporter", "licenses/node-exporter-license.txt", "licenses/node-exporter-notice.txt"} {
+			if _, found := seen[required]; !found {
+				return errors.New("node release payload is missing")
+			}
+		}
 	}
 	return nil
 }

@@ -86,8 +86,22 @@ func runAssemble(ctx context.Context, arguments []string, output io.Writer) erro
 	trustPath := flags.String("trust-key", "", "public trust root path")
 	previousID := flags.String("previous-id", "", "immediate predecessor release ID")
 	previousVersion := flags.String("previous-version", "", "immediate predecessor version")
+	target := flags.String("target", "platform", "release target: platform or node")
+	collectorArchive := flags.String("collector-archive", "", "fixed node collector release archive")
 	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 {
 		return errors.New("release assembly input is invalid")
+	}
+	kind := installationrelease.ManifestKind
+	collectorAbsolute := ""
+	if *target == "node" {
+		kind = installationrelease.NodeManifestKind
+		var err error
+		collectorAbsolute, err = absolutePath(*collectorArchive)
+		if err != nil {
+			return err
+		}
+	} else if *target != "platform" || *collectorArchive != "" {
+		return errors.New("release target input is invalid")
 	}
 	repositoryAbsolute, err := absolutePath(*repository)
 	if err != nil {
@@ -135,6 +149,7 @@ func runAssemble(ctx context.Context, arguments []string, output io.Writer) erro
 	}
 	clear(suppliedBytes)
 	result, err := releasebuild.Assemble(ctx, releasebuild.Config{
+		Kind: kind, CollectorArchive: collectorAbsolute,
 		RepositoryRoot: repositoryAbsolute, Output: bundleAbsolute,
 		Version: *version, BuildID: *buildID, SourceCommit: sourceCommit,
 		CreatedAt: createdAt, PreviousID: *previousID,

@@ -1,4 +1,4 @@
-// Package releasebuild assembles the fixed Phase 1 offline distribution. It
+// Package releasebuild assembles the closed platform and node distributions. It
 // consumes the installation-owned release and topology contracts and cannot
 // accept arbitrary packages, images, Dockerfiles, commands, or payloads.
 package releasebuild
@@ -29,16 +29,18 @@ type SigningMaterial struct {
 }
 
 type Config struct {
-	RepositoryRoot  string
-	Output          string
-	Version         string
-	BuildID         string
-	SourceCommit    string
-	CreatedAt       time.Time
-	PreviousID      string
-	PreviousVersion string
-	Signer          SigningMaterial
-	Entropy         io.Reader
+	Kind             string
+	CollectorArchive string
+	RepositoryRoot   string
+	Output           string
+	Version          string
+	BuildID          string
+	SourceCommit     string
+	CreatedAt        time.Time
+	PreviousID       string
+	PreviousVersion  string
+	Signer           SigningMaterial
+	Entropy          io.Reader
 }
 
 type Result struct {
@@ -70,8 +72,10 @@ func Assemble(ctx context.Context, config Config, effects Effects) (Result, erro
 	if err != nil {
 		return Result{}, err
 	}
-	if err := verifyBaseImages(ctx, effects); err != nil {
-		return Result{}, err
+	if config.Kind != installationrelease.NodeManifestKind {
+		if err := verifyBaseImages(ctx, effects); err != nil {
+			return Result{}, err
+		}
 	}
 
 	workspace, err := os.MkdirTemp(filepath.Dir(config.Output), ".matrix-release-build-")
@@ -84,9 +88,18 @@ func Assemble(ctx context.Context, config Config, effects Effects) (Result, erro
 	}
 	bundle := filepath.Join(workspace, "bundle")
 	if err := os.Mkdir(bundle, 0o700); err != nil ||
-		os.Mkdir(filepath.Join(bundle, "bin"), 0o700) != nil ||
-		os.Mkdir(filepath.Join(bundle, "images"), 0o700) != nil {
+		os.Mkdir(filepath.Join(bundle, "bin"), 0o700) != nil {
 		return Result{}, errors.New("create release bundle workspace failed")
+	}
+	if config.Kind == installationrelease.NodeManifestKind {
+		files, err := assembleNodePayloads(ctx, config, effects, bundle)
+		if err != nil {
+			return Result{}, err
+		}
+		return publishBundle(config, bundle, trust, files, nil)
+	}
+	if err := os.Mkdir(filepath.Join(bundle, "images"), 0o700); err != nil {
+		return Result{}, errors.New("create release image workspace failed")
 	}
 
 	binaries, err := buildBinaries(ctx, config, effects, workspace)
@@ -106,6 +119,10 @@ func Assemble(ctx context.Context, config Config, effects Effects) (Result, erro
 	if err != nil {
 		return Result{}, err
 	}
+	return publishBundle(config, bundle, trust, files, images)
+}
+
+func publishBundle(config Config, bundle string, trust installationrelease.TrustRoot, files []installationrelease.File, images []installationrelease.Image) (Result, error) {
 	manifest := newManifest(config, files, images)
 	manifestBytes, err := installationrelease.EncodeCanonical(manifest)
 	if err != nil {
@@ -133,6 +150,19 @@ func Assemble(ctx context.Context, config Config, effects Effects) (Result, erro
 }
 
 func validateConfig(config Config) (Config, installationrelease.TrustRoot, error) {
+	if config.Kind == "" {
+		config.Kind = installationrelease.ManifestKind
+	}
+	if config.Kind != installationrelease.ManifestKind && config.Kind != installationrelease.NodeManifestKind {
+		return Config{}, installationrelease.TrustRoot{}, errors.New("release target is invalid")
+	}
+	if config.Kind == installationrelease.NodeManifestKind {
+		if !filepath.IsAbs(config.CollectorArchive) || filepath.Clean(config.CollectorArchive) != config.CollectorArchive {
+			return Config{}, installationrelease.TrustRoot{}, errors.New("pinned node collector archive is required")
+		}
+	} else if config.CollectorArchive != "" {
+		return Config{}, installationrelease.TrustRoot{}, errors.New("platform release cannot contain node input")
+	}
 	if config.Entropy == nil {
 		config.Entropy = rand.Reader
 	}
@@ -169,6 +199,9 @@ func validateConfig(config Config) (Config, installationrelease.TrustRoot, error
 		return Config{}, installationrelease.TrustRoot{}, err
 	}
 	placeholderFiles, placeholderImages := placeholderPayloads()
+	if config.Kind == installationrelease.NodeManifestKind {
+		placeholderFiles, placeholderImages = nodePlaceholderPayloads(), nil
+	}
 	if err := installationrelease.ValidateManifest(newManifest(config, placeholderFiles, placeholderImages)); err != nil {
 		return Config{}, installationrelease.TrustRoot{}, errors.New("release build metadata is invalid")
 	}
@@ -302,7 +335,7 @@ func newManifest(
 	if len(config.SourceCommit) >= 12 {
 		releaseID = "matrix-" + config.Version + "-" + config.SourceCommit[:12]
 	}
-	return installationrelease.Manifest{
+	manifest := installationrelease.Manifest{
 		APIVersion: installationrelease.ManifestAPIVersion,
 		Kind:       installationrelease.ManifestKind,
 		Release: installationrelease.ReleaseIdentity{
@@ -322,6 +355,10 @@ func newManifest(
 		Database:         installationrelease.CurrentDatabaseProfile(),
 		TopologyDigest:   topology.ContractDigest(), Files: files, Images: images,
 	}
+	if config.Kind == installationrelease.NodeManifestKind {
+		return nodeManifest(manifest)
+	}
+	return manifest
 }
 
 func placeholderPayloads() ([]installationrelease.File, []installationrelease.Image) {

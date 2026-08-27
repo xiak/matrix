@@ -29,6 +29,7 @@ const (
 	ActionRollback Action = "ROLLBACK"
 	ActionRecover  Action = "RECOVER"
 	ActionSupport  Action = "SUPPORT"
+	ActionStart    Action = "START"
 )
 
 type Phase string
@@ -95,12 +96,20 @@ type Journal struct {
 	Version               uint64       `json:"version"`
 	InstallationID        string       `json:"installationId"`
 	ReleaseTrust          ReleaseTrust `json:"releaseTrust"`
+	Node                  *NodeBinding `json:"node,omitempty"`
 	CurrentReleaseID      string       `json:"currentReleaseId,omitempty"`
 	CurrentReleaseDigest  string       `json:"currentReleaseDigest,omitempty"`
 	PreviousRelease       string       `json:"previousReleaseId,omitempty"`
 	PreviousReleaseDigest string       `json:"previousReleaseDigest,omitempty"`
 	Active                *Execution   `json:"active,omitempty"`
 	Last                  *Execution   `json:"last,omitempty"`
+}
+
+// NodeBinding seals the purpose of this installation root and the complete
+// enrollment commitment. Platform journals omit it, preserving their bytes.
+type NodeBinding struct {
+	ExecutionTargetID   string `json:"executionTargetId"`
+	ConfigurationDigest string `json:"configurationDigest"`
 }
 
 // ReleaseTrust pins the out-of-band public trust root for the complete
@@ -138,6 +147,18 @@ func New(installationID string, trust ReleaseTrust) (Journal, error) {
 	return journal, nil
 }
 
+func NewNode(installationID string, trust ReleaseTrust, binding NodeBinding) (Journal, error) {
+	value, err := New(installationID, trust)
+	if err != nil {
+		return Journal{}, err
+	}
+	value.Node = &binding
+	if err := ValidateJournal(value); err != nil {
+		return Journal{}, err
+	}
+	return value, nil
+}
+
 func ValidateInstallationID(value string) error {
 	if !installationIDPattern.MatchString(value) {
 		return errors.New("installation identity is invalid")
@@ -156,7 +177,7 @@ func Start(journal Journal, command Command) (StartResult, error) {
 	if err := ValidateJournal(journal); err != nil {
 		return StartResult{}, fmt.Errorf("stored installation journal is invalid: %w", err)
 	}
-	if err := validateCommand(command); err != nil {
+	if err := validateCommand(command, journal.Node != nil); err != nil {
 		return StartResult{}, err
 	}
 	if journal.Active != nil {
@@ -179,7 +200,7 @@ func Start(journal Journal, command Command) (StartResult, error) {
 	}
 	execution := Execution{
 		Command:       command,
-		Phase:         workflow(command.Action)[0],
+		Phase:         workflow(command.Action, journal.Node != nil)[0],
 		StartedAt:     command.RequestedAt,
 		UpdatedAt:     command.RequestedAt,
 		SourceRelease: journal.CurrentReleaseID,
@@ -223,7 +244,7 @@ func Advance(journal Journal, commandID string, next Phase, at time.Time) (Journ
 		journal.Last = &execution
 		return journal, nil
 	}
-	sequence := workflow(execution.Command.Action)
+	sequence := workflow(execution.Command.Action, journal.Node != nil)
 	index := phaseIndex(sequence, execution.Phase)
 	if index < 0 || index+1 >= len(sequence) || sequence[index+1] != next {
 		return Journal{}, ErrInvalidTransition
@@ -270,7 +291,7 @@ func Fail(journal Journal, commandID, failureCode string, at time.Time) (Journal
 		return journal, nil
 	case ActionRollback, ActionRecover:
 		return finishManual(journal, execution, at), nil
-	case ActionVerify, ActionStatus, ActionBackup, ActionSupport:
+	case ActionVerify, ActionStatus, ActionBackup, ActionSupport, ActionStart:
 		execution.Outcome = OutcomeFailed
 		execution.CompletedAt = at
 		journal.Active = nil
@@ -291,6 +312,10 @@ func ValidateJournal(journal Journal) error {
 		!trustFingerprintPattern.MatchString(journal.ReleaseTrust.Fingerprint) {
 		problems = append(problems, errors.New("installation release trust is invalid"))
 	}
+	if journal.Node != nil && (!trustKeyIDPattern.MatchString(journal.Node.ExecutionTargetID) ||
+		!digestPattern.MatchString(journal.Node.ConfigurationDigest)) {
+		problems = append(problems, errors.New("node installation binding is invalid"))
+	}
 	if (journal.CurrentReleaseID == "") != (journal.CurrentReleaseDigest == "") ||
 		(journal.CurrentReleaseID != "" && (!releaseIDPattern.MatchString(journal.CurrentReleaseID) ||
 			!digestPattern.MatchString(journal.CurrentReleaseDigest))) {
@@ -303,14 +328,14 @@ func ValidateJournal(journal Journal) error {
 		problems = append(problems, errors.New("previous release identity is invalid"))
 	}
 	if journal.Active != nil {
-		problems = append(problems, validateExecution(*journal.Active, false))
+		problems = append(problems, validateExecution(*journal.Active, false, journal.Node != nil))
 		if journal.CurrentReleaseID != journal.Active.SourceRelease ||
 			journal.CurrentReleaseDigest != journal.Active.SourceDigest {
 			problems = append(problems, errors.New("active command source does not match the current release"))
 		}
 	}
 	if journal.Last != nil {
-		problems = append(problems, validateExecution(*journal.Last, true))
+		problems = append(problems, validateExecution(*journal.Last, true, journal.Node != nil))
 		problems = append(problems, validateCompletedPointers(journal, *journal.Last))
 	}
 	if journal.Active != nil && journal.Last != nil &&
@@ -320,9 +345,12 @@ func ValidateJournal(journal Journal) error {
 	return errors.Join(problems...)
 }
 
-func validateCommand(command Command) error {
+func validateCommand(command Command, node bool) error {
 	if !commandIDPattern.MatchString(command.ID) || !canonicalTime(command.RequestedAt) {
 		return errors.New("installation command identity or time is invalid")
+	}
+	if len(workflow(command.Action, node)) == 0 {
+		return errors.New("installation action is unsupported for this root")
 	}
 	switch command.Action {
 	case ActionInstall:
@@ -355,7 +383,7 @@ func validateCommand(command Command) error {
 			command.BackupDigest != "" {
 			return errors.New("support command input is invalid")
 		}
-	case ActionVerify, ActionStatus, ActionRollback:
+	case ActionVerify, ActionStatus, ActionRollback, ActionStart:
 		if command.InputDigest != "" || command.TargetReleaseID != "" || command.BackupID != "" ||
 			command.BackupDigest != "" {
 			return errors.New("installation command contains unrelated input")
@@ -380,7 +408,7 @@ func validateActionPrecondition(journal Journal, command Command) error {
 		if journal.CurrentReleaseID == "" || journal.PreviousRelease == "" {
 			return ErrPrecondition
 		}
-	case ActionVerify, ActionStatus, ActionBackup, ActionSupport:
+	case ActionVerify, ActionStatus, ActionBackup, ActionSupport, ActionStart:
 		if journal.CurrentReleaseID == "" {
 			return ErrPrecondition
 		}
@@ -392,9 +420,9 @@ func validateActionPrecondition(journal Journal, command Command) error {
 	return nil
 }
 
-func validateExecution(execution Execution, completed bool) error {
+func validateExecution(execution Execution, completed bool, node bool) error {
 	var problems []error
-	problems = append(problems, validateCommand(execution.Command))
+	problems = append(problems, validateCommand(execution.Command, node))
 	if !canonicalTime(execution.StartedAt) || !canonicalTime(execution.UpdatedAt) ||
 		execution.StartedAt != execution.Command.RequestedAt || execution.UpdatedAt.Before(execution.StartedAt) {
 		problems = append(problems, errors.New("installation execution time is invalid"))
@@ -447,7 +475,7 @@ func validateExecution(execution Execution, completed bool) error {
 				problems = append(problems, errors.New("successful installation execution is not ready"))
 			}
 		case OutcomeFailed:
-			if phaseIndex(workflow(execution.Command.Action), execution.Phase) < 0 || execution.Phase == PhaseReady {
+			if phaseIndex(workflow(execution.Command.Action, node), execution.Phase) < 0 || execution.Phase == PhaseReady {
 				problems = append(problems, errors.New("failed installation execution phase is invalid"))
 			}
 		case OutcomeManualIntervention:
@@ -459,7 +487,7 @@ func validateExecution(execution Execution, completed bool) error {
 			problems = append(problems, errors.New("completed installation time is invalid"))
 		}
 	} else {
-		if phaseIndex(workflow(execution.Command.Action), execution.Phase) < 0 &&
+		if phaseIndex(workflow(execution.Command.Action, node), execution.Phase) < 0 &&
 			execution.Phase != PhaseRollingBack {
 			problems = append(problems, errors.New("active installation execution phase is invalid"))
 		}
@@ -484,7 +512,19 @@ func sameCommandInput(left, right Command) bool {
 		left.BackupID == right.BackupID && left.BackupDigest == right.BackupDigest
 }
 
-func workflow(action Action) []Phase {
+func workflow(action Action, node bool) []Phase {
+	if node {
+		switch action {
+		case ActionInstall:
+			return []Phase{PhasePreflight, PhaseStaging, PhaseConfiguring, PhaseStarting, PhaseVerifying, PhaseCommitting, PhaseReady}
+		case ActionStart:
+			return []Phase{PhaseStarting, PhaseVerifying, PhaseReady}
+		case ActionVerify, ActionStatus:
+			return []Phase{PhaseVerifying, PhaseReady}
+		default:
+			return nil
+		}
+	}
 	switch action {
 	case ActionInstall:
 		return []Phase{PhasePreflight, PhaseStaging, PhaseLoadingImages, PhaseConfiguring,
@@ -507,9 +547,12 @@ func workflow(action Action) []Phase {
 
 // NextPhase exposes only the next admitted transition in the closed lifecycle
 // workflow so orchestration does not duplicate the state machine sequence.
-func NextPhase(action Action, current Phase) (Phase, bool) {
-	sequence := workflow(action)
-	index := phaseIndex(sequence, current)
+func NextPhase(journal Journal) (Phase, bool) {
+	if journal.Active == nil {
+		return "", false
+	}
+	sequence := workflow(journal.Active.Command.Action, journal.Node != nil)
+	index := phaseIndex(sequence, journal.Active.Phase)
 	if index < 0 || index+1 >= len(sequence) {
 		return "", false
 	}

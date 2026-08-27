@@ -17,6 +17,9 @@ const (
 	ObservationRequestKind          = "ExecutionTargetObservationRequest"
 	ObservationResponseKind         = "ExecutionTargetObservationResponse"
 	ObservationPath                 = "/adapter/node/v1/observation"
+	ReadinessPath                   = "/adapter/node/v1/ready"
+	ReadinessResponseKind           = "NodeReadiness"
+	MaximumReadinessResponseBytes   = 4096
 	MaximumObservationRequestBytes  = 64 * 1024
 	MaximumObservationResponseBytes = 256 * 1024
 	MaximumObservationDuration      = 30 * time.Second
@@ -43,6 +46,38 @@ type ObservationResponse struct {
 	Identity    Identity                          `json:"identity"`
 	CommandID   paasv1.CommandID                  `json:"commandId"`
 	Observation paasv1.ExecutionTargetObservation `json:"observation"`
+}
+
+// Readiness is the node's bounded installation self-check. It carries no
+// controller credential, command, resource quantities or provider payload.
+type Readiness struct {
+	APIVersion          string    `json:"apiVersion"`
+	Kind                string    `json:"kind"`
+	Identity            Identity  `json:"identity"`
+	IdentityFingerprint string    `json:"identityFingerprint"`
+	ObservedAt          time.Time `json:"observedAt"`
+	ValidUntil          time.Time `json:"validUntil"`
+}
+
+func ValidateReadiness(value Readiness) error {
+	if value.APIVersion != APIVersion || value.Kind != ReadinessResponseKind ||
+		ValidateIdentity(value.Identity) != nil ||
+		paasv1.ValidateDigest("identityFingerprint", value.IdentityFingerprint) != nil ||
+		value.ObservedAt.IsZero() || value.ObservedAt.Location() != time.UTC ||
+		value.ValidUntil.Location() != time.UTC || value.ObservedAt.Nanosecond()%1000 != 0 ||
+		value.ValidUntil.Nanosecond()%1000 != 0 || !value.ValidUntil.After(value.ObservedAt) ||
+		value.ValidUntil.Sub(value.ObservedAt) > MaximumObservationAge {
+		return ErrInvalidObservation
+	}
+	return nil
+}
+
+func DecodeReadiness(reader io.Reader) (Readiness, error) {
+	var value Readiness
+	if contractjson.DecodeObject(reader, MaximumReadinessResponseBytes, &value) != nil || ValidateReadiness(value) != nil {
+		return Readiness{}, ErrInvalidObservation
+	}
+	return value, nil
 }
 
 func ValidateIdentity(value Identity) error {

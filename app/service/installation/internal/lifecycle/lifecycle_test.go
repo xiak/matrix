@@ -46,6 +46,54 @@ func TestInstallUsesExactReplayAndPublishesOnlyAfterReady(t *testing.T) {
 	}
 }
 
+func TestNodeLifecycleCannotEnterPlatformEffects(t *testing.T) {
+	platform := newJournal(t)
+	binding := NodeBinding{ExecutionTargetID: "target-a", ConfigurationDigest: digest('a')}
+	node, err := NewNode(platform.InstallationID, platform.ReleaseTrust, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := lifecycleCommand(ActionInstall, releaseA, '1', 0)
+	started, err := Start(node, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := started.Journal
+	for state.Active != nil {
+		switch state.Active.Phase {
+		case PhaseLoadingImages, PhaseMigrating, PhaseBackingUp, PhaseRecovering:
+			t.Fatal("node workflow reached a platform-only effect")
+		}
+		next, ok := NextPhase(state)
+		if !ok {
+			t.Fatal("node install cannot reach a completed state")
+		}
+		state, err = Advance(state, command.ID, next, state.Active.UpdatedAt.Add(time.Second))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if state.CurrentReleaseID != releaseA || state.Node == nil || *state.Node != binding {
+		t.Fatal("node completion lost its release or enrollment commitment")
+	}
+	for _, action := range []Action{ActionUpgrade, ActionRollback, ActionRecover, ActionBackup, ActionSupport} {
+		if _, err := Start(state, lifecycleCommand(action, releaseB, '2', 10)); err == nil {
+			t.Fatal("node accepted a platform lifecycle action")
+		}
+	}
+	started, err = Start(state, lifecycleCommand(ActionStart, "", 0, 11))
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted := completeActive(t, started.Journal)
+	if restarted.CurrentReleaseID != state.CurrentReleaseID || *restarted.Node != binding {
+		t.Fatal("node restart changed its authority or release")
+	}
+	if _, err := Start(installedJournal(t), lifecycleCommand(ActionStart, "", 0, 11)); err == nil {
+		t.Fatal("node startup entered a platform root")
+	}
+}
+
 func TestUpgradeFailureRollsBackWithoutPublishingCandidate(t *testing.T) {
 	journal := installedJournal(t)
 	command := lifecycleCommand(ActionUpgrade, releaseB, '2', 10)
@@ -250,7 +298,7 @@ func completeActive(t *testing.T, journal Journal) Journal {
 	if journal.Active == nil {
 		t.Fatal("fixture has no active execution")
 	}
-	sequence := workflow(journal.Active.Command.Action)
+	sequence := workflow(journal.Active.Command.Action, journal.Node != nil)
 	commandID := journal.Active.Command.ID
 	at := journal.Active.UpdatedAt
 	var err error

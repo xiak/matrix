@@ -3,6 +3,8 @@ module github.com/xiak/matrix
 go 1.26.0
 
 require (
+	github.com/coreos/go-systemd/v22 v22.7.0
+	github.com/godbus/dbus/v5 v5.1.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/prometheus/client_model v0.6.2
 	github.com/prometheus/common v0.70.0

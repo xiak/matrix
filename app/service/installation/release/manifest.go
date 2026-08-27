@@ -10,6 +10,7 @@ const (
 	// canonical bytes remain valid, but its scalar is not a new schema profile.
 	LegacyManifestAPIVersion = "installation.matrix.xiak.com/v1"
 	ManifestKind             = "OfflineRelease"
+	NodeManifestKind         = "OfflineNodeRelease"
 	TrustAPIVersion          = "installation.matrix.xiak.com/v1"
 	TrustKind                = "ReleaseTrustRoot"
 	SignatureAlgorithm       = "Ed25519"
@@ -27,10 +28,11 @@ type Manifest struct {
 	Signer           Signer          `json:"signer"`
 	Host             HostProfile     `json:"host"`
 	MinimumFreeBytes uint64          `json:"minimumFreeBytes"`
-	Database         DatabaseProfile `json:"database"`
+	Database         DatabaseProfile `json:"database,omitzero"`
+	Node             *NodeProfile    `json:"node,omitempty"`
 	TopologyDigest   string          `json:"topologyDigest"`
 	Files            []File          `json:"files"`
-	Images           []Image         `json:"images"`
+	Images           []Image         `json:"images,omitempty"`
 }
 
 type ReleaseIdentity struct {
@@ -54,6 +56,13 @@ type HostProfile struct {
 	MinimumDocker   string `json:"minimumDocker"`
 	MinimumCompose  string `json:"minimumCompose"`
 	CommandContract string `json:"commandContract"`
+	MinimumSystemd  uint64 `json:"minimumSystemd,omitempty"`
+}
+
+type NodeProfile struct {
+	ProtocolAPIVersion string `json:"protocolApiVersion"`
+	RuntimeRevision    uint64 `json:"runtimeRevision"`
+	CollectorVersion   string `json:"collectorVersion"`
 }
 
 type DatabaseProfile struct {

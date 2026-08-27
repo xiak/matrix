@@ -1,6 +1,7 @@
 package releasebuild
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"crypto/ed25519"
@@ -14,6 +15,84 @@ import (
 
 	installationrelease "github.com/xiak/matrix/app/service/installation/release"
 )
+
+func TestNodeCollectorExtractionIsClosedAndRequiresAttribution(t *testing.T) {
+	for _, change := range []string{"valid", "link", "path escape", "extra", "missing attribution", "duplicate"} {
+		t.Run(change, func(t *testing.T) {
+			var archive bytes.Buffer
+			writer := tar.NewWriter(&archive)
+			prefix := "node_exporter-1.12.1.linux-amd64/"
+			names := []string{"node_exporter", "LICENSE", "NOTICE"}
+			if change == "extra" {
+				names = append(names, "arbitrary")
+			}
+			if change == "duplicate" {
+				names = append(names, "NOTICE")
+			}
+			if change == "missing attribution" {
+				names = names[:2]
+			}
+			for index, name := range names {
+				header := &tar.Header{Name: prefix + name, Mode: 0o600, Typeflag: tar.TypeReg, Size: 3}
+				if change == "path escape" && index == 0 {
+					header.Name = "../node_exporter"
+				}
+				if change == "link" && index == 0 {
+					header.Typeflag, header.Linkname, header.Size = tar.TypeSymlink, "/etc/passwd", 0
+				}
+				if err := writer.WriteHeader(header); err != nil {
+					t.Fatal(err)
+				}
+				if header.Size > 0 {
+					if _, err := writer.Write([]byte("abc")); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if err := writer.Close(); err != nil {
+				t.Fatal(err)
+			}
+			root := t.TempDir()
+			if os.Mkdir(filepath.Join(root, "bin"), 0o700) != nil {
+				t.Fatal("create binary directory")
+			}
+			err := extractNodeCollector(bytes.NewReader(archive.Bytes()), root)
+			if (err == nil) != (change == "valid") {
+				t.Fatalf("collector archive %s: %v", change, err)
+			}
+			if change == "valid" {
+				for _, name := range []string{"bin/node-exporter", "licenses/node-exporter-license.txt", "licenses/node-exporter-notice.txt"} {
+					content, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
+					if err != nil || string(content) != "abc" {
+						t.Fatal("collector archive lost its executable or attribution")
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestNodeBuildAuthenticatesCollectorBeforeBuildingAnyExecutable(t *testing.T) {
+	base := t.TempDir()
+	if os.WriteFile(filepath.Join(base, "go.mod"), []byte("module github.com/xiak/matrix\n"), 0o600) != nil {
+		t.Fatal("write build fixture")
+	}
+	archive := filepath.Join(base, "collector.tar.gz")
+	if os.WriteFile(archive, []byte("untrusted executable bytes"), 0o600) != nil {
+		t.Fatal("write archive fixture")
+	}
+	effects := newFakeEffects()
+	_, err := Assemble(context.Background(), Config{Kind: installationrelease.NodeManifestKind, CollectorArchive: archive,
+		RepositoryRoot: base, Output: filepath.Join(base, "bundle"), Version: "v0.1.0", BuildID: "node-build-gate", SourceCommit: strings.Repeat("a", 40),
+		CreatedAt: time.Date(2026, 8, 26, 15, 30, 0, 0, time.UTC),
+		Signer:    SigningMaterial{KeyID: "xiak-release-2026", PrivateKey: ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x42}, ed25519.SeedSize))}}, effects)
+	if err == nil || len(effects.binaries) != 0 || len(effects.images) != 0 || len(effects.saved) != 0 {
+		t.Fatal("untrusted collector reached release build effects")
+	}
+	if _, err := os.Lstat(filepath.Join(base, "bundle")); !os.IsNotExist(err) {
+		t.Fatal("untrusted collector published a node release")
+	}
+}
 
 type fakeEffects struct {
 	baseMismatch bool

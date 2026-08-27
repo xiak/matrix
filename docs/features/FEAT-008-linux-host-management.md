@@ -169,7 +169,10 @@ not admission of an older platform topology or implicit platform permissions.
 Their former single schema number is not evidence that a newer authority can
 run after rollback. Upgrade and data-preserving rollback initially admit only
 identical complete database profiles; a different profile is rejected before
-backup, migration, process replacement or journal advancement. Admitting a
+backup, migration, process replacement or journal advancement. Recovery also
+requires the current release, target release and authenticated backup to have
+the same complete profile, including at resumed recovery/start/verification
+boundaries. Selecting an older backup is not permission to cross profiles. Admitting a
 future cross-profile transition requires its retained-data and actual N-1
 runtime gates, not an increasing version number. Backup/recovery and sanitized
 support carry the same complete profile. This admission rule does not by itself
@@ -179,6 +182,25 @@ Authenticate signed executable/collector/image payloads and protocol
 compatibility before effects. Stage, verify images/ownership, start supervised
 processes, verify real behavior, then commit the release. Replay/restart
 preserves ownership, secrets and accepted receipts.
+
+The first node distribution is a distinct, closed `OfflineNodeRelease` in
+the existing signed release owner, containing `mx`, the node executable and
+the pinned collector, not platform images or a fictitious database profile.
+The existing lifecycle/journal owner seals its installation, target and
+credential/configuration commitment; node phases cannot run platform database
+or backup effects. `mx node` owns enrollment/start/status/verification while
+the existing local-machine adapter owns native process effects. Protected
+installation input supplies only the node and collector certificates, never
+a controller private key. The node's own identity can query a bounded
+self-readiness endpoint, but cannot invoke the controller observation or
+execution surface. Readiness requires fresh host and collector observations.
+
+Initial native startup uses installation-owned transient systemd services,
+with a dynamically allocated collector UID, read-only payload/credential
+access and no Docker socket for that collector. Replay after a host reboot
+restarts these exact sealed services; automatic boot registration remains an
+unaccepted lifecycle requirement. No customer package, daemon or firewall
+configuration is changed by this startup slice.
 
 Stage compatible upgrades without disrupting workloads. Failed verification
 restores the previous executable/configuration; explicit N-1 rollback retains

@@ -18,7 +18,7 @@ import (
 const maximumProviderObjects = 256
 
 var (
-	versionPattern   = regexp.MustCompile(`^v?([0-9]+)\.([0-9]+)\.([0-9]+)(?:[-+][0-9A-Za-z.-]+)?$`)
+	versionPattern   = regexp.MustCompile(`^v?([0-9]+)\.([0-9]+)\.([0-9]+)(?:[-+][0-9A-Za-z.~\-]+)?$`)
 	providerIdentity = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
 )
 
@@ -164,6 +164,9 @@ func compareProviderVersion(actual, minimum string) int {
 }
 
 func parseProviderVersion(value string) ([3]uint64, bool) {
+	if len(value) > 128 {
+		return [3]uint64{}, false
+	}
 	match := versionPattern.FindStringSubmatch(strings.TrimSpace(value))
 	if len(match) != 4 {
 		return [3]uint64{}, false

@@ -125,6 +125,42 @@ func TestSessionRejectsJournalAndKeyTampering(t *testing.T) {
 	})
 }
 
+func TestSessionCannotChangeNodePurposeIdentityOrTrust(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "node")
+	session, err := Acquire(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	initial := activeInstallJournal(t)
+	initial.Node = &lifecycle.NodeBinding{ExecutionTargetID: "target-a", ConfigurationDigest: "sha256:" + strings.Repeat("a", 64)}
+	if err := session.Initialize(initial); err != nil {
+		t.Fatal(err)
+	}
+	for name, change := range map[string]func(*lifecycle.Journal){
+		"platform substitution":   func(value *lifecycle.Journal) { value.Node = nil },
+		"target substitution":     func(value *lifecycle.Journal) { value.Node.ExecutionTargetID = "target-b" },
+		"credential substitution": func(value *lifecycle.Journal) { value.Node.ConfigurationDigest = "sha256:" + strings.Repeat("b", 64) },
+		"trust substitution":      func(value *lifecycle.Journal) { value.ReleaseTrust.Fingerprint = "sha256:" + strings.Repeat("b", 64) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			value, err := session.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			value.Version++
+			change(&value)
+			if err := session.Write(value); err == nil {
+				t.Fatal("sealed root binding was replaceable")
+			}
+			after, err := session.Read()
+			if err != nil || !reflect.DeepEqual(after, initial) {
+				t.Fatal("rejected change modified the journal")
+			}
+		})
+	}
+}
+
 func TestSessionRecoversInterruptedKeyCreation(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "installation")
 	session, err := Acquire(context.Background(), root)

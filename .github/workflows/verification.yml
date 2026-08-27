@@ -148,6 +148,26 @@ jobs:
             "MATRIX_NODE_AGENT_BINARY=$MATRIX_NODE_AGENT_BINARY" \
             "MATRIX_NODE_EXPORTER_BINARY=$RUNNER_TEMP/node_exporter-$NODE_EXPORTER_VERSION.linux-amd64/node_exporter" \
             "$RUNNER_TEMP/node-runtime.test" -test.v -test.count=1 -test.timeout=90s -test.run='^TestLinuxNodeProcessObservation$'
+      - name: Verify signed native startup and interrupted replay
+        run: |
+          go run -p 2 ./deploy/cmd/matrix-release keygen --key-id node-ci \
+            --private-key "$RUNNER_TEMP/node-release-private.json" --trust-key "$RUNNER_TEMP/node-release-trust.json"
+          go run -p 2 ./deploy/cmd/matrix-release assemble --target node --repository "$GITHUB_WORKSPACE" \
+            --collector-archive "$RUNNER_TEMP/node_exporter.tar.gz" --output "$RUNNER_TEMP/node-release" \
+            --version v0.3.0-node.1 --build-id "ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --created-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --private-key "$RUNNER_TEMP/node-release-private.json" --trust-key "$RUNNER_TEMP/node-release-trust.json"
+          node_gate_root="$(sudo mktemp -d /opt/matrix-node-ci-XXXXXX)"
+          trap 'sudo rmdir "$node_gate_root"' EXIT
+          sudo systemd-run --wait --pipe --collect \
+            --unit="matrix-node-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --property=CPUQuota=100% --property=MemoryMax=768M --property=TasksMax=128 \
+            --property=RuntimeMaxSec=240 --property=IPAddressDeny=any --property=IPAddressAllow=localhost \
+            /usr/bin/env GOMAXPROCS=2 GOMEMLIMIT=512MiB "TMPDIR=$node_gate_root" \
+            MATRIX_NODE_INSTALLATION_REAL_RUNTIME=1 \
+            "MATRIX_NODE_RELEASE_BUNDLE=$RUNNER_TEMP/node-release" \
+            "MATRIX_NODE_RELEASE_TRUST=$RUNNER_TEMP/node-release-trust.json" \
+            "$RUNNER_TEMP/node-runtime.test" -test.v -test.count=1 -test.timeout=200s -test.run='^TestLinuxSignedNodeStartup$'
       - name: Verify the real node through independent platform authorities
         env:
           POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}

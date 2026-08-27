@@ -32,6 +32,24 @@ import (
 	"github.com/xiak/matrix/app/service/installation/topology"
 )
 
+func TestProviderVersionComparisonAcceptsBoundedDistributionMetadata(t *testing.T) {
+	for _, test := range []struct {
+		actual, minimum string
+		want            int
+	}{
+		{"2.33.0+ds1-0ubuntu1~22.04.1", "2.33.0", 0},
+		{"27.5.1", "27.5.1", 0},
+		{"2.32.9+ds1-0ubuntu1~22.04.1", "2.33.0", -1},
+		{"2.33.1-vendor", "2.33.0", 1},
+		{"2.33.0;ignored", "2.33.0", -1},
+		{"2.33.0+" + strings.Repeat("a", 256), "2.33.0", -1},
+	} {
+		if got := compareProviderVersion(test.actual, test.minimum); got != test.want {
+			t.Errorf("provider version %q comparison = %d, want %d", test.actual, got, test.want)
+		}
+	}
+}
+
 func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T) {
 	plan := newInstallPlan(t)
 	if err := stageInstallation(plan, rand.Reader); err != nil {
@@ -965,6 +983,86 @@ func TestPublishedBackupSealRemainsReadableAndProfileCannotBeSubstituted(t *test
 	}
 }
 
+func TestRecoveryRejectsDifferentCurrentProfileAtEveryEffectBoundary(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine recovery effects target Linux")
+	}
+	current := release.CurrentDatabaseProfile()
+	revised, changedSchema := current, current
+	revised.ContractRevision++
+	changedSchema.Authorities.Audit++
+	for _, test := range []struct {
+		name    string
+		profile release.DatabaseProfile
+	}{{"authority schema", changedSchema}, {"same schemas changed contract", revised}} {
+		t.Run(test.name, func(t *testing.T) {
+			pair := newUpgradePlan(t, current, test.profile)
+			target, err := authenticateInstalledPlan(pair.Source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			installation, err := verifiedInstallationConfiguration(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			expectation, err := decodePlatformExpectation(installation.topology.ComposeJSON)
+			if err != nil {
+				t.Fatal(err)
+			}
+			runtimeBoundary := newPlatformStartRuntime(target, expectation)
+			runtimeBoundary.started = true
+			verifier := &recordingInstallationVerifier{}
+			effects := &Effects{runtime: runtimeBoundary, entropy: rand.Reader, verifier: verifier,
+				projectInspector: newRecoveryProbeInspector(t, target)}
+			secretPath := filepath.Join(filepath.FromSlash(layout.WorkloadSecretRoot), "retained-secret", "version-one")
+			if err := writeManagedOnce(target.Root, secretPath, []byte("retained-workload-secret")); err != nil {
+				t.Fatal(err)
+			}
+			backup := platformcommand.BackupPlan{InstalledPlan: pair.Source,
+				BackupID: "backup-cccccccccccccccccccccccccccccccc", CreatedAt: pair.CreatedAt}
+			if err := effects.CreateBackup(context.Background(), backup); err != nil {
+				t.Fatal(err)
+			}
+			source, err := effects.InspectBackup(context.Background(), pair.Source, backup.BackupID)
+			if err != nil || source.Database != target.Bundle.Manifest.Database {
+				t.Fatal("backup and recovery target must authenticate before the cross-profile check")
+			}
+			retained := map[string][]byte{}
+			for _, relative := range []string{layout.Compose, layout.PostgresPassword, layout.IAMBootstrap, secretPath,
+				filepath.Join(layout.BackupDirectory, backup.BackupID, backupManifestFilename),
+				filepath.Join(layout.BackupDirectory, backup.BackupID, databaseDumpFilename)} {
+				retained[relative] = readTestFile(t, target.Root, relative)
+			}
+			defer func() {
+				for _, content := range retained {
+					clear(content)
+				}
+			}()
+			recovery := platformcommand.RecoveryPlan{Current: pair.Target, Target: target,
+				BackupID: source.BackupID, BackupDigest: source.BackupDigest}
+			composeBefore, removalsBefore, restoresBefore := runtimeBoundary.composeCalls, runtimeBoundary.providerRemovals, runtimeBoundary.recoveryRestores
+			migrationsBefore, verificationsBefore := len(runtimeBoundary.migrationRuns), verifier.calls
+			for _, phase := range []lifecycle.Phase{lifecycle.PhaseRecovering, lifecycle.PhaseStarting, lifecycle.PhaseVerifying} {
+				if err := effects.ApplyRecoveryPhase(context.Background(), recovery, phase); !errors.Is(err, platformcommand.ErrEffectPrecondition) {
+					t.Fatalf("cross-profile %s did not fail closed: %v", phase, err)
+				}
+				if !runtimeBoundary.started || runtimeBoundary.composeCalls != composeBefore || runtimeBoundary.providerRemovals != removalsBefore ||
+					runtimeBoundary.recoveryRestores != restoresBefore || len(runtimeBoundary.migrationRuns) != migrationsBefore || verifier.calls != verificationsBefore {
+					t.Fatal("cross-profile recovery reached service, provider, database or verification effects")
+				}
+				for relative, expected := range retained {
+					actual := readTestFile(t, target.Root, relative)
+					equal := bytes.Equal(actual, expected)
+					clear(actual)
+					if !equal {
+						t.Fatal("rejected recovery changed configuration, credentials or the selected backup")
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestBackupProfileRejectsMissingAndAmbiguousVersions(t *testing.T) {
 	for _, manifest := range []backupManifest{
 		{APIVersion: backupAPIVersion},
@@ -1367,9 +1465,9 @@ func newInstallPlan(t *testing.T, profiles ...release.DatabaseProfile) platformc
 	}
 }
 
-func newUpgradePlan(t *testing.T) platformcommand.UpgradePlan {
+func newUpgradePlan(t *testing.T, profiles ...release.DatabaseProfile) platformcommand.UpgradePlan {
 	t.Helper()
-	fixtures, err := releasetest.WriteSequence(t.TempDir(), 2)
+	fixtures, err := releasetest.WriteSequence(t.TempDir(), 2, profiles...)
 	if err != nil {
 		t.Fatalf("write upgrade release fixtures: %v", err)
 	}
