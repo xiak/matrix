@@ -210,6 +210,12 @@ the active task reachable. The login route and every authenticated route must
 remain keyboard usable, visibly focused, reduced-motion compatible, and
 readable at 360 CSS pixels without horizontal page scrolling.
 
+Command failures must be visible inside an open contextual panel, not hidden
+behind its compact-mode overlay. Closing the panel preserves the same notice
+in the main content; reopening it restores the notice in the panel without
+duplicating live alerts. This behavior requires component and real 360-pixel
+installed-release checks, not just a successful backend permission denial.
+
 ## Public API and authority
 
 The managed-service API provides only the bounded routes needed by the journey:
@@ -262,7 +268,7 @@ checks cover these controls. Source checks or another Phase's browser evidence
 do not accept this extension, and do not replace the installed-release gate.
 
 This branch's adaptation passes type checking, lint, architecture, the 20
-contrast checks, 69 frontend tests, Go embed checks and two bounded,
+contrast checks, 71 frontend tests, Go embed checks and two bounded,
 two-worker production exports matching all 59 embedded files. Adapter and
 component gates cover platform-only navigation, version-bound lifecycle
 requests, original-primary recovery while paused, password clearing on
@@ -272,6 +278,11 @@ command's notice; a failed protected poll or a command discovering an invalid
 session removes the old resource snapshot. An account refresh cannot retain
 an earlier mutation's success message after session failure. The nine added
 behavior regressions fail before these corrections and pass afterward.
+The quota and installation denial regressions additionally prove one live
+notice in the active context panel, preserving it in the main content when
+closed and restoring it when reopened. Both fail with the old main-only notice
+and pass with the renderer correction; its installed-release narrow-screen
+check remains pending until the corrected signed UI is exercised.
 
 On 2026-08-27 this branch's real APISIX/IAM/Audit/PaaS browser environment
 passes the account/lifecycle path: a platform-only child opens two tenants,

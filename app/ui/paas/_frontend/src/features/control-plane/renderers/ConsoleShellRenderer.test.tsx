@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionProvider } from "@/features/auth/application/SessionProvider";
@@ -105,6 +105,35 @@ afterEach(() => {
 });
 
 describe("ConsoleShellRenderer", () => {
+  it.each([
+    { section: "quotas", mutation: "activateQuota", heading: "激活服务配额", submit: "确认激活配额", success: "配额已由平台确认" },
+    { section: "installations", mutation: "createInstallation", heading: "安装 PostgreSQL", submit: "提交安装任务", success: "安装任务已由平台接受" }
+  ] as const)("keeps a denied $section command visible in the active panel without duplicate alerts", async ({ section, mutation, heading, submit, success }) => {
+    const { user, repository, view } = await renderConsole({ section });
+    vi.mocked(repository[mutation]).mockRejectedValue(new HttpProblem(403, "private authority diagnostic"));
+    await user.click(await screen.findByRole("button", { name: submit }));
+
+    const alert = await screen.findByRole("alert");
+    const panel = screen.getAllByRole("complementary").find((element) =>
+      within(element).queryByRole("heading", { name: heading })
+    )!;
+    expect(within(panel).getByRole("alert")).toBe(alert);
+    expect(alert.textContent).toContain("当前角色无权执行此操作");
+    expect(within(screen.getByRole("main")).queryByRole("alert")).toBeNull();
+    expect(view.container.textContent).not.toContain(success);
+    expect(view.container.textContent).not.toContain("private authority diagnostic");
+    expect(view.container.textContent).not.toContain("renderer-test-memory-only-session");
+
+    await user.click(screen.getByRole("button", { name: "收起面板" }));
+    expect(within(screen.getByRole("main")).getByRole("alert").textContent).toContain("当前角色无权执行此操作");
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+
+    await user.click(screen.getByRole("button", { name: "打开面板" }));
+    expect(within(panel).getByRole("alert").textContent).toContain("当前角色无权执行此操作");
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(repository[mutation]).toHaveBeenCalledTimes(1);
+  });
+
   it("shows failed revocation without claiming logout or revealing the upstream error", async () => {
     const logout = vi.fn().mockRejectedValue(new Error("private upstream diagnostic"));
     const { user, view } = await renderConsole({ logout });

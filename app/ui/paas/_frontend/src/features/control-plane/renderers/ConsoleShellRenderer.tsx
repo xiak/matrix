@@ -184,6 +184,18 @@ function ConsoleShell() {
 
   const workspaceVisible = Boolean(scene.workspace && workspaceOpen);
   const principal = session.current;
+  const feedback = <>
+    {session.error ? (
+      <div className={styles.errorBanner} role="alert">
+        <ShieldCheck aria-hidden="true" /><span>{session.error}</span>
+      </div>
+    ) : null}
+    {controlPlane.error ? (
+      <div className={styles.errorBanner} role="alert">
+        <ServerCog aria-hidden="true" /><span>{controlPlane.error}</span>
+      </div>
+    ) : null}
+  </>;
 
   function resizeWorkspace(event: ReactPointerEvent<HTMLDivElement>) {
     event.preventDefault();
@@ -326,16 +338,7 @@ function ConsoleShell() {
                 </ContentPage.Header>
                 <ContentPage.Body>
                   <div className={styles.pageIntro}>{scene.description}</div>
-                  {session.error ? (
-                    <div className={styles.errorBanner} role="alert">
-                      <ShieldCheck aria-hidden="true" /><span>{session.error}</span>
-                    </div>
-                  ) : null}
-                  {controlPlane.error ? (
-                    <div className={styles.errorBanner} role="alert">
-                      <ServerCog aria-hidden="true" /><span>{controlPlane.error}</span>
-                    </div>
-                  ) : null}
+                  {!workspaceVisible ? feedback : null}
                   <ConsoleContentRenderer scene={scene.content} />
                 </ContentPage.Body>
               </ContentPage>
@@ -368,7 +371,7 @@ function ConsoleShell() {
                 tabIndex={0}
               />
               <button aria-label="关闭上下文面板" className={styles.workspaceCloseButton} onClick={closeWorkspace} type="button"><X aria-hidden="true" /></button>
-              {scene.workspace ? <ConsoleWorkspaceRenderer scene={scene.workspace} /> : null}
+              {scene.workspace ? <ConsoleWorkspaceRenderer feedback={workspaceVisible ? feedback : null} scene={scene.workspace} /> : null}
             </Layout.Workspace>
           </Layout>
         </App.Base>

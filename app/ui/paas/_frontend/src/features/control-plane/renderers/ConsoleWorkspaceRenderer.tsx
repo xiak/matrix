@@ -33,8 +33,10 @@ function OrderNotice({ children }: { children: React.ReactNode }) {
 }
 
 function QuotaOrder({
+  feedback,
   scene
 }: {
+  feedback?: React.ReactNode;
   scene: Extract<NonNullable<ConsoleWorkspaceScene>, { kind: "quota-order" }>;
 }) {
   const controlPlane = useControlPlane();
@@ -66,6 +68,7 @@ function QuotaOrder({
           <Typography.Title as="h2" level={3}>激活服务配额</Typography.Title>
         </div>
       </header>
+      {feedback}
       {scene.options.length === 0 ? (
         <OrderNotice>服务目录没有返回可激活的真实产品。</OrderNotice>
       ) : (
@@ -124,8 +127,10 @@ function QuotaOrder({
 }
 
 function InstallationOrder({
+  feedback,
   scene
 }: {
+  feedback?: React.ReactNode;
   scene: Extract<NonNullable<ConsoleWorkspaceScene>, { kind: "installation-order" }>;
 }) {
   const controlPlane = useControlPlane();
@@ -160,6 +165,7 @@ function InstallationOrder({
           <Typography.Title as="h2" level={3}>安装 PostgreSQL</Typography.Title>
         </div>
       </header>
+      {feedback}
       {scene.entitlementOptions.length === 0 ? (
         <OrderNotice>没有可用配额。请先激活 PostgreSQL 配额，或等待现有安装释放额度。</OrderNotice>
       ) : scene.regionOptions.length === 0 ? (
@@ -208,8 +214,10 @@ function InstallationOrder({
 }
 
 function PlatformStatus({
+  feedback,
   scene
 }: {
+  feedback?: React.ReactNode;
   scene: Extract<NonNullable<ConsoleWorkspaceScene>, { kind: "platform-status" }>;
 }) {
   const facts = useMemo(() => [
@@ -227,6 +235,7 @@ function PlatformStatus({
           <Typography.Title as="h2" level={3}>平台状态</Typography.Title>
         </div>
       </header>
+      {feedback}
       <div className={styles.statusList}>
         {facts.map((fact) => {
           const Icon = fact.icon;
@@ -247,11 +256,13 @@ function PlatformStatus({
 }
 
 export function ConsoleWorkspaceRenderer({
+  feedback,
   scene
 }: {
+  feedback?: React.ReactNode;
   scene: NonNullable<ConsoleWorkspaceScene>;
 }) {
-  if (scene.kind === "quota-order") return <QuotaOrder scene={scene} />;
-  if (scene.kind === "installation-order") return <InstallationOrder scene={scene} />;
-  return <PlatformStatus scene={scene} />;
+  if (scene.kind === "quota-order") return <QuotaOrder feedback={feedback} scene={scene} />;
+  if (scene.kind === "installation-order") return <InstallationOrder feedback={feedback} scene={scene} />;
+  return <PlatformStatus feedback={feedback} scene={scene} />;
 }
