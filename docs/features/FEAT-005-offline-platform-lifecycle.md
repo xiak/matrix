@@ -228,6 +228,8 @@ followed by the independent five-process race gate checking real runtime
 logins, the `2/2/1` readiness tuple, the seven-column IAM claim contract and
 the existing tenant/lifecycle/outbox matrices. These checks do not replace the
 signed populated A/B offline lifecycle acceptance above.
+Fixed implementation `b3a6f81450988d9759ce25163071338e89ed18c4` passes all
+three [independent Verification jobs](https://github.com/xiak/matrix/actions/runs/33068851630).
 
 ### Gate A: release and CLI contract
 
