@@ -330,7 +330,10 @@ The process fixture ran on its own internal bridge without published ports;
 its process and database containers each had a verified one-CPU ceiling and
 bounded memory/PIDs. Release, lifecycle and local-machine tests passed ten
 repetitions in network-disabled Linux containers. Full Go race/vet, Linux
-builds/vet, module verification and stable generation passed. These tests
+builds/vet, module verification and stable generation passed. Source `c29f9e3`
+passed all three existing jobs in
+[independent CI](https://github.com/xiak/matrix/actions/runs/33065856592).
+These tests
 establish admission and format boundaries, not a signed offline release or
 runnable cross-profile N-1 compatibility.
 
