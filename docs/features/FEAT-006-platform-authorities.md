@@ -131,8 +131,9 @@ upload policy languages, expressions, scripts, or provider-native documents.
 FEAT-008's host admission uses the separate `PLATFORM_OPERATOR` role for
 execution-pool create/read, execution-target register/read, platform Operation
 read, platform Audit read/verify, and platform-role grant/revoke. Organization
-administration never grants these actions; the platform role does not implicitly grant tenant application
-or organization administration. Platform bindings admit user principals only.
+administration never grants these actions; the platform role does not implicitly
+grant tenant application or organization administration. Platform bindings admit
+user principals only.
 The existing role-binding commands select their IAM action from the actual
 role, including retained revoked bindings, so replay cannot change authority.
 
@@ -419,6 +420,9 @@ tests pass.
   or PaaS Operation. PaaS database regressions, full-repository race/architecture,
   vet, module verification, stable generation, ten repeated focused runs, Linux
   builds, modified documentation links and diff checks also pass locally.
+  Source `6401e96` passes [independent CI](https://github.com/xiak/matrix/actions/runs/33050553233):
+  the existing Go/race and real node/collector gates plus the real PostgreSQL,
+  retained-data upgrade and authority-process gates in the same workflow.
 
 ## Deferred
 
