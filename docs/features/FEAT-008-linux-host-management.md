@@ -206,13 +206,14 @@ network/devices and protected home directories. Existing containers and their
 collector were not changed. Storage assertions follow the experiment's actual
 mount and verify reserve policy against each current capacity sample; shared
 pool capacity is not assumed constant between observations.
+The transient native services and their remote artifacts were removed afterward.
 The default Go suite, architecture, vet, module verification, generation drift,
 this slice's race checks and ten repeated runs passed locally. Opt-in database
 and full Phase 1/2/3 release exercises were not implied by that default run.
 
-[Independent CI](../../.github/workflows/verification.yml) reuses these tests.
-The final telemetry gate still requires its independent Linux Go/race and
-real node/collector process run; local success does not substitute for it.
+[Independent CI](https://github.com/xiak/matrix/actions/runs/33044131708) passed
+on `540dc10`, including the full Linux Go/race and real node/collector process
+gates in the existing [verification workflow](../../.github/workflows/verification.yml).
 No implementation iteration or complete Phase 3 gate is accepted.
 Next in P3-1: control-plane admission/refresh and signed offline node startup.
 The node observation chain alone is not the completed observability product.
