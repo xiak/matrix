@@ -377,6 +377,10 @@ tests pass.
   or denied platform decision joins exactly one delivered immutable IAM Audit
   fact. These checks do not accept platform-resource mutations or the offline
   upgrade/recovery path.
+  Source `a757a27` also passes full-repository race/architecture, vet, module
+  verification, stable generation, ten repeated IAM runs, Linux builds and
+  [independent CI](https://github.com/xiak/matrix/actions/runs/33046535740),
+  including the existing real node/collector process regression.
 
 ## Deferred
 
