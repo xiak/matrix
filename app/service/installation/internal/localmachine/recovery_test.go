@@ -21,6 +21,42 @@ import (
 
 const recoveryProbeConfigHash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
+func TestManagedRecoveryInventoryFailsClosedWithoutProviderDetails(t *testing.T) {
+	root := t.TempDir()
+	providerDetail := "provider-private-path-and-native-error"
+	for _, test := range []struct {
+		name    string
+		inspect func(string) (string, error)
+	}{
+		{name: "missing inspector"},
+		{name: "unavailable", inspect: func(string) (string, error) { return "", errors.New(providerDetail) }},
+		{name: "invalid witness", inspect: func(string) (string, error) { return providerDetail, nil }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			value, err := readManagedServiceInventory(root, test.inspect)
+			if value != "" || !errors.Is(err, platformcommand.ErrEffectUnavailable) || strings.Contains(err.Error(), providerDetail) {
+				t.Fatalf("unproved inventory was admitted or exposed provider details: %v", err)
+			}
+		})
+	}
+	for _, matching := range []bool{false, true} {
+		witness := "sha256:" + strings.Repeat("a", 64)
+		actual := witness
+		if !matching {
+			actual = "sha256:" + strings.Repeat("b", 64)
+		}
+		err := requireManagedServiceInventory(root, witness, func(bindingRoot string) (string, error) {
+			if bindingRoot != filepath.Join(root, filepath.FromSlash(layout.ExecutorRoot)) {
+				t.Fatal("inventory inspection escaped its local worker binding")
+			}
+			return actual, nil
+		})
+		if (matching && err != nil) || (!matching && !errors.Is(err, platformcommand.ErrEffectPrecondition)) {
+			t.Fatalf("inventory equality was not enforced: %v", err)
+		}
+	}
+}
+
 func TestRecoveryRemovesOnlyTheProvedFixedVerificationProjectAndReplays(t *testing.T) {
 	plan := newInstallPlan(t)
 	inspector := newRecoveryProbeInspector(t, plan)

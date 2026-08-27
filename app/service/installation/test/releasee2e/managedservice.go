@@ -20,8 +20,9 @@ import (
 )
 
 const (
-	managedServicePath    = "/api/managed-services/v1"
-	managedInstallationID = "release-postgres"
+	managedServicePath        = "/api/managed-services/v1"
+	managedInstallationID     = "release-postgres"
+	managedLateInstallationID = "release-postgres-later"
 )
 
 func (value *gate) createManagedPostgres(ctx context.Context, bearer []byte, platformID string) error {
@@ -153,7 +154,7 @@ func (value *gate) createManagedPostgres(ctx context.Context, bearer []byte, pla
 			return fail("managed-service-provisioning-timeout")
 		}
 	}
-	if err := value.writeManagedProbe(ctx, 1); err != nil {
+	if err := value.writeManagedProbe(ctx, managedInstallationID, 1); err != nil {
 		return err
 	}
 	if err := value.assertManagedPostgres(ctx, bearer, 1); err != nil {
@@ -167,6 +168,77 @@ func (value *gate) createManagedPostgres(ctx context.Context, bearer []byte, pla
 		return fail("managed-service-audit-delivery")
 	}
 	return nil
+}
+
+func (value *gate) assertManagedRecoveryBoundary(ctx context.Context, bearer []byte, backupID string) error {
+	var quota managedservicev1.QuotaEntitlement
+	activation := managedservicev1.ActivateQuotaRequest{
+		OfferingID: managedservicev1.PostgreSQLOfferingID, QuotaShapeID: "pg-small", InstanceCount: 1,
+	}
+	if err := value.managedWrite(ctx, "/quota-entitlements", bearer, activation, "release-later-quota", http.StatusCreated, &quota); err != nil {
+		return err
+	}
+	request := managedservicev1.CreateInstallationRequest{
+		ID: managedLateInstallationID, Name: "Post-backup PostgreSQL", OfferingID: activation.OfferingID,
+		QuotaEntitlementID: quota.ID, RegionID: value.managed.RegionID,
+	}
+	var accepted managedservicev1.ServiceInstallation
+	if err := value.managedWrite(ctx, "/service-installations", bearer, request, "release-later-installation", http.StatusAccepted, &accepted); err != nil {
+		return err
+	}
+	poll, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	for {
+		var installation managedservicev1.ServiceInstallation
+		_, err := value.edge.get(poll, managedServicePath+"/service-installations/"+request.ID, bearer, &installation)
+		if err != nil || managedservicev1.ValidateServiceInstallation(installation) != nil ||
+			installation.ID != request.ID || installation.Operation.ID != accepted.Operation.ID ||
+			installation.Phase == managedservicev1.InstallationFailed {
+			return fail("post-backup-managed-service-provisioning")
+		}
+		if installation.Phase == managedservicev1.InstallationReady {
+			value.managedLate = installation
+			break
+		}
+		if !waitPoll(poll, 200*time.Millisecond) {
+			return fail("post-backup-managed-service-provisioning-timeout")
+		}
+	}
+	if err := value.writeManagedProbe(ctx, managedLateInstallationID, 1); err != nil {
+		return err
+	}
+	if _, err := value.edge.waitAuditActions(ctx, bearer, map[auditv1.Action]string{
+		auditv1.ActionManagedServiceQuotaEntitlementActivated: quota.ID,
+		auditv1.ActionManagedServiceInstallationCreated:       request.ID,
+		auditv1.ActionManagedServiceInstallationReady:         request.ID,
+	}); err != nil {
+		return fail("post-backup-managed-service-audit")
+	}
+	output, err := runProcess(ctx, mxPath(value.releases.a), "--format", "json", "platform", "recover",
+		"--root", value.config.root, "--backup", backupID)
+	defer clear(output.stdout)
+	defer clear(output.stderr)
+	if err != nil || containsAny(output.stdout, value.pathLeakage()) || containsAny(output.stderr, value.pathLeakage()) {
+		return fail("managed-service-recovery-command")
+	}
+	if err := value.assertManagedProbe(ctx, managedLateInstallationID, 1); err != nil {
+		return err
+	}
+	var retained managedservicev1.ServiceInstallation
+	if _, err := value.edge.get(ctx, managedServicePath+"/service-installations/"+request.ID, bearer, &retained); err != nil ||
+		!reflect.DeepEqual(retained, value.managedLate) {
+		return fail("recovery-orphaned-new-managed-service")
+	}
+	var failure mxFailure
+	if output.exit != 3 || len(output.stdout) != 0 || decodeOne(output.stderr, &failure) != nil ||
+		failure.Kind != "PlatformCommandFailure" || failure.Action != "RECOVER" ||
+		failure.Status != "FAILED" || failure.Error.Class != "PRECONDITION_FAILED" {
+		return fail("recovery-admitted-changed-managed-inventory")
+	}
+	if _, err := assertPlatform(ctx, value.config.root, value.releases.a.Manifest, ""); err != nil {
+		return err
+	}
+	return value.assertManagedPostgres(ctx, bearer, 1)
 }
 
 func (value *gate) managedWrite(ctx context.Context, path string, bearer []byte, body any, key string, status int, destination any) error {
@@ -222,14 +294,38 @@ func (value *gate) assertManagedPostgres(ctx context.Context, bearer []byte, row
 			return fail("managed-service-preserved-resource-read")
 		}
 	}
-	if len(installations.Items) != 1 || len(quotas.Items) != 1 ||
-		!reflect.DeepEqual(installation, value.managed) || !reflect.DeepEqual(installations.Items[0], installation) ||
-		!reflect.DeepEqual(operation, installation.Operation) || !reflect.DeepEqual(quotas.Items[0], quota) ||
+	expected := map[string]managedservicev1.ServiceInstallation{value.managed.ID: value.managed}
+	if value.managedLate.ID != "" {
+		expected[value.managedLate.ID] = value.managedLate
+	}
+	if len(installations.Items) != len(expected) || len(quotas.Items) != len(expected) ||
+		!reflect.DeepEqual(installation, value.managed) || !reflect.DeepEqual(operation, installation.Operation) ||
 		managedservicev1.ValidateQuotaEntitlement(quota) != nil || quota.PurchasedCount != 1 ||
 		quota.ReservedCount != 0 || quota.ConsumedCount != 1 {
 		return fail("managed-service-preserved-identity-and-quota")
 	}
-	return value.assertManagedProbe(ctx, rows)
+	quotaIDs := make(map[string]bool, len(expected))
+	for _, installation := range installations.Items {
+		if !reflect.DeepEqual(installation, expected[installation.ID]) {
+			return fail("managed-service-preserved-installation-list")
+		}
+		delete(expected, installation.ID)
+		quotaIDs[installation.QuotaEntitlementID] = true
+	}
+	for _, quota := range quotas.Items {
+		if !quotaIDs[quota.ID] || managedservicev1.ValidateQuotaEntitlement(quota) != nil ||
+			quota.PurchasedCount != 1 || quota.ReservedCount != 0 || quota.ConsumedCount != 1 {
+			return fail("managed-service-preserved-quota-list")
+		}
+		delete(quotaIDs, quota.ID)
+	}
+	if err := value.assertManagedProbe(ctx, managedInstallationID, rows); err != nil {
+		return err
+	}
+	if value.managedLate.ID != "" {
+		return value.assertManagedProbe(ctx, managedLateInstallationID, 1)
+	}
+	return nil
 }
 
 type managedDatabase struct {
@@ -238,9 +334,10 @@ type managedDatabase struct {
 	password []byte
 }
 
-func (value *gate) managedDatabase(ctx context.Context) (*managedDatabase, error) {
+func (value *gate) managedDatabase(ctx context.Context, installationID string) (*managedDatabase, error) {
 	ids, err := dockerLines(ctx, "container", "ls", "--all", "--quiet",
-		"--filter", "label=com.xiak.matrix.role=managed-postgresql")
+		"--filter", "label=com.xiak.matrix.role=managed-postgresql",
+		"--filter", "label=com.xiak.matrix.managedservice.installation="+installationID)
 	if err != nil || len(ids) != 1 {
 		return nil, fail("managed-postgres-single-runtime")
 	}
@@ -257,7 +354,7 @@ func (value *gate) managedDatabase(ctx context.Context) (*managedDatabase, error
 	}
 	if wantImage == "" || container.Config.Image != wantImage ||
 		container.Config.Labels["com.xiak.matrix.managed"] != "true" ||
-		container.Config.Labels["com.xiak.matrix.managedservice.installation"] != managedInstallationID ||
+		container.Config.Labels["com.xiak.matrix.managedservice.installation"] != installationID ||
 		container.Config.Labels["com.xiak.matrix.managedservice.offering"] != managedservicev1.PostgreSQLOfferingID ||
 		container.Config.Labels["com.xiak.matrix.managedservice.storage-gib"] != "10" ||
 		container.HostConfig.Memory != 1024*1024*1024 || container.HostConfig.NanoCPUs != 500000000 ||
@@ -277,7 +374,11 @@ func (value *gate) managedDatabase(ctx context.Context) (*managedDatabase, error
 		return nil, fail("managed-postgres-local-port")
 	}
 	endpoint := net.JoinHostPort(binding.HostIP, binding.HostPort)
-	if value.managed.Endpoint != nil && *value.managed.Endpoint != endpoint {
+	expected := value.managed
+	if installationID == managedLateInstallationID {
+		expected = value.managedLate
+	}
+	if expected.Endpoint != nil && *expected.Endpoint != endpoint {
 		return nil, fail("managed-postgres-endpoint-identity")
 	}
 	ownedRoot := filepath.Join(value.config.root, filepath.FromSlash(layout.ExecutorRoot), "managed-postgres")
@@ -339,8 +440,8 @@ func (database *managedDatabase) query(ctx context.Context, query string) (strin
 	return strings.TrimSpace(string(output.stdout)), nil
 }
 
-func (value *gate) writeManagedProbe(ctx context.Context, row int) error {
-	connection, err := value.managedDatabase(ctx)
+func (value *gate) writeManagedProbe(ctx context.Context, installationID string, row int) error {
+	connection, err := value.managedDatabase(ctx, installationID)
 	if err != nil {
 		return err
 	}
@@ -361,8 +462,8 @@ func (value *gate) writeManagedProbe(ctx context.Context, row int) error {
 	return nil
 }
 
-func (value *gate) assertManagedProbe(ctx context.Context, want int) error {
-	connection, err := value.managedDatabase(ctx)
+func (value *gate) assertManagedProbe(ctx context.Context, installationID string, want int) error {
+	connection, err := value.managedDatabase(ctx, installationID)
 	if err != nil {
 		return err
 	}

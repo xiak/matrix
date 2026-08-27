@@ -145,7 +145,7 @@ func run(ctx context.Context) error {
 		return err
 	}
 	managedPostgres, err := localpostgresadapter.New(localpostgresadapter.Config{
-		Root:    filepath.Join(config.bindingRoot, "managed-postgres"),
+		Root:    filepath.Join(config.bindingRoot, localpostgresadapter.DirectoryName),
 		ImageID: config.managedPostgresImage, Runtime: runtime,
 	})
 	if err != nil {

@@ -48,6 +48,7 @@ type gate struct {
 	workloadProject string
 	workloadRunning string
 	managed         managedservicev1.ServiceInstallation
+	managedLate     managedservicev1.ServiceInstallation
 }
 
 func newGate(config options, releases releasePair) *gate {
@@ -186,6 +187,14 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return fail("protected-backup")
 	}
 	emit("protected-backup")
+	if err := value.assertManagedRecoveryBoundary(ctx, bearer, backup.BackupID); err != nil {
+		return err
+	}
+	emit("managed-service-recovery-inventory-boundary")
+	backup, err = runMX(ctx, value.releases.a, "backup", []string{"--root", value.config.root}, value.pathLeakage())
+	if err != nil || backup.BackupID == "" || !backup.Changed {
+		return fail("protected-backup-with-managed-inventory")
+	}
 
 	if err := value.failedUpgrade(ctx, secret, newPassword, bearer); err != nil {
 		return err
@@ -234,7 +243,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	); err != nil {
 		return err
 	}
-	if err := value.writeManagedProbe(ctx, 2); err != nil {
+	if err := value.writeManagedProbe(ctx, managedInstallationID, 2); err != nil {
 		return err
 	}
 	if err := value.assertManagedPostgres(ctx, bearer, 2); err != nil {
@@ -387,7 +396,10 @@ func (value *gate) afterRestart(ctx context.Context) error {
 	if active, err := value.activeCapacityClaims(ctx, state.InstallationID); err != nil || active != 0 {
 		return fail("restart-capacity-release")
 	}
-	if err := value.assertManagedProbe(ctx, 2); err != nil {
+	if err := value.assertManagedProbe(ctx, managedInstallationID, 2); err != nil {
+		return err
+	}
+	if err := value.assertManagedProbe(ctx, managedLateInstallationID, 1); err != nil {
 		return err
 	}
 	emit("post-restart-managed-postgresql")

@@ -150,6 +150,20 @@ that root remains owned and confined by PostgreSQL. A terminal
 provisioning failure releases only the reservation proven to belong to that
 installation; retry or equal command replay cannot create a second instance.
 
+Platform backup captures an opaque local-provisioner inventory witness before
+dumping control-plane state and refuses to publish a snapshot if that inventory
+changes during the dump. Recovery checks the witness before changing the
+platform, and again after stopping its writers. A service created since the
+snapshot makes the old backup ineligible; recovery must not orphan that
+service or silently return its quota to the pool. The operator can select a
+backup that includes the current inventory. A concurrent inventory change
+during recovery fails closed before database restore. Managed PostgreSQL data
+is preserved in place, not rewound by the platform snapshot. If the change is
+detected only after shutdown, the existing recovery failure contract requires
+operator intervention; automatic availability recovery is not claimed. Backups lacking
+this required witness are rejected rather than interpreted as an empty
+inventory.
+
 ## Console architecture
 
 The replacement UI is a Matrix-owned Next.js 16 and React 19 App Router
@@ -356,8 +370,19 @@ release-owned client with passwords on standard input, not an installation
 dependency or a credential-bearing command argument. Restart checks wait for
 bounded platform readiness before asserting stable status and verification.
 Final acceptance still requires the complete unified release test on the final
-candidate, the authenticated browser and 360-pixel keyboard journeys, and
-recovery coverage for an installation created after the selected backup.
+candidate and the authenticated browser and 360-pixel keyboard journeys.
+
+The extended recovery test found a release-blocking counterexample on the
+`f5ce412` runtime: restoring a platform backup taken before a second managed
+PostgreSQL installation removed that installation's control-plane record while
+leaving its database and container running. The current recovery guard rejects
+a selected backup whose sealed provisioner inventory differs from the current
+inventory, both before effects and after stopping platform writers. Backup
+publication also requires an unchanged inventory across the database dump.
+The unified lifecycle gate now creates the second installation after the first
+backup, requires non-destructive rejection of that backup, then verifies the
+full lifecycle with a new backup containing both installations. This fix is
+not accepted until that gate passes on a newly built signed runtime.
 
 ## Deferred
 

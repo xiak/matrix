@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -75,6 +77,97 @@ func TestEnsureRejectsUnsupportedOfferingBeforeRuntime(t *testing.T) {
 	if _, err := provisioner.Ensure(context.Background(), request); err == nil || runtime.applyCalls != 0 {
 		t.Fatalf("unsupported offering err=%v applyCalls=%d", err, runtime.applyCalls)
 	}
+}
+
+func TestRecoveryInventoryTracksPreparedIdentitiesButNotDatabaseContents(t *testing.T) {
+	first, second := recoveryInventoryRoot(t), recoveryInventoryRoot(t)
+	empty, err := InspectRecoveryInventory(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := []string{projectName("tenant-a", "postgres-a"), projectName("tenant-b", "postgres-b")}
+	for _, root := range []string{first, second} {
+		for index := range names {
+			name := names[index]
+			if root == second {
+				name = names[len(names)-1-index]
+			}
+			if err := os.Mkdir(filepath.Join(root, name), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	before, err := InspectRecoveryInventory(first)
+	if err != nil || before == empty {
+		t.Fatalf("prepared requests did not change the inventory: %v", err)
+	}
+	relocated, err := InspectRecoveryInventory(second)
+	if err != nil || relocated != before {
+		t.Fatalf("inventory depends on absolute root or enumeration order: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(first, names[0], "database-value"), []byte("post-backup-business-data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	afterWrite, err := InspectRecoveryInventory(first)
+	if err != nil || afterWrite != before {
+		t.Fatalf("database content changed the logical inventory: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(first, projectName("tenant-a", "postgres-after-backup")), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	afterCreate, err := InspectRecoveryInventory(first)
+	if err != nil || afterCreate == before {
+		t.Fatalf("new installation was not represented in the inventory: %v", err)
+	}
+}
+
+func TestRecoveryInventoryRejectsMissingUnprovedAndUnboundedRoots(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing")
+	if _, err := InspectRecoveryInventory(missing); err == nil {
+		t.Fatal("missing root was accepted")
+	}
+	if _, err := os.Lstat(missing); !os.IsNotExist(err) {
+		t.Fatal("read-only inventory created a root")
+	}
+	root := recoveryInventoryRoot(t)
+	foreign := filepath.Join(root, "foreign-file")
+	if err := os.WriteFile(foreign, []byte("must remain untouched"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InspectRecoveryInventory(root); err == nil {
+		t.Fatal("unproved inventory entry was accepted")
+	}
+	if content, err := os.ReadFile(foreign); err != nil || string(content) != "must remain untouched" {
+		t.Fatal("inventory observation modified an unrelated file")
+	}
+	bounded := recoveryInventoryRoot(t)
+	for index := 0; index < 257; index++ {
+		if err := os.Mkdir(filepath.Join(bounded, projectName("tenant", "postgres-"+strconv.Itoa(index))), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := InspectRecoveryInventory(bounded); err == nil {
+		t.Fatal("unbounded inventory was accepted")
+	}
+}
+
+func TestRecoveryInventoryRejectsSymlinkProjects(t *testing.T) {
+	root := recoveryInventoryRoot(t)
+	if err := os.Symlink(t.TempDir(), filepath.Join(root, projectName("tenant", "linked"))); err != nil {
+		t.Skip("symlinks are unavailable on this test host")
+	}
+	if _, err := InspectRecoveryInventory(root); err == nil {
+		t.Fatal("symlink project crossed the recovery inventory boundary")
+	}
+}
+
+func recoveryInventoryRoot(t *testing.T) string {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "managed")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return root
 }
 
 func testProvisionRequest() managedserviceadapterv1.ProvisionRequest {

@@ -4,10 +4,12 @@ import (
 	"context"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	composeadapter "github.com/xiak/matrix/app/adapter/apphosting/compose"
+	localpostgresadapter "github.com/xiak/matrix/app/adapter/managedservice/localpostgres"
 	"github.com/xiak/matrix/app/service/installation/internal/cli"
 	"github.com/xiak/matrix/app/service/installation/internal/localmachine"
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
@@ -51,7 +53,9 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 
 	backend, err := platformcommand.NewBackend(
-		localmachine.NewEffects(composeRecoveryProjectInspector{}),
+		localmachine.NewEffects(composeRecoveryProjectInspector{}, func(bindingRoot string) (string, error) {
+			return localpostgresadapter.InspectRecoveryInventory(filepath.Join(bindingRoot, localpostgresadapter.DirectoryName))
+		}),
 	)
 	if err != nil {
 		stop()

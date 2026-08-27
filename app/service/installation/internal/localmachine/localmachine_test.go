@@ -694,9 +694,11 @@ func TestCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T) {
 	}
 	runtimeBoundary := newPlatformStartRuntime(plan, expectation)
 	runtimeBoundary.started = true
+	managedInventory := "sha256:" + strings.Repeat("a", 64)
 	effects := &Effects{
 		runtime: runtimeBoundary, entropy: rand.Reader,
-		verifier: &recordingInstallationVerifier{},
+		verifier:         &recordingInstallationVerifier{},
+		managedInventory: func(string) (string, error) { return managedInventory, nil },
 	}
 	request := platformcommand.BackupPlan{
 		InstalledPlan: installedPlanFrom(plan),
@@ -714,6 +716,7 @@ func TestCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T) {
 		t.Fatalf("read backup manifest: %v", err)
 	}
 	sealKey := readTestFile(t, plan.Root, layout.BackupSealKey)
+	defer clear(sealKey)
 	for _, forbidden := range [][]byte{secret, sealKey, []byte(plan.Root)} {
 		if bytes.Contains(manifestContent, forbidden) {
 			t.Fatal("backup manifest contains secret or absolute-path material")
@@ -724,6 +727,7 @@ func TestCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T) {
 		manifest.BackupID != request.BackupID ||
 		manifest.InstallationID != plan.InstallationID ||
 		manifest.ReleaseDigest != plan.Bundle.ManifestSHA256 ||
+		manifest.ManagedServiceInventory != managedInventory ||
 		len(manifest.Artifacts) != 2 || manifest.Seal == nil || manifest.Seal.Value == "" {
 		t.Fatalf("sealed backup manifest = %#v", manifest)
 	}
@@ -770,6 +774,38 @@ func TestCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T) {
 	if runtimeBoundary.backupStreams != streams {
 		t.Fatal("backup replay streamed a second database snapshot")
 	}
+	managedInventory = "sha256:" + strings.Repeat("b", 64)
+	if _, err := effects.InspectBackup(context.Background(), request.InstalledPlan, request.BackupID); !errors.Is(err, platformcommand.ErrEffectPrecondition) ||
+		runtimeBoundary.providerRemovals != 0 || runtimeBoundary.recoveryRestores != 0 {
+		t.Fatalf("changed managed inventory was not rejected before effects: %v", err)
+	}
+	if err := effects.CreateBackup(context.Background(), request); err != nil {
+		t.Fatalf("replay of an authenticated old snapshot failed: %v", err)
+	}
+	if replayed, err := os.ReadFile(filepath.Join(backupRoot, backupManifestFilename)); err != nil || !bytes.Equal(replayed, manifestContent) {
+		t.Fatal("backup replay replaced its original inventory witness")
+	}
+	missingInventory := manifest
+	missingInventory.ManagedServiceInventory = ""
+	missingInventory.Seal = nil
+	signingKey, err := loadBackupSealKey(plan.Root, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(signingKey)
+	missingContent, err := sealBackupManifest(missingInventory, signingKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(backupRoot, backupManifestFilename), missingContent, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := effects.InspectBackup(context.Background(), request.InstalledPlan, request.BackupID); !errors.Is(err, platformcommand.ErrEffectVerification) {
+		t.Fatalf("backup without a required inventory witness was admitted: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(backupRoot, backupManifestFilename), manifestContent, 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	dumpPath := filepath.Join(backupRoot, databaseDumpFilename)
 	if err := os.WriteFile(dumpPath, []byte("tampered-dump"), 0o600); err != nil {
@@ -779,6 +815,41 @@ func TestCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T) {
 		context.Background(), request,
 	); !errors.Is(err, platformcommand.ErrEffectVerification) {
 		t.Fatalf("tampered backup replay error = %v", err)
+	}
+}
+
+func TestBackupRejectsManagedInventoryChangeDuringSnapshot(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine backup effects target Linux")
+	}
+	plan, expectation := configuredPlatformStartFixture(t)
+	runtimeBoundary := newPlatformStartRuntime(plan, expectation)
+	runtimeBoundary.started = true
+	effects := &Effects{
+		runtime: runtimeBoundary, entropy: rand.Reader,
+		verifier: &recordingInstallationVerifier{},
+		managedInventory: func(string) (string, error) {
+			if runtimeBoundary.backupStreams == 0 {
+				return "sha256:" + strings.Repeat("a", 64), nil
+			}
+			return "sha256:" + strings.Repeat("b", 64), nil
+		},
+	}
+	request := platformcommand.BackupPlan{
+		InstalledPlan: installedPlanFrom(plan),
+		BackupID:      "backup-cccccccccccccccccccccccccccccccc",
+		CreatedAt:     time.Date(2026, 8, 26, 5, 0, 0, 0, time.UTC),
+	}
+	if err := effects.CreateBackup(context.Background(), request); !errors.Is(err, platformcommand.ErrEffectPrecondition) {
+		t.Fatalf("backup admitted changing managed inventory: %v", err)
+	}
+	for _, name := range []string{request.BackupID, "." + request.BackupID + ".partial"} {
+		if _, err := os.Lstat(filepath.Join(plan.Root, filepath.FromSlash(layout.BackupDirectory), name)); !os.IsNotExist(err) {
+			t.Fatal("incoherent snapshot was published or retained")
+		}
+	}
+	if !runtimeBoundary.started || runtimeBoundary.providerRemovals != 0 || runtimeBoundary.recoveryRestores != 0 {
+		t.Fatal("rejected backup changed the running platform")
 	}
 }
 
@@ -798,6 +869,8 @@ func TestRecoverBackupRestoresSelectedSnapshotAndConvergesTarget(t *testing.T) {
 	runtimeBoundary := newPlatformStartRuntime(plan, expectation)
 	runtimeBoundary.started = true
 	projectInspector := newRecoveryProbeInspector(t, plan)
+	managedInventory := "sha256:" + strings.Repeat("a", 64)
+	changeInventoryAfterStop := false
 	verifier := &recordingInstallationVerifier{}
 	verifier.after = func(verifiedPlan platformcommand.InstallPlan) (paasv1.InstallationVerification, error) {
 		state := projectInspector.provision(t, 2)
@@ -809,6 +882,12 @@ func TestRecoverBackupRestoresSelectedSnapshotAndConvergesTarget(t *testing.T) {
 	effects := &Effects{
 		runtime: runtimeBoundary, entropy: rand.Reader, verifier: verifier,
 		projectInspector: projectInspector,
+		managedInventory: func(string) (string, error) {
+			if changeInventoryAfterStop && !runtimeBoundary.started {
+				return "sha256:" + strings.Repeat("b", 64), nil
+			}
+			return managedInventory, nil
+		},
 	}
 	backup := platformcommand.BackupPlan{
 		InstalledPlan: installedPlanFrom(plan),
@@ -848,6 +927,18 @@ func TestRecoverBackupRestoresSelectedSnapshotAndConvergesTarget(t *testing.T) {
 		BackupID:     source.BackupID,
 		BackupDigest: source.BackupDigest,
 	}
+	managedInventory = "sha256:" + strings.Repeat("b", 64)
+	if err := effects.ApplyRecoveryPhase(context.Background(), recovery, lifecycle.PhaseRecovering); !errors.Is(err, platformcommand.ErrEffectPrecondition) ||
+		runtimeBoundary.providerRemovals != removals || runtimeBoundary.recoveryRestores != 0 {
+		t.Fatalf("inventory change after inspection was not rejected before shutdown: %v", err)
+	}
+	managedInventory = "sha256:" + strings.Repeat("a", 64)
+	changeInventoryAfterStop = true
+	if err := effects.ApplyRecoveryPhase(context.Background(), recovery, lifecycle.PhaseRecovering); !errors.Is(err, platformcommand.ErrEffectPrecondition) ||
+		runtimeBoundary.recoveryRestores != 0 {
+		t.Fatalf("inventory race was not rejected before database restore: %v", err)
+	}
+	changeInventoryAfterStop = false
 	for _, phase := range []lifecycle.Phase{
 		lifecycle.PhaseRecovering, lifecycle.PhaseStarting, lifecycle.PhaseVerifying,
 	} {

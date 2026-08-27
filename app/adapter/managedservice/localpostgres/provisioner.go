@@ -10,10 +10,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,7 +30,12 @@ const (
 	postgresServiceName  = "postgres"
 )
 
+// DirectoryName is the adapter-owned directory below the local worker binding.
+const DirectoryName = "managed-postgres"
+
 var imageIDPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+var recoveryProjectPattern = regexp.MustCompile(`^matrix-[0-9a-f]{24}$`)
 
 type Config struct {
 	Root      string
@@ -400,4 +407,55 @@ func formatCPUs(millicores uint32) string {
 	}
 	return strconv.FormatUint(uint64(whole), 10) + "." +
 		strings.TrimRight(fmt.Sprintf("%03d", fraction), "0")
+}
+
+// InspectRecoveryInventory observes identities only. A project directory is
+// created after its durable installation request and before any Docker effect.
+// It must therefore participate even when provisioning has not completed.
+// Data and credential contents are neither read nor included in the witness.
+func InspectRecoveryInventory(root string) (string, error) {
+	if !filepath.IsAbs(root) || filepath.Clean(root) != root {
+		return "", errors.New("local PostgreSQL recovery root is invalid")
+	}
+	before, err := os.Lstat(root)
+	if err != nil || !before.IsDir() || before.Mode()&os.ModeSymlink != 0 ||
+		(os.PathSeparator == '/' && before.Mode().Perm()&0o077 != 0) {
+		return "", errors.New("local PostgreSQL recovery root is unavailable")
+	}
+	directory, err := os.Open(root)
+	if err != nil {
+		return "", errors.New("local PostgreSQL recovery inventory is unavailable")
+	}
+	defer directory.Close()
+	opened, err := directory.Stat()
+	if err != nil || !os.SameFile(before, opened) {
+		return "", errors.New("local PostgreSQL recovery root changed")
+	}
+	const maximumRecoveryProjects = 256
+	entries, err := directory.ReadDir(maximumRecoveryProjects + 1)
+	if (err != nil && !errors.Is(err, io.EOF)) || len(entries) > maximumRecoveryProjects {
+		return "", errors.New("local PostgreSQL recovery inventory exceeds its bound")
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		info, err := os.Lstat(filepath.Join(root, entry.Name()))
+		if err != nil || !recoveryProjectPattern.MatchString(entry.Name()) ||
+			!info.IsDir() || info.Mode()&os.ModeSymlink != 0 ||
+			(os.PathSeparator == '/' && info.Mode().Perm()&0o077 != 0) {
+			return "", errors.New("local PostgreSQL recovery inventory is unproved")
+		}
+		names = append(names, entry.Name())
+	}
+	after, err := os.Lstat(root)
+	if err != nil || !os.SameFile(before, after) {
+		return "", errors.New("local PostgreSQL recovery root changed")
+	}
+	slices.Sort(names)
+	digest := sha256.New()
+	_, _ = digest.Write([]byte("matrix-managed-postgres-recovery-inventory-v1\x00"))
+	for _, name := range names {
+		_, _ = digest.Write([]byte(name))
+		_, _ = digest.Write([]byte{0})
+	}
+	return "sha256:" + hex.EncodeToString(digest.Sum(nil)), nil
 }

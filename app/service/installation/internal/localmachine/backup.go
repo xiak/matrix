@@ -45,16 +45,17 @@ const (
 var backupIDPattern = regexp.MustCompile(`^backup-[0-9a-f]{32}$`)
 
 type backupManifest struct {
-	APIVersion     string           `json:"apiVersion"`
-	Kind           string           `json:"kind"`
-	BackupID       string           `json:"backupId"`
-	InstallationID string           `json:"installationId"`
-	ReleaseID      string           `json:"releaseId"`
-	ReleaseDigest  string           `json:"releaseDigest"`
-	SchemaVersion  uint64           `json:"schemaVersion"`
-	CreatedAt      time.Time        `json:"createdAt"`
-	Artifacts      []backupArtifact `json:"artifacts"`
-	Seal           *backupSeal      `json:"seal,omitempty"`
+	APIVersion              string           `json:"apiVersion"`
+	Kind                    string           `json:"kind"`
+	BackupID                string           `json:"backupId"`
+	InstallationID          string           `json:"installationId"`
+	ReleaseID               string           `json:"releaseId"`
+	ReleaseDigest           string           `json:"releaseDigest"`
+	SchemaVersion           uint64           `json:"schemaVersion"`
+	CreatedAt               time.Time        `json:"createdAt"`
+	ManagedServiceInventory string           `json:"managedServiceInventory"`
+	Artifacts               []backupArtifact `json:"artifacts"`
+	Seal                    *backupSeal      `json:"seal,omitempty"`
 }
 
 type backupArtifact struct {
@@ -75,7 +76,7 @@ func (effects *Effects) InspectBackup(
 	installed platformcommand.InstalledPlan,
 	backupID string,
 ) (platformcommand.RecoverySource, error) {
-	if effects == nil || ctx == nil {
+	if effects == nil || effects.managedInventory == nil || ctx == nil {
 		return platformcommand.RecoverySource{}, errors.Join(
 			platformcommand.ErrEffectUnavailable,
 			errors.New("local-machine backup inspection is unavailable"),
@@ -130,6 +131,9 @@ func (effects *Effects) InspectBackup(
 			platformcommand.ErrEffectConflict, err,
 		)
 	}
+	if err := requireManagedServiceInventory(installed.Root, manifest.ManagedServiceInventory, effects.managedInventory); err != nil {
+		return platformcommand.RecoverySource{}, err
+	}
 	return platformcommand.RecoverySource{
 		InstallationID: installed.InstallationID,
 		BackupID:       backupID,
@@ -144,7 +148,7 @@ func (effects *Effects) CreateBackup(
 	ctx context.Context,
 	request platformcommand.BackupPlan,
 ) error {
-	if effects == nil || effects.runtime == nil || effects.entropy == nil ||
+	if effects == nil || effects.runtime == nil || effects.entropy == nil || effects.managedInventory == nil ||
 		ctx == nil {
 		return errors.Join(
 			platformcommand.ErrEffectUnavailable,
@@ -210,7 +214,7 @@ func (effects *Effects) CreateBackup(
 	}
 	return createBackup(
 		ctx, effects.runtime, streaming, effects.entropy, plan,
-		installation, postgres.ID, request.BackupID, request.CreatedAt,
+		installation, postgres.ID, request.BackupID, request.CreatedAt, effects.managedInventory,
 	)
 }
 
@@ -224,6 +228,7 @@ func createBackup(
 	postgresID string,
 	backupID string,
 	createdAt time.Time,
+	inspectManagedInventory func(string) (string, error),
 ) error {
 	if _, err := ensureManagedDirectory(
 		plan.Root, filepath.FromSlash(layout.BackupDirectory),
@@ -265,6 +270,10 @@ func createBackup(
 			_ = removeManagedTree(plan.Root, partialRelative)
 		}
 	}()
+	managedInventory, err := readManagedServiceInventory(plan.Root, inspectManagedInventory)
+	if err != nil {
+		return err
+	}
 
 	secretsRelative := filepath.Join(partialRelative, workloadSecretsFilename)
 	if err := writeWorkloadSecretsArchive(plan.Root, secretsRelative); err != nil {
@@ -285,6 +294,9 @@ func createBackup(
 		if ctx.Err() != nil {
 			cleanup = false
 		}
+		return err
+	}
+	if err := requireManagedServiceInventory(plan.Root, managedInventory, inspectManagedInventory); err != nil {
 		return err
 	}
 	if err := verifyDatabaseDump(ctx, streaming, plan.Root, dumpRelative, postgresID); err != nil {
@@ -311,11 +323,12 @@ func createBackup(
 	manifest := backupManifest{
 		APIVersion: backupAPIVersion, Kind: backupKind,
 		BackupID: backupID, InstallationID: plan.InstallationID,
-		ReleaseID:     plan.Bundle.Manifest.Release.ID,
-		ReleaseDigest: plan.Bundle.ManifestSHA256,
-		SchemaVersion: plan.Bundle.Manifest.Database.SchemaVersion,
-		CreatedAt:     createdAt,
-		Artifacts:     []backupArtifact{dumpArtifact, secretsArtifact},
+		ReleaseID:               plan.Bundle.Manifest.Release.ID,
+		ReleaseDigest:           plan.Bundle.ManifestSHA256,
+		SchemaVersion:           plan.Bundle.Manifest.Database.SchemaVersion,
+		CreatedAt:               createdAt,
+		ManagedServiceInventory: managedInventory,
+		Artifacts:               []backupArtifact{dumpArtifact, secretsArtifact},
 	}
 	content, err := sealBackupManifest(manifest, key)
 	if err != nil {
@@ -830,7 +843,7 @@ func readVerifiedBackupDirectory(
 		manifest.APIVersion != backupAPIVersion || manifest.Kind != backupKind ||
 		manifest.BackupID != backupID || manifest.InstallationID != installationID ||
 		manifest.ReleaseID == "" || !validSHA256(manifest.ReleaseDigest) ||
-		manifest.SchemaVersion == 0 || manifest.CreatedAt.IsZero() ||
+		manifest.SchemaVersion == 0 || manifest.CreatedAt.IsZero() || !validSHA256(manifest.ManagedServiceInventory) ||
 		manifest.CreatedAt.Location() != time.UTC ||
 		manifest.CreatedAt != manifest.CreatedAt.Truncate(time.Microsecond) ||
 		len(manifest.Artifacts) != 2 || manifest.Seal == nil ||
