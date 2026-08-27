@@ -15,9 +15,10 @@ type passwordDigestInput struct {
 }
 
 type createUserDigestInput struct {
-	LoginName   string `json:"loginName"`
-	DisplayName string `json:"displayName"`
-	RequestID   string `json:"requestId"`
+	LoginName   string             `json:"loginName"`
+	DisplayName string             `json:"displayName"`
+	RequestID   string             `json:"requestId"`
+	InitialRole *iamv1.BuiltinRole `json:"initialRole,omitempty"`
 }
 
 type revokeDigestInput struct {
@@ -173,7 +174,7 @@ func (service *Authority) CreateUser(
 		return iamv1.Principal{}, ErrInvalidArgument
 	}
 	requestDigest, err := digestSanitized("principal-create", createUserDigestInput{
-		LoginName: request.LoginName, DisplayName: request.DisplayName, RequestID: request.RequestID,
+		LoginName: request.LoginName, DisplayName: request.DisplayName, RequestID: request.RequestID, InitialRole: request.InitialRole,
 	})
 	if err != nil {
 		return iamv1.Principal{}, err
@@ -248,6 +249,9 @@ func (service *Authority) CreateUser(
 			DecisionID:       decision.ID,
 			AuditEvent:       event,
 		})
+		if err == nil && request.InitialRole != nil {
+			err = service.putInitialRole(transactionContext, transaction, subject, created.ID, *request.InitialRole, request.RequestID, now)
+		}
 		return err
 	})
 	if err != nil {

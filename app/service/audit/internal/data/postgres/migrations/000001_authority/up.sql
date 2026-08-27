@@ -294,6 +294,10 @@ BEGIN
            iam_decision_permitted, iam_decision_required,
            operation_required
       FROM (VALUES
+        ('iam.organization.created', 'IAM', 'ORGANIZATION', 'SUCCEEDED', true, true, false),
+        ('iam.account-alias.set', 'IAM', 'ORGANIZATION', 'SUCCEEDED', true, true, false),
+        ('iam.principal.status-set', 'IAM', 'PRINCIPAL', 'SUCCEEDED', true, true, false),
+        ('iam.password.reset', 'IAM', 'PRINCIPAL', 'SUCCEEDED', true, true, false),
         ('iam.bootstrap.applied', 'IAM', 'INSTALLATION', 'SUCCEEDED', false, false, false),
         ('iam.session.issued', 'IAM', 'SESSION', 'SUCCEEDED', false, false, false),
         ('iam.session.revoked', 'IAM', 'SESSION', 'SUCCEEDED', true, false, false),
@@ -745,6 +749,8 @@ BEGIN
             'iam.bootstrap.applied', 'iam.session.issued',
             'iam.session.revoked', 'iam.password.changed',
             'iam.principal.created', 'iam.role-binding.put',
+            'iam.organization.created', 'iam.account-alias.set',
+            'iam.principal.status-set', 'iam.password.reset',
             'iam.role-binding.revoked', 'iam.authorization.decided',
             'paas.application.created', 'paas.configuration.created',
             'paas.configuration-revision.created',

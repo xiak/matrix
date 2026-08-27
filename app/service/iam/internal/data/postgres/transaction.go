@@ -207,8 +207,9 @@ func (value *transaction) LookupSession(
 		sessionRevokedAt                                            *time.Time
 		verificationDigest                                          string
 		roles                                                       []string
+		bootstrapAdministrator                                      bool
 	)
-	err := value.tx.QueryRow(ctx, "SELECT * FROM iam.lookup_session($1)", lookupDigest).Scan(
+	err := value.tx.QueryRow(ctx, "SELECT session.*, iam.is_bootstrap_administrator(session.organization_id, session.principal_id) FROM iam.lookup_session($1) AS session", lookupDigest).Scan(
 		&organizationID,
 		&organizationDisplayName,
 		&organizationStatus,
@@ -231,6 +232,7 @@ func (value *transaction) LookupSession(
 		&sessionRevokedAt,
 		&verificationDigest,
 		&roles,
+		&bootstrapAdministrator,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return identityaccess.SessionCredential{}, false, nil
@@ -248,6 +250,7 @@ func (value *transaction) LookupSession(
 		revokedAt = &converted
 	}
 	subject := authority.SubjectContext{
+		BootstrapAdministrator: bootstrapAdministrator,
 		Organization: iamv1.Organization{
 			APIVersion:      iamv1.APIVersion,
 			Kind:            "Organization",
@@ -331,6 +334,47 @@ func (value *transaction) LookupService(
 		Identity:           identity,
 		VerificationDigest: verificationDigest,
 	}, true, nil
+}
+
+func (value *transaction) ReadAuditEvidence(
+	ctx context.Context,
+	identity iamv1.ServiceIdentity,
+	event auditv1.Event,
+) (identityaccess.AuditEvidence, bool, error) {
+	if iamv1.ValidateServiceIdentity(identity) != nil || auditv1.ValidateEvent(event) != nil {
+		return identityaccess.AuditEvidence{}, false, identityaccess.ErrInvalidArgument
+	}
+	encoded, err := json.Marshal(event)
+	if err != nil {
+		return identityaccess.AuditEvidence{}, false, identityaccess.ErrInvalidArgument
+	}
+	defer clear(encoded)
+	var result identityaccess.AuditEvidence
+	var storedEvent, decision []byte
+	var verifier *string
+	err = value.tx.QueryRow(ctx, "SELECT * FROM iam.read_audit_evidence($1,$2,$3,$4,$5::jsonb)",
+		identity.OrganizationID, identity.PrincipalID, identity.Purpose, identity.InstallationID, encoded,
+	).Scan(&result.InstallationID, &storedEvent, &decision, &verifier)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return identityaccess.AuditEvidence{}, false, nil
+	}
+	if err != nil {
+		return identityaccess.AuditEvidence{}, false, mapDatabaseError("read historical IAM Audit evidence", err)
+	}
+	if json.Unmarshal(storedEvent, &result.Event) != nil {
+		return identityaccess.AuditEvidence{}, false, identityaccess.ErrUnavailable
+	}
+	result.Event.OccurredAt = result.Event.OccurredAt.UTC()
+	if len(decision) > 0 {
+		if json.Unmarshal(decision, &result.Decision) != nil || result.Decision == nil {
+			return identityaccess.AuditEvidence{}, false, identityaccess.ErrUnavailable
+		}
+		result.Decision.DecidedAt = result.Decision.DecidedAt.UTC()
+	}
+	if verifier != nil {
+		result.VerifierPrincipalID = iamv1.PrincipalID(*verifier)
+	}
+	return result, true, nil
 }
 
 func (value *transaction) LookupServiceRoles(

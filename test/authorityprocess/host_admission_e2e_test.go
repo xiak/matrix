@@ -210,10 +210,10 @@ func createPlatformHost(t *testing.T, ctx context.Context, admin *pgx.Conn, paas
 		wrong := record.Event
 		wrong.EventID = "event-wrong-platform"
 		wrong.InstallationID = "another-installation"
-		if got := performJSON(t, http.MethodPost, auditEndpoint+"/v1/events", paasServiceCredential, wrong); got.Status != http.StatusUnprocessableEntity {
+		if got := performJSON(t, http.MethodPost, auditEndpoint+"/v1/events", paasServiceCredential, wrong); got.Status != http.StatusForbidden {
 			t.Fatalf("wrong installation Audit accepted=%d", got.Status)
 		}
-		if got := performJSON(t, http.MethodPost, auditEndpoint+"/v1/events", iamServiceCredential, record.Event); got.Status != http.StatusUnprocessableEntity {
+		if got := performJSON(t, http.MethodPost, auditEndpoint+"/v1/events", iamServiceCredential, record.Event); got.Status != http.StatusForbidden {
 			t.Fatalf("wrong source Audit accepted=%d", got.Status)
 		}
 		return record

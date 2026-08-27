@@ -1,6 +1,7 @@
 package authorityprocess
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/hex"
@@ -51,6 +52,202 @@ const (
 	auditServiceCredential = "mx1.ProcessAuditServiceCredential000000000000001"
 	verifierCredential     = "mx1.ProcessVerifierCredential0000000000000001"
 )
+
+func TestIAMRetainedAccountProcessUpgrade(t *testing.T) {
+	const variable = "MATRIX_IAM_UPGRADE_POSTGRES_TEST_DSN"
+	dsn := os.Getenv(variable)
+	if dsn == "" {
+		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", variable)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	config, err := pgx.ParseConfig(dsn)
+	if err != nil || !strings.HasPrefix(config.Database, "matrix_iam_upgrade_") {
+		t.Fatal("IAM upgrade requires its own matrix_iam_upgrade_ database")
+	}
+	config.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	admin, err := pgx.ConnectConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = admin.Close(context.Background()) }()
+	assertPostgres18(t, ctx, admin)
+	assertCleanSchemas(t, ctx, admin)
+	if err := iammigration.Bootstrap(ctx, admin); err != nil {
+		t.Fatal(err)
+	}
+	root, temporary := repositoryRoot(t), t.TempDir()
+	baselineRoot := extractFixedIAMSource(t, ctx, root, temporary)
+	oldSQL, err := os.ReadFile(filepath.Join(baselineRoot, "app/service/iam/internal/data/postgres/migrations/000001_authority/up.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, string(oldSQL)); err != nil {
+		t.Fatalf("apply fixed single-tenant IAM schema: %v", err)
+	}
+	createProcessLogin(t, ctx, admin, iamAPILogin, "matrix_iam_api")
+	oldBinary := buildAuthorityBinary(t, ctx, baselineRoot, temporary, "matrix-iam-baseline", "./app/service/iam/cmd/matrix-iam")
+	currentBinary := buildAuthorityBinary(t, ctx, root, temporary, "matrix-iam-upgrade", "./app/service/iam/cmd/matrix-iam")
+	bootstrapBytes, err := iamv1.EncodeBootstrapDocument(processBootstrap(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrapPath := writeProtectedFile(t, temporary, "iam-bootstrap.json", bootstrapBytes)
+	clear(bootstrapBytes)
+	dsnPath := writeProtectedFile(t, temporary, "iam-dsn", []byte(runtimeDSN(config, iamAPILogin, processDBPassword)))
+	address := freeAddress(t)
+	endpoint := "http://" + address
+	environment := []string{"MATRIX_IAM_DATABASE_DSN_FILE=" + dsnPath, "MATRIX_IAM_BOOTSTRAP_FILE=" + bootstrapPath, "MATRIX_IAM_LISTEN_ADDRESS=" + address}
+	var children []*childProcess
+	defer func() {
+		for _, child := range children {
+			child.stop()
+		}
+		assertProcessOutputsSanitized(t, children, initialAdminPassword, changedAdminPassword, initialReaderPassword, changedReaderPassword)
+	}()
+	start := func(binary string) *childProcess {
+		child := startChild(t, root, binary, environment)
+		children = append(children, child)
+		waitHTTPStatus(t, ctx, child, endpoint+"/ready", http.StatusOK)
+		return child
+	}
+	old := start(oldBinary)
+	administrator := loginIAM(t, endpoint, "admin", initialAdminPassword, "request-upgrade-admin-login")
+	changePasswordIAM(t, endpoint, administrator.Credential, initialAdminPassword, changedAdminPassword, "request-upgrade-admin-password")
+	user := createIAMUser(t, endpoint, administrator.Credential, "retained.viewer", "Retained viewer", initialReaderPassword, "request-upgrade-member")
+	member := loginIAM(t, endpoint, "retained.viewer", initialReaderPassword, "request-upgrade-member-login")
+	changePasswordIAM(t, endpoint, member.Credential, initialReaderPassword, changedReaderPassword, "request-upgrade-member-password")
+	binding := putIAMBinding(t, endpoint, administrator.Credential, user.ID, iamv1.RolePaaSViewer, "request-upgrade-role")
+	revokeIAMBinding(t, endpoint, administrator.Credential, binding.ID, "request-upgrade-role-revoke")
+	revokeIAMSession(t, endpoint, administrator.Credential, member.Session.ID, "request-upgrade-session-revoke")
+	revokeIAMBinding(t, endpoint, administrator.Credential, "bootstrap-platform-operator-binding", "request-upgrade-platform-revoke")
+	old.stop()
+	rows, err := admin.Query(ctx, "SELECT event_id,event_document FROM iam.audit_outbox")
+	if err != nil {
+		t.Fatal(err)
+	}
+	retained := map[string]auditv1.Event{}
+	for rows.Next() {
+		var id string
+		var raw []byte
+		var event auditv1.Event
+		if rows.Scan(&id, &raw) != nil || json.Unmarshal(raw, &event) != nil {
+			rows.Close()
+			t.Fatal("decode retained IAM fact")
+		}
+		event.OccurredAt = event.OccurredAt.UTC()
+		retained[id] = event
+	}
+	rows.Close()
+	if rows.Err() != nil || len(retained) == 0 {
+		t.Fatal("old installation has no retained facts")
+	}
+	unmigrated := startChild(t, root, currentBinary, environment)
+	children = append(children, unmigrated)
+	if err := unmigrated.wait(10 * time.Second); err == nil || errors.Is(err, errProcessWaitTimeout) {
+		t.Fatal("current IAM served an unmigrated authority schema")
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := iammigration.Up(ctx, admin); err != nil {
+			t.Fatalf("upgrade populated IAM: %v", err)
+		}
+		if err := iammigration.Verify(ctx, admin); err != nil {
+			t.Fatal(err)
+		}
+	}
+	current := start(currentBinary)
+	for attempt := 0; attempt < 2; attempt++ {
+		if attempt > 0 {
+			current.stop()
+			current = start(currentBinary)
+		}
+		if got := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", member.Credential, nil); got.Status != http.StatusUnauthorized {
+			t.Fatal("upgrade/restart revived a revoked session")
+		}
+		primary := loginIAM(t, endpoint, "admin", changedAdminPassword, "request-upgrade-retained-primary")
+		identityResponse := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", primary.Credential, nil)
+		var identity iamv1.CurrentIdentity
+		if identityResponse.Status != http.StatusOK || json.Unmarshal(identityResponse.Body, &identity) != nil || identity.Account.PrimaryPrincipalID != "principal-admin" || identity.Principal.MustChangePassword {
+			t.Fatal("upgrade replaced primary ownership or credentials")
+		}
+		assertPlatformAuthorization(t, endpoint, primary.Credential, "principal-admin", "request-upgrade-platform-denied", false)
+		child := loginIAM(t, endpoint, "retained.viewer@organization-process", changedReaderPassword, "request-upgrade-retained-child")
+		childResponse := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", child.Credential, nil)
+		var childIdentity iamv1.CurrentIdentity
+		if childResponse.Status != http.StatusOK || json.Unmarshal(childResponse.Body, &childIdentity) != nil || childIdentity.Principal.ID != user.ID || len(childIdentity.Roles) != 0 {
+			t.Fatal("upgrade changed member identity or revived a revoked role")
+		}
+		serviceResponse := performJSON(t, http.MethodGet, endpoint+"/v1/service-identity", paasServiceCredential, nil)
+		var service iamv1.ServiceIdentity
+		if serviceResponse.Status != http.StatusOK || json.Unmarshal(serviceResponse.Body, &service) != nil || iamv1.ValidateServiceIdentity(service) != nil || service.InstallationID != "installation-process" {
+			t.Fatal("upgraded service lost sealed installation")
+		}
+		for id, event := range retained {
+			var raw []byte
+			var stored auditv1.Event
+			if err := admin.QueryRow(ctx, "SELECT event_document FROM iam.audit_outbox WHERE event_id=$1", id).Scan(&raw); err != nil || json.Unmarshal(raw, &stored) != nil {
+				t.Fatal("upgrade lost IAM fact")
+			}
+			stored.OccurredAt = stored.OccurredAt.UTC()
+			before, digest, beforeErr := auditv1.CanonicalizeEvent(auditv1.SourceIAM, event)
+			after, _, afterErr := auditv1.CanonicalizeEvent(auditv1.SourceIAM, stored)
+			if beforeErr != nil || afterErr != nil || before != after {
+				t.Fatal("upgrade rewrote canonical IAM evidence")
+			}
+			proofResponse := performJSON(t, http.MethodPost, endpoint+"/v1/audit-producer:resolve", iamServiceCredential, iamv1.ResolveAuditProducerRequest{Event: event})
+			var proof iamv1.AuditProducerAuthorization
+			if proofResponse.Status != http.StatusOK || json.Unmarshal(proofResponse.Body, &proof) != nil || proof.ContentDigest != digest {
+				t.Fatal("retained committed IAM fact cannot be delivered after upgrade")
+			}
+		}
+	}
+}
+
+// This gate builds the accepted old executable from fixed Git objects in its
+// own temporary directory. Old source is never a product/runtime dependency.
+func extractFixedIAMSource(t *testing.T, ctx context.Context, root, temporary string) string {
+	t.Helper()
+	command := exec.CommandContext(ctx, "git", "archive", "--format=zip", "9fd45b03ea398828fa3e74bf99961d2348c68299", "go.mod", "go.sum", "api", "app/service/iam", "app/service/internal")
+	command.Dir = root
+	archive, err := command.Output()
+	if err != nil || len(archive) > 32<<20 {
+		t.Fatal("cannot read bounded fixed IAM source archive")
+	}
+	reader, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(temporary, "iam-baseline")
+	for _, entry := range reader.File {
+		path := filepath.FromSlash(entry.Name)
+		if !filepath.IsLocal(path) || entry.UncompressedSize64 > 8<<20 {
+			t.Fatal("unsafe fixed source entry")
+		}
+		target := filepath.Join(destination, path)
+		if entry.FileInfo().IsDir() {
+			if err := os.MkdirAll(target, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		source, err := entry.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		content, readErr := io.ReadAll(io.LimitReader(source, 8<<20))
+		closeErr := source.Close()
+		if readErr != nil || closeErr != nil {
+			t.Fatal("cannot extract fixed source entry")
+		}
+		if err := os.WriteFile(target, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return destination
+}
 
 func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	dsn := os.Getenv(authorityProcessDSN)
@@ -309,10 +506,10 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		changedAdminPassword,
 		"request-admin-password",
 	)
-	assertCrossTenantIAMBindingRejected(t, ctx, admin, iamEndpoint, adminLogin.Credential)
 	platformDecisions := []iamv1.AuthorizationDecision{
 		assertPlatformAuthorization(t, iamEndpoint, adminLogin.Credential, "principal-admin", "request-platform-admin", true),
 	}
+	sensitive = append(sensitive, proveTenantAccountProcesses(t, ctx, admin, iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential)...)
 	platformAuditRecord := createPlatformHost(t, ctx, admin, paasEndpoint, auditEndpoint, adminLogin.Credential, node)
 	assertPlatformAuditAccess(t, auditEndpoint, adminLogin.Credential, http.StatusOK)
 	waitAllIAMOutboxDelivered(t, ctx, admin)
@@ -341,7 +538,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	developerLogin := loginIAM(
 		t,
 		iamEndpoint,
-		"paas.developer",
+		"paas.developer@organization-process",
 		initialDeveloperPassword,
 		"request-developer-login",
 	)
@@ -483,7 +680,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	readerLogin := loginIAM(
 		t,
 		iamEndpoint,
-		"audit.reader",
+		"audit.reader@organization-process",
 		initialReaderPassword,
 		"request-reader-login",
 	)
@@ -671,8 +868,8 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		iamServiceCredential,
 		changedEvent,
 	)
-	if response.Status != http.StatusConflict {
-		t.Fatalf("changed Audit replay status=%d", response.Status)
+	if response.Status != http.StatusForbidden {
+		t.Fatalf("unproved IAM fact replay status=%d", response.Status)
 	}
 	assertAuditEventCount(t, ctx, admin, outageEventID, 1)
 	paasEventID, paasEvent := findPaaSEvent(
@@ -712,8 +909,14 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		paasServiceCredential,
 		changedPaaSEvent,
 	)
+	if response.Status != http.StatusForbidden {
+		t.Fatalf("uncorrelated PaaS fact replay status=%d", response.Status)
+	}
+	changedPaaSEvent = paasEvent
+	changedPaaSEvent.RequestDigest = "sha256:" + strings.Repeat("e", 64)
+	response = performJSON(t, http.MethodPost, auditEndpoint+"/v1/events", paasServiceCredential, changedPaaSEvent)
 	if response.Status != http.StatusConflict {
-		t.Fatalf("changed PaaS Audit replay status=%d", response.Status)
+		t.Fatalf("authority-valid changed payload replay status=%d", response.Status)
 	}
 	assertAuditSourceEventCount(t, ctx, admin, auditv1.SourcePaaS, paasEventID, 1)
 
@@ -754,23 +957,16 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	waitIAMDeadLetter(t, ctx, admin)
 	waitHTTPStatus(t, ctx, iamProcess, iamEndpoint+"/ready", http.StatusServiceUnavailable)
 	wrongDispatcher.stop()
-	assertAuthorityPlaintextAbsent(
-		t,
-		ctx,
-		admin,
-		initialAdminPassword,
-		changedAdminPassword,
-		initialReaderPassword,
-		changedReaderPassword,
-		initialDeveloperPassword,
-		changedDeveloperPassword,
-		iamServiceCredential,
-		paasServiceCredential,
-		auditServiceCredential,
-		adminLogin.Credential,
-		readerLogin.Credential,
-		developerLogin.Credential,
-	)
+	if _, err := admin.Exec(ctx, `UPDATE iam.service_credentials SET revoked_at=transaction_timestamp()
+		WHERE tenant_id='organization-process' AND purpose='IAM' AND revoked_at IS NULL`); err != nil {
+		t.Fatal(err)
+	}
+	response = performJSON(t, http.MethodPost, auditEndpoint+"/v1/events", iamServiceCredential, outageEvent)
+	if response.Status != http.StatusUnauthorized {
+		t.Fatalf("revoked producer credential reused historical proof: status=%d", response.Status)
+	}
+	assertAuditEventCount(t, ctx, admin, outageEventID, 1)
+	assertAuthorityPlaintextAbsent(t, ctx, admin, sensitive...)
 }
 
 type binarySet struct {
@@ -788,19 +984,8 @@ func buildAuthorityBinaries(
 	temporary string,
 ) binarySet {
 	t.Helper()
-	suffix := ""
-	if runtime.GOOS == "windows" {
-		suffix = ".exe"
-	}
 	build := func(name, packagePath string) string {
-		path := filepath.Join(temporary, name+suffix)
-		command := exec.CommandContext(ctx, "go", "build", "-o", path, packagePath)
-		command.Dir = root
-		output, err := command.CombinedOutput()
-		if err != nil {
-			t.Fatalf("build %s: %v\n%s", name, err, output)
-		}
-		return path
+		return buildAuthorityBinary(t, ctx, root, temporary, name, packagePath)
 	}
 	return binarySet{
 		iam:            build("matrix-iam", "./app/service/iam/cmd/matrix-iam"),
@@ -809,6 +994,22 @@ func buildAuthorityBinaries(
 		paas:           build("matrix-paas", "./app/service/paas/cmd/matrix-paas"),
 		paasDispatcher: build("matrix-paas-audit-dispatcher", "./app/service/paas/cmd/matrix-paas-audit-dispatcher"),
 	}
+}
+
+func buildAuthorityBinary(t *testing.T, ctx context.Context, root, temporary, name, packagePath string) string {
+	t.Helper()
+	suffix := ""
+	if runtime.GOOS == "windows" {
+		suffix = ".exe"
+	}
+	path := filepath.Join(temporary, name+suffix)
+	command := exec.CommandContext(ctx, "go", "build", "-p", "2", "-o", path, packagePath)
+	command.Dir = root
+	command.Env = append(os.Environ(), "GOMAXPROCS=2", "GOMEMLIMIT=512MiB")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build %s: %v\n%s", name, err, output)
+	}
+	return path
 }
 
 type childProcess struct {
@@ -832,7 +1033,7 @@ func startChild(
 	child := &childProcess{done: make(chan error, 1)}
 	child.command = exec.Command(binary)
 	child.command.Dir = root
-	child.command.Env = append(os.Environ(), environment...)
+	child.command.Env = append(append(os.Environ(), environment...), "GOMAXPROCS=2", "GOMEMLIMIT=512MiB")
 	child.command.Stdout = &child.stdout
 	child.command.Stderr = &child.stderr
 	if err := child.command.Start(); err != nil {
@@ -1265,65 +1466,97 @@ func expireIAMSession(
 	}
 }
 
-func assertCrossTenantIAMBindingRejected(
+func proveTenantAccountProcesses(
 	t *testing.T,
 	ctx context.Context,
 	admin *pgx.Conn,
 	endpoint string,
+	auditEndpoint string,
+	paasEndpoint string,
 	bearer string,
-) {
+) []string {
 	t.Helper()
 	const (
-		crossTenantID    = "organization-process-cross-tenant"
-		crossPrincipalID = "principal-process-cross-tenant"
+		crossTenantID = "organization-process-customer"
+		initial       = "Customer-Process-Initial-Password-48!"
+		changed       = "Customer-Process-Changed-Password-59!"
 	)
-	if _, err := admin.Exec(
-		ctx,
-		`INSERT INTO iam.organizations (
-			id, display_name, status, resource_version, created_at, updated_at
-		) VALUES (
-			$1, 'Process Cross Tenant', 'ACTIVE', 1,
-			transaction_timestamp(), transaction_timestamp()
-		);
-		INSERT INTO iam.principals (
-			tenant_id, id, principal_type, login_name, display_name, status,
-			must_change_password, resource_version, created_at, updated_at
-		) VALUES (
-			$1, $2, 'USER', 'process.cross.tenant', 'Process Cross Tenant User',
-			'ACTIVE', true, 1, transaction_timestamp(), transaction_timestamp()
-		);`,
-		crossTenantID,
-		crossPrincipalID,
-	); err != nil {
-		t.Fatalf("insert cross-tenant IAM process fixture: %v", err)
+	opened := performJSON(t, http.MethodPost, endpoint+"/v1/organizations", bearer, map[string]any{
+		"id": crossTenantID, "displayName": "Process customer", "administratorLoginName": "customer.primary",
+		"administratorDisplayName": "Customer owner", "initialPassword": initial, "requestId": "request-open-customer",
+	})
+	var account iamv1.OrganizationAccount
+	if opened.Status != http.StatusCreated || json.Unmarshal(opened.Body, &account) != nil || iamv1.ValidateOrganizationAccount(account) != nil {
+		t.Fatalf("tenant HTTP onboarding status=%d", opened.Status)
 	}
+	primary := loginIAM(t, endpoint, "customer.primary", initial, "request-customer-login")
+	changePasswordIAM(t, endpoint, primary.Credential, initial, changed, "request-customer-password")
+	alias := performJSON(t, http.MethodPost, endpoint+"/v1/organization:alias", primary.Credential, iamv1.SetAccountAliasRequest{
+		Alias: "process-company", ResourceVersion: account.Organization.ResourceVersion, RequestID: "request-customer-alias",
+	})
+	if alias.Status != http.StatusOK {
+		t.Fatalf("customer alias status=%d", alias.Status)
+	}
+	child := createIAMUser(t, endpoint, primary.Credential, "account.user", "Customer developer", initial, "request-customer-user")
+	putIAMBinding(t, endpoint, primary.Credential, child.ID, iamv1.RolePaaSDeveloper, "request-customer-role")
+	childLogin := loginIAM(t, endpoint, "account.user@process-company", initial, "request-customer-child-login")
+	changePasswordIAM(t, endpoint, childLogin.Credential, initial, changed, "request-customer-child-password")
+	operation := createPaaSApplication(t, paasEndpoint, childLogin.Credential, "application-customer-only", "customer-only", "create-customer-application", http.StatusCreated)
+	if operation.Scope.TenantID != crossTenantID || operation.RequestedBy.ID != string(child.ID) {
+		t.Fatal("new tenant PaaS mutation lost its IAM identity")
+	}
+	getPaaSApplication(t, paasEndpoint, childLogin.Credential, "application-customer-only", http.StatusOK)
+	getPaaSApplication(t, paasEndpoint, bearer, "application-customer-only", http.StatusNotFound)
 	response := performJSON(
 		t,
 		http.MethodPost,
 		endpoint+"/v1/role-bindings",
 		bearer,
 		iamv1.PutRoleBindingRequest{
-			PrincipalID: crossPrincipalID,
-			Role:        iamv1.RolePaaSDeveloper,
+			PrincipalID: child.ID,
+			Role:        iamv1.RoleAuditReader,
 			RequestID:   "request-process-cross-tenant-binding",
 		},
 	)
 	if response.Status != http.StatusForbidden ||
-		bytes.Contains(response.Body, []byte(crossPrincipalID)) ||
+		bytes.Contains(response.Body, []byte(child.ID)) ||
 		bytes.Contains(response.Body, []byte("role binding principal")) {
 		t.Fatalf("cross-tenant IAM binding status=%d body=%s", response.Status, response.Body)
 	}
-	var bindings int
-	if err := admin.QueryRow(
-		ctx,
-		"SELECT count(*) FROM iam.role_bindings WHERE tenant_id = $1",
-		crossTenantID,
-	).Scan(&bindings); err != nil {
-		t.Fatalf("inspect cross-tenant IAM process bindings: %v", err)
+	var unauthorizedBindings int
+	if err := admin.QueryRow(ctx,
+		"SELECT count(*) FROM iam.role_bindings WHERE principal_id=$1 AND role_name='AUDIT_READER'",
+		child.ID).Scan(&unauthorizedBindings); err != nil || unauthorizedBindings != 0 {
+		t.Fatalf("cross-tenant IAM attack created bindings=%d err=%v", unauthorizedBindings, err)
 	}
-	if bindings != 0 {
-		t.Fatalf("cross-tenant IAM process bindings=%d want=0", bindings)
+	waitAllIAMOutboxDelivered(t, ctx, admin)
+	waitAllPaaSOutboxDelivered(t, ctx, admin)
+	for _, action := range []auditv1.Action{auditv1.ActionIAMAccountAliasSet, auditv1.ActionIAMPrincipalCreated, auditv1.ActionPaaSApplicationCreated} {
+		page := queryAudit(t, auditEndpoint, primary.Credential, auditv1.QueryRecordsRequest{PageSize: 100, Action: action}, http.StatusOK)
+		if page.TenantID != crossTenantID || len(page.Records) != 1 || page.Records[0].Event.TenantID != crossTenantID {
+			t.Fatalf("new tenant audit action=%s was not delivered exactly once within its account", action)
+		}
+		other := queryAudit(t, auditEndpoint, bearer, auditv1.QueryRecordsRequest{PageSize: 100, Action: action}, http.StatusOK)
+		for _, record := range other.Records {
+			if record.Event.TenantID != "organization-process" {
+				t.Fatal("bootstrap owner read another tenant's audit")
+			}
+		}
 	}
+	page := queryAudit(t, auditEndpoint, primary.Credential, auditv1.QueryRecordsRequest{PageSize: 1}, http.StatusOK)
+	if page.NextCursor == "" {
+		t.Fatal("new tenant audit page has no continuation")
+	}
+	queryAudit(t, auditEndpoint, bearer, auditv1.QueryRecordsRequest{PageSize: 1, Cursor: page.NextCursor}, http.StatusUnprocessableEntity)
+	chain := verifyAudit(t, auditEndpoint, primary.Credential)
+	if chain.TenantID != crossTenantID || chain.State != auditv1.VerificationVerified || !chain.Complete {
+		t.Fatal("new tenant audit chain failed verification")
+	}
+	userProducer := performJSON(t, http.MethodPost, auditEndpoint+"/v1/events", primary.Credential, page.Records[0].Event)
+	if userProducer.Status != http.StatusUnauthorized {
+		t.Fatal("tenant owner gained audit producer authority")
+	}
+	return []string{initial, changed, primary.Credential, childLogin.Credential}
 }
 
 func createPaaSApplication(
@@ -2135,7 +2368,13 @@ func createProcessLogins(t *testing.T, ctx context.Context, admin *pgx.Conn) {
 		{paasAPILogin, "matrix_paas_api"},
 		{paasWorkerLogin, "matrix_paas_worker"},
 	} {
-		statement := fmt.Sprintf(`DO $matrix_process_role$
+		createProcessLogin(t, ctx, admin, binding.login, binding.group)
+	}
+}
+
+func createProcessLogin(t *testing.T, ctx context.Context, admin *pgx.Conn, login, group string) {
+	t.Helper()
+	statement := fmt.Sprintf(`DO $matrix_process_role$
 		BEGIN
 			IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = %s) THEN
 				CREATE ROLE %s LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE
@@ -2145,16 +2384,15 @@ func createProcessLogins(t *testing.T, ctx context.Context, admin *pgx.Conn) {
 		$matrix_process_role$;
 		ALTER ROLE %s PASSWORD %s;
 		GRANT %s TO %s;`,
-			quoteLiteral(binding.login),
-			pgx.Identifier{binding.login}.Sanitize(),
-			pgx.Identifier{binding.login}.Sanitize(),
-			quoteLiteral(processDBPassword),
-			pgx.Identifier{binding.group}.Sanitize(),
-			pgx.Identifier{binding.login}.Sanitize(),
-		)
-		if _, err := admin.Exec(ctx, statement); err != nil {
-			t.Fatalf("create authority process login %s: %v", binding.login, err)
-		}
+		quoteLiteral(login),
+		pgx.Identifier{login}.Sanitize(),
+		pgx.Identifier{login}.Sanitize(),
+		quoteLiteral(processDBPassword),
+		pgx.Identifier{group}.Sanitize(),
+		pgx.Identifier{login}.Sanitize(),
+	)
+	if _, err := admin.Exec(ctx, statement); err != nil {
+		t.Fatalf("create authority process login %s: %v", login, err)
 	}
 }
 

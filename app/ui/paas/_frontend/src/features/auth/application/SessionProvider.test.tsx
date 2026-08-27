@@ -1,5 +1,6 @@
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
+import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import type { IamRepository } from "../repositories/iamRepository";
 import { SessionProvider, useSession } from "./SessionProvider";
 
@@ -88,6 +89,17 @@ describe("SessionProvider", () => {
     await act(async () => fireEvent.click(screen.getByText("logout")));
     await waitFor(() => expect(screen.getByTestId("phase").textContent).toBe("anonymous"));
     expect(screen.getByTestId("principal").textContent).toBe("none");
+  });
+
+  it("allows leaving a session already revoked by an administrator", async () => {
+    const revokedRepository = repository();
+    revokedRepository.logout = async () => { throw new HttpProblem(401, "iam.authentication.failed"); };
+    const screen = render(<SessionProvider repository={revokedRepository}><Probe /></SessionProvider>);
+    await act(async () => fireEvent.click(screen.getByText("login")));
+    await act(async () => fireEvent.click(screen.getByText("logout")));
+    await waitFor(() => expect(screen.getByTestId("phase").textContent).toBe("anonymous"));
+    expect(screen.getByTestId("principal").textContent).toBe("none");
+    expect(screen.getByTestId("error").textContent).toBe("none");
   });
 
   it("requires a first-login password change before authenticating", async () => {

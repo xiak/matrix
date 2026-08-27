@@ -269,9 +269,11 @@ builds passed locally. Source `3e208ea` passed
 including all existing Go/race, PostgreSQL/authority-process and real
 node/collector process jobs.
 
-Next in P3-1: consume the separately verified IAM historical producer proof,
-then combine real Linux enrollment/refresh with signed offline node startup
-and explicit platform authorization when upgrading an older installation.
+The fixed account/historical-producer-proof integration has passed this
+branch's host admission regression; its authority evidence is owned by
+[FEAT-006](FEAT-006-platform-authorities.md).
+Next in P3-1: combine real Linux enrollment/refresh with signed offline node
+startup and explicit platform authorization when upgrading an older installation.
 P3-1 and the complete Phase 3 release remain unaccepted.
 Retained-data schema migration alone does not establish runnable N-1
 compatibility; the release's schema profile and rollback admission still need

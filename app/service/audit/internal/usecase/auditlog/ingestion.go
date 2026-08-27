@@ -14,18 +14,29 @@ func (service *Service) Ingest(
 	serviceCredential iamv1.Secret,
 	event auditv1.Event,
 ) (auditv1.IngestionResult, error) {
-	identity, err := service.iam.ServiceIdentity(ctx, serviceCredential)
-	if err != nil {
-		return auditv1.IngestionResult{}, err
-	}
-	source, err := sourceForIdentity(identity)
-	if err != nil {
-		return auditv1.IngestionResult{}, err
-	}
-	if auditv1.ValidateEventForSource(source, event) != nil ||
-		(event.InstallationID != "" && event.InstallationID != identity.InstallationID) ||
-		(event.InstallationID == "" && event.TenantID != auditv1.TenantID(identity.OrganizationID)) {
+	if auditv1.ValidateEvent(event) != nil {
 		return auditv1.IngestionResult{}, ErrInvalidArgument
+	}
+	producer, err := service.iam.ResolveAuditProducer(ctx, serviceCredential, iamv1.ResolveAuditProducerRequest{
+		Event: event,
+	})
+	if err != nil {
+		return auditv1.IngestionResult{}, err
+	}
+	if iamv1.ValidateAuditProducerAuthorization(producer) != nil || producer.TenantID != iamv1.OrganizationID(event.TenantID) ||
+		producer.InstallationID != event.InstallationID {
+		return auditv1.IngestionResult{}, ErrUnavailable
+	}
+	source, err := sourceForIdentity(producer.Producer)
+	if err != nil {
+		return auditv1.IngestionResult{}, err
+	}
+	_, digest, err := auditv1.CanonicalizeEvent(source, event)
+	if err != nil {
+		return auditv1.IngestionResult{}, ErrInvalidArgument
+	}
+	if digest != producer.ContentDigest {
+		return auditv1.IngestionResult{}, ErrUnavailable
 	}
 	var result auditv1.IngestionResult
 	err = service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {

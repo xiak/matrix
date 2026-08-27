@@ -40,36 +40,42 @@ func NewClient(config Config) (*Client, error) {
 	}, nil
 }
 
-func (client *Client) ServiceIdentity(
+func (client *Client) ResolveAuditProducer(
 	ctx context.Context,
 	producerCredential iamv1.Secret,
-) (iamv1.ServiceIdentity, error) {
+	request iamv1.ResolveAuditProducerRequest,
+) (iamv1.AuditProducerAuthorization, error) {
 	if client == nil || client.http == nil {
-		return iamv1.ServiceIdentity{}, auditlog.ErrUnavailable
+		return iamv1.AuditProducerAuthorization{}, auditlog.ErrUnavailable
 	}
-	if ctx == nil || !producerCredential.Present() {
-		return iamv1.ServiceIdentity{}, auditlog.ErrInvalidArgument
+	if ctx == nil || !producerCredential.Present() || iamv1.ValidateResolveAuditProducerRequest(request) != nil {
+		return iamv1.AuditProducerAuthorization{}, auditlog.ErrInvalidArgument
+	}
+	body, err := json.Marshal(request)
+	if err != nil {
+		return iamv1.AuditProducerAuthorization{}, auditlog.ErrUnavailable
 	}
 	response, err := client.http.Do(
 		ctx,
-		http.MethodGet,
-		"/v1/service-identity",
-		nil,
-		"",
+		http.MethodPost,
+		"/v1/audit-producer:resolve",
+		bytes.NewReader(body),
+		"application/json",
 		producerCredential,
 		iamv1.Secret{},
 	)
 	if err != nil {
-		return iamv1.ServiceIdentity{}, fmt.Errorf("call IAM authority: %w", auditlog.ErrUnavailable)
+		return iamv1.AuditProducerAuthorization{}, fmt.Errorf("call IAM authority: %w", auditlog.ErrUnavailable)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return iamv1.ServiceIdentity{}, statusError(response.StatusCode)
+		return iamv1.AuditProducerAuthorization{}, statusError(response.StatusCode)
 	}
-	var identity iamv1.ServiceIdentity
+	var identity iamv1.AuditProducerAuthorization
 	if !authorityhttp.ResponseIsJSON(response) || iamv1.DecodeRequest(response.Body, &identity) != nil ||
-		iamv1.ValidateServiceIdentity(identity) != nil {
-		return iamv1.ServiceIdentity{}, auditlog.ErrUnavailable
+		iamv1.ValidateAuditProducerAuthorization(identity) != nil || identity.TenantID != iamv1.OrganizationID(request.Event.TenantID) ||
+		identity.InstallationID != request.Event.InstallationID {
+		return iamv1.AuditProducerAuthorization{}, auditlog.ErrUnavailable
 	}
 	return identity, nil
 }

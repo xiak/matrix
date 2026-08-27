@@ -9,11 +9,14 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	auditv1 "github.com/xiak/matrix/api/audit/v1"
 )
 
 var (
 	idPattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 	loginPattern  = regexp.MustCompile(`^[a-z][a-z0-9._-]{2,63}$`)
+	aliasPattern  = regexp.MustCompile(`^[a-z][a-z0-9-]{1,61}[a-z0-9]$`)
 	digestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 	problemCode   = regexp.MustCompile(`^[a-z][a-z0-9.]{2,127}$`)
 )
@@ -86,6 +89,26 @@ func ValidateServiceIdentity(value ServiceIdentity) error {
 	return errors.Join(problems...)
 }
 
+func ValidateResolveAuditProducerRequest(value ResolveAuditProducerRequest) error {
+	return auditv1.ValidateEvent(value.Event)
+}
+
+func ValidateAuditProducerAuthorization(value AuditProducerAuthorization) error {
+	if value.APIVersion != APIVersion || value.Kind != "AuditProducerAuthorization" ||
+		(value.Producer.Purpose != ServiceIAM && value.Producer.Purpose != ServicePaaS && value.Producer.Purpose != ServiceAudit) {
+		return errors.New("audit producer authorization is invalid")
+	}
+	if (value.TenantID == "") == (value.InstallationID == "") ||
+		(value.InstallationID != "" && value.InstallationID != value.Producer.InstallationID) {
+		return errors.New("audit producer scope is invalid")
+	}
+	scope := value.InstallationID
+	if value.TenantID != "" {
+		scope = string(value.TenantID)
+	}
+	return errors.Join(ValidateServiceIdentity(value.Producer), ValidateID("scope", scope), ValidateDigest("contentDigest", value.ContentDigest))
+}
+
 func ValidateBootstrapStatus(value BootstrapStatus) error {
 	if value.APIVersion != APIVersion || value.Kind != "BootstrapStatus" {
 		return errors.New("bootstrap status type metadata is invalid")
@@ -117,7 +140,7 @@ func ValidateBootstrapStatus(value BootstrapStatus) error {
 
 func ValidateLoginRequest(value LoginRequest) error {
 	var problems []error
-	problems = append(problems, validateLoginName(value.LoginName), ValidateID("requestId", value.RequestID))
+	problems = append(problems, ValidateLoginIdentifier(value.LoginName), ValidateID("requestId", value.RequestID))
 	if !value.Password.Present() {
 		problems = append(problems, ErrInvalidSecret)
 	}
@@ -167,6 +190,9 @@ func ValidateCreateUserRequest(value CreateUserRequest) error {
 	if !value.InitialPassword.Present() {
 		problems = append(problems, ErrInvalidSecret)
 	}
+	if value.InitialRole != nil && (!UserAssignableRole(*value.InitialRole) || *value.InitialRole == RolePlatformOperator) {
+		problems = append(problems, errors.New("initial role is invalid"))
+	}
 	return errors.Join(problems...)
 }
 
@@ -176,7 +202,7 @@ func ValidatePutRoleBindingRequest(value PutRoleBindingRequest) error {
 		ValidateID("principalId", string(value.PrincipalID)),
 		ValidateID("requestId", value.RequestID),
 	)
-	if !knownRole(value.Role) {
+	if !UserAssignableRole(value.Role) {
 		problems = append(problems, errors.New("role is invalid"))
 	}
 	return errors.Join(problems...)
@@ -429,9 +455,11 @@ func validateResourceForAction(action Action, resource ResourceReference) error 
 // domain validation and contract generation.
 func ResourceKindForAction(action Action) (ResourceKind, bool) {
 	switch action {
-	case ActionIAMPrincipalCreate:
+	case ActionIAMPrincipalCreate, ActionIAMPrincipalList,
+		ActionIAMOrganizationCreate, ActionIAMOrganizationRead, ActionIAMAccountAliasSet:
 		return ResourceOrganization, true
-	case ActionIAMPrincipalRead, ActionIAMRoleBindingPut, ActionIAMPlatformRoleBindingPut:
+	case ActionIAMPrincipalRead, ActionIAMRoleBindingPut, ActionIAMPlatformRoleBindingPut,
+		ActionIAMPrincipalSetStatus, ActionIAMPasswordReset:
 		return ResourcePrincipal, true
 	case ActionIAMRoleBindingRevoke, ActionIAMPlatformRoleBindingRevoke:
 		return ResourceRoleBinding, true
@@ -473,6 +501,141 @@ func ResourceKindForAction(action Action) (ResourceKind, bool) {
 	default:
 		return "", false
 	}
+}
+
+// ValidateLoginIdentifier accepts a primary login or one qualified subaccount
+// name. It deliberately does not normalize case, whitespace, Unicode, or DNS.
+func ValidateLoginIdentifier(value string) error {
+	name, namespace, qualified := strings.Cut(value, "@")
+	if err := validateLoginName(name); err != nil {
+		return err
+	}
+	if qualified && (strings.Contains(namespace, "@") || ValidateID("account", namespace) != nil) {
+		return errors.New("loginName is invalid")
+	}
+	return nil
+}
+
+func ValidateAccountAlias(value string) error {
+	if !aliasPattern.MatchString(value) {
+		return errors.New("account alias is invalid")
+	}
+	return nil
+}
+
+func UserAssignableRole(role BuiltinRole) bool {
+	return knownRole(role) && role != RoleInstallationVerifier
+}
+
+func ValidateCreateOrganizationRequest(value CreateOrganizationRequest) error {
+	var secretError error
+	if !value.InitialPassword.Present() {
+		secretError = ErrInvalidSecret
+	}
+	return errors.Join(
+		ValidateID("organization.id", string(value.ID)),
+		validateText("displayName", value.DisplayName, 1, 128),
+		validateLoginName(value.AdministratorLoginName),
+		validateText("administratorDisplayName", value.AdministratorDisplayName, 1, 128),
+		ValidateID("requestId", value.RequestID), secretError,
+	)
+}
+
+func ValidateSetAccountAliasRequest(value SetAccountAliasRequest) error {
+	return errors.Join(ValidateAccountAlias(value.Alias),
+		validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
+}
+
+func ValidateSetPrincipalStatusRequest(value SetPrincipalStatusRequest) error {
+	if value.Status != PrincipalActive && value.Status != PrincipalDisabled {
+		return errors.New("principal status is invalid")
+	}
+	return errors.Join(validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
+}
+
+func ValidateResetUserPasswordRequest(value ResetUserPasswordRequest) error {
+	if !value.InitialPassword.Present() {
+		return ErrInvalidSecret
+	}
+	return errors.Join(validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
+}
+
+func ValidateOrganizationAccount(value OrganizationAccount) error {
+	var aliasError error
+	if value.LoginAlias != nil {
+		aliasError = ValidateAccountAlias(*value.LoginAlias)
+	}
+	return errors.Join(ValidateOrganization(value.Organization),
+		ValidateID("primaryPrincipalId", string(value.PrimaryPrincipalID)),
+		validateLoginName(value.PrimaryLoginName), aliasError)
+}
+
+func ValidateCurrentIdentity(value CurrentIdentity) error {
+	if value.APIVersion != APIVersion || value.Kind != "CurrentIdentity" ||
+		value.Principal.Type != PrincipalUser || value.Roles == nil ||
+		value.Principal.OrganizationID != value.Account.Organization.ID ||
+		(value.CanCreateOrganizations && (value.Principal.ID != value.Account.PrimaryPrincipalID || value.Principal.MustChangePassword)) {
+		return errors.New("current identity is invalid")
+	}
+	seen := map[BuiltinRole]bool{}
+	for _, role := range value.Roles {
+		if !UserAssignableRole(role) || seen[role] {
+			return errors.New("current roles are invalid")
+		}
+		seen[role] = true
+	}
+	if value.CanCreateOrganizations && !seen[RoleOrganizationAdmin] {
+		return errors.New("account-opening capability is invalid")
+	}
+	return errors.Join(ValidateOrganizationAccount(value.Account), ValidatePrincipal(value.Principal))
+}
+
+func ValidatePrincipalList(value PrincipalList) error {
+	if value.APIVersion != APIVersion || value.Kind != "PrincipalList" || value.Items == nil || len(value.Items) > 100 {
+		return errors.New("principal list is invalid")
+	}
+	var previous string
+	var tenant OrganizationID
+	for _, item := range value.Items {
+		if ValidatePrincipal(item.Principal) != nil || item.Principal.Type != PrincipalUser ||
+			string(item.Principal.ID) <= previous || item.RoleBindings == nil {
+			return errors.New("principal list item is invalid")
+		}
+		previous = string(item.Principal.ID)
+		if tenant != "" && item.Principal.OrganizationID != tenant {
+			return errors.New("principal directory contains multiple tenants")
+		}
+		tenant = item.Principal.OrganizationID
+		roles := map[BuiltinRole]bool{}
+		for _, binding := range item.RoleBindings {
+			if ValidateRoleBinding(binding) != nil || !UserAssignableRole(binding.Role) ||
+				binding.OrganizationID != item.Principal.OrganizationID || binding.PrincipalID != item.Principal.ID || roles[binding.Role] {
+				return errors.New("principal role binding is invalid")
+			}
+			roles[binding.Role] = true
+		}
+	}
+	if value.NextAfter != "" && (previous == "" || value.NextAfter != previous) {
+		return errors.New("principal page boundary is invalid")
+	}
+	return nil
+}
+
+func ValidateOrganizationAccountList(value OrganizationAccountList) error {
+	if value.APIVersion != APIVersion || value.Kind != "OrganizationAccountList" || value.Items == nil || len(value.Items) > 100 {
+		return errors.New("organization list is invalid")
+	}
+	var previous string
+	for _, item := range value.Items {
+		if ValidateOrganizationAccount(item) != nil || string(item.Organization.ID) <= previous {
+			return errors.New("organization list item is invalid")
+		}
+		previous = string(item.Organization.ID)
+	}
+	if value.NextAfter != "" && (previous == "" || value.NextAfter != previous) {
+		return errors.New("organization page boundary is invalid")
+	}
+	return nil
 }
 
 func validateLoginName(value string) error {

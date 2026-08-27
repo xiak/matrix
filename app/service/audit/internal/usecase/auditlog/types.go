@@ -26,7 +26,7 @@ type Config struct {
 }
 
 type IAM interface {
-	ServiceIdentity(context.Context, iamv1.Secret) (iamv1.ServiceIdentity, error)
+	ResolveAuditProducer(context.Context, iamv1.Secret, iamv1.ResolveAuditProducerRequest) (iamv1.AuditProducerAuthorization, error)
 	Authorize(
 		context.Context,
 		iamv1.Secret,

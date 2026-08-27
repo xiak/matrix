@@ -245,6 +245,41 @@ func TestPlatformAuthorityRequiresAnExplicitRoleAndInstallationBinding(t *testin
 	}
 }
 
+func TestTenantOpeningIsBoundToBootstrapIdentityNotAnAssignableRole(t *testing.T) {
+	now := authorityTestTime()
+	for _, action := range []iamv1.Action{iamv1.ActionIAMOrganizationCreate, iamv1.ActionIAMOrganizationRead} {
+		request := iamv1.AuthorizationRequest{Action: action, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceOrganization, ID: "new-tenant"}, RequestID: "request-account", CorrelationID: "request-account"}
+		for _, test := range []struct {
+			name                                 string
+			bootstrap, initial, granted, allowed bool
+		}{
+			{"tenant administrator", false, false, true, false},
+			{"bootstrap administrator", true, false, true, true},
+			{"unchanged bootstrap password", true, true, true, false},
+			{"bootstrap without admin role", true, false, false, false},
+		} {
+			t.Run(string(action)+"/"+test.name, func(t *testing.T) {
+				context := authoritySubject(now)
+				context.BootstrapAdministrator, context.Principal.MustChangePassword = test.bootstrap, test.initial
+				if test.granted {
+					context.Roles = []iamv1.BuiltinRole{iamv1.RoleOrganizationAdmin}
+				}
+				decision, err := Decide(context, iamv1.ServiceIAM, request, "decision-account", now)
+				if err != nil || decision.Allowed != test.allowed {
+					t.Fatalf("decision allowed=%t err=%v", decision.Allowed, err)
+				}
+			})
+		}
+	}
+	for _, action := range []iamv1.Action{iamv1.ActionIAMAccountAliasSet, iamv1.ActionIAMPrincipalList, iamv1.ActionIAMPrincipalSetStatus, iamv1.ActionIAMPasswordReset} {
+		for _, role := range iamv1.AllBuiltinRoles() {
+			if RoleAllows(role, action) != (role == iamv1.RoleOrganizationAdmin) {
+				t.Errorf("unexpected authority %s/%s", role, action)
+			}
+		}
+	}
+}
+
 func TestAuthorizationDeniesAServiceOutsideItsProductBoundary(t *testing.T) {
 	now := authorityTestTime()
 	context := authoritySubject(now, iamv1.RolePaaSDeveloper)

@@ -433,7 +433,9 @@ BEGIN
        ) AND submitted_event ? 'iamDecisionId')
        OR (expected_action IN (
             'iam.principal.created', 'iam.role-binding.put',
-            'iam.role-binding.revoked', 'iam.authorization.decided'
+            'iam.role-binding.revoked', 'iam.authorization.decided',
+            'iam.organization.created', 'iam.account-alias.set',
+            'iam.principal.status-set', 'iam.password.reset'
        ) AND NOT (submitted_event ? 'iamDecisionId'))
        OR (expected_action = 'iam.authorization.decided'
             AND submitted_event#>>'{target,id}' IS DISTINCT FROM
@@ -533,10 +535,10 @@ BEGIN
         submitted_organization_id, submitted_administrator_id,
         submitted_password_hash, effective_now
     );
-    INSERT INTO iam.login_index (login_name, tenant_id, principal_id)
+    INSERT INTO iam.login_index (login_name, tenant_id, principal_id, account_owner)
     VALUES (
         submitted_login_name, submitted_organization_id,
-        submitted_administrator_id
+        submitted_administrator_id, true
     );
     INSERT INTO iam.role_bindings (
         tenant_id, id, principal_id, role_name, resource_version,
@@ -662,11 +664,11 @@ BEGIN
     SELECT EXISTS (
                SELECT 1 FROM iam.bootstrap_receipts AS receipt
                 WHERE receipt.singleton
-           ) AND NOT EXISTS (
+           ) AND to_regprocedure('iam.read_audit_evidence(text,text,text,text,jsonb)') IS NOT NULL AND NOT EXISTS (
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-           1::bigint,
+           2::bigint,
            transaction_timestamp();
 END
 $function$;
@@ -679,6 +681,12 @@ PARALLEL SAFE
 SET search_path = pg_catalog, pg_temp
 AS $function$
     SELECT CASE submitted_action
+        WHEN 'iam.organization.create' THEN 'ORGANIZATION'
+        WHEN 'iam.organization.read' THEN 'ORGANIZATION'
+        WHEN 'iam.account-alias.set' THEN 'ORGANIZATION'
+        WHEN 'iam.principal.list' THEN 'ORGANIZATION'
+        WHEN 'iam.principal.set-status' THEN 'PRINCIPAL'
+        WHEN 'iam.password.reset' THEN 'PRINCIPAL'
         WHEN 'iam.principal.create' THEN 'ORGANIZATION'
         WHEN 'iam.principal.read' THEN 'PRINCIPAL'
         WHEN 'iam.role-binding.put' THEN 'PRINCIPAL'
@@ -1538,13 +1546,14 @@ BEGIN
         'PRINCIPAL', submitted_principal_id
     );
     PERFORM set_config('matrix.iam_tenant_id', submitted_tenant_id, true);
-    IF NOT EXISTS (
-        SELECT 1 FROM iam.principals AS principal
+    PERFORM 1 FROM iam.principals AS principal
          WHERE principal.tenant_id = submitted_tenant_id
            AND principal.id = submitted_principal_id
+           AND principal.principal_type = 'USER'
            AND principal.status = 'ACTIVE'
-           AND (submitted_role_name <> 'PLATFORM_OPERATOR' OR principal.principal_type = 'USER')
-    ) THEN
+           AND (submitted_role_name <> 'PLATFORM_OPERATOR' OR NOT principal.must_change_password)
+         FOR UPDATE;
+    IF NOT FOUND OR submitted_role_name = 'INSTALLATION_VERIFIER' THEN
         RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'role binding principal is unavailable';
     END IF;
     PERFORM iam.assert_audit_event(
@@ -1653,6 +1662,10 @@ BEGIN
              THEN 'iam.platform-role-binding.revoke' ELSE 'iam.role-binding.revoke' END,
         'ROLE_BINDING', submitted_role_binding_id
     );
+    IF stored.role_name = 'ORGANIZATION_ADMIN' AND EXISTS (SELECT 1 FROM iam.login_index AS login
+        WHERE login.tenant_id = submitted_tenant_id AND login.principal_id = stored.principal_id AND login.account_owner) THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'primary role binding is protected';
+    END IF;
     IF stored.revoked_at IS NOT NULL THEN
         RETURN QUERY SELECT stored.resource_version, stored.revoked_at, false;
         RETURN;

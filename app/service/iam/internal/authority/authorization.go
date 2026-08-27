@@ -22,7 +22,8 @@ type SubjectContext struct {
 	// InstallationID is read from the sealed IAM bootstrap receipt, not a
 	// request field or an organization ID. Empty context cannot grant platform
 	// authority even when a role name has been supplied.
-	InstallationID string
+	InstallationID         string
+	BootstrapAdministrator bool
 }
 
 func AuthenticateSession(
@@ -62,12 +63,16 @@ func Decide(
 	if err := validateSubjectContext(context, databaseTime); err != nil {
 		return iamv1.AuthorizationDecision{}, err
 	}
+	roles := context.Roles
+	if (request.Action == iamv1.ActionIAMOrganizationCreate || request.Action == iamv1.ActionIAMOrganizationRead) && !context.BootstrapAdministrator {
+		roles = nil
+	}
 	return decide(
 		context.Organization.ID,
 		context.InstallationID,
 		iamv1.Subject{Type: context.Principal.Type, ID: context.Principal.ID},
 		context.Principal.MustChangePassword,
-		context.Roles,
+		roles,
 		callingService,
 		request,
 		decisionID,

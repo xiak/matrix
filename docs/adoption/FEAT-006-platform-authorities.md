@@ -12,6 +12,7 @@
 | Legacy PaaS | `69336e51f94fa98f6aa278fa4c62382e224dbeaf` | Read only through Git object commands; exclude its worktree. |
 | IAM/Audit foundation donor | `f51d5ed19fd60e8c4e43500af5e669d67ae4ef7d` | Read only through Git object commands; exclude its worktree. |
 | PaaS design | `338d9b5fcb820120c32265e380c55e5f171cdb75` | Read only through Git object commands; use as rationale, not executable evidence. |
+| Matrix IAM account and historical-proof slice | `26f3569269ba6e8bf3ac55b3c596c55590e1144a` | Same-repository fixed, independently verified source; do not read its worktree or import later lifecycle work. |
 
 The independent authority target, closed Phase 1 roles and actions, bootstrap
 contract, opaque credentials, Audit event union, indefinite retention, and
@@ -74,12 +75,27 @@ that already-existing IAM/Audit services can be reused are `REJECT`: this
 repository must deliver the two real authorities inside its own offline
 release.
 
+## Same-repository authority integration
+
+| Slice at `26f3569` | Decision | Rationale |
+| --- | --- | --- |
+| Qualified subaccount login, primary identity, aliases, member management and console | `ADAPT` | Reuse the existing account path and UI. Organization.ID remains TenantID; primary ownership is distinct from revocable administrator roles. Preserve the platform-credential guard and serialize grant/reset/status on the principal. |
+| Event-bound producer resolution and historical IAM evidence | `ADAPT` | Replace producer-home equality with exact IAM outbox or historical allowed-decision evidence, using the existing endpoint and canonical encoder. Current producer validity remains mandatory; old user authority is not reevaluated. |
+| Public canonical encoder and sealed ServiceIdentity installation | `REUSE` | Already integrated from `6401e96`; do not copy another encoder, change lookup_service column order, or reintroduce the weak organization selector. |
+| Dual-tenant, retained-data and independent-process tests | `ADAPT` | Extend existing gate owners while preserving this branch's actual host admission/Operation/outbox flow. Do not restore the superseded hand-made host Audit fixture. |
+| Task checkpoint, Phase 3 status and generated UI artifacts | `REJECT` as imported state | Keep this branch's checkpoint and FEAT-008 evidence; regenerate the UI export from admitted source. No moving branch, redundant action-catalog migration, or donor runtime dependency is introduced. |
+
+The fixed slice retains exact-bootstrap-only tenant opening. Its platform
+tenant lifecycle replacement is a separate IAM increment, not inferred from
+the account/proof integration.
+
 ## Resulting implementation constraints
 
 1. Implement compact independent `iam` and `audit` services in this repository;
    do not import a donor module, generated tree, SDK, schema, or runtime.
-2. Derive tenant and subject only from current credential bindings. Reject
-   tenant/subject headers, organization selectors, caller-supplied permission
+2. Derive tenant and subject only from current credential bindings. A qualified
+   login suffix selects a credential namespace, never an authenticated tenant.
+   Reject tenant/subject headers, post-login organization selectors, caller-supplied permission
    subjects, ABAC maps, and all failure-time local fallback.
 3. Use fixed code-owned roles/actions, opaque hashed sessions and service
    credentials, database time, exact bootstrap replay, and transactionally
@@ -101,5 +117,5 @@ release.
 8. Test behavior and security invariants rather than donor SQL text, generated
    files, path inventories, framework call order, or historical documents.
 
-No donor source is copied and no donor repository is a build or runtime
-dependency.
+No donor repository is a build or runtime dependency. Same-repository slices
+are admitted only as fixed, reviewed source and verified in the consuming branch.

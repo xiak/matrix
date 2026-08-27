@@ -10,6 +10,7 @@ import (
 	"errors"
 	"mime"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/xiak/matrix/api/contractjson"
@@ -18,9 +19,17 @@ import (
 )
 
 type Workflow interface {
+	CurrentIdentity(context.Context, iamv1.Secret) (iamv1.CurrentIdentity, error)
+	ListPrincipals(context.Context, iamv1.Secret, string, string) (iamv1.PrincipalList, error)
+	ListAccounts(context.Context, iamv1.Secret, string, string) (iamv1.OrganizationAccountList, error)
+	CreateOrganization(context.Context, iamv1.Secret, iamv1.CreateOrganizationRequest) (iamv1.OrganizationAccount, error)
+	SetAccountAlias(context.Context, iamv1.Secret, iamv1.SetAccountAliasRequest) (iamv1.OrganizationAccount, error)
+	SetPrincipalStatus(context.Context, iamv1.Secret, iamv1.PrincipalID, iamv1.SetPrincipalStatusRequest) (iamv1.Principal, error)
+	ResetUserPassword(context.Context, iamv1.Secret, iamv1.PrincipalID, iamv1.ResetUserPasswordRequest) (iamv1.Principal, error)
 	Readiness(context.Context) (iamv1.Readiness, error)
 	BootstrapStatus(context.Context, iamv1.Secret) (iamv1.BootstrapStatus, error)
 	ServiceIdentity(context.Context, iamv1.Secret) (iamv1.ServiceIdentity, error)
+	ResolveAuditProducer(context.Context, iamv1.Secret, iamv1.ResolveAuditProducerRequest) (iamv1.AuditProducerAuthorization, error)
 	Login(context.Context, iamv1.LoginRequest) (iamv1.LoginResponse, error)
 	Logout(context.Context, iamv1.Secret, iamv1.LogoutRequest) (iamv1.LogoutResponse, error)
 	ChangePassword(context.Context, iamv1.Secret, iamv1.ChangePasswordRequest) (iamv1.ChangePasswordResponse, error)
@@ -75,12 +84,17 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/ready", value.ready)
 	routes.HandleFunc("/v1/bootstrap/status", value.bootstrapStatus)
 	routes.HandleFunc("/v1/service-identity", value.serviceIdentity)
+	routes.HandleFunc("/v1/audit-producer:resolve", value.resolveAuditProducer)
 	routes.HandleFunc("/v1/auth/login", value.login)
+	routes.HandleFunc("/v1/auth/me", value.currentIdentity)
+	routes.HandleFunc("/v1/organizations", value.organizations)
+	routes.HandleFunc("/v1/organization:alias", value.setAccountAlias)
 	routes.HandleFunc("/v1/auth/logout", value.logout)
 	routes.HandleFunc("/v1/auth/password", value.changePassword)
 	routes.HandleFunc("/v1/authorize", value.authorize)
 	routes.HandleFunc("/v1/installation:verify", value.verifyInstallation)
 	routes.HandleFunc("/v1/principals", value.createUser)
+	routes.HandleFunc("/v1/principals/", value.changeSubaccount)
 	routes.HandleFunc("/v1/role-bindings", value.putRoleBinding)
 	routes.HandleFunc("/v1/role-bindings/", value.revokeRoleBinding)
 	routes.HandleFunc("/v1/sessions/", value.revokeSession)
@@ -146,6 +160,30 @@ func (value *handler) serviceIdentity(response http.ResponseWriter, request *htt
 	writeJSON(response, http.StatusOK, identity)
 }
 
+func (value *handler) resolveAuditProducer(response http.ResponseWriter, request *http.Request) {
+	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+		return
+	}
+	if len(request.Header.Values("Matrix-Subject-Credential")) != 0 {
+		writeProblem(response, requestID(request), http.StatusBadRequest, "iam.header.unsupported", "IAM header unsupported")
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	body, ok := decodeJSON[iamv1.ResolveAuditProducerRequest](value, response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.ResolveAuditProducer(request.Context(), credential, body)
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
 func (value *handler) login(response http.ResponseWriter, request *http.Request) {
 	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
 		return
@@ -208,6 +246,10 @@ func (value *handler) changePassword(response http.ResponseWriter, request *http
 }
 
 func (value *handler) createUser(response http.ResponseWriter, request *http.Request) {
+	if request.Method == http.MethodGet {
+		value.listPrincipals(response, request)
+		return
+	}
 	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
 		return
 	}
@@ -352,6 +394,149 @@ func (value *handler) verifyInstallation(response http.ResponseWriter, request *
 		return
 	}
 	writeJSON(response, http.StatusOK, decision)
+}
+
+func (value *handler) currentIdentity(response http.ResponseWriter, request *http.Request) {
+	if !value.requireMethod(response, request, http.MethodGet) || !rejectQueryAndBody(response, request) {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.CurrentIdentity(request.Context(), credential)
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func accountPage(response http.ResponseWriter, request *http.Request) (string, bool) {
+	query, err := url.ParseQuery(request.URL.RawQuery)
+	if err != nil || len(request.URL.RawQuery) > 512 || len(query) > 1 || request.ContentLength != 0 || len(request.TransferEncoding) > 0 {
+		writeProblem(response, requestID(request), http.StatusBadRequest, "iam.query.unsupported", "IAM page request invalid")
+		return "", false
+	}
+	if len(query) == 0 {
+		return "", true
+	}
+	values, ok := query["after"]
+	if !ok || len(values) != 1 || iamv1.ValidateID("after", values[0]) != nil {
+		writeProblem(response, requestID(request), http.StatusBadRequest, "iam.query.unsupported", "IAM page request invalid")
+		return "", false
+	}
+	return values[0], true
+}
+
+func (value *handler) listPrincipals(response http.ResponseWriter, request *http.Request) {
+	after, ok := accountPage(response, request)
+	if !ok {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.ListPrincipals(request.Context(), credential, after, requestID(request))
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) organizations(response http.ResponseWriter, request *http.Request) {
+	if request.Method == http.MethodGet {
+		after, ok := accountPage(response, request)
+		if !ok {
+			return
+		}
+		credential, ok := bearerCredential(response, request)
+		if !ok {
+			return
+		}
+		result, err := value.workflow.ListAccounts(request.Context(), credential, after, requestID(request))
+		if err != nil {
+			value.writeError(response, request, err)
+			return
+		}
+		writeJSON(response, http.StatusOK, result)
+		return
+	}
+	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	body, ok := decodeJSON[iamv1.CreateOrganizationRequest](value, response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.CreateOrganization(request.Context(), credential, body)
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusCreated, result)
+}
+
+func (value *handler) setAccountAlias(response http.ResponseWriter, request *http.Request) {
+	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	body, ok := decodeJSON[iamv1.SetAccountAliasRequest](value, response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.SetAccountAlias(request.Context(), credential, body)
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) changeSubaccount(response http.ResponseWriter, request *http.Request) {
+	suffix := ":set-status"
+	reset := strings.HasSuffix(request.URL.Path, ":reset-password")
+	if reset {
+		suffix = ":reset-password"
+	}
+	id, ok := commandPathID(response, request, "/v1/principals/", suffix, "principalId")
+	if !ok || !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	var result iamv1.Principal
+	var err error
+	if reset {
+		body, ok := decodeJSON[iamv1.ResetUserPasswordRequest](value, response, request)
+		if !ok {
+			return
+		}
+		result, err = value.workflow.ResetUserPassword(request.Context(), credential, iamv1.PrincipalID(id), body)
+	} else {
+		body, ok := decodeJSON[iamv1.SetPrincipalStatusRequest](value, response, request)
+		if !ok {
+			return
+		}
+		result, err = value.workflow.SetPrincipalStatus(request.Context(), credential, iamv1.PrincipalID(id), body)
+	}
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
 }
 
 func (value *handler) notFound(response http.ResponseWriter, request *http.Request) {

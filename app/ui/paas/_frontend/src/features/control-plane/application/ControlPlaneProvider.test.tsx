@@ -87,6 +87,7 @@ function Probe() {
     <div>
       <button onClick={() => void session.login("admin", "password")} type="button">login</button>
       <span data-testid="phase">{installation?.phase ?? "none"}</span>
+      <span data-testid="section">{controlPlane.scene?.section ?? "none"}</span>
     </div>
   );
 }
@@ -118,6 +119,14 @@ afterEach(() => {
 });
 
 describe("ControlPlaneProvider", () => {
+  it("makes the IAM shell available without calling the PaaS resource APIs", async () => {
+    const repository: ControlPlaneRepository = { load: vi.fn(), getInstallation: vi.fn(), activateQuota: vi.fn(), createInstallation: vi.fn() };
+    const screen = render(<SessionProvider repository={iamRepository()}><ControlPlaneProvider repository={repository} selection={{ section: "access" }}><Probe /></ControlPlaneProvider></SessionProvider>);
+    await act(async () => { fireEvent.click(screen.getByText("login")); });
+    expect(screen.getByTestId("section").textContent).toBe("access");
+    expect(repository.load).not.toHaveBeenCalled();
+    expect(repository.getInstallation).not.toHaveBeenCalled();
+  });
   it("polls only pending installation resources before refreshing terminal quota state", async () => {
     vi.useFakeTimers();
     const repository: ControlPlaneRepository = {

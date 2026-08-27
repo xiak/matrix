@@ -41,6 +41,7 @@ type Transaction interface {
 	LookupSession(context.Context, string) (SessionCredential, bool, error)
 	LookupPassword(context.Context, iamv1.OrganizationID, iamv1.PrincipalID) (authority.PasswordHash, bool, error)
 	LookupService(context.Context, string) (ServiceCredential, bool, error)
+	ReadAuditEvidence(context.Context, iamv1.ServiceIdentity, auditv1.Event) (AuditEvidence, bool, error)
 	LookupServiceRoles(
 		context.Context,
 		iamv1.OrganizationID,
@@ -53,7 +54,49 @@ type Transaction interface {
 	PutRoleBinding(context.Context, RoleBindingMutation) (iamv1.RoleBinding, bool, error)
 	LookupRoleBindingRole(context.Context, iamv1.OrganizationID, iamv1.RoleBindingID) (iamv1.BuiltinRole, bool, error)
 	RevokeRoleBinding(context.Context, RoleBindingRevocationMutation) (iamv1.Revocation, bool, error)
+	ReadAccount(context.Context, iamv1.OrganizationID, iamv1.PrincipalID) (iamv1.OrganizationAccount, error)
+	ListPrincipals(context.Context, AccountRead) (iamv1.PrincipalList, error)
+	ListAccounts(context.Context, AccountRead) (iamv1.OrganizationAccountList, error)
+	CreateOrganization(context.Context, OrganizationMutation) (iamv1.OrganizationAccount, error)
+	SetAccountAlias(context.Context, AccountAliasMutation) (iamv1.OrganizationAccount, error)
+	ChangeSubaccount(context.Context, SubaccountMutation) (iamv1.Principal, error)
 	Readiness(context.Context) (ReadinessSnapshot, error)
+}
+
+type AccountRead struct {
+	OrganizationID   iamv1.OrganizationID
+	ActorPrincipalID iamv1.PrincipalID
+	DecisionID       iamv1.DecisionID
+	After            string
+}
+
+type OrganizationMutation struct {
+	ActorOrganizationID iamv1.OrganizationID
+	ActorPrincipalID    iamv1.PrincipalID
+	DecisionID          iamv1.DecisionID
+	Organization        iamv1.InitialOrganization
+	Administrator       BootstrapAdministrator
+	AuditEvent          auditv1.Event
+}
+
+type AccountAliasMutation struct {
+	OrganizationID   iamv1.OrganizationID
+	ActorPrincipalID iamv1.PrincipalID
+	DecisionID       iamv1.DecisionID
+	Alias            string
+	ResourceVersion  uint64
+	AuditEvent       auditv1.Event
+}
+
+type SubaccountMutation struct {
+	OrganizationID   iamv1.OrganizationID
+	ActorPrincipalID iamv1.PrincipalID
+	PrincipalID      iamv1.PrincipalID
+	DecisionID       iamv1.DecisionID
+	ResourceVersion  uint64
+	Status           *iamv1.PrincipalStatus
+	PasswordHash     *authority.PasswordHash
+	AuditEvent       auditv1.Event
 }
 
 type BootstrapAdministrator struct {

@@ -6,6 +6,8 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 )
 
+const SchemaVersion uint64 = 2
+
 func (service *Authority) Readiness(ctx context.Context) (iamv1.Readiness, error) {
 	var snapshot ReadinessSnapshot
 	err := service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
@@ -17,7 +19,7 @@ func (service *Authority) Readiness(ctx context.Context) (iamv1.Readiness, error
 		return iamv1.Readiness{}, err
 	}
 	state := iamv1.ReadinessNotReady
-	if snapshot.Ready {
+	if snapshot.Ready && snapshot.SchemaVersion == SchemaVersion {
 		state = iamv1.ReadinessReady
 	}
 	readiness := iamv1.Readiness{

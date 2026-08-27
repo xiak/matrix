@@ -129,8 +129,8 @@ func TestAuditHTTPPostgresVerticalSlice(t *testing.T) {
 
 	wrongTenant := first
 	wrongTenant.EventID = "event-wrong-tenant"
-	wrongTenant.TenantID = "organization-b"
-	ingestAuditEvent(t, handler, producerCredentialA, wrongTenant, http.StatusUnprocessableEntity)
+	wrongTenant.TenantID = "organization-unknown"
+	ingestAuditEvent(t, handler, producerCredentialA, wrongTenant, http.StatusForbidden)
 	wrongCredential := performAuditRequest(
 		handler,
 		http.MethodPost,
@@ -288,6 +288,29 @@ func TestAuditHTTPPostgresVerticalSlice(t *testing.T) {
 
 	assertAuditFacts(t, ctx, admin)
 	assertAuditRuntimeBoundary(t, ctx, pool)
+	for index, action := range []auditv1.Action{auditv1.ActionIAMOrganizationCreated, auditv1.ActionIAMAccountAliasSet,
+		auditv1.ActionIAMPrincipalStatusSet, auditv1.ActionIAMPasswordReset} {
+		target := auditv1.TargetPrincipal
+		if index < 2 {
+			target = auditv1.TargetOrganization
+		}
+		event := integrationEvent(auditv1.EventID(fmt.Sprintf("event-account-%d", index)), "organization-b", action, target, "account-target", iam.now)
+		event.Actor = auditv1.ActorReference{Type: auditv1.ActorUser, ID: "account-administrator"}
+		event.IAMDecisionID = "decision-account"
+		ingestAuditEvent(t, handler, producerCredentialA, event, http.StatusCreated)
+		page := queryAuditRecords(t, handler, readerCredentialB, auditv1.QueryRecordsRequest{PageSize: 10, Action: action}, http.StatusOK)
+		if len(page.Records) != 1 || page.Records[0].Event != event {
+			t.Fatal("new tenant account audit fact was not queryable")
+		}
+		other := queryAuditRecords(t, handler, readerCredentialA, auditv1.QueryRecordsRequest{PageSize: 10, Action: action}, http.StatusOK)
+		if len(other.Records) != 0 {
+			t.Fatal("account audit fact escaped its tenant")
+		}
+	}
+	chainB := verifyAuditChain(t, handler, readerCredentialB, auditv1.VerifyChainRequest{FromSequence: 1, MaximumRecords: 100}, http.StatusOK)
+	if chainB.State != auditv1.VerificationVerified || !chainB.Complete {
+		t.Fatal("account audit chain did not verify")
+	}
 	assertAuditPlaintextAbsent(
 		t,
 		ctx,
@@ -648,33 +671,43 @@ type integrationIAM struct {
 	failure  error
 }
 
-func (client *integrationIAM) ServiceIdentity(
+func (client *integrationIAM) ResolveAuditProducer(
 	_ context.Context,
 	credential iamv1.Secret,
-) (iamv1.ServiceIdentity, error) {
+	request iamv1.ResolveAuditProducerRequest,
+) (iamv1.AuditProducerAuthorization, error) {
 	organizationID := iamv1.OrganizationID("")
+	purpose := iamv1.ServiceIAM
+	principalID := iamv1.PrincipalID("service-iam")
 	switch {
 	case secretEquals(credential, producerCredentialA):
 		organizationID = "organization-a"
 	case secretEquals(credential, producerCredentialB):
 		organizationID = "organization-b"
 	case secretEquals(credential, paasProducerCredential):
-		return iamv1.ServiceIdentity{
+		organizationID, purpose, principalID = "organization-a", iamv1.ServicePaaS, "service-paas"
+	default:
+		return iamv1.AuditProducerAuthorization{}, auditlog.ErrUnauthenticated
+	}
+	if request.Event.TenantID != "organization-a" && request.Event.TenantID != "organization-b" {
+		return iamv1.AuditProducerAuthorization{}, auditlog.ErrForbidden
+	}
+	source := auditv1.SourceIAM
+	if purpose == iamv1.ServicePaaS {
+		source = auditv1.SourcePaaS
+	}
+	_, digest, err := auditv1.CanonicalizeEvent(source, request.Event)
+	if err != nil {
+		return iamv1.AuditProducerAuthorization{}, auditlog.ErrInvalidArgument
+	}
+	return iamv1.AuditProducerAuthorization{
+		APIVersion: iamv1.APIVersion, Kind: "AuditProducerAuthorization",
+		TenantID: iamv1.OrganizationID(request.Event.TenantID), ContentDigest: digest,
+		Producer: iamv1.ServiceIdentity{
 			APIVersion: iamv1.APIVersion, Kind: "ServiceIdentity",
 			InstallationID: "installation-example",
-			OrganizationID: "organization-a", PrincipalID: "service-paas",
-			Purpose: iamv1.ServicePaaS,
-		}, nil
-	default:
-		return iamv1.ServiceIdentity{}, auditlog.ErrUnauthenticated
-	}
-	return iamv1.ServiceIdentity{
-		APIVersion:     iamv1.APIVersion,
-		Kind:           "ServiceIdentity",
-		InstallationID: "installation-example",
-		OrganizationID: organizationID,
-		PrincipalID:    "service-iam",
-		Purpose:        iamv1.ServiceIAM,
+			OrganizationID: organizationID, PrincipalID: principalID, Purpose: purpose,
+		},
 	}, nil
 }
 

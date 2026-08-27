@@ -24,6 +24,10 @@ const (
 )
 
 const (
+	ActionIAMOrganizationCreated  Action = "iam.organization.created"
+	ActionIAMAccountAliasSet      Action = "iam.account-alias.set"
+	ActionIAMPrincipalStatusSet   Action = "iam.principal.status-set"
+	ActionIAMPasswordReset        Action = "iam.password.reset"
 	ActionIAMBootstrapApplied     Action = "iam.bootstrap.applied"
 	ActionIAMSessionIssued        Action = "iam.session.issued"
 	ActionIAMSessionRevoked       Action = "iam.session.revoked"
@@ -54,6 +58,7 @@ const (
 )
 
 const (
+	TargetOrganization          TargetKind = "ORGANIZATION"
 	TargetInstallation          TargetKind = "INSTALLATION"
 	TargetPrincipal             TargetKind = "PRINCIPAL"
 	TargetRoleBinding           TargetKind = "ROLE_BINDING"
@@ -124,6 +129,10 @@ func ContractForAction(action Action) (ActionContract, bool) {
 }
 
 var allActions = []Action{
+	ActionIAMOrganizationCreated,
+	ActionIAMAccountAliasSet,
+	ActionIAMPrincipalStatusSet,
+	ActionIAMPasswordReset,
 	ActionIAMBootstrapApplied,
 	ActionIAMSessionIssued,
 	ActionIAMSessionRevoked,
@@ -152,6 +161,18 @@ var allActions = []Action{
 }
 
 var actionContracts = map[Action]ActionContract{
+	ActionIAMOrganizationCreated: {
+		Source: SourceIAM, Target: TargetOrganization, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true,
+	},
+	ActionIAMAccountAliasSet: {
+		Source: SourceIAM, Target: TargetOrganization, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true,
+	},
+	ActionIAMPrincipalStatusSet: {
+		Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true,
+	},
+	ActionIAMPasswordReset: {
+		Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true,
+	},
 	ActionIAMBootstrapApplied: {
 		Source: SourceIAM, Target: TargetInstallation, Results: []Result{ResultSucceeded},
 	},
