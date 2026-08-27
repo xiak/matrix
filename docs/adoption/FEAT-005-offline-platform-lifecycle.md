@@ -12,6 +12,7 @@
 | Legacy PaaS | `69336e51f94fa98f6aa278fa4c62382e224dbeaf` | Read only through Git object commands; exclude its worktree. |
 | IAM/Audit foundation and delivery donor | `f51d5ed19fd60e8c4e43500af5e669d67ae4ef7d` | Read only through Git object commands; exclude its worktree. |
 | PaaS design | `338d9b5fcb820120c32265e380c55e5f171cdb75` | Read only through Git object commands; use as rationale, not executable evidence. |
+| Matrix authority-profile increment | `c29f9e3f065af4a6dcfc06596ee9a49a5c671774` | Same-repository fixed patch; adapt only release/lifecycle mechanisms, excluding Phase 3 host implementation, checkpoint and acceptance state. |
 
 The FEAT-005 supported host, signed bundle, fixed inventory, lifecycle,
 upgrade/rollback semantics, CLI surface, and real offline gates were committed
@@ -49,6 +50,15 @@ DevOps closure.
 
 ## Resulting implementation constraints
 
+The multi-tenant release target in FEAT-006/005 additionally adopts the fixed
+Matrix authority-profile increment as follows:
+
+| Fixed slice | Decision | Rationale |
+| --- | --- | --- |
+| `c29f9e3` manifest v2, exact profile comparison, sealed backup/recovery binding and support output | `ADAPT` | Keep independent authority versions plus the code-owned contract revision. This branch uses its actual IAM2/Audit2/PaaS1 and the coordinated lifecycle revision 2, not the donor's host composition. Also close unproved cross-profile recovery before journal or provider changes, while preserving same-profile recovery. |
+| `c29f9e3` published v1 canonical/signature/backup preservation and pre-effect rejection gates | `REUSE` | Preserve evidence for real published formats without inventing cross-profile N-1 support. Run the gates on this branch and extend its existing process owner, never inherit the donor's acceptance result. |
+| `c29f9e3` PaaS2/host expectations and FEAT-008 status | `REJECT` for this slice | IAM release verification does not authorize importing host admission, changing another Phase or asserting its release acceptance. |
+
 1. Own the compact lifecycle in an `installation` context and keep one
    user-facing `mx` command tree. Do not import the legacy bootstrap aggregate
    or recreate its child authority graph.
@@ -78,5 +88,4 @@ DevOps closure.
    adopt tests tied to script layout, exact Compose text, ENV files, SQL text,
    line counts, or incidental command order.
 
-No donor source is copied and no donor repository is a build or runtime
-dependency.
+No legacy repository is a build or runtime dependency.

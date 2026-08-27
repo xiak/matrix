@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	supportAPIVersion        = "installation.matrix.xiak.com/v1"
+	supportAPIVersion        = "installation.matrix.xiak.com/v2"
 	supportKind              = "PlatformSupportEvidence"
 	maximumSupportEvidence   = int64(256 * 1024)
 	supportStateReady        = "READY"
@@ -30,18 +30,18 @@ const (
 var supportCommandIDPattern = regexp.MustCompile(`^cmd-[0-9a-f]{32}$`)
 
 type supportEvidence struct {
-	APIVersion            string             `json:"apiVersion"`
-	Kind                  string             `json:"kind"`
-	State                 string             `json:"state"`
-	ReleaseID             string             `json:"releaseId"`
-	ReleaseDigest         string             `json:"releaseDigest"`
-	PreviousReleaseID     string             `json:"previousReleaseId,omitempty"`
-	PreviousReleaseDigest string             `json:"previousReleaseDigest,omitempty"`
-	DatabaseSchemaVersion uint64             `json:"databaseSchemaVersion"`
-	GeneratedAt           time.Time          `json:"generatedAt"`
-	CorrelationID         string             `json:"correlationId"`
-	Components            []supportComponent `json:"components"`
-	Images                []supportImage     `json:"images"`
+	APIVersion            string                  `json:"apiVersion"`
+	Kind                  string                  `json:"kind"`
+	State                 string                  `json:"state"`
+	ReleaseID             string                  `json:"releaseId"`
+	ReleaseDigest         string                  `json:"releaseDigest"`
+	PreviousReleaseID     string                  `json:"previousReleaseId,omitempty"`
+	PreviousReleaseDigest string                  `json:"previousReleaseDigest,omitempty"`
+	Database              release.DatabaseProfile `json:"database"`
+	GeneratedAt           time.Time               `json:"generatedAt"`
+	CorrelationID         string                  `json:"correlationId"`
+	Components            []supportComponent      `json:"components"`
+	Images                []supportImage          `json:"images"`
 }
 
 type supportComponent struct {
@@ -208,7 +208,7 @@ func collectSupportEvidence(
 		ReleaseDigest:         plan.Bundle.ManifestSHA256,
 		PreviousReleaseID:     request.PreviousID,
 		PreviousReleaseDigest: request.PreviousDigest,
-		DatabaseSchemaVersion: installation.bundle.Manifest.Database.SchemaVersion,
+		Database:              installation.bundle.Manifest.Database,
 		GeneratedAt:           request.GeneratedAt, CorrelationID: request.CorrelationID,
 		Components: components, Images: images,
 	}, nil
@@ -249,7 +249,7 @@ func verifySupportEvidence(
 		evidence.ReleaseDigest != plan.Bundle.ManifestSHA256 ||
 		evidence.PreviousReleaseID != request.PreviousID ||
 		evidence.PreviousReleaseDigest != request.PreviousDigest ||
-		evidence.DatabaseSchemaVersion != plan.Bundle.Manifest.Database.SchemaVersion ||
+		evidence.Database != plan.Bundle.Manifest.Database ||
 		evidence.GeneratedAt != request.GeneratedAt ||
 		evidence.CorrelationID != request.CorrelationID ||
 		len(evidence.Components) != len(expectation.Services) ||

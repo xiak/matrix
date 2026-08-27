@@ -39,13 +39,19 @@ func Write(base string) (Fixture, error) {
 // WriteSequence creates signed immediate-successor fixtures under one trust
 // root. It is intentionally metadata-only and never substitutes for a real
 // offline release in runtime acceptance.
-func WriteSequence(base string, count int) ([]Fixture, error) {
-	if count < 1 || count > 8 {
+func WriteSequence(base string, count int, profiles ...release.DatabaseProfile) ([]Fixture, error) {
+	if count < 1 || count > 8 || (len(profiles) != 0 && len(profiles) != count) {
 		return nil, errors.New("fixture release sequence length is invalid")
 	}
 	manifests := make([]release.Manifest, count)
 	for index := range manifests {
 		manifest := Manifest()
+		if len(profiles) != 0 {
+			manifest.Database = profiles[index]
+			if manifest.Database.SchemaVersion != 0 {
+				manifest.APIVersion = release.LegacyManifestAPIVersion
+			}
+		}
 		commit := strings.Repeat(string("abcdef12"[index]), 40)
 		version := fmt.Sprintf("v0.%d.0", index+1)
 		manifest.Release.ID = "matrix-" + version + "-" + commit[:12]
@@ -165,10 +171,8 @@ func Manifest() release.Manifest {
 			MinimumCompose: "2.40.0", CommandContract: "v1",
 		},
 		MinimumFreeBytes: 1024 * 1024 * 1024,
-		Database: release.DatabaseProfile{
-			SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one",
-		},
-		TopologyDigest: topology.ContractDigest(), Files: files, Images: images,
+		Database:         release.CurrentDatabaseProfile(),
+		TopologyDigest:   topology.ContractDigest(), Files: files, Images: images,
 	}
 }
 

@@ -1,6 +1,7 @@
 package release
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
@@ -148,6 +149,17 @@ func TestManifestRejectsUnsafeOrIncompleteInventory(t *testing.T) {
 			value.Release.PreviousVersion = "v0.0.9"
 			value.Release.PreviousID = "matrix-v0.0.9-not-a-commit"
 		},
+		"missing IAM schema":                     func(value *Manifest) { value.Database.Authorities.IAM = 0 },
+		"missing Audit schema":                   func(value *Manifest) { value.Database.Authorities.Audit = 0 },
+		"missing PaaS schema":                    func(value *Manifest) { value.Database.Authorities.PaaS = 0 },
+		"missing authority contract":             func(value *Manifest) { value.Database.ContractRevision = 0 },
+		"unbounded schema":                       func(value *Manifest) { value.Database.Authorities.PaaS = 9007199254740992 },
+		"mixed scalar and authority profile":     func(value *Manifest) { value.Database.SchemaVersion = 1 },
+		"unproved compatibility":                 func(value *Manifest) { value.Database.Compatibility = "expand-contract-n-minus-one" },
+		"legacy envelope with authority profile": func(value *Manifest) { value.APIVersion = LegacyManifestAPIVersion },
+		"new envelope with legacy scalar": func(value *Manifest) {
+			value.Database = DatabaseProfile{SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one"}
+		},
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -157,6 +169,47 @@ func TestManifestRejectsUnsafeOrIncompleteInventory(t *testing.T) {
 				t.Fatal("invalid release manifest must fail")
 			}
 		})
+	}
+}
+
+func TestPublishedManifestCanonicalDatabaseBytesRemainVerifiable(t *testing.T) {
+	manifest := validManifest()
+	current, err := EncodeCanonical(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentDatabase, err := json.Marshal(manifest.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// These are the database fields and order in the published Phase 1 v1
+	// format. The rest of the signed envelope/payload contract is unchanged.
+	legacyBytes := bytes.Replace(current, []byte(ManifestAPIVersion), []byte(LegacyManifestAPIVersion), 1)
+	legacyBytes = bytes.Replace(legacyBytes,
+		append([]byte(`"database":`), currentDatabase...),
+		[]byte(`"database":{"schemaVersion":1,"compatibility":"expand-contract-n-minus-one"}`), 1)
+	legacy, err := DecodeCanonical(legacyBytes)
+	if err != nil || legacy.Database.SchemaVersion != 1 || legacy.Database.Authorities != (AuthoritySchemas{}) {
+		t.Fatalf("decode published database format: %#v / %v", legacy.Database, err)
+	}
+	roundTrip, err := EncodeCanonical(legacy)
+	if err != nil || !bytes.Equal(roundTrip, legacyBytes) {
+		t.Fatalf("published canonical bytes changed: %v", err)
+	}
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trust, err := NewTrustRoot(legacy.Signer.KeyID, publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trustBytes, err := EncodeTrustRoot(trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Verify(legacyBytes, ed25519.Sign(privateKey, legacyBytes), trustBytes); err != nil {
+		t.Fatalf("verify published manifest: %v", err)
 	}
 }
 
@@ -197,6 +250,15 @@ func TestManifestStrictDecodersRejectUnknownMetadataAndSignatureShape(t *testing
 	withUnknown = append(withUnknown, []byte(`,"unknown":true}`)...)
 	if _, err := DecodeCanonical(withUnknown); err == nil {
 		t.Fatal("unknown release metadata must fail")
+	}
+	for _, field := range []string{
+		`"iam":2,"iam":2`, `"iam":null`, `"iam":-1`, `"iam":2.0`,
+		`"iam":2,"unregisteredAuthority":2`,
+	} {
+		malformed := bytes.Replace(manifestBytes, []byte(`"iam":2`), []byte(field), 1)
+		if _, err := DecodeCanonical(malformed); err == nil {
+			t.Fatalf("ambiguous authority schema field accepted: %s", field)
+		}
 	}
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -264,7 +326,7 @@ func validManifest() Manifest {
 			MinimumCompose: "2.40.0", CommandContract: "v1",
 		},
 		MinimumFreeBytes: minimumFreeBytes,
-		Database:         DatabaseProfile{SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one"},
+		Database:         CurrentDatabaseProfile(),
 		TopologyDigest:   digest('f'), Files: files, Images: images,
 	}
 }

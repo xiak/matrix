@@ -121,7 +121,9 @@ func TestAssembleProducesAuthenticatedCompleteRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	if verified.Manifest.Release != result.Manifest.Release ||
-		verified.Manifest.TopologyDigest != result.Manifest.TopologyDigest {
+		verified.Manifest.TopologyDigest != result.Manifest.TopologyDigest ||
+		verified.Manifest.APIVersion != installationrelease.ManifestAPIVersion ||
+		verified.Manifest.Database != installationrelease.CurrentDatabaseProfile() {
 		t.Fatal("published release differs from the signed result")
 	}
 	if len(effects.binaries) != len(binarySpecifications) ||

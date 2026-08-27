@@ -3,7 +3,7 @@
 - Status: Accepted
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
-- Release contract version: `v1`
+- Release contract: accepted foundation `v1`; multi-tenant extension `v2` in progress
 
 ## Outcome
 
@@ -184,6 +184,50 @@ timestamps, and correlation IDs; it excludes secrets, tokens, configuration
 values, database rows, native errors, arbitrary logs, and absolute paths.
 
 ## Incremental acceptance
+
+### Multi-tenant authority-profile extension (not yet accepted)
+
+The isolated IAM branch replaces the single migration number for new releases
+with the signed manifest v2 database profile. Its code-owned composition is
+IAM schema 2, Audit schema 2, PaaS schema 1, and `contractRevision=2`. The
+revision includes the tenant lifecycle/original-primary recovery contract and
+the IAM worker's exact seven-column claim; it is not a request/configuration
+selector. Real service readiness and the owning function/dispatcher gates must
+prove the composition, rather than comparing three version numbers alone.
+
+Upgrade and data-preserving rollback require exact equality of the complete
+profile before journal advancement or provider effects. A larger number is
+not compatibility: the Phase 3 `2/2/2` composition, whether revision 1 or 2,
+does not become compatible with this branch's `2/2/1` revision 2. Backup and
+recovery bind their selected snapshot to its authenticated release's complete
+profile. Recovery also requires current and target profiles to be identical,
+in both the command boundary and each adapter phase before journal advancement,
+service changes or data restoration. No force/override bypass is provided;
+support reports the same non-secret profile.
+
+The published v1 manifest and backup canonical bytes and signatures/seals stay
+readable. This does not certify that an old executable can run new schemas,
+that an old topology remains executable, or that a cross-profile upgrade is
+supported. The existing gates must prove published-format preservation and
+unsafe transition rejection, followed by real signed A/B releases with this
+same complete profile, retained tenant/credential/resource/Audit state,
+data-preserving rollback and selected-backup recovery. These new gates remain
+separate from the accepted foundation evidence below and from FEAT-008's host
+work.
+
+The profile contract gates pass on this branch on 2026-08-27: unit/race and
+architecture checks, native Linux backup/seal and all recovery-phase refusal
+checks, and the actual published `c88a84f` installer rejecting the new signed
+format before effects. The negative recovery test first demonstrates that an
+authenticated old snapshot alone admitted a different current profile; both
+command and adapter boundaries now reject that transition without changing
+the journal, services, credentials, backup or data. The published v1 seal and
+canonical bytes still round-trip unchanged. In new task-owned PostgreSQL 18
+databases, the actual old IAM executable retained-account upgrade passes,
+followed by the independent five-process race gate checking real runtime
+logins, the `2/2/1` readiness tuple, the seven-column IAM claim contract and
+the existing tenant/lifecycle/outbox matrices. These checks do not replace the
+signed populated A/B offline lifecycle acceptance above.
 
 ### Gate A: release and CLI contract
 
