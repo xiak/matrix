@@ -364,16 +364,23 @@ runnable cross-profile N-1 compatibility.
 
 The existing process gate now consumes a release-builder-produced signed
 `OfflineNodeRelease` and executes its bundled `mx`; it does not construct a
-second test-only release implementation. Source `83a2618` assembled the pinned
+second test-only release implementation. Source `83ff8ca` assembled the pinned
 collector and licenses with the two native executables from a clean checkout.
-The signed bundle passed native Linux installation, exact replay, actual
-host/collector readiness, no-reader refresh, staged-payload and service-policy
-tamper rejection, collector outage/reconciliation and supervised crash restart.
+The signed bundle passed three native Linux runs covering installation, exact
+replay, actual host/collector readiness, no-reader refresh, staged-payload
+and service-policy tamper rejection, collector outage/reconciliation and
+supervised crash restart.
 Killing the installer after its services started preserved the in-flight command;
 a fresh invocation retained that command, release and both process identities.
 The collector ran under a distinct non-root UID without access to the node
 private key or Docker socket. Only fixture-owned transient services and files
 were used; no customer Docker object, package, daemon or firewall was changed.
+Systemd owns the collector's private runtime directory and removes it when
+the service stops. The real stop/restart and final cleanup assertions verify
+that no mount placeholder remains; a pre-existing directory is not adopted
+merely because its name matches the node identity.
+The experiment services, transient directories and remote test artifacts were
+removed after verification.
 
 Enrollment/security regressions cover closed input, overlapping IP aliases,
 exact certificate roles, mutual trust, expiry and certificate address binding.
@@ -389,7 +396,7 @@ Full local Go/race, vet, architecture, module verification, stable generation,
 Linux builds and ten focused repetitions passed. The existing independent
 node-process job now builds and tests the signed native package alongside the
 original collector and real-authority regression gates. Its exact-source
-[CI run](https://github.com/xiak/matrix/actions/runs/33074299379) passed all three
+[CI run](https://github.com/xiak/matrix/actions/runs/33076021004) passed all three
 jobs.
 The native exercise consumes an extracted Linux bundle; declared executable
 modes were restored after the Windows-origin transfer before verification.
