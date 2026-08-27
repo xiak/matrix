@@ -14,10 +14,12 @@ deployment, operations, upgrade, rollback, recovery, identity, and audit.
 Docker Engine is the default v0.1 substrate; Docker Compose is the first
 application executor. Kubernetes may be added later.
 
-The Matrix product family may eventually grow into a broader cloud platform.
-That future must not turn the current PaaS subproduct into a universal API
-spanning containers, virtual machines, functions, Kubernetes-native resources,
-and managed services.
+Matrix's long-term product direction is an independently deployable private
+cloud platform that can later evolve toward public-cloud operation.
+Application PaaS is one product domain within it. The product evolves through
+accepted vertical slices, not a one-step implementation of every cloud
+capability. That direction must not turn the current PaaS into a universal API
+spanning containers, virtual machines, functions and managed services.
 
 ## Decision
 
@@ -86,6 +88,14 @@ implement the same profile after passing its conformance suite. Native
 Kubernetes, VM, serverless, or managed-data products receive separate domains
 and APIs rather than entering `Runtime.Deploy(anySpec)`.
 
+Kubernetes is an optional provider, not Matrix's resource authority,
+installation prerequisite or mandatory UI vocabulary. Matrix owns identity,
+authorization, desired state and product lifecycle. Shared application
+experiences can use provider-specific execution, observation and access
+adapters, with explicit capabilities where providers differ. An interactive
+workload access session is separately authorized; it is not an arbitrary
+command field in the Deployment contract.
+
 Placement remains apphosting policy. Tenant-facing isolation describes a
 guarantee, not Compose projects, Docker daemons, Kubernetes namespaces, or
 other implementation mechanisms. The technology-shaped draft isolation
@@ -100,11 +110,22 @@ clean network-disabled install plus platform backup, upgrade verification,
 rollback/recovery, and sanitized support evidence. Exact bundle contents and
 commands belong to the release FEAT and verified runbook, not this ADR.
 
-If Matrix later becomes a cloud platform, Application PaaS remains one product
-domain. IAM, Audit, Operation, policy, quota, metering, resource references,
-and provider connections may become shared foundation only after multiple
-real products consume them. Product domains do not share a
-`UniversalWorkload`.
+Application PaaS remains one product domain as Matrix evolves. IAM, Audit,
+Operation, policy, quota, metering, resource references and provider
+connections may become shared foundation only after multiple real products
+consume them. Product domains do not share a `UniversalWorkload`.
+
+Each iteration delivers an independently runnable and verifiable product
+slice. Its current security and offline-recovery obligations are implemented
+with that slice, not postponed to a final hardening phase. Feature sequencing,
+scope and release gates belong to the owning FEAT. Future capability alone
+does not justify an empty provider framework or extra service boundary.
+
+Public-cloud operation requires its own acceptance of untrusted-tenant
+isolation, availability/failure domains, metering and abuse protection. A
+private deployment or Compose workload isolation does not by itself prove
+that readiness. Public exposure is not a deployment-mode shortcut around
+those boundaries.
 
 ### Pragmatic DDD
 
