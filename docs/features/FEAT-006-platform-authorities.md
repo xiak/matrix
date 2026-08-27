@@ -776,10 +776,42 @@ arrive in the installation chain; tenant audit bytes, replay and verification
 remain separate. This gate does not run a workload executor and therefore does
 not by itself prove continued execution of a live container.
 
+Process database identity must be proved independently of successful HTTP
+flows. The original test DSN helper changed a parsed pgx config and then used
+`ConnString()`, which returned the original migration-admin URL. Those runs
+do not establish least-privilege executable logins or database tenant
+isolation. This does not invalidate the separate adapter attack gates that
+connect directly with the modified configuration. The corrected helper
+constructs an explicit runtime URL, removes query credential overrides and
+bounds each process pool to two connections. Its default, database-free gate
+checks the user/password/address round trip. The real process gate checks
+`session_user` and `current_user` with that DSN and separately inspects every
+running binary's `pg_stat_activity` login, connection bound, and absence of
+superuser/RLS-bypass privileges; the identity probe cannot satisfy the running
+process check. No production diagnostic endpoint is introduced.
+On 2026-08-27, this branch passed the corrected PG18 race gate for all five
+processes and for the actual fixed `9fd45b0` IAM executable's populated
+upgrade/restart. Other Phase branches must adapt and rerun their own gates;
+these results do not certify their binaries.
+
+The resource-isolation increment in the same gate uses two actual tenant
+sessions with matching child login names, idempotency keys and database
+resource IDs. Each tenant independently activates quota and admits two
+database services; equal replay keeps its own quota/Operation, changed replay
+conflicts, and over-quota admission leaves no reservation. Foreign quota,
+service and Operation IDs, caller tenant headers/body fields and unsupported
+selectors/cursors cannot select another tenant. A platform-only user has no
+tenant-resource access, a viewer cannot mutate, and role revocation affects
+the next request. Suspension rejects quota/service/Operation reads; recovery,
+restoration and creator disable preserve their ownership, original actor and
+accepted content. Real outboxes deliver one quota fact and two creation facts
+per tenant with the original IAM authority. These are pending service records,
+not claims that a PostgreSQL workload has been provisioned.
+
 These are verified backend slices, not acceptance of the full multi-tenant
 target. The console still needs this branch's lifecycle adaptation and real
-browser gate. The complete database/quota isolation matrix and signed populated
-offline upgrade/rollback/backup/recovery gates remain unaccepted. The latter require
+browser gate. Live-workload preservation and signed populated offline
+upgrade/rollback/backup/recovery gates remain unaccepted. The latter require
 the concrete release schema profile owned by FEAT-005/008; these retained-data
 process gates are not a substitute. Prior foundation evidence below covers
 only its named source revisions.
@@ -797,10 +829,12 @@ only its named source revisions.
   canonical/event disagreement, arbitrary payloads, record hashes, immutable
   update/delete/truncate paths, database session/event/lease time, lease
   recovery, and stale fencing tokens.
-- Gate B was accepted on 2026-08-26 after implementation commit `255b790`.
+- Gate B's initial HTTP-flow evidence dates from implementation `255b790` on
+  2026-08-26. It is not evidence of actual executable database-login isolation;
+  that boundary requires the corrected process gate described above.
   IAM, Audit, the IAM Audit dispatcher, PaaS, and the PaaS Audit dispatcher run
-  as five independent processes with exact file credentials, least-privilege
-  database logins, and HTTP-only authority integration. PaaS readiness binds
+  as five independent processes with exact file service credentials and
+  HTTP-only authority integration. PaaS readiness binds
   its schema and outbox invariants to the live IAM identity of its configured
   PaaS service credential; there is no header, local allow-list, cached permit,
   or in-process Audit fallback.
