@@ -389,8 +389,12 @@ replay and revoked-producer rejection while retaining real PaaS host
 registration and its Operation/Audit correlation. Full-repository race/vet,
 ten repeated focused runs, stable generation, module verification and Linux
 builds passed; the existing console's 52 tests and two bounded static builds
-passed with matching embedded assets. Independent CI for this consuming
-commit is pending.
+passed with matching embedded assets. Equal-text tenant/installation identities
+remain disjoint, old tenant canonical bytes/hashes survive, and platform
+revocation takes effect on the next request without restart regrant.
+Consuming source `09474c9` passed all three
+[independent CI jobs](https://github.com/xiak/matrix/actions/runs/33058627543),
+including the real Linux node/collector regression.
 
 Exact-bootstrap-only tenant opening remains until the separately verified IAM
 platform-lifecycle replacement. New tenants do not inherit platform roles;
@@ -451,32 +455,6 @@ not accept the complete multi-tenant or offline release extension.
   leases and fencing; clean PostgreSQL 18 gates prove the three new actions,
   their public contracts, source-bound ingestion, transactional correlation,
   and delivery through the existing immutable Audit chain.
-- The Phase 3 IAM extension passes the existing strict contract, role matrix,
-  real PostgreSQL HTTP and database attack gates. The existing independent
-  IAM/Audit/PaaS process gate proves explicit platform grants, next-request
-  revocation, rejected organization-admin self-grant, and no authority
-  resurrection after IAM restart with equal bootstrap. Each tested allowed
-  or denied platform decision joins exactly one delivered immutable IAM Audit
-  fact. These checks do not accept platform-resource mutations or the offline
-  upgrade/recovery path.
-  Source `a757a27` also passes full-repository race/architecture, vet, module
-  verification, stable generation, ten repeated IAM runs, Linux builds and
-  [independent CI](https://github.com/xiak/matrix/actions/runs/33046535740),
-  including the existing real node/collector process regression.
-- The Phase 3 Audit extension passes clean PostgreSQL 18 apply-twice, immutable
-  storage and privilege attacks, and an upgrade from the actual `9fd45b0` SQL
-  with retained tenant records. Equal tenant/installation IDs and Operation IDs
-  remain separate; old canonical bytes, record hashes and replay survive.
-  IAM/Audit HTTP and the five-process race gate prove platform-only access,
-  next-request revocation, no restart regrant, wrong producer installation and
-  purpose rejection, and unchanged platform replay after Audit restart. The
-  platform fixture tests producer/Audit authority, not a completed host mutation
-  or PaaS Operation. PaaS database regressions, full-repository race/architecture,
-  vet, module verification, stable generation, ten repeated focused runs, Linux
-  builds, modified documentation links and diff checks also pass locally.
-  Source `6401e96` passes [independent CI](https://github.com/xiak/matrix/actions/runs/33050553233):
-  the existing Go/race and real node/collector gates plus the real PostgreSQL,
-  retained-data upgrade and authority-process gates in the same workflow.
 
 ## Deferred
 
