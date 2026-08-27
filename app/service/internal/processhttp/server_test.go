@@ -52,6 +52,15 @@ func TestServeWithBackgroundCancelsItsPeer(t *testing.T) {
 	}
 }
 
+func TestTLSProcessNeverFallsBackToPlaintext(t *testing.T) {
+	called := false
+	err := ServeTLSWithBackground(context.Background(), "127.0.0.1:0", http.NotFoundHandler(), nil,
+		func(context.Context) error { called = true; return nil })
+	if err == nil || called {
+		t.Fatal("missing TLS configuration started a process")
+	}
+}
+
 func assertProcessReadiness(
 	t *testing.T,
 	handler http.Handler,

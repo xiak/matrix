@@ -1,0 +1,60 @@
+name: Verification
+
+on:
+  push:
+    branches: [main, 'feat/**']
+    paths: ['api/**', 'app/**', 'deploy/**', 'test/**', 'go.mod', 'go.sum', '.github/workflows/**']
+  pull_request:
+    paths: ['api/**', 'app/**', 'deploy/**', 'test/**', 'go.mod', 'go.sum', '.github/workflows/**']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verification-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GOMAXPROCS: '2'
+
+jobs:
+  go:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: '1.26.x'
+          cache-dependency-path: go.sum
+      - name: Verify dependencies and generation
+        run: |
+          go mod download
+          go mod verify
+          go generate ./api/...
+          git diff --exit-code -- api
+      - name: Unit, architecture and race gates
+        run: |
+          go vet -p 2 ./...
+          go test -race -p 2 ./...
+
+  node-process:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: '1.26.x'
+          cache-dependency-path: go.sum
+      - name: Build and verify the real Linux node process
+        env:
+          MATRIX_NODE_AGENT_REAL_RUNTIME: '1'
+          MATRIX_NODE_AGENT_BINARY: ${{ runner.temp }}/matrix-node-agent
+        run: |
+          go build -p 2 -trimpath -o "$MATRIX_NODE_AGENT_BINARY" ./app/service/nodeagent/cmd/matrix-node-agent
+          go test -p 2 -count=1 -timeout=90s -run '^TestLinuxNodeProcessObservation$' ./app/service/nodeagent/internal/service/nethttp

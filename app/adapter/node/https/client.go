@@ -1,0 +1,189 @@
+// Package nodehttps adapts infrastructure observations through a bounded,
+// mutually authenticated node connection. It does not select a target or fall
+// back to local execution.
+package nodehttps
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"net"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
+
+	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
+	paasv1 "github.com/xiak/matrix/api/paas/v1"
+)
+
+type Config struct {
+	Endpoint            string
+	Identity            nodev1.Identity
+	ControllerID        string
+	BindingRef          string
+	ExpectedFingerprint string
+	Credentials         Credentials
+}
+
+type Client struct {
+	endpoint            string
+	identity            nodev1.Identity
+	bindingRef          string
+	expectedFingerprint string
+	http                *http.Client
+}
+
+func New(config Config) (*Client, error) {
+	endpoint, err := url.Parse(config.Endpoint)
+	if err != nil || !validEndpoint(endpoint) || nodev1.ValidateIdentity(config.Identity) != nil ||
+		paasv1.ValidateID("bindingRef", config.BindingRef) != nil ||
+		paasv1.ValidateDigest("expectedFingerprint", config.ExpectedFingerprint) != nil {
+		return nil, errors.New("node connection configuration is invalid")
+	}
+	security, err := clientTLS(config.Credentials, config.Identity, config.ControllerID)
+	if err != nil {
+		return nil, err
+	}
+	transport := &http.Transport{
+		Proxy:           nil,
+		DialContext:     (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
+		TLSClientConfig: security, TLSHandshakeTimeout: 5 * time.Second,
+		ResponseHeaderTimeout: 5 * time.Second, MaxResponseHeaderBytes: 32 * 1024,
+		MaxConnsPerHost: 8, DisableCompression: true, DisableKeepAlives: true,
+	}
+	return &Client{
+		endpoint: endpoint.String() + nodev1.ObservationPath, identity: config.Identity,
+		bindingRef: config.BindingRef, expectedFingerprint: config.ExpectedFingerprint,
+		http: &http.Client{
+			Transport: transport, Timeout: nodev1.MaximumObservationDuration,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
+	}, nil
+}
+
+func validEndpoint(value *url.URL) bool {
+	if value == nil || value.Scheme != "https" || value.User != nil || value.Opaque != "" ||
+		value.Path != "" || value.RawPath != "" || value.RawQuery != "" || value.ForceQuery ||
+		value.Fragment != "" || strings.Contains(value.Host, "%") {
+		return false
+	}
+	host, portText, err := net.SplitHostPort(value.Host)
+	port, portErr := strconv.ParseUint(portText, 10, 16)
+	return err == nil && portErr == nil && host != "" && port > 0
+}
+
+func (client *Client) Close() { client.http.CloseIdleConnections() }
+
+func (client *Client) Capabilities(ctx context.Context) (paasv1.AdapterCapabilitiesContract, error) {
+	if err := ctx.Err(); err != nil {
+		return paasv1.AdapterCapabilitiesContract{}, err
+	}
+	return paasv1.AdapterCapabilitiesContract{
+		Adapter:             paasv1.AdapterRef{Kind: paasv1.AdapterInfrastructure, Name: "nodehttps", ContractVersion: "v1"},
+		Actions:             []paasv1.AdapterAction{paasv1.AdapterCapabilities, paasv1.AdapterInspectExecutionTarget, paasv1.AdapterObserveExecutionTarget},
+		IsolationGuarantees: []paasv1.IsolationGuarantee{paasv1.IsolationWorkload},
+		ObservedAt:          time.Now().UTC().Truncate(time.Microsecond),
+	}, nil
+}
+
+func (client *Client) InspectExecutionTarget(ctx context.Context, request paasv1.InspectExecutionTargetRequest) (paasv1.ExecutionTargetObservation, error) {
+	if paasv1.ValidateInspectExecutionTargetRequest(request) != nil {
+		return paasv1.ExecutionTargetObservation{}, fault(paasv1.ErrorInvalidArgument)
+	}
+	return client.observe(ctx, request.Command)
+}
+
+func (client *Client) ObserveExecutionTarget(ctx context.Context, request paasv1.ObserveExecutionTargetRequest) (paasv1.ExecutionTargetObservation, error) {
+	if paasv1.ValidateObserveExecutionTargetRequest(request) != nil {
+		return paasv1.ExecutionTargetObservation{}, fault(paasv1.ErrorInvalidArgument)
+	}
+	return client.observe(ctx, request.Command)
+}
+
+func (client *Client) observe(ctx context.Context, command paasv1.AdapterCommandEnvelope) (paasv1.ExecutionTargetObservation, error) {
+	empty := paasv1.ExecutionTargetObservation{}
+	request := nodev1.ObservationRequest{
+		APIVersion: nodev1.APIVersion, Kind: nodev1.ObservationRequestKind, Identity: client.identity, Command: command,
+	}
+	if nodev1.ValidateObservationRequest(request) != nil || command.BindingRef != client.bindingRef ||
+		time.Until(command.Deadline) > nodev1.MaximumObservationDuration {
+		return empty, fault(paasv1.ErrorInvalidArgument)
+	}
+	if !time.Now().Before(command.Deadline) {
+		return empty, fault(paasv1.ErrorDeadlineExceeded)
+	}
+	operationContext, cancel := context.WithDeadline(ctx, command.Deadline)
+	defer cancel()
+	body, err := json.Marshal(request)
+	if err != nil || len(body) > nodev1.MaximumObservationBytes {
+		return empty, fault(paasv1.ErrorInvalidArgument)
+	}
+	httpRequest, err := http.NewRequestWithContext(operationContext, http.MethodPost, client.endpoint, bytes.NewReader(body))
+	if err != nil {
+		return empty, fault(paasv1.ErrorInvalidArgument)
+	}
+	httpRequest.Header.Set("Content-Type", "application/json")
+	httpRequest.Header.Set("Accept", "application/json")
+	response, err := client.http.Do(httpRequest)
+	if err != nil {
+		if errors.Is(operationContext.Err(), context.DeadlineExceeded) {
+			return empty, fault(paasv1.ErrorDeadlineExceeded)
+		}
+		return empty, fault(paasv1.ErrorExecutionTargetUnavailable)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return empty, responseFault(response.StatusCode)
+	}
+	if response.Header.Get("Content-Type") != "application/json" || response.Header.Get("Content-Encoding") != "" {
+		return empty, fault(paasv1.ErrorAdapterRejected)
+	}
+	value, err := nodev1.DecodeObservationResponse(response.Body)
+	if errors.Is(operationContext.Err(), context.DeadlineExceeded) {
+		return empty, fault(paasv1.ErrorDeadlineExceeded)
+	}
+	if err != nil || value.Identity != client.identity || value.CommandID != command.CommandID ||
+		value.Observation.IdentityFingerprint != client.expectedFingerprint ||
+		value.Observation.ObservedAt.After(time.Now().Add(2*time.Second)) {
+		return empty, fault(paasv1.ErrorAdapterRejected)
+	}
+	if !time.Now().Before(value.Observation.ObservedAt.Add(nodev1.MaximumObservationAge)) {
+		return empty, fault(paasv1.ErrorExecutionTargetUnavailable)
+	}
+	return value.Observation, nil
+}
+
+func responseFault(status int) error {
+	switch status {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return fault(paasv1.ErrorPermissionDenied)
+	case http.StatusRequestTimeout, http.StatusGatewayTimeout:
+		return fault(paasv1.ErrorDeadlineExceeded)
+	case http.StatusTooManyRequests:
+		return fault(paasv1.ErrorRateLimited)
+	case http.StatusServiceUnavailable:
+		return fault(paasv1.ErrorExecutionTargetUnavailable)
+	default:
+		return fault(paasv1.ErrorAdapterRejected)
+	}
+}
+
+func fault(code paasv1.ErrorCode) paasv1.AdapterFault {
+	value := paasv1.NormalizedAdapterError{Code: code}
+	switch code {
+	case paasv1.ErrorPermissionDenied:
+		value.Class, value.Message = paasv1.AdapterErrorPermissionDenied, "node access denied"
+	case paasv1.ErrorDeadlineExceeded:
+		value.Class, value.Message, value.Retryable = paasv1.AdapterErrorTimeout, "node observation deadline exceeded", true
+	case paasv1.ErrorRateLimited:
+		value.Class, value.Message, value.Retryable = paasv1.AdapterErrorRateLimited, "node observation concurrency exceeded", true
+	case paasv1.ErrorExecutionTargetUnavailable:
+		value.Class, value.Message, value.Retryable = paasv1.AdapterErrorUnavailable, "node observation is unavailable", true
+	default:
+		value.Class, value.Message = paasv1.AdapterErrorValidation, "node observation was rejected"
+	}
+	return paasv1.AdapterFault{Normalized: value}
+}

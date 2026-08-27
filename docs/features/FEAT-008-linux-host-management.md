@@ -174,9 +174,26 @@ executed commands; one checkpoint contains portable resume pointers.
 ## Implementation evidence
 
 The target/roadmap were fixed in `fbdb250` before the initial fixed-source
-review. No implementation iteration or Phase 3 gate is accepted. P3-1 starts
-with authenticated node observations; its full runtime/telemetry and offline
-startup evidence are still required.
+review. P3-1's initial node communication slice now has a versioned protocol,
+mTLS client/listener and a resident process reusing the host probe. Background
+capacity/health samples expire and preserve the configured host identity pin;
+allocatable capacity excludes installation reserve, not measured free memory.
+
+The [protocol/security tests](../../app/service/nodeagent/internal/service/nethttp/handler_test.go)
+verify actual TLS admission, exact peers and correlations, malformed/bounded
+requests, freshness, concurrency and sanitized errors. The
+[process gate](../../app/service/nodeagent/internal/service/nethttp/runtime_test.go)
+passed with the built executable in an egress-disabled Linux Docker-in-Docker
+fixture: no-reader refresh, disconnection, persisted identity and restart.
+The default Go suite, architecture, vet, module verification, generation drift,
+this slice's race checks and ten repeated runs passed locally. Opt-in database
+and full Phase 1/2/3 release exercises were not implied by that default run.
+
+[Independent CI](../../.github/workflows/verification.yml) reuses these tests;
+its remote result is not yet accepted. No implementation iteration or complete
+Phase 3 gate is accepted. Next in P3-1: actual CPU/memory/filesystem usage,
+control-plane admission/refresh and signed offline node startup. This initial
+capacity/health chain is not the completed observability product.
 
 ## Adoption
 
