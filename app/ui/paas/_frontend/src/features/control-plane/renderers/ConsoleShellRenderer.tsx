@@ -46,14 +46,16 @@ import styles from "./ConsoleShellRenderer.module.css";
 
 const railIcons = {
   overview: LayoutDashboard,
-  database: Database
+  database: Database,
+  access: ShieldCheck
 } satisfies Record<RailIconKind, typeof Database>;
 
 const navigationIcons = {
   catalog: PackageSearch,
   quota: Gauge,
   installation: ServerCog,
-  region: MapPin
+  region: MapPin,
+  access: ShieldCheck
 } satisfies Record<NavigationIconKind, typeof Database>;
 
 function ShellFrame({ children }: { children: React.ReactNode }) {
@@ -120,6 +122,7 @@ function LoadingShell({ error, logout, retry, revoking, sessionError }: {
                       <Typography.Title as="h2" level={2}>控制面未能加载</Typography.Title>
                       <p>{error}</p>
                       <Button onClick={retry} variant="secondary"><RefreshCcw aria-hidden="true" />重试</Button>
+                      <Link href="/console/access/">进入访问管理</Link>
                     </div>
                   ) : (
                     <div className={styles.loadingGrid} aria-label="正在加载控制面">
@@ -244,10 +247,10 @@ function ConsoleShell() {
 
               <Sider.ContextMenu className={styles.contextMenu}>
                 <div className={styles.contextHeader}>
-                  <div><Typography.Eyebrow>Managed services</Typography.Eyebrow><strong>托管数据库</strong></div>
-                  <Database aria-hidden="true" />
+                  <div><Typography.Eyebrow>{scene.section === "access" ? "Identity and access" : "Managed services"}</Typography.Eyebrow><strong>{scene.section === "access" ? "访问管理" : "托管数据库"}</strong></div>
+                  {scene.section === "access" ? <ShieldCheck aria-hidden="true" /> : <Database aria-hidden="true" />}
                 </div>
-                <nav aria-label="托管服务导航" className={styles.contextNavigation}>
+                <nav aria-label="控制台导航" className={styles.contextNavigation}>
                   <p>控制面</p>
                   {scene.navigation.map((item) => {
                     const Icon = navigationIcons[item.icon];
@@ -303,9 +306,9 @@ function ConsoleShell() {
                     <div><Typography.Eyebrow>{scene.eyebrow}</Typography.Eyebrow><Typography.Title as="h1" level={2}>{scene.title}</Typography.Title></div>
                   </div>
                   <div className={styles.pageActions}>
-                    <Button aria-label="刷新" disabled={controlPlane.loading} onClick={() => void controlPlane.reload()} size="small" variant="ghost">
+                    {scene.section !== "access" ? <Button aria-label="刷新" disabled={controlPlane.loading} onClick={() => void controlPlane.reload()} size="small" variant="ghost">
                       <RefreshCcw aria-hidden="true" /><span>刷新</span>
-                    </Button>
+                    </Button> : null}
                     {scene.workspace ? (
                       <Button
                         aria-controls="console-workspace"

@@ -95,8 +95,10 @@ entire moving branch.
 
 1. Implement compact independent `iam` and `audit` services in this repository;
    do not import a donor module, generated tree, SDK, schema, or runtime.
-2. Derive tenant and subject only from current credential bindings. Reject
-   tenant/subject headers, organization selectors, caller-supplied permission
+2. Derive tenant and subject only from current credential bindings. The
+   Phase 2 qualified child-login suffix is only a credential lookup namespace;
+   it does not select the tenant of an authenticated operation. Reject
+   tenant/subject headers, post-login organization selectors, caller-supplied permission
    subjects, ABAC maps, and all failure-time local fallback.
 3. Use fixed code-owned roles/actions, opaque hashed sessions and service
    credentials, database time, exact bootstrap replay, and transactionally
@@ -118,5 +120,13 @@ entire moving branch.
 8. Test behavior and security invariants rather than donor SQL text, generated
    files, path inventories, framework call order, or historical documents.
 
-No donor source is copied and no donor repository is a build or runtime
-dependency.
+No legacy repository is a build or runtime dependency. The fixed Matrix
+account slice is adapted in-tree under the existing IAM and console owners.
+
+The tenant/subaccount extension rechecks the legacy
+`authsession/contract/actor_identity.go` slice at `69336e51...`: `REFERENCE`
+for typed session-to-authority reference binding and `REJECT` as an implementation.
+Its UUIDv7 value-object closure, social identity models, and absent qualified
+password login do not implement Matrix account aliases, tenant onboarding, or
+subaccount management. Those workflows extend the existing target IAM owner;
+no additional donor implementation or dependency is adopted.

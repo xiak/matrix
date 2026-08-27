@@ -3,7 +3,8 @@ export type ConsoleSection =
   | "catalog"
   | "quotas"
   | "installations"
-  | "regions";
+  | "regions"
+  | "access";
 
 export type ControlPlaneRouteSelection = {
   section: ConsoleSection;

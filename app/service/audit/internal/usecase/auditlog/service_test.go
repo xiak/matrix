@@ -165,12 +165,12 @@ func TestAuditUsecasesFailClosedBeforeMutation(t *testing.T) {
 	wrongTenant := event
 	wrongTenant.EventID = "event-wrong-tenant"
 	wrongTenant.TenantID = "organization-other"
-	if _, err := service.Ingest(context.Background(), producerCredential, wrongTenant); !errors.Is(err, ErrInvalidArgument) {
-		t.Fatalf("cross-tenant producer error=%v, want invalid argument", err)
+	if _, err := service.Ingest(context.Background(), producerCredential, wrongTenant); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("uncorrelated producer target error=%v, want unavailable", err)
 	}
 	iam.identity.Purpose = iamv1.ServiceInstallationVerifier
-	if _, err := service.Ingest(context.Background(), producerCredential, event); !errors.Is(err, ErrUnauthenticated) {
-		t.Fatalf("unsupported producer error=%v, want unauthenticated", err)
+	if _, err := service.Ingest(context.Background(), producerCredential, event); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("malformed producer authorization error=%v, want unavailable", err)
 	}
 	if len(transaction.records["organization-example"]) != 0 {
 		t.Fatal("rejected producer mutated Audit records")
@@ -278,11 +278,15 @@ type auditIAM struct {
 	malformed bool
 }
 
-func (client *auditIAM) ServiceIdentity(
-	context.Context,
-	iamv1.Secret,
-) (iamv1.ServiceIdentity, error) {
-	return client.identity, nil
+func (client *auditIAM) ResolveAuditProducer(
+	_ context.Context,
+	_ iamv1.Secret,
+	_ iamv1.ResolveAuditProducerRequest,
+) (iamv1.AuditProducerAuthorization, error) {
+	return iamv1.AuditProducerAuthorization{
+		APIVersion: iamv1.APIVersion, Kind: "AuditProducerAuthorization",
+		Producer: client.identity, OrganizationID: "organization-example",
+	}, nil
 }
 
 func (client *auditIAM) Authorize(

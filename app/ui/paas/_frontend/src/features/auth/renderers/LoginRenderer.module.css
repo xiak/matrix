@@ -96,6 +96,14 @@
   gap: var(--xiak-spacing-roomy);
 }
 
+.loginModes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--xiak-spacing-tight);
+  border-bottom: var(--xiak-border-subtle);
+  padding-bottom: var(--xiak-spacing-default);
+}
+
 .form input {
   min-height: var(--xiak-control-height-large);
   font-weight: var(--xiak-font-weight-medium);

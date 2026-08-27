@@ -37,6 +37,90 @@ func TestIAMSchemaAcceptsGoUTCSecondEncoding(t *testing.T) {
 	}
 }
 
+func TestIAMAccountSchemasPreserveQualifiedLoginAndExplicitGrant(t *testing.T) {
+	document := loadIAMOpenAPI(t)
+	loginSchema := compileIAMOpenAPISchema(t, document, "LoginRequest")
+	login := loadIAMSchemaExample(t, "examples/login-request.json")
+	for _, name := range []string{"developer@acme", "developer@10001", "admin"} {
+		login["loginName"] = name
+		if err := loginSchema.Validate(login); err != nil {
+			t.Fatalf("qualified login %s: %v", name, err)
+		}
+	}
+	login["loginName"] = "developer@acme@other"
+	if loginSchema.Validate(login) == nil {
+		t.Fatal("schema accepted an ambiguous login")
+	}
+	createSchema := compileIAMOpenAPISchema(t, document, "CreateUserRequest")
+	create := loadIAMSchemaExample(t, "examples/create-user-request.json")
+	if err := createSchema.Validate(create); err != nil {
+		t.Fatalf("no initial role: %v", err)
+	}
+	create["initialRole"] = "PAAS_VIEWER"
+	if err := createSchema.Validate(create); err != nil {
+		t.Fatalf("explicit initial role: %v", err)
+	}
+	for _, role := range []BuiltinRole{RoleInstallationVerifier, RolePlatformOperator} {
+		create["initialRole"] = string(role)
+		if createSchema.Validate(create) == nil {
+			t.Fatalf("member creation schema accepted privileged role %s", role)
+		}
+	}
+	grantSchema := compileIAMOpenAPISchema(t, document, "PutRoleBindingRequest")
+	grant := loadIAMSchemaExample(t, "examples/put-role-binding-request.json")
+	grant["role"] = string(RolePlatformOperator)
+	if err := grantSchema.Validate(grant); err != nil {
+		t.Fatalf("explicit platform grant contract: %v", err)
+	}
+	aliasSchema := compileIAMOpenAPISchema(t, document, "SetAccountAliasRequest")
+	alias := map[string]any{"alias": "acme", "resourceVersion": float64(1), "requestId": "request-alias"}
+	if err := aliasSchema.Validate(alias); err != nil {
+		t.Fatalf("alias request: %v", err)
+	}
+	alias["tenantId"] = "forged"
+	if aliasSchema.Validate(alias) == nil {
+		t.Fatal("alias schema accepted a tenant selector")
+	}
+}
+
+func TestAuditProducerSchemaKeepsAppendAuthoritySeparate(t *testing.T) {
+	document := loadIAMOpenAPI(t)
+	requestSchema := compileIAMOpenAPISchema(t, document, "ResolveAuditProducerRequest")
+	request := map[string]any{"organizationId": "organization-customer"}
+	if err := requestSchema.Validate(request); err != nil {
+		t.Fatal(err)
+	}
+	for _, selector := range []string{"purpose", "principalId", "subject", "source"} {
+		request[selector] = "forged"
+		if requestSchema.Validate(request) == nil {
+			t.Fatalf("producer request accepted %s", selector)
+		}
+		delete(request, selector)
+	}
+	schema := compileIAMOpenAPISchema(t, document, "AuditProducerAuthorization")
+	producer := loadIAMSchemaExample(t, "examples/service-identity.json")
+	response := map[string]any{"apiVersion": APIVersion, "kind": "AuditProducerAuthorization", "producer": producer, "organizationId": "organization-customer"}
+	for _, purpose := range []ServicePurpose{ServiceIAM, ServicePaaS, ServiceAudit} {
+		producer["purpose"] = string(purpose)
+		if err := schema.Validate(response); err != nil {
+			t.Fatal(err)
+		}
+	}
+	producer["purpose"] = string(ServiceInstallationVerifier)
+	if schema.Validate(response) == nil {
+		t.Fatal("verifier gained producer authority in the schema")
+	}
+	value := AuditProducerAuthorization{APIVersion: APIVersion, Kind: "AuditProducerAuthorization", OrganizationID: "organization-customer",
+		Producer: ServiceIdentity{APIVersion: APIVersion, Kind: "ServiceIdentity", OrganizationID: "organization-platform", PrincipalID: "service-iam", Purpose: ServiceIAM}}
+	if err := ValidateAuditProducerAuthorization(value); err != nil {
+		t.Fatal(err)
+	}
+	value.Producer.Purpose = ServiceInstallationVerifier
+	if ValidateAuditProducerAuthorization(value) == nil {
+		t.Fatal("verifier gained producer authority in Go")
+	}
+}
+
 func TestIAMExamplesValidateAgainstOpenAPISchemas(t *testing.T) {
 	document := loadIAMOpenAPI(t)
 	examples := map[string]string{

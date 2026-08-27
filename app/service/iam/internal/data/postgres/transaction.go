@@ -207,8 +207,9 @@ func (value *transaction) LookupSession(
 		sessionRevokedAt                                            *time.Time
 		verificationDigest                                          string
 		roles                                                       []string
+		bootstrapAdministrator                                      bool
 	)
-	err := value.tx.QueryRow(ctx, "SELECT * FROM iam.lookup_session($1)", lookupDigest).Scan(
+	err := value.tx.QueryRow(ctx, "SELECT session.*, iam.is_bootstrap_administrator(session.organization_id, session.principal_id) FROM iam.lookup_session($1) AS session", lookupDigest).Scan(
 		&organizationID,
 		&organizationDisplayName,
 		&organizationStatus,
@@ -231,6 +232,7 @@ func (value *transaction) LookupSession(
 		&sessionRevokedAt,
 		&verificationDigest,
 		&roles,
+		&bootstrapAdministrator,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return identityaccess.SessionCredential{}, false, nil
@@ -248,6 +250,7 @@ func (value *transaction) LookupSession(
 		revokedAt = &converted
 	}
 	subject := authority.SubjectContext{
+		BootstrapAdministrator: bootstrapAdministrator,
 		Organization: iamv1.Organization{
 			APIVersion:      iamv1.APIVersion,
 			Kind:            "Organization",
@@ -329,6 +332,24 @@ func (value *transaction) LookupService(
 		Identity:           identity,
 		VerificationDigest: verificationDigest,
 	}, true, nil
+}
+
+func (value *transaction) CanProduceAudit(
+	ctx context.Context,
+	identity iamv1.ServiceIdentity,
+	organizationID iamv1.OrganizationID,
+) (bool, error) {
+	if iamv1.ValidateServiceIdentity(identity) != nil || iamv1.ValidateID("organizationId", string(organizationID)) != nil {
+		return false, identityaccess.ErrInvalidArgument
+	}
+	var allowed bool
+	err := value.tx.QueryRow(ctx, "SELECT iam.can_produce_audit($1, $2, $3, $4)",
+		string(identity.OrganizationID), string(identity.PrincipalID), string(identity.Purpose), string(organizationID),
+	).Scan(&allowed)
+	if err != nil {
+		return false, mapDatabaseError("resolve IAM audit producer", err)
+	}
+	return allowed, nil
 }
 
 func (value *transaction) LookupServiceRoles(

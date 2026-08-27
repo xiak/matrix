@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { AccountAccessRenderer } from "@/features/auth/renderers/AccountAccessRenderer";
 import {
   ArrowRight,
   Box,
@@ -267,6 +268,7 @@ function RegionContent({ scene }: { scene: Extract<ConsoleContentScene, { kind: 
 }
 
 export function ConsoleContentRenderer({ scene }: { scene: ConsoleContentScene }) {
+  if (scene.kind === "access") return <AccountAccessRenderer />;
   if (scene.kind === "overview") return <OverviewContent scene={scene} />;
   if (scene.kind === "catalog") return <CatalogContent scene={scene} />;
   if (scene.kind === "quotas") return <QuotaContent scene={scene} />;

@@ -79,16 +79,28 @@ func buildPaths() object {
 			"getServiceIdentity", "Get the identity bound to the current service credential", "ServiceIdentity",
 			[]any{object{"ServiceCredential": []string{}}}, nil,
 		)},
+		"/v1/audit-producer:resolve": object{"post": mutationOperation(
+			"resolveAuditProducer", "Verify a platform audit producer and its event organization", "ResolveAuditProducerRequest", "AuditProducerAuthorization", "200",
+			[]any{object{"ServiceCredential": []string{}}}, nil,
+		)},
 		"/v1/auth/login": object{"post": mutationOperation(
 			"login", "Log in with a password", "LoginRequest", "LoginResponse", "200", []any{}, nil,
 		)},
+		"/v1/auth/me": object{"get": readOperation("getCurrentIdentity", "Get the current account and identity", "CurrentIdentity", nil, nil)},
+		"/v1/organizations": object{
+			"get":  readOperation("listOrganizations", "List accounts as the bootstrap administrator", "OrganizationAccountList", nil, accountPageParameters()),
+			"post": mutationOperation("createOrganization", "Open a tenant account", "CreateOrganizationRequest", "OrganizationAccount", "201", nil, nil),
+		},
+		"/v1/organization:alias":                      object{"post": mutationOperation("setAccountAlias", "Set the current account login alias", "SetAccountAliasRequest", "OrganizationAccount", "200", nil, nil)},
+		"/v1/principals/{principalId}:set-status":     object{"post": mutationOperation("setPrincipalStatus", "Disable or enable a subaccount", "SetPrincipalStatusRequest", "Principal", "200", nil, []any{openapi31.PathIDParameter("principalId")})},
+		"/v1/principals/{principalId}:reset-password": object{"post": mutationOperation("resetUserPassword", "Reset a subaccount password and revoke its sessions", "ResetUserPasswordRequest", "Principal", "200", nil, []any{openapi31.PathIDParameter("principalId")})},
 		"/v1/auth/logout": object{"post": mutationOperation(
 			"logout", "Revoke the current session", "LogoutRequest", "LogoutResponse", "200", nil, nil,
 		)},
 		"/v1/auth/password": object{"post": mutationOperation(
 			"changePassword", "Change the current user password", "ChangePasswordRequest", "ChangePasswordResponse", "200", nil, nil,
 		)},
-		"/v1/principals": object{"post": mutationOperation(
+		"/v1/principals": object{"get": readOperation("listPrincipals", "List the current tenant users and role bindings", "PrincipalList", nil, accountPageParameters()), "post": mutationOperation(
 			"createUser", "Create an organization user", "CreateUserRequest", "Principal", "201", nil, nil,
 		)},
 		"/v1/role-bindings": object{"post": mutationOperation(
@@ -111,6 +123,10 @@ func buildPaths() object {
 			[]any{object{"ServiceCredential": []string{}}}, nil,
 		)},
 	}
+}
+
+func accountPageParameters() []any {
+	return []any{object{"name": "after", "in": "query", "required": false, "schema": openapi31.Ref("ID"), "description": "Exclusive principal or organization ID boundary within the authorized directory."}}
 }
 
 func mutationOperation(
@@ -208,37 +224,73 @@ func enumSchemas() map[string][]string {
 
 func structContracts() map[string]reflect.Type {
 	return map[string]reflect.Type{
-		"Subject":                    openapi31.StructType[iamv1.Subject](),
-		"ResourceReference":          openapi31.StructType[iamv1.ResourceReference](),
-		"Organization":               openapi31.StructType[iamv1.Organization](),
-		"Principal":                  openapi31.StructType[iamv1.Principal](),
-		"RoleBinding":                openapi31.StructType[iamv1.RoleBinding](),
-		"Session":                    openapi31.StructType[iamv1.Session](),
-		"InitialOrganization":        openapi31.StructType[iamv1.InitialOrganization](),
-		"InitialAdministrator":       openapi31.StructType[iamv1.InitialAdministrator](),
-		"BootstrapServiceCredential": openapi31.StructType[iamv1.BootstrapServiceCredential](),
-		"BootstrapDocument":          openapi31.StructType[iamv1.BootstrapDocument](),
-		"BootstrapStatus":            openapi31.StructType[iamv1.BootstrapStatus](),
-		"ServiceIdentity":            openapi31.StructType[iamv1.ServiceIdentity](),
-		"LoginRequest":               openapi31.StructType[iamv1.LoginRequest](),
-		"LoginResponse":              openapi31.StructType[iamv1.LoginResponse](),
-		"LogoutRequest":              openapi31.StructType[iamv1.LogoutRequest](),
-		"LogoutResponse":             openapi31.StructType[iamv1.LogoutResponse](),
-		"ChangePasswordRequest":      openapi31.StructType[iamv1.ChangePasswordRequest](),
-		"ChangePasswordResponse":     openapi31.StructType[iamv1.ChangePasswordResponse](),
-		"CreateUserRequest":          openapi31.StructType[iamv1.CreateUserRequest](),
-		"PutRoleBindingRequest":      openapi31.StructType[iamv1.PutRoleBindingRequest](),
-		"RevokeRoleBindingRequest":   openapi31.StructType[iamv1.RevokeRoleBindingRequest](),
-		"RevokeSessionRequest":       openapi31.StructType[iamv1.RevokeSessionRequest](),
-		"Revocation":                 openapi31.StructType[iamv1.Revocation](),
-		"AuthorizationRequest":       openapi31.StructType[iamv1.AuthorizationRequest](),
-		"AuthorizationDecision":      openapi31.StructType[iamv1.AuthorizationDecision](),
-		"Readiness":                  openapi31.StructType[iamv1.Readiness](),
-		"Problem":                    openapi31.StructType[iamv1.Problem](),
+		"Subject":                     openapi31.StructType[iamv1.Subject](),
+		"ResourceReference":           openapi31.StructType[iamv1.ResourceReference](),
+		"Organization":                openapi31.StructType[iamv1.Organization](),
+		"Principal":                   openapi31.StructType[iamv1.Principal](),
+		"RoleBinding":                 openapi31.StructType[iamv1.RoleBinding](),
+		"Session":                     openapi31.StructType[iamv1.Session](),
+		"InitialOrganization":         openapi31.StructType[iamv1.InitialOrganization](),
+		"InitialAdministrator":        openapi31.StructType[iamv1.InitialAdministrator](),
+		"BootstrapServiceCredential":  openapi31.StructType[iamv1.BootstrapServiceCredential](),
+		"BootstrapDocument":           openapi31.StructType[iamv1.BootstrapDocument](),
+		"BootstrapStatus":             openapi31.StructType[iamv1.BootstrapStatus](),
+		"ServiceIdentity":             openapi31.StructType[iamv1.ServiceIdentity](),
+		"ResolveAuditProducerRequest": openapi31.StructType[iamv1.ResolveAuditProducerRequest](),
+		"AuditProducerAuthorization":  openapi31.StructType[iamv1.AuditProducerAuthorization](),
+		"LoginRequest":                openapi31.StructType[iamv1.LoginRequest](),
+		"LoginResponse":               openapi31.StructType[iamv1.LoginResponse](),
+		"LogoutRequest":               openapi31.StructType[iamv1.LogoutRequest](),
+		"LogoutResponse":              openapi31.StructType[iamv1.LogoutResponse](),
+		"ChangePasswordRequest":       openapi31.StructType[iamv1.ChangePasswordRequest](),
+		"ChangePasswordResponse":      openapi31.StructType[iamv1.ChangePasswordResponse](),
+		"CreateUserRequest":           openapi31.StructType[iamv1.CreateUserRequest](),
+		"OrganizationAccount":         openapi31.StructType[iamv1.OrganizationAccount](),
+		"CurrentIdentity":             openapi31.StructType[iamv1.CurrentIdentity](),
+		"PrincipalAccess":             openapi31.StructType[iamv1.PrincipalAccess](),
+		"PrincipalList":               openapi31.StructType[iamv1.PrincipalList](),
+		"OrganizationAccountList":     openapi31.StructType[iamv1.OrganizationAccountList](),
+		"CreateOrganizationRequest":   openapi31.StructType[iamv1.CreateOrganizationRequest](),
+		"SetAccountAliasRequest":      openapi31.StructType[iamv1.SetAccountAliasRequest](),
+		"SetPrincipalStatusRequest":   openapi31.StructType[iamv1.SetPrincipalStatusRequest](),
+		"ResetUserPasswordRequest":    openapi31.StructType[iamv1.ResetUserPasswordRequest](),
+		"PutRoleBindingRequest":       openapi31.StructType[iamv1.PutRoleBindingRequest](),
+		"RevokeRoleBindingRequest":    openapi31.StructType[iamv1.RevokeRoleBindingRequest](),
+		"RevokeSessionRequest":        openapi31.StructType[iamv1.RevokeSessionRequest](),
+		"Revocation":                  openapi31.StructType[iamv1.Revocation](),
+		"AuthorizationRequest":        openapi31.StructType[iamv1.AuthorizationRequest](),
+		"AuthorizationDecision":       openapi31.StructType[iamv1.AuthorizationDecision](),
+		"Readiness":                   openapi31.StructType[iamv1.Readiness](),
+		"Problem":                     openapi31.StructType[iamv1.Problem](),
 	}
 }
 
 func fieldOverlay(owner string, field reflect.StructField, jsonName string, base object) object {
+	if jsonName == "loginName" || jsonName == "administratorLoginName" || jsonName == "primaryLoginName" {
+		base = object{"type": "string", "pattern": `^[a-z][a-z0-9._-]{2,63}$`, "minLength": 3, "maxLength": 64}
+		if owner == "LoginRequest" {
+			base = object{"type": "string", "pattern": `^[a-z][a-z0-9._-]{2,63}(@[A-Za-z0-9][A-Za-z0-9._:-]{0,127})?$`, "minLength": 3, "maxLength": 193}
+		}
+	}
+	if jsonName == "alias" {
+		base = object{"type": "string", "pattern": `^[a-z][a-z0-9-]{1,61}[a-z0-9]$`, "minLength": 3, "maxLength": 63}
+	}
+	if jsonName == "loginAlias" {
+		base = object{"anyOf": []any{object{"type": "null"}, object{"type": "string", "pattern": `^[a-z][a-z0-9-]{1,61}[a-z0-9]$`, "minLength": 3, "maxLength": 63}}}
+	}
+	if (owner == "PutRoleBindingRequest" && jsonName == "role") || (owner == "CreateUserRequest" && jsonName == "initialRole") {
+		roles := []string{"ORGANIZATION_ADMIN", "PAAS_DEVELOPER", "PAAS_VIEWER", "AUDIT_READER"}
+		if owner == "PutRoleBindingRequest" {
+			roles = append(roles, string(iamv1.RolePlatformOperator))
+		}
+		base = object{"type": "string", "enum": roles}
+	}
+	if jsonName == "nextAfter" {
+		base = openapi31.Ref("ID")
+	}
+	if (owner == "PrincipalList" || owner == "OrganizationAccountList") && jsonName == "items" {
+		base["maxItems"] = 100
+	}
 	if field.Type.Name() == "Secret" {
 		base["writeOnly"] = true
 		if owner == "LoginResponse" && jsonName == "credential" {
@@ -258,10 +310,12 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 
 func applySemanticOverlays(schemas object) {
 	kinds := map[string]string{
+		"CurrentIdentity": "CurrentIdentity", "PrincipalList": "PrincipalList", "OrganizationAccountList": "OrganizationAccountList",
 		"Organization": "Organization", "Principal": "Principal", "RoleBinding": "RoleBinding",
 		"Session": "Session", "BootstrapDocument": "IAMBootstrap", "BootstrapStatus": "BootstrapStatus",
-		"ServiceIdentity": "ServiceIdentity",
-		"Revocation":      "Revocation", "AuthorizationDecision": "AuthorizationDecision",
+		"ServiceIdentity":            "ServiceIdentity",
+		"AuditProducerAuthorization": "AuditProducerAuthorization",
+		"Revocation":                 "Revocation", "AuthorizationDecision": "AuthorizationDecision",
 		"Readiness": "Readiness",
 	}
 	for owner, kind := range kinds {
@@ -293,6 +347,11 @@ func applySemanticOverlays(schemas object) {
 	}
 
 	principal := schemas["Principal"].(object)
+	schemas["AuditProducerAuthorization"].(object)["properties"].(object)["producer"] = object{
+		"allOf": []any{openapi31.Ref("ServiceIdentity"), object{"properties": object{
+			"purpose": object{"enum": []string{"IAM", "PAAS", "AUDIT"}},
+		}}},
+	}
 	principal["allOf"] = []any{
 		object{
 			"if":   object{"properties": object{"type": object{"const": string(iamv1.PrincipalUser)}}, "required": []string{"type"}},
