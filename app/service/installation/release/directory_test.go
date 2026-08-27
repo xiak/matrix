@@ -20,6 +20,9 @@ func TestStageDirectoryPublishesOnlyExactAuthenticatedContent(t *testing.T) {
 		t.Fatalf("verify source bundle: %v", err)
 	}
 	parent := t.TempDir()
+	if err := os.Chmod(parent, 0o700); err != nil {
+		t.Fatalf("protect staged release parent: %v", err)
+	}
 	destination := filepath.Join(parent, fixture.manifest.Release.ID)
 	staging := destination + ".staging"
 	if err := os.Mkdir(staging, 0o700); err != nil {
