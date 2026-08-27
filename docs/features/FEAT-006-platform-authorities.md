@@ -492,7 +492,8 @@ Completion and fencing use the claimed row identity, not a chain selector.
 Readiness and migration verification check the exact result-column contract;
 malformed scope is retained as a dead letter before delivery. Sharing schema
 version 2 with an earlier proof increment is not an N-1 dispatcher or release
-compatibility claim.
+compatibility claim. The release owner's `contractRevision` must also bind
+this result shape before a populated upgrade or rollback can be accepted.
 
 Installation-scoped Audit partitioning remains the FEAT-008 owner's shared
 implementation. Tenant lifecycle facts use that agreed platform scope;
@@ -793,8 +794,9 @@ On 2026-08-27, this branch passed the corrected PG18 race gate for all five
 processes and for the actual fixed `9fd45b0` IAM executable's populated
 upgrade/restart. Other Phase branches must adapt and rerun their own gates;
 these results do not certify their binaries.
-The correction at `cf003e47449a554bba19486bb5050d09aeb7a988` also passed all
-three [independent CI jobs](https://github.com/xiak/matrix/actions/runs/33060772852).
+The `cf003e4` correction is retained in the console/runtime milestone
+`b66d77db0499b227f42b3b14d1869329aabcca30`, which passes all three
+[independent CI jobs](https://github.com/xiak/matrix/actions/runs/33065779664).
 
 The resource-isolation increment in the same gate uses two actual tenant
 sessions with matching child login names, idempotency keys and database
