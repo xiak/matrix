@@ -291,7 +291,7 @@ Four further regressions cover quota/region choices appearing or becoming
 invalid after refresh: the visible placeholder requires explicit selection,
 invalid choices cannot submit, instance inputs survive, and the submitted IDs
 match the new choices. These fail before the selection correction and pass
-afterward; its signed-runtime refresh check remains pending.
+afterward and in the signed-runtime quota refresh check below.
 
 On 2026-08-27 this branch's real APISIX/IAM/Audit/PaaS browser environment
 passes the account/lifecycle path: a platform-only child opens two tenants,
@@ -318,8 +318,9 @@ controls, tenant status/recovery confirmations and the resource list without
 horizontal page overflow. Account card headers wrap complete action buttons
 instead of squeezing their labels into vertical text. Keyboard-only end-to-end
 verification remains open: pointer-driven browser actions and component
-keyboard tests do not certify that gate. The complete installed-release
-browser gate also remains open. The signed offline profile/lifecycle evidence
+keyboard tests do not certify that gate. The installed-release pointer-driven
+path below passes, but overall browser acceptance still waits for the native
+keyboard gate. The signed offline profile/lifecycle evidence
 belongs to [FEAT-005](FEAT-005-offline-platform-lifecycle.md); neither changes
 another Phase's acceptance state.
 
@@ -362,6 +363,21 @@ upgrade. Password changes are performed by the acceptance driver, not left as
 manual work for the user. This is pointer-driven real-browser evidence;
 keyboard-only acceptance remains open and is not inferred from component
 keyboard tests.
+
+The selection correction ships in signed Release D
+`matrix-v0.4.0-a36cf9817f52`, fixed source
+`a36cf9817f522549b995ea9c1f0d873499b4fe62` with all three independent
+[Verification jobs](https://github.com/xiak/matrix/actions/runs/33075458596)
+successful. In a real 360-by-800 view, a second-tenant child starts with no
+available quota. Its original primary activates one through a separate browser
+session. Refreshing the child's existing installation page now displays an
+explicit quota placeholder; selecting the returned quota enables the valid
+form. Another refresh preserves the selected quota, instance ID and display
+name. Submitting as a viewer still fails through IAM and visibly reports the
+denial inside the panel, creates no additional instance and leaves both
+databases and their marker rows unchanged. This verifies the refreshed-option
+behavior against the installed service, without a browser data stub or an
+extra running workload.
 
 ## Incremental acceptance
 

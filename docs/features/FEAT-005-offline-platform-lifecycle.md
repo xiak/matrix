@@ -282,10 +282,13 @@ denials are not mistaken for malformed success responses.
 The installed-browser follow-up also assembles signed Release C
 `matrix-v0.3.0-464910f0df23` from fixed source
 `464910f0df23d79264fb59b35324a915a8a21335`, declaring A as its predecessor and
-the same complete `2/2/1` revision 2 profile. An actual protected backup,
-A-to-C upgrade and subsequent `mx platform verify` succeed on the populated
-owned installation. This particular source change is confined to console
-rendering/tests and embedded assets; it is not evidence for an arbitrary
+the same complete `2/2/1` revision 2 profile. Signed Release D
+`matrix-v0.4.0-a36cf9817f52`, fixed source
+`a36cf9817f522549b995ea9c1f0d873499b4fe62`, declares C as its predecessor with
+that same complete profile. An actual protected backup, A-to-C and C-to-D
+upgrades, and subsequent `mx platform verify` succeed on the populated owned
+installation. These source changes are confined to console rendering/tests,
+embedded assets and evidence; they are not evidence for an arbitrary
 schema-changing or cross-profile N-1 upgrade. FEAT-007 owns the installed
 browser and preserved workload observations. The browser's task-owned
 loopback network is attached only after the network-disabled offline gates;
