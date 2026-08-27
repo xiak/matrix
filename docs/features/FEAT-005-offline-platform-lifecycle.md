@@ -185,7 +185,7 @@ values, database rows, native errors, arbitrary logs, and absolute paths.
 
 ## Incremental acceptance
 
-### Multi-tenant authority-profile extension (not yet accepted)
+### Multi-tenant authority-profile extension
 
 The isolated IAM branch replaces the single migration number for new releases
 with the signed manifest v2 database profile. Its code-owned composition is
@@ -230,6 +230,54 @@ the existing tenant/lifecycle/outbox matrices. These checks do not replace the
 signed populated A/B offline lifecycle acceptance above.
 Fixed implementation `b3a6f81450988d9759ce25163071338e89ed18c4` passes all
 three [independent Verification jobs](https://github.com/xiak/matrix/actions/runs/33068851630).
+
+The populated gate uses the existing `phase1e2e` owner. Before backup it opens
+two tenants through IAM, changes each original primary's and same-named
+child's initial password, and creates same-ID applications/configurations and
+independent quota with their original child actor/Operation/Audit identities.
+One child loses its role and session; the other is disabled, its tenant is
+paused, and only that tenant's original primary credential is recovered.
+Failed upgrade, successful A/B upgrade, rollback, selected-backup recovery and
+engine restart must preserve those states, values and pre-backup Audit hashes.
+A resource written after upgrade must survive rollback but disappear on
+restoring the earlier snapshot. Only explicit tenant/member resume may restore
+access; the recovered original primary must replace its password, old sessions
+must remain invalid and platform permissions must remain absent. Each installed
+stage must match its signed profile in real readiness/verification and support
+evidence.
+
+These populated gates pass on 2026-08-27 using signed Release A
+`matrix-v0.1.0-b3a6f8145098` and Release B `matrix-v0.2.0-b3a6f8145098`, both
+assembled from fixed implementation `b3a6f81450988d9759ce25163071338e89ed18c4`
+with the exact `2/2/1` revision 2 profile. A new task-owned Linux Docker 27.5.1
+host, limited to two CPUs and 4 GiB with external networking disabled, starts
+with no inner images, containers or volumes. The 340.83-second real gate
+installs PostgreSQL 18 and all nine platform services, completes the populated
+tenant baseline and both tenant/installation Audit delivery, verifies two real
+application generations, failed-candidate rollback, successful B upgrade,
+data-preserving rollback, selected-backup recovery, application rollback/stop,
+capacity release and bounded support evidence. The post-upgrade tenant resource
+and Operation survive rollback and are absent after restoring the earlier
+snapshot. No revoked role/session or disabled user/tenant is revived.
+
+Restarting the entire owned Docker engine then passes the 20.01-second second
+gate. The original primary recovery is still bound to its original tenant and
+USER; explicit tenant resume and the required password change restore its
+tenant administration without platform permission. The child remains disabled
+until explicitly enabled, retains its changed password, and cannot reuse its
+old session. Tenant and platform Audit hashes/chains, configuration values,
+quota and original resource/Operation ownership survive. Actual installed
+readiness and repeated migration/function verification match the signed
+profile, including the seven-column IAM claim; support reports that same
+profile without credentials or configuration values.
+
+The releases have distinct release/image identities but share fixed production
+source. This proves the complete same-profile lifecycle, not a cross-profile
+or historical-binary N-1 runtime transition. Those unsupported transitions
+continue to fail closed. Browser acceptance of the installed release remains
+owned by FEAT-007. The gate's negative HTTP client also checks the proper
+`application/problem+json` contract, so expected authentication and access
+denials are not mistaken for malformed success responses.
 
 ### Gate A: release and CLI contract
 

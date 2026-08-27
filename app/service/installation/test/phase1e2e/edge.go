@@ -105,9 +105,13 @@ func (client *edgeClient) json(
 	}
 	defer response.Body.Close()
 	mediaType, _, mediaErr := mime.ParseMediaType(response.Header.Get("Content-Type"))
+	wantMediaType := "application/json"
+	if response.StatusCode >= http.StatusBadRequest {
+		wantMediaType = "application/problem+json"
+	}
 	content, readErr := io.ReadAll(io.LimitReader(response.Body, maximumHTTPBody+1))
 	if readErr != nil || len(content) > maximumHTTPBody || mediaErr != nil ||
-		mediaType != "application/json" || response.Header.Get("Content-Encoding") != "" ||
+		mediaType != wantMediaType || response.Header.Get("Content-Encoding") != "" ||
 		containsAny(content, client.forbidden) {
 		clear(content)
 		return httpResult{}, errors.New("HTTP response contract failed")
@@ -136,31 +140,44 @@ type changePasswordWire struct {
 }
 
 func (client *edgeClient) login(ctx context.Context, password []byte, requestID string) ([]byte, error) {
+	result, err := client.loginNamed(ctx, "admin", password, "organization-default", "principal-admin", requestID)
+	if err != nil {
+		return nil, err
+	}
+	return result.Credential.CopyBytes(), nil
+}
+
+func (client *edgeClient) loginNamed(
+	ctx context.Context, loginName string, password []byte,
+	tenantID iamv1.OrganizationID, principalID iamv1.PrincipalID, requestID string,
+) (iamv1.LoginResponse, error) {
 	response, err := client.json(
 		ctx, http.MethodPost, "/api/iam/v1/auth/login", nil,
-		loginWire{LoginName: "admin", Password: string(password), RequestID: requestID},
+		loginWire{LoginName: loginName, Password: string(password), RequestID: requestID},
 		nil, http.StatusOK,
 	)
 	if err != nil {
-		return nil, err
+		return iamv1.LoginResponse{}, err
 	}
 	defer clear(response.body)
 	var result iamv1.LoginResponse
 	if decodeOne(response.body, &result) != nil || iamv1.ValidateLoginResponse(result) != nil ||
-		result.Session.PrincipalID != "principal-admin" || result.Session.OrganizationID != "organization-default" ||
+		result.Session.PrincipalID != principalID || result.Session.OrganizationID != tenantID ||
 		result.Session.Status != iamv1.SessionActive {
-		return nil, errors.New("IAM login response failed")
+		return iamv1.LoginResponse{}, errors.New("IAM login response failed")
 	}
 	credential := result.Credential.CopyBytes()
+	defer clear(credential)
 	if len(credential) == 0 {
-		return nil, errors.New("IAM login credential failed")
+		return iamv1.LoginResponse{}, errors.New("IAM login credential failed")
 	}
-	return credential, nil
+	return result, nil
 }
 
 func (client *edgeClient) changePassword(
 	ctx context.Context,
 	bearer, current, next []byte,
+	retireBootstrap bool,
 ) error {
 	response, err := client.json(
 		ctx, http.MethodPost, "/api/iam/v1/auth/password", bearer,
@@ -176,8 +193,20 @@ func (client *edgeClient) changePassword(
 	defer clear(response.body)
 	var result iamv1.ChangePasswordResponse
 	if decodeOne(response.body, &result) != nil ||
-		iamv1.ValidateChangePasswordResponse(result) != nil || !result.BootstrapFileRetirable {
+		iamv1.ValidateChangePasswordResponse(result) != nil || result.BootstrapFileRetirable != retireBootstrap {
 		return errors.New("IAM password change response failed")
+	}
+	return nil
+}
+
+func (client *edgeClient) mutateIAM(ctx context.Context, path string, bearer []byte, body, destination any, status int) error {
+	response, err := client.json(ctx, http.MethodPost, "/api/iam/v1"+path, bearer, body, nil, status)
+	if err != nil {
+		return err
+	}
+	defer clear(response.body)
+	if destination != nil && decodeOne(response.body, destination) != nil {
+		return errors.New("IAM mutation response failed")
 	}
 	return nil
 }
@@ -337,9 +366,15 @@ func (client *edgeClient) queryAudit(
 	ctx context.Context,
 	bearer []byte,
 	request auditv1.QueryRecordsRequest,
+	tenantID iamv1.OrganizationID,
+	installationID string,
 ) (auditv1.RecordPage, error) {
+	path := "/api/audit/v1/records:query"
+	if installationID != "" {
+		path = "/api/audit/v1/platform/records:query"
+	}
 	response, err := client.json(
-		ctx, http.MethodPost, "/api/audit/v1/records:query", bearer, request, nil, http.StatusOK,
+		ctx, http.MethodPost, path, bearer, request, nil, http.StatusOK,
 	)
 	if err != nil {
 		return auditv1.RecordPage{}, err
@@ -347,7 +382,7 @@ func (client *edgeClient) queryAudit(
 	defer clear(response.body)
 	var page auditv1.RecordPage
 	if decodeOne(response.body, &page) != nil || auditv1.ValidateRecordPage(page) != nil ||
-		page.TenantID != "organization-default" {
+		string(page.TenantID) != string(tenantID) || page.InstallationID != installationID {
 		return auditv1.RecordPage{}, errors.New("Audit query response failed")
 	}
 	return page, nil
@@ -356,11 +391,13 @@ func (client *edgeClient) queryAudit(
 func (client *edgeClient) allAuditRecords(
 	ctx context.Context,
 	bearer []byte,
+	tenantID iamv1.OrganizationID,
+	installationID string,
 ) ([]auditv1.AuditRecord, error) {
 	request := auditv1.QueryRecordsRequest{PageSize: auditv1.MaxPageSize}
 	var records []auditv1.AuditRecord
 	for pageNumber := 0; pageNumber < 8; pageNumber++ {
-		page, err := client.queryAudit(ctx, bearer, request)
+		page, err := client.queryAudit(ctx, bearer, request, tenantID, installationID)
 		if err != nil {
 			return nil, err
 		}
@@ -381,7 +418,7 @@ func (client *edgeClient) waitAuditActions(
 	poll, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 	for poll.Err() == nil {
-		records, err := client.allAuditRecords(poll, bearer)
+		records, err := client.allAuditRecords(poll, bearer, "organization-default", "")
 		if err == nil {
 			remaining := make(map[auditv1.Action]string, len(want))
 			for action, target := range want {
@@ -407,9 +444,15 @@ func (client *edgeClient) waitAuditActions(
 func (client *edgeClient) verifyAuditChain(
 	ctx context.Context,
 	bearer []byte,
+	tenantID iamv1.OrganizationID,
+	installationID string,
 ) (auditv1.ChainVerification, error) {
+	path := "/api/audit/v1/integrity:verify"
+	if installationID != "" {
+		path = "/api/audit/v1/platform/integrity:verify"
+	}
 	response, err := client.json(
-		ctx, http.MethodPost, "/api/audit/v1/integrity:verify", bearer,
+		ctx, http.MethodPost, path, bearer,
 		auditv1.VerifyChainRequest{FromSequence: 1, MaximumRecords: auditv1.MaxVerifyRecords},
 		nil, http.StatusOK,
 	)
@@ -419,7 +462,7 @@ func (client *edgeClient) verifyAuditChain(
 	defer clear(response.body)
 	var result auditv1.ChainVerification
 	if decodeOne(response.body, &result) != nil || auditv1.ValidateChainVerification(result) != nil ||
-		result.TenantID != "organization-default" || result.State != auditv1.VerificationVerified ||
+		string(result.TenantID) != string(tenantID) || result.InstallationID != installationID || result.State != auditv1.VerificationVerified ||
 		!result.Complete || result.RecordCount == 0 {
 		return auditv1.ChainVerification{}, errors.New("Audit chain verification failed")
 	}

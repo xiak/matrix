@@ -859,11 +859,12 @@ a workload executor.
 
 These are verified slices, not acceptance of the full multi-tenant target.
 This branch's browser evidence and remaining keyboard-only gate belong to
-[FEAT-007](FEAT-007-control-plane-console.md). Signed populated offline
-upgrade/rollback/backup/recovery remain unaccepted and require the concrete
-release schema profile owned by FEAT-005/008; retained-data process checks and
-the task-local runtime are not substitutes. Prior foundation evidence below
-covers only its named source revisions.
+[FEAT-007](FEAT-007-control-plane-console.md). The exact release profile and
+signed populated offline upgrade/rollback/backup/recovery evidence belong to
+[FEAT-005](FEAT-005-offline-platform-lifecycle.md); retained-data process checks
+and the task-local runtime are not substitutes for that gate. Its verified
+same-profile A/B lifecycle does not permit cross-profile runtime transitions.
+Prior foundation evidence below covers only its named source revisions.
 
 - Gate A was accepted on 2026-08-26. Strict generated Go/OpenAPI contracts,
   current-credential-only service identity, fixed Argon2id and

@@ -299,8 +299,9 @@ horizontal page overflow. Account card headers wrap complete action buttons
 instead of squeezing their labels into vertical text. Keyboard-only end-to-end
 verification remains open: pointer-driven browser actions and component
 keyboard tests do not certify that gate. The complete installed-release
-browser and offline profile gates also remain open; this evidence does not
-change another Phase's acceptance state.
+browser gate also remains open. The signed offline profile/lifecycle evidence
+belongs to [FEAT-005](FEAT-005-offline-platform-lifecycle.md); neither changes
+another Phase's acceptance state.
 
 ## Incremental acceptance
 

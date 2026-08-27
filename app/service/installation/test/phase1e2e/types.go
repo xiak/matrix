@@ -4,6 +4,9 @@ import (
 	"errors"
 	"fmt"
 
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
+	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
+	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/installation/release"
 )
 
@@ -21,6 +24,31 @@ type options struct {
 type releasePair struct {
 	a release.VerifiedBundle
 	b release.VerifiedBundle
+}
+
+// This private test fixture crosses the outer engine restart, not a product
+// API. It is stored outside the installation backup and never enters a bundle.
+type iamRetention struct {
+	InstallationID        string
+	AdministratorPassword []byte
+	Tenants               []tenantRetention
+	PlatformAuditHashes   map[string]struct{}
+}
+
+type tenantRetention struct {
+	Account              iamv1.OrganizationAccount
+	Child                iamv1.Principal
+	ChildBinding         iamv1.RoleBinding
+	InitialPassword      []byte
+	PrimaryPassword      []byte
+	ChildPassword        []byte
+	RecoveryPassword     []byte
+	FinalPrimaryPassword []byte
+	OldPrimaryCredential []byte
+	OldChildCredential   []byte
+	Operations           []paasv1.Operation
+	Quota                managedservicev1.QuotaEntitlement
+	AuditHashes          map[string]struct{}
 }
 
 type safeError struct {
@@ -42,7 +70,9 @@ func validateReleasePair(a, b release.VerifiedBundle) error {
 		b.Manifest.Release.PreviousVersion != a.Manifest.Release.Version ||
 		a.Manifest.Release.ID == b.Manifest.Release.ID ||
 		a.Manifest.Release.Version == b.Manifest.Release.Version ||
-		a.Manifest.Release.SourceCommit != b.Manifest.Release.SourceCommit {
+		a.Manifest.Release.SourceCommit != b.Manifest.Release.SourceCommit ||
+		a.Manifest.Database != release.CurrentDatabaseProfile() ||
+		b.Manifest.Database != a.Manifest.Database {
 		return fail("release-pair-contract")
 	}
 	if _, ok := workloadImage(a.Manifest); !ok {

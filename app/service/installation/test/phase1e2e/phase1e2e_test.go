@@ -2,6 +2,8 @@ package phase1e2e
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -28,18 +30,53 @@ func TestOfflinePhase1Lifecycle(t *testing.T) {
 
 func TestReleasePairAllowsReleaseSpecificWorkloadImages(t *testing.T) {
 	a := release.VerifiedBundle{Manifest: release.Manifest{
-		Release: release.ReleaseIdentity{ID: "release-a", Version: "v0.1.0", SourceCommit: "commit"},
-		Images:  []release.Image{{Purpose: release.ImageWorkload, SourceDigest: "sha256:a"}},
+		Release:  release.ReleaseIdentity{ID: "release-a", Version: "v0.1.0", SourceCommit: "commit"},
+		Images:   []release.Image{{Purpose: release.ImageWorkload, SourceDigest: "sha256:a"}},
+		Database: release.CurrentDatabaseProfile(),
 	}}
 	b := release.VerifiedBundle{Manifest: release.Manifest{
 		Release: release.ReleaseIdentity{
 			ID: "release-b", Version: "v0.2.0", SourceCommit: "commit",
 			PreviousID: "release-a", PreviousVersion: "v0.1.0",
 		},
-		Images: []release.Image{{Purpose: release.ImageWorkload, SourceDigest: "sha256:b"}},
+		Images:   []release.Image{{Purpose: release.ImageWorkload, SourceDigest: "sha256:b"}},
+		Database: release.CurrentDatabaseProfile(),
 	}}
 	if err := validateReleasePair(a, b); err != nil {
 		t.Fatalf("release-specific workload images rejected: %v", err)
+	}
+	b.Manifest.Database.ContractRevision++
+	if validateReleasePair(a, b) == nil {
+		t.Fatal("different release contract revision admitted to offline lifecycle gate")
+	}
+}
+
+func TestEdgeClientChecksSuccessAndProblemMediaTypes(t *testing.T) {
+	for _, check := range []struct {
+		name, mediaType string
+		status          int
+		valid           bool
+	}{
+		{"success", "application/json", http.StatusOK, true},
+		{"authentication-denied", "application/problem+json", http.StatusUnauthorized, true},
+		{"resource-hidden", "application/problem+json", http.StatusNotFound, true},
+		{"invalid-success", "application/problem+json", http.StatusOK, false},
+		{"invalid-problem", "application/json", http.StatusForbidden, false},
+	} {
+		t.Run(check.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+				response.Header().Set("Content-Type", check.mediaType)
+				response.WriteHeader(check.status)
+				_, _ = response.Write([]byte(`{}`))
+			}))
+			defer server.Close()
+			client := newEdgeClient(server.URL)
+			defer client.close()
+			_, err := client.json(context.Background(), http.MethodGet, "/", nil, nil, nil, check.status)
+			if (err == nil) != check.valid {
+				t.Fatalf("response contract accepted=%t, want %t", err == nil, check.valid)
+			}
+		})
 	}
 }
 
