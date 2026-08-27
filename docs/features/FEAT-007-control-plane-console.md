@@ -320,10 +320,10 @@ and `git diff --check` gates must pass on the same committed worktree.
   Source gates cover the light theme, 20 semantic contrast pairs, and 31
   frontend tests, including visible failed revocation, logout during failed
   or pending resource loads, keyboard workspace sizing, and native instance-ID
-  validation. The installed `f5ce412` candidate proves the light login page,
+  validation. The installed `44fa1c7` candidate proves the light login page,
   local-only asset URLs, no browser errors, and no horizontal overflow at
-  1280 pixels. The current source still
-  requires final installed-release browser verification of authentication,
+  1280 pixels. The current source still requires installed-release browser
+  verification of authentication,
   route transitions, keyboard use, and 360-pixel layouts; source and component
   checks do not substitute for that acceptance.
 - Gate B authority is complete for the admitted PostgreSQL slice: the closed
@@ -332,7 +332,7 @@ and `git diff --check` gates must pass on the same committed worktree.
   installations, and installation Operations. Existing-role IAM actions,
   forced organization RLS, serializable quota reservation, idempotent replay,
   worker leases, fencing transitions, and transactionally coupled Audit facts
-  pass unit and real PostgreSQL 18 tests. The installed `f5ce412` candidate
+  pass unit and real PostgreSQL 18 tests. The installed `44fa1c7` candidate
   completed real IAM-authorized single-resource reads, quota and installation
   equal replay, changed-request rejection, unsupported-offering rejection,
   exhausted-quota rejection, and revoked-session rejection. Resource and
@@ -344,24 +344,40 @@ and `git diff --check` gates must pass on the same committed worktree.
   ownership labels, persistent bind data, bounded resources, normalized
   endpoint/credential references, retry, terminal quota release, and
   uncertain-create reconciliation. Signed runtime source
-  `f5ce412ff795abdaf5ba8e5fe112378f1cd1af41` produced Release A
-  `matrix-v1.3.0-f5ce412ff795` and Release B `matrix-v1.4.0-f5ce412ff795`.
+  `44fa1c7bb4cd20f2f807e12ec1e8a753b65688b3` produced Release A
+  `matrix-v1.5.0-44fa1c7bb4cd` and Release B `matrix-v1.6.0-44fa1c7bb4cd`.
   An empty, external-network-disabled Docker namespace installed A, resumed a
   durable managed-service request after worker restart, and completed failed-
   upgrade automatic rollback, successful upgrade, explicit N-1 rollback,
-  protected platform backup/recovery, and sanitized support evidence. The
-  existing PostgreSQL installation retained its endpoint, credential reference,
-  consumed quota, Audit facts, and both pre- and post-upgrade probe rows.
-  Whole-engine restart followed by authenticated SQL reads and repeated
-  status/verify also passed. This proves in-place preservation of an existing
-  managed database, not a managed-database backup or cross-host migration.
+  protected platform backup/recovery, and sanitized support evidence. A second
+  PostgreSQL installation created after the first backup made that old backup
+  ineligible: recovery returned normalized `PRECONDITION_FAILED` without
+  changing either installation, quota, or database. A new backup containing
+  both installations completed the remaining lifecycle. The installations
+  retained their endpoints, credential references, consumed quotas, Audit
+  facts, and pre- and post-upgrade probe rows. The unified lifecycle passed in
+  351.20 seconds. Whole-engine restart followed by authenticated SQL reads of
+  both databases and repeated status/verify passed in 26.45 seconds. This proves
+  in-place preservation, not managed-database backup or cross-host migration.
 
-The clean pushed `f5ce412` runtime source passed `go generate ./api/...`, module
-verification, full unit, vet and race suites, repeated critical packages,
-clean PostgreSQL 18 migration/tenant/Audit integration, the real fixed-image
-PostgreSQL lifecycle, Linux amd64 cross-build, all UI type/lint/architecture/
-style/test/embed gates, Markdown links, fixed-donor verification,
-donor-dependency and social-term scans, and `git diff --check`.
+The authenticated candidate identities are:
+
+| Release | Manifest SHA-256 |
+| --- | --- |
+| `matrix-v1.5.0-44fa1c7bb4cd` | `bb05294f217729b6af88c1d14c3b212808ce6176c3e72d2944d570f1cdbedc79` |
+| `matrix-v1.6.0-44fa1c7bb4cd` | `b1337fcd38e6bdf08249c315829e81e908f3c8c1dd38fd576a236600776f3ef3` |
+
+The clean pushed `44fa1c7` runtime source passed `go generate ./api/...`, module
+verification, full unit, vet and race suites, Linux local-machine tests,
+20 repeated backup/recovery checks, and five repeated provisioner/inventory
+checks. Clean PostgreSQL 18 managed-service tenant isolation, application
+hosting, IAM HTTP, and Audit HTTP integration passed inside the isolated Docker
+host. The release-owned PostgreSQL artifact used a separate disposable cluster
+with loopback-only SCRAM authentication for those tests. Linux amd64 release
+builds, all UI type/lint/architecture/style/test/embed gates, Markdown links,
+donor-dependency and social-term scans, and `git diff --check` passed. Frontend
+source and the fixed-donor adoption decisions are unchanged by this recovery
+slice.
 
 The former Phase 1-only release test owner is now
 `app/service/installation/test/releasee2e`. Its one platform journey includes
@@ -369,20 +385,17 @@ the application and managed-PostgreSQL checks; PostgreSQL probes use the
 release-owned client with passwords on standard input, not an installation
 dependency or a credential-bearing command argument. Restart checks wait for
 bounded platform readiness before asserting stable status and verification.
-Final acceptance still requires the complete unified release test on the final
-candidate and the authenticated browser and 360-pixel keyboard journeys.
+Linux behavior tests additionally prove that a backup is not published if its
+managed-service inventory changes during the dump; recovery refuses inventory
+drift before effects and again after stopping writers; an authenticated backup
+without the required witness is rejected; and replay cannot replace the
+original backup's witness. Provider inventory failures remain normalized and
+do not expose native details.
 
-The extended recovery test found a release-blocking counterexample on the
-`f5ce412` runtime: restoring a platform backup taken before a second managed
-PostgreSQL installation removed that installation's control-plane record while
-leaving its database and container running. The current recovery guard rejects
-a selected backup whose sealed provisioner inventory differs from the current
-inventory, both before effects and after stopping platform writers. Backup
-publication also requires an unchanged inventory across the database dump.
-The unified lifecycle gate now creates the second installation after the first
-backup, requires non-destructive rejection of that backup, then verifies the
-full lifecycle with a new backup containing both installations. This fix is
-not accepted until that gate passes on a newly built signed runtime.
+Final acceptance still requires the authenticated installed-release browser
+journey, client-side route transitions, keyboard use, and 360-pixel layouts.
+API, source, component, and anonymous-page checks do not substitute for those
+remaining browser gates.
 
 ## Deferred
 

@@ -6,7 +6,7 @@
 - Updated: 2026-08-27
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/control-plane-console`
-- Verified runtime source: `f5ce412ff795abdaf5ba8e5fe112378f1cd1af41`
+- Verified runtime source: `44fa1c7bb4cd20f2f807e12ec1e8a753b65688b3`
 - Goal: Matrix PaaS Phase 2 control-plane console
 
 ## Authoritative route
@@ -25,11 +25,12 @@ handoff, then validate it against Git and the linked FEAT.
 
 The feature branch contains `origin/main` at
 `a3f71cfebc7f45326b1ec5679fe69333f8139551`. The runtime baseline above carries
-the light console theme and interaction recovery fixes. The branch also
-contains the unified release lifecycle test in
-`app/service/installation/test/releasee2e`; the old Phase 1-only test path was
-replaced, not retained as a parallel runner. Evidence and remaining acceptance
-work belong only to the linked FEAT.
+the light console theme, interaction recovery fixes, and managed-service
+inventory guard for platform backup/recovery. The unified release lifecycle
+test in `app/service/installation/test/releasee2e` covers the application and
+managed PostgreSQL together; no parallel Phase 1-only runner remains. Signed
+releases from this source passed the offline lifecycle and whole-engine restart
+gates. Evidence and remaining acceptance work belong only to the linked FEAT.
 
 Phase 2 continues in Docker-in-Docker. The user has started separate Phase 3
 host-management work; do not move its branch, alter its working tree, or add
