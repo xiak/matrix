@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"os/user"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strconv"
@@ -86,6 +87,15 @@ func (localNodeSupervisor) Start(ctx context.Context, service nativeService) err
 	}
 	if state == nativeChanging {
 		return awaitNativeService(bounded, connection, service, true)
+	}
+	// systemd may chown and later remove a RuntimeDirectory. A stopped or
+	// missing unit cannot claim a pre-existing directory merely by name.
+	for _, directory := range service.runtimeDirectories {
+		if _, err := os.Lstat(filepath.Join("/run", directory)); err == nil {
+			return nodecommand.ErrConflict
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return nodecommand.ErrUnavailable
+		}
 	}
 	completed := make(chan string, 1)
 	if state == nativeMissing {
@@ -256,6 +266,8 @@ func nativeServiceProperties(service nativeService) []systemd.Property {
 		{"Slice", "system.slice"}, {"WorkingDirectory", "/"},
 		{"Environment", service.environment}, {"LoadCredential", service.credentials},
 		{"BindReadOnlyPaths", service.binds}, {"ReadWritePaths", service.writePaths},
+		{"RuntimeDirectory", service.runtimeDirectories}, {"RuntimeDirectoryMode", policy.RuntimeDirectoryMode},
+		{"RuntimeDirectoryPreserve", policy.RuntimeDirectoryPreserve},
 		{"Restart", policy.Restart}, {"RestartUSec", policy.RestartMicros},
 		{"TimeoutStartUSec", uint64(30000000)}, {"TimeoutStopUSec", policy.TimeoutStopMicros},
 		{"MemoryMax", policy.MemoryMax}, {"TasksMax", policy.TasksMax}, {"CPUQuotaPerSecUSec", policy.CPUQuotaPerSecond},
@@ -326,7 +338,7 @@ func verifyNativeServiceProperties(actual map[string]any, service nativeService)
 					return nodecommand.ErrConflict
 				}
 			}
-		case "Environment", "ReadWritePaths", "InaccessiblePaths":
+		case "Environment", "ReadWritePaths", "InaccessiblePaths", "RuntimeDirectory":
 			var values []string
 			if dbus.Store([]any{value}, &values) != nil {
 				return nodecommand.ErrConflict

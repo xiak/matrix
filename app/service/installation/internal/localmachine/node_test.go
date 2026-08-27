@@ -32,6 +32,10 @@ func TestNodeEffectsSealFilesAndKeepCollectorSeparateFromExecutor(t *testing.T) 
 	if !collector.policy.DynamicUser || node.policy.DynamicUser || collector.user == "root" || node.user != "root" || len(collector.writePaths) != 0 {
 		t.Fatal("collector shares executor privileges")
 	}
+	if len(collector.runtimeDirectories) != 1 || len(node.runtimeDirectories) != 0 ||
+		collector.policy.RuntimeDirectoryMode != 0o700 || collector.policy.RuntimeDirectoryPreserve != "no" {
+		t.Fatal("collector temporary mounts are not bound to supervised cleanup")
+	}
 	for _, credential := range collector.credentials {
 		if credential.Path == plan.Configuration.PrivateKeyFile || credential.Name == "node-key.pem" {
 			t.Fatal("collector received executor key")

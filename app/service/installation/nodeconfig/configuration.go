@@ -33,17 +33,19 @@ const (
 // ServicePolicy is the fixed native supervision contract, not operator input.
 // The provider consumes these values and the signed bundle commits to them.
 type ServicePolicy struct {
-	DynamicUser       bool   `json:"dynamicUser"`
-	MemoryMax         uint64 `json:"memoryMax"`
-	TasksMax          uint64 `json:"tasksMax"`
-	CPUQuotaPerSecond uint64 `json:"cpuQuotaPerSecond"`
-	Restart           string `json:"restart"`
-	RestartMicros     uint64 `json:"restartMicros"`
-	TimeoutStopMicros uint64 `json:"timeoutStopMicros"`
-	NoNewPrivileges   bool   `json:"noNewPrivileges"`
-	ProtectSystem     string `json:"protectSystem"`
-	ProtectHome       string `json:"protectHome"`
-	PrivateDevices    bool   `json:"privateDevices"`
+	DynamicUser              bool   `json:"dynamicUser"`
+	MemoryMax                uint64 `json:"memoryMax"`
+	TasksMax                 uint64 `json:"tasksMax"`
+	CPUQuotaPerSecond        uint64 `json:"cpuQuotaPerSecond"`
+	Restart                  string `json:"restart"`
+	RestartMicros            uint64 `json:"restartMicros"`
+	TimeoutStopMicros        uint64 `json:"timeoutStopMicros"`
+	NoNewPrivileges          bool   `json:"noNewPrivileges"`
+	ProtectSystem            string `json:"protectSystem"`
+	ProtectHome              string `json:"protectHome"`
+	PrivateDevices           bool   `json:"privateDevices"`
+	RuntimeDirectoryMode     uint32 `json:"runtimeDirectoryMode"`
+	RuntimeDirectoryPreserve string `json:"runtimeDirectoryPreserve"`
 }
 
 func Policy(collector bool) ServicePolicy {
@@ -51,6 +53,7 @@ func Policy(collector bool) ServicePolicy {
 		MemoryMax: 512 * 1024 * 1024, TasksMax: 128, CPUQuotaPerSecond: 1000000,
 		Restart: "on-failure", RestartMicros: 2000000, TimeoutStopMicros: 10000000,
 		NoNewPrivileges: true, ProtectSystem: "strict", ProtectHome: "yes", PrivateDevices: true,
+		RuntimeDirectoryMode: 0o700, RuntimeDirectoryPreserve: "no",
 	}
 	if collector {
 		value.DynamicUser = true

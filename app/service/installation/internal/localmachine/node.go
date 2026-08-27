@@ -351,18 +351,19 @@ type nativeBind struct {
 	Flags         uint64
 }
 type nativeService struct {
-	name          string
-	description   string
-	executable    string
-	arguments     []string
-	environment   []string
-	credentials   []nativeCredential
-	binds         []nativeBind
-	writePaths    []string
-	listenAddress string
-	collector     bool
-	user          string
-	policy        nodeconfig.ServicePolicy
+	name               string
+	description        string
+	executable         string
+	arguments          []string
+	environment        []string
+	credentials        []nativeCredential
+	binds              []nativeBind
+	writePaths         []string
+	runtimeDirectories []string
+	listenAddress      string
+	collector          bool
+	user               string
+	policy             nodeconfig.ServicePolicy
 }
 
 type nodeSupervisor interface {
@@ -377,7 +378,8 @@ func nativeNodeServices(plan nodecommand.Plan) []nativeService {
 	collectorName, _ := nodeconfig.ServiceName(plan.Configuration.Identity, true)
 	nodeName, _ := nodeconfig.ServiceName(plan.Configuration.Identity, false)
 	identity := strings.TrimSuffix(strings.TrimPrefix(collectorName, "matrix-collector-"), ".service")
-	collectorExecutable := "/run/matrix-" + identity + "/node-exporter"
+	collectorRuntimeDirectory := "matrix-" + identity
+	collectorExecutable := "/run/" + collectorRuntimeDirectory + "/node-exporter"
 	collectorAddress, _ := nodeconfig.CollectorListenAddress(plan.Configuration)
 	parents := []string{}
 	for path := plan.Configuration.StoragePath; ; path = filepath.Dir(path) {
@@ -389,6 +391,7 @@ func nativeNodeServices(plan nodecommand.Plan) []nativeService {
 	collector := nativeService{
 		name: collectorName, description: "Matrix collector " + commitment, executable: collectorExecutable,
 		collector: true, user: "mxn-" + identity[:16], policy: nodeconfig.Policy(true), listenAddress: collectorAddress,
+		runtimeDirectories: []string{collectorRuntimeDirectory},
 		arguments: []string{"--web.listen-address=" + collectorAddress,
 			"--web.config.file=/run/credentials/" + collectorName + "/collector.yaml",
 			"--web.disable-exporter-metrics", "--web.max-requests=2", "--collector.disable-defaults",

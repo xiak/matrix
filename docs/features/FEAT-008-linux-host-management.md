@@ -362,8 +362,44 @@ These tests
 establish admission and format boundaries, not a signed offline release or
 runnable cross-profile N-1 compatibility.
 
-Next in P3-1: signed offline node startup and explicit platform authorization
-when upgrading an older installation.
+The existing process gate now consumes a release-builder-produced signed
+`OfflineNodeRelease` and executes its bundled `mx`; it does not construct a
+second test-only release implementation. Source `83a2618` assembled the pinned
+collector and licenses with the two native executables from a clean checkout.
+The signed bundle passed native Linux installation, exact replay, actual
+host/collector readiness, no-reader refresh, staged-payload and service-policy
+tamper rejection, collector outage/reconciliation and supervised crash restart.
+Killing the installer after its services started preserved the in-flight command;
+a fresh invocation retained that command, release and both process identities.
+The collector ran under a distinct non-root UID without access to the node
+private key or Docker socket. Only fixture-owned transient services and files
+were used; no customer Docker object, package, daemon or firewall was changed.
+
+Enrollment/security regressions cover closed input, overlapping IP aliases,
+exact certificate roles, mutual trust, expiry and certificate address binding.
+The node's self credential cannot enter the controller command surface.
+The existing journal/lifecycle gates preserve the node's sealed identity and
+prevent platform database/backup phases or cross-purpose directory reuse.
+Linux local-machine tests cover retained executor files, credentials and backup
+bytes, including recovery rejection at every effect boundary when the current,
+target and authenticated backup profiles differ. This branch retains its
+IAM 2 / Audit 2 / PaaS 2, revision 1 platform profile.
+
+Full local Go/race, vet, architecture, module verification, stable generation,
+Linux builds and ten focused repetitions passed. The existing independent
+node-process job now builds and tests the signed native package alongside the
+original collector and real-authority regression gates. Its exact-source
+[CI run](https://github.com/xiak/matrix/actions/runs/33074299379) passed all three
+jobs.
+The native exercise consumes an extracted Linux bundle; declared executable
+modes were restored after the Windows-origin transfer before verification.
+It is not evidence of a portable archive format, node-wide egress isolation,
+automatic boot registration, certificate renewal/revocation, or a compatible
+signed platform/node release pair.
+
+Next in P3-1: automatic node startup after reboot, installation-owned
+certificate lifecycle and explicit platform authorization when upgrading an
+older installation, before remote application delivery.
 P3-1 and the complete Phase 3 release remain unaccepted.
 Retained-data schema migration alone does not establish runnable N-1
 compatibility; the complete offline lifecycle gate must still prove an actual

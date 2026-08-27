@@ -81,6 +81,7 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 	collectorUnit, _ := nodeconfig.ServiceName(identity, true)
 	nodeUnit, _ := nodeconfig.ServiceName(identity, false)
 	units := []string{nodeUnit, collectorUnit}
+	var collectorRuntimeDirectory string
 	for _, unit := range units {
 		load := nativeUnitProperty(t, unit, "LoadState")
 		if load != "not-found" {
@@ -101,6 +102,11 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 			// A successful stop may have already garbage-collected the unit.
 			if nativeUnitProperty(t, unit, "LoadState") == "loaded" {
 				nativeSystemctl(t, "reset-failed", unit)
+			}
+		}
+		if collectorRuntimeDirectory != "" {
+			if _, err := os.Lstat(collectorRuntimeDirectory); !os.IsNotExist(err) {
+				t.Error("stopped collector left a native runtime directory")
 			}
 		}
 	})
@@ -228,6 +234,14 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 		t.Fatal("collector is privileged")
 	}
 	uid := collectorProcess.Sys().(*syscall.Stat_t).Uid
+	runtimeDirectoryName := nativeUnitProperty(t, collectorUnit, "RuntimeDirectory")
+	if runtimeDirectoryName == "" || filepath.Base(runtimeDirectoryName) != runtimeDirectoryName {
+		t.Fatal("collector runtime directory is not supervised")
+	}
+	collectorRuntimeDirectory = filepath.Join("/run", runtimeDirectoryName)
+	if directory, err := os.Stat(collectorRuntimeDirectory); err != nil || !directory.IsDir() || directory.Mode().Perm() != 0o700 {
+		t.Fatal("collector runtime directory is not private")
+	}
 	denied := exec.Command("/usr/bin/test", "-r", filepath.Join(root, "secrets", "node", "node-key.pem"))
 	denied.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uid, Gid: uid, Groups: []uint32{}}}
 	if denied.Run() == nil {
@@ -295,6 +309,9 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 	// A stopped collector makes readiness false without affecting reservations
 	// or pretending the old source sample has a new timestamp.
 	nativeSystemctl(t, "stop", collectorUnit)
+	if _, err := os.Lstat(collectorRuntimeDirectory); !os.IsNotExist(err) {
+		t.Fatal("collector stop retained its transient mount destination")
+	}
 	status := nativeMX(t, installer, true, "node", "status", "--root", root)
 	if status.State != "NOT_READY" {
 		t.Fatal("stopped collector reported ready")
