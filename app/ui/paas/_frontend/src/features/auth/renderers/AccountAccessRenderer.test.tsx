@@ -248,6 +248,23 @@ describe("account access", () => {
     expect(screen.queryByText("操作已完成。")).toBeNull();
   });
 
+  it.each([401, 503])("clears stale success after a subsequent account refresh fails with %i", async (status) => {
+    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue(platformIdentity),
+      listAccounts: vi.fn().mockResolvedValue({ items: [customer], nextAfter: null }) });
+    const { user } = await openAccess(repository, iam({}, "child-a"));
+    await user.click(await screen.findByRole("button", { name: "管理租户 tenant-b" }));
+    await user.click(screen.getByRole("button", { name: "停用租户" }));
+    await user.click(screen.getByRole("button", { name: "确认停用租户" }));
+    await screen.findByText("操作已完成。");
+    await waitFor(() => expect((screen.getByRole("button", { name: "刷新账号信息" }) as HTMLButtonElement).disabled).toBe(false));
+    vi.mocked(repository.currentIdentity).mockRejectedValue(new HttpProblem(status, "PRIVATE refresh failure"));
+    await user.click(screen.getByRole("button", { name: "刷新账号信息" }));
+    await screen.findByRole("alert");
+    expect(screen.queryByText("操作已完成。")).toBeNull();
+    expect(screen.queryByText("Team B")).toBeNull();
+    expect(screen.queryByRole("button", { name: "开通租户" })).toBeNull();
+  });
+
   it.each(["identity", "directory", "principal"])("fails closed on a mismatched %s instead of showing another subject", async (mismatch) => {
     const other = structuredClone(identity);
     if (mismatch === "identity") other.account.organization.id = "tenant-b";

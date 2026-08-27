@@ -80,7 +80,7 @@ function UserAccess({ user, onClose }: { user: AccountUserScene; onClose(): void
     if (await access.execute({ kind: "reset-password", principalId: user.id, resourceVersion: user.resourceVersion, initialPassword })) setResettingPassword(false);
   }
   return <Card>
-    <Card.Header>
+    <Card.Header className={styles.cardHeader}>
       <div><Typography.Title as="h2" level={3}>{user.name}</Typography.Title><Typography.Text tone="muted">{user.qualifiedName}</Typography.Text></div>
       <Button onClick={onClose} size="small" variant="ghost">关闭详情</Button>
     </Card.Header>
@@ -134,7 +134,7 @@ function UserDirectory({ scene }: { scene: AccountAccessScene }) {
   const selected = scene.users.find((user) => user.id === selectedId);
   return <div className={styles.stack}>
     <Card>
-      <Card.Header>
+      <Card.Header className={styles.cardHeader}>
         <div><Typography.Title as="h2" level={3}>子用户</Typography.Title><Typography.Text tone="muted">独立身份与凭据，按授权访问所属租户的资源</Typography.Text></div>
         <Button disabled={access.busy || access.loading} onClick={() => { setCreating(true); setSelectedId(null); }} size="small"><Plus aria-hidden="true" />创建用户</Button>
       </Card.Header>
@@ -161,7 +161,7 @@ function UserSettings({ scene }: { scene: AccountAccessScene }) {
   const access = useAccountAccess();
   const [alias, setAlias] = useState(scene.loginAlias ?? "");
   return <Card>
-    <Card.Header><div><Typography.Title as="h2" level={3}>主账号别名</Typography.Title><Typography.Text tone="muted">主账号的专属登录标识</Typography.Text></div><Badge status={scene.loginAlias ? "success" : "neutral"}>{scene.loginAlias ? "已设置" : "未设置"}</Badge></Card.Header>
+    <Card.Header className={styles.cardHeader}><div><Typography.Title as="h2" level={3}>主账号别名</Typography.Title><Typography.Text tone="muted">主账号的专属登录标识</Typography.Text></div><Badge status={scene.loginAlias ? "success" : "neutral"}>{scene.loginAlias ? "已设置" : "未设置"}</Badge></Card.Header>
     <Card.Body className={styles.detail}>
       <p className={styles.note}>子用户可使用别名替代租户 ID 登录。它不是邮箱、域名，也不是主账号的用户名。</p>
       <dl className={styles.facts}>
@@ -195,7 +195,7 @@ function TenantAccess({ account, onClose }: { account: TenantAccountScene; onClo
   }
 
   return <Card>
-    <Card.Header><div><Typography.Title as="h2" level={3}>{account.name}</Typography.Title><Typography.Text tone="muted">租户访问与原主账号恢复</Typography.Text></div><Button onClick={onClose} size="small" variant="ghost">关闭租户详情</Button></Card.Header>
+    <Card.Header className={styles.cardHeader}><div><Typography.Title as="h2" level={3}>{account.name}</Typography.Title><Typography.Text tone="muted">租户访问与原主账号恢复</Typography.Text></div><Button onClick={onClose} size="small" variant="ghost">关闭租户详情</Button></Card.Header>
     <Card.Body className={styles.detail}>
       <dl className={styles.facts}>
         <div><dt>租户 ID</dt><dd><Typography.Code>{account.id}</Typography.Code></dd></div>
@@ -236,7 +236,7 @@ function TenantDirectory({ scene }: { scene: AccountAccessScene }) {
   const selected = scene.accounts.find((account) => account.id === selectedId);
   return <div className={styles.stack}>
     <Card>
-      <Card.Header><div><Typography.Title as="h2" level={3}>租户账号</Typography.Title><Typography.Text tone="muted">平台运营者管理租户生命周期；不等于租户管理员</Typography.Text></div><Button disabled={access.busy || access.loading} onClick={() => { setCreating(true); setSelectedId(null); }} size="small"><Plus aria-hidden="true" />开通租户</Button></Card.Header>
+      <Card.Header className={styles.cardHeader}><div><Typography.Title as="h2" level={3}>租户账号</Typography.Title><Typography.Text tone="muted">平台运营者管理租户生命周期；不等于租户管理员</Typography.Text></div><Button disabled={access.busy || access.loading} onClick={() => { setCreating(true); setSelectedId(null); }} size="small"><Plus aria-hidden="true" />开通租户</Button></Card.Header>
       <div aria-label="租户账号列表" className={styles.tableWrap} role="region" tabIndex={0}>
         <table className={styles.table}><thead><tr><th>租户</th><th>主账号登录名</th><th>主账号别名</th><th>状态</th><th>操作</th></tr></thead>
           <tbody>{scene.accounts.map((account) => <tr key={account.id}><td><strong>{account.name}</strong><small>{account.id}</small></td><td>{account.primaryLoginName}</td><td>{account.loginAlias ?? "未设置"}</td><td><Badge status={account.enabled ? "success" : "neutral"}>{account.enabled ? "正常" : "已停用"}</Badge></td><td><Button aria-label={`管理租户 ${account.id}`} disabled={access.busy || access.loading} onClick={() => { setSelectedId(account.id); setCreating(false); }} size="small" variant="ghost">管理</Button></td></tr>)}</tbody>

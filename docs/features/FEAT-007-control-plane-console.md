@@ -262,14 +262,45 @@ checks cover these controls. Source checks or another Phase's browser evidence
 do not accept this extension, and do not replace the installed-release gate.
 
 This branch's adaptation passes type checking, lint, architecture, the 20
-contrast checks, 60 frontend tests, Go embed checks and two bounded,
+contrast checks, 69 frontend tests, Go embed checks and two bounded,
 two-worker production exports matching all 59 embedded files. Adapter and
 component gates cover platform-only navigation, version-bound lifecycle
 requests, original-primary recovery while paused, password clearing on
 conflict, disabled platform-credential protection, and removal of protected
-content after a failed session. Task-local real IAM login reaches the forced
-password-replacement screen; the subsequent lifecycle/browser, keyboard and
-360-pixel paths are not yet accepted.
+content after a failed session. Background reads cannot erase a rejected
+command's notice; a failed protected poll or a command discovering an invalid
+session removes the old resource snapshot. An account refresh cannot retain
+an earlier mutation's success message after session failure. The nine added
+behavior regressions fail before these corrections and pass afterward.
+
+On 2026-08-27 this branch's real APISIX/IAM/Audit/PaaS browser environment
+passes the account/lifecycle path: a platform-only child opens two tenants,
+each original primary changes its initial password and creates a child with
+the same username, and explicit tenant roles permit the corresponding resource
+workflow. Qualified tenant-ID and account-alias logins resolve to the correct
+tenant. Both children complete their own forced password changes and submit
+real quota and database requests; each sees only its tenant's resources.
+The live executor and preserved-data evidence belong to FEAT-006.
+
+The same browser sessions prove role revocation, read-only write denial,
+member disable/enable and password reset, rejection of a stale member version
+after concurrent password change, and old-session denial after restoration.
+Platform-only access does not load the tenant user directory or permit tenant
+resource reads. Recovery keeps the original primary ID, does not resume a
+paused tenant, and still requires password replacement after explicit tenant
+restoration. Actual logout and full-page reload do not retain a usable browser
+credential. Failed polls remove protected content; write-denial notices remain
+visible across successful polls, and a failed account refresh shows no stale
+success notice.
+
+Measured 1280-by-900 and 360-by-800 CSS-pixel views cover account/member
+controls, tenant status/recovery confirmations and the resource list without
+horizontal page overflow. Account card headers wrap complete action buttons
+instead of squeezing their labels into vertical text. Keyboard-only end-to-end
+verification remains open: pointer-driven browser actions and component
+keyboard tests do not certify that gate. The complete installed-release
+browser and offline profile gates also remain open; this evidence does not
+change another Phase's acceptance state.
 
 ## Incremental acceptance
 

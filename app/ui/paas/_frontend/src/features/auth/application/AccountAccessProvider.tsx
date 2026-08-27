@@ -61,14 +61,14 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       return buildAccountAccessScene(identity, users, accounts);
     }
     read().then((loaded) => { if (active) { setScene(loaded); setError(null); } },
-      (failure: unknown) => { if (active) { setScene(null); setError(accountError(failure)); } })
+      (failure: unknown) => { if (active) { setScene(null); setSuccess(null); setError(accountError(failure)); } })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [credential, page, principalId, repository, revision, tenantId]);
 
   const value = useMemo<AccountAccess>(() => ({
     scene, loading, busy, error, success,
-    reload() { setLoading(true); setRevision((current) => current + 1); },
+    reload() { setLoading(true); setSuccess(null); setRevision((current) => current + 1); },
     usersPage(after) { setLoading(true); setPage((current) => ({ ...current, users: after })); },
     accountsPage(after) { setLoading(true); setPage((current) => ({ ...current, accounts: after })); },
     async execute(command) {

@@ -810,14 +810,41 @@ accepted content. Real outboxes deliver one quota fact and two creation facts
 per tenant with the original IAM authority. These are pending service records,
 not claims that a PostgreSQL workload has been provisioned.
 
-These are verified backend slices, not acceptance of the full multi-tenant
-target. The console still needs this branch's real browser acceptance in
-[FEAT-007](FEAT-007-control-plane-console.md). Live-workload preservation and
-signed populated offline
-upgrade/rollback/backup/recovery gates remain unaccepted. The latter require
-the concrete release schema profile owned by FEAT-005/008; these retained-data
-process gates are not a substitute. Prior foundation evidence below covers
-only its named source revisions.
+The task-local real-runtime gate on 2026-08-27 additionally runs the production
+PaaS executor with the independent IAM/Audit/PaaS/UI processes, both dispatchers
+and APISIX. Separate runtime database logins have one or two actual connections
+and neither superuser nor RLS-bypass privileges. Browser-created PostgreSQL 18
+workloads use the fixed image, at most two running instances, and verified
+limits of 0.5 CPU and 1 GiB each. An initial infrastructure failure remains a
+real `FAILED` Operation and releases its reserved quota; it is not rewritten
+as a successful installation. Docker's exhausted default address pools are
+worked around only with a task-owned explicit /28 network for the actual
+generated Compose project, without changing global configuration or removing
+another task's network.
+
+Before starting the executor for the replacement request, the gate checks
+that the tenant and original creator are both disabled and the accepted
+Operation is still pending. The normal worker then provisions the database
+and delivers its `managedservice.service-installation.ready` fact with the
+original actor and IAM decision, while the tenant remains paused. Pausing the
+other tenant preserves its already-running database and inserted row. Both
+database rows, container identities and start times survive the tenant pauses
+and an equal-bootstrap IAM process restart; disabled access is not revived.
+Explicit restoration does not change resource ownership or resurrect old
+sessions. Fresh public HTTP sessions reject foreign resource, Operation,
+quota and audit-cursor access, keep platform and tenant audit reads separate,
+verify both tenant chains and the installation chain completely, and replay
+the historical ready fact as an exact duplicate. These live-engine observations
+are task-local evidence, not an assertion that the pending-record CI gate runs
+a workload executor.
+
+These are verified slices, not acceptance of the full multi-tenant target.
+This branch's browser evidence and remaining keyboard-only gate belong to
+[FEAT-007](FEAT-007-control-plane-console.md). Signed populated offline
+upgrade/rollback/backup/recovery remain unaccepted and require the concrete
+release schema profile owned by FEAT-005/008; retained-data process checks and
+the task-local runtime are not substitutes. Prior foundation evidence below
+covers only its named source revisions.
 
 - Gate A was accepted on 2026-08-26. Strict generated Go/OpenAPI contracts,
   current-credential-only service identity, fixed Argon2id and

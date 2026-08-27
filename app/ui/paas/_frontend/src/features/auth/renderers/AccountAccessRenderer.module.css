@@ -23,6 +23,22 @@
   gap: var(--xiak-spacing-default);
 }
 
+.cardHeader {
+  flex-wrap: wrap;
+  gap: var(--xiak-spacing-default);
+}
+
+.cardHeader > div {
+  flex: 1 1 180px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cardHeader > button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 .identity {
   display: flex;
   flex-wrap: wrap;
