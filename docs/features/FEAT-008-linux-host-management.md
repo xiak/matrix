@@ -262,12 +262,16 @@ transaction functions. Applying the new schema twice preserved Operations,
 immutable generations, Audit documents and in-flight leases; retained work and
 Audit completion continued afterward. Legacy execution pools were not silently
 enrolled. PaaS API/worker readiness now requires schema 2 and rejects schema 1.
-Fresh PostgreSQL and upgrade tests, the five-process gate and the full Go
-race/vet suite passed locally. Independent CI for this increment remains
-pending until its fixed commit is pushed and verified.
+Fresh PostgreSQL and upgrade tests, the five-process gate, full Go race/vet,
+stable generation, module verification, ten repeated focused runs and Linux
+builds passed locally. Source `3e208ea` passed
+[independent CI](https://github.com/xiak/matrix/actions/runs/33056029691),
+including all existing Go/race, PostgreSQL/authority-process and real
+node/collector process jobs.
 
-Next in P3-1: combine real Linux enrollment/refresh with signed offline node
-startup and explicit platform authorization when upgrading an older installation.
+Next in P3-1: consume the separately verified IAM historical producer proof,
+then combine real Linux enrollment/refresh with signed offline node startup
+and explicit platform authorization when upgrading an older installation.
 P3-1 and the complete Phase 3 release remain unaccepted.
 Retained-data schema migration alone does not establish runnable N-1
 compatibility; the release's schema profile and rollback admission still need
