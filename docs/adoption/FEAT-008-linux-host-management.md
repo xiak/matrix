@@ -74,3 +74,12 @@ No predecessor source copy or compatibility alias is added to the working
 tree. Its real installer must read retained journals and latest credentials
 after a supported successor runs; differing labels on same-source bundles
 are not this evidence.
+
+For the installed platform predecessor gate, fixed same-repository production
+commit `91b8ba5a4d069bc5c217a4ccefdd5101ffb0bea7` is `REUSE` as a separately
+built, signed predecessor and retained-state producer. Its complete 4/3/2,
+revision-4 profile and protected-node-connection topology match the successor
+boundary. The old installer and service images must read data committed by
+the successor after rollback. No old implementation is copied, and this
+selection neither admits a different profile/topology nor upgrades the
+operator's existing installation.

@@ -41,9 +41,15 @@ func validateReleasePair(a, b release.VerifiedBundle) error {
 		b.Manifest.Release.PreviousID != a.Manifest.Release.ID ||
 		b.Manifest.Release.PreviousVersion != a.Manifest.Release.Version ||
 		a.Manifest.Release.ID == b.Manifest.Release.ID ||
-		a.Manifest.Release.Version == b.Manifest.Release.Version ||
-		a.Manifest.Release.SourceCommit != b.Manifest.Release.SourceCommit {
+		a.Manifest.Release.Version == b.Manifest.Release.Version {
 		return fail("release-pair-contract")
+	}
+	// Each directory is already authenticated. Admit distinct source binaries,
+	// but do not start a destructive lifecycle exercise for an unproved profile.
+	if a.Manifest.Kind != release.ManifestKind || b.Manifest.Kind != release.ManifestKind ||
+		a.Manifest.Database != b.Manifest.Database || release.ValidateDatabaseProfile(a.Manifest.Database) != nil ||
+		a.Manifest.TopologyDigest != b.Manifest.TopologyDigest {
+		return fail("release-pair-compatibility")
 	}
 	if _, ok := workloadImage(a.Manifest); !ok {
 		return fail("release-a-workload")

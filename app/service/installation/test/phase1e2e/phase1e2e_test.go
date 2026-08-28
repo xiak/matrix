@@ -109,20 +109,58 @@ func TestOfflinePhase1Lifecycle(t *testing.T) {
 	}
 }
 
-func TestReleasePairAllowsReleaseSpecificWorkloadImages(t *testing.T) {
-	a := release.VerifiedBundle{Manifest: release.Manifest{
-		Release: release.ReleaseIdentity{ID: "release-a", Version: "v0.1.0", SourceCommit: "commit"},
-		Images:  []release.Image{{Purpose: release.ImageWorkload, SourceDigest: "sha256:a"}},
-	}}
-	b := release.VerifiedBundle{Manifest: release.Manifest{
-		Release: release.ReleaseIdentity{
-			ID: "release-b", Version: "v0.2.0", SourceCommit: "commit",
-			PreviousID: "release-a", PreviousVersion: "v0.1.0",
-		},
-		Images: []release.Image{{Purpose: release.ImageWorkload, SourceDigest: "sha256:b"}},
-	}}
-	if err := validateReleasePair(a, b); err != nil {
-		t.Fatalf("release-specific workload images rejected: %v", err)
+func TestReleasePairRequiresCompatibleImmediatePredecessor(t *testing.T) {
+	for _, scenario := range []struct {
+		name   string
+		mutate func(a, b *release.Manifest)
+		accept bool
+	}{
+		{name: "actual different-source predecessor and workload", accept: true, mutate: func(_, b *release.Manifest) {
+			b.Release.SourceCommit = strings.Repeat("b", 40)
+		}},
+		{name: "same-source lifecycle fixture", accept: true},
+		{name: "wrong predecessor", mutate: func(_, b *release.Manifest) { b.Release.PreviousID = "other-release" }},
+		{name: "wrong predecessor version", mutate: func(_, b *release.Manifest) { b.Release.PreviousVersion = "v0.0.1" }},
+		{name: "skipped predecessor", mutate: func(a, _ *release.Manifest) {
+			a.Release.PreviousID, a.Release.PreviousVersion = "older-release", "v0.0.1"
+		}},
+		{name: "same release", mutate: func(a, b *release.Manifest) { b.Release.ID = a.Release.ID }},
+		{name: "same version", mutate: func(a, b *release.Manifest) { b.Release.Version = a.Release.Version }},
+		{name: "different authority tuple", mutate: func(_, b *release.Manifest) { b.Database.Authorities.PaaS++ }},
+		{name: "different contract revision", mutate: func(_, b *release.Manifest) { b.Database.ContractRevision++ }},
+		{name: "invalid equal profiles", mutate: func(a, b *release.Manifest) {
+			a.Database, b.Database = release.DatabaseProfile{}, release.DatabaseProfile{}
+		}},
+		{name: "different topology", mutate: func(_, b *release.Manifest) { b.TopologyDigest = "sha256:" + strings.Repeat("2", 64) }},
+		{name: "node is not a platform release", mutate: func(_, b *release.Manifest) { b.Kind = release.NodeManifestKind }},
+		{name: "missing predecessor workload", mutate: func(a, _ *release.Manifest) { a.Images = nil }},
+		{name: "missing successor workload", mutate: func(_, b *release.Manifest) { b.Images = nil }},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			a := release.VerifiedBundle{Manifest: release.Manifest{
+				Kind: release.ManifestKind,
+				Release: release.ReleaseIdentity{
+					ID: "release-a", Version: "v0.1.0", SourceCommit: strings.Repeat("a", 40),
+				},
+				Database: release.CurrentDatabaseProfile(), TopologyDigest: "sha256:" + strings.Repeat("1", 64),
+				Images: []release.Image{{Purpose: release.ImageWorkload, SourceDigest: "sha256:a"}},
+			}}
+			b := release.VerifiedBundle{Manifest: release.Manifest{
+				Kind: release.ManifestKind,
+				Release: release.ReleaseIdentity{
+					ID: "release-b", Version: "v0.2.0", SourceCommit: a.Manifest.Release.SourceCommit,
+					PreviousID: "release-a", PreviousVersion: "v0.1.0",
+				},
+				Database: release.CurrentDatabaseProfile(), TopologyDigest: a.Manifest.TopologyDigest,
+				Images: []release.Image{{Purpose: release.ImageWorkload, SourceDigest: "sha256:b"}},
+			}}
+			if scenario.mutate != nil {
+				scenario.mutate(&a.Manifest, &b.Manifest)
+			}
+			if err := validateReleasePair(a, b); (err == nil) != scenario.accept {
+				t.Fatalf("release pair accepted=%t, want %t", err == nil, scenario.accept)
+			}
+		})
 	}
 }
 

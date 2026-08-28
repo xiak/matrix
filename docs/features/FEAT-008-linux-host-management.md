@@ -213,6 +213,14 @@ compatibility before effects. Stage, verify images/ownership, start supervised
 processes, verify real behavior, then commit the release. Replay/restart
 preserves ownership, secrets and accepted receipts.
 
+The existing installed-platform gate admits a verified, immediate predecessor
+with a distinct source commit only within the same complete profile and
+topology. It must also write an application and Operation through the successor,
+read that exact terminal Operation and its Audit history through the predecessor
+after data-preserving rollback, and prove that only explicit restoration of the
+earlier backup removes those later records. Same-source A/B remains a lifecycle
+fixture, not proof of a separately built predecessor.
+
 The first node distribution is a distinct, closed `OfflineNodeRelease` in
 the existing signed release owner, containing `mx`, the node executable and
 the pinned collector, not platform images or a fictitious database profile.

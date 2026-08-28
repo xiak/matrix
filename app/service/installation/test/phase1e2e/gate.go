@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -27,6 +28,7 @@ import (
 
 const (
 	applicationID            paasv1.ResourceID = "phase1-application"
+	postUpgradeApplicationID paasv1.ResourceID = "phase1-after-upgrade"
 	configurationID          paasv1.ResourceID = "phase1-configuration"
 	configurationRevisionOne paasv1.ResourceID = "phase1-configuration-r1"
 	configurationRevisionTwo paasv1.ResourceID = "phase1-configuration-r2"
@@ -237,6 +239,35 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	); err != nil {
 		return err
 	}
+	postUpgradeOperation, err := value.edge.createResource(
+		ctx, "/api/paas/v1/applications", "phase1-create-after-upgrade", bearer,
+		paasv1.CreateApplicationRequest{ID: postUpgradeApplicationID, Name: string(postUpgradeApplicationID)},
+		paasv1.OperationCreateApplication, paasv1.ResourceRef{Kind: "Application", ID: postUpgradeApplicationID},
+	)
+	if err != nil || value.assertPostUpgradeApplication(ctx, bearer, postUpgradeOperation, true) != nil {
+		return fail("post-upgrade-application-and-operation")
+	}
+	postUpgradeAudit, err := value.edge.waitAuditActions(ctx, bearer, map[auditv1.Action]string{
+		auditv1.ActionPaaSApplicationCreated: string(postUpgradeApplicationID),
+	})
+	if err != nil {
+		return fail("post-upgrade-audit-delivery")
+	}
+	postUpgradeHash := ""
+	for _, record := range postUpgradeAudit {
+		if record.Event.Action != auditv1.ActionPaaSApplicationCreated || record.Event.Target.ID != string(postUpgradeApplicationID) {
+			continue
+		}
+		if postUpgradeHash != "" || record.Event.OperationID != auditv1.OperationID(postUpgradeOperation.ID) ||
+			record.Event.Actor.ID != auditv1.ActorID(postUpgradeOperation.RequestedBy.ID) ||
+			record.Event.TenantID != auditv1.TenantID(postUpgradeOperation.Scope.TenantID) {
+			return fail("post-upgrade-audit-association")
+		}
+		postUpgradeHash = record.RecordHash
+	}
+	if postUpgradeHash == "" {
+		return fail("post-upgrade-audit-association")
+	}
 	emit("release-b-upgrade-preservation")
 
 	rollback, err := runMX(ctx, value.releases.b, "rollback", []string{"--root", value.config.root}, value.forbidden(secret, newPassword, bearer))
@@ -255,6 +286,13 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	}
 	if err := value.repeatedStatusAndVerify(ctx, value.releases.a, value.releases.a.Manifest.Release.ID, ""); err != nil {
 		return err
+	}
+	if err := value.assertPostUpgradeApplication(ctx, bearer, postUpgradeOperation, true); err != nil {
+		return err
+	}
+	rollbackHistory, err := value.edge.allAuditRecords(ctx, bearer)
+	if err != nil || !containsAuditHistory(rollbackHistory, auditRecordHashes(postUpgradeAudit)) {
+		return fail("rollback-retained-successor-audit-history")
 	}
 	emit("explicit-platform-rollback")
 
@@ -280,6 +318,14 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	recoveredAudit, err := value.edge.allAuditRecords(ctx, bearer)
 	if err != nil || !containsAuditHistory(recoveredAudit, backupBaseline) {
 		return fail("recovered-audit-history")
+	}
+	if err := value.assertPostUpgradeApplication(ctx, bearer, postUpgradeOperation, false); err != nil {
+		return err
+	}
+	for _, record := range recoveredAudit {
+		if record.RecordHash == postUpgradeHash || record.Event.OperationID == auditv1.OperationID(postUpgradeOperation.ID) {
+			return fail("recovered-backup-retained-later-business-fact")
+		}
 	}
 	if err := value.repeatedStatusAndVerify(ctx, value.releases.a, value.releases.a.Manifest.Release.ID, ""); err != nil {
 		return err
@@ -339,6 +385,35 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	}
 	emit("bounded-support-zero-leakage")
 	emit("restart-required")
+	return nil
+}
+
+func (value *gate) assertPostUpgradeApplication(
+	ctx context.Context, bearer []byte, want paasv1.Operation, present bool,
+) error {
+	applicationPath := "/api/paas/v1/applications/" + string(postUpgradeApplicationID)
+	operationPath := "/api/paas/v1/operations/" + string(want.ID)
+	if !present {
+		for _, path := range []string{applicationPath, operationPath} {
+			response, err := value.edge.json(ctx, http.MethodGet, path, bearer, nil, nil, http.StatusNotFound)
+			clear(response.body)
+			if err != nil {
+				return fail("recovered-backup-retained-later-application-or-operation")
+			}
+		}
+		return nil
+	}
+	var application paasv1.Application
+	if _, err := value.edge.get(ctx, applicationPath, bearer, &application); err != nil ||
+		paasv1.ValidateApplication(application) != nil || application.Metadata.ID != postUpgradeApplicationID ||
+		application.Metadata.Name != string(postUpgradeApplicationID) || application.Metadata.Scope != want.Scope {
+		return fail("retained-successor-application")
+	}
+	var operation paasv1.Operation
+	if _, err := value.edge.get(ctx, operationPath, bearer, &operation); err != nil ||
+		paasv1.ValidateOperation(operation) != nil || !reflect.DeepEqual(operation, want) {
+		return fail("retained-successor-operation")
+	}
 	return nil
 }
 
