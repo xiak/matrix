@@ -67,6 +67,35 @@ database credentials and no scheduling or IAM authority. Installation owns
 certificate provisioning, renewal and revocation. SSH may bootstrap or rescue
 a node; it is not the steady-state workload protocol.
 
+The signed-platform connection increment uses `mx platform configure-nodes`
+with a protected, installation-bound controller configuration and the expected
+current configuration digest. Installation owns the private input, an atomic
+configuration replacement and a resumable journal; only the owned PaaS API is
+recreated to load an appended binding inventory. Existing target/binding/pin
+tuples cannot be removed or rebound by this command. Certificate replacement
+may not change controller identity. An empty initial configuration admits no
+nodes. The runtime receives no CA signing key, node key, host path selector or
+SSH/database credential through this input. A private management egress
+network and a read-only private configuration directory belong to the signed
+topology; no host network or Docker socket is added to the API. Configuring a
+connection grants no platform role, registers no target and creates no tenant
+resource. Existing platform-authorized admission owns those decisions.
+
+This increment consumes operator-provisioned controller credentials; it does
+not yet provide an automatic certificate issuer. Its acceptance requires
+closed/secret-safe input, wrong installation/identity/expected digest rejection,
+append-only inventory, crash/resume and current credential replacement,
+exact API-only effects, unchanged other services/workloads, signed topology
+and real platform/node observations. The private contract, failure/resume,
+append-only inventory, exact API-only provider boundary and full Linux native
+installation unit regressions pass locally, along with repository tests,
+architecture, vet and focused race gates. Signed composition and multi-machine
+observations remain pending. The previous platform bundle has no node
+connection mount and cannot be described as integrated merely because the
+native process gate passed. This changes the signed topology digest, not the
+database profile; transition from the previous topology is not admitted or
+claimed by this increment.
+
 PostgreSQL owns desired state/accounting; nodes own effects/observations.
 Disconnection preserves accepted workloads. Restart/reconnect uses durable
 receipts and actual runtime observations. Unknown outcomes require observation

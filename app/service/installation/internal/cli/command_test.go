@@ -27,6 +27,7 @@ func TestPlatformCommandSurfaceBuildsExactRequests(t *testing.T) {
 		{"rollback", []string{"platform", "rollback", "--root", "/srv/matrix"}, Request{Action: lifecycle.ActionRollback, Root: "/srv/matrix"}},
 		{"recover", []string{"platform", "recover", "--root", "/srv/matrix", "--backup", "backup-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, Request{Action: lifecycle.ActionRecover, Root: "/srv/matrix", BackupID: "backup-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
 		{"recover-credentials", []string{"platform", "recover-credentials", "--root", "/srv/matrix", "--recovery-input", "/private/recovery.json"}, Request{Action: lifecycle.ActionRecoverCredentials, Root: "/srv/matrix", RecoveryInput: "/private/recovery.json"}},
+		{"configure-nodes", []string{"platform", "configure-nodes", "--root", "/srv/matrix", "--configuration", "/private/nodes.json", "--expected-configuration-digest", "sha256:" + strings.Repeat("a", 64)}, Request{Action: lifecycle.ActionConfigureNodes, Root: "/srv/matrix", Configuration: "/private/nodes.json", ExpectedConfigurationDigest: "sha256:" + strings.Repeat("a", 64)}},
 		{"support", []string{"platform", "support", "--root", "/srv/matrix", "--output", "/safe/support.json"}, Request{Action: lifecycle.ActionSupport, Root: "/srv/matrix", SupportOutput: "/safe/support.json"}},
 	}
 	for _, test := range tests {
@@ -76,7 +77,7 @@ func TestPlatformCommandNamesHaveNoCompatibilityAliases(t *testing.T) {
 		got = append(got, child.Name())
 	}
 	slices.Sort(got)
-	want := []string{"backup", "install", "recover", "recover-credentials", "rollback", "status", "support", "upgrade", "verify"}
+	want := []string{"backup", "configure-nodes", "install", "recover", "recover-credentials", "rollback", "status", "support", "upgrade", "verify"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("platform command surface = %v, want %v", got, want)
 	}
@@ -206,6 +207,36 @@ func TestNodeSameTrustRenewalRequiresExplicitOptOut(t *testing.T) {
 		}))
 	if exit != ExitSuccess || !strings.Contains(out.String(), expected) || strings.Contains(out.String(), "/private/") {
 		t.Fatal("node result omitted its usable commitment or exposed an input path")
+	}
+}
+
+func TestPlatformNodeConfigurationHasExplicitPurposeBoundResume(t *testing.T) {
+	var out, errOut bytes.Buffer
+	exit := Run(context.Background(), []string{"platform", "configure-nodes", "--root", "/srv/platform", "--resume"}, Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut}, backendFunc(func(_ context.Context, request Request) (Result, error) {
+		if request.Subject != SubjectPlatform || request.Action != lifecycle.ActionConfigureNodes || !request.Resume || request.Configuration != "" || request.ExpectedConfigurationDigest != "" {
+			t.Fatal("node configuration resume changed purpose")
+		}
+		return Result{State: "READY"}, nil
+	}))
+	if exit != ExitSuccess {
+		t.Fatal("valid resume rejected")
+	}
+	for _, args := range [][]string{
+		{"platform", "configure-nodes", "--root", "/srv/platform"},
+		{"platform", "configure-nodes", "--root", "/srv/platform", "--configuration", "/private/nodes.json"},
+		{"platform", "configure-nodes", "--root", "/srv/platform", "--resume", "--configuration", "/private/nodes.json"},
+		{"platform", "configure-nodes", "--root", "/srv/platform", "--resume", "--endpoint", "https://127.0.0.1:1"},
+		{"platform", "configure-nodes", "--root", "/srv/platform", "--resume", "--principal-id", "caller"},
+		{"node", "configure-nodes", "--root", "/srv/node", "--resume"},
+	} {
+		out.Reset()
+		errOut.Reset()
+		if Run(context.Background(), args, Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut}, backendFunc(func(context.Context, Request) (Result, error) {
+			t.Fatal("unsafe node input reached backend")
+			return Result{}, nil
+		})) != ExitInvalidInput {
+			t.Fatal("ambiguous node configuration input accepted")
+		}
 	}
 }
 

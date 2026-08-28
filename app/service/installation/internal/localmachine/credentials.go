@@ -13,6 +13,7 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
+	"github.com/xiak/matrix/app/service/installation/nodeconfig"
 	"github.com/xiak/matrix/app/service/installation/release"
 )
 
@@ -76,6 +77,9 @@ func stageInstallation(plan platformcommand.InstallPlan, entropy io.Reader) erro
 		plan.Root, filepath.FromSlash(layout.ReleaseTrust), plan.TrustBytes,
 	); err != nil {
 		return errors.Join(platformcommand.ErrEffectConflict, err)
+	}
+	if err := ensureNodeController(plan.Root, plan.InstallationID, plan.Bundle.Manifest.Release.PreviousID == ""); err != nil {
+		return err
 	}
 
 	credentials, err := ensureIAMBootstrap(plan.Root, plan.InstallationID, entropy)
@@ -149,6 +153,27 @@ func stageInstallation(plan platformcommand.InstallPlan, entropy io.Reader) erro
 		}
 	}
 	return nil
+}
+
+func ensureNodeController(root, installationID string, allowCreate bool) error {
+	exists, err := managedFileExists(root, filepath.FromSlash(layout.NodeControllerConfiguration))
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectConflict, err)
+	}
+	if exists {
+		configuration, encoded, err := readNodeController(root, installationID)
+		configuration.Clear()
+		clear(encoded)
+		return err
+	}
+	if !allowCreate {
+		return platformcommand.ErrEffectVerification
+	}
+	encoded, err := nodeconfig.EncodeController(nodeconfig.EmptyController(installationID))
+	if err != nil {
+		return platformcommand.ErrEffectVerification
+	}
+	return writeManagedOnce(root, filepath.FromSlash(layout.NodeControllerConfiguration), encoded)
 }
 
 func ensureIAMBootstrap(root, installationID string, entropy io.Reader) (stagedCredentials, error) {

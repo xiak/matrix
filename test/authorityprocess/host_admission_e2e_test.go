@@ -25,6 +25,7 @@ import (
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	nodehttps "github.com/xiak/matrix/app/adapter/node/https"
+	"github.com/xiak/matrix/app/service/installation/nodeconfig"
 )
 
 const processHostPool = "execution-pool-process"
@@ -141,10 +142,11 @@ func newProcessNodeAuthority(t *testing.T) ([]byte, func(int64, string, ...x509.
 
 func writeProcessNodeConnection(t *testing.T, directory, installationID, endpoint, fingerprint string, controllerCertificate, controllerKey, trust []byte) string {
 	t.Helper()
-	configuration := map[string]any{"installationId": installationID, "controllerId": processHostController,
-		"certificateFile": writeProtectedFile(t, directory, "node-controller.crt", controllerCertificate), "privateKeyFile": writeProtectedFile(t, directory, "node-controller.key", controllerKey), "trustFile": writeProtectedFile(t, directory, "node-trust.crt", trust),
-		"nodes": []any{map[string]any{"bindingRef": processHostBinding, "targetId": processHostTarget, "endpoint": endpoint, "identityFingerprint": fingerprint}}}
-	document, err := json.Marshal(configuration)
+	configuration := nodeconfig.ControllerConfiguration{APIVersion: nodeconfig.APIVersion, Kind: nodeconfig.ControllerKind,
+		InstallationID: installationID, ControllerID: processHostController,
+		Certificate: controllerCertificate, PrivateKey: controllerKey, Trust: trust,
+		Nodes: []nodeconfig.Connection{{BindingRef: processHostBinding, TargetID: processHostTarget, Endpoint: endpoint, IdentityFingerprint: fingerprint}}}
+	document, err := nodeconfig.EncodeController(configuration)
 	if err != nil {
 		t.Fatal(err)
 	}

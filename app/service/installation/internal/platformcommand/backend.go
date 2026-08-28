@@ -188,6 +188,9 @@ type Effects interface {
 	ApplyRecoveryPhase(context.Context, RecoveryPlan, lifecycle.Phase) error
 	PrepareCredentialRecovery(context.Context, InstalledPlan, string, *lifecycle.Execution) (CredentialRecoveryPlan, error)
 	ApplyCredentialRecoveryPhase(context.Context, CredentialRecoveryPlan, lifecycle.Phase) error
+	NodeConnectionsDigest(context.Context, InstalledPlan) (string, error)
+	PrepareNodeConnections(context.Context, InstalledPlan, string, string, *lifecycle.Execution) (NodeConnectionsPlan, error)
+	ApplyNodeConnectionsPhase(context.Context, NodeConnectionsPlan, lifecycle.Phase) error
 	VerifyInstallation(context.Context, InstalledPlan) error
 	ObserveInstallation(context.Context, InstalledPlan) (bool, error)
 	CreateBackup(context.Context, BackupPlan) error
@@ -228,6 +231,8 @@ func (backend *Backend) Run(ctx context.Context, request cli.Request) (cli.Resul
 		return backend.recover(ctx, request)
 	case lifecycle.ActionRecoverCredentials:
 		return backend.recoverCredentials(ctx, request)
+	case lifecycle.ActionConfigureNodes:
+		return backend.configureNodes(ctx, request)
 	case lifecycle.ActionStatus:
 		return backend.status(ctx, request)
 	case lifecycle.ActionVerify, lifecycle.ActionBackup, lifecycle.ActionSupport:
@@ -276,6 +281,10 @@ func (backend *Backend) status(
 		result.State = "READY"
 	} else {
 		result.State = "NOT_READY"
+	}
+	result.ConfigurationDigest, err = backend.effects.NodeConnectionsDigest(ctx, installedPlan(session.Root(), state))
+	if err != nil {
+		return cli.Result{}, effectFault(lifecycle.PhaseVerifying, err)
 	}
 	return result, nil
 }

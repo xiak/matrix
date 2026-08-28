@@ -19,6 +19,7 @@ import (
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
 	"github.com/xiak/matrix/app/service/installation/internal/releasetest"
+	"github.com/xiak/matrix/app/service/installation/nodeconfig"
 	"github.com/xiak/matrix/app/service/installation/release"
 )
 
@@ -51,6 +52,69 @@ func TestCredentialRecoveryInputIsClosedBoundedAndSecretSafe(t *testing.T) {
 			strings.Contains(err.Error(), "temporary-Recovery") || strings.Contains(err.Error(), "foreign") {
 			t.Fatal("invalid credential recovery input was accepted or disclosed")
 		}
+	}
+}
+
+func TestNodeConfigurationRetainsOneIntentAcrossEveryInterruptedPhase(t *testing.T) {
+	for _, phase := range []lifecycle.Phase{"", lifecycle.PhaseStaging, lifecycle.PhaseConfiguring, lifecycle.PhaseStarting, lifecycle.PhaseVerifying, lifecycle.PhaseCommitting} {
+		t.Run(string(phase), func(t *testing.T) {
+			fixture := writeReleaseFixture(t)
+			effects := &installEffects{nodeFailPhase: phase, nodeFailErr: ErrEffectOutcomeUnknown}
+			backend := newTestBackend(t, effects)
+			root := filepath.Join(t.TempDir(), "matrix")
+			if _, err := backend.Run(context.Background(), installRequest(root, fixture)); err != nil {
+				t.Fatal(err)
+			}
+			before := readJournal(t, root)
+			expected, input := "sha256:"+strings.Repeat("a", 64), "sha256:"+strings.Repeat("b", 64)
+			effects.nodePlan = NodeConnectionsPlan{ExpectedDigest: expected, InputDigest: input}
+			request := cli.Request{Action: lifecycle.ActionConfigureNodes, Root: root, Configuration: filepath.Join(root, "private.json"), ExpectedConfigurationDigest: expected}
+			result, err := backend.Run(context.Background(), request)
+			state := readJournal(t, root)
+			if phase != "" {
+				if err == nil || state.Active == nil || state.Active.Phase != phase || state.Active.Command.InputDigest != input || state.Active.Command.ExpectedConfigurationDigest != expected {
+					t.Fatal("interruption lost the exact connection intent")
+				}
+				command := state.Active.Command
+				starts := effects.nodeCalls[lifecycle.PhaseStarting]
+				backend = newTestBackend(t, effects)
+				result, err = backend.Run(context.Background(), cli.Request{Action: lifecycle.ActionConfigureNodes, Root: root, Resume: true})
+				state = readJournal(t, root)
+				if state.Last == nil || state.Last.Command != command {
+					t.Fatal("resume allocated a different intent")
+				}
+				if (phase == lifecycle.PhaseVerifying || phase == lifecycle.PhaseCommitting) && effects.nodeCalls[lifecycle.PhaseStarting] != starts {
+					t.Fatal("late resume restarted the API again")
+				}
+			}
+			if err != nil || !result.Changed || result.ConfigurationDigest != input || state.Active != nil || state.Last.Outcome != lifecycle.OutcomeSucceeded ||
+				state.CurrentReleaseID != before.CurrentReleaseID || state.CurrentReleaseDigest != before.CurrentReleaseDigest {
+				t.Fatalf("connection workflow did not complete in place: %v", err)
+			}
+			calls := fmt.Sprint(effects.nodeCalls)
+			result, err = backend.Run(context.Background(), cli.Request{Action: lifecycle.ActionConfigureNodes, Root: root, Resume: true})
+			if err != nil || result.Changed || fmt.Sprint(effects.nodeCalls) != calls || !reflect.DeepEqual(state, readJournal(t, root)) {
+				t.Fatal("completed replay reran connection effects")
+			}
+			if effects.rollbackCalls != 0 || effects.backupCalls != 0 || len(effects.upgradeCalls) != 0 || len(effects.recoveryCalls) != 0 {
+				t.Fatal("node connection used a release or recovery effect")
+			}
+		})
+	}
+}
+
+func TestNodeConfigurationPreparationFailureDoesNotAdvanceJournal(t *testing.T) {
+	fixture := writeReleaseFixture(t)
+	effects := &installEffects{nodePrepareErr: ErrEffectConflict}
+	backend := newTestBackend(t, effects)
+	root := filepath.Join(t.TempDir(), "matrix")
+	if _, err := backend.Run(context.Background(), installRequest(root, fixture)); err != nil {
+		t.Fatal(err)
+	}
+	before := readJournal(t, root)
+	_, err := backend.Run(context.Background(), cli.Request{Action: lifecycle.ActionConfigureNodes, Root: root, Configuration: filepath.Join(root, "private.json"), ExpectedConfigurationDigest: "sha256:" + strings.Repeat("a", 64)})
+	if err == nil || len(effects.nodeCalls) != 0 || !reflect.DeepEqual(before, readJournal(t, root)) {
+		t.Fatal("invalid node input advanced the journal or provider")
 	}
 }
 
@@ -1188,6 +1252,37 @@ type installEffects struct {
 	credentialFailErr         error
 	credentialFailOnce        bool
 	credentialFailed          bool
+	nodePlan                  NodeConnectionsPlan
+	nodePrepareErr            error
+	nodeCalls                 map[lifecycle.Phase]int
+	nodeFailPhase             lifecycle.Phase
+	nodeFailErr               error
+}
+
+func (effects *installEffects) NodeConnectionsDigest(_ context.Context, installed InstalledPlan) (string, error) {
+	return nodeconfig.ControllerDigest(nodeconfig.EmptyController(installed.InstallationID))
+}
+
+func (effects *installEffects) PrepareNodeConnections(_ context.Context, installed InstalledPlan, _ string, _ string, previous *lifecycle.Execution) (NodeConnectionsPlan, error) {
+	plan := effects.nodePlan
+	plan.InstalledPlan = installed
+	if previous != nil {
+		plan.CommandID = previous.Command.ID
+	}
+	return plan, effects.nodePrepareErr
+}
+
+func (effects *installEffects) ApplyNodeConnectionsPhase(_ context.Context, plan NodeConnectionsPlan, phase lifecycle.Phase) error {
+	if effects.nodeCalls == nil {
+		effects.nodeCalls = map[lifecycle.Phase]int{}
+	}
+	effects.nodeCalls[phase]++
+	if phase == effects.nodeFailPhase && effects.nodeFailErr != nil {
+		err := effects.nodeFailErr
+		effects.nodeFailErr = nil
+		return err
+	}
+	return nil
 }
 
 func (effects *installEffects) PrepareCredentialRecovery(_ context.Context, installed InstalledPlan, _ string, _ *lifecycle.Execution) (CredentialRecoveryPlan, error) {

@@ -8,23 +8,26 @@ import (
 
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
+	"github.com/xiak/matrix/app/service/installation/nodeconfig"
 )
 
 // Effects is the concrete Phase 1 Linux local-machine provider behind mx.
 // It owns no lifecycle policy; every method delegates one journaled phase to
 // its existing idempotent effect boundary.
 type Effects struct {
-	runtime          dockerRuntime
-	entropy          io.Reader
-	verifier         installationVerifier
-	projectInspector RecoveryProjectInspector
+	runtime            dockerRuntime
+	entropy            io.Reader
+	verifier           installationVerifier
+	projectInspector   RecoveryProjectInspector
+	validateController func(nodeconfig.ControllerConfiguration) error
 }
 
-func NewEffects(projectInspector RecoveryProjectInspector) *Effects {
+func NewEffects(projectInspector RecoveryProjectInspector, validateController func(nodeconfig.ControllerConfiguration) error) *Effects {
 	return &Effects{
 		runtime: localDockerRuntime{}, entropy: rand.Reader,
-		verifier:         newHTTPInstallationVerifier(nil),
-		projectInspector: projectInspector,
+		verifier:           newHTTPInstallationVerifier(nil),
+		projectInspector:   projectInspector,
+		validateController: validateController,
 	}
 }
 

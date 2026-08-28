@@ -120,6 +120,12 @@ func verifiedInstallationConfiguration(
 	); err != nil {
 		return verifiedInstallation{}, errors.New("APISIX runtime configuration is unsafe")
 	}
+	controller, encoded, err := readNodeController(plan.Root, plan.InstallationID)
+	controller.Clear()
+	clear(encoded)
+	if err != nil {
+		return verifiedInstallation{}, errors.New("node controller configuration is unsafe")
+	}
 	composePath, err := managedPath(plan.Root, filepath.FromSlash(layout.Compose))
 	if err != nil {
 		return verifiedInstallation{}, err

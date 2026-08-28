@@ -28,9 +28,163 @@ import (
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
 	"github.com/xiak/matrix/app/service/installation/internal/releasetest"
+	"github.com/xiak/matrix/app/service/installation/nodeconfig"
 	"github.com/xiak/matrix/app/service/installation/release"
 	"github.com/xiak/matrix/app/service/installation/topology"
 )
+
+func TestNodeControllerReplacementIsAtomicResumableAndAPIScoped(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("protected platform topology targets Linux")
+	}
+	installation, expectation := configuredPlatformStartFixture(t)
+	runtimeBoundary := newPlatformStartRuntime(installation, expectation)
+	runtimeBoundary.started = true
+	effects := &Effects{runtime: runtimeBoundary, validateController: func(nodeconfig.ControllerConfiguration) error { return nil }}
+	installed := installedPlanFrom(installation)
+	expected, err := effects.NodeConnectionsDigest(context.Background(), installed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration := nodeconfig.EmptyController(installation.InstallationID)
+	configuration.Nodes = []nodeconfig.Connection{{BindingRef: "binding-a", TargetID: "target-a", Endpoint: "https://192.168.50.10:16443", IdentityFingerprint: "sha256:" + strings.Repeat("a", 64)}}
+	configuration.Certificate, configuration.PrivateKey, configuration.Trust = []byte("cert"), []byte("private-controller-key"), []byte("trust")
+	input, err := nodeconfig.EncodeController(configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	private := t.TempDir()
+	if os.Chmod(private, 0o700) != nil {
+		t.Fatal("protect fixture input")
+	}
+	path := filepath.Join(private, "connections.json")
+	if os.WriteFile(path, input, 0o600) != nil {
+		t.Fatal("write fixture input")
+	}
+	credentials := snapshotManagedCredentials(t, installation.Root)
+	before := readTestFile(t, installation.Root, layout.NodeControllerConfiguration)
+	plan, err := effects.PrepareNodeConnections(context.Background(), installed, path, expected, nil)
+	if err != nil {
+		t.Fatal("prepare controller", err)
+	}
+	defer plan.Clear()
+	plan.CommandID = "cmd-" + strings.Repeat("a", 32)
+	if _, err := effects.PrepareNodeConnections(context.Background(), installed, path, "sha256:"+strings.Repeat("f", 64), nil); !errors.Is(err, platformcommand.ErrEffectConflict) {
+		t.Fatal("wrong expected configuration admitted")
+	}
+	if runtimeBoundary.composeCalls != 0 || !bytes.Equal(before, readTestFile(t, installation.Root, layout.NodeControllerConfiguration)) {
+		t.Fatal("preparation changed runtime or configuration")
+	}
+	if err := effects.ApplyNodeConnectionsPhase(context.Background(), plan, lifecycle.PhaseStaging); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, readTestFile(t, installation.Root, layout.NodeControllerConfiguration)) {
+		t.Fatal("staging published live credentials")
+	}
+	pending := &lifecycle.Execution{Command: lifecycle.Command{ID: plan.CommandID, Action: lifecycle.ActionConfigureNodes, InputDigest: plan.InputDigest, ExpectedConfigurationDigest: expected}, Phase: lifecycle.PhaseConfiguring}
+	if os.Remove(path) != nil {
+		t.Fatal("remove original input")
+	}
+	resumed, err := effects.PrepareNodeConnections(context.Background(), installed, "", "", pending)
+	if err != nil || !bytes.Equal(resumed.After, plan.After) {
+		t.Fatal("no-input resume changed the private intent")
+	}
+	defer resumed.Clear()
+	for _, phase := range []lifecycle.Phase{lifecycle.PhaseConfiguring, lifecycle.PhaseConfiguring, lifecycle.PhaseStarting, lifecycle.PhaseVerifying, lifecycle.PhaseCommitting, lifecycle.PhaseCommitting} {
+		if err := effects.ApplyNodeConnectionsPhase(context.Background(), resumed, phase); err != nil {
+			t.Fatalf("controller phase %s failed: %v", phase, err)
+		}
+	}
+	args := runtimeBoundary.composeArguments
+	if runtimeBoundary.composeCalls != 1 || args[len(args)-1] != "paas-api" || !slices.Contains(args, "--no-deps") || !slices.Contains(args, "--force-recreate") || !hasArgumentPair(args, "--pull", "never") || len(runtimeBoundary.migrationRuns) != 0 {
+		t.Fatal("connection replacement changed more than the API")
+	}
+	if !bytes.Equal(input, readTestFile(t, installation.Root, layout.NodeControllerConfiguration)) || !equalSnapshots(credentials, snapshotManagedCredentials(t, installation.Root)) {
+		t.Fatal("connection replacement changed other credentials or lost input")
+	}
+	if exists, err := managedFileExists(installation.Root, filepath.FromSlash(layout.NodeControllerPending)); err != nil || exists {
+		t.Fatal("committed replacement retained previous private keys")
+	}
+	pending.Phase = lifecycle.PhaseCommitting
+	resumedAfterCleanup, err := effects.PrepareNodeConnections(context.Background(), installed, "", "", pending)
+	defer resumedAfterCleanup.Clear()
+	if err != nil || resumedAfterCleanup.InputDigest != plan.InputDigest || effects.ApplyNodeConnectionsPhase(context.Background(), resumedAfterCleanup, lifecycle.PhaseCommitting) != nil {
+		t.Fatal("cleanup-before-journal crash cannot resume")
+	}
+	if runtimeBoundary.composeCalls != 1 {
+		t.Fatal("cleanup replay restarted the API")
+	}
+}
+
+func TestNodeControllerRejectsRebindingUntrustedCredentialsAndForeignRuntime(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("protected platform topology targets Linux")
+	}
+	for _, mode := range []string{"wrong installation", "bad credential", "runtime drift", "remove binding", "rebind endpoint", "wrong pending intent", "foreign file"} {
+		t.Run(mode, func(t *testing.T) {
+			installation, expectation := configuredPlatformStartFixture(t)
+			runtimeBoundary := newPlatformStartRuntime(installation, expectation)
+			runtimeBoundary.started = true
+			effects := &Effects{runtime: runtimeBoundary, validateController: func(nodeconfig.ControllerConfiguration) error { return nil }}
+			installed := installedPlanFrom(installation)
+			configuration := nodeconfig.EmptyController(installation.InstallationID)
+			configuration.Nodes = []nodeconfig.Connection{{BindingRef: "binding-a", TargetID: "target-a", Endpoint: "https://192.168.50.10:16443", IdentityFingerprint: "sha256:" + strings.Repeat("a", 64)}}
+			configuration.Certificate, configuration.PrivateKey, configuration.Trust = []byte("cert"), []byte("private-key"), []byte("trust")
+			encoded, _ := nodeconfig.EncodeController(configuration)
+			if err := replaceManagedExpected(installation.Root, filepath.FromSlash(layout.NodeControllerConfiguration), readTestFile(t, installation.Root, layout.NodeControllerConfiguration), encoded); err != nil {
+				t.Fatal(err)
+			}
+			expected, _ := effects.NodeConnectionsDigest(context.Background(), installed)
+			configuration.PrivateKey = []byte("new-private-key")
+			switch mode {
+			case "wrong installation":
+				configuration.InstallationID = "other"
+			case "bad credential":
+				effects.validateController = func(nodeconfig.ControllerConfiguration) error { return errors.New("secret not for output") }
+			case "runtime drift":
+				runtimeBoundary.resourceDriftService = "paas-worker"
+			case "remove binding":
+				configuration.Nodes = []nodeconfig.Connection{}
+				configuration.Certificate = nil
+				configuration.PrivateKey = nil
+				configuration.Trust = nil
+			case "rebind endpoint":
+				configuration.Nodes[0].Endpoint = "https://192.168.50.11:16443"
+			}
+			input, _ := nodeconfig.EncodeController(configuration)
+			private := t.TempDir()
+			_ = os.Chmod(private, 0o700)
+			path := filepath.Join(private, "input.json")
+			if os.WriteFile(path, input, 0o600) != nil {
+				t.Fatal("write private input")
+			}
+			before := readTestFile(t, installation.Root, layout.NodeControllerConfiguration)
+			plan, err := effects.PrepareNodeConnections(context.Background(), installed, path, expected, nil)
+			defer plan.Clear()
+			if mode == "wrong pending intent" || mode == "foreign file" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				plan.CommandID = "cmd-" + strings.Repeat("b", 32)
+				if err := effects.ApplyNodeConnectionsPhase(context.Background(), plan, lifecycle.PhaseStaging); err != nil {
+					t.Fatal(err)
+				}
+				if mode == "wrong pending intent" {
+					plan.CommandID = "cmd-" + strings.Repeat("c", 32)
+				} else {
+					if os.WriteFile(filepath.Join(installation.Root, filepath.FromSlash(layout.NodeControllerConfiguration)), []byte("foreign"), 0o600) != nil {
+						t.Fatal("write foreign configuration")
+					}
+					before = []byte("foreign")
+				}
+				err = effects.ApplyNodeConnectionsPhase(context.Background(), plan, lifecycle.PhaseConfiguring)
+			}
+			if err == nil || strings.Contains(err.Error(), "secret") || runtimeBoundary.composeCalls != 0 || !bytes.Equal(before, readTestFile(t, installation.Root, layout.NodeControllerConfiguration)) {
+				t.Fatal("rejected controller input changed state, started a provider or exposed details")
+			}
+		})
+	}
+}
 
 func TestCredentialRecoveryReadsOnlyBoundedPrivateRegularInput(t *testing.T) {
 	const source = `{"apiVersion":"installation.matrix.xiak.com/v1","kind":"PlatformCredentialRecoveryInput","commandId":"cmd-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","password":"temporary-Recovery1!"}`

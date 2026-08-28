@@ -6,6 +6,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	composeadapter "github.com/xiak/matrix/app/adapter/apphosting/compose"
 	nodehttps "github.com/xiak/matrix/app/adapter/node/https"
@@ -19,6 +20,24 @@ import (
 type composeRecoveryProjectInspector struct{}
 
 type nodeInstallationVerifier struct{}
+
+func (nodeInstallationVerifier) ValidateController(configuration nodeconfig.ControllerConfiguration) error {
+	credentials, err := nodehttps.NewCredentials(configuration.Certificate, configuration.PrivateKey, configuration.Trust)
+	if err != nil {
+		return err
+	}
+	for _, node := range configuration.Nodes {
+		client, err := nodehttps.New(nodehttps.Config{Endpoint: node.Endpoint,
+			Identity:     nodev1.Identity{InstallationID: configuration.InstallationID, ExecutionTargetID: node.TargetID},
+			ControllerID: configuration.ControllerID, BindingRef: node.BindingRef, ExpectedFingerprint: node.IdentityFingerprint,
+			Credentials: func() (nodehttps.Credentials, error) { return credentials, nil }})
+		if err != nil {
+			return err
+		}
+		client.Close()
+	}
+	return nil
+}
 
 func (nodeInstallationVerifier) Validate(config nodeconfig.Configuration, material nodecommand.Credentials) error {
 	node, err := nodehttps.NewCredentials(material.Certificate, material.PrivateKey, material.Trust)
@@ -124,7 +143,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 
 	platform, err := platformcommand.NewBackend(
-		localmachine.NewEffects(composeRecoveryProjectInspector{}),
+		localmachine.NewEffects(composeRecoveryProjectInspector{}, nodeInstallationVerifier{}.ValidateController),
 	)
 	if err != nil {
 		stop()

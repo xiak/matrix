@@ -63,6 +63,7 @@ type platformMount struct {
 
 type platformContainerInspection struct {
 	ID              string                  `json:"Id"`
+	RestartCount    uint64                  `json:"RestartCount"`
 	Name            string                  `json:"Name"`
 	Image           string                  `json:"Image"`
 	Config          platformContainerConfig `json:"Config"`
@@ -87,6 +88,7 @@ type platformContainerConfig struct {
 
 type platformContainerState struct {
 	Status    string `json:"Status"`
+	StartedAt string `json:"StartedAt"`
 	Running   bool   `json:"Running"`
 	ExitCode  int    `json:"ExitCode"`
 	OOMKilled bool   `json:"OOMKilled"`

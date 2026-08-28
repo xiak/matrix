@@ -32,6 +32,7 @@ const (
 	ActionStart              Action = "START"
 	ActionRotateCredentials  Action = "ROTATE_CREDENTIALS"
 	ActionRecoverCredentials Action = "RECOVER_CREDENTIALS"
+	ActionConfigureNodes     Action = "CONFIGURE_NODES"
 )
 
 type Phase string
@@ -264,7 +265,7 @@ func Advance(journal Journal, commandID string, next Phase, at time.Time) (Journ
 	}
 	execution.Phase = next
 	execution.UpdatedAt = at
-	if execution.Command.Action == ActionRotateCredentials {
+	if execution.Command.Action == ActionRotateCredentials || execution.Command.Action == ActionConfigureNodes {
 		execution.FailureCode = ""
 	}
 	journal.Version++
@@ -313,7 +314,7 @@ func Fail(journal Journal, commandID, failureCode string, at time.Time) (Journal
 		execution.Phase = PhaseCommitting
 		journal.Active = &execution
 		return journal, nil
-	case ActionRotateCredentials:
+	case ActionRotateCredentials, ActionConfigureNodes:
 		// Credential retirement is one-way. A failed attempt keeps the exact
 		// candidate intent for retry; it never restores the old trust set.
 		journal.Active = &execution
@@ -438,11 +439,16 @@ func validateCommand(command Command, node bool) error {
 	if len(workflow(command.Action, node)) == 0 {
 		return errors.New("installation action is unsupported for this root")
 	}
-	if command.Action != ActionRotateCredentials &&
+	if command.Action != ActionRotateCredentials && command.Action != ActionConfigureNodes &&
 		(command.ExpectedConfigurationDigest != "" || command.RevokePreviousCredentials) {
 		return errors.New("installation command contains unrelated credential input")
 	}
 	switch command.Action {
+	case ActionConfigureNodes:
+		if !digestPattern.MatchString(command.InputDigest) || !digestPattern.MatchString(command.ExpectedConfigurationDigest) ||
+			command.InputDigest == command.ExpectedConfigurationDigest || command.RevokePreviousCredentials || command.TargetReleaseID != "" || command.BackupID != "" || command.BackupDigest != "" {
+			return errors.New("node controller configuration input is invalid")
+		}
 	case ActionRecoverCredentials:
 		if !digestPattern.MatchString(command.InputDigest) || command.TargetReleaseID != "" ||
 			command.BackupID != "" || command.BackupDigest != "" {
@@ -514,7 +520,7 @@ func validateActionPrecondition(journal Journal, command Command) error {
 		if journal.CurrentReleaseID == "" || journal.PreviousRelease == "" {
 			return ErrPrecondition
 		}
-	case ActionVerify, ActionStatus, ActionBackup, ActionSupport, ActionStart, ActionRecoverCredentials:
+	case ActionVerify, ActionStatus, ActionBackup, ActionSupport, ActionStart, ActionRecoverCredentials, ActionConfigureNodes:
 		if journal.CurrentReleaseID == "" {
 			return ErrPrecondition
 		}
@@ -652,6 +658,8 @@ func workflow(action Action, node bool) []Phase {
 		}
 	}
 	switch action {
+	case ActionConfigureNodes:
+		return []Phase{PhaseStaging, PhaseConfiguring, PhaseStarting, PhaseVerifying, PhaseCommitting, PhaseReady}
 	case ActionRecoverCredentials:
 		return []Phase{PhaseStaging, PhaseRecoveringCredentials, PhaseCommitting, PhaseReady}
 	case ActionInstall:

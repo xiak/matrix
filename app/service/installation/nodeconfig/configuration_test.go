@@ -2,13 +2,104 @@ package nodeconfig
 
 import (
 	"encoding/json"
+	"fmt"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
 	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
+
+func TestControllerConfigurationIsPrivateClosedAndAppendOnly(t *testing.T) {
+	empty := EmptyController("mxi-" + strings.Repeat("a", 32))
+	initial, err := EncodeController(empty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded, err := DecodeController(initial); err != nil || !reflect.DeepEqual(decoded, empty) {
+		t.Fatal("empty controller did not round trip")
+	}
+	configured := empty
+	configured.Nodes = []Connection{{BindingRef: "binding-a", TargetID: "target-a", Endpoint: "https://192.168.5.10:16443", IdentityFingerprint: "sha256:" + strings.Repeat("b", 64)}}
+	configured.Certificate, configured.PrivateKey, configured.Trust = []byte("certificate-fixture"), []byte("private-fixture-key"), []byte("trust-fixture")
+	encoded, err := EncodeController(configured)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeController(encoded)
+	if err != nil || !reflect.DeepEqual(decoded, configured) {
+		t.Fatal("private controller did not round trip")
+	}
+	defer decoded.Clear()
+	if _, err := json.Marshal(configured); err == nil || strings.Contains(fmt.Sprintf("%v %+v %#v", configured, configured, configured), "private-fixture-key") {
+		t.Fatal("controller credentials were serialized or printed")
+	}
+	firstDigest, _ := ControllerDigest(configured)
+	decoded.PrivateKey[0] ^= 1
+	secondDigest, _ := ControllerDigest(decoded)
+	if firstDigest == secondDigest {
+		t.Fatal("controller commitment omitted the private credential")
+	}
+	if ValidateControllerUpdate(empty, configured) != nil {
+		t.Fatal("first connection rejected")
+	}
+	appended := configured
+	appended.Nodes = append(slices.Clone(configured.Nodes), Connection{BindingRef: "binding-b", TargetID: "target-b", Endpoint: "https://192.168.5.11:16443", IdentityFingerprint: "sha256:" + strings.Repeat("c", 64)})
+	if ValidateControllerUpdate(configured, appended) != nil {
+		t.Fatal("appended connection rejected")
+	}
+	for _, mutate := range []func(*ControllerConfiguration){
+		func(c *ControllerConfiguration) { c.InstallationID = "other" },
+		func(c *ControllerConfiguration) { c.ControllerID = "other" },
+		func(c *ControllerConfiguration) {
+			c.Nodes = []Connection{}
+			c.Certificate = nil
+			c.PrivateKey = nil
+			c.Trust = nil
+		},
+		func(c *ControllerConfiguration) { c.Nodes[0].TargetID = "other" },
+		func(c *ControllerConfiguration) { c.Nodes[0].BindingRef = "other" },
+		func(c *ControllerConfiguration) { c.Nodes[0].Endpoint = "https://192.168.5.12:16443" },
+		func(c *ControllerConfiguration) { c.Nodes[0].IdentityFingerprint = "sha256:" + strings.Repeat("d", 64) },
+	} {
+		candidate := configured
+		candidate.Nodes = slices.Clone(configured.Nodes)
+		mutate(&candidate)
+		if ValidateControllerUpdate(configured, candidate) == nil {
+			t.Fatal("controller replacement removed or rebound an existing identity")
+		}
+	}
+	for _, invalid := range []string{
+		"null", "{}", string(encoded) + "{}", string(encoded) + strings.Repeat(" ", MaximumControllerBytes),
+		strings.Replace(string(encoded), `"nodes":`, `"caPrivateKey":"forbidden","nodes":`, 1),
+		strings.Replace(string(encoded), `"controllerId":`, `"controllerId":"other","controllerId":`, 1),
+		strings.Replace(string(encoded), `"controllerId":`, `"ControllerId":`, 1),
+		strings.Replace(string(encoded), "https://192.168.5.10:16443", "https://8.8.8.8:16443", 1),
+		strings.Replace(string(encoded), "https://192.168.5.10:16443", "https://customer-dns:16443", 1),
+		strings.Replace(string(encoded), "https://192.168.5.10:16443", "https://192.168.5.10:16443?", 1),
+	} {
+		if value, err := DecodeController([]byte(invalid)); err == nil {
+			value.Clear()
+			t.Fatal("untrusted controller document admitted")
+		}
+	}
+	for _, mutate := range []func(*ControllerConfiguration){
+		func(c *ControllerConfiguration) { c.Nodes = nil },
+		func(c *ControllerConfiguration) { c.Nodes = append(c.Nodes, c.Nodes[0]) },
+		func(c *ControllerConfiguration) { c.Nodes = make([]Connection, MaximumConnections+1) },
+		func(c *ControllerConfiguration) { c.PrivateKey = nil },
+	} {
+		candidate := configured
+		candidate.Nodes = slices.Clone(configured.Nodes)
+		mutate(&candidate)
+		if ValidateController(candidate) == nil {
+			t.Fatal("ambiguous or incomplete controller admitted")
+		}
+	}
+}
 
 func TestEnrollmentIsClosedAndKeepsCollectorLocal(t *testing.T) {
 	root := t.TempDir()

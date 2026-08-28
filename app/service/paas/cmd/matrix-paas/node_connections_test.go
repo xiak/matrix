@@ -25,6 +25,7 @@ import (
 	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	nodehttps "github.com/xiak/matrix/app/adapter/node/https"
+	"github.com/xiak/matrix/app/service/installation/nodeconfig"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/executionadmission"
 )
 
@@ -50,7 +51,7 @@ func TestNodeConnectionsAreProtectedClosedInstallationInput(t *testing.T) {
 			t.Fatalf("bad node input exposed details or was accepted: %v", err)
 		}
 	}
-	oversized := nodeConnections{InstallationID: "installation-a", ControllerID: "controller-a", Nodes: make([]nodeConnection, executionadmission.MaximumTargets+1)}
+	oversized := map[string]any{"apiVersion": nodeconfig.APIVersion, "kind": nodeconfig.ControllerKind, "installationId": "installation-a", "controllerId": "controller-a", "nodes": make([]nodeconfig.Connection, executionadmission.MaximumTargets+1)}
 	document, err := json.Marshal(oversized)
 	if err != nil {
 		t.Fatal(err)
@@ -106,14 +107,22 @@ func TestNodeCredentialReloadKeepsTheAdmittedMappingAndNeverFallsBack(t *testing
 	server.Config.ErrorLog = log.New(io.Discard, "", 0)
 	server.StartTLS()
 	defer server.Close()
-	configuration := nodeConnections{InstallationID: identity.InstallationID, ControllerID: "controller-a",
-		CertificateFile: first.certificate, PrivateKeyFile: first.key, TrustFile: trustFile,
-		Nodes: []nodeConnection{{BindingRef: "binding-a", TargetID: identity.ExecutionTargetID, Endpoint: server.URL,
+	read := func(path string) []byte {
+		t.Helper()
+		value, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	configuration := nodeconfig.ControllerConfiguration{APIVersion: nodeconfig.APIVersion, Kind: nodeconfig.ControllerKind, InstallationID: identity.InstallationID, ControllerID: "controller-a",
+		Certificate: read(first.certificate), PrivateKey: read(first.key), Trust: trust,
+		Nodes: []nodeconfig.Connection{{BindingRef: "binding-a", TargetID: identity.ExecutionTargetID, Endpoint: server.URL,
 			IdentityFingerprint: "sha256:" + strings.Repeat("a", 64)}}}
 	path := filepath.Join(root, "connections.json")
-	write := func(value nodeConnections) {
+	write := func(value nodeconfig.ControllerConfiguration) {
 		t.Helper()
-		document, err := json.Marshal(value)
+		document, err := nodeconfig.EncodeController(value)
 		if err != nil || os.WriteFile(path, document, 0o600) != nil {
 			t.Fatal("write protected connection fixture")
 		}
@@ -144,13 +153,13 @@ func TestNodeCredentialReloadKeepsTheAdmittedMappingAndNeverFallsBack(t *testing
 		}
 	}
 	observe(first.serial)
-	configuration.CertificateFile, configuration.PrivateKeyFile = second.certificate, second.key
+	configuration.Certificate, configuration.PrivateKey = read(second.certificate), read(second.key)
 	write(configuration)
 	observe(second.serial)
-	for _, mode := range []string{"installation", "controller", "target", "binding", "endpoint", "fingerprint", "missing key", "wrong credential role", "malformed"} {
+	for _, mode := range []string{"installation", "controller", "target", "binding", "endpoint", "fingerprint", "missing key", "wrong credential role", "untrusted signature", "malformed"} {
 		t.Run(mode, func(t *testing.T) {
 			changed := configuration
-			changed.Nodes = append([]nodeConnection{}, configuration.Nodes...)
+			changed.Nodes = append([]nodeconfig.Connection{}, configuration.Nodes...)
 			switch mode {
 			case "installation":
 				changed.InstallationID = "other-installation"
@@ -165,11 +174,22 @@ func TestNodeCredentialReloadKeepsTheAdmittedMappingAndNeverFallsBack(t *testing
 			case "fingerprint":
 				changed.Nodes[0].IdentityFingerprint = "sha256:" + strings.Repeat("c", 64)
 			case "missing key":
-				changed.PrivateKeyFile = filepath.Join(root, "missing-private-key")
+				changed.PrivateKey = []byte("not a private key")
 			case "wrong credential role":
-				changed.CertificateFile, changed.PrivateKeyFile = other.certificate, other.key
+				changed.Certificate, changed.PrivateKey = read(other.certificate), read(other.key)
+			case "untrusted signature":
+				block, _ := pem.Decode(changed.Certificate)
+				block.Bytes[len(block.Bytes)-1] ^= 1
+				changed.Certificate = pem.EncodeToMemory(block)
 			}
 			write(changed)
+			if mode == "missing key" || mode == "wrong credential role" || mode == "untrusted signature" {
+				_, closeInvalid, err := loadNodeBindings(path, identity.InstallationID)
+				closeInvalid()
+				if err == nil {
+					t.Fatal("invalid controller material was accepted at process startup")
+				}
+			}
 			if mode == "malformed" && os.WriteFile(path, []byte(`{"unrecognized":true}`), 0o600) != nil {
 				t.Fatal("write malformed fixture")
 			}

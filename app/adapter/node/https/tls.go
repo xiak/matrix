@@ -199,6 +199,18 @@ func clientTLS(credentials Credentials, identity nodev1.Identity, controllerID s
 	if err != nil || !credentials.validFor(ownURI, x509.ExtKeyUsageClientAuth) {
 		return nil, errTLSIdentity
 	}
+	intermediates := x509.NewCertPool()
+	for _, encoded := range credentials.certificate.Certificate[1:] {
+		certificate, err := x509.ParseCertificate(encoded)
+		if err != nil {
+			return nil, errTLSIdentity
+		}
+		intermediates.AddCert(certificate)
+	}
+	if _, err := credentials.certificate.Leaf.Verify(x509.VerifyOptions{Roots: credentials.roots,
+		Intermediates: intermediates, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}); err != nil {
+		return nil, errTLSIdentity
+	}
 	peerURI, err := nodev1.NodeURI(identity)
 	if err != nil {
 		return nil, errTLSIdentity

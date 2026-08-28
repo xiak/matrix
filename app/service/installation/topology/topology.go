@@ -77,9 +77,10 @@ func contractDescription() contract {
 		Name:     "matrix-00000000000000000000000000000000",
 		Services: compileServices(manifest, images, options),
 		Networks: map[string]networkConfig{
-			"control": {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-control")},
-			"edge":    {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-edge")},
-			"web":     {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-web")},
+			"control":    {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-control")},
+			"edge":       {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-edge")},
+			"web":        {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-web")},
+			"management": {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-management")},
 		},
 	}
 	return contract{
@@ -111,9 +112,10 @@ func Compile(manifest release.Manifest, options Options) (Result, error) {
 		Name:     "matrix-" + strings.TrimPrefix(options.InstallationID, "mxi-"),
 		Services: compileServices(manifest, images, options),
 		Networks: map[string]networkConfig{
-			"control": {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-control")},
-			"edge":    {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-edge")},
-			"web":     {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-web")},
+			"control":    {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-control")},
+			"edge":       {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-edge")},
+			"web":        {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-web")},
+			"management": {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-management")},
 		},
 	}
 	content, err := json.Marshal(document)
@@ -333,7 +335,7 @@ func compileServices(
 	iamAudit.DependsOn = healthy("postgres", "audit")
 
 	paasAPI := service(
-		"paas-api", "paas", images["paas"], []string{"control"}, []string{"/matrix/bin/matrix-paas"},
+		"paas-api", "paas", images["paas"], []string{"control", "management"}, []string{"/matrix/bin/matrix-paas"},
 		"1.0", "768M", "http://127.0.0.1:8080/ready",
 	)
 	paasAPI.Environment = map[string]string{
@@ -344,10 +346,12 @@ func compileServices(
 		"MATRIX_PAAS_SERVICE_CREDENTIAL_FILE":      "/run/matrix/paas-iam-credential",
 		"MATRIX_PAAS_VERIFICATION_ARTIFACT_DIGEST": verificationArtifactDigest(manifest),
 		"MATRIX_PAAS_LISTEN_ADDRESS":               "0.0.0.0:8080",
+		"MATRIX_PAAS_NODE_CONNECTIONS_FILE":        "/run/matrix/node-controller/configuration.json",
 	}
 	paasAPI.Volumes = []mount{
 		bind(paasAPIDSN, "/run/matrix/paas-api-dsn", true),
 		bind(paasIAMCredential, "/run/matrix/paas-iam-credential", true),
+		bind(path.Join(root, layout.NodeControllerDirectory), "/run/matrix/node-controller", true),
 	}
 	paasAPI.Tmpfs = append(paasAPI.Tmpfs, "/var/lib/docker:rw,noexec,nosuid,size=16m")
 	paasAPI.DependsOn = healthy("postgres", "iam")

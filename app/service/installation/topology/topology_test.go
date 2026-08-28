@@ -48,7 +48,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	if !ok {
 		t.Fatal("compiled topology has no networks object")
 	}
-	expectedNetworks := map[string]bool{"control": true, "edge": false, "web": true}
+	expectedNetworks := map[string]bool{"control": true, "edge": false, "web": true, "management": false}
 	actualNetworks := make([]string, 0, len(networks))
 	for name, raw := range networks {
 		network, valid := raw.(map[string]any)
@@ -64,8 +64,31 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 		actualNetworks = append(actualNetworks, name)
 	}
 	slices.Sort(actualNetworks)
-	if !slices.Equal(actualNetworks, []string{"control", "edge", "web"}) {
+	if !slices.Equal(actualNetworks, []string{"control", "edge", "management", "web"}) {
 		t.Fatalf("compiled networks = %v", actualNetworks)
+	}
+	controllerMounts := 0
+	for name, raw := range services {
+		service := raw.(map[string]any)
+		mounts, _ := service["volumes"].([]any)
+		for _, rawMount := range mounts {
+			mount := rawMount.(map[string]any)
+			if mount["source"] == path.Join(options.Root, layout.NodeControllerDirectory) {
+				controllerMounts++
+				if name != "paas-api" || mount["target"] != "/run/matrix/node-controller" || mount["read_only"] != true {
+					t.Fatal("node controller material crossed its process boundary")
+				}
+			}
+			if mount["source"] == path.Join(options.Root, layout.NodeControllerPending) {
+				t.Fatal("pending old credentials were mounted into a service")
+			}
+		}
+	}
+	if controllerMounts != 1 {
+		t.Fatal("controller configuration lacks exactly one directory mount")
+	}
+	if services["paas-api"].(map[string]any)["environment"].(map[string]any)["MATRIX_PAAS_NODE_CONNECTIONS_FILE"] != "/run/matrix/node-controller/configuration.json" {
+		t.Fatal("PaaS does not consume the signed controller mount")
 	}
 
 	portCount := 0
@@ -100,6 +123,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 		"paas-api": {
 			"MATRIX_PAAS_DATABASE_DSN_FILE", "MATRIX_PAAS_IAM_ENDPOINT",
 			"MATRIX_PAAS_INSTALLATION_ID", "MATRIX_PAAS_LISTEN_ADDRESS",
+			"MATRIX_PAAS_NODE_CONNECTIONS_FILE",
 			"MATRIX_PAAS_RELEASE_ID", "MATRIX_PAAS_SERVICE_CREDENTIAL_FILE",
 			"MATRIX_PAAS_VERIFICATION_ARTIFACT_DIGEST",
 		},
@@ -165,6 +189,9 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			}
 		} else if slices.Contains(actualServiceNetworks, "edge") {
 			t.Fatalf("service %q can join the northbound edge network", name)
+		}
+		if slices.Contains(actualServiceNetworks, "management") != (name == "paas-api") {
+			t.Fatalf("service %q crosses the node management boundary", name)
 		}
 		labels, ok := service["labels"].(map[string]any)
 		if !ok || labels["com.xiak.matrix.managed"] != "true" ||

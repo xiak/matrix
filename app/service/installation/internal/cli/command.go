@@ -98,7 +98,7 @@ func NewCommand(streams Streams, backend Backend) (*cobra.Command, error) {
 	root.AddCommand(platform)
 	for _, action := range []lifecycle.Action{lifecycle.ActionInstall, lifecycle.ActionVerify,
 		lifecycle.ActionStatus, lifecycle.ActionBackup, lifecycle.ActionUpgrade,
-		lifecycle.ActionRollback, lifecycle.ActionRecover, lifecycle.ActionRecoverCredentials, lifecycle.ActionSupport} {
+		lifecycle.ActionRollback, lifecycle.ActionRecover, lifecycle.ActionRecoverCredentials, lifecycle.ActionConfigureNodes, lifecycle.ActionSupport} {
 		platform.AddCommand(newLifecycleCommand(streams.Out, backend, SubjectPlatform, action, &format))
 	}
 	node := &cobra.Command{
@@ -159,6 +159,10 @@ func newLifecycleCommand(
 func bindCommandFlags(flags *pflag.FlagSet, subject Subject, action lifecycle.Action, options *commandOptions) {
 	flags.StringVar(&options.root, "root", "", "absolute Matrix installation root")
 	switch action {
+	case lifecycle.ActionConfigureNodes:
+		flags.StringVar(&options.configuration, "configuration", "", "protected node controller configuration file")
+		flags.StringVar(&options.expectedConfigurationDigest, "expected-configuration-digest", "", "current configuration digest reported by platform status")
+		flags.BoolVar(&options.resume, "resume", false, "resume only the sealed pending node configuration")
 	case lifecycle.ActionRecoverCredentials:
 		flags.StringVar(&options.recoveryInput, "recovery-input", "", "protected original-primary credential recovery request file")
 		flags.BoolVar(&options.resume, "resume", false, "resume the exact sealed credential recovery without new input")
@@ -186,6 +190,11 @@ func validateCommandFlags(subject Subject, action lifecycle.Action, options *com
 		return errors.New("installation root is required")
 	}
 	switch action {
+	case lifecycle.ActionConfigureNodes:
+		if subject != SubjectPlatform || (options.resume && (options.configuration != "" || options.expectedConfigurationDigest != "")) ||
+			(!options.resume && (strings.TrimSpace(options.configuration) == "" || !safeDigestPattern.MatchString(options.expectedConfigurationDigest))) {
+			return errors.New("node configuration and expected digest, or explicit resume, are required")
+		}
 	case lifecycle.ActionRecoverCredentials:
 		if subject != SubjectPlatform || options.resume == (strings.TrimSpace(options.recoveryInput) != "") ||
 			(options.resume && options.recoveryInput != "") {
@@ -251,6 +260,8 @@ func commandDescription(subject Subject, action lifecycle.Action) string {
 		return "Recover from a verified Matrix platform backup"
 	case lifecycle.ActionRecoverCredentials:
 		return "Recover the original platform administrator's credentials without restoring authority"
+	case lifecycle.ActionConfigureNodes:
+		return "Configure protected node connections without admitting or relocating hosts"
 	case lifecycle.ActionSupport:
 		return "Write sanitized Matrix support evidence"
 	default:
