@@ -239,8 +239,9 @@ changed policies fail before runtime replacement. Readiness includes the
 verified persistent registration. Replay must recover an interrupted, already
 configured node installation using its original command and staged release;
 missing or conflicting state is not permission to create another installation.
-Rollback removes only its own registration while retaining receipts and
-workloads. No customer package or firewall is changed. Full local guest boot,
+Failed-install rollback removes only its own registration while retaining
+receipts and workloads; release rollback retains the registration. No customer
+package or firewall is changed. Full local guest boot,
 tamper rejection, interruption/replay and unchanged retained state are required
 before accepting this slice.
 
@@ -548,7 +549,8 @@ private key or Docker socket. Systemd owns and removes its private runtime
 directory when the service stops. Real stop/restart and cleanup assertions prove
 that no mount placeholder remains; a pre-existing directory is not adopted by
 name. Local effect gates retain executor files and credentials during rollback;
-rollback authenticates every service before removing its exact boot links.
+failed-install rollback authenticates every service before removing its exact
+boot links.
 
 Enrollment/security regressions cover closed input, overlapping IP aliases,
 exact certificate roles, mutual trust, expiry and certificate address binding.
@@ -673,10 +675,34 @@ was restarted. This observation fixture reserved every workload slot and placed
 no application. Its VM network was not externally disconnected, so it is not
 Gate D, a signed platform/node upgrade pair, or remote application acceptance.
 
+The signed node release-transition implementation `cd271c5` and corrected
+fixture `20c41b8` introduce runtime revision 3 without changing the platform
+database profile. Existing lifecycle, journal, CLI and native-effect gates
+cover closed source/target ownership, interrupted activation and manager reload,
+unavailable original media, source recovery, completed replay and retention of
+credentials rotated after upgrade. All three jobs passed on the exact gate
+commit in [independent CI](https://github.com/xiak/matrix/actions/runs/33172147348),
+including signed native transitions and the real-authority node variant.
+
+The same native gate ran successfully on a task-owned Debian/ext4 VM with
+systemd 257.7 and Docker 28.5.1. Signed A/B came from the fixed production
+source and used a private staged directory. The one-CPU, 768 MiB, 128-task
+test helper denied non-loopback IP traffic; the preloaded PostgreSQL 18 fixture
+had no network, port or image pull. Actual installer interruption, resume after
+media removal, B boot-entry execution, complete credential replacement on B,
+interrupted rollback and failed-candidate automatic source recovery passed.
+Workload identity/start time/restart count/SQL data, executor marker and latest
+credential commitments were retained. Only the test-owned native services
+were replaced. Its temporary services and workload were removed by the gate;
+the VM boot ID and pre-existing node/collector PIDs and start times were
+unchanged, with no blocked D-state tasks afterwards. The VM itself was not
+externally disconnected. These same-source A/B results do not prove historical
+N-1, runtime-2 admission or the combined offline platform/node release.
+
 Next in P3-1:
-prove the runtime-revision-3 signed node upgrade/rollback slice, complete the
-platform/node offline lifecycle and separately prove first platform authorization
-for an older installation, before remote application delivery.
+complete the platform/node offline lifecycle with a real supported predecessor
+and separately prove first platform authorization for an older installation,
+before remote application delivery.
 P3-1 and the complete Phase 3 release remain unaccepted.
 Retained-data schema migration alone does not establish runnable N-1
 compatibility; the complete offline lifecycle gate must still prove an actual
