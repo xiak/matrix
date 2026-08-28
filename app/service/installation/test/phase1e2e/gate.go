@@ -42,12 +42,13 @@ const (
 )
 
 type gate struct {
-	config          options
-	releases        releasePair
-	edge            *edgeClient
-	sensitive       [][]byte
-	workloadProject string
-	workloadRunning string
+	config                 options
+	releases               releasePair
+	edge                   *edgeClient
+	sensitive              [][]byte
+	workloadProject        string
+	workloadRunning        string
+	controllerConfigDigest string
 }
 
 func newGate(config options, releases releasePair) *gate {
@@ -670,6 +671,14 @@ func (value *gate) repeatedStatusAndVerify(
 		result, err := runMX(ctx, bundle, "status", []string{"--root", value.config.root}, value.pathLeakage())
 		if err != nil || result.ReleaseID != releaseID || result.PreviousID != previousID || result.Changed {
 			return fail("repeated-status")
+		}
+		if paasv1.ValidateDigest("configurationDigest", result.ConfigurationDigest) != nil {
+			return fail("status-configuration-commitment")
+		}
+		if value.controllerConfigDigest == "" {
+			value.controllerConfigDigest = result.ConfigurationDigest
+		} else if value.controllerConfigDigest != result.ConfigurationDigest {
+			return fail("retained-controller-configuration-commitment")
 		}
 	}
 	after, err := readJournal(ctx, value.config.root)

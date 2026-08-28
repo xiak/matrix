@@ -88,12 +88,13 @@ type mxEnvelope struct {
 }
 
 type mxResult struct {
-	State         string `json:"state"`
-	ReleaseID     string `json:"releaseId,omitempty"`
-	PreviousID    string `json:"previousId,omitempty"`
-	BackupID      string `json:"backupId,omitempty"`
-	Changed       bool   `json:"changed"`
-	CorrelationID string `json:"correlationId,omitempty"`
+	State               string `json:"state"`
+	ReleaseID           string `json:"releaseId,omitempty"`
+	PreviousID          string `json:"previousId,omitempty"`
+	BackupID            string `json:"backupId,omitempty"`
+	Changed             bool   `json:"changed"`
+	CorrelationID       string `json:"correlationId,omitempty"`
+	ConfigurationDigest string `json:"configurationDigest,omitempty"`
 }
 
 type mxFailure struct {

@@ -164,6 +164,27 @@ func TestReleasePairRequiresCompatibleImmediatePredecessor(t *testing.T) {
 	}
 }
 
+func TestMXStatusConsumesConfigurationDigestAndRejectsUnknownFields(t *testing.T) {
+	for _, scenario := range []struct {
+		name, addition string
+		accept         bool
+	}{
+		{name: "known configuration commitment", accept: true},
+		{name: "unknown result material", addition: `,"password":"forbidden"`},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			content := []byte(`{"apiVersion":"cli.matrix.xiak.com/v1","kind":"PlatformCommandResult","action":"STATUS","status":"SUCCEEDED","result":{"state":"READY","releaseId":"release-a","changed":false,"configurationDigest":"` + fixedDigest("controller-input") + `"` + scenario.addition + `}}`)
+			var envelope mxEnvelope
+			if err := decodeOne(content, &envelope); (err == nil) != scenario.accept {
+				t.Fatalf("status contract accepted=%t, want %t", err == nil, scenario.accept)
+			}
+			if scenario.accept && envelope.Result.ConfigurationDigest != fixedDigest("controller-input") {
+				t.Fatal("status decoder discarded the protected configuration commitment")
+			}
+		})
+	}
+}
+
 func optionsFromEnvironment() (options, error) {
 	phase := os.Getenv("MATRIX_PHASE1_E2E_PHASE")
 	if phase != "run" && phase != "after-restart" {
