@@ -506,7 +506,11 @@ func nativeStartupUnit(startup nativeStartup) []byte {
 }
 
 func nativeNodeServices(plan nodecommand.Plan) []nativeService {
-	commitment := sha256Hex([]byte(plan.Binding.ConfigurationDigest + "\x00" + plan.Bundle.ManifestSHA256))
+	// The journal authenticates credential bytes at every lifecycle boundary.
+	// Native ownership binds the immutable enrollment and signed release, so a
+	// credential change retains the same boot unit and exact service owners.
+	configuration, _ := json.Marshal(plan.Configuration)
+	ownership := sha256Hex(append(configuration, []byte("\x00"+plan.Bundle.ManifestSHA256)...))
 	collectorName, _ := nodeconfig.ServiceName(plan.Configuration.Identity, true)
 	nodeName, _ := nodeconfig.ServiceName(plan.Configuration.Identity, false)
 	identity := strings.TrimSuffix(strings.TrimPrefix(collectorName, "matrix-collector-"), ".service")
@@ -521,7 +525,7 @@ func nativeNodeServices(plan nodecommand.Plan) []nativeService {
 		}
 	}
 	collector := nativeService{
-		name: collectorName, description: "Matrix collector " + commitment, executable: collectorExecutable,
+		name: collectorName, description: "Matrix collector " + ownership, executable: collectorExecutable,
 		collector: true, user: "mxn-" + identity[:16], policy: nodeconfig.Policy(true), listenAddress: collectorAddress,
 		runtimeDirectories: []string{collectorRuntimeDirectory},
 		arguments: []string{"--web.listen-address=" + collectorAddress,
@@ -541,7 +545,7 @@ func nativeNodeServices(plan nodecommand.Plan) []nativeService {
 		binds: []nativeBind{{Source: filepath.Join(plan.Root, filepath.FromSlash(layout.CollectorExecutable)), Destination: collectorExecutable}},
 	}
 	node := nativeService{
-		name: nodeName, description: "Matrix node " + commitment,
+		name: nodeName, description: "Matrix node " + ownership,
 		executable: filepath.Join(plan.Root, filepath.FromSlash(layout.ReleaseDirectory(plan.Bundle.Manifest.Release.ID)), "bin", "matrix-node-agent"),
 		policy:     nodeconfig.Policy(false), user: "root", listenAddress: plan.Configuration.ListenAddress,
 		environment: []string{"MATRIX_NODE_CONFIGURATION_FILE=" + filepath.Join(plan.Root, filepath.FromSlash(layout.NodeConfiguration)),

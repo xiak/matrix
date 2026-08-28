@@ -115,6 +115,14 @@ func TestNodeCredentialReplacementResumesMixedFilesAndRetiresOnlyItsSnapshots(t 
 		t.Fatal(err)
 	}
 	candidate.Previous, candidate.RevokePreviousCredentials = &previous, true
+	if !bytes.Equal(nativeStartupUnit(nativeNodeStartup(previous)), nativeStartupUnit(nativeNodeStartup(candidate))) {
+		t.Fatal("credential replacement would change immutable boot ownership")
+	}
+	for index, service := range nativeNodeServices(previous) {
+		if service.description != nativeNodeServices(candidate)[index].description {
+			t.Fatal("credential replacement would reject its own existing service owner")
+		}
+	}
 	if err := effects.ApplyPhase(context.Background(), candidate, lifecycle.PhaseStaging); err != nil {
 		t.Fatal(err)
 	}
