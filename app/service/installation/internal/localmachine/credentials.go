@@ -18,6 +18,26 @@ import (
 
 const maximumCredentialFile = 16 * 1024
 
+// Recovery input is an explicitly selected private file, never a directory
+// adopted by the installation. Its owned, private parent and exact regular
+// file are checked through the existing protected filesystem boundary.
+func readCredentialRecoveryInput(path string) (platformcommand.CredentialRecoveryInput, error) {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path || len(path) > 4096 ||
+		strings.ContainsAny(path, "\x00\r\n") || validateManagedRoot(filepath.Dir(path)) != nil {
+		return platformcommand.CredentialRecoveryInput{}, platformcommand.ErrEffectVerification
+	}
+	content, err := readManagedFile(filepath.Dir(path), filepath.Base(path), platformcommand.MaximumCredentialRecoveryInputBytes)
+	if err != nil {
+		return platformcommand.CredentialRecoveryInput{}, platformcommand.ErrEffectVerification
+	}
+	defer clear(content)
+	input, err := platformcommand.DecodeCredentialRecoveryInput(content)
+	if err != nil {
+		return platformcommand.CredentialRecoveryInput{}, platformcommand.ErrEffectVerification
+	}
+	return input, nil
+}
+
 type stagedCredentials struct {
 	administrator []byte
 	services      map[iamv1.ServicePurpose][]byte
@@ -63,6 +83,9 @@ func stageInstallation(plan platformcommand.InstallPlan, entropy io.Reader) erro
 		return err
 	}
 	defer credentials.clear()
+	if err := ensureLocalCredentialRecoveryAuthority(plan.Root, plan.InstallationID, entropy); err != nil {
+		return err
+	}
 	serviceFiles := map[iamv1.ServicePurpose][]string{
 		iamv1.ServiceIAM:                  {layout.IAMAuditCredential},
 		iamv1.ServicePaaS:                 {layout.PaaSIAMCredential, layout.PaaSAuditCredential},
@@ -116,6 +139,7 @@ func stageInstallation(plan platformcommand.InstallPlan, entropy io.Reader) erro
 	}{
 		{path: layout.IAMAPI, role: "matrix_iam_api_login"},
 		{path: layout.IAMWorker, role: "matrix_iam_worker_login"},
+		{path: layout.IAMCredentialRecovery, role: "matrix_iam_credential_recovery_login"},
 		{path: layout.AuditRuntime, role: "matrix_audit_runtime_login"},
 		{path: layout.PaaSAPI, role: "matrix_paas_api_login"},
 		{path: layout.PaaSWorker, role: "matrix_paas_worker_login"},
@@ -203,6 +227,82 @@ func credentialsFromBootstrap(document iamv1.BootstrapDocument) stagedCredential
 		result.services[service.Purpose] = service.Credential.CopyBytes()
 	}
 	return result
+}
+
+// The local issuing key is installation-owned, not a service credential or
+// caller-selected recovery target. Replay preserves it and the bootstrap bytes.
+func ensureLocalCredentialRecoveryAuthority(root, installationID string, entropy io.Reader) error {
+	scope, err := localCredentialRecoveryScope(root, installationID)
+	if err != nil {
+		return err
+	}
+	exists, err := managedFileExists(root, filepath.FromSlash(layout.IAMLocalRecoveryAuthority))
+	if err != nil {
+		return platformcommand.ErrEffectVerification
+	}
+	if exists {
+		_, err := readLocalCredentialRecoveryAuthority(root, installationID)
+		return err
+	}
+	key, err := randomCredential(entropy, "", false)
+	if err != nil {
+		return platformcommand.ErrEffectUnavailable
+	}
+	secret, err := iamv1.NewSecret(key)
+	key = ""
+	if err != nil {
+		return platformcommand.ErrEffectVerification
+	}
+	authority := iamv1.LocalCredentialRecoveryAuthority{
+		APIVersion: iamv1.APIVersion, Kind: "LocalCredentialRecoveryAuthority",
+		Purpose: iamv1.LocalCredentialRecoveryPurpose, Scope: scope, CapabilityKey: secret,
+	}
+	encoded, err := iamv1.EncodeLocalCredentialRecoveryAuthority(authority)
+	if err != nil {
+		return platformcommand.ErrEffectVerification
+	}
+	defer clear(encoded)
+	if writeManagedOnce(root, filepath.FromSlash(layout.IAMLocalRecoveryAuthority), encoded) != nil {
+		return platformcommand.ErrEffectConflict
+	}
+	return nil
+}
+
+func readLocalCredentialRecoveryAuthority(root, installationID string) (iamv1.LocalCredentialRecoveryAuthority, error) {
+	scope, err := localCredentialRecoveryScope(root, installationID)
+	if err != nil {
+		return iamv1.LocalCredentialRecoveryAuthority{}, err
+	}
+	encoded, err := readManagedFile(root, filepath.FromSlash(layout.IAMLocalRecoveryAuthority), iamv1.MaxLocalCredentialRecoveryBytes)
+	if err != nil {
+		return iamv1.LocalCredentialRecoveryAuthority{}, platformcommand.ErrEffectVerification
+	}
+	defer clear(encoded)
+	authority, err := iamv1.DecodeLocalCredentialRecoveryAuthority(bytes.NewReader(encoded))
+	if err != nil || authority.Scope != scope {
+		return iamv1.LocalCredentialRecoveryAuthority{}, platformcommand.ErrEffectVerification
+	}
+	return authority, nil
+}
+
+func localCredentialRecoveryScope(root, installationID string) (iamv1.LocalCredentialRecoveryScope, error) {
+	encoded, err := readManagedFile(root, filepath.FromSlash(layout.IAMBootstrap), maximumCredentialFile)
+	if err != nil {
+		return iamv1.LocalCredentialRecoveryScope{}, platformcommand.ErrEffectVerification
+	}
+	defer clear(encoded)
+	document, err := iamv1.DecodeBootstrapDocument(bytes.NewReader(encoded))
+	if err != nil || document.InstallationID != installationID {
+		return iamv1.LocalCredentialRecoveryScope{}, platformcommand.ErrEffectVerification
+	}
+	digest, err := iamv1.BootstrapDigest(document)
+	if err != nil {
+		return iamv1.LocalCredentialRecoveryScope{}, platformcommand.ErrEffectVerification
+	}
+	return iamv1.LocalCredentialRecoveryScope{
+		InstallationID: document.InstallationID, BootstrapDigest: digest,
+		OrganizationID: document.Organization.ID, PrincipalID: document.Administrator.ID,
+	}, nil
 }
 
 func (credentials *stagedCredentials) clear() {

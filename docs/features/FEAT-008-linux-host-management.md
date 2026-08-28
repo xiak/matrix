@@ -159,12 +159,13 @@ Operations have distinct lifecycles.
 
 The signed release manifest names IAM, Audit and PaaS schema versions
 individually. New bundles use manifest v2 and the closed authority profile;
-the current source requires IAM 3, Audit 2 and PaaS 2. A separate contract
+the current source requires IAM 4, Audit 3 and PaaS 2. A separate contract
 revision binds the compatible function/wire boundary: changing a return-column
-shape without changing schema numbers still changes this profile. Revision 3
-includes the seven-column IAM Audit claim and credential-generation/password-
-session contracts owned by [FEAT-006](FEAT-006-platform-authorities.md), while
-retaining event-bound producer proof and host admission. Readiness and retained-
+shape without changing schema numbers still changes this profile. Revision 4
+includes purpose-only local credential recovery and its closed SYSTEM Audit
+fact, retaining the seven-column IAM Audit claim and credential-generation/
+password-session contracts owned by [FEAT-006](FEAT-006-platform-authorities.md),
+event-bound producer proof and host admission. Readiness and retained-
 data gates verify the exact function shapes. Equal revisions
 with different authority schema tuples still cannot admit a transition.
 The published Phase 1 v1 manifest and
@@ -560,8 +561,20 @@ Go suite, vet, module verification and Linux test build.
 No authority database profile changed, and no remote machine or shared engine
 was restarted. A signed platform/node upgrade and rollback pair remains unproved.
 
+The local original-primary credential recovery consumer now uses the signed
+IAM one-shot executable, protected intent files and the existing installation
+journal. Public CLI/backend tests cover exact retry, unknown outcomes,
+definitive rejection and one-way completion; local-effect tests reject
+substituted process ownership, preserve in-flight recovery and authenticate
+temporary-file cleanup. The authority transaction/process evidence is owned by
+[FEAT-006](FEAT-006-platform-authorities.md). The existing installed-runtime
+gate now includes recovery, old-session denial, completed replay, unchanged
+service/workload identities and the exact SYSTEM Audit fact, but that signed
+4/3/2 revision-4 exercise and actual installer crash/reply-loss recovery have
+not yet run on this combined source. The recovery slice remains unaccepted.
+
 Next in P3-1:
-the local original-primary credential recovery slice, followed by the signed
+complete the signed original-primary recovery exercise, then the signed
 platform/node offline lifecycle and separately proven first platform
 authorization for an older installation, before remote application delivery.
 P3-1 and the complete Phase 3 release remain unaccepted.

@@ -321,7 +321,7 @@ func actionRules() (eventRules []any, recordRules []any) {
 		}
 		thenRequired := []string{}
 		target := thenProperties["target"].(object)
-		if action == auditv1.ActionIAMTenantAdministratorRecovered {
+		if action == auditv1.ActionIAMTenantAdministratorRecovered || action == auditv1.ActionIAMInstallationPrimaryCredentialsRecovered {
 			target["required"] = []string{"kind", "tenantId"}
 		} else {
 			target["properties"].(object)["tenantId"] = false
@@ -330,6 +330,12 @@ func actionRules() (eventRules []any, recordRules []any) {
 			thenRequired = append(thenRequired, "installationId")
 			thenProperties["tenantId"] = false
 			thenProperties["actor"] = object{"properties": object{"type": object{"const": string(auditv1.ActorUser)}}}
+			if action == auditv1.ActionIAMInstallationPrimaryCredentialsRecovered {
+				thenProperties["actor"] = object{"properties": object{
+					"type": object{"const": string(auditv1.ActorSystem)},
+					"id":   object{"const": "iam-local-recovery"},
+				}}
+			}
 		} else {
 			thenRequired = append(thenRequired, "tenantId")
 			thenProperties["installationId"] = false

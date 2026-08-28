@@ -33,6 +33,7 @@ var platformMigrations = []migrationDefinition{
 			{layout.PostgresMigration, "/run/matrix/migration-dsn", "MATRIX_MIGRATION_DATABASE_DSN_FILE"},
 			{layout.IAMAPI, "/run/matrix/iam-api-dsn", "MATRIX_MIGRATION_IAM_API_DSN_FILE"},
 			{layout.IAMWorker, "/run/matrix/iam-worker-dsn", "MATRIX_MIGRATION_IAM_WORKER_DSN_FILE"},
+			{layout.IAMCredentialRecovery, "/run/matrix/iam-recovery-dsn", "MATRIX_MIGRATION_IAM_RECOVERY_DSN_FILE"},
 		},
 	},
 	{

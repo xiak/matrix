@@ -76,7 +76,7 @@ func TestNodeLifecycleCannotEnterPlatformEffects(t *testing.T) {
 	if state.CurrentReleaseID != releaseA || state.Node == nil || *state.Node != binding {
 		t.Fatal("node completion lost its release or enrollment commitment")
 	}
-	for _, action := range []Action{ActionUpgrade, ActionRollback, ActionRecover, ActionBackup, ActionSupport} {
+	for _, action := range []Action{ActionUpgrade, ActionRollback, ActionRecover, ActionRecoverCredentials, ActionBackup, ActionSupport} {
 		if _, err := Start(state, lifecycleCommand(action, releaseB, '2', 10)); err == nil {
 			t.Fatal("node accepted a platform lifecycle action")
 		}
@@ -91,6 +91,90 @@ func TestNodeLifecycleCannotEnterPlatformEffects(t *testing.T) {
 	}
 	if _, err := Start(installedJournal(t), lifecycleCommand(ActionStart, "", 0, 11)); err == nil {
 		t.Fatal("node startup entered a platform root")
+	}
+}
+
+func TestPlatformCredentialRecoveryFinalizesWithoutReleaseOrRollbackEffects(t *testing.T) {
+	base := installedJournal(t)
+	upgraded, err := Start(base, lifecycleCommand(ActionUpgrade, releaseB, '2', 10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base = completeActive(t, upgraded.Journal)
+	command := lifecycleCommand(ActionRecoverCredentials, "", 'c', 20)
+	if _, err := Start(newJournal(t), command); !errors.Is(err, ErrPrecondition) {
+		t.Fatal("credential recovery admitted an uninstalled root")
+	}
+	started, err := Start(base, command)
+	if err != nil || started.Execution.Phase != PhaseStaging {
+		t.Fatal("credential recovery did not retain an intent before staging input")
+	}
+	changed := command
+	changed.InputDigest = digest('d')
+	if _, err := Start(started.Journal, changed); !errors.Is(err, ErrCommandConflict) {
+		t.Fatal("credential recovery replaced the sealed input commitment")
+	}
+	for _, phase := range []Phase{PhaseMigrating, PhaseStarting, PhaseRecovering, PhaseRollingBack, PhaseReady} {
+		if _, err := Advance(started.Journal, command.ID, phase, command.RequestedAt.Add(time.Second)); !errors.Is(err, ErrInvalidTransition) {
+			t.Fatal("credential recovery admitted an unrelated effect or premature completion")
+		}
+	}
+	applying, err := Advance(started.Journal, command.ID, PhaseRecoveringCredentials, command.RequestedAt.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay := command
+	replay.RequestedAt = command.RequestedAt.Add(time.Hour)
+	resumed, err := Start(applying, replay)
+	if err != nil || resumed.Replay != ReplayActive || resumed.Execution.Command != command {
+		t.Fatal("credential recovery resumed with a different intent")
+	}
+	committing, err := Advance(applying, command.ID, PhaseCommitting, applying.Active.UpdatedAt.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Fail(committing, command.ID, "CLEANUP_UNAVAILABLE", committing.Active.UpdatedAt.Add(time.Second)); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatal("cleanup failure converted a committed credential recovery into a rejection")
+	}
+	if _, err := Start(committing, lifecycleCommand(ActionVerify, "", 0, 21)); !errors.Is(err, ErrCommandInProgress) {
+		t.Fatal("another command could discard pending credential cleanup")
+	}
+	completed := completeActive(t, committing)
+	if completed.Last.Outcome != OutcomeSucceeded || completed.CurrentReleaseID != base.CurrentReleaseID ||
+		completed.CurrentReleaseDigest != base.CurrentReleaseDigest || completed.PreviousRelease != base.PreviousRelease ||
+		completed.PreviousReleaseDigest != base.PreviousReleaseDigest || ValidateJournal(completed) != nil {
+		t.Fatal("credential recovery changed installed releases or lost its completion")
+	}
+	if replayed, err := Start(completed, command); err != nil || replayed.Replay != ReplayCompleted {
+		t.Fatal("completed credential recovery did not retain exact replay")
+	}
+	corrupt := completed
+	receipt := *completed.Last
+	receipt.Outcome = OutcomeRolledBack
+	corrupt.Last = &receipt
+	if ValidateJournal(corrupt) == nil {
+		t.Fatal("credential recovery claimed to roll back an applied password")
+	}
+	for _, rejectedAt := range []Phase{PhaseStaging, PhaseRecoveringCredentials} {
+		t.Run(string(rejectedAt), func(t *testing.T) {
+			state := started.Journal
+			if rejectedAt == PhaseRecoveringCredentials {
+				state = applying
+			}
+			rejected, err := Fail(state, command.ID, "RECOVERY_PRECONDITION_FAILED", state.Active.UpdatedAt.Add(time.Second))
+			if err != nil || rejected.Active == nil || rejected.Active.Phase != PhaseCommitting ||
+				rejected.Active.FailureCode != "RECOVERY_PRECONDITION_FAILED" || ValidateJournal(rejected) != nil {
+				t.Fatal("definitive rejection did not retain cleanup without another apply")
+			}
+			if next, ok := NextPhase(rejected); !ok || next != PhaseReady {
+				t.Fatal("rejected recovery can re-enter a credential effect")
+			}
+			failed := completeActive(t, rejected)
+			if failed.Last.Outcome != OutcomeFailed || failed.Last.FailureCode != "RECOVERY_PRECONDITION_FAILED" ||
+				failed.CurrentReleaseID != base.CurrentReleaseID || failed.PreviousRelease != base.PreviousRelease || ValidateJournal(failed) != nil {
+				t.Fatal("cleanup discarded the definitive rejection or changed a release")
+			}
+		})
 	}
 }
 

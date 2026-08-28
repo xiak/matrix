@@ -285,6 +285,7 @@ BEGIN
     action_name := submitted_event->>'action';
     platform_only := action_name IN (
         'iam.tenant.created', 'iam.tenant.disabled', 'iam.tenant.enabled', 'iam.tenant-administrator.recovered',
+        'iam.installation-primary.credentials-recovered',
         'paas.execution-pool.created', 'paas.execution-target.registered',
         'audit.platform-records.read', 'audit.platform-integrity.verified'
     );
@@ -299,6 +300,7 @@ BEGIN
         ('iam.tenant.disabled', 'IAM', 'ORGANIZATION', 'SUCCEEDED', true, true, false),
         ('iam.tenant.enabled', 'IAM', 'ORGANIZATION', 'SUCCEEDED', true, true, false),
         ('iam.tenant-administrator.recovered', 'IAM', 'PRINCIPAL', 'SUCCEEDED', true, true, false),
+        ('iam.installation-primary.credentials-recovered', 'IAM', 'PRINCIPAL', 'SUCCEEDED', false, false, false),
         ('iam.organization.created', 'IAM', 'ORGANIZATION', 'SUCCEEDED', true, true, false),
         ('iam.account-alias.set', 'IAM', 'ORGANIZATION', 'SUCCEEDED', true, true, false),
         ('iam.principal.status-set', 'IAM', 'PRINCIPAL', 'SUCCEEDED', true, true, false),
@@ -365,11 +367,11 @@ BEGIN
        ]) <> '{}'::jsonb
        OR ((submitted_event->'actor') - ARRAY['type', 'id']) <> '{}'::jsonb
        OR ((submitted_event->'target') - ARRAY['kind', 'id', 'tenantId']) <> '{}'::jsonb
-       OR (action_name = 'iam.tenant-administrator.recovered' AND (
+       OR (action_name IN ('iam.tenant-administrator.recovered','iam.installation-primary.credentials-recovered') AND (
             jsonb_typeof(submitted_event#>'{target,tenantId}') IS DISTINCT FROM 'string'
             OR COALESCE(submitted_event#>>'{target,tenantId}','') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
           ))
-       OR (action_name <> 'iam.tenant-administrator.recovered' AND (submitted_event->'target') ? 'tenantId')
+       OR (action_name NOT IN ('iam.tenant-administrator.recovered','iam.installation-primary.credentials-recovered') AND (submitted_event->'target') ? 'tenantId')
        OR jsonb_typeof(submitted_event#>'{actor,type}') <> 'string'
        OR jsonb_typeof(submitted_event#>'{actor,id}') <> 'string'
        OR jsonb_typeof(submitted_event#>'{target,kind}') <> 'string'
@@ -389,7 +391,10 @@ BEGIN
             OR jsonb_typeof(submitted_event->'installationId') IS DISTINCT FROM 'string'
             OR submitted_event->>'installationId' IS DISTINCT FROM substr(submitted_chain_id, 14)
             OR submitted_event ? 'tenantId'
-            OR submitted_event#>>'{actor,type}' IS DISTINCT FROM 'USER'
+            OR (action_name <> 'iam.installation-primary.credentials-recovered' AND submitted_event#>>'{actor,type}' IS DISTINCT FROM 'USER')
+            OR (action_name = 'iam.installation-primary.credentials-recovered' AND (
+                submitted_event#>>'{actor,type}' IS DISTINCT FROM 'SYSTEM'
+                OR submitted_event#>>'{actor,id}' IS DISTINCT FROM 'iam-local-recovery'))
           ))
        OR (NOT platform_only AND (
             left(submitted_chain_id, 7) IS DISTINCT FROM 'tenant:'
@@ -456,7 +461,7 @@ AS $function$
         to_regclass('audit.chain_heads') IS NOT NULL
         AND to_regclass('audit.records') IS NOT NULL
         AND to_regclass('audit.event_registry') IS NOT NULL,
-        2::bigint,
+        3::bigint,
         transaction_timestamp()
 $function$;
 
@@ -762,6 +767,7 @@ BEGIN
             'iam.organization.created', 'iam.account-alias.set',
             'iam.tenant.created', 'iam.tenant.disabled', 'iam.tenant.enabled',
             'iam.tenant-administrator.recovered',
+            'iam.installation-primary.credentials-recovered',
             'iam.principal.status-set', 'iam.password.reset',
             'iam.role-binding.revoked', 'iam.authorization.decided',
             'paas.application.created', 'paas.configuration.created',

@@ -107,7 +107,7 @@ func (client *edgeClient) json(
 	mediaType, _, mediaErr := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	content, readErr := io.ReadAll(io.LimitReader(response.Body, maximumHTTPBody+1))
 	if readErr != nil || len(content) > maximumHTTPBody || mediaErr != nil ||
-		mediaType != "application/json" || response.Header.Get("Content-Encoding") != "" ||
+		(mediaType != "application/json" && (mediaType != "application/problem+json" || response.StatusCode < 400)) || response.Header.Get("Content-Encoding") != "" ||
 		containsAny(content, client.forbidden) {
 		clear(content)
 		return httpResult{}, errors.New("HTTP response contract failed")

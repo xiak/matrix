@@ -135,7 +135,10 @@ func TestAuditActionCatalogIsClosedAndSourceBound(t *testing.T) {
 			event.TenantID, event.InstallationID = "", "installation-example"
 			event.Actor.Type = ActorUser
 		}
-		if action == ActionIAMTenantAdministratorRecovered {
+		if action == ActionIAMInstallationPrimaryCredentialsRecovered {
+			event.Actor = ActorReference{Type: ActorSystem, ID: "iam-local-recovery"}
+		}
+		if action == ActionIAMTenantAdministratorRecovered || action == ActionIAMInstallationPrimaryCredentialsRecovered {
 			event.Target.TenantID = "organization-recovered"
 		}
 		if err := ValidateEventForSource(contract.Source, event); err != nil {
@@ -145,7 +148,7 @@ func TestAuditActionCatalogIsClosedAndSourceBound(t *testing.T) {
 			t.Fatalf("action %q accepted a forged source", action)
 		}
 		wrongNamespace := event
-		if action == ActionIAMTenantAdministratorRecovered {
+		if action == ActionIAMTenantAdministratorRecovered || action == ActionIAMInstallationPrimaryCredentialsRecovered {
 			wrongNamespace.Target.TenantID = ""
 		} else {
 			wrongNamespace.Target.TenantID = "organization-forged"

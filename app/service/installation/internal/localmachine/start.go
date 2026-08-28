@@ -78,32 +78,52 @@ type platformContainerInspection struct {
 }
 
 type platformContainerConfig struct {
-	Labels map[string]string `json:"Labels"`
-	User   string            `json:"User"`
-	Env    []string          `json:"Env"`
+	Labels     map[string]string `json:"Labels"`
+	User       string            `json:"User"`
+	Env        []string          `json:"Env"`
+	Entrypoint []string          `json:"Entrypoint"`
+	Cmd        []string          `json:"Cmd"`
 }
 
 type platformContainerState struct {
-	Status  string `json:"Status"`
-	Running bool   `json:"Running"`
-	Health  *struct {
+	Status    string `json:"Status"`
+	Running   bool   `json:"Running"`
+	ExitCode  int    `json:"ExitCode"`
+	OOMKilled bool   `json:"OOMKilled"`
+	Error     string `json:"Error"`
+	Health    *struct {
 		Status string `json:"Status"`
 	} `json:"Health"`
 }
 
 type platformHostConfig struct {
-	Privileged     bool                             `json:"Privileged"`
-	ReadonlyRootfs bool                             `json:"ReadonlyRootfs"`
-	NetworkMode    string                           `json:"NetworkMode"`
-	Init           *bool                            `json:"Init"`
-	Memory         int64                            `json:"Memory"`
-	NanoCPUs       int64                            `json:"NanoCpus"`
-	CapAdd         []string                         `json:"CapAdd"`
-	CapDrop        []string                         `json:"CapDrop"`
-	SecurityOpt    []string                         `json:"SecurityOpt"`
-	Tmpfs          map[string]string                `json:"Tmpfs"`
-	PortBindings   map[string][]platformPortBinding `json:"PortBindings"`
-	RestartPolicy  struct {
+	Privileged     bool              `json:"Privileged"`
+	ReadonlyRootfs bool              `json:"ReadonlyRootfs"`
+	NetworkMode    string            `json:"NetworkMode"`
+	Init           *bool             `json:"Init"`
+	Memory         int64             `json:"Memory"`
+	MemorySwap     int64             `json:"MemorySwap"`
+	PidsLimit      *int64            `json:"PidsLimit"`
+	PidMode        string            `json:"PidMode"`
+	IpcMode        string            `json:"IpcMode"`
+	UTSMode        string            `json:"UTSMode"`
+	UsernsMode     string            `json:"UsernsMode"`
+	CgroupnsMode   string            `json:"CgroupnsMode"`
+	Devices        []json.RawMessage `json:"Devices"`
+	DeviceRequests []json.RawMessage `json:"DeviceRequests"`
+	VolumesFrom    []string          `json:"VolumesFrom"`
+	Binds          []string          `json:"Binds"`
+	AutoRemove     bool              `json:"AutoRemove"`
+	LogConfig      struct {
+		Type string `json:"Type"`
+	} `json:"LogConfig"`
+	NanoCPUs      int64                            `json:"NanoCpus"`
+	CapAdd        []string                         `json:"CapAdd"`
+	CapDrop       []string                         `json:"CapDrop"`
+	SecurityOpt   []string                         `json:"SecurityOpt"`
+	Tmpfs         map[string]string                `json:"Tmpfs"`
+	PortBindings  map[string][]platformPortBinding `json:"PortBindings"`
+	RestartPolicy struct {
 		Name string `json:"Name"`
 	} `json:"RestartPolicy"`
 }

@@ -24,22 +24,23 @@ const (
 )
 
 const (
-	ActionIAMOrganizationCreated          Action = "iam.organization.created"
-	ActionIAMTenantCreated                Action = "iam.tenant.created"
-	ActionIAMTenantDisabled               Action = "iam.tenant.disabled"
-	ActionIAMTenantEnabled                Action = "iam.tenant.enabled"
-	ActionIAMTenantAdministratorRecovered Action = "iam.tenant-administrator.recovered"
-	ActionIAMAccountAliasSet              Action = "iam.account-alias.set"
-	ActionIAMPrincipalStatusSet           Action = "iam.principal.status-set"
-	ActionIAMPasswordReset                Action = "iam.password.reset"
-	ActionIAMBootstrapApplied             Action = "iam.bootstrap.applied"
-	ActionIAMSessionIssued                Action = "iam.session.issued"
-	ActionIAMSessionRevoked               Action = "iam.session.revoked"
-	ActionIAMPasswordChanged              Action = "iam.password.changed"
-	ActionIAMPrincipalCreated             Action = "iam.principal.created"
-	ActionIAMRoleBindingPut               Action = "iam.role-binding.put"
-	ActionIAMRoleBindingRevoked           Action = "iam.role-binding.revoked"
-	ActionIAMAuthorizationDecided         Action = "iam.authorization.decided"
+	ActionIAMOrganizationCreated                     Action = "iam.organization.created"
+	ActionIAMTenantCreated                           Action = "iam.tenant.created"
+	ActionIAMTenantDisabled                          Action = "iam.tenant.disabled"
+	ActionIAMTenantEnabled                           Action = "iam.tenant.enabled"
+	ActionIAMTenantAdministratorRecovered            Action = "iam.tenant-administrator.recovered"
+	ActionIAMInstallationPrimaryCredentialsRecovered Action = "iam.installation-primary.credentials-recovered"
+	ActionIAMAccountAliasSet                         Action = "iam.account-alias.set"
+	ActionIAMPrincipalStatusSet                      Action = "iam.principal.status-set"
+	ActionIAMPasswordReset                           Action = "iam.password.reset"
+	ActionIAMBootstrapApplied                        Action = "iam.bootstrap.applied"
+	ActionIAMSessionIssued                           Action = "iam.session.issued"
+	ActionIAMSessionRevoked                          Action = "iam.session.revoked"
+	ActionIAMPasswordChanged                         Action = "iam.password.changed"
+	ActionIAMPrincipalCreated                        Action = "iam.principal.created"
+	ActionIAMRoleBindingPut                          Action = "iam.role-binding.put"
+	ActionIAMRoleBindingRevoked                      Action = "iam.role-binding.revoked"
+	ActionIAMAuthorizationDecided                    Action = "iam.authorization.decided"
 
 	ActionPaaSApplicationCreated                  Action = "paas.application.created"
 	ActionPaaSConfigurationCreated                Action = "paas.configuration.created"
@@ -138,6 +139,7 @@ var allActions = []Action{
 	ActionIAMTenantDisabled,
 	ActionIAMTenantEnabled,
 	ActionIAMTenantAdministratorRecovered,
+	ActionIAMInstallationPrimaryCredentialsRecovered,
 	ActionIAMAccountAliasSet,
 	ActionIAMPrincipalStatusSet,
 	ActionIAMPasswordReset,
@@ -180,6 +182,9 @@ var actionContracts = map[Action]ActionContract{
 	},
 	ActionIAMTenantAdministratorRecovered: {
 		Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, PlatformOnly: true,
+	},
+	ActionIAMInstallationPrimaryCredentialsRecovered: {
+		Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, PlatformOnly: true,
 	},
 	ActionIAMOrganizationCreated: {
 		Source: SourceIAM, Target: TargetOrganization, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true,

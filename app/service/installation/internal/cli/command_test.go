@@ -26,6 +26,7 @@ func TestPlatformCommandSurfaceBuildsExactRequests(t *testing.T) {
 		{"upgrade", []string{"platform", "upgrade", "--bundle", "/media/release-b", "--root", "/srv/matrix"}, Request{Action: lifecycle.ActionUpgrade, Root: "/srv/matrix", Bundle: "/media/release-b"}},
 		{"rollback", []string{"platform", "rollback", "--root", "/srv/matrix"}, Request{Action: lifecycle.ActionRollback, Root: "/srv/matrix"}},
 		{"recover", []string{"platform", "recover", "--root", "/srv/matrix", "--backup", "backup-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, Request{Action: lifecycle.ActionRecover, Root: "/srv/matrix", BackupID: "backup-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
+		{"recover-credentials", []string{"platform", "recover-credentials", "--root", "/srv/matrix", "--recovery-input", "/private/recovery.json"}, Request{Action: lifecycle.ActionRecoverCredentials, Root: "/srv/matrix", RecoveryInput: "/private/recovery.json"}},
 		{"support", []string{"platform", "support", "--root", "/srv/matrix", "--output", "/safe/support.json"}, Request{Action: lifecycle.ActionSupport, Root: "/srv/matrix", SupportOutput: "/safe/support.json"}},
 	}
 	for _, test := range tests {
@@ -48,7 +49,7 @@ func TestPlatformCommandSurfaceBuildsExactRequests(t *testing.T) {
 			if got != test.want {
 				t.Fatalf("backend request = %#v, want %#v", got, test.want)
 			}
-			if errOut.Len() != 0 || !strings.HasPrefix(out.String(), strings.ToUpper(test.name)+" SUCCEEDED") {
+			if errOut.Len() != 0 || !strings.HasPrefix(out.String(), strings.ReplaceAll(strings.ToUpper(test.name), "-", "_")+" SUCCEEDED") {
 				t.Fatalf("command output = %q / %q", out.String(), errOut.String())
 			}
 		})
@@ -75,12 +76,68 @@ func TestPlatformCommandNamesHaveNoCompatibilityAliases(t *testing.T) {
 		got = append(got, child.Name())
 	}
 	slices.Sort(got)
-	want := []string{"backup", "install", "recover", "rollback", "status", "support", "upgrade", "verify"}
+	want := []string{"backup", "install", "recover", "recover-credentials", "rollback", "status", "support", "upgrade", "verify"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("platform command surface = %v, want %v", got, want)
 	}
 	if command.PersistentFlags().Lookup("output") != nil || command.PersistentFlags().Lookup("format") == nil {
 		t.Fatal("global output contract must use --format and not support's --output")
+	}
+}
+
+func TestPlatformCredentialRecoveryHasExplicitResumeAndNoAuthoritySelectors(t *testing.T) {
+	var out, errOut bytes.Buffer
+	exit := Run(context.Background(), []string{"--format", "json", "platform", "recover-credentials", "--root", "/srv/platform", "--resume"},
+		Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut},
+		backendFunc(func(_ context.Context, request Request) (Result, error) {
+			if request.Subject != SubjectPlatform || request.Action != lifecycle.ActionRecoverCredentials ||
+				!request.Resume || request.RecoveryInput != "" {
+				t.Fatal("credential recovery resume lost its closed intent")
+			}
+			return Result{State: "PASSWORD_CHANGE_REQUIRED", CorrelationID: "cmd-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, nil
+		}))
+	if exit != ExitSuccess || !strings.Contains(out.String(), `"action":"RECOVER_CREDENTIALS"`) ||
+		strings.Contains(out.String(), "/srv/") || errOut.Len() != 0 {
+		t.Fatal("credential recovery did not return a sanitized platform result")
+	}
+	for _, extra := range [][]string{
+		nil,
+		{"--recovery-input", " "},
+		{"--resume", "--recovery-input", "/private/recovery.json"},
+		{"--password", "raw-secret-value"},
+		{"--recovery-input", "/private/recovery.json", "--principal-id", "principal-other"},
+		{"--recovery-input", "/private/recovery.json", "--organization-id", "organization-other"},
+		{"--recovery-input", "/private/recovery.json", "--database-dsn", "postgres://secret@wrong-host/foreign"},
+		{"--recovery-input", "/private/recovery.json", "--backup", "backup-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		{"--recovery-input", "/private/recovery.json", "--force"},
+	} {
+		out.Reset()
+		errOut.Reset()
+		args := append([]string{"--format", "json", "platform", "recover-credentials", "--root", "/srv/platform"}, extra...)
+		exit := Run(context.Background(), args, Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut},
+			backendFunc(func(context.Context, Request) (Result, error) {
+				t.Fatal("invalid recovery input reached the backend")
+				return Result{}, nil
+			}))
+		if exit != ExitInvalidInput || out.Len() != 0 || strings.Contains(errOut.String(), "raw-secret-value") ||
+			strings.Contains(errOut.String(), "wrong-host") || strings.Contains(errOut.String(), "/private/") {
+			t.Fatal("credential recovery accepted an unrelated authority selector or exposed raw input")
+		}
+	}
+	for _, args := range [][]string{
+		{"node", "recover-credentials", "--root", "/srv/node", "--resume"},
+		{"platform", "recover", "--root", "/srv/platform", "--recovery-input", "/private/recovery.json"},
+		{"platform", "status", "--root", "/srv/platform", "--resume"},
+	} {
+		out.Reset()
+		errOut.Reset()
+		if Run(context.Background(), args, Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut},
+			backendFunc(func(context.Context, Request) (Result, error) {
+				t.Fatal("credential recovery crossed a command purpose")
+				return Result{}, nil
+			})) != ExitInvalidInput {
+			t.Fatal("credential recovery entered a different command purpose")
+		}
 	}
 }
 

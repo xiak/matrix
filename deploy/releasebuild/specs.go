@@ -22,6 +22,7 @@ var binarySpecifications = []binarySpecification{
 	{name: "matrix-health", packagePath: "./app/service/installation/cmd/matrix-health"},
 	{name: "matrix-iam", packagePath: "./app/service/iam/cmd/matrix-iam"},
 	{name: "matrix-iam-audit-dispatcher", packagePath: "./app/service/iam/cmd/matrix-iam-audit-dispatcher"},
+	{name: "matrix-iam-local-recovery", packagePath: "./app/service/iam/cmd/matrix-iam-local-recovery"},
 	{name: "matrix-iam-migrate", packagePath: "./app/service/iam/cmd/matrix-iam-migrate"},
 	{name: "matrix-paas", packagePath: "./app/service/paas/cmd/matrix-paas"},
 	{name: "matrix-paas-audit-dispatcher", packagePath: "./app/service/paas/cmd/matrix-paas-audit-dispatcher"},
@@ -50,7 +51,7 @@ var imageRecipes = []imageRecipe{
 	},
 	{
 		component: "iam", baseReference: "scratch",
-		binaries: []string{"matrix-iam", "matrix-iam-audit-dispatcher", "matrix-iam-migrate", "matrix-health"},
+		binaries: []string{"matrix-iam", "matrix-iam-audit-dispatcher", "matrix-iam-local-recovery", "matrix-iam-migrate", "matrix-health"},
 	},
 	{
 		component: "paas", baseReference: DockerBaseReference,

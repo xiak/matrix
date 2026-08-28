@@ -2,6 +2,8 @@ package phase1e2e
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -10,6 +12,35 @@ import (
 
 	"github.com/xiak/matrix/app/service/installation/release"
 )
+
+func TestEdgeClientAcceptsExpectedProblemResponses(t *testing.T) {
+	for _, scenario := range []struct {
+		name, media string
+		status      int
+		accepted    bool
+	}{
+		{"JSON success", "application/json", http.StatusOK, true},
+		{"expected denial", "application/problem+json", http.StatusUnauthorized, true},
+		{"problem is not success", "application/problem+json", http.StatusOK, false},
+		{"HTML denial", "text/html", http.StatusUnauthorized, false},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", scenario.media)
+				w.WriteHeader(scenario.status)
+				_, _ = w.Write([]byte(`{"code":"TEST_RESPONSE"}`))
+			}))
+			defer server.Close()
+			client := newEdgeClient(server.URL)
+			defer client.close()
+			result, err := client.json(context.Background(), http.MethodGet, "/test", nil, nil, nil, scenario.status)
+			if (err == nil) != scenario.accepted || scenario.accepted && result.status != scenario.status {
+				t.Fatal("edge gate misclassified the expected HTTP media/status contract")
+			}
+			clear(result.body)
+		})
+	}
+}
 
 func TestOfflinePhase1Lifecycle(t *testing.T) {
 	if os.Getenv("MATRIX_PHASE1_E2E") != "1" {

@@ -1,7 +1,10 @@
 package identityaccess
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -12,6 +15,83 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/iam/internal/authority"
 )
+
+func TestLocalRecoveryWorkflowBindsOnePrivateIntentToOneSanitizedFact(t *testing.T) {
+	secret := func(value string) iamv1.Secret {
+		result, err := iamv1.NewSecret(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	local := iamv1.LocalCredentialRecoveryAuthority{APIVersion: iamv1.APIVersion, Kind: "LocalCredentialRecoveryAuthority", Purpose: iamv1.LocalCredentialRecoveryPurpose,
+		Scope:         iamv1.LocalCredentialRecoveryScope{InstallationID: "installation-local", BootstrapDigest: "sha256:" + strings.Repeat("b", 64), OrganizationID: "organization-local", PrincipalID: "principal-original"},
+		CapabilityKey: secret(base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x47}, 32)))}
+	request, err := iamv1.SignLocalCredentialRecoveryRequest(local, iamv1.LocalCredentialRecoveryRequest{APIVersion: iamv1.APIVersion, Kind: "LocalCredentialRecoveryRequest", Purpose: iamv1.LocalCredentialRecoveryPurpose,
+		Scope: local.Scope, CommandID: "command-local", Expected: iamv1.LocalCredentialRecoveryExpected{OrganizationResourceVersion: 1, PrincipalResourceVersion: 2, CredentialGeneration: 3, PlatformBindingID: "binding-original", PlatformBindingResourceVersion: 4},
+		NewPassword: secret("Unit-Local-Private-Password-67!")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitment, err := iamv1.VerifyLocalCredentialRecoveryRequest(local, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := &coreRepository{transaction: newCoreTransaction()}
+	transaction := repository.transaction
+	completed := iamv1.LocalCredentialRecoveryResult{APIVersion: iamv1.APIVersion, Kind: "LocalCredentialRecoveryResult", State: "APPLIED", Scope: local.Scope,
+		CommandID: request.CommandID, InputCommitment: commitment, PreviousCredentialGeneration: 3, CredentialGeneration: 4, PrincipalResourceVersion: 3,
+		RevokedSessions: 2, AuditEventID: "event-local", CompletedAt: transaction.now}
+	transaction.localRecoveryResult = completed
+	service, err := NewAuthority(repository, Config{NewID: func(string) (string, error) { return "event-local", nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.RecoverLocalCredentials(context.Background(), local, request)
+	if err != nil || result != completed || transaction.localRecoveryMutation == nil {
+		t.Fatalf("local workflow rejected its exact result: %v", err)
+	}
+	mutation := *transaction.localRecoveryMutation
+	if mutation.Scope != local.Scope || mutation.Expected != request.Expected || mutation.InputCommitment != commitment || mutation.CommandID != request.CommandID {
+		t.Fatal("local mutation substituted its authority or expected intent")
+	}
+	if matched, err := authority.NewPasswordHasher(nil).Verify(request.NewPassword, mutation.PasswordHash); err != nil || !matched {
+		t.Fatal("local workflow did not use the established password hash profile")
+	}
+	event := mutation.AuditEvent
+	if auditv1.ValidateEventForSource(auditv1.SourceIAM, event) != nil || event.Action != auditv1.ActionIAMInstallationPrimaryCredentialsRecovered ||
+		event.Actor != (auditv1.ActorReference{Type: auditv1.ActorSystem, ID: iamv1.LocalCredentialRecoveryActor}) || event.InstallationID != local.Scope.InstallationID || event.TenantID != "" ||
+		event.Target.ID != string(local.Scope.PrincipalID) || event.Target.TenantID != auditv1.TenantID(local.Scope.OrganizationID) || event.RequestID != request.CommandID || event.CorrelationID != request.CommandID || event.OccurredAt != transaction.now || event.IAMDecisionID != "" {
+		t.Fatal("local workflow broadened or fabricated security authority")
+	}
+	encoded, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, private := range []string{string(request.NewPassword.CopyBytes()), string(request.Capability.CopyBytes()), string(local.CapabilityKey.CopyBytes()), string(mutation.PasswordHash)} {
+		if bytes.Contains(encoded, []byte(private)) {
+			t.Fatal("local security fact contains private recovery material")
+		}
+	}
+	transaction.localRecoveryMutation = nil
+	forged := request
+	forged.Expected.CredentialGeneration++
+	if _, err := service.RecoverLocalCredentials(context.Background(), local, forged); !errors.Is(err, ErrForbidden) || transaction.localRecoveryMutation != nil {
+		t.Fatal("unproved recovery intent reached the transaction")
+	}
+	transaction.localRecoveryResult.Scope.PrincipalID = "principal-substituted"
+	if _, err := service.RecoverLocalCredentials(context.Background(), local, request); !errors.Is(err, ErrUnavailable) {
+		t.Fatal("workflow accepted a substituted completion")
+	}
+	transaction.localRecoveryInspection = iamv1.LocalCredentialRecoveryInspection{APIVersion: iamv1.APIVersion, Kind: "LocalCredentialRecoveryInspection", Scope: local.Scope, State: "ELIGIBLE", Expected: &request.Expected}
+	if _, err := service.InspectLocalCredentialRecovery(context.Background(), local, nil); err != nil {
+		t.Fatal(err)
+	}
+	transaction.localRecoveryInspection.Scope.OrganizationID = "organization-substituted"
+	if _, err := service.InspectLocalCredentialRecovery(context.Background(), local, nil); !errors.Is(err, ErrUnavailable) {
+		t.Fatal("inspection returned another tenant's authority")
+	}
+}
 
 func TestAuditProofClosedHistoricalMappings(t *testing.T) {
 	for _, mapping := range []struct {
@@ -517,18 +597,30 @@ func (repository *coreRepository) WithinTransaction(
 
 type coreTransaction struct {
 	Transaction
-	now                time.Time
-	status             iamv1.BootstrapStatus
-	contentDigest      string
-	organization       iamv1.Organization
-	principal          iamv1.Principal
-	services           map[string]ServiceCredential
-	sessions           map[string]SessionCredential
-	authorizations     []AuthorizationMutation
-	passwords          map[iamv1.PrincipalID]authority.PasswordHash
-	users              map[iamv1.PrincipalID]iamv1.Principal
-	bindings           map[iamv1.RoleBindingID]iamv1.RoleBinding
-	bindingRevocations map[iamv1.RoleBindingID]iamv1.Revocation
+	now                     time.Time
+	status                  iamv1.BootstrapStatus
+	contentDigest           string
+	organization            iamv1.Organization
+	principal               iamv1.Principal
+	services                map[string]ServiceCredential
+	sessions                map[string]SessionCredential
+	authorizations          []AuthorizationMutation
+	passwords               map[iamv1.PrincipalID]authority.PasswordHash
+	users                   map[iamv1.PrincipalID]iamv1.Principal
+	bindings                map[iamv1.RoleBindingID]iamv1.RoleBinding
+	bindingRevocations      map[iamv1.RoleBindingID]iamv1.Revocation
+	localRecoveryInspection iamv1.LocalCredentialRecoveryInspection
+	localRecoveryResult     iamv1.LocalCredentialRecoveryResult
+	localRecoveryMutation   *LocalCredentialRecoveryMutation
+}
+
+func (transaction *coreTransaction) InspectLocalCredentialRecovery(context.Context, iamv1.LocalCredentialRecoveryScope, *iamv1.LocalCredentialRecoveryReceiptQuery) (iamv1.LocalCredentialRecoveryInspection, error) {
+	return transaction.localRecoveryInspection, nil
+}
+
+func (transaction *coreTransaction) RecoverLocalCredentials(_ context.Context, mutation LocalCredentialRecoveryMutation) (iamv1.LocalCredentialRecoveryResult, error) {
+	transaction.localRecoveryMutation = &mutation
+	return transaction.localRecoveryResult, nil
 }
 
 func newCoreTransaction() *coreTransaction {

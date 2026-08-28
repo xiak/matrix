@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xiak/matrix/api/contractjson"
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/cli"
 	"github.com/xiak/matrix/app/service/installation/internal/journal"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
@@ -23,8 +25,9 @@ import (
 )
 
 const (
-	defaultListener = "0.0.0.0"
-	defaultPort     = uint16(8080)
+	defaultListener                     = "0.0.0.0"
+	defaultPort                         = uint16(8080)
+	MaximumCredentialRecoveryInputBytes = 16 * 1024
 )
 
 var (
@@ -36,6 +39,11 @@ var (
 	// was not established. The journal phase stays active so the next replay
 	// observes the owned effect before retrying it.
 	ErrEffectOutcomeUnknown = errors.New("platform effect outcome is unknown")
+	// Only a verified one-shot IAM result can establish these no-mutation
+	// rejections. Filesystem/provider failures cannot close an unknown recovery.
+	ErrCredentialRecoveryInvalid   = errors.New("local credential recovery input rejected")
+	ErrCredentialRecoveryForbidden = errors.New("local credential recovery is forbidden")
+	ErrCredentialRecoveryConflict  = errors.New("local credential recovery intent conflicts")
 )
 
 // InstallPlan is authenticated input plus the installation-owned identity.
@@ -119,6 +127,53 @@ type RecoveryPlan struct {
 	BackupDigest string
 }
 
+// CredentialRecoveryInput is the operator's private intent, not an IAM
+// authorization. Installation derives all authority and expected-state fields
+// from its sealed provenance and the restricted IAM inspection result.
+type CredentialRecoveryInput struct {
+	APIVersion string       `json:"apiVersion"`
+	Kind       string       `json:"kind"`
+	CommandID  string       `json:"commandId"`
+	Password   iamv1.Secret `json:"password"`
+}
+
+// The request is private transient material; only CommandID/InputCommitment
+// enter the ordinary journal. A receipt-only resume needs no password.
+type CredentialRecoveryPlan struct {
+	InstalledPlan
+	CommandID       string
+	InputCommitment string
+	Request         *iamv1.LocalCredentialRecoveryRequest
+}
+
+// This entrypoint is supported only by the exact composition that implements
+// the dedicated IAM transaction and closed offline Audit fact. A contract-only
+// consumer must not invoke it against the earlier running authority profile.
+func ValidateCredentialRecoveryProfile(profile release.DatabaseProfile) error {
+	if profile != release.CurrentDatabaseProfile() || profile.Authorities.IAM != 4 ||
+		profile.Authorities.Audit != 3 || profile.ContractRevision != 4 {
+		return ErrEffectPrecondition
+	}
+	return nil
+}
+
+func (CredentialRecoveryInput) String() string {
+	return "platform credential recovery input <redacted>"
+}
+func (CredentialRecoveryInput) GoString() string {
+	return "platform credential recovery input <redacted>"
+}
+
+func DecodeCredentialRecoveryInput(source []byte) (CredentialRecoveryInput, error) {
+	var input CredentialRecoveryInput
+	if contractjson.DecodeObjectBytes(source, MaximumCredentialRecoveryInputBytes, &input) != nil ||
+		input.APIVersion != lifecycle.APIVersion || input.Kind != "PlatformCredentialRecoveryInput" ||
+		lifecycle.ValidateCommandID(input.CommandID) != nil || !input.Password.Present() {
+		return CredentialRecoveryInput{}, errors.New("credential recovery input is invalid")
+	}
+	return input, nil
+}
+
 // Effects is the closed local-machine lifecycle boundary. Mutating phases are
 // idempotent; status remains observational. If a command may have taken effect
 // without a known result, it returns ErrEffectOutcomeUnknown and observes
@@ -131,6 +186,8 @@ type Effects interface {
 	ApplyRollbackPhase(context.Context, RollbackPlan, lifecycle.Phase) error
 	InspectBackup(context.Context, InstalledPlan, string) (RecoverySource, error)
 	ApplyRecoveryPhase(context.Context, RecoveryPlan, lifecycle.Phase) error
+	PrepareCredentialRecovery(context.Context, InstalledPlan, string, *lifecycle.Execution) (CredentialRecoveryPlan, error)
+	ApplyCredentialRecoveryPhase(context.Context, CredentialRecoveryPlan, lifecycle.Phase) error
 	VerifyInstallation(context.Context, InstalledPlan) error
 	ObserveInstallation(context.Context, InstalledPlan) (bool, error)
 	CreateBackup(context.Context, BackupPlan) error
@@ -169,6 +226,8 @@ func (backend *Backend) Run(ctx context.Context, request cli.Request) (cli.Resul
 		return backend.rollback(ctx, request)
 	case lifecycle.ActionRecover:
 		return backend.recover(ctx, request)
+	case lifecycle.ActionRecoverCredentials:
+		return backend.recoverCredentials(ctx, request)
 	case lifecycle.ActionStatus:
 		return backend.status(ctx, request)
 	case lifecycle.ActionVerify, lifecycle.ActionBackup, lifecycle.ActionSupport:
@@ -912,6 +971,131 @@ func (backend *Backend) recover(
 	)
 }
 
+func (backend *Backend) recoverCredentials(ctx context.Context, request cli.Request) (result cli.Result, returnErr error) {
+	if (request.RecoveryInput == "") == !request.Resume || strings.TrimSpace(request.RecoveryInput) != request.RecoveryInput {
+		return cli.Result{}, fault(cli.FaultInvalidArgument, "CREDENTIAL_RECOVERY_INPUT_INVALID")
+	}
+	session, err := journal.AcquireExisting(ctx, request.Root)
+	if err != nil {
+		return cli.Result{}, acquireFault(err)
+	}
+	defer func() {
+		if closeErr := session.Close(); closeErr != nil && returnErr == nil {
+			result, returnErr = cli.Result{}, fault(cli.FaultInternal, "INSTALLATION_LOCK_RELEASE_FAILED")
+		}
+	}()
+	state, err := readPlatformJournal(session)
+	if err != nil {
+		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_STATE_INVALID")
+	}
+	if state.Active != nil && state.Active.Command.Action != lifecycle.ActionRecoverCredentials {
+		return cli.Result{}, lifecycleFault(lifecycle.ErrCommandInProgress)
+	}
+	if state.CurrentReleaseID == "" {
+		return cli.Result{}, fault(cli.FaultPrecondition, "PLATFORM_NOT_INSTALLED")
+	}
+	trustBytes, trust, err := release.ReadTrustRootFile(filepath.Join(session.Root(), filepath.FromSlash(layout.ReleaseTrust)))
+	if err != nil || trust.KeyID != state.ReleaseTrust.KeyID || trust.PublicKeyFingerprint != state.ReleaseTrust.Fingerprint {
+		clear(trustBytes)
+		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_RELEASE_INVALID")
+	}
+	defer clear(trustBytes)
+	bundle, err := authenticateJournalRelease(session.Root(), state.CurrentReleaseID, state.CurrentReleaseDigest, trustBytes)
+	if err != nil {
+		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_RELEASE_INVALID")
+	}
+	if ValidateCredentialRecoveryProfile(bundle.Manifest.Database) != nil {
+		return cli.Result{}, fault(cli.FaultPrecondition, "CREDENTIAL_RECOVERY_PROFILE_UNSUPPORTED")
+	}
+	previous := state.Active
+	if previous == nil && state.Last != nil && state.Last.Command.Action == lifecycle.ActionRecoverCredentials {
+		previous = state.Last
+	}
+	if request.Resume && previous == nil {
+		return cli.Result{}, fault(cli.FaultPrecondition, "CREDENTIAL_RECOVERY_NOT_PENDING")
+	}
+	installed := installedPlan(session.Root(), state)
+	plan, err := backend.effects.PrepareCredentialRecovery(ctx, installed, request.RecoveryInput, previous)
+	if err != nil {
+		return cli.Result{}, credentialRecoveryFault(ctx, lifecycle.PhaseStaging, err)
+	}
+	if plan.InstalledPlan != installed || lifecycle.ValidateCommandID(plan.CommandID) != nil ||
+		iamv1.ValidateDigest("inputCommitment", plan.InputCommitment) != nil {
+		return cli.Result{}, fault(cli.FaultVerification, "CREDENTIAL_RECOVERY_PLAN_INVALID")
+	}
+	started, err := lifecycle.Start(state, lifecycle.Command{
+		ID: plan.CommandID, Action: lifecycle.ActionRecoverCredentials,
+		InputDigest: plan.InputCommitment, RequestedAt: canonicalNow(backend.now()),
+	})
+	if err != nil {
+		return cli.Result{}, lifecycleFault(err)
+	}
+	if started.Replay == lifecycle.ReplayCompleted {
+		return operationResult(started.Journal, started.Execution, false)
+	}
+	if started.Replay == lifecycle.ReplayNone {
+		if err := session.Write(started.Journal); err != nil {
+			return cli.Result{}, stateWriteFault(err)
+		}
+	}
+	plan.CorrelationID = plan.CommandID
+	return backend.driveCredentialRecovery(ctx, session, plan)
+}
+
+func (backend *Backend) driveCredentialRecovery(ctx context.Context, session *journal.Session, plan CredentialRecoveryPlan) (cli.Result, error) {
+	for {
+		state, err := readPlatformJournal(session)
+		if err != nil || state.Active == nil || state.Active.Command.Action != lifecycle.ActionRecoverCredentials ||
+			state.Active.Command.ID != plan.CommandID || state.Active.Command.InputDigest != plan.InputCommitment {
+			return cli.Result{}, fault(cli.FaultVerification, "CREDENTIAL_RECOVERY_STATE_INVALID")
+		}
+		execution := *state.Active
+		err = backend.effects.ApplyCredentialRecoveryPhase(ctx, plan, execution.Phase)
+		if err != nil {
+			normalized := credentialRecoveryFault(ctx, execution.Phase, err)
+			// A committed outcome is one-way. Cleanup failure retains COMMITTING;
+			// unknown/database/provider failures retain the exact pending intent.
+			definitive := errors.Is(err, ErrCredentialRecoveryInvalid) || errors.Is(err, ErrCredentialRecoveryForbidden) || errors.Is(err, ErrCredentialRecoveryConflict)
+			if ctx.Err() != nil || execution.Phase == lifecycle.PhaseCommitting || !definitive {
+				return cli.Result{}, normalized
+			}
+			failed, failErr := lifecycle.Fail(state, plan.CommandID, normalized.Code, nextJournalTime(backend.now(), execution.UpdatedAt))
+			if failErr != nil || session.Write(failed) != nil {
+				return cli.Result{}, fault(cli.FaultInternal, "CREDENTIAL_RECOVERY_STATE_COMMIT_FAILED")
+			}
+			continue
+		}
+		next, ok := lifecycle.NextPhase(state)
+		if !ok {
+			return cli.Result{}, fault(cli.FaultInternal, "CREDENTIAL_RECOVERY_PHASE_INVALID")
+		}
+		advanced, err := lifecycle.Advance(state, plan.CommandID, next, nextJournalTime(backend.now(), execution.UpdatedAt))
+		if err != nil || session.Write(advanced) != nil {
+			return cli.Result{}, fault(cli.FaultInternal, "CREDENTIAL_RECOVERY_STATE_COMMIT_FAILED")
+		}
+		if advanced.Active == nil {
+			return operationResult(advanced, *advanced.Last, true)
+		}
+	}
+}
+
+func credentialRecoveryFault(ctx context.Context, phase lifecycle.Phase, err error) *cli.Fault {
+	switch {
+	case ctx.Err() != nil:
+		return fault(cli.FaultInterrupted, "COMMAND_INTERRUPTED")
+	case errors.Is(err, ErrCredentialRecoveryInvalid):
+		return fault(cli.FaultInvalidArgument, "CREDENTIAL_RECOVERY_INVALID")
+	case errors.Is(err, ErrCredentialRecoveryForbidden):
+		return fault(cli.FaultPrecondition, "CREDENTIAL_RECOVERY_FORBIDDEN")
+	case errors.Is(err, ErrCredentialRecoveryConflict):
+		return fault(cli.FaultConflict, "CREDENTIAL_RECOVERY_CONFLICT")
+	case errors.Is(err, ErrEffectOutcomeUnknown):
+		return fault(cli.FaultUnavailable, "EFFECT_OUTCOME_UNKNOWN")
+	default:
+		return effectFault(phase, err)
+	}
+}
+
 func readPlatformJournal(session *journal.Session) (lifecycle.Journal, error) {
 	state, err := session.Read()
 	if err != nil || state.Node != nil {
@@ -1070,6 +1254,12 @@ func storedFailure(execution *lifecycle.Execution) error {
 	}
 	class := cli.FaultInternal
 	switch {
+	case execution.FailureCode == "CREDENTIAL_RECOVERY_INVALID":
+		class = cli.FaultInvalidArgument
+	case execution.FailureCode == "CREDENTIAL_RECOVERY_FORBIDDEN":
+		class = cli.FaultPrecondition
+	case execution.FailureCode == "CREDENTIAL_RECOVERY_CONFLICT":
+		class = cli.FaultConflict
 	case execution.FailureCode == "PREFLIGHT_FAILED":
 		class = cli.FaultPrecondition
 	case execution.FailureCode == "OWNERSHIP_CONFLICT":
@@ -1122,6 +1312,8 @@ func phaseFailureCode(phase lifecycle.Phase, suffix string) string {
 		return "PLATFORM_" + suffix
 	case lifecycle.PhaseRecovering:
 		return "RECOVERY_" + suffix
+	case lifecycle.PhaseRecoveringCredentials:
+		return "CREDENTIAL_RECOVERY_" + suffix
 	default:
 		return "INSTALLATION_" + suffix
 	}

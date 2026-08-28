@@ -32,6 +32,321 @@ import (
 	"github.com/xiak/matrix/app/service/installation/topology"
 )
 
+func TestCredentialRecoveryReadsOnlyBoundedPrivateRegularInput(t *testing.T) {
+	const source = `{"apiVersion":"installation.matrix.xiak.com/v1","kind":"PlatformCredentialRecoveryInput","commandId":"cmd-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","password":"temporary-Recovery1!"}`
+	for _, mode := range []string{"valid", "relative", "missing", "directory", "too large", "empty", "unknown field", "file link", "parent link", "public file", "public parent", "foreign owner"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			private := filepath.Join(root, "private")
+			if os.Mkdir(private, 0o700) != nil {
+				t.Fatal("create private input fixture")
+			}
+			original := filepath.Join(private, "recovery.json")
+			if os.WriteFile(original, []byte(source), 0o600) != nil {
+				t.Fatal("create private recovery fixture")
+			}
+			path := original
+			switch mode {
+			case "relative":
+				path = "recovery.json"
+			case "missing":
+				path = filepath.Join(private, "absent.json")
+			case "directory":
+				path = private
+			case "too large":
+				if os.WriteFile(path, []byte(source+strings.Repeat(" ", platformcommand.MaximumCredentialRecoveryInputBytes)), 0o600) != nil {
+					t.Fatal("write bounded-input fixture")
+				}
+			case "empty":
+				if os.WriteFile(path, nil, 0o600) != nil {
+					t.Fatal("write empty-input fixture")
+				}
+			case "unknown field":
+				if os.WriteFile(path, []byte(strings.Replace(source, `"password":`, `"principalId":"foreign","password":`, 1)), 0o600) != nil {
+					t.Fatal("write closed-input fixture")
+				}
+			case "file link":
+				path = filepath.Join(private, "link.json")
+				if err := os.Symlink(original, path); err != nil {
+					t.Skip("host cannot create a symlink fixture")
+				}
+			case "parent link":
+				linked := filepath.Join(root, "linked")
+				if err := os.Symlink(private, linked); err != nil {
+					t.Skip("host cannot create a symlink fixture")
+				}
+				path = filepath.Join(linked, "recovery.json")
+			case "public file", "public parent":
+				if runtime.GOOS == "windows" {
+					t.Skip("POSIX ownership is enforced by the Linux installation boundary")
+				}
+				target, permissions := path, os.FileMode(0o644)
+				if mode == "public parent" {
+					target, permissions = private, 0o755
+				}
+				if os.Chmod(target, permissions) != nil {
+					t.Fatal("change input fixture permissions")
+				}
+			case "foreign owner":
+				if runtime.GOOS == "windows" || os.Geteuid() != 0 {
+					t.Skip("foreign-owner fixture needs a disposable Linux root process")
+				}
+				if err := os.Chown(path, 65534, 65534); err != nil {
+					t.Skip("fixture process cannot change its temporary file owner")
+				}
+			}
+			input, err := readCredentialRecoveryInput(path)
+			if mode == "valid" {
+				retained, readErr := os.ReadFile(original)
+				if err != nil || readErr != nil || !bytes.Equal(retained, []byte(source)) ||
+					input.CommandID != "cmd-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" || !input.Password.Present() {
+					t.Fatal("valid private input was rejected or modified")
+				}
+				return
+			}
+			if !errors.Is(err, platformcommand.ErrEffectVerification) || input.Password.Present() ||
+				strings.Contains(err.Error(), "temporary-Recovery") || strings.Contains(err.Error(), root) {
+				t.Fatal("unsafe recovery input was accepted or leaked")
+			}
+		})
+	}
+}
+
+func TestLocalRecoveryInvocationUsesOwnedProcessOutcomeAndNeverKillsPendingWork(t *testing.T) {
+	for _, scenario := range []struct {
+		name, mode, existingState  string
+		exitCode, existingExitCode int
+		attachErr                  bool
+		want                       error
+		wantStarts, wantRemoves    int
+	}{
+		{name: "apply success", mode: "apply", wantStarts: 1},
+		{name: "inspect success is temporary", mode: "inspect", wantStarts: 1, wantRemoves: 1},
+		{name: "invalid", mode: "apply", exitCode: 2, want: platformcommand.ErrCredentialRecoveryInvalid, wantStarts: 1},
+		{name: "forbidden", mode: "apply", exitCode: 3, want: platformcommand.ErrCredentialRecoveryForbidden, wantStarts: 1},
+		{name: "conflict", mode: "apply", exitCode: 4, want: platformcommand.ErrCredentialRecoveryConflict, wantStarts: 1},
+		{name: "unavailable is unknown", mode: "apply", exitCode: 6, want: platformcommand.ErrEffectOutcomeUnknown, wantStarts: 1},
+		{name: "unknown exit", mode: "apply", exitCode: 42, want: platformcommand.ErrEffectOutcomeUnknown, wantStarts: 1},
+		{name: "committed but attach lost", mode: "apply", attachErr: true, want: platformcommand.ErrEffectOutcomeUnknown, wantStarts: 1},
+		{name: "resume created invocation", mode: "apply", existingState: "created", wantStarts: 1},
+		{name: "prior invocation still running", mode: "apply", existingState: "running", want: platformcommand.ErrEffectOutcomeUnknown},
+		{name: "never rerun known completion", mode: "apply", existingState: "exited", want: platformcommand.ErrEffectOutcomeUnknown},
+		{name: "retain prior rejection", mode: "apply", existingState: "exited", existingExitCode: 3, want: platformcommand.ErrCredentialRecoveryForbidden},
+		{name: "retry same unavailable invocation", mode: "apply", existingState: "exited", existingExitCode: 6, wantStarts: 1, wantRemoves: 1},
+		{name: "no cached inspect answer", mode: "inspect", existingState: "exited", wantStarts: 1, wantRemoves: 2},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			expected, actual := localRecoveryInvocationFixture(scenario.mode)
+			runtimeBoundary := &localRecoveryInvocationRuntime{container: actual, exitCode: scenario.exitCode, attachErr: scenario.attachErr}
+			if scenario.existingState != "" {
+				runtimeBoundary.present = true
+				runtimeBoundary.container.State.Status = scenario.existingState
+				runtimeBoundary.container.State.ExitCode = scenario.existingExitCode
+				runtimeBoundary.container.State.Running = scenario.existingState == "running"
+				if runtimeBoundary.container.State.Running {
+					endpoint := runtimeBoundary.container.NetworkSettings.Networks[expected.networkName]
+					endpoint.NetworkID = expected.networkID
+					runtimeBoundary.container.NetworkSettings.Networks[expected.networkName] = endpoint
+				}
+			}
+			output, err := invokeCredentialRecoveryEntry(context.Background(), runtimeBoundary, []string{"container", "create"}, expected)
+			if !errors.Is(err, scenario.want) || runtimeBoundary.starts != scenario.wantStarts || runtimeBoundary.removes != scenario.wantRemoves {
+				t.Fatalf("one-shot outcome=%v, starts=%d, removals=%d", err, runtimeBoundary.starts, runtimeBoundary.removes)
+			}
+			if err != nil && (len(output) != 0 || strings.Contains(err.Error(), "private-native-error")) {
+				t.Fatal("unverified output or provider error escaped")
+			}
+		})
+	}
+}
+
+func TestLocalRecoveryInvocationRejectsSubstitutedRuntimeAuthority(t *testing.T) {
+	for name, mutate := range map[string]func(*platformContainerInspection){
+		"image":      func(v *platformContainerInspection) { v.Image = "sha256:" + strings.Repeat("f", 64) },
+		"name":       func(v *platformContainerInspection) { v.Name = "/foreign" },
+		"command":    func(v *platformContainerInspection) { v.Config.Labels["com.xiak.matrix.command"] = "cmd-foreign" },
+		"entrypoint": func(v *platformContainerInspection) { v.Config.Entrypoint = []string{"/bin/sh"} },
+		"mode":       func(v *platformContainerInspection) { v.Config.Cmd = []string{"other"} },
+		"environment": func(v *platformContainerInspection) {
+			v.Config.Env = append(v.Config.Env, "MATRIX_DATABASE_DSN=private")
+		},
+		"writable secret":  func(v *platformContainerInspection) { v.Mounts[0].RW = true },
+		"different secret": func(v *platformContainerInspection) { v.Mounts[0].Source = "/other/credential" },
+		"extra mount": func(v *platformContainerInspection) {
+			v.Mounts = append(v.Mounts, platformProviderMount{Type: "bind", Source: "/var/run/docker.sock", Destination: "/var/run/docker.sock", RW: true})
+		},
+		"privileged":          func(v *platformContainerInspection) { v.HostConfig.Privileged = true },
+		"host PID":            func(v *platformContainerInspection) { v.HostConfig.PidMode = "host" },
+		"host IPC":            func(v *platformContainerInspection) { v.HostConfig.IpcMode = "host" },
+		"unbounded processes": func(v *platformContainerInspection) { v.HostConfig.PidsLimit = nil },
+		"unbounded memory":    func(v *platformContainerInspection) { v.HostConfig.Memory = 0 },
+		"other network":       func(v *platformContainerInspection) { v.HostConfig.NetworkMode = "host" },
+		"unassigned foreign network": func(v *platformContainerInspection) {
+			v.NetworkSettings.Networks["other"] = v.NetworkSettings.Networks["private"]
+			delete(v.NetworkSettings.Networks, "private")
+		},
+		"additional network": func(v *platformContainerInspection) {
+			v.NetworkSettings.Networks["other"] = v.NetworkSettings.Networks["private"]
+		},
+		"foreign endpoint": func(v *platformContainerInspection) {
+			endpoint := v.NetworkSettings.Networks["private"]
+			endpoint.NetworkID = "foreign-network"
+			v.NetworkSettings.Networks["private"] = endpoint
+		},
+		"running without authenticated endpoint": func(v *platformContainerInspection) {
+			v.State.Status, v.State.Running = "running", true
+		},
+		"extra capabilities": func(v *platformContainerInspection) { v.HostConfig.CapAdd = []string{"SYS_ADMIN"} },
+		"persistent logging": func(v *platformContainerInspection) { v.HostConfig.LogConfig.Type = "json-file" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			expected, actual := localRecoveryInvocationFixture("apply")
+			mutate(&actual)
+			runtimeBoundary := &localRecoveryInvocationRuntime{container: actual, present: true}
+			_, err := invokeCredentialRecoveryEntry(context.Background(), runtimeBoundary, []string{"container", "create"}, expected)
+			if !errors.Is(err, platformcommand.ErrEffectConflict) || runtimeBoundary.starts != 0 || runtimeBoundary.removes != 0 {
+				t.Fatal("substituted container was used or removed")
+			}
+		})
+	}
+}
+
+func localRecoveryInvocationFixture(mode string) (credentialRecoveryContainerExpectation, platformContainerInspection) {
+	expected := credentialRecoveryContainerExpectation{name: "mxi-local-iam-local-recovery-" + mode, mode: mode, networkID: "network-private", networkName: "private", environment: []string{"PATH=/usr/bin", "MATRIX_IAM_LOCAL_RECOVERY_AUTHORITY_FILE=/run/private/authority"}}
+	expected.service = platformExpectedService{Image: "sha256:" + strings.Repeat("a", 64), User: "0:0", ReadOnly: true, Restart: "no", Networks: []string{"control"},
+		CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges:true"}, Tmpfs: []string{"/tmp:rw,noexec,nosuid,size=64m"},
+		Volumes: []platformMount{{Type: "bind", Source: "/root/private/authority", Target: "/run/private/authority", ReadOnly: true}},
+		Labels:  map[string]string{"com.xiak.matrix.command": "cmd-" + strings.Repeat("a", 32)}}
+	expected.service.Deploy.Resources.Limits.CPUs, expected.service.Deploy.Resources.Limits.Memory = "1", "256M"
+	limit := int64(64)
+	actual := platformContainerInspection{ID: strings.Repeat("b", 64), Name: "/" + expected.name, Image: expected.service.Image,
+		Config: platformContainerConfig{User: "0:0", Labels: cloneTestLabels(expected.service.Labels), Env: slices.Clone(expected.environment), Entrypoint: []string{localRecoveryEntrypoint}, Cmd: []string{mode}},
+		State:  platformContainerState{Status: "created"},
+		HostConfig: platformHostConfig{ReadonlyRootfs: true, NetworkMode: expected.networkID, Memory: 256 * 1024 * 1024, MemorySwap: 256 * 1024 * 1024, NanoCPUs: 1_000_000_000,
+			PidsLimit: &limit, CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges:true"}, Tmpfs: map[string]string{"/tmp": "rw,noexec,nosuid,size=64m"}, IpcMode: "private", CgroupnsMode: "private"},
+		Mounts: []platformProviderMount{{Type: "bind", Source: "/root/private/authority", Destination: "/run/private/authority"}}}
+	actual.HostConfig.RestartPolicy.Name = "no"
+	actual.HostConfig.LogConfig.Type = "none"
+	actual.NetworkSettings.Networks = map[string]struct {
+		NetworkID string `json:"NetworkID"`
+	}{"private": {}}
+	return expected, actual
+}
+
+type localRecoveryInvocationRuntime struct {
+	container       platformContainerInspection
+	present         bool
+	exitCode        int
+	attachErr       bool
+	starts, removes int
+}
+
+func (boundary *localRecoveryInvocationRuntime) Run(_ context.Context, input io.Reader, arguments ...string) ([]byte, bool, error) {
+	if input != nil || len(arguments) < 2 || arguments[0] != "container" {
+		return nil, false, errors.New("unexpected one-shot boundary")
+	}
+	switch arguments[1] {
+	case "ls":
+		if !boundary.present {
+			return nil, true, nil
+		}
+		return []byte(boundary.container.ID), true, nil
+	case "inspect":
+		output, err := json.Marshal(boundary.container)
+		return output, true, err
+	case "create":
+		boundary.present = true
+		boundary.container.State = platformContainerState{Status: "created"}
+		return []byte(boundary.container.ID), true, nil
+	case "start":
+		boundary.starts++
+		boundary.container.State = platformContainerState{Status: "exited", ExitCode: boundary.exitCode}
+		if boundary.attachErr {
+			return nil, true, errors.New("private-native-error")
+		}
+		return []byte(`{"sanitized":true}`), true, nil
+	case "rm":
+		if len(arguments) != 3 || arguments[2] != boundary.container.ID || boundary.container.State.Running {
+			return nil, false, errors.New("unsafe one-shot removal")
+		}
+		boundary.removes++
+		boundary.present = false
+		return nil, true, nil
+	default:
+		return nil, false, errors.New("unexpected one-shot action")
+	}
+}
+
+func TestCredentialRecoveryCleanupAuthenticatesOnlyItsExactTemporaryFiles(t *testing.T) {
+	for _, mode := range []string{"exact", "wrong query", "wrong request", "already cleaned"} {
+		t.Run(mode, func(t *testing.T) {
+			installed := newInstallPlan(t)
+			if err := stageInstallation(installed, rand.Reader); err != nil {
+				t.Fatal(err)
+			}
+			authority, err := readLocalCredentialRecoveryAuthority(installed.Root, installed.InstallationID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			secret, err := iamv1.NewSecret("Temporary-Recovery1!")
+			if err != nil {
+				t.Fatal(err)
+			}
+			request, err := iamv1.SignLocalCredentialRecoveryRequest(authority, iamv1.LocalCredentialRecoveryRequest{
+				APIVersion: iamv1.APIVersion, Kind: "LocalCredentialRecoveryRequest", Purpose: iamv1.LocalCredentialRecoveryPurpose,
+				CommandID: "cmd-" + strings.Repeat("a", 32), Scope: authority.Scope, NewPassword: secret,
+				Expected: iamv1.LocalCredentialRecoveryExpected{OrganizationResourceVersion: 1, PrincipalResourceVersion: 2, CredentialGeneration: 2, PlatformBindingID: "binding-original", PlatformBindingResourceVersion: 1}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			commitment, err := iamv1.VerifyLocalCredentialRecoveryRequest(authority, request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan := platformcommand.CredentialRecoveryPlan{InstalledPlan: installedPlanFrom(installed), CommandID: request.CommandID, InputCommitment: commitment, Request: &request}
+			query := iamv1.LocalCredentialRecoveryReceiptQuery{APIVersion: iamv1.APIVersion, Kind: "LocalCredentialRecoveryReceiptQuery", CommandID: request.CommandID, InputCommitment: commitment}
+			if mode == "wrong query" {
+				query.CommandID = "cmd-" + strings.Repeat("c", 32)
+			}
+			encoded, err := iamv1.EncodeLocalCredentialRecoveryRequest(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mode == "wrong request" {
+				encoded = bytes.Replace(encoded, []byte("Temporary-Recovery1!"), []byte("Forged-Password1!"), 1)
+			}
+			queryBytes, _ := json.Marshal(query)
+			if mode != "already cleaned" {
+				if writeManagedOnce(installed.Root, filepath.FromSlash(layout.IAMLocalRecoveryRequest), encoded) != nil || writeManagedOnce(installed.Root, filepath.FromSlash(layout.IAMLocalRecoveryQuery), queryBytes) != nil {
+					t.Fatal("stage private cleanup fixture")
+				}
+			}
+			before := snapshotManagedCredentials(t, installed.Root)
+			cleanupErr := finalizeCredentialRecoveryFiles(plan, authority)
+			if strings.HasPrefix(mode, "wrong") {
+				if !errors.Is(cleanupErr, platformcommand.ErrEffectConflict) {
+					t.Fatal("cleanup accepted a different intent")
+				}
+				if _, err := os.Stat(filepath.Join(installed.Root, filepath.FromSlash(layout.IAMLocalRecoveryRequest))); err != nil {
+					t.Fatal("cleanup removed an unauthenticated request")
+				}
+			} else {
+				if cleanupErr != nil || finalizeCredentialRecoveryFiles(plan, authority) != nil {
+					t.Fatal("exact cleanup did not replay")
+				}
+				for _, relative := range []string{layout.IAMLocalRecoveryRequest, layout.IAMLocalRecoveryQuery} {
+					if _, err := os.Lstat(filepath.Join(installed.Root, filepath.FromSlash(relative))); !errors.Is(err, os.ErrNotExist) {
+						t.Fatal("cleanup retained temporary material")
+					}
+				}
+			}
+			if !equalSnapshots(before, snapshotManagedCredentials(t, installed.Root)) {
+				t.Fatal("cleanup changed persistent credentials or bootstrap")
+			}
+		})
+	}
+}
+
 func TestProviderVersionComparisonAcceptsBoundedDistributionMetadata(t *testing.T) {
 	for _, test := range []struct {
 		actual, minimum string
@@ -72,6 +387,14 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		len(bootstrap.Services) != len(iamv1.AllServicePurposes()) {
 		t.Fatalf("staged IAM bootstrap identity = %#v", bootstrap)
 	}
+	localAuthority, err := readLocalCredentialRecoveryAuthority(plan.Root, plan.InstallationID)
+	bootstrapDigest, digestErr := iamv1.BootstrapDigest(bootstrap)
+	if err != nil || digestErr != nil || localAuthority.Scope != (iamv1.LocalCredentialRecoveryScope{
+		InstallationID: bootstrap.InstallationID, BootstrapDigest: bootstrapDigest,
+		OrganizationID: bootstrap.Organization.ID, PrincipalID: bootstrap.Administrator.ID,
+	}) {
+		t.Fatal("local recovery authority is not bound to the sealed original primary")
+	}
 
 	serviceCredentials := make(map[iamv1.ServicePurpose][]byte, len(bootstrap.Services))
 	for _, service := range bootstrap.Services {
@@ -109,6 +432,7 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		{layout.PostgresMigration, "matrix"},
 		{layout.IAMAPI, "matrix_iam_api_login"},
 		{layout.IAMWorker, "matrix_iam_worker_login"},
+		{layout.IAMCredentialRecovery, "matrix_iam_credential_recovery_login"},
 		{layout.AuditRuntime, "matrix_audit_runtime_login"},
 		{layout.PaaSAPI, "matrix_paas_api_login"},
 		{layout.PaaSWorker, "matrix_paas_worker_login"},
@@ -222,10 +546,29 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		apisix,
 		mainConfig,
 	}, nil)
+	expectation, err := decodePlatformExpectation(compiled.ComposeJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, service := range expectation.Services {
+		for _, mount := range service.Volumes {
+			if mount.Type != "bind" {
+				continue
+			}
+			for _, private := range []string{layout.IAMCredentialRecovery, layout.IAMLocalRecoveryAuthority, layout.IAMLocalRecoveryRequest, layout.IAMLocalRecoveryQuery} {
+				privatePath := "/matrix-installation-root/" + private
+				if mount.Source == privatePath || strings.HasPrefix(privatePath, strings.TrimRight(mount.Source, "/")+"/") {
+					t.Fatal("ordinary platform service mounted a local recovery capability or its parent")
+				}
+			}
+		}
+	}
 	secrets := [][]byte{
 		administrator,
 		readTestFile(t, plan.Root, layout.PostgresPassword),
 		readTestFile(t, plan.Root, layout.BackupSealKey),
+		readTestFile(t, plan.Root, layout.IAMCredentialRecovery),
+		localAuthority.CapabilityKey.CopyBytes(),
 	}
 	for _, credential := range serviceCredentials {
 		secrets = append(secrets, credential)
@@ -244,6 +587,60 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		); !errors.Is(err, platformcommand.ErrEffectConflict) {
 			t.Fatalf("unsafe APISIX runtime replay error=%v", err)
 		}
+	}
+}
+
+func TestLocalRecoveryAuthorityCannotAdoptAnotherBootstrapOrTarget(t *testing.T) {
+	for _, mode := range []string{"installation", "home organization", "original primary", "bootstrap bytes", "invalid key", "absent authority"} {
+		t.Run(mode, func(t *testing.T) {
+			plan := newInstallPlan(t)
+			if err := stageInstallation(plan, rand.Reader); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(plan.Root, filepath.FromSlash(layout.IAMLocalRecoveryAuthority))
+			content := readTestFile(t, plan.Root, layout.IAMLocalRecoveryAuthority)
+			switch mode {
+			case "installation":
+				content = bytes.Replace(content, []byte(plan.InstallationID), []byte("mxi-ffffffffffffffffffffffffffffffff"), 1)
+			case "home organization":
+				content = bytes.Replace(content, []byte("organization-default"), []byte("organization-foreign"), 1)
+			case "original primary":
+				content = bytes.Replace(content, []byte("principal-admin"), []byte("principal-child"), 1)
+			case "bootstrap bytes":
+				bootstrapPath := filepath.Join(plan.Root, filepath.FromSlash(layout.IAMBootstrap))
+				bootstrap := readTestFile(t, plan.Root, layout.IAMBootstrap)
+				bootstrap = bytes.Replace(bootstrap, []byte("Matrix Administrator"), []byte("Changed Administrator"), 1)
+				if os.WriteFile(bootstrapPath, bootstrap, 0o600) != nil {
+					t.Fatal("write changed bootstrap fixture")
+				}
+			case "invalid key":
+				content = bytes.Replace(content, []byte(`"capabilityKey":"`), []byte(`"capabilityKey":"invalid`), 1)
+			case "absent authority":
+				if os.Remove(path) != nil {
+					t.Fatal("remove temporary authority fixture")
+				}
+				if _, err := readLocalCredentialRecoveryAuthority(plan.Root, plan.InstallationID); !errors.Is(err, platformcommand.ErrEffectVerification) {
+					t.Fatal("recovery silently created a missing local capability")
+				}
+				if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+					t.Fatal("read-only recovery inspection changed authority state")
+				}
+				return
+			}
+			if os.WriteFile(path, content, 0o600) != nil {
+				t.Fatal("write substituted authority fixture")
+			}
+			before := snapshotManagedCredentials(t, plan.Root)
+			if _, err := readLocalCredentialRecoveryAuthority(plan.Root, plan.InstallationID); !errors.Is(err, platformcommand.ErrEffectVerification) {
+				t.Fatal("recovery accepted substituted authority provenance")
+			}
+			if err := stageInstallation(plan, failingEntropy{}); !errors.Is(err, platformcommand.ErrEffectVerification) {
+				t.Fatal("staging replay adopted a substituted local recovery authority")
+			}
+			if !equalSnapshots(before, snapshotManagedCredentials(t, plan.Root)) {
+				t.Fatal("rejected authority changed existing installation credentials")
+			}
+		})
 	}
 }
 
@@ -430,6 +827,7 @@ func TestMigrateInstallationUsesFixedGoBinariesWithoutCredentialArguments(t *tes
 		readTestFile(t, plan.Root, layout.PostgresMigration),
 		readTestFile(t, plan.Root, layout.IAMAPI),
 		readTestFile(t, plan.Root, layout.IAMWorker),
+		readTestFile(t, plan.Root, layout.IAMCredentialRecovery),
 		readTestFile(t, plan.Root, layout.AuditRuntime),
 		readTestFile(t, plan.Root, layout.PaaSAPI),
 		readTestFile(t, plan.Root, layout.PaaSWorker),
@@ -449,6 +847,12 @@ func TestMigrateInstallationUsesFixedGoBinariesWithoutCredentialArguments(t *tes
 			if bytes.Contains([]byte(joined), secret) {
 				t.Fatalf("migration command %d contains database credential material", index)
 			}
+		}
+		recoveryMount := "type=bind,src=" + filepath.Join(plan.Root, filepath.FromSlash(layout.IAMCredentialRecovery)) + ",dst=/run/matrix/iam-recovery-dsn,readonly"
+		iamMigration := wantEntrypoints[index] == "/matrix/bin/matrix-iam-migrate"
+		if hasArgumentPair(arguments, "--mount", recoveryMount) != iamMigration ||
+			hasArgumentPair(arguments, "--env", "MATRIX_MIGRATION_IAM_RECOVERY_DSN_FILE=/run/matrix/iam-recovery-dsn") != iamMigration {
+			t.Fatal("local recovery database capability escaped the IAM role-provisioning boundary")
 		}
 	}
 	installation, err := verifiedInstallationConfiguration(plan)
@@ -705,6 +1109,13 @@ func TestCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T) {
 		t.Skip("local-machine backup effects target Linux")
 	}
 	plan, expectation := configuredPlatformStartFixture(t)
+	credentials := snapshotManagedCredentials(t, plan.Root)
+	authority, err := readLocalCredentialRecoveryAuthority(plan.Root, plan.InstallationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capabilityKey := authority.CapabilityKey.CopyBytes()
+	defer clear(capabilityKey)
 	secret := []byte("backup-secret-value-that-must-not-enter-metadata")
 	secretRelative := filepath.Join(
 		filepath.FromSlash(layout.WorkloadSecretRoot),
@@ -735,7 +1146,7 @@ func TestCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T) {
 		t.Fatalf("read backup manifest: %v", err)
 	}
 	sealKey := readTestFile(t, plan.Root, layout.BackupSealKey)
-	for _, forbidden := range [][]byte{secret, sealKey, []byte(plan.Root)} {
+	for _, forbidden := range [][]byte{secret, sealKey, capabilityKey, readTestFile(t, plan.Root, layout.IAMCredentialRecovery), []byte(plan.Root)} {
 		if bytes.Contains(manifestContent, forbidden) {
 			t.Fatal("backup manifest contains secret or absolute-path material")
 		}
@@ -776,6 +1187,10 @@ func TestCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T) {
 		t.Fatalf("workload secret archive header=%#v err=%v", header, err)
 	}
 	archivedSecret, err := io.ReadAll(archive)
+	if _, nextErr := archive.Next(); !errors.Is(nextErr, io.EOF) {
+		_ = archiveFile.Close()
+		t.Fatal("workload backup included material outside the workload secret inventory")
+	}
 	if closeErr := archiveFile.Close(); err != nil || closeErr != nil ||
 		!bytes.Equal(archivedSecret, secret) {
 		t.Fatalf("workload secret snapshot differs: read=%v close=%v", err, closeErr)
@@ -790,6 +1205,9 @@ func TestCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T) {
 	}
 	if runtimeBoundary.backupStreams != streams {
 		t.Fatal("backup replay streamed a second database snapshot")
+	}
+	if !equalSnapshots(credentials, snapshotManagedCredentials(t, plan.Root)) {
+		t.Fatal("backup changed persistent installation or recovery credentials")
 	}
 	for _, scalar := range []string{"0", "null"} {
 		ambiguous := append([]byte(`{"schemaVersion":`+scalar+`,`), manifestContent[1:]...)
@@ -1085,6 +1503,12 @@ func TestSupportEvidenceIsBoundedSanitizedAndUsefulWhenDegraded(t *testing.T) {
 		t.Skip("local-machine support effects target Linux")
 	}
 	plan, expectation := configuredPlatformStartFixture(t)
+	authority, err := readLocalCredentialRecoveryAuthority(plan.Root, plan.InstallationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capabilityKey := authority.CapabilityKey.CopyBytes()
+	defer clear(capabilityKey)
 	secret := []byte("support-secret-value-that-must-never-be-emitted")
 	if err := writeManagedOnce(
 		plan.Root,
@@ -1119,6 +1543,8 @@ func TestSupportEvidenceIsBoundedSanitizedAndUsefulWhenDegraded(t *testing.T) {
 	}
 	for _, forbidden := range [][]byte{
 		secret,
+		capabilityKey,
+		readTestFile(t, plan.Root, layout.IAMCredentialRecovery),
 		readTestFile(t, plan.Root, layout.BackupSealKey),
 		readTestFile(t, plan.Root, layout.PaaSAPI),
 		[]byte(plan.Root),
@@ -1564,6 +1990,8 @@ func snapshotManagedCredentials(t *testing.T, root string) map[string]string {
 		layout.InitialAdministratorPassword,
 		layout.PostgresPassword, layout.PostgresMigration, layout.IAMAPI,
 		layout.IAMWorker, layout.AuditRuntime, layout.PaaSAPI, layout.PaaSWorker,
+		layout.IAMCredentialRecovery,
+		layout.IAMLocalRecoveryAuthority,
 	}
 	result := make(map[string]string, len(paths))
 	for _, path := range paths {

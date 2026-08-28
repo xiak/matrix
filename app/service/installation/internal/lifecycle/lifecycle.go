@@ -21,34 +21,36 @@ var (
 type Action string
 
 const (
-	ActionInstall           Action = "INSTALL"
-	ActionVerify            Action = "VERIFY"
-	ActionStatus            Action = "STATUS"
-	ActionBackup            Action = "BACKUP"
-	ActionUpgrade           Action = "UPGRADE"
-	ActionRollback          Action = "ROLLBACK"
-	ActionRecover           Action = "RECOVER"
-	ActionSupport           Action = "SUPPORT"
-	ActionStart             Action = "START"
-	ActionRotateCredentials Action = "ROTATE_CREDENTIALS"
+	ActionInstall            Action = "INSTALL"
+	ActionVerify             Action = "VERIFY"
+	ActionStatus             Action = "STATUS"
+	ActionBackup             Action = "BACKUP"
+	ActionUpgrade            Action = "UPGRADE"
+	ActionRollback           Action = "ROLLBACK"
+	ActionRecover            Action = "RECOVER"
+	ActionSupport            Action = "SUPPORT"
+	ActionStart              Action = "START"
+	ActionRotateCredentials  Action = "ROTATE_CREDENTIALS"
+	ActionRecoverCredentials Action = "RECOVER_CREDENTIALS"
 )
 
 type Phase string
 
 const (
-	PhasePreflight          Phase = "PREFLIGHT"
-	PhaseBackingUp          Phase = "BACKING_UP"
-	PhaseStaging            Phase = "STAGING"
-	PhaseLoadingImages      Phase = "LOADING_IMAGES"
-	PhaseConfiguring        Phase = "CONFIGURING"
-	PhaseMigrating          Phase = "MIGRATING"
-	PhaseStarting           Phase = "STARTING"
-	PhaseVerifying          Phase = "VERIFYING"
-	PhaseCommitting         Phase = "COMMITTING"
-	PhaseRollingBack        Phase = "ROLLING_BACK"
-	PhaseRecovering         Phase = "RECOVERING"
-	PhaseReady              Phase = "READY"
-	PhaseManualIntervention Phase = "MANUAL_INTERVENTION"
+	PhasePreflight             Phase = "PREFLIGHT"
+	PhaseBackingUp             Phase = "BACKING_UP"
+	PhaseStaging               Phase = "STAGING"
+	PhaseLoadingImages         Phase = "LOADING_IMAGES"
+	PhaseConfiguring           Phase = "CONFIGURING"
+	PhaseMigrating             Phase = "MIGRATING"
+	PhaseStarting              Phase = "STARTING"
+	PhaseVerifying             Phase = "VERIFYING"
+	PhaseCommitting            Phase = "COMMITTING"
+	PhaseRollingBack           Phase = "ROLLING_BACK"
+	PhaseRecovering            Phase = "RECOVERING"
+	PhaseRecoveringCredentials Phase = "RECOVERING_CREDENTIALS"
+	PhaseReady                 Phase = "READY"
+	PhaseManualIntervention    Phase = "MANUAL_INTERVENTION"
 )
 
 type Outcome string
@@ -177,6 +179,13 @@ func ValidateBackupID(value string) error {
 	return nil
 }
 
+func ValidateCommandID(value string) error {
+	if !commandIDPattern.MatchString(value) {
+		return errors.New("installation command identity is invalid")
+	}
+	return nil
+}
+
 func Start(journal Journal, command Command) (StartResult, error) {
 	if err := ValidateJournal(journal); err != nil {
 		return StartResult{}, fmt.Errorf("stored installation journal is invalid: %w", err)
@@ -261,8 +270,13 @@ func Advance(journal Journal, commandID string, next Phase, at time.Time) (Journ
 	journal.Version++
 	if next == PhaseReady {
 		execution.Outcome = OutcomeSucceeded
+		if execution.Command.Action == ActionRecoverCredentials && execution.FailureCode != "" {
+			execution.Outcome = OutcomeFailed
+		}
 		execution.CompletedAt = at
-		applySuccessfulPointerChange(&journal, execution)
+		if execution.Outcome == OutcomeSucceeded {
+			applySuccessfulPointerChange(&journal, execution)
+		}
 		journal.Active = nil
 		journal.Last = &execution
 		return journal, nil
@@ -289,6 +303,16 @@ func Fail(journal Journal, commandID, failureCode string, at time.Time) (Journal
 	execution.UpdatedAt = at
 	journal.Version++
 	switch execution.Command.Action {
+	case ActionRecoverCredentials:
+		if execution.Phase != PhaseStaging && execution.Phase != PhaseRecoveringCredentials {
+			return Journal{}, ErrInvalidTransition
+		}
+		// A definitive IAM rejection has no credential effect. Seal that
+		// result before removing its private input; cleanup can then resume
+		// without attempting the rejected recovery again.
+		execution.Phase = PhaseCommitting
+		journal.Active = &execution
+		return journal, nil
 	case ActionRotateCredentials:
 		// Credential retirement is one-way. A failed attempt keeps the exact
 		// candidate intent for retry; it never restores the old trust set.
@@ -419,6 +443,11 @@ func validateCommand(command Command, node bool) error {
 		return errors.New("installation command contains unrelated credential input")
 	}
 	switch command.Action {
+	case ActionRecoverCredentials:
+		if !digestPattern.MatchString(command.InputDigest) || command.TargetReleaseID != "" ||
+			command.BackupID != "" || command.BackupDigest != "" {
+			return errors.New("platform credential recovery input is invalid")
+		}
 	case ActionRotateCredentials:
 		if !digestPattern.MatchString(command.InputDigest) || !digestPattern.MatchString(command.ExpectedConfigurationDigest) ||
 			command.InputDigest == command.ExpectedConfigurationDigest || command.TargetReleaseID != "" ||
@@ -485,7 +514,7 @@ func validateActionPrecondition(journal Journal, command Command) error {
 		if journal.CurrentReleaseID == "" || journal.PreviousRelease == "" {
 			return ErrPrecondition
 		}
-	case ActionVerify, ActionStatus, ActionBackup, ActionSupport, ActionStart:
+	case ActionVerify, ActionStatus, ActionBackup, ActionSupport, ActionStart, ActionRecoverCredentials:
 		if journal.CurrentReleaseID == "" {
 			return ErrPrecondition
 		}
@@ -552,7 +581,8 @@ func validateExecution(execution Execution, completed bool, node bool) error {
 				problems = append(problems, errors.New("successful installation execution is not ready"))
 			}
 		case OutcomeFailed:
-			if phaseIndex(workflow(execution.Command.Action, node), execution.Phase) < 0 || execution.Phase == PhaseReady {
+			credentialRecoveryCompleted := execution.Command.Action == ActionRecoverCredentials && execution.Phase == PhaseReady && execution.FailureCode != ""
+			if !credentialRecoveryCompleted && (phaseIndex(workflow(execution.Command.Action, node), execution.Phase) < 0 || execution.Phase == PhaseReady) {
 				problems = append(problems, errors.New("failed installation execution phase is invalid"))
 			}
 		case OutcomeManualIntervention:
@@ -584,6 +614,17 @@ func validateExecution(execution Execution, completed bool, node bool) error {
 	if execution.FailureCode != "" && !failureCodePattern.MatchString(execution.FailureCode) {
 		problems = append(problems, errors.New("installation failure code is invalid"))
 	}
+	if execution.Command.Action == ActionRecoverCredentials {
+		if completed {
+			if execution.Phase != PhaseReady || (execution.Outcome != OutcomeSucceeded && execution.Outcome != OutcomeFailed) ||
+				(execution.Outcome == OutcomeSucceeded && execution.FailureCode != "") ||
+				(execution.Outcome == OutcomeFailed && execution.FailureCode == "") {
+				problems = append(problems, errors.New("credential recovery completion is invalid"))
+			}
+		} else if execution.FailureCode != "" && execution.Phase != PhaseCommitting {
+			problems = append(problems, errors.New("rejected credential recovery is not finalizing"))
+		}
+	}
 	return errors.Join(problems...)
 }
 
@@ -611,6 +652,8 @@ func workflow(action Action, node bool) []Phase {
 		}
 	}
 	switch action {
+	case ActionRecoverCredentials:
+		return []Phase{PhaseStaging, PhaseRecoveringCredentials, PhaseCommitting, PhaseReady}
 	case ActionInstall:
 		return []Phase{PhasePreflight, PhaseStaging, PhaseLoadingImages, PhaseConfiguring,
 			PhaseMigrating, PhaseStarting, PhaseVerifying, PhaseCommitting, PhaseReady}

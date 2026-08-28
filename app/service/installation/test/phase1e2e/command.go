@@ -129,7 +129,7 @@ func runMX(
 	var envelope mxEnvelope
 	if decodeOne(output.stdout, &envelope) != nil ||
 		envelope.APIVersion != "cli.matrix.xiak.com/v1" ||
-		envelope.Kind != "PlatformCommandResult" || envelope.Action != strings.ToUpper(action) ||
+		envelope.Kind != "PlatformCommandResult" || envelope.Action != strings.ToUpper(strings.ReplaceAll(action, "-", "_")) ||
 		envelope.Status != "SUCCEEDED" || envelope.Result.State != "READY" {
 		return mxResult{}, fail("mx-" + action + "-result")
 	}
@@ -170,7 +170,7 @@ func validateExpectedMXFailure(
 	var envelope mxFailure
 	if decodeOne(stderr.content.Bytes(), &envelope) != nil ||
 		envelope.APIVersion != "cli.matrix.xiak.com/v1" ||
-		envelope.Kind != "PlatformCommandFailure" || envelope.Action != strings.ToUpper(action) ||
+		envelope.Kind != "PlatformCommandFailure" || envelope.Action != strings.ToUpper(strings.ReplaceAll(action, "-", "_")) ||
 		envelope.Status != "FAILED" || envelope.Error.Class != "VERIFICATION_FAILED" ||
 		envelope.Error.Code == "" || strings.Contains(strings.ToLower(envelope.Error.Message), "docker") ||
 		strings.Contains(strings.ToLower(envelope.Error.Message), "postgres") {
@@ -290,16 +290,18 @@ func assertEmptyDocker(ctx context.Context) error {
 }
 
 type containerInspection struct {
-	ID     string `json:"Id"`
-	Name   string `json:"Name"`
-	Config struct {
+	ID           string `json:"Id"`
+	Name         string `json:"Name"`
+	RestartCount uint64 `json:"RestartCount"`
+	Config       struct {
 		Image  string            `json:"Image"`
 		Labels map[string]string `json:"Labels"`
 	} `json:"Config"`
 	State struct {
-		Running bool   `json:"Running"`
-		Status  string `json:"Status"`
-		Health  *struct {
+		Running   bool   `json:"Running"`
+		Status    string `json:"Status"`
+		StartedAt string `json:"StartedAt"`
+		Health    *struct {
 			Status string `json:"Status"`
 		} `json:"Health"`
 	} `json:"State"`

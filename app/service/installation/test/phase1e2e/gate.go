@@ -54,6 +54,11 @@ func newGate(config options, releases releasePair) *gate {
 
 func (value *gate) beforeRestart(ctx context.Context) error {
 	defer value.edge.close()
+	defer func() {
+		for _, secret := range value.sensitive {
+			clear(secret)
+		}
+	}()
 	if err := value.assertFreshHost(ctx); err != nil {
 		return err
 	}
@@ -143,6 +148,15 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return err
 	}
 	emit("application-generation-two")
+
+	bearer, err = value.recoverOriginalPlatformCredentials(ctx, bearer, newPassword)
+	if err != nil {
+		return err
+	}
+	if err := value.assertWorkload(ctx, value.releases.a.Manifest, updated, 2, "2", settingTwo, secretDigest); err != nil {
+		return err
+	}
+	emit("original-platform-credential-recovery-without-runtime-restart")
 
 	wantInitialAudit := map[auditv1.Action]string{
 		auditv1.ActionIAMBootstrapApplied:              "",
@@ -326,6 +340,186 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	emit("bounded-support-zero-leakage")
 	emit("restart-required")
 	return nil
+}
+
+func (value *gate) recoverOriginalPlatformCredentials(ctx context.Context, oldBearer, finalPassword []byte) ([]byte, error) {
+	before, err := readJournal(ctx, value.config.root)
+	if err != nil || before.Active != nil {
+		return nil, fail("credential-recovery-initial-journal")
+	}
+	ids, err := dockerLines(ctx, "container", "ls", "--quiet", "--no-trunc")
+	if err != nil || len(ids) == 0 {
+		return nil, fail("credential-recovery-runtime-baseline")
+	}
+	running, err := inspectContainers(ctx, ids)
+	if err != nil {
+		return nil, fail("credential-recovery-runtime-baseline")
+	}
+	unchangedRuntime := func() error {
+		currentIDs, err := dockerLines(ctx, "container", "ls", "--quiet", "--no-trunc")
+		if err != nil || len(currentIDs) != len(running) {
+			return fail("credential-recovery-runtime-preservation")
+		}
+		current, err := inspectContainers(ctx, currentIDs)
+		if err != nil {
+			return fail("credential-recovery-runtime-preservation")
+		}
+		for _, original := range running {
+			found := false
+			for _, observed := range current {
+				if original.ID == observed.ID && original.State.StartedAt != "" && observed.State.Running &&
+					original.State.StartedAt == observed.State.StartedAt && original.RestartCount == observed.RestartCount {
+					found = true
+				}
+			}
+			if !found {
+				return fail("credential-recovery-restarted-a-service-or-workload")
+			}
+		}
+		return nil
+	}
+	persistent := make(map[string][]byte)
+	defer func() {
+		for _, content := range persistent {
+			clear(content)
+		}
+	}()
+	for _, relative := range []string{layout.IAMBootstrap, layout.IAMLocalRecoveryAuthority, layout.IAMCredentialRecovery} {
+		content, err := os.ReadFile(filepath.Join(value.config.root, filepath.FromSlash(relative)))
+		if err != nil || len(content) == 0 {
+			return nil, fail("credential-recovery-protected-baseline")
+		}
+		persistent[relative] = content
+	}
+	temporaryPassword, err := randomPassword(rand.Reader)
+	if err != nil {
+		return nil, fail("credential-recovery-private-input")
+	}
+	value.sensitive = append(value.sensitive, temporaryPassword)
+	value.edge.addForbidden(temporaryPassword)
+	const commandID = "cmd-cccccccccccccccccccccccccccccccc"
+	input, err := json.Marshal(map[string]string{"apiVersion": lifecycle.APIVersion, "kind": "PlatformCredentialRecoveryInput",
+		"commandId": commandID, "password": string(temporaryPassword)})
+	if err != nil {
+		return nil, fail("credential-recovery-private-input")
+	}
+	inputPath := filepath.Join(value.config.root, "credential-recovery-input.json")
+	file, err := os.OpenFile(inputPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		clear(input)
+		return nil, fail("credential-recovery-private-input")
+	}
+	_, writeErr := file.Write(input)
+	clear(input)
+	closeErr := file.Close()
+	defer func() { _ = os.Remove(inputPath) }()
+	if writeErr != nil || closeErr != nil {
+		return nil, fail("credential-recovery-private-input")
+	}
+	recovered, err := runMX(ctx, value.releases.a, "recover-credentials", []string{
+		"--root", value.config.root, "--recovery-input", inputPath,
+	}, value.forbidden(temporaryPassword, finalPassword, oldBearer))
+	if err != nil || !recovered.Changed || recovered.CorrelationID != commandID || recovered.ReleaseID != before.CurrentReleaseID {
+		return nil, fail("credential-recovery-command")
+	}
+	if _, err := value.edge.json(ctx, http.MethodGet, "/api/iam/v1/auth/me", oldBearer, nil, nil, http.StatusUnauthorized); err != nil {
+		return nil, fail("credential-recovery-old-session-denial")
+	}
+	if _, err := value.edge.json(ctx, http.MethodPost, "/api/iam/v1/auth/login", nil,
+		loginWire{LoginName: "admin", Password: string(finalPassword), RequestID: "recovery-old-password"}, nil, http.StatusUnauthorized); err != nil {
+		return nil, fail("credential-recovery-old-password-denial")
+	}
+	current, err := value.edge.login(ctx, temporaryPassword, "recovery-current-temporary-session")
+	if err != nil {
+		return nil, fail("credential-recovery-temporary-login")
+	}
+	other, err := value.edge.login(ctx, temporaryPassword, "recovery-other-temporary-session")
+	if err != nil {
+		clear(current)
+		return nil, fail("credential-recovery-other-temporary-login")
+	}
+	value.sensitive = append(value.sensitive, current, other)
+	value.edge.addForbidden(current, other)
+	if _, err := value.edge.json(ctx, http.MethodGet, "/api/iam/v1/organizations", current, nil, nil, http.StatusForbidden); err != nil {
+		return nil, fail("credential-recovery-forced-change-only")
+	}
+	if err := value.edge.changePassword(ctx, current, temporaryPassword, finalPassword); err != nil {
+		return nil, fail("credential-recovery-normal-password-change")
+	}
+	if _, err := value.edge.json(ctx, http.MethodGet, "/api/iam/v1/auth/me", other, nil, nil, http.StatusUnauthorized); err != nil {
+		return nil, fail("credential-recovery-other-temporary-session-denial")
+	}
+	if err := os.Remove(inputPath); err != nil {
+		return nil, fail("credential-recovery-operator-input-removal")
+	}
+	for _, relative := range []string{layout.IAMLocalRecoveryRequest, layout.IAMLocalRecoveryQuery} {
+		if _, err := os.Lstat(filepath.Join(value.config.root, filepath.FromSlash(relative))); !errors.Is(err, os.ErrNotExist) {
+			return nil, fail("credential-recovery-temporary-material-cleanup")
+		}
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		replay, err := runMX(ctx, value.releases.a, "recover-credentials", []string{"--root", value.config.root, "--resume"}, value.forbidden(temporaryPassword, current, other))
+		if err != nil || replay.Changed || replay.CorrelationID != commandID {
+			return nil, fail("credential-recovery-completed-replay")
+		}
+	}
+	if _, err := value.edge.json(ctx, http.MethodPost, "/api/iam/v1/auth/login", nil,
+		loginWire{LoginName: "admin", Password: string(temporaryPassword), RequestID: "recovery-retired-password"}, nil, http.StatusUnauthorized); err != nil {
+		return nil, fail("credential-recovery-replay-revived-old-password")
+	}
+	after, err := readJournal(ctx, value.config.root)
+	if err != nil || after.Active != nil || after.Last == nil || after.Last.Command.ID != commandID ||
+		after.Last.Command.Action != lifecycle.ActionRecoverCredentials || after.Last.Outcome != lifecycle.OutcomeSucceeded ||
+		after.CurrentReleaseID != before.CurrentReleaseID || after.CurrentReleaseDigest != before.CurrentReleaseDigest ||
+		after.PreviousRelease != before.PreviousRelease || after.PreviousReleaseDigest != before.PreviousReleaseDigest {
+		return nil, fail("credential-recovery-journal-preservation")
+	}
+	for relative, original := range persistent {
+		content, err := os.ReadFile(filepath.Join(value.config.root, filepath.FromSlash(relative)))
+		matched := err == nil && bytes.Equal(original, content)
+		clear(content)
+		if !matched {
+			return nil, fail("credential-recovery-protected-authority-preservation")
+		}
+	}
+	if err := unchangedRuntime(); err != nil {
+		return nil, err
+	}
+	poll, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	for {
+		response, err := value.edge.json(poll, http.MethodPost, "/api/audit/v1/platform/records:query", current,
+			auditv1.QueryRecordsRequest{PageSize: 10, Action: auditv1.ActionIAMInstallationPrimaryCredentialsRecovered}, nil, http.StatusOK)
+		if err == nil {
+			var page auditv1.RecordPage
+			valid := decodeOne(response.body, &page) == nil && auditv1.ValidateRecordPage(page) == nil
+			clear(response.body)
+			if valid && page.InstallationID == before.InstallationID && len(page.Records) == 1 && page.NextCursor == "" {
+				event := page.Records[0].Event
+				if page.Records[0].Source != auditv1.SourceIAM || event.RequestID != commandID || event.CorrelationID != commandID ||
+					event.Actor != (auditv1.ActorReference{Type: auditv1.ActorSystem, ID: iamv1.LocalCredentialRecoveryActor}) ||
+					event.IAMDecisionID != "" || event.Target.ID != "principal-admin" || event.Target.TenantID != "organization-default" {
+					return nil, fail("credential-recovery-exact-audit-fact")
+				}
+				break
+			}
+		}
+		if !waitPoll(poll, 250*time.Millisecond) {
+			return nil, fail("credential-recovery-audit-delivery")
+		}
+	}
+	response, err := value.edge.json(ctx, http.MethodPost, "/api/audit/v1/platform/integrity:verify", current,
+		auditv1.VerifyChainRequest{FromSequence: 1, MaximumRecords: auditv1.MaxVerifyRecords}, nil, http.StatusOK)
+	if err != nil {
+		return nil, fail("credential-recovery-platform-chain")
+	}
+	defer clear(response.body)
+	var verification auditv1.ChainVerification
+	if decodeOne(response.body, &verification) != nil || auditv1.ValidateChainVerification(verification) != nil ||
+		verification.InstallationID != before.InstallationID || verification.State != auditv1.VerificationVerified || !verification.Complete || verification.RecordCount == 0 {
+		return nil, fail("credential-recovery-platform-chain")
+	}
+	return current, nil
 }
 
 func (value *gate) afterRestart(ctx context.Context) error {
@@ -991,6 +1185,13 @@ func installedSecretValues(root string) ([][]byte, error) {
 			for _, service := range document.Services {
 				values = append(values, service.Credential.CopyBytes())
 			}
+		}
+		if filepath.Clean(path) == filepath.Join(root, filepath.FromSlash(layout.IAMLocalRecoveryAuthority)) {
+			authority, decodeErr := iamv1.DecodeLocalCredentialRecoveryAuthority(bytes.NewReader(content))
+			if decodeErr != nil {
+				return decodeErr
+			}
+			values = append(values, authority.CapabilityKey.CopyBytes())
 		}
 		if parsed, parseErr := url.Parse(strings.TrimSpace(string(content))); parseErr == nil && parsed.User != nil {
 			if password, found := parsed.User.Password(); found && password != "" {

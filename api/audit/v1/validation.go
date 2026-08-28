@@ -64,8 +64,10 @@ func ValidateEvent(value Event) error {
 	if !known {
 		problems = append(problems, errors.New("Audit action is invalid"))
 	} else {
+		localRecovery := value.Action == ActionIAMInstallationPrimaryCredentialsRecovered
 		if contract.PlatformOnly != (value.InstallationID != "") ||
-			contract.PlatformOnly && value.Actor.Type != ActorUser {
+			contract.PlatformOnly && !localRecovery && value.Actor.Type != ActorUser ||
+			localRecovery && (value.Actor.Type != ActorSystem || value.Actor.ID != "iam-local-recovery") {
 			problems = append(problems, errors.New("Audit action and authority differ"))
 		}
 		if value.Target.Kind != contract.Target {
@@ -90,7 +92,7 @@ func ValidateEvent(value Event) error {
 	if value.IAMDecisionID != "" {
 		problems = append(problems, ValidateID("iamDecisionId", string(value.IAMDecisionID)))
 	}
-	if value.Action == ActionIAMTenantAdministratorRecovered {
+	if value.Action == ActionIAMTenantAdministratorRecovered || value.Action == ActionIAMInstallationPrimaryCredentialsRecovered {
 		problems = append(problems, ValidateID("target.tenantId", string(value.Target.TenantID)))
 	} else if value.Target.TenantID != "" {
 		problems = append(problems, errors.New("Audit action cannot contain a target tenant"))

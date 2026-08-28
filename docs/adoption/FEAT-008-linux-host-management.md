@@ -57,3 +57,12 @@ contract-test slices are consumed; the donor's FEAT status, checkpoint and
 database profile are not imported. This contract-only source has no recovery
 transaction, local executable or new Audit action, and proves none of their
 runtime acceptance gates.
+
+Fixed same-repository commit `aa345eca5f1ed3921000aa5380d5bfd2aa6d0a50`
+is `ADAPT` for the purpose-only IAM recovery executable, atomic transaction,
+immutable completion evidence, closed installation-scoped Audit fact and their
+existing authority gates. The installation consumer keeps its own PaaS 2
+composition and host regressions; the donor's PaaS 1 profile, FEAT acceptance
+state and checkpoint are `REJECT` for integration. These source gates do not
+accept the combined signed installation/CLI recovery workflow or cross-profile
+release transitions.

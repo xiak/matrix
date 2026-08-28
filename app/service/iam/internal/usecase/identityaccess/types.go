@@ -61,6 +61,8 @@ type Transaction interface {
 	CreateOrganization(context.Context, OrganizationMutation) (iamv1.OrganizationAccount, error)
 	SetOrganizationStatus(context.Context, OrganizationStatusMutation) (iamv1.OrganizationAccount, error)
 	RecoverOrganizationAdministrator(context.Context, OrganizationAdministratorRecovery) (iamv1.OrganizationAccount, error)
+	InspectLocalCredentialRecovery(context.Context, iamv1.LocalCredentialRecoveryScope, *iamv1.LocalCredentialRecoveryReceiptQuery) (iamv1.LocalCredentialRecoveryInspection, error)
+	RecoverLocalCredentials(context.Context, LocalCredentialRecoveryMutation) (iamv1.LocalCredentialRecoveryResult, error)
 	SetAccountAlias(context.Context, AccountAliasMutation) (iamv1.OrganizationAccount, error)
 	ChangeSubaccount(context.Context, SubaccountMutation) (iamv1.Principal, error)
 	Readiness(context.Context) (ReadinessSnapshot, error)
@@ -111,6 +113,17 @@ type OrganizationAdministratorRecovery struct {
 	PasswordHash        authority.PasswordHash
 	BindingID           iamv1.RoleBindingID
 	AuditEvent          auditv1.Event
+}
+
+// The local entry authenticates this mutation with installation-private
+// authority, never a USER decision or an existing service credential.
+type LocalCredentialRecoveryMutation struct {
+	Scope           iamv1.LocalCredentialRecoveryScope
+	Expected        iamv1.LocalCredentialRecoveryExpected
+	CommandID       string
+	InputCommitment string
+	PasswordHash    authority.PasswordHash
+	AuditEvent      auditv1.Event
 }
 
 type SubaccountMutation struct {

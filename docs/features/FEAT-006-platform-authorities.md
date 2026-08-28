@@ -195,8 +195,9 @@ Pausing a tenant denies its next interactive IAM/PaaS/Audit request without
 stopping workloads, cancelling accepted Operations or blocking historical outbox
 delivery. Enabling it cannot revive revoked roles or sessions. New lifecycle
 facts are installation-scoped `iam.tenant.created`, `iam.tenant.disabled`,
-`iam.tenant.enabled` and `iam.tenant-administrator.recovered`. Only recovery's
-PRINCIPAL target requires `target.tenantId`; other actions reject that namespace.
+`iam.tenant.enabled` and `iam.tenant-administrator.recovered`. Of these lifecycle
+facts, only recovery's PRINCIPAL target requires `target.tenantId`; the other
+lifecycle actions reject that namespace.
 Existing tenant events and canonical bytes remain unchanged. IAM's outbox claim
 adds a seventh, sealed installation-ID column independently of its physical
 organization owner; readiness verifies that exact function shape.
@@ -212,13 +213,41 @@ timestamps cannot establish which credential was used. Concurrency, revoked and
 temporary sessions, wrong old passwords and failed mutations must not acquire
 new authority or partially change credentials.
 
-IAM readiness requires schema 3 and the strict seven-argument password function;
-the old function is removed. The consuming release composition and contract
+IAM readiness requires schema 4, the strict seven-argument password function
+and the purpose-only local recovery functions/protections below; the old
+password function is removed. The consuming release composition and contract
 revision belong to [FEAT-008](FEAT-008-linux-host-management.md), not the donor's
 different PaaS schema. Retained-data SQL migration and old-executable tests do
 not authorize cross-profile release upgrade, rollback or recovery. Existing UI
 and gate owners are reused, retaining host admission/Operation/outbox regressions
 and independently verified runtime logins.
+
+### Local original-installation-primary credential recovery
+
+The signed local IAM entry uses a separate purpose-only database login, never
+an online USER decision, runtime credential or migration identity. Its private
+authority and request bind the sealed installation/bootstrap/home-organization/
+original-primary tuple, one command, expected organization/principal/binding
+versions and credential generation. Only the ACTIVE original USER with an
+existing unrevoked platform binding is eligible. It does not grant authority,
+enable accounts or tenants, transfer root ownership or recover service keys.
+
+The serializable transaction locks the binding and principal, increments the
+credential generation, requires password change, revokes all old sessions and
+commits an immutable completion with one sanitized outbox fact. Exact historical
+receipt queries and replay do not require current eligibility and cannot repeat
+the mutation after a later password change or role revocation. Missing receipts
+do not issue fresh expected versions. The API/worker/verifier cannot execute
+the two local functions or read their private receipt table.
+
+`iam.installation-primary.credentials-recovered` is the single closed local
+SYSTEM fact: actor `iam-local-recovery`, installation scope, original PRINCIPAL
+target with its home `target.tenantId`, and no invented IAM decision. Exact
+committed IAM outbox proof is still mandatory. Other platform actions retain
+their USER/decision rules and old canonical bytes are unchanged. Installation
+ownership, private-file invocation, signed packaging and crash-resume acceptance
+remain in [FEAT-008](FEAT-008-linux-host-management.md); these transactions do
+not admit legacy first authorization or cross-profile release transitions.
 
 ## Audit authority
 
@@ -236,7 +265,8 @@ verification require distinct installation-scoped IAM actions and record their
 own access facts. `api/audit/v1.CanonicalizeEvent` owns the pure canonical event
 encoding and content digest; Audit's chain implementation reuses that function.
 
-Audit readiness remains at schema version 2. The existing Audit migration upgrades retained tenant storage
+Audit readiness requires schema version 3, including the closed local SYSTEM
+fact. The existing Audit migration upgrades retained tenant storage
 atomically without rewriting event documents, canonical bytes or hashes. Its
 exclusive table locks cover foreign-key validation and restore forced RLS
 before commit. No old SQL aliases or second Audit implementation remain.
@@ -474,6 +504,15 @@ module verification and stable contract generation passed. Consuming source
 the retained-executable authority and real node/collector regressions. UI evidence is owned by
 [FEAT-007](FEAT-007-control-plane-console.md). The complete multi-tenant and
 offline release extension remains unaccepted.
+
+The purpose-only local recovery integration passed this branch's isolated
+PostgreSQL 18 transaction/concurrency and authority-schema gates. The existing
+process gate ran the actual fixed `5721b7b` IAM executable with retained schema-3
+data, migrated to IAM 4, and exercised the dedicated recovery login and real
+one-shot entrypoint. Its combined readiness remains IAM 4 / Audit 3 / PaaS 2,
+revision 4, with the host admission and dual-tenant regressions retained. This
+proves the authority transaction and process boundary, not the signed installer
+consumer, its crash recovery, or runnable cross-profile compatibility.
 
 - Gate A was accepted on 2026-08-26. Strict generated Go/OpenAPI contracts,
   current-credential-only service identity, fixed Argon2id and

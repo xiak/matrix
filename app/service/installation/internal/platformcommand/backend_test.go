@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/cli"
 	"github.com/xiak/matrix/app/service/installation/internal/journal"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
@@ -19,6 +21,150 @@ import (
 	"github.com/xiak/matrix/app/service/installation/internal/releasetest"
 	"github.com/xiak/matrix/app/service/installation/release"
 )
+
+func TestCredentialRecoveryInputIsClosedBoundedAndSecretSafe(t *testing.T) {
+	const source = `{"apiVersion":"installation.matrix.xiak.com/v1","kind":"PlatformCredentialRecoveryInput","commandId":"cmd-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","password":"temporary-Recovery1!"}`
+	input, err := DecodeCredentialRecoveryInput([]byte(source))
+	if err != nil || input.CommandID != "cmd-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" || !input.Password.Present() {
+		t.Fatal("valid private credential recovery input was rejected")
+	}
+	if _, err := json.Marshal(input); !errors.Is(err, iamv1.ErrSecretSerialization) {
+		t.Fatal("ordinary serialization exposed credential recovery material")
+	}
+	if strings.Contains(fmt.Sprintf("%v %+v %#v", input, input, input), "temporary-Recovery") {
+		t.Fatal("formatting exposed credential recovery material")
+	}
+	for _, invalid := range []string{
+		"null", "[]", "{}", source + "{}", source + strings.Repeat(" ", MaximumCredentialRecoveryInputBytes),
+		strings.Replace(source, "installation.matrix.xiak.com/v1", "installation.matrix.xiak.com/v2", 1),
+		strings.Replace(source, "PlatformCredentialRecoveryInput", "PlatformAuthorization", 1),
+		strings.Replace(source, `"password":"temporary-Recovery1!"`, `"password":null`, 1),
+		strings.Replace(source, `"password":"temporary-Recovery1!"`, `"password":""`, 1),
+		strings.Replace(source, `"password":"temporary-Recovery1!"`, `"password":"temporary-Recovery1!","password":"other"`, 1),
+		strings.Replace(source, `"commandId":"cmd-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"`, `"commandId":"../another"`, 1),
+		strings.Replace(source, `"password":`, `"principalId":"principal-other","password":`, 1),
+		strings.Replace(source, `"password":`, `"organizationId":"organization-other","password":`, 1),
+		strings.Replace(source, `"password":`, `"purpose":"grant-platform","password":`, 1),
+		strings.Replace(source, `"password":`, `"databaseDsn":"postgresql://secret@foreign/other","password":`, 1),
+	} {
+		if _, err := DecodeCredentialRecoveryInput([]byte(invalid)); err == nil ||
+			strings.Contains(err.Error(), "temporary-Recovery") || strings.Contains(err.Error(), "foreign") {
+			t.Fatal("invalid credential recovery input was accepted or disclosed")
+		}
+	}
+}
+
+func TestCredentialRecoveryRetainsOneIntentAndNeverRollsBackCredentials(t *testing.T) {
+	for _, scenario := range []struct {
+		name        string
+		phase       lifecycle.Phase
+		err         error
+		wantPending lifecycle.Phase
+		wantFailure string
+	}{
+		{name: "success"},
+		{name: "stage interruption", phase: lifecycle.PhaseStaging, err: ErrEffectUnavailable, wantPending: lifecycle.PhaseStaging},
+		{name: "lost apply response", phase: lifecycle.PhaseRecoveringCredentials, err: ErrEffectOutcomeUnknown, wantPending: lifecycle.PhaseRecoveringCredentials},
+		{name: "unverifiable provider", phase: lifecycle.PhaseRecoveringCredentials, err: ErrEffectVerification, wantPending: lifecycle.PhaseRecoveringCredentials},
+		{name: "known rejection", phase: lifecycle.PhaseRecoveringCredentials, err: ErrCredentialRecoveryForbidden, wantFailure: "CREDENTIAL_RECOVERY_FORBIDDEN"},
+		{name: "cleanup unavailable", phase: lifecycle.PhaseCommitting, err: ErrEffectUnavailable, wantPending: lifecycle.PhaseCommitting},
+		{name: "cleanup cannot reclassify success", phase: lifecycle.PhaseCommitting, err: ErrCredentialRecoveryForbidden, wantPending: lifecycle.PhaseCommitting},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			fixture := writeReleaseFixture(t)
+			effects := &installEffects{credentialFailPhase: scenario.phase, credentialFailErr: scenario.err, credentialFailOnce: true}
+			backend := newTestBackend(t, effects)
+			root := filepath.Join(t.TempDir(), "matrix")
+			if _, err := backend.Run(context.Background(), installRequest(root, fixture)); err != nil {
+				t.Fatal(err)
+			}
+			materializeInstalledRelease(t, root, fixture)
+			before := readJournal(t, root)
+			const commandID = "cmd-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+			commitment := "sha256:" + strings.Repeat("b", 64)
+			effects.credentialPlan = CredentialRecoveryPlan{CommandID: commandID, InputCommitment: commitment}
+			request := cli.Request{Action: lifecycle.ActionRecoverCredentials, Root: root, RecoveryInput: filepath.Join(root, "private-input.json")}
+			result, runErr := backend.Run(context.Background(), request)
+			state := readJournal(t, root)
+			if scenario.wantPending != "" {
+				if runErr == nil || state.Active == nil || state.Active.Phase != scenario.wantPending || state.Active.FailureCode != "" ||
+					state.Active.Command.ID != commandID || state.Active.Command.InputDigest != commitment ||
+					state.Active.Command.Action != lifecycle.ActionRecoverCredentials {
+					t.Fatal("unknown/cleanup failure lost or recategorized the sealed intent")
+				}
+				originalCommand := state.Active.Command
+				applyCalls := effects.credentialCalls[lifecycle.PhaseRecoveringCredentials]
+				backend = newTestBackend(t, effects)
+				result, runErr = backend.Run(context.Background(), cli.Request{Action: lifecycle.ActionRecoverCredentials, Root: root, Resume: true})
+				if scenario.wantPending == lifecycle.PhaseCommitting && effects.credentialCalls[lifecycle.PhaseRecoveringCredentials] != applyCalls {
+					t.Fatal("cleanup replay invoked credential recovery again")
+				}
+				state = readJournal(t, root)
+				if state.Last == nil || state.Last.Command != originalCommand {
+					t.Fatal("public resume replaced the original journal intent")
+				}
+			}
+			if state.Active != nil || state.Last == nil || state.Last.Command.ID != commandID || state.Last.Command.InputDigest != commitment ||
+				state.CurrentReleaseID != before.CurrentReleaseID || state.CurrentReleaseDigest != before.CurrentReleaseDigest ||
+				state.PreviousRelease != before.PreviousRelease || state.PreviousReleaseDigest != before.PreviousReleaseDigest {
+				t.Fatal("credential recovery changed release ownership or lost completion")
+			}
+			if scenario.wantFailure == "" {
+				if runErr != nil || state.Last.Outcome != lifecycle.OutcomeSucceeded || result.CorrelationID != commandID || !result.Changed {
+					t.Fatalf("recovery did not finish its sealed intent: %v", runErr)
+				}
+				applyCalls := effects.credentialCalls[lifecycle.PhaseRecoveringCredentials]
+				replayed, err := backend.Run(context.Background(), cli.Request{Action: lifecycle.ActionRecoverCredentials, Root: root, Resume: true})
+				if err != nil || replayed.Changed || replayed.CorrelationID != commandID ||
+					!reflect.DeepEqual(state, readJournal(t, root)) || effects.credentialCalls[lifecycle.PhaseRecoveringCredentials] != applyCalls {
+					t.Fatal("completed public resume changed credentials or journal state")
+				}
+			} else {
+				assertFault(t, runErr, cli.FaultPrecondition, scenario.wantFailure)
+				if state.Last.Outcome != lifecycle.OutcomeFailed || state.Last.Phase != lifecycle.PhaseReady || effects.credentialCalls[lifecycle.PhaseCommitting] != 1 {
+					t.Fatal("known rejection did not commit sanitized failure and clean private material")
+				}
+			}
+			for phase := range effects.credentialCalls {
+				if phase != lifecycle.PhaseStaging && phase != lifecycle.PhaseRecoveringCredentials && phase != lifecycle.PhaseCommitting {
+					t.Fatal("credential recovery reached an unrelated lifecycle phase")
+				}
+			}
+			if effects.rollbackCalls != 0 || effects.backupCalls != 0 || len(effects.recoveryCalls) != 0 || len(effects.upgradeCalls) != 0 || len(effects.explicitRollbackCalls) != 0 {
+				t.Fatal("credential recovery used release/backup/restart effects")
+			}
+		})
+	}
+}
+
+func TestCredentialRecoveryRejectsUnsupportedProfilesBeforePreparingAnIntent(t *testing.T) {
+	profiles := []release.DatabaseProfile{
+		{Compatibility: "identical-authority-profile", Authorities: release.AuthoritySchemas{IAM: 3, Audit: 2, PaaS: 2}, ContractRevision: 3},
+		{Compatibility: "identical-authority-profile", Authorities: release.AuthoritySchemas{IAM: 4, Audit: 3, PaaS: 1}, ContractRevision: 4},
+		{Compatibility: "identical-authority-profile", Authorities: release.AuthoritySchemas{IAM: 4, Audit: 3, PaaS: 2}, ContractRevision: 5},
+	}
+	for index, profile := range profiles {
+		t.Run(fmt.Sprint(index), func(t *testing.T) {
+			fixtures, err := releasetest.WriteSequence(t.TempDir(), 2, profile, profile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			effects := &installEffects{}
+			backend := newTestBackend(t, effects)
+			root := filepath.Join(t.TempDir(), "matrix")
+			if _, err := backend.Run(context.Background(), installRequest(root, fixtures[0])); err != nil {
+				t.Fatal(err)
+			}
+			materializeInstalledRelease(t, root, fixtures[0])
+			before := readJournal(t, root)
+			_, err = backend.Run(context.Background(), cli.Request{Action: lifecycle.ActionRecoverCredentials, Root: root, RecoveryInput: filepath.Join(root, "private-input.json")})
+			assertFault(t, err, cli.FaultPrecondition, "CREDENTIAL_RECOVERY_PROFILE_UNSUPPORTED")
+			if !reflect.DeepEqual(before, readJournal(t, root)) || effects.credentialPrepareCalls != 0 || len(effects.credentialCalls) != 0 {
+				t.Fatal("unsupported profile reached recovery preparation or changed its journal")
+			}
+		})
+	}
+}
 
 func TestInstallCommitsPinnedReleaseOnlyAfterEffectsAndReplays(t *testing.T) {
 	fixture := writeReleaseFixture(t)
@@ -1034,6 +1180,34 @@ type installEffects struct {
 	recoveryFailErr           error
 	recoveryFailOnce          bool
 	recoveryFailed            bool
+	credentialPlan            CredentialRecoveryPlan
+	credentialPrepareErr      error
+	credentialPrepareCalls    int
+	credentialCalls           map[lifecycle.Phase]int
+	credentialFailPhase       lifecycle.Phase
+	credentialFailErr         error
+	credentialFailOnce        bool
+	credentialFailed          bool
+}
+
+func (effects *installEffects) PrepareCredentialRecovery(_ context.Context, installed InstalledPlan, _ string, _ *lifecycle.Execution) (CredentialRecoveryPlan, error) {
+	effects.credentialPrepareCalls++
+	plan := effects.credentialPlan
+	plan.InstalledPlan = installed
+	return plan, effects.credentialPrepareErr
+}
+
+func (effects *installEffects) ApplyCredentialRecoveryPhase(_ context.Context, plan CredentialRecoveryPlan, phase lifecycle.Phase) error {
+	if effects.credentialCalls == nil {
+		effects.credentialCalls = make(map[lifecycle.Phase]int)
+	}
+	effects.credentialCalls[phase]++
+	effects.credentialPlan = plan
+	if phase == effects.credentialFailPhase && effects.credentialFailErr != nil && (!effects.credentialFailOnce || !effects.credentialFailed) {
+		effects.credentialFailed = true
+		return effects.credentialFailErr
+	}
+	return nil
 }
 
 func (effects *installEffects) ApplyInstallPhase(

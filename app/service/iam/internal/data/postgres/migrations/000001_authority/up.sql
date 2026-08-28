@@ -363,8 +363,10 @@ LANGUAGE plpgsql
 SET search_path = pg_catalog, pg_temp
 AS $function$
 DECLARE
+    local_recovery boolean := expected_action = 'iam.installation-primary.credentials-recovered';
     platform_lifecycle boolean := expected_action IN (
-        'iam.tenant.created','iam.tenant.disabled','iam.tenant.enabled','iam.tenant-administrator.recovered');
+        'iam.tenant.created','iam.tenant.disabled','iam.tenant.enabled','iam.tenant-administrator.recovered',
+        'iam.installation-primary.credentials-recovered');
 BEGIN
     IF jsonb_typeof(submitted_event) <> 'object'
        OR jsonb_typeof(submitted_event->'actor') <> 'object'
@@ -393,11 +395,11 @@ BEGIN
        ]) <> '{}'::jsonb
        OR ((submitted_event->'actor') - ARRAY['type', 'id']) <> '{}'::jsonb
        OR ((submitted_event->'target') - ARRAY['kind', 'id', 'tenantId']) <> '{}'::jsonb
-       OR (expected_action = 'iam.tenant-administrator.recovered' AND (
+       OR (expected_action IN ('iam.tenant-administrator.recovered','iam.installation-primary.credentials-recovered') AND (
             jsonb_typeof(submitted_event#>'{target,tenantId}') IS DISTINCT FROM 'string'
             OR COALESCE(submitted_event#>>'{target,tenantId}','') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
           ))
-       OR (expected_action <> 'iam.tenant-administrator.recovered' AND (submitted_event->'target') ? 'tenantId')
+       OR (expected_action NOT IN ('iam.tenant-administrator.recovered','iam.installation-primary.credentials-recovered') AND (submitted_event->'target') ? 'tenantId')
        OR jsonb_typeof(submitted_event#>'{actor,type}') <> 'string'
        OR jsonb_typeof(submitted_event#>'{actor,id}') <> 'string'
        OR jsonb_typeof(submitted_event#>'{target,kind}') <> 'string'
@@ -419,7 +421,9 @@ BEGIN
        OR (platform_lifecycle AND (
             submitted_event ? 'tenantId'
             OR jsonb_typeof(submitted_event->'installationId') IS DISTINCT FROM 'string'
-            OR submitted_event#>>'{actor,type}' IS DISTINCT FROM 'USER'
+            OR (NOT local_recovery AND submitted_event#>>'{actor,type}' IS DISTINCT FROM 'USER')
+            OR (local_recovery AND (submitted_event#>>'{actor,type}' IS DISTINCT FROM 'SYSTEM'
+                OR submitted_event#>>'{actor,id}' IS DISTINCT FROM 'iam-local-recovery'))
             OR NOT EXISTS(SELECT 1 FROM iam.bootstrap_receipts AS receipt
                 WHERE receipt.organization_id=expected_tenant_id AND receipt.installation_id=submitted_event->>'installationId')
           ))
@@ -457,7 +461,7 @@ BEGIN
        )
        OR (expected_action IN (
             'iam.bootstrap.applied', 'iam.session.issued',
-            'iam.password.changed'
+            'iam.password.changed', 'iam.installation-primary.credentials-recovered'
        ) AND submitted_event ? 'iamDecisionId')
        OR (expected_action IN (
             'iam.principal.created', 'iam.role-binding.put',
@@ -698,6 +702,20 @@ BEGIN
            AND to_regprocedure('iam.recover_organization_administrator(text,text,text,text,text,bigint,text,text,jsonb)') IS NOT NULL
            AND to_regprocedure('iam.change_password(text,text,text,text,jsonb,text,boolean)') IS NOT NULL
            AND to_regprocedure('iam.change_password(text,text,text,text,jsonb)') IS NULL
+           AND (SELECT count(*) FROM pg_catalog.pg_proc AS recovery
+                WHERE recovery.oid IN (
+                    to_regprocedure('iam.inspect_local_credential_recovery(jsonb,text,text)'),
+                    to_regprocedure('iam.recover_local_credentials(jsonb,jsonb,text,text,text,jsonb)'))
+                  AND recovery.prorettype='jsonb'::regtype AND NOT recovery.proretset
+                  AND recovery.prosecdef AND recovery.proowner='matrix_iam_owner'::regrole) = 2
+           AND EXISTS (SELECT 1 FROM pg_catalog.pg_class AS receipt
+                WHERE receipt.oid=to_regclass('iam.local_credential_recoveries')
+                  AND receipt.relrowsecurity AND receipt.relforcerowsecurity
+                  AND receipt.relowner='matrix_iam_owner'::regrole)
+           AND (SELECT count(*) FROM pg_catalog.pg_trigger AS protection
+                WHERE protection.tgrelid=to_regclass('iam.local_credential_recoveries')
+                  AND protection.tgname IN ('local_recovery_receipts_are_immutable','local_recovery_receipts_cannot_be_truncated')
+                  AND NOT protection.tgisinternal AND protection.tgenabled='A') = 2
            AND EXISTS (
                SELECT 1 FROM pg_catalog.pg_attribute AS column_definition
                 WHERE column_definition.attrelid = 'iam.sessions'::regclass
@@ -727,7 +745,7 @@ BEGIN
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-           3::bigint,
+           4::bigint,
            transaction_timestamp();
 END
 $function$;

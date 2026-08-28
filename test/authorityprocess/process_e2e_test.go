@@ -73,6 +73,10 @@ func TestRuntimeDSNBindsLeastPrivilegeLogin(t *testing.T) {
 	if admin.User != "postgres" || admin.Password != "query-admin" {
 		t.Fatal("runtime DSN mutated migration configuration")
 	}
+	direct, err := pgx.ParseConfig(localRecoveryMigrationDSN(t, runtimeDSN(t, admin, paasAPILogin, password)))
+	if err != nil || direct.User != actual.ConnConfig.User || direct.Password != actual.ConnConfig.Password || direct.Host != admin.Host || direct.Port != admin.Port || direct.Database != admin.Database || direct.RuntimeParams["pool_max_conns"] != "" {
+		t.Fatal("migration DSN changed its restricted identity or retained a pool-only server parameter")
+	}
 }
 
 func TestIAMRetainedAccountProcessUpgrade(t *testing.T) {
@@ -861,7 +865,18 @@ func runAuthorityProcesses(t *testing.T, dsnVariable string, nodeFixture func(*t
 	}
 	assertAuditAccessRecorded(t, ctx, admin, auditv1.ActionAuditRecordsRead, "principal-admin")
 	assertAuditAccessRecorded(t, ctx, admin, auditv1.ActionAuditIntegrityVerified, "principal-admin")
+	var verifyHistoricalRecovery func()
+	var recoverySecrets []string
+	adminLogin, verifyHistoricalRecovery, recoverySecrets = proveLocalCredentialRecoveryProcesses(t, ctx, admin, root, temporary, binaries.localRecovery, iamEndpoint, auditEndpoint, paasEndpoint, bootstrap, adminLogin,
+		func(admit func()) {
+			auditProcess.stop()
+			admit()
+			auditProcess = start(binaries.audit, auditEnvironment)
+			waitHTTPStatus(t, ctx, auditProcess, auditEndpoint+"/ready", http.StatusOK)
+		})
+	sensitive = append(sensitive, recoverySecrets...)
 	revokeIAMBinding(t, iamEndpoint, adminLogin.Credential, "bootstrap-platform-operator-binding", "request-revoke-bootstrap-platform")
+	verifyHistoricalRecovery()
 	platformDecisions = append(platformDecisions,
 		assertPlatformAuthorization(t, iamEndpoint, adminLogin.Credential, "principal-admin", "request-platform-admin-revoked", false),
 	)
@@ -901,6 +916,7 @@ func runAuthorityProcesses(t *testing.T, dsnVariable string, nodeFixture func(*t
 	assertPlatformAuditAccess(t, auditEndpoint, adminLogin.Credential, http.StatusForbidden)
 	assertProcessHostAccess(t, paasEndpoint, adminLogin.Credential, http.StatusForbidden)
 	waitAllIAMOutboxDelivered(t, ctx, admin)
+	verifyHistoricalRecovery()
 	assertPlatformDecisionAuditFacts(t, ctx, admin, platformDecisions)
 	paasProcess.stop()
 	wrongPaaSEnvironment := append([]string(nil), paasEnvironment...)
@@ -1095,6 +1111,7 @@ func runAuthorityProcesses(t *testing.T, dsnVariable string, nodeFixture func(*t
 
 type binarySet struct {
 	iam            string
+	localRecovery  string
 	audit          string
 	dispatcher     string
 	paas           string
@@ -1124,6 +1141,7 @@ func buildAuthorityBinaries(
 	}
 	return binarySet{
 		iam:            build("matrix-iam", "./app/service/iam/cmd/matrix-iam"),
+		localRecovery:  build("matrix-iam-local-recovery", "./app/service/iam/cmd/matrix-iam-local-recovery"),
 		audit:          build("matrix-audit", "./app/service/audit/cmd/matrix-audit"),
 		dispatcher:     build("matrix-iam-audit-dispatcher", "./app/service/iam/cmd/matrix-iam-audit-dispatcher"),
 		paas:           build("matrix-paas", "./app/service/paas/cmd/matrix-paas"),
@@ -1163,9 +1181,10 @@ func startChild(
 	root string,
 	binary string,
 	environment []string,
+	arguments ...string,
 ) *childProcess {
 	t.Helper()
-	command := exec.Command(binary)
+	command := exec.Command(binary, arguments...)
 	command.Dir = root
 	command.Env = append(os.Environ(), environment...)
 	return startChildCommand(t, command)
@@ -1470,13 +1489,23 @@ func assertPlatformAuditStoredFacts(t *testing.T, ctx context.Context, admin *pg
 	t.Helper()
 	var records, matched int
 	if err := admin.QueryRow(ctx, `SELECT count(*), count(*) FILTER (
-		WHERE decision.allowed AND record.tenant_id IS NULL
+		WHERE (decision.allowed AND record.tenant_id IS NULL
 		  AND decision.document->>'installationId' = record.installation_id
 		  AND NOT (decision.document ? 'tenantId')
 		  AND record.event_document#>>'{actor,id}' = decision.principal_id
 		  AND record.event_document->>'requestId' = decision.request_id)
+		 OR (record.source='IAM' AND record.event_document->>'action'='iam.installation-primary.credentials-recovered'
+		  AND record.event_document#>>'{actor,type}'='SYSTEM' AND record.event_document#>>'{actor,id}'='iam-local-recovery'
+		  AND NOT (record.event_document ? 'iamDecisionId') AND record.tenant_id IS NULL
+		  AND recovery.installation_id=record.installation_id
+		  AND recovery.primary_principal_id=record.event_document#>>'{target,id}'
+		  AND recovery.tenant_id=record.event_document#>>'{target,tenantId}'
+		  AND recovery.command_id=record.event_document->>'requestId'
+		  AND outbox.event_document=record.event_document))
 		FROM audit.records AS record LEFT JOIN iam.authorization_decisions AS decision
 		  ON decision.id = record.event_document->>'iamDecisionId'
+		LEFT JOIN iam.local_credential_recoveries AS recovery ON recovery.event_id=record.event_id
+		LEFT JOIN iam.audit_outbox AS outbox ON outbox.tenant_id=recovery.tenant_id AND outbox.event_id=recovery.event_id
 		WHERE record.installation_id = 'installation-process'`).Scan(&records, &matched); err != nil {
 		t.Fatal(err)
 	}
@@ -2808,6 +2837,10 @@ func assertAuthorityPlaintextAbsent(
 					SELECT 1 FROM audit.records
 					 WHERE event_document::text LIKE '%' || $1 || '%'
 					    OR canonical_document LIKE '%' || $1 || '%'
+				)
+				OR EXISTS (
+					SELECT 1 FROM iam.local_credential_recoveries AS receipt
+					 WHERE row_to_json(receipt)::text LIKE '%' || $1 || '%'
 				)`,
 			plaintext,
 		).Scan(&present); err != nil {
@@ -2952,6 +2985,7 @@ func createProcessLogins(t *testing.T, ctx context.Context, admin *pgx.Conn) {
 	}{
 		{iamAPILogin, "matrix_iam_api"},
 		{iamWorkerLogin, "matrix_iam_worker"},
+		{localRecoveryProcessLogin, "matrix_iam_credential_recovery"},
 		{auditRuntimeLogin, "matrix_audit_runtime"},
 		{paasAPILogin, "matrix_paas_api"},
 		{paasWorkerLogin, "matrix_paas_worker"},
@@ -3145,6 +3179,15 @@ func assertCrossSchemaIsolation(
 		{iamWorkerLogin, "SELECT * FROM paas.audit_outbox_snapshot()"},
 		{auditRuntimeLogin, "SELECT * FROM iam.bootstrap_status()"},
 		{auditRuntimeLogin, "SELECT * FROM paas.readiness()"},
+		{localRecoveryProcessLogin, "SELECT * FROM audit.readiness()"},
+		{localRecoveryProcessLogin, "SELECT * FROM paas.readiness()"},
+		{localRecoveryProcessLogin, "SELECT * FROM iam.bootstrap_status()"},
+		{localRecoveryProcessLogin, "SET ROLE matrix_iam_api"},
+		{localRecoveryProcessLogin, "SET ROLE matrix_iam_worker"},
+		{iamAPILogin, "SELECT iam.inspect_local_credential_recovery('{}'::jsonb,NULL,NULL)"},
+		{iamWorkerLogin, "SELECT iam.inspect_local_credential_recovery('{}'::jsonb,NULL,NULL)"},
+		{auditRuntimeLogin, "SELECT iam.inspect_local_credential_recovery('{}'::jsonb,NULL,NULL)"},
+		{paasAPILogin, "SELECT iam.inspect_local_credential_recovery('{}'::jsonb,NULL,NULL)"},
 	} {
 		config := adminConfig.Copy()
 		config.User = attack.login

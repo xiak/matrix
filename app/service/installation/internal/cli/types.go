@@ -37,6 +37,8 @@ type Request struct {
 	Configuration               string
 	ExpectedConfigurationDigest string
 	RevokePreviousCredentials   bool
+	RecoveryInput               string
+	Resume                      bool
 }
 
 type Result struct {
