@@ -517,23 +517,16 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 			t.Error("interrupted mx did not exit")
 		}
 	}()
-	deadline = time.Now().Add(15 * time.Second)
+	deadline, _ = startContext.Deadline()
 	for {
-		if pid := nativeUnitProperty(t, collectorUnit, "MainPID"); pid != "" && pid != "0" {
-			break
+		running := true
+		for _, unit := range units {
+			pid := nativeUnitProperty(t, unit, "MainPID")
+			if pid == "" || pid == "0" || nativeUnitProperty(t, unit, "ActiveState") != "active" {
+				running = false
+			}
 		}
-		select {
-		case <-done:
-			t.Fatal("mx exited before starting the collector")
-		default:
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("collector was not started before interruption")
-		}
-		<-time.After(100 * time.Millisecond)
-	}
-	for {
-		if pid := nativeUnitProperty(t, nodeUnit, "MainPID"); pid != "" && pid != "0" {
+		if running {
 			break
 		}
 		select {
@@ -541,11 +534,11 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 			if interruptionOutput.Len() <= 4096 {
 				t.Logf("interruption startup result: %s", interruptionOutput.Bytes())
 			}
-			t.Fatal("mx exited before starting the node")
+			t.Fatal("mx exited before both resident services were running")
 		default:
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("node was not started before interruption")
+			t.Fatal("resident services were not running before the command deadline")
 		}
 		<-time.After(100 * time.Millisecond)
 	}
