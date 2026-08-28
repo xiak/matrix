@@ -657,9 +657,13 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 			t.Fatal("rotation altered operator-owned original enrollment")
 		}
 
-		media := filepath.Join(base, "upgrade-media")
+		mediaRoot := filepath.Join(base, "upgrade-media")
+		if err := os.Mkdir(mediaRoot, 0o700); err != nil {
+			t.Fatal("create private fixture media parent")
+		}
+		media := filepath.Join(mediaRoot, "bundle")
 		if _, err := release.StageDirectory(successor, trustBytes, media); err != nil {
-			t.Fatal("prepare an owned, removable successor media fixture")
+			t.Fatalf("prepare an owned, removable successor media fixture: %v", err)
 		}
 		sourceMX := filepath.Join(root, "releases", installed.ReleaseID, "bin", "mx")
 		upgradeArgs := []string{"node", "upgrade", "--root", root, "--bundle", media}
@@ -854,7 +858,7 @@ func interruptNativeCommand(t *testing.T, installer, root string, units []string
 // does not restart a workload or lose data; it is not a PaaS placement gate.
 func nativeRetainedWorkload(t *testing.T, base, installationID string) func() {
 	t.Helper()
-	const image = "postgres@sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a"
+	image := "postgres@sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a"
 	const label = "com.xiak.matrix.fixture"
 	const inspect = `{{.Id}}|{{.State.StartedAt}}|{{.RestartCount}}|{{.State.Running}}|{{index .Config.Labels "com.xiak.matrix.fixture"}}`
 	docker := func(arguments ...string) (string, error) {
@@ -865,6 +869,17 @@ func nativeRetainedWorkload(t *testing.T, base, installationID string) func() {
 			return "", fmt.Errorf("fixture Docker output exceeded its bound")
 		}
 		return strings.TrimSpace(string(output)), err
+	}
+	// A classic Docker archive import retains the config identity, not the
+	// registry index name. This is the authenticated linux/amd64 config from
+	// the fixed index above; neither a mutable tag nor a pull fallback is used.
+	if _, err := docker("image", "inspect", "--format", "{{.Id}}", image); err != nil {
+		const configID = "sha256:1bf3d6960db467e87a506daef30feb41fecc23b7c5f96b157e873059f2ffb50a"
+		actual, err := docker("image", "inspect", "--format", "{{.Id}}|{{.Os}}|{{.Architecture}}", configID)
+		if err != nil || actual != configID+"|linux|amd64" {
+			t.Fatal("fixed workload image is not preloaded")
+		}
+		image = configID
 	}
 	name := "matrix-node-credentials-" + strings.TrimPrefix(installationID, "mxi-")
 	if _, err := docker("inspect", "--type", "container", "--format", "{{.Id}}", name); err == nil {
