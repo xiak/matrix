@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -38,6 +40,56 @@ func TestEdgeClientAcceptsExpectedProblemResponses(t *testing.T) {
 				t.Fatal("edge gate misclassified the expected HTTP media/status contract")
 			}
 			clear(result.body)
+		})
+	}
+}
+
+func TestAuditQueryRetriesOnlyBoundedExplicitUnavailability(t *testing.T) {
+	const unavailable = `{"type":"https://matrix.xiak.com/problems/audit.unavailable","title":"Audit unavailable","status":503,"code":"audit.unavailable","requestId":"request-test"}`
+	const page = `{"apiVersion":"audit.matrix.xiak.com/v1","kind":"AuditRecordPage","tenantId":"organization-default","records":[]}`
+	for _, scenario := range []struct {
+		name         string
+		status       int
+		body         string
+		persistent   bool
+		wantAttempts int32
+		wantSuccess  bool
+	}{
+		{name: "ready", status: 200, body: page, wantAttempts: 1, wantSuccess: true},
+		{name: "retry transient unavailable", status: 503, body: unavailable, wantAttempts: 2, wantSuccess: true},
+		{name: "bounded persistent unavailable", status: 503, body: unavailable, persistent: true, wantAttempts: 5},
+		{name: "authentication denial", status: 401, body: unavailable, wantAttempts: 1},
+		{name: "authorization denial", status: 403, body: unavailable, wantAttempts: 1},
+		{name: "unexpected gateway response", status: 502, body: unavailable, wantAttempts: 1},
+		{name: "different problem", status: 503, body: strings.ReplaceAll(unavailable, "audit.unavailable", "audit.other"), wantAttempts: 1},
+		{name: "invalid unavailable problem", status: 503, body: `{}`, wantAttempts: 1},
+		{name: "invalid successful page", status: 200, body: `{}`, wantAttempts: 1},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			var attempts atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				status, body := http.StatusOK, page
+				if attempts.Add(1) == 1 || scenario.persistent {
+					status, body = scenario.status, scenario.body
+				}
+				media := "application/json"
+				if status >= 400 {
+					media = "application/problem+json"
+				}
+				w.Header().Set("Content-Type", media)
+				w.WriteHeader(status)
+				_, _ = w.Write([]byte(body))
+			}))
+			defer server.Close()
+			client := newEdgeClient(server.URL)
+			defer client.close()
+			records, err := client.allAuditRecords(context.Background(), nil)
+			if (err == nil) != scenario.wantSuccess || attempts.Load() != scenario.wantAttempts {
+				t.Fatalf("Audit query success=%t, attempts=%d", err == nil, attempts.Load())
+			}
+			if err == nil && containsAuditHistory(records, map[string]struct{}{"required-record-hash": {}}) {
+				t.Fatal("a successful response masked missing immutable history")
+			}
 		})
 	}
 }

@@ -338,19 +338,42 @@ func (client *edgeClient) queryAudit(
 	bearer []byte,
 	request auditv1.QueryRecordsRequest,
 ) (auditv1.RecordPage, error) {
-	response, err := client.json(
-		ctx, http.MethodPost, "/api/audit/v1/records:query", bearer, request, nil, http.StatusOK,
-	)
-	if err != nil {
-		return auditv1.RecordPage{}, err
+	// Reading is itself audited. A busy chain may exhaust its bounded
+	// SERIALIZABLE retries while dispatchers catch up after a restart. Retry
+	// only that explicit unavailable response, never an invalid page or denial.
+	poll, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	for attempt := 0; attempt < 5; attempt++ {
+		response, err := client.json(
+			poll, http.MethodPost, "/api/audit/v1/records:query", bearer, request, nil, http.StatusOK, http.StatusServiceUnavailable,
+		)
+		if err != nil {
+			return auditv1.RecordPage{}, err
+		}
+		if response.status == http.StatusServiceUnavailable {
+			var problem auditv1.Problem
+			valid := decodeOne(response.body, &problem) == nil && auditv1.ValidateProblem(problem) == nil &&
+				problem.Status == http.StatusServiceUnavailable && problem.Code == "audit.unavailable" &&
+				problem.Type == "https://matrix.xiak.com/problems/audit.unavailable"
+			clear(response.body)
+			if !valid {
+				return auditv1.RecordPage{}, errors.New("Audit unavailable response failed")
+			}
+			if attempt == 4 || !waitPoll(poll, 250*time.Millisecond) {
+				return auditv1.RecordPage{}, errors.New("Audit query remained unavailable")
+			}
+			continue
+		}
+		var page auditv1.RecordPage
+		valid := decodeOne(response.body, &page) == nil && auditv1.ValidateRecordPage(page) == nil &&
+			page.TenantID == "organization-default"
+		clear(response.body)
+		if !valid {
+			return auditv1.RecordPage{}, errors.New("Audit query response failed")
+		}
+		return page, nil
 	}
-	defer clear(response.body)
-	var page auditv1.RecordPage
-	if decodeOne(response.body, &page) != nil || auditv1.ValidateRecordPage(page) != nil ||
-		page.TenantID != "organization-default" {
-		return auditv1.RecordPage{}, errors.New("Audit query response failed")
-	}
-	return page, nil
+	return auditv1.RecordPage{}, errors.New("Audit query remained unavailable")
 }
 
 func (client *edgeClient) allAuditRecords(
