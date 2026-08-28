@@ -141,6 +141,7 @@ func startMX(
 	bundle release.VerifiedBundle,
 	action string,
 	arguments []string,
+	environment ...string,
 ) (*exec.Cmd, *boundedBuffer, *boundedBuffer, error) {
 	args := []string{"--format", "json", "platform", action}
 	args = append(args, arguments...)
@@ -150,10 +151,118 @@ func startMX(
 	command.Stdin = nil
 	command.Stdout = stdout
 	command.Stderr = stderr
+	command.Env = append(os.Environ(), environment...)
 	if err := command.Start(); err != nil {
 		return nil, nil, nil, err
 	}
 	return command, stdout, stderr, nil
+}
+
+// The proxy forwards the real signed invocation to the real engine unchanged.
+// It only withholds the provider process exit after a successful apply, so the
+// installer can be killed while its durable journal still records an unknown
+// outcome. No production hook, forged receipt or database mutation is involved.
+func (value *gate) interruptCredentialRecovery(ctx context.Context, inputPath, commandID, installationID string, forbidden [][]byte) (mxResult, error) {
+	realDocker, err := exec.LookPath("docker")
+	if err != nil || !filepath.IsAbs(realDocker) {
+		return mxResult{}, fail("credential-recovery-provider-path")
+	}
+	directory, err := os.MkdirTemp(value.config.root, ".recovery-interruption-")
+	if err != nil {
+		return mxResult{}, fail("credential-recovery-interruption-fixture")
+	}
+	defer os.RemoveAll(directory)
+	for _, path := range []string{realDocker, directory} {
+		if strings.ContainsAny(path, " \t\r\n'\"$\\") || strings.ContainsRune(path, 96) {
+			return mxResult{}, fail("credential-recovery-provider-path")
+		}
+	}
+	marker, fifo := filepath.Join(directory, "committed"), filepath.Join(directory, "release")
+	output, err := runProcess(ctx, "mkfifo", "-m", "600", fifo)
+	if err != nil || output.exit != 0 {
+		return mxResult{}, fail("credential-recovery-interruption-fixture")
+	}
+	releasePipe, err := os.OpenFile(fifo, os.O_RDWR, 0)
+	if err != nil {
+		return mxResult{}, fail("credential-recovery-interruption-fixture")
+	}
+	defer releasePipe.Close()
+	script := fmt.Sprintf(`#!/bin/sh
+set -u
+umask 077
+if [ "$#" -eq 4 ] && [ "$1" = container ] && [ "$2" = start ] && [ "$3" = --attach ]; then
+  actual=$(%q container inspect --format '{{index .Config.Labels "com.xiak.matrix.command"}} {{index .Config.Labels "com.xiak.matrix.installation"}} {{index .Config.Labels "com.xiak.matrix.role"}}' "$4") || exit "$?"
+  if [ "$actual" = %q ]; then
+    status=0
+    %q "$@" || status=$?
+    if [ "$status" -eq 0 ]; then
+      printf complete > %q
+      mv %q %q
+      IFS= read -r released < %q || :
+    fi
+    exit "$status"
+  fi
+fi
+exec %q "$@"
+`, realDocker, commandID+" "+installationID+" iam-local-recovery-apply", realDocker, marker+".pending", marker+".pending", marker, fifo, realDocker)
+	if os.WriteFile(filepath.Join(directory, "docker"), []byte(script), 0o700) != nil {
+		return mxResult{}, fail("credential-recovery-interruption-fixture")
+	}
+	interruption, cancel := context.WithTimeout(ctx, 25*time.Second)
+	defer cancel()
+	command, stdout, stderr, err := startMX(interruption, value.releases.a, "recover-credentials",
+		[]string{"--root", value.config.root, "--recovery-input", inputPath}, "PATH="+directory+":"+os.Getenv("PATH"))
+	if err != nil {
+		return mxResult{}, fail("credential-recovery-interruption-start")
+	}
+	waited := make(chan error, 1)
+	go func() { waited <- command.Wait() }()
+	finished := false
+	defer func() {
+		if !finished {
+			_ = command.Process.Kill()
+			_, _ = releasePipe.Write([]byte("continue\n"))
+			<-waited
+		}
+	}()
+	for {
+		select {
+		case <-waited:
+			finished = true
+			return mxResult{}, fail("credential-recovery-ended-before-crash")
+		default:
+		}
+		content, readErr := os.ReadFile(marker)
+		if readErr == nil {
+			if string(content) != "complete" {
+				return mxResult{}, fail("credential-recovery-interruption-marker")
+			}
+			break
+		}
+		if !errors.Is(readErr, os.ErrNotExist) || !waitPoll(interruption, 50*time.Millisecond) {
+			return mxResult{}, fail("credential-recovery-interruption-boundary")
+		}
+	}
+	if command.Process.Kill() != nil {
+		return mxResult{}, fail("credential-recovery-installer-kill")
+	}
+	_, _ = releasePipe.Write([]byte("continue\n"))
+	waitErr := <-waited
+	finished = true
+	if waitErr == nil || stdout.overflow || stderr.overflow || stdout.content.Len() != 0 ||
+		containsAny(stdout.content.Bytes(), forbidden) || containsAny(stderr.content.Bytes(), forbidden) {
+		return mxResult{}, fail("credential-recovery-interrupted-output")
+	}
+	pending, err := readJournal(ctx, value.config.root)
+	if err != nil || pending.Active == nil || pending.Active.Command.ID != commandID ||
+		pending.Active.Command.Action != lifecycle.ActionRecoverCredentials ||
+		pending.Active.Phase != lifecycle.PhaseRecoveringCredentials || pending.Active.Command.InputDigest == "" {
+		return mxResult{}, fail("credential-recovery-interrupted-intent")
+	}
+	if os.Remove(inputPath) != nil {
+		return mxResult{}, fail("credential-recovery-operator-input-removal")
+	}
+	return runMX(ctx, value.releases.a, "recover-credentials", []string{"--root", value.config.root, "--resume"}, forbidden)
 }
 
 func validateExpectedMXFailure(

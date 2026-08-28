@@ -416,10 +416,12 @@ func (value *gate) recoverOriginalPlatformCredentials(ctx context.Context, oldBe
 	if writeErr != nil || closeErr != nil {
 		return nil, fail("credential-recovery-private-input")
 	}
-	recovered, err := runMX(ctx, value.releases.a, "recover-credentials", []string{
-		"--root", value.config.root, "--recovery-input", inputPath,
-	}, value.forbidden(temporaryPassword, finalPassword, oldBearer))
-	if err != nil || !recovered.Changed || recovered.CorrelationID != commandID || recovered.ReleaseID != before.CurrentReleaseID {
+	recovered, err := value.interruptCredentialRecovery(ctx, inputPath, commandID, before.InstallationID,
+		value.forbidden(temporaryPassword, finalPassword, oldBearer))
+	if err != nil {
+		return nil, err
+	}
+	if !recovered.Changed || recovered.CorrelationID != commandID || recovered.ReleaseID != before.CurrentReleaseID {
 		return nil, fail("credential-recovery-command")
 	}
 	if _, err := value.edge.json(ctx, http.MethodGet, "/api/iam/v1/auth/me", oldBearer, nil, nil, http.StatusUnauthorized); err != nil {
@@ -449,8 +451,8 @@ func (value *gate) recoverOriginalPlatformCredentials(ctx context.Context, oldBe
 	if _, err := value.edge.json(ctx, http.MethodGet, "/api/iam/v1/auth/me", other, nil, nil, http.StatusUnauthorized); err != nil {
 		return nil, fail("credential-recovery-other-temporary-session-denial")
 	}
-	if err := os.Remove(inputPath); err != nil {
-		return nil, fail("credential-recovery-operator-input-removal")
+	if _, err := os.Lstat(inputPath); !errors.Is(err, os.ErrNotExist) {
+		return nil, fail("credential-recovery-resume-recreated-operator-input")
 	}
 	for _, relative := range []string{layout.IAMLocalRecoveryRequest, layout.IAMLocalRecoveryQuery} {
 		if _, err := os.Lstat(filepath.Join(value.config.root, filepath.FromSlash(relative))); !errors.Is(err, os.ErrNotExist) {

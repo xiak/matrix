@@ -788,6 +788,78 @@ func TestLoadInstallImagesKeepsStartedFailureOutcomeUnknown(t *testing.T) {
 	}
 }
 
+func TestControlNetworkResolutionPreservesFullIdentityAndRejectsAmbiguity(t *testing.T) {
+	const installationID = "mxi-11111111111111111111111111111111"
+	const project = "matrix-" + installationID
+	const releaseID = "matrix-v0.3.0-test"
+	identity := strings.Repeat("a", 64)
+	for _, scenario := range []struct {
+		name      string
+		foreign   bool
+		ambiguous bool
+		want      error
+	}{
+		{name: "full identity"},
+		{name: "foreign ownership", foreign: true, want: platformcommand.ErrEffectConflict},
+		{name: "ambiguous prefix", ambiguous: true, want: platformcommand.ErrEffectVerification},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			labels := map[string]string{
+				"com.xiak.matrix.managed": "true", "com.xiak.matrix.installation": installationID,
+				"com.xiak.matrix.release": releaseID, "com.xiak.matrix.role": "network-control",
+				"com.docker.compose.project": project, "com.docker.compose.network": "control",
+			}
+			if scenario.foreign {
+				labels["com.xiak.matrix.installation"] = "another-installation"
+			}
+			boundary := &scriptedRuntime{run: func(arguments []string) ([]byte, bool, error) {
+				if len(arguments) < 2 || arguments[0] != "network" {
+					return nil, false, errors.New("unexpected network resolution effect")
+				}
+				switch arguments[1] {
+				case "ls":
+					listed := []string{identity}
+					if scenario.ambiguous {
+						listed = append(listed, identity[:12]+strings.Repeat("b", 52))
+					}
+					if !slices.Contains(arguments, "--no-trunc") {
+						for index := range listed {
+							listed[index] = listed[index][:12]
+						}
+					}
+					return []byte(strings.Join(listed, "\n") + "\n"), true, nil
+				case "inspect":
+					if !strings.HasPrefix(identity, arguments[len(arguments)-1]) {
+						return nil, true, errors.New("network is absent")
+					}
+					var value any = platformNetworkInspection{ID: identity, Name: project + "_control", Internal: true, Labels: labels}
+					if hasArgumentPair(arguments, "--format", "{{json .Labels}}") {
+						value = labels
+					}
+					output, err := json.Marshal(value)
+					return output, true, err
+				default:
+					return nil, false, errors.New("network resolution attempted mutation")
+				}
+			}}
+			resolved, err := controlNetworkID(context.Background(), boundary, project, installationID, releaseID)
+			if !errors.Is(err, scenario.want) {
+				t.Fatalf("control network resolution: %v", err)
+			}
+			if scenario.want != nil {
+				if resolved != "" {
+					t.Fatal("rejected network retained a usable identity")
+				}
+				return
+			}
+			observed, err := inspectPlatformNetwork(context.Background(), boundary, resolved)
+			if resolved != identity || err != nil || observed.ID != resolved {
+				t.Fatal("network listing identity cannot authenticate the actual provider observation")
+			}
+		})
+	}
+}
+
 func TestMigrateInstallationUsesFixedGoBinariesWithoutCredentialArguments(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("local-machine migration effects target Linux")
