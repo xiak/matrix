@@ -320,9 +320,26 @@ effect and signed-process owners must prove these boundaries, including removal
 of original media, interruption/replay, latest-key retention and unchanged
 workload identity/data. Certificate renewal/revocation remains independent.
 
-Retain platform backup/recovery/status/support. Node support exposes bounded
-normalized identities, release/health/capacity and correlations, not raw logs,
-paths or secrets. Destructive recovery is an explicit operator action.
+Retain platform backup/recovery/status/support. `mx node support` writes a
+bounded, closed diagnostic snapshot only under the installation's private
+support directory. It authenticates the installed release, enrollment and
+native ownership, but never reconciles a process, changes the lifecycle journal
+or cleans credentials. An active lifecycle command conflicts; diagnosis does
+not replace its recovery intent. A repeated output name may return only its
+already authenticated snapshot for the same journal/credential commitment,
+with original observation times; a changed installation requires a new file.
+
+The snapshot contains normalized identity, release/runtime revision, supervision
+and readiness states, configured reserve, bounded collector CPU/memory/filesystem
+quantities and lifecycle correlations. It reuses the existing authenticated
+collector with at most two samples and no background task or controller key.
+Missing observations remain unavailable, not zero. Raw logs, host/device paths,
+endpoints, environment, certificates, keys and provider output are excluded.
+Support file creation adds no journal action or node-wire field, so it does not
+alter the runtime-revision-3 rollback reader contract. Existing CLI, workflow,
+filesystem and signed-native gates must prove redaction, write-once/private
+output, outage diagnosis and unchanged journal/services/workloads. Destructive
+recovery remains an explicit operator action.
 
 ### Local platform credential recovery
 

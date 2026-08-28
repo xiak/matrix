@@ -66,6 +66,55 @@ func TestNodeInstallResumesUnknownStartupAndPinsEnrollment(t *testing.T) {
 	}
 }
 
+func TestNodeSupportPreservesJournalAndNeverReconcilesOrResumesAnIntent(t *testing.T) {
+	request, _ := nodeRequest(t)
+	effects := &nodeEffects{supportCreated: true}
+	backend, _ := NewBackend(effects)
+	installed, err := backend.Run(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, phaseCount := journalBytes(t, request.Root), len(effects.phases)
+	support := cli.Request{Subject: cli.SubjectNode, Action: lifecycle.ActionSupport, Root: request.Root,
+		SupportOutput: filepath.Join(request.Root, layout.SupportDirectory, "snapshot.json")}
+	outside := support
+	outside.SupportOutput = filepath.Join(filepath.Dir(request.Root), "outside.json")
+	_, err = backend.Run(context.Background(), outside)
+	assertNodeFault(t, err, "SUPPORT_OUTPUT_INVALID")
+	if effects.supportCalls != 0 || !bytes.Equal(before, journalBytes(t, request.Root)) {
+		t.Fatal("unowned diagnostic output reached effects or changed the journal")
+	}
+	effects.cleanupFailure = ErrUnavailable
+	result, err := backend.Run(context.Background(), support)
+	if err != nil || result.State != "SUPPORT_WRITTEN" || !result.Changed || result.CorrelationID != installed.CorrelationID ||
+		effects.supportCalls != 1 || effects.supportPlan.Journal.Version != nodeState(t, request.Root).Version ||
+		effects.supportPlan.Installation.Binding.ConfigurationDigest != installed.ConfigurationDigest ||
+		!bytes.Equal(before, journalBytes(t, request.Root)) || len(effects.phases) != phaseCount {
+		t.Fatalf("diagnostic read changed lifecycle/credentials or reported current readiness: %#v / %v", result, err)
+	}
+	effects.supportCreated = false
+	result, err = backend.Run(context.Background(), support)
+	if err != nil || result.State != "SUPPORT_REPLAYED" || result.Changed || !bytes.Equal(before, journalBytes(t, request.Root)) {
+		t.Fatal("diagnostic replay created an operation or fabricated fresh readiness")
+	}
+	effects.supportFailure = ErrOutcomeUnknown
+	_, err = backend.Run(context.Background(), support)
+	assertNodeFault(t, err, "EFFECT_OUTCOME_UNKNOWN")
+	if !bytes.Equal(before, journalBytes(t, request.Root)) {
+		t.Fatal("uncertain evidence write replaced the lifecycle intent")
+	}
+	effects.supportFailure = nil
+	effects.failPhase, effects.failure = lifecycle.PhaseVerifying, ErrOutcomeUnknown
+	_, err = backend.Run(context.Background(), cli.Request{Action: lifecycle.ActionVerify, Root: request.Root})
+	assertNodeFault(t, err, "EFFECT_OUTCOME_UNKNOWN")
+	pending, calls := journalBytes(t, request.Root), effects.supportCalls
+	_, err = backend.Run(context.Background(), support)
+	assertNodeFault(t, err, "INSTALLATION_COMMAND_CONFLICT")
+	if effects.supportCalls != calls || !bytes.Equal(pending, journalBytes(t, request.Root)) {
+		t.Fatal("support read resumed or replaced an accepted command")
+	}
+}
+
 func TestNodeUpgradeResumesProtectedCandidateAndRollbackKeepsLatestCredentials(t *testing.T) {
 	fixtures, err := releasetest.WriteNodeSequence(t.TempDir(), 2)
 	if err != nil {
@@ -612,6 +661,10 @@ type nodeEffects struct {
 	rollbackFailure error
 	phases          []lifecycle.Phase
 	rollbacks       int
+	supportCalls    int
+	supportPlan     SupportPlan
+	supportFailure  error
+	supportCreated  bool
 }
 
 func (effects *nodeEffects) ValidateEnrollment(Plan) error {
@@ -684,6 +737,11 @@ func (effects *nodeEffects) Rollback(_ context.Context, plan Plan) error {
 	return nil
 }
 func (effects *nodeEffects) Observe(context.Context, Plan) (bool, error) { return effects.ready, nil }
+func (effects *nodeEffects) WriteSupportEvidence(_ context.Context, plan SupportPlan) (bool, error) {
+	effects.supportCalls++
+	effects.supportPlan = plan
+	return effects.supportCreated, effects.supportFailure
+}
 func (effects *nodeEffects) ReadInstallation(root string) (nodeconfig.Configuration, Credentials, error) {
 	return readFixtureNodeCredentials(root, "")
 }

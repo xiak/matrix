@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io"
 	"path/filepath"
+	"strings"
 	"time"
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
@@ -42,6 +43,15 @@ type Plan struct {
 	RevokePreviousCredentials bool
 }
 
+// SupportPlan binds a diagnostic file to an authenticated journal snapshot.
+// Producing it is not a lifecycle action and must not advance that journal.
+type SupportPlan struct {
+	Installation Plan
+	Journal      lifecycle.Journal
+	Output       string
+	GeneratedAt  time.Time
+}
+
 func (plan Plan) Clear() {
 	plan.Credentials.Clear()
 	if plan.Previous != nil {
@@ -64,6 +74,7 @@ type Effects interface {
 	ApplyPhase(context.Context, Plan, lifecycle.Phase) error
 	Rollback(context.Context, Plan) error
 	Observe(context.Context, Plan) (bool, error)
+	WriteSupportEvidence(context.Context, SupportPlan) (created bool, err error)
 }
 
 type Backend struct {
@@ -98,9 +109,58 @@ func (backend *Backend) Run(ctx context.Context, request cli.Request) (cli.Resul
 		return backend.changeRelease(ctx, request)
 	case lifecycle.ActionStart, lifecycle.ActionStatus, lifecycle.ActionVerify:
 		return backend.installed(ctx, request)
+	case lifecycle.ActionSupport:
+		return backend.support(ctx, request)
 	default:
 		return cli.Result{}, fault(cli.FaultPrecondition, "NODE_ACTION_UNSUPPORTED")
 	}
+}
+
+func (backend *Backend) support(ctx context.Context, request cli.Request) (result cli.Result, resultErr error) {
+	if strings.TrimSpace(request.SupportOutput) == "" || len(request.SupportOutput) > 4096 ||
+		!filepath.IsAbs(request.SupportOutput) || filepath.Clean(request.SupportOutput) != request.SupportOutput ||
+		filepath.Dir(request.SupportOutput) != filepath.Join(request.Root, filepath.FromSlash(layout.SupportDirectory)) {
+		return cli.Result{}, fault(cli.FaultInvalidArgument, "SUPPORT_OUTPUT_INVALID")
+	}
+	session, err := journal.AcquireExisting(ctx, request.Root)
+	if err != nil {
+		return cli.Result{}, journalFault(err)
+	}
+	defer closeSession(session, &result, &resultErr)
+	state, err := readNodeJournal(session)
+	if err != nil {
+		return cli.Result{}, err
+	}
+	if state.Active != nil {
+		return cli.Result{}, fault(cli.FaultConflict, "INSTALLATION_COMMAND_CONFLICT")
+	}
+	if state.CurrentReleaseID == "" || state.Last == nil {
+		return cli.Result{}, fault(cli.FaultPrecondition, "NODE_NOT_INSTALLED")
+	}
+	plan, err := backend.installedPlan(session.Root(), state)
+	if err != nil {
+		return cli.Result{}, err
+	}
+	defer plan.Clear()
+	created, err := backend.effects.WriteSupportEvidence(ctx, SupportPlan{
+		Installation: plan, Journal: state, Output: request.SupportOutput,
+		GeneratedAt: backend.nextTime(state.Last.UpdatedAt),
+	})
+	if err != nil {
+		if ctx.Err() != nil {
+			return cli.Result{}, fault(cli.FaultInterrupted, "COMMAND_INTERRUPTED")
+		}
+		if errors.Is(err, ErrOutcomeUnknown) {
+			return cli.Result{}, fault(cli.FaultUnavailable, "EFFECT_OUTCOME_UNKNOWN")
+		}
+		return cli.Result{}, effectFault(err)
+	}
+	result = resultFor(state, created)
+	result.State = "SUPPORT_REPLAYED"
+	if created {
+		result.State = "SUPPORT_WRITTEN"
+	}
+	return result, nil
 }
 
 func (backend *Backend) install(ctx context.Context, request cli.Request) (result cli.Result, resultErr error) {

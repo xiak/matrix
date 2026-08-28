@@ -143,7 +143,7 @@ func TestPlatformCredentialRecoveryHasExplicitResumeAndNoAuthoritySelectors(t *t
 }
 
 func TestNodeCommandsStaySeparateAndRequireProtectedEnrollment(t *testing.T) {
-	for _, action := range []string{"install", "start", "verify", "status", "rotate-credentials", "upgrade", "rollback"} {
+	for _, action := range []string{"install", "start", "verify", "status", "rotate-credentials", "upgrade", "rollback", "support"} {
 		t.Run(action, func(t *testing.T) {
 			var request Request
 			backend := backendFunc(func(_ context.Context, value Request) (Result, error) {
@@ -160,6 +160,9 @@ func TestNodeCommandsStaySeparateAndRequireProtectedEnrollment(t *testing.T) {
 			if action == "upgrade" {
 				args = append(args, "--bundle", "/media/node-successor")
 			}
+			if action == "support" {
+				args = append(args, "--output", "/srv/node/support/snapshot.json")
+			}
 			var out, errOut bytes.Buffer
 			exit := Run(context.Background(), args, Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut}, backend)
 			if exit != ExitSuccess || request.Subject != SubjectNode || request.Action != lifecycle.Action(strings.ReplaceAll(strings.ToUpper(action), "-", "_")) {
@@ -167,6 +170,9 @@ func TestNodeCommandsStaySeparateAndRequireProtectedEnrollment(t *testing.T) {
 			}
 			if action == "rotate-credentials" && !request.RevokePreviousCredentials {
 				t.Fatal("node rotation defaulted to retaining the previous trust set")
+			}
+			if action == "support" && request.SupportOutput != "/srv/node/support/snapshot.json" {
+				t.Fatal("node support lost its explicit evidence destination")
 			}
 			var result successEnvelope
 			if json.Unmarshal(out.Bytes(), &result) != nil || result.Kind != "NodeCommandResult" || result.Result.ExecutionTargetID != "target-a" {
@@ -190,6 +196,10 @@ func TestNodeCommandsStaySeparateAndRequireProtectedEnrollment(t *testing.T) {
 		{"node", "rollback", "--root", "/srv/node", "--bundle", "/media/node"},
 		{"node", "rollback", "--root", "/srv/node", "--backup", "backup-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
 		{"node", "rollback", "--root", "/srv/node", "--force"},
+		{"node", "support", "--root", "/srv/node"},
+		{"node", "support", "--root", "/srv/node", "--output", "/srv/node/support/snapshot.json", "--configuration", "/private/other.json"},
+		{"node", "support", "--root", "/srv/node", "--output", "/srv/node/support/snapshot.json", "--bundle", "/media/other"},
+		{"node", "support", "--root", "/srv/node", "--output", "/srv/node/support/snapshot.json", "--force"},
 	} {
 		var out, errOut bytes.Buffer
 		exit := Run(context.Background(), append([]string{"--format", "json"}, args...), Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut},

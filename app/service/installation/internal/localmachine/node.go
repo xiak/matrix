@@ -30,6 +30,7 @@ type NodeVerifier interface {
 	Validate(nodeconfig.Configuration, nodecommand.Credentials) error
 	ValidateRotation(nodeconfig.Configuration, nodecommand.Credentials, nodecommand.Credentials, bool) error
 	Verify(context.Context, nodeconfig.Configuration, nodecommand.Credentials) error
+	ObserveUsage(context.Context, nodeconfig.Configuration, nodecommand.Credentials) (paasv1.ExecutionTargetUsage, error)
 }
 
 type NodeEffects struct {

@@ -122,6 +122,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+          # The native gate uses the actual fixed runtime-3 predecessor.
+          fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: '1.26.x'
@@ -155,9 +157,11 @@ jobs:
             "$RUNNER_TEMP/node-runtime.test" -test.v -test.count=1 -test.timeout=90s -test.run='^TestLinuxNodeProcessObservation$'
       - name: Verify signed native startup, upgrade, rollback and interrupted replay
         run: |
+          previous_node_source="$(mktemp -d "$RUNNER_TEMP/matrix-node-predecessor-XXXXXX")"
+          git worktree add --detach "$previous_node_source" cd271c5eea8cbf72544a05243f6228f2b6e1c18e
           go run -p 2 ./deploy/cmd/matrix-release keygen --key-id node-ci \
             --private-key "$RUNNER_TEMP/node-release-private.json" --trust-key "$RUNNER_TEMP/node-release-trust.json"
-          go run -p 2 ./deploy/cmd/matrix-release assemble --target node --repository "$GITHUB_WORKSPACE" \
+          go run -p 2 ./deploy/cmd/matrix-release assemble --target node --repository "$previous_node_source" \
             --collector-archive "$RUNNER_TEMP/node_exporter.tar.gz" --output "$RUNNER_TEMP/node-release" \
             --version v0.3.0-node.1 --build-id "ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --created-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -165,7 +169,7 @@ jobs:
           go run -p 2 ./deploy/cmd/matrix-release assemble --target node --repository "$GITHUB_WORKSPACE" \
             --collector-archive "$RUNNER_TEMP/node_exporter.tar.gz" --output "$RUNNER_TEMP/node-release-b" \
             --version v0.3.0-node.2 --build-id "ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-successor" \
-            --previous-id "matrix-v0.3.0-node.1-${GITHUB_SHA:0:12}" --previous-version v0.3.0-node.1 \
+            --previous-id matrix-v0.3.0-node.1-cd271c5eea8c --previous-version v0.3.0-node.1 \
             --created-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --private-key "$RUNNER_TEMP/node-release-private.json" --trust-key "$RUNNER_TEMP/node-release-trust.json"
           node_gate_root="$(sudo mktemp -d /opt/matrix-node-ci-XXXXXX)"

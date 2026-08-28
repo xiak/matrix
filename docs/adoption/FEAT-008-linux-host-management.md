@@ -66,3 +66,11 @@ composition and host regressions; the donor's PaaS 1 profile, FEAT acceptance
 state and checkpoint are `REJECT` for integration. These source gates do not
 accept the combined signed installation/CLI recovery workflow or cross-profile
 release transitions.
+
+For the runtime-revision-3 node release gate, fixed same-repository production
+commit `cd271c5eea8cbf72544a05243f6228f2b6e1c18e` is `REUSE` only as the
+separately built, signed predecessor executable and retained-state producer.
+No predecessor source copy or compatibility alias is added to the working
+tree. Its real installer must read retained journals and latest credentials
+after a supported successor runs; differing labels on same-source bundles
+are not this evidence.

@@ -5,10 +5,12 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	composeadapter "github.com/xiak/matrix/app/adapter/apphosting/compose"
+	"github.com/xiak/matrix/app/adapter/infrastructure/nodeexporter"
 	nodehttps "github.com/xiak/matrix/app/adapter/node/https"
 	"github.com/xiak/matrix/app/service/installation/internal/cli"
 	"github.com/xiak/matrix/app/service/installation/internal/localmachine"
@@ -67,6 +69,34 @@ func (nodeInstallationVerifier) Verify(ctx context.Context, config nodeconfig.Co
 	defer client.Close()
 	_, err = client.Verify(ctx)
 	return err
+}
+
+func (nodeInstallationVerifier) ObserveUsage(ctx context.Context, config nodeconfig.Configuration, material nodecommand.Credentials) (paasv1.ExecutionTargetUsage, error) {
+	credentials, err := nodehttps.NewCredentials(material.Certificate, material.PrivateKey, material.Trust)
+	if err != nil {
+		return paasv1.ExecutionTargetUsage{}, err
+	}
+	collector, err := nodeexporter.New(nodeexporter.Config{
+		Endpoint: config.CollectorEndpoint, Identity: config.Identity, Credentials: credentials,
+	})
+	if err != nil {
+		return paasv1.ExecutionTargetUsage{}, err
+	}
+	defer collector.Close()
+	first, err := collector.ObserveExecutionTargetUsage(ctx)
+	if err != nil || first.CPU.State != paasv1.MeasurementWarmingUp {
+		return first, err
+	}
+	// A rate requires two samples. This is a bounded diagnostic read, not a
+	// replacement sampler or a background task surviving this CLI invocation.
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return paasv1.ExecutionTargetUsage{}, ctx.Err()
+	case <-timer.C:
+		return collector.ObserveExecutionTargetUsage(ctx)
+	}
 }
 
 func (nodeInstallationVerifier) ValidateRotation(config nodeconfig.Configuration, previous, candidate nodecommand.Credentials, revokePrevious bool) error {

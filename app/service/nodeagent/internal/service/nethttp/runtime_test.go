@@ -679,6 +679,95 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 			t.Fatal("upgrade lost its command, signed predecessor, activated processes or current credentials")
 		}
 		targetMX := filepath.Join(root, "releases", upgraded.ReleaseID, "bin", "mx")
+		assertSupport := func(name string, healthy bool) {
+			t.Helper()
+			before, err := os.ReadFile(journalPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			owners := map[string]string{}
+			for _, unit := range units {
+				owners[unit] = nativeUnitProperty(t, unit, "MainPID,ExecMainStartTimestampMonotonic,NRestarts")
+			}
+			keys := map[string][32]byte{}
+			for _, file := range []string{"node.pem", "node-key.pem", "trust.pem", "collector.pem", "collector-key.pem"} {
+				data, err := os.ReadFile(filepath.Join(root, "secrets", "node", file))
+				if err != nil {
+					t.Fatal(err)
+				}
+				keys[file] = sha256.Sum256(data)
+				clear(data)
+			}
+			output := filepath.Join(root, "support", name+".json")
+			result := nativeMX(t, targetMX, true, "node", "support", "--root", root, "--output", output)
+			if result.State != "SUPPORT_WRITTEN" || !result.Changed {
+				t.Fatal("node support did not report diagnostic file creation")
+			}
+			info, err := os.Lstat(output)
+			if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || info.Size() <= 0 || info.Size() > 64*1024 {
+				t.Fatal("node support output was not bounded and private")
+			}
+			content, err := os.ReadFile(output)
+			var evidence struct {
+				Kind, State, Readiness, UsageState string
+				GeneratedAt                        time.Time
+				Binding                            struct {
+					Identity                                      nodev1.Identity
+					ReleaseID, ConfigurationDigest, JournalDigest string
+					RuntimeRevision                               uint64
+				}
+				Usage *struct {
+					ObservedAt, ValidUntil time.Time
+					CPU                    paasv1.CPUUsage
+					Memory                 paasv1.MemoryUsage
+					Filesystems            []struct {
+						State paasv1.MeasurementState
+						Value *paasv1.FilesystemUsageValue
+					}
+				}
+			}
+			if err != nil || json.Unmarshal(content, &evidence) != nil || evidence.Kind != "NodeSupportEvidence" ||
+				evidence.GeneratedAt.IsZero() || evidence.Binding.Identity != identity || evidence.Binding.ReleaseID != result.ReleaseID ||
+				evidence.Binding.ConfigurationDigest != result.ConfigurationDigest || evidence.Binding.RuntimeRevision != nodeconfig.RuntimeRevision ||
+				paasv1.ValidateDigest("journalDigest", evidence.Binding.JournalDigest) != nil {
+				t.Fatal("signed support command lost its sealed identity or release")
+			}
+			if healthy {
+				if evidence.State != "READY" || evidence.Readiness != "VERIFIED" || evidence.UsageState != "AVAILABLE" ||
+					evidence.Usage == nil || evidence.Usage.CPU.State != paasv1.MeasurementAvailable || evidence.Usage.CPU.Value == nil ||
+					evidence.Usage.Memory.Value == nil || evidence.Usage.Memory.Value.TotalBytes <= 0 || len(evidence.Usage.Filesystems) == 0 ||
+					!evidence.Usage.ValidUntil.After(evidence.Usage.ObservedAt) {
+					t.Fatal("signed node diagnostic did not collect real bounded host quantities")
+				}
+			} else if evidence.State != "NOT_READY" || evidence.Readiness != "UNAVAILABLE" || evidence.UsageState != "UNAVAILABLE" || evidence.Usage != nil {
+				t.Fatal("stopped collector produced fabricated readiness or zero-valued measurements")
+			}
+			for _, forbidden := range []string{root, config.ListenAddress, config.CollectorEndpoint, "-----BEGIN", `"device"`, `"mountPoint"`, `"environment"`} {
+				if bytes.Contains(content, []byte(forbidden)) {
+					t.Fatal("signed node support leaked credentials, endpoints, host paths or raw runtime data")
+				}
+			}
+			replay := nativeMX(t, targetMX, true, "node", "support", "--root", root, "--output", output)
+			replayed, readErr := os.ReadFile(output)
+			after, journalErr := os.ReadFile(journalPath)
+			if replay.Changed || replay.State != "SUPPORT_REPLAYED" || replay.CorrelationID != result.CorrelationID ||
+				readErr != nil || !bytes.Equal(content, replayed) || journalErr != nil || !bytes.Equal(before, after) {
+				t.Fatal("diagnostic replay restamped evidence or changed the node lifecycle")
+			}
+			for unit, owner := range owners {
+				if nativeUnitProperty(t, unit, "MainPID,ExecMainStartTimestampMonotonic,NRestarts") != owner {
+					t.Fatal("diagnosis restarted a native service")
+				}
+			}
+			for file, expected := range keys {
+				retained, err := os.ReadFile(filepath.Join(root, "secrets", "node", file))
+				if err != nil || sha256.Sum256(retained) != expected {
+					t.Fatal("diagnosis rewrote retained credentials")
+				}
+				clear(retained)
+			}
+			checkWorkload()
+		}
 		nativeMX(t, targetMX, true, "node", "verify", "--root", root)
 		if replay := nativeMX(t, targetMX, true, "node", "upgrade", "--root", root, "--resume"); replay.Changed || replay.CorrelationID != upgraded.CorrelationID {
 			t.Fatal("upgrade replay after verification lost the original completion receipt")
@@ -694,6 +783,12 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 		}
 		awaitObservation(t, rotatingClient, time.Time{}, paasv1.MeasurementAvailable)
 		checkWorkload()
+		assertSupport("upgraded", true)
+		nativeSystemctl(t, "stop", collectorUnit)
+		assertSupport("collector-outage", false)
+		if result := nativeMX(t, sourceMX, true, "node", "start", "--root", root); result.ReleaseID != upgraded.ReleaseID || result.State != "READY" {
+			t.Fatal("predecessor installer could not read the successor's retained journal")
+		}
 
 		// Change credentials on B, then prove that executing A during rollback
 		// consumes the latest commitment, not the old installation's key set.
@@ -732,6 +827,10 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 		nativeMX(t, sourceMX, true, "node", "verify", "--root", root)
 		if replay := nativeMX(t, sourceMX, true, "node", "rollback", "--root", root); replay.Changed || replay.CorrelationID != rolledBack.CorrelationID {
 			t.Fatal("rollback replay after verification issued another intent")
+		}
+		assertSupport("rolled-back", true)
+		if result := nativeMX(t, sourceMX, true, "node", "status", "--root", root); result.State != "READY" || result.ReleaseID != installed.ReleaseID {
+			t.Fatal("old signed installer rejected retained state after successor diagnostics")
 		}
 		awaitObservation(t, rotatingClient, time.Time{}, paasv1.MeasurementAvailable)
 		assertRetired()

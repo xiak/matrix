@@ -108,7 +108,7 @@ func NewCommand(streams Streams, backend Backend) (*cobra.Command, error) {
 	root.AddCommand(node)
 	for _, action := range []lifecycle.Action{lifecycle.ActionInstall, lifecycle.ActionStart,
 		lifecycle.ActionVerify, lifecycle.ActionStatus, lifecycle.ActionRotateCredentials,
-		lifecycle.ActionUpgrade, lifecycle.ActionRollback} {
+		lifecycle.ActionUpgrade, lifecycle.ActionRollback, lifecycle.ActionSupport} {
 		node.AddCommand(newLifecycleCommand(streams.Out, backend, SubjectNode, action, &format))
 	}
 	return root, nil
@@ -253,6 +253,8 @@ func commandDescription(subject Subject, action lifecycle.Action) string {
 			return "Read node supervision and readiness status"
 		case lifecycle.ActionRotateCredentials:
 			return "Rotate node credentials without changing workload ownership"
+		case lifecycle.ActionSupport:
+			return "Write a sanitized node snapshot without changing its lifecycle or services"
 		}
 	}
 	switch action {

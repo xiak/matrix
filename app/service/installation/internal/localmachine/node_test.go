@@ -3,14 +3,18 @@ package localmachine
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
+	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
 	"github.com/xiak/matrix/app/service/installation/internal/nodecommand"
@@ -423,6 +427,220 @@ func TestNodeReleaseActivationResumesBootReloadAndRetainsCurrentCredentials(t *t
 	}
 }
 
+func TestNodeSupportIsSanitizedWriteOnceAndReportsOutageWithoutEffects(t *testing.T) {
+	plan := nodeEffectPlan(t)
+	request := nodeSupportRequest(t, plan)
+	usage := nodeSupportFixtureUsage(request.GeneratedAt)
+	usageCalls := 0
+	supervisor := &nodeSupervisorFixture{states: map[string]nativeState{}}
+	effects := NewNodeEffects(nodeVerifierFixture{usage: &usage, usageCalls: &usageCalls})
+	effects.supervisor = supervisor
+	for _, phase := range []lifecycle.Phase{lifecycle.PhaseStaging, lifecycle.PhaseConfiguring, lifecycle.PhaseStarting} {
+		if err := effects.ApplyPhase(context.Background(), plan, phase); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files, _ := nodeFiles(plan)
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := effects.WriteSupportEvidence(canceled, request); !errors.Is(err, context.Canceled) {
+		t.Fatal("canceled diagnostic collection ignored its caller")
+	}
+	if _, err := os.Lstat(request.Output); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("canceled diagnostic collection wrote an artifact")
+	}
+	created, err := effects.WriteSupportEvidence(context.Background(), request)
+	if err != nil || !created {
+		t.Fatalf("write bounded node evidence: %v", err)
+	}
+	content, err := os.ReadFile(request.Output)
+	if err != nil || verifyManagedPermissions(request.Output, false) != nil {
+		t.Fatal("support output is missing or not private")
+	}
+	var evidence nodeSupportEvidence
+	if json.Unmarshal(content, &evidence) != nil || evidence.Kind != nodeSupportKind || evidence.State != supportStateReady ||
+		evidence.Binding.Identity != plan.Configuration.Identity || evidence.Binding.ConfigurationDigest != plan.Binding.ConfigurationDigest ||
+		evidence.Binding.RuntimeRevision != nodeconfig.RuntimeRevision || evidence.Usage == nil ||
+		evidence.Usage.Memory.Value.TotalBytes != 1024 || evidence.Usage.Filesystems[0].Value.TotalBytes != 8192 ||
+		evidence.Usage.ObservedAt != usage.ObservedAt || evidence.Usage.ValidUntil != usage.ValidUntil {
+		t.Fatalf("node support lost authenticated identity, quantities or source times: %s", content)
+	}
+	for _, forbidden := range []string{plan.Root, plan.Configuration.ListenAddress, plan.Configuration.CollectorEndpoint,
+		string(plan.Credentials.Certificate), string(plan.Credentials.PrivateKey), string(plan.Credentials.CollectorPrivateKey),
+		base64.StdEncoding.EncodeToString(plan.Credentials.PrivateKey),
+		usage.Filesystems[0].Device, usage.Filesystems[0].MountPoint, `"mountPoint"`, `"device"`, `"environment"`, `"privateKey"`} {
+		encoded, _ := json.Marshal(forbidden)
+		if bytes.Contains(content, []byte(forbidden)) || bytes.Contains(content, encoded[1:len(encoded)-1]) {
+			t.Fatalf("node support exposed excluded material: %q", forbidden)
+		}
+	}
+	// A repeated file is the historical snapshot, not a new readiness claim.
+	supervisor.states[nativeNodeServices(plan)[1].name] = nativeStopped
+	request.GeneratedAt = request.GeneratedAt.Add(time.Second)
+	created, err = effects.WriteSupportEvidence(context.Background(), request)
+	replayed, readErr := os.ReadFile(request.Output)
+	if err != nil || created || readErr != nil || !bytes.Equal(content, replayed) || usageCalls != 1 {
+		t.Fatal("support replay resampled/restamped or rewrote its completed snapshot")
+	}
+	request.Output = filepath.Join(plan.Root, layout.SupportDirectory, "outage.json")
+	created, err = effects.WriteSupportEvidence(context.Background(), request)
+	outage, _ := os.ReadFile(request.Output)
+	if err != nil || !created || json.Unmarshal(outage, &evidence) != nil || evidence.State != supportStateNotReady ||
+		evidence.Readiness != nodeSupportUnavailable || evidence.Components[1].State != nativeStopped {
+		t.Fatal("node outage was hidden or diagnosed through process replacement")
+	}
+	effects.verifier = nodeVerifierFixture{verifyErr: errors.New("private node diagnostic detail"), usageErr: errors.New("/private/collector/key.pem")}
+	request.Output = filepath.Join(plan.Root, layout.SupportDirectory, "unavailable.json")
+	created, err = effects.WriteSupportEvidence(context.Background(), request)
+	unavailable, _ := os.ReadFile(request.Output)
+	evidence = nodeSupportEvidence{}
+	if err != nil || !created || json.Unmarshal(unavailable, &evidence) != nil || evidence.Usage != nil ||
+		evidence.UsageState != paasv1.MeasurementUnavailable || bytes.Contains(unavailable, []byte("private")) {
+		t.Fatal("missing collector data became zero values or raw failure details")
+	}
+	if supervisor.starts != 2 || supervisor.stops != 0 || supervisor.registrations != 1 {
+		t.Fatal("diagnosis reconciled native services or boot registration")
+	}
+	for _, file := range files {
+		retained, err := readManagedFile(plan.Root, filepath.FromSlash(file.name), int64(len(file.content)))
+		if err != nil || !bytes.Equal(retained, file.content) {
+			t.Fatal("diagnosis changed protected configuration, boot source or credentials")
+		}
+	}
+}
+
+func TestNodeSupportRejectsConflictingSnapshotsAndForeignOwners(t *testing.T) {
+	plan := nodeEffectPlan(t)
+	request := nodeSupportRequest(t, plan)
+	usage := nodeSupportFixtureUsage(request.GeneratedAt)
+	supervisor := &nodeSupervisorFixture{states: map[string]nativeState{}}
+	effects := NewNodeEffects(nodeVerifierFixture{usage: &usage})
+	effects.supervisor = supervisor
+	for _, phase := range []lifecycle.Phase{lifecycle.PhaseStaging, lifecycle.PhaseConfiguring, lifecycle.PhaseStarting} {
+		if err := effects.ApplyPhase(context.Background(), plan, phase); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, output := range []string{filepath.Join(filepath.Dir(plan.Root), "outside.json"),
+		filepath.Join(plan.Root, layout.SupportDirectory, ".hidden.json"), filepath.Join(plan.Root, layout.SupportDirectory, "raw.log")} {
+		invalid := request
+		invalid.Output = output
+		if _, err := effects.WriteSupportEvidence(context.Background(), invalid); err == nil {
+			t.Fatal("unsupported support output was written")
+		}
+		if _, err := os.Lstat(output); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("rejected support output left a file")
+		}
+	}
+	for _, owner := range []string{nativeNodeStartup(plan).service.name, nativeNodeServices(plan)[0].name, nativeNodeServices(plan)[1].name} {
+		supervisor.foreign = owner
+		if _, err := effects.WriteSupportEvidence(context.Background(), request); err == nil {
+			t.Fatal("foreign native ownership was accepted as diagnostic evidence")
+		}
+		if _, err := os.Lstat(request.Output); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("foreign ownership produced a diagnostic file")
+		}
+	}
+	supervisor.foreign = ""
+	if _, err := effects.WriteSupportEvidence(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	original, _ := os.ReadFile(request.Output)
+	mutations := []struct {
+		name   string
+		change func(*nodeSupportEvidence)
+	}{
+		{"different identity", func(value *nodeSupportEvidence) { value.Binding.Identity.ExecutionTargetID = "another-target" }},
+		{"different credential commitment", func(value *nodeSupportEvidence) {
+			value.Binding.ConfigurationDigest = "sha256:" + strings.Repeat("f", 64)
+		}},
+		{"different journal", func(value *nodeSupportEvidence) { value.Binding.JournalVersion++ }},
+		{"different runtime", func(value *nodeSupportEvidence) { value.Binding.RuntimeRevision++ }},
+		{"future snapshot", func(value *nodeSupportEvidence) { value.GeneratedAt = request.GeneratedAt.Add(time.Hour) }},
+		{"false readiness", func(value *nodeSupportEvidence) { value.Components[1].State = nativeStopped }},
+		{"unknown process state", func(value *nodeSupportEvidence) { value.Components[0].State = "ARBITRARY_PROVIDER_OUTPUT" }},
+		{"invalid quantity", func(value *nodeSupportEvidence) { value.Usage.Filesystems[0].Value.TotalBytes = -1 }},
+		{"unavailable with values", func(value *nodeSupportEvidence) { value.UsageState = paasv1.MeasurementUnavailable }},
+		{"expired but current", func(value *nodeSupportEvidence) {
+			value.Usage.ObservedAt = request.GeneratedAt.Add(-time.Hour)
+			value.Usage.ValidUntil = value.Usage.ObservedAt.Add(nodev1.MaximumObservationAge)
+		}},
+	}
+	for _, test := range mutations {
+		t.Run(test.name, func(t *testing.T) {
+			var value nodeSupportEvidence
+			if err := json.Unmarshal(original, &value); err != nil {
+				t.Fatal(err)
+			}
+			test.change(&value)
+			changed, err := json.Marshal(value)
+			if err != nil || os.WriteFile(request.Output, changed, 0o600) != nil {
+				t.Fatal("prepare conflicting evidence")
+			}
+			if _, err := effects.WriteSupportEvidence(context.Background(), request); err == nil {
+				t.Fatal("changed evidence was reused")
+			}
+			retained, _ := os.ReadFile(request.Output)
+			if !bytes.Equal(retained, changed) {
+				t.Fatal("conflicting evidence was overwritten")
+			}
+		})
+	}
+	for _, malformed := range [][]byte{
+		bytes.Replace(original, []byte(`"kind":`), []byte(`"extra":"raw-detail","kind":`), 1),
+		bytes.Replace(original, []byte(`"kind":`), []byte(`"kind":"duplicate","kind":`), 1),
+		append(bytes.Repeat([]byte(" "), int(maximumNodeSupportBytes)), original...),
+	} {
+		if err := os.WriteFile(request.Output, malformed, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := effects.WriteSupportEvidence(context.Background(), request); err == nil {
+			t.Fatal("unbounded, duplicate or unknown support content was reused")
+		}
+	}
+	if supervisor.starts != 2 || supervisor.stops != 0 || supervisor.registrations != 1 {
+		t.Fatal("failed support collection changed native ownership")
+	}
+}
+
+func nodeSupportRequest(t *testing.T, plan nodecommand.Plan) nodecommand.SupportPlan {
+	t.Helper()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	state, err := lifecycle.NewNode(plan.Configuration.Identity.InstallationID,
+		lifecycle.ReleaseTrust{KeyID: plan.Trust.KeyID, Fingerprint: plan.Trust.PublicKeyFingerprint}, plan.Binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := lifecycle.Command{ID: "cmd-" + strings.Repeat("a", 32), Action: lifecycle.ActionInstall,
+		InputDigest: plan.Bundle.ManifestSHA256, TargetReleaseID: plan.Bundle.Manifest.Release.ID, RequestedAt: now.Add(-time.Second)}
+	started, err := lifecycle.Start(state, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state = started.Journal
+	for index, phase := range []lifecycle.Phase{lifecycle.PhaseStaging, lifecycle.PhaseConfiguring, lifecycle.PhaseStarting,
+		lifecycle.PhaseVerifying, lifecycle.PhaseCommitting, lifecycle.PhaseReady} {
+		state, err = lifecycle.Advance(state, command.ID, phase, command.RequestedAt.Add(time.Duration(index+1)*time.Microsecond))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	return nodecommand.SupportPlan{Installation: plan, Journal: state,
+		Output: filepath.Join(plan.Root, layout.SupportDirectory, "snapshot.json"), GeneratedAt: now}
+}
+
+func nodeSupportFixtureUsage(now time.Time) paasv1.ExecutionTargetUsage {
+	totalInodes, freeInodes := int64(128), int64(96)
+	return paasv1.ExecutionTargetUsage{ObservedAt: now, ValidUntil: now.Add(nodev1.MaximumObservationAge),
+		CPU:              paasv1.CPUUsage{State: paasv1.MeasurementAvailable, Value: &paasv1.CPUUsageValue{LogicalCPUs: 2, WindowMillis: 1000, UtilizationRatio: 0.1}},
+		Memory:           paasv1.MemoryUsage{State: paasv1.MeasurementAvailable, Value: &paasv1.MemoryUsageValue{TotalBytes: 1024, AvailableBytes: 512, UsedBytes: 512}},
+		FilesystemsState: paasv1.MeasurementAvailable, Filesystems: []paasv1.FilesystemUsage{{
+			Device: "/dev/never-output-disk", MountPoint: "/private/never-output-storage", FilesystemType: "ext4", State: paasv1.MeasurementAvailable,
+			Value: &paasv1.FilesystemUsageValue{TotalBytes: 8192, UsedBytes: 4096, AvailableBytes: 2048,
+				InodesState: paasv1.MeasurementAvailable, TotalInodes: &totalInodes, FreeInodes: &freeInodes},
+		}}}
+}
+
 func nodeEffectPlan(t *testing.T, supplied ...releasetest.Fixture) nodecommand.Plan {
 	t.Helper()
 	var fixture releasetest.Fixture
@@ -464,7 +682,12 @@ func nodeEffectPlan(t *testing.T, supplied ...releasetest.Fixture) nodecommand.P
 	return nodecommand.Plan{Root: root, Bundle: bundle, Trust: trust, TrustBytes: trustBytes, Configuration: config, Credentials: material, Binding: binding}
 }
 
-type nodeVerifierFixture struct{}
+type nodeVerifierFixture struct {
+	verifyErr  error
+	usage      *paasv1.ExecutionTargetUsage
+	usageErr   error
+	usageCalls *int
+}
 
 func (nodeVerifierFixture) Validate(nodeconfig.Configuration, nodecommand.Credentials) error {
 	return nil
@@ -472,8 +695,20 @@ func (nodeVerifierFixture) Validate(nodeconfig.Configuration, nodecommand.Creden
 func (nodeVerifierFixture) ValidateRotation(nodeconfig.Configuration, nodecommand.Credentials, nodecommand.Credentials, bool) error {
 	return nil
 }
-func (nodeVerifierFixture) Verify(context.Context, nodeconfig.Configuration, nodecommand.Credentials) error {
-	return nil
+func (fixture nodeVerifierFixture) Verify(context.Context, nodeconfig.Configuration, nodecommand.Credentials) error {
+	return fixture.verifyErr
+}
+func (fixture nodeVerifierFixture) ObserveUsage(context.Context, nodeconfig.Configuration, nodecommand.Credentials) (paasv1.ExecutionTargetUsage, error) {
+	if fixture.usageCalls != nil {
+		(*fixture.usageCalls)++
+	}
+	if fixture.usageErr != nil {
+		return paasv1.ExecutionTargetUsage{}, fixture.usageErr
+	}
+	if fixture.usage == nil {
+		return paasv1.ExecutionTargetUsage{}, nodecommand.ErrUnavailable
+	}
+	return *fixture.usage, nil
 }
 
 type nodeSupervisorFixture struct {
