@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -129,6 +130,38 @@ func TestNodeRollbackChecksAllServiceOwnershipAndRetainsState(t *testing.T) {
 	for _, phase := range []lifecycle.Phase{lifecycle.PhaseMigrating, lifecycle.PhaseBackingUp, lifecycle.PhaseLoadingImages, lifecycle.PhaseRecovering} {
 		if err := effects.ApplyPhase(context.Background(), plan, phase); err == nil {
 			t.Fatal("node accepted a platform phase")
+		}
+	}
+}
+
+func TestNodeCollectorFilesystemScopeMatchesOnlyStorageAncestors(t *testing.T) {
+	plan := nodeEffectPlan(t)
+	plan.Configuration.StoragePath = filepath.Join(plan.Root, "storage.with[meta]", "executor")
+	collector := nativeNodeServices(plan)[0]
+	var include, exclude *regexp.Regexp
+	for _, argument := range collector.arguments {
+		if expression, ok := strings.CutPrefix(argument, "--collector.filesystem.mount-points-include="); ok {
+			include = regexp.MustCompile(expression)
+		}
+		if expression, ok := strings.CutPrefix(argument, "--collector.filesystem.fs-types-exclude="); ok {
+			exclude = regexp.MustCompile(expression)
+		}
+	}
+	if include == nil || exclude == nil || exclude.MatchString("ext4") || exclude.MatchString("zfs") {
+		t.Fatal("filesystem selection excluded actual storage types")
+	}
+	for path := plan.Configuration.StoragePath; ; path = filepath.Dir(path) {
+		if !include.MatchString(filepath.ToSlash(path)) {
+			t.Fatal("filesystem selection missed a storage ancestor")
+		}
+		if filepath.Dir(path) == path {
+			break
+		}
+	}
+	for _, path := range []string{plan.Configuration.StoragePath + "-other", plan.Configuration.StoragePath + "\n",
+		filepath.Join(plan.Configuration.StoragePath, "child"), filepath.Join(plan.Root, "storageXwithm", "executor")} {
+		if include.MatchString(filepath.ToSlash(path)) {
+			t.Fatal("filesystem selection admitted an unrelated mount")
 		}
 	}
 }

@@ -229,7 +229,7 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 		}
 		for _, unit := range append([]string{startupUnit}, units...) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			output, _ := exec.CommandContext(ctx, "systemctl", "show", "--property=Id,LoadState,FragmentPath,DropInPaths,NeedDaemonReload,Transient,Type,ActiveState,ExecStart,Environment,ReadWritePaths,LoadCredential,BindReadOnlyPaths,RuntimeDirectory,MemoryMax,TasksMax,Restart,RemainAfterExit", unit).Output()
+			output, _ := exec.CommandContext(ctx, "systemctl", "show", "--property=Id,LoadState,FragmentPath,DropInPaths,NeedDaemonReload,Transient,Type,ActiveState,ExecStartEx,Environment,ReadWritePaths,LoadCredential,BindReadOnlyPaths,RuntimeDirectory,MemoryMax,TasksMax,Restart,RemainAfterExit", unit).Output()
 			cancel()
 			if len(output) <= 12288 {
 				t.Logf("owned unit snapshot: %s", output)
@@ -300,7 +300,8 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 		t.Fatal("signed installation is not persistently registered for boot")
 	}
 	// The boot entry point must work under its actual service sandbox too.
-	nativeSystemctl(t, "start", startupUnit)
+	nativeSystemctl(t, "start", "--no-block", startupUnit)
+	awaitNativeStartup(t, startupUnit)
 	if nativeUnitProperty(t, startupUnit, "ActiveState") != "active" || nativeUnitProperty(t, nodeUnit, "MainPID") != firstPID ||
 		nativeUnitProperty(t, collectorUnit, "MainPID") != collectorPID {
 		t.Fatal("boot entry point failed or replaced healthy services")
@@ -411,6 +412,33 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 	if os.Remove(dropinFile) != nil || os.Remove(dropin) != nil {
 		t.Fatal("remove exact fixture-owned startup override")
 	}
+	// Loading an altered execution flag must not be hidden by restoring the
+	// source file without reloading it. Never execute the altered command.
+	func() {
+		source := filepath.Join(root, "config", "native", startupUnit)
+		original, err := os.ReadFile(source)
+		if err != nil || bytes.Count(original, []byte("ExecStart=:")) != 1 {
+			t.Fatal("read fixture startup source")
+		}
+		defer func() {
+			if os.WriteFile(source, original, 0o600) != nil {
+				t.Error("restore fixture startup source")
+			}
+			nativeSystemctl(t, "daemon-reload")
+		}()
+		altered := bytes.Replace(original, []byte("ExecStart=:"), []byte("ExecStart=+:"), 1)
+		if os.WriteFile(source, altered, 0o600) != nil {
+			t.Fatal("alter fixture startup execution flag")
+		}
+		nativeSystemctl(t, "daemon-reload")
+		if os.WriteFile(source, original, 0o600) != nil {
+			t.Fatal("restore fixture startup source without reload")
+		}
+		nativeMX(t, installer, false, "node", "start", "--root", root)
+		if nativeUnitProperty(t, nodeUnit, "MainPID") != firstPID || nativeUnitProperty(t, collectorUnit, "MainPID") != collectorPID {
+			t.Fatal("altered execution flag changed healthy processes")
+		}
+	}()
 	// Partial registration can be replayed without restarting resident work.
 	wantedLink := filepath.Join("/etc/systemd/system/multi-user.target.wants", startupUnit)
 	if err := os.Remove(wantedLink); err != nil {
@@ -610,13 +638,7 @@ func verifyNativeBoot(t *testing.T, installer, base, releaseID string) {
 		t.Fatal("a process restart is not evidence of a guest kernel boot")
 	}
 	startupUnit, _ := nodeconfig.StartupServiceName(evidence.Identity)
-	deadline := time.Now().Add(120 * time.Second)
-	for nativeUnitProperty(t, startupUnit, "ActiveState") != "active" {
-		if time.Now().After(deadline) {
-			t.Fatal("guest boot did not start the registered node")
-		}
-		<-time.After(time.Second)
-	}
+	awaitNativeStartup(t, startupUnit)
 	for _, collector := range []bool{false, true} {
 		unit, _ := nodeconfig.ServiceName(evidence.Identity, collector)
 		if nativeUnitProperty(t, unit, "ActiveState") != "active" || nativeUnitProperty(t, unit, "MainPID") == "0" {
@@ -637,6 +659,21 @@ func verifyNativeBoot(t *testing.T, installer, base, releaseID string) {
 	status := nativeMX(t, installer, true, "node", "status", "--root", evidence.Root)
 	if status.State != "READY" || status.ReleaseID != releaseID || status.CorrelationID != evidence.CorrelationID || status.ExecutionTargetID != string(evidence.Identity.ExecutionTargetID) {
 		t.Fatal("guest boot did not preserve authenticated identity and readiness")
+	}
+}
+
+func awaitNativeStartup(t *testing.T, unit string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Duration(nodeconfig.StartupPolicy().TimeoutStartMicros) * time.Microsecond)
+	for {
+		state := nativeUnitProperty(t, unit, "ActiveState")
+		if state == "active" {
+			return
+		}
+		if state == "failed" || time.Now().After(deadline) {
+			t.Fatal("registered startup did not finish within its service deadline")
+		}
+		<-time.After(time.Second)
 	}
 }
 

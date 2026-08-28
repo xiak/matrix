@@ -524,7 +524,7 @@ func nativeServiceProperties(service nativeService) []systemd.Property {
 type nativeExec struct {
 	Path           string
 	Arguments      []string
-	IgnoreFailure  bool
+	Flags          []string
 	StartRealtime  uint64
 	StartMonotonic uint64
 	ExitRealtime   uint64
@@ -548,8 +548,16 @@ func verifyNativeServiceProperties(actual map[string]any, service nativeService,
 		}
 		switch property.Name {
 		case "ExecStart":
+			// The basic ExecStart property hides privileged/no-setuid and
+			// expansion flags. Authenticate the extended command too, not
+			// merely an executable and argv that can run under another policy.
 			var commands []nativeExec
-			if dbus.Store([]any{value}, &commands) != nil || len(commands) != 1 || commands[0].Path != service.executable || commands[0].IgnoreFailure ||
+			var flags []string
+			if !transient {
+				flags = []string{"no-env-expand"}
+			}
+			if dbus.Store([]any{actual["ExecStartEx"]}, &commands) != nil || len(commands) != 1 || commands[0].Path != service.executable ||
+				!slices.Equal(commands[0].Flags, flags) ||
 				!slices.Equal(commands[0].Arguments, append([]string{service.executable}, service.arguments...)) {
 				return nodecommand.ErrConflict
 			}

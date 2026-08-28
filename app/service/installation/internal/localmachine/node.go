@@ -479,8 +479,10 @@ func nativeNodeServices(plan nodecommand.Plan) []nativeService {
 			"--web.config.file=/run/credentials/" + collectorName + "/collector.yaml",
 			"--web.disable-exporter-metrics", "--web.max-requests=2", "--collector.disable-defaults",
 			"--collector.cpu", "--collector.loadavg", "--collector.meminfo", "--collector.filesystem",
-			"--collector.filesystem.mount-points-include=^(" + strings.Join(parents, "|") + ")$",
-			"--collector.filesystem.fs-types-exclude=^$", "--collector.filesystem.mount-timeout=1s"},
+			// Go's end-of-text anchor avoids a dollar that systemd would
+			// serialize as environment syntax during a manager reload.
+			"--collector.filesystem.mount-points-include=^(" + strings.Join(parents, "|") + ")\\z",
+			"--collector.filesystem.fs-types-exclude=^\\z", "--collector.filesystem.mount-timeout=1s"},
 		credentials: []nativeCredential{
 			{"collector.yaml", filepath.Join(plan.Root, filepath.FromSlash(layout.CollectorConfiguration))},
 			{"collector.pem", filepath.Join(plan.Root, filepath.FromSlash(layout.CollectorCertificate))},
