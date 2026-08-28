@@ -648,10 +648,12 @@ prefix. Audit observation retries only explicitly unavailable responses within
 a fixed bound; authorization errors, malformed pages and missing historical
 hashes still fail.
 
-The existing installed-runtime gate `6f054ef` consumed signed A/B from fixed
-production source `b595524`, both with the complete 4/3/2 revision-4 profile.
-It passed in 402.69 seconds on a new empty, externally disconnected Docker
-27.5.1 engine limited to two CPUs, 4 GiB memory and 768 tasks. The gate killed
+The existing installed-runtime gate `447b6c2` consumed signed A from fixed
+`91b8ba5` and B from fixed `7910622`, both with the complete 4/3/2 revision-4
+profile and the same protected-node-connection topology. These are separately
+built source revisions, not different labels on one source. It passed in
+308.89 seconds on a new empty, externally disconnected Docker 27.5.1 engine
+limited to two CPUs, 4 GiB memory and 768 tasks. The gate killed
 the real installer after IAM committed but before the provider returned,
 removed the operator input and resumed the same sealed intent through its
 exact receipt. Old sessions and the retired password were rejected; forced
@@ -661,16 +663,32 @@ Application generations, failed-candidate automatic rollback, successful B
 upgrade, data-preserving rollback, selected-backup recovery, retained Audit
 hashes, capacity release and sanitized support also passed.
 
-Only that local test engine was restarted. Its platform services became
-healthy automatically before the observational post-restart gate, which passed
-in 19.83 seconds. No remote machine or shared engine was restarted. This accepts
-the profile-matched original-primary recovery slice, not a kernel-boot test,
-arbitrary historical N-1 or cross-profile compatibility, legacy first platform
-authorization, or the combined platform/node release.
-Full Go/vet, affected-package race and architecture checks passed locally;
-the production fix and gate-only correction each passed all three jobs in
-[production CI](https://github.com/xiak/matrix/actions/runs/33160326192) and
-[gate CI](https://github.com/xiak/matrix/actions/runs/33161975147).
+The exercised manifest SHA-256 values were A
+`76938c05d17633b003c78a6ea4bfa04def0afeecf5683b3a9743779c08fc447a`
+and B `a42e56940667bb4334ff4e3239cca894489688f993b0bbce67e2485ccbb97b04`.
+
+A new application, terminal Operation and associated Audit fact were committed
+through B after the backup. Actual A read the same Operation and retained
+Audit hashes after rollback; only explicit recovery of the earlier backup
+removed those later records. The status consumer retains the existing
+configuration digest and still rejects unknown fields. The initial empty
+controller inventory's commitment stayed unchanged throughout; this does not
+prove retention of an enrolled remote connection during a combined lifecycle.
+
+Only that local test engine was restarted. All nine platform services became
+healthy automatically, with the same container identities and configuration
+commitment, before the post-restart gate passed in 12.28 seconds. No remote
+machine, shared engine or other task's service was restarted. This admits the
+exact tested platform predecessor/successor pair and profile-matched primary
+recovery, not arbitrary historical N-1, cross-profile transitions, a kernel-boot
+test, legacy first platform authorization or the combined platform/node release.
+The exercised input was an extracted signed directory with declared file modes
+restored after Windows-origin copying, not a portable-archive acceptance.
+Full Go tests/vet, focused race, architecture, stable generation, module
+verification and the Linux gate build passed locally. Both gate increments
+passed all three jobs in
+[predecessor CI](https://github.com/xiak/matrix/actions/runs/33177638962) and
+[status-consumer CI](https://github.com/xiak/matrix/actions/runs/33178802609).
 
 The protected platform/node connection increment `91b8ba5` passed repository
 tests/vet, affected-package race, architecture, stable generation and Linux
@@ -742,9 +760,9 @@ complete the combined platform/node offline lifecycle and separately prove
 first platform authorization for an older installation,
 before remote application delivery.
 P3-1 and the complete Phase 3 release remain unaccepted.
-Retained-data schema migration alone does not establish runnable N-1
-compatibility; the complete offline lifecycle gate must still prove an actual
-signed release pair against retained state.
+Individual platform/node evidence does not satisfy Gate D's combined runtime
+and isolation requirements. No untested predecessor or cross-profile admission
+is inferred from these fixed pairs.
 
 ## Adoption
 
