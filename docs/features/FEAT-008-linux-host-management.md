@@ -326,7 +326,7 @@ support directory. It authenticates the installed release, enrollment and
 native ownership, but never reconciles a process, changes the lifecycle journal
 or cleans credentials. An active lifecycle command conflicts; diagnosis does
 not replace its recovery intent. A repeated output name may return only its
-already authenticated snapshot for the same journal/credential commitment,
+validated stored snapshot for the same journal/credential commitment,
 with original observation times; a changed installation requires a new file.
 
 The snapshot contains normalized identity, release/runtime revision, supervision
@@ -692,33 +692,46 @@ was restarted. This observation fixture reserved every workload slot and placed
 no application. Its VM network was not externally disconnected, so it is not
 Gate D, a signed platform/node upgrade pair, or remote application acceptance.
 
-The signed node release-transition implementation `cd271c5` and corrected
-fixture `20c41b8` introduce runtime revision 3 without changing the platform
-database profile. Existing lifecycle, journal, CLI and native-effect gates
-cover closed source/target ownership, interrupted activation and manager reload,
-unavailable original media, source recovery, completed replay and retention of
-credentials rotated after upgrade. All three jobs passed on the exact gate
-commit in [independent CI](https://github.com/xiak/matrix/actions/runs/33172147348),
-including signed native transitions and the real-authority node variant.
+The signed node release-transition implementation `cd271c5` introduces runtime
+revision 3 without changing the platform database profile. The diagnostic
+increment `6697292` retains that journal/wire/runtime contract. Existing
+lifecycle, journal, CLI and native-effect gates cover closed source/target
+ownership, interrupted activation and manager reload, unavailable original
+media, source recovery, completed replay and retention of credentials rotated
+after upgrade. Diagnostic gates cover private write-once output, redaction,
+conflicting metadata/content, unavailable measurements and canceled collection.
+Full Go tests/vet, affected-package race, architecture, stable generation,
+module verification and Linux builds passed. All three jobs passed on the
+exact successor commit in
+[independent CI](https://github.com/xiak/matrix/actions/runs/33174882532), whose
+native gate now builds its actual predecessor from fixed `cd271c5`.
 
-The same native gate ran successfully on a task-owned Debian/ext4 VM with
-systemd 257.7 and Docker 28.5.1. Signed A/B came from the fixed production
-source and used a private staged directory. The one-CPU, 768 MiB, 128-task
-test helper denied non-loopback IP traffic; the preloaded PostgreSQL 18 fixture
-had no network, port or image pull. Actual installer interruption, resume after
-media removal, B boot-entry execution, complete credential replacement on B,
-interrupted rollback and failed-candidate automatic source recovery passed.
-Workload identity/start time/restart count/SQL data, executor marker and latest
-credential commitments were retained. Only the test-owned native services
-were replaced. Its temporary services and workload were removed by the gate;
-the VM boot ID and pre-existing node/collector PIDs and start times were
-unchanged, with no blocked D-state tasks afterwards. The VM itself was not
-externally disconnected. These same-source A/B results do not prove historical
-N-1, runtime-2 admission or the combined offline platform/node release.
+That gate also passed in 124.59 seconds on a task-owned Debian/ext4 VM with
+systemd 257.7 and Docker 28.5.1. Signed A used `cd271c5`; B used `6697292`,
+not another label on A's source. The one-CPU, 768 MiB, 128-task helper denied
+non-loopback IP traffic; the preloaded PostgreSQL 18 fixture had no network,
+port or image pull. Actual installer interruption, resume after media removal,
+B boot-entry execution, complete credential replacement on B, interrupted
+rollback and failed-candidate automatic source recovery passed. The old A
+installer read B's journal and operated again after rollback. Workload
+identity/start time/restart count/SQL data, executor marker and latest credential
+commitments were retained.
+
+The signed B diagnostic command read both B and rolled-back A, returned real
+bounded CPU/memory/filesystem quantities, and reported collector outage without
+zero-valued substitutes. Repeating a destination retained its original bytes
+and source times; diagnostic creation/replay left journal, keys, native process
+identities and workload unchanged. The gate removed only its temporary services
+and workload. The VM boot ID and pre-existing node/collector PIDs and start
+times were unchanged, with no blocked D-state tasks afterwards. Declared
+executable modes were restored after Windows-origin archive transfer. The VM
+itself was not externally disconnected. This admits the tested runtime-3
+predecessor/successor pair, not arbitrary historical N-1, runtime-2 admission,
+a portable archive format or the combined offline platform/node release.
 
 Next in P3-1:
-complete the platform/node offline lifecycle with a real supported predecessor
-and separately prove first platform authorization for an older installation,
+complete the combined platform/node offline lifecycle and separately prove
+first platform authorization for an older installation,
 before remote application delivery.
 P3-1 and the complete Phase 3 release remain unaccepted.
 Retained-data schema migration alone does not establish runnable N-1
