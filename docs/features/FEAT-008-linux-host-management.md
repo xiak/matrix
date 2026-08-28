@@ -567,19 +567,39 @@ journal. Public CLI/backend tests cover exact retry, unknown outcomes,
 definitive rejection and one-way completion; local-effect tests reject
 substituted process ownership, preserve in-flight recovery and authenticate
 temporary-file cleanup. The authority transaction/process evidence is owned by
-[FEAT-006](FEAT-006-platform-authorities.md). The existing installed-runtime
-gate now includes recovery, old-session denial, completed replay, unchanged
-service/workload identities and the exact SYSTEM Audit fact, but that signed
-4/3/2 revision-4 exercise and actual installer crash/reply-loss recovery have
-not yet passed on this combined source. The recovery slice remains unaccepted.
-Source `4c53fa9` passed full Go/race/vet, module verification, stable generation,
-Linux builds and all three existing jobs in
-[independent CI](https://github.com/xiak/matrix/actions/runs/33157871091).
+[FEAT-006](FEAT-006-platform-authorities.md). Control-network resolution retains
+the complete provider identity; ownership checks do not accept a truncated
+prefix. Audit observation retries only explicitly unavailable responses within
+a fixed bound; authorization errors, malformed pages and missing historical
+hashes still fail.
+
+The existing installed-runtime gate `6f054ef` consumed signed A/B from fixed
+production source `b595524`, both with the complete 4/3/2 revision-4 profile.
+It passed in 402.69 seconds on a new empty, externally disconnected Docker
+27.5.1 engine limited to two CPUs, 4 GiB memory and 768 tasks. The gate killed
+the real installer after IAM committed but before the provider returned,
+removed the operator input and resumed the same sealed intent through its
+exact receipt. Old sessions and the retired password were rejected; forced
+change, completed replay, unchanged service/workload identities, private-file
+cleanup and the single SYSTEM fact with a complete platform chain passed.
+Application generations, failed-candidate automatic rollback, successful B
+upgrade, data-preserving rollback, selected-backup recovery, retained Audit
+hashes, capacity release and sanitized support also passed.
+
+Only that local test engine was restarted. Its platform services became
+healthy automatically before the observational post-restart gate, which passed
+in 19.83 seconds. No remote machine or shared engine was restarted. This accepts
+the profile-matched original-primary recovery slice, not a kernel-boot test,
+arbitrary historical N-1 or cross-profile compatibility, legacy first platform
+authorization, or the combined platform/node release.
+Full Go/vet, affected-package race and architecture checks passed locally;
+the production fix and gate-only correction each passed all three jobs in
+[production CI](https://github.com/xiak/matrix/actions/runs/33160326192) and
+[gate CI](https://github.com/xiak/matrix/actions/runs/33161975147).
 
 Next in P3-1:
-complete the signed original-primary recovery exercise, then the signed
-platform/node offline lifecycle and separately proven first platform
-authorization for an older installation, before remote application delivery.
+complete the signed platform/node offline lifecycle and separately proven
+first platform authorization for an older installation, before remote application delivery.
 P3-1 and the complete Phase 3 release remain unaccepted.
 Retained-data schema migration alone does not establish runnable N-1
 compatibility; the complete offline lifecycle gate must still prove an actual
