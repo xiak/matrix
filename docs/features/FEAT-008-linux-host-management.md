@@ -478,12 +478,49 @@ and the [gate-only correction](https://github.com/xiak/matrix/actions/runs/33138
 each passed all three jobs.
 The native exercise consumes an extracted Linux bundle; declared executable
 modes were restored after the Windows-origin transfer before verification.
-This is not evidence of a portable archive format, certificate renewal/revocation,
-or a compatible signed platform/node release pair.
+Those earlier boot gates did not cover a portable archive format, credential
+rotation or a compatible signed platform/node release pair.
+
+Node runtime revision 2 now supports sealed credential rotation and protected
+control-plane credential reload. The existing lifecycle/filesystem gates prove
+old/candidate commitments, immutable target/configuration/release, rejected
+foreign services and unknown file contents, mixed-file recovery, exact replay,
+and one-way recovery intent. Committed snapshot cleanup can resume after an
+unlink; failure preserves the new credentials and blocks another rotation.
+Native service ownership binds immutable enrollment and signed release, while
+the journal separately authenticates credential bytes. Rotation retains the
+exact persistent startup source and verifies ownership before stopping services.
+
+The existing real-TLS gates prove exact roles, expired sealed predecessors,
+rejection of shared or cross-role reused private keys and reissued old CA keys,
+and refusal of both retired peers. The same control-plane client reads replaced
+protected credential references; missing/invalid input and changed node mappings
+fail before HTTP without falling back to cached credentials.
+
+Signed source `a7ad849` passed the extended native process gate in 54.84 seconds
+on the isolated Ubuntu 24.04 CI runner. It exercised explicit same-trust renewal,
+default complete trust replacement, killing the real installer, removal of all
+external rotation inputs, resumption from sealed snapshots, old-controller/node
+TLS refusal, resident-process restart, and replay retaining the original command.
+A separate preloaded PostgreSQL 18 fixture had no network or published port,
+a half-CPU quota and a 384 MiB memory ceiling. Its container ID, startup time,
+restart count and SQL marker remained unchanged throughout. Executor receipt and
+boot/configuration bytes were retained, and completed rotation snapshots were
+removed. This fixture is not evidence of PaaS remote application placement.
+
+Full Go tests/vet, affected-package race checks, ten focused repetitions,
+architecture, stable generation, module verification and Linux builds passed.
+The exact source passed all three jobs in
+[independent CI](https://github.com/xiak/matrix/actions/runs/33144098456), including
+the real-authority node variant and retained-data/least-privilege regressions.
+No authority database profile changed, and no remote machine or shared engine
+was restarted. Revision 2 has not yet repeated the minimum-systemd local guest
+boot exercise or proved a signed platform/node upgrade and rollback pair.
 
 Next in P3-1:
-installation-owned certificate lifecycle and explicit platform authorization
-when upgrading an older installation, before remote application delivery.
+the current node revision's minimum-systemd/offline lifecycle and explicit
+platform authorization when upgrading an older installation, before remote
+application delivery.
 P3-1 and the complete Phase 3 release remain unaccepted.
 Retained-data schema migration alone does not establish runnable N-1
 compatibility; the complete offline lifecycle gate must still prove an actual
