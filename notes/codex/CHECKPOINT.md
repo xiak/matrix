@@ -5,7 +5,7 @@
 - Updated: 2026-08-28
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/linux-host-management`
-- Pushed implementation milestone: `a7ad84924cd561aee3b739b2fe38e94adf77d102`
+- Pushed verified milestone: `9c49d550aa585c142740788592da647a27110bfd`
 
 ## Resume route
 

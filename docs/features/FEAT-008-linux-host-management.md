@@ -426,10 +426,13 @@ runnable cross-profile N-1 compatibility.
 
 The existing process gate consumes a release-builder-produced signed
 `OfflineNodeRelease` and executes its bundled `mx`, without a second test-only
-release implementation. Clean source `3e60be7` assembled the pinned collector,
-licenses and two native executables. Its signed bundle passed the full native
-gate in 248 seconds on a task-owned, resource-bounded local Ubuntu 22.04 guest
-with systemd 249, Docker 27.5.1 and Compose 2.33.0, without external networking.
+release implementation. Clean source `bd08f5d` assembled the runtime-revision-2
+bundle with the pinned collector, licenses and two native executables. Gate
+`9c49d55` passed its full native exercise in 417.07 seconds on a task-owned
+local Ubuntu 22.04 guest with systemd 249, Docker 27.5.1 and Compose 2.33.0.
+The software-emulated guest had two virtual CPUs and 2 GiB memory inside a
+two-CPU, 3 GiB wrapper with no external network, published port, privileged
+mode or shared Docker socket. The gate had its own one-CPU, 768 MiB limit.
 It covered exact install replay, no-reader sampling, staged-payload and effective
 service-policy tamper rejection, manager reload, collector outage/reconciliation
 and supervised crash restart. Restoring an altered unit source without reloading
@@ -437,17 +440,19 @@ does not hide a loaded privileged execution flag. Unsupported native roots fail
 before creating installation state. Partial boot registration is repaired without
 replacing healthy processes.
 
-After interrupting the real installer, the guest kernel was rebooted and its
-changed boot ID verified. The persistent startup unit automatically completed
-the original in-flight command, with no service retry or manual start. Both
+The same gate's boot preparation passed in 180.73 seconds, retaining an
+interrupted real installer command. Only that local guest kernel was rebooted;
+the changed boot ID was verified. The persistent startup unit automatically
+completed the original in-flight command, with no service retry or manual start. Both
 resident processes were running before the first manual `mx` status query.
 The retained installation/target, release, command ID, configuration, certificate/key bytes
-and executor marker were unchanged. The existing gate's read-only boot phase
-in `48f5b32` passed twice against that signed release; it separately bounds the
-wait for fresh observations after boot load instead of equating a running process
-with a current sample. These retained bytes are not evidence of a deployed
-application or database workload surviving reboot. No remote machine, shared
-engine or other task's service was restarted.
+and executor marker were unchanged. The read-only boot phase passed in
+8.20 seconds; it separately bounds the wait for fresh observations after boot
+load instead of equating a running process with a current sample. This boot
+case does not combine kernel reboot with credential rotation or prove that a
+deployed application/database workload survives reboot. No remote machine,
+shared engine or other task's service was restarted. Its task-owned runtime
+and transferred fixture files were removed after verification.
 
 The collector runs under a distinct non-root UID without access to the node
 private key or Docker socket. Systemd owns and removes its private runtime
@@ -463,23 +468,16 @@ The existing journal/lifecycle gates preserve the node's sealed identity and
 prevent platform database/backup phases or cross-purpose directory reuse.
 Linux local-machine tests cover retained executor files, credentials and backup
 bytes, including recovery rejection at every effect boundary when the current,
-target and authenticated backup profiles differ. Those node milestones did not
-change the then-current platform database profile. The later authority
-integration uses the composition specified above; the existing lifecycle gate
-explicitly rejects transitions in either direction with the preceding
+target and authenticated backup profiles differ. Node lifecycle does not change
+the platform database profile. The integrated authority composition is specified
+above; the existing lifecycle gate explicitly rejects transitions in either
+direction with the preceding
 IAM 2 / Audit 2 / PaaS 2, revision 1 profile before journal or provider effects.
 
-Full local Go tests/vet, affected-package race checks, architecture, module
-verification, stable generation, Linux builds/vet and ten focused repetitions
-passed. The existing independent node-process job builds and tests the signed
-native package alongside the collector and real-authority regressions. The
-signed source's [CI run](https://github.com/xiak/matrix/actions/runs/33137724786)
-and the [gate-only correction](https://github.com/xiak/matrix/actions/runs/33138389163)
-each passed all three jobs.
 The native exercise consumes an extracted Linux bundle; declared executable
 modes were restored after the Windows-origin transfer before verification.
-Those earlier boot gates did not cover a portable archive format, credential
-rotation or a compatible signed platform/node release pair.
+It does not prove a portable archive format or a compatible signed
+platform/node release pair.
 
 Node runtime revision 2 now supports sealed credential rotation and protected
 control-plane credential reload. The existing lifecycle/filesystem gates prove
@@ -497,30 +495,34 @@ and refusal of both retired peers. The same control-plane client reads replaced
 protected credential references; missing/invalid input and changed node mappings
 fail before HTTP without falling back to cached credentials.
 
-Signed source `a7ad849` passed the extended native process gate in 54.84 seconds
-on the isolated Ubuntu 24.04 CI runner. It exercised explicit same-trust renewal,
+The extended signed native gate exercises explicit same-trust renewal,
 default complete trust replacement, killing the real installer, removal of all
 external rotation inputs, resumption from sealed snapshots, old-controller/node
 TLS refusal, resident-process restart, and replay retaining the original command.
 A separate preloaded PostgreSQL 18 fixture had no network or published port,
 a half-CPU quota and a 384 MiB memory ceiling. Its container ID, startup time,
-restart count and SQL marker remained unchanged throughout. Executor receipt and
-boot/configuration bytes were retained, and completed rotation snapshots were
-removed. This fixture is not evidence of PaaS remote application placement.
+restart count and SQL marker remained unchanged throughout. An executor-state
+marker and boot/configuration bytes were retained, and completed rotation snapshots were
+removed. Its initialization has a bounded fixture wait independent of node
+readiness deadlines. This case passed within the full minimum-systemd exercise
+above and in independent CI; it is not evidence of PaaS remote application
+placement.
 
 Full Go tests/vet, affected-package race checks, ten focused repetitions,
 architecture, stable generation, module verification and Linux builds passed.
-The exact source passed all three jobs in
-[independent CI](https://github.com/xiak/matrix/actions/runs/33144098456), including
-the real-authority node variant and retained-data/least-privilege regressions.
+The production rotation slice `a7ad849` and the gate-only fixture correction
+`9c49d55` each passed all three jobs in
+[production CI](https://github.com/xiak/matrix/actions/runs/33144098456) and
+[gate CI](https://github.com/xiak/matrix/actions/runs/33146237962), including the
+signed native package, real-authority node variant and retained-data/
+least-privilege regressions. The gate correction also passed the local default
+Go suite, vet, module verification and Linux test build.
 No authority database profile changed, and no remote machine or shared engine
-was restarted. Revision 2 has not yet repeated the minimum-systemd local guest
-boot exercise or proved a signed platform/node upgrade and rollback pair.
+was restarted. A signed platform/node upgrade and rollback pair remains unproved.
 
 Next in P3-1:
-the current node revision's minimum-systemd/offline lifecycle and explicit
-platform authorization when upgrading an older installation, before remote
-application delivery.
+the signed platform/node offline lifecycle and explicit platform authorization
+when upgrading an older installation, before remote application delivery.
 P3-1 and the complete Phase 3 release remain unaccepted.
 Retained-data schema migration alone does not establish runnable N-1
 compatibility; the complete offline lifecycle gate must still prove an actual
