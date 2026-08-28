@@ -3,7 +3,7 @@
 - Status: Accepted
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
-- Release contract: accepted foundation `v1`; multi-tenant extension `v2` in progress
+- Release contract: accepted foundation `v1`; manifest `v2` with the exact `3/2/1` revision 3 profile accepted on the isolated IAM branch
 
 ## Outcome
 
@@ -195,12 +195,12 @@ password-change policy to the tenant lifecycle/original-primary recovery and
 exact seven-column IAM claim contract. It is not a request/configuration
 selector. Real service readiness and the owning function/dispatcher gates must
 prove the composition, rather than comparing three version numbers alone.
-The revision-3 populated signed lifecycle is still pending; the earlier
-revision-2 evidence below cannot accept the new session behavior.
-The current code passes the full repository race/vet gates and the native Linux
-backup/recovery boundary tests. The actual published installer still rejects
-the new format, and both directions between the previous `2/2/1` revision 2
-and current profile fail before journal or provider effects.
+The revision-3 populated signed lifecycle passes from fixed implementation
+`5721b7b1a985f25c9730ddb9229a51f7f6c3b63a`; earlier revision-2 evidence is not
+used to accept the new session behavior. The same code passes full-repository
+race/vet and native Linux backup/recovery boundary gates. The actual published
+installer rejects the new format, and both directions between the previous
+`2/2/1` revision 2 and current profile fail before journal or provider effects.
 
 Upgrade and data-preserving rollback require exact equality of the complete
 profile before journal advancement or provider effects. A larger number is
@@ -218,28 +218,24 @@ support reports the same non-secret profile.
 The published v1 manifest and backup canonical bytes and signatures/seals stay
 readable. This does not certify that an old executable can run new schemas,
 that an old topology remains executable, or that a cross-profile upgrade is
-supported. The existing gates must prove published-format preservation and
-unsafe transition rejection, followed by real signed A/B releases with this
-same complete profile, retained tenant/credential/resource/Audit state,
-data-preserving rollback and selected-backup recovery. These new gates remain
+supported. The existing gates prove published-format preservation and unsafe
+transition rejection, followed by real signed A/B releases with this same
+complete profile, retained tenant/credential/resource/Audit state,
+data-preserving rollback and selected-backup recovery. These gates remain
 separate from the accepted foundation evidence below and from FEAT-008's host
 work.
 
-The profile contract gates pass on this branch on 2026-08-27: unit/race and
-architecture checks, native Linux backup/seal and all recovery-phase refusal
-checks, and the actual published `c88a84f` installer rejecting the new signed
-format before effects. The negative recovery test first demonstrates that an
-authenticated old snapshot alone admitted a different current profile; both
-command and adapter boundaries now reject that transition without changing
-the journal, services, credentials, backup or data. The published v1 seal and
-canonical bytes still round-trip unchanged. In new task-owned PostgreSQL 18
-databases, the actual old IAM executable retained-account upgrade passes,
-followed by the independent five-process race gate checking real runtime
-logins, the `2/2/1` readiness tuple, the seven-column IAM claim contract and
-the existing tenant/lifecycle/outbox matrices. These checks do not replace the
-signed populated A/B offline lifecycle acceptance above.
-Fixed implementation `b3a6f81450988d9759ce25163071338e89ed18c4` passes all
-three [independent Verification jobs](https://github.com/xiak/matrix/actions/runs/33068851630).
+The profile contract gates pass on this branch on 2026-08-28: unit/race and
+architecture checks, native Linux backup/seal and every recovery-phase
+refusal, and the actual published `c88a84f` installer rejecting the new signed
+format before effects. Command and adapter boundaries reject a different
+current/target profile even with an authenticated target backup, without
+changing the journal, services, credentials, backup or data. The published v1
+seal and canonical bytes round-trip unchanged. FEAT-006 owns the actual old
+IAM binary retained-data migrations and independent restricted-login process
+gates; they are not cross-profile release compatibility evidence. Current
+implementation `5721b7b1a985f25c9730ddb9229a51f7f6c3b63a` passes all three
+[independent Verification jobs](https://github.com/xiak/matrix/actions/runs/33138242923).
 
 The populated gate uses the existing `phase1e2e` owner. Before backup it opens
 two tenants through IAM, changes each original primary's and same-named
@@ -263,13 +259,14 @@ after forced replacement, including when false was submitted. Tenant pause
 must revoke even an otherwise retained valid session. These sessions are
 generated through the actual installed IAM HTTP API, not inserted fixtures.
 
-These populated gates pass on 2026-08-27 using signed Release A
-`matrix-v0.1.0-b3a6f8145098` and Release B `matrix-v0.2.0-b3a6f8145098`, both
-assembled from fixed implementation `b3a6f81450988d9759ce25163071338e89ed18c4`
-with the exact `2/2/1` revision 2 profile. A new task-owned Linux Docker 27.5.1
-host, limited to two CPUs and 4 GiB with external networking disabled, starts
-with no inner images, containers or volumes. The 340.83-second real gate
-installs PostgreSQL 18 and all nine platform services, completes the populated
+These populated gates pass on 2026-08-28 using signed Release A
+`matrix-v0.1.0-5721b7b1a985` and Release B `matrix-v0.2.0-5721b7b1a985`, both
+assembled from fixed implementation `5721b7b1a985f25c9730ddb9229a51f7f6c3b63a`
+with the exact `3/2/1` revision 3 profile. A new task-owned local Linux Docker
+27.5.1 engine, limited to two CPUs, 4 GiB and 768 PIDs with external networking
+disabled, starts with no inner images, containers or volumes. The
+315.69-second real gate installs PostgreSQL 18 and all nine platform services,
+completes the populated
 tenant baseline and both tenant/installation Audit delivery, verifies two real
 application generations, failed-candidate rollback, successful B upgrade,
 data-preserving rollback, selected-backup recovery, application rollback/stop,
@@ -277,16 +274,20 @@ capacity release and bounded support evidence. The post-upgrade tenant resource
 and Operation survive rollback and are absent after restoring the earlier
 snapshot. No revoked role/session or disabled user/tenant is revived.
 
-Restarting the entire owned Docker engine then passes the 20.01-second second
-gate. The original primary recovery is still bound to its original tenant and
-USER; explicit tenant resume and the required password change restore its
+After restarting only this owned local engine and observing its services
+return to READY, the second gate passes in 14.55 seconds. No remote machine,
+host Docker daemon or shared service is restarted. The explicitly retained
+valid session remains usable; revoked and old temporary sessions remain
+denied. The original primary recovery is still bound to its original tenant
+and USER; explicit tenant resume and required password replacement restore
 tenant administration without platform permission. The child remains disabled
 until explicitly enabled, retains its changed password, and cannot reuse its
 old session. Tenant and platform Audit hashes/chains, configuration values,
 quota and original resource/Operation ownership survive. Actual installed
 readiness and repeated migration/function verification match the signed
-profile, including the seven-column IAM claim; support reports that same
-profile without credentials or configuration values.
+profile, including the seven-column IAM claim and generation-bound password
+function; support reports the same profile without credentials or
+configuration values. Engine availability alone is not platform readiness.
 
 The releases have distinct release/image identities but share fixed production
 source. This proves the complete same-profile lifecycle, not a cross-profile
@@ -296,20 +297,11 @@ owned by FEAT-007. The gate's negative HTTP client also checks the proper
 `application/problem+json` contract, so expected authentication and access
 denials are not mistaken for malformed success responses.
 
-The installed-browser follow-up also assembles signed Release C
-`matrix-v0.3.0-464910f0df23` from fixed source
-`464910f0df23d79264fb59b35324a915a8a21335`, declaring A as its predecessor and
-the same complete `2/2/1` revision 2 profile. Signed Release D
-`matrix-v0.4.0-a36cf9817f52`, fixed source
-`a36cf9817f522549b995ea9c1f0d873499b4fe62`, declares C as its predecessor with
-that same complete profile. An actual protected backup, A-to-C and C-to-D
-upgrades, and subsequent `mx platform verify` succeed on the populated owned
-installation. These source changes are confined to console rendering/tests,
-embedded assets and evidence; they are not evidence for an arbitrary
-schema-changing or cross-profile N-1 upgrade. FEAT-007 owns the installed
-browser and preserved workload observations. The browser's task-owned
-loopback network is attached only after the network-disabled offline gates;
-it is not presented as part of their offline-network proof.
+The real browser subsequently consumes this installed revision-3 release,
+not a development server. FEAT-007 owns that journey and its preserved
+database observations. Its task-owned loopback network is attached only after
+the network-disabled lifecycle and restart gates; browser connectivity is not
+presented as part of their offline-network proof.
 
 ### Gate A: release and CLI contract
 

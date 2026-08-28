@@ -1,12 +1,12 @@
 # FEAT-006: Platform IAM and Audit authorities
 
-- Status: Accepted foundation; multi-tenant extension in progress
+- Status: Accepted foundation; minimal multi-tenant slice accepted on `feat/iam-xxx`
 - Target release: Private Application PaaS v0.1 multi-tenant extension
 - Target design date: 2026-08-25
 - IAM API contract: `iam.matrix.xiak.com/v1`
 - Audit API contract: `audit.matrix.xiak.com/v1`
 - Phase 3 extension: installation-scoped IAM authority implemented; host-resource consumption and offline upgrade acceptance remain in FEAT-008
-- Multi-tenant extension: accounts, primary/platform credential protection, historical producer proof, tenant lifecycle, original-primary recovery and password-session policy pass backend gates; revision-3 installed-release acceptance remains pending
+- Multi-tenant extension: accounts, primary/platform credential protection, historical producer proof, tenant lifecycle, original-primary recovery and password-session policy pass backend, signed lifecycle and installed-browser gates; keyboard-only usability verification is deferred by the user in FEAT-007
 
 ## Outcome
 
@@ -225,9 +225,11 @@ Wrong-password and failed transactions leave the password,
 sessions and success facts unchanged. The console calls these login sessions,
 not devices; it does not add device fingerprinting or a device inventory.
 This hardening increments IAM's schema to 3 and the release contract revision
-to 3; retained-session process gates pass, while the new installed-release
-gate is still pending. Audit remains 2 and this branch's PaaS remains 1. The previous signed
-2/2/1 revision 2 evidence does not certify the new password/session contract.
+to 3. Retained-session process gates, the populated signed lifecycle in
+FEAT-005 and the installed-browser journey in FEAT-007 pass for this contract.
+Audit remains 2 and this branch's PaaS remains 1. The complete `3/2/1`
+revision 3 profile is verified independently; the previous signed `2/2/1`
+revision 2 evidence is not reused to certify the new password/session contract.
 
 An explicitly bound `PLATFORM_OPERATOR` may open another tenant account with
 its own primary account and initial password, list/read tenant metadata,
@@ -454,8 +456,9 @@ root and delegated-administrator boundaries in the
 [AWS root-user documentation](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_root-user.html)
 and [Alibaba RAM administrator documentation](https://www.alibabacloud.com/help/en/ram/create-admin-user).
 Resources remain owned by the existing organization, not the primary person.
-The Alibaba-style model here adopts this identity boundary, not Alibaba's
-billing, identity-provider, account-ownership transfer, or policy products.
+Matrix implements this primary/delegated-administrator boundary without
+including billing, identity-provider, account-ownership transfer or custom
+policy products in the slice.
 
 An unrevoked `PLATFORM_OPERATOR` binding also protects its user's credentials
 from ordinary tenant member status/password commands, even if that user is
@@ -514,7 +517,7 @@ must still match their storage owner; installation facts must match that seal.
 Completion and fencing use the claimed row identity, not a chain selector.
 Readiness and migration verification check the exact result-column contract;
 malformed scope is retained as a dead letter before delivery. Sharing schema
-version 2 with an earlier proof increment is not an N-1 dispatcher or release
+version numbers is not an N-1 dispatcher or release
 compatibility claim. The release owner's `contractRevision` must also bind
 this result shape before a populated upgrade or rollback can be accepted.
 
@@ -601,7 +604,7 @@ excluded. Host observation, execution-pool/target implementation, platform
 Operations, terminals, and general installation Audit are not reimplemented
 here. No real-time stream revocation or public-cloud isolation claim is made.
 
-### Multi-tenant vertical gates (not yet accepted)
+### Multi-tenant vertical gates
 
 Existing owners are extended rather than adding a parallel test framework.
 Contract/unit/architecture/security checks precede each focused PostgreSQL
@@ -894,7 +897,6 @@ the historical ready fact as an exact duplicate. These live-engine observations
 are task-local evidence, not an assertion that the pending-record CI gate runs
 a workload executor.
 
-These are verified slices, not acceptance of the full multi-tenant target.
 The password-session increment passes this branch's fresh PostgreSQL 18 race
 gates on 2026-08-28: forced initial/reset/recovery changes, ordinary omitted,
 true and false choices, invalid selectors, atomic failure, later platform
@@ -908,14 +910,24 @@ gates also pass. Full-repository unit/architecture/race and vet, strict contract
 generation, dependency verification and Linux amd64 builds pass. The native
 Linux release boundary preserves published v1 authentication and rejects
 different complete profiles before effects, including the prior `2/2/1`
-revision 2. Signed revision-3 lifecycle and installed browser acceptance
-remain separate from these backend results.
-This branch's browser evidence and deferred keyboard-only gate belong to
-[FEAT-007](FEAT-007-control-plane-console.md). The exact release profile and
-signed populated offline upgrade/rollback/backup/recovery evidence belong to
-[FEAT-005](FEAT-005-offline-platform-lifecycle.md); retained-data process checks
-and the task-local runtime are not substitutes for that gate. Its verified
-same-profile A/B lifecycle does not permit cross-profile runtime transitions.
+revision 2. Fixed implementation
+`5721b7b1a985f25c9730ddb9229a51f7f6c3b63a` passes all three
+[independent Verification jobs](https://github.com/xiak/matrix/actions/runs/33138242923).
+
+On 2026-08-28 the same fixed source passes the populated signed revision-3
+install, A/B upgrade, failed-candidate rollback, data-preserving rollback,
+selected-backup recovery and owned local-engine restart gates in
+[FEAT-005](FEAT-005-offline-platform-lifecycle.md). The installed browser then
+passes the dual-tenant password/session and real database journey in
+[FEAT-007](FEAT-007-control-plane-console.md), including measured 360-pixel
+controls. Together with the earlier lifecycle/resource checks retained by the
+current regressions, these accept this branch's minimum multi-tenant slice.
+The user's deferred keyboard-only usability gate is not counted as passed.
+This does not accept another Phase, main, complete public-cloud IAM, an
+arbitrary historical N-1 binary, or a cross-profile runtime transition.
+The FEAT-005 owner retains the exact signed profile and compatibility limits;
+retained-data SQL migration tests are not a substitute for signed lifecycle
+acceptance, nor permission to upgrade an incompatible published installation.
 Prior foundation evidence below covers only its named source revisions.
 
 - Gate A was accepted on 2026-08-26. Strict generated Go/OpenAPI contracts,

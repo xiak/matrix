@@ -263,7 +263,7 @@ suspended tenant. Protected platform credentials remain an offline recovery
 boundary. Conflict, revocation, and unavailable responses must not look like
 successful changes.
 
-Password/session hardening is in progress and follows FEAT-006's effective
+Password/session behavior implements FEAT-006's effective
 session policy. Existing user settings expose ordinary password replacement
 to the current user, with "exit other login sessions" checked by default.
 Explicit false retains only other valid sessions, not revoked credentials.
@@ -276,19 +276,22 @@ The new behavior passes 90 frontend tests, type/lint/architecture and all 20
 contrast checks, with two separate two-worker production exports matching all
 59 embedded files. The current-session choice, forced no-opt-out form,
 immediate password clearing and late-response/expiry protections are included.
-Its real installed browser gate is still pending; the evidence below predates it.
+Its real installed browser gate passes from fixed source `5721b7b` as detailed
+below; previous release evidence is not used to certify this new contract.
 
 Acceptance on the isolated IAM branch requires adapter/component gates and a
 real browser against its own IAM/PaaS/Audit environment: a platform-only user
 opens and manages a tenant; tenant administrators create and authorize child
 users; matching child names log into separate tenants and see only permitted
 resources; status/recovery, forced password replacement, logout/reload,
-permission denial and stale-session behavior work. Keyboard and 360-pixel
-checks cover these controls. Source checks or another Phase's browser evidence
-do not accept this extension, and do not replace the installed-release gate.
+permission denial and stale-session behavior work. Measured 360-pixel checks
+cover these controls. The user has explicitly deferred native keyboard-only
+verification; it remains an unpassed usability follow-up, not a prerequisite
+for this prioritized IAM slice. Source checks or another Phase's browser
+evidence do not replace its installed-release gate.
 
 This branch's adaptation passes type checking, lint, architecture, the 20
-contrast checks, 75 frontend tests, Go embed checks and two bounded,
+contrast checks, 90 frontend tests, Go embed checks and two bounded,
 two-worker production exports matching all 59 embedded files. Adapter and
 component gates cover platform-only navigation, version-bound lifecycle
 requests, original-primary recovery while paused, password clearing on
@@ -334,65 +337,78 @@ horizontal page overflow. Account card headers wrap complete action buttons
 instead of squeezing their labels into vertical text. Keyboard-only end-to-end
 verification remains open: pointer-driven browser actions and component
 keyboard tests do not certify that gate. The user has deferred this lower-priority
-keyboard-only gate while password/session security and its installed journey
-are completed; it is not counted as passed. The signed offline profile/lifecycle evidence
+keyboard-only gate; it is not counted as passed. The signed offline profile/lifecycle evidence
 belongs to [FEAT-005](FEAT-005-offline-platform-lifecycle.md); neither changes
 another Phase's acceptance state.
 
 ### Installed-release browser evidence
 
-On 2026-08-27 the browser consumes real signed Release A
-`matrix-v0.1.0-b3a6f8145098` after the populated offline lifecycle gate. An
-installation operator opens another tenant through the console. Its original
-primary completes the initial password change, creates a child, assigns a
-fixed tenant role and sets the account alias. That child completes its own
-forced password change. It and the identically named child of the existing
-second tenant sign in through distinct realms and each creates a real
-PostgreSQL 18 installation with the same public resource ID. Each browser
-lists only its tenant's instance. Both independent databases accept SQL and
-retain distinct marker rows under their own bounded workload containers.
+The current password/session journey passes on 2026-08-28 against signed
+Release A `matrix-v0.1.0-5721b7b1a985`, fixed source
+`5721b7b1a985f25c9730ddb9229a51f7f6c3b63a`, after FEAT-005's populated
+revision-3 lifecycle and owned-engine restart. Its three independent
+[Verification jobs](https://github.com/xiak/matrix/actions/runs/33138242923)
+pass. No development UI, mocked service, browser data stub or other Phase's
+running environment is used.
 
-Tenant suspension invalidates the child's next protected read without
-stopping either database. Online primary recovery keeps the original USER ID
-and suspended tenant state. Only explicit tenant restoration followed by the
-primary's forced password change restores access; the old password fails and
-no platform role appears. Revoking the child's developer role and retaining
-only the viewer role preserves its permitted reads and refuses writes.
+Both original primaries log in and create a child named `session-member` with
+an explicitly selected developer role. Their qualified logins resolve to
+separate tenants. Two initial-password sessions exist for the first child:
+after one completes forced replacement, only that current session can proceed;
+the other cannot change the password or gain ordinary permissions. The second
+tenant's child completes its own independent forced replacement. Each child
+creates a real PostgreSQL 18 installation with the same public resource ID
+`session-database`; its browser lists only its tenant's instance.
 
-Signed Release C `matrix-v0.3.0-464910f0df23` contains fixed renderer source
-`464910f0df23d79264fb59b35324a915a8a21335`, whose independent Verification
-`33074008639` passes all three jobs. The release is installed through the
-profile-checked upgrade in FEAT-005, not a development-server replacement.
-At measured 360-by-800 CSS pixels, both quota and installation write denials
-are visible inside the open panel; closing and reopening preserves one
-notice, with no horizontal page overflow. The installation denial has an
-available quota and an otherwise valid form, so it is a real authority
-refusal rather than a disabled-input check.
+An ordinary password change with the default checkbox retains the current
+session and rejects the other session's next protected request. All three
+password inputs are empty after submission. A fresh additional login then
+tests explicit false: both still-valid sessions remain usable after protected
+reads, but the earlier revoked session remains denied. The other tenant's
+session and resource list are unaffected. These are independent browser
+sessions, not a claim about device identification.
 
-On that signed release, member disable, password reset while disabled,
-explicit enable, rejection of the old password and old session, and forced
-password replacement complete through the browser. The child retains only its
-viewer role. The two database container IDs, start times and SQL marker rows
-remain unchanged across tenant/member lifecycle actions and the UI release
-upgrade. Password changes are performed by the acceptance driver, not left as
-manual work for the user. This is pointer-driven real-browser evidence;
-keyboard-only acceptance remains open and is not inferred from component
-keyboard tests.
+The original primary resets the first child's password through member
+management. After that transaction reports completion, both of the child's
+previously valid sessions lose protected content on their next reads, and the
+old password cannot log in. Two fresh reset-password sessions then prove that
+forced replacement again retains only the submitting session; the other
+temporary session cannot promote itself or change the replacement password.
+The accepted new password logs in normally and sees only the original tenant's
+database. Passwords and all browser actions are handled by the acceptance
+driver, not left as manual work for the user.
 
-The selection correction ships in signed Release D
-`matrix-v0.4.0-a36cf9817f52`, fixed source
-`a36cf9817f522549b995ea9c1f0d873499b4fe62` with all three independent
-[Verification jobs](https://github.com/xiak/matrix/actions/runs/33075458596)
-successful. In a real 360-by-800 view, a second-tenant child starts with no
-available quota. Its original primary activates one through a separate browser
-session. Refreshing the child's existing installation page now displays an
-explicit quota placeholder; selecting the returned quota enables the valid
-form. Another refresh preserves the selected quota, instance ID and display
-name. Submitting as a viewer still fails through IAM and visibly reports the
-denial inside the panel, creates no additional instance and leaves both
-databases and their marker rows unchanged. This verifies the refreshed-option
-behavior against the installed service, without a browser data stub or an
-extra running workload.
+Both PostgreSQL 18.4 workloads are bounded to 0.5 CPU and 1 GiB. Their container
+IDs, start times and distinct SQL marker rows stay unchanged through explicit
+session retention, administrator reset and forced replacement. Separate
+authenticated Audit readback verifies four alpha and one beta password-change
+facts for these new children, only alpha's reset fact, and each database's created/ready pair joined
+to the expected child, tenant, original IAM decision and request correlation.
+Both tenant chains verify completely; no password appears in those records.
+This readback is an HTTP/data check in addition to, not a replacement for,
+the real browser observations.
+
+Desktop interaction and an actual 360-by-800 CSS-pixel view cover the new
+password controls. At 360 pixels the full option and explanation are visible,
+pointer toggling works in both directions, password inputs remain empty and
+the document has no horizontal overflow. The temporary viewport override is
+removed after checking. Native keyboard-only end-to-end acceptance remains
+explicitly deferred by the user and is not inferred from pointer or component
+tests.
+
+The unchanged tenant/lifecycle and resource-control paths also retain their
+earlier installed-runtime evidence: signed source `b3a6f81` exercises tenant
+opening, primary/child creation, alias login, identical resource IDs and
+tenant suspension/recovery with live PostgreSQL data. Source `464910f` proves
+visible quota/installation denials in the open 360-pixel context panel and
+preserves one notice through close/reopen, plus disabled-member reset/enable
+and old-session denial. Source `a36cf98` proves a quota activated in a separate
+primary session appears after the child's refresh, requires explicit
+selection, preserves entered values and still refuses a viewer's submission.
+These checks use real signed, profile-checked UI upgrades and preserved
+database markers, not disabled-input checks. Their regressions remain in the
+current 90-test suite; their former revision-2 profile does not certify the
+new session contract, which is verified separately above.
 
 ## Incremental acceptance
 
