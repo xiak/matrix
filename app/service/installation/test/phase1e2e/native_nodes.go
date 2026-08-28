@@ -967,8 +967,9 @@ func (value *gate) afterNativeRestart(ctx context.Context, installationID string
 		factsBytes, err := os.ReadFile(factsPath)
 		var facts nativeHostFacts
 		if err != nil || decodeOne(factsBytes, &facts) != nil || !sameNativeHostAfterBoot(saved.Facts, facts) {
-			return fail("native-actual-kernel-boot-and-identity")
+			return fail("native-actual-kernel-boot-and-identity-" + strconv.Itoa(index+1))
 		}
+		fixture.nodes[index].facts = facts
 		poll, cancel := context.WithTimeout(ctx, 3*time.Minute)
 		for {
 			status, err := fixture.mx(poll, index, false, "status", "--root", nativeInstallationRoot)
@@ -1006,7 +1007,10 @@ func (value *gate) afterNativeRestart(ctx context.Context, installationID string
 }
 
 func sameNativeHostAfterBoot(before, after nativeHostFacts) bool {
-	return validNativeFacts(before) && validNativeFacts(after) && before.BootID != after.BootID && before.Fingerprint == after.Fingerprint && before.EngineID == after.EngineID && before.CPUs == after.CPUs && before.MemoryBytes == after.MemoryBytes && before.StorageBytes == after.StorageBytes
+	// Capacity is an observation, not an immutable identity: usable kernel
+	// memory can change across boots. The caller checks the fresh PaaS sample
+	// against the newly probed CPU, memory and filesystem quantities instead.
+	return validNativeFacts(before) && validNativeFacts(after) && before.BootID != after.BootID && before.Fingerprint == after.Fingerprint && before.EngineID == after.EngineID
 }
 
 func (value *gate) nativeStoredHistory(ctx context.Context, index int) error {

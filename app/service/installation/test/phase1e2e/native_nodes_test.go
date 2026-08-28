@@ -64,18 +64,25 @@ func TestOfflineNativeHostProbe(t *testing.T) {
 	}
 }
 
-func TestNativeBootEvidenceRequiresNewKernelAndSameMachine(t *testing.T) {
+func TestNativeBootEvidenceRequiresNewKernelAndSameIdentity(t *testing.T) {
 	before := nativeHostFacts{Fingerprint: "sha256:" + strings.Repeat("a", 64), BootID: "00000000-0000-0000-0000-000000000001", EngineID: "engine-1", CPUs: 2, MemoryBytes: 2 << 30, StorageBytes: 20 << 30}
 	after := before
 	after.BootID = "00000000-0000-0000-0000-000000000002"
 	if !sameNativeHostAfterBoot(before, after) || sameNativeHostAfterBoot(before, before) {
 		t.Fatal("kernel boot evidence not distinguished")
 	}
-	for _, change := range []func(*nativeHostFacts){func(v *nativeHostFacts) { v.Fingerprint = "sha256:" + strings.Repeat("b", 64) }, func(v *nativeHostFacts) { v.EngineID = "engine-2" }, func(v *nativeHostFacts) { v.MemoryBytes++ }, func(v *nativeHostFacts) { v.StorageBytes++ }, func(v *nativeHostFacts) { v.CPUs++ }} {
+	for _, change := range []func(*nativeHostFacts){func(v *nativeHostFacts) { v.MemoryBytes -= 4096 }, func(v *nativeHostFacts) { v.StorageBytes += 4096 }, func(v *nativeHostFacts) { v.CPUs++ }} {
+		candidate := after
+		change(&candidate)
+		if !sameNativeHostAfterBoot(before, candidate) {
+			t.Fatal("current capacity was mistaken for immutable host identity")
+		}
+	}
+	for _, change := range []func(*nativeHostFacts){func(v *nativeHostFacts) { v.Fingerprint = "sha256:" + strings.Repeat("b", 64) }, func(v *nativeHostFacts) { v.EngineID = "engine-2" }, func(v *nativeHostFacts) { v.BootID = "" }, func(v *nativeHostFacts) { v.MemoryBytes = 0 }, func(v *nativeHostFacts) { v.StorageBytes = 0 }, func(v *nativeHostFacts) { v.CPUs = 0 }} {
 		candidate := after
 		change(&candidate)
 		if sameNativeHostAfterBoot(before, candidate) {
-			t.Fatal("replacement host accepted as retained boot")
+			t.Fatal("replacement host or invalid physical facts accepted as retained boot")
 		}
 	}
 }
