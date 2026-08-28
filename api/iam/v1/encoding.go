@@ -2,6 +2,8 @@ package iamv1
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,6 +12,18 @@ import (
 )
 
 var ErrEncodingFailed = errors.New("IAM contract encoding failed")
+
+// BootstrapDigest is the single byte-preserving commitment to the sealed
+// installer bootstrap document. It deliberately reuses its private encoder.
+func BootstrapDigest(document BootstrapDocument) (string, error) {
+	encoded, err := EncodeBootstrapDocument(document)
+	if err != nil {
+		return "", err
+	}
+	defer clear(encoded)
+	digest := sha256.Sum256(encoded)
+	return "sha256:" + hex.EncodeToString(digest[:]), nil
+}
 
 // DecodeRequest applies the common strict IAM request decoder.
 func DecodeRequest(reader io.Reader, destination any) error {

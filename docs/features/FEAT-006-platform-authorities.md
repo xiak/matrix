@@ -7,6 +7,7 @@
 - Audit API contract: `audit.matrix.xiak.com/v1`
 - Phase 3 extension: installation-scoped IAM authority implemented; host-resource consumption and offline upgrade acceptance remain in FEAT-008
 - Multi-tenant extension: accounts, primary/platform credential protection, historical producer proof, tenant lifecycle, original-primary recovery and password-session policy pass backend, signed lifecycle and installed-browser gates; keyboard-only usability verification is deferred by the user in FEAT-007
+- Follow-up: original installation-primary local credential recovery is in implementation; it does not reopen or extend the accepted multi-tenant evidence
 
 ## Outcome
 
@@ -170,6 +171,104 @@ replay nor schema reapplication repairs or regrants a revoked platform role.
 Older installations without a platform binding require an explicit authorized
 upgrade/recovery path; that offline lifecycle remains unaccepted. No migration
 silently promotes organization administrators.
+
+### Local recovery of the original installation primary
+
+This subsequent bounded target restores only the password of the original
+installation primary while its platform binding is still unrevoked. It is
+not first-time authorization of an older installation, restoration of a
+revoked role, ownership transfer, service-credential recovery, or recovery
+from a disabled principal/organization. Those cases fail without effects.
+The completed multi-tenant slice retains its existing acceptance status.
+
+The signed release supplies a purpose-specific, one-shot IAM local entry with
+`inspect` and `apply` modes, separate from the HTTP server and database
+migrator. Installation owns verified executable selection, local capability
+protection, command locking/journaling, secret-file lifetime, and release
+profile enforcement. IAM owns capability verification, the atomic security
+mutation, completion evidence, and its single immutable Audit fact. Neither
+mode restarts services, engines, hosts, or workloads.
+
+The local authority combines an installation-private capability signing key
+with a dedicated PostgreSQL login whose sole role is
+`matrix_iam_credential_recovery`. That role can execute only the fixed
+inspection and recovery functions; it cannot access tables, use other IAM
+commands, or become API, worker, owner, migrator, or another authority role.
+Existing USER/API/worker/verifier credentials gain no recovery capability.
+The authority file seals installation ID, bootstrap content digest, home
+organization, and original primary ID. Both commands compare this tuple with
+IAM's existing bootstrap receipt; callers cannot choose another target.
+
+The signing key is local issuing authority, not a USER permission. A single
+HMAC-SHA256 capability binds the fixed purpose, command ID, sealed tuple,
+expected organization/principal/credential/binding versions, exact binding
+ID, and new password. Private request encoding is explicit and bounded;
+ordinary JSON serialization of the authority, password, or capability fails.
+Capability verification is constant-time. Passwords, password hashes,
+capabilities and database credentials never enter ordinary journal JSON,
+Audit, standard output, or native errors. An input commitment is the SHA-256
+of the capability, not an unkeyed password digest or an append permission.
+
+Read-only inspection uses this separate local authority rather than a lost
+user session. It returns only the eligible sealed original primary and the
+expected generation/resource versions needed to issue one intent. An exact
+command-ID/input-commitment query instead returns that historical completion
+and its original expected metadata without rechecking current eligibility.
+Its `NOT_FOUND` result never supplies fresh versions or permission to replace
+the intent. This allows confirmation after a lost response or private-file
+cleanup without another password change. Recovery
+then rechecks the receipt, `account_owner`, ACTIVE USER and organization,
+the exact unrevoked `PLATFORM_OPERATOR` binding, and all expected versions in
+the same SERIALIZABLE transaction. Binding and principal locking must agree
+with existing revoke/grant/password paths. Success replaces the Argon2id
+password hash, increments credential generation and principal version, sets
+`must_change_password=true`, revokes every existing session, and atomically
+stores completion evidence plus outbox. It does not modify any binding,
+principal/organization status, account ownership, or service credential.
+
+The stable command ID and private input commitment identify one recovery.
+Exact replay returns the original completion, not permission or current
+eligibility; changed input conflicts. A committed old command cannot change
+passwords or regrant authority after later password changes, logout, role
+revocation, or restart. An uncommitted stale intent conflicts on its expected
+generation/versions. Login with the recovery password still requires the
+normal forced-change flow before protected platform access.
+
+The only new fact is `iam.installation-primary.credentials-recovered`:
+installation chain, exact SYSTEM actor `iam-local-recovery`, PRINCIPAL target
+equal to the original primary and mandatory `target.tenantId` equal to its
+home organization. It has no fabricated USER decision. No other action gains
+a SYSTEM/platform exception or a target-tenant field. Its request digest
+contains only sanitized ownership/version metadata. Current IAM producer
+credentials and exact committed-outbox evidence remain mandatory for append;
+later user/session/binding state cannot erase an already committed fact.
+Existing canonical bytes, chain hashing, ServiceIdentity, lookup_service,
+and the seven-column outbox claim stay unchanged.
+
+Acceptance for this follow-up extends the existing IAM/Audit and
+authority-process owners, and is not yet claimed:
+
+1. Contract/domain tests reject substituted scope, purpose, generation,
+   binding, password, capability, actor, action and target; private material
+   is absent from ordinary JSON, errors and audit records.
+2. Real PostgreSQL 18 proves restricted local/runtime identities, atomic
+   credential generation/session/outbox changes, original-primary and active
+   unrevoked-binding checks, and no success side effects on every rejection.
+   Equal bootstrap/schema replay never repairs revoked authority.
+3. Concurrent recovery/change/reset/logout/grant/revoke and duplicate intents
+   serialize without lost generations, partial facts, surviving old sessions
+   or privilege resurrection. Both recovery-first and revoke-first outcomes
+   retain their respective committed facts and terminal revoked bindings.
+4. A real signed-entry-compatible IAM executable is invoked in the existing
+   independent-process gate, followed by normal login/forced change and
+   actual outbox delivery/replay/chain verification. Process restart and
+   retained-state schema upgrade preserve history and replay behavior.
+5. IAM schema/function and Audit closed-action changes are verified by actual
+   schema/readiness checks. The coordinated target is IAM4/Audit3 and release
+   contract revision 4, frozen with the installation owner; integration and
+   this follow-up's acceptance remain pending.
+   These SQL/runtime checks do not certify a cross-profile release transition
+   or import this branch's PaaS1 profile into Phase 3's PaaS2 composition.
 
 ### Tenant accounts and subaccounts
 

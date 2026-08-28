@@ -16,7 +16,7 @@ func (service *Authority) Bootstrap(
 	if iamv1.ValidateBootstrapDocument(document) != nil {
 		return iamv1.BootstrapStatus{}, ErrInvalidArgument
 	}
-	contentDigest, err := authority.BootstrapDigest(document)
+	contentDigest, err := iamv1.BootstrapDigest(document)
 	if err != nil {
 		return iamv1.BootstrapStatus{}, ErrUnavailable
 	}

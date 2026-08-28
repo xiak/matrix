@@ -96,6 +96,16 @@ entire moving branch.
 
 ## Resulting implementation constraints
 
+The subsequent local installation-primary recovery target in FEAT-006 was
+fixed before this focused recheck. It does not adopt a legacy recovery graph
+or add any legacy build/runtime dependency.
+
+| Fixed local-recovery slice | Decision | Rationale |
+| --- | --- | --- |
+| Matrix `5721b7b1a985f25c9730ddb9229a51f7f6c3b63a` sealed bootstrap, Argon2id, monotonic credential generation, SERIALIZABLE transactions and immutable IAM outbox proof | `REUSE` / `ADAPT` | Keep the existing receipt bytes, hash profile, session revocation, retry and exact historical-fact evidence; add a distinct purpose-limited local entry and atomic completion under the same IAM owner. Ordinary bootstrap or tenant-primary recovery must not become offline platform authorization. |
+| Legacy `69336e51` `authsession/contract/authorization_basis.go` and `bootstrapidentity/contract/recovery_basis.go` | `REFERENCE` for explicit same-installation authority; `REJECT` as code | Fixed-object inspection confirms that recovery is separate from ordinary sessions and binds installation authority. Its break-glass/recovery-mode reference graph, UUIDv7 closure and delegated-support model do not implement this bounded original-primary password transaction. |
+| Matrix `5721b7b` public Audit encoder, closed action catalog and seven-column IAM claim | `REUSE` / `ADAPT` | Reuse the single canonical encoder and unchanged delivery contract. Add only the exact installation-primary SYSTEM fact; no generic SYSTEM/platform exception, fake user decision, or duplicate encoder. |
+
 1. Implement compact independent `iam` and `audit` services in this repository;
    do not import a donor module, generated tree, SDK, schema, or runtime.
 2. Derive tenant and subject only from current credential bindings. The

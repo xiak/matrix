@@ -2,15 +2,189 @@ package iamv1
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xiak/matrix/api/contractjson"
 )
+
+func TestLocalRecoveryCapabilityBindsOnePrivateIntent(t *testing.T) {
+	secret := func(value string) Secret {
+		t.Helper()
+		result, err := NewSecret(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	scope := LocalCredentialRecoveryScope{
+		InstallationID: "installation-local", BootstrapDigest: "sha256:" + strings.Repeat("a", 64),
+		OrganizationID: "organization-original", PrincipalID: "principal-original",
+	}
+	local := LocalCredentialRecoveryAuthority{
+		APIVersion: APIVersion, Kind: "LocalCredentialRecoveryAuthority", Purpose: LocalCredentialRecoveryPurpose,
+		Scope: scope, CapabilityKey: secret(base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x39}, 32))),
+	}
+	request := LocalCredentialRecoveryRequest{
+		APIVersion: APIVersion, Kind: "LocalCredentialRecoveryRequest", Purpose: LocalCredentialRecoveryPurpose,
+		CommandID: "command-original", Scope: scope,
+		Expected: LocalCredentialRecoveryExpected{OrganizationResourceVersion: 3, PrincipalResourceVersion: 7,
+			CredentialGeneration: 4, PlatformBindingID: "binding-original", PlatformBindingResourceVersion: 1},
+		NewPassword: secret("Recovery-Private-Password-123!"),
+	}
+	signed, err := SignLocalCredentialRecoveryRequest(local, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitment, err := VerifyLocalCredentialRecoveryRequest(local, signed)
+	if err != nil || ValidateDigest("commitment", commitment) != nil {
+		t.Fatalf("verify capability: %v", err)
+	}
+	repeated, err := SignLocalCredentialRecoveryRequest(local, request)
+	if err != nil || !bytes.Equal(signed.Capability.CopyBytes(), repeated.Capability.CopyBytes()) {
+		t.Fatal("same private intent did not reproduce its capability")
+	}
+	for name, change := range map[string]func(*LocalCredentialRecoveryRequest){
+		"purpose":              func(v *LocalCredentialRecoveryRequest) { v.Purpose = "PLATFORM_ROLE_GRANT" },
+		"command":              func(v *LocalCredentialRecoveryRequest) { v.CommandID = "command-other" },
+		"installation":         func(v *LocalCredentialRecoveryRequest) { v.Scope.InstallationID = "installation-other" },
+		"bootstrap":            func(v *LocalCredentialRecoveryRequest) { v.Scope.BootstrapDigest = "sha256:" + strings.Repeat("b", 64) },
+		"tenant":               func(v *LocalCredentialRecoveryRequest) { v.Scope.OrganizationID = "organization-other" },
+		"primary":              func(v *LocalCredentialRecoveryRequest) { v.Scope.PrincipalID = "principal-child" },
+		"organization version": func(v *LocalCredentialRecoveryRequest) { v.Expected.OrganizationResourceVersion++ },
+		"principal version":    func(v *LocalCredentialRecoveryRequest) { v.Expected.PrincipalResourceVersion++ },
+		"generation":           func(v *LocalCredentialRecoveryRequest) { v.Expected.CredentialGeneration++ },
+		"binding":              func(v *LocalCredentialRecoveryRequest) { v.Expected.PlatformBindingID = "binding-other" },
+		"binding version":      func(v *LocalCredentialRecoveryRequest) { v.Expected.PlatformBindingResourceVersion++ },
+		"password":             func(v *LocalCredentialRecoveryRequest) { v.NewPassword = secret("Different-Private-Password-123!") },
+		"capability": func(v *LocalCredentialRecoveryRequest) {
+			v.Capability = secret(base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 32)))
+		},
+		"missing capability":  func(v *LocalCredentialRecoveryRequest) { v.Capability = Secret{} },
+		"overflow generation": func(v *LocalCredentialRecoveryRequest) { v.Expected.CredentialGeneration = 9007199254740991 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			forged := signed
+			change(&forged)
+			if _, err := VerifyLocalCredentialRecoveryRequest(local, forged); !errors.Is(err, ErrInvalidLocalCredentialRecovery) {
+				t.Fatalf("substituted intent accepted: %v", err)
+			}
+		})
+	}
+	otherKey := local
+	otherKey.CapabilityKey = secret(base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x71}, 32)))
+	if _, err := VerifyLocalCredentialRecoveryRequest(otherKey, signed); err == nil {
+		t.Fatal("another installation authority key accepted")
+	}
+	for _, value := range []any{local, signed} {
+		if _, err := json.Marshal(value); !errors.Is(err, ErrSecretSerialization) {
+			t.Fatalf("ordinary secret serialization error=%v", err)
+		}
+		formatted := fmt.Sprintf("%+v %#v", value, value)
+		for _, sensitive := range []Secret{local.CapabilityKey, signed.NewPassword, signed.Capability} {
+			if strings.Contains(formatted, string(sensitive.CopyBytes())) {
+				t.Fatal("private material leaked through formatting")
+			}
+		}
+	}
+	encodedAuthority, err := EncodeLocalCredentialRecoveryAuthority(local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decodedAuthority, err := DecodeLocalCredentialRecoveryAuthority(bytes.NewReader(encodedAuthority))
+	if err != nil || decodedAuthority.Scope != scope {
+		t.Fatalf("authority private round trip: %v", err)
+	}
+	encoded, err := EncodeLocalCredentialRecoveryRequest(signed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeLocalCredentialRecoveryRequest(bytes.NewReader(encoded))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := VerifyLocalCredentialRecoveryRequest(decodedAuthority, decoded); err != nil || got != commitment {
+		t.Fatalf("private wire changed commitment: %v", err)
+	}
+	for _, forged := range []string{
+		strings.Replace(string(encoded), `"commandId":`, `"commandId":"other","commandId":`, 1),
+		strings.TrimSuffix(string(encoded), "}") + `,"databaseDsn":"attacker"}`,
+		string(encoded) + `{}`,
+		strings.Replace(string(encoded), `"newPassword":`, `"extra":true,"newPassword":`, 1),
+	} {
+		if _, err := DecodeLocalCredentialRecoveryRequest(strings.NewReader(forged)); err == nil {
+			t.Fatal("ambiguous/unknown private request accepted")
+		}
+	}
+}
+
+func TestLocalRecoveryReceiptIsHistoricalNotFreshAuthority(t *testing.T) {
+	scope := LocalCredentialRecoveryScope{InstallationID: "installation-original", BootstrapDigest: "sha256:" + strings.Repeat("a", 64), OrganizationID: "organization-original", PrincipalID: "principal-original"}
+	expected := LocalCredentialRecoveryExpected{OrganizationResourceVersion: 1, PrincipalResourceVersion: 4, CredentialGeneration: 3, PlatformBindingID: "binding-original", PlatformBindingResourceVersion: 1}
+	result := LocalCredentialRecoveryResult{APIVersion: APIVersion, Kind: "LocalCredentialRecoveryResult", State: "APPLIED", CommandID: "command-original",
+		InputCommitment: "sha256:" + strings.Repeat("b", 64), Scope: scope, PreviousCredentialGeneration: 3, CredentialGeneration: 4,
+		PrincipalResourceVersion: 5, RevokedSessions: 2, AuditEventID: "event-original", CompletedAt: time.Date(2026, 8, 28, 1, 2, 3, 0, time.UTC)}
+	inspection := LocalCredentialRecoveryInspection{APIVersion: APIVersion, Kind: "LocalCredentialRecoveryInspection", Scope: scope, State: "COMPLETED",
+		CommandID: result.CommandID, InputCommitment: result.InputCommitment, Expected: &expected, Result: &result}
+	if err := ValidateLocalCredentialRecoveryInspection(inspection); err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*LocalCredentialRecoveryInspection){
+		"wrong command":             func(v *LocalCredentialRecoveryInspection) { v.CommandID = "other" },
+		"wrong commitment":          func(v *LocalCredentialRecoveryInspection) { v.InputCommitment = "sha256:" + strings.Repeat("c", 64) },
+		"scope":                     func(v *LocalCredentialRecoveryInspection) { v.Scope.PrincipalID = "another-primary" },
+		"missing result":            func(v *LocalCredentialRecoveryInspection) { v.Result = nil },
+		"missing original expected": func(v *LocalCredentialRecoveryInspection) { v.Expected = nil },
+		"missing receipt cannot supply current state": func(v *LocalCredentialRecoveryInspection) { v.State = "NOT_FOUND"; v.Result = nil },
+		"eligible cannot assert receipt":              func(v *LocalCredentialRecoveryInspection) { v.State = "ELIGIBLE" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			v := inspection
+			mutate(&v)
+			if ValidateLocalCredentialRecoveryInspection(v) == nil {
+				t.Fatal("invalid historical completion accepted")
+			}
+		})
+	}
+	missing := inspection
+	missing.State, missing.Expected, missing.Result = "NOT_FOUND", nil, nil
+	if err := ValidateLocalCredentialRecoveryInspection(missing); err != nil {
+		t.Fatal(err)
+	}
+	query := LocalCredentialRecoveryReceiptQuery{APIVersion: APIVersion, Kind: "LocalCredentialRecoveryReceiptQuery", CommandID: result.CommandID, InputCommitment: result.InputCommitment}
+	if err := ValidateLocalCredentialRecoveryReceiptQuery(query); err != nil {
+		t.Fatal(err)
+	}
+	forgedQuery := `{"apiVersion":"` + APIVersion + `","kind":"LocalCredentialRecoveryReceiptQuery","commandId":"command-original","inputCommitment":"` + result.InputCommitment + `","tenantId":"other"}`
+	if DecodeRequest(strings.NewReader(forgedQuery), &query) == nil {
+		t.Fatal("receipt query accepted a target selector")
+	}
+}
+
+func TestPublicBootstrapDigestPreservesTheSealedPrivateBytes(t *testing.T) {
+	document := decodeIAMExample[BootstrapDocument](t, "examples/bootstrap-document.json")
+	encoded, err := EncodeBootstrapDocument(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(encoded)
+	digest := sha256.Sum256(encoded)
+	got, err := BootstrapDigest(document)
+	if err != nil || got != "sha256:"+hex.EncodeToString(digest[:]) {
+		t.Fatalf("bootstrap byte commitment changed: %v", err)
+	}
+	if _, err := json.Marshal(document); !errors.Is(err, ErrSecretSerialization) {
+		t.Fatal("public digest exposed ordinary bootstrap serialization")
+	}
+}
 
 func TestPlatformDecisionsCannotMasqueradeAsTenantAuthority(t *testing.T) {
 	source, err := os.ReadFile("examples/authorization-decision-allowed.json")
