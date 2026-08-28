@@ -314,6 +314,10 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 	if jsonName == "resourceVersion" || jsonName == "schemaVersion" {
 		base["minimum"] = 1
 	}
+	if owner == "ChangePasswordRequest" && jsonName == "revokeOtherSessions" {
+		base["default"] = true
+		base["description"] = "Revoke other login sessions, preserving only the current bearer session after transactional revalidation. Omission defaults to true. Required password replacement always revokes other sessions; false can retain only already valid sessions of the same user."
+	}
 	return base
 }
 

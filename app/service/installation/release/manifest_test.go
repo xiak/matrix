@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -251,11 +252,12 @@ func TestManifestStrictDecodersRejectUnknownMetadataAndSignatureShape(t *testing
 	if _, err := DecodeCanonical(withUnknown); err == nil {
 		t.Fatal("unknown release metadata must fail")
 	}
+	iamField := fmt.Sprintf(`"iam":%d`, validManifest().Database.Authorities.IAM)
 	for _, field := range []string{
-		`"iam":2,"iam":2`, `"iam":null`, `"iam":-1`, `"iam":2.0`,
-		`"iam":2,"unregisteredAuthority":2`,
+		iamField + "," + iamField, `"iam":null`, `"iam":-1`, iamField + ".0",
+		iamField + `,"unregisteredAuthority":2`,
 	} {
-		malformed := bytes.Replace(manifestBytes, []byte(`"iam":2`), []byte(field), 1)
+		malformed := bytes.Replace(manifestBytes, []byte(iamField), []byte(field), 1)
 		if _, err := DecodeCanonical(malformed); err == nil {
 			t.Fatalf("ambiguous authority schema field accepted: %s", field)
 		}

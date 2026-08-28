@@ -132,6 +132,11 @@ CREATE TABLE IF NOT EXISTS iam.user_credentials (
     )
 );
 
+-- Credential lineage is a monotonic per-user generation, not wall-clock order.
+-- Existing credentials start at generation one; legacy sessions stay unbound.
+ALTER TABLE iam.user_credentials ADD COLUMN IF NOT EXISTS credential_version bigint NOT NULL DEFAULT 1
+    CHECK (credential_version > 0);
+
 CREATE TABLE IF NOT EXISTS iam.login_index (
     login_name text COLLATE "C" PRIMARY KEY,
     tenant_id text COLLATE "C" NOT NULL,
@@ -201,6 +206,11 @@ CREATE TABLE IF NOT EXISTS iam.sessions (
         )
     )
 );
+
+-- Retained pre-extension sessions have no credential epoch and must log in
+-- again. Transaction timestamps cannot prove which password issued them;
+-- neither migration replay nor explicit retention may bless those rows.
+ALTER TABLE iam.sessions ADD COLUMN IF NOT EXISTS credential_version bigint CHECK (credential_version > 0);
 
 CREATE TABLE IF NOT EXISTS iam.session_index (
     lookup_digest text COLLATE "C" PRIMARY KEY,
@@ -686,6 +696,23 @@ BEGIN
            ) AND to_regprocedure('iam.read_audit_evidence(text,text,text,text,jsonb)') IS NOT NULL
            AND to_regprocedure('iam.set_organization_status(text,text,text,text,text,bigint,jsonb)') IS NOT NULL
            AND to_regprocedure('iam.recover_organization_administrator(text,text,text,text,text,bigint,text,text,jsonb)') IS NOT NULL
+           AND to_regprocedure('iam.change_password(text,text,text,text,jsonb,text,boolean)') IS NOT NULL
+           AND to_regprocedure('iam.change_password(text,text,text,text,jsonb)') IS NULL
+           AND EXISTS (
+               SELECT 1 FROM pg_catalog.pg_attribute AS column_definition
+                WHERE column_definition.attrelid = 'iam.sessions'::regclass
+                  AND column_definition.attname = 'credential_version'
+                  AND column_definition.atttypid = 'bigint'::regtype
+                  AND NOT column_definition.attisdropped
+           )
+           AND EXISTS (
+               SELECT 1 FROM pg_catalog.pg_attribute AS column_definition
+                WHERE column_definition.attrelid = 'iam.user_credentials'::regclass
+                  AND column_definition.attname = 'credential_version'
+                  AND column_definition.atttypid = 'bigint'::regtype
+                  AND column_definition.attnotnull
+                  AND NOT column_definition.attisdropped
+           )
            AND EXISTS (
                SELECT 1 FROM pg_catalog.pg_proc AS claim
                 WHERE claim.oid = to_regprocedure('iam.claim_audit_event(text,integer)')
@@ -700,7 +727,7 @@ BEGIN
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-           2::bigint,
+           3::bigint,
            transaction_timestamp();
 END
 $function$;
@@ -836,6 +863,7 @@ AS $function$
 DECLARE
     effective_now timestamptz(6) := transaction_timestamp();
     effective_expires_at timestamptz(6);
+    password_version bigint;
 BEGIN
     IF submitted_session_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR submitted_tenant_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
@@ -848,17 +876,15 @@ BEGIN
     END IF;
     effective_expires_at := effective_now + make_interval(secs => submitted_lifetime_seconds);
     PERFORM set_config('matrix.iam_tenant_id', submitted_tenant_id, true);
-    IF NOT EXISTS (
-        SELECT 1
-          FROM iam.organizations AS organization
-          JOIN iam.principals AS principal
-            ON principal.tenant_id = organization.id
-         WHERE organization.id = submitted_tenant_id
-           AND organization.status = 'ACTIVE'
-           AND principal.id = submitted_principal_id
-           AND principal.principal_type = 'USER'
-           AND principal.status = 'ACTIVE'
-    ) THEN
+    SELECT credential.credential_version INTO password_version
+      FROM iam.organizations AS organization
+      JOIN iam.principals AS principal ON principal.tenant_id = organization.id
+      JOIN iam.user_credentials AS credential
+        ON credential.tenant_id = principal.tenant_id AND credential.principal_id = principal.id
+     WHERE organization.id = submitted_tenant_id AND organization.status = 'ACTIVE'
+       AND principal.id = submitted_principal_id AND principal.principal_type = 'USER'
+       AND principal.status = 'ACTIVE';
+    IF NOT FOUND THEN
         RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'session subject is unavailable';
     END IF;
     PERFORM iam.assert_audit_event(
@@ -867,11 +893,11 @@ BEGIN
     );
     INSERT INTO iam.sessions (
         tenant_id, id, principal_id, verification_digest, status, resource_version,
-        issued_at, expires_at
+        issued_at, expires_at, credential_version
     ) VALUES (
         submitted_tenant_id, submitted_session_id, submitted_principal_id,
         submitted_verification_digest, 'ACTIVE', 1, effective_now,
-        effective_expires_at
+        effective_expires_at, password_version
     );
     INSERT INTO iam.session_index (lookup_digest, tenant_id, session_id)
     VALUES (submitted_lookup_digest, submitted_tenant_id, submitted_session_id);
@@ -948,11 +974,15 @@ BEGIN
       JOIN iam.principals AS principal
         ON principal.tenant_id = session.tenant_id
        AND principal.id = session.principal_id
+      JOIN iam.user_credentials AS credential
+        ON credential.tenant_id = principal.tenant_id
+       AND credential.principal_id = principal.id
      WHERE session.tenant_id = indexed.tenant_id
        AND session.id = indexed.session_id
        AND session.status = 'ACTIVE'
        AND session.revoked_at IS NULL
        AND session.expires_at > transaction_timestamp()
+       AND session.credential_version = credential.credential_version
        AND organization.status = 'ACTIVE'
        AND principal.status = 'ACTIVE';
 END
@@ -1316,12 +1346,15 @@ BEGIN
 END
 $function$;
 
+DROP FUNCTION IF EXISTS iam.change_password(text,text,text,text,jsonb);
 CREATE OR REPLACE FUNCTION iam.change_password(
     submitted_tenant_id text,
     submitted_principal_id text,
     submitted_expected_password_hash text,
     submitted_new_password_hash text,
-    submitted_audit_event jsonb
+    submitted_audit_event jsonb,
+    submitted_session_id text,
+    submitted_revoke_other_sessions boolean
 )
 RETURNS TABLE (changed_at timestamptz, bootstrap_file_retirable boolean)
 LANGUAGE plpgsql
@@ -1332,6 +1365,10 @@ DECLARE
     effective_now timestamptz(6) := transaction_timestamp();
     changed integer;
     retirable boolean;
+    subject iam.principals%ROWTYPE;
+    current_session iam.sessions%ROWTYPE;
+    previous_version bigint;
+    revoke_others boolean;
 BEGIN
     IF submitted_tenant_id COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
@@ -1339,10 +1376,34 @@ BEGIN
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR submitted_expected_password_hash NOT LIKE '$matrix-iam-v1$argon2id$v=19$%'
        OR submitted_new_password_hash NOT LIKE '$matrix-iam-v1$argon2id$v=19$%'
-       OR submitted_expected_password_hash = submitted_new_password_hash THEN
+       OR submitted_expected_password_hash = submitted_new_password_hash
+       OR COALESCE(submitted_session_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_revoke_other_sessions IS NULL THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'password mutation is invalid';
     END IF;
     PERFORM set_config('matrix.iam_tenant_id', submitted_tenant_id, true);
+    -- All credential changes share the principal lock with reset/recovery and
+    -- platform grants; the caller cannot select a session in the public API.
+    SELECT * INTO subject FROM iam.principals AS principal
+     WHERE principal.tenant_id = submitted_tenant_id AND principal.id = submitted_principal_id
+       AND principal.principal_type = 'USER' AND principal.status = 'ACTIVE' FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'password subject is unavailable';
+    END IF;
+    SELECT credential.credential_version INTO previous_version FROM iam.user_credentials AS credential
+     WHERE credential.tenant_id = submitted_tenant_id AND credential.principal_id = submitted_principal_id
+       AND credential.password_hash = submitted_expected_password_hash FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'password changed concurrently';
+    END IF;
+    SELECT * INTO current_session FROM iam.sessions AS session
+     WHERE session.tenant_id = submitted_tenant_id AND session.principal_id = submitted_principal_id
+       AND session.id = submitted_session_id AND session.status = 'ACTIVE'
+       AND session.revoked_at IS NULL AND session.expires_at > effective_now FOR UPDATE;
+    IF NOT FOUND OR current_session.credential_version IS DISTINCT FROM previous_version THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'password session is unavailable';
+    END IF;
+    revoke_others := subject.must_change_password OR submitted_revoke_other_sessions;
     PERFORM iam.assert_audit_event(
         submitted_audit_event, submitted_tenant_id,
         'iam.password.changed', 'PRINCIPAL', submitted_principal_id, 'SUCCEEDED'
@@ -1352,7 +1413,8 @@ BEGIN
     );
     UPDATE iam.user_credentials AS credential
        SET password_hash = submitted_new_password_hash,
-           changed_at = effective_now
+           changed_at = effective_now,
+           credential_version = previous_version + 1
      WHERE credential.tenant_id = submitted_tenant_id
        AND credential.principal_id = submitted_principal_id
        AND credential.password_hash = submitted_expected_password_hash;
@@ -1372,6 +1434,18 @@ BEGIN
     IF changed <> 1 THEN
         RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'password subject is unavailable';
     END IF;
+    UPDATE iam.sessions AS session
+       SET status = 'REVOKED', revoked_at = effective_now,
+           resource_version = session.resource_version + 1
+     WHERE session.tenant_id = submitted_tenant_id AND session.principal_id = submitted_principal_id
+       AND session.id <> submitted_session_id AND session.status = 'ACTIVE'
+       AND (revoke_others OR session.credential_version IS DISTINCT FROM previous_version);
+    -- Only still-active sessions admitted by this password change advance to
+    -- the new credential epoch. Revoked sessions are never restored.
+    UPDATE iam.sessions AS session
+       SET credential_version = previous_version + 1, resource_version = session.resource_version + 1
+     WHERE session.tenant_id = submitted_tenant_id AND session.principal_id = submitted_principal_id
+       AND session.status = 'ACTIVE' AND session.revoked_at IS NULL AND session.expires_at > effective_now;
     SELECT EXISTS (
         SELECT 1
           FROM iam.bootstrap_receipts AS receipt
@@ -1916,7 +1990,7 @@ GRANT EXECUTE ON FUNCTION iam.record_authorization(
     text, text, jsonb, jsonb
 ) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.change_password(
-    text, text, text, text, jsonb
+    text, text, text, text, jsonb, text, boolean
 ) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.revoke_session(
     text, text, text, text, jsonb

@@ -74,7 +74,15 @@ func TestRuntimeDSNBindsLeastPrivilegeLogin(t *testing.T) {
 }
 
 func TestIAMRetainedAccountProcessUpgrade(t *testing.T) {
-	const variable = "MATRIX_IAM_UPGRADE_POSTGRES_TEST_DSN"
+	testIAMRetainedProcessUpgrade(t, "MATRIX_IAM_UPGRADE_POSTGRES_TEST_DSN", "9fd45b03ea398828fa3e74bf99961d2348c68299", false)
+}
+
+func TestIAMRetainedSessionProcessUpgrade(t *testing.T) {
+	testIAMRetainedProcessUpgrade(t, "MATRIX_IAM_SESSION_UPGRADE_POSTGRES_TEST_DSN", "a36cf9817f522549b995ea9c1f0d873499b4fe62", true)
+}
+
+func testIAMRetainedProcessUpgrade(t *testing.T, variable, fixedCommit string, qualifiedChild bool) {
+	t.Helper()
 	dsn := os.Getenv(variable)
 	if dsn == "" {
 		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", variable)
@@ -97,13 +105,19 @@ func TestIAMRetainedAccountProcessUpgrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	root, temporary := repositoryRoot(t), t.TempDir()
-	baselineRoot := extractFixedIAMSource(t, ctx, root, temporary)
-	oldSQL, err := os.ReadFile(filepath.Join(baselineRoot, "app/service/iam/internal/data/postgres/migrations/000001_authority/up.sql"))
-	if err != nil {
-		t.Fatal(err)
+	baselineRoot := extractFixedIAMSource(t, ctx, root, temporary, fixedCommit)
+	migrations := []string{"000001_authority"}
+	if qualifiedChild {
+		migrations = append(migrations, "000003_tenant_accounts")
 	}
-	if _, err := admin.Exec(ctx, string(oldSQL)); err != nil {
-		t.Fatalf("apply fixed single-tenant IAM schema: %v", err)
+	for _, migration := range migrations {
+		oldSQL, err := os.ReadFile(filepath.Join(baselineRoot, "app/service/iam/internal/data/postgres/migrations", migration, "up.sql"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := admin.Exec(ctx, string(oldSQL)); err != nil {
+			t.Fatalf("apply fixed retained IAM schema: %v", err)
+		}
 	}
 	createProcessLogin(t, ctx, admin, iamAPILogin, "matrix_iam_api")
 	oldBinary := buildAuthorityBinary(t, ctx, baselineRoot, temporary, "matrix-iam-baseline", "./app/service/iam/cmd/matrix-iam")
@@ -133,11 +147,17 @@ func TestIAMRetainedAccountProcessUpgrade(t *testing.T) {
 		return child
 	}
 	old := start(oldBinary)
+	oldChildLogin := "retained.viewer"
+	if qualifiedChild {
+		oldChildLogin += "@organization-process"
+	}
 	administrator := loginIAM(t, endpoint, "admin", initialAdminPassword, "request-upgrade-admin-login")
 	changePasswordIAM(t, endpoint, administrator.Credential, initialAdminPassword, changedAdminPassword, "request-upgrade-admin-password")
 	user := createIAMUser(t, endpoint, administrator.Credential, "retained.viewer", "Retained viewer", initialReaderPassword, "request-upgrade-member")
-	member := loginIAM(t, endpoint, "retained.viewer", initialReaderPassword, "request-upgrade-member-login")
+	member := loginIAM(t, endpoint, oldChildLogin, initialReaderPassword, "request-upgrade-member-login")
+	legacyTemporary := loginIAM(t, endpoint, oldChildLogin, initialReaderPassword, "request-upgrade-old-temporary")
 	changePasswordIAM(t, endpoint, member.Credential, initialReaderPassword, changedReaderPassword, "request-upgrade-member-password")
+	legacyCurrent := loginIAM(t, endpoint, oldChildLogin, changedReaderPassword, "request-upgrade-old-current")
 	binding := putIAMBinding(t, endpoint, administrator.Credential, user.ID, iamv1.RolePaaSViewer, "request-upgrade-role")
 	revokeIAMBinding(t, endpoint, administrator.Credential, binding.ID, "request-upgrade-role-revoke")
 	revokeIAMSession(t, endpoint, administrator.Credential, member.Session.ID, "request-upgrade-session-revoke")
@@ -177,13 +197,32 @@ func TestIAMRetainedAccountProcessUpgrade(t *testing.T) {
 		}
 	}
 	current := start(currentBinary)
+	// These rows were created by the actual old executable, not fabricated by
+	// current-schema writes. Neither pre-change nor post-change timestamps prove
+	// a credential epoch; both must require a new login after upgrade.
+	for _, retainedSession := range []iamv1.Session{legacyTemporary.Session, legacyCurrent.Session} {
+		var unboundActiveSession bool
+		if err := admin.QueryRow(ctx, `SELECT credential_version IS NULL AND status='ACTIVE'
+			FROM iam.sessions WHERE tenant_id=$1 AND id=$2`, retainedSession.OrganizationID, retainedSession.ID).Scan(&unboundActiveSession); err != nil || !unboundActiveSession {
+			t.Fatal("migration filled an unproved epoch or lost the old executable's active-session fixture")
+		}
+	}
+	retainedReaderPassword := changedReaderPassword
+	var retainedNewSession string
 	for attempt := 0; attempt < 2; attempt++ {
 		if attempt > 0 {
 			current.stop()
 			current = start(currentBinary)
 		}
-		if got := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", member.Credential, nil); got.Status != http.StatusUnauthorized {
-			t.Fatal("upgrade/restart revived a revoked session")
+		for _, invalid := range []string{member.Credential, legacyTemporary.Credential, legacyCurrent.Credential, administrator.Credential} {
+			if got := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", invalid, nil); got.Status != http.StatusUnauthorized {
+				t.Fatal("upgrade/restart revived a revoked or unversioned legacy session")
+			}
+		}
+		if retainedNewSession != "" {
+			if got := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", retainedNewSession, nil); got.Status != http.StatusOK {
+				t.Fatal("restart lost a valid credential-version-bound retained session")
+			}
 		}
 		primary := loginIAM(t, endpoint, "admin", changedAdminPassword, "request-upgrade-retained-primary")
 		identityResponse := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", primary.Credential, nil)
@@ -192,11 +231,35 @@ func TestIAMRetainedAccountProcessUpgrade(t *testing.T) {
 			t.Fatal("upgrade replaced primary ownership or credentials")
 		}
 		assertPlatformAuthorization(t, endpoint, primary.Credential, "principal-admin", "request-upgrade-platform-denied", false)
-		child := loginIAM(t, endpoint, "retained.viewer@organization-process", changedReaderPassword, "request-upgrade-retained-child")
+		child := loginIAM(t, endpoint, "retained.viewer@organization-process", retainedReaderPassword, "request-upgrade-retained-child")
 		childResponse := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", child.Credential, nil)
 		var childIdentity iamv1.CurrentIdentity
 		if childResponse.Status != http.StatusOK || json.Unmarshal(childResponse.Body, &childIdentity) != nil || childIdentity.Principal.ID != user.ID || len(childIdentity.Roles) != 0 {
 			t.Fatal("upgrade changed member identity or revived a revoked role")
+		}
+		if attempt == 0 {
+			retainedNewSession = loginIAM(t, endpoint, "retained.viewer@organization-process", retainedReaderPassword, "request-upgrade-new-current").Credential
+			retainedReaderPassword = "Retained-Session-Replacement-Password-68!"
+			changed := performJSON(t, http.MethodPost, endpoint+"/v1/auth/password", child.Credential, map[string]any{
+				"currentPassword": changedReaderPassword, "newPassword": retainedReaderPassword, "revokeOtherSessions": false, "requestId": "request-upgrade-retain-valid-sessions",
+			})
+			if changed.Status != http.StatusOK {
+				t.Fatalf("retained legacy session password policy status=%d", changed.Status)
+			}
+			for _, invalid := range []string{member.Credential, legacyTemporary.Credential, legacyCurrent.Credential} {
+				if got := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", invalid, nil); got.Status != http.StatusUnauthorized {
+					t.Fatal("explicit false revived a revoked or unversioned legacy session")
+				}
+			}
+			if got := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", retainedNewSession, nil); got.Status != http.StatusOK {
+				t.Fatal("explicit false lost a valid credential-version-bound session")
+			}
+			if err := iammigration.Up(ctx, admin); err != nil {
+				t.Fatal(err)
+			}
+			if err := iammigration.Verify(ctx, admin); err != nil {
+				t.Fatal(err)
+			}
 		}
 		serviceResponse := performJSON(t, http.MethodGet, endpoint+"/v1/service-identity", paasServiceCredential, nil)
 		var service iamv1.ServiceIdentity
@@ -226,9 +289,9 @@ func TestIAMRetainedAccountProcessUpgrade(t *testing.T) {
 
 // This gate builds the accepted old executable from fixed Git objects in its
 // own temporary directory. Old source is never a product/runtime dependency.
-func extractFixedIAMSource(t *testing.T, ctx context.Context, root, temporary string) string {
+func extractFixedIAMSource(t *testing.T, ctx context.Context, root, temporary, fixedCommit string) string {
 	t.Helper()
-	command := exec.CommandContext(ctx, "git", "archive", "--format=zip", "9fd45b03ea398828fa3e74bf99961d2348c68299", "go.mod", "go.sum", "api", "app/service/iam", "app/service/internal")
+	command := exec.CommandContext(ctx, "git", "archive", "--format=zip", fixedCommit, "go.mod", "go.sum", "api", "app/service/iam", "app/service/internal")
 	command.Dir = root
 	archive, err := command.Output()
 	if err != nil || len(archive) > 32<<20 {

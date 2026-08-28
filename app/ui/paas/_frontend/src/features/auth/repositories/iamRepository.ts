@@ -15,6 +15,7 @@ export type LoginResult = {
 export type ChangePasswordCommand = {
   currentPassword: string;
   newPassword: string;
+  revokeOtherSessions?: boolean;
 };
 
 export interface IamRepository {

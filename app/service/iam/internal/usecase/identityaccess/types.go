@@ -183,6 +183,8 @@ type AuthorizationMutation struct {
 type PasswordMutation struct {
 	OrganizationID       iamv1.OrganizationID
 	PrincipalID          iamv1.PrincipalID
+	SessionID            iamv1.SessionID
+	RevokeOtherSessions  bool
 	ExpectedPasswordHash authority.PasswordHash
 	NewPasswordHash      authority.PasswordHash
 	AuditEvent           auditv1.Event

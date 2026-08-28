@@ -109,7 +109,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	}
 	defer clear(firstSession)
 	value.edge.addForbidden(initialPassword, newPassword, firstSession)
-	if err := value.edge.changePassword(ctx, firstSession, initialPassword, newPassword, true); err != nil {
+	if err := value.edge.changePassword(ctx, firstSession, initialPassword, newPassword, true, nil); err != nil {
 		return fail("iam-change-password")
 	}
 	if err := value.edge.logout(ctx, firstSession); err != nil {
@@ -408,7 +408,7 @@ func (value *gate) prepareTenantRetention(ctx context.Context, operator, adminis
 		AdministratorPassword: append([]byte(nil), administratorPassword...)}
 	for index, label := range []string{"alpha", "beta"} {
 		tenant := tenantRetention{}
-		for _, password := range []*[]byte{&tenant.InitialPassword, &tenant.PrimaryPassword, &tenant.ChildPassword,
+		for _, password := range []*[]byte{&tenant.InitialPassword, &tenant.PrimaryPassword, &tenant.PreviousPrimaryPassword, &tenant.ChildPassword,
 			&tenant.RecoveryPassword, &tenant.FinalPrimaryPassword} {
 			generated, err := randomPassword(rand.Reader)
 			if err != nil {
@@ -432,8 +432,26 @@ func (value *gate) prepareTenantRetention(ctx context.Context, operator, adminis
 		}
 		tenant.OldPrimaryCredential = primary.Credential.CopyBytes()
 		value.edge.addForbidden(tenant.OldPrimaryCredential)
-		if err := value.edge.changePassword(ctx, tenant.OldPrimaryCredential, tenant.InitialPassword, tenant.PrimaryPassword, false); err != nil {
+		temporary, err := value.edge.loginNamed(ctx, tenant.Account.PrimaryLoginName, tenant.InitialPassword,
+			tenantID, tenant.Account.PrimaryPrincipalID, "phase1-primary-temporary-"+label)
+		if err != nil || !temporary.MustChangePassword {
+			return fail("tenant-primary-temporary-login-" + label)
+		}
+		tenant.TemporaryPrimaryCredential = temporary.Credential.CopyBytes()
+		value.edge.addForbidden(tenant.TemporaryPrimaryCredential)
+		keepOtherSessions := false
+		if err := value.edge.changePassword(ctx, tenant.OldPrimaryCredential, tenant.InitialPassword, tenant.PreviousPrimaryPassword, false, &keepOtherSessions); err != nil {
 			return fail("tenant-primary-password-" + label)
+		}
+		retained, err := value.edge.loginNamed(ctx, tenant.Account.PrimaryLoginName, tenant.PreviousPrimaryPassword,
+			tenantID, tenant.Account.PrimaryPrincipalID, "phase1-primary-retained-"+label)
+		if err != nil || retained.MustChangePassword {
+			return fail("tenant-primary-retained-login-" + label)
+		}
+		tenant.RetainedPrimaryCredential = retained.Credential.CopyBytes()
+		value.edge.addForbidden(tenant.RetainedPrimaryCredential)
+		if err := value.edge.changePassword(ctx, tenant.OldPrimaryCredential, tenant.PreviousPrimaryPassword, tenant.PrimaryPassword, false, &keepOtherSessions); err != nil {
+			return fail("tenant-primary-retain-valid-session-" + label)
 		}
 		if err := value.edge.mutateIAM(ctx, "/principals", tenant.OldPrimaryCredential, map[string]any{
 			"loginName": "developer", "displayName": "Offline developer", "initialPassword": string(tenant.InitialPassword),
@@ -454,7 +472,14 @@ func (value *gate) prepareTenantRetention(ctx context.Context, operator, adminis
 		}
 		tenant.OldChildCredential = child.Credential.CopyBytes()
 		value.edge.addForbidden(tenant.OldChildCredential)
-		if err := value.edge.changePassword(ctx, tenant.OldChildCredential, tenant.InitialPassword, tenant.ChildPassword, false); err != nil {
+		temporaryChild, err := value.edge.loginNamed(ctx, "developer@"+string(tenantID), tenant.InitialPassword,
+			tenantID, tenant.Child.ID, "phase1-child-temporary-"+label)
+		if err != nil || !temporaryChild.MustChangePassword {
+			return fail("tenant-child-temporary-login-" + label)
+		}
+		tenant.TemporaryChildCredential = temporaryChild.Credential.CopyBytes()
+		value.edge.addForbidden(tenant.TemporaryChildCredential)
+		if err := value.edge.changePassword(ctx, tenant.OldChildCredential, tenant.InitialPassword, tenant.ChildPassword, false, &keepOtherSessions); err != nil {
 			return fail("tenant-child-password-" + label)
 		}
 		values := map[string]string{"TENANT_SETTING": string(tenantID) + "-private-value"}
@@ -561,7 +586,8 @@ func (value *gate) readTenantRetention(installationID string) error {
 	value.edge.addForbidden(retained.AdministratorPassword)
 	for _, tenant := range retained.Tenants {
 		value.edge.addForbidden(tenant.InitialPassword, tenant.PrimaryPassword, tenant.ChildPassword, tenant.RecoveryPassword,
-			tenant.FinalPrimaryPassword, tenant.OldChildCredential, tenant.OldPrimaryCredential)
+			tenant.FinalPrimaryPassword, tenant.OldChildCredential, tenant.OldPrimaryCredential, tenant.PreviousPrimaryPassword,
+			tenant.TemporaryPrimaryCredential, tenant.TemporaryChildCredential, tenant.RetainedPrimaryCredential)
 	}
 	return nil
 }
@@ -587,7 +613,7 @@ func (value *gate) assertTenantRetention(ctx context.Context) error {
 			account.Organization.ResourceVersion != tenant.Account.Organization.ResourceVersion {
 			return fail("tenant-retained-original-account")
 		}
-		for _, credential := range [][]byte{tenant.OldChildCredential, tenant.OldPrimaryCredential} {
+		for _, credential := range [][]byte{tenant.OldChildCredential, tenant.OldPrimaryCredential, tenant.TemporaryPrimaryCredential, tenant.TemporaryChildCredential} {
 			response, err := value.edge.json(ctx, http.MethodGet, "/api/iam/v1/auth/me", credential, nil, nil, http.StatusUnauthorized)
 			clear(response.body)
 			if err != nil {
@@ -596,6 +622,7 @@ func (value *gate) assertTenantRetention(ctx context.Context) error {
 		}
 		for _, login := range []loginWire{
 			{LoginName: account.PrimaryLoginName, Password: string(tenant.InitialPassword), RequestID: "phase1-retained-old-primary-password"},
+			{LoginName: account.PrimaryLoginName, Password: string(tenant.PreviousPrimaryPassword), RequestID: "phase1-retained-previous-primary-password"},
 			{LoginName: "developer@" + string(id), Password: string(tenant.InitialPassword), RequestID: "phase1-retained-old-child-password"},
 			{LoginName: "developer@" + string(value.retainedIAM.Tenants[1-index].Account.Organization.ID), Password: string(tenant.ChildPassword), RequestID: "phase1-retained-wrong-realm"},
 		} {
@@ -606,6 +633,11 @@ func (value *gate) assertTenantRetention(ctx context.Context) error {
 			}
 		}
 		if index == 1 {
+			response, err := value.edge.json(ctx, http.MethodGet, "/api/iam/v1/auth/me", tenant.RetainedPrimaryCredential, nil, nil, http.StatusUnauthorized)
+			clear(response.body)
+			if err != nil {
+				return fail("tenant-pause-revived-retained-password-session")
+			}
 			for _, password := range [][]byte{tenant.PrimaryPassword, tenant.RecoveryPassword} {
 				response, err := value.edge.json(ctx, http.MethodPost, "/api/iam/v1/auth/login", nil,
 					loginWire{LoginName: account.PrimaryLoginName, Password: string(password), RequestID: "phase1-retained-paused-primary"}, nil, http.StatusUnauthorized)
@@ -615,6 +647,13 @@ func (value *gate) assertTenantRetention(ctx context.Context) error {
 				}
 			}
 			continue
+		}
+		var retainedIdentity iamv1.CurrentIdentity
+		if _, err := value.edge.get(ctx, "/api/iam/v1/auth/me", tenant.RetainedPrimaryCredential, &retainedIdentity); err != nil ||
+			iamv1.ValidateCurrentIdentity(retainedIdentity) != nil || retainedIdentity.Principal.ID != account.PrimaryPrincipalID ||
+			retainedIdentity.Principal.OrganizationID != id || retainedIdentity.Principal.MustChangePassword ||
+			!slices.Contains(retainedIdentity.Roles, iamv1.RoleOrganizationAdmin) || slices.Contains(retainedIdentity.Roles, iamv1.RolePlatformOperator) {
+			return fail("tenant-valid-password-session-not-retained")
 		}
 		primary, err := value.edge.loginNamed(ctx, account.PrimaryLoginName, tenant.PrimaryPassword, id, account.PrimaryPrincipalID, "phase1-retained-primary")
 		if err != nil || primary.MustChangePassword {
@@ -825,7 +864,7 @@ func (value *gate) restorePausedTenant(ctx context.Context) error {
 	defer clear(bearer)
 	defer func() { _ = value.edge.logout(ctx, bearer) }()
 	value.edge.addForbidden(bearer)
-	if err := value.edge.changePassword(ctx, bearer, tenant.RecoveryPassword, tenant.FinalPrimaryPassword, false); err != nil {
+	if err := value.edge.changePassword(ctx, bearer, tenant.RecoveryPassword, tenant.FinalPrimaryPassword, false, nil); err != nil {
 		return fail("recovered-primary-password")
 	}
 	var identity iamv1.CurrentIdentity
@@ -979,6 +1018,7 @@ func (value *gate) pathLeakage() [][]byte {
 		for _, tenant := range value.retainedIAM.Tenants {
 			result = append(result, tenant.InitialPassword, tenant.PrimaryPassword, tenant.ChildPassword,
 				tenant.RecoveryPassword, tenant.FinalPrimaryPassword, tenant.OldPrimaryCredential, tenant.OldChildCredential,
+				tenant.PreviousPrimaryPassword, tenant.TemporaryPrimaryCredential, tenant.TemporaryChildCredential, tenant.RetainedPrimaryCredential,
 				[]byte(string(tenant.Account.Organization.ID)+"-private-value"))
 		}
 	}

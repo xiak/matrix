@@ -318,7 +318,8 @@ BEGIN
     UPDATE iam.principals AS principal SET status='ACTIVE',must_change_password=true,
         resource_version=principal.resource_version+1,updated_at=transaction_timestamp()
     WHERE principal.tenant_id=target_tenant AND principal.id=primary_id;
-    UPDATE iam.user_credentials AS credential SET password_hash=new_password_hash,changed_at=transaction_timestamp()
+    UPDATE iam.user_credentials AS credential SET password_hash=new_password_hash,changed_at=transaction_timestamp(),
+        credential_version=credential.credential_version+1
     WHERE credential.tenant_id=target_tenant AND credential.principal_id=primary_id;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='primary credential is unavailable'; END IF;
     UPDATE iam.sessions AS session SET status='REVOKED',revoked_at=transaction_timestamp(),resource_version=session.resource_version+1
@@ -394,7 +395,8 @@ BEGIN
         must_change_password=CASE WHEN new_password_hash IS NULL THEN p.must_change_password ELSE true END,
         resource_version=p.resource_version+1,updated_at=transaction_timestamp() WHERE p.tenant_id=tenant AND p.id=principal;
     IF new_password_hash IS NOT NULL THEN
-        UPDATE iam.user_credentials AS c SET password_hash=new_password_hash,changed_at=transaction_timestamp()
+        UPDATE iam.user_credentials AS c SET password_hash=new_password_hash,changed_at=transaction_timestamp(),
+            credential_version=c.credential_version+1
         WHERE c.tenant_id=tenant AND c.principal_id=principal;
     END IF;
     UPDATE iam.sessions AS s SET status='REVOKED',revoked_at=transaction_timestamp(),resource_version=s.resource_version+1

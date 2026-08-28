@@ -18,7 +18,7 @@ export function LoginRenderer() {
   const [confirmedPassword, setConfirmedPassword] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
   const firstLoginSession = Boolean(
-    session.current && session.phase !== "authenticated"
+    session.current && session.phase !== "authenticated" && session.phase !== "updating-password"
   );
 
   async function submitLogin(event: FormEvent<HTMLFormElement>) {
@@ -41,11 +41,12 @@ export function LoginRenderer() {
       setFormError("两次输入的新密码不一致");
       return;
     }
-    const accepted = await session.changePassword(currentPassword, newPassword);
+    const pending = session.changePassword(currentPassword, newPassword);
     setCurrentPassword("");
+    setNewPassword("");
+    setConfirmedPassword("");
+    const accepted = await pending;
     if (accepted) {
-      setNewPassword("");
-      setConfirmedPassword("");
       router.replace(session.current?.loginName.includes("@") ? "/console/access/" : "/console/");
     }
   }
@@ -94,7 +95,7 @@ export function LoginRenderer() {
                     <Typography.Eyebrow>首次登录 · {session.current?.loginName}</Typography.Eyebrow>
                     <Typography.Title as="h2" level={2}>设置你的正式密码</Typography.Title>
                     <Typography.Text tone="muted">
-                      初始密码只能建立受限会话。完成更新后才能进入控制台。
+                      初始密码只能建立受限会话。更新成功后保留当前会话，其他临时登录会话会退出。
                     </Typography.Text>
                   </div>
                   <form
@@ -106,6 +107,7 @@ export function LoginRenderer() {
                       <span>当前初始密码</span>
                       <Input
                         autoComplete="current-password"
+                        disabled={session.phase === "changing-password" || session.phase === "revoking"}
                         maxLength={128}
                         name="currentPassword"
                         onChange={(event) => setCurrentPassword(event.target.value)}
@@ -119,6 +121,7 @@ export function LoginRenderer() {
                       <Input
                         aria-describedby="password-policy"
                         autoComplete="new-password"
+                        disabled={session.phase === "changing-password" || session.phase === "revoking"}
                         maxLength={128}
                         minLength={14}
                         name="newPassword"
@@ -132,6 +135,7 @@ export function LoginRenderer() {
                       <span>确认新密码</span>
                       <Input
                         autoComplete="new-password"
+                        disabled={session.phase === "changing-password" || session.phase === "revoking"}
                         maxLength={128}
                         minLength={14}
                         name="confirmedPassword"

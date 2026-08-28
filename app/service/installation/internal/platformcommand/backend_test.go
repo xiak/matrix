@@ -361,6 +361,10 @@ func TestExplicitRollbackReplaysUnknownOutcomeAndCommitsOnlyTheSignedPredecessor
 func TestDifferentDatabaseProfilesRejectBeforeEffectsOrJournalChange(t *testing.T) {
 	current := release.CurrentDatabaseProfile()
 	legacy := release.DatabaseProfile{SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one"}
+	previousTenantProfile := release.DatabaseProfile{
+		Compatibility: "identical-authority-profile", ContractRevision: 2,
+		Authorities: release.AuthoritySchemas{IAM: 2, Audit: 2, PaaS: 1},
+	}
 	revised := current
 	revised.ContractRevision++
 	proofOnly := current
@@ -372,6 +376,8 @@ func TestDifferentDatabaseProfilesRejectBeforeEffectsOrJournalChange(t *testing.
 		source, target release.DatabaseProfile
 	}{
 		{name: "published scalar to authorities", source: legacy, target: current},
+		{name: "verified tenant release before session lineage", source: previousTenantProfile, target: current},
+		{name: "session lineage to prior tenant release", source: current, target: previousTenantProfile},
 		{name: "legacy scalar increase", source: legacy, target: release.DatabaseProfile{SchemaVersion: 2, Compatibility: legacy.Compatibility}},
 		{name: "same schemas different authority contract", source: current, target: revised},
 		{name: "same schemas before tenant lifecycle", source: proofOnly, target: current},

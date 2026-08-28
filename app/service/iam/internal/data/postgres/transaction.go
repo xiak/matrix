@@ -467,6 +467,7 @@ func (value *transaction) ChangePassword(
 ) (iamv1.ChangePasswordResponse, error) {
 	if iamv1.ValidateID("organizationId", string(mutation.OrganizationID)) != nil ||
 		iamv1.ValidateID("principalId", string(mutation.PrincipalID)) != nil ||
+		iamv1.ValidateID("sessionId", string(mutation.SessionID)) != nil ||
 		mutation.ExpectedPasswordHash == "" || mutation.NewPasswordHash == "" ||
 		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
 		return iamv1.ChangePasswordResponse{}, identityaccess.ErrInvalidArgument
@@ -478,12 +479,14 @@ func (value *transaction) ChangePassword(
 	var response iamv1.ChangePasswordResponse
 	err = value.tx.QueryRow(
 		ctx,
-		"SELECT * FROM iam.change_password($1, $2, $3, $4, $5::jsonb)",
+		"SELECT * FROM iam.change_password($1, $2, $3, $4, $5::jsonb, $6, $7)",
 		string(mutation.OrganizationID),
 		string(mutation.PrincipalID),
 		string(mutation.ExpectedPasswordHash),
 		string(mutation.NewPasswordHash),
 		event,
+		string(mutation.SessionID),
+		mutation.RevokeOtherSessions,
 	).Scan(&response.ChangedAt, &response.BootstrapFileRetirable)
 	clear(event)
 	if err != nil {

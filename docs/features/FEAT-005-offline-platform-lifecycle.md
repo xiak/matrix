@@ -189,16 +189,26 @@ values, database rows, native errors, arbitrary logs, and absolute paths.
 
 The isolated IAM branch replaces the single migration number for new releases
 with the signed manifest v2 database profile. Its code-owned composition is
-IAM schema 2, Audit schema 2, PaaS schema 1, and `contractRevision=2`. The
-revision includes the tenant lifecycle/original-primary recovery contract and
-the IAM worker's exact seven-column claim; it is not a request/configuration
+IAM schema 3, Audit schema 2, PaaS schema 1, and `contractRevision=3`. This
+revision adds credential-generation-bound sessions and the current-session
+password-change policy to the tenant lifecycle/original-primary recovery and
+exact seven-column IAM claim contract. It is not a request/configuration
 selector. Real service readiness and the owning function/dispatcher gates must
 prove the composition, rather than comparing three version numbers alone.
+The revision-3 populated signed lifecycle is still pending; the earlier
+revision-2 evidence below cannot accept the new session behavior.
+The current code passes the full repository race/vet gates and the native Linux
+backup/recovery boundary tests. The actual published installer still rejects
+the new format, and both directions between the previous `2/2/1` revision 2
+and current profile fail before journal or provider effects.
 
 Upgrade and data-preserving rollback require exact equality of the complete
 profile before journal advancement or provider effects. A larger number is
-not compatibility: the Phase 3 `2/2/2` composition, whether revision 1 or 2,
-does not become compatible with this branch's `2/2/1` revision 2. Backup and
+not compatibility: neither the previous `2/2/1` revision 2 nor a Phase 3
+composition with PaaS schema 2 is compatible with this branch's `3/2/1`
+revision 3. Building an old IAM executable and retaining its database during
+a SQL migration proves that migration's failure-closed behavior, not a
+supported cross-profile release upgrade or data-preserving rollback. Backup and
 recovery bind their selected snapshot to its authenticated release's complete
 profile. Recovery also requires current and target profiles to be identical,
 in both the command boundary and each adapter phase before journal advancement,
@@ -245,6 +255,13 @@ access; the recovered original primary must replace its password, old sessions
 must remain invalid and platform permissions must remain absent. Each installed
 stage must match its signed profile in real readiness/verification and support
 evidence.
+
+The revision-3 gate also carries a valid session explicitly retained by an
+ordinary password change across signed upgrade, rollback, selected-backup
+recovery and process restart. Other initial-password sessions remain denied
+after forced replacement, including when false was submitted. Tenant pause
+must revoke even an otherwise retained valid session. These sessions are
+generated through the actual installed IAM HTTP API, not inserted fixtures.
 
 These populated gates pass on 2026-08-27 using signed Release A
 `matrix-v0.1.0-b3a6f8145098` and Release B `matrix-v0.2.0-b3a6f8145098`, both

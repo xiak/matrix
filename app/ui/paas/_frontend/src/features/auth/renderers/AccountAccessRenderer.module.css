@@ -121,6 +121,25 @@
   gap: var(--xiak-spacing-tight);
 }
 
+.sessionOption {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--xiak-spacing-tight);
+  color: var(--xiak-color-text-base);
+  font-size: var(--xiak-font-size-small);
+  line-height: 1.7;
+}
+
+.sessionOption .sessionCheckbox {
+  width: 18px;
+  min-height: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  padding: 0;
+  margin: var(--xiak-spacing-narrow) 0 0;
+  accent-color: var(--xiak-color-accent-primary);
+}
+
 .field > span {
   color: var(--xiak-color-text-base);
   font-size: var(--xiak-font-size-small);

@@ -222,6 +222,7 @@ export const httpIamRepository: IamRepository = {
       body: JSON.stringify({
         currentPassword: command.currentPassword,
         newPassword: command.newPassword,
+        revokeOtherSessions: command.revokeOtherSessions,
         requestId: requestToken("ui-password-")
       })
     });

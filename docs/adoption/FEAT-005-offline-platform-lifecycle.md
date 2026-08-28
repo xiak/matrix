@@ -55,7 +55,7 @@ Matrix authority-profile increment as follows:
 
 | Fixed slice | Decision | Rationale |
 | --- | --- | --- |
-| `c29f9e3` manifest v2, exact profile comparison, sealed backup/recovery binding and support output | `ADAPT` | Keep independent authority versions plus the code-owned contract revision. This branch uses its actual IAM2/Audit2/PaaS1 and the coordinated lifecycle revision 2, not the donor's host composition. Also close unproved cross-profile recovery before journal or provider changes, while preserving same-profile recovery. |
+| `c29f9e3` manifest v2, exact profile comparison, sealed backup/recovery binding and support output | `ADAPT` | Keep independent authority versions plus the code-owned contract revision. Retain this branch's own service composition and coordinated revision, owned by FEAT-005, rather than importing the donor's host composition. Also close unproved cross-profile recovery before journal or provider changes, while preserving same-profile recovery. |
 | `c29f9e3` published v1 canonical/signature/backup preservation and pre-effect rejection gates | `REUSE` | Preserve evidence for real published formats without inventing cross-profile N-1 support. Run the gates on this branch and extend its existing process owner, never inherit the donor's acceptance result. |
 | `c29f9e3` PaaS2/host expectations and FEAT-008 status | `REJECT` for this slice | IAM release verification does not authorize importing host admission, changing another Phase or asserting its release acceptance. |
 

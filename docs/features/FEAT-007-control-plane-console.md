@@ -263,6 +263,21 @@ suspended tenant. Protected platform credentials remain an offline recovery
 boundary. Conflict, revocation, and unavailable responses must not look like
 successful changes.
 
+Password/session hardening is in progress and follows FEAT-006's effective
+session policy. Existing user settings expose ordinary password replacement
+to the current user, with "exit other login sessions" checked by default.
+Explicit false retains only other valid sessions, not revoked credentials.
+Required first-login/reset/recovery replacement offers no opt-out and keeps
+only the revalidated current bearer. The console names sessions, not devices.
+Password inputs clear on submission. Unknown results or invalid credentials
+return to login; a definite validation rejection can be corrected in place.
+Late password responses cannot restore a session after logout or expiry.
+The new behavior passes 90 frontend tests, type/lint/architecture and all 20
+contrast checks, with two separate two-worker production exports matching all
+59 embedded files. The current-session choice, forced no-opt-out form,
+immediate password clearing and late-response/expiry protections are included.
+Its real installed browser gate is still pending; the evidence below predates it.
+
 Acceptance on the isolated IAM branch requires adapter/component gates and a
 real browser against its own IAM/PaaS/Audit environment: a platform-only user
 opens and manages a tenant; tenant administrators create and authorize child
@@ -318,9 +333,9 @@ controls, tenant status/recovery confirmations and the resource list without
 horizontal page overflow. Account card headers wrap complete action buttons
 instead of squeezing their labels into vertical text. Keyboard-only end-to-end
 verification remains open: pointer-driven browser actions and component
-keyboard tests do not certify that gate. The installed-release pointer-driven
-path below passes, but overall browser acceptance still waits for the native
-keyboard gate. The signed offline profile/lifecycle evidence
+keyboard tests do not certify that gate. The user has deferred this lower-priority
+keyboard-only gate while password/session security and its installed journey
+are completed; it is not counted as passed. The signed offline profile/lifecycle evidence
 belongs to [FEAT-005](FEAT-005-offline-platform-lifecycle.md); neither changes
 another Phase's acceptance state.
 

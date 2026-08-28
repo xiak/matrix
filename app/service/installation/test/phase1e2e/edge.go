@@ -134,9 +134,10 @@ type loginWire struct {
 }
 
 type changePasswordWire struct {
-	CurrentPassword string `json:"currentPassword"`
-	NewPassword     string `json:"newPassword"`
-	RequestID       string `json:"requestId"`
+	CurrentPassword     string `json:"currentPassword"`
+	NewPassword         string `json:"newPassword"`
+	RequestID           string `json:"requestId"`
+	RevokeOtherSessions *bool  `json:"revokeOtherSessions,omitempty"`
 }
 
 func (client *edgeClient) login(ctx context.Context, password []byte, requestID string) ([]byte, error) {
@@ -178,12 +179,13 @@ func (client *edgeClient) changePassword(
 	ctx context.Context,
 	bearer, current, next []byte,
 	retireBootstrap bool,
+	revokeOtherSessions *bool,
 ) error {
 	response, err := client.json(
 		ctx, http.MethodPost, "/api/iam/v1/auth/password", bearer,
 		changePasswordWire{
 			CurrentPassword: string(current), NewPassword: string(next),
-			RequestID: "phase1-change-password",
+			RequestID: "phase1-change-password", RevokeOtherSessions: revokeOtherSessions,
 		},
 		nil, http.StatusOK,
 	)

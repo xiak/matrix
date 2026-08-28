@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
@@ -38,7 +38,7 @@ function accounts(overrides: Partial<AccountRepository> = {}): AccountRepository
 
 function AuthenticatedAccess({ repository }: { repository: AccountRepository }) {
   const session = useSession();
-  return session.phase === "authenticated" ? <AccountAccessRenderer repository={repository} /> : <LoginRenderer />;
+  return session.phase === "authenticated" || session.phase === "updating-password" ? <AccountAccessRenderer repository={repository} /> : <LoginRenderer />;
 }
 
 async function openAccess(repository = accounts(), iamRepository = iam()) {
@@ -53,6 +53,42 @@ async function openAccess(repository = accounts(), iamRepository = iam()) {
 afterEach(() => { cleanup(); vi.clearAllMocks(); localStorage.clear(); sessionStorage.clear(); });
 
 describe("qualified login", () => {
+  it("forces other temporary sessions out, clears pending passwords and retains only the verified current session", async () => {
+    let complete!: () => void;
+    const source = iam({
+      login: vi.fn().mockResolvedValue({ credential, mustChangePassword: true, session: {
+        id: "session-forced", organizationId: "tenant-a", principalId: "child-a", status: "ACTIVE",
+        issuedAt: "2026-08-28T00:00:00Z", expiresAt: "2099-08-28T00:00:00Z"
+      } }),
+      changePassword: vi.fn().mockImplementation(() => new Promise<void>((resolve) => { complete = resolve; }))
+    });
+    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue({ ...identity, principal: child.principal, roles: [], canCreateOrganizations: false }) });
+    const user = userEvent.setup();
+    render(<SessionProvider repository={source}><AuthenticatedAccess repository={repository} /></SessionProvider>);
+    await user.click(screen.getByRole("button", { name: "IAM 子账号" }));
+    await user.type(screen.getByLabelText("子账号登录名"), "developer@tenant-a");
+    await user.type(screen.getByLabelText("密码", { exact: true }), "Temporary-Test-Password-49!");
+    await user.click(screen.getByRole("button", { name: "登录控制台" }));
+    await screen.findByRole("heading", { name: "设置你的正式密码" });
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    expect(repository.currentIdentity).not.toHaveBeenCalled();
+    await user.type(screen.getByLabelText("当前初始密码"), "Temporary-Test-Password-49!");
+    await user.type(screen.getByLabelText("新密码", { exact: true }), "Replacement-Test-Password-73!");
+    await user.type(screen.getByLabelText("确认新密码", { exact: true }), "Replacement-Test-Password-73!");
+    await user.click(screen.getByRole("button", { name: "保存并进入控制台" }));
+    expect(source.changePassword).toHaveBeenCalledWith(credential, {
+      currentPassword: "Temporary-Test-Password-49!", newPassword: "Replacement-Test-Password-73!", revokeOtherSessions: true
+    });
+    expect((screen.getByLabelText("当前初始密码") as HTMLInputElement).disabled).toBe(true);
+    expect(screen.queryByDisplayValue("Temporary-Test-Password-49!")).toBeNull();
+    expect(screen.queryByDisplayValue("Replacement-Test-Password-73!")).toBeNull();
+    await act(async () => complete());
+    await waitFor(() => expect(repository.currentIdentity).toHaveBeenCalledWith(credential));
+    expect(navigation.replace).toHaveBeenCalledWith("/console/access/");
+    expect(screen.queryByRole("heading", { name: "设置你的正式密码" })).toBeNull();
+    expect(localStorage.length + sessionStorage.length).toBe(0);
+  });
+
   it("uses one text identifier, clears secrets on mode change, and preserves IAM's account namespace", async () => {
     const repository = iam();
     const user = userEvent.setup();
@@ -88,6 +124,50 @@ describe("qualified login", () => {
 });
 
 describe("account access", () => {
+  it.each([true, false])("offers a default-on ordinary password session choice, including for a child (%s)", async (revokeOtherSessions) => {
+    let complete!: () => void;
+    const passwordRepository = iam({ changePassword: vi.fn().mockImplementation(() => new Promise<void>((resolve) => { complete = resolve; })) }, "child-a");
+    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue({ ...identity, principal: child.principal, roles: [], canCreateOrganizations: false }) });
+    const { user, view } = await openAccess(repository, passwordRepository);
+    await user.click(await screen.findByRole("button", { name: "用户设置" }));
+    const option = screen.getByRole("checkbox", { name: "同时退出其他登录会话（推荐）" }) as HTMLInputElement;
+    expect(option.checked).toBe(true);
+    if (!revokeOtherSessions) await user.click(option);
+    await user.type(screen.getByLabelText("当前密码", { exact: true }), "Current-Only-Test-Password-49!");
+    await user.type(screen.getByLabelText("新密码", { exact: true }), "New-Only-Test-Password-73!");
+    await user.type(screen.getByLabelText("确认新密码", { exact: true }), "New-Only-Test-Password-73!");
+    await user.click(screen.getByRole("button", { name: "更新密码" }));
+    expect(passwordRepository.changePassword).toHaveBeenCalledWith(credential, {
+      currentPassword: "Current-Only-Test-Password-49!", newPassword: "New-Only-Test-Password-73!", revokeOtherSessions
+    });
+    expect((screen.getByRole("button", { name: "正在更新密码…" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByDisplayValue("Current-Only-Test-Password-49!")).toBeNull();
+    expect(screen.queryByDisplayValue("New-Only-Test-Password-73!")).toBeNull();
+    await act(async () => complete());
+    expect((await screen.findByRole("status")).textContent).toContain(revokeOtherSessions ? "其他登录会话已退出" : "其他仍有效的登录会话保留");
+    expect(view.container.innerHTML).not.toContain(credential);
+    expect(localStorage.length + sessionStorage.length).toBe(0);
+  });
+
+  it("does not send mismatched passwords or claim success after a revoked session", async () => {
+    const source = iam({ changePassword: vi.fn().mockRejectedValue(new HttpProblem(401, "private authentication detail")) });
+    const { user } = await openAccess(accounts(), source);
+    await user.click(await screen.findByRole("button", { name: "用户设置" }));
+    await user.type(screen.getByLabelText("当前密码", { exact: true }), "Current-Only-Test-Password-49!");
+    await user.type(screen.getByLabelText("新密码", { exact: true }), "New-Only-Test-Password-73!");
+    await user.type(screen.getByLabelText("确认新密码", { exact: true }), "Another-Only-Test-Password-84!");
+    await user.click(screen.getByRole("button", { name: "更新密码" }));
+    expect(screen.getByRole("alert").textContent).toContain("两次输入的新密码不一致");
+    expect(source.changePassword).not.toHaveBeenCalled();
+    await user.clear(screen.getByLabelText("确认新密码", { exact: true }));
+    await user.type(screen.getByLabelText("确认新密码", { exact: true }), "New-Only-Test-Password-73!");
+    await user.click(screen.getByRole("button", { name: "更新密码" }));
+    await screen.findByRole("button", { name: "登录控制台" });
+    expect(screen.getByRole("alert").textContent).toContain("重新登录");
+    expect(screen.queryByText("密码已更新", { exact: false })).toBeNull();
+    expect(screen.queryByDisplayValue("New-Only-Test-Password-73!")).toBeNull();
+  });
+
   it("separates the resource owner from subusers and defaults creation to no business grant", async () => {
     const { user, repository, view } = await openAccess();
     await screen.findByText("Developer A");

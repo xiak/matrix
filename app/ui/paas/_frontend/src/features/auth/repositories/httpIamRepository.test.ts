@@ -31,6 +31,18 @@ function firstRequest(fetcher: ReturnType<typeof reply>) {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 describe("IAM HTTP account boundary", () => {
+  it.each([undefined, true, false])("sends only the password session policy %s, never a retained-session selector", async (revokeOtherSessions) => {
+    const fetcher = reply({ changedAt: "2026-08-28T01:02:03Z", bootstrapFileRetirable: false });
+    const command = { currentPassword: "Current-Only-Test-Password-49!", newPassword: "New-Only-Test-Password-73!", revokeOtherSessions, sessionId: "forged-session", tenantId: "forged-tenant" };
+    await httpIamRepository.changePassword("transient-bearer", command);
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/password");
+    expect(requestBody(fetcher)).toEqual({
+      currentPassword: command.currentPassword, newPassword: command.newPassword, requestId: expect.any(String),
+      ...(revokeOtherSessions === undefined ? {} : { revokeOtherSessions })
+    });
+    expect(firstRequest(fetcher)[1]).toMatchObject({ cache: "no-store", headers: { Authorization: "Bearer transient-bearer" } });
+  });
+
   it("sends the qualified username as one login identifier", async () => {
     const fetcher = reply({ credential: "transient-bearer", mustChangePassword: false,
       session: { id: "session", organizationId: "account-acme", principalId: "principal-alex", status: "ACTIVE", issuedAt: "2026-08-27T00:00:00Z", expiresAt: "2099-08-27T00:00:00Z" } });

@@ -1,6 +1,7 @@
 package iamv1
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -13,6 +14,24 @@ var ErrEncodingFailed = errors.New("IAM contract encoding failed")
 // DecodeRequest applies the common strict IAM request decoder.
 func DecodeRequest(reader io.Reader, destination any) error {
 	return contractjson.DecodeObject(reader, MaxRequestBytes, destination)
+}
+
+func (request *ChangePasswordRequest) UnmarshalJSON(source []byte) error {
+	// A missing policy defaults to true; explicit null is not a boolean choice.
+	// Reuse the strict decoder rather than bypassing its field/duplicate checks.
+	type wire ChangePasswordRequest
+	var decoded wire
+	if err := contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded); err != nil {
+		return err
+	}
+	var policy struct {
+		Value json.RawMessage `json:"revokeOtherSessions"`
+	}
+	if err := json.Unmarshal(source, &policy); err != nil || bytes.Equal(bytes.TrimSpace(policy.Value), []byte("null")) {
+		return contractjson.ErrInvalidDocument
+	}
+	*request = ChangePasswordRequest(decoded)
+	return nil
 }
 
 func DecodeBootstrapDocument(reader io.Reader) (BootstrapDocument, error) {

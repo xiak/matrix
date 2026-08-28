@@ -4,6 +4,7 @@ import { useState, type FormEvent, type ReactNode } from "react";
 import { Building2, KeyRound, Plus, RefreshCcw, ShieldCheck, UserRound, Users } from "lucide-react";
 import { Badge, Button, Card, Input, Select, Typography } from "@ui/xiak";
 import { AccountAccessProvider, useAccountAccess } from "../application/AccountAccessProvider";
+import { useSession } from "../application/SessionProvider";
 import { userRoles, type UserRole } from "../domain/accounts";
 import type { AccountRepository } from "../repositories/iamRepository";
 import { roleDescriptions, roleLabels, type AccountAccessScene, type AccountUserScene, type TenantAccountScene } from "../scenes/accountAccessScene";
@@ -157,10 +158,60 @@ function UserDirectory({ scene }: { scene: AccountAccessScene }) {
   </div>;
 }
 
+function PasswordSettings() {
+  const session = useSession();
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmation, setConfirmation] = useState("");
+  const [revokeOthers, setRevokeOthers] = useState(true);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const pending = session.phase === "updating-password" || session.phase === "revoking";
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setFormError(null);
+    setMessage(null);
+    session.clearError();
+    if (newPassword !== confirmation) {
+      setFormError("两次输入的新密码不一致");
+      return;
+    }
+    const submission = session.changePassword(currentPassword, newPassword, revokeOthers);
+    setCurrentPassword("");
+    setNewPassword("");
+    setConfirmation("");
+    if (await submission) {
+      setMessage(revokeOthers
+        ? "密码已更新，其他登录会话已退出，当前会话保留。"
+        : "密码已更新，当前会话及其他仍有效的登录会话保留。");
+    }
+  }
+
+  return <Card>
+    <Card.Header><div><Typography.Title as="h2" level={3}>修改登录密码</Typography.Title><Typography.Text tone="muted">仅修改当前登录账号的密码</Typography.Text></div></Card.Header>
+    <Card.Body>
+      <form className={styles.form} onSubmit={submit}>
+        <Field label="当前密码"><Input autoComplete="current-password" disabled={pending} maxLength={128} onChange={(event) => setCurrentPassword(event.target.value)} required type="password" value={currentPassword} /></Field>
+        <Field label="新密码"><Input aria-describedby="account-password-policy" autoComplete="new-password" disabled={pending} maxLength={128} minLength={14} onChange={(event) => setNewPassword(event.target.value)} required type="password" value={newPassword} /></Field>
+        <Field label="确认新密码"><Input autoComplete="new-password" disabled={pending} maxLength={128} minLength={14} onChange={(event) => setConfirmation(event.target.value)} required type="password" value={confirmation} /></Field>
+        <p className={styles.note} id="account-password-policy">14–128 字节，不含空格，至少包含大写、小写、数字、符号中的三类。</p>
+        <label className={styles.sessionOption}><Input checked={revokeOthers} className={styles.sessionCheckbox} disabled={pending} onChange={(event) => setRevokeOthers(event.target.checked)} type="checkbox" /><span>同时退出其他登录会话（推荐）</span></label>
+        <p className={styles.note}>当前会话保留。不勾选时仅保留其他仍有效的会话，已退出或已撤销的会话不会恢复。</p>
+        {formError ? <p className={styles.error} role="alert">{formError}</p> : null}
+        {message ? <p className={styles.success} role="status">{message}</p> : null}
+        <div><Button disabled={pending || !currentPassword || !newPassword || !confirmation} type="submit">{pending ? "正在更新密码…" : "更新密码"}</Button></div>
+      </form>
+    </Card.Body>
+  </Card>;
+}
+
 function UserSettings({ scene }: { scene: AccountAccessScene }) {
   const access = useAccountAccess();
   const [alias, setAlias] = useState(scene.loginAlias ?? "");
-  return <Card>
+  return <div className={styles.stack}>
+    <PasswordSettings />
+    <Card>
     <Card.Header className={styles.cardHeader}><div><Typography.Title as="h2" level={3}>主账号别名</Typography.Title><Typography.Text tone="muted">主账号的专属登录标识</Typography.Text></div><Badge status={scene.loginAlias ? "success" : "neutral"}>{scene.loginAlias ? "已设置" : "未设置"}</Badge></Card.Header>
     <Card.Body className={styles.detail}>
       <p className={styles.note}>子用户可使用别名替代租户 ID 登录。它不是邮箱、域名，也不是主账号的用户名。</p>
@@ -176,7 +227,8 @@ function UserSettings({ scene }: { scene: AccountAccessScene }) {
         <div><Button disabled={access.busy || access.loading || !alias.trim() || alias.trim() === scene.loginAlias} type="submit">{access.busy ? "正在保存…" : "保存别名"}</Button></div>
       </form> : <p className={styles.note}>请联系所属主账号的管理员设置或修改别名。</p>}
     </Card.Body>
-  </Card>;
+    </Card>
+  </div>;
 }
 
 function TenantAccess({ account, onClose }: { account: TenantAccountScene; onClose(): void }) {

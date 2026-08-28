@@ -390,7 +390,7 @@ export function ConsoleShellRenderer({
   const session = useSession();
   if (
     !session.current ||
-    (session.phase !== "authenticated" && session.phase !== "revoking")
+    (session.phase !== "authenticated" && session.phase !== "updating-password" && session.phase !== "revoking")
   ) {
     return <LoginRenderer />;
   }

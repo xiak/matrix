@@ -164,6 +164,9 @@ type ChangePasswordRequest struct {
 	CurrentPassword Secret `json:"currentPassword"`
 	NewPassword     Secret `json:"newPassword"`
 	RequestID       string `json:"requestId"`
+	// Omission defaults to true. Required password replacement always revokes
+	// other sessions, even if the caller submits false.
+	RevokeOtherSessions *bool `json:"revokeOtherSessions,omitempty"`
 }
 
 type ChangePasswordResponse struct {

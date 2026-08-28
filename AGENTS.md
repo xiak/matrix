@@ -48,6 +48,9 @@ gates pass.
 
 ## Documentation ownership and reading route
 
+User-facing document deliverables default to Markdown (`.md`). Use Word or
+another document format only when the user explicitly requests it.
+
 Every fact has exactly one documentation owner:
 
 - a FEAT owns its requirement, design, implementation status, acceptance

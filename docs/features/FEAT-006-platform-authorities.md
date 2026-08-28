@@ -6,7 +6,7 @@
 - IAM API contract: `iam.matrix.xiak.com/v1`
 - Audit API contract: `audit.matrix.xiak.com/v1`
 - Phase 3 extension: installation-scoped IAM authority implemented; host-resource consumption and offline upgrade acceptance remain in FEAT-008
-- Multi-tenant extension: accounts, primary/platform credential protection, historical producer proof, tenant lifecycle and original-primary recovery pass the backend gates; task-local console and release acceptance remain in progress
+- Multi-tenant extension: accounts, primary/platform credential protection, historical producer proof, tenant lifecycle, original-primary recovery and password-session policy pass backend gates; revision-3 installed-release acceptance remains pending
 
 ## Outcome
 
@@ -205,6 +205,29 @@ the password/session mechanism, but an unqualified child login is rejected.
 Malformed, ambiguous, unknown, disabled, and wrong-password identities do not
 reveal whether a tenant or user exists. There is no public identity-discovery
 or username-only "next step" endpoint.
+
+A password change preserves only the submitting session derived from the
+effective bearer and revalidated inside the transaction. First-login,
+administrator-reset and original-primary-recovery password changes always
+revoke other sessions: a second temporary-password session must never gain
+normal permissions when another session completes password replacement.
+Ordinary password changes accept `revokeOtherSessions`, defaulting to true;
+explicit false may retain only already valid sessions of that same USER.
+It cannot revive a revoked or old temporary session. The password, effective
+session policy and sanitized Audit fact commit together. Each password change,
+reset or primary recovery advances a per-USER credential generation under the
+same principal lock; login binds the session to the credential generation it
+verified. This generation is a monotonic counter, not a timestamp. Legacy sessions
+without credential-version evidence always fail closed and require a new
+login; transaction timestamps cannot establish which password issued them.
+No migration backfills or retention option may bless these legacy rows.
+Wrong-password and failed transactions leave the password,
+sessions and success facts unchanged. The console calls these login sessions,
+not devices; it does not add device fingerprinting or a device inventory.
+This hardening increments IAM's schema to 3 and the release contract revision
+to 3; retained-session process gates pass, while the new installed-release
+gate is still pending. Audit remains 2 and this branch's PaaS remains 1. The previous signed
+2/2/1 revision 2 evidence does not certify the new password/session contract.
 
 An explicitly bound `PLATFORM_OPERATOR` may open another tenant account with
 its own primary account and initial password, list/read tenant metadata,
@@ -518,8 +541,8 @@ historical cross-context evidence is separate from current identity-domain
 evaluation. Its PostgreSQL adapter reads only IAM's own committed records.
 `api/iam/v1` references the public Audit event and its generated schema in
 one direction; it does not copy the event schema or import Audit internals.
-IAM schema/readiness version 2 requires this proof boundary; Audit's independent
-partition schema is also version 2, while PaaS remains at its own version.
+The IAM schema/readiness contract requires this proof boundary; Audit's independent
+partition schema remains version 2, while PaaS remains at its own version.
 These numbers do not constitute a release compatibility or downgrade claim.
 
 For PaaS/Audit sources, an immutable original decision proves historical
@@ -607,6 +630,15 @@ lifecycle gates where their contracts change.
    child to root, and produce correlated sanitized facts. An unrevoked platform
    binding protects even a disabled user's credentials; concurrent platform
    grant versus tenant password reset/status changes cannot permit takeover.
+   Two initial/reset-password sessions cannot both become privileged after one
+   changes the password. Ordinary password changes retain the verified current
+   session and default to revoking others; explicit false retains only valid
+   same-user sessions, never revoked or old temporary ones. A later platform
+   grant and schema replay/restart cannot promote an invalid old session.
+   Concurrent change/reset/recover/logout must not preserve a revoked session;
+   a concurrent old-password login cannot evade required other-session
+   revocation. Omitted, explicit true/false and forced-change options require
+   separate gates, including current-session substitution denial.
 3. **Resource and Audit isolation.** Both tenants create/read their own
    applications, database/service installations, quota entitlements, and
    Operations. Cross-tenant resource IDs, filters, headers, bodies, cursors,
@@ -744,8 +776,9 @@ every closed action mapping and the explicitly unproved create payload.
 It also passed [independent CI](https://github.com/xiak/matrix/actions/runs/33054487149)
 at `26f3569269ba6e8bf3ac55b3c596c55590e1144a`.
 
-The existing process-test owner also builds and runs the actual IAM executable
-from fixed `9fd45b0` against its original schema. HTTP creates and changes
+The existing process-test owner builds and runs the actual IAM executables
+from fixed `9fd45b0` and `a36cf9817f522549b995ea9c1f0d873499b4fe62` against
+their original single-tenant and multi-tenant schemas. HTTP creates and changes
 credentials, revokes a role/session and the platform binding, then the current
 schema is applied twice and the new executable starts and restarts. Primary
 identity, changed passwords, qualified child login, revocations and original
@@ -753,8 +786,12 @@ IAM facts are retained; the new binary rejects the unmigrated old schema
 before bootstrap. The independent Audit upgrade gate retains original tenant
 documents, canonical bytes and hashes from `9fd45b0`, keeps identical raw tenant
 and installation IDs in separate chains, and rejects immutable-record writes.
-IAM's readiness version is 2 and Audit's is 2; no equality or single global
-schema number is used as release-compatibility evidence.
+Every old active session lacks credential-generation evidence and must log in
+again; neither its issuance time nor explicit retention blesses it. New
+generation-bound sessions survive explicit false, migration replay and process
+restart without reviving revoked sessions. IAM readiness is 3 and Audit is 2;
+these SQL migration checks do not authorize a cross-profile signed release
+transition or historical-binary rollback.
 
 The platform lifecycle increment passes this branch's real PG18 IAM HTTP,
 Audit HTTP, separated-schema and retained-record upgrade gates. A non-primary
@@ -858,7 +895,22 @@ are task-local evidence, not an assertion that the pending-record CI gate runs
 a workload executor.
 
 These are verified slices, not acceptance of the full multi-tenant target.
-This branch's browser evidence and remaining keyboard-only gate belong to
+The password-session increment passes this branch's fresh PostgreSQL 18 race
+gates on 2026-08-28: forced initial/reset/recovery changes, ordinary omitted,
+true and false choices, invalid selectors, atomic failure, later platform
+grant, and concurrent change/change, reset, recovery, logout and old-password
+login. Credential generation advances exactly once per successful change;
+legacy NULL sessions remain denied after both actual old-binary upgrades.
+The independent five-process regression retains actual restricted database
+logins, dual-tenant resource/Operation isolation, lifecycle and historical
+outbox proofs. The Audit HTTP, separated-schema and retained canonical/hash
+gates also pass. Full-repository unit/architecture/race and vet, strict contract
+generation, dependency verification and Linux amd64 builds pass. The native
+Linux release boundary preserves published v1 authentication and rejects
+different complete profiles before effects, including the prior `2/2/1`
+revision 2. Signed revision-3 lifecycle and installed browser acceptance
+remain separate from these backend results.
+This branch's browser evidence and deferred keyboard-only gate belong to
 [FEAT-007](FEAT-007-control-plane-console.md). The exact release profile and
 signed populated offline upgrade/rollback/backup/recovery evidence belong to
 [FEAT-005](FEAT-005-offline-platform-lifecycle.md); retained-data process checks

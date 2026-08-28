@@ -36,19 +36,23 @@ type iamRetention struct {
 }
 
 type tenantRetention struct {
-	Account              iamv1.OrganizationAccount
-	Child                iamv1.Principal
-	ChildBinding         iamv1.RoleBinding
-	InitialPassword      []byte
-	PrimaryPassword      []byte
-	ChildPassword        []byte
-	RecoveryPassword     []byte
-	FinalPrimaryPassword []byte
-	OldPrimaryCredential []byte
-	OldChildCredential   []byte
-	Operations           []paasv1.Operation
-	Quota                managedservicev1.QuotaEntitlement
-	AuditHashes          map[string]struct{}
+	Account                    iamv1.OrganizationAccount
+	Child                      iamv1.Principal
+	ChildBinding               iamv1.RoleBinding
+	InitialPassword            []byte
+	PrimaryPassword            []byte
+	PreviousPrimaryPassword    []byte
+	ChildPassword              []byte
+	RecoveryPassword           []byte
+	FinalPrimaryPassword       []byte
+	OldPrimaryCredential       []byte
+	OldChildCredential         []byte
+	TemporaryPrimaryCredential []byte
+	TemporaryChildCredential   []byte
+	RetainedPrimaryCredential  []byte
+	Operations                 []paasv1.Operation
+	Quota                      managedservicev1.QuotaEntitlement
+	AuditHashes                map[string]struct{}
 }
 
 type safeError struct {

@@ -171,6 +171,13 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 	if !loginResult.MustChangePassword {
 		t.Fatal("initial administrator login did not publish the password-change requirement")
 	}
+	secondInitialLogin := performIAMRequest(handler, http.MethodPost, "/v1/auth/login", "", loginBody)
+	var secondInitialSession struct {
+		Credential string `json:"credential"`
+	}
+	if secondInitialLogin.Code != http.StatusOK || json.Unmarshal(secondInitialLogin.Body.Bytes(), &secondInitialSession) != nil || secondInitialSession.Credential == "" {
+		t.Fatal("could not establish the second initial-password session")
+	}
 	authorizeBody := []byte(`{"action":"paas.application.create","resource":{"kind":"APPLICATION","id":"application-example"},"requestId":"request-authorize","correlationId":"correlation-authorize"}`)
 	authorize := performIAMRequestWithSubject(handler, authorizeBody, paasCredential, loginWire.Credential)
 	if authorize.Code != http.StatusOK {
@@ -194,6 +201,9 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 	if err := json.Unmarshal(password.Body.Bytes(), &passwordResult); err != nil ||
 		!passwordResult.BootstrapFileRetirable {
 		t.Fatalf("IAM administrator password response=%#v err=%v", passwordResult, err)
+	}
+	if response := performIAMRequest(handler, http.MethodGet, "/v1/auth/me", secondInitialSession.Credential, nil); response.Code != http.StatusUnauthorized {
+		t.Fatalf("password replacement promoted an old initial-password session: status=%d", response.Code)
 	}
 	oldPasswordLogin := performIAMRequest(handler, http.MethodPost, "/v1/auth/login", "", loginBody)
 	if oldPasswordLogin.Code != http.StatusUnauthorized {
@@ -338,6 +348,12 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 	}
 	t.Run("tenant accounts and subusers", func(t *testing.T) {
 		proveTenantAccounts(t, ctx, handler, admin, loginWire.Credential)
+	})
+	t.Run("password session policy", func(t *testing.T) {
+		provePasswordSessionPolicy(t, ctx, handler, admin, loginWire.Credential)
+	})
+	t.Run("password session races", func(t *testing.T) {
+		provePasswordSessionRaces(t, ctx, handler, admin, loginWire.Credential)
 	})
 	assertPlatformAuthorityHTTP(t, ctx, handler, admin, loginWire.Credential, developerWire.Credential, developer.ID)
 	if _, err := workflow.Bootstrap(ctx, document); err != nil {
@@ -491,6 +507,348 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 	t.Run("outbox physical owner and sealed chain", func(t *testing.T) {
 		proveIAMOutboxClaims(t, ctx, admin, poolConfig, handler)
 	})
+}
+
+func provePasswordSessionPolicy(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, operator string) {
+	t.Helper()
+	const initial = "Session-Policy-Initial-Password-49!"
+	const changed = "Session-Policy-Changed-Password-73!"
+	const retained = "Session-Policy-Retained-Password-84!"
+	const replaced = "Session-Policy-Replaced-Password-95!"
+	const reset = "Session-Policy-Reset-Password-68!"
+	var sequence atomic.Uint64
+	request := func(method, path, bearer string, body map[string]any, expected int) *httptest.ResponseRecorder {
+		t.Helper()
+		var encoded []byte
+		if body != nil {
+			body["requestId"] = fmt.Sprintf("request-password-policy-%d", sequence.Add(1))
+			var err error
+			encoded, err = json.Marshal(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		response := performIAMRequest(handler, method, path, bearer, encoded)
+		if response.Code != expected {
+			t.Fatalf("password policy %s %s: status=%d want=%d", method, path, response.Code, expected)
+		}
+		return response
+	}
+	login := func(name, password string) string {
+		t.Helper()
+		response := request(http.MethodPost, "/v1/auth/login", "", map[string]any{"loginName": name, "password": password}, http.StatusOK)
+		var result struct {
+			Credential string `json:"credential"`
+		}
+		if json.Unmarshal(response.Body.Bytes(), &result) != nil || result.Credential == "" {
+			t.Fatal("password policy login returned no credential")
+		}
+		return result.Credential
+	}
+	identity := func(bearer string) iamv1.CurrentIdentity {
+		t.Helper()
+		response := request(http.MethodGet, "/v1/auth/me", bearer, nil, http.StatusOK)
+		var result iamv1.CurrentIdentity
+		if json.Unmarshal(response.Body.Bytes(), &result) != nil || iamv1.ValidateCurrentIdentity(result) != nil {
+			t.Fatal("password policy returned invalid current identity")
+		}
+		return result
+	}
+	change := func(bearer, from, to string, others *bool) {
+		t.Helper()
+		subject := identity(bearer).Principal
+		var previousVersion, currentVersion int64
+		if err := database.QueryRow(ctx, "SELECT credential_version FROM iam.user_credentials WHERE tenant_id=$1 AND principal_id=$2", subject.OrganizationID, subject.ID).Scan(&previousVersion); err != nil {
+			t.Fatal(err)
+		}
+		body := map[string]any{"currentPassword": from, "newPassword": to}
+		if others != nil {
+			body["revokeOtherSessions"] = *others
+		}
+		request(http.MethodPost, "/v1/auth/password", bearer, body, http.StatusOK)
+		if identity(bearer).Principal.MustChangePassword {
+			t.Fatal("password change did not preserve and advance the verified current session")
+		}
+		if err := database.QueryRow(ctx, "SELECT credential_version FROM iam.user_credentials WHERE tenant_id=$1 AND principal_id=$2", subject.OrganizationID, subject.ID).Scan(&currentVersion); err != nil || currentVersion != previousVersion+1 {
+			t.Fatal("password change did not advance the per-user credential generation exactly once")
+		}
+	}
+	invalid := func(bearer string) {
+		t.Helper()
+		request(http.MethodGet, "/v1/auth/me", bearer, nil, http.StatusUnauthorized)
+	}
+	create := request(http.MethodPost, "/v1/principals", operator, map[string]any{
+		"loginName": "password.policy", "displayName": "Password policy", "initialPassword": initial, "initialRole": iamv1.RolePaaSViewer,
+	}, http.StatusCreated)
+	var principal iamv1.Principal
+	if json.Unmarshal(create.Body.Bytes(), &principal) != nil {
+		t.Fatal("invalid password policy principal")
+	}
+	name := principal.LoginName + "@" + string(principal.OrganizationID)
+	current, temporary := login(name, initial), login(name, initial)
+	keep, revoke := false, true
+	change(current, initial, changed, &keep)
+	invalid(temporary)
+	other, loggedOut := login(name, changed), login(name, changed)
+	request(http.MethodPost, "/v1/auth/logout", loggedOut, map[string]any{}, http.StatusOK)
+
+	// Compare only persisted security state and success facts, not incidental
+	// request order. Never print the credential/hash-containing comparison value.
+	securityState := func() string {
+		t.Helper()
+		var state string
+		if err := database.QueryRow(ctx, `SELECT jsonb_build_object(
+			'principal',to_jsonb(p),'credential',to_jsonb(c),
+			'sessions',(SELECT jsonb_agg(to_jsonb(s) ORDER BY s.id) FROM iam.sessions AS s WHERE s.tenant_id=p.tenant_id AND s.principal_id=p.id),
+			'successes',(SELECT jsonb_agg(e.event_document ORDER BY e.event_id) FROM iam.audit_outbox AS e WHERE e.tenant_id=p.tenant_id AND e.event_document->>'action'='iam.password.changed' AND e.event_document#>>'{target,id}'=p.id)
+			)::text FROM iam.principals AS p JOIN iam.user_credentials AS c ON c.tenant_id=p.tenant_id AND c.principal_id=p.id
+			WHERE p.tenant_id=$1 AND p.id=$2`, principal.OrganizationID, principal.ID).Scan(&state); err != nil {
+			t.Fatal(err)
+		}
+		return state
+	}
+	for _, attack := range []struct {
+		body   map[string]any
+		status int
+	}{
+		{map[string]any{"currentPassword": initial, "newPassword": retained}, http.StatusUnauthorized},
+		{map[string]any{"currentPassword": changed, "newPassword": "weak"}, http.StatusUnprocessableEntity},
+		{map[string]any{"currentPassword": changed, "newPassword": retained, "sessionId": identity(other).Principal.ID}, http.StatusBadRequest},
+		{map[string]any{"currentPassword": changed, "newPassword": retained, "revokeOtherSessions": "false"}, http.StatusBadRequest},
+		{map[string]any{"currentPassword": changed, "newPassword": retained, "revokeOtherSessions": nil}, http.StatusBadRequest},
+	} {
+		before := securityState()
+		request(http.MethodPost, "/v1/auth/password", current, attack.body, attack.status)
+		if securityState() != before {
+			t.Fatal("rejected password change partially altered security state or success facts")
+		}
+	}
+	change(current, changed, retained, &keep)
+	identity(other)
+	invalid(temporary)
+	invalid(loggedOut)
+	identity(operator) // Another user's session is never in this mutation's scope.
+	change(current, retained, replaced, nil)
+	invalid(other)
+	other = login(name, replaced)
+	change(current, replaced, changed, &revoke)
+	invalid(other)
+
+	// Reset must revoke old sessions before issuing any replacement-password
+	// sessions, and false cannot preserve another such temporary session.
+	beforeReset := identity(current)
+	request(http.MethodPost, "/v1/principals/"+string(principal.ID)+":reset-password", operator,
+		map[string]any{"initialPassword": reset, "resourceVersion": beforeReset.Principal.ResourceVersion}, http.StatusOK)
+	invalid(current)
+	resetCurrent, resetOther := login(name, reset), login(name, reset)
+	change(resetCurrent, reset, retained, &keep)
+	invalid(resetOther)
+	invalid(temporary)
+	invalid(loggedOut)
+
+	// An old temporary session may not gain platform authority when this USER
+	// later receives an explicit platform binding after confirmed replacement.
+	grant := request(http.MethodPost, "/v1/role-bindings", operator,
+		map[string]any{"principalId": principal.ID, "role": iamv1.RolePlatformOperator}, http.StatusOK)
+	var platform iamv1.RoleBinding
+	if json.Unmarshal(grant.Body.Bytes(), &platform) != nil {
+		t.Fatal("invalid policy platform binding")
+	}
+	assertPlatformDecisionHTTP(t, handler, resetCurrent, paasCredential, true)
+	for _, stale := range []string{temporary, resetOther, current, loggedOut} {
+		invalid(stale)
+	}
+	request(http.MethodPost, "/v1/role-bindings/"+string(platform.ID)+":revoke", operator, map[string]any{}, http.StatusOK)
+
+	created := request(http.MethodPost, "/v1/organizations", operator, map[string]any{
+		"id": "organization-password-policy", "displayName": "Password recovery policy", "administratorLoginName": "password.primary",
+		"administratorDisplayName": "Password primary", "initialPassword": initial,
+	}, http.StatusCreated)
+	var account iamv1.OrganizationAccount
+	if json.Unmarshal(created.Body.Bytes(), &account) != nil {
+		t.Fatal("invalid password policy account")
+	}
+	primary, oldPrimary := login(account.PrimaryLoginName, initial), login(account.PrimaryLoginName, initial)
+	change(primary, initial, changed, nil)
+	request(http.MethodPost, "/v1/organizations/"+string(account.Organization.ID)+":recover-administrator", operator,
+		map[string]any{"principalId": account.PrimaryPrincipalID, "initialPassword": reset, "resourceVersion": account.Organization.ResourceVersion}, http.StatusOK)
+	invalid(primary)
+	invalid(oldPrimary)
+	recovered, recoveredOther := login(account.PrimaryLoginName, reset), login(account.PrimaryLoginName, reset)
+	change(recovered, reset, changed, &keep)
+	invalid(recoveredOther)
+	applyIAMSchema(t, ctx, database)
+	applyIAMSchema(t, ctx, database)
+	for _, stale := range []string{temporary, resetOther, current, loggedOut, primary, oldPrimary, recoveredOther} {
+		invalid(stale)
+	}
+	identity(recovered)
+	identity(resetCurrent)
+	assertIAMSecretsAbsent(t, ctx, database, initial, changed, retained, replaced, reset)
+}
+
+func provePasswordSessionRaces(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, operator string) {
+	t.Helper()
+	const initial = "Race-Session-Initial-Password-49!"
+	const stable = "Race-Session-Stable-Password-62!"
+	const changed = "Race-Session-Changed-Password-73!"
+	const competing = "Race-Session-Competing-Password-84!"
+	const reset = "Race-Session-Reset-Password-95!"
+	for _, mutation := range []string{"change", "reset", "recover", "logout", "old-password-login"} {
+		t.Run(mutation, func(t *testing.T) {
+			var sequence atomic.Uint64
+			request := func(path, bearer string, body map[string]any) *httptest.ResponseRecorder {
+				body["requestId"] = fmt.Sprintf("request-session-race-%s-%d", mutation, sequence.Add(1))
+				encoded, err := json.Marshal(body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return performIAMRequest(handler, http.MethodPost, path, bearer, encoded)
+			}
+			credential := func(response *httptest.ResponseRecorder) string {
+				t.Helper()
+				var result struct {
+					Credential string `json:"credential"`
+				}
+				if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &result) != nil || result.Credential == "" {
+					t.Fatalf("session race login status=%d", response.Code)
+				}
+				return result.Credential
+			}
+			identity := func(bearer string, valid bool) iamv1.CurrentIdentity {
+				t.Helper()
+				response := performIAMRequest(handler, http.MethodGet, "/v1/auth/me", bearer, nil)
+				if !valid {
+					if response.Code != http.StatusUnauthorized {
+						t.Fatalf("session race retained a revoked session: %d", response.Code)
+					}
+					return iamv1.CurrentIdentity{}
+				}
+				var result iamv1.CurrentIdentity
+				if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &result) != nil || iamv1.ValidateCurrentIdentity(result) != nil {
+					t.Fatalf("session race lost an effective session: %d", response.Code)
+				}
+				return result
+			}
+			name := "password.race." + mutation
+			var account iamv1.OrganizationAccount
+			if mutation == "recover" {
+				response := request("/v1/organizations", operator, map[string]any{"id": "organization-password-race", "displayName": "Recovery race",
+					"administratorLoginName": name, "administratorDisplayName": "Recovery race primary", "initialPassword": initial})
+				if response.Code != http.StatusCreated || json.Unmarshal(response.Body.Bytes(), &account) != nil {
+					t.Fatalf("create password recovery race: %d", response.Code)
+				}
+			} else {
+				response := request("/v1/principals", operator, map[string]any{"loginName": name, "displayName": "Password race user", "initialPassword": initial})
+				var principal iamv1.Principal
+				if response.Code != http.StatusCreated || json.Unmarshal(response.Body.Bytes(), &principal) != nil {
+					t.Fatalf("create password race user: %d", response.Code)
+				}
+				name += "@" + string(principal.OrganizationID)
+			}
+			login := func(password string) string {
+				t.Helper()
+				return credential(request("/v1/auth/login", "", map[string]any{"loginName": name, "password": password}))
+			}
+			current := login(initial)
+			if response := request("/v1/auth/password", current, map[string]any{"currentPassword": initial, "newPassword": stable}); response.Code != http.StatusOK {
+				t.Fatalf("initialize password race: %d", response.Code)
+			}
+			other, loggedOut := login(stable), login(stable)
+			if response := request("/v1/auth/logout", loggedOut, map[string]any{}); response.Code != http.StatusOK {
+				t.Fatalf("prepare revoked race session: %d", response.Code)
+			}
+			before := identity(current, true)
+			changeID, competingID := "request-racing-password-"+mutation, "request-racing-peer-"+mutation
+			changeBody, _ := json.Marshal(map[string]any{"currentPassword": stable, "newPassword": changed, "requestId": changeID})
+			path, bearer := "/v1/auth/password", other
+			body := map[string]any{"currentPassword": stable, "newPassword": competing, "revokeOtherSessions": false}
+			switch mutation {
+			case "reset":
+				path, bearer = "/v1/principals/"+string(before.Principal.ID)+":reset-password", operator
+				body = map[string]any{"initialPassword": reset, "resourceVersion": before.Principal.ResourceVersion}
+			case "recover":
+				path, bearer = "/v1/organizations/"+string(account.Organization.ID)+":recover-administrator", operator
+				body = map[string]any{"principalId": account.PrimaryPrincipalID, "initialPassword": reset, "resourceVersion": account.Organization.ResourceVersion}
+			case "logout":
+				path, bearer, body = "/v1/auth/logout", current, map[string]any{}
+			case "old-password-login":
+				path, bearer, body = "/v1/auth/login", "", map[string]any{"loginName": name, "password": stable}
+			}
+			body["requestId"] = competingID
+			competingBody, _ := json.Marshal(body)
+			start := make(chan struct{})
+			changes, peers := make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)
+			go func() {
+				<-start
+				changes <- performIAMRequest(handler, http.MethodPost, "/v1/auth/password", current, changeBody)
+			}()
+			go func() { <-start; peers <- performIAMRequest(handler, http.MethodPost, path, bearer, competingBody) }()
+			close(start)
+			changeResponse, peerResponse := <-changes, <-peers
+			changeStatus, peerStatus := changeResponse.Code, peerResponse.Code
+			if changeStatus != http.StatusOK && changeStatus != http.StatusUnauthorized {
+				t.Fatalf("password race returned unexpected change status=%d", changeStatus)
+			}
+			switch mutation {
+			case "change":
+				if !((changeStatus == http.StatusOK && peerStatus == http.StatusUnauthorized) || (changeStatus == http.StatusUnauthorized && peerStatus == http.StatusOK)) {
+					t.Fatalf("two competing password replacements did not serialize: %d/%d", changeStatus, peerStatus)
+				}
+				password := changed
+				if peerStatus == http.StatusOK {
+					password = competing
+				}
+				identity(login(password), true)
+				identity(current, true) // Explicit false may retain this already valid session.
+				identity(other, peerStatus == http.StatusOK)
+			case "reset":
+				if !((changeStatus == http.StatusOK && peerStatus == http.StatusConflict) || (changeStatus == http.StatusUnauthorized && peerStatus == http.StatusOK)) {
+					t.Fatalf("reset and password replacement ignored principal version: %d/%d", changeStatus, peerStatus)
+				}
+				identity(current, changeStatus == http.StatusOK)
+				identity(other, false)
+				if peerStatus == http.StatusOK && !identity(login(reset), true).Principal.MustChangePassword {
+					t.Fatal("racing reset lost required password change")
+				}
+			case "recover":
+				if peerStatus != http.StatusOK {
+					t.Fatalf("original-primary recovery lost to a non-lifecycle version: %d", peerStatus)
+				}
+				identity(current, false)
+				identity(other, false)
+				if !identity(login(reset), true).Principal.MustChangePassword {
+					t.Fatal("racing recovery lost required password change")
+				}
+			case "logout":
+				if peerStatus != http.StatusOK {
+					t.Fatalf("racing logout failed: %d", peerStatus)
+				}
+				identity(current, false)
+				identity(other, changeStatus != http.StatusOK)
+			case "old-password-login":
+				if changeStatus != http.StatusOK || (peerStatus != http.StatusOK && peerStatus != http.StatusUnauthorized) {
+					t.Fatalf("old-password login/replacement did not serialize: %d/%d", changeStatus, peerStatus)
+				}
+				if peerStatus == http.StatusOK {
+					identity(credential(peerResponse), false)
+				}
+				identity(current, true)
+				identity(other, false)
+			}
+			identity(loggedOut, false)
+			for requestID, succeeded := range map[string]bool{changeID: changeStatus == http.StatusOK, competingID: mutation == "change" && peerStatus == http.StatusOK} {
+				var facts int
+				if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.audit_outbox WHERE event_document->>'action'='iam.password.changed' AND event_document->>'requestId'=$1`, requestID).Scan(&facts); err != nil {
+					t.Fatal(err)
+				}
+				if succeeded && facts != 1 || !succeeded && facts != 0 {
+					t.Fatal("racing password result and immutable success fact disagree")
+				}
+			}
+		})
+	}
+	assertIAMSecretsAbsent(t, ctx, database, initial, stable, changed, competing, reset)
 }
 
 func proveIAMOutboxClaims(t *testing.T, ctx context.Context, admin *pgx.Conn, config *pgxpool.Config, handler http.Handler) {

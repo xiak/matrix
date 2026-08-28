@@ -11,7 +11,9 @@ import (
 )
 
 type passwordDigestInput struct {
-	RequestID string `json:"requestId"`
+	RequestID           string          `json:"requestId"`
+	SessionID           iamv1.SessionID `json:"sessionId"`
+	RevokeOtherSessions bool            `json:"revokeOtherSessions"`
 }
 
 type createUserDigestInput struct {
@@ -94,12 +96,8 @@ func (service *Authority) ChangePassword(
 		authority.ValidatePassword(request.NewPassword) != nil {
 		return iamv1.ChangePasswordResponse{}, ErrInvalidArgument
 	}
-	requestDigest, err := digestSanitized("password-change", passwordDigestInput{RequestID: request.RequestID})
-	if err != nil {
-		return iamv1.ChangePasswordResponse{}, err
-	}
 	var response iamv1.ChangePasswordResponse
-	err = service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
+	err := service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
 		now, err := transactionTime(transactionContext, transaction)
 		if err != nil {
 			return err
@@ -133,6 +131,13 @@ func (service *Authority) ChangePassword(
 			}
 			return ErrUnavailable
 		}
+		revokeOthers := subject.Subject.Principal.MustChangePassword || request.RevokeOtherSessions == nil || *request.RevokeOtherSessions
+		requestDigest, err := digestSanitized("password-change", passwordDigestInput{
+			RequestID: request.RequestID, SessionID: subject.Subject.Session.ID, RevokeOtherSessions: revokeOthers,
+		})
+		if err != nil {
+			return err
+		}
 		event, err := service.newManagementEvent(
 			subject,
 			auditv1.ActionIAMPasswordChanged,
@@ -149,6 +154,8 @@ func (service *Authority) ChangePassword(
 		response, err = transaction.ChangePassword(transactionContext, PasswordMutation{
 			OrganizationID:       subject.Subject.Organization.ID,
 			PrincipalID:          subject.Subject.Principal.ID,
+			SessionID:            subject.Subject.Session.ID,
+			RevokeOtherSessions:  revokeOthers,
 			ExpectedPasswordHash: stored,
 			NewPasswordHash:      replacement,
 			AuditEvent:           event,

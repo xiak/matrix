@@ -862,7 +862,7 @@ func assertIAMLookupBoundaries(
 	); err != nil {
 		t.Fatalf("read IAM readiness: %v", err)
 	}
-	if !ready || schemaVersion != 2 || checkedAt.IsZero() {
+	if !ready || schemaVersion != 3 || checkedAt.IsZero() {
 		t.Fatalf("IAM readiness ready=%t schema=%d checked=%s", ready, schemaVersion, checkedAt)
 	}
 	var tenantID, principalID, passwordHash, organizationStatus, principalStatus string
@@ -943,7 +943,7 @@ func assertIAMUninitialized(t *testing.T, ctx context.Context, iamAPI *pgx.Conn)
 	); err != nil {
 		t.Fatalf("read uninitialized IAM readiness: %v", err)
 	}
-	if ready || schemaVersion != 2 || checkedAt.IsZero() {
+	if ready || schemaVersion != 3 || checkedAt.IsZero() {
 		t.Fatalf("uninitialized IAM readiness ready=%t schema=%d checked=%s", ready, schemaVersion, checkedAt)
 	}
 }
@@ -1668,9 +1668,18 @@ func assertIAMAuthorizationCatalog(
 	passwordEvent := authorityAuditEvent("event-catalog-password", fixture.TenantID, fixture.Administrator, auditv1.ActionIAMPasswordChanged)
 	passwordEvent.Actor = auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(fixture.Administrator)}
 	passwordEvent.OccurredAt = passwordTime.UTC()
-	if _, err := passwordTransaction.Exec(ctx, "SELECT * FROM iam.change_password($1,$2,$3,$4,$5::jsonb)",
+	sessionEvent := authorityAuditEvent("event-catalog-session", fixture.TenantID, "session-catalog", auditv1.ActionIAMSessionIssued)
+	sessionEvent.Actor = passwordEvent.Actor
+	sessionEvent.OccurredAt = passwordTime.UTC()
+	if _, err := passwordTransaction.Exec(ctx, "SELECT * FROM iam.issue_session($1,$2,$3,$4,$5,60,$6::jsonb)",
+		"session-catalog", string(fixture.TenantID), fixture.Administrator,
+		authorityDigest("catalog-session-lookup"), authorityDigest("catalog-session-verification"), authorityJSON(t, sessionEvent)); err != nil {
+		_ = passwordTransaction.Rollback(ctx)
+		t.Fatalf("establish the current session for catalog password replacement: %v", err)
+	}
+	if _, err := passwordTransaction.Exec(ctx, "SELECT * FROM iam.change_password($1,$2,$3,$4,$5::jsonb,$6,$7)",
 		string(fixture.TenantID), fixture.Administrator, fixture.PasswordHash,
-		strings.TrimSuffix(fixture.PasswordHash, strings.Repeat("A", 43))+strings.Repeat("B", 42)+"A", authorityJSON(t, passwordEvent)); err != nil {
+		strings.TrimSuffix(fixture.PasswordHash, strings.Repeat("A", 43))+strings.Repeat("B", 42)+"A", authorityJSON(t, passwordEvent), "session-catalog", true); err != nil {
 		_ = passwordTransaction.Rollback(ctx)
 		t.Fatalf("prepare current platform authority through the password mutation: %v", err)
 	}
