@@ -290,11 +290,34 @@ the committed credentials. The signed node runtime revision changes for this
 capability; it does not change the platform authority database profile or admit an
 unverified older node release.
 
-Stage compatible upgrades without disrupting workloads. Failed verification
-restores the previous executable/configuration; explicit N-1 rollback retains
-compatible data. Both versions read retained receipts and communicate with the
-supported control plane. Reconcile interrupted activation from sealed state,
-not directory presence. Verify certificate renewal/revocation independently.
+`mx node upgrade` stages an authenticated immediate successor before accepting
+its activation intent. The candidate must remain available in protected local
+storage if the original media disappears. `--resume` and the persistent startup
+entry use only that sealed source/destination pair and original command.
+`mx node rollback` selects only the retained, signed predecessor. Neither command
+accepts new enrollment, credentials, reserves, host paths or a platform database
+profile. The latest credential commitment survives both directions.
+
+The node running contract must also admit the upgrade/rollback journal and boot
+entry, not merely the observation protocol. This slice introduces runtime
+revision 3: revision-2 installers reject those journal actions and cannot be
+treated as compatible rollback readers. Cross-runtime-profile transitions remain
+unsupported before effects; old nodes keep their current installation. Prove a
+real signed predecessor/successor pair within the supported contract before
+claiming N-1. Same-source A/B alone remains insufficient for that claim.
+
+Activation authenticates both exact native service owners and the closed old/new
+startup definitions before changing either. Replace the protected boot source
+atomically without removing its registration links; admit only those two known
+loaded definitions while reconciling a lost reload reply. Reconcile only the node
+and collector, retaining every Docker workload, executor receipt and credential.
+Failed candidate verification restores and verifies the source release; an
+uncertain effect retains the same intent instead of issuing another upgrade.
+Conflicting ownership or failed recovery is explicit and never permits force,
+unknown-file overwrite or a host/engine restart. Existing lifecycle, native
+effect and signed-process owners must prove these boundaries, including removal
+of original media, interruption/replay, latest-key retention and unchanged
+workload identity/data. Certificate renewal/revocation remains independent.
 
 Retain platform backup/recovery/status/support. Node support exposes bounded
 normalized identities, release/health/capacity and correlations, not raw logs,
@@ -545,7 +568,7 @@ modes were restored after the Windows-origin transfer before verification.
 It does not prove a portable archive format or a compatible signed
 platform/node release pair.
 
-Node runtime revision 2 now supports sealed credential rotation and protected
+The verified runtime-revision-2 slice supports sealed credential rotation and protected
 control-plane credential reload. The existing lifecycle/filesystem gates prove
 old/candidate commitments, immutable target/configuration/release, rejected
 foreign services and unknown file contents, mixed-file recovery, exact replay,
@@ -651,7 +674,7 @@ no application. Its VM network was not externally disconnected, so it is not
 Gate D, a signed platform/node upgrade pair, or remote application acceptance.
 
 Next in P3-1:
-implement and prove compatible signed node upgrade/rollback, complete the
+prove the runtime-revision-3 signed node upgrade/rollback slice, complete the
 platform/node offline lifecycle and separately prove first platform authorization
 for an older installation, before remote application delivery.
 P3-1 and the complete Phase 3 release remain unaccepted.

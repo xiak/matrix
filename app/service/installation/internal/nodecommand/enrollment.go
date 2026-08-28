@@ -1,6 +1,7 @@
 package nodecommand
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -127,7 +128,8 @@ func ValidatePlan(plan Plan) error {
 		return errors.New("node plan differs from its sealed commitment")
 	}
 	if previous := plan.Previous; previous != nil {
-		if previous.Previous != nil || previous.RevokePreviousCredentials || ValidatePlan(*previous) != nil ||
+		if plan.ReleaseSource != nil || previous.Previous != nil || previous.ReleaseSource != nil ||
+			previous.RevokePreviousCredentials || ValidatePlan(*previous) != nil ||
 			previous.Root != plan.Root || previous.Configuration != config || previous.Binding == plan.Binding ||
 			previous.Bundle.ManifestSHA256 != plan.Bundle.ManifestSHA256 || previous.Trust != plan.Trust {
 			return errors.New("node rotation changes immutable enrollment or release state")
@@ -135,7 +137,21 @@ func ValidatePlan(plan Plan) error {
 	} else if plan.RevokePreviousCredentials {
 		return errors.New("node retirement lacks its sealed predecessor")
 	}
+	if source := plan.ReleaseSource; source != nil {
+		if source.ReleaseSource != nil || source.Previous != nil || source.RevokePreviousCredentials || ValidatePlan(*source) != nil ||
+			source.Root != plan.Root || source.Configuration != config || source.Binding != plan.Binding ||
+			source.Trust != plan.Trust || !bytes.Equal(source.TrustBytes, plan.TrustBytes) ||
+			source.Bundle.ManifestSHA256 == plan.Bundle.ManifestSHA256 ||
+			(!nodeReleaseSuccessor(plan.Bundle, source.Bundle) && !nodeReleaseSuccessor(source.Bundle, plan.Bundle)) {
+			return errors.New("node release change differs from its sealed identity, credentials or adjacent releases")
+		}
+	}
 	return nil
+}
+
+func nodeReleaseSuccessor(successor, predecessor release.VerifiedBundle) bool {
+	next, previous := successor.Manifest.Release, predecessor.Manifest.Release
+	return next.ID != previous.ID && next.PreviousID == previous.ID && next.PreviousVersion == previous.Version
 }
 
 func ValidateRelease(bundle release.VerifiedBundle) error {

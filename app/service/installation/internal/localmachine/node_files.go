@@ -118,27 +118,10 @@ func (effects *NodeEffects) replaceNodeCredentials(ctx context.Context, plan nod
 	if _, err := authenticateNodeRelease(plan); err != nil {
 		return err
 	}
-	before, err := nodeFiles(*plan.Previous)
-	if err != nil {
-		return nodecommand.ErrVerification
-	}
-	after, err := nodeFiles(plan)
-	if err != nil || len(before) != len(after) {
-		return nodecommand.ErrVerification
-	}
 	// Recovery may observe a mix of the two sealed sets. Prove every byte and
 	// every service owner before stopping anything or replacing the first file.
-	for index, file := range after {
-		if file.name != before[index].name {
-			return nodecommand.ErrVerification
-		}
-		actual, err := readManagedFile(plan.Root, filepath.FromSlash(file.name),
-			int64(max(len(file.content), len(before[index].content))))
-		valid := err == nil && (bytes.Equal(actual, file.content) || bytes.Equal(actual, before[index].content))
-		clear(actual)
-		if !valid {
-			return nodecommand.ErrConflict
-		}
+	if err := authenticateNodeFileTransition(*plan.Previous, plan); err != nil {
+		return err
 	}
 	if err := verifyMaterializedCollector(plan); err != nil {
 		return err
@@ -157,6 +140,8 @@ func (effects *NodeEffects) replaceNodeCredentials(ctx context.Context, plan nod
 			return err
 		}
 	}
+	before, _ := nodeFiles(*plan.Previous)
+	after, _ := nodeFiles(plan)
 	for index, file := range after {
 		if err := replaceManagedExpected(plan.Root, filepath.FromSlash(file.name), before[index].content, file.content); err != nil {
 			if errors.Is(err, errManagedOutcomeUnknown) {
@@ -168,11 +153,35 @@ func (effects *NodeEffects) replaceNodeCredentials(ctx context.Context, plan nod
 	return authenticateNodeFiles(plan)
 }
 
+func authenticateNodeFileTransition(source, target nodecommand.Plan) error {
+	before, err := nodeFiles(source)
+	if err != nil || source.Root != target.Root {
+		return nodecommand.ErrVerification
+	}
+	after, err := nodeFiles(target)
+	if err != nil || len(before) != len(after) {
+		return nodecommand.ErrVerification
+	}
+	for index, file := range after {
+		if file.name != before[index].name {
+			return nodecommand.ErrVerification
+		}
+		actual, err := readManagedFile(target.Root, filepath.FromSlash(file.name),
+			int64(max(len(file.content), len(before[index].content))))
+		valid := err == nil && (bytes.Equal(actual, file.content) || bytes.Equal(actual, before[index].content))
+		clear(actual)
+		if !valid {
+			return nodecommand.ErrConflict
+		}
+	}
+	return nil
+}
+
 // FinalizeRotation runs only after the new commitment is durable. Each unlink
 // is exact, authenticated and replayable; no directory tree or operator input
 // is deleted. A later rotation must finish this cleanup before staging more keys.
 func (effects *NodeEffects) FinalizeRotation(ctx context.Context, plan nodecommand.Plan, command lifecycle.Command) error {
-	plan.Previous, plan.RevokePreviousCredentials = nil, false
+	plan.Previous, plan.ReleaseSource, plan.RevokePreviousCredentials = nil, nil, false
 	if effects == nil || ctx == nil || command.Action != lifecycle.ActionRotateCredentials ||
 		command.InputDigest != plan.Binding.ConfigurationDigest || command.ExpectedConfigurationDigest == command.InputDigest {
 		return nodecommand.ErrVerification
@@ -235,7 +244,7 @@ func collectorDeclaration(plan nodecommand.Plan) (release.File, error) {
 // The signed release stays owner-only. Only this reverified executable copy
 // is made readable/executable in a private service mount namespace; its parent
 // remains private and no credential directory is made traversable.
-func materializeCollector(plan nodecommand.Plan) error {
+func materializeCollector(plan nodecommand.Plan, source *nodecommand.Plan) error {
 	bundle, err := authenticateNodeRelease(plan)
 	if err != nil {
 		return err
@@ -251,8 +260,18 @@ func materializeCollector(plan nodecommand.Plan) error {
 	if err != nil {
 		return nodecommand.ErrConflict
 	}
+	replacing := false
 	if _, err := os.Lstat(target); err == nil {
-		return verifyMaterializedCollector(plan)
+		if err := verifyMaterializedCollector(plan); err == nil {
+			return nil
+		}
+		if source == nil || source.Root != plan.Root || verifyMaterializedCollector(*source) != nil {
+			return nodecommand.ErrConflict
+		}
+		if _, err := authenticateNodeRelease(*source); err != nil {
+			return err
+		}
+		replacing = true
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nodecommand.ErrConflict
 	}
@@ -288,14 +307,29 @@ func materializeCollector(plan nodecommand.Plan) error {
 	if err != nil || uint64(written) != declaration.Size || "sha256:"+hex.EncodeToString(hasher.Sum(nil)) != declaration.SHA256 {
 		return nodecommand.ErrVerification
 	}
-	if output.Chmod(0o555) != nil || output.Sync() != nil || output.Close() != nil {
+	mode := os.FileMode(0o555)
+	if runtime.GOOS == "windows" {
+		// Windows has no POSIX executable mode; its read-only bit would prevent
+		// atomic replacement in filesystem gates. Native execution is Linux-only.
+		mode = 0o755
+	}
+	if output.Chmod(mode) != nil || output.Sync() != nil || output.Close() != nil {
 		return nodecommand.ErrUnavailable
 	}
-	if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
-		return nodecommand.ErrConflict
-	}
-	if os.Rename(partial, target) != nil {
-		return nodecommand.ErrUnavailable
+	if replacing {
+		if verifyMaterializedCollector(*source) != nil {
+			return nodecommand.ErrConflict
+		}
+		if err := durableReplaceManaged(partial, target, filepath.Dir(target)); err != nil {
+			return nodecommand.ErrOutcomeUnknown
+		}
+	} else {
+		if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
+			return nodecommand.ErrConflict
+		}
+		if os.Rename(partial, target) != nil {
+			return nodecommand.ErrUnavailable
+		}
 	}
 	published = true
 	if syncManagedDirectory(filepath.Dir(target)) != nil {

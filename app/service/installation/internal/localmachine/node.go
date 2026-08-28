@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -139,6 +140,17 @@ func (effects *NodeEffects) ApplyPhase(ctx context.Context, plan nodecommand.Pla
 			return effects.replaceNodeCredentials(ctx, plan)
 		}
 	}
+	if plan.ReleaseSource != nil {
+		switch phase {
+		case lifecycle.PhasePreflight:
+			if err := authenticateNodeFiles(*plan.ReleaseSource); err != nil {
+				return err
+			}
+			return effects.preflightNodeWithSpace(ctx, *plan.ReleaseSource, 128*1024)
+		case lifecycle.PhaseConfiguring, lifecycle.PhaseRollingBack:
+			return effects.replaceNodeRelease(ctx, plan)
+		}
+	}
 	switch phase {
 	case lifecycle.PhasePreflight:
 		return effects.preflightNode(ctx, plan)
@@ -185,7 +197,60 @@ func (effects *NodeEffects) ApplyPhase(ctx context.Context, plan nodecommand.Pla
 	}
 }
 
+// StageRelease authenticates the installed source before caching an immutable
+// candidate. It must not activate units, credentials or a different boot entry.
+func (effects *NodeEffects) StageRelease(ctx context.Context, plan nodecommand.Plan) error {
+	if ctx == nil || effects == nil || effects.supervisor == nil || effects.docker == nil {
+		return nodecommand.ErrUnavailable
+	}
+	if plan.ReleaseSource == nil || effects.ValidateEnrollment(plan) != nil {
+		return nodecommand.ErrVerification
+	}
+	if err := authenticateNodeFiles(*plan.ReleaseSource); err != nil {
+		return err
+	}
+	minimum := max(plan.Bundle.Manifest.MinimumFreeBytes, uint64(128*1024))
+	destination := filepath.Join(plan.Root, filepath.FromSlash(layout.ReleaseDirectory(plan.Bundle.Manifest.Release.ID)))
+	if _, err := os.Lstat(destination); err == nil {
+		if _, err := authenticateNodeRelease(plan); err != nil {
+			return err
+		}
+		// A retained predecessor is already on disk. Reserve only bounded
+		// journal/boot writes, not another complete release's staging budget.
+		minimum = 128 * 1024
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nodecommand.ErrConflict
+	}
+	if err := effects.preflightNodeWithSpace(ctx, *plan.ReleaseSource, minimum); err != nil {
+		return err
+	}
+	registered, err := effects.supervisor.InspectStartup(ctx, nativeNodeStartup(*plan.ReleaseSource))
+	if err != nil || !registered {
+		if err != nil {
+			return err
+		}
+		return nodecommand.ErrPrecondition
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if _, err := ensureManagedDirectory(plan.Root, "releases"); err != nil {
+		return nodecommand.ErrConflict
+	}
+	if _, err := release.StageDirectory(plan.Bundle, plan.TrustBytes, destination); err != nil {
+		if errors.Is(err, release.ErrStageConflict) {
+			return nodecommand.ErrConflict
+		}
+		return nodecommand.ErrVerification
+	}
+	return ctx.Err()
+}
+
 func (effects *NodeEffects) preflightNode(ctx context.Context, plan nodecommand.Plan) error {
+	return effects.preflightNodeWithSpace(ctx, plan, plan.Bundle.Manifest.MinimumFreeBytes)
+}
+
+func (effects *NodeEffects) preflightNodeWithSpace(ctx context.Context, plan nodecommand.Plan, minimum uint64) error {
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" || validateManagedRoot(plan.Root) != nil {
 		return nodecommand.ErrPrecondition
 	}
@@ -204,7 +269,7 @@ func (effects *NodeEffects) preflightNode(ctx context.Context, plan nodecommand.
 	if err != nil {
 		return errors.Join(nodecommand.ErrUnavailable, err)
 	}
-	if available < plan.Bundle.Manifest.MinimumFreeBytes {
+	if available < minimum {
 		return nodecommand.ErrPrecondition
 	}
 	output, _, err := effects.docker.Run(ctx, nil, "version", "--format", "{{json .Server}}")
@@ -302,6 +367,21 @@ func (effects *NodeEffects) Rollback(ctx context.Context, plan nodecommand.Plan)
 	if effects == nil || effects.supervisor == nil || ctx == nil {
 		return nodecommand.ErrUnavailable
 	}
+	if plan.ReleaseSource != nil {
+		// A failed candidate is not a failed enrollment: restore and verify the
+		// authenticated source, retaining the latest credential commitment.
+		restored, candidate := *plan.ReleaseSource, plan
+		candidate.ReleaseSource = nil
+		restored.ReleaseSource = &candidate
+		if err := effects.replaceNodeRelease(ctx, restored); err != nil {
+			return err
+		}
+		restored.ReleaseSource = nil
+		if err := effects.ApplyPhase(ctx, restored, lifecycle.PhaseStarting); err != nil {
+			return err
+		}
+		return effects.verifyNode(ctx, restored)
+	}
 	services := nativeNodeServices(plan)
 	startup := nativeNodeStartup(plan)
 	if _, err := effects.supervisor.InspectStartup(ctx, startup); err != nil {
@@ -326,6 +406,63 @@ func (effects *NodeEffects) Rollback(ctx context.Context, plan nodecommand.Plan)
 	return nil
 }
 
+func (effects *NodeEffects) replaceNodeRelease(ctx context.Context, plan nodecommand.Plan) error {
+	if plan.ReleaseSource == nil || nodecommand.ValidatePlan(plan) != nil {
+		return nodecommand.ErrVerification
+	}
+	source := *plan.ReleaseSource
+	for _, candidate := range []nodecommand.Plan{source, plan} {
+		if _, err := authenticateNodeRelease(candidate); err != nil {
+			return err
+		}
+	}
+	if err := authenticateNodeFileTransition(source, plan); err != nil {
+		return err
+	}
+	// The shared collector copy may be either authenticated payload after an
+	// interrupted transition. Never stop a process to overwrite unknown bytes.
+	stopServices := verifyMaterializedCollector(plan) != nil
+	if stopServices {
+		if err := verifyMaterializedCollector(source); err != nil {
+			return err
+		}
+	}
+	before, after := nativeNodeServices(source), nativeNodeServices(plan)
+	owned := make([]nativeService, len(after))
+	for index, service := range after {
+		if service.name != before[index].name {
+			return nodecommand.ErrVerification
+		}
+		_, err := effects.supervisor.Inspect(ctx, service)
+		if errors.Is(err, nodecommand.ErrConflict) {
+			if _, err = effects.supervisor.Inspect(ctx, before[index]); err != nil {
+				return err
+			}
+			owned[index], stopServices = before[index], true
+		} else if err != nil {
+			return err
+		} else {
+			owned[index] = service
+		}
+	}
+	// This first mutation proves the closed old/new disk and loaded boot unit,
+	// including links, masks and drop-ins. The registration links never vanish.
+	if err := effects.supervisor.ReplaceStartup(ctx, nativeNodeStartup(source), nativeNodeStartup(plan)); err != nil {
+		return err
+	}
+	if stopServices {
+		for index := len(owned) - 1; index >= 0; index-- {
+			if err := effects.supervisor.Stop(ctx, owned[index]); err != nil {
+				return err
+			}
+		}
+	}
+	if err := materializeCollector(plan, &source); err != nil {
+		return err
+	}
+	return authenticateNodeFiles(plan)
+}
+
 func configureNode(plan nodecommand.Plan) error {
 	if _, err := authenticateNodeRelease(plan); err != nil {
 		return err
@@ -333,7 +470,7 @@ func configureNode(plan nodecommand.Plan) error {
 	if _, err := ensureManagedDirectory(plan.Root, filepath.FromSlash(layout.ExecutorRoot)); err != nil {
 		return errors.Join(nodecommand.ErrConflict, err)
 	}
-	if err := materializeCollector(plan); err != nil {
+	if err := materializeCollector(plan, nil); err != nil {
 		return err
 	}
 	files, err := nodeFiles(plan)
@@ -448,6 +585,7 @@ type nodeSupervisor interface {
 	Stop(context.Context, nativeService) error
 	InspectStartup(context.Context, nativeStartup) (bool, error)
 	RegisterStartup(context.Context, nativeStartup) error
+	ReplaceStartup(context.Context, nativeStartup, nativeStartup) error
 	UnregisterStartup(context.Context, nativeStartup) error
 }
 

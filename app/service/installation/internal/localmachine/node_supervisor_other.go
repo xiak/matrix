@@ -27,6 +27,9 @@ func (localNodeSupervisor) InspectStartup(context.Context, nativeStartup) (bool,
 func (localNodeSupervisor) RegisterStartup(context.Context, nativeStartup) error {
 	return nodecommand.ErrPrecondition
 }
+func (localNodeSupervisor) ReplaceStartup(context.Context, nativeStartup, nativeStartup) error {
+	return nodecommand.ErrPrecondition
+}
 func (localNodeSupervisor) UnregisterStartup(context.Context, nativeStartup) error {
 	return nodecommand.ErrPrecondition
 }

@@ -71,12 +71,23 @@ func NodeManifest() release.Manifest {
 // root. It is intentionally metadata-only and never substitutes for a real
 // offline release in runtime acceptance.
 func WriteSequence(base string, count int, profiles ...release.DatabaseProfile) ([]Fixture, error) {
+	return writeSequence(base, count, profiles, false)
+}
+
+func WriteNodeSequence(base string, count int) ([]Fixture, error) {
+	return writeSequence(base, count, nil, true)
+}
+
+func writeSequence(base string, count int, profiles []release.DatabaseProfile, node bool) ([]Fixture, error) {
 	if count < 1 || count > 8 || (len(profiles) != 0 && len(profiles) != count) {
 		return nil, errors.New("fixture release sequence length is invalid")
 	}
 	manifests := make([]release.Manifest, count)
 	for index := range manifests {
 		manifest := Manifest()
+		if node {
+			manifest = NodeManifest()
+		}
 		if len(profiles) != 0 {
 			manifest.Database = profiles[index]
 			if manifest.Database.SchemaVersion != 0 {
@@ -126,6 +137,11 @@ func writeManifests(base string, manifests []release.Manifest) ([]Fixture, error
 		for fileIndex := range manifest.Files {
 			declaration := &manifest.Files[fileIndex]
 			content := []byte("matrix-release-payload:" + declaration.Path)
+			if manifest.Kind == release.NodeManifestKind && declaration.Executable {
+				// Distinct signed node fixture bytes exercise file replacement,
+				// including the materialized collector, not just manifest metadata.
+				content = append(content, []byte(":"+manifest.Release.ID)...)
+			}
 			mode := os.FileMode(0o600)
 			if declaration.Executable {
 				mode = 0o700

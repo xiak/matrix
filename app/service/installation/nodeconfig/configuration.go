@@ -26,7 +26,7 @@ const (
 	ConfigurationKind = "NodeConfiguration"
 	EnrollmentKind    = "NodeEnrollment"
 	MaximumBytes      = 64 * 1024
-	RuntimeRevision   = 2
+	RuntimeRevision   = 3
 	MinimumSystemd    = 249
 	MinimumDocker     = "27.5.1"
 	MinimumCompose    = "2.33.0"

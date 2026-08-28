@@ -143,7 +143,7 @@ func TestPlatformCredentialRecoveryHasExplicitResumeAndNoAuthoritySelectors(t *t
 }
 
 func TestNodeCommandsStaySeparateAndRequireProtectedEnrollment(t *testing.T) {
-	for _, action := range []string{"install", "start", "verify", "status", "rotate-credentials"} {
+	for _, action := range []string{"install", "start", "verify", "status", "rotate-credentials", "upgrade", "rollback"} {
 		t.Run(action, func(t *testing.T) {
 			var request Request
 			backend := backendFunc(func(_ context.Context, value Request) (Result, error) {
@@ -156,6 +156,9 @@ func TestNodeCommandsStaySeparateAndRequireProtectedEnrollment(t *testing.T) {
 			}
 			if action == "rotate-credentials" {
 				args = append(args, "--configuration", "/private/enrollment.json", "--expected-configuration-digest", "sha256:"+strings.Repeat("a", 64))
+			}
+			if action == "upgrade" {
+				args = append(args, "--bundle", "/media/node-successor")
 			}
 			var out, errOut bytes.Buffer
 			exit := Run(context.Background(), args, Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut}, backend)
@@ -180,6 +183,13 @@ func TestNodeCommandsStaySeparateAndRequireProtectedEnrollment(t *testing.T) {
 		{"platform", "rotate-credentials", "--root", "/srv/platform"},
 		{"node", "rotate-credentials", "--root", "/srv/node", "--configuration", "/private/enrollment.json"},
 		{"node", "rotate-credentials", "--root", "/srv/node", "--configuration", "/private/enrollment.json", "--expected-configuration-digest", "../credentials"},
+		{"node", "upgrade", "--root", "/srv/node"},
+		{"node", "upgrade", "--root", "/srv/node", "--bundle", "/media/node", "--resume"},
+		{"node", "upgrade", "--root", "/srv/node", "--bundle", "/media/node", "--configuration", "/private/enrollment.json"},
+		{"node", "upgrade", "--root", "/srv/node", "--bundle", "/media/node", "--trust-key", "/private/other-trust"},
+		{"node", "rollback", "--root", "/srv/node", "--bundle", "/media/node"},
+		{"node", "rollback", "--root", "/srv/node", "--backup", "backup-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		{"node", "rollback", "--root", "/srv/node", "--force"},
 	} {
 		var out, errOut bytes.Buffer
 		exit := Run(context.Background(), append([]string{"--format", "json"}, args...), Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut},
@@ -190,6 +200,21 @@ func TestNodeCommandsStaySeparateAndRequireProtectedEnrollment(t *testing.T) {
 		if exit != ExitInvalidInput || out.Len() != 0 {
 			t.Fatalf("invalid node input accepted: %v", args)
 		}
+	}
+}
+
+func TestNodeUpgradeResumeUsesOnlyItsSealedIntent(t *testing.T) {
+	var out, errOut bytes.Buffer
+	exit := Run(context.Background(), []string{"node", "upgrade", "--root", "/srv/node", "--resume"},
+		Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut},
+		backendFunc(func(_ context.Context, request Request) (Result, error) {
+			if request != (Request{Subject: SubjectNode, Action: lifecycle.ActionUpgrade, Root: "/srv/node", Resume: true}) {
+				t.Fatal("node upgrade resume accepted another release selector")
+			}
+			return Result{State: "READY"}, nil
+		}))
+	if exit != ExitSuccess || errOut.Len() != 0 {
+		t.Fatal("node upgrade resume did not reach its purpose-bound backend")
 	}
 }
 

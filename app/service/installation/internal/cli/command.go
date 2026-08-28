@@ -107,7 +107,8 @@ func NewCommand(streams Streams, backend Backend) (*cobra.Command, error) {
 	}
 	root.AddCommand(node)
 	for _, action := range []lifecycle.Action{lifecycle.ActionInstall, lifecycle.ActionStart,
-		lifecycle.ActionVerify, lifecycle.ActionStatus, lifecycle.ActionRotateCredentials} {
+		lifecycle.ActionVerify, lifecycle.ActionStatus, lifecycle.ActionRotateCredentials,
+		lifecycle.ActionUpgrade, lifecycle.ActionRollback} {
 		node.AddCommand(newLifecycleCommand(streams.Out, backend, SubjectNode, action, &format))
 	}
 	return root, nil
@@ -178,6 +179,9 @@ func bindCommandFlags(flags *pflag.FlagSet, subject Subject, action lifecycle.Ac
 		}
 	case lifecycle.ActionUpgrade:
 		flags.StringVar(&options.bundle, "bundle", "", "verified offline release bundle directory")
+		if subject == SubjectNode {
+			flags.BoolVar(&options.resume, "resume", false, "resume only the sealed node release change")
+		}
 	case lifecycle.ActionRecover:
 		flags.StringVar(&options.backupID, "backup", "", "verified installation-owned backup identity")
 	case lifecycle.ActionSupport:
@@ -213,7 +217,11 @@ func validateCommandFlags(subject Subject, action lifecycle.Action, options *com
 			return errors.New("protected node enrollment is required")
 		}
 	case lifecycle.ActionUpgrade:
-		if strings.TrimSpace(options.bundle) == "" {
+		if subject == SubjectNode {
+			if options.resume == (strings.TrimSpace(options.bundle) != "") || (options.resume && options.bundle != "") {
+				return errors.New("offline node bundle or explicit resume is required, but not both")
+			}
+		} else if strings.TrimSpace(options.bundle) == "" {
 			return errors.New("offline bundle is required")
 		}
 	case lifecycle.ActionRecover:
@@ -235,6 +243,10 @@ func commandDescription(subject Subject, action lifecycle.Action) string {
 			return "Install an authenticated offline node release"
 		case lifecycle.ActionStart:
 			return "Start or reconcile the sealed node and collector services"
+		case lifecycle.ActionUpgrade:
+			return "Activate a compatible signed successor without changing node enrollment"
+		case lifecycle.ActionRollback:
+			return "Restore the retained signed predecessor with current node credentials"
 		case lifecycle.ActionVerify:
 			return "Verify the sealed node and fresh collector observations"
 		case lifecycle.ActionStatus:

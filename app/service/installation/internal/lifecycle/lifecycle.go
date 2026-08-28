@@ -104,6 +104,7 @@ type Journal struct {
 	ReleaseTrust           ReleaseTrust `json:"releaseTrust"`
 	Node                   *NodeBinding `json:"node,omitempty"`
 	NodeCredentialRotation *Command     `json:"nodeCredentialRotation,omitempty"`
+	NodeReleaseChange      *Execution   `json:"nodeReleaseChange,omitempty"`
 	CurrentReleaseID       string       `json:"currentReleaseId,omitempty"`
 	CurrentReleaseDigest   string       `json:"currentReleaseDigest,omitempty"`
 	PreviousRelease        string       `json:"previousReleaseId,omitempty"`
@@ -359,6 +360,13 @@ func ValidateJournal(journal Journal) error {
 			problems = append(problems, errors.New("committed node credential rotation is invalid"))
 		}
 	}
+	if change := journal.NodeReleaseChange; change != nil {
+		if journal.Node == nil || (change.Command.Action != ActionUpgrade && change.Command.Action != ActionRollback) ||
+			change.Outcome != OutcomeSucceeded || validateExecution(*change, true, true) != nil ||
+			validateCompletedPointers(journal, *change) != nil {
+			problems = append(problems, errors.New("committed node release change is invalid"))
+		}
+	}
 	if (journal.CurrentReleaseID == "") != (journal.CurrentReleaseDigest == "") ||
 		(journal.CurrentReleaseID != "" && (!releaseIDPattern.MatchString(journal.CurrentReleaseID) ||
 			!digestPattern.MatchString(journal.CurrentReleaseDigest))) {
@@ -384,6 +392,11 @@ func ValidateJournal(journal Journal) error {
 	if journal.Last != nil {
 		problems = append(problems, validateExecution(*journal.Last, true, journal.Node != nil))
 		problems = append(problems, validateCompletedPointers(journal, *journal.Last))
+		if journal.Node != nil && journal.Last.Outcome == OutcomeSucceeded &&
+			(journal.Last.Command.Action == ActionUpgrade || journal.Last.Command.Action == ActionRollback) &&
+			!sameNodeReleaseChange(journal.NodeReleaseChange, journal.Last) {
+			problems = append(problems, errors.New("completed node release change lost its replay receipt"))
+		}
 	}
 	if journal.Active != nil && journal.Last != nil &&
 		journal.Active.Command.ID == journal.Last.Command.ID {
@@ -393,16 +406,16 @@ func ValidateJournal(journal Journal) error {
 }
 
 // ValidateNodeTransition keeps the node's lifetime identity immutable while
-// admitting only the final transition of its already sealed credential command.
+// admitting only the final transition of its already sealed installation command.
 // Persistence uses this boundary instead of treating any version increment as
 // permission to replace a credential commitment or its replay receipt.
 func ValidateNodeTransition(before, after Journal) error {
-	invalid := errors.New("node commitment change lacks a verified rotation transition")
+	invalid := errors.New("node installation change lacks a sealed terminal transition")
 	if (before.Node == nil) != (after.Node == nil) {
 		return invalid
 	}
 	if before.Node == nil {
-		if after.NodeCredentialRotation != nil {
+		if after.NodeCredentialRotation != nil || after.NodeReleaseChange != nil {
 			return invalid
 		}
 		return nil
@@ -414,22 +427,37 @@ func ValidateNodeTransition(before, after Journal) error {
 	if before.NodeCredentialRotation != nil && after.NodeCredentialRotation != nil {
 		receiptEqual = *before.NodeCredentialRotation == *after.NodeCredentialRotation
 	}
-	if before.Node.ConfigurationDigest == after.Node.ConfigurationDigest && receiptEqual {
+	releaseEqual := sameNodeReleaseChange(before.NodeReleaseChange, after.NodeReleaseChange)
+	pointersEqual := before.CurrentReleaseID == after.CurrentReleaseID && before.CurrentReleaseDigest == after.CurrentReleaseDigest &&
+		before.PreviousRelease == after.PreviousRelease && before.PreviousReleaseDigest == after.PreviousReleaseDigest
+	if before.Node.ConfigurationDigest == after.Node.ConfigurationDigest && receiptEqual && releaseEqual && pointersEqual {
 		return nil
 	}
-	if before.Active == nil || before.Active.Command.Action != ActionRotateCredentials ||
-		before.Active.Phase != PhaseCommitting || after.Active != nil || after.Last == nil {
+	if before.Active == nil || before.Active.Phase != PhaseCommitting || after.Active != nil || after.Last == nil {
+		return invalid
+	}
+	switch before.Active.Command.Action {
+	case ActionInstall, ActionRotateCredentials, ActionUpgrade, ActionRollback:
+	default:
 		return invalid
 	}
 	expected, err := Advance(before, before.Active.Command.ID, PhaseReady, after.Last.CompletedAt)
-	if err != nil || *expected.Node != *after.Node || expected.NodeCredentialRotation == nil ||
-		after.NodeCredentialRotation == nil || *expected.NodeCredentialRotation != *after.NodeCredentialRotation ||
+	rotationEqual := expected.NodeCredentialRotation == nil && after.NodeCredentialRotation == nil
+	if expected.NodeCredentialRotation != nil && after.NodeCredentialRotation != nil {
+		rotationEqual = *expected.NodeCredentialRotation == *after.NodeCredentialRotation
+	}
+	if err != nil || expected.Node == nil || *expected.Node != *after.Node || !rotationEqual ||
+		!sameNodeReleaseChange(expected.NodeReleaseChange, after.NodeReleaseChange) ||
 		*expected.Last != *after.Last || expected.CurrentReleaseID != after.CurrentReleaseID ||
 		expected.CurrentReleaseDigest != after.CurrentReleaseDigest || expected.PreviousRelease != after.PreviousRelease ||
 		expected.PreviousReleaseDigest != after.PreviousReleaseDigest {
 		return invalid
 	}
 	return nil
+}
+
+func sameNodeReleaseChange(left, right *Execution) bool {
+	return left == nil && right == nil || left != nil && right != nil && *left == *right
 }
 
 func validateCommand(command Command, node bool) error {
@@ -469,7 +497,7 @@ func validateCommand(command Command, node bool) error {
 	case ActionUpgrade:
 		if !digestPattern.MatchString(command.InputDigest) ||
 			!releaseIDPattern.MatchString(command.TargetReleaseID) ||
-			!backupIDPattern.MatchString(command.BackupID) || command.BackupDigest != "" {
+			(!node && !backupIDPattern.MatchString(command.BackupID)) || (node && command.BackupID != "") || command.BackupDigest != "" {
 			return errors.New("upgrade command input is invalid")
 		}
 	case ActionRecover:
@@ -645,8 +673,10 @@ func sameCommandInput(left, right Command) bool {
 func workflow(action Action, node bool) []Phase {
 	if node {
 		switch action {
-		case ActionInstall:
+		case ActionInstall, ActionUpgrade:
 			return []Phase{PhasePreflight, PhaseStaging, PhaseConfiguring, PhaseStarting, PhaseVerifying, PhaseCommitting, PhaseReady}
+		case ActionRollback:
+			return []Phase{PhaseRollingBack, PhaseStarting, PhaseVerifying, PhaseCommitting, PhaseReady}
 		case ActionRotateCredentials:
 			return []Phase{PhasePreflight, PhaseStaging, PhaseConfiguring, PhaseStarting, PhaseVerifying, PhaseCommitting, PhaseReady}
 		case ActionStart:
@@ -705,6 +735,10 @@ func phaseIndex(phases []Phase, phase Phase) int {
 }
 
 func applySuccessfulPointerChange(journal *Journal, execution Execution) {
+	if journal.Node != nil && (execution.Command.Action == ActionUpgrade || execution.Command.Action == ActionRollback) {
+		change := execution
+		journal.NodeReleaseChange = &change
+	}
 	switch execution.Command.Action {
 	case ActionRotateCredentials:
 		binding := *journal.Node

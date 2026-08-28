@@ -66,6 +66,241 @@ func TestNodeInstallResumesUnknownStartupAndPinsEnrollment(t *testing.T) {
 	}
 }
 
+func TestNodeUpgradeResumesProtectedCandidateAndRollbackKeepsLatestCredentials(t *testing.T) {
+	fixtures, err := releasetest.WriteNodeSequence(t.TempDir(), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, input := nodeRequest(t, fixtures[0])
+	effects := &nodeEffects{}
+	backend, _ := NewBackend(effects)
+	if _, err := backend.Run(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	before := nodeState(t, request.Root)
+	effects.failPhase, effects.failure = lifecycle.PhaseStarting, ErrOutcomeUnknown
+	upgrade := cli.Request{Subject: cli.SubjectNode, Action: lifecycle.ActionUpgrade, Root: request.Root, Bundle: fixtures[1].Root}
+	_, err = backend.Run(context.Background(), upgrade)
+	assertNodeFault(t, err, "EFFECT_OUTCOME_UNKNOWN")
+	pending := nodeState(t, request.Root)
+	if pending.Active == nil || pending.Active.Command.Action != lifecycle.ActionUpgrade || pending.CurrentReleaseID != before.CurrentReleaseID ||
+		pending.Active.DestinationDigest != fixtures[1].ManifestDigest || pending.Active.Command.BackupID != "" {
+		t.Fatal("node upgrade did not retain its exact source/candidate intent")
+	}
+	// The operator's original media is no longer available. Resume must use the
+	// authenticated, installation-owned staged bundle, not these input paths.
+	if err := os.Rename(fixtures[1].Root, fixtures[1].Root+"-unmounted"); err != nil {
+		t.Fatal(err)
+	}
+	result, err := backend.Run(context.Background(), cli.Request{Subject: cli.SubjectNode, Action: lifecycle.ActionStart, Root: request.Root})
+	if err != nil || result.State != "READY" || result.ReleaseID != fixtures[1].Manifest.Release.ID || result.CorrelationID != pending.Active.Command.ID {
+		t.Fatalf("node upgrade resume: %#v / %v", result, err)
+	}
+	if state := nodeState(t, request.Root); state.PreviousRelease != before.CurrentReleaseID || *state.Node != *before.Node {
+		t.Fatal("node upgrade lost predecessor or credential commitment")
+	}
+	// A read/verify command must not destroy the completed upgrade receipt.
+	if _, err := backend.Run(context.Background(), cli.Request{Action: lifecycle.ActionVerify, Root: request.Root}); err != nil {
+		t.Fatal(err)
+	}
+	result, err = backend.Run(context.Background(), cli.Request{Action: lifecycle.ActionUpgrade, Root: request.Root, Resume: true})
+	if err != nil || result.Changed || result.CorrelationID != pending.Active.Command.ID {
+		t.Fatalf("completed upgrade replay: %#v / %v", result, err)
+	}
+	if err := os.WriteFile(input.Node.PrivateKeyFile, []byte("new-key-after-upgrade"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := backend.Run(context.Background(), cli.Request{Action: lifecycle.ActionRotateCredentials, Root: request.Root,
+		Configuration: request.Configuration, ExpectedConfigurationDigest: before.Node.ConfigurationDigest, RevokePreviousCredentials: true}); err != nil {
+		t.Fatal(err)
+	}
+	latest := nodeState(t, request.Root)
+	rollback := cli.Request{Subject: cli.SubjectNode, Action: lifecycle.ActionRollback, Root: request.Root}
+	result, err = backend.Run(context.Background(), rollback)
+	if err != nil || !result.Changed || result.ReleaseID != before.CurrentReleaseID {
+		t.Fatalf("node rollback: %#v / %v", result, err)
+	}
+	rolledBack := nodeState(t, request.Root)
+	if rolledBack.PreviousRelease != "" || *rolledBack.Node != *latest.Node ||
+		*rolledBack.NodeCredentialRotation != *latest.NodeCredentialRotation {
+		t.Fatal("node rollback rewrote enrollment or retained an invalid predecessor")
+	}
+	if _, err := backend.Run(context.Background(), cli.Request{Action: lifecycle.ActionVerify, Root: request.Root}); err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := backend.Run(context.Background(), rollback)
+	if err != nil || replayed.Changed || replayed.CorrelationID != result.CorrelationID {
+		t.Fatalf("completed rollback replay: %#v / %v", replayed, err)
+	}
+	for _, phase := range effects.phases {
+		if phase == lifecycle.PhaseBackingUp || phase == lifecycle.PhaseMigrating || phase == lifecycle.PhaseLoadingImages || phase == lifecycle.PhaseRecovering {
+			t.Fatal("node release change ran platform effects")
+		}
+	}
+}
+
+func TestNodeReleaseChangesResumeEveryAcceptedPhase(t *testing.T) {
+	fixtures, err := releasetest.WriteNodeSequence(t.TempDir(), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []lifecycle.Action{lifecycle.ActionUpgrade, lifecycle.ActionRollback} {
+		phases := []lifecycle.Phase{lifecycle.PhasePreflight, lifecycle.PhaseStaging, lifecycle.PhaseConfiguring,
+			lifecycle.PhaseStarting, lifecycle.PhaseVerifying, lifecycle.PhaseCommitting}
+		if action == lifecycle.ActionRollback {
+			phases = []lifecycle.Phase{lifecycle.PhaseRollingBack, lifecycle.PhaseStarting, lifecycle.PhaseVerifying, lifecycle.PhaseCommitting}
+		}
+		for _, phase := range phases {
+			t.Run(string(action)+"/"+string(phase), func(t *testing.T) {
+				request, _ := nodeRequest(t, fixtures[0])
+				effects := &nodeEffects{}
+				backend, _ := NewBackend(effects)
+				if _, err := backend.Run(context.Background(), request); err != nil {
+					t.Fatal(err)
+				}
+				change := cli.Request{Action: lifecycle.ActionUpgrade, Root: request.Root, Bundle: fixtures[1].Root}
+				if action == lifecycle.ActionRollback {
+					if _, err := backend.Run(context.Background(), change); err != nil {
+						t.Fatal(err)
+					}
+					change.Action, change.Bundle = action, ""
+				}
+				before := nodeState(t, request.Root)
+				effects.failPhase, effects.failure = phase, ErrOutcomeUnknown
+				_, err := backend.Run(context.Background(), change)
+				assertNodeFault(t, err, "EFFECT_OUTCOME_UNKNOWN")
+				pending := nodeState(t, request.Root)
+				if pending.Active == nil || pending.Active.Phase != phase || pending.CurrentReleaseID != before.CurrentReleaseID {
+					t.Fatal("interrupted activation advanced its release pointer")
+				}
+				// Lost resident processes do not require another command or source
+				// media, even when the journal was already verifying/committing.
+				effects.ready = false
+				result, err := backend.Run(context.Background(), cli.Request{Action: lifecycle.ActionStart, Root: request.Root})
+				if err != nil || result.State != "READY" || result.ReleaseID != pending.Active.Destination ||
+					result.CorrelationID != pending.Active.Command.ID || *nodeState(t, request.Root).Node != *before.Node {
+					t.Fatalf("resume sealed activation: %#v / %v", result, err)
+				}
+			})
+		}
+	}
+}
+
+func TestNodeFailedUpgradeRetainsRecoveryIntentAndCannotFabricateReadiness(t *testing.T) {
+	fixtures, err := releasetest.WriteNodeSequence(t.TempDir(), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, _ := nodeRequest(t, fixtures[0])
+	effects := &nodeEffects{}
+	backend, _ := NewBackend(effects)
+	if _, err := backend.Run(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	before := nodeState(t, request.Root)
+	effects.failPhase, effects.failure, effects.rollbackFailure = lifecycle.PhaseVerifying, ErrVerification, ErrOutcomeUnknown
+	_, err = backend.Run(context.Background(), cli.Request{Action: lifecycle.ActionUpgrade, Root: request.Root, Bundle: fixtures[1].Root})
+	assertNodeFault(t, err, "EFFECT_OUTCOME_UNKNOWN")
+	pending := nodeState(t, request.Root)
+	if pending.Active == nil || pending.Active.Phase != lifecycle.PhaseRollingBack || pending.CurrentReleaseID != before.CurrentReleaseID || pending.NodeReleaseChange != nil {
+		t.Fatal("unverified recovery fabricated a completed release")
+	}
+	_, err = backend.Run(context.Background(), cli.Request{Action: lifecycle.ActionRollback, Root: request.Root})
+	assertNodeFault(t, err, "INSTALLATION_COMMAND_CONFLICT")
+	effects.rollbackFailure = nil
+	_, err = backend.Run(context.Background(), cli.Request{Action: lifecycle.ActionUpgrade, Root: request.Root, Resume: true})
+	assertNodeFault(t, err, "NODE_VERIFICATION_FAILED")
+	restored := nodeState(t, request.Root)
+	if restored.Active != nil || restored.Last.Outcome != lifecycle.OutcomeRolledBack ||
+		restored.Last.Command.ID != pending.Active.Command.ID || restored.CurrentReleaseID != before.CurrentReleaseID ||
+		*restored.Node != *before.Node || !effects.ready {
+		t.Fatal("source recovery lost its original identity, credentials or failure")
+	}
+	_, err = backend.Run(context.Background(), cli.Request{Action: lifecycle.ActionUpgrade, Root: request.Root, Resume: true})
+	assertNodeFault(t, err, "NODE_RELEASE_CHANGE_NOT_FOUND")
+}
+
+func TestNodeReleaseChangeRejectsWrongLineageAndTamperedStagedIntent(t *testing.T) {
+	fixtures, err := releasetest.WriteNodeSequence(t.TempDir(), 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, _ := nodeRequest(t, fixtures[0])
+	effects := &nodeEffects{}
+	backend, _ := NewBackend(effects)
+	if _, err := backend.Run(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	before, calls := journalBytes(t, request.Root), len(effects.phases)
+	_, err = backend.Run(context.Background(), cli.Request{Action: lifecycle.ActionUpgrade, Root: request.Root, Bundle: fixtures[2].Root})
+	assertNodeFault(t, err, "NODE_RELEASE_TRANSITION_UNSUPPORTED")
+	if !bytes.Equal(before, journalBytes(t, request.Root)) || calls != len(effects.phases) {
+		t.Fatal("non-adjacent release created an activation intent")
+	}
+	effects.failPhase, effects.failure = lifecycle.PhaseConfiguring, ErrOutcomeUnknown
+	_, err = backend.Run(context.Background(), cli.Request{Action: lifecycle.ActionUpgrade, Root: request.Root, Bundle: fixtures[1].Root})
+	assertNodeFault(t, err, "EFFECT_OUTCOME_UNKNOWN")
+	before, calls = journalBytes(t, request.Root), len(effects.phases)
+	if err := os.WriteFile(filepath.Join(request.Root, "releases", fixtures[1].Manifest.Release.ID, "bin", "mx"), []byte("not-the-signed-executable"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, err = backend.Run(context.Background(), cli.Request{Action: lifecycle.ActionStart, Root: request.Root})
+	assertNodeFault(t, err, "INSTALLATION_RELEASE_INVALID")
+	if !bytes.Equal(before, journalBytes(t, request.Root)) || calls != len(effects.phases) {
+		t.Fatal("tampered pending release caused effects or selected another release")
+	}
+}
+
+func TestNodeReleasePlanRejectsDifferentRuntimeAndCredentialAuthority(t *testing.T) {
+	fixtures, err := releasetest.WriteNodeSequence(t.TempDir(), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, _ := nodeRequest(t, fixtures[0])
+	configuration, material, err := enrollment(request.Root, request.Configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer material.Clear()
+	trustBytes, trust, _ := release.ReadTrustRootFile(request.TrustKey)
+	sourceBundle, _ := release.VerifyDirectory(fixtures[0].Root, trustBytes)
+	targetBundle, _ := release.VerifyDirectory(fixtures[1].Root, trustBytes)
+	binding, _ := Binding(configuration, material)
+	source := Plan{Root: request.Root, Bundle: sourceBundle, Configuration: configuration, Credentials: material,
+		Trust: trust, TrustBytes: trustBytes, Binding: binding}
+	plan := source
+	plan.Bundle, plan.ReleaseSource = targetBundle, &source
+	if err := ValidatePlan(plan); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"runtime", "topology", "credential", "trust", "enrollment", "nested source"} {
+		t.Run(mode, func(t *testing.T) {
+			value := plan
+			switch mode {
+			case "runtime":
+				profile := *value.Bundle.Manifest.Node
+				profile.RuntimeRevision--
+				value.Bundle.Manifest.Node = &profile
+			case "topology":
+				value.Bundle.Manifest.TopologyDigest = "sha256:" + strings.Repeat("d", 64)
+			case "credential":
+				value.Credentials.PrivateKey = []byte("a-different-current-credential")
+				value.Binding, _ = Binding(value.Configuration, value.Credentials)
+			case "trust":
+				value.Trust.KeyID = "another-signer"
+			case "enrollment":
+				value.Configuration.ControllerID = "another-controller"
+				value.Binding, _ = Binding(value.Configuration, value.Credentials)
+			case "nested source":
+				value.ReleaseSource = &value
+			}
+			if ValidatePlan(value) == nil {
+				t.Fatal("release change admitted another runtime or authority")
+			}
+		})
+	}
+}
+
 func TestNodeStartResumesOnlyConfiguredInstallWithoutNewEnrollment(t *testing.T) {
 	for _, phase := range []lifecycle.Phase{lifecycle.PhasePreflight, lifecycle.PhaseStaging,
 		lifecycle.PhaseConfiguring, lifecycle.PhaseStarting, lifecycle.PhaseVerifying, lifecycle.PhaseCommitting} {
@@ -369,13 +604,14 @@ func TestNodeCredentialRotationRejectsChangedIdentityAndStaleInputBeforeIntent(t
 }
 
 type nodeEffects struct {
-	invalid        bool
-	ready          bool
-	failPhase      lifecycle.Phase
-	failure        error
-	cleanupFailure error
-	phases         []lifecycle.Phase
-	rollbacks      int
+	invalid         bool
+	ready           bool
+	failPhase       lifecycle.Phase
+	failure         error
+	cleanupFailure  error
+	rollbackFailure error
+	phases          []lifecycle.Phase
+	rollbacks       int
 }
 
 func (effects *nodeEffects) ValidateEnrollment(Plan) error {
@@ -432,9 +668,19 @@ func (effects *nodeEffects) ApplyPhase(_ context.Context, plan Plan, phase lifec
 	}
 	return nil
 }
-func (effects *nodeEffects) Rollback(context.Context, Plan) error {
+func (effects *nodeEffects) StageRelease(_ context.Context, plan Plan) error {
+	if err := os.MkdirAll(filepath.Join(plan.Root, "releases"), 0o700); err != nil {
+		return err
+	}
+	_, err := release.StageDirectory(plan.Bundle, plan.TrustBytes, filepath.Join(plan.Root, "releases", plan.Bundle.Manifest.Release.ID))
+	return err
+}
+func (effects *nodeEffects) Rollback(_ context.Context, plan Plan) error {
 	effects.rollbacks++
-	effects.ready = false
+	if effects.rollbackFailure != nil {
+		return effects.rollbackFailure
+	}
+	effects.ready = plan.ReleaseSource != nil
 	return nil
 }
 func (effects *nodeEffects) Observe(context.Context, Plan) (bool, error) { return effects.ready, nil }
@@ -468,11 +714,19 @@ func readFixtureNodeCredentials(root, prefix string) (nodeconfig.Configuration, 
 	return config, material, nil
 }
 
-func nodeRequest(t *testing.T) (cli.Request, nodeconfig.Enrollment) {
+func nodeRequest(t *testing.T, supplied ...releasetest.Fixture) (cli.Request, nodeconfig.Enrollment) {
 	t.Helper()
-	fixture, err := releasetest.WriteNode(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
+	var fixture releasetest.Fixture
+	if len(supplied) == 1 {
+		fixture = supplied[0]
+	} else if len(supplied) == 0 {
+		var err error
+		fixture, err = releasetest.WriteNode(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		t.Fatal("node request accepts one release fixture")
 	}
 	base := t.TempDir()
 	root := filepath.Join(base, "node")

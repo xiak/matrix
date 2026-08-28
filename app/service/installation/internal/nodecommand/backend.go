@@ -38,6 +38,7 @@ type Plan struct {
 	Credentials               Credentials
 	Binding                   lifecycle.NodeBinding
 	Previous                  *Plan
+	ReleaseSource             *Plan
 	RevokePreviousCredentials bool
 }
 
@@ -45,6 +46,9 @@ func (plan Plan) Clear() {
 	plan.Credentials.Clear()
 	if plan.Previous != nil {
 		plan.Previous.Credentials.Clear()
+	}
+	if plan.ReleaseSource != nil {
+		plan.ReleaseSource.Credentials.Clear()
 	}
 }
 
@@ -56,6 +60,7 @@ type Effects interface {
 	ReadInstallation(string) (nodeconfig.Configuration, Credentials, error)
 	ReadRotation(string, string) (nodeconfig.Configuration, Credentials, error)
 	FinalizeRotation(context.Context, Plan, lifecycle.Command) error
+	StageRelease(context.Context, Plan) error
 	ApplyPhase(context.Context, Plan, lifecycle.Phase) error
 	Rollback(context.Context, Plan) error
 	Observe(context.Context, Plan) (bool, error)
@@ -89,6 +94,8 @@ func (backend *Backend) Run(ctx context.Context, request cli.Request) (cli.Resul
 		return backend.install(ctx, request)
 	case lifecycle.ActionRotateCredentials:
 		return backend.rotateCredentials(ctx, request)
+	case lifecycle.ActionUpgrade, lifecycle.ActionRollback:
+		return backend.changeRelease(ctx, request)
 	case lifecycle.ActionStart, lifecycle.ActionStatus, lifecycle.ActionVerify:
 		return backend.installed(ctx, request)
 	default:
@@ -201,6 +208,17 @@ func (backend *Backend) installed(ctx context.Context, request cli.Request) (res
 		defer plan.Clear()
 		return backend.drive(ctx, session, plan)
 	}
+	if state.Active != nil && (state.Active.Command.Action == lifecycle.ActionUpgrade || state.Active.Command.Action == lifecycle.ActionRollback) {
+		if request.Action != lifecycle.ActionStart {
+			return cli.Result{}, fault(cli.FaultConflict, "INSTALLATION_COMMAND_CONFLICT")
+		}
+		plan, err := backend.activeReleasePlan(session.Root(), state)
+		if err != nil {
+			return cli.Result{}, err
+		}
+		defer plan.Clear()
+		return backend.drive(ctx, session, plan)
+	}
 	if state.Last != nil && state.Last.Outcome == lifecycle.OutcomeManualIntervention {
 		if request.Action == lifecycle.ActionStatus {
 			return resultFor(state, false), nil
@@ -249,6 +267,10 @@ func (backend *Backend) releasePlan(root string, state lifecycle.Journal) (Plan,
 	if releaseID == "" && state.Active != nil {
 		releaseID, releaseDigest = state.Active.Command.TargetReleaseID, state.Active.Command.InputDigest
 	}
+	return backend.releasePlanAt(root, state, releaseID, releaseDigest)
+}
+
+func (backend *Backend) releasePlanAt(root string, state lifecycle.Journal, releaseID, releaseDigest string) (Plan, error) {
 	trustBytes, trust, err := release.ReadTrustRootFile(filepath.Join(root, filepath.FromSlash(layout.ReleaseTrust)))
 	if err != nil || trust.KeyID != state.ReleaseTrust.KeyID || trust.PublicKeyFingerprint != state.ReleaseTrust.Fingerprint {
 		return Plan{}, fault(cli.FaultVerification, "INSTALLATION_RELEASE_INVALID")
@@ -274,6 +296,157 @@ func (backend *Backend) installedPlan(root string, state lifecycle.Journal) (Pla
 	if config.Identity.InstallationID != state.InstallationID || ValidatePlan(plan) != nil || backend.effects.ValidateEnrollment(plan) != nil {
 		material.Clear()
 		return Plan{}, fault(cli.FaultVerification, "NODE_CONFIGURATION_INVALID")
+	}
+	return plan, nil
+}
+
+func (backend *Backend) changeRelease(ctx context.Context, request cli.Request) (result cli.Result, resultErr error) {
+	if request.Configuration != "" || request.TrustKey != "" || request.BackupID != "" ||
+		request.ExpectedConfigurationDigest != "" || request.RevokePreviousCredentials ||
+		(request.Action == lifecycle.ActionUpgrade && request.Resume == (request.Bundle != "")) ||
+		(request.Action == lifecycle.ActionRollback && (request.Resume || request.Bundle != "")) {
+		return cli.Result{}, fault(cli.FaultInvalidArgument, "NODE_RELEASE_INPUT_INVALID")
+	}
+	session, err := journal.AcquireExisting(ctx, request.Root)
+	if err != nil {
+		return cli.Result{}, journalFault(err)
+	}
+	defer closeSession(session, &result, &resultErr)
+	state, err := readNodeJournal(session)
+	if err != nil {
+		return cli.Result{}, err
+	}
+	if state.CurrentReleaseID == "" {
+		return cli.Result{}, fault(cli.FaultPrecondition, "NODE_NOT_INSTALLED")
+	}
+	if state.Last != nil && state.Last.Outcome == lifecycle.OutcomeManualIntervention {
+		return cli.Result{}, fault(cli.FaultPrecondition, "NODE_MANUAL_INTERVENTION_REQUIRED")
+	}
+	if state.Active != nil {
+		if state.Active.Command.Action != request.Action {
+			return cli.Result{}, fault(cli.FaultConflict, "INSTALLATION_COMMAND_CONFLICT")
+		}
+		plan, err := backend.activeReleasePlan(session.Root(), state)
+		if err != nil {
+			return cli.Result{}, err
+		}
+		defer plan.Clear()
+		if request.Bundle != "" {
+			candidate, err := release.VerifyDirectory(request.Bundle, plan.TrustBytes)
+			if err != nil || ValidateRelease(candidate) != nil {
+				return cli.Result{}, fault(cli.FaultVerification, "NODE_RELEASE_INVALID")
+			}
+			if candidate.Manifest.Release.ID != plan.Bundle.Manifest.Release.ID || candidate.ManifestSHA256 != plan.Bundle.ManifestSHA256 {
+				return cli.Result{}, fault(cli.FaultConflict, "INSTALLATION_COMMAND_CONFLICT")
+			}
+		}
+		return backend.drive(ctx, session, plan)
+	}
+	source, err := backend.installedPlan(session.Root(), state)
+	if err != nil {
+		return cli.Result{}, err
+	}
+	defer source.Clear()
+	if request.Resume || (request.Action == lifecycle.ActionRollback && state.PreviousRelease == "") {
+		return backend.replayReleaseChange(ctx, state, source, request.Action)
+	}
+	var candidate release.VerifiedBundle
+	if request.Action == lifecycle.ActionUpgrade {
+		candidate, err = release.VerifyDirectory(request.Bundle, source.TrustBytes)
+		if err != nil || ValidateRelease(candidate) != nil {
+			return cli.Result{}, fault(cli.FaultVerification, "NODE_RELEASE_INVALID")
+		}
+		if candidate.Manifest.Release.ID == state.CurrentReleaseID {
+			if candidate.ManifestSHA256 != state.CurrentReleaseDigest {
+				return cli.Result{}, fault(cli.FaultConflict, "RELEASE_CONTENT_CONFLICT")
+			}
+			return backend.replayReleaseChange(ctx, state, source, request.Action)
+		}
+		if !nodeReleaseSuccessor(candidate, source.Bundle) {
+			return cli.Result{}, fault(cli.FaultPrecondition, "NODE_RELEASE_TRANSITION_UNSUPPORTED")
+		}
+	} else {
+		previous, err := backend.releasePlanAt(session.Root(), state, state.PreviousRelease, state.PreviousReleaseDigest)
+		if err != nil {
+			return cli.Result{}, err
+		}
+		candidate = previous.Bundle
+		if !nodeReleaseSuccessor(source.Bundle, candidate) {
+			return cli.Result{}, fault(cli.FaultPrecondition, "NODE_RELEASE_TRANSITION_UNSUPPORTED")
+		}
+	}
+	plan := source
+	plan.Bundle, plan.ReleaseSource = candidate, &source
+	if ValidatePlan(plan) != nil || backend.effects.ValidateEnrollment(plan) != nil {
+		return cli.Result{}, fault(cli.FaultVerification, "NODE_RELEASE_INVALID")
+	}
+	if state.NodeCredentialRotation != nil {
+		if err := backend.effects.FinalizeRotation(ctx, source, *state.NodeCredentialRotation); err != nil {
+			return cli.Result{}, fault(cli.FaultUnavailable, "NODE_CREDENTIAL_CLEANUP_PENDING")
+		}
+	}
+	// Only authenticated immutable release bytes are staged before accepting an
+	// activation intent. No process, boot entry or credential may change here.
+	// Thus every accepted command can resume without the operator's media.
+	if err := backend.effects.StageRelease(ctx, plan); err != nil {
+		if ctx.Err() != nil {
+			return cli.Result{}, fault(cli.FaultInterrupted, "COMMAND_INTERRUPTED")
+		}
+		return cli.Result{}, effectFault(err)
+	}
+	staged, err := backend.releasePlanAt(session.Root(), state, candidate.Manifest.Release.ID, candidate.ManifestSHA256)
+	if err != nil {
+		return cli.Result{}, err
+	}
+	plan.Bundle = staged.Bundle
+	command, err := backend.command(state, request.Action)
+	if err != nil {
+		return cli.Result{}, err
+	}
+	if request.Action == lifecycle.ActionUpgrade {
+		command.InputDigest, command.TargetReleaseID = candidate.ManifestSHA256, candidate.Manifest.Release.ID
+	}
+	started, err := lifecycle.Start(state, command)
+	if err != nil {
+		return cli.Result{}, journalFault(err)
+	}
+	if err := session.Write(started.Journal); err != nil {
+		return cli.Result{}, journalFault(err)
+	}
+	return backend.drive(ctx, session, plan)
+}
+
+func (backend *Backend) replayReleaseChange(ctx context.Context, state lifecycle.Journal, plan Plan, action lifecycle.Action) (cli.Result, error) {
+	receipt := state.NodeReleaseChange
+	if receipt == nil || receipt.Command.Action != action {
+		return cli.Result{}, fault(cli.FaultPrecondition, "NODE_RELEASE_CHANGE_NOT_FOUND")
+	}
+	result, err := backend.observe(ctx, state, plan)
+	result.CorrelationID = receipt.Command.ID
+	return result, err
+}
+
+func (backend *Backend) activeReleasePlan(root string, state lifecycle.Journal) (Plan, error) {
+	source, err := backend.installedPlan(root, state)
+	if err != nil {
+		return Plan{}, err
+	}
+	execution := state.Active
+	if execution == nil || (execution.Command.Action != lifecycle.ActionUpgrade && execution.Command.Action != lifecycle.ActionRollback) {
+		source.Clear()
+		return Plan{}, fault(cli.FaultConflict, "INSTALLATION_COMMAND_CONFLICT")
+	}
+	plan, err := backend.releasePlanAt(root, state, execution.Destination, execution.DestinationDigest)
+	if err != nil {
+		source.Clear()
+		return Plan{}, err
+	}
+	plan.Configuration, plan.Credentials, plan.ReleaseSource = source.Configuration, source.Credentials, &source
+	if ValidatePlan(plan) != nil || backend.effects.ValidateEnrollment(plan) != nil ||
+		(execution.Command.Action == lifecycle.ActionUpgrade && !nodeReleaseSuccessor(plan.Bundle, source.Bundle)) ||
+		(execution.Command.Action == lifecycle.ActionRollback && !nodeReleaseSuccessor(source.Bundle, plan.Bundle)) {
+		plan.Clear()
+		return Plan{}, fault(cli.FaultVerification, "NODE_RELEASE_INVALID")
 	}
 	return plan, nil
 }
@@ -441,15 +614,17 @@ func (backend *Backend) drive(ctx context.Context, session *journal.Session, pla
 		execution := *state.Active
 		if resuming && (execution.Phase == lifecycle.PhaseVerifying || execution.Phase == lifecycle.PhaseCommitting) &&
 			(execution.Command.Action == lifecycle.ActionInstall || execution.Command.Action == lifecycle.ActionStart ||
-				execution.Command.Action == lifecycle.ActionRotateCredentials) {
+				execution.Command.Action == lifecycle.ActionRotateCredentials || execution.Command.Action == lifecycle.ActionUpgrade ||
+				execution.Command.Action == lifecycle.ActionRollback) {
 			// An interrupted late phase may resume after a kernel boot, which
 			// discards transient units. Reconcile the same sealed services before
 			// verifying them; do not rewind the journal or issue another command.
 			err = backend.effects.ApplyPhase(ctx, plan, lifecycle.PhaseStarting)
 		}
 		resuming = false
+		recoverSource := execution.Phase == lifecycle.PhaseRollingBack && execution.FailureCode != ""
 		if err == nil {
-			if execution.Phase == lifecycle.PhaseRollingBack {
+			if recoverSource {
 				err = backend.effects.Rollback(ctx, plan)
 			} else {
 				err = backend.effects.ApplyPhase(ctx, plan, execution.Phase)
@@ -473,7 +648,7 @@ func (backend *Backend) drive(ctx context.Context, session *journal.Session, pla
 			continue
 		}
 		next, ok := lifecycle.NextPhase(state)
-		if execution.Phase == lifecycle.PhaseRollingBack {
+		if recoverSource {
 			next, ok = lifecycle.PhaseReady, true
 		}
 		if !ok {
@@ -483,7 +658,7 @@ func (backend *Backend) drive(ctx context.Context, session *journal.Session, pla
 		if err != nil || session.Write(advanced) != nil {
 			return cli.Result{}, fault(cli.FaultInternal, "INSTALLATION_STATE_COMMIT_FAILED")
 		}
-		if execution.Phase == lifecycle.PhaseRollingBack {
+		if recoverSource {
 			class := cli.FaultVerification
 			switch execution.FailureCode {
 			case "NODE_PREFLIGHT_FAILED":
@@ -537,7 +712,7 @@ func closeSession(session *journal.Session, result *cli.Result, resultErr *error
 }
 
 func resultFor(state lifecycle.Journal, changed bool) cli.Result {
-	result := cli.Result{State: "NOT_READY", ReleaseID: state.CurrentReleaseID, Changed: changed,
+	result := cli.Result{State: "NOT_READY", ReleaseID: state.CurrentReleaseID, PreviousID: state.PreviousRelease, Changed: changed,
 		ExecutionTargetID: state.Node.ExecutionTargetID, ConfigurationDigest: state.Node.ConfigurationDigest}
 	if state.Active != nil {
 		result.State, result.CorrelationID = string(state.Active.Phase), state.Active.Command.ID

@@ -125,6 +125,42 @@ func (localNodeSupervisor) RegisterStartup(ctx context.Context, startup nativeSt
 	return nil
 }
 
+func (localNodeSupervisor) ReplaceStartup(ctx context.Context, before, after nativeStartup) error {
+	connection, bounded, cancel, err := nodeSystemdConnection(ctx)
+	if err != nil {
+		return errors.Join(nodecommand.ErrOutcomeUnknown, err)
+	}
+	defer cancel()
+	defer connection.Close()
+	ready, err := inspectNativeStartupChange(bounded, connection, after, &before)
+	if err != nil || ready {
+		return err
+	}
+	relative, err := filepath.Rel(after.root, after.unitFile)
+	if err != nil {
+		return nodecommand.ErrConflict
+	}
+	if err := replaceManagedExpected(after.root, relative, nativeStartupUnit(before), nativeStartupUnit(after)); err != nil {
+		if errors.Is(err, errManagedOutcomeUnknown) {
+			return nodecommand.ErrOutcomeUnknown
+		}
+		return nodecommand.ErrConflict
+	}
+	// The same two registration links remain in place throughout. A lost reload
+	// reply admits only the sealed old/new loaded definitions on the next run.
+	if err := connection.ReloadContext(bounded); err != nil {
+		return errors.Join(nodecommand.ErrOutcomeUnknown, err)
+	}
+	ready, err = inspectNativeStartup(bounded, connection, after)
+	if err != nil {
+		return err
+	}
+	if !ready {
+		return nodecommand.ErrOutcomeUnknown
+	}
+	return nil
+}
+
 func (localNodeSupervisor) UnregisterStartup(ctx context.Context, startup nativeStartup) error {
 	connection, bounded, cancel, err := nodeSystemdConnection(ctx)
 	if err != nil {
@@ -207,6 +243,13 @@ func verifyNativeStartupLink(path, destination string) (bool, error) {
 }
 
 func inspectNativeStartup(ctx context.Context, connection *systemd.Conn, startup nativeStartup) (bool, error) {
+	return inspectNativeStartupChange(ctx, connection, startup, nil)
+}
+
+func inspectNativeStartupChange(ctx context.Context, connection *systemd.Conn, startup nativeStartup, source *nativeStartup) (bool, error) {
+	if source != nil && (source.root != startup.root || source.unitFile != startup.unitFile || source.service.name != startup.service.name) {
+		return false, nodecommand.ErrConflict
+	}
 	relative, err := filepath.Rel(startup.root, startup.unitFile)
 	if err != nil {
 		return false, nodecommand.ErrConflict
@@ -215,12 +258,20 @@ func inspectNativeStartup(ctx context.Context, connection *systemd.Conn, startup
 	if err != nil {
 		return false, nodecommand.ErrConflict
 	}
+	targetFile := false
 	if exists {
 		expected := nativeStartupUnit(startup)
-		actual, err := readManagedFile(startup.root, relative, int64(len(expected)))
-		if err != nil || !bytes.Equal(actual, expected) {
+		previous := expected
+		if source != nil {
+			previous = nativeStartupUnit(*source)
+		}
+		actual, err := readManagedFile(startup.root, relative, int64(max(len(expected), len(previous))))
+		targetFile = err == nil && bytes.Equal(actual, expected)
+		if err != nil || (!targetFile && !bytes.Equal(actual, previous)) {
 			return false, nodecommand.ErrConflict
 		}
+	} else if source != nil {
+		return false, nodecommand.ErrConflict
 	}
 	links := nativeStartupLinks(startup)
 	linked := 0
@@ -232,6 +283,9 @@ func inspectNativeStartup(ctx context.Context, connection *systemd.Conn, startup
 		if present {
 			linked++
 		}
+	}
+	if source != nil && linked != len(links) {
+		return false, nodecommand.ErrConflict
 	}
 	// Inspect the manager's real search paths before reloading. A pending
 	// mask, drop-in, generated unit or dependency must not become ours simply
@@ -285,14 +339,16 @@ func inspectNativeStartup(ctx context.Context, connection *systemd.Conn, startup
 	}
 	// systemd reports the registered unit-file path, not the symlink's target.
 	// Both that exact link and its protected source were authenticated above.
-	if properties["FragmentPath"] != links[0] || verifyNativeServiceProperties(properties, startup.service, false) != nil {
+	targetLoaded := verifyNativeServiceProperties(properties, startup.service, false) == nil
+	if properties["FragmentPath"] != links[0] || (!targetLoaded &&
+		(source == nil || verifyNativeServiceProperties(properties, source.service, false) != nil)) {
 		return false, nodecommand.ErrConflict
 	}
 	var names []string
 	if dbus.Store([]any{properties["Names"]}, &names) != nil || !slices.Equal(names, []string{startup.service.name}) {
 		return false, nodecommand.ErrConflict
 	}
-	return linked == len(links) && properties["NeedDaemonReload"] == false && properties["UnitFileState"] == "enabled", nil
+	return targetFile && targetLoaded && linked == len(links) && properties["NeedDaemonReload"] == false && properties["UnitFileState"] == "enabled", nil
 }
 
 func (localNodeSupervisor) Inspect(ctx context.Context, service nativeService) (nativeState, error) {
@@ -413,7 +469,23 @@ func (localNodeSupervisor) Stop(ctx context.Context, service nativeService) erro
 	if err := connection.ResetFailedUnitContext(bounded, service.name); err != nil && !nativeUnitMissing(err) {
 		return nodecommand.ErrOutcomeUnknown
 	}
-	return nil
+	// Release the exact transient definition before another signed release can
+	// reuse its stable name. A stopped but still loaded old definition is not
+	// permission to mutate its properties or start it as the new release.
+	for {
+		state, err := inspectNativeService(bounded, connection, service)
+		if err != nil {
+			return err
+		}
+		if state == nativeMissing {
+			return nil
+		}
+		select {
+		case <-bounded.Done():
+			return nodecommand.ErrOutcomeUnknown
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 }
 
 func awaitNativeService(ctx context.Context, connection *systemd.Conn, service nativeService, running bool) error {

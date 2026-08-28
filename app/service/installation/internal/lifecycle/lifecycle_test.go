@@ -76,7 +76,7 @@ func TestNodeLifecycleCannotEnterPlatformEffects(t *testing.T) {
 	if state.CurrentReleaseID != releaseA || state.Node == nil || *state.Node != binding {
 		t.Fatal("node completion lost its release or enrollment commitment")
 	}
-	for _, action := range []Action{ActionUpgrade, ActionRollback, ActionRecover, ActionRecoverCredentials, ActionBackup, ActionSupport} {
+	for _, action := range []Action{ActionRecover, ActionRecoverCredentials, ActionBackup, ActionSupport} {
 		if _, err := Start(state, lifecycleCommand(action, releaseB, '2', 10)); err == nil {
 			t.Fatal("node accepted a platform lifecycle action")
 		}
@@ -91,6 +91,90 @@ func TestNodeLifecycleCannotEnterPlatformEffects(t *testing.T) {
 	}
 	if _, err := Start(installedJournal(t), lifecycleCommand(ActionStart, "", 0, 11)); err == nil {
 		t.Fatal("node startup entered a platform root")
+	}
+}
+
+func TestNodeReleaseTransitionsRetainEnrollmentAndLatestCredentials(t *testing.T) {
+	base := newJournal(t)
+	binding := NodeBinding{ExecutionTargetID: "target-a", ConfigurationDigest: digest('a')}
+	state, err := NewNode(base.InstallationID, base.ReleaseTrust, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Start(state, lifecycleCommand(ActionInstall, releaseA, '1', 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state = completeActive(t, installed.Journal)
+	rotation := lifecycleCommand(ActionRotateCredentials, "", 'b', 10)
+	rotation.ExpectedConfigurationDigest, rotation.RevokePreviousCredentials = binding.ConfigurationDigest, true
+	rotated, err := Start(state, rotation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state = completeActive(t, rotated.Journal)
+	retainedBinding, retainedRotation := *state.Node, *state.NodeCredentialRotation
+	upgrade := lifecycleCommand(ActionUpgrade, releaseB, '2', 20)
+	upgrade.BackupID = ""
+	started, err := Start(state, upgrade)
+	if err != nil {
+		t.Fatalf("node upgrade rejected: %v", err)
+	}
+	if _, err := Start(started.Journal, lifecycleCommand(ActionStart, "", 0, 21)); !errors.Is(err, ErrCommandInProgress) {
+		t.Fatal("another command replaced a pending node upgrade")
+	}
+	state = started.Journal
+	for state.Active != nil {
+		switch state.Active.Phase {
+		case PhaseLoadingImages, PhaseBackingUp, PhaseMigrating, PhaseRecovering:
+			t.Fatal("node upgrade entered a platform effect")
+		}
+		next, ok := NextPhase(state)
+		if !ok {
+			t.Fatal("node upgrade cannot complete")
+		}
+		after, err := Advance(state, upgrade.ID, next, state.Active.UpdatedAt.Add(time.Second))
+		if err != nil || ValidateNodeTransition(state, after) != nil {
+			t.Fatalf("node transition invalid: %v", err)
+		}
+		state = after
+	}
+	if state.CurrentReleaseID != releaseB || state.PreviousRelease != releaseA || *state.Node != retainedBinding || *state.NodeCredentialRotation != retainedRotation {
+		t.Fatal("upgrade changed enrollment, latest credentials, or predecessor")
+	}
+	started, err = Start(state, lifecycleCommand(ActionRollback, "", 0, 30))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state = completeActive(t, started.Journal)
+	if state.CurrentReleaseID != releaseA || state.PreviousRelease != "" || *state.Node != retainedBinding || *state.NodeCredentialRotation != retainedRotation {
+		t.Fatal("rollback restored old enrollment/credentials or failed to select the predecessor")
+	}
+	withBackup := lifecycleCommand(ActionUpgrade, releaseB, '2', 40)
+	if _, err := Start(state, withBackup); err == nil {
+		t.Fatal("node upgrade accepted a platform backup selector")
+	}
+}
+
+func TestFailedNodeUpgradeRetainsSourceUntilRecoveryIsVerified(t *testing.T) {
+	base := installedJournal(t)
+	base.Node = &NodeBinding{ExecutionTargetID: "target-a", ConfigurationDigest: digest('a')}
+	command := lifecycleCommand(ActionUpgrade, releaseB, '2', 10)
+	command.BackupID = ""
+	started, err := Start(base, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, err := Fail(started.Journal, command.ID, "NODE_VERIFICATION_FAILED", started.Execution.UpdatedAt.Add(time.Second))
+	if err != nil || failed.Active == nil || failed.Active.Phase != PhaseRollingBack || failed.CurrentReleaseID != releaseA {
+		t.Fatal("failed node upgrade did not retain source and rollback intent")
+	}
+	if _, err := Start(failed, lifecycleCommand(ActionRollback, "", 0, 20)); !errors.Is(err, ErrCommandInProgress) {
+		t.Fatal("explicit rollback replaced automatic recovery")
+	}
+	recovered, err := Advance(failed, command.ID, PhaseReady, failed.Active.UpdatedAt.Add(time.Second))
+	if err != nil || recovered.Last.Outcome != OutcomeRolledBack || recovered.CurrentReleaseID != releaseA || *recovered.Node != *base.Node {
+		t.Fatal("verified recovery changed source or node identity")
 	}
 }
 

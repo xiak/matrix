@@ -56,7 +56,8 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 		t.Fatal("signed node trust root is unavailable")
 	}
 	verified, err := release.VerifyDirectory(bundle, trustBytes)
-	if err != nil || verified.Manifest.Kind != release.NodeManifestKind {
+	if err != nil || verified.Manifest.Kind != release.NodeManifestKind || verified.Manifest.Node == nil ||
+		verified.Manifest.Node.RuntimeRevision != nodeconfig.RuntimeRevision {
 		t.Fatal("node gate release did not authenticate")
 	}
 	installer := filepath.Join(bundle, "bin", "mx")
@@ -71,6 +72,15 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 		if bootPhase == "verify" {
 			verifyNativeBoot(t, installer, bootRoot, verified.Manifest.Release.ID)
 			return
+		}
+	}
+	var successor release.VerifiedBundle
+	if bootPhase == "" {
+		successor, err = release.VerifyDirectory(os.Getenv("MATRIX_NODE_UPGRADE_BUNDLE"), trustBytes)
+		if err != nil || successor.Manifest.Kind != release.NodeManifestKind || successor.Manifest.Node == nil ||
+			*successor.Manifest.Node != *verified.Manifest.Node || successor.Manifest.TopologyDigest != verified.Manifest.TopologyDigest ||
+			successor.Manifest.Release.PreviousID != verified.Manifest.Release.ID || successor.Manifest.Release.PreviousVersion != verified.Manifest.Release.Version {
+			t.Fatal("node gate requires an authenticated immediate successor with the same complete node runtime contract")
 		}
 	}
 	var base string
@@ -512,7 +522,7 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 		nativeUnitProperty(t, nodeUnit, "MainPID") != retainedNodePID || nativeUnitProperty(t, collectorUnit, "MainPID") != retainedCollectorPID {
 		t.Fatal("node replay lost its command, committed release or running processes")
 	}
-	t.Run("credential lifecycle retains a running workload", func(t *testing.T) {
+	t.Run("credential and release lifecycle retain a running workload", func(t *testing.T) {
 		checkWorkload := nativeRetainedWorkload(t, base, identity.InstallationID)
 		marker := "runtime/executor/credential-retained-receipt"
 		if err := os.WriteFile(filepath.Join(root, marker), []byte("accepted-node-effect"), 0o600); err != nil {
@@ -599,9 +609,10 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 		}
 		current.Store(&nextController.credentials)
 		awaitObservation(t, rotatingClient, time.Time{}, paasv1.MeasurementAvailable)
+		retiredPeers := []issuedCertificate{controller, node, renewedNode}
 		assertRetired := func() {
 			t.Helper()
-			for _, peer := range []issuedCertificate{controller, node, renewedNode} {
+			for _, peer := range retiredPeers {
 				for _, endpoint := range []string{"https://" + config.ListenAddress + nodev1.ReadinessPath, config.CollectorEndpoint + "/metrics"} {
 					retiredClient := nextAuthority.rawClient(&peer.pair)
 					response, err := retiredClient.Get(endpoint)
@@ -644,6 +655,112 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 		}
 		if data, err := os.ReadFile(enrollmentFile); err != nil || !bytes.Equal(data, enrollmentBytes) {
 			t.Fatal("rotation altered operator-owned original enrollment")
+		}
+
+		media := filepath.Join(base, "upgrade-media")
+		if _, err := release.StageDirectory(successor, trustBytes, media); err != nil {
+			t.Fatal("prepare an owned, removable successor media fixture")
+		}
+		sourceMX := filepath.Join(root, "releases", installed.ReleaseID, "bin", "mx")
+		upgradeArgs := []string{"node", "upgrade", "--root", root, "--bundle", media}
+		upgradeInterrupted := interruptNativeCommand(t, sourceMX, root, units, upgradeArgs...)
+		if err := os.Rename(media, media+"-unmounted"); err != nil {
+			t.Fatal("unmount only the fixture-owned original successor media")
+		}
+		upgradeInterrupted.resume()
+		upgraded := nativeMX(t, sourceMX, true, "node", "start", "--root", root)
+		if upgraded.State != "READY" || upgraded.ReleaseID != successor.Manifest.Release.ID || upgraded.PreviousID != installed.ReleaseID ||
+			upgraded.ConfigurationDigest != rotated.ConfigurationDigest || upgraded.CorrelationID != upgradeInterrupted.result.CorrelationID ||
+			nativeUnitProperty(t, nodeUnit, "MainPID") != upgradeInterrupted.nodePID || nativeUnitProperty(t, collectorUnit, "MainPID") != upgradeInterrupted.collectorPID {
+			t.Fatal("upgrade lost its command, signed predecessor, activated processes or current credentials")
+		}
+		targetMX := filepath.Join(root, "releases", upgraded.ReleaseID, "bin", "mx")
+		nativeMX(t, targetMX, true, "node", "verify", "--root", root)
+		if replay := nativeMX(t, targetMX, true, "node", "upgrade", "--root", root, "--resume"); replay.Changed || replay.CorrelationID != upgraded.CorrelationID {
+			t.Fatal("upgrade replay after verification lost the original completion receipt")
+		}
+		// Exercise the actual updated boot executable and sandbox without a host
+		// reboot. Healthy resident services must keep their current identities.
+		nativeSystemctl(t, "stop", startupUnit)
+		nativeSystemctl(t, "start", "--no-block", startupUnit)
+		awaitNativeStartup(t, startupUnit)
+		if nativeUnitProperty(t, nodeUnit, "MainPID") != upgradeInterrupted.nodePID || nativeUnitProperty(t, collectorUnit, "MainPID") != upgradeInterrupted.collectorPID ||
+			!strings.Contains(nativeUnitProperty(t, startupUnit, "ExecStartEx"), targetMX) {
+			t.Fatal("successor boot source did not reconcile its exact healthy processes")
+		}
+		awaitObservation(t, rotatingClient, time.Time{}, paasv1.MeasurementAvailable)
+		checkWorkload()
+
+		// Change credentials on B, then prove that executing A during rollback
+		// consumes the latest commitment, not the old installation's key set.
+		afterUpgradeAuthority := newAuthority(t)
+		afterUpgradeNode := afterUpgradeAuthority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false, x509.ExtKeyUsageClientAuth)
+		afterUpgradeCollector := afterUpgradeAuthority.issue(t, collectorURI, x509.ExtKeyUsageServerAuth, false)
+		afterUpgradeController := afterUpgradeAuthority.issue(t, controllerURI, x509.ExtKeyUsageClientAuth, false)
+		afterUpgradeFile, _ := writeEnrollment("after-upgrade", afterUpgradeNode, afterUpgradeCollector, afterUpgradeAuthority.pem)
+		latest := nativeMX(t, targetMX, true, "node", "rotate-credentials", "--root", root, "--configuration", afterUpgradeFile,
+			"--expected-configuration-digest", upgraded.ConfigurationDigest)
+		if latest.State != "READY" || latest.ConfigurationDigest == upgraded.ConfigurationDigest || latest.ReleaseID != upgraded.ReleaseID {
+			t.Fatal("post-upgrade credential retirement did not commit on B")
+		}
+		retiredPeers = append(retiredPeers, nextController, nextNode)
+		nextAuthority = afterUpgradeAuthority
+		current.Store(&afterUpgradeController.credentials)
+		awaitObservation(t, rotatingClient, time.Time{}, paasv1.MeasurementAvailable)
+		assertRetired()
+		credentialDigests := map[string][32]byte{}
+		for _, name := range []string{"node.pem", "node-key.pem", "trust.pem", "collector.pem", "collector-key.pem"} {
+			data, err := os.ReadFile(filepath.Join(root, "secrets", "node", name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			credentialDigests[name] = sha256.Sum256(data)
+			clear(data)
+		}
+		rollbackInterrupted := interruptNativeCommand(t, targetMX, root, units, "node", "rollback", "--root", root)
+		rollbackInterrupted.resume()
+		rolledBack := nativeMX(t, sourceMX, true, "node", "start", "--root", root)
+		if rolledBack.State != "READY" || rolledBack.ReleaseID != installed.ReleaseID || rolledBack.PreviousID != "" ||
+			rolledBack.ConfigurationDigest != latest.ConfigurationDigest || rolledBack.CorrelationID != rollbackInterrupted.result.CorrelationID ||
+			nativeUnitProperty(t, nodeUnit, "MainPID") != rollbackInterrupted.nodePID || nativeUnitProperty(t, collectorUnit, "MainPID") != rollbackInterrupted.collectorPID {
+			t.Fatal("interrupted rollback lost its original command or restored old credentials")
+		}
+		nativeMX(t, sourceMX, true, "node", "verify", "--root", root)
+		if replay := nativeMX(t, sourceMX, true, "node", "rollback", "--root", root); replay.Changed || replay.CorrelationID != rolledBack.CorrelationID {
+			t.Fatal("rollback replay after verification issued another intent")
+		}
+		awaitObservation(t, rotatingClient, time.Time{}, paasv1.MeasurementAvailable)
+		assertRetired()
+		checkWorkload()
+
+		// Fail real candidate readiness, not its signature. The paused owned
+		// collector cannot produce the candidate's first fresh CPU observation.
+		// Recovery must restore and verify A before reporting the failed upgrade.
+		failed := interruptNativeCommand(t, sourceMX, root, units, "node", "upgrade", "--root", root,
+			"--bundle", filepath.Join(root, "releases", upgraded.ReleaseID))
+		nativeMX(t, sourceMX, false, "node", "upgrade", "--root", root, "--resume")
+		failed.resume()
+		recovered := nativeMX(t, sourceMX, true, "node", "status", "--root", root)
+		if recovered.State != "READY" || recovered.ReleaseID != installed.ReleaseID || recovered.PreviousID != "" ||
+			recovered.ConfigurationDigest != latest.ConfigurationDigest || recovered.CorrelationID != failed.result.CorrelationID {
+			t.Fatal("failed candidate did not restore the sealed source with current credentials")
+		}
+		nativeMX(t, sourceMX, false, "node", "upgrade", "--root", root, "--resume")
+		awaitObservation(t, rotatingClient, time.Time{}, paasv1.MeasurementAvailable)
+		assertRetired()
+		checkWorkload()
+		for relative, expected := range retained {
+			actual, err := os.ReadFile(filepath.Join(root, relative))
+			if err != nil || !bytes.Equal(actual, expected) {
+				t.Fatal("node upgrade/rollback changed retained state or failed to restore exact A boot source")
+			}
+		}
+		for name, expected := range credentialDigests {
+			actual, err := os.ReadFile(filepath.Join(root, "secrets", "node", name))
+			if err != nil || sha256.Sum256(actual) != expected {
+				t.Fatal("node release change restored superseded credential bytes")
+			}
+			clear(actual)
 		}
 	})
 }
@@ -704,9 +821,14 @@ func interruptNativeCommand(t *testing.T, installer, root string, units []string
 		}
 	}
 	nativeSystemctl(t, "kill", "--kill-who=main", "--signal=STOP", units[1])
+	pausedPID := nativeUnitProperty(t, units[1], "MainPID")
 	var resumeOnce sync.Once
 	resume := func() {
-		resumeOnce.Do(func() { nativeSystemctl(t, "kill", "--kill-who=main", "--signal=CONT", units[1]) })
+		resumeOnce.Do(func() {
+			if nativeUnitProperty(t, units[1], "MainPID") == pausedPID {
+				nativeSystemctl(t, "kill", "--kill-who=main", "--signal=CONT", units[1])
+			}
+		})
 	}
 	t.Cleanup(resume)
 	nodePID, collectorPID := nativeUnitProperty(t, units[0], "MainPID"), nativeUnitProperty(t, units[1], "MainPID")
@@ -915,6 +1037,7 @@ type nativeMXResult struct {
 	State               string `json:"state"`
 	CorrelationID       string `json:"correlationId"`
 	ReleaseID           string `json:"releaseId"`
+	PreviousID          string `json:"previousId"`
 	ExecutionTargetID   string `json:"executionTargetId"`
 	Changed             bool   `json:"changed"`
 	ConfigurationDigest string `json:"configurationDigest"`

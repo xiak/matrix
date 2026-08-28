@@ -346,11 +346,96 @@ func TestNodeStartupOwnershipAndRegistrationFailuresDoNotPartiallyStart(t *testi
 	}
 }
 
-func nodeEffectPlan(t *testing.T) nodecommand.Plan {
-	t.Helper()
-	fixture, err := releasetest.WriteNode(t.TempDir())
+func TestNodeReleaseActivationResumesBootReloadAndRetainsCurrentCredentials(t *testing.T) {
+	fixtures, err := releasetest.WriteNodeSequence(t.TempDir(), 2)
 	if err != nil {
 		t.Fatal(err)
+	}
+	source := nodeEffectPlan(t, fixtures[0])
+	supervisor := &nodeSupervisorFixture{states: map[string]nativeState{}}
+	effects := NewNodeEffects(nodeVerifierFixture{})
+	effects.supervisor = supervisor
+	for _, phase := range []lifecycle.Phase{lifecycle.PhaseStaging, lifecycle.PhaseConfiguring, lifecycle.PhaseStarting} {
+		if err := effects.ApplyPhase(context.Background(), source, phase); err != nil {
+			t.Fatal(err)
+		}
+	}
+	receiptPath := filepath.Join(filepath.FromSlash(layout.ExecutorRoot), "retained-receipt")
+	if err := writeManagedOnce(source.Root, receiptPath, []byte("accepted-workload-generation")); err != nil {
+		t.Fatal(err)
+	}
+	candidate := source
+	candidate.Bundle, err = release.VerifyDirectory(fixtures[1].Root, source.TrustBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate.ReleaseSource = &source
+	if err := effects.ApplyPhase(context.Background(), candidate, lifecycle.PhaseStaging); err != nil {
+		t.Fatal(err)
+	}
+	supervisor.foreign = nativeNodeServices(candidate)[1].name
+	if err := effects.ApplyPhase(context.Background(), candidate, lifecycle.PhaseConfiguring); !errors.Is(err, nodecommand.ErrConflict) || supervisor.stops != 0 {
+		t.Fatal("release activation changed a service before rejecting foreign ownership")
+	}
+	supervisor.foreign = ""
+	supervisor.startupReloadFailure = nodecommand.ErrOutcomeUnknown
+	if err := effects.ApplyPhase(context.Background(), candidate, lifecycle.PhaseConfiguring); !errors.Is(err, nodecommand.ErrOutcomeUnknown) || supervisor.stops != 0 {
+		t.Fatalf("lost boot reload did not retain known old/new state without stopping services: %v", err)
+	}
+	for _, phase := range []lifecycle.Phase{lifecycle.PhaseConfiguring, lifecycle.PhaseStarting, lifecycle.PhaseVerifying} {
+		if err := effects.ApplyPhase(context.Background(), candidate, phase); err != nil {
+			t.Fatalf("resume node release %s: %v", phase, err)
+		}
+	}
+	if supervisor.stops != 2 || supervisor.starts != 4 || supervisor.registrations != 1 || !supervisor.registered {
+		t.Fatal("release activation recreated registrations or did not replace exactly the two owned services")
+	}
+	// Rotate credentials after the upgrade. The previous release must consume
+	// these current bytes, never an enrollment or credential snapshot from A.
+	candidate.ReleaseSource = nil
+	rotated := candidate
+	rotated.Credentials = nodecommand.Credentials{Certificate: []byte("new-node-certificate"), PrivateKey: []byte("new-node-key"),
+		Trust: []byte("new-trust"), CollectorCertificate: []byte("new-collector-certificate"), CollectorPrivateKey: []byte("new-collector-key")}
+	rotated.Binding, err = nodecommand.Binding(rotated.Configuration, rotated.Credentials)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotated.Previous, rotated.RevokePreviousCredentials = &candidate, true
+	for _, phase := range []lifecycle.Phase{lifecycle.PhaseStaging, lifecycle.PhaseConfiguring, lifecycle.PhaseStarting} {
+		if err := effects.ApplyPhase(context.Background(), rotated, phase); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rotated.Previous, rotated.RevokePreviousCredentials = nil, false
+	restored := source
+	restored.Credentials, restored.Binding, restored.ReleaseSource = rotated.Credentials, rotated.Binding, &rotated
+	for _, phase := range []lifecycle.Phase{lifecycle.PhaseRollingBack, lifecycle.PhaseStarting, lifecycle.PhaseVerifying} {
+		if err := effects.ApplyPhase(context.Background(), restored, phase); err != nil {
+			t.Fatalf("rollback with current keys %s: %v", phase, err)
+		}
+	}
+	if err := authenticateNodeFiles(restored); err != nil {
+		t.Fatal(err)
+	}
+	retained, err := readManagedFile(source.Root, receiptPath, 128)
+	if err != nil || string(retained) != "accepted-workload-generation" || supervisor.registrations != 1 {
+		t.Fatal("node release change rewrote workload state or boot registration")
+	}
+}
+
+func nodeEffectPlan(t *testing.T, supplied ...releasetest.Fixture) nodecommand.Plan {
+	t.Helper()
+	var fixture releasetest.Fixture
+	if len(supplied) == 0 {
+		var err error
+		fixture, err = releasetest.WriteNode(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else if len(supplied) == 1 {
+		fixture = supplied[0]
+	} else {
+		t.Fatal("one signed node release fixture is required")
 	}
 	trustBytes, trust, err := release.ReadTrustRootFile(fixture.TrustPath)
 	if err != nil {
@@ -392,17 +477,23 @@ func (nodeVerifierFixture) Verify(context.Context, nodeconfig.Configuration, nod
 }
 
 type nodeSupervisorFixture struct {
-	states              map[string]nativeState
-	foreign             string
-	starts, stops       int
-	registered          bool
-	registrations       int
-	registrationFailure error
+	states               map[string]nativeState
+	owners               map[string]string
+	startupOwner         string
+	startupReloadFailure error
+	foreign              string
+	starts, stops        int
+	registered           bool
+	registrations        int
+	registrationFailure  error
 }
 
 func (*nodeSupervisorFixture) Preflight(context.Context, uint64) error { return nil }
 func (fixture *nodeSupervisorFixture) InspectStartup(_ context.Context, startup nativeStartup) (bool, error) {
 	if fixture.foreign == startup.service.name {
+		return false, nodecommand.ErrConflict
+	}
+	if fixture.startupOwner != "" && fixture.startupOwner != startup.service.description {
 		return false, nodecommand.ErrConflict
 	}
 	return fixture.registered, nil
@@ -417,6 +508,7 @@ func (fixture *nodeSupervisorFixture) RegisterStartup(ctx context.Context, start
 	}
 	if !registered {
 		fixture.registered = true
+		fixture.startupOwner = startup.service.description
 		fixture.registrations++
 	}
 	return nil
@@ -428,11 +520,35 @@ func (fixture *nodeSupervisorFixture) UnregisterStartup(ctx context.Context, sta
 	fixture.registered = false
 	return nil
 }
+func (fixture *nodeSupervisorFixture) ReplaceStartup(_ context.Context, before, after nativeStartup) error {
+	if fixture.foreign == after.service.name || !fixture.registered ||
+		before.root != after.root || before.unitFile != after.unitFile || before.service.name != after.service.name ||
+		(fixture.startupOwner != before.service.description && fixture.startupOwner != after.service.description) {
+		return nodecommand.ErrConflict
+	}
+	relative, err := filepath.Rel(after.root, after.unitFile)
+	if err != nil {
+		return nodecommand.ErrConflict
+	}
+	if err := replaceManagedExpected(after.root, relative, nativeStartupUnit(before), nativeStartupUnit(after)); err != nil {
+		return nodecommand.ErrConflict
+	}
+	if fixture.startupReloadFailure != nil {
+		err := fixture.startupReloadFailure
+		fixture.startupReloadFailure = nil
+		return err
+	}
+	fixture.startupOwner = after.service.description
+	return nil
+}
 func (fixture *nodeSupervisorFixture) Inspect(_ context.Context, service nativeService) (nativeState, error) {
 	if fixture.foreign == service.name {
 		return "", nodecommand.ErrConflict
 	}
 	if state, found := fixture.states[service.name]; found {
+		if owner := fixture.owners[service.name]; owner != "" && owner != service.description {
+			return "", nodecommand.ErrConflict
+		}
 		return state, nil
 	}
 	return nativeMissing, nil
@@ -443,7 +559,11 @@ func (fixture *nodeSupervisorFixture) Start(ctx context.Context, service nativeS
 		return err
 	}
 	if state != nativeRunning {
+		if fixture.owners == nil {
+			fixture.owners = map[string]string{}
+		}
 		fixture.states[service.name] = nativeRunning
+		fixture.owners[service.name] = service.description
 		fixture.starts++
 	}
 	return nil
@@ -454,7 +574,8 @@ func (fixture *nodeSupervisorFixture) Stop(ctx context.Context, service nativeSe
 		return err
 	}
 	if state != nativeMissing && state != nativeStopped {
-		fixture.states[service.name] = nativeStopped
+		delete(fixture.states, service.name)
+		delete(fixture.owners, service.name)
 		fixture.stops++
 	}
 	return nil
