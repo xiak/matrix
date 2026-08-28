@@ -649,9 +649,22 @@ func verifyNativeBoot(t *testing.T, installer, base, releaseID string) {
 			t.Fatal("guest boot changed retained configuration, credentials or receipts")
 		}
 	}
-	status := nativeMX(t, installer, true, "node", "status", "--root", evidence.Root)
-	if status.State != "READY" || status.ReleaseID != releaseID || status.CorrelationID != evidence.CorrelationID || status.ExecutionTargetID != string(evidence.Identity.ExecutionTargetID) {
-		t.Fatal("guest boot did not preserve authenticated identity and readiness")
+	// Process startup and fresh observations are distinct. Status must remain
+	// read-only while a bounded wait obtains a current sample after boot load.
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		status := nativeMX(t, installer, true, "node", "status", "--root", evidence.Root)
+		if status.ReleaseID != releaseID || status.CorrelationID != evidence.CorrelationID ||
+			status.ExecutionTargetID != string(evidence.Identity.ExecutionTargetID) || status.Changed {
+			t.Fatal("guest boot did not preserve authenticated identity and original command")
+		}
+		if status.State == "READY" {
+			return
+		}
+		if status.State != "NOT_READY" || time.Now().After(deadline) {
+			t.Fatalf("guest boot did not obtain fresh readiness: %s", status.State)
+		}
+		<-time.After(time.Second)
 	}
 }
 
