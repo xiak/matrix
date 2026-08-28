@@ -772,7 +772,9 @@ func nativeRetainedWorkload(t *testing.T, base, installationID string) func() {
 			t.Error("remove exact owned workload fixture")
 		}
 	})
-	deadline := time.Now().Add(30 * time.Second)
+	// Database initialization is a fixture prerequisite, not a node readiness
+	// deadline. Bound the wait while allowing a half-CPU emulated guest to boot PG.
+	deadline := time.Now().Add(120 * time.Second)
 	for {
 		if _, err := docker("exec", id, "pg_isready", "-h", "127.0.0.1", "-U", "postgres"); err == nil {
 			break
