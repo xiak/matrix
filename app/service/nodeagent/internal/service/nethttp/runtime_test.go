@@ -61,8 +61,28 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 	installer := filepath.Join(bundle, "bin", "mx")
 	t.Setenv("DOCKER_HOST", "unix:///var/run/docker.sock")
 	t.Setenv("DOCKER_CONTEXT", "")
-	base := t.TempDir()
-	root := filepath.Join(base, "installation")
+	bootPhase, bootRoot := os.Getenv("MATRIX_NODE_BOOT_PHASE"), os.Getenv("MATRIX_NODE_BOOT_ROOT")
+	if bootPhase != "" {
+		if (bootPhase != "prepare" && bootPhase != "verify") || !filepath.IsAbs(bootRoot) ||
+			filepath.Clean(bootRoot) != bootRoot || !strings.HasPrefix(filepath.Base(bootRoot), "matrix-node-boot-") {
+			t.Fatal("boot gate needs a dedicated absolute fixture root and prepare/verify phase")
+		}
+		if bootPhase == "verify" {
+			verifyNativeBoot(t, installer, bootRoot, verified.Manifest.Release.ID)
+			return
+		}
+	}
+	var base string
+	if bootPhase == "prepare" {
+		base = bootRoot
+		if err := os.Mkdir(base, 0o700); err != nil {
+			t.Fatal("boot gate root already exists or cannot be created")
+		}
+	} else {
+		base = t.TempDir()
+	}
+	// Exercise literal systemd specifiers, dollar expressions and whitespace.
+	root := filepath.Join(base, "installation %node $literal")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	facts, err := localmachine.NewLocalHostProbe().Inspect(ctx, base)
 	cancel()
@@ -80,15 +100,45 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 	identity := nodev1.Identity{InstallationID: "mxi-" + hex.EncodeToString(identityEntropy[:]), ExecutionTargetID: nodeIdentity.ExecutionTargetID}
 	collectorUnit, _ := nodeconfig.ServiceName(identity, true)
 	nodeUnit, _ := nodeconfig.ServiceName(identity, false)
+	startupUnit, _ := nodeconfig.StartupServiceName(identity)
 	units := []string{nodeUnit, collectorUnit}
+	keepForBoot := false
 	var collectorRuntimeDirectory string
-	for _, unit := range units {
+	for _, unit := range append([]string{startupUnit}, units...) {
 		load := nativeUnitProperty(t, unit, "LoadState")
 		if load != "not-found" {
 			t.Fatal("node gate unit identity already exists")
 		}
 	}
 	t.Cleanup(func() {
+		if keepForBoot {
+			return
+		}
+		source := filepath.Join(root, "config", "native", startupUnit)
+		changed := false
+		for _, path := range []string{filepath.Join("/etc/systemd/system/multi-user.target.wants", startupUnit), filepath.Join("/etc/systemd/system", startupUnit)} {
+			target, err := os.Readlink(path)
+			if os.IsNotExist(err) {
+				continue
+			}
+			if err != nil || target != source {
+				t.Error("node gate refuses to remove foreign boot registration")
+				continue
+			}
+			if !changed && nativeUnitProperty(t, startupUnit, "LoadState") == "loaded" {
+				if nativeUnitProperty(t, startupUnit, "FragmentPath") != source {
+					t.Fatal("node gate refuses to stop foreign boot service")
+				}
+				nativeSystemctl(t, "stop", startupUnit)
+			}
+			if err := os.Remove(path); err != nil {
+				t.Error("remove owned boot registration")
+			}
+			changed = true
+		}
+		if changed {
+			nativeSystemctl(t, "daemon-reload")
+		}
 		for _, unit := range units {
 			description := nativeUnitProperty(t, unit, "Description")
 			if description == unit || description == "" {
@@ -226,6 +276,21 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 	}
 	firstPID := nativeUnitProperty(t, nodeUnit, "MainPID")
 	collectorPID := nativeUnitProperty(t, collectorUnit, "MainPID")
+	if nativeUnitProperty(t, startupUnit, "UnitFileState") != "enabled" || nativeUnitProperty(t, startupUnit, "Transient") != "no" {
+		t.Fatal("signed installation is not persistently registered for boot")
+	}
+	// The boot entry point must work under its actual service sandbox too.
+	nativeSystemctl(t, "start", startupUnit)
+	if nativeUnitProperty(t, startupUnit, "ActiveState") != "active" || nativeUnitProperty(t, nodeUnit, "MainPID") != firstPID ||
+		nativeUnitProperty(t, collectorUnit, "MainPID") != collectorPID {
+		t.Fatal("boot entry point failed or replaced healthy services")
+	}
+	// Starting the boot entry point records a start command; exact install
+	// replay below must leave this new journal unchanged.
+	before, err = os.ReadFile(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if firstPID == "" || firstPID == "0" || collectorPID == "" || collectorPID == "0" || nativeUnitProperty(t, collectorUnit, "DynamicUser") != "yes" {
 		t.Fatal("native supervision or separate collector UID absent")
 	}
@@ -297,6 +362,47 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 		t.Fatal("restore gate-owned staged payload")
 	}
 	clear(original)
+	// A pending drop-in is rejected even before a manager reload could make
+	// its hooks effective. No unrelated service or global drop-in is changed.
+	dropin := filepath.Join("/etc/systemd/system", startupUnit+".d")
+	if err := os.Mkdir(dropin, 0o700); err != nil {
+		t.Fatal("create fixture-owned startup override")
+	}
+	dropinFile := filepath.Join(dropin, "gate.conf")
+	t.Cleanup(func() {
+		if _, err := os.Lstat(dropinFile); err == nil {
+			if err := os.Remove(dropinFile); err != nil {
+				t.Error("remove fixture-owned boot override")
+			}
+		}
+		if _, err := os.Lstat(dropin); err == nil {
+			if err := os.Remove(dropin); err != nil {
+				t.Error("remove empty fixture-owned override directory")
+			}
+		}
+	})
+	if err := os.WriteFile(dropinFile, []byte("[Service]\nExecStartPost=/usr/bin/false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	nativeMX(t, installer, false, "node", "start", "--root", root)
+	if nativeUnitProperty(t, nodeUnit, "MainPID") != firstPID || nativeUnitProperty(t, collectorUnit, "MainPID") != collectorPID {
+		t.Fatal("pending boot override changed healthy processes")
+	}
+	if os.Remove(dropinFile) != nil || os.Remove(dropin) != nil {
+		t.Fatal("remove exact fixture-owned startup override")
+	}
+	// Partial registration can be replayed without restarting resident work.
+	wantedLink := filepath.Join("/etc/systemd/system/multi-user.target.wants", startupUnit)
+	if err := os.Remove(wantedLink); err != nil {
+		t.Fatal(err)
+	}
+	if result := nativeMX(t, installer, true, "node", "status", "--root", root); result.State != "NOT_READY" {
+		t.Fatal("missing persistent registration was reported ready")
+	}
+	nativeMX(t, installer, true, "node", "start", "--root", root)
+	if nativeUnitProperty(t, nodeUnit, "MainPID") != firstPID || nativeUnitProperty(t, collectorUnit, "MainPID") != collectorPID {
+		t.Fatal("partial boot registration replay replaced healthy services")
+	}
 	// A same-name service with changed policy is not installation-owned merely
 	// because its process is still healthy. Reject it before replacement/stop.
 	memoryLimit := nativeUnitProperty(t, collectorUnit, "MemoryMax")
@@ -413,12 +519,100 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 	if (pending.State != "STARTING" && pending.State != "VERIFYING") || pending.CorrelationID == "" {
 		t.Fatal("interruption did not retain the in-flight command")
 	}
+	if bootPhase == "prepare" {
+		// Leave the actual interrupted command for the next guest boot. The
+		// deferred CONT only releases the fixture's pause; it does not run mx.
+		retainNativeBoot(t, base, root, identity, installed.ReleaseID, pending.CorrelationID)
+		keepForBoot = true
+		return
+	}
 	nativeSystemctl(t, "kill", "--kill-who=main", "--signal=CONT", collectorUnit)
 	paused = false
 	started = nativeMX(t, installer, true, "node", "start", "--root", root)
 	if started.State != "READY" || started.ReleaseID != installed.ReleaseID || started.CorrelationID != pending.CorrelationID ||
 		nativeUnitProperty(t, nodeUnit, "MainPID") != retainedNodePID || nativeUnitProperty(t, collectorUnit, "MainPID") != retainedCollectorPID {
 		t.Fatal("node replay lost its command, committed release or running processes")
+	}
+}
+
+// The operator reboots only the dedicated local guest between these phases.
+// The gate never issues a machine or shared-engine restart itself.
+type nativeBootEvidence struct {
+	Identity      nodev1.Identity   `json:"identity"`
+	Root          string            `json:"root"`
+	ReleaseID     string            `json:"releaseId"`
+	CorrelationID string            `json:"correlationId"`
+	BootID        string            `json:"bootId"`
+	Files         map[string]string `json:"files"`
+}
+
+func retainNativeBoot(t *testing.T, base, root string, identity nodev1.Identity, releaseID, correlationID string) {
+	t.Helper()
+	bootID, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := "runtime/executor/boot-retained-receipt"
+	if err := os.WriteFile(filepath.Join(root, marker), []byte("accepted-node-effect"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	evidence := nativeBootEvidence{Identity: identity, Root: root, ReleaseID: releaseID, CorrelationID: correlationID, BootID: strings.TrimSpace(string(bootID)), Files: map[string]string{}}
+	for _, relative := range []string{"config/node.json", "config/release-trust.json", "secrets/node/node.pem", "secrets/node/node-key.pem",
+		"secrets/node/trust.pem", "secrets/node/collector.pem", "secrets/node/collector-key.pem", marker} {
+		source, err := os.ReadFile(filepath.Join(root, relative))
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(source)
+		clear(source)
+		evidence.Files[relative] = hex.EncodeToString(digest[:])
+	}
+	source, err := json.Marshal(evidence)
+	if err != nil || os.WriteFile(filepath.Join(base, "boot-evidence.json"), source, 0o600) != nil {
+		t.Fatal("retain owned boot evidence")
+	}
+}
+
+func verifyNativeBoot(t *testing.T, installer, base, releaseID string) {
+	t.Helper()
+	source, err := os.ReadFile(filepath.Join(base, "boot-evidence.json"))
+	var evidence nativeBootEvidence
+	if err != nil || json.Unmarshal(source, &evidence) != nil || nodev1.ValidateIdentity(evidence.Identity) != nil ||
+		evidence.Root != filepath.Join(base, "installation %node $literal") || evidence.ReleaseID != releaseID || evidence.CorrelationID == "" || len(evidence.Files) != 8 {
+		t.Fatal("boot fixture evidence is missing or inconsistent")
+	}
+	bootID, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
+	if err != nil || strings.TrimSpace(string(bootID)) == evidence.BootID || evidence.BootID == "" {
+		t.Fatal("a process restart is not evidence of a guest kernel boot")
+	}
+	startupUnit, _ := nodeconfig.StartupServiceName(evidence.Identity)
+	deadline := time.Now().Add(120 * time.Second)
+	for nativeUnitProperty(t, startupUnit, "ActiveState") != "active" {
+		if time.Now().After(deadline) {
+			t.Fatal("guest boot did not start the registered node")
+		}
+		<-time.After(time.Second)
+	}
+	for _, collector := range []bool{false, true} {
+		unit, _ := nodeconfig.ServiceName(evidence.Identity, collector)
+		if nativeUnitProperty(t, unit, "ActiveState") != "active" || nativeUnitProperty(t, unit, "MainPID") == "0" {
+			t.Fatal("resident service was not running before any mx command")
+		}
+	}
+	for relative, expected := range evidence.Files {
+		if filepath.IsAbs(relative) || strings.Contains(relative, "..") {
+			t.Fatal("boot evidence escaped its fixture root")
+		}
+		source, err := os.ReadFile(filepath.Join(evidence.Root, relative))
+		digest := sha256.Sum256(source)
+		clear(source)
+		if err != nil || hex.EncodeToString(digest[:]) != expected {
+			t.Fatal("guest boot changed retained configuration, credentials or receipts")
+		}
+	}
+	status := nativeMX(t, installer, true, "node", "status", "--root", evidence.Root)
+	if status.State != "READY" || status.ReleaseID != releaseID || status.CorrelationID != evidence.CorrelationID || status.ExecutionTargetID != string(evidence.Identity.ExecutionTargetID) {
+		t.Fatal("guest boot did not preserve authenticated identity and readiness")
 	}
 }
 

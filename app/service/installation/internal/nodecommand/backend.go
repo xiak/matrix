@@ -182,7 +182,11 @@ func (backend *Backend) installed(ctx context.Context, request cli.Request) (res
 		}
 		return cli.Result{}, fault(cli.FaultPrecondition, "NODE_MANUAL_INTERVENTION_REQUIRED")
 	}
-	if state.CurrentReleaseID == "" {
+	resumeInstall := request.Action == lifecycle.ActionStart && state.CurrentReleaseID == "" &&
+		state.Active != nil && state.Active.Command.Action == lifecycle.ActionInstall &&
+		(state.Active.Phase == lifecycle.PhaseStarting || state.Active.Phase == lifecycle.PhaseVerifying ||
+			state.Active.Phase == lifecycle.PhaseCommitting || state.Active.Phase == lifecycle.PhaseRollingBack)
+	if state.CurrentReleaseID == "" && !resumeInstall {
 		return cli.Result{}, fault(cli.FaultPrecondition, "NODE_NOT_INSTALLED")
 	}
 	plan, err := backend.installedPlan(session.Root(), state)
@@ -190,6 +194,12 @@ func (backend *Backend) installed(ctx context.Context, request cli.Request) (res
 		return cli.Result{}, err
 	}
 	defer plan.Credentials.Clear()
+	if resumeInstall {
+		// Boot may finish an already configured installation, but cannot enroll
+		// a node or allocate another command. The staged release and protected
+		// material must still authenticate against the original sealed intent.
+		return backend.drive(ctx, session, plan)
+	}
 	if request.Action == lifecycle.ActionStatus {
 		return backend.observe(ctx, state, plan)
 	}
@@ -210,13 +220,17 @@ func (backend *Backend) installed(ctx context.Context, request cli.Request) (res
 }
 
 func (backend *Backend) installedPlan(root string, state lifecycle.Journal) (Plan, error) {
+	releaseID, releaseDigest := state.CurrentReleaseID, state.CurrentReleaseDigest
+	if releaseID == "" && state.Active != nil {
+		releaseID, releaseDigest = state.Active.Command.TargetReleaseID, state.Active.Command.InputDigest
+	}
 	trustBytes, trust, err := release.ReadTrustRootFile(filepath.Join(root, filepath.FromSlash(layout.ReleaseTrust)))
 	if err != nil || trust.KeyID != state.ReleaseTrust.KeyID || trust.PublicKeyFingerprint != state.ReleaseTrust.Fingerprint {
 		return Plan{}, fault(cli.FaultVerification, "INSTALLATION_RELEASE_INVALID")
 	}
-	bundle, err := release.VerifyDirectory(filepath.Join(root, filepath.FromSlash(layout.ReleaseDirectory(state.CurrentReleaseID))), trustBytes)
-	if err != nil || ValidateRelease(bundle) != nil || bundle.Manifest.Release.ID != state.CurrentReleaseID ||
-		bundle.ManifestSHA256 != state.CurrentReleaseDigest {
+	bundle, err := release.VerifyDirectory(filepath.Join(root, filepath.FromSlash(layout.ReleaseDirectory(releaseID))), trustBytes)
+	if err != nil || ValidateRelease(bundle) != nil || bundle.Manifest.Release.ID != releaseID ||
+		bundle.ManifestSHA256 != releaseDigest {
 		return Plan{}, fault(cli.FaultVerification, "INSTALLATION_RELEASE_INVALID")
 	}
 	config, material, err := backend.effects.ReadInstallation(root)
@@ -248,6 +262,7 @@ func (backend *Backend) command(state lifecycle.Journal, action lifecycle.Action
 }
 
 func (backend *Backend) drive(ctx context.Context, session *journal.Session, plan Plan) (cli.Result, error) {
+	resuming := true
 	for {
 		state, err := readNodeJournal(session)
 		if err != nil {
@@ -260,10 +275,20 @@ func (backend *Backend) drive(ctx context.Context, session *journal.Session, pla
 			return resultFor(state, state.Last.Command.Action != lifecycle.ActionVerify), nil
 		}
 		execution := *state.Active
-		if execution.Phase == lifecycle.PhaseRollingBack {
-			err = backend.effects.Rollback(ctx, plan)
-		} else {
-			err = backend.effects.ApplyPhase(ctx, plan, execution.Phase)
+		if resuming && (execution.Phase == lifecycle.PhaseVerifying || execution.Phase == lifecycle.PhaseCommitting) &&
+			(execution.Command.Action == lifecycle.ActionInstall || execution.Command.Action == lifecycle.ActionStart) {
+			// An interrupted late phase may resume after a kernel boot, which
+			// discards transient units. Reconcile the same sealed services before
+			// verifying them; do not rewind the journal or issue another command.
+			err = backend.effects.ApplyPhase(ctx, plan, lifecycle.PhaseStarting)
+		}
+		resuming = false
+		if err == nil {
+			if execution.Phase == lifecycle.PhaseRollingBack {
+				err = backend.effects.Rollback(ctx, plan)
+			} else {
+				err = backend.effects.ApplyPhase(ctx, plan, execution.Phase)
+			}
 		}
 		if err != nil {
 			if ctx.Err() != nil {

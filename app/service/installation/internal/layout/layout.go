@@ -12,6 +12,7 @@ const (
 	APISIXUID               = "config/apisix.uid"
 	APISIXNginx             = "runtime/apisix/nginx.conf"
 	NodeConfiguration       = "config/node.json"
+	NodeStartupDirectory    = "config/native"
 	NodeDockerConfiguration = "config/docker-client/config.json"
 	CollectorConfiguration  = "config/collector.yaml"
 	NodeCertificate         = "secrets/node/node.pem"

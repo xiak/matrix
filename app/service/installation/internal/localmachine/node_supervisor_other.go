@@ -21,3 +21,12 @@ func (localNodeSupervisor) Start(context.Context, nativeService) error {
 func (localNodeSupervisor) Stop(context.Context, nativeService) error {
 	return nodecommand.ErrPrecondition
 }
+func (localNodeSupervisor) InspectStartup(context.Context, nativeStartup) (bool, error) {
+	return false, nodecommand.ErrPrecondition
+}
+func (localNodeSupervisor) RegisterStartup(context.Context, nativeStartup) error {
+	return nodecommand.ErrPrecondition
+}
+func (localNodeSupervisor) UnregisterStartup(context.Context, nativeStartup) error {
+	return nodecommand.ErrPrecondition
+}

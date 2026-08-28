@@ -24,6 +24,9 @@ Development, artifacts and disposable runtime objects are isolated from
 Phase 2. Never reset, edit, merge into, redeploy or stop its branch, worktree
 or environment. UI additions happen only on this Phase 3 branch; existing
 console and managed PostgreSQL behavior remain regression requirements.
+Never reboot a remote machine, including a remote experiment VM. Reboot
+acceptance uses only task-owned local guests; the shared host, Docker Desktop,
+other engines and other tasks' services must remain running unchanged.
 
 ## Iterative roadmap
 
@@ -195,12 +198,25 @@ a controller private key. The node's own identity can query a bounded
 self-readiness endpoint, but cannot invoke the controller observation or
 execution surface. Readiness requires fresh host and collector observations.
 
-Initial native startup uses installation-owned transient systemd services,
-with a dynamically allocated collector UID, read-only payload/credential
-access and no Docker socket for that collector. Replay after a host reboot
-restarts these exact sealed services; automatic boot registration remains an
-unaccepted lifecycle requirement. No customer package, daemon or firewall
-configuration is changed by this startup slice.
+Native execution uses installation-owned transient systemd services, with a
+dynamically allocated collector UID, read-only payload/credential access and
+no Docker socket for that collector. Automatic boot registration is the next
+unaccepted slice: a narrowly owned persistent startup unit must invoke the
+staged `mx node start`, authenticate the retained release/configuration and
+credentials, then reconcile the same node and collector. It must not execute
+an unchecked node binary or create a new enrollment authority.
+
+The startup unit is derived from the sealed installation/target binding. Its
+source stays below the protected installation root; only exact, non-forced
+registration links may be created. Existing masks, foreign units, drop-ins or
+changed policies fail before runtime replacement. Readiness includes the
+verified persistent registration. Replay must recover an interrupted, already
+configured node installation using its original command and staged release;
+missing or conflicting state is not permission to create another installation.
+Rollback removes only its own registration while retaining receipts and
+workloads. No customer package or firewall is changed. Full local guest boot,
+tamper rejection, interruption/replay and unchanged retained state are required
+before accepting this slice.
 
 Stage compatible upgrades without disrupting workloads. Failed verification
 restores the previous executable/configuration; explicit N-1 rollback retains

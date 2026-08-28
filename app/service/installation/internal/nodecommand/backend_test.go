@@ -66,6 +66,68 @@ func TestNodeInstallResumesUnknownStartupAndPinsEnrollment(t *testing.T) {
 	}
 }
 
+func TestNodeStartResumesOnlyConfiguredInstallWithoutNewEnrollment(t *testing.T) {
+	for _, phase := range []lifecycle.Phase{lifecycle.PhasePreflight, lifecycle.PhaseStaging,
+		lifecycle.PhaseConfiguring, lifecycle.PhaseStarting, lifecycle.PhaseVerifying, lifecycle.PhaseCommitting} {
+		t.Run(string(phase), func(t *testing.T) {
+			request, _ := nodeRequest(t)
+			effects := &nodeEffects{failPhase: phase, failure: ErrOutcomeUnknown}
+			backend, _ := NewBackend(effects)
+			_, err := backend.Run(context.Background(), request)
+			assertNodeFault(t, err, "EFFECT_OUTCOME_UNKNOWN")
+			state := nodeState(t, request.Root)
+			command := state.Active.Command
+			before, calls := journalBytes(t, request.Root), len(effects.phases)
+			effects.ready = false // A guest boot loses its transient services.
+			if err := os.Remove(request.Configuration); err != nil {
+				t.Fatal(err)
+			}
+			result, err := backend.Run(context.Background(), cli.Request{Action: lifecycle.ActionStart, Root: request.Root})
+			if phase == lifecycle.PhasePreflight || phase == lifecycle.PhaseStaging || phase == lifecycle.PhaseConfiguring {
+				assertNodeFault(t, err, "NODE_NOT_INSTALLED")
+				if !bytes.Equal(before, journalBytes(t, request.Root)) || calls != len(effects.phases) {
+					t.Fatal("boot created effects from an unconfigured installation")
+				}
+				return
+			}
+			if err != nil || result.State != "READY" || result.CorrelationID != command.ID {
+				t.Fatalf("boot did not resume its sealed install: %#v / %v", result, err)
+			}
+			state = nodeState(t, request.Root)
+			if state.Active != nil || state.Last.Command != command || state.CurrentReleaseID != command.TargetReleaseID || state.CurrentReleaseDigest != command.InputDigest {
+				t.Fatal("boot changed the original command or committed a different release")
+			}
+		})
+	}
+}
+
+func TestNodeBootRejectsTamperedPendingInstallationBeforeEffects(t *testing.T) {
+	for _, mode := range []string{"credential", "signed payload"} {
+		t.Run(mode, func(t *testing.T) {
+			request, _ := nodeRequest(t)
+			effects := &nodeEffects{failPhase: lifecycle.PhaseStarting, failure: ErrOutcomeUnknown}
+			backend, _ := NewBackend(effects)
+			_, err := backend.Run(context.Background(), request)
+			assertNodeFault(t, err, "EFFECT_OUTCOME_UNKNOWN")
+			artifact := layout.NodePrivateKey
+			if mode == "signed payload" {
+				artifact = layout.ReleaseDirectory(nodeState(t, request.Root).Active.Command.TargetReleaseID) + "/bin/mx"
+			}
+			path := filepath.Join(request.Root, filepath.FromSlash(artifact))
+			if err := os.WriteFile(path, []byte("substitution"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			before, calls := journalBytes(t, request.Root), len(effects.phases)
+			if _, err := backend.Run(context.Background(), cli.Request{Action: lifecycle.ActionStart, Root: request.Root}); err == nil {
+				t.Fatal("boot accepted tampered staged material")
+			}
+			if !bytes.Equal(before, journalBytes(t, request.Root)) || calls != len(effects.phases) || effects.rollbacks != 0 {
+				t.Fatal("tampered boot changed journal or provider")
+			}
+		})
+	}
+}
+
 func TestNodeRejectsInvalidInputAndPlatformRootsBeforeEffects(t *testing.T) {
 	for _, mode := range []string{"platform release", "invalid credential", "platform root"} {
 		t.Run(mode, func(t *testing.T) {
@@ -203,6 +265,10 @@ func (effects *nodeEffects) ApplyPhase(_ context.Context, plan Plan, phase lifec
 		}
 	case lifecycle.PhaseStarting:
 		effects.ready = true
+	case lifecycle.PhaseVerifying, lifecycle.PhaseCommitting:
+		if !effects.ready {
+			return ErrVerification
+		}
 	}
 	return nil
 }

@@ -63,6 +63,16 @@ func TestNodeEffectsSealFilesAndKeepCollectorSeparateFromExecutor(t *testing.T) 
 	if err := effects.ApplyPhase(context.Background(), plan, lifecycle.PhaseStarting); err != nil || supervisor.starts != 2 {
 		t.Fatal("repeated startup replaced running services")
 	}
+	if !supervisor.registered || supervisor.registrations != 1 {
+		t.Fatal("replay lost or replaced the boot registration")
+	}
+	supervisor.registered = false
+	if ready, err := effects.Observe(context.Background(), plan); err != nil || ready {
+		t.Fatal("running processes without persistent boot registration were ready")
+	}
+	if err := effects.ApplyPhase(context.Background(), plan, lifecycle.PhaseStarting); err != nil || supervisor.starts != 2 {
+		t.Fatal("repairing registration replaced healthy processes")
+	}
 	config, material, err := effects.ReadInstallation(plan.Root)
 	if err != nil {
 		t.Fatal(err)
@@ -99,11 +109,16 @@ func TestNodeRollbackChecksAllServiceOwnershipAndRetainsState(t *testing.T) {
 		t.Fatal("rollback partially stopped services before proving ownership")
 	}
 	supervisor.foreign = ""
+	supervisor.foreign = nativeNodeStartup(plan).service.name
+	if err := effects.Rollback(context.Background(), plan); !errors.Is(err, nodecommand.ErrConflict) || supervisor.stops != 0 || !supervisor.registered {
+		t.Fatal("foreign boot registration allowed partial rollback")
+	}
+	supervisor.foreign = ""
 	if err := effects.Rollback(context.Background(), plan); err != nil {
 		t.Fatal(err)
 	}
-	if supervisor.stops != 2 {
-		t.Fatal("rollback did not stop its two services")
+	if supervisor.stops != 2 || supervisor.registered {
+		t.Fatal("rollback did not remove its registration and stop its two services")
 	}
 	if err := authenticateNodeFiles(plan); err != nil {
 		t.Fatal("rollback removed enrollment or release files")
@@ -115,6 +130,35 @@ func TestNodeRollbackChecksAllServiceOwnershipAndRetainsState(t *testing.T) {
 		if err := effects.ApplyPhase(context.Background(), plan, phase); err == nil {
 			t.Fatal("node accepted a platform phase")
 		}
+	}
+}
+
+func TestNodeStartupOwnershipAndRegistrationFailuresDoNotPartiallyStart(t *testing.T) {
+	for _, mode := range []string{"collector", "node", "startup", "registration interrupted"} {
+		t.Run(mode, func(t *testing.T) {
+			plan := nodeEffectPlan(t)
+			supervisor := &nodeSupervisorFixture{states: map[string]nativeState{}}
+			effects := NewNodeEffects(nodeVerifierFixture{})
+			effects.supervisor = supervisor
+			for _, phase := range []lifecycle.Phase{lifecycle.PhaseStaging, lifecycle.PhaseConfiguring} {
+				if err := effects.ApplyPhase(context.Background(), plan, phase); err != nil {
+					t.Fatal(err)
+				}
+			}
+			switch mode {
+			case "collector":
+				supervisor.foreign = nativeNodeServices(plan)[0].name
+			case "node":
+				supervisor.foreign = nativeNodeServices(plan)[1].name
+			case "startup":
+				supervisor.foreign = nativeNodeStartup(plan).service.name
+			case "registration interrupted":
+				supervisor.registrationFailure = nodecommand.ErrOutcomeUnknown
+			}
+			if err := effects.ApplyPhase(context.Background(), plan, lifecycle.PhaseStarting); err == nil || supervisor.starts != 0 || supervisor.registrations != 0 {
+				t.Fatal("ownership or registration failure partially started a node")
+			}
+		})
 	}
 }
 
@@ -161,12 +205,42 @@ func (nodeVerifierFixture) Verify(context.Context, nodeconfig.Configuration, nod
 }
 
 type nodeSupervisorFixture struct {
-	states        map[string]nativeState
-	foreign       string
-	starts, stops int
+	states              map[string]nativeState
+	foreign             string
+	starts, stops       int
+	registered          bool
+	registrations       int
+	registrationFailure error
 }
 
 func (*nodeSupervisorFixture) Preflight(context.Context, uint64) error { return nil }
+func (fixture *nodeSupervisorFixture) InspectStartup(_ context.Context, startup nativeStartup) (bool, error) {
+	if fixture.foreign == startup.service.name {
+		return false, nodecommand.ErrConflict
+	}
+	return fixture.registered, nil
+}
+func (fixture *nodeSupervisorFixture) RegisterStartup(ctx context.Context, startup nativeStartup) error {
+	registered, err := fixture.InspectStartup(ctx, startup)
+	if err != nil {
+		return err
+	}
+	if fixture.registrationFailure != nil {
+		return fixture.registrationFailure
+	}
+	if !registered {
+		fixture.registered = true
+		fixture.registrations++
+	}
+	return nil
+}
+func (fixture *nodeSupervisorFixture) UnregisterStartup(ctx context.Context, startup nativeStartup) error {
+	if _, err := fixture.InspectStartup(ctx, startup); err != nil {
+		return err
+	}
+	fixture.registered = false
+	return nil
+}
 func (fixture *nodeSupervisorFixture) Inspect(_ context.Context, service nativeService) (nativeState, error) {
 	if fixture.foreign == service.name {
 		return "", nodecommand.ErrConflict

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -106,12 +107,18 @@ func (effects *NodeEffects) ApplyPhase(ctx context.Context, plan nodecommand.Pla
 			return err
 		}
 		services := nativeNodeServices(plan)
-		// Inspect both before any start. A foreign collector must not permit a
-		// partially started node, or vice versa.
+		startup := nativeNodeStartup(plan)
+		// Prove every service and the boot registration before any mutation.
+		if _, err := effects.supervisor.InspectStartup(ctx, startup); err != nil {
+			return err
+		}
 		for _, service := range services {
 			if _, err := effects.supervisor.Inspect(ctx, service); err != nil {
 				return err
 			}
+		}
+		if err := effects.supervisor.RegisterStartup(ctx, startup); err != nil {
+			return err
 		}
 		for _, service := range services {
 			if err := effects.supervisor.Start(ctx, service); err != nil {
@@ -136,6 +143,9 @@ func (effects *NodeEffects) preflightNode(ctx context.Context, plan nodecommand.
 		}
 	}
 	if err := effects.supervisor.Preflight(ctx, plan.Bundle.Manifest.Host.MinimumSystemd); err != nil {
+		return err
+	}
+	if _, err := effects.supervisor.InspectStartup(ctx, nativeNodeStartup(plan)); err != nil {
 		return err
 	}
 	available, err := availableFilesystemBytes(plan.Root)
@@ -190,6 +200,10 @@ func (effects *NodeEffects) Observe(ctx context.Context, plan nodecommand.Plan) 
 }
 
 func (effects *NodeEffects) observeNodeServices(ctx context.Context, plan nodecommand.Plan) (bool, error) {
+	registered, err := effects.supervisor.InspectStartup(ctx, nativeNodeStartup(plan))
+	if err != nil || !registered {
+		return false, err
+	}
 	for _, service := range nativeNodeServices(plan) {
 		state, err := effects.supervisor.Inspect(ctx, service)
 		if err != nil {
@@ -234,6 +248,10 @@ func (effects *NodeEffects) Rollback(ctx context.Context, plan nodecommand.Plan)
 		return nodecommand.ErrUnavailable
 	}
 	services := nativeNodeServices(plan)
+	startup := nativeNodeStartup(plan)
+	if _, err := effects.supervisor.InspectStartup(ctx, startup); err != nil {
+		return err
+	}
 	for _, service := range services {
 		if _, err := effects.supervisor.Inspect(ctx, service); err != nil {
 			if errors.Is(err, nodecommand.ErrConflict) {
@@ -241,6 +259,9 @@ func (effects *NodeEffects) Rollback(ctx context.Context, plan nodecommand.Plan)
 			}
 			return errors.Join(nodecommand.ErrOutcomeUnknown, err)
 		}
+	}
+	if err := effects.supervisor.UnregisterStartup(ctx, startup); err != nil {
+		return err
 	}
 	for index := len(services) - 1; index >= 0; index-- {
 		if err := effects.supervisor.Stop(ctx, services[index]); err != nil {
@@ -283,6 +304,7 @@ func nodeFiles(plan nodecommand.Plan) ([]nodeFile, error) {
 		return nil, err
 	}
 	collector := nativeNodeServices(plan)[0]
+	startup := nativeNodeStartup(plan)
 	credentialRoot := "/run/credentials/" + collector.name
 	uri, err := nodev1.NodeURI(plan.Configuration.Identity)
 	if err != nil {
@@ -293,6 +315,7 @@ func nodeFiles(plan nodecommand.Plan) ([]nodeFile, error) {
 	return []nodeFile{
 		{layout.ReleaseTrust, plan.TrustBytes}, {layout.NodeConfiguration, configuration},
 		{layout.NodeDockerConfiguration, []byte("{}\n")},
+		{filepath.ToSlash(filepath.Join(layout.NodeStartupDirectory, startup.service.name)), nativeStartupUnit(startup)},
 		{layout.CollectorConfiguration, collectorConfiguration},
 		{layout.NodeCertificate, plan.Credentials.Certificate}, {layout.NodePrivateKey, plan.Credentials.PrivateKey},
 		{layout.NodeTrust, plan.Credentials.Trust}, {layout.CollectorCertificate, plan.Credentials.CollectorCertificate},
@@ -371,6 +394,63 @@ type nodeSupervisor interface {
 	Inspect(context.Context, nativeService) (nativeState, error)
 	Start(context.Context, nativeService) error
 	Stop(context.Context, nativeService) error
+	InspectStartup(context.Context, nativeStartup) (bool, error)
+	RegisterStartup(context.Context, nativeStartup) error
+	UnregisterStartup(context.Context, nativeStartup) error
+}
+
+type nativeStartup struct {
+	root, unitFile string
+	service        nativeService
+}
+
+func nativeNodeStartup(plan nodecommand.Plan) nativeStartup {
+	name, _ := nodeconfig.StartupServiceName(plan.Configuration.Identity)
+	node := nativeNodeServices(plan)[1]
+	return nativeStartup{root: plan.Root,
+		unitFile: filepath.Join(plan.Root, filepath.FromSlash(layout.NodeStartupDirectory), name),
+		service: nativeService{
+			name: name, description: strings.Replace(node.description, "Matrix node ", "Matrix node startup ", 1),
+			executable:  filepath.Join(filepath.Dir(node.executable), "mx"),
+			arguments:   []string{"--format", "json", "node", "start", "--root", plan.Root},
+			environment: node.environment, user: "root", policy: nodeconfig.StartupPolicy(),
+			// Registration changes are limited by the adapter to its two exact
+			// links. This also permits rollback of an interrupted initial install.
+			writePaths: []string{plan.Root, "/etc/systemd/system"},
+		},
+	}
+}
+
+// This closed boot unit invokes the signed installer, never an unchecked node
+// executable. Percent specifiers are escaped and dollar expansion is disabled;
+// neither a shell nor operator-supplied unit directives are accepted.
+func nativeStartupUnit(startup nativeStartup) []byte {
+	service, policy := startup.service, startup.service.policy
+	quote := func(value string) string { return strconv.Quote(strings.ReplaceAll(value, "%", "%%")) }
+	var unit strings.Builder
+	fmt.Fprintf(&unit, "[Unit]\nDescription=%s\nAfter=network-online.target docker.service\nWants=network-online.target\nRequiresMountsFor=%s\n\n[Service]\nType=%s\nRemainAfterExit=%t\n",
+		service.description, quote(startup.root), policy.Type, policy.RemainAfterExit)
+	unit.WriteString("ExecStart=:")
+	for index, value := range append([]string{service.executable}, service.arguments...) {
+		if index != 0 {
+			unit.WriteByte(' ')
+		}
+		unit.WriteString(quote(value))
+	}
+	unit.WriteByte('\n')
+	for _, value := range service.environment {
+		fmt.Fprintf(&unit, "Environment=%s\n", quote(value))
+	}
+	for _, path := range service.writePaths {
+		fmt.Fprintf(&unit, "ReadWritePaths=%s\n", quote(path))
+	}
+	fmt.Fprintf(&unit, "User=root\nGroup=root\nDynamicUser=false\nSlice=system.slice\nWorkingDirectory=/\nRestart=%s\nRestartSec=%dus\nTimeoutStartSec=%dus\nTimeoutStopSec=%dus\nMemoryMax=%d\nTasksMax=%d\nCPUQuota=%d%%\nNoNewPrivileges=%t\nProtectSystem=%s\nProtectHome=%s\nPrivateDevices=%t\nRuntimeDirectoryMode=%04o\nRuntimeDirectoryPreserve=%s\n",
+		policy.Restart, policy.RestartMicros, policy.TimeoutStartMicros, policy.TimeoutStopMicros,
+		policy.MemoryMax, policy.TasksMax, policy.CPUQuotaPerSecond/10000,
+		policy.NoNewPrivileges, policy.ProtectSystem, policy.ProtectHome, policy.PrivateDevices,
+		policy.RuntimeDirectoryMode, policy.RuntimeDirectoryPreserve)
+	unit.WriteString("PrivateTmp=true\nProtectKernelTunables=true\nProtectKernelModules=true\nProtectControlGroups=true\nRestrictSUIDSGID=true\nLockPersonality=true\nRestrictRealtime=true\nCapabilityBoundingSet=\nAmbientCapabilities=\nUMask=0077\nStandardOutput=null\nStandardError=null\nKillMode=control-group\n\n[Install]\nWantedBy=multi-user.target\n")
+	return []byte(unit.String())
 }
 
 func nativeNodeServices(plan nodecommand.Plan) []nativeService {

@@ -33,12 +33,15 @@ const (
 // ServicePolicy is the fixed native supervision contract, not operator input.
 // The provider consumes these values and the signed bundle commits to them.
 type ServicePolicy struct {
+	Type                     string `json:"type"`
+	RemainAfterExit          bool   `json:"remainAfterExit"`
 	DynamicUser              bool   `json:"dynamicUser"`
 	MemoryMax                uint64 `json:"memoryMax"`
 	TasksMax                 uint64 `json:"tasksMax"`
 	CPUQuotaPerSecond        uint64 `json:"cpuQuotaPerSecond"`
 	Restart                  string `json:"restart"`
 	RestartMicros            uint64 `json:"restartMicros"`
+	TimeoutStartMicros       uint64 `json:"timeoutStartMicros"`
 	TimeoutStopMicros        uint64 `json:"timeoutStopMicros"`
 	NoNewPrivileges          bool   `json:"noNewPrivileges"`
 	ProtectSystem            string `json:"protectSystem"`
@@ -50,6 +53,7 @@ type ServicePolicy struct {
 
 func Policy(collector bool) ServicePolicy {
 	value := ServicePolicy{
+		Type: "exec", TimeoutStartMicros: 30000000,
 		MemoryMax: 512 * 1024 * 1024, TasksMax: 128, CPUQuotaPerSecond: 1000000,
 		Restart: "on-failure", RestartMicros: 2000000, TimeoutStopMicros: 10000000,
 		NoNewPrivileges: true, ProtectSystem: "strict", ProtectHome: "yes", PrivateDevices: true,
@@ -61,6 +65,13 @@ func Policy(collector bool) ServicePolicy {
 		value.TasksMax = 64
 		value.CPUQuotaPerSecond = 500000
 	}
+	return value
+}
+
+func StartupPolicy() ServicePolicy {
+	value := Policy(false)
+	value.Type, value.RemainAfterExit = "oneshot", true
+	value.TimeoutStartMicros, value.RestartMicros = 120000000, 30000000
 	return value
 }
 
@@ -78,6 +89,14 @@ func ServiceName(identity nodev1.Identity, collector bool) (string, error) {
 	return prefix + hex.EncodeToString(sum[:12]) + ".service", nil
 }
 
+func StartupServiceName(identity nodev1.Identity) (string, error) {
+	name, err := ServiceName(identity, false)
+	if err != nil {
+		return "", err
+	}
+	return strings.Replace(name, "matrix-node-", "matrix-node-start-", 1), nil
+}
+
 func ContractDigest() string {
 	value := struct {
 		Protocol         string        `json:"protocol"`
@@ -88,7 +107,8 @@ func ContractDigest() string {
 		MinimumCompose   string        `json:"minimumCompose"`
 		Node             ServicePolicy `json:"node"`
 		Collector        ServicePolicy `json:"collector"`
-	}{nodev1.APIVersion, RuntimeRevision, CollectorVersion, MinimumSystemd, MinimumDocker, MinimumCompose, Policy(false), Policy(true)}
+		Startup          ServicePolicy `json:"startup"`
+	}{nodev1.APIVersion, RuntimeRevision, CollectorVersion, MinimumSystemd, MinimumDocker, MinimumCompose, Policy(false), Policy(true), StartupPolicy()}
 	encoded, _ := json.Marshal(value)
 	digest := sha256.Sum256(encoded)
 	return "sha256:" + hex.EncodeToString(digest[:])

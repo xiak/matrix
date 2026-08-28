@@ -3,6 +3,7 @@
 package localmachine
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -23,7 +24,8 @@ import (
 type localNodeSupervisor struct{}
 
 // Use the system manager's local private socket, never an inherited user bus,
-// remote address, shell, unit-file directory, or daemon reload.
+// remote address or shell. Only exact startup registration changes reload the
+// manager's unit definitions; they never restart the manager or another service.
 func nodeSystemdConnection(ctx context.Context) (*systemd.Conn, context.Context, context.CancelFunc, error) {
 	bounded, cancel := context.WithTimeout(ctx, 20*time.Second)
 	if os.Geteuid() != 0 {
@@ -59,6 +61,230 @@ func (localNodeSupervisor) Preflight(ctx context.Context, minimum uint64) error 
 		return nodecommand.ErrPrecondition
 	}
 	return nil
+}
+
+func (localNodeSupervisor) InspectStartup(ctx context.Context, startup nativeStartup) (bool, error) {
+	connection, bounded, cancel, err := nodeSystemdConnection(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer cancel()
+	defer connection.Close()
+	return inspectNativeStartup(bounded, connection, startup)
+}
+
+func (localNodeSupervisor) RegisterStartup(ctx context.Context, startup nativeStartup) error {
+	connection, bounded, cancel, err := nodeSystemdConnection(ctx)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	defer connection.Close()
+	registered, err := inspectNativeStartup(bounded, connection, startup)
+	if err != nil || registered {
+		return err
+	}
+	if _, err := os.Lstat(startup.unitFile); err != nil {
+		return nodecommand.ErrVerification
+	}
+	// No force/overwrite and no generic enable operation that may follow
+	// operator-created aliases. An interrupted pair is completed on replay.
+	for _, path := range nativeStartupLinks(startup) {
+		if err := os.Mkdir(filepath.Dir(path), 0o755); err != nil && !errors.Is(err, os.ErrExist) {
+			return errors.Join(nodecommand.ErrOutcomeUnknown, err)
+		}
+		if err := verifyNativeRegistrationDirectory(filepath.Dir(path)); err != nil {
+			return err
+		}
+		if err := os.Symlink(startup.unitFile, path); err != nil && !errors.Is(err, os.ErrExist) {
+			return errors.Join(nodecommand.ErrOutcomeUnknown, err)
+		}
+		if linked, err := verifyNativeStartupLink(path, startup.unitFile); err != nil || !linked {
+			return nodecommand.ErrConflict
+		}
+		if err := syncManagedDirectory(filepath.Dir(path)); err != nil {
+			return errors.Join(nodecommand.ErrOutcomeUnknown, err)
+		}
+	}
+	if err := connection.ReloadContext(bounded); err != nil {
+		return errors.Join(nodecommand.ErrOutcomeUnknown, err)
+	}
+	registered, err = inspectNativeStartup(bounded, connection, startup)
+	if err != nil {
+		return err
+	}
+	if !registered {
+		return nodecommand.ErrOutcomeUnknown
+	}
+	return nil
+}
+
+func (localNodeSupervisor) UnregisterStartup(ctx context.Context, startup nativeStartup) error {
+	connection, bounded, cancel, err := nodeSystemdConnection(ctx)
+	if err != nil {
+		return errors.Join(nodecommand.ErrOutcomeUnknown, err)
+	}
+	defer cancel()
+	defer connection.Close()
+	if _, err := inspectNativeStartup(bounded, connection, startup); err != nil {
+		return err
+	}
+	changed := false
+	links := nativeStartupLinks(startup)
+	for index := len(links) - 1; index >= 0; index-- {
+		linked, err := verifyNativeStartupLink(links[index], startup.unitFile)
+		if err != nil {
+			return err
+		}
+		if !linked {
+			continue
+		}
+		if err := os.Remove(links[index]); err != nil {
+			return errors.Join(nodecommand.ErrOutcomeUnknown, err)
+		}
+		if err := syncManagedDirectory(filepath.Dir(links[index])); err != nil {
+			return errors.Join(nodecommand.ErrOutcomeUnknown, err)
+		}
+		changed = true
+	}
+	if changed {
+		if err := connection.ReloadContext(bounded); err != nil {
+			return errors.Join(nodecommand.ErrOutcomeUnknown, err)
+		}
+	}
+	// Do not stop the bootstrap unit: this may be its own rollback invocation.
+	// Source, release, credentials and receipts remain available for recovery.
+	return nil
+}
+
+func nativeStartupLinks(startup nativeStartup) [2]string {
+	return [2]string{filepath.Join("/etc/systemd/system", startup.service.name),
+		filepath.Join("/etc/systemd/system/multi-user.target.wants", startup.service.name)}
+}
+
+func verifyNativeRegistrationDirectory(path string) error {
+	for current := path; ; current = filepath.Dir(current) {
+		info, err := os.Lstat(current)
+		if errors.Is(err, os.ErrNotExist) && current == path {
+			continue
+		}
+		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o022 != 0 {
+			return nodecommand.ErrConflict
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || stat.Uid != 0 {
+			return nodecommand.ErrConflict
+		}
+		if filepath.Dir(current) == current {
+			return nil
+		}
+	}
+}
+
+func verifyNativeStartupLink(path, destination string) (bool, error) {
+	if err := verifyNativeRegistrationDirectory(filepath.Dir(path)); err != nil {
+		return false, err
+	}
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return false, nodecommand.ErrConflict
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	target, err := os.Readlink(path)
+	if !ok || stat.Uid != 0 || err != nil || target != destination {
+		return false, nodecommand.ErrConflict
+	}
+	return true, nil
+}
+
+func inspectNativeStartup(ctx context.Context, connection *systemd.Conn, startup nativeStartup) (bool, error) {
+	relative, err := filepath.Rel(startup.root, startup.unitFile)
+	if err != nil {
+		return false, nodecommand.ErrConflict
+	}
+	exists, err := managedFileExists(startup.root, relative)
+	if err != nil {
+		return false, nodecommand.ErrConflict
+	}
+	if exists {
+		expected := nativeStartupUnit(startup)
+		actual, err := readManagedFile(startup.root, relative, int64(len(expected)))
+		if err != nil || !bytes.Equal(actual, expected) {
+			return false, nodecommand.ErrConflict
+		}
+	}
+	links := nativeStartupLinks(startup)
+	linked := 0
+	for _, path := range links {
+		present, err := verifyNativeStartupLink(path, startup.unitFile)
+		if err != nil || (present && !exists) {
+			return false, nodecommand.ErrConflict
+		}
+		if present {
+			linked++
+		}
+	}
+	// Inspect the manager's real search paths before reloading. A pending
+	// mask, drop-in, generated unit or dependency must not become ours simply
+	// because the currently loaded unit still looks correct.
+	encoded, err := connection.GetManagerProperty("UnitPath")
+	if err != nil {
+		return false, nodecommand.ErrUnavailable
+	}
+	variant, err := dbus.ParseVariant(encoded, dbus.SignatureOf([]string{}))
+	if err != nil {
+		return false, nodecommand.ErrUnavailable
+	}
+	var searchPaths []string
+	if dbus.Store([]any{variant.Value()}, &searchPaths) != nil || len(searchPaths) == 0 || len(searchPaths) > 64 {
+		return false, nodecommand.ErrPrecondition
+	}
+	dropins := []string{"service.d", startup.service.name + ".d"}
+	for prefix := strings.TrimSuffix(startup.service.name, ".service"); strings.Contains(prefix, "-"); {
+		index := strings.LastIndex(prefix, "-")
+		dropins = append(dropins, prefix[:index+1]+".service.d")
+		prefix = prefix[:index]
+	}
+	for _, directory := range searchPaths {
+		if !filepath.IsAbs(directory) {
+			return false, nodecommand.ErrPrecondition
+		}
+		path := filepath.Join(directory, startup.service.name)
+		if path != links[0] {
+			if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+				return false, nodecommand.ErrConflict
+			}
+		}
+		for _, suffix := range append(slices.Clone(dropins), startup.service.name+".wants", startup.service.name+".requires") {
+			entries, err := os.ReadDir(filepath.Join(directory, suffix))
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				return false, nodecommand.ErrConflict
+			}
+			for _, entry := range entries {
+				if !strings.HasSuffix(suffix, ".d") || strings.HasSuffix(entry.Name(), ".conf") {
+					return false, nodecommand.ErrConflict
+				}
+			}
+		}
+	}
+	properties, err := connection.GetAllPropertiesContext(ctx, startup.service.name)
+	if nativeUnitMissing(err) || (err == nil && properties["LoadState"] == "not-found") {
+		return false, nil
+	}
+	if err != nil {
+		return false, errors.Join(nodecommand.ErrUnavailable, err)
+	}
+	if properties["FragmentPath"] != startup.unitFile || verifyNativeServiceProperties(properties, startup.service, false) != nil {
+		return false, nodecommand.ErrConflict
+	}
+	var names []string
+	if dbus.Store([]any{properties["Names"]}, &names) != nil || !slices.Equal(names, []string{startup.service.name}) {
+		return false, nodecommand.ErrConflict
+	}
+	return linked == len(links) && properties["NeedDaemonReload"] == false && properties["UnitFileState"] == "enabled", nil
 }
 
 func (localNodeSupervisor) Inspect(ctx context.Context, service nativeService) (nativeState, error) {
@@ -225,7 +451,7 @@ func inspectNativeService(ctx context.Context, connection *systemd.Conn, service
 	if properties["LoadState"] == "not-found" {
 		return nativeMissing, nil
 	}
-	if err := verifyNativeServiceProperties(properties, service); err != nil {
+	if err := verifyNativeServiceProperties(properties, service, true); err != nil {
 		return "", err
 	}
 	switch properties["ActiveState"] {
@@ -255,7 +481,7 @@ func inspectNativeService(ctx context.Context, connection *systemd.Conn, service
 func nativeServiceProperties(service nativeService) []systemd.Property {
 	policy := service.policy
 	properties := []systemd.Property{
-		systemd.PropDescription(service.description), systemd.PropType("exec"),
+		systemd.PropDescription(service.description), systemd.PropType(policy.Type),
 		systemd.PropExecStart(append([]string{service.executable}, service.arguments...), false),
 	}
 	for _, property := range []struct {
@@ -269,7 +495,8 @@ func nativeServiceProperties(service nativeService) []systemd.Property {
 		{"RuntimeDirectory", service.runtimeDirectories}, {"RuntimeDirectoryMode", policy.RuntimeDirectoryMode},
 		{"RuntimeDirectoryPreserve", policy.RuntimeDirectoryPreserve},
 		{"Restart", policy.Restart}, {"RestartUSec", policy.RestartMicros},
-		{"TimeoutStartUSec", uint64(30000000)}, {"TimeoutStopUSec", policy.TimeoutStopMicros},
+		{"RemainAfterExit", policy.RemainAfterExit},
+		{"TimeoutStartUSec", policy.TimeoutStartMicros}, {"TimeoutStopUSec", policy.TimeoutStopMicros},
 		{"MemoryMax", policy.MemoryMax}, {"TasksMax", policy.TasksMax}, {"CPUQuotaPerSecUSec", policy.CPUQuotaPerSecond},
 		{"NoNewPrivileges", policy.NoNewPrivileges}, {"ProtectSystem", policy.ProtectSystem}, {"ProtectHome", policy.ProtectHome},
 		{"PrivateDevices", policy.PrivateDevices}, {"PrivateTmp", true},
@@ -302,8 +529,8 @@ type nativeExec struct {
 // Check the effective service, not just its convenient name/description. A
 // same-name unit with extra hooks, credentials, environment files or writable
 // mounts cannot become an owned unit that Matrix may start or stop.
-func verifyNativeServiceProperties(actual map[string]any, service nativeService) error {
-	if actual["LoadState"] != "loaded" || actual["Transient"] != true {
+func verifyNativeServiceProperties(actual map[string]any, service nativeService, transient bool) error {
+	if actual["LoadState"] != "loaded" || actual["Transient"] != transient {
 		return nodecommand.ErrConflict
 	}
 	for _, property := range nativeServiceProperties(service) {
@@ -358,8 +585,12 @@ func verifyNativeServiceProperties(actual map[string]any, service nativeService)
 			}
 		}
 	}
-	for _, name := range []string{"ExecStartPre", "ExecStartPost", "ExecStop", "ExecStopPost", "ExecReload",
-		"EnvironmentFiles", "SupplementaryGroups", "BindPaths", "TemporaryFileSystem", "SetCredential"} {
+	empty := []string{"ExecStartPre", "ExecStartPost", "ExecStop", "ExecStopPost", "ExecReload", "ExecCondition",
+		"EnvironmentFiles", "SupplementaryGroups", "BindPaths", "TemporaryFileSystem", "SetCredential"}
+	if !transient {
+		empty = append(empty, "DropInPaths")
+	}
+	for _, name := range empty {
 		value, exists := actual[name]
 		if !exists {
 			return nodecommand.ErrConflict
