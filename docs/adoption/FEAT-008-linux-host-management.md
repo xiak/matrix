@@ -35,8 +35,9 @@ sections, not an unreviewed transitive implementation closure.
 | Design `docs/paas/adoption-manifest.yaml`: staged adoption and dependency boundaries | `REFERENCE` | Preserve independently verifiable slices and explicit unknown/stale state. |
 | Same design manifest: GitLab/current-DevOps execution authority and release inventory | `REJECT` | Matrix owns its independent host runtime and offline lifecycle; donor CI/product topology is not a runtime prerequisite. |
 
-No source file is copied and no donor is a build/runtime dependency. Existing
-accepted Matrix adapters, validators, journals and tests retain their owners.
+The initial external-source review copies no files and creates no donor
+build/runtime dependency. Existing accepted Matrix adapters, validators,
+journals and tests retain their owners.
 Any additional source needed by a later iteration is reviewed here at its
 fixed commit before use, rather than opening the whole donor in advance.
 
@@ -46,3 +47,13 @@ manifest/backup bytes and `REUSE` as a separately built legacy `mx` consumer in
 the format-rejection gate. This inspection followed the FEAT-008 profile
 design. No older installer implementation is copied into the working tree,
 and the old scalar schema comparison is not reused for new authority profiles.
+
+For local original-primary credential recovery, fixed same-repository commit
+`91af8482aa218f64f90a7151bca388918367dc7a` is `ADAPT` for the private IAM
+authority/request/receipt contracts and their capability encoder, and `REUSE`
+for the byte-preserving public `BootstrapDigest` and migrated consumers. This
+follows the installation recovery target in FEAT-008. Only those code and
+contract-test slices are consumed; the donor's FEAT status, checkpoint and
+database profile are not imported. This contract-only source has no recovery
+transaction, local executable or new Audit action, and proves none of their
+runtime acceptance gates.

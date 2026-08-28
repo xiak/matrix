@@ -274,6 +274,46 @@ Retain platform backup/recovery/status/support. Node support exposes bounded
 normalized identities, release/health/capacity and correlations, not raw logs,
 paths or secrets. Destructive recovery is an explicit operator action.
 
+### Local platform credential recovery
+
+`mx platform recover-credentials` is a distinct installation operation, not
+backup restoration or bootstrap replay. Its first slice invokes only IAM's
+purpose-limited recovery transaction for the sealed original installation
+primary. The account, binding, session, concurrency and Audit invariants are
+owned by [FEAT-006](FEAT-006-platform-authorities.md). It does not grant or
+restore platform authority, transfer ownership, enable an account or tenant,
+or recover service credentials. Legacy first authorization and revoked-role
+reinstatement remain separate, unsupported intents in this slice.
+
+The existing installation lock and authenticated journal own the command.
+Before recording a new intent or invoking recovery, authenticate the installed
+release, complete supported authority profile, protected bootstrap provenance
+and local capability. Do not accept caller-selected users, tenants, database
+addresses or executables. Invoke only the signed IAM entrypoint with its
+restricted local recovery capability; existing online users, runtime services
+and the installation verifier gain no such capability. Migration and direct
+table writes are not the recovery interface. Recovery neither changes release
+pointers nor restarts the platform, engine, node or workloads.
+
+Read secret input through a bounded protected-file boundary, never a password
+argument or environment value. Ordinary journal records, command output,
+errors, Audit and support evidence contain no password, password hash or raw
+recovery material. Keep only the authenticated protected material needed to
+resume an interrupted command. Its exact identity remains stable across
+response loss and process restart; replay after a later credential change or
+role revocation cannot perform another reset. Once the IAM completion receipt
+and local completion are durable, remove only that command's authenticated
+temporary material. Failed cleanup is resumable and cannot authorize another
+recovery or a rollback of credentials.
+
+Extend the existing CLI, lifecycle, filesystem and installed-runtime gates.
+Prove wrong-root/provenance/profile and changed-input rejection before effects,
+bounded secret input and sanitized output, lost-response and crash replay,
+one-way credential replacement, exact temporary-material cleanup, and unchanged
+service/workload identities and data. IAM's transaction and delayed-Audit gates
+remain in their current owner. SQL migration evidence alone does not admit a
+cross-profile release transition or accept the combined offline slice.
+
 ## Acceptance gates
 
 | Gate | Required evidence |
@@ -521,8 +561,9 @@ No authority database profile changed, and no remote machine or shared engine
 was restarted. A signed platform/node upgrade and rollback pair remains unproved.
 
 Next in P3-1:
-the signed platform/node offline lifecycle and explicit platform authorization
-when upgrading an older installation, before remote application delivery.
+the local original-primary credential recovery slice, followed by the signed
+platform/node offline lifecycle and separately proven first platform
+authorization for an older installation, before remote application delivery.
 P3-1 and the complete Phase 3 release remain unaccepted.
 Retained-data schema migration alone does not establish runnable N-1
 compatibility; the complete offline lifecycle gate must still prove an actual
