@@ -81,8 +81,7 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 	} else {
 		base = t.TempDir()
 	}
-	// Exercise literal systemd specifiers, dollar expressions and whitespace.
-	root := filepath.Join(base, "installation %node $literal")
+	root := filepath.Join(base, "installation")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	facts, err := localmachine.NewLocalHostProbe().Inspect(ctx, base)
 	cancel()
@@ -228,6 +227,14 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 		if !t.Failed() {
 			return
 		}
+		for _, unit := range append([]string{startupUnit}, units...) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			output, _ := exec.CommandContext(ctx, "systemctl", "show", "--property=Id,LoadState,FragmentPath,DropInPaths,NeedDaemonReload,Transient,Type,ActiveState,ExecStart,Environment,ReadWritePaths,LoadCredential,BindReadOnlyPaths,RuntimeDirectory,MemoryMax,TasksMax,Restart,RemainAfterExit", unit).Output()
+			cancel()
+			if len(output) <= 12288 {
+				t.Logf("owned unit snapshot: %s", output)
+			}
+		}
 		select {
 		case summary := <-diagnostic:
 			t.Logf("startup snapshot: %s", summary)
@@ -250,6 +257,19 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 		}
 	})
 	installArgs := []string{"node", "install", "--root", root, "--bundle", bundle, "--trust-key", releaseTrust, "--configuration", enrollmentFile}
+	for _, suffix := range []string{"unsupported space", "unsupported:binding", "unsupported%specifier", "unsupported$dollar"} {
+		unsupportedRoot := filepath.Join(base, suffix)
+		unsupported := enrollment
+		unsupported.Node.StoragePath = filepath.Join(unsupportedRoot, "runtime", "executor")
+		encoded, _ := json.Marshal(unsupported)
+		if err := os.WriteFile(enrollmentFile, encoded, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		nativeMX(t, installer, false, "node", "install", "--root", unsupportedRoot, "--bundle", bundle, "--trust-key", releaseTrust, "--configuration", enrollmentFile)
+		if _, err := os.Lstat(unsupportedRoot); !os.IsNotExist(err) {
+			t.Fatal("unsupported native path created installation state")
+		}
+	}
 	// A role substitution fails before creating a root or touching services.
 	wrong := enrollment
 	wrong.Node.PrivateKeyFile = collectorKey
@@ -403,6 +423,10 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 	if nativeUnitProperty(t, nodeUnit, "MainPID") != firstPID || nativeUnitProperty(t, collectorUnit, "MainPID") != collectorPID {
 		t.Fatal("partial boot registration replay replaced healthy services")
 	}
+	// Routine manager reload must retain the exact service policy and mount
+	// bindings, not just keep the previous processes temporarily alive.
+	nativeSystemctl(t, "daemon-reload")
+	nativeMX(t, installer, true, "node", "verify", "--root", root)
 	// A same-name service with changed policy is not installation-owned merely
 	// because its process is still healthy. Reject it before replacement/stop.
 	memoryLimit := nativeUnitProperty(t, collectorUnit, "MemoryMax")
@@ -578,7 +602,7 @@ func verifyNativeBoot(t *testing.T, installer, base, releaseID string) {
 	source, err := os.ReadFile(filepath.Join(base, "boot-evidence.json"))
 	var evidence nativeBootEvidence
 	if err != nil || json.Unmarshal(source, &evidence) != nil || nodev1.ValidateIdentity(evidence.Identity) != nil ||
-		evidence.Root != filepath.Join(base, "installation %node $literal") || evidence.ReleaseID != releaseID || evidence.CorrelationID == "" || len(evidence.Files) != 8 {
+		evidence.Root != filepath.Join(base, "installation") || evidence.ReleaseID != releaseID || evidence.CorrelationID == "" || len(evidence.Files) != 8 {
 		t.Fatal("boot fixture evidence is missing or inconsistent")
 	}
 	bootID, err := os.ReadFile("/proc/sys/kernel/random/boot_id")

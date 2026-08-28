@@ -83,16 +83,34 @@ func TestNativeServiceIdentitySeparatesTargetsInstallationsAndRoles(t *testing.T
 	}
 	again, _ := ServiceName(identity, false)
 	collector, _ := ServiceName(identity, true)
+	startup, _ := StartupServiceName(identity)
 	other := identity
 	other.ExecutionTargetID = "target-b"
 	otherTarget, _ := ServiceName(other, false)
 	other = identity
 	other.InstallationID = "mxi-" + strings.Repeat("b", 32)
 	otherInstallation, _ := ServiceName(other, false)
-	if first != again || first == collector || first == otherTarget || first == otherInstallation {
+	if first != again || first == collector || first == otherTarget || first == otherInstallation || startup == first || startup == collector {
 		t.Fatal("native service identity aliases another authority or role")
 	}
 	if _, err := ServiceName(nodev1.Identity{}, false); err == nil {
 		t.Fatal("missing node identity received a service name")
+	}
+	if _, err := StartupServiceName(nodev1.Identity{}); err == nil {
+		t.Fatal("missing node identity received a startup registration")
+	}
+}
+
+func TestNativeRootRejectsUnitFileReinterpretation(t *testing.T) {
+	for _, root := range []string{"/data/xiak/matrix-node", "/opt/matrix/node_a.1", "/data/节点-一"} {
+		if err := ValidateNativeRoot(root); err != nil {
+			t.Fatalf("supported native root rejected: %v", err)
+		}
+	}
+	for _, root := range []string{"", "/", "relative", "/data/../other", "/data//node", "/data/node/", "/data/with space", "/data/tab\tpath",
+		"/data/bind:target", "/data/\"quote", "/data/'quote", "/data/back\\slash", "/data/%n", "/data/${USER}", "/data/\u00a0space", "/data/control\x00", string([]byte{'/', 0xff})} {
+		if err := ValidateNativeRoot(root); err == nil {
+			t.Fatalf("unsafe native root admitted: %q", root)
+		}
 	}
 }

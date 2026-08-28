@@ -43,6 +43,9 @@ func (effects *NodeEffects) ValidateEnrollment(plan nodecommand.Plan) error {
 	if effects == nil || effects.verifier == nil || nodecommand.ValidatePlan(plan) != nil {
 		return nodecommand.ErrVerification
 	}
+	if runtime.GOOS == "linux" && nodeconfig.ValidateNativeRoot(plan.Root) != nil {
+		return nodecommand.ErrPrecondition
+	}
 	return effects.verifier.Validate(plan.Configuration, plan.Credentials)
 }
 

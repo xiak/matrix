@@ -218,6 +218,14 @@ workloads. No customer package or firewall is changed. Full local guest boot,
 tamper rejection, interruption/replay and unchanged retained state are required
 before accepting this slice.
 
+Native installation roots must be clean absolute POSIX paths without whitespace,
+control characters, quotes, backslashes, colons, dollar signs or percent signs.
+The minimum systemd's transient bind serialization does not quote source paths;
+unsupported roots are rejected before creating installation state, not accepted
+until a later manager reload changes their meaning. The signed node runtime
+contract binds this restriction. External enrollment input files are copied
+into the protected root and are not native mount sources.
+
 Stage compatible upgrades without disrupting workloads. Failed verification
 restores the previous executable/configuration; explicit N-1 rollback retains
 compatible data. Both versions read retained receipts and communicate with the

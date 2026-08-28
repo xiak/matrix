@@ -9,9 +9,12 @@ import (
 	"errors"
 	"net"
 	"net/url"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
 	"github.com/xiak/matrix/api/contractjson"
@@ -28,6 +31,7 @@ const (
 	MinimumDocker     = "27.5.1"
 	MinimumCompose    = "2.33.0"
 	CollectorVersion  = "1.12.1"
+	NativeRootSyntax  = "absolute-posix-without-unit-syntax/v1"
 )
 
 // ServicePolicy is the fixed native supervision contract, not operator input.
@@ -97,6 +101,22 @@ func StartupServiceName(identity nodev1.Identity) (string, error) {
 	return strings.Replace(name, "matrix-node-", "matrix-node-start-", 1), nil
 }
 
+// ValidateNativeRoot bounds native unit-file round trips on the minimum
+// systemd. Its transient bind serialization does not quote source paths, so
+// accepting setting syntax here could change a binding on daemon reload.
+// Enrollment source files outside this root are not native mount sources.
+func ValidateNativeRoot(value string) error {
+	if value == "/" || !path.IsAbs(value) || path.Clean(value) != value || len(value) > 4096 || !utf8.ValidString(value) {
+		return errors.New("native node root is invalid")
+	}
+	for _, character := range value {
+		if unicode.IsSpace(character) || unicode.IsControl(character) || strings.ContainsRune(":\"'\\$%", character) {
+			return errors.New("native node root contains unit-file syntax")
+		}
+	}
+	return nil
+}
+
 func ContractDigest() string {
 	value := struct {
 		Protocol         string        `json:"protocol"`
@@ -105,10 +125,11 @@ func ContractDigest() string {
 		MinimumSystemd   uint64        `json:"minimumSystemd"`
 		MinimumDocker    string        `json:"minimumDocker"`
 		MinimumCompose   string        `json:"minimumCompose"`
+		NativeRootSyntax string        `json:"nativeRootSyntax"`
 		Node             ServicePolicy `json:"node"`
 		Collector        ServicePolicy `json:"collector"`
 		Startup          ServicePolicy `json:"startup"`
-	}{nodev1.APIVersion, RuntimeRevision, CollectorVersion, MinimumSystemd, MinimumDocker, MinimumCompose, Policy(false), Policy(true), StartupPolicy()}
+	}{nodev1.APIVersion, RuntimeRevision, CollectorVersion, MinimumSystemd, MinimumDocker, MinimumCompose, NativeRootSyntax, Policy(false), Policy(true), StartupPolicy()}
 	encoded, _ := json.Marshal(value)
 	digest := sha256.Sum256(encoded)
 	return "sha256:" + hex.EncodeToString(digest[:])

@@ -106,6 +106,12 @@ func (localNodeSupervisor) RegisterStartup(ctx context.Context, startup nativeSt
 			return errors.Join(nodecommand.ErrOutcomeUnknown, err)
 		}
 	}
+	// Restoring only a missing enablement link need not reload already loaded
+	// definitions. A first registration or interrupted load still reconciles.
+	registered, err = inspectNativeStartup(bounded, connection, startup)
+	if err != nil || registered {
+		return err
+	}
 	if err := connection.ReloadContext(bounded); err != nil {
 		return errors.Join(nodecommand.ErrOutcomeUnknown, err)
 	}
