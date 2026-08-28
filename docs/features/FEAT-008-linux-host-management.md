@@ -200,11 +200,10 @@ execution surface. Readiness requires fresh host and collector observations.
 
 Native execution uses installation-owned transient systemd services, with a
 dynamically allocated collector UID, read-only payload/credential access and
-no Docker socket for that collector. Automatic boot registration is the next
-unaccepted slice: a narrowly owned persistent startup unit must invoke the
-staged `mx node start`, authenticate the retained release/configuration and
-credentials, then reconcile the same node and collector. It must not execute
-an unchecked node binary or create a new enrollment authority.
+no Docker socket for that collector. A narrowly owned persistent startup unit
+invokes the staged `mx node start`, authenticates the retained release,
+configuration and credentials, then reconciles the same node and collector.
+It cannot bypass node-payload verification or create a new enrollment authority.
 
 The startup unit is derived from the sealed installation/target binding. Its
 source stays below the protected installation root; only exact, non-forced
@@ -386,25 +385,37 @@ These tests
 establish admission and format boundaries, not a signed offline release or
 runnable cross-profile N-1 compatibility.
 
-The existing process gate now consumes a release-builder-produced signed
-`OfflineNodeRelease` and executes its bundled `mx`; it does not construct a
-second test-only release implementation. Source `83ff8ca` assembled the pinned
-collector and licenses with the two native executables from a clean checkout.
-The signed bundle passed three native Linux runs covering installation, exact
-replay, actual host/collector readiness, no-reader refresh, staged-payload
-and service-policy tamper rejection, collector outage/reconciliation and
-supervised crash restart.
-Killing the installer after its services started preserved the in-flight command;
-a fresh invocation retained that command, release and both process identities.
-The collector ran under a distinct non-root UID without access to the node
-private key or Docker socket. Only fixture-owned transient services and files
-were used; no customer Docker object, package, daemon or firewall was changed.
-Systemd owns the collector's private runtime directory and removes it when
-the service stops. The real stop/restart and final cleanup assertions verify
-that no mount placeholder remains; a pre-existing directory is not adopted
-merely because its name matches the node identity.
-The experiment services, transient directories and remote test artifacts were
-removed after verification.
+The existing process gate consumes a release-builder-produced signed
+`OfflineNodeRelease` and executes its bundled `mx`, without a second test-only
+release implementation. Clean source `3e60be7` assembled the pinned collector,
+licenses and two native executables. Its signed bundle passed the full native
+gate in 248 seconds on a task-owned, resource-bounded local Ubuntu 22.04 guest
+with systemd 249, Docker 27.5.1 and Compose 2.33.0, without external networking.
+It covered exact install replay, no-reader sampling, staged-payload and effective
+service-policy tamper rejection, manager reload, collector outage/reconciliation
+and supervised crash restart. Restoring an altered unit source without reloading
+does not hide a loaded privileged execution flag. Unsupported native roots fail
+before creating installation state. Partial boot registration is repaired without
+replacing healthy processes.
+
+After interrupting the real installer, the guest kernel was rebooted and its
+changed boot ID verified. The persistent startup unit automatically completed
+the original in-flight command, with no service retry or manual start. Both
+resident processes were running before the first manual `mx` status query.
+The retained installation/target, release, command ID, configuration, certificate/key bytes
+and executor marker were unchanged. The existing gate's read-only boot phase
+in `48f5b32` passed twice against that signed release; it separately bounds the
+wait for fresh observations after boot load instead of equating a running process
+with a current sample. These retained bytes are not evidence of a deployed
+application or database workload surviving reboot. No remote machine, shared
+engine or other task's service was restarted.
+
+The collector runs under a distinct non-root UID without access to the node
+private key or Docker socket. Systemd owns and removes its private runtime
+directory when the service stops. Real stop/restart and cleanup assertions prove
+that no mount placeholder remains; a pre-existing directory is not adopted by
+name. Local effect gates retain executor files and credentials during rollback;
+rollback authenticates every service before removing its exact boot links.
 
 Enrollment/security regressions cover closed input, overlapping IP aliases,
 exact certificate roles, mutual trust, expiry and certificate address binding.
@@ -416,21 +427,21 @@ bytes, including recovery rejection at every effect boundary when the current,
 target and authenticated backup profiles differ. This branch retains its
 IAM 2 / Audit 2 / PaaS 2, revision 1 platform profile.
 
-Full local Go/race, vet, architecture, module verification, stable generation,
-Linux builds and ten focused repetitions passed. The existing independent
-node-process job now builds and tests the signed native package alongside the
-original collector and real-authority regression gates. Its exact-source
-[CI run](https://github.com/xiak/matrix/actions/runs/33076021004) passed all three
-jobs.
+Full local Go tests/vet, affected-package race checks, architecture, module
+verification, stable generation, Linux builds/vet and ten focused repetitions
+passed. The existing independent node-process job builds and tests the signed
+native package alongside the collector and real-authority regressions. The
+signed source's [CI run](https://github.com/xiak/matrix/actions/runs/33137724786)
+and the [gate-only correction](https://github.com/xiak/matrix/actions/runs/33138389163)
+each passed all three jobs.
 The native exercise consumes an extracted Linux bundle; declared executable
 modes were restored after the Windows-origin transfer before verification.
-It is not evidence of a portable archive format, node-wide egress isolation,
-automatic boot registration, certificate renewal/revocation, or a compatible
-signed platform/node release pair.
+This is not evidence of a portable archive format, certificate renewal/revocation,
+or a compatible signed platform/node release pair.
 
-Next in P3-1: automatic node startup after reboot, installation-owned
-certificate lifecycle and explicit platform authorization when upgrading an
-older installation, before remote application delivery.
+Next in P3-1: installation-owned certificate lifecycle and explicit platform
+authorization when upgrading an older installation, before remote application
+delivery.
 P3-1 and the complete Phase 3 release remain unaccepted.
 Retained-data schema migration alone does not establish runnable N-1
 compatibility; the complete offline lifecycle gate must still prove an actual
