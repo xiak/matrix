@@ -278,7 +278,7 @@ func assertAuditContractCatalog(
 		// hash mismatch rejection. The authorized migration identity only calls
 		// validation here; no invalid record is inserted or encoder duplicated.
 		forgedTarget := event
-		if action == auditv1.ActionIAMTenantAdministratorRecovered {
+		if action == auditv1.ActionIAMTenantAdministratorRecovered || action == auditv1.ActionIAMInstallationPrimaryCredentialsRecovered {
 			forgedTarget.Target.TenantID = ""
 		} else {
 			forgedTarget.Target.TenantID = "organization-forged"
@@ -311,6 +311,9 @@ func assertAuditContractCatalog(
 						forged.TenantID, forged.InstallationID = auditv1.TenantID(forged.InstallationID), ""
 					case "actor":
 						forged.Actor.Type = auditv1.ActorSystem
+						if action == auditv1.ActionIAMInstallationPrimaryCredentialsRecovered {
+							forged.Actor.Type = auditv1.ActorUser
+						}
 					case "installation":
 						forged.InstallationID = "other-installation"
 					}
@@ -862,7 +865,7 @@ func assertIAMLookupBoundaries(
 	); err != nil {
 		t.Fatalf("read IAM readiness: %v", err)
 	}
-	if !ready || schemaVersion != 3 || checkedAt.IsZero() {
+	if !ready || schemaVersion != 4 || checkedAt.IsZero() {
 		t.Fatalf("IAM readiness ready=%t schema=%d checked=%s", ready, schemaVersion, checkedAt)
 	}
 	var tenantID, principalID, passwordHash, organizationStatus, principalStatus string
@@ -943,7 +946,7 @@ func assertIAMUninitialized(t *testing.T, ctx context.Context, iamAPI *pgx.Conn)
 	); err != nil {
 		t.Fatalf("read uninitialized IAM readiness: %v", err)
 	}
-	if ready || schemaVersion != 3 || checkedAt.IsZero() {
+	if ready || schemaVersion != 4 || checkedAt.IsZero() {
 		t.Fatalf("uninitialized IAM readiness ready=%t schema=%d checked=%s", ready, schemaVersion, checkedAt)
 	}
 }
@@ -1874,7 +1877,10 @@ func authorityAuditEvent(
 		event.TenantID, event.InstallationID = "", string(tenantID)
 		event.Actor.Type = auditv1.ActorUser
 	}
-	if action == auditv1.ActionIAMTenantAdministratorRecovered {
+	if action == auditv1.ActionIAMInstallationPrimaryCredentialsRecovered {
+		event.Actor = auditv1.ActorReference{Type: auditv1.ActorSystem, ID: "iam-local-recovery"}
+	}
+	if action == auditv1.ActionIAMTenantAdministratorRecovered || action == auditv1.ActionIAMInstallationPrimaryCredentialsRecovered {
 		event.Target.TenantID = "organization-recovered"
 	}
 	return event

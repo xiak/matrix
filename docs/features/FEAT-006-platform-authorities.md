@@ -7,7 +7,7 @@
 - Audit API contract: `audit.matrix.xiak.com/v1`
 - Phase 3 extension: installation-scoped IAM authority implemented; host-resource consumption and offline upgrade acceptance remain in FEAT-008
 - Multi-tenant extension: accounts, primary/platform credential protection, historical producer proof, tenant lifecycle, original-primary recovery and password-session policy pass backend, signed lifecycle and installed-browser gates; keyboard-only usability verification is deferred by the user in FEAT-007
-- Follow-up: original installation-primary local credential recovery is in implementation; it does not reopen or extend the accepted multi-tenant evidence
+- Follow-up: original installation-primary local credential recovery is implemented in IAM/Audit; signed installation/CLI integration remains separate and unaccepted, without reopening the accepted multi-tenant evidence
 
 ## Outcome
 
@@ -181,13 +181,24 @@ revoked role, ownership transfer, service-credential recovery, or recovery
 from a disabled principal/organization. Those cases fail without effects.
 The completed multi-tenant slice retains its existing acceptance status.
 
-The signed release supplies a purpose-specific, one-shot IAM local entry with
+The signed release must supply a purpose-specific, one-shot IAM local entry with
 `inspect` and `apply` modes, separate from the HTTP server and database
 migrator. Installation owns verified executable selection, local capability
 protection, command locking/journaling, secret-file lifetime, and release
 profile enforcement. IAM owns capability verification, the atomic security
 mutation, completion evidence, and its single immutable Audit fact. Neither
 mode restarts services, engines, hosts, or workloads.
+
+The entry is `matrix-iam-local-recovery inspect|apply`, with no other argument
+or northbound route. It reads only the exact protected files named by
+`MATRIX_IAM_LOCAL_RECOVERY_DATABASE_DSN_FILE`,
+`MATRIX_IAM_LOCAL_RECOVERY_AUTHORITY_FILE`, and, when needed,
+`MATRIX_IAM_LOCAL_RECOVERY_REQUEST_FILE`. Successful output is validated,
+sanitized JSON. Exit codes are 0 for success, 2 for invalid input, 3 for
+forbidden authority, 4 for conflicting intent/state, and 6 for unavailable or
+unknown outcome; failure output is only the corresponding stable
+`IAM_LOCAL_RECOVERY_*` code. A lost or invalid result requires receipt
+inspection, not automatic reissuance with fresh expected values.
 
 The local authority combines an installation-private capability signing key
 with a dedicated PostgreSQL login whose sole role is
@@ -198,6 +209,9 @@ Existing USER/API/worker/verifier credentials gain no recovery capability.
 The authority file seals installation ID, bootstrap content digest, home
 organization, and original primary ID. Both commands compare this tuple with
 IAM's existing bootstrap receipt; callers cannot choose another target.
+The dedicated login is `matrix_iam_credential_recovery_login`; only ordinary
+installation provisioning uses `MATRIX_MIGRATION_IAM_RECOVERY_DSN_FILE` to
+configure it. Migration is never a supported recovery effect.
 
 The signing key is local issuing authority, not a USER permission. A single
 HMAC-SHA256 capability binds the fixed purpose, command ID, sealed tuple,
@@ -208,6 +222,13 @@ Capability verification is constant-time. Passwords, password hashes,
 capabilities and database credentials never enter ordinary journal JSON,
 Audit, standard output, or native errors. An input commitment is the SHA-256
 of the capability, not an unkeyed password digest or an append permission.
+The trusted one-shot executable verifies this MAC; PostgreSQL authenticates
+the dedicated database role and independently enforces sealed ownership and
+the atomic state transition. This does not claim that PostgreSQL verifies the
+MAC or that a compromised local installation authority is contained by it.
+Installation consumes the single public `iamv1.BootstrapDigest` function;
+the existing sealed receipt bytes are not redefined or copied into a second
+digest implementation.
 
 Read-only inspection uses this separate local authority rather than a lost
 user session. It returns only the eligible sealed original primary and the
@@ -245,8 +266,8 @@ later user/session/binding state cannot erase an already committed fact.
 Existing canonical bytes, chain hashing, ServiceIdentity, lookup_service,
 and the seven-column outbox claim stay unchanged.
 
-Acceptance for this follow-up extends the existing IAM/Audit and
-authority-process owners, and is not yet claimed:
+Backend acceptance for this follow-up extends the existing IAM/Audit and
+authority-process owners. It does not certify the installation consumer:
 
 1. Contract/domain tests reject substituted scope, purpose, generation,
    binding, password, capability, actor, action and target; private material
@@ -259,16 +280,48 @@ authority-process owners, and is not yet claimed:
    serialize without lost generations, partial facts, surviving old sessions
    or privilege resurrection. Both recovery-first and revoke-first outcomes
    retain their respective committed facts and terminal revoked bindings.
-4. A real signed-entry-compatible IAM executable is invoked in the existing
+4. The real one-shot IAM executable is invoked in the existing
    independent-process gate, followed by normal login/forced change and
    actual outbox delivery/replay/chain verification. Process restart and
    retained-state schema upgrade preserve history and replay behavior.
 5. IAM schema/function and Audit closed-action changes are verified by actual
    schema/readiness checks. The coordinated target is IAM4/Audit3 and release
-   contract revision 4, frozen with the installation owner; integration and
-   this follow-up's acceptance remain pending.
+   contract revision 4, frozen with the installation owner. This branch's
+   actual complete profile is IAM4/Audit3/PaaS1 plus revision 4; signed
+   installation/CLI integration remains pending in its existing owner.
    These SQL/runtime checks do not certify a cross-profile release transition
    or import this branch's PaaS1 profile into Phase 3's PaaS2 composition.
+
+The local backend gates pass on 2026-08-28 with a dedicated PostgreSQL 18
+instance limited to one CPU and 768 MiB, fresh named databases, bounded
+connections and serial heavy gates. Contract, architecture, full-repository
+race/vet, generated schema and Linux builds pass. Actual restricted logins
+reject tables, other functions, role escalation and cross-schema access;
+verification rejects inherited recovery authority and altered function/RLS/
+immutability protections. Ordered real-lock races prove both recovery-first
+and revoke-first outcomes, alongside password/reset/recovery/logout/grant/
+login and duplicate-intent races. Rejection preserves credentials, sessions,
+bindings and success facts; exact replay cannot perform another mutation.
+
+The existing independent-process gate invokes the actual one-shot executable
+with protected files and observes its single purpose-only database connection.
+It proves forced password replacement, exact receipt confirmation after the
+private intent file is removed, conflicting input rejection, historical
+outbox delivery after an Audit outage, action/SYSTEM-filtered platform query,
+and chain/replay behavior after later password change, platform revocation
+and IAM restart. Only the exact committed IAM fact is admitted; other
+producers and substituted targets/correlation are rejected. This is not a
+claim that a Docker transport interruption or signed CLI journal was tested.
+
+The actual fixed `5721b7b` IAM executable creates populated schema-3 state
+before migration: valid and revoked sessions, changed credentials and role
+history. The new executable rejects the unmigrated schema. Production
+provisioning/verification applied twice preserves valid generation-bound
+sessions and old canonical bytes; recovery and restart never revive revoked
+state. The existing `9fd45b0`/`a36cf98` retained-executable, dual-tenant resource,
+Audit HTTP/storage and PaaS database regressions also pass. These results
+certify this IAM/Audit backend boundary only, not a signed cross-profile
+installation upgrade or Phase 3's different composition.
 
 ### Tenant accounts and subaccounts
 
@@ -323,12 +376,12 @@ No migration backfills or retention option may bless these legacy rows.
 Wrong-password and failed transactions leave the password,
 sessions and success facts unchanged. The console calls these login sessions,
 not devices; it does not add device fingerprinting or a device inventory.
-This hardening increments IAM's schema to 3 and the release contract revision
-to 3. Retained-session process gates, the populated signed lifecycle in
-FEAT-005 and the installed-browser journey in FEAT-007 pass for this contract.
-Audit remains 2 and this branch's PaaS remains 1. The complete `3/2/1`
-revision 3 profile is verified independently; the previous signed `2/2/1`
-revision 2 evidence is not reused to certify the new password/session contract.
+The accepted password/session implementation at `5721b7b` uses IAM3/Audit2/
+PaaS1 and release contract revision 3. Retained-session process gates, the
+populated signed lifecycle in FEAT-005 and the installed-browser journey in
+FEAT-007 pass for that exact complete profile. Neither earlier `2/2/1`
+revision-2 evidence nor this accepted revision-3 installation certifies the
+subsequent local-recovery release profile defined above.
 
 An explicitly bound `PLATFORM_OPERATOR` may open another tenant account with
 its own primary account and initial password, list/read tenant metadata,

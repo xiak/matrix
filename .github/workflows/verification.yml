@@ -70,7 +70,8 @@ jobs:
           POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
         run: |
           for database in matrix_authority_ci matrix_audit_upgrade_ci matrix_audit_http_ci \
-              matrix_iam_http_ci matrix_iam_upgrade_ci matrix_iam_upgrade_sessions_ci \
+              matrix_iam_http_ci matrix_iam_recovery_ci matrix_iam_upgrade_ci matrix_iam_upgrade_sessions_ci \
+              matrix_iam_upgrade_local_recovery_ci \
               matrix_authority_process_ci matrix_paas_ci; do
             docker exec "$POSTGRES_CONTAINER_ID" createdb -U postgres "$database"
           done
@@ -88,8 +89,10 @@ jobs:
           MATRIX_AUDIT_UPGRADE_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports[5432] }}/matrix_audit_upgrade_ci?sslmode=disable
           MATRIX_AUDIT_HTTP_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports[5432] }}/matrix_audit_http_ci?sslmode=disable
           MATRIX_IAM_HTTP_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports[5432] }}/matrix_iam_http_ci?sslmode=disable
+          MATRIX_IAM_RECOVERY_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports[5432] }}/matrix_iam_recovery_ci?sslmode=disable
           MATRIX_IAM_UPGRADE_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports[5432] }}/matrix_iam_upgrade_ci?sslmode=disable
           MATRIX_IAM_SESSION_UPGRADE_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports[5432] }}/matrix_iam_upgrade_sessions_ci?sslmode=disable
+          MATRIX_IAM_LOCAL_RECOVERY_UPGRADE_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports[5432] }}/matrix_iam_upgrade_local_recovery_ci?sslmode=disable
           MATRIX_AUTHORITY_PROCESS_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports[5432] }}/matrix_authority_process_ci?sslmode=disable
           MATRIX_PAAS_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports[5432] }}/matrix_paas_ci?sslmode=disable
         run: |

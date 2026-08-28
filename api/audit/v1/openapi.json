@@ -20,6 +20,7 @@
           "iam.tenant.disabled",
           "iam.tenant.enabled",
           "iam.tenant-administrator.recovered",
+          "iam.installation-primary.credentials-recovered",
           "iam.account-alias.set",
           "iam.principal.status-set",
           "iam.password.reset",
@@ -196,6 +197,32 @@
                   "properties": {
                     "action": {
                       "const": "iam.tenant-administrator.recovered"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.installation-primary.credentials-recovered"
                     }
                   },
                   "required": [
@@ -1346,6 +1373,54 @@
               "required": [
                 "installationId",
                 "iamDecisionId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.installation-primary.credentials-recovered"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "id": {
+                      "const": "iam-local-recovery"
+                    },
+                    "type": {
+                      "const": "SYSTEM"
+                    }
+                  }
+                },
+                "iamDecisionId": false,
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "PRINCIPAL"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "tenantId"
+                  ]
+                },
+                "tenantId": false
+              },
+              "required": [
+                "installationId"
               ]
             }
           },

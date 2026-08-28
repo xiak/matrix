@@ -14,6 +14,7 @@ import (
 var dsnFileEnvironments = []string{
 	"MATRIX_MIGRATION_DATABASE_DSN_FILE",
 	"MATRIX_MIGRATION_IAM_API_DSN_FILE",
+	"MATRIX_MIGRATION_IAM_RECOVERY_DSN_FILE",
 	"MATRIX_MIGRATION_IAM_WORKER_DSN_FILE",
 }
 
@@ -30,10 +31,10 @@ func run(ctx context.Context, arguments []string) error {
 	return migrationprocess.Run(ctx, arguments, migrationprocess.Configuration{
 		DSNFileEnvironments: dsnFileEnvironments,
 		Apply: func(ctx context.Context, values []string) error {
-			return iammigration.Apply(ctx, values[0], values[1], values[2])
+			return iammigration.ApplyWithLocalRecovery(ctx, values[0], values[1], values[3], values[2])
 		},
 		Verify: func(ctx context.Context, values []string) error {
-			return iammigration.VerifyInstalled(ctx, values[0], values[1], values[2])
+			return iammigration.VerifyInstalledWithLocalRecovery(ctx, values[0], values[1], values[3], values[2])
 		},
 	})
 }
