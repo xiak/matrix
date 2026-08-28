@@ -135,3 +135,46 @@ func TestNativeRetentionRequiresSameRunningContainerAndStart(t *testing.T) {
 		})
 	}
 }
+
+func TestNativeRotationAllowsOnlyTheOwnedAPIReplacement(t *testing.T) {
+	var before []containerInspection
+	for _, name := range []string{"paas-api", "paas-worker", "postgres", "workload"} {
+		var container containerInspection
+		container.ID = name + "-before"
+		container.Config.Image = "sha256:" + strings.Repeat("a", 64)
+		container.Config.Labels = map[string]string{"com.xiak.matrix.installation": "installation-test", "com.xiak.matrix.role": name}
+		container.State.Running = true
+		container.State.StartedAt = "2026-08-28T00:00:00Z"
+		before = append(before, container)
+	}
+	for _, scenario := range []struct {
+		name    string
+		mutate  func([]containerInspection) []containerInspection
+		allowed bool
+	}{
+		{"API only", func(v []containerInspection) []containerInspection { return v }, true},
+		{"worker replacement", func(v []containerInspection) []containerInspection { v[1].ID = "new-worker"; return v }, false},
+		{"database restart", func(v []containerInspection) []containerInspection {
+			v[2].State.StartedAt = "2026-08-28T00:01:00Z"
+			return v
+		}, false},
+		{"workload restart counter", func(v []containerInspection) []containerInspection { v[3].RestartCount++; return v }, false},
+		{"database stopped", func(v []containerInspection) []containerInspection { v[2].State.Running = false; return v }, false},
+		{"API foreign installation", func(v []containerInspection) []containerInspection {
+			v[0].Config.Labels = map[string]string{"com.xiak.matrix.installation": "foreign", "com.xiak.matrix.role": "paas-api"}
+			return v
+		}, false},
+		{"API wrong image", func(v []containerInspection) []containerInspection { v[0].Config.Image = "other-image"; return v }, false},
+		{"additional runtime", func(v []containerInspection) []containerInspection { return append(v, v[2]) }, false},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			after := append([]containerInspection(nil), before...)
+			after[0].ID = "new-api"
+			after[0].State.StartedAt = "2026-08-28T00:01:00Z"
+			after = scenario.mutate(after)
+			if preservesNativeRotationRuntime(before, after, "installation-test") != scenario.allowed {
+				t.Fatal("API-only replacement boundary misclassified")
+			}
+		})
+	}
+}

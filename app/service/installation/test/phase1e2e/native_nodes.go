@@ -613,7 +613,8 @@ func (value *gate) waitNativeStored(ctx context.Context, index int, health paasv
 		if err != nil {
 			return paasv1.ExecutionTarget{}, err
 		}
-		if target.Status.Health == health && target.Status.Usage != nil && (after.IsZero() || target.Status.Usage.ObservedAt.After(after)) {
+		if target.Status.Health == health && target.Status.Usage != nil && (after.IsZero() || target.Status.Usage.ObservedAt.After(after)) &&
+			(health != paasv1.ExecutionTargetHealthReady || time.Now().Before(target.Status.Usage.ValidUntil) && target.Status.Usage.CPU.State == paasv1.MeasurementAvailable && target.Status.Usage.Memory.State == paasv1.MeasurementAvailable) {
 			return target, nil
 		}
 		if !waitPoll(poll, 500*time.Millisecond) {
@@ -682,20 +683,59 @@ func (value *gate) rotateNativeCredentials(ctx context.Context, bearer []byte) e
 	if err = value.nodes.credentials(ctx, value, true); err != nil {
 		return err
 	}
-	after, err := inspectContainers(ctx, ids)
-	if err != nil || len(before) != len(after) {
+	afterIDs, err := dockerLines(ctx, "container", "ls", "--quiet", "--no-trunc")
+	if err != nil {
 		return fail("native-rotation-platform-preservation")
 	}
-	for index := range before {
-		if before[index].ID != after[index].ID || before[index].State.StartedAt != after[index].State.StartedAt || before[index].RestartCount != after[index].RestartCount || !after[index].State.Running {
-			return fail("native-rotation-restarted-platform")
-		}
+	after, err := inspectContainers(ctx, afterIDs)
+	if err != nil || !preservesNativeRotationRuntime(before, after, value.nodes.controller.InstallationID) {
+		return fail("native-rotation-platform-preservation")
+	}
+	if _, err := assertPlatform(ctx, value.config.root, value.releases.a.Manifest, ""); err != nil {
+		return err
 	}
 	if err = value.assertNativeNodes(ctx, bearer, false); err != nil {
 		return err
 	}
-	emit("native-complete-trust-replacement-without-platform-restart")
+	emit("native-complete-trust-replacement-with-exact-api-only-platform-effect")
 	return nil
+}
+
+func preservesNativeRotationRuntime(before, after []containerInspection, installationID string) bool {
+	if installationID == "" || len(before) != len(after) {
+		return false
+	}
+	beforeAPIs, afterAPIs := 0, 0
+	for _, current := range after {
+		if current.Config.Labels["com.xiak.matrix.role"] == "paas-api" && current.Config.Labels["com.xiak.matrix.installation"] == installationID {
+			afterAPIs++
+		}
+	}
+	for _, original := range before {
+		ownedAPI := original.Config.Labels["com.xiak.matrix.role"] == "paas-api" && original.Config.Labels["com.xiak.matrix.installation"] == installationID
+		if ownedAPI {
+			beforeAPIs++
+		}
+		found := false
+		for _, current := range after {
+			if !current.State.Running {
+				continue
+			}
+			if ownedAPI {
+				// configure-nodes owns exactly this API replacement. Its full
+				// signed topology is also checked through assertPlatform.
+				if current.Config.Labels["com.xiak.matrix.role"] == "paas-api" && current.Config.Labels["com.xiak.matrix.installation"] == installationID && current.Config.Image == original.Config.Image {
+					found = true
+				}
+			} else if original.ID != "" && current.ID == original.ID && original.State.StartedAt != "" && current.State.StartedAt == original.State.StartedAt && current.RestartCount == original.RestartCount {
+				found = true
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return beforeAPIs == 1 && afterAPIs == 1
 }
 
 func (value *gate) nativeReleasePair(ctx context.Context, bearer []byte) error {
