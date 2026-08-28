@@ -202,14 +202,18 @@ func TestCredentialRecoveryRetainsOneIntentAndNeverRollsBackCredentials(t *testi
 }
 
 func TestCredentialRecoveryRejectsUnsupportedProfilesBeforePreparingAnIntent(t *testing.T) {
-	profiles := []release.DatabaseProfile{
-		{Compatibility: "identical-authority-profile", Authorities: release.AuthoritySchemas{IAM: 3, Audit: 2, PaaS: 2}, ContractRevision: 3},
-		{Compatibility: "identical-authority-profile", Authorities: release.AuthoritySchemas{IAM: 4, Audit: 3, PaaS: 1}, ContractRevision: 4},
-		{Compatibility: "identical-authority-profile", Authorities: release.AuthoritySchemas{IAM: 4, Audit: 3, PaaS: 2}, ContractRevision: 5},
+	profiles := []struct {
+		name    string
+		profile release.DatabaseProfile
+	}{
+		{name: "published scalar is not first-authorization admission", profile: release.DatabaseProfile{SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one"}},
+		{name: "prior credential contract", profile: release.DatabaseProfile{Compatibility: "identical-authority-profile", Authorities: release.AuthoritySchemas{IAM: 3, Audit: 2, PaaS: 2}, ContractRevision: 3}},
+		{name: "different PaaS schema", profile: release.DatabaseProfile{Compatibility: "identical-authority-profile", Authorities: release.AuthoritySchemas{IAM: 4, Audit: 3, PaaS: 1}, ContractRevision: 4}},
+		{name: "different contract revision", profile: release.DatabaseProfile{Compatibility: "identical-authority-profile", Authorities: release.AuthoritySchemas{IAM: 4, Audit: 3, PaaS: 2}, ContractRevision: 5}},
 	}
-	for index, profile := range profiles {
-		t.Run(fmt.Sprint(index), func(t *testing.T) {
-			fixtures, err := releasetest.WriteSequence(t.TempDir(), 2, profile, profile)
+	for _, test := range profiles {
+		t.Run(test.name, func(t *testing.T) {
+			fixtures, err := releasetest.WriteSequence(t.TempDir(), 2, test.profile, test.profile)
 			if err != nil {
 				t.Fatal(err)
 			}

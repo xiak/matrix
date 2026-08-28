@@ -17,6 +17,7 @@
 | Matrix tenant lifecycle and original-primary recovery | `c9fa43d9452b5eda6cfef67f153ac0c106864e7a` | Fixed source only; preserve existing platform/host authority and old tenant Audit bytes. |
 | Matrix credential-generation and session-policy closure | `5721b7b1a985f25c9730ddb9229a51f7f6c3b63a` | Fixed source only; consume the required lifecycle dependencies, not the donor worktree, profile values or acceptance state. |
 | Matrix pre-generation IAM executable | `a36cf9817f522549b995ea9c1f0d873499b4fe62` | Retained-data test fixture only, extracted from fixed objects into the test's own temporary directory. |
+| Matrix pre-platform IAM executable | `c88a84f379afcf94431e2aca7332fe6ec3136dc7` | Retained-data test fixture only; use its real executable/schema to produce absent platform-grant history, not current-schema deletions. |
 
 The independent authority target, closed Phase 1 roles and actions, bootstrap
 contract, opaque credentials, Audit event union, indefinite retention, and
@@ -92,6 +93,7 @@ release.
 | `5721b7b`: password request, credential generation, session persistence and readiness | `ADAPT` | Replace the five-argument password function with current-session-bound policy. Forced changes revoke other sessions; explicit ordinary retention admits only valid same-USER generations. Legacy NULL sessions fail closed without timestamp inference or migration backfill. Keep ServiceIdentity and the seven-column claim unchanged. |
 | `5721b7b`: current contract, database, concurrency and retained-executable gates | `ADAPT` | Extend the existing owners, including real restricted process identities, without replacing Phase 3 host registration/Operation/outbox tests. Independently verify the consuming branch rather than inheriting donor results. |
 | `a36cf98`: actual pre-generation IAM executable and schema | `REFERENCE` | Produce real legacy sessions and retained account data for the current migration gate. Its executable, source, schema profile and UI are not production dependencies or a supported rollback target. |
+| `c88a84f`: actual pre-platform IAM executable, schema and bootstrap facts | `REUSE` as a fixed test producer; `REFERENCE` for proof limits | Produce real original accounts, sessions and immutable facts without platform bindings, then prove migration/replay/restart never grants absent authority. Its bootstrap fact does not identify the executing source revision; this test is neither first-authorization admission nor a signed release-transition path. |
 | `5721b7b`: donor release profile and lifecycle acceptance | `REJECT` as imported state | The donor's PaaS schema is 1; this branch's host schema is 2. Derive the actual consuming profile and keep cross-profile effects forbidden. Donor SQL migration evidence does not admit a release upgrade, rollback or recovery. |
 | Donor checkpoint, Phase 3 status and generated UI artifacts | `REJECT` as imported state | Keep this branch's checkpoint and FEAT-008 evidence; regenerate the UI export from admitted source. No moving branch, redundant action-catalog migration, or donor runtime dependency is introduced. |
 

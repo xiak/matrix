@@ -138,14 +138,30 @@ func TestPlatformAuditObservationRetriesOnlyExplicitUnavailable(t *testing.T) {
 }
 
 func TestIAMRetainedAccountProcessUpgrade(t *testing.T) {
-	testIAMRetainedProcessUpgrade(t, "MATRIX_IAM_UPGRADE_POSTGRES_TEST_DSN", "9fd45b03ea398828fa3e74bf99961d2348c68299", false)
+	testIAMRetainedProcessUpgrade(t, "MATRIX_IAM_UPGRADE_POSTGRES_TEST_DSN", retainedIAMBaseline{
+		commit: "9fd45b03ea398828fa3e74bf99961d2348c68299", platformBinding: true,
+	})
 }
 
 func TestIAMRetainedSessionProcessUpgrade(t *testing.T) {
-	testIAMRetainedProcessUpgrade(t, "MATRIX_IAM_SESSION_UPGRADE_POSTGRES_TEST_DSN", "a36cf9817f522549b995ea9c1f0d873499b4fe62", true)
+	testIAMRetainedProcessUpgrade(t, "MATRIX_IAM_SESSION_UPGRADE_POSTGRES_TEST_DSN", retainedIAMBaseline{
+		commit: "a36cf9817f522549b995ea9c1f0d873499b4fe62", qualifiedChild: true, platformBinding: true,
+	})
 }
 
-func testIAMRetainedProcessUpgrade(t *testing.T, variable, fixedCommit string, qualifiedChild bool) {
+func TestIAMRetainedPrePlatformProcessUpgrade(t *testing.T) {
+	testIAMRetainedProcessUpgrade(t, "MATRIX_IAM_PRE_PLATFORM_UPGRADE_POSTGRES_TEST_DSN", retainedIAMBaseline{
+		commit: "c88a84f379afcf94431e2aca7332fe6ec3136dc7",
+	})
+}
+
+type retainedIAMBaseline struct {
+	commit          string
+	qualifiedChild  bool
+	platformBinding bool
+}
+
+func testIAMRetainedProcessUpgrade(t *testing.T, variable string, baseline retainedIAMBaseline) {
 	t.Helper()
 	dsn := os.Getenv(variable)
 	if dsn == "" {
@@ -169,9 +185,9 @@ func testIAMRetainedProcessUpgrade(t *testing.T, variable, fixedCommit string, q
 		t.Fatal(err)
 	}
 	root, temporary := repositoryRoot(t), t.TempDir()
-	baselineRoot := extractFixedIAMSource(t, ctx, root, temporary, fixedCommit)
+	baselineRoot := extractFixedIAMSource(t, ctx, root, temporary, baseline.commit)
 	migrations := []string{"000001_authority"}
-	if qualifiedChild {
+	if baseline.qualifiedChild {
 		migrations = append(migrations, "000003_tenant_accounts")
 	}
 	for _, migration := range migrations {
@@ -211,8 +227,15 @@ func testIAMRetainedProcessUpgrade(t *testing.T, variable, fixedCommit string, q
 		return child
 	}
 	old := start(oldBinary)
+	var originalPlatformBindings int
+	if err := admin.QueryRow(ctx, "SELECT count(*) FROM iam.role_bindings WHERE role_name='PLATFORM_OPERATOR'").Scan(&originalPlatformBindings); err != nil {
+		t.Fatal("read actual predecessor platform bindings")
+	}
+	if baseline.platformBinding && originalPlatformBindings != 1 || !baseline.platformBinding && originalPlatformBindings != 0 {
+		t.Fatal("actual predecessor does not establish the expected platform-authority history")
+	}
 	oldChildLogin := "retained.viewer"
-	if qualifiedChild {
+	if baseline.qualifiedChild {
 		oldChildLogin += "@organization-process"
 	}
 	administrator := loginIAM(t, endpoint, "admin", initialAdminPassword, "request-upgrade-admin-login")
@@ -225,8 +248,24 @@ func testIAMRetainedProcessUpgrade(t *testing.T, variable, fixedCommit string, q
 	binding := putIAMBinding(t, endpoint, administrator.Credential, user.ID, iamv1.RolePaaSViewer, "request-upgrade-role")
 	revokeIAMBinding(t, endpoint, administrator.Credential, binding.ID, "request-upgrade-role-revoke")
 	revokeIAMSession(t, endpoint, administrator.Credential, member.Session.ID, "request-upgrade-session-revoke")
-	revokeIAMBinding(t, endpoint, administrator.Credential, "bootstrap-platform-operator-binding", "request-upgrade-platform-revoke")
+	if baseline.platformBinding {
+		revokeIAMBinding(t, endpoint, administrator.Credential, "bootstrap-platform-operator-binding", "request-upgrade-platform-revoke")
+	}
 	old.stop()
+	// The real predecessor, not current-schema fixture DML, creates this
+	// history. Equal bootstrap facts alone do not attest an executable's source.
+	const bootstrapReceiptQuery = `SELECT jsonb_build_array(installation_id,content_digest,
+		organization_id,administrator_principal_id,applied_at)::text FROM iam.bootstrap_receipts WHERE singleton`
+	const platformHistoryQuery = `SELECT COALESCE(jsonb_agg(jsonb_build_array(tenant_id,id,
+		principal_id,role_name,resource_version,created_at,updated_at,revoked_at) ORDER BY tenant_id,id),'[]'::jsonb)::text
+		FROM iam.role_bindings WHERE role_name='PLATFORM_OPERATOR'`
+	var bootstrapReceipt, platformHistory string
+	if err := admin.QueryRow(ctx, bootstrapReceiptQuery).Scan(&bootstrapReceipt); err != nil {
+		t.Fatal("read predecessor bootstrap identity receipt")
+	}
+	if err := admin.QueryRow(ctx, platformHistoryQuery).Scan(&platformHistory); err != nil {
+		t.Fatal("read predecessor platform grant/revocation history")
+	}
 	rows, err := admin.Query(ctx, "SELECT event_id,event_document FROM iam.audit_outbox")
 	if err != nil {
 		t.Fatal(err)
@@ -277,6 +316,13 @@ func testIAMRetainedProcessUpgrade(t *testing.T, variable, fixedCommit string, q
 		if attempt > 0 {
 			current.stop()
 			current = start(currentBinary)
+		}
+		var currentReceipt, currentPlatformHistory string
+		if err := admin.QueryRow(ctx, bootstrapReceiptQuery).Scan(&currentReceipt); err != nil || currentReceipt != bootstrapReceipt {
+			t.Fatal("migration/bootstrap replay/restart changed the original bootstrap identity receipt")
+		}
+		if err := admin.QueryRow(ctx, platformHistoryQuery).Scan(&currentPlatformHistory); err != nil || currentPlatformHistory != platformHistory {
+			t.Fatal("migration/bootstrap replay/restart granted absent platform authority or rewrote its history")
 		}
 		for _, invalid := range []string{member.Credential, legacyTemporary.Credential, legacyCurrent.Credential, administrator.Credential} {
 			if got := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", invalid, nil); got.Status != http.StatusUnauthorized {

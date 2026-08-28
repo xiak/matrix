@@ -514,6 +514,21 @@ revision 4, with the host admission and dual-tenant regressions retained. This
 proves the authority transaction and process boundary, not the signed installer
 consumer, its crash recovery, or runnable cross-profile compatibility.
 
+The same process owner also runs the actual pre-platform `c88a84f` executable
+and schema. Its original bootstrap creates no platform binding. Against an
+isolated PostgreSQL 18 database, retained-data migration to IAM 4, repeated
+schema application, equal bootstrap replay and process restart preserved the
+original bootstrap receipt, canonical outbox facts, passwords and revoked
+tenant roles while keeping platform authorization denied. Unversioned legacy
+sessions remained rejected; fresh qualified logins and historical outbox proof
+worked. The existing `9fd45b0`/`a36cf98` cases separately retain revoked platform
+bindings rather than substituting them for a never-granted sample.
+This establishes a real pre-platform data fixture, not provenance of an
+arbitrary supplied database. Bootstrap facts contain no source revision or
+role-catalog commitment. First authorization and its non-rollback provenance/
+consumption boundary remain unimplemented and are specified in
+[FEAT-008](FEAT-008-linux-host-management.md).
+
 - Gate A was accepted on 2026-08-26. Strict generated Go/OpenAPI contracts,
   current-credential-only service identity, fixed Argon2id and
   opaque-credential behavior, closed RBAC decisions, bootstrap and Audit replay
