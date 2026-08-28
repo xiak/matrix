@@ -5,67 +5,86 @@
 - Updated: 2026-08-28
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/iam-xxx`
-- Pushed implementation milestone: `5721b7b1a985f25c9730ddb9229a51f7f6c3b63a`
+- Pushed local-recovery backend: `aa345eca5f1ed3921000aa5380d5bfd2aa6d0a50`
+- Accepted minimum multi-tenant implementation: `5721b7b1a985f25c9730ddb9229a51f7f6c3b63a`
 
 ## Resume route
 
-1. [FEAT-006](../../docs/features/FEAT-006-platform-authorities.md) owns the
-   multi-tenant target, invariants and backend/runtime evidence.
-2. [FEAT-007](../../docs/features/FEAT-007-control-plane-console.md) owns
-   console behavior, installed-release browser evidence and the user-deferred
-   native keyboard-only usability gate.
-3. [FEAT-005](../../docs/features/FEAT-005-offline-platform-lifecycle.md) owns
-   the exact release profile and signed populated upgrade/rollback/recovery.
-4. Read the relevant adoption record and directly related ADR only when
-   changing those boundaries, not the whole documentation tree.
+1. [FEAT-006](../../docs/features/FEAT-006-platform-authorities.md) owns IAM,
+   Audit, the accepted multi-tenant boundary and this subsequent local
+   installation-primary recovery backend.
+2. Its [adoption record](../../docs/adoption/FEAT-006-platform-authorities.md)
+   owns fixed source decisions. Public capability/private-file contracts and
+   the single BootstrapDigest owner were fixed at `91af848` before the atomic
+   implementation.
+3. [FEAT-007](../../docs/features/FEAT-007-control-plane-console.md) and
+   [FEAT-005](../../docs/features/FEAT-005-offline-platform-lifecycle.md) retain
+   the installed-browser and signed lifecycle evidence for the accepted
+   minimum slice. Do not extend that evidence to the new recovery profile.
+4. Phase 3's installation/CLI integration remains in its separate task and
+   FEAT-008 owner. Read only confirmed fixed objects when integration is
+   requested; never inspect or import another worktree's WIP/checkpoint.
 
-The user chose protected original primary ownership plus revocable child
-administrators. Daily handoff never transfers the primary identity. Online
-tenant recovery restores only the original primary, refuses every unrevoked
-platform binding and cannot implicitly resume a suspended tenant. Password
-changes in the test journey are performed by the agent, not delegated to the
-user.
+## Current boundary
 
-The current password policy keeps only the transactionally revalidated current
-bearer during forced replacement; ordinary replacement defaults to revoking
-other sessions, with explicit false retaining only valid same-user sessions.
-Credential generation is a monotonic counter, not a timestamp. Legacy sessions
-without generation evidence remain NULL and fail closed; no migration backfill
-or retention option may promote them. The fixed old `9fd45b0` and `a36cf98`
-IAM executables' retained-data migration/restart gates and concurrent
-change/reset/recovery/logout/login gates pass.
+The minimum primary/subaccount IAM goal remains complete. Primary ownership
+never transfers to a child administrator; tenant ownership and platform roles
+remain separate. The password-session contract uses monotonic credential
+generation. Forced replacement revokes other temporary sessions; ordinary
+replacement defaults to revoking other sessions, with explicit false retaining
+only already valid same-user sessions. Legacy NULL generations fail closed.
+The user deferred native keyboard-only verification, not the core IAM goal.
+User-facing documents default to Markdown.
 
-The complete current profile is IAM3/Audit2/PaaS1 plus contract revision 3,
-including the exact seven-column IAM claim and generation-bound password
-function. Different complete profiles fail before effects, including recovery;
-schema numbers alone never establish binary compatibility. Never reuse the
-pre-`cf003e4` process DSN evidence as proof of restricted executable logins.
+The subsequent local recovery backend is implemented and independently
+verified. It accepts only the sealed original installation primary while its
+USER and organization are ACTIVE and its exact platform binding is unrevoked.
+The fixed one-shot entry has only inspect/apply modes and purpose-only private
+files/database authority; no northbound permission or route exists. It changes
+only the password hash, credential generation, principal version, forced-change
+flag and old sessions, with immutable completion plus one closed SYSTEM Audit
+fact in the same transaction. It cannot grant/regrant roles, enable identities,
+transfer ownership or recover service credentials.
 
-Signed A/B releases from `5721b7b` pass the populated, network-disabled
-PostgreSQL 18 lifecycle and owned local-engine restart gates. Retained valid
-sessions survive; revoked/temporary sessions do not revive. FEAT-005 owns
-these results and their limits: same-source A/B is not arbitrary historical
-N-1 or cross-profile compatibility. No remote machine or shared daemon was
-restarted.
+Original command/commitment receipt inspection remains available after later
+password changes or revocation and after private intent cleanup. Equal replay
+only returns original completion; missing receipt never issues fresh expected
+state. The trusted executable checks the MAC; PostgreSQL authenticates the
+dedicated role and enforces sealed ownership/atomic state, not the MAC itself.
 
-The real installed browser passes same-name child creation, forced and
-ordinary password policies, cross-session reset, two real same-ID databases
-and measured 360-pixel controls. FEAT-007 owns exact evidence and preserves
-the earlier signed lifecycle/renderer/refresh checks. The current source
-passes 90 frontend tests, bounded repeated exports, full-repository Go gates
-and all three independent Verification jobs at run `33138242923`.
+Current source profile is IAM4/Audit3/PaaS1 plus contract revision 4, with the
+existing seven-column IAM claim and unchanged ServiceIdentity/lookup_service/
+CanonicalizeEvent bytes. Different complete profiles still fail before effects.
+The installation owner adapts to its own PaaS2 composition and independently
+validates 4/3/2+r4; it must not import this branch's profile or acceptance state.
+This branch has not integrated or accepted the new signed installation/CLI
+consumer. New schema support does not imply a usable signed recovery command,
+cross-profile release transition or historical binary compatibility.
 
-The prioritized minimum IAM slice is complete on this feature branch. Native
-keyboard-only verification is explicitly deferred by the user, not counted
-as passed or used to hold the core goal open. Do not infer complete Phase 2,
-Phase 3, public-cloud IAM or supported cross-profile installation upgrade.
-User-facing documents default to Markdown; the architecture reading copy
-does not replace the existing FEAT owners.
+## Verified fixed milestone
 
-Keep work, commits and test resources in this task's independently verified
-worktree and feature branch. Phase 2 owns its separate console branch;
-Phase 3 owns host/Operation and its offline profile. Exchange only mutually
-confirmed fixed verified commits, never another worktree's uncommitted state.
-Do not start extra agents/user tasks, change other Phase environments or import
-their checkpoint/acceptance state. Do not restart remote machines or shared
-host services. Replace this checkpoint only at a committed-and-pushed milestone.
+`aa345ec` passes full-repository race/architecture/vet, strict generation,
+dependency verification and Linux builds. Dedicated PostgreSQL 18 tests prove
+actual restricted identities, closed facts, immutable receipts, both ordered
+recovery/revoke races and the other credential/session/role races. The actual
+fixed `5721b7b` executable creates retained schema-3 state before current
+migration/restart; old canonical bytes, valid sessions and revoked history
+retain their meanings. Older `9fd45b0`/`a36cf98` upgrade and dual-tenant
+resource/Operation/outbox regressions remain covered.
+
+The independent-process gate runs the real local executable, normal forced
+password replacement, original receipt lookup without its old secret file,
+Audit outage delivery, exact action/SYSTEM filtering and historical replay
+after password change, platform revocation and IAM restart. It does not claim
+a Docker transport interruption, signed CLI journal or release integration.
+GitHub API verifies exact-SHA
+[Verification 33153170437](https://github.com/xiak/matrix/actions/runs/33153170437)
+with go, authority-process and node-process all successful.
+
+Phase 3 task `01a04149-5dbb-7300-9e4c-31d9e85c8ada` owns the remaining
+installation/CLI/journal/release integration and has received the fixed
+implementation and exact CI confirmation. Do not start extra agents/tasks,
+change other Phase environments, infer authorization for a new recovery/grant
+slice, or reopen the completed minimum IAM goal. Never restart remote machines
+or shared services. Keep commits and tests in this task's own feature branch
+and isolated resources; replace this checkpoint only at pushed milestones.

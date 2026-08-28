@@ -7,7 +7,7 @@
 - Audit API contract: `audit.matrix.xiak.com/v1`
 - Phase 3 extension: installation-scoped IAM authority implemented; host-resource consumption and offline upgrade acceptance remain in FEAT-008
 - Multi-tenant extension: accounts, primary/platform credential protection, historical producer proof, tenant lifecycle, original-primary recovery and password-session policy pass backend, signed lifecycle and installed-browser gates; keyboard-only usability verification is deferred by the user in FEAT-007
-- Follow-up: original installation-primary local credential recovery is implemented in IAM/Audit; signed installation/CLI integration remains separate and unaccepted, without reopening the accepted multi-tenant evidence
+- Follow-up: original installation-primary local credential recovery passes the IAM/Audit backend gates; signed installation/CLI integration remains separate and unaccepted, without reopening the accepted multi-tenant evidence
 
 ## Outcome
 
@@ -322,6 +322,10 @@ state. The existing `9fd45b0`/`a36cf98` retained-executable, dual-tenant resourc
 Audit HTTP/storage and PaaS database regressions also pass. These results
 certify this IAM/Audit backend boundary only, not a signed cross-profile
 installation upgrade or Phase 3's different composition.
+Fixed implementation `aa345eca5f1ed3921000aa5380d5bfd2aa6d0a50` passes all
+three [independent Verification jobs](https://github.com/xiak/matrix/actions/runs/33153170437),
+including Linux PostgreSQL 18, retained-executable upgrades and the real
+one-shot recovery process alongside the existing authority and node gates.
 
 ### Tenant accounts and subaccounts
 
