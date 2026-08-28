@@ -749,7 +749,10 @@ func nativeRetainedWorkload(t *testing.T, base, installationID string) func() {
 		t.Fatal("workload fixture identity already exists")
 	}
 	data := filepath.Join(base, "credential-workload-data")
-	if err := os.Mkdir(data, 0o700); err != nil {
+	// PG18 creates its private versioned PGDATA below this bind root, then
+	// drops UID. The mount root must remain traversable inside the container;
+	// the test's outer base is still owner-only on the native host.
+	if err := os.Mkdir(data, 0o711); err != nil {
 		t.Fatal("create owned workload fixture data")
 	}
 	id, err := docker("run", "--pull=never", "--detach", "--name", name, "--label", label+"="+installationID,
@@ -775,6 +778,9 @@ func nativeRetainedWorkload(t *testing.T, base, installationID string) func() {
 			break
 		}
 		if time.Now().After(deadline) {
+			state, _ := docker("inspect", "--type", "container", "--format", `{{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}}`, id)
+			diagnostic, _ := docker("logs", "--tail=12", id)
+			t.Logf("owned workload prerequisite: %s\n%s", state, diagnostic)
 			t.Fatal("bounded workload fixture did not become ready")
 		}
 		<-time.After(200 * time.Millisecond)
