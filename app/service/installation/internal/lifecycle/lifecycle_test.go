@@ -94,6 +94,99 @@ func TestNodeLifecycleCannotEnterPlatformEffects(t *testing.T) {
 	}
 }
 
+func TestNodeCredentialRotationKeepsFailedIntentAndCommitsOnlyAfterVerification(t *testing.T) {
+	platform := newJournal(t)
+	node, err := NewNode(platform.InstallationID, platform.ReleaseTrust,
+		NodeBinding{ExecutionTargetID: "target-a", ConfigurationDigest: digest('a')})
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Start(node, lifecycleCommand(ActionInstall, releaseA, '1', 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	node = completeActive(t, installed.Journal)
+	command := lifecycleCommand(ActionRotateCredentials, "", 'b', 10)
+	command.ExpectedConfigurationDigest, command.RevokePreviousCredentials = digest('a'), true
+	if _, err := Start(installedJournal(t), command); err == nil {
+		t.Fatal("credential rotation entered a platform root")
+	}
+	stale := command
+	stale.ExpectedConfigurationDigest = digest('c')
+	if _, err := Start(node, stale); !errors.Is(err, ErrPrecondition) {
+		t.Fatal("stale node commitment admitted rotation")
+	}
+	started, err := Start(node, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := started.Journal
+	for state.Active.Phase != PhaseConfiguring {
+		next, _ := NextPhase(state)
+		state, err = Advance(state, command.ID, next, state.Active.UpdatedAt.Add(time.Second))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	state, err = Fail(state, command.ID, "NODE_DEPENDENCY_UNAVAILABLE", state.Active.UpdatedAt.Add(time.Second))
+	if err != nil || state.Active == nil || state.Active.Phase != PhaseConfiguring ||
+		state.Node.ConfigurationDigest != digest('a') || state.NodeCredentialRotation != nil || ValidateJournal(state) != nil {
+		t.Fatal("failed credential replacement lost its uncommitted forward intent")
+	}
+	changed := command
+	changed.RevokePreviousCredentials = false
+	if _, err := Start(state, changed); !errors.Is(err, ErrCommandConflict) {
+		t.Fatal("rotation replay changed its retirement policy")
+	}
+	corrupt := state
+	execution := *state.Active
+	execution.Phase = PhaseRollingBack
+	corrupt.Active = &execution
+	if ValidateJournal(corrupt) == nil {
+		t.Fatal("credential retirement admitted automatic rollback")
+	}
+	state = completeActive(t, state)
+	if state.Node.ConfigurationDigest != digest('b') || node.Node.ConfigurationDigest != digest('a') ||
+		state.CurrentReleaseID != node.CurrentReleaseID || state.CurrentReleaseDigest != node.CurrentReleaseDigest ||
+		state.Node.ExecutionTargetID != node.Node.ExecutionTargetID || state.NodeCredentialRotation == nil ||
+		*state.NodeCredentialRotation != command || state.Last.FailureCode != "" || ValidateJournal(state) != nil {
+		t.Fatal("rotation changed identity/release, aliased prior state, or failed to commit its exact input")
+	}
+	replayed, err := Start(state, command)
+	if err != nil || replayed.Replay != ReplayCompleted {
+		t.Fatal("completed rotation could not replay")
+	}
+	restart, err := Start(state, lifecycleCommand(ActionStart, "", 0, 50))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state = completeActive(t, restart.Journal)
+	if state.NodeCredentialRotation == nil || *state.NodeCredentialRotation != command || ValidateJournal(state) != nil {
+		t.Fatal("startup discarded the committed rotation receipt")
+	}
+	for _, mode := range []string{"remove receipt", "change policy", "change predecessor"} {
+		t.Run(mode, func(t *testing.T) {
+			altered := state
+			receipt := *state.NodeCredentialRotation
+			altered.NodeCredentialRotation, altered.Version = &receipt, state.Version+1
+			switch mode {
+			case "remove receipt":
+				altered.NodeCredentialRotation = nil
+			case "change policy":
+				receipt.RevokePreviousCredentials = false
+			case "change predecessor":
+				receipt.ExpectedConfigurationDigest = digest('c')
+			}
+			if ValidateJournal(altered) != nil {
+				t.Fatal("fixture is not a structurally valid journal")
+			}
+			if ValidateNodeTransition(state, altered) == nil {
+				t.Fatal("an unrelated command could alter committed rotation evidence")
+			}
+		})
+	}
+}
+
 func TestUpgradeFailureRollsBackWithoutPublishingCandidate(t *testing.T) {
 	journal := installedJournal(t)
 	command := lifecycleCommand(ActionUpgrade, releaseB, '2', 10)

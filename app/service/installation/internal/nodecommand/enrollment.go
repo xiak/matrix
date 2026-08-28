@@ -126,6 +126,15 @@ func ValidatePlan(plan Plan) error {
 	if err != nil || binding != plan.Binding {
 		return errors.New("node plan differs from its sealed commitment")
 	}
+	if previous := plan.Previous; previous != nil {
+		if previous.Previous != nil || previous.RevokePreviousCredentials || ValidatePlan(*previous) != nil ||
+			previous.Root != plan.Root || previous.Configuration != config || previous.Binding == plan.Binding ||
+			previous.Bundle.ManifestSHA256 != plan.Bundle.ManifestSHA256 || previous.Trust != plan.Trust {
+			return errors.New("node rotation changes immutable enrollment or release state")
+		}
+	} else if plan.RevokePreviousCredentials {
+		return errors.New("node retirement lacks its sealed predecessor")
+	}
 	return nil
 }
 

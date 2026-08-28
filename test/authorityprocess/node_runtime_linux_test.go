@@ -105,7 +105,8 @@ func newLinuxProcessNode(t *testing.T, directory, installationID string) *proces
 		configurationPath := writeProtectedFile(t, directory, "linux-node.json", document)
 		child = startChild(t, directory, nodeBinary, []string{"MATRIX_NODE_CONFIGURATION_FILE=" + configurationPath})
 		client, err := nodehttps.New(nodehttps.Config{Endpoint: "https://" + nodeAddress, Identity: selected,
-			ControllerID: processHostController, BindingRef: processHostBinding, ExpectedFingerprint: fingerprint, Credentials: controller})
+			ControllerID: processHostController, BindingRef: processHostBinding, ExpectedFingerprint: fingerprint,
+			Credentials: func() (nodehttps.Credentials, error) { return controller, nil }})
 		if err != nil {
 			t.Fatal(err)
 		}

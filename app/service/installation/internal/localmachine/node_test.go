@@ -1,6 +1,7 @@
 package localmachine
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -88,6 +89,148 @@ func TestNodeEffectsSealFilesAndKeepCollectorSeparateFromExecutor(t *testing.T) 
 	}
 	if err := effects.ApplyPhase(context.Background(), plan, lifecycle.PhaseStarting); err == nil || supervisor.starts != 2 {
 		t.Fatal("substituted credential reached supervision")
+	}
+}
+
+func TestNodeCredentialReplacementResumesMixedFilesAndRetiresOnlyItsSnapshots(t *testing.T) {
+	previous := nodeEffectPlan(t)
+	supervisor := &nodeSupervisorFixture{states: map[string]nativeState{}}
+	effects := NewNodeEffects(nodeVerifierFixture{})
+	effects.supervisor = supervisor
+	for _, phase := range []lifecycle.Phase{lifecycle.PhaseStaging, lifecycle.PhaseConfiguring, lifecycle.PhaseStarting} {
+		if err := effects.ApplyPhase(context.Background(), previous, phase); err != nil {
+			t.Fatal(err)
+		}
+	}
+	marker := filepath.Join(previous.Configuration.StoragePath, "accepted-receipt")
+	if err := os.WriteFile(marker, []byte("retained effect"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	candidate := previous
+	candidate.Credentials = nodecommand.Credentials{Certificate: []byte("next certificate"), PrivateKey: []byte("next key"),
+		Trust: []byte("next trust"), CollectorCertificate: []byte("next collector certificate"), CollectorPrivateKey: []byte("next collector key")}
+	var err error
+	candidate.Binding, err = nodecommand.Binding(candidate.Configuration, candidate.Credentials)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate.Previous, candidate.RevokePreviousCredentials = &previous, true
+	if err := effects.ApplyPhase(context.Background(), candidate, lifecycle.PhaseStaging); err != nil {
+		t.Fatal(err)
+	}
+	for _, plan := range []nodecommand.Plan{previous, candidate} {
+		config, material, err := effects.ReadRotation(plan.Root, plan.Binding.ConfigurationDigest)
+		binding, bindingErr := nodecommand.Binding(config, material)
+		material.Clear()
+		if err != nil || bindingErr != nil || binding != plan.Binding {
+			t.Fatal("staged credentials did not authenticate their commitment")
+		}
+	}
+	files, _ := nodeFiles(previous)
+	for _, foreign := range []string{nativeNodeServices(previous)[0].name, nativeNodeServices(previous)[1].name, nativeNodeStartup(previous).service.name} {
+		supervisor.foreign = foreign
+		if err := effects.ApplyPhase(context.Background(), candidate, lifecycle.PhaseConfiguring); err == nil || supervisor.stops != 0 {
+			t.Fatal("foreign service ownership allowed partial credential effects")
+		}
+	}
+	supervisor.foreign = ""
+	for _, file := range files {
+		actual, err := readManagedFile(previous.Root, filepath.FromSlash(file.name), int64(len(file.content)))
+		if err != nil || !bytes.Equal(actual, file.content) {
+			t.Fatal("rejected replacement changed a sealed file")
+		}
+	}
+	foreignKey := []byte("not part of either sealed credential set")
+	keyPath := filepath.FromSlash(layout.NodePrivateKey)
+	if err := replaceManagedExpected(previous.Root, keyPath, previous.Credentials.PrivateKey, foreignKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := effects.ApplyPhase(context.Background(), candidate, lifecycle.PhaseConfiguring); err == nil || supervisor.stops != 0 {
+		t.Fatal("an unknown active key caused partial replacement or process effects")
+	}
+	if err := replaceManagedExpected(previous.Root, keyPath, foreignKey, previous.Credentials.PrivateKey); err != nil {
+		t.Fatal(err)
+	}
+	// An interrupted activation has stopped only its own processes and replaced
+	// one file. The next attempt accepts only this exact old/candidate mixture.
+	for _, service := range nativeNodeServices(previous) {
+		if err := supervisor.Stop(context.Background(), service); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := replaceManagedExpected(previous.Root, filepath.FromSlash(layout.NodeCertificate), previous.Credentials.Certificate, candidate.Credentials.Certificate); err != nil {
+		t.Fatal(err)
+	}
+	if err := effects.ApplyPhase(context.Background(), candidate, lifecycle.PhaseConfiguring); err != nil {
+		t.Fatal(err)
+	}
+	if err := effects.ApplyPhase(context.Background(), candidate, lifecycle.PhaseStarting); err != nil {
+		t.Fatal(err)
+	}
+	if err := effects.ApplyPhase(context.Background(), candidate, lifecycle.PhaseVerifying); err != nil {
+		t.Fatal(err)
+	}
+	if supervisor.starts != 4 || supervisor.stops != 2 || supervisor.registrations != 1 || !supervisor.registered {
+		t.Fatal("rotation replaced boot ownership or failed to restart its two authenticated services")
+	}
+	if err := effects.Rollback(context.Background(), candidate); err == nil {
+		t.Fatal("credential retirement admitted automatic rollback")
+	}
+	command := lifecycle.Command{Action: lifecycle.ActionRotateCredentials, InputDigest: candidate.Binding.ConfigurationDigest,
+		ExpectedConfigurationDigest: previous.Binding.ConfigurationDigest, RevokePreviousCredentials: true}
+	oldSnapshot := filepath.Join(previous.Root, filepath.FromSlash(layout.NodeCredentialSnapshot(previous.Binding.ConfigurationDigest)))
+	if err := os.Remove(oldSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := effects.FinalizeRotation(context.Background(), candidate, command); err != nil {
+			t.Fatal("post-commit snapshot cleanup could not resume after an unlink", err)
+		}
+	}
+	for _, digest := range []string{previous.Binding.ConfigurationDigest, candidate.Binding.ConfigurationDigest} {
+		if _, err := os.Lstat(filepath.Join(previous.Root, filepath.FromSlash(layout.NodeCredentialSnapshot(digest)))); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("completed retirement retained a staged private-key snapshot")
+		}
+	}
+	if err := authenticateNodeFiles(candidate); err != nil {
+		t.Fatal("cleanup removed the active credential set")
+	}
+	if content, err := os.ReadFile(marker); err != nil || string(content) != "retained effect" {
+		t.Fatal("rotation changed executor state")
+	}
+}
+
+func TestNodeCredentialSnapshotsRejectSubstitutionBeforeReplacement(t *testing.T) {
+	plan := nodeEffectPlan(t)
+	effects := NewNodeEffects(nodeVerifierFixture{})
+	effects.supervisor = &nodeSupervisorFixture{states: map[string]nativeState{}}
+	for _, phase := range []lifecycle.Phase{lifecycle.PhaseStaging, lifecycle.PhaseConfiguring} {
+		if err := effects.ApplyPhase(context.Background(), plan, phase); err != nil {
+			t.Fatal(err)
+		}
+	}
+	encoded, err := encodeNodeCredentials(plan.Credentials)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(encoded)
+	path := filepath.FromSlash(layout.NodeCredentialSnapshot(plan.Binding.ConfigurationDigest))
+	if err := writeManagedOnce(plan.Root, path, encoded); err != nil {
+		t.Fatal(err)
+	}
+	altered := plan.Credentials
+	altered.PrivateKey = []byte("foreign key")
+	wrong, _ := encodeNodeCredentials(altered)
+	defer clear(wrong)
+	if err := replaceManagedExpected(plan.Root, path, encoded, wrong); err != nil {
+		t.Fatal(err)
+	}
+	if _, material, err := effects.ReadRotation(plan.Root, plan.Binding.ConfigurationDigest); err == nil {
+		material.Clear()
+		t.Fatal("a snapshot filename authorized substituted credentials")
+	}
+	if err := authenticateNodeFiles(plan); err != nil {
+		t.Fatal("snapshot rejection changed active enrollment")
 	}
 }
 
@@ -231,6 +374,9 @@ func nodeEffectPlan(t *testing.T) nodecommand.Plan {
 type nodeVerifierFixture struct{}
 
 func (nodeVerifierFixture) Validate(nodeconfig.Configuration, nodecommand.Credentials) error {
+	return nil
+}
+func (nodeVerifierFixture) ValidateRotation(nodeconfig.Configuration, nodecommand.Credentials, nodecommand.Credentials, bool) error {
 	return nil
 }
 func (nodeVerifierFixture) Verify(context.Context, nodeconfig.Configuration, nodecommand.Credentials) error {

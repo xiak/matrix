@@ -42,12 +42,14 @@ func (value *invocationError) Error() string { return "Matrix command failed" }
 func (value *invocationError) Unwrap() error { return value.err }
 
 type commandOptions struct {
-	root          string
-	bundle        string
-	trustKey      string
-	backupID      string
-	supportOutput string
-	configuration string
+	root                        string
+	bundle                      string
+	trustKey                    string
+	backupID                    string
+	supportOutput               string
+	configuration               string
+	expectedConfigurationDigest string
+	revokePreviousCredentials   bool
 }
 
 func NewCommand(streams Streams, backend Backend) (*cobra.Command, error) {
@@ -103,7 +105,7 @@ func NewCommand(streams Streams, backend Backend) (*cobra.Command, error) {
 	}
 	root.AddCommand(node)
 	for _, action := range []lifecycle.Action{lifecycle.ActionInstall, lifecycle.ActionStart,
-		lifecycle.ActionVerify, lifecycle.ActionStatus} {
+		lifecycle.ActionVerify, lifecycle.ActionStatus, lifecycle.ActionRotateCredentials} {
 		node.AddCommand(newLifecycleCommand(streams.Out, backend, SubjectNode, action, &format))
 	}
 	return root, nil
@@ -117,7 +119,7 @@ func newLifecycleCommand(
 	format *string,
 ) *cobra.Command {
 	options := &commandOptions{}
-	name := strings.ToLower(string(action))
+	name := strings.ReplaceAll(strings.ToLower(string(action)), "_", "-")
 	command := &cobra.Command{
 		Use:   name,
 		Short: commandDescription(subject, action),
@@ -129,7 +131,9 @@ func newLifecycleCommand(
 			request := Request{
 				Subject: subject, Action: action, Root: options.root, Bundle: options.bundle, TrustKey: options.trustKey,
 				BackupID: options.backupID, SupportOutput: options.supportOutput,
-				Configuration: options.configuration,
+				Configuration:               options.configuration,
+				ExpectedConfigurationDigest: options.expectedConfigurationDigest,
+				RevokePreviousCredentials:   options.revokePreviousCredentials,
 			}
 			result, err := backend.Run(command.Context(), request)
 			if err != nil {
@@ -151,6 +155,10 @@ func newLifecycleCommand(
 func bindCommandFlags(flags *pflag.FlagSet, subject Subject, action lifecycle.Action, options *commandOptions) {
 	flags.StringVar(&options.root, "root", "", "absolute Matrix installation root")
 	switch action {
+	case lifecycle.ActionRotateCredentials:
+		flags.StringVar(&options.configuration, "configuration", "", "protected replacement node enrollment file")
+		flags.StringVar(&options.expectedConfigurationDigest, "expected-configuration-digest", "", "current sealed node configuration digest")
+		flags.BoolVar(&options.revokePreviousCredentials, "revoke-previous", true, "replace all previous management trust keys; false permits same-trust renewal")
 	case lifecycle.ActionInstall:
 		flags.StringVar(&options.bundle, "bundle", "", "verified offline release bundle directory")
 		flags.StringVar(&options.trustKey, "trust-key", "", "out-of-band release trust root")
@@ -171,6 +179,11 @@ func validateCommandFlags(subject Subject, action lifecycle.Action, options *com
 		return errors.New("installation root is required")
 	}
 	switch action {
+	case lifecycle.ActionRotateCredentials:
+		if subject != SubjectNode || strings.TrimSpace(options.configuration) == "" ||
+			!safeDigestPattern.MatchString(options.expectedConfigurationDigest) {
+			return errors.New("replacement enrollment and current configuration digest are required")
+		}
 	case lifecycle.ActionInstall:
 		if strings.TrimSpace(options.bundle) == "" || strings.TrimSpace(options.trustKey) == "" {
 			return errors.New("offline bundle and trust key are required")
@@ -205,6 +218,8 @@ func commandDescription(subject Subject, action lifecycle.Action) string {
 			return "Verify the sealed node and fresh collector observations"
 		case lifecycle.ActionStatus:
 			return "Read node supervision and readiness status"
+		case lifecycle.ActionRotateCredentials:
+			return "Rotate node credentials without changing workload ownership"
 		}
 	}
 	switch action {
@@ -238,6 +253,8 @@ func actionForCommand(command *cobra.Command) lifecycle.Action {
 		return lifecycle.ActionInstall
 	case "start":
 		return lifecycle.ActionStart
+	case "rotate-credentials":
+		return lifecycle.ActionRotateCredentials
 	case "verify":
 		return lifecycle.ActionVerify
 	case "status":
@@ -393,6 +410,9 @@ func writeSuccess(out io.Writer, format outputFormat, subject Subject, action li
 	}
 	if err == nil && result.ExecutionTargetID != "" {
 		_, err = fmt.Fprintf(out, " target=%s", result.ExecutionTargetID)
+	}
+	if err == nil && result.ConfigurationDigest != "" {
+		_, err = fmt.Fprintf(out, " configuration=%s", result.ConfigurationDigest)
 	}
 	if err == nil {
 		_, err = io.WriteString(out, "\n")

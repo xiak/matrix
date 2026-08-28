@@ -27,24 +27,27 @@ const (
 )
 
 type Request struct {
-	Subject       Subject
-	Action        lifecycle.Action
-	Root          string
-	Bundle        string
-	TrustKey      string
-	BackupID      string
-	SupportOutput string
-	Configuration string
+	Subject                     Subject
+	Action                      lifecycle.Action
+	Root                        string
+	Bundle                      string
+	TrustKey                    string
+	BackupID                    string
+	SupportOutput               string
+	Configuration               string
+	ExpectedConfigurationDigest string
+	RevokePreviousCredentials   bool
 }
 
 type Result struct {
-	State             string `json:"state"`
-	ReleaseID         string `json:"releaseId,omitempty"`
-	PreviousID        string `json:"previousId,omitempty"`
-	BackupID          string `json:"backupId,omitempty"`
-	Changed           bool   `json:"changed"`
-	CorrelationID     string `json:"correlationId,omitempty"`
-	ExecutionTargetID string `json:"executionTargetId,omitempty"`
+	State               string `json:"state"`
+	ReleaseID           string `json:"releaseId,omitempty"`
+	PreviousID          string `json:"previousId,omitempty"`
+	BackupID            string `json:"backupId,omitempty"`
+	Changed             bool   `json:"changed"`
+	CorrelationID       string `json:"correlationId,omitempty"`
+	ExecutionTargetID   string `json:"executionTargetId,omitempty"`
+	ConfigurationDigest string `json:"configurationDigest,omitempty"`
 }
 
 type Backend interface {
@@ -76,9 +79,10 @@ func (fault *Fault) Error() string {
 }
 
 var (
-	faultCodePattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]{2,63}$`)
-	safeStatePattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]{1,63}$`)
-	safeIDPattern    = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$`)
+	faultCodePattern  = regexp.MustCompile(`^[A-Z][A-Z0-9_]{2,63}$`)
+	safeStatePattern  = regexp.MustCompile(`^[A-Z][A-Z0-9_]{1,63}$`)
+	safeIDPattern     = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$`)
+	safeDigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 )
 
 func NewFault(class FaultClass, code string) (*Fault, error) {
@@ -98,6 +102,9 @@ func validateStreams(streams Streams) error {
 
 func validateResult(result Result) error {
 	var problems []error
+	if result.ConfigurationDigest != "" && !safeDigestPattern.MatchString(result.ConfigurationDigest) {
+		problems = append(problems, errors.New("node configuration digest is invalid"))
+	}
 	if !safeStatePattern.MatchString(result.State) {
 		problems = append(problems, errors.New("platform result state is invalid"))
 	}

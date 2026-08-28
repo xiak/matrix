@@ -21,6 +21,7 @@ var errTLSIdentity = errors.New("node TLS identity or trust is invalid")
 type Credentials struct {
 	certificate tls.Certificate
 	roots       *x509.CertPool
+	trustRoots  []*x509.Certificate
 }
 
 func (Credentials) String() string   { return "node TLS credentials <redacted>" }
@@ -41,6 +42,7 @@ func NewCredentials(certificatePEM, privateKeyPEM, trustPEM []byte) (Credentials
 		return Credentials{}, errTLSIdentity
 	}
 	roots := x509.NewCertPool()
+	var trustRoots []*x509.Certificate
 	count := 0
 	for remaining := bytes.TrimSpace(trustPEM); len(remaining) > 0; count++ {
 		block, rest := pem.Decode(remaining)
@@ -52,12 +54,52 @@ func NewCredentials(certificatePEM, privateKeyPEM, trustPEM []byte) (Credentials
 			return Credentials{}, errTLSIdentity
 		}
 		roots.AddCert(root)
+		trustRoots = append(trustRoots, root)
 		remaining = bytes.TrimSpace(rest)
 	}
 	if count == 0 {
 		return Credentials{}, errTLSIdentity
 	}
-	return Credentials{certificate: certificate, roots: roots}, nil
+	return Credentials{certificate: certificate, roots: roots, trustRoots: trustRoots}, nil
+}
+
+// ValidateCredentialRotation separates renewal from retirement of a complete
+// management trust set. Old material is already bound by the installation's
+// sealed commitment; it need not still be within its validity period.
+func ValidateCredentialRotation(previousNode, previousCollector, node, collector Credentials,
+	identity nodev1.Identity, nodeAddress, collectorAddress string, revokePrevious bool) error {
+	if ValidateEnrollment(node, collector, identity, nodeAddress, collectorAddress) != nil {
+		return errTLSIdentity
+	}
+	nodeURI, _ := nodev1.NodeURI(identity)
+	collectorURI, _ := nodev1.CollectorURI(identity)
+	for _, previous := range []struct {
+		credentials Credentials
+		uri         string
+	}{{previousNode, nodeURI}, {previousCollector, collectorURI}} {
+		leaf := previous.credentials.certificate.Leaf
+		if leaf == nil || leaf.IsCA || len(previous.credentials.trustRoots) == 0 || !nodev1.MatchesIdentity(leaf.URIs, previous.uri) {
+			return errTLSIdentity
+		}
+	}
+	if !revokePrevious {
+		return nil
+	}
+	for _, previous := range []Credentials{previousNode, previousCollector} {
+		for _, candidate := range []Credentials{node, collector} {
+			if bytes.Equal(previous.certificate.Leaf.RawSubjectPublicKeyInfo, candidate.certificate.Leaf.RawSubjectPublicKeyInfo) {
+				return errTLSIdentity
+			}
+			for _, oldRoot := range previous.trustRoots {
+				for _, newRoot := range candidate.trustRoots {
+					if bytes.Equal(oldRoot.RawSubjectPublicKeyInfo, newRoot.RawSubjectPublicKeyInfo) {
+						return errTLSIdentity
+					}
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func ServerTLS(credentials Credentials, identity nodev1.Identity, controllerID string) (*tls.Config, error) {
@@ -102,6 +144,12 @@ func readinessClientTLS(credentials Credentials, identity nodev1.Identity) (*tls
 // The node needs client auth for its collector and self-readiness, not a
 // controller certificate. Each chain is checked for its exact required EKU.
 func ValidateEnrollment(node, collector Credentials, identity nodev1.Identity, nodeAddress, collectorAddress string) error {
+	// The collector can read its own key. Sharing that key with the privileged
+	// node would defeat process/credential isolation despite distinct SAN roles.
+	if node.certificate.Leaf == nil || collector.certificate.Leaf == nil ||
+		bytes.Equal(node.certificate.Leaf.RawSubjectPublicKeyInfo, collector.certificate.Leaf.RawSubjectPublicKeyInfo) {
+		return errTLSIdentity
+	}
 	nodeURI, err := nodev1.NodeURI(identity)
 	if err != nil {
 		return errTLSIdentity

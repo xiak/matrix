@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"slices"
 
 	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
 	"github.com/xiak/matrix/api/contractjson"
@@ -40,35 +41,16 @@ func loadNodeBindings(path, installationID string) ([]executionadmission.Binding
 		return nil, closeClients, nil
 	}
 	invalid := errors.New("protected node connections are invalid")
-	document, err := processconfig.ReadFile(path, 256*1024, true)
+	configuration, err := readNodeConnections(path, installationID)
 	if err != nil {
 		return nil, closeClients, invalid
 	}
-	defer clear(document)
-	var configuration nodeConnections
-	if contractjson.DecodeObjectBytes(document, 256*1024, &configuration) != nil || configuration.InstallationID != installationID ||
-		paasv1.ValidateID("installationId", installationID) != nil || paasv1.ValidateID("controllerId", configuration.ControllerID) != nil ||
-		len(configuration.Nodes) < 1 || len(configuration.Nodes) > executionadmission.MaximumTargets {
-		return nil, closeClients, invalid
-	}
-	certificate, err := processconfig.ReadFile(configuration.CertificateFile, 64*1024, true)
-	if err != nil {
-		return nil, closeClients, invalid
-	}
-	defer clear(certificate)
-	key, err := processconfig.ReadFile(configuration.PrivateKeyFile, 64*1024, true)
-	if err != nil {
-		return nil, closeClients, invalid
-	}
-	defer clear(key)
-	trust, err := processconfig.ReadFile(configuration.TrustFile, 256*1024, true)
-	if err != nil {
-		return nil, closeClients, invalid
-	}
-	defer clear(trust)
-	credentials, err := nodehttps.NewCredentials(certificate, key, trust)
-	if err != nil {
-		return nil, closeClients, invalid
+	credentials := func() (nodehttps.Credentials, error) {
+		current, err := readNodeConnections(path, installationID)
+		if err != nil || current.ControllerID != configuration.ControllerID || !slices.Equal(current.Nodes, configuration.Nodes) {
+			return nodehttps.Credentials{}, invalid
+		}
+		return readNodeControllerCredentials(current)
 	}
 	bindings := make([]executionadmission.Binding, 0, len(configuration.Nodes))
 	seenBindings, seenTargets, seenFingerprints := map[string]bool{}, map[paasv1.ResourceID]bool{}, map[string]bool{}
@@ -88,4 +70,40 @@ func loadNodeBindings(path, installationID string) ([]executionadmission.Binding
 		bindings = append(bindings, executionadmission.Binding{Ref: connection.BindingRef, TargetID: connection.TargetID, IdentityFingerprint: connection.IdentityFingerprint, Adapter: client})
 	}
 	return bindings, closeClients, nil
+}
+
+func readNodeConnections(path, installationID string) (nodeConnections, error) {
+	invalid := errors.New("protected node connections are invalid")
+	document, err := processconfig.ReadFile(path, 256*1024, true)
+	if err != nil {
+		return nodeConnections{}, invalid
+	}
+	defer clear(document)
+	var configuration nodeConnections
+	if contractjson.DecodeObjectBytes(document, 256*1024, &configuration) != nil || configuration.InstallationID != installationID ||
+		paasv1.ValidateID("installationId", installationID) != nil || paasv1.ValidateID("controllerId", configuration.ControllerID) != nil ||
+		len(configuration.Nodes) < 1 || len(configuration.Nodes) > executionadmission.MaximumTargets {
+		return nodeConnections{}, invalid
+	}
+	return configuration, nil
+}
+
+func readNodeControllerCredentials(configuration nodeConnections) (nodehttps.Credentials, error) {
+	invalid := errors.New("protected node credentials are invalid")
+	certificate, err := processconfig.ReadFile(configuration.CertificateFile, 64*1024, true)
+	if err != nil {
+		return nodehttps.Credentials{}, invalid
+	}
+	defer clear(certificate)
+	key, err := processconfig.ReadFile(configuration.PrivateKeyFile, 64*1024, true)
+	if err != nil {
+		return nodehttps.Credentials{}, invalid
+	}
+	defer clear(key)
+	trust, err := processconfig.ReadFile(configuration.TrustFile, 256*1024, true)
+	if err != nil {
+		return nodehttps.Credentials{}, invalid
+	}
+	defer clear(trust)
+	return nodehttps.NewCredentials(certificate, key, trust)
 }

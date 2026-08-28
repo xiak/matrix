@@ -15,6 +15,7 @@ import (
 	"time"
 
 	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
+	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
 	"github.com/xiak/matrix/app/service/installation/internal/nodecommand"
@@ -26,6 +27,7 @@ import (
 // concrete node adapter; native effects never import another adapter package.
 type NodeVerifier interface {
 	Validate(nodeconfig.Configuration, nodecommand.Credentials) error
+	ValidateRotation(nodeconfig.Configuration, nodecommand.Credentials, nodecommand.Credentials, bool) error
 	Verify(context.Context, nodeconfig.Configuration, nodecommand.Credentials) error
 }
 
@@ -46,18 +48,55 @@ func (effects *NodeEffects) ValidateEnrollment(plan nodecommand.Plan) error {
 	if runtime.GOOS == "linux" && nodeconfig.ValidateNativeRoot(plan.Root) != nil {
 		return nodecommand.ErrPrecondition
 	}
+	if plan.Previous != nil {
+		return effects.verifier.ValidateRotation(plan.Configuration, plan.Previous.Credentials, plan.Credentials, plan.RevokePreviousCredentials)
+	}
 	return effects.verifier.Validate(plan.Configuration, plan.Credentials)
 }
 
 func (effects *NodeEffects) ReadInstallation(root string) (nodeconfig.Configuration, nodecommand.Credentials, error) {
-	source, err := readManagedFile(root, filepath.FromSlash(layout.NodeConfiguration), nodeconfig.MaximumBytes)
+	return readNodeCredentials(root)
+}
+
+func (effects *NodeEffects) ReadRotation(root, digest string) (nodeconfig.Configuration, nodecommand.Credentials, error) {
+	if paasv1.ValidateDigest("configurationDigest", digest) != nil {
+		return nodeconfig.Configuration{}, nodecommand.Credentials{}, nodecommand.ErrVerification
+	}
+	config, err := readNodeConfiguration(root)
+	if err != nil {
+		return nodeconfig.Configuration{}, nodecommand.Credentials{}, err
+	}
+	source, err := readManagedFile(root, filepath.FromSlash(layout.NodeCredentialSnapshot(digest)), 1024*1024)
 	if err != nil {
 		return nodeconfig.Configuration{}, nodecommand.Credentials{}, nodecommand.ErrVerification
 	}
 	defer clear(source)
+	material, err := decodeNodeCredentials(source)
+	binding, bindingErr := nodecommand.Binding(config, material)
+	if err != nil || bindingErr != nil || binding.ConfigurationDigest != digest {
+		material.Clear()
+		return nodeconfig.Configuration{}, nodecommand.Credentials{}, nodecommand.ErrVerification
+	}
+	return config, material, nil
+}
+
+func readNodeConfiguration(root string) (nodeconfig.Configuration, error) {
+	source, err := readManagedFile(root, filepath.FromSlash(layout.NodeConfiguration), nodeconfig.MaximumBytes)
+	if err != nil {
+		return nodeconfig.Configuration{}, nodecommand.ErrVerification
+	}
+	defer clear(source)
 	config, err := nodeconfig.DecodeConfiguration(source)
 	if err != nil {
-		return nodeconfig.Configuration{}, nodecommand.Credentials{}, nodecommand.ErrVerification
+		return nodeconfig.Configuration{}, nodecommand.ErrVerification
+	}
+	return config, nil
+}
+
+func readNodeCredentials(root string) (nodeconfig.Configuration, nodecommand.Credentials, error) {
+	config, err := readNodeConfiguration(root)
+	if err != nil {
+		return nodeconfig.Configuration{}, nodecommand.Credentials{}, err
 	}
 	var material nodecommand.Credentials
 	for _, file := range []struct {
@@ -89,6 +128,16 @@ func (effects *NodeEffects) ApplyPhase(ctx context.Context, plan nodecommand.Pla
 	}
 	if effects.ValidateEnrollment(plan) != nil {
 		return nodecommand.ErrVerification
+	}
+	if plan.Previous != nil {
+		switch phase {
+		case lifecycle.PhasePreflight:
+			return effects.preflightNodeRotation(ctx, plan)
+		case lifecycle.PhaseStaging:
+			return stageNodeCredentials(plan)
+		case lifecycle.PhaseConfiguring:
+			return effects.replaceNodeCredentials(ctx, plan)
+		}
 	}
 	switch phase {
 	case lifecycle.PhasePreflight:
@@ -247,6 +296,9 @@ func (effects *NodeEffects) verifyNode(ctx context.Context, plan nodecommand.Pla
 // Rollback stops only exact installation-owned native services. It retains
 // staged bytes, credentials, receipts and every Docker workload for replay.
 func (effects *NodeEffects) Rollback(ctx context.Context, plan nodecommand.Plan) error {
+	if plan.Previous != nil {
+		return nodecommand.ErrVerification
+	}
 	if effects == nil || effects.supervisor == nil || ctx == nil {
 		return nodecommand.ErrUnavailable
 	}
@@ -315,15 +367,12 @@ func nodeFiles(plan nodecommand.Plan) ([]nodeFile, error) {
 	}
 	collectorConfiguration := []byte(fmt.Sprintf("tls_server_config:\n  cert_file: %q\n  key_file: %q\n  client_ca_file: %q\n  client_auth_type: RequireAndVerifyClientCert\n  client_allowed_sans:\n    - %q\n  min_version: TLS13\nhttp_server_config:\n  http2: false\n",
 		credentialRoot+"/collector.pem", credentialRoot+"/collector-key.pem", credentialRoot+"/trust.pem", uri))
-	return []nodeFile{
+	return append([]nodeFile{
 		{layout.ReleaseTrust, plan.TrustBytes}, {layout.NodeConfiguration, configuration},
 		{layout.NodeDockerConfiguration, []byte("{}\n")},
 		{filepath.ToSlash(filepath.Join(layout.NodeStartupDirectory, startup.service.name)), nativeStartupUnit(startup)},
 		{layout.CollectorConfiguration, collectorConfiguration},
-		{layout.NodeCertificate, plan.Credentials.Certificate}, {layout.NodePrivateKey, plan.Credentials.PrivateKey},
-		{layout.NodeTrust, plan.Credentials.Trust}, {layout.CollectorCertificate, plan.Credentials.CollectorCertificate},
-		{layout.CollectorPrivateKey, plan.Credentials.CollectorPrivateKey},
-	}, nil
+	}, nodeCredentialFiles(plan)...), nil
 }
 
 func authenticateNodeRelease(plan nodecommand.Plan) (release.VerifiedBundle, error) {

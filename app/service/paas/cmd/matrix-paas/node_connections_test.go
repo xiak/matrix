@@ -1,12 +1,30 @@
 package main
 
 import (
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
+	"io"
+	"log"
+	"math/big"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
+	paasv1 "github.com/xiak/matrix/api/paas/v1"
+	nodehttps "github.com/xiak/matrix/app/adapter/node/https"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/executionadmission"
 )
 
@@ -46,4 +64,164 @@ func TestNodeConnectionsAreProtectedClosedInstallationInput(t *testing.T) {
 	if err == nil {
 		t.Fatal("unbounded node inventory accepted")
 	}
+}
+
+func TestNodeCredentialReloadKeepsTheAdmittedMappingAndNeverFallsBack(t *testing.T) {
+	root := t.TempDir()
+	public, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "credential reload fixture"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), IsCA: true,
+		BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
+	der, err := x509.CreateCertificate(rand.Reader, authority, authority, public, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trust := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	trustFile := filepath.Join(root, "trust.pem")
+	if err := os.WriteFile(trustFile, trust, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	identity := nodev1.Identity{InstallationID: "installation-a", ExecutionTargetID: "target-a"}
+	nodeURI, _ := nodev1.NodeURI(identity)
+	controllerURI, _ := nodev1.ControllerURI(identity.InstallationID, "controller-a")
+	node := issueConnectionCertificate(t, root, "node", nodeURI, x509.ExtKeyUsageServerAuth, authority, key, trust)
+	first := issueConnectionCertificate(t, root, "first", controllerURI, x509.ExtKeyUsageClientAuth, authority, key, trust)
+	second := issueConnectionCertificate(t, root, "second", controllerURI, x509.ExtKeyUsageClientAuth, authority, key, trust)
+	otherURI, _ := nodev1.ControllerURI(identity.InstallationID, "other-controller")
+	other := issueConnectionCertificate(t, root, "other", otherURI, x509.ExtKeyUsageClientAuth, authority, key, trust)
+	var calls atomic.Int32
+	var peerSerial atomic.Value
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		peerSerial.Store(request.TLS.PeerCertificates[0].SerialNumber.String())
+		calls.Add(1)
+		response.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	server.TLS, err = nodehttps.ServerTLS(node.credentials, identity, "controller-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.Config.ErrorLog = log.New(io.Discard, "", 0)
+	server.StartTLS()
+	defer server.Close()
+	configuration := nodeConnections{InstallationID: identity.InstallationID, ControllerID: "controller-a",
+		CertificateFile: first.certificate, PrivateKeyFile: first.key, TrustFile: trustFile,
+		Nodes: []nodeConnection{{BindingRef: "binding-a", TargetID: identity.ExecutionTargetID, Endpoint: server.URL,
+			IdentityFingerprint: "sha256:" + strings.Repeat("a", 64)}}}
+	path := filepath.Join(root, "connections.json")
+	write := func(value nodeConnections) {
+		t.Helper()
+		document, err := json.Marshal(value)
+		if err != nil || os.WriteFile(path, document, 0o600) != nil {
+			t.Fatal("write protected connection fixture")
+		}
+	}
+	write(configuration)
+	bindings, closeBindings, err := loadNodeBindings(path, identity.InstallationID)
+	if err != nil || len(bindings) != 1 {
+		t.Fatal("load protected binding", err)
+	}
+	defer closeBindings()
+	observe := func(expectedSerial string) {
+		t.Helper()
+		before := calls.Load()
+		_, err := bindings[0].Adapter.ObserveExecutionTarget(context.Background(), paasv1.ObserveExecutionTargetRequest{
+			Command: paasv1.AdapterCommandEnvelope{OperationID: "operation-a", CommandID: "command-a", Attempt: 1,
+				Action: paasv1.AdapterObserveExecutionTarget, Scope: paasv1.ResourceScope{Kind: paasv1.AuthorityPlatform},
+				ExecutionTargetID: identity.ExecutionTargetID, BindingRef: "binding-a", RequestDigest: "sha256:" + strings.Repeat("b", 64),
+				Deadline: time.Now().UTC().Truncate(time.Microsecond).Add(5 * time.Second)}})
+		if err == nil {
+			t.Fatal("fixture's explicit unavailable response was ignored")
+		}
+		if expectedSerial == "" {
+			if calls.Load() != before {
+				t.Fatal("invalid replacement used a cached credential or retargeted the connection")
+			}
+		} else if calls.Load() != before+1 || peerSerial.Load() != expectedSerial {
+			t.Fatal("existing adapter did not use the current protected credential")
+		}
+	}
+	observe(first.serial)
+	configuration.CertificateFile, configuration.PrivateKeyFile = second.certificate, second.key
+	write(configuration)
+	observe(second.serial)
+	for _, mode := range []string{"installation", "controller", "target", "binding", "endpoint", "fingerprint", "missing key", "wrong credential role", "malformed"} {
+		t.Run(mode, func(t *testing.T) {
+			changed := configuration
+			changed.Nodes = append([]nodeConnection{}, configuration.Nodes...)
+			switch mode {
+			case "installation":
+				changed.InstallationID = "other-installation"
+			case "controller":
+				changed.ControllerID = "other-controller"
+			case "target":
+				changed.Nodes[0].TargetID = "other-target"
+			case "binding":
+				changed.Nodes[0].BindingRef = "other-binding"
+			case "endpoint":
+				changed.Nodes[0].Endpoint = "https://127.0.0.1:1"
+			case "fingerprint":
+				changed.Nodes[0].IdentityFingerprint = "sha256:" + strings.Repeat("c", 64)
+			case "missing key":
+				changed.PrivateKeyFile = filepath.Join(root, "missing-private-key")
+			case "wrong credential role":
+				changed.CertificateFile, changed.PrivateKeyFile = other.certificate, other.key
+			}
+			write(changed)
+			if mode == "malformed" && os.WriteFile(path, []byte(`{"unrecognized":true}`), 0o600) != nil {
+				t.Fatal("write malformed fixture")
+			}
+			observe("")
+			write(configuration)
+			observe(second.serial)
+		})
+	}
+}
+
+type connectionCertificate struct {
+	certificate, key, serial string
+	credentials              nodehttps.Credentials
+}
+
+func issueConnectionCertificate(t *testing.T, root, name, identity string, purpose x509.ExtKeyUsage,
+	authority *x509.Certificate, authorityKey ed25519.PrivateKey, trust []byte) connectionCertificate {
+	t.Helper()
+	public, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uri, err := url.Parse(identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 120))
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate := &x509.Certificate{SerialNumber: serial, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{purpose}, URIs: []*url.URL{uri},
+		IPAddresses: []net.IP{net.ParseIP("127.0.0.1")}}
+	der, err := x509.CreateCertificate(rand.Reader, certificate, authority, public, authorityKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificatePEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	private, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(private)
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: private})
+	defer clear(keyPEM)
+	value := connectionCertificate{certificate: filepath.Join(root, name+".pem"), key: filepath.Join(root, name+"-key.pem"), serial: serial.String()}
+	if os.WriteFile(value.certificate, certificatePEM, 0o600) != nil || os.WriteFile(value.key, keyPEM, 0o600) != nil {
+		t.Fatal("write private credential fixture")
+	}
+	value.credentials, err = nodehttps.NewCredentials(certificatePEM, keyPEM, trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value
 }

@@ -26,7 +26,9 @@ type Config struct {
 	ControllerID        string
 	BindingRef          string
 	ExpectedFingerprint string
-	Credentials         Credentials
+	// Credentials is evaluated for each TLS connection. An invalid replacement
+	// must fail closed rather than using a credential cached at process startup.
+	Credentials func() (Credentials, error)
 }
 
 type Client struct {
@@ -41,17 +43,41 @@ func New(config Config) (*Client, error) {
 	endpoint, err := url.Parse(config.Endpoint)
 	if err != nil || !validEndpoint(endpoint) || nodev1.ValidateIdentity(config.Identity) != nil ||
 		paasv1.ValidateID("bindingRef", config.BindingRef) != nil ||
-		paasv1.ValidateDigest("expectedFingerprint", config.ExpectedFingerprint) != nil {
+		paasv1.ValidateDigest("expectedFingerprint", config.ExpectedFingerprint) != nil || config.Credentials == nil {
 		return nil, errors.New("node connection configuration is invalid")
 	}
-	security, err := clientTLS(config.Credentials, config.Identity, config.ControllerID)
+	credentials, err := config.Credentials()
+	if err != nil {
+		return nil, errors.New("node connection credentials are unavailable")
+	}
+	_, err = clientTLS(credentials, config.Identity, config.ControllerID)
 	if err != nil {
 		return nil, err
+	}
+	connection := newHTTPClient(nil)
+	connection.Transport.(*http.Transport).DialTLSContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		credentials, err := config.Credentials()
+		if err != nil {
+			return nil, errTLSIdentity
+		}
+		security, err := clientTLS(credentials, config.Identity, config.ControllerID)
+		if err != nil {
+			return nil, errTLSIdentity
+		}
+		host, _, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, errTLSIdentity
+		}
+		security.ServerName = host
+		bounded, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		dialer := &tls.Dialer{NetDialer: &net.Dialer{Timeout: 5 * time.Second}, Config: security}
+		return dialer.DialContext(bounded, network, address)
 	}
 	return &Client{
 		endpoint: endpoint.String() + nodev1.ObservationPath, identity: config.Identity,
 		bindingRef: config.BindingRef, expectedFingerprint: config.ExpectedFingerprint,
-		http: newHTTPClient(security),
+		http: connection,
 	}, nil
 }
 

@@ -22,6 +22,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -208,7 +209,8 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 			}
 		}
 		client, err := nodehttps.New(nodehttps.Config{Endpoint: "https://" + config.ListenAddress, Identity: identity,
-			ControllerID: controllerID, BindingRef: config.BindingRef, ExpectedFingerprint: fingerprint, Credentials: controller.credentials})
+			ControllerID: controllerID, BindingRef: config.BindingRef, ExpectedFingerprint: fingerprint,
+			Credentials: func() (nodehttps.Credentials, error) { return controller.credentials, nil }})
 		if err == nil {
 			defer client.Close()
 			ctx, cancel := context.WithTimeout(diagnosticContext, 3*time.Second)
@@ -241,7 +243,8 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 		default:
 		}
 		client, err := nodehttps.New(nodehttps.Config{Endpoint: "https://" + config.ListenAddress, Identity: identity,
-			ControllerID: controllerID, BindingRef: config.BindingRef, ExpectedFingerprint: fingerprint, Credentials: controller.credentials})
+			ControllerID: controllerID, BindingRef: config.BindingRef, ExpectedFingerprint: fingerprint,
+			Credentials: func() (nodehttps.Credentials, error) { return controller.credentials, nil }})
 		if err != nil {
 			return
 		}
@@ -348,7 +351,8 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 		t.Fatal("install replay or platform directory misuse changed sealed state")
 	}
 	client, err := nodehttps.New(nodehttps.Config{Endpoint: "https://" + config.ListenAddress, Identity: identity,
-		ControllerID: controllerID, BindingRef: config.BindingRef, ExpectedFingerprint: fingerprint, Credentials: controller.credentials})
+		ControllerID: controllerID, BindingRef: config.BindingRef, ExpectedFingerprint: fingerprint,
+		Credentials: func() (nodehttps.Credentials, error) { return controller.credentials, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -492,37 +496,196 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 	for _, unit := range units {
 		nativeSystemctl(t, "stop", unit)
 	}
-	// Hold collector readiness while the real mx process is interrupted. The
-	// systemd-owned services must survive and a fresh mx must resume the exact
-	// durable command, not start a new operation or replace either process.
-	startContext, cancelStart := context.WithTimeout(context.Background(), 90*time.Second)
-	interrupted := exec.CommandContext(startContext, installer, "--format", "json", "node", "start", "--root", root)
-	var interruptionOutput bytes.Buffer
-	interrupted.Stdout, interrupted.Stderr = &interruptionOutput, &interruptionOutput
-	if err := interrupted.Start(); err != nil {
-		cancelStart()
+	interruption := interruptNativeCommand(t, installer, root, units, "node", "start", "--root", root)
+	pending := interruption.result
+	retainedNodePID, retainedCollectorPID := interruption.nodePID, interruption.collectorPID
+	if bootPhase == "prepare" {
+		// Leave the actual interrupted command for the next guest boot. The
+		// deferred CONT only releases the fixture's pause; it does not run mx.
+		retainNativeBoot(t, base, root, identity, installed.ReleaseID, pending.CorrelationID)
+		keepForBoot = true
+		return
+	}
+	interruption.resume()
+	started = nativeMX(t, installer, true, "node", "start", "--root", root)
+	if started.State != "READY" || started.ReleaseID != installed.ReleaseID || started.CorrelationID != pending.CorrelationID ||
+		nativeUnitProperty(t, nodeUnit, "MainPID") != retainedNodePID || nativeUnitProperty(t, collectorUnit, "MainPID") != retainedCollectorPID {
+		t.Fatal("node replay lost its command, committed release or running processes")
+	}
+	t.Run("credential lifecycle retains a running workload", func(t *testing.T) {
+		checkWorkload := nativeRetainedWorkload(t, base, identity.InstallationID)
+		marker := "runtime/executor/credential-retained-receipt"
+		if err := os.WriteFile(filepath.Join(root, marker), []byte("accepted-node-effect"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		retained := map[string][]byte{}
+		for _, relative := range []string{"config/node.json", "config/release-trust.json", "config/native/" + startupUnit, marker} {
+			data, err := os.ReadFile(filepath.Join(root, relative))
+			if err != nil {
+				t.Fatal(err)
+			}
+			retained[relative] = data
+		}
+		writeEnrollment := func(name string, node, collector issuedCertificate, trust []byte) (string, []string) {
+			t.Helper()
+			candidate := enrollment
+			candidate.Node.CertificateFile, candidate.Node.PrivateKeyFile = nativeCertificateFiles(t, base, name+"-node", node)
+			candidate.CollectorCertificateFile, candidate.CollectorPrivateKeyFile = nativeCertificateFiles(t, base, name+"-collector", collector)
+			candidate.Node.TrustFile = filepath.Join(base, name+"-trust.pem")
+			path := filepath.Join(base, name+".json")
+			encoded, err := json.Marshal(candidate)
+			if err != nil || os.WriteFile(candidate.Node.TrustFile, trust, 0o600) != nil || os.WriteFile(path, encoded, 0o600) != nil {
+				t.Fatal("write protected rotation input")
+			}
+			return path, []string{path, candidate.Node.CertificateFile, candidate.Node.PrivateKeyFile, candidate.Node.TrustFile,
+				candidate.CollectorCertificateFile, candidate.CollectorPrivateKeyFile}
+		}
+		var current atomic.Pointer[nodehttps.Credentials]
+		current.Store(&controller.credentials)
+		rotatingClient, err := nodehttps.New(nodehttps.Config{Endpoint: "https://" + config.ListenAddress, Identity: identity,
+			ControllerID: controllerID, BindingRef: config.BindingRef, ExpectedFingerprint: fingerprint,
+			Credentials: func() (nodehttps.Credentials, error) { return *current.Load(), nil }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rotatingClient.Close()
+		status := nativeMX(t, installer, true, "node", "status", "--root", root)
+		if paasv1.ValidateDigest("configurationDigest", status.ConfigurationDigest) != nil {
+			t.Fatal("current credential commitment is unavailable")
+		}
+		renewedNode := authority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false, x509.ExtKeyUsageClientAuth)
+		renewedCollector := authority.issue(t, collectorURI, x509.ExtKeyUsageServerAuth, false)
+		renewalFile, _ := writeEnrollment("renewal", renewedNode, renewedCollector, authority.pem)
+		renewalArgs := []string{"node", "rotate-credentials", "--root", root, "--configuration", renewalFile,
+			"--expected-configuration-digest", status.ConfigurationDigest}
+		before, err := os.ReadFile(journalPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		nodePID, collectorPID := nativeUnitProperty(t, nodeUnit, "MainPID"), nativeUnitProperty(t, collectorUnit, "MainPID")
+		nativeMX(t, installer, false, renewalArgs...)
+		after, err := os.ReadFile(journalPath)
+		if err != nil || !bytes.Equal(before, after) || nativeUnitProperty(t, nodeUnit, "MainPID") != nodePID ||
+			nativeUnitProperty(t, collectorUnit, "MainPID") != collectorPID {
+			t.Fatal("default retirement accepted old trust or caused partial effects")
+		}
+		renewed := nativeMX(t, installer, true, append(renewalArgs, "--revoke-previous=false")...)
+		if !renewed.Changed || renewed.State != "READY" || renewed.ConfigurationDigest == status.ConfigurationDigest {
+			t.Fatal("explicit same-trust renewal did not commit")
+		}
+		awaitObservation(t, rotatingClient, time.Time{}, paasv1.MeasurementAvailable)
+		checkWorkload()
+
+		nextAuthority := newAuthority(t)
+		nextNode := nextAuthority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false, x509.ExtKeyUsageClientAuth)
+		nextCollector := nextAuthority.issue(t, collectorURI, x509.ExtKeyUsageServerAuth, false)
+		nextController := nextAuthority.issue(t, controllerURI, x509.ExtKeyUsageClientAuth, false)
+		rotationFile, externalInputs := writeEnrollment("retirement", nextNode, nextCollector, nextAuthority.pem)
+		rotationArgs := []string{"node", "rotate-credentials", "--root", root, "--configuration", rotationFile,
+			"--expected-configuration-digest", renewed.ConfigurationDigest}
+		interrupted := interruptNativeCommand(t, installer, root, units, rotationArgs...)
+		for _, path := range externalInputs {
+			if err := os.Remove(path); err != nil {
+				t.Fatal("remove exact fixture-owned external rotation input")
+			}
+		}
+		interrupted.resume()
+		rotated := nativeMX(t, installer, true, "node", "start", "--root", root)
+		if rotated.State != "READY" || rotated.CorrelationID != interrupted.result.CorrelationID ||
+			rotated.ReleaseID != installed.ReleaseID || rotated.ExecutionTargetID != string(identity.ExecutionTargetID) ||
+			rotated.ConfigurationDigest == renewed.ConfigurationDigest || paasv1.ValidateDigest("configurationDigest", rotated.ConfigurationDigest) != nil ||
+			nativeUnitProperty(t, nodeUnit, "MainPID") != interrupted.nodePID || nativeUnitProperty(t, collectorUnit, "MainPID") != interrupted.collectorPID {
+			t.Fatal("interrupted rotation lost sealed intent or replaced already activated processes")
+		}
+		current.Store(&nextController.credentials)
+		awaitObservation(t, rotatingClient, time.Time{}, paasv1.MeasurementAvailable)
+		assertRetired := func() {
+			t.Helper()
+			for _, peer := range []issuedCertificate{controller, node, renewedNode} {
+				for _, endpoint := range []string{"https://" + config.ListenAddress + nodev1.ReadinessPath, config.CollectorEndpoint + "/metrics"} {
+					retiredClient := nextAuthority.rawClient(&peer.pair)
+					response, err := retiredClient.Get(endpoint)
+					if response != nil {
+						response.Body.Close()
+					}
+					retiredClient.CloseIdleConnections()
+					if err == nil {
+						t.Fatal("retired credential passed real mutual TLS after the trust switch")
+					}
+				}
+			}
+		}
+		assertRetired()
+		checkWorkload()
+		for _, unit := range units {
+			nativeSystemctl(t, "stop", unit)
+		}
+		restarted := nativeMX(t, installer, true, "node", "start", "--root", root)
+		if restarted.State != "READY" || restarted.ConfigurationDigest != rotated.ConfigurationDigest {
+			t.Fatal("resident restart did not retain the committed credential set")
+		}
+		awaitObservation(t, rotatingClient, time.Time{}, paasv1.MeasurementAvailable)
+		assertRetired()
+		checkWorkload()
+		writeEnrollment("retirement", nextNode, nextCollector, nextAuthority.pem)
+		replayed := nativeMX(t, installer, true, rotationArgs...)
+		if replayed.Changed || replayed.ConfigurationDigest != rotated.ConfigurationDigest || replayed.CorrelationID != rotated.CorrelationID {
+			t.Fatal("rotation replay after restart lost its original receipt")
+		}
+		for relative, expected := range retained {
+			actual, err := os.ReadFile(filepath.Join(root, relative))
+			if err != nil || !bytes.Equal(actual, expected) {
+				t.Fatal("credential rotation changed retained configuration, release trust, boot ownership or executor receipt")
+			}
+		}
+		entries, err := os.ReadDir(filepath.Join(root, "secrets", "node-rotations"))
+		if err != nil || len(entries) != 0 {
+			t.Fatal("committed rotation retained obsolete private-key snapshots")
+		}
+		if data, err := os.ReadFile(enrollmentFile); err != nil || !bytes.Equal(data, enrollmentBytes) {
+			t.Fatal("rotation altered operator-owned original enrollment")
+		}
+	})
+}
+
+type nativeInterruptedCommand struct {
+	result                nativeMXResult
+	nodePID, collectorPID string
+	resume                func()
+}
+
+// Pause only the owned collector after both Type=exec services have started,
+// so the real installer can be killed during readiness, not systemd startup.
+func interruptNativeCommand(t *testing.T, installer, root string, units []string, arguments ...string) nativeInterruptedCommand {
+	t.Helper()
+	if len(units) != 2 {
+		t.Fatal("interruption gate requires the exact node and collector")
+	}
+	previous := []string{nativeUnitProperty(t, units[0], "MainPID"), nativeUnitProperty(t, units[1], "MainPID")}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	command := exec.CommandContext(ctx, installer, append([]string{"--format", "json"}, arguments...)...)
+	var output bytes.Buffer
+	command.Stdout, command.Stderr = &output, &output
+	if err := command.Start(); err != nil {
+		cancel()
 		t.Fatal("start interruptible node command")
 	}
 	done := make(chan struct{})
-	var interruptedErr error
-	go func() {
-		interruptedErr = interrupted.Wait()
-		close(done)
-	}()
-	defer func() {
-		cancelStart()
+	var commandErr error
+	go func() { commandErr = command.Wait(); close(done) }()
+	t.Cleanup(func() {
+		cancel()
 		select {
 		case <-done:
 		case <-time.After(5 * time.Second):
 			t.Error("interrupted mx did not exit")
 		}
-	}()
-	deadline, _ = startContext.Deadline()
+	})
 	for {
 		running := true
-		for _, unit := range units {
+		for index, unit := range units {
 			pid := nativeUnitProperty(t, unit, "MainPID")
-			if pid == "" || pid == "0" || nativeUnitProperty(t, unit, "ActiveState") != "active" {
+			if pid == "" || pid == "0" || pid == previous[index] || nativeUnitProperty(t, unit, "ActiveState") != "active" {
 				running = false
 			}
 		}
@@ -531,52 +694,109 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 		}
 		select {
 		case <-done:
-			if interruptionOutput.Len() <= 4096 {
-				t.Logf("interruption startup result: %s", interruptionOutput.Bytes())
+			if output.Len() <= 4096 {
+				t.Logf("interruption startup result: %s", output.Bytes())
 			}
-			t.Fatal("mx exited before both resident services were running")
-		default:
+			t.Fatal("mx exited before both replacement services were running")
+		case <-ctx.Done():
+			t.Fatal("resident services did not start before the interruption deadline")
+		case <-time.After(100 * time.Millisecond):
 		}
-		if time.Now().After(deadline) {
-			t.Fatal("resident services were not running before the command deadline")
-		}
-		<-time.After(100 * time.Millisecond)
 	}
-	// MainPID can be assigned before a Type=exec service has exec'd. Wait for
-	// both services before pausing collection, so this does not stall systemd's
-	// own startup job instead of exercising the installer's readiness phase.
-	nativeSystemctl(t, "kill", "--kill-who=main", "--signal=STOP", collectorUnit)
-	paused := true
-	defer func() {
-		if paused {
-			nativeSystemctl(t, "kill", "--kill-who=main", "--signal=CONT", collectorUnit)
-		}
-	}()
-	retainedNodePID, retainedCollectorPID := nativeUnitProperty(t, nodeUnit, "MainPID"), nativeUnitProperty(t, collectorUnit, "MainPID")
-	if err := interrupted.Process.Kill(); err != nil {
+	nativeSystemctl(t, "kill", "--kill-who=main", "--signal=STOP", units[1])
+	var resumeOnce sync.Once
+	resume := func() {
+		resumeOnce.Do(func() { nativeSystemctl(t, "kill", "--kill-who=main", "--signal=CONT", units[1]) })
+	}
+	t.Cleanup(resume)
+	nodePID, collectorPID := nativeUnitProperty(t, units[0], "MainPID"), nativeUnitProperty(t, units[1], "MainPID")
+	if command.Process.Kill() != nil {
 		t.Fatal("mx completed before the interruption gate")
 	}
-	<-done
-	if interruptedErr == nil {
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("interrupted mx did not stop")
+	}
+	if commandErr == nil {
 		t.Fatal("interrupted mx reported successful completion")
 	}
 	pending := nativeMX(t, installer, true, "node", "status", "--root", root)
 	if (pending.State != "STARTING" && pending.State != "VERIFYING") || pending.CorrelationID == "" {
 		t.Fatal("interruption did not retain the in-flight command")
 	}
-	if bootPhase == "prepare" {
-		// Leave the actual interrupted command for the next guest boot. The
-		// deferred CONT only releases the fixture's pause; it does not run mx.
-		retainNativeBoot(t, base, root, identity, installed.ReleaseID, pending.CorrelationID)
-		keepForBoot = true
-		return
+	return nativeInterruptedCommand{result: pending, nodePID: nodePID, collectorPID: collectorPID, resume: resume}
+}
+
+// This one network-disabled, bounded fixture proves credential replacement
+// does not restart a workload or lose data; it is not a PaaS placement gate.
+func nativeRetainedWorkload(t *testing.T, base, installationID string) func() {
+	t.Helper()
+	const image = "postgres@sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a"
+	const label = "com.xiak.matrix.fixture"
+	const inspect = `{{.Id}}|{{.State.StartedAt}}|{{.RestartCount}}|{{.State.Running}}|{{index .Config.Labels "com.xiak.matrix.fixture"}}`
+	docker := func(arguments ...string) (string, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		output, err := exec.CommandContext(ctx, "docker", arguments...).CombinedOutput()
+		if len(output) > 4096 {
+			return "", fmt.Errorf("fixture Docker output exceeded its bound")
+		}
+		return strings.TrimSpace(string(output)), err
 	}
-	nativeSystemctl(t, "kill", "--kill-who=main", "--signal=CONT", collectorUnit)
-	paused = false
-	started = nativeMX(t, installer, true, "node", "start", "--root", root)
-	if started.State != "READY" || started.ReleaseID != installed.ReleaseID || started.CorrelationID != pending.CorrelationID ||
-		nativeUnitProperty(t, nodeUnit, "MainPID") != retainedNodePID || nativeUnitProperty(t, collectorUnit, "MainPID") != retainedCollectorPID {
-		t.Fatal("node replay lost its command, committed release or running processes")
+	name := "matrix-node-credentials-" + strings.TrimPrefix(installationID, "mxi-")
+	if _, err := docker("inspect", "--type", "container", "--format", "{{.Id}}", name); err == nil {
+		t.Fatal("workload fixture identity already exists")
+	}
+	data := filepath.Join(base, "credential-workload-data")
+	if err := os.Mkdir(data, 0o700); err != nil {
+		t.Fatal("create owned workload fixture data")
+	}
+	id, err := docker("run", "--pull=never", "--detach", "--name", name, "--label", label+"="+installationID,
+		"--cpus=0.5", "--memory=384m", "--pids-limit=128", "--network=none",
+		"--mount", "type=bind,src="+data+",dst=/var/lib/postgresql", "--env", "POSTGRES_PASSWORD="+installationID,
+		image, "postgres", "-c", "max_connections=10", "-c", "shared_buffers=32MB", "-c", "max_worker_processes=2")
+	if err != nil || len(id) != 64 {
+		t.Fatal("start bounded workload using the preloaded pinned image")
+	}
+	t.Cleanup(func() {
+		owned, err := docker("inspect", "--type", "container", "--format", `{{.Id}}|{{index .Config.Labels "com.xiak.matrix.fixture"}}`, id)
+		if err != nil || owned != id+"|"+installationID {
+			t.Error("refuse to remove an unauthenticated workload fixture")
+			return
+		}
+		if _, err := docker("rm", "--force", id); err != nil {
+			t.Error("remove exact owned workload fixture")
+		}
+	})
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if _, err := docker("exec", id, "pg_isready", "-h", "127.0.0.1", "-U", "postgres"); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("bounded workload fixture did not become ready")
+		}
+		<-time.After(200 * time.Millisecond)
+	}
+	if _, err := docker("exec", id, "psql", "-U", "postgres", "-v", "ON_ERROR_STOP=1", "-c",
+		"CREATE TABLE retained_marker(value text NOT NULL); INSERT INTO retained_marker VALUES ('credential-rotation-retained');"); err != nil {
+		t.Fatal("seed real workload marker")
+	}
+	before, err := docker("inspect", "--type", "container", "--format", inspect, id)
+	if err != nil || !strings.HasPrefix(before, id+"|") || !strings.HasSuffix(before, "|0|true|"+installationID) {
+		t.Fatal("workload identity or running state is unavailable")
+	}
+	return func() {
+		t.Helper()
+		after, err := docker("inspect", "--type", "container", "--format", inspect, id)
+		if err != nil || after != before {
+			t.Fatal("node lifecycle changed the running workload identity or startup time")
+		}
+		marker, err := docker("exec", id, "psql", "-U", "postgres", "-v", "ON_ERROR_STOP=1", "-Atc", "SELECT value FROM retained_marker")
+		if err != nil || marker != "credential-rotation-retained" {
+			t.Fatal("node lifecycle lost real retained workload data")
+		}
 	}
 }
 
@@ -684,11 +904,12 @@ func awaitNativeStartup(t *testing.T, unit string) {
 }
 
 type nativeMXResult struct {
-	State             string `json:"state"`
-	CorrelationID     string `json:"correlationId"`
-	ReleaseID         string `json:"releaseId"`
-	ExecutionTargetID string `json:"executionTargetId"`
-	Changed           bool   `json:"changed"`
+	State               string `json:"state"`
+	CorrelationID       string `json:"correlationId"`
+	ReleaseID           string `json:"releaseId"`
+	ExecutionTargetID   string `json:"executionTargetId"`
+	Changed             bool   `json:"changed"`
+	ConfigurationDigest string `json:"configurationDigest"`
 }
 
 func nativeMX(t *testing.T, binary string, success bool, arguments ...string) nativeMXResult {
@@ -838,7 +1059,8 @@ func TestLinuxNodeProcessObservation(t *testing.T) {
 	}
 	client, err := nodehttps.New(nodehttps.Config{
 		Endpoint: "https://" + address, Identity: nodeIdentity, ControllerID: controllerID,
-		BindingRef: "binding-a", ExpectedFingerprint: fingerprint, Credentials: controller.credentials,
+		BindingRef: "binding-a", ExpectedFingerprint: fingerprint,
+		Credentials: func() (nodehttps.Credentials, error) { return controller.credentials, nil },
 	})
 	if err != nil {
 		t.Fatal(err)

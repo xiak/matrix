@@ -85,7 +85,7 @@ func TestPlatformCommandNamesHaveNoCompatibilityAliases(t *testing.T) {
 }
 
 func TestNodeCommandsStaySeparateAndRequireProtectedEnrollment(t *testing.T) {
-	for _, action := range []string{"install", "start", "verify", "status"} {
+	for _, action := range []string{"install", "start", "verify", "status", "rotate-credentials"} {
 		t.Run(action, func(t *testing.T) {
 			var request Request
 			backend := backendFunc(func(_ context.Context, value Request) (Result, error) {
@@ -96,10 +96,16 @@ func TestNodeCommandsStaySeparateAndRequireProtectedEnrollment(t *testing.T) {
 			if action == "install" {
 				args = append(args, "--bundle", "/media/node", "--trust-key", "/media/trust.json", "--configuration", "/private/enrollment.json")
 			}
+			if action == "rotate-credentials" {
+				args = append(args, "--configuration", "/private/enrollment.json", "--expected-configuration-digest", "sha256:"+strings.Repeat("a", 64))
+			}
 			var out, errOut bytes.Buffer
 			exit := Run(context.Background(), args, Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut}, backend)
-			if exit != ExitSuccess || request.Subject != SubjectNode || request.Action != lifecycle.Action(strings.ToUpper(action)) {
+			if exit != ExitSuccess || request.Subject != SubjectNode || request.Action != lifecycle.Action(strings.ReplaceAll(strings.ToUpper(action), "-", "_")) {
 				t.Fatalf("node request not routed: %d / %#v / %s", exit, request, errOut.String())
+			}
+			if action == "rotate-credentials" && !request.RevokePreviousCredentials {
+				t.Fatal("node rotation defaulted to retaining the previous trust set")
 			}
 			var result successEnvelope
 			if json.Unmarshal(out.Bytes(), &result) != nil || result.Kind != "NodeCommandResult" || result.Result.ExecutionTargetID != "target-a" {
@@ -113,6 +119,9 @@ func TestNodeCommandsStaySeparateAndRequireProtectedEnrollment(t *testing.T) {
 		{"node", "recover", "--root", "/srv/node"},
 		{"node", "start", "--root", "/srv/node", "--configuration", "/private/other.json"},
 		{"platform", "install", "--root", "/srv/platform", "--configuration", "/private/enrollment.json"},
+		{"platform", "rotate-credentials", "--root", "/srv/platform"},
+		{"node", "rotate-credentials", "--root", "/srv/node", "--configuration", "/private/enrollment.json"},
+		{"node", "rotate-credentials", "--root", "/srv/node", "--configuration", "/private/enrollment.json", "--expected-configuration-digest", "../credentials"},
 	} {
 		var out, errOut bytes.Buffer
 		exit := Run(context.Background(), append([]string{"--format", "json"}, args...), Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut},
@@ -123,6 +132,23 @@ func TestNodeCommandsStaySeparateAndRequireProtectedEnrollment(t *testing.T) {
 		if exit != ExitInvalidInput || out.Len() != 0 {
 			t.Fatalf("invalid node input accepted: %v", args)
 		}
+	}
+}
+
+func TestNodeSameTrustRenewalRequiresExplicitOptOut(t *testing.T) {
+	var out, errOut bytes.Buffer
+	expected := "sha256:" + strings.Repeat("a", 64)
+	exit := Run(context.Background(), []string{"node", "rotate-credentials", "--root", "/srv/node",
+		"--configuration", "/private/enrollment.json", "--expected-configuration-digest", expected, "--revoke-previous=false"},
+		Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut},
+		backendFunc(func(_ context.Context, request Request) (Result, error) {
+			if request.Action != lifecycle.ActionRotateCredentials || request.RevokePreviousCredentials || request.ExpectedConfigurationDigest != expected {
+				t.Fatal("explicit renewal policy was lost")
+			}
+			return Result{State: "READY", ConfigurationDigest: expected}, nil
+		}))
+	if exit != ExitSuccess || !strings.Contains(out.String(), expected) || strings.Contains(out.String(), "/private/") {
+		t.Fatal("node result omitted its usable commitment or exposed an input path")
 	}
 }
 

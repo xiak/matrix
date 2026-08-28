@@ -21,15 +21,16 @@ var (
 type Action string
 
 const (
-	ActionInstall  Action = "INSTALL"
-	ActionVerify   Action = "VERIFY"
-	ActionStatus   Action = "STATUS"
-	ActionBackup   Action = "BACKUP"
-	ActionUpgrade  Action = "UPGRADE"
-	ActionRollback Action = "ROLLBACK"
-	ActionRecover  Action = "RECOVER"
-	ActionSupport  Action = "SUPPORT"
-	ActionStart    Action = "START"
+	ActionInstall           Action = "INSTALL"
+	ActionVerify            Action = "VERIFY"
+	ActionStatus            Action = "STATUS"
+	ActionBackup            Action = "BACKUP"
+	ActionUpgrade           Action = "UPGRADE"
+	ActionRollback          Action = "ROLLBACK"
+	ActionRecover           Action = "RECOVER"
+	ActionSupport           Action = "SUPPORT"
+	ActionStart             Action = "START"
+	ActionRotateCredentials Action = "ROTATE_CREDENTIALS"
 )
 
 type Phase string
@@ -68,13 +69,15 @@ const (
 )
 
 type Command struct {
-	ID              string    `json:"id"`
-	Action          Action    `json:"action"`
-	InputDigest     string    `json:"inputDigest,omitempty"`
-	BackupDigest    string    `json:"backupDigest,omitempty"`
-	TargetReleaseID string    `json:"targetReleaseId,omitempty"`
-	BackupID        string    `json:"backupId,omitempty"`
-	RequestedAt     time.Time `json:"requestedAt"`
+	ID                          string    `json:"id"`
+	Action                      Action    `json:"action"`
+	InputDigest                 string    `json:"inputDigest,omitempty"`
+	BackupDigest                string    `json:"backupDigest,omitempty"`
+	TargetReleaseID             string    `json:"targetReleaseId,omitempty"`
+	BackupID                    string    `json:"backupId,omitempty"`
+	ExpectedConfigurationDigest string    `json:"expectedConfigurationDigest,omitempty"`
+	RevokePreviousCredentials   bool      `json:"revokePreviousCredentials,omitempty"`
+	RequestedAt                 time.Time `json:"requestedAt"`
 }
 
 type Execution struct {
@@ -92,17 +95,18 @@ type Execution struct {
 }
 
 type Journal struct {
-	APIVersion            string       `json:"apiVersion"`
-	Version               uint64       `json:"version"`
-	InstallationID        string       `json:"installationId"`
-	ReleaseTrust          ReleaseTrust `json:"releaseTrust"`
-	Node                  *NodeBinding `json:"node,omitempty"`
-	CurrentReleaseID      string       `json:"currentReleaseId,omitempty"`
-	CurrentReleaseDigest  string       `json:"currentReleaseDigest,omitempty"`
-	PreviousRelease       string       `json:"previousReleaseId,omitempty"`
-	PreviousReleaseDigest string       `json:"previousReleaseDigest,omitempty"`
-	Active                *Execution   `json:"active,omitempty"`
-	Last                  *Execution   `json:"last,omitempty"`
+	APIVersion             string       `json:"apiVersion"`
+	Version                uint64       `json:"version"`
+	InstallationID         string       `json:"installationId"`
+	ReleaseTrust           ReleaseTrust `json:"releaseTrust"`
+	Node                   *NodeBinding `json:"node,omitempty"`
+	NodeCredentialRotation *Command     `json:"nodeCredentialRotation,omitempty"`
+	CurrentReleaseID       string       `json:"currentReleaseId,omitempty"`
+	CurrentReleaseDigest   string       `json:"currentReleaseDigest,omitempty"`
+	PreviousRelease        string       `json:"previousReleaseId,omitempty"`
+	PreviousReleaseDigest  string       `json:"previousReleaseDigest,omitempty"`
+	Active                 *Execution   `json:"active,omitempty"`
+	Last                   *Execution   `json:"last,omitempty"`
 }
 
 // NodeBinding seals the purpose of this installation root and the complete
@@ -251,6 +255,9 @@ func Advance(journal Journal, commandID string, next Phase, at time.Time) (Journ
 	}
 	execution.Phase = next
 	execution.UpdatedAt = at
+	if execution.Command.Action == ActionRotateCredentials {
+		execution.FailureCode = ""
+	}
 	journal.Version++
 	if next == PhaseReady {
 		execution.Outcome = OutcomeSucceeded
@@ -282,6 +289,11 @@ func Fail(journal Journal, commandID, failureCode string, at time.Time) (Journal
 	execution.UpdatedAt = at
 	journal.Version++
 	switch execution.Command.Action {
+	case ActionRotateCredentials:
+		// Credential retirement is one-way. A failed attempt keeps the exact
+		// candidate intent for retry; it never restores the old trust set.
+		journal.Active = &execution
+		return journal, nil
 	case ActionInstall, ActionUpgrade:
 		if execution.Phase == PhaseCommitting || execution.Phase == PhaseRollingBack {
 			return finishManual(journal, execution, at), nil
@@ -316,6 +328,12 @@ func ValidateJournal(journal Journal) error {
 		!digestPattern.MatchString(journal.Node.ConfigurationDigest)) {
 		problems = append(problems, errors.New("node installation binding is invalid"))
 	}
+	if rotation := journal.NodeCredentialRotation; rotation != nil {
+		if journal.Node == nil || journal.CurrentReleaseID == "" || rotation.Action != ActionRotateCredentials ||
+			validateCommand(*rotation, true) != nil || rotation.InputDigest != journal.Node.ConfigurationDigest {
+			problems = append(problems, errors.New("committed node credential rotation is invalid"))
+		}
+	}
 	if (journal.CurrentReleaseID == "") != (journal.CurrentReleaseDigest == "") ||
 		(journal.CurrentReleaseID != "" && (!releaseIDPattern.MatchString(journal.CurrentReleaseID) ||
 			!digestPattern.MatchString(journal.CurrentReleaseDigest))) {
@@ -333,6 +351,10 @@ func ValidateJournal(journal Journal) error {
 			journal.CurrentReleaseDigest != journal.Active.SourceDigest {
 			problems = append(problems, errors.New("active command source does not match the current release"))
 		}
+		if journal.Active.Command.Action == ActionRotateCredentials &&
+			(journal.Node == nil || journal.Active.Command.ExpectedConfigurationDigest != journal.Node.ConfigurationDigest) {
+			problems = append(problems, errors.New("active rotation source does not match the node commitment"))
+		}
 	}
 	if journal.Last != nil {
 		problems = append(problems, validateExecution(*journal.Last, true, journal.Node != nil))
@@ -345,6 +367,46 @@ func ValidateJournal(journal Journal) error {
 	return errors.Join(problems...)
 }
 
+// ValidateNodeTransition keeps the node's lifetime identity immutable while
+// admitting only the final transition of its already sealed credential command.
+// Persistence uses this boundary instead of treating any version increment as
+// permission to replace a credential commitment or its replay receipt.
+func ValidateNodeTransition(before, after Journal) error {
+	invalid := errors.New("node commitment change lacks a verified rotation transition")
+	if (before.Node == nil) != (after.Node == nil) {
+		return invalid
+	}
+	if before.Node == nil {
+		if after.NodeCredentialRotation != nil {
+			return invalid
+		}
+		return nil
+	}
+	if before.Node.ExecutionTargetID != after.Node.ExecutionTargetID {
+		return invalid
+	}
+	receiptEqual := before.NodeCredentialRotation == nil && after.NodeCredentialRotation == nil
+	if before.NodeCredentialRotation != nil && after.NodeCredentialRotation != nil {
+		receiptEqual = *before.NodeCredentialRotation == *after.NodeCredentialRotation
+	}
+	if before.Node.ConfigurationDigest == after.Node.ConfigurationDigest && receiptEqual {
+		return nil
+	}
+	if before.Active == nil || before.Active.Command.Action != ActionRotateCredentials ||
+		before.Active.Phase != PhaseCommitting || after.Active != nil || after.Last == nil {
+		return invalid
+	}
+	expected, err := Advance(before, before.Active.Command.ID, PhaseReady, after.Last.CompletedAt)
+	if err != nil || *expected.Node != *after.Node || expected.NodeCredentialRotation == nil ||
+		after.NodeCredentialRotation == nil || *expected.NodeCredentialRotation != *after.NodeCredentialRotation ||
+		*expected.Last != *after.Last || expected.CurrentReleaseID != after.CurrentReleaseID ||
+		expected.CurrentReleaseDigest != after.CurrentReleaseDigest || expected.PreviousRelease != after.PreviousRelease ||
+		expected.PreviousReleaseDigest != after.PreviousReleaseDigest {
+		return invalid
+	}
+	return nil
+}
+
 func validateCommand(command Command, node bool) error {
 	if !commandIDPattern.MatchString(command.ID) || !canonicalTime(command.RequestedAt) {
 		return errors.New("installation command identity or time is invalid")
@@ -352,7 +414,17 @@ func validateCommand(command Command, node bool) error {
 	if len(workflow(command.Action, node)) == 0 {
 		return errors.New("installation action is unsupported for this root")
 	}
+	if command.Action != ActionRotateCredentials &&
+		(command.ExpectedConfigurationDigest != "" || command.RevokePreviousCredentials) {
+		return errors.New("installation command contains unrelated credential input")
+	}
 	switch command.Action {
+	case ActionRotateCredentials:
+		if !digestPattern.MatchString(command.InputDigest) || !digestPattern.MatchString(command.ExpectedConfigurationDigest) ||
+			command.InputDigest == command.ExpectedConfigurationDigest || command.TargetReleaseID != "" ||
+			command.BackupID != "" || command.BackupDigest != "" {
+			return errors.New("node credential rotation input is invalid")
+		}
 	case ActionInstall:
 		if !digestPattern.MatchString(command.InputDigest) ||
 			!releaseIDPattern.MatchString(command.TargetReleaseID) || command.BackupID != "" ||
@@ -396,6 +468,11 @@ func validateCommand(command Command, node bool) error {
 
 func validateActionPrecondition(journal Journal, command Command) error {
 	switch command.Action {
+	case ActionRotateCredentials:
+		if journal.Node == nil || journal.CurrentReleaseID == "" ||
+			journal.Node.ConfigurationDigest != command.ExpectedConfigurationDigest {
+			return ErrPrecondition
+		}
 	case ActionInstall:
 		if journal.CurrentReleaseID != "" || journal.PreviousRelease != "" {
 			return ErrPrecondition
@@ -499,6 +576,10 @@ func validateExecution(execution Execution, completed bool, node bool) error {
 			execution.FailureCode == "" {
 			problems = append(problems, errors.New("installation rollback intent lacks a failure"))
 		}
+		if execution.Phase == PhaseRollingBack && execution.Command.Action != ActionInstall &&
+			execution.Command.Action != ActionUpgrade && execution.Command.Action != ActionRollback {
+			problems = append(problems, errors.New("installation action cannot roll back"))
+		}
 	}
 	if execution.FailureCode != "" && !failureCodePattern.MatchString(execution.FailureCode) {
 		problems = append(problems, errors.New("installation failure code is invalid"))
@@ -509,13 +590,17 @@ func validateExecution(execution Execution, completed bool, node bool) error {
 func sameCommandInput(left, right Command) bool {
 	return left.ID == right.ID && left.Action == right.Action &&
 		left.InputDigest == right.InputDigest && left.TargetReleaseID == right.TargetReleaseID &&
-		left.BackupID == right.BackupID && left.BackupDigest == right.BackupDigest
+		left.BackupID == right.BackupID && left.BackupDigest == right.BackupDigest &&
+		left.ExpectedConfigurationDigest == right.ExpectedConfigurationDigest &&
+		left.RevokePreviousCredentials == right.RevokePreviousCredentials
 }
 
 func workflow(action Action, node bool) []Phase {
 	if node {
 		switch action {
 		case ActionInstall:
+			return []Phase{PhasePreflight, PhaseStaging, PhaseConfiguring, PhaseStarting, PhaseVerifying, PhaseCommitting, PhaseReady}
+		case ActionRotateCredentials:
 			return []Phase{PhasePreflight, PhaseStaging, PhaseConfiguring, PhaseStarting, PhaseVerifying, PhaseCommitting, PhaseReady}
 		case ActionStart:
 			return []Phase{PhaseStarting, PhaseVerifying, PhaseReady}
@@ -570,6 +655,12 @@ func phaseIndex(phases []Phase, phase Phase) int {
 
 func applySuccessfulPointerChange(journal *Journal, execution Execution) {
 	switch execution.Command.Action {
+	case ActionRotateCredentials:
+		binding := *journal.Node
+		binding.ConfigurationDigest = execution.Command.InputDigest
+		journal.Node = &binding
+		command := execution.Command
+		journal.NodeCredentialRotation = &command
 	case ActionInstall:
 		journal.CurrentReleaseID = execution.Destination
 		journal.CurrentReleaseDigest = execution.DestinationDigest
@@ -596,6 +687,11 @@ func applySuccessfulPointerChange(journal *Journal, execution Execution) {
 func validateCompletedPointers(journal Journal, execution Execution) error {
 	switch execution.Outcome {
 	case OutcomeSucceeded:
+		if execution.Command.Action == ActionRotateCredentials &&
+			(journal.Node == nil || journal.Node.ConfigurationDigest != execution.Command.InputDigest ||
+				journal.NodeCredentialRotation == nil || !sameCommandInput(*journal.NodeCredentialRotation, execution.Command)) {
+			return errors.New("successful credential rotation is not current")
+		}
 		switch execution.Command.Action {
 		case ActionInstall, ActionUpgrade, ActionRollback, ActionRecover:
 			if journal.CurrentReleaseID != execution.Destination ||

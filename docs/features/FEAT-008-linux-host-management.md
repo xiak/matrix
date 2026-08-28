@@ -237,9 +237,14 @@ replacement can resume the same command without the original input files.
 Only the exact node and collector processes are reconciled; executor receipts,
 Docker workloads and boot ownership are retained. Expiry of the old certificates
 does not prevent an authorized rotation of their still-authenticated sealed bytes.
+After the new commitment is durable, remove only its two authenticated temporary
+credential snapshots. Cleanup is replayable; failure retains the new commitment
+and blocks staging another rotation, rather than accumulating old private keys.
 
 The default rotation replaces the complete management trust set and both private
-keys. It rejects retained old trust keys and is the first revocation primitive;
+keys. Node and collector keys must be distinct, and no old key may be retained
+by moving it to the other role. It rejects retained old trust keys, including
+reissued CA certificates with the same key, and is the first revocation primitive;
 ordinary same-trust certificate renewal requires explicit `--revoke-previous=false`.
 Revocation is not automatically rolled back after activation failure. The sealed
 candidate remains the recovery intent, failed verification stays unaccepted, and

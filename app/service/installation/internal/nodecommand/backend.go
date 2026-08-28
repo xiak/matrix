@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"time"
 
+	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/cli"
 	"github.com/xiak/matrix/app/service/installation/internal/journal"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
@@ -29,13 +30,22 @@ var (
 )
 
 type Plan struct {
-	Root          string
-	Bundle        release.VerifiedBundle
-	Trust         release.TrustRoot
-	TrustBytes    []byte
-	Configuration nodeconfig.Configuration
-	Credentials   Credentials
-	Binding       lifecycle.NodeBinding
+	Root                      string
+	Bundle                    release.VerifiedBundle
+	Trust                     release.TrustRoot
+	TrustBytes                []byte
+	Configuration             nodeconfig.Configuration
+	Credentials               Credentials
+	Binding                   lifecycle.NodeBinding
+	Previous                  *Plan
+	RevokePreviousCredentials bool
+}
+
+func (plan Plan) Clear() {
+	plan.Credentials.Clear()
+	if plan.Previous != nil {
+		plan.Previous.Credentials.Clear()
+	}
 }
 
 // Effects separates supervision/filesystem effects from the durable workflow.
@@ -44,6 +54,8 @@ type Plan struct {
 type Effects interface {
 	ValidateEnrollment(Plan) error
 	ReadInstallation(string) (nodeconfig.Configuration, Credentials, error)
+	ReadRotation(string, string) (nodeconfig.Configuration, Credentials, error)
+	FinalizeRotation(context.Context, Plan, lifecycle.Command) error
 	ApplyPhase(context.Context, Plan, lifecycle.Phase) error
 	Rollback(context.Context, Plan) error
 	Observe(context.Context, Plan) (bool, error)
@@ -75,6 +87,8 @@ func (backend *Backend) Run(ctx context.Context, request cli.Request) (cli.Resul
 	switch request.Action {
 	case lifecycle.ActionInstall:
 		return backend.install(ctx, request)
+	case lifecycle.ActionRotateCredentials:
+		return backend.rotateCredentials(ctx, request)
 	case lifecycle.ActionStart, lifecycle.ActionStatus, lifecycle.ActionVerify:
 		return backend.installed(ctx, request)
 	default:
@@ -176,6 +190,17 @@ func (backend *Backend) installed(ctx context.Context, request cli.Request) (res
 	if request.Action == lifecycle.ActionStatus && state.Active != nil {
 		return resultFor(state, false), nil
 	}
+	if state.Active != nil && state.Active.Command.Action == lifecycle.ActionRotateCredentials {
+		if request.Action != lifecycle.ActionStart {
+			return cli.Result{}, fault(cli.FaultConflict, "INSTALLATION_COMMAND_CONFLICT")
+		}
+		plan, err := backend.rotationPlan(session.Root(), state)
+		if err != nil {
+			return cli.Result{}, err
+		}
+		defer plan.Clear()
+		return backend.drive(ctx, session, plan)
+	}
 	if state.Last != nil && state.Last.Outcome == lifecycle.OutcomeManualIntervention {
 		if request.Action == lifecycle.ActionStatus {
 			return resultFor(state, false), nil
@@ -219,7 +244,7 @@ func (backend *Backend) installed(ctx context.Context, request cli.Request) (res
 	return backend.drive(ctx, session, plan)
 }
 
-func (backend *Backend) installedPlan(root string, state lifecycle.Journal) (Plan, error) {
+func (backend *Backend) releasePlan(root string, state lifecycle.Journal) (Plan, error) {
 	releaseID, releaseDigest := state.CurrentReleaseID, state.CurrentReleaseDigest
 	if releaseID == "" && state.Active != nil {
 		releaseID, releaseDigest = state.Active.Command.TargetReleaseID, state.Active.Command.InputDigest
@@ -233,15 +258,148 @@ func (backend *Backend) installedPlan(root string, state lifecycle.Journal) (Pla
 		bundle.ManifestSHA256 != releaseDigest {
 		return Plan{}, fault(cli.FaultVerification, "INSTALLATION_RELEASE_INVALID")
 	}
+	return Plan{Root: root, Bundle: bundle, Trust: trust, TrustBytes: trustBytes, Binding: *state.Node}, nil
+}
+
+func (backend *Backend) installedPlan(root string, state lifecycle.Journal) (Plan, error) {
+	plan, err := backend.releasePlan(root, state)
+	if err != nil {
+		return Plan{}, err
+	}
 	config, material, err := backend.effects.ReadInstallation(root)
 	if err != nil {
 		return Plan{}, fault(cli.FaultVerification, "NODE_CONFIGURATION_INVALID")
 	}
-	plan := Plan{Root: root, Bundle: bundle, Trust: trust, TrustBytes: trustBytes,
-		Configuration: config, Credentials: material, Binding: *state.Node}
+	plan.Configuration, plan.Credentials = config, material
 	if config.Identity.InstallationID != state.InstallationID || ValidatePlan(plan) != nil || backend.effects.ValidateEnrollment(plan) != nil {
 		material.Clear()
 		return Plan{}, fault(cli.FaultVerification, "NODE_CONFIGURATION_INVALID")
+	}
+	return plan, nil
+}
+
+func (backend *Backend) rotateCredentials(ctx context.Context, request cli.Request) (result cli.Result, resultErr error) {
+	if paasv1.ValidateDigest("expectedConfigurationDigest", request.ExpectedConfigurationDigest) != nil {
+		return cli.Result{}, fault(cli.FaultInvalidArgument, "NODE_ROTATION_INPUT_INVALID")
+	}
+	config, material, err := enrollment(request.Root, request.Configuration)
+	if err != nil {
+		return cli.Result{}, fault(cli.FaultVerification, "NODE_ENROLLMENT_INVALID")
+	}
+	defer material.Clear()
+	binding, err := Binding(config, material)
+	if err != nil {
+		return cli.Result{}, fault(cli.FaultVerification, "NODE_ENROLLMENT_INVALID")
+	}
+	session, err := journal.AcquireExisting(ctx, request.Root)
+	if err != nil {
+		return cli.Result{}, journalFault(err)
+	}
+	defer closeSession(session, &result, &resultErr)
+	state, err := readNodeJournal(session)
+	if err != nil {
+		return cli.Result{}, err
+	}
+	if state.CurrentReleaseID == "" || (state.Last != nil && state.Last.Outcome == lifecycle.OutcomeManualIntervention) {
+		return cli.Result{}, fault(cli.FaultPrecondition, "NODE_NOT_INSTALLED")
+	}
+	plan, err := backend.releasePlan(session.Root(), state)
+	if err != nil {
+		return cli.Result{}, err
+	}
+	plan.Configuration, plan.Credentials, plan.Binding = config, material, binding
+	if binding.ExecutionTargetID != state.Node.ExecutionTargetID || config.Identity.InstallationID != state.InstallationID {
+		return cli.Result{}, fault(cli.FaultConflict, "NODE_ENROLLMENT_CONFLICT")
+	}
+	if state.Active == nil && binding == *state.Node {
+		receipt := state.NodeCredentialRotation
+		if receipt == nil || receipt.InputDigest != binding.ConfigurationDigest ||
+			receipt.ExpectedConfigurationDigest != request.ExpectedConfigurationDigest ||
+			receipt.RevokePreviousCredentials != request.RevokePreviousCredentials {
+			return cli.Result{}, fault(cli.FaultConflict, "NODE_CONFIGURATION_CONFLICT")
+		}
+		if ValidatePlan(plan) != nil || backend.effects.ValidateEnrollment(plan) != nil {
+			return cli.Result{}, fault(cli.FaultVerification, "NODE_ENROLLMENT_INVALID")
+		}
+		if err := backend.effects.FinalizeRotation(ctx, plan, *receipt); err != nil {
+			return cli.Result{}, fault(cli.FaultUnavailable, "NODE_CREDENTIAL_CLEANUP_PENDING")
+		}
+		result, err := backend.observe(ctx, state, plan)
+		result.CorrelationID = receipt.ID
+		return result, err
+	}
+	if request.ExpectedConfigurationDigest != state.Node.ConfigurationDigest || binding == *state.Node {
+		return cli.Result{}, fault(cli.FaultConflict, "NODE_CONFIGURATION_CONFLICT")
+	}
+	if state.Active != nil {
+		command := state.Active.Command
+		if command.Action != lifecycle.ActionRotateCredentials || command.InputDigest != binding.ConfigurationDigest ||
+			command.ExpectedConfigurationDigest != request.ExpectedConfigurationDigest ||
+			command.RevokePreviousCredentials != request.RevokePreviousCredentials {
+			return cli.Result{}, fault(cli.FaultConflict, "INSTALLATION_COMMAND_CONFLICT")
+		}
+	}
+	var previousConfiguration nodeconfig.Configuration
+	var previousCredentials Credentials
+	if state.Active != nil {
+		previousConfiguration, previousCredentials, err = backend.effects.ReadRotation(session.Root(), state.Node.ConfigurationDigest)
+	}
+	if state.Active == nil || (err != nil && (state.Active.Phase == lifecycle.PhasePreflight || state.Active.Phase == lifecycle.PhaseStaging)) {
+		previousConfiguration, previousCredentials, err = backend.effects.ReadInstallation(session.Root())
+	}
+	if err != nil {
+		return cli.Result{}, fault(cli.FaultVerification, "NODE_ROTATION_INPUT_UNAVAILABLE")
+	}
+	defer previousCredentials.Clear()
+	previous := plan
+	previous.Configuration, previous.Credentials, previous.Binding = previousConfiguration, previousCredentials, *state.Node
+	plan.Previous, plan.RevokePreviousCredentials = &previous, request.RevokePreviousCredentials
+	// The old bytes must match their sealed commitment, but their certificates
+	// may have expired. Only the candidate must be currently usable.
+	if ValidatePlan(plan) != nil || backend.effects.ValidateEnrollment(plan) != nil {
+		return cli.Result{}, fault(cli.FaultVerification, "NODE_ENROLLMENT_INVALID")
+	}
+	if state.Active == nil && state.NodeCredentialRotation != nil {
+		if err := backend.effects.FinalizeRotation(ctx, previous, *state.NodeCredentialRotation); err != nil {
+			return cli.Result{}, fault(cli.FaultUnavailable, "NODE_CREDENTIAL_CLEANUP_PENDING")
+		}
+	}
+	command, err := backend.command(state, lifecycle.ActionRotateCredentials)
+	if err != nil {
+		return cli.Result{}, err
+	}
+	command.InputDigest, command.ExpectedConfigurationDigest = binding.ConfigurationDigest, request.ExpectedConfigurationDigest
+	command.RevokePreviousCredentials = request.RevokePreviousCredentials
+	started, err := lifecycle.Start(state, command)
+	if err != nil {
+		return cli.Result{}, journalFault(err)
+	}
+	if started.Replay == lifecycle.ReplayNone {
+		if err := session.Write(started.Journal); err != nil {
+			return cli.Result{}, journalFault(err)
+		}
+	}
+	return backend.drive(ctx, session, plan)
+}
+
+func (backend *Backend) rotationPlan(root string, state lifecycle.Journal) (Plan, error) {
+	plan, err := backend.releasePlan(root, state)
+	if err != nil {
+		return Plan{}, err
+	}
+	command := state.Active.Command
+	previous := plan
+	previous.Configuration, previous.Credentials, err = backend.effects.ReadRotation(root, command.ExpectedConfigurationDigest)
+	if err != nil {
+		return Plan{}, fault(cli.FaultVerification, "NODE_ROTATION_INPUT_UNAVAILABLE")
+	}
+	plan.Configuration, plan.Credentials, err = backend.effects.ReadRotation(root, command.InputDigest)
+	plan.Binding.ConfigurationDigest = command.InputDigest
+	plan.Previous, plan.RevokePreviousCredentials = &previous, command.RevokePreviousCredentials
+	if err != nil || ValidatePlan(plan) != nil || plan.Configuration.Identity.InstallationID != state.InstallationID ||
+		backend.effects.ValidateEnrollment(plan) != nil {
+		plan.Clear()
+		return Plan{}, fault(cli.FaultVerification, "NODE_ROTATION_INPUT_UNAVAILABLE")
 	}
 	return plan, nil
 }
@@ -272,11 +430,18 @@ func (backend *Backend) drive(ctx context.Context, session *journal.Session, pla
 			if state.Last == nil || state.Last.Outcome != lifecycle.OutcomeSucceeded {
 				return cli.Result{}, fault(cli.FaultVerification, "NODE_COMMAND_FAILED")
 			}
+			if state.NodeCredentialRotation != nil &&
+				(state.Last.Command.Action == lifecycle.ActionRotateCredentials || state.Last.Command.Action == lifecycle.ActionStart) {
+				if err := backend.effects.FinalizeRotation(ctx, plan, *state.NodeCredentialRotation); err != nil {
+					return cli.Result{}, fault(cli.FaultUnavailable, "NODE_CREDENTIAL_CLEANUP_PENDING")
+				}
+			}
 			return resultFor(state, state.Last.Command.Action != lifecycle.ActionVerify), nil
 		}
 		execution := *state.Active
 		if resuming && (execution.Phase == lifecycle.PhaseVerifying || execution.Phase == lifecycle.PhaseCommitting) &&
-			(execution.Command.Action == lifecycle.ActionInstall || execution.Command.Action == lifecycle.ActionStart) {
+			(execution.Command.Action == lifecycle.ActionInstall || execution.Command.Action == lifecycle.ActionStart ||
+				execution.Command.Action == lifecycle.ActionRotateCredentials) {
 			// An interrupted late phase may resume after a kernel boot, which
 			// discards transient units. Reconcile the same sealed services before
 			// verifying them; do not rewind the journal or issue another command.
@@ -302,7 +467,7 @@ func (backend *Backend) drive(ctx context.Context, session *journal.Session, pla
 			if failErr != nil || session.Write(failed) != nil {
 				return cli.Result{}, fault(cli.FaultInternal, "FAILURE_STATE_COMMIT_FAILED")
 			}
-			if failed.Active == nil {
+			if failed.Active == nil || execution.Command.Action == lifecycle.ActionRotateCredentials {
 				return cli.Result{}, normalized
 			}
 			continue
@@ -373,7 +538,7 @@ func closeSession(session *journal.Session, result *cli.Result, resultErr *error
 
 func resultFor(state lifecycle.Journal, changed bool) cli.Result {
 	result := cli.Result{State: "NOT_READY", ReleaseID: state.CurrentReleaseID, Changed: changed,
-		ExecutionTargetID: state.Node.ExecutionTargetID}
+		ExecutionTargetID: state.Node.ExecutionTargetID, ConfigurationDigest: state.Node.ConfigurationDigest}
 	if state.Active != nil {
 		result.State, result.CorrelationID = string(state.Active.Phase), state.Active.Command.ID
 	} else if state.Last != nil {

@@ -3,6 +3,8 @@
 // can feed Linux Compose mounts and host-local filesystem adapters.
 package layout
 
+import "strings"
+
 const (
 	ReleaseTrust            = "config/release-trust.json"
 	Compose                 = "config/compose.json"
@@ -49,4 +51,9 @@ const (
 
 func ReleaseDirectory(releaseID string) string {
 	return "releases/" + releaseID
+}
+
+// Callers validate the digest before resolving any managed filesystem path.
+func NodeCredentialSnapshot(digest string) string {
+	return "secrets/node-rotations/" + strings.TrimPrefix(digest, "sha256:") + ".json"
 }

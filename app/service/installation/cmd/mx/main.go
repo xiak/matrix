@@ -50,6 +50,31 @@ func (nodeInstallationVerifier) Verify(ctx context.Context, config nodeconfig.Co
 	return err
 }
 
+func (nodeInstallationVerifier) ValidateRotation(config nodeconfig.Configuration, previous, candidate nodecommand.Credentials, revokePrevious bool) error {
+	previousNode, err := nodehttps.NewCredentials(previous.Certificate, previous.PrivateKey, previous.Trust)
+	if err != nil {
+		return err
+	}
+	previousCollector, err := nodehttps.NewCredentials(previous.CollectorCertificate, previous.CollectorPrivateKey, previous.Trust)
+	if err != nil {
+		return err
+	}
+	node, err := nodehttps.NewCredentials(candidate.Certificate, candidate.PrivateKey, candidate.Trust)
+	if err != nil {
+		return err
+	}
+	collector, err := nodehttps.NewCredentials(candidate.CollectorCertificate, candidate.CollectorPrivateKey, candidate.Trust)
+	if err != nil {
+		return err
+	}
+	address, err := nodeconfig.CollectorListenAddress(config)
+	if err != nil {
+		return err
+	}
+	return nodehttps.ValidateCredentialRotation(previousNode, previousCollector, node, collector,
+		config.Identity, config.ListenAddress, address, revokePrevious)
+}
+
 type lifecycleCommands struct{ platform, node cli.Backend }
 
 func (commands lifecycleCommands) Run(ctx context.Context, request cli.Request) (cli.Result, error) {

@@ -466,6 +466,150 @@ func TestCollectorTransportRequiresTheExactLocalCollectorAndNodeIdentities(t *te
 	}
 }
 
+func TestRealMTLSReloadsCredentialsAndRetiresBothOldPeers(t *testing.T) {
+	oldAuthority, nextAuthority := newAuthority(t), newAuthority(t)
+	nodeURI, _ := nodev1.NodeURI(nodeIdentity)
+	controllerURI, _ := nodev1.ControllerURI(nodeIdentity.InstallationID, controllerID)
+	oldNode := oldAuthority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false)
+	nextNode := nextAuthority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false)
+	oldController := oldAuthority.issue(t, controllerURI, x509.ExtKeyUsageClientAuth, false)
+	nextController := nextAuthority.issue(t, controllerURI, x509.ExtKeyUsageClientAuth, false)
+	oldSecurity, err := nodehttps.ServerTLS(oldNode.credentials, nodeIdentity, controllerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextSecurity, err := nodehttps.ServerTLS(nextNode.credentials, nodeIdentity, controllerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var activeServer atomic.Pointer[tls.Config]
+	activeServer.Store(oldSecurity)
+	var calls atomic.Int32
+	handler, err := New(sourceFunc(func(context.Context) (paasv1.ExecutionTargetObservation, error) {
+		calls.Add(1)
+		return observedTarget(), nil
+	}), Config{Identity: nodeIdentity, ControllerID: controllerID, BindingRef: "binding-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewUnstartedServer(handler)
+	server.TLS = oldSecurity.Clone()
+	server.TLS.GetConfigForClient = func(*tls.ClientHelloInfo) (*tls.Config, error) { return activeServer.Load(), nil }
+	server.Config.ErrorLog = log.New(io.Discard, "", 0)
+	server.StartTLS()
+	defer server.Close()
+	var current atomic.Pointer[nodehttps.Credentials]
+	current.Store(&oldController.credentials)
+	client, err := nodehttps.New(nodehttps.Config{Endpoint: server.URL, Identity: nodeIdentity,
+		ControllerID: controllerID, BindingRef: "binding-a", ExpectedFingerprint: observedTarget().IdentityFingerprint,
+		Credentials: func() (nodehttps.Credentials, error) {
+			if value := current.Load(); value != nil {
+				return *value, nil
+			}
+			return nodehttps.Credentials{}, errors.New("private credential path is unavailable")
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	observe := func(allowed bool) {
+		t.Helper()
+		before := calls.Load()
+		_, err := client.ObserveExecutionTarget(context.Background(), paasv1.ObserveExecutionTargetRequest{Command: observationCommand()})
+		if allowed {
+			if err != nil || calls.Load() != before+1 {
+				t.Fatalf("current credential did not reach the node: %v", err)
+			}
+		} else if err == nil || calls.Load() != before || strings.Contains(err.Error(), "private credential") {
+			t.Fatal("retired or unavailable credential reached the source or leaked provider input")
+		}
+	}
+	observe(true)
+	current.Store(nil)
+	observe(false)
+	current.Store(&nextController.credentials)
+	observe(false) // The old server certificate is no longer trusted.
+	activeServer.Store(nextSecurity)
+	observe(true) // The existing client adopts the new files without reconstruction.
+	retired := oldController.withTrust(t, nextAuthority.pem)
+	current.Store(&retired.credentials)
+	observe(false) // Server trust is current, but the old client identity is retired.
+	current.Store(&nextController.credentials)
+	observe(true)
+	activeServer.Store(oldSecurity)
+	observe(false)
+}
+
+func TestCredentialRenewalAndCompleteTrustRetirementAreDistinct(t *testing.T) {
+	oldAuthority, nextAuthority := newAuthority(t), newAuthority(t)
+	nodeURI, _ := nodev1.NodeURI(nodeIdentity)
+	collectorURI, _ := nodev1.CollectorURI(nodeIdentity)
+	oldNode := oldAuthority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false, x509.ExtKeyUsageClientAuth)
+	oldCollector := oldAuthority.issue(t, collectorURI, x509.ExtKeyUsageServerAuth, false)
+	nextNode := nextAuthority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false, x509.ExtKeyUsageClientAuth)
+	nextCollector := nextAuthority.issue(t, collectorURI, x509.ExtKeyUsageServerAuth, false)
+	renewed := oldAuthority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false, x509.ExtKeyUsageClientAuth)
+	validate := func(beforeNode, beforeCollector, node, collector issuedCertificate, revoke bool) error {
+		return nodehttps.ValidateCredentialRotation(beforeNode.credentials, beforeCollector.credentials, node.credentials, collector.credentials,
+			nodeIdentity, "127.0.0.1:16443", "127.0.0.1:19100", revoke)
+	}
+	if validate(oldNode, oldCollector, renewed, oldCollector, false) != nil ||
+		validate(oldNode, oldCollector, renewed, oldCollector, true) == nil ||
+		validate(oldNode, oldCollector, nextNode, nextCollector, true) != nil {
+		t.Fatal("renewal was confused with retirement of the complete trust set")
+	}
+	expiredNode := oldAuthority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, true, x509.ExtKeyUsageClientAuth)
+	expiredCollector := oldAuthority.issue(t, collectorURI, x509.ExtKeyUsageServerAuth, true)
+	if validate(expiredNode, expiredCollector, nextNode, nextCollector, true) != nil {
+		t.Fatal("expired sealed predecessor prevented authenticated rotation")
+	}
+	retainedNodeKey := nextAuthority.issueWithKey(t, oldNode.pair.PrivateKey.(ed25519.PrivateKey), nodeURI, x509.ExtKeyUsageServerAuth, false, x509.ExtKeyUsageClientAuth)
+	retainedCollectorKey := nextAuthority.issueWithKey(t, oldCollector.pair.PrivateKey.(ed25519.PrivateKey), collectorURI, x509.ExtKeyUsageServerAuth, false)
+	swappedNodeKey := nextAuthority.issueWithKey(t, oldCollector.pair.PrivateKey.(ed25519.PrivateKey), nodeURI, x509.ExtKeyUsageServerAuth, false, x509.ExtKeyUsageClientAuth)
+	swappedCollectorKey := nextAuthority.issueWithKey(t, oldNode.pair.PrivateKey.(ed25519.PrivateKey), collectorURI, x509.ExtKeyUsageServerAuth, false)
+	sharedCollectorKey := nextAuthority.issueWithKey(t, nextNode.pair.PrivateKey.(ed25519.PrivateKey), collectorURI, x509.ExtKeyUsageServerAuth, false)
+	t.Run("renewal cannot share node and collector keys", func(t *testing.T) {
+		if validate(oldNode, oldCollector, nextNode, sharedCollectorKey, false) == nil {
+			t.Fatal("the unprivileged collector received the node private key")
+		}
+	})
+	reissuedTemplate := *oldAuthority.certificate
+	reissuedTemplate.SerialNumber = big.NewInt(2)
+	reissuedDER, err := x509.CreateCertificate(rand.Reader, &reissuedTemplate, &reissuedTemplate, oldAuthority.key.Public(), oldAuthority.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reissuedCA, err := x509.ParseCertificate(reissuedDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reissued := testAuthority{certificate: reissuedCA, key: oldAuthority.key,
+		pem: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: reissuedDER}), roots: x509.NewCertPool()}
+	reissued.roots.AddCert(reissuedCA)
+	if bytes.Equal(reissued.pem, oldAuthority.pem) {
+		t.Fatal("reissued CA fixture did not change its certificate bytes")
+	}
+	mixedTrust := append(append([]byte{}, nextAuthority.pem...), oldAuthority.pem...)
+	for name, peers := range map[string][2]issuedCertificate{
+		"old node key":                    {retainedNodeKey, nextCollector},
+		"old collector key":               {nextNode, retainedCollectorKey},
+		"old collector key moved to node": {swappedNodeKey, nextCollector},
+		"old node key moved to collector": {nextNode, swappedCollectorKey},
+		"shared candidate key":            {nextNode, sharedCollectorKey},
+		"reissued old CA key": {reissued.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false, x509.ExtKeyUsageClientAuth),
+			reissued.issue(t, collectorURI, x509.ExtKeyUsageServerAuth, false)},
+		"retained trust":    {nextNode.withTrust(t, mixedTrust), nextCollector.withTrust(t, mixedTrust)},
+		"expired candidate": {nextAuthority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, true, x509.ExtKeyUsageClientAuth), nextCollector},
+		"wrong role":        {nextAuthority.issue(t, collectorURI, x509.ExtKeyUsageServerAuth, false, x509.ExtKeyUsageClientAuth), nextCollector},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if validate(oldNode, oldCollector, peers[0], peers[1], true) == nil {
+				t.Fatal("unsafe credential retirement passed admission")
+			}
+		})
+	}
+}
+
 func requestBody(t *testing.T, command paasv1.AdapterCommandEnvelope) []byte {
 	t.Helper()
 	value, err := json.Marshal(nodev1.ObservationRequest{APIVersion: nodev1.APIVersion, Kind: nodev1.ObservationRequestKind, Identity: nodeIdentity, Command: command})
@@ -502,7 +646,8 @@ func newClient(t *testing.T, endpoint string, credentials nodehttps.Credentials,
 	t.Helper()
 	client, err := nodehttps.New(nodehttps.Config{
 		Endpoint: endpoint, Identity: identity, ControllerID: controller, BindingRef: "binding-a",
-		ExpectedFingerprint: observedTarget().IdentityFingerprint, Credentials: credentials,
+		ExpectedFingerprint: observedTarget().IdentityFingerprint,
+		Credentials:         func() (nodehttps.Credentials, error) { return credentials, nil },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -549,10 +694,16 @@ func newAuthority(t *testing.T) testAuthority {
 
 func (authority testAuthority) issue(t *testing.T, identity string, purpose x509.ExtKeyUsage, expired bool, additionalPurposes ...x509.ExtKeyUsage) issuedCertificate {
 	t.Helper()
-	public, key, err := ed25519.GenerateKey(rand.Reader)
+	_, key, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return authority.issueWithKey(t, key, identity, purpose, expired, additionalPurposes...)
+}
+
+func (authority testAuthority) issueWithKey(t *testing.T, key ed25519.PrivateKey, identity string, purpose x509.ExtKeyUsage, expired bool, additionalPurposes ...x509.ExtKeyUsage) issuedCertificate {
+	t.Helper()
+	public := key.Public()
 	uri, err := url.Parse(identity)
 	if err != nil {
 		t.Fatal(err)
@@ -590,6 +741,26 @@ func (authority testAuthority) issue(t *testing.T, identity string, purpose x509
 		t.Fatal(err)
 	}
 	return issuedCertificate{credentials: credentials, pair: pair}
+}
+
+func (certificate issuedCertificate) withTrust(t *testing.T, trust []byte) issuedCertificate {
+	t.Helper()
+	key, err := x509.MarshalPKCS8PrivateKey(certificate.pair.PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: key})
+	defer clear(keyPEM)
+	defer clear(key)
+	var chain []byte
+	for _, der := range certificate.pair.Certificate {
+		chain = append(chain, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})...)
+	}
+	credentials, err := nodehttps.NewCredentials(chain, keyPEM, trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return issuedCertificate{credentials: credentials, pair: certificate.pair}
 }
 
 func (authority testAuthority) rawClient(certificate *tls.Certificate) *http.Client {

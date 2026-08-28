@@ -224,13 +224,158 @@ func TestNodeFailedVerificationRollsBackOnlySupervisionAndCanRetry(t *testing.T)
 	}
 }
 
+func TestNodeCredentialRotationResumesSealedInputWithoutRestoringRetiredKeys(t *testing.T) {
+	for _, phase := range []lifecycle.Phase{lifecycle.PhaseConfiguring, lifecycle.PhaseStarting,
+		lifecycle.PhaseVerifying, lifecycle.PhaseCommitting} {
+		t.Run(string(phase), func(t *testing.T) {
+			request, input := nodeRequest(t)
+			effects := &nodeEffects{}
+			backend, _ := NewBackend(effects)
+			if _, err := backend.Run(context.Background(), request); err != nil {
+				t.Fatal(err)
+			}
+			original := nodeState(t, request.Root)
+			for _, path := range []string{input.Node.CertificateFile, input.Node.PrivateKeyFile, input.Node.TrustFile,
+				input.CollectorCertificateFile, input.CollectorPrivateKeyFile} {
+				if os.WriteFile(path, []byte("replacement:"+filepath.Base(path)), 0o600) != nil {
+					t.Fatal("replace external enrollment fixture")
+				}
+			}
+			rotation := cli.Request{Subject: cli.SubjectNode, Action: lifecycle.ActionRotateCredentials,
+				Root: request.Root, Configuration: request.Configuration,
+				ExpectedConfigurationDigest: original.Node.ConfigurationDigest, RevokePreviousCredentials: true}
+			effects.failPhase, effects.failure = phase, ErrOutcomeUnknown
+			_, err := backend.Run(context.Background(), rotation)
+			assertNodeFault(t, err, "EFFECT_OUTCOME_UNKNOWN")
+			pending := nodeState(t, request.Root)
+			if pending.Active == nil || pending.Active.Phase != phase || *pending.Node != *original.Node || effects.rollbacks != 0 {
+				t.Fatal("interrupted rotation changed authority or rolled back")
+			}
+			command := pending.Active.Command
+			before, calls := journalBytes(t, request.Root), len(effects.phases)
+			changed := rotation
+			changed.RevokePreviousCredentials = false
+			if _, err := backend.Run(context.Background(), changed); err == nil || !bytes.Equal(before, journalBytes(t, request.Root)) || calls != len(effects.phases) {
+				t.Fatal("active rotation accepted a different retirement policy")
+			}
+			if err := os.Remove(request.Configuration); err != nil {
+				t.Fatal(err)
+			}
+			result, err := backend.Run(context.Background(), cli.Request{Action: lifecycle.ActionStart, Root: request.Root})
+			if err != nil || result.State != "READY" || result.CorrelationID != command.ID || result.ConfigurationDigest != command.InputDigest {
+				t.Fatalf("resume staged rotation: %#v / %v", result, err)
+			}
+			completed := nodeState(t, request.Root)
+			if completed.Active != nil || completed.CurrentReleaseID != original.CurrentReleaseID ||
+				completed.CurrentReleaseDigest != original.CurrentReleaseDigest || completed.Node.ExecutionTargetID != original.Node.ExecutionTargetID ||
+				completed.Node.ConfigurationDigest != command.InputDigest || effects.rollbacks != 0 {
+				t.Fatal("credential commit changed its release/target or restored the source")
+			}
+			if _, err := backend.Run(context.Background(), cli.Request{Action: lifecycle.ActionStart, Root: request.Root}); err != nil {
+				t.Fatal(err)
+			}
+			writeInput(t, request.Configuration, input)
+			before = journalBytes(t, request.Root)
+			result, err = backend.Run(context.Background(), rotation)
+			if err != nil || result.Changed || result.CorrelationID != command.ID || !bytes.Equal(before, journalBytes(t, request.Root)) {
+				t.Fatalf("rotation replay after startup changed input/state: %#v / %v", result, err)
+			}
+		})
+	}
+}
+
+func TestNodeCredentialCleanupFailureRetainsCommitAndBlocksAnotherRotation(t *testing.T) {
+	request, input := nodeRequest(t)
+	effects := &nodeEffects{}
+	backend, _ := NewBackend(effects)
+	if _, err := backend.Run(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	original := nodeState(t, request.Root)
+	if err := os.WriteFile(input.Node.PrivateKeyFile, []byte("replacement-key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rotation := cli.Request{Action: lifecycle.ActionRotateCredentials, Root: request.Root, Configuration: request.Configuration,
+		ExpectedConfigurationDigest: original.Node.ConfigurationDigest, RevokePreviousCredentials: true}
+	effects.cleanupFailure = ErrUnavailable
+	_, err := backend.Run(context.Background(), rotation)
+	assertNodeFault(t, err, "NODE_CREDENTIAL_CLEANUP_PENDING")
+	committed := nodeState(t, request.Root)
+	if committed.Active != nil || committed.NodeCredentialRotation == nil || committed.Node.ConfigurationDigest == original.Node.ConfigurationDigest ||
+		committed.Node.ConfigurationDigest != committed.NodeCredentialRotation.InputDigest || effects.rollbacks != 0 {
+		t.Fatal("cleanup failure lost or rolled back the committed credential set")
+	}
+	if err := os.WriteFile(input.Node.PrivateKeyFile, []byte("another-replacement-key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rotation.ExpectedConfigurationDigest = committed.Node.ConfigurationDigest
+	before, calls := journalBytes(t, request.Root), len(effects.phases)
+	_, err = backend.Run(context.Background(), rotation)
+	assertNodeFault(t, err, "NODE_CREDENTIAL_CLEANUP_PENDING")
+	if !bytes.Equal(before, journalBytes(t, request.Root)) || calls != len(effects.phases) {
+		t.Fatal("a second rotation staged more private keys before cleanup completed")
+	}
+	effects.cleanupFailure = nil
+	if result, err := backend.Run(context.Background(), cli.Request{Action: lifecycle.ActionStart, Root: request.Root}); err != nil || result.ConfigurationDigest != committed.Node.ConfigurationDigest {
+		t.Fatalf("cleanup replay did not retain the current credentials: %v", err)
+	}
+	if result, err := backend.Run(context.Background(), rotation); err != nil || result.ConfigurationDigest == committed.Node.ConfigurationDigest || effects.rollbacks != 0 {
+		t.Fatalf("cleaned installation could not accept its next rotation: %v", err)
+	}
+}
+
+func TestNodeCredentialRotationRejectsChangedIdentityAndStaleInputBeforeIntent(t *testing.T) {
+	for _, mode := range []string{"target", "installation", "controller", "binding", "fingerprint", "listener", "collector", "reserve", "stale digest"} {
+		t.Run(mode, func(t *testing.T) {
+			request, input := nodeRequest(t)
+			effects := &nodeEffects{}
+			backend, _ := NewBackend(effects)
+			if _, err := backend.Run(context.Background(), request); err != nil {
+				t.Fatal(err)
+			}
+			rotation := cli.Request{Action: lifecycle.ActionRotateCredentials, Root: request.Root,
+				Configuration: request.Configuration, ExpectedConfigurationDigest: nodeState(t, request.Root).Node.ConfigurationDigest,
+				RevokePreviousCredentials: true}
+			if os.WriteFile(input.Node.PrivateKeyFile, []byte("new-test-key"), 0o600) != nil {
+				t.Fatal("write replacement fixture")
+			}
+			switch mode {
+			case "target":
+				input.Node.Identity.ExecutionTargetID = "target-other"
+			case "installation":
+				input.Node.Identity.InstallationID = "mxi-" + strings.Repeat("b", 32)
+			case "controller":
+				input.Node.ControllerID = "controller-other"
+			case "binding":
+				input.Node.BindingRef = "binding-other"
+			case "fingerprint":
+				input.Node.ExpectedFingerprint = "sha256:" + strings.Repeat("b", 64)
+			case "listener":
+				input.Node.ListenAddress = "127.0.0.1:16444"
+			case "collector":
+				input.Node.CollectorEndpoint = "https://127.0.0.1:19101"
+			case "reserve":
+				input.Node.SystemReserve.CPUMillis = 10
+			case "stale digest":
+				rotation.ExpectedConfigurationDigest = "sha256:" + strings.Repeat("b", 64)
+			}
+			writeInput(t, request.Configuration, input)
+			before, calls := journalBytes(t, request.Root), len(effects.phases)
+			if _, err := backend.Run(context.Background(), rotation); err == nil || !bytes.Equal(before, journalBytes(t, request.Root)) || calls != len(effects.phases) {
+				t.Fatal("invalid rotation changed intent or native effects")
+			}
+		})
+	}
+}
+
 type nodeEffects struct {
-	invalid   bool
-	ready     bool
-	failPhase lifecycle.Phase
-	failure   error
-	phases    []lifecycle.Phase
-	rollbacks int
+	invalid        bool
+	ready          bool
+	failPhase      lifecycle.Phase
+	failure        error
+	cleanupFailure error
+	phases         []lifecycle.Phase
+	rollbacks      int
 }
 
 func (effects *nodeEffects) ValidateEnrollment(Plan) error {
@@ -248,6 +393,21 @@ func (effects *nodeEffects) ApplyPhase(_ context.Context, plan Plan, phase lifec
 	}
 	switch phase {
 	case lifecycle.PhaseStaging:
+		if plan.Previous != nil {
+			for _, candidate := range []Plan{*plan.Previous, plan} {
+				prefix := "fixture-rotation/" + candidate.Binding.ConfigurationDigest[len("sha256:"):]
+				for relative, source := range map[string][]byte{
+					layout.NodeCertificate: candidate.Credentials.Certificate, layout.NodePrivateKey: candidate.Credentials.PrivateKey,
+					layout.NodeTrust: candidate.Credentials.Trust, layout.CollectorCertificate: candidate.Credentials.CollectorCertificate,
+					layout.CollectorPrivateKey: candidate.Credentials.CollectorPrivateKey} {
+					path := filepath.Join(plan.Root, filepath.FromSlash(prefix), filepath.FromSlash(relative))
+					if os.MkdirAll(filepath.Dir(path), 0o700) != nil || os.WriteFile(path, source, 0o600) != nil {
+						return ErrUnavailable
+					}
+				}
+			}
+			return nil
+		}
 		if err := os.MkdirAll(filepath.Join(plan.Root, "releases"), 0o700); err != nil {
 			return err
 		}
@@ -279,6 +439,15 @@ func (effects *nodeEffects) Rollback(context.Context, Plan) error {
 }
 func (effects *nodeEffects) Observe(context.Context, Plan) (bool, error) { return effects.ready, nil }
 func (effects *nodeEffects) ReadInstallation(root string) (nodeconfig.Configuration, Credentials, error) {
+	return readFixtureNodeCredentials(root, "")
+}
+func (effects *nodeEffects) ReadRotation(root, digest string) (nodeconfig.Configuration, Credentials, error) {
+	return readFixtureNodeCredentials(root, "fixture-rotation/"+digest[len("sha256:"):])
+}
+func (effects *nodeEffects) FinalizeRotation(context.Context, Plan, lifecycle.Command) error {
+	return effects.cleanupFailure
+}
+func readFixtureNodeCredentials(root, prefix string) (nodeconfig.Configuration, Credentials, error) {
 	source, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(layout.NodeConfiguration)))
 	if err != nil {
 		return nodeconfig.Configuration{}, Credentials{}, err
@@ -290,7 +459,7 @@ func (effects *nodeEffects) ReadInstallation(root string) (nodeconfig.Configurat
 	var material Credentials
 	for relative, target := range map[string]*[]byte{layout.NodeCertificate: &material.Certificate, layout.NodePrivateKey: &material.PrivateKey,
 		layout.NodeTrust: &material.Trust, layout.CollectorCertificate: &material.CollectorCertificate, layout.CollectorPrivateKey: &material.CollectorPrivateKey} {
-		*target, err = os.ReadFile(filepath.Join(root, filepath.FromSlash(relative)))
+		*target, err = os.ReadFile(filepath.Join(root, filepath.FromSlash(prefix), filepath.FromSlash(relative)))
 		if err != nil {
 			material.Clear()
 			return nodeconfig.Configuration{}, Credentials{}, err
