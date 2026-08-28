@@ -571,7 +571,10 @@ temporary-file cleanup. The authority transaction/process evidence is owned by
 gate now includes recovery, old-session denial, completed replay, unchanged
 service/workload identities and the exact SYSTEM Audit fact, but that signed
 4/3/2 revision-4 exercise and actual installer crash/reply-loss recovery have
-not yet run on this combined source. The recovery slice remains unaccepted.
+not yet passed on this combined source. The recovery slice remains unaccepted.
+Source `4c53fa9` passed full Go/race/vet, module verification, stable generation,
+Linux builds and all three existing jobs in
+[independent CI](https://github.com/xiak/matrix/actions/runs/33157871091).
 
 Next in P3-1:
 complete the signed original-primary recovery exercise, then the signed
