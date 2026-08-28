@@ -229,7 +229,9 @@ actual machine/engine identities, CPU, memory and filesystem observations;
 background refresh is checked without an HTTP reader. Admission Operations,
 Audit hashes, latest trust and real database fixture data must survive the
 combined platform/node lifecycle and automatic native boot. These database
-fixtures do not count as P3-2 remote application delivery.
+fixtures do not count as P3-2 remote application delivery. After boot, the
+machine/engine identities must still match, while capacity quantities are
+compared with the current OS facts rather than treated as immutable identity.
 
 The first node distribution is a distinct, closed `OfflineNodeRelease` in
 the existing signed release owner, containing `mx`, the node executable and
@@ -644,7 +646,8 @@ signed native package, real-authority node variant and retained-data/
 least-privilege regressions. The gate correction also passed the local default
 Go suite, vet, module verification and Linux test build.
 No authority database profile changed, and no remote machine or shared engine
-was restarted. A signed platform/node upgrade and rollback pair remains unproved.
+was restarted. These per-node checks alone do not prove a combined offline
+platform/node lifecycle.
 
 The local original-primary credential recovery consumer now uses the signed
 IAM one-shot executable, protected intent files and the existing installation
@@ -658,13 +661,21 @@ prefix. Audit observation retries only explicitly unavailable responses within
 a fixed bound; authorization errors, malformed pages and missing historical
 hashes still fail.
 
-The existing installed-runtime gate `447b6c2` consumed signed A from fixed
-`91b8ba5` and B from fixed `7910622`, both with the complete 4/3/2 revision-4
-profile and the same protected-node-connection topology. These are separately
-built source revisions, not different labels on one source. It passed in
-308.89 seconds on a new empty, externally disconnected Docker 27.5.1 engine
-limited to two CPUs, 4 GiB memory and 768 tasks. The gate killed
-the real installer after IAM committed but before the provider returned,
+The existing installed-runtime gate's combined phase (`a060715`) consumed
+signed platform A from `91b8ba5` and B from `7910622`, both with the complete
+4/3/2 revision-4 profile and the same protected-node-connection topology.
+Signed node A used `cd271c5`; B used `6697292`, both at runtime revision 3.
+Both pairs contain distinct source revisions. The lifecycle phase passed in
+1076.69 seconds with a new empty control-plane engine and two independently
+booted, empty workload engines, with external egress disabled throughout.
+
+The task-owned Docker 27.5.1 wrapper had four CPUs, an 8 GiB ceiling and a
+768-task limit. It was privileged for nested Docker, without a host socket,
+host bind mount or published port. Two local Ubuntu 22.04/systemd 249 guests
+each had two virtual CPUs, 2 GiB RAM and an ext4 disk. Their private management
+forwards served only this experiment. No remote machine was accessed.
+
+The gate killed the real installer after IAM committed but before the provider returned,
 removed the operator input and resumed the same sealed intent through its
 exact receipt. Old sessions and the retired password were rejected; forced
 change, completed replay, unchanged service/workload identities, private-file
@@ -673,32 +684,63 @@ Application generations, failed-candidate automatic rollback, successful B
 upgrade, data-preserving rollback, selected-backup recovery, retained Audit
 hashes, capacity release and sanitized support also passed.
 
-The exercised manifest SHA-256 values were A
+Both signed nodes were admitted through the real platform authority. The gate
+checked actual machine/engine identities and CPU/memory/filesystem quantities,
+background refresh without HTTP readers, isolated node outage and replay of
+the original admission Operation. Complete trust/key replacement rejected the
+old controller. Updating controller credentials recreated only the owned
+PaaS API, preserving every other running service and workload at that boundary.
+Node A-to-B upgrade and B-to-A rollback retained the latest credentials.
+The original host Operations, Audit hashes, node bindings and two independent
+PostgreSQL 18 container identities, start times and SQL markers survived the
+combined platform/node lifecycle, including selected-backup recovery.
+
+The exercised manifest SHA-256 values were platform A
 `76938c05d17633b003c78a6ea4bfa04def0afeecf5683b3a9743779c08fc447a`
-and B `a42e56940667bb4334ff4e3239cca894489688f993b0bbce67e2485ccbb97b04`.
+and B `a42e56940667bb4334ff4e3239cca894489688f993b0bbce67e2485ccbb97b04`,
+node A `5b19cd9f1f9daafb8ea620f62a73b32d52342ff1c3dc511b97065d2a7f40cfff`
+and B `32d66e02d67ecc1d7ef6491103639c048dfe393cee93e350a9ad8901be5cc9d9`.
 
 A new application, terminal Operation and associated Audit fact were committed
 through B after the backup. Actual A read the same Operation and retained
 Audit hashes after rollback; only explicit recovery of the earlier backup
 removed those later records. The status consumer retains the existing
-configuration digest and still rejects unknown fields. The initial empty
-controller inventory's commitment stayed unchanged throughout; this does not
-prove retention of an enrolled remote connection during a combined lifecycle.
+configuration digest and still rejects unknown fields. The populated controller
+inventory retained its latest credential commitment through rollback and
+recovery, rather than restoring the older trust from the backup.
 
-Only that local test engine was restarted. All nine platform services became
-healthy automatically, with the same container identities and configuration
-commitment, before the post-restart gate passed in 12.28 seconds. No remote
-machine, shared engine or other task's service was restarted. This admits the
-exact tested platform predecessor/successor pair and profile-matched primary
-recovery, not arbitrary historical N-1, cross-profile transitions, a kernel-boot
-test, legacy first platform authorization or the combined platform/node release.
+Only the two local guests and their task-owned engine were shut down and
+started again. All nine platform container identities became healthy
+automatically. The boot phase (`dc8dd3a`) passed in 71.02 seconds, proving new
+kernel boot IDs with the original machine/engine identities, automatic sealed
+node startup without a test start command, latest credentials, fresh platform
+observations, retained host Operations/Audit hashes and the same database
+containers and SQL data. Their new start times reflected the actual boot.
+Current OS capacity was compared exactly with the new platform sample; one
+guest's usable RAM changed by 4096 bytes without changing its identity.
+
+No remote machine, shared engine or other task's service was restarted.
+The temporary engines, guest disks and test volumes were removed afterward;
+fixed source and signed inputs were retained. This accepts the exercised
+observation-only lifecycle and exact predecessor pairs, not arbitrary
+historical N-1, cross-profile transitions, legacy first platform authorization
+or the complete Phase 3 release. The database fixtures are not remote PaaS
+application placement or interactive-container acceptance.
 The exercised input was an extracted signed directory with declared file modes
 restored after Windows-origin copying, not a portable-archive acceptance.
-Full Go tests/vet, focused race, architecture, stable generation, module
-verification and the Linux gate build passed locally. Both gate increments
-passed all three jobs in
-[predecessor CI](https://github.com/xiak/matrix/actions/runs/33177638962) and
-[status-consumer CI](https://github.com/xiak/matrix/actions/runs/33178802609).
+Local checks passed affected-package race, architecture, vet and fixed Linux
+builds. The existing five-process gate also passed in 30.90 seconds with a
+separate PostgreSQL 18 database limited to one CPU, 768 MiB and 192 tasks;
+that local variant uses the controlled node wire peer. Its platform Audit
+observer retries only the closed `audit.unavailable` response, at most five
+times. Denials, malformed responses, persistent unavailability and invalid
+page/chain data remain failures; mutation and negative-access assertions do
+not acquire retry behavior. The default behavior regression covers these cases.
+All three jobs on the final code checkpoint `524a982` passed in
+[independent CI](https://github.com/xiak/matrix/actions/runs/33190459118), including
+full Go/race/vet, module/generation checks, retained authority upgrades,
+least-privilege processes and the real Linux node variant. CI does not run
+the optional two-guest combined exercise and is not a substitute for it.
 
 The protected platform/node connection increment `91b8ba5` passed repository
 tests/vet, affected-package race, architecture, stable generation and Linux
@@ -766,13 +808,12 @@ predecessor/successor pair, not arbitrary historical N-1, runtime-2 admission,
 a portable archive format or the combined offline platform/node release.
 
 Next in P3-1:
-complete the combined platform/node offline lifecycle and separately prove
-first platform authorization for an older installation,
-before remote application delivery.
+separately prove first platform authorization for an older installation before
+remote application delivery. The observation-only combined lifecycle does not
+replace Gate C's remote application and interactive operations requirements.
 P3-1 and the complete Phase 3 release remain unaccepted.
-Individual platform/node evidence does not satisfy Gate D's combined runtime
-and isolation requirements. No untested predecessor or cross-profile admission
-is inferred from these fixed pairs.
+Gate D as a whole remains open. No untested predecessor or cross-profile
+admission is inferred from the fixed pairs exercised here.
 
 ## Adoption
 
