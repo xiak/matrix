@@ -86,15 +86,11 @@ not yet provide an automatic certificate issuer. Its acceptance requires
 closed/secret-safe input, wrong installation/identity/expected digest rejection,
 append-only inventory, crash/resume and current credential replacement,
 exact API-only effects, unchanged other services/workloads, signed topology
-and real platform/node observations. The private contract, failure/resume,
-append-only inventory, exact API-only provider boundary and full Linux native
-installation unit regressions pass locally, along with repository tests,
-architecture, vet and focused race gates. Signed composition and multi-machine
-observations remain pending. The previous platform bundle has no node
-connection mount and cannot be described as integrated merely because the
-native process gate passed. This changes the signed topology digest, not the
-database profile; transition from the previous topology is not admitted or
-claimed by this increment.
+and real platform/node observations. Evidence and remaining release gates are
+recorded below. The previous platform bundle has no node connection mount and
+cannot be described as integrated merely because the native process gate passed.
+This changes the signed topology digest, not the database profile; transition
+from the previous topology is not admitted or claimed by this increment.
 
 PostgreSQL owns desired state/accounting; nodes own effects/observations.
 Disconnection preserves accepted workloads. Restart/reconnect uses durable
@@ -626,9 +622,38 @@ the production fix and gate-only correction each passed all three jobs in
 [production CI](https://github.com/xiak/matrix/actions/runs/33160326192) and
 [gate CI](https://github.com/xiak/matrix/actions/runs/33161975147).
 
+The protected platform/node connection increment `91b8ba5` passed repository
+tests/vet, affected-package race, architecture, stable generation and Linux
+native installation regressions. Its closed private contract, append-only
+inventory, interrupted-effect/resume and exact API-only provider boundaries
+are covered in the existing owners. All three jobs passed in
+[independent CI](https://github.com/xiak/matrix/actions/runs/33165337635).
+
+Signed platform and node bundles from that exact source were then installed
+on two operator-provided Debian/ext4 VMs. Real IAM-authorized admission,
+platform-only Operations, exact historical Audit/content commitments and a
+complete platform chain passed. CPU, memory, filesystem and inode samples
+advanced through the signed platform. Stopping only the owned node service
+produced unavailable/stale state with retained capacity and source times;
+committed admission replay and reconnection kept the original target and facts.
+Wrong-installation connection input changed neither journal nor runtime.
+
+The same installation replaced the node/collector keys and complete management
+trust set. Current-controller TLS succeeded before and after retired-controller
+and anonymous rejection. The old platform connection remained unavailable until
+its protected controller credentials were replaced, then fresh samples resumed.
+Both configuration commands recreated only the PaaS API: the other eight
+platform container IDs, start times and restart counts were unchanged. Completed
+configuration replay and authenticated pending-file cleanup passed. Node verify
+and platform status ended ready. No remote machine, engine or Kubernetes service
+was restarted. This observation fixture reserved every workload slot and placed
+no application. Its VM network was not externally disconnected, so it is not
+Gate D, a signed platform/node upgrade pair, or remote application acceptance.
+
 Next in P3-1:
-complete the signed platform/node offline lifecycle and separately proven
-first platform authorization for an older installation, before remote application delivery.
+implement and prove compatible signed node upgrade/rollback, complete the
+platform/node offline lifecycle and separately prove first platform authorization
+for an older installation, before remote application delivery.
 P3-1 and the complete Phase 3 release remain unaccepted.
 Retained-data schema migration alone does not establish runnable N-1
 compatibility; the complete offline lifecycle gate must still prove an actual
