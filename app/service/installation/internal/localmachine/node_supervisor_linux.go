@@ -277,7 +277,9 @@ func inspectNativeStartup(ctx context.Context, connection *systemd.Conn, startup
 	if err != nil {
 		return false, errors.Join(nodecommand.ErrUnavailable, err)
 	}
-	if properties["FragmentPath"] != startup.unitFile || verifyNativeServiceProperties(properties, startup.service, false) != nil {
+	// systemd reports the registered unit-file path, not the symlink's target.
+	// Both that exact link and its protected source were authenticated above.
+	if properties["FragmentPath"] != links[0] || verifyNativeServiceProperties(properties, startup.service, false) != nil {
 		return false, nodecommand.ErrConflict
 	}
 	var names []string

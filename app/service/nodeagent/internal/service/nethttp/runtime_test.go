@@ -126,7 +126,7 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 				continue
 			}
 			if !changed && nativeUnitProperty(t, startupUnit, "LoadState") == "loaded" {
-				if nativeUnitProperty(t, startupUnit, "FragmentPath") != source {
+				if nativeUnitProperty(t, startupUnit, "FragmentPath") != filepath.Join("/etc/systemd/system", startupUnit) {
 					t.Fatal("node gate refuses to stop foreign boot service")
 				}
 				nativeSystemctl(t, "stop", startupUnit)
