@@ -178,6 +178,50 @@ equal-replay success at Audit. Delivery failure never erases the committed IAM
 fact; a saturated or dead-lettered outbox is unhealthy and visible without
 payload leakage.
 
+### Tenant lifecycle and credential-session integration target
+
+The next Phase 3 authority increment consumes fixed, independently verified IAM
+slices; it is not accepted in this branch until its own gates pass. Preserve
+the existing Organization.ID/TenantID and primary/root identity. Platform-only
+organization create/read, status changes and original-primary recovery must
+not grant platform authority to tenant administrators or transfer root ownership.
+Status/recovery use the target organization's resource version; wrong versions,
+cross-tenant principals and concurrent changes cannot partially commit. Recovery
+restores only the original USER and protected tenant-admin authority, requires a
+new password, revokes old sessions and does not enable a paused tenant. An
+unrevoked platform binding forbids online credential recovery. The bootstrap
+service-home organization cannot be disabled.
+
+Pausing a tenant denies its next interactive IAM/PaaS/Audit request without
+stopping workloads, cancelling accepted Operations or blocking historical outbox
+delivery. Enabling it cannot revive revoked roles or sessions. New lifecycle
+facts are installation-scoped `iam.tenant.created`, `iam.tenant.disabled`,
+`iam.tenant.enabled` and `iam.tenant-administrator.recovered`. Only recovery's
+PRINCIPAL target requires `target.tenantId`; other actions reject that namespace.
+Existing tenant events and canonical bytes remain unchanged. IAM's outbox claim
+adds a seventh, sealed installation-ID column independently of its physical
+organization owner; readiness verifies that exact function shape.
+
+The existing password-change request gains optional `revokeOtherSessions`,
+defaulting to true. Initial, reset and recovered credentials always revoke other
+sessions. Daily change may explicitly retain them; the current session comes
+only from the bearer and is revalidated under the principal lock. A monotonic
+credential generation advances atomically on change/reset/recovery. Only already
+valid same-USER sessions can receive the new generation. Legacy sessions without
+generation evidence remain NULL and fail closed until a new login; transaction
+timestamps cannot establish which credential was used. Concurrency, revoked and
+temporary sessions, wrong old passwords and failed mutations must not acquire
+new authority or partially change credentials.
+
+The consuming branch targets IAM 3 / Audit 2 / PaaS 2, contract revision 3;
+the donor's different PaaS schema is not imported. Replace the old password SQL
+signature with the strict seven-argument function and verify its shape at
+readiness. Retained-data SQL migration and old-executable tests are required but
+do not authorize cross-profile release upgrade, rollback or recovery. Reuse the
+existing UI and gate owners, retain the real host admission/Operation/outbox
+regressions, and independently verify this branch's actual runtime logins and
+profile before recording acceptance.
+
 ## Audit authority
 
 ### Ingestion and integrity

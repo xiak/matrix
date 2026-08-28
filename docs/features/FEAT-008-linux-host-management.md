@@ -162,9 +162,11 @@ individually. New bundles use manifest v2 and the closed authority profile;
 the current source requires IAM 2, Audit 2 and PaaS 2. A separate contract
 revision binds the compatible function/wire boundary: changing a return-column
 shape without changing schema numbers still changes this profile. Revision 1
-covers the event-bound producer proof and host admission. Revision 2 is reserved
-for the pending tenant-lifecycle integration, including the seven-column IAM
-Audit claim contract; adoption must verify that exact shape. Equal revisions
+covers the event-bound producer proof and host admission. The pending authority
+integration targets IAM 3 / Audit 2 / PaaS 2, revision 3, including the seven-column
+IAM Audit claim and credential-generation/password-session contracts owned by
+[FEAT-006](FEAT-006-platform-authorities.md). Adoption must verify their exact
+function shapes; the current branch is not yet on that profile. Equal revisions
 with different authority schema tuples still cannot admit a transition.
 The published Phase 1 v1 manifest and
 sealed backup formats remain verifiable without changing their bytes; this is
@@ -439,9 +441,9 @@ modes were restored after the Windows-origin transfer before verification.
 This is not evidence of a portable archive format, certificate renewal/revocation,
 or a compatible signed platform/node release pair.
 
-Next in P3-1: installation-owned certificate lifecycle and explicit platform
-authorization when upgrading an older installation, before remote application
-delivery.
+Next in P3-1: integrate the fixed authority prerequisites, then installation-owned
+certificate lifecycle and explicit platform authorization when upgrading an older
+installation, before remote application delivery.
 P3-1 and the complete Phase 3 release remain unaccepted.
 Retained-data schema migration alone does not establish runnable N-1
 compatibility; the complete offline lifecycle gate must still prove an actual
