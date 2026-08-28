@@ -191,12 +191,13 @@ func optionsFromEnvironment() (options, error) {
 		return options{}, fail("command-input")
 	}
 	config := options{
-		root:       os.Getenv("MATRIX_PHASE1_ROOT"),
-		releaseA:   os.Getenv("MATRIX_PHASE1_RELEASE_A"),
-		releaseB:   os.Getenv("MATRIX_PHASE1_RELEASE_B"),
-		trustKey:   os.Getenv("MATRIX_PHASE1_TRUST_KEY"),
-		edge:       defaultEdgeEndpoint,
-		afterStart: phase == "after-restart",
+		root:        os.Getenv("MATRIX_PHASE1_ROOT"),
+		releaseA:    os.Getenv("MATRIX_PHASE1_RELEASE_A"),
+		releaseB:    os.Getenv("MATRIX_PHASE1_RELEASE_B"),
+		trustKey:    os.Getenv("MATRIX_PHASE1_TRUST_KEY"),
+		edge:        defaultEdgeEndpoint,
+		afterStart:  phase == "after-restart",
+		nativeNodes: os.Getenv("MATRIX_PHASE1_NATIVE_NODES"),
 	}
 	for _, path := range []string{config.root, config.releaseA, config.trustKey} {
 		if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path {
@@ -205,6 +206,9 @@ func optionsFromEnvironment() (options, error) {
 	}
 	if !config.afterStart && (config.releaseB == "" || !filepath.IsAbs(config.releaseB) ||
 		filepath.Clean(config.releaseB) != config.releaseB) {
+		return options{}, fail("command-input")
+	}
+	if config.nativeNodes != "" && (!filepath.IsAbs(config.nativeNodes) || filepath.Clean(config.nativeNodes) != config.nativeNodes) {
 		return options{}, fail("command-input")
 	}
 	return config, nil

@@ -1,0 +1,137 @@
+package phase1e2e
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/xiak/matrix/app/adapter/infrastructure/localmachine"
+)
+
+// The same gate binary probes each independently booted guest before loading
+// images or enrolling a node. No HTTP/debug endpoint or caller host selector.
+func TestOfflineNativeHostProbe(t *testing.T) {
+	phase := os.Getenv("MATRIX_PHASE1_NATIVE_HOST_PROBE")
+	if phase != "1" && phase != "after-restart" {
+		t.Skip("native offline companion only")
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" || os.Geteuid() != 0 {
+		t.Fatal("native probe requires Linux/amd64 root")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if assertNoExternalRoute() != nil || phase == "1" && assertEmptyDocker(ctx) != nil {
+		t.Fatal("native companion is not empty and offline")
+	}
+	if _, err := os.Stat(nativeInstallationRoot); phase == "1" && !os.IsNotExist(err) || phase == "after-restart" && err != nil {
+		t.Fatal("native installation root already exists")
+	}
+	facts, err := localmachine.NewLocalHostProbe().Inspect(ctx, nativeFixtureRoot)
+	if err != nil || !facts.DockerEngineReady || !facts.ComposePluginReady {
+		t.Fatal("real native host prerequisites unavailable")
+	}
+	fingerprint, err := localmachine.DeriveMachineFingerprint(facts)
+	if err != nil {
+		t.Fatal("native fingerprint unavailable")
+	}
+	boot, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
+	if err != nil {
+		t.Fatal("native boot identity unavailable")
+	}
+	engine, err := docker(ctx, "info", "--format", "{{.ID}}")
+	if err != nil {
+		t.Fatal("native engine identity unavailable")
+	}
+	result := nativeHostFacts{Fingerprint: fingerprint, BootID: strings.TrimSpace(string(boot)), EngineID: strings.TrimSpace(string(engine)), CPUs: int64(facts.LogicalCPUs), MemoryBytes: int64(facts.MemoryTotalBytes), StorageBytes: int64(facts.StorageTotalBytes)}
+	if !validNativeFacts(result) {
+		t.Fatal("native host facts invalid")
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "facts.json"
+	if phase == "after-restart" {
+		name = "facts-after-restart.json"
+	}
+	if _, err = privateFixtureFile(nativeFixtureRoot, name, encoded); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNativeBootEvidenceRequiresNewKernelAndSameMachine(t *testing.T) {
+	before := nativeHostFacts{Fingerprint: "sha256:" + strings.Repeat("a", 64), BootID: "00000000-0000-0000-0000-000000000001", EngineID: "engine-1", CPUs: 2, MemoryBytes: 2 << 30, StorageBytes: 20 << 30}
+	after := before
+	after.BootID = "00000000-0000-0000-0000-000000000002"
+	if !sameNativeHostAfterBoot(before, after) || sameNativeHostAfterBoot(before, before) {
+		t.Fatal("kernel boot evidence not distinguished")
+	}
+	for _, change := range []func(*nativeHostFacts){func(v *nativeHostFacts) { v.Fingerprint = "sha256:" + strings.Repeat("b", 64) }, func(v *nativeHostFacts) { v.EngineID = "engine-2" }, func(v *nativeHostFacts) { v.MemoryBytes++ }, func(v *nativeHostFacts) { v.StorageBytes++ }, func(v *nativeHostFacts) { v.CPUs++ }} {
+		candidate := after
+		change(&candidate)
+		if sameNativeHostAfterBoot(before, candidate) {
+			t.Fatal("replacement host accepted as retained boot")
+		}
+	}
+}
+
+func TestNativeFixtureRejectsAmbiguousOrExternalTargets(t *testing.T) {
+	directory := t.TempDir()
+	valid := nativeFixtureInput{ReleaseA: filepath.Join(directory, "a"), ReleaseB: filepath.Join(directory, "b"), IdentityFile: filepath.Join(directory, "client"), KnownHostsFile: filepath.Join(directory, "known_hosts"), Nodes: []nativeNodeInput{{Port: 2201, Endpoint: "https://172.17.0.1:16443"}, {Port: 2202, Endpoint: "https://172.17.0.1:16444"}}}
+	for _, scenario := range []struct {
+		name   string
+		change func(*nativeFixtureInput)
+	}{
+		{"one host", func(v *nativeFixtureInput) { v.Nodes = v.Nodes[:1] }},
+		{"same SSH forward", func(v *nativeFixtureInput) { v.Nodes[1].Port = v.Nodes[0].Port }},
+		{"same node endpoint", func(v *nativeFixtureInput) { v.Nodes[1].Endpoint = v.Nodes[0].Endpoint }},
+		{"public endpoint", func(v *nativeFixtureInput) { v.Nodes[0].Endpoint = "https://8.8.8.8:16443" }},
+		{"DNS endpoint", func(v *nativeFixtureInput) { v.Nodes[0].Endpoint = "https://node.invalid:16443" }},
+		{"HTTP endpoint", func(v *nativeFixtureInput) { v.Nodes[0].Endpoint = "http://172.17.0.1:16443" }},
+		{"endpoint credentials", func(v *nativeFixtureInput) { v.Nodes[0].Endpoint = "https://user@172.17.0.1:16443" }},
+		{"query", func(v *nativeFixtureInput) { v.Nodes[0].Endpoint += "?" }},
+		{"relative signer", func(v *nativeFixtureInput) { v.IdentityFile = "client" }},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			input := valid
+			input.Nodes = append([]nativeNodeInput(nil), valid.Nodes...)
+			scenario.change(&input)
+			if validateNativeFixture(input) == nil {
+				t.Fatal("unsafe or ambiguous native fixture accepted")
+			}
+		})
+	}
+	if validateNativeFixture(valid) != nil {
+		t.Fatal("valid isolated native fixture rejected")
+	}
+}
+
+func TestNativeRetentionRequiresSameRunningContainerAndStart(t *testing.T) {
+	baseline := nativeWorkload{ID: strings.Repeat("a", 64), StartedAt: "2026-08-28T00:00:00Z", Running: true}
+	if !sameNativeWorkload(baseline, baseline) {
+		t.Fatal("unchanged runtime rejected")
+	}
+	for _, scenario := range []struct {
+		name   string
+		change func(*nativeWorkload)
+	}{
+		{"replacement", func(v *nativeWorkload) { v.ID = strings.Repeat("b", 64) }},
+		{"restart", func(v *nativeWorkload) { v.StartedAt = "2026-08-28T00:01:00Z" }},
+		{"restart counter", func(v *nativeWorkload) { v.RestartCount++ }},
+		{"stopped", func(v *nativeWorkload) { v.Running = false }},
+		{"missing start", func(v *nativeWorkload) { v.StartedAt = "" }},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			current := baseline
+			scenario.change(&current)
+			if sameNativeWorkload(baseline, current) {
+				t.Fatal("runtime replacement or downtime accepted as retention")
+			}
+		})
+	}
+}

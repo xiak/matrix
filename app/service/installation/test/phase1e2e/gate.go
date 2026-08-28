@@ -49,6 +49,7 @@ type gate struct {
 	workloadProject        string
 	workloadRunning        string
 	controllerConfigDigest string
+	nodes                  *nativeNodes
 }
 
 func newGate(config options, releases releasePair) *gate {
@@ -60,6 +61,9 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	defer func() {
 		for _, secret := range value.sensitive {
 			clear(secret)
+		}
+		if value.nodes != nil {
+			value.nodes.controller.Clear()
 		}
 	}()
 	if err := value.assertFreshHost(ctx); err != nil {
@@ -160,6 +164,12 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return err
 	}
 	emit("original-platform-credential-recovery-without-runtime-restart")
+	if err := value.prepareNativeNodes(ctx, state.InstallationID); err != nil {
+		return err
+	}
+	if err := value.admitNativeNodes(ctx, bearer); err != nil {
+		return err
+	}
 
 	wantInitialAudit := map[auditv1.Action]string{
 		auditv1.ActionIAMBootstrapApplied:              "",
@@ -195,6 +205,9 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return fail("protected-backup")
 	}
 	emit("protected-backup")
+	if err := value.rotateNativeCredentials(ctx, bearer); err != nil {
+		return err
+	}
 
 	if err := value.failedUpgrade(ctx, secret, newPassword, bearer); err != nil {
 		return err
@@ -212,6 +225,9 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return err
 	}
 	emit("automatic-upgrade-rollback")
+	if err := value.assertNativeNodes(ctx, bearer, false); err != nil {
+		return err
+	}
 
 	upgrade, err := runMX(ctx, value.releases.a, "upgrade", []string{
 		"--bundle", value.releases.b.Root, "--root", value.config.root,
@@ -270,6 +286,12 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return fail("post-upgrade-audit-association")
 	}
 	emit("release-b-upgrade-preservation")
+	if err := value.nativeReleasePair(ctx, bearer); err != nil {
+		return err
+	}
+	if err := value.assertNativeNodes(ctx, bearer, false); err != nil {
+		return err
+	}
 
 	rollback, err := runMX(ctx, value.releases.b, "rollback", []string{"--root", value.config.root}, value.forbidden(secret, newPassword, bearer))
 	if err != nil || rollback.ReleaseID != value.releases.a.Manifest.Release.ID ||
@@ -296,6 +318,9 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return fail("rollback-retained-successor-audit-history")
 	}
 	emit("explicit-platform-rollback")
+	if err := value.assertNativeNodes(ctx, bearer, false); err != nil {
+		return err
+	}
 
 	value.workloadRunning = ""
 	recovery, err := runMX(ctx, value.releases.a, "recover", []string{
@@ -332,6 +357,9 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return err
 	}
 	emit("backup-recovery")
+	if err := value.assertNativeNodes(ctx, bearer, false); err != nil {
+		return err
+	}
 
 	rolledBack, err := value.rollbackApplication(ctx, bearer, recovered)
 	if err != nil {
@@ -385,6 +413,9 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return err
 	}
 	emit("bounded-support-zero-leakage")
+	if err := value.saveNativeRetention(ctx); err != nil {
+		return err
+	}
 	emit("restart-required")
 	return nil
 }
@@ -620,6 +651,9 @@ func (value *gate) afterRestart(ctx context.Context) error {
 	}
 	if active, err := value.activeCapacityClaims(ctx, state.InstallationID); err != nil || active != 0 {
 		return fail("restart-capacity-release")
+	}
+	if err := value.afterNativeRestart(ctx, state.InstallationID); err != nil {
+		return err
 	}
 	if err := value.writeAndScanSupport(ctx, value.releases.a, "phase1-after-restart.json", nil); err != nil {
 		return err

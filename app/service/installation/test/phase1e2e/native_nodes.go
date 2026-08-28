@@ -1,0 +1,986 @@
+package phase1e2e
+
+import (
+	"bytes"
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/json"
+	"encoding/pem"
+	"fmt"
+	"math/big"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strconv"
+	"strings"
+	"time"
+
+	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
+	auditv1 "github.com/xiak/matrix/api/audit/v1"
+	paasv1 "github.com/xiak/matrix/api/paas/v1"
+	"github.com/xiak/matrix/app/service/installation/internal/cli"
+	"github.com/xiak/matrix/app/service/installation/internal/layout"
+	"github.com/xiak/matrix/app/service/installation/nodeconfig"
+	"github.com/xiak/matrix/app/service/installation/release"
+)
+
+// This is the native companion of the existing signed platform gate, not a
+// second platform workflow. SSH reaches only two explicitly prepared loopback
+// forwards with pinned host keys. Product observations still use real mTLS.
+const nativeFixtureRoot = "/var/lib/matrix-offline-fixture"
+const nativeInstallationRoot = nativeFixtureRoot + "/installation"
+const nativePool paasv1.ResourceID = "offline-native-pool"
+
+type nativeNodeInput struct {
+	Port     int    `json:"port"`
+	Endpoint string `json:"endpoint"`
+}
+
+type nativeFixtureInput struct {
+	ReleaseA       string            `json:"releaseA"`
+	ReleaseB       string            `json:"releaseB"`
+	IdentityFile   string            `json:"identityFile"`
+	KnownHostsFile string            `json:"knownHostsFile"`
+	Nodes          []nativeNodeInput `json:"nodes"`
+}
+
+type nativeHostFacts struct {
+	Fingerprint  string `json:"fingerprint"`
+	BootID       string `json:"bootId"`
+	EngineID     string `json:"engineId"`
+	CPUs         int64  `json:"cpus"`
+	MemoryBytes  int64  `json:"memoryBytes"`
+	StorageBytes int64  `json:"storageBytes"`
+}
+
+type nativeNodeState struct {
+	input         nativeNodeInput
+	facts         nativeHostFacts
+	identity      nodev1.Identity
+	binding       string
+	configuration nodeconfig.Configuration
+	digest        string
+	operation     paasv1.Operation
+	auditHash     string
+	workload      nativeWorkload
+}
+
+type nativeWorkload struct {
+	ID           string `json:"id"`
+	StartedAt    string `json:"startedAt"`
+	RestartCount uint64 `json:"restartCount"`
+	Running      bool   `json:"running"`
+}
+
+type nativeNodes struct {
+	input      nativeFixtureInput
+	directory  string
+	releases   releasePair
+	controller nodeconfig.ControllerConfiguration
+	nodes      []nativeNodeState
+}
+
+func validateNativeFixture(input nativeFixtureInput) error {
+	for _, path := range []string{input.ReleaseA, input.ReleaseB, input.IdentityFile, input.KnownHostsFile} {
+		if !filepath.IsAbs(path) || filepath.Clean(path) != path || strings.ContainsAny(path, "\x00\r\n") {
+			return fail("native-fixture-path")
+		}
+	}
+	if len(input.Nodes) != 2 || input.Nodes[0].Port == input.Nodes[1].Port || input.Nodes[0].Endpoint == input.Nodes[1].Endpoint {
+		return fail("native-fixture-two-distinct-hosts")
+	}
+	for _, node := range input.Nodes {
+		endpoint, err := url.Parse(node.Endpoint)
+		if err != nil || endpoint.Scheme != "https" || endpoint.User != nil || endpoint.Path != "" || endpoint.RawQuery != "" || endpoint.ForceQuery || endpoint.Fragment != "" || endpoint.Opaque != "" {
+			return fail("native-fixture-private-endpoint")
+		}
+		host, port, err := net.SplitHostPort(endpoint.Host)
+		parsedPort, portErr := strconv.ParseUint(port, 10, 16)
+		address := net.ParseIP(host)
+		if err != nil || portErr != nil || parsedPort == 0 || address == nil || !address.IsPrivate() || node.Port < 1024 || node.Port > 65535 {
+			return fail("native-fixture-private-endpoint")
+		}
+	}
+	return nil
+}
+
+func (value *gate) prepareNativeNodes(ctx context.Context, installationID string) error {
+	if value.config.nativeNodes == "" {
+		return nil
+	}
+	content, err := os.ReadFile(value.config.nativeNodes)
+	if err != nil || len(content) > 16*1024 {
+		return fail("native-fixture-input")
+	}
+	var input nativeFixtureInput
+	if decodeOne(content, &input) != nil || validateNativeFixture(input) != nil {
+		return fail("native-fixture-input")
+	}
+	trust, err := os.ReadFile(value.config.trustKey)
+	if err != nil {
+		return fail("native-release-trust")
+	}
+	defer clear(trust)
+	a, err := release.VerifyDirectory(input.ReleaseA, trust)
+	if err != nil {
+		return fail("native-release-a")
+	}
+	b, err := release.VerifyDirectory(input.ReleaseB, trust)
+	if err != nil || a.Manifest.Kind != release.NodeManifestKind || b.Manifest.Kind != release.NodeManifestKind || a.Manifest.Node == nil || b.Manifest.Node == nil ||
+		a.Manifest.Node.RuntimeRevision != nodeconfig.RuntimeRevision || *a.Manifest.Node != *b.Manifest.Node || a.Manifest.TopologyDigest != b.Manifest.TopologyDigest ||
+		b.Manifest.Release.PreviousID != a.Manifest.Release.ID || b.Manifest.Release.PreviousVersion != a.Manifest.Release.Version || a.Manifest.Release.SourceCommit == b.Manifest.Release.SourceCommit {
+		return fail("native-real-predecessor-pair")
+	}
+	directory, err := os.MkdirTemp(filepath.Dir(value.config.nativeNodes), ".combined-enrollment-")
+	if err != nil {
+		return fail("native-private-fixture")
+	}
+	fixture := &nativeNodes{input: input, directory: directory, releases: releasePair{a: a, b: b}, controller: nodeconfig.EmptyController(installationID)}
+	value.nodes = fixture
+	driver, err := os.Executable()
+	if err != nil {
+		return fail("native-probe-driver")
+	}
+	for index, inputNode := range input.Nodes {
+		node := nativeNodeState{input: inputNode, identity: nodev1.Identity{InstallationID: installationID, ExecutionTargetID: paasv1.ResourceID(fmt.Sprintf("offline-native-%d", index+1))}, binding: fmt.Sprintf("offline-native-%d-connection", index+1)}
+		fixture.nodes = append(fixture.nodes, node)
+		if err := fixture.waitPrepared(ctx, index); err != nil {
+			return err
+		}
+		if err := fixture.copy(ctx, index, driver, nativeFixtureRoot+"/probe.test", true, false); err != nil {
+			return err
+		}
+		if _, err := fixture.command(ctx, index, "env", "MATRIX_PHASE1_NATIVE_HOST_PROBE=1", nativeFixtureRoot+"/probe.test", "-test.run=^TestOfflineNativeHostProbe$", "-test.count=1"); err != nil {
+			return err
+		}
+		factsPath := filepath.Join(directory, fmt.Sprintf("facts-%d.json", index))
+		if err := fixture.copy(ctx, index, factsPath, nativeFixtureRoot+"/facts.json", false, false); err != nil {
+			return err
+		}
+		facts, err := os.ReadFile(factsPath)
+		if err != nil || len(facts) > 4096 || decodeOne(facts, &fixture.nodes[index].facts) != nil || !validNativeFacts(fixture.nodes[index].facts) {
+			return fail("native-real-host-facts")
+		}
+		for _, media := range []struct {
+			source, target string
+			directory      bool
+		}{{a.Root, "node-a", true}, {b.Root, "node-b", true}, {value.config.trustKey, "trust.json", false}} {
+			if err := fixture.copy(ctx, index, media.source, nativeFixtureRoot+"/"+media.target, true, media.directory); err != nil {
+				return err
+			}
+		}
+	}
+	left, right := fixture.nodes[0].facts, fixture.nodes[1].facts
+	if left.Fingerprint == right.Fingerprint || left.BootID == right.BootID || left.EngineID == right.EngineID {
+		return fail("native-independent-kernels-and-engines")
+	}
+	if err := fixture.credentials(ctx, value, false); err != nil {
+		return err
+	}
+	return value.prepareNativeWorkloads(ctx)
+}
+
+func validNativeFacts(facts nativeHostFacts) bool {
+	return paasv1.ValidateDigest("fingerprint", facts.Fingerprint) == nil && len(facts.BootID) == 36 && facts.EngineID != "" && facts.CPUs > 0 && facts.MemoryBytes > 0 && facts.StorageBytes > 0
+}
+
+func (fixture *nativeNodes) sshArguments(index int) []string {
+	return []string{"-F", "/dev/null", "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=yes", "-o", "GlobalKnownHostsFile=/dev/null", "-o", "UserKnownHostsFile=" + fixture.input.KnownHostsFile, "-o", "ConnectTimeout=5", "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=1", "-o", "LogLevel=ERROR", "-i", fixture.input.IdentityFile}
+}
+
+func (fixture *nativeNodes) waitPrepared(ctx context.Context, index int) error {
+	// A booted sshd may precede cloud-init's offline Docker preparation. Wait
+	// before the first file write; never treat a half-prepared VM as installed.
+	poll, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+	for {
+		_, directoryErr := fixture.command(poll, index, "test", "-d", nativeFixtureRoot)
+		if directoryErr == nil {
+			if content, err := fixture.command(poll, index, "docker", "info", "--format", "{{.ID}}"); err == nil && strings.TrimSpace(string(content)) != "" {
+				return nil
+			}
+		}
+		if !waitPoll(poll, time.Second) {
+			return fail("native-prepared-guest-timeout")
+		}
+	}
+}
+
+func (fixture *nativeNodes) command(ctx context.Context, index int, arguments ...string) ([]byte, error) {
+	bounded, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+	args := append(fixture.sshArguments(index), "-p", strconv.Itoa(fixture.nodes[index].input.Port), "root@127.0.0.1")
+	var words []string
+	for _, argument := range arguments {
+		words = append(words, "'"+strings.ReplaceAll(argument, "'", "'\\''")+"'")
+	}
+	args = append(args, strings.Join(words, " "))
+	output, err := runProcess(bounded, "ssh", args...)
+	if err != nil || output.exit != 0 || len(output.stderr) != 0 {
+		clear(output.stdout)
+		clear(output.stderr)
+		return nil, fail("native-loopback-command")
+	}
+	return output.stdout, nil
+}
+
+func (fixture *nativeNodes) copy(ctx context.Context, index int, local, remote string, toRemote, recursive bool) error {
+	bounded, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	args := append(fixture.sshArguments(index), "-q", "-p", "-P", strconv.Itoa(fixture.nodes[index].input.Port))
+	if recursive {
+		args = append(args, "-r")
+	}
+	if toRemote {
+		args = append(args, local, "root@127.0.0.1:"+remote)
+	} else {
+		args = append(args, "root@127.0.0.1:"+remote, local)
+	}
+	output, err := runProcess(bounded, "scp", args...)
+	defer clear(output.stdout)
+	defer clear(output.stderr)
+	if err != nil || output.exit != 0 || len(output.stderr) != 0 {
+		return fail("native-private-media-transfer-" + strconv.Itoa(index+1) + "-" + filepath.Base(remote))
+	}
+	return nil
+}
+
+func (fixture *nativeNodes) mx(ctx context.Context, index int, successor bool, action string, args ...string) (cli.Result, error) {
+	media := "node-a"
+	if successor {
+		media = "node-b"
+	}
+	arguments := append([]string{nativeFixtureRoot + "/" + media + "/bin/mx", "--format", "json", "node", action}, args...)
+	content, err := fixture.command(ctx, index, arguments...)
+	defer clear(content)
+	var result struct {
+		APIVersion string     `json:"apiVersion"`
+		Kind       string     `json:"kind"`
+		Action     string     `json:"action"`
+		Status     string     `json:"status"`
+		Result     cli.Result `json:"result"`
+	}
+	if err != nil || decodeOne(content, &result) != nil || result.APIVersion != "cli.matrix.xiak.com/v1" || result.Kind != "NodeCommandResult" || result.Action != strings.ToUpper(strings.ReplaceAll(action, "-", "_")) || result.Status != "SUCCEEDED" || result.Result.State != "READY" || result.Result.ExecutionTargetID != string(fixture.nodes[index].identity.ExecutionTargetID) {
+		return cli.Result{}, fail("native-mx-" + action)
+	}
+	return result.Result, nil
+}
+
+func privateFixtureFile(directory, name string, content []byte) (string, error) {
+	path := filepath.Join(directory, name)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return "", fail("native-private-file")
+	}
+	_, writeErr := f.Write(content)
+	closeErr := f.Close()
+	if writeErr != nil || closeErr != nil {
+		return "", fail("native-private-file")
+	}
+	return path, nil
+}
+
+func (fixture *nativeNodes) credentials(ctx context.Context, value *gate, rotate bool) error {
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return fail("native-fixture-ca")
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	caTemplate := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "isolated-native-gate"}, NotBefore: now.Add(-time.Minute), NotAfter: now.Add(12 * time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		return fail("native-fixture-ca")
+	}
+	ca, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		return fail("native-fixture-ca")
+	}
+	trust := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
+	issue := func(serial int64, uri string, addresses []net.IP, usages ...x509.ExtKeyUsage) ([]byte, []byte, error) {
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			return nil, nil, err
+		}
+		identity, err := url.Parse(uri)
+		if err != nil {
+			return nil, nil, err
+		}
+		template := &x509.Certificate{SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: "isolated-native-peer"}, URIs: []*url.URL{identity}, IPAddresses: addresses, NotBefore: ca.NotBefore, NotAfter: ca.NotAfter, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: usages}
+		der, err := x509.CreateCertificate(rand.Reader, template, ca, &key.PublicKey, caKey)
+		if err != nil {
+			return nil, nil, err
+		}
+		private, err := x509.MarshalPKCS8PrivateKey(key)
+		if err != nil {
+			return nil, nil, err
+		}
+		defer clear(private)
+		return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: private}), nil
+	}
+	controllerURI, _ := nodev1.ControllerURI(fixture.controller.InstallationID, fixture.controller.ControllerID)
+	certificate, key, err := issue(2, controllerURI, nil, x509.ExtKeyUsageClientAuth)
+	if err != nil {
+		return fail("native-fixture-controller")
+	}
+	defer clear(key)
+	controller := fixture.controller
+	controller.Certificate, controller.PrivateKey, controller.Trust = certificate, key, trust
+	controller.Nodes = nil
+	for index := range fixture.nodes {
+		node := &fixture.nodes[index]
+		directory, err := os.MkdirTemp(fixture.directory, "node-input-")
+		if err != nil {
+			return fail("native-fixture-enrollment")
+		}
+		remote := nativeFixtureRoot + "/" + filepath.Base(directory)
+		nodeURI, _ := nodev1.NodeURI(node.identity)
+		collectorURI, _ := nodev1.CollectorURI(node.identity)
+		endpoint, _ := url.Parse(node.input.Endpoint)
+		nodeCertificate, nodeKey, err := issue(int64(10+index*2), nodeURI, []net.IP{net.ParseIP("10.0.2.15"), net.ParseIP(endpoint.Hostname())}, x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth)
+		if err != nil {
+			return fail("native-fixture-node")
+		}
+		collectorCertificate, collectorKey, err := issue(int64(11+index*2), collectorURI, []net.IP{net.ParseIP("127.0.0.1")}, x509.ExtKeyUsageServerAuth)
+		if err != nil {
+			clear(nodeKey)
+			return fail("native-fixture-collector")
+		}
+		for _, item := range []struct {
+			name    string
+			content []byte
+		}{{"node.pem", nodeCertificate}, {"node-key.pem", nodeKey}, {"collector.pem", collectorCertificate}, {"collector-key.pem", collectorKey}, {"trust.pem", trust}} {
+			_, err = privateFixtureFile(directory, item.name, item.content)
+			if err != nil {
+				clear(nodeKey)
+				clear(collectorKey)
+				return err
+			}
+		}
+		clear(nodeKey)
+		clear(collectorKey)
+		configuration := nodeconfig.Configuration{APIVersion: nodeconfig.APIVersion, Kind: nodeconfig.ConfigurationKind, Identity: node.identity, ControllerID: controller.ControllerID, BindingRef: node.binding, ExpectedFingerprint: node.facts.Fingerprint, ListenAddress: "10.0.2.15:16443", CollectorEndpoint: "https://127.0.0.1:19100", StoragePath: nativeInstallationRoot + "/runtime/executor", CertificateFile: remote + "/node.pem", PrivateKeyFile: remote + "/node-key.pem", TrustFile: remote + "/trust.pem", SystemReserve: paasv1.Capacity{MemoryBytes: 256 << 20, WorkloadSlots: node.facts.CPUs}}
+		enrollment := nodeconfig.Enrollment{APIVersion: nodeconfig.APIVersion, Kind: nodeconfig.EnrollmentKind, Node: configuration, CollectorCertificateFile: remote + "/collector.pem", CollectorPrivateKeyFile: remote + "/collector-key.pem"}
+		encoded, err := json.Marshal(enrollment)
+		if err != nil {
+			return fail("native-fixture-enrollment")
+		}
+		if _, err = privateFixtureFile(directory, "enrollment.json", encoded); err != nil {
+			return err
+		}
+		if err = fixture.copy(ctx, index, directory, remote, true, true); err != nil {
+			return err
+		}
+		action := "install"
+		arguments := []string{"--root", nativeInstallationRoot, "--configuration", remote + "/enrollment.json"}
+		if rotate {
+			action = "rotate-credentials"
+			arguments = append(arguments, "--expected-configuration-digest", node.digest)
+		} else {
+			arguments = append(arguments, "--bundle", nativeFixtureRoot+"/node-a", "--trust-key", nativeFixtureRoot+"/trust.json")
+		}
+		result, err := fixture.mx(ctx, index, false, action, arguments...)
+		if err != nil || !result.Changed || paasv1.ValidateDigest("configurationDigest", result.ConfigurationDigest) != nil || result.ConfigurationDigest == node.digest {
+			return fail("native-signed-" + action)
+		}
+		node.configuration, node.digest = configuration, result.ConfigurationDigest
+		controller.Nodes = append(controller.Nodes, nodeconfig.Connection{BindingRef: node.binding, TargetID: node.identity.ExecutionTargetID, Endpoint: node.input.Endpoint, IdentityFingerprint: node.facts.Fingerprint})
+		if rotate {
+			if err := assertRetiredControllerTLS(ctx, node.input.Endpoint, node.identity, fixture.controller, controller); err != nil {
+				return err
+			}
+		}
+	}
+	encoded, err := nodeconfig.EncodeController(controller)
+	if err != nil {
+		return fail("native-controller-encoding")
+	}
+	defer clear(encoded)
+	input, err := privateFixtureFile(fixture.directory, fmt.Sprintf("controller-%t.json", rotate), encoded)
+	if err != nil {
+		return err
+	}
+	result, err := runMX(ctx, value.releases.a, "configure-nodes", []string{"--root", value.config.root, "--configuration", input, "--expected-configuration-digest", value.controllerConfigDigest}, value.forbidden(key))
+	digest, digestErr := nodeconfig.ControllerDigest(controller)
+	if err != nil || digestErr != nil || !result.Changed || result.ConfigurationDigest != digest {
+		return fail("native-controller-configuration")
+	}
+	value.controllerConfigDigest = digest
+	fixture.controller.Clear()
+	controller.PrivateKey = bytes.Clone(key)
+	fixture.controller = controller
+	return nil
+}
+
+func assertRetiredControllerTLS(ctx context.Context, endpoint string, identity nodev1.Identity, previous, current nodeconfig.ControllerConfiguration) error {
+	// Trust the NEW server for both attempts: a failed old client must not be
+	// mistaken for merely refusing the new server's CA. The positive control
+	// reaches HTTP using the new controller, which is denied self-readiness.
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(current.Trust) {
+		return fail("native-controller-revocation-fixture")
+	}
+	peer, _ := nodev1.NodeURI(identity)
+	for index, credential := range []nodeconfig.ControllerConfiguration{previous, current} {
+		pair, err := tls.X509KeyPair(credential.Certificate, credential.PrivateKey)
+		if err != nil {
+			return fail("native-controller-revocation-fixture")
+		}
+		security := &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: roots, Certificates: []tls.Certificate{pair}, VerifyConnection: func(state tls.ConnectionState) error {
+			if len(state.PeerCertificates) == 0 || !nodev1.MatchesIdentity(state.PeerCertificates[0].URIs, peer) {
+				return fail("native-controller-revocation-peer")
+			}
+			return nil
+		}}
+		transport := &http.Transport{Proxy: nil, TLSClientConfig: security, DialContext: (&net.Dialer{Timeout: 5 * time.Second}).DialContext, TLSHandshakeTimeout: 5 * time.Second, ResponseHeaderTimeout: 5 * time.Second, DisableKeepAlives: true}
+		client := &http.Client{Transport: transport, Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+nodev1.ReadinessPath, nil)
+		if err != nil {
+			return fail("native-controller-revocation-fixture")
+		}
+		response, err := client.Do(request)
+		if response != nil {
+			_ = response.Body.Close()
+		}
+		transport.CloseIdleConnections()
+		if index == 0 && (err == nil || response != nil) {
+			return fail("native-retired-controller-accepted")
+		}
+		if index == 1 && (err != nil || response == nil || response.StatusCode != http.StatusForbidden) {
+			return fail("native-current-controller-tls-control")
+		}
+	}
+	return nil
+}
+
+func (value *gate) admitNativeNodes(ctx context.Context, bearer []byte) error {
+	if value.nodes == nil {
+		return nil
+	}
+	fixture := value.nodes
+	if _, err := value.edge.createResource(ctx, "/api/paas/v1/execution-pools", "offline-native-pool", bearer, paasv1.CreateExecutionPoolRequest{ID: nativePool, Name: string(nativePool), Spec: paasv1.ExecutionPoolSpec{AllowedIsolationGuarantees: []paasv1.IsolationGuarantee{paasv1.IsolationWorkload}}}, paasv1.OperationCreateExecutionPool, paasv1.ResourceRef{Kind: "ExecutionPool", ID: nativePool}); err != nil {
+		return fail("native-platform-pool")
+	}
+	for index := range fixture.nodes {
+		node := &fixture.nodes[index]
+		operation, err := value.edge.createResource(ctx, "/api/paas/v1/execution-targets", string(node.identity.ExecutionTargetID), bearer, paasv1.RegisterExecutionTargetRequest{ID: node.identity.ExecutionTargetID, Name: string(node.identity.ExecutionTargetID), ExecutionPoolID: nativePool, BindingRef: node.binding}, paasv1.OperationRegisterExecutionTarget, paasv1.ResourceRef{Kind: "ExecutionTarget", ID: node.identity.ExecutionTargetID})
+		if err != nil || operation.InstallationID != fixture.controller.InstallationID || operation.Scope.TenantID != "" {
+			return fail("native-platform-admission")
+		}
+		node.operation = operation
+	}
+	if err := value.assertNativeNodes(ctx, bearer, false); err != nil {
+		return err
+	}
+	if err := value.nativeBackgroundAndOutage(ctx, bearer); err != nil {
+		return err
+	}
+	emit("two-signed-native-hosts-through-platform-admission")
+	return nil
+}
+
+func (value *gate) assertNativeNodes(ctx context.Context, bearer []byte, successor bool) error {
+	if value.nodes == nil {
+		return nil
+	}
+	fixture := value.nodes
+	for index := range fixture.nodes {
+		node := &fixture.nodes[index]
+		result, err := fixture.mx(ctx, index, successor, "status", "--root", nativeInstallationRoot)
+		want := fixture.releases.a.Manifest.Release.ID
+		if successor {
+			want = fixture.releases.b.Manifest.Release.ID
+		}
+		if err != nil || result.Changed || result.ReleaseID != want || result.ConfigurationDigest != node.digest {
+			return fail("native-retained-node-release-and-credentials")
+		}
+		poll, cancel := context.WithTimeout(ctx, 45*time.Second)
+		var target paasv1.ExecutionTarget
+		for {
+			_, err = value.edge.get(poll, "/api/paas/v1/execution-targets/"+string(node.identity.ExecutionTargetID), bearer, &target)
+			if err == nil && target.Status.Health == paasv1.ExecutionTargetHealthReady && target.Status.Usage != nil && target.Status.Usage.CPU.State == paasv1.MeasurementAvailable && target.Status.Usage.Memory.State == paasv1.MeasurementAvailable {
+				break
+			}
+			if !waitPoll(poll, 250*time.Millisecond) {
+				cancel()
+				return fail("native-connected-observation")
+			}
+		}
+		cancel()
+		if !matchesNativeObservation(target, *node) {
+			return fail("native-physical-observation-and-binding")
+		}
+		if _, err := value.nativeStoredTarget(ctx, index); err != nil {
+			return err
+		}
+		if err := fixture.assertWorkload(ctx, index); err != nil {
+			return err
+		}
+		var operation paasv1.Operation
+		if _, err = value.edge.get(ctx, "/api/paas/v1/platform/operations/"+string(node.operation.ID), bearer, &operation); err != nil || !reflect.DeepEqual(operation, node.operation) {
+			return fail("native-retained-admission-operation")
+		}
+		if _, err = value.edge.json(ctx, http.MethodGet, "/api/paas/v1/operations/"+string(node.operation.ID), bearer, nil, nil, http.StatusNotFound); err != nil {
+			return fail("native-platform-operation-tenant-route")
+		}
+	}
+	return value.assertNativeAudit(ctx, bearer)
+}
+
+func matchesNativeObservation(target paasv1.ExecutionTarget, node nativeNodeState) bool {
+	usage := target.Status.Usage
+	if paasv1.ValidateExecutionTarget(target) != nil || target.Metadata.ID != node.identity.ExecutionTargetID || target.Metadata.Labels["matrix-machine-fingerprint"] != node.facts.Fingerprint ||
+		target.Spec.ExecutionPoolID != nativePool || target.Spec.InfrastructureAdapter.Name != "nodehttps" || target.Status.Capacity.CPUMillis != node.facts.CPUs*1000 || target.Status.Capacity.MemoryBytes != node.facts.MemoryBytes ||
+		target.Status.Allocatable.MemoryBytes != node.facts.MemoryBytes-(256<<20) || target.Status.Allocatable.WorkloadSlots != 0 || usage == nil || usage.CPU.Value == nil || usage.Memory.Value == nil ||
+		usage.CPU.Value.LogicalCPUs != node.facts.CPUs || usage.Memory.Value.TotalBytes != node.facts.MemoryBytes || !time.Now().Before(usage.ValidUntil) {
+		return false
+	}
+	for _, filesystem := range usage.Filesystems {
+		if filesystem.State == paasv1.MeasurementAvailable && filesystem.Value != nil && filesystem.Value.TotalBytes == node.facts.StorageBytes && strings.HasPrefix(nativeInstallationRoot, strings.TrimSuffix(filesystem.MountPoint, "/")+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func (value *gate) assertNativeAudit(ctx context.Context, bearer []byte) error {
+	poll, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	for {
+		response, err := value.edge.json(poll, http.MethodPost, "/api/audit/v1/platform/records:query", bearer, auditv1.QueryRecordsRequest{PageSize: 10, Action: auditv1.ActionPaaSExecutionTargetRegistered}, nil, http.StatusOK)
+		var page auditv1.RecordPage
+		valid := err == nil && decodeOne(response.body, &page) == nil && auditv1.ValidateRecordPage(page) == nil && page.InstallationID == value.nodes.controller.InstallationID && page.NextCursor == ""
+		clear(response.body)
+		if valid && len(page.Records) == len(value.nodes.nodes) {
+			for index := range value.nodes.nodes {
+				node := &value.nodes.nodes[index]
+				found := false
+				for _, record := range page.Records {
+					if record.Event.OperationID != auditv1.OperationID(node.operation.ID) {
+						continue
+					}
+					if found || record.Source != auditv1.SourcePaaS || record.Event.Action != auditv1.ActionPaaSExecutionTargetRegistered || record.Event.InstallationID != value.nodes.controller.InstallationID || record.Event.Target.ID != string(node.identity.ExecutionTargetID) || record.Event.Actor.Type != auditv1.ActorUser || record.Event.Actor.ID != auditv1.ActorID(node.operation.RequestedBy.ID) || record.Event.IAMDecisionID == "" || record.Event.TenantID != "" || (node.auditHash != "" && node.auditHash != record.RecordHash) {
+						return fail("native-original-admission-audit")
+					}
+					node.auditHash = record.RecordHash
+					found = true
+				}
+				if !found {
+					return fail("native-missing-admission-audit")
+				}
+			}
+			return nil
+		}
+		if !waitPoll(poll, 250*time.Millisecond) {
+			return fail("native-admission-audit-delivery")
+		}
+	}
+}
+
+func (value *gate) nativeStoredTarget(ctx context.Context, index int) (paasv1.ExecutionTarget, error) {
+	node := value.nodes.nodes[index]
+	ids, err := dockerLines(ctx, "container", "ls", "--quiet", "--filter", "label=com.xiak.matrix.installation="+node.identity.InstallationID, "--filter", "label=com.xiak.matrix.role=postgres")
+	if err != nil || len(ids) != 1 {
+		return paasv1.ExecutionTarget{}, fail("native-authority-database")
+	}
+	// The ID comes only from this gate's fixed fixture, never a caller string.
+	query := fmt.Sprintf("SELECT json_build_object('installationId',installation_id,'binding',binding_ref,'fingerprint',identity_fingerprint,'target',document)::text FROM paas.execution_targets WHERE id='offline-native-%d'", index+1)
+	content, err := docker(ctx, "container", "exec", "--user", "postgres", ids[0], "psql", "--no-psqlrc", "--tuples-only", "--no-align", "--set", "ON_ERROR_STOP=1", "--username", "matrix", "--dbname", "matrix", "--command", query)
+	var stored struct {
+		InstallationID string                 `json:"installationId"`
+		Binding        string                 `json:"binding"`
+		Fingerprint    string                 `json:"fingerprint"`
+		Target         paasv1.ExecutionTarget `json:"target"`
+	}
+	if err != nil || decodeOne(content, &stored) != nil || stored.InstallationID != node.identity.InstallationID || stored.Binding != node.binding || stored.Fingerprint != node.facts.Fingerprint || stored.Target.Metadata.ID != node.identity.ExecutionTargetID {
+		return paasv1.ExecutionTarget{}, fail("native-sealed-authority-binding")
+	}
+	return stored.Target, nil
+}
+
+func (value *gate) waitNativeStored(ctx context.Context, index int, health paasv1.ExecutionTargetHealth, after time.Time) (paasv1.ExecutionTarget, error) {
+	poll, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+	for {
+		target, err := value.nativeStoredTarget(poll, index)
+		if err != nil {
+			return paasv1.ExecutionTarget{}, err
+		}
+		if target.Status.Health == health && target.Status.Usage != nil && (after.IsZero() || target.Status.Usage.ObservedAt.After(after)) {
+			return target, nil
+		}
+		if !waitPoll(poll, 500*time.Millisecond) {
+			return paasv1.ExecutionTarget{}, fail("native-background-observer")
+		}
+	}
+}
+
+func (value *gate) nativeBackgroundAndOutage(ctx context.Context, bearer []byte) error {
+	before, err := value.nativeStoredTarget(ctx, 0)
+	if err != nil || before.Status.Usage == nil {
+		return fail("native-background-baseline")
+	}
+	// These waits read only committed SQL facts. No PaaS/node GET can cause the
+	// new sample whose timestamp is being asserted.
+	fresh, err := value.waitNativeStored(ctx, 0, paasv1.ExecutionTargetHealthReady, before.Status.Usage.ObservedAt)
+	if err != nil {
+		return err
+	}
+	fixture := value.nodes
+	unit, err := nodeconfig.ServiceName(fixture.nodes[0].identity, false)
+	if err != nil {
+		return fail("native-owned-unit")
+	}
+	if _, err = fixture.command(ctx, 0, "systemctl", "stop", unit); err != nil {
+		return err
+	}
+	unavailable, err := value.waitNativeStored(ctx, 0, paasv1.ExecutionTargetHealthUnavailable, time.Time{})
+	if err != nil || unavailable.Status.ObservedAt.Before(fresh.Status.ObservedAt) || unavailable.Status.Capacity.CPUMillis == 0 || unavailable.Status.Capacity.MemoryBytes == 0 {
+		return fail("native-outage-retained-physical-facts")
+	}
+	other, err := value.nativeStoredTarget(ctx, 1)
+	if err != nil || other.Status.Health != paasv1.ExecutionTargetHealthReady {
+		return fail("native-outage-isolation")
+	}
+	node := fixture.nodes[0]
+	replay, err := value.edge.json(ctx, http.MethodPost, "/api/paas/v1/execution-targets", bearer, paasv1.RegisterExecutionTargetRequest{ID: node.identity.ExecutionTargetID, Name: string(node.identity.ExecutionTargetID), ExecutionPoolID: nativePool, BindingRef: node.binding}, map[string]string{"Idempotency-Key": string(node.identity.ExecutionTargetID)}, http.StatusOK)
+	var operation paasv1.Operation
+	if err != nil || decodeOne(replay.body, &operation) != nil || !reflect.DeepEqual(operation, node.operation) {
+		clear(replay.body)
+		return fail("native-outage-admission-replay")
+	}
+	clear(replay.body)
+	if result, err := fixture.mx(ctx, 0, false, "start", "--root", nativeInstallationRoot); err != nil || result.ConfigurationDigest != node.digest {
+		return fail("native-reconnect-original-binding")
+	}
+	if _, err = value.waitNativeStored(ctx, 0, paasv1.ExecutionTargetHealthReady, fresh.Status.Usage.ObservedAt); err != nil {
+		return err
+	}
+	emit("native-background-without-readers-and-isolated-outage")
+	return nil
+}
+
+func (value *gate) rotateNativeCredentials(ctx context.Context, bearer []byte) error {
+	if value.nodes == nil {
+		return nil
+	}
+	ids, err := dockerLines(ctx, "container", "ls", "--quiet", "--no-trunc")
+	if err != nil {
+		return fail("native-rotation-platform-baseline")
+	}
+	before, err := inspectContainers(ctx, ids)
+	if err != nil {
+		return err
+	}
+	if err = value.nodes.credentials(ctx, value, true); err != nil {
+		return err
+	}
+	after, err := inspectContainers(ctx, ids)
+	if err != nil || len(before) != len(after) {
+		return fail("native-rotation-platform-preservation")
+	}
+	for index := range before {
+		if before[index].ID != after[index].ID || before[index].State.StartedAt != after[index].State.StartedAt || before[index].RestartCount != after[index].RestartCount || !after[index].State.Running {
+			return fail("native-rotation-restarted-platform")
+		}
+	}
+	if err = value.assertNativeNodes(ctx, bearer, false); err != nil {
+		return err
+	}
+	emit("native-complete-trust-replacement-without-platform-restart")
+	return nil
+}
+
+func (value *gate) nativeReleasePair(ctx context.Context, bearer []byte) error {
+	if value.nodes == nil {
+		return nil
+	}
+	fixture := value.nodes
+	for index, node := range fixture.nodes {
+		result, err := fixture.mx(ctx, index, false, "upgrade", "--root", nativeInstallationRoot, "--bundle", nativeFixtureRoot+"/node-b")
+		if err != nil || !result.Changed || result.ReleaseID != fixture.releases.b.Manifest.Release.ID || result.PreviousID != fixture.releases.a.Manifest.Release.ID || result.ConfigurationDigest != node.digest {
+			return fail("native-real-successor-upgrade")
+		}
+	}
+	if err := value.assertNativeNodes(ctx, bearer, true); err != nil {
+		return err
+	}
+	for index, node := range fixture.nodes {
+		result, err := fixture.mx(ctx, index, true, "rollback", "--root", nativeInstallationRoot)
+		if err != nil || !result.Changed || result.ReleaseID != fixture.releases.a.Manifest.Release.ID || result.PreviousID != "" || result.ConfigurationDigest != node.digest {
+			return fail("native-real-predecessor-rollback")
+		}
+	}
+	if err := value.assertNativeNodes(ctx, bearer, false); err != nil {
+		return err
+	}
+	emit("native-real-predecessor-successor-with-platform-and-latest-credentials")
+	return nil
+}
+
+func (value *gate) prepareNativeWorkloads(ctx context.Context) error {
+	var postgres release.Image
+	for _, image := range value.releases.a.Manifest.Images {
+		if image.Component == "postgres" {
+			postgres = image
+		}
+	}
+	if postgres.ImageID == "" || postgres.ArchivePath == "" {
+		return fail("native-signed-postgres-fixture")
+	}
+	fixture := value.nodes
+	for index := range fixture.nodes {
+		password, err := randomPassword(rand.Reader)
+		if err != nil {
+			return fail("native-workload-password")
+		}
+		path, err := privateFixtureFile(fixture.directory, fmt.Sprintf("workload-password-%d", index), password)
+		clear(password)
+		if err != nil {
+			return err
+		}
+		if err = fixture.copy(ctx, index, path, nativeFixtureRoot+"/workload-password", true, false); err != nil {
+			return err
+		}
+		if err = fixture.copy(ctx, index, filepath.Join(value.releases.a.Root, filepath.FromSlash(postgres.ArchivePath)), nativeFixtureRoot+"/postgres.tar", true, false); err != nil {
+			return err
+		}
+		if _, err = fixture.command(ctx, index, "docker", "load", "--input", nativeFixtureRoot+"/postgres.tar"); err != nil {
+			return err
+		}
+		if _, err = fixture.command(ctx, index, "docker", "volume", "create", "--label", "com.xiak.matrix.task=offline-native-gate", "matrix-offline-retained-data"); err != nil {
+			return err
+		}
+		if _, err = fixture.command(ctx, index, "docker", "run", "--detach", "--pull", "never", "--name", "matrix-offline-retained", "--label", "com.xiak.matrix.task=offline-native-gate", "--network", "none", "--cpus", "0.5", "--memory", "384m", "--memory-swap", "384m", "--pids-limit", "64", "--restart", "unless-stopped", "--mount", "type=volume,source=matrix-offline-retained-data,target=/var/lib/postgresql", "--mount", "type=bind,source="+nativeFixtureRoot+"/workload-password,target=/run/secrets/fixture-password,readonly", "--env", "POSTGRES_PASSWORD_FILE=/run/secrets/fixture-password", postgres.ImageID); err != nil {
+			return err
+		}
+		poll, cancel := context.WithTimeout(ctx, 90*time.Second)
+		for {
+			if _, err = fixture.command(poll, index, "docker", "exec", "--user", "postgres", "matrix-offline-retained", "pg_isready", "--username", "postgres"); err == nil {
+				break
+			}
+			if !waitPoll(poll, 500*time.Millisecond) {
+				cancel()
+				return fail("native-workload-ready")
+			}
+		}
+		cancel()
+		statement := fmt.Sprintf("CREATE TABLE matrix_retained (id integer PRIMARY KEY, marker text NOT NULL); INSERT INTO matrix_retained VALUES (1,'offline-native-%d')", index+1)
+		if _, err = fixture.command(ctx, index, "docker", "exec", "--user", "postgres", "matrix-offline-retained", "psql", "-XAt", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "postgres", "-c", statement); err != nil {
+			return err
+		}
+		workload, err := fixture.readWorkload(ctx, index)
+		if err != nil || !workload.Running || len(workload.ID) != 64 || workload.StartedAt == "" || workload.RestartCount != 0 {
+			return fail("native-workload-baseline")
+		}
+		fixture.nodes[index].workload = workload
+		if err = fixture.assertWorkload(ctx, index); err != nil {
+			return err
+		}
+	}
+	if fixture.nodes[0].workload.ID == fixture.nodes[1].workload.ID {
+		return fail("native-independent-workload-engines")
+	}
+	emit("two-isolated-native-postgres-retention-fixtures")
+	return nil
+}
+
+func (fixture *nativeNodes) readWorkload(ctx context.Context, index int) (nativeWorkload, error) {
+	format := `{"id":"{{.Id}}","startedAt":"{{.State.StartedAt}}","restartCount":{{.RestartCount}},"running":{{.State.Running}}}`
+	content, err := fixture.command(ctx, index, "docker", "container", "inspect", "--format", format, "matrix-offline-retained")
+	var workload nativeWorkload
+	if err != nil || decodeOne(content, &workload) != nil {
+		return nativeWorkload{}, fail("native-workload-observation")
+	}
+	return workload, nil
+}
+
+func sameNativeWorkload(before, after nativeWorkload) bool {
+	return before.Running && after.Running && before.ID != "" && before.ID == after.ID && before.StartedAt != "" && before.StartedAt == after.StartedAt && before.RestartCount == after.RestartCount
+}
+
+func (fixture *nativeNodes) assertWorkload(ctx context.Context, index int) error {
+	workload, err := fixture.readWorkload(ctx, index)
+	if err != nil || !sameNativeWorkload(fixture.nodes[index].workload, workload) {
+		return fail("native-workload-identity-and-uptime")
+	}
+	content, err := fixture.command(ctx, index, "docker", "exec", "--user", "postgres", "matrix-offline-retained", "psql", "-XAt", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "postgres", "-c", "SELECT marker FROM matrix_retained WHERE id=1")
+	if err != nil || strings.TrimSpace(string(content)) != fmt.Sprintf("offline-native-%d", index+1) {
+		return fail("native-workload-marker-retention")
+	}
+	return nil
+}
+
+// A private, sanitized experiment receipt links the two existing gate phases.
+// It is never presented to IAM, the node, or an installer as authority.
+type nativeRetainedNode struct {
+	Facts      nativeHostFacts  `json:"facts"`
+	Digest     string           `json:"digest"`
+	Operation  paasv1.Operation `json:"operation"`
+	AuditHash  string           `json:"auditHash"`
+	Workload   nativeWorkload   `json:"workload"`
+	ObservedAt time.Time        `json:"observedAt"`
+}
+
+type nativeRetention struct {
+	InstallationID   string               `json:"installationId"`
+	ControllerDigest string               `json:"controllerDigest"`
+	ReleaseID        string               `json:"releaseId"`
+	ReleaseDigest    string               `json:"releaseDigest"`
+	Nodes            []nativeRetainedNode `json:"nodes"`
+}
+
+func (value *gate) saveNativeRetention(ctx context.Context) error {
+	if value.nodes == nil {
+		return nil
+	}
+	fixture := value.nodes
+	retained := nativeRetention{InstallationID: fixture.controller.InstallationID, ControllerDigest: value.controllerConfigDigest, ReleaseID: fixture.releases.a.Manifest.Release.ID, ReleaseDigest: fixture.releases.a.ManifestSHA256}
+	for index, node := range fixture.nodes {
+		target, err := value.nativeStoredTarget(ctx, index)
+		if err != nil || target.Status.Usage == nil {
+			return fail("native-retained-observation")
+		}
+		if _, err := fixture.mx(ctx, index, false, "verify", "--root", nativeInstallationRoot); err != nil {
+			return err
+		}
+		retained.Nodes = append(retained.Nodes, nativeRetainedNode{Facts: node.facts, Digest: node.digest, Operation: node.operation, AuditHash: node.auditHash, Workload: node.workload, ObservedAt: target.Status.Usage.ObservedAt})
+	}
+	content, err := json.Marshal(retained)
+	if err != nil {
+		return fail("native-retention-encoding")
+	}
+	_, err = privateFixtureFile(filepath.Dir(value.config.nativeNodes), "retained.json", content)
+	return err
+}
+
+func (value *gate) afterNativeRestart(ctx context.Context, installationID string) error {
+	if value.config.nativeNodes == "" {
+		return nil
+	}
+	inputBytes, err := os.ReadFile(value.config.nativeNodes)
+	var input nativeFixtureInput
+	if err != nil || len(inputBytes) > 16*1024 || decodeOne(inputBytes, &input) != nil || validateNativeFixture(input) != nil {
+		return fail("native-restart-input")
+	}
+	content, err := os.ReadFile(filepath.Join(filepath.Dir(value.config.nativeNodes), "retained.json"))
+	var retained nativeRetention
+	if err != nil || len(content) > 64*1024 || decodeOne(content, &retained) != nil || len(retained.Nodes) != 2 || retained.InstallationID != installationID || retained.ControllerDigest != value.controllerConfigDigest {
+		return fail("native-restart-retention")
+	}
+	trust, err := os.ReadFile(value.config.trustKey)
+	if err != nil {
+		return fail("native-restart-release-trust")
+	}
+	defer clear(trust)
+	a, err := release.VerifyDirectory(input.ReleaseA, trust)
+	if err != nil || a.Manifest.Kind != release.NodeManifestKind || a.Manifest.Node == nil || a.Manifest.Node.RuntimeRevision != nodeconfig.RuntimeRevision || a.Manifest.Release.ID != retained.ReleaseID || a.ManifestSHA256 != retained.ReleaseDigest {
+		return fail("native-restart-predecessor-release")
+	}
+	controllerBytes, err := os.ReadFile(filepath.Join(value.config.root, filepath.FromSlash(layout.NodeControllerConfiguration)))
+	if err != nil {
+		return fail("native-restart-controller")
+	}
+	defer clear(controllerBytes)
+	controller, err := nodeconfig.DecodeController(controllerBytes)
+	if err != nil {
+		return fail("native-restart-controller")
+	}
+	defer controller.Clear()
+	digest, err := nodeconfig.ControllerDigest(controller)
+	if err != nil || digest != retained.ControllerDigest || controller.InstallationID != installationID || len(controller.Nodes) != 2 {
+		return fail("native-restart-latest-controller")
+	}
+	fixture := &nativeNodes{input: input, directory: filepath.Dir(value.config.nativeNodes), releases: releasePair{a: a}, controller: controller}
+	value.nodes = fixture
+	driver, err := os.Executable()
+	if err != nil {
+		return fail("native-restart-probe-driver")
+	}
+	for index, saved := range retained.Nodes {
+		targetID := paasv1.ResourceID(fmt.Sprintf("offline-native-%d", index+1))
+		if !validNativeFacts(saved.Facts) || paasv1.ValidateOperation(saved.Operation) != nil || saved.Operation.InstallationID != installationID || saved.Operation.Target.ID != targetID || paasv1.ValidateDigest("digest", saved.Digest) != nil || paasv1.ValidateDigest("auditHash", saved.AuditHash) != nil || saved.ObservedAt.IsZero() {
+			return fail("native-restart-node-receipt")
+		}
+		node := nativeNodeState{input: input.Nodes[index], facts: saved.Facts, identity: nodev1.Identity{InstallationID: installationID, ExecutionTargetID: targetID}, binding: fmt.Sprintf("offline-native-%d-connection", index+1), digest: saved.Digest, operation: saved.Operation, auditHash: saved.AuditHash, workload: saved.Workload}
+		fixture.nodes = append(fixture.nodes, node)
+		if err := fixture.waitPrepared(ctx, index); err != nil {
+			return err
+		}
+		if err = fixture.copy(ctx, index, driver, nativeFixtureRoot+"/probe.test", true, false); err != nil {
+			return err
+		}
+		if _, err = fixture.command(ctx, index, "env", "MATRIX_PHASE1_NATIVE_HOST_PROBE=after-restart", nativeFixtureRoot+"/probe.test", "-test.run=^TestOfflineNativeHostProbe$", "-test.count=1"); err != nil {
+			return err
+		}
+		factsPath := filepath.Join(fixture.directory, fmt.Sprintf("facts-after-restart-%d.json", index))
+		if err = fixture.copy(ctx, index, factsPath, nativeFixtureRoot+"/facts-after-restart.json", false, false); err != nil {
+			return err
+		}
+		factsBytes, err := os.ReadFile(factsPath)
+		var facts nativeHostFacts
+		if err != nil || decodeOne(factsBytes, &facts) != nil || !sameNativeHostAfterBoot(saved.Facts, facts) {
+			return fail("native-actual-kernel-boot-and-identity")
+		}
+		poll, cancel := context.WithTimeout(ctx, 3*time.Minute)
+		for {
+			status, err := fixture.mx(poll, index, false, "status", "--root", nativeInstallationRoot)
+			if err == nil && !status.Changed && status.ReleaseID == retained.ReleaseID && status.ConfigurationDigest == saved.Digest {
+				break
+			}
+			if !waitPoll(poll, time.Second) {
+				cancel()
+				return fail("native-automatic-sealed-boot-startup")
+			}
+		}
+		cancel()
+		// Read-only status was the first node command: no test start/reconcile
+		// can make a broken persistent boot entry appear to have succeeded.
+		workload, err := fixture.readWorkload(ctx, index)
+		oldStart, oldErr := time.Parse(time.RFC3339Nano, saved.Workload.StartedAt)
+		newStart, newErr := time.Parse(time.RFC3339Nano, workload.StartedAt)
+		if err != nil || !workload.Running || workload.ID != saved.Workload.ID || oldErr != nil || newErr != nil || !newStart.After(oldStart) {
+			return fail("native-post-boot-workload-identity")
+		}
+		fixture.nodes[index].workload = workload
+		if err = fixture.assertWorkload(ctx, index); err != nil {
+			return err
+		}
+		observed, err := value.waitNativeStored(ctx, index, paasv1.ExecutionTargetHealthReady, saved.ObservedAt)
+		if err != nil || !matchesNativeObservation(observed, fixture.nodes[index]) {
+			return fail("native-post-boot-background-reconnection")
+		}
+		if err = value.nativeStoredHistory(ctx, index); err != nil {
+			return err
+		}
+	}
+	emit("two-real-native-kernel-boots-auto-reconnected-with-retained-data")
+	return nil
+}
+
+func sameNativeHostAfterBoot(before, after nativeHostFacts) bool {
+	return validNativeFacts(before) && validNativeFacts(after) && before.BootID != after.BootID && before.Fingerprint == after.Fingerprint && before.EngineID == after.EngineID && before.CPUs == after.CPUs && before.MemoryBytes == after.MemoryBytes && before.StorageBytes == after.StorageBytes
+}
+
+func (value *gate) nativeStoredHistory(ctx context.Context, index int) error {
+	node := value.nodes.nodes[index]
+	ids, err := dockerLines(ctx, "container", "ls", "--quiet", "--filter", "label=com.xiak.matrix.installation="+node.identity.InstallationID, "--filter", "label=com.xiak.matrix.role=postgres")
+	if err != nil || len(ids) != 1 || paasv1.ValidateID("operationId", string(node.operation.ID)) != nil || paasv1.ValidateDigest("recordHash", node.auditHash) != nil {
+		return fail("native-post-boot-history-input")
+	}
+	query := fmt.Sprintf("SELECT document FROM paas.operations WHERE id='%s'; SELECT record_hash FROM audit.records WHERE record_hash='%s'", node.operation.ID, node.auditHash)
+	content, err := docker(ctx, "container", "exec", "--user", "postgres", ids[0], "psql", "--no-psqlrc", "--tuples-only", "--no-align", "--set", "ON_ERROR_STOP=1", "--username", "matrix", "--dbname", "matrix", "--command", query)
+	lines := strings.Split(strings.TrimSpace(string(content)), "\n")
+	var operation paasv1.Operation
+	if err != nil || len(lines) != 2 || decodeOne([]byte(lines[0]), &operation) != nil || !reflect.DeepEqual(operation, node.operation) || lines[1] != node.auditHash {
+		return fail("native-post-boot-original-operation-and-audit")
+	}
+	return nil
+}

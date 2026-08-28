@@ -221,6 +221,16 @@ after data-preserving rollback, and prove that only explicit restoration of the
 earlier backup removes those later records. Same-source A/B remains a lifecycle
 fixture, not proof of a separately built predecessor.
 
+Its optional native companion uses two independently booted, empty workload
+engines in the same externally disconnected experiment. Pinned loopback SSH
+forwards are fixture preparation only, never a runtime adapter or a source of
+fabricated host facts. Signed enrollment and platform admission must bind the
+actual machine/engine identities, CPU, memory and filesystem observations;
+background refresh is checked without an HTTP reader. Admission Operations,
+Audit hashes, latest trust and real database fixture data must survive the
+combined platform/node lifecycle and automatic native boot. These database
+fixtures do not count as P3-2 remote application delivery.
+
 The first node distribution is a distinct, closed `OfflineNodeRelease` in
 the existing signed release owner, containing `mx`, the node executable and
 the pinned collector, not platform images or a fictitious database profile.
