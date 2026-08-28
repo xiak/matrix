@@ -468,8 +468,10 @@ configuration, database-service and Operation matrix; pause/recovery and delayed
 dual-outbox delivery; and this branch's existing host admission, observation,
 revocation and Audit correlation. No real database workload provisioning is
 claimed by those pending-record tests. Full Go tests/vet, Linux race/build,
-module verification and stable contract generation passed; independent
-consuming-commit CI remains required before handoff. UI evidence is owned by
+module verification and stable contract generation passed. Consuming source
+`a3486f16809f3ae4c1e9c1bd38a7e6b2510a5d63` passed all three jobs in
+[independent CI](https://github.com/xiak/matrix/actions/runs/33140297585), including
+the retained-executable authority and real node/collector regressions. UI evidence is owned by
 [FEAT-007](FEAT-007-control-plane-console.md). The complete multi-tenant and
 offline release extension remains unaccepted.
 

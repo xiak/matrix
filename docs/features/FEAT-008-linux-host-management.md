@@ -443,7 +443,7 @@ modes were restored after the Windows-origin transfer before verification.
 This is not evidence of a portable archive format, certificate renewal/revocation,
 or a compatible signed platform/node release pair.
 
-Next in P3-1 after the integrated authority slice's independent gates:
+Next in P3-1:
 installation-owned certificate lifecycle and explicit platform authorization
 when upgrading an older installation, before remote application delivery.
 P3-1 and the complete Phase 3 release remain unaccepted.
