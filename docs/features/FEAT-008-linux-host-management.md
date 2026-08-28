@@ -226,6 +226,39 @@ until a later manager reload changes their meaning. The signed node runtime
 contract binds this restriction. External enrollment input files are copied
 into the protected root and are not native mount sources.
 
+Node credential rotation is an installation command, not a writable node API.
+`mx node rotate-credentials` consumes protected enrollment input and the expected
+current configuration digest. It may change only the node/collector certificate,
+key and management trust bytes; installation/target, controller, binding, host
+fingerprint, addresses, reserve policy, storage and signed release stay fixed.
+The existing journal seals the old and candidate commitments before activation.
+Both sets are staged in protected installation-owned storage so an interrupted
+replacement can resume the same command without the original input files.
+Only the exact node and collector processes are reconciled; executor receipts,
+Docker workloads and boot ownership are retained. Expiry of the old certificates
+does not prevent an authorized rotation of their still-authenticated sealed bytes.
+
+The default rotation replaces the complete management trust set and both private
+keys. It rejects retained old trust keys and is the first revocation primitive;
+ordinary same-trust certificate renewal requires explicit `--revoke-previous=false`.
+Revocation is not automatically rolled back after activation failure. The sealed
+candidate remains the recovery intent, failed verification stays unaccepted, and
+restart must not silently restore the old credential set. This is a bounded local
+trust-domain replacement, not CRL/OCSP, automatic CA issuance or zero-gap CA overlap.
+The control plane reloads protected credential references at each new node TLS
+connection, without changing the admitted node mapping or falling back to cached
+credentials on invalid input. Completing the trust switch requires updating that
+installation-owned control-plane input as well; local node readiness alone is not
+proof that every consumer has revoked the previous node credential.
+
+The existing TLS, lifecycle, native-effect and process gates must prove successful
+renewal, old-peer rejection after the complete trust switch, exact replay and stale
+digest conflict, wrong identity/address/key rejection before effects, interruption
+at replacement boundaries, retained workload/receipt state and restart with only
+the committed credentials. The signed node runtime revision changes for this
+capability; it does not change the platform authority database profile or admit an
+unverified older node release.
+
 Stage compatible upgrades without disrupting workloads. Failed verification
 restores the previous executable/configuration; explicit N-1 rollback retains
 compatible data. Both versions read retained receipts and communicate with the
