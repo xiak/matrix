@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"os/exec"
@@ -18,6 +19,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -76,6 +78,62 @@ func TestRuntimeDSNBindsLeastPrivilegeLogin(t *testing.T) {
 	direct, err := pgx.ParseConfig(localRecoveryMigrationDSN(t, runtimeDSN(t, admin, paasAPILogin, password)))
 	if err != nil || direct.User != actual.ConnConfig.User || direct.Password != actual.ConnConfig.Password || direct.Host != admin.Host || direct.Port != admin.Port || direct.Database != admin.Database || direct.RuntimeParams["pool_max_conns"] != "" {
 		t.Fatal("migration DSN changed its restricted identity or retained a pool-only server parameter")
+	}
+}
+
+func TestPlatformAuditObservationRetriesOnlyExplicitUnavailable(t *testing.T) {
+	const unavailable = `{"type":"https://matrix.xiak.com/problems/audit.unavailable","title":"Audit unavailable","status":503,"code":"audit.unavailable","requestId":"request-observation"}`
+	for _, scenario := range []struct {
+		name, body             string
+		status, attempts, want int
+		persistent, verify     bool
+	}{
+		{name: "busy query", body: unavailable, status: 503, attempts: 2, want: 200},
+		{name: "busy verification", body: unavailable, status: 503, attempts: 2, want: 200, verify: true},
+		{name: "bounded persistent unavailability", body: unavailable, status: 503, attempts: 5, want: 503, persistent: true},
+		{name: "denied", body: `{}`, status: 403, attempts: 1, want: 403, persistent: true},
+		{name: "unauthenticated", body: `{}`, status: 401, attempts: 1, want: 401, persistent: true},
+		{name: "other failure", body: unavailable, status: 500, attempts: 1, want: 500, persistent: true},
+		{name: "malformed unavailable", body: `{`, status: 503, attempts: 1, want: 503, persistent: true},
+		{name: "wrong problem", body: strings.ReplaceAll(unavailable, "audit.unavailable", "iam.unavailable"), status: 503, attempts: 1, want: 503, persistent: true},
+		{name: "wrong status", body: strings.Replace(unavailable, `"status":503`, `"status":403`, 1), status: 503, attempts: 1, want: 503, persistent: true},
+		{name: "duplicate field", body: strings.Replace(unavailable, `"status":503`, `"status":503,"status":503`, 1), status: 503, attempts: 1, want: 503, persistent: true},
+		{name: "invalid success is not retried", body: `{`, status: 200, attempts: 1, want: 200, persistent: true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			var attempts atomic.Int32
+			path := "/v1/platform/records:query"
+			var input any = auditv1.QueryRecordsRequest{PageSize: 20}
+			if scenario.verify {
+				path, input = "/v1/platform/integrity:verify", auditv1.VerifyChainRequest{FromSequence: 1, MaximumRecords: 20}
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost || r.URL.Path != path || r.Header.Get("Authorization") != "Bearer observation-reader" {
+					t.Error("Audit observation changed route or authority")
+				}
+				status, body := http.StatusOK, `{}`
+				if attempts.Add(1) == 1 || scenario.persistent {
+					status, body = scenario.status, scenario.body
+				}
+				media := "application/json"
+				if status >= 400 {
+					media = "application/problem+json"
+				}
+				w.Header().Set("Content-Type", media)
+				w.WriteHeader(status)
+				_, _ = io.WriteString(w, body)
+			}))
+			defer server.Close()
+			response := performPlatformAuditObservation(t, server.URL, "observation-reader", input)
+			if response.Status != scenario.want || int(attempts.Load()) != scenario.attempts {
+				t.Fatalf("Audit observation status=%d attempts=%d", response.Status, attempts.Load())
+			}
+			// Successful bodies still reach the original full page/chain checks;
+			// this bounded availability wait cannot turn malformed data valid.
+			if scenario.persistent && string(response.Body) != scenario.body {
+				t.Fatal("Audit observation rewrote a rejected or invalid response")
+			}
+		})
 	}
 }
 
@@ -1453,6 +1511,42 @@ func assertPlatformAuthorization(
 	return decision
 }
 
+func performPlatformAuditObservation(t *testing.T, endpoint, credential string, body any) processResponse {
+	t.Helper()
+	var path string
+	switch body.(type) {
+	case auditv1.QueryRecordsRequest:
+		path = "/v1/platform/records:query"
+	case auditv1.VerifyChainRequest:
+		path = "/v1/platform/integrity:verify"
+	default:
+		t.Fatal("unsupported platform Audit observation")
+	}
+	// Audit reads append their own facts. A busy SERIALIZABLE chain may
+	// exhaust its database retry budget while dispatchers catch up. Keep the
+	// same observation and authority, with at most five bounded HTTP calls.
+	for attempt := 0; ; attempt++ {
+		response := performJSON(t, http.MethodPost, endpoint+path, credential, body)
+		if response.Status != http.StatusServiceUnavailable || attempt == 4 {
+			return response
+		}
+		var problem auditv1.Problem
+		if auditv1.DecodeRequest(bytes.NewReader(response.Body), &problem) != nil || auditv1.ValidateProblem(problem) != nil ||
+			problem.Status != http.StatusServiceUnavailable || problem.Code != "audit.unavailable" ||
+			problem.Type != "https://matrix.xiak.com/problems/audit.unavailable" {
+			return response
+		}
+		timer := time.NewTimer(250 * time.Millisecond)
+		select {
+		case <-t.Context().Done():
+			timer.Stop()
+			return response
+		case <-timer.C:
+			clear(response.Body)
+		}
+	}
+}
+
 func assertPlatformAuditAccess(t *testing.T, endpoint, credential string, status int) {
 	t.Helper()
 	for _, query := range []struct {
@@ -1462,7 +1556,12 @@ func assertPlatformAuditAccess(t *testing.T, endpoint, credential string, status
 		{"/v1/platform/records:query", auditv1.QueryRecordsRequest{PageSize: 20}},
 		{"/v1/platform/integrity:verify", auditv1.VerifyChainRequest{FromSequence: 1, MaximumRecords: 20}},
 	} {
-		response := performJSON(t, http.MethodPost, endpoint+query.path, credential, query.body)
+		var response processResponse
+		if status == http.StatusOK {
+			response = performPlatformAuditObservation(t, endpoint, credential, query.body)
+		} else {
+			response = performJSON(t, http.MethodPost, endpoint+query.path, credential, query.body)
+		}
 		if response.Status != status {
 			t.Fatalf("platform Audit %s status=%d want=%d", query.path, response.Status, status)
 		}
@@ -1845,7 +1944,7 @@ func proveTenantAccountProcesses(
 	}
 	waitAllIAMOutboxDelivered(t, ctx, admin)
 	for _, action := range []auditv1.Action{auditv1.ActionIAMTenantCreated, auditv1.ActionIAMTenantDisabled, auditv1.ActionIAMTenantEnabled, auditv1.ActionIAMTenantAdministratorRecovered} {
-		response := performJSON(t, http.MethodPost, auditEndpoint+"/v1/platform/records:query", bearer, auditv1.QueryRecordsRequest{PageSize: 100, Action: action})
+		response := performPlatformAuditObservation(t, auditEndpoint, bearer, auditv1.QueryRecordsRequest{PageSize: 100, Action: action})
 		var records auditv1.RecordPage
 		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &records) != nil || len(records.Records) != 1 || records.InstallationID != "installation-process" || records.TenantID != "" {
 			t.Fatalf("lifecycle platform audit action=%s status=%d", action, response.Status)

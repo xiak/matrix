@@ -218,7 +218,7 @@ func createPlatformHost(t *testing.T, ctx context.Context, admin *pgx.Conn, paas
 	node.setUnavailable(false)
 	waitProcessHostHealth(t, ctx, admin, "READY")
 	waitAllPaaSOutboxDelivered(t, ctx, admin)
-	response := performJSON(t, http.MethodPost, auditEndpoint+"/v1/platform/records:query", credential, auditv1.QueryRecordsRequest{PageSize: 200})
+	response := performPlatformAuditObservation(t, auditEndpoint, credential, auditv1.QueryRecordsRequest{PageSize: 200})
 	var page auditv1.RecordPage
 	if response.Status != http.StatusOK || json.Unmarshal(response.Body, &page) != nil || auditv1.ValidateRecordPage(page) != nil {
 		t.Fatal("cannot query installation admission Audit")
