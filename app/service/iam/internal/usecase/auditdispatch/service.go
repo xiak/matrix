@@ -61,7 +61,7 @@ func (usecase *Usecase) DispatchOnce(ctx context.Context) (Result, error) {
 	if !found {
 		return Result{}, nil
 	}
-	if err := validateClaim(claim); err != nil {
+	if err := ValidateClaim(claim); err != nil {
 		return Result{}, fmt.Errorf("validate claimed IAM Audit event: %w", err)
 	}
 	result := Result{Claimed: true}
@@ -105,11 +105,25 @@ func (usecase *Usecase) Snapshot(ctx context.Context) (Snapshot, error) {
 	return usecase.repository.Snapshot(ctx)
 }
 
-func validateClaim(claim Claim) error {
+// ValidateClaim binds the event chain to its independently stored IAM owner.
+func ValidateClaim(claim Claim) error {
 	var problems []error
-	problems = append(problems, auditv1.ValidateEventForSource(auditv1.SourceIAM, claim.Event))
-	if claim.TenantID != claim.Event.TenantID || claim.EventID != claim.Event.EventID {
+	problems = append(problems,
+		auditv1.ValidateEventForSource(auditv1.SourceIAM, claim.Event),
+		auditv1.ValidateID("organizationId", string(claim.OrganizationID)),
+	)
+	if claim.InstallationID != "" {
+		problems = append(problems, auditv1.ValidateID("installationId", claim.InstallationID))
+	}
+	if claim.EventID != claim.Event.EventID {
 		problems = append(problems, errors.New("IAM Audit claim and event identity differ"))
+	}
+	if claim.Event.InstallationID != "" {
+		if claim.InstallationID != claim.Event.InstallationID {
+			problems = append(problems, errors.New("IAM Audit event differs from its owner's sealed installation"))
+		}
+	} else if string(claim.OrganizationID) != string(claim.Event.TenantID) {
+		problems = append(problems, errors.New("IAM Audit event differs from its owning tenant"))
 	}
 	if claim.Attempts < 1 || claim.Attempts > 100 {
 		problems = append(problems, errors.New("IAM Audit claim attempt is invalid"))

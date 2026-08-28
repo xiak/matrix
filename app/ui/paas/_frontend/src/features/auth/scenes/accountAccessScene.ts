@@ -6,7 +6,7 @@ export const roleLabels: Record<IdentityRole, string> = {
 };
 
 export const roleDescriptions: Record<IdentityRole, string> = {
-  PLATFORM_OPERATOR: "管理安装级平台资源；不隐含任何租户的数据读取或成员管理权限。",
+  PLATFORM_OPERATOR: "管理安装级平台资源和租户开通、停复用、原主账号恢复；不隐含租户数据读取或成员管理权限。",
   ORGANIZATION_ADMIN: "管理本租户的用户、授权、别名、PaaS 资源与审计记录；不能开通新租户或访问其他租户资源。",
   PAAS_DEVELOPER: "查看本租户的 PaaS 资源，激活配额、创建服务实例，以及管理应用部署；不能管理账号或授权。",
   PAAS_VIEWER: "只读查看本租户的 PaaS 资源、配额与运行状态；不能创建或修改资源。",
@@ -29,16 +29,21 @@ export function buildAccountAccessScene(identity: AccountIdentity, users: Direct
     users: users?.items.filter(({ principal }) => principal.id !== account.primaryPrincipalId).map(({ principal, roleBindings }) => ({
       id: principal.id, name: principal.displayName, loginName: principal.loginName,
       qualifiedName: `${principal.loginName}@${account.loginAlias ?? account.organization.id}`,
-      protected: principal.id === identity.principal.id,
+      credentialProtection: roleBindings.some((binding) => binding.role === "PLATFORM_OPERATOR") ? "platform" : principal.id === identity.principal.id ? "self" : null,
       enabled: principal.status === "ACTIVE", resourceVersion: principal.resourceVersion,
       statusLabel: principal.status === "DISABLED" ? "已禁用" : principal.mustChangePassword ? "待修改初始密码" : "正常",
       bindings: roleBindings.map((binding) => ({ ...binding, label: roleLabels[binding.role] }))
     })) ?? [],
     nextUserPage: users?.nextAfter ?? null,
-    accounts: accounts?.items.map((entry) => ({ id: entry.organization.id, name: entry.organization.displayName, loginAlias: entry.loginAlias, primaryLoginName: entry.primaryLoginName })) ?? [],
+    accounts: accounts?.items.map((entry) => ({
+      id: entry.organization.id, name: entry.organization.displayName, loginAlias: entry.loginAlias,
+      primaryLoginName: entry.primaryLoginName, primaryPrincipalId: entry.primaryPrincipalId,
+      enabled: entry.organization.status === "ACTIVE", resourceVersion: entry.organization.resourceVersion
+    })) ?? [],
     nextAccountPage: accounts?.nextAfter ?? null
   };
 }
 
 export type AccountAccessScene = ReturnType<typeof buildAccountAccessScene>;
 export type AccountUserScene = AccountAccessScene["users"][number];
+export type TenantAccountScene = AccountAccessScene["accounts"][number];

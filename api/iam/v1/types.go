@@ -164,6 +164,9 @@ type ChangePasswordRequest struct {
 	CurrentPassword Secret `json:"currentPassword"`
 	NewPassword     Secret `json:"newPassword"`
 	RequestID       string `json:"requestId"`
+	// Omission defaults to true. Required password replacement always revokes
+	// other sessions, even if the caller submits false.
+	RevokeOtherSessions *bool `json:"revokeOtherSessions,omitempty"`
 }
 
 type ChangePasswordResponse struct {
@@ -235,6 +238,20 @@ type SetPrincipalStatusRequest struct {
 	Status          PrincipalStatus `json:"status"`
 	ResourceVersion uint64          `json:"resourceVersion"`
 	RequestID       string          `json:"requestId"`
+}
+
+type SetOrganizationStatusRequest struct {
+	Status          OrganizationStatus `json:"status"`
+	ResourceVersion uint64             `json:"resourceVersion"`
+	RequestID       string             `json:"requestId"`
+}
+
+// Recovery names the existing primary USER; it cannot select a new owner.
+type RecoverOrganizationAdministratorRequest struct {
+	PrincipalID     PrincipalID `json:"principalId"`
+	InitialPassword Secret      `json:"initialPassword"`
+	ResourceVersion uint64      `json:"resourceVersion"`
+	RequestID       string      `json:"requestId"`
 }
 
 type ResetUserPasswordRequest struct {

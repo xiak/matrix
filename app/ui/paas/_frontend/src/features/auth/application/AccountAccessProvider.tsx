@@ -61,14 +61,14 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       return buildAccountAccessScene(identity, users, accounts);
     }
     read().then((loaded) => { if (active) { setScene(loaded); setError(null); } },
-      (failure: unknown) => { if (active) { setScene(null); setError(accountError(failure)); } })
+      (failure: unknown) => { if (active) { setScene(null); setSuccess(null); setError(accountError(failure)); } })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [credential, page, principalId, repository, revision, tenantId]);
 
   const value = useMemo<AccountAccess>(() => ({
     scene, loading, busy, error, success,
-    reload() { setLoading(true); setRevision((current) => current + 1); },
+    reload() { setLoading(true); setSuccess(null); setRevision((current) => current + 1); },
     usersPage(after) { setLoading(true); setPage((current) => ({ ...current, users: after })); },
     accountsPage(after) { setLoading(true); setPage((current) => ({ ...current, accounts: after })); },
     async execute(command) {
@@ -80,7 +80,10 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         setSuccess("操作已完成。");
         setLoading(true); setRevision((current) => current + 1);
         return true;
-      } catch (failure) { setError(accountError(failure)); return false; }
+      } catch (failure) {
+        if (failure instanceof HttpProblem && failure.status === 401) setScene(null);
+        setError(accountError(failure)); return false;
+      }
       finally { mutationPending.current = false; setBusy(false); }
     }
   }), [busy, credential, error, loading, repository, scene, success]);

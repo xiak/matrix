@@ -11,6 +11,7 @@
 | --- | --- | --- |
 | Complete Discord-style Next.js UI | `69336e51f94fa98f6aa278fa4c62382e224dbeaf` | Sole architecture and visual-style donor; read only through Git object commands and exclude its worktree. |
 | PaaS product-design record | `338d9b5fcb820120c32265e380c55e5f171cdb75` | Product-boundary reference only; it is not a second UI architecture or style donor. |
+| Matrix IAM lifecycle and credential-session console | `5721b7b1a985f25c9730ddb9229a51f7f6c3b63a` | Fixed same-repository source only; preserve the current UI architecture and do not read its worktree or import generated assets or acceptance state. |
 
 The FEAT-007 outcome, user journey, ownership, model, authority boundary, and
 three acceptance gates were fixed before the following adoption decisions.
@@ -66,6 +67,15 @@ Matrix Phase 1 product.
 | Next.js 16 and React 19 as a proposed baseline | `REFERENCE` | This corroborates the selected framework family, but the fixed complete application owns the adopted App Router pattern. Installation still performs no package-manager or framework-server work. |
 | transport parser -> view model -> page, unknown/stale/error states, server-side authorization, and no provider secrets in UI | `REFERENCE` | These are product constraints. The actual route -> provider -> repository -> scene -> renderer chain is adapted only from the complete UI donor. |
 | legacy component projections, GitLab Provider, current DevOps scripts as source of truth, signed web assertion, and CLI/GitLab escape-hatch roadmap | `REJECT` | Phase 1 now owns application hosting, IAM, Audit, Operations, installation, and Compose execution inside this repository. Reintroducing the legacy execution authority or its compatibility routes would contradict the accepted product boundary. |
+
+## Same-repository authority consumption
+
+| Slice at `5721b7b` | Decision | Rationale |
+| --- | --- | --- |
+| Existing account provider, repository, scene and renderer | `ADAPT` | Consume FEAT-006's explicit platform tenant lifecycle and original-primary recovery without a second account model or UI-only authority. Retain version-bound confirmation, protected platform credentials and secret clearing. |
+| Session provider and existing login/settings forms | `ADAPT` | Offer the current ordinary-change session option, force the initial-change policy and keep credentials memory-only. Uncertain results and late responses cannot promote a temporary session or undo logout/expiry. |
+| Existing control-plane failure notice and refreshed order choices | `ADAPT` | Keep write failures visible through background polling and in the active compact panel; discard unauthorized snapshots and require an explicit valid target after choices disappear. Reuse existing behavior-test owners. |
+| Embedded export, donor FEAT/checkpoint and browser/offline results | `REJECT` as imported state | Regenerate this branch's static export and independently verify its consuming profile. Component evidence is not installed-browser or offline acceptance. |
 
 ## Resulting implementation constraints
 

@@ -21,12 +21,7 @@ CREATE TABLE IF NOT EXISTS iam.account_aliases (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS account_alias_active_uq ON iam.account_aliases (tenant_id) WHERE active;
 
-CREATE OR REPLACE FUNCTION iam.is_bootstrap_administrator(tenant text, principal text)
-RETURNS boolean LANGUAGE sql SECURITY DEFINER
-SET search_path = pg_catalog, pg_temp AS $function$
-    SELECT EXISTS (SELECT 1 FROM iam.bootstrap_receipts AS receipt
-        WHERE receipt.organization_id = tenant AND receipt.administrator_principal_id = principal)
-$function$;
+DROP FUNCTION IF EXISTS iam.is_bootstrap_administrator(text,text);
 
 CREATE OR REPLACE FUNCTION iam.lookup_login(submitted_login_name text)
 RETURNS TABLE (tenant_id text, principal_id text, password_hash text,
@@ -188,10 +183,7 @@ CREATE OR REPLACE FUNCTION iam.list_accounts(tenant text, actor text, decision t
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $function$
 DECLARE result jsonb := '[]'::jsonb; candidate record;
 BEGIN
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.organization.read','ORGANIZATION',tenant);
-    IF NOT iam.is_bootstrap_administrator(tenant,actor) THEN
-        RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='account directory is forbidden';
-    END IF;
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.organization.read','ORGANIZATION','organizations');
     IF after_id IS NULL OR (after_id <> '' AND after_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$') THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='page boundary is invalid';
     END IF;
@@ -203,6 +195,17 @@ BEGIN
 END
 $function$;
 
+CREATE OR REPLACE FUNCTION iam.read_organization(tenant text, actor text, decision text, target_tenant text)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $function$
+DECLARE result jsonb;
+BEGIN
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.organization.read','ORGANIZATION',target_tenant);
+    result := iam.account_snapshot(target_tenant);
+    IF result IS NULL THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='organization is unavailable'; END IF;
+    RETURN result;
+END
+$function$;
+
 CREATE OR REPLACE FUNCTION iam.append_account_event(tenant text, actor text, decision text,
     action text, target_kind text, target_id text, event jsonb)
 RETURNS void LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $function$
@@ -210,7 +213,11 @@ BEGIN
     PERFORM set_config('matrix.iam_tenant_id',tenant,true);
     PERFORM iam.assert_audit_event(event,tenant,action,target_kind,target_id,'SUCCEEDED');
     PERFORM iam.assert_user_audit_actor(tenant,actor,event);
-    IF event->>'iamDecisionId' IS DISTINCT FROM decision THEN
+    IF event->>'iamDecisionId' IS DISTINCT FROM decision
+        OR NOT EXISTS(SELECT 1 FROM iam.authorization_decisions AS original
+            WHERE original.tenant_id=tenant AND original.id=decision AND original.principal_id=actor
+                AND original.request_id=event->>'requestId' AND original.request_id=event->>'correlationId'
+                AND original.decided_at=transaction_timestamp()) THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='account decision correlation is invalid';
     END IF;
     INSERT INTO iam.audit_outbox(tenant_id,event_id,event_document,next_attempt_at,created_at,updated_at)
@@ -224,9 +231,6 @@ RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg
 DECLARE result jsonb; effective_now timestamptz := transaction_timestamp();
 BEGIN
     PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.organization.create','ORGANIZATION',new_id);
-    IF NOT iam.is_bootstrap_administrator(tenant,actor) THEN
-        RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='account opening is forbidden';
-    END IF;
     IF new_id IS NULL OR primary_id IS NULL OR login_name IS NULL OR password_hash IS NULL
         OR new_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         OR primary_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
@@ -251,8 +255,83 @@ BEGIN
     INSERT INTO iam.role_bindings(tenant_id,id,principal_id,role_name,resource_version,created_at,updated_at)
     VALUES(new_id,'primary-admin-binding',primary_id,'ORGANIZATION_ADMIN',1,effective_now,effective_now);
     result := iam.account_snapshot(new_id);
-    PERFORM iam.append_account_event(tenant,actor,decision,'iam.organization.created','ORGANIZATION',new_id,event);
+    PERFORM iam.append_account_event(tenant,actor,decision,'iam.tenant.created','ORGANIZATION',new_id,event);
     RETURN result;
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION iam.set_organization_status(tenant text, actor text, decision text,
+    target_tenant text, new_status text, expected_version bigint, event jsonb)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $function$
+DECLARE stored iam.organizations%ROWTYPE;
+BEGIN
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.organization.set-status','ORGANIZATION',target_tenant);
+    IF new_status IS NULL OR new_status NOT IN ('ACTIVE','DISABLED') OR expected_version IS NULL OR expected_version < 1 THEN
+        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='organization status change is invalid';
+    END IF;
+    IF new_status='DISABLED' AND EXISTS(SELECT 1 FROM iam.bootstrap_receipts AS receipt WHERE receipt.organization_id=target_tenant) THEN
+        RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='installation service organization is protected';
+    END IF;
+    PERFORM set_config('matrix.iam_tenant_id',target_tenant,true);
+    SELECT * INTO stored FROM iam.organizations AS organization WHERE organization.id=target_tenant FOR UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='organization is unavailable'; END IF;
+    IF stored.resource_version <> expected_version THEN
+        RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='organization version conflicts';
+    END IF;
+    IF stored.status=new_status THEN RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='organization status already matches'; END IF;
+    UPDATE iam.organizations AS organization SET status=new_status,resource_version=organization.resource_version+1,updated_at=transaction_timestamp()
+    WHERE organization.id=target_tenant;
+    IF new_status='DISABLED' THEN
+        UPDATE iam.sessions AS session SET status='REVOKED',revoked_at=transaction_timestamp(),resource_version=session.resource_version+1
+        WHERE session.tenant_id=target_tenant AND session.status='ACTIVE';
+    END IF;
+    PERFORM iam.append_account_event(tenant,actor,decision,
+        CASE WHEN new_status='DISABLED' THEN 'iam.tenant.disabled' ELSE 'iam.tenant.enabled' END,'ORGANIZATION',target_tenant,event);
+    RETURN iam.account_snapshot(target_tenant);
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION iam.recover_organization_administrator(tenant text, actor text, decision text,
+    target_tenant text, primary_id text, expected_version bigint, new_password_hash text, new_binding_id text, event jsonb)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $function$
+DECLARE stored_version bigint;
+BEGIN
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.organization-administrator.recover','PRINCIPAL',primary_id);
+    IF expected_version IS NULL OR expected_version < 1 OR new_password_hash IS NULL
+        OR new_password_hash NOT LIKE '$matrix-iam-v1$argon2id$v=19$%'
+        OR event#>>'{target,tenantId}' IS DISTINCT FROM target_tenant
+        OR COALESCE(new_binding_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
+        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='primary recovery is invalid';
+    END IF;
+    PERFORM set_config('matrix.iam_tenant_id',target_tenant,true);
+    SELECT organization.resource_version INTO stored_version FROM iam.organizations AS organization WHERE organization.id=target_tenant FOR UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='organization is unavailable'; END IF;
+    IF stored_version <> expected_version THEN RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='organization version conflicts'; END IF;
+    -- Serialize all credential takeover checks with platform grants on this USER.
+    PERFORM 1 FROM iam.principals AS principal JOIN iam.login_index AS login
+        ON login.tenant_id=principal.tenant_id AND login.principal_id=principal.id AND login.account_owner
+        WHERE principal.tenant_id=target_tenant AND principal.id=primary_id AND principal.principal_type='USER' FOR UPDATE OF principal;
+    IF NOT FOUND OR EXISTS(SELECT 1 FROM iam.role_bindings AS binding WHERE binding.tenant_id=target_tenant
+        AND binding.principal_id=primary_id AND binding.role_name='PLATFORM_OPERATOR' AND binding.revoked_at IS NULL) THEN
+        RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='primary recovery is forbidden';
+    END IF;
+    UPDATE iam.principals AS principal SET status='ACTIVE',must_change_password=true,
+        resource_version=principal.resource_version+1,updated_at=transaction_timestamp()
+    WHERE principal.tenant_id=target_tenant AND principal.id=primary_id;
+    UPDATE iam.user_credentials AS credential SET password_hash=new_password_hash,changed_at=transaction_timestamp(),
+        credential_version=credential.credential_version+1
+    WHERE credential.tenant_id=target_tenant AND credential.principal_id=primary_id;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='primary credential is unavailable'; END IF;
+    UPDATE iam.sessions AS session SET status='REVOKED',revoked_at=transaction_timestamp(),resource_version=session.resource_version+1
+    WHERE session.tenant_id=target_tenant AND session.principal_id=primary_id AND session.status='ACTIVE';
+    INSERT INTO iam.role_bindings(tenant_id,id,principal_id,role_name,resource_version,created_at,updated_at)
+    SELECT target_tenant,new_binding_id,primary_id,'ORGANIZATION_ADMIN',1,transaction_timestamp(),transaction_timestamp()
+    WHERE NOT EXISTS(SELECT 1 FROM iam.role_bindings AS binding WHERE binding.tenant_id=target_tenant
+        AND binding.principal_id=primary_id AND binding.role_name='ORGANIZATION_ADMIN' AND binding.revoked_at IS NULL);
+    UPDATE iam.organizations AS organization SET resource_version=organization.resource_version+1,updated_at=transaction_timestamp()
+    WHERE organization.id=target_tenant;
+    PERFORM iam.append_account_event(tenant,actor,decision,'iam.tenant-administrator.recovered','PRINCIPAL',primary_id,event);
+    RETURN iam.account_snapshot(target_tenant);
 END
 $function$;
 
@@ -316,7 +395,8 @@ BEGIN
         must_change_password=CASE WHEN new_password_hash IS NULL THEN p.must_change_password ELSE true END,
         resource_version=p.resource_version+1,updated_at=transaction_timestamp() WHERE p.tenant_id=tenant AND p.id=principal;
     IF new_password_hash IS NOT NULL THEN
-        UPDATE iam.user_credentials AS c SET password_hash=new_password_hash,changed_at=transaction_timestamp()
+        UPDATE iam.user_credentials AS c SET password_hash=new_password_hash,changed_at=transaction_timestamp(),
+            credential_version=c.credential_version+1
         WHERE c.tenant_id=tenant AND c.principal_id=principal;
     END IF;
     UPDATE iam.sessions AS s SET status='REVOKED',revoked_at=transaction_timestamp(),resource_version=s.resource_version+1
@@ -329,13 +409,17 @@ $function$;
 REVOKE ALL ON ALL TABLES IN SCHEMA iam FROM PUBLIC, matrix_iam_api, matrix_iam_worker;
 REVOKE ALL ON FUNCTION iam.account_snapshot(text), iam.principal_snapshot(text,text),
     iam.append_account_event(text,text,text,text,text,text,jsonb) FROM PUBLIC, matrix_iam_api, matrix_iam_worker;
-REVOKE ALL ON FUNCTION iam.is_bootstrap_administrator(text,text), iam.read_account(text,text),
+REVOKE ALL ON FUNCTION iam.read_account(text,text), iam.read_organization(text,text,text,text),
+    iam.set_organization_status(text,text,text,text,text,bigint,jsonb),
+    iam.recover_organization_administrator(text,text,text,text,text,bigint,text,text,jsonb),
     iam.read_audit_evidence(text,text,text,text,jsonb),
     iam.list_principals(text,text,text,text), iam.list_accounts(text,text,text,text),
     iam.create_organization(text,text,text,text,text,text,text,text,text,jsonb),
     iam.set_account_alias(text,text,text,text,bigint,jsonb),
     iam.change_subaccount(text,text,text,text,bigint,text,text,jsonb) FROM PUBLIC, matrix_iam_worker;
-GRANT EXECUTE ON FUNCTION iam.is_bootstrap_administrator(text,text), iam.read_account(text,text),
+GRANT EXECUTE ON FUNCTION iam.read_account(text,text), iam.read_organization(text,text,text,text),
+    iam.set_organization_status(text,text,text,text,text,bigint,jsonb),
+    iam.recover_organization_administrator(text,text,text,text,text,bigint,text,text,jsonb),
     iam.read_audit_evidence(text,text,text,text,jsonb),
     iam.list_principals(text,text,text,text), iam.list_accounts(text,text,text,text),
     iam.create_organization(text,text,text,text,text,text,text,text,text,jsonb),

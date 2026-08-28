@@ -2,6 +2,7 @@ package identityaccess
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
@@ -27,7 +28,7 @@ func (service *Authority) CurrentIdentity(ctx context.Context, credential iamv1.
 		}
 		result = iamv1.CurrentIdentity{APIVersion: iamv1.APIVersion, Kind: "CurrentIdentity", Account: account,
 			Principal: subject.Principal, Roles: append([]iamv1.BuiltinRole{}, subject.Roles...),
-			CanCreateOrganizations: subject.BootstrapAdministrator && !subject.Principal.MustChangePassword && hasOrganizationAdmin(subject.Roles)}
+			CanCreateOrganizations: subject.InstallationID != "" && !subject.Principal.MustChangePassword && slices.Contains(subject.Roles, iamv1.RolePlatformOperator)}
 		return nil
 	})
 	if err != nil {
@@ -37,15 +38,6 @@ func (service *Authority) CurrentIdentity(ctx context.Context, credential iamv1.
 		return iamv1.CurrentIdentity{}, ErrUnavailable
 	}
 	return result, nil
-}
-
-func hasOrganizationAdmin(roles []iamv1.BuiltinRole) bool {
-	for _, role := range roles {
-		if role == iamv1.RoleOrganizationAdmin {
-			return true
-		}
-	}
-	return false
 }
 
 // This boundary keeps authenticated tenant derivation, denied-decision Audit,
@@ -107,9 +99,20 @@ func (service *Authority) ListAccounts(ctx context.Context, credential iamv1.Sec
 		return iamv1.OrganizationAccountList{}, ErrInvalidArgument
 	}
 	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMOrganizationRead,
-		iamv1.ResourceReference{Kind: iamv1.ResourceOrganization}, requestID,
+		iamv1.ResourceReference{Kind: iamv1.ResourceOrganization, ID: "organizations"}, requestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, _ time.Time) (iamv1.OrganizationAccountList, error) {
 			return tx.ListAccounts(ctx, AccountRead{OrganizationID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID, After: after})
+		})
+}
+
+func (service *Authority) ReadOrganization(ctx context.Context, credential iamv1.Secret, id iamv1.OrganizationID, requestID string) (iamv1.OrganizationAccount, error) {
+	if iamv1.ValidateID("organizationId", string(id)) != nil || iamv1.ValidateID("requestId", requestID) != nil {
+		return iamv1.OrganizationAccount{}, ErrInvalidArgument
+	}
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMOrganizationRead,
+		iamv1.ResourceReference{Kind: iamv1.ResourceOrganization, ID: string(id)}, requestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, _ time.Time) (iamv1.OrganizationAccount, error) {
+			return tx.ReadOrganization(ctx, AccountRead{OrganizationID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID}, id)
 		})
 }
 
@@ -136,7 +139,8 @@ func (service *Authority) CreateOrganization(ctx context.Context, credential iam
 			if err != nil {
 				return iamv1.OrganizationAccount{}, ErrUnavailable
 			}
-			event, err := service.newManagementEvent(subject, auditv1.ActionIAMOrganizationCreated, auditv1.TargetOrganization, string(request.ID), decision.ID, digest, request.RequestID, now)
+			event, err := service.newTenantLifecycleEvent(subject, decision, auditv1.ActionIAMTenantCreated,
+				auditv1.TargetReference{Kind: auditv1.TargetOrganization, ID: string(request.ID)}, digest, request.RequestID, now)
 			if err != nil {
 				return iamv1.OrganizationAccount{}, err
 			}
@@ -144,6 +148,87 @@ func (service *Authority) CreateOrganization(ctx context.Context, credential iam
 				DecisionID: decision.ID, Organization: iamv1.InitialOrganization{ID: request.ID, DisplayName: request.DisplayName},
 				Administrator: BootstrapAdministrator{ID: iamv1.PrincipalID(id), LoginName: request.AdministratorLoginName, DisplayName: request.AdministratorDisplayName, PasswordHash: hash}, AuditEvent: event})
 		})
+}
+
+func (service *Authority) SetOrganizationStatus(ctx context.Context, credential iamv1.Secret, id iamv1.OrganizationID, request iamv1.SetOrganizationStatusRequest) (iamv1.OrganizationAccount, error) {
+	if iamv1.ValidateID("organizationId", string(id)) != nil || iamv1.ValidateSetOrganizationStatusRequest(request) != nil {
+		return iamv1.OrganizationAccount{}, ErrInvalidArgument
+	}
+	digest, err := digestSanitized("organization-status", struct {
+		ID      iamv1.OrganizationID
+		Request iamv1.SetOrganizationStatusRequest
+	}{id, request})
+	if err != nil {
+		return iamv1.OrganizationAccount{}, err
+	}
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMOrganizationSetStatus,
+		iamv1.ResourceReference{Kind: iamv1.ResourceOrganization, ID: string(id)}, request.RequestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.OrganizationAccount, error) {
+			action := auditv1.ActionIAMTenantDisabled
+			if request.Status == iamv1.OrganizationActive {
+				action = auditv1.ActionIAMTenantEnabled
+			}
+			event, err := service.newTenantLifecycleEvent(subject, decision, action,
+				auditv1.TargetReference{Kind: auditv1.TargetOrganization, ID: string(id)}, digest, request.RequestID, now)
+			if err != nil {
+				return iamv1.OrganizationAccount{}, err
+			}
+			return tx.SetOrganizationStatus(ctx, OrganizationStatusMutation{
+				ActorOrganizationID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID,
+				DecisionID: decision.ID, OrganizationID: id, Status: request.Status, ResourceVersion: request.ResourceVersion, AuditEvent: event,
+			})
+		})
+}
+
+func (service *Authority) RecoverOrganizationAdministrator(ctx context.Context, credential iamv1.Secret, id iamv1.OrganizationID, request iamv1.RecoverOrganizationAdministratorRequest) (iamv1.OrganizationAccount, error) {
+	if iamv1.ValidateID("organizationId", string(id)) != nil || iamv1.ValidateRecoverOrganizationAdministratorRequest(request) != nil || authority.ValidatePassword(request.InitialPassword) != nil {
+		return iamv1.OrganizationAccount{}, ErrInvalidArgument
+	}
+	digest, err := digestSanitized("organization-administrator-recover", struct {
+		OrganizationID  iamv1.OrganizationID
+		PrincipalID     iamv1.PrincipalID
+		ResourceVersion uint64
+		RequestID       string
+	}{id, request.PrincipalID, request.ResourceVersion, request.RequestID})
+	if err != nil {
+		return iamv1.OrganizationAccount{}, err
+	}
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMOrganizationAdministratorRecover,
+		iamv1.ResourceReference{Kind: iamv1.ResourcePrincipal, ID: string(request.PrincipalID)}, request.RequestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.OrganizationAccount, error) {
+			hash, err := service.passwords.Hash(request.InitialPassword)
+			if err != nil {
+				return iamv1.OrganizationAccount{}, ErrUnavailable
+			}
+			bindingID, err := service.config.NewID("binding")
+			if err != nil {
+				return iamv1.OrganizationAccount{}, ErrUnavailable
+			}
+			event, err := service.newTenantLifecycleEvent(subject, decision, auditv1.ActionIAMTenantAdministratorRecovered,
+				auditv1.TargetReference{Kind: auditv1.TargetPrincipal, ID: string(request.PrincipalID), TenantID: auditv1.TenantID(id)}, digest, request.RequestID, now)
+			if err != nil {
+				return iamv1.OrganizationAccount{}, err
+			}
+			return tx.RecoverOrganizationAdministrator(ctx, OrganizationAdministratorRecovery{
+				ActorOrganizationID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID,
+				DecisionID: decision.ID, OrganizationID: id, PrincipalID: request.PrincipalID,
+				ResourceVersion: request.ResourceVersion, PasswordHash: hash, BindingID: iamv1.RoleBindingID(bindingID), AuditEvent: event,
+			})
+		})
+}
+
+func (service *Authority) newTenantLifecycleEvent(subject SessionCredential, decision iamv1.AuthorizationDecision, action auditv1.Action,
+	target auditv1.TargetReference, digest, requestID string, now time.Time) (auditv1.Event, error) {
+	if !decision.Allowed || decision.InstallationID == "" || decision.InstallationID != subject.Subject.InstallationID {
+		return auditv1.Event{}, ErrUnavailable
+	}
+	eventID, err := service.config.NewID("event")
+	if err != nil {
+		return auditv1.Event{}, ErrUnavailable
+	}
+	return newAuditEvent(eventID, "", decision.InstallationID,
+		auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(subject.Subject.Principal.ID)},
+		action, target, auditv1.ResultSucceeded, decision.ID, digest, requestID, requestID, now)
 }
 
 func (service *Authority) SetAccountAlias(ctx context.Context, credential iamv1.Secret, request iamv1.SetAccountAliasRequest) (iamv1.OrganizationAccount, error) {

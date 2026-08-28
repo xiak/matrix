@@ -90,6 +90,11 @@ func ValidateEvent(value Event) error {
 	if value.IAMDecisionID != "" {
 		problems = append(problems, ValidateID("iamDecisionId", string(value.IAMDecisionID)))
 	}
+	if value.Action == ActionIAMTenantAdministratorRecovered {
+		problems = append(problems, ValidateID("target.tenantId", string(value.Target.TenantID)))
+	} else if value.Target.TenantID != "" {
+		problems = append(problems, errors.New("Audit action cannot contain a target tenant"))
+	}
 	if value.Action == ActionIAMAuthorizationDecided &&
 		string(value.IAMDecisionID) != value.Target.ID {
 		problems = append(problems, errors.New("authorization event target differs from its IAM decision"))

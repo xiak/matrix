@@ -76,7 +76,15 @@ func TestRuntimeDSNBindsLeastPrivilegeLogin(t *testing.T) {
 }
 
 func TestIAMRetainedAccountProcessUpgrade(t *testing.T) {
-	const variable = "MATRIX_IAM_UPGRADE_POSTGRES_TEST_DSN"
+	testIAMRetainedProcessUpgrade(t, "MATRIX_IAM_UPGRADE_POSTGRES_TEST_DSN", "9fd45b03ea398828fa3e74bf99961d2348c68299", false)
+}
+
+func TestIAMRetainedSessionProcessUpgrade(t *testing.T) {
+	testIAMRetainedProcessUpgrade(t, "MATRIX_IAM_SESSION_UPGRADE_POSTGRES_TEST_DSN", "a36cf9817f522549b995ea9c1f0d873499b4fe62", true)
+}
+
+func testIAMRetainedProcessUpgrade(t *testing.T, variable, fixedCommit string, qualifiedChild bool) {
+	t.Helper()
 	dsn := os.Getenv(variable)
 	if dsn == "" {
 		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", variable)
@@ -99,13 +107,19 @@ func TestIAMRetainedAccountProcessUpgrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	root, temporary := repositoryRoot(t), t.TempDir()
-	baselineRoot := extractFixedIAMSource(t, ctx, root, temporary)
-	oldSQL, err := os.ReadFile(filepath.Join(baselineRoot, "app/service/iam/internal/data/postgres/migrations/000001_authority/up.sql"))
-	if err != nil {
-		t.Fatal(err)
+	baselineRoot := extractFixedIAMSource(t, ctx, root, temporary, fixedCommit)
+	migrations := []string{"000001_authority"}
+	if qualifiedChild {
+		migrations = append(migrations, "000003_tenant_accounts")
 	}
-	if _, err := admin.Exec(ctx, string(oldSQL)); err != nil {
-		t.Fatalf("apply fixed single-tenant IAM schema: %v", err)
+	for _, migration := range migrations {
+		oldSQL, err := os.ReadFile(filepath.Join(baselineRoot, "app/service/iam/internal/data/postgres/migrations", migration, "up.sql"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := admin.Exec(ctx, string(oldSQL)); err != nil {
+			t.Fatalf("apply fixed retained IAM schema: %v", err)
+		}
 	}
 	createProcessLogin(t, ctx, admin, iamAPILogin, "matrix_iam_api")
 	oldBinary := buildAuthorityBinary(t, ctx, baselineRoot, temporary, "matrix-iam-baseline", "./app/service/iam/cmd/matrix-iam")
@@ -135,11 +149,17 @@ func TestIAMRetainedAccountProcessUpgrade(t *testing.T) {
 		return child
 	}
 	old := start(oldBinary)
+	oldChildLogin := "retained.viewer"
+	if qualifiedChild {
+		oldChildLogin += "@organization-process"
+	}
 	administrator := loginIAM(t, endpoint, "admin", initialAdminPassword, "request-upgrade-admin-login")
 	changePasswordIAM(t, endpoint, administrator.Credential, initialAdminPassword, changedAdminPassword, "request-upgrade-admin-password")
 	user := createIAMUser(t, endpoint, administrator.Credential, "retained.viewer", "Retained viewer", initialReaderPassword, "request-upgrade-member")
-	member := loginIAM(t, endpoint, "retained.viewer", initialReaderPassword, "request-upgrade-member-login")
+	member := loginIAM(t, endpoint, oldChildLogin, initialReaderPassword, "request-upgrade-member-login")
+	legacyTemporary := loginIAM(t, endpoint, oldChildLogin, initialReaderPassword, "request-upgrade-old-temporary")
 	changePasswordIAM(t, endpoint, member.Credential, initialReaderPassword, changedReaderPassword, "request-upgrade-member-password")
+	legacyCurrent := loginIAM(t, endpoint, oldChildLogin, changedReaderPassword, "request-upgrade-old-current")
 	binding := putIAMBinding(t, endpoint, administrator.Credential, user.ID, iamv1.RolePaaSViewer, "request-upgrade-role")
 	revokeIAMBinding(t, endpoint, administrator.Credential, binding.ID, "request-upgrade-role-revoke")
 	revokeIAMSession(t, endpoint, administrator.Credential, member.Session.ID, "request-upgrade-session-revoke")
@@ -179,13 +199,32 @@ func TestIAMRetainedAccountProcessUpgrade(t *testing.T) {
 		}
 	}
 	current := start(currentBinary)
+	// These rows were created by the actual old executable, not fabricated by
+	// current-schema writes. Neither pre-change nor post-change timestamps prove
+	// a credential epoch; both must require a new login after upgrade.
+	for _, retainedSession := range []iamv1.Session{legacyTemporary.Session, legacyCurrent.Session} {
+		var unboundActiveSession bool
+		if err := admin.QueryRow(ctx, `SELECT credential_version IS NULL AND status='ACTIVE'
+			FROM iam.sessions WHERE tenant_id=$1 AND id=$2`, retainedSession.OrganizationID, retainedSession.ID).Scan(&unboundActiveSession); err != nil || !unboundActiveSession {
+			t.Fatal("migration filled an unproved epoch or lost the old executable's active-session fixture")
+		}
+	}
+	retainedReaderPassword := changedReaderPassword
+	var retainedNewSession string
 	for attempt := 0; attempt < 2; attempt++ {
 		if attempt > 0 {
 			current.stop()
 			current = start(currentBinary)
 		}
-		if got := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", member.Credential, nil); got.Status != http.StatusUnauthorized {
-			t.Fatal("upgrade/restart revived a revoked session")
+		for _, invalid := range []string{member.Credential, legacyTemporary.Credential, legacyCurrent.Credential, administrator.Credential} {
+			if got := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", invalid, nil); got.Status != http.StatusUnauthorized {
+				t.Fatal("upgrade/restart revived a revoked or unversioned legacy session")
+			}
+		}
+		if retainedNewSession != "" {
+			if got := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", retainedNewSession, nil); got.Status != http.StatusOK {
+				t.Fatal("restart lost a valid credential-version-bound retained session")
+			}
 		}
 		primary := loginIAM(t, endpoint, "admin", changedAdminPassword, "request-upgrade-retained-primary")
 		identityResponse := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", primary.Credential, nil)
@@ -194,11 +233,35 @@ func TestIAMRetainedAccountProcessUpgrade(t *testing.T) {
 			t.Fatal("upgrade replaced primary ownership or credentials")
 		}
 		assertPlatformAuthorization(t, endpoint, primary.Credential, "principal-admin", "request-upgrade-platform-denied", false)
-		child := loginIAM(t, endpoint, "retained.viewer@organization-process", changedReaderPassword, "request-upgrade-retained-child")
+		child := loginIAM(t, endpoint, "retained.viewer@organization-process", retainedReaderPassword, "request-upgrade-retained-child")
 		childResponse := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", child.Credential, nil)
 		var childIdentity iamv1.CurrentIdentity
 		if childResponse.Status != http.StatusOK || json.Unmarshal(childResponse.Body, &childIdentity) != nil || childIdentity.Principal.ID != user.ID || len(childIdentity.Roles) != 0 {
 			t.Fatal("upgrade changed member identity or revived a revoked role")
+		}
+		if attempt == 0 {
+			retainedNewSession = loginIAM(t, endpoint, "retained.viewer@organization-process", retainedReaderPassword, "request-upgrade-new-current").Credential
+			retainedReaderPassword = "Retained-Session-Replacement-Password-68!"
+			changed := performJSON(t, http.MethodPost, endpoint+"/v1/auth/password", child.Credential, map[string]any{
+				"currentPassword": changedReaderPassword, "newPassword": retainedReaderPassword, "revokeOtherSessions": false, "requestId": "request-upgrade-retain-valid-sessions",
+			})
+			if changed.Status != http.StatusOK {
+				t.Fatalf("retained legacy session password policy status=%d", changed.Status)
+			}
+			for _, invalid := range []string{member.Credential, legacyTemporary.Credential, legacyCurrent.Credential} {
+				if got := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", invalid, nil); got.Status != http.StatusUnauthorized {
+					t.Fatal("explicit false revived a revoked or unversioned legacy session")
+				}
+			}
+			if got := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", retainedNewSession, nil); got.Status != http.StatusOK {
+				t.Fatal("explicit false lost a valid credential-version-bound session")
+			}
+			if err := iammigration.Up(ctx, admin); err != nil {
+				t.Fatal(err)
+			}
+			if err := iammigration.Verify(ctx, admin); err != nil {
+				t.Fatal(err)
+			}
 		}
 		serviceResponse := performJSON(t, http.MethodGet, endpoint+"/v1/service-identity", paasServiceCredential, nil)
 		var service iamv1.ServiceIdentity
@@ -228,9 +291,9 @@ func TestIAMRetainedAccountProcessUpgrade(t *testing.T) {
 
 // This gate builds the accepted old executable from fixed Git objects in its
 // own temporary directory. Old source is never a product/runtime dependency.
-func extractFixedIAMSource(t *testing.T, ctx context.Context, root, temporary string) string {
+func extractFixedIAMSource(t *testing.T, ctx context.Context, root, temporary, fixedCommit string) string {
 	t.Helper()
-	command := exec.CommandContext(ctx, "git", "archive", "--format=zip", "9fd45b03ea398828fa3e74bf99961d2348c68299", "go.mod", "go.sum", "api", "app/service/iam", "app/service/internal")
+	command := exec.CommandContext(ctx, "git", "archive", "--format=zip", fixedCommit, "go.mod", "go.sum", "api", "app/service/iam", "app/service/internal")
 	command.Dir = root
 	archive, err := command.Output()
 	if err != nil || len(archive) > 32<<20 {
@@ -560,7 +623,17 @@ func runAuthorityProcesses(t *testing.T, dsnVariable string, nodeFixture func(*t
 	platformDecisions := []iamv1.AuthorizationDecision{
 		assertPlatformAuthorization(t, iamEndpoint, adminLogin.Credential, "principal-admin", "request-platform-admin", true),
 	}
-	sensitive = append(sensitive, proveTenantAccountProcesses(t, ctx, admin, iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential)...)
+	sensitive = append(sensitive, proveTenantAccountProcesses(t, ctx, admin, iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential,
+		func(admit func()) {
+			auditProcess.stop()
+			admit()
+			auditProcess = start(binaries.audit, auditEnvironment)
+			waitHTTPStatus(t, ctx, auditProcess, auditEndpoint+"/ready", http.StatusOK)
+		}, func() {
+			iamProcess.stop()
+			iamProcess = start(binaries.iam, iamEnvironment)
+			waitHTTPStatus(t, ctx, iamProcess, iamEndpoint+"/ready", http.StatusOK)
+		})...)
 	platformAuditRecord := createPlatformHost(t, ctx, admin, paasEndpoint, auditEndpoint, adminLogin.Credential, node)
 	assertPlatformAuditAccess(t, auditEndpoint, adminLogin.Credential, http.StatusOK)
 	waitAllIAMOutboxDelivered(t, ctx, admin)
@@ -1554,6 +1627,8 @@ func proveTenantAccountProcesses(
 	auditEndpoint string,
 	paasEndpoint string,
 	bearer string,
+	withAuditOutage func(func()),
+	restartIAM func(),
 ) []string {
 	t.Helper()
 	const (
@@ -1581,7 +1656,6 @@ func proveTenantAccountProcesses(
 	putIAMBinding(t, endpoint, primary.Credential, child.ID, iamv1.RolePaaSDeveloper, "request-customer-role")
 	childLogin := loginIAM(t, endpoint, "account.user@process-company", initial, "request-customer-child-login")
 	changePasswordIAM(t, endpoint, childLogin.Credential, initial, changed, "request-customer-child-password")
-	managedSecrets := proveManagedServiceTenantProcesses(t, ctx, admin, endpoint, auditEndpoint, paasEndpoint, bearer, primary.Credential, childLogin.Credential, child.ID)
 	operation := createPaaSApplication(t, paasEndpoint, childLogin.Credential, "application-customer-only", "customer-only", "create-customer-application", http.StatusCreated)
 	if operation.Scope.TenantID != crossTenantID || operation.RequestedBy.ID != string(child.ID) {
 		t.Fatal("new tenant PaaS mutation lost its IAM identity")
@@ -1637,12 +1711,138 @@ func proveTenantAccountProcesses(
 	if userProducer.Status != http.StatusUnauthorized {
 		t.Fatal("tenant owner gained audit producer authority")
 	}
-	return append(managedSecrets, initial, changed, primary.Credential, childLogin.Credential)
+	retainedQuota, retainedDatabase, resourceSecrets := proveTenantResourceProcesses(t, ctx, admin, endpoint, auditEndpoint, paasEndpoint, bearer, primary.Credential, childLogin)
+	sensitive := append(resourceSecrets, initial, changed, primary.Credential, childLogin.Credential)
+	readAccount := func(id string) iamv1.OrganizationAccount {
+		t.Helper()
+		response := performJSON(t, http.MethodGet, endpoint+"/v1/organizations/"+id, bearer, nil)
+		var account iamv1.OrganizationAccount
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &account) != nil || iamv1.ValidateOrganizationAccount(account) != nil {
+			t.Fatalf("platform tenant detail status=%d", response.Status)
+		}
+		return account
+	}
+	setStatus := func(id string, status iamv1.OrganizationStatus, expected int) {
+		t.Helper()
+		current := readAccount(id)
+		response := performJSON(t, http.MethodPost, endpoint+"/v1/organizations/"+id+":set-status", bearer, iamv1.SetOrganizationStatusRequest{Status: status, ResourceVersion: current.Organization.ResourceVersion, RequestID: "request-process-tenant-status"})
+		if response.Status != expected {
+			t.Fatalf("set tenant status=%d want=%d", response.Status, expected)
+		}
+	}
+	setStatus("organization-process", iamv1.OrganizationDisabled, http.StatusForbidden)
+	var retainedApplication string
+	if err := admin.QueryRow(ctx, "SELECT document::text FROM paas.applications WHERE tenant_id=$1 AND id='application-customer-only'", crossTenantID).Scan(&retainedApplication); err != nil {
+		t.Fatal(err)
+	}
+	withAuditOutage(func() {
+		createPaaSApplication(t, paasEndpoint, childLogin.Credential, "application-before-tenant-pause", "before-tenant-pause", "create-before-tenant-pause", http.StatusCreated)
+		setStatus(crossTenantID, iamv1.OrganizationDisabled, http.StatusOK)
+		createPaaSApplication(t, paasEndpoint, childLogin.Credential, "application-after-tenant-pause", "after-tenant-pause", "create-after-tenant-pause", http.StatusUnauthorized)
+		assertPaaSApplicationAbsent(t, ctx, admin, "application-after-tenant-pause")
+	})
+	waitAllIAMOutboxDelivered(t, ctx, admin)
+	waitAllPaaSOutboxDelivered(t, ctx, admin)
+	_, historical := findPaaSEvent(t, ctx, admin, auditv1.ActionPaaSApplicationCreated, "application-before-tenant-pause")
+	if historical.TenantID != crossTenantID || historical.Actor.ID != auditv1.ActorID(child.ID) {
+		t.Fatal("paused tenant historical outbox lost identity")
+	}
+	replayed := performJSON(t, http.MethodPost, auditEndpoint+"/v1/events", paasServiceCredential, historical)
+	var replay auditv1.IngestionResult
+	if replayed.Status != http.StatusOK || json.Unmarshal(replayed.Body, &replay) != nil || replay.Outcome != auditv1.IngestionDuplicate {
+		t.Fatal("suspended tenant lost committed historical audit delivery")
+	}
+	for _, credential := range []string{primary.Credential, childLogin.Credential} {
+		if response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", credential, nil); response.Status != http.StatusUnauthorized {
+			t.Fatal("tenant suspension missed IAM")
+		}
+		getPaaSApplication(t, paasEndpoint, credential, "application-customer-only", http.StatusUnauthorized)
+		queryAudit(t, auditEndpoint, credential, auditv1.QueryRecordsRequest{PageSize: 10}, http.StatusUnauthorized)
+		for _, path := range []string{"/quota-entitlements/" + retainedQuota.ID, "/service-installations/" + retainedDatabase.ID, "/service-installations/" + retainedDatabase.ID + "/operation"} {
+			if response := performJSON(t, http.MethodGet, paasEndpoint+"/managed-services/v1"+path, credential, nil); response.Status != http.StatusUnauthorized {
+				t.Fatal("tenant suspension missed managed-service resource or Operation access")
+			}
+		}
+	}
+	const recoveryPassword = "Primary-Process-Recovered-Password-68!"
+	current := readAccount(crossTenantID)
+	recovery := performJSON(t, http.MethodPost, endpoint+"/v1/organizations/"+crossTenantID+":recover-administrator", bearer, map[string]any{
+		"principalId": account.PrimaryPrincipalID, "initialPassword": recoveryPassword, "resourceVersion": current.Organization.ResourceVersion, "requestId": "request-process-primary-recovery"})
+	if recovery.Status != http.StatusOK {
+		t.Fatalf("recover paused tenant primary status=%d", recovery.Status)
+	}
+	restartIAM()
+	if readAccount(crossTenantID).Organization.Status != iamv1.OrganizationDisabled {
+		t.Fatal("recovery or equal-bootstrap restart revived tenant")
+	}
+	if response := performJSON(t, http.MethodPost, endpoint+"/v1/auth/login", "", map[string]any{"loginName": "customer.primary", "password": recoveryPassword, "requestId": "request-paused-primary-login"}); response.Status != http.StatusUnauthorized {
+		t.Fatal("recovered primary bypassed tenant suspension")
+	}
+	setStatus(crossTenantID, iamv1.OrganizationActive, http.StatusOK)
+	getPaaSApplication(t, paasEndpoint, childLogin.Credential, "application-customer-only", http.StatusUnauthorized)
+	if response := performJSON(t, http.MethodPost, endpoint+"/v1/auth/login", "", map[string]any{"loginName": "customer.primary", "password": changed, "requestId": "request-old-primary-login"}); response.Status != http.StatusUnauthorized {
+		t.Fatal("primary recovery retained old password")
+	}
+	primary = loginIAM(t, endpoint, "customer.primary", recoveryPassword, "request-recovered-primary-login")
+	sensitive = append(sensitive, recoveryPassword, primary.Credential)
+	createPaaSApplication(t, paasEndpoint, primary.Credential, "application-before-recovery-change", "before-recovery-change", "create-before-recovery-change", http.StatusForbidden)
+	changePasswordIAM(t, endpoint, primary.Credential, recoveryPassword, changed, "request-recovered-primary-password")
+	getPaaSApplication(t, paasEndpoint, primary.Credential, "application-customer-only", http.StatusOK)
+	getPaaSApplication(t, paasEndpoint, bearer, "application-customer-only", http.StatusNotFound)
+	childLogin = loginIAM(t, endpoint, "account.user@process-company", changed, "request-resumed-child-login")
+	sensitive = append(sensitive, childLogin.Credential)
+	memberDisabled := performJSON(t, http.MethodPost, endpoint+"/v1/principals/"+string(child.ID)+":set-status", primary.Credential, iamv1.SetPrincipalStatusRequest{Status: iamv1.PrincipalDisabled, ResourceVersion: 2, RequestID: "request-process-creator-disabled"})
+	if memberDisabled.Status != http.StatusOK {
+		t.Fatalf("disable resource creator status=%d", memberDisabled.Status)
+	}
+	getPaaSApplication(t, paasEndpoint, childLogin.Credential, "application-customer-only", http.StatusUnauthorized)
+	getPaaSApplication(t, paasEndpoint, primary.Credential, "application-customer-only", http.StatusOK)
+	assertManagedServiceRetained(t, paasEndpoint, primary.Credential, retainedQuota, retainedDatabase)
+	var retainedManagedActor string
+	if err := admin.QueryRow(ctx, "SELECT requested_by_id FROM managedservice.operations WHERE tenant_id=$1 AND id=$2", crossTenantID, retainedDatabase.Operation.ID).Scan(&retainedManagedActor); err != nil || retainedManagedActor != string(child.ID) {
+		t.Fatal("identity lifecycle changed database Operation tenant or creator")
+	}
+	var unchanged bool
+	if err := admin.QueryRow(ctx, "SELECT document::text=$2 FROM paas.applications WHERE tenant_id=$1 AND id='application-customer-only'", crossTenantID, retainedApplication).Scan(&unchanged); err != nil || !unchanged {
+		t.Fatal("identity lifecycle changed tenant resource ownership or content")
+	}
+	operationResponse := performJSON(t, http.MethodGet, paasEndpoint+"/v1/operations/"+string(operation.ID), primary.Credential, nil)
+	var retainedOperation paasv1.Operation
+	if operationResponse.Status != http.StatusOK || json.Unmarshal(operationResponse.Body, &retainedOperation) != nil || retainedOperation.Scope.TenantID != crossTenantID || retainedOperation.RequestedBy.ID != string(child.ID) {
+		t.Fatal("creator suspension changed accepted Operation ownership")
+	}
+	if response := performJSON(t, http.MethodGet, paasEndpoint+"/v1/operations/"+string(operation.ID), bearer, nil); response.Status != http.StatusNotFound {
+		t.Fatal("platform identity read another tenant's Operation")
+	}
+	waitAllIAMOutboxDelivered(t, ctx, admin)
+	for _, action := range []auditv1.Action{auditv1.ActionIAMTenantCreated, auditv1.ActionIAMTenantDisabled, auditv1.ActionIAMTenantEnabled, auditv1.ActionIAMTenantAdministratorRecovered} {
+		response := performJSON(t, http.MethodPost, auditEndpoint+"/v1/platform/records:query", bearer, auditv1.QueryRecordsRequest{PageSize: 100, Action: action})
+		var records auditv1.RecordPage
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &records) != nil || len(records.Records) != 1 || records.InstallationID != "installation-process" || records.TenantID != "" {
+			t.Fatalf("lifecycle platform audit action=%s status=%d", action, response.Status)
+		}
+		event := records.Records[0].Event
+		if action == auditv1.ActionIAMTenantAdministratorRecovered && (event.Target.TenantID != crossTenantID || event.Target.ID != string(account.PrimaryPrincipalID)) {
+			t.Fatal("delivered recovery fact substituted its primary tenant")
+		}
+	}
+	assertPlatformAuditAccess(t, auditEndpoint, primary.Credential, http.StatusForbidden)
+	chain = verifyAudit(t, auditEndpoint, primary.Credential)
+	if chain.TenantID != crossTenantID || !chain.Complete {
+		t.Fatal("recovery broke original tenant audit chain")
+	}
+	setStatus(crossTenantID, iamv1.OrganizationDisabled, http.StatusOK)
+	restartIAM()
+	getPaaSApplication(t, paasEndpoint, primary.Credential, "application-customer-only", http.StatusUnauthorized)
+	if readAccount(crossTenantID).Organization.Status != iamv1.OrganizationDisabled {
+		t.Fatal("restart revived paused tenant access")
+	}
+	return sensitive
 }
 
-// These are real admitted database-service records and reserved quota. The
-// local provisioner gate, not this five-process test, proves a running engine.
-func proveManagedServiceTenantProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, iamEndpoint, auditEndpoint, paasEndpoint, homeBearer, customerBearer, customerMember string, customerMemberID iamv1.PrincipalID) []string {
+// These are real application resources, database-service records and reserved
+// quota. The local provisioner gate separately proves a running engine.
+func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, iamEndpoint, auditEndpoint, paasEndpoint, homeBearer, customerBearer string, customer loginResult) (managedservicev1.QuotaEntitlement, managedservicev1.ServiceInstallation, []string) {
 	t.Helper()
 	base := paasEndpoint + "/managed-services/v1"
 	homeUser := createIAMUser(t, iamEndpoint, homeBearer, "account.user", "Home resource member", initialDeveloperPassword, "request-home-resource-member")
@@ -1660,7 +1860,7 @@ func proveManagedServiceTenantProcesses(t *testing.T, ctx context.Context, admin
 		shared, unique    managedservicev1.ServiceInstallation
 	}{
 		{id: "organization-process", owner: homeBearer, member: home.Credential, memberID: homeUser.ID},
-		{id: "organization-process-customer", owner: customerBearer, member: customerMember, memberID: customerMemberID},
+		{id: "organization-process-customer", owner: customerBearer, member: customer.Credential, memberID: customer.Session.PrincipalID},
 	}
 	assertStatus := func(response processResponse, status int, action string) {
 		t.Helper()
@@ -1754,13 +1954,18 @@ func proveManagedServiceTenantProcesses(t *testing.T, ctx context.Context, admin
 		tenant.quota = quotas.Items[0]
 		assertManagedServiceRetained(t, paasEndpoint, tenant.owner, tenant.quota, tenant.shared)
 	}
+	applicationValues := proveApplicationTenantProcesses(t, ctx, admin, paasEndpoint, home, customer, platform.Credential)
 	assertStatus(performJSONWithIdempotency(t, http.MethodPost, base+"/quota-entitlements", platform.Credential, "platform-quota-attempt", activation), http.StatusForbidden, "platform-only tenant write")
 	revokeIAMBinding(t, iamEndpoint, homeBearer, developerBinding.ID, "request-resource-developer-revoked")
 	viewerBinding := putIAMBinding(t, iamEndpoint, homeBearer, homeUser.ID, iamv1.RolePaaSViewer, "request-resource-viewer")
 	assertStatus(performJSON(t, http.MethodGet, base+"/service-installations", home.Credential, nil), http.StatusOK, "viewer read")
 	assertStatus(performJSONWithIdempotency(t, http.MethodPost, base+"/quota-entitlements", home.Credential, "viewer-quota-attempt", activation), http.StatusForbidden, "viewer write")
+	getPaaSApplication(t, paasEndpoint, home.Credential, "application-shared-id", http.StatusOK)
+	createPaaSApplication(t, paasEndpoint, home.Credential, "application-viewer-denied", "viewer-denied", "viewer-application-attempt", http.StatusForbidden)
+	assertPaaSApplicationAbsent(t, ctx, admin, "application-viewer-denied")
 	revokeIAMBinding(t, iamEndpoint, homeBearer, viewerBinding.ID, "request-resource-viewer-revoked")
 	assertStatus(performJSON(t, http.MethodGet, base+"/service-installations", home.Credential, nil), http.StatusForbidden, "next-request role revocation")
+	getPaaSApplication(t, paasEndpoint, home.Credential, "application-shared-id", http.StatusForbidden)
 	waitAllIAMOutboxDelivered(t, ctx, admin)
 	waitAllPaaSOutboxDelivered(t, ctx, admin)
 	for _, tenant := range tenants {
@@ -1780,7 +1985,134 @@ func proveManagedServiceTenantProcesses(t *testing.T, ctx context.Context, admin
 			}
 		}
 	}
-	return []string{home.Credential, platform.Credential}
+	return tenants[1].quota, tenants[1].shared, append(applicationValues, home.Credential, platform.Credential)
+}
+
+func proveApplicationTenantProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, endpoint string, home, customer loginResult, platformCredential string) []string {
+	t.Helper()
+	tenants := []struct {
+		login      loginResult
+		operations []paasv1.Operation
+		value      string
+	}{
+		{login: home}, {login: customer},
+	}
+	assertStatus := func(response processResponse, expected int, boundary string) {
+		t.Helper()
+		if response.Status != expected {
+			t.Fatalf("application tenant %s status=%d want=%d", boundary, response.Status, expected)
+		}
+	}
+	for i := range tenants {
+		tenant := &tenants[i]
+		id, credential := string(tenant.login.Session.OrganizationID), tenant.login.Credential
+		tenant.value = "private-configuration-for-" + id + "-end"
+		shared := createPaaSApplication(t, endpoint, credential, "application-shared-id", "application-"+id, "shared-application-key", http.StatusCreated)
+		unique := createPaaSApplication(t, endpoint, credential, paasv1.ResourceID("application-only-"+id), "only-"+id, "unique-application-key", http.StatusCreated)
+		replay := createPaaSApplication(t, endpoint, credential, shared.Target.ID, "application-"+id, "shared-application-key", http.StatusOK)
+		if replay.ID != shared.ID {
+			t.Fatal("tenant application replay changed its Operation")
+		}
+		createPaaSApplication(t, endpoint, credential, shared.Target.ID, "changed-accepted-application", "shared-application-key", http.StatusConflict)
+		configuration := createPaaSConfiguration(t, endpoint, credential, "configuration-shared-id", "configuration-"+id, shared.Target.ID, "shared-configuration-key", http.StatusCreated)
+		uniqueConfiguration := createPaaSConfiguration(t, endpoint, credential, paasv1.ResourceID("configuration-only-"+id), "only-"+id, unique.Target.ID, "unique-configuration-key", http.StatusCreated)
+		configurationReplay := createPaaSConfiguration(t, endpoint, credential, configuration.Target.ID, "configuration-"+id, shared.Target.ID, "shared-configuration-key", http.StatusOK)
+		if configurationReplay.ID != configuration.ID {
+			t.Fatal("tenant configuration replay changed its Operation")
+		}
+		createPaaSConfiguration(t, endpoint, credential, configuration.Target.ID, "changed-accepted-configuration", shared.Target.ID, "shared-configuration-key", http.StatusConflict)
+		values := map[string]string{"TENANT_MARKER": tenant.value}
+		request := paasv1.CreateConfigurationRevisionRequest{ID: "configuration-revision-shared-id", Name: "values-" + id,
+			Spec: paasv1.ConfigurationRevisionSpec{ConfigurationID: configuration.Target.ID, Values: values, ContentDigest: paasv1.ConfigurationValuesDigest(values)}}
+		response := performJSONWithIdempotency(t, http.MethodPost, endpoint+"/v1/configuration-revisions", credential, "shared-configuration-revision-key", request)
+		assertStatus(response, http.StatusCreated, "create configuration revision")
+		var revision paasv1.Operation
+		if json.Unmarshal(response.Body, &revision) != nil || paasv1.ValidateOperation(revision) != nil || revision.Action != paasv1.OperationCreateConfigurationRevision || revision.Target.ID != request.ID {
+			t.Fatal("configuration revision did not produce its real Operation")
+		}
+		tenant.operations = []paasv1.Operation{shared, unique, configuration, uniqueConfiguration, revision}
+		for _, operation := range tenant.operations {
+			if operation.Scope != (paasv1.ResourceScope{Kind: paasv1.AuthorityTenant, TenantID: paasv1.TenantID(id)}) || operation.RequestedBy != (paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: string(tenant.login.Session.PrincipalID)}) {
+				t.Fatal("application resource lost its current IAM tenant or actor")
+			}
+		}
+	}
+	for i := range tenants {
+		tenant, other := &tenants[i], &tenants[1-i]
+		id, credential := string(tenant.login.Session.OrganizationID), tenant.login.Credential
+		shared := tenant.operations[0]
+		if shared.ID == other.operations[0].ID {
+			t.Fatal("same-key application requests merged two tenants")
+		}
+		headers := map[string]string{"X-Tenant-ID": string(other.login.Session.OrganizationID), "Matrix-Tenant-ID": string(other.login.Session.OrganizationID), "Matrix-Subject-Credential": other.login.Credential}
+		response := performJSONWithHeaders(t, http.MethodGet, endpoint+"/v1/applications/"+string(shared.Target.ID)+"?tenantId="+string(other.login.Session.OrganizationID), credential, "", nil, headers)
+		assertStatus(response, http.StatusOK, "same-ID header and URL confinement")
+		var application paasv1.Application
+		if json.Unmarshal(response.Body, &application) != nil || paasv1.ValidateApplication(application) != nil || application.Metadata.Scope != shared.Scope || application.Metadata.Name != "application-"+id {
+			t.Fatal("caller selectors chose the other same-ID application")
+		}
+		response = performJSONWithHeaders(t, http.MethodGet, endpoint+"/v1/configurations/configuration-shared-id", credential, "", nil, headers)
+		var configuration paasv1.Configuration
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &configuration) != nil || paasv1.ValidateConfiguration(configuration) != nil || configuration.Metadata.Scope != shared.Scope || configuration.ApplicationID != shared.Target.ID || configuration.Metadata.Name != "configuration-"+id {
+			t.Fatal("same-ID configuration crossed tenant ownership")
+		}
+		response = performJSONWithHeaders(t, http.MethodGet, endpoint+"/v1/configuration-revisions/configuration-revision-shared-id", credential, "", nil, headers)
+		var revision paasv1.ConfigurationRevision
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &revision) != nil || paasv1.ValidateConfigurationRevision(revision) != nil || revision.Metadata.Scope != shared.Scope || revision.Spec.Values["TENANT_MARKER"] != tenant.value || bytes.Contains(response.Body, []byte(other.value)) {
+			t.Fatal("same-ID configuration revision exposed another tenant's values")
+		}
+		for _, path := range []string{"/applications/" + string(other.operations[1].Target.ID), "/configurations/" + string(other.operations[3].Target.ID)} {
+			assertStatus(performJSONWithHeaders(t, http.MethodGet, endpoint+"/v1"+path, credential, "", nil, headers), http.StatusNotFound, "foreign resource")
+		}
+		for j, operation := range tenant.operations {
+			response := performJSONWithHeaders(t, http.MethodGet, endpoint+"/v1/operations/"+string(operation.ID), credential, "", nil, headers)
+			var current paasv1.Operation
+			if response.Status != http.StatusOK || json.Unmarshal(response.Body, &current) != nil || !reflect.DeepEqual(current, operation) {
+				t.Fatal("Operation read changed its tenant, actor or accepted resource")
+			}
+			assertStatus(performJSON(t, http.MethodGet, endpoint+"/v1/operations/"+string(other.operations[j].ID), credential, nil), http.StatusNotFound, "foreign Operation")
+			assertStatus(performJSON(t, http.MethodGet, endpoint+"/v1/operations/"+string(operation.ID), platformCredential, nil), http.StatusForbidden, "platform-only Operation read")
+		}
+		for _, path := range []string{"/applications/application-shared-id", "/configurations/configuration-shared-id", "/configuration-revisions/configuration-revision-shared-id"} {
+			assertStatus(performJSON(t, http.MethodGet, endpoint+"/v1"+path, platformCredential, nil), http.StatusForbidden, "platform-only tenant read")
+		}
+		createPaaSConfiguration(t, endpoint, credential, "configuration-foreign-reference", "foreign-application", other.operations[1].Target.ID, "foreign-application-reference", http.StatusNotFound)
+		foreign := paasv1.CreateConfigurationRevisionRequest{ID: "configuration-revision-foreign-reference", Name: "foreign-configuration", Spec: paasv1.ConfigurationRevisionSpec{ConfigurationID: other.operations[3].Target.ID, Values: revision.Spec.Values, ContentDigest: revision.Spec.ContentDigest}}
+		assertStatus(performJSONWithIdempotency(t, http.MethodPost, endpoint+"/v1/configuration-revisions", credential, "foreign-configuration-reference", foreign), http.StatusNotFound, "foreign configuration reference")
+		for _, field := range []string{"tenantId", "organizationId", "requestedBy"} {
+			request := map[string]any{"id": "application-forged-" + field, "name": "forged-authority", field: string(other.login.Session.OrganizationID)}
+			assertStatus(performJSONWithIdempotency(t, http.MethodPost, endpoint+"/v1/applications", credential, "forged-application-"+field, request), http.StatusBadRequest, "authority body selector")
+		}
+		var partial int
+		if err := admin.QueryRow(ctx, `SELECT
+			(SELECT count(*) FROM paas.applications WHERE tenant_id=$1 AND id=ANY($2::text[])) +
+			(SELECT count(*) FROM paas.configurations WHERE tenant_id=$1 AND id='configuration-foreign-reference') +
+			(SELECT count(*) FROM paas.configuration_revisions WHERE tenant_id=$1 AND id='configuration-revision-foreign-reference') +
+			(SELECT count(*) FROM paas.operations WHERE tenant_id=$1 AND target_id=ANY($2::text[])) +
+			(SELECT count(*) FROM paas.audit_outbox WHERE tenant_id=$1 AND document#>>'{target,id}'=ANY($2::text[]))`,
+			id, []string{"configuration-foreign-reference", "configuration-revision-foreign-reference", "application-forged-tenantId", "application-forged-organizationId", "application-forged-requestedBy"}).Scan(&partial); err != nil || partial != 0 {
+			t.Fatalf("rejected tenant attack left resource/Operation/outbox changes=%d err=%v", partial, err)
+		}
+	}
+	createPaaSApplication(t, endpoint, platformCredential, "application-platform-denied", "platform-denied", "platform-application-attempt", http.StatusForbidden)
+	assertPaaSApplicationAbsent(t, ctx, admin, "application-platform-denied")
+	waitAllIAMOutboxDelivered(t, ctx, admin)
+	waitAllPaaSOutboxDelivered(t, ctx, admin)
+	for _, tenant := range tenants {
+		for _, operation := range tenant.operations {
+			action := map[paasv1.OperationAction]auditv1.Action{
+				paasv1.OperationCreateApplication:           auditv1.ActionPaaSApplicationCreated,
+				paasv1.OperationCreateConfiguration:         auditv1.ActionPaaSConfigurationCreated,
+				paasv1.OperationCreateConfigurationRevision: auditv1.ActionPaaSConfigurationRevisionCreated,
+			}[operation.Action]
+			assertPaaSAuditFact(t, ctx, admin, action, string(operation.Target.ID), operation.RequestedBy.ID)
+		}
+		var leaked bool
+		if err := admin.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM audit.records WHERE event_document::text LIKE '%' || $1 || '%')", tenant.value).Scan(&leaked); err != nil || leaked {
+			t.Fatal("configuration values entered the Audit contract")
+		}
+	}
+	return []string{tenants[0].value, tenants[1].value}
 }
 
 func assertManagedServiceRetained(t *testing.T, endpoint, bearer string, quota managedservicev1.QuotaEntitlement, installation managedservicev1.ServiceInstallation) {
@@ -1846,7 +2178,7 @@ func createPaaSConfiguration(
 	applicationID paasv1.ResourceID,
 	idempotencyKey string,
 	status int,
-) {
+) paasv1.Operation {
 	t.Helper()
 	response := performJSONWithIdempotency(
 		t,
@@ -1862,7 +2194,7 @@ func createPaaSConfiguration(
 		t.Fatalf("create PaaS configuration %s status=%d want=%d", id, response.Status, status)
 	}
 	if status != http.StatusCreated && status != http.StatusOK {
-		return
+		return paasv1.Operation{}
 	}
 	var operation paasv1.Operation
 	if err := json.Unmarshal(response.Body, &operation); err != nil ||
@@ -1871,6 +2203,7 @@ func createPaaSConfiguration(
 		operation.Target != (paasv1.ResourceRef{Kind: "Configuration", ID: id}) {
 		t.Fatalf("decode PaaS configuration operation: operation=%#v err=%v", operation, err)
 	}
+	return operation
 }
 
 func getPaaSApplication(
@@ -2317,7 +2650,10 @@ func assertPaaSAuditFact(
 		    AND decision.allowed
 		    AND decision.principal_id = $3
 		    AND record.event_document->>'iamDecisionId' = decision.id
-		    AND record.event_document#>>'{actor,id}' = decision.principal_id`,
+		    AND record.event_document#>>'{actor,id}' = decision.principal_id
+		    AND record.event_document->>'tenantId' = outbox.tenant_id
+		    AND record.event_document#>>'{target,id}' = outbox.document#>>'{target,id}'
+		    AND record.event_document->>'operationId' = outbox.operation_id`,
 		string(action),
 		targetID,
 		actorID,

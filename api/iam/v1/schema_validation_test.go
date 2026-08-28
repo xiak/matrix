@@ -3,6 +3,7 @@ package iamv1
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -35,6 +36,87 @@ func TestIAMSchemaAcceptsGoUTCSecondEncoding(t *testing.T) {
 	}
 	if err := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), "Readiness").Validate(instance); err != nil {
 		t.Fatalf("Go-encoded UTC second does not satisfy IAM schema: %v", err)
+	}
+}
+
+func TestIAMPasswordChangePolicyHasNoCurrentSessionSelector(t *testing.T) {
+	schema := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), "ChangePasswordRequest")
+	for _, setting := range []any{nil, true, false} {
+		instance := map[string]any{"currentPassword": "Current-Test-Password-49!", "newPassword": "Replacement-Test-Password-73!", "requestId": "request-password-policy"}
+		if setting != nil {
+			instance["revokeOtherSessions"] = setting
+		}
+		if err := schema.Validate(instance); err != nil {
+			t.Fatalf("valid session policy rejected: %v", err)
+		}
+		encoded, _ := json.Marshal(instance)
+		var request ChangePasswordRequest
+		if DecodeRequest(bytes.NewReader(encoded), &request) != nil || ValidateChangePasswordRequest(request) != nil {
+			t.Fatal("valid password policy failed strict request decoding")
+		}
+		if (setting == nil) != (request.RevokeOtherSessions == nil) ||
+			setting != nil && *request.RevokeOtherSessions != setting.(bool) {
+			t.Fatal("explicit false and omitted policy were not distinguished")
+		}
+		if _, err := json.Marshal(request); !errors.Is(err, ErrSecretSerialization) {
+			t.Fatal("password policy serialized credential material")
+		}
+		for _, selector := range []string{"sessionId", "currentSessionId", "principalId", "tenantId"} {
+			instance[selector] = "forged"
+			encoded, _ := json.Marshal(instance)
+			var attack ChangePasswordRequest
+			if schema.Validate(instance) == nil || DecodeRequest(bytes.NewReader(encoded), &attack) == nil {
+				t.Fatalf("password change accepted caller-selected %s", selector)
+			}
+			delete(instance, selector)
+		}
+		for _, invalid := range []any{"false", nil, 0} {
+			instance["revokeOtherSessions"] = invalid
+			encoded, _ = json.Marshal(instance)
+			if schema.Validate(instance) == nil || DecodeRequest(bytes.NewReader(encoded), &request) == nil {
+				t.Fatal("password change accepted a non-boolean session policy")
+			}
+		}
+	}
+}
+
+func TestIAMTenantLifecycleRequestsBindVersionAndOriginalPrimary(t *testing.T) {
+	document := loadIAMOpenAPI(t)
+	status := map[string]any{"status": "DISABLED", "resourceVersion": float64(1), "requestId": "request-status"}
+	recovery := map[string]any{"principalId": "primary-original", "initialPassword": "Recovery-Temporary-Password-79!", "resourceVersion": float64(1), "requestId": "request-recovery"}
+	for name, instance := range map[string]map[string]any{"SetOrganizationStatusRequest": status, "RecoverOrganizationAdministratorRequest": recovery} {
+		schema := compileIAMOpenAPISchema(t, document, name)
+		if err := schema.Validate(instance); err != nil {
+			t.Fatalf("valid %s: %v", name, err)
+		}
+		for _, selector := range []string{"tenantId", "installationId", "organizationId", "newPrimaryId", "role"} {
+			instance[selector] = "forged"
+			if schema.Validate(instance) == nil {
+				t.Fatalf("%s accepted selector %s", name, selector)
+			}
+			delete(instance, selector)
+		}
+		instance["resourceVersion"] = float64(0)
+		if schema.Validate(instance) == nil {
+			t.Fatalf("%s accepted missing concurrency authority", name)
+		}
+		instance["resourceVersion"] = float64(1)
+	}
+	encoded, _ := json.Marshal(recovery)
+	var request RecoverOrganizationAdministratorRequest
+	if err := DecodeRequest(bytes.NewReader(encoded), &request); err != nil || ValidateRecoverOrganizationAdministratorRequest(request) != nil {
+		t.Fatal("valid primary recovery request rejected")
+	}
+	if _, err := json.Marshal(request); !errors.Is(err, ErrSecretSerialization) {
+		t.Fatal("primary recovery serialized its temporary credential")
+	}
+	request.PrincipalID = ""
+	if ValidateRecoverOrganizationAdministratorRequest(request) == nil {
+		t.Fatal("recovery accepted missing original principal")
+	}
+	delete(recovery, "principalId")
+	if compileIAMOpenAPISchema(t, document, "RecoverOrganizationAdministratorRequest").Validate(recovery) == nil {
+		t.Fatal("recovery schema accepted missing original principal")
 	}
 }
 

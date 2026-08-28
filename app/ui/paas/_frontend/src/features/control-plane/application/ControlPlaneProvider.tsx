@@ -36,13 +36,14 @@ type ControlPlaneContextValue = {
 
 const ControlPlaneContext = createContext<ControlPlaneContextValue | null>(null);
 
-function loadMessage(error: unknown): string {
+function failureMessage(error: unknown, operation: "read" | "write" = "read"): string {
   if (error instanceof HttpProblem && error.status === 401) {
     return "IAM 会话已失效，请注销后重新登录。";
   }
   if (error instanceof HttpProblem && error.status === 403) {
-    return "当前角色无权查看托管服务控制面。";
+    return operation === "write" ? "当前角色无权执行此操作。" : "当前角色无权查看托管服务控制面。";
   }
+  if (operation === "write") return "操作未完成，请检查输入或稍后重试。";
   return "托管服务控制面暂时不可用，未展示任何模拟资源。";
 }
 
@@ -74,7 +75,7 @@ export function ControlPlaneProvider({
       setSnapshot(await repository.load(credential));
     } catch (loadError) {
       setSnapshot(null);
-      setError(loadMessage(loadError));
+      setError(failureMessage(loadError));
     } finally {
       setLoading(false);
     }
@@ -92,7 +93,7 @@ export function ControlPlaneProvider({
       (loadError: unknown) => {
         if (!active) return;
         setSnapshot(null);
-        setError(loadMessage(loadError));
+        setError(failureMessage(loadError));
       }
     ).finally(() => {
       if (active) setLoading(false);
@@ -114,7 +115,6 @@ export function ControlPlaneProvider({
             pending.map((item) => repository.getInstallation(credential, item.id))
           );
           if (!active) return;
-          setError(null);
           const byId = new Map(updates.map((item) => [item.id, item]));
           setSnapshot((current) => current ? {
             ...current,
@@ -126,7 +126,10 @@ export function ControlPlaneProvider({
           const refreshed = await repository.load(credential);
           if (active) setSnapshot(refreshed);
         } catch (pollError: unknown) {
-          if (active) setError(loadMessage(pollError));
+          if (active) {
+            setSnapshot(null);
+            setError(failureMessage(pollError));
+          }
         }
       })();
     }, 4_000);
@@ -148,7 +151,8 @@ export function ControlPlaneProvider({
       } : current);
       return true;
     } catch (mutationError) {
-      setError(loadMessage(mutationError));
+      if (mutationError instanceof HttpProblem && mutationError.status === 401) setSnapshot(null);
+      setError(failureMessage(mutationError, "write"));
       return false;
     } finally {
       setMutation(null);
@@ -167,7 +171,8 @@ export function ControlPlaneProvider({
       } : current);
       return true;
     } catch (mutationError) {
-      setError(loadMessage(mutationError));
+      if (mutationError instanceof HttpProblem && mutationError.status === 401) setSnapshot(null);
+      setError(failureMessage(mutationError, "write"));
       return false;
     } finally {
       setMutation(null);

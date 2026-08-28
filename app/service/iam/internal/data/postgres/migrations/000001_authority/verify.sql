@@ -127,7 +127,7 @@ BEGIN
             'EXECUTE'
        )
        OR NOT has_function_privilege(
-            'matrix_iam_api', 'iam.change_password(text,text,text,text,jsonb)', 'EXECUTE'
+            'matrix_iam_api', 'iam.change_password(text,text,text,text,jsonb,text,boolean)', 'EXECUTE'
        )
        OR NOT has_function_privilege(
             'matrix_iam_api', 'iam.revoke_session(text,text,text,text,jsonb)', 'EXECUTE'
@@ -165,7 +165,7 @@ BEGIN
        )
        OR has_function_privilege(
             'matrix_iam_worker',
-            'iam.change_password(text,text,text,text,jsonb)',
+            'iam.change_password(text,text,text,text,jsonb,text,boolean)',
             'EXECUTE'
        )
        OR has_function_privilege(
@@ -179,6 +179,24 @@ BEGIN
             'matrix_iam_api', 'iam.assert_user_audit_actor(text,text,jsonb)', 'EXECUTE'
        ) THEN
         RAISE EXCEPTION 'IAM API/worker function authority is invalid';
+    END IF;
+
+    IF to_regprocedure('iam.change_password(text,text,text,text,jsonb)') IS NOT NULL
+       OR NOT EXISTS (
+           SELECT 1 FROM pg_catalog.pg_attribute AS column_definition
+            WHERE column_definition.attrelid = 'iam.sessions'::regclass
+              AND column_definition.attname = 'credential_version'
+              AND column_definition.atttypid = 'bigint'::regtype
+              AND NOT column_definition.attisdropped
+       ) OR NOT EXISTS (
+           SELECT 1 FROM pg_catalog.pg_attribute AS column_definition
+            WHERE column_definition.attrelid = 'iam.user_credentials'::regclass
+              AND column_definition.attname = 'credential_version'
+              AND column_definition.atttypid = 'bigint'::regtype
+              AND column_definition.attnotnull
+              AND NOT column_definition.attisdropped
+       ) THEN
+        RAISE EXCEPTION 'IAM password/session contract is invalid';
     END IF;
 
     IF to_regnamespace('audit') IS NOT NULL AND (

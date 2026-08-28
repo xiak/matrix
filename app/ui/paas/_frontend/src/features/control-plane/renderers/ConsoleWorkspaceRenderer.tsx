@@ -33,8 +33,10 @@ function OrderNotice({ children }: { children: React.ReactNode }) {
 }
 
 function QuotaOrder({
+  feedback,
   scene
 }: {
+  feedback?: React.ReactNode;
   scene: Extract<NonNullable<ConsoleWorkspaceScene>, { kind: "quota-order" }>;
 }) {
   const controlPlane = useControlPlane();
@@ -66,6 +68,7 @@ function QuotaOrder({
           <Typography.Title as="h2" level={3}>激活服务配额</Typography.Title>
         </div>
       </header>
+      {feedback}
       {scene.options.length === 0 ? (
         <OrderNotice>服务目录没有返回可激活的真实产品。</OrderNotice>
       ) : (
@@ -124,8 +127,10 @@ function QuotaOrder({
 }
 
 function InstallationOrder({
+  feedback,
   scene
 }: {
+  feedback?: React.ReactNode;
   scene: Extract<NonNullable<ConsoleWorkspaceScene>, { kind: "installation-order" }>;
 }) {
   const controlPlane = useControlPlane();
@@ -135,18 +140,19 @@ function InstallationOrder({
   const [id, setId] = useState("postgres-primary");
   const [accepted, setAccepted] = useState(false);
   const selectedEntitlement = scene.entitlementOptions.find((item) => item.entitlementId === entitlementId);
-  const canSubmit = Boolean(selectedEntitlement && regionId && installationIDPattern.test(id) && name.trim());
+  const selectedRegion = scene.regionOptions.find((item) => item.id === regionId);
+  const canSubmit = Boolean(selectedEntitlement && selectedRegion && installationIDPattern.test(id) && name.trim());
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!selectedEntitlement) return;
+    if (!selectedEntitlement || !selectedRegion) return;
     setAccepted(false);
     const success = await controlPlane.createInstallation({
       id,
       name: name.trim(),
       offeringId: selectedEntitlement.offeringId,
-      quotaEntitlementId: entitlementId,
-      regionId
+      quotaEntitlementId: selectedEntitlement.entitlementId,
+      regionId: selectedRegion.id
     });
     setAccepted(success);
   }
@@ -160,6 +166,7 @@ function InstallationOrder({
           <Typography.Title as="h2" level={3}>安装 PostgreSQL</Typography.Title>
         </div>
       </header>
+      {feedback}
       {scene.entitlementOptions.length === 0 ? (
         <OrderNotice>没有可用配额。请先激活 PostgreSQL 配额，或等待现有安装释放额度。</OrderNotice>
       ) : scene.regionOptions.length === 0 ? (
@@ -179,7 +186,8 @@ function InstallationOrder({
             <Input onChange={(event) => { setName(event.target.value); setAccepted(false); }} required value={name} />
           </Field>
           <Field label="配额">
-            <Select onChange={(event) => { setEntitlementId(event.target.value); setAccepted(false); }} value={entitlementId}>
+            <Select onChange={(event) => { setEntitlementId(event.target.value); setAccepted(false); }} required value={selectedEntitlement?.entitlementId ?? ""}>
+              <option disabled value="">请选择可用配额</option>
               {scene.entitlementOptions.map((item) => (
                 <option key={item.entitlementId} value={item.entitlementId}>
                   {item.label} · 可用 {item.available}
@@ -188,7 +196,8 @@ function InstallationOrder({
             </Select>
           </Field>
           <Field label="安装区域">
-            <Select onChange={(event) => { setRegionId(event.target.value); setAccepted(false); }} value={regionId}>
+            <Select onChange={(event) => { setRegionId(event.target.value); setAccepted(false); }} required value={selectedRegion?.id ?? ""}>
+              <option disabled value="">请选择就绪区域</option>
               {scene.regionOptions.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
             </Select>
           </Field>
@@ -208,8 +217,10 @@ function InstallationOrder({
 }
 
 function PlatformStatus({
+  feedback,
   scene
 }: {
+  feedback?: React.ReactNode;
   scene: Extract<NonNullable<ConsoleWorkspaceScene>, { kind: "platform-status" }>;
 }) {
   const facts = useMemo(() => [
@@ -227,6 +238,7 @@ function PlatformStatus({
           <Typography.Title as="h2" level={3}>平台状态</Typography.Title>
         </div>
       </header>
+      {feedback}
       <div className={styles.statusList}>
         {facts.map((fact) => {
           const Icon = fact.icon;
@@ -247,11 +259,13 @@ function PlatformStatus({
 }
 
 export function ConsoleWorkspaceRenderer({
+  feedback,
   scene
 }: {
+  feedback?: React.ReactNode;
   scene: NonNullable<ConsoleWorkspaceScene>;
 }) {
-  if (scene.kind === "quota-order") return <QuotaOrder scene={scene} />;
-  if (scene.kind === "installation-order") return <InstallationOrder scene={scene} />;
-  return <PlatformStatus scene={scene} />;
+  if (scene.kind === "quota-order") return <QuotaOrder feedback={feedback} scene={scene} />;
+  if (scene.kind === "installation-order") return <InstallationOrder feedback={feedback} scene={scene} />;
+  return <PlatformStatus feedback={feedback} scene={scene} />;
 }

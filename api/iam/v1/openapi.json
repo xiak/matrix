@@ -17,6 +17,8 @@
         "enum": [
           "iam.organization.create",
           "iam.organization.read",
+          "iam.organization.set-status",
+          "iam.organization-administrator.recover",
           "iam.account-alias.set",
           "iam.principal.list",
           "iam.principal.set-status",
@@ -196,6 +198,10 @@
                 "properties": {
                   "action": {
                     "enum": [
+                      "iam.organization.create",
+                      "iam.organization.read",
+                      "iam.organization.set-status",
+                      "iam.organization-administrator.recover",
                       "iam.platform-role-binding.put",
                       "iam.platform-role-binding.revoke",
                       "paas.execution-pool.create",
@@ -272,6 +278,58 @@
                   "properties": {
                     "kind": {
                       "const": "ORGANIZATION"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.organization.set-status"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ORGANIZATION"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.organization-administrator.recover"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "PRINCIPAL"
                     }
                   },
                   "required": [
@@ -1445,6 +1503,58 @@
                   "properties": {
                     "kind": {
                       "const": "ORGANIZATION"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.organization.set-status"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ORGANIZATION"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.organization-administrator.recover"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "PRINCIPAL"
                     }
                   },
                   "required": [
@@ -2763,6 +2873,11 @@
           },
           "requestId": {
             "$ref": "#/components/schemas/ID"
+          },
+          "revokeOtherSessions": {
+            "default": true,
+            "description": "Revoke other login sessions, preserving only the current bearer session after transactional revalidation. Omission defaults to true. Required password replacement always revokes other sessions; false can retain only already valid sessions of the same user.",
+            "type": "boolean"
           }
         },
         "required": [
@@ -2863,6 +2978,36 @@
       },
       "CurrentIdentity": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "canCreateOrganizations": {
+                  "const": true
+                }
+              },
+              "required": [
+                "canCreateOrganizations"
+              ]
+            },
+            "then": {
+              "properties": {
+                "principal": {
+                  "properties": {
+                    "mustChangePassword": {
+                      "const": false
+                    }
+                  }
+                },
+                "roles": {
+                  "contains": {
+                    "const": "PLATFORM_OPERATOR"
+                  }
+                }
+              }
+            }
+          }
+        ],
         "properties": {
           "account": {
             "$ref": "#/components/schemas/OrganizationAccount"
@@ -3411,6 +3556,33 @@
         ],
         "type": "string"
       },
+      "RecoverOrganizationAdministratorRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "initialPassword": {
+            "$ref": "#/components/schemas/Secret",
+            "writeOnly": true
+          },
+          "principalId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "resourceVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "initialPassword",
+          "principalId",
+          "requestId",
+          "resourceVersion"
+        ],
+        "type": "object"
+      },
       "ResetUserPasswordRequest": {
         "additionalProperties": false,
         "properties": {
@@ -3744,6 +3916,28 @@
           "alias",
           "requestId",
           "resourceVersion"
+        ],
+        "type": "object"
+      },
+      "SetOrganizationStatusRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "resourceVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/OrganizationStatus"
+          }
+        },
+        "required": [
+          "requestId",
+          "resourceVersion",
+          "status"
         ],
         "type": "object"
       },
@@ -4352,7 +4546,7 @@
             "$ref": "#/components/responses/ProblemResponse"
           }
         },
-        "summary": "List accounts as the bootstrap administrator"
+        "summary": "List tenant accounts as a platform operator"
       },
       "post": {
         "operationId": "createOrganization",
@@ -4406,6 +4600,185 @@
           }
         },
         "summary": "Open a tenant account"
+      }
+    },
+    "/v1/organizations/{organizationId}": {
+      "get": {
+        "operationId": "getOrganization",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organizationId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationAccount"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Read tenant account metadata as a platform operator"
+      }
+    },
+    "/v1/organizations/{organizationId}:recover-administrator": {
+      "post": {
+        "operationId": "recoverOrganizationAdministrator",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organizationId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecoverOrganizationAdministratorRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationAccount"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Recover the original primary user without transferring ownership"
+      }
+    },
+    "/v1/organizations/{organizationId}:set-status": {
+      "post": {
+        "operationId": "setOrganizationStatus",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organizationId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetOrganizationStatusRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationAccount"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Suspend or restore tenant access without stopping workloads"
       }
     },
     "/v1/principals": {

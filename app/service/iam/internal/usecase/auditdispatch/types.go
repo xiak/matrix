@@ -6,6 +6,7 @@ import (
 	"time"
 
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 )
 
 var (
@@ -17,7 +18,10 @@ var (
 )
 
 type Claim struct {
-	TenantID       auditv1.TenantID
+	// OrganizationID owns the IAM outbox row, not necessarily the Audit chain.
+	OrganizationID iamv1.OrganizationID
+	// InstallationID is sealed by that organization's bootstrap receipt.
+	InstallationID string
 	EventID        auditv1.EventID
 	Attempts       int
 	FencingToken   uint64

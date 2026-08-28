@@ -17,6 +17,8 @@ type ActorReference struct {
 type TargetReference struct {
 	Kind TargetKind `json:"kind"`
 	ID   string     `json:"id"`
+	// Only primary recovery needs this resource namespace; it is not chain authority.
+	TenantID TenantID `json:"tenantId,omitempty"`
 }
 
 // Event contains one sanitized fact. Source is deliberately absent: the

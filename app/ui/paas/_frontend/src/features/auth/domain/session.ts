@@ -19,5 +19,6 @@ export type SessionPhase =
   | "authenticating"
   | "password-change-required"
   | "changing-password"
+  | "updating-password"
   | "authenticated"
   | "revoking";

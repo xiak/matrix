@@ -105,6 +105,7 @@ func digestSanitized(domain string, value any) (string, error) {
 func newAuditEvent(
 	eventID string,
 	tenantID iamv1.OrganizationID,
+	installationID string,
 	actor auditv1.ActorReference,
 	action auditv1.Action,
 	target auditv1.TargetReference,
@@ -116,19 +117,20 @@ func newAuditEvent(
 	occurredAt time.Time,
 ) (auditv1.Event, error) {
 	event := auditv1.Event{
-		APIVersion:    auditv1.APIVersion,
-		Kind:          "AuditEvent",
-		EventID:       auditv1.EventID(eventID),
-		TenantID:      auditv1.TenantID(tenantID),
-		Actor:         actor,
-		IAMDecisionID: auditv1.DecisionID(decisionID),
-		Action:        action,
-		Target:        target,
-		Result:        result,
-		RequestDigest: requestDigest,
-		RequestID:     requestID,
-		CorrelationID: correlationID,
-		OccurredAt:    occurredAt,
+		APIVersion:     auditv1.APIVersion,
+		Kind:           "AuditEvent",
+		EventID:        auditv1.EventID(eventID),
+		TenantID:       auditv1.TenantID(tenantID),
+		InstallationID: installationID,
+		Actor:          actor,
+		IAMDecisionID:  auditv1.DecisionID(decisionID),
+		Action:         action,
+		Target:         target,
+		Result:         result,
+		RequestDigest:  requestDigest,
+		RequestID:      requestID,
+		CorrelationID:  correlationID,
+		OccurredAt:     occurredAt,
 	}
 	if err := auditv1.ValidateEventForSource(auditv1.SourceIAM, event); err != nil {
 		return auditv1.Event{}, fmt.Errorf("%w: construct IAM Audit event", ErrUnavailable)

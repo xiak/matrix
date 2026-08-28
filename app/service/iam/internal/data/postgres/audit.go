@@ -47,17 +47,18 @@ func (repository *AuditOutboxRepository) Claim(
 	err := repository.pool.QueryRow(
 		ctx,
 		`SELECT tenant_id, event_id, event_document, attempts,
-		        fencing_token, lease_expires_at
+		        fencing_token, lease_expires_at, installation_id
 		   FROM iam.claim_audit_event($1, $2)`,
 		workerID,
 		int(leaseDuration/time.Second),
 	).Scan(
-		&claim.TenantID,
+		&claim.OrganizationID,
 		&claim.EventID,
 		&document,
 		&claim.Attempts,
 		&fencingToken,
 		&claim.LeaseExpiresAt,
+		&claim.InstallationID,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return auditdispatch.Claim{}, false, nil
@@ -71,8 +72,7 @@ func (repository *AuditOutboxRepository) Claim(
 	}
 	claim.FencingToken = uint64(fencingToken)
 	if auditv1.DecodeRequest(bytes.NewReader(document), &claim.Event) != nil ||
-		auditv1.ValidateEventForSource(auditv1.SourceIAM, claim.Event) != nil ||
-		claim.Event.TenantID != claim.TenantID || claim.Event.EventID != claim.EventID {
+		auditdispatch.ValidateClaim(claim) != nil {
 		clear(document)
 		completionErr := repository.Complete(ctx, auditdispatch.Completion{
 			EventID: claim.EventID, WorkerID: workerID, FencingToken: claim.FencingToken,

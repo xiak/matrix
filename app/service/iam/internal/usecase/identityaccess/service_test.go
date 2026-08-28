@@ -192,6 +192,73 @@ func mustAuditSource(t *testing.T, action auditv1.Action) auditv1.Source {
 	return contract.Source
 }
 
+func TestPasswordChangeRetainsCurrentAndHonorsEffectiveSessionPolicy(t *testing.T) {
+	keep, revoke := false, true
+	for _, scenario := range []struct {
+		name       string
+		forced     bool
+		option     *bool
+		otherValid bool
+	}{
+		{"forced overrides false", true, &keep, false},
+		{"ordinary defaults true", false, nil, false},
+		{"ordinary explicit true", false, &revoke, false},
+		{"ordinary explicit false", false, &keep, true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			repository := &coreRepository{transaction: newCoreTransaction()}
+			sequence := 0
+			service, err := NewAuthority(repository, Config{NewID: func(prefix string) (string, error) {
+				sequence++
+				return fmt.Sprintf("%s-policy-%d", prefix, sequence), nil
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			document := coreBootstrap(t)
+			if _, err := service.Bootstrap(context.Background(), document); err != nil {
+				t.Fatal(err)
+			}
+			// This is the unit fixture for ordinary versus required replacement;
+			// real first-login/reset/recovery transitions are owned by the PG gate.
+			principal := repository.transaction.users[document.Administrator.ID]
+			principal.MustChangePassword = scenario.forced
+			repository.transaction.users[principal.ID] = principal
+			repository.transaction.principal = principal
+			login := func() iamv1.LoginResponse {
+				t.Helper()
+				result, err := service.Login(context.Background(), iamv1.LoginRequest{
+					LoginName: "admin", Password: document.Administrator.Password, RequestID: "request-policy-login",
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return result
+			}
+			current, other, loggedOut := login(), login(), login()
+			if _, err := service.Logout(context.Background(), loggedOut.Credential, iamv1.LogoutRequest{RequestID: "request-policy-logout"}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := service.ChangePassword(context.Background(), current.Credential, iamv1.ChangePasswordRequest{
+				CurrentPassword: document.Administrator.Password, NewPassword: coreSecret(t, "Policy-Replacement-Password-73!"),
+				RequestID: "request-policy-change", RevokeOtherSessions: scenario.option,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			for _, check := range []struct {
+				session iamv1.LoginResponse
+				valid   bool
+			}{{current, true}, {other, scenario.otherValid}, {loggedOut, false}} {
+				decision, err := service.Authorize(context.Background(), coreServiceCredential(t, document, iamv1.ServicePaaS), check.session.Credential,
+					iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-policy"}, RequestID: "request-policy-authorize", CorrelationID: "correlation-policy"})
+				if check.valid && (err != nil || !decision.Allowed) || !check.valid && !errors.Is(err, ErrUnauthenticated) {
+					t.Fatalf("password policy current=%t valid=%t allowed=%t error=%v", check.session.Session.ID == current.Session.ID, check.valid, decision.Allowed, err)
+				}
+			}
+		})
+	}
+}
+
 func TestIAMCoreUsecasesBindCredentialsAndRecordClosedAuthorization(t *testing.T) {
 	repository := &coreRepository{transaction: newCoreTransaction()}
 	sequence := 0
@@ -615,11 +682,10 @@ func (transaction *coreTransaction) IssueSession(
 	}
 	transaction.sessions[mutation.LookupDigest] = SessionCredential{
 		Subject: authority.SubjectContext{
-			Organization:           transaction.organization,
-			Principal:              principal,
-			Session:                mutation.Session,
-			Roles:                  roles,
-			BootstrapAdministrator: principal.ID == transaction.principal.ID,
+			Organization: transaction.organization,
+			Principal:    principal,
+			Session:      mutation.Session,
+			Roles:        roles,
 		},
 		VerificationDigest: mutation.VerificationDigest,
 	}
@@ -711,6 +777,15 @@ func (transaction *coreTransaction) ChangePassword(
 	}
 	transaction.passwords[mutation.PrincipalID] = mutation.NewPasswordHash
 	principal := transaction.users[mutation.PrincipalID]
+	for lookup, binding := range transaction.sessions {
+		if binding.Subject.Principal.ID == mutation.PrincipalID && binding.Subject.Session.ID != mutation.SessionID &&
+			(principal.MustChangePassword || mutation.RevokeOtherSessions) && binding.Subject.Session.Status == iamv1.SessionActive {
+			binding.Subject.Session.Status = iamv1.SessionRevoked
+			now := transaction.now
+			binding.Subject.Session.RevokedAt = &now
+			transaction.sessions[lookup] = binding
+		}
+	}
 	principal.MustChangePassword = false
 	principal.ResourceVersion++
 	principal.UpdatedAt = transaction.now
@@ -816,7 +891,7 @@ func (transaction *coreTransaction) RevokeRoleBinding(
 func (transaction *coreTransaction) Readiness(context.Context) (ReadinessSnapshot, error) {
 	return ReadinessSnapshot{
 		Ready:         transaction.status.State == iamv1.BootstrapReady,
-		SchemaVersion: 2,
+		SchemaVersion: SchemaVersion,
 		CheckedAt:     transaction.now,
 	}, nil
 }

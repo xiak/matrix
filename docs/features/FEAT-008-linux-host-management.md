@@ -159,14 +159,13 @@ Operations have distinct lifecycles.
 
 The signed release manifest names IAM, Audit and PaaS schema versions
 individually. New bundles use manifest v2 and the closed authority profile;
-the current source requires IAM 2, Audit 2 and PaaS 2. A separate contract
+the current source requires IAM 3, Audit 2 and PaaS 2. A separate contract
 revision binds the compatible function/wire boundary: changing a return-column
-shape without changing schema numbers still changes this profile. Revision 1
-covers the event-bound producer proof and host admission. The pending authority
-integration targets IAM 3 / Audit 2 / PaaS 2, revision 3, including the seven-column
-IAM Audit claim and credential-generation/password-session contracts owned by
-[FEAT-006](FEAT-006-platform-authorities.md). Adoption must verify their exact
-function shapes; the current branch is not yet on that profile. Equal revisions
+shape without changing schema numbers still changes this profile. Revision 3
+includes the seven-column IAM Audit claim and credential-generation/password-
+session contracts owned by [FEAT-006](FEAT-006-platform-authorities.md), while
+retaining event-bound producer proof and host admission. Readiness and retained-
+data gates verify the exact function shapes. Equal revisions
 with different authority schema tuples still cannot admit a transition.
 The published Phase 1 v1 manifest and
 sealed backup formats remain verifiable without changing their bytes; this is
@@ -358,8 +357,8 @@ builds passed locally. Source `3e208ea` passed
 including all existing Go/race, PostgreSQL/authority-process and real
 node/collector process jobs.
 
-The fixed account/historical-producer-proof integration has passed this
-branch's host admission regression; its authority evidence is owned by
+The fixed account, historical-proof and lifecycle/session integration has passed
+this branch's host admission regression; its authority evidence is owned by
 [FEAT-006](FEAT-006-platform-authorities.md).
 
 The release builder now emits the explicit authority profile and contract
@@ -426,8 +425,11 @@ The existing journal/lifecycle gates preserve the node's sealed identity and
 prevent platform database/backup phases or cross-purpose directory reuse.
 Linux local-machine tests cover retained executor files, credentials and backup
 bytes, including recovery rejection at every effect boundary when the current,
-target and authenticated backup profiles differ. This branch retains its
-IAM 2 / Audit 2 / PaaS 2, revision 1 platform profile.
+target and authenticated backup profiles differ. Those node milestones did not
+change the then-current platform database profile. The later authority
+integration uses the composition specified above; the existing lifecycle gate
+explicitly rejects transitions in either direction with the preceding
+IAM 2 / Audit 2 / PaaS 2, revision 1 profile before journal or provider effects.
 
 Full local Go tests/vet, affected-package race checks, architecture, module
 verification, stable generation, Linux builds/vet and ten focused repetitions
@@ -441,9 +443,9 @@ modes were restored after the Windows-origin transfer before verification.
 This is not evidence of a portable archive format, certificate renewal/revocation,
 or a compatible signed platform/node release pair.
 
-Next in P3-1: integrate the fixed authority prerequisites, then installation-owned
-certificate lifecycle and explicit platform authorization when upgrading an older
-installation, before remote application delivery.
+Next in P3-1 after the integrated authority slice's independent gates:
+installation-owned certificate lifecycle and explicit platform authorization
+when upgrading an older installation, before remote application delivery.
 P3-1 and the complete Phase 3 release remain unaccepted.
 Retained-data schema migration alone does not establish runnable N-1
 compatibility; the complete offline lifecycle gate must still prove an actual

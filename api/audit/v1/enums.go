@@ -24,18 +24,22 @@ const (
 )
 
 const (
-	ActionIAMOrganizationCreated  Action = "iam.organization.created"
-	ActionIAMAccountAliasSet      Action = "iam.account-alias.set"
-	ActionIAMPrincipalStatusSet   Action = "iam.principal.status-set"
-	ActionIAMPasswordReset        Action = "iam.password.reset"
-	ActionIAMBootstrapApplied     Action = "iam.bootstrap.applied"
-	ActionIAMSessionIssued        Action = "iam.session.issued"
-	ActionIAMSessionRevoked       Action = "iam.session.revoked"
-	ActionIAMPasswordChanged      Action = "iam.password.changed"
-	ActionIAMPrincipalCreated     Action = "iam.principal.created"
-	ActionIAMRoleBindingPut       Action = "iam.role-binding.put"
-	ActionIAMRoleBindingRevoked   Action = "iam.role-binding.revoked"
-	ActionIAMAuthorizationDecided Action = "iam.authorization.decided"
+	ActionIAMOrganizationCreated          Action = "iam.organization.created"
+	ActionIAMTenantCreated                Action = "iam.tenant.created"
+	ActionIAMTenantDisabled               Action = "iam.tenant.disabled"
+	ActionIAMTenantEnabled                Action = "iam.tenant.enabled"
+	ActionIAMTenantAdministratorRecovered Action = "iam.tenant-administrator.recovered"
+	ActionIAMAccountAliasSet              Action = "iam.account-alias.set"
+	ActionIAMPrincipalStatusSet           Action = "iam.principal.status-set"
+	ActionIAMPasswordReset                Action = "iam.password.reset"
+	ActionIAMBootstrapApplied             Action = "iam.bootstrap.applied"
+	ActionIAMSessionIssued                Action = "iam.session.issued"
+	ActionIAMSessionRevoked               Action = "iam.session.revoked"
+	ActionIAMPasswordChanged              Action = "iam.password.changed"
+	ActionIAMPrincipalCreated             Action = "iam.principal.created"
+	ActionIAMRoleBindingPut               Action = "iam.role-binding.put"
+	ActionIAMRoleBindingRevoked           Action = "iam.role-binding.revoked"
+	ActionIAMAuthorizationDecided         Action = "iam.authorization.decided"
 
 	ActionPaaSApplicationCreated                  Action = "paas.application.created"
 	ActionPaaSConfigurationCreated                Action = "paas.configuration.created"
@@ -130,6 +134,10 @@ func ContractForAction(action Action) (ActionContract, bool) {
 
 var allActions = []Action{
 	ActionIAMOrganizationCreated,
+	ActionIAMTenantCreated,
+	ActionIAMTenantDisabled,
+	ActionIAMTenantEnabled,
+	ActionIAMTenantAdministratorRecovered,
 	ActionIAMAccountAliasSet,
 	ActionIAMPrincipalStatusSet,
 	ActionIAMPasswordReset,
@@ -161,6 +169,18 @@ var allActions = []Action{
 }
 
 var actionContracts = map[Action]ActionContract{
+	ActionIAMTenantCreated: {
+		Source: SourceIAM, Target: TargetOrganization, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, PlatformOnly: true,
+	},
+	ActionIAMTenantDisabled: {
+		Source: SourceIAM, Target: TargetOrganization, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, PlatformOnly: true,
+	},
+	ActionIAMTenantEnabled: {
+		Source: SourceIAM, Target: TargetOrganization, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, PlatformOnly: true,
+	},
+	ActionIAMTenantAdministratorRecovered: {
+		Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, PlatformOnly: true,
+	},
 	ActionIAMOrganizationCreated: {
 		Source: SourceIAM, Target: TargetOrganization, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true,
 	},

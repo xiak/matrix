@@ -130,6 +130,10 @@ func TestPostgresAuthorityIntegration(t *testing.T) {
 	assertAuthorityPostgresCode(t, err, "40001")
 
 	bootstrapEvent := decodeAuthorityEvent(t, secondClaim.EventDocument)
+	if firstClaim.InstallationID != fixture.InstallationID || secondClaim.InstallationID != fixture.InstallationID ||
+		firstClaim.TenantID != string(bootstrapEvent.TenantID) || bootstrapEvent.InstallationID != "" {
+		t.Fatal("tenant outbox claim replaced its physical owner with the sealed installation")
+	}
 	bootstrapRecord, bootstrapFact := appendAcceptedAuditRecord(
 		t, ctx, auditRuntime, auditv1.SourceIAM, bootstrapEvent,
 	)
@@ -229,7 +233,7 @@ func TestPostgresAuthorityIntegration(t *testing.T) {
 	if tenantBRecord.Sequence != 1 || tenantBRecord.PreviousHash != auditauthority.GenesisHash {
 		t.Fatalf("tenant B Audit record = %#v", tenantBRecord)
 	}
-	assertAuditContractCatalog(t, ctx, auditRuntime)
+	assertAuditContractCatalog(t, ctx, auditRuntime, auditMigrator)
 	assertStoredAuditChains(t, ctx, auditRuntime, bootstrapEvent.TenantID)
 	assertForcedTenantIsolation(
 		t, ctx, iamMigrator, auditMigrator, bootstrapEvent.TenantID,
@@ -243,6 +247,7 @@ func assertAuditContractCatalog(
 	t *testing.T,
 	ctx context.Context,
 	runtimeConnection *pgx.Conn,
+	migrator *pgx.Conn,
 ) {
 	t.Helper()
 	for index, action := range auditv1.AllActions() {
@@ -262,6 +267,33 @@ func assertAuditContractCatalog(
 		if record.Sequence != 1 || record.PreviousHash != auditauthority.GenesisHash {
 			t.Fatalf("Audit catalog action %q record = %#v", action, record)
 		}
+		var matched int
+		if err := runtimeConnection.QueryRow(ctx,
+			"SELECT count(*) FROM audit.read_records($1,$2,2,NULL,NULL,$3,NULL,NULL) WHERE event_id=$4",
+			string(auditauthority.ChainFor(event.TenantID, event.InstallationID)), authorityMaximumSequence+1,
+			string(action), string(event.EventID)).Scan(&matched); err != nil || matched != 1 {
+			t.Fatalf("Audit catalog action %q cannot be queried: matches=%d error=%v", action, matched, err)
+		}
+		// Exercise the database's closed target shape independently of canonical
+		// hash mismatch rejection. The authorized migration identity only calls
+		// validation here; no invalid record is inserted or encoder duplicated.
+		forgedTarget := event
+		if action == auditv1.ActionIAMTenantAdministratorRecovered {
+			forgedTarget.Target.TenantID = ""
+		} else {
+			forgedTarget.Target.TenantID = "organization-forged"
+		}
+		tx, err := migrator.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, "SET LOCAL ROLE matrix_audit_owner"); err != nil {
+			_ = tx.Rollback(ctx)
+			t.Fatal(err)
+		}
+		_, err = tx.Exec(ctx, "SELECT audit.assert_event($1,$2,$3,$4::jsonb)", contract.Source, event.EventID, string(auditauthority.ChainFor(event.TenantID, event.InstallationID)), authorityJSON(t, forgedTarget))
+		_ = tx.Rollback(ctx)
+		assertAuthorityPostgresCode(t, err, "22023")
 		if contract.PlatformOnly {
 			for _, mutation := range []string{"both", "tenant", "actor", "installation"} {
 				candidate := event
@@ -830,7 +862,7 @@ func assertIAMLookupBoundaries(
 	); err != nil {
 		t.Fatalf("read IAM readiness: %v", err)
 	}
-	if !ready || schemaVersion != 2 || checkedAt.IsZero() {
+	if !ready || schemaVersion != 3 || checkedAt.IsZero() {
 		t.Fatalf("IAM readiness ready=%t schema=%d checked=%s", ready, schemaVersion, checkedAt)
 	}
 	var tenantID, principalID, passwordHash, organizationStatus, principalStatus string
@@ -911,13 +943,14 @@ func assertIAMUninitialized(t *testing.T, ctx context.Context, iamAPI *pgx.Conn)
 	); err != nil {
 		t.Fatalf("read uninitialized IAM readiness: %v", err)
 	}
-	if ready || schemaVersion != 2 || checkedAt.IsZero() {
+	if ready || schemaVersion != 3 || checkedAt.IsZero() {
 		t.Fatalf("uninitialized IAM readiness ready=%t schema=%d checked=%s", ready, schemaVersion, checkedAt)
 	}
 }
 
 type iamOutboxClaim struct {
 	TenantID       string
+	InstallationID string
 	EventID        string
 	EventDocument  string
 	Attempts       int
@@ -940,7 +973,7 @@ func claimIAMOutbox(
 		ctx,
 		`SELECT claimed.tenant_id, claimed.event_id, claimed.event_document,
 			   claimed.attempts, claimed.fencing_token,
-			   claimed.lease_expires_at, transaction_timestamp()
+			   claimed.lease_expires_at, transaction_timestamp(), claimed.installation_id
 		  FROM iam.claim_audit_event($1, $2) AS claimed`,
 		workerID,
 		leaseSeconds,
@@ -952,6 +985,7 @@ func claimIAMOutbox(
 		&claim.FencingToken,
 		&claim.LeaseExpiresAt,
 		&claim.ClaimedAt,
+		&claim.InstallationID,
 	); err != nil {
 		t.Fatalf("claim IAM Audit outbox event: %v", err)
 	}
@@ -1634,9 +1668,18 @@ func assertIAMAuthorizationCatalog(
 	passwordEvent := authorityAuditEvent("event-catalog-password", fixture.TenantID, fixture.Administrator, auditv1.ActionIAMPasswordChanged)
 	passwordEvent.Actor = auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(fixture.Administrator)}
 	passwordEvent.OccurredAt = passwordTime.UTC()
-	if _, err := passwordTransaction.Exec(ctx, "SELECT * FROM iam.change_password($1,$2,$3,$4,$5::jsonb)",
+	sessionEvent := authorityAuditEvent("event-catalog-session", fixture.TenantID, "session-catalog", auditv1.ActionIAMSessionIssued)
+	sessionEvent.Actor = passwordEvent.Actor
+	sessionEvent.OccurredAt = passwordTime.UTC()
+	if _, err := passwordTransaction.Exec(ctx, "SELECT * FROM iam.issue_session($1,$2,$3,$4,$5,60,$6::jsonb)",
+		"session-catalog", string(fixture.TenantID), fixture.Administrator,
+		authorityDigest("catalog-session-lookup"), authorityDigest("catalog-session-verification"), authorityJSON(t, sessionEvent)); err != nil {
+		_ = passwordTransaction.Rollback(ctx)
+		t.Fatalf("establish the current session for catalog password replacement: %v", err)
+	}
+	if _, err := passwordTransaction.Exec(ctx, "SELECT * FROM iam.change_password($1,$2,$3,$4,$5::jsonb,$6,$7)",
 		string(fixture.TenantID), fixture.Administrator, fixture.PasswordHash,
-		strings.TrimSuffix(fixture.PasswordHash, strings.Repeat("A", 43))+strings.Repeat("B", 42)+"A", authorityJSON(t, passwordEvent)); err != nil {
+		strings.TrimSuffix(fixture.PasswordHash, strings.Repeat("A", 43))+strings.Repeat("B", 42)+"A", authorityJSON(t, passwordEvent), "session-catalog", true); err != nil {
 		_ = passwordTransaction.Rollback(ctx)
 		t.Fatalf("prepare current platform authority through the password mutation: %v", err)
 	}
@@ -1830,6 +1873,9 @@ func authorityAuditEvent(
 	if contract.PlatformOnly {
 		event.TenantID, event.InstallationID = "", string(tenantID)
 		event.Actor.Type = auditv1.ActorUser
+	}
+	if action == auditv1.ActionIAMTenantAdministratorRecovered {
+		event.Target.TenantID = "organization-recovered"
 	}
 	return event
 }

@@ -22,6 +22,9 @@ type Workflow interface {
 	CurrentIdentity(context.Context, iamv1.Secret) (iamv1.CurrentIdentity, error)
 	ListPrincipals(context.Context, iamv1.Secret, string, string) (iamv1.PrincipalList, error)
 	ListAccounts(context.Context, iamv1.Secret, string, string) (iamv1.OrganizationAccountList, error)
+	ReadOrganization(context.Context, iamv1.Secret, iamv1.OrganizationID, string) (iamv1.OrganizationAccount, error)
+	SetOrganizationStatus(context.Context, iamv1.Secret, iamv1.OrganizationID, iamv1.SetOrganizationStatusRequest) (iamv1.OrganizationAccount, error)
+	RecoverOrganizationAdministrator(context.Context, iamv1.Secret, iamv1.OrganizationID, iamv1.RecoverOrganizationAdministratorRequest) (iamv1.OrganizationAccount, error)
 	CreateOrganization(context.Context, iamv1.Secret, iamv1.CreateOrganizationRequest) (iamv1.OrganizationAccount, error)
 	SetAccountAlias(context.Context, iamv1.Secret, iamv1.SetAccountAliasRequest) (iamv1.OrganizationAccount, error)
 	SetPrincipalStatus(context.Context, iamv1.Secret, iamv1.PrincipalID, iamv1.SetPrincipalStatusRequest) (iamv1.Principal, error)
@@ -88,6 +91,7 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/auth/login", value.login)
 	routes.HandleFunc("/v1/auth/me", value.currentIdentity)
 	routes.HandleFunc("/v1/organizations", value.organizations)
+	routes.HandleFunc("/v1/organizations/", value.organization)
 	routes.HandleFunc("/v1/organization:alias", value.setAccountAlias)
 	routes.HandleFunc("/v1/auth/logout", value.logout)
 	routes.HandleFunc("/v1/auth/password", value.changePassword)
@@ -496,6 +500,53 @@ func (value *handler) setAccountAlias(response http.ResponseWriter, request *htt
 		return
 	}
 	result, err := value.workflow.SetAccountAlias(request.Context(), credential, body)
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) organization(response http.ResponseWriter, request *http.Request) {
+	suffix := ""
+	if request.Method != http.MethodGet {
+		if !value.requireMethod(response, request, http.MethodPost) {
+			return
+		}
+		suffix = ":set-status"
+		if strings.HasSuffix(request.URL.Path, ":recover-administrator") {
+			suffix = ":recover-administrator"
+		}
+	}
+	id, ok := commandPathID(response, request, "/v1/organizations/", suffix, "organizationId")
+	if !ok || !rejectQuery(response, request) {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	var result iamv1.OrganizationAccount
+	var err error
+	switch suffix {
+	case "":
+		if !rejectQueryAndBody(response, request) {
+			return
+		}
+		result, err = value.workflow.ReadOrganization(request.Context(), credential, iamv1.OrganizationID(id), requestID(request))
+	case ":set-status":
+		body, ok := decodeJSON[iamv1.SetOrganizationStatusRequest](value, response, request)
+		if !ok {
+			return
+		}
+		result, err = value.workflow.SetOrganizationStatus(request.Context(), credential, iamv1.OrganizationID(id), body)
+	case ":recover-administrator":
+		body, ok := decodeJSON[iamv1.RecoverOrganizationAdministratorRequest](value, response, request)
+		if !ok {
+			return
+		}
+		result, err = value.workflow.RecoverOrganizationAdministrator(request.Context(), credential, iamv1.OrganizationID(id), body)
+	}
 	if err != nil {
 		value.writeError(response, request, err)
 		return

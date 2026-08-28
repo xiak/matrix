@@ -284,6 +284,7 @@ DECLARE
 BEGIN
     action_name := submitted_event->>'action';
     platform_only := action_name IN (
+        'iam.tenant.created', 'iam.tenant.disabled', 'iam.tenant.enabled', 'iam.tenant-administrator.recovered',
         'paas.execution-pool.created', 'paas.execution-target.registered',
         'audit.platform-records.read', 'audit.platform-integrity.verified'
     );
@@ -294,6 +295,10 @@ BEGIN
            iam_decision_permitted, iam_decision_required,
            operation_required
       FROM (VALUES
+        ('iam.tenant.created', 'IAM', 'ORGANIZATION', 'SUCCEEDED', true, true, false),
+        ('iam.tenant.disabled', 'IAM', 'ORGANIZATION', 'SUCCEEDED', true, true, false),
+        ('iam.tenant.enabled', 'IAM', 'ORGANIZATION', 'SUCCEEDED', true, true, false),
+        ('iam.tenant-administrator.recovered', 'IAM', 'PRINCIPAL', 'SUCCEEDED', true, true, false),
         ('iam.organization.created', 'IAM', 'ORGANIZATION', 'SUCCEEDED', true, true, false),
         ('iam.account-alias.set', 'IAM', 'ORGANIZATION', 'SUCCEEDED', true, true, false),
         ('iam.principal.status-set', 'IAM', 'PRINCIPAL', 'SUCCEEDED', true, true, false),
@@ -359,7 +364,12 @@ BEGIN
             'occurredAt'
        ]) <> '{}'::jsonb
        OR ((submitted_event->'actor') - ARRAY['type', 'id']) <> '{}'::jsonb
-       OR ((submitted_event->'target') - ARRAY['kind', 'id']) <> '{}'::jsonb
+       OR ((submitted_event->'target') - ARRAY['kind', 'id', 'tenantId']) <> '{}'::jsonb
+       OR (action_name = 'iam.tenant-administrator.recovered' AND (
+            jsonb_typeof(submitted_event#>'{target,tenantId}') IS DISTINCT FROM 'string'
+            OR COALESCE(submitted_event#>>'{target,tenantId}','') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+          ))
+       OR (action_name <> 'iam.tenant-administrator.recovered' AND (submitted_event->'target') ? 'tenantId')
        OR jsonb_typeof(submitted_event#>'{actor,type}') <> 'string'
        OR jsonb_typeof(submitted_event#>'{actor,id}') <> 'string'
        OR jsonb_typeof(submitted_event#>'{target,kind}') <> 'string'
@@ -750,6 +760,8 @@ BEGIN
             'iam.session.revoked', 'iam.password.changed',
             'iam.principal.created', 'iam.role-binding.put',
             'iam.organization.created', 'iam.account-alias.set',
+            'iam.tenant.created', 'iam.tenant.disabled', 'iam.tenant.enabled',
+            'iam.tenant-administrator.recovered',
             'iam.principal.status-set', 'iam.password.reset',
             'iam.role-binding.revoked', 'iam.authorization.decided',
             'paas.application.created', 'paas.configuration.created',

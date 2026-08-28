@@ -34,6 +34,27 @@ func TestCanonicalEventPreservesTenantBytesAndDigest(t *testing.T) {
 	}
 }
 
+func TestLegacyOrganizationCreationRetainsItsTenantCanonicalContract(t *testing.T) {
+	event := Event{
+		APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-legacy-organization",
+		TenantID: "organization-original", Actor: ActorReference{Type: ActorUser, ID: "principal-original"},
+		IAMDecisionID: "decision-original", Action: ActionIAMOrganizationCreated,
+		Target: TargetReference{Kind: TargetOrganization, ID: "organization-created"}, Result: ResultSucceeded,
+		RequestDigest: "sha256:" + strings.Repeat("1", 64), RequestID: "request-original",
+		CorrelationID: "request-original", OccurredAt: time.Date(2026, 8, 25, 3, 4, 5, 0, time.UTC),
+	}
+	const expected = `{"canonicalVersion":"matrix.audit.canonical-event.v1","source":"IAM","event":{"apiVersion":"audit.matrix.xiak.com/v1","kind":"AuditEvent","eventId":"event-legacy-organization","tenantId":"organization-original","actor":{"type":"USER","id":"principal-original"},"iamDecisionId":"decision-original","action":"iam.organization.created","target":{"kind":"ORGANIZATION","id":"organization-created"},"result":"SUCCEEDED","requestDigest":"sha256:1111111111111111111111111111111111111111111111111111111111111111","requestId":"request-original","correlationId":"request-original","occurredAt":"2026-08-25T03:04:05.000000Z"}}`
+	document, digest, err := CanonicalizeEvent(SourceIAM, event)
+	expectedDigest := sha256.Sum256([]byte(expected))
+	if err != nil || document != expected || digest != "sha256:"+hex.EncodeToString(expectedDigest[:]) {
+		t.Fatal("legacy organization fact changed its canonical contract")
+	}
+	event.TenantID, event.InstallationID = "", "installation-original"
+	if _, _, err := CanonicalizeEvent(SourceIAM, event); err == nil {
+		t.Fatal("legacy organization action was reclassified as a platform lifecycle fact")
+	}
+}
+
 func TestAuditExamplesPassDomainValidation(t *testing.T) {
 	tests := []struct {
 		name string
@@ -114,11 +135,23 @@ func TestAuditActionCatalogIsClosedAndSourceBound(t *testing.T) {
 			event.TenantID, event.InstallationID = "", "installation-example"
 			event.Actor.Type = ActorUser
 		}
+		if action == ActionIAMTenantAdministratorRecovered {
+			event.Target.TenantID = "organization-recovered"
+		}
 		if err := ValidateEventForSource(contract.Source, event); err != nil {
 			t.Fatalf("valid action contract %q rejected: %v", action, err)
 		}
 		if err := ValidateEventForSource(otherAuditSource(contract.Source), event); err == nil {
 			t.Fatalf("action %q accepted a forged source", action)
+		}
+		wrongNamespace := event
+		if action == ActionIAMTenantAdministratorRecovered {
+			wrongNamespace.Target.TenantID = ""
+		} else {
+			wrongNamespace.Target.TenantID = "organization-forged"
+		}
+		if ValidateEvent(wrongNamespace) == nil {
+			t.Fatalf("action %q accepted an invalid target tenant namespace", action)
 		}
 		wrongAuthority := event
 		if contract.PlatformOnly {

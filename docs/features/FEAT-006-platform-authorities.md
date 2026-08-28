@@ -5,7 +5,7 @@
 - Target design date: 2026-08-25
 - IAM API contract: `iam.matrix.xiak.com/v1`
 - Audit API contract: `audit.matrix.xiak.com/v1`
-- Phase 3 extension: installation authority and fixed account/historical-proof integration implemented; host and offline release acceptance remain in FEAT-008
+- Phase 3 extension: installation authority, accounts, historical proof, tenant lifecycle and credential-session integration implemented; host and offline release acceptance remain in FEAT-008
 
 ## Outcome
 
@@ -84,7 +84,7 @@ are projections of Organization and its primary USER, not another tenant model.
 Login returns a cryptographically random opaque bearer session plus the
 non-secret current password-change requirement.
 The database stores only its digest, absolute
-database-time expiry, revocation, principal, and exact organization. Phase 1
+database-time expiry, revocation, credential generation, principal, and exact organization. Phase 1
 has no JWT, external IdP, LDAP, SAML, OIDC, social login, API-key query
 parameter, or tenant-selection header.
 
@@ -178,11 +178,10 @@ equal-replay success at Audit. Delivery failure never erases the committed IAM
 fact; a saturated or dead-lettered outbox is unhealthy and visible without
 payload leakage.
 
-### Tenant lifecycle and credential-session integration target
+### Tenant lifecycle and credential sessions
 
-The next Phase 3 authority increment consumes fixed, independently verified IAM
-slices; it is not accepted in this branch until its own gates pass. Preserve
-the existing Organization.ID/TenantID and primary/root identity. Platform-only
+The Phase 3 authority increment preserves the existing Organization.ID/TenantID
+and primary/root identity. Platform-only
 organization create/read, status changes and original-primary recovery must
 not grant platform authority to tenant administrators or transfer root ownership.
 Status/recovery use the target organization's resource version; wrong versions,
@@ -213,14 +212,13 @@ timestamps cannot establish which credential was used. Concurrency, revoked and
 temporary sessions, wrong old passwords and failed mutations must not acquire
 new authority or partially change credentials.
 
-The consuming branch targets IAM 3 / Audit 2 / PaaS 2, contract revision 3;
-the donor's different PaaS schema is not imported. Replace the old password SQL
-signature with the strict seven-argument function and verify its shape at
-readiness. Retained-data SQL migration and old-executable tests are required but
-do not authorize cross-profile release upgrade, rollback or recovery. Reuse the
-existing UI and gate owners, retain the real host admission/Operation/outbox
-regressions, and independently verify this branch's actual runtime logins and
-profile before recording acceptance.
+IAM readiness requires schema 3 and the strict seven-argument password function;
+the old function is removed. The consuming release composition and contract
+revision belong to [FEAT-008](FEAT-008-linux-host-management.md), not the donor's
+different PaaS schema. Retained-data SQL migration and old-executable tests do
+not authorize cross-profile release upgrade, rollback or recovery. Existing UI
+and gate owners are reused, retaining host admission/Operation/outbox regressions
+and independently verified runtime logins.
 
 ## Audit authority
 
@@ -238,7 +236,7 @@ verification require distinct installation-scoped IAM actions and record their
 own access facts. `api/audit/v1.CanonicalizeEvent` owns the pure canonical event
 encoding and content digest; Audit's chain implementation reuses that function.
 
-IAM and Audit readiness require schema version 2. The existing Audit migration upgrades retained tenant storage
+Audit readiness remains at schema version 2. The existing Audit migration upgrades retained tenant storage
 atomically without rewriting event documents, canonical bytes or hashes. Its
 exclusive table locks cover foreign-key validation and restore forced RLS
 before commit. No old SQL aliases or second Audit implementation remain.
@@ -373,9 +371,10 @@ two independently created tenants, repeated child names and realm login,
 primary/platform credential protection, delayed delivery after user revocation,
 current producer rejection, and the real PaaS host Operation/outbox path.
 Retained single-tenant credentials, revocations and immutable Audit data must
-survive schema replay and process restart. This does not accept the remaining
-platform tenant lifecycle, original-primary recovery, task-local browser or
-signed populated offline upgrade/rollback gates.
+survive schema replay and process restart. Lifecycle and credential-session
+changes additionally require the concurrency and retained-executable evidence
+below. These checks do not accept the installed-browser or signed populated
+offline upgrade/rollback gates for the consuming release.
 
 ### Gate A: contracts, domain, and database authority
 
@@ -453,10 +452,26 @@ matching embedded assets. Equal-text tenant/installation identities remain
 disjoint, old tenant canonical bytes/hashes survive, and platform revocation
 takes effect on the next request without restart regrant.
 
-Exact-bootstrap-only tenant opening remains until the separately verified IAM
-platform-lifecycle replacement. New tenants do not inherit platform roles;
-ordinary tenant administration cannot grant them. These integration checks do
-not accept the complete multi-tenant or offline release extension.
+The fixed lifecycle/session integration replaces exact-bootstrap-only opening
+with explicit platform authority. This branch's fresh, isolated PostgreSQL 18
+race gates passed IAM/Audit HTTP, schema replay, immutable storage and exact
+function-shape checks. They cover original-primary recovery, protected platform
+credentials, same-version lifecycle conflicts, no partial rejected mutation,
+forced/default/explicit session policy, and concurrent change/reset/recovery/
+logout/login. Legacy NULL session generations are not backfilled or revived.
+
+The existing process owner built the actual fixed `9fd45b0` and `a36cf98` IAM
+executables to create retained credentials, revoked roles and sessions before
+migration. Both upgrades and process restarts passed with restricted runtime
+logins. Its five-process flow also passed the same-ID/key application,
+configuration, database-service and Operation matrix; pause/recovery and delayed
+dual-outbox delivery; and this branch's existing host admission, observation,
+revocation and Audit correlation. No real database workload provisioning is
+claimed by those pending-record tests. Full Go tests/vet, Linux race/build,
+module verification and stable contract generation passed; independent
+consuming-commit CI remains required before handoff. UI evidence is owned by
+[FEAT-007](FEAT-007-control-plane-console.md). The complete multi-tenant and
+offline release extension remains unaccepted.
 
 - Gate A was accepted on 2026-08-26. Strict generated Go/OpenAPI contracts,
   current-credential-only service identity, fixed Argon2id and

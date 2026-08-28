@@ -456,10 +456,10 @@ func validateResourceForAction(action Action, resource ResourceReference) error 
 func ResourceKindForAction(action Action) (ResourceKind, bool) {
 	switch action {
 	case ActionIAMPrincipalCreate, ActionIAMPrincipalList,
-		ActionIAMOrganizationCreate, ActionIAMOrganizationRead, ActionIAMAccountAliasSet:
+		ActionIAMOrganizationCreate, ActionIAMOrganizationRead, ActionIAMOrganizationSetStatus, ActionIAMAccountAliasSet:
 		return ResourceOrganization, true
 	case ActionIAMPrincipalRead, ActionIAMRoleBindingPut, ActionIAMPlatformRoleBindingPut,
-		ActionIAMPrincipalSetStatus, ActionIAMPasswordReset:
+		ActionIAMPrincipalSetStatus, ActionIAMPasswordReset, ActionIAMOrganizationAdministratorRecover:
 		return ResourcePrincipal, true
 	case ActionIAMRoleBindingRevoke, ActionIAMPlatformRoleBindingRevoke:
 		return ResourceRoleBinding, true
@@ -553,6 +553,21 @@ func ValidateSetPrincipalStatusRequest(value SetPrincipalStatusRequest) error {
 	return errors.Join(validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
 }
 
+func ValidateSetOrganizationStatusRequest(value SetOrganizationStatusRequest) error {
+	if value.Status != OrganizationActive && value.Status != OrganizationDisabled {
+		return errors.New("organization status is invalid")
+	}
+	return errors.Join(validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
+}
+
+func ValidateRecoverOrganizationAdministratorRequest(value RecoverOrganizationAdministratorRequest) error {
+	if !value.InitialPassword.Present() {
+		return ErrInvalidSecret
+	}
+	return errors.Join(ValidateID("principalId", string(value.PrincipalID)),
+		validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
+}
+
 func ValidateResetUserPasswordRequest(value ResetUserPasswordRequest) error {
 	if !value.InitialPassword.Present() {
 		return ErrInvalidSecret
@@ -574,7 +589,7 @@ func ValidateCurrentIdentity(value CurrentIdentity) error {
 	if value.APIVersion != APIVersion || value.Kind != "CurrentIdentity" ||
 		value.Principal.Type != PrincipalUser || value.Roles == nil ||
 		value.Principal.OrganizationID != value.Account.Organization.ID ||
-		(value.CanCreateOrganizations && (value.Principal.ID != value.Account.PrimaryPrincipalID || value.Principal.MustChangePassword)) {
+		(value.CanCreateOrganizations && value.Principal.MustChangePassword) {
 		return errors.New("current identity is invalid")
 	}
 	seen := map[BuiltinRole]bool{}
@@ -584,8 +599,8 @@ func ValidateCurrentIdentity(value CurrentIdentity) error {
 		}
 		seen[role] = true
 	}
-	if value.CanCreateOrganizations && !seen[RoleOrganizationAdmin] {
-		return errors.New("account-opening capability is invalid")
+	if value.CanCreateOrganizations && !seen[RolePlatformOperator] {
+		return errors.New("tenant opening requires a platform role")
 	}
 	return errors.Join(ValidateOrganizationAccount(value.Account), ValidatePrincipal(value.Principal))
 }

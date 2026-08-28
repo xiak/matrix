@@ -132,3 +132,52 @@ func TestAuditSchemaRequiresTheActionAuthorityAndPlatformUser(t *testing.T) {
 		t.Fatal("platform action accepted tenant authority")
 	}
 }
+
+func TestAuditTargetTenantIsRequiredOnlyForPrimaryRecovery(t *testing.T) {
+	schema := compileAuditOpenAPISchema(t, loadAuditOpenAPI(t), "Event")
+	event := loadAuditSchemaExample(t, "examples/event-paas.json")
+	delete(event, "tenantId")
+	delete(event, "operationId")
+	event["installationId"] = "installation-example"
+	event["action"], event["result"] = string(ActionIAMTenantAdministratorRecovered), string(ResultSucceeded)
+	target := event["target"].(map[string]any)
+	target["kind"], target["id"], target["tenantId"] = string(TargetPrincipal), "primary-original", "tenant-original"
+	if err := schema.Validate(event); err != nil {
+		t.Fatal(err)
+	}
+	delete(target, "tenantId")
+	if schema.Validate(event) == nil {
+		t.Fatal("recovery omitted its primary's tenant")
+	}
+	target["tenantId"] = "tenant-original"
+	for _, action := range []Action{ActionIAMTenantCreated, ActionIAMTenantDisabled, ActionIAMTenantEnabled, ActionIAMOrganizationCreated} {
+		event["action"] = string(action)
+		target["kind"] = string(TargetOrganization)
+		if action == ActionIAMOrganizationCreated {
+			delete(event, "installationId")
+			event["tenantId"] = "tenant-original"
+		}
+		if schema.Validate(event) == nil {
+			t.Fatalf("%s accepted a target tenant selector", action)
+		}
+		delete(target, "tenantId")
+		if err := schema.Validate(event); err != nil {
+			t.Fatalf("valid lifecycle %s: %v", action, err)
+		}
+		target["tenantId"] = "tenant-original"
+	}
+	for _, namespace := range []any{nil, "", "tenant-original"} {
+		target["tenantId"] = namespace
+		if schema.Validate(event) == nil {
+			t.Fatal("non-recovery schema accepted an explicit target namespace")
+		}
+		encoded, err := json.Marshal(event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded Event
+		if DecodeRequest(bytes.NewReader(encoded), &decoded) == nil && ValidateEventForSource(SourceIAM, decoded) == nil {
+			t.Fatal("non-recovery decoder erased or accepted an explicit target namespace")
+		}
+	}
+}

@@ -84,6 +84,7 @@ func (service *Authority) Login(
 		event, err := newAuditEvent(
 			eventID,
 			account.OrganizationID,
+			"",
 			auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(account.PrincipalID)},
 			auditv1.ActionIAMSessionIssued,
 			auditv1.TargetReference{Kind: auditv1.TargetSession, ID: sessionID},

@@ -298,6 +298,22 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ## Implementation status
 
+Phase 3's authority consumption uses the existing account and control-plane
+owners for the lifecycle and session contracts in
+[FEAT-006](FEAT-006-platform-authorities.md). The UI must present explicit
+version-bound tenant confirmation, original-primary recovery and the ordinary
+password-change session choice; unknown results cannot report success or
+restore a forgotten session. Background refresh must preserve write failures
+and cannot retain unauthorized resource snapshots or silently select a new
+installation target. This branch must regenerate its own export and repeat
+behavior and installed-browser gates; the fixed donor's acceptance is not
+inherited and Phase 2's workspace/runtime is not changed.
+
+This branch's authority-consumption source passed 90 frontend behavior tests,
+type/lint/architecture and contrast checks, plus two static exports with two
+workers and matching Go-embedded output. These are source/component gates;
+the new consuming release has not yet passed installed-browser acceptance.
+
 - Gate A implementation replaces the Phase 1 page with the complete donor-
   shaped App Router -> route -> provider -> repository -> scene -> renderer ->
   public-component chain, seven static routes, memory-only IAM sessions,

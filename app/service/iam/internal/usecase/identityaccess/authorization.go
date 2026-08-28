@@ -177,6 +177,7 @@ func (service *Authority) decideAndRecord(
 	event, err := newAuditEvent(
 		eventID,
 		actor.organizationID,
+		"",
 		auditv1.ActorReference{
 			Type: auditv1.ActorType(actor.principalType),
 			ID:   auditv1.ActorID(actor.principalID),

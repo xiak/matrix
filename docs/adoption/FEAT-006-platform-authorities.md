@@ -14,6 +14,9 @@
 | PaaS design | `338d9b5fcb820120c32265e380c55e5f171cdb75` | Read only through Git object commands; use as rationale, not executable evidence. |
 | Matrix IAM account and historical-proof slice | `26f3569269ba6e8bf3ac55b3c596c55590e1144a` | Same-repository fixed source; do not read its worktree or import later lifecycle work. |
 | Matrix process-login and resource-isolation test repair | `cf003e47449a554bba19486bb5050d09aeb7a988` | Fixed test slice only; retain this branch's host gate and exclude donor lifecycle, checkpoint and acceptance state. |
+| Matrix tenant lifecycle and original-primary recovery | `c9fa43d9452b5eda6cfef67f153ac0c106864e7a` | Fixed source only; preserve existing platform/host authority and old tenant Audit bytes. |
+| Matrix credential-generation and session-policy closure | `5721b7b1a985f25c9730ddb9229a51f7f6c3b63a` | Fixed source only; consume the required lifecycle dependencies, not the donor worktree, profile values or acceptance state. |
+| Matrix pre-generation IAM executable | `a36cf9817f522549b995ea9c1f0d873499b4fe62` | Retained-data test fixture only, extracted from fixed objects into the test's own temporary directory. |
 
 The independent authority target, closed Phase 1 roles and actions, bootstrap
 contract, opaque credentials, Audit event union, indefinite retention, and
@@ -85,11 +88,16 @@ release.
 | `26f3569`: public canonical encoder and sealed ServiceIdentity installation | `REUSE` | Already integrated from `6401e96`; do not copy another encoder, change lookup_service column order, or reintroduce the weak organization selector. |
 | `26f3569`: dual-tenant, retained-data and independent-process tests | `ADAPT` | Extend existing gate owners while preserving this branch's actual host admission/Operation/outbox flow. Do not restore the superseded hand-made host Audit fixture. |
 | `cf003e4`: URL DSN, actual process login checks and dual-tenant managed-service attacks | `ADAPT` | Replace the broken configuration-field serialization in the same process gate. Bind runtime credentials and a two-connection pool; distinguish independent identity probes from real process sessions. Keep same-name users, same-key quota replay, same-ID database and Operation isolation; defer lifecycle-dependent assertions until that implementation is admitted. |
+| `c9fa43d` as retained in `5721b7b`: platform tenant lifecycle, original-primary recovery and seven-column IAM outbox claim | `ADAPT` | Replace exact-bootstrap-only opening with explicit platform actions; preserve primary/root ownership, tenant-only recovery, principal-lock protection and resource-version conflicts. Separate the physical outbox owner from the sealed installation chain, retaining old tenant facts and the existing canonical encoder. |
+| `5721b7b`: password request, credential generation, session persistence and readiness | `ADAPT` | Replace the five-argument password function with current-session-bound policy. Forced changes revoke other sessions; explicit ordinary retention admits only valid same-USER generations. Legacy NULL sessions fail closed without timestamp inference or migration backfill. Keep ServiceIdentity and the seven-column claim unchanged. |
+| `5721b7b`: current contract, database, concurrency and retained-executable gates | `ADAPT` | Extend the existing owners, including real restricted process identities, without replacing Phase 3 host registration/Operation/outbox tests. Independently verify the consuming branch rather than inheriting donor results. |
+| `a36cf98`: actual pre-generation IAM executable and schema | `REFERENCE` | Produce real legacy sessions and retained account data for the current migration gate. Its executable, source, schema profile and UI are not production dependencies or a supported rollback target. |
+| `5721b7b`: donor release profile and lifecycle acceptance | `REJECT` as imported state | The donor's PaaS schema is 1; this branch's host schema is 2. Derive the actual consuming profile and keep cross-profile effects forbidden. Donor SQL migration evidence does not admit a release upgrade, rollback or recovery. |
 | Donor checkpoint, Phase 3 status and generated UI artifacts | `REJECT` as imported state | Keep this branch's checkpoint and FEAT-008 evidence; regenerate the UI export from admitted source. No moving branch, redundant action-catalog migration, or donor runtime dependency is introduced. |
 
-The fixed slice retains exact-bootstrap-only tenant opening. Its platform
-tenant lifecycle replacement is a separate IAM increment, not inferred from
-the account/proof integration.
+The account/proof baseline alone retains exact-bootstrap-only tenant opening.
+The separately admitted lifecycle and session slices replace that restriction;
+their implementation and acceptance status belong only to the owning FEAT.
 
 ## Resulting implementation constraints
 
