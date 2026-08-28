@@ -523,6 +523,18 @@ tenant roles while keeping platform authorization denied. Unversioned legacy
 sessions remained rejected; fresh qualified logins and historical outbox proof
 worked. The existing `9fd45b0`/`a36cf98` cases separately retain revoked platform
 bindings rather than substituting them for a never-granted sample.
+The three retained-source race cases passed locally in 7.98, 8.81 and 8.15
+seconds respectively for `c88a84f`, `9fd45b0` and `a36cf98`, using separate
+databases on a task-owned PostgreSQL 18 instance limited to one CPU, 768 MiB
+and 192 tasks. Its data used a bounded tmpfs and its port was loopback-only;
+the temporary instance was removed after the checks. No remote machine or
+shared service was changed. All Go tests/vet, affected-package race,
+architecture, generation and module checks passed. Fixed test increment
+`b91d079` passed all three jobs in
+[independent CI](https://github.com/xiak/matrix/actions/runs/33195376384), including
+the additional real pre-platform retained-data case in the existing authority
+job and the unchanged Linux node gate. No production API, SQL or release
+profile changed.
 This establishes a real pre-platform data fixture, not provenance of an
 arbitrary supplied database. Bootstrap facts contain no source revision or
 role-catalog commitment. First authorization and its non-rollback provenance/
