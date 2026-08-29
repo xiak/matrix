@@ -685,7 +685,7 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 			nativeUnitProperty(t, nodeUnit, "MainPID") != upgradeInterrupted.nodePID || nativeUnitProperty(t, collectorUnit, "MainPID") != upgradeInterrupted.collectorPID {
 			t.Fatal("upgrade lost its command, signed predecessor, activated processes or current credentials")
 		}
-		assertSupport := func(name string, healthy bool) {
+		assertSupport := func(name string, healthy bool, runtimeRevision uint64) {
 			t.Helper()
 			before, err := os.ReadFile(journalPath)
 			if err != nil {
@@ -734,7 +734,7 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 			}
 			if err != nil || json.Unmarshal(content, &evidence) != nil || evidence.Kind != "NodeSupportEvidence" ||
 				evidence.GeneratedAt.IsZero() || evidence.Binding.Identity != identity || evidence.Binding.ReleaseID != result.ReleaseID ||
-				evidence.Binding.ConfigurationDigest != result.ConfigurationDigest || evidence.Binding.RuntimeRevision != nodeconfig.RuntimeRevision ||
+				evidence.Binding.ConfigurationDigest != result.ConfigurationDigest || evidence.Binding.RuntimeRevision != runtimeRevision ||
 				paasv1.ValidateDigest("journalDigest", evidence.Binding.JournalDigest) != nil {
 				t.Fatal("signed support command lost its sealed identity or release")
 			}
@@ -789,9 +789,9 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 		}
 		awaitObservation(t, rotatingClient, time.Time{}, paasv1.MeasurementAvailable)
 		checkWorkload()
-		assertSupport("upgraded", true)
+		assertSupport("upgraded", true, nodeconfig.RuntimeRevision)
 		nativeSystemctl(t, "stop", collectorUnit)
-		assertSupport("collector-outage", false)
+		assertSupport("collector-outage", false, nodeconfig.RuntimeRevision)
 		beforeRejectedStart, err := os.ReadFile(journalPath)
 		if err != nil {
 			t.Fatal(err)
@@ -845,7 +845,7 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 		if replay := nativeMX(t, sourceMX, true, "node", "rollback", "--root", root); replay.Changed || replay.CorrelationID != rolledBack.CorrelationID {
 			t.Fatal("rollback replay after verification issued another intent")
 		}
-		assertSupport("rolled-back", true)
+		assertSupport("rolled-back", true, nodeconfig.DeploymentRuntimePredecessorRevision)
 		if result := nativeMX(t, sourceMX, true, "node", "status", "--root", root); result.State != "READY" || result.ReleaseID != installed.ReleaseID {
 			t.Fatal("old signed installer rejected retained state after successor diagnostics")
 		}
