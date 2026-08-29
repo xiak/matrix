@@ -928,6 +928,53 @@ views and a separately authorized, short-lived terminal bound to the selected
 running instance. Gate D as a whole remains open, and no untested predecessor
 or cross-profile admission is inferred from the fixed pairs exercised here.
 
+The first P3-3 tenant Deployment runtime-inventory implementation is fixed at
+`21e526e`. It adds a bounded ID-ordered Deployment collection and one selected
+Deployment's current-instance snapshot without introducing a Machine model or
+a host/provider selector. The existing PaaS worker samples independently of UI
+readers through the sealed target route; tenant reads retain the exact source
+time and last proved value while projecting stale or unavailable state. The
+node revalidates tenant, generation, application revision, content and target,
+then returns only opaque provider-neutral instance identity, component,
+lifecycle, health and terminal exit state. The console polls only the selected
+Deployment every five seconds and cancels on navigation/logout.
+
+This additive slice keeps PaaS schema 2 and advances the authority contract to
+revision 5 and node runtime to revision 5. Its only installed predecessor is
+runtime 4 at fixed source `c273fbf` and topology digest
+`sha256:1c07008679db72f2057c17c1fd62cba5ae02f29026d0e44d2b17cf1c5bbf1326`.
+The signed gate first exposed that the current release builder had stamped its
+own runtime metadata onto predecessor binaries. Fix `91399dd` makes the fixed
+predecessor build its own manifest and makes the target release tool own the
+forward transition; the old tool fails closed while B is current and operates
+again only after rollback. The same fix replaces the final current-only check
+inside installed-release reauthentication with the exact current-or-frozen-
+predecessor policy. Gate correction `71dacd6` verifies support evidence against
+the actually selected signed runtime in both directions.
+
+Fresh and retained PostgreSQL 18 gates, worker fencing and least-privilege
+checks, API/adapter/use-case tests, full Go tests/vet/race, architecture,
+stable generation and the frontend's 118 behavior tests passed. A native
+Debian/ext4 host then ran signed A from `c273fbf` at runtime 4 and signed B from
+`91399dd` at runtime 5 under a one-CPU, 768 MiB, 128-task, loopback-only gate.
+Install, no-reader observation, credential retirement, interrupted A-to-B
+upgrade, old-tool rejection, B-to-A rollback, failed-candidate source recovery,
+support evidence and the bounded PostgreSQL workload's identity/data retention
+passed in 143.45 seconds. The exercised `release.json` SHA-256 values were A
+`1085ad593921a6fe8154ff732866002554394975bb3c503504e1e54d47ba9c30` and B
+`c7473702f4b766e462f6da08ab71e8625026160826366ace74df71a331e5f45c`.
+Only exact test-owned services, container and `/opt` directories were removed;
+the host's ten existing platform containers remained running and the machine
+and Docker Engine were not restarted.
+
+Exact checkpoint `71dacd6bdedaec3b9964a40459e8ef8d22b7e4ca` passed all three jobs in
+[independent CI](https://github.com/xiak/matrix/actions/runs/33272639690),
+including the corrected signed runtime-4-to-5 native gate and independent
+authority processes. This verifies the code checkpoint and the explicit node
+transition. It does not yet prove a signed platform's real tenant snapshot in
+the browser across two managed hosts, per-container resource quantities, a
+terminal session, complete Gate C/D or Phase 3. P3-3 remains in progress.
+
 ## Adoption
 
 - [FEAT-008 fixed-source review](../adoption/FEAT-008-linux-host-management.md)
