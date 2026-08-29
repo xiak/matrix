@@ -96,6 +96,24 @@ func TestNodeEffectsSealFilesAndKeepCollectorSeparateFromExecutor(t *testing.T) 
 	}
 }
 
+func TestNodeEffectsReauthenticateExactInstalledRuntimePredecessor(t *testing.T) {
+	fixtures, err := releasetest.WriteNodeRuntimeSequence(t.TempDir(), nodeconfig.DeploymentRuntimePredecessorRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := nodeEffectPlan(t, fixtures[0])
+	effects := NewNodeEffects(nodeVerifierFixture{})
+	effects.supervisor = &nodeSupervisorFixture{states: map[string]nativeState{}}
+	for _, phase := range []lifecycle.Phase{lifecycle.PhaseStaging, lifecycle.PhaseConfiguring} {
+		if err := effects.ApplyPhase(context.Background(), plan, phase); err != nil {
+			t.Fatalf("prepare installed predecessor at %s: %v", phase, err)
+		}
+	}
+	if _, err := authenticateNodeRelease(plan); err != nil {
+		t.Fatal("exact frozen predecessor could not be reauthenticated as installed state")
+	}
+}
+
 func TestNodeCredentialReplacementResumesMixedFilesAndRetiresOnlyItsSnapshots(t *testing.T) {
 	previous := nodeEffectPlan(t)
 	supervisor := &nodeSupervisorFixture{states: map[string]nativeState{}}

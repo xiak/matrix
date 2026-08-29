@@ -519,7 +519,7 @@ func authenticateNodeRelease(plan nodecommand.Plan) (release.VerifiedBundle, err
 	}
 	bundle, err := release.VerifyDirectory(filepath.Join(plan.Root,
 		filepath.FromSlash(layout.ReleaseDirectory(plan.Bundle.Manifest.Release.ID))), plan.TrustBytes)
-	if err != nil || bundle.ManifestSHA256 != plan.Bundle.ManifestSHA256 || nodecommand.ValidateRelease(bundle) != nil {
+	if err != nil || bundle.ManifestSHA256 != plan.Bundle.ManifestSHA256 || nodecommand.ValidateInstalledRelease(bundle) != nil {
 		return release.VerifiedBundle{}, nodecommand.ErrVerification
 	}
 	return bundle, nil

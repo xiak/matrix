@@ -57,8 +57,9 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 	}
 	verified, err := release.VerifyDirectory(bundle, trustBytes)
 	if err != nil || verified.Manifest.Kind != release.NodeManifestKind || verified.Manifest.Node == nil ||
-		verified.Manifest.Node.RuntimeRevision != nodeconfig.RuntimeRevision {
-		t.Fatal("node gate release did not authenticate")
+		verified.Manifest.Node.RuntimeRevision != nodeconfig.DeploymentRuntimePredecessorRevision ||
+		verified.Manifest.TopologyDigest != nodeconfig.DeploymentRuntimePredecessorContractDigest() {
+		t.Fatal("node gate predecessor did not authenticate with its exact frozen runtime contract")
 	}
 	installer := filepath.Join(bundle, "bin", "mx")
 	t.Setenv("DOCKER_HOST", "unix:///var/run/docker.sock")
@@ -78,9 +79,12 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 	if bootPhase == "" {
 		successor, err = release.VerifyDirectory(os.Getenv("MATRIX_NODE_UPGRADE_BUNDLE"), trustBytes)
 		if err != nil || successor.Manifest.Kind != release.NodeManifestKind || successor.Manifest.Node == nil ||
-			*successor.Manifest.Node != *verified.Manifest.Node || successor.Manifest.TopologyDigest != verified.Manifest.TopologyDigest ||
+			successor.Manifest.Node.ProtocolAPIVersion != verified.Manifest.Node.ProtocolAPIVersion ||
+			successor.Manifest.Node.CollectorVersion != verified.Manifest.Node.CollectorVersion ||
+			successor.Manifest.Node.RuntimeRevision != nodeconfig.RuntimeRevision ||
+			successor.Manifest.TopologyDigest != nodeconfig.ContractDigest() ||
 			successor.Manifest.Release.PreviousID != verified.Manifest.Release.ID || successor.Manifest.Release.PreviousVersion != verified.Manifest.Release.Version {
-			t.Fatal("node gate requires an authenticated immediate successor with the same complete node runtime contract")
+			t.Fatal("node gate requires the authenticated immediate runtime-contract successor")
 		}
 	}
 	var base string
@@ -666,19 +670,21 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 			t.Fatalf("prepare an owned, removable successor media fixture: %v", err)
 		}
 		sourceMX := filepath.Join(root, "releases", installed.ReleaseID, "bin", "mx")
+		targetMX := filepath.Join(root, "releases", successor.Manifest.Release.ID, "bin", "mx")
 		upgradeArgs := []string{"node", "upgrade", "--root", root, "--bundle", media}
-		upgradeInterrupted := interruptNativeCommand(t, sourceMX, root, units, upgradeArgs...)
+		// The target release owns the forward migration contract. The fixed
+		// predecessor cannot be expected to understand a later runtime revision.
+		upgradeInterrupted := interruptNativeCommand(t, filepath.Join(media, "bin", "mx"), root, units, upgradeArgs...)
 		if err := os.Rename(media, media+"-unmounted"); err != nil {
 			t.Fatal("unmount only the fixture-owned original successor media")
 		}
 		upgradeInterrupted.resume()
-		upgraded := nativeMX(t, sourceMX, true, "node", "start", "--root", root)
+		upgraded := nativeMX(t, targetMX, true, "node", "start", "--root", root)
 		if upgraded.State != "READY" || upgraded.ReleaseID != successor.Manifest.Release.ID || upgraded.PreviousID != installed.ReleaseID ||
 			upgraded.ConfigurationDigest != rotated.ConfigurationDigest || upgraded.CorrelationID != upgradeInterrupted.result.CorrelationID ||
 			nativeUnitProperty(t, nodeUnit, "MainPID") != upgradeInterrupted.nodePID || nativeUnitProperty(t, collectorUnit, "MainPID") != upgradeInterrupted.collectorPID {
 			t.Fatal("upgrade lost its command, signed predecessor, activated processes or current credentials")
 		}
-		targetMX := filepath.Join(root, "releases", upgraded.ReleaseID, "bin", "mx")
 		assertSupport := func(name string, healthy bool) {
 			t.Helper()
 			before, err := os.ReadFile(journalPath)
@@ -786,8 +792,19 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 		assertSupport("upgraded", true)
 		nativeSystemctl(t, "stop", collectorUnit)
 		assertSupport("collector-outage", false)
-		if result := nativeMX(t, sourceMX, true, "node", "start", "--root", root); result.ReleaseID != upgraded.ReleaseID || result.State != "READY" {
-			t.Fatal("predecessor installer could not read the successor's retained journal")
+		beforeRejectedStart, err := os.ReadFile(journalPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		successorNodePID := nativeUnitProperty(t, nodeUnit, "MainPID")
+		nativeMX(t, sourceMX, false, "node", "start", "--root", root)
+		afterRejectedStart, err := os.ReadFile(journalPath)
+		if err != nil || !bytes.Equal(beforeRejectedStart, afterRejectedStart) ||
+			nativeUnitProperty(t, nodeUnit, "MainPID") != successorNodePID || nativeUnitProperty(t, collectorUnit, "ActiveState") != "inactive" {
+			t.Fatal("predecessor installer changed successor state instead of failing closed")
+		}
+		if result := nativeMX(t, targetMX, true, "node", "start", "--root", root); result.ReleaseID != upgraded.ReleaseID || result.State != "READY" {
+			t.Fatal("successor installer could not reconcile its retained journal")
 		}
 
 		// Change credentials on B, then prove that executing A during rollback
@@ -818,7 +835,7 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 		}
 		rollbackInterrupted := interruptNativeCommand(t, targetMX, root, units, "node", "rollback", "--root", root)
 		rollbackInterrupted.resume()
-		rolledBack := nativeMX(t, sourceMX, true, "node", "start", "--root", root)
+		rolledBack := nativeMX(t, targetMX, true, "node", "start", "--root", root)
 		if rolledBack.State != "READY" || rolledBack.ReleaseID != installed.ReleaseID || rolledBack.PreviousID != "" ||
 			rolledBack.ConfigurationDigest != latest.ConfigurationDigest || rolledBack.CorrelationID != rollbackInterrupted.result.CorrelationID ||
 			nativeUnitProperty(t, nodeUnit, "MainPID") != rollbackInterrupted.nodePID || nativeUnitProperty(t, collectorUnit, "MainPID") != rollbackInterrupted.collectorPID {
@@ -839,16 +856,17 @@ func TestLinuxSignedNodeStartup(t *testing.T) {
 		// Fail real candidate readiness, not its signature. The paused owned
 		// collector cannot produce the candidate's first fresh CPU observation.
 		// Recovery must restore and verify A before reporting the failed upgrade.
-		failed := interruptNativeCommand(t, sourceMX, root, units, "node", "upgrade", "--root", root,
+		failed := interruptNativeCommand(t, targetMX, root, units, "node", "upgrade", "--root", root,
 			"--bundle", filepath.Join(root, "releases", upgraded.ReleaseID))
-		nativeMX(t, sourceMX, false, "node", "upgrade", "--root", root, "--resume")
+		nativeMX(t, targetMX, false, "node", "upgrade", "--root", root, "--resume")
 		failed.resume()
-		recovered := nativeMX(t, sourceMX, true, "node", "status", "--root", root)
+		recovered := nativeMX(t, targetMX, true, "node", "status", "--root", root)
 		if recovered.State != "READY" || recovered.ReleaseID != installed.ReleaseID || recovered.PreviousID != "" ||
 			recovered.ConfigurationDigest != latest.ConfigurationDigest || recovered.CorrelationID != failed.result.CorrelationID {
 			t.Fatal("failed candidate did not restore the sealed source with current credentials")
 		}
-		nativeMX(t, sourceMX, false, "node", "upgrade", "--root", root, "--resume")
+		nativeMX(t, targetMX, false, "node", "upgrade", "--root", root, "--resume")
+		nativeMX(t, sourceMX, true, "node", "verify", "--root", root)
 		awaitObservation(t, rotatingClient, time.Time{}, paasv1.MeasurementAvailable)
 		assertRetired()
 		checkWorkload()

@@ -165,11 +165,14 @@ jobs:
           git worktree add --detach "$previous_node_source" c273fbfe2889a86e2827f92f88b811bf088d359c
           go run -p 2 ./deploy/cmd/matrix-release keygen --key-id node-ci \
             --private-key "$RUNNER_TEMP/node-release-private.json" --trust-key "$RUNNER_TEMP/node-release-trust.json"
-          go run -p 2 ./deploy/cmd/matrix-release assemble --target node --repository "$previous_node_source" \
-            --collector-archive "$RUNNER_TEMP/node_exporter.tar.gz" --output "$RUNNER_TEMP/node-release" \
-            --version v0.3.0-node.1 --build-id "ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
-            --created-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --private-key "$RUNNER_TEMP/node-release-private.json" --trust-key "$RUNNER_TEMP/node-release-trust.json"
+          (
+            cd "$previous_node_source"
+            go run -p 2 ./deploy/cmd/matrix-release assemble --target node --repository "$previous_node_source" \
+              --collector-archive "$RUNNER_TEMP/node_exporter.tar.gz" --output "$RUNNER_TEMP/node-release" \
+              --version v0.3.0-node.1 --build-id "ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+              --created-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              --private-key "$RUNNER_TEMP/node-release-private.json" --trust-key "$RUNNER_TEMP/node-release-trust.json"
+          )
           go run -p 2 ./deploy/cmd/matrix-release assemble --target node --repository "$GITHUB_WORKSPACE" \
             --collector-archive "$RUNNER_TEMP/node_exporter.tar.gz" --output "$RUNNER_TEMP/node-release-b" \
             --version v0.3.0-node.2 --build-id "ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-successor" \
