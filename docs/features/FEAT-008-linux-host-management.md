@@ -159,6 +159,24 @@ used is total minus free, not total minus space available to non-root users.
 Unreported inode capacity is explicitly unsupported or unavailable. Source
 timestamps/expiry survive reads; failure never becomes a fabricated zero.
 
+P3-3 starts with a platform-operator host inventory and current-resource view.
+The public collection is bounded by the installation's admitted-target limit
+and returns normalized `ExecutionTarget` documents only; it exposes no binding,
+endpoint, certificate, host path or provider credential and accepts no tenant or
+target selector. Reads use the already persisted background observations and
+must not synchronously probe a node, renew a source timestamp or advance a
+resource version. The console performs one authenticated fetch at a time on a
+five-second cadence, cancels it on navigation or logout, retains the last proved
+sample across a transient failure and shows source time, expiry and measurement
+state. A stale or unavailable value remains visibly stale or unavailable.
+
+This first increment provides successive CPU, memory and filesystem samples
+without a page reload; it is not yet the final live-subscription, history,
+container-attribution or terminal acceptance. Those remain P3-3 work. Host
+inventory is platform-scoped, while later container observations and terminal
+sessions resolve tenant ownership from a Deployment and never grant a tenant
+user general host visibility.
+
 ### Interactive container access
 
 UI selection resolves server-side to the authorized tenant, exact Deployment
