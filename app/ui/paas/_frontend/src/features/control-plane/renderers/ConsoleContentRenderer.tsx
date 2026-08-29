@@ -2,12 +2,14 @@ import Link from "next/link";
 import { AccountAccessRenderer } from "@/features/auth/renderers/AccountAccessRenderer";
 import {
   ArrowRight,
+  Activity,
   Box,
   CheckCircle2,
   Cpu,
   Database,
   Gauge,
   HardDrive,
+  MemoryStick,
   MapPin,
   PackageCheck,
   PackageSearch,
@@ -21,6 +23,8 @@ import {
 } from "@ui/xiak";
 import type {
   ConsoleContentScene,
+  HostMeasurementScene,
+  HostScene,
   InstallationScene,
   SceneStatus
 } from "../scenes/consoleScene";
@@ -41,7 +45,11 @@ function phaseLabel(value: string): string {
     FAILED: "失败",
     AVAILABLE: "可用",
     UNAVAILABLE: "不可用",
-    STALE: "待复检"
+    STALE: "待复检",
+    UNKNOWN: "未知",
+    DEGRADED: "降级",
+    ACTIVE: "可调度",
+    DRAINING: "排空中"
   };
   return labels[value] ?? value;
 }
@@ -267,11 +275,111 @@ function RegionContent({ scene }: { scene: Extract<ConsoleContentScene, { kind: 
   );
 }
 
+function HostMeasurement({
+  icon: Icon,
+  label,
+  measurement
+}: {
+  icon: typeof Cpu;
+  label: string;
+  measurement: HostMeasurementScene;
+}) {
+  return (
+    <div className={styles.hostMeasurement}>
+      <div className={styles.hostMeasurementHeading}>
+        <span><Icon aria-hidden="true" />{label}</span>
+        <Badge status={measurement.status}>{measurement.stateLabel}</Badge>
+      </div>
+      <strong>{measurement.value}</strong>
+      {measurement.progress === null ? null : (
+        <progress aria-label={`${label}占用率`} max={100} value={measurement.progress} />
+      )}
+      <small>{measurement.detail}</small>
+    </div>
+  );
+}
+
+function HostCard({ host }: { host: HostScene }) {
+  return (
+    <Card className={styles.hostCard}>
+      <Card.Header>
+        <div className={styles.hostIdentity}>
+          <div className={styles.regionIcon}><Server aria-hidden="true" /></div>
+          <div>
+            <Typography.Title as="h2" level={3}>{host.name}</Typography.Title>
+            <Typography.Code>{host.id}</Typography.Code>
+          </div>
+        </div>
+        <div className={styles.hostBadges}>
+          <Badge status={host.sampleStatus}>{host.sampleState}</Badge>
+          <Badge status={host.status}>{phaseLabel(host.health)}</Badge>
+        </div>
+      </Card.Header>
+      <Card.Body className={styles.hostBody}>
+        <dl className={styles.hostFacts}>
+          <div><dt>平台</dt><dd>{host.platform}</dd></div>
+          <div><dt>执行池</dt><dd><Typography.Code>{host.executionPoolId}</Typography.Code></dd></div>
+          <div><dt>适配来源</dt><dd>{host.source}</dd></div>
+          <div><dt>期望状态</dt><dd>{phaseLabel(host.desiredState)}</dd></div>
+          <div><dt>标称容量</dt><dd>{host.capacity}</dd></div>
+        </dl>
+
+        <div className={styles.hostMetricGrid}>
+          <HostMeasurement icon={Activity} label="CPU" measurement={host.cpu} />
+          <HostMeasurement icon={MemoryStick} label="内存" measurement={host.memory} />
+        </div>
+
+        <section className={styles.filesystems} aria-label={`${host.name} 文件系统`}>
+          <div className={styles.filesystemHeading}>
+            <div><HardDrive aria-hidden="true" /><strong>文件系统</strong></div>
+            <Badge status={host.filesystems.length > 0 ? "info" : "neutral"}>{host.filesystemsState}</Badge>
+          </div>
+          {host.filesystems.length === 0 ? (
+            <p>该采样没有可展示的文件系统数值。</p>
+          ) : host.filesystems.map((filesystem) => (
+            <div className={styles.filesystemRow} key={filesystem.id}>
+              <div className={styles.filesystemIdentity}>
+                <strong>{filesystem.mountPoint}</strong>
+                <span>{filesystem.device} · {filesystem.filesystemType}{filesystem.readOnly ? " · 只读" : ""}</span>
+              </div>
+              <div className={styles.filesystemUsage}>
+                <span><strong>{filesystem.value}</strong><Badge status={filesystem.status}>{filesystem.stateLabel}</Badge></span>
+                {filesystem.progress === null ? null : (
+                  <progress aria-label={`${filesystem.mountPoint}占用率`} max={100} value={filesystem.progress} />
+                )}
+                <small>{filesystem.detail}</small>
+              </div>
+            </div>
+          ))}
+        </section>
+
+        <div className={styles.hostTimestamps}>
+          <span>主机健康观测：{host.observedAt}</span>
+          <span>资源采样：{host.usageObservedAt}</span>
+          <span>有效至：{host.validUntil}</span>
+        </div>
+      </Card.Body>
+    </Card>
+  );
+}
+
+function HostContent({ scene }: { scene: Extract<ConsoleContentScene, { kind: "hosts" }> }) {
+  if (scene.hosts.length === 0) {
+    return <EmptyState title="尚未纳管主机" description="由平台安装器登记并验证主机后，资源采样才会出现在这里。" />;
+  }
+  return (
+    <div className={styles.hostList}>
+      {scene.hosts.map((host) => <HostCard host={host} key={host.id} />)}
+    </div>
+  );
+}
+
 export function ConsoleContentRenderer({ scene }: { scene: ConsoleContentScene }) {
   if (scene.kind === "access") return <AccountAccessRenderer />;
   if (scene.kind === "overview") return <OverviewContent scene={scene} />;
   if (scene.kind === "catalog") return <CatalogContent scene={scene} />;
   if (scene.kind === "quotas") return <QuotaContent scene={scene} />;
   if (scene.kind === "installations") return <InstallationContent scene={scene} />;
+  if (scene.kind === "hosts") return <HostContent scene={scene} />;
   return <RegionContent scene={scene} />;
 }

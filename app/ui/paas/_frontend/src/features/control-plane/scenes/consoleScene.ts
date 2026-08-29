@@ -1,11 +1,13 @@
 import type { ConsoleSection } from "../domain/selection";
+import type { HostMeasurementState } from "../domain/hosts";
 
-export type RailIconKind = "overview" | "database" | "access";
+export type RailIconKind = "overview" | "database" | "infrastructure" | "access";
 export type NavigationIconKind =
   | "catalog"
   | "quota"
   | "installation"
   | "region"
+  | "host"
   | "access";
 export type SceneStatus = "neutral" | "info" | "success" | "warning" | "danger";
 
@@ -79,6 +81,44 @@ export type RegionScene = {
   inspectedAt: string;
 };
 
+export type HostMeasurementScene = {
+  state: HostMeasurementState;
+  stateLabel: string;
+  value: string;
+  detail: string;
+  progress: number | null;
+  status: SceneStatus;
+};
+
+export type HostFilesystemScene = HostMeasurementScene & {
+  id: string;
+  device: string;
+  mountPoint: string;
+  filesystemType: string;
+  readOnly: boolean;
+};
+
+export type HostScene = {
+  id: string;
+  name: string;
+  platform: string;
+  source: string;
+  executionPoolId: string;
+  desiredState: string;
+  health: string;
+  status: SceneStatus;
+  capacity: string;
+  observedAt: string;
+  usageObservedAt: string;
+  validUntil: string;
+  sampleState: string;
+  sampleStatus: SceneStatus;
+  cpu: HostMeasurementScene;
+  memory: HostMeasurementScene;
+  filesystemsState: string;
+  filesystems: HostFilesystemScene[];
+};
+
 export type QuotaOrderOptionScene = {
   offeringId: string;
   offeringName: string;
@@ -107,6 +147,7 @@ export type ConsoleContentScene =
   | { kind: "quotas"; entitlements: EntitlementScene[] }
   | { kind: "installations"; installations: InstallationScene[] }
   | { kind: "regions"; regions: RegionScene[] }
+  | { kind: "hosts"; hosts: HostScene[] }
   | { kind: "access" };
 
 export type ConsoleWorkspaceScene =

@@ -6,8 +6,10 @@ import type { IamRepository } from "@/features/auth/repositories/iamRepository";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { useConsoleUiStore } from "../application/consoleUiStore";
 import type { ControlPlaneSnapshot } from "../domain/resources";
+import type { HostInventory } from "../domain/hosts";
 import type { ConsoleSection } from "../domain/selection";
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
+import type { HostInventoryRepository } from "../repositories/hostInventoryRepository";
 import { ConsoleShellRenderer } from "./ConsoleShellRenderer";
 
 const navigation = vi.hoisted(() => ({ replace: vi.fn() }));
@@ -52,12 +54,43 @@ const snapshot: ControlPlaneSnapshot = {
   installations: []
 };
 
+const hostSnapshot: HostInventory = {
+  items: [{
+    id: "node-a",
+    name: "node-a",
+    labels: { "matrix-os": "linux", "matrix-arch": "amd64" },
+    resourceVersion: 4,
+    executionPoolId: "linux-hosts",
+    infrastructureAdapter: "nodehttps",
+    deploymentExecutor: "compose",
+    desiredState: "ACTIVE",
+    health: "READY",
+    capacity: { cpuMillis: 4000, memoryBytes: 8_589_934_592, storageBytes: 107_374_182_400, workloadSlots: 24 },
+    allocatable: { cpuMillis: 3000, memoryBytes: 6_442_450_944, storageBytes: 85_899_345_920, workloadSlots: 16 },
+    supportedIsolationGuarantees: ["WORKLOAD"],
+    observedAt: "2026-08-30T08:01:00Z",
+    usage: {
+      observedAt: "2026-08-30T08:01:00Z",
+      validUntil: "2026-08-30T08:01:15Z",
+      cpu: { state: "AVAILABLE", value: { logicalCpus: 4, windowMillis: 5000, utilizationRatio: 0.25, ioWaitRatio: 0.05, load1: 0.8, load5: 0.6, load15: 0.4 } },
+      memory: { state: "AVAILABLE", value: { totalBytes: 8_589_934_592, availableBytes: 6_442_450_944, usedBytes: 2_147_483_648, swapTotalBytes: 0, swapFreeBytes: 0 } },
+      filesystemsState: "AVAILABLE",
+      filesystems: [{
+        device: "/dev/vda1", mountPoint: "/", filesystemType: "ext4", state: "AVAILABLE",
+        value: { totalBytes: 107_374_182_400, usedBytes: 21_474_836_480, availableBytes: 85_899_345_920, inodesState: "UNSUPPORTED", totalInodes: null, freeInodes: null, readOnly: false }
+      }]
+    }
+  }]
+};
+
 async function renderConsole({
   section = "overview",
+  hostLoad = vi.fn().mockResolvedValue({ items: [] }),
   load = vi.fn().mockResolvedValue(snapshot),
   logout = vi.fn().mockResolvedValue(undefined)
 }: {
   section?: ConsoleSection;
+  hostLoad?: HostInventoryRepository["load"];
   load?: ControlPlaneRepository["load"];
   logout?: IamRepository["logout"];
 } = {}) {
@@ -67,6 +100,7 @@ async function renderConsole({
     activateQuota: vi.fn(),
     createInstallation: vi.fn()
   };
+  const hostRepository: HostInventoryRepository = { load: hostLoad };
   const iam: IamRepository = {
     async login() {
       return {
@@ -88,14 +122,14 @@ async function renderConsole({
   const user = userEvent.setup();
   const view = render(
     <SessionProvider repository={iam}>
-      <ConsoleShellRenderer repository={repository} selection={{ section }} />
+      <ConsoleShellRenderer hostRepository={hostRepository} repository={repository} selection={{ section }} />
     </SessionProvider>
   );
   await user.type(screen.getByLabelText("密码", { exact: true }), "renderer-test-password");
   await user.click(screen.getByRole("button", { name: "登录控制台" }));
-  await waitFor(() => expect(load).toHaveBeenCalled());
+  await waitFor(() => expect(section === "hosts" ? hostLoad : load).toHaveBeenCalled());
   navigation.replace.mockClear();
-  return { user, view, repository };
+  return { user, view, repository, hostRepository };
 }
 
 afterEach(() => {
@@ -105,6 +139,24 @@ afterEach(() => {
 });
 
 describe("ConsoleShellRenderer", () => {
+  it("shows source-timed CPU, memory, and filesystem facts without loading tenant resources", async () => {
+    const load = vi.fn();
+    await renderConsole({
+      section: "hosts",
+      load,
+      hostLoad: vi.fn().mockResolvedValue(hostSnapshot)
+    });
+
+    expect(await screen.findByRole("heading", { level: 1, name: "主机与资源" })).toBeTruthy();
+    expect(screen.getByText("25.0%")).toBeTruthy();
+    expect(screen.getByText("2 GiB / 8 GiB")).toBeTruthy();
+    expect(screen.getByText("/dev/vda1 · ext4")).toBeTruthy();
+    expect(screen.getByRole("progressbar", { name: "CPU占用率" })).toHaveProperty("value", 25);
+    expect(screen.getByText(/资源采样：/)).toBeTruthy();
+    expect(screen.getByText(/有效至：/)).toBeTruthy();
+    expect(load).not.toHaveBeenCalled();
+  });
+
   it.each([
     { missing: "quota", label: "配额", value: "quota-primary" },
     { missing: "region", label: "安装区域", value: "local-primary" }

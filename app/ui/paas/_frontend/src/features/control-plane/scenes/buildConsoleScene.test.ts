@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ControlPlaneSnapshot } from "../domain/resources";
-import { buildConsoleScene } from "./buildConsoleScene";
+import type { HostInventory } from "../domain/hosts";
+import { buildConsoleScene, buildHostConsoleScene } from "./buildConsoleScene";
 
 const snapshot: ControlPlaneSnapshot = {
   offerings: [{
@@ -57,15 +58,51 @@ const snapshot: ControlPlaneSnapshot = {
   }]
 };
 
+const hosts: HostInventory = {
+  items: [{
+    id: "node-a",
+    name: "node-a",
+    labels: { "matrix-os": "linux", "matrix-arch": "amd64" },
+    resourceVersion: 4,
+    executionPoolId: "linux-hosts",
+    infrastructureAdapter: "nodehttps",
+    deploymentExecutor: "compose",
+    desiredState: "ACTIVE",
+    health: "READY",
+    capacity: { cpuMillis: 4000, memoryBytes: 8_589_934_592, storageBytes: 107_374_182_400, workloadSlots: 24 },
+    allocatable: { cpuMillis: 3000, memoryBytes: 6_442_450_944, storageBytes: 85_899_345_920, workloadSlots: 16 },
+    supportedIsolationGuarantees: ["WORKLOAD"],
+    observedAt: "2026-08-30T08:01:00Z",
+    usage: {
+      observedAt: "2026-08-30T08:01:00Z",
+      validUntil: "2026-08-30T08:01:15Z",
+      cpu: {
+        state: "AVAILABLE",
+        value: { logicalCpus: 4, windowMillis: 5000, utilizationRatio: 0.25, ioWaitRatio: 0.05, load1: 0.8, load5: 0.6, load15: 0.4 }
+      },
+      memory: {
+        state: "AVAILABLE",
+        value: { totalBytes: 8_589_934_592, availableBytes: 6_442_450_944, usedBytes: 2_147_483_648, swapTotalBytes: 0, swapFreeBytes: 0 }
+      },
+      filesystemsState: "AVAILABLE",
+      filesystems: [{
+        device: "/dev/vda1", mountPoint: "/", filesystemType: "ext4", state: "AVAILABLE",
+        value: { totalBytes: 107_374_182_400, usedBytes: 21_474_836_480, availableBytes: 85_899_345_920, inodesState: "UNSUPPORTED", totalInodes: null, freeInodes: null, readOnly: false }
+      }]
+    }
+  }]
+};
+
 describe("buildConsoleScene", () => {
   it("projects real resources into the complete console shell", () => {
     const scene = buildConsoleScene("overview", snapshot);
-    expect(scene.rail.map((item) => item.label)).toEqual(["控制面概览", "托管数据库", "访问管理"]);
+    expect(scene.rail.map((item) => item.label)).toEqual(["控制面概览", "托管数据库", "基础设施", "访问管理"]);
     expect(scene.navigation.map((item) => item.id)).toEqual([
       "catalog",
       "quotas",
       "installations",
       "regions",
+      "hosts",
       "access"
     ]);
     expect(scene.content.kind).toBe("overview");
@@ -94,5 +131,22 @@ describe("buildConsoleScene", () => {
     for (const forbidden of ["guild", "channel", "message", "friend", "discord"]) {
       expect(serialized).not.toContain(forbidden);
     }
+  });
+
+  it("projects source-timed host usage without converting it to placement capacity", () => {
+    const scene = buildHostConsoleScene(hosts);
+    expect(scene.section).toBe("hosts");
+    expect(scene.rail.find((item) => item.id === "infrastructure")?.selected).toBe(true);
+    expect(scene.content).toMatchObject({
+      kind: "hosts",
+      hosts: [{
+        id: "node-a",
+        health: "READY",
+        sampleState: "采样有效",
+        cpu: { value: "25.0%", progress: 25, state: "AVAILABLE" },
+        memory: { progress: 25, state: "AVAILABLE" },
+        filesystems: [{ mountPoint: "/", progress: 20 }]
+      }]
+    });
   });
 });

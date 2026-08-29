@@ -33,13 +33,17 @@ func TestHandlerServesNextControlPlane(t *testing.T) {
 
 func TestHandlerServesNestedRouteAndHashedAsset(t *testing.T) {
 	handler := NewHandler()
-	page := httptest.NewRecorder()
-	handler.ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/console/quotas/", nil))
-	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Matrix Control Plane") {
-		t.Fatalf("nested Next route status=%d body=%s", page.Code, page.Body.String())
+	var body string
+	for _, path := range []string{"/console/quotas/", "/console/hosts/"} {
+		page := httptest.NewRecorder()
+		handler.ServeHTTP(page, httptest.NewRequest(http.MethodGet, path, nil))
+		body = page.Body.String()
+		if page.Code != http.StatusOK || !strings.Contains(body, "Matrix Control Plane") {
+			t.Fatalf("nested Next route %s status=%d body=%s", path, page.Code, body)
+		}
 	}
 	assetPattern := regexp.MustCompile(`(?:src|href)="(/_next/static/[^"]+\.(?:js|css))"`)
-	match := assetPattern.FindStringSubmatch(page.Body.String())
+	match := assetPattern.FindStringSubmatch(body)
 	if len(match) != 2 {
 		t.Fatal("nested route does not reference a hashed static asset")
 	}

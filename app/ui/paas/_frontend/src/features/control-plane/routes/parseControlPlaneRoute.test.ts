@@ -12,6 +12,7 @@ describe("parseControlPlaneRoute", () => {
     [["quotas"], "quotas"],
     [["installations"], "installations"],
     [["regions"], "regions"],
+    [["hosts"], "hosts"],
     [["access"], "access"],
     [["unknown"], "overview"]
   ] as const)("maps %j to %s", (segments, section) => {
@@ -24,6 +25,7 @@ describe("parseControlPlaneRoute", () => {
     ["/console/quotas", "quotas"],
     ["/console/installations/", "installations"],
     ["/console/regions/", "regions"],
+    ["/console/hosts/", "hosts"],
     ["/console/access/", "access"],
     ["/console/unknown/", "overview"],
     ["/", "overview"]

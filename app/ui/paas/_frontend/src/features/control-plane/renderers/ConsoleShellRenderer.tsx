@@ -17,6 +17,7 @@ import {
   PanelRightClose,
   PanelRightOpen,
   RefreshCcw,
+  Server,
   ServerCog,
   ShieldCheck,
   X
@@ -36,6 +37,7 @@ import { ControlPlaneProvider, useControlPlane } from "../application/ControlPla
 import { useConsoleUiStore } from "../application/consoleUiStore";
 import type { ControlPlaneRouteSelection } from "../domain/selection";
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
+import type { HostInventoryRepository } from "../repositories/hostInventoryRepository";
 import type {
   NavigationIconKind,
   RailIconKind
@@ -47,6 +49,7 @@ import styles from "./ConsoleShellRenderer.module.css";
 const railIcons = {
   overview: LayoutDashboard,
   database: Database,
+  infrastructure: Server,
   access: ShieldCheck
 } satisfies Record<RailIconKind, typeof Database>;
 
@@ -55,6 +58,7 @@ const navigationIcons = {
   quota: Gauge,
   installation: ServerCog,
   region: MapPin,
+  host: Server,
   access: ShieldCheck
 } satisfies Record<NavigationIconKind, typeof Database>;
 
@@ -69,7 +73,8 @@ function ShellFrame({ children }: { children: React.ReactNode }) {
   );
 }
 
-function LoadingShell({ error, logout, retry, revoking, sessionError }: {
+function LoadingShell({ area, error, logout, retry, revoking, sessionError }: {
+  area: string;
   error: string | null;
   logout(): void;
   retry(): void;
@@ -82,7 +87,7 @@ function LoadingShell({ error, logout, retry, revoking, sessionError }: {
         <App.Base>
           <Layout.Header className={styles.topbar}>
             <div className={styles.topbarBrand}><Boxes aria-hidden="true" /><strong>Matrix</strong></div>
-            <div className={styles.topbarPath}><span>Control Plane</span><ChevronRight aria-hidden="true" /><span>Managed Services</span></div>
+            <div className={styles.topbarPath}><span>Control Plane</span><ChevronRight aria-hidden="true" /><span>{area}</span></div>
             <Button
               aria-label="注销并撤销 IAM 会话"
               className={styles.loadingLogout}
@@ -141,7 +146,7 @@ function LoadingShell({ error, logout, retry, revoking, sessionError }: {
 
 type WorkspaceSize = "compact" | "medium" | "wide";
 
-function ConsoleShell() {
+function ConsoleShell({ selection }: { selection: ControlPlaneRouteSelection }) {
   const router = useRouter();
   const session = useSession();
   const controlPlane = useControlPlane();
@@ -173,6 +178,7 @@ function ConsoleShell() {
   if (!scene) {
     return (
       <LoadingShell
+        area={selection.section === "hosts" ? "Infrastructure" : "Managed Services"}
         error={controlPlane.error}
         logout={() => void logout()}
         retry={() => void controlPlane.reload()}
@@ -183,6 +189,11 @@ function ConsoleShell() {
   }
 
   const workspaceVisible = Boolean(scene.workspace && workspaceOpen);
+  const isAccess = scene.section === "access";
+  const isHosts = scene.section === "hosts";
+  const contextEyebrow = isAccess ? "Identity and access" : isHosts ? "Infrastructure" : "Managed services";
+  const contextTitle = isAccess ? "访问管理" : isHosts ? "基础设施" : "托管数据库";
+  const ContextIcon = isAccess ? ShieldCheck : isHosts ? Server : Database;
   const principal = session.current;
   const feedback = <>
     {session.error ? (
@@ -259,8 +270,8 @@ function ConsoleShell() {
 
               <Sider.ContextMenu className={styles.contextMenu}>
                 <div className={styles.contextHeader}>
-                  <div><Typography.Eyebrow>{scene.section === "access" ? "Identity and access" : "Managed services"}</Typography.Eyebrow><strong>{scene.section === "access" ? "访问管理" : "托管数据库"}</strong></div>
-                  {scene.section === "access" ? <ShieldCheck aria-hidden="true" /> : <Database aria-hidden="true" />}
+                  <div><Typography.Eyebrow>{contextEyebrow}</Typography.Eyebrow><strong>{contextTitle}</strong></div>
+                  <ContextIcon aria-hidden="true" />
                 </div>
                 <nav aria-label="控制台导航" className={styles.contextNavigation}>
                   <p>控制面</p>
@@ -284,7 +295,10 @@ function ConsoleShell() {
                 </nav>
                 <div className={styles.contextCallout}>
                   <CircleGauge aria-hidden="true" />
-                  <div><strong>本机部署</strong><span>PostgreSQL · 托管服务</span></div>
+                  <div>
+                    <strong>{isHosts ? "持续观测" : "本机部署"}</strong>
+                    <span>{isHosts ? "5 秒刷新 · 保留来源时间" : "PostgreSQL · 托管服务"}</span>
+                  </div>
                 </div>
                 <div className={styles.userDock}>
                   <div className={styles.avatar} aria-hidden="true">
@@ -381,9 +395,11 @@ function ConsoleShell() {
 }
 
 export function ConsoleShellRenderer({
+  hostRepository,
   repository,
   selection
 }: {
+  hostRepository?: HostInventoryRepository;
   repository?: ControlPlaneRepository;
   selection: ControlPlaneRouteSelection;
 }) {
@@ -395,8 +411,8 @@ export function ConsoleShellRenderer({
     return <LoginRenderer />;
   }
   return (
-    <ControlPlaneProvider repository={repository} selection={selection}>
-      <ConsoleShell />
+    <ControlPlaneProvider hostRepository={hostRepository} repository={repository} selection={selection}>
+      <ConsoleShell selection={selection} />
     </ControlPlaneProvider>
   );
 }

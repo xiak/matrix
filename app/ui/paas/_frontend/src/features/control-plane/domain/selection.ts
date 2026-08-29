@@ -4,6 +4,7 @@ export type ConsoleSection =
   | "quotas"
   | "installations"
   | "regions"
+  | "hosts"
   | "access";
 
 export type ControlPlaneRouteSelection = {
