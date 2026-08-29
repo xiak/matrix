@@ -165,6 +165,16 @@ func TestPostgresIntegration(t *testing.T) {
 			t, ctx, admin, apiPool, workerPool, placementUsecase, fixture, prefix,
 		)
 	}
+	assertInPlaceReplacementWorkflow(
+		t,
+		ctx,
+		admin,
+		apiPool,
+		workerPool,
+		placementUsecase,
+		fixture,
+		prefix,
+	)
 	assertDeploymentWorkerWorkflow(
 		t,
 		ctx,

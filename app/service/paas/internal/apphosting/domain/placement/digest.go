@@ -71,6 +71,15 @@ func (planner *Planner) candidateSetDigest(
 	encoder.string("deployment-id", string(deployment.Metadata.ID))
 	encoder.uint64("deployment-generation", deployment.Generation)
 	encoder.uint64("deployment-resource-version", deployment.Metadata.ResourceVersion)
+	if active := input.Snapshot.ActivePlacement; active != nil {
+		encoder.string("active-placement-decision-id", string(active.DecisionID))
+		encoder.string("active-placement-target-id", string(active.ExecutionTargetID))
+		encoder.string("active-placement-capacity-claim-id", string(active.CapacityClaimID))
+	} else {
+		encoder.string("active-placement-decision-id", "")
+		encoder.string("active-placement-target-id", "")
+		encoder.string("active-placement-capacity-claim-id", "")
+	}
 
 	revision := input.Snapshot.ApplicationRevision
 	encoder.string("application-revision-id", string(revision.Metadata.ID))

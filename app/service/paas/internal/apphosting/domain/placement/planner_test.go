@@ -48,6 +48,41 @@ func TestPlanFirstFitBuildsValidVersionBoundDecision(t *testing.T) {
 	}
 }
 
+func TestUpdateReplacesActiveCapacityOnItsBoundTarget(t *testing.T) {
+	planner := mustPlanner(t)
+	input := baseInput()
+	input.Snapshot.Deployment.Generation = 2
+	input.Snapshot.Deployment.Status = paasv1.DeploymentStatus{
+		Phase:                         paasv1.DeploymentPending,
+		ObservedGeneration:            1,
+		ObservedApplicationRevisionID: input.Snapshot.ApplicationRevision.Metadata.ID,
+		PlacementDecisionID:           "decision-active",
+		CurrentOperationID:            input.OperationID,
+		ReadyComponents:               2,
+		ObservedAt:                    fixtureTime.Add(-time.Minute),
+	}
+	input.Snapshot.Targets[0].Status.Allocatable = paasv1.Capacity{
+		CPUMillis: 400, MemoryBytes: 512 * 1024 * 1024, WorkloadSlots: 3,
+	}
+	input.Snapshot.CapacityClaims = []CapacityClaim{
+		testCapacityClaim("claim-active", "target-b", Resources{
+			CPUMillis: 400, MemoryBytes: 512 * 1024 * 1024, WorkloadSlots: 3,
+		}),
+	}
+	input.Snapshot.ActivePlacement = &ActivePlacement{
+		DecisionID: "decision-active", ExecutionTargetID: "target-b", CapacityClaimID: "claim-active",
+	}
+
+	result, err := planner.Plan(input)
+	if err != nil {
+		t.Fatalf("plan replacement: %v", err)
+	}
+	if result.Decision.Outcome != paasv1.PlacementScheduled ||
+		result.Decision.ExecutionTargetID != "target-b" {
+		t.Fatalf("replacement decision = %#v", result.Decision)
+	}
+}
+
 func TestCandidateFiltersFailClosed(t *testing.T) {
 	tests := []struct {
 		name    string

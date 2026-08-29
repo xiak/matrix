@@ -102,7 +102,7 @@ func TestCandidateDigestGoldenAndDecisionRelevantSensitivity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("baseline plan: %v", err)
 	}
-	const golden = "sha256:86d9d98742ffad5308107dc248717e30142215285b09b063688cbb178e8b0147"
+	const golden = "sha256:8e075b7823c6c9b5e7b68544051cbacd74e87aaf907ad1896b9c43a04617e9e2"
 	if baseline.Decision.CandidateSetDigest != golden {
 		t.Fatalf(
 			"candidate digest = %q, update golden %q",
@@ -194,6 +194,40 @@ func TestCandidateDigestGoldenAndDecisionRelevantSensitivity(t *testing.T) {
 	}
 	if withDifferentPolicyVersion.Decision.CandidateSetDigest == baseline.Decision.CandidateSetDigest {
 		t.Fatal("isolation policy version did not change candidate digest")
+	}
+}
+
+func TestCandidateDigestBindsExactActiveReplacementClaim(t *testing.T) {
+	input := baseInput()
+	input.Snapshot.Deployment.Generation = 2
+	input.Snapshot.Deployment.Status = paasv1.DeploymentStatus{
+		Phase:                         paasv1.DeploymentPending,
+		ObservedGeneration:            1,
+		ObservedApplicationRevisionID: input.Snapshot.ApplicationRevision.Metadata.ID,
+		PlacementDecisionID:           "decision-active",
+		CurrentOperationID:            input.OperationID,
+		ReadyComponents:               2,
+		ObservedAt:                    fixtureTime.Add(-time.Minute),
+	}
+	input.Snapshot.CapacityClaims = []CapacityClaim{
+		testCapacityClaim("claim-active-a", "target-b", Resources{CPUMillis: 100, WorkloadSlots: 1}),
+		testCapacityClaim("claim-active-b", "target-b", Resources{CPUMillis: 200, WorkloadSlots: 1}),
+	}
+	input.Snapshot.ActivePlacement = &ActivePlacement{
+		DecisionID: "decision-active", ExecutionTargetID: "target-b", CapacityClaimID: "claim-active-a",
+	}
+	first, err := mustPlanner(t).Plan(input)
+	if err != nil {
+		t.Fatalf("plan first replacement: %v", err)
+	}
+	secondInput := cloneInput(input)
+	secondInput.Snapshot.ActivePlacement.CapacityClaimID = "claim-active-b"
+	second, err := mustPlanner(t).Plan(secondInput)
+	if err != nil {
+		t.Fatalf("plan second replacement: %v", err)
+	}
+	if first.Decision.CandidateSetDigest == second.Decision.CandidateSetDigest {
+		t.Fatal("changing the exact replaced capacity claim did not change candidate digest")
 	}
 }
 

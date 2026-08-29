@@ -355,6 +355,10 @@ func cloneInput(value Input) Input {
 		[]CapacityClaim(nil),
 		value.Snapshot.CapacityClaims...,
 	)
+	if value.Snapshot.ActivePlacement != nil {
+		active := *value.Snapshot.ActivePlacement
+		result.Snapshot.ActivePlacement = &active
+	}
 	return result
 }
 

@@ -123,6 +123,10 @@ func (transaction *placementTransaction) LoadAndLockSnapshot(
 	if err != nil {
 		return placement.Snapshot{}, err
 	}
+	active, err := transaction.loadActivePlacement(ctx, deployment)
+	if err != nil {
+		return placement.Snapshot{}, err
+	}
 	return placement.Snapshot{
 		Deployment:          deployment,
 		ApplicationRevision: revision,
@@ -130,6 +134,7 @@ func (transaction *placementTransaction) LoadAndLockSnapshot(
 		Pools:               pools,
 		Targets:             targets,
 		CapacityClaims:      claims,
+		ActivePlacement:     active,
 	}, nil
 }
 
@@ -505,6 +510,48 @@ func (transaction *placementTransaction) loadCapacityClaims(
 		return nil, fmt.Errorf("iterate capacity claims: %w", err)
 	}
 	return claims, nil
+}
+
+func (transaction *placementTransaction) loadActivePlacement(
+	ctx context.Context,
+	deployment paasv1.Deployment,
+) (*placement.ActivePlacement, error) {
+	decisionID := deployment.Status.PlacementDecisionID
+	if decisionID == "" {
+		return nil, nil
+	}
+	var storedDecisionID string
+	var targetID string
+	var claimID string
+	err := transaction.tx.QueryRow(
+		ctx,
+		`SELECT reservation.decision_id,
+		        reservation.execution_target_id,
+		        reservation.capacity_claim_id::text
+		   FROM paas.capacity_reservations AS reservation
+		   JOIN paas.placement_decisions AS decision
+		     ON decision.tenant_id = reservation.tenant_id
+		    AND decision.id = reservation.decision_id
+		    AND decision.deployment_id = reservation.deployment_id
+		    AND decision.execution_target_id = reservation.execution_target_id
+		  WHERE reservation.tenant_id = $1
+		    AND reservation.deployment_id = $2
+		    AND reservation.decision_id = $3`,
+		string(transaction.tenantID),
+		string(deployment.Metadata.ID),
+		string(decisionID),
+	).Scan(&storedDecisionID, &targetID, &claimID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, errors.New("observed Deployment placement has no capacity reservation")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load active Deployment placement: %w", err)
+	}
+	return &placement.ActivePlacement{
+		DecisionID:        paasv1.ResourceID(storedDecisionID),
+		ExecutionTargetID: paasv1.ResourceID(targetID),
+		CapacityClaimID:   paasv1.ResourceID(claimID),
+	}, nil
 }
 
 func databaseTime(value time.Time) time.Time {

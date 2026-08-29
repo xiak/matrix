@@ -6,7 +6,7 @@ import (
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
 
-const AlgorithmVersion = "placement-v2"
+const AlgorithmVersion = "placement-v3"
 
 type CapacityClaimState string
 
@@ -37,6 +37,15 @@ type CapacityClaim struct {
 	ResourceVersion   uint64
 }
 
+// ActivePlacement identifies the exact active capacity claim that an update
+// or rollback replaces in place. It is repository-derived from the persisted
+// Deployment status and never accepts a caller-selected target.
+type ActivePlacement struct {
+	DecisionID        paasv1.ResourceID
+	ExecutionTargetID paasv1.ResourceID
+	CapacityClaimID   paasv1.ResourceID
+}
+
 type Snapshot struct {
 	Deployment          paasv1.Deployment
 	ApplicationRevision paasv1.ApplicationRevision
@@ -44,6 +53,7 @@ type Snapshot struct {
 	Pools               []paasv1.ExecutionPool
 	Targets             []paasv1.ExecutionTarget
 	CapacityClaims      []CapacityClaim
+	ActivePlacement     *ActivePlacement
 }
 
 // Input contains identities owned by the placement operation plus a single
@@ -69,6 +79,7 @@ type RejectionCode string
 const (
 	CandidateEligible            RejectionCode = "ELIGIBLE"
 	RejectPoolNotEligible        RejectionCode = "POOL_NOT_ELIGIBLE"
+	RejectTargetNotCurrent       RejectionCode = "TARGET_NOT_CURRENT"
 	RejectPoolNotReady           RejectionCode = "POOL_NOT_READY"
 	RejectTargetNotActive        RejectionCode = "TARGET_NOT_ACTIVE"
 	RejectTargetNotReady         RejectionCode = "TARGET_NOT_READY"

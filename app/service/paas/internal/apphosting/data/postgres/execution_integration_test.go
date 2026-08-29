@@ -17,6 +17,83 @@ import (
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/reconciledeployment"
 )
 
+func assertInPlaceReplacementWorkflow(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	apiPool *pgxpool.Pool,
+	workerPool *pgxpool.Pool,
+	placementUsecase *createplacement.Usecase,
+	fixture integrationFixture,
+	prefix string,
+) {
+	t.Helper()
+	executor := &postgresWorkerExecutor{
+		t: t, ctx: ctx, admin: admin, fixture: fixture,
+		plans: make(map[paasv1.OperationID]*postgresWorkerPlan),
+	}
+	workerFixture := newDeploymentWorkerFixture(
+		t, apiPool, workerPool, placementUsecase, executor, fixture.targetID, "compose-local", 10*time.Second,
+	)
+	requestedBy := paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "replacement-integration-user"}
+	deploymentID := paasv1.ResourceID(prefix + "-replacement-deployment")
+	created := submitWorkerDeployment(t, ctx, workerFixture.application, applicationlifecycle.SubmitCommand{
+		Authorization:  integrationAuthorization(fixture.tenantA, requestedBy, "replacement-deploy"),
+		DeploymentID:   deploymentID,
+		Name:           "replacement-deployment",
+		Spec:           applicationIntegrationSpec(fixture, fixture.configurationRevisionIDs[0]),
+		IdempotencyKey: "replacement-deploy",
+	}, paasv1.OperationDeploy)
+	executor.expect(created.Operation.ID, postgresWorkerPlan{
+		method: "apply", resultState: paasv1.AdapterResultSucceeded,
+		observationPhase: paasv1.DeploymentReady, expectedConsuming: 1,
+		expectedConfigurationRevisionID: fixture.configurationRevisionIDs[0],
+	})
+	processWorkerOperation(t, ctx, workerFixture.worker)
+	ready, operation := loadWorkerOutcome(t, ctx, admin, fixture.tenantA, deploymentID, created.Operation.ID)
+	assertWorkerOutcome(t, ready, operation, 1, 1, paasv1.DeploymentReady, paasv1.OperationSucceeded)
+	firstTarget := operationPlacementTargetID(t, ctx, admin, fixture.tenantA, created.Operation.ID)
+
+	updated := submitWorkerDeployment(t, ctx, workerFixture.application, applicationlifecycle.SubmitCommand{
+		Authorization:           integrationAuthorization(fixture.tenantA, requestedBy, "replacement-update"),
+		DeploymentID:            deploymentID,
+		Spec:                    applicationIntegrationSpec(fixture, fixture.configurationRevisionIDs[1]),
+		ExpectedResourceVersion: ready.Metadata.ResourceVersion,
+		IdempotencyKey:          "replacement-update",
+	}, paasv1.OperationUpdate)
+	executor.expect(updated.Operation.ID, postgresWorkerPlan{
+		method: "apply", resultState: paasv1.AdapterResultSucceeded,
+		observationPhase: paasv1.DeploymentReady, expectedConsuming: 2,
+		expectedConfigurationRevisionID: fixture.configurationRevisionIDs[1],
+	})
+	processWorkerOperation(t, ctx, workerFixture.worker)
+	ready, operation = loadWorkerOutcome(t, ctx, admin, fixture.tenantA, deploymentID, updated.Operation.ID)
+	assertWorkerOutcome(t, ready, operation, 2, 2, paasv1.DeploymentReady, paasv1.OperationSucceeded)
+	if nextTarget := operationPlacementTargetID(t, ctx, admin, fixture.tenantA, updated.Operation.ID); nextTarget != firstTarget {
+		t.Fatalf("replacement moved from target %q to %q", firstTarget, nextTarget)
+	}
+	assertConsumingClaims(t, ctx, admin, fixture.targetID, 1)
+
+	stopSpec := ready.Spec
+	stopSpec.DesiredState = paasv1.DeploymentDesiredStopped
+	stopping := submitWorkerDeployment(t, ctx, workerFixture.application, applicationlifecycle.SubmitCommand{
+		Authorization:           integrationAuthorization(fixture.tenantA, requestedBy, "replacement-stop"),
+		DeploymentID:            deploymentID,
+		Spec:                    stopSpec,
+		ExpectedResourceVersion: ready.Metadata.ResourceVersion,
+		IdempotencyKey:          "replacement-stop",
+	}, paasv1.OperationStop)
+	executor.expect(stopping.Operation.ID, postgresWorkerPlan{
+		method: "stop", resultState: paasv1.AdapterResultSucceeded,
+		observationPhase: paasv1.DeploymentStopped, expectedConsuming: 1,
+		expectedConfigurationRevisionID: fixture.configurationRevisionIDs[1],
+	})
+	processWorkerOperation(t, ctx, workerFixture.worker)
+	stopped, operation := loadWorkerOutcome(t, ctx, admin, fixture.tenantA, deploymentID, stopping.Operation.ID)
+	assertWorkerOutcome(t, stopped, operation, 3, 3, paasv1.DeploymentStopped, paasv1.OperationSucceeded)
+	assertConsumingClaims(t, ctx, admin, fixture.targetID, 0)
+}
+
 func assertDeploymentWorkerWorkflow(
 	t *testing.T,
 	ctx context.Context,
@@ -673,6 +750,26 @@ func operationPlacementID(
 		t.Fatalf("load Operation placement decision: %v", err)
 	}
 	return paasv1.ResourceID(decisionID)
+}
+
+func operationPlacementTargetID(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	tenantID paasv1.TenantID,
+	operationID paasv1.OperationID,
+) paasv1.ResourceID {
+	t.Helper()
+	var targetID string
+	if err := admin.QueryRow(
+		ctx,
+		"SELECT execution_target_id FROM paas.placement_decisions WHERE tenant_id = $1 AND operation_id = $2",
+		tenantID,
+		operationID,
+	).Scan(&targetID); err != nil {
+		t.Fatalf("load Operation placement target: %v", err)
+	}
+	return paasv1.ResourceID(targetID)
 }
 
 func assertOperationReceiptState(
