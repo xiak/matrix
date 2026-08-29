@@ -177,6 +177,33 @@ inventory is platform-scoped, while later container observations and terminal
 sessions resolve tenant ownership from a Deployment and never grant a tenant
 user general host visibility.
 
+The next P3-3 increment owns a tenant-scoped Deployment and current-instance
+view. The existing PaaS worker, which already owns the sealed target routes and
+node credentials, samples running Deployments independently of an open console
+and persists one bounded latest runtime snapshot per Deployment. The API never
+acquires node credentials or synchronously probes a host. A tenant-authorized
+read resolves the persisted Deployment, generation, placement and latest
+snapshot in one tenant transaction; it accepts no host, binding or provider
+selector. Transient collection failure retains the last proved value and its
+source time while making staleness explicit.
+
+The node lists containers only through the exact persisted Compose project and
+revalidates tenant, Deployment, generation, application revision, content
+digest and target identity. It returns at most 64 current instances with a
+node-derived opaque instance ID, component, lifecycle/health and exit state.
+Docker container IDs, names, labels, image IDs, host paths and sockets never
+cross the node boundary. The browser polls one selected Deployment at a time,
+cancels on navigation/logout and cannot use this read model to choose a host or
+open a terminal. Per-container CPU, memory, network and storage samples and the
+write-capable terminal remain later P3-3 increments.
+
+This snapshot owner introduces PaaS schema 3, authority contract revision 5
+and node runtime revision 5. The only initial cross-profile admission is the
+exact retained-data revision-4 to revision-5 successor after fresh/replay,
+least-privilege, rollback and real predecessor-runtime gates pass. It is not a
+general increasing-version rule, and no signed upgrade is accepted from an
+unproved tuple or node runtime.
+
 ### Interactive container access
 
 UI selection resolves server-side to the authorized tenant, exact Deployment
