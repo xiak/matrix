@@ -1,6 +1,6 @@
 # FEAT-008: existing Linux hosts and remote application delivery
 
-- Status: Target and initial donor review complete; P3-1 implementation in progress
+- Status: P3-1 accepted; P3-2 implementation in progress
 - Target: Matrix PaaS Phase 3
 - Design date: 2026-08-27
 - Branch: `feat/linux-host-management`
@@ -38,8 +38,8 @@ exercise combines these capabilities rather than introducing them late.
 | Iteration | Usable outcome | Required evidence | State |
 | --- | --- | --- | --- |
 | P3-0: design and adoption | Fixed scope, isolated branch and donor decisions | Target committed before fixed-source review; no donor dependency | Complete for the initial node slice |
-| P3-1: one managed host | Secure resident agent enrollment, identity, heartbeat and continuously refreshed basic CPU/memory/filesystem status through the control plane | Real authenticated Linux node; wrong identity denied; stale/disconnected state; restart and signed offline startup | In progress |
-| P3-2: remote application loop | Deploy, observe, update, stop and roll back a real application on that host | IAM/Audit/Operation/accounting integration; exact routing; ENV/Secret behavior; replay and lost-response recovery | Pending |
+| P3-1: one managed host | Secure resident agent enrollment, identity, heartbeat and continuously refreshed basic CPU/memory/filesystem status through the control plane | Real authenticated Linux node; wrong identity denied; stale/disconnected state; restart and signed offline startup | Complete |
+| P3-2: remote application loop | Deploy, observe, update, stop and roll back a real application on that host | IAM/Audit/Operation/accounting integration; exact routing; ENV/Secret behavior; replay and lost-response recovery | In progress |
 | P3-3: interactive operations | Live host/container UI and terminal in the selected running instance | Successive measurements without reload; real terminal I/O, resize, expiry, disconnect, authorization and audit | Pending |
 | P3-4: multiple hosts | Pool placement, drain, unavailable-node handling and safe removal across two independent hosts | No cross-host/local fallback; identity collision, tenant isolation and concurrent capacity checks | Pending |
 | P3-5: offline release | Platform and nodes install, operate, upgrade, roll back and recover without external access | Complete Gates A-E on exact committed source and signed releases | Pending |
@@ -369,8 +369,8 @@ purpose-limited recovery transaction for the sealed original installation
 primary. The account, binding, session, concurrency and Audit invariants are
 owned by [FEAT-006](FEAT-006-platform-authorities.md). It does not grant or
 restore platform authority, transfer ownership, enable an account or tenant,
-or recover service credentials. Legacy first authorization and revoked-role
-reinstatement remain separate, unsupported intents in this slice.
+or recover service credentials. Development-history first authorization and
+revoked-role reinstatement are unsupported product intents.
 
 The existing installation lock and authenticated journal own the command.
 Before recording a new intent or invoking recovery, authenticate the installed
@@ -401,45 +401,31 @@ service/workload identities and data. IAM's transaction and delayed-Audit gates
 remain in their current owner. SQL migration evidence alone does not admit a
 cross-profile release transition or accept the combined offline slice.
 
-### Explicit first platform authorization for a legacy installation
+### Supported release and authority migration boundary
 
-The next P3-1 slice is a separate, explicit first-authorization intent for the
-sealed original installation primary. It is not credential recovery, bootstrap
-replay or reinstatement of revoked authority. Eligibility requires authenticated
-evidence of a supported installation created before platform authorization
-existed, plus an installation-wide absence of any platform grant or revocation
-history. An empty set of currently active bindings is not that evidence.
-The original USER and home organization must be active, and initial/reset
-password change must already be complete; the intent does not reset credentials,
-enable resources, transfer ownership or select another principal.
+Matrix supports upgrade, rollback and recovery only between explicitly signed
+releases admitted by an exact source, database profile, contract revision and
+topology transition. The fixed `c88a84f` executable is a development-history
+and retained-data fixture, not a supported customer predecessor for platform
+authority. Its bootstrap records do not identify the executing source or role
+catalog. Consequently, an absent platform binding or empty grant history is
+never evidence from which the product may grant `PLATFORM_OPERATOR`.
 
-Installation owns authenticated release/provenance and a resumable local intent;
-IAM owns the purpose-limited, serialized authorization transaction, permanent
-completion evidence and its closed Audit fact. Successful replay reports the
-original result without recreating a binding after revocation. Neither an absent
-receipt nor a restored old command permits issuing a replacement intent.
-Online tenant/runtime/verifier identities acquire no local granting capability.
+Fresh supported installations establish their sealed installation owner and
+initial platform authority through the current bootstrap ceremony. Credential
+loss for an owner that still has an unrevoked platform binding uses the separate
+purpose-only recovery operation above. A revoked binding remains revoked, and
+unknown or incomplete provenance fails closed.
 
-The original bootstrap receipt and Audit fact bind identity and content, not
-the executing source revision or its role catalog. The rolling installation
-journal is not a complete software history. Neither can retroactively establish
-legacy eligibility. A source commitment must come from an authenticated,
-explicitly supported provenance path; missing history fails closed.
-First-authorization consumption must also survive the product's database
-backup recovery outside that restored database. Restoring an earlier snapshot
-or finding no IAM completion cannot reopen a completed or uncertain local
-intent. This does not claim protection against an owner rolling back every
-disk and key outside the supported product lifecycle.
-
-The existing complete-profile admission rule remains unchanged. First
-authorization cannot itself upgrade a release or make an unsupported old
-installation eligible. Any required legacy-to-current transition needs a
-separately explicit, fixed-source retained-data and signed lifecycle proof before
-it is admitted. Until that path is established, this slice remains unaccepted.
-Tests must use an actual eligible predecessor, not a new installation with a
-deleted binding or invented legacy marker, and cover revoked/history/provenance
-rejection, grant/revoke races, unknown outcomes, exact replay and delayed Audit
-delivery without partial mutation or workload changes.
+If a future published release requires a new highest privilege, that release
+must define a dedicated, version-scoped transition with authenticated source
+and target manifests, explicit operator intent, one-time non-rollback
+consumption evidence and a closed Audit fact. Database migration, startup
+reconciliation, bootstrap replay and absence checks are not substitutes. This
+pre-v1 replacement-first boundary removes development-history first
+authorization from P3-1 while retaining the real `c88a84f` regression that
+proves migration and replay never grant absent authority. The supported
+compatibility baseline begins with the first accepted Phase 3 signed release.
 
 ## Acceptance gates
 
@@ -763,8 +749,8 @@ No remote machine, shared engine or other task's service was restarted.
 The temporary engines, guest disks and test volumes were removed afterward;
 fixed source and signed inputs were retained. This accepts the exercised
 observation-only lifecycle and exact predecessor pairs, not arbitrary
-historical N-1, cross-profile transitions, legacy first platform authorization
-or the complete Phase 3 release. The database fixtures are not remote PaaS
+historical N-1, cross-profile transitions, development-history upgrade
+compatibility or the complete Phase 3 release. The database fixtures are not remote PaaS
 application placement or interactive-container acceptance.
 The exercised input was an extracted signed directory with declared file modes
 restored after Windows-origin copying, not a portable-archive acceptance.
@@ -847,11 +833,11 @@ itself was not externally disconnected. This admits the tested runtime-3
 predecessor/successor pair, not arbitrary historical N-1, runtime-2 admission,
 a portable archive format or the combined offline platform/node release.
 
-Next in P3-1:
-separately prove first platform authorization for an older installation before
-remote application delivery. The observation-only combined lifecycle does not
-replace Gate C's remote application and interactive operations requirements.
-P3-1 and the complete Phase 3 release remain unaccepted.
+P3-1 is accepted for its one-managed-host outcome. Its observation-only
+combined lifecycle does not replace Gate C's remote application and interactive
+operations requirements. Next in P3-2: route persisted placement to the exact
+managed target and prove deploy, observe, update, stop and rollback without
+local or other-host fallback. The complete Phase 3 release remains unaccepted.
 Gate D as a whole remains open. No untested predecessor or cross-profile
 admission is inferred from the fixed pairs exercised here.
 

@@ -537,9 +537,10 @@ job and the unchanged Linux node gate. No production API, SQL or release
 profile changed.
 This establishes a real pre-platform data fixture, not provenance of an
 arbitrary supplied database. Bootstrap facts contain no source revision or
-role-catalog commitment. First authorization and its non-rollback provenance/
-consumption boundary remain unimplemented and are specified in
-[FEAT-008](FEAT-008-linux-host-management.md).
+role-catalog commitment. The fixture is not a supported product predecessor;
+automatic first authorization from absent role data is rejected. A future
+published predecessor would require a distinct signed, version-scoped
+transition owned by [FEAT-008](FEAT-008-linux-host-management.md).
 
 - Gate A was accepted on 2026-08-26. Strict generated Go/OpenAPI contracts,
   current-credential-only service identity, fixed Argon2id and

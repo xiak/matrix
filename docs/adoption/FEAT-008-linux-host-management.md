@@ -48,13 +48,14 @@ the format-rejection gate. This inspection followed the FEAT-008 profile
 design. No older installer implementation is copied into the working tree,
 and the old scalar schema comparison is not reused for new authority profiles.
 
-For explicit legacy first platform authorization, the same fixed `c88a84f`
-installation journal, configuration and upgrade slices are `REFERENCE` for
-authenticating a real predecessor and its retained installation state. They are
-not copied as a granting path or a cross-profile migration implementation.
-The target is the separate first-authorization boundary in FEAT-008; normal
-bootstrap replay, credential recovery and schema application are `REJECT` as
-substitutes for that explicit intent.
+The fixed `c88a84f` installation is `REJECT` as a supported platform-authority
+upgrade source. It remains only a real retained-data and format-regression
+producer. No customer-facing release promise admits it, its bootstrap fact has
+no source or role-catalog commitment, and absence of a platform binding cannot
+authorize a grant. Normal bootstrap replay, credential recovery, schema
+application and startup reconciliation are also `REJECT` as first-authorization
+substitutes. A future published predecessor would require its own signed,
+version-scoped adoption review and explicit transition evidence.
 
 For local original-primary credential recovery, fixed same-repository commit
 `91af8482aa218f64f90a7151bca388918367dc7a` is `ADAPT` for the private IAM
