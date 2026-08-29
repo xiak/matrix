@@ -3294,8 +3294,9 @@ func seedProcessExecutionProfile(
 	if err := transaction.QueryRow(
 		ctx,
 		`SELECT paas.reconcile_local_execution_profile(
-		     0, $1::jsonb, 0, $2::jsonb, 0, $3::jsonb
+		     $1, 0, $2::jsonb, 0, $3::jsonb, 0, $4::jsonb
 		 )`,
+		"installation-process",
 		poolDocument,
 		targetDocument,
 		policyDocument,
