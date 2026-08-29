@@ -11,11 +11,12 @@ import (
 )
 
 var (
-	idPattern              = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
-	namePattern            = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
-	environmentKeyPattern  = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,127}$`)
-	digestPattern          = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
-	contractVersionPattern = regexp.MustCompile(`^v[1-9][0-9]*$`)
+	idPattern                   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+	namePattern                 = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+	environmentKeyPattern       = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,127}$`)
+	digestPattern               = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	contractVersionPattern      = regexp.MustCompile(`^v[1-9][0-9]*$`)
+	deploymentInstanceIDPattern = regexp.MustCompile(`^instance-[0-9a-f]{32}$`)
 )
 
 var sensitiveKeyFragments = [...]string{
@@ -830,6 +831,26 @@ func ValidateObserveDeploymentRequest(value ObserveDeploymentRequest) error {
 	return errors.Join(problems...)
 }
 
+func ValidateObserveDeploymentRuntimeRequest(value ObserveDeploymentRuntimeRequest) error {
+	var problems []error
+	problems = append(problems,
+		ValidateID("requestId", string(value.RequestID)),
+		ValidateResourceScope(value.Scope),
+		ValidateID("deploymentId", string(value.DeploymentID)),
+		ValidateID("applicationRevisionId", string(value.ApplicationRevisionID)),
+		ValidateID("executionTargetId", string(value.ExecutionTargetID)),
+		ValidateDigest("expectedContentDigest", value.ExpectedContentDigest),
+		validateContractTime("deadline", value.Deadline),
+	)
+	if value.Scope.Kind != AuthorityTenant {
+		problems = append(problems, errors.New("deployment runtime observation must be tenant scoped"))
+	}
+	if value.Generation == 0 {
+		problems = append(problems, errors.New("deployment runtime observation generation must be positive"))
+	}
+	return errors.Join(problems...)
+}
+
 func ValidateDeploymentObservation(value DeploymentObservation) error {
 	var problems []error
 	problems = append(problems,
@@ -875,6 +896,108 @@ func ValidateDeploymentObservation(value DeploymentObservation) error {
 		if err := ValidateEvidence(evidence); err != nil {
 			problems = append(problems, fmt.Errorf("evidence[%d]: %w", index, err))
 		}
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateDeploymentList(value DeploymentList) error {
+	if value.APIVersion != APIVersion || value.Kind != "DeploymentList" ||
+		ValidateResourceScope(value.Scope) != nil || value.Scope.Kind != AuthorityTenant ||
+		value.Items == nil || len(value.Items) > MaximumDeploymentListItems {
+		return errors.New("deployment list is invalid")
+	}
+	var previous ResourceID
+	for index, item := range value.Items {
+		if ValidateDeployment(item) != nil || item.Metadata.Scope != value.Scope {
+			return errors.New("deployment list is invalid")
+		}
+		if index > 0 && item.Metadata.ID <= previous {
+			return errors.New("deployment list is invalid")
+		}
+		previous = item.Metadata.ID
+	}
+	if value.NextAfter != "" {
+		if ValidateID("nextAfter", string(value.NextAfter)) != nil || len(value.Items) == 0 ||
+			value.NextAfter != value.Items[len(value.Items)-1].Metadata.ID {
+			return errors.New("deployment list is invalid")
+		}
+	}
+	return nil
+}
+
+func ValidateDeploymentRuntimeObservation(value DeploymentRuntimeObservation) error {
+	var problems []error
+	problems = append(problems,
+		ValidateID("deploymentId", string(value.DeploymentID)),
+		ValidateID("applicationRevisionId", string(value.ApplicationRevisionID)),
+		ValidateID("executionTargetId", string(value.ExecutionTargetID)),
+		validateContractTime("observedAt", value.ObservedAt),
+	)
+	if value.Generation == 0 {
+		problems = append(problems, errors.New("deployment runtime generation must be positive"))
+	}
+	if value.Instances == nil || len(value.Instances) > MaximumDeploymentRuntimeInstances {
+		problems = append(problems, errors.New("deployment runtime instances are invalid"))
+	}
+	seen := make(map[ResourceID]struct{}, len(value.Instances))
+	for index, instance := range value.Instances {
+		path := fmt.Sprintf("instances[%d]", index)
+		if !deploymentInstanceIDPattern.MatchString(string(instance.ID)) {
+			problems = append(problems, fmt.Errorf("%s.id is not an opaque node-derived identity", path))
+		}
+		if !namePattern.MatchString(instance.ComponentName) {
+			problems = append(problems, fmt.Errorf("%s.componentName is invalid", path))
+		}
+		if !contains(DeploymentInstanceStates(), instance.State) {
+			problems = append(problems, fmt.Errorf("%s.state is invalid", path))
+		}
+		if !contains(DeploymentInstanceHealthStates(), instance.Health) {
+			problems = append(problems, fmt.Errorf("%s.health is invalid", path))
+		}
+		terminal := instance.State == DeploymentInstanceExited ||
+			instance.State == DeploymentInstanceDead
+		if (instance.ExitCode != nil) != terminal {
+			problems = append(
+				problems,
+				fmt.Errorf("%s.exitCode must exactly match a terminal state", path),
+			)
+		}
+		if _, duplicate := seen[instance.ID]; duplicate {
+			problems = append(problems, fmt.Errorf("%s.id is duplicated", path))
+		}
+		seen[instance.ID] = struct{}{}
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateDeploymentRuntimeSnapshot(value DeploymentRuntimeSnapshot) error {
+	var problems []error
+	if value.APIVersion != APIVersion || value.Kind != "DeploymentRuntimeSnapshot" {
+		problems = append(problems, errors.New("deployment runtime snapshot type metadata is invalid"))
+	}
+	problems = append(problems, ValidateResourceScope(value.Scope))
+	if value.Scope.Kind != AuthorityTenant {
+		problems = append(problems, errors.New("deployment runtime snapshot must be tenant scoped"))
+	}
+	switch value.State {
+	case MeasurementAvailable, MeasurementStale:
+		if value.Value == nil {
+			problems = append(problems, errors.New("deployment runtime value is required"))
+			break
+		}
+		problems = append(problems,
+			ValidateDeploymentRuntimeObservation(value.Value.Observation),
+			validateContractTime("validUntil", value.Value.ValidUntil),
+		)
+		if !value.Value.ValidUntil.After(value.Value.Observation.ObservedAt) {
+			problems = append(problems, errors.New("deployment runtime validity window is invalid"))
+		}
+	case MeasurementUnavailable:
+		if value.Value != nil {
+			problems = append(problems, errors.New("unavailable deployment runtime must not contain a value"))
+		}
+	default:
+		problems = append(problems, errors.New("deployment runtime state is invalid"))
 	}
 	return errors.Join(problems...)
 }

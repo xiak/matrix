@@ -197,12 +197,14 @@ cancels on navigation/logout and cannot use this read model to choose a host or
 open a terminal. Per-container CPU, memory, network and storage samples and the
 write-capable terminal remain later P3-3 increments.
 
-This snapshot owner introduces PaaS schema 3, authority contract revision 5
-and node runtime revision 5. The only initial cross-profile admission is the
-exact retained-data revision-4 to revision-5 successor after fresh/replay,
-least-privilege, rollback and real predecessor-runtime gates pass. It is not a
-general increasing-version rule, and no signed upgrade is accepted from an
-unproved tuple or node runtime.
+This snapshot owner keeps the PaaS schema-2 compatibility floor, introduces
+authority contract revision 5 and node runtime revision 5. Its new table and
+functions are a pure additive expansion: revision-4 PaaS binaries ignore them,
+while revision-5 migration verification requires their exact shape and least
+privilege. The only initial cross-profile admission is the exact retained-data
+revision-4 to revision-5 successor after fresh/replay, rollback and real
+predecessor-runtime gates pass. It is not a general increasing-version rule,
+and no signed upgrade is accepted from an unproved tuple or node runtime.
 
 ### Interactive container access
 

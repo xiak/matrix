@@ -1073,6 +1073,58 @@
         "type": "object",
         "x-matrix-immutable": true
       },
+      "DeploymentInstanceHealth": {
+        "enum": [
+          "NONE",
+          "STARTING",
+          "HEALTHY",
+          "UNHEALTHY"
+        ],
+        "type": "string"
+      },
+      "DeploymentInstanceState": {
+        "enum": [
+          "CREATED",
+          "RUNNING",
+          "RESTARTING",
+          "REMOVING",
+          "PAUSED",
+          "EXITED",
+          "DEAD"
+        ],
+        "type": "string"
+      },
+      "DeploymentList": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "paas.matrix.xiak.com/v1"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Deployment"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "kind": {
+            "const": "DeploymentList"
+          },
+          "nextAfter": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ResourceScope"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "scope",
+          "items"
+        ],
+        "type": "object"
+      },
       "DeploymentObservation": {
         "additionalProperties": false,
         "properties": {
@@ -1138,6 +1190,191 @@
           "STOPPED"
         ],
         "type": "string"
+      },
+      "DeploymentRuntimeInstance": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "exitCode"
+              ]
+            },
+            "then": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "EXITED",
+                    "DEAD"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "EXITED",
+                    "DEAD"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "exitCode"
+              ]
+            }
+          }
+        ],
+        "properties": {
+          "componentName": {
+            "$ref": "#/components/schemas/Name"
+          },
+          "exitCode": {
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "health": {
+            "$ref": "#/components/schemas/DeploymentInstanceHealth"
+          },
+          "id": {
+            "pattern": "^instance-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/DeploymentInstanceState"
+          }
+        },
+        "required": [
+          "id",
+          "componentName",
+          "state",
+          "health"
+        ],
+        "type": "object"
+      },
+      "DeploymentRuntimeObservation": {
+        "additionalProperties": false,
+        "properties": {
+          "applicationRevisionId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "deploymentId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "executionTargetId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "generation": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "instances": {
+            "items": {
+              "$ref": "#/components/schemas/DeploymentRuntimeInstance"
+            },
+            "maxItems": 64,
+            "type": "array"
+          },
+          "observedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "deploymentId",
+          "generation",
+          "applicationRevisionId",
+          "executionTargetId",
+          "instances",
+          "observedAt"
+        ],
+        "type": "object"
+      },
+      "DeploymentRuntimeSnapshot": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "UNAVAILABLE"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "value": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "AVAILABLE",
+                    "STALE"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "value"
+              ]
+            }
+          }
+        ],
+        "properties": {
+          "apiVersion": {
+            "const": "paas.matrix.xiak.com/v1"
+          },
+          "kind": {
+            "const": "DeploymentRuntimeSnapshot"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ResourceScope"
+          },
+          "state": {
+            "enum": [
+              "AVAILABLE",
+              "STALE",
+              "UNAVAILABLE"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/DeploymentRuntimeValue"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "scope",
+          "state"
+        ],
+        "type": "object"
+      },
+      "DeploymentRuntimeValue": {
+        "additionalProperties": false,
+        "properties": {
+          "observation": {
+            "$ref": "#/components/schemas/DeploymentRuntimeObservation"
+          },
+          "validUntil": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "observation",
+          "validUntil"
+        ],
+        "type": "object"
       },
       "DeploymentSpec": {
         "additionalProperties": false,
@@ -2200,6 +2437,49 @@
           "command",
           "generation",
           "expectedContentDigest"
+        ],
+        "type": "object",
+        "x-matrix-visibility": "internal"
+      },
+      "ObserveDeploymentRuntimeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "applicationRevisionId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "deadline": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "deploymentId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "executionTargetId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "expectedContentDigest": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "generation": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ResourceScope"
+          }
+        },
+        "required": [
+          "requestId",
+          "scope",
+          "deploymentId",
+          "generation",
+          "applicationRevisionId",
+          "executionTargetId",
+          "expectedContentDigest",
+          "deadline"
         ],
         "type": "object",
         "x-matrix-visibility": "internal"
@@ -3589,6 +3869,58 @@
       }
     },
     "/v1/deployments": {
+      "get": {
+        "operationId": "listDeployments",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentList"
+                }
+              }
+            },
+            "description": "Current bounded authorized collection.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "List tenant-scoped Deployments"
+      },
       "post": {
         "operationId": "createDeployment",
         "parameters": [
@@ -4018,6 +4350,60 @@
           }
         },
         "summary": "Roll back Deployment"
+      }
+    },
+    "/v1/deployments/{deploymentId}/runtime": {
+      "get": {
+        "operationId": "getDeploymentRuntime",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "deploymentId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentRuntimeSnapshot"
+                }
+              }
+            },
+            "description": "Current tenant-scoped resource.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Get current Deployment runtime"
       }
     },
     "/v1/execution-pools": {

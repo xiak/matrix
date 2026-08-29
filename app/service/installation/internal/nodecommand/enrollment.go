@@ -115,7 +115,7 @@ func digest(value []byte) string {
 func ValidatePlan(plan Plan) error {
 	config := plan.Configuration
 	if !filepath.IsAbs(plan.Root) || filepath.Clean(plan.Root) != plan.Root ||
-		ValidateRelease(plan.Bundle) != nil || nodeconfig.ValidateConfiguration(config) != nil ||
+		ValidateInstalledRelease(plan.Bundle) != nil || nodeconfig.ValidateConfiguration(config) != nil ||
 		lifecycle.ValidateInstallationID(config.Identity.InstallationID) != nil ||
 		config.StoragePath != filepath.Join(plan.Root, filepath.FromSlash(layout.ExecutorRoot)) ||
 		config.CertificateFile != filepath.Join(plan.Root, filepath.FromSlash(layout.NodeCertificate)) ||
@@ -155,15 +155,32 @@ func nodeReleaseSuccessor(successor, predecessor release.VerifiedBundle) bool {
 }
 
 func ValidateRelease(bundle release.VerifiedBundle) error {
+	return validateRelease(bundle, false)
+}
+
+// ValidateInstalledRelease accepts the current node contract and the one
+// explicit rollback predecessor. New install/upgrade media still passes
+// ValidateRelease and therefore cannot select the predecessor as a target.
+func ValidateInstalledRelease(bundle release.VerifiedBundle) error {
+	return validateRelease(bundle, true)
+}
+
+func validateRelease(bundle release.VerifiedBundle, allowPredecessor bool) error {
 	manifest := bundle.Manifest
 	if release.ValidateManifest(manifest) != nil || manifest.Kind != release.NodeManifestKind ||
 		manifest.Node == nil || manifest.Node.ProtocolAPIVersion != nodev1.APIVersion ||
-		manifest.Node.RuntimeRevision != nodeconfig.RuntimeRevision ||
 		manifest.Node.CollectorVersion != nodeconfig.CollectorVersion ||
 		manifest.Host.MinimumSystemd != nodeconfig.MinimumSystemd ||
 		manifest.Host.MinimumDocker != nodeconfig.MinimumDocker ||
-		manifest.Host.MinimumCompose != nodeconfig.MinimumCompose ||
-		manifest.TopologyDigest != nodeconfig.ContractDigest() {
+		manifest.Host.MinimumCompose != nodeconfig.MinimumCompose {
+		return errors.New("node release profile is unsupported")
+	}
+	current := manifest.Node.RuntimeRevision == nodeconfig.RuntimeRevision &&
+		manifest.TopologyDigest == nodeconfig.ContractDigest()
+	predecessor := allowPredecessor &&
+		manifest.Node.RuntimeRevision == nodeconfig.DeploymentRuntimePredecessorRevision &&
+		manifest.TopologyDigest == nodeconfig.DeploymentRuntimePredecessorContractDigest()
+	if !current && !predecessor {
 		return errors.New("node release profile is unsupported")
 	}
 	return nil

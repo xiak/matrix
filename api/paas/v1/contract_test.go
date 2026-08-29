@@ -30,6 +30,11 @@ func TestOpenAPIContractDefinesApplicationPaaSV1(t *testing.T) {
 		"ApplicationRevision",
 		"CreateApplicationRevisionRequest",
 		"Deployment",
+		"DeploymentList",
+		"DeploymentRuntimeInstance",
+		"DeploymentRuntimeObservation",
+		"DeploymentRuntimeValue",
+		"DeploymentRuntimeSnapshot",
 		"CreateDeploymentRequest",
 		"RollbackDeploymentRequest",
 		"DeploymentGeneration",
@@ -50,6 +55,7 @@ func TestOpenAPIContractDefinesApplicationPaaSV1(t *testing.T) {
 		"ObserveExecutionTargetRequest",
 		"DeploymentExecutionRequest",
 		"ObserveDeploymentRequest",
+		"ObserveDeploymentRuntimeRequest",
 		"DeploymentEndpointObservation",
 		"DeploymentObservation",
 		"ExecutionTargetObservation",
@@ -71,6 +77,35 @@ func TestOpenAPIContractDefinesApplicationPaaSV1(t *testing.T) {
 	listItems := object(t, listProperties["items"], "ExecutionTargetList.items")
 	if listItems["maxItems"] != json.Number(fmt.Sprint(MaximumExecutionTargetListItems)) {
 		t.Fatalf("ExecutionTargetList.items must be bounded: %#v", listItems)
+	}
+	deploymentList := schemaObject(t, schemas, "DeploymentList")
+	deploymentItems := object(t, object(t, deploymentList["properties"], "DeploymentList.properties")["items"], "DeploymentList.items")
+	if deploymentItems["maxItems"] != json.Number(fmt.Sprint(MaximumDeploymentListItems)) {
+		t.Fatalf("DeploymentList.items must be bounded: %#v", deploymentItems)
+	}
+	runtimeObservation := schemaObject(t, schemas, "DeploymentRuntimeObservation")
+	runtimeProperties := object(t, runtimeObservation["properties"], "DeploymentRuntimeObservation.properties")
+	runtimeInstances := object(t, runtimeProperties["instances"], "DeploymentRuntimeObservation.instances")
+	if runtimeInstances["maxItems"] != json.Number(fmt.Sprint(MaximumDeploymentRuntimeInstances)) {
+		t.Fatalf("DeploymentRuntimeObservation.instances must be bounded: %#v", runtimeInstances)
+	}
+	if generation := object(t, runtimeProperties["generation"], "DeploymentRuntimeObservation.generation"); generation["minimum"] != json.Number("1") {
+		t.Fatalf("DeploymentRuntimeObservation.generation must be positive: %#v", generation)
+	}
+	request := schemaObject(t, schemas, "ObserveDeploymentRuntimeRequest")
+	requestGeneration := object(t, object(t, request["properties"], "ObserveDeploymentRuntimeRequest.properties")["generation"], "ObserveDeploymentRuntimeRequest.generation")
+	if requestGeneration["minimum"] != json.Number("1") {
+		t.Fatalf("ObserveDeploymentRuntimeRequest.generation must be positive: %#v", requestGeneration)
+	}
+	snapshot := schemaObject(t, schemas, "DeploymentRuntimeSnapshot")
+	snapshotState := object(t, object(t, snapshot["properties"], "DeploymentRuntimeSnapshot.properties")["state"], "DeploymentRuntimeSnapshot.state")
+	wantRuntimeStates := []any{string(MeasurementAvailable), string(MeasurementStale), string(MeasurementUnavailable)}
+	if !reflect.DeepEqual(snapshotState["enum"], wantRuntimeStates) {
+		t.Fatalf("DeploymentRuntimeSnapshot.state must be closed: %#v", snapshotState)
+	}
+	instance := schemaObject(t, schemas, "DeploymentRuntimeInstance")
+	if allOf, ok := instance["allOf"].([]any); !ok || len(allOf) != 2 {
+		t.Fatalf("DeploymentRuntimeInstance exit-code condition is incomplete: %#v", instance["allOf"])
 	}
 }
 
@@ -106,10 +141,11 @@ func TestOpenAPINorthboundSurfaceUsesMatrixIAM(t *testing.T) {
 		"/v1/configuration-revisions/{configurationRevisionId}":   {"get"},
 		"/v1/application-revisions":                               {"post"},
 		"/v1/application-revisions/{applicationRevisionId}":       {"get"},
-		"/v1/deployments":                                         {"post"},
+		"/v1/deployments":                                         {"get", "post"},
 		"/v1/deployments/{deploymentId}":                          {"get", "put"},
 		"/v1/deployments/{deploymentId}/rollback":                 {"post"},
 		"/v1/deployments/{deploymentId}/generations/{generation}": {"get"},
+		"/v1/deployments/{deploymentId}/runtime":                  {"get"},
 		"/v1/operations/{operationId}":                            {"get"},
 		"/v1/installation:verify":                                 {"post"},
 	}
@@ -415,6 +451,11 @@ func TestOpenAPIStructPropertiesAndRequiredFieldsMatchGoTypes(t *testing.T) {
 		"DeploymentSpec":                     reflect.TypeOf(DeploymentSpec{}),
 		"DeploymentStatus":                   reflect.TypeOf(DeploymentStatus{}),
 		"Deployment":                         reflect.TypeOf(Deployment{}),
+		"DeploymentList":                     reflect.TypeOf(DeploymentList{}),
+		"DeploymentRuntimeInstance":          reflect.TypeOf(DeploymentRuntimeInstance{}),
+		"DeploymentRuntimeObservation":       reflect.TypeOf(DeploymentRuntimeObservation{}),
+		"DeploymentRuntimeValue":             reflect.TypeOf(DeploymentRuntimeValue{}),
+		"DeploymentRuntimeSnapshot":          reflect.TypeOf(DeploymentRuntimeSnapshot{}),
 		"CreateDeploymentRequest":            reflect.TypeOf(CreateDeploymentRequest{}),
 		"RollbackDeploymentRequest":          reflect.TypeOf(RollbackDeploymentRequest{}),
 		"DeploymentGeneration":               reflect.TypeOf(DeploymentGeneration{}),
@@ -433,6 +474,7 @@ func TestOpenAPIStructPropertiesAndRequiredFieldsMatchGoTypes(t *testing.T) {
 		"ObserveDeploymentRequest":           reflect.TypeOf(ObserveDeploymentRequest{}),
 		"DeploymentEndpointObservation":      reflect.TypeOf(DeploymentEndpointObservation{}),
 		"DeploymentObservation":              reflect.TypeOf(DeploymentObservation{}),
+		"ObserveDeploymentRuntimeRequest":    reflect.TypeOf(ObserveDeploymentRuntimeRequest{}),
 		"ExecutionTargetObservation":         reflect.TypeOf(ExecutionTargetObservation{}),
 		"NormalizedAdapterError":             reflect.TypeOf(NormalizedAdapterError{}),
 		"AdapterResult":                      reflect.TypeOf(AdapterResult{}),

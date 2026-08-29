@@ -113,6 +113,51 @@ func DeploymentPhases() []DeploymentPhase {
 	}
 }
 
+// DeploymentInstanceState is the provider-neutral lifecycle exposed for one
+// current Deployment instance. Provider-native names and identifiers never
+// enter the northbound contract.
+type DeploymentInstanceState string
+
+const (
+	DeploymentInstanceCreated    DeploymentInstanceState = "CREATED"
+	DeploymentInstanceRunning    DeploymentInstanceState = "RUNNING"
+	DeploymentInstanceRestarting DeploymentInstanceState = "RESTARTING"
+	DeploymentInstanceRemoving   DeploymentInstanceState = "REMOVING"
+	DeploymentInstancePaused     DeploymentInstanceState = "PAUSED"
+	DeploymentInstanceExited     DeploymentInstanceState = "EXITED"
+	DeploymentInstanceDead       DeploymentInstanceState = "DEAD"
+)
+
+func DeploymentInstanceStates() []DeploymentInstanceState {
+	return []DeploymentInstanceState{
+		DeploymentInstanceCreated,
+		DeploymentInstanceRunning,
+		DeploymentInstanceRestarting,
+		DeploymentInstanceRemoving,
+		DeploymentInstancePaused,
+		DeploymentInstanceExited,
+		DeploymentInstanceDead,
+	}
+}
+
+type DeploymentInstanceHealth string
+
+const (
+	DeploymentInstanceHealthNone      DeploymentInstanceHealth = "NONE"
+	DeploymentInstanceHealthStarting  DeploymentInstanceHealth = "STARTING"
+	DeploymentInstanceHealthHealthy   DeploymentInstanceHealth = "HEALTHY"
+	DeploymentInstanceHealthUnhealthy DeploymentInstanceHealth = "UNHEALTHY"
+)
+
+func DeploymentInstanceHealthStates() []DeploymentInstanceHealth {
+	return []DeploymentInstanceHealth{
+		DeploymentInstanceHealthNone,
+		DeploymentInstanceHealthStarting,
+		DeploymentInstanceHealthHealthy,
+		DeploymentInstanceHealthUnhealthy,
+	}
+}
+
 type OperationAction string
 
 const (

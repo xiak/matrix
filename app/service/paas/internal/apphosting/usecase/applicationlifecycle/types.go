@@ -92,6 +92,15 @@ type Transaction interface {
 		context.Context,
 		paasv1.ResourceID,
 	) (paasv1.Deployment, bool, error)
+	ListDeployments(
+		context.Context,
+		paasv1.ResourceID,
+		int,
+	) ([]paasv1.Deployment, paasv1.ResourceID, error)
+	LoadDeploymentRuntime(
+		context.Context,
+		paasv1.ResourceID,
+	) (paasv1.DeploymentRuntimeSnapshot, bool, error)
 	LoadApplication(context.Context, paasv1.ResourceID) (paasv1.Application, bool, error)
 	LoadConfiguration(context.Context, paasv1.ResourceID) (paasv1.Configuration, bool, error)
 	LoadConfigurationRevision(

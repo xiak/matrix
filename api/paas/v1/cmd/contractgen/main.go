@@ -144,6 +144,7 @@ func buildPaths() schema {
 	)
 
 	paths["/v1/deployments"] = schema{
+		"get":  deploymentCollectionReadOperation(),
 		"post": mutationOperation("createDeployment", "Create Deployment", "CreateDeploymentRequest", false, "202"),
 	}
 	paths["/v1/deployments/{deploymentId}"] = schema{
@@ -170,6 +171,11 @@ func buildPaths() schema {
 			},
 			"responses": readResponses("DeploymentGeneration"),
 		},
+	}
+	paths["/v1/deployments/{deploymentId}/runtime"] = schema{
+		"get": readOperation(
+			"getDeploymentRuntime", "Get current Deployment runtime", "deploymentId", "DeploymentRuntimeSnapshot",
+		),
 	}
 	paths["/v1/operations/{operationId}"] = schema{
 		"get": readOperation("getOperation", "Get Operation", "operationId", "Operation"),
@@ -280,6 +286,17 @@ func collectionReadOperation(operationID, summary, responseSchema string) schema
 	}
 }
 
+func deploymentCollectionReadOperation() schema {
+	operation := collectionReadOperation(
+		"listDeployments", "List tenant-scoped Deployments", "DeploymentList",
+	)
+	operation["parameters"] = []any{schema{
+		"name": "after", "in": "query", "required": false,
+		"schema": ref("ID"),
+	}}
+	return operation
+}
+
 func jsonRequestBody(schemaName string) schema {
 	return schema{
 		"required": true,
@@ -388,6 +405,8 @@ func enumSchemas() map[string][]string {
 		"PlacementOutcome":              stringsOf(paasv1.PlacementScheduled, paasv1.PlacementUnschedulable),
 		"DeploymentDesiredState":        stringsOf(paasv1.DeploymentDesiredRunning, paasv1.DeploymentDesiredStopped),
 		"DeploymentPhase":               stringsOfSlice(paasv1.DeploymentPhases()),
+		"DeploymentInstanceState":       stringsOfSlice(paasv1.DeploymentInstanceStates()),
+		"DeploymentInstanceHealth":      stringsOfSlice(paasv1.DeploymentInstanceHealthStates()),
 		"OperationAction":               stringsOfSlice(paasv1.OperationActions()),
 		"OperationState":                stringsOfSlice(paasv1.OperationStates()),
 		"EvidenceType":                  stringsOf(paasv1.EvidencePolicyDecision, paasv1.EvidencePlacementDecision, paasv1.EvidenceAdapterCommand, paasv1.EvidenceAdapterResult, paasv1.EvidenceObservation, paasv1.EvidenceVerification, paasv1.EvidenceAuditDispatch),
@@ -423,11 +442,14 @@ func structContracts() map[string]reflect.Type {
 		paasv1.CreateConfigurationRevisionRequest{}, paasv1.ApplicationRevisionComponent{}, paasv1.ApplicationRevisionSpec{},
 		paasv1.ApplicationRevision{}, paasv1.CreateApplicationRevisionRequest{}, paasv1.DeploymentComponent{}, paasv1.DeploymentSpec{},
 		paasv1.DeploymentStatus{}, paasv1.Deployment{}, paasv1.CreateDeploymentRequest{}, paasv1.RollbackDeploymentRequest{},
+		paasv1.DeploymentList{}, paasv1.DeploymentRuntimeInstance{}, paasv1.DeploymentRuntimeObservation{},
+		paasv1.DeploymentRuntimeValue{}, paasv1.DeploymentRuntimeSnapshot{},
 		paasv1.DeploymentGeneration{}, paasv1.SubjectRef{}, paasv1.ResourceRef{}, paasv1.FieldViolation{}, paasv1.Readiness{},
 		paasv1.VerifyInstallationRequest{}, paasv1.InstallationVerification{},
 		paasv1.Problem{}, paasv1.Operation{}, paasv1.Evidence{}, paasv1.AdapterCapabilitiesContract{},
 		paasv1.AdapterCommandEnvelope{}, paasv1.InspectExecutionTargetRequest{}, paasv1.ObserveExecutionTargetRequest{},
 		paasv1.DeploymentExecutionRequest{}, paasv1.ObserveDeploymentRequest{}, paasv1.DeploymentEndpointObservation{},
+		paasv1.ObserveDeploymentRuntimeRequest{},
 		paasv1.DeploymentObservation{}, paasv1.ExecutionTargetObservation{}, paasv1.NormalizedAdapterError{}, paasv1.AdapterResult{},
 	}
 	result := make(map[string]reflect.Type, len(values))
@@ -465,10 +487,13 @@ func structSchema(contract reflect.Type) schema {
 }
 
 func schemaForField(owner string, field reflect.StructField, jsonName string) schema {
+	if owner == "DeploymentRuntimeInstance" && field.Name == "ID" {
+		return schema{"type": "string", "pattern": `^instance-[0-9a-f]{32}$`}
+	}
 	if field.Name == "BindingRef" {
 		return ref("ID")
 	}
-	if owner == "DeploymentEndpointObservation" &&
+	if (owner == "DeploymentEndpointObservation" || owner == "DeploymentRuntimeInstance") &&
 		(field.Name == "ComponentName" || field.Name == "EndpointName" || field.Name == "Address") {
 		return ref("Name")
 	}
@@ -550,7 +575,8 @@ func applySemanticOverlays(schemas map[string]any) {
 	resourceKinds := map[string]string{
 		"Application": "Application", "Configuration": "Configuration",
 		"ConfigurationRevision": "ConfigurationRevision", "ApplicationRevision": "ApplicationRevision",
-		"Deployment": "Deployment", "DeploymentGeneration": "DeploymentGeneration",
+		"Deployment": "Deployment", "DeploymentList": "DeploymentList",
+		"DeploymentGeneration": "DeploymentGeneration", "DeploymentRuntimeSnapshot": "DeploymentRuntimeSnapshot",
 		"ExecutionPool": "ExecutionPool", "ExecutionTarget": "ExecutionTarget",
 		"PlacementPolicy": "PlacementPolicy", "PlacementDecision": "PlacementDecision",
 		"Operation": "Operation", "Evidence": "Evidence",
@@ -569,9 +595,43 @@ func applySemanticOverlays(schemas map[string]any) {
 	for _, name := range []string{"ConfigurationRevisionSpec", "ApplicationRevisionSpec", "DeploymentGeneration", "PlacementDecision"} {
 		object(schemas[name])["x-matrix-immutable"] = true
 	}
+	object(schemas["DeploymentList"])["properties"].(schema)["items"].(schema)["maxItems"] = paasv1.MaximumDeploymentListItems
+	object(schemas["DeploymentRuntimeObservation"])["properties"].(schema)["instances"].(schema)["maxItems"] = paasv1.MaximumDeploymentRuntimeInstances
+	for _, name := range []string{"DeploymentRuntimeObservation", "ObserveDeploymentRuntimeRequest"} {
+		object(schemas[name])["properties"].(schema)["generation"].(schema)["minimum"] = 1
+	}
+	object(schemas["DeploymentRuntimeSnapshot"])["properties"].(schema)["state"] = schema{
+		"type": "string",
+		"enum": stringsOf(
+			paasv1.MeasurementAvailable,
+			paasv1.MeasurementStale,
+			paasv1.MeasurementUnavailable,
+		),
+	}
+	object(schemas["DeploymentRuntimeSnapshot"])["allOf"] = []any{
+		schema{
+			"if":   schema{"properties": schema{"state": schema{"const": string(paasv1.MeasurementUnavailable)}}},
+			"then": schema{"properties": schema{"value": false}},
+		},
+		schema{
+			"if":   schema{"properties": schema{"state": schema{"enum": stringsOf(paasv1.MeasurementAvailable, paasv1.MeasurementStale)}}},
+			"then": schema{"required": []string{"value"}},
+		},
+	}
+	object(schemas["DeploymentRuntimeInstance"])["allOf"] = []any{
+		schema{
+			"if":   schema{"required": []string{"exitCode"}},
+			"then": schema{"properties": schema{"state": schema{"enum": stringsOf(paasv1.DeploymentInstanceExited, paasv1.DeploymentInstanceDead)}}},
+		},
+		schema{
+			"if":   schema{"properties": schema{"state": schema{"enum": stringsOf(paasv1.DeploymentInstanceExited, paasv1.DeploymentInstanceDead)}}},
+			"then": schema{"required": []string{"exitCode"}},
+		},
+	}
 	for _, name := range []string{
 		"AdapterCapabilitiesContract", "AdapterCommandEnvelope", "InspectExecutionTargetRequest",
 		"ObserveExecutionTargetRequest", "DeploymentExecutionRequest", "ObserveDeploymentRequest",
+		"ObserveDeploymentRuntimeRequest",
 		"DeploymentEndpointObservation", "DeploymentObservation", "ExecutionTargetObservation",
 		"NormalizedAdapterError", "AdapterResult",
 	} {

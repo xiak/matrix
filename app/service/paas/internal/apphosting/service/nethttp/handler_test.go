@@ -410,6 +410,118 @@ func TestHandlerPassesIAMTenantToReadsAndIgnoresTenantHeader(t *testing.T) {
 	}
 }
 
+func TestHandlerListsDeploymentsWithOnlyOpaqueCursor(t *testing.T) {
+	authorizer := &fakeAuthorizer{}
+	workflow := &fakeWorkflow{deploymentList: paasv1.DeploymentList{
+		APIVersion: paasv1.APIVersion,
+		Kind:       "DeploymentList",
+		Scope: paasv1.ResourceScope{
+			Kind: paasv1.AuthorityTenant, TenantID: "tenant-authorized",
+		},
+		Items: []paasv1.Deployment{},
+	}}
+	handler := mustHandler(t, authorizer, workflow)
+	request := httptest.NewRequest(http.MethodGet, "/v1/deployments?after=deployment-before", nil)
+	request.Header.Set("Authorization", "Bearer opaque-credential")
+	request.Header.Set("X-Tenant-ID", "tenant-attacker")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if workflow.listDeploymentsCalls != 1 || workflow.listAfter != "deployment-before" ||
+		workflow.readAuthorization.TenantID != "tenant-authorized" {
+		t.Fatalf("list workflow = %#v", workflow)
+	}
+	if authorizer.request.Action != port.AuthorizeDeploymentRead ||
+		authorizer.request.Resource != (paasv1.ResourceRef{Kind: "Deployment", ID: "collection"}) {
+		t.Fatalf("list authorization = %#v", authorizer.request)
+	}
+
+	request = httptest.NewRequest(
+		http.MethodGet,
+		"/v1/deployments?executionTargetId=execution-target-attacker",
+		nil,
+	)
+	request.Header.Set("Authorization", "Bearer opaque-credential")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("selector status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if workflow.listDeploymentsCalls != 1 {
+		t.Fatal("provider selector reached Deployment list workflow")
+	}
+
+	request = httptest.NewRequest(
+		http.MethodGet,
+		"/v1/deployments?after=deployment-before;executionTargetId=execution-target-attacker",
+		nil,
+	)
+	request.Header.Set("Authorization", "Bearer opaque-credential")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || workflow.listDeploymentsCalls != 1 {
+		t.Fatalf("malformed selector status/calls = %d/%d", response.Code, workflow.listDeploymentsCalls)
+	}
+}
+
+func TestHandlerReadsDeploymentRuntimeThroughExactDeploymentAuthorization(t *testing.T) {
+	observedAt := time.Date(2026, 8, 30, 9, 0, 0, 0, time.UTC)
+	authorizer := &fakeAuthorizer{}
+	workflow := &fakeWorkflow{runtimeSnapshot: paasv1.DeploymentRuntimeSnapshot{
+		APIVersion: paasv1.APIVersion,
+		Kind:       "DeploymentRuntimeSnapshot",
+		Scope: paasv1.ResourceScope{
+			Kind: paasv1.AuthorityTenant, TenantID: "tenant-authorized",
+		},
+		State: paasv1.MeasurementAvailable,
+		Value: &paasv1.DeploymentRuntimeValue{
+			Observation: paasv1.DeploymentRuntimeObservation{
+				DeploymentID:          "deployment-a",
+				Generation:            1,
+				ApplicationRevisionID: "revision-a",
+				ExecutionTargetID:     "execution-target-a",
+				Instances:             []paasv1.DeploymentRuntimeInstance{},
+				ObservedAt:            observedAt,
+			},
+			ValidUntil: observedAt.Add(15 * time.Second),
+		},
+	}}
+	handler := mustHandler(t, authorizer, workflow)
+	request := httptest.NewRequest(http.MethodGet, "/v1/deployments/deployment-a/runtime", nil)
+	request.Header.Set("Authorization", "Bearer opaque-credential")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if workflow.runtimeCalls != 1 || workflow.readID != "deployment-a" ||
+		workflow.readAuthorization.TenantID != "tenant-authorized" {
+		t.Fatalf("runtime workflow = %#v", workflow)
+	}
+	if authorizer.request.Action != port.AuthorizeDeploymentRead ||
+		authorizer.request.Resource != (paasv1.ResourceRef{Kind: "Deployment", ID: "deployment-a"}) {
+		t.Fatalf("runtime authorization = %#v", authorizer.request)
+	}
+
+	for _, invalidRequest := range []*http.Request{
+		httptest.NewRequest(http.MethodGet, "/v1/deployments/deployment-a/runtime?executionTargetId=execution-target-attacker", nil),
+		httptest.NewRequest(http.MethodGet, "/v1/deployments/deployment-a/runtime?", nil),
+		httptest.NewRequest(http.MethodGet, "/v1/deployments/deployment-a/runtime", strings.NewReader(`{}`)),
+	} {
+		invalidRequest.Header.Set("Authorization", "Bearer opaque-credential")
+		invalidResponse := httptest.NewRecorder()
+		handler.ServeHTTP(invalidResponse, invalidRequest)
+		if invalidResponse.Code != http.StatusBadRequest {
+			t.Fatalf("runtime selector/body status = %d, body = %s", invalidResponse.Code, invalidResponse.Body.String())
+		}
+	}
+	if workflow.runtimeCalls != 1 {
+		t.Fatal("runtime selector or body reached the Deployment workflow")
+	}
+}
+
 type fakeAuthorizer struct {
 	request port.AuthorizationRequest
 	err     error
@@ -444,6 +556,11 @@ type fakeWorkflow struct {
 	getApplicationCalls    int
 	readAuthorization      port.Authorization
 	readID                 paasv1.ResourceID
+	listDeploymentsCalls   int
+	listAfter              paasv1.ResourceID
+	deploymentList         paasv1.DeploymentList
+	runtimeCalls           int
+	runtimeSnapshot        paasv1.DeploymentRuntimeSnapshot
 }
 
 type fakeInstallationVerifier struct {
@@ -548,6 +665,27 @@ func (workflow *fakeWorkflow) GetApplicationRevision(context.Context, port.Autho
 
 func (workflow *fakeWorkflow) GetDeployment(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.Deployment, error) {
 	return paasv1.Deployment{}, errors.New("unexpected GetDeployment")
+}
+
+func (workflow *fakeWorkflow) ListDeployments(
+	_ context.Context,
+	authorization port.Authorization,
+	after paasv1.ResourceID,
+) (paasv1.DeploymentList, error) {
+	workflow.listDeploymentsCalls++
+	workflow.readAuthorization = authorization
+	workflow.listAfter = after
+	return workflow.deploymentList, nil
+}
+
+func (workflow *fakeWorkflow) GetDeploymentRuntime(
+	_ context.Context,
+	authorization port.Authorization,
+	id paasv1.ResourceID,
+) (paasv1.DeploymentRuntimeSnapshot, error) {
+	workflow.runtimeCalls++
+	workflow.readAuthorization, workflow.readID = authorization, id
+	return workflow.runtimeSnapshot, nil
 }
 
 func (workflow *fakeWorkflow) GetDeploymentGeneration(context.Context, port.Authorization, paasv1.ResourceID, uint64) (paasv1.DeploymentGeneration, error) {

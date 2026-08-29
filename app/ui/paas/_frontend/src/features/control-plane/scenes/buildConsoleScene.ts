@@ -9,11 +9,21 @@ import type {
   HostMeasurementState,
   HostTarget
 } from "../domain/hosts";
+import type {
+  DeploymentInstanceHealth,
+  DeploymentInstanceState,
+  DeploymentInventory,
+  DeploymentInventoryItem,
+  DeploymentRuntimeSnapshot
+} from "../domain/deployments";
 import type { ConsoleSection } from "../domain/selection";
 import type {
   ConsoleContentScene,
   ConsoleNavigationItemScene,
   ConsoleScene,
+  DeploymentRuntimeInstanceScene,
+  DeploymentRuntimeScene,
+  DeploymentScene,
   EntitlementScene,
   HostFilesystemScene,
   HostMeasurementScene,
@@ -48,6 +58,11 @@ const sectionCopy: Record<ConsoleSection, {
     title: "服务实例",
     eyebrow: "Service installations",
     description: "将已激活的 PostgreSQL 配额安装到一个就绪区域。"
+  },
+  deployments: {
+    title: "应用工作负载",
+    eyebrow: "Application deployments",
+    description: "查看当前租户部署及其来源可追溯的容器运行态；运行实例只在选中部署后按 5 秒采样刷新。"
   },
   regions: {
     title: "区域与基础设施",
@@ -285,11 +300,17 @@ function hostScenes(inventory: HostInventory): HostScene[] {
     });
 }
 
-function navigation(section: ConsoleSection, snapshot?: ControlPlaneSnapshot, hostCount?: number): ConsoleNavigationItemScene[] {
+function navigation(
+  section: ConsoleSection,
+  snapshot?: ControlPlaneSnapshot,
+  hostCount?: number,
+  deploymentCount?: number
+): ConsoleNavigationItemScene[] {
   return [
     { id: "catalog", label: "服务目录", description: "可用产品", href: "/console/catalog/", icon: "catalog", selected: section === "catalog", count: snapshot?.offerings.length },
     { id: "quotas", label: "服务配额", description: "组织额度", href: "/console/quotas/", icon: "quota", selected: section === "quotas", count: snapshot?.entitlements.length },
     { id: "installations", label: "服务实例", description: "安装与运行", href: "/console/installations/", icon: "installation", selected: section === "installations", count: snapshot?.installations.length },
+    { id: "deployments", label: "应用工作负载", description: "部署与容器运行态", href: "/console/deployments/", icon: "deployment", selected: section === "deployments", count: deploymentCount },
     { id: "regions", label: "区域配置", description: "薄 IaaS 能力", href: "/console/regions/", icon: "region", selected: section === "regions", count: snapshot?.regions.length },
     { id: "hosts", label: "主机资源", description: "健康与实时占用", href: "/console/hosts/", icon: "host", selected: section === "hosts", count: hostCount },
     { id: "access", label: "访问管理", description: "账号与权限", href: "/console/access/", icon: "access", selected: section === "access" }
@@ -300,6 +321,7 @@ function productRail(section: ConsoleSection): ConsoleScene["rail"] {
   return [
     { id: "overview", label: "控制面概览", href: "/console/", icon: "overview", selected: section === "overview" },
     { id: "managed-database", label: "托管数据库", href: "/console/catalog/", icon: "database", selected: ["catalog", "quotas", "installations", "regions"].includes(section) },
+    { id: "workloads", label: "应用托管", href: "/console/deployments/", icon: "workloads", selected: section === "deployments" },
     { id: "infrastructure", label: "基础设施", href: "/console/hosts/", icon: "infrastructure", selected: section === "hosts" },
     { id: "access", label: "访问管理", href: "/console/access/", icon: "access", selected: section === "access" }
   ];
@@ -407,6 +429,111 @@ export function buildHostConsoleScene(inventory: HostInventory): ConsoleScene {
     rail: productRail("hosts"),
     navigation: navigation("hosts", undefined, inventory.items.length),
     content: { kind: "hosts", hosts: hostScenes(inventory) },
+    workspace: null
+  };
+}
+
+function deploymentStatus(value: DeploymentInventoryItem["phase"]): SceneStatus {
+  if (value === "READY") return "success";
+  if (value === "DEGRADED" || value === "STOPPING") return "warning";
+  if (value === "FAILED") return "danger";
+  if (value === "PENDING" || value === "PLACING" || value === "APPLYING") return "info";
+  return "neutral";
+}
+
+function deploymentScenes(inventory: DeploymentInventory, selectedDeploymentId: string | null): DeploymentScene[] {
+  return inventory.items.map((item) => ({
+    id: item.id,
+    name: item.name,
+    generation: item.generation,
+    revisionId: item.applicationRevisionId,
+    desiredState: item.desiredState,
+    phase: item.phase,
+    status: deploymentStatus(item.phase),
+    componentSummary: item.components.map((component) => `${component.name} × ${component.replicas}`).join(" · "),
+    readiness: `${item.readyComponents}/${item.components.length} 组件就绪`,
+    observedAt: dateTime(item.observedAt),
+    selected: item.id === selectedDeploymentId
+  }));
+}
+
+function runtimeInstanceStatus(state: DeploymentInstanceState, health: DeploymentInstanceHealth): SceneStatus {
+  if (health === "UNHEALTHY" || state === "DEAD") return "danger";
+  if (health === "HEALTHY" && state === "RUNNING") return "success";
+  if (state === "CREATED" || state === "RESTARTING" || health === "STARTING") return "warning";
+  if (state === "RUNNING") return "info";
+  return "neutral";
+}
+
+function runtimeStateLabel(value: DeploymentInstanceState): string {
+  const labels: Record<DeploymentInstanceState, string> = {
+    CREATED: "已创建",
+    RUNNING: "运行中",
+    RESTARTING: "重启中",
+    REMOVING: "移除中",
+    PAUSED: "已暂停",
+    EXITED: "已退出",
+    DEAD: "失效"
+  };
+  return labels[value];
+}
+
+function runtimeHealthLabel(value: DeploymentInstanceHealth): string {
+  const labels: Record<DeploymentInstanceHealth, string> = {
+    NONE: "未配置",
+    STARTING: "检查中",
+    HEALTHY: "健康",
+    UNHEALTHY: "不健康"
+  };
+  return labels[value];
+}
+
+function runtimeScene(snapshot: DeploymentRuntimeSnapshot | null): DeploymentRuntimeScene | null {
+  if (!snapshot) return null;
+  const labels = { AVAILABLE: "采样有效", STALE: "采样已过期", UNAVAILABLE: "运行态不可用" } as const;
+  const status: SceneStatus = snapshot.state === "AVAILABLE" ? "success" : snapshot.state === "STALE" ? "warning" : "neutral";
+  return {
+    state: snapshot.state,
+    stateLabel: labels[snapshot.state],
+    status,
+    generation: snapshot.value?.generation ?? null,
+    revisionId: snapshot.value?.applicationRevisionId ?? null,
+    executionTargetId: snapshot.value?.executionTargetId ?? null,
+    observedAt: snapshot.value ? dateTime(snapshot.value.observedAt) : "尚无来源采样",
+    validUntil: snapshot.value ? dateTime(snapshot.value.validUntil) : "无有效期",
+    instances: snapshot.value?.instances.map((instance): DeploymentRuntimeInstanceScene => ({
+      id: instance.id,
+      componentName: instance.componentName,
+      state: instance.state,
+      stateLabel: runtimeStateLabel(instance.state),
+      health: instance.health,
+      healthLabel: runtimeHealthLabel(instance.health),
+      status: runtimeInstanceStatus(instance.state, instance.health),
+      exitCode: instance.exitCode === null ? "—" : String(instance.exitCode)
+    })) ?? []
+  };
+}
+
+export function buildDeploymentConsoleScene(
+  inventory: DeploymentInventory,
+  selectedDeploymentId: string | null,
+  runtime: DeploymentRuntimeSnapshot | null
+): ConsoleScene {
+  const selected = inventory.items.some((item) => item.id === selectedDeploymentId)
+    ? selectedDeploymentId
+    : null;
+  return {
+    section: "deployments",
+    ...sectionCopy.deployments,
+    rail: productRail("deployments"),
+    navigation: navigation("deployments", undefined, undefined, inventory.items.length),
+    content: {
+      kind: "deployments",
+      deployments: deploymentScenes(inventory, selected),
+      selectedDeploymentId: selected,
+      runtime: selected ? runtimeScene(runtime) : null,
+      truncated: inventory.nextAfter !== null
+    },
     workspace: null
   };
 }

@@ -10,7 +10,7 @@ import {
   useState,
   type ReactNode
 } from "react";
-import { useSessionCredential } from "@/features/auth/application/SessionProvider";
+import { useSession, useSessionCredential } from "@/features/auth/application/SessionProvider";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import type {
   ActivateQuotaCommand,
@@ -18,12 +18,20 @@ import type {
   CreateInstallationCommand
 } from "../domain/resources";
 import type { HostInventory } from "../domain/hosts";
+import type { DeploymentInventory, DeploymentRuntimeSnapshot } from "../domain/deployments";
 import type { ControlPlaneRouteSelection } from "../domain/selection";
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
 import type { HostInventoryRepository } from "../repositories/hostInventoryRepository";
+import type { DeploymentInventoryRepository } from "../repositories/deploymentInventoryRepository";
 import { httpControlPlaneRepository } from "../repositories/httpControlPlaneRepository";
 import { httpHostInventoryRepository } from "../repositories/httpHostInventoryRepository";
-import { buildAccessConsoleScene, buildConsoleScene, buildHostConsoleScene } from "../scenes/buildConsoleScene";
+import { httpDeploymentInventoryRepository } from "../repositories/httpDeploymentInventoryRepository";
+import {
+  buildAccessConsoleScene,
+  buildConsoleScene,
+  buildDeploymentConsoleScene,
+  buildHostConsoleScene
+} from "../scenes/buildConsoleScene";
 import type { ConsoleScene } from "../scenes/consoleScene";
 
 type MutationKind = "quota" | "installation" | null;
@@ -36,6 +44,7 @@ type ControlPlaneContextValue = {
   reload(): Promise<void>;
   activateQuota(command: ActivateQuotaCommand): Promise<boolean>;
   createInstallation(command: CreateInstallationCommand): Promise<boolean>;
+  selectDeployment(deploymentId: string): void;
 };
 
 const ControlPlaneContext = createContext<ControlPlaneContextValue | null>(null);
@@ -59,6 +68,16 @@ function hostFailureMessage(error: unknown): string {
     return "当前角色没有平台主机查看权限。";
   }
   return "主机观测暂时不可用；已有采样（如有）保持原时间，不会被续期。";
+}
+
+function deploymentFailureMessage(error: unknown): string {
+  if (error instanceof HttpProblem && error.status === 401) {
+    return "IAM 会话已失效，请注销后重新登录。";
+  }
+  if (error instanceof HttpProblem && error.status === 403) {
+    return "当前角色没有租户部署查看权限。";
+  }
+  return "部署运行态暂时不可用；已有来源采样（如有）保持原时间，不会被续期。";
 }
 
 function ManagedControlPlaneProvider({
@@ -204,7 +223,8 @@ function ManagedControlPlaneProvider({
     mutation,
     reload,
     activateQuota,
-    createInstallation
+    createInstallation,
+    selectDeployment: () => {}
   }), [activateQuota, createInstallation, error, isAccess, loading, mutation, reload, scene]);
 
   return (
@@ -314,7 +334,8 @@ function HostInventoryProvider({
     mutation: null,
     reload,
     activateQuota: async () => false,
-    createInstallation: async () => false
+    createInstallation: async () => false,
+    selectDeployment: () => {}
   }), [error, loading, reload, scene]);
 
   return (
@@ -324,19 +345,220 @@ function HostInventoryProvider({
   );
 }
 
+type DeploymentRequest = {
+  controller: AbortController;
+  promise: Promise<boolean>;
+};
+
+function DeploymentInventoryProvider({
+  children,
+  repository
+}: {
+  children: ReactNode;
+  repository: DeploymentInventoryRepository;
+}) {
+  const credential = useSessionCredential();
+  const session = useSession();
+  const tenantId = session.current?.session.organizationId ?? null;
+  const [inventory, setInventory] = useState<DeploymentInventory | null>(null);
+  const [selectedDeploymentId, setSelectedDeploymentId] = useState<string | null>(null);
+  const [runtime, setRuntime] = useState<DeploymentRuntimeSnapshot | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [inventoryError, setInventoryError] = useState<string | null>(null);
+  const [runtimeError, setRuntimeError] = useState<string | null>(null);
+  const inventoryEpoch = useRef(0);
+  const runtimeEpoch = useRef(0);
+  const selectedDeploymentIdRef = useRef<string | null>(null);
+  const inventoryRequest = useRef<DeploymentRequest | null>(null);
+  const runtimeRequest = useRef<DeploymentRequest | null>(null);
+  const runtimeTimer = useRef<number | null>(null);
+  const runtimeCycle = useRef<(() => void) | null>(null);
+
+  const loadInventory = useCallback((): Promise<boolean> => {
+    if (!credential || !tenantId) {
+      setInventory(null);
+      selectedDeploymentIdRef.current = null;
+      setSelectedDeploymentId(null);
+      setRuntime(null);
+      setInventoryError(null);
+      setRuntimeError(null);
+      setLoading(false);
+      return Promise.resolve(false);
+    }
+    if (inventoryRequest.current) return inventoryRequest.current.promise;
+
+    const requestEpoch = inventoryEpoch.current;
+    const controller = new AbortController();
+    const slot: DeploymentRequest = { controller, promise: Promise.resolve(false) };
+    inventoryRequest.current = slot;
+    setLoading(true);
+    slot.promise = Promise.resolve().then(async () => {
+      try {
+        const loaded = await repository.load(credential, tenantId, controller.signal);
+        if (controller.signal.aborted || requestEpoch !== inventoryEpoch.current) return false;
+        setInventory(loaded);
+        const current = selectedDeploymentIdRef.current;
+        const next = current && loaded.items.some((item) => item.id === current)
+          ? current
+          : loaded.items[0]?.id ?? null;
+        if (next !== current) {
+          setRuntime(null);
+        }
+        selectedDeploymentIdRef.current = next;
+        setSelectedDeploymentId(next);
+        setInventoryError(null);
+        return true;
+      } catch (loadError) {
+        if (controller.signal.aborted || requestEpoch !== inventoryEpoch.current) return false;
+        const authorizationFailure = loadError instanceof HttpProblem &&
+          (loadError.status === 401 || loadError.status === 403);
+        if (authorizationFailure) {
+          setInventory(null);
+          selectedDeploymentIdRef.current = null;
+          setSelectedDeploymentId(null);
+          setRuntime(null);
+          setRuntimeError(null);
+        }
+        setInventoryError(deploymentFailureMessage(loadError));
+        return !authorizationFailure;
+      } finally {
+        if (inventoryRequest.current === slot) inventoryRequest.current = null;
+        if (!controller.signal.aborted && requestEpoch === inventoryEpoch.current) setLoading(false);
+      }
+    });
+    return slot.promise;
+  }, [credential, repository, tenantId]);
+
+  useEffect(() => {
+    inventoryEpoch.current++;
+    const effectEpoch = inventoryEpoch.current;
+    void Promise.resolve().then(loadInventory);
+    return () => {
+      inventoryEpoch.current = effectEpoch + 1;
+      inventoryRequest.current?.controller.abort();
+      inventoryRequest.current = null;
+    };
+  }, [loadInventory]);
+
+  useEffect(() => {
+    runtimeEpoch.current++;
+    const effectEpoch = runtimeEpoch.current;
+    if (runtimeTimer.current !== null) window.clearTimeout(runtimeTimer.current);
+    runtimeTimer.current = null;
+    runtimeRequest.current?.controller.abort();
+    runtimeRequest.current = null;
+    if (!credential || !tenantId || !selectedDeploymentId) {
+      runtimeCycle.current = null;
+      return;
+    }
+
+    let active = true;
+    const schedule = () => {
+      if (!active || effectEpoch !== runtimeEpoch.current || !runtimeCycle.current) return;
+      runtimeTimer.current = window.setTimeout(() => runtimeCycle.current?.(), 5_000);
+    };
+    runtimeCycle.current = () => {
+      if (!active || effectEpoch !== runtimeEpoch.current || runtimeRequest.current) return;
+      const controller = new AbortController();
+      const slot: DeploymentRequest = { controller, promise: Promise.resolve(false) };
+      runtimeRequest.current = slot;
+      slot.promise = Promise.resolve().then(async () => {
+        try {
+          const loaded = await repository.loadRuntime(
+            credential, tenantId, selectedDeploymentId, controller.signal
+          );
+          if (controller.signal.aborted || effectEpoch !== runtimeEpoch.current) return false;
+          setRuntime(loaded);
+          setRuntimeError(null);
+          return true;
+        } catch (loadError) {
+          if (controller.signal.aborted || effectEpoch !== runtimeEpoch.current) return false;
+          const authorizationFailure = loadError instanceof HttpProblem &&
+            (loadError.status === 401 || loadError.status === 403);
+          if (authorizationFailure) {
+            setInventory(null);
+            selectedDeploymentIdRef.current = null;
+            setSelectedDeploymentId(null);
+            setRuntime(null);
+            setInventoryError(null);
+          }
+          setRuntimeError(deploymentFailureMessage(loadError));
+          return !authorizationFailure;
+        } finally {
+          if (runtimeRequest.current === slot) runtimeRequest.current = null;
+          if (!controller.signal.aborted && effectEpoch === runtimeEpoch.current) setLoading(false);
+        }
+      }).then((continuePolling) => {
+        if (continuePolling) schedule();
+        return continuePolling;
+      });
+    };
+    runtimeCycle.current();
+
+    return () => {
+      active = false;
+      runtimeEpoch.current = effectEpoch + 1;
+      if (runtimeTimer.current !== null) window.clearTimeout(runtimeTimer.current);
+      runtimeTimer.current = null;
+      runtimeCycle.current = null;
+      runtimeRequest.current?.controller.abort();
+      runtimeRequest.current = null;
+    };
+  }, [credential, repository, selectedDeploymentId, tenantId]);
+
+  const reload = useCallback(async () => {
+    const continueReading = await loadInventory();
+    if (continueReading) runtimeCycle.current?.();
+  }, [loadInventory]);
+
+  const selectDeployment = useCallback((deploymentId: string) => {
+    if (!inventory?.items.some((item) => item.id === deploymentId) || deploymentId === selectedDeploymentId) return;
+    if (runtimeTimer.current !== null) window.clearTimeout(runtimeTimer.current);
+    runtimeTimer.current = null;
+    runtimeRequest.current?.controller.abort();
+    runtimeRequest.current = null;
+    setRuntime(null);
+    setRuntimeError(null);
+    selectedDeploymentIdRef.current = deploymentId;
+    setSelectedDeploymentId(deploymentId);
+  }, [inventory, selectedDeploymentId]);
+
+  const scene = useMemo(
+    () => inventory ? buildDeploymentConsoleScene(inventory, selectedDeploymentId, runtime) : null,
+    [inventory, runtime, selectedDeploymentId]
+  );
+  const value = useMemo<ControlPlaneContextValue>(() => ({
+    scene,
+    loading,
+    error: inventoryError ?? runtimeError,
+    mutation: null,
+    reload,
+    activateQuota: async () => false,
+    createInstallation: async () => false,
+    selectDeployment
+  }), [inventoryError, loading, reload, runtimeError, scene, selectDeployment]);
+
+  return <ControlPlaneContext.Provider value={value}>{children}</ControlPlaneContext.Provider>;
+}
+
 export function ControlPlaneProvider({
   children,
   repository = httpControlPlaneRepository,
   hostRepository = httpHostInventoryRepository,
+  deploymentRepository = httpDeploymentInventoryRepository,
   selection
 }: {
   children: ReactNode;
   repository?: ControlPlaneRepository;
   hostRepository?: HostInventoryRepository;
+  deploymentRepository?: DeploymentInventoryRepository;
   selection: ControlPlaneRouteSelection;
 }) {
   if (selection.section === "hosts") {
     return <HostInventoryProvider repository={hostRepository}>{children}</HostInventoryProvider>;
+  }
+  if (selection.section === "deployments") {
+    return <DeploymentInventoryProvider repository={deploymentRepository}>{children}</DeploymentInventoryProvider>;
   }
   return (
     <ManagedControlPlaneProvider repository={repository} selection={selection}>

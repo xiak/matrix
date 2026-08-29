@@ -304,18 +304,95 @@ func TestSubmitRetriesRolledBackSerializableTransaction(t *testing.T) {
 	}
 }
 
+func TestListDeploymentsUsesAuthorizedTenantAndBoundedCursor(t *testing.T) {
+	transaction := lifecycleTransaction()
+	deployment := lifecycleReadyDeployment()
+	transaction.deployments = []paasv1.Deployment{deployment}
+	transaction.nextDeploymentAfter = deployment.Metadata.ID
+	repository := &fakeLifecycleRepository{transaction: transaction}
+
+	result, err := mustLifecycleUsecase(t, repository).ListDeployments(
+		context.Background(),
+		lifecycleAuthorization(),
+		"deployment-before",
+	)
+	if err != nil {
+		t.Fatalf("list Deployments: %v", err)
+	}
+	if len(repository.tenantIDs) != 1 || repository.tenantIDs[0] != "tenant-a" ||
+		transaction.listAfter != "deployment-before" ||
+		transaction.listLimit != paasv1.MaximumDeploymentListItems {
+		t.Fatalf(
+			"tenant/cursor/limit = %#v/%q/%d",
+			repository.tenantIDs,
+			transaction.listAfter,
+			transaction.listLimit,
+		)
+	}
+	if result.Scope.TenantID != "tenant-a" || len(result.Items) != 1 ||
+		result.Items[0].Metadata.ID != deployment.Metadata.ID ||
+		result.NextAfter != deployment.Metadata.ID || paasv1.ValidateDeploymentList(result) != nil {
+		t.Fatalf("Deployment list = %#v", result)
+	}
+}
+
+func TestGetDeploymentRuntimeUsesAuthorizedTenantAndReturnsExactSourceProof(t *testing.T) {
+	transaction := lifecycleTransaction()
+	observation := paasv1.DeploymentRuntimeObservation{
+		DeploymentID:          "deployment-a",
+		Generation:            2,
+		ApplicationRevisionID: "revision-a",
+		ExecutionTargetID:     "execution-target-a",
+		Instances: []paasv1.DeploymentRuntimeInstance{{
+			ID:            "instance-0123456789abcdef0123456789abcdef",
+			ComponentName: "api",
+			State:         paasv1.DeploymentInstanceRunning,
+			Health:        paasv1.DeploymentInstanceHealthHealthy,
+		}},
+		ObservedAt: lifecycleTime.Add(-time.Second),
+	}
+	transaction.deploymentRuntime = paasv1.DeploymentRuntimeSnapshot{
+		APIVersion: paasv1.APIVersion,
+		Kind:       "DeploymentRuntimeSnapshot",
+		Scope:      paasv1.ResourceScope{Kind: paasv1.AuthorityTenant, TenantID: "tenant-a"},
+		State:      paasv1.MeasurementAvailable,
+		Value: &paasv1.DeploymentRuntimeValue{
+			Observation: observation,
+			ValidUntil:  lifecycleTime.Add(10 * time.Second),
+		},
+	}
+	transaction.deploymentRuntimeFound = true
+	repository := &fakeLifecycleRepository{transaction: transaction}
+
+	result, err := mustLifecycleUsecase(t, repository).GetDeploymentRuntime(
+		context.Background(),
+		lifecycleAuthorization(),
+		"deployment-a",
+	)
+	if err != nil {
+		t.Fatalf("get Deployment runtime: %v", err)
+	}
+	if len(repository.tenantIDs) != 1 || repository.tenantIDs[0] != "tenant-a" ||
+		result.Value == nil || result.Value.Observation.ObservedAt != observation.ObservedAt ||
+		paasv1.ValidateDeploymentRuntimeSnapshot(result) != nil {
+		t.Fatalf("tenant/runtime = %#v/%#v", repository.tenantIDs, result)
+	}
+}
+
 type fakeLifecycleRepository struct {
 	transaction         Transaction
 	afterCallbackErrors []error
 	calls               int
+	tenantIDs           []paasv1.TenantID
 }
 
 func (repository *fakeLifecycleRepository) WithinTransaction(
 	ctx context.Context,
-	_ paasv1.TenantID,
+	tenantID paasv1.TenantID,
 	callback func(context.Context, Transaction) error,
 ) error {
 	repository.calls++
+	repository.tenantIDs = append(repository.tenantIDs, tenantID)
 	if err := callback(ctx, repository.transaction); err != nil {
 		return err
 	}
@@ -330,6 +407,10 @@ type fakeLifecycleTransaction struct {
 	now                        time.Time
 	deployment                 paasv1.Deployment
 	deploymentFound            bool
+	deployments                []paasv1.Deployment
+	nextDeploymentAfter        paasv1.ResourceID
+	deploymentRuntime          paasv1.DeploymentRuntimeSnapshot
+	deploymentRuntimeFound     bool
 	revision                   paasv1.ApplicationRevision
 	revisionFound              bool
 	policy                     paasv1.PlacementPolicy
@@ -348,6 +429,8 @@ type fakeLifecycleTransaction struct {
 	loadedOperation            paasv1.Operation
 	loadedOperationFound       bool
 	resourceSubmission         *ResourceSubmission
+	listAfter                  paasv1.ResourceID
+	listLimit                  int
 }
 
 func (transaction *fakeLifecycleTransaction) TransactionTime(context.Context) (time.Time, error) {
@@ -372,6 +455,22 @@ func (transaction *fakeLifecycleTransaction) LoadDeployment(
 		return paasv1.Deployment{}, false, nil
 	}
 	return transaction.deployment, transaction.deploymentFound, nil
+}
+
+func (transaction *fakeLifecycleTransaction) ListDeployments(
+	_ context.Context,
+	after paasv1.ResourceID,
+	limit int,
+) ([]paasv1.Deployment, paasv1.ResourceID, error) {
+	transaction.listAfter, transaction.listLimit = after, limit
+	return append([]paasv1.Deployment{}, transaction.deployments...), transaction.nextDeploymentAfter, nil
+}
+
+func (transaction *fakeLifecycleTransaction) LoadDeploymentRuntime(
+	_ context.Context,
+	_ paasv1.ResourceID,
+) (paasv1.DeploymentRuntimeSnapshot, bool, error) {
+	return transaction.deploymentRuntime, transaction.deploymentRuntimeFound, nil
 }
 
 func (transaction *fakeLifecycleTransaction) LoadApplication(

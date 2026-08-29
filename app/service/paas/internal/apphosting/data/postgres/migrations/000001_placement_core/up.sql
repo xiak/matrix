@@ -854,6 +854,62 @@ CREATE TABLE IF NOT EXISTS paas.deployment_observations (
     )
 );
 
+CREATE TABLE IF NOT EXISTS paas.deployment_runtime_snapshots (
+    tenant_id text COLLATE "C" NOT NULL,
+    deployment_id text COLLATE "C" NOT NULL,
+    deployment_generation bigint NOT NULL,
+    application_revision_id text COLLATE "C" NOT NULL,
+    execution_target_id text COLLATE "C" NOT NULL,
+    placement_decision_id text COLLATE "C" NOT NULL,
+    observed_at timestamptz(6) NOT NULL,
+    valid_until timestamptz(6) NOT NULL,
+    document jsonb NOT NULL,
+    PRIMARY KEY (tenant_id, deployment_id),
+    CONSTRAINT deployment_runtime_snapshots_deployment_fk FOREIGN KEY (
+        tenant_id, deployment_id
+    ) REFERENCES paas.deployments (tenant_id, id),
+    CONSTRAINT deployment_runtime_snapshots_generation_fk FOREIGN KEY (
+        tenant_id, deployment_id, deployment_generation
+    ) REFERENCES paas.deployment_generations (tenant_id, deployment_id, generation),
+    CONSTRAINT deployment_runtime_snapshots_revision_fk FOREIGN KEY (
+        tenant_id, application_revision_id
+    ) REFERENCES paas.application_revisions (tenant_id, id),
+    CONSTRAINT deployment_runtime_snapshots_target_fk FOREIGN KEY (execution_target_id)
+        REFERENCES paas.execution_targets (id),
+    CONSTRAINT deployment_runtime_snapshots_values_valid CHECK (
+        deployment_generation BETWEEN 1 AND 9007199254740991
+        AND valid_until > observed_at
+        AND valid_until <= observed_at + interval '1 minute'
+    ),
+    CONSTRAINT deployment_runtime_snapshots_document_identity CHECK (
+        jsonb_typeof(document) = 'object'
+        AND document ?& ARRAY[
+            'deploymentId', 'generation', 'applicationRevisionId',
+            'executionTargetId', 'instances', 'observedAt'
+        ]
+        AND document - ARRAY[
+            'deploymentId', 'generation', 'applicationRevisionId',
+            'executionTargetId', 'instances', 'observedAt'
+        ] = '{}'::jsonb
+        AND jsonb_typeof(document->'deploymentId') = 'string'
+        AND jsonb_typeof(document->'generation') = 'number'
+        AND jsonb_typeof(document->'applicationRevisionId') = 'string'
+        AND jsonb_typeof(document->'executionTargetId') = 'string'
+        AND jsonb_typeof(document->'observedAt') = 'string'
+        AND document->>'deploymentId' = deployment_id
+        AND document->>'applicationRevisionId' = application_revision_id
+        AND document->>'executionTargetId' = execution_target_id
+        AND (document->>'observedAt')::timestamptz = observed_at
+        AND CASE
+            WHEN document->>'generation' ~ '^[1-9][0-9]*$'
+            THEN (document->>'generation')::numeric = deployment_generation
+            ELSE false
+        END
+        AND jsonb_typeof(document->'instances') = 'array'
+        AND jsonb_array_length(document->'instances') <= 64
+    )
+);
+
 CREATE TABLE IF NOT EXISTS paas.placement_decisions (
     tenant_id text COLLATE "C" NOT NULL,
     id text COLLATE "C" NOT NULL,
@@ -980,6 +1036,22 @@ CREATE TABLE IF NOT EXISTS paas.placement_decisions (
     )
 );
 
+DO $matrix_runtime_snapshot_decision_fk$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+          FROM pg_catalog.pg_constraint
+         WHERE conname = 'deployment_runtime_snapshots_decision_fk'
+           AND connamespace = 'paas'::regnamespace
+    ) THEN
+        ALTER TABLE paas.deployment_runtime_snapshots
+            ADD CONSTRAINT deployment_runtime_snapshots_decision_fk
+            FOREIGN KEY (tenant_id, placement_decision_id)
+            REFERENCES paas.placement_decisions (tenant_id, id);
+    END IF;
+END
+$matrix_runtime_snapshot_decision_fk$;
+
 CREATE TABLE IF NOT EXISTS paas.capacity_claims (
     id uuid NOT NULL DEFAULT gen_random_uuid(),
     execution_target_id text COLLATE "C" NOT NULL,
@@ -1091,6 +1163,8 @@ ALTER TABLE paas.adapter_receipts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE paas.adapter_receipts FORCE ROW LEVEL SECURITY;
 ALTER TABLE paas.deployment_observations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE paas.deployment_observations FORCE ROW LEVEL SECURITY;
+ALTER TABLE paas.deployment_runtime_snapshots ENABLE ROW LEVEL SECURITY;
+ALTER TABLE paas.deployment_runtime_snapshots FORCE ROW LEVEL SECURITY;
 ALTER TABLE paas.placement_decisions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE paas.placement_decisions FORCE ROW LEVEL SECURITY;
 ALTER TABLE paas.capacity_reservations ENABLE ROW LEVEL SECURITY;
@@ -1111,6 +1185,7 @@ BEGIN
         'adapter_commands',
         'adapter_receipts',
         'deployment_observations',
+        'deployment_runtime_snapshots',
         'placement_decisions',
         'capacity_reservations'
     ]
@@ -2121,6 +2196,320 @@ REVOKE ALL ON FUNCTION paas.audit_outbox_snapshot() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION paas.audit_outbox_snapshot()
     TO matrix_paas_worker;
 
+CREATE OR REPLACE FUNCTION paas.next_deployment_runtime_candidate(
+    requested_after_tenant_id text,
+    requested_after_deployment_id text
+)
+RETURNS TABLE (
+    tenant_id text,
+    deployment_id text,
+    deployment_generation bigint,
+    application_revision_id text,
+    execution_target_id text,
+    placement_decision_id text,
+    content_digest text
+)
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+BEGIN
+    IF (requested_after_tenant_id IS NULL)
+        <> (requested_after_deployment_id IS NULL)
+       OR requested_after_tenant_id IS NOT NULL AND (
+            requested_after_tenant_id COLLATE "C"
+                !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+            OR requested_after_deployment_id COLLATE "C"
+                !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       ) THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'Deployment runtime cursor is invalid';
+    END IF;
+
+    RETURN QUERY
+    SELECT deployment.tenant_id,
+           deployment.id,
+           deployment.generation,
+           deployment.application_revision_id,
+           decision.execution_target_id,
+           decision.id,
+           generation.content_digest
+      FROM paas.deployments AS deployment
+      JOIN paas.deployment_generations AS generation
+        ON generation.tenant_id = deployment.tenant_id
+       AND generation.deployment_id = deployment.id
+       AND generation.generation = deployment.generation
+       AND generation.application_revision_id = deployment.application_revision_id
+      JOIN paas.placement_decisions AS decision
+        ON decision.tenant_id = deployment.tenant_id
+       AND decision.id = deployment.document#>>'{status,placementDecisionId}'
+       AND decision.deployment_id = deployment.id
+       AND decision.deployment_generation = deployment.generation
+       AND decision.application_revision_id = deployment.application_revision_id
+       AND decision.outcome = 'SCHEDULED'
+       AND decision.execution_target_id IS NOT NULL
+     WHERE deployment.document#>>'{spec,desiredState}' = 'RUNNING'
+       AND (
+            requested_after_tenant_id IS NULL
+            OR deployment.tenant_id > requested_after_tenant_id COLLATE "C"
+            OR (
+                deployment.tenant_id = requested_after_tenant_id
+                AND deployment.id > requested_after_deployment_id COLLATE "C"
+            )
+       )
+     ORDER BY deployment.tenant_id COLLATE "C", deployment.id COLLATE "C"
+     LIMIT 1;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.next_deployment_runtime_candidate(text, text)
+    FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paas.next_deployment_runtime_candidate(text, text)
+    TO matrix_paas_worker;
+
+CREATE OR REPLACE FUNCTION paas.store_deployment_runtime_snapshot(
+    requested_tenant_id text,
+    requested_deployment_id text,
+    requested_generation bigint,
+    requested_application_revision_id text,
+    requested_execution_target_id text,
+    requested_placement_decision_id text,
+    requested_observed_at timestamptz,
+    requested_valid_until timestamptz,
+    submitted_document jsonb
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    current_observed_at timestamptz;
+    current_valid_until timestamptz;
+    current_placement_decision_id text;
+    current_document jsonb;
+BEGIN
+    IF requested_tenant_id IS NULL
+       OR requested_tenant_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_deployment_id IS NULL
+       OR requested_deployment_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_generation IS NULL
+       OR requested_generation NOT BETWEEN 1 AND 9007199254740991
+       OR requested_application_revision_id IS NULL
+       OR requested_application_revision_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_execution_target_id IS NULL
+       OR requested_execution_target_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_placement_decision_id IS NULL
+       OR requested_placement_decision_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_observed_at IS NULL
+       OR requested_valid_until IS NULL
+       OR requested_observed_at > transaction_timestamp() + interval '2 seconds'
+       OR requested_observed_at <= transaction_timestamp() - interval '1 minute'
+       OR requested_valid_until <= requested_observed_at
+       OR requested_valid_until > requested_observed_at + interval '1 minute'
+       OR submitted_document IS NULL
+       OR jsonb_typeof(submitted_document) <> 'object'
+       OR NOT submitted_document ?& ARRAY[
+            'deploymentId', 'generation', 'applicationRevisionId',
+            'executionTargetId', 'instances', 'observedAt'
+       ]
+       OR submitted_document - ARRAY[
+            'deploymentId', 'generation', 'applicationRevisionId',
+            'executionTargetId', 'instances', 'observedAt'
+       ] <> '{}'::jsonb
+       OR jsonb_typeof(submitted_document->'deploymentId')
+            IS DISTINCT FROM 'string'
+       OR jsonb_typeof(submitted_document->'generation')
+            IS DISTINCT FROM 'number'
+       OR jsonb_typeof(submitted_document->'applicationRevisionId')
+            IS DISTINCT FROM 'string'
+       OR jsonb_typeof(submitted_document->'executionTargetId')
+            IS DISTINCT FROM 'string'
+       OR jsonb_typeof(submitted_document->'observedAt')
+            IS DISTINCT FROM 'string'
+       OR submitted_document->>'deploymentId'
+            IS DISTINCT FROM requested_deployment_id
+       OR submitted_document->>'applicationRevisionId'
+            IS DISTINCT FROM requested_application_revision_id
+       OR submitted_document->>'executionTargetId'
+            IS DISTINCT FROM requested_execution_target_id
+       OR submitted_document->>'generation'
+            IS DISTINCT FROM requested_generation::text
+       OR (submitted_document->>'observedAt')::timestamptz
+            IS DISTINCT FROM requested_observed_at
+       OR jsonb_typeof(submitted_document->'instances')
+            IS DISTINCT FROM 'array'
+       OR jsonb_array_length(submitted_document->'instances') > 64 THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'Deployment runtime snapshot is invalid';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+         FROM jsonb_array_elements(submitted_document->'instances') AS instance(value)
+         WHERE jsonb_typeof(instance.value) <> 'object'
+            OR NOT instance.value ?& ARRAY[
+                'id', 'componentName', 'state', 'health'
+            ]
+            OR instance.value - ARRAY[
+                'id', 'componentName', 'state', 'health', 'exitCode'
+            ] <> '{}'::jsonb
+            OR jsonb_typeof(instance.value->'id')
+                IS DISTINCT FROM 'string'
+            OR jsonb_typeof(instance.value->'componentName')
+                IS DISTINCT FROM 'string'
+            OR jsonb_typeof(instance.value->'state')
+                IS DISTINCT FROM 'string'
+            OR jsonb_typeof(instance.value->'health')
+                IS DISTINCT FROM 'string'
+            OR instance.value->>'id' COLLATE "C"
+                !~ '^instance-[0-9a-f]{32}$'
+            OR instance.value->>'componentName' COLLATE "C"
+                !~ '^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$'
+            OR instance.value->>'state' NOT IN (
+                'CREATED', 'RUNNING', 'RESTARTING', 'REMOVING',
+                'PAUSED', 'EXITED', 'DEAD'
+            )
+            OR instance.value->>'health' NOT IN (
+                'NONE', 'STARTING', 'HEALTHY', 'UNHEALTHY'
+            )
+            OR EXISTS (
+                SELECT 1
+                  FROM jsonb_object_keys(instance.value) AS key(name)
+                 WHERE key.name NOT IN (
+                    'id', 'componentName', 'state', 'health', 'exitCode'
+                 )
+            )
+            OR (
+                (instance.value ? 'exitCode')
+                <> (instance.value->>'state' IN ('EXITED', 'DEAD'))
+            )
+            OR CASE WHEN instance.value ? 'exitCode' THEN
+                jsonb_typeof(instance.value->'exitCode')
+                    IS DISTINCT FROM 'number'
+                OR instance.value->>'exitCode' !~ '^(0|[1-9][0-9]*)$'
+                OR CASE
+                    WHEN instance.value->>'exitCode' ~ '^(0|[1-9][0-9]*)$'
+                    THEN (instance.value->>'exitCode')::numeric > 4294967295
+                    ELSE true
+                END
+            ELSE false END
+    ) OR (
+        SELECT count(*) <> count(DISTINCT instance.value->>'id')
+          FROM jsonb_array_elements(submitted_document->'instances') AS instance(value)
+    ) THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'Deployment runtime instances are invalid';
+    END IF;
+
+    PERFORM 1
+      FROM paas.deployments AS deployment
+      JOIN paas.deployment_generations AS generation
+        ON generation.tenant_id = deployment.tenant_id
+       AND generation.deployment_id = deployment.id
+       AND generation.generation = deployment.generation
+       AND generation.application_revision_id = deployment.application_revision_id
+      JOIN paas.placement_decisions AS decision
+        ON decision.tenant_id = deployment.tenant_id
+       AND decision.id = requested_placement_decision_id
+       AND decision.id = deployment.document#>>'{status,placementDecisionId}'
+       AND decision.deployment_id = deployment.id
+       AND decision.deployment_generation = deployment.generation
+       AND decision.application_revision_id = deployment.application_revision_id
+       AND decision.outcome = 'SCHEDULED'
+       AND decision.execution_target_id = requested_execution_target_id
+     WHERE deployment.tenant_id = requested_tenant_id
+       AND deployment.id = requested_deployment_id
+       AND deployment.generation = requested_generation
+       AND deployment.application_revision_id = requested_application_revision_id
+       AND deployment.document#>>'{spec,desiredState}' = 'RUNNING'
+     FOR UPDATE OF deployment;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'MX409',
+            MESSAGE = 'Deployment runtime authority changed';
+    END IF;
+
+    SELECT snapshot.observed_at,
+           snapshot.valid_until,
+           snapshot.placement_decision_id,
+           snapshot.document
+      INTO current_observed_at,
+           current_valid_until,
+           current_placement_decision_id,
+           current_document
+      FROM paas.deployment_runtime_snapshots AS snapshot
+     WHERE snapshot.tenant_id = requested_tenant_id
+       AND snapshot.deployment_id = requested_deployment_id
+     FOR UPDATE;
+    IF FOUND THEN
+        IF requested_observed_at < current_observed_at THEN
+            RETURN false;
+        END IF;
+        IF requested_observed_at = current_observed_at THEN
+            IF requested_placement_decision_id = current_placement_decision_id
+               AND requested_valid_until = current_valid_until
+               AND submitted_document = current_document THEN
+                RETURN false;
+            END IF;
+            RAISE EXCEPTION USING
+                ERRCODE = 'MX409',
+                MESSAGE = 'Deployment runtime observation conflicts';
+        END IF;
+        UPDATE paas.deployment_runtime_snapshots
+           SET deployment_generation = requested_generation,
+               application_revision_id = requested_application_revision_id,
+               execution_target_id = requested_execution_target_id,
+               placement_decision_id = requested_placement_decision_id,
+               observed_at = requested_observed_at,
+               valid_until = requested_valid_until,
+               document = submitted_document
+         WHERE tenant_id = requested_tenant_id
+           AND deployment_id = requested_deployment_id;
+        RETURN true;
+    END IF;
+
+    INSERT INTO paas.deployment_runtime_snapshots (
+        tenant_id,
+        deployment_id,
+        deployment_generation,
+        application_revision_id,
+        execution_target_id,
+        placement_decision_id,
+        observed_at,
+        valid_until,
+        document
+    ) VALUES (
+        requested_tenant_id,
+        requested_deployment_id,
+        requested_generation,
+        requested_application_revision_id,
+        requested_execution_target_id,
+        requested_placement_decision_id,
+        requested_observed_at,
+        requested_valid_until,
+        submitted_document
+    );
+    RETURN true;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.store_deployment_runtime_snapshot(
+    text, text, bigint, text, text, text, timestamptz, timestamptz, jsonb
+) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paas.store_deployment_runtime_snapshot(
+    text, text, bigint, text, text, text, timestamptz, timestamptz, jsonb
+) TO matrix_paas_worker;
+
 CREATE OR REPLACE FUNCTION paas.readiness()
 RETURNS TABLE (ready boolean, schema_version bigint, checked_at timestamptz)
 LANGUAGE sql
@@ -2132,10 +2521,13 @@ AS $function$
         to_regclass('paas.applications') IS NOT NULL
         AND to_regclass('paas.operations') IS NOT NULL
         AND to_regclass('paas.audit_outbox') IS NOT NULL
+        AND to_regclass('paas.deployment_runtime_snapshots') IS NOT NULL
         AND to_regprocedure('paas.current_installation_id()') IS NOT NULL
         AND to_regprocedure('paas.complete_audit_event(text,text,text,text,bigint,text,timestamptz,text)') IS NOT NULL
         AND to_regprocedure('paas.admit_execution_resource(jsonb,jsonb,jsonb,text,text,bigint,jsonb)') IS NOT NULL
         AND to_regprocedure('paas.refresh_execution_target(bigint,jsonb,bigint,jsonb)') IS NOT NULL
+        AND to_regprocedure('paas.next_deployment_runtime_candidate(text,text)') IS NOT NULL
+        AND to_regprocedure('paas.store_deployment_runtime_snapshot(text,text,bigint,text,text,text,timestamp with time zone,timestamp with time zone,jsonb)') IS NOT NULL
         AND NOT EXISTS (
             SELECT 1
               FROM paas.audit_outbox AS outbox
@@ -2160,6 +2552,7 @@ AS $function$
         to_regclass('paas.operations') IS NOT NULL
         AND to_regclass('paas.execution_targets') IS NOT NULL
         AND to_regclass('paas.adapter_commands') IS NOT NULL
+        AND to_regclass('paas.deployment_runtime_snapshots') IS NOT NULL
         AND to_regprocedure('paas.current_installation_id()') IS NOT NULL
         AND to_regprocedure('paas.claim_operation(text,integer)') IS NOT NULL
         AND to_regprocedure(
@@ -2168,6 +2561,8 @@ AS $function$
         AND to_regprocedure(
             'paas.reconcile_local_execution_profile(text,bigint,jsonb,bigint,jsonb,bigint,jsonb)'
         ) IS NOT NULL
+        AND to_regprocedure('paas.next_deployment_runtime_candidate(text,text)') IS NOT NULL
+        AND to_regprocedure('paas.store_deployment_runtime_snapshot(text,text,bigint,text,text,text,timestamp with time zone,timestamp with time zone,jsonb)') IS NOT NULL
         AND to_regprocedure(
             'paas.reconcile_local_execution_profile(bigint,jsonb,bigint,jsonb,bigint,jsonb)'
         ) IS NULL,
@@ -4018,6 +4413,7 @@ GRANT SELECT ON paas.configuration_revisions TO matrix_paas_api;
 GRANT SELECT ON paas.application_revisions TO matrix_paas_api;
 GRANT SELECT ON paas.placement_policies TO matrix_paas_api;
 GRANT SELECT ON paas.deployments TO matrix_paas_api;
+GRANT SELECT ON paas.deployment_runtime_snapshots TO matrix_paas_api;
 GRANT SELECT ON paas.deployment_generations TO matrix_paas_api;
 GRANT SELECT ON paas.operations TO matrix_paas_api;
 GRANT SELECT ON paas.execution_pools TO matrix_paas_api;
@@ -4038,6 +4434,7 @@ GRANT SELECT, UPDATE (lock_version)
 GRANT SELECT ON paas.adapter_commands TO matrix_paas_worker;
 GRANT SELECT ON paas.adapter_receipts TO matrix_paas_worker;
 GRANT SELECT ON paas.deployment_observations TO matrix_paas_worker;
+GRANT SELECT ON paas.deployment_runtime_snapshots TO matrix_paas_worker;
 GRANT SELECT ON paas.placement_decisions TO matrix_paas_worker;
 GRANT SELECT ON paas.capacity_claims TO matrix_paas_worker;
 GRANT SELECT ON paas.capacity_reservations TO matrix_paas_worker;

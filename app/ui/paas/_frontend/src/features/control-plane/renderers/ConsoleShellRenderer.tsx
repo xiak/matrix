@@ -7,6 +7,7 @@ import {
   Boxes,
   ChevronRight,
   CircleGauge,
+  Container,
   Database,
   Gauge,
   LayoutDashboard,
@@ -38,6 +39,7 @@ import { useConsoleUiStore } from "../application/consoleUiStore";
 import type { ControlPlaneRouteSelection } from "../domain/selection";
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
 import type { HostInventoryRepository } from "../repositories/hostInventoryRepository";
+import type { DeploymentInventoryRepository } from "../repositories/deploymentInventoryRepository";
 import type {
   NavigationIconKind,
   RailIconKind
@@ -50,6 +52,7 @@ const railIcons = {
   overview: LayoutDashboard,
   database: Database,
   infrastructure: Server,
+  workloads: Container,
   access: ShieldCheck
 } satisfies Record<RailIconKind, typeof Database>;
 
@@ -57,6 +60,7 @@ const navigationIcons = {
   catalog: PackageSearch,
   quota: Gauge,
   installation: ServerCog,
+  deployment: Container,
   region: MapPin,
   host: Server,
   access: ShieldCheck
@@ -178,7 +182,7 @@ function ConsoleShell({ selection }: { selection: ControlPlaneRouteSelection }) 
   if (!scene) {
     return (
       <LoadingShell
-        area={selection.section === "hosts" ? "Infrastructure" : "Managed Services"}
+        area={selection.section === "hosts" ? "Infrastructure" : selection.section === "deployments" ? "Application Hosting" : "Managed Services"}
         error={controlPlane.error}
         logout={() => void logout()}
         retry={() => void controlPlane.reload()}
@@ -191,9 +195,10 @@ function ConsoleShell({ selection }: { selection: ControlPlaneRouteSelection }) 
   const workspaceVisible = Boolean(scene.workspace && workspaceOpen);
   const isAccess = scene.section === "access";
   const isHosts = scene.section === "hosts";
-  const contextEyebrow = isAccess ? "Identity and access" : isHosts ? "Infrastructure" : "Managed services";
-  const contextTitle = isAccess ? "访问管理" : isHosts ? "基础设施" : "托管数据库";
-  const ContextIcon = isAccess ? ShieldCheck : isHosts ? Server : Database;
+  const isDeployments = scene.section === "deployments";
+  const contextEyebrow = isAccess ? "Identity and access" : isHosts ? "Infrastructure" : isDeployments ? "Application hosting" : "Managed services";
+  const contextTitle = isAccess ? "访问管理" : isHosts ? "基础设施" : isDeployments ? "应用托管" : "托管数据库";
+  const ContextIcon = isAccess ? ShieldCheck : isHosts ? Server : isDeployments ? Container : Database;
   const principal = session.current;
   const feedback = <>
     {session.error ? (
@@ -296,8 +301,8 @@ function ConsoleShell({ selection }: { selection: ControlPlaneRouteSelection }) 
                 <div className={styles.contextCallout}>
                   <CircleGauge aria-hidden="true" />
                   <div>
-                    <strong>{isHosts ? "持续观测" : "本机部署"}</strong>
-                    <span>{isHosts ? "5 秒刷新 · 保留来源时间" : "PostgreSQL · 托管服务"}</span>
+                    <strong>{isHosts || isDeployments ? "持续观测" : "本机部署"}</strong>
+                    <span>{isHosts ? "5 秒刷新 · 保留来源时间" : isDeployments ? "选中部署 · 5 秒刷新" : "PostgreSQL · 托管服务"}</span>
                   </div>
                 </div>
                 <div className={styles.userDock}>
@@ -353,7 +358,7 @@ function ConsoleShell({ selection }: { selection: ControlPlaneRouteSelection }) 
                 <ContentPage.Body>
                   <div className={styles.pageIntro}>{scene.description}</div>
                   {!workspaceVisible ? feedback : null}
-                  <ConsoleContentRenderer scene={scene.content} />
+                  <ConsoleContentRenderer onSelectDeployment={controlPlane.selectDeployment} scene={scene.content} />
                 </ContentPage.Body>
               </ContentPage>
             </Layout.Content>
@@ -395,10 +400,12 @@ function ConsoleShell({ selection }: { selection: ControlPlaneRouteSelection }) 
 }
 
 export function ConsoleShellRenderer({
+  deploymentRepository,
   hostRepository,
   repository,
   selection
 }: {
+  deploymentRepository?: DeploymentInventoryRepository;
   hostRepository?: HostInventoryRepository;
   repository?: ControlPlaneRepository;
   selection: ControlPlaneRouteSelection;
@@ -411,7 +418,7 @@ export function ConsoleShellRenderer({
     return <LoginRenderer />;
   }
   return (
-    <ControlPlaneProvider hostRepository={hostRepository} repository={repository} selection={selection}>
+    <ControlPlaneProvider deploymentRepository={deploymentRepository} hostRepository={hostRepository} repository={repository} selection={selection}>
       <ConsoleShell selection={selection} />
     </ControlPlaneProvider>
   );

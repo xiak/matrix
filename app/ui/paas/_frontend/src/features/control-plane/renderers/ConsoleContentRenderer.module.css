@@ -505,6 +505,216 @@
   font-variant-numeric: tabular-nums;
 }
 
+.deploymentLayout {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.7fr) minmax(0, 1.3fr);
+  gap: var(--xiak-spacing-roomy);
+  align-items: start;
+}
+
+.deploymentInventoryCard,
+.runtimeCard {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.deploymentList,
+.runtimeBody,
+.runtimeInstances {
+  display: grid;
+  gap: var(--xiak-spacing-default);
+}
+
+.deploymentItem {
+  display: grid;
+  width: 100%;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--xiak-spacing-default);
+  align-items: center;
+  border: var(--xiak-border-subtle);
+  border-radius: var(--xiak-radius-control);
+  padding: var(--xiak-spacing-default);
+  background: var(--xiak-color-bg-canvas);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.deploymentItem:hover {
+  background: var(--xiak-color-bg-panel-hover);
+}
+
+.deploymentItem:focus-visible {
+  outline: none;
+  box-shadow: var(--xiak-shadow-focus);
+}
+
+.deploymentItem[data-selected="true"] {
+  border-color: var(--xiak-color-border-focus);
+  background: var(--xiak-color-accent-haze);
+}
+
+.deploymentItemIcon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  place-items: center;
+  border-radius: var(--xiak-radius-control);
+  background: var(--xiak-color-bg-panel);
+  color: var(--xiak-color-accent-text);
+}
+
+.deploymentItemIcon svg,
+.runtimeInstanceIdentity > svg,
+.runtimeEmpty > svg,
+.terminalBoundary svg {
+  width: 18px;
+  height: 18px;
+}
+
+.deploymentItemIdentity,
+.deploymentItemState {
+  display: grid;
+  min-width: 0;
+  gap: var(--xiak-spacing-narrow);
+}
+
+.deploymentItemIdentity strong,
+.deploymentItemIdentity code,
+.runtimeInstanceIdentity code,
+.runtimeFacts dd {
+  overflow-wrap: anywhere;
+}
+
+.deploymentItemIdentity small,
+.deploymentItemState small,
+.deploymentNotice,
+.runtimeEmpty span,
+.terminalBoundary small {
+  color: var(--xiak-color-text-subtle);
+  font-size: var(--xiak-font-size-caption);
+}
+
+.deploymentItemState {
+  justify-items: end;
+  text-align: right;
+}
+
+.deploymentNotice {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.runtimeFacts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--xiak-spacing-default);
+  margin: 0;
+}
+
+.runtimeFacts > div {
+  display: grid;
+  min-width: 0;
+  gap: var(--xiak-spacing-narrow);
+  border-radius: var(--xiak-radius-control);
+  padding: var(--xiak-spacing-default);
+  background: var(--xiak-color-bg-canvas);
+}
+
+.runtimeFacts dt {
+  color: var(--xiak-color-text-subtle);
+  font-size: var(--xiak-font-size-caption);
+}
+
+.runtimeFacts dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--xiak-color-text-base);
+}
+
+.runtimeInstance,
+.runtimeInstanceIdentity,
+.runtimeInstanceStatus,
+.runtimeEmpty,
+.terminalBoundary,
+.terminalBoundary > div,
+.terminalBoundary span {
+  display: flex;
+  align-items: center;
+  gap: var(--xiak-spacing-tight);
+}
+
+.runtimeInstance {
+  min-width: 0;
+  justify-content: space-between;
+  gap: var(--xiak-spacing-default);
+  border: var(--xiak-border-subtle);
+  border-radius: var(--xiak-radius-control);
+  padding: var(--xiak-spacing-default);
+}
+
+.runtimeInstanceIdentity {
+  min-width: 0;
+}
+
+.runtimeInstanceIdentity > svg {
+  flex: none;
+  color: var(--xiak-color-accent-text);
+}
+
+.runtimeInstanceIdentity span,
+.terminalBoundary span {
+  display: grid;
+  min-width: 0;
+  gap: var(--xiak-spacing-narrow);
+}
+
+.runtimeInstanceStatus {
+  flex: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  color: var(--xiak-color-text-muted);
+  font-size: var(--xiak-font-size-small);
+}
+
+.runtimeEmpty {
+  min-height: 112px;
+  justify-content: center;
+  border: var(--xiak-border-subtle);
+  border-radius: var(--xiak-radius-control);
+  padding: var(--xiak-spacing-roomy);
+  background: var(--xiak-color-bg-canvas);
+  text-align: left;
+}
+
+.runtimeEmpty > svg {
+  flex: none;
+  color: var(--xiak-color-text-subtle);
+}
+
+.runtimeEmpty div {
+  display: grid;
+  gap: var(--xiak-spacing-narrow);
+}
+
+.terminalBoundary {
+  justify-content: space-between;
+  gap: var(--xiak-spacing-default);
+  border-top: var(--xiak-border-subtle);
+  padding-top: var(--xiak-spacing-comfortable);
+}
+
+.terminalBoundary > div {
+  min-width: 0;
+}
+
+.terminalBoundary > div > svg {
+  flex: none;
+  color: var(--xiak-color-text-subtle);
+}
+
 @container matrix-page-content (max-width: 900px) {
   .metricGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -523,6 +733,10 @@
   .hostFacts {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .deploymentLayout {
+    grid-template-columns: 1fr;
+  }
 }
 
 @container matrix-page-content (max-width: 760px) {
@@ -532,7 +746,8 @@
   }
 
   .hostMetricGrid,
-  .filesystemRow {
+  .filesystemRow,
+  .runtimeFacts {
     grid-template-columns: 1fr;
   }
 }
@@ -553,6 +768,26 @@
 
   .hostFacts {
     grid-template-columns: 1fr;
+  }
+
+  .deploymentItem {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .deploymentItemState {
+    grid-column: 2;
+    justify-items: start;
+    text-align: left;
+  }
+
+  .runtimeInstance,
+  .terminalBoundary {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .runtimeInstanceStatus {
+    justify-content: flex-start;
   }
 }
 

@@ -209,7 +209,7 @@ func TestCredentialRecoveryRejectsUnsupportedProfilesBeforePreparingAnIntent(t *
 		{name: "published scalar is not first-authorization admission", profile: release.DatabaseProfile{SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one"}},
 		{name: "prior credential contract", profile: release.DatabaseProfile{Compatibility: "identical-authority-profile", Authorities: release.AuthoritySchemas{IAM: 3, Audit: 2, PaaS: 2}, ContractRevision: 3}},
 		{name: "different PaaS schema", profile: release.DatabaseProfile{Compatibility: "identical-authority-profile", Authorities: release.AuthoritySchemas{IAM: 4, Audit: 3, PaaS: 1}, ContractRevision: 4}},
-		{name: "different contract revision", profile: release.DatabaseProfile{Compatibility: "identical-authority-profile", Authorities: release.AuthoritySchemas{IAM: 4, Audit: 3, PaaS: 2}, ContractRevision: 5}},
+		{name: "different contract revision", profile: release.DatabaseProfile{Compatibility: "identical-authority-profile", Authorities: release.AuthoritySchemas{IAM: 4, Audit: 3, PaaS: 2}, ContractRevision: 6}},
 	}
 	for _, test := range profiles {
 		t.Run(test.name, func(t *testing.T) {
@@ -231,6 +231,14 @@ func TestCredentialRecoveryRejectsUnsupportedProfilesBeforePreparingAnIntent(t *
 				t.Fatal("unsupported profile reached recovery preparation or changed its journal")
 			}
 		})
+	}
+}
+
+func TestCredentialRecoveryRetainsExactRevisionFourConsumer(t *testing.T) {
+	profile := release.CurrentDatabaseProfile()
+	profile.ContractRevision = 4
+	if err := ValidateCredentialRecoveryProfile(profile); err != nil {
+		t.Fatalf("revision-four credential recovery profile: %v", err)
 	}
 }
 
@@ -682,6 +690,39 @@ func TestPublishedScalarProfileStillAllowsItsOwnReleasePair(t *testing.T) {
 	result, err := backend.Run(context.Background(), cli.Request{Action: lifecycle.ActionRollback, Root: root})
 	if err != nil || result.ReleaseID != fixtures[0].Manifest.Release.ID {
 		t.Fatalf("rollback published profile pair: %#v / %v", result, err)
+	}
+}
+
+func TestDeploymentRuntimeProfileExactPairAllowsUpgradeAndRollback(t *testing.T) {
+	current := release.CurrentDatabaseProfile()
+	predecessor := current
+	predecessor.ContractRevision = 4
+	fixtures, err := releasetest.WriteSequence(t.TempDir(), 2, predecessor, current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	effects := &installEffects{observeReady: true}
+	backend := newTestBackend(t, effects)
+	root := filepath.Join(t.TempDir(), "matrix")
+	if _, err := backend.Run(context.Background(), installRequest(root, fixtures[0])); err != nil {
+		t.Fatal(err)
+	}
+	materializeInstalledRelease(t, root, fixtures[0])
+	upgraded, err := backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[1].Root,
+	})
+	if err != nil || upgraded.ReleaseID != fixtures[1].Manifest.Release.ID || !upgraded.Changed {
+		t.Fatalf("upgrade exact runtime profile pair: %#v / %v", upgraded, err)
+	}
+	materializeInstalledRelease(t, root, fixtures[1])
+	rolledBack, err := backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionRollback, Root: root,
+	})
+	if err != nil || rolledBack.ReleaseID != fixtures[0].Manifest.Release.ID || !rolledBack.Changed {
+		t.Fatalf("rollback exact runtime profile pair: %#v / %v", rolledBack, err)
+	}
+	if len(effects.upgradeCalls) == 0 || len(effects.explicitRollbackCalls) == 0 {
+		t.Fatal("exact profile pair bypassed release lifecycle effects")
 	}
 }
 

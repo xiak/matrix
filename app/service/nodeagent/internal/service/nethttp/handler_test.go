@@ -57,10 +57,18 @@ func (deploymentService) ObserveDeployment(
 	return paasv1.DeploymentObservation{}, errors.New("unexpected Deployment observation")
 }
 
+func (deploymentService) ObserveDeploymentRuntime(
+	context.Context,
+	paasv1.ObserveDeploymentRuntimeRequest,
+) (paasv1.DeploymentRuntimeObservation, error) {
+	return paasv1.DeploymentRuntimeObservation{}, errors.New("unexpected Deployment runtime observation")
+}
+
 type deploymentServiceFuncs struct {
 	ready   func(context.Context) error
 	execute func(context.Context, nodev1.DeploymentEffectRequest) (paasv1.AdapterResult, error)
 	observe func(context.Context, paasv1.ObserveDeploymentRequest) (paasv1.DeploymentObservation, error)
+	runtime func(context.Context, paasv1.ObserveDeploymentRuntimeRequest) (paasv1.DeploymentRuntimeObservation, error)
 }
 
 func (service deploymentServiceFuncs) Ready(ctx context.Context) error {
@@ -82,6 +90,16 @@ func (service deploymentServiceFuncs) ObserveDeployment(
 	request paasv1.ObserveDeploymentRequest,
 ) (paasv1.DeploymentObservation, error) {
 	return service.observe(ctx, request)
+}
+
+func (service deploymentServiceFuncs) ObserveDeploymentRuntime(
+	ctx context.Context,
+	request paasv1.ObserveDeploymentRuntimeRequest,
+) (paasv1.DeploymentRuntimeObservation, error) {
+	if service.runtime == nil {
+		return paasv1.DeploymentRuntimeObservation{}, errors.New("unexpected Deployment runtime observation")
+	}
+	return service.runtime(ctx, request)
 }
 
 type deploymentArtifactResolver struct{}
@@ -189,7 +207,7 @@ func TestRealMTLSDeploymentBindsExactTargetMaterialsAndObservation(t *testing.T)
 	node := authority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false)
 	controller := authority.issue(t, controllerURI, x509.ExtKeyUsageClientAuth, false)
 	execution := deploymentExecutionFixture(t)
-	var effectCalls, observationCalls atomic.Int32
+	var effectCalls, observationCalls, runtimeCalls atomic.Int32
 	var receivedSecret string
 	var receivedSecretBytes []byte
 	service := deploymentServiceFuncs{
@@ -211,6 +229,10 @@ func TestRealMTLSDeploymentBindsExactTargetMaterialsAndObservation(t *testing.T)
 		observe: func(_ context.Context, request paasv1.ObserveDeploymentRequest) (paasv1.DeploymentObservation, error) {
 			observationCalls.Add(1)
 			return deploymentObservationFixture(request), nil
+		},
+		runtime: func(_ context.Context, request paasv1.ObserveDeploymentRuntimeRequest) (paasv1.DeploymentRuntimeObservation, error) {
+			runtimeCalls.Add(1)
+			return deploymentRuntimeObservationFixture(request), nil
 		},
 	}
 	handler, err := New(sourceFunc(func(context.Context) (paasv1.ExecutionTargetObservation, error) {
@@ -234,6 +256,13 @@ func TestRealMTLSDeploymentBindsExactTargetMaterialsAndObservation(t *testing.T)
 	if err != nil || observation.Phase != paasv1.DeploymentReady || observationCalls.Load() != 1 {
 		t.Fatalf("remote observation failed: %#v, %v", observation, err)
 	}
+	runtimeObservation, err := client.ObserveDeploymentRuntime(
+		context.Background(), deploymentRuntimeObserveRequest(execution),
+	)
+	if err != nil || len(runtimeObservation.Instances) != 1 || runtimeCalls.Load() != 1 ||
+		runtimeObservation.Instances[0].ID != "instance-0123456789abcdef0123456789abcdef" {
+		t.Fatalf("remote runtime observation failed: %#v, %v", runtimeObservation, err)
+	}
 
 	wrong := deploymentExecutionFixture(t)
 	wrong.Command.BindingRef = "binding-b"
@@ -243,6 +272,12 @@ func TestRealMTLSDeploymentBindsExactTargetMaterialsAndObservation(t *testing.T)
 	var fault paasv1.AdapterFault
 	if !errors.As(err, &fault) || fault.Normalized.Class != paasv1.AdapterErrorPermissionDenied || effectCalls.Load() != 1 {
 		t.Fatalf("wrong binding reached the node effect: %v", err)
+	}
+	_, err = wrongClient.ObserveDeploymentRuntime(
+		context.Background(), deploymentRuntimeObserveRequest(execution),
+	)
+	if !errors.As(err, &fault) || fault.Normalized.Class != paasv1.AdapterErrorPermissionDenied || runtimeCalls.Load() != 1 {
+		t.Fatalf("wrong binding reached the node runtime observation: %v", err)
 	}
 }
 
@@ -1013,6 +1048,39 @@ func deploymentObservationFixture(
 		Phase:                 paasv1.DeploymentReady, ReadyComponents: 1,
 		ReceiptDigest: deploymentTestDigest('e'),
 		ObservedAt:    time.Now().UTC().Truncate(time.Microsecond),
+	}
+}
+
+func deploymentRuntimeObserveRequest(
+	execution paasv1.DeploymentExecutionRequest,
+) paasv1.ObserveDeploymentRuntimeRequest {
+	return paasv1.ObserveDeploymentRuntimeRequest{
+		RequestID:             "runtime-observe-a",
+		Scope:                 execution.Command.Scope,
+		DeploymentID:          execution.Generation.DeploymentID,
+		Generation:            execution.Generation.Generation,
+		ApplicationRevisionID: execution.ApplicationRevision.Metadata.ID,
+		ExecutionTargetID:     execution.Command.ExecutionTargetID,
+		ExpectedContentDigest: execution.Generation.ContentDigest,
+		Deadline:              time.Now().UTC().Truncate(time.Microsecond).Add(time.Minute),
+	}
+}
+
+func deploymentRuntimeObservationFixture(
+	request paasv1.ObserveDeploymentRuntimeRequest,
+) paasv1.DeploymentRuntimeObservation {
+	return paasv1.DeploymentRuntimeObservation{
+		DeploymentID:          request.DeploymentID,
+		Generation:            request.Generation,
+		ApplicationRevisionID: request.ApplicationRevisionID,
+		ExecutionTargetID:     request.ExecutionTargetID,
+		Instances: []paasv1.DeploymentRuntimeInstance{{
+			ID:            "instance-0123456789abcdef0123456789abcdef",
+			ComponentName: "web",
+			State:         paasv1.DeploymentInstanceRunning,
+			Health:        paasv1.DeploymentInstanceHealthHealthy,
+		}},
+		ObservedAt: time.Now().UTC().Truncate(time.Microsecond),
 	}
 }
 

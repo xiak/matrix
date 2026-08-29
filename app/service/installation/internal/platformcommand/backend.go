@@ -150,8 +150,10 @@ type CredentialRecoveryPlan struct {
 // the dedicated IAM transaction and closed offline Audit fact. A contract-only
 // consumer must not invoke it against the earlier running authority profile.
 func ValidateCredentialRecoveryProfile(profile release.DatabaseProfile) error {
-	if profile != release.CurrentDatabaseProfile() || profile.Authorities.IAM != 4 ||
-		profile.Authorities.Audit != 3 || profile.ContractRevision != 4 {
+	if release.ValidateDatabaseUpgradePath(profile, release.CurrentDatabaseProfile()) != nil ||
+		profile.Authorities.IAM != 4 || profile.Authorities.Audit != 3 ||
+		profile.Authorities.PaaS != 2 ||
+		(profile.ContractRevision != 4 && profile.ContractRevision != 5) {
 		return ErrEffectPrecondition
 	}
 	return nil
@@ -687,7 +689,9 @@ func (backend *Backend) upgrade(
 		targetBundle.Manifest.Release.PreviousVersion != sourceBundle.Manifest.Release.Version {
 		return cli.Result{}, fault(cli.FaultPrecondition, "UPGRADE_PREDECESSOR_MISMATCH")
 	}
-	if targetBundle.Manifest.Database != sourceBundle.Manifest.Database {
+	if release.ValidateDatabaseUpgradePath(
+		sourceBundle.Manifest.Database, targetBundle.Manifest.Database,
+	) != nil {
 		return cli.Result{}, fault(cli.FaultPrecondition, "UPGRADE_SCHEMA_INCOMPATIBLE")
 	}
 
@@ -797,7 +801,9 @@ func (backend *Backend) rollback(
 		currentBundle.Manifest.Release.PreviousVersion != previousBundle.Manifest.Release.Version {
 		return cli.Result{}, fault(cli.FaultPrecondition, "ROLLBACK_PREDECESSOR_MISMATCH")
 	}
-	if previousBundle.Manifest.Database != currentBundle.Manifest.Database {
+	if release.ValidateDatabaseUpgradePath(
+		previousBundle.Manifest.Database, currentBundle.Manifest.Database,
+	) != nil {
 		return cli.Result{}, fault(cli.FaultPrecondition, "ROLLBACK_SCHEMA_INCOMPATIBLE")
 	}
 

@@ -36,6 +36,7 @@ func TestWorkerLoopProcessesAvailableWorkAndStopsWithContext(t *testing.T) {
 			ctx,
 			worker.ProcessNext,
 			func(context.Context) error { return nil },
+			func(context.Context) (bool, error) { return false, nil },
 			"worker-a",
 		)
 	}()
@@ -67,9 +68,41 @@ func TestWorkerLoopNormalizesCycleFailure(t *testing.T) {
 		context.Background(),
 		worker.ProcessNext,
 		func(context.Context) error { return nil },
+		func(context.Context) (bool, error) { return false, nil },
 		"worker-a",
 	)
 	if err == nil || errors.Is(err, native) || err.Error() != "PaaS reconciliation cycle failed" {
 		t.Fatalf("worker loop error = %v", err)
+	}
+}
+
+func TestWorkerLoopDoesNotStarveRuntimeRefreshWhenOperationsRemain(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runtimeCalled := make(chan struct{}, 1)
+	result := make(chan error, 1)
+	go func() {
+		result <- runWorkerLoop(
+			ctx,
+			func(context.Context, string) (bool, error) { return true, nil },
+			func(context.Context) error { return nil },
+			func(context.Context) (bool, error) {
+				select {
+				case runtimeCalled <- struct{}{}:
+				default:
+				}
+				return true, nil
+			},
+			"worker-a",
+		)
+	}()
+	select {
+	case <-runtimeCalled:
+		cancel()
+	case <-time.After(2 * time.Second):
+		t.Fatal("runtime refresh was starved by available Operations")
+	}
+	if err := <-result; err != nil {
+		t.Fatalf("stop worker loop: %v", err)
 	}
 }

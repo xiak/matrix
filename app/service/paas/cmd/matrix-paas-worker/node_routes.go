@@ -9,6 +9,7 @@ import (
 	"github.com/xiak/matrix/app/service/paas/cmd/internal/nodeconnections"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/reconciledeployment"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/refreshdeploymentruntime"
 )
 
 func newDeploymentRoutes(
@@ -16,21 +17,30 @@ func newDeploymentRoutes(
 	catalog apphostingv1.ArtifactCatalog,
 	secrets nodehttps.DeploymentSecretResolver,
 	local port.DeploymentExecutor,
-) ([]reconciledeployment.DeploymentRoute, func(), error) {
+) (
+	[]reconciledeployment.DeploymentRoute,
+	[]refreshdeploymentruntime.Route,
+	func(),
+	error,
+) {
 	invalid := errors.New("PaaS worker node execution routes are invalid")
 	if local == nil || secrets == nil {
-		return nil, func() {}, invalid
+		return nil, nil, func() {}, invalid
+	}
+	localObserver, observesRuntime := local.(port.DeploymentRuntimeObserver)
+	if !observesRuntime {
+		return nil, nil, func() {}, invalid
 	}
 	connections, err := nodeconnections.Load(
 		config.nodeConnectionsFile,
 		config.installationID,
 	)
 	if err != nil {
-		return nil, func() {}, invalid
+		return nil, nil, func() {}, invalid
 	}
 	artifacts, err := nodehttps.NewCatalogDeploymentArtifactResolver(catalog)
 	if err != nil {
-		return nil, func() {}, invalid
+		return nil, nil, func() {}, invalid
 	}
 	clients := make([]*nodehttps.DeploymentClient, 0, len(connections.Nodes()))
 	closeClients := func() {
@@ -42,6 +52,10 @@ func newDeploymentRoutes(
 		ExecutionTargetID: localExecutionProfileIDs.TargetID,
 		BindingRef:        config.bindingRef,
 		Executor:          local,
+	}}
+	runtimeRoutes := []refreshdeploymentruntime.Route{{
+		ExecutionTargetID: localExecutionProfileIDs.TargetID,
+		Observer:          localObserver,
 	}}
 	for _, connection := range connections.Nodes() {
 		client, err := nodehttps.NewDeploymentClient(nodehttps.DeploymentConfig{
@@ -61,7 +75,7 @@ func newDeploymentRoutes(
 		})
 		if err != nil {
 			closeClients()
-			return nil, func() {}, invalid
+			return nil, nil, func() {}, invalid
 		}
 		clients = append(clients, client)
 		routes = append(routes, reconciledeployment.DeploymentRoute{
@@ -69,6 +83,10 @@ func newDeploymentRoutes(
 			BindingRef:        connection.BindingRef,
 			Executor:          client,
 		})
+		runtimeRoutes = append(runtimeRoutes, refreshdeploymentruntime.Route{
+			ExecutionTargetID: connection.TargetID,
+			Observer:          client,
+		})
 	}
-	return routes, closeClients, nil
+	return routes, runtimeRoutes, closeClients, nil
 }

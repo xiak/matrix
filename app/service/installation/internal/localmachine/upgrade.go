@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
+	"github.com/xiak/matrix/app/service/installation/release"
 	"github.com/xiak/matrix/app/service/installation/topology"
 )
 
@@ -198,7 +199,9 @@ func validateUpgradeIdentity(
 		target.Bundle.Manifest.Release.ID == source.Bundle.Manifest.Release.ID ||
 		target.Bundle.Manifest.Release.PreviousID != source.Bundle.Manifest.Release.ID ||
 		target.Bundle.Manifest.Release.PreviousVersion != source.Bundle.Manifest.Release.Version ||
-		target.Bundle.Manifest.Database != source.Bundle.Manifest.Database {
+		release.ValidateDatabaseUpgradePath(
+			source.Bundle.Manifest.Database, target.Bundle.Manifest.Database,
+		) != nil {
 		return errors.New("upgrade source and target identities are inconsistent")
 	}
 	return nil

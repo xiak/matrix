@@ -276,6 +276,32 @@ func TestPublishedManifestCanonicalDatabaseBytesRemainVerifiable(t *testing.T) {
 	}
 }
 
+func TestDatabaseUpgradePathIsExactAndNotNumeric(t *testing.T) {
+	current := CurrentDatabaseProfile()
+	predecessor := current
+	predecessor.ContractRevision = 4
+	if err := ValidateDatabaseUpgradePath(predecessor, current); err != nil {
+		t.Fatalf("admit exact deployment-runtime predecessor: %v", err)
+	}
+	if err := ValidateDatabaseUpgradePath(current, current); err != nil {
+		t.Fatalf("admit equal current profile: %v", err)
+	}
+	for name, pair := range map[string][2]DatabaseProfile{
+		"reverse":        {current, predecessor},
+		"skipped source": {func() DatabaseProfile { value := predecessor; value.ContractRevision = 3; return value }(), current},
+		"future target":  {current, func() DatabaseProfile { value := current; value.ContractRevision = 6; return value }()},
+		"PaaS change": {predecessor, func() DatabaseProfile {
+			value := current
+			value.Authorities.PaaS = 3
+			return value
+		}()},
+	} {
+		if ValidateDatabaseUpgradePath(pair[0], pair[1]) == nil {
+			t.Fatalf("%s profile pair was admitted", name)
+		}
+	}
+}
+
 func TestManifestAdmitsOnlyForwardSemanticSuccessors(t *testing.T) {
 	tests := []struct {
 		name     string

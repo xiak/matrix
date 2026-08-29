@@ -1,11 +1,12 @@
 import type { ConsoleSection } from "../domain/selection";
 import type { HostMeasurementState } from "../domain/hosts";
 
-export type RailIconKind = "overview" | "database" | "infrastructure" | "access";
+export type RailIconKind = "overview" | "database" | "workloads" | "infrastructure" | "access";
 export type NavigationIconKind =
   | "catalog"
   | "quota"
   | "installation"
+  | "deployment"
   | "region"
   | "host"
   | "access";
@@ -119,6 +120,43 @@ export type HostScene = {
   filesystems: HostFilesystemScene[];
 };
 
+export type DeploymentScene = {
+  id: string;
+  name: string;
+  generation: number;
+  revisionId: string;
+  desiredState: string;
+  phase: string;
+  status: SceneStatus;
+  componentSummary: string;
+  readiness: string;
+  observedAt: string;
+  selected: boolean;
+};
+
+export type DeploymentRuntimeInstanceScene = {
+  id: string;
+  componentName: string;
+  state: string;
+  stateLabel: string;
+  health: string;
+  healthLabel: string;
+  status: SceneStatus;
+  exitCode: string;
+};
+
+export type DeploymentRuntimeScene = {
+  state: string;
+  stateLabel: string;
+  status: SceneStatus;
+  generation: number | null;
+  revisionId: string | null;
+  executionTargetId: string | null;
+  observedAt: string;
+  validUntil: string;
+  instances: DeploymentRuntimeInstanceScene[];
+};
+
 export type QuotaOrderOptionScene = {
   offeringId: string;
   offeringName: string;
@@ -146,6 +184,13 @@ export type ConsoleContentScene =
   | { kind: "catalog"; offerings: OfferingScene[] }
   | { kind: "quotas"; entitlements: EntitlementScene[] }
   | { kind: "installations"; installations: InstallationScene[] }
+  | {
+      kind: "deployments";
+      deployments: DeploymentScene[];
+      selectedDeploymentId: string | null;
+      runtime: DeploymentRuntimeScene | null;
+      truncated: boolean;
+    }
   | { kind: "regions"; regions: RegionScene[] }
   | { kind: "hosts"; hosts: HostScene[] }
   | { kind: "access" };

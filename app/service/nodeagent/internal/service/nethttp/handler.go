@@ -19,6 +19,7 @@ type DeploymentService interface {
 	Ready(context.Context) error
 	ExecuteDeployment(context.Context, nodev1.DeploymentEffectRequest) (paasv1.AdapterResult, error)
 	ObserveDeployment(context.Context, paasv1.ObserveDeploymentRequest) (paasv1.DeploymentObservation, error)
+	ObserveDeploymentRuntime(context.Context, paasv1.ObserveDeploymentRuntimeRequest) (paasv1.DeploymentRuntimeObservation, error)
 }
 
 type Config struct {
@@ -80,6 +81,8 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 		handler.deploymentEffect(response, request)
 	case nodev1.DeploymentObservationPath:
 		handler.deploymentObservation(response, request)
+	case nodev1.DeploymentRuntimeObservationPath:
+		handler.deploymentRuntimeObservation(response, request)
 	default:
 		reject(response, http.StatusBadRequest)
 	}
@@ -246,6 +249,62 @@ func (handler *Handler) deploymentObservation(response http.ResponseWriter, requ
 	}
 	encoded, err := json.Marshal(responseValue)
 	if err != nil || len(encoded) > nodev1.MaximumDeploymentObservationResponseBytes {
+		reject(response, http.StatusServiceUnavailable)
+		return
+	}
+	response.WriteHeader(http.StatusOK)
+	_, _ = response.Write(encoded)
+}
+
+func (handler *Handler) deploymentRuntimeObservation(response http.ResponseWriter, request *http.Request) {
+	if !validJSONPost(request, nodev1.MaximumDeploymentRuntimeRequestBytes) || !handler.acquire(response) {
+		return
+	}
+	defer handler.release()
+	controller := http.NewResponseController(response)
+	_ = controller.SetReadDeadline(time.Now().Add(5 * time.Second))
+	value, err := nodev1.DecodeDeploymentRuntimeObservationRequest(request.Body)
+	if err != nil {
+		reject(response, http.StatusBadRequest)
+		return
+	}
+	if value.Identity != handler.identity || value.BindingRef != handler.bindingRef {
+		reject(response, http.StatusForbidden)
+		return
+	}
+	now := time.Now()
+	if !now.Before(value.Request.Deadline) {
+		reject(response, http.StatusRequestTimeout)
+		return
+	}
+	if value.Request.Deadline.Sub(now) > nodev1.MaximumDeploymentDuration {
+		reject(response, http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithDeadline(request.Context(), value.Request.Deadline)
+	observation, observeErr := handler.deployments.ObserveDeploymentRuntime(ctx, value.Request)
+	contextErr := ctx.Err()
+	cancel()
+	if observeErr != nil || contextErr != nil {
+		reject(response, deploymentObservationStatus(observeErr, contextErr))
+		return
+	}
+	responseValue := nodev1.DeploymentRuntimeObservationResponse{
+		APIVersion:  nodev1.APIVersion,
+		Kind:        nodev1.DeploymentRuntimeObservationResponseKind,
+		Identity:    handler.identity,
+		RequestID:   value.Request.RequestID,
+		Observation: observation,
+	}
+	if nodev1.ValidateDeploymentRuntimeObservationResponse(responseValue) != nil ||
+		observation.DeploymentID != value.Request.DeploymentID ||
+		observation.Generation != value.Request.Generation ||
+		observation.ApplicationRevisionID != value.Request.ApplicationRevisionID {
+		reject(response, http.StatusServiceUnavailable)
+		return
+	}
+	encoded, err := json.Marshal(responseValue)
+	if err != nil || len(encoded) > nodev1.MaximumDeploymentRuntimeResponseBytes {
 		reject(response, http.StatusServiceUnavailable)
 		return
 	}

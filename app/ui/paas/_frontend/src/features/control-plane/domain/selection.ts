@@ -3,6 +3,7 @@ export type ConsoleSection =
   | "catalog"
   | "quotas"
   | "installations"
+  | "deployments"
   | "regions"
   | "hosts"
   | "access";

@@ -5,6 +5,7 @@ import {
   Activity,
   Box,
   CheckCircle2,
+  Container,
   Cpu,
   Database,
   Gauge,
@@ -13,10 +14,12 @@ import {
   MapPin,
   PackageCheck,
   PackageSearch,
-  Server
+  Server,
+  SquareTerminal
 } from "lucide-react";
 import {
   Badge,
+  Button,
   Card,
   ContentLayout,
   Typography
@@ -49,7 +52,12 @@ function phaseLabel(value: string): string {
     UNKNOWN: "未知",
     DEGRADED: "降级",
     ACTIVE: "可调度",
-    DRAINING: "排空中"
+    DRAINING: "排空中",
+    PLACING: "调度中",
+    APPLYING: "部署中",
+    STOPPING: "停止中",
+    STOPPED: "已停止",
+    RUNNING: "运行中"
   };
   return labels[value] ?? value;
 }
@@ -374,12 +382,123 @@ function HostContent({ scene }: { scene: Extract<ConsoleContentScene, { kind: "h
   );
 }
 
-export function ConsoleContentRenderer({ scene }: { scene: ConsoleContentScene }) {
+function DeploymentContent({
+  onSelect,
+  scene
+}: {
+  onSelect(deploymentId: string): void;
+  scene: Extract<ConsoleContentScene, { kind: "deployments" }>;
+}) {
+  if (scene.deployments.length === 0) {
+    return <EmptyState title="当前租户没有部署" description="部署由应用交付流程创建；控制台不会扫描主机或导入未知容器。" />;
+  }
+  const selected = scene.deployments.find((item) => item.selected) ?? null;
+  return (
+    <div className={styles.deploymentLayout}>
+      <Card className={styles.deploymentInventoryCard}>
+        <Card.Header>
+          <div>
+            <Typography.Title as="h2" level={3}>租户部署</Typography.Title>
+            <Typography.Text tone="muted">最多展示当前有序页中的 100 个资源</Typography.Text>
+          </div>
+          <Badge status={scene.truncated ? "warning" : "info"}>{scene.deployments.length} 个部署</Badge>
+        </Card.Header>
+        <Card.Body className={styles.deploymentList}>
+          {scene.deployments.map((deployment) => (
+            <button
+              aria-pressed={deployment.selected}
+              className={styles.deploymentItem}
+              data-selected={deployment.selected ? "true" : undefined}
+              key={deployment.id}
+              onClick={() => onSelect(deployment.id)}
+              type="button"
+            >
+              <span className={styles.deploymentItemIcon}><Container aria-hidden="true" /></span>
+              <span className={styles.deploymentItemIdentity}>
+                <strong>{deployment.name}</strong>
+                <Typography.Code>{deployment.id}</Typography.Code>
+                <small>{deployment.componentSummary}</small>
+              </span>
+              <span className={styles.deploymentItemState}>
+                <Badge status={deployment.status}>{phaseLabel(deployment.phase)}</Badge>
+                <small>{deployment.readiness}</small>
+              </span>
+            </button>
+          ))}
+          {scene.truncated ? <p className={styles.deploymentNotice}>当前仅展示前 100 个部署；本切片不会在浏览器中自动扫描后续页。</p> : null}
+        </Card.Body>
+      </Card>
+
+      <Card className={styles.runtimeCard}>
+        <Card.Header>
+          <div>
+            <Typography.Title as="h2" level={3}>{selected ? `${selected.name} 运行态` : "部署运行态"}</Typography.Title>
+            <Typography.Text tone="muted">来源时间由执行节点给出，控制面不会在读取时重新盖章</Typography.Text>
+          </div>
+          {scene.runtime ? <Badge status={scene.runtime.status}>{scene.runtime.stateLabel}</Badge> : <Badge status="neutral">正在读取</Badge>}
+        </Card.Header>
+        <Card.Body className={styles.runtimeBody}>
+          {scene.runtime ? (
+            <>
+              <dl className={styles.runtimeFacts}>
+                <div><dt>部署代次</dt><dd>{scene.runtime.generation ?? "不可用"}</dd></div>
+                <div><dt>应用修订</dt><dd><Typography.Code>{scene.runtime.revisionId ?? "不可用"}</Typography.Code></dd></div>
+                <div><dt>执行目标</dt><dd><Typography.Code>{scene.runtime.executionTargetId ?? "不可用"}</Typography.Code></dd></div>
+                <div><dt>来源观测</dt><dd>{scene.runtime.observedAt}</dd></div>
+                <div><dt>有效至</dt><dd>{scene.runtime.validUntil}</dd></div>
+              </dl>
+              {scene.runtime.instances.length === 0 ? (
+                <div className={styles.runtimeEmpty}>
+                  <Container aria-hidden="true" />
+                  <div><strong>没有可证明的当前容器实例</strong><span>停止中的部署或尚未完成首次采样时，这是正常状态。</span></div>
+                </div>
+              ) : (
+                <div aria-label="部署容器实例" className={styles.runtimeInstances}>
+                  {scene.runtime.instances.map((instance) => (
+                    <div className={styles.runtimeInstance} key={instance.id}>
+                      <div className={styles.runtimeInstanceIdentity}>
+                        <Container aria-hidden="true" />
+                        <span><strong>{instance.componentName}</strong><Typography.Code>{instance.id}</Typography.Code></span>
+                      </div>
+                      <div className={styles.runtimeInstanceStatus}>
+                        <Badge status={instance.status}>{instance.stateLabel}</Badge>
+                        <span>{instance.healthLabel}</span>
+                        {instance.exitCode === "—" ? null : <span>退出码 {instance.exitCode}</span>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className={styles.terminalBoundary}>
+                <div><SquareTerminal aria-hidden="true" /><span><strong>短时终端</strong><small>将在下一纵向切片加入受审计、限时、按部署授权的会话。</small></span></div>
+                <Button disabled size="small" variant="secondary"><SquareTerminal aria-hidden="true" />暂不可用</Button>
+              </div>
+            </>
+          ) : (
+            <div className={styles.runtimeEmpty}>
+              <Container aria-hidden="true" />
+              <div><strong>正在读取所选部署</strong><span>只请求当前选中资源，不扫描其他租户、主机或容器。</span></div>
+            </div>
+          )}
+        </Card.Body>
+      </Card>
+    </div>
+  );
+}
+
+export function ConsoleContentRenderer({
+  onSelectDeployment = () => {},
+  scene
+}: {
+  onSelectDeployment?(deploymentId: string): void;
+  scene: ConsoleContentScene;
+}) {
   if (scene.kind === "access") return <AccountAccessRenderer />;
   if (scene.kind === "overview") return <OverviewContent scene={scene} />;
   if (scene.kind === "catalog") return <CatalogContent scene={scene} />;
   if (scene.kind === "quotas") return <QuotaContent scene={scene} />;
   if (scene.kind === "installations") return <InstallationContent scene={scene} />;
   if (scene.kind === "hosts") return <HostContent scene={scene} />;
+  if (scene.kind === "deployments") return <DeploymentContent onSelect={onSelectDeployment} scene={scene} />;
   return <RegionContent scene={scene} />;
 }

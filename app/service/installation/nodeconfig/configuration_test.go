@@ -205,3 +205,10 @@ func TestNativeRootRejectsUnitFileReinterpretation(t *testing.T) {
 		}
 	}
 }
+
+func TestDeploymentRuntimePredecessorContractDigestIsFrozen(t *testing.T) {
+	const expected = "sha256:1c07008679db72f2057c17c1fd62cba5ae02f29026d0e44d2b17cf1c5bbf1326"
+	if actual := DeploymentRuntimePredecessorContractDigest(); actual != expected {
+		t.Fatalf("predecessor contract digest = %q", actual)
+	}
+}

@@ -24,6 +24,17 @@ type DeploymentExecutor interface {
 	RollbackDeployment(context.Context, paasv1.DeploymentExecutionRequest) (paasv1.AdapterResult, error)
 }
 
+// DeploymentRuntimeObserver is the read-only, Operation-independent runtime
+// projection boundary. It is kept separate from DeploymentExecutor so a
+// provider effect implementation cannot accidentally make live reads a write
+// or Operation capability.
+type DeploymentRuntimeObserver interface {
+	ObserveDeploymentRuntime(
+		context.Context,
+		paasv1.ObserveDeploymentRuntimeRequest,
+	) (paasv1.DeploymentRuntimeObservation, error)
+}
+
 type Route struct {
 	Name       string
 	Endpoint   string

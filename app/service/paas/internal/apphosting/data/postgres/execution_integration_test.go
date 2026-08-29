@@ -52,6 +52,7 @@ func assertInPlaceReplacementWorkflow(
 	processWorkerOperation(t, ctx, workerFixture.worker)
 	ready, operation := loadWorkerOutcome(t, ctx, admin, fixture.tenantA, deploymentID, created.Operation.ID)
 	assertWorkerOutcome(t, ready, operation, 1, 1, paasv1.DeploymentReady, paasv1.OperationSucceeded)
+	assertDeploymentRuntimeProjection(t, ctx, admin, apiPool, workerPool, fixture, ready)
 	firstTarget := operationPlacementTargetID(t, ctx, admin, fixture.tenantA, created.Operation.ID)
 
 	updated := submitWorkerDeployment(t, ctx, workerFixture.application, applicationlifecycle.SubmitCommand{

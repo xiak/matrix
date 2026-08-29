@@ -403,6 +403,78 @@ type Deployment struct {
 	Status     DeploymentStatus `json:"status"`
 }
 
+// DeploymentList is one bounded tenant-scoped page ordered by stable resource
+// identity. When present, NextAfter is exactly the final returned identity;
+// callers cannot select a target, binding or host.
+type DeploymentList struct {
+	APIVersion string        `json:"apiVersion"`
+	Kind       string        `json:"kind"`
+	Scope      ResourceScope `json:"scope"`
+	Items      []Deployment  `json:"items"`
+	NextAfter  ResourceID    `json:"nextAfter,omitempty"`
+}
+
+const (
+	MaximumDeploymentListItems        = 100
+	MaximumDeploymentRuntimeInstances = 64
+)
+
+// DeploymentRuntimeInstance is deliberately provider neutral. ID is derived
+// by the node from the exact tenant, Deployment generation, application
+// revision, execution target and provider instance; it is not a Docker ID and
+// cannot be used as a provider selector.
+type DeploymentRuntimeInstance struct {
+	ID            ResourceID               `json:"id"`
+	ComponentName string                   `json:"componentName"`
+	State         DeploymentInstanceState  `json:"state"`
+	Health        DeploymentInstanceHealth `json:"health"`
+	ExitCode      *uint32                  `json:"exitCode,omitempty"`
+}
+
+// DeploymentRuntimeObservation is one source-timestamped node proof. The
+// control plane persists it independently of Operations and never restamps it.
+type DeploymentRuntimeObservation struct {
+	DeploymentID          ResourceID                  `json:"deploymentId"`
+	Generation            uint64                      `json:"generation"`
+	ApplicationRevisionID ResourceID                  `json:"applicationRevisionId"`
+	ExecutionTargetID     ResourceID                  `json:"executionTargetId"`
+	Instances             []DeploymentRuntimeInstance `json:"instances"`
+	ObservedAt            time.Time                   `json:"observedAt"`
+}
+
+// DeploymentRuntimeValue adds the control-plane freshness boundary to the
+// immutable node observation.
+type DeploymentRuntimeValue struct {
+	Observation DeploymentRuntimeObservation `json:"observation"`
+	ValidUntil  time.Time                    `json:"validUntil"`
+}
+
+// DeploymentRuntimeSnapshot is the tenant read model. AVAILABLE and STALE
+// retain the exact source value; UNAVAILABLE has no value.
+type DeploymentRuntimeSnapshot struct {
+	APIVersion string                  `json:"apiVersion"`
+	Kind       string                  `json:"kind"`
+	Scope      ResourceScope           `json:"scope"`
+	State      MeasurementState        `json:"state"`
+	Value      *DeploymentRuntimeValue `json:"value,omitempty"`
+}
+
+// Snapshot returns an independent value and projects expiry to STALE without
+// changing source timestamps.
+func (snapshot DeploymentRuntimeSnapshot) Snapshot(now time.Time) DeploymentRuntimeSnapshot {
+	if snapshot.Value == nil {
+		return snapshot
+	}
+	value := *snapshot.Value
+	value.Observation.Instances = slices.Clone(value.Observation.Instances)
+	snapshot.Value = &value
+	if snapshot.State == MeasurementAvailable &&
+		(now.Before(value.Observation.ObservedAt) || !now.Before(value.ValidUntil)) {
+		snapshot.State = MeasurementStale
+	}
+	return snapshot
+}
+
 type CreateDeploymentRequest struct {
 	ID   ResourceID     `json:"id"`
 	Name string         `json:"name"`
@@ -569,6 +641,20 @@ type ObserveDeploymentRequest struct {
 	Command               AdapterCommandEnvelope `json:"command"`
 	Generation            uint64                 `json:"generation"`
 	ExpectedContentDigest string                 `json:"expectedContentDigest"`
+}
+
+// ObserveDeploymentRuntimeRequest is a read-only, Operation-independent node
+// request. The worker resolves every identity from persisted placement state;
+// callers cannot supply a host or binding selector.
+type ObserveDeploymentRuntimeRequest struct {
+	RequestID             CommandID     `json:"requestId"`
+	Scope                 ResourceScope `json:"scope"`
+	DeploymentID          ResourceID    `json:"deploymentId"`
+	Generation            uint64        `json:"generation"`
+	ApplicationRevisionID ResourceID    `json:"applicationRevisionId"`
+	ExecutionTargetID     ResourceID    `json:"executionTargetId"`
+	ExpectedContentDigest string        `json:"expectedContentDigest"`
+	Deadline              time.Time     `json:"deadline"`
 }
 
 type DeploymentEndpointObservation struct {

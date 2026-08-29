@@ -24,6 +24,7 @@ import (
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/createplacement"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/operationqueue"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/reconciledeployment"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/refreshdeploymentruntime"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/refreshexecutionprofile"
 	managedservicepostgres "github.com/xiak/matrix/app/service/paas/internal/managedservice/data/postgres"
 	"github.com/xiak/matrix/app/service/paas/internal/managedservice/domain"
@@ -47,6 +48,11 @@ const (
 	executionTargetRefresh          = time.Minute
 	executionTargetMaximumAge       = 5 * time.Minute
 	executionTargetTimeout          = 5 * time.Second
+	runtimeObservationInterval      = 5 * time.Second
+	runtimeFailureBackoff           = 2 * time.Second
+	runtimeObservationTimeout       = 3 * time.Second
+	runtimeMaximumObservationAge    = 5 * time.Second
+	runtimeValidityDuration         = 15 * time.Second
 	operationLeaseDuration          = 30 * time.Second
 	effectTimeout                   = 20 * time.Second
 	reconcileBackoff                = time.Second
@@ -144,7 +150,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	routes, closeRoutes, err := newDeploymentRoutes(config, catalog, secrets, executor)
+	routes, runtimeRoutes, closeRoutes, err := newDeploymentRoutes(config, catalog, secrets, executor)
 	if err != nil {
 		return err
 	}
@@ -223,6 +229,27 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	runtimeRepository, err := paaspostgres.NewDeploymentRuntimeRepository(pool)
+	if err != nil {
+		return err
+	}
+	runtimeRefresh, err := refreshdeploymentruntime.New(
+		runtimeRepository,
+		runtimeRoutes,
+		refreshdeploymentruntime.Config{
+			ObservationInterval:   runtimeObservationInterval,
+			FailureBackoff:        runtimeFailureBackoff,
+			ObservationTimeout:    runtimeObservationTimeout,
+			MaximumObservationAge: runtimeMaximumObservationAge,
+			ValidityDuration:      runtimeValidityDuration,
+			Clock: func() time.Time {
+				return time.Now().UTC().Truncate(time.Microsecond)
+			},
+		},
+	)
+	if err != nil {
+		return err
+	}
 	readiness := func(readinessContext context.Context) error {
 		state, checkErr := queueRepository.Readiness(readinessContext)
 		if checkErr != nil || state.State != paasv1.ReadinessReady ||
@@ -271,6 +298,7 @@ func run(ctx context.Context) error {
 					return second(cycleContext, workerID)
 				},
 				executionProfile.Refresh,
+				runtimeRefresh.ProcessNext,
 				config.workerID,
 			)
 		},
@@ -326,13 +354,18 @@ func runWorkerLoop(
 	ctx context.Context,
 	processNext func(context.Context, string) (bool, error),
 	refreshExecutionTarget func(context.Context) error,
+	refreshDeploymentRuntime func(context.Context) (bool, error),
 	workerID string,
 ) error {
-	if ctx == nil || processNext == nil || refreshExecutionTarget == nil {
+	if ctx == nil || processNext == nil || refreshExecutionTarget == nil ||
+		refreshDeploymentRuntime == nil {
 		return errors.New("PaaS worker loop configuration is invalid")
 	}
 	nextRefresh := time.Now().Add(executionTargetRefresh)
 	for {
+		if ctx.Err() != nil {
+			return nil
+		}
 		if !time.Now().Before(nextRefresh) {
 			if err := refreshExecutionTarget(ctx); err != nil {
 				if ctx.Err() != nil {
@@ -342,14 +375,21 @@ func runWorkerLoop(
 			}
 			nextRefresh = time.Now().Add(executionTargetRefresh)
 		}
-		processed, err := processNext(ctx, workerID)
+		operationProcessed, err := processNext(ctx, workerID)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
 			return errors.New("PaaS reconciliation cycle failed")
 		}
-		if processed {
+		runtimeProcessed, err := refreshDeploymentRuntime(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return errors.New("PaaS Deployment runtime refresh failed")
+		}
+		if operationProcessed || runtimeProcessed {
 			continue
 		}
 		wait := pollInterval

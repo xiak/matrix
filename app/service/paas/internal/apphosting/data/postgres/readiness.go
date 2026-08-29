@@ -11,6 +11,12 @@ import (
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
 
+// The deployment-runtime objects are an additive expansion of the published
+// PaaS schema-2 compatibility floor. Revision-4 binaries ignore them and keep
+// accepting the same readiness tuple during an exact rollback; this binary
+// separately verifies the new object and function shapes in its migration.
+const paasDatabaseSchemaVersion = 2
+
 func (repository *ApplicationRepository) Readiness(
 	ctx context.Context,
 ) (paasv1.Readiness, error) {
@@ -47,7 +53,7 @@ func readReadiness(
 		return paasv1.Readiness{}, fmt.Errorf("read PaaS readiness: %w", err)
 	}
 	checkedAt = databaseTime(checkedAt)
-	if schemaVersion != 2 || checkedAt.IsZero() ||
+	if schemaVersion != paasDatabaseSchemaVersion || checkedAt.IsZero() ||
 		checkedAt.Location() != time.UTC || checkedAt.Nanosecond()%1_000 != 0 {
 		return paasv1.Readiness{}, errors.New("PaaS readiness state is invalid")
 	}

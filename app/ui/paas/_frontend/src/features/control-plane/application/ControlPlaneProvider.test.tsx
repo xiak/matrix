@@ -5,8 +5,13 @@ import type { IamRepository } from "@/features/auth/repositories/iamRepository";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import type { ControlPlaneSnapshot, ServiceInstallation } from "../domain/resources";
 import type { HostInventory } from "../domain/hosts";
+import type {
+  DeploymentInventory,
+  DeploymentRuntimeSnapshot
+} from "../domain/deployments";
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
 import type { HostInventoryRepository } from "../repositories/hostInventoryRepository";
+import type { DeploymentInventoryRepository } from "../repositories/deploymentInventoryRepository";
 import { ControlPlaneProvider, useControlPlane } from "./ControlPlaneProvider";
 
 const pendingInstallation: ServiceInstallation = {
@@ -61,6 +66,58 @@ function hostInventory(name = "node-a"): HostInventory {
   };
 }
 
+function deploymentInventory(): DeploymentInventory {
+  return {
+    tenantId: "organization-test",
+    nextAfter: null,
+    items: ["alpha", "beta"].map((suffix) => ({
+      id: `deployment-${suffix}`,
+      name: `deployment-${suffix}`,
+      tenantId: "organization-test",
+      resourceVersion: 1,
+      generation: 1,
+      applicationRevisionId: `revision-${suffix}`,
+      placementPolicyId: "placement-policy-default",
+      desiredState: "RUNNING",
+      components: [{ name: "database", replicas: 1 }],
+      phase: "READY",
+      observedGeneration: 1,
+      placementDecisionId: `decision-${suffix}`,
+      currentOperationId: null,
+      observedApplicationRevisionId: `revision-${suffix}`,
+      readyComponents: 1,
+      observedAt: "2026-08-30T08:00:00Z",
+      createdAt: "2026-08-30T07:00:00Z",
+      updatedAt: "2026-08-30T08:00:00Z"
+    }))
+  };
+}
+
+function deploymentRuntime(deploymentId = "deployment-alpha", targetId = "node-a"): DeploymentRuntimeSnapshot {
+  const suffix = deploymentId.replace("deployment-", "");
+  return {
+    tenantId: "organization-test",
+    state: "AVAILABLE",
+    value: {
+      deploymentId,
+      generation: 1,
+      applicationRevisionId: `revision-${suffix}`,
+      executionTargetId: targetId,
+      instances: [{
+        id: suffix === "alpha"
+          ? "instance-0123456789abcdef0123456789abcdef"
+          : "instance-fedcba9876543210fedcba9876543210",
+        componentName: "database",
+        state: "RUNNING",
+        health: "HEALTHY",
+        exitCode: null
+      }],
+      observedAt: "2026-08-30T08:00:00Z",
+      validUntil: "2026-08-30T08:00:15Z"
+    }
+  };
+}
+
 function snapshot(installation: ServiceInstallation, consumedCount: number): ControlPlaneSnapshot {
   return {
     offerings: [{
@@ -110,6 +167,12 @@ function Probe() {
   const host = controlPlane.scene?.content.kind === "hosts"
     ? controlPlane.scene.content.hosts[0]
     : null;
+  const deployment = controlPlane.scene?.content.kind === "deployments"
+    ? controlPlane.scene.content.deployments.find((item) => item.selected)
+    : null;
+  const runtime = controlPlane.scene?.content.kind === "deployments"
+    ? controlPlane.scene.content.runtime
+    : null;
   return (
     <div>
       <button onClick={() => void session.login("admin", "password")} type="button">login</button>
@@ -117,9 +180,12 @@ function Probe() {
       <button onClick={() => void controlPlane.createInstallation({ id: "postgres-next", name: "Next database", offeringId: "postgresql-18", quotaEntitlementId: "quota-primary", regionId: "local-primary" })} type="button">create installation</button>
       <button onClick={() => void controlPlane.reload()} type="button">reload</button>
       <button onClick={() => void session.logout()} type="button">logout</button>
+      <button onClick={() => controlPlane.selectDeployment("deployment-beta")} type="button">select beta</button>
       <span data-testid="phase">{installation?.phase ?? "none"}</span>
       <span data-testid="host">{host?.name ?? "none"}</span>
       <span data-testid="section">{controlPlane.scene?.section ?? "none"}</span>
+      <span data-testid="deployment">{deployment?.id ?? "none"}</span>
+      <span data-testid="runtime-target">{runtime?.executionTargetId ?? "none"}</span>
       <span role="status">{controlPlane.error}</span>
     </div>
   );
@@ -384,6 +450,160 @@ describe("ControlPlaneProvider", () => {
     const screen = render(
       <SessionProvider repository={iamRepository()}>
         <ControlPlaneProvider hostRepository={hosts} selection={{ section: "hosts" }}>
+          <Probe />
+        </ControlPlaneProvider>
+      </SessionProvider>
+    );
+    await act(async () => { fireEvent.click(screen.getByText("login")); });
+    expect(signal?.aborted).toBe(false);
+    await act(async () => { fireEvent.click(screen.getByText("logout")); });
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it("polls only the selected deployment and aborts its prior read when selection changes", async () => {
+    vi.useFakeTimers();
+    let secondAlphaSignal: AbortSignal | undefined;
+    const deployments: DeploymentInventoryRepository = {
+      load: vi.fn().mockResolvedValue(deploymentInventory()),
+      loadRuntime: vi.fn()
+        .mockResolvedValueOnce(deploymentRuntime())
+        .mockImplementationOnce((_credential, _tenant, _deployment, signal) => {
+          secondAlphaSignal = signal;
+          return new Promise<DeploymentRuntimeSnapshot>(() => {});
+        })
+        .mockResolvedValueOnce(deploymentRuntime("deployment-beta", "node-b"))
+    };
+    const screen = render(
+      <SessionProvider repository={iamRepository()}>
+        <ControlPlaneProvider deploymentRepository={deployments} selection={{ section: "deployments" }}>
+          <Probe />
+        </ControlPlaneProvider>
+      </SessionProvider>
+    );
+    await act(async () => { fireEvent.click(screen.getByText("login")); });
+    expect(screen.getByTestId("deployment").textContent).toBe("deployment-alpha");
+    expect(screen.getByTestId("runtime-target").textContent).toBe("node-a");
+    expect(deployments.loadRuntime).toHaveBeenNthCalledWith(
+      1, "memory-only-session", "organization-test", "deployment-alpha", expect.any(AbortSignal)
+    );
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(secondAlphaSignal?.aborted).toBe(false);
+    await act(async () => { fireEvent.click(screen.getByText("select beta")); });
+
+    expect(secondAlphaSignal?.aborted).toBe(true);
+    expect(screen.getByTestId("deployment").textContent).toBe("deployment-beta");
+    expect(screen.getByTestId("runtime-target").textContent).toBe("node-b");
+    expect(deployments.loadRuntime).toHaveBeenNthCalledWith(
+      3, "memory-only-session", "organization-test", "deployment-beta", expect.any(AbortSignal)
+    );
+  });
+
+  it("retains the selected source proof across a transient runtime failure and stops after authorization denial", async () => {
+    vi.useFakeTimers();
+    const deployments: DeploymentInventoryRepository = {
+      load: vi.fn().mockResolvedValue(deploymentInventory()),
+      loadRuntime: vi.fn()
+        .mockResolvedValueOnce(deploymentRuntime())
+        .mockRejectedValueOnce(new HttpProblem(503, "PRIVATE_NODE_DETAIL"))
+        .mockRejectedValueOnce(new HttpProblem(403, "PRIVATE_AUTHORITY_DETAIL"))
+    };
+    const screen = render(
+      <SessionProvider repository={iamRepository()}>
+        <ControlPlaneProvider deploymentRepository={deployments} selection={{ section: "deployments" }}>
+          <Probe />
+        </ControlPlaneProvider>
+      </SessionProvider>
+    );
+    await act(async () => { fireEvent.click(screen.getByText("login")); });
+    expect(screen.getByTestId("runtime-target").textContent).toBe("node-a");
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(screen.getByTestId("runtime-target").textContent).toBe("node-a");
+    expect(screen.getByRole("status").textContent).toContain("保持原时间");
+    expect(screen.container.textContent).not.toContain("PRIVATE_NODE_DETAIL");
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(screen.getByTestId("runtime-target").textContent).toBe("none");
+    expect(screen.getByRole("status").textContent).toContain("没有租户部署查看权限");
+    expect(screen.container.textContent).not.toContain("PRIVATE_AUTHORITY_DETAIL");
+    await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+    expect(deployments.loadRuntime).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not let a successful runtime poll hide a Deployment inventory refresh failure", async () => {
+    vi.useFakeTimers();
+    const deployments: DeploymentInventoryRepository = {
+      load: vi.fn()
+        .mockResolvedValueOnce(deploymentInventory())
+        .mockRejectedValueOnce(new HttpProblem(503, "PRIVATE_INVENTORY_DETAIL")),
+      loadRuntime: vi.fn().mockResolvedValue(deploymentRuntime())
+    };
+    const screen = render(
+      <SessionProvider repository={iamRepository()}>
+        <ControlPlaneProvider deploymentRepository={deployments} selection={{ section: "deployments" }}>
+          <Probe />
+        </ControlPlaneProvider>
+      </SessionProvider>
+    );
+    await act(async () => { fireEvent.click(screen.getByText("login")); });
+    expect(screen.getByTestId("runtime-target").textContent).toBe("node-a");
+
+    await act(async () => { fireEvent.click(screen.getByText("reload")); });
+
+    expect(screen.getByTestId("runtime-target").textContent).toBe("node-a");
+    expect(screen.getByRole("status").textContent).toContain("保持原时间");
+    expect(screen.container.textContent).not.toContain("PRIVATE_INVENTORY_DETAIL");
+  });
+
+  it("aborts an in-flight deployment runtime read when navigation leaves the section", async () => {
+    let signal: AbortSignal | undefined;
+    const deployments: DeploymentInventoryRepository = {
+      load: vi.fn().mockResolvedValue(deploymentInventory()),
+      loadRuntime: vi.fn((_credential, _tenant, _deployment, currentSignal) => {
+        signal = currentSignal;
+        return new Promise<DeploymentRuntimeSnapshot>(() => {});
+      })
+    };
+    const managed: ControlPlaneRepository = {
+      load: vi.fn().mockResolvedValue(snapshot(readyInstallation, 1)),
+      getInstallation: vi.fn(), activateQuota: vi.fn(), createInstallation: vi.fn()
+    };
+    const view = render(
+      <SessionProvider repository={iamRepository()}>
+        <ControlPlaneProvider deploymentRepository={deployments} repository={managed} selection={{ section: "deployments" }}>
+          <Probe />
+        </ControlPlaneProvider>
+      </SessionProvider>
+    );
+    await act(async () => { fireEvent.click(view.getByText("login")); });
+    expect(signal?.aborted).toBe(false);
+    await act(async () => {
+      view.rerender(
+        <SessionProvider repository={iamRepository()}>
+          <ControlPlaneProvider deploymentRepository={deployments} repository={managed} selection={{ section: "regions" }}>
+            <Probe />
+          </ControlPlaneProvider>
+        </SessionProvider>
+      );
+      await Promise.resolve();
+    });
+    expect(signal?.aborted).toBe(true);
+    expect(view.getByTestId("section").textContent).toBe("regions");
+  });
+
+  it("aborts an in-flight deployment runtime read when the user logs out", async () => {
+    let signal: AbortSignal | undefined;
+    const deployments: DeploymentInventoryRepository = {
+      load: vi.fn().mockResolvedValue(deploymentInventory()),
+      loadRuntime: vi.fn((_credential, _tenant, _deployment, currentSignal) => {
+        signal = currentSignal;
+        return new Promise<DeploymentRuntimeSnapshot>(() => {});
+      })
+    };
+    const screen = render(
+      <SessionProvider repository={iamRepository()}>
+        <ControlPlaneProvider deploymentRepository={deployments} selection={{ section: "deployments" }}>
           <Probe />
         </ControlPlaneProvider>
       </SessionProvider>

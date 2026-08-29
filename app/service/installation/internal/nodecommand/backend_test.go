@@ -350,6 +350,58 @@ func TestNodeReleasePlanRejectsDifferentRuntimeAndCredentialAuthority(t *testing
 	}
 }
 
+func TestNodeReleasePlanAdmitsOnlyTheDeploymentRuntimePredecessorAsInstalledState(t *testing.T) {
+	fixtures, err := releasetest.WriteNodeRuntimeSequence(
+		t.TempDir(),
+		nodeconfig.DeploymentRuntimePredecessorRevision,
+		nodeconfig.RuntimeRevision,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, _ := nodeRequest(t, fixtures[1])
+	configuration, material, err := enrollment(request.Root, request.Configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer material.Clear()
+	trustBytes, trust, err := release.ReadTrustRootFile(request.TrustKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	predecessorBundle, err := release.VerifyDirectory(fixtures[0].Root, trustBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentBundle, err := release.VerifyDirectory(fixtures[1].Root, trustBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ValidateRelease(predecessorBundle) == nil || ValidateInstalledRelease(predecessorBundle) != nil ||
+		ValidateRelease(currentBundle) != nil || ValidateInstalledRelease(currentBundle) != nil {
+		t.Fatal("node target and installed profile boundaries are not exact")
+	}
+	binding, err := Binding(configuration, material)
+	if err != nil {
+		t.Fatal(err)
+	}
+	predecessor := Plan{
+		Root: request.Root, Bundle: predecessorBundle, Configuration: configuration,
+		Credentials: material, Trust: trust, TrustBytes: trustBytes, Binding: binding,
+	}
+	current := predecessor
+	current.Bundle, current.ReleaseSource = currentBundle, &predecessor
+	if err := ValidatePlan(current); err != nil {
+		t.Fatalf("forward node runtime plan: %v", err)
+	}
+	rollback := predecessor
+	rollback.ReleaseSource = &current
+	current.ReleaseSource = nil
+	if err := ValidatePlan(rollback); err != nil {
+		t.Fatalf("rollback node runtime plan: %v", err)
+	}
+}
+
 func TestNodeStartResumesOnlyConfiguredInstallWithoutNewEnrollment(t *testing.T) {
 	for _, phase := range []lifecycle.Phase{lifecycle.PhasePreflight, lifecycle.PhaseStaging,
 		lifecycle.PhaseConfiguring, lifecycle.PhaseStarting, lifecycle.PhaseVerifying, lifecycle.PhaseCommitting} {

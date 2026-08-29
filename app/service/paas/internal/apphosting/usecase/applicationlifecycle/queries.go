@@ -63,6 +63,82 @@ func (usecase *Usecase) GetDeployment(
 	})
 }
 
+func (usecase *Usecase) ListDeployments(
+	ctx context.Context,
+	authorization port.Authorization,
+	after paasv1.ResourceID,
+) (paasv1.DeploymentList, error) {
+	if usecase == nil || usecase.repository == nil {
+		return paasv1.DeploymentList{}, errors.New("application lifecycle use case is nil")
+	}
+	if ctx == nil {
+		return paasv1.DeploymentList{}, errors.New("application lifecycle context is nil")
+	}
+	if err := port.ValidateAuthorization(authorization); err != nil {
+		return paasv1.DeploymentList{}, err
+	}
+	if after != "" && paasv1.ValidateID("after", string(after)) != nil {
+		return paasv1.DeploymentList{}, ErrInvalidArgument
+	}
+	var result paasv1.DeploymentList
+	var transactionErr error
+	for attempt := 0; attempt < usecase.config.MaxTransactionAttempts; attempt++ {
+		result = paasv1.DeploymentList{}
+		transactionErr = usecase.repository.WithinTransaction(
+			ctx,
+			authorization.TenantID,
+			func(transactionContext context.Context, transaction Transaction) error {
+				items, nextAfter, err := transaction.ListDeployments(
+					transactionContext,
+					after,
+					paasv1.MaximumDeploymentListItems,
+				)
+				if err != nil {
+					return err
+				}
+				result = paasv1.DeploymentList{
+					APIVersion: paasv1.APIVersion,
+					Kind:       "DeploymentList",
+					Scope: paasv1.ResourceScope{
+						Kind: paasv1.AuthorityTenant, TenantID: authorization.TenantID,
+					},
+					Items: items, NextAfter: nextAfter,
+				}
+				if paasv1.ValidateDeploymentList(result) != nil {
+					return errors.New("stored Deployment list is invalid")
+				}
+				return nil
+			},
+		)
+		if transactionErr == nil {
+			return result, nil
+		}
+		if !errors.Is(transactionErr, ErrRetryableTransaction) {
+			return paasv1.DeploymentList{}, transactionErr
+		}
+		if err := ctx.Err(); err != nil {
+			return paasv1.DeploymentList{}, err
+		}
+	}
+	return paasv1.DeploymentList{}, fmt.Errorf(
+		"application lifecycle read attempts exhausted: %w",
+		transactionErr,
+	)
+}
+
+func (usecase *Usecase) GetDeploymentRuntime(
+	ctx context.Context,
+	authorization port.Authorization,
+	id paasv1.ResourceID,
+) (paasv1.DeploymentRuntimeSnapshot, error) {
+	return readResource(ctx, usecase, authorization, func(
+		ctx context.Context,
+		transaction Transaction,
+	) (paasv1.DeploymentRuntimeSnapshot, bool, error) {
+		return transaction.LoadDeploymentRuntime(ctx, id)
+	})
+}
+
 func (usecase *Usecase) GetDeploymentGeneration(
 	ctx context.Context,
 	authorization port.Authorization,

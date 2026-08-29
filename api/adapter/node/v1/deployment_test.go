@@ -118,6 +118,49 @@ func TestDeploymentProtocolSeparatesEffectsFromObservation(t *testing.T) {
 	}
 }
 
+func TestDeploymentRuntimeProtocolIsOperationIndependentAndTargetBound(t *testing.T) {
+	effect := deploymentEffectFixture(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	request := DeploymentRuntimeObservationRequest{
+		APIVersion: APIVersion,
+		Kind:       DeploymentRuntimeObservationRequestKind,
+		Identity:   effect.Identity,
+		BindingRef: effect.Execution.Command.BindingRef,
+		Request: paasv1.ObserveDeploymentRuntimeRequest{
+			RequestID:             "runtime-observe-a",
+			Scope:                 effect.Execution.Command.Scope,
+			DeploymentID:          effect.Execution.Generation.DeploymentID,
+			Generation:            effect.Execution.Generation.Generation,
+			ApplicationRevisionID: effect.Execution.ApplicationRevision.Metadata.ID,
+			ExecutionTargetID:     effect.Identity.ExecutionTargetID,
+			ExpectedContentDigest: effect.Execution.Generation.ContentDigest,
+			Deadline:              now.Add(15 * time.Second),
+		},
+	}
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeDeploymentRuntimeObservationRequest(bytes.NewReader(encoded))
+	if err != nil || decoded.Request.RequestID != request.Request.RequestID {
+		t.Fatalf("runtime request round trip = %#v / %v", decoded, err)
+	}
+	request.Identity.ExecutionTargetID = "target-b"
+	if ValidateDeploymentRuntimeObservationRequest(request) == nil {
+		t.Fatal("runtime request crossed its authenticated node identity")
+	}
+	request = decoded
+	request.BindingRef = ""
+	if ValidateDeploymentRuntimeObservationRequest(request) == nil {
+		t.Fatal("runtime request omitted its sealed node binding")
+	}
+	request = decoded
+	request.Request.Scope = paasv1.ResourceScope{Kind: paasv1.AuthorityPlatform}
+	if ValidateDeploymentRuntimeObservationRequest(request) == nil {
+		t.Fatal("runtime request accepted platform scope")
+	}
+}
+
 func TestDeploymentMaterialsClearSecretBytes(t *testing.T) {
 	secret := []byte("must-be-cleared")
 	materials := DeploymentMaterials{Secrets: []SecretMaterial{{Value: secret}}}

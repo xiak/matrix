@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"mime"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -48,6 +49,8 @@ type Workflow interface {
 	GetConfigurationRevision(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.ConfigurationRevision, error)
 	GetApplicationRevision(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.ApplicationRevision, error)
 	GetDeployment(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.Deployment, error)
+	ListDeployments(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.DeploymentList, error)
+	GetDeploymentRuntime(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.DeploymentRuntimeSnapshot, error)
 	GetDeploymentGeneration(context.Context, port.Authorization, paasv1.ResourceID, uint64) (paasv1.DeploymentGeneration, error)
 	GetOperation(context.Context, port.Authorization, paasv1.OperationID) (paasv1.Operation, error)
 }
@@ -117,7 +120,9 @@ func NewHandler(
 	routes.HandleFunc("POST /v1/application-revisions", value.createApplicationRevision)
 	routes.HandleFunc("GET /v1/application-revisions/{applicationRevisionId}", value.getApplicationRevision)
 	routes.HandleFunc("POST /v1/deployments", value.createDeployment)
+	routes.HandleFunc("GET /v1/deployments", value.listDeployments)
 	routes.HandleFunc("GET /v1/deployments/{deploymentId}", value.getDeployment)
+	routes.HandleFunc("GET /v1/deployments/{deploymentId}/runtime", value.getDeploymentRuntime)
 	routes.HandleFunc("PUT /v1/deployments/{deploymentId}", value.updateDeployment)
 	routes.HandleFunc("POST /v1/deployments/{deploymentId}/rollback", value.rollbackDeployment)
 	routes.HandleFunc("GET /v1/deployments/{deploymentId}/generations/{generation}", value.getDeploymentGeneration)
@@ -403,6 +408,79 @@ func (value *handler) getDeployment(response http.ResponseWriter, request *http.
 	}
 	resource, err := value.workflow.GetDeployment(request.Context(), authorization, id)
 	writeResource(response, requestID, resource, resourceVersionETag(resource.Metadata.ResourceVersion), err)
+}
+
+func (value *handler) listDeployments(response http.ResponseWriter, request *http.Request) {
+	requestID, ok := value.beginRequest(response)
+	if !ok {
+		return
+	}
+	if request.ContentLength > 0 || len(request.TransferEncoding) > 0 {
+		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "Deployment list accepts no body", false)
+		return
+	}
+	if request.URL.ForceQuery {
+		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "Deployment list query is invalid", false)
+		return
+	}
+	query, queryErr := url.ParseQuery(request.URL.RawQuery)
+	if queryErr != nil || len(query) > 1 {
+		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "Deployment list query is invalid", false)
+		return
+	}
+	var after paasv1.ResourceID
+	if values, present := query["after"]; present {
+		if len(values) != 1 || values[0] == "" || paasv1.ValidateID("after", values[0]) != nil {
+			writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "Deployment list cursor is invalid", false)
+			return
+		}
+		after = paasv1.ResourceID(values[0])
+	} else if len(query) != 0 {
+		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "Deployment list query is invalid", false)
+		return
+	}
+	authorization, ok := value.authorizeRequest(
+		response,
+		request,
+		requestID,
+		port.AuthorizeDeploymentRead,
+		"Deployment",
+		"collection",
+	)
+	if !ok {
+		return
+	}
+	resources, err := value.workflow.ListDeployments(request.Context(), authorization, after)
+	writeResource(response, requestID, resources, "", err)
+}
+
+func (value *handler) getDeploymentRuntime(response http.ResponseWriter, request *http.Request) {
+	requestID, ok := value.beginRequest(response)
+	if !ok {
+		return
+	}
+	if request.URL.RawQuery != "" || request.URL.ForceQuery ||
+		request.ContentLength > 0 || len(request.TransferEncoding) > 0 {
+		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "Deployment runtime accepts no selector or body", false)
+		return
+	}
+	id, ok := pathResourceID(response, request, "deploymentId")
+	if !ok {
+		return
+	}
+	authorization, ok := value.authorizeRequest(
+		response,
+		request,
+		requestID,
+		port.AuthorizeDeploymentRead,
+		"Deployment",
+		id,
+	)
+	if !ok {
+		return
+	}
+	resource, err := value.workflow.GetDeploymentRuntime(request.Context(), authorization, id)
+	writeResource(response, requestID, resource, "", err)
 }
 
 func (value *handler) getDeploymentGeneration(response http.ResponseWriter, request *http.Request) {

@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { ControlPlaneSnapshot } from "../domain/resources";
 import type { HostInventory } from "../domain/hosts";
-import { buildConsoleScene, buildHostConsoleScene } from "./buildConsoleScene";
+import type { DeploymentInventory, DeploymentRuntimeSnapshot } from "../domain/deployments";
+import {
+  buildConsoleScene,
+  buildDeploymentConsoleScene,
+  buildHostConsoleScene
+} from "./buildConsoleScene";
 
 const snapshot: ControlPlaneSnapshot = {
   offerings: [{
@@ -93,14 +98,60 @@ const hosts: HostInventory = {
   }]
 };
 
+const deployments: DeploymentInventory = {
+  tenantId: "tenant-alpha",
+  nextAfter: "deployment-next",
+  items: [{
+    id: "deployment-alpha",
+    name: "database-alpha",
+    tenantId: "tenant-alpha",
+    resourceVersion: 4,
+    generation: 2,
+    applicationRevisionId: "revision-alpha-v2",
+    placementPolicyId: "placement-policy-default",
+    desiredState: "RUNNING",
+    components: [{ name: "database", replicas: 1 }],
+    phase: "READY",
+    observedGeneration: 2,
+    placementDecisionId: "decision-alpha",
+    currentOperationId: null,
+    observedApplicationRevisionId: "revision-alpha-v2",
+    readyComponents: 1,
+    observedAt: "2026-08-30T08:01:00Z",
+    createdAt: "2026-08-30T07:00:00Z",
+    updatedAt: "2026-08-30T08:01:00Z"
+  }]
+};
+
+const runtime: DeploymentRuntimeSnapshot = {
+  tenantId: "tenant-alpha",
+  state: "STALE",
+  value: {
+    deploymentId: "deployment-alpha",
+    generation: 2,
+    applicationRevisionId: "revision-alpha-v2",
+    executionTargetId: "node-a",
+    instances: [{
+      id: "instance-0123456789abcdef0123456789abcdef",
+      componentName: "database",
+      state: "RUNNING",
+      health: "HEALTHY",
+      exitCode: null
+    }],
+    observedAt: "2026-08-30T08:01:00Z",
+    validUntil: "2026-08-30T08:01:15Z"
+  }
+};
+
 describe("buildConsoleScene", () => {
   it("projects real resources into the complete console shell", () => {
     const scene = buildConsoleScene("overview", snapshot);
-    expect(scene.rail.map((item) => item.label)).toEqual(["控制面概览", "托管数据库", "基础设施", "访问管理"]);
+    expect(scene.rail.map((item) => item.label)).toEqual(["控制面概览", "托管数据库", "应用托管", "基础设施", "访问管理"]);
     expect(scene.navigation.map((item) => item.id)).toEqual([
       "catalog",
       "quotas",
       "installations",
+      "deployments",
       "regions",
       "hosts",
       "access"
@@ -147,6 +198,28 @@ describe("buildConsoleScene", () => {
         memory: { progress: 25, state: "AVAILABLE" },
         filesystems: [{ mountPoint: "/", progress: 20 }]
       }]
+    });
+  });
+
+  it("projects only the selected deployment runtime and preserves stale source proof", () => {
+    const scene = buildDeploymentConsoleScene(deployments, "deployment-alpha", runtime);
+    expect(scene.section).toBe("deployments");
+    expect(scene.rail.find((item) => item.id === "workloads")?.selected).toBe(true);
+    expect(scene.content).toMatchObject({
+      kind: "deployments",
+      selectedDeploymentId: "deployment-alpha",
+      truncated: true,
+      deployments: [{ id: "deployment-alpha", selected: true, readiness: "1/1 组件就绪" }],
+      runtime: {
+        state: "STALE",
+        stateLabel: "采样已过期",
+        executionTargetId: "node-a",
+        instances: [{
+          id: "instance-0123456789abcdef0123456789abcdef",
+          stateLabel: "运行中",
+          healthLabel: "健康"
+        }]
+      }
     });
   });
 });

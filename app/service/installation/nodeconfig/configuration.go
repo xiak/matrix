@@ -26,12 +26,16 @@ const (
 	ConfigurationKind = "NodeConfiguration"
 	EnrollmentKind    = "NodeEnrollment"
 	MaximumBytes      = 64 * 1024
-	RuntimeRevision   = 4
-	MinimumSystemd    = 249
-	MinimumDocker     = "27.5.1"
-	MinimumCompose    = "2.33.0"
-	CollectorVersion  = "1.12.1"
-	NativeRootSyntax  = "absolute-posix-without-unit-syntax/v1"
+	RuntimeRevision   = 5
+	// DeploymentRuntimePredecessorRevision is the one installed node runtime
+	// whose provider-neutral contract remains a supported rollback source.
+	DeploymentRuntimePredecessorRevision = 4
+	deploymentRuntimePredecessorDigest   = "sha256:1c07008679db72f2057c17c1fd62cba5ae02f29026d0e44d2b17cf1c5bbf1326"
+	MinimumSystemd                       = 249
+	MinimumDocker                        = "27.5.1"
+	MinimumCompose                       = "2.33.0"
+	CollectorVersion                     = "1.12.1"
+	NativeRootSyntax                     = "absolute-posix-without-unit-syntax/v1"
 )
 
 // ServicePolicy is the fixed native supervision contract, not operator input.
@@ -118,6 +122,16 @@ func ValidateNativeRoot(value string) error {
 }
 
 func ContractDigest() string {
+	return contractDigest()
+}
+
+func DeploymentRuntimePredecessorContractDigest() string {
+	// This is the topology digest from the fixed runtime-4 release, not a
+	// reconstruction using mutable current policy constants.
+	return deploymentRuntimePredecessorDigest
+}
+
+func contractDigest() string {
 	value := struct {
 		Protocol         string        `json:"protocol"`
 		Revision         uint64        `json:"revision"`

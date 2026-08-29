@@ -36,13 +36,14 @@ type DeploymentConfig struct {
 // DeploymentClient is an exact target-bound DeploymentExecutor. It has no
 // target selector and never falls back to local execution or another node.
 type DeploymentClient struct {
-	effectEndpoint      string
-	observationEndpoint string
-	identity            nodev1.Identity
-	bindingRef          string
-	artifacts           DeploymentArtifactResolver
-	secrets             DeploymentSecretResolver
-	http                *http.Client
+	effectEndpoint             string
+	observationEndpoint        string
+	runtimeObservationEndpoint string
+	identity                   nodev1.Identity
+	bindingRef                 string
+	artifacts                  DeploymentArtifactResolver
+	secrets                    DeploymentSecretResolver
+	http                       *http.Client
 }
 
 func NewDeploymentClient(config DeploymentConfig) (*DeploymentClient, error) {
@@ -58,9 +59,10 @@ func NewDeploymentClient(config DeploymentConfig) (*DeploymentClient, error) {
 		return nil, err
 	}
 	return &DeploymentClient{
-		effectEndpoint:      endpoint + nodev1.DeploymentEffectPath,
-		observationEndpoint: endpoint + nodev1.DeploymentObservationPath,
-		identity:            config.Connection.Identity, bindingRef: config.Connection.BindingRef,
+		effectEndpoint:             endpoint + nodev1.DeploymentEffectPath,
+		observationEndpoint:        endpoint + nodev1.DeploymentObservationPath,
+		runtimeObservationEndpoint: endpoint + nodev1.DeploymentRuntimeObservationPath,
+		identity:                   config.Connection.Identity, bindingRef: config.Connection.BindingRef,
 		artifacts: config.Artifacts, secrets: config.Secrets, http: connection,
 	}, nil
 }
@@ -263,6 +265,84 @@ func (client *DeploymentClient) ObserveDeployment(
 		decoded.Observation.DeploymentID != request.Command.DeploymentID ||
 		decoded.Observation.Generation != request.Generation ||
 		decoded.Observation.ApplicationRevisionID != request.Command.ApplicationRevisionID ||
+		decoded.Observation.ObservedAt.After(time.Now().Add(2*time.Second)) {
+		return empty, rejectedDeploymentObservation()
+	}
+	return decoded.Observation, nil
+}
+
+func (client *DeploymentClient) ObserveDeploymentRuntime(
+	ctx context.Context,
+	request paasv1.ObserveDeploymentRuntimeRequest,
+) (paasv1.DeploymentRuntimeObservation, error) {
+	empty := paasv1.DeploymentRuntimeObservation{}
+	if client == nil || client.http == nil || ctx == nil ||
+		paasv1.ValidateObserveDeploymentRuntimeRequest(request) != nil ||
+		request.ExecutionTargetID != client.identity.ExecutionTargetID ||
+		request.Deadline.Sub(time.Now()) > nodev1.MaximumDeploymentDuration {
+		return empty, invalidRemoteDeployment()
+	}
+	if err := ctx.Err(); err != nil || !time.Now().Before(request.Deadline) {
+		return empty, deploymentFault(
+			paasv1.AdapterErrorTimeout,
+			paasv1.ErrorDeadlineExceeded,
+			"Remote Deployment runtime observation exceeded its deadline before dispatch.",
+			true,
+		)
+	}
+	value := nodev1.DeploymentRuntimeObservationRequest{
+		APIVersion: nodev1.APIVersion,
+		Kind:       nodev1.DeploymentRuntimeObservationRequestKind,
+		Identity:   client.identity,
+		BindingRef: client.bindingRef,
+		Request:    request,
+	}
+	if nodev1.ValidateDeploymentRuntimeObservationRequest(value) != nil {
+		return empty, invalidRemoteDeployment()
+	}
+	body, err := json.Marshal(value)
+	if err != nil || len(body) > nodev1.MaximumDeploymentRuntimeRequestBytes {
+		return empty, invalidRemoteDeployment()
+	}
+	operationContext, cancel := context.WithDeadline(ctx, request.Deadline)
+	defer cancel()
+	httpRequest, err := http.NewRequestWithContext(
+		operationContext,
+		http.MethodPost,
+		client.runtimeObservationEndpoint,
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return empty, invalidRemoteDeployment()
+	}
+	httpRequest.Header.Set("Content-Type", "application/json")
+	httpRequest.Header.Set("Accept", "application/json")
+	response, err := client.http.Do(httpRequest)
+	if err != nil {
+		if errors.Is(operationContext.Err(), context.DeadlineExceeded) {
+			return empty, deploymentFault(
+				paasv1.AdapterErrorTimeout,
+				paasv1.ErrorDeadlineExceeded,
+				"Remote Deployment runtime observation exceeded its deadline.",
+				true,
+			)
+		}
+		return empty, unavailableDeploymentObservation()
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return empty, deploymentObservationStatusFault(response.StatusCode)
+	}
+	if response.Header.Get("Content-Type") != "application/json" ||
+		response.Header.Get("Content-Encoding") != "" {
+		return empty, rejectedDeploymentObservation()
+	}
+	decoded, err := nodev1.DecodeDeploymentRuntimeObservationResponse(response.Body)
+	if err != nil || decoded.Identity != client.identity || decoded.RequestID != request.RequestID ||
+		decoded.Observation.DeploymentID != request.DeploymentID ||
+		decoded.Observation.Generation != request.Generation ||
+		decoded.Observation.ApplicationRevisionID != request.ApplicationRevisionID ||
+		decoded.Observation.ExecutionTargetID != request.ExecutionTargetID ||
 		decoded.Observation.ObservedAt.After(time.Now().Add(2*time.Second)) {
 		return empty, rejectedDeploymentObservation()
 	}

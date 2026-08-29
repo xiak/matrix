@@ -270,6 +270,20 @@ func ValidateDatabaseProfile(value DatabaseProfile) error {
 	return nil
 }
 
+// ValidateDatabaseUpgradePath admits equal profiles and the one retained-data
+// expansion whose predecessor can safely ignore the added PaaS objects. It is
+// deliberately not a numeric or monotonic-version compatibility rule.
+func ValidateDatabaseUpgradePath(source, target DatabaseProfile) error {
+	if ValidateDatabaseProfile(source) != nil || ValidateDatabaseProfile(target) != nil {
+		return errors.New("release database upgrade path is invalid")
+	}
+	if source == target ||
+		(source == deploymentRuntimePredecessorProfile() && target == CurrentDatabaseProfile()) {
+		return nil
+	}
+	return errors.New("release database upgrade path is unsupported")
+}
+
 func validateFiles(files []File, node bool) error {
 	minimum := 7
 	if node {

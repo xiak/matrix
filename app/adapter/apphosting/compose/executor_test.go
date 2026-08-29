@@ -130,6 +130,18 @@ func TestExecutorRunsRetrySafeApplyRollbackObserveAndStop(t *testing.T) {
 		len(observation.Endpoints) != 2 {
 		t.Fatalf("ready observation = %#v", observation)
 	}
+	runtimeObservation, err := executor.ObserveDeploymentRuntime(
+		context.Background(), runtimeObserveRequest(request, now.Add(3*time.Minute)),
+	)
+	if err != nil || len(runtimeObservation.Instances) != len(runtime.containers) ||
+		runtimeObservation.ExecutionTargetID != request.Command.ExecutionTargetID {
+		t.Fatalf("runtime observation/error = %#v / %v", runtimeObservation, err)
+	}
+	encodedRuntime, err := json.Marshal(runtimeObservation)
+	if err != nil || strings.Contains(string(encodedRuntime), runtime.containers[0].ID) ||
+		!strings.HasPrefix(string(runtimeObservation.Instances[0].ID), "instance-") {
+		t.Fatalf("runtime observation exposed provider identity: %s / %v", encodedRuntime, err)
+	}
 
 	conflict := cloneCompileRequest(t, request)
 	conflict.Generation.Spec.Components[0].Replicas++
@@ -493,6 +505,40 @@ func observeRequest(
 	}
 	request.Command.RequestDigest = paasv1.ObserveDeploymentRequestDigest(request)
 	return request
+}
+
+func runtimeObserveRequest(
+	effect paasv1.DeploymentExecutionRequest,
+	deadline time.Time,
+) paasv1.ObserveDeploymentRuntimeRequest {
+	return paasv1.ObserveDeploymentRuntimeRequest{
+		RequestID:             paasv1.CommandID(fmt.Sprintf("runtime-generation-%d", effect.Generation.Generation)),
+		Scope:                 effect.Command.Scope,
+		DeploymentID:          effect.Generation.DeploymentID,
+		Generation:            effect.Generation.Generation,
+		ApplicationRevisionID: effect.ApplicationRevision.Metadata.ID,
+		ExecutionTargetID:     effect.Command.ExecutionTargetID,
+		ExpectedContentDigest: effect.Generation.ContentDigest,
+		Deadline:              deadline,
+	}
+}
+
+func TestOpaqueRuntimeInstanceIdentityBindsTheExactExecutionTarget(t *testing.T) {
+	state := projectState{
+		TenantID:              "tenant-a",
+		DeploymentID:          "deployment-a",
+		Generation:            2,
+		ApplicationRevisionID: "revision-a",
+	}
+	first := opaqueDeploymentInstanceID(state, "target-a", "provider-container-a")
+	if first == opaqueDeploymentInstanceID(state, "target-b", "provider-container-a") {
+		t.Fatal("opaque runtime instance identity aliased another execution target")
+	}
+	changed := state
+	changed.ApplicationRevisionID = "revision-b"
+	if first == opaqueDeploymentInstanceID(changed, "target-a", "provider-container-a") {
+		t.Fatal("opaque runtime instance identity aliased another application revision")
+	}
 }
 
 func requireComposeFault(t *testing.T, err error) paasv1.AdapterFault {

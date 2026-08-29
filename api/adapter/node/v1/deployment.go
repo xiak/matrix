@@ -12,14 +12,19 @@ import (
 const (
 	DeploymentEffectPath                      = "/adapter/node/v1/deployment-effects"
 	DeploymentObservationPath                 = "/adapter/node/v1/deployment-observations"
+	DeploymentRuntimeObservationPath          = "/adapter/node/v1/deployment-runtime-observations"
 	DeploymentEffectRequestKind               = "DeploymentEffectRequest"
 	DeploymentEffectResponseKind              = "DeploymentEffectResponse"
 	DeploymentObservationRequestKind          = "DeploymentObservationRequest"
 	DeploymentObservationResponseKind         = "DeploymentObservationResponse"
+	DeploymentRuntimeObservationRequestKind   = "DeploymentRuntimeObservationRequest"
+	DeploymentRuntimeObservationResponseKind  = "DeploymentRuntimeObservationResponse"
 	MaximumDeploymentEffectRequestBytes       = 16 * 1024 * 1024
 	MaximumDeploymentEffectResponseBytes      = 256 * 1024
 	MaximumDeploymentObservationRequestBytes  = 128 * 1024
 	MaximumDeploymentObservationResponseBytes = 512 * 1024
+	MaximumDeploymentRuntimeRequestBytes      = 64 * 1024
+	MaximumDeploymentRuntimeResponseBytes     = 256 * 1024
 	MaximumDeploymentDuration                 = 5 * time.Minute
 	MaximumSecretMaterialBytes                = 1024 * 1024
 	MaximumDeploymentMaterialBytes            = 8 * 1024 * 1024
@@ -90,6 +95,22 @@ type DeploymentObservationResponse struct {
 	Observation paasv1.DeploymentObservation `json:"observation"`
 }
 
+type DeploymentRuntimeObservationRequest struct {
+	APIVersion string                                 `json:"apiVersion"`
+	Kind       string                                 `json:"kind"`
+	Identity   Identity                               `json:"identity"`
+	BindingRef string                                 `json:"bindingRef"`
+	Request    paasv1.ObserveDeploymentRuntimeRequest `json:"request"`
+}
+
+type DeploymentRuntimeObservationResponse struct {
+	APIVersion  string                              `json:"apiVersion"`
+	Kind        string                              `json:"kind"`
+	Identity    Identity                            `json:"identity"`
+	RequestID   paasv1.CommandID                    `json:"requestId"`
+	Observation paasv1.DeploymentRuntimeObservation `json:"observation"`
+}
+
 func ValidateDeploymentEffectRequest(value DeploymentEffectRequest) error {
 	if value.APIVersion != APIVersion || value.Kind != DeploymentEffectRequestKind ||
 		ValidateIdentity(value.Identity) != nil ||
@@ -145,6 +166,29 @@ func ValidateDeploymentObservationResponse(value DeploymentObservationResponse) 
 	return nil
 }
 
+func ValidateDeploymentRuntimeObservationRequest(value DeploymentRuntimeObservationRequest) error {
+	if value.APIVersion != APIVersion || value.Kind != DeploymentRuntimeObservationRequestKind ||
+		ValidateIdentity(value.Identity) != nil ||
+		paasv1.ValidateID("bindingRef", value.BindingRef) != nil ||
+		paasv1.ValidateObserveDeploymentRuntimeRequest(value.Request) != nil ||
+		value.Request.ExecutionTargetID != value.Identity.ExecutionTargetID ||
+		value.Request.Deadline.IsZero() || value.Request.Deadline.Location() != time.UTC {
+		return ErrInvalidDeployment
+	}
+	return nil
+}
+
+func ValidateDeploymentRuntimeObservationResponse(value DeploymentRuntimeObservationResponse) error {
+	if value.APIVersion != APIVersion || value.Kind != DeploymentRuntimeObservationResponseKind ||
+		ValidateIdentity(value.Identity) != nil ||
+		paasv1.ValidateID("requestId", string(value.RequestID)) != nil ||
+		paasv1.ValidateDeploymentRuntimeObservation(value.Observation) != nil ||
+		value.Observation.ExecutionTargetID != value.Identity.ExecutionTargetID {
+		return ErrInvalidDeployment
+	}
+	return nil
+}
+
 func DecodeDeploymentEffectRequest(reader io.Reader) (DeploymentEffectRequest, error) {
 	var value DeploymentEffectRequest
 	if contractjson.DecodeObject(reader, MaximumDeploymentEffectRequestBytes, &value) != nil ||
@@ -178,6 +222,24 @@ func DecodeDeploymentObservationResponse(reader io.Reader) (DeploymentObservatio
 	if contractjson.DecodeObject(reader, MaximumDeploymentObservationResponseBytes, &value) != nil ||
 		ValidateDeploymentObservationResponse(value) != nil {
 		return DeploymentObservationResponse{}, ErrInvalidDeployment
+	}
+	return value, nil
+}
+
+func DecodeDeploymentRuntimeObservationRequest(reader io.Reader) (DeploymentRuntimeObservationRequest, error) {
+	var value DeploymentRuntimeObservationRequest
+	if contractjson.DecodeObject(reader, MaximumDeploymentRuntimeRequestBytes, &value) != nil ||
+		ValidateDeploymentRuntimeObservationRequest(value) != nil {
+		return DeploymentRuntimeObservationRequest{}, ErrInvalidDeployment
+	}
+	return value, nil
+}
+
+func DecodeDeploymentRuntimeObservationResponse(reader io.Reader) (DeploymentRuntimeObservationResponse, error) {
+	var value DeploymentRuntimeObservationResponse
+	if contractjson.DecodeObject(reader, MaximumDeploymentRuntimeResponseBytes, &value) != nil ||
+		ValidateDeploymentRuntimeObservationResponse(value) != nil {
+		return DeploymentRuntimeObservationResponse{}, ErrInvalidDeployment
 	}
 	return value, nil
 }

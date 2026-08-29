@@ -336,7 +336,7 @@ func (backend *Backend) releasePlanAt(root string, state lifecycle.Journal, rele
 		return Plan{}, fault(cli.FaultVerification, "INSTALLATION_RELEASE_INVALID")
 	}
 	bundle, err := release.VerifyDirectory(filepath.Join(root, filepath.FromSlash(layout.ReleaseDirectory(releaseID))), trustBytes)
-	if err != nil || ValidateRelease(bundle) != nil || bundle.Manifest.Release.ID != releaseID ||
+	if err != nil || ValidateInstalledRelease(bundle) != nil || bundle.Manifest.Release.ID != releaseID ||
 		bundle.ManifestSHA256 != releaseDigest {
 		return Plan{}, fault(cli.FaultVerification, "INSTALLATION_RELEASE_INVALID")
 	}
