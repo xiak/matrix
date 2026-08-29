@@ -312,7 +312,8 @@ func newLocalExecutionProfile(
 		infrastructure,
 		repository,
 		refreshexecutionprofile.Config{
-			TenantID: config.executionTenant, IDs: localExecutionProfileIDs,
+			InstallationID: config.installationID,
+			TenantID:       config.executionTenant, IDs: localExecutionProfileIDs,
 			MachineBindingRef:      config.machineBinding,
 			ObservationTimeout:     executionTargetTimeout,
 			MaximumObservationAge:  executionTargetMaximumAge,

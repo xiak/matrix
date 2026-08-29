@@ -140,16 +140,42 @@ func (transaction *executionAdmissionTransaction) LoadPool(ctx context.Context, 
 
 func (transaction *executionAdmissionTransaction) LoadTarget(ctx context.Context, id paasv1.ResourceID) (executionadmission.Registration, bool, error) {
 	value, err := scanExecutionRegistration(transaction.tx.QueryRow(ctx, `SELECT id, execution_pool_id, resource_version, binding_ref, identity_fingerprint, document
-		FROM paas.execution_targets WHERE installation_id = $1 AND id = $2`, transaction.installationID, id))
+		FROM paas.execution_targets WHERE installation_id = $1 AND id = $2 AND binding_ref IS NOT NULL`, transaction.installationID, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return executionadmission.Registration{}, false, nil
 	}
 	return value, err == nil, err
 }
 
+func (transaction *executionAdmissionTransaction) LoadPoolTarget(ctx context.Context, id paasv1.ResourceID) (paasv1.ExecutionTarget, bool, error) {
+	if paasv1.ValidateID("targetId", string(id)) != nil {
+		return paasv1.ExecutionTarget{}, false, executionadmission.ErrInvalidArgument
+	}
+	var storedID, poolID string
+	var version uint64
+	var document []byte
+	err := transaction.tx.QueryRow(ctx, `SELECT id, execution_pool_id, resource_version, document
+		FROM paas.execution_targets WHERE installation_id = $1 AND id = $2`, transaction.installationID, id).Scan(
+		&storedID, &poolID, &version, &document,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return paasv1.ExecutionTarget{}, false, nil
+	}
+	if err != nil {
+		return paasv1.ExecutionTarget{}, false, err
+	}
+	var value paasv1.ExecutionTarget
+	if decodeDocument("ExecutionTarget", document, &value) != nil ||
+		paasv1.ValidateExecutionTarget(value) != nil || string(value.Metadata.ID) != storedID ||
+		string(value.Spec.ExecutionPoolID) != poolID || value.Metadata.ResourceVersion != version {
+		return paasv1.ExecutionTarget{}, false, errors.New("stored execution target is invalid")
+	}
+	return value, true, nil
+}
+
 func (transaction *executionAdmissionTransaction) ListTargets(ctx context.Context) ([]executionadmission.Registration, error) {
 	rows, err := transaction.tx.Query(ctx, `SELECT id, execution_pool_id, resource_version, binding_ref, identity_fingerprint, document
-		FROM paas.execution_targets WHERE installation_id = $1 ORDER BY id COLLATE "C" LIMIT $2`, transaction.installationID, executionadmission.MaximumTargets+1)
+		FROM paas.execution_targets WHERE installation_id = $1 AND binding_ref IS NOT NULL ORDER BY id COLLATE "C" LIMIT $2`, transaction.installationID, executionadmission.MaximumTargets+1)
 	if err != nil {
 		return nil, err
 	}
@@ -163,6 +189,40 @@ func (transaction *executionAdmissionTransaction) ListTargets(ctx context.Contex
 		values = append(values, value)
 	}
 	if len(values) > executionadmission.MaximumTargets {
+		return nil, executionadmission.ErrConflict
+	}
+	return values, rows.Err()
+}
+
+func (transaction *executionAdmissionTransaction) ListPoolTargets(ctx context.Context, poolID paasv1.ResourceID) ([]paasv1.ExecutionTarget, error) {
+	if paasv1.ValidateID("poolId", string(poolID)) != nil {
+		return nil, executionadmission.ErrInvalidArgument
+	}
+	rows, err := transaction.tx.Query(ctx, `SELECT id, execution_pool_id, resource_version, document
+		FROM paas.execution_targets WHERE installation_id = $1 AND execution_pool_id = $2
+		ORDER BY id COLLATE "C" LIMIT $3`, transaction.installationID, poolID, executionadmission.MaximumTargets+2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	values := make([]paasv1.ExecutionTarget, 0)
+	for rows.Next() {
+		var id, storedPoolID string
+		var version uint64
+		var document []byte
+		if err := rows.Scan(&id, &storedPoolID, &version, &document); err != nil {
+			return nil, err
+		}
+		var value paasv1.ExecutionTarget
+		if decodeDocument("ExecutionTarget", document, &value) != nil ||
+			paasv1.ValidateExecutionTarget(value) != nil || string(value.Metadata.ID) != id ||
+			string(value.Spec.ExecutionPoolID) != storedPoolID || value.Spec.ExecutionPoolID != poolID ||
+			value.Metadata.ResourceVersion != version {
+			return nil, errors.New("stored pool execution target is invalid")
+		}
+		values = append(values, value)
+	}
+	if len(values) > executionadmission.MaximumTargets+1 {
 		return nil, executionadmission.ErrConflict
 	}
 	return values, rows.Err()

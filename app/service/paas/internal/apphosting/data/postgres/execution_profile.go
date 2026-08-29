@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
@@ -34,6 +35,7 @@ func NewExecutionProfileRepository(pool *pgxpool.Pool) (*ExecutionProfileReposit
 func (repository *ExecutionProfileRepository) WithinTransaction(
 	ctx context.Context,
 	tenantID paasv1.TenantID,
+	installationID string,
 	callback func(context.Context, refreshexecutionprofile.Transaction) error,
 ) error {
 	if repository == nil || repository.pool == nil || ctx == nil || callback == nil {
@@ -42,13 +44,18 @@ func (repository *ExecutionProfileRepository) WithinTransaction(
 	if err := paasv1.ValidateID("tenantId", string(tenantID)); err != nil {
 		return err
 	}
+	if err := paasv1.ValidateID("installationId", installationID); err != nil {
+		return err
+	}
 	err := withinTenantTransaction(
 		ctx,
 		repository.pool,
 		tenantID,
 		pgx.TxOptions{IsoLevel: pgx.Serializable, AccessMode: pgx.ReadWrite},
 		func(tx pgx.Tx) error {
-			return callback(ctx, &executionProfileTransaction{tx: tx, tenantID: tenantID})
+			return callback(ctx, &executionProfileTransaction{
+				tx: tx, tenantID: tenantID, installationID: installationID,
+			})
 		},
 	)
 	if err == nil {
@@ -73,8 +80,9 @@ func (repository *ExecutionProfileRepository) WithinTransaction(
 }
 
 type executionProfileTransaction struct {
-	tx       pgx.Tx
-	tenantID paasv1.TenantID
+	tx             pgx.Tx
+	tenantID       paasv1.TenantID
+	installationID string
 }
 
 func (transaction *executionProfileTransaction) Load(
@@ -105,11 +113,16 @@ func (transaction *executionProfileTransaction) Load(
 	if err != nil {
 		return refreshexecutionprofile.Snapshot{}, err
 	}
+	targets, err := transaction.loadTargets(ctx, ids.PoolID, ids.TargetID)
+	if err != nil {
+		return refreshexecutionprofile.Snapshot{}, err
+	}
 	return refreshexecutionprofile.Snapshot{
 		TransactionTime: databaseTime(transactionTime),
 		Pool:            pool,
 		Target:          target,
 		Policy:          policy,
+		Targets:         targets,
 	}, nil
 }
 
@@ -142,8 +155,9 @@ func (transaction *executionProfileTransaction) Save(
 	if err := transaction.tx.QueryRow(
 		ctx,
 		`SELECT paas.reconcile_local_execution_profile(
-		     $1, $2::jsonb, $3, $4::jsonb, $5, $6::jsonb
+		     $1, $2, $3::jsonb, $4, $5::jsonb, $6, $7::jsonb
 		 )`,
+		transaction.installationID,
 		int64(versions.Pool),
 		poolDocument,
 		int64(versions.Target),
@@ -163,20 +177,24 @@ func (transaction *executionProfileTransaction) loadPool(
 	ctx context.Context,
 	id paasv1.ResourceID,
 ) (*paasv1.ExecutionPool, error) {
+	var installationID pgtype.Text
 	var resourceVersion uint64
 	var document []byte
 	err := transaction.tx.QueryRow(
 		ctx,
-		`SELECT resource_version, document
+		`SELECT installation_id, resource_version, document
 		   FROM paas.execution_pools
 		  WHERE id = $1`,
 		string(id),
-	).Scan(&resourceVersion, &document)
+	).Scan(&installationID, &resourceVersion, &document)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, errors.New("execution profile pool cannot be loaded")
+	}
+	if installationID.Valid && installationID.String != transaction.installationID {
+		return nil, refreshexecutionprofile.ErrConflict
 	}
 	var value paasv1.ExecutionPool
 	if decodeDocument("ExecutionPool", document, &value) != nil ||
@@ -191,21 +209,25 @@ func (transaction *executionProfileTransaction) loadTarget(
 	ctx context.Context,
 	id paasv1.ResourceID,
 ) (*paasv1.ExecutionTarget, error) {
+	var installationID pgtype.Text
 	var poolID string
 	var resourceVersion uint64
 	var document []byte
 	err := transaction.tx.QueryRow(
 		ctx,
-		`SELECT execution_pool_id, resource_version, document
+		`SELECT installation_id, execution_pool_id, resource_version, document
 		   FROM paas.execution_targets
 		  WHERE id = $1`,
 		string(id),
-	).Scan(&poolID, &resourceVersion, &document)
+	).Scan(&installationID, &poolID, &resourceVersion, &document)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, errors.New("execution profile target cannot be loaded")
+	}
+	if installationID.Valid && installationID.String != transaction.installationID {
+		return nil, refreshexecutionprofile.ErrConflict
 	}
 	var value paasv1.ExecutionTarget
 	if decodeDocument("ExecutionTarget", document, &value) != nil ||
@@ -215,6 +237,50 @@ func (transaction *executionProfileTransaction) loadTarget(
 		return nil, errors.New("stored execution profile target is invalid")
 	}
 	return &value, nil
+}
+
+func (transaction *executionProfileTransaction) loadTargets(
+	ctx context.Context,
+	poolID paasv1.ResourceID,
+	localTargetID paasv1.ResourceID,
+) ([]paasv1.ExecutionTarget, error) {
+	rows, err := transaction.tx.Query(
+		ctx,
+		`SELECT id, installation_id, resource_version, document
+		   FROM paas.execution_targets
+		  WHERE execution_pool_id = $1
+		  ORDER BY id COLLATE "C"`,
+		string(poolID),
+	)
+	if err != nil {
+		return nil, errors.New("execution profile targets cannot be loaded")
+	}
+	defer rows.Close()
+	values := make([]paasv1.ExecutionTarget, 0)
+	for rows.Next() {
+		var id string
+		var installationID pgtype.Text
+		var resourceVersion uint64
+		var document []byte
+		if err := rows.Scan(&id, &installationID, &resourceVersion, &document); err != nil {
+			return nil, errors.New("execution profile target cannot be scanned")
+		}
+		if (installationID.Valid && installationID.String != transaction.installationID) ||
+			(!installationID.Valid && paasv1.ResourceID(id) != localTargetID) {
+			return nil, refreshexecutionprofile.ErrConflict
+		}
+		var value paasv1.ExecutionTarget
+		if decodeDocument("ExecutionTarget", document, &value) != nil ||
+			paasv1.ValidateExecutionTarget(value) != nil || string(value.Metadata.ID) != id ||
+			value.Spec.ExecutionPoolID != poolID || value.Metadata.ResourceVersion != resourceVersion {
+			return nil, errors.New("stored execution profile target is invalid")
+		}
+		values = append(values, value)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errors.New("execution profile targets cannot be iterated")
+	}
+	return values, nil
 }
 
 func (transaction *executionProfileTransaction) loadPolicy(

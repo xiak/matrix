@@ -69,7 +69,9 @@ type Transaction interface {
 	FindOperationByFingerprint(context.Context, string) (paasv1.Operation, bool, error)
 	LoadOperation(context.Context, paasv1.OperationID) (paasv1.Operation, bool, error)
 	LoadPool(context.Context, paasv1.ResourceID) (paasv1.ExecutionPool, bool, error)
+	LoadPoolTarget(context.Context, paasv1.ResourceID) (paasv1.ExecutionTarget, bool, error)
 	LoadTarget(context.Context, paasv1.ResourceID) (Registration, bool, error)
+	ListPoolTargets(context.Context, paasv1.ResourceID) ([]paasv1.ExecutionTarget, error)
 	ListTargets(context.Context) ([]Registration, error)
 	CreatePool(context.Context, paasv1.ExecutionPool, Submission) error
 	RegisterTarget(context.Context, Registration, uint64, paasv1.ExecutionPool, Submission) error

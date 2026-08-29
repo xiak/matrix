@@ -23,9 +23,12 @@ import (
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/createplacement"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/executionadmission"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/operationqueue"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/refreshexecutionprofile"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/transitionreservation"
+	auditpostgres "github.com/xiak/matrix/app/service/paas/internal/audit/data/postgres"
+	"github.com/xiak/matrix/app/service/paas/internal/audit/usecase/auditdispatch"
 	paasmigration "github.com/xiak/matrix/app/service/paas/migration"
 )
 
@@ -71,7 +74,7 @@ func TestPostgresIntegration(t *testing.T) {
 	defer workerPool.Close()
 
 	prefix := fmt.Sprintf("integration-%x", time.Now().UnixNano())
-	assertExecutionProfileRefresh(t, ctx, admin, workerPool, prefix)
+	assertExecutionProfileRefresh(t, ctx, admin, apiPool, workerPool, prefix)
 	fixture := seedIntegrationFixture(t, ctx, admin, prefix)
 	applicationResult := assertApplicationLifecycle(t, ctx, admin, apiPool, fixture, prefix)
 	assertAuditPersistenceAndFencing(t, ctx, admin, apiPool, workerPool, applicationResult)
@@ -386,15 +389,17 @@ func assertExecutionProfileRefresh(
 	t *testing.T,
 	ctx context.Context,
 	admin *pgx.Conn,
+	apiPool *pgxpool.Pool,
 	workerPool *pgxpool.Pool,
 	prefix string,
 ) {
 	t.Helper()
+	installationID := prefix + "-profile-installation"
 	tenantID := paasv1.TenantID(prefix + "-profile-tenant")
 	ids := refreshexecutionprofile.IDs{
-		PoolID:   paasv1.ResourceID(prefix + "-profile-pool"),
-		TargetID: paasv1.ResourceID(prefix + "-profile-target"),
-		PolicyID: paasv1.ResourceID(prefix + "-profile-policy"),
+		PoolID:   "execution-pool-local",
+		TargetID: "execution-target-local",
+		PolicyID: "placement-policy-local",
 	}
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	adapter := &integrationExecutionTargetAdapter{observation: paasv1.ExecutionTargetObservation{
@@ -423,7 +428,8 @@ func assertExecutionProfileRefresh(
 		adapter,
 		repository,
 		refreshexecutionprofile.Config{
-			TenantID: tenantID, IDs: ids, MachineBindingRef: "local-machine-v1",
+			InstallationID: installationID,
+			TenantID:       tenantID, IDs: ids, MachineBindingRef: "local-machine-v1",
 			ObservationTimeout: 5 * time.Second, MaximumObservationAge: 5 * time.Minute,
 			MaxTransactionAttempts: 5,
 		},
@@ -437,14 +443,29 @@ func assertExecutionProfileRefresh(
 	if err := service.Ready(ctx); err != nil {
 		t.Fatalf("created execution profile readiness: %v", err)
 	}
+	if _, err := admin.Exec(ctx,
+		"UPDATE paas.execution_targets SET installation_id = NULL WHERE id = $1",
+		ids.TargetID,
+	); err != nil {
+		t.Fatalf("stage retained local target: %v", err)
+	}
+	if _, err := admin.Exec(ctx,
+		"UPDATE paas.execution_pools SET installation_id = NULL WHERE id = $1",
+		ids.PoolID,
+	); err != nil {
+		t.Fatalf("stage retained local pool: %v", err)
+	}
 	adapter.observation.ObservedAt = time.Now().UTC().Truncate(time.Microsecond)
 	if err := service.Refresh(ctx); err != nil {
 		t.Fatalf("refresh execution profile through worker boundary: %v", err)
 	}
+	var poolInstallation, targetInstallation string
 	var poolVersion, targetVersion, policyVersion uint64
 	if err := admin.QueryRow(
 		ctx,
-		`SELECT pool.resource_version,
+		`SELECT pool.installation_id,
+		        target.installation_id,
+		        pool.resource_version,
 		        target.resource_version,
 		        policy.resource_version
 		   FROM paas.execution_pools AS pool
@@ -459,7 +480,7 @@ func assertExecutionProfileRefresh(
 		ids.PolicyID,
 		ids.PoolID,
 		ids.TargetID,
-	).Scan(&poolVersion, &targetVersion, &policyVersion); err != nil {
+	).Scan(&poolInstallation, &targetInstallation, &poolVersion, &targetVersion, &policyVersion); err != nil {
 		t.Fatalf("read reconciled execution profile: %v", err)
 	}
 	if poolVersion != 2 || targetVersion != 2 || policyVersion != 1 {
@@ -469,6 +490,78 @@ func assertExecutionProfileRefresh(
 			targetVersion,
 			policyVersion,
 		)
+	}
+	if poolInstallation != installationID || targetInstallation != installationID {
+		t.Fatalf("retained local profile was not scoped: pool=%q target=%q", poolInstallation, targetInstallation)
+	}
+
+	managedTargetID := paasv1.ResourceID(prefix + "-profile-node")
+	managedAdapter := &admissionAdapter{
+		targetID:    managedTargetID,
+		fingerprint: integrationDigest(prefix + "-profile-node"),
+	}
+	admissionRepository, err := NewExecutionAdmissionRepository(apiPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admission, err := executionadmission.New(admissionRepository, executionadmission.Config{
+		InstallationID: installationID,
+		Bindings: []executionadmission.Binding{{
+			Ref: "node-binding", TargetID: managedTargetID,
+			IdentityFingerprint: managedAdapter.fingerprint, Adapter: managedAdapter,
+		}},
+		ObservationTimeout: time.Second, MaximumObservationAge: 15 * time.Second,
+		MaxTransactionAttempts: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorization := port.Authorization{
+		InstallationID: installationID,
+		Subject:        paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "profile-platform-user"},
+		DecisionID:     "profile-platform-decision", RequestID: "profile-platform-request",
+	}
+	registered, _, replayed, err := admission.RegisterTarget(ctx, executionadmission.RegisterTargetCommand{
+		Authorization: authorization, IdempotencyKey: "register-profile-node",
+		Request: paasv1.RegisterExecutionTargetRequest{
+			ID: managedTargetID, Name: "profile-node", ExecutionPoolID: ids.PoolID,
+			BindingRef: "node-binding",
+			Labels:     map[string]string{"matrix-profile": "local-compose"},
+		},
+	})
+	if err != nil || replayed || registered.Metadata.ID != managedTargetID {
+		t.Fatalf("register node in built-in pool: replay=%v target=%#v err=%v", replayed, registered, err)
+	}
+	pool, err := admission.GetPool(ctx, authorization, ids.PoolID)
+	if err != nil || pool.Status.ExecutionTargetCount != 2 || pool.Status.ReadyExecutionTargetCount != 2 {
+		t.Fatalf("built-in pool did not retain both targets: %#v err=%v", pool, err)
+	}
+	localTarget, err := admission.GetTarget(ctx, authorization, ids.TargetID)
+	if err != nil || localTarget.Spec.InfrastructureAdapter.Name != "localmachine" {
+		t.Fatalf("installation cannot read built-in target: %#v err=%v", localTarget, err)
+	}
+	adapter.observation.ObservedAt = time.Now().UTC().Truncate(time.Microsecond)
+	if err := service.Refresh(ctx); err != nil {
+		t.Fatalf("local refresh overwrote managed pool membership: %v", err)
+	}
+	pool, err = admission.GetPool(ctx, authorization, ids.PoolID)
+	if err != nil || pool.Status.ExecutionTargetCount != 2 || pool.Status.ReadyExecutionTargetCount != 2 {
+		t.Fatalf("local refresh changed managed pool membership: %#v err=%v", pool, err)
+	}
+	outbox, err := auditpostgres.NewAuditOutboxRepository(workerPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim, found, err := outbox.Claim(ctx, "profile-audit-worker", 30*time.Second)
+	if err != nil || !found || claim.InstallationID != installationID {
+		t.Fatalf("claim built-in pool admission fact: found=%v claim=%#v err=%v", found, claim, err)
+	}
+	if err := outbox.Complete(ctx, auditdispatch.Completion{
+		InstallationID: claim.InstallationID, EventID: claim.EventID, Stream: claim.Stream,
+		WorkerID: "profile-audit-worker", FencingToken: claim.FencingToken,
+		Outcome: auditdispatch.OutcomeDelivered,
+	}); err != nil {
+		t.Fatalf("complete built-in pool admission fact: %v", err)
 	}
 	if _, err := workerPool.Exec(
 		ctx,

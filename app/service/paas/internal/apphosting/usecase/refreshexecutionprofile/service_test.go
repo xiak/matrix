@@ -45,6 +45,7 @@ type profileRepository struct {
 func (repository *profileRepository) WithinTransaction(
 	ctx context.Context,
 	_ paasv1.TenantID,
+	_ string,
 	callback func(context.Context, Transaction) error,
 ) error {
 	return callback(ctx, &profileTransaction{repository: repository})
@@ -72,6 +73,19 @@ func (transaction *profileTransaction) Save(
 	transaction.repository.snapshot.Pool = &profile.Pool
 	transaction.repository.snapshot.Target = &profile.Target
 	transaction.repository.snapshot.Policy = &profile.Policy
+	found := false
+	for index := range transaction.repository.snapshot.Targets {
+		if transaction.repository.snapshot.Targets[index].Metadata.ID == profile.Target.Metadata.ID {
+			transaction.repository.snapshot.Targets[index] = profile.Target
+			found = true
+		}
+	}
+	if !found {
+		transaction.repository.snapshot.Targets = append(
+			transaction.repository.snapshot.Targets,
+			profile.Target,
+		)
+	}
 	transaction.repository.saves++
 	return nil
 }
@@ -109,7 +123,9 @@ func TestRefreshCreatesAndKeepsLocalProfileFresh(t *testing.T) {
 	}
 
 	repository.snapshot.TransactionTime = profileTestTime.Add(2 * time.Minute)
-	repository.snapshot.Target.Status.ObservedAt = repository.snapshot.TransactionTime.Add(time.Second)
+	repository.snapshot.Target.Status.ObservedAt = repository.snapshot.TransactionTime.Add(
+		maximumObservationFutureSkew + time.Microsecond,
+	)
 	if err := service.Ready(context.Background()); err == nil {
 		t.Fatal("future execution profile observation reported ready")
 	}
@@ -137,6 +153,54 @@ func TestRefreshPersistsDegradedProfileWithoutIsolation(t *testing.T) {
 	}
 	if err := service.Ready(context.Background()); err == nil {
 		t.Fatal("degraded execution profile reported ready")
+	}
+}
+
+func TestRefreshPreservesManagedTargetsAndLocalReadiness(t *testing.T) {
+	adapter := &profileAdapter{observation: readyProfileObservation(profileTestTime)}
+	repository := &profileRepository{snapshot: Snapshot{TransactionTime: profileTestTime}}
+	service := newProfileService(t, adapter, repository)
+	if err := service.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	managed := repository.snapshot.Targets[0]
+	managed.Metadata.ID = "execution-target-managed"
+	managed.Metadata.Name = "managed"
+	managed.Metadata.ResourceVersion = 1
+	managed.Metadata.Labels = map[string]string{
+		"matrix-os": "linux", "matrix-arch": "amd64",
+		profileLabelKey: profileLabelValue, fingerprintLabel: "sha256:" + repeatHex("b"),
+	}
+	managed.Spec.InfrastructureAdapter.Name = "nodehttps"
+	managed.Status.ObservedAt = profileTestTime
+	repository.snapshot.Targets = append(repository.snapshot.Targets, managed)
+	repository.snapshot.TransactionTime = profileTestTime.Add(time.Second)
+	adapter.observation.ObservedAt = repository.snapshot.TransactionTime
+	if err := service.Refresh(context.Background()); err != nil {
+		t.Fatalf("refresh profile with managed target: %v", err)
+	}
+	if len(repository.snapshot.Targets) != 2 ||
+		repository.snapshot.Targets[1].Metadata.ID != managed.Metadata.ID ||
+		repository.snapshot.Pool.Status.ExecutionTargetCount != 2 ||
+		repository.snapshot.Pool.Status.ReadyExecutionTargetCount != 2 ||
+		repository.snapshot.Pool.Status.Phase != paasv1.ExecutionPoolReady {
+		t.Fatalf("managed target was not preserved: %#v", repository.snapshot)
+	}
+
+	repository.snapshot.Targets[1].Status.Health = paasv1.ExecutionTargetHealthUnavailable
+	repository.snapshot.Targets[1].Status.SupportedIsolationGuarantees = nil
+	repository.snapshot.TransactionTime = profileTestTime.Add(2 * time.Second)
+	adapter.observation.ObservedAt = repository.snapshot.TransactionTime
+	if err := service.Refresh(context.Background()); err != nil {
+		t.Fatalf("refresh profile with unavailable managed target: %v", err)
+	}
+	if repository.snapshot.Pool.Status.Phase != paasv1.ExecutionPoolDegraded ||
+		repository.snapshot.Pool.Status.ExecutionTargetCount != 2 ||
+		repository.snapshot.Pool.Status.ReadyExecutionTargetCount != 1 {
+		t.Fatalf("mixed pool status = %#v", repository.snapshot.Pool.Status)
+	}
+	if err := service.Ready(context.Background()); err != nil {
+		t.Fatalf("local readiness depended on managed target: %v", err)
 	}
 }
 
@@ -183,7 +247,8 @@ func newProfileService(
 ) *Service {
 	t.Helper()
 	service, err := New(adapter, repository, Config{
-		TenantID: "organization-default",
+		InstallationID: "installation-local",
+		TenantID:       "organization-default",
 		IDs: IDs{
 			PoolID: "execution-pool-local", TargetID: "execution-target-local",
 			PolicyID: "placement-policy-local",

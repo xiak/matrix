@@ -16,6 +16,10 @@ import (
 
 const fingerprintLabel = "matrix-machine-fingerprint"
 const maximumVersion = uint64(9007199254740991)
+const builtInObservationMaximumAge = 5 * time.Minute
+const maximumObservationFutureSkew = 2 * time.Second
+const builtInPoolID = paasv1.ResourceID("execution-pool-local")
+const builtInTargetID = paasv1.ResourceID("execution-target-local")
 
 func New(repository Repository, config Config) (*Service, error) {
 	if repository == nil || paasv1.ValidateID("installationId", config.InstallationID) != nil ||
@@ -132,6 +136,9 @@ func (service *Service) CreatePool(ctx context.Context, command CreatePoolComman
 	if paasv1.ValidateCreateExecutionPoolRequest(command.Request) != nil {
 		return pool, operation, false, ErrInvalidArgument
 	}
+	if command.Request.ID == builtInPoolID {
+		return pool, operation, false, ErrConflict
+	}
 	fingerprint, digest, err := creationIdentity(command.Authorization, paasv1.OperationCreateExecutionPool, command.IdempotencyKey, command.Request)
 	if err != nil {
 		return pool, operation, false, err
@@ -198,6 +205,9 @@ func (service *Service) RegisterTarget(ctx context.Context, command RegisterTarg
 	if paasv1.ValidateRegisterExecutionTargetRequest(request) != nil {
 		return target, operation, false, ErrInvalidArgument
 	}
+	if request.ID == builtInTargetID {
+		return target, operation, false, ErrConflict
+	}
 	fingerprint, digest, err := creationIdentity(command.Authorization, paasv1.OperationRegisterExecutionTarget, command.IdempotencyKey, request)
 	if err != nil {
 		return target, operation, false, err
@@ -240,6 +250,7 @@ func (service *Service) RegisterTarget(ctx context.Context, command RegisterTarg
 	capabilities, err := binding.Adapter.Capabilities(probeContext)
 	if err != nil || paasv1.ValidateAdapterCapabilities(capabilities) != nil ||
 		capabilities.Adapter.Kind != paasv1.AdapterInfrastructure ||
+		capabilities.Adapter.Name == "localmachine" ||
 		!slices.Contains(capabilities.Actions, paasv1.AdapterInspectExecutionTarget) || !slices.Contains(capabilities.Actions, paasv1.AdapterObserveExecutionTarget) {
 		return target, operation, false, ErrUnavailable
 	}
@@ -306,8 +317,12 @@ func (service *Service) RegisterTarget(ctx context.Context, command RegisterTarg
 			return ErrInvalidArgument
 		}
 		registration := Registration{Target: target, BindingRef: binding.Ref, IdentityFingerprint: binding.IdentityFingerprint}
+		poolTargets, err := transaction.ListPoolTargets(ctx, pool.Metadata.ID)
+		if err != nil {
+			return err
+		}
 		poolVersion := pool.Metadata.ResourceVersion
-		pool, err = service.poolSnapshot(pool, append(registrations, registration), now, true)
+		pool, err = service.poolSnapshot(pool, append(poolTargets, target), now, true)
 		if err != nil {
 			return err
 		}

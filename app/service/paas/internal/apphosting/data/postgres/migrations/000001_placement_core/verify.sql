@@ -313,7 +313,7 @@ BEGIN
             ),
             (
                 'reconcile_local_execution_profile',
-                'expected_pool_version bigint, submitted_pool jsonb, expected_target_version bigint, submitted_target jsonb, expected_policy_version bigint, submitted_policy jsonb'
+                'requested_installation_id text, expected_pool_version bigint, submitted_pool jsonb, expected_target_version bigint, submitted_target jsonb, expected_policy_version bigint, submitted_policy jsonb'
             )
       ) AS required(name, identity_arguments)
      WHERE NOT EXISTS (
@@ -570,9 +570,12 @@ BEGIN
        )
        OR NOT has_function_privilege(
             'matrix_paas_worker',
-            'paas.reconcile_local_execution_profile(bigint, jsonb, bigint, jsonb, bigint, jsonb)',
+            'paas.reconcile_local_execution_profile(text, bigint, jsonb, bigint, jsonb, bigint, jsonb)',
             'EXECUTE'
        )
+       OR to_regprocedure(
+            'paas.reconcile_local_execution_profile(bigint,jsonb,bigint,jsonb,bigint,jsonb)'
+       ) IS NOT NULL
        OR NOT has_function_privilege(
             'matrix_paas_api',
             'paas.create_apphosting_resource(jsonb, jsonb, jsonb)',
@@ -650,7 +653,7 @@ BEGIN
                     'paas.record_deployment_observation(text, text, bigint, text, jsonb)',
                     'paas.release_operation_lease(text, text, bigint, timestamptz)',
                     'paas.transition_capacity_reservation(text, text, bigint, text, text, bigint)',
-                    'paas.reconcile_local_execution_profile(bigint, jsonb, bigint, jsonb, bigint, jsonb)'
+                    'paas.reconcile_local_execution_profile(text, bigint, jsonb, bigint, jsonb, bigint, jsonb)'
                    ]) AS worker_function(signature)
              WHERE has_function_privilege(
                     'matrix_paas_api',

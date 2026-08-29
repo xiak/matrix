@@ -650,8 +650,10 @@ CREATE TABLE IF NOT EXISTS paas.execution_targets (
 CREATE INDEX IF NOT EXISTS execution_targets_pool_idx
     ON paas.execution_targets (execution_pool_id, id);
 
--- Retained Phase 1 local-profile rows have no enrolled-node identity. They
--- cannot be claimed or rewritten by installation admission/refresh commands.
+-- The built-in local target and admitted nodes share one installation-owned
+-- pool. Only an admitted node carries a protected binding and certificate
+-- fingerprint; the local target remains worker-observed and cannot be claimed
+-- by the installation admission API.
 ALTER TABLE paas.execution_pools ADD COLUMN IF NOT EXISTS installation_id text COLLATE "C";
 ALTER TABLE paas.execution_targets
     ADD COLUMN IF NOT EXISTS installation_id text COLLATE "C",
@@ -674,11 +676,21 @@ ALTER TABLE paas.execution_targets
     ADD CONSTRAINT execution_targets_installation_pool_fk FOREIGN KEY (installation_id, execution_pool_id)
         REFERENCES paas.execution_pools (installation_id, id),
     ADD CONSTRAINT execution_targets_installation_identity_valid CHECK ((
-        (installation_id IS NULL AND binding_ref IS NULL AND identity_fingerprint IS NULL)
+        (installation_id IS NULL AND binding_ref IS NULL AND identity_fingerprint IS NULL
+            AND document#>>'{spec,infrastructureAdapter,name}' = 'localmachine')
+        OR (installation_id IS NOT NULL AND binding_ref IS NULL AND identity_fingerprint IS NULL
+            AND installation_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+            AND id = 'execution-target-local'
+            AND execution_pool_id = 'execution-pool-local'
+            AND document#>>'{metadata,name}' = 'local'
+            AND document#>>'{metadata,labels,matrix-profile}' = 'local-compose'
+            AND document#>>'{metadata,labels,matrix-machine-fingerprint}' COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+            AND document#>>'{spec,infrastructureAdapter,name}' = 'localmachine')
         OR (installation_id IS NOT NULL AND binding_ref IS NOT NULL AND identity_fingerprint IS NOT NULL
             AND installation_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
             AND binding_ref COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
             AND identity_fingerprint COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+            AND document#>>'{spec,infrastructureAdapter,name}' <> 'localmachine'
             AND document#>>'{metadata,labels,matrix-machine-fingerprint}' = identity_fingerprint)
     ) IS TRUE);
 
@@ -1312,6 +1324,7 @@ DECLARE
     effective_installation_id text := paas.current_installation_id();
     total_count bigint;
     maximum_ready_count bigint;
+    degraded_count bigint;
     ready_count bigint;
     next_version bigint;
 BEGIN
@@ -1325,9 +1338,15 @@ BEGIN
     END IF;
     SELECT count(*), count(*) FILTER (
         WHERE document#>>'{status,health}' = 'READY' AND document#>>'{spec,desiredState}' = 'ACTIVE'
-          AND (document#>>'{status,observedAt}')::timestamptz > transaction_timestamp() - interval '15 seconds'
+          AND (document#>>'{status,observedAt}')::timestamptz > transaction_timestamp() - CASE
+              WHEN binding_ref IS NULL THEN interval '5 minutes' ELSE interval '15 seconds' END
           AND (document#>>'{status,observedAt}')::timestamptz <= transaction_timestamp() + interval '2 seconds'
-    ) INTO total_count, maximum_ready_count FROM paas.execution_targets
+    ), count(*) FILTER (
+        WHERE document#>>'{status,health}' = 'DEGRADED'
+          AND (document#>>'{status,observedAt}')::timestamptz > transaction_timestamp() - CASE
+              WHEN binding_ref IS NULL THEN interval '5 minutes' ELSE interval '15 seconds' END
+          AND (document#>>'{status,observedAt}')::timestamptz <= transaction_timestamp() + interval '2 seconds'
+    ) INTO total_count, maximum_ready_count, degraded_count FROM paas.execution_targets
      WHERE installation_id = effective_installation_id AND execution_pool_id = current_pool.id;
     ready_count := (submitted_pool#>>'{status,readyExecutionTargetCount}')::bigint;
     next_version := expected_resource_version + CASE
@@ -1340,8 +1359,8 @@ BEGIN
         AND (submitted_pool#>>'{status,observedAt}')::timestamptz = transaction_timestamp()
         AND submitted_pool#>>'{status,executionTargetCount}' = total_count::text
         AND ready_count BETWEEN 0 AND maximum_ready_count
-        AND submitted_pool#>>'{status,phase}' = CASE WHEN ready_count = 0 THEN 'UNAVAILABLE'
-            WHEN ready_count = total_count THEN 'READY' ELSE 'DEGRADED' END
+        AND submitted_pool#>>'{status,phase}' = CASE WHEN ready_count = total_count THEN 'READY'
+            WHEN ready_count > 0 OR degraded_count > 0 THEN 'DEGRADED' ELSE 'UNAVAILABLE' END
         AND ((submitted_pool->'status') - ARRAY['phase','executionTargetCount','readyExecutionTargetCount','observedAt']) = '{}'::jsonb
     ) IS TRUE) THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'execution pool observation cannot change desired authority';
@@ -1397,7 +1416,8 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'execution admission identity or operation is invalid';
     END IF;
     IF resource_kind = 'ExecutionPool' THEN
-        IF submitted_binding_ref IS NOT NULL OR submitted_identity_fingerprint IS NOT NULL
+        IF resource_id = 'execution-pool-local'
+           OR submitted_binding_ref IS NOT NULL OR submitted_identity_fingerprint IS NOT NULL
            OR expected_pool_version IS NOT NULL OR submitted_pool IS NOT NULL
            OR submitted_resource->'status' IS DISTINCT FROM jsonb_build_object(
                'phase', 'UNAVAILABLE', 'executionTargetCount', 0, 'readyExecutionTargetCount', 0,
@@ -1415,7 +1435,7 @@ BEGIN
         IF NOT FOUND THEN
             RAISE EXCEPTION USING ERRCODE = 'MX404', MESSAGE = 'execution pool is not registered';
         END IF;
-        IF NOT ((
+        IF resource_id = 'execution-target-local' OR NOT ((
             submitted_binding_ref IS NOT NULL AND submitted_identity_fingerprint IS NOT NULL
             AND submitted_resource#>>'{spec,desiredState}' = 'ACTIVE'
             AND submitted_resource#>>'{status,health}' = 'READY'
@@ -1426,7 +1446,8 @@ BEGIN
         ) IS TRUE) THEN
             RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'node registration requires a fresh identity-bound observation';
         END IF;
-        IF (SELECT count(*) FROM paas.execution_targets WHERE installation_id = effective_installation_id) >= 128 THEN
+        IF (SELECT count(*) FROM paas.execution_targets
+             WHERE installation_id = effective_installation_id AND binding_ref IS NOT NULL) >= 128 THEN
             RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'execution target admission limit reached';
         END IF;
         INSERT INTO paas.execution_targets (id, installation_id, execution_pool_id, binding_ref, identity_fingerprint, resource_version, document)
@@ -2143,7 +2164,13 @@ AS $function$
         AND to_regprocedure('paas.claim_operation(text,integer)') IS NOT NULL
         AND to_regprocedure(
             'paas.advance_operation(text,text,bigint,text,jsonb,timestamptz,boolean)'
-        ) IS NOT NULL,
+        ) IS NOT NULL
+        AND to_regprocedure(
+            'paas.reconcile_local_execution_profile(text,bigint,jsonb,bigint,jsonb,bigint,jsonb)'
+        ) IS NOT NULL
+        AND to_regprocedure(
+            'paas.reconcile_local_execution_profile(bigint,jsonb,bigint,jsonb,bigint,jsonb)'
+        ) IS NULL,
         2::bigint,
         transaction_timestamp()
 $function$;
@@ -3667,7 +3694,12 @@ GRANT EXECUTE ON FUNCTION paas.transition_capacity_reservation(
 )
     TO matrix_paas_worker;
 
+DROP FUNCTION IF EXISTS paas.reconcile_local_execution_profile(
+    bigint, jsonb, bigint, jsonb, bigint, jsonb
+);
+
 CREATE OR REPLACE FUNCTION paas.reconcile_local_execution_profile(
+    requested_installation_id text,
     expected_pool_version bigint,
     submitted_pool jsonb,
     expected_target_version bigint,
@@ -3689,11 +3721,19 @@ DECLARE
     next_target_version bigint;
     next_policy_version bigint;
     affected_rows bigint;
+    current_pool jsonb;
+    current_pool_installation_id text;
     current_target jsonb;
+    current_target_installation_id text;
     current_policy jsonb;
+    total_count bigint;
+    ready_count bigint;
+    degraded_count bigint;
 BEGIN
     effective_tenant_id := paas.current_tenant_id();
     IF effective_tenant_id IS NULL
+       OR requested_installation_id IS NULL
+       OR requested_installation_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR jsonb_typeof(submitted_pool) <> 'object'
        OR jsonb_typeof(submitted_target) <> 'object'
        OR jsonb_typeof(submitted_policy) <> 'object'
@@ -3725,6 +3765,9 @@ BEGIN
     IF pool_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR target_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR policy_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR pool_id <> 'execution-pool-local'
+       OR target_id <> 'execution-target-local'
+       OR policy_id <> 'placement-policy-local'
        OR next_pool_version NOT BETWEEN 1 AND 9007199254740991
        OR next_target_version NOT BETWEEN 1 AND 9007199254740991
        OR next_policy_version NOT BETWEEN 1 AND 9007199254740991
@@ -3787,16 +3830,54 @@ BEGIN
             MESSAGE = 'local execution profile document is invalid';
     END IF;
 
+    IF EXISTS (
+        SELECT 1
+          FROM paas.execution_targets AS target
+         WHERE target.execution_pool_id = pool_id
+           AND target.installation_id IS NULL
+           AND target.id <> target_id
+    ) THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'MX409',
+            MESSAGE = 'local execution pool has ambiguous retained membership';
+    END IF;
+
+    SELECT pool.document, pool.installation_id
+      INTO current_pool, current_pool_installation_id
+      FROM paas.execution_pools AS pool
+     WHERE pool.id = pool_id
+     FOR UPDATE;
     IF expected_pool_version = 0 THEN
-        INSERT INTO paas.execution_pools (id, resource_version, document)
-        VALUES (pool_id, 1, submitted_pool)
+        IF FOUND THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '40001',
+                MESSAGE = 'local execution pool changed concurrently';
+        END IF;
+        INSERT INTO paas.execution_pools (
+            id, installation_id, resource_version, document
+        ) VALUES (pool_id, requested_installation_id, 1, submitted_pool)
         ON CONFLICT DO NOTHING;
     ELSE
+        IF NOT FOUND
+           OR current_pool_installation_id IS DISTINCT FROM requested_installation_id
+                AND current_pool_installation_id IS NOT NULL
+           OR (current_pool#>>'{metadata,resourceVersion}')::bigint <> expected_pool_version THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '40001',
+                MESSAGE = 'local execution pool changed concurrently';
+        END IF;
+        IF (((current_pool #- '{metadata,resourceVersion}') #- '{metadata,updatedAt}') - 'status') <>
+           (((submitted_pool #- '{metadata,resourceVersion}') #- '{metadata,updatedAt}') - 'status') THEN
+            RAISE EXCEPTION USING
+                ERRCODE = 'MX409',
+                MESSAGE = 'local execution pool authority conflicts';
+        END IF;
         UPDATE paas.execution_pools AS pool
-           SET resource_version = next_pool_version,
+           SET installation_id = requested_installation_id,
+               resource_version = next_pool_version,
                document = submitted_pool
          WHERE pool.id = pool_id
-           AND pool.installation_id IS NULL
+           AND (pool.installation_id IS NULL OR pool.installation_id = requested_installation_id)
            AND pool.resource_version = expected_pool_version;
     END IF;
     GET DIAGNOSTICS affected_rows = ROW_COUNT;
@@ -3806,35 +3887,42 @@ BEGIN
             MESSAGE = 'local execution pool changed concurrently';
     END IF;
 
+    SELECT target.document, target.installation_id
+      INTO current_target, current_target_installation_id
+      FROM paas.execution_targets AS target
+     WHERE target.id = target_id
+     FOR UPDATE;
     IF expected_target_version = 0 THEN
-        INSERT INTO paas.execution_targets (
-            id, execution_pool_id, resource_version, document
-        ) VALUES (target_id, pool_id, 1, submitted_target)
-        ON CONFLICT DO NOTHING;
-    ELSE
-        SELECT target.document
-          INTO current_target
-          FROM paas.execution_targets AS target
-         WHERE target.id = target_id
-           AND target.installation_id IS NULL
-           AND target.resource_version = expected_target_version
-         FOR UPDATE;
-        IF NOT FOUND THEN
+        IF FOUND THEN
             RAISE EXCEPTION USING
                 ERRCODE = '40001',
                 MESSAGE = 'local execution target changed concurrently';
         END IF;
-        IF current_target#>>'{metadata,labels,matrix-machine-fingerprint}' <>
-           submitted_target#>>'{metadata,labels,matrix-machine-fingerprint}' THEN
+        INSERT INTO paas.execution_targets (
+            id, installation_id, execution_pool_id, resource_version, document
+        ) VALUES (target_id, requested_installation_id, pool_id, 1, submitted_target)
+        ON CONFLICT DO NOTHING;
+    ELSE
+        IF NOT FOUND
+           OR current_target_installation_id IS DISTINCT FROM requested_installation_id
+                AND current_target_installation_id IS NOT NULL
+           OR (current_target#>>'{metadata,resourceVersion}')::bigint <> expected_target_version THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '40001',
+                MESSAGE = 'local execution target changed concurrently';
+        END IF;
+        IF (((current_target #- '{metadata,resourceVersion}') #- '{metadata,updatedAt}') - 'status') <>
+           (((submitted_target #- '{metadata,resourceVersion}') #- '{metadata,updatedAt}') - 'status') THEN
             RAISE EXCEPTION USING
                 ERRCODE = 'MX409',
-                MESSAGE = 'local execution target identity changed';
+                MESSAGE = 'local execution target authority conflicts';
         END IF;
         UPDATE paas.execution_targets AS target
-           SET resource_version = next_target_version,
+           SET installation_id = requested_installation_id,
+               resource_version = next_target_version,
                document = submitted_target
          WHERE target.id = target_id
-           AND target.installation_id IS NULL
+           AND (target.installation_id IS NULL OR target.installation_id = requested_installation_id)
            AND target.resource_version = expected_target_version;
     END IF;
     GET DIAGNOSTICS affected_rows = ROW_COUNT;
@@ -3842,6 +3930,38 @@ BEGIN
         RAISE EXCEPTION USING
             ERRCODE = '40001',
             MESSAGE = 'local execution target changed concurrently';
+    END IF;
+
+    SELECT count(*), count(*) FILTER (
+        WHERE target.document#>>'{status,health}' = 'READY'
+          AND target.document#>>'{spec,desiredState}' = 'ACTIVE'
+          AND (target.document#>>'{status,observedAt}')::timestamptz > transaction_timestamp() - CASE
+              WHEN target.binding_ref IS NULL THEN interval '5 minutes' ELSE interval '15 seconds' END
+          AND (target.document#>>'{status,observedAt}')::timestamptz <= transaction_timestamp() + interval '2 seconds'
+    ), count(*) FILTER (
+        WHERE target.document#>>'{status,health}' = 'DEGRADED'
+          AND (target.document#>>'{status,observedAt}')::timestamptz > transaction_timestamp() - CASE
+              WHEN target.binding_ref IS NULL THEN interval '5 minutes' ELSE interval '15 seconds' END
+          AND (target.document#>>'{status,observedAt}')::timestamptz <= transaction_timestamp() + interval '2 seconds'
+    ) INTO total_count, ready_count, degraded_count
+      FROM paas.execution_targets AS target
+     WHERE target.installation_id = requested_installation_id
+       AND target.execution_pool_id = pool_id;
+    IF total_count NOT BETWEEN 1 AND 129
+       OR submitted_pool#>>'{status,executionTargetCount}' <> total_count::text
+       OR submitted_pool#>>'{status,readyExecutionTargetCount}' <> ready_count::text
+       OR submitted_pool#>>'{status,phase}' <> (CASE WHEN ready_count = total_count THEN 'READY'
+            WHEN ready_count > 0 OR degraded_count > 0 THEN 'DEGRADED' ELSE 'UNAVAILABLE' END) THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'local execution pool status is inconsistent with installation targets',
+            DETAIL = format(
+                'stored total=%s ready=%s degraded=%s submitted total=%s ready=%s phase=%s',
+                total_count, ready_count, degraded_count,
+                submitted_pool#>>'{status,executionTargetCount}',
+                submitted_pool#>>'{status,readyExecutionTargetCount}',
+                submitted_pool#>>'{status,phase}'
+            );
     END IF;
 
     IF expected_policy_version = 0 THEN
@@ -3883,10 +4003,10 @@ END
 $function$;
 
 REVOKE ALL ON FUNCTION paas.reconcile_local_execution_profile(
-    bigint, jsonb, bigint, jsonb, bigint, jsonb
+    text, bigint, jsonb, bigint, jsonb, bigint, jsonb
 ) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION paas.reconcile_local_execution_profile(
-    bigint, jsonb, bigint, jsonb, bigint, jsonb
+    text, bigint, jsonb, bigint, jsonb, bigint, jsonb
 ) TO matrix_paas_worker;
 
 REVOKE ALL ON ALL TABLES IN SCHEMA paas FROM PUBLIC;

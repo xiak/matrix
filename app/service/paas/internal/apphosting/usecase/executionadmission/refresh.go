@@ -28,7 +28,7 @@ func (service *Service) GetPool(ctx context.Context, authorization port.Authoriz
 		if !found {
 			return ErrNotFound
 		}
-		targets, err := transaction.ListTargets(ctx)
+		targets, err := transaction.ListPoolTargets(ctx, id)
 		if err != nil {
 			return err
 		}
@@ -47,14 +47,14 @@ func (service *Service) GetTarget(ctx context.Context, authorization port.Author
 		return result, ErrInvalidArgument
 	}
 	err := service.transaction(ctx, func(ctx context.Context, transaction Transaction) error {
-		registration, found, err := transaction.LoadTarget(ctx, id)
+		target, found, err := transaction.LoadPoolTarget(ctx, id)
 		if err != nil {
 			return err
 		}
 		if !found {
 			return ErrNotFound
 		}
-		result = service.targetSnapshot(registration.Target, service.config.Clock())
+		result = service.targetSnapshot(target, service.config.Clock())
 		return nil
 	})
 	return result, err
@@ -192,17 +192,17 @@ func (service *Service) refreshTarget(ctx context.Context, initial Registration)
 		if paasv1.ValidateExecutionTarget(next) != nil {
 			return ErrUnavailable
 		}
-		registrations, err := transaction.ListTargets(ctx)
+		targets, err := transaction.ListPoolTargets(ctx, pool.Metadata.ID)
 		if err != nil {
 			return err
 		}
-		for index := range registrations {
-			if registrations[index].Target.Metadata.ID == next.Metadata.ID {
-				registrations[index].Target = next
+		for index := range targets {
+			if targets[index].Metadata.ID == next.Metadata.ID {
+				targets[index] = next
 			}
 		}
 		poolVersion := pool.Metadata.ResourceVersion
-		pool, err = service.poolSnapshot(pool, registrations, now, true)
+		pool, err = service.poolSnapshot(pool, targets, now, true)
 		if err != nil {
 			return err
 		}
@@ -223,7 +223,12 @@ func placementStatusChanged(before, after paasv1.ExecutionTargetStatus) bool {
 }
 
 func (service *Service) targetSnapshot(target paasv1.ExecutionTarget, now time.Time) paasv1.ExecutionTarget {
-	if now.Before(target.Status.ObservedAt) || !now.Before(target.Status.ObservedAt.Add(service.config.MaximumObservationAge)) {
+	maximumAge := service.config.MaximumObservationAge
+	if target.Spec.InfrastructureAdapter.Name == "localmachine" {
+		maximumAge = builtInObservationMaximumAge
+	}
+	if target.Status.ObservedAt.After(now.Add(maximumObservationFutureSkew)) ||
+		!now.Before(target.Status.ObservedAt.Add(maximumAge)) {
 		target.Status.Health = paasv1.ExecutionTargetHealthUnavailable
 		target.Status.SupportedIsolationGuarantees = []paasv1.IsolationGuarantee{}
 	}
@@ -234,10 +239,11 @@ func (service *Service) targetSnapshot(target paasv1.ExecutionTarget, now time.T
 	return target
 }
 
-func (service *Service) poolSnapshot(pool paasv1.ExecutionPool, registrations []Registration, now time.Time, persist bool) (paasv1.ExecutionPool, error) {
+func (service *Service) poolSnapshot(pool paasv1.ExecutionPool, targets []paasv1.ExecutionTarget, now time.Time, persist bool) (paasv1.ExecutionPool, error) {
 	status := paasv1.ExecutionPoolStatus{Phase: paasv1.ExecutionPoolUnavailable, ObservedAt: now}
-	for _, registration := range registrations {
-		target := service.targetSnapshot(registration.Target, now)
+	degraded := false
+	for _, current := range targets {
+		target := service.targetSnapshot(current, now)
 		if target.Spec.ExecutionPoolID != pool.Metadata.ID {
 			continue
 		}
@@ -245,8 +251,9 @@ func (service *Service) poolSnapshot(pool paasv1.ExecutionPool, registrations []
 		if target.Status.Health == paasv1.ExecutionTargetHealthReady && target.Spec.DesiredState == paasv1.ExecutionTargetActive {
 			status.ReadyExecutionTargetCount++
 		}
+		degraded = degraded || target.Status.Health == paasv1.ExecutionTargetHealthDegraded
 	}
-	if status.ReadyExecutionTargetCount > 0 {
+	if status.ReadyExecutionTargetCount > 0 || degraded {
 		status.Phase = paasv1.ExecutionPoolDegraded
 		if status.ReadyExecutionTargetCount == status.ExecutionTargetCount {
 			status.Phase = paasv1.ExecutionPoolReady
