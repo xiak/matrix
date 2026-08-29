@@ -35,6 +35,7 @@ func TestOpenAPIContractDefinesApplicationPaaSV1(t *testing.T) {
 		"DeploymentGeneration",
 		"ExecutionPool",
 		"ExecutionTarget",
+		"ExecutionTargetList",
 		"PlacementPolicy",
 		"PlacementDecision",
 		"Operation",
@@ -65,6 +66,12 @@ func TestOpenAPIContractDefinesApplicationPaaSV1(t *testing.T) {
 	if schemaVersion["minimum"] != json.Number("1") {
 		t.Fatalf("Readiness.schemaVersion must be positive: %#v", schemaVersion)
 	}
+	executionTargetList := schemaObject(t, schemas, "ExecutionTargetList")
+	listProperties := object(t, executionTargetList["properties"], "ExecutionTargetList.properties")
+	listItems := object(t, listProperties["items"], "ExecutionTargetList.items")
+	if listItems["maxItems"] != json.Number(fmt.Sprint(MaximumExecutionTargetListItems)) {
+		t.Fatalf("ExecutionTargetList.items must be bounded: %#v", listItems)
+	}
 }
 
 func TestOpenAPINorthboundSurfaceUsesMatrixIAM(t *testing.T) {
@@ -87,7 +94,7 @@ func TestOpenAPINorthboundSurfaceUsesMatrixIAM(t *testing.T) {
 	want := map[string][]string{
 		"/v1/execution-pools":                                     {"post"},
 		"/v1/execution-pools/{executionPoolId}":                   {"get"},
-		"/v1/execution-targets":                                   {"post"},
+		"/v1/execution-targets":                                   {"get", "post"},
 		"/v1/execution-targets/{executionTargetId}":               {"get"},
 		"/v1/platform/operations/{operationId}":                   {"get"},
 		"/ready":                                                  {"get"},
@@ -383,6 +390,7 @@ func TestOpenAPIStructPropertiesAndRequiredFieldsMatchGoTypes(t *testing.T) {
 		"ExecutionTargetSpec":                reflect.TypeOf(ExecutionTargetSpec{}),
 		"ExecutionTargetStatus":              reflect.TypeOf(ExecutionTargetStatus{}),
 		"ExecutionTarget":                    reflect.TypeOf(ExecutionTarget{}),
+		"ExecutionTargetList":                reflect.TypeOf(ExecutionTargetList{}),
 		"PlacementPolicySpec":                reflect.TypeOf(PlacementPolicySpec{}),
 		"PlacementPolicy":                    reflect.TypeOf(PlacementPolicy{}),
 		"PlacementDecision":                  reflect.TypeOf(PlacementDecision{}),

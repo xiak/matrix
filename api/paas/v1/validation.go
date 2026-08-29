@@ -302,6 +302,25 @@ func ValidateExecutionTarget(value ExecutionTarget) error {
 	return errors.Join(problems...)
 }
 
+// MaximumExecutionTargetListItems bounds one built-in target plus the 128
+// managed targets admitted by an installation.
+const MaximumExecutionTargetListItems = 129
+
+func ValidateExecutionTargetList(value ExecutionTargetList) error {
+	if value.APIVersion != APIVersion || value.Kind != "ExecutionTargetList" ||
+		value.Items == nil || len(value.Items) > MaximumExecutionTargetListItems {
+		return errors.New("execution target list is invalid")
+	}
+	seen := make(map[ResourceID]bool, len(value.Items))
+	for _, item := range value.Items {
+		if ValidateExecutionTarget(item) != nil || seen[item.Metadata.ID] {
+			return errors.New("execution target list is invalid")
+		}
+		seen[item.Metadata.ID] = true
+	}
+	return nil
+}
+
 func ValidatePlacementPolicy(value PlacementPolicy) error {
 	var problems []error
 	if value.APIVersion != APIVersion || value.Kind != "PlacementPolicy" {

@@ -14,6 +14,7 @@ type ExecutionWorkflow interface {
 	RegisterTarget(context.Context, executionadmission.RegisterTargetCommand) (paasv1.ExecutionTarget, paasv1.Operation, bool, error)
 	GetPool(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.ExecutionPool, error)
 	GetTarget(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.ExecutionTarget, error)
+	ListTargets(context.Context, port.Authorization) (paasv1.ExecutionTargetList, error)
 	GetOperation(context.Context, port.Authorization, paasv1.OperationID) (paasv1.Operation, error)
 }
 
@@ -91,6 +92,26 @@ func (value *handler) getExecutionTarget(response http.ResponseWriter, request *
 	}
 	target, err := value.execution.GetTarget(request.Context(), authorization, id)
 	writeResource(response, requestID, target, "", err)
+}
+
+func (value *handler) listExecutionTargets(response http.ResponseWriter, request *http.Request) {
+	requestID, ok := value.beginExecutionRequest(response, request, false)
+	if !ok {
+		return
+	}
+	authorization, ok := value.authorizeRequest(
+		response,
+		request,
+		requestID,
+		port.AuthorizeExecutionTargetRead,
+		"ExecutionTarget",
+		"collection",
+	)
+	if !ok {
+		return
+	}
+	targets, err := value.execution.ListTargets(request.Context(), authorization)
+	writeResource(response, requestID, targets, "", err)
 }
 
 func (value *handler) getPlatformOperation(response http.ResponseWriter, request *http.Request) {

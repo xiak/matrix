@@ -83,6 +83,45 @@ func TestChangedNodeIdentityCannotRebindRegisteredTarget(t *testing.T) {
 	}
 }
 
+func TestListTargetsUsesPersistedSnapshotWithoutProbingOrRenewingIt(t *testing.T) {
+	service, transaction, adapter, now := refreshFixture(t)
+	managed := transaction.registration.Target
+	managed.Metadata.ID = "target-z"
+	managed.Metadata.Name = "managed-z"
+	local := transaction.registration.Target
+	local.Metadata.ID = builtInTargetID
+	local.Metadata.Name = "local"
+	local.Spec.InfrastructureAdapter.Name = "localmachine"
+	local.Status.ObservedAt = now.Add(-time.Minute)
+	transaction.poolTargets = []paasv1.ExecutionTarget{managed, local}
+	transaction.retryFirst = true
+	service.config.Clock = func() time.Time { return now.Add(20 * time.Second) }
+	authorization := port.Authorization{
+		InstallationID: "installation-a",
+		Subject:        paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "platform-user"},
+		DecisionID:     "decision-list",
+		RequestID:      "request-list",
+	}
+	result, err := service.ListTargets(context.Background(), authorization)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paasv1.ValidateExecutionTargetList(result) != nil || len(result.Items) != 2 ||
+		result.Items[0].Metadata.ID != builtInTargetID || result.Items[1].Metadata.ID != "target-z" {
+		t.Fatalf("execution target inventory = %#v", result)
+	}
+	if result.Items[0].Status.ObservedAt != local.Status.ObservedAt ||
+		result.Items[1].Status.Usage.ObservedAt != managed.Status.Usage.ObservedAt ||
+		result.Items[1].Status.Usage.CPU.State != paasv1.MeasurementStale ||
+		result.Items[1].Status.Health != paasv1.ExecutionTargetHealthUnavailable {
+		t.Fatal("execution target read renewed or hid a stale sample")
+	}
+	if adapter.calls != 0 || transaction.calls != 2 ||
+		transaction.poolTargets[1].Status.Usage.CPU.State != paasv1.MeasurementUnavailable {
+		t.Fatal("retried execution target read probed, duplicated, or mutated persisted state")
+	}
+}
+
 func TestRefreshPreservesWorkerObservedLocalTarget(t *testing.T) {
 	service, transaction, _, now := refreshFixture(t)
 	local := transaction.registration.Target
@@ -179,6 +218,7 @@ type refreshTransaction struct {
 	pool         paasv1.ExecutionPool
 	calls        int
 	active       bool
+	retryFirst   bool
 }
 
 func (transaction *refreshTransaction) WithinTransaction(ctx context.Context, installation string, callback func(context.Context, Transaction) error) error {
@@ -188,13 +228,24 @@ func (transaction *refreshTransaction) WithinTransaction(ctx context.Context, in
 	if installation != "installation-a" {
 		return ErrConflict
 	}
-	return callback(ctx, transaction)
+	err := callback(ctx, transaction)
+	if err == nil && transaction.retryFirst {
+		transaction.retryFirst = false
+		return ErrRetryableTransaction
+	}
+	return err
 }
 func (transaction *refreshTransaction) TransactionTime(context.Context) (time.Time, error) {
 	return transaction.now, nil
 }
 func (transaction *refreshTransaction) ListTargets(context.Context) ([]Registration, error) {
 	return []Registration{transaction.registration}, nil
+}
+func (transaction *refreshTransaction) ListTargetResources(context.Context) ([]paasv1.ExecutionTarget, error) {
+	if transaction.poolTargets == nil {
+		return []paasv1.ExecutionTarget{transaction.registration.Target}, nil
+	}
+	return append([]paasv1.ExecutionTarget(nil), transaction.poolTargets...), nil
 }
 func (transaction *refreshTransaction) ListPoolTargets(context.Context, paasv1.ResourceID) ([]paasv1.ExecutionTarget, error) {
 	if transaction.poolTargets == nil {

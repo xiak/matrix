@@ -101,6 +101,55 @@ func TestExecutionAdmissionAuthorizesTheActualResourceAndInstallation(t *testing
 	}
 }
 
+func TestExecutionTargetInventoryIsPlatformAuthorizedAndSelectorFree(t *testing.T) {
+	authorization := port.Authorization{
+		InstallationID: "installation-a",
+		Subject:        paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "platform-user"},
+		DecisionID:     "decision-platform-list",
+		RequestID:      "request-test",
+	}
+	authorizer := &fakeAuthorizer{result: &authorization}
+	workflow := &fakeExecutionWorkflow{listResult: paasv1.ExecutionTargetList{
+		APIVersion: paasv1.APIVersion,
+		Kind:       "ExecutionTargetList",
+		Items:      []paasv1.ExecutionTarget{},
+	}}
+	handler, err := NewHandler(authorizer, &fakeWorkflow{}, workflow, &fakeInstallationVerifier{}, Config{
+		NewRequestID: func() (string, error) { return "request-test", nil },
+		Readiness:    func(context.Context) (paasv1.Readiness, error) { return paasv1.Readiness{}, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/v1/execution-targets", nil)
+	request.Header.Set("Authorization", "Bearer platform-user")
+	request.Header.Set("X-Tenant-ID", "attacker-tenant")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	var result paasv1.ExecutionTargetList
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &result) != nil ||
+		paasv1.ValidateExecutionTargetList(result) != nil || workflow.listCalls != 1 ||
+		authorizer.request.Action != port.AuthorizeExecutionTargetRead ||
+		authorizer.request.Resource != (paasv1.ResourceRef{Kind: "ExecutionTarget", ID: "collection"}) ||
+		workflow.listAuthorization.InstallationID != "installation-a" || workflow.listAuthorization.TenantID != "" {
+		t.Fatalf("execution target inventory response=%d body=%s authorization=%#v", response.Code, response.Body.String(), authorizer.request)
+	}
+	for _, target := range []string{
+		"/v1/execution-targets?tenantId=attacker",
+		"/v1/execution-targets?executionTargetId=node-a",
+	} {
+		authorizer.request = port.AuthorizationRequest{}
+		response = httptest.NewRecorder()
+		request = httptest.NewRequest(http.MethodGet, target, nil)
+		request.Header.Set("Authorization", "Bearer platform-user")
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest || workflow.listCalls != 1 ||
+			authorizer.request != (port.AuthorizationRequest{}) {
+			t.Fatalf("execution target selector reached authorization/workflow: status=%d", response.Code)
+		}
+	}
+}
+
 func TestHandlerUsesOnlyVerifierCredentialForFixedInstallationProbe(t *testing.T) {
 	authorizer := &fakeAuthorizer{}
 	verifier := &fakeInstallationVerifier{result: paasv1.InstallationVerification{
@@ -556,10 +605,13 @@ func testMetadata(id paasv1.ResourceID, name string) paasv1.ResourceMetadata {
 }
 
 type fakeExecutionWorkflow struct {
-	createCommand   executionadmission.CreatePoolCommand
-	registerCommand executionadmission.RegisterTargetCommand
-	createCalls     int
-	registerCalls   int
+	createCommand     executionadmission.CreatePoolCommand
+	registerCommand   executionadmission.RegisterTargetCommand
+	listAuthorization port.Authorization
+	listResult        paasv1.ExecutionTargetList
+	createCalls       int
+	registerCalls     int
+	listCalls         int
 }
 
 func (workflow *fakeExecutionWorkflow) CreatePool(_ context.Context, command executionadmission.CreatePoolCommand) (paasv1.ExecutionPool, paasv1.Operation, bool, error) {
@@ -581,6 +633,17 @@ func (*fakeExecutionWorkflow) GetPool(context.Context, port.Authorization, paasv
 }
 func (*fakeExecutionWorkflow) GetTarget(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.ExecutionTarget, error) {
 	return paasv1.ExecutionTarget{}, executionadmission.ErrNotFound
+}
+func (workflow *fakeExecutionWorkflow) ListTargets(_ context.Context, authorization port.Authorization) (paasv1.ExecutionTargetList, error) {
+	workflow.listAuthorization, workflow.listCalls = authorization, workflow.listCalls+1
+	if workflow.listResult.Items == nil {
+		return paasv1.ExecutionTargetList{
+			APIVersion: paasv1.APIVersion,
+			Kind:       "ExecutionTargetList",
+			Items:      []paasv1.ExecutionTarget{},
+		}, nil
+	}
+	return workflow.listResult, nil
 }
 func (*fakeExecutionWorkflow) GetOperation(context.Context, port.Authorization, paasv1.OperationID) (paasv1.Operation, error) {
 	return paasv1.Operation{}, executionadmission.ErrNotFound

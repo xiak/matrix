@@ -136,6 +136,12 @@ func buildPaths() schema {
 			"get": readOperation(resource.readID, "Get "+resource.kind, resource.parameter, resource.kind),
 		}
 	}
+	executionTargets := paths["/v1/execution-targets"].(schema)
+	executionTargets["get"] = collectionReadOperation(
+		"listExecutionTargets",
+		"List installation-scoped ExecutionTargets",
+		"ExecutionTargetList",
+	)
 
 	paths["/v1/deployments"] = schema{
 		"post": mutationOperation("createDeployment", "Create Deployment", "CreateDeploymentRequest", false, "202"),
@@ -261,6 +267,16 @@ func readOperation(operationID, summary, pathParameter, responseSchema string) s
 		"summary":     summary,
 		"parameters":  []any{pathIDParameter(pathParameter)},
 		"responses":   readResponses(responseSchema),
+	}
+}
+
+func collectionReadOperation(operationID, summary, responseSchema string) schema {
+	responses := readResponses(responseSchema)
+	object(responses["200"])["description"] = "Current bounded authorized collection."
+	return schema{
+		"operationId": operationID,
+		"summary":     summary,
+		"responses":   responses,
 	}
 }
 
@@ -397,7 +413,7 @@ func structContracts() map[string]reflect.Type {
 		paasv1.ResourceScope{}, paasv1.ResourceMetadata{}, paasv1.Tenant{},
 		paasv1.LabelSelector{}, paasv1.ExecutionPoolSpec{}, paasv1.ExecutionPoolStatus{}, paasv1.ExecutionPool{},
 		paasv1.CreateExecutionPoolRequest{}, paasv1.RegisterExecutionTargetRequest{},
-		paasv1.AdapterRef{}, paasv1.Capacity{}, paasv1.ExecutionTargetSpec{}, paasv1.ExecutionTargetStatus{}, paasv1.ExecutionTarget{},
+		paasv1.AdapterRef{}, paasv1.Capacity{}, paasv1.ExecutionTargetSpec{}, paasv1.ExecutionTargetStatus{}, paasv1.ExecutionTarget{}, paasv1.ExecutionTargetList{},
 		paasv1.ExecutionTargetUsage{}, paasv1.CPUUsage{}, paasv1.CPUUsageValue{}, paasv1.MemoryUsage{}, paasv1.MemoryUsageValue{},
 		paasv1.FilesystemUsage{}, paasv1.FilesystemUsageValue{},
 		paasv1.PlacementPolicySpec{}, paasv1.PlacementPolicy{}, paasv1.PlacementDecision{},
@@ -592,6 +608,8 @@ func applySemanticOverlays(schemas map[string]any) {
 	}
 
 	setArrayMinimum(schemas, "ExecutionPoolSpec", "allowedIsolationGuarantees", 1)
+	executionTargetListItems := object(schemas["ExecutionTargetList"])["properties"].(schema)["items"].(schema)
+	executionTargetListItems["maxItems"] = paasv1.MaximumExecutionTargetListItems
 	usageProperties := object(schemas["ExecutionTargetUsage"])["properties"].(schema)
 	usageProperties["filesystems"].(schema)["maxItems"] = paasv1.MaximumObservedFilesystems
 	usageProperties["filesystems"].(schema)["minItems"] = 1

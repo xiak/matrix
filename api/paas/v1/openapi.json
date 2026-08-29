@@ -1471,6 +1471,30 @@
         ],
         "type": "string"
       },
+      "ExecutionTargetList": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ExecutionTarget"
+            },
+            "maxItems": 129,
+            "type": "array"
+          },
+          "kind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "items"
+        ],
+        "type": "object"
+      },
       "ExecutionTargetObservation": {
         "additionalProperties": false,
         "properties": {
@@ -4149,6 +4173,48 @@
       }
     },
     "/v1/execution-targets": {
+      "get": {
+        "operationId": "listExecutionTargets",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionTargetList"
+                }
+              }
+            },
+            "description": "Current bounded authorized collection.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "List installation-scoped ExecutionTargets"
+      },
       "post": {
         "operationId": "registerExecutionTarget",
         "parameters": [

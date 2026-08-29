@@ -73,6 +73,7 @@ type Transaction interface {
 	LoadTarget(context.Context, paasv1.ResourceID) (Registration, bool, error)
 	ListPoolTargets(context.Context, paasv1.ResourceID) ([]paasv1.ExecutionTarget, error)
 	ListTargets(context.Context) ([]Registration, error)
+	ListTargetResources(context.Context) ([]paasv1.ExecutionTarget, error)
 	CreatePool(context.Context, paasv1.ExecutionPool, Submission) error
 	RegisterTarget(context.Context, Registration, uint64, paasv1.ExecutionPool, Submission) error
 	RefreshTarget(context.Context, uint64, paasv1.ExecutionTarget, uint64, paasv1.ExecutionPool) error

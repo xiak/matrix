@@ -1,6 +1,7 @@
 package paasv1
 
 import (
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -188,6 +189,44 @@ func TestValidateExecutionTargetCapabilityRequirementFollowsHealth(t *testing.T)
 	target.Status.Health = ExecutionTargetHealthReady
 	if err := ValidateExecutionTarget(target); err == nil {
 		t.Fatal("ready target without advertised isolation was accepted")
+	}
+}
+
+func TestValidateExecutionTargetListIsBoundedAndUnique(t *testing.T) {
+	var target ExecutionTarget
+	decodeStrictJSON(t, "examples/execution-target.json", &target)
+	valid := ExecutionTargetList{
+		APIVersion: APIVersion,
+		Kind:       "ExecutionTargetList",
+		Items:      []ExecutionTarget{target},
+	}
+	if err := ValidateExecutionTargetList(valid); err != nil {
+		t.Fatalf("valid execution target list: %v", err)
+	}
+	empty := valid
+	empty.Items = []ExecutionTarget{}
+	if err := ValidateExecutionTargetList(empty); err != nil {
+		t.Fatalf("empty execution target list: %v", err)
+	}
+	missing := valid
+	missing.Items = nil
+	if ValidateExecutionTargetList(missing) == nil {
+		t.Fatal("nil execution target inventory accepted")
+	}
+	duplicate := valid
+	duplicate.Items = append(duplicate.Items, target)
+	if ValidateExecutionTargetList(duplicate) == nil {
+		t.Fatal("duplicate execution target accepted")
+	}
+	overflow := valid
+	overflow.Items = make([]ExecutionTarget, MaximumExecutionTargetListItems+1)
+	for index := range overflow.Items {
+		item := target
+		item.Metadata.ID = ResourceID(fmt.Sprintf("target-%03d", index))
+		overflow.Items[index] = item
+	}
+	if ValidateExecutionTargetList(overflow) == nil {
+		t.Fatal("oversized execution target inventory accepted")
 	}
 }
 

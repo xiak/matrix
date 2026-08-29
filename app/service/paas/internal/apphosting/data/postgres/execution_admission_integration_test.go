@@ -92,6 +92,25 @@ func assertExecutionAdmission(t *testing.T, ctx context.Context, admin *pgx.Conn
 	if target.Metadata.Labels["matrix-machine-fingerprint"] != adapter.fingerprint || target.Spec.DesiredState != paasv1.ExecutionTargetActive || target.Status.Usage == nil {
 		t.Fatalf("registered target = %#v", target)
 	}
+	var documentBefore string
+	if err := admin.QueryRow(ctx, `SELECT document::text FROM paas.execution_targets
+		WHERE installation_id=$1 AND id=$2`, installationID, targetID).Scan(&documentBefore); err != nil {
+		t.Fatal(err)
+	}
+	callsBeforeList := adapter.calls.Load()
+	inventory, err := service.ListTargets(ctx, authorization)
+	if err != nil || paasv1.ValidateExecutionTargetList(inventory) != nil || len(inventory.Items) != 1 ||
+		inventory.Items[0].Metadata.ID != targetID || adapter.calls.Load() != callsBeforeList {
+		t.Fatalf("installation inventory probed or crossed scope: inventory=%#v calls=%d err=%v", inventory, adapter.calls.Load(), err)
+	}
+	var documentAfter string
+	if err := admin.QueryRow(ctx, `SELECT document::text FROM paas.execution_targets
+		WHERE installation_id=$1 AND id=$2`, installationID, targetID).Scan(&documentAfter); err != nil {
+		t.Fatal(err)
+	}
+	if documentAfter != documentBefore || inventory.Items[0].Status.Usage.ObservedAt != target.Status.Usage.ObservedAt {
+		t.Fatal("inventory read renewed or persisted a source observation")
+	}
 	pool, err = service.GetPool(ctx, authorization, poolID)
 	if err != nil || pool.Status.ReadyExecutionTargetCount != 1 {
 		t.Fatalf("registered pool = %#v %v", pool, err)
@@ -115,6 +134,10 @@ func assertExecutionAdmission(t *testing.T, ctx context.Context, admin *pgx.Conn
 	otherAuthorization.InstallationID = otherConfig.InstallationID
 	if _, err := otherService.GetTarget(ctx, otherAuthorization, targetID); !errors.Is(err, executionadmission.ErrNotFound) {
 		t.Fatalf("another installation read node: %v", err)
+	}
+	otherInventory, err := otherService.ListTargets(ctx, otherAuthorization)
+	if err != nil || otherInventory.Items == nil || len(otherInventory.Items) != 0 {
+		t.Fatalf("another installation listed node: inventory=%#v err=%v", otherInventory, err)
 	}
 	assertAdmissionRLS(t, ctx, apiPool, installationID, poolID, targetID)
 	_, err = admin.Exec(ctx, `INSERT INTO paas.execution_targets(id,execution_pool_id,resource_version,document,installation_id,binding_ref,identity_fingerprint)

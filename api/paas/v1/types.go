@@ -201,6 +201,15 @@ type ExecutionTarget struct {
 	Status     ExecutionTargetStatus `json:"status"`
 }
 
+// ExecutionTargetList is the bounded installation-scoped platform inventory.
+// Its items are normalized target documents; connection bindings and provider
+// credentials never enter this contract.
+type ExecutionTargetList struct {
+	APIVersion string            `json:"apiVersion"`
+	Kind       string            `json:"kind"`
+	Items      []ExecutionTarget `json:"items"`
+}
+
 // RegisterExecutionTargetRequest selects one protected installation binding.
 // Endpoints, identity pins, certificates and host paths are never caller input.
 type RegisterExecutionTargetRequest struct {

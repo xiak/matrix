@@ -550,6 +550,28 @@ func assertExecutionProfileRefresh(
 	if err != nil || localTarget.Spec.InfrastructureAdapter.Name != "localmachine" {
 		t.Fatalf("installation cannot read built-in target: %#v err=%v", localTarget, err)
 	}
+	managedCalls := managedAdapter.calls.Load()
+	inventory, err := admission.ListTargets(ctx, authorization)
+	if err != nil || paasv1.ValidateExecutionTargetList(inventory) != nil || len(inventory.Items) != 2 ||
+		string(inventory.Items[0].Metadata.ID) >= string(inventory.Items[1].Metadata.ID) ||
+		managedAdapter.calls.Load() != managedCalls {
+		t.Fatalf("list built-in and managed targets: inventory=%#v calls=%d err=%v", inventory, managedAdapter.calls.Load(), err)
+	}
+	listed := map[paasv1.ResourceID]paasv1.ExecutionTarget{}
+	for _, item := range inventory.Items {
+		listed[item.Metadata.ID] = item
+	}
+	if listed[ids.TargetID].Status.ObservedAt != localTarget.Status.ObservedAt ||
+		listed[managedTargetID].Status.Usage == nil || registered.Status.Usage == nil ||
+		listed[managedTargetID].Status.Usage.ObservedAt != registered.Status.Usage.ObservedAt {
+		t.Fatal("inventory replaced persisted source timestamps")
+	}
+	encodedInventory, err := json.Marshal(inventory)
+	if err != nil || strings.Contains(string(encodedInventory), "node-binding") ||
+		strings.Contains(string(encodedInventory), "bindingRef") ||
+		strings.Contains(string(encodedInventory), "identityFingerprint") {
+		t.Fatalf("inventory leaked protected binding material: %s err=%v", encodedInventory, err)
+	}
 	adapter.observation.ObservedAt = time.Now().UTC().Truncate(time.Microsecond)
 	if err := service.Refresh(ctx); err != nil {
 		t.Fatalf("local refresh overwrote managed pool membership: %v", err)

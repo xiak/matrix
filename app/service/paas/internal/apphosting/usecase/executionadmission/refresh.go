@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -58,6 +59,44 @@ func (service *Service) GetTarget(ctx context.Context, authorization port.Author
 		return nil
 	})
 	return result, err
+}
+
+func (service *Service) ListTargets(ctx context.Context, authorization port.Authorization) (paasv1.ExecutionTargetList, error) {
+	result := paasv1.ExecutionTargetList{
+		APIVersion: paasv1.APIVersion,
+		Kind:       "ExecutionTargetList",
+		Items:      []paasv1.ExecutionTarget{},
+	}
+	if err := service.authorize(ctx, authorization); err != nil {
+		return paasv1.ExecutionTargetList{}, err
+	}
+	err := service.transaction(ctx, func(ctx context.Context, transaction Transaction) error {
+		items, err := transaction.ListTargetResources(ctx)
+		if err != nil {
+			return err
+		}
+		if len(items) > paasv1.MaximumExecutionTargetListItems {
+			return ErrConflict
+		}
+		attempt := result
+		attempt.Items = make([]paasv1.ExecutionTarget, 0, len(items))
+		now := service.config.Clock().UTC().Truncate(time.Microsecond)
+		for _, item := range items {
+			attempt.Items = append(attempt.Items, service.targetSnapshot(item, now))
+		}
+		slices.SortFunc(attempt.Items, func(left, right paasv1.ExecutionTarget) int {
+			return strings.Compare(string(left.Metadata.ID), string(right.Metadata.ID))
+		})
+		if paasv1.ValidateExecutionTargetList(attempt) != nil {
+			return ErrConflict
+		}
+		result = attempt
+		return nil
+	})
+	if err != nil {
+		return paasv1.ExecutionTargetList{}, err
+	}
+	return result, nil
 }
 
 func (service *Service) GetOperation(ctx context.Context, authorization port.Authorization, id paasv1.OperationID) (paasv1.Operation, error) {

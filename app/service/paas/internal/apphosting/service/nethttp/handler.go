@@ -105,6 +105,7 @@ func NewHandler(
 	routes.HandleFunc("POST /v1/execution-pools", value.createExecutionPool)
 	routes.HandleFunc("GET /v1/execution-pools/{executionPoolId}", value.getExecutionPool)
 	routes.HandleFunc("POST /v1/execution-targets", value.registerExecutionTarget)
+	routes.HandleFunc("GET /v1/execution-targets", value.listExecutionTargets)
 	routes.HandleFunc("GET /v1/execution-targets/{executionTargetId}", value.getExecutionTarget)
 	routes.HandleFunc("GET /v1/platform/operations/{operationId}", value.getPlatformOperation)
 	routes.HandleFunc("POST /v1/applications", value.createApplication)
