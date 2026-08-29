@@ -39,6 +39,74 @@ func (fn sourceFunc) Current(ctx context.Context) (paasv1.ExecutionTargetObserva
 	return fn(ctx)
 }
 
+type deploymentService struct{}
+
+func (deploymentService) Ready(context.Context) error { return nil }
+
+func (deploymentService) ExecuteDeployment(
+	context.Context,
+	nodev1.DeploymentEffectRequest,
+) (paasv1.AdapterResult, error) {
+	return paasv1.AdapterResult{}, errors.New("unexpected Deployment effect")
+}
+
+func (deploymentService) ObserveDeployment(
+	context.Context,
+	paasv1.ObserveDeploymentRequest,
+) (paasv1.DeploymentObservation, error) {
+	return paasv1.DeploymentObservation{}, errors.New("unexpected Deployment observation")
+}
+
+type deploymentServiceFuncs struct {
+	ready   func(context.Context) error
+	execute func(context.Context, nodev1.DeploymentEffectRequest) (paasv1.AdapterResult, error)
+	observe func(context.Context, paasv1.ObserveDeploymentRequest) (paasv1.DeploymentObservation, error)
+}
+
+func (service deploymentServiceFuncs) Ready(ctx context.Context) error {
+	if service.ready == nil {
+		return nil
+	}
+	return service.ready(ctx)
+}
+
+func (service deploymentServiceFuncs) ExecuteDeployment(
+	ctx context.Context,
+	request nodev1.DeploymentEffectRequest,
+) (paasv1.AdapterResult, error) {
+	return service.execute(ctx, request)
+}
+
+func (service deploymentServiceFuncs) ObserveDeployment(
+	ctx context.Context,
+	request paasv1.ObserveDeploymentRequest,
+) (paasv1.DeploymentObservation, error) {
+	return service.observe(ctx, request)
+}
+
+type deploymentArtifactResolver struct{}
+
+func (deploymentArtifactResolver) ResolveDeploymentArtifact(
+	_ context.Context,
+	artifact paasv1.ArtifactRef,
+) (nodev1.ResolvedArtifact, error) {
+	return nodev1.ResolvedArtifact{
+		ArtifactDigest: artifact.Digest,
+		LocalImageID:   deploymentTestDigest('d'),
+	}, nil
+}
+
+type deploymentSecretResolver struct {
+	content []byte
+}
+
+func (resolver deploymentSecretResolver) ResolveSecret(
+	_ context.Context,
+	_ paasv1.SecretVersionReference,
+) ([]byte, error) {
+	return bytes.Clone(resolver.content), nil
+}
+
 func observedTarget() paasv1.ExecutionTargetObservation {
 	capacity := paasv1.Capacity{CPUMillis: 2000, MemoryBytes: 8000, StorageBytes: 10000, WorkloadSlots: 2}
 	now := time.Now().UTC().Truncate(time.Microsecond)
@@ -114,6 +182,183 @@ func TestRealMTLSBindsBothPeersAndReturnsOnlyTheSelectedNode(t *testing.T) {
 	}
 }
 
+func TestRealMTLSDeploymentBindsExactTargetMaterialsAndObservation(t *testing.T) {
+	authority := newAuthority(t)
+	nodeURI, _ := nodev1.NodeURI(nodeIdentity)
+	controllerURI, _ := nodev1.ControllerURI(nodeIdentity.InstallationID, controllerID)
+	node := authority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false)
+	controller := authority.issue(t, controllerURI, x509.ExtKeyUsageClientAuth, false)
+	execution := deploymentExecutionFixture(t)
+	var effectCalls, observationCalls atomic.Int32
+	var receivedSecret string
+	var receivedSecretBytes []byte
+	service := deploymentServiceFuncs{
+		execute: func(_ context.Context, request nodev1.DeploymentEffectRequest) (paasv1.AdapterResult, error) {
+			effectCalls.Add(1)
+			if request.Identity != nodeIdentity || request.Execution.Command.ExecutionTargetID != nodeIdentity.ExecutionTargetID ||
+				request.Execution.Command.BindingRef != "binding-a" || len(request.Materials.Artifacts) != 1 ||
+				request.Materials.Artifacts[0].LocalImageID != deploymentTestDigest('d') || len(request.Materials.Secrets) != 1 {
+				t.Fatal("node service received a retargeted or incomplete effect")
+			}
+			receivedSecret = string(request.Materials.Secrets[0].Value)
+			receivedSecretBytes = request.Materials.Secrets[0].Value
+			return paasv1.AdapterResult{
+				CommandID: request.Execution.Command.CommandID,
+				State:     paasv1.AdapterResultSucceeded, Receipt: "node-receipt",
+				ObservedAt: time.Now().UTC().Truncate(time.Microsecond),
+			}, nil
+		},
+		observe: func(_ context.Context, request paasv1.ObserveDeploymentRequest) (paasv1.DeploymentObservation, error) {
+			observationCalls.Add(1)
+			return deploymentObservationFixture(request), nil
+		},
+	}
+	handler, err := New(sourceFunc(func(context.Context) (paasv1.ExecutionTargetObservation, error) {
+		return observedTarget(), nil
+	}), service, Config{Identity: nodeIdentity, ControllerID: controllerID, BindingRef: "binding-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := startTLSServer(t, node, handler)
+	client := newDeploymentClient(t, server.URL, controller.credentials, nodeIdentity, "binding-a")
+	result, err := client.ApplyDeployment(context.Background(), execution)
+	if err != nil || result.State != paasv1.AdapterResultSucceeded || effectCalls.Load() != 1 ||
+		receivedSecret != "secret-value" {
+		t.Fatalf("remote effect failed: %#v, %v", result, err)
+	}
+	if !bytes.Equal(receivedSecretBytes, make([]byte, len(receivedSecretBytes))) {
+		t.Fatal("node handler retained decoded secret bytes after the effect")
+	}
+	observe := deploymentObserveRequest(execution)
+	observation, err := client.ObserveDeployment(context.Background(), observe)
+	if err != nil || observation.Phase != paasv1.DeploymentReady || observationCalls.Load() != 1 {
+		t.Fatalf("remote observation failed: %#v, %v", observation, err)
+	}
+
+	wrong := deploymentExecutionFixture(t)
+	wrong.Command.BindingRef = "binding-b"
+	wrong.Command.RequestDigest = paasv1.DeploymentExecutionRequestDigest(wrong)
+	wrongClient := newDeploymentClient(t, server.URL, controller.credentials, nodeIdentity, "binding-b")
+	_, err = wrongClient.ApplyDeployment(context.Background(), wrong)
+	var fault paasv1.AdapterFault
+	if !errors.As(err, &fault) || fault.Normalized.Class != paasv1.AdapterErrorPermissionDenied || effectCalls.Load() != 1 {
+		t.Fatalf("wrong binding reached the node effect: %v", err)
+	}
+}
+
+func TestLostRemoteEffectResponseBecomesUnknownThenObservesSameTarget(t *testing.T) {
+	authority := newAuthority(t)
+	nodeURI, _ := nodev1.NodeURI(nodeIdentity)
+	controllerURI, _ := nodev1.ControllerURI(nodeIdentity.InstallationID, controllerID)
+	node := authority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false)
+	controller := authority.issue(t, controllerURI, x509.ExtKeyUsageClientAuth, false)
+	execution := deploymentExecutionFixture(t)
+	var effects, observations atomic.Int32
+	handler := http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case nodev1.DeploymentEffectPath:
+			value, err := nodev1.DecodeDeploymentEffectRequest(request.Body)
+			if err != nil || value.Identity != nodeIdentity {
+				t.Error("lost-response fixture received invalid effect")
+				return
+			}
+			defer value.Materials.Clear()
+			effects.Add(1)
+			connection, _, err := response.(http.Hijacker).Hijack()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			_ = connection.Close()
+		case nodev1.DeploymentObservationPath:
+			value, err := nodev1.DecodeDeploymentObservationRequest(request.Body)
+			if err != nil || value.Identity != nodeIdentity ||
+				value.Request.Command.ExecutionTargetID != execution.Command.ExecutionTargetID {
+				t.Error("lost-response recovery observed another target")
+				return
+			}
+			observations.Add(1)
+			encoded, _ := json.Marshal(nodev1.DeploymentObservationResponse{
+				APIVersion: nodev1.APIVersion, Kind: nodev1.DeploymentObservationResponseKind,
+				Identity: nodeIdentity, CommandID: value.Request.Command.CommandID,
+				Observation: deploymentObservationFixture(value.Request),
+			})
+			response.Header().Set("Content-Type", "application/json")
+			_, _ = response.Write(encoded)
+		default:
+			response.WriteHeader(http.StatusBadRequest)
+		}
+	})
+	server := startTLSServer(t, node, handler)
+	client := newDeploymentClient(t, server.URL, controller.credentials, nodeIdentity, "binding-a")
+	_, err := client.ApplyDeployment(context.Background(), execution)
+	var fault paasv1.AdapterFault
+	if !errors.As(err, &fault) || fault.Normalized.Class != paasv1.AdapterErrorUnknownOutcome || effects.Load() != 1 {
+		t.Fatalf("lost response was not classified as unknown: %v", err)
+	}
+	observation, err := client.ObserveDeployment(context.Background(), deploymentObserveRequest(execution))
+	if err != nil || observation.Phase != paasv1.DeploymentReady || observations.Load() != 1 || effects.Load() != 1 {
+		t.Fatalf("same-target recovery observation failed: %#v, %v", observation, err)
+	}
+}
+
+func TestDeploymentClientRejectsUncorrelatedEffectResponsesAsUnknown(t *testing.T) {
+	authority := newAuthority(t)
+	nodeURI, _ := nodev1.NodeURI(nodeIdentity)
+	controllerURI, _ := nodev1.ControllerURI(nodeIdentity.InstallationID, controllerID)
+	node := authority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false)
+	controller := authority.issue(t, controllerURI, x509.ExtKeyUsageClientAuth, false)
+	for _, problem := range []string{"identity", "command", "unknown field", "wrong content type", "redirect"} {
+		t.Run(problem, func(t *testing.T) {
+			handler := http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				value, err := nodev1.DecodeDeploymentEffectRequest(request.Body)
+				if err != nil {
+					response.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				defer value.Materials.Clear()
+				if problem == "redirect" {
+					response.Header().Set("Location", "https://127.0.0.1:1/another-target")
+					response.WriteHeader(http.StatusTemporaryRedirect)
+					return
+				}
+				identity := nodeIdentity
+				commandID := value.Execution.Command.CommandID
+				if problem == "identity" {
+					identity.ExecutionTargetID = "target-b"
+				}
+				if problem == "command" {
+					commandID = "other-command"
+				}
+				result := paasv1.AdapterResult{
+					CommandID: commandID, State: paasv1.AdapterResultSucceeded,
+					Receipt: "node-receipt", ObservedAt: time.Now().UTC().Truncate(time.Microsecond),
+				}
+				encoded, _ := json.Marshal(nodev1.DeploymentEffectResponse{
+					APIVersion: nodev1.APIVersion, Kind: nodev1.DeploymentEffectResponseKind,
+					Identity: identity, CommandID: commandID, Result: result,
+				})
+				if problem == "unknown field" {
+					encoded = bytes.Replace(encoded, []byte(`"result":`), []byte(`"shell":"/bin/sh","result":`), 1)
+				}
+				contentType := "application/json"
+				if problem == "wrong content type" {
+					contentType = "text/plain"
+				}
+				response.Header().Set("Content-Type", contentType)
+				_, _ = response.Write(encoded)
+			})
+			server := startTLSServer(t, node, handler)
+			client := newDeploymentClient(t, server.URL, controller.credentials, nodeIdentity, "binding-a")
+			_, err := client.ApplyDeployment(context.Background(), deploymentExecutionFixture(t))
+			var fault paasv1.AdapterFault
+			if !errors.As(err, &fault) || fault.Normalized.Class != paasv1.AdapterErrorUnknownOutcome {
+				t.Fatalf("uncorrelated effect response was accepted: %v", err)
+			}
+		})
+	}
+}
+
 func TestAuthenticatedRequestsRejectInvalidInputBeforeReadingTheHost(t *testing.T) {
 	authority := newAuthority(t)
 	nodeURI, _ := nodev1.NodeURI(nodeIdentity)
@@ -169,7 +414,7 @@ func TestAuthenticatedRequestsRejectInvalidInputBeforeReadingTheHost(t *testing.
 	handler, err := New(sourceFunc(func(context.Context) (paasv1.ExecutionTargetObservation, error) {
 		t.Fatal("plaintext request read the host")
 		return paasv1.ExecutionTargetObservation{}, nil
-	}), Config{Identity: nodeIdentity, ControllerID: controllerID, BindingRef: "binding-a"})
+	}), deploymentService{}, Config{Identity: nodeIdentity, ControllerID: controllerID, BindingRef: "binding-a"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,6 +550,40 @@ func TestNodeBoundsConcurrencyAndNeverSerializesProviderErrors(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("observation did not finish")
+	}
+}
+
+func TestNodeObservationFailsClosedWhenDeploymentRuntimeIsUnavailable(t *testing.T) {
+	authority := newAuthority(t)
+	nodeURI, _ := nodev1.NodeURI(nodeIdentity)
+	controllerURI, _ := nodev1.ControllerURI(nodeIdentity.InstallationID, controllerID)
+	node := authority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false)
+	controller := authority.issue(t, controllerURI, x509.ExtKeyUsageClientAuth, false)
+	var hostCalls atomic.Int32
+	handler, err := New(sourceFunc(func(context.Context) (paasv1.ExecutionTargetObservation, error) {
+		hostCalls.Add(1)
+		return observedTarget(), nil
+	}), deploymentServiceFuncs{
+		ready: func(context.Context) error {
+			return errors.New("docker socket /private/path password=secret is unavailable")
+		},
+		execute: func(context.Context, nodev1.DeploymentEffectRequest) (paasv1.AdapterResult, error) {
+			return paasv1.AdapterResult{}, errors.New("unexpected effect")
+		},
+		observe: func(context.Context, paasv1.ObserveDeploymentRequest) (paasv1.DeploymentObservation, error) {
+			return paasv1.DeploymentObservation{}, errors.New("unexpected Deployment observation")
+		},
+	}, Config{Identity: nodeIdentity, ControllerID: controllerID, BindingRef: "binding-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := startTLSServer(t, node, handler)
+	client := newClient(t, server.URL, controller.credentials, nodeIdentity, controllerID)
+	_, err = client.ObserveExecutionTarget(context.Background(), paasv1.ObserveExecutionTargetRequest{Command: observationCommand()})
+	var fault paasv1.AdapterFault
+	if !errors.As(err, &fault) || fault.Normalized.Class != paasv1.AdapterErrorUnavailable ||
+		hostCalls.Load() != 0 || strings.Contains(err.Error(), "/private/path") || strings.Contains(err.Error(), "password") {
+		t.Fatalf("unready executor did not close node admission safely: %v", err)
 	}
 }
 
@@ -488,7 +767,7 @@ func TestRealMTLSReloadsCredentialsAndRetiresBothOldPeers(t *testing.T) {
 	handler, err := New(sourceFunc(func(context.Context) (paasv1.ExecutionTargetObservation, error) {
 		calls.Add(1)
 		return observedTarget(), nil
-	}), Config{Identity: nodeIdentity, ControllerID: controllerID, BindingRef: "binding-a"})
+	}), deploymentService{}, Config{Identity: nodeIdentity, ControllerID: controllerID, BindingRef: "binding-a"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -610,6 +889,137 @@ func TestCredentialRenewalAndCompleteTrustRetirementAreDistinct(t *testing.T) {
 	}
 }
 
+func newDeploymentClient(
+	t *testing.T,
+	endpoint string,
+	credentials nodehttps.Credentials,
+	identity nodev1.Identity,
+	bindingRef string,
+) *nodehttps.DeploymentClient {
+	t.Helper()
+	client, err := nodehttps.NewDeploymentClient(nodehttps.DeploymentConfig{
+		Connection: nodehttps.Config{
+			Endpoint: endpoint, Identity: identity, ControllerID: controllerID,
+			BindingRef: bindingRef, ExpectedFingerprint: observedTarget().IdentityFingerprint,
+			Credentials: func() (nodehttps.Credentials, error) { return credentials, nil },
+		},
+		Artifacts: deploymentArtifactResolver{},
+		Secrets:   deploymentSecretResolver{content: []byte("secret-value")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(client.Close)
+	return client
+}
+
+func deploymentExecutionFixture(t *testing.T) paasv1.DeploymentExecutionRequest {
+	t.Helper()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	scope := paasv1.ResourceScope{Kind: paasv1.AuthorityTenant, TenantID: "tenant-a"}
+	metadata := func(id string) paasv1.ResourceMetadata {
+		return paasv1.ResourceMetadata{
+			ID: paasv1.ResourceID(id), Name: id, Scope: scope,
+			ResourceVersion: 1, CreatedAt: now, UpdatedAt: now,
+		}
+	}
+	revision := paasv1.ApplicationRevision{
+		APIVersion: paasv1.APIVersion, Kind: "ApplicationRevision",
+		Metadata: metadata("revision-a"),
+		Spec: paasv1.ApplicationRevisionSpec{
+			ApplicationID: "application-a", Revision: "revision-1",
+			ContentDigest: deploymentTestDigest('b'),
+			Components: []paasv1.ApplicationRevisionComponent{{
+				Name: "web",
+				Artifact: paasv1.ArtifactRef{
+					Kind: paasv1.ArtifactOCIImage, Locator: "registry.example.invalid/web",
+					Digest: deploymentTestDigest('a'),
+				},
+				Resources: paasv1.ResourceRequirements{CPUMillis: 100, MemoryBytes: 64 * 1024 * 1024},
+				Inputs: []paasv1.ComponentInput{{
+					Name: "password", Kind: paasv1.InputSecret,
+					Injection: paasv1.InjectionFile, Required: true,
+				}},
+			}},
+		},
+	}
+	generation := paasv1.DeploymentGeneration{
+		APIVersion: paasv1.APIVersion, Kind: "DeploymentGeneration", Scope: scope,
+		DeploymentID: "deployment-a", Generation: 1,
+		Spec: paasv1.DeploymentSpec{
+			ApplicationRevisionID: revision.Metadata.ID, PlacementPolicyID: "policy-a",
+			DesiredState: paasv1.DeploymentDesiredRunning,
+			Components: []paasv1.DeploymentComponent{{
+				Name: "web", Replicas: 1,
+				Bindings: []paasv1.ComponentBinding{{
+					Name: "password", SecretVersion: &paasv1.SecretVersionReference{
+						SecretID: "secret-a", Version: "version-1",
+					},
+				}},
+			}},
+		},
+		CreatedByOperationID: "operation-a", CreatedAt: now,
+	}
+	generation.ContentDigest = paasv1.DeploymentSpecContentDigest(generation.Spec)
+	placement := paasv1.PlacementDecision{
+		APIVersion: paasv1.APIVersion, Kind: "PlacementDecision",
+		Metadata: metadata("decision-a"), DeploymentID: generation.DeploymentID,
+		DeploymentGeneration: generation.Generation, DeploymentResourceVersion: 1,
+		ApplicationRevisionID: revision.Metadata.ID,
+		PlacementPolicyID:     generation.Spec.PlacementPolicyID, PolicyResourceVersion: 1,
+		RequestedIsolationGuarantee: paasv1.IsolationWorkload,
+		Outcome:                     paasv1.PlacementScheduled, ExecutionTargetID: nodeIdentity.ExecutionTargetID,
+		ExecutionTargetResourceVersion: 1, GrantedIsolationGuarantee: paasv1.IsolationWorkload,
+		CandidateSetDigest: deploymentTestDigest('c'), DecidedAt: now,
+	}
+	request := paasv1.DeploymentExecutionRequest{
+		Command: paasv1.AdapterCommandEnvelope{
+			OperationID: "operation-a", CommandID: "command-a", Attempt: 1,
+			Action: paasv1.AdapterApplyDeployment, Scope: scope,
+			ApplicationID: revision.Spec.ApplicationID, ApplicationRevisionID: revision.Metadata.ID,
+			DeploymentID: generation.DeploymentID, ExecutionTargetID: placement.ExecutionTargetID,
+			BindingRef: "binding-a", Deadline: now.Add(time.Minute),
+		},
+		Generation: generation, ApplicationRevision: revision, Placement: placement,
+	}
+	request.Command.RequestDigest = paasv1.DeploymentExecutionRequestDigest(request)
+	if err := paasv1.ValidateDeploymentExecutionRequest(request); err != nil {
+		t.Fatalf("invalid Deployment fixture: %v", err)
+	}
+	return request
+}
+
+func deploymentObserveRequest(
+	execution paasv1.DeploymentExecutionRequest,
+) paasv1.ObserveDeploymentRequest {
+	command := execution.Command
+	command.CommandID = "observe-a"
+	command.Action = paasv1.AdapterObserveDeployment
+	command.Deadline = time.Now().UTC().Truncate(time.Microsecond).Add(time.Minute)
+	request := paasv1.ObserveDeploymentRequest{
+		Command: command, Generation: execution.Generation.Generation,
+		ExpectedContentDigest: execution.Generation.ContentDigest,
+	}
+	request.Command.RequestDigest = paasv1.ObserveDeploymentRequestDigest(request)
+	return request
+}
+
+func deploymentObservationFixture(
+	request paasv1.ObserveDeploymentRequest,
+) paasv1.DeploymentObservation {
+	return paasv1.DeploymentObservation{
+		DeploymentID: request.Command.DeploymentID, Generation: request.Generation,
+		ApplicationRevisionID: request.Command.ApplicationRevisionID,
+		Phase:                 paasv1.DeploymentReady, ReadyComponents: 1,
+		ReceiptDigest: deploymentTestDigest('e'),
+		ObservedAt:    time.Now().UTC().Truncate(time.Microsecond),
+	}
+}
+
+func deploymentTestDigest(character byte) string {
+	return "sha256:" + strings.Repeat(string(character), 64)
+}
+
 func requestBody(t *testing.T, command paasv1.AdapterCommandEnvelope) []byte {
 	t.Helper()
 	value, err := json.Marshal(nodev1.ObservationRequest{APIVersion: nodev1.APIVersion, Kind: nodev1.ObservationRequestKind, Identity: nodeIdentity, Command: command})
@@ -621,7 +1031,7 @@ func requestBody(t *testing.T, command paasv1.AdapterCommandEnvelope) []byte {
 
 func startNode(t *testing.T, node issuedCertificate, source ObservationSource, concurrent int) *httptest.Server {
 	t.Helper()
-	handler, err := New(source, Config{Identity: nodeIdentity, ControllerID: controllerID, BindingRef: "binding-a", MaximumConcurrent: concurrent})
+	handler, err := New(source, deploymentService{}, Config{Identity: nodeIdentity, ControllerID: controllerID, BindingRef: "binding-a", MaximumConcurrent: concurrent})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -37,6 +37,8 @@ const (
 	bindingRootEnvironment          = "MATRIX_PAAS_WORKER_BINDING_ROOT"
 	secretRootEnvironment           = "MATRIX_PAAS_WORKER_SECRET_ROOT"
 	artifactCatalogEnvironment      = "MATRIX_PAAS_WORKER_ARTIFACT_CATALOG_FILE"
+	installationIDEnvironment       = "MATRIX_PAAS_WORKER_INSTALLATION_ID"
+	nodeConnectionsFileEnvironment  = "MATRIX_PAAS_WORKER_NODE_CONNECTIONS_FILE"
 	executionTenantEnvironment      = "MATRIX_PAAS_WORKER_EXECUTION_TENANT_ID"
 	machineBindingEnvironment       = "MATRIX_PAAS_WORKER_MACHINE_BINDING_REF"
 	listenAddressEnvironment        = "MATRIX_PAAS_WORKER_LISTEN_ADDRESS"
@@ -61,6 +63,8 @@ type configuration struct {
 	bindingRoot          string
 	secretRoot           string
 	artifactCatalog      string
+	installationID       string
+	nodeConnectionsFile  string
 	executionTenant      paasv1.TenantID
 	machineBinding       string
 	listenAddress        string
@@ -140,6 +144,11 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	routes, closeRoutes, err := newDeploymentRoutes(config, catalog, secrets, executor)
+	if err != nil {
+		return err
+	}
+	defer closeRoutes()
 	managedServiceRepository, err := managedservicepostgres.NewRepository(pool)
 	if err != nil {
 		return err
@@ -202,9 +211,9 @@ func run(ctx context.Context) error {
 		queue,
 		placementUsecase,
 		executionRepository,
-		executor,
+		routes,
 		reconciledeployment.Config{
-			BindingRef: config.bindingRef, EffectTimeout: effectTimeout,
+			EffectTimeout:    effectTimeout,
 			ReconcileBackoff: reconcileBackoff, MaxAttempts: maximumOperationAttempts,
 			Clock: func() time.Time {
 				return time.Now().UTC().Truncate(time.Microsecond)
@@ -369,6 +378,8 @@ func loadConfiguration() (configuration, error) {
 		bindingRoot:          os.Getenv(bindingRootEnvironment),
 		secretRoot:           os.Getenv(secretRootEnvironment),
 		artifactCatalog:      os.Getenv(artifactCatalogEnvironment),
+		installationID:       os.Getenv(installationIDEnvironment),
+		nodeConnectionsFile:  os.Getenv(nodeConnectionsFileEnvironment),
 		executionTenant:      paasv1.TenantID(os.Getenv(executionTenantEnvironment)),
 		machineBinding:       os.Getenv(machineBindingEnvironment),
 		listenAddress:        os.Getenv(listenAddressEnvironment),
@@ -377,11 +388,13 @@ func loadConfiguration() (configuration, error) {
 	if config.databaseDSNFile == "" || config.workerID == "" ||
 		config.bindingRef == "" || config.bindingRoot == "" ||
 		config.secretRoot == "" || config.artifactCatalog == "" ||
+		config.installationID == "" || config.nodeConnectionsFile == "" ||
 		config.executionTenant == "" || config.machineBinding == "" ||
 		config.listenAddress == "" || config.managedPostgresImage == "" {
 		return configuration{}, errors.New("PaaS worker configuration is incomplete")
 	}
 	if paasv1.ValidateID("workerId", config.workerID) != nil ||
+		paasv1.ValidateID("installationId", config.installationID) != nil ||
 		paasv1.ValidateID("bindingRef", config.bindingRef) != nil ||
 		paasv1.ValidateID("executionTenantId", string(config.executionTenant)) != nil ||
 		paasv1.ValidateID("machineBindingRef", config.machineBinding) != nil {

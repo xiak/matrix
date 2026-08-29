@@ -34,7 +34,7 @@ func assertDeploymentWorkerWorkflow(
 		plans: make(map[paasv1.OperationID]*postgresWorkerPlan),
 	}
 	workerFixture := newDeploymentWorkerFixture(
-		t, apiPool, workerPool, placementUsecase, executor, "compose-local", 10*time.Second,
+		t, apiPool, workerPool, placementUsecase, executor, fixture.targetID, "compose-local", 10*time.Second,
 	)
 	applicationUsecase := workerFixture.application
 	worker := workerFixture.worker
@@ -312,6 +312,7 @@ func newDeploymentWorkerFixture(
 	workerPool *pgxpool.Pool,
 	placementUsecase *createplacement.Usecase,
 	executor port.DeploymentExecutor,
+	executionTargetID paasv1.ResourceID,
 	bindingRef string,
 	effectTimeout time.Duration,
 ) deploymentWorkerFixture {
@@ -346,9 +347,11 @@ func newDeploymentWorkerFixture(
 		queue,
 		placementUsecase,
 		executionRepository,
-		executor,
+		[]reconciledeployment.DeploymentRoute{{
+			ExecutionTargetID: executionTargetID, BindingRef: bindingRef, Executor: executor,
+		}},
 		reconciledeployment.Config{
-			BindingRef: bindingRef, EffectTimeout: effectTimeout,
+			EffectTimeout:    effectTimeout,
 			ReconcileBackoff: time.Millisecond, MaxAttempts: 3,
 			Clock: func() time.Time {
 				return time.Now().UTC().Truncate(time.Microsecond)

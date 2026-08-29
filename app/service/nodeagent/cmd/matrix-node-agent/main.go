@@ -10,8 +10,10 @@ import (
 	"syscall"
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
+	composeadapter "github.com/xiak/matrix/app/adapter/apphosting/compose"
 	"github.com/xiak/matrix/app/adapter/infrastructure/localmachine"
 	"github.com/xiak/matrix/app/adapter/infrastructure/nodeexporter"
+	nodedeployment "github.com/xiak/matrix/app/adapter/node/deployment"
 	nodehttps "github.com/xiak/matrix/app/adapter/node/https"
 	"github.com/xiak/matrix/app/service/installation/nodeconfig"
 	"github.com/xiak/matrix/app/service/internal/processconfig"
@@ -82,7 +84,15 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	handler, err := nethttp.New(sampler, nethttp.Config{
+	composeRuntime := composeadapter.NewLocalRuntime()
+	deployments, err := nodedeployment.New(nodedeployment.Config{
+		BindingRef: config.BindingRef, BindingRoot: config.StoragePath,
+		Runtime: composeRuntime, Readiness: composeRuntime.Ready,
+	})
+	if err != nil {
+		return err
+	}
+	handler, err := nethttp.New(sampler, deployments, nethttp.Config{
 		Identity: config.Identity, ControllerID: config.ControllerID, BindingRef: config.BindingRef,
 	})
 	if err != nil {

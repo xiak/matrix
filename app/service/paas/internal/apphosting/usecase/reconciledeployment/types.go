@@ -109,8 +109,16 @@ type Repository interface {
 
 type Clock func() time.Time
 
+// DeploymentRoute binds one persisted execution target to exactly one
+// installation-owned executor. It is immutable for a worker process and has no
+// local or alternate-target fallback.
+type DeploymentRoute struct {
+	ExecutionTargetID paasv1.ResourceID
+	BindingRef        string
+	Executor          port.DeploymentExecutor
+}
+
 type Config struct {
-	BindingRef       string
 	EffectTimeout    time.Duration
 	ReconcileBackoff time.Duration
 	MaxAttempts      uint32
@@ -121,6 +129,6 @@ type Worker struct {
 	queue      OperationQueue
 	placement  Placement
 	repository Repository
-	executor   port.DeploymentExecutor
+	routes     map[paasv1.ResourceID]DeploymentRoute
 	config     Config
 }

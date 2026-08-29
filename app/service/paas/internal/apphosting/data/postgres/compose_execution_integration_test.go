@@ -98,7 +98,7 @@ func assertRealComposeWorkerWorkflow(
 	expandExecutionTargetCapacity(t, ctx, admin, fixture.targetID)
 	workerFixture := newDeploymentWorkerFixture(
 		t, apiPool, workerPool, placementUsecase, executor,
-		"compose-real-postgres", 20*time.Second,
+		fixture.targetID, "compose-real-postgres", 20*time.Second,
 	)
 	requestedBy := paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "real-compose-user"}
 	deploymentID := paasv1.ResourceID(prefix + "-real-compose-deployment")

@@ -75,7 +75,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			mount := rawMount.(map[string]any)
 			if mount["source"] == path.Join(options.Root, layout.NodeControllerDirectory) {
 				controllerMounts++
-				if name != "paas-api" || mount["target"] != "/run/matrix/node-controller" || mount["read_only"] != true {
+				if (name != "paas-api" && name != "paas-worker") || mount["target"] != "/run/matrix/node-controller" || mount["read_only"] != true {
 					t.Fatal("node controller material crossed its process boundary")
 				}
 			}
@@ -84,8 +84,8 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			}
 		}
 	}
-	if controllerMounts != 1 {
-		t.Fatal("controller configuration lacks exactly one directory mount")
+	if controllerMounts != 2 {
+		t.Fatal("controller configuration lacks exact API and worker directory mounts")
 	}
 	if services["paas-api"].(map[string]any)["environment"].(map[string]any)["MATRIX_PAAS_NODE_CONNECTIONS_FILE"] != "/run/matrix/node-controller/configuration.json" {
 		t.Fatal("PaaS does not consume the signed controller mount")
@@ -138,8 +138,10 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			"MATRIX_PAAS_WORKER_ARTIFACT_CATALOG_FILE", "MATRIX_PAAS_WORKER_BINDING_REF",
 			"MATRIX_PAAS_WORKER_BINDING_ROOT", "MATRIX_PAAS_WORKER_DATABASE_DSN_FILE",
 			"MATRIX_PAAS_WORKER_EXECUTION_TENANT_ID", "MATRIX_PAAS_WORKER_ID",
+			"MATRIX_PAAS_WORKER_INSTALLATION_ID",
 			"MATRIX_PAAS_WORKER_LISTEN_ADDRESS", "MATRIX_PAAS_WORKER_MACHINE_BINDING_REF",
 			"MATRIX_PAAS_WORKER_MANAGED_POSTGRES_IMAGE",
+			"MATRIX_PAAS_WORKER_NODE_CONNECTIONS_FILE",
 			"MATRIX_PAAS_WORKER_SECRET_ROOT",
 		},
 	}
@@ -190,7 +192,8 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 		} else if slices.Contains(actualServiceNetworks, "edge") {
 			t.Fatalf("service %q can join the northbound edge network", name)
 		}
-		if slices.Contains(actualServiceNetworks, "management") != (name == "paas-api") {
+		controllerProcess := name == "paas-api" || name == "paas-worker"
+		if slices.Contains(actualServiceNetworks, "management") != controllerProcess {
 			t.Fatalf("service %q crosses the node management boundary", name)
 		}
 		labels, ok := service["labels"].(map[string]any)

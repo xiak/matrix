@@ -11,7 +11,6 @@ import (
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/domain"
-	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/createplacement"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/operationqueue"
 )
@@ -31,7 +30,7 @@ func NewWorker(
 	queue OperationQueue,
 	placement Placement,
 	repository Repository,
-	executor port.DeploymentExecutor,
+	routes []DeploymentRoute,
 	config Config,
 ) (*Worker, error) {
 	var problems []error
@@ -44,10 +43,28 @@ func NewWorker(
 	if repository == nil {
 		problems = append(problems, errors.New("Deployment reconciliation repository is required"))
 	}
-	if executor == nil {
-		problems = append(problems, errors.New("Deployment executor is required"))
+	if len(routes) == 0 || len(routes) > 256 {
+		problems = append(problems, errors.New("between one and 256 Deployment routes are required"))
 	}
-	problems = append(problems, paasv1.ValidateID("bindingRef", config.BindingRef))
+	configuredRoutes := make(map[paasv1.ResourceID]DeploymentRoute, len(routes))
+	bindingRefs := make(map[string]struct{}, len(routes))
+	for _, route := range routes {
+		problems = append(problems,
+			paasv1.ValidateID("executionTargetId", string(route.ExecutionTargetID)),
+			paasv1.ValidateID("bindingRef", route.BindingRef),
+		)
+		if route.Executor == nil {
+			problems = append(problems, errors.New("Deployment route executor is required"))
+		}
+		if _, duplicate := configuredRoutes[route.ExecutionTargetID]; duplicate {
+			problems = append(problems, errors.New("Deployment route target is duplicated"))
+		}
+		if _, duplicate := bindingRefs[route.BindingRef]; duplicate {
+			problems = append(problems, errors.New("Deployment route binding is duplicated"))
+		}
+		configuredRoutes[route.ExecutionTargetID] = route
+		bindingRefs[route.BindingRef] = struct{}{}
+	}
 	if config.EffectTimeout < time.Second ||
 		config.EffectTimeout > 5*time.Minute ||
 		config.EffectTimeout%time.Microsecond != 0 {
@@ -73,7 +90,7 @@ func NewWorker(
 	}
 	return &Worker{
 		queue: queue, placement: placement, repository: repository,
-		executor: executor, config: config,
+		routes: configuredRoutes, config: config,
 	}, nil
 }
 
@@ -160,9 +177,21 @@ func (worker *Worker) processLease(
 			if err != nil {
 				return err
 			}
-			if _, _, err := worker.repository.PrepareEffect(
-				ctx, lease, action, worker.config.BindingRef, deadline,
-			); err != nil {
+			state, err := worker.repository.Load(ctx, lease.Guard())
+			if err != nil {
+				return err
+			}
+			route, err := worker.routeForState(state)
+			if err != nil {
+				return err
+			}
+			request, _, err := worker.repository.PrepareEffect(
+				ctx, lease, action, route.BindingRef, deadline,
+			)
+			if err != nil {
+				return err
+			}
+			if err := validateRouteCommand(route, request.Command); err != nil {
 				return err
 			}
 			if lease.Operation.Action != paasv1.OperationStop {
@@ -369,14 +398,22 @@ func (worker *Worker) observe(
 	if err != nil {
 		return true, operationqueue.Lease{}, err
 	}
+	route, err := worker.routeForLease(ctx, lease)
+	if err != nil {
+		return true, operationqueue.Lease{}, err
+	}
 	request, _, err := worker.repository.PrepareObservation(
-		ctx, lease, worker.config.BindingRef, deadline,
+		ctx, lease, route.BindingRef, deadline,
 	)
 	if err != nil {
 		return true, operationqueue.Lease{}, err
 	}
 	observeContext, cancel := context.WithDeadline(ctx, request.Command.Deadline)
-	observation, err := worker.executor.ObserveDeployment(observeContext, request)
+	if err := validateRouteCommand(route, request.Command); err != nil {
+		cancel()
+		return true, operationqueue.Lease{}, err
+	}
+	observation, err := route.Executor.ObserveDeployment(observeContext, request)
 	cancel()
 	if err != nil {
 		nextAttempt := worker.nextAttempt(lease)
@@ -441,14 +478,22 @@ func (worker *Worker) reconcile(
 	if err != nil {
 		return true, operationqueue.Lease{}, false, err
 	}
+	route, err := worker.routeForLease(ctx, lease)
+	if err != nil {
+		return true, operationqueue.Lease{}, false, err
+	}
 	request, _, err := worker.repository.PrepareObservation(
-		ctx, lease, worker.config.BindingRef, deadline,
+		ctx, lease, route.BindingRef, deadline,
 	)
 	if err != nil {
 		return true, operationqueue.Lease{}, false, err
 	}
 	observeContext, cancel := context.WithDeadline(ctx, request.Command.Deadline)
-	observation, observeErr := worker.executor.ObserveDeployment(observeContext, request)
+	if err := validateRouteCommand(route, request.Command); err != nil {
+		cancel()
+		return true, operationqueue.Lease{}, false, err
+	}
+	observation, observeErr := route.Executor.ObserveDeployment(observeContext, request)
 	cancel()
 	if observeErr != nil {
 		if isNotFound(observeErr) {
@@ -506,9 +551,17 @@ func (worker *Worker) retryEffect(
 	if err != nil {
 		return true, operationqueue.Lease{}, false, err
 	}
-	if _, _, err := worker.repository.PrepareEffect(
-		ctx, next, action, worker.config.BindingRef, deadline,
-	); err != nil {
+	route, err := worker.routeForLease(ctx, next)
+	if err != nil {
+		return true, operationqueue.Lease{}, false, err
+	}
+	request, _, err := worker.repository.PrepareEffect(
+		ctx, next, action, route.BindingRef, deadline,
+	)
+	if err != nil {
+		return true, operationqueue.Lease{}, false, err
+	}
+	if err := validateRouteCommand(route, request.Command); err != nil {
 		return true, operationqueue.Lease{}, false, err
 	}
 	return false, next, true, nil
@@ -519,17 +572,25 @@ func (worker *Worker) invokeEffect(
 	action paasv1.OperationAction,
 	request paasv1.DeploymentExecutionRequest,
 ) paasv1.AdapterResult {
+	route, routeErr := worker.routeForCommand(request.Command)
+	if routeErr != nil {
+		return unknownResult(
+			request.Command.CommandID,
+			"Persisted Deployment command has no exact executor route.",
+			worker.now(),
+		)
+	}
 	effectContext, cancel := context.WithDeadline(ctx, request.Command.Deadline)
 	defer cancel()
 	var result paasv1.AdapterResult
 	var err error
 	switch action {
 	case paasv1.OperationDeploy, paasv1.OperationUpdate:
-		result, err = worker.executor.ApplyDeployment(effectContext, request)
+		result, err = route.Executor.ApplyDeployment(effectContext, request)
 	case paasv1.OperationRollback:
-		result, err = worker.executor.RollbackDeployment(effectContext, request)
+		result, err = route.Executor.RollbackDeployment(effectContext, request)
 	case paasv1.OperationStop:
-		result, err = worker.executor.StopDeployment(effectContext, request)
+		result, err = route.Executor.StopDeployment(effectContext, request)
 	default:
 		err = errors.New("unsupported Deployment effect")
 	}
@@ -544,6 +605,45 @@ func (worker *Worker) invokeEffect(
 		)
 	}
 	return result
+}
+
+func (worker *Worker) routeForLease(
+	ctx context.Context,
+	lease operationqueue.Lease,
+) (DeploymentRoute, error) {
+	state, err := worker.repository.Load(ctx, lease.Guard())
+	if err != nil {
+		return DeploymentRoute{}, err
+	}
+	return worker.routeForState(state)
+}
+
+func (worker *Worker) routeForState(state State) (DeploymentRoute, error) {
+	if state.Placement == nil || state.Placement.Outcome != paasv1.PlacementScheduled {
+		return DeploymentRoute{}, errors.New("Deployment route requires a scheduled placement")
+	}
+	route, found := worker.routes[state.Placement.ExecutionTargetID]
+	if !found || route.Executor == nil {
+		return DeploymentRoute{}, errors.New("persisted placement has no exact Deployment route")
+	}
+	return route, nil
+}
+
+func (worker *Worker) routeForCommand(
+	command paasv1.AdapterCommandEnvelope,
+) (DeploymentRoute, error) {
+	route, found := worker.routes[command.ExecutionTargetID]
+	if !found || route.Executor == nil || validateRouteCommand(route, command) != nil {
+		return DeploymentRoute{}, errors.New("persisted command has no exact Deployment route")
+	}
+	return route, nil
+}
+
+func validateRouteCommand(route DeploymentRoute, command paasv1.AdapterCommandEnvelope) error {
+	if route.ExecutionTargetID != command.ExecutionTargetID || route.BindingRef != command.BindingRef {
+		return errors.New("Deployment command route identity mismatch")
+	}
+	return nil
 }
 
 func (worker *Worker) resumeStoredObservation(

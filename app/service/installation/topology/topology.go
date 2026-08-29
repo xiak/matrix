@@ -357,7 +357,7 @@ func compileServices(
 	paasAPI.DependsOn = healthy("postgres", "iam")
 
 	paasWorker := service(
-		"paas-worker", "paas", images["paas"], []string{"control"},
+		"paas-worker", "paas", images["paas"], []string{"control", "management"},
 		[]string{"/matrix/bin/matrix-paas-worker"},
 		"2.0", "1G", "http://127.0.0.1:8080/ready",
 	)
@@ -368,6 +368,8 @@ func compileServices(
 		"MATRIX_PAAS_WORKER_BINDING_ROOT":           executorRoot,
 		"MATRIX_PAAS_WORKER_SECRET_ROOT":            workloadSecretRoot,
 		"MATRIX_PAAS_WORKER_ARTIFACT_CATALOG_FILE":  "/run/matrix/artifact-catalog.json",
+		"MATRIX_PAAS_WORKER_INSTALLATION_ID":        options.InstallationID,
+		"MATRIX_PAAS_WORKER_NODE_CONNECTIONS_FILE":  "/run/matrix/node-controller/configuration.json",
 		"MATRIX_PAAS_WORKER_EXECUTION_TENANT_ID":    "organization-default",
 		"MATRIX_PAAS_WORKER_MACHINE_BINDING_REF":    "local-machine-v1",
 		"MATRIX_PAAS_WORKER_LISTEN_ADDRESS":         "0.0.0.0:8080",
@@ -378,6 +380,7 @@ func compileServices(
 	paasWorker.Volumes = []mount{
 		bind(paasWorkerDSN, "/run/matrix/paas-worker-dsn", true),
 		bind(artifactCatalog, "/run/matrix/artifact-catalog.json", true),
+		bind(path.Join(root, layout.NodeControllerDirectory), "/run/matrix/node-controller", true),
 		bind(executorRoot, executorRoot, false),
 		bind(workloadSecretRoot, workloadSecretRoot, true),
 		bind("/var/run/docker.sock", "/var/run/docker.sock", false),

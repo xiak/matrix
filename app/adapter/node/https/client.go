@@ -40,21 +40,41 @@ type Client struct {
 }
 
 func New(config Config) (*Client, error) {
+	endpoint, connection, err := newControllerConnection(
+		config,
+		nodev1.MaximumObservationDuration,
+		5*time.Second,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &Client{
+		endpoint: endpoint + nodev1.ObservationPath, identity: config.Identity,
+		bindingRef: config.BindingRef, expectedFingerprint: config.ExpectedFingerprint,
+		http: connection,
+	}, nil
+}
+
+func newControllerConnection(
+	config Config,
+	timeout time.Duration,
+	responseHeaderTimeout time.Duration,
+) (string, *http.Client, error) {
 	endpoint, err := url.Parse(config.Endpoint)
 	if err != nil || !validEndpoint(endpoint) || nodev1.ValidateIdentity(config.Identity) != nil ||
 		paasv1.ValidateID("bindingRef", config.BindingRef) != nil ||
 		paasv1.ValidateDigest("expectedFingerprint", config.ExpectedFingerprint) != nil || config.Credentials == nil {
-		return nil, errors.New("node connection configuration is invalid")
+		return "", nil, errors.New("node connection configuration is invalid")
 	}
 	credentials, err := config.Credentials()
 	if err != nil {
-		return nil, errors.New("node connection credentials are unavailable")
+		return "", nil, errors.New("node connection credentials are unavailable")
 	}
 	_, err = clientTLS(credentials, config.Identity, config.ControllerID)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
-	connection := newHTTPClient(nil)
+	connection := newBoundedHTTPClient(nil, timeout, responseHeaderTimeout)
 	connection.Transport.(*http.Transport).DialTLSContext = func(ctx context.Context, network, address string) (net.Conn, error) {
 		credentials, err := config.Credentials()
 		if err != nil {
@@ -74,23 +94,31 @@ func New(config Config) (*Client, error) {
 		dialer := &tls.Dialer{NetDialer: &net.Dialer{Timeout: 5 * time.Second}, Config: security}
 		return dialer.DialContext(bounded, network, address)
 	}
-	return &Client{
-		endpoint: endpoint.String() + nodev1.ObservationPath, identity: config.Identity,
-		bindingRef: config.BindingRef, expectedFingerprint: config.ExpectedFingerprint,
-		http: connection,
-	}, nil
+	return endpoint.String(), connection, nil
 }
 
 func newHTTPClient(security *tls.Config) *http.Client {
+	return newBoundedHTTPClient(
+		security,
+		nodev1.MaximumObservationDuration,
+		5*time.Second,
+	)
+}
+
+func newBoundedHTTPClient(
+	security *tls.Config,
+	timeout time.Duration,
+	responseHeaderTimeout time.Duration,
+) *http.Client {
 	transport := &http.Transport{
 		Proxy:           nil,
 		DialContext:     (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
 		TLSClientConfig: security, TLSHandshakeTimeout: 5 * time.Second,
-		ResponseHeaderTimeout: 5 * time.Second, MaxResponseHeaderBytes: 32 * 1024,
+		ResponseHeaderTimeout: responseHeaderTimeout, MaxResponseHeaderBytes: 32 * 1024,
 		MaxConnsPerHost: 8, DisableCompression: true, DisableKeepAlives: true,
 	}
 	return &http.Client{
-		Transport: transport, Timeout: nodev1.MaximumObservationDuration,
+		Transport: transport, Timeout: timeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 }
