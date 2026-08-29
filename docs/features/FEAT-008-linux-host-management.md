@@ -1,6 +1,6 @@
 # FEAT-008: existing Linux hosts and remote application delivery
 
-- Status: P3-1 accepted; P3-2 implementation in progress
+- Status: P3-2 accepted; P3-3 implementation in progress
 - Target: Matrix PaaS Phase 3
 - Design date: 2026-08-27
 - Branch: `feat/linux-host-management`
@@ -39,8 +39,8 @@ exercise combines these capabilities rather than introducing them late.
 | --- | --- | --- | --- |
 | P3-0: design and adoption | Fixed scope, isolated branch and donor decisions | Target committed before fixed-source review; no donor dependency | Complete for the initial node slice |
 | P3-1: one managed host | Secure resident agent enrollment, identity, heartbeat and continuously refreshed basic CPU/memory/filesystem status through the control plane | Real authenticated Linux node; wrong identity denied; stale/disconnected state; restart and signed offline startup | Complete |
-| P3-2: remote application loop | Deploy, observe, update, stop and roll back a real application on that host | IAM/Audit/Operation/accounting integration; exact routing; ENV/Secret behavior; replay and lost-response recovery | In progress |
-| P3-3: interactive operations | Live host/container UI and terminal in the selected running instance | Successive measurements without reload; real terminal I/O, resize, expiry, disconnect, authorization and audit | Pending |
+| P3-2: remote application loop | Deploy, observe, update, stop and roll back a real application on that host | IAM/Audit/Operation/accounting integration; exact routing; ENV/Secret behavior; replay and lost-response recovery | Complete |
+| P3-3: interactive operations | Live host/container UI and terminal in the selected running instance | Successive measurements without reload; real terminal I/O, resize, expiry, disconnect, authorization and audit | In progress |
 | P3-4: multiple hosts | Pool placement, drain, unavailable-node handling and safe removal across two independent hosts | No cross-host/local fallback; identity collision, tenant isolation and concurrent capacity checks | Pending |
 | P3-5: offline release | Platform and nodes install, operate, upgrade, roll back and recover without external access | Complete Gates A-E on exact committed source and signed releases | Pending |
 
@@ -833,13 +833,53 @@ itself was not externally disconnected. This admits the tested runtime-3
 predecessor/successor pair, not arbitrary historical N-1, runtime-2 admission,
 a portable archive format or the combined offline platform/node release.
 
-P3-1 is accepted for its one-managed-host outcome. Its observation-only
-combined lifecycle does not replace Gate C's remote application and interactive
-operations requirements. Next in P3-2: route persisted placement to the exact
-managed target and prove deploy, observe, update, stop and rollback without
-local or other-host fallback. The complete Phase 3 release remains unaccepted.
-Gate D as a whole remains open. No untested predecessor or cross-profile
-admission is inferred from the fixed pairs exercised here.
+P3-2 is accepted for its remote application loop. The production slice fixed at
+`54a5591` routes every persisted placement to its exact target-bound executor.
+An update or rollback is an in-place replacement on the Deployment's current
+target: only that Deployment's exact active capacity claim is excluded while
+checking replacement capacity, and every other target fails closed. Relocation
+remains a future explicit operation, not an implicit response to a busy host.
+Unit and real PostgreSQL 18 gates cover invalid caller-supplied bindings,
+digest binding, a one-slot target with the old generation still active,
+concurrent accounting and release after terminal success.
+
+A signed platform release from exact source `54a5591` used manifest SHA-256
+`d40d292b7f176045a145fe07d616ae85e8f037c5c3230afd3396703693306947`
+and transport SHA-256
+`76a87b96bf9da545030f9c5701e8c0e99017e59b7489e9237d89195078791cda`.
+It upgraded the task-owned control plane and used the separately installed
+managed node without an external image pull. A real application with bounded
+resources, configuration environment values and a protected file Secret
+reached READY at generation 1. Update generation 2 and rollback generation 3
+remained on the same managed host; generation 4 stopped it, cleared placement
+and released every claim. The control-plane host had no container for this
+Deployment. Exact PaaS decisions and APPLY/APPLY/ROLLBACK/STOP commands all
+named the managed target and reached terminal success; the tenant and platform
+Audit chains verified. Successive host samples advanced independently of reads
+and reported real CPU, memory and filesystem values throughout the lifecycle.
+
+The first real run exposed the former implicit rescheduling defect instead of
+masking it: generation 2 had moved to the control-plane host while generation 1
+remained on the managed node. The accepted slice replaces that behavior. The
+two test Deployments ended STOPPED with released claims and zero remaining
+containers; only the exact orphaned test container and its network were removed,
+while its authenticated project state was retained. Both remote machine boot
+identities remained unchanged and neither machine nor Docker Engine was
+restarted.
+
+The signed product source's first independent run exposed a stale test fixture
+that still invoked the removed six-argument execution-profile function. The
+test-only successor `640ff2d` uses the installation-scoped seven-argument
+contract. Full local Go tests/vet, the affected race gate, a dedicated real
+PostgreSQL 18 authority-process run and the real Linux node-process variant
+passed. All three jobs then passed in
+[independent CI](https://github.com/xiak/matrix/actions/runs/33262466613).
+
+P3-2 does not accept interactive access, multi-host scheduling policy or the
+complete offline release. Next in P3-3: add successive live host/container
+views and a separately authorized, short-lived terminal bound to the selected
+running instance. Gate D as a whole remains open, and no untested predecessor
+or cross-profile admission is inferred from the fixed pairs exercised here.
 
 ## Adoption
 
