@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -36,8 +37,8 @@ import (
 // This is the native companion of the existing signed platform gate, not a
 // second platform workflow. SSH reaches only two explicitly prepared loopback
 // forwards with pinned host keys. Product observations still use real mTLS.
-const nativeFixtureRoot = "/var/lib/matrix-offline-fixture"
-const nativeInstallationRoot = nativeFixtureRoot + "/installation"
+const nativeFixtureRootEnvironment = "MATRIX_PHASE1_NATIVE_FIXTURE_ROOT"
+const nativeFixtureRootPrefix = "/data/xiak/"
 const nativePool paasv1.ResourceID = "offline-native-pool"
 const nativeRuntimePool paasv1.ResourceID = "execution-pool-local"
 const nativeRuntimeProfileLabel = "matrix-profile"
@@ -55,6 +56,7 @@ type nativeFixtureInput struct {
 	ReleaseB       string            `json:"releaseB"`
 	IdentityFile   string            `json:"identityFile"`
 	KnownHostsFile string            `json:"knownHostsFile"`
+	FixtureRoot    string            `json:"fixtureRoot"`
 	Nodes          []nativeNodeInput `json:"nodes"`
 }
 
@@ -101,6 +103,9 @@ func validateNativeFixture(input nativeFixtureInput) error {
 			return fail("native-fixture-path")
 		}
 	}
+	if validateNativeFixtureRoot(input.FixtureRoot) != nil {
+		return fail("native-fixture-root")
+	}
 	if len(input.Nodes) != 2 || input.Nodes[0].Port == input.Nodes[1].Port || input.Nodes[0].Endpoint == input.Nodes[1].Endpoint {
 		return fail("native-fixture-two-distinct-hosts")
 	}
@@ -126,6 +131,22 @@ func validateNativeFixture(input nativeFixtureInput) error {
 		}
 	}
 	return nil
+}
+
+func validateNativeFixtureRoot(root string) error {
+	if !path.IsAbs(root) || path.Clean(root) != root || !strings.HasPrefix(root, nativeFixtureRootPrefix) ||
+		len(root) <= len(nativeFixtureRootPrefix) || strings.ContainsAny(root, "\x00\r\n") {
+		return fail("native-fixture-root")
+	}
+	return nil
+}
+
+func (fixture *nativeNodes) root() string {
+	return fixture.input.FixtureRoot
+}
+
+func (fixture *nativeNodes) installationRoot() string {
+	return path.Join(fixture.root(), "installation")
 }
 
 func isNativeDeploymentRuntimePredecessor(bundle release.VerifiedBundle) bool {
@@ -194,18 +215,18 @@ func (value *gate) prepareNativeNodes(ctx context.Context, installationID string
 		if err := fixture.waitPrepared(ctx, index); err != nil {
 			return err
 		}
-		if err := fixture.copy(ctx, index, driver, nativeFixtureRoot+"/probe.test", true, false); err != nil {
+		if err := fixture.copy(ctx, index, driver, fixture.root()+"/probe.test", true, false); err != nil {
 			return err
 		}
 		probeMode := "1"
 		if fixture.deploymentRuntime {
 			probeMode = "runtime"
 		}
-		if _, err := fixture.command(ctx, index, "env", "MATRIX_PHASE1_NATIVE_HOST_PROBE="+probeMode, nativeFixtureRoot+"/probe.test", "-test.run=^TestOfflineNativeHostProbe$", "-test.count=1"); err != nil {
+		if _, err := fixture.command(ctx, index, "env", "MATRIX_PHASE1_NATIVE_HOST_PROBE="+probeMode, nativeFixtureRootEnvironment+"="+fixture.root(), fixture.root()+"/probe.test", "-test.run=^TestOfflineNativeHostProbe$", "-test.count=1"); err != nil {
 			return err
 		}
 		factsPath := filepath.Join(directory, fmt.Sprintf("facts-%d.json", index))
-		if err := fixture.copy(ctx, index, factsPath, nativeFixtureRoot+"/facts.json", false, false); err != nil {
+		if err := fixture.copy(ctx, index, factsPath, fixture.root()+"/facts.json", false, false); err != nil {
 			return err
 		}
 		facts, err := os.ReadFile(factsPath)
@@ -216,7 +237,7 @@ func (value *gate) prepareNativeNodes(ctx context.Context, installationID string
 			source, target string
 			directory      bool
 		}{{a.Root, "node-a", true}, {b.Root, "node-b", true}, {value.config.trustKey, "trust.json", false}} {
-			if err := fixture.copy(ctx, index, media.source, nativeFixtureRoot+"/"+media.target, true, media.directory); err != nil {
+			if err := fixture.copy(ctx, index, media.source, fixture.root()+"/"+media.target, true, media.directory); err != nil {
 				return err
 			}
 		}
@@ -248,7 +269,7 @@ func (fixture *nativeNodes) waitPrepared(ctx context.Context, index int) error {
 	poll, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
 	for {
-		_, directoryErr := fixture.command(poll, index, "test", "-d", nativeFixtureRoot)
+		_, directoryErr := fixture.command(poll, index, "test", "-d", fixture.root())
 		if directoryErr == nil {
 			if content, err := fixture.command(poll, index, "docker", "info", "--format", "{{.ID}}"); err == nil && strings.TrimSpace(string(content)) != "" {
 				return nil
@@ -304,7 +325,7 @@ func (fixture *nativeNodes) mx(ctx context.Context, index int, successor bool, a
 	if successor {
 		media = "node-b"
 	}
-	arguments := append([]string{nativeFixtureRoot + "/" + media + "/bin/mx", "--format", "json", "node", action}, args...)
+	arguments := append([]string{fixture.root() + "/" + media + "/bin/mx", "--format", "json", "node", action}, args...)
 	content, err := fixture.command(ctx, index, arguments...)
 	defer clear(content)
 	var result struct {
@@ -386,7 +407,7 @@ func (fixture *nativeNodes) credentials(ctx context.Context, value *gate, rotate
 		if err != nil {
 			return fail("native-fixture-enrollment")
 		}
-		remote := nativeFixtureRoot + "/" + filepath.Base(directory)
+		remote := fixture.root() + "/" + filepath.Base(directory)
 		nodeURI, _ := nodev1.NodeURI(node.identity)
 		collectorURI, _ := nodev1.CollectorURI(node.identity)
 		endpoint, _ := url.Parse(node.input.Endpoint)
@@ -429,7 +450,7 @@ func (fixture *nativeNodes) credentials(ctx context.Context, value *gate, rotate
 		if collectorPort == 0 {
 			collectorPort = 19100
 		}
-		configuration := nodeconfig.Configuration{APIVersion: nodeconfig.APIVersion, Kind: nodeconfig.ConfigurationKind, Identity: node.identity, ControllerID: controller.ControllerID, BindingRef: node.binding, ExpectedFingerprint: node.facts.Fingerprint, ListenAddress: listenAddress, CollectorEndpoint: fmt.Sprintf("https://127.0.0.1:%d", collectorPort), StoragePath: nativeInstallationRoot + "/runtime/executor", CertificateFile: remote + "/node.pem", PrivateKeyFile: remote + "/node-key.pem", TrustFile: remote + "/trust.pem", SystemReserve: paasv1.Capacity{MemoryBytes: 256 << 20, WorkloadSlots: reservedSlots}}
+		configuration := nodeconfig.Configuration{APIVersion: nodeconfig.APIVersion, Kind: nodeconfig.ConfigurationKind, Identity: node.identity, ControllerID: controller.ControllerID, BindingRef: node.binding, ExpectedFingerprint: node.facts.Fingerprint, ListenAddress: listenAddress, CollectorEndpoint: fmt.Sprintf("https://127.0.0.1:%d", collectorPort), StoragePath: fixture.installationRoot() + "/runtime/executor", CertificateFile: remote + "/node.pem", PrivateKeyFile: remote + "/node-key.pem", TrustFile: remote + "/trust.pem", SystemReserve: paasv1.Capacity{MemoryBytes: 256 << 20, WorkloadSlots: reservedSlots}}
 		enrollment := nodeconfig.Enrollment{APIVersion: nodeconfig.APIVersion, Kind: nodeconfig.EnrollmentKind, Node: configuration, CollectorCertificateFile: remote + "/collector.pem", CollectorPrivateKeyFile: remote + "/collector-key.pem"}
 		encoded, err := json.Marshal(enrollment)
 		if err != nil {
@@ -442,12 +463,12 @@ func (fixture *nativeNodes) credentials(ctx context.Context, value *gate, rotate
 			return err
 		}
 		action := "install"
-		arguments := []string{"--root", nativeInstallationRoot, "--configuration", remote + "/enrollment.json"}
+		arguments := []string{"--root", fixture.installationRoot(), "--configuration", remote + "/enrollment.json"}
 		if rotate {
 			action = "rotate-credentials"
 			arguments = append(arguments, "--expected-configuration-digest", node.digest)
 		} else {
-			arguments = append(arguments, "--bundle", nativeFixtureRoot+"/node-a", "--trust-key", nativeFixtureRoot+"/trust.json")
+			arguments = append(arguments, "--bundle", fixture.root()+"/node-a", "--trust-key", fixture.root()+"/trust.json")
 		}
 		result, err := fixture.mx(ctx, index, false, action, arguments...)
 		if err != nil || !result.Changed || paasv1.ValidateDigest("configurationDigest", result.ConfigurationDigest) != nil || result.ConfigurationDigest == node.digest {
@@ -566,7 +587,7 @@ func (value *gate) assertNativeNodes(ctx context.Context, bearer []byte, success
 	fixture := value.nodes
 	for index := range fixture.nodes {
 		node := &fixture.nodes[index]
-		result, err := fixture.mx(ctx, index, successor, "status", "--root", nativeInstallationRoot)
+		result, err := fixture.mx(ctx, index, successor, "status", "--root", fixture.installationRoot())
 		want := fixture.releases.a.Manifest.Release.ID
 		if successor {
 			want = fixture.releases.b.Manifest.Release.ID
@@ -587,7 +608,7 @@ func (value *gate) assertNativeNodes(ctx context.Context, bearer []byte, success
 			}
 		}
 		cancel()
-		if !matchesNativeObservation(target, *node, fixture.deploymentRuntime) {
+		if !matchesNativeObservation(target, *node, fixture.deploymentRuntime, fixture.installationRoot()) {
 			return fail("native-physical-observation-and-binding")
 		}
 		if _, err := value.nativeStoredTarget(ctx, index); err != nil {
@@ -609,7 +630,7 @@ func (value *gate) assertNativeNodes(ctx context.Context, bearer []byte, success
 	return value.assertNativeAudit(ctx, bearer)
 }
 
-func matchesNativeObservation(target paasv1.ExecutionTarget, node nativeNodeState, deploymentRuntime bool) bool {
+func matchesNativeObservation(target paasv1.ExecutionTarget, node nativeNodeState, deploymentRuntime bool, installationRoot string) bool {
 	usage := target.Status.Usage
 	poolID, workloadSlots := nativePool, int64(0)
 	if deploymentRuntime {
@@ -623,7 +644,7 @@ func matchesNativeObservation(target paasv1.ExecutionTarget, node nativeNodeStat
 		return false
 	}
 	for _, filesystem := range usage.Filesystems {
-		if filesystem.State == paasv1.MeasurementAvailable && filesystem.Value != nil && filesystem.Value.TotalBytes == node.facts.StorageBytes && strings.HasPrefix(nativeInstallationRoot, strings.TrimSuffix(filesystem.MountPoint, "/")+"/") {
+		if filesystem.State == paasv1.MeasurementAvailable && filesystem.Value != nil && filesystem.Value.TotalBytes == node.facts.StorageBytes && strings.HasPrefix(installationRoot, strings.TrimSuffix(filesystem.MountPoint, "/")+"/") {
 			return true
 		}
 	}
@@ -739,7 +760,7 @@ func (value *gate) nativeBackgroundAndOutage(ctx context.Context, bearer []byte)
 		return fail("native-outage-admission-replay")
 	}
 	clear(replay.body)
-	if result, err := fixture.mx(ctx, 0, false, "start", "--root", nativeInstallationRoot); err != nil || result.ConfigurationDigest != node.digest {
+	if result, err := fixture.mx(ctx, 0, false, "start", "--root", fixture.installationRoot()); err != nil || result.ConfigurationDigest != node.digest {
 		return fail("native-reconnect-original-binding")
 	}
 	if _, err = value.waitNativeStored(ctx, 0, paasv1.ExecutionTargetHealthReady, fresh.Status.Usage.ObservedAt); err != nil {
@@ -825,7 +846,7 @@ func (value *gate) nativeReleasePair(ctx context.Context, bearer []byte) error {
 	}
 	fixture := value.nodes
 	for index, node := range fixture.nodes {
-		result, err := fixture.mx(ctx, index, true, "upgrade", "--root", nativeInstallationRoot, "--bundle", nativeFixtureRoot+"/node-b")
+		result, err := fixture.mx(ctx, index, true, "upgrade", "--root", fixture.installationRoot(), "--bundle", fixture.root()+"/node-b")
 		if err != nil || !result.Changed || result.ReleaseID != fixture.releases.b.Manifest.Release.ID || result.PreviousID != fixture.releases.a.Manifest.Release.ID || result.ConfigurationDigest != node.digest {
 			return fail("native-real-successor-upgrade")
 		}
@@ -837,7 +858,7 @@ func (value *gate) nativeReleasePair(ctx context.Context, bearer []byte) error {
 		return err
 	}
 	for index, node := range fixture.nodes {
-		result, err := fixture.mx(ctx, index, true, "rollback", "--root", nativeInstallationRoot)
+		result, err := fixture.mx(ctx, index, true, "rollback", "--root", fixture.installationRoot())
 		if err != nil || !result.Changed || result.ReleaseID != fixture.releases.a.Manifest.Release.ID || result.PreviousID != "" || result.ConfigurationDigest != node.digest {
 			return fail("native-real-predecessor-rollback")
 		}
@@ -1129,7 +1150,7 @@ func (value *gate) prepareNativeRuntimeImages(ctx context.Context) error {
 	fixture := value.nodes
 	for index := range fixture.nodes {
 		for bundleIndex, workload := range workloads {
-			remote := fmt.Sprintf("%s/runtime-workload-%d.tar", nativeFixtureRoot, bundleIndex+1)
+			remote := fmt.Sprintf("%s/runtime-workload-%d.tar", fixture.root(), bundleIndex+1)
 			if err := fixture.copy(ctx, index, filepath.Join(bundles[bundleIndex].Root, filepath.FromSlash(workload.ArchivePath)), remote, true, false); err != nil {
 				return err
 			}
@@ -1166,19 +1187,19 @@ func (value *gate) prepareNativeWorkloads(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if err = fixture.copy(ctx, index, path, nativeFixtureRoot+"/workload-password", true, false); err != nil {
+		if err = fixture.copy(ctx, index, path, fixture.root()+"/workload-password", true, false); err != nil {
 			return err
 		}
-		if err = fixture.copy(ctx, index, filepath.Join(value.releases.a.Root, filepath.FromSlash(postgres.ArchivePath)), nativeFixtureRoot+"/postgres.tar", true, false); err != nil {
+		if err = fixture.copy(ctx, index, filepath.Join(value.releases.a.Root, filepath.FromSlash(postgres.ArchivePath)), fixture.root()+"/postgres.tar", true, false); err != nil {
 			return err
 		}
-		if _, err = fixture.command(ctx, index, "docker", "load", "--input", nativeFixtureRoot+"/postgres.tar"); err != nil {
+		if _, err = fixture.command(ctx, index, "docker", "load", "--input", fixture.root()+"/postgres.tar"); err != nil {
 			return err
 		}
 		if _, err = fixture.command(ctx, index, "docker", "volume", "create", "--label", "com.xiak.matrix.task=offline-native-gate", "matrix-offline-retained-data"); err != nil {
 			return err
 		}
-		if _, err = fixture.command(ctx, index, "docker", "run", "--detach", "--pull", "never", "--name", "matrix-offline-retained", "--label", "com.xiak.matrix.task=offline-native-gate", "--network", "none", "--cpus", "0.5", "--memory", "384m", "--memory-swap", "384m", "--pids-limit", "64", "--restart", "unless-stopped", "--mount", "type=volume,source=matrix-offline-retained-data,target=/var/lib/postgresql", "--mount", "type=bind,source="+nativeFixtureRoot+"/workload-password,target=/run/secrets/fixture-password,readonly", "--env", "POSTGRES_PASSWORD_FILE=/run/secrets/fixture-password", postgres.ImageID); err != nil {
+		if _, err = fixture.command(ctx, index, "docker", "run", "--detach", "--pull", "never", "--name", "matrix-offline-retained", "--label", "com.xiak.matrix.task=offline-native-gate", "--network", "none", "--cpus", "0.5", "--memory", "384m", "--memory-swap", "384m", "--pids-limit", "64", "--restart", "unless-stopped", "--mount", "type=volume,source=matrix-offline-retained-data,target=/var/lib/postgresql", "--mount", "type=bind,source="+fixture.root()+"/workload-password,target=/run/secrets/fixture-password,readonly", "--env", "POSTGRES_PASSWORD_FILE=/run/secrets/fixture-password", postgres.ImageID); err != nil {
 			return err
 		}
 		poll, cancel := context.WithTimeout(ctx, 90*time.Second)
@@ -1268,7 +1289,7 @@ func (value *gate) saveNativeRetention(ctx context.Context) error {
 		if err != nil || target.Status.Usage == nil {
 			return fail("native-retained-observation")
 		}
-		if _, err := fixture.mx(ctx, index, false, "verify", "--root", nativeInstallationRoot); err != nil {
+		if _, err := fixture.mx(ctx, index, false, "verify", "--root", fixture.installationRoot()); err != nil {
 			return err
 		}
 		retained.Nodes = append(retained.Nodes, nativeRetainedNode{Facts: node.facts, Digest: node.digest, Operation: node.operation, AuditHash: node.auditHash, Workload: node.workload, ObservedAt: target.Status.Usage.ObservedAt})
@@ -1335,14 +1356,14 @@ func (value *gate) afterNativeRestart(ctx context.Context, installationID string
 		if err := fixture.waitPrepared(ctx, index); err != nil {
 			return err
 		}
-		if err = fixture.copy(ctx, index, driver, nativeFixtureRoot+"/probe.test", true, false); err != nil {
+		if err = fixture.copy(ctx, index, driver, fixture.root()+"/probe.test", true, false); err != nil {
 			return err
 		}
-		if _, err = fixture.command(ctx, index, "env", "MATRIX_PHASE1_NATIVE_HOST_PROBE=after-restart", nativeFixtureRoot+"/probe.test", "-test.run=^TestOfflineNativeHostProbe$", "-test.count=1"); err != nil {
+		if _, err = fixture.command(ctx, index, "env", "MATRIX_PHASE1_NATIVE_HOST_PROBE=after-restart", nativeFixtureRootEnvironment+"="+fixture.root(), fixture.root()+"/probe.test", "-test.run=^TestOfflineNativeHostProbe$", "-test.count=1"); err != nil {
 			return err
 		}
 		factsPath := filepath.Join(fixture.directory, fmt.Sprintf("facts-after-restart-%d.json", index))
-		if err = fixture.copy(ctx, index, factsPath, nativeFixtureRoot+"/facts-after-restart.json", false, false); err != nil {
+		if err = fixture.copy(ctx, index, factsPath, fixture.root()+"/facts-after-restart.json", false, false); err != nil {
 			return err
 		}
 		factsBytes, err := os.ReadFile(factsPath)
@@ -1353,7 +1374,7 @@ func (value *gate) afterNativeRestart(ctx context.Context, installationID string
 		fixture.nodes[index].facts = facts
 		poll, cancel := context.WithTimeout(ctx, 3*time.Minute)
 		for {
-			status, err := fixture.mx(poll, index, false, "status", "--root", nativeInstallationRoot)
+			status, err := fixture.mx(poll, index, false, "status", "--root", fixture.installationRoot())
 			if err == nil && !status.Changed && status.ReleaseID == retained.ReleaseID && status.ConfigurationDigest == saved.Digest {
 				break
 			}
@@ -1376,7 +1397,7 @@ func (value *gate) afterNativeRestart(ctx context.Context, installationID string
 			return err
 		}
 		observed, err := value.waitNativeStored(ctx, index, paasv1.ExecutionTargetHealthReady, saved.ObservedAt)
-		if err != nil || !matchesNativeObservation(observed, fixture.nodes[index], false) {
+		if err != nil || !matchesNativeObservation(observed, fixture.nodes[index], false, fixture.installationRoot()) {
 			return fail("native-post-boot-background-reconnection")
 		}
 		if err = value.nativeStoredHistory(ctx, index); err != nil {

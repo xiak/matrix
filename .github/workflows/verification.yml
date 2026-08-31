@@ -169,7 +169,7 @@ jobs:
       - name: Verify signed native startup, upgrade, rollback and interrupted replay
         run: |
           previous_node_source="$(mktemp -d "$RUNNER_TEMP/matrix-node-predecessor-XXXXXX")"
-          git worktree add --detach "$previous_node_source" 6b8eeb237a7acd99d1518b4f2f0aac2c2b044767
+          git worktree add --detach "$previous_node_source" a25d4468927e121ee800f851c96b605a3c010e6e
           go run -p 2 ./deploy/cmd/matrix-release keygen --key-id node-ci \
             --private-key "$RUNNER_TEMP/node-release-private.json" --trust-key "$RUNNER_TEMP/node-release-trust.json"
           (
@@ -183,7 +183,7 @@ jobs:
           go run -p 2 ./deploy/cmd/matrix-release assemble --target node --repository "$GITHUB_WORKSPACE" \
             --collector-archive "$RUNNER_TEMP/node_exporter.tar.gz" --output "$RUNNER_TEMP/node-release-b" \
             --version v0.3.0-node.2 --build-id "ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-successor" \
-            --previous-id matrix-v0.3.0-node.1-6b8eeb237a7a --previous-version v0.3.0-node.1 \
+            --previous-id matrix-v0.3.0-node.1-a25d4468927e --previous-version v0.3.0-node.1 \
             --created-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --private-key "$RUNNER_TEMP/node-release-private.json" --trust-key "$RUNNER_TEMP/node-release-trust.json"
           node_gate_root="$(sudo mktemp -d /opt/matrix-node-ci-XXXXXX)"

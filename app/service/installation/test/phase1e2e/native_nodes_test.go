@@ -29,13 +29,18 @@ func TestOfflineNativeHostProbe(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	fixtureRoot := os.Getenv(nativeFixtureRootEnvironment)
+	if validateNativeFixtureRoot(fixtureRoot) != nil {
+		t.Fatal("native fixture root is not an isolated task path")
+	}
+	installationRoot := filepath.Join(fixtureRoot, "installation")
 	if phase != "runtime" && assertNoExternalRoute() != nil || phase == "1" && assertEmptyDocker(ctx) != nil {
 		t.Fatal("native companion is not empty and offline")
 	}
-	if _, err := os.Stat(nativeInstallationRoot); (phase == "1" || phase == "runtime") && !os.IsNotExist(err) || phase == "after-restart" && err != nil {
+	if _, err := os.Stat(installationRoot); (phase == "1" || phase == "runtime") && !os.IsNotExist(err) || phase == "after-restart" && err != nil {
 		t.Fatal("native installation root already exists")
 	}
-	facts, err := localmachine.NewLocalHostProbe().Inspect(ctx, nativeFixtureRoot)
+	facts, err := localmachine.NewLocalHostProbe().Inspect(ctx, fixtureRoot)
 	if err != nil || !facts.DockerEngineReady || !facts.ComposePluginReady {
 		t.Fatal("real native host prerequisites unavailable")
 	}
@@ -63,7 +68,7 @@ func TestOfflineNativeHostProbe(t *testing.T) {
 	if phase == "after-restart" {
 		name = "facts-after-restart.json"
 	}
-	if _, err = privateFixtureFile(nativeFixtureRoot, name, encoded); err != nil {
+	if _, err = privateFixtureFile(fixtureRoot, name, encoded); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -93,7 +98,7 @@ func TestNativeBootEvidenceRequiresNewKernelAndSameIdentity(t *testing.T) {
 
 func TestNativeFixtureRejectsAmbiguousOrExternalTargets(t *testing.T) {
 	directory := t.TempDir()
-	valid := nativeFixtureInput{ReleaseA: filepath.Join(directory, "a"), ReleaseB: filepath.Join(directory, "b"), IdentityFile: filepath.Join(directory, "client"), KnownHostsFile: filepath.Join(directory, "known_hosts"), Nodes: []nativeNodeInput{{Port: 2201, Endpoint: "https://172.17.0.1:16443"}, {Port: 2202, Endpoint: "https://172.17.0.1:16444"}}}
+	valid := nativeFixtureInput{ReleaseA: filepath.Join(directory, "a"), ReleaseB: filepath.Join(directory, "b"), IdentityFile: filepath.Join(directory, "client"), KnownHostsFile: filepath.Join(directory, "known_hosts"), FixtureRoot: "/data/xiak/matrix-native-gate-1", Nodes: []nativeNodeInput{{Port: 2201, Endpoint: "https://172.17.0.1:16443"}, {Port: 2202, Endpoint: "https://172.17.0.1:16444"}}}
 	for _, scenario := range []struct {
 		name   string
 		change func(*nativeFixtureInput)
@@ -112,6 +117,10 @@ func TestNativeFixtureRejectsAmbiguousOrExternalTargets(t *testing.T) {
 		{"privileged collector", func(v *nativeFixtureInput) { v.Nodes[0].CollectorPort = 443 }},
 		{"shared node and collector port", func(v *nativeFixtureInput) { v.Nodes[0].CollectorPort = 16443 }},
 		{"relative signer", func(v *nativeFixtureInput) { v.IdentityFile = "client" }},
+		{"missing fixture root", func(v *nativeFixtureInput) { v.FixtureRoot = "" }},
+		{"broad fixture root", func(v *nativeFixtureInput) { v.FixtureRoot = "/data/xiak" }},
+		{"outside task area", func(v *nativeFixtureInput) { v.FixtureRoot = "/var/lib/matrix" }},
+		{"unclean fixture root", func(v *nativeFixtureInput) { v.FixtureRoot += "/../other" }},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			input := valid
