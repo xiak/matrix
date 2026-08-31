@@ -20,6 +20,14 @@ import (
 )
 
 const ContractVersion = "matrix-platform-compose/v1"
+const deploymentRuntimePredecessorDigest = "sha256:4e10f76e5d16d2805faeb771ea9aefddaaba5bec0eefc4d15b3da018431d703a"
+
+type contractGeneration uint8
+
+const (
+	deploymentRuntimePredecessor contractGeneration = iota + 1
+	currentContract
+)
 
 type Options struct {
 	InstallationID string
@@ -46,7 +54,17 @@ var platformServiceNames = []string{
 }
 
 func ContractDigest() string {
-	content, err := json.Marshal(contractDescription())
+	return contractDescriptionDigest(contractDescription(currentContract))
+}
+
+func DeploymentRuntimePredecessorContractDigest() string {
+	// This is the topology digest from the fixed contract-revision-6 release,
+	// not a digest inferred from the caller's current installation state.
+	return deploymentRuntimePredecessorDigest
+}
+
+func contractDescriptionDigest(value contract) string {
+	content, err := json.Marshal(value)
 	if err != nil {
 		panic("static platform topology contract cannot be encoded")
 	}
@@ -54,7 +72,7 @@ func ContractDigest() string {
 	return "sha256:" + hex.EncodeToString(digest[:])
 }
 
-func contractDescription() contract {
+func contractDescription(generation contractGeneration) contract {
 	options := Options{
 		InstallationID: "mxi-00000000000000000000000000000000",
 		Root:           "/matrix-installation-root",
@@ -75,7 +93,7 @@ func contractDescription() contract {
 	}
 	document := composeDocument{
 		Name:     "matrix-00000000000000000000000000000000",
-		Services: compileServices(manifest, images, options),
+		Services: compileServices(manifest, images, options, generation),
 		Networks: map[string]networkConfig{
 			"control":    {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-control")},
 			"edge":       {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-edge")},
@@ -101,6 +119,43 @@ func Compile(manifest release.Manifest, options Options) (Result, error) {
 	if manifest.TopologyDigest != ContractDigest() {
 		return Result{}, errors.New("release topology contract digest is unsupported")
 	}
+	return compile(manifest, options, currentContract, ContractDigest())
+}
+
+// CompileInstalled admits the current platform contract and exactly one
+// authenticated N-1 contract/profile pair. New install and upgrade targets
+// continue to use Compile and therefore cannot select the predecessor.
+func CompileInstalled(manifest release.Manifest, options Options) (Result, error) {
+	generation, digest, err := installedContractGeneration(manifest)
+	if err != nil {
+		return Result{}, err
+	}
+	return compile(manifest, options, generation, digest)
+}
+
+func ValidateInstalledContract(manifest release.Manifest) error {
+	_, _, err := installedContractGeneration(manifest)
+	return err
+}
+
+func installedContractGeneration(manifest release.Manifest) (contractGeneration, string, error) {
+	if err := release.ValidateManifest(manifest); err != nil {
+		return 0, "", fmt.Errorf("release manifest cannot supply installed platform topology: %w", err)
+	}
+	switch {
+	case manifest.TopologyDigest == ContractDigest():
+		return currentContract, ContractDigest(), nil
+	case manifest.TopologyDigest == DeploymentRuntimePredecessorContractDigest() &&
+		manifest.Database != release.CurrentDatabaseProfile() &&
+		release.ValidateDatabaseUpgradePath(manifest.Database, release.CurrentDatabaseProfile()) == nil &&
+		contractDescriptionDigest(contractDescription(deploymentRuntimePredecessor)) == DeploymentRuntimePredecessorContractDigest():
+		return deploymentRuntimePredecessor, DeploymentRuntimePredecessorContractDigest(), nil
+	default:
+		return 0, "", errors.New("installed platform topology contract is unsupported")
+	}
+}
+
+func compile(manifest release.Manifest, options Options, generation contractGeneration, digest string) (Result, error) {
 	if err := validateOptions(options); err != nil {
 		return Result{}, err
 	}
@@ -110,7 +165,7 @@ func Compile(manifest release.Manifest, options Options) (Result, error) {
 	}
 	document := composeDocument{
 		Name:     "matrix-" + strings.TrimPrefix(options.InstallationID, "mxi-"),
-		Services: compileServices(manifest, images, options),
+		Services: compileServices(manifest, images, options, generation),
 		Networks: map[string]networkConfig{
 			"control":    {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-control")},
 			"edge":       {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-edge")},
@@ -123,7 +178,7 @@ func Compile(manifest release.Manifest, options Options) (Result, error) {
 		return Result{}, errors.New("encode platform Compose topology failed")
 	}
 	return Result{
-		ProjectName: document.Name, ContractDigest: ContractDigest(), ComposeJSON: content,
+		ProjectName: document.Name, ContractDigest: digest, ComposeJSON: content,
 	}, nil
 }
 
@@ -214,6 +269,7 @@ func compileServices(
 	manifest release.Manifest,
 	images map[string]string,
 	options Options,
+	generation contractGeneration,
 ) map[string]serviceConfig {
 	root := options.Root
 	postgresPassword := path.Join(root, layout.PostgresPassword)
@@ -347,8 +403,10 @@ func compileServices(
 		"MATRIX_PAAS_VERIFICATION_ARTIFACT_DIGEST": verificationArtifactDigest(manifest),
 		"MATRIX_PAAS_LISTEN_ADDRESS":               "0.0.0.0:8080",
 		"MATRIX_PAAS_NODE_CONNECTIONS_FILE":        "/run/matrix/node-controller/configuration.json",
-		"MATRIX_PAAS_PUBLIC_BASE_PATH":             "/api/paas/v1",
-		"MATRIX_PAAS_TERMINAL_COOKIE_SECURE":       "false",
+	}
+	if generation == currentContract {
+		paasAPI.Environment["MATRIX_PAAS_PUBLIC_BASE_PATH"] = "/api/paas/v1"
+		paasAPI.Environment["MATRIX_PAAS_TERMINAL_COOKIE_SECURE"] = "false"
 	}
 	paasAPI.Volumes = []mount{
 		bind(paasAPIDSN, "/run/matrix/paas-api-dsn", true),

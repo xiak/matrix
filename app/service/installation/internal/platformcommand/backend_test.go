@@ -704,10 +704,12 @@ func TestDeploymentRuntimeProfileExactPairAllowsUpgradeAndRollback(t *testing.T)
 	effects := &installEffects{observeReady: true}
 	backend := newTestBackend(t, effects)
 	root := filepath.Join(t.TempDir(), "matrix")
-	if _, err := backend.Run(context.Background(), installRequest(root, fixtures[0])); err != nil {
-		t.Fatal(err)
+	_, err = backend.Run(context.Background(), installRequest(root, fixtures[0]))
+	assertFault(t, err, cli.FaultVerification, "TOPOLOGY_CONTRACT_UNSUPPORTED")
+	if _, statErr := os.Lstat(root); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatal("current installer changed the root while rejecting predecessor input")
 	}
-	materializeInstalledRelease(t, root, fixtures[0])
+	seedPublishedInstalledRelease(t, root, fixtures[0])
 	upgraded, err := backend.Run(context.Background(), cli.Request{
 		Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[1].Root,
 	})
@@ -1632,4 +1634,31 @@ func materializeInstalledRelease(
 	); err != nil {
 		t.Fatalf("stage installed release: %v", err)
 	}
+}
+
+func seedPublishedInstalledRelease(t *testing.T, root string, fixture releasetest.Fixture) {
+	t.Helper()
+	state, err := lifecycle.New(
+		"mxi-11111111111111111111111111111111",
+		lifecycle.ReleaseTrust{
+			KeyID: fixture.Trust.KeyID, Fingerprint: fixture.Trust.PublicKeyFingerprint,
+		},
+	)
+	if err != nil {
+		t.Fatalf("create published installation state: %v", err)
+	}
+	state.CurrentReleaseID = fixture.Manifest.Release.ID
+	state.CurrentReleaseDigest = fixture.ManifestDigest
+	session, err := journal.Acquire(context.Background(), root)
+	if err != nil {
+		t.Fatalf("acquire published installation journal: %v", err)
+	}
+	if err := session.Initialize(state); err != nil {
+		_ = session.Close()
+		t.Fatalf("initialize published installation journal: %v", err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("close published installation journal: %v", err)
+	}
+	materializeInstalledRelease(t, root, fixture)
 }

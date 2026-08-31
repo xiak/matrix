@@ -1146,7 +1146,7 @@ func authenticateJournalRelease(
 	bundle, err := release.VerifyDirectory(releaseRoot, trustBytes)
 	if err != nil || bundle.Manifest.Kind != release.ManifestKind || bundle.Manifest.Release.ID != releaseID ||
 		bundle.ManifestSHA256 != digest ||
-		bundle.Manifest.TopologyDigest != topology.ContractDigest() {
+		topology.ValidateInstalledContract(bundle.Manifest) != nil {
 		return release.VerifiedBundle{}, errors.New("committed release authentication failed")
 	}
 	return bundle, nil

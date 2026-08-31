@@ -904,6 +904,61 @@ func TestUpgradeConfigurationReplacesOnlyReleaseDerivedFilesAndReplaysBothWays(t
 	}
 }
 
+func TestUpgradeConfigurationReplacesAndRestoresTheFrozenPredecessorTopology(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine upgrade configuration targets Linux")
+	}
+	current := release.CurrentDatabaseProfile()
+	predecessor := current
+	predecessor.ContractRevision--
+	plan := newUpgradePlan(t, predecessor, current)
+	source, err := authenticateInstalledPlan(plan.Source)
+	if err != nil {
+		t.Fatalf("authenticate predecessor source: %v", err)
+	}
+	defer clear(source.TrustBytes)
+
+	predecessorCompose := readTestFile(t, source.Root, layout.Compose)
+	predecessorRoutes := readTestFile(t, source.Root, layout.APISIXRoutes)
+	if bytes.Contains(predecessorCompose, []byte("MATRIX_PAAS_PUBLIC_BASE_PATH")) ||
+		bytes.Contains(predecessorCompose, []byte("MATRIX_PAAS_TERMINAL_COOKIE_SECURE")) ||
+		bytes.Contains(predecessorRoutes, []byte("matrix-paas-terminal")) {
+		t.Fatal("frozen predecessor fixture contains successor terminal configuration")
+	}
+	if _, err := verifiedInstallationConfiguration(source); err != nil {
+		t.Fatalf("verify predecessor installation: %v", err)
+	}
+
+	if err := configureUpgrade(
+		context.Background(), newImageRuntime(plan.Target.Bundle.Manifest, true), plan,
+	); err != nil {
+		t.Fatalf("configure predecessor upgrade: %v", err)
+	}
+	assertReleaseConfiguration(
+		t, plan.Target, source.Bundle.Manifest, plan.Target.Bundle.Manifest,
+	)
+	successorCompose := readTestFile(t, source.Root, layout.Compose)
+	successorRoutes := readTestFile(t, source.Root, layout.APISIXRoutes)
+	if bytes.Equal(successorCompose, predecessorCompose) ||
+		!bytes.Contains(successorCompose, []byte("MATRIX_PAAS_PUBLIC_BASE_PATH")) ||
+		!bytes.Contains(successorCompose, []byte("MATRIX_PAAS_TERMINAL_COOKIE_SECURE")) ||
+		bytes.Equal(successorRoutes, predecessorRoutes) ||
+		!bytes.Contains(successorRoutes, []byte("matrix-paas-terminal")) {
+		t.Fatal("upgrade did not publish the successor terminal configuration")
+	}
+
+	if err := restoreUpgradeConfiguration(plan); err != nil {
+		t.Fatalf("restore predecessor configuration: %v", err)
+	}
+	if restored := readTestFile(t, source.Root, layout.Compose); !bytes.Equal(restored, predecessorCompose) {
+		t.Fatal("rollback did not restore the exact predecessor topology")
+	}
+	if restored := readTestFile(t, source.Root, layout.APISIXRoutes); !bytes.Equal(restored, predecessorRoutes) {
+		t.Fatal("rollback did not restore the exact predecessor APISIX routes")
+	}
+	assertReleaseConfiguration(t, source)
+}
+
 func TestPrepareReleaseRollbackRemovesOnlyCurrentAndRestoresPreviousConfiguration(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("local-machine release rollback targets Linux")
@@ -2210,10 +2265,25 @@ func newUpgradePlan(t *testing.T, profiles ...release.DatabaseProfile) platformc
 	if err := stageInstallation(source, rand.Reader); err != nil {
 		t.Fatalf("stage upgrade source: %v", err)
 	}
-	if err := configureInstallation(
-		context.Background(), newImageRuntime(source.Bundle.Manifest, true), source,
-	); err != nil {
-		t.Fatalf("configure upgrade source: %v", err)
+	if source.Bundle.Manifest.TopologyDigest == topology.ContractDigest() {
+		if err := configureInstallation(
+			context.Background(), newImageRuntime(source.Bundle.Manifest, true), source,
+		); err != nil {
+			t.Fatalf("configure upgrade source: %v", err)
+		}
+	} else {
+		// Materialize the one signed predecessor exactly as its installer did.
+		// Production configureInstallation remains current-target-only.
+		compiled, err := topology.CompileInstalled(source.Bundle.Manifest, topology.Options{
+			InstallationID: source.InstallationID, Root: source.Root,
+			Listener: source.Listener, Port: source.Port,
+		})
+		if err != nil {
+			t.Fatalf("compile predecessor source: %v", err)
+		}
+		if err := publishInstallationConfiguration(source.Root, source.Bundle.Manifest, compiled); err != nil {
+			t.Fatalf("publish predecessor source: %v", err)
+		}
 	}
 	target := source
 	target.Bundle = bundles[1]
@@ -2235,7 +2305,7 @@ func assertReleaseConfiguration(
 	catalogManifests ...release.Manifest,
 ) {
 	t.Helper()
-	compiled, err := topology.Compile(plan.Bundle.Manifest, topology.Options{
+	compiled, err := topology.CompileInstalled(plan.Bundle.Manifest, topology.Options{
 		InstallationID: plan.InstallationID, Root: plan.Root,
 		Listener: plan.Listener, Port: plan.Port,
 	})

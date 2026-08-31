@@ -450,7 +450,7 @@ func expectedPlatformServices(
 	manifest release.Manifest,
 	root, installationID string,
 ) (topology.Result, map[string]struct{}, error) {
-	compiled, err := topology.Compile(manifest, topology.Options{
+	compiled, err := topology.CompileInstalled(manifest, topology.Options{
 		InstallationID: installationID,
 		Root:           filepath.ToSlash(root),
 		Listener:       "0.0.0.0",

@@ -1,7 +1,10 @@
 package localmachine
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"path/filepath"
 	"slices"
@@ -110,11 +113,11 @@ func replaceReleaseConfiguration(
 		InstallationID: after.InstallationID, Root: after.Root,
 		Listener: after.Listener, Port: after.Port,
 	}
-	beforeTopology, err := topology.Compile(beforeBundle.Manifest, options)
+	beforeTopology, err := topology.CompileInstalled(beforeBundle.Manifest, options)
 	if err != nil {
 		return errors.Join(platformcommand.ErrEffectVerification, err)
 	}
-	afterTopology, err := topology.Compile(afterBundle.Manifest, options)
+	afterTopology, err := topology.CompileInstalled(afterBundle.Manifest, options)
 	if err != nil || afterTopology.ProjectName != beforeTopology.ProjectName {
 		return errors.Join(
 			platformcommand.ErrEffectVerification,
@@ -129,12 +132,21 @@ func replaceReleaseConfiguration(
 	if err != nil {
 		return errors.Join(platformcommand.ErrEffectVerification, err)
 	}
+	beforeRoutes, err := installedAPISIXStandaloneConfig(beforeBundle.Manifest)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	afterRoutes, err := installedAPISIXStandaloneConfig(afterBundle.Manifest)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, err)
+	}
 	for _, replacement := range []struct {
 		path          string
 		before, after []byte
 	}{
 		{layout.Compose, beforeTopology.ComposeJSON, afterTopology.ComposeJSON},
 		{layout.ArtifactCatalog, beforeCatalog, afterCatalog},
+		{layout.APISIXRoutes, beforeRoutes, afterRoutes},
 	} {
 		if err := replaceManagedExpected(
 			after.Root, filepath.FromSlash(replacement.path),
@@ -150,7 +162,6 @@ func replaceReleaseConfiguration(
 		path    string
 		content []byte
 	}{
-		{layout.APISIXRoutes, apisixStandaloneConfig()},
 		{layout.APISIXConfig, apisixMainConfig()},
 		{layout.APISIXUID, []byte(afterTopology.ProjectName)},
 	} {
@@ -173,6 +184,10 @@ func publishInstallationConfiguration(
 	manifest release.Manifest,
 	compiled topology.Result,
 ) error {
+	routes, err := installedAPISIXStandaloneConfig(manifest)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, err)
+	}
 	if err := writeManagedOnce(
 		root, filepath.FromSlash(layout.Compose), compiled.ComposeJSON,
 	); err != nil {
@@ -189,7 +204,7 @@ func publishInstallationConfiguration(
 		return errors.Join(platformcommand.ErrEffectConflict, err)
 	}
 	if err := writeManagedOnce(
-		root, filepath.FromSlash(layout.APISIXRoutes), apisixStandaloneConfig(),
+		root, filepath.FromSlash(layout.APISIXRoutes), routes,
 	); err != nil {
 		return errors.Join(platformcommand.ErrEffectConflict, err)
 	}
@@ -239,7 +254,7 @@ func installedArtifactCatalogConfig(plan platformcommand.InstallPlan) ([]byte, e
 	previous, err := release.VerifyDirectory(previousRoot, plan.TrustBytes)
 	if err != nil || previous.ManifestSHA256 != plan.PreviousDigest ||
 		previous.Manifest.Kind != release.ManifestKind ||
-		previous.Manifest.TopologyDigest != topology.ContractDigest() {
+		topology.ValidateInstalledContract(previous.Manifest) != nil {
 		return nil, errors.New("installed predecessor release is invalid")
 	}
 	if validateUpgradeReleasePair(previous, current) != nil {
@@ -451,4 +466,51 @@ func apisixStandaloneConfig() []byte {
         "paas-ui:8080": 1
 #END
 `)
+}
+
+const deploymentRuntimePredecessorAPISIXDigest = "sha256:ce24c10e6005b78ed68ff6101b66737ab746039e0eb161b302a99037057168da"
+
+func installedAPISIXStandaloneConfig(manifest release.Manifest) ([]byte, error) {
+	if err := topology.ValidateInstalledContract(manifest); err != nil {
+		return nil, err
+	}
+	current := apisixStandaloneConfig()
+	if manifest.TopologyDigest != topology.DeploymentRuntimePredecessorContractDigest() {
+		return current, nil
+	}
+	terminalRoute := []byte(`  -
+    id: matrix-paas-terminal
+    uri: /api/paas/v1/terminal-sessions/*
+    methods:
+      - GET
+    priority: 200
+    vars:
+      -
+        - uri
+        - "~~"
+        - "^/api/paas/v1/terminal-sessions/terminal-session-[0-9a-f]{32}/connect$"
+    enable_websocket: true
+    timeout:
+      connect: 5
+      send: 10
+      read: 130
+    plugins:
+      proxy-rewrite:
+        regex_uri:
+          - "^/api/paas/(.*)"
+          - "/$1"
+    upstream:
+      type: roundrobin
+      nodes:
+        "paas-api:8080": 1
+`)
+	if bytes.Count(current, terminalRoute) != 1 {
+		return nil, errors.New("platform predecessor APISIX route contract cannot be reconstructed")
+	}
+	predecessor := bytes.Replace(current, terminalRoute, nil, 1)
+	digest := sha256.Sum256(predecessor)
+	if "sha256:"+hex.EncodeToString(digest[:]) != deploymentRuntimePredecessorAPISIXDigest {
+		return nil, errors.New("platform predecessor APISIX route contract changed")
+	}
+	return predecessor, nil
 }

@@ -39,7 +39,7 @@ func authenticateInstalledPlan(
 	bundle, err := release.VerifyDirectory(releaseRoot, trustBytes)
 	if err != nil || bundle.Manifest.Kind != release.ManifestKind || bundle.Manifest.Release.ID != installed.ReleaseID ||
 		bundle.ManifestSHA256 != installed.ReleaseDigest ||
-		bundle.Manifest.TopologyDigest != topology.ContractDigest() {
+		topology.ValidateInstalledContract(bundle.Manifest) != nil {
 		clear(trustBytes)
 		return platformcommand.InstallPlan{}, errors.New(
 			"installed release differs from the sealed current pointer",
@@ -83,7 +83,7 @@ func verifiedInstallationConfiguration(
 	if err != nil {
 		return verifiedInstallation{}, err
 	}
-	compiled, err := topology.Compile(staged.Manifest, topology.Options{
+	compiled, err := topology.CompileInstalled(staged.Manifest, topology.Options{
 		InstallationID: plan.InstallationID,
 		Root:           plan.Root,
 		Listener:       plan.Listener,
@@ -96,13 +96,17 @@ func verifiedInstallationConfiguration(
 	if err != nil {
 		return verifiedInstallation{}, errors.New("generated artifact catalog is invalid")
 	}
+	routes, err := installedAPISIXStandaloneConfig(staged.Manifest)
+	if err != nil {
+		return verifiedInstallation{}, errors.New("generated APISIX routes are invalid")
+	}
 	expectedFiles := []struct {
 		path    string
 		content []byte
 	}{
 		{layout.Compose, compiled.ComposeJSON},
 		{layout.ArtifactCatalog, catalog},
-		{layout.APISIXRoutes, apisixStandaloneConfig()},
+		{layout.APISIXRoutes, routes},
 		{layout.APISIXConfig, apisixMainConfig()},
 		{layout.APISIXUID, []byte(compiled.ProjectName)},
 	}

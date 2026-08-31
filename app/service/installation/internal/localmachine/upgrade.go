@@ -330,7 +330,7 @@ func inspectUpgradeProject(
 func compileUpgradeExpectation(
 	plan platformcommand.InstallPlan,
 ) (platformComposeExpectation, error) {
-	compiled, err := topology.Compile(plan.Bundle.Manifest, topology.Options{
+	compiled, err := topology.CompileInstalled(plan.Bundle.Manifest, topology.Options{
 		InstallationID: plan.InstallationID,
 		Root:           plan.Root,
 		Listener:       plan.Listener,

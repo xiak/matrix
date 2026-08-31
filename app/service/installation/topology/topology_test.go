@@ -390,6 +390,56 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	}
 }
 
+func TestCompileInstalledAdmitsOnlyTheFrozenAdjacentPredecessor(t *testing.T) {
+	if actual := contractDescriptionDigest(contractDescription(deploymentRuntimePredecessor)); actual != DeploymentRuntimePredecessorContractDigest() {
+		t.Fatalf("predecessor topology digest = %q", actual)
+	}
+	options := Options{InstallationID: "mxi-" + strings.Repeat("b", 32), Root: "/data/xiak/matrix-predecessor", Listener: "0.0.0.0", Port: 8080}
+	current := topologyManifest()
+	wantCurrent, err := Compile(current, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotCurrent, err := CompileInstalled(current, options)
+	if err != nil || !reflect.DeepEqual(gotCurrent, wantCurrent) {
+		t.Fatal("current installed topology changed through predecessor admission")
+	}
+
+	predecessor := current
+	predecessor.Database.ContractRevision--
+	predecessor.TopologyDigest = DeploymentRuntimePredecessorContractDigest()
+	if _, err := Compile(predecessor, options); err == nil {
+		t.Fatal("predecessor was admitted as a new target topology")
+	}
+	compiled, err := CompileInstalled(predecessor, options)
+	if err != nil || compiled.ContractDigest != predecessor.TopologyDigest {
+		t.Fatalf("compile predecessor topology: %#v %v", compiled, err)
+	}
+	var document composeDocument
+	if json.Unmarshal(compiled.ComposeJSON, &document) != nil || len(document.Services) != len(platformServiceNames) {
+		t.Fatal("predecessor topology inventory is incomplete")
+	}
+	environment := document.Services["paas-api"].Environment
+	if _, exists := environment["MATRIX_PAAS_PUBLIC_BASE_PATH"]; exists {
+		t.Fatal("predecessor topology gained the terminal public path")
+	}
+	if _, exists := environment["MATRIX_PAAS_TERMINAL_COOKIE_SECURE"]; exists {
+		t.Fatal("predecessor topology gained the terminal cookie policy")
+	}
+
+	for _, change := range []func(*release.Manifest){
+		func(value *release.Manifest) { value.Database.ContractRevision-- },
+		func(value *release.Manifest) { value.Database = current.Database },
+		func(value *release.Manifest) { value.TopologyDigest = digest('f') },
+	} {
+		candidate := predecessor
+		change(&candidate)
+		if _, err := CompileInstalled(candidate, options); err == nil {
+			t.Fatal("non-adjacent or mismatched installed topology was admitted")
+		}
+	}
+}
+
 func TestCompileRejectsUntrustedTopologyInputs(t *testing.T) {
 	valid := Options{
 		InstallationID: "mxi-" + strings.Repeat("a", 32),
