@@ -43,6 +43,7 @@ const nativePool paasv1.ResourceID = "offline-native-pool"
 const nativeRuntimePool paasv1.ResourceID = "execution-pool-local"
 const nativeRuntimeProfileLabel = "matrix-profile"
 const nativeRuntimeProfile = "local-compose"
+const nativeCompleteRuntimeSnapshotTimeout = 3 * time.Minute
 
 type nativeNodeInput struct {
 	Port          int    `json:"port"`
@@ -1023,7 +1024,11 @@ func (value *gate) waitNativeDeploymentRuntime(
 	targetID paasv1.ResourceID,
 	after time.Time,
 ) (paasv1.DeploymentRuntimeSnapshot, error) {
-	poll, cancel := context.WithTimeout(ctx, time.Minute)
+	// CPU, memory and network are sampled immediately, while the first complete
+	// storage view may need several bounded retries when Docker's disk inventory
+	// is busy. Keep the gate finite without confusing that provider warm-up with
+	// a missing background observation.
+	poll, cancel := context.WithTimeout(ctx, nativeCompleteRuntimeSnapshotTimeout)
 	defer cancel()
 	for poll.Err() == nil {
 		var snapshot paasv1.DeploymentRuntimeSnapshot

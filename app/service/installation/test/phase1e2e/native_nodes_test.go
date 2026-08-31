@@ -289,6 +289,10 @@ func TestNativeDeploymentRuntimeRequiresExactAdvancingProviderNeutralProof(t *te
 			value.Resources.Value.Observation.Instances[0].CPU.Value = nil
 		},
 		func(value *paasv1.DeploymentRuntimeSnapshot) {
+			value.Resources.Value.Observation.Instances[0].Storage.State = paasv1.MeasurementUnavailable
+			value.Resources.Value.Observation.Instances[0].Storage.Value = nil
+		},
+		func(value *paasv1.DeploymentRuntimeSnapshot) {
 			value.Resources.Value.Observation.Instances[0].ID = "instance-fedcba9876543210fedcba9876543210"
 		},
 	} {
