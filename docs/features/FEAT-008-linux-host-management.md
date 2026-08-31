@@ -197,6 +197,34 @@ cancels on navigation/logout and cannot use this read model to choose a host or
 open a terminal. Per-container CPU, memory, network and storage samples and the
 write-capable terminal remain later P3-3 increments.
 
+The per-container measurement increment keeps lifecycle and resource facts as
+separate proofs. A new node telemetry call first revalidates the same sealed
+Compose project and current generation, then obtains structured Docker Engine
+statistics only for those already validated provider instances. The public
+model joins by the opaque instance ID and exposes no Docker ID/name, image ID,
+volume name, mount path, socket or host selector. CPU reports a bounded sample
+window and used cores against the configured limit; memory reports used bytes
+and limit; network and block I/O report cumulative bytes/errors/drops or an
+explicit unsupported state. No human-formatted `docker stats` output is parsed.
+
+Fast resource collection follows the existing five-second background cadence.
+Writable-layer, image and named-volume space use a separately timestamped,
+bounded 30-second Docker disk-usage cache. Image total/shared/unique bytes and
+volume total/shared bytes remain distinct, so a shared layer or volume is never
+presented as exclusive container usage. Unknown drivers and unavailable size
+accounting are explicit, not zero. A failed refresh retains the last committed
+proof until its own validity expires; storage can become stale independently of
+current CPU/memory/network and lifecycle state.
+
+The immutable lifecycle observation document remains byte-compatible. Resource
+proofs use a separate tenant-scoped, placement/generation-fenced table and
+least-privilege functions that revision-5 binaries ignore. PaaS therefore stays
+at schema 2 while the complete authority contract advances to revision 6 and
+the node runtime to revision 6. The only initial transition is the exact
+revision-5/runtime-5 predecessor after fresh, retained-data, real Docker and
+data-preserving rollback gates pass; this is not a general same-schema
+compatibility rule.
+
 This snapshot owner keeps the PaaS schema-2 compatibility floor, introduces
 authority contract revision 5 and node runtime revision 5. Its new table and
 functions are a pure additive expansion: revision-4 PaaS binaries ignore them,
