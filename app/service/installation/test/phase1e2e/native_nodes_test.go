@@ -12,6 +12,9 @@ import (
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/adapter/infrastructure/localmachine"
+	"github.com/xiak/matrix/app/service/installation/internal/releasetest"
+	"github.com/xiak/matrix/app/service/installation/nodeconfig"
+	"github.com/xiak/matrix/app/service/installation/release"
 )
 
 // The same gate binary probes each independently booted guest before loading
@@ -121,6 +124,64 @@ func TestNativeFixtureRejectsAmbiguousOrExternalTargets(t *testing.T) {
 	}
 	if validateNativeFixture(valid) != nil {
 		t.Fatal("valid isolated native fixture rejected")
+	}
+}
+
+func TestNativeReleasePairRequiresTheExplicitDeploymentRuntimePredecessor(t *testing.T) {
+	fixtures, err := releasetest.WriteNodeRuntimeSequence(
+		t.TempDir(),
+		nodeconfig.DeploymentRuntimePredecessorRevision,
+		nodeconfig.RuntimeRevision,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trust, err := os.ReadFile(fixtures[0].TrustPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := release.VerifyDirectory(fixtures[0].Root, trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := release.VerifyDirectory(fixtures[1].Root, trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if validateNativeReleasePair(a, b) != nil {
+		t.Fatal("authenticated deployment-runtime predecessor pair was rejected")
+	}
+
+	for _, scenario := range []struct {
+		name   string
+		change func(*release.VerifiedBundle, *release.VerifiedBundle)
+	}{
+		{"current release as predecessor", func(a, _ *release.VerifiedBundle) {
+			a.Manifest.Node.RuntimeRevision = nodeconfig.RuntimeRevision
+			a.Manifest.TopologyDigest = nodeconfig.ContractDigest()
+		}},
+		{"predecessor release as target", func(_, b *release.VerifiedBundle) {
+			b.Manifest.Node.RuntimeRevision = nodeconfig.DeploymentRuntimePredecessorRevision
+			b.Manifest.TopologyDigest = nodeconfig.DeploymentRuntimePredecessorContractDigest()
+		}},
+		{"non-root predecessor", func(a, _ *release.VerifiedBundle) {
+			a.Manifest.Release.PreviousID = "another-release"
+			a.Manifest.Release.PreviousVersion = "v0.0.1"
+		}},
+		{"non-adjacent target", func(_, b *release.VerifiedBundle) {
+			b.Manifest.Release.PreviousID = "another-release"
+		}},
+		{"same source", func(a, b *release.VerifiedBundle) {
+			b.Manifest.Release.SourceCommit = a.Manifest.Release.SourceCommit
+		}},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			candidateA, candidateB := a, b
+			scenario.change(&candidateA, &candidateB)
+			if validateNativeReleasePair(candidateA, candidateB) == nil {
+				t.Fatal("unsupported or ambiguous native release pair was accepted")
+			}
+		})
 	}
 }
 

@@ -28,6 +28,7 @@ import (
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/cli"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
+	"github.com/xiak/matrix/app/service/installation/internal/nodecommand"
 	"github.com/xiak/matrix/app/service/installation/nodeconfig"
 	"github.com/xiak/matrix/app/service/installation/release"
 )
@@ -127,6 +128,27 @@ func validateNativeFixture(input nativeFixtureInput) error {
 	return nil
 }
 
+func isNativeDeploymentRuntimePredecessor(bundle release.VerifiedBundle) bool {
+	return nodecommand.ValidateInstalledRelease(bundle) == nil &&
+		bundle.Manifest.Node.RuntimeRevision == nodeconfig.DeploymentRuntimePredecessorRevision &&
+		bundle.Manifest.TopologyDigest == nodeconfig.DeploymentRuntimePredecessorContractDigest()
+}
+
+func validateNativeReleasePair(a, b release.VerifiedBundle) error {
+	if !isNativeDeploymentRuntimePredecessor(a) || nodecommand.ValidateRelease(b) != nil ||
+		b.Manifest.Node.RuntimeRevision != nodeconfig.RuntimeRevision ||
+		b.Manifest.TopologyDigest != nodeconfig.ContractDigest() ||
+		a.Manifest.Release.PreviousID != "" || a.Manifest.Release.PreviousVersion != "" ||
+		b.Manifest.Release.PreviousID != a.Manifest.Release.ID ||
+		b.Manifest.Release.PreviousVersion != a.Manifest.Release.Version ||
+		a.Manifest.Release.ID == b.Manifest.Release.ID ||
+		a.Manifest.Release.Version == b.Manifest.Release.Version ||
+		a.Manifest.Release.SourceCommit == b.Manifest.Release.SourceCommit {
+		return fail("native-real-predecessor-pair")
+	}
+	return nil
+}
+
 func (value *gate) prepareNativeNodes(ctx context.Context, installationID string) error {
 	if value.config.nativeNodes == "" {
 		return nil
@@ -149,9 +171,7 @@ func (value *gate) prepareNativeNodes(ctx context.Context, installationID string
 		return fail("native-release-a")
 	}
 	b, err := release.VerifyDirectory(input.ReleaseB, trust)
-	if err != nil || a.Manifest.Kind != release.NodeManifestKind || b.Manifest.Kind != release.NodeManifestKind || a.Manifest.Node == nil || b.Manifest.Node == nil ||
-		a.Manifest.Node.RuntimeRevision != nodeconfig.RuntimeRevision || *a.Manifest.Node != *b.Manifest.Node || a.Manifest.TopologyDigest != b.Manifest.TopologyDigest ||
-		b.Manifest.Release.PreviousID != a.Manifest.Release.ID || b.Manifest.Release.PreviousVersion != a.Manifest.Release.Version || a.Manifest.Release.SourceCommit == b.Manifest.Release.SourceCommit {
+	if err != nil || validateNativeReleasePair(a, b) != nil {
 		return fail("native-real-predecessor-pair")
 	}
 	directory, err := os.MkdirTemp(filepath.Dir(value.config.nativeNodes), ".combined-enrollment-")
@@ -1261,7 +1281,8 @@ func (value *gate) afterNativeRestart(ctx context.Context, installationID string
 	}
 	defer clear(trust)
 	a, err := release.VerifyDirectory(input.ReleaseA, trust)
-	if err != nil || a.Manifest.Kind != release.NodeManifestKind || a.Manifest.Node == nil || a.Manifest.Node.RuntimeRevision != nodeconfig.RuntimeRevision || a.Manifest.Release.ID != retained.ReleaseID || a.ManifestSHA256 != retained.ReleaseDigest {
+	if err != nil || !isNativeDeploymentRuntimePredecessor(a) ||
+		a.Manifest.Release.ID != retained.ReleaseID || a.ManifestSHA256 != retained.ReleaseDigest {
 		return fail("native-restart-predecessor-release")
 	}
 	controllerBytes, err := os.ReadFile(filepath.Join(value.config.root, filepath.FromSlash(layout.NodeControllerConfiguration)))
