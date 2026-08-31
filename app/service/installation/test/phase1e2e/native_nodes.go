@@ -813,6 +813,9 @@ func (value *gate) nativeReleasePair(ctx context.Context, bearer []byte) error {
 	if err := value.assertNativeNodes(ctx, bearer, true); err != nil {
 		return err
 	}
+	if err := value.assertNativeDeploymentRuntime(ctx, bearer); err != nil {
+		return err
+	}
 	for index, node := range fixture.nodes {
 		result, err := fixture.mx(ctx, index, true, "rollback", "--root", nativeInstallationRoot)
 		if err != nil || !result.Changed || result.ReleaseID != fixture.releases.a.Manifest.Release.ID || result.PreviousID != "" || result.ConfigurationDigest != node.digest {
@@ -900,6 +903,57 @@ func (value *gate) assertNativeDeploymentRuntime(ctx context.Context, bearer []b
 	}
 	if active, err := value.activeCapacityClaims(ctx, value.nodes.controller.InstallationID, deploymentIDs...); err != nil || active != len(deployments) {
 		return fail("native-runtime-capacity-claims")
+	}
+	for index, deployment := range deployments {
+		spec := deployment.Spec
+		spec.DesiredState = paasv1.DeploymentDesiredStopped
+		operation, err := value.edge.mutateDeployment(
+			ctx,
+			http.MethodPut,
+			"/api/paas/v1/deployments/"+string(deployment.Metadata.ID),
+			fmt.Sprintf("phase3-stop-runtime-deployment-%d", index+1),
+			formatResourceVersion(deployment.Metadata.ResourceVersion),
+			bearer,
+			spec,
+			paasv1.OperationStop,
+			deployment.Metadata.ID,
+		)
+		if err != nil {
+			return fail("native-runtime-deployment-stop")
+		}
+		if _, err = value.edge.waitOperation(ctx, bearer, operation.ID); err != nil {
+			return fail("native-runtime-deployment-stop-operation")
+		}
+		if _, err = value.edge.waitDeployment(
+			ctx,
+			bearer,
+			deployment.Metadata.ID,
+			deployment.Generation+1,
+			paasv1.DeploymentStopped,
+		); err != nil {
+			return fail("native-runtime-deployment-stop-convergence")
+		}
+		containers, commandErr := value.nodes.command(
+			ctx,
+			index,
+			"docker",
+			"container",
+			"ls",
+			"--all",
+			"--quiet",
+			"--filter",
+			"label=com.xiak.matrix.deployment-id="+string(deployment.Metadata.ID),
+		)
+		if commandErr != nil || len(strings.Fields(string(containers))) != 0 {
+			return fail("native-runtime-provider-stop")
+		}
+	}
+	if active, err := value.activeCapacityClaims(
+		ctx,
+		value.nodes.controller.InstallationID,
+		deploymentIDs...,
+	); err != nil || active != 0 {
+		return fail("native-runtime-released-capacity-claims")
 	}
 	if _, err := value.edge.verifyAuditChain(ctx, bearer); err != nil {
 		return fail("native-runtime-audit-integrity")

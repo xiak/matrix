@@ -398,9 +398,6 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if _, err := value.edge.verifyAuditChain(ctx, bearer); err != nil {
 		return fail("final-audit-integrity")
 	}
-	if err := value.assertNativeDeploymentRuntime(ctx, bearer); err != nil {
-		return err
-	}
 	if err := value.edge.logout(ctx, bearer); err != nil {
 		return fail("iam-logout-current")
 	}
