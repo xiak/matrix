@@ -2,6 +2,7 @@ package phase1e2e
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
+	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/installation/release"
 )
 
@@ -92,6 +95,53 @@ func TestAuditQueryRetriesOnlyBoundedExplicitUnavailability(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTerminalTicketReplayRequiresTheNonDisclosingNotFoundContract(t *testing.T) {
+	for _, scenario := range []struct {
+		name   string
+		status int
+		code   paasv1.ErrorCode
+		accept bool
+	}{
+		{name: "non-disclosing replay denial", status: http.StatusNotFound, code: paasv1.ErrorNotFound, accept: true},
+		{name: "existence-revealing conflict", status: http.StatusConflict, code: paasv1.ErrorConflict},
+		{name: "wrong problem code", status: http.StatusNotFound, code: paasv1.ErrorConflict},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				if request.Header.Get("Origin") != serverOrigin(request) ||
+					request.Header.Get("Cookie") != terminalTicketCookieName+"="+strings.Repeat("A", 43) ||
+					request.Header.Get("Sec-WebSocket-Protocol") != nodev1.TerminalSubprotocol {
+					response.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				response.Header().Set("Content-Type", "application/problem+json")
+				response.WriteHeader(scenario.status)
+				_ = json.NewEncoder(response).Encode(paasv1.Problem{
+					Type:  "https://matrix.xiak.com/problems/terminal-replay",
+					Title: "Terminal unavailable", Status: scenario.status, Code: scenario.code,
+					Detail:  "the terminal ticket cannot identify an available session",
+					TraceID: "request-terminal-replay", Retryable: false,
+				})
+			}))
+			defer server.Close()
+			client := newEdgeClient(server.URL)
+			defer client.close()
+			err := rejectNativeTerminalReplay(
+				context.Background(), client,
+				"/api/paas/v1/terminal-sessions/terminal-session-"+strings.Repeat("a", 32)+"/connect",
+				terminalTicketCookieName+"="+strings.Repeat("A", 43),
+			)
+			if (err == nil) != scenario.accept {
+				t.Fatalf("replay denial accepted=%t err=%v", err == nil, err)
+			}
+		})
+	}
+}
+
+func serverOrigin(request *http.Request) string {
+	return "http://" + request.Host
 }
 
 func TestOfflinePhase1Lifecycle(t *testing.T) {

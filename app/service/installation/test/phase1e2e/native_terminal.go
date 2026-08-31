@@ -248,7 +248,7 @@ func rejectNativeTerminalReplay(
 	if connection != nil {
 		connection.CloseNow()
 	}
-	if err == nil || response == nil || response.StatusCode != http.StatusConflict {
+	if err == nil || response == nil || response.StatusCode != http.StatusNotFound {
 		return fail("native-terminal-ticket-replay")
 	}
 	mediaType, _, mediaErr := mime.ParseMediaType(response.Header.Get("Content-Type"))
@@ -257,8 +257,8 @@ func rejectNativeTerminalReplay(
 	var problem paasv1.Problem
 	if readErr != nil || mediaErr != nil || mediaType != "application/problem+json" ||
 		containsAny(content, client.forbidden) || decodeOne(content, &problem) != nil ||
-		paasv1.ValidateProblem(problem) != nil || problem.Status != http.StatusConflict ||
-		problem.Code != paasv1.ErrorConflict {
+		paasv1.ValidateProblem(problem) != nil || problem.Status != http.StatusNotFound ||
+		problem.Code != paasv1.ErrorNotFound {
 		return fail("native-terminal-ticket-replay-contract")
 	}
 	return nil
