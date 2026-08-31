@@ -2798,21 +2798,38 @@ func (runtimeBoundary *platformStartRuntime) RunTo(
 			_, err = output.Write([]byte("; Archive created for test\n"))
 			return true, err
 		}
+		return true, errors.New("recovery used direct pg_restore outside its schema-reset transaction")
+	}
+	if slices.Contains(arguments, databaseRestoreScript) {
+		if input == nil {
+			return false, errors.New("recovery restore stdin is absent")
+		}
+		content, err := io.ReadAll(input)
+		if err != nil || !bytes.Equal(content, runtimeBoundary.databaseDump) {
+			return true, errors.New("recovery restore content is invalid")
+		}
+		wantTail := []string{
+			"/bin/bash", "-o", "pipefail", "-ceu", databaseRestoreScript,
+		}
+		if len(arguments) < len(wantTail) ||
+			!slices.Equal(arguments[len(arguments)-len(wantTail):], wantTail) ||
+			!hasArgumentPair(arguments, "--user", "postgres") {
+			return true, errors.New("recovery restore process boundary is invalid")
+		}
 		for _, required := range []string{
-			"--interactive", "--clean", "--if-exists", "--exit-on-error",
-			"--single-transaction", "--no-privileges", "--no-password",
+			"BEGIN;", "DROP SCHEMA IF EXISTS audit, iam, managedservice, paas CASCADE;",
+			"pg_restore --file=- --exit-on-error --no-privileges --no-password",
+			"COMMIT;", "ROLLBACK;", "psql -X --set=ON_ERROR_STOP=1",
+			"--username=matrix --dbname=matrix",
 		} {
-			if !slices.Contains(arguments, required) {
-				return true, fmt.Errorf("recovery restore lacks %s", required)
+			if !strings.Contains(databaseRestoreScript, required) {
+				return true, fmt.Errorf("recovery restore transaction lacks %s", required)
 			}
 		}
-		if slices.Contains(arguments, "--no-owner") {
-			return true, errors.New("recovery restore suppresses database ownership")
-		}
-		if !hasArgumentPair(arguments, "--user", "postgres") ||
-			!hasArgumentPair(arguments, "--username", "matrix") ||
-			!hasArgumentPair(arguments, "--dbname", "matrix") {
-			return true, errors.New("recovery restore database identity is invalid")
+		for _, forbidden := range []string{"--clean", "--no-owner"} {
+			if strings.Contains(databaseRestoreScript, forbidden) {
+				return true, fmt.Errorf("recovery restore transaction contains %s", forbidden)
+			}
 		}
 		runtimeBoundary.recoveryRestores++
 		return true, nil

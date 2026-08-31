@@ -19,6 +19,16 @@ const (
 	recoveryVerificationTenantID    = paasv1.TenantID("organization-default")
 	recoveryVerificationComponent   = "probe"
 	recoveryVerificationDownTimeout = "30"
+	databaseRestoreScript           = `{
+  printf '%s\n' 'BEGIN;' 'DROP SCHEMA IF EXISTS audit, iam, managedservice, paas CASCADE;'
+  if pg_restore --file=- --exit-on-error --no-privileges --no-password; then
+    printf '%s\n' 'COMMIT;'
+  else
+    printf '%s\n' 'ROLLBACK;'
+    exit 1
+  fi
+} | psql -X --set=ON_ERROR_STOP=1 --no-password --username=matrix --dbname=matrix
+`
 )
 
 type recoveryVerificationParticipant struct {
@@ -765,13 +775,12 @@ func restoreDatabaseDump(
 	started, err := runtimeBoundary.RunTo(
 		ctx, file, io.Discard,
 		"exec", "--interactive", "--user", "postgres", postgresID,
-		"pg_restore", "--clean", "--if-exists", "--exit-on-error",
 		// The authenticated custom archive carries the exact IAM/Audit owner
-		// roles. Restoring those owners is required before their non-superuser
-		// migrators can converge functions and tables. ACLs remain release-owned
-		// and are intentionally reapplied by the target migration binaries.
-		"--single-transaction", "--no-privileges", "--no-password",
-		"--username", "matrix", "--dbname", "matrix",
+		// roles. Stream it through one transaction that first removes only the
+		// Matrix-owned schemas. This also removes authenticated successor-only
+		// dependencies that an older backup cannot name in its cleanup TOC.
+		// ACLs remain release-owned and are reapplied by target migrations.
+		"/bin/bash", "-o", "pipefail", "-ceu", databaseRestoreScript,
 	)
 	if err == nil {
 		return nil
