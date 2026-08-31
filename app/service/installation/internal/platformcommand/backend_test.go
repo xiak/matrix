@@ -512,6 +512,24 @@ func TestUpgradeRejectsSkippedPredecessorWithoutStartingACommand(t *testing.T) {
 	}
 }
 
+func TestInstallRejectsNonRootReleaseWithoutStartingACommand(t *testing.T) {
+	fixtures := writeReleaseSequence(t, 2)
+	effects := &installEffects{}
+	backend := newTestBackend(t, effects)
+	root := filepath.Join(t.TempDir(), "matrix")
+
+	_, err := backend.Run(
+		context.Background(), installRequest(root, fixtures[1]),
+	)
+	assertFault(t, err, cli.FaultPrecondition, "INSTALL_RELEASE_HAS_PREDECESSOR")
+	if len(effects.calls) != 0 {
+		t.Fatal("non-root installation reached installation effects")
+	}
+	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("non-root installation created installation state")
+	}
+}
+
 func TestExplicitRollbackReplaysUnknownOutcomeAndCommitsOnlyTheSignedPredecessor(t *testing.T) {
 	fixtures := writeReleaseSequence(t, 2)
 	effects := &installEffects{

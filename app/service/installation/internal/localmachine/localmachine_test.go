@@ -827,6 +827,64 @@ func TestArtifactCatalogRejectsConflictingAuthenticatedMappings(t *testing.T) {
 	}
 }
 
+func TestInstalledArtifactCatalogAdmitsOnlyTheCommittedPredecessorState(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("installed artifact catalog targets Linux installation state")
+	}
+	plan := newUpgradePlan(t)
+	source, err := authenticateInstalledPlan(plan.Source)
+	if err != nil {
+		t.Fatalf("authenticate predecessor source: %v", err)
+	}
+	defer clear(source.TrustBytes)
+
+	withPredecessor, err := installedArtifactCatalogConfig(plan.Target)
+	if err != nil {
+		t.Fatalf("compile catalog with authenticated predecessor: %v", err)
+	}
+	wantWithPredecessor, err := artifactCatalogConfig(
+		source.Bundle.Manifest, plan.Target.Bundle.Manifest,
+	)
+	if err != nil {
+		t.Fatalf("compile expected predecessor catalog: %v", err)
+	}
+	if !bytes.Equal(withPredecessor, wantWithPredecessor) {
+		t.Fatal("authenticated predecessor catalog omitted a committed release")
+	}
+
+	currentOnly := plan.Target
+	currentOnly.PreviousID = ""
+	currentOnly.PreviousDigest = ""
+	withoutPredecessor, err := installedArtifactCatalogConfig(currentOnly)
+	if err != nil {
+		t.Fatalf("compile catalog after explicit rollback: %v", err)
+	}
+	wantCurrentOnly, err := artifactCatalogConfig(plan.Target.Bundle.Manifest)
+	if err != nil {
+		t.Fatalf("compile expected current-only catalog: %v", err)
+	}
+	if !bytes.Equal(withoutPredecessor, wantCurrentOnly) {
+		t.Fatal("explicit rollback retained an uncommitted N-2 release")
+	}
+
+	for name, mutate := range map[string]func(*platformcommand.InstallPlan){
+		"id only": func(candidate *platformcommand.InstallPlan) {
+			candidate.PreviousDigest = ""
+		},
+		"digest only": func(candidate *platformcommand.InstallPlan) {
+			candidate.PreviousID = ""
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := plan.Target
+			mutate(&candidate)
+			if _, err := installedArtifactCatalogConfig(candidate); err == nil {
+				t.Fatal("catalog accepted a partially committed predecessor identity")
+			}
+		})
+	}
+}
+
 func TestUpgradeConfigurationReplacesOnlyReleaseDerivedFilesAndReplaysBothWays(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("local-machine upgrade configuration targets Linux")

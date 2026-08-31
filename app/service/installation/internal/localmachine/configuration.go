@@ -241,6 +241,14 @@ func installedArtifactCatalogConfig(plan platformcommand.InstallPlan) ([]byte, e
 		}
 		return artifactCatalogConfig(current.Manifest)
 	}
+	// A successful explicit rollback intentionally commits only the restored
+	// release as current. Its signed manifest still records where that release
+	// originally came from, but the installation no longer promises that the
+	// older N-2 release is retained. Install rejects a non-root release and an
+	// upgrade still supplies and authenticates the exact predecessor below.
+	if plan.PreviousID == "" && plan.PreviousDigest == "" {
+		return artifactCatalogConfig(current.Manifest)
+	}
 	if plan.PreviousID != identity.PreviousID || plan.PreviousDigest == "" {
 		return nil, errors.New("installed predecessor identity is incomplete")
 	}
