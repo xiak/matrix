@@ -172,8 +172,11 @@ the current pointer unchanged. Explicit rollback returns to that immediate
 previous release without discarding data written after upgrade; the previous
 binary must pass verification against the expanded schema. Recovery is the
 separate destructive path that restores a selected verified backup after an
-operator request. Backups remain installation-owned, restrictive, sealed, and
-excluded from support evidence.
+operator request. The recovery engine comes from an authenticated, supported
+operator bundle compatible with the installation profile; the selected backup
+alone determines the authenticated target release. A historical target binary
+does not own the restore algorithm. Backups remain installation-owned,
+restrictive, sealed, and excluded from support evidence.
 
 `verify` rechecks journal seals, current bundle content, loaded image identity,
 Compose project membership, service health, schema compatibility, IAM

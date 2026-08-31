@@ -324,7 +324,10 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	}
 
 	value.workloadRunning = ""
-	recovery, err := runMX(ctx, value.releases.a, "recover", []string{
+	// Recovery is executed by the authenticated current operator media. The
+	// selected backup, not a historical target binary, owns the release that is
+	// restored. This keeps recovery fixes usable after the platform rolls back.
+	recovery, err := runMX(ctx, value.releases.b, "recover", []string{
 		"--root", value.config.root, "--backup", backup.BackupID,
 	}, value.forbidden(secret, newPassword, bearer))
 	if err != nil || recovery.ReleaseID != value.releases.a.Manifest.Release.ID ||
