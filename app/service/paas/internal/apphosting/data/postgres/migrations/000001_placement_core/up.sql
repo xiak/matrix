@@ -1141,7 +1141,7 @@ BEGIN
                    OR NOT measurement_value->'volumes' ?& ARRAY[
                         'count', 'bytes', 'sharedCount', 'sharedBytes'
                    ]
-                   OR measurement_value->'volumes' - ARRAY[
+                   OR (measurement_value->'volumes') - ARRAY[
                         'count', 'bytes', 'sharedCount', 'sharedBytes'
                    ] <> '{}'::jsonb
                    OR EXISTS (

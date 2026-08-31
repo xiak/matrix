@@ -377,6 +377,43 @@ BEGIN
         RAISE EXCEPTION 'Deployment resource validator is missing or unsafe';
     END IF;
 
+    IF NOT paas.valid_deployment_resource_document(
+        jsonb_build_object(
+            'deploymentId', 'deployment-resource-verification',
+            'generation', 1,
+            'applicationRevisionId', 'application-revision-verification',
+            'executionTargetId', 'execution-target-verification',
+            'instances', jsonb_build_array(jsonb_build_object(
+                'id', 'instance-0123456789abcdef0123456789abcdef',
+                'cpu', jsonb_build_object('state', 'UNSUPPORTED'),
+                'memory', jsonb_build_object('state', 'UNSUPPORTED'),
+                'network', jsonb_build_object('state', 'UNSUPPORTED'),
+                'blockIo', jsonb_build_object('state', 'UNSUPPORTED'),
+                'storage', jsonb_build_object(
+                    'state', 'AVAILABLE',
+                    'value', jsonb_build_object(
+                        'observedAt', '2026-08-31T00:00:00Z',
+                        'validUntil', '2026-08-31T00:01:30Z',
+                        'writableLayerBytes', 1,
+                        'imageTotalBytes', 10,
+                        'imageSharedBytes', 4,
+                        'imageUniqueBytes', 6,
+                        'volumesState', 'AVAILABLE',
+                        'volumes', jsonb_build_object(
+                            'count', 0,
+                            'bytes', 0,
+                            'sharedCount', 0,
+                            'sharedBytes', 0
+                        )
+                    )
+                )
+            )),
+            'observedAt', '2026-08-31T00:00:01Z'
+        )
+    ) THEN
+        RAISE EXCEPTION 'Deployment resource validator rejects valid available storage';
+    END IF;
+
     IF has_schema_privilege('matrix_paas_api', 'paas', 'CREATE')
        OR has_schema_privilege('matrix_paas_worker', 'paas', 'CREATE')
        OR has_table_privilege(

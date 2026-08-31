@@ -440,7 +440,19 @@ func deploymentTelemetrySnapshot(
 			Memory:  paasv1.DeploymentInstanceMemoryUsage{State: paasv1.MeasurementUnsupported},
 			Network: paasv1.DeploymentInstanceNetworkUsage{State: paasv1.MeasurementUnsupported},
 			BlockIO: paasv1.DeploymentInstanceBlockIOUsage{State: paasv1.MeasurementUnsupported},
-			Storage: paasv1.DeploymentInstanceStorageUsage{State: paasv1.MeasurementUnsupported},
+			Storage: paasv1.DeploymentInstanceStorageUsage{
+				State: paasv1.MeasurementAvailable,
+				Value: &paasv1.DeploymentInstanceStorageUsageValue{
+					ObservedAt:         runtime.ObservedAt,
+					ValidUntil:         runtime.ObservedAt.Add(90 * time.Second),
+					WritableLayerBytes: 1,
+					ImageTotalBytes:    10,
+					ImageSharedBytes:   4,
+					ImageUniqueBytes:   6,
+					VolumesState:       paasv1.MeasurementAvailable,
+					Volumes:            &paasv1.DeploymentInstanceVolumeUsage{},
+				},
+			},
 		}
 	}
 	return refreshdeploymentruntime.TelemetrySnapshot{
