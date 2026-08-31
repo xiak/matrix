@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -189,6 +190,100 @@ func TestDockerResourceCollectorRejectsCrossContainerStatsAndSkipsStoppedStats(t
 	_, err = collector.observe(context.Background(), project, []RuntimeContainer{{ID: containerID, State: "running"}})
 	if !errors.Is(err, ErrRuntimeOutputInvalid) {
 		t.Fatalf("cross-container stats error = %v, want provider rejection", err)
+	}
+}
+
+func TestDockerResourceCollectorOverlapsFastAndDiskObservation(t *testing.T) {
+	now := time.Date(2026, 8, 31, 2, 3, 4, 0, time.UTC)
+	containerID := strings.Repeat("f", 64)
+	imageID := "sha256:" + strings.Repeat("e", 64)
+	statsStarted := make(chan struct{})
+	diskStarted := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(request.URL.Path, "/json"):
+			value := map[string]any{
+				"Id": containerID, "Image": imageID,
+				"HostConfig": map[string]any{"NanoCpus": 1_000_000_000, "Memory": 64 << 20},
+				"Mounts":     []any{},
+			}
+			if request.URL.Query().Get("size") == "true" {
+				value["SizeRw"] = 1
+			}
+			_ = json.NewEncoder(response).Encode(value)
+		case strings.HasSuffix(request.URL.Path, "/stats"):
+			close(statsStarted)
+			select {
+			case <-release:
+			case <-request.Context().Done():
+				return
+			}
+			_ = json.NewEncoder(response).Encode(map[string]any{
+				"id": containerID, "read": now.Format(time.RFC3339Nano),
+				"preread":      now.Add(-time.Second).Format(time.RFC3339Nano),
+				"cpu_stats":    map[string]any{"cpu_usage": map[string]any{"total_usage": 2}, "system_cpu_usage": 2, "online_cpus": 1},
+				"precpu_stats": map[string]any{"cpu_usage": map[string]any{"total_usage": 1}, "system_cpu_usage": 1},
+				"memory_stats": map[string]any{"usage": 1, "limit": 64 << 20, "stats": map[string]any{}},
+				"networks":     map[string]any{}, "blkio_stats": map[string]any{},
+			})
+		case strings.HasSuffix(request.URL.Path, "/system/df"):
+			close(diskStarted)
+			select {
+			case <-release:
+			case <-request.Context().Done():
+				return
+			}
+			_ = json.NewEncoder(response).Encode(map[string]any{
+				"Images":  []any{map[string]any{"Id": imageID, "Size": 1, "SharedSize": 0}},
+				"Volumes": []any{},
+			})
+		default:
+			response.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	collector := newDockerResourceCollectorWithEngine(
+		&dockerEngineClient{http: server.Client(), endpoint: server.URL + "/v1.46"},
+		func() time.Time { return now },
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	project := runtimeResourceProject(t)
+	type observation struct {
+		resources map[string]RuntimeContainerResources
+		err       error
+	}
+	completed := make(chan observation, 1)
+	go func() {
+		resources, err := collector.observe(
+			ctx,
+			project,
+			[]RuntimeContainer{{ID: containerID, State: "running"}},
+		)
+		completed <- observation{resources: resources, err: err}
+	}()
+	for name, started := range map[string]<-chan struct{}{
+		"container stats": statsStarted,
+		"disk inventory":  diskStarted,
+	} {
+		select {
+		case <-started:
+		case <-time.After(500 * time.Millisecond):
+			t.Fatalf("%s did not start within the shared observation budget", name)
+		}
+	}
+	releaseOnce.Do(func() { close(release) })
+	select {
+	case result := <-completed:
+		if result.err != nil || result.resources[containerID].Storage.State != paasv1.MeasurementAvailable {
+			t.Fatalf("overlapped Docker resource observation = %#v / %v", result.resources, result.err)
+		}
+	case <-ctx.Done():
+		t.Fatal("overlapped Docker resource observation exceeded its deadline")
 	}
 }
 

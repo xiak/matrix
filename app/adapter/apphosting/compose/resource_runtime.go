@@ -248,11 +248,21 @@ func (collector *dockerResourceCollector) observe(
 		}
 		seen[container.ID] = struct{}{}
 	}
+	work, cancel := context.WithCancel(ctx)
+	defer cancel()
+	now := collector.now().UTC().Truncate(time.Microsecond)
+	diskReady := make(chan *dockerDiskUsageSnapshot, 1)
+	go func() {
+		diskReady <- collector.currentDiskUsage(work, now)
+	}()
 	samples := make([]dockerFastSample, len(containers))
-	if err := collector.collectFast(ctx, containers, samples); err != nil {
+	if err := collector.collectFast(work, containers, samples); err != nil {
+		cancel()
+		<-diskReady
 		return nil, err
 	}
-	storage := collector.collectStorage(ctx, containers, samples)
+	disk := <-diskReady
+	storage := collector.collectStorage(work, now, disk, containers, samples)
 	if ctx.Err() != nil {
 		return nil, ErrRuntimeUnavailable
 	}
@@ -660,11 +670,11 @@ func publicIntegers(values ...uint64) ([]int64, bool) {
 
 func (collector *dockerResourceCollector) collectStorage(
 	ctx context.Context,
+	now time.Time,
+	disk *dockerDiskUsageSnapshot,
 	containers []RuntimeContainer,
 	samples []dockerFastSample,
 ) []paasv1.DeploymentInstanceStorageUsage {
-	now := collector.now().UTC().Truncate(time.Microsecond)
-	disk := collector.currentDiskUsage(ctx, now)
 	result := make([]paasv1.DeploymentInstanceStorageUsage, len(containers))
 	type pendingStorage struct {
 		index    int
