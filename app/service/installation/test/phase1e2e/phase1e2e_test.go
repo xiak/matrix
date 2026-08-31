@@ -47,6 +47,48 @@ func TestEdgeClientAcceptsExpectedProblemResponses(t *testing.T) {
 	}
 }
 
+func TestExecutionTargetTransitionRejectionRequiresExactProblemCode(t *testing.T) {
+	for _, scenario := range []struct {
+		name     string
+		actual   paasv1.ErrorCode
+		expected paasv1.ErrorCode
+		accepted bool
+	}{
+		{name: "idempotency conflict", actual: paasv1.ErrorIdempotencyConflict, expected: paasv1.ErrorIdempotencyConflict, accepted: true},
+		{name: "lifecycle conflict", actual: paasv1.ErrorConflict, expected: paasv1.ErrorConflict, accepted: true},
+		{name: "different conflict class", actual: paasv1.ErrorIdempotencyConflict, expected: paasv1.ErrorConflict},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				if request.URL.Path != "/api/paas/v1/execution-targets/target-a/activate" ||
+					request.Header.Get("Idempotency-Key") != "transition-a" ||
+					request.Header.Get("If-Match") != `"2"` {
+					response.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				response.Header().Set("Content-Type", "application/problem+json")
+				response.WriteHeader(http.StatusConflict)
+				_ = json.NewEncoder(response).Encode(paasv1.Problem{
+					Type:  "https://matrix.xiak.com/problems/execution-target-transition",
+					Title: "Execution target transition conflict", Status: http.StatusConflict,
+					Code: scenario.actual, Detail: "the transition conflicts with retained state",
+					TraceID: "request-transition-a", Retryable: false,
+				})
+			}))
+			defer server.Close()
+			client := newEdgeClient(server.URL)
+			defer client.close()
+			_, err := client.rejectExecutionTargetTransition(
+				context.Background(), nil, "target-a", paasv1.OperationActivateExecutionTarget,
+				"transition-a", `"2"`, scenario.expected,
+			)
+			if (err == nil) != scenario.accepted {
+				t.Fatalf("transition rejection accepted=%t err=%v", err == nil, err)
+			}
+		})
+	}
+}
+
 func TestAuditQueryRetriesOnlyBoundedExplicitUnavailability(t *testing.T) {
 	const unavailable = `{"type":"https://matrix.xiak.com/problems/audit.unavailable","title":"Audit unavailable","status":503,"code":"audit.unavailable","requestId":"request-test"}`
 	const page = `{"apiVersion":"audit.matrix.xiak.com/v1","kind":"AuditRecordPage","tenantId":"organization-default","records":[]}`

@@ -343,6 +343,7 @@ func (client *edgeClient) rejectExecutionTargetTransition(
 	targetID paasv1.ResourceID,
 	action paasv1.OperationAction,
 	key, ifMatch string,
+	expectedCode paasv1.ErrorCode,
 ) (paasv1.Problem, error) {
 	segment, _, _, ok := executionTargetLifecycleContract(action)
 	if !ok {
@@ -360,7 +361,7 @@ func (client *edgeClient) rejectExecutionTargetTransition(
 	defer clear(response.body)
 	var problem paasv1.Problem
 	if decodeOne(response.body, &problem) != nil || paasv1.ValidateProblem(problem) != nil ||
-		problem.Status != http.StatusConflict || problem.Code != paasv1.ErrorConflict ||
+		problem.Status != http.StatusConflict || problem.Code != expectedCode ||
 		response.header.Get("ETag") != "" || response.header.Get("Operation-Location") != "" {
 		return paasv1.Problem{}, errors.New("PaaS ExecutionTarget rejection response failed")
 	}

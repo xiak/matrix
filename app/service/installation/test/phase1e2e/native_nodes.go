@@ -1189,7 +1189,7 @@ func (value *gate) beginNativeTargetLifecycle(
 	}
 	if _, err = value.edge.rejectExecutionTargetTransition(
 		ctx, bearer, firstTarget, paasv1.OperationActivateExecutionTarget,
-		firstDrain.Key, etag,
+		firstDrain.Key, etag, paasv1.ErrorIdempotencyConflict,
 	); err != nil {
 		return nil, fail("native-lifecycle-changed-action-replay")
 	}
@@ -1201,7 +1201,7 @@ func (value *gate) beginNativeTargetLifecycle(
 	}
 	blocked, err := value.edge.rejectExecutionTargetTransition(
 		ctx, bearer, firstTarget, paasv1.OperationRemoveExecutionTarget,
-		"phase3-remove-live-target-1", etag,
+		"phase3-remove-live-target-1", etag, paasv1.ErrorConflict,
 	)
 	if err != nil || !blocked.Retryable {
 		return nil, fail("native-lifecycle-live-removal-blocked")
