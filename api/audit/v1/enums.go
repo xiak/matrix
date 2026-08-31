@@ -52,6 +52,9 @@ const (
 	ActionPaaSDeploymentRolledBack                Action = "paas.deployment.rolled-back"
 	ActionPaaSExecutionPoolCreated                Action = "paas.execution-pool.created"
 	ActionPaaSExecutionTargetRegistered           Action = "paas.execution-target.registered"
+	ActionPaaSTerminalSessionCreated              Action = "paas.terminal-session.created"
+	ActionPaaSTerminalSessionStarted              Action = "paas.terminal-session.started"
+	ActionPaaSTerminalSessionEnded                Action = "paas.terminal-session.ended"
 	ActionManagedServiceQuotaEntitlementActivated Action = "managedservice.quota-entitlement.activated"
 	ActionManagedServiceInstallationCreated       Action = "managedservice.service-installation.created"
 	ActionManagedServiceInstallationReady         Action = "managedservice.service-installation.ready"
@@ -74,6 +77,7 @@ const (
 	TargetConfigurationRevision TargetKind = "CONFIGURATION_REVISION"
 	TargetApplicationRevision   TargetKind = "APPLICATION_REVISION"
 	TargetDeployment            TargetKind = "DEPLOYMENT"
+	TargetTerminalSession       TargetKind = "TERMINAL_SESSION"
 	TargetExecutionPool         TargetKind = "EXECUTION_POOL"
 	TargetExecutionTarget       TargetKind = "EXECUTION_TARGET"
 	TargetQuotaEntitlement      TargetKind = "QUOTA_ENTITLEMENT"
@@ -83,10 +87,17 @@ const (
 )
 
 const (
-	ResultAccepted  Result = "ACCEPTED"
-	ResultSucceeded Result = "SUCCEEDED"
-	ResultAllowed   Result = "ALLOWED"
-	ResultDenied    Result = "DENIED"
+	ResultAccepted     Result = "ACCEPTED"
+	ResultSucceeded    Result = "SUCCEEDED"
+	ResultAllowed      Result = "ALLOWED"
+	ResultDenied       Result = "DENIED"
+	ResultCompleted    Result = "COMPLETED"
+	ResultUnsupported  Result = "UNSUPPORTED"
+	ResultExpired      Result = "EXPIRED"
+	ResultDisconnected Result = "DISCONNECTED"
+	ResultRevoked      Result = "REVOKED"
+	ResultReplaced     Result = "REPLACED"
+	ResultFailed       Result = "FAILED"
 )
 
 const (
@@ -161,6 +172,9 @@ var allActions = []Action{
 	ActionPaaSDeploymentRolledBack,
 	ActionPaaSExecutionPoolCreated,
 	ActionPaaSExecutionTargetRegistered,
+	ActionPaaSTerminalSessionCreated,
+	ActionPaaSTerminalSessionStarted,
+	ActionPaaSTerminalSessionEnded,
 	ActionManagedServiceQuotaEntitlementActivated,
 	ActionManagedServiceInstallationCreated,
 	ActionManagedServiceInstallationReady,
@@ -262,6 +276,22 @@ var actionContracts = map[Action]ActionContract{
 	ActionPaaSExecutionTargetRegistered: {
 		Source: SourcePaaS, Target: TargetExecutionTarget, Results: []Result{ResultSucceeded},
 		IAMDecisionRequired: true, OperationRequired: true, PlatformOnly: true,
+	},
+	ActionPaaSTerminalSessionCreated: {
+		Source: SourcePaaS, Target: TargetTerminalSession, Results: []Result{ResultAccepted},
+		IAMDecisionRequired: true,
+	},
+	ActionPaaSTerminalSessionStarted: {
+		Source: SourcePaaS, Target: TargetTerminalSession, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true,
+	},
+	ActionPaaSTerminalSessionEnded: {
+		Source: SourcePaaS, Target: TargetTerminalSession,
+		Results: []Result{
+			ResultCompleted, ResultUnsupported, ResultExpired, ResultDisconnected,
+			ResultRevoked, ResultReplaced, ResultFailed,
+		},
+		IAMDecisionRequired: true,
 	},
 	ActionManagedServiceQuotaEntitlementActivated: {
 		Source: SourcePaaS, Target: TargetQuotaEntitlement, Results: []Result{ResultSucceeded},

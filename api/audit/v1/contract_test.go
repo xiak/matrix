@@ -171,6 +171,28 @@ func TestAuditActionCatalogIsClosedAndSourceBound(t *testing.T) {
 	}
 }
 
+func TestTerminalAuditFactsHaveNoOperationOrPayloadEscapeHatch(t *testing.T) {
+	for _, action := range []Action{
+		ActionPaaSTerminalSessionCreated,
+		ActionPaaSTerminalSessionStarted,
+		ActionPaaSTerminalSessionEnded,
+	} {
+		contract, known := ContractForAction(action)
+		if !known || contract.Source != SourcePaaS || contract.Target != TargetTerminalSession ||
+			!contract.IAMDecisionRequired || contract.OperationRequired || contract.PlatformOnly {
+			t.Fatalf("terminal action %q has an invalid Audit contract: %#v", action, contract)
+		}
+	}
+	ended, _ := ContractForAction(ActionPaaSTerminalSessionEnded)
+	want := []Result{
+		ResultCompleted, ResultUnsupported, ResultExpired, ResultDisconnected,
+		ResultRevoked, ResultReplaced, ResultFailed,
+	}
+	if !reflect.DeepEqual(ended.Results, want) {
+		t.Fatalf("terminal outcomes = %v, want %v", ended.Results, want)
+	}
+}
+
 func TestAuditWireTypesHaveNoArbitraryPayloadEscapeHatch(t *testing.T) {
 	roots := []reflect.Type{
 		reflect.TypeOf(Event{}), reflect.TypeOf(AuditRecord{}), reflect.TypeOf(IngestionResult{}),

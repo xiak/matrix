@@ -42,6 +42,9 @@
           "paas.deployment.rolled-back",
           "paas.execution-pool.created",
           "paas.execution-target.registered",
+          "paas.terminal-session.created",
+          "paas.terminal-session.started",
+          "paas.terminal-session.ended",
           "managedservice.quota-entitlement.activated",
           "managedservice.service-installation.created",
           "managedservice.service-installation.ready",
@@ -769,6 +772,84 @@
                   "properties": {
                     "action": {
                       "const": "paas.execution-target.registered"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "PAAS"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "paas.terminal-session.created"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "PAAS"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "paas.terminal-session.started"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "PAAS"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "paas.terminal-session.ended"
                     }
                   },
                   "required": [
@@ -2240,6 +2321,126 @@
             "if": {
               "properties": {
                 "action": {
+                  "const": "paas.terminal-session.created"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "installationId": false,
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "ACCEPTED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "TERMINAL_SESSION"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "tenantId",
+                "iamDecisionId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.terminal-session.started"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "installationId": false,
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "TERMINAL_SESSION"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "tenantId",
+                "iamDecisionId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.terminal-session.ended"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "installationId": false,
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "COMPLETED",
+                    "UNSUPPORTED",
+                    "EXPIRED",
+                    "DISCONNECTED",
+                    "REVOKED",
+                    "REPLACED",
+                    "FAILED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "TERMINAL_SESSION"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "tenantId",
+                "iamDecisionId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
                   "const": "managedservice.quota-entitlement.activated"
                 }
               },
@@ -2905,7 +3106,14 @@
           "SUCCEEDED",
           "ALLOWED",
           "DENIED",
-          "ACCEPTED"
+          "ACCEPTED",
+          "COMPLETED",
+          "UNSUPPORTED",
+          "EXPIRED",
+          "DISCONNECTED",
+          "REVOKED",
+          "REPLACED",
+          "FAILED"
         ],
         "type": "string"
       },
@@ -2938,6 +3146,7 @@
           "DEPLOYMENT",
           "EXECUTION_POOL",
           "EXECUTION_TARGET",
+          "TERMINAL_SESSION",
           "QUOTA_ENTITLEMENT",
           "SERVICE_INSTALLATION",
           "AUDIT_RECORDS",
