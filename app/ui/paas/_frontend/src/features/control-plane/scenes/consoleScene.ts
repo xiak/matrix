@@ -143,6 +143,23 @@ export type DeploymentRuntimeInstanceScene = {
   healthLabel: string;
   status: SceneStatus;
   exitCode: string;
+  resources: DeploymentRuntimeInstanceResourcesScene | null;
+};
+
+export type DeploymentResourceMeasurementScene = {
+  state: string;
+  stateLabel: string;
+  status: SceneStatus;
+  value: string;
+  detail: string;
+};
+
+export type DeploymentRuntimeInstanceResourcesScene = {
+  cpu: DeploymentResourceMeasurementScene;
+  memory: DeploymentResourceMeasurementScene;
+  network: DeploymentResourceMeasurementScene;
+  blockIo: DeploymentResourceMeasurementScene;
+  storage: DeploymentResourceMeasurementScene;
 };
 
 export type DeploymentRuntimeScene = {
@@ -154,6 +171,13 @@ export type DeploymentRuntimeScene = {
   executionTargetId: string | null;
   observedAt: string;
   validUntil: string;
+  resources: {
+    state: string;
+    stateLabel: string;
+    status: SceneStatus;
+    observedAt: string;
+    validUntil: string;
+  };
   instances: DeploymentRuntimeInstanceScene[];
 };
 

@@ -970,12 +970,140 @@ func ValidateDeploymentRuntimeObservation(value DeploymentRuntimeObservation) er
 	return errors.Join(problems...)
 }
 
+func ValidateDeploymentResourceObservation(value DeploymentResourceObservation) error {
+	var problems []error
+	problems = append(problems,
+		ValidateID("deploymentId", string(value.DeploymentID)),
+		ValidateID("applicationRevisionId", string(value.ApplicationRevisionID)),
+		ValidateID("executionTargetId", string(value.ExecutionTargetID)),
+		validateContractTime("observedAt", value.ObservedAt),
+	)
+	if value.Generation == 0 {
+		problems = append(problems, errors.New("deployment resource generation must be positive"))
+	}
+	if value.Instances == nil || len(value.Instances) > MaximumDeploymentRuntimeInstances {
+		problems = append(problems, errors.New("deployment resource instances are invalid"))
+	}
+	previous := ResourceID("")
+	for index, instance := range value.Instances {
+		path := fmt.Sprintf("instances[%d]", index)
+		if !deploymentInstanceIDPattern.MatchString(string(instance.ID)) || instance.ID <= previous {
+			problems = append(problems, fmt.Errorf("%s.id is invalid or unordered", path))
+		}
+		previous = instance.ID
+		problems = append(problems, validateDeploymentInstanceResources(path, instance))
+	}
+	return errors.Join(problems...)
+}
+
+func validateDeploymentInstanceResources(path string, value DeploymentResourceInstance) error {
+	var problems []error
+	if !validResourceMeasurement(value.CPU.State, value.CPU.Value != nil, true, false) {
+		problems = append(problems, fmt.Errorf("%s.cpu is invalid", path))
+	}
+	if cpu := value.CPU.Value; cpu != nil {
+		if cpu.WindowMillis < 1 || cpu.WindowMillis > 60000 ||
+			!finiteNonnegative(cpu.UsedCores) || cpu.UsedCores > 4096 ||
+			cpu.LimitCPUMillis < 1 || cpu.LimitCPUMillis > 4096000 {
+			problems = append(problems, fmt.Errorf("%s.cpu value is invalid", path))
+		}
+	}
+	if !validResourceMeasurement(value.Memory.State, value.Memory.Value != nil, false, false) {
+		problems = append(problems, fmt.Errorf("%s.memory is invalid", path))
+	}
+	if memory := value.Memory.Value; memory != nil {
+		if !safeMeasurementInteger(memory.UsedBytes, memory.LimitBytes) ||
+			memory.LimitBytes == 0 || memory.UsedBytes > memory.LimitBytes {
+			problems = append(problems, fmt.Errorf("%s.memory value is invalid", path))
+		}
+	}
+	if !validResourceMeasurement(value.Network.State, value.Network.Value != nil, false, false) {
+		problems = append(problems, fmt.Errorf("%s.network is invalid", path))
+	}
+	if network := value.Network.Value; network != nil && !safeMeasurementInteger(
+		network.ReceivedBytes, network.TransmittedBytes,
+		network.ReceiveErrors, network.TransmitErrors,
+		network.ReceiveDrops, network.TransmitDrops,
+	) {
+		problems = append(problems, fmt.Errorf("%s.network value is invalid", path))
+	}
+	if !validResourceMeasurement(value.BlockIO.State, value.BlockIO.Value != nil, false, false) {
+		problems = append(problems, fmt.Errorf("%s.blockIo is invalid", path))
+	}
+	if block := value.BlockIO.Value; block != nil && !safeMeasurementInteger(
+		block.ReadBytes, block.WriteBytes, block.ReadOperations, block.WriteOperations,
+	) {
+		problems = append(problems, fmt.Errorf("%s.blockIo value is invalid", path))
+	}
+	if !validResourceMeasurement(value.Storage.State, value.Storage.Value != nil, false, true) {
+		problems = append(problems, fmt.Errorf("%s.storage is invalid", path))
+	}
+	if storage := value.Storage.Value; storage != nil {
+		if validateContractTime("storage.observedAt", storage.ObservedAt) != nil ||
+			validateContractTime("storage.validUntil", storage.ValidUntil) != nil ||
+			!storage.ValidUntil.After(storage.ObservedAt) ||
+			storage.ValidUntil.Sub(storage.ObservedAt) > 5*time.Minute ||
+			!safeMeasurementInteger(
+				storage.WritableLayerBytes, storage.ImageTotalBytes,
+				storage.ImageSharedBytes, storage.ImageUniqueBytes,
+			) || storage.ImageSharedBytes > storage.ImageTotalBytes ||
+			storage.ImageUniqueBytes != storage.ImageTotalBytes-storage.ImageSharedBytes ||
+			!validResourceMeasurement(storage.VolumesState, storage.Volumes != nil, false, false) {
+			problems = append(problems, fmt.Errorf("%s.storage value is invalid", path))
+		}
+		if volumes := storage.Volumes; volumes != nil {
+			if !safeMeasurementInteger(volumes.Bytes, volumes.SharedBytes) ||
+				volumes.SharedCount > volumes.Count || volumes.SharedBytes > volumes.Bytes {
+				problems = append(problems, fmt.Errorf("%s.volume value is invalid", path))
+			}
+		}
+	}
+	return errors.Join(problems...)
+}
+
+func validResourceMeasurement(state MeasurementState, present, warming, stale bool) bool {
+	switch state {
+	case MeasurementAvailable:
+		return present
+	case MeasurementWarmingUp:
+		return warming && !present
+	case MeasurementStale:
+		return stale && present
+	case MeasurementUnavailable, MeasurementUnsupported:
+		return !present
+	default:
+		return false
+	}
+}
+
+func ValidateDeploymentResourceSnapshot(value DeploymentResourceSnapshot) error {
+	switch value.State {
+	case MeasurementAvailable, MeasurementStale:
+		if value.Value == nil || ValidateDeploymentResourceObservation(value.Value.Observation) != nil ||
+			validateContractTime("validUntil", value.Value.ValidUntil) != nil ||
+			!value.Value.ValidUntil.After(value.Value.Observation.ObservedAt) ||
+			value.Value.ValidUntil.Sub(value.Value.Observation.ObservedAt) > time.Minute {
+			return errors.New("deployment resource snapshot is invalid")
+		}
+	case MeasurementUnavailable:
+		if value.Value != nil {
+			return errors.New("unavailable deployment resources must not contain a value")
+		}
+	default:
+		return errors.New("deployment resource snapshot state is invalid")
+	}
+	return nil
+}
+
 func ValidateDeploymentRuntimeSnapshot(value DeploymentRuntimeSnapshot) error {
 	var problems []error
 	if value.APIVersion != APIVersion || value.Kind != "DeploymentRuntimeSnapshot" {
 		problems = append(problems, errors.New("deployment runtime snapshot type metadata is invalid"))
 	}
-	problems = append(problems, ValidateResourceScope(value.Scope))
+	problems = append(problems,
+		ValidateResourceScope(value.Scope),
+		ValidateDeploymentResourceSnapshot(value.Resources),
+	)
 	if value.Scope.Kind != AuthorityTenant {
 		problems = append(problems, errors.New("deployment runtime snapshot must be tenant scoped"))
 	}
@@ -996,8 +1124,32 @@ func ValidateDeploymentRuntimeSnapshot(value DeploymentRuntimeSnapshot) error {
 		if value.Value != nil {
 			problems = append(problems, errors.New("unavailable deployment runtime must not contain a value"))
 		}
+		if value.Resources.State != MeasurementUnavailable {
+			problems = append(problems, errors.New("unavailable deployment runtime cannot contain current resources"))
+		}
 	default:
 		problems = append(problems, errors.New("deployment runtime state is invalid"))
+	}
+	if value.Value != nil && value.Resources.Value != nil {
+		runtime := value.Value.Observation
+		resources := value.Resources.Value.Observation
+		if runtime.DeploymentID != resources.DeploymentID || runtime.Generation != resources.Generation ||
+			runtime.ApplicationRevisionID != resources.ApplicationRevisionID ||
+			runtime.ExecutionTargetID != resources.ExecutionTargetID ||
+			len(runtime.Instances) != len(resources.Instances) {
+			problems = append(problems, errors.New("deployment runtime and resource identities do not match"))
+		} else {
+			seen := make(map[ResourceID]struct{}, len(runtime.Instances))
+			for _, instance := range runtime.Instances {
+				seen[instance.ID] = struct{}{}
+			}
+			for _, instance := range resources.Instances {
+				if _, found := seen[instance.ID]; !found {
+					problems = append(problems, errors.New("deployment runtime and resource instances do not match"))
+					break
+				}
+			}
+		}
 	}
 	return errors.Join(problems...)
 }

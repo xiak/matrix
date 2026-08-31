@@ -861,7 +861,10 @@ func (value *gate) assertNativeDeploymentRuntime(ctx context.Context, bearer []b
 			return err
 		}
 		second, err := value.waitNativeDeploymentRuntime(ctx, bearer, deployment, node.identity.ExecutionTargetID, first.Value.Observation.ObservedAt)
-		if err != nil || first.Value.Observation.Instances[0].ID != second.Value.Observation.Instances[0].ID {
+		if err != nil || first.Value.Observation.Instances[0].ID != second.Value.Observation.Instances[0].ID ||
+			first.Resources.Value == nil || second.Resources.Value == nil ||
+			first.Resources.Value.Observation.Instances[0].ID != second.Resources.Value.Observation.Instances[0].ID ||
+			second.Resources.Value.Observation.ObservedAt.Before(first.Resources.Value.Observation.ObservedAt) {
 			return fail("native-runtime-background-snapshot")
 		}
 		if err := value.assertNativeProviderInstance(ctx, index, deployment, second); err != nil {
@@ -901,7 +904,7 @@ func (value *gate) assertNativeDeploymentRuntime(ctx context.Context, bearer []b
 	if _, err := value.edge.verifyAuditChain(ctx, bearer); err != nil {
 		return fail("native-runtime-audit-integrity")
 	}
-	emit("two-native-deployments-with-background-runtime-snapshots")
+	emit("two-native-deployments-with-background-runtime-and-resource-snapshots")
 	return nil
 }
 
@@ -942,7 +945,45 @@ func validNativeDeploymentRuntime(
 	}
 	instance := observation.Instances[0]
 	observedHealth := instance.Health == paasv1.DeploymentInstanceHealthNone || instance.Health == paasv1.DeploymentInstanceHealthHealthy
-	return instance.ID != "" && instance.ComponentName == "web" && instance.State == paasv1.DeploymentInstanceRunning && observedHealth && instance.ExitCode == nil
+	if instance.ID == "" || instance.ComponentName != "web" || instance.State != paasv1.DeploymentInstanceRunning ||
+		!observedHealth || instance.ExitCode != nil {
+		return false
+	}
+	resources := snapshot.Resources
+	if resources.State != paasv1.MeasurementAvailable || resources.Value == nil ||
+		!resources.Value.Observation.ObservedAt.After(after) ||
+		!resources.Value.ValidUntil.After(resources.Value.Observation.ObservedAt) ||
+		!now.Before(resources.Value.ValidUntil) {
+		return false
+	}
+	resourceObservation := resources.Value.Observation
+	if resourceObservation.DeploymentID != observation.DeploymentID ||
+		resourceObservation.Generation != observation.Generation ||
+		resourceObservation.ApplicationRevisionID != observation.ApplicationRevisionID ||
+		resourceObservation.ExecutionTargetID != observation.ExecutionTargetID ||
+		len(resourceObservation.Instances) != 1 ||
+		resourceObservation.Instances[0].ID != instance.ID {
+		return false
+	}
+	resource := resourceObservation.Instances[0]
+	if resource.CPU.State != paasv1.MeasurementAvailable || resource.CPU.Value == nil ||
+		resource.CPU.Value.LimitCPUMillis != 100 || resource.CPU.Value.WindowMillis < 1 ||
+		resource.Memory.State != paasv1.MeasurementAvailable || resource.Memory.Value == nil ||
+		resource.Memory.Value.LimitBytes != 32*1024*1024 ||
+		resource.Memory.Value.UsedBytes > resource.Memory.Value.LimitBytes ||
+		resource.Network.State != paasv1.MeasurementAvailable || resource.Network.Value == nil ||
+		(resource.BlockIO.State != paasv1.MeasurementAvailable &&
+			resource.BlockIO.State != paasv1.MeasurementUnsupported) ||
+		resource.Storage.Value == nil ||
+		(resource.Storage.State != paasv1.MeasurementAvailable && resource.Storage.State != paasv1.MeasurementStale) {
+		return false
+	}
+	storage := resource.Storage.Value
+	return !storage.ObservedAt.After(resourceObservation.ObservedAt) &&
+		storage.ValidUntil.After(storage.ObservedAt) &&
+		storage.ImageSharedBytes <= storage.ImageTotalBytes &&
+		storage.ImageUniqueBytes == storage.ImageTotalBytes-storage.ImageSharedBytes &&
+		storage.VolumesState == paasv1.MeasurementAvailable && storage.Volumes != nil
 }
 
 type nativeProviderInstance struct {
@@ -973,7 +1014,10 @@ func (value *gate) assertNativeProviderInstance(
 			return fail("native-runtime-provider-placement")
 		}
 		instance := snapshot.Value.Observation.Instances[0]
+		encoded, encodeErr := json.Marshal(snapshot)
 		if string(instance.ID) == provider.ID || string(instance.ID) == strings.TrimPrefix(provider.Name, "/") ||
+			encodeErr != nil || bytes.Contains(encoded, []byte(provider.ID)) ||
+			bytes.Contains(encoded, []byte(strings.TrimPrefix(provider.Name, "/"))) ||
 			provider.Labels["com.xiak.matrix.tenant-id"] != string(deployment.Metadata.Scope.TenantID) ||
 			provider.Labels["com.xiak.matrix.deployment-id"] != string(deployment.Metadata.ID) ||
 			provider.Labels["com.xiak.matrix.generation"] != strconv.FormatUint(deployment.Generation, 10) ||

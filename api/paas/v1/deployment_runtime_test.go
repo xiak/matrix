@@ -14,17 +14,28 @@ func TestDeploymentRuntimeSnapshotRetainsExactProofAndProjectsStaleness(t *testi
 
 	current := snapshot.Snapshot(now.Add(5 * time.Second))
 	if current.State != MeasurementAvailable || current.Value == snapshot.Value ||
-		&current.Value.Observation.Instances[0] == &snapshot.Value.Observation.Instances[0] {
+		&current.Value.Observation.Instances[0] == &snapshot.Value.Observation.Instances[0] ||
+		current.Resources.Value == snapshot.Resources.Value ||
+		current.Resources.Value.Observation.Instances[0].CPU.Value == snapshot.Resources.Value.Observation.Instances[0].CPU.Value {
 		t.Fatalf("current snapshot was not independently copied: %#v", current)
 	}
 	stale := snapshot.Snapshot(now.Add(15 * time.Second))
 	if stale.State != MeasurementStale || stale.Value.Observation.ObservedAt != now ||
-		stale.Value.ValidUntil != now.Add(15*time.Second) {
+		stale.Value.ValidUntil != now.Add(15*time.Second) || stale.Resources.State != MeasurementStale ||
+		stale.Resources.Value.Observation.Instances[0].Storage.State != MeasurementAvailable {
 		t.Fatalf("expired snapshot was restamped or not stale: %#v", stale)
 	}
+	storageStale := snapshot.Snapshot(now.Add(90 * time.Second))
+	if storageStale.Resources.Value.Observation.Instances[0].Storage.State != MeasurementStale {
+		t.Fatalf("storage did not retain its independent timestamp: %#v", storageStale.Resources)
+	}
 	stale.Value.Observation.Instances[0].ComponentName = "changed"
+	stale.Resources.Value.Observation.Instances[0].CPU.Value.UsedCores = 3
 	if snapshot.Value.Observation.Instances[0].ComponentName != "web" {
 		t.Fatal("snapshot copy mutated persisted runtime proof")
+	}
+	if snapshot.Resources.Value.Observation.Instances[0].CPU.Value.UsedCores != 0.25 {
+		t.Fatal("snapshot copy mutated persisted resource proof")
 	}
 }
 
@@ -79,6 +90,21 @@ func TestDeploymentRuntimeContractsRejectAmbiguousOrProviderNativeValues(t *test
 		"provider native instance id": func(value *DeploymentRuntimeSnapshot) {
 			value.Value.Observation.Instances[0].ID = "sha256:provider-id"
 		},
+		"provider native resource id": func(value *DeploymentRuntimeSnapshot) {
+			value.Resources.Value.Observation.Instances[0].ID = "sha256:provider-id"
+		},
+		"resource identity mismatch": func(value *DeploymentRuntimeSnapshot) {
+			value.Resources.Value.Observation.ExecutionTargetID = "target-b"
+		},
+		"memory exceeds limit": func(value *DeploymentRuntimeSnapshot) {
+			value.Resources.Value.Observation.Instances[0].Memory.Value.UsedBytes = 65 << 20
+		},
+		"shared image accounting mismatch": func(value *DeploymentRuntimeSnapshot) {
+			value.Resources.Value.Observation.Instances[0].Storage.Value.ImageSharedBytes++
+		},
+		"volume state without value": func(value *DeploymentRuntimeSnapshot) {
+			value.Resources.Value.Observation.Instances[0].Storage.Value.Volumes = nil
+		},
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -95,6 +121,7 @@ func TestDeploymentRuntimeContractsRejectAmbiguousOrProviderNativeValues(t *test
 		Kind:       "DeploymentRuntimeSnapshot",
 		Scope:      valid.Scope,
 		State:      MeasurementUnavailable,
+		Resources:  DeploymentResourceSnapshot{State: MeasurementUnavailable},
 	}
 	if err := ValidateDeploymentRuntimeSnapshot(unavailable); err != nil {
 		t.Fatalf("unavailable snapshot without fabricated value: %v", err)
@@ -179,6 +206,40 @@ func deploymentRuntimeSnapshotFixture(now time.Time) DeploymentRuntimeSnapshot {
 				ObservedAt: now,
 			},
 			ValidUntil: now.Add(15 * time.Second),
+		},
+		Resources: DeploymentResourceSnapshot{
+			State: MeasurementAvailable,
+			Value: &DeploymentResourceValue{
+				Observation: DeploymentResourceObservation{
+					DeploymentID:          "deployment-a",
+					Generation:            2,
+					ApplicationRevisionID: "revision-a",
+					ExecutionTargetID:     "target-a",
+					Instances: []DeploymentResourceInstance{{
+						ID: "instance-0123456789abcdef0123456789abcdef",
+						CPU: DeploymentInstanceCPUUsage{State: MeasurementAvailable, Value: &DeploymentInstanceCPUUsageValue{
+							WindowMillis: 1000, UsedCores: 0.25, LimitCPUMillis: 500,
+						}},
+						Memory: DeploymentInstanceMemoryUsage{State: MeasurementAvailable, Value: &DeploymentInstanceMemoryUsageValue{
+							UsedBytes: 16 << 20, LimitBytes: 64 << 20,
+						}},
+						Network: DeploymentInstanceNetworkUsage{State: MeasurementAvailable, Value: &DeploymentInstanceNetworkUsageValue{
+							ReceivedBytes: 100, TransmittedBytes: 200, ReceiveErrors: 1, TransmitDrops: 2,
+						}},
+						BlockIO: DeploymentInstanceBlockIOUsage{State: MeasurementAvailable, Value: &DeploymentInstanceBlockIOUsageValue{
+							ReadBytes: 300, WriteBytes: 400, ReadOperations: 3, WriteOperations: 4,
+						}},
+						Storage: DeploymentInstanceStorageUsage{State: MeasurementAvailable, Value: &DeploymentInstanceStorageUsageValue{
+							ObservedAt: now, ValidUntil: now.Add(time.Minute), WritableLayerBytes: 500,
+							ImageTotalBytes: 1000, ImageSharedBytes: 700, ImageUniqueBytes: 300,
+							VolumesState: MeasurementAvailable,
+							Volumes:      &DeploymentInstanceVolumeUsage{Count: 2, Bytes: 900, SharedCount: 1, SharedBytes: 600},
+						}},
+					}},
+					ObservedAt: now,
+				},
+				ValidUntil: now.Add(15 * time.Second),
+			},
 		},
 	}
 }

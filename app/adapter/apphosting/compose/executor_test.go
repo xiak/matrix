@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -40,6 +42,29 @@ type stateRuntime struct {
 	observeError   error
 	containers     []RuntimeContainer
 	publishedPorts uint32
+}
+
+type resourceStateRuntime struct {
+	*stateRuntime
+	observedIDs []string
+	resources   map[string]RuntimeContainerResources
+	err         error
+}
+
+func (runtime *resourceStateRuntime) ObserveResources(
+	_ context.Context,
+	_ RuntimeProject,
+	containers []RuntimeContainer,
+) (map[string]RuntimeContainerResources, error) {
+	runtime.observedIDs = runtime.observedIDs[:0]
+	for _, container := range containers {
+		runtime.observedIDs = append(runtime.observedIDs, container.ID)
+	}
+	result := make(map[string]RuntimeContainerResources, len(runtime.resources))
+	for id, value := range runtime.resources {
+		result[id] = value
+	}
+	return result, runtime.err
 }
 
 func (runtime *stateRuntime) Apply(_ context.Context, project RuntimeProject) error {
@@ -181,6 +206,62 @@ func TestExecutorRunsRetrySafeApplyRollbackObserveAndStop(t *testing.T) {
 		t.Fatalf("secret directory after stop error = %v, want not found", err)
 	}
 	assertTreeExcludes(t, root, string((&secretFixture{content: []byte("database-password")}).content))
+}
+
+func TestDeploymentTelemetrySelectsOnlyProvedCurrentContainersAndReturnsOpaqueResources(t *testing.T) {
+	executor, request, runtime, _, now := executorFixture(t)
+	if _, err := executor.ApplyDeployment(context.Background(), request); err != nil {
+		t.Fatalf("apply Deployment: %v", err)
+	}
+	currentID := runtime.containers[0].ID
+	resourceValues := make(map[string]RuntimeContainerResources, len(runtime.containers))
+	for _, container := range runtime.containers {
+		resourceValues[container.ID] = RuntimeContainerResources{
+			CPU: paasv1.DeploymentInstanceCPUUsage{
+				State: paasv1.MeasurementAvailable,
+				Value: &paasv1.DeploymentInstanceCPUUsageValue{
+					WindowMillis: 1000, UsedCores: 0.25, LimitCPUMillis: 500,
+				},
+			},
+			Memory:  paasv1.DeploymentInstanceMemoryUsage{State: paasv1.MeasurementUnsupported},
+			Network: paasv1.DeploymentInstanceNetworkUsage{State: paasv1.MeasurementUnsupported},
+			BlockIO: paasv1.DeploymentInstanceBlockIOUsage{State: paasv1.MeasurementUnsupported},
+			Storage: paasv1.DeploymentInstanceStorageUsage{State: paasv1.MeasurementUnsupported},
+		}
+	}
+	stale := runtime.containers[0]
+	stale.ID = "container-stale-generation"
+	stale.Labels = maps.Clone(stale.Labels)
+	stale.Labels["com.xiak.matrix.generation"] = "999"
+	runtime.containers = append(runtime.containers, stale)
+	resourceRuntime := &resourceStateRuntime{
+		stateRuntime: runtime,
+		resources:    resourceValues,
+	}
+	executor.runtime = resourceRuntime
+	runtimeObservation, resources, err := executor.ObserveDeploymentTelemetry(
+		context.Background(), runtimeObserveRequest(request, now.Add(3*time.Minute)),
+	)
+	if err != nil || len(runtimeObservation.Instances) != 3 || len(resources.Instances) != 3 ||
+		len(resourceRuntime.observedIDs) != 3 || slices.Contains(resourceRuntime.observedIDs, stale.ID) ||
+		resources.Instances[0].CPU.Value == nil ||
+		paasv1.ValidateDeploymentResourceObservation(resources) != nil {
+		t.Fatalf("telemetry runtime/resources/selected/error = %#v / %#v / %#v / %v",
+			runtimeObservation, resources, resourceRuntime.observedIDs, err)
+	}
+	encoded, err := json.Marshal(resources)
+	if err != nil || strings.Contains(string(encoded), currentID) || strings.Contains(string(encoded), stale.ID) {
+		t.Fatalf("telemetry exposed provider identity: %s / %v", encoded, err)
+	}
+
+	resourceRuntime.resources["provider-container-attacker"] = resourceRuntime.resources[currentID]
+	_, _, err = executor.ObserveDeploymentTelemetry(
+		context.Background(), runtimeObserveRequest(request, now.Add(3*time.Minute)),
+	)
+	if fault := requireComposeFault(t, err); fault.Normalized.Class != paasv1.AdapterErrorValidation ||
+		fault.Normalized.Code != paasv1.ErrorAdapterRejected {
+		t.Fatalf("extra provider resource fault = %#v", fault.Normalized)
+	}
 }
 
 func TestInspectRunningProjectStateProvesExactStoredDocumentsWithoutCreatingState(t *testing.T) {

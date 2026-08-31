@@ -1073,6 +1073,190 @@
         "type": "object",
         "x-matrix-immutable": true
       },
+      "DeploymentInstanceBlockIOUsage": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "AVAILABLE",
+                    "STALE"
+                  ]
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "required": [
+                "value"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "UNAVAILABLE",
+                    "UNSUPPORTED",
+                    "WARMING_UP"
+                  ]
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "value": false
+              }
+            }
+          }
+        ],
+        "properties": {
+          "state": {
+            "enum": [
+              "AVAILABLE",
+              "UNAVAILABLE",
+              "UNSUPPORTED"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/DeploymentInstanceBlockIOUsageValue"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      "DeploymentInstanceBlockIOUsageValue": {
+        "additionalProperties": false,
+        "properties": {
+          "readBytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "readOperations": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "writeBytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "writeOperations": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "readBytes",
+          "writeBytes",
+          "readOperations",
+          "writeOperations"
+        ],
+        "type": "object"
+      },
+      "DeploymentInstanceCPUUsage": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "AVAILABLE",
+                    "STALE"
+                  ]
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "required": [
+                "value"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "UNAVAILABLE",
+                    "UNSUPPORTED",
+                    "WARMING_UP"
+                  ]
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "value": false
+              }
+            }
+          }
+        ],
+        "properties": {
+          "state": {
+            "enum": [
+              "AVAILABLE",
+              "UNAVAILABLE",
+              "UNSUPPORTED",
+              "WARMING_UP"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/DeploymentInstanceCPUUsageValue"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      "DeploymentInstanceCPUUsageValue": {
+        "additionalProperties": false,
+        "properties": {
+          "limitCpuMillis": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "usedCores": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "windowMillis": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "windowMillis",
+          "usedCores",
+          "limitCpuMillis"
+        ],
+        "type": "object"
+      },
       "DeploymentInstanceHealth": {
         "enum": [
           "NONE",
@@ -1081,6 +1265,196 @@
           "UNHEALTHY"
         ],
         "type": "string"
+      },
+      "DeploymentInstanceMemoryUsage": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "AVAILABLE",
+                    "STALE"
+                  ]
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "required": [
+                "value"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "UNAVAILABLE",
+                    "UNSUPPORTED",
+                    "WARMING_UP"
+                  ]
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "value": false
+              }
+            }
+          }
+        ],
+        "properties": {
+          "state": {
+            "enum": [
+              "AVAILABLE",
+              "UNAVAILABLE",
+              "UNSUPPORTED"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/DeploymentInstanceMemoryUsageValue"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      "DeploymentInstanceMemoryUsageValue": {
+        "additionalProperties": false,
+        "properties": {
+          "limitBytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "usedBytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "usedBytes",
+          "limitBytes"
+        ],
+        "type": "object"
+      },
+      "DeploymentInstanceNetworkUsage": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "AVAILABLE",
+                    "STALE"
+                  ]
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "required": [
+                "value"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "UNAVAILABLE",
+                    "UNSUPPORTED",
+                    "WARMING_UP"
+                  ]
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "value": false
+              }
+            }
+          }
+        ],
+        "properties": {
+          "state": {
+            "enum": [
+              "AVAILABLE",
+              "UNAVAILABLE",
+              "UNSUPPORTED"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/DeploymentInstanceNetworkUsageValue"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      "DeploymentInstanceNetworkUsageValue": {
+        "additionalProperties": false,
+        "properties": {
+          "receiveDrops": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "receiveErrors": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "receivedBytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "transmitDrops": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "transmitErrors": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "transmittedBytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "receivedBytes",
+          "transmittedBytes",
+          "receiveErrors",
+          "transmitErrors",
+          "receiveDrops",
+          "transmitDrops"
+        ],
+        "type": "object"
       },
       "DeploymentInstanceState": {
         "enum": [
@@ -1093,6 +1467,193 @@
           "DEAD"
         ],
         "type": "string"
+      },
+      "DeploymentInstanceStorageUsage": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "AVAILABLE",
+                    "STALE"
+                  ]
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "required": [
+                "value"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "UNAVAILABLE",
+                    "UNSUPPORTED",
+                    "WARMING_UP"
+                  ]
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "value": false
+              }
+            }
+          }
+        ],
+        "properties": {
+          "state": {
+            "enum": [
+              "AVAILABLE",
+              "UNAVAILABLE",
+              "UNSUPPORTED",
+              "STALE"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/DeploymentInstanceStorageUsageValue"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      "DeploymentInstanceStorageUsageValue": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "volumesState": {
+                  "const": "AVAILABLE"
+                }
+              },
+              "required": [
+                "volumesState"
+              ]
+            },
+            "then": {
+              "required": [
+                "volumes"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "volumesState": {
+                  "enum": [
+                    "UNAVAILABLE",
+                    "UNSUPPORTED"
+                  ]
+                }
+              },
+              "required": [
+                "volumesState"
+              ]
+            },
+            "then": {
+              "properties": {
+                "volumes": false
+              }
+            }
+          }
+        ],
+        "properties": {
+          "imageSharedBytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "imageTotalBytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "imageUniqueBytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "observedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "validUntil": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "volumes": {
+            "$ref": "#/components/schemas/DeploymentInstanceVolumeUsage"
+          },
+          "volumesState": {
+            "enum": [
+              "AVAILABLE",
+              "UNAVAILABLE",
+              "UNSUPPORTED"
+            ],
+            "type": "string"
+          },
+          "writableLayerBytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "observedAt",
+          "validUntil",
+          "writableLayerBytes",
+          "imageTotalBytes",
+          "imageSharedBytes",
+          "imageUniqueBytes",
+          "volumesState"
+        ],
+        "type": "object"
+      },
+      "DeploymentInstanceVolumeUsage": {
+        "additionalProperties": false,
+        "properties": {
+          "bytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "count": {
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sharedBytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sharedCount": {
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count",
+          "bytes",
+          "sharedCount",
+          "sharedBytes"
+        ],
+        "type": "object"
       },
       "DeploymentList": {
         "additionalProperties": false,
@@ -1190,6 +1751,152 @@
           "STOPPED"
         ],
         "type": "string"
+      },
+      "DeploymentResourceInstance": {
+        "additionalProperties": false,
+        "properties": {
+          "blockIo": {
+            "$ref": "#/components/schemas/DeploymentInstanceBlockIOUsage"
+          },
+          "cpu": {
+            "$ref": "#/components/schemas/DeploymentInstanceCPUUsage"
+          },
+          "id": {
+            "pattern": "^instance-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "memory": {
+            "$ref": "#/components/schemas/DeploymentInstanceMemoryUsage"
+          },
+          "network": {
+            "$ref": "#/components/schemas/DeploymentInstanceNetworkUsage"
+          },
+          "storage": {
+            "$ref": "#/components/schemas/DeploymentInstanceStorageUsage"
+          }
+        },
+        "required": [
+          "id",
+          "cpu",
+          "memory",
+          "network",
+          "blockIo",
+          "storage"
+        ],
+        "type": "object"
+      },
+      "DeploymentResourceObservation": {
+        "additionalProperties": false,
+        "properties": {
+          "applicationRevisionId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "deploymentId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "executionTargetId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "generation": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "instances": {
+            "items": {
+              "$ref": "#/components/schemas/DeploymentResourceInstance"
+            },
+            "maxItems": 64,
+            "type": "array"
+          },
+          "observedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "deploymentId",
+          "generation",
+          "applicationRevisionId",
+          "executionTargetId",
+          "instances",
+          "observedAt"
+        ],
+        "type": "object"
+      },
+      "DeploymentResourceSnapshot": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "UNAVAILABLE"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "value": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "AVAILABLE",
+                    "STALE"
+                  ]
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "required": [
+                "value"
+              ]
+            }
+          }
+        ],
+        "properties": {
+          "state": {
+            "enum": [
+              "AVAILABLE",
+              "STALE",
+              "UNAVAILABLE"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/DeploymentResourceValue"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      "DeploymentResourceValue": {
+        "additionalProperties": false,
+        "properties": {
+          "observation": {
+            "$ref": "#/components/schemas/DeploymentResourceObservation"
+          },
+          "validUntil": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "observation",
+          "validUntil"
+        ],
+        "type": "object"
       },
       "DeploymentRuntimeInstance": {
         "additionalProperties": false,
@@ -1337,6 +2044,9 @@
           "kind": {
             "const": "DeploymentRuntimeSnapshot"
           },
+          "resources": {
+            "$ref": "#/components/schemas/DeploymentResourceSnapshot"
+          },
           "scope": {
             "$ref": "#/components/schemas/ResourceScope"
           },
@@ -1356,7 +2066,8 @@
           "apiVersion",
           "kind",
           "scope",
-          "state"
+          "state",
+          "resources"
         ],
         "type": "object"
       },

@@ -634,7 +634,7 @@
   color: var(--xiak-color-text-base);
 }
 
-.runtimeInstance,
+.runtimeInstanceHeader,
 .runtimeInstanceIdentity,
 .runtimeInstanceStatus,
 .runtimeEmpty,
@@ -647,12 +647,18 @@
 }
 
 .runtimeInstance {
+  display: grid;
   min-width: 0;
-  justify-content: space-between;
   gap: var(--xiak-spacing-default);
   border: var(--xiak-border-subtle);
   border-radius: var(--xiak-radius-control);
   padding: var(--xiak-spacing-default);
+}
+
+.runtimeInstanceHeader {
+  min-width: 0;
+  justify-content: space-between;
+  gap: var(--xiak-spacing-default);
 }
 
 .runtimeInstanceIdentity {
@@ -676,6 +682,55 @@
   flex-wrap: wrap;
   justify-content: flex-end;
   color: var(--xiak-color-text-muted);
+  font-size: var(--xiak-font-size-small);
+}
+
+.runtimeResourceGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--xiak-spacing-tight);
+  margin: 0;
+}
+
+.runtimeResourceGrid > div {
+  display: grid;
+  min-width: 0;
+  gap: var(--xiak-spacing-narrow);
+  border-radius: var(--xiak-radius-control);
+  padding: var(--xiak-spacing-default);
+  background: var(--xiak-color-bg-canvas);
+}
+
+.runtimeResourceGrid > div:last-child {
+  grid-column: 1 / -1;
+}
+
+.runtimeResourceGrid dt,
+.runtimeResourceGrid dd {
+  display: flex;
+  min-width: 0;
+  justify-content: space-between;
+  gap: var(--xiak-spacing-tight);
+  margin: 0;
+}
+
+.runtimeResourceGrid dd {
+  align-items: flex-start;
+  flex-direction: column;
+}
+
+.runtimeResourceGrid dd strong,
+.runtimeResourceGrid dd small {
+  overflow-wrap: anywhere;
+}
+
+.runtimeResourceGrid dd small,
+.runtimeResourceUnavailable {
+  color: var(--xiak-color-text-muted);
+}
+
+.runtimeResourceUnavailable {
+  margin: 0;
   font-size: var(--xiak-font-size-small);
 }
 
@@ -747,8 +802,13 @@
 
   .hostMetricGrid,
   .filesystemRow,
-  .runtimeFacts {
+  .runtimeFacts,
+  .runtimeResourceGrid {
     grid-template-columns: 1fr;
+  }
+
+  .runtimeResourceGrid > div:last-child {
+    grid-column: auto;
   }
 }
 
@@ -780,7 +840,7 @@
     text-align: left;
   }
 
-  .runtimeInstance,
+  .runtimeInstanceHeader,
   .terminalBoundary {
     align-items: flex-start;
     flex-direction: column;

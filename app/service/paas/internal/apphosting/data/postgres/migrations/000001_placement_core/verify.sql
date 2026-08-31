@@ -22,6 +22,7 @@ BEGIN
             ('adapter_receipts'),
             ('deployment_observations'),
             ('deployment_runtime_snapshots'),
+            ('deployment_resource_snapshots'),
             ('placement_decisions'),
             ('capacity_claims'),
             ('capacity_reservations')
@@ -71,6 +72,7 @@ BEGIN
             'adapter_receipts',
             'deployment_observations',
             'deployment_runtime_snapshots',
+            'deployment_resource_snapshots',
             'placement_decisions',
             'capacity_reservations'
        )
@@ -119,6 +121,11 @@ BEGIN
             ('deployment_runtime_snapshots_revision_fk'),
             ('deployment_runtime_snapshots_target_fk'),
             ('deployment_runtime_snapshots_decision_fk'),
+            ('deployment_resource_snapshots_deployment_fk'),
+            ('deployment_resource_snapshots_generation_fk'),
+            ('deployment_resource_snapshots_revision_fk'),
+            ('deployment_resource_snapshots_target_fk'),
+            ('deployment_resource_snapshots_decision_fk'),
             ('placement_decisions_operation_uq'),
             ('placement_decisions_deployment_fk'),
             ('placement_decisions_generation_fk'),
@@ -178,6 +185,7 @@ BEGIN
             ('adapter_receipts'),
             ('deployment_observations'),
             ('deployment_runtime_snapshots'),
+            ('deployment_resource_snapshots'),
             ('placement_decisions'),
             ('capacity_reservations')
       ) AS required(table_name)
@@ -330,6 +338,10 @@ BEGIN
             (
                 'store_deployment_runtime_snapshot',
                 'requested_tenant_id text, requested_deployment_id text, requested_generation bigint, requested_application_revision_id text, requested_execution_target_id text, requested_placement_decision_id text, requested_observed_at timestamp with time zone, requested_valid_until timestamp with time zone, submitted_document jsonb'
+            ),
+            (
+                'store_deployment_telemetry_snapshot',
+                'requested_tenant_id text, requested_deployment_id text, requested_generation bigint, requested_application_revision_id text, requested_execution_target_id text, requested_placement_decision_id text, requested_runtime_observed_at timestamp with time zone, requested_runtime_valid_until timestamp with time zone, submitted_runtime_document jsonb, requested_resource_observed_at timestamp with time zone, requested_resource_valid_until timestamp with time zone, submitted_resource_document jsonb'
             )
       ) AS required(name, identity_arguments)
      WHERE NOT EXISTS (
@@ -346,6 +358,23 @@ BEGIN
     );
     IF missing IS NOT NULL THEN
         RAISE EXCEPTION 'application transition functions are missing or unsafe: %', missing;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+          FROM pg_catalog.pg_proc AS procedure
+          JOIN pg_catalog.pg_namespace AS namespace
+            ON namespace.oid = procedure.pronamespace
+         WHERE namespace.nspname = 'paas'
+           AND procedure.proname = 'valid_deployment_resource_document'
+           AND pg_catalog.pg_get_function_identity_arguments(procedure.oid)
+                = 'resource_document jsonb'
+           AND NOT procedure.prosecdef
+           AND procedure.provolatile = 'i'
+           AND procedure.proisstrict
+           AND 'search_path=pg_catalog, pg_temp' = ANY(procedure.proconfig)
+    ) THEN
+        RAISE EXCEPTION 'Deployment resource validator is missing or unsafe';
     END IF;
 
     IF has_schema_privilege('matrix_paas_api', 'paas', 'CREATE')
@@ -405,6 +434,11 @@ BEGIN
        OR has_table_privilege(
             'matrix_paas_api',
             'paas.deployment_runtime_snapshots',
+            'INSERT, UPDATE, DELETE'
+       )
+       OR has_table_privilege(
+            'matrix_paas_api',
+            'paas.deployment_resource_snapshots',
             'INSERT, UPDATE, DELETE'
        )
        OR has_table_privilege(
@@ -482,6 +516,11 @@ BEGIN
        )
        OR has_table_privilege(
             'matrix_paas_worker',
+            'paas.deployment_resource_snapshots',
+            'SELECT, INSERT, UPDATE, DELETE'
+       )
+       OR has_table_privilege(
+            'matrix_paas_worker',
             'paas.placement_decisions',
             'INSERT, UPDATE, DELETE'
        )
@@ -555,6 +594,11 @@ BEGIN
             'SELECT'
        )
        OR NOT has_table_privilege(
+            'matrix_paas_api',
+            'paas.deployment_resource_snapshots',
+            'SELECT'
+       )
+       OR NOT has_table_privilege(
             'matrix_paas_worker',
             'paas.adapter_commands',
             'SELECT'
@@ -617,6 +661,21 @@ BEGIN
        OR NOT has_function_privilege(
             'matrix_paas_worker',
             'paas.store_deployment_runtime_snapshot(text, text, bigint, text, text, text, timestamptz, timestamptz, jsonb)',
+            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_paas_worker',
+            'paas.store_deployment_telemetry_snapshot(text, text, bigint, text, text, text, timestamptz, timestamptz, jsonb, timestamptz, timestamptz, jsonb)',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_paas_api',
+            'paas.valid_deployment_resource_document(jsonb)',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_paas_worker',
+            'paas.valid_deployment_resource_document(jsonb)',
             'EXECUTE'
        )
        OR to_regprocedure(
@@ -701,7 +760,8 @@ BEGIN
                     'paas.transition_capacity_reservation(text, text, bigint, text, text, bigint)',
                     'paas.reconcile_local_execution_profile(text, bigint, jsonb, bigint, jsonb, bigint, jsonb)',
                     'paas.next_deployment_runtime_candidate(text, text)',
-                    'paas.store_deployment_runtime_snapshot(text, text, bigint, text, text, text, timestamptz, timestamptz, jsonb)'
+                    'paas.store_deployment_runtime_snapshot(text, text, bigint, text, text, text, timestamptz, timestamptz, jsonb)',
+                    'paas.store_deployment_telemetry_snapshot(text, text, bigint, text, text, text, timestamptz, timestamptz, jsonb, timestamptz, timestamptz, jsonb)'
                    ]) AS worker_function(signature)
              WHERE has_function_privilege(
                     'matrix_paas_api',

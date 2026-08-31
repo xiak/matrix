@@ -96,6 +96,7 @@ func TestRealComposeExecutorOfflineVerticalSlice(t *testing.T) {
 		t.Fatalf("real generation 1 observation = %#v", firstObservation)
 	}
 	containerID, networkID := assertOneUnpublishedProject(t, project)
+	requireRealTelemetry(t, executor, request, containerID)
 	probeFixture(t, imageID, networkID, "one", secretDigest, "1")
 	if output := runDockerTest(t, "port", containerID); strings.TrimSpace(output) != "" {
 		t.Fatalf("application container published a host port: %q", output)
@@ -177,6 +178,18 @@ func (runtime *unknownOnceRuntime) Observe(
 	project RuntimeProject,
 ) ([]RuntimeContainer, error) {
 	return runtime.delegate.Observe(ctx, project)
+}
+
+func (runtime *unknownOnceRuntime) ObserveResources(
+	ctx context.Context,
+	project RuntimeProject,
+	containers []RuntimeContainer,
+) (map[string]RuntimeContainerResources, error) {
+	observer, supported := runtime.delegate.(RuntimeResourceObserver)
+	if !supported {
+		return nil, ErrRuntimeUnavailable
+	}
+	return observer.ObserveResources(ctx, project, containers)
 }
 
 func (runtime *unknownOnceRuntime) Stop(ctx context.Context, project RuntimeProject) error {
@@ -345,6 +358,82 @@ func requireRealObservation(
 		t.Fatalf("observe real Compose generation %d: %v", request.Generation.Generation, err)
 	}
 	return observation
+}
+
+func requireRealTelemetry(
+	t *testing.T,
+	executor *Executor,
+	request paasv1.DeploymentExecutionRequest,
+	providerContainerID string,
+) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	var lastRuntime paasv1.DeploymentRuntimeObservation
+	var lastResources paasv1.DeploymentResourceObservation
+	var lastErr error
+	for time.Now().Before(deadline) {
+		observeContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		lastRuntime, lastResources, lastErr = executor.ObserveDeploymentTelemetry(
+			observeContext,
+			runtimeObserveRequest(request, time.Now().Add(5*time.Second).UTC().Truncate(time.Microsecond)),
+		)
+		cancel()
+		if lastErr == nil && validRealTelemetry(lastRuntime, lastResources, request, providerContainerID) {
+			return
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	t.Fatalf("real Compose telemetry did not become valid: runtime=%#v resources=%#v err=%v", lastRuntime, lastResources, lastErr)
+}
+
+func validRealTelemetry(
+	runtime paasv1.DeploymentRuntimeObservation,
+	resources paasv1.DeploymentResourceObservation,
+	request paasv1.DeploymentExecutionRequest,
+	providerContainerID string,
+) bool {
+	if paasv1.ValidateDeploymentRuntimeObservation(runtime) != nil ||
+		paasv1.ValidateDeploymentResourceObservation(resources) != nil ||
+		runtime.DeploymentID != request.Generation.DeploymentID ||
+		runtime.Generation != request.Generation.Generation ||
+		runtime.ApplicationRevisionID != request.ApplicationRevision.Metadata.ID ||
+		runtime.ExecutionTargetID != request.Command.ExecutionTargetID ||
+		resources.DeploymentID != runtime.DeploymentID ||
+		resources.Generation != runtime.Generation ||
+		resources.ApplicationRevisionID != runtime.ApplicationRevisionID ||
+		resources.ExecutionTargetID != runtime.ExecutionTargetID ||
+		len(runtime.Instances) != 1 || len(resources.Instances) != 1 ||
+		resources.Instances[0].ID != runtime.Instances[0].ID ||
+		string(runtime.Instances[0].ID) == providerContainerID {
+		return false
+	}
+	resource := resources.Instances[0]
+	if resource.CPU.State != paasv1.MeasurementAvailable || resource.CPU.Value == nil ||
+		resource.CPU.Value.WindowMillis < 1 || resource.CPU.Value.LimitCPUMillis != 100 ||
+		resource.Memory.State != paasv1.MeasurementAvailable || resource.Memory.Value == nil ||
+		resource.Memory.Value.LimitBytes != 32*1024*1024 ||
+		resource.Memory.Value.UsedBytes > resource.Memory.Value.LimitBytes ||
+		resource.Network.State != paasv1.MeasurementAvailable || resource.Network.Value == nil ||
+		(resource.BlockIO.State != paasv1.MeasurementAvailable &&
+			resource.BlockIO.State != paasv1.MeasurementUnsupported) ||
+		resource.Storage.Value == nil ||
+		(resource.Storage.State != paasv1.MeasurementAvailable &&
+			resource.Storage.State != paasv1.MeasurementStale) {
+		return false
+	}
+	storage := resource.Storage.Value
+	if storage.ObservedAt.After(resources.ObservedAt) ||
+		!storage.ValidUntil.After(storage.ObservedAt) ||
+		storage.ImageSharedBytes > storage.ImageTotalBytes ||
+		storage.ImageUniqueBytes != storage.ImageTotalBytes-storage.ImageSharedBytes ||
+		storage.VolumesState != paasv1.MeasurementAvailable || storage.Volumes == nil {
+		return false
+	}
+	document, err := json.Marshal(struct {
+		Runtime   paasv1.DeploymentRuntimeObservation  `json:"runtime"`
+		Resources paasv1.DeploymentResourceObservation `json:"resources"`
+	}{Runtime: runtime, Resources: resources})
+	return err == nil && !strings.Contains(string(document), providerContainerID)
 }
 
 func requireDocker(t *testing.T) {

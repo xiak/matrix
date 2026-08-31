@@ -36,14 +36,15 @@ type DeploymentConfig struct {
 // DeploymentClient is an exact target-bound DeploymentExecutor. It has no
 // target selector and never falls back to local execution or another node.
 type DeploymentClient struct {
-	effectEndpoint             string
-	observationEndpoint        string
-	runtimeObservationEndpoint string
-	identity                   nodev1.Identity
-	bindingRef                 string
-	artifacts                  DeploymentArtifactResolver
-	secrets                    DeploymentSecretResolver
-	http                       *http.Client
+	effectEndpoint               string
+	observationEndpoint          string
+	runtimeObservationEndpoint   string
+	telemetryObservationEndpoint string
+	identity                     nodev1.Identity
+	bindingRef                   string
+	artifacts                    DeploymentArtifactResolver
+	secrets                      DeploymentSecretResolver
+	http                         *http.Client
 }
 
 func NewDeploymentClient(config DeploymentConfig) (*DeploymentClient, error) {
@@ -59,10 +60,11 @@ func NewDeploymentClient(config DeploymentConfig) (*DeploymentClient, error) {
 		return nil, err
 	}
 	return &DeploymentClient{
-		effectEndpoint:             endpoint + nodev1.DeploymentEffectPath,
-		observationEndpoint:        endpoint + nodev1.DeploymentObservationPath,
-		runtimeObservationEndpoint: endpoint + nodev1.DeploymentRuntimeObservationPath,
-		identity:                   config.Connection.Identity, bindingRef: config.Connection.BindingRef,
+		effectEndpoint:               endpoint + nodev1.DeploymentEffectPath,
+		observationEndpoint:          endpoint + nodev1.DeploymentObservationPath,
+		runtimeObservationEndpoint:   endpoint + nodev1.DeploymentRuntimeObservationPath,
+		telemetryObservationEndpoint: endpoint + nodev1.DeploymentTelemetryObservationPath,
+		identity:                     config.Connection.Identity, bindingRef: config.Connection.BindingRef,
 		artifacts: config.Artifacts, secrets: config.Secrets, http: connection,
 	}, nil
 }
@@ -347,6 +349,94 @@ func (client *DeploymentClient) ObserveDeploymentRuntime(
 		return empty, rejectedDeploymentObservation()
 	}
 	return decoded.Observation, nil
+}
+
+func (client *DeploymentClient) ObserveDeploymentTelemetry(
+	ctx context.Context,
+	request paasv1.ObserveDeploymentRuntimeRequest,
+) (
+	paasv1.DeploymentRuntimeObservation,
+	paasv1.DeploymentResourceObservation,
+	error,
+) {
+	emptyRuntime := paasv1.DeploymentRuntimeObservation{}
+	emptyResources := paasv1.DeploymentResourceObservation{}
+	if client == nil || client.http == nil || ctx == nil ||
+		paasv1.ValidateObserveDeploymentRuntimeRequest(request) != nil ||
+		request.ExecutionTargetID != client.identity.ExecutionTargetID ||
+		request.Deadline.Sub(time.Now()) > nodev1.MaximumDeploymentDuration {
+		return emptyRuntime, emptyResources, invalidRemoteDeployment()
+	}
+	if err := ctx.Err(); err != nil || !time.Now().Before(request.Deadline) {
+		return emptyRuntime, emptyResources, deploymentFault(
+			paasv1.AdapterErrorTimeout,
+			paasv1.ErrorDeadlineExceeded,
+			"Remote Deployment telemetry observation exceeded its deadline before dispatch.",
+			true,
+		)
+	}
+	value := nodev1.DeploymentTelemetryObservationRequest{
+		APIVersion: nodev1.APIVersion,
+		Kind:       nodev1.DeploymentTelemetryObservationRequestKind,
+		Identity:   client.identity,
+		BindingRef: client.bindingRef,
+		Request:    request,
+	}
+	if nodev1.ValidateDeploymentTelemetryObservationRequest(value) != nil {
+		return emptyRuntime, emptyResources, invalidRemoteDeployment()
+	}
+	body, err := json.Marshal(value)
+	if err != nil || len(body) > nodev1.MaximumDeploymentRuntimeRequestBytes {
+		return emptyRuntime, emptyResources, invalidRemoteDeployment()
+	}
+	operationContext, cancel := context.WithDeadline(ctx, request.Deadline)
+	defer cancel()
+	httpRequest, err := http.NewRequestWithContext(
+		operationContext,
+		http.MethodPost,
+		client.telemetryObservationEndpoint,
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return emptyRuntime, emptyResources, invalidRemoteDeployment()
+	}
+	httpRequest.Header.Set("Content-Type", "application/json")
+	httpRequest.Header.Set("Accept", "application/json")
+	response, err := client.http.Do(httpRequest)
+	if err != nil {
+		if errors.Is(operationContext.Err(), context.DeadlineExceeded) {
+			return emptyRuntime, emptyResources, deploymentFault(
+				paasv1.AdapterErrorTimeout,
+				paasv1.ErrorDeadlineExceeded,
+				"Remote Deployment telemetry observation exceeded its deadline.",
+				true,
+			)
+		}
+		return emptyRuntime, emptyResources, unavailableDeploymentObservation()
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return emptyRuntime, emptyResources, deploymentObservationStatusFault(response.StatusCode)
+	}
+	if response.Header.Get("Content-Type") != "application/json" ||
+		response.Header.Get("Content-Encoding") != "" {
+		return emptyRuntime, emptyResources, rejectedDeploymentObservation()
+	}
+	decoded, err := nodev1.DecodeDeploymentTelemetryObservationResponse(response.Body)
+	if err != nil || decoded.Identity != client.identity || decoded.RequestID != request.RequestID ||
+		decoded.Runtime.DeploymentID != request.DeploymentID ||
+		decoded.Runtime.Generation != request.Generation ||
+		decoded.Runtime.ApplicationRevisionID != request.ApplicationRevisionID ||
+		decoded.Runtime.ExecutionTargetID != request.ExecutionTargetID ||
+		decoded.Resources.DeploymentID != request.DeploymentID ||
+		decoded.Resources.Generation != request.Generation ||
+		decoded.Resources.ApplicationRevisionID != request.ApplicationRevisionID ||
+		decoded.Resources.ExecutionTargetID != request.ExecutionTargetID ||
+		decoded.Runtime.ObservedAt.After(time.Now().Add(2*time.Second)) ||
+		decoded.Resources.ObservedAt.After(time.Now().Add(2*time.Second)) {
+		return emptyRuntime, emptyResources, rejectedDeploymentObservation()
+	}
+	return decoded.Runtime, decoded.Resources, nil
 }
 
 func (client *DeploymentClient) validateEffect(

@@ -10,24 +10,28 @@ import (
 )
 
 const (
-	DeploymentEffectPath                      = "/adapter/node/v1/deployment-effects"
-	DeploymentObservationPath                 = "/adapter/node/v1/deployment-observations"
-	DeploymentRuntimeObservationPath          = "/adapter/node/v1/deployment-runtime-observations"
-	DeploymentEffectRequestKind               = "DeploymentEffectRequest"
-	DeploymentEffectResponseKind              = "DeploymentEffectResponse"
-	DeploymentObservationRequestKind          = "DeploymentObservationRequest"
-	DeploymentObservationResponseKind         = "DeploymentObservationResponse"
-	DeploymentRuntimeObservationRequestKind   = "DeploymentRuntimeObservationRequest"
-	DeploymentRuntimeObservationResponseKind  = "DeploymentRuntimeObservationResponse"
-	MaximumDeploymentEffectRequestBytes       = 16 * 1024 * 1024
-	MaximumDeploymentEffectResponseBytes      = 256 * 1024
-	MaximumDeploymentObservationRequestBytes  = 128 * 1024
-	MaximumDeploymentObservationResponseBytes = 512 * 1024
-	MaximumDeploymentRuntimeRequestBytes      = 64 * 1024
-	MaximumDeploymentRuntimeResponseBytes     = 256 * 1024
-	MaximumDeploymentDuration                 = 5 * time.Minute
-	MaximumSecretMaterialBytes                = 1024 * 1024
-	MaximumDeploymentMaterialBytes            = 8 * 1024 * 1024
+	DeploymentEffectPath                       = "/adapter/node/v1/deployment-effects"
+	DeploymentObservationPath                  = "/adapter/node/v1/deployment-observations"
+	DeploymentRuntimeObservationPath           = "/adapter/node/v1/deployment-runtime-observations"
+	DeploymentTelemetryObservationPath         = "/adapter/node/v1/deployment-telemetry-observations"
+	DeploymentEffectRequestKind                = "DeploymentEffectRequest"
+	DeploymentEffectResponseKind               = "DeploymentEffectResponse"
+	DeploymentObservationRequestKind           = "DeploymentObservationRequest"
+	DeploymentObservationResponseKind          = "DeploymentObservationResponse"
+	DeploymentRuntimeObservationRequestKind    = "DeploymentRuntimeObservationRequest"
+	DeploymentRuntimeObservationResponseKind   = "DeploymentRuntimeObservationResponse"
+	DeploymentTelemetryObservationRequestKind  = "DeploymentTelemetryObservationRequest"
+	DeploymentTelemetryObservationResponseKind = "DeploymentTelemetryObservationResponse"
+	MaximumDeploymentEffectRequestBytes        = 16 * 1024 * 1024
+	MaximumDeploymentEffectResponseBytes       = 256 * 1024
+	MaximumDeploymentObservationRequestBytes   = 128 * 1024
+	MaximumDeploymentObservationResponseBytes  = 512 * 1024
+	MaximumDeploymentRuntimeRequestBytes       = 64 * 1024
+	MaximumDeploymentRuntimeResponseBytes      = 256 * 1024
+	MaximumDeploymentTelemetryResponseBytes    = 512 * 1024
+	MaximumDeploymentDuration                  = 5 * time.Minute
+	MaximumSecretMaterialBytes                 = 1024 * 1024
+	MaximumDeploymentMaterialBytes             = 8 * 1024 * 1024
 )
 
 var ErrInvalidDeployment = errors.New("node deployment document is invalid")
@@ -111,6 +115,23 @@ type DeploymentRuntimeObservationResponse struct {
 	Observation paasv1.DeploymentRuntimeObservation `json:"observation"`
 }
 
+type DeploymentTelemetryObservationRequest struct {
+	APIVersion string                                 `json:"apiVersion"`
+	Kind       string                                 `json:"kind"`
+	Identity   Identity                               `json:"identity"`
+	BindingRef string                                 `json:"bindingRef"`
+	Request    paasv1.ObserveDeploymentRuntimeRequest `json:"request"`
+}
+
+type DeploymentTelemetryObservationResponse struct {
+	APIVersion string                               `json:"apiVersion"`
+	Kind       string                               `json:"kind"`
+	Identity   Identity                             `json:"identity"`
+	RequestID  paasv1.CommandID                     `json:"requestId"`
+	Runtime    paasv1.DeploymentRuntimeObservation  `json:"runtime"`
+	Resources  paasv1.DeploymentResourceObservation `json:"resources"`
+}
+
 func ValidateDeploymentEffectRequest(value DeploymentEffectRequest) error {
 	if value.APIVersion != APIVersion || value.Kind != DeploymentEffectRequestKind ||
 		ValidateIdentity(value.Identity) != nil ||
@@ -189,6 +210,35 @@ func ValidateDeploymentRuntimeObservationResponse(value DeploymentRuntimeObserva
 	return nil
 }
 
+func ValidateDeploymentTelemetryObservationRequest(value DeploymentTelemetryObservationRequest) error {
+	if value.APIVersion != APIVersion || value.Kind != DeploymentTelemetryObservationRequestKind ||
+		ValidateIdentity(value.Identity) != nil ||
+		paasv1.ValidateID("bindingRef", value.BindingRef) != nil ||
+		paasv1.ValidateObserveDeploymentRuntimeRequest(value.Request) != nil ||
+		value.Request.ExecutionTargetID != value.Identity.ExecutionTargetID ||
+		value.Request.Deadline.IsZero() || value.Request.Deadline.Location() != time.UTC {
+		return ErrInvalidDeployment
+	}
+	return nil
+}
+
+func ValidateDeploymentTelemetryObservationResponse(value DeploymentTelemetryObservationResponse) error {
+	if value.APIVersion != APIVersion || value.Kind != DeploymentTelemetryObservationResponseKind ||
+		ValidateIdentity(value.Identity) != nil ||
+		paasv1.ValidateID("requestId", string(value.RequestID)) != nil ||
+		paasv1.ValidateDeploymentRuntimeObservation(value.Runtime) != nil ||
+		paasv1.ValidateDeploymentResourceObservation(value.Resources) != nil ||
+		value.Runtime.DeploymentID != value.Resources.DeploymentID ||
+		value.Runtime.Generation != value.Resources.Generation ||
+		value.Runtime.ApplicationRevisionID != value.Resources.ApplicationRevisionID ||
+		value.Runtime.ExecutionTargetID != value.Identity.ExecutionTargetID ||
+		value.Resources.ExecutionTargetID != value.Identity.ExecutionTargetID ||
+		!sameTelemetryInstances(value.Runtime.Instances, value.Resources.Instances) {
+		return ErrInvalidDeployment
+	}
+	return nil
+}
+
 func DecodeDeploymentEffectRequest(reader io.Reader) (DeploymentEffectRequest, error) {
 	var value DeploymentEffectRequest
 	if contractjson.DecodeObject(reader, MaximumDeploymentEffectRequestBytes, &value) != nil ||
@@ -242,6 +292,43 @@ func DecodeDeploymentRuntimeObservationResponse(reader io.Reader) (DeploymentRun
 		return DeploymentRuntimeObservationResponse{}, ErrInvalidDeployment
 	}
 	return value, nil
+}
+
+func DecodeDeploymentTelemetryObservationRequest(reader io.Reader) (DeploymentTelemetryObservationRequest, error) {
+	var value DeploymentTelemetryObservationRequest
+	if contractjson.DecodeObject(reader, MaximumDeploymentRuntimeRequestBytes, &value) != nil ||
+		ValidateDeploymentTelemetryObservationRequest(value) != nil {
+		return DeploymentTelemetryObservationRequest{}, ErrInvalidDeployment
+	}
+	return value, nil
+}
+
+func DecodeDeploymentTelemetryObservationResponse(reader io.Reader) (DeploymentTelemetryObservationResponse, error) {
+	var value DeploymentTelemetryObservationResponse
+	if contractjson.DecodeObject(reader, MaximumDeploymentTelemetryResponseBytes, &value) != nil ||
+		ValidateDeploymentTelemetryObservationResponse(value) != nil {
+		return DeploymentTelemetryObservationResponse{}, ErrInvalidDeployment
+	}
+	return value, nil
+}
+
+func sameTelemetryInstances(
+	runtime []paasv1.DeploymentRuntimeInstance,
+	resources []paasv1.DeploymentResourceInstance,
+) bool {
+	if len(runtime) != len(resources) {
+		return false
+	}
+	seen := make(map[paasv1.ResourceID]struct{}, len(runtime))
+	for _, instance := range runtime {
+		seen[instance.ID] = struct{}{}
+	}
+	for _, instance := range resources {
+		if _, found := seen[instance.ID]; !found {
+			return false
+		}
+	}
+	return true
 }
 
 func validateDeploymentMaterials(

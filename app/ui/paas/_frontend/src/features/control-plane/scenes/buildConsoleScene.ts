@@ -14,6 +14,8 @@ import type {
   DeploymentInstanceState,
   DeploymentInventory,
   DeploymentInventoryItem,
+  DeploymentMeasurementState,
+  DeploymentResourceInstance,
   DeploymentRuntimeSnapshot
 } from "../domain/deployments";
 import type { ConsoleSection } from "../domain/selection";
@@ -21,6 +23,7 @@ import type {
   ConsoleContentScene,
   ConsoleNavigationItemScene,
   ConsoleScene,
+  DeploymentResourceMeasurementScene,
   DeploymentRuntimeInstanceScene,
   DeploymentRuntimeScene,
   DeploymentScene,
@@ -488,10 +491,76 @@ function runtimeHealthLabel(value: DeploymentInstanceHealth): string {
   return labels[value];
 }
 
+function deploymentMeasurementScene(
+  state: DeploymentMeasurementState,
+  value: string,
+  detail: string
+): DeploymentResourceMeasurementScene {
+  return {
+    state,
+    stateLabel: measurementLabel(state),
+    status: measurementStatus(state),
+    value: state === "AVAILABLE" || state === "STALE" ? value : measurementLabel(state),
+    detail: state === "AVAILABLE" || state === "STALE"
+      ? detail
+      : "平台没有可证明的当前数值"
+  };
+}
+
+function resourceScene(instance: DeploymentResourceInstance) {
+  const cpu = instance.cpu.value;
+  const memory = instance.memory.value;
+  const network = instance.network.value;
+  const blockIo = instance.blockIo.value;
+  const storage = instance.storage.value;
+  const memoryPercent = memory ? Math.min(100, memory.usedBytes / memory.limitBytes * 100) : 0;
+  const volumes = storage?.volumes;
+  return {
+    cpu: deploymentMeasurementScene(
+      instance.cpu.state,
+      cpu ? `${new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 2 }).format(cpu.usedCores)} 核 / 上限 ${cpu.limitCpuMillis}m` : "",
+      cpu ? `${new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 1 }).format(cpu.windowMillis / 1000)} 秒采样窗口` : ""
+    ),
+    memory: deploymentMeasurementScene(
+      instance.memory.state,
+      memory ? `${byteSize(memory.usedBytes)} / ${byteSize(memory.limitBytes)}` : "",
+      memory ? `已使用 ${new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 1 }).format(memoryPercent)}%` : ""
+    ),
+    network: deploymentMeasurementScene(
+      instance.network.state,
+      network ? `接收 ${byteSize(network.receivedBytes)} · 发送 ${byteSize(network.transmittedBytes)}` : "",
+      network
+        ? `错误 ${network.receiveErrors + network.transmitErrors} · 丢包 ${network.receiveDrops + network.transmitDrops}`
+        : ""
+    ),
+    blockIo: deploymentMeasurementScene(
+      instance.blockIo.state,
+      blockIo ? `读 ${byteSize(blockIo.readBytes)} · 写 ${byteSize(blockIo.writeBytes)}` : "",
+      blockIo ? `读操作 ${blockIo.readOperations} · 写操作 ${blockIo.writeOperations}` : ""
+    ),
+    storage: deploymentMeasurementScene(
+      instance.storage.state,
+      storage ? `可写层 ${byteSize(storage.writableLayerBytes)} · 镜像独占 ${byteSize(storage.imageUniqueBytes)}` : "",
+      storage
+        ? `镜像总计 ${byteSize(storage.imageTotalBytes)}（共享 ${byteSize(storage.imageSharedBytes)}） · ` +
+          (volumes
+            ? `卷 ${volumes.count} 个 / ${byteSize(volumes.bytes)}，共享 ${volumes.sharedCount} 个 / ${byteSize(volumes.sharedBytes)}`
+            : `卷 ${measurementLabel(storage.volumesState)}`) +
+          ` · 来源 ${dateTime(storage.observedAt)} · 有效至 ${dateTime(storage.validUntil)}`
+        : ""
+    )
+  };
+}
+
 function runtimeScene(snapshot: DeploymentRuntimeSnapshot | null): DeploymentRuntimeScene | null {
   if (!snapshot) return null;
   const labels = { AVAILABLE: "采样有效", STALE: "采样已过期", UNAVAILABLE: "运行态不可用" } as const;
   const status: SceneStatus = snapshot.state === "AVAILABLE" ? "success" : snapshot.state === "STALE" ? "warning" : "neutral";
+  const resourceLabels = { AVAILABLE: "资源采样有效", STALE: "资源采样已过期", UNAVAILABLE: "资源采样不可用" } as const;
+  const resourceStatus: SceneStatus = snapshot.resources.state === "AVAILABLE"
+    ? "success"
+    : snapshot.resources.state === "STALE" ? "warning" : "neutral";
+  const resources = new Map(snapshot.resources.value?.instances.map((item) => [item.id, item]) ?? []);
   return {
     state: snapshot.state,
     stateLabel: labels[snapshot.state],
@@ -501,6 +570,13 @@ function runtimeScene(snapshot: DeploymentRuntimeSnapshot | null): DeploymentRun
     executionTargetId: snapshot.value?.executionTargetId ?? null,
     observedAt: snapshot.value ? dateTime(snapshot.value.observedAt) : "尚无来源采样",
     validUntil: snapshot.value ? dateTime(snapshot.value.validUntil) : "无有效期",
+    resources: {
+      state: snapshot.resources.state,
+      stateLabel: resourceLabels[snapshot.resources.state],
+      status: resourceStatus,
+      observedAt: snapshot.resources.value ? dateTime(snapshot.resources.value.observedAt) : "尚无资源采样",
+      validUntil: snapshot.resources.value ? dateTime(snapshot.resources.value.validUntil) : "无有效期"
+    },
     instances: snapshot.value?.instances.map((instance): DeploymentRuntimeInstanceScene => ({
       id: instance.id,
       componentName: instance.componentName,
@@ -509,7 +585,8 @@ function runtimeScene(snapshot: DeploymentRuntimeSnapshot | null): DeploymentRun
       health: instance.health,
       healthLabel: runtimeHealthLabel(instance.health),
       status: runtimeInstanceStatus(instance.state, instance.health),
-      exitCode: instance.exitCode === null ? "—" : String(instance.exitCode)
+      exitCode: instance.exitCode === null ? "—" : String(instance.exitCode),
+      resources: resources.has(instance.id) ? resourceScene(resources.get(instance.id)!) : null
     })) ?? []
   };
 }

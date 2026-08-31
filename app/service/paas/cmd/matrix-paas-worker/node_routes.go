@@ -27,8 +27,8 @@ func newDeploymentRoutes(
 	if local == nil || secrets == nil {
 		return nil, nil, func() {}, invalid
 	}
-	localObserver, observesRuntime := local.(port.DeploymentRuntimeObserver)
-	if !observesRuntime {
+	localObserver, observesTelemetry := local.(port.DeploymentTelemetryObserver)
+	if !observesTelemetry {
 		return nil, nil, func() {}, invalid
 	}
 	connections, err := nodeconnections.Load(

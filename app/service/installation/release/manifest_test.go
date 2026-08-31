@@ -279,7 +279,7 @@ func TestPublishedManifestCanonicalDatabaseBytesRemainVerifiable(t *testing.T) {
 func TestDatabaseUpgradePathIsExactAndNotNumeric(t *testing.T) {
 	current := CurrentDatabaseProfile()
 	predecessor := current
-	predecessor.ContractRevision = 4
+	predecessor.ContractRevision--
 	if err := ValidateDatabaseUpgradePath(predecessor, current); err != nil {
 		t.Fatalf("admit exact deployment-runtime predecessor: %v", err)
 	}
@@ -288,8 +288,8 @@ func TestDatabaseUpgradePathIsExactAndNotNumeric(t *testing.T) {
 	}
 	for name, pair := range map[string][2]DatabaseProfile{
 		"reverse":        {current, predecessor},
-		"skipped source": {func() DatabaseProfile { value := predecessor; value.ContractRevision = 3; return value }(), current},
-		"future target":  {current, func() DatabaseProfile { value := current; value.ContractRevision = 6; return value }()},
+		"skipped source": {func() DatabaseProfile { value := predecessor; value.ContractRevision--; return value }(), current},
+		"future target":  {current, func() DatabaseProfile { value := current; value.ContractRevision++; return value }()},
 		"PaaS change": {predecessor, func() DatabaseProfile {
 			value := current
 			value.Authorities.PaaS = 3

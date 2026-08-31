@@ -5,7 +5,11 @@ import type {
   DeploymentInstanceState,
   DeploymentInventory,
   DeploymentInventoryItem,
+  DeploymentMeasurement,
+  DeploymentMeasurementState,
   DeploymentPhase,
+  DeploymentResourceInstance,
+  DeploymentResourceSnapshot,
   DeploymentRuntimeInstance,
   DeploymentRuntimeSnapshot,
   DeploymentRuntimeState
@@ -32,6 +36,9 @@ const instanceStates = new Set<DeploymentInstanceState>([
   "CREATED", "RUNNING", "RESTARTING", "REMOVING", "PAUSED", "EXITED", "DEAD"
 ]);
 const healthStates = new Set<DeploymentInstanceHealth>(["NONE", "STARTING", "HEALTHY", "UNHEALTHY"]);
+const measurementStates = new Set<DeploymentMeasurementState>([
+  "AVAILABLE", "WARMING_UP", "STALE", "UNAVAILABLE", "UNSUPPORTED"
+]);
 
 function invalid(name: string): Error {
   return new Error(`INVALID_${name.toUpperCase().replaceAll(/[^A-Z0-9]+/g, "_")}_RESPONSE`);
@@ -74,6 +81,13 @@ function timestamp(value: unknown, field: string): string {
 
 function integer(value: unknown, field: string, positive = false): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < (positive ? 1 : 0)) {
+    throw invalid(field);
+  }
+  return value;
+}
+
+function finiteNumber(value: unknown, field: string, maximum: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > maximum) {
     throw invalid(field);
   }
   return value;
@@ -219,16 +233,171 @@ function runtimeInstance(value: unknown): DeploymentRuntimeInstance {
   };
 }
 
+function resourceMeasurement<T>(
+  value: unknown,
+  field: string,
+  valueStates: ReadonlySet<DeploymentMeasurementState>,
+  emptyStates: ReadonlySet<DeploymentMeasurementState>,
+  parseValue: (wire: UnknownRecord) => T
+): DeploymentMeasurement<T> {
+  const wire = closed(value, field, ["state", "value"]);
+  if (!measurementStates.has(wire.state as DeploymentMeasurementState)) throw invalid(field);
+  const state = wire.state as DeploymentMeasurementState;
+  const hasValue = Object.hasOwn(wire, "value") && wire.value !== undefined;
+  if (valueStates.has(state) !== hasValue || (!valueStates.has(state) && !emptyStates.has(state))) {
+    throw invalid(field);
+  }
+  return { state, value: hasValue ? parseValue(record(wire.value, `${field} value`)) : null };
+}
+
+function resourceInstance(value: unknown): DeploymentResourceInstance {
+  const wire = closed(value, "deployment resource instance", ["id", "cpu", "memory", "network", "blockIo", "storage"]);
+  const instanceId = text(wire.id, "deployment resource instance id");
+  if (!instanceIDPattern.test(instanceId)) throw invalid("deployment resource instance");
+  const available = new Set<DeploymentMeasurementState>(["AVAILABLE"]);
+  const standardEmpty = new Set<DeploymentMeasurementState>(["UNAVAILABLE", "UNSUPPORTED"]);
+  return {
+    id: instanceId,
+    cpu: resourceMeasurement(wire.cpu, "deployment cpu resource", available,
+      new Set([...standardEmpty, "WARMING_UP"]), (input) => {
+        const item = closed(input, "deployment cpu value", ["windowMillis", "usedCores", "limitCpuMillis"]);
+        const windowMillis = integer(item.windowMillis, "deployment cpu window", true);
+        const limitCpuMillis = integer(item.limitCpuMillis, "deployment cpu limit", true);
+        if (windowMillis > 60_000 || limitCpuMillis > 4_096_000) throw invalid("deployment cpu value");
+        return {
+          windowMillis,
+          usedCores: finiteNumber(item.usedCores, "deployment cpu usage", 4096),
+          limitCpuMillis
+        };
+      }),
+    memory: resourceMeasurement(wire.memory, "deployment memory resource", available, standardEmpty, (input) => {
+      const item = closed(input, "deployment memory value", ["usedBytes", "limitBytes"]);
+      const usedBytes = integer(item.usedBytes, "deployment memory used");
+      const limitBytes = integer(item.limitBytes, "deployment memory limit", true);
+      if (usedBytes > limitBytes) throw invalid("deployment memory value");
+      return { usedBytes, limitBytes };
+    }),
+    network: resourceMeasurement(wire.network, "deployment network resource", available, standardEmpty, (input) => {
+      const item = closed(input, "deployment network value", [
+        "receivedBytes", "transmittedBytes", "receiveErrors", "transmitErrors", "receiveDrops", "transmitDrops"
+      ]);
+      return {
+        receivedBytes: integer(item.receivedBytes, "deployment network received"),
+        transmittedBytes: integer(item.transmittedBytes, "deployment network transmitted"),
+        receiveErrors: integer(item.receiveErrors, "deployment network receive errors"),
+        transmitErrors: integer(item.transmitErrors, "deployment network transmit errors"),
+        receiveDrops: integer(item.receiveDrops, "deployment network receive drops"),
+        transmitDrops: integer(item.transmitDrops, "deployment network transmit drops")
+      };
+    }),
+    blockIo: resourceMeasurement(wire.blockIo, "deployment block io resource", available, standardEmpty, (input) => {
+      const item = closed(input, "deployment block io value", [
+        "readBytes", "writeBytes", "readOperations", "writeOperations"
+      ]);
+      return {
+        readBytes: integer(item.readBytes, "deployment block io read bytes"),
+        writeBytes: integer(item.writeBytes, "deployment block io write bytes"),
+        readOperations: integer(item.readOperations, "deployment block io read operations"),
+        writeOperations: integer(item.writeOperations, "deployment block io write operations")
+      };
+    }),
+    storage: resourceMeasurement(wire.storage, "deployment storage resource",
+      new Set<DeploymentMeasurementState>(["AVAILABLE", "STALE"]), standardEmpty, (input) => {
+        const item = closed(input, "deployment storage value", [
+          "observedAt", "validUntil", "writableLayerBytes", "imageTotalBytes", "imageSharedBytes",
+          "imageUniqueBytes", "volumesState", "volumes"
+        ]);
+        const observedAt = timestamp(item.observedAt, "deployment storage observed at");
+        const validUntil = timestamp(item.validUntil, "deployment storage valid until");
+        if (Date.parse(validUntil) <= Date.parse(observedAt) || Date.parse(validUntil) - Date.parse(observedAt) > 300_000) {
+          throw invalid("deployment storage validity");
+        }
+        const imageTotalBytes = integer(item.imageTotalBytes, "deployment image total");
+        const imageSharedBytes = integer(item.imageSharedBytes, "deployment image shared");
+        const imageUniqueBytes = integer(item.imageUniqueBytes, "deployment image unique");
+        if (imageSharedBytes > imageTotalBytes || imageUniqueBytes !== imageTotalBytes - imageSharedBytes) {
+          throw invalid("deployment image accounting");
+        }
+        const volumesState = item.volumesState as DeploymentMeasurementState;
+        const validVolumeState = volumesState === "AVAILABLE" || volumesState === "UNAVAILABLE" || volumesState === "UNSUPPORTED";
+        const hasVolumes = Object.hasOwn(item, "volumes") && item.volumes !== undefined;
+        if (!validVolumeState || (volumesState === "AVAILABLE") !== hasVolumes) throw invalid("deployment volume resource");
+        let volumes = null;
+        if (hasVolumes) {
+          const volume = closed(item.volumes, "deployment volume value", ["count", "bytes", "sharedCount", "sharedBytes"]);
+          const count = integer(volume.count, "deployment volume count");
+          const bytes = integer(volume.bytes, "deployment volume bytes");
+          const sharedCount = integer(volume.sharedCount, "deployment shared volume count");
+          const sharedBytes = integer(volume.sharedBytes, "deployment shared volume bytes");
+          if (count > 0xffff_ffff || sharedCount > count || sharedBytes > bytes) throw invalid("deployment volume value");
+          volumes = { count, bytes, sharedCount, sharedBytes };
+        }
+        return {
+          observedAt,
+          validUntil,
+          writableLayerBytes: integer(item.writableLayerBytes, "deployment writable layer"),
+          imageTotalBytes,
+          imageSharedBytes,
+          imageUniqueBytes,
+          volumesState,
+          volumes
+        };
+      })
+  };
+}
+
+function deploymentResources(value: unknown, expectedDeploymentId: string): DeploymentResourceSnapshot {
+  const wire = closed(value, "deployment resources", ["state", "value"]);
+  if (!runtimeStates.has(wire.state as DeploymentRuntimeState)) throw invalid("deployment resources");
+  const state = wire.state as DeploymentRuntimeState;
+  const hasValue = Object.hasOwn(wire, "value") && wire.value !== undefined;
+  if ((state === "UNAVAILABLE") === hasValue) throw invalid("deployment resources");
+  if (!hasValue) return { state, value: null };
+  const resourceValue = closed(wire.value, "deployment resource value", ["observation", "validUntil"]);
+  const observation = closed(resourceValue.observation, "deployment resource observation", [
+    "deploymentId", "generation", "applicationRevisionId", "executionTargetId", "instances", "observedAt"
+  ]);
+  if (id(observation.deploymentId, "deployment resource deployment") !== expectedDeploymentId ||
+      !Array.isArray(observation.instances) || observation.instances.length > maximumInstances) {
+    throw invalid("deployment resource observation");
+  }
+  const instances = observation.instances.map(resourceInstance);
+  for (let index = 1; index < instances.length; index += 1) {
+    if (instances[index - 1]!.id >= instances[index]!.id) throw invalid("deployment resource instances");
+  }
+  const observedAt = timestamp(observation.observedAt, "deployment resource observed at");
+  const validUntil = timestamp(resourceValue.validUntil, "deployment resource valid until");
+  if (Date.parse(validUntil) <= Date.parse(observedAt) || Date.parse(validUntil) - Date.parse(observedAt) > 60_000) {
+    throw invalid("deployment resource validity");
+  }
+  return {
+    state,
+    value: {
+      deploymentId: expectedDeploymentId,
+      generation: integer(observation.generation, "deployment resource generation", true),
+      applicationRevisionId: id(observation.applicationRevisionId, "deployment resource application revision"),
+      executionTargetId: id(observation.executionTargetId, "deployment resource execution target"),
+      instances,
+      observedAt,
+      validUntil
+    }
+  };
+}
+
 function runtime(value: unknown, expectedTenantId: string, expectedDeploymentId: string): DeploymentRuntimeSnapshot {
-  const wire = closed(value, "deployment runtime", ["apiVersion", "kind", "scope", "state", "value"]);
+  const wire = closed(value, "deployment runtime", ["apiVersion", "kind", "scope", "state", "value", "resources"]);
   if (wire.apiVersion !== apiVersion || wire.kind !== "DeploymentRuntimeSnapshot" ||
       !runtimeStates.has(wire.state as DeploymentRuntimeState)) {
     throw invalid("deployment runtime");
   }
   scope(wire.scope, expectedTenantId, "deployment runtime scope");
+  const resources = deploymentResources(wire.resources, expectedDeploymentId);
   const hasValue = Object.hasOwn(wire, "value") && wire.value !== undefined;
   if ((wire.state === "UNAVAILABLE") === hasValue) throw invalid("deployment runtime");
-  if (!hasValue) return { tenantId: expectedTenantId, state: "UNAVAILABLE", value: null };
+  if (!hasValue) {
+    if (resources.state !== "UNAVAILABLE") throw invalid("deployment runtime resources");
+    return { tenantId: expectedTenantId, state: "UNAVAILABLE", value: null, resources };
+  }
 
   const runtimeValue = closed(wire.value, "deployment runtime value", ["observation", "validUntil"]);
   const observation = closed(runtimeValue.observation, "deployment runtime observation", [
@@ -242,19 +411,32 @@ function runtime(value: unknown, expectedTenantId: string, expectedDeploymentId:
   if (new Set(instances.map((item) => item.id)).size !== instances.length) throw invalid("deployment runtime instances");
   const observedAt = timestamp(observation.observedAt, "deployment runtime observed at");
   const validUntil = timestamp(runtimeValue.validUntil, "deployment runtime valid until");
-  if (Date.parse(validUntil) <= Date.parse(observedAt)) throw invalid("deployment runtime validity");
+  if (Date.parse(validUntil) <= Date.parse(observedAt) || Date.parse(validUntil) - Date.parse(observedAt) > 60_000) {
+    throw invalid("deployment runtime validity");
+  }
+  const generation = integer(observation.generation, "deployment runtime generation", true);
+  const applicationRevisionId = id(observation.applicationRevisionId, "deployment runtime application revision");
+  const executionTargetId = id(observation.executionTargetId, "deployment runtime execution target");
+  if (resources.value && (resources.value.generation !== generation ||
+      resources.value.applicationRevisionId !== applicationRevisionId ||
+      resources.value.executionTargetId !== executionTargetId ||
+      resources.value.instances.length !== instances.length ||
+      resources.value.instances.some((item, index) => item.id !== instances[index]!.id))) {
+    throw invalid("deployment runtime resource identity");
+  }
   return {
     tenantId: expectedTenantId,
     state: wire.state as DeploymentRuntimeState,
     value: {
       deploymentId: expectedDeploymentId,
-      generation: integer(observation.generation, "deployment runtime generation", true),
-      applicationRevisionId: id(observation.applicationRevisionId, "deployment runtime application revision"),
-      executionTargetId: id(observation.executionTargetId, "deployment runtime execution target"),
+      generation,
+      applicationRevisionId,
+      executionTargetId,
       instances,
       observedAt,
       validUntil
-    }
+    },
+    resources
   };
 }
 

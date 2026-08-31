@@ -122,6 +122,21 @@ func (service *Service) ObserveDeploymentRuntime(
 	return service.observer.ObserveDeploymentRuntime(ctx, request)
 }
 
+func (service *Service) ObserveDeploymentTelemetry(
+	ctx context.Context,
+	request paasv1.ObserveDeploymentRuntimeRequest,
+) (
+	paasv1.DeploymentRuntimeObservation,
+	paasv1.DeploymentResourceObservation,
+	error,
+) {
+	if service == nil || service.observer == nil || ctx == nil ||
+		paasv1.ValidateObserveDeploymentRuntimeRequest(request) != nil {
+		return paasv1.DeploymentRuntimeObservation{}, paasv1.DeploymentResourceObservation{}, invalidFault()
+	}
+	return service.observer.ObserveDeploymentTelemetry(ctx, request)
+}
+
 func (service *Service) materialExecutor(
 	materials nodev1.DeploymentMaterials,
 ) (*composeadapter.Executor, error) {

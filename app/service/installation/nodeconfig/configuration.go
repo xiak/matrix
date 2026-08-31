@@ -26,11 +26,11 @@ const (
 	ConfigurationKind = "NodeConfiguration"
 	EnrollmentKind    = "NodeEnrollment"
 	MaximumBytes      = 64 * 1024
-	RuntimeRevision   = 5
+	RuntimeRevision   = 6
 	// DeploymentRuntimePredecessorRevision is the one installed node runtime
 	// whose provider-neutral contract remains a supported rollback source.
-	DeploymentRuntimePredecessorRevision = 4
-	deploymentRuntimePredecessorDigest   = "sha256:1c07008679db72f2057c17c1fd62cba5ae02f29026d0e44d2b17cf1c5bbf1326"
+	DeploymentRuntimePredecessorRevision = 5
+	deploymentRuntimePredecessorDigest   = "sha256:bd58faf91ffb1f1339778193c97d5ae339c6e60fd575039f4f6b4f3c62ba0d79"
 	MinimumSystemd                       = 249
 	MinimumDocker                        = "27.5.1"
 	MinimumCompose                       = "2.33.0"
@@ -126,7 +126,7 @@ func ContractDigest() string {
 }
 
 func DeploymentRuntimePredecessorContractDigest() string {
-	// This is the topology digest from the fixed runtime-4 release, not a
+	// This is the topology digest from the fixed runtime-5 release, not a
 	// reconstruction using mutable current policy constants.
 	return deploymentRuntimePredecessorDigest
 }

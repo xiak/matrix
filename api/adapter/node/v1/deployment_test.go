@@ -161,6 +161,73 @@ func TestDeploymentRuntimeProtocolIsOperationIndependentAndTargetBound(t *testin
 	}
 }
 
+func TestDeploymentTelemetryProtocolBindsLifecycleAndResourcesToOneOpaqueInstance(t *testing.T) {
+	effect := deploymentEffectFixture(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	request := DeploymentTelemetryObservationRequest{
+		APIVersion: APIVersion, Kind: DeploymentTelemetryObservationRequestKind,
+		Identity: effect.Identity, BindingRef: effect.Execution.Command.BindingRef,
+		Request: paasv1.ObserveDeploymentRuntimeRequest{
+			RequestID: "telemetry-observe-a", Scope: effect.Execution.Command.Scope,
+			DeploymentID:          effect.Execution.Generation.DeploymentID,
+			Generation:            effect.Execution.Generation.Generation,
+			ApplicationRevisionID: effect.Execution.ApplicationRevision.Metadata.ID,
+			ExecutionTargetID:     effect.Identity.ExecutionTargetID,
+			ExpectedContentDigest: effect.Execution.Generation.ContentDigest,
+			Deadline:              now.Add(15 * time.Second),
+		},
+	}
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded, err := DecodeDeploymentTelemetryObservationRequest(bytes.NewReader(encoded)); err != nil || decoded.Request.RequestID != request.Request.RequestID {
+		t.Fatalf("telemetry request round trip = %#v / %v", decoded, err)
+	}
+	instanceID := paasv1.ResourceID("instance-0123456789abcdef0123456789abcdef")
+	response := DeploymentTelemetryObservationResponse{
+		APIVersion: APIVersion, Kind: DeploymentTelemetryObservationResponseKind,
+		Identity: effect.Identity, RequestID: request.Request.RequestID,
+		Runtime: paasv1.DeploymentRuntimeObservation{
+			DeploymentID: request.Request.DeploymentID, Generation: request.Request.Generation,
+			ApplicationRevisionID: request.Request.ApplicationRevisionID,
+			ExecutionTargetID:     request.Request.ExecutionTargetID,
+			Instances: []paasv1.DeploymentRuntimeInstance{{
+				ID: instanceID, ComponentName: "web", State: paasv1.DeploymentInstanceRunning,
+				Health: paasv1.DeploymentInstanceHealthHealthy,
+			}},
+			ObservedAt: now,
+		},
+		Resources: paasv1.DeploymentResourceObservation{
+			DeploymentID: request.Request.DeploymentID, Generation: request.Request.Generation,
+			ApplicationRevisionID: request.Request.ApplicationRevisionID,
+			ExecutionTargetID:     request.Request.ExecutionTargetID,
+			Instances: []paasv1.DeploymentResourceInstance{{
+				ID:  instanceID,
+				CPU: paasv1.DeploymentInstanceCPUUsage{State: paasv1.MeasurementWarmingUp},
+				Memory: paasv1.DeploymentInstanceMemoryUsage{State: paasv1.MeasurementAvailable, Value: &paasv1.DeploymentInstanceMemoryUsageValue{
+					UsedBytes: 16 << 20, LimitBytes: 64 << 20,
+				}},
+				Network: paasv1.DeploymentInstanceNetworkUsage{State: paasv1.MeasurementUnsupported},
+				BlockIO: paasv1.DeploymentInstanceBlockIOUsage{State: paasv1.MeasurementUnsupported},
+				Storage: paasv1.DeploymentInstanceStorageUsage{State: paasv1.MeasurementUnavailable},
+			}},
+			ObservedAt: now,
+		},
+	}
+	encoded, err = json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded, err := DecodeDeploymentTelemetryObservationResponse(bytes.NewReader(encoded)); err != nil || decoded.RequestID != response.RequestID {
+		t.Fatalf("telemetry response round trip = %#v / %v", decoded, err)
+	}
+	response.Resources.Instances[0].ID = "instance-ffffffffffffffffffffffffffffffff"
+	if ValidateDeploymentTelemetryObservationResponse(response) == nil {
+		t.Fatal("telemetry response joined resources from another instance")
+	}
+}
+
 func TestDeploymentMaterialsClearSecretBytes(t *testing.T) {
 	secret := []byte("must-be-cleared")
 	materials := DeploymentMaterials{Secrets: []SecretMaterial{{Value: secret}}}

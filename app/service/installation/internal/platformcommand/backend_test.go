@@ -209,7 +209,7 @@ func TestCredentialRecoveryRejectsUnsupportedProfilesBeforePreparingAnIntent(t *
 		{name: "published scalar is not first-authorization admission", profile: release.DatabaseProfile{SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one"}},
 		{name: "prior credential contract", profile: release.DatabaseProfile{Compatibility: "identical-authority-profile", Authorities: release.AuthoritySchemas{IAM: 3, Audit: 2, PaaS: 2}, ContractRevision: 3}},
 		{name: "different PaaS schema", profile: release.DatabaseProfile{Compatibility: "identical-authority-profile", Authorities: release.AuthoritySchemas{IAM: 4, Audit: 3, PaaS: 1}, ContractRevision: 4}},
-		{name: "different contract revision", profile: release.DatabaseProfile{Compatibility: "identical-authority-profile", Authorities: release.AuthoritySchemas{IAM: 4, Audit: 3, PaaS: 2}, ContractRevision: 6}},
+		{name: "different contract revision", profile: release.DatabaseProfile{Compatibility: "identical-authority-profile", Authorities: release.AuthoritySchemas{IAM: 4, Audit: 3, PaaS: 2}, ContractRevision: 7}},
 	}
 	for _, test := range profiles {
 		t.Run(test.name, func(t *testing.T) {
@@ -234,11 +234,11 @@ func TestCredentialRecoveryRejectsUnsupportedProfilesBeforePreparingAnIntent(t *
 	}
 }
 
-func TestCredentialRecoveryRetainsExactRevisionFourConsumer(t *testing.T) {
+func TestCredentialRecoveryRetainsExactRevisionFiveConsumer(t *testing.T) {
 	profile := release.CurrentDatabaseProfile()
-	profile.ContractRevision = 4
+	profile.ContractRevision--
 	if err := ValidateCredentialRecoveryProfile(profile); err != nil {
-		t.Fatalf("revision-four credential recovery profile: %v", err)
+		t.Fatalf("revision-five credential recovery profile: %v", err)
 	}
 }
 
@@ -696,7 +696,7 @@ func TestPublishedScalarProfileStillAllowsItsOwnReleasePair(t *testing.T) {
 func TestDeploymentRuntimeProfileExactPairAllowsUpgradeAndRollback(t *testing.T) {
 	current := release.CurrentDatabaseProfile()
 	predecessor := current
-	predecessor.ContractRevision = 4
+	predecessor.ContractRevision--
 	fixtures, err := releasetest.WriteSequence(t.TempDir(), 2, predecessor, current)
 	if err != nil {
 		t.Fatal(err)

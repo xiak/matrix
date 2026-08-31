@@ -95,6 +95,7 @@ func (transaction *applicationTransaction) LoadDeploymentRuntime(
 		Kind:       "DeploymentRuntimeSnapshot",
 		Scope:      deployment.Metadata.Scope,
 		State:      paasv1.MeasurementUnavailable,
+		Resources:  paasv1.DeploymentResourceSnapshot{State: paasv1.MeasurementUnavailable},
 	}
 	if deployment.Spec.DesiredState != paasv1.DeploymentDesiredRunning ||
 		deployment.Status.PlacementDecisionID == "" {
@@ -159,6 +160,23 @@ func (transaction *applicationTransaction) LoadDeploymentRuntime(
 		Observation: observation,
 		ValidUntil:  databaseTime(validUntil),
 	}
+	resourceObservation, resourceValidUntil, found, err := transaction.loadDeploymentResources(
+		ctx,
+		deployment,
+		observation,
+	)
+	if err != nil {
+		return paasv1.DeploymentRuntimeSnapshot{}, false, err
+	}
+	if found {
+		base.Resources = paasv1.DeploymentResourceSnapshot{
+			State: paasv1.MeasurementAvailable,
+			Value: &paasv1.DeploymentResourceValue{
+				Observation: resourceObservation,
+				ValidUntil:  resourceValidUntil,
+			},
+		}
+	}
 	now, err := transaction.TransactionTime(ctx)
 	if err != nil {
 		return paasv1.DeploymentRuntimeSnapshot{}, false, err
@@ -168,4 +186,90 @@ func (transaction *applicationTransaction) LoadDeploymentRuntime(
 		return paasv1.DeploymentRuntimeSnapshot{}, false, errors.New("stored Deployment runtime snapshot is invalid")
 	}
 	return base, true, nil
+}
+
+func (transaction *applicationTransaction) loadDeploymentResources(
+	ctx context.Context,
+	deployment paasv1.Deployment,
+	runtime paasv1.DeploymentRuntimeObservation,
+) (paasv1.DeploymentResourceObservation, time.Time, bool, error) {
+	var (
+		generation            uint64
+		applicationRevisionID string
+		executionTargetID     string
+		observedAt            time.Time
+		validUntil            time.Time
+		document              []byte
+	)
+	err := transaction.tx.QueryRow(
+		ctx,
+		`SELECT snapshot.deployment_generation,
+		        snapshot.application_revision_id,
+		        snapshot.execution_target_id,
+		        snapshot.observed_at,
+		        snapshot.valid_until,
+		        snapshot.document
+		   FROM paas.deployment_resource_snapshots AS snapshot
+		  WHERE snapshot.tenant_id = $1
+		    AND snapshot.deployment_id = $2
+		    AND snapshot.placement_decision_id = $3
+		    AND snapshot.deployment_generation = $4
+		    AND snapshot.application_revision_id = $5
+		    AND snapshot.execution_target_id = $6`,
+		string(transaction.tenantID),
+		string(deployment.Metadata.ID),
+		string(deployment.Status.PlacementDecisionID),
+		deployment.Generation,
+		string(deployment.Spec.ApplicationRevisionID),
+		string(runtime.ExecutionTargetID),
+	).Scan(
+		&generation,
+		&applicationRevisionID,
+		&executionTargetID,
+		&observedAt,
+		&validUntil,
+		&document,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return paasv1.DeploymentResourceObservation{}, time.Time{}, false, nil
+	}
+	if err != nil {
+		return paasv1.DeploymentResourceObservation{}, time.Time{}, false,
+			fmt.Errorf("load Deployment resources: %w", err)
+	}
+	var observation paasv1.DeploymentResourceObservation
+	if err := decodeDocument("DeploymentResourceObservation", document, &observation); err != nil {
+		return paasv1.DeploymentResourceObservation{}, time.Time{}, false, err
+	}
+	if paasv1.ValidateDeploymentResourceObservation(observation) != nil ||
+		observation.DeploymentID != deployment.Metadata.ID ||
+		observation.DeploymentID != runtime.DeploymentID ||
+		observation.Generation != generation || generation != deployment.Generation ||
+		observation.Generation != runtime.Generation ||
+		string(observation.ApplicationRevisionID) != applicationRevisionID ||
+		observation.ApplicationRevisionID != deployment.Spec.ApplicationRevisionID ||
+		observation.ApplicationRevisionID != runtime.ApplicationRevisionID ||
+		string(observation.ExecutionTargetID) != executionTargetID ||
+		observation.ExecutionTargetID != runtime.ExecutionTargetID ||
+		!observation.ObservedAt.Equal(databaseTime(observedAt)) ||
+		!sameDeploymentInstanceIDs(runtime.Instances, observation.Instances) {
+		return paasv1.DeploymentResourceObservation{}, time.Time{}, false,
+			errors.New("stored Deployment resource identity mismatch")
+	}
+	return observation, databaseTime(validUntil), true, nil
+}
+
+func sameDeploymentInstanceIDs(
+	runtime []paasv1.DeploymentRuntimeInstance,
+	resources []paasv1.DeploymentResourceInstance,
+) bool {
+	if len(runtime) != len(resources) {
+		return false
+	}
+	for index := range runtime {
+		if runtime[index].ID != resources[index].ID {
+			return false
+		}
+	}
+	return true
 }

@@ -910,6 +910,330 @@ CREATE TABLE IF NOT EXISTS paas.deployment_runtime_snapshots (
     )
 );
 
+CREATE OR REPLACE FUNCTION paas.valid_deployment_resource_document(
+    resource_document jsonb
+)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE
+STRICT
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    instance jsonb;
+    measurement jsonb;
+    measurement_value jsonb;
+    measurement_state text;
+    volume_state text;
+BEGIN
+    IF jsonb_typeof(resource_document) <> 'object'
+       OR NOT resource_document ?& ARRAY[
+            'deploymentId', 'generation', 'applicationRevisionId',
+            'executionTargetId', 'instances', 'observedAt'
+       ]
+       OR resource_document - ARRAY[
+            'deploymentId', 'generation', 'applicationRevisionId',
+            'executionTargetId', 'instances', 'observedAt'
+       ] <> '{}'::jsonb
+       OR jsonb_typeof(resource_document->'deploymentId') <> 'string'
+       OR jsonb_typeof(resource_document->'generation') <> 'number'
+       OR resource_document->>'generation' !~ '^[1-9][0-9]*$'
+       OR (resource_document->>'generation')::numeric > 9007199254740991
+       OR jsonb_typeof(resource_document->'applicationRevisionId') <> 'string'
+       OR jsonb_typeof(resource_document->'executionTargetId') <> 'string'
+       OR jsonb_typeof(resource_document->'observedAt') <> 'string'
+       OR jsonb_typeof(resource_document->'instances') <> 'array'
+       OR jsonb_array_length(resource_document->'instances') > 64 THEN
+        RETURN false;
+    END IF;
+
+    FOR instance IN
+        SELECT item.value
+          FROM jsonb_array_elements(resource_document->'instances') AS item(value)
+    LOOP
+        IF jsonb_typeof(instance) <> 'object'
+           OR NOT instance ?& ARRAY['id', 'cpu', 'memory', 'network', 'blockIo', 'storage']
+           OR instance - ARRAY['id', 'cpu', 'memory', 'network', 'blockIo', 'storage'] <> '{}'::jsonb
+           OR jsonb_typeof(instance->'id') <> 'string'
+           OR instance->>'id' COLLATE "C" !~ '^instance-[0-9a-f]{32}$' THEN
+            RETURN false;
+        END IF;
+
+        measurement := instance->'cpu';
+        IF jsonb_typeof(measurement) <> 'object'
+           OR jsonb_typeof(measurement->'state') IS DISTINCT FROM 'string' THEN
+            RETURN false;
+        END IF;
+        measurement_state := measurement->>'state';
+        IF measurement_state = 'AVAILABLE' THEN
+            measurement_value := measurement->'value';
+            IF measurement - ARRAY['state', 'value'] <> '{}'::jsonb
+               OR jsonb_typeof(measurement_value) IS DISTINCT FROM 'object'
+               OR NOT measurement_value ?& ARRAY['windowMillis', 'usedCores', 'limitCpuMillis']
+               OR measurement_value - ARRAY['windowMillis', 'usedCores', 'limitCpuMillis'] <> '{}'::jsonb
+               OR jsonb_typeof(measurement_value->'windowMillis') <> 'number'
+               OR measurement_value->>'windowMillis' !~ '^[1-9][0-9]*$'
+               OR (measurement_value->>'windowMillis')::numeric > 60000
+               OR jsonb_typeof(measurement_value->'usedCores') <> 'number'
+               OR (measurement_value->>'usedCores')::numeric < 0
+               OR (measurement_value->>'usedCores')::numeric > 4096
+               OR jsonb_typeof(measurement_value->'limitCpuMillis') <> 'number'
+               OR measurement_value->>'limitCpuMillis' !~ '^[1-9][0-9]*$'
+               OR (measurement_value->>'limitCpuMillis')::numeric > 4096000 THEN
+                RETURN false;
+            END IF;
+        ELSIF measurement_state IN ('WARMING_UP', 'UNAVAILABLE', 'UNSUPPORTED') THEN
+            IF measurement - 'state' <> '{}'::jsonb THEN
+                RETURN false;
+            END IF;
+        ELSE
+            RETURN false;
+        END IF;
+
+        measurement := instance->'memory';
+        IF jsonb_typeof(measurement) <> 'object'
+           OR jsonb_typeof(measurement->'state') IS DISTINCT FROM 'string' THEN
+            RETURN false;
+        END IF;
+        measurement_state := measurement->>'state';
+        IF measurement_state = 'AVAILABLE' THEN
+            measurement_value := measurement->'value';
+            IF measurement - ARRAY['state', 'value'] <> '{}'::jsonb
+               OR jsonb_typeof(measurement_value) IS DISTINCT FROM 'object'
+               OR NOT measurement_value ?& ARRAY['usedBytes', 'limitBytes']
+               OR measurement_value - ARRAY['usedBytes', 'limitBytes'] <> '{}'::jsonb
+               OR jsonb_typeof(measurement_value->'usedBytes') <> 'number'
+               OR measurement_value->>'usedBytes' !~ '^(0|[1-9][0-9]*)$'
+               OR (measurement_value->>'usedBytes')::numeric > 9007199254740991
+               OR jsonb_typeof(measurement_value->'limitBytes') <> 'number'
+               OR measurement_value->>'limitBytes' !~ '^[1-9][0-9]*$'
+               OR (measurement_value->>'limitBytes')::numeric > 9007199254740991
+               OR (measurement_value->>'usedBytes')::numeric >
+                    (measurement_value->>'limitBytes')::numeric THEN
+                RETURN false;
+            END IF;
+        ELSIF measurement_state IN ('UNAVAILABLE', 'UNSUPPORTED') THEN
+            IF measurement - 'state' <> '{}'::jsonb THEN
+                RETURN false;
+            END IF;
+        ELSE
+            RETURN false;
+        END IF;
+
+        measurement := instance->'network';
+        IF jsonb_typeof(measurement) <> 'object'
+           OR jsonb_typeof(measurement->'state') IS DISTINCT FROM 'string' THEN
+            RETURN false;
+        END IF;
+        measurement_state := measurement->>'state';
+        IF measurement_state = 'AVAILABLE' THEN
+            measurement_value := measurement->'value';
+            IF measurement - ARRAY['state', 'value'] <> '{}'::jsonb
+               OR jsonb_typeof(measurement_value) IS DISTINCT FROM 'object'
+               OR NOT measurement_value ?& ARRAY[
+                    'receivedBytes', 'transmittedBytes', 'receiveErrors',
+                    'transmitErrors', 'receiveDrops', 'transmitDrops'
+               ]
+               OR measurement_value - ARRAY[
+                    'receivedBytes', 'transmittedBytes', 'receiveErrors',
+                    'transmitErrors', 'receiveDrops', 'transmitDrops'
+               ] <> '{}'::jsonb
+               OR EXISTS (
+                    SELECT 1
+                      FROM jsonb_each(measurement_value) AS field(name, value)
+                     WHERE jsonb_typeof(field.value) <> 'number'
+                        OR field.value#>>'{}' !~ '^(0|[1-9][0-9]*)$'
+                        OR (field.value#>>'{}')::numeric > 9007199254740991
+               ) THEN
+                RETURN false;
+            END IF;
+        ELSIF measurement_state IN ('UNAVAILABLE', 'UNSUPPORTED') THEN
+            IF measurement - 'state' <> '{}'::jsonb THEN
+                RETURN false;
+            END IF;
+        ELSE
+            RETURN false;
+        END IF;
+
+        measurement := instance->'blockIo';
+        IF jsonb_typeof(measurement) <> 'object'
+           OR jsonb_typeof(measurement->'state') IS DISTINCT FROM 'string' THEN
+            RETURN false;
+        END IF;
+        measurement_state := measurement->>'state';
+        IF measurement_state = 'AVAILABLE' THEN
+            measurement_value := measurement->'value';
+            IF measurement - ARRAY['state', 'value'] <> '{}'::jsonb
+               OR jsonb_typeof(measurement_value) IS DISTINCT FROM 'object'
+               OR NOT measurement_value ?& ARRAY[
+                    'readBytes', 'writeBytes', 'readOperations', 'writeOperations'
+               ]
+               OR measurement_value - ARRAY[
+                    'readBytes', 'writeBytes', 'readOperations', 'writeOperations'
+               ] <> '{}'::jsonb
+               OR EXISTS (
+                    SELECT 1
+                      FROM jsonb_each(measurement_value) AS field(name, value)
+                     WHERE jsonb_typeof(field.value) <> 'number'
+                        OR field.value#>>'{}' !~ '^(0|[1-9][0-9]*)$'
+                        OR (field.value#>>'{}')::numeric > 9007199254740991
+               ) THEN
+                RETURN false;
+            END IF;
+        ELSIF measurement_state IN ('UNAVAILABLE', 'UNSUPPORTED') THEN
+            IF measurement - 'state' <> '{}'::jsonb THEN
+                RETURN false;
+            END IF;
+        ELSE
+            RETURN false;
+        END IF;
+
+        measurement := instance->'storage';
+        IF jsonb_typeof(measurement) <> 'object'
+           OR jsonb_typeof(measurement->'state') IS DISTINCT FROM 'string' THEN
+            RETURN false;
+        END IF;
+        measurement_state := measurement->>'state';
+        IF measurement_state IN ('AVAILABLE', 'STALE') THEN
+            measurement_value := measurement->'value';
+            IF measurement - ARRAY['state', 'value'] <> '{}'::jsonb
+               OR jsonb_typeof(measurement_value) IS DISTINCT FROM 'object'
+               OR NOT measurement_value ?& ARRAY[
+                    'observedAt', 'validUntil', 'writableLayerBytes',
+                    'imageTotalBytes', 'imageSharedBytes', 'imageUniqueBytes',
+                    'volumesState'
+               ]
+               OR measurement_value - ARRAY[
+                    'observedAt', 'validUntil', 'writableLayerBytes',
+                    'imageTotalBytes', 'imageSharedBytes', 'imageUniqueBytes',
+                    'volumesState', 'volumes'
+               ] <> '{}'::jsonb
+               OR jsonb_typeof(measurement_value->'observedAt') <> 'string'
+               OR jsonb_typeof(measurement_value->'validUntil') <> 'string'
+               OR (measurement_value->>'validUntil')::timestamptz <=
+                    (measurement_value->>'observedAt')::timestamptz
+               OR (measurement_value->>'validUntil')::timestamptz >
+                    (measurement_value->>'observedAt')::timestamptz + interval '5 minutes'
+               OR EXISTS (
+                    SELECT 1
+                      FROM jsonb_each(measurement_value) AS field(name, value)
+                     WHERE field.name IN (
+                            'writableLayerBytes', 'imageTotalBytes',
+                            'imageSharedBytes', 'imageUniqueBytes'
+                       )
+                       AND (
+                            jsonb_typeof(field.value) <> 'number'
+                            OR field.value#>>'{}' !~ '^(0|[1-9][0-9]*)$'
+                            OR (field.value#>>'{}')::numeric > 9007199254740991
+                       )
+               )
+               OR (measurement_value->>'imageSharedBytes')::numeric >
+                    (measurement_value->>'imageTotalBytes')::numeric
+               OR (measurement_value->>'imageUniqueBytes')::numeric <>
+                    (measurement_value->>'imageTotalBytes')::numeric -
+                    (measurement_value->>'imageSharedBytes')::numeric
+               OR jsonb_typeof(measurement_value->'volumesState') <> 'string' THEN
+                RETURN false;
+            END IF;
+            volume_state := measurement_value->>'volumesState';
+            IF volume_state = 'AVAILABLE' THEN
+                IF jsonb_typeof(measurement_value->'volumes') IS DISTINCT FROM 'object'
+                   OR NOT measurement_value->'volumes' ?& ARRAY[
+                        'count', 'bytes', 'sharedCount', 'sharedBytes'
+                   ]
+                   OR measurement_value->'volumes' - ARRAY[
+                        'count', 'bytes', 'sharedCount', 'sharedBytes'
+                   ] <> '{}'::jsonb
+                   OR EXISTS (
+                        SELECT 1
+                          FROM jsonb_each(measurement_value->'volumes') AS field(name, value)
+                         WHERE jsonb_typeof(field.value) <> 'number'
+                            OR field.value#>>'{}' !~ '^(0|[1-9][0-9]*)$'
+                            OR (field.value#>>'{}')::numeric > 9007199254740991
+                   )
+                   OR (measurement_value#>>'{volumes,count}')::numeric > 4294967295
+                   OR (measurement_value#>>'{volumes,sharedCount}')::numeric > 4294967295
+                   OR (measurement_value#>>'{volumes,sharedCount}')::numeric >
+                        (measurement_value#>>'{volumes,count}')::numeric
+                   OR (measurement_value#>>'{volumes,sharedBytes}')::numeric >
+                        (measurement_value#>>'{volumes,bytes}')::numeric THEN
+                    RETURN false;
+                END IF;
+            ELSIF volume_state IN ('UNAVAILABLE', 'UNSUPPORTED') THEN
+                IF measurement_value ? 'volumes' THEN
+                    RETURN false;
+                END IF;
+            ELSE
+                RETURN false;
+            END IF;
+        ELSIF measurement_state IN ('UNAVAILABLE', 'UNSUPPORTED') THEN
+            IF measurement - 'state' <> '{}'::jsonb THEN
+                RETURN false;
+            END IF;
+        ELSE
+            RETURN false;
+        END IF;
+    END LOOP;
+
+    IF EXISTS (
+        SELECT 1
+          FROM (
+            SELECT item.value->>'id' AS id,
+                   lag(item.value->>'id') OVER (ORDER BY item.ordinality) AS previous_id
+              FROM jsonb_array_elements(resource_document->'instances')
+                   WITH ORDINALITY AS item(value, ordinality)
+          ) AS ordered
+         WHERE ordered.previous_id IS NOT NULL
+           AND ordered.id COLLATE "C" <= ordered.previous_id COLLATE "C"
+    ) THEN
+        RETURN false;
+    END IF;
+    RETURN true;
+EXCEPTION
+    WHEN OTHERS THEN
+        RETURN false;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.valid_deployment_resource_document(jsonb) FROM PUBLIC;
+
+CREATE TABLE IF NOT EXISTS paas.deployment_resource_snapshots (
+    tenant_id text COLLATE "C" NOT NULL,
+    deployment_id text COLLATE "C" NOT NULL,
+    deployment_generation bigint NOT NULL,
+    application_revision_id text COLLATE "C" NOT NULL,
+    execution_target_id text COLLATE "C" NOT NULL,
+    placement_decision_id text COLLATE "C" NOT NULL,
+    observed_at timestamptz(6) NOT NULL,
+    valid_until timestamptz(6) NOT NULL,
+    document jsonb NOT NULL,
+    PRIMARY KEY (tenant_id, deployment_id),
+    CONSTRAINT deployment_resource_snapshots_deployment_fk FOREIGN KEY (
+        tenant_id, deployment_id
+    ) REFERENCES paas.deployments (tenant_id, id),
+    CONSTRAINT deployment_resource_snapshots_generation_fk FOREIGN KEY (
+        tenant_id, deployment_id, deployment_generation
+    ) REFERENCES paas.deployment_generations (tenant_id, deployment_id, generation),
+    CONSTRAINT deployment_resource_snapshots_revision_fk FOREIGN KEY (
+        tenant_id, application_revision_id
+    ) REFERENCES paas.application_revisions (tenant_id, id),
+    CONSTRAINT deployment_resource_snapshots_target_fk FOREIGN KEY (execution_target_id)
+        REFERENCES paas.execution_targets (id),
+    CONSTRAINT deployment_resource_snapshots_values_valid CHECK (
+        deployment_generation BETWEEN 1 AND 9007199254740991
+        AND valid_until > observed_at
+        AND valid_until <= observed_at + interval '1 minute'
+    ),
+    CONSTRAINT deployment_resource_snapshots_document_valid CHECK (
+        paas.valid_deployment_resource_document(document)
+        AND document->>'deploymentId' = deployment_id
+        AND document->>'applicationRevisionId' = application_revision_id
+        AND document->>'executionTargetId' = execution_target_id
+        AND (document->>'observedAt')::timestamptz = observed_at
+        AND (document->>'generation')::numeric = deployment_generation
+    )
+);
+
 CREATE TABLE IF NOT EXISTS paas.placement_decisions (
     tenant_id text COLLATE "C" NOT NULL,
     id text COLLATE "C" NOT NULL,
@@ -1052,6 +1376,22 @@ BEGIN
 END
 $matrix_runtime_snapshot_decision_fk$;
 
+DO $matrix_resource_snapshot_decision_fk$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+          FROM pg_catalog.pg_constraint
+         WHERE conname = 'deployment_resource_snapshots_decision_fk'
+           AND connamespace = 'paas'::regnamespace
+    ) THEN
+        ALTER TABLE paas.deployment_resource_snapshots
+            ADD CONSTRAINT deployment_resource_snapshots_decision_fk
+            FOREIGN KEY (tenant_id, placement_decision_id)
+            REFERENCES paas.placement_decisions (tenant_id, id);
+    END IF;
+END
+$matrix_resource_snapshot_decision_fk$;
+
 CREATE TABLE IF NOT EXISTS paas.capacity_claims (
     id uuid NOT NULL DEFAULT gen_random_uuid(),
     execution_target_id text COLLATE "C" NOT NULL,
@@ -1165,6 +1505,8 @@ ALTER TABLE paas.deployment_observations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE paas.deployment_observations FORCE ROW LEVEL SECURITY;
 ALTER TABLE paas.deployment_runtime_snapshots ENABLE ROW LEVEL SECURITY;
 ALTER TABLE paas.deployment_runtime_snapshots FORCE ROW LEVEL SECURITY;
+ALTER TABLE paas.deployment_resource_snapshots ENABLE ROW LEVEL SECURITY;
+ALTER TABLE paas.deployment_resource_snapshots FORCE ROW LEVEL SECURITY;
 ALTER TABLE paas.placement_decisions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE paas.placement_decisions FORCE ROW LEVEL SECURITY;
 ALTER TABLE paas.capacity_reservations ENABLE ROW LEVEL SECURITY;
@@ -1186,6 +1528,7 @@ BEGIN
         'adapter_receipts',
         'deployment_observations',
         'deployment_runtime_snapshots',
+        'deployment_resource_snapshots',
         'placement_decisions',
         'capacity_reservations'
     ]
@@ -2510,6 +2853,190 @@ GRANT EXECUTE ON FUNCTION paas.store_deployment_runtime_snapshot(
     text, text, bigint, text, text, text, timestamptz, timestamptz, jsonb
 ) TO matrix_paas_worker;
 
+CREATE OR REPLACE FUNCTION paas.store_deployment_telemetry_snapshot(
+    requested_tenant_id text,
+    requested_deployment_id text,
+    requested_generation bigint,
+    requested_application_revision_id text,
+    requested_execution_target_id text,
+    requested_placement_decision_id text,
+    requested_runtime_observed_at timestamptz,
+    requested_runtime_valid_until timestamptz,
+    submitted_runtime_document jsonb,
+    requested_resource_observed_at timestamptz,
+    requested_resource_valid_until timestamptz,
+    submitted_resource_document jsonb
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    runtime_stored boolean;
+    current_runtime_observed_at timestamptz;
+    current_runtime_valid_until timestamptz;
+    current_runtime_placement_decision_id text;
+    current_runtime_document jsonb;
+    current_resource_observed_at timestamptz;
+    current_resource_valid_until timestamptz;
+    current_resource_placement_decision_id text;
+    current_resource_document jsonb;
+BEGIN
+    runtime_stored := paas.store_deployment_runtime_snapshot(
+        requested_tenant_id,
+        requested_deployment_id,
+        requested_generation,
+        requested_application_revision_id,
+        requested_execution_target_id,
+        requested_placement_decision_id,
+        requested_runtime_observed_at,
+        requested_runtime_valid_until,
+        submitted_runtime_document
+    );
+
+    IF requested_resource_observed_at IS NULL
+       OR requested_resource_valid_until IS NULL
+       OR requested_resource_observed_at > transaction_timestamp() + interval '2 seconds'
+       OR requested_resource_observed_at <= transaction_timestamp() - interval '1 minute'
+       OR requested_resource_valid_until <= requested_resource_observed_at
+       OR requested_resource_valid_until > requested_resource_observed_at + interval '1 minute'
+       OR submitted_resource_document IS NULL
+       OR NOT paas.valid_deployment_resource_document(submitted_resource_document)
+       OR submitted_resource_document->>'deploymentId'
+            IS DISTINCT FROM requested_deployment_id
+       OR submitted_resource_document->>'applicationRevisionId'
+            IS DISTINCT FROM requested_application_revision_id
+       OR submitted_resource_document->>'executionTargetId'
+            IS DISTINCT FROM requested_execution_target_id
+       OR submitted_resource_document->>'generation'
+            IS DISTINCT FROM requested_generation::text
+       OR (submitted_resource_document->>'observedAt')::timestamptz
+            IS DISTINCT FROM requested_resource_observed_at THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'Deployment resource snapshot is invalid';
+    END IF;
+
+    IF jsonb_array_length(submitted_runtime_document->'instances') <>
+            jsonb_array_length(submitted_resource_document->'instances')
+       OR EXISTS (
+            (SELECT runtime.value->>'id'
+               FROM jsonb_array_elements(submitted_runtime_document->'instances') AS runtime(value))
+            EXCEPT
+            (SELECT resource.value->>'id'
+               FROM jsonb_array_elements(submitted_resource_document->'instances') AS resource(value))
+       )
+       OR EXISTS (
+            (SELECT resource.value->>'id'
+               FROM jsonb_array_elements(submitted_resource_document->'instances') AS resource(value))
+            EXCEPT
+            (SELECT runtime.value->>'id'
+               FROM jsonb_array_elements(submitted_runtime_document->'instances') AS runtime(value))
+       ) THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'Deployment telemetry instances do not match';
+    END IF;
+
+    IF NOT runtime_stored THEN
+        SELECT snapshot.observed_at,
+               snapshot.valid_until,
+               snapshot.placement_decision_id,
+               snapshot.document
+          INTO current_runtime_observed_at,
+               current_runtime_valid_until,
+               current_runtime_placement_decision_id,
+               current_runtime_document
+          FROM paas.deployment_runtime_snapshots AS snapshot
+         WHERE snapshot.tenant_id = requested_tenant_id
+           AND snapshot.deployment_id = requested_deployment_id;
+        IF NOT FOUND
+           OR current_runtime_observed_at <> requested_runtime_observed_at
+           OR current_runtime_valid_until <> requested_runtime_valid_until
+           OR current_runtime_placement_decision_id <> requested_placement_decision_id
+           OR current_runtime_document <> submitted_runtime_document THEN
+            RETURN false;
+        END IF;
+    END IF;
+
+    SELECT snapshot.observed_at,
+           snapshot.valid_until,
+           snapshot.placement_decision_id,
+           snapshot.document
+      INTO current_resource_observed_at,
+           current_resource_valid_until,
+           current_resource_placement_decision_id,
+           current_resource_document
+      FROM paas.deployment_resource_snapshots AS snapshot
+     WHERE snapshot.tenant_id = requested_tenant_id
+       AND snapshot.deployment_id = requested_deployment_id
+     FOR UPDATE;
+    IF FOUND THEN
+        IF requested_resource_observed_at < current_resource_observed_at THEN
+            RAISE EXCEPTION USING
+                ERRCODE = 'MX409',
+                MESSAGE = 'Deployment resource observation is older than current proof';
+        END IF;
+        IF requested_resource_observed_at = current_resource_observed_at THEN
+            IF requested_placement_decision_id = current_resource_placement_decision_id
+               AND requested_resource_valid_until = current_resource_valid_until
+               AND submitted_resource_document = current_resource_document THEN
+                RETURN runtime_stored;
+            END IF;
+            RAISE EXCEPTION USING
+                ERRCODE = 'MX409',
+                MESSAGE = 'Deployment resource observation conflicts';
+        END IF;
+        UPDATE paas.deployment_resource_snapshots
+           SET deployment_generation = requested_generation,
+               application_revision_id = requested_application_revision_id,
+               execution_target_id = requested_execution_target_id,
+               placement_decision_id = requested_placement_decision_id,
+               observed_at = requested_resource_observed_at,
+               valid_until = requested_resource_valid_until,
+               document = submitted_resource_document
+         WHERE tenant_id = requested_tenant_id
+           AND deployment_id = requested_deployment_id;
+        RETURN true;
+    END IF;
+
+    INSERT INTO paas.deployment_resource_snapshots (
+        tenant_id,
+        deployment_id,
+        deployment_generation,
+        application_revision_id,
+        execution_target_id,
+        placement_decision_id,
+        observed_at,
+        valid_until,
+        document
+    ) VALUES (
+        requested_tenant_id,
+        requested_deployment_id,
+        requested_generation,
+        requested_application_revision_id,
+        requested_execution_target_id,
+        requested_placement_decision_id,
+        requested_resource_observed_at,
+        requested_resource_valid_until,
+        submitted_resource_document
+    );
+    RETURN true;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.store_deployment_telemetry_snapshot(
+    text, text, bigint, text, text, text,
+    timestamptz, timestamptz, jsonb,
+    timestamptz, timestamptz, jsonb
+) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paas.store_deployment_telemetry_snapshot(
+    text, text, bigint, text, text, text,
+    timestamptz, timestamptz, jsonb,
+    timestamptz, timestamptz, jsonb
+) TO matrix_paas_worker;
+
 CREATE OR REPLACE FUNCTION paas.readiness()
 RETURNS TABLE (ready boolean, schema_version bigint, checked_at timestamptz)
 LANGUAGE sql
@@ -2522,12 +3049,15 @@ AS $function$
         AND to_regclass('paas.operations') IS NOT NULL
         AND to_regclass('paas.audit_outbox') IS NOT NULL
         AND to_regclass('paas.deployment_runtime_snapshots') IS NOT NULL
+        AND to_regclass('paas.deployment_resource_snapshots') IS NOT NULL
         AND to_regprocedure('paas.current_installation_id()') IS NOT NULL
         AND to_regprocedure('paas.complete_audit_event(text,text,text,text,bigint,text,timestamptz,text)') IS NOT NULL
         AND to_regprocedure('paas.admit_execution_resource(jsonb,jsonb,jsonb,text,text,bigint,jsonb)') IS NOT NULL
         AND to_regprocedure('paas.refresh_execution_target(bigint,jsonb,bigint,jsonb)') IS NOT NULL
         AND to_regprocedure('paas.next_deployment_runtime_candidate(text,text)') IS NOT NULL
         AND to_regprocedure('paas.store_deployment_runtime_snapshot(text,text,bigint,text,text,text,timestamp with time zone,timestamp with time zone,jsonb)') IS NOT NULL
+        AND to_regprocedure('paas.valid_deployment_resource_document(jsonb)') IS NOT NULL
+        AND to_regprocedure('paas.store_deployment_telemetry_snapshot(text,text,bigint,text,text,text,timestamp with time zone,timestamp with time zone,jsonb,timestamp with time zone,timestamp with time zone,jsonb)') IS NOT NULL
         AND NOT EXISTS (
             SELECT 1
               FROM paas.audit_outbox AS outbox
@@ -2553,6 +3083,7 @@ AS $function$
         AND to_regclass('paas.execution_targets') IS NOT NULL
         AND to_regclass('paas.adapter_commands') IS NOT NULL
         AND to_regclass('paas.deployment_runtime_snapshots') IS NOT NULL
+        AND to_regclass('paas.deployment_resource_snapshots') IS NOT NULL
         AND to_regprocedure('paas.current_installation_id()') IS NOT NULL
         AND to_regprocedure('paas.claim_operation(text,integer)') IS NOT NULL
         AND to_regprocedure(
@@ -2563,6 +3094,8 @@ AS $function$
         ) IS NOT NULL
         AND to_regprocedure('paas.next_deployment_runtime_candidate(text,text)') IS NOT NULL
         AND to_regprocedure('paas.store_deployment_runtime_snapshot(text,text,bigint,text,text,text,timestamp with time zone,timestamp with time zone,jsonb)') IS NOT NULL
+        AND to_regprocedure('paas.valid_deployment_resource_document(jsonb)') IS NOT NULL
+        AND to_regprocedure('paas.store_deployment_telemetry_snapshot(text,text,bigint,text,text,text,timestamp with time zone,timestamp with time zone,jsonb,timestamp with time zone,timestamp with time zone,jsonb)') IS NOT NULL
         AND to_regprocedure(
             'paas.reconcile_local_execution_profile(bigint,jsonb,bigint,jsonb,bigint,jsonb)'
         ) IS NULL,
@@ -4414,6 +4947,7 @@ GRANT SELECT ON paas.application_revisions TO matrix_paas_api;
 GRANT SELECT ON paas.placement_policies TO matrix_paas_api;
 GRANT SELECT ON paas.deployments TO matrix_paas_api;
 GRANT SELECT ON paas.deployment_runtime_snapshots TO matrix_paas_api;
+GRANT SELECT ON paas.deployment_resource_snapshots TO matrix_paas_api;
 GRANT SELECT ON paas.deployment_generations TO matrix_paas_api;
 GRANT SELECT ON paas.operations TO matrix_paas_api;
 GRANT SELECT ON paas.execution_pools TO matrix_paas_api;

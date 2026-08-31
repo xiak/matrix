@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -63,8 +64,7 @@ func assertDeploymentRuntimeProjection(
 		ctx,
 		fixture.tenantA,
 		candidate.PlacementDecisionID,
-		observation,
-		databaseNow.Add(-5*time.Second),
+		deploymentTelemetrySnapshot(observation, databaseNow.Add(-5*time.Second)),
 	)
 	if err != nil || !stored {
 		t.Fatalf("store stale Deployment runtime proof: stored=%v err=%v", stored, err)
@@ -93,7 +93,10 @@ func assertDeploymentRuntimeProjection(
 	)
 	if err != nil || snapshot.State != paasv1.MeasurementStale ||
 		snapshot.Value == nil ||
-		!snapshot.Value.Observation.ObservedAt.Equal(observation.ObservedAt) {
+		!snapshot.Value.Observation.ObservedAt.Equal(observation.ObservedAt) ||
+		snapshot.Resources.State != paasv1.MeasurementStale ||
+		snapshot.Resources.Value == nil ||
+		!snapshot.Resources.Value.Observation.ObservedAt.Equal(observation.ObservedAt) {
 		t.Fatalf("stale Deployment runtime snapshot=%#v err=%v", snapshot, err)
 	}
 
@@ -102,8 +105,7 @@ func assertDeploymentRuntimeProjection(
 		ctx,
 		fixture.tenantA,
 		candidate.PlacementDecisionID,
-		observation,
-		databaseNow.Add(15*time.Second),
+		deploymentTelemetrySnapshot(observation, databaseNow.Add(15*time.Second)),
 	)
 	if err != nil || !stored {
 		t.Fatalf("store fresh Deployment runtime proof: stored=%v err=%v", stored, err)
@@ -112,8 +114,7 @@ func assertDeploymentRuntimeProjection(
 		ctx,
 		fixture.tenantA,
 		candidate.PlacementDecisionID,
-		observation,
-		databaseNow.Add(15*time.Second),
+		deploymentTelemetrySnapshot(observation, databaseNow.Add(15*time.Second)),
 	)
 	if err != nil || stored {
 		t.Fatalf("replay Deployment runtime proof: stored=%v err=%v", stored, err)
@@ -126,8 +127,7 @@ func assertDeploymentRuntimeProjection(
 		ctx,
 		fixture.tenantA,
 		candidate.PlacementDecisionID,
-		changed,
-		databaseNow.Add(15*time.Second),
+		deploymentTelemetrySnapshot(changed, databaseNow.Add(15*time.Second)),
 	); err == nil {
 		t.Fatal("equal-timestamp variant Deployment runtime proof was accepted")
 	}
@@ -135,8 +135,7 @@ func assertDeploymentRuntimeProjection(
 		ctx,
 		fixture.tenantB,
 		candidate.PlacementDecisionID,
-		observation,
-		databaseNow.Add(15*time.Second),
+		deploymentTelemetrySnapshot(observation, databaseNow.Add(15*time.Second)),
 	); err == nil {
 		t.Fatal("cross-tenant Deployment runtime proof was accepted")
 	}
@@ -144,8 +143,7 @@ func assertDeploymentRuntimeProjection(
 		ctx,
 		fixture.tenantA,
 		"placement-decision-attacker",
-		observation,
-		databaseNow.Add(15*time.Second),
+		deploymentTelemetrySnapshot(observation, databaseNow.Add(15*time.Second)),
 	); !errors.Is(err, refreshdeploymentruntime.ErrSnapshotRejected) {
 		t.Fatalf("stale or substituted placement decision error = %v", err)
 	}
@@ -157,7 +155,12 @@ func assertDeploymentRuntimeProjection(
 	)
 	if err != nil || snapshot.State != paasv1.MeasurementAvailable ||
 		snapshot.Value == nil || len(snapshot.Value.Observation.Instances) != 1 ||
-		!snapshot.Value.Observation.ObservedAt.Equal(databaseNow) {
+		!snapshot.Value.Observation.ObservedAt.Equal(databaseNow) ||
+		snapshot.Resources.State != paasv1.MeasurementAvailable ||
+		snapshot.Resources.Value == nil ||
+		len(snapshot.Resources.Value.Observation.Instances) != 1 ||
+		snapshot.Resources.Value.Observation.Instances[0].ID !=
+			snapshot.Value.Observation.Instances[0].ID {
 		t.Fatalf("available Deployment runtime snapshot=%#v err=%v", snapshot, err)
 	}
 	otherTenant := authorization
@@ -197,12 +200,41 @@ func assertDeploymentRuntimeProjection(
 	); err == nil {
 		t.Fatal("PaaS API role executed worker-only runtime snapshot function")
 	}
+	telemetry := deploymentTelemetrySnapshot(observation, databaseNow.Add(15*time.Second))
+	if _, err := apiPool.Exec(
+		ctx,
+		`SELECT paas.store_deployment_telemetry_snapshot(
+			$1, $2, $3, $4, $5, $6,
+			$7, $8, $9::jsonb, $10, $11, $12::jsonb
+		)`,
+		fixture.tenantA,
+		observation.DeploymentID,
+		observation.Generation,
+		observation.ApplicationRevisionID,
+		observation.ExecutionTargetID,
+		candidate.PlacementDecisionID,
+		observation.ObservedAt,
+		telemetry.RuntimeValidUntil,
+		integrationJSON(t, observation),
+		telemetry.Resources.ObservedAt,
+		telemetry.ResourcesValidUntil,
+		integrationJSON(t, telemetry.Resources),
+	); err == nil {
+		t.Fatal("PaaS API role executed worker-only telemetry snapshot function")
+	}
 	if _, err := workerPool.Exec(
 		ctx,
 		`UPDATE paas.deployment_runtime_snapshots
 		    SET valid_until = valid_until + interval '1 second'`,
 	); err == nil {
 		t.Fatal("PaaS worker role directly mutated runtime snapshot table")
+	}
+	if _, err := workerPool.Exec(
+		ctx,
+		`UPDATE paas.deployment_resource_snapshots
+		    SET valid_until = valid_until + interval '1 second'`,
+	); err == nil {
+		t.Fatal("PaaS worker role directly mutated resource snapshot table")
 	}
 
 	malformedDocuments := []func(map[string]any){
@@ -250,6 +282,172 @@ func assertDeploymentRuntimeProjection(
 		); err == nil {
 			t.Fatalf("malformed Deployment runtime document %d was accepted", index)
 		}
+	}
+
+	malformedResourceDocuments := []func(map[string]any){
+		func(document map[string]any) { document["providerId"] = "docker-container-id" },
+		func(document map[string]any) {
+			instances := document["instances"].([]any)
+			instances[0].(map[string]any)["id"] = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+		},
+		func(document map[string]any) {
+			instances := document["instances"].([]any)
+			delete(instances[0].(map[string]any), "cpu")
+		},
+		func(document map[string]any) {
+			instances := document["instances"].([]any)
+			instances[0].(map[string]any)["cpu"] = map[string]any{"state": "AVAILABLE"}
+		},
+		func(document map[string]any) {
+			instances := document["instances"].([]any)
+			instances[0].(map[string]any)["memory"] = map[string]any{
+				"state": "AVAILABLE",
+				"value": map[string]any{"usedBytes": 2, "limitBytes": 1},
+			}
+		},
+		func(document map[string]any) {
+			instances := document["instances"].([]any)
+			instances[0].(map[string]any)["storage"] = map[string]any{
+				"state": "AVAILABLE",
+				"value": map[string]any{
+					"observedAt":         databaseNow,
+					"validUntil":         databaseNow.Add(30 * time.Second),
+					"writableLayerBytes": 1,
+					"imageTotalBytes":    10,
+					"imageSharedBytes":   4,
+					"imageUniqueBytes":   7,
+					"volumesState":       "UNSUPPORTED",
+				},
+			}
+		},
+		func(document map[string]any) {
+			instances := document["instances"].([]any)
+			instances[0].(map[string]any)["secret"] = "provider-volume-name"
+		},
+	}
+	for index, mutate := range malformedResourceDocuments {
+		encoded, err := json.Marshal(telemetry.Resources)
+		if err != nil {
+			t.Fatalf("encode Deployment resource fixture: %v", err)
+		}
+		var document map[string]any
+		if err := json.Unmarshal(encoded, &document); err != nil {
+			t.Fatalf("decode Deployment resource fixture: %v", err)
+		}
+		mutate(document)
+		if _, err := workerPool.Exec(
+			ctx,
+			`SELECT paas.store_deployment_telemetry_snapshot(
+				$1, $2, $3, $4, $5, $6,
+				$7, $8, $9::jsonb, $10, $11, $12::jsonb
+			)`,
+			fixture.tenantA,
+			observation.DeploymentID,
+			observation.Generation,
+			observation.ApplicationRevisionID,
+			observation.ExecutionTargetID,
+			candidate.PlacementDecisionID,
+			observation.ObservedAt,
+			telemetry.RuntimeValidUntil,
+			integrationJSON(t, observation),
+			telemetry.Resources.ObservedAt,
+			telemetry.ResourcesValidUntil,
+			integrationJSON(t, document),
+		); err == nil {
+			t.Fatalf("malformed Deployment resource document %d was accepted", index)
+		}
+	}
+
+	advancedRuntime := observation
+	advancedRuntime.Instances = append([]paasv1.DeploymentRuntimeInstance{}, observation.Instances...)
+	advancedRuntime.Instances[0].Health = paasv1.DeploymentInstanceHealthUnhealthy
+	advancedRuntime.ObservedAt = databaseNow.Add(time.Millisecond)
+	advancedTelemetry := deploymentTelemetrySnapshot(
+		advancedRuntime,
+		advancedRuntime.ObservedAt.Add(15*time.Second),
+	)
+	encoded, err := json.Marshal(advancedTelemetry.Resources)
+	if err != nil {
+		t.Fatalf("encode atomic Deployment resource fixture: %v", err)
+	}
+	var invalidAdvancedResource map[string]any
+	if err := json.Unmarshal(encoded, &invalidAdvancedResource); err != nil {
+		t.Fatalf("decode atomic Deployment resource fixture: %v", err)
+	}
+	invalidAdvancedResource["providerId"] = "must-roll-back-runtime-update"
+	if _, err := workerPool.Exec(
+		ctx,
+		`SELECT paas.store_deployment_telemetry_snapshot(
+			$1, $2, $3, $4, $5, $6,
+			$7, $8, $9::jsonb, $10, $11, $12::jsonb
+		)`,
+		fixture.tenantA,
+		advancedRuntime.DeploymentID,
+		advancedRuntime.Generation,
+		advancedRuntime.ApplicationRevisionID,
+		advancedRuntime.ExecutionTargetID,
+		candidate.PlacementDecisionID,
+		advancedRuntime.ObservedAt,
+		advancedTelemetry.RuntimeValidUntil,
+		integrationJSON(t, advancedRuntime),
+		advancedTelemetry.Resources.ObservedAt,
+		advancedTelemetry.ResourcesValidUntil,
+		integrationJSON(t, invalidAdvancedResource),
+	); err == nil {
+		t.Fatal("invalid resource proof committed an advanced runtime snapshot")
+	}
+	var retainedRuntimeAt, retainedResourceAt time.Time
+	var retainedHealth string
+	if err := admin.QueryRow(
+		ctx,
+		`SELECT runtime.observed_at,
+		        runtime.document#>>'{instances,0,health}',
+		        resources.observed_at
+		   FROM paas.deployment_runtime_snapshots AS runtime
+		   JOIN paas.deployment_resource_snapshots AS resources
+		     ON resources.tenant_id = runtime.tenant_id
+		    AND resources.deployment_id = runtime.deployment_id
+		  WHERE runtime.tenant_id = $1 AND runtime.deployment_id = $2`,
+		fixture.tenantA,
+		observation.DeploymentID,
+	).Scan(&retainedRuntimeAt, &retainedHealth, &retainedResourceAt); err != nil {
+		t.Fatalf("read atomically retained telemetry snapshot: %v", err)
+	}
+	if !databaseTime(retainedRuntimeAt).Equal(databaseNow) ||
+		!databaseTime(retainedResourceAt).Equal(databaseNow) ||
+		retainedHealth != string(paasv1.DeploymentInstanceHealthHealthy) {
+		t.Fatalf("invalid resource proof partially changed telemetry: runtime=%s resource=%s health=%s",
+			retainedRuntimeAt, retainedResourceAt, retainedHealth)
+	}
+}
+
+func deploymentTelemetrySnapshot(
+	runtime paasv1.DeploymentRuntimeObservation,
+	validUntil time.Time,
+) refreshdeploymentruntime.TelemetrySnapshot {
+	resources := paasv1.DeploymentResourceObservation{
+		DeploymentID:          runtime.DeploymentID,
+		Generation:            runtime.Generation,
+		ApplicationRevisionID: runtime.ApplicationRevisionID,
+		ExecutionTargetID:     runtime.ExecutionTargetID,
+		Instances:             make([]paasv1.DeploymentResourceInstance, len(runtime.Instances)),
+		ObservedAt:            runtime.ObservedAt,
+	}
+	for index, instance := range runtime.Instances {
+		resources.Instances[index] = paasv1.DeploymentResourceInstance{
+			ID:      instance.ID,
+			CPU:     paasv1.DeploymentInstanceCPUUsage{State: paasv1.MeasurementUnsupported},
+			Memory:  paasv1.DeploymentInstanceMemoryUsage{State: paasv1.MeasurementUnsupported},
+			Network: paasv1.DeploymentInstanceNetworkUsage{State: paasv1.MeasurementUnsupported},
+			BlockIO: paasv1.DeploymentInstanceBlockIOUsage{State: paasv1.MeasurementUnsupported},
+			Storage: paasv1.DeploymentInstanceStorageUsage{State: paasv1.MeasurementUnsupported},
+		}
+	}
+	return refreshdeploymentruntime.TelemetrySnapshot{
+		Runtime:             runtime,
+		RuntimeValidUntil:   validUntil,
+		Resources:           resources,
+		ResourcesValidUntil: validUntil,
 	}
 }
 

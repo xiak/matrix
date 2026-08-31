@@ -45,11 +45,47 @@ function listResponse(items = [deployment()], nextAfter?: string): Response {
 }
 
 function runtimeResponse(state: "AVAILABLE" | "STALE" | "UNAVAILABLE" = "AVAILABLE"): Response {
+  const resources = state === "UNAVAILABLE" ? { state: "UNAVAILABLE" } : {
+    state,
+    value: {
+      observation: {
+        deploymentId: "deployment-alpha",
+        generation: 2,
+        applicationRevisionId: "revision-alpha-v2",
+        executionTargetId: "node-a",
+        instances: [{
+          id: "instance-0123456789abcdef0123456789abcdef",
+          cpu: { state: "AVAILABLE", value: { windowMillis: 1000, usedCores: 0.25, limitCpuMillis: 500 } },
+          memory: { state: "AVAILABLE", value: { usedBytes: 268435456, limitBytes: 536870912 } },
+          network: { state: "AVAILABLE", value: {
+            receivedBytes: 1024, transmittedBytes: 2048,
+            receiveErrors: 0, transmitErrors: 1, receiveDrops: 2, transmitDrops: 3
+          } },
+          blockIo: { state: "AVAILABLE", value: {
+            readBytes: 4096, writeBytes: 8192, readOperations: 4, writeOperations: 8
+          } },
+          storage: { state: state === "STALE" ? "STALE" : "AVAILABLE", value: {
+            observedAt: "2026-08-30T08:00:45Z",
+            validUntil: "2026-08-30T08:01:15Z",
+            writableLayerBytes: 16384,
+            imageTotalBytes: 104857600,
+            imageSharedBytes: 52428800,
+            imageUniqueBytes: 52428800,
+            volumesState: "AVAILABLE",
+            volumes: { count: 2, bytes: 2097152, sharedCount: 1, sharedBytes: 1048576 }
+          } }
+        }],
+        observedAt: "2026-08-30T08:01:00Z"
+      },
+      validUntil: "2026-08-30T08:01:15Z"
+    }
+  };
   return new Response(JSON.stringify({
     apiVersion: "paas.matrix.xiak.com/v1",
     kind: "DeploymentRuntimeSnapshot",
     scope: { kind: "TENANT", tenantId },
     state,
+    resources,
     ...(state === "UNAVAILABLE" ? {} : {
       value: {
         observation: {
@@ -114,6 +150,17 @@ describe("httpDeploymentInventoryRepository", () => {
         observedAt: "2026-08-30T08:01:00Z",
         validUntil: "2026-08-30T08:01:15Z",
         instances: [{ id: "instance-0123456789abcdef0123456789abcdef", exitCode: null }]
+      },
+      resources: {
+        state: "STALE",
+        value: {
+          observedAt: "2026-08-30T08:01:00Z",
+          instances: [{
+            id: "instance-0123456789abcdef0123456789abcdef",
+            cpu: { state: "AVAILABLE", value: { usedCores: 0.25, limitCpuMillis: 500 } },
+            storage: { state: "STALE", value: { imageUniqueBytes: 52428800 } }
+          }]
+        }
       }
     });
     expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/paas/v1/deployments/deployment-alpha/runtime");
@@ -122,7 +169,12 @@ describe("httpDeploymentInventoryRepository", () => {
   it("accepts unavailable runtime only without a value", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(runtimeResponse("UNAVAILABLE")));
     await expect(httpDeploymentInventoryRepository.loadRuntime("session", tenantId, "deployment-alpha"))
-      .resolves.toEqual({ tenantId, state: "UNAVAILABLE", value: null });
+      .resolves.toEqual({
+        tenantId,
+        state: "UNAVAILABLE",
+        value: null,
+        resources: { state: "UNAVAILABLE", value: null }
+      });
   });
 
   it("fails closed on tenant mismatch, duplicate resources, or provider-native runtime fields", async () => {
@@ -175,5 +227,30 @@ describe("httpDeploymentInventoryRepository", () => {
       .rejects.toThrow("INVALID_DEPLOYMENT_RUNTIME_EXIT_CODE_RESPONSE");
     await expect(httpDeploymentInventoryRepository.loadRuntime("session", tenantId, "deployment-alpha"))
       .rejects.toThrow("INVALID_DEPLOYMENT_RUNTIME_OBSERVED_AT_RESPONSE");
+  });
+
+  it("fails closed on resource identity, provider fields, and impossible accounting", async () => {
+    const mismatched = JSON.parse(await runtimeResponse().text()) as {
+      resources: { value: { observation: { instances: Array<Record<string, unknown>> } } };
+    };
+    mismatched.resources.value.observation.instances[0]!.id =
+      "instance-fedcba9876543210fedcba9876543210";
+    const leaked = JSON.parse(await runtimeResponse().text()) as typeof mismatched;
+    leaked.resources.value.observation.instances[0]!.containerId = "raw-docker-id";
+    const impossible = JSON.parse(await runtimeResponse().text()) as typeof mismatched;
+    const instance = impossible.resources.value.observation.instances[0]!;
+    instance.memory = { state: "AVAILABLE", value: { usedBytes: 2, limitBytes: 1 } };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(mismatched), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(leaked), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(impossible), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(httpDeploymentInventoryRepository.loadRuntime("session", tenantId, "deployment-alpha"))
+      .rejects.toThrow("INVALID_DEPLOYMENT_RUNTIME_RESOURCE_IDENTITY_RESPONSE");
+    await expect(httpDeploymentInventoryRepository.loadRuntime("session", tenantId, "deployment-alpha"))
+      .rejects.toThrow("INVALID_DEPLOYMENT_RESOURCE_INSTANCE_RESPONSE");
+    await expect(httpDeploymentInventoryRepository.loadRuntime("session", tenantId, "deployment-alpha"))
+      .rejects.toThrow("INVALID_DEPLOYMENT_MEMORY_VALUE_RESPONSE");
   });
 });

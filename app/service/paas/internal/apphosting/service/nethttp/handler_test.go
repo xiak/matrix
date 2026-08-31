@@ -487,6 +487,7 @@ func TestHandlerReadsDeploymentRuntimeThroughExactDeploymentAuthorization(t *tes
 			},
 			ValidUntil: observedAt.Add(15 * time.Second),
 		},
+		Resources: paasv1.DeploymentResourceSnapshot{State: paasv1.MeasurementUnavailable},
 	}}
 	handler := mustHandler(t, authorizer, workflow)
 	request := httptest.NewRequest(http.MethodGet, "/v1/deployments/deployment-a/runtime", nil)

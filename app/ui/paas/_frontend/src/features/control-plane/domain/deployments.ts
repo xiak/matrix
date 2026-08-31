@@ -38,6 +38,12 @@ export type DeploymentInventory = {
 };
 
 export type DeploymentRuntimeState = "AVAILABLE" | "STALE" | "UNAVAILABLE";
+export type DeploymentMeasurementState =
+  | "AVAILABLE"
+  | "WARMING_UP"
+  | "STALE"
+  | "UNAVAILABLE"
+  | "UNSUPPORTED";
 export type DeploymentInstanceState =
   | "CREATED"
   | "RUNNING"
@@ -66,8 +72,66 @@ export type DeploymentRuntimeValue = {
   validUntil: string;
 };
 
+export type DeploymentMeasurement<T> = {
+  state: DeploymentMeasurementState;
+  value: T | null;
+};
+
+export type DeploymentResourceInstance = {
+  id: string;
+  cpu: DeploymentMeasurement<{
+    windowMillis: number;
+    usedCores: number;
+    limitCpuMillis: number;
+  }>;
+  memory: DeploymentMeasurement<{ usedBytes: number; limitBytes: number }>;
+  network: DeploymentMeasurement<{
+    receivedBytes: number;
+    transmittedBytes: number;
+    receiveErrors: number;
+    transmitErrors: number;
+    receiveDrops: number;
+    transmitDrops: number;
+  }>;
+  blockIo: DeploymentMeasurement<{
+    readBytes: number;
+    writeBytes: number;
+    readOperations: number;
+    writeOperations: number;
+  }>;
+  storage: DeploymentMeasurement<{
+    observedAt: string;
+    validUntil: string;
+    writableLayerBytes: number;
+    imageTotalBytes: number;
+    imageSharedBytes: number;
+    imageUniqueBytes: number;
+    volumesState: DeploymentMeasurementState;
+    volumes: {
+      count: number;
+      bytes: number;
+      sharedCount: number;
+      sharedBytes: number;
+    } | null;
+  }>;
+};
+
+export type DeploymentResourceSnapshot = {
+  state: DeploymentRuntimeState;
+  value: {
+    deploymentId: string;
+    generation: number;
+    applicationRevisionId: string;
+    executionTargetId: string;
+    instances: DeploymentResourceInstance[];
+    observedAt: string;
+    validUntil: string;
+  } | null;
+};
+
 export type DeploymentRuntimeSnapshot = {
   tenantId: string;
   state: DeploymentRuntimeState;
   value: DeploymentRuntimeValue | null;
+  resources: DeploymentResourceSnapshot;
 };

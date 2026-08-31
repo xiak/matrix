@@ -41,6 +41,13 @@ const scene: Extract<ConsoleContentScene, { kind: "deployments" }> = {
     executionTargetId: "node-a",
     observedAt: "2026年8月30日 16:01",
     validUntil: "2026年8月30日 16:01",
+    resources: {
+      state: "AVAILABLE",
+      stateLabel: "资源采样有效",
+      status: "success",
+      observedAt: "2026年8月30日 16:01",
+      validUntil: "2026年8月30日 16:01"
+    },
     instances: [{
       id: "instance-0123456789abcdef0123456789abcdef",
       componentName: "database",
@@ -49,7 +56,14 @@ const scene: Extract<ConsoleContentScene, { kind: "deployments" }> = {
       health: "HEALTHY",
       healthLabel: "健康",
       status: "success",
-      exitCode: "—"
+      exitCode: "—",
+      resources: {
+        cpu: { state: "AVAILABLE", stateLabel: "有效", status: "success", value: "0.25 核 / 上限 500m", detail: "1 秒采样窗口" },
+        memory: { state: "AVAILABLE", stateLabel: "有效", status: "success", value: "256 MiB / 512 MiB", detail: "已使用 50%" },
+        network: { state: "AVAILABLE", stateLabel: "有效", status: "success", value: "接收 1 KiB · 发送 2 KiB", detail: "错误 0 · 丢包 0" },
+        blockIo: { state: "AVAILABLE", stateLabel: "有效", status: "success", value: "读 4 KiB · 写 8 KiB", detail: "读操作 4 · 写操作 8" },
+        storage: { state: "STALE", stateLabel: "已过期", status: "warning", value: "可写层 16 KiB · 镜像独占 50 MiB", detail: "来源时间独立于快速采样" }
+      }
     }]
   }
 };
@@ -66,6 +80,9 @@ describe("ConsoleContentRenderer deployment inventory", () => {
     expect(select).toHaveBeenCalledWith("deployment-beta");
     expect(screen.getByRole("button", { name: /暂不可用/ }).hasAttribute("disabled")).toBe(true);
     expect(screen.container.textContent).toContain("受审计、限时、按部署授权");
+    expect(screen.getByLabelText("database 资源使用")).toBeTruthy();
+    expect(screen.container.textContent).toContain("0.25 核 / 上限 500m");
+    expect(screen.container.textContent).toContain("资源采样有效");
     expect(screen.container.textContent).not.toContain("docker.sock");
     expect(screen.container.textContent).not.toContain("containerId");
   });

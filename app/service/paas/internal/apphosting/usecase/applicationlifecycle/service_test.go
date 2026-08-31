@@ -360,6 +360,7 @@ func TestGetDeploymentRuntimeUsesAuthorizedTenantAndReturnsExactSourceProof(t *t
 			Observation: observation,
 			ValidUntil:  lifecycleTime.Add(10 * time.Second),
 		},
+		Resources: paasv1.DeploymentResourceSnapshot{State: paasv1.MeasurementUnavailable},
 	}
 	transaction.deploymentRuntimeFound = true
 	repository := &fakeLifecycleRepository{transaction: transaction}

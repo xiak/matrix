@@ -442,6 +442,155 @@ type DeploymentRuntimeObservation struct {
 	ObservedAt            time.Time                   `json:"observedAt"`
 }
 
+type DeploymentInstanceCPUUsage struct {
+	State MeasurementState                 `json:"state"`
+	Value *DeploymentInstanceCPUUsageValue `json:"value,omitempty"`
+}
+
+type DeploymentInstanceCPUUsageValue struct {
+	WindowMillis   int64   `json:"windowMillis"`
+	UsedCores      float64 `json:"usedCores"`
+	LimitCPUMillis int64   `json:"limitCpuMillis"`
+}
+
+type DeploymentInstanceMemoryUsage struct {
+	State MeasurementState                    `json:"state"`
+	Value *DeploymentInstanceMemoryUsageValue `json:"value,omitempty"`
+}
+
+type DeploymentInstanceMemoryUsageValue struct {
+	UsedBytes  int64 `json:"usedBytes"`
+	LimitBytes int64 `json:"limitBytes"`
+}
+
+type DeploymentInstanceNetworkUsage struct {
+	State MeasurementState                     `json:"state"`
+	Value *DeploymentInstanceNetworkUsageValue `json:"value,omitempty"`
+}
+
+type DeploymentInstanceNetworkUsageValue struct {
+	ReceivedBytes    int64 `json:"receivedBytes"`
+	TransmittedBytes int64 `json:"transmittedBytes"`
+	ReceiveErrors    int64 `json:"receiveErrors"`
+	TransmitErrors   int64 `json:"transmitErrors"`
+	ReceiveDrops     int64 `json:"receiveDrops"`
+	TransmitDrops    int64 `json:"transmitDrops"`
+}
+
+type DeploymentInstanceBlockIOUsage struct {
+	State MeasurementState                     `json:"state"`
+	Value *DeploymentInstanceBlockIOUsageValue `json:"value,omitempty"`
+}
+
+type DeploymentInstanceBlockIOUsageValue struct {
+	ReadBytes       int64 `json:"readBytes"`
+	WriteBytes      int64 `json:"writeBytes"`
+	ReadOperations  int64 `json:"readOperations"`
+	WriteOperations int64 `json:"writeOperations"`
+}
+
+type DeploymentInstanceVolumeUsage struct {
+	Count       uint32 `json:"count"`
+	Bytes       int64  `json:"bytes"`
+	SharedCount uint32 `json:"sharedCount"`
+	SharedBytes int64  `json:"sharedBytes"`
+}
+
+type DeploymentInstanceStorageUsage struct {
+	State MeasurementState                     `json:"state"`
+	Value *DeploymentInstanceStorageUsageValue `json:"value,omitempty"`
+}
+
+type DeploymentInstanceStorageUsageValue struct {
+	ObservedAt         time.Time                      `json:"observedAt"`
+	ValidUntil         time.Time                      `json:"validUntil"`
+	WritableLayerBytes int64                          `json:"writableLayerBytes"`
+	ImageTotalBytes    int64                          `json:"imageTotalBytes"`
+	ImageSharedBytes   int64                          `json:"imageSharedBytes"`
+	ImageUniqueBytes   int64                          `json:"imageUniqueBytes"`
+	VolumesState       MeasurementState               `json:"volumesState"`
+	Volumes            *DeploymentInstanceVolumeUsage `json:"volumes,omitempty"`
+}
+
+// DeploymentResourceInstance uses the same opaque identity as the lifecycle
+// observation. Provider identifiers and storage names never enter this model.
+type DeploymentResourceInstance struct {
+	ID      ResourceID                     `json:"id"`
+	CPU     DeploymentInstanceCPUUsage     `json:"cpu"`
+	Memory  DeploymentInstanceMemoryUsage  `json:"memory"`
+	Network DeploymentInstanceNetworkUsage `json:"network"`
+	BlockIO DeploymentInstanceBlockIOUsage `json:"blockIo"`
+	Storage DeploymentInstanceStorageUsage `json:"storage"`
+}
+
+// DeploymentResourceObservation is persisted separately from the immutable
+// lifecycle observation so each proof can retain its own validity and rollback
+// boundary.
+type DeploymentResourceObservation struct {
+	DeploymentID          ResourceID                   `json:"deploymentId"`
+	Generation            uint64                       `json:"generation"`
+	ApplicationRevisionID ResourceID                   `json:"applicationRevisionId"`
+	ExecutionTargetID     ResourceID                   `json:"executionTargetId"`
+	Instances             []DeploymentResourceInstance `json:"instances"`
+	ObservedAt            time.Time                    `json:"observedAt"`
+}
+
+type DeploymentResourceValue struct {
+	Observation DeploymentResourceObservation `json:"observation"`
+	ValidUntil  time.Time                     `json:"validUntil"`
+}
+
+// DeploymentResourceSnapshot is joined by the control plane after loading the
+// lifecycle snapshot. UNAVAILABLE contains no fabricated zero values.
+type DeploymentResourceSnapshot struct {
+	State MeasurementState         `json:"state"`
+	Value *DeploymentResourceValue `json:"value,omitempty"`
+}
+
+func (snapshot DeploymentResourceSnapshot) Snapshot(now time.Time) DeploymentResourceSnapshot {
+	if snapshot.Value == nil {
+		return snapshot
+	}
+	value := *snapshot.Value
+	value.Observation.Instances = slices.Clone(value.Observation.Instances)
+	for index := range value.Observation.Instances {
+		instance := &value.Observation.Instances[index]
+		if instance.CPU.Value != nil {
+			copy := *instance.CPU.Value
+			instance.CPU.Value = &copy
+		}
+		if instance.Memory.Value != nil {
+			copy := *instance.Memory.Value
+			instance.Memory.Value = &copy
+		}
+		if instance.Network.Value != nil {
+			copy := *instance.Network.Value
+			instance.Network.Value = &copy
+		}
+		if instance.BlockIO.Value != nil {
+			copy := *instance.BlockIO.Value
+			instance.BlockIO.Value = &copy
+		}
+		if instance.Storage.Value != nil {
+			copy := *instance.Storage.Value
+			if copy.Volumes != nil {
+				volumes := *copy.Volumes
+				copy.Volumes = &volumes
+			}
+			if now.Before(copy.ObservedAt) || !now.Before(copy.ValidUntil) {
+				instance.Storage.State = MeasurementStale
+			}
+			instance.Storage.Value = &copy
+		}
+	}
+	snapshot.Value = &value
+	if snapshot.State == MeasurementAvailable &&
+		(now.Before(value.Observation.ObservedAt) || !now.Before(value.ValidUntil)) {
+		snapshot.State = MeasurementStale
+	}
+	return snapshot
+}
+
 // DeploymentRuntimeValue adds the control-plane freshness boundary to the
 // immutable node observation.
 type DeploymentRuntimeValue struct {
@@ -452,11 +601,12 @@ type DeploymentRuntimeValue struct {
 // DeploymentRuntimeSnapshot is the tenant read model. AVAILABLE and STALE
 // retain the exact source value; UNAVAILABLE has no value.
 type DeploymentRuntimeSnapshot struct {
-	APIVersion string                  `json:"apiVersion"`
-	Kind       string                  `json:"kind"`
-	Scope      ResourceScope           `json:"scope"`
-	State      MeasurementState        `json:"state"`
-	Value      *DeploymentRuntimeValue `json:"value,omitempty"`
+	APIVersion string                     `json:"apiVersion"`
+	Kind       string                     `json:"kind"`
+	Scope      ResourceScope              `json:"scope"`
+	State      MeasurementState           `json:"state"`
+	Value      *DeploymentRuntimeValue    `json:"value,omitempty"`
+	Resources  DeploymentResourceSnapshot `json:"resources"`
 }
 
 // Snapshot returns an independent value and projects expiry to STALE without
@@ -472,6 +622,7 @@ func (snapshot DeploymentRuntimeSnapshot) Snapshot(now time.Time) DeploymentRunt
 		(now.Before(value.Observation.ObservedAt) || !now.Before(value.ValidUntil)) {
 		snapshot.State = MeasurementStale
 	}
+	snapshot.Resources = snapshot.Resources.Snapshot(now)
 	return snapshot
 }
 

@@ -443,6 +443,12 @@ func structContracts() map[string]reflect.Type {
 		paasv1.ApplicationRevision{}, paasv1.CreateApplicationRevisionRequest{}, paasv1.DeploymentComponent{}, paasv1.DeploymentSpec{},
 		paasv1.DeploymentStatus{}, paasv1.Deployment{}, paasv1.CreateDeploymentRequest{}, paasv1.RollbackDeploymentRequest{},
 		paasv1.DeploymentList{}, paasv1.DeploymentRuntimeInstance{}, paasv1.DeploymentRuntimeObservation{},
+		paasv1.DeploymentInstanceCPUUsage{}, paasv1.DeploymentInstanceCPUUsageValue{},
+		paasv1.DeploymentInstanceMemoryUsage{}, paasv1.DeploymentInstanceMemoryUsageValue{},
+		paasv1.DeploymentInstanceNetworkUsage{}, paasv1.DeploymentInstanceNetworkUsageValue{},
+		paasv1.DeploymentInstanceBlockIOUsage{}, paasv1.DeploymentInstanceBlockIOUsageValue{},
+		paasv1.DeploymentInstanceVolumeUsage{}, paasv1.DeploymentInstanceStorageUsage{}, paasv1.DeploymentInstanceStorageUsageValue{},
+		paasv1.DeploymentResourceInstance{}, paasv1.DeploymentResourceObservation{}, paasv1.DeploymentResourceValue{}, paasv1.DeploymentResourceSnapshot{},
 		paasv1.DeploymentRuntimeValue{}, paasv1.DeploymentRuntimeSnapshot{},
 		paasv1.DeploymentGeneration{}, paasv1.SubjectRef{}, paasv1.ResourceRef{}, paasv1.FieldViolation{}, paasv1.Readiness{},
 		paasv1.VerifyInstallationRequest{}, paasv1.InstallationVerification{},
@@ -487,7 +493,7 @@ func structSchema(contract reflect.Type) schema {
 }
 
 func schemaForField(owner string, field reflect.StructField, jsonName string) schema {
-	if owner == "DeploymentRuntimeInstance" && field.Name == "ID" {
+	if (owner == "DeploymentRuntimeInstance" || owner == "DeploymentResourceInstance") && field.Name == "ID" {
 		return schema{"type": "string", "pattern": `^instance-[0-9a-f]{32}$`}
 	}
 	if field.Name == "BindingRef" {
@@ -597,7 +603,8 @@ func applySemanticOverlays(schemas map[string]any) {
 	}
 	object(schemas["DeploymentList"])["properties"].(schema)["items"].(schema)["maxItems"] = paasv1.MaximumDeploymentListItems
 	object(schemas["DeploymentRuntimeObservation"])["properties"].(schema)["instances"].(schema)["maxItems"] = paasv1.MaximumDeploymentRuntimeInstances
-	for _, name := range []string{"DeploymentRuntimeObservation", "ObserveDeploymentRuntimeRequest"} {
+	object(schemas["DeploymentResourceObservation"])["properties"].(schema)["instances"].(schema)["maxItems"] = paasv1.MaximumDeploymentRuntimeInstances
+	for _, name := range []string{"DeploymentRuntimeObservation", "DeploymentResourceObservation", "ObserveDeploymentRuntimeRequest"} {
 		object(schemas[name])["properties"].(schema)["generation"].(schema)["minimum"] = 1
 	}
 	object(schemas["DeploymentRuntimeSnapshot"])["properties"].(schema)["state"] = schema{
@@ -616,6 +623,75 @@ func applySemanticOverlays(schemas map[string]any) {
 		schema{
 			"if":   schema{"properties": schema{"state": schema{"enum": stringsOf(paasv1.MeasurementAvailable, paasv1.MeasurementStale)}}},
 			"then": schema{"required": []string{"value"}},
+		},
+	}
+	object(schemas["DeploymentResourceSnapshot"])["properties"].(schema)["state"] = schema{
+		"type": "string",
+		"enum": stringsOf(
+			paasv1.MeasurementAvailable,
+			paasv1.MeasurementStale,
+			paasv1.MeasurementUnavailable,
+		),
+	}
+	object(schemas["DeploymentResourceSnapshot"])["allOf"] = []any{
+		schema{
+			"if":   schema{"properties": schema{"state": schema{"const": string(paasv1.MeasurementUnavailable)}}, "required": []string{"state"}},
+			"then": schema{"properties": schema{"value": false}},
+		},
+		schema{
+			"if": schema{"properties": schema{"state": schema{
+				"enum": stringsOf(paasv1.MeasurementAvailable, paasv1.MeasurementStale),
+			}}, "required": []string{"state"}},
+			"then": schema{"required": []string{"value"}},
+		},
+	}
+	for _, name := range []string{
+		"DeploymentInstanceCPUUsage", "DeploymentInstanceMemoryUsage",
+		"DeploymentInstanceNetworkUsage", "DeploymentInstanceBlockIOUsage",
+		"DeploymentInstanceStorageUsage",
+	} {
+		states := stringsOf(
+			paasv1.MeasurementAvailable,
+			paasv1.MeasurementUnavailable,
+			paasv1.MeasurementUnsupported,
+		)
+		if name == "DeploymentInstanceCPUUsage" {
+			states = append(states, string(paasv1.MeasurementWarmingUp))
+		}
+		if name == "DeploymentInstanceStorageUsage" {
+			states = append(states, string(paasv1.MeasurementStale))
+		}
+		object(schemas[name])["properties"].(schema)["state"] = schema{"type": "string", "enum": states}
+		object(schemas[name])["allOf"] = []any{
+			schema{
+				"if": schema{"properties": schema{"state": schema{
+					"enum": stringsOf(paasv1.MeasurementAvailable, paasv1.MeasurementStale),
+				}}, "required": []string{"state"}},
+				"then": schema{"required": []string{"value"}},
+			},
+			schema{
+				"if": schema{"properties": schema{"state": schema{
+					"enum": stringsOf(paasv1.MeasurementUnavailable, paasv1.MeasurementUnsupported, paasv1.MeasurementWarmingUp),
+				}}, "required": []string{"state"}},
+				"then": schema{"properties": schema{"value": false}},
+			},
+		}
+	}
+	storage := object(schemas["DeploymentInstanceStorageUsageValue"])
+	storage["properties"].(schema)["volumesState"] = schema{
+		"type": "string",
+		"enum": stringsOf(paasv1.MeasurementAvailable, paasv1.MeasurementUnavailable, paasv1.MeasurementUnsupported),
+	}
+	storage["allOf"] = []any{
+		schema{
+			"if":   schema{"properties": schema{"volumesState": schema{"const": string(paasv1.MeasurementAvailable)}}, "required": []string{"volumesState"}},
+			"then": schema{"required": []string{"volumes"}},
+		},
+		schema{
+			"if": schema{"properties": schema{"volumesState": schema{
+				"enum": stringsOf(paasv1.MeasurementUnavailable, paasv1.MeasurementUnsupported),
+			}}, "required": []string{"volumesState"}},
+			"then": schema{"properties": schema{"volumes": false}},
 		},
 	}
 	object(schemas["DeploymentRuntimeInstance"])["allOf"] = []any{

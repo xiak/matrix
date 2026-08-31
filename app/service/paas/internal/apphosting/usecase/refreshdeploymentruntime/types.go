@@ -38,14 +38,20 @@ type Repository interface {
 		context.Context,
 		paasv1.TenantID,
 		paasv1.ResourceID,
-		paasv1.DeploymentRuntimeObservation,
-		time.Time,
+		TelemetrySnapshot,
 	) (bool, error)
+}
+
+type TelemetrySnapshot struct {
+	Runtime             paasv1.DeploymentRuntimeObservation
+	RuntimeValidUntil   time.Time
+	Resources           paasv1.DeploymentResourceObservation
+	ResourcesValidUntil time.Time
 }
 
 type Route struct {
 	ExecutionTargetID paasv1.ResourceID
-	Observer          port.DeploymentRuntimeObserver
+	Observer          port.DeploymentTelemetryObserver
 }
 
 type Config struct {
@@ -59,7 +65,7 @@ type Config struct {
 
 type Service struct {
 	repository Repository
-	routes     map[paasv1.ResourceID]port.DeploymentRuntimeObserver
+	routes     map[paasv1.ResourceID]port.DeploymentTelemetryObserver
 	config     Config
 	cursor     Cursor
 	nextDue    map[string]time.Time

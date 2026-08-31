@@ -32,7 +32,7 @@ func New(repository Repository, routes []Route, config Config) (*Service, error)
 		config.Clock = time.Now
 	}
 	bound := make(map[paasv1.ResourceID]struct{}, len(routes))
-	observers := make(map[paasv1.ResourceID]port.DeploymentRuntimeObserver, len(routes))
+	observers := make(map[paasv1.ResourceID]port.DeploymentTelemetryObserver, len(routes))
 	for _, route := range routes {
 		if paasv1.ValidateID("executionTargetId", string(route.ExecutionTargetID)) != nil ||
 			route.Observer == nil {
@@ -98,22 +98,32 @@ func (service *Service) ProcessNext(ctx context.Context) (bool, error) {
 		Deadline:              now.Add(service.config.ObservationTimeout),
 	}
 	observeContext, cancel := context.WithDeadline(ctx, request.Deadline)
-	observation, observeErr := observer.ObserveDeploymentRuntime(observeContext, request)
+	runtimeObservation, resourceObservation, observeErr :=
+		observer.ObserveDeploymentTelemetry(observeContext, request)
 	cancel()
 	if ctx.Err() != nil {
 		return false, ctx.Err()
 	}
-	if observeErr != nil || !validObservation(candidate, observation, now, service.config.MaximumObservationAge) {
+	if observeErr != nil || !validTelemetry(
+		candidate,
+		runtimeObservation,
+		resourceObservation,
+		now,
+		service.config.MaximumObservationAge,
+	) {
 		service.schedule(key, now.Add(service.config.FailureBackoff))
 		return true, nil
 	}
-	validUntil := observation.ObservedAt.Add(service.config.ValidityDuration)
 	if _, err := service.repository.Store(
 		ctx,
 		candidate.TenantID,
 		candidate.PlacementDecisionID,
-		observation,
-		validUntil,
+		TelemetrySnapshot{
+			Runtime:             runtimeObservation,
+			RuntimeValidUntil:   runtimeObservation.ObservedAt.Add(service.config.ValidityDuration),
+			Resources:           resourceObservation,
+			ResourcesValidUntil: resourceObservation.ObservedAt.Add(service.config.ValidityDuration),
+		},
 	); err != nil {
 		if errors.Is(err, ErrSnapshotRejected) {
 			// Placement or generation changed while the provider was observed. The
@@ -139,24 +149,45 @@ func validateCandidate(value Candidate) error {
 	return nil
 }
 
-func validObservation(
+func validTelemetry(
 	candidate Candidate,
-	value paasv1.DeploymentRuntimeObservation,
+	runtime paasv1.DeploymentRuntimeObservation,
+	resources paasv1.DeploymentResourceObservation,
 	now time.Time,
 	maximumAge time.Duration,
 ) bool {
-	return paasv1.ValidateDeploymentRuntimeObservation(value) == nil &&
-		value.DeploymentID == candidate.DeploymentID &&
-		value.Generation == candidate.Generation &&
-		value.ApplicationRevisionID == candidate.ApplicationRevisionID &&
-		value.ExecutionTargetID == candidate.ExecutionTargetID &&
-		!value.ObservedAt.After(now.Add(maximumFutureSkew)) &&
-		now.Before(value.ObservedAt.Add(maximumAge))
+	if paasv1.ValidateDeploymentRuntimeObservation(runtime) != nil ||
+		paasv1.ValidateDeploymentResourceObservation(resources) != nil ||
+		runtime.DeploymentID != candidate.DeploymentID ||
+		runtime.Generation != candidate.Generation ||
+		runtime.ApplicationRevisionID != candidate.ApplicationRevisionID ||
+		runtime.ExecutionTargetID != candidate.ExecutionTargetID ||
+		resources.DeploymentID != candidate.DeploymentID ||
+		resources.Generation != candidate.Generation ||
+		resources.ApplicationRevisionID != candidate.ApplicationRevisionID ||
+		resources.ExecutionTargetID != candidate.ExecutionTargetID ||
+		runtime.ObservedAt.After(now.Add(maximumFutureSkew)) ||
+		resources.ObservedAt.After(now.Add(maximumFutureSkew)) ||
+		!now.Before(runtime.ObservedAt.Add(maximumAge)) ||
+		!now.Before(resources.ObservedAt.Add(maximumAge)) ||
+		len(runtime.Instances) != len(resources.Instances) {
+		return false
+	}
+	instances := make(map[paasv1.ResourceID]struct{}, len(runtime.Instances))
+	for _, instance := range runtime.Instances {
+		instances[instance.ID] = struct{}{}
+	}
+	for _, instance := range resources.Instances {
+		if _, found := instances[instance.ID]; !found {
+			return false
+		}
+	}
+	return true
 }
 
 func runtimeRequestID(candidate Candidate, now time.Time) paasv1.CommandID {
 	digest := sha256.Sum256([]byte(
-		"matrix-deployment-runtime-request-v1\x00" + string(candidate.TenantID) + "\x00" +
+		"matrix-deployment-telemetry-request-v1\x00" + string(candidate.TenantID) + "\x00" +
 			string(candidate.DeploymentID) + "\x00" + strconv.FormatUint(candidate.Generation, 10) + "\x00" +
 			string(candidate.ApplicationRevisionID) + "\x00" + string(candidate.ExecutionTargetID) + "\x00" +
 			string(candidate.PlacementDecisionID) + "\x00" + candidate.ContentDigest + "\x00" +

@@ -140,6 +140,39 @@ const runtime: DeploymentRuntimeSnapshot = {
     }],
     observedAt: "2026-08-30T08:01:00Z",
     validUntil: "2026-08-30T08:01:15Z"
+  },
+  resources: {
+    state: "STALE",
+    value: {
+      deploymentId: "deployment-alpha",
+      generation: 2,
+      applicationRevisionId: "revision-alpha-v2",
+      executionTargetId: "node-a",
+      instances: [{
+        id: "instance-0123456789abcdef0123456789abcdef",
+        cpu: { state: "AVAILABLE", value: { windowMillis: 1000, usedCores: 0.25, limitCpuMillis: 500 } },
+        memory: { state: "AVAILABLE", value: { usedBytes: 268435456, limitBytes: 536870912 } },
+        network: { state: "AVAILABLE", value: {
+          receivedBytes: 1024, transmittedBytes: 2048,
+          receiveErrors: 0, transmitErrors: 0, receiveDrops: 0, transmitDrops: 0
+        } },
+        blockIo: { state: "AVAILABLE", value: {
+          readBytes: 4096, writeBytes: 8192, readOperations: 4, writeOperations: 8
+        } },
+        storage: { state: "STALE", value: {
+          observedAt: "2026-08-30T08:00:45Z",
+          validUntil: "2026-08-30T08:01:15Z",
+          writableLayerBytes: 16384,
+          imageTotalBytes: 104857600,
+          imageSharedBytes: 52428800,
+          imageUniqueBytes: 52428800,
+          volumesState: "AVAILABLE",
+          volumes: { count: 2, bytes: 2097152, sharedCount: 1, sharedBytes: 1048576 }
+        } }
+      }],
+      observedAt: "2026-08-30T08:01:00Z",
+      validUntil: "2026-08-30T08:01:15Z"
+    }
   }
 };
 
@@ -214,10 +247,19 @@ describe("buildConsoleScene", () => {
         state: "STALE",
         stateLabel: "采样已过期",
         executionTargetId: "node-a",
+        resources: {
+          state: "STALE",
+          stateLabel: "资源采样已过期"
+        },
         instances: [{
           id: "instance-0123456789abcdef0123456789abcdef",
           stateLabel: "运行中",
-          healthLabel: "健康"
+          healthLabel: "健康",
+          resources: {
+            cpu: { state: "AVAILABLE", value: "0.25 核 / 上限 500m" },
+            memory: { value: "256 MiB / 512 MiB" },
+            storage: { state: "STALE", value: "可写层 16 KiB · 镜像独占 50 MiB" }
+          }
         }]
       }
     });

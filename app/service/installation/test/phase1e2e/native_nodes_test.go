@@ -150,6 +150,48 @@ func TestNativeDeploymentRuntimeRequiresExactAdvancingProviderNeutralProof(t *te
 			},
 			ValidUntil: now.Add(15 * time.Second),
 		},
+		Resources: paasv1.DeploymentResourceSnapshot{
+			State: paasv1.MeasurementAvailable,
+			Value: &paasv1.DeploymentResourceValue{
+				Observation: paasv1.DeploymentResourceObservation{
+					DeploymentID:          deployment.Metadata.ID,
+					Generation:            deployment.Generation,
+					ApplicationRevisionID: deployment.Spec.ApplicationRevisionID,
+					ExecutionTargetID:     "target-a",
+					Instances: []paasv1.DeploymentResourceInstance{{
+						ID: "instance-0123456789abcdef0123456789abcdef",
+						CPU: paasv1.DeploymentInstanceCPUUsage{
+							State: paasv1.MeasurementAvailable,
+							Value: &paasv1.DeploymentInstanceCPUUsageValue{
+								WindowMillis: 1000, UsedCores: 0.1, LimitCPUMillis: 100,
+							},
+						},
+						Memory: paasv1.DeploymentInstanceMemoryUsage{
+							State: paasv1.MeasurementAvailable,
+							Value: &paasv1.DeploymentInstanceMemoryUsageValue{
+								UsedBytes: 8 << 20, LimitBytes: 32 << 20,
+							},
+						},
+						Network: paasv1.DeploymentInstanceNetworkUsage{
+							State: paasv1.MeasurementAvailable,
+							Value: &paasv1.DeploymentInstanceNetworkUsageValue{},
+						},
+						BlockIO: paasv1.DeploymentInstanceBlockIOUsage{State: paasv1.MeasurementUnsupported},
+						Storage: paasv1.DeploymentInstanceStorageUsage{
+							State: paasv1.MeasurementAvailable,
+							Value: &paasv1.DeploymentInstanceStorageUsageValue{
+								ObservedAt: now.Add(-10 * time.Second), ValidUntil: now.Add(80 * time.Second),
+								ImageTotalBytes: 10, ImageSharedBytes: 4, ImageUniqueBytes: 6,
+								VolumesState: paasv1.MeasurementAvailable,
+								Volumes:      &paasv1.DeploymentInstanceVolumeUsage{},
+							},
+						},
+					}},
+					ObservedAt: now,
+				},
+				ValidUntil: now.Add(15 * time.Second),
+			},
+		},
 	}
 	if !validNativeDeploymentRuntime(snapshot, deployment, "target-a", now.Add(-time.Second), now.Add(time.Second)) {
 		t.Fatal("exact advancing runtime proof rejected")
@@ -166,11 +208,21 @@ func TestNativeDeploymentRuntimeRequiresExactAdvancingProviderNeutralProof(t *te
 			value.Value.Observation.Instances[0].Health = paasv1.DeploymentInstanceHealthStarting
 		},
 		func(value *paasv1.DeploymentRuntimeSnapshot) { value.Value.ValidUntil = now },
+		func(value *paasv1.DeploymentRuntimeSnapshot) {
+			value.Resources.Value.Observation.ExecutionTargetID = "target-b"
+		},
+		func(value *paasv1.DeploymentRuntimeSnapshot) {
+			value.Resources.Value.Observation.ObservedAt = now.Add(-2 * time.Second)
+		},
+		func(value *paasv1.DeploymentRuntimeSnapshot) {
+			value.Resources.Value.Observation.Instances[0].CPU.State = paasv1.MeasurementUnsupported
+			value.Resources.Value.Observation.Instances[0].CPU.Value = nil
+		},
+		func(value *paasv1.DeploymentRuntimeSnapshot) {
+			value.Resources.Value.Observation.Instances[0].ID = "instance-fedcba9876543210fedcba9876543210"
+		},
 	} {
-		candidate := snapshot
-		value := *snapshot.Value
-		value.Observation.Instances = append([]paasv1.DeploymentRuntimeInstance(nil), snapshot.Value.Observation.Instances...)
-		candidate.Value = &value
+		candidate := snapshot.Snapshot(now)
 		change(&candidate)
 		if validNativeDeploymentRuntime(candidate, deployment, "target-a", now.Add(-time.Second), now.Add(time.Second)) {
 			t.Fatal("stale, unready or wrong-target runtime proof accepted")

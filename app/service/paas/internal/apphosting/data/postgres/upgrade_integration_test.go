@@ -37,7 +37,7 @@ import (
 
 const (
 	deploymentRuntimeCompatibilityDSN = "MATRIX_PAAS_RUNTIME_COMPAT_POSTGRES_TEST_DSN"
-	deploymentRuntimePredecessor      = "8c93736574e17462734eae7aa5beef68f266e55b"
+	deploymentRuntimePredecessor      = "6b8eeb237a7acd99d1518b4f2f0aac2c2b044767"
 	compatibilityAPILogin             = "matrix_paas_api_login"
 	compatibilityWorkerLogin          = "matrix_paas_worker_login"
 	compatibilityAPIPassword          = "mxp1.runtime-compat-api-000000000000000000000000"
@@ -303,7 +303,7 @@ func TestDeploymentRuntimeExactPredecessorCompatibility(t *testing.T) {
 		predecessorMigrationEnvironment,
 	)
 	if err := paasmigration.Verify(ctx, admin); err == nil {
-		t.Fatal("revision-5 migration verification accepted the unexpanded revision-4 schema")
+		t.Fatal("revision-6 migration verification accepted the unexpanded revision-5 schema")
 	}
 
 	apiPool, err := pgxpool.New(ctx, apiProcessDSN)
@@ -341,7 +341,7 @@ func TestDeploymentRuntimeExactPredecessorCompatibility(t *testing.T) {
 			apiMigrationDSN,
 			workerMigrationDSN,
 		); err != nil {
-			t.Fatalf("apply revision-5 expansion attempt %d: %v", attempt, err)
+			t.Fatalf("apply revision-6 expansion attempt %d: %v", attempt, err)
 		}
 	}
 	if err := paasmigration.VerifyInstalled(
@@ -350,7 +350,7 @@ func TestDeploymentRuntimeExactPredecessorCompatibility(t *testing.T) {
 		apiMigrationDSN,
 		workerMigrationDSN,
 	); err != nil {
-		t.Fatalf("verify revision-5 expansion: %v", err)
+		t.Fatalf("verify revision-6 expansion: %v", err)
 	}
 	if retainedAfter := compatibilityRetainedState(
 		t,
@@ -358,7 +358,7 @@ func TestDeploymentRuntimeExactPredecessorCompatibility(t *testing.T) {
 		admin,
 		fixture,
 	); retainedAfter != retainedBefore {
-		t.Fatal("revision-5 expansion rewrote predecessor tenant work")
+		t.Fatal("revision-6 expansion rewrote predecessor tenant work")
 	}
 	runtimeBefore := createCompatibilityRuntimeSnapshot(
 		t,
@@ -525,8 +525,8 @@ func buildFixedPaaSBinaries(
 		extension = ".exe"
 	}
 	result := fixedPaaSBinaries{
-		migration: filepath.Join(temporary, "matrix-paas-migrate-r4"+extension),
-		api:       filepath.Join(temporary, "matrix-paas-r4"+extension),
+		migration: filepath.Join(temporary, "matrix-paas-migrate-r5"+extension),
+		api:       filepath.Join(temporary, "matrix-paas-r5"+extension),
 	}
 	for _, build := range []struct {
 		output      string
@@ -802,8 +802,7 @@ func createCompatibilityRuntimeSnapshot(
 		ctx,
 		fixture.tenantA,
 		candidate.PlacementDecisionID,
-		observation,
-		observedAt.Add(15*time.Second),
+		deploymentTelemetrySnapshot(observation, observedAt.Add(15*time.Second)),
 	)
 	if err != nil || !stored {
 		t.Fatalf("store compatibility runtime snapshot: stored=%v err=%v", stored, err)
@@ -836,16 +835,34 @@ func compatibilityRuntimeState(
 	if err := admin.QueryRow(
 		ctx,
 		`SELECT jsonb_build_object(
-		    'generation', deployment_generation,
-		    'applicationRevisionId', application_revision_id,
-		    'executionTargetId', execution_target_id,
-		    'placementDecisionId', placement_decision_id,
-		    'observedAt', observed_at,
-		    'validUntil', valid_until,
-		    'document', document
+		    'runtime', (
+		        SELECT jsonb_build_object(
+		            'generation', deployment_generation,
+		            'applicationRevisionId', application_revision_id,
+		            'executionTargetId', execution_target_id,
+		            'placementDecisionId', placement_decision_id,
+		            'observedAt', observed_at,
+		            'validUntil', valid_until,
+		            'document', document
+		        )
+		        FROM paas.deployment_runtime_snapshots
+		        WHERE tenant_id=$1 AND deployment_id=$2
+		    ),
+		    'resources', (
+		        SELECT jsonb_build_object(
+		            'generation', deployment_generation,
+		            'applicationRevisionId', application_revision_id,
+		            'executionTargetId', execution_target_id,
+		            'placementDecisionId', placement_decision_id,
+		            'observedAt', observed_at,
+		            'validUntil', valid_until,
+		            'document', document
+		        )
+		        FROM paas.deployment_resource_snapshots
+		        WHERE tenant_id=$1 AND deployment_id=$2
+		    )
 		)::text
-		FROM paas.deployment_runtime_snapshots
-		WHERE tenant_id=$1 AND deployment_id=$2`,
+		`,
 		tenantID,
 		deploymentID,
 	).Scan(&state); err != nil {
@@ -885,6 +902,11 @@ func assertCompatibilityRuntimeReadable(
 	if err != nil || snapshot.State != paasv1.MeasurementAvailable ||
 		snapshot.Value == nil || len(snapshot.Value.Observation.Instances) != 1 ||
 		snapshot.Value.Observation.Instances[0].ID !=
+			"instance-fedcba9876543210fedcba9876543210" ||
+		snapshot.Resources.State != paasv1.MeasurementAvailable ||
+		snapshot.Resources.Value == nil ||
+		len(snapshot.Resources.Value.Observation.Instances) != 1 ||
+		snapshot.Resources.Value.Observation.Instances[0].ID !=
 			"instance-fedcba9876543210fedcba9876543210" {
 		t.Fatalf("read compatibility runtime snapshot=%#v err=%v", snapshot, err)
 	}
@@ -949,7 +971,7 @@ func assertFixedPaaSReady(
 		"MATRIX_PAAS_SERVICE_CREDENTIAL_FILE=" + credentialPath,
 		"MATRIX_PAAS_LISTEN_ADDRESS=" + address,
 		"MATRIX_PAAS_INSTALLATION_ID=installation-runtime-compat",
-		"MATRIX_PAAS_RELEASE_ID=matrix-v0.3.0-runtime-4",
+		"MATRIX_PAAS_RELEASE_ID=matrix-v0.3.0-runtime-5",
 		"MATRIX_PAAS_VERIFICATION_ARTIFACT_DIGEST=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		"MATRIX_PAAS_NODE_CONNECTIONS_FILE=",
 	})

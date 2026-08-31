@@ -64,11 +64,28 @@ func (deploymentService) ObserveDeploymentRuntime(
 	return paasv1.DeploymentRuntimeObservation{}, errors.New("unexpected Deployment runtime observation")
 }
 
+func (deploymentService) ObserveDeploymentTelemetry(
+	context.Context,
+	paasv1.ObserveDeploymentRuntimeRequest,
+) (
+	paasv1.DeploymentRuntimeObservation,
+	paasv1.DeploymentResourceObservation,
+	error,
+) {
+	return paasv1.DeploymentRuntimeObservation{}, paasv1.DeploymentResourceObservation{},
+		errors.New("unexpected Deployment telemetry observation")
+}
+
 type deploymentServiceFuncs struct {
-	ready   func(context.Context) error
-	execute func(context.Context, nodev1.DeploymentEffectRequest) (paasv1.AdapterResult, error)
-	observe func(context.Context, paasv1.ObserveDeploymentRequest) (paasv1.DeploymentObservation, error)
-	runtime func(context.Context, paasv1.ObserveDeploymentRuntimeRequest) (paasv1.DeploymentRuntimeObservation, error)
+	ready     func(context.Context) error
+	execute   func(context.Context, nodev1.DeploymentEffectRequest) (paasv1.AdapterResult, error)
+	observe   func(context.Context, paasv1.ObserveDeploymentRequest) (paasv1.DeploymentObservation, error)
+	runtime   func(context.Context, paasv1.ObserveDeploymentRuntimeRequest) (paasv1.DeploymentRuntimeObservation, error)
+	telemetry func(context.Context, paasv1.ObserveDeploymentRuntimeRequest) (
+		paasv1.DeploymentRuntimeObservation,
+		paasv1.DeploymentResourceObservation,
+		error,
+	)
 }
 
 func (service deploymentServiceFuncs) Ready(ctx context.Context) error {
@@ -100,6 +117,21 @@ func (service deploymentServiceFuncs) ObserveDeploymentRuntime(
 		return paasv1.DeploymentRuntimeObservation{}, errors.New("unexpected Deployment runtime observation")
 	}
 	return service.runtime(ctx, request)
+}
+
+func (service deploymentServiceFuncs) ObserveDeploymentTelemetry(
+	ctx context.Context,
+	request paasv1.ObserveDeploymentRuntimeRequest,
+) (
+	paasv1.DeploymentRuntimeObservation,
+	paasv1.DeploymentResourceObservation,
+	error,
+) {
+	if service.telemetry == nil {
+		return paasv1.DeploymentRuntimeObservation{}, paasv1.DeploymentResourceObservation{},
+			errors.New("unexpected Deployment telemetry observation")
+	}
+	return service.telemetry(ctx, request)
 }
 
 type deploymentArtifactResolver struct{}
@@ -207,7 +239,7 @@ func TestRealMTLSDeploymentBindsExactTargetMaterialsAndObservation(t *testing.T)
 	node := authority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false)
 	controller := authority.issue(t, controllerURI, x509.ExtKeyUsageClientAuth, false)
 	execution := deploymentExecutionFixture(t)
-	var effectCalls, observationCalls, runtimeCalls atomic.Int32
+	var effectCalls, observationCalls, runtimeCalls, telemetryCalls atomic.Int32
 	var receivedSecret string
 	var receivedSecretBytes []byte
 	service := deploymentServiceFuncs{
@@ -233,6 +265,14 @@ func TestRealMTLSDeploymentBindsExactTargetMaterialsAndObservation(t *testing.T)
 		runtime: func(_ context.Context, request paasv1.ObserveDeploymentRuntimeRequest) (paasv1.DeploymentRuntimeObservation, error) {
 			runtimeCalls.Add(1)
 			return deploymentRuntimeObservationFixture(request), nil
+		},
+		telemetry: func(_ context.Context, request paasv1.ObserveDeploymentRuntimeRequest) (
+			paasv1.DeploymentRuntimeObservation,
+			paasv1.DeploymentResourceObservation,
+			error,
+		) {
+			telemetryCalls.Add(1)
+			return deploymentRuntimeObservationFixture(request), deploymentResourceObservationFixture(request), nil
 		},
 	}
 	handler, err := New(sourceFunc(func(context.Context) (paasv1.ExecutionTargetObservation, error) {
@@ -263,6 +303,14 @@ func TestRealMTLSDeploymentBindsExactTargetMaterialsAndObservation(t *testing.T)
 		runtimeObservation.Instances[0].ID != "instance-0123456789abcdef0123456789abcdef" {
 		t.Fatalf("remote runtime observation failed: %#v, %v", runtimeObservation, err)
 	}
+	runtimeObservation, resources, err := client.ObserveDeploymentTelemetry(
+		context.Background(), deploymentRuntimeObserveRequest(execution),
+	)
+	if err != nil || len(runtimeObservation.Instances) != 1 || len(resources.Instances) != 1 ||
+		telemetryCalls.Load() != 1 || resources.Instances[0].CPU.State != paasv1.MeasurementAvailable ||
+		resources.Instances[0].ID != runtimeObservation.Instances[0].ID {
+		t.Fatalf("remote telemetry observation failed: %#v / %#v / %v", runtimeObservation, resources, err)
+	}
 
 	wrong := deploymentExecutionFixture(t)
 	wrong.Command.BindingRef = "binding-b"
@@ -278,6 +326,13 @@ func TestRealMTLSDeploymentBindsExactTargetMaterialsAndObservation(t *testing.T)
 	)
 	if !errors.As(err, &fault) || fault.Normalized.Class != paasv1.AdapterErrorPermissionDenied || runtimeCalls.Load() != 1 {
 		t.Fatalf("wrong binding reached the node runtime observation: %v", err)
+	}
+	_, _, err = wrongClient.ObserveDeploymentTelemetry(
+		context.Background(), deploymentRuntimeObserveRequest(execution),
+	)
+	if !errors.As(err, &fault) || fault.Normalized.Class != paasv1.AdapterErrorPermissionDenied ||
+		telemetryCalls.Load() != 1 {
+		t.Fatalf("wrong binding reached the node telemetry observation: %v", err)
 	}
 }
 
@@ -1079,6 +1134,31 @@ func deploymentRuntimeObservationFixture(
 			ComponentName: "web",
 			State:         paasv1.DeploymentInstanceRunning,
 			Health:        paasv1.DeploymentInstanceHealthHealthy,
+		}},
+		ObservedAt: time.Now().UTC().Truncate(time.Microsecond),
+	}
+}
+
+func deploymentResourceObservationFixture(
+	request paasv1.ObserveDeploymentRuntimeRequest,
+) paasv1.DeploymentResourceObservation {
+	return paasv1.DeploymentResourceObservation{
+		DeploymentID:          request.DeploymentID,
+		Generation:            request.Generation,
+		ApplicationRevisionID: request.ApplicationRevisionID,
+		ExecutionTargetID:     request.ExecutionTargetID,
+		Instances: []paasv1.DeploymentResourceInstance{{
+			ID: "instance-0123456789abcdef0123456789abcdef",
+			CPU: paasv1.DeploymentInstanceCPUUsage{
+				State: paasv1.MeasurementAvailable,
+				Value: &paasv1.DeploymentInstanceCPUUsageValue{
+					WindowMillis: 1000, UsedCores: 0.25, LimitCPUMillis: 500,
+				},
+			},
+			Memory:  paasv1.DeploymentInstanceMemoryUsage{State: paasv1.MeasurementUnsupported},
+			Network: paasv1.DeploymentInstanceNetworkUsage{State: paasv1.MeasurementUnsupported},
+			BlockIO: paasv1.DeploymentInstanceBlockIOUsage{State: paasv1.MeasurementUnsupported},
+			Storage: paasv1.DeploymentInstanceStorageUsage{State: paasv1.MeasurementUnsupported},
 		}},
 		ObservedAt: time.Now().UTC().Truncate(time.Microsecond),
 	}

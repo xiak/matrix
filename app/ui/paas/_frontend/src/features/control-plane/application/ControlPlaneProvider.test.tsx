@@ -114,7 +114,8 @@ function deploymentRuntime(deploymentId = "deployment-alpha", targetId = "node-a
       }],
       observedAt: "2026-08-30T08:00:00Z",
       validUntil: "2026-08-30T08:00:15Z"
-    }
+    },
+    resources: { state: "UNAVAILABLE", value: null }
   };
 }
 

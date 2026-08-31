@@ -106,7 +106,7 @@ jobs:
 
   node-process:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     env:
       NODE_EXPORTER_VERSION: '1.12.1'
       NODE_EXPORTER_SHA256: b51d8a76aa2a9156a55d501aca6276fae09e262259a5e4e831d2c2222f084e63
@@ -125,7 +125,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-          # The native gate uses the actual fixed runtime-4 predecessor. Older
+          # The native gate uses the actual fixed runtime-5 predecessor. Older
           # runtime contracts remain unsupported before effects.
           fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
@@ -138,6 +138,13 @@ jobs:
           sudo env -u DOCKER_CONTEXT DOCKER_HOST=unix:///var/run/docker.sock \
             timeout 30s docker info --format '{{.ServerVersion}}'
           sudo timeout 10s docker compose version --short
+      - name: Verify structured deployment telemetry against the real Docker Engine
+        env:
+          MATRIX_COMPOSE_E2E: '1'
+        run: |
+          GOMAXPROCS=2 timeout 150s go test -p 1 -count=1 -timeout=140s \
+            -run='^TestRealComposeExecutorOfflineVerticalSlice$' \
+            ./app/adapter/apphosting/compose
       - name: Fetch authenticated collector fixture
         run: |
           curl --fail --location --proto '=https' --tlsv1.3 --max-time 90 \
@@ -162,7 +169,7 @@ jobs:
       - name: Verify signed native startup, upgrade, rollback and interrupted replay
         run: |
           previous_node_source="$(mktemp -d "$RUNNER_TEMP/matrix-node-predecessor-XXXXXX")"
-          git worktree add --detach "$previous_node_source" c273fbfe2889a86e2827f92f88b811bf088d359c
+          git worktree add --detach "$previous_node_source" 6b8eeb237a7acd99d1518b4f2f0aac2c2b044767
           go run -p 2 ./deploy/cmd/matrix-release keygen --key-id node-ci \
             --private-key "$RUNNER_TEMP/node-release-private.json" --trust-key "$RUNNER_TEMP/node-release-trust.json"
           (
@@ -176,7 +183,7 @@ jobs:
           go run -p 2 ./deploy/cmd/matrix-release assemble --target node --repository "$GITHUB_WORKSPACE" \
             --collector-archive "$RUNNER_TEMP/node_exporter.tar.gz" --output "$RUNNER_TEMP/node-release-b" \
             --version v0.3.0-node.2 --build-id "ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-successor" \
-            --previous-id matrix-v0.3.0-node.1-c273fbfe2889 --previous-version v0.3.0-node.1 \
+            --previous-id matrix-v0.3.0-node.1-6b8eeb237a7a --previous-version v0.3.0-node.1 \
             --created-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --private-key "$RUNNER_TEMP/node-release-private.json" --trust-key "$RUNNER_TEMP/node-release-trust.json"
           node_gate_root="$(sudo mktemp -d /opt/matrix-node-ci-XXXXXX)"

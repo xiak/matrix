@@ -446,6 +446,9 @@ function DeploymentContent({
                 <div><dt>执行目标</dt><dd><Typography.Code>{scene.runtime.executionTargetId ?? "不可用"}</Typography.Code></dd></div>
                 <div><dt>来源观测</dt><dd>{scene.runtime.observedAt}</dd></div>
                 <div><dt>有效至</dt><dd>{scene.runtime.validUntil}</dd></div>
+                <div><dt>资源采样</dt><dd><Badge status={scene.runtime.resources.status}>{scene.runtime.resources.stateLabel}</Badge></dd></div>
+                <div><dt>资源来源</dt><dd>{scene.runtime.resources.observedAt}</dd></div>
+                <div><dt>资源有效至</dt><dd>{scene.runtime.resources.validUntil}</dd></div>
               </dl>
               {scene.runtime.instances.length === 0 ? (
                 <div className={styles.runtimeEmpty}>
@@ -456,15 +459,35 @@ function DeploymentContent({
                 <div aria-label="部署容器实例" className={styles.runtimeInstances}>
                   {scene.runtime.instances.map((instance) => (
                     <div className={styles.runtimeInstance} key={instance.id}>
-                      <div className={styles.runtimeInstanceIdentity}>
-                        <Container aria-hidden="true" />
-                        <span><strong>{instance.componentName}</strong><Typography.Code>{instance.id}</Typography.Code></span>
+                      <div className={styles.runtimeInstanceHeader}>
+                        <div className={styles.runtimeInstanceIdentity}>
+                          <Container aria-hidden="true" />
+                          <span><strong>{instance.componentName}</strong><Typography.Code>{instance.id}</Typography.Code></span>
+                        </div>
+                        <div className={styles.runtimeInstanceStatus}>
+                          <Badge status={instance.status}>{instance.stateLabel}</Badge>
+                          <span>{instance.healthLabel}</span>
+                          {instance.exitCode === "—" ? null : <span>退出码 {instance.exitCode}</span>}
+                        </div>
                       </div>
-                      <div className={styles.runtimeInstanceStatus}>
-                        <Badge status={instance.status}>{instance.stateLabel}</Badge>
-                        <span>{instance.healthLabel}</span>
-                        {instance.exitCode === "—" ? null : <span>退出码 {instance.exitCode}</span>}
-                      </div>
+                      {instance.resources ? (
+                        <dl aria-label={`${instance.componentName} 资源使用`} className={styles.runtimeResourceGrid}>
+                          {([
+                            ["CPU", instance.resources.cpu],
+                            ["内存", instance.resources.memory],
+                            ["网络累计", instance.resources.network],
+                            ["块设备累计", instance.resources.blockIo],
+                            ["存储", instance.resources.storage]
+                          ] as const).map(([label, measurement]) => (
+                            <div key={label}>
+                              <dt><span>{label}</span><Badge status={measurement.status}>{measurement.stateLabel}</Badge></dt>
+                              <dd><strong>{measurement.value}</strong><small>{measurement.detail}</small></dd>
+                            </div>
+                          ))}
+                        </dl>
+                      ) : (
+                        <p className={styles.runtimeResourceUnavailable}>该实例尚无可证明的资源采样。</p>
+                      )}
                     </div>
                   ))}
                 </div>

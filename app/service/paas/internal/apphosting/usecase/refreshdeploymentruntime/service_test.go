@@ -13,7 +13,7 @@ import (
 type runtimeRepository struct {
 	candidates []Candidate
 	cursors    []Cursor
-	stored     []paasv1.DeploymentRuntimeObservation
+	stored     []TelemetrySnapshot
 	storeErr   error
 }
 
@@ -31,8 +31,7 @@ func (repository *runtimeRepository) Store(
 	_ context.Context,
 	_ paasv1.TenantID,
 	_ paasv1.ResourceID,
-	observation paasv1.DeploymentRuntimeObservation,
-	_ time.Time,
+	observation TelemetrySnapshot,
 ) (bool, error) {
 	if repository.storeErr != nil {
 		return false, repository.storeErr
@@ -42,19 +41,24 @@ func (repository *runtimeRepository) Store(
 }
 
 type runtimeObserver struct {
-	value    paasv1.DeploymentRuntimeObservation
-	err      error
-	calls    int
-	requests []paasv1.ObserveDeploymentRuntimeRequest
+	value     paasv1.DeploymentRuntimeObservation
+	resources paasv1.DeploymentResourceObservation
+	err       error
+	calls     int
+	requests  []paasv1.ObserveDeploymentRuntimeRequest
 }
 
-func (observer *runtimeObserver) ObserveDeploymentRuntime(
+func (observer *runtimeObserver) ObserveDeploymentTelemetry(
 	_ context.Context,
 	request paasv1.ObserveDeploymentRuntimeRequest,
-) (paasv1.DeploymentRuntimeObservation, error) {
+) (
+	paasv1.DeploymentRuntimeObservation,
+	paasv1.DeploymentResourceObservation,
+	error,
+) {
 	observer.calls++
 	observer.requests = append(observer.requests, request)
-	return observer.value, observer.err
+	return observer.value, observer.resources, observer.err
 }
 
 func TestRuntimeRequestIdentityBindsTheExactPlacementAndScheduleIsBounded(t *testing.T) {
@@ -79,7 +83,9 @@ func TestRefreshStoresOnlyExactCurrentTargetObservation(t *testing.T) {
 	now := time.Date(2026, 8, 30, 1, 2, 3, 0, time.UTC)
 	candidate := runtimeCandidate()
 	repository := &runtimeRepository{candidates: []Candidate{candidate}}
-	observer := &runtimeObserver{value: runtimeObservation(candidate, now)}
+	observer := &runtimeObserver{
+		value: runtimeObservation(candidate, now), resources: resourceObservation(candidate, now),
+	}
 	service := newRuntimeService(t, repository, observer, now)
 	processed, err := service.ProcessNext(context.Background())
 	if err != nil || !processed || observer.calls != 1 || len(repository.stored) != 1 {
@@ -110,6 +116,7 @@ func TestRefreshRetainsProofAcrossProviderFailureAndSurfacesDatabaseFailure(t *t
 	service.nextDue = map[string]time.Time{}
 	observer.err = nil
 	observer.value = runtimeObservation(candidate, now)
+	observer.resources = resourceObservation(candidate, now)
 	repository.storeErr = ErrSnapshotRejected
 	if processed, err = service.ProcessNext(context.Background()); !processed || err != nil {
 		t.Fatalf("concurrent authority change stopped refresh: %t/%v", processed, err)
@@ -127,7 +134,9 @@ func TestNotYetDueCandidateAdvancesTheBoundedScanWithoutProviderWork(t *testing.
 	now := time.Date(2026, 8, 30, 1, 2, 3, 0, time.UTC)
 	candidate := runtimeCandidate()
 	repository := &runtimeRepository{candidates: []Candidate{candidate}}
-	observer := &runtimeObserver{value: runtimeObservation(candidate, now)}
+	observer := &runtimeObserver{
+		value: runtimeObservation(candidate, now), resources: resourceObservation(candidate, now),
+	}
 	service := newRuntimeService(t, repository, observer, now)
 	service.nextDue[string(candidate.TenantID)+"\x00"+string(candidate.DeploymentID)] = now.Add(time.Second)
 
@@ -187,6 +196,24 @@ func runtimeObservation(candidate Candidate, now time.Time) paasv1.DeploymentRun
 			ComponentName: "web",
 			State:         paasv1.DeploymentInstanceRunning,
 			Health:        paasv1.DeploymentInstanceHealthHealthy,
+		}},
+		ObservedAt: now,
+	}
+}
+
+func resourceObservation(candidate Candidate, now time.Time) paasv1.DeploymentResourceObservation {
+	return paasv1.DeploymentResourceObservation{
+		DeploymentID:          candidate.DeploymentID,
+		Generation:            candidate.Generation,
+		ApplicationRevisionID: candidate.ApplicationRevisionID,
+		ExecutionTargetID:     candidate.ExecutionTargetID,
+		Instances: []paasv1.DeploymentResourceInstance{{
+			ID:      "instance-0123456789abcdef0123456789abcdef",
+			CPU:     paasv1.DeploymentInstanceCPUUsage{State: paasv1.MeasurementUnsupported},
+			Memory:  paasv1.DeploymentInstanceMemoryUsage{State: paasv1.MeasurementUnsupported},
+			Network: paasv1.DeploymentInstanceNetworkUsage{State: paasv1.MeasurementUnsupported},
+			BlockIO: paasv1.DeploymentInstanceBlockIOUsage{State: paasv1.MeasurementUnsupported},
+			Storage: paasv1.DeploymentInstanceStorageUsage{State: paasv1.MeasurementUnsupported},
 		}},
 		ObservedAt: now,
 	}

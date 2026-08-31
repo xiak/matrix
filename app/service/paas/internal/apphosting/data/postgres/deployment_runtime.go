@@ -78,37 +78,52 @@ func (repository *DeploymentRuntimeRepository) Store(
 	ctx context.Context,
 	tenantID paasv1.TenantID,
 	placementDecisionID paasv1.ResourceID,
-	observation paasv1.DeploymentRuntimeObservation,
-	validUntil time.Time,
+	snapshot refreshdeploymentruntime.TelemetrySnapshot,
 ) (bool, error) {
 	if repository == nil || repository.pool == nil || ctx == nil {
 		return false, errors.New("Deployment runtime repository is unavailable")
 	}
 	if paasv1.ValidateID("tenantId", string(tenantID)) != nil ||
 		paasv1.ValidateID("placementDecisionId", string(placementDecisionID)) != nil ||
-		paasv1.ValidateDeploymentRuntimeObservation(observation) != nil ||
-		validUntil.Location() != time.UTC || !validUntil.After(observation.ObservedAt) {
-		return false, errors.New("Deployment runtime snapshot is invalid")
+		paasv1.ValidateDeploymentRuntimeObservation(snapshot.Runtime) != nil ||
+		paasv1.ValidateDeploymentResourceObservation(snapshot.Resources) != nil ||
+		snapshot.Runtime.DeploymentID != snapshot.Resources.DeploymentID ||
+		snapshot.Runtime.Generation != snapshot.Resources.Generation ||
+		snapshot.Runtime.ApplicationRevisionID != snapshot.Resources.ApplicationRevisionID ||
+		snapshot.Runtime.ExecutionTargetID != snapshot.Resources.ExecutionTargetID ||
+		snapshot.RuntimeValidUntil.Location() != time.UTC ||
+		!snapshot.RuntimeValidUntil.After(snapshot.Runtime.ObservedAt) ||
+		snapshot.ResourcesValidUntil.Location() != time.UTC ||
+		!snapshot.ResourcesValidUntil.After(snapshot.Resources.ObservedAt) {
+		return false, errors.New("Deployment telemetry snapshot is invalid")
 	}
-	document, err := json.Marshal(observation)
+	runtimeDocument, err := json.Marshal(snapshot.Runtime)
 	if err != nil {
 		return false, fmt.Errorf("encode Deployment runtime observation: %w", err)
+	}
+	resourceDocument, err := json.Marshal(snapshot.Resources)
+	if err != nil {
+		return false, fmt.Errorf("encode Deployment resource observation: %w", err)
 	}
 	var stored bool
 	err = repository.pool.QueryRow(
 		ctx,
-		`SELECT paas.store_deployment_runtime_snapshot(
-		    $1, $2, $3, $4, $5, $6, $7, $8, $9
+		`SELECT paas.store_deployment_telemetry_snapshot(
+		    $1, $2, $3, $4, $5, $6,
+		    $7, $8, $9, $10, $11, $12
 		)`,
 		string(tenantID),
-		string(observation.DeploymentID),
-		observation.Generation,
-		string(observation.ApplicationRevisionID),
-		string(observation.ExecutionTargetID),
+		string(snapshot.Runtime.DeploymentID),
+		snapshot.Runtime.Generation,
+		string(snapshot.Runtime.ApplicationRevisionID),
+		string(snapshot.Runtime.ExecutionTargetID),
 		string(placementDecisionID),
-		observation.ObservedAt,
-		validUntil,
-		document,
+		snapshot.Runtime.ObservedAt,
+		snapshot.RuntimeValidUntil,
+		runtimeDocument,
+		snapshot.Resources.ObservedAt,
+		snapshot.ResourcesValidUntil,
+		resourceDocument,
 	).Scan(&stored)
 	if err != nil {
 		var postgresError *pgconn.PgError
@@ -118,7 +133,7 @@ func (repository *DeploymentRuntimeRepository) Store(
 				refreshdeploymentruntime.ErrSnapshotRejected,
 			)
 		}
-		return false, fmt.Errorf("store Deployment runtime snapshot: %w", err)
+		return false, fmt.Errorf("store Deployment telemetry snapshot: %w", err)
 	}
 	return stored, nil
 }

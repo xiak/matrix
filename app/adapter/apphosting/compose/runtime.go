@@ -56,10 +56,12 @@ type Runtime interface {
 	Stop(context.Context, RuntimeProject) error
 }
 
-type LocalRuntime struct{}
+type LocalRuntime struct {
+	resources *dockerResourceCollector
+}
 
 func NewLocalRuntime() *LocalRuntime {
-	return &LocalRuntime{}
+	return &LocalRuntime{resources: newDockerResourceCollector()}
 }
 
 // Ready proves that both the local Docker Engine and the Compose plugin can

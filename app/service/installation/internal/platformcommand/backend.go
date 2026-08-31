@@ -153,7 +153,7 @@ func ValidateCredentialRecoveryProfile(profile release.DatabaseProfile) error {
 	if release.ValidateDatabaseUpgradePath(profile, release.CurrentDatabaseProfile()) != nil ||
 		profile.Authorities.IAM != 4 || profile.Authorities.Audit != 3 ||
 		profile.Authorities.PaaS != 2 ||
-		(profile.ContractRevision != 4 && profile.ContractRevision != 5) {
+		(profile.ContractRevision != 5 && profile.ContractRevision != 6) {
 		return ErrEffectPrecondition
 	}
 	return nil
