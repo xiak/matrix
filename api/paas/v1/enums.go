@@ -47,6 +47,7 @@ const (
 const (
 	ExecutionTargetActive   ExecutionTargetDesiredState = "ACTIVE"
 	ExecutionTargetDraining ExecutionTargetDesiredState = "DRAINING"
+	ExecutionTargetRemoved  ExecutionTargetDesiredState = "REMOVED"
 )
 
 type IsolationGuarantee string
@@ -209,6 +210,9 @@ type OperationAction string
 const (
 	OperationCreateExecutionPool         OperationAction = "CREATE_EXECUTION_POOL"
 	OperationRegisterExecutionTarget     OperationAction = "REGISTER_EXECUTION_TARGET"
+	OperationDrainExecutionTarget        OperationAction = "DRAIN_EXECUTION_TARGET"
+	OperationActivateExecutionTarget     OperationAction = "ACTIVATE_EXECUTION_TARGET"
+	OperationRemoveExecutionTarget       OperationAction = "REMOVE_EXECUTION_TARGET"
 	OperationCreatePlacement             OperationAction = "CREATE_PLACEMENT"
 	OperationCreateApplication           OperationAction = "CREATE_APPLICATION"
 	OperationCreateConfiguration         OperationAction = "CREATE_CONFIGURATION"
@@ -224,6 +228,9 @@ func OperationActions() []OperationAction {
 	return []OperationAction{
 		OperationCreateExecutionPool,
 		OperationRegisterExecutionTarget,
+		OperationDrainExecutionTarget,
+		OperationActivateExecutionTarget,
+		OperationRemoveExecutionTarget,
 		OperationCreatePlacement,
 		OperationCreateApplication,
 		OperationCreateConfiguration,

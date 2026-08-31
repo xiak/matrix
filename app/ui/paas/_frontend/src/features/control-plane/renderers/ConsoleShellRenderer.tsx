@@ -362,8 +362,10 @@ function ConsoleShell({ selection }: { selection: ControlPlaneRouteSelection }) 
                   <ConsoleContentRenderer
                     closeTerminal={controlPlane.closeTerminal}
                     connectTerminal={controlPlane.connectTerminal}
+                    hostMutation={controlPlane.mutation === "host"}
                     onOpenTerminal={controlPlane.openTerminal}
                     onSelectDeployment={controlPlane.selectDeployment}
+                    onTransitionHost={controlPlane.transitionHost}
                     scene={scene.content}
                     terminal={controlPlane.terminal}
                   />

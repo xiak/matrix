@@ -100,7 +100,7 @@ async function renderConsole({
     activateQuota: vi.fn(),
     createInstallation: vi.fn()
   };
-  const hostRepository: HostInventoryRepository = { load: hostLoad };
+  const hostRepository: HostInventoryRepository = { load: hostLoad, transition: vi.fn() };
   const iam: IamRepository = {
     async login() {
       return {

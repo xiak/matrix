@@ -12,6 +12,7 @@ import (
 type ExecutionWorkflow interface {
 	CreatePool(context.Context, executionadmission.CreatePoolCommand) (paasv1.ExecutionPool, paasv1.Operation, bool, error)
 	RegisterTarget(context.Context, executionadmission.RegisterTargetCommand) (paasv1.ExecutionTarget, paasv1.Operation, bool, error)
+	TransitionTarget(context.Context, executionadmission.TransitionTargetCommand) (executionadmission.TransitionTargetResult, error)
 	GetPool(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.ExecutionPool, error)
 	GetTarget(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.ExecutionTarget, error)
 	ListTargets(context.Context, port.Authorization) (paasv1.ExecutionTargetList, error)
@@ -60,6 +61,89 @@ func (value *handler) registerExecutionTarget(response http.ResponseWriter, requ
 	value.writeCreation(response, requestID, replayed, target.Metadata.ResourceVersion, "/v1/execution-targets/"+string(body.ID), operation, err)
 }
 
+func (value *handler) drainExecutionTarget(response http.ResponseWriter, request *http.Request) {
+	value.transitionExecutionTarget(
+		response,
+		request,
+		paasv1.OperationDrainExecutionTarget,
+		port.AuthorizeExecutionTargetDrain,
+	)
+}
+
+func (value *handler) activateExecutionTarget(response http.ResponseWriter, request *http.Request) {
+	value.transitionExecutionTarget(
+		response,
+		request,
+		paasv1.OperationActivateExecutionTarget,
+		port.AuthorizeExecutionTargetActivate,
+	)
+}
+
+func (value *handler) removeExecutionTarget(response http.ResponseWriter, request *http.Request) {
+	value.transitionExecutionTarget(
+		response,
+		request,
+		paasv1.OperationRemoveExecutionTarget,
+		port.AuthorizeExecutionTargetRemove,
+	)
+}
+
+func (value *handler) transitionExecutionTarget(
+	response http.ResponseWriter,
+	request *http.Request,
+	action paasv1.OperationAction,
+	authorizationAction string,
+) {
+	id, ok := pathResourceID(response, request, "executionTargetId")
+	if !ok {
+		return
+	}
+	requestID, ok := value.beginExecutionRequest(response, request, true)
+	if !ok {
+		return
+	}
+	if request.ContentLength != 0 || len(request.TransferEncoding) > 0 {
+		writeWorkflowError(response, requestID, executionadmission.ErrInvalidArgument)
+		return
+	}
+	expected, ok := parseIfMatch(response, request, requestID)
+	if !ok {
+		return
+	}
+	authorization, ok := value.authorizeRequest(
+		response,
+		request,
+		requestID,
+		authorizationAction,
+		"ExecutionTarget",
+		id,
+	)
+	if !ok {
+		return
+	}
+	result, err := value.execution.TransitionTarget(
+		request.Context(),
+		executionadmission.TransitionTargetCommand{
+			Authorization:           authorization,
+			TargetID:                id,
+			Action:                  action,
+			ExpectedResourceVersion: expected,
+			IdempotencyKey:          request.Header.Get("Idempotency-Key"),
+		},
+	)
+	if err != nil {
+		writeWorkflowError(response, requestID, err)
+		return
+	}
+	writeOperation(
+		response,
+		http.StatusOK,
+		"/v1/execution-targets/"+string(id),
+		result.Target.Metadata.ResourceVersion,
+		result.Operation,
+	)
+}
+
 func (value *handler) getExecutionPool(response http.ResponseWriter, request *http.Request) {
 	requestID, ok := value.beginExecutionRequest(response, request, false)
 	if !ok {
@@ -91,7 +175,11 @@ func (value *handler) getExecutionTarget(response http.ResponseWriter, request *
 		return
 	}
 	target, err := value.execution.GetTarget(request.Context(), authorization, id)
-	writeResource(response, requestID, target, "", err)
+	etag := ""
+	if err == nil {
+		etag = resourceVersionETag(target.Metadata.ResourceVersion)
+	}
+	writeResource(response, requestID, target, etag, err)
 }
 
 func (value *handler) listExecutionTargets(response http.ResponseWriter, request *http.Request) {

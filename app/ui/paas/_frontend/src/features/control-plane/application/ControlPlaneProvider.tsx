@@ -17,7 +17,7 @@ import type {
   ControlPlaneSnapshot,
   CreateInstallationCommand
 } from "../domain/resources";
-import type { HostInventory } from "../domain/hosts";
+import type { HostInventory, HostLifecycleCommand } from "../domain/hosts";
 import type { DeploymentInventory, DeploymentRuntimeSnapshot } from "../domain/deployments";
 import type { TerminalServerError, TerminalSession, TerminalSize } from "../domain/terminalSessions";
 import type { ControlPlaneRouteSelection } from "../domain/selection";
@@ -37,7 +37,7 @@ import {
 } from "../scenes/buildConsoleScene";
 import type { ConsoleScene } from "../scenes/consoleScene";
 
-type MutationKind = "quota" | "installation" | null;
+type MutationKind = "quota" | "installation" | "host" | null;
 
 export type TerminalConsolePhase = "IDLE" | "CREATING" | "CONNECTING" | "ACTIVE" | "ENDED" | "ERROR";
 
@@ -58,6 +58,7 @@ export type OpenTerminal = (
 export type ConnectTerminal = () => TerminalConnection | null;
 
 export type CloseTerminal = () => Promise<void>;
+export type TransitionHost = (command: HostLifecycleCommand) => Promise<boolean>;
 
 type ControlPlaneContextValue = {
   scene: ConsoleScene | null;
@@ -67,6 +68,7 @@ type ControlPlaneContextValue = {
   reload(): Promise<void>;
   activateQuota(command: ActivateQuotaCommand): Promise<boolean>;
   createInstallation(command: CreateInstallationCommand): Promise<boolean>;
+  transitionHost: TransitionHost;
   selectDeployment(deploymentId: string): void;
   terminal: TerminalConsoleState;
   openTerminal: OpenTerminal;
@@ -87,6 +89,7 @@ export const idleTerminalConsoleState: TerminalConsoleState = {
 const unsupportedOpenTerminal: OpenTerminal = async () => false;
 const unsupportedConnectTerminal: ConnectTerminal = () => null;
 const unsupportedCloseTerminal: CloseTerminal = async () => {};
+const unsupportedTransitionHost: TransitionHost = async () => false;
 
 function failureMessage(error: unknown, operation: "read" | "write" = "read"): string {
   if (error instanceof HttpProblem && error.status === 401) {
@@ -107,6 +110,26 @@ function hostFailureMessage(error: unknown): string {
     return "当前角色没有平台主机查看权限。";
   }
   return "主机观测暂时不可用；已有采样（如有）保持原时间，不会被续期。";
+}
+
+function hostMutationFailureMessage(error: unknown): string {
+  if (error instanceof HttpProblem && error.status === 401) {
+    return "IAM 会话已失效，请注销后重新登录。";
+  }
+  if (error instanceof HttpProblem && error.status === 403) {
+    return "当前角色无权变更平台主机生命周期。";
+  }
+  if (error instanceof HttpProblem && error.status === 412 ||
+      error instanceof Error && error.message === "STALE_HOST_LIFECYCLE_COMMAND") {
+    return "主机资源版本已变化，已保留服务端状态；请刷新后重试。";
+  }
+  if (error instanceof HttpProblem && error.status === 409) {
+    return "主机状态已变化，或仍有工作负载、容量、命令或终端占用；平台未执行部分移除。";
+  }
+  if (error instanceof HttpProblem && error.status === 404) {
+    return "主机登记已不存在，请刷新资源清单。";
+  }
+  return "主机生命周期操作未完成，平台未重启主机、Docker 或工作负载。";
 }
 
 function deploymentFailureMessage(error: unknown): string {
@@ -279,6 +302,7 @@ function ManagedControlPlaneProvider({
     reload,
     activateQuota,
     createInstallation,
+    transitionHost: unsupportedTransitionHost,
     selectDeployment: () => {},
     terminal: idleTerminalConsoleState,
     openTerminal: unsupportedOpenTerminal,
@@ -308,8 +332,11 @@ function HostInventoryProvider({
   const credential = useSessionCredential();
   const [inventory, setInventory] = useState<HostInventory | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [readError, setReadError] = useState<string | null>(null);
+  const [mutationError, setMutationError] = useState<string | null>(null);
+  const [hostMutation, setHostMutation] = useState<string | null>(null);
   const active = useRef(false);
+  const mutationActive = useRef(false);
   const epoch = useRef(0);
   const request = useRef<HostRequest | null>(null);
   const timer = useRef<number | null>(null);
@@ -333,14 +360,14 @@ function HostInventoryProvider({
         const loaded = await repository.load(credential, controller.signal);
         if (controller.signal.aborted || requestEpoch !== epoch.current) return false;
         setInventory(loaded);
-        setError(null);
+        setReadError(null);
         return true;
       } catch (loadError) {
         if (controller.signal.aborted || requestEpoch !== epoch.current) return false;
         const authorizationFailure = loadError instanceof HttpProblem &&
           (loadError.status === 401 || loadError.status === 403);
         if (authorizationFailure) setInventory(null);
-        setError(hostFailureMessage(loadError));
+        setReadError(hostFailureMessage(loadError));
         return !authorizationFailure;
       } finally {
         if (request.current === slot) request.current = null;
@@ -378,9 +405,44 @@ function HostInventoryProvider({
   }, [load, scheduleNext]);
 
   const reload = useCallback(async () => {
+    setMutationError(null);
     const continuePolling = await load();
     if (continuePolling) scheduleNext();
   }, [load, scheduleNext]);
+
+  const transitionHost = useCallback<TransitionHost>(async (command) => {
+    if (!credential || mutationActive.current ||
+        !inventory?.items.some((item) => item.id === command.targetId && item.resourceVersion === command.resourceVersion)) {
+      return false;
+    }
+    mutationActive.current = true;
+    setHostMutation(command.targetId);
+    setMutationError(null);
+    try {
+      const changed = await repository.transition(credential, command);
+      setInventory((current) => {
+        if (!current) return current;
+        const items = changed.desiredState === "REMOVED"
+          ? current.items.filter((item) => item.id !== changed.id)
+          : current.items.map((item) => item.id === changed.id ? changed : item);
+        return { items };
+      });
+      scheduleNext();
+      return true;
+    } catch (mutationFailure) {
+      const authorizationFailure = mutationFailure instanceof HttpProblem &&
+        (mutationFailure.status === 401 || mutationFailure.status === 403);
+      if (authorizationFailure) setInventory(null);
+      setMutationError(hostMutationFailureMessage(mutationFailure));
+      void load().then((continuePolling) => {
+        if (continuePolling) scheduleNext();
+      });
+      return false;
+    } finally {
+      mutationActive.current = false;
+      setHostMutation(null);
+    }
+  }, [credential, inventory, load, repository, scheduleNext]);
 
   const scene = useMemo(
     () => inventory ? buildHostConsoleScene(inventory) : null,
@@ -389,17 +451,18 @@ function HostInventoryProvider({
   const value = useMemo<ControlPlaneContextValue>(() => ({
     scene,
     loading,
-    error,
-    mutation: null,
+    error: mutationError ?? readError,
+    mutation: hostMutation === null ? null : "host",
     reload,
     activateQuota: async () => false,
     createInstallation: async () => false,
+    transitionHost,
     selectDeployment: () => {},
     terminal: idleTerminalConsoleState,
     openTerminal: unsupportedOpenTerminal,
     connectTerminal: unsupportedConnectTerminal,
     closeTerminal: unsupportedCloseTerminal
-  }), [error, loading, reload, scene]);
+  }), [hostMutation, loading, mutationError, readError, reload, scene, transitionHost]);
 
   return (
     <ControlPlaneContext.Provider value={value}>
@@ -749,6 +812,7 @@ function DeploymentInventoryProvider({
     reload,
     activateQuota: async () => false,
     createInstallation: async () => false,
+    transitionHost: unsupportedTransitionHost,
     selectDeployment,
     terminal,
     openTerminal,

@@ -15,12 +15,15 @@ import (
 const MaximumTargets = 128
 
 var (
-	ErrInvalidArgument      = errors.New("execution admission request is invalid")
-	ErrNotFound             = errors.New("execution admission resource not found")
-	ErrConflict             = errors.New("execution admission conflicts with stored authority")
-	ErrIdempotencyConflict  = errors.New("execution admission idempotency conflict")
-	ErrUnavailable          = errors.New("execution target observation is unavailable")
-	ErrRetryableTransaction = errors.New("execution admission transaction must be retried")
+	ErrInvalidArgument         = errors.New("execution admission request is invalid")
+	ErrNotFound                = errors.New("execution admission resource not found")
+	ErrConflict                = errors.New("execution admission conflicts with stored authority")
+	ErrIdempotencyConflict     = errors.New("execution admission idempotency conflict")
+	ErrResourceVersionConflict = errors.New("execution target resource version conflict")
+	ErrInvalidTransition       = errors.New("execution target lifecycle transition is invalid")
+	ErrTargetInUse             = errors.New("execution target still owns live or unresolved work")
+	ErrUnavailable             = errors.New("execution target observation is unavailable")
+	ErrRetryableTransaction    = errors.New("execution admission transaction must be retried")
 )
 
 type Binding struct {
@@ -51,6 +54,20 @@ type RegisterTargetCommand struct {
 	IdempotencyKey string
 }
 
+type TransitionTargetCommand struct {
+	Authorization           port.Authorization
+	TargetID                paasv1.ResourceID
+	Action                  paasv1.OperationAction
+	ExpectedResourceVersion uint64
+	IdempotencyKey          string
+}
+
+type TransitionTargetResult struct {
+	Target    paasv1.ExecutionTarget
+	Operation paasv1.Operation
+	Replayed  bool
+}
+
 // Registration is the persisted node identity attached to an ExecutionTarget,
 // not a second host resource. Refresh cannot change this accepted binding.
 type Registration struct {
@@ -76,6 +93,7 @@ type Transaction interface {
 	ListTargetResources(context.Context) ([]paasv1.ExecutionTarget, error)
 	CreatePool(context.Context, paasv1.ExecutionPool, Submission) error
 	RegisterTarget(context.Context, Registration, uint64, paasv1.ExecutionPool, Submission) error
+	TransitionTarget(context.Context, uint64, paasv1.ExecutionTarget, uint64, paasv1.ExecutionPool, Submission) error
 	RefreshTarget(context.Context, uint64, paasv1.ExecutionTarget, uint64, paasv1.ExecutionPool) error
 }
 

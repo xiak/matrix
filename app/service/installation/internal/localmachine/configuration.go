@@ -1,10 +1,7 @@
 package localmachine
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"path/filepath"
 	"slices"
@@ -476,49 +473,9 @@ func apisixStandaloneConfig() []byte {
 `)
 }
 
-const deploymentRuntimePredecessorAPISIXDigest = "sha256:ce24c10e6005b78ed68ff6101b66737ab746039e0eb161b302a99037057168da"
-
 func installedAPISIXStandaloneConfig(manifest release.Manifest) ([]byte, error) {
 	if err := topology.ValidateInstalledContract(manifest); err != nil {
 		return nil, err
 	}
-	current := apisixStandaloneConfig()
-	if manifest.TopologyDigest != topology.DeploymentRuntimePredecessorContractDigest() {
-		return current, nil
-	}
-	terminalRoute := []byte(`  -
-    id: matrix-paas-terminal
-    uri: /api/paas/v1/terminal-sessions/*
-    methods:
-      - GET
-    priority: 200
-    vars:
-      -
-        - uri
-        - "~~"
-        - "^/api/paas/v1/terminal-sessions/terminal-session-[0-9a-f]{32}/connect$"
-    enable_websocket: true
-    timeout:
-      connect: 5
-      send: 10
-      read: 130
-    plugins:
-      proxy-rewrite:
-        regex_uri:
-          - "^/api/paas/(.*)"
-          - "/$1"
-    upstream:
-      type: roundrobin
-      nodes:
-        "paas-api:8080": 1
-`)
-	if bytes.Count(current, terminalRoute) != 1 {
-		return nil, errors.New("platform predecessor APISIX route contract cannot be reconstructed")
-	}
-	predecessor := bytes.Replace(current, terminalRoute, nil, 1)
-	digest := sha256.Sum256(predecessor)
-	if "sha256:"+hex.EncodeToString(digest[:]) != deploymentRuntimePredecessorAPISIXDigest {
-		return nil, errors.New("platform predecessor APISIX route contract changed")
-	}
-	return predecessor, nil
+	return apisixStandaloneConfig(), nil
 }

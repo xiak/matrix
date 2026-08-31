@@ -2423,7 +2423,8 @@
       "ExecutionTargetDesiredState": {
         "enum": [
           "ACTIVE",
-          "DRAINING"
+          "DRAINING",
+          "REMOVED"
         ],
         "type": "string"
       },
@@ -3391,6 +3392,9 @@
         "enum": [
           "CREATE_EXECUTION_POOL",
           "REGISTER_EXECUTION_TARGET",
+          "DRAIN_EXECUTION_TARGET",
+          "ACTIVATE_EXECUTION_TARGET",
+          "REMOVE_EXECUTION_TARGET",
           "CREATE_PLACEMENT",
           "CREATE_APPLICATION",
           "CREATE_CONFIGURATION",
@@ -5761,6 +5765,240 @@
           }
         },
         "summary": "Get ExecutionTarget"
+      }
+    },
+    "/v1/execution-targets/{executionTargetId}/activate": {
+      "post": {
+        "operationId": "activateExecutionTarget",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "executionTargetId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operation"
+                }
+              }
+            },
+            "description": "Durable Operation accepted or completed.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              },
+              "Operation-Location": {
+                "$ref": "#/components/headers/OperationLocation"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "428": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Return a draining ExecutionTarget to placement eligibility"
+      }
+    },
+    "/v1/execution-targets/{executionTargetId}/drain": {
+      "post": {
+        "operationId": "drainExecutionTarget",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "executionTargetId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operation"
+                }
+              }
+            },
+            "description": "Durable Operation accepted or completed.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              },
+              "Operation-Location": {
+                "$ref": "#/components/headers/OperationLocation"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "428": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Exclude an ExecutionTarget from new placement without moving existing work"
+      }
+    },
+    "/v1/execution-targets/{executionTargetId}/remove": {
+      "post": {
+        "operationId": "removeExecutionTarget",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "executionTargetId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operation"
+                }
+              }
+            },
+            "description": "Durable Operation accepted or completed.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              },
+              "Operation-Location": {
+                "$ref": "#/components/headers/OperationLocation"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "428": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Permanently remove an empty draining ExecutionTarget from pool membership"
       }
     },
     "/v1/installation:verify": {

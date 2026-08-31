@@ -152,10 +152,9 @@ type CredentialRecoveryPlan struct {
 // the dedicated IAM transaction and closed offline Audit fact. A contract-only
 // consumer must not invoke it against the earlier running authority profile.
 func ValidateCredentialRecoveryProfile(profile release.DatabaseProfile) error {
-	if release.ValidateDatabaseUpgradePath(profile, release.CurrentDatabaseProfile()) != nil ||
-		profile.Authorities.IAM != 4 || profile.Authorities.Audit != 3 ||
-		profile.Authorities.PaaS != 2 ||
-		(profile.ContractRevision != 6 && profile.ContractRevision != 7) {
+	current := release.CurrentDatabaseProfile()
+	if release.ValidateDatabaseUpgradePath(profile, current) != nil ||
+		(profile != current && profile != release.SupportedDatabasePredecessorProfile()) {
 		return ErrEffectPrecondition
 	}
 	return nil

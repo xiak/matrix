@@ -384,6 +384,42 @@
   gap: var(--xiak-spacing-comfortable);
 }
 
+.hostActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--xiak-spacing-tight);
+  justify-content: flex-end;
+}
+
+.hostRemoveConfirmation {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--xiak-spacing-default);
+  border: 1px solid var(--xiak-color-status-danger);
+  border-radius: var(--xiak-radius-control);
+  padding: var(--xiak-spacing-default);
+  background: var(--xiak-color-bg-canvas);
+}
+
+.hostRemoveConfirmation > div:first-child {
+  display: grid;
+  min-width: 0;
+  gap: var(--xiak-spacing-narrow);
+}
+
+.hostRemoveConfirmation > div:first-child span {
+  color: var(--xiak-color-text-muted);
+  font-size: var(--xiak-font-size-small);
+  line-height: 1.5;
+}
+
+.hostRemoveConfirmation > div:last-child {
+  display: flex;
+  flex: none;
+  gap: var(--xiak-spacing-tight);
+}
+
 .hostFacts {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -807,6 +843,13 @@
 
   .hostFacts {
     grid-template-columns: 1fr;
+  }
+
+  .hostActions,
+  .hostRemoveConfirmation,
+  .hostRemoveConfirmation > div:last-child {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .deploymentItem {

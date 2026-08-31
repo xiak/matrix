@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -248,7 +249,253 @@ func assertExecutionAdmission(t *testing.T, ctx context.Context, admin *pgx.Conn
 	if originalRequest != authorization.RequestID || originalDecision != authorization.DecisionID {
 		t.Fatal("replay replaced original audit evidence")
 	}
-	assertInstallationAuditDispatch(t, ctx, workerPool, installationID)
+
+	// Exercise terminal removal on a distinct target. The original node remains
+	// available to the terminal-session gate, while the tombstone below remains
+	// permanent and cannot be resurrected merely to satisfy another test.
+	lifecycleTargetID := paasv1.ResourceID(prefix + "-node-lifecycle")
+	lifecycleAdapter := &admissionAdapter{
+		targetID:    lifecycleTargetID,
+		bindingRef:  "node-lifecycle-binding",
+		fingerprint: integrationDigest("node-lifecycle-" + prefix),
+	}
+	lifecycleConfig := config
+	lifecycleConfig.Bindings = append(
+		append([]executionadmission.Binding(nil), config.Bindings...),
+		executionadmission.Binding{
+			Ref:                 "node-lifecycle-binding",
+			TargetID:            lifecycleTargetID,
+			IdentityFingerprint: lifecycleAdapter.fingerprint,
+			Adapter:             lifecycleAdapter,
+		},
+	)
+	lifecycleService, err := executionadmission.New(repository, lifecycleConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lifecycleRegistration := executionadmission.RegisterTargetCommand{
+		Authorization:  authorization,
+		IdempotencyKey: "register-lifecycle-node",
+		Request: paasv1.RegisterExecutionTargetRequest{
+			ID: lifecycleTargetID, Name: "node-lifecycle", ExecutionPoolID: poolID,
+			BindingRef: "node-lifecycle-binding", Labels: map[string]string{"rack": "rack-b"},
+		},
+	}
+	lifecycleTarget, _, lifecycleReplayed, err := lifecycleService.RegisterTarget(ctx, lifecycleRegistration)
+	if err != nil || lifecycleReplayed || lifecycleTarget.Spec.DesiredState != paasv1.ExecutionTargetActive {
+		t.Fatalf("register lifecycle target: replay=%v target=%#v err=%v", lifecycleReplayed, lifecycleTarget, err)
+	}
+
+	transition := func(action paasv1.OperationAction, expected uint64, key string) executionadmission.TransitionTargetResult {
+		t.Helper()
+		lifecycleAuthorization := authorization
+		lifecycleAuthorization.DecisionID = "decision-" + key
+		lifecycleAuthorization.RequestID = "request-" + key
+		result, err := lifecycleService.TransitionTarget(ctx, executionadmission.TransitionTargetCommand{
+			Authorization: lifecycleAuthorization, TargetID: lifecycleTargetID, Action: action,
+			ExpectedResourceVersion: expected, IdempotencyKey: key,
+		})
+		if err != nil {
+			t.Fatalf("transition %s: %v", action, err)
+		}
+		return result
+	}
+	callsBeforeLifecycle := lifecycleAdapter.calls.Load()
+	drained := transition(paasv1.OperationDrainExecutionTarget, lifecycleTarget.Metadata.ResourceVersion, "drain-node")
+	if drained.Replayed || drained.Target.Spec.DesiredState != paasv1.ExecutionTargetDraining ||
+		drained.Operation.Action != paasv1.OperationDrainExecutionTarget || lifecycleAdapter.calls.Load() != callsBeforeLifecycle {
+		t.Fatalf("drain called node or stored wrong state: %#v", drained)
+	}
+	pool, err = lifecycleService.GetPool(ctx, authorization, poolID)
+	if err != nil || pool.Status.ExecutionTargetCount != 2 || pool.Status.ReadyExecutionTargetCount != 1 {
+		t.Fatalf("drained pool = %#v err=%v", pool, err)
+	}
+	replayedDrain := transition(paasv1.OperationDrainExecutionTarget, lifecycleTarget.Metadata.ResourceVersion, "drain-node")
+	if !replayedDrain.Replayed || replayedDrain.Operation.ID != drained.Operation.ID ||
+		replayedDrain.Target.Metadata.ResourceVersion != drained.Target.Metadata.ResourceVersion {
+		t.Fatalf("drain replay = %#v", replayedDrain)
+	}
+	changedActionAuthorization := authorization
+	changedActionAuthorization.DecisionID = "decision-drain-node-changed-action"
+	changedActionAuthorization.RequestID = "request-drain-node-changed-action"
+	_, err = lifecycleService.TransitionTarget(ctx, executionadmission.TransitionTargetCommand{
+		Authorization: changedActionAuthorization, TargetID: lifecycleTargetID,
+		Action:                  paasv1.OperationActivateExecutionTarget,
+		ExpectedResourceVersion: drained.Target.Metadata.ResourceVersion,
+		IdempotencyKey:          "drain-node",
+	})
+	if !errors.Is(err, executionadmission.ErrIdempotencyConflict) {
+		t.Fatalf("changed-action drain replay = %v", err)
+	}
+	_, err = lifecycleService.TransitionTarget(ctx, executionadmission.TransitionTargetCommand{
+		Authorization: authorization, TargetID: lifecycleTargetID, Action: paasv1.OperationActivateExecutionTarget,
+		ExpectedResourceVersion: lifecycleTarget.Metadata.ResourceVersion, IdempotencyKey: "stale-activate-node",
+	})
+	if !errors.Is(err, executionadmission.ErrResourceVersionConflict) {
+		t.Fatalf("stale activation = %v", err)
+	}
+	activated := transition(paasv1.OperationActivateExecutionTarget, drained.Target.Metadata.ResourceVersion, "activate-node")
+	var raced [2]executionadmission.TransitionTargetResult
+	var raceErrors [2]error
+	var raceWorkers sync.WaitGroup
+	for index := range raced {
+		raceWorkers.Go(func() {
+			raceAuthorization := authorization
+			raceAuthorization.DecisionID = fmt.Sprintf("decision-drain-race-%d", index)
+			raceAuthorization.RequestID = fmt.Sprintf("request-drain-race-%d", index)
+			raced[index], raceErrors[index] = lifecycleService.TransitionTarget(ctx, executionadmission.TransitionTargetCommand{
+				Authorization: raceAuthorization, TargetID: lifecycleTargetID,
+				Action:                  paasv1.OperationDrainExecutionTarget,
+				ExpectedResourceVersion: activated.Target.Metadata.ResourceVersion,
+				IdempotencyKey:          fmt.Sprintf("drain-node-race-%d", index),
+			})
+		})
+	}
+	raceWorkers.Wait()
+	var drainedAgain executionadmission.TransitionTargetResult
+	successes, conflicts := 0, 0
+	for index, raceErr := range raceErrors {
+		switch {
+		case raceErr == nil:
+			successes++
+			drainedAgain = raced[index]
+		case errors.Is(raceErr, executionadmission.ErrResourceVersionConflict):
+			conflicts++
+		default:
+			t.Fatalf("concurrent drain %d: %v", index, raceErr)
+		}
+	}
+	if successes != 1 || conflicts != 1 || drainedAgain.Target.Spec.DesiredState != paasv1.ExecutionTargetDraining {
+		t.Fatalf("concurrent drain successes=%d conflicts=%d result=%#v errors=%#v", successes, conflicts, drainedAgain, raceErrors)
+	}
+	removed := transition(paasv1.OperationRemoveExecutionTarget, drainedAgain.Target.Metadata.ResourceVersion, "remove-node")
+	if removed.Target.Spec.DesiredState != paasv1.ExecutionTargetRemoved || lifecycleAdapter.calls.Load() != callsBeforeLifecycle {
+		t.Fatalf("remove called node or failed to retain tombstone: %#v", removed)
+	}
+	inventory, err = lifecycleService.ListTargets(ctx, authorization)
+	if err != nil || len(inventory.Items) != 1 || inventory.Items[0].Metadata.ID != targetID {
+		t.Fatalf("removed target remained in default inventory: %#v err=%v", inventory, err)
+	}
+	tombstone, err := lifecycleService.GetTarget(ctx, authorization, lifecycleTargetID)
+	if err != nil || tombstone.Spec.DesiredState != paasv1.ExecutionTargetRemoved ||
+		tombstone.Metadata.ResourceVersion != removed.Target.Metadata.ResourceVersion {
+		t.Fatalf("removed target tombstone = %#v err=%v", tombstone, err)
+	}
+	if err := lifecycleService.Refresh(ctx); err != nil || lifecycleAdapter.calls.Load() != callsBeforeLifecycle {
+		t.Fatalf("removed target was probed: err=%v calls=%d/%d", err, lifecycleAdapter.calls.Load(), callsBeforeLifecycle)
+	}
+	reRegister := lifecycleRegistration
+	reRegister.IdempotencyKey = "register-removed-node"
+	if _, _, _, err := lifecycleService.RegisterTarget(ctx, reRegister); !errors.Is(err, executionadmission.ErrConflict) || lifecycleAdapter.calls.Load() != callsBeforeLifecycle {
+		t.Fatalf("removed target was re-admitted or probed: %v", err)
+	}
+	assertInstallationAuditDispatch(t, ctx, workerPool, installationID, 7)
+}
+
+func assertExecutionTargetRemovalFencesCurrentWork(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	apiPool, workerPool *pgxpool.Pool,
+	prefix string,
+) {
+	t.Helper()
+	installationID := prefix + "-installation"
+	poolID := paasv1.ResourceID(prefix + "-nodes")
+	targetID := paasv1.ResourceID(prefix + "-node-a")
+	adapter := &admissionAdapter{
+		targetID: targetID, fingerprint: integrationDigest("node-" + prefix),
+	}
+	repository, err := NewExecutionAdmissionRepository(apiPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := executionadmission.New(repository, executionadmission.Config{
+		InstallationID: installationID,
+		Bindings: []executionadmission.Binding{{
+			Ref: "node-binding", TargetID: targetID,
+			IdentityFingerprint: adapter.fingerprint, Adapter: adapter,
+		}},
+		ObservationTimeout: time.Second, MaximumObservationAge: 15 * time.Second,
+		MaxTransactionAttempts: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorization := port.Authorization{
+		InstallationID: installationID,
+		Subject:        paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "platform-user"},
+		DecisionID:     "decision-current-work-fence",
+		RequestID:      "request-current-work-fence",
+	}
+	active, err := service.GetTarget(ctx, authorization, targetID)
+	if err != nil || active.Spec.DesiredState != paasv1.ExecutionTargetActive {
+		t.Fatalf("load current-work target: %#v err=%v", active, err)
+	}
+	drained, err := service.TransitionTarget(ctx, executionadmission.TransitionTargetCommand{
+		Authorization: authorization, TargetID: targetID,
+		Action:                  paasv1.OperationDrainExecutionTarget,
+		ExpectedResourceVersion: active.Metadata.ResourceVersion,
+		IdempotencyKey:          "drain-current-work-target",
+	})
+	if err != nil || drained.Target.Spec.DesiredState != paasv1.ExecutionTargetDraining {
+		t.Fatalf("drain current-work target: %#v err=%v", drained, err)
+	}
+
+	type persistedProof struct {
+		targetVersion, poolVersion   int64
+		targetDocument, poolDocument string
+		operations, events           int64
+	}
+	readProof := func() persistedProof {
+		t.Helper()
+		var proof persistedProof
+		if err := admin.QueryRow(ctx, `
+			SELECT target.resource_version,target.document::text,pool.resource_version,pool.document::text,
+			       (SELECT count(*) FROM paas.operations WHERE installation_id=$1),
+			       (SELECT count(*) FROM paas.audit_outbox WHERE installation_id=$1)
+			  FROM paas.execution_targets AS target
+			  JOIN paas.execution_pools AS pool ON pool.id=target.execution_pool_id
+			 WHERE target.installation_id=$1 AND target.id=$2 AND pool.id=$3`,
+			installationID, targetID, poolID,
+		).Scan(
+			&proof.targetVersion, &proof.targetDocument, &proof.poolVersion,
+			&proof.poolDocument, &proof.operations, &proof.events,
+		); err != nil {
+			t.Fatal(err)
+		}
+		return proof
+	}
+	before := readProof()
+	removeAuthorization := authorization
+	removeAuthorization.DecisionID = "decision-remove-current-work"
+	removeAuthorization.RequestID = "request-remove-current-work"
+	_, err = service.TransitionTarget(ctx, executionadmission.TransitionTargetCommand{
+		Authorization: removeAuthorization, TargetID: targetID,
+		Action:                  paasv1.OperationRemoveExecutionTarget,
+		ExpectedResourceVersion: drained.Target.Metadata.ResourceVersion,
+		IdempotencyKey:          "remove-current-work-target",
+	})
+	if !errors.Is(err, executionadmission.ErrTargetInUse) {
+		t.Fatalf("remove target with current tenant work = %v", err)
+	}
+	after := readProof()
+	if after != before || adapter.calls.Load() != 0 {
+		t.Fatalf("failed removal changed authority or called node: before=%#v after=%#v calls=%d", before, after, adapter.calls.Load())
+	}
+	activateAuthorization := authorization
+	activateAuthorization.DecisionID = "decision-reactivate-current-work"
+	activateAuthorization.RequestID = "request-reactivate-current-work"
+	reactivated, err := service.TransitionTarget(ctx, executionadmission.TransitionTargetCommand{
+		Authorization: activateAuthorization, TargetID: targetID,
+		Action:                  paasv1.OperationActivateExecutionTarget,
+		ExpectedResourceVersion: drained.Target.Metadata.ResourceVersion,
+		IdempotencyKey:          "reactivate-current-work-target",
+	})
+	if err != nil || reactivated.Target.Spec.DesiredState != paasv1.ExecutionTargetActive || adapter.calls.Load() != 0 {
+		t.Fatalf("reactivate after rejected removal: %#v err=%v calls=%d", reactivated, err, adapter.calls.Load())
+	}
+	assertInstallationAuditDispatch(t, ctx, workerPool, installationID, 2)
 }
 
 func assertAdmissionRLS(t *testing.T, ctx context.Context, pool *pgxpool.Pool, installationID string, poolID, targetID paasv1.ResourceID) {
@@ -278,7 +525,7 @@ func assertAdmissionRLS(t *testing.T, ctx context.Context, pool *pgxpool.Pool, i
 	assertPostgresCode(t, err, "42501")
 }
 
-func assertInstallationAuditDispatch(t *testing.T, ctx context.Context, pool *pgxpool.Pool, installationID string) {
+func assertInstallationAuditDispatch(t *testing.T, ctx context.Context, pool *pgxpool.Pool, installationID string, expected int) {
 	t.Helper()
 	repository, err := auditpostgres.NewAuditOutboxRepository(pool)
 	if err != nil {
@@ -310,13 +557,14 @@ func assertInstallationAuditDispatch(t *testing.T, ctx context.Context, pool *pg
 			t.Fatal(err)
 		}
 	}
-	if seen != 2 {
-		t.Fatalf("delivered %d installation audit facts, want two", seen)
+	if seen != expected {
+		t.Fatalf("delivered %d installation audit facts, want %d", seen, expected)
 	}
 }
 
 type admissionAdapter struct {
 	targetID    paasv1.ResourceID
+	bindingRef  string
 	fingerprint string
 	fail        atomic.Bool
 	calls       atomic.Int64
@@ -333,7 +581,11 @@ func (adapter *admissionAdapter) ObserveExecutionTarget(_ context.Context, reque
 	if adapter.fail.Load() {
 		return paasv1.ExecutionTargetObservation{}, errors.New("node fixture disconnected")
 	}
-	if request.Command.ExecutionTargetID != adapter.targetID || request.Command.BindingRef != "node-binding" {
+	expectedBindingRef := adapter.bindingRef
+	if expectedBindingRef == "" {
+		expectedBindingRef = "node-binding"
+	}
+	if request.Command.ExecutionTargetID != adapter.targetID || request.Command.BindingRef != expectedBindingRef {
 		return paasv1.ExecutionTargetObservation{}, errors.New("wrong node binding")
 	}
 	now := time.Now().UTC().Truncate(time.Microsecond)

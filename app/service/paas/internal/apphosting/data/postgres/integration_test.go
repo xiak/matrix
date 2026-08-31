@@ -188,6 +188,7 @@ func TestPostgresIntegration(t *testing.T) {
 	assertNorthboundIAMAudit(t, ctx, admin, apiPool, workerPool, fixture, prefix)
 	assertExecutionAdmission(t, ctx, admin, apiPool, workerPool, prefix)
 	assertTerminalSessionPersistence(t, ctx, admin, apiPool, workerPool, fixture, prefix)
+	assertExecutionTargetRemovalFencesCurrentWork(t, ctx, admin, apiPool, workerPool, prefix)
 }
 
 type integrationFixture struct {

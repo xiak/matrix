@@ -313,6 +313,10 @@ BEGIN
                 'submitted_resource jsonb, submitted_operation jsonb, submitted_audit_event jsonb, submitted_binding_ref text, submitted_identity_fingerprint text, expected_pool_version bigint, submitted_pool jsonb'
             ),
             (
+                'transition_execution_target',
+                'expected_target_version bigint, submitted_target jsonb, expected_pool_version bigint, submitted_pool jsonb, submitted_operation jsonb, submitted_audit_event jsonb'
+            ),
+            (
                 'refresh_execution_target',
                 'expected_target_version bigint, submitted_target jsonb, expected_pool_version bigint, submitted_pool jsonb'
             ),
@@ -679,6 +683,7 @@ BEGIN
     END IF;
 
     IF NOT has_function_privilege('matrix_paas_api', 'paas.admit_execution_resource(jsonb,jsonb,jsonb,text,text,bigint,jsonb)', 'EXECUTE')
+       OR NOT has_function_privilege('matrix_paas_api', 'paas.transition_execution_target(bigint,jsonb,bigint,jsonb,jsonb,jsonb)', 'EXECUTE')
        OR NOT has_function_privilege('matrix_paas_api', 'paas.refresh_execution_target(bigint,jsonb,bigint,jsonb)', 'EXECUTE')
        OR EXISTS (
             SELECT 1
@@ -714,6 +719,7 @@ BEGIN
                    )
        )
        OR has_function_privilege('matrix_paas_worker', 'paas.admit_execution_resource(jsonb,jsonb,jsonb,text,text,bigint,jsonb)', 'EXECUTE')
+       OR has_function_privilege('matrix_paas_worker', 'paas.transition_execution_target(bigint,jsonb,bigint,jsonb,jsonb,jsonb)', 'EXECUTE')
        OR has_function_privilege('matrix_paas_worker', 'paas.refresh_execution_target(bigint,jsonb,bigint,jsonb)', 'EXECUTE')
        OR has_function_privilege('matrix_paas_api', 'paas.store_execution_pool_observation(bigint,jsonb)', 'EXECUTE')
        OR has_function_privilege('matrix_paas_worker', 'paas.store_execution_pool_observation(bigint,jsonb)', 'EXECUTE')

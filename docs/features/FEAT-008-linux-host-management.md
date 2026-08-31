@@ -1,6 +1,6 @@
 # FEAT-008: existing Linux hosts and remote application delivery
 
-- Status: P3-2 accepted; P3-3 signed terminal lifecycle accepted, real browser terminal gate in progress
+- Status: P3-2 accepted; P3-3 signed terminal lifecycle accepted, real browser terminal gate pending; P3-4 lifecycle implementation locally verified, signed two-host gate pending
 - Target: Matrix PaaS Phase 3
 - Design date: 2026-08-27
 - Branch: `feat/linux-host-management`
@@ -41,7 +41,7 @@ exercise combines these capabilities rather than introducing them late.
 | P3-1: one managed host | Secure resident agent enrollment, identity, heartbeat and continuously refreshed basic CPU/memory/filesystem status through the control plane | Real authenticated Linux node; wrong identity denied; stale/disconnected state; restart and signed offline startup | Complete |
 | P3-2: remote application loop | Deploy, observe, update, stop and roll back a real application on that host | IAM/Audit/Operation/accounting integration; exact routing; ENV/Secret behavior; replay and lost-response recovery | Complete |
 | P3-3: interactive operations | Live host/container UI and terminal in the selected running instance | Successive measurements without reload; real terminal I/O, resize, expiry, disconnect, authorization and audit | Real browser terminal gate pending |
-| P3-4: multiple hosts | Pool placement, drain, unavailable-node handling and safe removal across two independent hosts | No cross-host/local fallback; identity collision, tenant isolation and concurrent capacity checks | Pending |
+| P3-4: multiple hosts | Pool placement, drain, unavailable-node handling and safe removal across two independent hosts | No cross-host/local fallback; identity collision, tenant isolation and concurrent capacity checks | Local contract/PostgreSQL/UI gates pass; signed two-host lifecycle pending |
 | P3-5: offline release | Platform and nodes install, operate, upgrade, roll back and recover without external access | Complete Gates A-E on exact committed source and signed releases | Pending |
 
 Start P3-1 after P3-0's donor review. Its basic measurements do not replace
@@ -116,6 +116,21 @@ generation while offline.
   or unsupported targets reject new placement without stopping healthy nodes.
   Drain retains existing work; removal rejects live/reserved/unresolved work.
   Neither touches unrelated host files or Docker objects.
+- P3-4 exposes three platform-authorized commands on an admitted managed target:
+  `ACTIVE -> DRAINING`, `DRAINING -> ACTIVE`, and the terminal
+  `DRAINING -> REMOVED`. Each command requires the current strong ETag and an
+  idempotency key, commits its Operation and installation Audit fact with the
+  target/pool update, and never calls the node. `REMOVED` is an immutable
+  tombstone: default inventory and placement exclude it, exact reads and
+  history retain it, and its target ID, binding and machine fingerprint can
+  never be registered again.
+- Safe removal locks the same target-allocation identity used by placement and
+  fails closed while a consuming capacity claim, non-terminal target Operation,
+  unresolved adapter result, non-stopped current Deployment, or open terminal
+  session remains. It neither evicts nor migrates work, releases capacity,
+  closes sessions, deletes host data, revokes node credentials, nor changes the
+  protected connection inventory. A lost response can replay only the exact
+  committed command; changing its action, target, ETag or content conflicts.
 - Persisted placement selects the exact executor for apply/observe/stop/rollback.
   No other-host or control-plane fallback. Preserve RLS, least privilege,
   worker fencing and capacity conservation.
@@ -1216,6 +1231,32 @@ remains open until one authenticated browser selects the persisted running
 instance and proves terminal I/O, resize, explicit disconnect, consumed-ticket
 replay denial and the associated Audit view. The prohibited remote reboot
 phase also remains outside this evidence and Gate D remains open.
+
+The P3-4 lifecycle candidate keeps the existing `ExecutionTarget` and
+`ExecutionPool` owners. It adds the exact `ACTIVE -> DRAINING -> ACTIVE` and
+terminal `DRAINING -> REMOVED` transitions with platform IAM decisions,
+installation-scoped Audit facts, synchronous terminal Operations, strong
+resource-version preconditions and one lifecycle-wide idempotency namespace.
+Changing the action, target or expected version under a committed key
+conflicts. A removed target remains an immutable exact-read tombstone while
+default inventory, placement and refresh exclude it; neither the use case nor
+the database transition invokes a node adapter.
+
+Local verification uses a task-owned, resource-limited PostgreSQL 18 instance
+and no remote machine. The real PaaS race gate proves exact replay, changed-
+intent conflict, stale-version rejection, one-winner concurrent drain,
+drain/activate/remove, tombstone retention, registration/fingerprint reuse
+rejection, removal failure with current work and byte/count-preserving failure
+atomicity. Independent IAM 5 and Audit 4 HTTP/PostgreSQL race gates prove the
+new platform decisions, producer proof and immutable event contracts. The
+full Go suite and vet pass; all 130 frontend behavior tests, type, lint,
+architecture and 20 contrast checks pass. Two constrained production exports
+produce the same 72-file embedded tree with SHA-256
+`7e4ae064f1dbaa099f9ee86a3333804ad88109e03ac4041884534a56e2097ad5`;
+all three OpenAPI documents also regenerate byte-identically. These local
+gates do not accept P3-4: independent CI, the signed predecessor transition
+and the authorized two-host drain/live-work blocker/safe-removal exercise are
+still required. No remote host or Docker Engine was restarted for this work.
 
 ## Adoption
 

@@ -98,10 +98,44 @@ func creationIdentity(authorization port.Authorization, action paasv1.OperationA
 	return domain.DigestPayload(identity), domain.DigestPayload(payload), nil
 }
 
+func lifecycleIdentity(authorization port.Authorization, action paasv1.OperationAction, key string, request any) (string, string, error) {
+	if paasv1.ValidateSafeExternalText("Idempotency-Key", key, 128, true) != nil {
+		return "", "", ErrInvalidArgument
+	}
+	identity, err := json.Marshal(struct {
+		InstallationID string            `json:"installationId"`
+		Subject        paasv1.SubjectRef `json:"subject"`
+		Purpose        string            `json:"purpose"`
+		Key            string            `json:"key"`
+	}{authorization.InstallationID, authorization.Subject, "EXECUTION_TARGET_LIFECYCLE", key})
+	if err != nil {
+		return "", "", ErrInvalidArgument
+	}
+	payload, err := json.Marshal(struct {
+		Action  paasv1.OperationAction `json:"action"`
+		Request any                    `json:"request"`
+	}{action, request})
+	if err != nil {
+		return "", "", ErrInvalidArgument
+	}
+	return domain.DigestPayload(identity), domain.DigestPayload(payload), nil
+}
+
 func newSubmission(authorization port.Authorization, action paasv1.OperationAction, id paasv1.ResourceID, fingerprint, digest string, now time.Time) (Submission, error) {
-	kind, auditAction := "ExecutionPool", audit.ExecutionPoolCreated
-	if action == paasv1.OperationRegisterExecutionTarget {
+	kind, auditAction := "", ""
+	switch action {
+	case paasv1.OperationCreateExecutionPool:
+		kind, auditAction = "ExecutionPool", audit.ExecutionPoolCreated
+	case paasv1.OperationRegisterExecutionTarget:
 		kind, auditAction = "ExecutionTarget", audit.ExecutionTargetRegistered
+	case paasv1.OperationDrainExecutionTarget:
+		kind, auditAction = "ExecutionTarget", audit.ExecutionTargetDrained
+	case paasv1.OperationActivateExecutionTarget:
+		kind, auditAction = "ExecutionTarget", audit.ExecutionTargetActivated
+	case paasv1.OperationRemoveExecutionTarget:
+		kind, auditAction = "ExecutionTarget", audit.ExecutionTargetRemoved
+	default:
+		return Submission{}, ErrInvalidArgument
 	}
 	operation := paasv1.Operation{
 		APIVersion: paasv1.APIVersion, Kind: "Operation", ID: paasv1.OperationID("operation-" + fingerprint[7:]),
@@ -236,7 +270,15 @@ func (service *Service) RegisterTarget(ctx context.Context, command RegisterTarg
 	err = service.transaction(ctx, func(ctx context.Context, transaction Transaction) error {
 		var err error
 		replayed, err = loadReplay(ctx, transaction)
-		return err
+		if err != nil || replayed {
+			return err
+		}
+		if _, found, err := transaction.LoadTarget(ctx, request.ID); err != nil {
+			return err
+		} else if found {
+			return ErrConflict
+		}
+		return nil
 	})
 	if err != nil || replayed {
 		return target, operation, replayed, err
@@ -340,6 +382,169 @@ func (service *Service) RegisterTarget(ctx context.Context, command RegisterTarg
 		return paasv1.ExecutionTarget{}, paasv1.Operation{}, false, err
 	}
 	return target, operation, replayed, nil
+}
+
+func (service *Service) TransitionTarget(
+	ctx context.Context,
+	command TransitionTargetCommand,
+) (TransitionTargetResult, error) {
+	var result TransitionTargetResult
+	if err := service.authorize(ctx, command.Authorization); err != nil {
+		return result, err
+	}
+	nextState, valid := lifecycleTransition(command.Action)
+	if !valid || paasv1.ValidateID("targetId", string(command.TargetID)) != nil ||
+		command.ExpectedResourceVersion == 0 || command.ExpectedResourceVersion > maximumVersion ||
+		command.TargetID == builtInTargetID {
+		return result, ErrInvalidArgument
+	}
+	request := struct {
+		TargetID                paasv1.ResourceID                  `json:"targetId"`
+		ExpectedResourceVersion uint64                             `json:"expectedResourceVersion"`
+		DesiredState            paasv1.ExecutionTargetDesiredState `json:"desiredState"`
+	}{command.TargetID, command.ExpectedResourceVersion, nextState}
+	fingerprint, digest, err := lifecycleIdentity(
+		command.Authorization,
+		command.Action,
+		command.IdempotencyKey,
+		request,
+	)
+	if err != nil {
+		return result, err
+	}
+	err = service.transaction(ctx, func(ctx context.Context, transaction Transaction) error {
+		stored, found, err := transaction.FindOperationByFingerprint(ctx, fingerprint)
+		if err != nil {
+			return err
+		}
+		if found {
+			if stored.RequestDigest != digest || stored.Target.ID != command.TargetID || stored.Action != command.Action {
+				return ErrIdempotencyConflict
+			}
+			registration, found, err := transaction.LoadTarget(ctx, command.TargetID)
+			if err != nil {
+				return err
+			}
+			if !found {
+				return ErrNotFound
+			}
+			result = TransitionTargetResult{
+				Target:    service.targetSnapshot(registration.Target, service.config.Clock()),
+				Operation: stored,
+				Replayed:  true,
+			}
+			return nil
+		}
+		registration, found, err := transaction.LoadTarget(ctx, command.TargetID)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return ErrNotFound
+		}
+		current := registration.Target
+		if current.Metadata.ResourceVersion != command.ExpectedResourceVersion {
+			return ErrResourceVersionConflict
+		}
+		if !validLifecycleSource(command.Action, current.Spec.DesiredState) {
+			return ErrInvalidTransition
+		}
+		if current.Metadata.ResourceVersion == maximumVersion {
+			return ErrConflict
+		}
+		pool, found, err := transaction.LoadPool(ctx, current.Spec.ExecutionPoolID)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return ErrNotFound
+		}
+		now, err := transaction.TransactionTime(ctx)
+		if err != nil {
+			return err
+		}
+		if now.Before(current.Metadata.UpdatedAt) {
+			return ErrConflict
+		}
+		target := current
+		target.Spec.DesiredState = nextState
+		target.Metadata.ResourceVersion++
+		target.Metadata.UpdatedAt = now
+		if paasv1.ValidateExecutionTarget(target) != nil {
+			return ErrInvalidArgument
+		}
+		targets, err := transaction.ListPoolTargets(ctx, pool.Metadata.ID)
+		if err != nil {
+			return err
+		}
+		replaced := false
+		for index := range targets {
+			if targets[index].Metadata.ID == target.Metadata.ID {
+				targets[index], replaced = target, true
+			}
+		}
+		if !replaced {
+			return ErrNotFound
+		}
+		poolVersion := pool.Metadata.ResourceVersion
+		pool, err = service.poolSnapshot(pool, targets, now, true)
+		if err != nil {
+			return err
+		}
+		submission, err := newSubmission(
+			command.Authorization,
+			command.Action,
+			command.TargetID,
+			fingerprint,
+			digest,
+			now,
+		)
+		if err != nil {
+			return err
+		}
+		if err := transaction.TransitionTarget(
+			ctx,
+			current.Metadata.ResourceVersion,
+			target,
+			poolVersion,
+			pool,
+			submission,
+		); err != nil {
+			return err
+		}
+		result = TransitionTargetResult{Target: target, Operation: submission.Operation}
+		return nil
+	})
+	if err != nil {
+		return TransitionTargetResult{}, err
+	}
+	return result, nil
+}
+
+func lifecycleTransition(action paasv1.OperationAction) (paasv1.ExecutionTargetDesiredState, bool) {
+	switch action {
+	case paasv1.OperationDrainExecutionTarget:
+		return paasv1.ExecutionTargetDraining, true
+	case paasv1.OperationActivateExecutionTarget:
+		return paasv1.ExecutionTargetActive, true
+	case paasv1.OperationRemoveExecutionTarget:
+		return paasv1.ExecutionTargetRemoved, true
+	default:
+		return "", false
+	}
+}
+
+func validLifecycleSource(action paasv1.OperationAction, state paasv1.ExecutionTargetDesiredState) bool {
+	switch action {
+	case paasv1.OperationDrainExecutionTarget:
+		return state == paasv1.ExecutionTargetActive
+	case paasv1.OperationActivateExecutionTarget:
+		return state == paasv1.ExecutionTargetDraining
+	case paasv1.OperationRemoveExecutionTarget:
+		return state == paasv1.ExecutionTargetDraining
+	default:
+		return false
+	}
 }
 
 func (service *Service) observationCommand(binding Binding, action paasv1.AdapterAction, fingerprint, digest string) paasv1.AdapterCommandEnvelope {

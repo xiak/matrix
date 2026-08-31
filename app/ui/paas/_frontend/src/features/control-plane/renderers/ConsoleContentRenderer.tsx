@@ -1,3 +1,6 @@
+"use client";
+
+import { useState } from "react";
 import Link from "next/link";
 import { AccountAccessRenderer } from "@/features/auth/renderers/AccountAccessRenderer";
 import {
@@ -28,8 +31,10 @@ import type {
   CloseTerminal,
   ConnectTerminal,
   OpenTerminal,
-  TerminalConsoleState
+  TerminalConsoleState,
+  TransitionHost
 } from "../application/ControlPlaneProvider";
+import type { HostLifecycleCommand } from "../domain/hosts";
 import type {
   ConsoleContentScene,
   HostMeasurementScene,
@@ -314,7 +319,12 @@ function HostMeasurement({
   );
 }
 
-function HostCard({ host }: { host: HostScene }) {
+function HostCard({ disabled, host, onTransition }: { disabled: boolean; host: HostScene; onTransition: TransitionHost }) {
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
+  async function transition(action: HostLifecycleCommand["action"]) {
+    const changed = await onTransition({ targetId: host.id, action, resourceVersion: host.resourceVersion });
+    if (changed) setConfirmingRemove(false);
+  }
   return (
     <Card className={styles.hostCard}>
       <Card.Header>
@@ -336,8 +346,32 @@ function HostCard({ host }: { host: HostScene }) {
           <div><dt>执行池</dt><dd><Typography.Code>{host.executionPoolId}</Typography.Code></dd></div>
           <div><dt>适配来源</dt><dd>{host.source}</dd></div>
           <div><dt>期望状态</dt><dd>{phaseLabel(host.desiredState)}</dd></div>
+          <div><dt>资源版本</dt><dd>{host.resourceVersion}</dd></div>
           <div><dt>标称容量</dt><dd>{host.capacity}</dd></div>
         </dl>
+
+        <div className={styles.hostActions}>
+          {host.desiredState === "ACTIVE" ? (
+            <Button disabled={disabled} onClick={() => void transition("DRAIN")} size="small" variant="secondary">停止新调度</Button>
+          ) : (
+            <>
+              <Button disabled={disabled} onClick={() => void transition("ACTIVATE")} size="small" variant="primary">恢复调度</Button>
+              <Button disabled={disabled} onClick={() => setConfirmingRemove(true)} size="small" variant="danger">移除主机登记</Button>
+            </>
+          )}
+        </div>
+        {confirmingRemove ? (
+          <div className={styles.hostRemoveConfirmation} role="group" aria-label={`确认移除 ${host.name}`}>
+            <div>
+              <strong>仅移除平台登记</strong>
+              <span>不会停止主机、Docker 或工作负载。存在容量占用、未完成命令、运行中部署或终端时，服务端会拒绝且不产生部分变更。</span>
+            </div>
+            <div>
+              <Button disabled={disabled} onClick={() => setConfirmingRemove(false)} size="small" variant="ghost">取消</Button>
+              <Button disabled={disabled} onClick={() => void transition("REMOVE")} size="small" variant="danger">确认永久移除</Button>
+            </div>
+          </div>
+        ) : null}
 
         <div className={styles.hostMetricGrid}>
           <HostMeasurement icon={Activity} label="CPU" measurement={host.cpu} />
@@ -378,13 +412,17 @@ function HostCard({ host }: { host: HostScene }) {
   );
 }
 
-function HostContent({ scene }: { scene: Extract<ConsoleContentScene, { kind: "hosts" }> }) {
+function HostContent({ disabled, onTransition, scene }: {
+  disabled: boolean;
+  onTransition: TransitionHost;
+  scene: Extract<ConsoleContentScene, { kind: "hosts" }>;
+}) {
   if (scene.hosts.length === 0) {
     return <EmptyState title="尚未纳管主机" description="由平台安装器登记并验证主机后，资源采样才会出现在这里。" />;
   }
   return (
     <div className={styles.hostList}>
-      {scene.hosts.map((host) => <HostCard host={host} key={host.id} />)}
+      {scene.hosts.map((host) => <HostCard disabled={disabled} host={host} key={`${host.id}:${host.resourceVersion}`} onTransition={onTransition} />)}
     </div>
   );
 }
@@ -547,6 +585,8 @@ export function ConsoleContentRenderer({
   connectTerminal,
   onOpenTerminal,
   onSelectDeployment = () => {},
+  onTransitionHost,
+  hostMutation = false,
   scene,
   terminal
 }: {
@@ -554,6 +594,8 @@ export function ConsoleContentRenderer({
   connectTerminal: ConnectTerminal;
   onOpenTerminal: OpenTerminal;
   onSelectDeployment?(deploymentId: string): void;
+  onTransitionHost: TransitionHost;
+  hostMutation?: boolean;
   scene: ConsoleContentScene;
   terminal: TerminalConsoleState;
 }) {
@@ -562,7 +604,7 @@ export function ConsoleContentRenderer({
   if (scene.kind === "catalog") return <CatalogContent scene={scene} />;
   if (scene.kind === "quotas") return <QuotaContent scene={scene} />;
   if (scene.kind === "installations") return <InstallationContent scene={scene} />;
-  if (scene.kind === "hosts") return <HostContent scene={scene} />;
+  if (scene.kind === "hosts") return <HostContent disabled={hostMutation} onTransition={onTransitionHost} scene={scene} />;
   if (scene.kind === "deployments") return (
     <DeploymentContent
       closeTerminal={closeTerminal}

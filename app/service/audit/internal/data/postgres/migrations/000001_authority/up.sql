@@ -287,6 +287,8 @@ BEGIN
         'iam.tenant.created', 'iam.tenant.disabled', 'iam.tenant.enabled', 'iam.tenant-administrator.recovered',
         'iam.installation-primary.credentials-recovered',
         'paas.execution-pool.created', 'paas.execution-target.registered',
+        'paas.execution-target.drained', 'paas.execution-target.activated',
+        'paas.execution-target.removed',
         'audit.platform-records.read', 'audit.platform-integrity.verified'
     );
     SELECT contract.source, contract.target_kind, contract.result,
@@ -328,6 +330,9 @@ BEGIN
         ('audit.integrity.verified', 'AUDIT', 'AUDIT_CHAIN', 'SUCCEEDED', true, true, false),
         ('paas.execution-pool.created', 'PAAS', 'EXECUTION_POOL', 'SUCCEEDED', true, true, true),
         ('paas.execution-target.registered', 'PAAS', 'EXECUTION_TARGET', 'SUCCEEDED', true, true, true),
+        ('paas.execution-target.drained', 'PAAS', 'EXECUTION_TARGET', 'SUCCEEDED', true, true, true),
+        ('paas.execution-target.activated', 'PAAS', 'EXECUTION_TARGET', 'SUCCEEDED', true, true, true),
+        ('paas.execution-target.removed', 'PAAS', 'EXECUTION_TARGET', 'SUCCEEDED', true, true, true),
         ('paas.terminal-session.created', 'PAAS', 'TERMINAL_SESSION', 'ACCEPTED', true, true, false),
         ('paas.terminal-session.started', 'PAAS', 'TERMINAL_SESSION', 'SUCCEEDED', true, true, false),
         ('paas.terminal-session.ended', 'PAAS', 'TERMINAL_SESSION', NULL, true, true, false),
@@ -472,7 +477,7 @@ AS $function$
         to_regclass('audit.chain_heads') IS NOT NULL
         AND to_regclass('audit.records') IS NOT NULL
         AND to_regclass('audit.event_registry') IS NOT NULL,
-        3::bigint,
+        4::bigint,
         transaction_timestamp()
 $function$;
 
@@ -791,6 +796,8 @@ BEGIN
             'managedservice.service-installation.ready', 'audit.records.read',
             'audit.integrity.verified',
             'paas.execution-pool.created', 'paas.execution-target.registered',
+            'paas.execution-target.drained', 'paas.execution-target.activated',
+            'paas.execution-target.removed',
             'paas.terminal-session.created', 'paas.terminal-session.started',
             'paas.terminal-session.ended',
             'audit.platform-records.read', 'audit.platform-integrity.verified'

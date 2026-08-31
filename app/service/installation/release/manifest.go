@@ -87,16 +87,19 @@ type AuthoritySchemas struct {
 func CurrentDatabaseProfile() DatabaseProfile {
 	return DatabaseProfile{
 		Compatibility:    "identical-authority-profile",
-		Authorities:      AuthoritySchemas{IAM: 4, Audit: 3, PaaS: 2},
-		ContractRevision: 7,
+		Authorities:      AuthoritySchemas{IAM: 5, Audit: 4, PaaS: 3},
+		ContractRevision: 8,
 	}
 }
 
-func deploymentRuntimePredecessorProfile() DatabaseProfile {
+// SupportedDatabasePredecessorProfile is the one authenticated installed
+// profile that this source can upgrade in place. It is an exact release
+// contract, not a numeric N-1 rule.
+func SupportedDatabasePredecessorProfile() DatabaseProfile {
 	return DatabaseProfile{
 		Compatibility:    "identical-authority-profile",
 		Authorities:      AuthoritySchemas{IAM: 4, Audit: 3, PaaS: 2},
-		ContractRevision: 6,
+		ContractRevision: 7,
 	}
 }
 

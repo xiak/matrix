@@ -105,6 +105,80 @@ func TestExecutionAdmissionAuthorizesTheActualResourceAndInstallation(t *testing
 	}
 }
 
+func TestExecutionTargetLifecycleRequiresExactPlatformCommandHeaders(t *testing.T) {
+	authorization := port.Authorization{
+		InstallationID: "installation-a",
+		Subject:        paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "platform-user"},
+		DecisionID:     "decision-platform",
+		RequestID:      "request-test",
+	}
+	for _, test := range []struct {
+		path          string
+		authorization string
+		action        paasv1.OperationAction
+	}{
+		{"drain", port.AuthorizeExecutionTargetDrain, paasv1.OperationDrainExecutionTarget},
+		{"activate", port.AuthorizeExecutionTargetActivate, paasv1.OperationActivateExecutionTarget},
+		{"remove", port.AuthorizeExecutionTargetRemove, paasv1.OperationRemoveExecutionTarget},
+	} {
+		t.Run(test.path, func(t *testing.T) {
+			authorizer, workflow := &fakeAuthorizer{result: &authorization}, &fakeExecutionWorkflow{}
+			handler, err := NewHandler(authorizer, &fakeWorkflow{}, workflow, &fakeTerminalWorkflow{}, &fakeTerminalConnector{}, &fakeInstallationVerifier{}, Config{
+				NewRequestID: func() (string, error) { return "request-test", nil },
+				Readiness:    func(context.Context) (paasv1.Readiness, error) { return paasv1.Readiness{}, nil },
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(http.MethodPost, "/v1/execution-targets/node-a/"+test.path, nil)
+			request.Header.Set("Authorization", "Bearer platform-user")
+			request.Header.Set("Idempotency-Key", test.path+"-node-a")
+			request.Header.Set("If-Match", `"7"`)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusOK || workflow.transitionCalls != 1 ||
+				authorizer.request.Action != test.authorization ||
+				authorizer.request.Resource != (paasv1.ResourceRef{Kind: "ExecutionTarget", ID: "node-a"}) ||
+				workflow.transitionCommand.Action != test.action ||
+				workflow.transitionCommand.ExpectedResourceVersion != 7 ||
+				workflow.transitionCommand.IdempotencyKey != test.path+"-node-a" ||
+				workflow.transitionCommand.Authorization.InstallationID != "installation-a" ||
+				response.Header().Get("ETag") != `"8"` ||
+				response.Header().Get("Location") != "/v1/execution-targets/node-a" ||
+				response.Header().Get("Operation-Location") != "/v1/platform/operations/operation-a" {
+				t.Fatalf("lifecycle response=%d body=%s authorization=%#v command=%#v", response.Code, response.Body.String(), authorizer.request, workflow.transitionCommand)
+			}
+
+			authorizer.request = port.AuthorizationRequest{}
+			request = httptest.NewRequest(http.MethodPost, "/v1/execution-targets/node-a/"+test.path, strings.NewReader(`{}`))
+			request.Header.Set("If-Match", `"8"`)
+			response = httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusBadRequest || workflow.transitionCalls != 1 || authorizer.request != (port.AuthorizationRequest{}) {
+				t.Fatalf("body-bearing lifecycle request reached authority: %d %s", response.Code, response.Body.String())
+			}
+
+			authorizer.request = port.AuthorizationRequest{}
+			request = httptest.NewRequest(http.MethodPost, "/v1/execution-targets/node-a/"+test.path, strings.NewReader(`{}`))
+			request.ContentLength = -1
+			request.TransferEncoding = nil
+			request.Header.Set("If-Match", `"8"`)
+			response = httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusBadRequest || workflow.transitionCalls != 1 || authorizer.request != (port.AuthorizationRequest{}) {
+				t.Fatalf("unknown-length lifecycle body reached authority: %d %s", response.Code, response.Body.String())
+			}
+
+			request = httptest.NewRequest(http.MethodPost, "/v1/execution-targets/node-a/"+test.path, nil)
+			response = httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusPreconditionRequired || workflow.transitionCalls != 1 || authorizer.request != (port.AuthorizationRequest{}) {
+				t.Fatalf("unconditional lifecycle request reached authority: %d %s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
 func TestExecutionTargetInventoryIsPlatformAuthorizedAndSelectorFree(t *testing.T) {
 	authorization := port.Authorization{
 		InstallationID: "installation-a",
@@ -1230,10 +1304,14 @@ func testMetadata(id paasv1.ResourceID, name string) paasv1.ResourceMetadata {
 type fakeExecutionWorkflow struct {
 	createCommand     executionadmission.CreatePoolCommand
 	registerCommand   executionadmission.RegisterTargetCommand
+	transitionCommand executionadmission.TransitionTargetCommand
+	transitionResult  executionadmission.TransitionTargetResult
+	transitionErr     error
 	listAuthorization port.Authorization
 	listResult        paasv1.ExecutionTargetList
 	createCalls       int
 	registerCalls     int
+	transitionCalls   int
 	listCalls         int
 }
 
@@ -1249,6 +1327,22 @@ func (workflow *fakeExecutionWorkflow) RegisterTarget(_ context.Context, command
 	operation := testOperation("ExecutionTarget", command.Request.ID, paasv1.OperationRegisterExecutionTarget, paasv1.OperationSucceeded)
 	operation.Scope, operation.InstallationID = paasv1.ResourceScope{Kind: paasv1.AuthorityPlatform}, command.Authorization.InstallationID
 	return paasv1.ExecutionTarget{Metadata: testMetadata(command.Request.ID, command.Request.Name)}, operation, false, nil
+}
+
+func (workflow *fakeExecutionWorkflow) TransitionTarget(_ context.Context, command executionadmission.TransitionTargetCommand) (executionadmission.TransitionTargetResult, error) {
+	workflow.transitionCommand, workflow.transitionCalls = command, workflow.transitionCalls+1
+	if workflow.transitionErr != nil {
+		return executionadmission.TransitionTargetResult{}, workflow.transitionErr
+	}
+	if workflow.transitionResult.Operation.ID != "" {
+		return workflow.transitionResult, nil
+	}
+	operation := testOperation("ExecutionTarget", command.TargetID, command.Action, paasv1.OperationSucceeded)
+	operation.Scope, operation.InstallationID = paasv1.ResourceScope{Kind: paasv1.AuthorityPlatform}, command.Authorization.InstallationID
+	return executionadmission.TransitionTargetResult{
+		Target:    paasv1.ExecutionTarget{Metadata: paasv1.ResourceMetadata{ID: command.TargetID, ResourceVersion: command.ExpectedResourceVersion + 1}},
+		Operation: operation,
+	}, nil
 }
 
 func (*fakeExecutionWorkflow) GetPool(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.ExecutionPool, error) {

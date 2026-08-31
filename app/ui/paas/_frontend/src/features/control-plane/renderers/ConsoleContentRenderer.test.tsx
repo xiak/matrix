@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render } from "@testing-library/react";
+import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { idleTerminalConsoleState } from "../application/ControlPlaneProvider";
 import type { ConsoleContentScene } from "../scenes/consoleScene";
@@ -82,6 +82,7 @@ describe("ConsoleContentRenderer deployment inventory", () => {
         connectTerminal={() => null}
         onOpenTerminal={openTerminal}
         onSelectDeployment={select}
+        onTransitionHost={vi.fn().mockResolvedValue(false)}
         scene={scene}
         terminal={idleTerminalConsoleState}
       />
@@ -101,5 +102,74 @@ describe("ConsoleContentRenderer deployment inventory", () => {
     expect(screen.container.textContent).toContain("资源采样有效");
     expect(screen.container.textContent).not.toContain("docker.sock");
     expect(screen.container.textContent).not.toContain("containerId");
+  });
+});
+
+const hostScene = (desiredState: "ACTIVE" | "DRAINING"): Extract<ConsoleContentScene, { kind: "hosts" }> => ({
+  kind: "hosts",
+  hosts: [{
+    id: "node-a",
+    name: "node-a",
+    platform: "linux · amd64",
+    source: "nodehttps · compose",
+    executionPoolId: "linux-hosts",
+    resourceVersion: 7,
+    desiredState,
+    health: "READY",
+    status: "success",
+    capacity: "4 vCPU · 8 GiB 内存 · 100 GiB 存储",
+    observedAt: "2026年8月30日 16:01",
+    usageObservedAt: "2026年8月30日 16:01",
+    validUntil: "2026年8月30日 16:01",
+    sampleState: "采样有效",
+    sampleStatus: "success",
+    cpu: { state: "AVAILABLE", stateLabel: "有效", status: "success", value: "25%", progress: 25, detail: "4 逻辑 CPU" },
+    memory: { state: "AVAILABLE", stateLabel: "有效", status: "success", value: "2 GiB / 8 GiB", progress: 25, detail: "可用 6 GiB" },
+    filesystemsState: "有效",
+    filesystems: []
+  }]
+});
+
+describe("ConsoleContentRenderer host lifecycle", () => {
+  it("drains with the visible version and requires a second explicit remove confirmation", async () => {
+    const transition = vi.fn().mockResolvedValue(true);
+    const common = {
+      closeTerminal: vi.fn().mockResolvedValue(undefined),
+      connectTerminal: () => null,
+      onOpenTerminal: vi.fn().mockResolvedValue(false),
+      onSelectDeployment: vi.fn(),
+      onTransitionHost: transition,
+      terminal: idleTerminalConsoleState
+    };
+    const active = render(<ConsoleContentRenderer {...common} scene={hostScene("ACTIVE")} />);
+    fireEvent.click(active.getByRole("button", { name: "停止新调度" }));
+    await waitFor(() => expect(transition).toHaveBeenCalledWith({
+      targetId: "node-a", action: "DRAIN", resourceVersion: 7
+    }));
+    active.unmount();
+
+    const draining = render(<ConsoleContentRenderer {...common} scene={hostScene("DRAINING")} />);
+    fireEvent.click(draining.getByRole("button", { name: "移除主机登记" }));
+    expect(transition).toHaveBeenCalledTimes(1);
+    expect(draining.getByText(/不会停止主机、Docker 或工作负载/)).toBeTruthy();
+    fireEvent.click(draining.getByRole("button", { name: "确认永久移除" }));
+    await waitFor(() => expect(transition).toHaveBeenLastCalledWith({
+      targetId: "node-a", action: "REMOVE", resourceVersion: 7
+    }));
+  });
+
+  it("disables lifecycle controls while another host mutation is in flight", () => {
+    const screen = render(
+      <ConsoleContentRenderer
+        closeTerminal={vi.fn().mockResolvedValue(undefined)}
+        connectTerminal={() => null}
+        hostMutation
+        onOpenTerminal={vi.fn().mockResolvedValue(false)}
+        onTransitionHost={vi.fn().mockResolvedValue(false)}
+        scene={hostScene("ACTIVE")}
+        terminal={idleTerminalConsoleState}
+      />
+    );
+    expect((screen.getByRole("button", { name: "停止新调度" }) as HTMLButtonElement).disabled).toBe(true);
   });
 });

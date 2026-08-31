@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { httpHostInventoryRepository } from "./httpHostInventoryRepository";
 
-function target() {
+function target(desiredState: "ACTIVE" | "DRAINING" | "REMOVED" = "ACTIVE", resourceVersion = 4) {
   return {
     apiVersion: "paas.matrix.xiak.com/v1",
     kind: "ExecutionTarget",
@@ -10,7 +10,7 @@ function target() {
       name: "node-a",
       scope: { kind: "PLATFORM" },
       labels: { "matrix-os": "linux", "matrix-arch": "amd64" },
-      resourceVersion: 4,
+      resourceVersion,
       createdAt: "2026-08-30T08:00:00Z",
       updatedAt: "2026-08-30T08:01:00Z"
     },
@@ -18,7 +18,7 @@ function target() {
       executionPoolId: "linux-hosts",
       infrastructureAdapter: { kind: "INFRASTRUCTURE", name: "nodehttps", contractVersion: "v1" },
       deploymentExecutor: { kind: "DEPLOYMENT_EXECUTOR", name: "compose", contractVersion: "v1" },
-      desiredState: "ACTIVE"
+      desiredState
     },
     status: {
       health: "READY",
@@ -64,6 +64,33 @@ function response(items = [target()]): Response {
     kind: "ExecutionTargetList",
     items
   }), { status: 200, headers: { "Content-Type": "application/json" } });
+}
+
+function targetResponse(item: ReturnType<typeof target>, etag = `"${item.metadata.resourceVersion}"`): Response {
+  return new Response(JSON.stringify(item), {
+    status: 200,
+    headers: { "Content-Type": "application/json", ETag: etag }
+  });
+}
+
+function operationResponse(action: "DRAIN" | "ACTIVATE" | "REMOVE", version: number): Response {
+  return new Response(JSON.stringify({
+    apiVersion: "paas.matrix.xiak.com/v1",
+    kind: "Operation",
+    id: `operation-${action.toLowerCase()}`,
+    scope: { kind: "PLATFORM" },
+    installationId: "mxi-test",
+    action: `${action}_EXECUTION_TARGET`,
+    target: { kind: "ExecutionTarget", id: "node-a" },
+    requestedBy: { type: "USER", id: "platform-user" },
+    idempotencyFingerprint: "sha256:" + "a".repeat(64),
+    requestDigest: "sha256:" + "b".repeat(64),
+    state: "SUCCEEDED",
+    attempt: 1,
+    createdAt: "2026-08-30T08:02:00Z",
+    updatedAt: "2026-08-30T08:02:00Z",
+    terminalAt: "2026-08-30T08:02:00Z"
+  }), { status: 200, headers: { "Content-Type": "application/json", ETag: `"${version}"` } });
 }
 
 afterEach(() => {
@@ -129,5 +156,51 @@ describe("httpHostInventoryRepository", () => {
 
     await expect(httpHostInventoryRepository.load("session")).rejects.toThrow("INVALID_HOST_INVENTORY_RESPONSE");
     await expect(httpHostInventoryRepository.load("session")).rejects.toThrow("INVALID_HOST_TARGET_RESPONSE");
+  });
+
+  it("uses the exact target ETag and an empty idempotent lifecycle request", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(targetResponse(target("ACTIVE", 4)))
+      .mockResolvedValueOnce(operationResponse("DRAIN", 5))
+      .mockResolvedValueOnce(targetResponse(target("DRAINING", 5)));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const changed = await httpHostInventoryRepository.transition("platform-session", {
+      targetId: "node-a", action: "DRAIN", resourceVersion: 4
+    });
+
+    expect(changed).toMatchObject({ id: "node-a", desiredState: "DRAINING", resourceVersion: 5 });
+    expect(fetchMock.mock.calls[0]).toEqual([
+      "/api/paas/v1/execution-targets/node-a",
+      expect.objectContaining({ headers: expect.objectContaining({ Authorization: "Bearer platform-session" }) })
+    ]);
+    expect(fetchMock.mock.calls[1]).toEqual([
+      "/api/paas/v1/execution-targets/node-a/drain",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Authorization: "Bearer platform-session",
+          "If-Match": '"4"',
+          "Idempotency-Key": expect.stringMatching(/^ui-host-lifecycle-[0-9a-f]{32}$/)
+        })
+      })
+    ]);
+    expect((fetchMock.mock.calls[1]![1] as RequestInit).body).toBeUndefined();
+    expect(new Headers((fetchMock.mock.calls[1]![1] as RequestInit).headers).has("Content-Type")).toBe(false);
+  });
+
+  it("fails closed before mutation when the visible resource version or server ETag is stale", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(targetResponse(target("ACTIVE", 5)))
+      .mockResolvedValueOnce(targetResponse(target("ACTIVE", 4), 'W/"4"'));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(httpHostInventoryRepository.transition("session", {
+      targetId: "node-a", action: "DRAIN", resourceVersion: 4
+    })).rejects.toThrow("STALE_HOST_LIFECYCLE_COMMAND");
+    await expect(httpHostInventoryRepository.transition("session", {
+      targetId: "node-a", action: "DRAIN", resourceVersion: 4
+    })).rejects.toThrow("INVALID_HOST_ETAG_RESPONSE");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

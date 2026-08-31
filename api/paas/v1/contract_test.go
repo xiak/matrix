@@ -152,6 +152,9 @@ func TestOpenAPINorthboundSurfaceUsesMatrixIAM(t *testing.T) {
 		"/v1/execution-pools/{executionPoolId}":                   {"get"},
 		"/v1/execution-targets":                                   {"get", "post"},
 		"/v1/execution-targets/{executionTargetId}":               {"get"},
+		"/v1/execution-targets/{executionTargetId}/drain":         {"post"},
+		"/v1/execution-targets/{executionTargetId}/activate":      {"post"},
+		"/v1/execution-targets/{executionTargetId}/remove":        {"post"},
 		"/v1/platform/operations/{operationId}":                   {"get"},
 		"/ready":                                                  {"get"},
 		"/v1/applications":                                        {"post"},
@@ -251,6 +254,7 @@ func TestOpenAPIEnumsMatchGoContract(t *testing.T) {
 	assertExactEnum(t, schemas, "ExecutionTargetDesiredState", stringify([]ExecutionTargetDesiredState{
 		ExecutionTargetActive,
 		ExecutionTargetDraining,
+		ExecutionTargetRemoved,
 	}))
 	assertExactEnum(t, schemas, "IsolationGuarantee", stringify(IsolationGuarantees()))
 	assertExactEnum(t, schemas, "PlacementStrategy", stringify([]PlacementStrategy{

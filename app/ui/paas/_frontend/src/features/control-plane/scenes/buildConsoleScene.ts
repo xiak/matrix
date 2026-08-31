@@ -286,6 +286,7 @@ function hostScenes(inventory: HostInventory): HostScene[] {
         platform: [target.labels["matrix-os"], target.labels["matrix-arch"]].filter(Boolean).join(" · ") || "平台信息未上报",
         source: `${target.infrastructureAdapter} · ${target.deploymentExecutor}`,
         executionPoolId: target.executionPoolId,
+        resourceVersion: target.resourceVersion,
         desiredState: target.desiredState,
         health: target.health,
         status: hostStatus(target.health),

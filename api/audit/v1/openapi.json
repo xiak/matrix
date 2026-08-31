@@ -42,6 +42,9 @@
           "paas.deployment.rolled-back",
           "paas.execution-pool.created",
           "paas.execution-target.registered",
+          "paas.execution-target.drained",
+          "paas.execution-target.activated",
+          "paas.execution-target.removed",
           "paas.terminal-session.created",
           "paas.terminal-session.started",
           "paas.terminal-session.ended",
@@ -772,6 +775,84 @@
                   "properties": {
                     "action": {
                       "const": "paas.execution-target.registered"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "PAAS"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "paas.execution-target.drained"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "PAAS"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "paas.execution-target.activated"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "PAAS"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "paas.execution-target.removed"
                     }
                   },
                   "required": [
@@ -2277,6 +2358,141 @@
               "properties": {
                 "action": {
                   "const": "paas.execution-target.registered"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "type": {
+                      "const": "USER"
+                    }
+                  }
+                },
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "EXECUTION_TARGET"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                },
+                "tenantId": false
+              },
+              "required": [
+                "installationId",
+                "iamDecisionId",
+                "operationId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.execution-target.drained"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "type": {
+                      "const": "USER"
+                    }
+                  }
+                },
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "EXECUTION_TARGET"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                },
+                "tenantId": false
+              },
+              "required": [
+                "installationId",
+                "iamDecisionId",
+                "operationId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.execution-target.activated"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "type": {
+                      "const": "USER"
+                    }
+                  }
+                },
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "EXECUTION_TARGET"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                },
+                "tenantId": false
+              },
+              "required": [
+                "installationId",
+                "iamDecisionId",
+                "operationId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.execution-target.removed"
                 }
               },
               "required": [

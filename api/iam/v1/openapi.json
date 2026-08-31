@@ -34,6 +34,9 @@
           "paas.execution-pool.read",
           "paas.execution-target.register",
           "paas.execution-target.read",
+          "paas.execution-target.drain",
+          "paas.execution-target.activate",
+          "paas.execution-target.remove",
           "paas.platform-operation.read",
           "paas.application.create",
           "paas.application.read",
@@ -210,6 +213,9 @@
                       "paas.execution-pool.read",
                       "paas.execution-target.register",
                       "paas.execution-target.read",
+                      "paas.execution-target.drain",
+                      "paas.execution-target.activate",
+                      "paas.execution-target.remove",
                       "paas.platform-operation.read",
                       "audit.platform-record.read",
                       "audit.platform-integrity.verify"
@@ -710,6 +716,84 @@
               "properties": {
                 "action": {
                   "const": "paas.execution-target.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "EXECUTION_TARGET"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.execution-target.drain"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "EXECUTION_TARGET"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.execution-target.activate"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "EXECUTION_TARGET"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.execution-target.remove"
                 }
               },
               "required": [
@@ -1987,6 +2071,84 @@
               "properties": {
                 "action": {
                   "const": "paas.execution-target.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "EXECUTION_TARGET"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.execution-target.drain"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "EXECUTION_TARGET"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.execution-target.activate"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "EXECUTION_TARGET"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.execution-target.remove"
                 }
               },
               "required": [

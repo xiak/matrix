@@ -962,13 +962,12 @@ func TestUpgradeConfigurationReplacesOnlyReleaseDerivedFilesAndReplaysBothWays(t
 	}
 }
 
-func TestUpgradeConfigurationReplacesAndRestoresTheFrozenPredecessorTopology(t *testing.T) {
+func TestUpgradeConfigurationRetainsAndRestoresTheFrozenAdjacentTopology(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("local-machine upgrade configuration targets Linux")
 	}
 	current := release.CurrentDatabaseProfile()
-	predecessor := current
-	predecessor.ContractRevision--
+	predecessor := release.SupportedDatabasePredecessorProfile()
 	plan := newUpgradePlan(t, predecessor, current)
 	source, err := authenticateInstalledPlan(plan.Source)
 	if err != nil {
@@ -978,10 +977,10 @@ func TestUpgradeConfigurationReplacesAndRestoresTheFrozenPredecessorTopology(t *
 
 	predecessorCompose := readTestFile(t, source.Root, layout.Compose)
 	predecessorRoutes := readTestFile(t, source.Root, layout.APISIXRoutes)
-	if bytes.Contains(predecessorCompose, []byte("MATRIX_PAAS_PUBLIC_BASE_PATH")) ||
-		bytes.Contains(predecessorCompose, []byte("MATRIX_PAAS_TERMINAL_COOKIE_SECURE")) ||
-		bytes.Contains(predecessorRoutes, []byte("matrix-paas-terminal")) {
-		t.Fatal("frozen predecessor fixture contains successor terminal configuration")
+	if !bytes.Contains(predecessorCompose, []byte("MATRIX_PAAS_PUBLIC_BASE_PATH")) ||
+		!bytes.Contains(predecessorCompose, []byte("MATRIX_PAAS_TERMINAL_COOKIE_SECURE")) ||
+		!bytes.Contains(predecessorRoutes, []byte("matrix-paas-terminal")) {
+		t.Fatal("frozen adjacent predecessor lost its retained terminal configuration")
 	}
 	if _, err := verifiedInstallationConfiguration(source); err != nil {
 		t.Fatalf("verify predecessor installation: %v", err)
@@ -1000,9 +999,9 @@ func TestUpgradeConfigurationReplacesAndRestoresTheFrozenPredecessorTopology(t *
 	if bytes.Equal(successorCompose, predecessorCompose) ||
 		!bytes.Contains(successorCompose, []byte("MATRIX_PAAS_PUBLIC_BASE_PATH")) ||
 		!bytes.Contains(successorCompose, []byte("MATRIX_PAAS_TERMINAL_COOKIE_SECURE")) ||
-		bytes.Equal(successorRoutes, predecessorRoutes) ||
+		!bytes.Equal(successorRoutes, predecessorRoutes) ||
 		!bytes.Contains(successorRoutes, []byte("matrix-paas-terminal")) {
-		t.Fatal("upgrade did not publish the successor terminal configuration")
+		t.Fatal("schema upgrade changed the retained terminal topology or release labels were not advanced")
 	}
 
 	if err := restoreUpgradeConfiguration(plan); err != nil {

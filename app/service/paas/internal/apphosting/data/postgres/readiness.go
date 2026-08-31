@@ -15,7 +15,7 @@ import (
 // PaaS schema-2 compatibility floor. Revision-4 binaries ignore them and keep
 // accepting the same readiness tuple during an exact rollback; this binary
 // separately verifies the new object and function shapes in its migration.
-const paasDatabaseSchemaVersion = 2
+const paasDatabaseSchemaVersion = 3
 
 func (repository *ApplicationRepository) Readiness(
 	ctx context.Context,

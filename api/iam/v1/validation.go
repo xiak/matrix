@@ -482,7 +482,9 @@ func ResourceKindForAction(action Action) (ResourceKind, bool) {
 		return ResourceOperation, true
 	case ActionPaaSExecutionPoolCreate, ActionPaaSExecutionPoolRead:
 		return ResourceExecutionPool, true
-	case ActionPaaSExecutionTargetRegister, ActionPaaSExecutionTargetRead:
+	case ActionPaaSExecutionTargetRegister, ActionPaaSExecutionTargetRead,
+		ActionPaaSExecutionTargetDrain, ActionPaaSExecutionTargetActivate,
+		ActionPaaSExecutionTargetRemove:
 		return ResourceExecutionTarget, true
 	case ActionManagedServiceOfferingRead:
 		return ResourceServiceOffering, true

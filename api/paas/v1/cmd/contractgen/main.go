@@ -146,6 +146,17 @@ func buildPaths() schema {
 		"List installation-scoped ExecutionTargets",
 		"ExecutionTargetList",
 	)
+	for _, command := range []struct {
+		name, operationID, summary string
+	}{
+		{"drain", "drainExecutionTarget", "Exclude an ExecutionTarget from new placement without moving existing work"},
+		{"activate", "activateExecutionTarget", "Return a draining ExecutionTarget to placement eligibility"},
+		{"remove", "removeExecutionTarget", "Permanently remove an empty draining ExecutionTarget from pool membership"},
+	} {
+		paths["/v1/execution-targets/{executionTargetId}/"+command.name] = schema{
+			"post": targetLifecycleOperation(command.operationID, command.summary),
+		}
+	}
 
 	paths["/v1/deployments"] = schema{
 		"get":  deploymentCollectionReadOperation(),
@@ -357,6 +368,19 @@ func mutationOperationWithPath(
 	return operation
 }
 
+func targetLifecycleOperation(operationID, summary string) schema {
+	return schema{
+		"operationId": operationID,
+		"summary":     summary,
+		"parameters": []any{
+			pathIDParameter("executionTargetId"),
+			componentRef("#/components/parameters/IdempotencyKey"),
+			componentRef("#/components/parameters/IfMatch"),
+		},
+		"responses": mutationResponses("200"),
+	}
+}
+
 func readOperation(operationID, summary, pathParameter, responseSchema string) schema {
 	return schema{
 		"operationId": operationID,
@@ -489,7 +513,7 @@ func enumSchemas() map[string][]string {
 		"ExecutionPoolPhase":            stringsOf(paasv1.ExecutionPoolReady, paasv1.ExecutionPoolDegraded, paasv1.ExecutionPoolUnavailable),
 		"ExecutionTargetHealth":         stringsOf(paasv1.ExecutionTargetHealthUnknown, paasv1.ExecutionTargetHealthReady, paasv1.ExecutionTargetHealthDegraded, paasv1.ExecutionTargetHealthUnavailable),
 		"MeasurementState":              stringsOf(paasv1.MeasurementAvailable, paasv1.MeasurementWarmingUp, paasv1.MeasurementUnavailable, paasv1.MeasurementUnsupported, paasv1.MeasurementStale),
-		"ExecutionTargetDesiredState":   stringsOf(paasv1.ExecutionTargetActive, paasv1.ExecutionTargetDraining),
+		"ExecutionTargetDesiredState":   stringsOf(paasv1.ExecutionTargetActive, paasv1.ExecutionTargetDraining, paasv1.ExecutionTargetRemoved),
 		"IsolationGuarantee":            stringsOfSlice(paasv1.IsolationGuarantees()),
 		"PlacementStrategy":             stringsOf(paasv1.PlacementFirstFit, paasv1.PlacementSpread, paasv1.PlacementBinPack),
 		"PlacementOutcome":              stringsOf(paasv1.PlacementScheduled, paasv1.PlacementUnschedulable),

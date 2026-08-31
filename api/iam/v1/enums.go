@@ -64,6 +64,9 @@ const (
 	ActionPaaSExecutionPoolRead       Action = "paas.execution-pool.read"
 	ActionPaaSExecutionTargetRegister Action = "paas.execution-target.register"
 	ActionPaaSExecutionTargetRead     Action = "paas.execution-target.read"
+	ActionPaaSExecutionTargetDrain    Action = "paas.execution-target.drain"
+	ActionPaaSExecutionTargetActivate Action = "paas.execution-target.activate"
+	ActionPaaSExecutionTargetRemove   Action = "paas.execution-target.remove"
 	ActionPaaSPlatformOperationRead   Action = "paas.platform-operation.read"
 
 	ActionPaaSApplicationCreate           Action = "paas.application.create"
@@ -176,6 +179,9 @@ var allActions = []Action{
 	ActionPaaSExecutionPoolRead,
 	ActionPaaSExecutionTargetRegister,
 	ActionPaaSExecutionTargetRead,
+	ActionPaaSExecutionTargetDrain,
+	ActionPaaSExecutionTargetActivate,
+	ActionPaaSExecutionTargetRemove,
 	ActionPaaSPlatformOperationRead,
 	ActionPaaSApplicationCreate,
 	ActionPaaSApplicationRead,
@@ -231,6 +237,8 @@ func IsPlatformAction(action Action) bool {
 		ActionIAMPlatformRoleBindingPut, ActionIAMPlatformRoleBindingRevoke,
 		ActionPaaSExecutionPoolCreate, ActionPaaSExecutionPoolRead,
 		ActionPaaSExecutionTargetRegister, ActionPaaSExecutionTargetRead,
+		ActionPaaSExecutionTargetDrain, ActionPaaSExecutionTargetActivate,
+		ActionPaaSExecutionTargetRemove,
 		ActionPaaSPlatformOperationRead, ActionAuditPlatformRecordRead, ActionAuditPlatformIntegrityVerify:
 		return true
 	default:

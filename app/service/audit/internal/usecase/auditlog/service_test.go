@@ -125,7 +125,7 @@ func TestAuditUsecasesBindIAMAndAuditEveryAuthorizedRead(t *testing.T) {
 	assertLastAccessRecord(t, transaction, 6, auditv1.ActionAuditIntegrityVerified, "decision-4")
 	readiness, err := service.Readiness(context.Background())
 	if err != nil || readiness.State != auditv1.ReadinessReady ||
-		readiness.CheckedAt != transaction.now || readiness.SchemaVersion != 3 {
+		readiness.CheckedAt != transaction.now || readiness.SchemaVersion != 4 {
 		t.Fatalf("read Audit readiness: readiness=%#v err=%v", readiness, err)
 	}
 }
@@ -605,7 +605,7 @@ func (transaction *auditTransaction) LookupPaaSOperationRecord(
 }
 
 func (transaction *auditTransaction) Readiness(context.Context) (ReadinessSnapshot, error) {
-	return ReadinessSnapshot{Ready: true, SchemaVersion: 3, CheckedAt: transaction.now}, nil
+	return ReadinessSnapshot{Ready: true, SchemaVersion: 4, CheckedAt: transaction.now}, nil
 }
 
 func registryKey(source auditv1.Source, eventID auditv1.EventID) string {

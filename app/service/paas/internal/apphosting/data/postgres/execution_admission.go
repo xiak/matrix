@@ -67,6 +67,10 @@ func (repository *ExecutionAdmissionRepository) WithinTransaction(ctx context.Co
 			return executionadmission.ErrConflict
 		case "MX404":
 			return executionadmission.ErrNotFound
+		case "MX423":
+			return executionadmission.ErrTargetInUse
+		case "55000":
+			return executionadmission.ErrInvalidTransition
 		case "22023", "23514":
 			return executionadmission.ErrInvalidArgument
 		}
@@ -197,6 +201,7 @@ func (transaction *executionAdmissionTransaction) ListTargets(ctx context.Contex
 func (transaction *executionAdmissionTransaction) ListTargetResources(ctx context.Context) ([]paasv1.ExecutionTarget, error) {
 	rows, err := transaction.tx.Query(ctx, `SELECT id, execution_pool_id, resource_version, document
 		FROM paas.execution_targets WHERE installation_id = $1
+		  AND document#>>'{spec,desiredState}' <> 'REMOVED'
 		ORDER BY id COLLATE "C" LIMIT $2`, transaction.installationID, paasv1.MaximumExecutionTargetListItems+1)
 	if err != nil {
 		return nil, err
@@ -295,6 +300,52 @@ func (transaction *executionAdmissionTransaction) RegisterTarget(ctx context.Con
 		return err
 	}
 	return transaction.admit(ctx, registration.Target, submission, registration.BindingRef, registration.IdentityFingerprint, int64(expectedPoolVersion), poolDocument)
+}
+
+func (transaction *executionAdmissionTransaction) TransitionTarget(
+	ctx context.Context,
+	expectedTargetVersion uint64,
+	target paasv1.ExecutionTarget,
+	expectedPoolVersion uint64,
+	pool paasv1.ExecutionPool,
+	submission executionadmission.Submission,
+) error {
+	if paasv1.ValidateExecutionTarget(target) != nil || paasv1.ValidateExecutionPool(pool) != nil ||
+		target.Spec.ExecutionPoolID != pool.Metadata.ID || expectedTargetVersion < 1 ||
+		expectedTargetVersion > 9007199254740991 || expectedPoolVersion < 1 ||
+		expectedPoolVersion > 9007199254740991 || paasv1.ValidateOperation(submission.Operation) != nil ||
+		audit.ValidateEvent(submission.AuditEvent) != nil ||
+		submission.Operation.InstallationID != transaction.installationID ||
+		submission.AuditEvent.InstallationID != transaction.installationID {
+		return executionadmission.ErrInvalidArgument
+	}
+	targetDocument, err := json.Marshal(target)
+	if err != nil {
+		return err
+	}
+	poolDocument, err := json.Marshal(pool)
+	if err != nil {
+		return err
+	}
+	operationDocument, err := json.Marshal(submission.Operation)
+	if err != nil {
+		return err
+	}
+	eventDocument, err := json.Marshal(submission.AuditEvent)
+	if err != nil {
+		return err
+	}
+	_, err = transaction.tx.Exec(
+		ctx,
+		`SELECT paas.transition_execution_target($1,$2::jsonb,$3,$4::jsonb,$5::jsonb,$6::jsonb)`,
+		int64(expectedTargetVersion),
+		targetDocument,
+		int64(expectedPoolVersion),
+		poolDocument,
+		operationDocument,
+		eventDocument,
+	)
+	return err
 }
 
 func (transaction *executionAdmissionTransaction) admit(ctx context.Context, resource any, submission executionadmission.Submission, bindingRef, fingerprint, poolVersion, poolDocument any) error {

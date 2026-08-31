@@ -105,6 +105,7 @@ export type HostScene = {
   platform: string;
   source: string;
   executionPoolId: string;
+  resourceVersion: number;
   desiredState: string;
   health: string;
   status: SceneStatus;

@@ -493,7 +493,9 @@ ALTER TABLE paas.operations
             'CREATE_APPLICATION', 'CREATE_CONFIGURATION', 'CREATE_CONFIGURATION_REVISION',
             'CREATE_APPLICATION_REVISION', 'DEPLOY', 'UPDATE', 'STOP', 'ROLLBACK'
         )) OR (installation_id IS NOT NULL AND action IN (
-            'CREATE_EXECUTION_POOL', 'REGISTER_EXECUTION_TARGET'
+            'CREATE_EXECUTION_POOL', 'REGISTER_EXECUTION_TARGET',
+            'DRAIN_EXECUTION_TARGET', 'ACTIVATE_EXECUTION_TARGET',
+            'REMOVE_EXECUTION_TARGET'
         ) AND state = 'SUCCEEDED' AND lease_owner IS NULL AND attempt = 1)
     ),
     ADD CONSTRAINT operations_ids_valid CHECK (
@@ -519,7 +521,10 @@ ALTER TABLE paas.operations
             AND document#>>'{requestedBy,type}' = 'USER'
             AND target_kind = CASE action
                 WHEN 'CREATE_EXECUTION_POOL' THEN 'ExecutionPool'
-                WHEN 'REGISTER_EXECUTION_TARGET' THEN 'ExecutionTarget' END))
+                WHEN 'REGISTER_EXECUTION_TARGET' THEN 'ExecutionTarget'
+                WHEN 'DRAIN_EXECUTION_TARGET' THEN 'ExecutionTarget'
+                WHEN 'ACTIVATE_EXECUTION_TARGET' THEN 'ExecutionTarget'
+                WHEN 'REMOVE_EXECUTION_TARGET' THEN 'ExecutionTarget' END))
         AND document->>'action' = action
         AND document#>>'{target,kind}' = target_kind
         AND document#>>'{target,id}' = target_id
@@ -1808,6 +1813,9 @@ BEGIN
         WHEN 'ROLLBACK' THEN 'paas.deployment.rolled-back'
         WHEN 'CREATE_EXECUTION_POOL' THEN 'paas.execution-pool.created'
         WHEN 'REGISTER_EXECUTION_TARGET' THEN 'paas.execution-target.registered'
+        WHEN 'DRAIN_EXECUTION_TARGET' THEN 'paas.execution-target.drained'
+        WHEN 'ACTIVATE_EXECUTION_TARGET' THEN 'paas.execution-target.activated'
+        WHEN 'REMOVE_EXECUTION_TARGET' THEN 'paas.execution-target.removed'
         ELSE NULL
     END;
     expected_result := CASE
@@ -1817,7 +1825,10 @@ BEGIN
             'CREATE_CONFIGURATION_REVISION',
             'CREATE_APPLICATION_REVISION',
             'CREATE_EXECUTION_POOL',
-            'REGISTER_EXECUTION_TARGET'
+            'REGISTER_EXECUTION_TARGET',
+            'DRAIN_EXECUTION_TARGET',
+            'ACTIVATE_EXECUTION_TARGET',
+            'REMOVE_EXECUTION_TARGET'
         ) THEN 'SUCCEEDED'
         ELSE 'ACCEPTED'
     END;
@@ -1830,7 +1841,9 @@ BEGIN
        OR (submitted_audit_event ? 'tenantId') <> (effective_tenant_id IS NOT NULL)
        OR (submitted_audit_event ? 'installationId') <> (effective_installation_id IS NOT NULL)
        OR ((effective_installation_id IS NOT NULL) <> (submitted_operation->>'action' IN (
-            'CREATE_EXECUTION_POOL', 'REGISTER_EXECUTION_TARGET'
+            'CREATE_EXECUTION_POOL', 'REGISTER_EXECUTION_TARGET',
+            'DRAIN_EXECUTION_TARGET', 'ACTIVATE_EXECUTION_TARGET',
+            'REMOVE_EXECUTION_TARGET'
        )))
        OR (effective_installation_id IS NOT NULL
             AND submitted_audit_event#>>'{actor,type}' IS DISTINCT FROM 'USER')
@@ -2253,6 +2266,19 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'terminal session proof is invalid';
     END IF;
 
+    -- Serialize session admission with terminal removal. Draining keeps
+    -- access to existing work; a removed tombstone cannot mint a new ticket.
+    PERFORM 1
+      FROM paas.execution_target_allocations AS allocation
+      JOIN paas.execution_targets AS target
+        ON target.id = allocation.execution_target_id
+     WHERE allocation.execution_target_id = submitted_binding->>'executionTargetId'
+       AND target.document#>>'{spec,desiredState}' <> 'REMOVED'
+     FOR UPDATE OF allocation, target;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'terminal execution target is removed';
+    END IF;
+
     SELECT runtime.document INTO current_binding
       FROM paas.lock_current_terminal_runtime(
         submitted_binding->>'deploymentId',
@@ -2550,7 +2576,9 @@ BEGIN
               WHEN binding_ref IS NULL THEN interval '5 minutes' ELSE interval '15 seconds' END
           AND (document#>>'{status,observedAt}')::timestamptz <= transaction_timestamp() + interval '2 seconds'
     ) INTO total_count, maximum_ready_count, degraded_count FROM paas.execution_targets
-     WHERE installation_id = effective_installation_id AND execution_pool_id = current_pool.id;
+     WHERE installation_id = effective_installation_id
+       AND execution_pool_id = current_pool.id
+       AND document#>>'{spec,desiredState}' <> 'REMOVED';
     ready_count := (submitted_pool#>>'{status,readyExecutionTargetCount}')::bigint;
     next_version := expected_resource_version + CASE
         WHEN ((current_pool.document->'status') - 'observedAt') IS DISTINCT FROM ((submitted_pool->'status') - 'observedAt') THEN 1 ELSE 0 END;
@@ -2562,7 +2590,8 @@ BEGIN
         AND (submitted_pool#>>'{status,observedAt}')::timestamptz = transaction_timestamp()
         AND submitted_pool#>>'{status,executionTargetCount}' = total_count::text
         AND ready_count BETWEEN 0 AND maximum_ready_count
-        AND submitted_pool#>>'{status,phase}' = CASE WHEN ready_count = total_count THEN 'READY'
+        AND submitted_pool#>>'{status,phase}' = CASE WHEN total_count = 0 THEN 'UNAVAILABLE'
+            WHEN ready_count = total_count THEN 'READY'
             WHEN ready_count > 0 OR degraded_count > 0 THEN 'DEGRADED' ELSE 'UNAVAILABLE' END
         AND ((submitted_pool->'status') - ARRAY['phase','executionTargetCount','readyExecutionTargetCount','observedAt']) = '{}'::jsonb
     ) IS TRUE) THEN
@@ -2669,6 +2698,189 @@ END
 $function$;
 REVOKE ALL ON FUNCTION paas.admit_execution_resource(jsonb,jsonb,jsonb,text,text,bigint,jsonb) FROM PUBLIC, matrix_paas_worker;
 GRANT EXECUTE ON FUNCTION paas.admit_execution_resource(jsonb,jsonb,jsonb,text,text,bigint,jsonb) TO matrix_paas_api;
+
+CREATE OR REPLACE FUNCTION paas.transition_execution_target(
+    expected_target_version bigint,
+    submitted_target jsonb,
+    expected_pool_version bigint,
+    submitted_pool jsonb,
+    submitted_operation jsonb,
+    submitted_audit_event jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_installation_id text := paas.current_installation_id();
+    current_target paas.execution_targets%ROWTYPE;
+    operation_action text := submitted_operation->>'action';
+    expected_source_state text;
+    expected_target_state text;
+    effective_target_id text := submitted_target#>>'{metadata,id}';
+    effective_pool_id text := submitted_target#>>'{spec,executionPoolId}';
+BEGIN
+    IF effective_installation_id IS NULL THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'installation context is required';
+    END IF;
+    expected_source_state := CASE operation_action
+        WHEN 'DRAIN_EXECUTION_TARGET' THEN 'ACTIVE'
+        WHEN 'ACTIVATE_EXECUTION_TARGET' THEN 'DRAINING'
+        WHEN 'REMOVE_EXECUTION_TARGET' THEN 'DRAINING'
+        ELSE NULL
+    END;
+    expected_target_state := CASE operation_action
+        WHEN 'DRAIN_EXECUTION_TARGET' THEN 'DRAINING'
+        WHEN 'ACTIVATE_EXECUTION_TARGET' THEN 'ACTIVE'
+        WHEN 'REMOVE_EXECUTION_TARGET' THEN 'REMOVED'
+        ELSE NULL
+    END;
+    IF expected_source_state IS NULL
+       OR jsonb_typeof(submitted_target) IS DISTINCT FROM 'object'
+       OR jsonb_typeof(submitted_pool) IS DISTINCT FROM 'object'
+       OR jsonb_typeof(submitted_operation) IS DISTINCT FROM 'object'
+       OR jsonb_typeof(submitted_audit_event) IS DISTINCT FROM 'object'
+       OR expected_target_version NOT BETWEEN 1 AND 9007199254740991
+       OR expected_pool_version NOT BETWEEN 1 AND 9007199254740991 THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'execution target transition input is invalid';
+    END IF;
+
+    -- Pool then allocation is the stable operator lock order. Placement takes
+    -- the allocation lock before it reads target eligibility, so a completed
+    -- drain is an exact scheduling fence rather than an eventually-consistent
+    -- hint.
+    PERFORM 1 FROM paas.execution_pools
+     WHERE installation_id = effective_installation_id AND id = effective_pool_id
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX404', MESSAGE = 'execution pool is not registered';
+    END IF;
+    PERFORM 1 FROM paas.execution_target_allocations
+     WHERE execution_target_id = effective_target_id
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX404', MESSAGE = 'execution target allocation is not registered';
+    END IF;
+    SELECT * INTO current_target
+      FROM paas.execution_targets
+     WHERE installation_id = effective_installation_id
+       AND id = effective_target_id
+       AND binding_ref IS NOT NULL
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX404', MESSAGE = 'managed execution target is not registered';
+    END IF;
+    IF current_target.resource_version IS DISTINCT FROM expected_target_version THEN
+        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'execution target changed concurrently';
+    END IF;
+    IF current_target.document#>>'{spec,desiredState}' IS DISTINCT FROM expected_source_state THEN
+        RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'execution target lifecycle transition is invalid';
+    END IF;
+    IF NOT ((
+        (((current_target.document #- '{metadata,resourceVersion}') #- '{metadata,updatedAt}') #- '{spec,desiredState}')
+            = (((submitted_target #- '{metadata,resourceVersion}') #- '{metadata,updatedAt}') #- '{spec,desiredState}')
+        AND submitted_target#>>'{metadata,resourceVersion}' = (expected_target_version + 1)::text
+        AND (submitted_target#>>'{metadata,updatedAt}')::timestamptz = transaction_timestamp()
+        AND submitted_target#>>'{spec,desiredState}' = expected_target_state
+        AND current_target.execution_pool_id = effective_pool_id
+        AND submitted_pool#>>'{metadata,id}' = effective_pool_id
+        AND submitted_operation->>'installationId' = effective_installation_id
+        AND submitted_operation->>'action' = operation_action
+        AND submitted_operation#>>'{target,kind}' = 'ExecutionTarget'
+        AND submitted_operation#>>'{target,id}' = effective_target_id
+        AND submitted_operation->>'state' = 'SUCCEEDED'
+        AND submitted_operation->>'attempt' = '1'
+        AND NOT (submitted_operation ? 'error')
+        AND (submitted_operation->>'createdAt')::timestamptz = transaction_timestamp()
+        AND (submitted_operation->>'updatedAt')::timestamptz = transaction_timestamp()
+        AND (submitted_operation->>'terminalAt')::timestamptz = transaction_timestamp()
+    ) IS TRUE) THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'execution target transition changed protected authority';
+    END IF;
+
+    IF operation_action = 'REMOVE_EXECUTION_TARGET' THEN
+        PERFORM 1 FROM paas.capacity_claims AS claim
+         WHERE claim.execution_target_id = effective_target_id
+           AND claim.state IN ('PENDING', 'ACTIVE')
+         FOR UPDATE;
+        IF FOUND THEN
+            RAISE EXCEPTION USING ERRCODE = 'MX423', MESSAGE = 'execution target still has consuming capacity';
+        END IF;
+
+        PERFORM 1
+          FROM paas.operations AS operation
+          JOIN paas.placement_decisions AS decision
+            ON decision.tenant_id = operation.tenant_id
+           AND decision.operation_id = operation.id
+         WHERE decision.execution_target_id = effective_target_id
+           AND operation.state NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'MANUAL_INTERVENTION')
+         FOR UPDATE OF operation;
+        IF FOUND THEN
+            RAISE EXCEPTION USING ERRCODE = 'MX423', MESSAGE = 'execution target still has a non-terminal Operation';
+        END IF;
+
+        PERFORM 1
+          FROM paas.adapter_commands AS command
+          WHERE command.execution_target_id = effective_target_id
+           AND NOT EXISTS (
+                SELECT 1 FROM paas.adapter_receipts AS receipt
+                 WHERE receipt.tenant_id = command.tenant_id
+                   AND receipt.command_id = command.id
+                   AND receipt.state IN ('SUCCEEDED', 'FAILED')
+           )
+         FOR UPDATE OF command;
+        IF FOUND THEN
+            RAISE EXCEPTION USING ERRCODE = 'MX423', MESSAGE = 'execution target still has an unresolved adapter result';
+        END IF;
+
+        PERFORM 1 FROM paas.terminal_sessions AS session
+         WHERE session.execution_target_id = effective_target_id
+           AND session.state <> 'ENDED'
+         FOR UPDATE;
+        IF FOUND THEN
+            RAISE EXCEPTION USING ERRCODE = 'MX423', MESSAGE = 'execution target still has an open terminal session';
+        END IF;
+
+        PERFORM 1
+          FROM paas.deployments AS deployment
+          JOIN paas.placement_decisions AS decision
+            ON decision.tenant_id = deployment.tenant_id
+           AND decision.id = deployment.document#>>'{status,placementDecisionId}'
+         WHERE decision.execution_target_id = effective_target_id
+           AND (deployment.document#>>'{spec,desiredState}' <> 'STOPPED'
+                OR deployment.document#>>'{status,phase}' <> 'STOPPED')
+         FOR UPDATE OF deployment;
+        IF FOUND THEN
+            RAISE EXCEPTION USING ERRCODE = 'MX423', MESSAGE = 'execution target still has a current Deployment';
+        END IF;
+    END IF;
+
+    UPDATE paas.execution_targets AS target
+       SET resource_version = expected_target_version + 1,
+           document = submitted_target
+     WHERE target.id = current_target.id;
+    PERFORM paas.store_execution_pool_observation(expected_pool_version, submitted_pool);
+    INSERT INTO paas.operations (
+        installation_id, id, action, target_kind, target_id,
+        idempotency_fingerprint, request_digest, state, attempt,
+        next_attempt_at, fencing_token, created_at, updated_at, terminal_at,
+        document
+    ) VALUES (
+        effective_installation_id, submitted_operation->>'id', operation_action,
+        'ExecutionTarget', effective_target_id,
+        submitted_operation->>'idempotencyFingerprint',
+        submitted_operation->>'requestDigest', 'SUCCEEDED', 1,
+        transaction_timestamp(), 0, transaction_timestamp(),
+        transaction_timestamp(), transaction_timestamp(), submitted_operation
+    );
+    PERFORM paas.append_audit_outbox(submitted_operation, submitted_audit_event);
+END
+$function$;
+REVOKE ALL ON FUNCTION paas.transition_execution_target(bigint,jsonb,bigint,jsonb,jsonb,jsonb)
+    FROM PUBLIC, matrix_paas_worker;
+GRANT EXECUTE ON FUNCTION paas.transition_execution_target(bigint,jsonb,bigint,jsonb,jsonb,jsonb)
+    TO matrix_paas_api;
 
 CREATE OR REPLACE FUNCTION paas.refresh_execution_target(
     expected_target_version bigint, submitted_target jsonb,
@@ -3839,6 +4051,7 @@ AS $function$
         AND to_regprocedure('paas.current_installation_id()') IS NOT NULL
         AND to_regprocedure('paas.complete_audit_event(text,text,text,text,bigint,text,timestamptz,text)') IS NOT NULL
         AND to_regprocedure('paas.admit_execution_resource(jsonb,jsonb,jsonb,text,text,bigint,jsonb)') IS NOT NULL
+        AND to_regprocedure('paas.transition_execution_target(bigint,jsonb,bigint,jsonb,jsonb,jsonb)') IS NOT NULL
         AND to_regprocedure('paas.refresh_execution_target(bigint,jsonb,bigint,jsonb)') IS NOT NULL
         AND to_regprocedure('paas.next_deployment_runtime_candidate(text,text)') IS NOT NULL
         AND to_regprocedure('paas.store_deployment_runtime_snapshot(text,text,bigint,text,text,text,timestamp with time zone,timestamp with time zone,jsonb)') IS NOT NULL
@@ -3859,7 +4072,7 @@ AS $function$
              WHERE outbox.status = 'DEAD_LETTER'
                 OR outbox.attempts >= 100
         ),
-        2::bigint,
+        3::bigint,
         transaction_timestamp()
 $function$;
 
@@ -3894,7 +4107,7 @@ AS $function$
         AND to_regprocedure(
             'paas.reconcile_local_execution_profile(bigint,jsonb,bigint,jsonb,bigint,jsonb)'
         ) IS NULL,
-        2::bigint,
+        3::bigint,
         transaction_timestamp()
 $function$;
 

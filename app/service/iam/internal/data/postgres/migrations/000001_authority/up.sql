@@ -745,7 +745,7 @@ BEGIN
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-           4::bigint,
+           5::bigint,
            transaction_timestamp();
 END
 $function$;
@@ -777,6 +777,9 @@ AS $function$
         WHEN 'paas.execution-pool.read' THEN 'EXECUTION_POOL'
         WHEN 'paas.execution-target.register' THEN 'EXECUTION_TARGET'
         WHEN 'paas.execution-target.read' THEN 'EXECUTION_TARGET'
+        WHEN 'paas.execution-target.drain' THEN 'EXECUTION_TARGET'
+        WHEN 'paas.execution-target.activate' THEN 'EXECUTION_TARGET'
+        WHEN 'paas.execution-target.remove' THEN 'EXECUTION_TARGET'
         WHEN 'paas.platform-operation.read' THEN 'OPERATION'
         WHEN 'paas.application.create' THEN 'APPLICATION'
         WHEN 'paas.application.read' THEN 'APPLICATION'
@@ -822,6 +825,8 @@ AS $function$
         'iam.platform-role-binding.put', 'iam.platform-role-binding.revoke',
         'paas.execution-pool.create', 'paas.execution-pool.read',
         'paas.execution-target.register', 'paas.execution-target.read',
+        'paas.execution-target.drain', 'paas.execution-target.activate',
+        'paas.execution-target.remove',
         'paas.platform-operation.read', 'audit.platform-record.read',
         'audit.platform-integrity.verify'
     ), false)

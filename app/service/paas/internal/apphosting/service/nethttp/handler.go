@@ -146,6 +146,9 @@ func NewHandler(
 	routes.HandleFunc("POST /v1/execution-targets", value.registerExecutionTarget)
 	routes.HandleFunc("GET /v1/execution-targets", value.listExecutionTargets)
 	routes.HandleFunc("GET /v1/execution-targets/{executionTargetId}", value.getExecutionTarget)
+	routes.HandleFunc("POST /v1/execution-targets/{executionTargetId}/drain", value.drainExecutionTarget)
+	routes.HandleFunc("POST /v1/execution-targets/{executionTargetId}/activate", value.activateExecutionTarget)
+	routes.HandleFunc("POST /v1/execution-targets/{executionTargetId}/remove", value.removeExecutionTarget)
 	routes.HandleFunc("GET /v1/platform/operations/{operationId}", value.getPlatformOperation)
 	routes.HandleFunc("POST /v1/applications", value.createApplication)
 	routes.HandleFunc("GET /v1/applications/{applicationId}", value.getApplication)
@@ -925,6 +928,10 @@ func writeWorkflowError(response http.ResponseWriter, requestID string, err erro
 		writeProblem(response, requestID, http.StatusServiceUnavailable, paasv1.ErrorExecutionTargetUnavailable, "Execution target unavailable", "the execution target cannot be observed or admitted now", true)
 	case errors.Is(err, executionadmission.ErrConflict):
 		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorConflict, "Execution admission conflict", "the request conflicts with the registered execution authority", false)
+	case errors.Is(err, executionadmission.ErrInvalidTransition):
+		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorConflict, "Execution target transition conflict", "the execution target is not in the required lifecycle state", false)
+	case errors.Is(err, executionadmission.ErrTargetInUse):
+		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorConflict, "Execution target is in use", "live or unresolved work must be completed before removal", true)
 	case errors.Is(err, executionadmission.ErrNotFound):
 		writeProblem(response, requestID, http.StatusNotFound, paasv1.ErrorNotFound, "Not found", "the requested installation resource does not exist", false)
 	case errors.Is(err, applicationlifecycle.ErrInvalidArgument), errors.Is(err, executionadmission.ErrInvalidArgument):
@@ -936,6 +943,8 @@ func writeWorkflowError(response http.ResponseWriter, requestID string, err erro
 	case errors.Is(err, applicationlifecycle.ErrIdempotencyConflict), errors.Is(err, executionadmission.ErrIdempotencyConflict):
 		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorIdempotencyConflict, "Idempotency conflict", "Idempotency-Key was already used for different content", false)
 	case errors.Is(err, applicationlifecycle.ErrResourceVersionConflict):
+		writeProblem(response, requestID, http.StatusPreconditionFailed, paasv1.ErrorResourceVersionConflict, "Resource version conflict", "If-Match does not identify the current resource version", false)
+	case errors.Is(err, executionadmission.ErrResourceVersionConflict):
 		writeProblem(response, requestID, http.StatusPreconditionFailed, paasv1.ErrorResourceVersionConflict, "Resource version conflict", "If-Match does not identify the current resource version", false)
 	case errors.Is(err, applicationlifecycle.ErrNoDesiredChange):
 		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorConflict, "No desired change", "Deployment desired content is unchanged", false)

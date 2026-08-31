@@ -283,7 +283,7 @@ func (value *transaction) Readiness(
 		return auditlog.ReadinessSnapshot{}, mapDatabaseError("read Audit readiness", err)
 	}
 	snapshot.CheckedAt = snapshot.CheckedAt.UTC()
-	if snapshot.SchemaVersion != 3 || snapshot.CheckedAt.IsZero() {
+	if snapshot.SchemaVersion != 4 || snapshot.CheckedAt.IsZero() {
 		return auditlog.ReadinessSnapshot{}, auditlog.ErrUnavailable
 	}
 	return snapshot, nil

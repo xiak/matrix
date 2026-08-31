@@ -1,5 +1,12 @@
 export type HostHealth = "UNKNOWN" | "READY" | "DEGRADED" | "UNAVAILABLE";
-export type HostDesiredState = "ACTIVE" | "DRAINING";
+export type HostDesiredState = "ACTIVE" | "DRAINING" | "REMOVED";
+export type HostLifecycleAction = "DRAIN" | "ACTIVATE" | "REMOVE";
+
+export type HostLifecycleCommand = {
+  targetId: string;
+  action: HostLifecycleAction;
+  resourceVersion: number;
+};
 export type HostMeasurementState =
   | "AVAILABLE"
   | "WARMING_UP"

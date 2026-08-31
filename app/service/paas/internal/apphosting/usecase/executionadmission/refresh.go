@@ -142,6 +142,9 @@ func (service *Service) Refresh(ctx context.Context) error {
 	}
 	work, failures := make(chan Registration, len(registrations)), make(chan error, len(registrations))
 	for _, registration := range registrations {
+		if registration.Target.Spec.DesiredState == paasv1.ExecutionTargetRemoved {
+			continue
+		}
 		work <- registration
 	}
 	close(work)
@@ -283,7 +286,8 @@ func (service *Service) poolSnapshot(pool paasv1.ExecutionPool, targets []paasv1
 	degraded := false
 	for _, current := range targets {
 		target := service.targetSnapshot(current, now)
-		if target.Spec.ExecutionPoolID != pool.Metadata.ID {
+		if target.Spec.ExecutionPoolID != pool.Metadata.ID ||
+			target.Spec.DesiredState == paasv1.ExecutionTargetRemoved {
 			continue
 		}
 		status.ExecutionTargetCount++

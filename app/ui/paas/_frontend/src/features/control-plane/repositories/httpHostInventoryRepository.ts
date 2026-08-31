@@ -1,10 +1,11 @@
-import { requestJSON } from "@/infrastructure/http/jsonRequest";
+import { requestJSON, requestJSONWithResponse, requestToken } from "@/infrastructure/http/jsonRequest";
 import type {
   HostCPUUsageValue,
   HostCapacity,
   HostFilesystemUsage,
   HostFilesystemUsageValue,
   HostInventory,
+  HostLifecycleCommand,
   HostMeasurementState,
   HostMemoryUsageValue,
   HostTarget,
@@ -249,7 +250,7 @@ function target(value: unknown): HostTarget {
     text(gateway.name, "host gateway name");
     text(gateway.contractVersion, "host gateway contract");
   }
-  if (spec.desiredState !== "ACTIVE" && spec.desiredState !== "DRAINING") {
+  if (spec.desiredState !== "ACTIVE" && spec.desiredState !== "DRAINING" && spec.desiredState !== "REMOVED") {
     throw new Error("INVALID_HOST_DESIRED_STATE_RESPONSE");
   }
   const status = closed(wire.status, "host status", ["health", "capacity", "allocatable", "supportedIsolationGuarantees", "observedAt", "usage"]);
@@ -298,6 +299,47 @@ function inventory(value: unknown): HostInventory {
   return { items };
 }
 
+function operation(value: unknown, command: HostLifecycleCommand): void {
+  const wire = closed(value, "host lifecycle operation", [
+    "apiVersion", "kind", "id", "scope", "installationId", "action", "target",
+    "requestedBy", "idempotencyFingerprint", "requestDigest", "state", "attempt",
+    "error", "createdAt", "updatedAt", "terminalAt"
+  ]);
+  const scope = closed(wire.scope, "host operation scope", ["kind"]);
+  const operationTarget = closed(wire.target, "host operation target", ["kind", "id"]);
+  const requestedBy = closed(wire.requestedBy, "host operation subject", ["type", "id"]);
+  const expectedAction = `${command.action}_EXECUTION_TARGET`;
+  if (wire.apiVersion !== apiVersion || wire.kind !== "Operation" || scope.kind !== "PLATFORM" ||
+      wire.action !== expectedAction || operationTarget.kind !== "ExecutionTarget" ||
+      operationTarget.id !== command.targetId || wire.state !== "SUCCEEDED" ||
+      integer(wire.attempt, "host operation attempt", true) !== 1 || wire.error !== undefined) {
+    throw new Error("INVALID_HOST_LIFECYCLE_OPERATION_RESPONSE");
+  }
+  text(wire.id, "host operation id");
+  text(wire.installationId, "host operation installation");
+  text(wire.idempotencyFingerprint, "host operation fingerprint");
+  text(wire.requestDigest, "host operation digest");
+  text(requestedBy.type, "host operation subject type");
+  text(requestedBy.id, "host operation subject id");
+  timestamp(wire.createdAt, "host operation creation");
+  timestamp(wire.updatedAt, "host operation update");
+  timestamp(wire.terminalAt, "host operation terminal time");
+}
+
+function exactETag(response: Response, resourceVersion: number): string {
+  const etag = response.headers.get("ETag");
+  if (etag !== `"${resourceVersion}"`) {
+    throw new Error("INVALID_HOST_ETAG_RESPONSE");
+  }
+  return etag;
+}
+
+function expectedState(action: HostLifecycleCommand["action"]): HostTarget["desiredState"] {
+  if (action === "DRAIN") return "DRAINING";
+  if (action === "ACTIVATE") return "ACTIVE";
+  return "REMOVED";
+}
+
 export const httpHostInventoryRepository: HostInventoryRepository = {
   async load(credential, signal) {
     const value = await requestJSON<unknown>("/api/paas/v1/execution-targets", {
@@ -305,5 +347,34 @@ export const httpHostInventoryRepository: HostInventoryRepository = {
       signal
     });
     return inventory(value);
+  },
+
+  async transition(credential, command) {
+    const path = `/api/paas/v1/execution-targets/${encodeURIComponent(command.targetId)}`;
+    const authorization = { Authorization: `Bearer ${credential}` };
+    const currentResponse = await requestJSONWithResponse<unknown>(path, { headers: authorization });
+    const current = target(currentResponse.body);
+    if (current.id !== command.targetId || current.resourceVersion !== command.resourceVersion) {
+      throw new Error("STALE_HOST_LIFECYCLE_COMMAND");
+    }
+    const etag = exactETag(currentResponse.response, current.resourceVersion);
+    const transitionResponse = await requestJSONWithResponse<unknown>(`${path}/${command.action.toLowerCase()}`, {
+      method: "POST",
+      headers: {
+        ...authorization,
+        "Idempotency-Key": requestToken("ui-host-lifecycle-"),
+        "If-Match": etag
+      }
+    });
+    operation(transitionResponse.body, command);
+    const nextVersionText = transitionResponse.response.headers.get("ETag");
+    const nextResponse = await requestJSONWithResponse<unknown>(path, { headers: authorization });
+    const changed = target(nextResponse.body);
+    if (changed.id !== command.targetId || changed.resourceVersion <= current.resourceVersion ||
+        changed.desiredState !== expectedState(command.action) ||
+        exactETag(nextResponse.response, changed.resourceVersion) !== nextVersionText) {
+      throw new Error("INVALID_HOST_LIFECYCLE_RESULT_RESPONSE");
+    }
+    return changed;
   }
 };

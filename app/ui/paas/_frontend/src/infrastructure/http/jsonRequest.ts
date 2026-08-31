@@ -10,10 +10,10 @@ export class HttpProblem extends Error {
   }
 }
 
-export async function requestJSON<T>(
+export async function requestJSONWithResponse<T>(
   path: string,
   init?: RequestInit
-): Promise<T> {
+): Promise<{ body: T; response: Response }> {
   const response = await fetch(path, {
     ...init,
     cache: "no-store",
@@ -39,7 +39,14 @@ export async function requestJSON<T>(
     throw new HttpProblem(response.status, code);
   }
 
-  return body as T;
+  return { body: body as T, response };
+}
+
+export async function requestJSON<T>(
+  path: string,
+  init?: RequestInit
+): Promise<T> {
+  return (await requestJSONWithResponse<T>(path, init)).body;
 }
 
 export function requestToken(prefix: string): string {

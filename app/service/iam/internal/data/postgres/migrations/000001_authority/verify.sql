@@ -213,11 +213,17 @@ BEGIN
        OR iam.resource_kind_for_action('managedservice.service-installation.create') IS DISTINCT FROM 'SERVICE_INSTALLATION'
        OR iam.resource_kind_for_action('managedservice.service-installation.read') IS DISTINCT FROM 'SERVICE_INSTALLATION'
        OR iam.resource_kind_for_action('paas.execution-target.register') IS DISTINCT FROM 'EXECUTION_TARGET'
+       OR iam.resource_kind_for_action('paas.execution-target.drain') IS DISTINCT FROM 'EXECUTION_TARGET'
+       OR iam.resource_kind_for_action('paas.execution-target.activate') IS DISTINCT FROM 'EXECUTION_TARGET'
+       OR iam.resource_kind_for_action('paas.execution-target.remove') IS DISTINCT FROM 'EXECUTION_TARGET'
        OR iam.resource_kind_for_action('paas.execution-pool.create') IS DISTINCT FROM 'EXECUTION_POOL'
        OR iam.resource_kind_for_action('paas.terminal-session.create') IS DISTINCT FROM 'TERMINAL_SESSION'
        OR iam.resource_kind_for_action('paas.terminal-session.close') IS DISTINCT FROM 'TERMINAL_SESSION'
        OR iam.resource_kind_for_action('unsupported') IS NOT NULL
        OR NOT iam.is_platform_action('paas.execution-target.register')
+       OR NOT iam.is_platform_action('paas.execution-target.drain')
+       OR NOT iam.is_platform_action('paas.execution-target.activate')
+       OR NOT iam.is_platform_action('paas.execution-target.remove')
        OR iam.is_platform_action('paas.application.create')
        OR iam.is_platform_action('unsupported') THEN
         RAISE EXCEPTION 'IAM authorization action mapping is invalid';

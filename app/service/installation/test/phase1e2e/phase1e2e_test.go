@@ -169,7 +169,7 @@ func TestReleasePairRequiresCompatibleImmediatePredecessor(t *testing.T) {
 			b.Release.SourceCommit = strings.Repeat("b", 40)
 		}},
 		{name: "exact retained-data profile and topology successor", accept: true, mutate: func(a, _ *release.Manifest) {
-			a.Database.ContractRevision--
+			a.Database = release.SupportedDatabasePredecessorProfile()
 			a.TopologyDigest = "sha256:" + strings.Repeat("3", 64)
 		}},
 		{name: "same-source lifecycle fixture", accept: true},
@@ -248,8 +248,7 @@ func TestReleaseSequenceRequiresTwoCompatibleImmediateTransitions(t *testing.T) 
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			successorProfile := release.CurrentDatabaseProfile()
-			bridgeProfile := successorProfile
-			bridgeProfile.ContractRevision--
+			bridgeProfile := release.SupportedDatabasePredecessorProfile()
 			base := release.VerifiedBundle{Manifest: release.Manifest{
 				Kind: release.ManifestKind,
 				Release: release.ReleaseIdentity{

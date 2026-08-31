@@ -390,10 +390,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	}
 }
 
-func TestCompileInstalledAdmitsOnlyTheFrozenAdjacentPredecessor(t *testing.T) {
-	if actual := contractDescriptionDigest(contractDescription(deploymentRuntimePredecessor)); actual != DeploymentRuntimePredecessorContractDigest() {
-		t.Fatalf("predecessor topology digest = %q", actual)
-	}
+func TestCompileInstalledUsesOneTopologyAcrossTheFrozenAdjacentDatabaseProfile(t *testing.T) {
 	options := Options{InstallationID: "mxi-" + strings.Repeat("b", 32), Root: "/data/xiak/matrix-predecessor", Listener: "0.0.0.0", Port: 8080}
 	current := topologyManifest()
 	wantCurrent, err := Compile(current, options)
@@ -406,10 +403,9 @@ func TestCompileInstalledAdmitsOnlyTheFrozenAdjacentPredecessor(t *testing.T) {
 	}
 
 	predecessor := current
-	predecessor.Database.ContractRevision--
-	predecessor.TopologyDigest = DeploymentRuntimePredecessorContractDigest()
-	if _, err := Compile(predecessor, options); err == nil {
-		t.Fatal("predecessor was admitted as a new target topology")
+	predecessor.Database = release.SupportedDatabasePredecessorProfile()
+	if compiledTarget, err := Compile(predecessor, options); err != nil || compiledTarget.ContractDigest != ContractDigest() {
+		t.Fatal("shared target topology rejected the adjacent database profile")
 	}
 	compiled, err := CompileInstalled(predecessor, options)
 	if err != nil || compiled.ContractDigest != predecessor.TopologyDigest {
@@ -420,23 +416,17 @@ func TestCompileInstalledAdmitsOnlyTheFrozenAdjacentPredecessor(t *testing.T) {
 		t.Fatal("predecessor topology inventory is incomplete")
 	}
 	environment := document.Services["paas-api"].Environment
-	if _, exists := environment["MATRIX_PAAS_PUBLIC_BASE_PATH"]; exists {
-		t.Fatal("predecessor topology gained the terminal public path")
+	if environment["MATRIX_PAAS_PUBLIC_BASE_PATH"] != "/api/paas/v1" {
+		t.Fatal("adjacent predecessor lost the retained terminal public path")
 	}
-	if _, exists := environment["MATRIX_PAAS_TERMINAL_COOKIE_SECURE"]; exists {
-		t.Fatal("predecessor topology gained the terminal cookie policy")
+	if environment["MATRIX_PAAS_TERMINAL_COOKIE_SECURE"] != "false" {
+		t.Fatal("adjacent predecessor lost the retained terminal cookie policy")
 	}
 
-	for _, change := range []func(*release.Manifest){
-		func(value *release.Manifest) { value.Database.ContractRevision-- },
-		func(value *release.Manifest) { value.Database = current.Database },
-		func(value *release.Manifest) { value.TopologyDigest = digest('f') },
-	} {
-		candidate := predecessor
-		change(&candidate)
-		if _, err := CompileInstalled(candidate, options); err == nil {
-			t.Fatal("non-adjacent or mismatched installed topology was admitted")
-		}
+	candidate := predecessor
+	candidate.TopologyDigest = digest('f')
+	if _, err := CompileInstalled(candidate, options); err == nil {
+		t.Fatal("mismatched installed topology was admitted")
 	}
 }
 

@@ -281,7 +281,7 @@ func ValidateExecutionTarget(value ExecutionTarget) error {
 			validateAdapterRef("spec.gatewayAdapter", *value.Spec.GatewayAdapter, AdapterGateway),
 		)
 	}
-	if !contains([]ExecutionTargetDesiredState{ExecutionTargetActive, ExecutionTargetDraining}, value.Spec.DesiredState) {
+	if !contains([]ExecutionTargetDesiredState{ExecutionTargetActive, ExecutionTargetDraining, ExecutionTargetRemoved}, value.Spec.DesiredState) {
 		problems = append(problems, fmt.Errorf("unknown target desired state %q", value.Spec.DesiredState))
 	}
 	if !contains(
@@ -1399,13 +1399,15 @@ func ValidateOperation(value Operation) error {
 		problems = append(problems, fmt.Errorf("unknown operation action %q", value.Action))
 	}
 	switch value.Action {
-	case OperationCreateExecutionPool, OperationRegisterExecutionTarget:
+	case OperationCreateExecutionPool, OperationRegisterExecutionTarget,
+		OperationDrainExecutionTarget, OperationActivateExecutionTarget,
+		OperationRemoveExecutionTarget:
 		problems = append(problems, ValidateID("operation.installationId", value.InstallationID))
 		if value.Scope.Kind != AuthorityPlatform || value.RequestedBy.Type != SubjectUser {
 			problems = append(problems, errors.New("platform operation requires installation scope and a user"))
 		}
 		expectedTarget := "ExecutionPool"
-		if value.Action == OperationRegisterExecutionTarget {
+		if value.Action != OperationCreateExecutionPool {
 			expectedTarget = "ExecutionTarget"
 		}
 		if value.Target.Kind != expectedTarget {

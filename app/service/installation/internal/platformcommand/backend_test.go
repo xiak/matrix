@@ -234,11 +234,10 @@ func TestCredentialRecoveryRejectsUnsupportedProfilesBeforePreparingAnIntent(t *
 	}
 }
 
-func TestCredentialRecoveryRetainsExactRevisionFiveConsumer(t *testing.T) {
-	profile := release.CurrentDatabaseProfile()
-	profile.ContractRevision--
+func TestCredentialRecoveryRetainsExactPhase3Predecessor(t *testing.T) {
+	profile := release.SupportedDatabasePredecessorProfile()
 	if err := ValidateCredentialRecoveryProfile(profile); err != nil {
-		t.Fatalf("revision-five credential recovery profile: %v", err)
+		t.Fatalf("phase3 predecessor credential recovery profile: %v", err)
 	}
 }
 
@@ -711,10 +710,9 @@ func TestPublishedScalarProfileStillAllowsItsOwnReleasePair(t *testing.T) {
 	}
 }
 
-func TestDeploymentRuntimeProfileExactPairAllowsUpgradeAndRollback(t *testing.T) {
+func TestFrozenAdjacentProfilePairAllowsInstallUpgradeAndRollback(t *testing.T) {
 	current := release.CurrentDatabaseProfile()
-	predecessor := current
-	predecessor.ContractRevision--
+	predecessor := release.SupportedDatabasePredecessorProfile()
 	fixtures, err := releasetest.WriteSequence(t.TempDir(), 2, predecessor, current)
 	if err != nil {
 		t.Fatal(err)
@@ -722,12 +720,11 @@ func TestDeploymentRuntimeProfileExactPairAllowsUpgradeAndRollback(t *testing.T)
 	effects := &installEffects{observeReady: true}
 	backend := newTestBackend(t, effects)
 	root := filepath.Join(t.TempDir(), "matrix")
-	_, err = backend.Run(context.Background(), installRequest(root, fixtures[0]))
-	assertFault(t, err, cli.FaultVerification, "TOPOLOGY_CONTRACT_UNSUPPORTED")
-	if _, statErr := os.Lstat(root); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatal("current installer changed the root while rejecting predecessor input")
+	installed, err := backend.Run(context.Background(), installRequest(root, fixtures[0]))
+	if err != nil || installed.ReleaseID != fixtures[0].Manifest.Release.ID || !installed.Changed {
+		t.Fatalf("install adjacent profile release: %#v / %v", installed, err)
 	}
-	seedPublishedInstalledRelease(t, root, fixtures[0])
+	materializeInstalledRelease(t, root, fixtures[0])
 	upgraded, err := backend.Run(context.Background(), cli.Request{
 		Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[1].Root,
 	})

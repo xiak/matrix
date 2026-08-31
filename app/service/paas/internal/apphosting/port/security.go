@@ -34,6 +34,9 @@ const (
 	AuthorizeExecutionPoolRead           = "paas.execution-pool.read"
 	AuthorizeExecutionTargetRegister     = "paas.execution-target.register"
 	AuthorizeExecutionTargetRead         = "paas.execution-target.read"
+	AuthorizeExecutionTargetDrain        = "paas.execution-target.drain"
+	AuthorizeExecutionTargetActivate     = "paas.execution-target.activate"
+	AuthorizeExecutionTargetRemove       = "paas.execution-target.remove"
 	AuthorizePlatformOperationRead       = "paas.platform-operation.read"
 	AuthorizeTerminalSessionCreate       = "paas.terminal-session.create"
 	AuthorizeTerminalSessionClose        = "paas.terminal-session.close"
@@ -167,6 +170,9 @@ func knownAuthorizationAction(value string) bool {
 		AuthorizeExecutionPoolRead,
 		AuthorizeExecutionTargetRegister,
 		AuthorizeExecutionTargetRead,
+		AuthorizeExecutionTargetDrain,
+		AuthorizeExecutionTargetActivate,
+		AuthorizeExecutionTargetRemove,
 		AuthorizePlatformOperationRead,
 		AuthorizeTerminalSessionCreate,
 		AuthorizeTerminalSessionClose,
@@ -182,6 +188,8 @@ func isPlatformAuthorizationAction(value string) bool {
 	switch value {
 	case AuthorizeExecutionPoolCreate, AuthorizeExecutionPoolRead,
 		AuthorizeExecutionTargetRegister, AuthorizeExecutionTargetRead,
+		AuthorizeExecutionTargetDrain, AuthorizeExecutionTargetActivate,
+		AuthorizeExecutionTargetRemove,
 		AuthorizePlatformOperationRead:
 		return true
 	default:

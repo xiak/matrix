@@ -278,7 +278,7 @@ func ValidateDatabaseUpgradePath(source, target DatabaseProfile) error {
 		return errors.New("release database upgrade path is invalid")
 	}
 	if source == target ||
-		(source == deploymentRuntimePredecessorProfile() && target == CurrentDatabaseProfile()) {
+		(source == SupportedDatabasePredecessorProfile() && target == CurrentDatabaseProfile()) {
 		return nil
 	}
 	return errors.New("release database upgrade path is unsupported")

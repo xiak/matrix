@@ -185,6 +185,9 @@ function Probe() {
       <button onClick={() => void controlPlane.activateQuota({ offeringId: "postgresql-18", quotaShapeId: "pg-small", instanceCount: 1 })} type="button">activate quota</button>
       <button onClick={() => void controlPlane.createInstallation({ id: "postgres-next", name: "Next database", offeringId: "postgresql-18", quotaEntitlementId: "quota-primary", regionId: "local-primary" })} type="button">create installation</button>
       <button onClick={() => void controlPlane.reload()} type="button">reload</button>
+      <button onClick={() => void controlPlane.transitionHost({
+        targetId: host?.id ?? "none", action: "DRAIN", resourceVersion: host?.resourceVersion ?? 1
+      })} type="button">drain host</button>
       <button onClick={() => void session.logout()} type="button">logout</button>
       <button onClick={() => controlPlane.selectDeployment("deployment-beta")} type="button">select beta</button>
       <button onClick={() => void controlPlane.openTerminal(
@@ -196,6 +199,7 @@ function Probe() {
       <button onClick={() => void controlPlane.closeTerminal()} type="button">close terminal</button>
       <span data-testid="phase">{installation?.phase ?? "none"}</span>
       <span data-testid="host">{host?.name ?? "none"}</span>
+      <span data-testid="host-state">{host?.desiredState ?? "none"}</span>
       <span data-testid="section">{controlPlane.scene?.section ?? "none"}</span>
       <span data-testid="deployment">{deployment?.id ?? "none"}</span>
       <span data-testid="runtime-target">{runtime?.executionTargetId ?? "none"}</span>
@@ -373,6 +377,7 @@ describe("ControlPlaneProvider", () => {
       load: vi.fn(), getInstallation: vi.fn(), activateQuota: vi.fn(), createInstallation: vi.fn()
     };
     const hosts: HostInventoryRepository = {
+      transition: vi.fn(),
       load: vi.fn()
         .mockResolvedValueOnce(hostInventory("node-a"))
         .mockRejectedValueOnce(new HttpProblem(503, "PRIVATE_NODE_DETAIL"))
@@ -403,6 +408,7 @@ describe("ControlPlaneProvider", () => {
     vi.useFakeTimers();
     let finishSecond!: (value: HostInventory) => void;
     const hosts: HostInventoryRepository = {
+      transition: vi.fn(),
       load: vi.fn()
         .mockResolvedValueOnce(hostInventory())
         .mockImplementationOnce(() => new Promise<HostInventory>((resolve) => { finishSecond = resolve; }))
@@ -431,9 +437,52 @@ describe("ControlPlaneProvider", () => {
     expect(hosts.load).toHaveBeenCalledTimes(3);
   });
 
+  it("updates a successful host transition and does not let polling erase a later write rejection", async () => {
+    const active = hostInventory();
+    const drained = {
+      ...active.items[0]!, desiredState: "DRAINING" as const, resourceVersion: 2
+    };
+    const hosts: HostInventoryRepository = {
+      load: vi.fn().mockResolvedValue(active),
+      transition: vi.fn()
+        .mockResolvedValueOnce(drained)
+        .mockRejectedValueOnce(new HttpProblem(409, "CONFLICT"))
+    };
+    const screen = render(
+      <SessionProvider repository={iamRepository()}>
+        <ControlPlaneProvider hostRepository={hosts} selection={{ section: "hosts" }}>
+          <Probe />
+        </ControlPlaneProvider>
+      </SessionProvider>
+    );
+    await act(async () => { fireEvent.click(screen.getByText("login")); });
+    await act(async () => {
+      fireEvent.click(screen.getByText("drain host"));
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("host-state").textContent).toBe("DRAINING");
+    expect(hosts.transition).toHaveBeenCalledWith("memory-only-session", {
+      targetId: "node-a", action: "DRAIN", resourceVersion: 1
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("drain host"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("status").textContent).toContain("未执行部分移除");
+    expect(hosts.load).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      fireEvent.click(screen.getByText("reload"));
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("status").textContent).toBe("");
+  });
+
   it.each([401, 403])("clears protected host facts and stops polling after authorization failure %i", async (status) => {
     vi.useFakeTimers();
     const hosts: HostInventoryRepository = {
+      transition: vi.fn(),
       load: vi.fn()
         .mockResolvedValueOnce(hostInventory())
         .mockRejectedValue(new HttpProblem(status, "PRIVATE_AUTHORITY_DETAIL"))
@@ -458,6 +507,7 @@ describe("ControlPlaneProvider", () => {
     let signal: AbortSignal | undefined;
     let finish!: (value: HostInventory) => void;
     const hosts: HostInventoryRepository = {
+      transition: vi.fn(),
       load: vi.fn((_credential, currentSignal) => {
         signal = currentSignal;
         return new Promise<HostInventory>((resolve) => { finish = resolve; });
@@ -493,6 +543,7 @@ describe("ControlPlaneProvider", () => {
   it("aborts an in-flight host read when the user logs out", async () => {
     let signal: AbortSignal | undefined;
     const hosts: HostInventoryRepository = {
+      transition: vi.fn(),
       load: vi.fn((_credential, currentSignal) => {
         signal = currentSignal;
         return new Promise<HostInventory>(() => {});

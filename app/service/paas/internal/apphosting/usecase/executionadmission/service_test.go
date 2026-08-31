@@ -210,15 +210,102 @@ func TestLateObservationDoesNotOverwriteNewerMeasurement(t *testing.T) {
 	}
 }
 
+func TestManagedTargetLifecycleIsExplicitTerminalAndNeverProbesTheNode(t *testing.T) {
+	service, transaction, adapter, _ := refreshFixture(t)
+	authorization := port.Authorization{
+		InstallationID: "installation-a",
+		Subject:        paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "platform-user"},
+		DecisionID:     "decision-lifecycle",
+		RequestID:      "request-lifecycle",
+	}
+	transition := func(action paasv1.OperationAction, version uint64, key string) TransitionTargetResult {
+		t.Helper()
+		result, err := service.TransitionTarget(context.Background(), TransitionTargetCommand{
+			Authorization: authorization, TargetID: "target-a", Action: action,
+			ExpectedResourceVersion: version, IdempotencyKey: key,
+		})
+		if err != nil {
+			t.Fatalf("transition %s: %v", action, err)
+		}
+		return result
+	}
+	drained := transition(paasv1.OperationDrainExecutionTarget, 1, "drain-target")
+	if drained.Target.Spec.DesiredState != paasv1.ExecutionTargetDraining ||
+		drained.Target.Metadata.ResourceVersion != 2 || transaction.pool.Status.ExecutionTargetCount != 1 ||
+		transaction.pool.Status.ReadyExecutionTargetCount != 0 || transaction.pool.Status.Phase != paasv1.ExecutionPoolUnavailable {
+		t.Fatalf("drained target/pool = %#v / %#v", drained.Target, transaction.pool)
+	}
+	for _, changed := range []TransitionTargetCommand{
+		{Authorization: authorization, TargetID: "target-a", Action: paasv1.OperationActivateExecutionTarget, ExpectedResourceVersion: 2, IdempotencyKey: "drain-target"},
+		{Authorization: authorization, TargetID: "target-b", Action: paasv1.OperationDrainExecutionTarget, ExpectedResourceVersion: 1, IdempotencyKey: "drain-target"},
+		{Authorization: authorization, TargetID: "target-a", Action: paasv1.OperationDrainExecutionTarget, ExpectedResourceVersion: 2, IdempotencyKey: "drain-target"},
+	} {
+		_, err := service.TransitionTarget(context.Background(), changed)
+		if !errors.Is(err, ErrIdempotencyConflict) ||
+			transaction.registration.Target.Spec.DesiredState != paasv1.ExecutionTargetDraining ||
+			transaction.transitionCalls != 1 {
+			t.Fatalf("changed replay mutated target: command=%#v err=%v target=%#v", changed, err, transaction.registration.Target)
+		}
+	}
+	activated := transition(paasv1.OperationActivateExecutionTarget, 2, "activate-target")
+	if activated.Target.Spec.DesiredState != paasv1.ExecutionTargetActive ||
+		activated.Target.Metadata.ResourceVersion != 3 || transaction.pool.Status.ReadyExecutionTargetCount != 1 {
+		t.Fatalf("activated target/pool = %#v / %#v", activated.Target, transaction.pool)
+	}
+	transition(paasv1.OperationDrainExecutionTarget, 3, "drain-target-again")
+	removed := transition(paasv1.OperationRemoveExecutionTarget, 4, "remove-target")
+	if removed.Target.Spec.DesiredState != paasv1.ExecutionTargetRemoved ||
+		removed.Target.Metadata.ResourceVersion != 5 || transaction.pool.Status.ExecutionTargetCount != 0 ||
+		transaction.pool.Status.ReadyExecutionTargetCount != 0 || transaction.pool.Status.Phase != paasv1.ExecutionPoolUnavailable {
+		t.Fatalf("removed target/pool = %#v / %#v", removed.Target, transaction.pool)
+	}
+	replayed := transition(paasv1.OperationRemoveExecutionTarget, 4, "remove-target")
+	if !replayed.Replayed || replayed.Operation.ID != removed.Operation.ID ||
+		replayed.Target.Metadata.ResourceVersion != 5 || transaction.transitionCalls != 4 {
+		t.Fatalf("remove replay changed state: %#v calls=%d", replayed, transaction.transitionCalls)
+	}
+	_, err := service.TransitionTarget(context.Background(), TransitionTargetCommand{
+		Authorization: authorization, TargetID: "target-a", Action: paasv1.OperationActivateExecutionTarget,
+		ExpectedResourceVersion: 5, IdempotencyKey: "resurrect-target",
+	})
+	if !errors.Is(err, ErrInvalidTransition) || transaction.registration.Target.Spec.DesiredState != paasv1.ExecutionTargetRemoved {
+		t.Fatalf("removed target resurrected: %v %#v", err, transaction.registration.Target)
+	}
+	if adapter.calls != 0 {
+		t.Fatalf("operator lifecycle called the node %d times", adapter.calls)
+	}
+}
+
+func TestTargetLifecycleRejectsStaleVersionBeforeMutation(t *testing.T) {
+	service, transaction, _, _ := refreshFixture(t)
+	_, err := service.TransitionTarget(context.Background(), TransitionTargetCommand{
+		Authorization: port.Authorization{
+			InstallationID: "installation-a",
+			Subject:        paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "platform-user"},
+			DecisionID:     "decision-lifecycle",
+			RequestID:      "request-lifecycle",
+		},
+		TargetID: "target-a", Action: paasv1.OperationDrainExecutionTarget,
+		ExpectedResourceVersion: 2, IdempotencyKey: "stale-drain",
+	})
+	if !errors.Is(err, ErrResourceVersionConflict) ||
+		transaction.registration.Target.Spec.DesiredState != paasv1.ExecutionTargetActive ||
+		transaction.transitionCalls != 0 {
+		t.Fatalf("stale transition mutated target: %v %#v", err, transaction.registration.Target)
+	}
+}
+
 type refreshTransaction struct {
 	Transaction
-	now          time.Time
-	registration Registration
-	poolTargets  []paasv1.ExecutionTarget
-	pool         paasv1.ExecutionPool
-	calls        int
-	active       bool
-	retryFirst   bool
+	now             time.Time
+	registration    Registration
+	poolTargets     []paasv1.ExecutionTarget
+	pool            paasv1.ExecutionPool
+	calls           int
+	active          bool
+	retryFirst      bool
+	operations      map[string]paasv1.Operation
+	transitionCalls int
 }
 
 func (transaction *refreshTransaction) WithinTransaction(ctx context.Context, installation string, callback func(context.Context, Transaction) error) error {
@@ -237,6 +324,10 @@ func (transaction *refreshTransaction) WithinTransaction(ctx context.Context, in
 }
 func (transaction *refreshTransaction) TransactionTime(context.Context) (time.Time, error) {
 	return transaction.now, nil
+}
+func (transaction *refreshTransaction) FindOperationByFingerprint(_ context.Context, fingerprint string) (paasv1.Operation, bool, error) {
+	operation, found := transaction.operations[fingerprint]
+	return operation, found, nil
 }
 func (transaction *refreshTransaction) ListTargets(context.Context) ([]Registration, error) {
 	return []Registration{transaction.registration}, nil
@@ -272,6 +363,19 @@ func (transaction *refreshTransaction) RefreshTarget(_ context.Context, version 
 			transaction.poolTargets[index] = target
 		}
 	}
+	return nil
+}
+func (transaction *refreshTransaction) TransitionTarget(_ context.Context, version uint64, target paasv1.ExecutionTarget, poolVersion uint64, pool paasv1.ExecutionPool, submission Submission) error {
+	if version != transaction.registration.Target.Metadata.ResourceVersion ||
+		poolVersion != transaction.pool.Metadata.ResourceVersion {
+		return ErrConflict
+	}
+	transaction.transitionCalls++
+	transaction.registration.Target, transaction.pool = target, pool
+	if transaction.operations == nil {
+		transaction.operations = make(map[string]paasv1.Operation)
+	}
+	transaction.operations[submission.Operation.IdempotencyFingerprint] = submission.Operation
 	return nil
 }
 
