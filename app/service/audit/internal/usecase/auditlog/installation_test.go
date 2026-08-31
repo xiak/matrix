@@ -73,6 +73,29 @@ func TestVerifyInstallationFindsExactPaaSOperationAndVerifiesItsChain(t *testing
 	if _, err := transaction.AppendRecord(context.Background(), AppendMutation{Record: record, Fact: fact}); err != nil {
 		t.Fatalf("seed PaaS Audit record: %v", err)
 	}
+	laterEvent := event
+	laterEvent.EventID = "event-after-installation-probe"
+	laterEvent.Target.ID = "deployment-after-installation-probe"
+	laterEvent.OperationID = "operation-after-installation-probe"
+	laterEvent.RequestID = "request-after-installation-probe"
+	laterEvent.CorrelationID = laterEvent.RequestID
+	laterRecord, laterFact, err := authority.AppendRecord(
+		authority.Checkpoint{
+			ChainID: authority.TenantChain(event.TenantID), Sequence: 1, RecordHash: record.RecordHash,
+		},
+		2,
+		auditv1.SourcePaaS,
+		laterEvent,
+		transaction.now,
+	)
+	if err != nil {
+		t.Fatalf("create later PaaS Audit record: %v", err)
+	}
+	if _, err := transaction.AppendRecord(
+		context.Background(), AppendMutation{Record: laterRecord, Fact: laterFact},
+	); err != nil {
+		t.Fatalf("seed later PaaS Audit record: %v", err)
+	}
 
 	verified, err := service.VerifyInstallation(
 		context.Background(), credential, "request-installation-verified", request,
@@ -83,10 +106,17 @@ func TestVerifyInstallationFindsExactPaaSOperationAndVerifiesItsChain(t *testing
 		verified.ToSequence != 1 || verified.RecordHash != record.RecordHash {
 		t.Fatalf("verified installation Audit result=%#v err=%v", verified, err)
 	}
+	if transaction.readChainFrom != 1 || transaction.readChainMaximum != 1 {
+		t.Fatalf(
+			"installation verification chain read = from:%d maximum:%d, want exact target prefix",
+			transaction.readChainFrom,
+			transaction.readChainMaximum,
+		)
+	}
 	records := transaction.records[authority.TenantChain(event.TenantID)]
-	if len(records) != 2 || records[1].Source != auditv1.SourceAudit ||
-		records[1].Event.Action != auditv1.ActionAuditIntegrityVerified ||
-		records[1].Event.Actor != (auditv1.ActorReference{
+	if len(records) != 3 || records[2].Source != auditv1.SourceAudit ||
+		records[2].Event.Action != auditv1.ActionAuditIntegrityVerified ||
+		records[2].Event.Actor != (auditv1.ActorReference{
 			Type: auditv1.ActorServiceAccount, ID: "service-installation-verifier",
 		}) {
 		t.Fatalf("installation verification access record=%#v", records)

@@ -105,8 +105,9 @@ func (service *Service) VerifyInstallation(
 				return ErrConflict
 			}
 		}
+		maximumRecords := int(record.Sequence-fromSequence) + 1
 		records, err := transaction.ReadChain(
-			transactionContext, chainID, fromSequence, auditv1.MaxVerifyRecords,
+			transactionContext, chainID, fromSequence, maximumRecords,
 		)
 		if err != nil {
 			return err

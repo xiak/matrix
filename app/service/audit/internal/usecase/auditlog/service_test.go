@@ -451,9 +451,11 @@ func (client *auditIAM) VerifyInstallation(
 }
 
 type auditTransaction struct {
-	now      time.Time
-	records  map[authority.ChainID][]auditv1.AuditRecord
-	registry map[string]StoredRecord
+	now              time.Time
+	records          map[authority.ChainID][]auditv1.AuditRecord
+	registry         map[string]StoredRecord
+	readChainFrom    uint64
+	readChainMaximum int
 }
 
 func newAuditTransaction() *auditTransaction {
@@ -578,6 +580,8 @@ func (transaction *auditTransaction) ReadChain(
 	fromSequence uint64,
 	maximumRecords int,
 ) ([]auditv1.AuditRecord, error) {
+	transaction.readChainFrom = fromSequence
+	transaction.readChainMaximum = maximumRecords
 	records := transaction.records[chainID]
 	if fromSequence == 0 || fromSequence > uint64(len(records)) {
 		return nil, nil
