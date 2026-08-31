@@ -11,6 +11,7 @@ const defaultEdgeEndpoint = "http://127.0.0.1:8080"
 
 type options struct {
 	root                    string
+	releaseBase             string
 	releaseA                string
 	releaseB                string
 	trustKey                string
@@ -22,8 +23,9 @@ type options struct {
 }
 
 type releasePair struct {
-	a release.VerifiedBundle
-	b release.VerifiedBundle
+	base *release.VerifiedBundle
+	a    release.VerifiedBundle
+	b    release.VerifiedBundle
 }
 
 type safeError struct {
@@ -40,8 +42,24 @@ func (value *safeError) Error() string {
 func fail(step string) error { return &safeError{step: step} }
 
 func validateReleasePair(a, b release.VerifiedBundle) error {
-	if a.Manifest.Release.PreviousID != "" || a.Manifest.Release.PreviousVersion != "" ||
-		b.Manifest.Release.PreviousID != a.Manifest.Release.ID ||
+	if a.Manifest.Release.PreviousID != "" || a.Manifest.Release.PreviousVersion != "" {
+		return fail("release-pair-contract")
+	}
+	return validateReleaseTransition(a, b)
+}
+
+func validateReleaseSequence(base, bridge, successor release.VerifiedBundle) error {
+	if base.Manifest.Release.PreviousID != "" || base.Manifest.Release.PreviousVersion != "" {
+		return fail("release-sequence-base-contract")
+	}
+	if err := validateReleaseTransition(base, bridge); err != nil {
+		return err
+	}
+	return validateReleaseTransition(bridge, successor)
+}
+
+func validateReleaseTransition(a, b release.VerifiedBundle) error {
+	if b.Manifest.Release.PreviousID != a.Manifest.Release.ID ||
 		b.Manifest.Release.PreviousVersion != a.Manifest.Release.Version ||
 		a.Manifest.Release.ID == b.Manifest.Release.ID ||
 		a.Manifest.Release.Version == b.Manifest.Release.Version {

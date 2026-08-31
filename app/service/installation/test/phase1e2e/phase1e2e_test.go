@@ -223,6 +223,69 @@ func TestReleasePairRequiresCompatibleImmediatePredecessor(t *testing.T) {
 	}
 }
 
+func TestReleaseSequenceRequiresTwoCompatibleImmediateTransitions(t *testing.T) {
+	for _, scenario := range []struct {
+		name   string
+		mutate func(base, bridge, successor *release.Manifest)
+		accept bool
+	}{
+		{name: "base through bridge to successor", accept: true},
+		{name: "base is not root", mutate: func(base, _, _ *release.Manifest) {
+			base.Release.PreviousID, base.Release.PreviousVersion = "older", "v0.0.1"
+		}},
+		{name: "bridge skips base", mutate: func(_, bridge, _ *release.Manifest) {
+			bridge.Release.PreviousID = "other-base"
+		}},
+		{name: "successor skips bridge", mutate: func(_, _, successor *release.Manifest) {
+			successor.Release.PreviousID = "other-bridge"
+		}},
+		{name: "same-profile bridge changes topology", mutate: func(_, bridge, _ *release.Manifest) {
+			bridge.TopologyDigest = "sha256:" + strings.Repeat("4", 64)
+		}},
+		{name: "successor topology changes without profile transition", mutate: func(_, bridge, successor *release.Manifest) {
+			successor.Database = bridge.Database
+		}},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			successorProfile := release.CurrentDatabaseProfile()
+			bridgeProfile := successorProfile
+			bridgeProfile.ContractRevision--
+			base := release.VerifiedBundle{Manifest: release.Manifest{
+				Kind: release.ManifestKind,
+				Release: release.ReleaseIdentity{
+					ID: "release-base", Version: "v0.1.0", SourceCommit: strings.Repeat("a", 40),
+				},
+				Database: bridgeProfile, TopologyDigest: "sha256:" + strings.Repeat("1", 64),
+				Images: []release.Image{{Purpose: release.ImageWorkload, SourceDigest: "sha256:base"}},
+			}}
+			bridge := release.VerifiedBundle{Manifest: release.Manifest{
+				Kind: release.ManifestKind,
+				Release: release.ReleaseIdentity{
+					ID: "release-bridge", Version: "v0.2.0", SourceCommit: strings.Repeat("b", 40),
+					PreviousID: base.Manifest.Release.ID, PreviousVersion: base.Manifest.Release.Version,
+				},
+				Database: bridgeProfile, TopologyDigest: base.Manifest.TopologyDigest,
+				Images: []release.Image{{Purpose: release.ImageWorkload, SourceDigest: "sha256:bridge"}},
+			}}
+			successor := release.VerifiedBundle{Manifest: release.Manifest{
+				Kind: release.ManifestKind,
+				Release: release.ReleaseIdentity{
+					ID: "release-successor", Version: "v0.3.0", SourceCommit: strings.Repeat("c", 40),
+					PreviousID: bridge.Manifest.Release.ID, PreviousVersion: bridge.Manifest.Release.Version,
+				},
+				Database: successorProfile, TopologyDigest: "sha256:" + strings.Repeat("2", 64),
+				Images: []release.Image{{Purpose: release.ImageWorkload, SourceDigest: "sha256:successor"}},
+			}}
+			if scenario.mutate != nil {
+				scenario.mutate(&base.Manifest, &bridge.Manifest, &successor.Manifest)
+			}
+			if err := validateReleaseSequence(base, bridge, successor); (err == nil) != scenario.accept {
+				t.Fatalf("release sequence accepted=%t, want %t", err == nil, scenario.accept)
+			}
+		})
+	}
+}
+
 func TestMXStatusConsumesConfigurationDigestAndRejectsUnknownFields(t *testing.T) {
 	for _, scenario := range []struct {
 		name, addition string
@@ -297,6 +360,7 @@ func optionsFromEnvironment() (options, error) {
 	}
 	config := options{
 		root:                    os.Getenv("MATRIX_PHASE1_ROOT"),
+		releaseBase:             os.Getenv("MATRIX_PHASE1_RELEASE_BASE"),
 		releaseA:                os.Getenv("MATRIX_PHASE1_RELEASE_A"),
 		releaseB:                os.Getenv("MATRIX_PHASE1_RELEASE_B"),
 		trustKey:                os.Getenv("MATRIX_PHASE1_TRUST_KEY"),
@@ -313,6 +377,10 @@ func optionsFromEnvironment() (options, error) {
 	}
 	if !config.afterStart && (config.releaseB == "" || !filepath.IsAbs(config.releaseB) ||
 		filepath.Clean(config.releaseB) != config.releaseB) {
+		return options{}, fail("command-input")
+	}
+	if config.releaseBase != "" && (!filepath.IsAbs(config.releaseBase) ||
+		filepath.Clean(config.releaseBase) != config.releaseBase) {
 		return options{}, fail("command-input")
 	}
 	if config.nativeNodes != "" && (!filepath.IsAbs(config.nativeNodes) || filepath.Clean(config.nativeNodes) != config.nativeNodes) {
@@ -350,8 +418,20 @@ func runGate(ctx context.Context, config options) error {
 	if err != nil {
 		return fail("release-b-authentication")
 	}
-	if err := validateReleasePair(a, b); err != nil {
-		return err
+	releases := releasePair{a: a, b: b}
+	if config.releaseBase == "" {
+		if err := validateReleasePair(a, b); err != nil {
+			return err
+		}
+	} else {
+		base, err := release.VerifyDirectory(config.releaseBase, trust)
+		if err != nil {
+			return fail("release-base-authentication")
+		}
+		if err := validateReleaseSequence(base, a, b); err != nil {
+			return err
+		}
+		releases.base = &base
 	}
-	return newGate(config, releasePair{a: a, b: b}).beforeRestart(ctx)
+	return newGate(config, releases).beforeRestart(ctx)
 }

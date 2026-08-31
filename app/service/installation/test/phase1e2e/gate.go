@@ -50,11 +50,101 @@ type gate struct {
 	workloadProject        string
 	workloadRunning        string
 	controllerConfigDigest string
+	releaseAPreviousID     string
 	nodes                  *nativeNodes
 }
 
 func newGate(config options, releases releasePair) *gate {
-	return &gate{config: config, releases: releases, edge: newEdgeClient(config.edge)}
+	value := &gate{config: config, releases: releases, edge: newEdgeClient(config.edge)}
+	if releases.base != nil {
+		value.releaseAPreviousID = releases.base.Manifest.Release.ID
+	}
+	return value
+}
+
+func (value *gate) activateReleaseA(ctx context.Context) error {
+	initial := value.releases.a
+	if value.releases.base != nil {
+		initial = *value.releases.base
+	}
+	installStep := "release-a-install"
+	if value.releases.base != nil {
+		installStep = "release-base-install"
+	}
+	installed, err := runMX(ctx, initial, "install", []string{
+		"--bundle", initial.Root,
+		"--root", value.config.root,
+		"--trust-key", value.config.trustKey,
+	}, value.pathLeakage())
+	if err != nil || installed.ReleaseID != initial.Manifest.Release.ID ||
+		installed.PreviousID != "" || !installed.Changed {
+		return fail(installStep)
+	}
+	if _, err := assertPlatform(ctx, value.config.root, initial.Manifest, ""); err != nil {
+		return err
+	}
+	if err := value.repeatedStatusAndVerify(
+		ctx, initial, initial.Manifest.Release.ID, "",
+	); err != nil {
+		return err
+	}
+	if value.releases.base == nil {
+		emit("release-a-install")
+		emit("release-a-status-verify")
+		return nil
+	}
+	emit("release-base-install-status-verify")
+
+	upgrade := func(step string) error {
+		result, err := runMX(ctx, value.releases.a, "upgrade", []string{
+			"--bundle", value.releases.a.Root, "--root", value.config.root,
+		}, value.pathLeakage())
+		if err != nil || result.ReleaseID != value.releases.a.Manifest.Release.ID ||
+			result.PreviousID != initial.Manifest.Release.ID || !result.Changed {
+			return fail(step)
+		}
+		if _, err := assertPlatform(
+			ctx, value.config.root, value.releases.a.Manifest, initial.Manifest.Release.ID,
+		); err != nil {
+			return err
+		}
+		return value.repeatedStatusAndVerify(
+			ctx, value.releases.a, value.releases.a.Manifest.Release.ID, initial.Manifest.Release.ID,
+		)
+	}
+	if err := upgrade("release-a-bridge-upgrade"); err != nil {
+		return err
+	}
+	emit("release-a-bridge-upgrade")
+
+	rolledBack, err := runMX(
+		ctx, value.releases.a, "rollback", []string{"--root", value.config.root}, value.pathLeakage(),
+	)
+	if err != nil || rolledBack.ReleaseID != initial.Manifest.Release.ID ||
+		rolledBack.PreviousID != "" || !rolledBack.Changed {
+		return fail("release-a-bridge-rollback")
+	}
+	if _, err := assertPlatform(ctx, value.config.root, initial.Manifest, ""); err != nil {
+		return err
+	}
+	if err := assertNoPlatformReleaseContainers(
+		ctx, value.releases.a.Manifest.Release.ID,
+	); err != nil {
+		return err
+	}
+	if err := value.repeatedStatusAndVerify(
+		ctx, initial, initial.Manifest.Release.ID, "",
+	); err != nil {
+		return err
+	}
+	emit("release-a-bridge-rollback")
+
+	if err := upgrade("release-a-bridge-reactivation"); err != nil {
+		return err
+	}
+	emit("release-a-bridge-reactivation")
+	emit("release-a-status-verify")
+	return nil
 }
 
 func (value *gate) beforeRestart(ctx context.Context) error {
@@ -73,15 +163,12 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if _, err := os.Stat(value.config.root); err == nil || !errors.Is(err, os.ErrNotExist) {
 		return fail("empty-installation-root")
 	}
-	install, err := runMX(ctx, value.releases.a, "install", []string{
-		"--bundle", value.releases.a.Root,
-		"--root", value.config.root,
-		"--trust-key", value.config.trustKey,
-	}, value.pathLeakage())
-	if err != nil || install.ReleaseID != value.releases.a.Manifest.Release.ID || !install.Changed {
-		return fail("release-a-install")
+	if err := value.activateReleaseA(ctx); err != nil {
+		return err
 	}
-	state, err := assertPlatform(ctx, value.config.root, value.releases.a.Manifest, "")
+	state, err := assertPlatform(
+		ctx, value.config.root, value.releases.a.Manifest, value.releaseAPreviousID,
+	)
 	if err != nil {
 		return err
 	}
@@ -89,12 +176,6 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err != nil || !dataRootBefore.IsDir() {
 		return fail("postgres-data-identity")
 	}
-	emit("release-a-install")
-
-	if err := value.repeatedStatusAndVerify(ctx, value.releases.a, value.releases.a.Manifest.Release.ID, ""); err != nil {
-		return err
-	}
-	emit("release-a-status-verify")
 
 	initialPassword, err := os.ReadFile(filepath.Join(
 		value.config.root, filepath.FromSlash(layout.InitialAdministratorPassword),
@@ -213,7 +294,9 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err := value.failedUpgrade(ctx, secret, newPassword, bearer); err != nil {
 		return err
 	}
-	if _, err := assertPlatform(ctx, value.config.root, value.releases.a.Manifest, ""); err != nil {
+	if _, err := assertPlatform(
+		ctx, value.config.root, value.releases.a.Manifest, value.releaseAPreviousID,
+	); err != nil {
 		return err
 	}
 	if err := assertNoPlatformReleaseContainers(ctx, value.releases.b.Manifest.Release.ID); err != nil {
@@ -222,7 +305,9 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err := value.assertWorkload(ctx, value.releases.a.Manifest, updated, 2, "2", settingTwo, secretDigest); err != nil {
 		return err
 	}
-	if err := value.repeatedStatusAndVerify(ctx, value.releases.a, value.releases.a.Manifest.Release.ID, ""); err != nil {
+	if err := value.repeatedStatusAndVerify(
+		ctx, value.releases.a, value.releases.a.Manifest.Release.ID, value.releaseAPreviousID,
+	); err != nil {
 		return err
 	}
 	emit("automatic-upgrade-rollback")
@@ -299,6 +384,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		rollback.PreviousID != "" || !rollback.Changed {
 		return fail("platform-rollback")
 	}
+	value.releaseAPreviousID = ""
 	if _, err := assertPlatform(ctx, value.config.root, value.releases.a.Manifest, ""); err != nil {
 		return err
 	}
@@ -701,6 +787,9 @@ func (value *gate) pathLeakage() [][]byte {
 	result := [][]byte{
 		[]byte(value.config.root), []byte(value.config.releaseA), []byte(value.config.releaseB),
 		[]byte(value.config.trustKey),
+	}
+	if value.config.releaseBase != "" {
+		result = append(result, []byte(value.config.releaseBase))
 	}
 	if value.config.browserPasswordFile != "" {
 		result = append(result, []byte(value.config.browserPasswordFile))

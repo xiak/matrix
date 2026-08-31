@@ -794,7 +794,9 @@ func (value *gate) rotateNativeCredentials(ctx context.Context, bearer []byte) e
 	if err != nil || !preservesNativeRotationRuntime(before, after, value.nodes.controller.InstallationID) {
 		return fail("native-rotation-platform-preservation")
 	}
-	if _, err := assertPlatform(ctx, value.config.root, value.releases.a.Manifest, ""); err != nil {
+	if _, err := assertPlatform(
+		ctx, value.config.root, value.releases.a.Manifest, value.releaseAPreviousID,
+	); err != nil {
 		return err
 	}
 	if err = value.assertNativeNodes(ctx, bearer, false); err != nil {
