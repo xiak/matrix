@@ -981,16 +981,10 @@ func (backend *Backend) recover(
 		Trust:  trust, TrustBytes: append([]byte(nil), trustBytes...),
 	}
 	defer clear(currentPlan.TrustBytes)
-	targetPreviousID, targetPreviousDigest := "", ""
-	if targetBundle.Manifest.Release.ID == currentBundle.Manifest.Release.ID {
-		targetPreviousID = started.Journal.PreviousRelease
-		targetPreviousDigest = started.Journal.PreviousReleaseDigest
-	}
 	targetPlan := InstallPlan{
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
 		CorrelationID: commandID,
 		Listener:      defaultListener, Port: defaultPort,
-		PreviousID: targetPreviousID, PreviousDigest: targetPreviousDigest,
 		Bundle: targetBundle,
 		Trust:  trust, TrustBytes: append([]byte(nil), trustBytes...),
 	}

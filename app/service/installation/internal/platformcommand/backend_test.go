@@ -976,6 +976,49 @@ func TestRecoveryBindsSelectedBackupAndResumesUnknownOutcome(t *testing.T) {
 	}
 }
 
+func TestRecoveryOfCurrentReleaseDropsRetainedPredecessorFromEffectPlan(t *testing.T) {
+	fixtures := writeReleaseSequence(t, 2)
+	effects := &installEffects{}
+	backend := newTestBackend(t, effects)
+	root := filepath.Join(t.TempDir(), "matrix")
+	if _, err := backend.Run(
+		context.Background(), installRequest(root, fixtures[0]),
+	); err != nil {
+		t.Fatalf("install recovery source: %v", err)
+	}
+	materializeInstalledRelease(t, root, fixtures[0])
+	if _, err := backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[1].Root,
+	}); err != nil {
+		t.Fatalf("upgrade recovery fixture: %v", err)
+	}
+	materializeInstalledRelease(t, root, fixtures[1])
+	installed := readJournal(t, root)
+	backupID := "backup-" + strings.Repeat("a", 32)
+	effects.recoverySource = RecoverySource{
+		InstallationID: installed.InstallationID,
+		BackupID:       backupID,
+		BackupDigest:   "sha256:" + strings.Repeat("b", 64),
+		ReleaseID:      fixtures[1].Manifest.Release.ID,
+		ReleaseDigest:  fixtures[1].ManifestDigest,
+		Database:       fixtures[1].Manifest.Database,
+	}
+
+	result, err := backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionRecover, Root: root, BackupID: backupID,
+	})
+	if err != nil || result.ReleaseID != fixtures[1].Manifest.Release.ID ||
+		result.PreviousID != "" {
+		t.Fatalf("recover current release = %#v / %v", result, err)
+	}
+	if effects.recoveryPlan.Current.PreviousID != fixtures[0].Manifest.Release.ID ||
+		effects.recoveryPlan.Current.PreviousDigest != fixtures[0].ManifestDigest ||
+		effects.recoveryPlan.Target.PreviousID != "" ||
+		effects.recoveryPlan.Target.PreviousDigest != "" {
+		t.Fatalf("recovery did not retire predecessor: %#v", effects.recoveryPlan)
+	}
+}
+
 func TestRecoveryRejectsUntrustedSourceBeforePersistingIntent(t *testing.T) {
 	fixture := writeReleaseFixture(t)
 	effects := &installEffects{}
