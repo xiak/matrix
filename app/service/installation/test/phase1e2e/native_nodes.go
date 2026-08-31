@@ -1104,22 +1104,29 @@ func (value *gate) assertNativeProviderInstance(
 }
 
 func (value *gate) prepareNativeRuntimeImages(ctx context.Context) error {
-	workload, ok := workloadImage(value.releases.a.Manifest)
-	if !ok || workload.ImageID == "" || workload.ArchivePath == "" {
-		return fail("native-runtime-workload-image")
+	bundles := []release.VerifiedBundle{value.releases.a, value.releases.b}
+	workloads := make([]release.Image, 0, len(bundles))
+	for _, bundle := range bundles {
+		workload, ok := workloadImage(bundle.Manifest)
+		if !ok || workload.ImageID == "" || workload.ArchivePath == "" {
+			return fail("native-runtime-workload-image")
+		}
+		workloads = append(workloads, workload)
 	}
 	fixture := value.nodes
 	for index := range fixture.nodes {
-		remote := nativeFixtureRoot + "/runtime-workload.tar"
-		if err := fixture.copy(ctx, index, filepath.Join(value.releases.a.Root, filepath.FromSlash(workload.ArchivePath)), remote, true, false); err != nil {
-			return err
-		}
-		if _, err := fixture.command(ctx, index, "docker", "load", "--input", remote); err != nil {
-			return err
-		}
-		identity, err := fixture.command(ctx, index, "docker", "image", "inspect", "--format", "{{.Id}}", workload.ImageID)
-		if err != nil || strings.TrimSpace(string(identity)) != workload.ImageID {
-			return fail("native-runtime-workload-image")
+		for bundleIndex, workload := range workloads {
+			remote := fmt.Sprintf("%s/runtime-workload-%d.tar", nativeFixtureRoot, bundleIndex+1)
+			if err := fixture.copy(ctx, index, filepath.Join(bundles[bundleIndex].Root, filepath.FromSlash(workload.ArchivePath)), remote, true, false); err != nil {
+				return err
+			}
+			if _, err := fixture.command(ctx, index, "docker", "load", "--input", remote); err != nil {
+				return err
+			}
+			identity, err := fixture.command(ctx, index, "docker", "image", "inspect", "--format", "{{.Id}}", workload.ImageID)
+			if err != nil || strings.TrimSpace(string(identity)) != workload.ImageID {
+				return fail("native-runtime-workload-image")
+			}
 		}
 	}
 	return nil

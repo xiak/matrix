@@ -49,6 +49,7 @@ func authenticateInstalledPlan(
 		Root: installed.Root, InstallationID: installed.InstallationID,
 		CorrelationID: installed.CorrelationID,
 		Listener:      installed.Listener, Port: installed.Port,
+		PreviousID: installed.PreviousID, PreviousDigest: installed.PreviousDigest,
 		Bundle: bundle, Trust: trust, TrustBytes: trustBytes,
 	}, nil
 }
@@ -91,7 +92,7 @@ func verifiedInstallationConfiguration(
 	if err != nil {
 		return verifiedInstallation{}, err
 	}
-	catalog, err := artifactCatalogConfig(staged.Manifest)
+	catalog, err := installedArtifactCatalogConfig(plan)
 	if err != nil {
 		return verifiedInstallation{}, errors.New("generated artifact catalog is invalid")
 	}

@@ -109,9 +109,7 @@ func recoverBackup(
 	); err != nil {
 		return err
 	}
-	if err := replaceReleaseConfiguration(
-		plan.Current, current.Bundle.Manifest, target.Bundle.Manifest,
-	); err != nil {
+	if err := replaceReleaseConfiguration(current, target); err != nil {
 		return err
 	}
 	postgresID, err := startRecoveryPostgres(ctx, runtimeBoundary, target)

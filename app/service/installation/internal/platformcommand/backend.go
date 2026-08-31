@@ -54,6 +54,8 @@ type InstallPlan struct {
 	CorrelationID  string
 	Listener       string
 	Port           uint16
+	PreviousID     string
+	PreviousDigest string
 	Bundle         release.VerifiedBundle
 	Trust          release.TrustRoot
 	TrustBytes     []byte
@@ -728,15 +730,17 @@ func (backend *Backend) upgrade(
 			return cli.Result{}, stateWriteFault(err)
 		}
 	}
+	sourcePlan := installedPlan(session.Root(), started.Journal)
+	sourcePlan.CorrelationID = commandID
 	targetPlan := InstallPlan{
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
 		CorrelationID: commandID,
-		Listener:      defaultListener, Port: defaultPort, Bundle: targetBundle,
-		Trust: trust, TrustBytes: append([]byte(nil), trustBytes...),
+		Listener:      defaultListener, Port: defaultPort,
+		PreviousID: sourcePlan.ReleaseID, PreviousDigest: sourcePlan.ReleaseDigest,
+		Bundle: targetBundle,
+		Trust:  trust, TrustBytes: append([]byte(nil), trustBytes...),
 	}
 	defer clear(targetPlan.TrustBytes)
-	sourcePlan := installedPlan(session.Root(), started.Journal)
-	sourcePlan.CorrelationID = commandID
 	plan := UpgradePlan{
 		Source: sourcePlan, Target: targetPlan,
 		BackupID: backupID, CreatedAt: started.Execution.StartedAt,
@@ -849,8 +853,10 @@ func (backend *Backend) rollback(
 	currentPlan := InstallPlan{
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
 		CorrelationID: commandID,
-		Listener:      defaultListener, Port: defaultPort, Bundle: currentBundle,
-		Trust: trust, TrustBytes: append([]byte(nil), trustBytes...),
+		Listener:      defaultListener, Port: defaultPort,
+		PreviousID: started.Journal.PreviousRelease, PreviousDigest: started.Journal.PreviousReleaseDigest,
+		Bundle: currentBundle,
+		Trust:  trust, TrustBytes: append([]byte(nil), trustBytes...),
 	}
 	defer clear(currentPlan.TrustBytes)
 	previousPlan := previousInstalledPlan(session.Root(), started.Journal)
@@ -962,15 +968,24 @@ func (backend *Backend) recover(
 	currentPlan := InstallPlan{
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
 		CorrelationID: commandID,
-		Listener:      defaultListener, Port: defaultPort, Bundle: currentBundle,
-		Trust: trust, TrustBytes: append([]byte(nil), trustBytes...),
+		Listener:      defaultListener, Port: defaultPort,
+		PreviousID: started.Journal.PreviousRelease, PreviousDigest: started.Journal.PreviousReleaseDigest,
+		Bundle: currentBundle,
+		Trust:  trust, TrustBytes: append([]byte(nil), trustBytes...),
 	}
 	defer clear(currentPlan.TrustBytes)
+	targetPreviousID, targetPreviousDigest := "", ""
+	if targetBundle.Manifest.Release.ID == currentBundle.Manifest.Release.ID {
+		targetPreviousID = started.Journal.PreviousRelease
+		targetPreviousDigest = started.Journal.PreviousReleaseDigest
+	}
 	targetPlan := InstallPlan{
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
 		CorrelationID: commandID,
-		Listener:      defaultListener, Port: defaultPort, Bundle: targetBundle,
-		Trust: trust, TrustBytes: append([]byte(nil), trustBytes...),
+		Listener:      defaultListener, Port: defaultPort,
+		PreviousID: targetPreviousID, PreviousDigest: targetPreviousDigest,
+		Bundle: targetBundle,
+		Trust:  trust, TrustBytes: append([]byte(nil), trustBytes...),
 	}
 	defer clear(targetPlan.TrustBytes)
 	plan := RecoveryPlan{

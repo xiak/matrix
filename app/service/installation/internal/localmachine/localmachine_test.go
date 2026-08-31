@@ -798,6 +798,21 @@ func TestLocalRecoveryAuthorityCannotAdoptAnotherBootstrapOrTarget(t *testing.T)
 	}
 }
 
+func TestArtifactCatalogRejectsConflictingAuthenticatedMappings(t *testing.T) {
+	digest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	first := release.Manifest{Images: []release.Image{{
+		Purpose: release.ImageWorkload, SourceDigest: digest,
+		ImageID: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	}}}
+	second := release.Manifest{Images: []release.Image{{
+		Purpose: release.ImageWorkload, SourceDigest: digest,
+		ImageID: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+	}}}
+	if _, err := artifactCatalogConfig(first, second); err == nil {
+		t.Fatal("catalog accepted one artifact digest mapped to different images")
+	}
+}
+
 func TestUpgradeConfigurationReplacesOnlyReleaseDerivedFilesAndReplaysBothWays(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("local-machine upgrade configuration targets Linux")
@@ -814,7 +829,31 @@ func TestUpgradeConfigurationReplacesOnlyReleaseDerivedFilesAndReplaysBothWays(t
 	if err := configureUpgrade(context.Background(), runtimeBoundary, plan); err != nil {
 		t.Fatalf("configure upgrade: %v", err)
 	}
-	assertReleaseConfiguration(t, plan.Target)
+	assertReleaseConfiguration(
+		t, plan.Target, source.Bundle.Manifest, plan.Target.Bundle.Manifest,
+	)
+	if _, err := verifiedInstallationConfiguration(plan.Target); err != nil {
+		t.Fatalf("verify successor configuration with predecessor catalog: %v", err)
+	}
+	wrongPredecessor := plan.Target
+	wrongPredecessor.PreviousDigest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	if _, err := verifiedInstallationConfiguration(wrongPredecessor); err == nil {
+		t.Fatal("successor configuration accepted a different predecessor digest")
+	}
+	predecessorRoot := filepath.Join(
+		plan.Target.Root,
+		filepath.FromSlash(layout.ReleaseDirectory(source.Bundle.Manifest.Release.ID)),
+	)
+	missingPredecessor := predecessorRoot + ".missing"
+	if err := os.Rename(predecessorRoot, missingPredecessor); err != nil {
+		t.Fatalf("hide authenticated predecessor: %v", err)
+	}
+	if _, err := verifiedInstallationConfiguration(plan.Target); err == nil {
+		t.Fatal("successor configuration verified without its authenticated predecessor")
+	}
+	if err := os.Rename(missingPredecessor, predecessorRoot); err != nil {
+		t.Fatalf("restore authenticated predecessor: %v", err)
+	}
 	if after := snapshotManagedCredentials(t, source.Root); !equalSnapshots(credentials, after) {
 		t.Fatal("upgrade configuration changed installation credentials")
 	}
@@ -2154,6 +2193,8 @@ func newUpgradePlan(t *testing.T, profiles ...release.DatabaseProfile) platformc
 	}
 	target := source
 	target.Bundle = bundles[1]
+	target.PreviousID = source.Bundle.Manifest.Release.ID
+	target.PreviousDigest = source.Bundle.ManifestSHA256
 	if err := stageInstallation(target, rand.Reader); err != nil {
 		t.Fatalf("stage upgrade target: %v", err)
 	}
@@ -2164,7 +2205,11 @@ func newUpgradePlan(t *testing.T, profiles ...release.DatabaseProfile) platformc
 	}
 }
 
-func assertReleaseConfiguration(t *testing.T, plan platformcommand.InstallPlan) {
+func assertReleaseConfiguration(
+	t *testing.T,
+	plan platformcommand.InstallPlan,
+	catalogManifests ...release.Manifest,
+) {
 	t.Helper()
 	compiled, err := topology.Compile(plan.Bundle.Manifest, topology.Options{
 		InstallationID: plan.InstallationID, Root: plan.Root,
@@ -2176,7 +2221,10 @@ func assertReleaseConfiguration(t *testing.T, plan platformcommand.InstallPlan) 
 	if actual := readTestFile(t, plan.Root, layout.Compose); !bytes.Equal(actual, compiled.ComposeJSON) {
 		t.Fatal("installed Compose configuration differs from authenticated release")
 	}
-	catalog, err := artifactCatalogConfig(plan.Bundle.Manifest)
+	if len(catalogManifests) == 0 {
+		catalogManifests = []release.Manifest{plan.Bundle.Manifest}
+	}
+	catalog, err := artifactCatalogConfig(catalogManifests...)
 	if err != nil {
 		t.Fatalf("compile expected artifact catalog: %v", err)
 	}
@@ -2192,6 +2240,8 @@ func installedPlanFrom(plan platformcommand.InstallPlan) platformcommand.Install
 		Listener:      plan.Listener, Port: plan.Port,
 		ReleaseID:        plan.Bundle.Manifest.Release.ID,
 		ReleaseDigest:    plan.Bundle.ManifestSHA256,
+		PreviousID:       plan.PreviousID,
+		PreviousDigest:   plan.PreviousDigest,
 		TrustKeyID:       plan.Trust.KeyID,
 		TrustFingerprint: plan.Trust.PublicKeyFingerprint,
 	}

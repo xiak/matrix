@@ -77,9 +77,9 @@ func configureUpgrade(
 			)
 		}
 	}
-	return replaceReleaseConfiguration(
-		plan.Target, source.Bundle.Manifest, target.Manifest,
-	)
+	targetPlan := plan.Target
+	targetPlan.Bundle = target
+	return replaceReleaseConfiguration(source, targetPlan)
 }
 
 func restoreUpgradeConfiguration(plan platformcommand.UpgradePlan) error {
@@ -91,36 +91,41 @@ func restoreUpgradeConfiguration(plan platformcommand.UpgradePlan) error {
 	if err := validateUpgradeIdentity(source, plan.Target); err != nil {
 		return errors.Join(platformcommand.ErrEffectVerification, err)
 	}
-	return replaceReleaseConfiguration(
-		plan.Target, plan.Target.Bundle.Manifest, source.Bundle.Manifest,
-	)
+	return replaceReleaseConfiguration(plan.Target, source)
 }
 
 func replaceReleaseConfiguration(
-	plan platformcommand.InstallPlan,
-	before release.Manifest,
-	after release.Manifest,
+	before platformcommand.InstallPlan,
+	after platformcommand.InstallPlan,
 ) error {
-	options := topology.Options{
-		InstallationID: plan.InstallationID, Root: plan.Root,
-		Listener: plan.Listener, Port: plan.Port,
-	}
-	beforeTopology, err := topology.Compile(before, options)
+	beforeBundle, err := verifiedStagedBundle(before)
 	if err != nil {
 		return errors.Join(platformcommand.ErrEffectVerification, err)
 	}
-	afterTopology, err := topology.Compile(after, options)
+	afterBundle, err := verifiedStagedBundle(after)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	options := topology.Options{
+		InstallationID: after.InstallationID, Root: after.Root,
+		Listener: after.Listener, Port: after.Port,
+	}
+	beforeTopology, err := topology.Compile(beforeBundle.Manifest, options)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	afterTopology, err := topology.Compile(afterBundle.Manifest, options)
 	if err != nil || afterTopology.ProjectName != beforeTopology.ProjectName {
 		return errors.Join(
 			platformcommand.ErrEffectVerification,
 			errors.New("release configuration project identity changed"),
 		)
 	}
-	beforeCatalog, err := artifactCatalogConfig(before)
+	beforeCatalog, err := installedArtifactCatalogConfig(before)
 	if err != nil {
 		return errors.Join(platformcommand.ErrEffectVerification, err)
 	}
-	afterCatalog, err := artifactCatalogConfig(after)
+	afterCatalog, err := installedArtifactCatalogConfig(after)
 	if err != nil {
 		return errors.Join(platformcommand.ErrEffectVerification, err)
 	}
@@ -132,7 +137,7 @@ func replaceReleaseConfiguration(
 		{layout.ArtifactCatalog, beforeCatalog, afterCatalog},
 	} {
 		if err := replaceManagedExpected(
-			plan.Root, filepath.FromSlash(replacement.path),
+			after.Root, filepath.FromSlash(replacement.path),
 			replacement.before, replacement.after,
 		); err != nil {
 			if errors.Is(err, errManagedOutcomeUnknown) {
@@ -150,13 +155,13 @@ func replaceReleaseConfiguration(
 		{layout.APISIXUID, []byte(afterTopology.ProjectName)},
 	} {
 		if err := writeManagedOnce(
-			plan.Root, filepath.FromSlash(fixed.path), fixed.content,
+			after.Root, filepath.FromSlash(fixed.path), fixed.content,
 		); err != nil {
 			return errors.Join(platformcommand.ErrEffectConflict, err)
 		}
 	}
 	if err := ensureManagedMutableFile(
-		plan.Root, filepath.FromSlash(layout.APISIXNginx), []byte("\n"),
+		after.Root, filepath.FromSlash(layout.APISIXNginx), []byte("\n"),
 	); err != nil {
 		return errors.Join(platformcommand.ErrEffectConflict, err)
 	}
@@ -206,14 +211,68 @@ func publishInstallationConfiguration(
 	return nil
 }
 
-func artifactCatalogConfig(manifest release.Manifest) ([]byte, error) {
-	entries := make([]apphostingv1.ArtifactCatalogEntry, 0)
-	for _, image := range manifest.Images {
-		if image.Purpose == release.ImageWorkload {
-			entries = append(entries, apphostingv1.ArtifactCatalogEntry{
-				ArtifactDigest: image.SourceDigest, ImageID: image.ImageID,
-			})
+// installedArtifactCatalogConfig admits the current signed release and only
+// its sealed immediate predecessor. Older artifact retention needs a distinct
+// lifecycle and garbage-collection contract; it is never inferred here.
+func installedArtifactCatalogConfig(plan platformcommand.InstallPlan) ([]byte, error) {
+	current, err := verifiedStagedBundle(plan)
+	if err != nil {
+		return nil, err
+	}
+	identity := current.Manifest.Release
+	if identity.PreviousID == "" {
+		if plan.PreviousID != "" || plan.PreviousDigest != "" {
+			return nil, errors.New("installed predecessor identity is unexpected")
 		}
+		return artifactCatalogConfig(current.Manifest)
+	}
+	if plan.PreviousID != identity.PreviousID || plan.PreviousDigest == "" {
+		return nil, errors.New("installed predecessor identity is incomplete")
+	}
+	previousRoot, err := managedPath(
+		plan.Root,
+		filepath.FromSlash(layout.ReleaseDirectory(identity.PreviousID)),
+	)
+	if err != nil {
+		return nil, err
+	}
+	previous, err := release.VerifyDirectory(previousRoot, plan.TrustBytes)
+	if err != nil || previous.ManifestSHA256 != plan.PreviousDigest ||
+		previous.Manifest.Kind != release.ManifestKind ||
+		previous.Manifest.TopologyDigest != topology.ContractDigest() {
+		return nil, errors.New("installed predecessor release is invalid")
+	}
+	previousPlan := plan
+	previousPlan.Bundle = previous
+	currentPlan := plan
+	currentPlan.Bundle = current
+	if validateUpgradeIdentity(previousPlan, currentPlan) != nil {
+		return nil, errors.New("installed predecessor release is inconsistent")
+	}
+	return artifactCatalogConfig(previous.Manifest, current.Manifest)
+}
+
+func artifactCatalogConfig(manifests ...release.Manifest) ([]byte, error) {
+	if len(manifests) == 0 {
+		return nil, errors.New("artifact catalog source is required")
+	}
+	images := make(map[string]string)
+	for _, manifest := range manifests {
+		for _, image := range manifest.Images {
+			if image.Purpose != release.ImageWorkload {
+				continue
+			}
+			if existing, found := images[image.SourceDigest]; found && existing != image.ImageID {
+				return nil, errors.New("artifact catalog digest maps to conflicting images")
+			}
+			images[image.SourceDigest] = image.ImageID
+		}
+	}
+	entries := make([]apphostingv1.ArtifactCatalogEntry, 0, len(images))
+	for digest, imageID := range images {
+		entries = append(entries, apphostingv1.ArtifactCatalogEntry{
+			ArtifactDigest: digest, ImageID: imageID,
+		})
 	}
 	slices.SortFunc(entries, func(left, right apphostingv1.ArtifactCatalogEntry) int {
 		return strings.Compare(left.ArtifactDigest, right.ArtifactDigest)
