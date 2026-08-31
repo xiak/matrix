@@ -388,6 +388,49 @@ func TestUpgradeFailureRollsBackWithoutPublishingCandidate(t *testing.T) {
 	}
 }
 
+func TestManualInterventionAdmitsOnlyExactReplayOrRecovery(t *testing.T) {
+	journal := installedJournal(t)
+	upgrade := lifecycleCommand(ActionUpgrade, releaseB, '2', 10)
+	started, err := Start(journal, upgrade)
+	if err != nil {
+		t.Fatalf("start upgrade: %v", err)
+	}
+	failed, err := Fail(
+		started.Journal, upgrade.ID, "PLATFORM_VERIFICATION_FAILED",
+		upgrade.RequestedAt.Add(time.Second),
+	)
+	if err != nil {
+		t.Fatalf("record upgrade failure: %v", err)
+	}
+	manual, err := Fail(
+		failed, upgrade.ID, "AUTHENTICATED_RECOVERY_REQUIRED",
+		upgrade.RequestedAt.Add(2*time.Second),
+	)
+	if err != nil || manual.Active != nil || manual.Last == nil ||
+		manual.Last.Outcome != OutcomeManualIntervention {
+		t.Fatalf("manual recovery state = %#v / %v", manual, err)
+	}
+
+	replayed, err := Start(manual, upgrade)
+	if err != nil || replayed.Replay != ReplayCompleted ||
+		replayed.Execution.FailureCode != "AUTHENTICATED_RECOVERY_REQUIRED" {
+		t.Fatalf("exact manual replay = %#v / %v", replayed, err)
+	}
+	newUpgrade := lifecycleCommand(ActionUpgrade, releaseB, '2', 11)
+	if _, err := Start(manual, newUpgrade); !errors.Is(err, ErrManualIntervention) {
+		t.Fatalf("new command in manual state error = %v", err)
+	}
+
+	recovery := lifecycleCommand(ActionRecover, releaseA, '1', 12)
+	recovery.BackupID = upgrade.BackupID
+	recovery.BackupDigest = digest('3')
+	recovering, err := Start(manual, recovery)
+	if err != nil || recovering.Replay != ReplayNone ||
+		recovering.Execution.Phase != PhaseRecovering {
+		t.Fatalf("explicit recovery from manual state = %#v / %v", recovering, err)
+	}
+}
+
 func TestSuccessfulUpgradeAndExplicitRollbackMaintainNMinusOne(t *testing.T) {
 	journal := installedJournal(t)
 	upgrade := lifecycleCommand(ActionUpgrade, releaseB, '2', 20)

@@ -291,26 +291,56 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return err
 	}
 
-	if err := value.failedUpgrade(ctx, secret, newPassword, bearer); err != nil {
+	failureBackupID, err := value.failedUpgrade(ctx, secret, newPassword, bearer)
+	if err != nil {
 		return err
 	}
-	if _, err := assertPlatform(
-		ctx, value.config.root, value.releases.a.Manifest, value.releaseAPreviousID,
-	); err != nil {
-		return err
+	if value.releases.a.Manifest.Database == value.releases.b.Manifest.Database {
+		if _, err := assertPlatform(
+			ctx, value.config.root, value.releases.a.Manifest, value.releaseAPreviousID,
+		); err != nil {
+			return err
+		}
+		if err := assertNoPlatformReleaseContainers(ctx, value.releases.b.Manifest.Release.ID); err != nil {
+			return err
+		}
+		if err := value.assertWorkload(ctx, value.releases.a.Manifest, updated, 2, "2", settingTwo, secretDigest); err != nil {
+			return err
+		}
+		if err := value.repeatedStatusAndVerify(
+			ctx, value.releases.a, value.releases.a.Manifest.Release.ID, value.releaseAPreviousID,
+		); err != nil {
+			return err
+		}
+		emit("automatic-upgrade-rollback")
+	} else {
+		if err := assertNoPlatformReleaseContainers(ctx, value.releases.b.Manifest.Release.ID); err != nil {
+			return err
+		}
+		if err := assertNoPlatformReleaseContainers(ctx, value.releases.a.Manifest.Release.ID); err != nil {
+			return err
+		}
+		recovered, err := runMX(ctx, value.releases.b, "recover", []string{
+			"--root", value.config.root, "--backup", failureBackupID,
+		}, value.forbidden(secret, newPassword, bearer))
+		if err != nil || recovered.ReleaseID != value.releases.a.Manifest.Release.ID ||
+			recovered.PreviousID != "" || !recovered.Changed {
+			return fail("cross-profile-upgrade-recovery")
+		}
+		value.releaseAPreviousID = ""
+		if _, err := assertPlatform(ctx, value.config.root, value.releases.a.Manifest, ""); err != nil {
+			return err
+		}
+		if err := value.assertWorkload(ctx, value.releases.a.Manifest, updated, 2, "2", settingTwo, secretDigest); err != nil {
+			return err
+		}
+		if err := value.repeatedStatusAndVerify(
+			ctx, value.releases.a, value.releases.a.Manifest.Release.ID, "",
+		); err != nil {
+			return err
+		}
+		emit("cross-profile-upgrade-failure-authenticated-recovery")
 	}
-	if err := assertNoPlatformReleaseContainers(ctx, value.releases.b.Manifest.Release.ID); err != nil {
-		return err
-	}
-	if err := value.assertWorkload(ctx, value.releases.a.Manifest, updated, 2, "2", settingTwo, secretDigest); err != nil {
-		return err
-	}
-	if err := value.repeatedStatusAndVerify(
-		ctx, value.releases.a, value.releases.a.Manifest.Release.ID, value.releaseAPreviousID,
-	); err != nil {
-		return err
-	}
-	emit("automatic-upgrade-rollback")
 	if err := value.assertNativeNodes(ctx, bearer, false); err != nil {
 		return err
 	}
@@ -1167,7 +1197,7 @@ func (value *gate) provisionSecret() ([]byte, string, error) {
 func (value *gate) failedUpgrade(
 	ctx context.Context,
 	secret, password, bearer []byte,
-) error {
+) (string, error) {
 	upgradeContext, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	command, stdout, stderr, err := startMX(
@@ -1175,7 +1205,7 @@ func (value *gate) failedUpgrade(
 		[]string{"--bundle", value.releases.b.Root, "--root", value.config.root},
 	)
 	if err != nil {
-		return fail("failed-upgrade-start")
+		return "", fail("failed-upgrade-start")
 	}
 	waited := make(chan error, 1)
 	go func() {
@@ -1185,7 +1215,7 @@ func (value *gate) failedUpgrade(
 	for !injected && upgradeContext.Err() == nil {
 		select {
 		case <-waited:
-			return fail("failed-upgrade-ended-before-injection")
+			return "", fail("failed-upgrade-ended-before-injection")
 		default:
 		}
 		ids, listErr := dockerLines(
@@ -1206,15 +1236,31 @@ func (value *gate) failedUpgrade(
 	if !injected {
 		_ = command.Process.Kill()
 		<-waited
-		return fail("failed-upgrade-injection")
+		return "", fail("failed-upgrade-injection")
 	}
 	waitErr := <-waited
+	wantExit, wantClass, wantCode := 5, "VERIFICATION_FAILED", "PLATFORM_VERIFICATION_FAILED"
+	wantOutcome := lifecycle.OutcomeRolledBack
+	if value.releases.a.Manifest.Database != value.releases.b.Manifest.Database {
+		wantExit, wantClass, wantCode = 3, "PRECONDITION_FAILED", "AUTHENTICATED_RECOVERY_REQUIRED"
+		wantOutcome = lifecycle.OutcomeManualIntervention
+	}
 	if err := validateExpectedMXFailure(
 		waitErr, stdout, stderr, "upgrade", value.forbidden(secret, password, bearer),
+		wantExit, wantClass, wantCode,
 	); err != nil {
-		return err
+		return "", err
 	}
-	return nil
+	state, err := readJournal(ctx, value.config.root)
+	if err != nil || state.Active != nil || state.Last == nil ||
+		state.Last.Command.Action != lifecycle.ActionUpgrade ||
+		state.Last.Command.BackupID == "" || state.Last.Outcome != wantOutcome ||
+		state.Last.FailureCode != wantCode ||
+		state.CurrentReleaseID != value.releases.a.Manifest.Release.ID ||
+		state.CurrentReleaseDigest != value.releases.a.ManifestSHA256 {
+		return "", fail("failed-upgrade-journal")
+	}
+	return state.Last.Command.BackupID, nil
 }
 
 func (value *gate) assertWorkload(

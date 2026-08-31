@@ -1070,6 +1070,58 @@ func TestPrepareReleaseRollbackRemovesOnlyCurrentAndRestoresPreviousConfiguratio
 	}
 }
 
+func TestCrossProfileAutomaticRollbackCleansCandidateWithoutStartingSource(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine release rollback targets Linux")
+	}
+	plan := newUpgradePlan(
+		t, release.SupportedDatabasePredecessorProfile(), release.CurrentDatabaseProfile(),
+	)
+	source, err := authenticateInstalledPlan(plan.Source)
+	if err != nil {
+		t.Fatalf("authenticate rollback source: %v", err)
+	}
+	defer clear(source.TrustBytes)
+	if err := configureUpgrade(
+		context.Background(), newImageRuntime(plan.Target.Bundle.Manifest, true), plan,
+	); err != nil {
+		t.Fatalf("configure cross-profile candidate: %v", err)
+	}
+	expectation, err := compileUpgradeExpectation(plan.Target)
+	if err != nil {
+		t.Fatalf("compile candidate expectation: %v", err)
+	}
+	runtimeBoundary := newPlatformCleanupRuntime(t, plan.Target, expectation)
+	verifier := &recordingInstallationVerifier{}
+
+	err = rollbackUpgrade(context.Background(), runtimeBoundary, verifier, plan)
+	if !errors.Is(err, platformcommand.ErrEffectRecoveryRequired) {
+		t.Fatalf("cross-profile rollback error = %v", err)
+	}
+	assertReleaseConfiguration(t, source)
+	wantContainers := len(expectation.Services) + 1
+	wantNetworks := len(expectation.Networks)
+	if len(runtimeBoundary.containers) != 0 || len(runtimeBoundary.networks) != 0 ||
+		runtimeBoundary.containerRemovals != wantContainers ||
+		runtimeBoundary.networkRemovals != wantNetworks ||
+		runtimeBoundary.unexpectedRemovals != 0 || verifier.calls != 0 {
+		t.Fatalf(
+			"cross-profile cleanup inventory=%d/%d removals=%d/%d unexpected=%d verifier=%d",
+			len(runtimeBoundary.containers), len(runtimeBoundary.networks),
+			runtimeBoundary.containerRemovals, runtimeBoundary.networkRemovals,
+			runtimeBoundary.unexpectedRemovals, verifier.calls,
+		)
+	}
+
+	err = rollbackUpgrade(context.Background(), runtimeBoundary, verifier, plan)
+	if !errors.Is(err, platformcommand.ErrEffectRecoveryRequired) ||
+		runtimeBoundary.containerRemovals != wantContainers ||
+		runtimeBoundary.networkRemovals != wantNetworks ||
+		runtimeBoundary.unexpectedRemovals != 0 || verifier.calls != 0 {
+		t.Fatalf("cross-profile cleanup replay = %v / %#v", err, runtimeBoundary)
+	}
+}
+
 func TestLoadInstallImagesUsesAuthenticatedStdinAndExactIdentities(t *testing.T) {
 	plan := newInstallPlan(t)
 	if err := stageInstallation(plan, rand.Reader); err != nil {

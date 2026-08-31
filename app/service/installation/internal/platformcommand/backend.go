@@ -35,6 +35,11 @@ var (
 	ErrEffectConflict     = errors.New("platform effect ownership conflict")
 	ErrEffectVerification = errors.New("platform effect verification failed")
 	ErrEffectUnavailable  = errors.New("platform effect dependency is unavailable")
+	// ErrEffectRecoveryRequired means rollback has safely removed the failed
+	// candidate, but restoring the source runtime would cross an authenticated
+	// database contract boundary. Only recovery from the upgrade backup can
+	// restore that source profile.
+	ErrEffectRecoveryRequired = errors.New("platform effect requires authenticated recovery")
 	// ErrEffectOutcomeUnknown means a provider command started but completion
 	// was not established. The journal phase stays active so the next replay
 	// observes the owned effect before retrying it.
@@ -809,6 +814,9 @@ func (backend *Backend) rollback(
 	) != nil {
 		return cli.Result{}, fault(cli.FaultPrecondition, "ROLLBACK_SCHEMA_INCOMPATIBLE")
 	}
+	if previousBundle.Manifest.Database != currentBundle.Manifest.Database {
+		return cli.Result{}, fault(cli.FaultPrecondition, "ROLLBACK_REQUIRES_AUTHENTICATED_RECOVERY")
+	}
 
 	if state.Active == nil {
 		ready, observeErr := backend.effects.ObserveInstallation(
@@ -1248,6 +1256,16 @@ func (backend *Backend) handleRollbackFailure(
 	if errors.Is(effectErr, ErrEffectUnavailable) {
 		return fault(cli.FaultUnavailable, "ROLLBACK_DEPENDENCY_UNAVAILABLE")
 	}
+	if errors.Is(effectErr, ErrEffectRecoveryRequired) {
+		manual, err := lifecycle.Fail(
+			state, execution.Command.ID, "AUTHENTICATED_RECOVERY_REQUIRED",
+			nextJournalTime(backend.now(), execution.UpdatedAt),
+		)
+		if err != nil || session.Write(manual) != nil {
+			return fault(cli.FaultInternal, "ROLLBACK_FAILURE_COMMIT_FAILED")
+		}
+		return fault(cli.FaultPrecondition, "AUTHENTICATED_RECOVERY_REQUIRED")
+	}
 	manual, err := lifecycle.Fail(
 		state, execution.Command.ID, "ROLLBACK_FAILED",
 		nextJournalTime(backend.now(), execution.UpdatedAt),
@@ -1290,6 +1308,8 @@ func storedFailure(execution *lifecycle.Execution) error {
 	case execution.FailureCode == "CREDENTIAL_RECOVERY_CONFLICT":
 		class = cli.FaultConflict
 	case execution.FailureCode == "PREFLIGHT_FAILED":
+		class = cli.FaultPrecondition
+	case execution.FailureCode == "AUTHENTICATED_RECOVERY_REQUIRED":
 		class = cli.FaultPrecondition
 	case execution.FailureCode == "OWNERSHIP_CONFLICT":
 		class = cli.FaultConflict
@@ -1350,6 +1370,8 @@ func phaseFailureCode(phase lifecycle.Phase, suffix string) string {
 
 func lifecycleFault(err error) error {
 	switch {
+	case errors.Is(err, lifecycle.ErrManualIntervention):
+		return fault(cli.FaultPrecondition, "PLATFORM_MANUAL_INTERVENTION_REQUIRED")
 	case errors.Is(err, lifecycle.ErrPrecondition):
 		return fault(cli.FaultPrecondition, "INSTALLATION_PRECONDITION_FAILED")
 	case errors.Is(err, lifecycle.ErrCommandConflict),

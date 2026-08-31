@@ -72,21 +72,34 @@ func startUpgrade(
 	return startInstallation(ctx, runtimeBoundary, target)
 }
 
-// rollbackUpgrade removes only a fully authenticated target candidate, puts
-// the source configuration back, and proves the previous release healthy. It
-// intentionally preserves PostgreSQL data, release media, backups, and every
-// non-platform Compose project.
+// rollbackUpgrade removes only a fully authenticated target candidate and
+// puts the source configuration back. Equal database profiles can then start
+// and verify that source while preserving PostgreSQL data. A cross-profile
+// failure stops after cleanup: starting old binaries against the migrated
+// schema is forbidden and the authenticated upgrade backup owns recovery.
 func rollbackUpgrade(
 	ctx context.Context,
 	runtimeBoundary dockerRuntime,
 	verifier installationVerifier,
 	plan platformcommand.UpgradePlan,
 ) error {
+	source, err := authenticateInstalledPlan(plan.Source)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	sourceDatabase := source.Bundle.Manifest.Database
+	clear(source.TrustBytes)
 	rollback := platformcommand.RollbackPlan{
 		Current: plan.Target, Previous: plan.Source,
 	}
 	if err := prepareReleaseRollback(ctx, runtimeBoundary, rollback); err != nil {
 		return err
+	}
+	if sourceDatabase != plan.Target.Bundle.Manifest.Database {
+		return errors.Join(
+			platformcommand.ErrEffectRecoveryRequired,
+			errors.New("cross-profile upgrade rollback requires authenticated backup recovery"),
+		)
 	}
 	if err := startPreviousRelease(ctx, runtimeBoundary, rollback); err != nil {
 		return err

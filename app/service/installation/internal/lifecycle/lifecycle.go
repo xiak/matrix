@@ -12,10 +12,11 @@ import (
 const APIVersion = "installation.matrix.xiak.com/v1"
 
 var (
-	ErrCommandConflict   = errors.New("installation command identity conflicts with stored input")
-	ErrCommandInProgress = errors.New("another installation command is in progress")
-	ErrInvalidTransition = errors.New("installation phase transition is invalid")
-	ErrPrecondition      = errors.New("installation lifecycle precondition failed")
+	ErrCommandConflict    = errors.New("installation command identity conflicts with stored input")
+	ErrCommandInProgress  = errors.New("another installation command is in progress")
+	ErrInvalidTransition  = errors.New("installation phase transition is invalid")
+	ErrPrecondition       = errors.New("installation lifecycle precondition failed")
+	ErrManualIntervention = errors.New("installation requires explicit recovery")
 )
 
 type Action string
@@ -530,6 +531,10 @@ func validateCommand(command Command, node bool) error {
 }
 
 func validateActionPrecondition(journal Journal, command Command) error {
+	if journal.Last != nil && journal.Last.Outcome == OutcomeManualIntervention &&
+		command.Action != ActionRecover && command.Action != ActionStatus {
+		return ErrManualIntervention
+	}
 	switch command.Action {
 	case ActionRotateCredentials:
 		if journal.Node == nil || journal.CurrentReleaseID == "" ||

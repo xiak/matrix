@@ -490,6 +490,66 @@ func TestUpgradeUnknownOutcomeResumesAndDefinitiveFailureRestoresSource(t *testi
 	}
 }
 
+func TestCrossProfileUpgradeFailureRequiresAuthenticatedRecovery(t *testing.T) {
+	fixtures, err := releasetest.WriteSequence(
+		t.TempDir(), 2,
+		release.SupportedDatabasePredecessorProfile(), release.CurrentDatabaseProfile(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	effects := &installEffects{
+		upgradeFailPhase:   lifecycle.PhaseVerifying,
+		upgradeFailErr:     ErrEffectVerification,
+		upgradeRollbackErr: ErrEffectRecoveryRequired,
+	}
+	backend := newTestBackend(t, effects)
+	root := filepath.Join(t.TempDir(), "matrix")
+	if _, err := backend.Run(
+		context.Background(), installRequest(root, fixtures[0]),
+	); err != nil {
+		t.Fatalf("install cross-profile source: %v", err)
+	}
+	materializeInstalledRelease(t, root, fixtures[0])
+	request := cli.Request{
+		Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[1].Root,
+	}
+
+	_, err = backend.Run(context.Background(), request)
+	assertFault(t, err, cli.FaultPrecondition, "AUTHENTICATED_RECOVERY_REQUIRED")
+	manual := readJournal(t, root)
+	if manual.Active != nil || manual.Last == nil ||
+		manual.Last.Outcome != lifecycle.OutcomeManualIntervention ||
+		manual.Last.FailureCode != "AUTHENTICATED_RECOVERY_REQUIRED" ||
+		manual.Last.Command.Action != lifecycle.ActionUpgrade ||
+		manual.Last.Command.BackupID == "" ||
+		manual.CurrentReleaseID != fixtures[0].Manifest.Release.ID ||
+		manual.CurrentReleaseDigest != fixtures[0].ManifestDigest ||
+		effects.upgradeRollbackCalls != 1 {
+		t.Fatalf("cross-profile manual state = %#v / effects=%#v", manual, effects)
+	}
+	status, err := backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionStatus, Root: root,
+	})
+	if err != nil || status.State != string(lifecycle.PhaseManualIntervention) ||
+		status.CorrelationID != manual.Last.Command.ID {
+		t.Fatalf("manual status = %#v / %v", status, err)
+	}
+
+	verificationCalls := effects.upgradeCalls[lifecycle.PhaseVerifying]
+	_, err = backend.Run(context.Background(), request)
+	assertFault(t, err, cli.FaultPrecondition, "PLATFORM_MANUAL_INTERVENTION_REQUIRED")
+	_, err = backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionBackup, Root: root,
+	})
+	assertFault(t, err, cli.FaultPrecondition, "PLATFORM_MANUAL_INTERVENTION_REQUIRED")
+	if effects.upgradeCalls[lifecycle.PhaseVerifying] != verificationCalls ||
+		effects.upgradeRollbackCalls != 1 || effects.backupCalls != 0 ||
+		!reflect.DeepEqual(readJournal(t, root), manual) {
+		t.Fatal("manual intervention admitted a new effect or changed its recovery receipt")
+	}
+}
+
 func TestUpgradeRejectsSkippedPredecessorWithoutStartingACommand(t *testing.T) {
 	fixtures := writeReleaseSequence(t, 3)
 	effects := &installEffects{}
@@ -710,7 +770,7 @@ func TestPublishedScalarProfileStillAllowsItsOwnReleasePair(t *testing.T) {
 	}
 }
 
-func TestFrozenAdjacentProfilePairAllowsInstallUpgradeAndRollback(t *testing.T) {
+func TestFrozenAdjacentProfilePairAllowsUpgradeButRollbackRequiresAuthenticatedRecovery(t *testing.T) {
 	current := release.CurrentDatabaseProfile()
 	predecessor := release.SupportedDatabasePredecessorProfile()
 	fixtures, err := releasetest.WriteSequence(t.TempDir(), 2, predecessor, current)
@@ -732,14 +792,16 @@ func TestFrozenAdjacentProfilePairAllowsInstallUpgradeAndRollback(t *testing.T) 
 		t.Fatalf("upgrade exact runtime profile pair: %#v / %v", upgraded, err)
 	}
 	materializeInstalledRelease(t, root, fixtures[1])
-	rolledBack, err := backend.Run(context.Background(), cli.Request{
+	_, err = backend.Run(context.Background(), cli.Request{
 		Action: lifecycle.ActionRollback, Root: root,
 	})
-	if err != nil || rolledBack.ReleaseID != fixtures[0].Manifest.Release.ID || !rolledBack.Changed {
-		t.Fatalf("rollback exact runtime profile pair: %#v / %v", rolledBack, err)
-	}
-	if len(effects.upgradeCalls) == 0 || len(effects.explicitRollbackCalls) == 0 {
-		t.Fatal("exact profile pair bypassed release lifecycle effects")
+	assertFault(t, err, cli.FaultPrecondition, "ROLLBACK_REQUIRES_AUTHENTICATED_RECOVERY")
+	state := readJournal(t, root)
+	if state.CurrentReleaseID != fixtures[1].Manifest.Release.ID ||
+		state.PreviousRelease != fixtures[0].Manifest.Release.ID ||
+		state.Active != nil || len(effects.upgradeCalls) == 0 ||
+		len(effects.explicitRollbackCalls) != 0 || effects.observeCalls != 0 {
+		t.Fatalf("cross-profile rollback changed state or reached effects: %#v / %#v", state, effects)
 	}
 }
 

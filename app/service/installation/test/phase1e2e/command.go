@@ -271,9 +271,11 @@ func validateExpectedMXFailure(
 	stdout, stderr *boundedBuffer,
 	action string,
 	forbidden [][]byte,
+	wantExit int,
+	wantClass, wantCode string,
 ) error {
 	var exit *exec.ExitError
-	if !errors.As(waitErr, &exit) || exit.ExitCode() != 5 || stdout.overflow || stderr.overflow ||
+	if !errors.As(waitErr, &exit) || exit.ExitCode() != wantExit || stdout.overflow || stderr.overflow ||
 		stdout.content.Len() != 0 || containsAny(stderr.content.Bytes(), forbidden) {
 		return fail("failed-" + action + "-exit")
 	}
@@ -281,8 +283,8 @@ func validateExpectedMXFailure(
 	if decodeOne(stderr.content.Bytes(), &envelope) != nil ||
 		envelope.APIVersion != "cli.matrix.xiak.com/v1" ||
 		envelope.Kind != "PlatformCommandFailure" || envelope.Action != strings.ToUpper(strings.ReplaceAll(action, "-", "_")) ||
-		envelope.Status != "FAILED" || envelope.Error.Class != "VERIFICATION_FAILED" ||
-		envelope.Error.Code == "" || strings.Contains(strings.ToLower(envelope.Error.Message), "docker") ||
+		envelope.Status != "FAILED" || envelope.Error.Class != wantClass ||
+		envelope.Error.Code != wantCode || strings.Contains(strings.ToLower(envelope.Error.Message), "docker") ||
 		strings.Contains(strings.ToLower(envelope.Error.Message), "postgres") {
 		return fail("failed-" + action + "-result")
 	}
