@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"time"
 
@@ -27,6 +28,21 @@ type DeploymentService interface {
 	)
 }
 
+var (
+	ErrTerminalUnsupported = errors.New("node terminal is unsupported")
+	ErrTerminalUnavailable = errors.New("node terminal is unavailable")
+)
+
+type TerminalSession interface {
+	io.ReadWriteCloser
+	Resize(context.Context, paasv1.TerminalSize) error
+	ExitCode(context.Context) (int32, error)
+}
+
+type TerminalService interface {
+	OpenTerminal(context.Context, nodev1.TerminalOpenRequest) (TerminalSession, error)
+}
+
 type Config struct {
 	Identity          nodev1.Identity
 	ControllerID      string
@@ -41,29 +57,35 @@ type Handler struct {
 	bindingRef    string
 	source        ObservationSource
 	deployments   DeploymentService
+	terminals     TerminalService
 	slots         chan struct{}
 }
 
-func New(source ObservationSource, deployments DeploymentService, config Config) (*Handler, error) {
+func New(
+	source ObservationSource,
+	deployments DeploymentService,
+	terminals TerminalService,
+	config Config,
+) (*Handler, error) {
 	controllerURI, err := nodev1.ControllerURI(config.Identity.InstallationID, config.ControllerID)
 	selfURI, _ := nodev1.NodeURI(config.Identity)
 	if config.MaximumConcurrent == 0 {
 		config.MaximumConcurrent = 8
 	}
-	if source == nil || deployments == nil || err != nil || nodev1.ValidateIdentity(config.Identity) != nil ||
+	if source == nil || deployments == nil || terminals == nil || err != nil || nodev1.ValidateIdentity(config.Identity) != nil ||
 		paasv1.ValidateID("bindingRef", config.BindingRef) != nil ||
 		config.MaximumConcurrent < 1 || config.MaximumConcurrent > 64 {
 		return nil, errors.New("node HTTP configuration is invalid")
 	}
 	return &Handler{
 		identity: config.Identity, controllerURI: controllerURI, selfURI: selfURI, bindingRef: config.BindingRef,
-		source: source, deployments: deployments, slots: make(chan struct{}, config.MaximumConcurrent),
+		source: source, deployments: deployments, terminals: terminals,
+		slots: make(chan struct{}, config.MaximumConcurrent),
 	}, nil
 }
 
 func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
 	response.Header().Set("Cache-Control", "no-store")
-	response.Header().Set("Content-Type", "application/json")
 	response.Header().Set("X-Content-Type-Options", "nosniff")
 	// Keep this guard even though the listener requires mTLS: accidentally
 	// mounting this handler on a plain HTTP server must never authorize a node.
@@ -76,9 +98,15 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 		return
 	}
 	if request.URL.Path == nodev1.ReadinessPath {
+		response.Header().Set("Content-Type", "application/json")
 		handler.readiness(response, request)
 		return
 	}
+	if request.URL.Path == nodev1.DeploymentTerminalSessionPath {
+		handler.terminalSession(response, request)
+		return
+	}
+	response.Header().Set("Content-Type", "application/json")
 	switch request.URL.Path {
 	case nodev1.ObservationPath:
 		handler.observation(response, request)
@@ -516,6 +544,9 @@ func (handler *Handler) authenticated(request *http.Request, peerURI string) boo
 }
 
 func reject(response http.ResponseWriter, status int) {
+	response.Header().Set("Cache-Control", "no-store")
+	response.Header().Set("Content-Type", "application/json")
+	response.Header().Set("X-Content-Type-Options", "nosniff")
 	response.WriteHeader(status)
 	_, _ = response.Write([]byte(`{"error":"node observation unavailable"}`))
 }

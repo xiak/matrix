@@ -12,6 +12,11 @@ import type {
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
 import type { HostInventoryRepository } from "../repositories/hostInventoryRepository";
 import type { DeploymentInventoryRepository } from "../repositories/deploymentInventoryRepository";
+import type {
+  TerminalConnection,
+  TerminalConnectionHandlers,
+  TerminalSessionRepository
+} from "../repositories/terminalSessionRepository";
 import { ControlPlaneProvider, useControlPlane } from "./ControlPlaneProvider";
 
 const pendingInstallation: ServiceInstallation = {
@@ -182,11 +187,20 @@ function Probe() {
       <button onClick={() => void controlPlane.reload()} type="button">reload</button>
       <button onClick={() => void session.logout()} type="button">logout</button>
       <button onClick={() => controlPlane.selectDeployment("deployment-beta")} type="button">select beta</button>
+      <button onClick={() => void controlPlane.openTerminal(
+        deployment?.id ?? "none",
+        runtime?.instances[0]?.id ?? "none",
+        { columns: 120, rows: 32 }
+      )} type="button">open terminal</button>
+      <button onClick={() => controlPlane.connectTerminal()} type="button">connect terminal</button>
+      <button onClick={() => void controlPlane.closeTerminal()} type="button">close terminal</button>
       <span data-testid="phase">{installation?.phase ?? "none"}</span>
       <span data-testid="host">{host?.name ?? "none"}</span>
       <span data-testid="section">{controlPlane.scene?.section ?? "none"}</span>
       <span data-testid="deployment">{deployment?.id ?? "none"}</span>
       <span data-testid="runtime-target">{runtime?.executionTargetId ?? "none"}</span>
+      <span data-testid="terminal-phase">{controlPlane.terminal.phase}</span>
+      <span data-testid="terminal-message">{controlPlane.terminal.message ?? "none"}</span>
       <span role="status">{controlPlane.error}</span>
     </div>
   );
@@ -210,6 +224,42 @@ function iamRepository(): IamRepository {
     },
     async changePassword() {},
     async logout() {}
+  };
+}
+
+class MemoryTerminalConnection implements TerminalConnection {
+  readonly handlers = new Set<TerminalConnectionHandlers>();
+  readonly sendInput = vi.fn();
+  readonly resize = vi.fn();
+  readonly closeInput = vi.fn();
+  readonly close = vi.fn();
+
+  subscribe(handlers: TerminalConnectionHandlers): () => void {
+    this.handlers.add(handlers);
+    return () => this.handlers.delete(handlers);
+  }
+
+  ready(): void {
+    for (const handlers of this.handlers) handlers.ready?.();
+  }
+}
+
+function terminalSession() {
+  return {
+    id: "terminal-session-0123456789abcdef0123456789abcdef",
+    tenantId: "organization-test",
+    deploymentId: "deployment-alpha",
+    generation: 1,
+    applicationRevisionId: "revision-alpha",
+    instanceId: "instance-0123456789abcdef0123456789abcdef",
+    size: { columns: 120, rows: 32 },
+    state: "PENDING" as const,
+    outcome: null,
+    createdAt: "2026-08-31T10:00:00.000000Z",
+    connectBefore: "2026-08-31T10:00:30.000000Z",
+    expiresAt: "2026-08-31T10:15:00.000000Z",
+    connectedAt: null,
+    endedAt: null
   };
 }
 
@@ -555,6 +605,63 @@ describe("ControlPlaneProvider", () => {
     expect(screen.getByTestId("runtime-target").textContent).toBe("node-a");
     expect(screen.getByRole("status").textContent).toContain("保持原时间");
     expect(screen.container.textContent).not.toContain("PRIVATE_INVENTORY_DETAIL");
+  });
+
+  it("binds one terminal to the selected running instance and explicitly closes it before selection changes", async () => {
+    const connection = new MemoryTerminalConnection();
+    const terminals: TerminalSessionRepository = {
+      create: vi.fn().mockResolvedValue(terminalSession()),
+      connect: vi.fn().mockReturnValue(connection),
+      close: vi.fn().mockResolvedValue(undefined)
+    };
+    const deployments: DeploymentInventoryRepository = {
+      load: vi.fn().mockResolvedValue(deploymentInventory()),
+      loadRuntime: vi.fn()
+        .mockResolvedValueOnce(deploymentRuntime())
+        .mockResolvedValueOnce(deploymentRuntime("deployment-beta", "node-b"))
+    };
+    const screen = render(
+      <SessionProvider repository={iamRepository()}>
+        <ControlPlaneProvider
+          deploymentRepository={deployments}
+          selection={{ section: "deployments" }}
+          terminalRepository={terminals}
+        >
+          <Probe />
+        </ControlPlaneProvider>
+      </SessionProvider>
+    );
+    await act(async () => { fireEvent.click(screen.getByText("login")); });
+    await act(async () => {
+      fireEvent.click(screen.getByText("open terminal"));
+      await Promise.resolve();
+    });
+    expect(terminals.create).toHaveBeenCalledWith(
+      "memory-only-session",
+      "organization-test",
+      "deployment-alpha",
+      "instance-0123456789abcdef0123456789abcdef",
+      { columns: 120, rows: 32 },
+      expect.stringMatching(/^terminal-session-[0-9a-f]{32}$/)
+    );
+    expect(screen.getByTestId("terminal-phase").textContent).toBe("CONNECTING");
+    expect(terminals.connect).not.toHaveBeenCalled();
+
+    await act(async () => { fireEvent.click(screen.getByText("connect terminal")); });
+    expect(terminals.connect).toHaveBeenCalledWith("terminal-session-0123456789abcdef0123456789abcdef");
+    await act(async () => { connection.ready(); });
+    expect(screen.getByTestId("terminal-phase").textContent).toBe("ACTIVE");
+
+    await act(async () => { fireEvent.click(screen.getByText("select beta")); });
+    expect(connection.closeInput).toHaveBeenCalledTimes(1);
+    expect(connection.close).toHaveBeenCalledTimes(1);
+    expect(terminals.close).toHaveBeenCalledWith(
+      "memory-only-session",
+      "organization-test",
+      "terminal-session-0123456789abcdef0123456789abcdef"
+    );
+    expect(screen.getByTestId("terminal-phase").textContent).toBe("IDLE");
+    expect(screen.getByTestId("deployment").textContent).toBe("deployment-beta");
   });
 
   it("aborts an in-flight deployment runtime read when navigation leaves the section", async () => {

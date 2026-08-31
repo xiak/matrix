@@ -214,6 +214,8 @@ BEGIN
        OR iam.resource_kind_for_action('managedservice.service-installation.read') IS DISTINCT FROM 'SERVICE_INSTALLATION'
        OR iam.resource_kind_for_action('paas.execution-target.register') IS DISTINCT FROM 'EXECUTION_TARGET'
        OR iam.resource_kind_for_action('paas.execution-pool.create') IS DISTINCT FROM 'EXECUTION_POOL'
+       OR iam.resource_kind_for_action('paas.terminal-session.create') IS DISTINCT FROM 'TERMINAL_SESSION'
+       OR iam.resource_kind_for_action('paas.terminal-session.close') IS DISTINCT FROM 'TERMINAL_SESSION'
        OR iam.resource_kind_for_action('unsupported') IS NOT NULL
        OR NOT iam.is_platform_action('paas.execution-target.register')
        OR iam.is_platform_action('paas.application.create')

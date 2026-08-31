@@ -11,7 +11,7 @@ import {
   type ReactNode
 } from "react";
 import { useSession, useSessionCredential } from "@/features/auth/application/SessionProvider";
-import { HttpProblem } from "@/infrastructure/http/jsonRequest";
+import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import type {
   ActivateQuotaCommand,
   ControlPlaneSnapshot,
@@ -19,13 +19,16 @@ import type {
 } from "../domain/resources";
 import type { HostInventory } from "../domain/hosts";
 import type { DeploymentInventory, DeploymentRuntimeSnapshot } from "../domain/deployments";
+import type { TerminalServerError, TerminalSession, TerminalSize } from "../domain/terminalSessions";
 import type { ControlPlaneRouteSelection } from "../domain/selection";
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
 import type { HostInventoryRepository } from "../repositories/hostInventoryRepository";
 import type { DeploymentInventoryRepository } from "../repositories/deploymentInventoryRepository";
+import type { TerminalConnection, TerminalSessionRepository } from "../repositories/terminalSessionRepository";
 import { httpControlPlaneRepository } from "../repositories/httpControlPlaneRepository";
 import { httpHostInventoryRepository } from "../repositories/httpHostInventoryRepository";
 import { httpDeploymentInventoryRepository } from "../repositories/httpDeploymentInventoryRepository";
+import { httpTerminalSessionRepository } from "../repositories/httpTerminalSessionRepository";
 import {
   buildAccessConsoleScene,
   buildConsoleScene,
@@ -36,6 +39,26 @@ import type { ConsoleScene } from "../scenes/consoleScene";
 
 type MutationKind = "quota" | "installation" | null;
 
+export type TerminalConsolePhase = "IDLE" | "CREATING" | "CONNECTING" | "ACTIVE" | "ENDED" | "ERROR";
+
+export type TerminalConsoleState = {
+  phase: TerminalConsolePhase;
+  deploymentId: string | null;
+  instanceId: string | null;
+  session: TerminalSession | null;
+  message: string | null;
+};
+
+export type OpenTerminal = (
+  deploymentId: string,
+  instanceId: string,
+  size: TerminalSize
+) => Promise<boolean>;
+
+export type ConnectTerminal = () => TerminalConnection | null;
+
+export type CloseTerminal = () => Promise<void>;
+
 type ControlPlaneContextValue = {
   scene: ConsoleScene | null;
   loading: boolean;
@@ -45,9 +68,25 @@ type ControlPlaneContextValue = {
   activateQuota(command: ActivateQuotaCommand): Promise<boolean>;
   createInstallation(command: CreateInstallationCommand): Promise<boolean>;
   selectDeployment(deploymentId: string): void;
+  terminal: TerminalConsoleState;
+  openTerminal: OpenTerminal;
+  connectTerminal: ConnectTerminal;
+  closeTerminal: CloseTerminal;
 };
 
 const ControlPlaneContext = createContext<ControlPlaneContextValue | null>(null);
+
+export const idleTerminalConsoleState: TerminalConsoleState = {
+  phase: "IDLE",
+  deploymentId: null,
+  instanceId: null,
+  session: null,
+  message: null
+};
+
+const unsupportedOpenTerminal: OpenTerminal = async () => false;
+const unsupportedConnectTerminal: ConnectTerminal = () => null;
+const unsupportedCloseTerminal: CloseTerminal = async () => {};
 
 function failureMessage(error: unknown, operation: "read" | "write" = "read"): string {
   if (error instanceof HttpProblem && error.status === 401) {
@@ -78,6 +117,22 @@ function deploymentFailureMessage(error: unknown): string {
     return "当前角色没有租户部署查看权限。";
   }
   return "部署运行态暂时不可用；已有来源采样（如有）保持原时间，不会被续期。";
+}
+
+function terminalFailureMessage(error: unknown): string {
+  if (error instanceof HttpProblem && error.status === 401) return "IAM 会话已失效，终端没有启动。";
+  if (error instanceof HttpProblem && error.status === 403) return "当前角色无权打开或关闭该部署终端。";
+  if (error instanceof HttpProblem && error.status === 404) return "目标容器已不属于当前部署运行代次。";
+  if (error instanceof HttpProblem && (error.status === 409 || error.status === 410)) {
+    return "终端请求已过期或与当前部署运行态冲突，请刷新后重试。";
+  }
+  return "终端请求未能安全完成；不会自动连接到其他容器。";
+}
+
+function terminalServerMessage(code: TerminalServerError): string {
+  if (code === "UNSUPPORTED") return "该执行节点不支持受控终端。";
+  if (code === "UNAVAILABLE") return "执行节点或目标容器当前不可用。";
+  return "终端连接异常结束；不会自动重连。";
 }
 
 function ManagedControlPlaneProvider({
@@ -224,7 +279,11 @@ function ManagedControlPlaneProvider({
     reload,
     activateQuota,
     createInstallation,
-    selectDeployment: () => {}
+    selectDeployment: () => {},
+    terminal: idleTerminalConsoleState,
+    openTerminal: unsupportedOpenTerminal,
+    connectTerminal: unsupportedConnectTerminal,
+    closeTerminal: unsupportedCloseTerminal
   }), [activateQuota, createInstallation, error, isAccess, loading, mutation, reload, scene]);
 
   return (
@@ -335,7 +394,11 @@ function HostInventoryProvider({
     reload,
     activateQuota: async () => false,
     createInstallation: async () => false,
-    selectDeployment: () => {}
+    selectDeployment: () => {},
+    terminal: idleTerminalConsoleState,
+    openTerminal: unsupportedOpenTerminal,
+    connectTerminal: unsupportedConnectTerminal,
+    closeTerminal: unsupportedCloseTerminal
   }), [error, loading, reload, scene]);
 
   return (
@@ -352,10 +415,12 @@ type DeploymentRequest = {
 
 function DeploymentInventoryProvider({
   children,
-  repository
+  repository,
+  terminalRepository
 }: {
   children: ReactNode;
   repository: DeploymentInventoryRepository;
+  terminalRepository: TerminalSessionRepository;
 }) {
   const credential = useSessionCredential();
   const session = useSession();
@@ -366,6 +431,7 @@ function DeploymentInventoryProvider({
   const [loading, setLoading] = useState(true);
   const [inventoryError, setInventoryError] = useState<string | null>(null);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
+  const [terminal, setTerminal] = useState<TerminalConsoleState>(idleTerminalConsoleState);
   const inventoryEpoch = useRef(0);
   const runtimeEpoch = useRef(0);
   const selectedDeploymentIdRef = useRef<string | null>(null);
@@ -373,6 +439,151 @@ function DeploymentInventoryProvider({
   const runtimeRequest = useRef<DeploymentRequest | null>(null);
   const runtimeTimer = useRef<number | null>(null);
   const runtimeCycle = useRef<(() => void) | null>(null);
+  const terminalState = useRef<TerminalConsoleState>(idleTerminalConsoleState);
+  const terminalEpoch = useRef(0);
+  const terminalConnection = useRef<TerminalConnection | null>(null);
+  const terminalConnectionSubscription = useRef<(() => void) | null>(null);
+
+  const commitTerminal = useCallback((next: TerminalConsoleState) => {
+    terminalState.current = next;
+    setTerminal(next);
+  }, []);
+
+  const updateTerminal = useCallback((change: (current: TerminalConsoleState) => TerminalConsoleState) => {
+    setTerminal((current) => {
+      const next = change(current);
+      terminalState.current = next;
+      return next;
+    });
+  }, []);
+
+  const disconnectTerminal = useCallback(() => {
+    terminalConnectionSubscription.current?.();
+    terminalConnectionSubscription.current = null;
+    const connection = terminalConnection.current;
+    terminalConnection.current = null;
+    if (!connection) return;
+    try { connection.closeInput(); } catch {}
+    connection.close();
+  }, []);
+
+  const closeTerminal = useCallback(async () => {
+    const operationEpoch = ++terminalEpoch.current;
+    const previous = terminalState.current;
+    disconnectTerminal();
+    commitTerminal(idleTerminalConsoleState);
+    if (!credential || !tenantId || !previous.session) return;
+    try {
+      await terminalRepository.close(credential, tenantId, previous.session.id);
+    } catch (closeError) {
+      if (operationEpoch !== terminalEpoch.current) return;
+      commitTerminal({
+        ...idleTerminalConsoleState,
+        phase: "ERROR",
+        message: terminalFailureMessage(closeError)
+      });
+    }
+  }, [commitTerminal, credential, disconnectTerminal, tenantId, terminalRepository]);
+
+  const openTerminal = useCallback<OpenTerminal>(async (deploymentId, instanceId, size) => {
+    const deployment = inventory?.items.find((item) => item.id === deploymentId);
+    const runtimeValue = runtime?.state === "AVAILABLE" ? runtime.value : null;
+    const instance = runtimeValue?.instances.find((item) => item.id === instanceId);
+    if (!credential || !tenantId || selectedDeploymentId !== deploymentId || !deployment ||
+        !runtimeValue || runtimeValue.deploymentId !== deploymentId ||
+        runtimeValue.generation !== deployment.generation ||
+        runtimeValue.applicationRevisionId !== deployment.applicationRevisionId ||
+        instance?.state !== "RUNNING") {
+      commitTerminal({
+        phase: "ERROR", deploymentId, instanceId, session: null,
+        message: "只能进入当前已证明运行代次中的运行中容器。"
+      });
+      return false;
+    }
+
+    const operationEpoch = ++terminalEpoch.current;
+    const previous = terminalState.current;
+    disconnectTerminal();
+    commitTerminal({ phase: "CREATING", deploymentId, instanceId, session: null, message: null });
+    if (previous.session) {
+      void terminalRepository.close(credential, tenantId, previous.session.id).catch(() => {});
+    }
+    try {
+      const sessionValue = await terminalRepository.create(
+        credential,
+        tenantId,
+        deploymentId,
+        instanceId,
+        size,
+        requestToken("terminal-session-")
+      );
+      if (operationEpoch !== terminalEpoch.current) {
+        void terminalRepository.close(credential, tenantId, sessionValue.id).catch(() => {});
+        return false;
+      }
+      if (sessionValue.tenantId !== tenantId || sessionValue.deploymentId !== deploymentId ||
+          sessionValue.instanceId !== instanceId || sessionValue.generation !== runtimeValue.generation ||
+          sessionValue.applicationRevisionId !== runtimeValue.applicationRevisionId ||
+          sessionValue.state !== "PENDING") {
+        void terminalRepository.close(credential, tenantId, sessionValue.id).catch(() => {});
+        throw new Error("terminal response does not match the selected runtime proof");
+      }
+      commitTerminal({
+        phase: "CONNECTING", deploymentId, instanceId,
+        session: sessionValue, message: "正在建立一次性受控连接…"
+      });
+      return true;
+    } catch (openError) {
+      if (operationEpoch !== terminalEpoch.current) return false;
+      commitTerminal({
+        phase: "ERROR", deploymentId, instanceId, session: null,
+        message: terminalFailureMessage(openError)
+      });
+      return false;
+    }
+  }, [commitTerminal, credential, disconnectTerminal, inventory, runtime, selectedDeploymentId, tenantId, terminalRepository]);
+
+  const connectTerminal = useCallback<ConnectTerminal>(() => {
+    const current = terminalState.current;
+    if (!current.session || (current.phase !== "CONNECTING" && current.phase !== "ACTIVE")) return null;
+    if (terminalConnection.current) return terminalConnection.current;
+    const expiresAt = current.session.expiresAt;
+    let connection: TerminalConnection;
+    try {
+      connection = terminalRepository.connect(current.session.id);
+    } catch (connectError) {
+      updateTerminal((value) => value.session?.id === current.session?.id ? {
+        ...value, phase: "ERROR", message: terminalFailureMessage(connectError)
+      } : value);
+      return null;
+    }
+    terminalConnection.current = connection;
+    terminalConnectionSubscription.current = connection.subscribe({
+      ready: () => updateTerminal((value) => value.session?.id === current.session?.id ? {
+        ...value, phase: "ACTIVE", message: `连接有效至 ${new Date(expiresAt).toLocaleTimeString("zh-CN")}`
+      } : value),
+      exit: (exitCode) => updateTerminal((value) => value.session?.id === current.session?.id ? {
+        ...value, phase: "ENDED", message: `容器终端已退出（退出码 ${exitCode}），不会自动重连。`
+      } : value),
+      error: (code) => updateTerminal((value) => value.session?.id === current.session?.id ? {
+        ...value, phase: "ENDED", message: terminalServerMessage(code)
+      } : value),
+      closed: () => updateTerminal((value) => value.session?.id === current.session?.id &&
+        value.phase !== "ENDED" && value.phase !== "ERROR" ? {
+          ...value, phase: "ENDED", message: "终端连接已断开；不会自动重连。"
+        } : value)
+    });
+    return connection;
+  }, [terminalRepository, updateTerminal]);
+
+  useEffect(() => () => {
+    ++terminalEpoch.current;
+    const previous = terminalState.current;
+    disconnectTerminal();
+    if (credential && tenantId && previous.session) {
+      void terminalRepository.close(credential, tenantId, previous.session.id).catch(() => {});
+    }
+  }, [credential, disconnectTerminal, tenantId, terminalRepository]);
 
   const loadInventory = useCallback((): Promise<boolean> => {
     if (!credential || !tenantId) {
@@ -413,6 +624,7 @@ function DeploymentInventoryProvider({
         const authorizationFailure = loadError instanceof HttpProblem &&
           (loadError.status === 401 || loadError.status === 403);
         if (authorizationFailure) {
+          void closeTerminal();
           setInventory(null);
           selectedDeploymentIdRef.current = null;
           setSelectedDeploymentId(null);
@@ -427,7 +639,7 @@ function DeploymentInventoryProvider({
       }
     });
     return slot.promise;
-  }, [credential, repository, tenantId]);
+  }, [closeTerminal, credential, repository, tenantId]);
 
   useEffect(() => {
     inventoryEpoch.current++;
@@ -476,6 +688,7 @@ function DeploymentInventoryProvider({
           const authorizationFailure = loadError instanceof HttpProblem &&
             (loadError.status === 401 || loadError.status === 403);
           if (authorizationFailure) {
+            void closeTerminal();
             setInventory(null);
             selectedDeploymentIdRef.current = null;
             setSelectedDeploymentId(null);
@@ -504,7 +717,7 @@ function DeploymentInventoryProvider({
       runtimeRequest.current?.controller.abort();
       runtimeRequest.current = null;
     };
-  }, [credential, repository, selectedDeploymentId, tenantId]);
+  }, [closeTerminal, credential, repository, selectedDeploymentId, tenantId]);
 
   const reload = useCallback(async () => {
     const continueReading = await loadInventory();
@@ -513,6 +726,7 @@ function DeploymentInventoryProvider({
 
   const selectDeployment = useCallback((deploymentId: string) => {
     if (!inventory?.items.some((item) => item.id === deploymentId) || deploymentId === selectedDeploymentId) return;
+    void closeTerminal();
     if (runtimeTimer.current !== null) window.clearTimeout(runtimeTimer.current);
     runtimeTimer.current = null;
     runtimeRequest.current?.controller.abort();
@@ -521,7 +735,7 @@ function DeploymentInventoryProvider({
     setRuntimeError(null);
     selectedDeploymentIdRef.current = deploymentId;
     setSelectedDeploymentId(deploymentId);
-  }, [inventory, selectedDeploymentId]);
+  }, [closeTerminal, inventory, selectedDeploymentId]);
 
   const scene = useMemo(
     () => inventory ? buildDeploymentConsoleScene(inventory, selectedDeploymentId, runtime) : null,
@@ -535,8 +749,12 @@ function DeploymentInventoryProvider({
     reload,
     activateQuota: async () => false,
     createInstallation: async () => false,
-    selectDeployment
-  }), [inventoryError, loading, reload, runtimeError, scene, selectDeployment]);
+    selectDeployment,
+    terminal,
+    openTerminal,
+    connectTerminal,
+    closeTerminal
+  }), [closeTerminal, connectTerminal, inventoryError, loading, openTerminal, reload, runtimeError, scene, selectDeployment, terminal]);
 
   return <ControlPlaneContext.Provider value={value}>{children}</ControlPlaneContext.Provider>;
 }
@@ -546,19 +764,25 @@ export function ControlPlaneProvider({
   repository = httpControlPlaneRepository,
   hostRepository = httpHostInventoryRepository,
   deploymentRepository = httpDeploymentInventoryRepository,
+  terminalRepository = httpTerminalSessionRepository,
   selection
 }: {
   children: ReactNode;
   repository?: ControlPlaneRepository;
   hostRepository?: HostInventoryRepository;
   deploymentRepository?: DeploymentInventoryRepository;
+  terminalRepository?: TerminalSessionRepository;
   selection: ControlPlaneRouteSelection;
 }) {
   if (selection.section === "hosts") {
     return <HostInventoryProvider repository={hostRepository}>{children}</HostInventoryProvider>;
   }
   if (selection.section === "deployments") {
-    return <DeploymentInventoryProvider repository={deploymentRepository}>{children}</DeploymentInventoryProvider>;
+    return (
+      <DeploymentInventoryProvider repository={deploymentRepository} terminalRepository={terminalRepository}>
+        {children}
+      </DeploymentInventoryProvider>
+    );
   }
   return (
     <ManagedControlPlaneProvider repository={repository} selection={selection}>

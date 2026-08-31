@@ -3,6 +3,8 @@ package releasebuild
 const (
 	APISIXBaseReference   = "apache/apisix:3.17.0-debian"
 	APISIXBaseImageID     = "sha256:6cbf65f3085d1386bfd636b7e88400c163c3641841909e674af7896a5766b092"
+	AlpineBaseReference   = "alpine:3.24.1"
+	AlpineBaseImageID     = "sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b"
 	DockerBaseReference   = "docker:27.5.1-dind-alpine3.21"
 	DockerBaseImageID     = "sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce"
 	PostgresReference     = "postgres:18"
@@ -66,7 +68,7 @@ var imageRecipes = []imageRecipe{
 		entrypoint: "/matrix/bin/matrix-paas-ui",
 	},
 	{
-		component: "verification", baseReference: "scratch",
+		component: "verification", baseReference: AlpineBaseReference,
 		binaries:   []string{"matrix-verification"},
 		entrypoint: "/matrix/bin/matrix-verification",
 	},

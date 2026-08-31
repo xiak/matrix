@@ -40,6 +40,7 @@ import type { ControlPlaneRouteSelection } from "../domain/selection";
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
 import type { HostInventoryRepository } from "../repositories/hostInventoryRepository";
 import type { DeploymentInventoryRepository } from "../repositories/deploymentInventoryRepository";
+import type { TerminalSessionRepository } from "../repositories/terminalSessionRepository";
 import type {
   NavigationIconKind,
   RailIconKind
@@ -358,7 +359,14 @@ function ConsoleShell({ selection }: { selection: ControlPlaneRouteSelection }) 
                 <ContentPage.Body>
                   <div className={styles.pageIntro}>{scene.description}</div>
                   {!workspaceVisible ? feedback : null}
-                  <ConsoleContentRenderer onSelectDeployment={controlPlane.selectDeployment} scene={scene.content} />
+                  <ConsoleContentRenderer
+                    closeTerminal={controlPlane.closeTerminal}
+                    connectTerminal={controlPlane.connectTerminal}
+                    onOpenTerminal={controlPlane.openTerminal}
+                    onSelectDeployment={controlPlane.selectDeployment}
+                    scene={scene.content}
+                    terminal={controlPlane.terminal}
+                  />
                 </ContentPage.Body>
               </ContentPage>
             </Layout.Content>
@@ -403,11 +411,13 @@ export function ConsoleShellRenderer({
   deploymentRepository,
   hostRepository,
   repository,
+  terminalRepository,
   selection
 }: {
   deploymentRepository?: DeploymentInventoryRepository;
   hostRepository?: HostInventoryRepository;
   repository?: ControlPlaneRepository;
+  terminalRepository?: TerminalSessionRepository;
   selection: ControlPlaneRouteSelection;
 }) {
   const session = useSession();
@@ -418,7 +428,13 @@ export function ConsoleShellRenderer({
     return <LoginRenderer />;
   }
   return (
-    <ControlPlaneProvider deploymentRepository={deploymentRepository} hostRepository={hostRepository} repository={repository} selection={selection}>
+    <ControlPlaneProvider
+      deploymentRepository={deploymentRepository}
+      hostRepository={hostRepository}
+      repository={repository}
+      selection={selection}
+      terminalRepository={terminalRepository}
+    >
       <ConsoleShell selection={selection} />
     </ControlPlaneProvider>
   );

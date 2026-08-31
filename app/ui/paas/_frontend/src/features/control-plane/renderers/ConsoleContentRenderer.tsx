@@ -25,6 +25,12 @@ import {
   Typography
 } from "@ui/xiak";
 import type {
+  CloseTerminal,
+  ConnectTerminal,
+  OpenTerminal,
+  TerminalConsoleState
+} from "../application/ControlPlaneProvider";
+import type {
   ConsoleContentScene,
   HostMeasurementScene,
   HostScene,
@@ -32,6 +38,7 @@ import type {
   SceneStatus
 } from "../scenes/consoleScene";
 import styles from "./ConsoleContentRenderer.module.css";
+import { DeploymentTerminalRenderer } from "./DeploymentTerminalRenderer";
 
 const metricIcons: Record<string, typeof Database> = {
   offerings: PackageSearch,
@@ -383,11 +390,19 @@ function HostContent({ scene }: { scene: Extract<ConsoleContentScene, { kind: "h
 }
 
 function DeploymentContent({
+  closeTerminal,
+  connectTerminal,
+  onOpenTerminal,
   onSelect,
-  scene
+  scene,
+  terminal
 }: {
+  closeTerminal: CloseTerminal;
+  connectTerminal: ConnectTerminal;
+  onOpenTerminal: OpenTerminal;
   onSelect(deploymentId: string): void;
   scene: Extract<ConsoleContentScene, { kind: "deployments" }>;
+  terminal: TerminalConsoleState;
 }) {
   if (scene.deployments.length === 0) {
     return <EmptyState title="当前租户没有部署" description="部署由应用交付流程创建；控制台不会扫描主机或导入未知容器。" />;
@@ -468,6 +483,23 @@ function DeploymentContent({
                           <Badge status={instance.status}>{instance.stateLabel}</Badge>
                           <span>{instance.healthLabel}</span>
                           {instance.exitCode === "—" ? null : <span>退出码 {instance.exitCode}</span>}
+                          <Button
+                            aria-label={`${instance.componentName} ${instance.id} ${instance.terminalAvailable ? "打开终端" : "终端不可用"}`}
+                            disabled={!instance.terminalAvailable ||
+                              terminal.instanceId === instance.id && terminal.phase !== "ENDED" && terminal.phase !== "ERROR"}
+                            onClick={() => void onOpenTerminal(
+                              scene.selectedDeploymentId!, instance.id, { columns: 120, rows: 32 }
+                            )}
+                            size="small"
+                            variant="secondary"
+                          >
+                            <SquareTerminal aria-hidden="true" />
+                            {terminal.instanceId === instance.id && terminal.phase === "ACTIVE"
+                              ? "终端已打开"
+                              : terminal.instanceId !== null && terminal.instanceId !== instance.id && terminal.phase === "ACTIVE"
+                                ? "切换终端"
+                                : instance.terminalAvailable ? "打开终端" : "不可进入"}
+                          </Button>
                         </div>
                       </div>
                       {instance.resources ? (
@@ -492,10 +524,11 @@ function DeploymentContent({
                   ))}
                 </div>
               )}
-              <div className={styles.terminalBoundary}>
-                <div><SquareTerminal aria-hidden="true" /><span><strong>短时终端</strong><small>将在下一纵向切片加入受审计、限时、按部署授权的会话。</small></span></div>
-                <Button disabled size="small" variant="secondary"><SquareTerminal aria-hidden="true" />暂不可用</Button>
-              </div>
+              <DeploymentTerminalRenderer
+                closeTerminal={closeTerminal}
+                connectTerminal={connectTerminal}
+                terminal={terminal}
+              />
             </>
           ) : (
             <div className={styles.runtimeEmpty}>
@@ -510,11 +543,19 @@ function DeploymentContent({
 }
 
 export function ConsoleContentRenderer({
+  closeTerminal,
+  connectTerminal,
+  onOpenTerminal,
   onSelectDeployment = () => {},
-  scene
+  scene,
+  terminal
 }: {
+  closeTerminal: CloseTerminal;
+  connectTerminal: ConnectTerminal;
+  onOpenTerminal: OpenTerminal;
   onSelectDeployment?(deploymentId: string): void;
   scene: ConsoleContentScene;
+  terminal: TerminalConsoleState;
 }) {
   if (scene.kind === "access") return <AccountAccessRenderer />;
   if (scene.kind === "overview") return <OverviewContent scene={scene} />;
@@ -522,6 +563,15 @@ export function ConsoleContentRenderer({
   if (scene.kind === "quotas") return <QuotaContent scene={scene} />;
   if (scene.kind === "installations") return <InstallationContent scene={scene} />;
   if (scene.kind === "hosts") return <HostContent scene={scene} />;
-  if (scene.kind === "deployments") return <DeploymentContent onSelect={onSelectDeployment} scene={scene} />;
+  if (scene.kind === "deployments") return (
+    <DeploymentContent
+      closeTerminal={closeTerminal}
+      connectTerminal={connectTerminal}
+      onOpenTerminal={onOpenTerminal}
+      onSelect={onSelectDeployment}
+      scene={scene}
+      terminal={terminal}
+    />
+  );
   return <RegionContent scene={scene} />;
 }

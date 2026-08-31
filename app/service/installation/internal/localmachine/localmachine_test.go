@@ -643,6 +643,10 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 	for _, required := range []string{
 		"uri: /api/audit/v1/installation:verify",
 		"uri: /api/paas/v1/installation:verify",
+		"id: matrix-paas-terminal",
+		"enable_websocket: true",
+		"terminal-session-[0-9a-f]{32}/connect$",
+		"read: 130",
 		"uri: /api/managed-services/*",
 		`- "/managed-services/$1"`,
 		"priority: 100",
@@ -651,6 +655,16 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		if !bytes.Contains(apisix, []byte(required)) {
 			t.Fatalf("APISIX configuration lacks fixed verifier route %q", required)
 		}
+	}
+	terminalStart := bytes.Index(apisix, []byte("id: matrix-paas-terminal"))
+	terminalEnd := bytes.Index(apisix, []byte("id: matrix-paas-installation-verification"))
+	if terminalStart < 0 || terminalEnd <= terminalStart {
+		t.Fatal("APISIX terminal WebSocket route is absent or unordered")
+	}
+	terminalRoute := apisix[terminalStart:terminalEnd]
+	if bytes.Contains(terminalRoute, []byte("Authorization")) ||
+		bytes.Contains(terminalRoute, []byte("Matrix-Subject-Credential")) {
+		t.Fatal("terminal route must let the PaaS endpoint reject ambient authority")
 	}
 	if bytes.Contains(apisix, []byte("matrix-service-auth")) ||
 		bytes.Contains(apisix, []byte("apisix-iam-credential")) {

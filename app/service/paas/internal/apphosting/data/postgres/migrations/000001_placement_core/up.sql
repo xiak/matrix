@@ -443,7 +443,8 @@ CREATE TABLE IF NOT EXISTS paas.audit_outbox (
              ELSE 'tenant:' || tenant_id END
     ) STORED,
     event_id text COLLATE "C" NOT NULL,
-    operation_id text COLLATE "C" NOT NULL,
+    operation_id text COLLATE "C",
+    terminal_session_id text COLLATE "C",
     status text COLLATE "C" NOT NULL,
     available_at timestamptz(6) NOT NULL,
     attempts integer NOT NULL DEFAULT 0,
@@ -535,7 +536,11 @@ ALTER TABLE paas.operations
     ) IS TRUE);
 
 ALTER TABLE paas.audit_outbox
+    ADD COLUMN IF NOT EXISTS terminal_session_id text COLLATE "C";
+ALTER TABLE paas.audit_outbox
+    ALTER COLUMN operation_id DROP NOT NULL,
     DROP CONSTRAINT IF EXISTS audit_outbox_ids_valid,
+    DROP CONSTRAINT IF EXISTS audit_outbox_owner_valid,
     DROP CONSTRAINT IF EXISTS audit_outbox_document_identity;
 ALTER TABLE paas.audit_outbox
     ADD CONSTRAINT audit_outbox_ids_valid CHECK (
@@ -543,9 +548,15 @@ ALTER TABLE paas.audit_outbox
         AND (tenant_id IS NULL OR tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
         AND (installation_id IS NULL OR installation_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
         AND event_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-        AND operation_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND (operation_id IS NULL OR operation_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+        AND (terminal_session_id IS NULL OR terminal_session_id COLLATE "C"
+            ~ '^terminal-session-[0-9a-f]{32}$')
         AND (lease_owner IS NULL OR lease_owner COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
         AND (last_error_code IS NULL OR last_error_code COLLATE "C" ~ '^[A-Z][A-Z0-9_]{0,63}$')
+    ),
+    ADD CONSTRAINT audit_outbox_owner_valid CHECK (
+        (operation_id IS NULL) <> (terminal_session_id IS NULL)
+        AND (terminal_session_id IS NULL OR (tenant_id IS NOT NULL AND installation_id IS NULL))
     ),
     ADD CONSTRAINT audit_outbox_document_identity CHECK ((
         document->>'schemaVersion' = 'v1'
@@ -554,7 +565,13 @@ ALTER TABLE paas.audit_outbox
         AND (document->>'installationId') IS NOT DISTINCT FROM installation_id
         AND (document ? 'tenantId') = (tenant_id IS NOT NULL)
         AND (document ? 'installationId') = (installation_id IS NOT NULL)
-        AND document->>'operationId' = operation_id
+        AND ((operation_id IS NOT NULL
+                AND document->>'operationId' = operation_id
+                AND NOT (document ? 'terminalSessionId'))
+            OR (terminal_session_id IS NOT NULL
+                AND NOT (document ? 'operationId')
+                AND document#>>'{target,kind}' = 'TerminalSession'
+                AND document#>>'{target,id}' = terminal_session_id))
         AND document->>'requestDigest' COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
         AND (document->>'occurredAt')::timestamptz = created_at
     ) IS TRUE);
@@ -1392,6 +1409,156 @@ BEGIN
 END
 $matrix_resource_snapshot_decision_fk$;
 
+-- A terminal session is a short-lived authorization and runtime proof. The
+-- ticket digest is private persistence state and never appears in the public
+-- document, Audit fact, browser response or node request. Provider identities,
+-- terminal bytes and workload secrets are not represented by this table.
+CREATE TABLE IF NOT EXISTS paas.terminal_sessions (
+    tenant_id text COLLATE "C" NOT NULL,
+    id text COLLATE "C" NOT NULL,
+    deployment_id text COLLATE "C" NOT NULL,
+    deployment_generation bigint NOT NULL,
+    application_revision_id text COLLATE "C" NOT NULL,
+    content_digest text COLLATE "C" NOT NULL,
+    execution_target_id text COLLATE "C" NOT NULL,
+    placement_decision_id text COLLATE "C" NOT NULL,
+    binding_ref text COLLATE "C" NOT NULL,
+    instance_id text COLLATE "C" NOT NULL,
+    subject_type text COLLATE "C" NOT NULL,
+    subject_id text COLLATE "C" NOT NULL,
+    iam_decision_id text COLLATE "C" NOT NULL,
+    request_id text COLLATE "C" NOT NULL,
+    audit_id text COLLATE "C",
+    traceparent text COLLATE "C",
+    idempotency_fingerprint text COLLATE "C" NOT NULL,
+    request_digest text COLLATE "C" NOT NULL,
+    ticket_digest text COLLATE "C",
+    columns integer NOT NULL,
+    rows integer NOT NULL,
+    state text COLLATE "C" NOT NULL,
+    outcome text COLLATE "C",
+    created_at timestamptz(6) NOT NULL,
+    connect_before timestamptz(6) NOT NULL,
+    expires_at timestamptz(6) NOT NULL,
+    connected_at timestamptz(6),
+    ended_at timestamptz(6),
+    document jsonb NOT NULL,
+    PRIMARY KEY (tenant_id, id),
+    CONSTRAINT terminal_sessions_global_id_uq UNIQUE (id),
+    CONSTRAINT terminal_sessions_idempotency_uq UNIQUE (
+        tenant_id, idempotency_fingerprint
+    ),
+    CONSTRAINT terminal_sessions_deployment_fk FOREIGN KEY (
+        tenant_id, deployment_id
+    ) REFERENCES paas.deployments (tenant_id, id),
+    CONSTRAINT terminal_sessions_generation_fk FOREIGN KEY (
+        tenant_id, deployment_id, deployment_generation
+    ) REFERENCES paas.deployment_generations (tenant_id, deployment_id, generation),
+    CONSTRAINT terminal_sessions_revision_fk FOREIGN KEY (
+        tenant_id, application_revision_id
+    ) REFERENCES paas.application_revisions (tenant_id, id),
+    CONSTRAINT terminal_sessions_target_fk FOREIGN KEY (execution_target_id)
+        REFERENCES paas.execution_targets (id),
+    CONSTRAINT terminal_sessions_decision_fk FOREIGN KEY (
+        tenant_id, placement_decision_id
+    ) REFERENCES paas.placement_decisions (tenant_id, id),
+    CONSTRAINT terminal_sessions_ids_valid CHECK (
+        tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND id COLLATE "C" ~ '^terminal-session-[0-9a-f]{32}$'
+        AND deployment_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND application_revision_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND execution_target_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND placement_decision_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND binding_ref COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND instance_id COLLATE "C" ~ '^instance-[0-9a-f]{32}$'
+        AND subject_type = 'USER'
+        AND subject_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND iam_decision_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND request_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND (audit_id IS NULL OR audit_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+        AND (traceparent IS NULL OR octet_length(traceparent) BETWEEN 1 AND 55)
+    ),
+    CONSTRAINT terminal_sessions_values_valid CHECK (
+        deployment_generation BETWEEN 1 AND 9007199254740991
+        AND content_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND idempotency_fingerprint COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND request_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND (ticket_digest IS NULL OR ticket_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$')
+        AND columns BETWEEN 2 AND 512
+        AND rows BETWEEN 2 AND 256
+    ),
+    CONSTRAINT terminal_sessions_state_valid CHECK (
+        state IN ('PENDING', 'CONNECTING', 'ACTIVE', 'ENDED')
+        AND (state = 'PENDING') = (ticket_digest IS NOT NULL)
+        AND (
+            (state IN ('PENDING', 'CONNECTING')
+                AND outcome IS NULL AND connected_at IS NULL AND ended_at IS NULL)
+            OR (state = 'ACTIVE'
+                AND outcome IS NULL AND connected_at IS NOT NULL AND ended_at IS NULL)
+            OR (state = 'ENDED'
+                AND outcome IN (
+                    'COMPLETED', 'UNSUPPORTED', 'EXPIRED', 'DISCONNECTED',
+                    'REVOKED', 'REPLACED', 'FAILED'
+                )
+                AND ended_at IS NOT NULL)
+        )
+    ),
+    CONSTRAINT terminal_sessions_time_valid CHECK (
+        connect_before = created_at + interval '30 seconds'
+        AND expires_at = created_at + interval '15 minutes'
+        AND (connected_at IS NULL OR connected_at BETWEEN created_at AND expires_at)
+        AND (ended_at IS NULL OR ended_at >= created_at)
+        AND (connected_at IS NULL OR ended_at IS NULL OR ended_at >= connected_at)
+    ),
+    CONSTRAINT terminal_sessions_document_identity CHECK ((
+        document->>'apiVersion' = 'paas.matrix.xiak.com/v1'
+        AND document->>'kind' = 'TerminalSession'
+        AND document->>'id' = id
+        AND document#>>'{scope,kind}' = 'TENANT'
+        AND document#>>'{scope,tenantId}' = tenant_id
+        AND document->>'deploymentId' = deployment_id
+        AND document->>'applicationRevisionId' = application_revision_id
+        AND document->>'instanceId' = instance_id
+        AND document->>'state' = state
+        AND (document->>'outcome') IS NOT DISTINCT FROM outcome
+        AND (document->>'createdAt')::timestamptz = created_at
+        AND (document->>'connectBefore')::timestamptz = connect_before
+        AND (document->>'expiresAt')::timestamptz = expires_at
+        AND ((connected_at IS NULL AND NOT (document ? 'connectedAt'))
+            OR (document->>'connectedAt')::timestamptz = connected_at)
+        AND ((ended_at IS NULL AND NOT (document ? 'endedAt'))
+            OR (document->>'endedAt')::timestamptz = ended_at)
+        AND CASE WHEN document->>'generation' ~ '^[1-9][0-9]*$'
+            THEN (document->>'generation')::numeric = deployment_generation ELSE false END
+        AND CASE WHEN document#>>'{size,columns}' ~ '^[1-9][0-9]*$'
+            THEN (document#>>'{size,columns}')::numeric = columns ELSE false END
+        AND CASE WHEN document#>>'{size,rows}' ~ '^[1-9][0-9]*$'
+            THEN (document#>>'{size,rows}')::numeric = rows ELSE false END
+    ) IS TRUE)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS terminal_sessions_open_subject_instance_uq
+    ON paas.terminal_sessions (
+        tenant_id, subject_type, subject_id, deployment_id, instance_id
+    ) WHERE state <> 'ENDED';
+CREATE INDEX IF NOT EXISTS terminal_sessions_ticket_lookup_idx
+    ON paas.terminal_sessions (id, ticket_digest) WHERE state = 'PENDING';
+
+DO $matrix_terminal_outbox_fk$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_constraint
+         WHERE conname = 'audit_outbox_terminal_session_fk'
+           AND connamespace = 'paas'::regnamespace
+    ) THEN
+        ALTER TABLE paas.audit_outbox
+            ADD CONSTRAINT audit_outbox_terminal_session_fk
+            FOREIGN KEY (tenant_id, terminal_session_id)
+            REFERENCES paas.terminal_sessions (tenant_id, id);
+    END IF;
+END
+$matrix_terminal_outbox_fk$;
+
 CREATE TABLE IF NOT EXISTS paas.capacity_claims (
     id uuid NOT NULL DEFAULT gen_random_uuid(),
     execution_target_id text COLLATE "C" NOT NULL,
@@ -1507,6 +1674,8 @@ ALTER TABLE paas.deployment_runtime_snapshots ENABLE ROW LEVEL SECURITY;
 ALTER TABLE paas.deployment_runtime_snapshots FORCE ROW LEVEL SECURITY;
 ALTER TABLE paas.deployment_resource_snapshots ENABLE ROW LEVEL SECURITY;
 ALTER TABLE paas.deployment_resource_snapshots FORCE ROW LEVEL SECURITY;
+ALTER TABLE paas.terminal_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE paas.terminal_sessions FORCE ROW LEVEL SECURITY;
 ALTER TABLE paas.placement_decisions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE paas.placement_decisions FORCE ROW LEVEL SECURITY;
 ALTER TABLE paas.capacity_reservations ENABLE ROW LEVEL SECURITY;
@@ -1529,6 +1698,7 @@ BEGIN
         'deployment_observations',
         'deployment_runtime_snapshots',
         'deployment_resource_snapshots',
+        'terminal_sessions',
         'placement_decisions',
         'capacity_reservations'
     ]
@@ -1728,6 +1898,621 @@ $function$;
 REVOKE ALL ON FUNCTION paas.append_audit_outbox(jsonb, jsonb) FROM PUBLIC;
 REVOKE ALL ON FUNCTION paas.append_audit_outbox(jsonb, jsonb)
     FROM matrix_paas_api, matrix_paas_worker;
+
+CREATE OR REPLACE FUNCTION paas.terminal_session_snapshot(
+    session_row paas.terminal_sessions
+)
+RETURNS jsonb
+LANGUAGE sql
+IMMUTABLE
+STRICT
+SET search_path = pg_catalog, pg_temp
+AS $function$
+    SELECT jsonb_build_object(
+        'session', session_row.document,
+        'binding', jsonb_build_object(
+            'deploymentId', session_row.deployment_id,
+            'generation', session_row.deployment_generation,
+            'applicationRevisionId', session_row.application_revision_id,
+            'contentDigest', session_row.content_digest,
+            'executionTargetId', session_row.execution_target_id,
+            'placementDecisionId', session_row.placement_decision_id,
+            'bindingRef', session_row.binding_ref,
+            'instanceId', session_row.instance_id
+        ),
+        'subject', jsonb_build_object(
+            'type', session_row.subject_type,
+            'id', session_row.subject_id
+        ),
+        'iamDecisionId', session_row.iam_decision_id,
+        'requestId', session_row.request_id,
+        'idempotencyFingerprint', session_row.idempotency_fingerprint,
+        'requestDigest', session_row.request_digest
+    )
+    || CASE WHEN session_row.audit_id IS NULL THEN '{}'::jsonb
+        ELSE jsonb_build_object('auditId', session_row.audit_id) END
+    || CASE WHEN session_row.traceparent IS NULL THEN '{}'::jsonb
+        ELSE jsonb_build_object('traceparent', session_row.traceparent) END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.terminal_session_snapshot(paas.terminal_sessions)
+    FROM PUBLIC, matrix_paas_api, matrix_paas_worker;
+
+CREATE OR REPLACE FUNCTION paas.lock_terminal_session_by_fingerprint(
+    requested_fingerprint text
+)
+RETURNS TABLE (document jsonb)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text := paas.current_tenant_id();
+BEGIN
+    IF effective_tenant_id IS NULL
+       OR requested_fingerprint IS NULL
+       OR requested_fingerprint COLLATE "C" !~ '^sha256:[0-9a-f]{64}$' THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'terminal fingerprint is invalid';
+    END IF;
+    RETURN QUERY
+    SELECT paas.terminal_session_snapshot(session)
+      FROM paas.terminal_sessions AS session
+     WHERE session.tenant_id = effective_tenant_id
+       AND session.idempotency_fingerprint = requested_fingerprint
+     FOR UPDATE OF session;
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION paas.lock_terminal_session(
+    requested_session_id text
+)
+RETURNS TABLE (document jsonb)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text := paas.current_tenant_id();
+BEGIN
+    IF effective_tenant_id IS NULL
+       OR requested_session_id IS NULL
+       OR requested_session_id COLLATE "C" !~ '^terminal-session-[0-9a-f]{32}$' THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'terminal session identity is invalid';
+    END IF;
+    RETURN QUERY
+    SELECT paas.terminal_session_snapshot(session)
+      FROM paas.terminal_sessions AS session
+     WHERE session.tenant_id = effective_tenant_id
+       AND session.id = requested_session_id
+     FOR UPDATE OF session;
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION paas.lock_open_terminal_session(
+    requested_subject_type text,
+    requested_subject_id text,
+    requested_deployment_id text,
+    requested_instance_id text
+)
+RETURNS TABLE (document jsonb)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text := paas.current_tenant_id();
+BEGIN
+    IF effective_tenant_id IS NULL
+       OR requested_subject_type IS DISTINCT FROM 'USER'
+       OR requested_subject_id IS NULL
+       OR requested_subject_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_deployment_id IS NULL
+       OR requested_deployment_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_instance_id IS NULL
+       OR requested_instance_id COLLATE "C" !~ '^instance-[0-9a-f]{32}$' THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'open terminal selector is invalid';
+    END IF;
+    RETURN QUERY
+    SELECT paas.terminal_session_snapshot(session)
+      FROM paas.terminal_sessions AS session
+     WHERE session.tenant_id = effective_tenant_id
+       AND session.subject_type = requested_subject_type
+       AND session.subject_id = requested_subject_id
+       AND session.deployment_id = requested_deployment_id
+       AND session.instance_id = requested_instance_id
+       AND session.state <> 'ENDED'
+     FOR UPDATE OF session;
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION paas.lock_current_terminal_runtime(
+    requested_deployment_id text,
+    requested_instance_id text,
+    requested_now timestamptz
+)
+RETURNS TABLE (document jsonb)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text := paas.current_tenant_id();
+BEGIN
+    IF effective_tenant_id IS NULL
+       OR requested_deployment_id IS NULL
+       OR requested_deployment_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_instance_id IS NULL
+       OR requested_instance_id COLLATE "C" !~ '^instance-[0-9a-f]{32}$'
+       OR requested_now IS DISTINCT FROM transaction_timestamp() THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'terminal runtime selector is invalid';
+    END IF;
+    RETURN QUERY
+    SELECT jsonb_build_object(
+        'deploymentId', snapshot.deployment_id,
+        'generation', snapshot.deployment_generation,
+        'applicationRevisionId', snapshot.application_revision_id,
+        'contentDigest', generation.content_digest,
+        'executionTargetId', snapshot.execution_target_id,
+        'placementDecisionId', snapshot.placement_decision_id,
+        'bindingRef', target.binding_ref,
+        'instanceId', requested_instance_id
+    )
+      FROM paas.deployment_runtime_snapshots AS snapshot
+      JOIN paas.deployments AS deployment
+        ON deployment.tenant_id = snapshot.tenant_id
+       AND deployment.id = snapshot.deployment_id
+       AND deployment.generation = snapshot.deployment_generation
+       AND deployment.application_revision_id = snapshot.application_revision_id
+      JOIN paas.deployment_generations AS generation
+        ON generation.tenant_id = snapshot.tenant_id
+       AND generation.deployment_id = snapshot.deployment_id
+       AND generation.generation = snapshot.deployment_generation
+       AND generation.application_revision_id = snapshot.application_revision_id
+      JOIN paas.placement_decisions AS decision
+        ON decision.tenant_id = snapshot.tenant_id
+       AND decision.id = snapshot.placement_decision_id
+       AND decision.deployment_id = snapshot.deployment_id
+       AND decision.deployment_generation = snapshot.deployment_generation
+       AND decision.application_revision_id = snapshot.application_revision_id
+       AND decision.execution_target_id = snapshot.execution_target_id
+       AND decision.outcome = 'SCHEDULED'
+      JOIN paas.execution_targets AS target
+        ON target.id = snapshot.execution_target_id
+       AND target.binding_ref IS NOT NULL
+     WHERE snapshot.tenant_id = effective_tenant_id
+       AND snapshot.deployment_id = requested_deployment_id
+       AND snapshot.valid_until > requested_now
+       AND EXISTS (
+            SELECT 1
+              FROM jsonb_array_elements(snapshot.document->'instances') AS instance(value)
+             WHERE instance.value->>'id' = requested_instance_id
+       )
+     FOR UPDATE OF snapshot;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.lock_terminal_session_by_fingerprint(text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION paas.lock_terminal_session(text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION paas.lock_open_terminal_session(text,text,text,text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION paas.lock_current_terminal_runtime(text,text,timestamptz) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paas.lock_terminal_session_by_fingerprint(text) TO matrix_paas_api;
+GRANT EXECUTE ON FUNCTION paas.lock_terminal_session(text) TO matrix_paas_api;
+GRANT EXECUTE ON FUNCTION paas.lock_open_terminal_session(text,text,text,text) TO matrix_paas_api;
+GRANT EXECUTE ON FUNCTION paas.lock_current_terminal_runtime(text,text,timestamptz) TO matrix_paas_api;
+
+CREATE OR REPLACE FUNCTION paas.append_terminal_audit_outbox(
+    requested_session_id text,
+    submitted_audit_event jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text := paas.current_tenant_id();
+    current_session paas.terminal_sessions%ROWTYPE;
+    expected_action text;
+    expected_result text;
+    expected_time timestamptz(6);
+    expected_event_id text;
+BEGIN
+    SELECT * INTO current_session
+      FROM paas.terminal_sessions AS session
+     WHERE session.tenant_id = effective_tenant_id
+       AND session.id = requested_session_id;
+    IF effective_tenant_id IS NULL OR NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'terminal Audit authority is invalid';
+    END IF;
+    IF jsonb_typeof(submitted_audit_event) IS DISTINCT FROM 'object'
+       OR jsonb_typeof(submitted_audit_event->'actor') IS DISTINCT FROM 'object'
+       OR jsonb_typeof(submitted_audit_event->'target') IS DISTINCT FROM 'object'
+       OR NOT (submitted_audit_event ?& ARRAY[
+            'schemaVersion', 'eventId', 'tenantId', 'actor', 'iamDecisionId',
+            'action', 'target', 'requestDigest', 'result', 'requestId', 'occurredAt'
+       ])
+       OR (submitted_audit_event - ARRAY[
+            'schemaVersion', 'eventId', 'tenantId', 'actor', 'iamDecisionId',
+            'action', 'target', 'requestDigest', 'result', 'requestId',
+            'auditId', 'traceparent', 'occurredAt'
+       ]) <> '{}'::jsonb
+       OR ((submitted_audit_event->'actor') - ARRAY['type', 'id']) <> '{}'::jsonb
+       OR ((submitted_audit_event->'target') - ARRAY['kind', 'id']) <> '{}'::jsonb THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'terminal Audit event is invalid';
+    END IF;
+
+    expected_action := submitted_audit_event->>'action';
+    IF expected_action = 'paas.terminal-session.created'
+       AND current_session.state = 'PENDING' THEN
+        expected_result := 'ACCEPTED';
+        expected_time := current_session.created_at;
+    ELSIF expected_action = 'paas.terminal-session.started'
+       AND current_session.state = 'ACTIVE' THEN
+        expected_result := 'SUCCEEDED';
+        expected_time := current_session.connected_at;
+    ELSIF expected_action = 'paas.terminal-session.ended'
+       AND current_session.state = 'ENDED' THEN
+        expected_result := current_session.outcome;
+        expected_time := current_session.ended_at;
+    ELSE
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'terminal Audit lifecycle is invalid';
+    END IF;
+    expected_event_id := 'terminal-event-'
+        || substring(current_session.id FROM char_length('terminal-session-') + 1)
+        || '-' || substring(expected_action FROM char_length('paas.terminal-session.') + 1);
+
+    IF submitted_audit_event->>'schemaVersion' IS DISTINCT FROM 'v1'
+       OR submitted_audit_event->>'eventId' IS DISTINCT FROM expected_event_id
+       OR submitted_audit_event->>'tenantId' IS DISTINCT FROM effective_tenant_id
+       OR submitted_audit_event#>>'{actor,type}' IS DISTINCT FROM current_session.subject_type
+       OR submitted_audit_event#>>'{actor,id}' IS DISTINCT FROM current_session.subject_id
+       OR submitted_audit_event->>'iamDecisionId' IS DISTINCT FROM current_session.iam_decision_id
+       OR submitted_audit_event#>>'{target,kind}' IS DISTINCT FROM 'TerminalSession'
+       OR submitted_audit_event#>>'{target,id}' IS DISTINCT FROM current_session.id
+       OR submitted_audit_event->>'requestDigest' IS DISTINCT FROM current_session.request_digest
+       OR submitted_audit_event->>'result' IS DISTINCT FROM expected_result
+       OR submitted_audit_event->>'requestId' IS DISTINCT FROM current_session.request_id
+       OR (submitted_audit_event->>'auditId') IS DISTINCT FROM current_session.audit_id
+       OR (submitted_audit_event->>'traceparent') IS DISTINCT FROM current_session.traceparent
+       OR (submitted_audit_event->>'occurredAt')::timestamptz IS DISTINCT FROM expected_time
+       OR expected_time IS DISTINCT FROM transaction_timestamp() THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'terminal Audit identity is invalid';
+    END IF;
+
+    INSERT INTO paas.audit_outbox (
+        tenant_id, installation_id, event_id, operation_id, terminal_session_id,
+        status, available_at, attempts, fencing_token,
+        created_at, updated_at, document
+    ) VALUES (
+        effective_tenant_id, NULL, expected_event_id, NULL, current_session.id,
+        'PENDING', expected_time, 0, 0,
+        expected_time, expected_time, submitted_audit_event
+    );
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.append_terminal_audit_outbox(text,jsonb)
+    FROM PUBLIC, matrix_paas_api, matrix_paas_worker;
+
+CREATE OR REPLACE FUNCTION paas.create_terminal_session(
+    submitted_stored jsonb,
+    requested_ticket_digest text,
+    submitted_audit_event jsonb
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text := paas.current_tenant_id();
+    effective_now timestamptz(6) := transaction_timestamp();
+    submitted_session jsonb := submitted_stored->'session';
+    submitted_binding jsonb := submitted_stored->'binding';
+    current_binding jsonb;
+    stored_session paas.terminal_sessions%ROWTYPE;
+BEGIN
+    IF effective_tenant_id IS NULL
+       OR requested_ticket_digest IS NULL
+       OR requested_ticket_digest COLLATE "C" !~ '^sha256:[0-9a-f]{64}$'
+       OR jsonb_typeof(submitted_stored) IS DISTINCT FROM 'object'
+       OR NOT (submitted_stored ?& ARRAY[
+            'session', 'binding', 'subject', 'iamDecisionId', 'requestId',
+            'idempotencyFingerprint', 'requestDigest'
+       ])
+       OR (submitted_stored - ARRAY[
+            'session', 'binding', 'subject', 'iamDecisionId', 'requestId',
+            'auditId', 'traceparent', 'idempotencyFingerprint', 'requestDigest'
+       ]) <> '{}'::jsonb
+       OR jsonb_typeof(submitted_session) IS DISTINCT FROM 'object'
+       OR NOT (submitted_session ?& ARRAY[
+            'apiVersion', 'kind', 'id', 'scope', 'deploymentId', 'generation',
+            'applicationRevisionId', 'instanceId', 'size', 'state',
+            'createdAt', 'connectBefore', 'expiresAt'
+       ])
+       OR (submitted_session - ARRAY[
+            'apiVersion', 'kind', 'id', 'scope', 'deploymentId', 'generation',
+            'applicationRevisionId', 'instanceId', 'size', 'state',
+            'createdAt', 'connectBefore', 'expiresAt'
+       ]) <> '{}'::jsonb
+       OR jsonb_typeof(submitted_session->'scope') IS DISTINCT FROM 'object'
+       OR ((submitted_session->'scope') - ARRAY['kind', 'tenantId']) <> '{}'::jsonb
+       OR jsonb_typeof(submitted_session->'size') IS DISTINCT FROM 'object'
+       OR ((submitted_session->'size') - ARRAY['columns', 'rows']) <> '{}'::jsonb
+       OR jsonb_typeof(submitted_binding) IS DISTINCT FROM 'object'
+       OR NOT (submitted_binding ?& ARRAY[
+            'deploymentId', 'generation', 'applicationRevisionId', 'contentDigest',
+            'executionTargetId', 'placementDecisionId', 'bindingRef', 'instanceId'
+       ])
+       OR (submitted_binding - ARRAY[
+            'deploymentId', 'generation', 'applicationRevisionId', 'contentDigest',
+            'executionTargetId', 'placementDecisionId', 'bindingRef', 'instanceId'
+       ]) <> '{}'::jsonb
+       OR jsonb_typeof(submitted_stored->'subject') IS DISTINCT FROM 'object'
+       OR ((submitted_stored->'subject') - ARRAY['type', 'id']) <> '{}'::jsonb THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'terminal session proof is invalid';
+    END IF;
+
+    SELECT runtime.document INTO current_binding
+      FROM paas.lock_current_terminal_runtime(
+        submitted_binding->>'deploymentId',
+        submitted_binding->>'instanceId',
+        effective_now
+      ) AS runtime;
+    IF NOT FOUND OR current_binding IS DISTINCT FROM submitted_binding
+       OR submitted_session#>>'{scope,kind}' IS DISTINCT FROM 'TENANT'
+       OR submitted_session#>>'{scope,tenantId}' IS DISTINCT FROM effective_tenant_id
+       OR submitted_session->>'deploymentId' IS DISTINCT FROM submitted_binding->>'deploymentId'
+       OR submitted_session->>'generation' IS DISTINCT FROM submitted_binding->>'generation'
+       OR submitted_session->>'applicationRevisionId' IS DISTINCT FROM submitted_binding->>'applicationRevisionId'
+       OR submitted_session->>'instanceId' IS DISTINCT FROM submitted_binding->>'instanceId'
+       OR submitted_session->>'state' IS DISTINCT FROM 'PENDING'
+       OR (submitted_session->>'createdAt')::timestamptz IS DISTINCT FROM effective_now
+       OR (submitted_session->>'connectBefore')::timestamptz IS DISTINCT FROM effective_now + interval '30 seconds'
+       OR (submitted_session->>'expiresAt')::timestamptz IS DISTINCT FROM effective_now + interval '15 minutes' THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'terminal runtime proof conflicts';
+    END IF;
+
+    INSERT INTO paas.terminal_sessions (
+        tenant_id, id, deployment_id, deployment_generation,
+        application_revision_id, content_digest, execution_target_id,
+        placement_decision_id, binding_ref, instance_id,
+        subject_type, subject_id, iam_decision_id, request_id, audit_id,
+        traceparent, idempotency_fingerprint, request_digest, ticket_digest,
+        columns, rows, state, outcome, created_at, connect_before, expires_at,
+        connected_at, ended_at, document
+    ) VALUES (
+        effective_tenant_id,
+        submitted_session->>'id',
+        submitted_binding->>'deploymentId',
+        (submitted_binding->>'generation')::bigint,
+        submitted_binding->>'applicationRevisionId',
+        submitted_binding->>'contentDigest',
+        submitted_binding->>'executionTargetId',
+        submitted_binding->>'placementDecisionId',
+        submitted_binding->>'bindingRef',
+        submitted_binding->>'instanceId',
+        submitted_stored#>>'{subject,type}',
+        submitted_stored#>>'{subject,id}',
+        submitted_stored->>'iamDecisionId',
+        submitted_stored->>'requestId',
+        submitted_stored->>'auditId',
+        submitted_stored->>'traceparent',
+        submitted_stored->>'idempotencyFingerprint',
+        submitted_stored->>'requestDigest',
+        requested_ticket_digest,
+        (submitted_session#>>'{size,columns}')::integer,
+        (submitted_session#>>'{size,rows}')::integer,
+        'PENDING', NULL, effective_now,
+        effective_now + interval '30 seconds',
+        effective_now + interval '15 minutes',
+        NULL, NULL, submitted_session
+    ) RETURNING * INTO stored_session;
+    PERFORM paas.append_terminal_audit_outbox(stored_session.id, submitted_audit_event);
+    RETURN paas.terminal_session_snapshot(stored_session);
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.create_terminal_session(jsonb,text,jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paas.create_terminal_session(jsonb,text,jsonb) TO matrix_paas_api;
+
+CREATE OR REPLACE FUNCTION paas.rotate_terminal_session_ticket(
+    requested_session_id text,
+    requested_ticket_digest text
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text := paas.current_tenant_id();
+    current_session paas.terminal_sessions%ROWTYPE;
+BEGIN
+    IF effective_tenant_id IS NULL
+       OR requested_session_id IS NULL
+       OR requested_session_id COLLATE "C" !~ '^terminal-session-[0-9a-f]{32}$'
+       OR requested_ticket_digest IS NULL
+       OR requested_ticket_digest COLLATE "C" !~ '^sha256:[0-9a-f]{64}$' THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'terminal ticket rotation is invalid';
+    END IF;
+    SELECT * INTO current_session
+      FROM paas.terminal_sessions AS session
+     WHERE session.tenant_id = effective_tenant_id
+       AND session.id = requested_session_id
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'P0002', MESSAGE = 'terminal session was not found';
+    END IF;
+    IF current_session.state <> 'PENDING'
+       OR transaction_timestamp() >= current_session.connect_before
+       OR transaction_timestamp() >= current_session.expires_at THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'terminal ticket cannot be rotated';
+    END IF;
+    UPDATE paas.terminal_sessions AS session
+       SET ticket_digest = requested_ticket_digest
+     WHERE session.tenant_id = effective_tenant_id
+       AND session.id = requested_session_id;
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION paas.open_terminal_session_ticket(
+    requested_session_id text,
+    requested_ticket_digest text
+)
+RETURNS TABLE (document jsonb)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    current_session paas.terminal_sessions%ROWTYPE;
+    configured_tenant text;
+BEGIN
+    IF requested_session_id IS NULL
+       OR requested_session_id COLLATE "C" !~ '^terminal-session-[0-9a-f]{32}$'
+       OR requested_ticket_digest IS NULL
+       OR requested_ticket_digest COLLATE "C" !~ '^sha256:[0-9a-f]{64}$' THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'terminal ticket is invalid';
+    END IF;
+    SELECT * INTO current_session
+      FROM paas.terminal_sessions AS session
+     WHERE session.id = requested_session_id
+       AND session.ticket_digest = requested_ticket_digest
+       AND session.state = 'PENDING'
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+    configured_tenant := set_config('matrix.tenant_id', current_session.tenant_id, true);
+    IF configured_tenant IS DISTINCT FROM current_session.tenant_id
+       OR paas.current_tenant_id() IS DISTINCT FROM current_session.tenant_id THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'terminal ticket tenant is invalid';
+    END IF;
+    RETURN QUERY SELECT paas.terminal_session_snapshot(current_session);
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION paas.consume_terminal_session_ticket(
+    requested_session_id text,
+    submitted_session jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text := paas.current_tenant_id();
+    current_session paas.terminal_sessions%ROWTYPE;
+    expected_document jsonb;
+BEGIN
+    SELECT * INTO current_session
+      FROM paas.terminal_sessions AS session
+     WHERE session.tenant_id = effective_tenant_id
+       AND session.id = requested_session_id
+     FOR UPDATE;
+    IF effective_tenant_id IS NULL OR NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'P0002', MESSAGE = 'terminal session was not found';
+    END IF;
+    expected_document := jsonb_set(current_session.document, '{state}', '"CONNECTING"'::jsonb);
+    IF current_session.state <> 'PENDING'
+       OR current_session.ticket_digest IS NULL
+       OR submitted_session IS DISTINCT FROM expected_document THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'terminal ticket state conflicts';
+    END IF;
+    UPDATE paas.terminal_sessions AS session
+       SET state = 'CONNECTING', ticket_digest = NULL, document = submitted_session
+     WHERE session.tenant_id = effective_tenant_id
+       AND session.id = requested_session_id;
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION paas.transition_terminal_session(
+    requested_session_id text,
+    submitted_session jsonb,
+    submitted_audit_event jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text := paas.current_tenant_id();
+    effective_now timestamptz(6) := transaction_timestamp();
+    current_session paas.terminal_sessions%ROWTYPE;
+    transitioned_session paas.terminal_sessions%ROWTYPE;
+    requested_state text;
+    requested_outcome text;
+    requested_connected_at timestamptz(6);
+    requested_ended_at timestamptz(6);
+BEGIN
+    SELECT * INTO current_session
+      FROM paas.terminal_sessions AS session
+     WHERE session.tenant_id = effective_tenant_id
+       AND session.id = requested_session_id
+     FOR UPDATE;
+    IF effective_tenant_id IS NULL OR NOT FOUND
+       OR jsonb_typeof(submitted_session) IS DISTINCT FROM 'object'
+       OR (submitted_session - ARRAY[
+            'apiVersion', 'kind', 'id', 'scope', 'deploymentId', 'generation',
+            'applicationRevisionId', 'instanceId', 'size', 'state', 'outcome',
+            'createdAt', 'connectBefore', 'expiresAt', 'connectedAt', 'endedAt'
+       ]) <> '{}'::jsonb
+       OR (submitted_session - ARRAY['state', 'outcome', 'connectedAt', 'endedAt'])
+            IS DISTINCT FROM
+          (current_session.document - ARRAY['state', 'outcome', 'connectedAt', 'endedAt']) THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'terminal transition proof conflicts';
+    END IF;
+
+    requested_state := submitted_session->>'state';
+    requested_outcome := submitted_session->>'outcome';
+    requested_connected_at := (submitted_session->>'connectedAt')::timestamptz;
+    requested_ended_at := (submitted_session->>'endedAt')::timestamptz;
+    IF current_session.state = 'CONNECTING'
+       AND requested_state = 'ACTIVE'
+       AND requested_outcome IS NULL
+       AND requested_connected_at IS NOT DISTINCT FROM effective_now
+       AND requested_ended_at IS NULL THEN
+        NULL;
+    ELSIF current_session.state <> 'ENDED'
+       AND requested_state = 'ENDED'
+       AND requested_outcome IN (
+            'COMPLETED', 'UNSUPPORTED', 'EXPIRED', 'DISCONNECTED',
+            'REVOKED', 'REPLACED', 'FAILED'
+       )
+       AND requested_ended_at IS NOT DISTINCT FROM effective_now
+       AND requested_connected_at IS NOT DISTINCT FROM current_session.connected_at THEN
+        NULL;
+    ELSE
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'terminal lifecycle transition is invalid';
+    END IF;
+
+    UPDATE paas.terminal_sessions AS session
+       SET ticket_digest = NULL,
+           state = requested_state,
+           outcome = requested_outcome,
+           connected_at = requested_connected_at,
+           ended_at = requested_ended_at,
+           document = submitted_session
+     WHERE session.tenant_id = effective_tenant_id
+       AND session.id = requested_session_id
+    RETURNING * INTO transitioned_session;
+    PERFORM paas.append_terminal_audit_outbox(
+        transitioned_session.id, submitted_audit_event
+    );
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.rotate_terminal_session_ticket(text,text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION paas.open_terminal_session_ticket(text,text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION paas.consume_terminal_session_ticket(text,jsonb) FROM PUBLIC;
+REVOKE ALL ON FUNCTION paas.transition_terminal_session(text,jsonb,jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paas.rotate_terminal_session_ticket(text,text) TO matrix_paas_api;
+GRANT EXECUTE ON FUNCTION paas.open_terminal_session_ticket(text,text) TO matrix_paas_api;
+GRANT EXECUTE ON FUNCTION paas.consume_terminal_session_ticket(text,jsonb) TO matrix_paas_api;
+GRANT EXECUTE ON FUNCTION paas.transition_terminal_session(text,jsonb,jsonb) TO matrix_paas_api;
 
 CREATE OR REPLACE FUNCTION paas.store_execution_pool_observation(
     expected_resource_version bigint, submitted_pool jsonb
@@ -3050,6 +3835,7 @@ AS $function$
         AND to_regclass('paas.audit_outbox') IS NOT NULL
         AND to_regclass('paas.deployment_runtime_snapshots') IS NOT NULL
         AND to_regclass('paas.deployment_resource_snapshots') IS NOT NULL
+        AND to_regclass('paas.terminal_sessions') IS NOT NULL
         AND to_regprocedure('paas.current_installation_id()') IS NOT NULL
         AND to_regprocedure('paas.complete_audit_event(text,text,text,text,bigint,text,timestamptz,text)') IS NOT NULL
         AND to_regprocedure('paas.admit_execution_resource(jsonb,jsonb,jsonb,text,text,bigint,jsonb)') IS NOT NULL
@@ -3058,6 +3844,15 @@ AS $function$
         AND to_regprocedure('paas.store_deployment_runtime_snapshot(text,text,bigint,text,text,text,timestamp with time zone,timestamp with time zone,jsonb)') IS NOT NULL
         AND to_regprocedure('paas.valid_deployment_resource_document(jsonb)') IS NOT NULL
         AND to_regprocedure('paas.store_deployment_telemetry_snapshot(text,text,bigint,text,text,text,timestamp with time zone,timestamp with time zone,jsonb,timestamp with time zone,timestamp with time zone,jsonb)') IS NOT NULL
+        AND to_regprocedure('paas.lock_terminal_session_by_fingerprint(text)') IS NOT NULL
+        AND to_regprocedure('paas.lock_terminal_session(text)') IS NOT NULL
+        AND to_regprocedure('paas.lock_open_terminal_session(text,text,text,text)') IS NOT NULL
+        AND to_regprocedure('paas.lock_current_terminal_runtime(text,text,timestamp with time zone)') IS NOT NULL
+        AND to_regprocedure('paas.create_terminal_session(jsonb,text,jsonb)') IS NOT NULL
+        AND to_regprocedure('paas.rotate_terminal_session_ticket(text,text)') IS NOT NULL
+        AND to_regprocedure('paas.open_terminal_session_ticket(text,text)') IS NOT NULL
+        AND to_regprocedure('paas.consume_terminal_session_ticket(text,jsonb)') IS NOT NULL
+        AND to_regprocedure('paas.transition_terminal_session(text,jsonb,jsonb)') IS NOT NULL
         AND NOT EXISTS (
             SELECT 1
               FROM paas.audit_outbox AS outbox

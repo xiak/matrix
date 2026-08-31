@@ -207,7 +207,7 @@ func TestNativeRootRejectsUnitFileReinterpretation(t *testing.T) {
 }
 
 func TestDeploymentRuntimePredecessorContractDigestIsFrozen(t *testing.T) {
-	const expected = "sha256:bd58faf91ffb1f1339778193c97d5ae339c6e60fd575039f4f6b4f3c62ba0d79"
+	const expected = "sha256:f60ec594fc58390c8f7013d33406c9af0999abf33626a3d9a83ad6e21c3f823f"
 	if actual := DeploymentRuntimePredecessorContractDigest(); actual != expected {
 		t.Fatalf("predecessor contract digest = %q", actual)
 	}

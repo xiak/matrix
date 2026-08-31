@@ -80,6 +80,8 @@ const (
 	ActionPaaSDeploymentStop              Action = "paas.deployment.stop"
 	ActionPaaSDeploymentRead              Action = "paas.deployment.read"
 	ActionPaaSOperationRead               Action = "paas.operation.read"
+	ActionPaaSTerminalSessionCreate       Action = "paas.terminal-session.create"
+	ActionPaaSTerminalSessionClose        Action = "paas.terminal-session.close"
 
 	ActionManagedServiceOfferingRead             Action = "managedservice.offering.read"
 	ActionManagedServiceRegionRead               Action = "managedservice.region.read"
@@ -105,6 +107,7 @@ const (
 	ResourceConfigurationRevision ResourceKind = "CONFIGURATION_REVISION"
 	ResourceApplicationRevision   ResourceKind = "APPLICATION_REVISION"
 	ResourceDeployment            ResourceKind = "DEPLOYMENT"
+	ResourceTerminalSession       ResourceKind = "TERMINAL_SESSION"
 	ResourceOperation             ResourceKind = "OPERATION"
 	ResourceServiceOffering       ResourceKind = "SERVICE_OFFERING"
 	ResourceRegion                ResourceKind = "REGION"
@@ -188,6 +191,8 @@ var allActions = []Action{
 	ActionPaaSDeploymentStop,
 	ActionPaaSDeploymentRead,
 	ActionPaaSOperationRead,
+	ActionPaaSTerminalSessionCreate,
+	ActionPaaSTerminalSessionClose,
 	ActionManagedServiceOfferingRead,
 	ActionManagedServiceRegionRead,
 	ActionManagedServiceQuotaEntitlementActivate,

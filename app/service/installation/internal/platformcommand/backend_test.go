@@ -209,7 +209,7 @@ func TestCredentialRecoveryRejectsUnsupportedProfilesBeforePreparingAnIntent(t *
 		{name: "published scalar is not first-authorization admission", profile: release.DatabaseProfile{SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one"}},
 		{name: "prior credential contract", profile: release.DatabaseProfile{Compatibility: "identical-authority-profile", Authorities: release.AuthoritySchemas{IAM: 3, Audit: 2, PaaS: 2}, ContractRevision: 3}},
 		{name: "different PaaS schema", profile: release.DatabaseProfile{Compatibility: "identical-authority-profile", Authorities: release.AuthoritySchemas{IAM: 4, Audit: 3, PaaS: 1}, ContractRevision: 4}},
-		{name: "different contract revision", profile: release.DatabaseProfile{Compatibility: "identical-authority-profile", Authorities: release.AuthoritySchemas{IAM: 4, Audit: 3, PaaS: 2}, ContractRevision: 7}},
+		{name: "different contract revision", profile: release.DatabaseProfile{Compatibility: "identical-authority-profile", Authorities: release.AuthoritySchemas{IAM: 4, Audit: 3, PaaS: 2}, ContractRevision: 8}},
 	}
 	for _, test := range profiles {
 		t.Run(test.name, func(t *testing.T) {

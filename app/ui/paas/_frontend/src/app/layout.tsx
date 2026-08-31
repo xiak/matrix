@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 import { ApplicationProviders } from "./providers";
+import "@xterm/xterm/css/xterm.css";
 import "@/styles/globals.css";
 
 export const dynamic = "error";

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"os/exec"
@@ -50,6 +51,32 @@ type resourceStateRuntime struct {
 	resources   map[string]RuntimeContainerResources
 	err         error
 }
+
+type terminalStateRuntime struct {
+	*stateRuntime
+	opened   RuntimeContainer
+	openSize paasv1.TerminalSize
+	calls    int
+}
+
+func (runtime *terminalStateRuntime) OpenTerminal(
+	_ context.Context,
+	_ RuntimeProject,
+	container RuntimeContainer,
+	size paasv1.TerminalSize,
+) (Terminal, error) {
+	runtime.opened, runtime.openSize = container, size
+	runtime.calls++
+	return stubComposeTerminal{}, nil
+}
+
+type stubComposeTerminal struct{}
+
+func (stubComposeTerminal) Read([]byte) (int, error)                          { return 0, io.EOF }
+func (stubComposeTerminal) Write(value []byte) (int, error)                   { return len(value), nil }
+func (stubComposeTerminal) Close() error                                      { return nil }
+func (stubComposeTerminal) Resize(context.Context, paasv1.TerminalSize) error { return nil }
+func (stubComposeTerminal) ExitCode(context.Context) (int32, error)           { return 0, nil }
 
 func (runtime *resourceStateRuntime) ObserveResources(
 	_ context.Context,
@@ -206,6 +233,57 @@ func TestExecutorRunsRetrySafeApplyRollbackObserveAndStop(t *testing.T) {
 		t.Fatalf("secret directory after stop error = %v, want not found", err)
 	}
 	assertTreeExcludes(t, root, string((&secretFixture{content: []byte("database-password")}).content))
+}
+
+func TestTerminalResolvesOnlyTheOpaqueRunningCurrentInstanceUnderProjectProof(t *testing.T) {
+	executor, request, runtime, _, now := executorFixture(t)
+	provider := &terminalStateRuntime{stateRuntime: runtime}
+	executor.runtime = provider
+	if _, err := executor.ApplyDeployment(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	proof := runtimeObserveRequest(request, now.Add(time.Minute))
+	observation, err := executor.ObserveDeploymentRuntime(context.Background(), proof)
+	if err != nil || len(observation.Instances) == 0 {
+		t.Fatalf("runtime observation = %#v/%v", observation, err)
+	}
+	size := paasv1.TerminalSize{Columns: 120, Rows: 40}
+	terminal, err := executor.OpenDeploymentTerminal(
+		context.Background(), proof, observation.Instances[0].ID, size,
+	)
+	if err != nil || terminal == nil || provider.calls != 1 || provider.openSize != size ||
+		opaqueDeploymentInstanceID(
+			projectState{
+				TenantID: request.Command.Scope.TenantID, DeploymentID: request.Command.DeploymentID,
+				Generation:            request.Generation.Generation,
+				ApplicationRevisionID: request.ApplicationRevision.Metadata.ID,
+			},
+			request.Command.ExecutionTargetID,
+			provider.opened.ID,
+		) != observation.Instances[0].ID {
+		t.Fatalf("terminal selection = %#v calls=%d error=%v", provider.opened, provider.calls, err)
+	}
+	_, err = executor.OpenDeploymentTerminal(
+		context.Background(), proof,
+		"instance-ffffffffffffffffffffffffffffffff",
+		size,
+	)
+	if fault := requireComposeFault(t, err); fault.Normalized.Class != paasv1.AdapterErrorNotFound || provider.calls != 1 {
+		t.Fatalf("unknown opaque instance reached provider: %#v calls=%d", fault.Normalized, provider.calls)
+	}
+	provider.stateRuntime.mu.Lock()
+	for index := range provider.containers {
+		if provider.containers[index].ID == provider.opened.ID {
+			provider.containers[index].State = "paused"
+		}
+	}
+	provider.stateRuntime.mu.Unlock()
+	_, err = executor.OpenDeploymentTerminal(
+		context.Background(), proof, observation.Instances[0].ID, size,
+	)
+	if fault := requireComposeFault(t, err); fault.Normalized.Class != paasv1.AdapterErrorConflict || provider.calls != 1 {
+		t.Fatalf("non-running instance reached provider: %#v calls=%d", fault.Normalized, provider.calls)
+	}
 }
 
 func TestDeploymentTelemetrySelectsOnlyProvedCurrentContainersAndReturnsOpaqueResources(t *testing.T) {

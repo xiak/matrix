@@ -193,6 +193,21 @@ func TestManagedServiceUsesTheExistingClosedPaaSRoleMatrix(t *testing.T) {
 	}
 }
 
+func TestTerminalSessionsRequireWriteCapablePaaSAuthority(t *testing.T) {
+	for _, action := range []iamv1.Action{
+		iamv1.ActionPaaSTerminalSessionCreate,
+		iamv1.ActionPaaSTerminalSessionClose,
+	} {
+		if !RoleAllows(iamv1.RoleOrganizationAdmin, action) ||
+			!RoleAllows(iamv1.RolePaaSDeveloper, action) ||
+			RoleAllows(iamv1.RolePaaSViewer, action) ||
+			RoleAllows(iamv1.RoleAuditReader, action) ||
+			!ServiceCanRequest(iamv1.ServicePaaS, action) {
+			t.Fatalf("terminal action %q has an invalid role or service owner", action)
+		}
+	}
+}
+
 func TestPlatformAuthorityRequiresAnExplicitRoleAndInstallationBinding(t *testing.T) {
 	now := authorityTestTime()
 	for _, action := range iamv1.AllActions() {

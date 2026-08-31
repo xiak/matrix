@@ -16,11 +16,13 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 	apphttp "github.com/xiak/matrix/app/service/paas/internal/apphosting/service/nethttp"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/executionadmission"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/terminalsession"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/verifyinstallation"
 	"github.com/xiak/matrix/app/service/paas/internal/audit"
 	auditpostgres "github.com/xiak/matrix/app/service/paas/internal/audit/data/postgres"
@@ -449,10 +451,23 @@ func newIntegrationHTTPHandler(
 	if err != nil {
 		t.Fatal(err)
 	}
+	terminalRepository, err := NewTerminalSessionRepository(apiPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminalWorkflow, err := terminalsession.New(
+		terminalRepository,
+		terminalsession.Config{MaxTransactionAttempts: 5},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	handler, err := apphttp.NewHandler(
 		integrationHTTPAuthorizer{tenantID: tenantID},
 		workflow,
 		execution,
+		terminalWorkflow,
+		integrationTerminalConnector{},
 		integrationInstallationVerifier{},
 		apphttp.Config{
 			NewRequestID: func() (string, error) {
@@ -472,6 +487,16 @@ func newIntegrationHTTPHandler(
 		t.Fatalf("create northbound HTTP handler: %v", err)
 	}
 	return handler
+}
+
+type integrationTerminalConnector struct{}
+
+func (integrationTerminalConnector) OpenTerminal(
+	context.Context,
+	string,
+	nodev1.TerminalOpenRequest,
+) (port.TerminalConnection, error) {
+	return nil, errors.New("unexpected terminal connection")
 }
 
 type integrationInstallationVerifier struct{}

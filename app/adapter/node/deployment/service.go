@@ -137,6 +137,23 @@ func (service *Service) ObserveDeploymentTelemetry(
 	return service.observer.ObserveDeploymentTelemetry(ctx, request)
 }
 
+func (service *Service) OpenTerminal(
+	ctx context.Context,
+	request nodev1.TerminalOpenRequest,
+) (composeadapter.Terminal, error) {
+	if service == nil || service.observer == nil || ctx == nil ||
+		nodev1.ValidateTerminalOpenRequest(request) != nil ||
+		request.BindingRef != service.bindingRef {
+		return nil, invalidFault()
+	}
+	return service.observer.OpenDeploymentTerminal(
+		ctx,
+		request.Request,
+		request.InstanceID,
+		request.Size,
+	)
+}
+
 func (service *Service) materialExecutor(
 	materials nodev1.DeploymentMaterials,
 ) (*composeadapter.Executor, error) {

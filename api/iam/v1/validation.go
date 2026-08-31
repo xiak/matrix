@@ -476,6 +476,8 @@ func ResourceKindForAction(action Action) (ResourceKind, bool) {
 	case ActionPaaSDeploymentCreate, ActionPaaSDeploymentUpdate,
 		ActionPaaSDeploymentRollback, ActionPaaSDeploymentStop, ActionPaaSDeploymentRead:
 		return ResourceDeployment, true
+	case ActionPaaSTerminalSessionCreate, ActionPaaSTerminalSessionClose:
+		return ResourceTerminalSession, true
 	case ActionPaaSOperationRead, ActionPaaSPlatformOperationRead:
 		return ResourceOperation, true
 	case ActionPaaSExecutionPoolCreate, ActionPaaSExecutionPoolRead:

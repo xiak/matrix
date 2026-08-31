@@ -28,6 +28,14 @@
   --xiak-palette-shadow-soft: #17243b08;
   --xiak-palette-overlay: #17243b59;
   --xiak-palette-focus: #2860df29;
+  --xiak-palette-terminal-bg: #070b12;
+  --xiak-palette-terminal-panel: #122033;
+  --xiak-palette-terminal-border: #1f2d40;
+  --xiak-palette-terminal-text: #d8e1ee;
+  --xiak-palette-terminal-muted: #93a4ba;
+  --xiak-palette-terminal-cursor: #67e8f9;
+  --xiak-palette-terminal-success: #5eead4;
+  --xiak-palette-terminal-selection: #164e63;
 
   --xiak-color-bg-canvas: var(--xiak-palette-slate-50);
   --xiak-color-bg-header: var(--xiak-palette-white);
@@ -77,6 +85,14 @@
   --xiak-color-status-warning-bg: var(--xiak-palette-amber-50);
   --xiak-color-status-danger: var(--xiak-palette-red-700);
   --xiak-color-status-danger-bg: var(--xiak-palette-red-50);
+  --xiak-color-terminal-bg: var(--xiak-palette-terminal-bg);
+  --xiak-color-terminal-panel: var(--xiak-palette-terminal-panel);
+  --xiak-color-terminal-border: var(--xiak-palette-terminal-border);
+  --xiak-color-terminal-text: var(--xiak-palette-terminal-text);
+  --xiak-color-terminal-muted: var(--xiak-palette-terminal-muted);
+  --xiak-color-terminal-cursor: var(--xiak-palette-terminal-cursor);
+  --xiak-color-terminal-success: var(--xiak-palette-terminal-success);
+  --xiak-color-terminal-selection: var(--xiak-palette-terminal-selection);
 
   --xiak-border-width: 1px;
   --xiak-border-style: solid;

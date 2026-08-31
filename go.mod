@@ -3,6 +3,7 @@ module github.com/xiak/matrix
 go 1.26.0
 
 require (
+	github.com/coder/websocket v1.8.15
 	github.com/coreos/go-systemd/v22 v22.7.0
 	github.com/godbus/dbus/v5 v5.1.0
 	github.com/jackc/pgx/v5 v5.10.0

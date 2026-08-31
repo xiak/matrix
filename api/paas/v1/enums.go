@@ -158,6 +158,52 @@ func DeploymentInstanceHealthStates() []DeploymentInstanceHealth {
 	}
 }
 
+// TerminalSessionState is independent of Deployment Operations. A session is
+// single-use: once it leaves PENDING its connection ticket cannot be reused.
+type TerminalSessionState string
+
+const (
+	TerminalSessionPending    TerminalSessionState = "PENDING"
+	TerminalSessionConnecting TerminalSessionState = "CONNECTING"
+	TerminalSessionActive     TerminalSessionState = "ACTIVE"
+	TerminalSessionEnded      TerminalSessionState = "ENDED"
+)
+
+func TerminalSessionStates() []TerminalSessionState {
+	return []TerminalSessionState{
+		TerminalSessionPending,
+		TerminalSessionConnecting,
+		TerminalSessionActive,
+		TerminalSessionEnded,
+	}
+}
+
+// TerminalSessionOutcome is present only after a session has ended. It is a
+// sanitized lifecycle result and never contains terminal input or output.
+type TerminalSessionOutcome string
+
+const (
+	TerminalSessionCompleted    TerminalSessionOutcome = "COMPLETED"
+	TerminalSessionUnsupported  TerminalSessionOutcome = "UNSUPPORTED"
+	TerminalSessionExpired      TerminalSessionOutcome = "EXPIRED"
+	TerminalSessionDisconnected TerminalSessionOutcome = "DISCONNECTED"
+	TerminalSessionRevoked      TerminalSessionOutcome = "REVOKED"
+	TerminalSessionReplaced     TerminalSessionOutcome = "REPLACED"
+	TerminalSessionFailed       TerminalSessionOutcome = "FAILED"
+)
+
+func TerminalSessionOutcomes() []TerminalSessionOutcome {
+	return []TerminalSessionOutcome{
+		TerminalSessionCompleted,
+		TerminalSessionUnsupported,
+		TerminalSessionExpired,
+		TerminalSessionDisconnected,
+		TerminalSessionRevoked,
+		TerminalSessionReplaced,
+		TerminalSessionFailed,
+	}
+}
+
 type OperationAction string
 
 const (

@@ -626,6 +626,52 @@ func (snapshot DeploymentRuntimeSnapshot) Snapshot(now time.Time) DeploymentRunt
 	return snapshot
 }
 
+const (
+	MinimumTerminalColumns         = 2
+	MaximumTerminalColumns         = 512
+	MinimumTerminalRows            = 2
+	MaximumTerminalRows            = 256
+	MaximumTerminalFrameBytes      = 64 * 1024
+	TerminalSessionConnectTimeout  = 30 * time.Second
+	TerminalSessionIdleTimeout     = 2 * time.Minute
+	MaximumTerminalSessionDuration = 15 * time.Minute
+)
+
+type TerminalSize struct {
+	Columns uint16 `json:"columns"`
+	Rows    uint16 `json:"rows"`
+}
+
+// CreateTerminalSessionRequest contains no provider selector, command, user,
+// environment or host identity. InstanceID is the opaque node-derived value
+// from the current Deployment runtime snapshot.
+type CreateTerminalSessionRequest struct {
+	InstanceID ResourceID   `json:"instanceId"`
+	Size       TerminalSize `json:"size"`
+}
+
+// TerminalSession is a sanitized, tenant-scoped lifecycle resource. The
+// one-time connection ticket is delivered only by an HttpOnly cookie and is
+// never part of this document.
+type TerminalSession struct {
+	APIVersion            string                 `json:"apiVersion"`
+	Kind                  string                 `json:"kind"`
+	ID                    ResourceID             `json:"id"`
+	Scope                 ResourceScope          `json:"scope"`
+	DeploymentID          ResourceID             `json:"deploymentId"`
+	Generation            uint64                 `json:"generation"`
+	ApplicationRevisionID ResourceID             `json:"applicationRevisionId"`
+	InstanceID            ResourceID             `json:"instanceId"`
+	Size                  TerminalSize           `json:"size"`
+	State                 TerminalSessionState   `json:"state"`
+	Outcome               TerminalSessionOutcome `json:"outcome,omitempty"`
+	CreatedAt             time.Time              `json:"createdAt"`
+	ConnectBefore         time.Time              `json:"connectBefore"`
+	ExpiresAt             time.Time              `json:"expiresAt"`
+	ConnectedAt           *time.Time             `json:"connectedAt,omitempty"`
+	EndedAt               *time.Time             `json:"endedAt,omitempty"`
+}
+
 type CreateDeploymentRequest struct {
 	ID   ResourceID     `json:"id"`
 	Name string         `json:"name"`

@@ -586,6 +586,7 @@ function runtimeScene(snapshot: DeploymentRuntimeSnapshot | null): DeploymentRun
       healthLabel: runtimeHealthLabel(instance.health),
       status: runtimeInstanceStatus(instance.state, instance.health),
       exitCode: instance.exitCode === null ? "—" : String(instance.exitCode),
+      terminalAvailable: snapshot.state === "AVAILABLE" && instance.state === "RUNNING",
       resources: resources.has(instance.id) ? resourceScene(resources.get(instance.id)!) : null
     })) ?? []
   };

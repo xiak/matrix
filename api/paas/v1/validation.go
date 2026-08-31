@@ -17,6 +17,7 @@ var (
 	digestPattern               = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 	contractVersionPattern      = regexp.MustCompile(`^v[1-9][0-9]*$`)
 	deploymentInstanceIDPattern = regexp.MustCompile(`^instance-[0-9a-f]{32}$`)
+	terminalSessionIDPattern    = regexp.MustCompile(`^terminal-session-[0-9a-f]{32}$`)
 )
 
 var sensitiveKeyFragments = [...]string{
@@ -1150,6 +1151,92 @@ func ValidateDeploymentRuntimeSnapshot(value DeploymentRuntimeSnapshot) error {
 				}
 			}
 		}
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateTerminalSize(value TerminalSize) error {
+	if value.Columns < MinimumTerminalColumns || value.Columns > MaximumTerminalColumns ||
+		value.Rows < MinimumTerminalRows || value.Rows > MaximumTerminalRows {
+		return errors.New("terminal size is outside the supported range")
+	}
+	return nil
+}
+
+func ValidateTerminalSessionID(value ResourceID) error {
+	if !terminalSessionIDPattern.MatchString(string(value)) {
+		return errors.New("terminal session identity is invalid")
+	}
+	return nil
+}
+
+func ValidateDeploymentInstanceID(value ResourceID) error {
+	if !deploymentInstanceIDPattern.MatchString(string(value)) {
+		return errors.New("Deployment instance identity is invalid")
+	}
+	return nil
+}
+
+func ValidateCreateTerminalSessionRequest(value CreateTerminalSessionRequest) error {
+	return errors.Join(
+		ValidateDeploymentInstanceID(value.InstanceID),
+		ValidateTerminalSize(value.Size),
+	)
+}
+
+func ValidateTerminalSession(value TerminalSession) error {
+	var problems []error
+	if value.APIVersion != APIVersion || value.Kind != "TerminalSession" ||
+		ValidateTerminalSessionID(value.ID) != nil {
+		problems = append(problems, errors.New("terminal session type or identity is invalid"))
+	}
+	problems = append(problems,
+		ValidateResourceScope(value.Scope),
+		ValidateID("deploymentId", string(value.DeploymentID)),
+		ValidateID("applicationRevisionId", string(value.ApplicationRevisionID)),
+		ValidateTerminalSize(value.Size),
+		validateContractTime("createdAt", value.CreatedAt),
+		validateContractTime("connectBefore", value.ConnectBefore),
+		validateContractTime("expiresAt", value.ExpiresAt),
+	)
+	if value.Scope.Kind != AuthorityTenant ||
+		!deploymentInstanceIDPattern.MatchString(string(value.InstanceID)) || value.Generation == 0 {
+		problems = append(problems, errors.New("terminal session Deployment binding is invalid"))
+	}
+	if !value.ConnectBefore.After(value.CreatedAt) || value.ConnectBefore.After(value.ExpiresAt) ||
+		!value.ExpiresAt.After(value.CreatedAt) ||
+		value.ConnectBefore.Sub(value.CreatedAt) > TerminalSessionConnectTimeout ||
+		value.ExpiresAt.Sub(value.CreatedAt) > MaximumTerminalSessionDuration {
+		problems = append(problems, errors.New("terminal session time boundary is invalid"))
+	}
+	if value.ConnectedAt != nil {
+		problems = append(problems, validateContractTime("connectedAt", *value.ConnectedAt))
+		if value.ConnectedAt.Before(value.CreatedAt) || value.ConnectedAt.After(value.ExpiresAt) {
+			problems = append(problems, errors.New("terminal connection time is invalid"))
+		}
+	}
+	if value.EndedAt != nil {
+		problems = append(problems, validateContractTime("endedAt", *value.EndedAt))
+		if value.EndedAt.Before(value.CreatedAt) ||
+			(value.ConnectedAt != nil && value.EndedAt.Before(*value.ConnectedAt)) {
+			problems = append(problems, errors.New("terminal end time is invalid"))
+		}
+	}
+	switch value.State {
+	case TerminalSessionPending, TerminalSessionConnecting:
+		if value.Outcome != "" || value.ConnectedAt != nil || value.EndedAt != nil {
+			problems = append(problems, errors.New("unstarted terminal session contains terminal fields"))
+		}
+	case TerminalSessionActive:
+		if value.Outcome != "" || value.ConnectedAt == nil || value.EndedAt != nil {
+			problems = append(problems, errors.New("active terminal session lifecycle is invalid"))
+		}
+	case TerminalSessionEnded:
+		if !contains(TerminalSessionOutcomes(), value.Outcome) || value.EndedAt == nil {
+			problems = append(problems, errors.New("ended terminal session requires a closed outcome and time"))
+		}
+	default:
+		problems = append(problems, errors.New("terminal session state is invalid"))
 	}
 	return errors.Join(problems...)
 }

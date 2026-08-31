@@ -272,6 +272,8 @@ func toIAMResourceKind(kind string) (iamv1.ResourceKind, error) {
 		return iamv1.ResourceExecutionPool, nil
 	case "ExecutionTarget":
 		return iamv1.ResourceExecutionTarget, nil
+	case "TerminalSession":
+		return iamv1.ResourceTerminalSession, nil
 	default:
 		return "", errors.New("PaaS authorization resource kind is invalid")
 	}

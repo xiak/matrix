@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -76,6 +77,13 @@ func (deploymentService) ObserveDeploymentTelemetry(
 		errors.New("unexpected Deployment telemetry observation")
 }
 
+func (deploymentService) OpenTerminal(
+	context.Context,
+	nodev1.TerminalOpenRequest,
+) (TerminalSession, error) {
+	return nil, errors.New("unexpected terminal session")
+}
+
 type deploymentServiceFuncs struct {
 	ready     func(context.Context) error
 	execute   func(context.Context, nodev1.DeploymentEffectRequest) (paasv1.AdapterResult, error)
@@ -86,6 +94,7 @@ type deploymentServiceFuncs struct {
 		paasv1.DeploymentResourceObservation,
 		error,
 	)
+	terminal func(context.Context, nodev1.TerminalOpenRequest) (TerminalSession, error)
 }
 
 func (service deploymentServiceFuncs) Ready(ctx context.Context) error {
@@ -132,6 +141,16 @@ func (service deploymentServiceFuncs) ObserveDeploymentTelemetry(
 			errors.New("unexpected Deployment telemetry observation")
 	}
 	return service.telemetry(ctx, request)
+}
+
+func (service deploymentServiceFuncs) OpenTerminal(
+	ctx context.Context,
+	request nodev1.TerminalOpenRequest,
+) (TerminalSession, error) {
+	if service.terminal == nil {
+		return nil, errors.New("unexpected terminal session")
+	}
+	return service.terminal(ctx, request)
 }
 
 type deploymentArtifactResolver struct{}
@@ -277,7 +296,7 @@ func TestRealMTLSDeploymentBindsExactTargetMaterialsAndObservation(t *testing.T)
 	}
 	handler, err := New(sourceFunc(func(context.Context) (paasv1.ExecutionTargetObservation, error) {
 		return observedTarget(), nil
-	}), service, Config{Identity: nodeIdentity, ControllerID: controllerID, BindingRef: "binding-a"})
+	}), service, service, Config{Identity: nodeIdentity, ControllerID: controllerID, BindingRef: "binding-a"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,6 +353,132 @@ func TestRealMTLSDeploymentBindsExactTargetMaterialsAndObservation(t *testing.T)
 		telemetryCalls.Load() != 1 {
 		t.Fatalf("wrong binding reached the node telemetry observation: %v", err)
 	}
+}
+
+func TestRealMTLSTerminalBindsClosedProofAndBridgesTTYFrames(t *testing.T) {
+	authority := newAuthority(t)
+	nodeURI, _ := nodev1.NodeURI(nodeIdentity)
+	controllerURI, _ := nodev1.ControllerURI(nodeIdentity.InstallationID, controllerID)
+	node := authority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false)
+	controller := authority.issue(t, controllerURI, x509.ExtKeyUsageClientAuth, false)
+	provider := newFakeNodeTerminal()
+	received := make(chan nodev1.TerminalOpenRequest, 1)
+	service := deploymentServiceFuncs{terminal: func(
+		_ context.Context,
+		request nodev1.TerminalOpenRequest,
+	) (TerminalSession, error) {
+		received <- request
+		return provider, nil
+	}}
+	handler, err := New(
+		sourceFunc(func(context.Context) (paasv1.ExecutionTargetObservation, error) {
+			return observedTarget(), nil
+		}),
+		service,
+		service,
+		Config{Identity: nodeIdentity, ControllerID: controllerID, BindingRef: "binding-a"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := startTLSServer(t, node, handler)
+	client := newClient(t, server.URL, controller.credentials, nodeIdentity, controllerID)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	sessionID := paasv1.ResourceID("terminal-session-0123456789abcdef0123456789abcdef")
+	request := nodev1.TerminalOpenRequest{
+		APIVersion: nodev1.APIVersion, Kind: nodev1.TerminalOpenRequestKind,
+		Identity: nodeIdentity, BindingRef: "binding-a", TerminalSessionID: sessionID,
+		Request: paasv1.ObserveDeploymentRuntimeRequest{
+			RequestID:    paasv1.CommandID(sessionID),
+			Scope:        paasv1.ResourceScope{Kind: paasv1.AuthorityTenant, TenantID: "tenant-a"},
+			DeploymentID: "deployment-a", Generation: 3,
+			ApplicationRevisionID: "application-revision-a", ExecutionTargetID: nodeIdentity.ExecutionTargetID,
+			ExpectedContentDigest: deploymentTestDigest('c'), Deadline: now.Add(5 * time.Second),
+		},
+		InstanceID: "instance-0123456789abcdef0123456789abcdef",
+		Size:       paasv1.TerminalSize{Columns: 120, Rows: 40}, ExpiresAt: now.Add(time.Minute),
+	}
+	if err := nodev1.ValidateTerminalOpenRequest(request); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	connection, err := client.OpenTerminal(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	if actual := <-received; actual != request {
+		t.Fatalf("node terminal proof = %#v", actual)
+	}
+	input := []byte("id\n")
+	if err := connection.SendInput(ctx, input); err != nil {
+		t.Fatal(err)
+	}
+	if actual := <-provider.inputs; !bytes.Equal(actual, input) {
+		t.Fatalf("provider input = %q", actual)
+	}
+	size := paasv1.TerminalSize{Columns: 132, Rows: 45}
+	if err := connection.Resize(ctx, size); err != nil {
+		t.Fatal(err)
+	}
+	if actual := <-provider.resizes; actual != size {
+		t.Fatalf("provider resize = %#v", actual)
+	}
+	provider.outputs <- []byte("uid=1000(matrix)\r\n")
+	output, control, err := connection.Receive(ctx)
+	if err != nil || control != nil || string(output) != "uid=1000(matrix)\r\n" {
+		t.Fatalf("node output = %q/%#v/%v", output, control, err)
+	}
+	close(provider.outputs)
+	output, control, err = connection.Receive(ctx)
+	if err != nil || len(output) != 0 || control == nil || control.Type != nodev1.TerminalServerExit ||
+		control.ExitCode == nil || *control.ExitCode != provider.exitCode {
+		t.Fatalf("node exit = %q/%#v/%v", output, control, err)
+	}
+}
+
+type fakeNodeTerminal struct {
+	outputs   chan []byte
+	inputs    chan []byte
+	resizes   chan paasv1.TerminalSize
+	exitCode  int32
+	closeOnce sync.Once
+	closed    chan struct{}
+}
+
+func newFakeNodeTerminal() *fakeNodeTerminal {
+	return &fakeNodeTerminal{
+		outputs: make(chan []byte, 2), inputs: make(chan []byte, 1),
+		resizes: make(chan paasv1.TerminalSize, 1), exitCode: 7, closed: make(chan struct{}),
+	}
+}
+
+func (terminal *fakeNodeTerminal) Read(content []byte) (int, error) {
+	value, open := <-terminal.outputs
+	if !open {
+		return 0, io.EOF
+	}
+	return copy(content, value), nil
+}
+
+func (terminal *fakeNodeTerminal) Write(content []byte) (int, error) {
+	terminal.inputs <- bytes.Clone(content)
+	return len(content), nil
+}
+
+func (terminal *fakeNodeTerminal) Resize(_ context.Context, size paasv1.TerminalSize) error {
+	terminal.resizes <- size
+	return nil
+}
+
+func (terminal *fakeNodeTerminal) ExitCode(context.Context) (int32, error) {
+	return terminal.exitCode, nil
+}
+
+func (terminal *fakeNodeTerminal) Close() error {
+	terminal.closeOnce.Do(func() { close(terminal.closed) })
+	return nil
 }
 
 func TestLostRemoteEffectResponseBecomesUnknownThenObservesSameTarget(t *testing.T) {
@@ -504,7 +649,7 @@ func TestAuthenticatedRequestsRejectInvalidInputBeforeReadingTheHost(t *testing.
 	handler, err := New(sourceFunc(func(context.Context) (paasv1.ExecutionTargetObservation, error) {
 		t.Fatal("plaintext request read the host")
 		return paasv1.ExecutionTargetObservation{}, nil
-	}), deploymentService{}, Config{Identity: nodeIdentity, ControllerID: controllerID, BindingRef: "binding-a"})
+	}), deploymentService{}, deploymentService{}, Config{Identity: nodeIdentity, ControllerID: controllerID, BindingRef: "binding-a"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -650,10 +795,7 @@ func TestNodeObservationFailsClosedWhenDeploymentRuntimeIsUnavailable(t *testing
 	node := authority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false)
 	controller := authority.issue(t, controllerURI, x509.ExtKeyUsageClientAuth, false)
 	var hostCalls atomic.Int32
-	handler, err := New(sourceFunc(func(context.Context) (paasv1.ExecutionTargetObservation, error) {
-		hostCalls.Add(1)
-		return observedTarget(), nil
-	}), deploymentServiceFuncs{
+	service := deploymentServiceFuncs{
 		ready: func(context.Context) error {
 			return errors.New("docker socket /private/path password=secret is unavailable")
 		},
@@ -663,7 +805,11 @@ func TestNodeObservationFailsClosedWhenDeploymentRuntimeIsUnavailable(t *testing
 		observe: func(context.Context, paasv1.ObserveDeploymentRequest) (paasv1.DeploymentObservation, error) {
 			return paasv1.DeploymentObservation{}, errors.New("unexpected Deployment observation")
 		},
-	}, Config{Identity: nodeIdentity, ControllerID: controllerID, BindingRef: "binding-a"})
+	}
+	handler, err := New(sourceFunc(func(context.Context) (paasv1.ExecutionTargetObservation, error) {
+		hostCalls.Add(1)
+		return observedTarget(), nil
+	}), service, service, Config{Identity: nodeIdentity, ControllerID: controllerID, BindingRef: "binding-a"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -857,7 +1003,7 @@ func TestRealMTLSReloadsCredentialsAndRetiresBothOldPeers(t *testing.T) {
 	handler, err := New(sourceFunc(func(context.Context) (paasv1.ExecutionTargetObservation, error) {
 		calls.Add(1)
 		return observedTarget(), nil
-	}), deploymentService{}, Config{Identity: nodeIdentity, ControllerID: controllerID, BindingRef: "binding-a"})
+	}), deploymentService{}, deploymentService{}, Config{Identity: nodeIdentity, ControllerID: controllerID, BindingRef: "binding-a"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1179,7 +1325,7 @@ func requestBody(t *testing.T, command paasv1.AdapterCommandEnvelope) []byte {
 
 func startNode(t *testing.T, node issuedCertificate, source ObservationSource, concurrent int) *httptest.Server {
 	t.Helper()
-	handler, err := New(source, deploymentService{}, Config{Identity: nodeIdentity, ControllerID: controllerID, BindingRef: "binding-a", MaximumConcurrent: concurrent})
+	handler, err := New(source, deploymentService{}, deploymentService{}, Config{Identity: nodeIdentity, ControllerID: controllerID, BindingRef: "binding-a", MaximumConcurrent: concurrent})
 	if err != nil {
 		t.Fatal(err)
 	}

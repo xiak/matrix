@@ -92,7 +92,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	handler, err := nethttp.New(sampler, deployments, nethttp.Config{
+	handler, err := nethttp.New(sampler, deployments, terminalAdapter{deployment: deployments}, nethttp.Config{
 		Identity: config.Identity, ControllerID: config.ControllerID, BindingRef: config.BindingRef,
 	})
 	if err != nil {

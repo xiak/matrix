@@ -33,10 +33,12 @@ type Config struct {
 
 type Client struct {
 	endpoint            string
+	terminalEndpoint    string
 	identity            nodev1.Identity
 	bindingRef          string
 	expectedFingerprint string
 	http                *http.Client
+	terminalHTTP        *http.Client
 }
 
 func New(config Config) (*Client, error) {
@@ -48,10 +50,21 @@ func New(config Config) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	terminalEndpoint, terminalConnection, err := newControllerConnection(
+		config,
+		0,
+		5*time.Second,
+	)
+	if err != nil {
+		connection.CloseIdleConnections()
+		return nil, err
+	}
 	return &Client{
-		endpoint: endpoint + nodev1.ObservationPath, identity: config.Identity,
-		bindingRef: config.BindingRef, expectedFingerprint: config.ExpectedFingerprint,
-		http: connection,
+		endpoint:         endpoint + nodev1.ObservationPath,
+		terminalEndpoint: terminalEndpoint + nodev1.DeploymentTerminalSessionPath,
+		identity:         config.Identity,
+		bindingRef:       config.BindingRef, expectedFingerprint: config.ExpectedFingerprint,
+		http: connection, terminalHTTP: terminalConnection,
 	}, nil
 }
 
@@ -186,7 +199,17 @@ func validEndpoint(value *url.URL) bool {
 	return err == nil && portErr == nil && host != "" && port > 0
 }
 
-func (client *Client) Close() { client.http.CloseIdleConnections() }
+func (client *Client) Close() {
+	if client == nil {
+		return
+	}
+	if client.http != nil {
+		client.http.CloseIdleConnections()
+	}
+	if client.terminalHTTP != nil {
+		client.terminalHTTP.CloseIdleConnections()
+	}
+}
 
 func (client *Client) Capabilities(ctx context.Context) (paasv1.AdapterCapabilitiesContract, error) {
 	if err := ctx.Err(); err != nil {

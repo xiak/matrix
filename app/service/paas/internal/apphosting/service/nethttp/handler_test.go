@@ -8,13 +8,17 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
+	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/executionadmission"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/terminalsession"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/verifyinstallation"
 )
 
@@ -24,7 +28,7 @@ func TestHandlerReadinessIsOperationalAndSanitized(t *testing.T) {
 		APIVersion: paasv1.APIVersion, Kind: "Readiness", State: paasv1.ReadinessReady,
 		SchemaVersion: 1, CheckedAt: time.Date(2026, 8, 26, 3, 4, 5, 678_000, time.UTC),
 	}
-	handler, err := NewHandler(&fakeAuthorizer{}, &fakeWorkflow{}, &fakeExecutionWorkflow{}, &fakeInstallationVerifier{}, Config{
+	handler, err := NewHandler(&fakeAuthorizer{}, &fakeWorkflow{}, &fakeExecutionWorkflow{}, &fakeTerminalWorkflow{}, &fakeTerminalConnector{}, &fakeInstallationVerifier{}, Config{
 		Readiness: func(context.Context) (paasv1.Readiness, error) {
 			return readiness, readyErr
 		},
@@ -53,7 +57,7 @@ func TestHandlerReadinessIsOperationalAndSanitized(t *testing.T) {
 func TestExecutionAdmissionAuthorizesTheActualResourceAndInstallation(t *testing.T) {
 	authorization := port.Authorization{InstallationID: "installation-a", Subject: paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "platform-user"}, DecisionID: "decision-platform", RequestID: "request-test"}
 	authorizer, workflow := &fakeAuthorizer{result: &authorization}, &fakeExecutionWorkflow{}
-	handler, err := NewHandler(authorizer, &fakeWorkflow{}, workflow, &fakeInstallationVerifier{}, Config{
+	handler, err := NewHandler(authorizer, &fakeWorkflow{}, workflow, &fakeTerminalWorkflow{}, &fakeTerminalConnector{}, &fakeInstallationVerifier{}, Config{
 		NewRequestID: func() (string, error) { return "request-test", nil }, Readiness: func(context.Context) (paasv1.Readiness, error) { return paasv1.Readiness{}, nil },
 	})
 	if err != nil {
@@ -114,7 +118,7 @@ func TestExecutionTargetInventoryIsPlatformAuthorizedAndSelectorFree(t *testing.
 		Kind:       "ExecutionTargetList",
 		Items:      []paasv1.ExecutionTarget{},
 	}}
-	handler, err := NewHandler(authorizer, &fakeWorkflow{}, workflow, &fakeInstallationVerifier{}, Config{
+	handler, err := NewHandler(authorizer, &fakeWorkflow{}, workflow, &fakeTerminalWorkflow{}, &fakeTerminalConnector{}, &fakeInstallationVerifier{}, Config{
 		NewRequestID: func() (string, error) { return "request-test", nil },
 		Readiness:    func(context.Context) (paasv1.Readiness, error) { return paasv1.Readiness{}, nil },
 	})
@@ -523,6 +527,417 @@ func TestHandlerReadsDeploymentRuntimeThroughExactDeploymentAuthorization(t *tes
 	}
 }
 
+func TestTerminalSessionCreationUsesOnlyDigestAndStrictHostCookie(t *testing.T) {
+	authorization := port.Authorization{
+		TenantID:   "tenant-authorized",
+		Subject:    paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "user-authorized"},
+		DecisionID: "decision-terminal", RequestID: "request-test",
+	}
+	authorizer := &fakeAuthorizer{result: &authorization}
+	terminal := &fakeTerminalWorkflow{}
+	now := time.Date(2026, 8, 31, 9, 10, 11, 123_456_000, time.UTC)
+	stored := terminalHTTPStored(authorization, now)
+	terminal.createResult = terminalsession.CreateResult{Stored: stored}
+	rawTicket, ticketDigest, err := newTerminalTicket()
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := NewHandler(
+		authorizer,
+		&fakeWorkflow{},
+		&fakeExecutionWorkflow{},
+		terminal,
+		&fakeTerminalConnector{},
+		&fakeInstallationVerifier{},
+		Config{
+			TerminalPublicBasePath: "/api/paas/v1",
+			NewRequestID:           func() (string, error) { return "request-test", nil },
+			NewTerminalTicket: func() (string, string, error) {
+				return rawTicket, ticketDigest, nil
+			},
+			Readiness: func(context.Context) (paasv1.Readiness, error) {
+				return paasv1.Readiness{}, nil
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := jsonRequest(
+		t,
+		http.MethodPost,
+		"/v1/deployments/deployment-terminal/terminal-sessions",
+		paasv1.CreateTerminalSessionRequest{
+			InstanceID: stored.Session.InstanceID,
+			Size:       stored.Session.Size,
+		},
+	)
+	request.Header.Set("Authorization", "Bearer user-session")
+	request.Header.Set("Idempotency-Key", "terminal-key")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated || terminal.createCalls != 1 ||
+		authorizer.request.Action != port.AuthorizeTerminalSessionCreate ||
+		authorizer.request.Resource != (paasv1.ResourceRef{Kind: "TerminalSession", ID: "collection"}) ||
+		terminal.createCommand.Authorization != authorization ||
+		terminal.createCommand.DeploymentID != "deployment-terminal" ||
+		terminal.createCommand.TicketDigest != ticketDigest ||
+		terminal.createCommand.IdempotencyKey != "terminal-key" ||
+		strings.Contains(response.Body.String(), rawTicket) ||
+		response.Header().Get("Location") != "/api/paas/v1/terminal-sessions/"+string(stored.Session.ID) {
+		t.Fatalf("terminal create status=%d body=%s command=%#v authorization=%#v", response.Code, response.Body.String(), terminal.createCommand, authorizer.request)
+	}
+	cookies := response.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Name != terminalTicketCookie ||
+		cookies[0].Value != rawTicket || !cookies[0].HttpOnly || cookies[0].Secure ||
+		cookies[0].SameSite != http.SameSiteStrictMode ||
+		cookies[0].Path != "/api/paas/v1/terminal-sessions/"+string(stored.Session.ID)+"/connect" ||
+		cookies[0].Expires.Unix() != stored.Session.ConnectBefore.Unix() {
+		t.Fatalf("terminal cookie=%#v header=%q", cookies[0], response.Header().Get("Set-Cookie"))
+	}
+
+	request = jsonRequest(
+		t,
+		http.MethodPost,
+		"/v1/deployments/deployment-terminal/terminal-sessions",
+		paasv1.CreateTerminalSessionRequest{InstanceID: stored.Session.InstanceID, Size: stored.Session.Size},
+	)
+	request.Header.Set("Authorization", "Bearer user-session")
+	request.Header.Add("Idempotency-Key", "one")
+	request.Header.Add("Idempotency-Key", "two")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || terminal.createCalls != 1 {
+		t.Fatalf("duplicate idempotency reached terminal workflow: %d %s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodDelete, "/v1/terminal-sessions/"+string(stored.Session.ID), nil)
+	request.Header.Set("Authorization", "Bearer user-session")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent || terminal.closeCalls != 1 ||
+		terminal.closeCommand.Authorization != authorization ||
+		terminal.closeCommand.SessionID != stored.Session.ID ||
+		authorizer.request.Action != port.AuthorizeTerminalSessionClose ||
+		authorizer.request.Resource != (paasv1.ResourceRef{Kind: "TerminalSession", ID: stored.Session.ID}) {
+		t.Fatalf("terminal close status=%d command=%#v authorization=%#v", response.Code, terminal.closeCommand, authorizer.request)
+	}
+}
+
+func TestTerminalConnectionConsumesCookieBridgesClosedFramesAndEndsDurably(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	authorization := port.Authorization{
+		TenantID:   "tenant-authorized",
+		Subject:    paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "user-authorized"},
+		DecisionID: "decision-terminal", RequestID: "request-terminal",
+	}
+	pending := terminalHTTPStored(authorization, now)
+	connecting := pending
+	connecting.Session.State = paasv1.TerminalSessionConnecting
+	active := connecting
+	active.Session.State = paasv1.TerminalSessionActive
+	connectedAt := now.Add(time.Second)
+	active.Session.ConnectedAt = &connectedAt
+	rawTicket, digest, err := newTerminalTicket()
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := &connectTerminalWorkflow{
+		connecting: connecting, active: active, expectedDigest: digest,
+		ended: make(chan paasv1.TerminalSessionOutcome, 1),
+	}
+	nodeConnection := newFakeNorthboundTerminalConnection()
+	opened := make(chan nodev1.TerminalOpenRequest, 1)
+	connector := &fakeTerminalConnector{open: func(
+		_ context.Context,
+		bindingRef string,
+		request nodev1.TerminalOpenRequest,
+	) (port.TerminalConnection, error) {
+		if bindingRef != connecting.Binding.BindingRef {
+			return nil, errors.New("wrong binding route")
+		}
+		opened <- request
+		return nodeConnection, nil
+	}}
+	handler, err := NewHandler(
+		&fakeAuthorizer{}, &fakeWorkflow{}, &fakeExecutionWorkflow{}, workflow,
+		connector, &fakeInstallationVerifier{}, Config{
+			NewRequestID: func() (string, error) { return "request-terminal-connect", nil },
+			Readiness: func(context.Context) (paasv1.Readiness, error) {
+				return paasv1.Readiness{}, nil
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	path := "/v1/terminal-sessions/" + string(connecting.Session.ID) + "/connect"
+	connection, response, err := websocket.Dial(
+		ctx,
+		"ws"+strings.TrimPrefix(server.URL, "http")+path,
+		&websocket.DialOptions{
+			Subprotocols: []string{nodev1.TerminalSubprotocol},
+			HTTPHeader: http.Header{
+				"Origin": []string{server.URL},
+				"Cookie": []string{terminalTicketCookie + "=" + rawTicket},
+			},
+		},
+	)
+	if err != nil {
+		if response != nil {
+			t.Fatalf("connect terminal status=%d error=%v", response.StatusCode, err)
+		}
+		t.Fatal(err)
+	}
+	defer connection.CloseNow()
+	if connection.Subprotocol() != nodev1.TerminalSubprotocol {
+		t.Fatal("terminal subprotocol was not negotiated")
+	}
+	request := <-opened
+	if request.Identity != (nodev1.Identity{}) || request.BindingRef != connecting.Binding.BindingRef ||
+		request.TerminalSessionID != connecting.Session.ID ||
+		request.Request.ExecutionTargetID != connecting.Binding.ExecutionTargetID ||
+		request.Request.ExpectedContentDigest != connecting.Binding.ContentDigest ||
+		request.InstanceID != connecting.Binding.InstanceID || request.Size != connecting.Session.Size ||
+		request.ExpiresAt != connecting.Session.ExpiresAt {
+		t.Fatalf("node terminal request = %#v", request)
+	}
+	kind, content, err := connection.Read(ctx)
+	if err != nil || kind != websocket.MessageText {
+		t.Fatalf("read ready = %v/%v/%q", kind, err, content)
+	}
+	ready, err := nodev1.DecodeTerminalServerControl(bytes.NewReader(content))
+	if err != nil || ready.Type != nodev1.TerminalServerReady {
+		t.Fatalf("ready control = %#v/%v", ready, err)
+	}
+	input := []byte("whoami\n")
+	if err := connection.Write(ctx, websocket.MessageBinary, input); err != nil {
+		t.Fatal(err)
+	}
+	if received := <-nodeConnection.inputs; !bytes.Equal(received, input) {
+		t.Fatalf("node input = %q", received)
+	}
+	resize := nodev1.TerminalClientControl{
+		Type: nodev1.TerminalClientResize,
+		Size: &paasv1.TerminalSize{Columns: 132, Rows: 44},
+	}
+	resizeDocument, _ := json.Marshal(resize)
+	if err := connection.Write(ctx, websocket.MessageText, resizeDocument); err != nil {
+		t.Fatal(err)
+	}
+	if received := <-nodeConnection.resizes; received != *resize.Size {
+		t.Fatalf("node resize = %#v", received)
+	}
+	nodeConnection.events <- fakeNodeTerminalEvent{output: []byte("matrix\r\n")}
+	kind, content, err = connection.Read(ctx)
+	if err != nil || kind != websocket.MessageBinary || string(content) != "matrix\r\n" {
+		t.Fatalf("terminal output = %v/%v/%q", kind, err, content)
+	}
+	exitCode := int32(0)
+	nodeConnection.events <- fakeNodeTerminalEvent{control: &nodev1.TerminalServerControl{
+		Type: nodev1.TerminalServerExit, ExitCode: &exitCode,
+	}}
+	kind, content, err = connection.Read(ctx)
+	if err != nil || kind != websocket.MessageText {
+		t.Fatalf("terminal exit = %v/%v/%q", kind, err, content)
+	}
+	exit, err := nodev1.DecodeTerminalServerControl(bytes.NewReader(content))
+	if err != nil || exit.Type != nodev1.TerminalServerExit || exit.ExitCode == nil || *exit.ExitCode != 0 {
+		t.Fatalf("exit control = %#v/%v", exit, err)
+	}
+	select {
+	case outcome := <-workflow.ended:
+		if outcome != paasv1.TerminalSessionCompleted {
+			t.Fatalf("terminal outcome = %s", outcome)
+		}
+	case <-ctx.Done():
+		t.Fatal("terminal lifecycle did not end")
+	}
+	select {
+	case <-nodeConnection.closed:
+	case <-ctx.Done():
+		t.Fatal("node terminal was not closed")
+	}
+}
+
+func TestTerminalConnectionRejectsAmbientAuthorityBeforeTicketConsumption(t *testing.T) {
+	handler, err := NewHandler(
+		&fakeAuthorizer{}, &fakeWorkflow{}, &fakeExecutionWorkflow{}, &fakeTerminalWorkflow{},
+		&fakeTerminalConnector{}, &fakeInstallationVerifier{}, Config{
+			NewRequestID: func() (string, error) { return "request-terminal-negative", nil },
+			Readiness:    func(context.Context) (paasv1.Readiness, error) { return paasv1.Readiness{}, nil },
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawTicket, _, _ := newTerminalTicket()
+	path := "/v1/terminal-sessions/terminal-session-0123456789abcdef0123456789abcdef/connect"
+	for name, mutate := range map[string]func(*http.Request){
+		"cross origin":     func(request *http.Request) { request.Header.Set("Origin", "https://attacker.invalid") },
+		"authorization":    func(request *http.Request) { request.Header.Set("Authorization", "Bearer ambient") },
+		"duplicate cookie": func(request *http.Request) { request.Header.Add("Cookie", terminalTicketCookie+"="+rawTicket) },
+		"duplicate protocol": func(request *http.Request) {
+			request.Header.Set("Sec-WebSocket-Protocol", nodev1.TerminalSubprotocol+", other")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "http://matrix.example"+path, nil)
+			request.Host = "matrix.example"
+			request.Header.Set("Origin", "http://matrix.example")
+			request.Header.Set("Connection", "Upgrade")
+			request.Header.Set("Upgrade", "websocket")
+			request.Header.Set("Sec-WebSocket-Version", "13")
+			request.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+			request.Header.Set("Sec-WebSocket-Protocol", nodev1.TerminalSubprotocol)
+			request.Header.Set("Cookie", terminalTicketCookie+"="+rawTicket)
+			mutate(request)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusBadRequest && response.Code != http.StatusUnauthorized {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+type connectTerminalWorkflow struct {
+	connecting     terminalsession.StoredSession
+	active         terminalsession.StoredSession
+	expectedDigest string
+	ended          chan paasv1.TerminalSessionOutcome
+}
+
+func (*connectTerminalWorkflow) Create(
+	context.Context,
+	terminalsession.CreateCommand,
+) (terminalsession.CreateResult, error) {
+	return terminalsession.CreateResult{}, errors.New("unexpected create")
+}
+
+func (workflow *connectTerminalWorkflow) Consume(
+	_ context.Context,
+	id paasv1.ResourceID,
+	digest string,
+) (terminalsession.StoredSession, error) {
+	if id != workflow.connecting.Session.ID || digest != workflow.expectedDigest {
+		return terminalsession.StoredSession{}, errors.New("ticket authority changed")
+	}
+	return workflow.connecting, nil
+}
+
+func (workflow *connectTerminalWorkflow) Activate(
+	_ context.Context,
+	stored terminalsession.StoredSession,
+) (terminalsession.StoredSession, error) {
+	if stored.Session.ID != workflow.connecting.Session.ID {
+		return terminalsession.StoredSession{}, errors.New("activation authority changed")
+	}
+	return workflow.active, nil
+}
+
+func (workflow *connectTerminalWorkflow) End(
+	_ context.Context,
+	tenantID paasv1.TenantID,
+	id paasv1.ResourceID,
+	outcome paasv1.TerminalSessionOutcome,
+) (terminalsession.StoredSession, bool, error) {
+	if tenantID != workflow.active.Session.Scope.TenantID || id != workflow.active.Session.ID {
+		return terminalsession.StoredSession{}, false, errors.New("end authority changed")
+	}
+	workflow.ended <- outcome
+	return workflow.active, true, nil
+}
+
+func (*connectTerminalWorkflow) Close(
+	context.Context,
+	terminalsession.CloseCommand,
+) (terminalsession.StoredSession, bool, error) {
+	return terminalsession.StoredSession{}, false, errors.New("unexpected close")
+}
+
+type fakeNodeTerminalEvent struct {
+	output  []byte
+	control *nodev1.TerminalServerControl
+	err     error
+}
+
+type fakeNorthboundTerminalConnection struct {
+	events    chan fakeNodeTerminalEvent
+	inputs    chan []byte
+	resizes   chan paasv1.TerminalSize
+	closeOnce sync.Once
+	closed    chan struct{}
+}
+
+func newFakeNorthboundTerminalConnection() *fakeNorthboundTerminalConnection {
+	return &fakeNorthboundTerminalConnection{
+		events: make(chan fakeNodeTerminalEvent, 4), inputs: make(chan []byte, 1),
+		resizes: make(chan paasv1.TerminalSize, 1), closed: make(chan struct{}),
+	}
+}
+
+func (connection *fakeNorthboundTerminalConnection) Receive(
+	ctx context.Context,
+) ([]byte, *nodev1.TerminalServerControl, error) {
+	select {
+	case event := <-connection.events:
+		return bytes.Clone(event.output), event.control, event.err
+	case <-ctx.Done():
+		return nil, nil, ctx.Err()
+	}
+}
+
+func (connection *fakeNorthboundTerminalConnection) SendInput(_ context.Context, content []byte) error {
+	connection.inputs <- bytes.Clone(content)
+	return nil
+}
+
+func (connection *fakeNorthboundTerminalConnection) Resize(_ context.Context, size paasv1.TerminalSize) error {
+	connection.resizes <- size
+	return nil
+}
+
+func (*fakeNorthboundTerminalConnection) CloseInput(context.Context) error { return nil }
+
+func (connection *fakeNorthboundTerminalConnection) Close() {
+	connection.closeOnce.Do(func() { close(connection.closed) })
+}
+
+func terminalHTTPStored(authorization port.Authorization, now time.Time) terminalsession.StoredSession {
+	session := paasv1.TerminalSession{
+		APIVersion: paasv1.APIVersion, Kind: "TerminalSession",
+		ID:           "terminal-session-0123456789abcdef0123456789abcdef",
+		Scope:        paasv1.ResourceScope{Kind: paasv1.AuthorityTenant, TenantID: authorization.TenantID},
+		DeploymentID: "deployment-terminal", Generation: 3,
+		ApplicationRevisionID: "application-revision-terminal",
+		InstanceID:            "instance-0123456789abcdef0123456789abcdef",
+		Size:                  paasv1.TerminalSize{Columns: 120, Rows: 40},
+		State:                 paasv1.TerminalSessionPending, CreatedAt: now,
+		ConnectBefore: now.Add(paasv1.TerminalSessionConnectTimeout),
+		ExpiresAt:     now.Add(paasv1.MaximumTerminalSessionDuration),
+	}
+	return terminalsession.StoredSession{
+		Session: session,
+		Binding: terminalsession.RuntimeBinding{
+			DeploymentID: session.DeploymentID, Generation: session.Generation,
+			ApplicationRevisionID: session.ApplicationRevisionID,
+			ContentDigest:         "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+			ExecutionTargetID:     "execution-target-terminal",
+			PlacementDecisionID:   "placement-decision-terminal",
+			BindingRef:            "node-binding-terminal", InstanceID: session.InstanceID,
+		},
+		Subject: authorization.Subject, IAMDecisionID: authorization.DecisionID,
+		RequestID:              authorization.RequestID,
+		IdempotencyFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		RequestDigest:          "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	}
+}
+
 type fakeAuthorizer struct {
 	request port.AuthorizationRequest
 	err     error
@@ -569,6 +984,75 @@ type fakeInstallationVerifier struct {
 	command verifyinstallation.Command
 	result  paasv1.InstallationVerification
 	err     error
+}
+
+type fakeTerminalWorkflow struct {
+	createCalls   int
+	createCommand terminalsession.CreateCommand
+	createResult  terminalsession.CreateResult
+	createErr     error
+	closeCalls    int
+	closeCommand  terminalsession.CloseCommand
+	closeResult   terminalsession.StoredSession
+	closeChanged  bool
+	closeErr      error
+}
+
+type fakeTerminalConnector struct {
+	open func(context.Context, string, nodev1.TerminalOpenRequest) (port.TerminalConnection, error)
+}
+
+func (connector *fakeTerminalConnector) OpenTerminal(
+	ctx context.Context,
+	bindingRef string,
+	request nodev1.TerminalOpenRequest,
+) (port.TerminalConnection, error) {
+	if connector.open != nil {
+		return connector.open(ctx, bindingRef, request)
+	}
+	return nil, errors.New("unexpected terminal connection")
+}
+
+func (workflow *fakeTerminalWorkflow) Create(
+	_ context.Context,
+	command terminalsession.CreateCommand,
+) (terminalsession.CreateResult, error) {
+	workflow.createCalls++
+	workflow.createCommand = command
+	return workflow.createResult, workflow.createErr
+}
+
+func (*fakeTerminalWorkflow) Consume(
+	context.Context,
+	paasv1.ResourceID,
+	string,
+) (terminalsession.StoredSession, error) {
+	return terminalsession.StoredSession{}, errors.New("unexpected terminal Consume")
+}
+
+func (*fakeTerminalWorkflow) Activate(
+	context.Context,
+	terminalsession.StoredSession,
+) (terminalsession.StoredSession, error) {
+	return terminalsession.StoredSession{}, errors.New("unexpected terminal Activate")
+}
+
+func (*fakeTerminalWorkflow) End(
+	context.Context,
+	paasv1.TenantID,
+	paasv1.ResourceID,
+	paasv1.TerminalSessionOutcome,
+) (terminalsession.StoredSession, bool, error) {
+	return terminalsession.StoredSession{}, false, errors.New("unexpected terminal End")
+}
+
+func (workflow *fakeTerminalWorkflow) Close(
+	_ context.Context,
+	command terminalsession.CloseCommand,
+) (terminalsession.StoredSession, bool, error) {
+	workflow.closeCalls++
+	workflow.closeCommand = command
+	return workflow.closeResult, workflow.closeChanged, workflow.closeErr
 }
 
 func (value *fakeInstallationVerifier) VerifyInstallation(
@@ -708,7 +1192,7 @@ func mustHandlerWithVerifier(
 	verifier InstallationVerifier,
 ) http.Handler {
 	t.Helper()
-	handler, err := NewHandler(authorizer, workflow, &fakeExecutionWorkflow{}, verifier, Config{
+	handler, err := NewHandler(authorizer, workflow, &fakeExecutionWorkflow{}, &fakeTerminalWorkflow{}, &fakeTerminalConnector{}, verifier, Config{
 		NewRequestID: func() (string, error) { return "request-test", nil },
 		Readiness: func(context.Context) (paasv1.Readiness, error) {
 			return paasv1.Readiness{

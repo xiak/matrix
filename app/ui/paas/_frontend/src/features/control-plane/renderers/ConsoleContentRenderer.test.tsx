@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { idleTerminalConsoleState } from "../application/ControlPlaneProvider";
 import type { ConsoleContentScene } from "../scenes/consoleScene";
 import { ConsoleContentRenderer } from "./ConsoleContentRenderer";
 
@@ -57,6 +58,7 @@ const scene: Extract<ConsoleContentScene, { kind: "deployments" }> = {
       healthLabel: "健康",
       status: "success",
       exitCode: "—",
+      terminalAvailable: true,
       resources: {
         cpu: { state: "AVAILABLE", stateLabel: "有效", status: "success", value: "0.25 核 / 上限 500m", detail: "1 秒采样窗口" },
         memory: { state: "AVAILABLE", stateLabel: "有效", status: "success", value: "256 MiB / 512 MiB", detail: "已使用 50%" },
@@ -71,15 +73,29 @@ const scene: Extract<ConsoleContentScene, { kind: "deployments" }> = {
 afterEach(cleanup);
 
 describe("ConsoleContentRenderer deployment inventory", () => {
-  it("selects by opaque Deployment identity and keeps terminal entry explicitly unavailable", () => {
+  it("selects by opaque Deployment identity and opens only the opaque running instance", () => {
     const select = vi.fn();
-    const screen = render(<ConsoleContentRenderer onSelectDeployment={select} scene={scene} />);
+    const openTerminal = vi.fn().mockResolvedValue(true);
+    const screen = render(
+      <ConsoleContentRenderer
+        closeTerminal={vi.fn().mockResolvedValue(undefined)}
+        connectTerminal={() => null}
+        onOpenTerminal={openTerminal}
+        onSelectDeployment={select}
+        scene={scene}
+        terminal={idleTerminalConsoleState}
+      />
+    );
 
     expect(screen.getByText("instance-0123456789abcdef0123456789abcdef")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /database-beta/ }));
     expect(select).toHaveBeenCalledWith("deployment-beta");
-    expect(screen.getByRole("button", { name: /暂不可用/ }).hasAttribute("disabled")).toBe(true);
-    expect(screen.container.textContent).toContain("受审计、限时、按部署授权");
+    fireEvent.click(screen.getByRole("button", { name: /database instance-.*打开终端/ }));
+    expect(openTerminal).toHaveBeenCalledWith(
+      "deployment-alpha",
+      "instance-0123456789abcdef0123456789abcdef",
+      { columns: 120, rows: 32 }
+    );
     expect(screen.getByLabelText("database 资源使用")).toBeTruthy();
     expect(screen.container.textContent).toContain("0.25 核 / 上限 500m");
     expect(screen.container.textContent).toContain("资源采样有效");

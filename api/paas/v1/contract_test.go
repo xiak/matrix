@@ -38,6 +38,9 @@ func TestOpenAPIContractDefinesApplicationPaaSV1(t *testing.T) {
 		"DeploymentResourceSnapshot",
 		"DeploymentRuntimeValue",
 		"DeploymentRuntimeSnapshot",
+		"TerminalSize",
+		"CreateTerminalSessionRequest",
+		"TerminalSession",
 		"CreateDeploymentRequest",
 		"RollbackDeploymentRequest",
 		"DeploymentGeneration",
@@ -139,6 +142,10 @@ func TestOpenAPINorthboundSurfaceUsesMatrixIAM(t *testing.T) {
 	if matrixIAM["type"] != "http" || matrixIAM["scheme"] != "bearer" {
 		t.Fatalf("MatrixIAM = %#v, want HTTP bearer", matrixIAM)
 	}
+	terminalTicket := object(t, schemes["MatrixTerminalTicket"], "MatrixTerminalTicket")
+	if terminalTicket["type"] != "apiKey" || terminalTicket["in"] != "cookie" || terminalTicket["name"] != "matrix_terminal_ticket" {
+		t.Fatalf("MatrixTerminalTicket = %#v, want exact cookie ticket", terminalTicket)
+	}
 
 	want := map[string][]string{
 		"/v1/execution-pools":                                     {"post"},
@@ -160,6 +167,9 @@ func TestOpenAPINorthboundSurfaceUsesMatrixIAM(t *testing.T) {
 		"/v1/deployments/{deploymentId}/rollback":                 {"post"},
 		"/v1/deployments/{deploymentId}/generations/{generation}": {"get"},
 		"/v1/deployments/{deploymentId}/runtime":                  {"get"},
+		"/v1/deployments/{deploymentId}/terminal-sessions":        {"post"},
+		"/v1/terminal-sessions/{terminalSessionId}":               {"delete"},
+		"/v1/terminal-sessions/{terminalSessionId}/connect":       {"get"},
 		"/v1/operations/{operationId}":                            {"get"},
 		"/v1/installation:verify":                                 {"post"},
 	}
@@ -193,6 +203,20 @@ func TestOpenAPINorthboundSurfaceUsesMatrixIAM(t *testing.T) {
 				verificationRequirement := object(t, verificationSecurity[0], "installation verifier security")
 				if len(verificationRequirement) != 1 || verificationRequirement["MatrixInstallationVerifier"] == nil {
 					t.Errorf("%s %s must require only MatrixInstallationVerifier", method, path)
+				}
+			} else if path == "/v1/terminal-sessions/{terminalSessionId}/connect" {
+				if !overridesSecurity {
+					t.Errorf("%s %s must override bearer security", method, path)
+					continue
+				}
+				connectionSecurity := securityOverride.([]any)
+				if len(connectionSecurity) != 1 {
+					t.Errorf("%s %s security = %#v", method, path, connectionSecurity)
+					continue
+				}
+				connectionRequirement := object(t, connectionSecurity[0], "terminal ticket security")
+				if len(connectionRequirement) != 1 || connectionRequirement["MatrixTerminalTicket"] == nil {
+					t.Errorf("%s %s must require only MatrixTerminalTicket", method, path)
 				}
 			} else if overridesSecurity {
 				t.Errorf("%s %s must inherit MatrixIAM", method, path)

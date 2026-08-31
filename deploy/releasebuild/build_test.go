@@ -125,6 +125,8 @@ func (fake *fakeEffects) InspectImage(_ context.Context, reference string) (Imag
 			id = testDigest("wrong-apisix")
 		}
 		return ImageMetadata{ID: id, OS: "linux", Architecture: "amd64"}, nil
+	case AlpineBaseReference:
+		return ImageMetadata{ID: AlpineBaseImageID, OS: "linux", Architecture: "amd64"}, nil
 	case DockerBaseReference:
 		return ImageMetadata{ID: DockerBaseImageID, OS: "linux", Architecture: "amd64"}, nil
 	case PostgresReference:
@@ -159,6 +161,15 @@ func (fake *fakeEffects) SaveImage(_ context.Context, imageID, output string) (I
 
 func (fake *fakeEffects) VerifyPaaSCLI(_ context.Context, imageID string) error {
 	if imageID != fake.paasImageID {
+		return os.ErrInvalid
+	}
+	return nil
+}
+
+func (fake *fakeEffects) VerifyWorkloadShell(_ context.Context, imageID string) error {
+	// The fake image identity is deterministic; accept only the exact
+	// verification component rather than any release image.
+	if imageID != testDigest("image:verification") {
 		return os.ErrInvalid
 	}
 	return nil
@@ -216,6 +227,9 @@ func TestAssembleProducesAuthenticatedCompleteRelease(t *testing.T) {
 		if strings.Contains(dockerfile, "RUN ") || strings.Contains(dockerfile, "http://") ||
 			strings.Contains(dockerfile, "https://") || !strings.Contains(dockerfile, "COPY --chmod=0555") {
 			t.Fatalf("image %s escaped the fixed offline recipe", component)
+		}
+		if component == "verification" && !strings.HasPrefix(dockerfile, "FROM "+AlpineBaseReference+"\n") {
+			t.Fatal("verification workload lost its fixed shell-bearing base")
 		}
 	}
 	for _, image := range verified.Manifest.Images {

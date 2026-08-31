@@ -35,6 +35,8 @@ const (
 	AuthorizeExecutionTargetRegister     = "paas.execution-target.register"
 	AuthorizeExecutionTargetRead         = "paas.execution-target.read"
 	AuthorizePlatformOperationRead       = "paas.platform-operation.read"
+	AuthorizeTerminalSessionCreate       = "paas.terminal-session.create"
+	AuthorizeTerminalSessionClose        = "paas.terminal-session.close"
 )
 
 // AuthorizationRequest carries transient credential material to the IAM
@@ -166,6 +168,8 @@ func knownAuthorizationAction(value string) bool {
 		AuthorizeExecutionTargetRegister,
 		AuthorizeExecutionTargetRead,
 		AuthorizePlatformOperationRead,
+		AuthorizeTerminalSessionCreate,
+		AuthorizeTerminalSessionClose,
 	} {
 		if value == candidate {
 			return true

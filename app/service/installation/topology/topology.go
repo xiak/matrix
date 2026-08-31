@@ -347,6 +347,8 @@ func compileServices(
 		"MATRIX_PAAS_VERIFICATION_ARTIFACT_DIGEST": verificationArtifactDigest(manifest),
 		"MATRIX_PAAS_LISTEN_ADDRESS":               "0.0.0.0:8080",
 		"MATRIX_PAAS_NODE_CONNECTIONS_FILE":        "/run/matrix/node-controller/configuration.json",
+		"MATRIX_PAAS_PUBLIC_BASE_PATH":             "/api/paas/v1",
+		"MATRIX_PAAS_TERMINAL_COOKIE_SECURE":       "false",
 	}
 	paasAPI.Volumes = []mount{
 		bind(paasAPIDSN, "/run/matrix/paas-api-dsn", true),

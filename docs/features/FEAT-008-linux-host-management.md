@@ -233,6 +233,41 @@ addresses/container IDs or expose node credentials/Docker sockets to browsers.
 A separate IAM action admits a short-lived, single-use session bound to user
 and instance; the node verifies workload ownership again.
 
+The first terminal slice uses
+`POST /v1/deployments/{deploymentId}/terminal-sessions` with a required
+`Idempotency-Key` and the closed body `instanceId` and
+`size { columns, rows }`. The
+only authority is tenant action `paas.terminal-session.create` on the
+`TERMINAL_SESSION` collection; `ORGANIZATION_ADMIN` and `PAAS_DEVELOPER` own it
+and `PAAS_VIEWER` does not. The PaaS transaction resolves the opaque instance
+against the persisted current runtime proof and binds the durable session to
+the exact tenant, user and IAM decision, Deployment, generation, application
+revision, content digest and execution target. An equal unconsumed replay may
+rotate only its one-time ticket; a consumed, expired or changed replay cannot
+create another connection. Creating a replacement terminates the prior live
+session for that user and instance before the new one can become active.
+
+The northbound connection is same-origin WebSocket
+`/v1/terminal-sessions/{terminalSessionId}/connect` with subprotocol
+`matrix.terminal.v1`. The 256-bit ticket is delivered only as a short-lived,
+HttpOnly, `SameSite=Strict` cookie, is stored only as a digest and is consumed
+atomically at the upgrade. TLS deployments additionally require the `Secure`
+host cookie form. The browser never receives a node endpoint or provider ID.
+Cross-origin, missing/duplicate cookie, already-consumed ticket and silent
+reconnect are rejected. The exact APISIX route enables WebSocket forwarding
+without turning the other PaaS routes into upgrade endpoints.
+
+Browser binary frames are bounded stdin and server binary frames are TTY
+output. Closed text control frames cover only resize and close from the client,
+and ready, exit or sanitized error from the server. Each frame is at most 64
+KiB; the ticket lasts 30 seconds, idle sessions last at most two minutes and
+absolute sessions at most 15 minutes. One PaaS connection registry provides
+replacement/revocation for the Phase 1 modular-monolith topology; the durable
+session state remains the future distributed cancellation boundary. A separate
+authorized close route revokes the caller's exact session. Backpressure,
+deadline, disconnect and process cancellation always close both WebSockets and
+the provider stream.
+
 Support bounded bidirectional I/O and resize with origin checks, idle/absolute
 expiry, concurrency/backpressure, revocation and disconnect cleanup.
 Replacement ends the old session; reconnect cannot silently switch generation
@@ -240,11 +275,40 @@ or replica. Use the container's configured user without privileged execution,
 added mounts, host namespaces or environment injection. No-shell images report
 unsupported; no unapproved debug image is injected.
 
+The release-owned verification workload is the closed signed success fixture:
+its builder pins the official Alpine `3.24.1` amd64 image identity, verifies
+`/bin/sh` under network-none, read-only, capability-dropped, non-root execution
+and then signs the resulting workload image. It is selected through the normal
+ApplicationRevision artifact contract and is never injected into another
+workload. Distroless customer images therefore continue to fail closed as
+unsupported instead of silently gaining a debug container.
+
+The node connection carries a closed first-frame request over the existing mTLS
+controller identity and repeats the complete sealed Deployment/instance proof.
+Under the Compose project lock the node lists the current project, maps the
+opaque ID back to exactly one running provider instance and only then opens
+Docker Engine exec with TTY, stdin/stdout/stderr and `/bin/sh`. It omits user,
+environment, working-directory, privilege, mount and namespace overrides. A
+resize targets only that exec ID; the provider ID and exec ID never leave the
+node adapter.
+
 A terminal is write-capable and may expose its workload's own secrets; it is
 not read-only. Interactive edits do not create desired generations. Audit
 actor, resource/session, decision, start/end and outcome; do not retain raw
 I/O by default or include it in support. Sessions, metric samples and deployment
 Operations have distinct lifecycles.
+
+PaaS emits the closed facts `paas.terminal-session.created`,
+`paas.terminal-session.started` and `paas.terminal-session.ended` against the
+`TERMINAL_SESSION` target. The ended result distinguishes completed,
+unsupported, expired, disconnected, revoked, replaced and failed outcomes.
+These facts reuse the immutable original create decision proof, contain no
+Operation ID, command, TTY bytes, ticket, provider identity or workload secret,
+and use the existing PaaS outbox/tenant chain. This expand-only slice keeps the
+authority tuple at IAM 4/Audit 3/PaaS 2, advances the complete contract to
+revision 7 and node runtime to revision 7. Only the exact revision-6/runtime-6
+release is an eligible predecessor after retained-data, pending-outbox and
+data-preserving rollback gates; this is not general same-schema compatibility.
 
 ### Offline lifecycle
 

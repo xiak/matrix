@@ -792,6 +792,8 @@ AS $function$
         WHEN 'paas.deployment.stop' THEN 'DEPLOYMENT'
         WHEN 'paas.deployment.read' THEN 'DEPLOYMENT'
         WHEN 'paas.operation.read' THEN 'OPERATION'
+        WHEN 'paas.terminal-session.create' THEN 'TERMINAL_SESSION'
+        WHEN 'paas.terminal-session.close' THEN 'TERMINAL_SESSION'
         WHEN 'managedservice.offering.read' THEN 'SERVICE_OFFERING'
         WHEN 'managedservice.region.read' THEN 'REGION'
         WHEN 'managedservice.quota-entitlement.activate' THEN 'QUOTA_ENTITLEMENT'

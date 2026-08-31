@@ -88,7 +88,7 @@ func CurrentDatabaseProfile() DatabaseProfile {
 	return DatabaseProfile{
 		Compatibility:    "identical-authority-profile",
 		Authorities:      AuthoritySchemas{IAM: 4, Audit: 3, PaaS: 2},
-		ContractRevision: 6,
+		ContractRevision: 7,
 	}
 }
 
@@ -96,7 +96,7 @@ func deploymentRuntimePredecessorProfile() DatabaseProfile {
 	return DatabaseProfile{
 		Compatibility:    "identical-authority-profile",
 		Authorities:      AuthoritySchemas{IAM: 4, Audit: 3, PaaS: 2},
-		ContractRevision: 5,
+		ContractRevision: 6,
 	}
 }
 

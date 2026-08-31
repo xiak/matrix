@@ -49,6 +49,8 @@
           "paas.deployment.stop",
           "paas.deployment.read",
           "paas.operation.read",
+          "paas.terminal-session.create",
+          "paas.terminal-session.close",
           "managedservice.offering.read",
           "managedservice.region.read",
           "managedservice.quota-entitlement.activate",
@@ -1110,6 +1112,58 @@
                   "properties": {
                     "kind": {
                       "const": "OPERATION"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.terminal-session.create"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "TERMINAL_SESSION"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.terminal-session.close"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "TERMINAL_SESSION"
                     }
                   },
                   "required": [
@@ -2335,6 +2389,58 @@
                   "properties": {
                     "kind": {
                       "const": "OPERATION"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.terminal-session.create"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "TERMINAL_SESSION"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.terminal-session.close"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "TERMINAL_SESSION"
                     }
                   },
                   "required": [
@@ -3630,6 +3736,7 @@
           "APPLICATION_REVISION",
           "DEPLOYMENT",
           "OPERATION",
+          "TERMINAL_SESSION",
           "SERVICE_OFFERING",
           "REGION",
           "QUOTA_ENTITLEMENT",

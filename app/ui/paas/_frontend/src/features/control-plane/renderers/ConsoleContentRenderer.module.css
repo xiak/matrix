@@ -569,7 +569,7 @@
 .deploymentItemIcon svg,
 .runtimeInstanceIdentity > svg,
 .runtimeEmpty > svg,
-.terminalBoundary svg {
+.runtimeInstanceStatus button svg {
   width: 18px;
   height: 18px;
 }
@@ -591,8 +591,7 @@
 .deploymentItemIdentity small,
 .deploymentItemState small,
 .deploymentNotice,
-.runtimeEmpty span,
-.terminalBoundary small {
+.runtimeEmpty span {
   color: var(--xiak-color-text-subtle);
   font-size: var(--xiak-font-size-caption);
 }
@@ -637,10 +636,7 @@
 .runtimeInstanceHeader,
 .runtimeInstanceIdentity,
 .runtimeInstanceStatus,
-.runtimeEmpty,
-.terminalBoundary,
-.terminalBoundary > div,
-.terminalBoundary span {
+.runtimeEmpty {
   display: flex;
   align-items: center;
   gap: var(--xiak-spacing-tight);
@@ -670,8 +666,7 @@
   color: var(--xiak-color-accent-text);
 }
 
-.runtimeInstanceIdentity span,
-.terminalBoundary span {
+.runtimeInstanceIdentity span {
   display: grid;
   min-width: 0;
   gap: var(--xiak-spacing-narrow);
@@ -754,22 +749,6 @@
   gap: var(--xiak-spacing-narrow);
 }
 
-.terminalBoundary {
-  justify-content: space-between;
-  gap: var(--xiak-spacing-default);
-  border-top: var(--xiak-border-subtle);
-  padding-top: var(--xiak-spacing-comfortable);
-}
-
-.terminalBoundary > div {
-  min-width: 0;
-}
-
-.terminalBoundary > div > svg {
-  flex: none;
-  color: var(--xiak-color-text-subtle);
-}
-
 @container matrix-page-content (max-width: 900px) {
   .metricGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -840,8 +819,7 @@
     text-align: left;
   }
 
-  .runtimeInstanceHeader,
-  .terminalBoundary {
+  .runtimeInstanceHeader {
     align-items: flex-start;
     flex-direction: column;
   }

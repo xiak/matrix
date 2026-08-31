@@ -105,6 +105,10 @@ func auditDecisionTarget(event auditv1.Event) (iamv1.Action, string) {
 		return iamv1.ActionPaaSExecutionPoolCreate, event.Target.ID
 	case auditv1.ActionPaaSExecutionTargetRegistered:
 		return iamv1.ActionPaaSExecutionTargetRegister, event.Target.ID
+	case auditv1.ActionPaaSTerminalSessionCreated,
+		auditv1.ActionPaaSTerminalSessionStarted,
+		auditv1.ActionPaaSTerminalSessionEnded:
+		return iamv1.ActionPaaSTerminalSessionCreate, "collection"
 	case auditv1.ActionManagedServiceQuotaEntitlementActivated:
 		return iamv1.ActionManagedServiceQuotaEntitlementActivate, "collection"
 	case auditv1.ActionManagedServiceInstallationCreated, auditv1.ActionManagedServiceInstallationReady:

@@ -871,6 +871,23 @@
         ],
         "type": "object"
       },
+      "CreateTerminalSessionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "instanceId": {
+            "pattern": "^instance-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "size": {
+            "$ref": "#/components/schemas/TerminalSize"
+          }
+        },
+        "required": [
+          "instanceId",
+          "size"
+        ],
+        "type": "object"
+      },
       "Deployment": {
         "additionalProperties": false,
         "properties": {
@@ -3905,6 +3922,183 @@
         ],
         "type": "string"
       },
+      "TerminalSession": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "PENDING",
+                    "CONNECTING"
+                  ]
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "connectedAt": false,
+                "endedAt": false,
+                "outcome": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "ACTIVE"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "endedAt": false,
+                "outcome": false
+              },
+              "required": [
+                "connectedAt"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "ENDED"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "required": [
+                "outcome",
+                "endedAt"
+              ]
+            }
+          }
+        ],
+        "properties": {
+          "apiVersion": {
+            "const": "paas.matrix.xiak.com/v1"
+          },
+          "applicationRevisionId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "connectBefore": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "connectedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "deploymentId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "endedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "generation": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "id": {
+            "pattern": "^terminal-session-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "instanceId": {
+            "pattern": "^instance-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "kind": {
+            "const": "TerminalSession"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/TerminalSessionOutcome"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ResourceScope"
+          },
+          "size": {
+            "$ref": "#/components/schemas/TerminalSize"
+          },
+          "state": {
+            "$ref": "#/components/schemas/TerminalSessionState"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "id",
+          "scope",
+          "deploymentId",
+          "generation",
+          "applicationRevisionId",
+          "instanceId",
+          "size",
+          "state",
+          "createdAt",
+          "connectBefore",
+          "expiresAt"
+        ],
+        "type": "object"
+      },
+      "TerminalSessionOutcome": {
+        "enum": [
+          "COMPLETED",
+          "UNSUPPORTED",
+          "EXPIRED",
+          "DISCONNECTED",
+          "REVOKED",
+          "REPLACED",
+          "FAILED"
+        ],
+        "type": "string"
+      },
+      "TerminalSessionState": {
+        "enum": [
+          "PENDING",
+          "CONNECTING",
+          "ACTIVE",
+          "ENDED"
+        ],
+        "type": "string"
+      },
+      "TerminalSize": {
+        "additionalProperties": false,
+        "properties": {
+          "columns": {
+            "maximum": 512,
+            "minimum": 2,
+            "type": "integer"
+          },
+          "rows": {
+            "maximum": 256,
+            "minimum": 2,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "columns",
+          "rows"
+        ],
+        "type": "object"
+      },
       "Timestamp": {
         "format": "date-time",
         "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,6})?Z$",
@@ -3937,6 +4131,12 @@
         "description": "Narrow installation-verifier service credential resolved through IAM installation.verify.",
         "scheme": "bearer",
         "type": "http"
+      },
+      "MatrixTerminalTicket": {
+        "description": "Single-use terminal connection ticket delivered only by an HttpOnly SameSite=Strict host-only cookie.",
+        "in": "cookie",
+        "name": "matrix_terminal_ticket",
+        "type": "apiKey"
       }
     }
   },
@@ -5117,6 +5317,106 @@
         "summary": "Get current Deployment runtime"
       }
     },
+    "/v1/deployments/{deploymentId}/terminal-sessions": {
+      "post": {
+        "operationId": "createTerminalSession",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "deploymentId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTerminalSessionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalSession"
+                }
+              }
+            },
+            "description": "A durable terminal session and a single-use connection cookie.",
+            "headers": {
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              },
+              "Set-Cookie": {
+                "description": "HttpOnly SameSite=Strict host-only connection ticket; Secure is required when TLS is in use.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalSession"
+                }
+              }
+            },
+            "description": "A durable terminal session and a single-use connection cookie.",
+            "headers": {
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              },
+              "Set-Cookie": {
+                "description": "HttpOnly SameSite=Strict host-only connection ticket; Secure is required when TLS is in use.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Create a short-lived terminal session for one current Deployment instance"
+      }
+    },
     "/v1/execution-pools": {
       "post": {
         "operationId": "createExecutionPool",
@@ -5628,6 +5928,100 @@
           }
         },
         "summary": "Get an installation-scoped Operation"
+      }
+    },
+    "/v1/terminal-sessions/{terminalSessionId}": {
+      "delete": {
+        "operationId": "closeTerminalSession",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "terminalSessionId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The terminal session is closed or was already closed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Close the caller's exact terminal session"
+      }
+    },
+    "/v1/terminal-sessions/{terminalSessionId}/connect": {
+      "get": {
+        "operationId": "connectTerminalSession",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "terminalSessionId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "WebSocket upgraded with the matrix.terminal.v1 subprotocol."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "410": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [
+          {
+            "MatrixTerminalTicket": []
+          }
+        ],
+        "summary": "Consume the single-use ticket and upgrade to the bounded terminal WebSocket",
+        "x-matrix-websocket-max-frame": 65536,
+        "x-matrix-websocket-subprotocol": "matrix.terminal.v1"
       }
     }
   },

@@ -143,6 +143,7 @@ export type DeploymentRuntimeInstanceScene = {
   healthLabel: string;
   status: SceneStatus;
   exitCode: string;
+  terminalAvailable: boolean;
   resources: DeploymentRuntimeInstanceResourcesScene | null;
 };
 

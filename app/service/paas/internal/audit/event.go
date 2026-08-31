@@ -20,8 +20,15 @@ var (
 type Result string
 
 const (
-	Accepted  Result = "ACCEPTED"
-	Succeeded Result = "SUCCEEDED"
+	Accepted     Result = "ACCEPTED"
+	Succeeded    Result = "SUCCEEDED"
+	Completed    Result = "COMPLETED"
+	Unsupported  Result = "UNSUPPORTED"
+	Expired      Result = "EXPIRED"
+	Disconnected Result = "DISCONNECTED"
+	Revoked      Result = "REVOKED"
+	Replaced     Result = "REPLACED"
+	Failed       Result = "FAILED"
 )
 
 const (
@@ -35,6 +42,9 @@ const (
 	DeploymentRolledBack         = "paas.deployment.rolled-back"
 	ExecutionPoolCreated         = "paas.execution-pool.created"
 	ExecutionTargetRegistered    = "paas.execution-target.registered"
+	TerminalSessionCreated       = "paas.terminal-session.created"
+	TerminalSessionStarted       = "paas.terminal-session.started"
+	TerminalSessionEnded         = "paas.terminal-session.ended"
 	QuotaEntitlementActivated    = "managedservice.quota-entitlement.activated"
 	ServiceInstallationCreated   = "managedservice.service-installation.created"
 	ServiceInstallationReady     = "managedservice.service-installation.ready"
@@ -43,6 +53,7 @@ const (
 const (
 	TargetQuotaEntitlement    = "QuotaEntitlement"
 	TargetServiceInstallation = "ServiceInstallation"
+	TargetTerminalSession     = "TerminalSession"
 )
 
 const (
@@ -151,6 +162,8 @@ func targetKindToV1(value string) (auditv1.TargetKind, error) {
 		return auditv1.TargetApplicationRevision, nil
 	case "Deployment":
 		return auditv1.TargetDeployment, nil
+	case TargetTerminalSession:
+		return auditv1.TargetTerminalSession, nil
 	case "ExecutionPool":
 		return auditv1.TargetExecutionPool, nil
 	case "ExecutionTarget":

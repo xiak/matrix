@@ -80,3 +80,35 @@ func TestQuotaAuditRejectsOperationAndProviderTarget(t *testing.T) {
 		t.Fatal("managed-service Audit event accepted a provider-native target")
 	}
 }
+
+func TestTerminalLifecycleMapsWithoutAnOperation(t *testing.T) {
+	now := time.Date(2026, 8, 31, 8, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		action string
+		result Result
+	}{
+		{TerminalSessionCreated, Accepted},
+		{TerminalSessionStarted, Succeeded},
+		{TerminalSessionEnded, Completed},
+		{TerminalSessionEnded, Unsupported},
+		{TerminalSessionEnded, Expired},
+		{TerminalSessionEnded, Disconnected},
+		{TerminalSessionEnded, Revoked},
+		{TerminalSessionEnded, Replaced},
+		{TerminalSessionEnded, Failed},
+	} {
+		event := Event{
+			SchemaVersion: "v1", EventID: "terminal-event-" + string(test.result),
+			TenantID:      "organization-example",
+			Actor:         ActorReference{Type: ActorUser, ID: "principal-example"},
+			IAMDecisionID: "decision-example", Action: test.action,
+			Target:        TargetReference{Kind: TargetTerminalSession, ID: "terminal-session-example"},
+			RequestDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Result:        test.result, RequestID: "request-example", OccurredAt: now,
+		}
+		public, err := ToV1(event)
+		if err != nil || ValidateEvent(event) != nil || public.Target.Kind != auditv1.TargetTerminalSession || public.OperationID != "" {
+			t.Fatalf("terminal event %s/%s rejected: public=%#v err=%v", test.action, test.result, public, err)
+		}
+	}
+}

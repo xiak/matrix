@@ -202,6 +202,8 @@ func RoleAllows(role iamv1.BuiltinRole, action iamv1.Action) bool {
 			iamv1.ActionPaaSDeploymentStop,
 			iamv1.ActionPaaSDeploymentRead,
 			iamv1.ActionPaaSOperationRead,
+			iamv1.ActionPaaSTerminalSessionCreate,
+			iamv1.ActionPaaSTerminalSessionClose,
 			iamv1.ActionManagedServiceOfferingRead,
 			iamv1.ActionManagedServiceRegionRead,
 			iamv1.ActionManagedServiceQuotaEntitlementActivate,

@@ -860,13 +860,18 @@ func (value *gate) assertNativeDeploymentRuntime(ctx context.Context, bearer []b
 	if value.nodes == nil || len(value.nodes.nodes) != 2 {
 		return fail("native-runtime-fixture")
 	}
+	terminalRevisionID, err := value.createNativeTerminalApplicationRevision(ctx, bearer)
+	if err != nil {
+		return err
+	}
 	deployments := make([]paasv1.Deployment, 0, len(value.nodes.nodes))
 	snapshots := make([]paasv1.DeploymentRuntimeSnapshot, 0, len(value.nodes.nodes))
+	terminalSessions := make([]paasv1.ResourceID, 0, len(value.nodes.nodes))
 	for index, node := range value.nodes.nodes {
 		id := nativeRuntimeDeploymentID(index)
 		operation, err := value.edge.mutateDeployment(
 			ctx, http.MethodPost, "/api/paas/v1/deployments", string(id), "", bearer,
-			paasv1.CreateDeploymentRequest{ID: id, Name: string(id), Spec: deploymentSpec(configurationRevisionOne, paasv1.DeploymentDesiredRunning)},
+			paasv1.CreateDeploymentRequest{ID: id, Name: string(id), Spec: deploymentSpec(terminalRevisionID, configurationRevisionOne, paasv1.DeploymentDesiredRunning)},
 			paasv1.OperationDeploy, id,
 		)
 		if err != nil {
@@ -893,6 +898,10 @@ func (value *gate) assertNativeDeploymentRuntime(ctx context.Context, bearer []b
 		if err := value.assertNativeProviderInstance(ctx, index, deployment, second); err != nil {
 			return err
 		}
+		terminalSessionID, err := value.assertNativeTerminal(ctx, bearer, deployment, second, index)
+		if err != nil {
+			return err
+		}
 		response, err := value.edge.json(ctx, http.MethodGet, "/api/paas/v1/deployments/"+string(id)+"/runtime?executionTargetId="+string(node.identity.ExecutionTargetID), bearer, nil, nil, http.StatusBadRequest)
 		clear(response.body)
 		if err != nil {
@@ -900,6 +909,7 @@ func (value *gate) assertNativeDeploymentRuntime(ctx context.Context, bearer []b
 		}
 		deployments = append(deployments, deployment)
 		snapshots = append(snapshots, second)
+		terminalSessions = append(terminalSessions, terminalSessionID)
 	}
 	if snapshots[0].Value.Observation.ExecutionTargetID == snapshots[1].Value.Observation.ExecutionTargetID {
 		return fail("native-runtime-distinct-targets")
@@ -923,6 +933,9 @@ func (value *gate) assertNativeDeploymentRuntime(ctx context.Context, bearer []b
 	}
 	if active, err := value.activeCapacityClaims(ctx, value.nodes.controller.InstallationID, deploymentIDs...); err != nil || active != len(deployments) {
 		return fail("native-runtime-capacity-claims")
+	}
+	if err := value.assertNativeTerminalAudit(ctx, bearer, terminalSessions); err != nil {
+		return err
 	}
 	for index, deployment := range deployments {
 		spec := deployment.Spec

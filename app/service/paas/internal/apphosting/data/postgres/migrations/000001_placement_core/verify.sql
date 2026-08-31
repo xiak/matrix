@@ -23,6 +23,7 @@ BEGIN
             ('deployment_observations'),
             ('deployment_runtime_snapshots'),
             ('deployment_resource_snapshots'),
+            ('terminal_sessions'),
             ('placement_decisions'),
             ('capacity_claims'),
             ('capacity_reservations')
@@ -73,6 +74,7 @@ BEGIN
             'deployment_observations',
             'deployment_runtime_snapshots',
             'deployment_resource_snapshots',
+            'terminal_sessions',
             'placement_decisions',
             'capacity_reservations'
        )
@@ -100,7 +102,9 @@ BEGIN
             ('operations_ids_valid'),
             ('operations_document_identity'),
             ('audit_outbox_operation_fk'),
+            ('audit_outbox_terminal_session_fk'),
             ('audit_outbox_ids_valid'),
+            ('audit_outbox_owner_valid'),
             ('audit_outbox_document_identity'),
             ('execution_targets_pool_fk'),
             ('execution_targets_installation_pool_fk'),
@@ -126,6 +130,18 @@ BEGIN
             ('deployment_resource_snapshots_revision_fk'),
             ('deployment_resource_snapshots_target_fk'),
             ('deployment_resource_snapshots_decision_fk'),
+            ('terminal_sessions_global_id_uq'),
+            ('terminal_sessions_idempotency_uq'),
+            ('terminal_sessions_deployment_fk'),
+            ('terminal_sessions_generation_fk'),
+            ('terminal_sessions_revision_fk'),
+            ('terminal_sessions_target_fk'),
+            ('terminal_sessions_decision_fk'),
+            ('terminal_sessions_ids_valid'),
+            ('terminal_sessions_values_valid'),
+            ('terminal_sessions_state_valid'),
+            ('terminal_sessions_time_valid'),
+            ('terminal_sessions_document_identity'),
             ('placement_decisions_operation_uq'),
             ('placement_decisions_deployment_fk'),
             ('placement_decisions_generation_fk'),
@@ -186,6 +202,7 @@ BEGIN
             ('deployment_observations'),
             ('deployment_runtime_snapshots'),
             ('deployment_resource_snapshots'),
+            ('terminal_sessions'),
             ('placement_decisions'),
             ('capacity_reservations')
       ) AS required(table_name)
@@ -246,6 +263,46 @@ BEGIN
             (
                 'append_audit_outbox',
                 'submitted_operation jsonb, submitted_audit_event jsonb'
+            ),
+            (
+                'append_terminal_audit_outbox',
+                'requested_session_id text, submitted_audit_event jsonb'
+            ),
+            (
+                'lock_terminal_session_by_fingerprint',
+                'requested_fingerprint text'
+            ),
+            (
+                'lock_terminal_session',
+                'requested_session_id text'
+            ),
+            (
+                'lock_open_terminal_session',
+                'requested_subject_type text, requested_subject_id text, requested_deployment_id text, requested_instance_id text'
+            ),
+            (
+                'lock_current_terminal_runtime',
+                'requested_deployment_id text, requested_instance_id text, requested_now timestamp with time zone'
+            ),
+            (
+                'create_terminal_session',
+                'submitted_stored jsonb, requested_ticket_digest text, submitted_audit_event jsonb'
+            ),
+            (
+                'rotate_terminal_session_ticket',
+                'requested_session_id text, requested_ticket_digest text'
+            ),
+            (
+                'open_terminal_session_ticket',
+                'requested_session_id text, requested_ticket_digest text'
+            ),
+            (
+                'consume_terminal_session_ticket',
+                'requested_session_id text, submitted_session jsonb'
+            ),
+            (
+                'transition_terminal_session',
+                'requested_session_id text, submitted_session jsonb, submitted_audit_event jsonb'
             ),
             (
                 'create_apphosting_resource',
@@ -377,6 +434,23 @@ BEGIN
         RAISE EXCEPTION 'Deployment resource validator is missing or unsafe';
     END IF;
 
+    IF NOT EXISTS (
+        SELECT 1
+          FROM pg_catalog.pg_proc AS procedure
+          JOIN pg_catalog.pg_namespace AS namespace
+            ON namespace.oid = procedure.pronamespace
+         WHERE namespace.nspname = 'paas'
+           AND procedure.proname = 'terminal_session_snapshot'
+           AND pg_catalog.pg_get_function_identity_arguments(procedure.oid)
+                = 'session_row paas.terminal_sessions'
+           AND NOT procedure.prosecdef
+           AND procedure.provolatile = 'i'
+           AND procedure.proisstrict
+           AND 'search_path=pg_catalog, pg_temp' = ANY(procedure.proconfig)
+    ) THEN
+        RAISE EXCEPTION 'terminal session snapshot encoder is missing or unsafe';
+    END IF;
+
     IF NOT paas.valid_deployment_resource_document(
         jsonb_build_object(
             'deploymentId', 'deployment-resource-verification',
@@ -446,6 +520,11 @@ BEGIN
        OR has_table_privilege(
             'matrix_paas_api',
             'paas.audit_outbox',
+            'SELECT, INSERT, UPDATE, DELETE'
+       )
+       OR has_table_privilege(
+            'matrix_paas_api',
+            'paas.terminal_sessions',
             'SELECT, INSERT, UPDATE, DELETE'
        )
        OR has_table_privilege(
@@ -528,6 +607,11 @@ BEGIN
        )
        OR has_table_privilege(
             'matrix_paas_worker',
+            'paas.terminal_sessions',
+            'SELECT, INSERT, UPDATE, DELETE'
+       )
+       OR has_table_privilege(
+            'matrix_paas_worker',
             'paas.deployments',
             'INSERT, UPDATE, DELETE'
        )
@@ -596,6 +680,39 @@ BEGIN
 
     IF NOT has_function_privilege('matrix_paas_api', 'paas.admit_execution_resource(jsonb,jsonb,jsonb,text,text,bigint,jsonb)', 'EXECUTE')
        OR NOT has_function_privilege('matrix_paas_api', 'paas.refresh_execution_target(bigint,jsonb,bigint,jsonb)', 'EXECUTE')
+       OR EXISTS (
+            SELECT 1
+              FROM unnest(ARRAY[
+                    'paas.lock_terminal_session_by_fingerprint(text)',
+                    'paas.lock_terminal_session(text)',
+                    'paas.lock_open_terminal_session(text,text,text,text)',
+                    'paas.lock_current_terminal_runtime(text,text,timestamptz)',
+                    'paas.create_terminal_session(jsonb,text,jsonb)',
+                    'paas.rotate_terminal_session_ticket(text,text)',
+                    'paas.open_terminal_session_ticket(text,text)',
+                    'paas.consume_terminal_session_ticket(text,jsonb)',
+                    'paas.transition_terminal_session(text,jsonb,jsonb)'
+                   ]) AS terminal_function(signature)
+             WHERE NOT has_function_privilege(
+                    'matrix_paas_api', terminal_function.signature, 'EXECUTE'
+                   )
+                OR has_function_privilege(
+                    'matrix_paas_worker', terminal_function.signature, 'EXECUTE'
+                   )
+       )
+       OR EXISTS (
+            SELECT 1
+              FROM unnest(ARRAY[
+                    'paas.terminal_session_snapshot(paas.terminal_sessions)',
+                    'paas.append_terminal_audit_outbox(text,jsonb)'
+                   ]) AS internal_terminal_function(signature)
+             WHERE has_function_privilege(
+                    'matrix_paas_api', internal_terminal_function.signature, 'EXECUTE'
+                   )
+                OR has_function_privilege(
+                    'matrix_paas_worker', internal_terminal_function.signature, 'EXECUTE'
+                   )
+       )
        OR has_function_privilege('matrix_paas_worker', 'paas.admit_execution_resource(jsonb,jsonb,jsonb,text,text,bigint,jsonb)', 'EXECUTE')
        OR has_function_privilege('matrix_paas_worker', 'paas.refresh_execution_target(bigint,jsonb,bigint,jsonb)', 'EXECUTE')
        OR has_function_privilege('matrix_paas_api', 'paas.store_execution_pool_observation(bigint,jsonb)', 'EXECUTE')

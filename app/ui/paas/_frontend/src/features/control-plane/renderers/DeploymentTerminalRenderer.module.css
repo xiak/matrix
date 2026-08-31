@@ -1,0 +1,113 @@
+.panel {
+  display: grid;
+  min-width: 0;
+  gap: var(--xiak-spacing-default);
+  border: 1px solid color-mix(in srgb, var(--xiak-color-border-focus) 52%, transparent);
+  border-radius: var(--xiak-radius-control);
+  padding: var(--xiak-spacing-default);
+  background: var(--xiak-color-terminal-bg);
+  color: var(--xiak-color-terminal-text);
+}
+
+.header,
+.identity,
+.actions,
+.securityNote {
+  display: flex;
+  align-items: center;
+  gap: var(--xiak-spacing-tight);
+}
+
+.header {
+  min-width: 0;
+  justify-content: space-between;
+}
+
+.identity {
+  min-width: 0;
+}
+
+.identity > span:last-child {
+  display: grid;
+  min-width: 0;
+  gap: var(--xiak-spacing-narrow);
+}
+
+.identity small,
+.message,
+.securityNote {
+  color: var(--xiak-color-terminal-muted);
+  font-size: var(--xiak-font-size-caption);
+}
+
+.identity code {
+  overflow-wrap: anywhere;
+}
+
+.icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  place-items: center;
+  border-radius: var(--xiak-radius-control);
+  background: var(--xiak-color-terminal-panel);
+  color: var(--xiak-color-terminal-cursor);
+}
+
+.icon svg,
+.securityNote svg {
+  width: 17px;
+  height: 17px;
+}
+
+.actions {
+  flex: none;
+}
+
+.securityNote {
+  align-items: flex-start;
+  border-top: 1px solid var(--xiak-color-terminal-border);
+  padding-top: var(--xiak-spacing-tight);
+  line-height: 1.5;
+}
+
+.securityNote svg {
+  flex: none;
+  color: var(--xiak-color-terminal-success);
+}
+
+.terminal {
+  min-width: 0;
+  height: clamp(240px, 42vh, 480px);
+  overflow: hidden;
+  border: 1px solid var(--xiak-color-terminal-border);
+  border-radius: var(--xiak-radius-small);
+  padding: 6px;
+  background: var(--xiak-color-terminal-bg);
+}
+
+.terminal :global(.xterm) {
+  height: 100%;
+}
+
+.message {
+  margin: 0;
+  line-height: 1.5;
+}
+
+@container matrix-page-content (max-width: 560px) {
+  .header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .terminal {
+    height: 300px;
+  }
+}

@@ -1,11 +1,13 @@
 package compose
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,7 +26,17 @@ func TestRealComposeExecutorOfflineVerticalSlice(t *testing.T) {
 	}
 	requireDocker(t)
 	fixtureContext, cancelFixture := context.WithTimeout(context.Background(), 2*time.Minute)
-	fixtureImage, err := composefixture.Import(fixtureContext)
+	var fixtureImage *composefixture.Image
+	var err error
+	fixtureBinary := os.Getenv("MATRIX_COMPOSE_FIXTURE_BINARY")
+	terminalShellBinary := os.Getenv("MATRIX_COMPOSE_TERMINAL_SHELL_BINARY")
+	if fixtureBinary != "" || terminalShellBinary != "" {
+		fixtureImage, err = composefixture.ImportBinaries(
+			fixtureContext, fixtureBinary, terminalShellBinary,
+		)
+	} else {
+		fixtureImage, err = composefixture.Import(fixtureContext)
+	}
 	cancelFixture()
 	if err != nil {
 		t.Fatalf("import offline fixture image: %v", err)
@@ -97,6 +109,7 @@ func TestRealComposeExecutorOfflineVerticalSlice(t *testing.T) {
 	}
 	containerID, networkID := assertOneUnpublishedProject(t, project)
 	requireRealTelemetry(t, executor, request, containerID)
+	requireRealTerminal(t, executor, request, containerID)
 	probeFixture(t, imageID, networkID, "one", secretDigest, "1")
 	if output := runDockerTest(t, "port", containerID); strings.TrimSpace(output) != "" {
 		t.Fatalf("application container published a host port: %q", output)
@@ -190,6 +203,79 @@ func (runtime *unknownOnceRuntime) ObserveResources(
 		return nil, ErrRuntimeUnavailable
 	}
 	return observer.ObserveResources(ctx, project, containers)
+}
+
+func (runtime *unknownOnceRuntime) OpenTerminal(
+	ctx context.Context,
+	project RuntimeProject,
+	container RuntimeContainer,
+	size paasv1.TerminalSize,
+) (Terminal, error) {
+	provider, supported := runtime.delegate.(TerminalRuntime)
+	if !supported {
+		return nil, ErrTerminalUnsupported
+	}
+	return provider.OpenTerminal(ctx, project, container, size)
+}
+
+func requireRealTerminal(
+	t *testing.T,
+	executor *Executor,
+	request paasv1.DeploymentExecutionRequest,
+	providerID string,
+) {
+	t.Helper()
+	deadline := time.Now().UTC().Truncate(time.Microsecond).Add(10 * time.Second)
+	proof := runtimeObserveRequest(request, deadline)
+	observation, err := executor.ObserveDeploymentRuntime(context.Background(), proof)
+	if err != nil || len(observation.Instances) != 1 {
+		t.Fatalf("real terminal runtime proof = %#v / %v", observation, err)
+	}
+	terminal, err := executor.OpenDeploymentTerminal(
+		context.Background(), proof, observation.Instances[0].ID,
+		paasv1.TerminalSize{Columns: 90, Rows: 30},
+	)
+	if err != nil {
+		t.Fatalf("open real terminal: %v", err)
+	}
+	defer terminal.Close()
+	resizeContext, cancelResize := context.WithTimeout(context.Background(), 3*time.Second)
+	err = terminal.Resize(resizeContext, paasv1.TerminalSize{Columns: 100, Rows: 35})
+	cancelResize()
+	if err != nil {
+		t.Fatalf("resize real terminal: %v", err)
+	}
+	if _, err := terminal.Write([]byte("printf 'matrix-terminal-ok\\n'; exit\n")); err != nil {
+		t.Fatalf("write real terminal: %v", err)
+	}
+	result := make(chan struct {
+		content []byte
+		err     error
+	}, 1)
+	go func() {
+		content, err := io.ReadAll(io.LimitReader(terminal, 64*1024+1))
+		result <- struct {
+			content []byte
+			err     error
+		}{content, err}
+	}()
+	select {
+	case value := <-result:
+		if value.err != nil || len(value.content) > 64*1024 ||
+			!bytes.Contains(value.content, []byte("matrix-terminal-ok 35x100")) ||
+			bytes.Contains(value.content, []byte(providerID)) {
+			t.Fatalf("real terminal output/error = %q / %v", value.content, value.err)
+		}
+	case <-time.After(10 * time.Second):
+		_ = terminal.Close()
+		t.Fatal("real terminal did not exit")
+	}
+	exitContext, cancelExit := context.WithTimeout(context.Background(), 3*time.Second)
+	exitCode, err := terminal.ExitCode(exitContext)
+	cancelExit()
+	if err != nil || exitCode != 0 {
+		t.Fatalf("real terminal exit = %d / %v", exitCode, err)
+	}
 }
 
 func (runtime *unknownOnceRuntime) Stop(ctx context.Context, project RuntimeProject) error {

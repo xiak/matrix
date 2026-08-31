@@ -328,6 +328,9 @@ BEGIN
         ('audit.integrity.verified', 'AUDIT', 'AUDIT_CHAIN', 'SUCCEEDED', true, true, false),
         ('paas.execution-pool.created', 'PAAS', 'EXECUTION_POOL', 'SUCCEEDED', true, true, true),
         ('paas.execution-target.registered', 'PAAS', 'EXECUTION_TARGET', 'SUCCEEDED', true, true, true),
+        ('paas.terminal-session.created', 'PAAS', 'TERMINAL_SESSION', 'ACCEPTED', true, true, false),
+        ('paas.terminal-session.started', 'PAAS', 'TERMINAL_SESSION', 'SUCCEEDED', true, true, false),
+        ('paas.terminal-session.ended', 'PAAS', 'TERMINAL_SESSION', NULL, true, true, false),
         ('audit.platform-records.read', 'AUDIT', 'AUDIT_RECORDS', 'SUCCEEDED', true, true, false),
         ('audit.platform-integrity.verified', 'AUDIT', 'AUDIT_CHAIN', 'SUCCEEDED', true, true, false)
       ) AS contract(
@@ -337,6 +340,14 @@ BEGIN
      WHERE contract.action = action_name;
     IF action_name = 'iam.authorization.decided' THEN
         IF submitted_event->>'result' IN ('ALLOWED', 'DENIED') THEN
+            expected_result := submitted_event->>'result';
+        END IF;
+    END IF;
+    IF action_name = 'paas.terminal-session.ended' THEN
+        IF submitted_event->>'result' IN (
+            'COMPLETED', 'UNSUPPORTED', 'EXPIRED', 'DISCONNECTED',
+            'REVOKED', 'REPLACED', 'FAILED'
+        ) THEN
             expected_result := submitted_event->>'result';
         END IF;
     END IF;
@@ -780,6 +791,8 @@ BEGIN
             'managedservice.service-installation.ready', 'audit.records.read',
             'audit.integrity.verified',
             'paas.execution-pool.created', 'paas.execution-target.registered',
+            'paas.terminal-session.created', 'paas.terminal-session.started',
+            'paas.terminal-session.ended',
             'audit.platform-records.read', 'audit.platform-integrity.verified'
        ))
        OR ((submitted_actor_type IS NULL) <> (submitted_actor_id IS NULL))

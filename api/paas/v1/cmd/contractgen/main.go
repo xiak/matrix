@@ -60,6 +60,10 @@ func buildDocument() schema {
 					"type": "http", "scheme": "bearer",
 					"description": "Narrow installation-verifier service credential resolved through IAM installation.verify.",
 				},
+				"MatrixTerminalTicket": schema{
+					"type": "apiKey", "in": "cookie", "name": "matrix_terminal_ticket",
+					"description": "Single-use terminal connection ticket delivered only by an HttpOnly SameSite=Strict host-only cookie.",
+				},
 			},
 			"parameters": schema{
 				"IdempotencyKey": schema{
@@ -177,6 +181,15 @@ func buildPaths() schema {
 			"getDeploymentRuntime", "Get current Deployment runtime", "deploymentId", "DeploymentRuntimeSnapshot",
 		),
 	}
+	paths["/v1/deployments/{deploymentId}/terminal-sessions"] = schema{
+		"post": createTerminalSessionOperation(),
+	}
+	paths["/v1/terminal-sessions/{terminalSessionId}"] = schema{
+		"delete": closeTerminalSessionOperation(),
+	}
+	paths["/v1/terminal-sessions/{terminalSessionId}/connect"] = schema{
+		"get": connectTerminalSessionOperation(),
+	}
 	paths["/v1/operations/{operationId}"] = schema{
 		"get": readOperation("getOperation", "Get Operation", "operationId", "Operation"),
 	}
@@ -212,6 +225,83 @@ func buildPaths() schema {
 		},
 	}
 	return paths
+}
+
+func createTerminalSessionOperation() schema {
+	success := schema{
+		"description": "A durable terminal session and a single-use connection cookie.",
+		"headers": schema{
+			"Location":   componentRef("#/components/headers/Location"),
+			"Set-Cookie": schema{"description": "HttpOnly SameSite=Strict host-only connection ticket; Secure is required when TLS is in use.", "schema": schema{"type": "string"}},
+		},
+		"content": schema{
+			"application/json": schema{"schema": ref("TerminalSession")},
+		},
+	}
+	return schema{
+		"operationId": "createTerminalSession",
+		"summary":     "Create a short-lived terminal session for one current Deployment instance",
+		"parameters": []any{
+			pathIDParameter("deploymentId"),
+			componentRef("#/components/parameters/IdempotencyKey"),
+		},
+		"requestBody": jsonRequestBody("CreateTerminalSessionRequest"),
+		"responses": schema{
+			"200": success,
+			"201": success,
+			"400": componentRef("#/components/responses/ProblemResponse"),
+			"401": componentRef("#/components/responses/ProblemResponse"),
+			"403": componentRef("#/components/responses/ProblemResponse"),
+			"404": componentRef("#/components/responses/ProblemResponse"),
+			"409": componentRef("#/components/responses/ProblemResponse"),
+			"415": componentRef("#/components/responses/ProblemResponse"),
+			"500": componentRef("#/components/responses/ProblemResponse"),
+			"503": componentRef("#/components/responses/ProblemResponse"),
+			"504": componentRef("#/components/responses/ProblemResponse"),
+		},
+	}
+}
+
+func closeTerminalSessionOperation() schema {
+	return schema{
+		"operationId": "closeTerminalSession",
+		"summary":     "Close the caller's exact terminal session",
+		"parameters":  []any{pathIDParameter("terminalSessionId")},
+		"responses": schema{
+			"204": schema{"description": "The terminal session is closed or was already closed."},
+			"400": componentRef("#/components/responses/ProblemResponse"),
+			"401": componentRef("#/components/responses/ProblemResponse"),
+			"403": componentRef("#/components/responses/ProblemResponse"),
+			"404": componentRef("#/components/responses/ProblemResponse"),
+			"409": componentRef("#/components/responses/ProblemResponse"),
+			"500": componentRef("#/components/responses/ProblemResponse"),
+			"503": componentRef("#/components/responses/ProblemResponse"),
+		},
+	}
+}
+
+func connectTerminalSessionOperation() schema {
+	return schema{
+		"operationId": "connectTerminalSession",
+		"summary":     "Consume the single-use ticket and upgrade to the bounded terminal WebSocket",
+		"parameters":  []any{pathIDParameter("terminalSessionId")},
+		"security": []any{schema{
+			"MatrixTerminalTicket": []string{},
+		}},
+		"x-matrix-websocket-subprotocol": "matrix.terminal.v1",
+		"x-matrix-websocket-max-frame":   paasv1.MaximumTerminalFrameBytes,
+		"responses": schema{
+			"101": schema{"description": "WebSocket upgraded with the matrix.terminal.v1 subprotocol."},
+			"400": componentRef("#/components/responses/ProblemResponse"),
+			"401": componentRef("#/components/responses/ProblemResponse"),
+			"403": componentRef("#/components/responses/ProblemResponse"),
+			"404": componentRef("#/components/responses/ProblemResponse"),
+			"409": componentRef("#/components/responses/ProblemResponse"),
+			"410": componentRef("#/components/responses/ProblemResponse"),
+			"500": componentRef("#/components/responses/ProblemResponse"),
+			"503": componentRef("#/components/responses/ProblemResponse"),
+		},
+	}
 }
 
 func readinessOperation() schema {
@@ -407,6 +497,8 @@ func enumSchemas() map[string][]string {
 		"DeploymentPhase":               stringsOfSlice(paasv1.DeploymentPhases()),
 		"DeploymentInstanceState":       stringsOfSlice(paasv1.DeploymentInstanceStates()),
 		"DeploymentInstanceHealth":      stringsOfSlice(paasv1.DeploymentInstanceHealthStates()),
+		"TerminalSessionState":          stringsOfSlice(paasv1.TerminalSessionStates()),
+		"TerminalSessionOutcome":        stringsOfSlice(paasv1.TerminalSessionOutcomes()),
 		"OperationAction":               stringsOfSlice(paasv1.OperationActions()),
 		"OperationState":                stringsOfSlice(paasv1.OperationStates()),
 		"EvidenceType":                  stringsOf(paasv1.EvidencePolicyDecision, paasv1.EvidencePlacementDecision, paasv1.EvidenceAdapterCommand, paasv1.EvidenceAdapterResult, paasv1.EvidenceObservation, paasv1.EvidenceVerification, paasv1.EvidenceAuditDispatch),
@@ -450,6 +542,7 @@ func structContracts() map[string]reflect.Type {
 		paasv1.DeploymentInstanceVolumeUsage{}, paasv1.DeploymentInstanceStorageUsage{}, paasv1.DeploymentInstanceStorageUsageValue{},
 		paasv1.DeploymentResourceInstance{}, paasv1.DeploymentResourceObservation{}, paasv1.DeploymentResourceValue{}, paasv1.DeploymentResourceSnapshot{},
 		paasv1.DeploymentRuntimeValue{}, paasv1.DeploymentRuntimeSnapshot{},
+		paasv1.TerminalSize{}, paasv1.CreateTerminalSessionRequest{}, paasv1.TerminalSession{},
 		paasv1.DeploymentGeneration{}, paasv1.SubjectRef{}, paasv1.ResourceRef{}, paasv1.FieldViolation{}, paasv1.Readiness{},
 		paasv1.VerifyInstallationRequest{}, paasv1.InstallationVerification{},
 		paasv1.Problem{}, paasv1.Operation{}, paasv1.Evidence{}, paasv1.AdapterCapabilitiesContract{},
@@ -583,7 +676,8 @@ func applySemanticOverlays(schemas map[string]any) {
 		"ConfigurationRevision": "ConfigurationRevision", "ApplicationRevision": "ApplicationRevision",
 		"Deployment": "Deployment", "DeploymentList": "DeploymentList",
 		"DeploymentGeneration": "DeploymentGeneration", "DeploymentRuntimeSnapshot": "DeploymentRuntimeSnapshot",
-		"ExecutionPool": "ExecutionPool", "ExecutionTarget": "ExecutionTarget",
+		"TerminalSession": "TerminalSession",
+		"ExecutionPool":   "ExecutionPool", "ExecutionTarget": "ExecutionTarget",
 		"PlacementPolicy": "PlacementPolicy", "PlacementDecision": "PlacementDecision",
 		"Operation": "Operation", "Evidence": "Evidence",
 		"Readiness": "Readiness", "InstallationVerification": "InstallationVerification",
@@ -623,6 +717,28 @@ func applySemanticOverlays(schemas map[string]any) {
 		schema{
 			"if":   schema{"properties": schema{"state": schema{"enum": stringsOf(paasv1.MeasurementAvailable, paasv1.MeasurementStale)}}},
 			"then": schema{"required": []string{"value"}},
+		},
+	}
+	terminalSizeProperties := object(schemas["TerminalSize"])["properties"].(schema)
+	terminalSizeProperties["columns"] = schema{"type": "integer", "minimum": paasv1.MinimumTerminalColumns, "maximum": paasv1.MaximumTerminalColumns}
+	terminalSizeProperties["rows"] = schema{"type": "integer", "minimum": paasv1.MinimumTerminalRows, "maximum": paasv1.MaximumTerminalRows}
+	object(schemas["CreateTerminalSessionRequest"])["properties"].(schema)["instanceId"] = schema{"type": "string", "pattern": `^instance-[0-9a-f]{32}$`}
+	terminalProperties := object(schemas["TerminalSession"])["properties"].(schema)
+	terminalProperties["id"] = schema{"type": "string", "pattern": `^terminal-session-[0-9a-f]{32}$`}
+	terminalProperties["instanceId"] = schema{"type": "string", "pattern": `^instance-[0-9a-f]{32}$`}
+	terminalProperties["generation"].(schema)["minimum"] = 1
+	object(schemas["TerminalSession"])["allOf"] = []any{
+		schema{
+			"if":   schema{"properties": schema{"state": schema{"enum": stringsOf(paasv1.TerminalSessionPending, paasv1.TerminalSessionConnecting)}}, "required": []string{"state"}},
+			"then": schema{"properties": schema{"outcome": false, "connectedAt": false, "endedAt": false}},
+		},
+		schema{
+			"if":   schema{"properties": schema{"state": schema{"const": string(paasv1.TerminalSessionActive)}}, "required": []string{"state"}},
+			"then": schema{"required": []string{"connectedAt"}, "properties": schema{"outcome": false, "endedAt": false}},
+		},
+		schema{
+			"if":   schema{"properties": schema{"state": schema{"const": string(paasv1.TerminalSessionEnded)}}, "required": []string{"state"}},
+			"then": schema{"required": []string{"outcome", "endedAt"}},
 		},
 	}
 	object(schemas["DeploymentResourceSnapshot"])["properties"].(schema)["state"] = schema{

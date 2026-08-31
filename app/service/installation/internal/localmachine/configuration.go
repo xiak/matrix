@@ -368,6 +368,31 @@ func apisixStandaloneConfig() []byte {
       nodes:
         "audit:8080": 1
   -
+    id: matrix-paas-terminal
+    uri: /api/paas/v1/terminal-sessions/*
+    methods:
+      - GET
+    priority: 200
+    vars:
+      -
+        - uri
+        - "~~"
+        - "^/api/paas/v1/terminal-sessions/terminal-session-[0-9a-f]{32}/connect$"
+    enable_websocket: true
+    timeout:
+      connect: 5
+      send: 10
+      read: 130
+    plugins:
+      proxy-rewrite:
+        regex_uri:
+          - "^/api/paas/(.*)"
+          - "/$1"
+    upstream:
+      type: roundrobin
+      nodes:
+        "paas-api:8080": 1
+  -
     id: matrix-paas-installation-verification
     uri: /api/paas/v1/installation:verify
     priority: 100

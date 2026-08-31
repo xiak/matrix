@@ -156,6 +156,28 @@ func (effects *LocalEffects) VerifyPaaSCLI(ctx context.Context, imageID string) 
 	return nil
 }
 
+func (effects *LocalEffects) VerifyWorkloadShell(ctx context.Context, imageID string) error {
+	if effects == nil || effects.run == nil || validateImageMetadata(ImageMetadata{
+		ID: imageID, OS: "linux", Architecture: "amd64",
+	}) != nil {
+		return errors.New("verification workload shell effect is invalid")
+	}
+	_, err := effects.run(ctx, localCommand{
+		program: "docker",
+		args: []string{
+			"run", "--rm", "--pull", "never", "--network", "none", "--read-only",
+			"--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+			"--pids-limit", "16", "--memory", "32m", "--memory-swap", "32m",
+			"--user", "65534:65534", "--entrypoint", "/bin/sh", imageID,
+			"-c", "test -x /bin/sh",
+		},
+	})
+	if err != nil {
+		return errors.New("verification workload shell effect failed")
+	}
+	return nil
+}
+
 func (effects *LocalEffects) RemoveBuildTag(ctx context.Context, tag string) error {
 	if effects == nil || effects.run == nil || !buildTagPattern.MatchString(tag) {
 		return errors.New("Docker build tag cleanup effect is invalid")
@@ -239,7 +261,7 @@ func allowedBinaryPackage(value string) bool {
 }
 
 func allowedImageReference(value string) bool {
-	return value == APISIXBaseReference || value == DockerBaseReference ||
+	return value == APISIXBaseReference || value == AlpineBaseReference || value == DockerBaseReference ||
 		value == PostgresReference || buildTagPattern.MatchString(value)
 }
 

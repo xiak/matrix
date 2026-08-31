@@ -61,6 +61,7 @@ type Effects interface {
 	BuildImage(context.Context, string, string) error
 	SaveImage(context.Context, string, string) (ImageMetadata, error)
 	VerifyPaaSCLI(context.Context, string) error
+	VerifyWorkloadShell(context.Context, string) error
 	RemoveBuildTag(context.Context, string) error
 }
 
@@ -263,6 +264,9 @@ func buildImages(
 	if err := effects.VerifyPaaSCLI(ctx, metadata["paas"].ID); err != nil {
 		return nil, tags, errors.New("PaaS image Docker Compose contract failed")
 	}
+	if err := effects.VerifyWorkloadShell(ctx, metadata["verification"].ID); err != nil {
+		return nil, tags, errors.New("verification workload shell contract failed")
+	}
 
 	images := make([]installationrelease.Image, 0, len(installationrelease.RequiredImages()))
 	for _, requirement := range installationrelease.RequiredImages() {
@@ -289,6 +293,7 @@ func buildImages(
 func verifyBaseImages(ctx context.Context, effects Effects) error {
 	for _, required := range []struct{ reference, id string }{
 		{APISIXBaseReference, APISIXBaseImageID},
+		{AlpineBaseReference, AlpineBaseImageID},
 		{DockerBaseReference, DockerBaseImageID},
 		{PostgresReference, PostgresImageID},
 	} {

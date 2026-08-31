@@ -22,6 +22,7 @@ import (
 	paashttp "github.com/xiak/matrix/app/service/paas/internal/apphosting/service/nethttp"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/executionadmission"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/terminalsession"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/verifyinstallation"
 	managedserviceiam "github.com/xiak/matrix/app/service/paas/internal/managedservice/data/iamhttp"
 	managedservicepostgres "github.com/xiak/matrix/app/service/paas/internal/managedservice/data/postgres"
@@ -39,6 +40,8 @@ const (
 	releaseIDEnvironment             = "MATRIX_PAAS_RELEASE_ID"
 	verificationDigestEnvironment    = "MATRIX_PAAS_VERIFICATION_ARTIFACT_DIGEST"
 	nodeConnectionsFileEnvironment   = "MATRIX_PAAS_NODE_CONNECTIONS_FILE"
+	publicBasePathEnvironment        = "MATRIX_PAAS_PUBLIC_BASE_PATH"
+	terminalCookieSecureEnvironment  = "MATRIX_PAAS_TERMINAL_COOKIE_SECURE"
 )
 
 type configuration struct {
@@ -50,6 +53,8 @@ type configuration struct {
 	releaseID             string
 	verificationDigest    string
 	nodeConnectionsFile   string
+	publicBasePath        string
+	terminalCookieSecure  bool
 }
 
 func main() {
@@ -135,6 +140,10 @@ func run(ctx context.Context) error {
 		return err
 	}
 	defer closeBindings()
+	terminalConnector, err := terminalRouter(config.installationID, bindings)
+	if err != nil {
+		return err
+	}
 	executionRepository, err := paaspostgres.NewExecutionAdmissionRepository(pool)
 	if err != nil {
 		return err
@@ -143,6 +152,17 @@ func run(ctx context.Context) error {
 		InstallationID: config.installationID, Bindings: bindings, ObservationTimeout: 5 * time.Second,
 		MaximumObservationAge: 15 * time.Second, MaxTransactionAttempts: 5,
 	})
+	if err != nil {
+		return err
+	}
+	terminalRepository, err := paaspostgres.NewTerminalSessionRepository(pool)
+	if err != nil {
+		return err
+	}
+	terminalWorkflow, err := terminalsession.New(
+		terminalRepository,
+		terminalsession.Config{MaxTransactionAttempts: 5},
+	)
 	if err != nil {
 		return err
 	}
@@ -162,7 +182,9 @@ func run(ctx context.Context) error {
 		}
 	}()
 	defer func() { stopRefresh(); <-refreshDone }()
-	apphostingHandler, err := paashttp.NewHandler(authorizer, workflow, execution, installationVerifier, paashttp.Config{
+	apphostingHandler, err := paashttp.NewHandler(authorizer, workflow, execution, terminalWorkflow, terminalConnector, installationVerifier, paashttp.Config{
+		TerminalPublicBasePath: config.publicBasePath,
+		TerminalCookieSecure:   config.terminalCookieSecure,
 		Readiness: func(readinessContext context.Context) (paasv1.Readiness, error) {
 			readiness, err := repository.Readiness(readinessContext)
 			if err != nil || readiness.State != paasv1.ReadinessReady {
@@ -212,6 +234,14 @@ func run(ctx context.Context) error {
 }
 
 func loadConfiguration() (configuration, error) {
+	terminalCookieSecure := false
+	switch os.Getenv(terminalCookieSecureEnvironment) {
+	case "", "false":
+	case "true":
+		terminalCookieSecure = true
+	default:
+		return configuration{}, errors.New("PaaS terminal cookie security configuration is invalid")
+	}
 	config := configuration{
 		databaseDSNFile:       os.Getenv(databaseDSNFileEnvironment),
 		iamEndpoint:           os.Getenv(iamEndpointEnvironment),
@@ -221,6 +251,8 @@ func loadConfiguration() (configuration, error) {
 		releaseID:             os.Getenv(releaseIDEnvironment),
 		verificationDigest:    os.Getenv(verificationDigestEnvironment),
 		nodeConnectionsFile:   os.Getenv(nodeConnectionsFileEnvironment),
+		publicBasePath:        os.Getenv(publicBasePathEnvironment),
+		terminalCookieSecure:  terminalCookieSecure,
 	}
 	if config.databaseDSNFile == "" || config.iamEndpoint == "" ||
 		config.serviceCredentialFile == "" || config.listenAddress == "" ||

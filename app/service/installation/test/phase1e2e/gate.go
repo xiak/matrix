@@ -820,22 +820,7 @@ func (value *gate) createApplication(
 		Spec: paasv1.ApplicationRevisionSpec{
 			ApplicationID: applicationID, Revision: "revision-0001",
 			ContentDigest: fixedDigest("phase1-application-revision-one"),
-			Components: []paasv1.ApplicationRevisionComponent{{
-				Name: "web",
-				Artifact: paasv1.ArtifactRef{
-					Kind: paasv1.ArtifactOCIImage, Locator: "offline.matrix.invalid/verification",
-					Digest: workload.SourceDigest,
-				},
-				Resources: paasv1.ResourceRequirements{CPUMillis: 100, MemoryBytes: 32 * 1024 * 1024},
-				Endpoints: []paasv1.ApplicationEndpoint{{
-					Name: "ready", Port: 8080, Protocol: paasv1.EndpointHTTP,
-					Visibility: paasv1.EndpointPrivate,
-				}},
-				Inputs: []paasv1.ComponentInput{
-					{Name: "settings", Kind: paasv1.InputConfiguration, Injection: paasv1.InjectionEnvironment, Required: true},
-					{Name: "credential", Kind: paasv1.InputSecret, Injection: paasv1.InjectionFile, Required: true},
-				},
-			}},
+			Components:    []paasv1.ApplicationRevisionComponent{verificationApplicationComponent(workload.SourceDigest)},
 		},
 	}
 	if _, err := value.edge.createResource(
@@ -845,7 +830,7 @@ func (value *gate) createApplication(
 	); err != nil {
 		return applicationState{}, fail("create-application-revision")
 	}
-	spec := deploymentSpec(configurationRevisionOne, paasv1.DeploymentDesiredRunning)
+	spec := deploymentSpec(applicationRevisionID, configurationRevisionOne, paasv1.DeploymentDesiredRunning)
 	operation, err := value.edge.mutateDeployment(
 		ctx, http.MethodPost, "/api/paas/v1/deployments", "phase1-create-deployment", "", bearer,
 		paasv1.CreateDeploymentRequest{ID: deploymentID, Name: "phase1-deployment", Spec: spec},
@@ -865,6 +850,7 @@ func (value *gate) createApplication(
 }
 
 func deploymentSpec(
+	applicationRevisionID paasv1.ResourceID,
 	configurationRevisionID paasv1.ResourceID,
 	desired paasv1.DeploymentDesiredState,
 ) paasv1.DeploymentSpec {
@@ -881,6 +867,25 @@ func deploymentSpec(
 				}},
 			},
 		}},
+	}
+}
+
+func verificationApplicationComponent(digest string) paasv1.ApplicationRevisionComponent {
+	return paasv1.ApplicationRevisionComponent{
+		Name: "web",
+		Artifact: paasv1.ArtifactRef{
+			Kind: paasv1.ArtifactOCIImage, Locator: "offline.matrix.invalid/verification",
+			Digest: digest,
+		},
+		Resources: paasv1.ResourceRequirements{CPUMillis: 100, MemoryBytes: 32 * 1024 * 1024},
+		Endpoints: []paasv1.ApplicationEndpoint{{
+			Name: "ready", Port: 8080, Protocol: paasv1.EndpointHTTP,
+			Visibility: paasv1.EndpointPrivate,
+		}},
+		Inputs: []paasv1.ComponentInput{
+			{Name: "settings", Kind: paasv1.InputConfiguration, Injection: paasv1.InjectionEnvironment, Required: true},
+			{Name: "credential", Kind: paasv1.InputSecret, Injection: paasv1.InjectionFile, Required: true},
+		},
 	}
 }
 
@@ -904,7 +909,7 @@ func (value *gate) updateConfiguration(
 	); err != nil {
 		return paasv1.Deployment{}, fail("create-configuration-revision-two")
 	}
-	spec := deploymentSpec(configurationRevisionTwo, paasv1.DeploymentDesiredRunning)
+	spec := deploymentSpec(applicationRevisionID, configurationRevisionTwo, paasv1.DeploymentDesiredRunning)
 	operation, err := value.edge.mutateDeployment(
 		ctx, http.MethodPut, "/api/paas/v1/deployments/"+string(deploymentID),
 		"phase1-update-deployment", formatResourceVersion(current.Metadata.ResourceVersion), bearer,

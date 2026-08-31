@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -28,6 +29,30 @@ func TestLocalImageBuildEffectIsNetworkAndPullClosed(t *testing.T) {
 	if observed.program != "docker" || !slices.Contains(observed.args, "--network=none") ||
 		!slices.Contains(observed.args, "--pull=false") || slices.Contains(observed.args, "--pull=true") {
 		t.Fatalf("Docker build effect is not offline closed: %v", observed.args)
+	}
+}
+
+func TestLocalWorkloadShellVerificationIsIsolatedAndNonRoot(t *testing.T) {
+	var observed localCommand
+	effects := &LocalEffects{run: func(_ context.Context, command localCommand) ([]byte, error) {
+		observed = command
+		return nil, nil
+	}}
+	imageID := "sha256:" + strings.Repeat("a", 64)
+	if err := effects.VerifyWorkloadShell(context.Background(), imageID); err != nil {
+		t.Fatal(err)
+	}
+	for _, argument := range []string{
+		"--pull", "never", "--network", "none", "--read-only", "--cap-drop", "ALL",
+		"--security-opt", "no-new-privileges", "--user", "65534:65534", "--entrypoint", "/bin/sh",
+	} {
+		if !slices.Contains(observed.args, argument) {
+			t.Fatalf("workload shell verification lost %q: %v", argument, observed.args)
+		}
+	}
+	if observed.program != "docker" || slices.Contains(observed.args, "--privileged") ||
+		observed.args[len(observed.args)-2] != "-c" || observed.args[len(observed.args)-1] != "test -x /bin/sh" {
+		t.Fatalf("workload shell verification escaped its fixed command: %v", observed.args)
 	}
 }
 
