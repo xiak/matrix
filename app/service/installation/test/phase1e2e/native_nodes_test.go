@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/adapter/infrastructure/localmachine"
 )
 
@@ -17,7 +18,7 @@ import (
 // images or enrolling a node. No HTTP/debug endpoint or caller host selector.
 func TestOfflineNativeHostProbe(t *testing.T) {
 	phase := os.Getenv("MATRIX_PHASE1_NATIVE_HOST_PROBE")
-	if phase != "1" && phase != "after-restart" {
+	if phase != "1" && phase != "runtime" && phase != "after-restart" {
 		t.Skip("native offline companion only")
 	}
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" || os.Geteuid() != 0 {
@@ -25,10 +26,10 @@ func TestOfflineNativeHostProbe(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if assertNoExternalRoute() != nil || phase == "1" && assertEmptyDocker(ctx) != nil {
+	if phase != "runtime" && assertNoExternalRoute() != nil || phase == "1" && assertEmptyDocker(ctx) != nil {
 		t.Fatal("native companion is not empty and offline")
 	}
-	if _, err := os.Stat(nativeInstallationRoot); phase == "1" && !os.IsNotExist(err) || phase == "after-restart" && err != nil {
+	if _, err := os.Stat(nativeInstallationRoot); (phase == "1" || phase == "runtime") && !os.IsNotExist(err) || phase == "after-restart" && err != nil {
 		t.Fatal("native installation root already exists")
 	}
 	facts, err := localmachine.NewLocalHostProbe().Inspect(ctx, nativeFixtureRoot)
@@ -102,6 +103,11 @@ func TestNativeFixtureRejectsAmbiguousOrExternalTargets(t *testing.T) {
 		{"HTTP endpoint", func(v *nativeFixtureInput) { v.Nodes[0].Endpoint = "http://172.17.0.1:16443" }},
 		{"endpoint credentials", func(v *nativeFixtureInput) { v.Nodes[0].Endpoint = "https://user@172.17.0.1:16443" }},
 		{"query", func(v *nativeFixtureInput) { v.Nodes[0].Endpoint += "?" }},
+		{"public listen address", func(v *nativeFixtureInput) { v.Nodes[0].ListenAddress = "8.8.8.8:16443" }},
+		{"DNS listen address", func(v *nativeFixtureInput) { v.Nodes[0].ListenAddress = "node.invalid:16443" }},
+		{"missing listen port", func(v *nativeFixtureInput) { v.Nodes[0].ListenAddress = "172.17.0.1" }},
+		{"privileged collector", func(v *nativeFixtureInput) { v.Nodes[0].CollectorPort = 443 }},
+		{"shared node and collector port", func(v *nativeFixtureInput) { v.Nodes[0].CollectorPort = 16443 }},
 		{"relative signer", func(v *nativeFixtureInput) { v.IdentityFile = "client" }},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
@@ -115,6 +121,60 @@ func TestNativeFixtureRejectsAmbiguousOrExternalTargets(t *testing.T) {
 	}
 	if validateNativeFixture(valid) != nil {
 		t.Fatal("valid isolated native fixture rejected")
+	}
+}
+
+func TestNativeDeploymentRuntimeRequiresExactAdvancingProviderNeutralProof(t *testing.T) {
+	now := time.Date(2026, 8, 30, 1, 2, 3, 0, time.UTC)
+	deployment := paasv1.Deployment{
+		Metadata:   paasv1.ResourceMetadata{ID: "deployment-a", Scope: paasv1.ResourceScope{Kind: paasv1.AuthorityTenant, TenantID: "tenant-a"}},
+		Generation: 1,
+		Spec:       paasv1.DeploymentSpec{ApplicationRevisionID: "revision-a"},
+	}
+	snapshot := paasv1.DeploymentRuntimeSnapshot{
+		APIVersion: paasv1.APIVersion,
+		Kind:       "DeploymentRuntimeSnapshot",
+		Scope:      deployment.Metadata.Scope,
+		State:      paasv1.MeasurementAvailable,
+		Value: &paasv1.DeploymentRuntimeValue{
+			Observation: paasv1.DeploymentRuntimeObservation{
+				DeploymentID:          deployment.Metadata.ID,
+				Generation:            deployment.Generation,
+				ApplicationRevisionID: deployment.Spec.ApplicationRevisionID,
+				ExecutionTargetID:     "target-a",
+				Instances: []paasv1.DeploymentRuntimeInstance{{
+					ID: "instance-0123456789abcdef0123456789abcdef", ComponentName: "web",
+					State: paasv1.DeploymentInstanceRunning, Health: paasv1.DeploymentInstanceHealthNone,
+				}},
+				ObservedAt: now,
+			},
+			ValidUntil: now.Add(15 * time.Second),
+		},
+	}
+	if !validNativeDeploymentRuntime(snapshot, deployment, "target-a", now.Add(-time.Second), now.Add(time.Second)) {
+		t.Fatal("exact advancing runtime proof rejected")
+	}
+	for _, change := range []func(*paasv1.DeploymentRuntimeSnapshot){
+		func(value *paasv1.DeploymentRuntimeSnapshot) { value.Value.Observation.ExecutionTargetID = "target-b" },
+		func(value *paasv1.DeploymentRuntimeSnapshot) {
+			value.Value.Observation.ObservedAt = now.Add(-2 * time.Second)
+		},
+		func(value *paasv1.DeploymentRuntimeSnapshot) {
+			value.Value.Observation.Instances[0].Health = paasv1.DeploymentInstanceHealthUnhealthy
+		},
+		func(value *paasv1.DeploymentRuntimeSnapshot) {
+			value.Value.Observation.Instances[0].Health = paasv1.DeploymentInstanceHealthStarting
+		},
+		func(value *paasv1.DeploymentRuntimeSnapshot) { value.Value.ValidUntil = now },
+	} {
+		candidate := snapshot
+		value := *snapshot.Value
+		value.Observation.Instances = append([]paasv1.DeploymentRuntimeInstance(nil), snapshot.Value.Observation.Instances...)
+		candidate.Value = &value
+		change(&candidate)
+		if validNativeDeploymentRuntime(candidate, deployment, "target-a", now.Add(-time.Second), now.Add(time.Second)) {
+			t.Fatal("stale, unready or wrong-target runtime proof accepted")
+		}
 	}
 }
 

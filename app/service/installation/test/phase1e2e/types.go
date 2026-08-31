@@ -10,13 +10,15 @@ import (
 const defaultEdgeEndpoint = "http://127.0.0.1:8080"
 
 type options struct {
-	root        string
-	releaseA    string
-	releaseB    string
-	trustKey    string
-	edge        string
-	afterStart  bool
-	nativeNodes string
+	root                    string
+	releaseA                string
+	releaseB                string
+	trustKey                string
+	edge                    string
+	afterStart              bool
+	nativeNodes             string
+	nativeDeploymentRuntime bool
+	browserPasswordFile     string
 }
 
 type releasePair struct {

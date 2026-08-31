@@ -185,19 +185,67 @@ func TestMXStatusConsumesConfigurationDigestAndRejectsUnknownFields(t *testing.T
 	}
 }
 
+func TestBrowserPasswordInputRequiresPrivateRegularBoundedContent(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("POSIX private-file contract")
+	}
+	directory := t.TempDir()
+	path := filepath.Join(directory, "browser-password.private")
+	write := func(content string, mode os.FileMode) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(content), mode); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("0123456789abcdefghij", 0o600)
+	value := newGate(options{browserPasswordFile: path}, releasePair{})
+	password, err := value.finalPassword()
+	if err != nil || string(password) != "0123456789abcdefghij" {
+		clear(password)
+		t.Fatal("private bounded browser password was rejected")
+	}
+	clear(password)
+
+	write("0123456789abcdefghij", 0o640)
+	if password, err = value.finalPassword(); err == nil {
+		clear(password)
+		t.Fatal("group-readable browser password was accepted")
+	}
+	write("0123456789abcdefghi\n", 0o600)
+	if password, err = value.finalPassword(); err == nil {
+		clear(password)
+		t.Fatal("line-delimited browser password was accepted")
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(directory, "missing"), path); err != nil {
+		t.Fatal(err)
+	}
+	if password, err = value.finalPassword(); err == nil {
+		clear(password)
+		t.Fatal("symlinked browser password was accepted")
+	}
+}
+
 func optionsFromEnvironment() (options, error) {
 	phase := os.Getenv("MATRIX_PHASE1_E2E_PHASE")
 	if phase != "run" && phase != "after-restart" {
 		return options{}, fail("command-input")
 	}
 	config := options{
-		root:        os.Getenv("MATRIX_PHASE1_ROOT"),
-		releaseA:    os.Getenv("MATRIX_PHASE1_RELEASE_A"),
-		releaseB:    os.Getenv("MATRIX_PHASE1_RELEASE_B"),
-		trustKey:    os.Getenv("MATRIX_PHASE1_TRUST_KEY"),
-		edge:        defaultEdgeEndpoint,
-		afterStart:  phase == "after-restart",
-		nativeNodes: os.Getenv("MATRIX_PHASE1_NATIVE_NODES"),
+		root:                    os.Getenv("MATRIX_PHASE1_ROOT"),
+		releaseA:                os.Getenv("MATRIX_PHASE1_RELEASE_A"),
+		releaseB:                os.Getenv("MATRIX_PHASE1_RELEASE_B"),
+		trustKey:                os.Getenv("MATRIX_PHASE1_TRUST_KEY"),
+		edge:                    defaultEdgeEndpoint,
+		afterStart:              phase == "after-restart",
+		nativeNodes:             os.Getenv("MATRIX_PHASE1_NATIVE_NODES"),
+		nativeDeploymentRuntime: os.Getenv("MATRIX_PHASE1_NATIVE_DEPLOYMENT_RUNTIME") == "1",
+		browserPasswordFile:     os.Getenv("MATRIX_PHASE1_BROWSER_PASSWORD_FILE"),
 	}
 	for _, path := range []string{config.root, config.releaseA, config.trustKey} {
 		if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path {
@@ -209,6 +257,15 @@ func optionsFromEnvironment() (options, error) {
 		return options{}, fail("command-input")
 	}
 	if config.nativeNodes != "" && (!filepath.IsAbs(config.nativeNodes) || filepath.Clean(config.nativeNodes) != config.nativeNodes) {
+		return options{}, fail("command-input")
+	}
+	if mode := os.Getenv("MATRIX_PHASE1_NATIVE_DEPLOYMENT_RUNTIME"); mode != "" && mode != "1" {
+		return options{}, fail("command-input")
+	}
+	if config.nativeDeploymentRuntime && (config.nativeNodes == "" || config.afterStart) {
+		return options{}, fail("command-input")
+	}
+	if config.browserPasswordFile != "" && (!config.nativeDeploymentRuntime || !filepath.IsAbs(config.browserPasswordFile) || filepath.Clean(config.browserPasswordFile) != config.browserPasswordFile) {
 		return options{}, fail("command-input")
 	}
 	return config, nil

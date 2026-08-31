@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -103,9 +104,9 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return fail("iam-initial-password")
 	}
 	defer clear(initialPassword)
-	newPassword, err := randomPassword(rand.Reader)
+	newPassword, err := value.finalPassword()
 	if err != nil {
-		return fail("iam-new-password")
+		return err
 	}
 	defer clear(newPassword)
 	firstSession, err := value.edge.login(ctx, initialPassword, "phase1-login-initial")
@@ -397,6 +398,9 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if _, err := value.edge.verifyAuditChain(ctx, bearer); err != nil {
 		return fail("final-audit-integrity")
 	}
+	if err := value.assertNativeDeploymentRuntime(ctx, bearer); err != nil {
+		return err
+	}
 	if err := value.edge.logout(ctx, bearer); err != nil {
 		return fail("iam-logout-current")
 	}
@@ -409,7 +413,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err != nil || !os.SameFile(dataRootBefore, dataRootAfter) {
 		return fail("postgres-data-identity-preservation")
 	}
-	if err := assertNoExternalRoute(); err != nil {
+	if err := value.assertNetworkBoundary(); err != nil {
 		return err
 	}
 	emit("bounded-support-zero-leakage")
@@ -667,7 +671,7 @@ func (value *gate) afterRestart(ctx context.Context) error {
 }
 
 func (value *gate) assertFreshHost(ctx context.Context) error {
-	if err := assertNoExternalRoute(); err != nil {
+	if err := value.assertNetworkBoundary(); err != nil {
 		return err
 	}
 	if _, err := os.Lstat(value.config.root); !errors.Is(err, os.ErrNotExist) {
@@ -679,12 +683,45 @@ func (value *gate) assertFreshHost(ctx context.Context) error {
 	return nil
 }
 
+func (value *gate) assertNetworkBoundary() error {
+	if value.config.nativeDeploymentRuntime {
+		connection, err := net.DialTimeout("tcp", "1.1.1.1:443", 300*time.Millisecond)
+		if connection != nil {
+			_ = connection.Close()
+		}
+		if err == nil {
+			return fail("external-network-connectivity")
+		}
+		return nil
+	}
+	return assertNoExternalRoute()
+}
+
 func (value *gate) pathLeakage() [][]byte {
 	result := [][]byte{
 		[]byte(value.config.root), []byte(value.config.releaseA), []byte(value.config.releaseB),
 		[]byte(value.config.trustKey),
 	}
+	if value.config.browserPasswordFile != "" {
+		result = append(result, []byte(value.config.browserPasswordFile))
+	}
 	return append(result, value.sensitive...)
+}
+
+func (value *gate) finalPassword() ([]byte, error) {
+	if value.config.browserPasswordFile == "" {
+		return randomPassword(rand.Reader)
+	}
+	info, err := os.Lstat(value.config.browserPasswordFile)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o600 || info.Size() < 20 || info.Size() > 128 {
+		return nil, fail("browser-password-input")
+	}
+	password, err := os.ReadFile(value.config.browserPasswordFile)
+	if err != nil || int64(len(password)) != info.Size() || bytes.ContainsAny(password, "\x00\r\n") {
+		clear(password)
+		return nil, fail("browser-password-input")
+	}
+	return password, nil
 }
 
 func (value *gate) forbidden(values ...[]byte) [][]byte {
@@ -1187,7 +1224,7 @@ func (value *gate) assertWorkloadRemoved(ctx context.Context) error {
 	return nil
 }
 
-func (value *gate) activeCapacityClaims(ctx context.Context, installationID string) (int, error) {
+func (value *gate) activeCapacityClaims(ctx context.Context, installationID string, deploymentIDs ...paasv1.ResourceID) (int, error) {
 	ids, err := dockerLines(
 		ctx, "container", "ls", "--all", "--quiet",
 		"--filter", "label=com.xiak.matrix.installation="+installationID,
@@ -1196,10 +1233,28 @@ func (value *gate) activeCapacityClaims(ctx context.Context, installationID stri
 	if err != nil || len(ids) != 1 {
 		return 0, errors.New("PostgreSQL container is unavailable")
 	}
+	if len(deploymentIDs) == 0 {
+		deploymentIDs = []paasv1.ResourceID{deploymentID}
+	}
+	if len(deploymentIDs) > 16 {
+		return 0, errors.New("capacity observation is invalid")
+	}
+	quoted := make([]string, 0, len(deploymentIDs))
+	seen := make(map[paasv1.ResourceID]struct{}, len(deploymentIDs))
+	for _, id := range deploymentIDs {
+		if paasv1.ValidateID("deploymentId", string(id)) != nil {
+			return 0, errors.New("capacity observation is invalid")
+		}
+		if _, duplicate := seen[id]; duplicate {
+			return 0, errors.New("capacity observation is invalid")
+		}
+		seen[id] = struct{}{}
+		quoted = append(quoted, "'"+string(id)+"'")
+	}
 	query := "SELECT count(*) FROM paas.capacity_reservations AS reservation " +
 		"JOIN paas.capacity_claims AS claim ON claim.id = reservation.capacity_claim_id " +
 		"WHERE reservation.tenant_id = 'organization-default' " +
-		"AND reservation.deployment_id = 'phase1-deployment' AND claim.state = 'ACTIVE'"
+		"AND reservation.deployment_id IN (" + strings.Join(quoted, ",") + ") AND claim.state = 'ACTIVE'"
 	content, err := docker(
 		ctx, "container", "exec", "--user", "postgres", ids[0],
 		"psql", "--no-psqlrc", "--tuples-only", "--no-align", "--set", "ON_ERROR_STOP=1",
@@ -1209,7 +1264,7 @@ func (value *gate) activeCapacityClaims(ctx context.Context, installationID stri
 		return 0, err
 	}
 	count, err := strconv.Atoi(strings.TrimSpace(string(content)))
-	if err != nil || count < 0 || count > 1 {
+	if err != nil || count < 0 || count > len(deploymentIDs) {
 		return 0, errors.New("capacity observation is invalid")
 	}
 	return count, nil
