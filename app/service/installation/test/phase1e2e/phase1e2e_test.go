@@ -118,6 +118,10 @@ func TestReleasePairRequiresCompatibleImmediatePredecessor(t *testing.T) {
 		{name: "actual different-source predecessor and workload", accept: true, mutate: func(_, b *release.Manifest) {
 			b.Release.SourceCommit = strings.Repeat("b", 40)
 		}},
+		{name: "exact retained-data profile and topology successor", accept: true, mutate: func(a, _ *release.Manifest) {
+			a.Database.ContractRevision--
+			a.TopologyDigest = "sha256:" + strings.Repeat("3", 64)
+		}},
 		{name: "same-source lifecycle fixture", accept: true},
 		{name: "wrong predecessor", mutate: func(_, b *release.Manifest) { b.Release.PreviousID = "other-release" }},
 		{name: "wrong predecessor version", mutate: func(_, b *release.Manifest) { b.Release.PreviousVersion = "v0.0.1" }},
@@ -128,10 +132,15 @@ func TestReleasePairRequiresCompatibleImmediatePredecessor(t *testing.T) {
 		{name: "same version", mutate: func(a, b *release.Manifest) { b.Release.Version = a.Release.Version }},
 		{name: "different authority tuple", mutate: func(_, b *release.Manifest) { b.Database.Authorities.PaaS++ }},
 		{name: "different contract revision", mutate: func(_, b *release.Manifest) { b.Database.ContractRevision++ }},
+		{name: "profile downgrade", mutate: func(_, b *release.Manifest) { b.Database.ContractRevision-- }},
 		{name: "invalid equal profiles", mutate: func(a, b *release.Manifest) {
 			a.Database, b.Database = release.DatabaseProfile{}, release.DatabaseProfile{}
 		}},
 		{name: "different topology", mutate: func(_, b *release.Manifest) { b.TopologyDigest = "sha256:" + strings.Repeat("2", 64) }},
+		{name: "unproved profile with changed topology", mutate: func(a, _ *release.Manifest) {
+			a.Database.ContractRevision -= 2
+			a.TopologyDigest = "sha256:" + strings.Repeat("3", 64)
+		}},
 		{name: "node is not a platform release", mutate: func(_, b *release.Manifest) { b.Kind = release.NodeManifestKind }},
 		{name: "missing predecessor workload", mutate: func(a, _ *release.Manifest) { a.Images = nil }},
 		{name: "missing successor workload", mutate: func(_, b *release.Manifest) { b.Images = nil }},

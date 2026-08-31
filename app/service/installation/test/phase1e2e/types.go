@@ -49,9 +49,12 @@ func validateReleasePair(a, b release.VerifiedBundle) error {
 	}
 	// Each directory is already authenticated. Admit distinct source binaries,
 	// but do not start a destructive lifecycle exercise for an unproved profile.
+	// Same-profile release fixtures still require an identical topology. The one
+	// retained-data profile transition owns its authenticated topology change.
+	sameProfile := a.Manifest.Database == b.Manifest.Database
 	if a.Manifest.Kind != release.ManifestKind || b.Manifest.Kind != release.ManifestKind ||
-		a.Manifest.Database != b.Manifest.Database || release.ValidateDatabaseProfile(a.Manifest.Database) != nil ||
-		a.Manifest.TopologyDigest != b.Manifest.TopologyDigest {
+		release.ValidateDatabaseUpgradePath(a.Manifest.Database, b.Manifest.Database) != nil ||
+		(sameProfile && a.Manifest.TopologyDigest != b.Manifest.TopologyDigest) {
 		return fail("release-pair-compatibility")
 	}
 	if _, ok := workloadImage(a.Manifest); !ok {
