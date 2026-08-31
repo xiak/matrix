@@ -1031,11 +1031,58 @@ symlink input are rejected.
 Only exact task-owned services, containers, images, keys and remote fixture
 roots were removed afterward. Each host returned to its ten pre-existing
 running containers; its machine boot ID and Docker Engine ID were unchanged.
-Neither host, Docker Engine nor any unrelated service was restarted. This mode
-uses existing operator-provided hosts and therefore is not the externally
-disconnected or reboot phase of Gate D. Per-container resource attribution and
-the separately authorized short-lived terminal remain open, so P3-3, Gate C/D
-and Phase 3 are not accepted by this evidence.
+Neither host, Docker Engine nor any unrelated service was restarted. That
+checkpoint used existing operator-provided hosts and did not cover the
+externally disconnected or reboot phase of Gate D. Per-container resource
+attribution and the separately authorized short-lived terminal were still open
+at that checkpoint.
+
+The per-container resource implementation is fixed at
+`44402510890042cb9b1c7d6d16e7f4453b4dbc19`. The Compose adapter overlaps its
+bounded container-statistics and Docker disk-inventory requests under one
+cancelable observation context. A slow global storage inventory therefore no
+longer serially consumes the entire three-second budget after CPU, memory and
+network sampling; the existing storage cache, independent freshness and
+unavailable/stale states remain unchanged. The behavior gate proves both
+provider requests can make progress within one observation budget. Its race
+run, twenty repetitions, full Go suite and vet passed locally. The exact
+checkpoint's `go`, `node-process` and `authority-process` jobs also passed in
+[independent CI](https://github.com/xiak/matrix/actions/runs/33374998320).
+
+Signed platform B `matrix-v0.3.0-host.15-444025108900` was assembled from that
+clean source with profile IAM 4, Audit 3, PaaS 2 and contract revision 6. It
+names the accepted host.8 release as its immediate predecessor. Its
+`release.json` SHA-256 is
+`050bbd5dccb6b13716abdcb44a46ef5b9d518809a831bbbfe5bad2cf8329ee7d`;
+the transport archive SHA-256 is
+`3e942557e68a152ee7baa6a08db97a53e748de4246ead62f16223dc02dd70cfc`.
+The independently built Linux acceptance driver SHA-256 is
+`0384ff2a94dc8fb01a5bb46c9010bad674e7cbd0116234bedd60c9052425e481`.
+
+A fresh Docker 27.5.1-in-Docker engine with zero containers, images and volumes
+then ran the complete installed-runtime gate against the two operator-provided
+Debian/ext4 hosts. In 675.26 seconds it passed release-A installation, IAM and
+Audit through APISIX, application generations, purpose-only local credential
+recovery, two signed native admissions, backup and trust replacement, failed-
+candidate rollback, host.15 upgrade, two real native Deployments and successive
+runtime/resource snapshots, the exact node predecessor/successor transition,
+platform rollback, backup recovery, application rollback/stop, capacity
+release and zero-leakage support. Both containers reported bounded CPU and
+memory against their configured limits, network counters, explicit block-I/O
+support state, and separately timestamped image, writable-layer and volume
+storage without exposing provider identities. The accepted log SHA-256 is
+`69caecd927058a439e9022f7082ff80092a97f5ffbe47a90d3274505df6afb03`.
+
+The recovery step used the authenticated current host.15 controller while the
+selected sealed backup determined host.8 as the target; the historical target
+binary did not own the restore algorithm. Both remote boot IDs and Docker
+Engine IDs were unchanged before and after the gate, pre-existing node/
+collector units and platform containers remained active, and no machine or
+Docker Engine was restarted. The gate ended at its explicit `restart-required`
+boundary because remote reboot is prohibited. This evidence accepts the
+per-container resource slice and the exercised signed transition/recovery, not
+the externally disconnected/reboot portion of Gate D, the write-capable
+short-lived terminal, complete Gate C/D or Phase 3. P3-3 remains in progress.
 
 ## Adoption
 
