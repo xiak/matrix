@@ -41,6 +41,7 @@ const nativeFixtureRootEnvironment = "MATRIX_PHASE1_NATIVE_FIXTURE_ROOT"
 const nativeFixtureRootPrefix = "/data/xiak/"
 const nativePool paasv1.ResourceID = "offline-native-pool"
 const nativeRuntimePool paasv1.ResourceID = "execution-pool-local"
+const nativeAfterRemovalDeploymentID paasv1.ResourceID = "phase3-runtime-after-removal"
 const nativeRuntimeProfileLabel = "matrix-profile"
 const nativeRuntimeProfile = "local-compose"
 const nativeCompleteRuntimeSnapshotTimeout = 3 * time.Minute
@@ -87,6 +88,25 @@ type nativeWorkload struct {
 	StartedAt    string `json:"startedAt"`
 	RestartCount uint64 `json:"restartCount"`
 	Running      bool   `json:"running"`
+}
+
+type nativeRuntimeIdentity struct {
+	BootID               string
+	EngineID             string
+	DockerActiveSince    string
+	NodeActiveSince      string
+	CollectorActiveSince string
+}
+
+type nativeLifecycleEvidence struct {
+	Operations int64 `json:"operations"`
+	Outbox     int64 `json:"outbox"`
+}
+
+type nativeTargetLifecycleState struct {
+	RuntimeIdentities [2]nativeRuntimeIdentity
+	Operations        []paasv1.Operation
+	RemoveEvidence    nativeLifecycleEvidence
 }
 
 type nativeNodes struct {
@@ -860,6 +880,10 @@ func (value *gate) nativeReleasePair(ctx context.Context, bearer []byte) error {
 	if err := value.assertNativeDeploymentRuntime(ctx, bearer); err != nil {
 		return err
 	}
+	if value.config.multiHostLifecycle {
+		emit("native-successor-retained-for-multi-host-lifecycle")
+		return nil
+	}
 	for index, node := range fixture.nodes {
 		result, err := fixture.mx(ctx, index, true, "rollback", "--root", fixture.installationRoot())
 		if err != nil || !result.Changed || result.ReleaseID != fixture.releases.a.Manifest.Release.ID || result.PreviousID != "" || result.ConfigurationDigest != node.digest {
@@ -961,6 +985,13 @@ func (value *gate) assertNativeDeploymentRuntime(ctx context.Context, bearer []b
 	if err := value.assertNativeTerminalAudit(ctx, bearer, terminalSessions); err != nil {
 		return err
 	}
+	var lifecycle *nativeTargetLifecycleState
+	if value.config.multiHostLifecycle {
+		lifecycle, err = value.beginNativeTargetLifecycle(ctx, bearer, deployments, snapshots)
+		if err != nil {
+			return err
+		}
+	}
 	for index, deployment := range deployments {
 		spec := deployment.Spec
 		spec.DesiredState = paasv1.DeploymentDesiredStopped
@@ -1012,11 +1043,417 @@ func (value *gate) assertNativeDeploymentRuntime(ctx context.Context, bearer []b
 	); err != nil || active != 0 {
 		return fail("native-runtime-released-capacity-claims")
 	}
+	if lifecycle != nil {
+		if err := value.completeNativeTargetLifecycle(ctx, bearer, terminalRevisionID, *lifecycle); err != nil {
+			return err
+		}
+	}
 	if _, err := value.edge.verifyAuditChain(ctx, bearer); err != nil {
 		return fail("native-runtime-audit-integrity")
 	}
 	emit("two-native-deployments-with-background-runtime-and-resource-snapshots")
 	return nil
+}
+
+func (fixture *nativeNodes) runtimeIdentity(ctx context.Context, index int) (nativeRuntimeIdentity, error) {
+	if fixture == nil || index < 0 || index >= len(fixture.nodes) {
+		return nativeRuntimeIdentity{}, fail("native-lifecycle-runtime-identity-input")
+	}
+	nodeUnit, err := nodeconfig.ServiceName(fixture.nodes[index].identity, false)
+	if err != nil {
+		return nativeRuntimeIdentity{}, fail("native-lifecycle-node-unit")
+	}
+	collectorUnit, err := nodeconfig.ServiceName(fixture.nodes[index].identity, true)
+	if err != nil {
+		return nativeRuntimeIdentity{}, fail("native-lifecycle-collector-unit")
+	}
+	read := func(arguments ...string) (string, error) {
+		content, commandErr := fixture.command(ctx, index, arguments...)
+		if commandErr != nil {
+			return "", commandErr
+		}
+		value := strings.TrimSpace(string(content))
+		if value == "" {
+			return "", fail("native-lifecycle-runtime-identity")
+		}
+		return value, nil
+	}
+	serviceStart := func(unit string) (string, error) {
+		active, commandErr := read("systemctl", "is-active", unit)
+		if commandErr != nil || active != "active" {
+			return "", fail("native-lifecycle-service-active")
+		}
+		return read("systemctl", "show", "--property=ActiveEnterTimestampMonotonic", "--value", unit)
+	}
+	bootID, err := read("cat", "/proc/sys/kernel/random/boot_id")
+	if err != nil {
+		return nativeRuntimeIdentity{}, err
+	}
+	engineID, err := read("docker", "info", "--format", "{{.ID}}")
+	if err != nil {
+		return nativeRuntimeIdentity{}, err
+	}
+	dockerStart, err := serviceStart("docker.service")
+	if err != nil {
+		return nativeRuntimeIdentity{}, err
+	}
+	nodeStart, err := serviceStart(nodeUnit)
+	if err != nil {
+		return nativeRuntimeIdentity{}, err
+	}
+	collectorStart, err := serviceStart(collectorUnit)
+	if err != nil {
+		return nativeRuntimeIdentity{}, err
+	}
+	identity := nativeRuntimeIdentity{
+		BootID: bootID, EngineID: engineID, DockerActiveSince: dockerStart,
+		NodeActiveSince: nodeStart, CollectorActiveSince: collectorStart,
+	}
+	if identity.BootID != fixture.nodes[index].facts.BootID ||
+		identity.EngineID != fixture.nodes[index].facts.EngineID {
+		return nativeRuntimeIdentity{}, fail("native-lifecycle-host-replaced")
+	}
+	return identity, nil
+}
+
+func (value *gate) nativeLifecycleEvidence(
+	ctx context.Context,
+	targetID paasv1.ResourceID,
+	action paasv1.OperationAction,
+) (nativeLifecycleEvidence, error) {
+	if value.nodes == nil {
+		return nativeLifecycleEvidence{}, fail("native-lifecycle-evidence-input")
+	}
+	_, _, _, ok := executionTargetLifecycleContract(action)
+	auditAction := map[paasv1.OperationAction]auditv1.Action{
+		paasv1.OperationDrainExecutionTarget:    auditv1.ActionPaaSExecutionTargetDrained,
+		paasv1.OperationActivateExecutionTarget: auditv1.ActionPaaSExecutionTargetActivated,
+		paasv1.OperationRemoveExecutionTarget:   auditv1.ActionPaaSExecutionTargetRemoved,
+	}[action]
+	if !ok || auditAction == "" {
+		return nativeLifecycleEvidence{}, fail("native-lifecycle-evidence-action")
+	}
+	installationID := value.nodes.controller.InstallationID
+	ids, err := dockerLines(
+		ctx, "container", "ls", "--quiet",
+		"--filter", "label=com.xiak.matrix.installation="+installationID,
+		"--filter", "label=com.xiak.matrix.role=postgres",
+	)
+	if err != nil || len(ids) != 1 {
+		return nativeLifecycleEvidence{}, fail("native-lifecycle-authority-database")
+	}
+	query := fmt.Sprintf(`SELECT json_build_object(
+        'operations', (SELECT count(*) FROM paas.operations WHERE installation_id='%s' AND action='%s' AND target_id='%s'),
+        'outbox', (SELECT count(*) FROM paas.audit_outbox WHERE installation_id='%s' AND document->>'action'='%s' AND document#>>'{target,id}'='%s')
+    )::text`, installationID, action, targetID, installationID, auditAction, targetID)
+	content, err := docker(
+		ctx, "container", "exec", "--user", "postgres", ids[0],
+		"psql", "--no-psqlrc", "--tuples-only", "--no-align", "--set", "ON_ERROR_STOP=1",
+		"--username", "matrix", "--dbname", "matrix", "--command", query,
+	)
+	var evidence nativeLifecycleEvidence
+	if err != nil || decodeOne(content, &evidence) != nil || evidence.Operations < 0 || evidence.Outbox < 0 {
+		return nativeLifecycleEvidence{}, fail("native-lifecycle-evidence")
+	}
+	return evidence, nil
+}
+
+func (value *gate) beginNativeTargetLifecycle(
+	ctx context.Context,
+	bearer []byte,
+	deployments []paasv1.Deployment,
+	snapshots []paasv1.DeploymentRuntimeSnapshot,
+) (*nativeTargetLifecycleState, error) {
+	if value.nodes == nil || len(value.nodes.nodes) != 2 || len(deployments) != 2 || len(snapshots) != 2 {
+		return nil, fail("native-lifecycle-fixture")
+	}
+	state := &nativeTargetLifecycleState{Operations: make([]paasv1.Operation, 0, 4)}
+	for index := range value.nodes.nodes {
+		identity, err := value.nodes.runtimeIdentity(ctx, index)
+		if err != nil {
+			return nil, err
+		}
+		state.RuntimeIdentities[index] = identity
+	}
+	firstTarget := value.nodes.nodes[0].identity.ExecutionTargetID
+	firstDrain, err := value.edge.transitionExecutionTarget(
+		ctx, bearer, firstTarget, paasv1.OperationDrainExecutionTarget, "phase3-drain-live-target-1",
+	)
+	if err != nil || value.edge.replayExecutionTargetTransition(ctx, bearer, firstDrain) != nil {
+		return nil, fail("native-lifecycle-drain-and-replay")
+	}
+	state.Operations = append(state.Operations, firstDrain.Operation)
+	current, etag, err := value.edge.executionTarget(ctx, bearer, firstTarget)
+	if err != nil || current.Spec.DesiredState != paasv1.ExecutionTargetDraining {
+		return nil, fail("native-lifecycle-drained-target")
+	}
+	if _, err = value.edge.rejectExecutionTargetTransition(
+		ctx, bearer, firstTarget, paasv1.OperationActivateExecutionTarget,
+		firstDrain.Key, etag,
+	); err != nil {
+		return nil, fail("native-lifecycle-changed-action-replay")
+	}
+	state.RemoveEvidence, err = value.nativeLifecycleEvidence(
+		ctx, firstTarget, paasv1.OperationRemoveExecutionTarget,
+	)
+	if err != nil {
+		return nil, err
+	}
+	blocked, err := value.edge.rejectExecutionTargetTransition(
+		ctx, bearer, firstTarget, paasv1.OperationRemoveExecutionTarget,
+		"phase3-remove-live-target-1", etag,
+	)
+	if err != nil || !blocked.Retryable {
+		return nil, fail("native-lifecycle-live-removal-blocked")
+	}
+	afterBlocked, err := value.nativeLifecycleEvidence(
+		ctx, firstTarget, paasv1.OperationRemoveExecutionTarget,
+	)
+	if err != nil || afterBlocked != state.RemoveEvidence {
+		return nil, fail("native-lifecycle-blocked-removal-atomic")
+	}
+	afterRuntime, err := value.waitNativeDeploymentRuntime(
+		ctx, bearer, deployments[0], firstTarget,
+		snapshots[0].Value.Observation.ObservedAt,
+	)
+	if err != nil || afterRuntime.Value.Observation.Instances[0].ID != snapshots[0].Value.Observation.Instances[0].ID {
+		return nil, fail("native-lifecycle-drain-retained-runtime")
+	}
+	if err := value.assertNativeProviderInstance(ctx, 0, deployments[0], afterRuntime); err != nil {
+		return nil, err
+	}
+	if active, err := value.activeCapacityClaims(
+		ctx, value.nodes.controller.InstallationID,
+		nativeRuntimeDeploymentID(0), nativeRuntimeDeploymentID(1),
+	); err != nil || active != 2 {
+		return nil, fail("native-lifecycle-drain-retained-capacity")
+	}
+	secondTarget := value.nodes.nodes[1].identity.ExecutionTargetID
+	secondDrain, err := value.edge.transitionExecutionTarget(
+		ctx, bearer, secondTarget, paasv1.OperationDrainExecutionTarget, "phase3-drain-live-target-2",
+	)
+	if err != nil {
+		return nil, fail("native-lifecycle-second-drain")
+	}
+	secondActivate, err := value.edge.transitionExecutionTarget(
+		ctx, bearer, secondTarget, paasv1.OperationActivateExecutionTarget, "phase3-activate-live-target-2",
+	)
+	if err != nil {
+		return nil, fail("native-lifecycle-reactivate")
+	}
+	state.Operations = append(state.Operations, secondDrain.Operation, secondActivate.Operation)
+	for index := range value.nodes.nodes {
+		identity, err := value.nodes.runtimeIdentity(ctx, index)
+		if err != nil || identity != state.RuntimeIdentities[index] {
+			return nil, fail("native-lifecycle-command-restarted-host-or-service")
+		}
+	}
+	emit("two-host-live-drain-removal-block-and-reactivation")
+	return state, nil
+}
+
+func (value *gate) completeNativeTargetLifecycle(
+	ctx context.Context,
+	bearer []byte,
+	applicationRevisionID paasv1.ResourceID,
+	state nativeTargetLifecycleState,
+) error {
+	firstNode, secondNode := value.nodes.nodes[0], value.nodes.nodes[1]
+	removed, err := value.edge.transitionExecutionTarget(
+		ctx, bearer, firstNode.identity.ExecutionTargetID,
+		paasv1.OperationRemoveExecutionTarget, "phase3-remove-stopped-target-1",
+	)
+	if err != nil || value.edge.replayExecutionTargetTransition(ctx, bearer, removed) != nil {
+		return fail("native-lifecycle-safe-remove-and-replay")
+	}
+	state.Operations = append(state.Operations, removed.Operation)
+	afterEvidence, err := value.nativeLifecycleEvidence(
+		ctx, firstNode.identity.ExecutionTargetID, paasv1.OperationRemoveExecutionTarget,
+	)
+	if err != nil || afterEvidence.Operations != state.RemoveEvidence.Operations+1 ||
+		afterEvidence.Outbox != state.RemoveEvidence.Outbox+1 {
+		return fail("native-lifecycle-remove-operation-outbox")
+	}
+	tombstone, _, err := value.edge.executionTarget(ctx, bearer, firstNode.identity.ExecutionTargetID)
+	if err != nil || tombstone.Spec.DesiredState != paasv1.ExecutionTargetRemoved ||
+		tombstone.Metadata.ResourceVersion < removed.Before.Metadata.ResourceVersion+1 {
+		return fail("native-lifecycle-retained-tombstone")
+	}
+	var inventory paasv1.ExecutionTargetList
+	if _, err = value.edge.get(ctx, "/api/paas/v1/execution-targets", bearer, &inventory); err != nil ||
+		paasv1.ValidateExecutionTargetList(inventory) != nil {
+		return fail("native-lifecycle-default-inventory")
+	}
+	foundSecond := false
+	for _, target := range inventory.Items {
+		if target.Metadata.ID == firstNode.identity.ExecutionTargetID || target.Spec.DesiredState == paasv1.ExecutionTargetRemoved {
+			return fail("native-lifecycle-tombstone-leaked-into-inventory")
+		}
+		foundSecond = foundSecond || target.Metadata.ID == secondNode.identity.ExecutionTargetID
+	}
+	if !foundSecond {
+		return fail("native-lifecycle-active-target-missing")
+	}
+	poolID, labels := value.nodes.registration()
+	response, err := value.edge.json(
+		ctx, http.MethodPost, "/api/paas/v1/execution-targets", bearer,
+		paasv1.RegisterExecutionTargetRequest{
+			ID: firstNode.identity.ExecutionTargetID, Name: string(firstNode.identity.ExecutionTargetID),
+			ExecutionPoolID: poolID, BindingRef: firstNode.binding, Labels: labels,
+		}, map[string]string{"Idempotency-Key": "phase3-reregister-removed-target-1"},
+		http.StatusConflict,
+	)
+	if err != nil {
+		return fail("native-lifecycle-tombstone-reregistration")
+	}
+	var conflict paasv1.Problem
+	if decodeOne(response.body, &conflict) != nil || paasv1.ValidateProblem(conflict) != nil ||
+		conflict.Code != paasv1.ErrorConflict {
+		clear(response.body)
+		return fail("native-lifecycle-tombstone-reregistration")
+	}
+	clear(response.body)
+
+	operation, err := value.edge.mutateDeployment(
+		ctx, http.MethodPost, "/api/paas/v1/deployments", string(nativeAfterRemovalDeploymentID), "", bearer,
+		paasv1.CreateDeploymentRequest{
+			ID: nativeAfterRemovalDeploymentID, Name: string(nativeAfterRemovalDeploymentID),
+			Spec: deploymentSpec(applicationRevisionID, configurationRevisionOne, paasv1.DeploymentDesiredRunning),
+		}, paasv1.OperationDeploy, nativeAfterRemovalDeploymentID,
+	)
+	if err != nil {
+		return fail("native-lifecycle-post-removal-deployment")
+	}
+	if _, err = value.edge.waitOperation(ctx, bearer, operation.ID); err != nil {
+		return fail("native-lifecycle-post-removal-operation")
+	}
+	deployment, err := value.edge.waitDeployment(
+		ctx, bearer, nativeAfterRemovalDeploymentID, 1, paasv1.DeploymentReady,
+	)
+	if err != nil {
+		return fail("native-lifecycle-post-removal-convergence")
+	}
+	snapshot, err := value.waitNativeDeploymentRuntime(
+		ctx, bearer, deployment, secondNode.identity.ExecutionTargetID, time.Time{},
+	)
+	if err != nil {
+		return err
+	}
+	if err := value.assertNativeProviderInstance(ctx, 1, deployment, snapshot); err != nil {
+		return err
+	}
+	spec := deployment.Spec
+	spec.DesiredState = paasv1.DeploymentDesiredStopped
+	operation, err = value.edge.mutateDeployment(
+		ctx, http.MethodPut, "/api/paas/v1/deployments/"+string(deployment.Metadata.ID),
+		"phase3-stop-runtime-after-removal", formatResourceVersion(deployment.Metadata.ResourceVersion),
+		bearer, spec, paasv1.OperationStop, deployment.Metadata.ID,
+	)
+	if err != nil {
+		return fail("native-lifecycle-post-removal-stop")
+	}
+	if _, err = value.edge.waitOperation(ctx, bearer, operation.ID); err != nil {
+		return fail("native-lifecycle-post-removal-stop-operation")
+	}
+	if _, err = value.edge.waitDeployment(
+		ctx, bearer, deployment.Metadata.ID, deployment.Generation+1, paasv1.DeploymentStopped,
+	); err != nil {
+		return fail("native-lifecycle-post-removal-stop-convergence")
+	}
+	if active, err := value.activeCapacityClaims(
+		ctx, value.nodes.controller.InstallationID,
+		nativeRuntimeDeploymentID(0), nativeRuntimeDeploymentID(1), nativeAfterRemovalDeploymentID,
+	); err != nil || active != 0 {
+		return fail("native-lifecycle-final-capacity-release")
+	}
+	for index := range value.nodes.nodes {
+		identity, err := value.nodes.runtimeIdentity(ctx, index)
+		if err != nil || identity != state.RuntimeIdentities[index] {
+			return fail("native-lifecycle-remove-restarted-host-or-service")
+		}
+		result, statusErr := value.nodes.mx(ctx, index, true, "status", "--root", value.nodes.installationRoot())
+		if statusErr != nil || result.Changed || result.ReleaseID != value.nodes.releases.b.Manifest.Release.ID ||
+			result.ConfigurationDigest != value.nodes.nodes[index].digest {
+			return fail("native-lifecycle-node-release-retained")
+		}
+	}
+	if err := value.assertNativeLifecycleAudit(ctx, bearer, state.Operations); err != nil {
+		return err
+	}
+	emit("safe-tombstone-removal-and-remaining-host-placement")
+	return nil
+}
+
+func (value *gate) assertNativeLifecycleAudit(
+	ctx context.Context,
+	bearer []byte,
+	operations []paasv1.Operation,
+) error {
+	expected := map[auditv1.Action][]paasv1.Operation{}
+	for _, operation := range operations {
+		action := map[paasv1.OperationAction]auditv1.Action{
+			paasv1.OperationDrainExecutionTarget:    auditv1.ActionPaaSExecutionTargetDrained,
+			paasv1.OperationActivateExecutionTarget: auditv1.ActionPaaSExecutionTargetActivated,
+			paasv1.OperationRemoveExecutionTarget:   auditv1.ActionPaaSExecutionTargetRemoved,
+		}[operation.Action]
+		if action == "" {
+			return fail("native-lifecycle-audit-input")
+		}
+		expected[action] = append(expected[action], operation)
+	}
+	poll, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	for poll.Err() == nil {
+		complete := true
+		for action, wanted := range expected {
+			response, err := value.edge.json(
+				poll, http.MethodPost, "/api/audit/v1/platform/records:query", bearer,
+				auditv1.QueryRecordsRequest{PageSize: 100, Action: action}, nil, http.StatusOK,
+			)
+			var page auditv1.RecordPage
+			valid := err == nil && decodeOne(response.body, &page) == nil &&
+				auditv1.ValidateRecordPage(page) == nil && page.InstallationID == value.nodes.controller.InstallationID &&
+				page.NextCursor == ""
+			clear(response.body)
+			if !valid || len(page.Records) < len(wanted) {
+				complete = false
+				continue
+			}
+			if len(page.Records) != len(wanted) {
+				return fail("native-lifecycle-audit-duplicate")
+			}
+			for _, operation := range wanted {
+				matches := 0
+				for _, record := range page.Records {
+					if record.Event.OperationID != auditv1.OperationID(operation.ID) {
+						continue
+					}
+					matches++
+					if record.Source != auditv1.SourcePaaS || record.Event.Action != action ||
+						record.Event.InstallationID != value.nodes.controller.InstallationID ||
+						record.Event.TenantID != "" || record.Event.Target.ID != string(operation.Target.ID) ||
+						record.Event.Actor.Type != auditv1.ActorUser ||
+						record.Event.Actor.ID != auditv1.ActorID(operation.RequestedBy.ID) ||
+						record.Event.IAMDecisionID == "" || record.Event.Result != auditv1.ResultSucceeded {
+						return fail("native-lifecycle-audit-association")
+					}
+				}
+				if matches != 1 {
+					return fail("native-lifecycle-audit-association")
+				}
+			}
+		}
+		if complete {
+			if _, err := value.edge.verifyAuditChain(ctx, bearer); err != nil {
+				return fail("native-lifecycle-audit-integrity")
+			}
+			return nil
+		}
+		if !waitPoll(poll, 250*time.Millisecond) {
+			break
+		}
+	}
+	return fail("native-lifecycle-audit-delivery")
 }
 
 func (value *gate) waitNativeDeploymentRuntime(

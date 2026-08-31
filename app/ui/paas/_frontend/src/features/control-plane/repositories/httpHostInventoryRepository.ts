@@ -367,14 +367,15 @@ export const httpHostInventoryRepository: HostInventoryRepository = {
       }
     });
     operation(transitionResponse.body, command);
-    const nextVersionText = transitionResponse.response.headers.get("ETag");
+    const transitionVersion = current.resourceVersion + 1;
+    exactETag(transitionResponse.response, transitionVersion);
     const nextResponse = await requestJSONWithResponse<unknown>(path, { headers: authorization });
     const changed = target(nextResponse.body);
-    if (changed.id !== command.targetId || changed.resourceVersion <= current.resourceVersion ||
-        changed.desiredState !== expectedState(command.action) ||
-        exactETag(nextResponse.response, changed.resourceVersion) !== nextVersionText) {
+    if (changed.id !== command.targetId || changed.resourceVersion < transitionVersion ||
+        changed.desiredState !== expectedState(command.action)) {
       throw new Error("INVALID_HOST_LIFECYCLE_RESULT_RESPONSE");
     }
+    exactETag(nextResponse.response, changed.resourceVersion);
     return changed;
   }
 };

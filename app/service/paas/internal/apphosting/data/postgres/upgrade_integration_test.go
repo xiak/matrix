@@ -37,7 +37,7 @@ import (
 
 const (
 	deploymentRuntimeCompatibilityDSN = "MATRIX_PAAS_RUNTIME_COMPAT_POSTGRES_TEST_DSN"
-	deploymentRuntimePredecessor      = "6b8eeb237a7acd99d1518b4f2f0aac2c2b044767"
+	hostLifecyclePredecessor          = "5344b739b4284e2f6f42a12165105d9b0e349bdc"
 	compatibilityAPILogin             = "matrix_paas_api_login"
 	compatibilityWorkerLogin          = "matrix_paas_worker_login"
 	compatibilityAPIPassword          = "mxp1.runtime-compat-api-000000000000000000000000"
@@ -201,7 +201,7 @@ func TestInstallationPartitionUpgradePreservesTenantWork(t *testing.T) {
 	assertOperationQueue(t, ctx, admin, workerPool, retained)
 }
 
-func TestDeploymentRuntimeExactPredecessorCompatibility(t *testing.T) {
+func TestHostLifecycleExactPredecessorUpgradeAndRollbackRejection(t *testing.T) {
 	adminDSN := os.Getenv(deploymentRuntimeCompatibilityDSN)
 	if adminDSN == "" {
 		t.Skipf(
@@ -246,7 +246,7 @@ func TestDeploymentRuntimeExactPredecessorCompatibility(t *testing.T) {
 		ctx,
 		repositoryRoot,
 		temporary,
-		deploymentRuntimePredecessor,
+		hostLifecyclePredecessor,
 	)
 	predecessor := buildFixedPaaSBinaries(t, ctx, predecessorSource, temporary)
 	apiMigrationDSN := compatibilityRuntimeDSN(
@@ -303,7 +303,7 @@ func TestDeploymentRuntimeExactPredecessorCompatibility(t *testing.T) {
 		predecessorMigrationEnvironment,
 	)
 	if err := paasmigration.Verify(ctx, admin); err == nil {
-		t.Fatal("revision-6 migration verification accepted the unexpanded revision-5 schema")
+		t.Fatal("schema-3 migration verification accepted the predecessor schema")
 	}
 
 	apiPool, err := pgxpool.New(ctx, apiProcessDSN)
@@ -341,7 +341,7 @@ func TestDeploymentRuntimeExactPredecessorCompatibility(t *testing.T) {
 			apiMigrationDSN,
 			workerMigrationDSN,
 		); err != nil {
-			t.Fatalf("apply revision-6 expansion attempt %d: %v", attempt, err)
+			t.Fatalf("apply host lifecycle schema expansion attempt %d: %v", attempt, err)
 		}
 	}
 	if err := paasmigration.VerifyInstalled(
@@ -350,7 +350,7 @@ func TestDeploymentRuntimeExactPredecessorCompatibility(t *testing.T) {
 		apiMigrationDSN,
 		workerMigrationDSN,
 	); err != nil {
-		t.Fatalf("verify revision-6 expansion: %v", err)
+		t.Fatalf("verify host lifecycle schema expansion: %v", err)
 	}
 	if retainedAfter := compatibilityRetainedState(
 		t,
@@ -358,7 +358,7 @@ func TestDeploymentRuntimeExactPredecessorCompatibility(t *testing.T) {
 		admin,
 		fixture,
 	); retainedAfter != retainedBefore {
-		t.Fatal("revision-6 expansion rewrote predecessor tenant work")
+		t.Fatal("host lifecycle schema expansion rewrote predecessor tenant work")
 	}
 	runtimeBefore := createCompatibilityRuntimeSnapshot(
 		t,
@@ -371,9 +371,11 @@ func TestDeploymentRuntimeExactPredecessorCompatibility(t *testing.T) {
 	)
 	rollbackStateBefore := compatibilityRetainedState(t, ctx, admin, fixture)
 
-	// The installation owner migrates only forward. A data-preserving rollback
-	// starts the predecessor against the expanded database and invokes its
-	// read-only verifier; it never reruns an old migration's privilege reset.
+	// The predecessor's read-only migration verifier audits the still-supported
+	// structural and privilege subset; it is not a release-profile permit. The
+	// schema-2 API must nevertheless fail readiness before serving against
+	// schema 3, which can persist REMOVED tombstones and lifecycle facts.
+	// Rollback across this profile boundary requires an authenticated backup.
 	runFixedPaaSMigration(
 		t,
 		ctx,
@@ -381,7 +383,7 @@ func TestDeploymentRuntimeExactPredecessorCompatibility(t *testing.T) {
 		"verify",
 		predecessorMigrationEnvironment,
 	)
-	assertFixedPaaSReady(
+	assertFixedPaaSNotReady(
 		t,
 		ctx,
 		predecessor.api,
@@ -394,7 +396,7 @@ func TestDeploymentRuntimeExactPredecessorCompatibility(t *testing.T) {
 		apiMigrationDSN,
 		workerMigrationDSN,
 	); err != nil {
-		t.Fatalf("successor verification after predecessor verifier and API: %v", err)
+		t.Fatalf("successor verification after rejected predecessor: %v", err)
 	}
 	if rollbackStateAfter := compatibilityRetainedState(
 		t,
@@ -402,7 +404,7 @@ func TestDeploymentRuntimeExactPredecessorCompatibility(t *testing.T) {
 		admin,
 		fixture,
 	); rollbackStateAfter != rollbackStateBefore {
-		t.Fatal("predecessor verifier or API rewrote retained PaaS work")
+		t.Fatal("rejected predecessor verifier or API rewrote retained PaaS work")
 	}
 	if runtimeAfter := compatibilityRuntimeState(
 		t,
@@ -411,7 +413,7 @@ func TestDeploymentRuntimeExactPredecessorCompatibility(t *testing.T) {
 		fixture.tenantA,
 		retained.Deployment.Metadata.ID,
 	); runtimeAfter != runtimeBefore {
-		t.Fatal("predecessor verifier or API rewrote the additive runtime snapshot")
+		t.Fatal("rejected predecessor verifier or API rewrote the runtime snapshot")
 	}
 	assertCompatibilityRuntimeReadable(
 		t,
@@ -525,8 +527,8 @@ func buildFixedPaaSBinaries(
 		extension = ".exe"
 	}
 	result := fixedPaaSBinaries{
-		migration: filepath.Join(temporary, "matrix-paas-migrate-r5"+extension),
-		api:       filepath.Join(temporary, "matrix-paas-r5"+extension),
+		migration: filepath.Join(temporary, "matrix-paas-migrate-r7"+extension),
+		api:       filepath.Join(temporary, "matrix-paas-r7"+extension),
 	}
 	for _, build := range []struct {
 		output      string
@@ -912,7 +914,7 @@ func assertCompatibilityRuntimeReadable(
 	}
 }
 
-func assertFixedPaaSReady(
+func assertFixedPaaSNotReady(
 	t *testing.T,
 	ctx context.Context,
 	binary string,
@@ -971,7 +973,7 @@ func assertFixedPaaSReady(
 		"MATRIX_PAAS_SERVICE_CREDENTIAL_FILE=" + credentialPath,
 		"MATRIX_PAAS_LISTEN_ADDRESS=" + address,
 		"MATRIX_PAAS_INSTALLATION_ID=installation-runtime-compat",
-		"MATRIX_PAAS_RELEASE_ID=matrix-v0.3.0-runtime-5",
+		"MATRIX_PAAS_RELEASE_ID=matrix-v0.3.0-runtime-7",
 		"MATRIX_PAAS_VERIFICATION_ARTIFACT_DIGEST=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		"MATRIX_PAAS_NODE_CONNECTIONS_FILE=",
 	})
@@ -986,7 +988,7 @@ func assertFixedPaaSReady(
 	client := &http.Client{Transport: transport, Timeout: time.Second}
 	defer client.CloseIdleConnections()
 	deadline := time.Now().Add(20 * time.Second)
-	ready := false
+	refused := false
 	for time.Now().Before(deadline) {
 		request, err := http.NewRequestWithContext(
 			ctx,
@@ -999,14 +1001,13 @@ func assertFixedPaaSReady(
 		}
 		response, err := client.Do(request)
 		if err == nil {
-			var readiness paasv1.Readiness
-			decodeErr := json.NewDecoder(response.Body).Decode(&readiness)
+			var problem paasv1.Problem
+			decodeErr := json.NewDecoder(response.Body).Decode(&problem)
 			closeErr := response.Body.Close()
-			if response.StatusCode == http.StatusOK && decodeErr == nil &&
-				closeErr == nil && readiness.State == paasv1.ReadinessReady &&
-				readiness.SchemaVersion == paasDatabaseSchemaVersion &&
-				paasv1.ValidateReadiness(readiness) == nil {
-				ready = true
+			if response.StatusCode == http.StatusServiceUnavailable && decodeErr == nil &&
+				closeErr == nil && problem.Status == http.StatusServiceUnavailable &&
+				problem.Code == paasv1.ErrorInternal && paasv1.ValidateProblem(problem) == nil {
+				refused = true
 				break
 			}
 		}
@@ -1021,10 +1022,10 @@ func assertFixedPaaSReady(
 		_ = command.Process.Kill()
 		<-wait
 	}
-	if !ready || invalid.Load() || calls.Load() == 0 {
+	if !refused || invalid.Load() || calls.Load() != 0 {
 		t.Fatalf(
-			"fixed predecessor PaaS readiness failed: ready=%v invalidIAM=%v iamCalls=%d",
-			ready,
+			"fixed predecessor PaaS did not reject expanded schema: refused=%v invalidIAM=%v iamCalls=%d",
+			refused,
 			invalid.Load(),
 			calls.Load(),
 		)

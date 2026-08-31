@@ -1249,10 +1249,20 @@ drain/activate/remove, tombstone retention, registration/fingerprint reuse
 rejection, removal failure with current work and byte/count-preserving failure
 atomicity. Independent IAM 5 and Audit 4 HTTP/PostgreSQL race gates prove the
 new platform decisions, producer proof and immutable event contracts. The
-full Go suite and vet pass; all 130 frontend behavior tests, type, lint,
+fixed `5344b739b4284e2f6f42a12165105d9b0e349bdc` predecessor upgrades retained
+PaaS work to schema 3 without rewriting it. Its read-only migration verifier
+can still audit the structural subset, but its API returns 503 before calling
+IAM; rollback across the 4/3/2+r7 to 5/4/3+r8 boundary therefore requires an
+authenticated backup rather than starting old services on the expanded
+database. The signed two-host driver is prepared to prove live-work drain,
+blocked removal, reactivation, safe tombstone removal, remaining-host
+placement, exact Audit delivery and unchanged boot/engine/service identities,
+but that driver has not yet run.
+
+The full Go suite and vet pass; all 131 frontend behavior tests, type, lint,
 architecture and 20 contrast checks pass. Two constrained production exports
 produce the same 72-file embedded tree with SHA-256
-`7e4ae064f1dbaa099f9ee86a3333804ad88109e03ac4041884534a56e2097ad5`;
+`d62af55a88c6f8a846ac6951f63b988b439645c6cf1c8c9424844caa4e8266e4`;
 all three OpenAPI documents also regenerate byte-identically. These local
 gates do not accept P3-4: independent CI, the signed predecessor transition
 and the authorized two-host drain/live-work blocker/safe-removal exercise are

@@ -375,6 +375,10 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err := value.nativeReleasePair(ctx, bearer); err != nil {
 		return err
 	}
+	if value.config.multiHostLifecycle {
+		emit("signed-multi-host-lifecycle-complete")
+		return nil
+	}
 	if err := value.assertNativeNodes(ctx, bearer, false); err != nil {
 		return err
 	}

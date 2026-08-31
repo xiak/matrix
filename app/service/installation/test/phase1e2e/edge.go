@@ -11,6 +11,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -32,6 +33,16 @@ type httpResult struct {
 	status int
 	header http.Header
 	body   []byte
+}
+
+type executionTargetTransitionResult struct {
+	Before    paasv1.ExecutionTarget
+	After     paasv1.ExecutionTarget
+	Operation paasv1.Operation
+	Action    paasv1.OperationAction
+	Path      string
+	Key       string
+	IfMatch   string
 }
 
 func newEdgeClient(endpoint string) *edgeClient {
@@ -221,6 +232,139 @@ func (client *edgeClient) createResource(
 		return paasv1.Operation{}, errors.New("PaaS resource creation response failed")
 	}
 	return operation, nil
+}
+
+func executionTargetLifecycleContract(action paasv1.OperationAction) (string, paasv1.ExecutionTargetDesiredState, paasv1.ExecutionTargetDesiredState, bool) {
+	switch action {
+	case paasv1.OperationDrainExecutionTarget:
+		return "drain", paasv1.ExecutionTargetActive, paasv1.ExecutionTargetDraining, true
+	case paasv1.OperationActivateExecutionTarget:
+		return "activate", paasv1.ExecutionTargetDraining, paasv1.ExecutionTargetActive, true
+	case paasv1.OperationRemoveExecutionTarget:
+		return "remove", paasv1.ExecutionTargetDraining, paasv1.ExecutionTargetRemoved, true
+	default:
+		return "", "", "", false
+	}
+}
+
+func (client *edgeClient) executionTarget(
+	ctx context.Context,
+	bearer []byte,
+	targetID paasv1.ResourceID,
+) (paasv1.ExecutionTarget, string, error) {
+	var target paasv1.ExecutionTarget
+	header, err := client.get(ctx, "/api/paas/v1/execution-targets/"+string(targetID), bearer, &target)
+	etag := header.Get("ETag")
+	if err != nil || paasv1.ValidateExecutionTarget(target) != nil || target.Metadata.ID != targetID ||
+		etag != formatResourceVersion(target.Metadata.ResourceVersion) {
+		return paasv1.ExecutionTarget{}, "", errors.New("PaaS ExecutionTarget read response failed")
+	}
+	return target, etag, nil
+}
+
+func (client *edgeClient) transitionExecutionTarget(
+	ctx context.Context,
+	bearer []byte,
+	targetID paasv1.ResourceID,
+	action paasv1.OperationAction,
+	key string,
+) (executionTargetTransitionResult, error) {
+	segment, source, destination, ok := executionTargetLifecycleContract(action)
+	if !ok {
+		return executionTargetTransitionResult{}, errors.New("PaaS ExecutionTarget action failed")
+	}
+	before, ifMatch, err := client.executionTarget(ctx, bearer, targetID)
+	if err != nil || before.Spec.DesiredState != source {
+		return executionTargetTransitionResult{}, errors.New("PaaS ExecutionTarget source state failed")
+	}
+	path := "/api/paas/v1/execution-targets/" + string(targetID) + "/" + segment
+	response, err := client.json(
+		ctx, http.MethodPost, path, bearer, nil,
+		map[string]string{"Idempotency-Key": key, "If-Match": ifMatch}, http.StatusOK,
+	)
+	if err != nil {
+		return executionTargetTransitionResult{}, err
+	}
+	defer clear(response.body)
+	var operation paasv1.Operation
+	nextVersion := before.Metadata.ResourceVersion + 1
+	if decodeOne(response.body, &operation) != nil || paasv1.ValidateOperation(operation) != nil ||
+		operation.Action != action || operation.Target != (paasv1.ResourceRef{Kind: "ExecutionTarget", ID: targetID}) ||
+		operation.State != paasv1.OperationSucceeded || response.header.Get("ETag") != formatResourceVersion(nextVersion) ||
+		response.header.Get("Location") != "/v1/execution-targets/"+string(targetID) ||
+		response.header.Get("Operation-Location") != "/v1/platform/operations/"+string(operation.ID) {
+		return executionTargetTransitionResult{}, errors.New("PaaS ExecutionTarget transition response failed")
+	}
+	var stored paasv1.Operation
+	if _, err = client.get(ctx, "/api/paas/v1/platform/operations/"+string(operation.ID), bearer, &stored); err != nil ||
+		!reflect.DeepEqual(stored, operation) {
+		return executionTargetTransitionResult{}, errors.New("PaaS ExecutionTarget Operation failed")
+	}
+	after, _, err := client.executionTarget(ctx, bearer, targetID)
+	if err != nil || after.Spec.DesiredState != destination || after.Metadata.ResourceVersion < nextVersion {
+		return executionTargetTransitionResult{}, errors.New("PaaS ExecutionTarget result failed")
+	}
+	return executionTargetTransitionResult{
+		Before: before, After: after, Operation: operation,
+		Action: action, Path: path, Key: key, IfMatch: ifMatch,
+	}, nil
+}
+
+func (client *edgeClient) replayExecutionTargetTransition(
+	ctx context.Context,
+	bearer []byte,
+	transition executionTargetTransitionResult,
+) error {
+	response, err := client.json(
+		ctx, http.MethodPost, transition.Path, bearer, nil,
+		map[string]string{"Idempotency-Key": transition.Key, "If-Match": transition.IfMatch}, http.StatusOK,
+	)
+	if err != nil {
+		return err
+	}
+	defer clear(response.body)
+	var operation paasv1.Operation
+	if decodeOne(response.body, &operation) != nil || !reflect.DeepEqual(operation, transition.Operation) ||
+		response.header.Get("Location") != "/v1/execution-targets/"+string(transition.Before.Metadata.ID) ||
+		response.header.Get("Operation-Location") != "/v1/platform/operations/"+string(operation.ID) {
+		return errors.New("PaaS ExecutionTarget replay response failed")
+	}
+	version, err := strconv.ParseUint(strings.Trim(response.header.Get("ETag"), `"`), 10, 64)
+	if err != nil || response.header.Get("ETag") != formatResourceVersion(version) ||
+		version < transition.Before.Metadata.ResourceVersion+1 {
+		return errors.New("PaaS ExecutionTarget replay ETag failed")
+	}
+	return nil
+}
+
+func (client *edgeClient) rejectExecutionTargetTransition(
+	ctx context.Context,
+	bearer []byte,
+	targetID paasv1.ResourceID,
+	action paasv1.OperationAction,
+	key, ifMatch string,
+) (paasv1.Problem, error) {
+	segment, _, _, ok := executionTargetLifecycleContract(action)
+	if !ok {
+		return paasv1.Problem{}, errors.New("PaaS ExecutionTarget rejected action failed")
+	}
+	response, err := client.json(
+		ctx, http.MethodPost,
+		"/api/paas/v1/execution-targets/"+string(targetID)+"/"+segment,
+		bearer, nil, map[string]string{"Idempotency-Key": key, "If-Match": ifMatch},
+		http.StatusConflict,
+	)
+	if err != nil {
+		return paasv1.Problem{}, err
+	}
+	defer clear(response.body)
+	var problem paasv1.Problem
+	if decodeOne(response.body, &problem) != nil || paasv1.ValidateProblem(problem) != nil ||
+		problem.Status != http.StatusConflict || problem.Code != paasv1.ErrorConflict ||
+		response.header.Get("ETag") != "" || response.header.Get("Operation-Location") != "" {
+		return paasv1.Problem{}, errors.New("PaaS ExecutionTarget rejection response failed")
+	}
+	return problem, nil
 }
 
 func (client *edgeClient) mutateDeployment(

@@ -18,6 +18,7 @@ type options struct {
 	edge                    string
 	afterStart              bool
 	browserReady            bool
+	multiHostLifecycle      bool
 	nativeNodes             string
 	nativeDeploymentRuntime bool
 	browserPasswordFile     string

@@ -189,6 +189,18 @@ describe("httpHostInventoryRepository", () => {
     expect(new Headers((fetchMock.mock.calls[1]![1] as RequestInit).headers).has("Content-Type")).toBe(false);
   });
 
+  it("accepts a newer observation version after the lifecycle commit", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(targetResponse(target("ACTIVE", 4)))
+      .mockResolvedValueOnce(operationResponse("DRAIN", 5))
+      .mockResolvedValueOnce(targetResponse(target("DRAINING", 6)));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(httpHostInventoryRepository.transition("platform-session", {
+      targetId: "node-a", action: "DRAIN", resourceVersion: 4
+    })).resolves.toMatchObject({ desiredState: "DRAINING", resourceVersion: 6 });
+  });
+
   it("fails closed before mutation when the visible resource version or server ETag is stale", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(targetResponse(target("ACTIVE", 5)))

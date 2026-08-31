@@ -352,7 +352,7 @@ func TestBrowserPasswordInputRequiresPrivateRegularBoundedContent(t *testing.T) 
 	}
 }
 
-func TestBrowserPhaseOwnsItsPrivateCredentialWithoutClaimingNativeRuntime(t *testing.T) {
+func TestSpecializedAcceptancePhasesOwnOnlyTheirRequiredInputs(t *testing.T) {
 	directory := t.TempDir()
 	password := filepath.Join(directory, "browser-password.private")
 	nodes := filepath.Join(directory, "native-nodes.json")
@@ -364,6 +364,8 @@ func TestBrowserPhaseOwnsItsPrivateCredentialWithoutClaimingNativeRuntime(t *tes
 	}{
 		{name: "browser acceptance with local runtime", phase: "browser", password: true, accept: true},
 		{name: "browser acceptance without operator credential", phase: "browser"},
+		{name: "multi-host lifecycle with native runtime", phase: "multi-host", native: true, accept: true},
+		{name: "multi-host lifecycle without native runtime", phase: "multi-host"},
 		{name: "ordinary lifecycle cannot expose an operator credential", phase: "run", password: true},
 		{name: "existing native browser acceptance", phase: "run", password: true, native: true, accept: true},
 	} {
@@ -388,8 +390,9 @@ func TestBrowserPhaseOwnsItsPrivateCredentialWithoutClaimingNativeRuntime(t *tes
 			if (err == nil) != scenario.accept {
 				t.Fatalf("browser phase accepted=%t, want %t", err == nil, scenario.accept)
 			}
-			if scenario.accept && config.browserReady != (scenario.phase == "browser") {
-				t.Fatal("browser phase was not retained independently of the native runtime")
+			if scenario.accept && (config.browserReady != (scenario.phase == "browser") ||
+				config.multiHostLifecycle != (scenario.phase == "multi-host")) {
+				t.Fatal("specialized acceptance phase was not retained independently of the native runtime")
 			}
 		})
 	}
@@ -397,7 +400,7 @@ func TestBrowserPhaseOwnsItsPrivateCredentialWithoutClaimingNativeRuntime(t *tes
 
 func optionsFromEnvironment() (options, error) {
 	phase := os.Getenv("MATRIX_PHASE1_E2E_PHASE")
-	if phase != "run" && phase != "after-restart" && phase != "browser" {
+	if phase != "run" && phase != "after-restart" && phase != "browser" && phase != "multi-host" {
 		return options{}, fail("command-input")
 	}
 	config := options{
@@ -409,6 +412,7 @@ func optionsFromEnvironment() (options, error) {
 		edge:                    defaultEdgeEndpoint,
 		afterStart:              phase == "after-restart",
 		browserReady:            phase == "browser",
+		multiHostLifecycle:      phase == "multi-host",
 		nativeNodes:             os.Getenv("MATRIX_PHASE1_NATIVE_NODES"),
 		nativeDeploymentRuntime: os.Getenv("MATRIX_PHASE1_NATIVE_DEPLOYMENT_RUNTIME") == "1",
 		browserPasswordFile:     os.Getenv("MATRIX_PHASE1_BROWSER_PASSWORD_FILE"),
@@ -433,6 +437,9 @@ func optionsFromEnvironment() (options, error) {
 		return options{}, fail("command-input")
 	}
 	if config.nativeDeploymentRuntime && (config.nativeNodes == "" || config.afterStart) {
+		return options{}, fail("command-input")
+	}
+	if config.multiHostLifecycle && !config.nativeDeploymentRuntime {
 		return options{}, fail("command-input")
 	}
 	if config.browserReady && config.browserPasswordFile == "" {
