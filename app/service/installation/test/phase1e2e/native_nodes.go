@@ -825,7 +825,7 @@ func (value *gate) nativeReleasePair(ctx context.Context, bearer []byte) error {
 	}
 	fixture := value.nodes
 	for index, node := range fixture.nodes {
-		result, err := fixture.mx(ctx, index, false, "upgrade", "--root", nativeInstallationRoot, "--bundle", nativeFixtureRoot+"/node-b")
+		result, err := fixture.mx(ctx, index, true, "upgrade", "--root", nativeInstallationRoot, "--bundle", nativeFixtureRoot+"/node-b")
 		if err != nil || !result.Changed || result.ReleaseID != fixture.releases.b.Manifest.Release.ID || result.PreviousID != fixture.releases.a.Manifest.Release.ID || result.ConfigurationDigest != node.digest {
 			return fail("native-real-successor-upgrade")
 		}

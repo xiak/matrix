@@ -230,7 +230,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return err
 	}
 
-	upgrade, err := runMX(ctx, value.releases.a, "upgrade", []string{
+	upgrade, err := runMX(ctx, value.releases.b, "upgrade", []string{
 		"--bundle", value.releases.b.Root, "--root", value.config.root,
 	}, value.forbidden(secret, newPassword, bearer))
 	if err != nil || upgrade.ReleaseID != value.releases.b.Manifest.Release.ID ||
@@ -1066,7 +1066,7 @@ func (value *gate) failedUpgrade(
 	upgradeContext, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	command, stdout, stderr, err := startMX(
-		upgradeContext, value.releases.a, "upgrade",
+		upgradeContext, value.releases.b, "upgrade",
 		[]string{"--bundle", value.releases.b.Root, "--root", value.config.root},
 	)
 	if err != nil {
