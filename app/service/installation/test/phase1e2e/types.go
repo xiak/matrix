@@ -17,6 +17,7 @@ type options struct {
 	trustKey                string
 	edge                    string
 	afterStart              bool
+	browserReady            bool
 	nativeNodes             string
 	nativeDeploymentRuntime bool
 	browserPasswordFile     string

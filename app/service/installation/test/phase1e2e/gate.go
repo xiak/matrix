@@ -378,6 +378,10 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err := value.assertNativeNodes(ctx, bearer, false); err != nil {
 		return err
 	}
+	if value.config.browserReady {
+		emit("browser-successor-ready")
+		return nil
+	}
 
 	rollback, err := runMX(ctx, value.releases.b, "rollback", []string{"--root", value.config.root}, value.forbidden(secret, newPassword, bearer))
 	if err != nil || rollback.ReleaseID != value.releases.a.Manifest.Release.ID ||

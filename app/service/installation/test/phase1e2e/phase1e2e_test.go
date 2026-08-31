@@ -353,9 +353,52 @@ func TestBrowserPasswordInputRequiresPrivateRegularBoundedContent(t *testing.T) 
 	}
 }
 
+func TestBrowserPhaseOwnsItsPrivateCredentialWithoutClaimingNativeRuntime(t *testing.T) {
+	directory := t.TempDir()
+	password := filepath.Join(directory, "browser-password.private")
+	nodes := filepath.Join(directory, "native-nodes.json")
+	for _, scenario := range []struct {
+		name, phase string
+		password    bool
+		native      bool
+		accept      bool
+	}{
+		{name: "browser acceptance with local runtime", phase: "browser", password: true, accept: true},
+		{name: "browser acceptance without operator credential", phase: "browser"},
+		{name: "ordinary lifecycle cannot expose an operator credential", phase: "run", password: true},
+		{name: "existing native browser acceptance", phase: "run", password: true, native: true, accept: true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			t.Setenv("MATRIX_PHASE1_E2E_PHASE", scenario.phase)
+			t.Setenv("MATRIX_PHASE1_ROOT", filepath.Join(directory, "installation"))
+			t.Setenv("MATRIX_PHASE1_RELEASE_BASE", "")
+			t.Setenv("MATRIX_PHASE1_RELEASE_A", filepath.Join(directory, "release-a"))
+			t.Setenv("MATRIX_PHASE1_RELEASE_B", filepath.Join(directory, "release-b"))
+			t.Setenv("MATRIX_PHASE1_TRUST_KEY", filepath.Join(directory, "trust.pem"))
+			t.Setenv("MATRIX_PHASE1_NATIVE_NODES", "")
+			t.Setenv("MATRIX_PHASE1_NATIVE_DEPLOYMENT_RUNTIME", "")
+			t.Setenv("MATRIX_PHASE1_BROWSER_PASSWORD_FILE", "")
+			if scenario.password {
+				t.Setenv("MATRIX_PHASE1_BROWSER_PASSWORD_FILE", password)
+			}
+			if scenario.native {
+				t.Setenv("MATRIX_PHASE1_NATIVE_NODES", nodes)
+				t.Setenv("MATRIX_PHASE1_NATIVE_DEPLOYMENT_RUNTIME", "1")
+			}
+			config, err := optionsFromEnvironment()
+			if (err == nil) != scenario.accept {
+				t.Fatalf("browser phase accepted=%t, want %t", err == nil, scenario.accept)
+			}
+			if scenario.accept && config.browserReady != (scenario.phase == "browser") {
+				t.Fatal("browser phase was not retained independently of the native runtime")
+			}
+		})
+	}
+}
+
 func optionsFromEnvironment() (options, error) {
 	phase := os.Getenv("MATRIX_PHASE1_E2E_PHASE")
-	if phase != "run" && phase != "after-restart" {
+	if phase != "run" && phase != "after-restart" && phase != "browser" {
 		return options{}, fail("command-input")
 	}
 	config := options{
@@ -366,6 +409,7 @@ func optionsFromEnvironment() (options, error) {
 		trustKey:                os.Getenv("MATRIX_PHASE1_TRUST_KEY"),
 		edge:                    defaultEdgeEndpoint,
 		afterStart:              phase == "after-restart",
+		browserReady:            phase == "browser",
 		nativeNodes:             os.Getenv("MATRIX_PHASE1_NATIVE_NODES"),
 		nativeDeploymentRuntime: os.Getenv("MATRIX_PHASE1_NATIVE_DEPLOYMENT_RUNTIME") == "1",
 		browserPasswordFile:     os.Getenv("MATRIX_PHASE1_BROWSER_PASSWORD_FILE"),
@@ -392,7 +436,10 @@ func optionsFromEnvironment() (options, error) {
 	if config.nativeDeploymentRuntime && (config.nativeNodes == "" || config.afterStart) {
 		return options{}, fail("command-input")
 	}
-	if config.browserPasswordFile != "" && (!config.nativeDeploymentRuntime || !filepath.IsAbs(config.browserPasswordFile) || filepath.Clean(config.browserPasswordFile) != config.browserPasswordFile) {
+	if config.browserReady && config.browserPasswordFile == "" {
+		return options{}, fail("command-input")
+	}
+	if config.browserPasswordFile != "" && ((!config.browserReady && !config.nativeDeploymentRuntime) || !filepath.IsAbs(config.browserPasswordFile) || filepath.Clean(config.browserPasswordFile) != config.browserPasswordFile) {
 		return options{}, fail("command-input")
 	}
 	return config, nil
