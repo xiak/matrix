@@ -2823,6 +2823,7 @@ BEGIN
         PERFORM 1
           FROM paas.adapter_commands AS command
           WHERE command.execution_target_id = effective_target_id
+           AND command.action <> 'OBSERVE_DEPLOYMENT'
            AND NOT EXISTS (
                 SELECT 1 FROM paas.adapter_receipts AS receipt
                  WHERE receipt.tenant_id = command.tenant_id

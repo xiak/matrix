@@ -368,6 +368,99 @@ func assertExecutionAdmission(t *testing.T, ctx context.Context, admin *pgx.Conn
 	if successes != 1 || conflicts != 1 || drainedAgain.Target.Spec.DesiredState != paasv1.ExecutionTargetDraining {
 		t.Fatalf("concurrent drain successes=%d conflicts=%d result=%#v errors=%#v", successes, conflicts, drainedAgain, raceErrors)
 	}
+
+	// Observation commands complete through deployment_observations and never
+	// receive an adapter_receipt. Retain real completed observation history on
+	// this target while separately proving that an unfinished side-effecting
+	// command still fences removal.
+	var observationTenant, observationCommand string
+	if err := admin.QueryRow(ctx, `
+		WITH selected AS (
+			SELECT command.tenant_id,command.id
+			  FROM paas.adapter_commands AS command
+			  JOIN paas.deployment_observations AS observation
+			    ON observation.tenant_id=command.tenant_id
+			   AND observation.command_id=command.id
+			 WHERE command.action='OBSERVE_DEPLOYMENT'
+			 ORDER BY command.tenant_id,command.id
+			 LIMIT 1
+		)
+		UPDATE paas.adapter_commands AS command
+		   SET execution_target_id=$1,
+		       binding_ref=$2,
+		       document=jsonb_set(
+				jsonb_set(command.document,'{executionTargetId}',to_jsonb($1::text),false),
+				'{bindingRef}',to_jsonb($2::text),false
+			)
+		  FROM selected
+		 WHERE command.tenant_id=selected.tenant_id AND command.id=selected.id
+		 RETURNING command.tenant_id,command.id`,
+		lifecycleTargetID, lifecycleAdapter.bindingRef,
+	).Scan(&observationTenant, &observationCommand); err != nil {
+		t.Fatalf("retain completed observation history on lifecycle target: %v", err)
+	}
+	var observationResults, observationReceipts int
+	if err := admin.QueryRow(ctx, `
+		SELECT (SELECT count(*) FROM paas.deployment_observations
+		         WHERE tenant_id=$1 AND command_id=$2),
+		       (SELECT count(*) FROM paas.adapter_receipts
+		         WHERE tenant_id=$1 AND command_id=$2)`,
+		observationTenant, observationCommand,
+	).Scan(&observationResults, &observationReceipts); err != nil {
+		t.Fatal(err)
+	}
+	if observationResults != 1 || observationReceipts != 0 {
+		t.Fatalf("observation completion shape results=%d receipts=%d", observationResults, observationReceipts)
+	}
+
+	var effectTenant, effectCommand string
+	if err := admin.QueryRow(ctx, `
+		WITH selected AS (
+			SELECT command.tenant_id,command.id
+			  FROM paas.adapter_commands AS command
+			  JOIN paas.adapter_receipts AS receipt
+			    ON receipt.tenant_id=command.tenant_id
+			   AND receipt.command_id=command.id
+			 WHERE command.action<>'OBSERVE_DEPLOYMENT' AND receipt.state='SUCCEEDED'
+			 ORDER BY command.tenant_id,command.id
+			 LIMIT 1
+		)
+		UPDATE paas.adapter_commands AS command
+		   SET execution_target_id=$1,
+		       binding_ref=$2,
+		       document=jsonb_set(
+				jsonb_set(command.document,'{executionTargetId}',to_jsonb($1::text),false),
+				'{bindingRef}',to_jsonb($2::text),false
+			)
+		  FROM selected
+		 WHERE command.tenant_id=selected.tenant_id AND command.id=selected.id
+		 RETURNING command.tenant_id,command.id`,
+		lifecycleTargetID, lifecycleAdapter.bindingRef,
+	).Scan(&effectTenant, &effectCommand); err != nil {
+		t.Fatalf("retain completed effect history on lifecycle target: %v", err)
+	}
+	result, err := admin.Exec(ctx, `UPDATE paas.adapter_receipts SET state='IN_PROGRESS'
+		WHERE tenant_id=$1 AND command_id=$2 AND state='SUCCEEDED'`, effectTenant, effectCommand)
+	if err != nil || result.RowsAffected() != 1 {
+		t.Fatalf("stage unresolved effect result: rows=%d err=%v", result.RowsAffected(), err)
+	}
+	removeAuthorization := authorization
+	removeAuthorization.DecisionID = "decision-remove-node"
+	removeAuthorization.RequestID = "request-remove-node"
+	_, err = lifecycleService.TransitionTarget(ctx, executionadmission.TransitionTargetCommand{
+		Authorization: removeAuthorization, TargetID: lifecycleTargetID,
+		Action:                  paasv1.OperationRemoveExecutionTarget,
+		ExpectedResourceVersion: drainedAgain.Target.Metadata.ResourceVersion,
+		IdempotencyKey:          "remove-node",
+	})
+	if !errors.Is(err, executionadmission.ErrTargetInUse) {
+		t.Fatalf("remove target with unresolved effect = %v", err)
+	}
+	result, err = admin.Exec(ctx, `UPDATE paas.adapter_receipts SET state='SUCCEEDED'
+		WHERE tenant_id=$1 AND command_id=$2 AND state='IN_PROGRESS'`, effectTenant, effectCommand)
+	if err != nil || result.RowsAffected() != 1 {
+		t.Fatalf("complete effect result: rows=%d err=%v", result.RowsAffected(), err)
+	}
 	removed := transition(paasv1.OperationRemoveExecutionTarget, drainedAgain.Target.Metadata.ResourceVersion, "remove-node")
 	if removed.Target.Spec.DesiredState != paasv1.ExecutionTargetRemoved || lifecycleAdapter.calls.Load() != callsBeforeLifecycle {
 		t.Fatalf("remove called node or failed to retain tombstone: %#v", removed)
