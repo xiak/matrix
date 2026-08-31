@@ -975,6 +975,49 @@ transition. It does not yet prove a signed platform's real tenant snapshot in
 the browser across two managed hosts, per-container resource quantities, a
 terminal session, complete Gate C/D or Phase 3. P3-3 remains in progress.
 
+The signed two-host runtime/UI gate is fixed at
+`6b8eeb237a7acd99d1518b4f2f0aac2c2b044767`. It extends the existing optional
+installed-runtime owner rather than creating a parallel release harness. Signed
+platform A used source `21e526e` and manifest SHA-256
+`01f35d1cfbf95fd6814c7ae6f4a708faf26512b9ea5d4df43ce7565b2ed27e62`;
+platform B used source `91399dd` and manifest SHA-256
+`a89f00eddaf16b82ca0b7734397ab1f85c46271591b0606755254aa2fe1e49ad`.
+The corresponding runtime-4 and runtime-5 node manifests were
+`19021bc5a5e707be82f15d158f1c1d81e059e56fb96f126394acc0b18c7405da`
+and `7af244423c0be3f7e3f235fe6719522e549fc6593844cdab504032335141fda5`.
+All three jobs for that exact checkpoint passed in
+[independent CI](https://github.com/xiak/matrix/actions/runs/33348789655).
+
+The real lifecycle passed in 556.31 seconds with a task-owned signed platform
+and the two operator-provided Debian/ext4 hosts. It admitted exact target
+identities `a-runtime-native-1` and `a-runtime-native-2`, reserved one workload
+slot on each, and placed one real signed-image Deployment on each through the
+normal FIRST_FIT, Operation, capacity-claim and Audit owners. Two independently
+advancing background snapshots retained the same provider-neutral instance on
+the exact persisted target. Direct provider inspection proved that no copy
+existed on the other host and that tenant, Deployment, generation, revision and
+component labels matched, while Docker IDs and names differed from the public
+opaque identity. A caller-supplied execution-target query selector was rejected.
+
+One authenticated browser session on that installed platform displayed both
+Deployments as READY/RUNNING with their distinct targets and opaque instances.
+It also displayed both hosts' real CPU, load, memory and ext4 capacity with
+source time and freshness; a 12.5-second observation changed the first host's
+load from `1.83 / 0.83 / 0.58` to `1.57 / 0.82 / 0.58` without reloading the
+page. Images without a health check remained explicitly `NONE`, not falsely
+healthy. The opt-in browser credential uses a bounded private regular file and
+is included in support/path leakage checks; group-readable, line-delimited and
+symlink input are rejected.
+
+Only exact task-owned services, containers, images, keys and remote fixture
+roots were removed afterward. Each host returned to its ten pre-existing
+running containers; its machine boot ID and Docker Engine ID were unchanged.
+Neither host, Docker Engine nor any unrelated service was restarted. This mode
+uses existing operator-provided hosts and therefore is not the externally
+disconnected or reboot phase of Gate D. Per-container resource attribution and
+the separately authorized short-lived terminal remain open, so P3-3, Gate C/D
+and Phase 3 are not accepted by this evidence.
+
 ## Adoption
 
 - [FEAT-008 fixed-source review](../adoption/FEAT-008-linux-host-management.md)
