@@ -242,11 +242,7 @@ func installedArtifactCatalogConfig(plan platformcommand.InstallPlan) ([]byte, e
 		previous.Manifest.TopologyDigest != topology.ContractDigest() {
 		return nil, errors.New("installed predecessor release is invalid")
 	}
-	previousPlan := plan
-	previousPlan.Bundle = previous
-	currentPlan := plan
-	currentPlan.Bundle = current
-	if validateUpgradeIdentity(previousPlan, currentPlan) != nil {
+	if validateUpgradeReleasePair(previous, current) != nil {
 		return nil, errors.New("installed predecessor release is inconsistent")
 	}
 	return artifactCatalogConfig(previous.Manifest, current.Manifest)

@@ -196,13 +196,27 @@ func validateUpgradeIdentity(
 		source.Listener != target.Listener || source.Port != target.Port ||
 		source.Trust != target.Trust ||
 		!bytes.Equal(source.TrustBytes, target.TrustBytes) ||
-		target.Bundle.Manifest.Release.ID == source.Bundle.Manifest.Release.ID ||
-		target.Bundle.Manifest.Release.PreviousID != source.Bundle.Manifest.Release.ID ||
-		target.Bundle.Manifest.Release.PreviousVersion != source.Bundle.Manifest.Release.Version ||
-		release.ValidateDatabaseUpgradePath(
-			source.Bundle.Manifest.Database, target.Bundle.Manifest.Database,
-		) != nil {
+		validateUpgradeReleasePair(source.Bundle, target.Bundle) != nil {
 		return errors.New("upgrade source and target identities are inconsistent")
+	}
+	return nil
+}
+
+// validateUpgradeReleasePair authenticates the signed release relationship
+// independently of a running lifecycle command. Read-only status and verify
+// operations have no command correlation ID, while an active upgrade still
+// validates that transaction boundary in validateUpgradeIdentity.
+func validateUpgradeReleasePair(
+	source release.VerifiedBundle,
+	target release.VerifiedBundle,
+) error {
+	if target.Manifest.Release.ID == source.Manifest.Release.ID ||
+		target.Manifest.Release.PreviousID != source.Manifest.Release.ID ||
+		target.Manifest.Release.PreviousVersion != source.Manifest.Release.Version ||
+		release.ValidateDatabaseUpgradePath(
+			source.Manifest.Database, target.Manifest.Database,
+		) != nil {
+		return errors.New("upgrade release pair is inconsistent")
 	}
 	return nil
 }

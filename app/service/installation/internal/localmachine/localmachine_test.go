@@ -823,6 +823,11 @@ func TestUpgradeConfigurationReplacesOnlyReleaseDerivedFilesAndReplaysBothWays(t
 		t.Fatalf("authenticate upgrade source: %v", err)
 	}
 	defer clear(source.TrustBytes)
+	uncorrelated := plan.Target
+	uncorrelated.CorrelationID = ""
+	if validateUpgradeIdentity(source, uncorrelated) == nil {
+		t.Fatal("active upgrade accepted a missing command correlation")
+	}
 	credentials := snapshotManagedCredentials(t, source.Root)
 	runtimeBoundary := newImageRuntime(plan.Target.Bundle.Manifest, true)
 
@@ -834,6 +839,11 @@ func TestUpgradeConfigurationReplacesOnlyReleaseDerivedFilesAndReplaysBothWays(t
 	)
 	if _, err := verifiedInstallationConfiguration(plan.Target); err != nil {
 		t.Fatalf("verify successor configuration with predecessor catalog: %v", err)
+	}
+	operational := plan.Target
+	operational.CorrelationID = ""
+	if _, err := verifiedInstallationConfiguration(operational); err != nil {
+		t.Fatalf("read-only status rejected authenticated predecessor catalog: %v", err)
 	}
 	wrongPredecessor := plan.Target
 	wrongPredecessor.PreviousDigest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
