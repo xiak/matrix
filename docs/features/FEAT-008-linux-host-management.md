@@ -1,6 +1,6 @@
 # FEAT-008: existing Linux hosts and remote application delivery
 
-- Status: P3-2 accepted; P3-3 implementation in progress
+- Status: P3-2 accepted; P3-3 signed terminal lifecycle accepted, real browser terminal gate in progress
 - Target: Matrix PaaS Phase 3
 - Design date: 2026-08-27
 - Branch: `feat/linux-host-management`
@@ -40,7 +40,7 @@ exercise combines these capabilities rather than introducing them late.
 | P3-0: design and adoption | Fixed scope, isolated branch and donor decisions | Target committed before fixed-source review; no donor dependency | Complete for the initial node slice |
 | P3-1: one managed host | Secure resident agent enrollment, identity, heartbeat and continuously refreshed basic CPU/memory/filesystem status through the control plane | Real authenticated Linux node; wrong identity denied; stale/disconnected state; restart and signed offline startup | Complete |
 | P3-2: remote application loop | Deploy, observe, update, stop and roll back a real application on that host | IAM/Audit/Operation/accounting integration; exact routing; ENV/Secret behavior; replay and lost-response recovery | Complete |
-| P3-3: interactive operations | Live host/container UI and terminal in the selected running instance | Successive measurements without reload; real terminal I/O, resize, expiry, disconnect, authorization and audit | In progress |
+| P3-3: interactive operations | Live host/container UI and terminal in the selected running instance | Successive measurements without reload; real terminal I/O, resize, expiry, disconnect, authorization and audit | Real browser terminal gate pending |
 | P3-4: multiple hosts | Pool placement, drain, unavailable-node handling and safe removal across two independent hosts | No cross-host/local fallback; identity collision, tenant isolation and concurrent capacity checks | Pending |
 | P3-5: offline release | Platform and nodes install, operate, upgrade, roll back and recover without external access | Complete Gates A-E on exact committed source and signed releases | Pending |
 
@@ -1147,6 +1147,75 @@ boundary because remote reboot is prohibited. This evidence accepts the
 per-container resource slice and the exercised signed transition/recovery, not
 the externally disconnected/reboot portion of Gate D, the write-capable
 short-lived terminal, complete Gate C/D or Phase 3. P3-3 remains in progress.
+
+The write-capable terminal implementation is fixed at
+`38cb80b67eff6c9083bdf52660eae0ed24847269`. It owns the closed PaaS session
+contract, IAM action, same-origin one-time HttpOnly ticket, bounded WebSocket
+protocol, exact Deployment/generation/instance proof, node mTLS hop, Compose
+TTY adapter, xterm renderer and the three redacted Audit facts. Unit,
+architecture, real Compose and HTTP/WebSocket gates cover resize, bounded
+bidirectional I/O, expiry, disconnect, close/replacement, unsupported shells,
+origin/ticket rejection, consumed-ticket non-disclosure and Audit association.
+Those automated paths do not substitute for the required real browser gate.
+
+The first signed terminal lifecycle exposed a retained-data compatibility
+defect rather than permitting a loose rollback. Audit chain verification had
+read records after the requested terminal sequence, so a predecessor could be
+forced to decode future terminal actions while verifying an older prefix.
+`46158bc17519d06ed66e0abc787fc88be2c64fc8` bounds the read to the requested
+record count. The expand-only reader bridge is fixed at
+`d5d44b851238c0dcf20ee87f2a227cd8132331dc`; lifecycle correction
+`746586a35845b32055be17450f2b77f7d23b7e68` permits that authenticated bridge
+as current-only only after an explicit committed rollback, while fresh install
+and normal upgrade still require their exact predecessor. The final sequence
+gate is `44559b1ba6318efb6508e5f603993c0d463400bb`.
+
+The resulting signed release sequence is base
+`matrix-v0.3.0-host.15-444025108900` (IAM 4/Audit 3/PaaS 2, revision 6), bridge
+`matrix-v0.3.0-host.21-746586a35845` (the same profile and topology), then
+terminal successor `matrix-v0.3.0-host.22-44559b1ba631` (revision 7 and terminal
+topology). Their `release.json` SHA-256 values are respectively
+`3b08de94926bbdc986f1a97519f165024b55f35bc63be9b736228da776a67b51`,
+`59b13efa7cdc4857a76cdd087326067fe510337cc67660650370e8478dee2f25`
+and `311cdfe269c0f808abde34e61c5913311fd4b7c48d9fa5469034a075fde86f1f`.
+The complete offline transport archive SHA-256 is
+`f7c9404e5379f4a692c347f518c4be76640ba337936b8305fe1de670e0ca9176ce`;
+the independent Linux gate binary SHA-256 is
+`6e7bceaa57391b89ec2af9320b7603cacb509034aa754ea86f4c023fa7990660`.
+
+A fresh externally disconnected Docker 27.5.1-in-Docker engine then exercised
+that exact sequence with the two operator-provided Debian/ext4 hosts. In
+1127.29 seconds it passed base install, bridge upgrade/rollback/reactivation,
+successor activation, two signed node transitions, two real native
+Deployments, two terminal sessions with actual input/output and resize,
+one-time ticket replay denial, all three terminal Audit facts, successor-to-
+bridge rollback with later Operation/Audit readability, backup recovery,
+application rollback/stop, accounting release and zero-leakage support. The
+accepted log SHA-256 is
+`015c460c72738c6ee3ec04b6daf07e84c91e1a8bf6f9725e1cd293da1e619746`.
+Neither remote machine nor either Docker Engine was restarted; the gate ended
+at its explicit `restart-required` boundary. All three jobs for the exact
+source passed in
+[independent CI](https://github.com/xiak/matrix/actions/runs/33408657183).
+
+Test-only checkpoint `b75115b4c62bb7ad6a9f3d7df008db757c59c20f`
+separates browser preparation from the already accepted two-host gate: it
+requires a private operator-password file, runs the same signed sequence and
+stops with the successor and real local workload current instead of claiming a
+second host. Its three independent jobs passed in
+[CI](https://github.com/xiak/matrix/actions/runs/33414863566). A new internal,
+three-CPU/3 GiB DIND run reached `browser-successor-ready` in 533.39 seconds;
+the successor reports READY with the exact bridge predecessor. The gate log
+and sanitized status SHA-256 values are
+`218e8ded27af1feca2179262a134c951140f5b88b1278a9352b5e7183353aacb`
+and `013cf159d1bc9c6ba6edc0eeb5b2cc1345292ad535a44f2bec6009f82741e7ac`.
+The task-local console is reachable through a loopback-only SSH forward and its
+real login page has been rendered. No browser credential or terminal action
+has yet been submitted, so this preparation is not browser acceptance. P3-3
+remains open until one authenticated browser selects the persisted running
+instance and proves terminal I/O, resize, explicit disconnect, consumed-ticket
+replay denial and the associated Audit view. The prohibited remote reboot
+phase also remains outside this evidence and Gate D remains open.
 
 ## Adoption
 
