@@ -21,7 +21,10 @@ import (
 	"github.com/xiak/matrix/app/service/installation/topology"
 )
 
-const maximumCommandOutput = 1024 * 1024
+const (
+	maximumCommandOutput                  = 1024 * 1024
+	credentialRecoveryInterruptionTimeout = 2 * time.Minute
+)
 
 type commandOutput struct {
 	stdout []byte
@@ -209,7 +212,11 @@ exec %q "$@"
 	if os.WriteFile(filepath.Join(directory, "docker"), []byte(script), 0o700) != nil {
 		return mxResult{}, fail("credential-recovery-interruption-fixture")
 	}
-	interruption, cancel := context.WithTimeout(ctx, 25*time.Second)
+	// A fresh intent performs an eligibility inspection, an exact receipt
+	// inspection and the apply. Each purpose-only provider call is independently
+	// bounded to 30 seconds, so the crash injector must not cancel the parent
+	// before those fail-closed boundaries can complete on a constrained host.
+	interruption, cancel := context.WithTimeout(ctx, credentialRecoveryInterruptionTimeout)
 	defer cancel()
 	command, stdout, stderr, err := startMX(interruption, value.releases.a, "recover-credentials",
 		[]string{"--root", value.config.root, "--recovery-input", inputPath}, "PATH="+directory+":"+os.Getenv("PATH"))
