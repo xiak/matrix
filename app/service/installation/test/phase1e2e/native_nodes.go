@@ -45,6 +45,7 @@ const nativeAfterRemovalDeploymentID paasv1.ResourceID = "phase3-runtime-after-r
 const nativeRuntimeProfileLabel = "matrix-profile"
 const nativeRuntimeProfile = "local-compose"
 const nativeCompleteRuntimeSnapshotTimeout = 3 * time.Minute
+const nativeSSHControlPath = "/run/matrix-phase3-native-%C"
 
 type nativeNodeInput struct {
 	Port          int    `json:"port"`
@@ -281,7 +282,7 @@ func validNativeFacts(facts nativeHostFacts) bool {
 }
 
 func (fixture *nativeNodes) sshArguments(index int) []string {
-	return []string{"-F", "/dev/null", "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=yes", "-o", "GlobalKnownHostsFile=/dev/null", "-o", "UserKnownHostsFile=" + fixture.input.KnownHostsFile, "-o", "ConnectTimeout=5", "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=1", "-o", "LogLevel=ERROR", "-i", fixture.input.IdentityFile}
+	return []string{"-F", "/dev/null", "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=yes", "-o", "GlobalKnownHostsFile=/dev/null", "-o", "UserKnownHostsFile=" + fixture.input.KnownHostsFile, "-o", "ConnectTimeout=5", "-o", "ConnectionAttempts=3", "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=1", "-o", "ControlMaster=auto", "-o", "ControlPersist=30s", "-o", "ControlPath=" + nativeSSHControlPath, "-o", "LogLevel=ERROR", "-i", fixture.input.IdentityFile}
 }
 
 func (fixture *nativeNodes) waitPrepared(ctx context.Context, index int) error {
@@ -312,10 +313,21 @@ func (fixture *nativeNodes) command(ctx context.Context, index int, arguments ..
 	}
 	args = append(args, strings.Join(words, " "))
 	output, err := runProcess(bounded, "ssh", args...)
-	if err != nil || output.exit != 0 || len(output.stderr) != 0 {
+	stage := ""
+	switch {
+	case err != nil:
+		stage = "native-loopback-process"
+	case output.exit == 255:
+		stage = "native-loopback-transport"
+	case output.exit != 0:
+		stage = "native-remote-command"
+	case len(output.stderr) != 0:
+		stage = "native-loopback-stderr"
+	}
+	if stage != "" {
 		clear(output.stdout)
 		clear(output.stderr)
-		return nil, fail("native-loopback-command")
+		return nil, fail(stage)
 	}
 	return output.stdout, nil
 }

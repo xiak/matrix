@@ -96,6 +96,34 @@ func TestNativeBootEvidenceRequiresNewKernelAndSameIdentity(t *testing.T) {
 	}
 }
 
+func TestNativeSSHTransportPinsAndReusesConnections(t *testing.T) {
+	fixture := nativeNodes{input: nativeFixtureInput{
+		IdentityFile:   "/data/xiak/private/id_ed25519",
+		KnownHostsFile: "/data/xiak/private/known_hosts",
+	}}
+	joined := "\n" + strings.Join(fixture.sshArguments(0), "\n") + "\n"
+	for _, required := range []string{
+		"BatchMode=yes",
+		"IdentitiesOnly=yes",
+		"StrictHostKeyChecking=yes",
+		"GlobalKnownHostsFile=/dev/null",
+		"UserKnownHostsFile=/data/xiak/private/known_hosts",
+		"ConnectionAttempts=3",
+		"ControlMaster=auto",
+		"ControlPersist=30s",
+		"ControlPath=" + nativeSSHControlPath,
+	} {
+		if !strings.Contains(joined, "\n"+required+"\n") {
+			t.Fatalf("required SSH boundary %q is absent", required)
+		}
+	}
+	for _, forbidden := range []string{"StrictHostKeyChecking=no", "UserKnownHostsFile=/dev/null", "PasswordAuthentication=yes"} {
+		if strings.Contains(joined, "\n"+forbidden+"\n") {
+			t.Fatalf("unsafe SSH option %q is present", forbidden)
+		}
+	}
+}
+
 func TestNativeFixtureRejectsAmbiguousOrExternalTargets(t *testing.T) {
 	directory := t.TempDir()
 	valid := nativeFixtureInput{ReleaseA: filepath.Join(directory, "a"), ReleaseB: filepath.Join(directory, "b"), IdentityFile: filepath.Join(directory, "client"), KnownHostsFile: filepath.Join(directory, "known_hosts"), FixtureRoot: "/data/xiak/matrix-native-gate-1", Nodes: []nativeNodeInput{{Port: 2201, Endpoint: "https://172.17.0.1:16443"}, {Port: 2202, Endpoint: "https://172.17.0.1:16444"}}}
