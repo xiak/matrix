@@ -295,15 +295,17 @@ func (fixture *nativeNodes) sshArguments(index int) []string {
 }
 
 func (fixture *nativeNodes) waitPrepared(ctx context.Context, index int) error {
-	// A booted sshd may precede cloud-init's offline Docker preparation. Wait
+	// A booted sshd may precede cloud-init's offline Docker/Compose preparation. Wait
 	// before the first file write; never treat a half-prepared VM as installed.
 	poll, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
 	for {
 		_, directoryErr := fixture.command(poll, index, "test", "-d", fixture.root())
 		if directoryErr == nil {
-			if content, err := fixture.command(poll, index, "docker", "info", "--format", "{{.ID}}"); err == nil && strings.TrimSpace(string(content)) != "" {
-				return nil
+			if engine, err := fixture.command(poll, index, "docker", "info", "--format", "{{.ID}}"); err == nil && strings.TrimSpace(string(engine)) != "" {
+				if compose, composeErr := fixture.command(poll, index, "docker", "compose", "version", "--short"); composeErr == nil && strings.TrimSpace(string(compose)) != "" {
+					return nil
+				}
 			}
 		}
 		if !waitPoll(poll, time.Second) {
