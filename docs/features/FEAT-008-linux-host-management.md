@@ -1,6 +1,6 @@
 # FEAT-008: existing Linux hosts and remote application delivery
 
-- Status: P3-2 accepted; P3-3 signed terminal lifecycle accepted, real browser terminal gate pending; P3-4 lifecycle implementation locally verified, signed two-host gate pending
+- Status: P3-2 accepted; P3-3 signed terminal lifecycle accepted, real browser terminal gate pending; P3-4 accepted; P3-5 pending
 - Target: Matrix PaaS Phase 3
 - Design date: 2026-08-27
 - Branch: `feat/linux-host-management`
@@ -41,7 +41,7 @@ exercise combines these capabilities rather than introducing them late.
 | P3-1: one managed host | Secure resident agent enrollment, identity, heartbeat and continuously refreshed basic CPU/memory/filesystem status through the control plane | Real authenticated Linux node; wrong identity denied; stale/disconnected state; restart and signed offline startup | Complete |
 | P3-2: remote application loop | Deploy, observe, update, stop and roll back a real application on that host | IAM/Audit/Operation/accounting integration; exact routing; ENV/Secret behavior; replay and lost-response recovery | Complete |
 | P3-3: interactive operations | Live host/container UI and terminal in the selected running instance | Successive measurements without reload; real terminal I/O, resize, expiry, disconnect, authorization and audit | Real browser terminal gate pending |
-| P3-4: multiple hosts | Pool placement, drain, unavailable-node handling and safe removal across two independent hosts | No cross-host/local fallback; identity collision, tenant isolation and concurrent capacity checks | Local contract/PostgreSQL/UI gates pass; signed two-host lifecycle pending |
+| P3-4: multiple hosts | Pool placement, drain, unavailable-node handling and safe removal across two independent hosts | No cross-host/local fallback; identity collision, tenant isolation and concurrent capacity checks | Complete |
 | P3-5: offline release | Platform and nodes install, operate, upgrade, roll back and recover without external access | Complete Gates A-E on exact committed source and signed releases | Pending |
 
 Start P3-1 after P3-0's donor review. Its basic measurements do not replace
@@ -1232,9 +1232,9 @@ instance and proves terminal I/O, resize, explicit disconnect, consumed-ticket
 replay denial and the associated Audit view. The prohibited remote reboot
 phase also remains outside this evidence and Gate D remains open.
 
-The P3-4 lifecycle candidate keeps the existing `ExecutionTarget` and
-`ExecutionPool` owners. It adds the exact `ACTIVE -> DRAINING -> ACTIVE` and
-terminal `DRAINING -> REMOVED` transitions with platform IAM decisions,
+P3-4 keeps the existing `ExecutionTarget` and `ExecutionPool` owners. It adds
+the exact `ACTIVE -> DRAINING -> ACTIVE` and terminal
+`DRAINING -> REMOVED` transitions with platform IAM decisions,
 installation-scoped Audit facts, synchronous terminal Operations, strong
 resource-version preconditions and one lifecycle-wide idempotency namespace.
 Changing the action, target or expected version under a committed key
@@ -1242,31 +1242,59 @@ conflicts. A removed target remains an immutable exact-read tombstone while
 default inventory, placement and refresh exclude it; neither the use case nor
 the database transition invokes a node adapter.
 
-Local verification uses a task-owned, resource-limited PostgreSQL 18 instance
-and no remote machine. The real PaaS race gate proves exact replay, changed-
-intent conflict, stale-version rejection, one-winner concurrent drain,
-drain/activate/remove, tombstone retention, registration/fingerprint reuse
-rejection, removal failure with current work and byte/count-preserving failure
-atomicity. Independent IAM 5 and Audit 4 HTTP/PostgreSQL race gates prove the
-new platform decisions, producer proof and immutable event contracts. The
-fixed `5344b739b4284e2f6f42a12165105d9b0e349bdc` predecessor upgrades retained
-PaaS work to schema 3 without rewriting it. Its read-only migration verifier
-can still audit the structural subset, but its API returns 503 before calling
-IAM; rollback across the 4/3/2+r7 to 5/4/3+r8 boundary therefore requires an
-authenticated backup rather than starting old services on the expanded
-database. The signed two-host driver is prepared to prove live-work drain,
-blocked removal, reactivation, safe tombstone removal, remaining-host
-placement, exact Audit delivery and unchanged boot/engine/service identities,
-but that driver has not yet run.
+The final implementation source is
+`489433624b74da031bf0e54a1dc897ee5f0c1406`. Cross-profile failed upgrades
+remove the candidate and enter authenticated recovery instead of starting an
+old binary on an expanded database; explicit recovery also removes a retained
+predecessor from the effect plan. The lifecycle HTTP gate requires the exact
+idempotency-conflict and live-work conflict codes. The final real gate exposed
+one further retained-history defect: completed `OBSERVE_DEPLOYMENT` commands
+have their result in `deployment_observations`, deliberately not in
+`adapter_receipts`, so treating every missing receipt as an unresolved effect
+made a safely stopped target impossible to remove. The PostgreSQL authority
+now excludes only this read-only observation action from the unresolved-effect
+check. A red/green PostgreSQL 18 integration gate proves the old query rejects
+safe removal, the corrected query accepts completed observation history, and
+an unfinished apply/stop effect still rejects removal; the same gate passes
+under the race detector.
 
-The full Go suite and vet pass; all 131 frontend behavior tests, type, lint,
-architecture and 20 contrast checks pass. Two constrained production exports
-produce the same 72-file embedded tree with SHA-256
-`d62af55a88c6f8a846ac6951f63b988b439645c6cf1c8c9424844caa4e8266e4`;
-all three OpenAPI documents also regenerate byte-identically. These local
-gates do not accept P3-4: independent CI, the signed predecessor transition
-and the authorized two-host drain/live-work blocker/safe-removal exercise are
-still required. No remote host or Docker Engine was restarted for this work.
+The accepted signed successor is
+`matrix-v0.3.0-host.29-489433624b74`, with IAM 5, Audit 4, PaaS 3 and contract
+revision 8. It names the fixed bridge
+`matrix-v0.3.0-host.23.1-5344b739b428` as its immediate predecessor. The
+successor `release.json` SHA-256 is
+`809844c60c3bbd3904e81468a01fc4a9488d94d22795f0ea42d30d2bae950563`;
+the complete Linux POSIX release archive is
+`dc0311b4fa788eb04caa1d4a4cf465a30c1001286a7d6aa11fd82da60c480c42`.
+The independently built gate binary and its POSIX archive are respectively
+`d309f3d8becfb1e66212f70bc5a1f71ea8d7838c5eb62cd68930047eae39cb8d`
+and `5c0cc9cf6b96bad4e27aa8cccd9ff57890a1c70da867858d0d42349475108dfc`.
+
+A fresh, externally closed Docker 27.5.1-in-Docker engine with independent
+data and Docker volumes then exercised the complete signed sequence against
+the two operator-provided Linux hosts. In 898.01 seconds it passed base
+install/status/verify, bridge upgrade/rollback/reactivation, IAM and Audit
+through APISIX, two application generations, purpose-only original-platform
+credential recovery, two signed native admissions, protected backup, complete
+node trust replacement, failed cross-profile candidate recovery, successor
+upgrade with retained data, two real terminal sessions with resize/replay/
+Audit, live-work drain and blocked removal, reactivation, safe tombstone
+removal, placement on the remaining host, two native Deployments and advancing
+runtime/resource snapshots. The accepted gate log SHA-256 is
+`bf783daeb191a5b8f82846b1f671eb5f5b53c1eb3d0961c51b2042057fccbaaa`;
+the final sealed journal names the exact successor READY and has SHA-256
+`0da60585b9a282deddb877f14c7770aaca5028de114d73a9f59652eaecce3329`.
+
+All exact task-owned node, collector and startup units, host fixture roots,
+DIND container and volumes were removed after evidence capture. Both remote
+boot IDs and Docker Engine IDs were unchanged, and no remote machine, Docker
+Engine or unrelated service was restarted. The full Go suite, vet, focused
+PostgreSQL 18 race gate and local architecture gates pass. All three jobs for
+the exact source passed in
+[independent CI](https://github.com/xiak/matrix/actions/runs/33452721266).
+This accepts P3-4. It does not accept P3-3's real-browser terminal exercise or
+P3-5's remaining reboot portion of Gate D and complete Gates A-E closure;
+those boundaries remain open.
 
 ## Adoption
 

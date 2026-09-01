@@ -2,10 +2,10 @@
 
 > Non-authoritative portable memory. Validate against Git and the owning FEAT.
 
-- Updated: 2026-08-31
+- Updated: 2026-09-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/linux-host-management`
-- Pushed verified milestone: `44402510890042cb9b1c7d6d16e7f4453b4dbc19`
+- Pushed verified milestone: `489433624b74da031bf0e54a1dc897ee5f0c1406`
 
 ## Resume route
 
