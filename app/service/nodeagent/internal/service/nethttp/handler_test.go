@@ -535,13 +535,22 @@ func TestSelfReadinessRequiresFreshCollectorButCannotReadControllerSurface(t *te
 	if err := paasv1.ValidateExecutionTargetObservation(value); err != nil {
 		t.Fatal(err)
 	}
-	server := startNode(t, node, sourceFunc(func(context.Context) (paasv1.ExecutionTargetObservation, error) {
+	var runtimeCalls atomic.Int32
+	service := deploymentServiceFuncs{ready: func(context.Context) error {
+		runtimeCalls.Add(1)
+		return nil
+	}}
+	handler, err := New(sourceFunc(func(context.Context) (paasv1.ExecutionTargetObservation, error) {
 		calls.Add(1)
 		if available.Load() {
 			return value, nil
 		}
 		return observedTarget(), nil
-	}), 2)
+	}), service, Config{Identity: nodeIdentity, ControllerID: controllerID, BindingRef: "binding-a", MaximumConcurrent: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := startTLSServer(t, node, handler)
 	client, err := nodehttps.NewReadinessClient(server.URL, nodeIdentity, value.IdentityFingerprint, node.credentials)
 	if err != nil {
 		t.Fatal(err)
@@ -550,13 +559,17 @@ func TestSelfReadinessRequiresFreshCollectorButCannotReadControllerSurface(t *te
 	if _, err := client.Verify(context.Background()); err == nil {
 		t.Fatal("missing collector was reported as a ready installation")
 	}
+	if runtimeCalls.Load() != 0 {
+		t.Fatal("unavailable background observation amplified Docker readiness probes")
+	}
 	available.Store(true)
 	first, err := client.Verify(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	second, err := client.Verify(context.Background())
-	if err != nil || first != second || first.ObservedAt != value.ObservedAt || first.ValidUntil != value.Usage.ValidUntil {
+	if err != nil || first != second || first.ObservedAt != value.ObservedAt || first.ValidUntil != value.Usage.ValidUntil ||
+		runtimeCalls.Load() != 2 {
 		t.Fatalf("readiness changed observation freshness: %#v, %#v, %v", first, second, err)
 	}
 	raw := authority.rawClient(&node.pair)

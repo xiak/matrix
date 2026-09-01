@@ -68,16 +68,45 @@ func NewLocalRuntime() *LocalRuntime {
 // accept commands. Version/profile admission remains the installation
 // preflight's responsibility; the worker only needs a live effect boundary.
 func (*LocalRuntime) Ready(ctx context.Context) error {
+	return readyDockerRuntime(ctx, runDocker)
+}
+
+type dockerCommandRunner func(context.Context, io.Writer, ...string) (bool, error)
+
+func readyDockerRuntime(ctx context.Context, run dockerCommandRunner) error {
 	if ctx == nil {
 		return errors.New("Docker Compose readiness context is required")
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if _, err := runDocker(ctx, nil, "version", "--format", "{{.Server.Version}}"); err != nil {
+	if run == nil {
 		return ErrRuntimeUnavailable
 	}
-	if _, err := runDocker(ctx, nil, "compose", "version", "--short"); err != nil {
+	// Engine and plugin discovery are independent read-only probes. Keep them
+	// inside one shared request budget; serial CLI startup can otherwise consume
+	// the entire readiness deadline on a one-CPU managed host.
+	probeContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+	results := make(chan error, 2)
+	for _, arguments := range [][]string{
+		{"version", "--format", "{{.Server.Version}}"},
+		{"compose", "version", "--short"},
+	} {
+		arguments := arguments
+		go func() {
+			_, err := run(probeContext, nil, arguments...)
+			results <- err
+		}()
+	}
+	failed := false
+	for range 2 {
+		if err := <-results; err != nil {
+			failed = true
+			cancel()
+		}
+	}
+	if failed {
 		return ErrRuntimeUnavailable
 	}
 	return nil

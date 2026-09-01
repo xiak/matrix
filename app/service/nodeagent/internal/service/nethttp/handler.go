@@ -461,21 +461,23 @@ func (handler *Handler) readiness(response http.ResponseWriter, request *http.Re
 	}
 	ctx, cancel := context.WithTimeout(request.Context(), 5*time.Second)
 	defer cancel()
+	observation, err := handler.source.Current(ctx)
+	now := time.Now()
+	// Read the bounded background snapshot before invoking the heavier Docker
+	// runtime probe. An unavailable snapshot must not amplify provider pressure
+	// and prevent the sampler from recovering on a constrained host.
+	if err != nil || ctx.Err() != nil || !validSelfReadinessObservation(observation, handler.identity, now) {
+		reject(response, http.StatusServiceUnavailable)
+		return
+	}
 	if err := handler.deployments.Ready(ctx); err != nil {
 		reject(response, http.StatusServiceUnavailable)
 		return
 	}
-	observation, err := handler.source.Current(ctx)
-	now := time.Now()
-	if err != nil || ctx.Err() != nil || observation.ExecutionTargetID != handler.identity.ExecutionTargetID ||
-		paasv1.ValidateExecutionTargetObservation(observation) != nil || observation.Health != paasv1.ExecutionTargetHealthReady ||
-		observation.ObservedAt.After(now) || !now.Before(observation.ObservedAt.Add(nodev1.MaximumObservationAge)) ||
-		observation.Usage == nil || observation.Usage.ObservedAt.After(now) ||
-		!now.Before(observation.Usage.ValidUntil) ||
-		!now.Before(observation.Usage.ObservedAt.Add(nodev1.MaximumObservationAge)) ||
-		observation.Usage.CPU.State != paasv1.MeasurementAvailable ||
-		observation.Usage.Memory.State != paasv1.MeasurementAvailable ||
-		observation.Usage.FilesystemsState != paasv1.MeasurementAvailable {
+	// The provider check consumes the same request budget. Recheck freshness so
+	// a snapshot that expires during that check cannot be returned as ready.
+	now = time.Now()
+	if ctx.Err() != nil || !validSelfReadinessObservation(observation, handler.identity, now) {
 		reject(response, http.StatusServiceUnavailable)
 		return
 	}
@@ -502,6 +504,23 @@ func (handler *Handler) readiness(response http.ResponseWriter, request *http.Re
 	}
 	response.WriteHeader(http.StatusOK)
 	_, _ = response.Write(encoded)
+}
+
+func validSelfReadinessObservation(
+	observation paasv1.ExecutionTargetObservation,
+	identity nodev1.Identity,
+	now time.Time,
+) bool {
+	return observation.ExecutionTargetID == identity.ExecutionTargetID &&
+		paasv1.ValidateExecutionTargetObservation(observation) == nil &&
+		observation.Health == paasv1.ExecutionTargetHealthReady &&
+		!observation.ObservedAt.After(now) && now.Before(observation.ObservedAt.Add(nodev1.MaximumObservationAge)) &&
+		observation.Usage != nil && !observation.Usage.ObservedAt.After(now) &&
+		now.Before(observation.Usage.ValidUntil) &&
+		now.Before(observation.Usage.ObservedAt.Add(nodev1.MaximumObservationAge)) &&
+		observation.Usage.CPU.State == paasv1.MeasurementAvailable &&
+		observation.Usage.Memory.State == paasv1.MeasurementAvailable &&
+		observation.Usage.FilesystemsState == paasv1.MeasurementAvailable
 }
 
 func (handler *Handler) authenticated(request *http.Request, peerURI string) bool {

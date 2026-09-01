@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"os/exec"
@@ -42,6 +43,39 @@ type stateRuntime struct {
 	observeError   error
 	containers     []RuntimeContainer
 	publishedPorts uint32
+}
+
+func TestLocalRuntimeReadinessOverlapsIndependentEngineAndComposeProbes(t *testing.T) {
+	entered := make(chan string, 2)
+	release := make(chan struct{})
+	completed := make(chan error, 1)
+	runner := func(ctx context.Context, output io.Writer, arguments ...string) (bool, error) {
+		if output != nil {
+			return false, errors.New("readiness unexpectedly requested provider output")
+		}
+		entered <- strings.Join(arguments, " ")
+		select {
+		case <-ctx.Done():
+			return true, ctx.Err()
+		case <-release:
+			return true, nil
+		}
+	}
+	go func() { completed <- readyDockerRuntime(context.Background(), runner) }()
+	commands := map[string]bool{}
+	for range 2 {
+		select {
+		case command := <-entered:
+			commands[command] = true
+		case <-time.After(time.Second):
+			t.Fatal("independent readiness probes consumed their budget serially")
+		}
+	}
+	close(release)
+	if err := <-completed; err != nil || len(commands) != 2 ||
+		!commands["version --format {{.Server.Version}}"] || !commands["compose version --short"] {
+		t.Fatalf("runtime readiness probes = %v, %v", commands, err)
+	}
 }
 
 type resourceStateRuntime struct {
