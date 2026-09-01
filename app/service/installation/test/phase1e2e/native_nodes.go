@@ -833,7 +833,13 @@ func (value *gate) nativeBackgroundAndOutage(ctx context.Context, bearer []byte)
 		return fail("native-outage-retained-physical-facts")
 	}
 	other, err := value.nativeStoredTarget(ctx, 1)
-	if err != nil || other.Status.Health != paasv1.ExecutionTargetHealthReady {
+	if err != nil || other.Status.Usage == nil {
+		return fail("native-outage-isolation")
+	}
+	// A single snapshot can coincide with that node's own bounded refresh miss.
+	// Require a later, fresh READY sample while the first node remains stopped;
+	// this proves independent background progress instead of timing one read.
+	if _, err = value.waitNativeStored(ctx, 1, paasv1.ExecutionTargetHealthReady, other.Status.Usage.ObservedAt); err != nil {
 		return fail("native-outage-isolation")
 	}
 	node := fixture.nodes[0]
