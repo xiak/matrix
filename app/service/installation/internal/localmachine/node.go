@@ -39,6 +39,15 @@ type NodeEffects struct {
 	verifier   NodeVerifier
 }
 
+const (
+	// Each self-readiness request performs live Docker and Compose checks. A
+	// tight loop can starve the node's seven-second background observation on
+	// the minimum one-CPU host, so verification leaves bounded sampling gaps.
+	nodeVerificationTimeout      = 60 * time.Second
+	nodeVerificationInitialDelay = time.Second
+	nodeVerificationMaximumDelay = 4 * time.Second
+)
+
 func NewNodeEffects(verifier NodeVerifier) *NodeEffects {
 	return &NodeEffects{supervisor: localNodeSupervisor{}, docker: localDockerRuntime{}, verifier: verifier}
 }
@@ -341,8 +350,9 @@ func (effects *NodeEffects) verifyNode(ctx context.Context, plan nodecommand.Pla
 	if err := authenticateNodeFiles(plan); err != nil {
 		return err
 	}
-	deadline, cancel := context.WithTimeout(ctx, 30*time.Second)
+	deadline, cancel := context.WithTimeout(ctx, nodeVerificationTimeout)
 	defer cancel()
+	delay := nodeVerificationInitialDelay
 	for {
 		ready, err := effects.observeNodeServices(deadline, plan)
 		if err != nil {
@@ -351,12 +361,22 @@ func (effects *NodeEffects) verifyNode(ctx context.Context, plan nodecommand.Pla
 		if ready {
 			return nil
 		}
+		timer := time.NewTimer(delay)
 		select {
 		case <-deadline.Done():
+			timer.Stop()
 			return nodecommand.ErrVerification
-		case <-time.After(time.Second):
+		case <-timer.C:
 		}
+		delay = nextNodeVerificationDelay(delay)
 	}
+}
+
+func nextNodeVerificationDelay(current time.Duration) time.Duration {
+	if current >= nodeVerificationMaximumDelay/2 {
+		return nodeVerificationMaximumDelay
+	}
+	return current * 2
 }
 
 // Rollback stops only exact installation-owned native services. It retains
