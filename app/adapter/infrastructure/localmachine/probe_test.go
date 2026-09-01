@@ -134,6 +134,21 @@ func TestExecCapabilityCheckerRejectsUnknownProbeWithoutExecution(t *testing.T) 
 	}
 }
 
+func TestDefaultCapabilityProbeBudgetAccommodatesConstrainedNodes(t *testing.T) {
+	if defaultCapabilityProbeTimeout <= 3*time.Second ||
+		defaultCapabilityProbeTimeout >= 6*time.Second {
+		t.Fatalf(
+			"default capability probe timeout = %s, want more than three seconds inside the six-second observation deadline",
+			defaultCapabilityProbeTimeout,
+		)
+	}
+	probe := NewLocalHostProbe()
+	checker, ok := probe.capabilities.(execCapabilityChecker)
+	if !ok || checker.timeout != 0 {
+		t.Fatalf("default local probe capability checker = %#v", probe.capabilities)
+	}
+}
+
 func TestHostFactsFormattingRedactsRawMachineIdentity(t *testing.T) {
 	facts := validHostFacts()
 	facts.MachineID = "secret-machine-id-must-not-leak"
