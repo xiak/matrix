@@ -342,6 +342,14 @@ func (fixture *nativeNodes) copy(ctx context.Context, index int, local, remote s
 }
 
 func (fixture *nativeNodes) mx(ctx context.Context, index int, successor bool, action string, args ...string) (cli.Result, error) {
+	result, err := fixture.mxResult(ctx, index, successor, action, args...)
+	if err != nil || result.State != "READY" {
+		return cli.Result{}, fail("native-mx-" + action)
+	}
+	return result, nil
+}
+
+func (fixture *nativeNodes) mxResult(ctx context.Context, index int, successor bool, action string, args ...string) (cli.Result, error) {
 	media := "node-a"
 	if successor {
 		media = "node-b"
@@ -356,7 +364,7 @@ func (fixture *nativeNodes) mx(ctx context.Context, index int, successor bool, a
 		Status     string     `json:"status"`
 		Result     cli.Result `json:"result"`
 	}
-	if err != nil || decodeOne(content, &result) != nil || result.APIVersion != "cli.matrix.xiak.com/v1" || result.Kind != "NodeCommandResult" || result.Action != strings.ToUpper(strings.ReplaceAll(action, "-", "_")) || result.Status != "SUCCEEDED" || result.Result.State != "READY" || result.Result.ExecutionTargetID != string(fixture.nodes[index].identity.ExecutionTargetID) {
+	if err != nil || decodeOne(content, &result) != nil || result.APIVersion != "cli.matrix.xiak.com/v1" || result.Kind != "NodeCommandResult" || result.Action != strings.ToUpper(strings.ReplaceAll(action, "-", "_")) || result.Status != "SUCCEEDED" || result.Result.ExecutionTargetID != string(fixture.nodes[index].identity.ExecutionTargetID) {
 		return cli.Result{}, fail("native-mx-" + action)
 	}
 	return result.Result, nil
@@ -608,7 +616,24 @@ func (value *gate) assertNativeNodes(ctx context.Context, bearer []byte, success
 	fixture := value.nodes
 	for index := range fixture.nodes {
 		node := &fixture.nodes[index]
-		result, err := fixture.mx(ctx, index, successor, "status", "--root", fixture.installationRoot())
+		poll, cancel := context.WithTimeout(ctx, 45*time.Second)
+		var result cli.Result
+		var err error
+		for {
+			result, err = fixture.mxResult(poll, index, successor, "status", "--root", fixture.installationRoot())
+			if err == nil && result.State == "READY" {
+				break
+			}
+			if err == nil && result.State != "NOT_READY" {
+				cancel()
+				return fail("native-retained-node-release-and-credentials")
+			}
+			if !waitPoll(poll, time.Second) {
+				cancel()
+				return fail("native-retained-node-release-and-credentials")
+			}
+		}
+		cancel()
 		want := fixture.releases.a.Manifest.Release.ID
 		if successor {
 			want = fixture.releases.b.Manifest.Release.ID
@@ -616,7 +641,7 @@ func (value *gate) assertNativeNodes(ctx context.Context, bearer []byte, success
 		if err != nil || result.Changed || result.ReleaseID != want || result.ConfigurationDigest != node.digest {
 			return fail("native-retained-node-release-and-credentials")
 		}
-		poll, cancel := context.WithTimeout(ctx, 45*time.Second)
+		poll, cancel = context.WithTimeout(ctx, 45*time.Second)
 		var target paasv1.ExecutionTarget
 		for {
 			_, err = value.edge.get(poll, "/api/paas/v1/execution-targets/"+string(node.identity.ExecutionTargetID), bearer, &target)
