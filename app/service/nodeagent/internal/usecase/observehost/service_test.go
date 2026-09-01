@@ -102,6 +102,30 @@ func samplingConfig() Config {
 	}
 }
 
+func TestDefaultSamplingBudgetLeavesHeadroomForOneCPUHosts(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	config := samplingConfig()
+	config.Clock = func() time.Time { return now }
+	service, err := New(hostFunc(func(ctx context.Context, _ paasv1.ObserveExecutionTargetRequest) (paasv1.ExecutionTargetObservation, error) {
+		deadline, found := ctx.Deadline()
+		if !found || time.Until(deadline) < 5*time.Second {
+			return paasv1.ExecutionTargetObservation{}, errors.New("host probe budget is too short")
+		}
+		return sample(now), nil
+	}), noUsage, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Refresh(context.Background()); err != nil {
+		t.Fatal("default sampling budget rejected a bounded one-CPU observation")
+	}
+	if service.config.Interval != defaultSamplingInterval ||
+		service.config.ProbeTimeout != defaultProbeTimeout ||
+		2*service.config.Interval > service.config.MaximumAge {
+		t.Fatal("default sampling policy exceeds the freshness contract")
+	}
+}
+
 func TestCurrentPreservesFreshnessIdentityAndSchedulingBudget(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	value := sample(now)
