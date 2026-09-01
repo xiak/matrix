@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/adapter/infrastructure/localmachine"
 	"github.com/xiak/matrix/app/service/installation/internal/releasetest"
@@ -121,6 +122,21 @@ func TestNativeSSHTransportPinsAndReusesConnections(t *testing.T) {
 		if strings.Contains(joined, "\n"+forbidden+"\n") {
 			t.Fatalf("unsafe SSH option %q is present", forbidden)
 		}
+	}
+}
+
+func TestNativeReadinessRetryLeavesAFullSamplingOpportunity(t *testing.T) {
+	if nativeReadinessTimeout != time.Minute || nativeReadinessInitialDelay != 2*time.Second ||
+		nativeReadinessMaximumDelay <= nodev1.MaximumObservationAge/2 {
+		t.Fatal("native readiness retry no longer leaves a bounded background sampling opportunity")
+	}
+	delay := nativeReadinessInitialDelay
+	want := []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second, 8 * time.Second}
+	for index, expected := range want {
+		if delay != expected {
+			t.Fatalf("native readiness delay %d = %s, want %s", index, delay, expected)
+		}
+		delay = nextNativeReadinessDelay(delay)
 	}
 }
 

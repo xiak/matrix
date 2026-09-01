@@ -47,6 +47,15 @@ const nativeRuntimeProfile = "local-compose"
 const nativeCompleteRuntimeSnapshotTimeout = 3 * time.Minute
 const nativeSSHControlPath = "/run/matrix-phase3-native-%C"
 
+const (
+	nativeReadinessTimeout      = time.Minute
+	nativeReadinessInitialDelay = 2 * time.Second
+	// Self-readiness admits observations for at most MaximumObservationAge.
+	// Leave slightly more than half that window between retries so a sampler
+	// which guarantees two opportunities per window can run on a one-CPU host.
+	nativeReadinessMaximumDelay = (nodev1.MaximumObservationAge + time.Second) / 2
+)
+
 type nativeNodeInput struct {
 	Port          int    `json:"port"`
 	Endpoint      string `json:"endpoint"`
@@ -382,6 +391,41 @@ func (fixture *nativeNodes) mxResult(ctx context.Context, index int, successor b
 	return result.Result, nil
 }
 
+func (fixture *nativeNodes) waitReady(
+	ctx context.Context,
+	index int,
+	successor bool,
+	timeout time.Duration,
+) (cli.Result, error) {
+	poll, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	delay := nativeReadinessInitialDelay
+	for {
+		result, err := fixture.mxResult(poll, index, successor, "status", "--root", fixture.installationRoot())
+		if err == nil {
+			switch result.State {
+			case "READY":
+				return result, nil
+			case "NOT_READY":
+			default:
+				return cli.Result{}, fmt.Errorf("native node returned an invalid readiness state")
+			}
+		}
+		if !waitPoll(poll, delay) {
+			return cli.Result{}, fmt.Errorf("native node did not become ready within the bounded wait")
+		}
+		delay = nextNativeReadinessDelay(delay)
+	}
+}
+
+func nextNativeReadinessDelay(current time.Duration) time.Duration {
+	next := current * 2
+	if next > nativeReadinessMaximumDelay {
+		return nativeReadinessMaximumDelay
+	}
+	return next
+}
+
 func privateFixtureFile(directory, name string, content []byte) (string, error) {
 	path := filepath.Join(directory, name)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
@@ -628,24 +672,7 @@ func (value *gate) assertNativeNodes(ctx context.Context, bearer []byte, success
 	fixture := value.nodes
 	for index := range fixture.nodes {
 		node := &fixture.nodes[index]
-		poll, cancel := context.WithTimeout(ctx, 45*time.Second)
-		var result cli.Result
-		var err error
-		for {
-			result, err = fixture.mxResult(poll, index, successor, "status", "--root", fixture.installationRoot())
-			if err == nil && result.State == "READY" {
-				break
-			}
-			if err == nil && result.State != "NOT_READY" {
-				cancel()
-				return fail("native-retained-node-release-and-credentials")
-			}
-			if !waitPoll(poll, time.Second) {
-				cancel()
-				return fail("native-retained-node-release-and-credentials")
-			}
-		}
-		cancel()
+		result, err := fixture.waitReady(ctx, index, successor, nativeReadinessTimeout)
 		want := fixture.releases.a.Manifest.Release.ID
 		if successor {
 			want = fixture.releases.b.Manifest.Release.ID
@@ -653,7 +680,7 @@ func (value *gate) assertNativeNodes(ctx context.Context, bearer []byte, success
 		if err != nil || result.Changed || result.ReleaseID != want || result.ConfigurationDigest != node.digest {
 			return fail("native-retained-node-release-and-credentials")
 		}
-		poll, cancel = context.WithTimeout(ctx, 45*time.Second)
+		poll, cancel := context.WithTimeout(ctx, 45*time.Second)
 		var target paasv1.ExecutionTarget
 		for {
 			_, err = value.edge.get(poll, "/api/paas/v1/execution-targets/"+string(node.identity.ExecutionTargetID), bearer, &target)
@@ -1408,7 +1435,7 @@ func (value *gate) completeNativeTargetLifecycle(
 		if err != nil || identity != state.RuntimeIdentities[index] {
 			return fail("native-lifecycle-remove-restarted-host-or-service")
 		}
-		result, statusErr := value.nodes.mx(ctx, index, true, "status", "--root", value.nodes.installationRoot())
+		result, statusErr := value.nodes.waitReady(ctx, index, true, nativeReadinessTimeout)
 		if statusErr != nil || result.Changed || result.ReleaseID != value.nodes.releases.b.Manifest.Release.ID ||
 			result.ConfigurationDigest != value.nodes.nodes[index].digest {
 			return fail("native-lifecycle-node-release-retained")
@@ -1853,18 +1880,10 @@ func (value *gate) afterNativeRestart(ctx context.Context, installationID string
 			return fail("native-actual-kernel-boot-and-identity-" + strconv.Itoa(index+1))
 		}
 		fixture.nodes[index].facts = facts
-		poll, cancel := context.WithTimeout(ctx, 3*time.Minute)
-		for {
-			status, err := fixture.mx(poll, index, false, "status", "--root", fixture.installationRoot())
-			if err == nil && !status.Changed && status.ReleaseID == retained.ReleaseID && status.ConfigurationDigest == saved.Digest {
-				break
-			}
-			if !waitPoll(poll, time.Second) {
-				cancel()
-				return fail("native-automatic-sealed-boot-startup")
-			}
+		status, err := fixture.waitReady(ctx, index, false, 3*time.Minute)
+		if err != nil || status.Changed || status.ReleaseID != retained.ReleaseID || status.ConfigurationDigest != saved.Digest {
+			return fail("native-automatic-sealed-boot-startup")
 		}
-		cancel()
 		// Read-only status was the first node command: no test start/reconcile
 		// can make a broken persistent boot entry appear to have succeeded.
 		workload, err := fixture.readWorkload(ctx, index)
