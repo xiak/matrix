@@ -14,7 +14,12 @@ import (
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
 
-const terminalWriteTimeout = 5 * time.Second
+const (
+	terminalWriteTimeout = 5 * time.Second
+	// The wire contract still caps ExpiresAt relative to the controller-issued
+	// deadline. This bound only tolerates a small controller/node clock offset.
+	terminalClockSkewTolerance = 30 * time.Second
+)
 
 type terminalClientEvent struct {
 	typeValue websocket.MessageType
@@ -67,7 +72,7 @@ func (handler *Handler) terminalSession(response http.ResponseWriter, request *h
 	if err != nil || value.Identity != handler.identity || value.BindingRef != handler.bindingRef ||
 		!now.Before(value.Request.Deadline) || !now.Before(value.ExpiresAt) ||
 		value.Request.Deadline.Sub(now) > nodev1.MaximumDeploymentDuration ||
-		value.ExpiresAt.Sub(now) > paasv1.MaximumTerminalSessionDuration {
+		value.ExpiresAt.Sub(now) > paasv1.MaximumTerminalSessionDuration+terminalClockSkewTolerance {
 		writeTerminalControl(request.Context(), connection, nodev1.TerminalServerControl{
 			Type: nodev1.TerminalServerError, Error: nodev1.TerminalErrorFailed,
 		})

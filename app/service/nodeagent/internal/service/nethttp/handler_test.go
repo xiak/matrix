@@ -384,6 +384,7 @@ func TestRealMTLSTerminalBindsClosedProofAndBridgesTTYFrames(t *testing.T) {
 	server := startTLSServer(t, node, handler)
 	client := newClient(t, server.URL, controller.credentials, nodeIdentity, controllerID)
 	now := time.Now().UTC().Truncate(time.Microsecond)
+	controllerAhead := 15 * time.Second
 	sessionID := paasv1.ResourceID("terminal-session-0123456789abcdef0123456789abcdef")
 	request := nodev1.TerminalOpenRequest{
 		APIVersion: nodev1.APIVersion, Kind: nodev1.TerminalOpenRequestKind,
@@ -393,10 +394,11 @@ func TestRealMTLSTerminalBindsClosedProofAndBridgesTTYFrames(t *testing.T) {
 			Scope:        paasv1.ResourceScope{Kind: paasv1.AuthorityTenant, TenantID: "tenant-a"},
 			DeploymentID: "deployment-a", Generation: 3,
 			ApplicationRevisionID: "application-revision-a", ExecutionTargetID: nodeIdentity.ExecutionTargetID,
-			ExpectedContentDigest: deploymentTestDigest('c'), Deadline: now.Add(5 * time.Second),
+			ExpectedContentDigest: deploymentTestDigest('c'), Deadline: now.Add(controllerAhead + 5*time.Second),
 		},
 		InstanceID: "instance-0123456789abcdef0123456789abcdef",
-		Size:       paasv1.TerminalSize{Columns: 120, Rows: 40}, ExpiresAt: now.Add(time.Minute),
+		Size:       paasv1.TerminalSize{Columns: 120, Rows: 40},
+		ExpiresAt:  now.Add(paasv1.MaximumTerminalSessionDuration + controllerAhead),
 	}
 	if err := nodev1.ValidateTerminalOpenRequest(request); err != nil {
 		t.Fatal(err)
@@ -435,6 +437,68 @@ func TestRealMTLSTerminalBindsClosedProofAndBridgesTTYFrames(t *testing.T) {
 	if err != nil || len(output) != 0 || control == nil || control.Type != nodev1.TerminalServerExit ||
 		control.ExitCode == nil || *control.ExitCode != provider.exitCode {
 		t.Fatalf("node exit = %q/%#v/%v", output, control, err)
+	}
+}
+
+func TestTerminalRejectsClockSkewBeyondBoundBeforeProviderEffect(t *testing.T) {
+	authority := newAuthority(t)
+	nodeURI, _ := nodev1.NodeURI(nodeIdentity)
+	controllerURI, _ := nodev1.ControllerURI(nodeIdentity.InstallationID, controllerID)
+	node := authority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false)
+	controller := authority.issue(t, controllerURI, x509.ExtKeyUsageClientAuth, false)
+	providerCalled := make(chan struct{}, 1)
+	service := deploymentServiceFuncs{terminal: func(
+		_ context.Context,
+		_ nodev1.TerminalOpenRequest,
+	) (TerminalSession, error) {
+		providerCalled <- struct{}{}
+		return newFakeNodeTerminal(), nil
+	}}
+	handler, err := New(
+		sourceFunc(func(context.Context) (paasv1.ExecutionTargetObservation, error) {
+			return observedTarget(), nil
+		}),
+		service,
+		service,
+		Config{Identity: nodeIdentity, ControllerID: controllerID, BindingRef: "binding-a"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := startTLSServer(t, node, handler)
+	client := newClient(t, server.URL, controller.credentials, nodeIdentity, controllerID)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	controllerAhead := terminalClockSkewTolerance + time.Second
+	sessionID := paasv1.ResourceID("terminal-session-abcdef0123456789abcdef0123456789")
+	request := nodev1.TerminalOpenRequest{
+		APIVersion: nodev1.APIVersion, Kind: nodev1.TerminalOpenRequestKind,
+		Identity: nodeIdentity, BindingRef: "binding-a", TerminalSessionID: sessionID,
+		Request: paasv1.ObserveDeploymentRuntimeRequest{
+			RequestID:    paasv1.CommandID(sessionID),
+			Scope:        paasv1.ResourceScope{Kind: paasv1.AuthorityTenant, TenantID: "tenant-a"},
+			DeploymentID: "deployment-a", Generation: 3,
+			ApplicationRevisionID: "application-revision-a", ExecutionTargetID: nodeIdentity.ExecutionTargetID,
+			ExpectedContentDigest: deploymentTestDigest('c'), Deadline: now.Add(controllerAhead + 5*time.Second),
+		},
+		InstanceID: "instance-0123456789abcdef0123456789abcdef",
+		Size:       paasv1.TerminalSize{Columns: 120, Rows: 40},
+		ExpiresAt:  now.Add(paasv1.MaximumTerminalSessionDuration + controllerAhead),
+	}
+	if err := nodev1.ValidateTerminalOpenRequest(request); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if connection, err := client.OpenTerminal(ctx, request); !errors.Is(err, nodehttps.ErrTerminalRejected) {
+		if connection != nil {
+			connection.Close()
+		}
+		t.Fatalf("excessive controller clock skew terminal error = %v", err)
+	}
+	select {
+	case <-providerCalled:
+		t.Fatal("excessive controller clock skew reached the provider")
+	default:
 	}
 }
 
