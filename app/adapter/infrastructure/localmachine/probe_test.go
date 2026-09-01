@@ -5,12 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
 type recordingCapabilityChecker struct {
+	mu        sync.Mutex
 	available map[CapabilityProbeID]bool
 	calls     []CapabilityProbeID
 }
@@ -19,8 +22,35 @@ func (checker *recordingCapabilityChecker) Available(
 	_ context.Context,
 	id CapabilityProbeID,
 ) bool {
+	checker.mu.Lock()
+	defer checker.mu.Unlock()
 	checker.calls = append(checker.calls, id)
 	return checker.available[id]
+}
+
+func (checker *recordingCapabilityChecker) recordedCalls() []CapabilityProbeID {
+	checker.mu.Lock()
+	defer checker.mu.Unlock()
+	return append([]CapabilityProbeID(nil), checker.calls...)
+}
+
+type synchronizedCapabilityChecker struct {
+	started chan CapabilityProbeID
+	release chan struct{}
+}
+
+func (checker synchronizedCapabilityChecker) Available(ctx context.Context, id CapabilityProbeID) bool {
+	select {
+	case checker.started <- id:
+	case <-ctx.Done():
+		return false
+	}
+	select {
+	case <-checker.release:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 func TestLocalHostProbeUsesClosedCapabilityIdentifiers(t *testing.T) {
@@ -38,11 +68,49 @@ func TestLocalHostProbeUsesClosedCapabilityIdentifiers(t *testing.T) {
 	if !facts.DockerEngineReady || !facts.ComposePluginReady {
 		t.Fatal("capability facts did not preserve fixed probe results")
 	}
-	if !reflect.DeepEqual(checker.calls, []CapabilityProbeID{
+	calls := checker.recordedCalls()
+	slices.Sort(calls)
+	expected := []CapabilityProbeID{
 		ProbeDockerEngine,
 		ProbeComposePlugin,
-	}) {
-		t.Fatalf("capability probe calls = %v", checker.calls)
+	}
+	slices.Sort(expected)
+	if !reflect.DeepEqual(calls, expected) {
+		t.Fatalf("capability probe calls = %v", calls)
+	}
+}
+
+func TestLocalHostProbeObservesIndependentCapabilitiesConcurrently(t *testing.T) {
+	started := make(chan CapabilityProbeID, 2)
+	release := make(chan struct{})
+	checker := synchronizedCapabilityChecker{started: started, release: release}
+	probe := newLocalHostProbe(checker)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	type inspection struct {
+		facts HostFacts
+		err   error
+	}
+	done := make(chan inspection, 1)
+	go func() {
+		facts, err := probe.Inspect(ctx, "")
+		done <- inspection{facts: facts, err: err}
+	}()
+	seen := map[CapabilityProbeID]bool{}
+	for len(seen) != 2 {
+		select {
+		case id := <-started:
+			seen[id] = true
+		case <-ctx.Done():
+			close(release)
+			t.Fatal("independent capability probes did not start within one observation")
+		}
+	}
+	close(release)
+	result := <-done
+	if result.err != nil || !result.facts.DockerEngineReady || !result.facts.ComposePluginReady ||
+		!seen[ProbeDockerEngine] || !seen[ProbeComposePlugin] {
+		t.Fatalf("concurrent capability observation = %+v / %v / %v", result.facts, result.err, seen)
 	}
 }
 
