@@ -3,6 +3,7 @@ package phase1e2e
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -40,8 +41,9 @@ func TestOfflineNativeHostProbe(t *testing.T) {
 	if _, err := os.Stat(installationRoot); (phase == "1" || phase == "runtime") && !os.IsNotExist(err) || phase == "after-restart" && err != nil {
 		t.Fatal("native installation root already exists")
 	}
-	facts, err := localmachine.NewLocalHostProbe().Inspect(ctx, fixtureRoot)
-	if err != nil || !facts.DockerEngineReady || !facts.ComposePluginReady {
+	probe := localmachine.NewLocalHostProbe()
+	facts, ready := awaitNativeHostFacts(ctx, fixtureRoot, probe.Inspect, waitPoll)
+	if !ready {
 		t.Fatal("real native host prerequisites unavailable")
 	}
 	fingerprint, err := localmachine.DeriveMachineFingerprint(facts)
@@ -70,6 +72,53 @@ func TestOfflineNativeHostProbe(t *testing.T) {
 	}
 	if _, err = privateFixtureFile(fixtureRoot, name, encoded); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func awaitNativeHostFacts(
+	ctx context.Context,
+	storagePath string,
+	inspect func(context.Context, string) (localmachine.HostFacts, error),
+	pause func(context.Context, time.Duration) bool,
+) (localmachine.HostFacts, bool) {
+	for ctx.Err() == nil {
+		facts, err := inspect(ctx, storagePath)
+		if err == nil && facts.DockerEngineReady && facts.ComposePluginReady {
+			return facts, true
+		}
+		// Host observation is read-only. A freshly booted, resource-limited
+		// guest may need one cold Docker/Compose CLI load before both bounded
+		// capability probes become ready; mutations are never retried here.
+		if !pause(ctx, time.Second) {
+			break
+		}
+	}
+	return localmachine.HostFacts{}, false
+}
+
+func TestNativeHostFactsAwaitTransientReadiness(t *testing.T) {
+	inspections := 0
+	pauses := 0
+	facts, ready := awaitNativeHostFacts(
+		context.Background(),
+		"/isolated/storage",
+		func(_ context.Context, storagePath string) (localmachine.HostFacts, error) {
+			if storagePath != "/isolated/storage" {
+				t.Fatal("native storage path changed during readiness observation")
+			}
+			inspections++
+			if inspections == 1 {
+				return localmachine.HostFacts{}, errors.New("transient observation failure")
+			}
+			return localmachine.HostFacts{DockerEngineReady: true, ComposePluginReady: true}, nil
+		},
+		func(_ context.Context, delay time.Duration) bool {
+			pauses++
+			return delay == time.Second
+		},
+	)
+	if !ready || !facts.DockerEngineReady || !facts.ComposePluginReady || inspections != 2 || pauses != 1 {
+		t.Fatalf("native readiness observation = ready:%t facts:%+v inspections:%d pauses:%d", ready, facts, inspections, pauses)
 	}
 }
 
