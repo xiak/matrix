@@ -96,6 +96,20 @@ func TestNodeEffectsSealFilesAndKeepCollectorSeparateFromExecutor(t *testing.T) 
 	}
 }
 
+func TestNodeVerificationBackoffBoundsLiveRuntimeProbes(t *testing.T) {
+	delay := nodeVerificationInitialDelay
+	for index, expected := range []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 4 * time.Second} {
+		if delay != expected {
+			t.Fatalf("node verification delay %d = %s, want %s", index, delay, expected)
+		}
+		delay = nextNodeVerificationDelay(delay)
+	}
+	if nodeVerificationTimeout < 2*nodeVerificationMaximumDelay ||
+		nodeVerificationMaximumDelay > nodev1.MaximumObservationAge/2 {
+		t.Fatal("node verification cannot leave two background observation opportunities inside its bounded window")
+	}
+}
+
 func TestNodeEffectsReauthenticateExactInstalledRuntimePredecessor(t *testing.T) {
 	fixtures, err := releasetest.WriteNodeRuntimeSequence(t.TempDir(), nodeconfig.DeploymentRuntimePredecessorRevision)
 	if err != nil {
