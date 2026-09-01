@@ -47,6 +47,88 @@ func TestEdgeClientAcceptsExpectedProblemResponses(t *testing.T) {
 	}
 }
 
+func TestResourceCreationRetriesOnlyBoundedExecutionTargetUnavailability(t *testing.T) {
+	now := time.Date(2026, 9, 1, 11, 12, 13, 0, time.UTC)
+	terminal := now
+	operation := paasv1.Operation{
+		APIVersion: paasv1.APIVersion, Kind: "Operation", ID: "operation-register-target-a",
+		Scope: paasv1.ResourceScope{Kind: paasv1.AuthorityPlatform}, InstallationID: "installation-a",
+		Action:                 paasv1.OperationRegisterExecutionTarget,
+		Target:                 paasv1.ResourceRef{Kind: "ExecutionTarget", ID: "target-a"},
+		RequestedBy:            paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "principal-admin"},
+		IdempotencyFingerprint: "sha256:" + strings.Repeat("a", 64),
+		RequestDigest:          "sha256:" + strings.Repeat("b", 64),
+		State:                  paasv1.OperationSucceeded, Attempt: 1,
+		CreatedAt: now, UpdatedAt: now, TerminalAt: &terminal,
+	}
+	problem := paasv1.Problem{
+		Type:  "https://xiak.com/problems/execution-target-unavailable",
+		Title: "Execution target unavailable", Status: http.StatusServiceUnavailable,
+		Code:    paasv1.ErrorExecutionTargetUnavailable,
+		Detail:  "the execution target cannot be observed or admitted now",
+		TraceID: "request-register-target-a", Retryable: true,
+	}
+	for _, scenario := range []struct {
+		name          string
+		problem       paasv1.Problem
+		unavailable   int32
+		wantAttempts  int32
+		wantSucceeded bool
+	}{
+		{name: "one transient unavailable response", problem: problem, unavailable: 1, wantAttempts: 2, wantSucceeded: true},
+		{name: "bounded persistent unavailable response", problem: problem, unavailable: 4, wantAttempts: 4},
+		{name: "non-retryable unavailable response", problem: func() paasv1.Problem { value := problem; value.Retryable = false; return value }(), unavailable: 1, wantAttempts: 1},
+		{name: "invalid retryable response", problem: paasv1.Problem{Retryable: true}, unavailable: 1, wantAttempts: 1},
+		{name: "different retryable failure", problem: func() paasv1.Problem {
+			value := problem
+			value.Code = paasv1.ErrorIdentityUnavailable
+			value.Type = "https://xiak.com/problems/identity-unavailable"
+			return value
+		}(), unavailable: 1, wantAttempts: 1},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			var attempts atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				attempt := attempts.Add(1)
+				var body paasv1.RegisterExecutionTargetRequest
+				if request.Method != http.MethodPost || request.URL.Path != "/api/paas/v1/execution-targets" ||
+					request.Header.Get("Idempotency-Key") != "register-target-a" ||
+					json.NewDecoder(request.Body).Decode(&body) != nil || body.ID != "target-a" ||
+					body.ExecutionPoolID != "pool-a" || body.BindingRef != "binding-a" {
+					response.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				if attempt <= scenario.unavailable {
+					response.Header().Set("Content-Type", "application/problem+json")
+					response.WriteHeader(http.StatusServiceUnavailable)
+					_ = json.NewEncoder(response).Encode(scenario.problem)
+					return
+				}
+				response.Header().Set("Content-Type", "application/json")
+				response.Header().Set("Operation-Location", "/v1/operations/operation-register-target-a")
+				response.Header().Set("ETag", `"1"`)
+				response.WriteHeader(http.StatusCreated)
+				_ = json.NewEncoder(response).Encode(operation)
+			}))
+			defer server.Close()
+			client := newEdgeClient(server.URL)
+			client.creationRetryDelays = [3]time.Duration{}
+			defer client.close()
+			result, err := client.createResource(
+				context.Background(), "/api/paas/v1/execution-targets", "register-target-a", nil,
+				paasv1.RegisterExecutionTargetRequest{ID: "target-a", Name: "target-a", ExecutionPoolID: "pool-a", BindingRef: "binding-a"},
+				paasv1.OperationRegisterExecutionTarget, paasv1.ResourceRef{Kind: "ExecutionTarget", ID: "target-a"},
+			)
+			if (err == nil) != scenario.wantSucceeded || attempts.Load() != scenario.wantAttempts {
+				t.Fatalf("resource creation success=%t attempts=%d error=%v", err == nil, attempts.Load(), err)
+			}
+			if err == nil && result.ID != operation.ID {
+				t.Fatalf("resource creation operation = %#v", result)
+			}
+		})
+	}
+}
+
 func TestExecutionTargetTransitionRejectionRequiresExactProblemCode(t *testing.T) {
 	for _, scenario := range []struct {
 		name     string

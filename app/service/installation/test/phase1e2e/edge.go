@@ -24,9 +24,10 @@ import (
 const maximumHTTPBody = 1024 * 1024
 
 type edgeClient struct {
-	endpoint  string
-	http      *http.Client
-	forbidden [][]byte
+	endpoint            string
+	http                *http.Client
+	forbidden           [][]byte
+	creationRetryDelays [3]time.Duration
 }
 
 type httpResult struct {
@@ -48,6 +49,11 @@ type executionTargetTransitionResult struct {
 func newEdgeClient(endpoint string) *edgeClient {
 	return &edgeClient{
 		endpoint: endpoint,
+		creationRetryDelays: [3]time.Duration{
+			time.Second,
+			2 * time.Second,
+			4 * time.Second,
+		},
 		http: &http.Client{
 			Timeout: 10 * time.Second,
 			CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -217,21 +223,51 @@ func (client *edgeClient) createResource(
 	action paasv1.OperationAction,
 	target paasv1.ResourceRef,
 ) (paasv1.Operation, error) {
-	response, err := client.json(
-		ctx, http.MethodPost, path, bearer, body,
-		map[string]string{"Idempotency-Key": idempotency}, http.StatusCreated,
-	)
-	if err != nil {
-		return paasv1.Operation{}, err
+	// Resource creation is protected by the same Idempotency-Key on every
+	// attempt. Follow only the API's exact retryable target-unavailable problem
+	// with bounded exponential backoff; denials, invalid problems and other 5xx
+	// classes fail immediately instead of being hidden by the release gate.
+	poll, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	for attempt := 0; ; attempt++ {
+		response, err := client.json(
+			poll, http.MethodPost, path, bearer, body,
+			map[string]string{"Idempotency-Key": idempotency},
+			http.StatusCreated, http.StatusServiceUnavailable,
+		)
+		if err != nil {
+			return paasv1.Operation{}, err
+		}
+		if response.status == http.StatusServiceUnavailable {
+			var problem paasv1.Problem
+			valid := decodeOne(response.body, &problem) == nil &&
+				paasv1.ValidateProblem(problem) == nil &&
+				problem.Type == "https://xiak.com/problems/execution-target-unavailable" &&
+				problem.Status == http.StatusServiceUnavailable &&
+				problem.Code == paasv1.ErrorExecutionTargetUnavailable && problem.Retryable
+			clear(response.body)
+			if !valid {
+				return paasv1.Operation{}, errors.New("PaaS resource creation unavailable response failed")
+			}
+			if attempt == len(client.creationRetryDelays) ||
+				!waitPoll(poll, client.creationRetryDelays[attempt]) {
+				return paasv1.Operation{}, errors.New("PaaS execution target remained unavailable")
+			}
+			continue
+		}
+		var operation paasv1.Operation
+		valid := decodeOne(response.body, &operation) == nil &&
+			paasv1.ValidateOperation(operation) == nil &&
+			operation.Action == action && operation.Target == target &&
+			operation.State == paasv1.OperationSucceeded &&
+			response.header.Get("Operation-Location") != "" &&
+			response.header.Get("ETag") != ""
+		clear(response.body)
+		if !valid {
+			return paasv1.Operation{}, errors.New("PaaS resource creation response failed")
+		}
+		return operation, nil
 	}
-	defer clear(response.body)
-	var operation paasv1.Operation
-	if decodeOne(response.body, &operation) != nil || paasv1.ValidateOperation(operation) != nil ||
-		operation.Action != action || operation.Target != target || operation.State != paasv1.OperationSucceeded ||
-		response.header.Get("Operation-Location") == "" || response.header.Get("ETag") == "" {
-		return paasv1.Operation{}, errors.New("PaaS resource creation response failed")
-	}
-	return operation, nil
 }
 
 func executionTargetLifecycleContract(action paasv1.OperationAction) (string, paasv1.ExecutionTargetDesiredState, paasv1.ExecutionTargetDesiredState, bool) {
