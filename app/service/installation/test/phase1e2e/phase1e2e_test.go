@@ -295,10 +295,30 @@ func TestOfflinePhase1Lifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(safeFailure(err))
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), offlineLifecycleTimeout(config))
 	defer cancel()
 	if err := runGate(ctx, config); err != nil {
 		t.Fatal(safeFailure(err))
+	}
+}
+
+func offlineLifecycleTimeout(config options) time.Duration {
+	if config.nativeDeploymentRuntime {
+		// Two independent one-vCPU TCG guests exercise signed node upgrade,
+		// provider-neutral runtime proof and terminal traffic in addition to the
+		// complete platform rollback/recovery gate. Keep that real-runtime path
+		// bounded without applying its infrastructure cost to ordinary gates.
+		return 50 * time.Minute
+	}
+	return 30 * time.Minute
+}
+
+func TestOfflineLifecycleTimeoutRemainsBoundedByRuntimeScope(t *testing.T) {
+	if got := offlineLifecycleTimeout(options{}); got != 30*time.Minute {
+		t.Fatalf("ordinary lifecycle timeout=%s", got)
+	}
+	if got := offlineLifecycleTimeout(options{nativeDeploymentRuntime: true}); got != 50*time.Minute {
+		t.Fatalf("native runtime lifecycle timeout=%s", got)
 	}
 }
 
