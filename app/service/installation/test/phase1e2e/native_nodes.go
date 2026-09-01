@@ -1018,6 +1018,19 @@ func (value *gate) assertNativeDeploymentRuntime(ctx context.Context, bearer []b
 		if err := value.assertNativeProviderInstance(ctx, index, deployment, second); err != nil {
 			return err
 		}
+		// The provider-neutral placement proof above intentionally crosses both
+		// native hosts. On a resource-constrained offline guest those SSH and
+		// Docker reads can outlive the 15-second runtime authority window. Never
+		// weaken the terminal service's fail-closed freshness check: require a
+		// newer observation for the same opaque instance after that proof.
+		current, err := value.waitNativeDeploymentRuntime(
+			ctx, bearer, deployment, node.identity.ExecutionTargetID,
+			second.Value.Observation.ObservedAt,
+		)
+		if err != nil || !sameNativeRuntimeInstance(second, current) {
+			return fail("native-runtime-current-terminal-instance")
+		}
+		second = current
 		terminalSessionID, err := value.assertNativeTerminal(ctx, bearer, deployment, second, index)
 		if err != nil {
 			return err
@@ -1608,6 +1621,19 @@ func validNativeDeploymentRuntime(
 		storage.ImageSharedBytes <= storage.ImageTotalBytes &&
 		storage.ImageUniqueBytes == storage.ImageTotalBytes-storage.ImageSharedBytes &&
 		storage.VolumesState == paasv1.MeasurementAvailable && storage.Volumes != nil
+}
+
+func sameNativeRuntimeInstance(left, right paasv1.DeploymentRuntimeSnapshot) bool {
+	if left.Value == nil || right.Value == nil ||
+		len(left.Value.Observation.Instances) != 1 || len(right.Value.Observation.Instances) != 1 {
+		return false
+	}
+	leftObservation, rightObservation := left.Value.Observation, right.Value.Observation
+	return leftObservation.DeploymentID == rightObservation.DeploymentID &&
+		leftObservation.Generation == rightObservation.Generation &&
+		leftObservation.ApplicationRevisionID == rightObservation.ApplicationRevisionID &&
+		leftObservation.ExecutionTargetID == rightObservation.ExecutionTargetID &&
+		leftObservation.Instances[0].ID == rightObservation.Instances[0].ID
 }
 
 type nativeProviderInstance struct {

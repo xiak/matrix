@@ -310,6 +310,19 @@ func TestNativeDeploymentRuntimeRequiresExactAdvancingProviderNeutralProof(t *te
 	if !validNativeDeploymentRuntime(snapshot, deployment, "target-a", now.Add(-time.Second), now.Add(time.Second)) {
 		t.Fatal("exact advancing runtime proof rejected")
 	}
+	advanced := snapshot.Snapshot(now)
+	advanced.Value.Observation.ObservedAt = now.Add(time.Second)
+	advanced.Value.ValidUntil = now.Add(16 * time.Second)
+	advanced.Resources.Value.Observation.ObservedAt = now.Add(time.Second)
+	advanced.Resources.Value.ValidUntil = now.Add(16 * time.Second)
+	if !sameNativeRuntimeInstance(snapshot, advanced) {
+		t.Fatal("same opaque instance was not retained across refreshed runtime proof")
+	}
+	replaced := advanced.Snapshot(now)
+	replaced.Value.Observation.Instances[0].ID = "instance-fedcba9876543210fedcba9876543210"
+	if sameNativeRuntimeInstance(snapshot, replaced) {
+		t.Fatal("replacement instance was accepted as the refreshed terminal authority")
+	}
 	for _, change := range []func(*paasv1.DeploymentRuntimeSnapshot){
 		func(value *paasv1.DeploymentRuntimeSnapshot) { value.Value.Observation.ExecutionTargetID = "target-b" },
 		func(value *paasv1.DeploymentRuntimeSnapshot) {
