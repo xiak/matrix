@@ -129,6 +129,25 @@ func TestResourceCreationRetriesOnlyBoundedExecutionTargetUnavailability(t *test
 	}
 }
 
+func TestDefaultResourceCreationBackoffDoesNotAliasNodeSampling(t *testing.T) {
+	client := newEdgeClient("http://127.0.0.1")
+	defer client.close()
+	const nodeSamplingInterval = 7 * time.Second
+	var elapsed time.Duration
+	for index, delay := range client.creationRetryDelays {
+		if delay <= 0 {
+			t.Fatalf("creation retry delay %d = %s", index, delay)
+		}
+		elapsed += delay
+		if elapsed%nodeSamplingInterval == 0 {
+			t.Fatalf("creation retry %d aliases the node sampling interval at %s", index+1, elapsed)
+		}
+	}
+	if elapsed >= 30*time.Second {
+		t.Fatalf("creation retry delays exceed the bounded creation window: %s", elapsed)
+	}
+}
+
 func TestExecutionTargetTransitionRejectionRequiresExactProblemCode(t *testing.T) {
 	for _, scenario := range []struct {
 		name     string

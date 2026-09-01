@@ -50,9 +50,9 @@ func newEdgeClient(endpoint string) *edgeClient {
 	return &edgeClient{
 		endpoint: endpoint,
 		creationRetryDelays: [3]time.Duration{
-			time.Second,
 			2 * time.Second,
 			4 * time.Second,
+			9 * time.Second,
 		},
 		http: &http.Client{
 			Timeout: 10 * time.Second,
@@ -225,8 +225,10 @@ func (client *edgeClient) createResource(
 ) (paasv1.Operation, error) {
 	// Resource creation is protected by the same Idempotency-Key on every
 	// attempt. Follow only the API's exact retryable target-unavailable problem
-	// with bounded exponential backoff; denials, invalid problems and other 5xx
-	// classes fail immediately instead of being hidden by the release gate.
+	// with bounded backoff. The default delays deliberately avoid harmonics of
+	// the node's seven-second background sampler, so a healthy constrained node
+	// is not retried against the same transient sample. Denials, invalid problems
+	// and other 5xx classes fail immediately instead of being hidden by the gate.
 	poll, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	for attempt := 0; ; attempt++ {

@@ -73,6 +73,11 @@ type CapabilityProbeID string
 const (
 	ProbeDockerEngine  CapabilityProbeID = "docker-engine"
 	ProbeComposePlugin CapabilityProbeID = "compose-plugin"
+
+	// Keep each capability command below the node observer's six-second parent
+	// deadline while allowing a constrained one-CPU host to exceed three
+	// seconds without being falsely reported as unavailable.
+	defaultCapabilityProbeTimeout = 5 * time.Second
 )
 
 type CapabilityChecker interface {
@@ -86,7 +91,7 @@ type LocalHostProbe struct {
 
 func NewLocalHostProbe() *LocalHostProbe {
 	return &LocalHostProbe{
-		capabilities: execCapabilityChecker{timeout: 3 * time.Second},
+		capabilities: execCapabilityChecker{},
 	}
 }
 
@@ -131,8 +136,8 @@ func (probe *LocalHostProbe) Inspect(
 		}
 	}
 	// The node sampler owns a single bounded observation deadline. These two
-	// read-only capabilities are independent; serial three-second subprocess
-	// budgets could exceed that deadline and falsely demote a healthy host.
+	// read-only capabilities are independent; serial subprocess budgets could
+	// exceed that deadline and falsely demote a healthy host.
 	var observations sync.WaitGroup
 	observations.Add(2)
 	go func() {
@@ -177,7 +182,7 @@ func (checker execCapabilityChecker) Available(
 	}
 	timeout := checker.timeout
 	if timeout <= 0 {
-		timeout = 3 * time.Second
+		timeout = defaultCapabilityProbeTimeout
 	}
 	probeContext, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
