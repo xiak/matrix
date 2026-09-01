@@ -16,6 +16,13 @@ import (
 
 var ErrUnavailable = errors.New("current node observation is unavailable")
 
+const (
+	// Keep two sampling opportunities inside the public freshness window while
+	// leaving a one-CPU node enough bounded time for Docker and collector probes.
+	defaultSamplingInterval = 7 * time.Second
+	defaultProbeTimeout     = 6 * time.Second
+)
+
 type HostObserver interface {
 	ObserveExecutionTarget(context.Context, paasv1.ObserveExecutionTargetRequest) (paasv1.ExecutionTargetObservation, error)
 }
@@ -49,10 +56,10 @@ type Service struct {
 
 func New(host HostObserver, usage UsageObserver, config Config) (*Service, error) {
 	if config.Interval == 0 {
-		config.Interval = 5 * time.Second
+		config.Interval = defaultSamplingInterval
 	}
 	if config.ProbeTimeout == 0 {
-		config.ProbeTimeout = 4 * time.Second
+		config.ProbeTimeout = defaultProbeTimeout
 	}
 	if config.MaximumAge == 0 {
 		config.MaximumAge = nodev1.MaximumObservationAge
