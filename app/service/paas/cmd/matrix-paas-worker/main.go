@@ -300,6 +300,7 @@ func run(ctx context.Context) error {
 				executionProfile.Refresh,
 				runtimeRefresh.ProcessNext,
 				config.workerID,
+				executionTargetRefresh,
 			)
 		},
 	)
@@ -356,12 +357,13 @@ func runWorkerLoop(
 	refreshExecutionTarget func(context.Context) error,
 	refreshDeploymentRuntime func(context.Context) (bool, error),
 	workerID string,
+	refreshInterval time.Duration,
 ) error {
 	if ctx == nil || processNext == nil || refreshExecutionTarget == nil ||
-		refreshDeploymentRuntime == nil {
+		refreshDeploymentRuntime == nil || refreshInterval <= 0 {
 		return errors.New("PaaS worker loop configuration is invalid")
 	}
-	nextRefresh := time.Now().Add(executionTargetRefresh)
+	nextRefresh := time.Now().Add(refreshInterval)
 	for {
 		if ctx.Err() != nil {
 			return nil
@@ -371,9 +373,18 @@ func runWorkerLoop(
 				if ctx.Err() != nil {
 					return nil
 				}
-				return errors.New("PaaS execution target refresh failed")
+				// A provider observation is not a worker-lifecycle boundary. Keep
+				// the last proved snapshot, let readiness expose it once stale, and
+				// retry at a bounded cadence instead of restarting every service
+				// loop around a transient Docker or remote-host outage.
+				retryAfter := reconcileBackoff
+				if refreshInterval < retryAfter {
+					retryAfter = refreshInterval
+				}
+				nextRefresh = time.Now().Add(retryAfter)
+			} else {
+				nextRefresh = time.Now().Add(refreshInterval)
 			}
-			nextRefresh = time.Now().Add(executionTargetRefresh)
 		}
 		operationProcessed, err := processNext(ctx, workerID)
 		if err != nil {
