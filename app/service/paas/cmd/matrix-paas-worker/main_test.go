@@ -38,6 +38,7 @@ func TestWorkerLoopProcessesAvailableWorkAndStopsWithContext(t *testing.T) {
 			func(context.Context) error { return nil },
 			func(context.Context) (bool, error) { return false, nil },
 			"worker-a",
+			time.Hour,
 		)
 	}()
 	deadline := time.After(2 * time.Second)
@@ -70,6 +71,7 @@ func TestWorkerLoopNormalizesCycleFailure(t *testing.T) {
 		func(context.Context) error { return nil },
 		func(context.Context) (bool, error) { return false, nil },
 		"worker-a",
+		time.Hour,
 	)
 	if err == nil || errors.Is(err, native) || err.Error() != "PaaS reconciliation cycle failed" {
 		t.Fatalf("worker loop error = %v", err)
@@ -94,6 +96,7 @@ func TestWorkerLoopDoesNotStarveRuntimeRefreshWhenOperationsRemain(t *testing.T)
 				return true, nil
 			},
 			"worker-a",
+			time.Hour,
 		)
 	}()
 	select {
@@ -104,5 +107,50 @@ func TestWorkerLoopDoesNotStarveRuntimeRefreshWhenOperationsRemain(t *testing.T)
 	}
 	if err := <-result; err != nil {
 		t.Fatalf("stop worker loop: %v", err)
+	}
+}
+
+func TestWorkerLoopRetriesExecutionTargetObservationWithoutRestart(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	native := errors.New("Docker socket and provider path must not escape")
+	recovered := make(chan struct{})
+	result := make(chan error, 1)
+	attempts := 0
+	go func() {
+		result <- runWorkerLoop(
+			ctx,
+			func(context.Context, string) (bool, error) { return false, nil },
+			func(context.Context) error {
+				attempts++
+				if attempts == 1 {
+					return native
+				}
+				if attempts == 2 {
+					close(recovered)
+				}
+				return nil
+			},
+			func(context.Context) (bool, error) { return false, nil },
+			"worker-a",
+			10*time.Millisecond,
+		)
+	}()
+	select {
+	case <-recovered:
+		cancel()
+	case err := <-result:
+		if errors.Is(err, native) {
+			t.Fatal("worker leaked the provider failure")
+		}
+		t.Fatalf("worker stopped after a transient target observation: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("worker did not retry the target observation")
+	}
+	if err := <-result; err != nil {
+		t.Fatalf("stop worker loop: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("target observation attempts = %d, want 2", attempts)
 	}
 }
