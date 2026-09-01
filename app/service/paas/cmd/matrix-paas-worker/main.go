@@ -50,7 +50,6 @@ const (
 	executionTargetTimeout          = 5 * time.Second
 	runtimeObservationInterval      = 5 * time.Second
 	runtimeFailureBackoff           = 2 * time.Second
-	runtimeObservationTimeout       = 3 * time.Second
 	runtimeMaximumObservationAge    = 5 * time.Second
 	runtimeValidityDuration         = 15 * time.Second
 	operationLeaseDuration          = 30 * time.Second
@@ -61,6 +60,11 @@ const (
 	pendingCapacityClaimTTL         = 10 * time.Minute
 	maximumArtifactCatalogBytes     = 1024 * 1024
 )
+
+// One remote telemetry cycle includes bounded Docker lifecycle, stats and
+// storage reads. Keep enough end-to-end budget for those individually bounded
+// calls and host/network tail latency without outliving the stored proof.
+const runtimeObservationTimeout = 10 * time.Second
 
 type configuration struct {
 	databaseDSNFile      string

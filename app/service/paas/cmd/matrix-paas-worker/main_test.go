@@ -14,6 +14,19 @@ type loopWorker struct {
 	failure   error
 }
 
+func TestRuntimeObservationBudgetCoversRemoteProviderTailWithoutOutlivingProof(t *testing.T) {
+	if runtimeObservationTimeout != 10*time.Second {
+		t.Fatalf("runtime observation timeout = %s, want 10s", runtimeObservationTimeout)
+	}
+	if runtimeObservationTimeout >= runtimeValidityDuration {
+		t.Fatalf(
+			"runtime observation timeout %s must remain below proof validity %s",
+			runtimeObservationTimeout,
+			runtimeValidityDuration,
+		)
+	}
+}
+
 func (worker *loopWorker) ProcessNext(context.Context, string) (bool, error) {
 	worker.mu.Lock()
 	defer worker.mu.Unlock()
