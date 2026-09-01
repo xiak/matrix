@@ -8,6 +8,7 @@ import (
 	"math"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/sys/execabs"
@@ -75,6 +76,7 @@ const (
 )
 
 type CapabilityChecker interface {
+	// Available may be called concurrently for independent closed probes.
 	Available(context.Context, CapabilityProbeID) bool
 }
 
@@ -128,8 +130,20 @@ func (probe *LocalHostProbe) Inspect(
 			ID:   "capabilities",
 		}
 	}
-	facts.DockerEngineReady = probe.capabilities.Available(ctx, ProbeDockerEngine)
-	facts.ComposePluginReady = probe.capabilities.Available(ctx, ProbeComposePlugin)
+	// The node sampler owns a single bounded observation deadline. These two
+	// read-only capabilities are independent; serial three-second subprocess
+	// budgets could exceed that deadline and falsely demote a healthy host.
+	var observations sync.WaitGroup
+	observations.Add(2)
+	go func() {
+		defer observations.Done()
+		facts.DockerEngineReady = probe.capabilities.Available(ctx, ProbeDockerEngine)
+	}()
+	go func() {
+		defer observations.Done()
+		facts.ComposePluginReady = probe.capabilities.Available(ctx, ProbeComposePlugin)
+	}()
+	observations.Wait()
 	return facts, nil
 }
 
