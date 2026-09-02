@@ -48,8 +48,9 @@ const nativeCompleteRuntimeSnapshotTimeout = 3 * time.Minute
 const nativeSSHControlPath = "/run/matrix-phase3-native-%C"
 
 const (
-	nativeReadinessTimeout      = time.Minute
-	nativeReadinessInitialDelay = 2 * time.Second
+	nativeReadinessTimeout        = time.Minute
+	nativeReadinessAttemptTimeout = nodev1.MaximumObservationAge
+	nativeReadinessInitialDelay   = 2 * time.Second
 	// Self-readiness admits observations for at most MaximumObservationAge.
 	// Leave slightly more than half that window between retries so a sampler
 	// which guarantees two opportunities per window can run on a one-CPU host.
@@ -403,7 +404,12 @@ func (fixture *nativeNodes) waitReady(
 	defer cancel()
 	delay := nativeReadinessInitialDelay
 	for {
-		result, err := fixture.mxResult(poll, index, successor, "status", "--root", fixture.installationRoot())
+		// A slow SSH or local verification attempt must not consume the complete
+		// retry window. A result taking longer than the protocol's freshness
+		// window cannot prove the bounded observation this gate requires.
+		attempt, cancelAttempt := context.WithTimeout(poll, nativeReadinessAttemptTimeout)
+		result, err := fixture.mxResult(attempt, index, successor, "status", "--root", fixture.installationRoot())
+		cancelAttempt()
 		if err == nil {
 			switch result.State {
 			case "READY":

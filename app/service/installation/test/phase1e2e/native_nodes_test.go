@@ -126,7 +126,8 @@ func TestNativeSSHTransportPinsAndReusesConnections(t *testing.T) {
 }
 
 func TestNativeReadinessRetryLeavesAFullSamplingOpportunity(t *testing.T) {
-	if nativeReadinessTimeout != time.Minute || nativeReadinessInitialDelay != 2*time.Second ||
+	if nativeReadinessTimeout != time.Minute || nativeReadinessAttemptTimeout != nodev1.MaximumObservationAge ||
+		nativeReadinessInitialDelay != 2*time.Second ||
 		nativeReadinessMaximumDelay <= nodev1.MaximumObservationAge/2 {
 		t.Fatal("native readiness retry no longer leaves a bounded background sampling opportunity")
 	}
