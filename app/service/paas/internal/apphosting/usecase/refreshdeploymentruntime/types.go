@@ -59,6 +59,7 @@ type Config struct {
 	FailureBackoff        time.Duration
 	ObservationTimeout    time.Duration
 	MaximumObservationAge time.Duration
+	MaximumPastClockSkew  time.Duration
 	ValidityDuration      time.Duration
 	Clock                 func() time.Time
 }

@@ -166,6 +166,7 @@ func TestRefreshValidatesTelemetryAgainstRequestCompletion(t *testing.T) {
 		FailureBackoff:        time.Second,
 		ObservationTimeout:    10 * time.Second,
 		MaximumObservationAge: 5 * time.Second,
+		MaximumPastClockSkew:  30 * time.Second,
 		ValidityDuration:      15 * time.Second,
 		Clock: func() time.Time {
 			if len(clockValues) == 1 {
@@ -190,6 +191,121 @@ func TestRefreshValidatesTelemetryAgainstRequestCompletion(t *testing.T) {
 	}
 }
 
+func TestRefreshAcceptsRequestBoundTelemetryAcrossBoundedNodeClockLag(t *testing.T) {
+	startedAt := time.Date(2026, 8, 30, 1, 2, 3, 0, time.UTC)
+	completedAt := startedAt.Add(8 * time.Second)
+	nodeObservedAt := startedAt.Add(-6 * time.Second)
+	candidate := runtimeCandidate()
+	repository := &runtimeRepository{candidates: []Candidate{candidate}}
+	observer := &runtimeObserver{
+		value:     runtimeObservation(candidate, nodeObservedAt),
+		resources: resourceObservation(candidate, nodeObservedAt.Add(time.Second)),
+	}
+	clockValues := []time.Time{startedAt, completedAt}
+	service, err := New(repository, []Route{{ExecutionTargetID: "target-a", Observer: observer}}, Config{
+		ObservationInterval:   5 * time.Second,
+		FailureBackoff:        time.Second,
+		ObservationTimeout:    10 * time.Second,
+		MaximumObservationAge: 5 * time.Second,
+		MaximumPastClockSkew:  30 * time.Second,
+		ValidityDuration:      15 * time.Second,
+		Clock: func() time.Time {
+			if len(clockValues) == 1 {
+				return clockValues[0]
+			}
+			value := clockValues[0]
+			clockValues = clockValues[1:]
+			return value
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	processed, err := service.ProcessNext(context.Background())
+	if err != nil || !processed || len(repository.stored) != 1 {
+		t.Fatalf("clock-lagged telemetry processed/error/stored = %t/%v/%d", processed, err, len(repository.stored))
+	}
+	stored := repository.stored[0]
+	wantValidUntil := completedAt.Add(15 * time.Second)
+	if stored.Runtime.ObservedAt != nodeObservedAt || stored.Resources.ObservedAt != nodeObservedAt.Add(time.Second) ||
+		stored.RuntimeValidUntil != wantValidUntil || stored.ResourcesValidUntil != wantValidUntil {
+		t.Fatalf("clock-lagged telemetry snapshot = %#v", stored)
+	}
+}
+
+func TestTelemetryClockSkewWindowFailsClosedAtItsBounds(t *testing.T) {
+	startedAt := time.Date(2026, 8, 30, 1, 2, 3, 0, time.UTC)
+	completedAt := startedAt.Add(8 * time.Second)
+	candidate := runtimeCandidate()
+	runtime := runtimeObservation(candidate, startedAt.Add(-35*time.Second+time.Microsecond))
+	resources := resourceObservation(candidate, runtime.ObservedAt)
+	if !validTelemetry(candidate, runtime, resources, startedAt, completedAt, 5*time.Second, 30*time.Second) {
+		t.Fatal("telemetry inside the bounded past clock-skew window was rejected")
+	}
+
+	runtime.ObservedAt = startedAt.Add(-35 * time.Second)
+	resources.ObservedAt = runtime.ObservedAt
+	if validTelemetry(candidate, runtime, resources, startedAt, completedAt, 5*time.Second, 30*time.Second) {
+		t.Fatal("telemetry at the expired past clock-skew boundary was accepted")
+	}
+	runtime.ObservedAt = completedAt.Add(maximumFutureSkew + time.Microsecond)
+	resources.ObservedAt = runtime.ObservedAt
+	if validTelemetry(candidate, runtime, resources, startedAt, completedAt, 5*time.Second, 30*time.Second) {
+		t.Fatal("telemetry beyond the future clock-skew boundary was accepted")
+	}
+}
+
+func TestRefreshRejectsTelemetryWhichCompletesAtTheRequestDeadline(t *testing.T) {
+	startedAt := time.Date(2026, 8, 30, 1, 2, 3, 0, time.UTC)
+	candidate := runtimeCandidate()
+	repository := &runtimeRepository{candidates: []Candidate{candidate}}
+	observer := &runtimeObserver{
+		value: runtimeObservation(candidate, startedAt), resources: resourceObservation(candidate, startedAt),
+	}
+	clockValues := []time.Time{startedAt, startedAt.Add(10 * time.Second)}
+	service, err := New(repository, []Route{{ExecutionTargetID: "target-a", Observer: observer}}, Config{
+		ObservationInterval:   5 * time.Second,
+		FailureBackoff:        time.Second,
+		ObservationTimeout:    10 * time.Second,
+		MaximumObservationAge: 5 * time.Second,
+		MaximumPastClockSkew:  30 * time.Second,
+		ValidityDuration:      15 * time.Second,
+		Clock: func() time.Time {
+			value := clockValues[0]
+			if len(clockValues) > 1 {
+				clockValues = clockValues[1:]
+			}
+			return value
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	processed, err := service.ProcessNext(context.Background())
+	if err != nil || !processed || len(repository.stored) != 0 {
+		t.Fatalf("deadline telemetry processed/error/stored = %t/%v/%d", processed, err, len(repository.stored))
+	}
+}
+
+func TestRuntimeTimingKeepsWorstCaseSourceToExpiryWithinThePublicContract(t *testing.T) {
+	candidate := runtimeCandidate()
+	repository := &runtimeRepository{}
+	observer := &runtimeObserver{}
+	_, err := New(repository, []Route{{ExecutionTargetID: candidate.ExecutionTargetID, Observer: observer}}, Config{
+		ObservationInterval:   5 * time.Second,
+		FailureBackoff:        time.Second,
+		ObservationTimeout:    10 * time.Second,
+		MaximumObservationAge: 5 * time.Second,
+		MaximumPastClockSkew:  30*time.Second + time.Microsecond,
+		ValidityDuration:      15 * time.Second,
+	})
+	if err == nil {
+		t.Fatal("source-to-expiry window beyond one minute was accepted")
+	}
+}
+
 func newRuntimeService(
 	t *testing.T,
 	repository Repository,
@@ -202,6 +318,7 @@ func newRuntimeService(
 		FailureBackoff:        time.Second,
 		ObservationTimeout:    2 * time.Second,
 		MaximumObservationAge: 5 * time.Second,
+		MaximumPastClockSkew:  30 * time.Second,
 		ValidityDuration:      15 * time.Second,
 		Clock:                 func() time.Time { return now },
 	})

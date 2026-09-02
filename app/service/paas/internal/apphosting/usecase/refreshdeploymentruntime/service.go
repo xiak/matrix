@@ -25,7 +25,10 @@ func New(repository Repository, routes []Route, config Config) (*Service, error)
 		config.FailureBackoff <= 0 || config.FailureBackoff > time.Minute ||
 		config.ObservationTimeout <= 0 || config.ObservationTimeout > time.Minute ||
 		config.MaximumObservationAge <= 0 || config.MaximumObservationAge > time.Minute ||
-		config.ValidityDuration <= 0 || config.ValidityDuration > time.Minute {
+		config.MaximumPastClockSkew <= 0 || config.MaximumPastClockSkew > time.Minute ||
+		config.ValidityDuration <= 0 || config.ValidityDuration > time.Minute ||
+		config.MaximumObservationAge+config.MaximumPastClockSkew+
+			config.ObservationTimeout+config.ValidityDuration > time.Minute {
 		return nil, errors.New("Deployment runtime refresh timing is invalid")
 	}
 	if config.Clock == nil {
@@ -105,12 +108,14 @@ func (service *Service) ProcessNext(ctx context.Context) (bool, error) {
 	if ctx.Err() != nil {
 		return false, ctx.Err()
 	}
-	if observeErr != nil || !validTelemetry(
+	if observeErr != nil || completedAt.Before(startedAt) || !completedAt.Before(request.Deadline) || !validTelemetry(
 		candidate,
 		runtimeObservation,
 		resourceObservation,
+		startedAt,
 		completedAt,
 		service.config.MaximumObservationAge,
+		service.config.MaximumPastClockSkew,
 	) {
 		service.schedule(key, completedAt.Add(service.config.FailureBackoff))
 		return true, nil
@@ -121,9 +126,9 @@ func (service *Service) ProcessNext(ctx context.Context) (bool, error) {
 		candidate.PlacementDecisionID,
 		TelemetrySnapshot{
 			Runtime:             runtimeObservation,
-			RuntimeValidUntil:   runtimeObservation.ObservedAt.Add(service.config.ValidityDuration),
+			RuntimeValidUntil:   completedAt.Add(service.config.ValidityDuration),
 			Resources:           resourceObservation,
-			ResourcesValidUntil: resourceObservation.ObservedAt.Add(service.config.ValidityDuration),
+			ResourcesValidUntil: completedAt.Add(service.config.ValidityDuration),
 		},
 	); err != nil {
 		if errors.Is(err, ErrSnapshotRejected) {
@@ -154,9 +159,17 @@ func validTelemetry(
 	candidate Candidate,
 	runtime paasv1.DeploymentRuntimeObservation,
 	resources paasv1.DeploymentResourceObservation,
-	now time.Time,
+	startedAt time.Time,
+	completedAt time.Time,
 	maximumAge time.Duration,
+	maximumPastClockSkew time.Duration,
 ) bool {
+	// The mutually authenticated response is bound to this exact request by
+	// its unique controller-issued RequestID and sealed Deployment authority. Preserve
+	// the node's source time, but judge liveness against the controller-owned
+	// request interval so a bounded slow node clock cannot turn fresh telemetry
+	// into a fabricated outage. Future source time remains narrowly bounded.
+	maximumPastAge := maximumAge + maximumPastClockSkew
 	if paasv1.ValidateDeploymentRuntimeObservation(runtime) != nil ||
 		paasv1.ValidateDeploymentResourceObservation(resources) != nil ||
 		runtime.DeploymentID != candidate.DeploymentID ||
@@ -167,10 +180,10 @@ func validTelemetry(
 		resources.Generation != candidate.Generation ||
 		resources.ApplicationRevisionID != candidate.ApplicationRevisionID ||
 		resources.ExecutionTargetID != candidate.ExecutionTargetID ||
-		runtime.ObservedAt.After(now.Add(maximumFutureSkew)) ||
-		resources.ObservedAt.After(now.Add(maximumFutureSkew)) ||
-		!now.Before(runtime.ObservedAt.Add(maximumAge)) ||
-		!now.Before(resources.ObservedAt.Add(maximumAge)) ||
+		runtime.ObservedAt.After(completedAt.Add(maximumFutureSkew)) ||
+		resources.ObservedAt.After(completedAt.Add(maximumFutureSkew)) ||
+		!startedAt.Before(runtime.ObservedAt.Add(maximumPastAge)) ||
+		!startedAt.Before(resources.ObservedAt.Add(maximumPastAge)) ||
 		len(runtime.Instances) != len(resources.Instances) {
 		return false
 	}

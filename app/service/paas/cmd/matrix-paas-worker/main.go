@@ -51,6 +51,7 @@ const (
 	runtimeObservationInterval      = 5 * time.Second
 	runtimeFailureBackoff           = 2 * time.Second
 	runtimeMaximumObservationAge    = 5 * time.Second
+	runtimeMaximumPastClockSkew     = 30 * time.Second
 	runtimeValidityDuration         = 15 * time.Second
 	operationLeaseDuration          = 30 * time.Second
 	effectTimeout                   = 20 * time.Second
@@ -245,6 +246,7 @@ func run(ctx context.Context) error {
 			FailureBackoff:        runtimeFailureBackoff,
 			ObservationTimeout:    runtimeObservationTimeout,
 			MaximumObservationAge: runtimeMaximumObservationAge,
+			MaximumPastClockSkew:  runtimeMaximumPastClockSkew,
 			ValidityDuration:      runtimeValidityDuration,
 			Clock: func() time.Time {
 				return time.Now().UTC().Truncate(time.Microsecond)
