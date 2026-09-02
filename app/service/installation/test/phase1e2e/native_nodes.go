@@ -48,12 +48,14 @@ const nativeCompleteRuntimeSnapshotTimeout = 3 * time.Minute
 const nativeSSHControlPath = "/run/matrix-phase3-native-%C"
 
 const (
-	nativeReadinessTimeout        = time.Minute
-	nativeReadinessAttemptTimeout = nodev1.MaximumObservationAge
+	nativeReadinessTimeout        = 2 * time.Minute
+	nativeReadinessAttemptTimeout = 2 * nodev1.MaximumObservationAge
 	nativeReadinessInitialDelay   = 2 * time.Second
-	// Self-readiness admits observations for at most MaximumObservationAge.
-	// Leave slightly more than half that window between retries so a sampler
-	// which guarantees two opportunities per window can run on a one-CPU host.
+	// Status authenticates the installed release before fetching and validating
+	// a fresh self-observation. Give that immutable-file verification bounded
+	// headroom on a busy one-CPU host; observation freshness is still enforced
+	// after verification. Leave slightly more than half the freshness window
+	// between retries so the background sampler gets another opportunity.
 	nativeReadinessMaximumDelay = (nodev1.MaximumObservationAge + time.Second) / 2
 )
 

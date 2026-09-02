@@ -125,11 +125,12 @@ func TestNativeSSHTransportPinsAndReusesConnections(t *testing.T) {
 	}
 }
 
-func TestNativeReadinessRetryLeavesAFullSamplingOpportunity(t *testing.T) {
-	if nativeReadinessTimeout != time.Minute || nativeReadinessAttemptTimeout != nodev1.MaximumObservationAge ||
+func TestNativeReadinessRetryAccommodatesAuthenticatedObservation(t *testing.T) {
+	if nativeReadinessTimeout != 2*time.Minute || nativeReadinessAttemptTimeout != 2*nodev1.MaximumObservationAge ||
 		nativeReadinessInitialDelay != 2*time.Second ||
-		nativeReadinessMaximumDelay <= nodev1.MaximumObservationAge/2 {
-		t.Fatal("native readiness retry no longer leaves a bounded background sampling opportunity")
+		nativeReadinessMaximumDelay <= nodev1.MaximumObservationAge/2 ||
+		nativeReadinessTimeout < 3*nativeReadinessAttemptTimeout {
+		t.Fatal("native readiness retry no longer accommodates bounded release authentication and fresh sampling")
 	}
 	delay := nativeReadinessInitialDelay
 	want := []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second, 8 * time.Second}
