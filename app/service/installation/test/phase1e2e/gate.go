@@ -417,32 +417,71 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return nil
 	}
 
-	rollback, err := runMX(ctx, value.releases.b, "rollback", []string{"--root", value.config.root}, value.forbidden(secret, newPassword, bearer))
-	if err != nil || rollback.ReleaseID != value.releases.a.Manifest.Release.ID ||
-		rollback.PreviousID != "" || !rollback.Changed {
-		return fail("platform-rollback")
+	if value.releases.a.Manifest.Database != value.releases.b.Manifest.Database {
+		beforeRollback, err := readJournal(ctx, value.config.root)
+		if err != nil {
+			return fail("cross-profile-rollback-journal")
+		}
+		command, stdout, stderr, err := startMX(
+			ctx, value.releases.b, "rollback", []string{"--root", value.config.root},
+		)
+		if err != nil {
+			return fail("cross-profile-rollback-start")
+		}
+		if err := validateExpectedMXFailure(
+			command.Wait(), stdout, stderr, "rollback", value.forbidden(secret, newPassword, bearer),
+			3, "PRECONDITION_FAILED", "ROLLBACK_REQUIRES_AUTHENTICATED_RECOVERY",
+		); err != nil {
+			return err
+		}
+		afterRollback, err := readJournal(ctx, value.config.root)
+		if err != nil || !reflect.DeepEqual(beforeRollback, afterRollback) {
+			return fail("cross-profile-rollback-changed-journal")
+		}
+		if _, err := assertPlatform(
+			ctx, value.config.root, value.releases.b.Manifest, value.releases.a.Manifest.Release.ID,
+		); err != nil {
+			return err
+		}
+		if err := value.assertWorkload(ctx, value.releases.b.Manifest, updated, 2, "2", settingTwo, secretDigest); err != nil {
+			return err
+		}
+		if err := value.assertPostUpgradeApplication(ctx, bearer, postUpgradeOperation, true); err != nil {
+			return err
+		}
+		rollbackHistory, err := value.edge.allAuditRecords(ctx, bearer)
+		if err != nil || !containsAuditHistory(rollbackHistory, auditRecordHashes(postUpgradeAudit)) {
+			return fail("rejected-rollback-retained-successor-audit-history")
+		}
+		emit("cross-profile-platform-rollback-rejected")
+	} else {
+		rollback, err := runMX(ctx, value.releases.b, "rollback", []string{"--root", value.config.root}, value.forbidden(secret, newPassword, bearer))
+		if err != nil || rollback.ReleaseID != value.releases.a.Manifest.Release.ID ||
+			rollback.PreviousID != "" || !rollback.Changed {
+			return fail("platform-rollback")
+		}
+		value.releaseAPreviousID = ""
+		if _, err := assertPlatform(ctx, value.config.root, value.releases.a.Manifest, ""); err != nil {
+			return err
+		}
+		if err := assertNoPlatformReleaseContainers(ctx, value.releases.b.Manifest.Release.ID); err != nil {
+			return err
+		}
+		if err := value.assertWorkload(ctx, value.releases.a.Manifest, updated, 2, "2", settingTwo, secretDigest); err != nil {
+			return err
+		}
+		if err := value.repeatedStatusAndVerify(ctx, value.releases.a, value.releases.a.Manifest.Release.ID, ""); err != nil {
+			return err
+		}
+		if err := value.assertPostUpgradeApplication(ctx, bearer, postUpgradeOperation, true); err != nil {
+			return err
+		}
+		rollbackHistory, err := value.edge.allAuditRecords(ctx, bearer)
+		if err != nil || !containsAuditHistory(rollbackHistory, auditRecordHashes(postUpgradeAudit)) {
+			return fail("rollback-retained-successor-audit-history")
+		}
+		emit("explicit-platform-rollback")
 	}
-	value.releaseAPreviousID = ""
-	if _, err := assertPlatform(ctx, value.config.root, value.releases.a.Manifest, ""); err != nil {
-		return err
-	}
-	if err := assertNoPlatformReleaseContainers(ctx, value.releases.b.Manifest.Release.ID); err != nil {
-		return err
-	}
-	if err := value.assertWorkload(ctx, value.releases.a.Manifest, updated, 2, "2", settingTwo, secretDigest); err != nil {
-		return err
-	}
-	if err := value.repeatedStatusAndVerify(ctx, value.releases.a, value.releases.a.Manifest.Release.ID, ""); err != nil {
-		return err
-	}
-	if err := value.assertPostUpgradeApplication(ctx, bearer, postUpgradeOperation, true); err != nil {
-		return err
-	}
-	rollbackHistory, err := value.edge.allAuditRecords(ctx, bearer)
-	if err != nil || !containsAuditHistory(rollbackHistory, auditRecordHashes(postUpgradeAudit)) {
-		return fail("rollback-retained-successor-audit-history")
-	}
-	emit("explicit-platform-rollback")
 	if err := value.assertNativeNodes(ctx, bearer, false); err != nil {
 		return err
 	}
@@ -450,7 +489,8 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	value.workloadRunning = ""
 	// Recovery is executed by the authenticated current operator media. The
 	// selected backup, not a historical target binary, owns the release that is
-	// restored. This keeps recovery fixes usable after the platform rolls back.
+	// restored. This keeps recovery fixes usable after a direct rollback is
+	// rejected or after a same-profile platform rollback.
 	recovery, err := runMX(ctx, value.releases.b, "recover", []string{
 		"--root", value.config.root, "--backup", backup.BackupID,
 	}, value.forbidden(secret, newPassword, bearer))
