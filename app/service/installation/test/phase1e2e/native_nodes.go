@@ -1821,11 +1821,47 @@ type nativeRetainedNode struct {
 }
 
 type nativeRetention struct {
-	InstallationID   string               `json:"installationId"`
-	ControllerDigest string               `json:"controllerDigest"`
-	ReleaseID        string               `json:"releaseId"`
-	ReleaseDigest    string               `json:"releaseDigest"`
-	Nodes            []nativeRetainedNode `json:"nodes"`
+	InstallationID    string               `json:"installationId"`
+	ControllerDigest  string               `json:"controllerDigest"`
+	ReleaseID         string               `json:"releaseId"`
+	ReleaseDigest     string               `json:"releaseDigest"`
+	DeploymentRuntime bool                 `json:"deploymentRuntime"`
+	Nodes             []nativeRetainedNode `json:"nodes"`
+}
+
+func nativeRestartConnection(
+	input nativeNodeInput,
+	saved nativeRetainedNode,
+	installationID string,
+	connections []nodeconfig.Connection,
+	deploymentRuntime bool,
+) (nodeconfig.Connection, bool) {
+	var matched nodeconfig.Connection
+	found := false
+	for _, connection := range connections {
+		if connection.Endpoint != input.Endpoint {
+			continue
+		}
+		if found {
+			return nodeconfig.Connection{}, false
+		}
+		matched, found = connection, true
+	}
+	if !found || !validNativeFacts(saved.Facts) ||
+		matched.IdentityFingerprint != saved.Facts.Fingerprint ||
+		paasv1.ValidateOperation(saved.Operation) != nil ||
+		saved.Operation.Action != paasv1.OperationRegisterExecutionTarget ||
+		saved.Operation.State != paasv1.OperationSucceeded ||
+		saved.Operation.InstallationID != installationID ||
+		saved.Operation.Target != (paasv1.ResourceRef{Kind: "ExecutionTarget", ID: matched.TargetID}) ||
+		paasv1.ValidateDigest("digest", saved.Digest) != nil ||
+		paasv1.ValidateDigest("auditHash", saved.AuditHash) != nil ||
+		saved.ObservedAt.IsZero() ||
+		deploymentRuntime && saved.Workload != (nativeWorkload{}) ||
+		!deploymentRuntime && (!saved.Workload.Running || saved.Workload.ID == "" || saved.Workload.StartedAt == "") {
+		return nodeconfig.Connection{}, false
+	}
+	return matched, true
 }
 
 func (value *gate) saveNativeRetention(ctx context.Context) error {
@@ -1833,7 +1869,7 @@ func (value *gate) saveNativeRetention(ctx context.Context) error {
 		return nil
 	}
 	fixture := value.nodes
-	retained := nativeRetention{InstallationID: fixture.controller.InstallationID, ControllerDigest: value.controllerConfigDigest, ReleaseID: fixture.releases.a.Manifest.Release.ID, ReleaseDigest: fixture.releases.a.ManifestSHA256}
+	retained := nativeRetention{InstallationID: fixture.controller.InstallationID, ControllerDigest: value.controllerConfigDigest, ReleaseID: fixture.releases.a.Manifest.Release.ID, ReleaseDigest: fixture.releases.a.ManifestSHA256, DeploymentRuntime: fixture.deploymentRuntime}
 	for index, node := range fixture.nodes {
 		target, err := value.nativeStoredTarget(ctx, index)
 		if err != nil || target.Status.Usage == nil {
@@ -1890,18 +1926,18 @@ func (value *gate) afterNativeRestart(ctx context.Context, installationID string
 	if err != nil || digest != retained.ControllerDigest || controller.InstallationID != installationID || len(controller.Nodes) != 2 {
 		return fail("native-restart-latest-controller")
 	}
-	fixture := &nativeNodes{input: input, directory: filepath.Dir(value.config.nativeNodes), releases: releasePair{a: a}, controller: controller}
+	fixture := &nativeNodes{input: input, directory: filepath.Dir(value.config.nativeNodes), releases: releasePair{a: a}, controller: controller, deploymentRuntime: retained.DeploymentRuntime}
 	value.nodes = fixture
 	driver, err := os.Executable()
 	if err != nil {
 		return fail("native-restart-probe-driver")
 	}
 	for index, saved := range retained.Nodes {
-		targetID := paasv1.ResourceID(fmt.Sprintf("offline-native-%d", index+1))
-		if !validNativeFacts(saved.Facts) || paasv1.ValidateOperation(saved.Operation) != nil || saved.Operation.InstallationID != installationID || saved.Operation.Target.ID != targetID || paasv1.ValidateDigest("digest", saved.Digest) != nil || paasv1.ValidateDigest("auditHash", saved.AuditHash) != nil || saved.ObservedAt.IsZero() {
+		connection, valid := nativeRestartConnection(input.Nodes[index], saved, installationID, controller.Nodes, retained.DeploymentRuntime)
+		if !valid {
 			return fail("native-restart-node-receipt")
 		}
-		node := nativeNodeState{input: input.Nodes[index], facts: saved.Facts, identity: nodev1.Identity{InstallationID: installationID, ExecutionTargetID: targetID}, binding: fmt.Sprintf("offline-native-%d-connection", index+1), digest: saved.Digest, operation: saved.Operation, auditHash: saved.AuditHash, workload: saved.Workload}
+		node := nativeNodeState{input: input.Nodes[index], facts: saved.Facts, identity: nodev1.Identity{InstallationID: installationID, ExecutionTargetID: connection.TargetID}, binding: connection.BindingRef, digest: saved.Digest, operation: saved.Operation, auditHash: saved.AuditHash, workload: saved.Workload}
 		fixture.nodes = append(fixture.nodes, node)
 		if err := fixture.waitPrepared(ctx, index); err != nil {
 			return err
@@ -1928,18 +1964,25 @@ func (value *gate) afterNativeRestart(ctx context.Context, installationID string
 		}
 		// Read-only status was the first node command: no test start/reconcile
 		// can make a broken persistent boot entry appear to have succeeded.
-		workload, err := fixture.readWorkload(ctx, index)
-		oldStart, oldErr := time.Parse(time.RFC3339Nano, saved.Workload.StartedAt)
-		newStart, newErr := time.Parse(time.RFC3339Nano, workload.StartedAt)
-		if err != nil || !workload.Running || workload.ID != saved.Workload.ID || oldErr != nil || newErr != nil || !newStart.After(oldStart) {
-			return fail("native-post-boot-workload-identity")
-		}
-		fixture.nodes[index].workload = workload
-		if err = fixture.assertWorkload(ctx, index); err != nil {
-			return err
+		if fixture.deploymentRuntime {
+			containers, commandErr := fixture.command(ctx, index, "docker", "container", "ls", "--all", "--quiet", "--filter", "name=^/matrix-offline-retained$")
+			if commandErr != nil || strings.TrimSpace(string(containers)) != "" {
+				return fail("native-post-boot-unexpected-retention-fixture")
+			}
+		} else {
+			workload, workloadErr := fixture.readWorkload(ctx, index)
+			oldStart, oldErr := time.Parse(time.RFC3339Nano, saved.Workload.StartedAt)
+			newStart, newErr := time.Parse(time.RFC3339Nano, workload.StartedAt)
+			if workloadErr != nil || !workload.Running || workload.ID != saved.Workload.ID || oldErr != nil || newErr != nil || !newStart.After(oldStart) {
+				return fail("native-post-boot-workload-identity")
+			}
+			fixture.nodes[index].workload = workload
+			if err = fixture.assertWorkload(ctx, index); err != nil {
+				return err
+			}
 		}
 		observed, err := value.waitNativeStored(ctx, index, paasv1.ExecutionTargetHealthReady, saved.ObservedAt)
-		if err != nil || !matchesNativeObservation(observed, fixture.nodes[index], false, fixture.installationRoot()) {
+		if err != nil || !matchesNativeObservation(observed, fixture.nodes[index], fixture.deploymentRuntime, fixture.installationRoot()) {
 			return fail("native-post-boot-background-reconnection")
 		}
 		if err = value.nativeStoredHistory(ctx, index); err != nil {

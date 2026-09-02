@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -849,14 +848,7 @@ func (value *gate) assertFreshHost(ctx context.Context) error {
 
 func (value *gate) assertNetworkBoundary() error {
 	if value.config.nativeDeploymentRuntime {
-		connection, err := net.DialTimeout("tcp", "1.1.1.1:443", 300*time.Millisecond)
-		if connection != nil {
-			_ = connection.Close()
-		}
-		if err == nil {
-			return fail("external-network-connectivity")
-		}
-		return nil
+		return assertNoExternalConnectivity()
 	}
 	return assertNoExternalRoute()
 }

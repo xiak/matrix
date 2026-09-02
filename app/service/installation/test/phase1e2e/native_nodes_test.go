@@ -35,7 +35,11 @@ func TestOfflineNativeHostProbe(t *testing.T) {
 		t.Fatal("native fixture root is not an isolated task path")
 	}
 	installationRoot := filepath.Join(fixtureRoot, "installation")
-	if phase != "runtime" && assertNoExternalRoute() != nil || phase == "1" && assertEmptyDocker(ctx) != nil {
+	networkErr := assertNoExternalConnectivity()
+	if phase == "1" {
+		networkErr = assertNoExternalRoute()
+	}
+	if networkErr != nil || phase == "1" && assertEmptyDocker(ctx) != nil {
 		t.Fatal("native companion is not empty and offline")
 	}
 	if _, err := os.Stat(installationRoot); (phase == "1" || phase == "runtime") && !os.IsNotExist(err) || phase == "after-restart" && err != nil {
@@ -94,6 +98,109 @@ func TestNativeBootEvidenceRequiresNewKernelAndSameIdentity(t *testing.T) {
 		if sameNativeHostAfterBoot(before, candidate) {
 			t.Fatal("replacement host or invalid physical facts accepted as retained boot")
 		}
+	}
+}
+
+func TestNativeRestartReceiptUsesTheAuthenticatedControllerTarget(t *testing.T) {
+	now := time.Date(2026, 9, 2, 1, 2, 3, 0, time.UTC)
+	terminal := now
+	installationID := "mxi-" + strings.Repeat("a", 32)
+	targetID := paasv1.ResourceID("a-runtime-native-1")
+	input := nativeNodeInput{Endpoint: "https://172.17.0.1:16443"}
+	fingerprint := "sha256:" + strings.Repeat("b", 64)
+	connection := nodeconfig.Connection{
+		BindingRef:          "a-runtime-native-1-connection",
+		TargetID:            targetID,
+		Endpoint:            input.Endpoint,
+		IdentityFingerprint: fingerprint,
+	}
+	saved := nativeRetainedNode{
+		Facts: nativeHostFacts{
+			Fingerprint:  fingerprint,
+			BootID:       "00000000-0000-0000-0000-000000000001",
+			EngineID:     "engine-1",
+			CPUs:         2,
+			MemoryBytes:  2 << 30,
+			StorageBytes: 20 << 30,
+		},
+		Digest:     "sha256:" + strings.Repeat("c", 64),
+		AuditHash:  "sha256:" + strings.Repeat("d", 64),
+		ObservedAt: now,
+		Operation: paasv1.Operation{
+			APIVersion:             paasv1.APIVersion,
+			Kind:                   "Operation",
+			ID:                     "operation-register-runtime-native-1",
+			Scope:                  paasv1.ResourceScope{Kind: paasv1.AuthorityPlatform},
+			InstallationID:         installationID,
+			Action:                 paasv1.OperationRegisterExecutionTarget,
+			Target:                 paasv1.ResourceRef{Kind: "ExecutionTarget", ID: targetID},
+			RequestedBy:            paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "principal-admin"},
+			IdempotencyFingerprint: "sha256:" + strings.Repeat("e", 64),
+			RequestDigest:          "sha256:" + strings.Repeat("f", 64),
+			State:                  paasv1.OperationSucceeded,
+			Attempt:                1,
+			CreatedAt:              now,
+			UpdatedAt:              now,
+			TerminalAt:             &terminal,
+		},
+	}
+
+	actual, valid := nativeRestartConnection(input, saved, installationID, []nodeconfig.Connection{connection}, true)
+	if !valid || actual.TargetID != targetID || actual.BindingRef != connection.BindingRef {
+		t.Fatal("authenticated P3-4 runtime target was not restored from the controller")
+	}
+	if _, accepted := nativeRestartConnection(input, saved, installationID, []nodeconfig.Connection{connection}, false); accepted {
+		t.Fatal("missing non-runtime workload receipt was accepted")
+	}
+	standalone := saved
+	standalone.Workload = nativeWorkload{ID: strings.Repeat("2", 64), StartedAt: now.Format(time.RFC3339Nano), Running: true}
+	if _, accepted := nativeRestartConnection(input, standalone, installationID, []nodeconfig.Connection{connection}, false); !accepted {
+		t.Fatal("complete non-runtime workload receipt was rejected")
+	}
+
+	for _, scenario := range []struct {
+		name   string
+		change func(*nativeNodeInput, *nativeRetainedNode, *[]nodeconfig.Connection)
+	}{
+		{"stale ordinal target", func(_ *nativeNodeInput, value *nativeRetainedNode, _ *[]nodeconfig.Connection) {
+			value.Operation.Target.ID = "offline-native-1"
+		}},
+		{"wrong operation", func(_ *nativeNodeInput, value *nativeRetainedNode, _ *[]nodeconfig.Connection) {
+			value.Operation.Action = paasv1.OperationDrainExecutionTarget
+		}},
+		{"unfinished operation", func(_ *nativeNodeInput, value *nativeRetainedNode, _ *[]nodeconfig.Connection) {
+			value.Operation.State = paasv1.OperationExecuting
+			value.Operation.TerminalAt = nil
+		}},
+		{"replaced host", func(_ *nativeNodeInput, value *nativeRetainedNode, _ *[]nodeconfig.Connection) {
+			value.Facts.Fingerprint = "sha256:" + strings.Repeat("1", 64)
+		}},
+		{"wrong endpoint", func(value *nativeNodeInput, _ *nativeRetainedNode, _ *[]nodeconfig.Connection) {
+			value.Endpoint = "https://172.17.0.1:16444"
+		}},
+		{"ambiguous endpoint", func(_ *nativeNodeInput, _ *nativeRetainedNode, values *[]nodeconfig.Connection) {
+			*values = append(*values, connection)
+		}},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			candidateInput, candidateSaved := input, saved
+			connections := []nodeconfig.Connection{connection}
+			scenario.change(&candidateInput, &candidateSaved, &connections)
+			if _, accepted := nativeRestartConnection(candidateInput, candidateSaved, installationID, connections, true); accepted {
+				t.Fatal("forged or stale restart receipt was accepted")
+			}
+		})
+	}
+}
+
+func TestNativeRetentionPreservesDeploymentRuntimeAcrossBoot(t *testing.T) {
+	encoded, err := json.Marshal(nativeRetention{DeploymentRuntime: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded nativeRetention
+	if decodeOne(encoded, &decoded) != nil || !decoded.DeploymentRuntime {
+		t.Fatal("deployment-runtime validation mode was lost across the reboot receipt")
 	}
 }
 

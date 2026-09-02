@@ -382,6 +382,10 @@ func assertNoExternalRoute() error {
 			}
 		}
 	}
+	return assertNoExternalConnectivity()
+}
+
+func assertNoExternalConnectivity() error {
 	connection, dialErr := net.DialTimeout("tcp", "1.1.1.1:443", 300*time.Millisecond)
 	if connection != nil {
 		_ = connection.Close()
