@@ -657,7 +657,7 @@ func TestExplicitRollbackReplaysUnknownOutcomeAndCommitsOnlyTheSignedPredecessor
 	}
 }
 
-func TestDifferentDatabaseProfilesRejectBeforeEffectsOrJournalChange(t *testing.T) {
+func TestUnsupportedDatabaseProfilesRejectBeforeEffectsOrJournalChange(t *testing.T) {
 	current := release.CurrentDatabaseProfile()
 	legacy := release.DatabaseProfile{SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one"}
 	previousHostProfile := release.DatabaseProfile{
@@ -708,7 +708,8 @@ func TestDifferentDatabaseProfilesRejectBeforeEffectsOrJournalChange(t *testing.
 				if action == lifecycle.ActionRollback || action == lifecycle.ActionRecover {
 					materializeInstalledRelease(t, root, fixtures[1])
 					// A prior installer may have committed an unproved transition.
-					// A sealed predecessor/backup does not admit another profile.
+					// A signed predecessor relationship alone does not admit an
+					// unsupported database-profile transition.
 					state := readJournal(t, root)
 					state.PreviousRelease, state.PreviousReleaseDigest = state.CurrentReleaseID, state.CurrentReleaseDigest
 					state.CurrentReleaseID, state.CurrentReleaseDigest = fixtures[1].Manifest.Release.ID, fixtures[1].ManifestDigest
@@ -735,7 +736,7 @@ func TestDifferentDatabaseProfilesRejectBeforeEffectsOrJournalChange(t *testing.
 						ReleaseID:    fixtures[0].Manifest.Release.ID, ReleaseDigest: fixtures[0].ManifestDigest,
 						Database: fixtures[0].Manifest.Database,
 					}
-					failureCode = "RECOVERY_SCHEMA_INCOMPATIBLE"
+					failureCode = "RECOVERY_TARGET_UNSUPPORTED"
 				}
 				_, err = backend.Run(context.Background(), request)
 				assertFault(t, err, cli.FaultPrecondition, failureCode)
@@ -802,6 +803,72 @@ func TestFrozenAdjacentProfilePairAllowsUpgradeButRollbackRequiresAuthenticatedR
 		state.Active != nil || len(effects.upgradeCalls) == 0 ||
 		len(effects.explicitRollbackCalls) != 0 || effects.observeCalls != 0 {
 		t.Fatalf("cross-profile rollback changed state or reached effects: %#v / %#v", state, effects)
+	}
+
+	backupID := "backup-" + strings.Repeat("c", 32)
+	effects.recoverySource = RecoverySource{
+		InstallationID: state.InstallationID,
+		BackupID:       backupID,
+		BackupDigest:   "sha256:" + strings.Repeat("d", 64),
+		ReleaseID:      fixtures[0].Manifest.Release.ID,
+		ReleaseDigest:  fixtures[0].ManifestDigest,
+		Database:       fixtures[0].Manifest.Database,
+	}
+	recovered, err := backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionRecover, Root: root, BackupID: backupID,
+	})
+	if err != nil || recovered.ReleaseID != fixtures[0].Manifest.Release.ID ||
+		recovered.PreviousID != "" || !recovered.Changed ||
+		effects.recoveryCalls[lifecycle.PhaseRecovering] != 1 ||
+		effects.recoveryCalls[lifecycle.PhaseStarting] != 1 ||
+		effects.recoveryCalls[lifecycle.PhaseVerifying] != 1 {
+		t.Fatalf("authenticated cross-profile recovery = %#v / %v / effects=%#v", recovered, err, effects)
+	}
+}
+
+func TestRecoveryRejectsSkippedSignedTargetBeforePersistingIntent(t *testing.T) {
+	fixtures := writeReleaseSequence(t, 3)
+	effects := &installEffects{}
+	backend := newTestBackend(t, effects)
+	root := filepath.Join(t.TempDir(), "matrix")
+	if _, err := backend.Run(
+		context.Background(), installRequest(root, fixtures[0]),
+	); err != nil {
+		t.Fatalf("install skipped recovery fixture: %v", err)
+	}
+	for _, fixture := range fixtures {
+		materializeInstalledRelease(t, root, fixture)
+	}
+	state := readJournal(t, root)
+	state.PreviousRelease, state.PreviousReleaseDigest = fixtures[1].Manifest.Release.ID, fixtures[1].ManifestDigest
+	state.CurrentReleaseID, state.CurrentReleaseDigest = fixtures[2].Manifest.Release.ID, fixtures[2].ManifestDigest
+	state.Last = nil
+	state.Version++
+	session, err := journal.AcquireExisting(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeErr := session.Write(state)
+	closeErr := session.Close()
+	if writeErr != nil || closeErr != nil {
+		t.Fatalf("seed current recovery release: %v / %v", writeErr, closeErr)
+	}
+	before := readJournal(t, root)
+	backupID := "backup-" + strings.Repeat("e", 32)
+	effects.recoverySource = RecoverySource{
+		InstallationID: before.InstallationID,
+		BackupID:       backupID,
+		BackupDigest:   "sha256:" + strings.Repeat("f", 64),
+		ReleaseID:      fixtures[0].Manifest.Release.ID,
+		ReleaseDigest:  fixtures[0].ManifestDigest,
+		Database:       fixtures[0].Manifest.Database,
+	}
+	_, err = backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionRecover, Root: root, BackupID: backupID,
+	})
+	assertFault(t, err, cli.FaultPrecondition, "RECOVERY_TARGET_UNSUPPORTED")
+	if !reflect.DeepEqual(readJournal(t, root), before) || len(effects.recoveryCalls) != 0 {
+		t.Fatal("skipped signed recovery target changed state or reached destructive effects")
 	}
 }
 

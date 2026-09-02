@@ -134,6 +134,20 @@ type RecoveryPlan struct {
 	BackupDigest string
 }
 
+// SupportsRecoveryTarget is the recovery policy shared by the use case and
+// every destructive local-machine phase. Recovery may restore the current
+// release or its exact signed immediate predecessor. A cross-profile restore
+// is admitted only when that predecessor-to-current profile transition is the
+// one explicitly supported by this release composition.
+func SupportsRecoveryTarget(current, target release.Manifest) bool {
+	sameRelease := current.Release.ID == target.Release.ID &&
+		current.Release.Version == target.Release.Version
+	immediatePredecessor := current.Release.PreviousID == target.Release.ID &&
+		current.Release.PreviousVersion == target.Release.Version
+	return (sameRelease || immediatePredecessor) &&
+		release.ValidateDatabaseUpgradePath(target.Database, current.Database) == nil
+}
+
 // CredentialRecoveryInput is the operator's private intent, not an IAM
 // authorization. Installation derives all authority and expected-state fields
 // from its sealed provenance and the restricted IAM inspection result.
@@ -942,8 +956,8 @@ func (backend *Backend) recover(
 	if err != nil || targetBundle.Manifest.Database != source.Database {
 		return cli.Result{}, fault(cli.FaultVerification, "RECOVERY_RELEASE_INVALID")
 	}
-	if currentBundle.Manifest.Database != targetBundle.Manifest.Database {
-		return cli.Result{}, fault(cli.FaultPrecondition, "RECOVERY_SCHEMA_INCOMPATIBLE")
+	if !SupportsRecoveryTarget(currentBundle.Manifest, targetBundle.Manifest) {
+		return cli.Result{}, fault(cli.FaultPrecondition, "RECOVERY_TARGET_UNSUPPORTED")
 	}
 
 	commandID := ""

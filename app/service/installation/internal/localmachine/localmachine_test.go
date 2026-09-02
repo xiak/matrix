@@ -1854,7 +1854,65 @@ func TestPublishedBackupSealRemainsReadableAndProfileCannotBeSubstituted(t *test
 	}
 }
 
-func TestRecoveryRejectsDifferentCurrentProfileAtEveryEffectBoundary(t *testing.T) {
+func TestRecoveryAuthenticatesSupportedCrossProfileImmediatePredecessor(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine recovery effects target Linux")
+	}
+	pair := newUpgradePlan(
+		t, release.SupportedDatabasePredecessorProfile(), release.CurrentDatabaseProfile(),
+	)
+	target, err := authenticateInstalledPlan(pair.Source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(target.TrustBytes)
+	installation, err := verifiedInstallationConfiguration(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectation, err := decodePlatformExpectation(installation.topology.ComposeJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeBoundary := newPlatformStartRuntime(target, expectation)
+	runtimeBoundary.started = true
+	effects := &Effects{
+		runtime: runtimeBoundary, entropy: rand.Reader,
+		verifier: &recordingInstallationVerifier{},
+	}
+	backup := platformcommand.BackupPlan{
+		InstalledPlan: pair.Source,
+		BackupID:      "backup-cccccccccccccccccccccccccccccccc",
+		CreatedAt:     pair.CreatedAt,
+	}
+	if err := effects.CreateBackup(context.Background(), backup); err != nil {
+		t.Fatal(err)
+	}
+	source, err := effects.InspectBackup(context.Background(), pair.Source, backup.BackupID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery := platformcommand.RecoveryPlan{
+		Current: pair.Target, Target: target,
+		BackupID: source.BackupID, BackupDigest: source.BackupDigest,
+	}
+	current, recoveredTarget, manifest, err := authenticateRecoveryPlan(recovery)
+	if err != nil {
+		t.Fatalf("authenticate supported cross-profile recovery: %v", err)
+	}
+	defer clear(current.TrustBytes)
+	defer clear(recoveredTarget.TrustBytes)
+	if current.Bundle.Manifest.Database != release.CurrentDatabaseProfile() ||
+		recoveredTarget.Bundle.Manifest.Database != release.SupportedDatabasePredecessorProfile() ||
+		current.Bundle.Manifest.Release.PreviousID != recoveredTarget.Bundle.Manifest.Release.ID ||
+		current.Bundle.Manifest.Release.PreviousVersion != recoveredTarget.Bundle.Manifest.Release.Version ||
+		manifest.ReleaseID != recoveredTarget.Bundle.Manifest.Release.ID ||
+		manifest.ReleaseDigest != recoveredTarget.Bundle.ManifestSHA256 {
+		t.Fatal("cross-profile recovery did not retain its exact signed predecessor and backup identity")
+	}
+}
+
+func TestRecoveryRejectsUnsupportedProfileTransitionAtEveryEffectBoundary(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("local-machine recovery effects target Linux")
 	}
@@ -1915,11 +1973,11 @@ func TestRecoveryRejectsDifferentCurrentProfileAtEveryEffectBoundary(t *testing.
 			migrationsBefore, verificationsBefore := len(runtimeBoundary.migrationRuns), verifier.calls
 			for _, phase := range []lifecycle.Phase{lifecycle.PhaseRecovering, lifecycle.PhaseStarting, lifecycle.PhaseVerifying} {
 				if err := effects.ApplyRecoveryPhase(context.Background(), recovery, phase); !errors.Is(err, platformcommand.ErrEffectPrecondition) {
-					t.Fatalf("cross-profile %s did not fail closed: %v", phase, err)
+					t.Fatalf("unsupported profile transition %s did not fail closed: %v", phase, err)
 				}
 				if !runtimeBoundary.started || runtimeBoundary.composeCalls != composeBefore || runtimeBoundary.providerRemovals != removalsBefore ||
 					runtimeBoundary.recoveryRestores != restoresBefore || len(runtimeBoundary.migrationRuns) != migrationsBefore || verifier.calls != verificationsBefore {
-					t.Fatal("cross-profile recovery reached service, provider, database or verification effects")
+					t.Fatal("unsupported recovery reached service, provider, database or verification effects")
 				}
 				for relative, expected := range retained {
 					actual := readTestFile(t, target.Root, relative)

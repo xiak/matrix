@@ -175,7 +175,11 @@ separate destructive path that restores a selected verified backup after an
 operator request. The recovery engine comes from an authenticated, supported
 operator bundle compatible with the installation profile; the selected backup
 alone determines the authenticated target release. A historical target binary
-does not own the restore algorithm. Backups remain installation-owned,
+does not own the restore algorithm. Phase 1 recovery may target the current
+release or its exact signed immediate predecessor. A cross-profile recovery is
+admitted only for the explicitly supported predecessor-to-current upgrade
+profile pair; it never admits a skipped or arbitrary downgrade, while direct
+rollback remains equal-profile only. Backups remain installation-owned,
 restrictive, sealed, and excluded from support evidence.
 
 `verify` rechecks journal seals, current bundle content, loaded image identity,

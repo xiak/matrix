@@ -634,10 +634,12 @@ func authenticateRecoveryPlan(
 		return platformcommand.InstallPlan{}, platformcommand.InstallPlan{}, backupManifest{},
 			errors.Join(platformcommand.ErrEffectVerification, err)
 	}
-	if currentBundle.Manifest.Database != targetBundle.Manifest.Database {
+	if !platformcommand.SupportsRecoveryTarget(
+		currentBundle.Manifest, targetBundle.Manifest,
+	) {
 		return platformcommand.InstallPlan{}, platformcommand.InstallPlan{}, backupManifest{},
 			errors.Join(platformcommand.ErrEffectPrecondition,
-				errors.New("cross-profile recovery is not admitted"))
+				errors.New("recovery target is not the current release or its supported immediate predecessor"))
 	}
 	current := plan.Current
 	current.Bundle = currentBundle
