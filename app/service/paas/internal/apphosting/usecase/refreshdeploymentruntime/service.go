@@ -74,9 +74,9 @@ func (service *Service) ProcessNext(ctx context.Context) (bool, error) {
 	if validateCandidate(candidate) != nil {
 		return false, ErrInvalidCandidate
 	}
-	now := service.config.Clock().UTC().Truncate(time.Microsecond)
+	startedAt := service.config.Clock().UTC().Truncate(time.Microsecond)
 	key := string(candidate.TenantID) + "\x00" + string(candidate.DeploymentID)
-	if due := service.nextDue[key]; now.Before(due) {
+	if due := service.nextDue[key]; startedAt.Before(due) {
 		// A candidate was consumed and the stable cursor advanced. Report progress
 		// so the worker drains the rest of the bounded scan without sleeping once
 		// per not-yet-due Deployment.
@@ -84,23 +84,24 @@ func (service *Service) ProcessNext(ctx context.Context) (bool, error) {
 	}
 	observer, routed := service.routes[candidate.ExecutionTargetID]
 	if !routed {
-		service.schedule(key, now.Add(service.config.FailureBackoff))
+		service.schedule(key, startedAt.Add(service.config.FailureBackoff))
 		return true, nil
 	}
 	request := paasv1.ObserveDeploymentRuntimeRequest{
-		RequestID:             runtimeRequestID(candidate, now),
+		RequestID:             runtimeRequestID(candidate, startedAt),
 		Scope:                 paasv1.ResourceScope{Kind: paasv1.AuthorityTenant, TenantID: candidate.TenantID},
 		DeploymentID:          candidate.DeploymentID,
 		Generation:            candidate.Generation,
 		ApplicationRevisionID: candidate.ApplicationRevisionID,
 		ExecutionTargetID:     candidate.ExecutionTargetID,
 		ExpectedContentDigest: candidate.ContentDigest,
-		Deadline:              now.Add(service.config.ObservationTimeout),
+		Deadline:              startedAt.Add(service.config.ObservationTimeout),
 	}
 	observeContext, cancel := context.WithDeadline(ctx, request.Deadline)
 	runtimeObservation, resourceObservation, observeErr :=
 		observer.ObserveDeploymentTelemetry(observeContext, request)
 	cancel()
+	completedAt := service.config.Clock().UTC().Truncate(time.Microsecond)
 	if ctx.Err() != nil {
 		return false, ctx.Err()
 	}
@@ -108,10 +109,10 @@ func (service *Service) ProcessNext(ctx context.Context) (bool, error) {
 		candidate,
 		runtimeObservation,
 		resourceObservation,
-		now,
+		completedAt,
 		service.config.MaximumObservationAge,
 	) {
-		service.schedule(key, now.Add(service.config.FailureBackoff))
+		service.schedule(key, completedAt.Add(service.config.FailureBackoff))
 		return true, nil
 	}
 	if _, err := service.repository.Store(
@@ -128,12 +129,12 @@ func (service *Service) ProcessNext(ctx context.Context) (bool, error) {
 		if errors.Is(err, ErrSnapshotRejected) {
 			// Placement or generation changed while the provider was observed. The
 			// database rejected the stale proof; retry the new authority normally.
-			service.schedule(key, now.Add(service.config.FailureBackoff))
+			service.schedule(key, completedAt.Add(service.config.FailureBackoff))
 			return true, nil
 		}
 		return true, err
 	}
-	service.schedule(key, now.Add(service.config.ObservationInterval))
+	service.schedule(key, completedAt.Add(service.config.ObservationInterval))
 	return true, nil
 }
 

@@ -152,6 +152,44 @@ func TestNotYetDueCandidateAdvancesTheBoundedScanWithoutProviderWork(t *testing.
 	}
 }
 
+func TestRefreshValidatesTelemetryAgainstRequestCompletion(t *testing.T) {
+	startedAt := time.Date(2026, 8, 30, 1, 2, 3, 0, time.UTC)
+	completedAt := startedAt.Add(3 * time.Second)
+	candidate := runtimeCandidate()
+	repository := &runtimeRepository{candidates: []Candidate{candidate}}
+	observer := &runtimeObserver{
+		value: runtimeObservation(candidate, completedAt), resources: resourceObservation(candidate, completedAt),
+	}
+	clockValues := []time.Time{startedAt, completedAt}
+	service, err := New(repository, []Route{{ExecutionTargetID: "target-a", Observer: observer}}, Config{
+		ObservationInterval:   5 * time.Second,
+		FailureBackoff:        time.Second,
+		ObservationTimeout:    10 * time.Second,
+		MaximumObservationAge: 5 * time.Second,
+		ValidityDuration:      15 * time.Second,
+		Clock: func() time.Time {
+			if len(clockValues) == 1 {
+				return clockValues[0]
+			}
+			value := clockValues[0]
+			clockValues = clockValues[1:]
+			return value
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	processed, err := service.ProcessNext(context.Background())
+	if err != nil || !processed || len(repository.stored) != 1 {
+		t.Fatalf("delayed telemetry processed/error/stored = %t/%v/%d", processed, err, len(repository.stored))
+	}
+	key := string(candidate.TenantID) + "\x00" + string(candidate.DeploymentID)
+	if due := service.nextDue[key]; !due.Equal(completedAt.Add(5 * time.Second)) {
+		t.Fatalf("next observation due = %s", due)
+	}
+}
+
 func newRuntimeService(
 	t *testing.T,
 	repository Repository,
