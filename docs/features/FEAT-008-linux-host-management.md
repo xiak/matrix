@@ -1,6 +1,6 @@
 # FEAT-008: existing Linux hosts and remote application delivery
 
-- Status: P3-2 accepted; P3-3 signed terminal lifecycle accepted, real browser terminal gate pending; P3-4 accepted; P3-5 pending
+- Status: P3-2 accepted; P3-3 signed terminal lifecycle accepted, real browser terminal gate pending; P3-4 accepted; P3-5 offline/reboot lifecycle accepted, final Gate C browser closure pending
 - Target: Matrix PaaS Phase 3
 - Design date: 2026-08-27
 - Branch: `feat/linux-host-management`
@@ -42,7 +42,7 @@ exercise combines these capabilities rather than introducing them late.
 | P3-2: remote application loop | Deploy, observe, update, stop and roll back a real application on that host | IAM/Audit/Operation/accounting integration; exact routing; ENV/Secret behavior; replay and lost-response recovery | Complete |
 | P3-3: interactive operations | Live host/container UI and terminal in the selected running instance | Successive measurements without reload; real terminal I/O, resize, expiry, disconnect, authorization and audit | Real browser terminal gate pending |
 | P3-4: multiple hosts | Pool placement, drain, unavailable-node handling and safe removal across two independent hosts | No cross-host/local fallback; identity collision, tenant isolation and concurrent capacity checks | Complete |
-| P3-5: offline release | Platform and nodes install, operate, upgrade, roll back and recover without external access | Complete Gates A-E on exact committed source and signed releases | Pending |
+| P3-5: offline release | Platform and nodes install, operate, upgrade, roll back and recover without external access | Complete Gates A-E on exact committed source and signed releases | Offline/reboot lifecycle accepted; Gate C browser closure pending |
 
 Start P3-1 after P3-0's donor review. Its basic measurements do not replace
 P3-3's full observability scope. Historical queries, interactive sessions and
@@ -1023,8 +1023,9 @@ passed. All three jobs then passed in
 P3-2 does not accept interactive access, multi-host scheduling policy or the
 complete offline release. Next in P3-3: add successive live host/container
 views and a separately authorized, short-lived terminal bound to the selected
-running instance. Gate D as a whole remains open, and no untested predecessor
-or cross-profile admission is inferred from the fixed pairs exercised here.
+running instance. That checkpoint did not close Gate D, and no untested
+predecessor or cross-profile admission is inferred from the fixed pairs
+exercised there.
 
 The first P3-3 tenant Deployment runtime-inventory implementation is fixed at
 `21e526e`. It adds a bounded ID-ordered Deployment collection and one selected
@@ -1229,8 +1230,8 @@ real login page has been rendered. No browser credential or terminal action
 has yet been submitted, so this preparation is not browser acceptance. P3-3
 remains open until one authenticated browser selects the persisted running
 instance and proves terminal I/O, resize, explicit disconnect, consumed-ticket
-replay denial and the associated Audit view. The prohibited remote reboot
-phase also remains outside this evidence and Gate D remains open.
+replay denial and the associated Audit view. The then-prohibited remote reboot
+phase also remained outside that browser-preparation evidence.
 
 P3-4 keeps the existing `ExecutionTarget` and `ExecutionPool` owners. It adds
 the exact `ACTIVE -> DRAINING -> ACTIVE` and terminal
@@ -1292,9 +1293,73 @@ Engine or unrelated service was restarted. The full Go suite, vet, focused
 PostgreSQL 18 race gate and local architecture gates pass. All three jobs for
 the exact source passed in
 [independent CI](https://github.com/xiak/matrix/actions/runs/33452721266).
-This accepts P3-4. It does not accept P3-3's real-browser terminal exercise or
-P3-5's remaining reboot portion of Gate D and complete Gates A-E closure;
-those boundaries remain open.
+This accepts P3-4. It does not accept P3-3's real-browser terminal exercise;
+the following exact-source gate owns the remaining P3-5 reboot evidence.
+
+The final reboot driver correction is fixed at
+`0a09444c5fc4d9bd4b9e4d280519570b6e41937e`. It rehydrates the two retained
+runtime nodes from the protected controller endpoints and their exact completed
+registration Operations instead of assuming ordinal target IDs. The private
+receipt also preserves whether the gate owns the Deployment runtime; the
+post-restart path rejects an obsolete standalone workload in that mode and
+requires failed external connectivity rather than incorrectly requiring that
+the operator-provided host have no default route. Its independently built
+Linux gate binary SHA-256 is
+`83ae12e059485efd782cc8c1499b720c62df1d929e787bd9e22726dc76f24929`.
+The full Go suite, vet, module verification and focused lifecycle race tests
+passed locally. The exact commit's `go`, `authority-process` and `node-process`
+jobs passed in
+[independent CI](https://github.com/xiak/matrix/actions/runs/33640613028).
+
+A fresh attempt then exercised the accepted signed release sequence in a
+separate, externally closed Docker 27.5.1-in-Docker engine with two independent
+fresh Debian 13 QEMU guests. The exact product successor was
+`matrix-v0.3.0-host.36-0be1b7b0bc24`, with IAM 5, Audit 4, PaaS 3 and contract
+revision 8; its `release.json` SHA-256 was
+`3c7ee7a346056e194ed5823fedc5d6b856405ca6f1d3717bdcac29410b431d7e`.
+The before-restart phase took 2181.18 seconds and passed signed base install,
+bridge upgrade/rollback/reactivation, IAM/Audit through APISIX, two application
+generations, purpose-only credential recovery, two signed native admissions,
+protected backup, complete trust replacement, failed cross-profile recovery,
+successor upgrade, two real terminal sessions, two native Deployments with
+advancing runtime/resource snapshots, real node predecessor/successor
+credentials, cross-profile rollback rejection, backup recovery, application
+rollback/stop, capacity release and bounded zero-leakage support. It ended only
+at the explicit `restart-required` boundary. The log and retained-receipt
+SHA-256 values were respectively
+`0f7bde2702db6031347eab7346aecbb708fa73492132d55b48c1ec00f4507055`
+and
+`dfb246e2993ddb753753fd8f0119d589ae243cccb9d530cc5c610b5882f8a6a0`.
+
+Only the two task-owned QEMU guest kernels were then rebooted. Their boot IDs
+changed from `dc5e6fac-3ffc-44e6-a2fd-d458e34b7f48` and
+`ec96cfe6-2e44-4901-a1d8-00bbbac775b7` to
+`aca7829c-399f-47fe-991e-ec791161af36` and
+`d7cad9ec-64ea-4318-a2b2-83dd29267f51`. Their Docker Engine IDs remained
+`1ae0e8df-bed0-4b86-a542-c1ebd7baa342` and
+`2701261a-9e6a-427d-a366-b07944b978e4`, and their machine identities and QEMU
+container identities also remained unchanged. The node, collector and startup
+units automatically returned active while the guest egress locks remained
+effective. The 128.07-second after-restart phase passed two real kernel boots
+with automatic reconnection and retained data, post-restart status/verify and
+the complete offline lifecycle. Its log SHA-256 was
+`1d87f170f941ae28cf116694be742da5427a37db5697456e16517ed62ffe6655`;
+the two sanitized post-restart fact SHA-256 values were
+`2c2bf2a3787f8763d4d1ec4ec6e9b8599888916219093a79c4809ab408a6e0ba`
+and
+`7d9b4abe3dadbeb0c74c963dc7c81061bd67b04b8468e70426647e8ae84a559b`.
+
+The outer hosts retained boot IDs
+`6546f4e0-e2b0-4ee7-854a-f783545d7756` and
+`2340cea6-797b-447c-953b-cdf4ab02b2c9` and Docker Engine IDs
+`209c2bb9-a2b9-4387-8028-c1f76b26322b` and
+`7a9a32f7-8e63-4940-8f21-ca4cd385c13a` throughout. No outer machine or Docker
+Engine was restarted. After evidence capture, both QEMU guests were gracefully
+powered off and all exact attempt containers, volumes, network and remote
+fixture roots were removed; no prune or unrelated cleanup was performed. This
+accepts the remaining reboot portion and complete clean offline lifecycle of
+Gate D. P3-5 and complete Gates A-E now remain open only because Gate C still
+requires the explicitly deferred authenticated real-browser terminal exercise.
 
 ## Adoption
 
