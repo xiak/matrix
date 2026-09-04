@@ -53,6 +53,9 @@ class FakeWebSocket {
   }
 
   close(code?: number, reason?: string): void {
+    if (code !== undefined && code !== 1000 && (code < 3000 || code > 4999)) {
+      throw new DOMException("invalid WebSocket close code", "InvalidAccessError");
+    }
     this.closed = { code, reason };
   }
 
@@ -121,7 +124,7 @@ describe("httpTerminalSessionRepository", () => {
     )).rejects.toThrow("INVALID_TERMINAL_SESSION_SCOPE_RESPONSE");
   });
 
-  it("uses the exact same-origin WebSocket protocol and bridges only closed frames", () => {
+  it("uses the exact same-origin WebSocket protocol and bridges only closed frames", async () => {
     const connection = httpTerminalSessionRepository.connect(sessionId);
     const ready = vi.fn();
     const output = vi.fn();
@@ -136,7 +139,7 @@ describe("httpTerminalSessionRepository", () => {
 
     socket.emit("open");
     socket.emit("message", new MessageEvent("message", { data: JSON.stringify({ type: "READY" }) }));
-    expect(ready).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(ready).toHaveBeenCalledTimes(1));
     connection.sendInput(new Uint8Array([0x6c, 0x73, 0x0a]));
     connection.resize({ columns: 100, rows: 30 });
     connection.closeInput();
@@ -146,19 +149,36 @@ describe("httpTerminalSessionRepository", () => {
 
     const bytes = new Uint8Array([0x6f, 0x6b, 0x0a]);
     socket.emit("message", new MessageEvent("message", { data: bytes.buffer }));
-    expect(output).toHaveBeenCalledWith(bytes);
+    await vi.waitFor(() => expect(output).toHaveBeenCalledWith(bytes));
     socket.emit("message", new MessageEvent("message", { data: JSON.stringify({ type: "EXIT", exitCode: 0 }) }));
-    expect(exit).toHaveBeenCalledWith(0);
+    await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(0));
   });
 
-  it("fails closed on an unknown server frame", () => {
+  it("accepts the browser Blob representation of a binary terminal frame in order", async () => {
+    const connection = httpTerminalSessionRepository.connect(sessionId);
+    const ready = vi.fn();
+    const output = vi.fn();
+    connection.subscribe({ ready, output });
+    const socket = FakeWebSocket.latest!;
+
+    socket.emit("open");
+    socket.emit("message", new MessageEvent("message", { data: JSON.stringify({ type: "READY" }) }));
+    const bytes = new Uint8Array([0x62, 0x6c, 0x6f, 0x62, 0x0a]);
+    socket.emit("message", new MessageEvent("message", { data: new Blob([bytes]) }));
+
+    await vi.waitFor(() => expect(ready).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(output).toHaveBeenCalledWith(bytes));
+    expect(socket.closed).toBeNull();
+  });
+
+  it("fails closed on an unknown server frame with a browser-valid private close code", async () => {
     const connection = httpTerminalSessionRepository.connect(sessionId);
     const error = vi.fn();
     connection.subscribe({ error });
     const socket = FakeWebSocket.latest!;
     socket.emit("open");
     socket.emit("message", new MessageEvent("message", { data: JSON.stringify({ type: "READY", providerId: "private" }) }));
-    expect(error).toHaveBeenCalledWith("FAILED");
-    expect(socket.closed).toEqual({ code: 1002, reason: "invalid terminal protocol" });
+    await vi.waitFor(() => expect(error).toHaveBeenCalledWith("FAILED"));
+    expect(socket.closed).toEqual({ code: 3002, reason: "invalid terminal protocol" });
   });
 });

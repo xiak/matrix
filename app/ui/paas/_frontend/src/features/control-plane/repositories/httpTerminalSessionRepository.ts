@@ -16,6 +16,7 @@ type UnknownRecord = Record<string, unknown>;
 
 const apiVersion = "paas.matrix.xiak.com/v1";
 const terminalSubprotocol = "matrix.terminal.v1";
+const terminalProtocolFailureCloseCode = 3002;
 const maximumFrameBytes = 64 * 1024;
 const idPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const instanceIDPattern = /^instance-[0-9a-f]{32}$/;
@@ -170,6 +171,7 @@ function terminalControl(value: unknown):
 class BrowserTerminalConnection implements TerminalConnection {
   readonly #handlers = new Set<TerminalConnectionHandlers>();
   readonly #socket: WebSocket;
+  #receiveQueue = Promise.resolve();
   #ready = false;
   #terminal = false;
 
@@ -179,7 +181,11 @@ class BrowserTerminalConnection implements TerminalConnection {
     this.#socket.addEventListener("open", () => {
       if (this.#socket.protocol !== terminalSubprotocol) this.#protocolFailure();
     });
-    this.#socket.addEventListener("message", (event) => this.#receive(event));
+    this.#socket.addEventListener("message", (event) => {
+      this.#receiveQueue = this.#receiveQueue
+        .then(() => this.#receive(event))
+        .catch(() => this.#protocolFailure());
+    });
     this.#socket.addEventListener("close", () => {
       this.#terminal = true;
       this.#broadcast((handlers) => handlers.closed?.());
@@ -218,7 +224,7 @@ class BrowserTerminalConnection implements TerminalConnection {
     this.#socket.send(JSON.stringify(value));
   }
 
-  #receive(event: MessageEvent): void {
+  async #receive(event: MessageEvent): Promise<void> {
     if (this.#terminal) return;
     if (typeof event.data === "string") {
       try {
@@ -244,12 +250,26 @@ class BrowserTerminalConnection implements TerminalConnection {
         return;
       }
     }
-    if (!this.#ready || !(event.data instanceof ArrayBuffer) ||
-        event.data.byteLength === 0 || event.data.byteLength > maximumFrameBytes) {
+    if (!this.#ready) {
       this.#protocolFailure();
       return;
     }
-    const output = new Uint8Array(event.data.slice(0));
+    let content: ArrayBuffer;
+    if (event.data instanceof ArrayBuffer) {
+      content = event.data;
+    } else if (typeof Blob !== "undefined" && event.data instanceof Blob &&
+        event.data.size > 0 && event.data.size <= maximumFrameBytes) {
+      content = await event.data.arrayBuffer();
+    } else {
+      this.#protocolFailure();
+      return;
+    }
+    if (this.#terminal) return;
+    if (content.byteLength === 0 || content.byteLength > maximumFrameBytes) {
+      this.#protocolFailure();
+      return;
+    }
+    const output = new Uint8Array(content.slice(0));
     this.#broadcast((handlers) => handlers.output?.(output));
   }
 
@@ -257,7 +277,7 @@ class BrowserTerminalConnection implements TerminalConnection {
     if (this.#terminal) return;
     this.#terminal = true;
     this.#broadcast((handlers) => handlers.error?.("FAILED"));
-    this.#socket.close(1002, "invalid terminal protocol");
+    this.#socket.close(terminalProtocolFailureCloseCode, "invalid terminal protocol");
   }
 
   #broadcast(deliver: (handlers: TerminalConnectionHandlers) => void): void {
