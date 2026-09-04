@@ -1078,6 +1078,13 @@ func (value *gate) assertNativeDeploymentRuntime(ctx context.Context, bearer []b
 	if err := value.assertNativeTerminalAudit(ctx, bearer, terminalSessions); err != nil {
 		return err
 	}
+	if value.config.browserReady {
+		if _, err := value.edge.verifyAuditChain(ctx, bearer); err != nil {
+			return fail("native-runtime-audit-integrity")
+		}
+		emit("browser-native-deployments-ready")
+		return nil
+	}
 	var lifecycle *nativeTargetLifecycleState
 	if value.config.multiHostLifecycle {
 		lifecycle, err = value.beginNativeTargetLifecycle(ctx, bearer, deployments, snapshots)
