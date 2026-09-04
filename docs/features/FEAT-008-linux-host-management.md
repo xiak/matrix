@@ -1,6 +1,6 @@
 # FEAT-008: existing Linux hosts and remote application delivery
 
-- Status: P3-2 accepted; P3-3 signed terminal lifecycle accepted, real browser terminal gate pending; P3-4 accepted; P3-5 offline/reboot lifecycle accepted, final Gate C browser closure pending
+- Status: Phase 3 accepted; P3-0 through P3-5 and Gates A through E complete
 - Target: Matrix PaaS Phase 3
 - Design date: 2026-08-27
 - Branch: `feat/linux-host-management`
@@ -40,9 +40,9 @@ exercise combines these capabilities rather than introducing them late.
 | P3-0: design and adoption | Fixed scope, isolated branch and donor decisions | Target committed before fixed-source review; no donor dependency | Complete for the initial node slice |
 | P3-1: one managed host | Secure resident agent enrollment, identity, heartbeat and continuously refreshed basic CPU/memory/filesystem status through the control plane | Real authenticated Linux node; wrong identity denied; stale/disconnected state; restart and signed offline startup | Complete |
 | P3-2: remote application loop | Deploy, observe, update, stop and roll back a real application on that host | IAM/Audit/Operation/accounting integration; exact routing; ENV/Secret behavior; replay and lost-response recovery | Complete |
-| P3-3: interactive operations | Live host/container UI and terminal in the selected running instance | Successive measurements without reload; real terminal I/O, resize, expiry, disconnect, authorization and audit | Real browser terminal gate pending |
+| P3-3: interactive operations | Live host/container UI and terminal in the selected running instance | Successive measurements without reload; real terminal I/O, resize, expiry, disconnect, authorization and audit | Complete |
 | P3-4: multiple hosts | Pool placement, drain, unavailable-node handling and safe removal across two independent hosts | No cross-host/local fallback; identity collision, tenant isolation and concurrent capacity checks | Complete |
-| P3-5: offline release | Platform and nodes install, operate, upgrade, roll back and recover without external access | Complete Gates A-E on exact committed source and signed releases | Offline/reboot lifecycle accepted; Gate C browser closure pending |
+| P3-5: offline release | Platform and nodes install, operate, upgrade, roll back and recover without external access | Complete Gates A-E on exact committed source and signed releases | Complete |
 
 Start P3-1 after P3-0's donor review. Its basic measurements do not replace
 P3-3's full observability scope. Historical queries, interactive sessions and
@@ -1358,8 +1358,83 @@ Engine was restarted. After evidence capture, both QEMU guests were gracefully
 powered off and all exact attempt containers, volumes, network and remote
 fixture roots were removed; no prune or unrelated cleanup was performed. This
 accepts the remaining reboot portion and complete clean offline lifecycle of
-Gate D. P3-5 and complete Gates A-E now remain open only because Gate C still
-requires the explicitly deferred authenticated real-browser terminal exercise.
+Gate D. At that checkpoint, P3-5 and complete Gates A-E remained open only for
+the explicitly deferred authenticated real-browser terminal exercise in Gate C.
+
+The final Gate C browser closure is fixed by three commits. Test preparation
+`8442226fcfae881b674f58b53678e600a5511373` retains only the exact native
+Deployments needed by the browser. Browser transport correction
+`8944e23d89a1b0f6a1f85f24841d9b3e54687c88` consumes both browser `Blob` and
+`ArrayBuffer` WebSocket binary frames in order and uses a valid private close
+code for malformed frames. Terminal presentation correction
+`acc27112cfb8ee9d35059ac29bd98a97ff20e3ac` adds an explicit expand/restore
+control whose container-size change drives the existing `ResizeObserver` and
+the real terminal resize protocol. All three jobs passed for the preparation,
+[transport](https://github.com/xiak/matrix/actions/runs/33832368475) and
+[resize](https://github.com/xiak/matrix/actions/runs/33834765831) commits; the
+preparation commit's independent run is
+[33826498908](https://github.com/xiak/matrix/actions/runs/33826498908).
+
+A fresh task-owned Docker 27.5.1-in-Docker engine with external egress removed
+then ran the full signed native preparation against the two operator-provided
+Linux hosts. The platform reached signed release
+`matrix-v0.3.0-host.38.5-acc27112cfb8` (IAM 5, Audit 4, PaaS 3, revision 8)
+through its declared predecessor `matrix-v0.3.0-host.38.4-8944e23d89a1`;
+their `release.json` SHA-256 values are respectively
+`dd4688f7ad222fef850c01ee928f4b8cf62660444ffa6ac02b6ac2a5cd649d8a`
+and `f32ea3751fed9de34074382ef5b63f555711b75b1f9352616fa6b7e8865c747c`.
+Both nodes ran signed successor `matrix-node-v0.3.0-host.29-8914451c5eb7`,
+which includes the bounded controller/node terminal-clock-skew correction.
+The 1494.88-second gate passed signed install, transitions and retained data;
+two real native Deployments; two terminal sessions with input/output, resize,
+one-time ticket replay rejection and Audit; and stopped at the browser-ready
+successor. Its 986-byte log SHA-256 is
+`ef2fe8adf7b493a9fc598bcdac6a3511866504cac4cddd2837b3df67ce7d3d57`.
+
+The authenticated browser then selected Deployment
+`phase3-runtime-deployment-1`, instance
+`instance-7e4829d6c267ac8498927cdab19c2d5b` on target
+`a-runtime-native-1`. Successive five-second refreshes advanced source times
+and runtime state without a page reload and showed actual CPU, memory, network,
+writable-layer, image and volume values; unavailable block I/O remained
+explicitly unsupported rather than fabricated. In terminal session
+`terminal-session-b01f6ea7a5a019c9c2d4da9bfe4a3f94`, browser keyboard input
+printed `matrix-browser-gate-c-acc2711`; `stty size` visibly changed from
+`17 98` to `31 98` after expansion and returned to `17 98` after restoration.
+The user-visible close control ended the session with outcome `COMPLETED`,
+cleared its ticket digest, and produced an APISIX WebSocket `101` followed by
+the explicit session `DELETE` `204`. Because the one-time ticket is HttpOnly,
+the browser did not extract it: the same isolated signed run's native client
+retained the opaque ticket only in memory and proved exact replay returned the
+closed `404` problem contract.
+
+Audit stored exactly the `paas.terminal-session.created`/`ACCEPTED`,
+`paas.terminal-session.started`/`SUCCEEDED` and
+`paas.terminal-session.ended`/`COMPLETED` facts for that browser session, all
+as PaaS facts for tenant `organization-default`, actor USER
+`principal-admin`, with non-empty IAM decisions and no terminal content. A
+full database verification of the tenant's 1,233 records found contiguous
+sequences, exact previous-hash links, recomputed record hashes, matching chain
+head and matching event registry. Full `go test -p 2 -count=1 ./...`,
+`go vet -p 2 ./...`, module verification, 132 UI tests, type/lint/architecture,
+contrast checks, two bounded production exports and embedded-asset comparison
+passed for the fixed source. This closes P3-3, Gate C, P3-5 and the Phase 3
+Gates A-E acceptance target.
+
+After evidence capture, the browser logout revoked the IAM session. On each
+remote host, the exact task-owned node, collector and startup units, Compose
+workload and network, verification image, 235 MiB fixture root, SSH key and
+IPv4/IPv6 egress-lock chains were removed. Default operator SSH still worked,
+and the hosts retained boot IDs
+`6546f4e0-e2b0-4ee7-854a-f783545d7756` and
+`2340cea6-797b-447c-953b-cdf4ab02b2c9` and Docker Engine IDs
+`209c2bb9-a2b9-4387-8028-c1f76b26322b` and
+`7a9a32f7-8e63-4940-8f21-ca4cd385c13a`. The exact local DIND container, its
+two labeled volumes and dedicated network were also removed, and no task relay
+process remained. No prune, remote reboot, Docker Engine restart or unrelated
+cleanup was performed. The temporary clean source worktree was unregistered;
+the final signed `matrix-v0.3.0-host.38.5-acc27112cfb8` directory was separated
+as the release deliverable rather than treated as a running test resource.
 
 ## Adoption
 
