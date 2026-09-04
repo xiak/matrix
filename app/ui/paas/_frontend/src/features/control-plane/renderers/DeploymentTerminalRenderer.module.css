@@ -87,6 +87,10 @@
   background: var(--xiak-color-terminal-bg);
 }
 
+.terminalExpanded {
+  height: clamp(480px, 70vh, 760px);
+}
+
 .terminal :global(.xterm) {
   height: 100%;
 }
@@ -109,5 +113,9 @@
 
   .terminal {
     height: 300px;
+  }
+
+  .terminalExpanded {
+    height: clamp(360px, 70vh, 600px);
   }
 }

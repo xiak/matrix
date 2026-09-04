@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useRef } from "react";
-import { ShieldCheck, SquareTerminal, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Maximize2, Minimize2, ShieldCheck, SquareTerminal, X } from "lucide-react";
 import { Badge, Button, Typography } from "@ui/xiak";
 import type {
   CloseTerminal,
@@ -44,6 +44,7 @@ export function DeploymentTerminalRenderer({
 }) {
   const host = useRef<HTMLDivElement | null>(null);
   const phase = useRef(terminal.phase);
+  const [expanded, setExpanded] = useState(false);
   const sessionId = terminal.session?.id ?? null;
 
   useEffect(() => {
@@ -184,6 +185,16 @@ export function DeploymentTerminalRenderer({
         </div>
         <div className={styles.actions}>
           <Badge status={status(terminal.phase)}>{phaseLabel(terminal.phase)}</Badge>
+          <Button
+            aria-label={expanded ? "恢复终端尺寸" : "展开终端"}
+            aria-pressed={expanded}
+            onClick={() => setExpanded((value) => !value)}
+            size="small"
+            variant="ghost"
+          >
+            {expanded ? <Minimize2 aria-hidden="true" /> : <Maximize2 aria-hidden="true" />}
+            {expanded ? "恢复" : "展开"}
+          </Button>
           <Button aria-label="关闭终端面板" onClick={() => void closeTerminal()} size="small" variant="ghost">
             <X aria-hidden="true" />关闭
           </Button>
@@ -193,7 +204,13 @@ export function DeploymentTerminalRenderer({
         <ShieldCheck aria-hidden="true" />
         <span>固定当前部署代次与容器实例；仅提供 <Typography.Code>/bin/sh</Typography.Code>，最长 15 分钟。</span>
       </div>
-      {terminal.session ? <div aria-label="终端输入输出" className={styles.terminal} ref={host} /> : null}
+      {terminal.session ? (
+        <div
+          aria-label="终端输入输出"
+          className={`${styles.terminal} ${expanded ? styles.terminalExpanded : ""}`}
+          ref={host}
+        />
+      ) : null}
       {terminal.message ? <p aria-live="polite" className={styles.message} role="status">{terminal.message}</p> : null}
     </section>
   );

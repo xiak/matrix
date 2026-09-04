@@ -5,6 +5,9 @@ import type { TerminalConnection, TerminalConnectionHandlers } from "../reposito
 import { DeploymentTerminalRenderer } from "./DeploymentTerminalRenderer";
 
 const terminalHarness = vi.hoisted(() => ({
+  columns: 100,
+  rows: 30,
+  resizeCallbacks: [] as ResizeObserverCallback[],
   instances: [] as Array<{
     writes: Array<string | Uint8Array>;
     input: ((value: string) => void) | null;
@@ -14,8 +17,8 @@ const terminalHarness = vi.hoisted(() => ({
 
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
-    cols = 100;
-    rows = 30;
+    get cols() { return terminalHarness.columns; }
+    get rows() { return terminalHarness.rows; }
     readonly state = { writes: [] as Array<string | Uint8Array>, input: null as ((value: string) => void) | null, disposed: false };
     constructor() { terminalHarness.instances.push(this.state); }
     loadAddon() {}
@@ -74,8 +77,12 @@ const terminal: TerminalConsoleState = {
 };
 
 beforeEach(() => {
+  terminalHarness.columns = 100;
+  terminalHarness.rows = 30;
+  terminalHarness.resizeCallbacks = [];
   terminalHarness.instances = [];
   vi.stubGlobal("ResizeObserver", class {
+    constructor(callback: ResizeObserverCallback) { terminalHarness.resizeCallbacks.push(callback); }
     observe() {}
     disconnect() {}
   });
@@ -113,6 +120,16 @@ describe("DeploymentTerminalRenderer", () => {
 
     terminalHarness.instances[0]!.input?.("echo 你好\n");
     expect(new TextDecoder().decode(connection.sendInput.mock.calls[0]![0] as Uint8Array)).toBe("echo 你好\n");
+    terminalHarness.columns = 132;
+    terminalHarness.rows = 48;
+    fireEvent.click(screen.getByRole("button", { name: "展开终端" }));
+    expect(screen.getByRole("button", { name: "恢复终端尺寸" }).getAttribute("aria-pressed")).toBe("true");
+    await act(async () => {
+      terminalHarness.resizeCallbacks[0]?.([], {} as ResizeObserver);
+      await new Promise((resolve) => window.setTimeout(resolve, 1));
+    });
+    expect(connection.resize).toHaveBeenLastCalledWith({ columns: 132, rows: 48 });
+
     fireEvent.click(screen.getByRole("button", { name: "关闭终端面板" }));
     expect(close).toHaveBeenCalledTimes(1);
     expect(connect).toHaveBeenCalledTimes(1);
