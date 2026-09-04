@@ -623,8 +623,9 @@ and full Phase 1/2/3 release exercises were not implied by that default run.
 [Independent CI](https://github.com/xiak/matrix/actions/runs/33044131708) passed
 on `540dc10`, including the full Linux Go/race and real node/collector process
 gates in the existing [verification workflow](../../.github/workflows/verification.yml).
-No implementation iteration or complete Phase 3 gate is accepted.
-The node observation chain alone is not the completed observability product.
+At that checkpoint, no implementation iteration or complete Phase 3 gate was
+accepted; the node observation chain alone was not the completed observability
+product.
 The prerequisite installation-scoped IAM and Audit boundaries and their
 verification are owned by
 [FEAT-006](FEAT-006-platform-authorities.md).
@@ -1020,10 +1021,10 @@ PostgreSQL 18 authority-process run and the real Linux node-process variant
 passed. All three jobs then passed in
 [independent CI](https://github.com/xiak/matrix/actions/runs/33262466613).
 
-P3-2 does not accept interactive access, multi-host scheduling policy or the
-complete offline release. Next in P3-3: add successive live host/container
-views and a separately authorized, short-lived terminal bound to the selected
-running instance. That checkpoint did not close Gate D, and no untested
+P3-2 did not accept interactive access, multi-host scheduling policy or the
+complete offline release. The next P3-3 work added successive live
+host/container views and a separately authorized, short-lived terminal bound
+to the selected running instance. That checkpoint did not close Gate D, and no untested
 predecessor or cross-profile admission is inferred from the fixed pairs
 exercised there.
 
@@ -1069,10 +1070,10 @@ and Docker Engine were not restarted.
 Exact checkpoint `71dacd6bdedaec3b9964a40459e8ef8d22b7e4ca` passed all three jobs in
 [independent CI](https://github.com/xiak/matrix/actions/runs/33272639690),
 including the corrected signed runtime-4-to-5 native gate and independent
-authority processes. This verifies the code checkpoint and the explicit node
-transition. It does not yet prove a signed platform's real tenant snapshot in
-the browser across two managed hosts, per-container resource quantities, a
-terminal session, complete Gate C/D or Phase 3. P3-3 remains in progress.
+authority processes. This verified the code checkpoint and the explicit node
+transition. At that checkpoint it had not yet proved a signed platform's real
+tenant snapshot in the browser across two managed hosts, per-container
+resource quantities, a terminal session, complete Gate C/D or Phase 3.
 
 The signed two-host runtime/UI gate is fixed at
 `6b8eeb237a7acd99d1518b4f2f0aac2c2b044767`. It extends the existing optional
@@ -1159,10 +1160,10 @@ binary did not own the restore algorithm. Both remote boot IDs and Docker
 Engine IDs were unchanged before and after the gate, pre-existing node/
 collector units and platform containers remained active, and no machine or
 Docker Engine was restarted. The gate ended at its explicit `restart-required`
-boundary because remote reboot is prohibited. This evidence accepts the
-per-container resource slice and the exercised signed transition/recovery, not
-the externally disconnected/reboot portion of Gate D, the write-capable
-short-lived terminal, complete Gate C/D or Phase 3. P3-3 remains in progress.
+boundary because remote reboot is prohibited. At that checkpoint, the evidence
+accepted the per-container resource slice and the exercised signed
+transition/recovery, not the externally disconnected/reboot portion of Gate D,
+the write-capable short-lived terminal, complete Gate C/D or Phase 3.
 
 The write-capable terminal implementation is fixed at
 `38cb80b67eff6c9083bdf52660eae0ed24847269`. It owns the closed PaaS session
@@ -1225,13 +1226,14 @@ the successor reports READY with the exact bridge predecessor. The gate log
 and sanitized status SHA-256 values are
 `218e8ded27af1feca2179262a134c951140f5b88b1278a9352b5e7183353aacb`
 and `013cf159d1bc9c6ba6edc0eeb5b2cc1345292ad535a44f2bec6009f82741e7ac`.
-The task-local console is reachable through a loopback-only SSH forward and its
-real login page has been rendered. No browser credential or terminal action
-has yet been submitted, so this preparation is not browser acceptance. P3-3
-remains open until one authenticated browser selects the persisted running
-instance and proves terminal I/O, resize, explicit disconnect, consumed-ticket
-replay denial and the associated Audit view. The then-prohibited remote reboot
-phase also remained outside that browser-preparation evidence.
+The task-local console was reachable through a loopback-only SSH forward and
+its real login page was rendered. No browser credential or terminal action had
+yet been submitted, so that preparation was not browser acceptance. At that
+checkpoint P3-3 remained open until one authenticated browser selected the
+persisted running instance and proved terminal I/O, resize, explicit
+disconnect, consumed-ticket replay denial and the associated Audit view. The
+then-prohibited remote reboot phase also remained outside that
+browser-preparation evidence.
 
 P3-4 keeps the existing `ExecutionTarget` and `ExecutionPool` owners. It adds
 the exact `ACTIVE -> DRAINING -> ACTIVE` and terminal
@@ -1293,8 +1295,8 @@ Engine or unrelated service was restarted. The full Go suite, vet, focused
 PostgreSQL 18 race gate and local architecture gates pass. All three jobs for
 the exact source passed in
 [independent CI](https://github.com/xiak/matrix/actions/runs/33452721266).
-This accepts P3-4. It does not accept P3-3's real-browser terminal exercise;
-the following exact-source gate owns the remaining P3-5 reboot evidence.
+This accepted P3-4 but not P3-3's real-browser terminal exercise; the following
+exact-source gate owned the then-remaining P3-5 reboot evidence.
 
 The final reboot driver correction is fixed at
 `0a09444c5fc4d9bd4b9e4d280519570b6e41937e`. It rehydrates the two retained
