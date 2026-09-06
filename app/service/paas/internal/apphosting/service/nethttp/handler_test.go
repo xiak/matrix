@@ -380,6 +380,135 @@ func TestNodeEnrollmentExchangeUsesOnlyProtectedTLSPeerAndBoundedBody(t *testing
 	}
 }
 
+func TestNodeEnrollmentRecoveryUsesProtectedTLSAndNoIAMAuthority(t *testing.T) {
+	exchangeRequest, exchangeResponse := testNodeEnrollmentExchangeFixture(t)
+	consumedAt := exchangeResponse.CertificateNotBefore.Add(5 * time.Minute)
+	enrollment := paasv1.NodeEnrollment{
+		APIVersion: paasv1.APIVersion, Kind: "NodeEnrollment",
+		Metadata: paasv1.ResourceMetadata{
+			ID: exchangeRequest.EnrollmentID, Name: "host-a",
+			Scope: paasv1.ResourceScope{Kind: paasv1.AuthorityPlatform}, Labels: map[string]string{"zone": "private-a"},
+			ResourceVersion: 2, CreatedAt: consumedAt.Add(-time.Minute), UpdatedAt: consumedAt,
+		},
+		ExecutionTargetID: exchangeRequest.ExecutionTargetID, ExecutionPoolID: "pool-a",
+		OperationID: "operation-enrollment-a", State: paasv1.NodeEnrollmentVerifying,
+		ExpiresAt: consumedAt.Add(14 * time.Minute), CredentialConsumedAt: &consumedAt,
+	}
+	publicKeyFingerprint := func(encodedCertificate string) string {
+		encoded, err := base64.RawURLEncoding.Strict().DecodeString(encodedCertificate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		certificate, err := x509.ParseCertificate(encoded)
+		if err != nil {
+			clear(encoded)
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(certificate.RawSubjectPublicKeyInfo)
+		clear(encoded)
+		return "sha256:" + hex.EncodeToString(digest[:])
+	}
+	challengeRequest := paasv1.CreateNodeEnrollmentRecoveryChallengeRequest{
+		APIVersion:   paasv1.NodeEnrollmentRecoveryAPIVersion,
+		Kind:         paasv1.NodeEnrollmentRecoveryChallengeRequestKind,
+		EnrollmentID: exchangeRequest.EnrollmentID, InstallationID: exchangeRequest.InstallationID,
+		ExecutionTargetID: exchangeRequest.ExecutionTargetID, ExchangeID: exchangeRequest.ExchangeID,
+		MachineFingerprint:            exchangeRequest.MachineFingerprint,
+		RuntimeContractDigest:         exchangeRequest.RuntimeContractDigest,
+		NodePublicKeyFingerprint:      publicKeyFingerprint(exchangeResponse.NodeCertificate),
+		CollectorPublicKeyFingerprint: publicKeyFingerprint(exchangeResponse.CollectorCertificate),
+	}
+	challenge := paasv1.NodeEnrollmentRecoveryChallenge{
+		APIVersion:   paasv1.NodeEnrollmentRecoveryAPIVersion,
+		Kind:         paasv1.NodeEnrollmentRecoveryChallengeKind,
+		EnrollmentID: challengeRequest.EnrollmentID, InstallationID: challengeRequest.InstallationID,
+		ExecutionTargetID: challengeRequest.ExecutionTargetID, ExchangeID: challengeRequest.ExchangeID,
+		MachineFingerprint:            challengeRequest.MachineFingerprint,
+		RuntimeContractDigest:         challengeRequest.RuntimeContractDigest,
+		NodePublicKeyFingerprint:      challengeRequest.NodePublicKeyFingerprint,
+		CollectorPublicKeyFingerprint: challengeRequest.CollectorPublicKeyFingerprint,
+		Challenge:                     base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x31}, 32)),
+		IssuedAt:                      consumedAt.Add(time.Minute), ExpiresAt: consumedAt.Add(3 * time.Minute),
+		Authenticator: base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 32)),
+	}
+	proof := paasv1.RecoverNodeEnrollmentExchangeRequest{
+		APIVersion:         paasv1.NodeEnrollmentRecoveryAPIVersion,
+		Kind:               paasv1.NodeEnrollmentRecoveryProofRequestKind,
+		Challenge:          challenge,
+		NodeSignature:      base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x53}, ed25519.SignatureSize)),
+		CollectorSignature: base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x64}, ed25519.SignatureSize)),
+	}
+	workflow := &fakeEnrollmentWorkflow{
+		challengeResult: nodeenrollment.RecoveryChallengeResult{Enrollment: enrollment, Challenge: challenge},
+		recoverResult:   nodeenrollment.ExchangeResult{Enrollment: enrollment, Response: exchangeResponse},
+	}
+	authorizer := &fakeAuthorizer{}
+	handler, err := NewHandler(
+		authorizer, &fakeWorkflow{}, &fakeExecutionWorkflow{}, workflow,
+		&fakeTerminalWorkflow{}, &fakeTerminalConnector{}, &fakeInstallationVerifier{},
+		Config{NewRequestID: func() (string, error) { return "request-test", nil }, Readiness: func(context.Context) (paasv1.Readiness, error) { return paasv1.Readiness{}, nil }},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "/v1/node-enrollments/" + string(exchangeRequest.EnrollmentID)
+	request := jsonRequest(t, http.MethodPost, path+"/recovery-challenge", challengeRequest)
+	request.Header.Set(nodeEnrollmentTransportSchemeHeader, "https")
+	request.Header.Set(nodeEnrollmentObservedPeerHeader, "192.168.50.10")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Header().Get("ETag") != `"2"` ||
+		workflow.challengeCalls != 1 || workflow.challengeCommand.EnrollmentID != exchangeRequest.EnrollmentID ||
+		workflow.challengeCommand.ObservedPeerAddress != "192.168.50.10" ||
+		!reflect.DeepEqual(workflow.challengeCommand.Request, challengeRequest) ||
+		authorizer.request != (port.AuthorizationRequest{}) {
+		t.Fatalf("recovery challenge response=%d body=%s command=%#v", response.Code, response.Body.String(), workflow.challengeCommand)
+	}
+	var receivedChallenge paasv1.NodeEnrollmentRecoveryChallenge
+	if err := json.Unmarshal(response.Body.Bytes(), &receivedChallenge); err != nil || receivedChallenge != challenge {
+		t.Fatalf("decode recovery challenge=%#v err=%v", receivedChallenge, err)
+	}
+
+	request = jsonRequest(t, http.MethodPost, path+"/recover", proof)
+	request.Header.Set(nodeEnrollmentTransportSchemeHeader, "https")
+	request.Header.Set(nodeEnrollmentObservedPeerHeader, "192.168.50.10")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Header().Get("ETag") != `"2"` || workflow.recoverCalls != 1 ||
+		workflow.recoverCommand.EnrollmentID != exchangeRequest.EnrollmentID ||
+		workflow.recoverCommand.ObservedPeerAddress != "192.168.50.10" ||
+		!reflect.DeepEqual(workflow.recoverCommand.Request, proof) || authorizer.request != (port.AuthorizationRequest{}) {
+		t.Fatalf("recovery proof response=%d body=%s command=%#v", response.Code, response.Body.String(), workflow.recoverCommand)
+	}
+	var recovered paasv1.NodeEnrollmentExchangeResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &recovered); err != nil || !reflect.DeepEqual(recovered, exchangeResponse) {
+		t.Fatalf("decode recovered exchange=%#v err=%v", recovered, err)
+	}
+
+	for _, endpoint := range []struct {
+		name string
+		path string
+		body any
+	}{
+		{name: "challenge", path: path + "/recovery-challenge", body: challengeRequest},
+		{name: "proof", path: path + "/recover", body: proof},
+	} {
+		t.Run(endpoint.name+" rejects ambient authority", func(t *testing.T) {
+			beforeChallenge, beforeRecover := workflow.challengeCalls, workflow.recoverCalls
+			request := jsonRequest(t, http.MethodPost, endpoint.path, endpoint.body)
+			request.Header.Set(nodeEnrollmentTransportSchemeHeader, "https")
+			request.Header.Set(nodeEnrollmentObservedPeerHeader, "192.168.50.10")
+			request.Header.Set("Authorization", "Bearer ambient")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusBadRequest || workflow.challengeCalls != beforeChallenge ||
+				workflow.recoverCalls != beforeRecover {
+				t.Fatalf("ambient recovery status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
 func TestNodeEnrollmentExchangeRejectsUnprotectedOrUserAuthenticatedRequests(t *testing.T) {
 	exchangeRequest, _ := testNodeEnrollmentExchangeFixture(t)
 	path := "/v1/node-enrollments/" + string(exchangeRequest.EnrollmentID) + "/exchange"
@@ -481,7 +610,7 @@ func TestNodeEnrollmentExchangeBoundsAndSanitizesCredentialFailure(t *testing.T)
 	}
 
 	workflow.exchangeCalls = 0
-	request = httptest.NewRequest(http.MethodPost, path, strings.NewReader(strings.Repeat("x", int(maximumNodeEnrollmentExchangeBody)+1)))
+	request = httptest.NewRequest(http.MethodPost, path, strings.NewReader(strings.Repeat("x", int(maximumNodeEnrollmentBootstrapBody)+1)))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set(nodeEnrollmentTransportSchemeHeader, "https")
 	request.Header.Set(nodeEnrollmentObservedPeerHeader, "192.168.50.10")
@@ -2008,6 +2137,12 @@ type fakeEnrollmentWorkflow struct {
 	exchangeCommand   nodeenrollment.ExchangeCommand
 	exchangeResult    nodeenrollment.ExchangeResult
 	exchangeErr       error
+	challengeCommand  nodeenrollment.RecoveryChallengeCommand
+	challengeResult   nodeenrollment.RecoveryChallengeResult
+	challengeErr      error
+	recoverCommand    nodeenrollment.RecoverExchangeCommand
+	recoverResult     nodeenrollment.ExchangeResult
+	recoverErr        error
 	readAuthorization port.Authorization
 	readID            paasv1.ResourceID
 	readResult        paasv1.NodeEnrollment
@@ -2023,6 +2158,8 @@ type fakeEnrollmentWorkflow struct {
 	regenerateErr     error
 	createCalls       int
 	exchangeCalls     int
+	challengeCalls    int
+	recoverCalls      int
 	readCalls         int
 	listCalls         int
 	revokeCalls       int
@@ -2043,6 +2180,22 @@ func (workflow *fakeEnrollmentWorkflow) Exchange(
 ) (nodeenrollment.ExchangeResult, error) {
 	workflow.exchangeCommand, workflow.exchangeCalls = command, workflow.exchangeCalls+1
 	return workflow.exchangeResult, workflow.exchangeErr
+}
+
+func (workflow *fakeEnrollmentWorkflow) CreateRecoveryChallenge(
+	_ context.Context,
+	command nodeenrollment.RecoveryChallengeCommand,
+) (nodeenrollment.RecoveryChallengeResult, error) {
+	workflow.challengeCommand, workflow.challengeCalls = command, workflow.challengeCalls+1
+	return workflow.challengeResult, workflow.challengeErr
+}
+
+func (workflow *fakeEnrollmentWorkflow) RecoverExchange(
+	_ context.Context,
+	command nodeenrollment.RecoverExchangeCommand,
+) (nodeenrollment.ExchangeResult, error) {
+	workflow.recoverCommand, workflow.recoverCalls = command, workflow.recoverCalls+1
+	return workflow.recoverResult, workflow.recoverErr
 }
 
 func (workflow *fakeEnrollmentWorkflow) Get(

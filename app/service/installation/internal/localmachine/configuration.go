@@ -339,7 +339,7 @@ func apisixMainConfig() []byte {
       ssl_protocols TLSv1.3;
       ssl_session_cache off;
       ssl_session_tickets off;
-      location ~ "^(?:/ready|/api/paas/v1/node-enrollments/node-enrollment-[0-9a-f]{32}/exchange)$" {
+      location ~ "^(?:/ready|/api/paas/v1/node-enrollments/node-enrollment-[0-9a-f]{32}/(?:exchange|recovery-challenge|recover))$" {
         client_max_body_size 64k;
         client_body_timeout 10s;
         proxy_http_version 1.1;
@@ -399,11 +399,11 @@ func apisixStandaloneConfig() []byte {
 		predecessor, paasPublicOriginAPISIXPredecessor, paasPublicOriginAPISIXCurrent(),
 	)
 	marker := []byte("  -\n    id: matrix-paas-terminal")
-	exchange := nodeEnrollmentExchangeAPISIXRoute()
-	withExchange := make([]byte, 0, len(exchange)+len(marker))
-	withExchange = append(withExchange, exchange...)
-	withExchange = append(withExchange, marker...)
-	return replaceStaticAPISIXFragment(withPublicOrigin, marker, withExchange)
+	bootstrap := nodeEnrollmentBootstrapAPISIXRoute()
+	withBootstrap := make([]byte, 0, len(bootstrap)+len(marker))
+	withBootstrap = append(withBootstrap, bootstrap...)
+	withBootstrap = append(withBootstrap, marker...)
+	return replaceStaticAPISIXFragment(withPublicOrigin, marker, withBootstrap)
 }
 
 func replaceStaticAPISIXFragment(content, old, replacement []byte) []byte {
@@ -440,10 +440,13 @@ func paasPublicOriginAPISIXCurrent() []byte {
             - X-Matrix-TLS-Peer`, topology.NodeEnrollmentIngressPort))
 }
 
-func nodeEnrollmentExchangeAPISIXRoute() []byte {
+func nodeEnrollmentBootstrapAPISIXRoute() []byte {
 	return []byte(fmt.Sprintf(`  -
-    id: matrix-paas-node-enrollment-exchange
-    uri: /api/paas/v1/node-enrollments/*/exchange
+    id: matrix-paas-node-enrollment-bootstrap
+    uris:
+      - /api/paas/v1/node-enrollments/*/exchange
+      - /api/paas/v1/node-enrollments/*/recovery-challenge
+      - /api/paas/v1/node-enrollments/*/recover
     methods:
       - POST
     priority: 300
@@ -455,7 +458,7 @@ func nodeEnrollmentExchangeAPISIXRoute() []byte {
       -
         - uri
         - "~~"
-        - "^/api/paas/v1/node-enrollments/node-enrollment-[0-9a-f]{32}/exchange$"
+        - "^/api/paas/v1/node-enrollments/node-enrollment-[0-9a-f]{32}/(?:exchange|recovery-challenge|recover)$"
       -
         - server_port
         - "=="

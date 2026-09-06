@@ -140,11 +140,11 @@ func TestIssueExchangeSignsDistinctRolesAndSealsRecoverableResult(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	nodePublic, _, err := ed25519.GenerateKey(rand.Reader)
+	nodePublic, nodePrivate, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	collectorPublic, _, err := ed25519.GenerateKey(rand.Reader)
+	collectorPublic, collectorPrivate, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,6 +206,59 @@ func TestIssueExchangeSignsDistinctRolesAndSealsRecoverableResult(t *testing.T) 
 	opened, err := restarted.OpenExchangeResult(context.Background(), exchange, issued.Sealed)
 	if err != nil || opened != issued.Response {
 		t.Fatalf("open sealed exchange after restart: %#v / %v", opened, err)
+	}
+	challenge, err := issuer.IssueRecoveryChallenge(context.Background(), nodeenrollment.RecoveryChallengeIssueRequest{
+		Exchange: exchange, IssuedAt: testTime().Add(time.Minute),
+		ExpiresAt: testTime().Add(3 * time.Minute),
+	})
+	if err != nil || paasv1.ValidateNodeEnrollmentRecoveryChallenge(challenge) != nil {
+		t.Fatalf("issue recovery challenge: %#v / %v", challenge, err)
+	}
+	proofBytes, err := paasv1.NodeEnrollmentRecoveryProofSigningBytes(challenge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(proofBytes)
+	proof := paasv1.RecoverNodeEnrollmentExchangeRequest{
+		APIVersion:         paasv1.NodeEnrollmentRecoveryAPIVersion,
+		Kind:               paasv1.NodeEnrollmentRecoveryProofRequestKind,
+		Challenge:          challenge,
+		NodeSignature:      base64.RawURLEncoding.EncodeToString(ed25519.Sign(nodePrivate, proofBytes)),
+		CollectorSignature: base64.RawURLEncoding.EncodeToString(ed25519.Sign(collectorPrivate, proofBytes)),
+	}
+	recovered, err := restarted.RecoverExchange(context.Background(), nodeenrollment.RecoverExchangeIssueRequest{
+		Exchange: exchange, Sealed: issued.Sealed, Request: proof,
+		Now: testTime().Add(2 * time.Minute),
+	})
+	if err != nil || recovered != issued.Response {
+		t.Fatalf("recover sealed exchange with both role keys after restart: %#v / %v", recovered, err)
+	}
+	wrongNodeProof := proof
+	wrongNodeProof.NodeSignature = base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x51}, ed25519.SignatureSize))
+	if _, err := restarted.RecoverExchange(context.Background(), nodeenrollment.RecoverExchangeIssueRequest{
+		Exchange: exchange, Sealed: issued.Sealed, Request: wrongNodeProof,
+		Now: testTime().Add(2 * time.Minute),
+	}); !errors.Is(err, nodeenrollment.ErrRecoveryProofRejected) {
+		t.Fatalf("wrong node recovery proof error = %v", err)
+	}
+	if _, err := restarted.RecoverExchange(context.Background(), nodeenrollment.RecoverExchangeIssueRequest{
+		Exchange: exchange, Sealed: issued.Sealed, Request: proof, Now: challenge.ExpiresAt,
+	}); !errors.Is(err, nodeenrollment.ErrRecoveryChallengeExpired) {
+		t.Fatalf("expired recovery challenge error = %v", err)
+	}
+	tamperedAuthenticator, err := base64.RawURLEncoding.Strict().DecodeString(challenge.Authenticator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tamperedAuthenticator[len(tamperedAuthenticator)-1] ^= 1
+	tamperedProof := proof
+	tamperedProof.Challenge.Authenticator = base64.RawURLEncoding.EncodeToString(tamperedAuthenticator)
+	clear(tamperedAuthenticator)
+	if _, err := restarted.RecoverExchange(context.Background(), nodeenrollment.RecoverExchangeIssueRequest{
+		Exchange: exchange, Sealed: issued.Sealed, Request: tamperedProof,
+		Now: testTime().Add(2 * time.Minute),
+	}); !errors.Is(err, nodeenrollment.ErrRecoveryProofRejected) {
+		t.Fatalf("tampered recovery challenge error = %v", err)
 	}
 
 	tamperedCiphertext, err := base64.RawURLEncoding.Strict().DecodeString(issued.Sealed.Ciphertext)

@@ -37,16 +37,21 @@ var (
 )
 
 const (
-	MaximumExecutionPoolListItems            = 129
-	MaximumNodeEnrollmentListItems           = 128
-	MaximumNodeEnrollmentLifetime            = 30 * time.Minute
-	MaximumNodeEnrollmentCertificateLifetime = 30 * 24 * time.Hour
-	MinimumNodeEnrollmentListenerPort        = 1024
-	NodeEnrollmentJoinAPIVersion             = "node.enrollment.matrix.xiak.com/v1"
-	NodeEnrollmentJoinKind                   = "NodeEnrollmentJoin"
-	NodeEnrollmentExchangeAPIVersion         = "node.enrollment.matrix.xiak.com/v1"
-	NodeEnrollmentExchangeRequestKind        = "NodeEnrollmentExchangeRequest"
-	NodeEnrollmentExchangeResponseKind       = "NodeEnrollmentExchangeResponse"
+	MaximumExecutionPoolListItems                  = 129
+	MaximumNodeEnrollmentListItems                 = 128
+	MaximumNodeEnrollmentLifetime                  = 30 * time.Minute
+	MaximumNodeEnrollmentCertificateLifetime       = 30 * 24 * time.Hour
+	MaximumNodeEnrollmentRecoveryChallengeLifetime = 5 * time.Minute
+	MinimumNodeEnrollmentListenerPort              = 1024
+	NodeEnrollmentJoinAPIVersion                   = "node.enrollment.matrix.xiak.com/v1"
+	NodeEnrollmentJoinKind                         = "NodeEnrollmentJoin"
+	NodeEnrollmentExchangeAPIVersion               = "node.enrollment.matrix.xiak.com/v1"
+	NodeEnrollmentExchangeRequestKind              = "NodeEnrollmentExchangeRequest"
+	NodeEnrollmentExchangeResponseKind             = "NodeEnrollmentExchangeResponse"
+	NodeEnrollmentRecoveryAPIVersion               = "node.enrollment.matrix.xiak.com/v1"
+	NodeEnrollmentRecoveryChallengeRequestKind     = "NodeEnrollmentRecoveryChallengeRequest"
+	NodeEnrollmentRecoveryChallengeKind            = "NodeEnrollmentRecoveryChallenge"
+	NodeEnrollmentRecoveryProofRequestKind         = "NodeEnrollmentRecoveryProofRequest"
 )
 
 var sensitiveKeyFragments = [...]string{
@@ -643,6 +648,187 @@ func ValidateNodeEnrollmentExchangeResponseForRequest(
 		return errors.New("node enrollment exchange response changes its public keys")
 	}
 	return nil
+}
+
+func ValidateCreateNodeEnrollmentRecoveryChallengeRequest(
+	value CreateNodeEnrollmentRecoveryChallengeRequest,
+) error {
+	if value.APIVersion != NodeEnrollmentRecoveryAPIVersion ||
+		value.Kind != NodeEnrollmentRecoveryChallengeRequestKind ||
+		!validNodeEnrollmentRecoveryIdentity(
+			value.EnrollmentID,
+			value.InstallationID,
+			value.ExecutionTargetID,
+			value.ExchangeID,
+			value.MachineFingerprint,
+			value.RuntimeContractDigest,
+			value.NodePublicKeyFingerprint,
+			value.CollectorPublicKeyFingerprint,
+		) {
+		return errors.New("node enrollment recovery challenge request is invalid")
+	}
+	return nil
+}
+
+func ValidateNodeEnrollmentRecoveryChallenge(value NodeEnrollmentRecoveryChallenge) error {
+	if _, err := nodeEnrollmentRecoveryChallengeAuthenticationBytes(value); err != nil {
+		return err
+	}
+	authenticator, err := decodeRawURLBase64(
+		"node enrollment recovery challenge authenticator",
+		value.Authenticator,
+		sha256.Size,
+	)
+	clear(authenticator)
+	return err
+}
+
+// NodeEnrollmentRecoveryChallengeAuthenticationBytes returns the exact public
+// challenge commitment authenticated by the installation issuer. The
+// authenticator itself is deliberately excluded.
+func NodeEnrollmentRecoveryChallengeAuthenticationBytes(
+	value NodeEnrollmentRecoveryChallenge,
+) ([]byte, error) {
+	return nodeEnrollmentRecoveryChallengeAuthenticationBytes(value)
+}
+
+// NodeEnrollmentRecoveryProofSigningBytes returns the complete authenticated
+// challenge that both target-host role keys must sign independently.
+func NodeEnrollmentRecoveryProofSigningBytes(value NodeEnrollmentRecoveryChallenge) ([]byte, error) {
+	if ValidateNodeEnrollmentRecoveryChallenge(value) != nil {
+		return nil, errors.New("node enrollment recovery challenge is invalid")
+	}
+	encoded, err := json.Marshal(struct {
+		Purpose   string                          `json:"purpose"`
+		Challenge NodeEnrollmentRecoveryChallenge `json:"challenge"`
+	}{"MATRIX_NODE_ENROLLMENT_RECOVERY_PROOF_V1", value})
+	if err != nil {
+		return nil, errors.New("node enrollment recovery proof cannot be encoded")
+	}
+	return encoded, nil
+}
+
+func ValidateRecoverNodeEnrollmentExchangeRequest(value RecoverNodeEnrollmentExchangeRequest) error {
+	if value.APIVersion != NodeEnrollmentRecoveryAPIVersion ||
+		value.Kind != NodeEnrollmentRecoveryProofRequestKind ||
+		ValidateNodeEnrollmentRecoveryChallenge(value.Challenge) != nil {
+		return errors.New("node enrollment recovery proof is invalid")
+	}
+	nodeSignature, nodeErr := decodeRawURLBase64(
+		"node enrollment recovery node signature", value.NodeSignature, ed25519.SignatureSize,
+	)
+	collectorSignature, collectorErr := decodeRawURLBase64(
+		"node enrollment recovery collector signature", value.CollectorSignature, ed25519.SignatureSize,
+	)
+	clear(nodeSignature)
+	clear(collectorSignature)
+	if nodeErr != nil || collectorErr != nil {
+		return errors.New("node enrollment recovery proof is invalid")
+	}
+	return nil
+}
+
+func ValidateNodeEnrollmentRecoveryChallengeForRequest(
+	challenge NodeEnrollmentRecoveryChallenge,
+	request CreateNodeEnrollmentRecoveryChallengeRequest,
+) error {
+	if ValidateNodeEnrollmentRecoveryChallenge(challenge) != nil ||
+		ValidateCreateNodeEnrollmentRecoveryChallengeRequest(request) != nil ||
+		challenge.EnrollmentID != request.EnrollmentID ||
+		challenge.InstallationID != request.InstallationID ||
+		challenge.ExecutionTargetID != request.ExecutionTargetID ||
+		challenge.ExchangeID != request.ExchangeID ||
+		challenge.MachineFingerprint != request.MachineFingerprint ||
+		challenge.RuntimeContractDigest != request.RuntimeContractDigest ||
+		challenge.NodePublicKeyFingerprint != request.NodePublicKeyFingerprint ||
+		challenge.CollectorPublicKeyFingerprint != request.CollectorPublicKeyFingerprint {
+		return errors.New("node enrollment recovery challenge differs from its request")
+	}
+	return nil
+}
+
+func nodeEnrollmentRecoveryChallengeAuthenticationBytes(
+	value NodeEnrollmentRecoveryChallenge,
+) ([]byte, error) {
+	if value.APIVersion != NodeEnrollmentRecoveryAPIVersion ||
+		value.Kind != NodeEnrollmentRecoveryChallengeKind ||
+		!validNodeEnrollmentRecoveryIdentity(
+			value.EnrollmentID,
+			value.InstallationID,
+			value.ExecutionTargetID,
+			value.ExchangeID,
+			value.MachineFingerprint,
+			value.RuntimeContractDigest,
+			value.NodePublicKeyFingerprint,
+			value.CollectorPublicKeyFingerprint,
+		) ||
+		validateContractTime("issuedAt", value.IssuedAt) != nil ||
+		validateContractTime("expiresAt", value.ExpiresAt) != nil ||
+		!value.ExpiresAt.After(value.IssuedAt) ||
+		value.ExpiresAt.Sub(value.IssuedAt) > MaximumNodeEnrollmentRecoveryChallengeLifetime {
+		return nil, errors.New("node enrollment recovery challenge is invalid")
+	}
+	challenge, err := decodeRawURLBase64("node enrollment recovery challenge", value.Challenge, 32)
+	clear(challenge)
+	if err != nil {
+		return nil, errors.New("node enrollment recovery challenge is invalid")
+	}
+	encoded, err := json.Marshal(struct {
+		Purpose                       string     `json:"purpose"`
+		APIVersion                    string     `json:"apiVersion"`
+		Kind                          string     `json:"kind"`
+		EnrollmentID                  ResourceID `json:"enrollmentId"`
+		InstallationID                string     `json:"installationId"`
+		ExecutionTargetID             ResourceID `json:"executionTargetId"`
+		ExchangeID                    string     `json:"exchangeId"`
+		MachineFingerprint            string     `json:"machineFingerprint"`
+		RuntimeContractDigest         string     `json:"runtimeContractDigest"`
+		NodePublicKeyFingerprint      string     `json:"nodePublicKeyFingerprint"`
+		CollectorPublicKeyFingerprint string     `json:"collectorPublicKeyFingerprint"`
+		Challenge                     string     `json:"challenge"`
+		IssuedAt                      time.Time  `json:"issuedAt"`
+		ExpiresAt                     time.Time  `json:"expiresAt"`
+	}{
+		"MATRIX_NODE_ENROLLMENT_RECOVERY_CHALLENGE_V1",
+		value.APIVersion,
+		value.Kind,
+		value.EnrollmentID,
+		value.InstallationID,
+		value.ExecutionTargetID,
+		value.ExchangeID,
+		value.MachineFingerprint,
+		value.RuntimeContractDigest,
+		value.NodePublicKeyFingerprint,
+		value.CollectorPublicKeyFingerprint,
+		value.Challenge,
+		value.IssuedAt,
+		value.ExpiresAt,
+	})
+	if err != nil {
+		return nil, errors.New("node enrollment recovery challenge cannot be encoded")
+	}
+	return encoded, nil
+}
+
+func validNodeEnrollmentRecoveryIdentity(
+	enrollmentID ResourceID,
+	installationID string,
+	executionTargetID ResourceID,
+	exchangeID string,
+	machineFingerprint string,
+	runtimeContractDigest string,
+	nodePublicKeyFingerprint string,
+	collectorPublicKeyFingerprint string,
+) bool {
+	return nodeEnrollmentIDPattern.MatchString(string(enrollmentID)) &&
+		ValidateID("installationId", installationID) == nil &&
+		ValidateID("executionTargetId", string(executionTargetID)) == nil &&
+		nodeExchangeIDPattern.MatchString(exchangeID) &&
+		ValidateDigest("machineFingerprint", machineFingerprint) == nil &&
+		ValidateDigest("runtimeContractDigest", runtimeContractDigest) == nil &&
+		ValidateDigest("nodePublicKeyFingerprint", nodePublicKeyFingerprint) == nil &&
+		ValidateDigest("collectorPublicKeyFingerprint", collectorPublicKeyFingerprint) == nil &&
+		nodePublicKeyFingerprint != collectorPublicKeyFingerprint
 }
 
 func parseNodeEnrollmentPrivateAddress(value string) (netip.Addr, uint16, error) {

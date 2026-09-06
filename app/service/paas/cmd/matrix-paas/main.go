@@ -190,6 +190,7 @@ func run(ctx context.Context) error {
 		nodeenrollment.Config{
 			InstallationID: config.installationID, Lifetime: 15 * time.Minute,
 			CertificateLifetime:            30 * 24 * time.Hour,
+			RecoveryChallengeLifetime:      2 * time.Minute,
 			SupportedRuntimeContractDigest: nodeconfig.ContractDigest(),
 			ControllerID:                   nodeconfig.DefaultControllerID,
 			ManagementPort:                 nodeconfig.DefaultManagementPort, CollectorPort: nodeconfig.DefaultCollectorPort,

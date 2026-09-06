@@ -599,6 +599,20 @@ func (integrationEnrollmentWorkflow) Exchange(
 	return nodeenrollment.ExchangeResult{}, nodeenrollment.ErrNotFound
 }
 
+func (integrationEnrollmentWorkflow) CreateRecoveryChallenge(
+	context.Context,
+	nodeenrollment.RecoveryChallengeCommand,
+) (nodeenrollment.RecoveryChallengeResult, error) {
+	return nodeenrollment.RecoveryChallengeResult{}, nodeenrollment.ErrNotFound
+}
+
+func (integrationEnrollmentWorkflow) RecoverExchange(
+	context.Context,
+	nodeenrollment.RecoverExchangeCommand,
+) (nodeenrollment.ExchangeResult, error) {
+	return nodeenrollment.ExchangeResult{}, nodeenrollment.ErrNotFound
+}
+
 func (integrationEnrollmentWorkflow) Get(
 	context.Context,
 	port.Authorization,

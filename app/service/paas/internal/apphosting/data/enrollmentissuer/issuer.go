@@ -8,6 +8,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/ed25519"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -45,6 +46,7 @@ type Issuer struct {
 	privateKey     ed25519.PrivateKey
 	sealKey        []byte
 	sealKeyID      string
+	recoveryKey    []byte
 	entropy        io.Reader
 }
 
@@ -75,10 +77,21 @@ func New(installationID string, certificateDER, privateKeyDER []byte) (*Issuer, 
 		hkdf.New(sha256.New, seed, nil, []byte("matrix-node-enrollment-result-seal-v1\x00"+installationID)),
 		sealKey,
 	)
+	if err != nil {
+		clear(seed)
+		clear(sealKey)
+		return nil, errors.New("node enrollment result seal key cannot be derived")
+	}
+	recoveryKey := make([]byte, 32)
+	_, err = io.ReadFull(
+		hkdf.New(sha256.New, seed, nil, []byte("matrix-node-enrollment-recovery-challenge-v1\x00"+installationID)),
+		recoveryKey,
+	)
 	clear(seed)
 	if err != nil {
 		clear(sealKey)
-		return nil, errors.New("node enrollment result seal key cannot be derived")
+		clear(recoveryKey)
+		return nil, errors.New("node enrollment recovery key cannot be derived")
 	}
 	sealKeyDigest := sha256.Sum256(sealKey)
 	return &Issuer{
@@ -88,6 +101,7 @@ func New(installationID string, certificateDER, privateKeyDER []byte) (*Issuer, 
 		privateKey:     bytes.Clone(privateKey),
 		sealKey:        sealKey,
 		sealKeyID:      "sha256:" + hex.EncodeToString(sealKeyDigest[:]),
+		recoveryKey:    recoveryKey,
 		entropy:        rand.Reader,
 	}, nil
 }
@@ -228,6 +242,135 @@ func (issuer *Issuer) IssueExchange(
 		return nodeenrollment.IssuedExchange{}, err
 	}
 	return nodeenrollment.IssuedExchange{Response: response, Sealed: sealed}, nil
+}
+
+func (issuer *Issuer) IssueRecoveryChallenge(
+	ctx context.Context,
+	request nodeenrollment.RecoveryChallengeIssueRequest,
+) (paasv1.NodeEnrollmentRecoveryChallenge, error) {
+	if issuer == nil || issuer.entropy == nil || len(issuer.recoveryKey) != sha256.Size || ctx == nil ||
+		request.Exchange.InstallationID != issuer.installationID ||
+		nodeenrollment.ValidateStoredExchange(request.Exchange) != nil ||
+		request.IssuedAt.IsZero() || request.IssuedAt.Location() != time.UTC ||
+		request.IssuedAt.Nanosecond()%1000 != 0 ||
+		request.ExpiresAt.IsZero() || request.ExpiresAt.Location() != time.UTC ||
+		request.ExpiresAt.Nanosecond()%1000 != 0 ||
+		!request.ExpiresAt.After(request.IssuedAt) ||
+		request.ExpiresAt.Sub(request.IssuedAt) > paasv1.MaximumNodeEnrollmentRecoveryChallengeLifetime {
+		return paasv1.NodeEnrollmentRecoveryChallenge{}, nodeenrollment.ErrInvalidArgument
+	}
+	if err := ctx.Err(); err != nil {
+		return paasv1.NodeEnrollmentRecoveryChallenge{}, err
+	}
+	nonce := make([]byte, 32)
+	if _, err := io.ReadFull(issuer.entropy, nonce); err != nil {
+		clear(nonce)
+		return paasv1.NodeEnrollmentRecoveryChallenge{}, nodeenrollment.ErrUnavailable
+	}
+	defer clear(nonce)
+	exchange := request.Exchange
+	challenge := paasv1.NodeEnrollmentRecoveryChallenge{
+		APIVersion:   paasv1.NodeEnrollmentRecoveryAPIVersion,
+		Kind:         paasv1.NodeEnrollmentRecoveryChallengeKind,
+		EnrollmentID: exchange.EnrollmentID, InstallationID: exchange.InstallationID,
+		ExecutionTargetID: exchange.ExecutionTargetID, ExchangeID: exchange.ExchangeID,
+		MachineFingerprint: exchange.MachineFingerprint, RuntimeContractDigest: exchange.RuntimeContractDigest,
+		NodePublicKeyFingerprint:      exchange.NodePublicKeyFingerprint,
+		CollectorPublicKeyFingerprint: exchange.CollectorPublicKeyFingerprint,
+		Challenge:                     base64.RawURLEncoding.EncodeToString(nonce),
+		IssuedAt:                      request.IssuedAt, ExpiresAt: request.ExpiresAt,
+	}
+	commitment, err := paasv1.NodeEnrollmentRecoveryChallengeAuthenticationBytes(challenge)
+	if err != nil {
+		return paasv1.NodeEnrollmentRecoveryChallenge{}, nodeenrollment.ErrInvalidArgument
+	}
+	defer clear(commitment)
+	mac := hmac.New(sha256.New, issuer.recoveryKey)
+	_, _ = mac.Write(commitment)
+	authenticator := mac.Sum(nil)
+	defer clear(authenticator)
+	challenge.Authenticator = base64.RawURLEncoding.EncodeToString(authenticator)
+	if err := ctx.Err(); err != nil {
+		return paasv1.NodeEnrollmentRecoveryChallenge{}, err
+	}
+	if paasv1.ValidateNodeEnrollmentRecoveryChallenge(challenge) != nil {
+		return paasv1.NodeEnrollmentRecoveryChallenge{}, nodeenrollment.ErrUnavailable
+	}
+	return challenge, nil
+}
+
+func (issuer *Issuer) RecoverExchange(
+	ctx context.Context,
+	request nodeenrollment.RecoverExchangeIssueRequest,
+) (paasv1.NodeEnrollmentExchangeResponse, error) {
+	if issuer == nil || issuer.entropy == nil || len(issuer.recoveryKey) != sha256.Size || ctx == nil ||
+		request.Exchange.InstallationID != issuer.installationID ||
+		nodeenrollment.ValidateStoredExchange(request.Exchange) != nil ||
+		nodeenrollment.ValidateSealedExchangeResult(request.Sealed) != nil {
+		return paasv1.NodeEnrollmentExchangeResponse{}, nodeenrollment.ErrUnavailable
+	}
+	if paasv1.ValidateRecoverNodeEnrollmentExchangeRequest(request.Request) != nil ||
+		request.Now.IsZero() || request.Now.Location() != time.UTC || request.Now.Nanosecond()%1000 != 0 {
+		return paasv1.NodeEnrollmentExchangeResponse{}, nodeenrollment.ErrInvalidArgument
+	}
+	if err := ctx.Err(); err != nil {
+		return paasv1.NodeEnrollmentExchangeResponse{}, err
+	}
+	challenge := request.Request.Challenge
+	if !recoveryChallengeMatchesExchange(challenge, request.Exchange) {
+		return paasv1.NodeEnrollmentExchangeResponse{}, nodeenrollment.ErrRecoveryProofRejected
+	}
+	commitment, err := paasv1.NodeEnrollmentRecoveryChallengeAuthenticationBytes(challenge)
+	if err != nil {
+		return paasv1.NodeEnrollmentExchangeResponse{}, nodeenrollment.ErrInvalidArgument
+	}
+	defer clear(commitment)
+	actualAuthenticator, err := base64.RawURLEncoding.Strict().DecodeString(challenge.Authenticator)
+	if err != nil {
+		clear(actualAuthenticator)
+		return paasv1.NodeEnrollmentExchangeResponse{}, nodeenrollment.ErrInvalidArgument
+	}
+	defer clear(actualAuthenticator)
+	mac := hmac.New(sha256.New, issuer.recoveryKey)
+	_, _ = mac.Write(commitment)
+	expectedAuthenticator := mac.Sum(nil)
+	defer clear(expectedAuthenticator)
+	if !hmac.Equal(actualAuthenticator, expectedAuthenticator) {
+		return paasv1.NodeEnrollmentExchangeResponse{}, nodeenrollment.ErrRecoveryProofRejected
+	}
+	if !request.Now.Before(challenge.ExpiresAt) {
+		return paasv1.NodeEnrollmentExchangeResponse{}, nodeenrollment.ErrRecoveryChallengeExpired
+	}
+	if request.Now.Before(challenge.IssuedAt) {
+		return paasv1.NodeEnrollmentExchangeResponse{}, nodeenrollment.ErrRecoveryProofRejected
+	}
+	proof, err := paasv1.NodeEnrollmentRecoveryProofSigningBytes(challenge)
+	if err != nil {
+		return paasv1.NodeEnrollmentExchangeResponse{}, nodeenrollment.ErrInvalidArgument
+	}
+	defer clear(proof)
+	nodeSignature, nodeSignatureErr := base64.RawURLEncoding.Strict().DecodeString(request.Request.NodeSignature)
+	collectorSignature, collectorSignatureErr := base64.RawURLEncoding.Strict().DecodeString(request.Request.CollectorSignature)
+	defer clear(nodeSignature)
+	defer clear(collectorSignature)
+	nodePublicKey, nodeKeyErr := recoveryPublicKey(request.Exchange.NodePublicKey)
+	collectorPublicKey, collectorKeyErr := recoveryPublicKey(request.Exchange.CollectorPublicKey)
+	if nodeSignatureErr != nil || collectorSignatureErr != nil || nodeKeyErr != nil || collectorKeyErr != nil {
+		return paasv1.NodeEnrollmentExchangeResponse{}, nodeenrollment.ErrUnavailable
+	}
+	nodeProofValid := ed25519.Verify(nodePublicKey, proof, nodeSignature)
+	collectorProofValid := ed25519.Verify(collectorPublicKey, proof, collectorSignature)
+	if !nodeProofValid || !collectorProofValid {
+		return paasv1.NodeEnrollmentExchangeResponse{}, nodeenrollment.ErrRecoveryProofRejected
+	}
+	response, err := issuer.OpenExchangeResult(ctx, request.Exchange, request.Sealed)
+	if err != nil {
+		if ctx.Err() != nil {
+			return paasv1.NodeEnrollmentExchangeResponse{}, ctx.Err()
+		}
+		return paasv1.NodeEnrollmentExchangeResponse{}, nodeenrollment.ErrUnavailable
+	}
+	return response, nil
 }
 
 func (issuer *Issuer) OpenExchangeResult(
@@ -489,6 +632,34 @@ func parseExchangePublicKey(encoded []byte) (ed25519.PublicKey, error) {
 		return nil, errors.New("node enrollment exchange public key is invalid")
 	}
 	return publicKey, nil
+}
+
+func recoveryPublicKey(value string) (ed25519.PublicKey, error) {
+	encoded, err := base64.RawURLEncoding.Strict().DecodeString(value)
+	if err != nil || base64.RawURLEncoding.EncodeToString(encoded) != value {
+		clear(encoded)
+		return nil, errors.New("node enrollment recovery public key is invalid")
+	}
+	defer clear(encoded)
+	key, err := parseExchangePublicKey(encoded)
+	if err != nil {
+		return nil, err
+	}
+	return bytes.Clone(key), nil
+}
+
+func recoveryChallengeMatchesExchange(
+	challenge paasv1.NodeEnrollmentRecoveryChallenge,
+	exchange nodeenrollment.StoredExchange,
+) bool {
+	return challenge.EnrollmentID == exchange.EnrollmentID &&
+		challenge.InstallationID == exchange.InstallationID &&
+		challenge.ExecutionTargetID == exchange.ExecutionTargetID &&
+		challenge.ExchangeID == exchange.ExchangeID &&
+		challenge.MachineFingerprint == exchange.MachineFingerprint &&
+		challenge.RuntimeContractDigest == exchange.RuntimeContractDigest &&
+		challenge.NodePublicKeyFingerprint == exchange.NodePublicKeyFingerprint &&
+		challenge.CollectorPublicKeyFingerprint == exchange.CollectorPublicKeyFingerprint
 }
 
 func decodeWrappingKey(value string) (*rsa.PublicKey, error) {

@@ -722,8 +722,10 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		"priority: 100",
 		"uri: /v1/installation:verify",
 		`X-Matrix-Public-Origin: "https://$host:8443"`,
-		"id: matrix-paas-node-enrollment-exchange",
-		"node-enrollment-[0-9a-f]{32}/exchange$",
+		"id: matrix-paas-node-enrollment-bootstrap",
+		"node-enrollment-[0-9a-f]{32}/(?:exchange|recovery-challenge|recover)$",
+		"/api/paas/v1/node-enrollments/*/recovery-challenge",
+		"/api/paas/v1/node-enrollments/*/recover",
 		`X-Matrix-Observed-Peer: "$http_x_matrix_tls_peer"`,
 		`X-Matrix-Transport-Scheme: "https"`,
 		`- server_port`,
@@ -743,14 +745,14 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		bytes.Contains(terminalRoute, []byte("Matrix-Subject-Credential")) {
 		t.Fatal("terminal route must let the PaaS endpoint reject ambient authority")
 	}
-	exchangeStart := bytes.Index(apisix, []byte("id: matrix-paas-node-enrollment-exchange"))
-	if exchangeStart < 0 || terminalStart <= exchangeStart {
-		t.Fatal("node enrollment exchange route is absent or not isolated ahead of general PaaS routing")
+	bootstrapStart := bytes.Index(apisix, []byte("id: matrix-paas-node-enrollment-bootstrap"))
+	if bootstrapStart < 0 || terminalStart <= bootstrapStart {
+		t.Fatal("node enrollment bootstrap route is absent or not isolated ahead of general PaaS routing")
 	}
-	exchangeRoute := apisix[exchangeStart:terminalStart]
+	bootstrapRoute := apisix[bootstrapStart:terminalStart]
 	for _, removed := range []string{"Authorization", "Cookie", "Idempotency-Key", "If-Match", "Matrix-Subject-Credential", "X-Matrix-Public-Origin", "X-Matrix-TLS-Peer"} {
-		if !bytes.Contains(exchangeRoute, []byte("- "+removed)) {
-			t.Fatalf("node enrollment exchange route does not remove ambient header %q", removed)
+		if !bytes.Contains(bootstrapRoute, []byte("- "+removed)) {
+			t.Fatalf("node enrollment bootstrap route does not remove ambient header %q", removed)
 		}
 	}
 	paasStart := bytes.Index(apisix, []byte("id: matrix-paas\n"))
@@ -784,6 +786,7 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		"config_provider: yaml", "stream_plugins: []", "user: root",
 		"client_body_temp_path /tmp/", "node_listen:", "port: 9081",
 		"listen 0.0.0.0:9443 ssl;", "ssl_protocols TLSv1.3;", "ssl_session_tickets off;",
+		"(?:exchange|recovery-challenge|recover)",
 		"client_max_body_size 64k;", "client_body_timeout 10s;", "proxy_connect_timeout 3s;",
 		"proxy_set_header X-Matrix-TLS-Peer $remote_addr;", "proxy_pass http://127.0.0.1:9081;",
 		topology.NodeEnrollmentIngressCertificateTarget, topology.NodeEnrollmentIngressPrivateKeyTarget,
@@ -1161,7 +1164,7 @@ func TestUpgradeConfigurationRetainsAndRestoresTheFrozenAdjacentTopology(t *test
 		bytes.Contains(predecessorCompose, []byte(layout.EnrollmentIngressPrivateKey)) ||
 		!bytes.Contains(predecessorRoutes, []byte("matrix-paas-terminal")) ||
 		bytes.Contains(predecessorRoutes, []byte("X-Matrix-Public-Origin")) ||
-		bytes.Contains(predecessorRoutes, []byte("matrix-paas-node-enrollment-exchange")) ||
+		bytes.Contains(predecessorRoutes, []byte("matrix-paas-node-enrollment-bootstrap")) ||
 		!bytes.Equal(predecessorMainConfig, predecessorAPISIXMainConfig()) {
 		t.Fatal("frozen adjacent predecessor differs from its signed topology")
 	}
@@ -1190,7 +1193,7 @@ func TestUpgradeConfigurationRetainsAndRestoresTheFrozenAdjacentTopology(t *test
 		bytes.Equal(successorRoutes, predecessorRoutes) ||
 		!bytes.Contains(successorRoutes, []byte("matrix-paas-terminal")) ||
 		!bytes.Contains(successorRoutes, []byte("X-Matrix-Public-Origin")) ||
-		!bytes.Contains(successorRoutes, []byte("matrix-paas-node-enrollment-exchange")) ||
+		!bytes.Contains(successorRoutes, []byte("matrix-paas-node-enrollment-bootstrap")) ||
 		bytes.Equal(successorMainConfig, predecessorMainConfig) ||
 		!bytes.Equal(successorMainConfig, apisixMainConfig()) {
 		t.Fatal("schema upgrade did not advance the exact enrollment route while retaining terminal topology")

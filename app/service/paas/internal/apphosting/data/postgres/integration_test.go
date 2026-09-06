@@ -654,6 +654,7 @@ func assertNodeEnrollmentPersistence(
 	enrollmentConfig := nodeenrollment.Config{
 		InstallationID: installationID, Lifetime: 5 * time.Minute,
 		CertificateLifetime:            30 * 24 * time.Hour,
+		RecoveryChallengeLifetime:      2 * time.Minute,
 		SupportedRuntimeContractDigest: integrationDigest("node-runtime-contract"),
 		ControllerID:                   "paas-controller-v1", ManagementPort: 16443, CollectorPort: 19100,
 		MaxTransactionAttempts: 5,
@@ -839,6 +840,78 @@ func assertNodeEnrollmentPersistence(
 	}); !errors.Is(err, nodeenrollment.ErrCredentialConsumed) {
 		t.Fatalf("replayed consumed credential error = %v", err)
 	}
+	nodePublicKey, collectorPublicKey, err := paasv1.NodeEnrollmentExchangePublicKeys(exchangeRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodePublicKeyDigest := sha256.Sum256(nodePublicKey)
+	collectorPublicKeyDigest := sha256.Sum256(collectorPublicKey)
+	clear(nodePublicKey)
+	clear(collectorPublicKey)
+	challengeRequest := paasv1.CreateNodeEnrollmentRecoveryChallengeRequest{
+		APIVersion:   paasv1.NodeEnrollmentRecoveryAPIVersion,
+		Kind:         paasv1.NodeEnrollmentRecoveryChallengeRequestKind,
+		EnrollmentID: exchangeRequest.EnrollmentID, InstallationID: exchangeRequest.InstallationID,
+		ExecutionTargetID: exchangeRequest.ExecutionTargetID, ExchangeID: exchangeRequest.ExchangeID,
+		MachineFingerprint:            exchangeRequest.MachineFingerprint,
+		RuntimeContractDigest:         exchangeRequest.RuntimeContractDigest,
+		NodePublicKeyFingerprint:      "sha256:" + hex.EncodeToString(nodePublicKeyDigest[:]),
+		CollectorPublicKeyFingerprint: "sha256:" + hex.EncodeToString(collectorPublicKeyDigest[:]),
+	}
+	challenge, err := service.CreateRecoveryChallenge(ctx, nodeenrollment.RecoveryChallengeCommand{
+		EnrollmentID: exchangeRequest.EnrollmentID, ObservedPeerAddress: "192.168.50.10",
+		Request: challengeRequest,
+	})
+	if err != nil || challenge.Enrollment.Metadata.ResourceVersion != 2 ||
+		paasv1.ValidateNodeEnrollmentRecoveryChallengeForRequest(challenge.Challenge, challengeRequest) != nil {
+		t.Fatalf("create persisted recovery challenge: result=%#v err=%v", challenge, err)
+	}
+	issuerCertificateDER, err := base64.RawURLEncoding.Strict().DecodeString(exchanged.Response.IssuerCertificate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuerPrivateKeyDER, err := x509.MarshalPKCS8PrivateKey(issuerPrivateKey)
+	if err != nil {
+		clear(issuerCertificateDER)
+		t.Fatal(err)
+	}
+	restartedIssuer, err := enrollmentissuer.New(installationID, issuerCertificateDER, issuerPrivateKeyDER)
+	clear(issuerCertificateDER)
+	clear(issuerPrivateKeyDER)
+	if err != nil {
+		t.Fatalf("restart enrollment issuer: %v", err)
+	}
+	restartedService, err := nodeenrollment.New(repository, restartedIssuer, enrollmentConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proofBytes, err := paasv1.NodeEnrollmentRecoveryProofSigningBytes(challenge.Challenge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveryRequest := paasv1.RecoverNodeEnrollmentExchangeRequest{
+		APIVersion:         paasv1.NodeEnrollmentRecoveryAPIVersion,
+		Kind:               paasv1.NodeEnrollmentRecoveryProofRequestKind,
+		Challenge:          challenge.Challenge,
+		NodeSignature:      base64.RawURLEncoding.EncodeToString(ed25519.Sign(nodePrivateKey, proofBytes)),
+		CollectorSignature: base64.RawURLEncoding.EncodeToString(ed25519.Sign(collectorPrivateKey, proofBytes)),
+	}
+	clear(proofBytes)
+	recoveredExchange, err := restartedService.RecoverExchange(ctx, nodeenrollment.RecoverExchangeCommand{
+		EnrollmentID: exchangeRequest.EnrollmentID, ObservedPeerAddress: "192.168.50.10",
+		Request: recoveryRequest,
+	})
+	if err != nil || !reflect.DeepEqual(recoveredExchange.Response, exchanged.Response) ||
+		!reflect.DeepEqual(recoveredExchange.Enrollment, exchanged.Enrollment) {
+		t.Fatalf("recover persisted exchange after issuer restart: result=%#v err=%v", recoveredExchange, err)
+	}
+	replayedRecovery, err := restartedService.RecoverExchange(ctx, nodeenrollment.RecoverExchangeCommand{
+		EnrollmentID: exchangeRequest.EnrollmentID, ObservedPeerAddress: "192.168.50.10",
+		Request: recoveryRequest,
+	})
+	if err != nil || !reflect.DeepEqual(replayedRecovery, recoveredExchange) {
+		t.Fatalf("replay persisted exchange recovery: result=%#v err=%v", replayedRecovery, err)
+	}
 
 	var persistedExchange nodeenrollment.StoredEnrollment
 	err = repository.WithinInstallation(ctx, installationID, func(
@@ -864,12 +937,6 @@ func assertNodeEnrollmentPersistence(
 		t.Fatalf("load persisted exchange: stored=%#v err=%v", persistedExchange, err)
 	}
 	defer persistedExchange.Clear()
-	recovered, err := issuer.OpenExchangeResult(
-		ctx, *persistedExchange.Exchange, *persistedExchange.SealedExchangeResult,
-	)
-	if err != nil || !reflect.DeepEqual(recovered, exchanged.Response) {
-		t.Fatalf("recover sealed persisted exchange: response=%#v err=%v", recovered, err)
-	}
 	var exchangeDocument, sealedDocument string
 	var exchangedCredentialCleared bool
 	if err := admin.QueryRow(ctx, `SELECT

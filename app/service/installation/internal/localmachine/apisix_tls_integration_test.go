@@ -176,27 +176,31 @@ http {
 		response.TLS.PeerCertificates[0].VerifyHostname(serverName) != nil {
 		t.Fatalf("APISIX TLS readiness status=%d body=%q err=%v", response.StatusCode, body, err)
 	}
-	exchange := waitForAPISIXEnrollmentExchange(t, containerName, baseURL, security.Clone())
-	defer exchange.Body.Close()
-	peer := net.ParseIP(exchange.Header.Get("X-Matrix-Test-Observed-Peer"))
-	if exchange.StatusCode != http.StatusNoContent || peer == nil || !peer.IsPrivate() ||
-		exchange.Header.Get("X-Matrix-Test-Transport-Scheme") != "https" {
-		t.Fatalf(
-			"APISIX enrollment TLS route status=%d peer=%q scheme=%q",
-			exchange.StatusCode,
-			exchange.Header.Get("X-Matrix-Test-Observed-Peer"),
-			exchange.Header.Get("X-Matrix-Test-Transport-Scheme"),
-		)
-	}
-	for _, header := range []string{
-		"X-Matrix-Test-Authorization", "X-Matrix-Test-Cookie",
-		"X-Matrix-Test-Idempotency-Key", "X-Matrix-Test-If-Match",
-		"X-Matrix-Test-Subject-Credential", "X-Matrix-Test-Public-Origin",
-		"X-Matrix-Test-TLS-Peer",
-	} {
-		if exchange.Header.Get(header) != "" {
-			t.Fatalf("APISIX enrollment TLS route forwarded ambient authority %s", header)
+	for _, action := range []string{"exchange", "recovery-challenge", "recover"} {
+		bootstrap := waitForAPISIXEnrollmentBootstrap(t, containerName, baseURL, action, security.Clone())
+		peer := net.ParseIP(bootstrap.Header.Get("X-Matrix-Test-Observed-Peer"))
+		if bootstrap.StatusCode != http.StatusNoContent || peer == nil || !peer.IsPrivate() ||
+			bootstrap.Header.Get("X-Matrix-Test-Transport-Scheme") != "https" {
+			bootstrap.Body.Close()
+			t.Fatalf(
+				"APISIX enrollment %s TLS route status=%d peer=%q scheme=%q",
+				action, bootstrap.StatusCode,
+				bootstrap.Header.Get("X-Matrix-Test-Observed-Peer"),
+				bootstrap.Header.Get("X-Matrix-Test-Transport-Scheme"),
+			)
 		}
+		for _, header := range []string{
+			"X-Matrix-Test-Authorization", "X-Matrix-Test-Cookie",
+			"X-Matrix-Test-Idempotency-Key", "X-Matrix-Test-If-Match",
+			"X-Matrix-Test-Subject-Credential", "X-Matrix-Test-Public-Origin",
+			"X-Matrix-Test-TLS-Peer",
+		} {
+			if bootstrap.Header.Get(header) != "" {
+				bootstrap.Body.Close()
+				t.Fatalf("APISIX enrollment %s TLS route forwarded ambient authority %s", action, header)
+			}
+		}
+		bootstrap.Body.Close()
 	}
 	client := newAPISIXTLSClient(security.Clone(), 5*time.Second)
 	denied, err := client.Get(baseURL + "/api/iam/v1/ready")
@@ -279,9 +283,9 @@ func waitForAPISIXTLS(t *testing.T, containerName, endpoint string, security *tl
 	}
 }
 
-func waitForAPISIXEnrollmentExchange(
+func waitForAPISIXEnrollmentBootstrap(
 	t *testing.T,
-	containerName, baseURL string,
+	containerName, baseURL, action string,
 	security *tls.Config,
 ) *http.Response {
 	t.Helper()
@@ -290,7 +294,7 @@ func waitForAPISIXEnrollmentExchange(
 	for {
 		request, err := http.NewRequest(
 			http.MethodPost,
-			baseURL+"/api/paas/v1/node-enrollments/node-enrollment-11111111111111111111111111111111/exchange",
+			baseURL+"/api/paas/v1/node-enrollments/node-enrollment-11111111111111111111111111111111/"+action,
 			strings.NewReader(`{"credential":"test-only"}`),
 		)
 		if err != nil {
@@ -320,8 +324,8 @@ func waitForAPISIXEnrollmentExchange(
 			logs := exec.Command("docker", "logs", "--tail", "100", containerName)
 			output, logsErr := logs.CombinedOutput()
 			t.Fatalf(
-				"APISIX enrollment TLS route did not become ready: request error=%v; logs error=%v logs=%s",
-				requestErr, logsErr, strings.TrimSpace(string(output)),
+				"APISIX enrollment %s TLS route did not become ready: request error=%v; logs error=%v logs=%s",
+				action, requestErr, logsErr, strings.TrimSpace(string(output)),
 			)
 		}
 		time.Sleep(200 * time.Millisecond)

@@ -148,6 +148,135 @@ func TestExchangeConsumesCredentialOnceAndPersistsOnlyNormalizedPublicIdentity(t
 	}
 }
 
+func TestLostExchangeResponseRecoversOnlyWithBothPersistedRoleKeys(t *testing.T) {
+	service, repository, issuer := enrollmentFixture(t)
+	create := createCommand(t)
+	created, err := service.Create(context.Background(), create)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exchangeCommand, nodePrivateKey, collectorPrivateKey := exchangeCommandWithKeys(t, created, issuer, "a")
+	defer clear(nodePrivateKey)
+	defer clear(collectorPrivateKey)
+	repository.now = repository.now.Add(time.Minute)
+	exchanged, err := service.Exchange(context.Background(), exchangeCommand)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := repository.values[created.Response.Enrollment.Metadata.ID]
+	challengeRequest := recoveryChallengeRequest(*stored.Exchange)
+	challengeResult, err := service.CreateRecoveryChallenge(context.Background(), RecoveryChallengeCommand{
+		EnrollmentID: stored.Enrollment.Metadata.ID, ObservedPeerAddress: "192.168.50.10",
+		Request: challengeRequest,
+	})
+	if err != nil || challengeResult.Enrollment.Metadata.ResourceVersion != 2 ||
+		challengeResult.Enrollment.State != paasv1.NodeEnrollmentVerifying ||
+		paasv1.ValidateNodeEnrollmentRecoveryChallengeForRequest(challengeResult.Challenge, challengeRequest) != nil ||
+		issuer.challengeCalls != 1 || repository.exchangeCalls != 1 {
+		t.Fatalf("recovery challenge=%#v err=%v", challengeResult, err)
+	}
+	proof := recoveryProofRequest(t, challengeResult.Challenge, nodePrivateKey, collectorPrivateKey)
+	commandFormatting := (RecoverExchangeCommand{Request: proof}).String()
+	issueFormatting := (RecoverExchangeIssueRequest{Request: proof, Sealed: *stored.SealedExchangeResult}).String()
+	if strings.Contains(commandFormatting, proof.NodeSignature) || strings.Contains(commandFormatting, proof.CollectorSignature) ||
+		strings.Contains(issueFormatting, proof.NodeSignature) || strings.Contains(issueFormatting, proof.CollectorSignature) ||
+		strings.Contains(issueFormatting, stored.SealedExchangeResult.Ciphertext) {
+		t.Fatal("recovery workflow formatting leaked proof or sealed result")
+	}
+	recovered, err := service.RecoverExchange(context.Background(), RecoverExchangeCommand{
+		EnrollmentID: stored.Enrollment.Metadata.ID, ObservedPeerAddress: "192.168.50.10", Request: proof,
+	})
+	if err != nil || !reflect.DeepEqual(recovered.Response, exchanged.Response) ||
+		!reflect.DeepEqual(recovered.Enrollment, exchanged.Enrollment) || issuer.recoveryCalls != 1 ||
+		repository.exchangeCalls != 1 {
+		t.Fatalf("recovered exchange=%#v err=%v", recovered, err)
+	}
+	replayed, err := service.RecoverExchange(context.Background(), RecoverExchangeCommand{
+		EnrollmentID: stored.Enrollment.Metadata.ID, ObservedPeerAddress: "192.168.50.10", Request: proof,
+	})
+	if err != nil || !reflect.DeepEqual(replayed, recovered) || issuer.recoveryCalls != 2 ||
+		repository.values[stored.Enrollment.Metadata.ID].Enrollment.Metadata.ResourceVersion != 2 {
+		t.Fatalf("replayed recovery=%#v err=%v", replayed, err)
+	}
+
+	for name, mutate := range map[string]func(*paasv1.RecoverNodeEnrollmentExchangeRequest){
+		"node key": func(value *paasv1.RecoverNodeEnrollmentExchangeRequest) {
+			value.NodeSignature = base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x41}, ed25519.SignatureSize))
+		},
+		"collector key": func(value *paasv1.RecoverNodeEnrollmentExchangeRequest) {
+			value.CollectorSignature = base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, ed25519.SignatureSize))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := proof
+			mutate(&changed)
+			if _, err := service.RecoverExchange(context.Background(), RecoverExchangeCommand{
+				EnrollmentID: stored.Enrollment.Metadata.ID, ObservedPeerAddress: "192.168.50.10", Request: changed,
+			}); !errors.Is(err, ErrRecoveryProofRejected) {
+				t.Fatalf("changed proof error = %v", err)
+			}
+		})
+	}
+	changedIntent := challengeRequest
+	changedIntent.MachineFingerprint = "sha256:" + strings.Repeat("b", 64)
+	if _, err := service.CreateRecoveryChallenge(context.Background(), RecoveryChallengeCommand{
+		EnrollmentID: stored.Enrollment.Metadata.ID, ObservedPeerAddress: "192.168.50.10", Request: changedIntent,
+	}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("changed recovery intent error = %v", err)
+	}
+	if _, err := service.CreateRecoveryChallenge(context.Background(), RecoveryChallengeCommand{
+		EnrollmentID: stored.Enrollment.Metadata.ID, ObservedPeerAddress: "192.168.50.11", Request: challengeRequest,
+	}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("changed recovery peer error = %v", err)
+	}
+	repository.now = challengeResult.Challenge.ExpiresAt
+	if _, err := service.RecoverExchange(context.Background(), RecoverExchangeCommand{
+		EnrollmentID: stored.Enrollment.Metadata.ID, ObservedPeerAddress: "192.168.50.10", Request: proof,
+	}); !errors.Is(err, ErrRecoveryChallengeExpired) {
+		t.Fatalf("expired recovery challenge error = %v", err)
+	}
+}
+
+func TestRevocationAfterRecoveryChallengePreventsResultRecovery(t *testing.T) {
+	service, repository, issuer := enrollmentFixture(t)
+	create := createCommand(t)
+	created, err := service.Create(context.Background(), create)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exchangeCommand, nodePrivateKey, collectorPrivateKey := exchangeCommandWithKeys(t, created, issuer, "a")
+	defer clear(nodePrivateKey)
+	defer clear(collectorPrivateKey)
+	repository.now = repository.now.Add(time.Minute)
+	if _, err := service.Exchange(context.Background(), exchangeCommand); err != nil {
+		t.Fatal(err)
+	}
+	stored := repository.values[created.Response.Enrollment.Metadata.ID]
+	challenge, err := service.CreateRecoveryChallenge(context.Background(), RecoveryChallengeCommand{
+		EnrollmentID: stored.Enrollment.Metadata.ID, ObservedPeerAddress: "192.168.50.10",
+		Request: recoveryChallengeRequest(*stored.Exchange),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof := recoveryProofRequest(t, challenge.Challenge, nodePrivateKey, collectorPrivateKey)
+	repository.now = repository.now.Add(time.Second)
+	if _, err := service.Revoke(context.Background(), RevokeCommand{
+		Authorization: create.Authorization, EnrollmentID: stored.Enrollment.Metadata.ID,
+		ExpectedResourceVersion: 2, IdempotencyKey: "revoke-after-recovery-challenge",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.RecoverExchange(context.Background(), RecoverExchangeCommand{
+		EnrollmentID: stored.Enrollment.Metadata.ID, ObservedPeerAddress: "192.168.50.10", Request: proof,
+	}); !errors.Is(err, ErrRevoked) {
+		t.Fatalf("recovery after revocation error = %v", err)
+	}
+	if issuer.recoveryCalls != 0 || repository.values[stored.Enrollment.Metadata.ID].Enrollment.State != paasv1.NodeEnrollmentRevoked {
+		t.Fatal("revoked recovery reached cryptography or reopened enrollment")
+	}
+}
+
 func TestExchangeRejectsWrongCredentialAndAuthorityBeforeIssuance(t *testing.T) {
 	service, repository, issuer := enrollmentFixture(t)
 	created, err := service.Create(context.Background(), createCommand(t))
@@ -531,7 +660,11 @@ type fakeJoinIssuer struct {
 	privateKey     ed25519.PrivateKey
 	calls          int
 	exchangeCalls  int
+	challengeCalls int
+	recoveryCalls  int
 	credentials    map[paasv1.ResourceID][]byte
+	challenges     map[string]paasv1.NodeEnrollmentRecoveryChallenge
+	responses      map[string]paasv1.NodeEnrollmentExchangeResponse
 }
 
 func (issuer *fakeJoinIssuer) IssueJoin(_ context.Context, request JoinIssueRequest) (IssuedJoin, error) {
@@ -626,11 +759,96 @@ func (issuer *fakeJoinIssuer) IssueExchange(_ context.Context, request ExchangeI
 		IssuerCertificate:    base64.RawURLEncoding.EncodeToString(issuer.certificate),
 		CertificateNotBefore: request.CertificateNotBefore, CertificateNotAfter: request.CertificateNotAfter,
 	}
+	if issuer.responses == nil {
+		issuer.responses = map[string]paasv1.NodeEnrollmentExchangeResponse{}
+	}
+	issuer.responses[request.ExchangeID] = response
 	return IssuedExchange{Response: response, Sealed: SealedExchangeResult{
 		Algorithm: ExchangeResultSealAlgorithm, KeyID: "sha256:" + strings.Repeat("d", 64),
 		Nonce:      base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x7a}, 12)),
 		Ciphertext: base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x6b}, 64)),
 	}}, nil
+}
+
+func (issuer *fakeJoinIssuer) IssueRecoveryChallenge(
+	_ context.Context,
+	request RecoveryChallengeIssueRequest,
+) (paasv1.NodeEnrollmentRecoveryChallenge, error) {
+	issuer.challengeCalls++
+	exchange := request.Exchange
+	nonce := sha256.Sum256([]byte(exchange.ExchangeID + request.IssuedAt.String()))
+	authenticator := sha256.Sum256(append([]byte("fake-recovery-authenticator\x00"), nonce[:]...))
+	challenge := paasv1.NodeEnrollmentRecoveryChallenge{
+		APIVersion:   paasv1.NodeEnrollmentRecoveryAPIVersion,
+		Kind:         paasv1.NodeEnrollmentRecoveryChallengeKind,
+		EnrollmentID: exchange.EnrollmentID, InstallationID: exchange.InstallationID,
+		ExecutionTargetID: exchange.ExecutionTargetID, ExchangeID: exchange.ExchangeID,
+		MachineFingerprint: exchange.MachineFingerprint, RuntimeContractDigest: exchange.RuntimeContractDigest,
+		NodePublicKeyFingerprint:      exchange.NodePublicKeyFingerprint,
+		CollectorPublicKeyFingerprint: exchange.CollectorPublicKeyFingerprint,
+		Challenge:                     base64.RawURLEncoding.EncodeToString(nonce[:]),
+		IssuedAt:                      request.IssuedAt, ExpiresAt: request.ExpiresAt,
+		Authenticator: base64.RawURLEncoding.EncodeToString(authenticator[:]),
+	}
+	if paasv1.ValidateNodeEnrollmentRecoveryChallenge(challenge) != nil {
+		return paasv1.NodeEnrollmentRecoveryChallenge{}, ErrInvalidArgument
+	}
+	if issuer.challenges == nil {
+		issuer.challenges = map[string]paasv1.NodeEnrollmentRecoveryChallenge{}
+	}
+	issuer.challenges[exchange.ExchangeID] = challenge
+	return challenge, nil
+}
+
+func (issuer *fakeJoinIssuer) RecoverExchange(
+	_ context.Context,
+	request RecoverExchangeIssueRequest,
+) (paasv1.NodeEnrollmentExchangeResponse, error) {
+	issuer.recoveryCalls++
+	challenge, found := issuer.challenges[request.Exchange.ExchangeID]
+	if !found || challenge != request.Request.Challenge ||
+		!recoveryChallengeMatchesStored(challenge, request.Exchange) {
+		return paasv1.NodeEnrollmentExchangeResponse{}, ErrRecoveryProofRejected
+	}
+	if !request.Now.Before(challenge.ExpiresAt) {
+		return paasv1.NodeEnrollmentExchangeResponse{}, ErrRecoveryChallengeExpired
+	}
+	proof, err := paasv1.NodeEnrollmentRecoveryProofSigningBytes(challenge)
+	if err != nil {
+		return paasv1.NodeEnrollmentExchangeResponse{}, ErrInvalidArgument
+	}
+	defer clear(proof)
+	nodeSignature, nodeSignatureErr := base64.RawURLEncoding.Strict().DecodeString(request.Request.NodeSignature)
+	collectorSignature, collectorSignatureErr := base64.RawURLEncoding.Strict().DecodeString(request.Request.CollectorSignature)
+	defer clear(nodeSignature)
+	defer clear(collectorSignature)
+	publicKey := func(value string) (ed25519.PublicKey, error) {
+		encoded, err := base64.RawURLEncoding.Strict().DecodeString(value)
+		if err != nil {
+			return nil, err
+		}
+		defer clear(encoded)
+		parsed, err := x509.ParsePKIXPublicKey(encoded)
+		key, ok := parsed.(ed25519.PublicKey)
+		if err != nil || !ok {
+			return nil, ErrUnavailable
+		}
+		return bytes.Clone(key), nil
+	}
+	nodeKey, nodeKeyErr := publicKey(request.Exchange.NodePublicKey)
+	collectorKey, collectorKeyErr := publicKey(request.Exchange.CollectorPublicKey)
+	if nodeSignatureErr != nil || collectorSignatureErr != nil || nodeKeyErr != nil || collectorKeyErr != nil {
+		return paasv1.NodeEnrollmentExchangeResponse{}, ErrUnavailable
+	}
+	if !ed25519.Verify(nodeKey, proof, nodeSignature) ||
+		!ed25519.Verify(collectorKey, proof, collectorSignature) {
+		return paasv1.NodeEnrollmentExchangeResponse{}, ErrRecoveryProofRejected
+	}
+	response, found := issuer.responses[request.Exchange.ExchangeID]
+	if !found {
+		return paasv1.NodeEnrollmentExchangeResponse{}, ErrUnavailable
+	}
+	return response, nil
 }
 
 func enrollmentFixture(t *testing.T) (*Service, *fakeRepository, *fakeJoinIssuer) {
@@ -671,6 +889,7 @@ func enrollmentFixture(t *testing.T) (*Service, *fakeRepository, *fakeJoinIssuer
 	service, err := New(repository, issuer, Config{
 		InstallationID: "installation-a", Lifetime: 15 * time.Minute,
 		CertificateLifetime:            30 * 24 * time.Hour,
+		RecoveryChallengeLifetime:      2 * time.Minute,
 		SupportedRuntimeContractDigest: "sha256:" + strings.Repeat("c", 64),
 		ControllerID:                   "paas-controller-v1", ManagementPort: 16443, CollectorPort: 19100,
 		MaxTransactionAttempts: 3,
@@ -732,14 +951,25 @@ func exchangeCommand(
 	hexIdentity string,
 ) ExchangeCommand {
 	t.Helper()
+	command, nodePrivateKey, collectorPrivateKey := exchangeCommandWithKeys(t, created, issuer, hexIdentity)
+	clear(nodePrivateKey)
+	clear(collectorPrivateKey)
+	return command
+}
+
+func exchangeCommandWithKeys(
+	t *testing.T,
+	created CreateResult,
+	issuer *fakeJoinIssuer,
+	hexIdentity string,
+) (ExchangeCommand, ed25519.PrivateKey, ed25519.PrivateKey) {
+	t.Helper()
 	if len(hexIdentity) != 1 || !strings.Contains("0123456789abcdef", hexIdentity) {
 		t.Fatal("test exchange identity must be one lowercase hex character")
 	}
-	certificateRequest := func() string {
-		_, privateKey, err := ed25519.GenerateKey(rand.Reader)
-		if err != nil {
-			t.Fatal(err)
-		}
+	nodePrivateKey := integrationTestEd25519PrivateKey(t)
+	collectorPrivateKey := integrationTestEd25519PrivateKey(t)
+	certificateRequest := func(privateKey ed25519.PrivateKey) string {
 		encoded, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, privateKey)
 		if err != nil {
 			t.Fatal(err)
@@ -756,14 +986,57 @@ func exchangeCommand(
 		Request: paasv1.ExchangeNodeEnrollmentRequest{
 			APIVersion: paasv1.NodeEnrollmentExchangeAPIVersion, Kind: paasv1.NodeEnrollmentExchangeRequestKind,
 			EnrollmentID: created.Response.Enrollment.Metadata.ID, InstallationID: "installation-a",
-			ExecutionTargetID:      created.Response.Enrollment.ExecutionTargetID,
-			ExchangeID:             "node-exchange-" + strings.Repeat(hexIdentity, 32),
-			Credential:             base64.RawURLEncoding.EncodeToString(credential),
-			MachineFingerprint:     "sha256:" + strings.Repeat(hexIdentity, 64),
-			RuntimeContractDigest:  "sha256:" + strings.Repeat("c", 64),
-			Listener:               paasv1.NodeEnrollmentListenerClaim{ManagementPort: 16443, CollectorPort: 19100},
-			NodeCertificateRequest: certificateRequest(), CollectorCertificateRequest: certificateRequest(),
+			ExecutionTargetID:           created.Response.Enrollment.ExecutionTargetID,
+			ExchangeID:                  "node-exchange-" + strings.Repeat(hexIdentity, 32),
+			Credential:                  base64.RawURLEncoding.EncodeToString(credential),
+			MachineFingerprint:          "sha256:" + strings.Repeat(hexIdentity, 64),
+			RuntimeContractDigest:       "sha256:" + strings.Repeat("c", 64),
+			Listener:                    paasv1.NodeEnrollmentListenerClaim{ManagementPort: 16443, CollectorPort: 19100},
+			NodeCertificateRequest:      certificateRequest(nodePrivateKey),
+			CollectorCertificateRequest: certificateRequest(collectorPrivateKey),
 		},
+	}, nodePrivateKey, collectorPrivateKey
+}
+
+func integrationTestEd25519PrivateKey(t *testing.T) ed25519.PrivateKey {
+	t.Helper()
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return privateKey
+}
+
+func recoveryChallengeRequest(exchange StoredExchange) paasv1.CreateNodeEnrollmentRecoveryChallengeRequest {
+	return paasv1.CreateNodeEnrollmentRecoveryChallengeRequest{
+		APIVersion:   paasv1.NodeEnrollmentRecoveryAPIVersion,
+		Kind:         paasv1.NodeEnrollmentRecoveryChallengeRequestKind,
+		EnrollmentID: exchange.EnrollmentID, InstallationID: exchange.InstallationID,
+		ExecutionTargetID: exchange.ExecutionTargetID, ExchangeID: exchange.ExchangeID,
+		MachineFingerprint: exchange.MachineFingerprint, RuntimeContractDigest: exchange.RuntimeContractDigest,
+		NodePublicKeyFingerprint:      exchange.NodePublicKeyFingerprint,
+		CollectorPublicKeyFingerprint: exchange.CollectorPublicKeyFingerprint,
+	}
+}
+
+func recoveryProofRequest(
+	t *testing.T,
+	challenge paasv1.NodeEnrollmentRecoveryChallenge,
+	nodePrivateKey ed25519.PrivateKey,
+	collectorPrivateKey ed25519.PrivateKey,
+) paasv1.RecoverNodeEnrollmentExchangeRequest {
+	t.Helper()
+	proof, err := paasv1.NodeEnrollmentRecoveryProofSigningBytes(challenge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(proof)
+	return paasv1.RecoverNodeEnrollmentExchangeRequest{
+		APIVersion:         paasv1.NodeEnrollmentRecoveryAPIVersion,
+		Kind:               paasv1.NodeEnrollmentRecoveryProofRequestKind,
+		Challenge:          challenge,
+		NodeSignature:      base64.RawURLEncoding.EncodeToString(ed25519.Sign(nodePrivateKey, proof)),
+		CollectorSignature: base64.RawURLEncoding.EncodeToString(ed25519.Sign(collectorPrivateKey, proof)),
 	}
 }
 

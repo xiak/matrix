@@ -205,6 +205,61 @@ type NodeEnrollmentExchangeResponse struct {
 	CertificateNotAfter   time.Time  `json:"certificateNotAfter"`
 }
 
+// CreateNodeEnrollmentRecoveryChallengeRequest identifies the exact local
+// exchange intent whose success response was lost. It contains neither the
+// consumed join credential nor either target-host private key.
+type CreateNodeEnrollmentRecoveryChallengeRequest struct {
+	APIVersion                    string     `json:"apiVersion"`
+	Kind                          string     `json:"kind"`
+	EnrollmentID                  ResourceID `json:"enrollmentId"`
+	InstallationID                string     `json:"installationId"`
+	ExecutionTargetID             ResourceID `json:"executionTargetId"`
+	ExchangeID                    string     `json:"exchangeId"`
+	MachineFingerprint            string     `json:"machineFingerprint"`
+	RuntimeContractDigest         string     `json:"runtimeContractDigest"`
+	NodePublicKeyFingerprint      string     `json:"nodePublicKeyFingerprint"`
+	CollectorPublicKeyFingerprint string     `json:"collectorPublicKeyFingerprint"`
+}
+
+// NodeEnrollmentRecoveryChallenge is a short-lived, installation-authenticated
+// public challenge. It is safe to replay within its bounded lifetime because
+// recovery is read-only and can return only the already sealed exchange result.
+type NodeEnrollmentRecoveryChallenge struct {
+	APIVersion                    string     `json:"apiVersion"`
+	Kind                          string     `json:"kind"`
+	EnrollmentID                  ResourceID `json:"enrollmentId"`
+	InstallationID                string     `json:"installationId"`
+	ExecutionTargetID             ResourceID `json:"executionTargetId"`
+	ExchangeID                    string     `json:"exchangeId"`
+	MachineFingerprint            string     `json:"machineFingerprint"`
+	RuntimeContractDigest         string     `json:"runtimeContractDigest"`
+	NodePublicKeyFingerprint      string     `json:"nodePublicKeyFingerprint"`
+	CollectorPublicKeyFingerprint string     `json:"collectorPublicKeyFingerprint"`
+	Challenge                     string     `json:"challenge"`
+	IssuedAt                      time.Time  `json:"issuedAt"`
+	ExpiresAt                     time.Time  `json:"expiresAt"`
+	Authenticator                 string     `json:"authenticator"`
+}
+
+// RecoverNodeEnrollmentExchangeRequest proves simultaneous possession of the
+// two distinct private keys fixed by the consumed exchange. The signatures
+// cover the complete authenticated challenge and never disclose either key.
+type RecoverNodeEnrollmentExchangeRequest struct {
+	APIVersion         string                          `json:"apiVersion"`
+	Kind               string                          `json:"kind"`
+	Challenge          NodeEnrollmentRecoveryChallenge `json:"challenge"`
+	NodeSignature      string                          `json:"nodeSignature"`
+	CollectorSignature string                          `json:"collectorSignature"`
+}
+
+func (RecoverNodeEnrollmentExchangeRequest) String() string {
+	return "node enrollment recovery proof <redacted>"
+}
+
+func (RecoverNodeEnrollmentExchangeRequest) GoString() string {
+	return "node enrollment recovery proof <redacted>"
+}
+
 type AdapterRef struct {
 	Kind            AdapterKind `json:"kind"`
 	Name            string      `json:"name"`

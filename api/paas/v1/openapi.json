@@ -871,6 +871,57 @@
         ],
         "type": "object"
       },
+      "CreateNodeEnrollmentRecoveryChallengeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "node.enrollment.matrix.xiak.com/v1"
+          },
+          "collectorPublicKeyFingerprint": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "enrollmentId": {
+            "pattern": "^node-enrollment-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "exchangeId": {
+            "pattern": "^node-exchange-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "executionTargetId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "installationId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "kind": {
+            "const": "NodeEnrollmentRecoveryChallengeRequest"
+          },
+          "machineFingerprint": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "nodePublicKeyFingerprint": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "runtimeContractDigest": {
+            "$ref": "#/components/schemas/Digest"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "enrollmentId",
+          "installationId",
+          "executionTargetId",
+          "exchangeId",
+          "machineFingerprint",
+          "runtimeContractDigest",
+          "nodePublicKeyFingerprint",
+          "collectorPublicKeyFingerprint"
+        ],
+        "type": "object",
+        "x-matrix-visibility": "node-bootstrap"
+      },
       "CreateNodeEnrollmentRequest": {
         "additionalProperties": false,
         "properties": {
@@ -3733,6 +3784,79 @@
         ],
         "type": "object"
       },
+      "NodeEnrollmentRecoveryChallenge": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "node.enrollment.matrix.xiak.com/v1"
+          },
+          "authenticator": {
+            "maxLength": 43,
+            "minLength": 43,
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "type": "string"
+          },
+          "challenge": {
+            "maxLength": 43,
+            "minLength": 43,
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "type": "string"
+          },
+          "collectorPublicKeyFingerprint": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "enrollmentId": {
+            "pattern": "^node-enrollment-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "exchangeId": {
+            "pattern": "^node-exchange-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "executionTargetId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "installationId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "issuedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "kind": {
+            "const": "NodeEnrollmentRecoveryChallenge"
+          },
+          "machineFingerprint": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "nodePublicKeyFingerprint": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "runtimeContractDigest": {
+            "$ref": "#/components/schemas/Digest"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "enrollmentId",
+          "installationId",
+          "executionTargetId",
+          "exchangeId",
+          "machineFingerprint",
+          "runtimeContractDigest",
+          "nodePublicKeyFingerprint",
+          "collectorPublicKeyFingerprint",
+          "challenge",
+          "issuedAt",
+          "expiresAt",
+          "authenticator"
+        ],
+        "type": "object",
+        "x-matrix-visibility": "node-bootstrap"
+      },
       "NodeEnrollmentState": {
         "enum": [
           "WAITING_INSTALL",
@@ -4350,6 +4474,43 @@
           "NOT_READY"
         ],
         "type": "string"
+      },
+      "RecoverNodeEnrollmentExchangeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "node.enrollment.matrix.xiak.com/v1"
+          },
+          "challenge": {
+            "$ref": "#/components/schemas/NodeEnrollmentRecoveryChallenge"
+          },
+          "collectorSignature": {
+            "maxLength": 86,
+            "minLength": 86,
+            "pattern": "^[A-Za-z0-9_-]{86}$",
+            "type": "string",
+            "writeOnly": true
+          },
+          "kind": {
+            "const": "NodeEnrollmentRecoveryProofRequest"
+          },
+          "nodeSignature": {
+            "maxLength": 86,
+            "minLength": 86,
+            "pattern": "^[A-Za-z0-9_-]{86}$",
+            "type": "string",
+            "writeOnly": true
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "challenge",
+          "nodeSignature",
+          "collectorSignature"
+        ],
+        "type": "object",
+        "x-matrix-visibility": "node-bootstrap"
       },
       "RegenerateNodeEnrollmentRequest": {
         "additionalProperties": false,
@@ -7044,6 +7205,156 @@
         },
         "security": [],
         "summary": "Consume one node enrollment credential and issue role-bound certificates"
+      }
+    },
+    "/v1/node-enrollments/{nodeEnrollmentId}/recover": {
+      "post": {
+        "description": "Node bootstrap only. The request is accepted solely through the installation-authenticated TLS ingress and carries no join credential or private key.",
+        "operationId": "recoverNodeEnrollmentExchange",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "nodeEnrollmentId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecoverNodeEnrollmentExchangeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeEnrollmentExchangeResponse"
+                }
+              }
+            },
+            "description": "The challenge or exact previously sealed exchange result.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "410": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [],
+        "summary": "Recover the exact sealed exchange result with both target-host role keys"
+      }
+    },
+    "/v1/node-enrollments/{nodeEnrollmentId}/recovery-challenge": {
+      "post": {
+        "description": "Node bootstrap only. The request is accepted solely through the installation-authenticated TLS ingress and carries no join credential or private key.",
+        "operationId": "createNodeEnrollmentRecoveryChallenge",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "nodeEnrollmentId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateNodeEnrollmentRecoveryChallengeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeEnrollmentRecoveryChallenge"
+                }
+              }
+            },
+            "description": "The challenge or exact previously sealed exchange result.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "410": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [],
+        "summary": "Create a short-lived challenge for one consumed node enrollment exchange"
       }
     },
     "/v1/node-enrollments/{nodeEnrollmentId}/regenerate": {

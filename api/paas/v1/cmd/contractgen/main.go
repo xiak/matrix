@@ -176,6 +176,22 @@ func buildPaths() schema {
 	paths["/v1/node-enrollments/{nodeEnrollmentId}/exchange"] = schema{
 		"post": exchangeNodeEnrollmentOperation(),
 	}
+	paths["/v1/node-enrollments/{nodeEnrollmentId}/recovery-challenge"] = schema{
+		"post": nodeEnrollmentRecoveryOperation(
+			"createNodeEnrollmentRecoveryChallenge",
+			"Create a short-lived challenge for one consumed node enrollment exchange",
+			"CreateNodeEnrollmentRecoveryChallengeRequest",
+			"NodeEnrollmentRecoveryChallenge",
+		),
+	}
+	paths["/v1/node-enrollments/{nodeEnrollmentId}/recover"] = schema{
+		"post": nodeEnrollmentRecoveryOperation(
+			"recoverNodeEnrollmentExchange",
+			"Recover the exact sealed exchange result with both target-host role keys",
+			"RecoverNodeEnrollmentExchangeRequest",
+			"NodeEnrollmentExchangeResponse",
+		),
+	}
 	paths["/v1/node-enrollments/{nodeEnrollmentId}/revoke"] = schema{
 		"post": nodeEnrollmentLifecycleOperation(
 			"revokeNodeEnrollment",
@@ -301,6 +317,38 @@ func exchangeNodeEnrollmentOperation() schema {
 					"ETag": componentRef("#/components/headers/ETag"),
 				},
 				"content": schema{"application/json": schema{"schema": ref("NodeEnrollmentExchangeResponse")}},
+			},
+			"400": componentRef("#/components/responses/ProblemResponse"),
+			"401": componentRef("#/components/responses/ProblemResponse"),
+			"404": componentRef("#/components/responses/ProblemResponse"),
+			"409": componentRef("#/components/responses/ProblemResponse"),
+			"410": componentRef("#/components/responses/ProblemResponse"),
+			"413": componentRef("#/components/responses/ProblemResponse"),
+			"415": componentRef("#/components/responses/ProblemResponse"),
+			"500": componentRef("#/components/responses/ProblemResponse"),
+			"503": componentRef("#/components/responses/ProblemResponse"),
+			"504": componentRef("#/components/responses/ProblemResponse"),
+		},
+	}
+}
+
+func nodeEnrollmentRecoveryOperation(operationID, summary, requestSchema, responseSchema string) schema {
+	return schema{
+		"operationId": operationID,
+		"summary":     summary,
+		"description": "Node bootstrap only. The request is accepted solely through the installation-authenticated TLS ingress and carries no join credential or private key.",
+		"security":    []any{},
+		"parameters": []any{
+			pathIDParameter("nodeEnrollmentId"),
+		},
+		"requestBody": jsonRequestBody(requestSchema),
+		"responses": schema{
+			"200": schema{
+				"description": "The challenge or exact previously sealed exchange result.",
+				"headers": schema{
+					"ETag": componentRef("#/components/headers/ETag"),
+				},
+				"content": schema{"application/json": schema{"schema": ref(responseSchema)}},
 			},
 			"400": componentRef("#/components/responses/ProblemResponse"),
 			"401": componentRef("#/components/responses/ProblemResponse"),
@@ -702,6 +750,8 @@ func structContracts() map[string]reflect.Type {
 		paasv1.CreateNodeEnrollmentRequest{}, paasv1.RegenerateNodeEnrollmentRequest{}, paasv1.NodeEnrollmentJoin{},
 		paasv1.WrappedJoinCredential{}, paasv1.CreateNodeEnrollmentResponse{},
 		paasv1.NodeEnrollmentListenerClaim{}, paasv1.ExchangeNodeEnrollmentRequest{}, paasv1.NodeEnrollmentExchangeResponse{},
+		paasv1.CreateNodeEnrollmentRecoveryChallengeRequest{}, paasv1.NodeEnrollmentRecoveryChallenge{},
+		paasv1.RecoverNodeEnrollmentExchangeRequest{},
 		paasv1.AdapterRef{}, paasv1.Capacity{}, paasv1.ExecutionTargetSpec{}, paasv1.ExecutionTargetStatus{}, paasv1.ExecutionTarget{}, paasv1.ExecutionTargetList{},
 		paasv1.ExecutionTargetUsage{}, paasv1.CPUUsage{}, paasv1.CPUUsageValue{}, paasv1.MemoryUsage{}, paasv1.MemoryUsageValue{},
 		paasv1.FilesystemUsage{}, paasv1.FilesystemUsageValue{},
@@ -882,6 +932,18 @@ func applySemanticOverlays(schemas map[string]any) {
 	exchangeResponseProperties := exchangeResponse["properties"].(schema)
 	exchangeResponseProperties["apiVersion"] = schema{"const": paasv1.NodeEnrollmentExchangeAPIVersion}
 	exchangeResponseProperties["kind"] = schema{"const": paasv1.NodeEnrollmentExchangeResponseKind}
+	recoveryChallengeRequest := object(schemas["CreateNodeEnrollmentRecoveryChallengeRequest"])
+	recoveryChallengeRequestProperties := recoveryChallengeRequest["properties"].(schema)
+	recoveryChallengeRequestProperties["apiVersion"] = schema{"const": paasv1.NodeEnrollmentRecoveryAPIVersion}
+	recoveryChallengeRequestProperties["kind"] = schema{"const": paasv1.NodeEnrollmentRecoveryChallengeRequestKind}
+	recoveryChallenge := object(schemas["NodeEnrollmentRecoveryChallenge"])
+	recoveryChallengeProperties := recoveryChallenge["properties"].(schema)
+	recoveryChallengeProperties["apiVersion"] = schema{"const": paasv1.NodeEnrollmentRecoveryAPIVersion}
+	recoveryChallengeProperties["kind"] = schema{"const": paasv1.NodeEnrollmentRecoveryChallengeKind}
+	recoveryProof := object(schemas["RecoverNodeEnrollmentExchangeRequest"])
+	recoveryProofProperties := recoveryProof["properties"].(schema)
+	recoveryProofProperties["apiVersion"] = schema{"const": paasv1.NodeEnrollmentRecoveryAPIVersion}
+	recoveryProofProperties["kind"] = schema{"const": paasv1.NodeEnrollmentRecoveryProofRequestKind}
 
 	for _, name := range []string{"ConfigurationRevisionSpec", "ApplicationRevisionSpec", "DeploymentGeneration", "PlacementDecision"} {
 		object(schemas[name])["x-matrix-immutable"] = true
@@ -932,6 +994,27 @@ func applySemanticOverlays(schemas map[string]any) {
 	}
 	exchangeRequest["x-matrix-visibility"] = "node-bootstrap"
 	exchangeResponse["x-matrix-visibility"] = "node-bootstrap"
+	for _, recovery := range []schema{recoveryChallengeRequest, recoveryChallenge, recoveryProof} {
+		recovery["x-matrix-visibility"] = "node-bootstrap"
+	}
+	for _, properties := range []schema{recoveryChallengeRequestProperties, recoveryChallengeProperties} {
+		properties["enrollmentId"] = schema{"type": "string", "pattern": `^node-enrollment-[0-9a-f]{32}$`}
+		properties["exchangeId"] = schema{"type": "string", "pattern": `^node-exchange-[0-9a-f]{32}$`}
+	}
+	recoveryChallengeProperties["challenge"] = schema{
+		"type": "string", "minLength": 43, "maxLength": 43,
+		"pattern": `^[A-Za-z0-9_-]{43}$`,
+	}
+	recoveryChallengeProperties["authenticator"] = schema{
+		"type": "string", "minLength": 43, "maxLength": 43,
+		"pattern": `^[A-Za-z0-9_-]{43}$`,
+	}
+	for _, name := range []string{"nodeSignature", "collectorSignature"} {
+		recoveryProofProperties[name] = schema{
+			"type": "string", "minLength": 86, "maxLength": 86,
+			"pattern": `^[A-Za-z0-9_-]{86}$`, "writeOnly": true,
+		}
+	}
 	joinProperties["controlPlaneUrl"] = schema{
 		"type": "string", "format": "uri", "maxLength": 2048,
 		"pattern": `^https://[^?#]+/api/paas/v1/node-enrollments/node-enrollment-[0-9a-f]{32}/exchange$`,

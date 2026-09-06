@@ -1,12 +1,15 @@
 package paasv1
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"math/big"
 	"net"
@@ -346,6 +349,102 @@ func TestNodeEnrollmentExchangeResponseRejectsRebindingAndCertificateTampering(t
 	changed.ExchangeID = "node-exchange-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	if err := ValidateNodeEnrollmentExchangeResponseForRequest(response, changed); err == nil {
 		t.Fatal("exchange response was rebound to another request")
+	}
+}
+
+func TestNodeEnrollmentRecoveryChallengeBindsExactExchangeAndTwoProofs(t *testing.T) {
+	exchange, _ := nodeEnrollmentExchangeFixture(t)
+	nodeKey, collectorKey, err := NodeEnrollmentExchangePublicKeys(exchange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(nodeKey)
+	defer clear(collectorKey)
+	nodeDigest := sha256.Sum256(nodeKey)
+	collectorDigest := sha256.Sum256(collectorKey)
+	request := CreateNodeEnrollmentRecoveryChallengeRequest{
+		APIVersion: NodeEnrollmentRecoveryAPIVersion, Kind: NodeEnrollmentRecoveryChallengeRequestKind,
+		EnrollmentID: exchange.EnrollmentID, InstallationID: exchange.InstallationID,
+		ExecutionTargetID: exchange.ExecutionTargetID, ExchangeID: exchange.ExchangeID,
+		MachineFingerprint: exchange.MachineFingerprint, RuntimeContractDigest: exchange.RuntimeContractDigest,
+		NodePublicKeyFingerprint:      "sha256:" + hex.EncodeToString(nodeDigest[:]),
+		CollectorPublicKeyFingerprint: "sha256:" + hex.EncodeToString(collectorDigest[:]),
+	}
+	issuedAt := time.Date(2026, 9, 6, 8, 1, 0, 0, time.UTC)
+	challenge := NodeEnrollmentRecoveryChallenge{
+		APIVersion: NodeEnrollmentRecoveryAPIVersion, Kind: NodeEnrollmentRecoveryChallengeKind,
+		EnrollmentID: request.EnrollmentID, InstallationID: request.InstallationID,
+		ExecutionTargetID: request.ExecutionTargetID, ExchangeID: request.ExchangeID,
+		MachineFingerprint: request.MachineFingerprint, RuntimeContractDigest: request.RuntimeContractDigest,
+		NodePublicKeyFingerprint:      request.NodePublicKeyFingerprint,
+		CollectorPublicKeyFingerprint: request.CollectorPublicKeyFingerprint,
+		Challenge:                     base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x31}, 32)),
+		IssuedAt:                      issuedAt,
+		ExpiresAt:                     issuedAt.Add(2 * time.Minute),
+		Authenticator:                 base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 32)),
+	}
+	if err := ValidateCreateNodeEnrollmentRecoveryChallengeRequest(request); err != nil {
+		t.Fatalf("valid recovery challenge request: %v", err)
+	}
+	if err := ValidateNodeEnrollmentRecoveryChallengeForRequest(challenge, request); err != nil {
+		t.Fatalf("valid recovery challenge: %v", err)
+	}
+	authenticationBytes, err := NodeEnrollmentRecoveryChallengeAuthenticationBytes(challenge)
+	if err != nil || bytes.Contains(authenticationBytes, []byte(challenge.Authenticator)) {
+		t.Fatalf("challenge authentication commitment includes authenticator: %q / %v", authenticationBytes, err)
+	}
+	proofBytes, err := NodeEnrollmentRecoveryProofSigningBytes(challenge)
+	if err != nil || !bytes.Contains(proofBytes, []byte(challenge.Authenticator)) {
+		t.Fatalf("proof commitment omits authenticated challenge: %q / %v", proofBytes, err)
+	}
+	proof := RecoverNodeEnrollmentExchangeRequest{
+		APIVersion: NodeEnrollmentRecoveryAPIVersion, Kind: NodeEnrollmentRecoveryProofRequestKind,
+		Challenge:          challenge,
+		NodeSignature:      base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x53}, ed25519.SignatureSize)),
+		CollectorSignature: base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x64}, ed25519.SignatureSize)),
+	}
+	if err := ValidateRecoverNodeEnrollmentExchangeRequest(proof); err != nil {
+		t.Fatalf("valid recovery proof shape: %v", err)
+	}
+	if got := proof.String(); got != "node enrollment recovery proof <redacted>" ||
+		strings.Contains(got, proof.NodeSignature) || strings.Contains(got, proof.CollectorSignature) {
+		t.Fatalf("recovery proof formatting leaked signatures: %q", got)
+	}
+
+	for name, mutate := range map[string]func(*NodeEnrollmentRecoveryChallenge){
+		"same role key": func(value *NodeEnrollmentRecoveryChallenge) {
+			value.CollectorPublicKeyFingerprint = value.NodePublicKeyFingerprint
+		},
+		"oversized lifetime": func(value *NodeEnrollmentRecoveryChallenge) {
+			value.ExpiresAt = value.IssuedAt.Add(MaximumNodeEnrollmentRecoveryChallengeLifetime + time.Microsecond)
+		},
+		"noncanonical challenge": func(value *NodeEnrollmentRecoveryChallenge) { value.Challenge += "=" },
+		"short authenticator": func(value *NodeEnrollmentRecoveryChallenge) {
+			value.Authenticator = base64.RawURLEncoding.EncodeToString([]byte("short"))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := challenge
+			mutate(&changed)
+			if err := ValidateNodeEnrollmentRecoveryChallenge(changed); err == nil {
+				t.Fatal("invalid recovery challenge was accepted")
+			}
+		})
+	}
+	rebound := challenge
+	rebound.ExchangeID = "node-exchange-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	if err := ValidateNodeEnrollmentRecoveryChallengeForRequest(rebound, request); err == nil {
+		t.Fatal("recovery challenge was rebound to another exchange")
+	}
+	rebound = challenge
+	rebound.EnrollmentID = "node-enrollment-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	if err := ValidateNodeEnrollmentRecoveryChallengeForRequest(rebound, request); err == nil {
+		t.Fatal("recovery challenge was rebound to another enrollment")
+	}
+	badProof := proof
+	badProof.NodeSignature += "="
+	if err := ValidateRecoverNodeEnrollmentExchangeRequest(badProof); err == nil {
+		t.Fatal("noncanonical recovery proof was accepted")
 	}
 }
 

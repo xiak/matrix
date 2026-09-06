@@ -21,19 +21,21 @@ const (
 )
 
 var (
-	ErrInvalidArgument      = errors.New("node enrollment request is invalid")
-	ErrNotFound             = errors.New("node enrollment was not found")
-	ErrConflict             = errors.New("node enrollment conflicts with stored authority")
-	ErrInvalidTransition    = errors.New("node enrollment lifecycle transition is invalid")
-	ErrIdempotencyConflict  = errors.New("node enrollment idempotency conflict")
-	ErrResourceVersion      = errors.New("node enrollment resource version conflict")
-	ErrExpired              = errors.New("node enrollment expired")
-	ErrRevoked              = errors.New("node enrollment was revoked")
-	ErrCredentialRejected   = errors.New("node enrollment credential was rejected")
-	ErrCredentialConsumed   = errors.New("node enrollment credential was consumed")
-	ErrRuntimeUnsupported   = errors.New("node enrollment runtime is unsupported")
-	ErrRetryableTransaction = errors.New("node enrollment transaction must be retried")
-	ErrUnavailable          = errors.New("node enrollment dependency is unavailable")
+	ErrInvalidArgument          = errors.New("node enrollment request is invalid")
+	ErrNotFound                 = errors.New("node enrollment was not found")
+	ErrConflict                 = errors.New("node enrollment conflicts with stored authority")
+	ErrInvalidTransition        = errors.New("node enrollment lifecycle transition is invalid")
+	ErrIdempotencyConflict      = errors.New("node enrollment idempotency conflict")
+	ErrResourceVersion          = errors.New("node enrollment resource version conflict")
+	ErrExpired                  = errors.New("node enrollment expired")
+	ErrRevoked                  = errors.New("node enrollment was revoked")
+	ErrCredentialRejected       = errors.New("node enrollment credential was rejected")
+	ErrCredentialConsumed       = errors.New("node enrollment credential was consumed")
+	ErrRecoveryProofRejected    = errors.New("node enrollment recovery proof was rejected")
+	ErrRecoveryChallengeExpired = errors.New("node enrollment recovery challenge expired")
+	ErrRuntimeUnsupported       = errors.New("node enrollment runtime is unsupported")
+	ErrRetryableTransaction     = errors.New("node enrollment transaction must be retried")
+	ErrUnavailable              = errors.New("node enrollment dependency is unavailable")
 )
 
 type JoinIssueRequest struct {
@@ -130,17 +132,41 @@ type IssuedExchange struct {
 func (IssuedExchange) String() string   { return "issued node exchange <redacted>" }
 func (IssuedExchange) GoString() string { return "issued node exchange <redacted>" }
 
+type RecoveryChallengeIssueRequest struct {
+	Exchange  StoredExchange
+	IssuedAt  time.Time
+	ExpiresAt time.Time
+}
+
+type RecoverExchangeIssueRequest struct {
+	Exchange StoredExchange
+	Sealed   SealedExchangeResult
+	Request  paasv1.RecoverNodeEnrollmentExchangeRequest
+	Now      time.Time
+}
+
+func (RecoverExchangeIssueRequest) String() string {
+	return "node enrollment recovery issue request <redacted>"
+}
+
+func (RecoverExchangeIssueRequest) GoString() string {
+	return "node enrollment recovery issue request <redacted>"
+}
+
 // EnrollmentIssuer isolates protected enrollment signing/sealing material and
 // entropy from both browser and node-facing transports.
 type EnrollmentIssuer interface {
 	IssueJoin(context.Context, JoinIssueRequest) (IssuedJoin, error)
 	IssueExchange(context.Context, ExchangeIssueRequest) (IssuedExchange, error)
+	IssueRecoveryChallenge(context.Context, RecoveryChallengeIssueRequest) (paasv1.NodeEnrollmentRecoveryChallenge, error)
+	RecoverExchange(context.Context, RecoverExchangeIssueRequest) (paasv1.NodeEnrollmentExchangeResponse, error)
 }
 
 type Config struct {
 	InstallationID                 string
 	Lifetime                       time.Duration
 	CertificateLifetime            time.Duration
+	RecoveryChallengeLifetime      time.Duration
 	SupportedRuntimeContractDigest string
 	ControllerID                   string
 	ManagementPort                 uint16
@@ -194,6 +220,31 @@ func (ExchangeCommand) GoString() string { return "node enrollment exchange comm
 type ExchangeResult struct {
 	Enrollment paasv1.NodeEnrollment
 	Response   paasv1.NodeEnrollmentExchangeResponse
+}
+
+type RecoveryChallengeCommand struct {
+	EnrollmentID        paasv1.ResourceID
+	ObservedPeerAddress string
+	Request             paasv1.CreateNodeEnrollmentRecoveryChallengeRequest
+}
+
+type RecoveryChallengeResult struct {
+	Enrollment paasv1.NodeEnrollment
+	Challenge  paasv1.NodeEnrollmentRecoveryChallenge
+}
+
+type RecoverExchangeCommand struct {
+	EnrollmentID        paasv1.ResourceID
+	ObservedPeerAddress string
+	Request             paasv1.RecoverNodeEnrollmentExchangeRequest
+}
+
+func (RecoverExchangeCommand) String() string {
+	return "node enrollment recovery command <redacted>"
+}
+
+func (RecoverExchangeCommand) GoString() string {
+	return "node enrollment recovery command <redacted>"
 }
 
 // StoredExchange is the normalized public-key and machine identity fixed by a

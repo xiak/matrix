@@ -30,6 +30,8 @@ func New(repository Repository, issuer EnrollmentIssuer, config Config) (*Servic
 	if repository == nil || issuer == nil || paasv1.ValidateID("installationId", config.InstallationID) != nil ||
 		config.Lifetime < time.Minute || config.Lifetime > paasv1.MaximumNodeEnrollmentLifetime ||
 		config.CertificateLifetime < time.Hour || config.CertificateLifetime > paasv1.MaximumNodeEnrollmentCertificateLifetime ||
+		config.RecoveryChallengeLifetime < 10*time.Second ||
+		config.RecoveryChallengeLifetime > paasv1.MaximumNodeEnrollmentRecoveryChallengeLifetime ||
 		paasv1.ValidateDigest("supportedRuntimeContractDigest", config.SupportedRuntimeContractDigest) != nil ||
 		paasv1.ValidateID("controllerId", config.ControllerID) != nil ||
 		config.ManagementPort < paasv1.MinimumNodeEnrollmentListenerPort ||
@@ -322,6 +324,223 @@ func (service *Service) Exchange(ctx context.Context, command ExchangeCommand) (
 		return ExchangeResult{}, ErrUnavailable
 	}
 	return result, nil
+}
+
+func (service *Service) CreateRecoveryChallenge(
+	ctx context.Context,
+	command RecoveryChallengeCommand,
+) (RecoveryChallengeResult, error) {
+	if service == nil || service.repository == nil || service.issuer == nil || ctx == nil {
+		return RecoveryChallengeResult{}, ErrUnavailable
+	}
+	if !validEnrollmentID(command.EnrollmentID) || command.EnrollmentID != command.Request.EnrollmentID ||
+		paasv1.ValidateCreateNodeEnrollmentRecoveryChallengeRequest(command.Request) != nil {
+		return RecoveryChallengeResult{}, ErrInvalidArgument
+	}
+	observedPeer, err := normalizeObservedPeer(command.ObservedPeerAddress)
+	if err != nil {
+		return RecoveryChallengeResult{}, ErrInvalidArgument
+	}
+	var stored StoredEnrollment
+	var now time.Time
+	err = service.transaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
+		stored.Clear()
+		var inspectErr error
+		stored, now, inspectErr = service.inspectRecoverableExchange(
+			transactionContext, transaction, command.EnrollmentID, observedPeer,
+		)
+		if inspectErr != nil {
+			return inspectErr
+		}
+		if !recoveryChallengeRequestMatchesStored(command.Request, *stored.Exchange) {
+			stored.Clear()
+			return ErrConflict
+		}
+		return nil
+	})
+	if err != nil {
+		stored.Clear()
+		return RecoveryChallengeResult{}, err
+	}
+	defer stored.Clear()
+	challenge, err := service.issuer.IssueRecoveryChallenge(ctx, RecoveryChallengeIssueRequest{
+		Exchange: *stored.Exchange, IssuedAt: now,
+		ExpiresAt: now.Add(service.config.RecoveryChallengeLifetime),
+	})
+	if err != nil {
+		if ctx.Err() != nil {
+			return RecoveryChallengeResult{}, ctx.Err()
+		}
+		return RecoveryChallengeResult{}, ErrUnavailable
+	}
+	if paasv1.ValidateNodeEnrollmentRecoveryChallengeForRequest(challenge, command.Request) != nil ||
+		!challenge.IssuedAt.Equal(now) ||
+		!challenge.ExpiresAt.Equal(now.Add(service.config.RecoveryChallengeLifetime)) {
+		return RecoveryChallengeResult{}, ErrUnavailable
+	}
+	result := RecoveryChallengeResult{
+		Enrollment: enrollmentSnapshot(stored.Enrollment),
+		Challenge:  challenge,
+	}
+	if result.Enrollment.State != paasv1.NodeEnrollmentVerifying ||
+		paasv1.ValidateNodeEnrollment(result.Enrollment) != nil {
+		return RecoveryChallengeResult{}, ErrUnavailable
+	}
+	return result, nil
+}
+
+func (service *Service) RecoverExchange(
+	ctx context.Context,
+	command RecoverExchangeCommand,
+) (ExchangeResult, error) {
+	if service == nil || service.repository == nil || service.issuer == nil || ctx == nil {
+		return ExchangeResult{}, ErrUnavailable
+	}
+	if !validEnrollmentID(command.EnrollmentID) ||
+		command.EnrollmentID != command.Request.Challenge.EnrollmentID ||
+		paasv1.ValidateRecoverNodeEnrollmentExchangeRequest(command.Request) != nil {
+		return ExchangeResult{}, ErrInvalidArgument
+	}
+	observedPeer, err := normalizeObservedPeer(command.ObservedPeerAddress)
+	if err != nil {
+		return ExchangeResult{}, ErrInvalidArgument
+	}
+	var stored StoredEnrollment
+	var now time.Time
+	err = service.transaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
+		stored.Clear()
+		var inspectErr error
+		stored, now, inspectErr = service.inspectRecoverableExchange(
+			transactionContext, transaction, command.EnrollmentID, observedPeer,
+		)
+		if inspectErr != nil {
+			return inspectErr
+		}
+		if !recoveryChallengeMatchesStored(command.Request.Challenge, *stored.Exchange) {
+			stored.Clear()
+			return ErrConflict
+		}
+		return nil
+	})
+	if err != nil {
+		stored.Clear()
+		return ExchangeResult{}, err
+	}
+	defer stored.Clear()
+	response, err := service.issuer.RecoverExchange(ctx, RecoverExchangeIssueRequest{
+		Exchange: *stored.Exchange, Sealed: *stored.SealedExchangeResult,
+		Request: command.Request, Now: now,
+	})
+	if err != nil {
+		if ctx.Err() != nil {
+			return ExchangeResult{}, ctx.Err()
+		}
+		if errors.Is(err, ErrRecoveryProofRejected) || errors.Is(err, ErrRecoveryChallengeExpired) {
+			return ExchangeResult{}, err
+		}
+		return ExchangeResult{}, ErrUnavailable
+	}
+	if !exchangeResponseMatchesStoredDigest(response, *stored.Exchange) {
+		return ExchangeResult{}, ErrUnavailable
+	}
+	result := ExchangeResult{
+		Enrollment: enrollmentSnapshot(stored.Enrollment),
+		Response:   response,
+	}
+	if result.Enrollment.State != paasv1.NodeEnrollmentVerifying ||
+		paasv1.ValidateNodeEnrollment(result.Enrollment) != nil {
+		return ExchangeResult{}, ErrUnavailable
+	}
+	return result, nil
+}
+
+func (service *Service) inspectRecoverableExchange(
+	ctx context.Context,
+	transaction Transaction,
+	enrollmentID paasv1.ResourceID,
+	observedPeer string,
+) (StoredEnrollment, time.Time, error) {
+	stored, found, err := transaction.LoadEnrollment(ctx, enrollmentID)
+	if err != nil {
+		return StoredEnrollment{}, time.Time{}, err
+	}
+	if !found {
+		return StoredEnrollment{}, time.Time{}, ErrNotFound
+	}
+	if ValidateStoredEnrollment(stored, service.config.InstallationID) != nil {
+		stored.Clear()
+		return StoredEnrollment{}, time.Time{}, ErrUnavailable
+	}
+	switch stored.Enrollment.State {
+	case paasv1.NodeEnrollmentVerifying:
+	case paasv1.NodeEnrollmentExpired:
+		stored.Clear()
+		return StoredEnrollment{}, time.Time{}, ErrExpired
+	case paasv1.NodeEnrollmentRevoked:
+		stored.Clear()
+		return StoredEnrollment{}, time.Time{}, ErrRevoked
+	default:
+		stored.Clear()
+		return StoredEnrollment{}, time.Time{}, ErrInvalidTransition
+	}
+	if stored.Exchange == nil || stored.SealedExchangeResult == nil {
+		stored.Clear()
+		return StoredEnrollment{}, time.Time{}, ErrUnavailable
+	}
+	address, _, addressErr := parseStoredNodeAddress(stored.Exchange.NodeListenAddress)
+	if addressErr != nil || address.String() != observedPeer {
+		stored.Clear()
+		return StoredEnrollment{}, time.Time{}, ErrConflict
+	}
+	now, err := transaction.TransactionTime(ctx)
+	if err != nil || validateTime(now) != nil {
+		stored.Clear()
+		return StoredEnrollment{}, time.Time{}, ErrUnavailable
+	}
+	return stored, now, nil
+}
+
+func recoveryChallengeRequestMatchesStored(
+	request paasv1.CreateNodeEnrollmentRecoveryChallengeRequest,
+	exchange StoredExchange,
+) bool {
+	return request.EnrollmentID == exchange.EnrollmentID &&
+		request.InstallationID == exchange.InstallationID &&
+		request.ExecutionTargetID == exchange.ExecutionTargetID &&
+		request.ExchangeID == exchange.ExchangeID &&
+		request.MachineFingerprint == exchange.MachineFingerprint &&
+		request.RuntimeContractDigest == exchange.RuntimeContractDigest &&
+		request.NodePublicKeyFingerprint == exchange.NodePublicKeyFingerprint &&
+		request.CollectorPublicKeyFingerprint == exchange.CollectorPublicKeyFingerprint
+}
+
+func recoveryChallengeMatchesStored(
+	challenge paasv1.NodeEnrollmentRecoveryChallenge,
+	exchange StoredExchange,
+) bool {
+	return challenge.EnrollmentID == exchange.EnrollmentID &&
+		challenge.InstallationID == exchange.InstallationID &&
+		challenge.ExecutionTargetID == exchange.ExecutionTargetID &&
+		challenge.ExchangeID == exchange.ExchangeID &&
+		challenge.MachineFingerprint == exchange.MachineFingerprint &&
+		challenge.RuntimeContractDigest == exchange.RuntimeContractDigest &&
+		challenge.NodePublicKeyFingerprint == exchange.NodePublicKeyFingerprint &&
+		challenge.CollectorPublicKeyFingerprint == exchange.CollectorPublicKeyFingerprint
+}
+
+func exchangeResponseMatchesStoredDigest(
+	response paasv1.NodeEnrollmentExchangeResponse,
+	exchange StoredExchange,
+) bool {
+	if paasv1.ValidateNodeEnrollmentExchangeResponse(response) != nil {
+		return false
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		return false
+	}
+	defer clear(encoded)
+	return domain.DigestPayload(encoded) == exchange.ResultDigest
 }
 
 type exchangeInspection struct {
