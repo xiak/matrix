@@ -78,20 +78,27 @@ type Effects interface {
 }
 
 type Backend struct {
-	effects Effects
-	now     func() time.Time
-	entropy io.Reader
+	effects    Effects
+	store      EnrollmentStore
+	host       EnrollmentHost
+	enrollment EnrollmentClient
+	now        func() time.Time
+	entropy    io.Reader
 }
 
-func NewBackend(effects Effects) (*Backend, error) {
-	if effects == nil {
-		return nil, errors.New("node lifecycle effects are required")
+func NewBackend(effects Effects, store EnrollmentStore, host EnrollmentHost, enrollment EnrollmentClient) (*Backend, error) {
+	if effects == nil || store == nil || host == nil || enrollment == nil {
+		return nil, errors.New("node lifecycle and enrollment dependencies are required")
 	}
-	return &Backend{effects: effects, now: time.Now, entropy: rand.Reader}, nil
+	return &Backend{
+		effects: effects, store: store, host: host, enrollment: enrollment,
+		now: time.Now, entropy: rand.Reader,
+	}, nil
 }
 
 func (backend *Backend) Run(ctx context.Context, request cli.Request) (cli.Result, error) {
-	if backend == nil || backend.effects == nil || backend.now == nil || backend.entropy == nil {
+	if backend == nil || backend.effects == nil || backend.store == nil || backend.host == nil ||
+		backend.enrollment == nil || backend.now == nil || backend.entropy == nil {
 		return cli.Result{}, fault(cli.FaultInternal, "NODE_BACKEND_UNAVAILABLE")
 	}
 	if ctx == nil {
@@ -117,7 +124,9 @@ func (backend *Backend) Run(ctx context.Context, request cli.Request) (cli.Resul
 }
 
 func (backend *Backend) support(ctx context.Context, request cli.Request) (result cli.Result, resultErr error) {
-	if strings.TrimSpace(request.SupportOutput) == "" || len(request.SupportOutput) > 4096 ||
+	if request.Join != "" || request.Bundle != "" || request.TrustKey != "" || request.Configuration != "" ||
+		request.BackupID != "" || request.ExpectedConfigurationDigest != "" || request.RevokePreviousCredentials ||
+		request.RecoveryInput != "" || request.Resume || strings.TrimSpace(request.SupportOutput) == "" || len(request.SupportOutput) > 4096 ||
 		!filepath.IsAbs(request.SupportOutput) || filepath.Clean(request.SupportOutput) != request.SupportOutput ||
 		filepath.Dir(request.SupportOutput) != filepath.Join(request.Root, filepath.FromSlash(layout.SupportDirectory)) {
 		return cli.Result{}, fault(cli.FaultInvalidArgument, "SUPPORT_OUTPUT_INVALID")
@@ -164,30 +173,38 @@ func (backend *Backend) support(ctx context.Context, request cli.Request) (resul
 }
 
 func (backend *Backend) install(ctx context.Context, request cli.Request) (result cli.Result, resultErr error) {
-	trustBytes, trust, err := release.ReadTrustRootFile(request.TrustKey)
+	if request.Configuration != "" || request.BackupID != "" || request.SupportOutput != "" ||
+		request.ExpectedConfigurationDigest != "" || request.RevokePreviousCredentials ||
+		request.RecoveryInput != "" || request.Resume || strings.TrimSpace(request.Join) == "" {
+		return cli.Result{}, fault(cli.FaultInvalidArgument, "NODE_INSTALL_INPUT_INVALID")
+	}
+	bundlePath, err := absoluteInstallInput(request.Bundle)
+	if err != nil {
+		return cli.Result{}, fault(cli.FaultInvalidArgument, "NODE_INSTALL_INPUT_INVALID")
+	}
+	trustPath, err := absoluteInstallInput(request.TrustKey)
+	if err != nil {
+		return cli.Result{}, fault(cli.FaultInvalidArgument, "NODE_INSTALL_INPUT_INVALID")
+	}
+	joinPath, err := absoluteInstallInput(request.Join)
+	if err != nil {
+		return cli.Result{}, fault(cli.FaultInvalidArgument, "NODE_INSTALL_INPUT_INVALID")
+	}
+	joinFile, err := readNodeEnrollmentJoin(joinPath)
+	if err != nil {
+		return cli.Result{}, fault(cli.FaultVerification, "NODE_JOIN_INVALID")
+	}
+	defer joinFile.Clear()
+	trustBytes, trust, err := release.ReadTrustRootFile(trustPath)
 	if err != nil {
 		return cli.Result{}, fault(cli.FaultVerification, "TRUST_ROOT_INVALID")
 	}
-	bundle, err := release.VerifyDirectory(request.Bundle, trustBytes)
+	bundle, err := release.VerifyDirectory(bundlePath, trustBytes)
 	if err != nil || ValidateRelease(bundle) != nil {
 		return cli.Result{}, fault(cli.FaultVerification, "NODE_RELEASE_INVALID")
 	}
 	if bundle.Manifest.Release.PreviousID != "" {
 		return cli.Result{}, fault(cli.FaultPrecondition, "INSTALL_RELEASE_HAS_PREDECESSOR")
-	}
-	config, material, err := enrollment(request.Root, request.Configuration)
-	if err != nil {
-		return cli.Result{}, fault(cli.FaultVerification, "NODE_ENROLLMENT_INVALID")
-	}
-	defer material.Clear()
-	binding, err := Binding(config, material)
-	if err != nil {
-		return cli.Result{}, fault(cli.FaultVerification, "NODE_ENROLLMENT_INVALID")
-	}
-	plan := Plan{Root: request.Root, Bundle: bundle, Trust: trust, TrustBytes: trustBytes,
-		Configuration: config, Credentials: material, Binding: binding}
-	if ValidatePlan(plan) != nil || backend.effects.ValidateEnrollment(plan) != nil {
-		return cli.Result{}, fault(cli.FaultVerification, "NODE_ENROLLMENT_INVALID")
 	}
 	session, err := journal.Acquire(ctx, request.Root)
 	if err != nil {
@@ -198,31 +215,88 @@ func (backend *Backend) install(ctx context.Context, request cli.Request) (resul
 	if err != nil {
 		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_STATE_INVALID")
 	}
+	if _, err := backend.store.ResumeEnrollmentCleanup(session.Root()); err != nil {
+		return cli.Result{}, enrollmentCleanupFault(ctx, err)
+	}
 	var state lifecycle.Journal
 	if initialized {
 		state, err = readNodeJournal(session)
 		if err != nil {
 			return cli.Result{}, err
 		}
-		if state.InstallationID != config.Identity.InstallationID || *state.Node != binding ||
+		intent, exists, readErr := backend.store.ReadEnrollmentIntent(session.Root())
+		if readErr != nil {
+			return cli.Result{}, enrollmentStateFault(readErr)
+		}
+		matchesRequest := state.Node != nil && state.InstallationID == joinFile.Join.InstallationID &&
+			state.Node.ExecutionTargetID == string(joinFile.Join.ExecutionTargetID) &&
+			state.ReleaseTrust == (lifecycle.ReleaseTrust{KeyID: trust.KeyID, Fingerprint: trust.PublicKeyFingerprint})
+		if rejectedEnrollmentCleanupPending(state) {
+			if !matchesRequest || state.Last.Command.TargetReleaseID != bundle.Manifest.Release.ID ||
+				state.Last.Command.InputDigest != bundle.ManifestSHA256 ||
+				(exists && !sameEnrollmentJoin(intent.Join, joinFile.Join)) {
+				intent.Clear()
+				return cli.Result{}, fault(cli.FaultConflict, "NODE_ENROLLMENT_CONFLICT")
+			}
+			intent.Clear()
+			if exists {
+				if err := backend.cleanupRejectedEnrollment(ctx, session.Root(), state); err != nil {
+					return cli.Result{}, enrollmentCleanupFault(ctx, err)
+				}
+			}
+			return cli.Result{}, fault(cli.FaultVerification, lifecycle.NodeEnrollmentRejectedFailureCode)
+		}
+		if state.Active == nil && state.Last != nil && state.Last.Outcome == lifecycle.OutcomeManualIntervention {
+			intent.Clear()
+			return cli.Result{}, fault(cli.FaultPrecondition, "NODE_MANUAL_INTERVENTION_REQUIRED")
+		}
+		if state.Active == nil && state.CurrentReleaseID != "" {
+			if !matchesRequest || state.CurrentReleaseID != bundle.Manifest.Release.ID ||
+				state.CurrentReleaseDigest != bundle.ManifestSHA256 ||
+				(exists && !sameEnrollmentJoin(intent.Join, joinFile.Join)) {
+				intent.Clear()
+				return cli.Result{}, fault(cli.FaultConflict, "NODE_ENROLLMENT_CONFLICT")
+			}
+			intent.Clear()
+			if exists {
+				if err := backend.finalizeCompletedEnrollment(session.Root(), state); err != nil {
+					return cli.Result{}, enrollmentCleanupFault(ctx, err)
+				}
+			}
+			plan, planErr := backend.installedPlan(session.Root(), state)
+			if planErr != nil {
+				return cli.Result{}, planErr
+			}
+			defer plan.Clear()
+			return backend.observe(ctx, state, plan)
+		}
+		if !exists {
+			return cli.Result{}, fault(cli.FaultConflict, "NODE_ENROLLMENT_CONFLICT")
+		}
+		intent.Clear()
+	}
+	ceremony, err := backend.prepareEnrollment(ctx, session.Root(), joinFile)
+	if err != nil {
+		return cli.Result{}, enrollmentStateFaultWithContext(ctx, err)
+	}
+	defer ceremony.Clear()
+	plan, err := planFromEnrollment(request.Root, bundle, trust, trustBytes, ceremony.intent, ceremony.response)
+	if err != nil || backend.effects.ValidateEnrollment(plan) != nil {
+		plan.Clear()
+		return cli.Result{}, fault(cli.FaultVerification, "NODE_ENROLLMENT_INVALID")
+	}
+	defer plan.Clear()
+	if initialized {
+		if state.InstallationID != plan.Configuration.Identity.InstallationID || *state.Node != plan.Binding ||
 			state.ReleaseTrust != (lifecycle.ReleaseTrust{KeyID: trust.KeyID, Fingerprint: trust.PublicKeyFingerprint}) {
 			return cli.Result{}, fault(cli.FaultConflict, "NODE_ENROLLMENT_CONFLICT")
 		}
 	} else {
-		state, err = lifecycle.NewNode(config.Identity.InstallationID,
-			lifecycle.ReleaseTrust{KeyID: trust.KeyID, Fingerprint: trust.PublicKeyFingerprint}, binding)
+		state, err = lifecycle.NewNode(plan.Configuration.Identity.InstallationID,
+			lifecycle.ReleaseTrust{KeyID: trust.KeyID, Fingerprint: trust.PublicKeyFingerprint}, plan.Binding)
 		if err != nil {
 			return cli.Result{}, fault(cli.FaultVerification, "NODE_ENROLLMENT_INVALID")
 		}
-	}
-	if state.Active == nil && state.Last != nil && state.Last.Outcome == lifecycle.OutcomeManualIntervention {
-		return cli.Result{}, fault(cli.FaultPrecondition, "NODE_MANUAL_INTERVENTION_REQUIRED")
-	}
-	if state.Active == nil && state.CurrentReleaseID == bundle.Manifest.Release.ID {
-		if state.CurrentReleaseDigest != bundle.ManifestSHA256 {
-			return cli.Result{}, fault(cli.FaultConflict, "RELEASE_CONTENT_CONFLICT")
-		}
-		return backend.observe(ctx, state, plan)
 	}
 	command, err := backend.command(state, lifecycle.ActionInstall)
 	if err != nil {
@@ -234,22 +308,32 @@ func (backend *Backend) install(ctx context.Context, request cli.Request) (resul
 		return cli.Result{}, journalFault(err)
 	}
 	if !initialized {
-		err = session.Initialize(started.Journal)
+		err = session.InitializeNode(started.Journal)
 	} else if started.Replay == lifecycle.ReplayNone {
 		err = session.Write(started.Journal)
 	}
 	if err != nil {
 		return cli.Result{}, journalFault(err)
 	}
-	return backend.drive(ctx, session, plan)
+	return backend.drive(ctx, session, plan, &ceremony)
 }
 
 func (backend *Backend) installed(ctx context.Context, request cli.Request) (result cli.Result, resultErr error) {
+	if request.Join != "" || request.Bundle != "" || request.TrustKey != "" || request.Configuration != "" ||
+		request.BackupID != "" || request.SupportOutput != "" || request.ExpectedConfigurationDigest != "" ||
+		request.RevokePreviousCredentials || request.RecoveryInput != "" || request.Resume {
+		return cli.Result{}, fault(cli.FaultInvalidArgument, "NODE_OPERATION_INPUT_INVALID")
+	}
 	session, err := journal.AcquireExisting(ctx, request.Root)
 	if err != nil {
 		return cli.Result{}, journalFault(err)
 	}
 	defer closeSession(session, &result, &resultErr)
+	if request.Action != lifecycle.ActionStatus {
+		if _, err := backend.store.ResumeEnrollmentCleanup(session.Root()); err != nil {
+			return cli.Result{}, enrollmentCleanupFault(ctx, err)
+		}
+	}
 	state, err := readNodeJournal(session)
 	if err != nil {
 		return cli.Result{}, err
@@ -266,7 +350,7 @@ func (backend *Backend) installed(ctx context.Context, request cli.Request) (res
 			return cli.Result{}, err
 		}
 		defer plan.Clear()
-		return backend.drive(ctx, session, plan)
+		return backend.drive(ctx, session, plan, nil)
 	}
 	if state.Active != nil && (state.Active.Command.Action == lifecycle.ActionUpgrade || state.Active.Command.Action == lifecycle.ActionRollback) {
 		if request.Action != lifecycle.ActionStart {
@@ -277,13 +361,19 @@ func (backend *Backend) installed(ctx context.Context, request cli.Request) (res
 			return cli.Result{}, err
 		}
 		defer plan.Clear()
-		return backend.drive(ctx, session, plan)
+		return backend.drive(ctx, session, plan, nil)
 	}
 	if state.Last != nil && state.Last.Outcome == lifecycle.OutcomeManualIntervention {
 		if request.Action == lifecycle.ActionStatus {
 			return resultFor(state, false), nil
 		}
 		return cli.Result{}, fault(cli.FaultPrecondition, "NODE_MANUAL_INTERVENTION_REQUIRED")
+	}
+	if request.Action == lifecycle.ActionStart && rejectedEnrollmentCleanupPending(state) {
+		if err := backend.cleanupRejectedEnrollment(ctx, session.Root(), state); err != nil {
+			return cli.Result{}, enrollmentCleanupFault(ctx, err)
+		}
+		return cli.Result{}, fault(cli.FaultVerification, lifecycle.NodeEnrollmentRejectedFailureCode)
 	}
 	resumeInstall := request.Action == lifecycle.ActionStart && state.CurrentReleaseID == "" &&
 		state.Active != nil && state.Active.Command.Action == lifecycle.ActionInstall &&
@@ -292,16 +382,27 @@ func (backend *Backend) installed(ctx context.Context, request cli.Request) (res
 	if state.CurrentReleaseID == "" && !resumeInstall {
 		return cli.Result{}, fault(cli.FaultPrecondition, "NODE_NOT_INSTALLED")
 	}
+	if resumeInstall {
+		// Boot may finish an already configured installation, but cannot enroll
+		// a node or allocate another command. The staged release and protected
+		// material must still authenticate against the original sealed intent.
+		plan, ceremony, err := backend.storedEnrollmentPlan(session.Root(), state)
+		if err != nil {
+			return cli.Result{}, enrollmentStateFault(err)
+		}
+		defer plan.Clear()
+		defer ceremony.Clear()
+		return backend.drive(ctx, session, plan, &ceremony)
+	}
 	plan, err := backend.installedPlan(session.Root(), state)
 	if err != nil {
 		return cli.Result{}, err
 	}
 	defer plan.Credentials.Clear()
-	if resumeInstall {
-		// Boot may finish an already configured installation, but cannot enroll
-		// a node or allocate another command. The staged release and protected
-		// material must still authenticate against the original sealed intent.
-		return backend.drive(ctx, session, plan)
+	if request.Action == lifecycle.ActionStart && state.Active == nil {
+		if err := backend.finalizeCompletedEnrollment(session.Root(), state); err != nil {
+			return cli.Result{}, enrollmentCleanupFault(ctx, err)
+		}
 	}
 	if request.Action == lifecycle.ActionStatus {
 		return backend.observe(ctx, state, plan)
@@ -319,7 +420,7 @@ func (backend *Backend) installed(ctx context.Context, request cli.Request) (res
 			return cli.Result{}, journalFault(err)
 		}
 	}
-	return backend.drive(ctx, session, plan)
+	return backend.drive(ctx, session, plan, nil)
 }
 
 func (backend *Backend) releasePlan(root string, state lifecycle.Journal) (Plan, error) {
@@ -361,8 +462,9 @@ func (backend *Backend) installedPlan(root string, state lifecycle.Journal) (Pla
 }
 
 func (backend *Backend) changeRelease(ctx context.Context, request cli.Request) (result cli.Result, resultErr error) {
-	if request.Configuration != "" || request.TrustKey != "" || request.BackupID != "" ||
-		request.ExpectedConfigurationDigest != "" || request.RevokePreviousCredentials ||
+	if request.Configuration != "" || request.Join != "" || request.TrustKey != "" || request.BackupID != "" ||
+		request.SupportOutput != "" || request.ExpectedConfigurationDigest != "" || request.RevokePreviousCredentials ||
+		request.RecoveryInput != "" ||
 		(request.Action == lifecycle.ActionUpgrade && request.Resume == (request.Bundle != "")) ||
 		(request.Action == lifecycle.ActionRollback && (request.Resume || request.Bundle != "")) {
 		return cli.Result{}, fault(cli.FaultInvalidArgument, "NODE_RELEASE_INPUT_INVALID")
@@ -372,6 +474,9 @@ func (backend *Backend) changeRelease(ctx context.Context, request cli.Request) 
 		return cli.Result{}, journalFault(err)
 	}
 	defer closeSession(session, &result, &resultErr)
+	if _, err := backend.store.ResumeEnrollmentCleanup(session.Root()); err != nil {
+		return cli.Result{}, enrollmentCleanupFault(ctx, err)
+	}
 	state, err := readNodeJournal(session)
 	if err != nil {
 		return cli.Result{}, err
@@ -400,7 +505,7 @@ func (backend *Backend) changeRelease(ctx context.Context, request cli.Request) 
 				return cli.Result{}, fault(cli.FaultConflict, "INSTALLATION_COMMAND_CONFLICT")
 			}
 		}
-		return backend.drive(ctx, session, plan)
+		return backend.drive(ctx, session, plan, nil)
 	}
 	source, err := backend.installedPlan(session.Root(), state)
 	if err != nil {
@@ -473,7 +578,7 @@ func (backend *Backend) changeRelease(ctx context.Context, request cli.Request) 
 	if err := session.Write(started.Journal); err != nil {
 		return cli.Result{}, journalFault(err)
 	}
-	return backend.drive(ctx, session, plan)
+	return backend.drive(ctx, session, plan, nil)
 }
 
 func (backend *Backend) replayReleaseChange(ctx context.Context, state lifecycle.Journal, plan Plan, action lifecycle.Action) (cli.Result, error) {
@@ -512,7 +617,9 @@ func (backend *Backend) activeReleasePlan(root string, state lifecycle.Journal) 
 }
 
 func (backend *Backend) rotateCredentials(ctx context.Context, request cli.Request) (result cli.Result, resultErr error) {
-	if paasv1.ValidateDigest("expectedConfigurationDigest", request.ExpectedConfigurationDigest) != nil {
+	if request.Join != "" || request.Bundle != "" || request.TrustKey != "" || request.BackupID != "" ||
+		request.SupportOutput != "" || request.RecoveryInput != "" || request.Resume ||
+		paasv1.ValidateDigest("expectedConfigurationDigest", request.ExpectedConfigurationDigest) != nil {
 		return cli.Result{}, fault(cli.FaultInvalidArgument, "NODE_ROTATION_INPUT_INVALID")
 	}
 	config, material, err := enrollment(request.Root, request.Configuration)
@@ -529,6 +636,9 @@ func (backend *Backend) rotateCredentials(ctx context.Context, request cli.Reque
 		return cli.Result{}, journalFault(err)
 	}
 	defer closeSession(session, &result, &resultErr)
+	if _, err := backend.store.ResumeEnrollmentCleanup(session.Root()); err != nil {
+		return cli.Result{}, enrollmentCleanupFault(ctx, err)
+	}
 	state, err := readNodeJournal(session)
 	if err != nil {
 		return cli.Result{}, err
@@ -612,7 +722,7 @@ func (backend *Backend) rotateCredentials(ctx context.Context, request cli.Reque
 			return cli.Result{}, journalFault(err)
 		}
 	}
-	return backend.drive(ctx, session, plan)
+	return backend.drive(ctx, session, plan, nil)
 }
 
 func (backend *Backend) rotationPlan(root string, state lifecycle.Journal) (Plan, error) {
@@ -652,7 +762,12 @@ func (backend *Backend) command(state lifecycle.Journal, action lifecycle.Action
 		RequestedAt: backend.now().UTC().Truncate(time.Microsecond)}, nil
 }
 
-func (backend *Backend) drive(ctx context.Context, session *journal.Session, plan Plan) (cli.Result, error) {
+func (backend *Backend) drive(
+	ctx context.Context,
+	session *journal.Session,
+	plan Plan,
+	ceremony *enrollmentCeremony,
+) (cli.Result, error) {
 	resuming := true
 	for {
 		state, err := readNodeJournal(session)
@@ -663,6 +778,11 @@ func (backend *Backend) drive(ctx context.Context, session *journal.Session, pla
 			if state.Last == nil || state.Last.Outcome != lifecycle.OutcomeSucceeded {
 				return cli.Result{}, fault(cli.FaultVerification, "NODE_COMMAND_FAILED")
 			}
+			if ceremony != nil && state.Last.Command.Action == lifecycle.ActionInstall {
+				if err := backend.store.FinalizeEnrollment(session.Root(), ceremony.intent, ceremony.response); err != nil {
+					return cli.Result{}, enrollmentCleanupFault(ctx, err)
+				}
+			}
 			if state.NodeCredentialRotation != nil &&
 				(state.Last.Command.Action == lifecycle.ActionRotateCredentials || state.Last.Command.Action == lifecycle.ActionStart) {
 				if err := backend.effects.FinalizeRotation(ctx, plan, *state.NodeCredentialRotation); err != nil {
@@ -672,7 +792,11 @@ func (backend *Backend) drive(ctx context.Context, session *journal.Session, pla
 			return resultFor(state, state.Last.Command.Action != lifecycle.ActionVerify), nil
 		}
 		execution := *state.Active
-		if resuming && (execution.Phase == lifecycle.PhaseVerifying || execution.Phase == lifecycle.PhaseCommitting) &&
+		resumed := resuming
+		enrollmentCommit := ceremony != nil && execution.Command.Action == lifecycle.ActionInstall &&
+			execution.Phase == lifecycle.PhaseCommitting
+		if resumed && !enrollmentCommit &&
+			(execution.Phase == lifecycle.PhaseVerifying || execution.Phase == lifecycle.PhaseCommitting) &&
 			(execution.Command.Action == lifecycle.ActionInstall || execution.Command.Action == lifecycle.ActionStart ||
 				execution.Command.Action == lifecycle.ActionRotateCredentials || execution.Command.Action == lifecycle.ActionUpgrade ||
 				execution.Command.Action == lifecycle.ActionRollback) {
@@ -686,9 +810,42 @@ func (backend *Backend) drive(ctx context.Context, session *journal.Session, pla
 		if err == nil {
 			if recoverSource {
 				err = backend.effects.Rollback(ctx, plan)
+			} else if enrollmentCommit {
+				// COMMITTING is the durable proof that local verification
+				// succeeded before the remote target can be published. On a
+				// later process invocation, reconcile and reverify before the
+				// idempotent completion replay, but never run a post-publication
+				// provider effect.
+				if resumed {
+					err = backend.effects.ApplyPhase(ctx, plan, lifecycle.PhaseStarting)
+					if err == nil {
+						err = backend.effects.ApplyPhase(ctx, plan, lifecycle.PhaseVerifying)
+					}
+				}
 			} else {
 				err = backend.effects.ApplyPhase(ctx, plan, execution.Phase)
 			}
+		}
+		if err != nil && enrollmentCommit && resumed {
+			if ctx.Err() != nil {
+				return cli.Result{}, fault(cli.FaultInterrupted, "COMMAND_INTERRUPTED")
+			}
+			if errors.Is(err, ErrOutcomeUnknown) {
+				return cli.Result{}, fault(cli.FaultUnavailable, "EFFECT_OUTCOME_UNKNOWN")
+			}
+			return cli.Result{}, effectFault(err)
+		}
+		completionRejected := false
+		if err == nil && ceremony != nil && execution.Command.Action == lifecycle.ActionInstall &&
+			execution.Phase == lifecycle.PhaseCommitting {
+			err = backend.completeEnrollment(ctx, *ceremony)
+			if errors.Is(err, ErrEnrollmentUnavailable) {
+				if ctx.Err() != nil {
+					return cli.Result{}, fault(cli.FaultInterrupted, "COMMAND_INTERRUPTED")
+				}
+				return cli.Result{}, fault(cli.FaultUnavailable, "NODE_ENROLLMENT_COMPLETION_PENDING")
+			}
+			completionRejected = errors.Is(err, ErrEnrollmentRejected)
 		}
 		if err != nil {
 			if ctx.Err() != nil {
@@ -697,7 +854,13 @@ func (backend *Backend) drive(ctx context.Context, session *journal.Session, pla
 			if errors.Is(err, ErrOutcomeUnknown) {
 				return cli.Result{}, fault(cli.FaultUnavailable, "EFFECT_OUTCOME_UNKNOWN")
 			}
+			if recoverSource && execution.FailureCode == lifecycle.NodeEnrollmentRejectedFailureCode && errors.Is(err, ErrUnavailable) {
+				return cli.Result{}, fault(cli.FaultUnavailable, "NODE_DEPENDENCY_UNAVAILABLE")
+			}
 			normalized := effectFault(err)
+			if completionRejected {
+				normalized = fault(cli.FaultVerification, lifecycle.NodeEnrollmentRejectedFailureCode)
+			}
 			failed, failErr := lifecycle.Fail(state, execution.Command.ID, normalized.Code, backend.nextTime(execution.UpdatedAt))
 			if failErr != nil || session.Write(failed) != nil {
 				return cli.Result{}, fault(cli.FaultInternal, "FAILURE_STATE_COMMIT_FAILED")
@@ -719,6 +882,14 @@ func (backend *Backend) drive(ctx context.Context, session *journal.Session, pla
 			return cli.Result{}, fault(cli.FaultInternal, "INSTALLATION_STATE_COMMIT_FAILED")
 		}
 		if recoverSource {
+			if execution.FailureCode == lifecycle.NodeEnrollmentRejectedFailureCode {
+				if ceremony == nil {
+					return cli.Result{}, fault(cli.FaultVerification, "NODE_ENROLLMENT_STATE_INVALID")
+				}
+				if err := backend.store.CleanupRejectedEnrollment(ctx, plan, ceremony.intent, ceremony.response); err != nil {
+					return cli.Result{}, enrollmentCleanupFault(ctx, err)
+				}
+			}
 			class := cli.FaultVerification
 			switch execution.FailureCode {
 			case "NODE_PREFLIGHT_FAILED":
@@ -800,6 +971,40 @@ func effectFault(err error) *cli.Fault {
 		return fault(cli.FaultUnavailable, "NODE_DEPENDENCY_UNAVAILABLE")
 	default:
 		return fault(cli.FaultVerification, "NODE_VERIFICATION_FAILED")
+	}
+}
+
+func enrollmentStateFaultWithContext(ctx context.Context, err error) *cli.Fault {
+	if ctx != nil && ctx.Err() != nil {
+		return fault(cli.FaultInterrupted, "COMMAND_INTERRUPTED")
+	}
+	return enrollmentStateFault(err)
+}
+
+func enrollmentStateFault(err error) *cli.Fault {
+	switch {
+	case errors.Is(err, ErrEnrollmentUnavailable), errors.Is(err, ErrUnavailable), errors.Is(err, ErrOutcomeUnknown):
+		return fault(cli.FaultUnavailable, "NODE_ENROLLMENT_UNAVAILABLE")
+	case errors.Is(err, ErrEnrollmentRejected):
+		return fault(cli.FaultVerification, lifecycle.NodeEnrollmentRejectedFailureCode)
+	case errors.Is(err, ErrConflict):
+		return fault(cli.FaultConflict, "NODE_ENROLLMENT_CONFLICT")
+	default:
+		return fault(cli.FaultVerification, "NODE_ENROLLMENT_STATE_INVALID")
+	}
+}
+
+func enrollmentCleanupFault(ctx context.Context, err error) *cli.Fault {
+	if ctx != nil && ctx.Err() != nil {
+		return fault(cli.FaultInterrupted, "COMMAND_INTERRUPTED")
+	}
+	switch {
+	case errors.Is(err, ErrUnavailable), errors.Is(err, ErrOutcomeUnknown):
+		return fault(cli.FaultUnavailable, "NODE_ENROLLMENT_CLEANUP_PENDING")
+	case errors.Is(err, ErrConflict):
+		return fault(cli.FaultConflict, "NODE_ENROLLMENT_CLEANUP_CONFLICT")
+	default:
+		return fault(cli.FaultVerification, "NODE_ENROLLMENT_CLEANUP_INVALID")
 	}
 }
 

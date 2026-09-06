@@ -300,6 +300,8 @@ func writeNodeEnrollmentRecoveryError(response http.ResponseWriter, requestID st
 	switch {
 	case errors.Is(err, nodeenrollment.ErrRecoveryProofRejected):
 		writeProblem(response, requestID, http.StatusUnauthorized, paasv1.ErrorUnauthenticated, "Unauthenticated", "node enrollment recovery proof is invalid", false)
+	case errors.Is(err, nodeenrollment.ErrNotExchanged):
+		writeProblem(response, requestID, http.StatusNotFound, paasv1.ErrorNotFound, "Exchange not found", "node enrollment has no exchange result", false)
 	case errors.Is(err, nodeenrollment.ErrNotFound):
 		writeProblem(response, requestID, http.StatusNotFound, paasv1.ErrorNotFound, "Not found", "node enrollment does not exist", false)
 	case errors.Is(err, nodeenrollment.ErrRecoveryChallengeExpired):

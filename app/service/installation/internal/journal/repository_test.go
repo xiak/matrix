@@ -11,8 +11,64 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
 )
+
+func TestNodeInitializationOwnsOnlyItsProtectedBootstrapArtifacts(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "node")
+	session, err := Acquire(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	for _, relative := range []string{
+		layout.NodeEnrollmentIntent,
+		layout.NodeEnrollmentAttempt,
+		layout.NodeEnrollmentResponse,
+	} {
+		path := filepath.Join(root, filepath.FromSlash(relative))
+		if err := os.WriteFile(path, []byte(filepath.Base(path)), managedFileMode); err != nil ||
+			securePermissions(path, false) != nil {
+			t.Fatalf("write node bootstrap artifact %q: %v", relative, err)
+		}
+	}
+	if err := session.Initialize(activeInstallJournal(t)); !errors.Is(err, ErrOwnershipConflict) {
+		t.Fatalf("platform initialization admitted node bootstrap state: %v", err)
+	}
+	if err := session.InitializeNode(activeNodeInstallJournal(t)); err != nil {
+		t.Fatalf("node initialization rejected its exact bootstrap state: %v", err)
+	}
+
+	foreignRoot := filepath.Join(t.TempDir(), "node")
+	foreignSession, err := Acquire(context.Background(), foreignRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer foreignSession.Close()
+	foreign := filepath.Join(foreignRoot, stateDirectoryName, "enrollment-extra")
+	if err := os.WriteFile(foreign, []byte("foreign"), managedFileMode); err != nil ||
+		securePermissions(foreign, false) != nil {
+		t.Fatal("write foreign bootstrap artifact")
+	}
+	if err := foreignSession.InitializeNode(activeNodeInstallJournal(t)); !errors.Is(err, ErrOwnershipConflict) {
+		t.Fatalf("node initialization admitted an unowned bootstrap artifact: %v", err)
+	}
+
+	unsafeRoot := filepath.Join(t.TempDir(), "node")
+	unsafeSession, err := Acquire(context.Background(), unsafeRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unsafeSession.Close()
+	unsafeIntent := filepath.Join(unsafeRoot, filepath.FromSlash(layout.NodeEnrollmentIntent))
+	if err := os.Mkdir(unsafeIntent, managedDirectoryMode); err != nil {
+		t.Fatalf("write unsafe bootstrap artifact: %v", err)
+	}
+	if err := unsafeSession.InitializeNode(activeNodeInstallJournal(t)); !errors.Is(err, ErrOwnershipConflict) {
+		t.Fatalf("node initialization admitted a non-regular bootstrap artifact: %v", err)
+	}
+}
 
 func TestSessionPersistsSealedMonotonicJournal(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "installation")
@@ -327,6 +383,32 @@ func activeInstallJournal(t *testing.T) lifecycle.Journal {
 	})
 	if err != nil {
 		t.Fatalf("start lifecycle journal: %v", err)
+	}
+	return started.Journal
+}
+
+func activeNodeInstallJournal(t *testing.T) lifecycle.Journal {
+	t.Helper()
+	value, err := lifecycle.NewNode(
+		"mxi-"+strings.Repeat("a", 32),
+		lifecycle.ReleaseTrust{
+			KeyID: "xiak-release-2026", Fingerprint: "sha256:" + strings.Repeat("f", 64),
+		},
+		lifecycle.NodeBinding{
+			ExecutionTargetID: "target-a", ConfigurationDigest: "sha256:" + strings.Repeat("e", 64),
+		},
+	)
+	if err != nil {
+		t.Fatalf("create node lifecycle journal: %v", err)
+	}
+	started, err := lifecycle.Start(value, lifecycle.Command{
+		ID: "cmd-" + strings.Repeat("b", 32), Action: lifecycle.ActionInstall,
+		InputDigest:     "sha256:" + strings.Repeat("c", 64),
+		TargetReleaseID: "matrix-v0.1.0-aaaaaaaaaaaa",
+		RequestedAt:     time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("start node lifecycle journal: %v", err)
 	}
 	return started.Journal
 }

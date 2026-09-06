@@ -45,6 +45,7 @@ type commandOptions struct {
 	root                        string
 	bundle                      string
 	trustKey                    string
+	join                        string
 	backupID                    string
 	supportOutput               string
 	configuration               string
@@ -133,7 +134,7 @@ func newLifecycleCommand(
 			}
 			request := Request{
 				Subject: subject, Action: action, Root: options.root, Bundle: options.bundle, TrustKey: options.trustKey,
-				BackupID: options.backupID, SupportOutput: options.supportOutput,
+				Join: options.join, BackupID: options.backupID, SupportOutput: options.supportOutput,
 				Configuration:               options.configuration,
 				ExpectedConfigurationDigest: options.expectedConfigurationDigest,
 				RevokePreviousCredentials:   options.revokePreviousCredentials,
@@ -175,7 +176,7 @@ func bindCommandFlags(flags *pflag.FlagSet, subject Subject, action lifecycle.Ac
 		flags.StringVar(&options.bundle, "bundle", "", "verified offline release bundle directory")
 		flags.StringVar(&options.trustKey, "trust-key", "", "out-of-band release trust root")
 		if subject == SubjectNode {
-			flags.StringVar(&options.configuration, "configuration", "", "protected node enrollment file")
+			flags.StringVar(&options.join, "join", "", "protected one-time node join file")
 		}
 	case lifecycle.ActionUpgrade:
 		flags.StringVar(&options.bundle, "bundle", "", "verified offline release bundle directory")
@@ -213,8 +214,8 @@ func validateCommandFlags(subject Subject, action lifecycle.Action, options *com
 		if strings.TrimSpace(options.bundle) == "" || strings.TrimSpace(options.trustKey) == "" {
 			return errors.New("offline bundle and trust key are required")
 		}
-		if subject == SubjectNode && strings.TrimSpace(options.configuration) == "" {
-			return errors.New("protected node enrollment is required")
+		if subject == SubjectNode && strings.TrimSpace(options.join) == "" {
+			return errors.New("protected one-time node join is required")
 		}
 	case lifecycle.ActionUpgrade:
 		if subject == SubjectNode {
@@ -240,7 +241,7 @@ func commandDescription(subject Subject, action lifecycle.Action) string {
 	if subject == SubjectNode {
 		switch action {
 		case lifecycle.ActionInstall:
-			return "Install an authenticated offline node release"
+			return "Install and enroll a node from a signed one-time join"
 		case lifecycle.ActionStart:
 			return "Start or reconcile the sealed node and collector services"
 		case lifecycle.ActionUpgrade:

@@ -4,6 +4,7 @@ package nodeconfig
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -25,6 +26,7 @@ const (
 	APIVersion        = "node.installation.matrix.xiak.com/v1"
 	ConfigurationKind = "NodeConfiguration"
 	EnrollmentKind    = "NodeEnrollment"
+	JoinFileKind      = "NodeEnrollmentJoinFile"
 	MaximumBytes      = 64 * 1024
 	RuntimeRevision   = 7
 	// DeploymentRuntimePredecessorRevision is the one installed node runtime
@@ -83,6 +85,13 @@ func StartupPolicy() ServicePolicy {
 	value.Type, value.RemainAfterExit = "oneshot", true
 	value.TimeoutStartMicros, value.RestartMicros = 120000000, 30000000
 	return value
+}
+
+// SelfEnrollmentSystemReserve is product policy rather than browser input. It
+// keeps the resident agent, collector and a constrained Docker host from being
+// advertised as workload capacity during first registration.
+func SelfEnrollmentSystemReserve() paasv1.Capacity {
+	return paasv1.Capacity{MemoryBytes: 256 * 1024 * 1024}
 }
 
 // ServiceName binds native ownership to the platform installation and target,
@@ -175,6 +184,26 @@ type Enrollment struct {
 	CollectorPrivateKeyFile  string        `json:"collectorPrivateKeyFile"`
 }
 
+// JoinFile is the short-lived offline handoff assembled by the authenticated
+// console. Keeping the signed public join nested makes the one raw credential
+// explicit and prevents a second, subtly different copy of that public
+// contract from becoming an installation model.
+type JoinFile struct {
+	APIVersion string                    `json:"apiVersion"`
+	Kind       string                    `json:"kind"`
+	Join       paasv1.NodeEnrollmentJoin `json:"join"`
+	Credential string                    `json:"credential"`
+}
+
+func (JoinFile) String() string   { return "node enrollment join file <redacted>" }
+func (JoinFile) GoString() string { return "node enrollment join file <redacted>" }
+
+func (value *JoinFile) Clear() {
+	if value != nil {
+		value.Credential = ""
+	}
+}
+
 func DecodeConfiguration(source []byte) (Configuration, error) {
 	var value Configuration
 	if contractjson.DecodeObjectBytes(source, MaximumBytes, &value) != nil || ValidateConfiguration(value) != nil {
@@ -192,6 +221,38 @@ func DecodeEnrollment(source []byte) (Enrollment, error) {
 		return Enrollment{}, errors.New("node enrollment is invalid")
 	}
 	return value, nil
+}
+
+func DecodeJoinFile(source []byte) (JoinFile, error) {
+	var value JoinFile
+	if contractjson.DecodeObjectBytes(source, MaximumBytes, &value) != nil ||
+		value.APIVersion != APIVersion || value.Kind != JoinFileKind ||
+		paasv1.ValidateNodeEnrollmentJoin(value.Join) != nil {
+		return JoinFile{}, errors.New("node enrollment join file is invalid")
+	}
+	credential, err := decodeRawURLCredential(value.Credential)
+	if err != nil {
+		return JoinFile{}, errors.New("node enrollment join file is invalid")
+	}
+	defer clear(credential)
+	digest := sha256.Sum256(credential)
+	expected := "sha256:" + hex.EncodeToString(digest[:])
+	if expected != value.Join.CredentialDigest {
+		return JoinFile{}, errors.New("node enrollment join credential is invalid")
+	}
+	return value, nil
+}
+
+func decodeRawURLCredential(value string) ([]byte, error) {
+	if value == "" || strings.ContainsAny(value, "=\r\n\t ") {
+		return nil, errors.New("node enrollment join credential is invalid")
+	}
+	decoded, err := base64.RawURLEncoding.Strict().DecodeString(value)
+	if err != nil || len(decoded) != 32 || base64.RawURLEncoding.EncodeToString(decoded) != value {
+		clear(decoded)
+		return nil, errors.New("node enrollment join credential is invalid")
+	}
+	return decoded, nil
 }
 
 func ValidateConfiguration(value Configuration) error {

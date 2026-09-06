@@ -160,6 +160,25 @@ func TestLostExchangeResponseRecoversOnlyWithBothPersistedRoleKeys(t *testing.T)
 	exchangeCommand, nodePrivateKey, collectorPrivateKey := exchangeCommandWithKeys(t, created, issuer, "a")
 	defer clear(nodePrivateKey)
 	defer clear(collectorPrivateKey)
+	unexchanged := paasv1.CreateNodeEnrollmentRecoveryChallengeRequest{
+		APIVersion:                    paasv1.NodeEnrollmentRecoveryAPIVersion,
+		Kind:                          paasv1.NodeEnrollmentRecoveryChallengeRequestKind,
+		EnrollmentID:                  exchangeCommand.Request.EnrollmentID,
+		InstallationID:                exchangeCommand.Request.InstallationID,
+		ExecutionTargetID:             exchangeCommand.Request.ExecutionTargetID,
+		ExchangeID:                    exchangeCommand.Request.ExchangeID,
+		MachineFingerprint:            exchangeCommand.Request.MachineFingerprint,
+		RuntimeContractDigest:         exchangeCommand.Request.RuntimeContractDigest,
+		NodePublicKeyFingerprint:      "sha256:" + strings.Repeat("a", 64),
+		CollectorPublicKeyFingerprint: "sha256:" + strings.Repeat("b", 64),
+	}
+	if _, err := service.CreateRecoveryChallenge(context.Background(), RecoveryChallengeCommand{
+		EnrollmentID:        created.Response.Enrollment.Metadata.ID,
+		ObservedPeerAddress: "192.168.50.10",
+		Request:             unexchanged,
+	}); !errors.Is(err, ErrNotExchanged) || issuer.challengeCalls != 0 {
+		t.Fatalf("unexchanged recovery challenge = %v", err)
+	}
 	repository.now = repository.now.Add(time.Minute)
 	exchanged, err := service.Exchange(context.Background(), exchangeCommand)
 	if err != nil {

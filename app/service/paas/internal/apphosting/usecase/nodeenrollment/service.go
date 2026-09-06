@@ -925,6 +925,9 @@ func (service *Service) inspectRecoverableExchange(
 		return StoredEnrollment{}, time.Time{}, ErrUnavailable
 	}
 	switch stored.Enrollment.State {
+	case paasv1.NodeEnrollmentWaitingInstall:
+		stored.Clear()
+		return StoredEnrollment{}, time.Time{}, ErrNotExchanged
 	case paasv1.NodeEnrollmentVerifying:
 	case paasv1.NodeEnrollmentExpired:
 		stored.Clear()

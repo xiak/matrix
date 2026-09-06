@@ -10,9 +10,11 @@ import (
 	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	composeadapter "github.com/xiak/matrix/app/adapter/apphosting/compose"
+	machineadapter "github.com/xiak/matrix/app/adapter/infrastructure/localmachine"
 	"github.com/xiak/matrix/app/adapter/infrastructure/nodeexporter"
 	nodehttps "github.com/xiak/matrix/app/adapter/node/https"
 	"github.com/xiak/matrix/app/service/installation/internal/cli"
+	"github.com/xiak/matrix/app/service/installation/internal/enrollmenthttps"
 	"github.com/xiak/matrix/app/service/installation/internal/localmachine"
 	"github.com/xiak/matrix/app/service/installation/internal/nodecommand"
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
@@ -22,6 +24,25 @@ import (
 type composeRecoveryProjectInspector struct{}
 
 type nodeInstallationVerifier struct{}
+
+type nodeEnrollmentHost struct {
+	probe machineadapter.HostProbe
+}
+
+func (host nodeEnrollmentHost) MachineFingerprint(ctx context.Context, root string) (string, error) {
+	if host.probe == nil {
+		return "", nodecommand.ErrUnavailable
+	}
+	facts, err := host.probe.Inspect(ctx, root)
+	if err != nil {
+		return "", nodecommand.ErrUnavailable
+	}
+	fingerprint, err := machineadapter.DeriveMachineFingerprint(facts)
+	if err != nil {
+		return "", nodecommand.ErrVerification
+	}
+	return fingerprint, nil
+}
 
 func (nodeInstallationVerifier) ValidateController(configuration nodeconfig.ControllerConfiguration) error {
 	credentials, err := nodehttps.NewCredentials(configuration.Certificate, configuration.PrivateKey, configuration.Trust)
@@ -180,7 +201,13 @@ func main() {
 		_, _ = os.Stderr.WriteString("Matrix CLI initialization failed\n")
 		os.Exit(cli.ExitInternal)
 	}
-	node, err := nodecommand.NewBackend(localmachine.NewNodeEffects(nodeInstallationVerifier{}))
+	nodeEffects := localmachine.NewNodeEffects(nodeInstallationVerifier{})
+	node, err := nodecommand.NewBackend(
+		nodeEffects,
+		nodeEffects,
+		nodeEnrollmentHost{probe: machineadapter.NewLocalHostProbe()},
+		enrollmenthttps.New(),
+	)
 	if err != nil {
 		stop()
 		_, _ = os.Stderr.WriteString("Matrix CLI initialization failed\n")

@@ -11,6 +11,8 @@ import (
 
 const APIVersion = "installation.matrix.xiak.com/v1"
 
+const NodeEnrollmentRejectedFailureCode = "NODE_ENROLLMENT_REJECTED"
+
 var (
 	ErrCommandConflict    = errors.New("installation command identity conflicts with stored input")
 	ErrCommandInProgress  = errors.New("another installation command is in progress")
@@ -322,7 +324,9 @@ func Fail(journal Journal, commandID, failureCode string, at time.Time) (Journal
 		journal.Active = &execution
 		return journal, nil
 	case ActionInstall, ActionUpgrade:
-		if execution.Phase == PhaseCommitting || execution.Phase == PhaseRollingBack {
+		nodeEnrollmentRejected := journal.Node != nil && execution.Command.Action == ActionInstall &&
+			execution.Phase == PhaseCommitting && failureCode == NodeEnrollmentRejectedFailureCode
+		if (execution.Phase == PhaseCommitting && !nodeEnrollmentRejected) || execution.Phase == PhaseRollingBack {
 			return finishManual(journal, execution, at), nil
 		}
 		execution.Phase = PhaseRollingBack
@@ -434,7 +438,8 @@ func ValidateNodeTransition(before, after Journal) error {
 	if before.Node.ConfigurationDigest == after.Node.ConfigurationDigest && receiptEqual && releaseEqual && pointersEqual {
 		return nil
 	}
-	if before.Active == nil || before.Active.Phase != PhaseCommitting || after.Active != nil || after.Last == nil {
+	next, terminal := NextPhase(before)
+	if before.Active == nil || !terminal || next != PhaseReady || after.Active != nil || after.Last == nil {
 		return invalid
 	}
 	switch before.Active.Command.Action {

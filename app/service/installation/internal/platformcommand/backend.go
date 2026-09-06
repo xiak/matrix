@@ -242,6 +242,9 @@ func (backend *Backend) Run(ctx context.Context, request cli.Request) (cli.Resul
 	if err := ctx.Err(); err != nil {
 		return cli.Result{}, fault(cli.FaultInterrupted, "COMMAND_INTERRUPTED")
 	}
+	if request.Join != "" {
+		return cli.Result{}, fault(cli.FaultInvalidArgument, "PLATFORM_JOIN_UNSUPPORTED")
+	}
 	switch request.Action {
 	case lifecycle.ActionInstall:
 		return backend.install(ctx, request)

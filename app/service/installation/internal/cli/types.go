@@ -32,6 +32,7 @@ type Request struct {
 	Root                        string
 	Bundle                      string
 	TrustKey                    string
+	Join                        string
 	BackupID                    string
 	SupportOutput               string
 	Configuration               string

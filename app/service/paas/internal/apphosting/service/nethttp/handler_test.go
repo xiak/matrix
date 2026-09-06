@@ -609,6 +609,28 @@ func TestNodeEnrollmentRecoveryUsesProtectedTLSAndNoIAMAuthority(t *testing.T) {
 	}
 }
 
+func TestNodeEnrollmentRecoveryDistinguishesMissingExchangeFromConflict(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		err    error
+		status int
+		title  string
+	}{
+		{"not exchanged", nodeenrollment.ErrNotExchanged, http.StatusNotFound, "Exchange not found"},
+		{"conflict", nodeenrollment.ErrConflict, http.StatusConflict, "Enrollment conflict"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			writeNodeEnrollmentRecoveryError(response, "request-test", test.err)
+			var problem paasv1.Problem
+			if err := json.Unmarshal(response.Body.Bytes(), &problem); err != nil ||
+				response.Code != test.status || problem.Status != test.status || problem.Title != test.title {
+				t.Fatalf("recovery problem = %d %#v / %v", response.Code, problem, err)
+			}
+		})
+	}
+}
+
 func TestNodeEnrollmentExchangeRejectsUnprotectedOrUserAuthenticatedRequests(t *testing.T) {
 	exchangeRequest, _ := testNodeEnrollmentExchangeFixture(t)
 	path := "/v1/node-enrollments/" + string(exchangeRequest.EnrollmentID) + "/exchange"

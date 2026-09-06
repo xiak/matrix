@@ -25,6 +25,7 @@ const (
 var (
 	ErrInvalidArgument          = errors.New("node enrollment request is invalid")
 	ErrNotFound                 = errors.New("node enrollment was not found")
+	ErrNotExchanged             = errors.New("node enrollment has no exchange result")
 	ErrConflict                 = errors.New("node enrollment conflicts with stored authority")
 	ErrInvalidTransition        = errors.New("node enrollment lifecycle transition is invalid")
 	ErrIdempotencyConflict      = errors.New("node enrollment idempotency conflict")

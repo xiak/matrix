@@ -1,17 +1,124 @@
 package nodeconfig
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math/big"
+	"net/url"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
+
+func TestJoinFileBindsOneRawCredentialToSignedPublicMetadata(t *testing.T) {
+	credential := []byte("0123456789abcdef0123456789abcdef")
+	digest := sha256.Sum256(credential)
+	installationID := "mxi-" + strings.Repeat("a", 32)
+	issuerURI, err := paasv1.NodeEnrollmentIssuerURI(installationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuerTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "Matrix join test issuer"},
+		NotBefore:             time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC),
+		NotAfter:              time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC),
+		BasicConstraintsValid: true, IsCA: true, MaxPathLenZero: true,
+		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		URIs:     []*url.URL{issuerURI},
+	}
+	issuer, err := x509.CreateCertificate(rand.Reader, issuerTemplate, issuerTemplate, public, private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enrollmentID := paasv1.ResourceID("node-enrollment-" + strings.Repeat("a", 32))
+	join := paasv1.NodeEnrollmentJoin{
+		APIVersion: paasv1.NodeEnrollmentJoinAPIVersion, Kind: paasv1.NodeEnrollmentJoinKind,
+		EnrollmentID: enrollmentID, InstallationID: installationID, ExecutionTargetID: "target-a",
+		ControlPlaneURL:    "https://matrix.internal/api/paas/v1/node-enrollments/" + string(enrollmentID) + "/exchange",
+		CredentialDigest:   "sha256:" + hex.EncodeToString(digest[:]),
+		ExpiresAt:          time.Date(2026, 9, 7, 9, 30, 0, 0, time.UTC),
+		IssuerCertificate:  base64.RawURLEncoding.EncodeToString(issuer),
+		SignatureAlgorithm: paasv1.NodeJoinSignatureEd25519,
+	}
+	commitment, err := paasv1.NodeEnrollmentJoinSigningBytes(join)
+	if err != nil {
+		t.Fatal(err)
+	}
+	join.Signature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(private, commitment))
+	input := JoinFile{APIVersion: APIVersion, Kind: JoinFileKind, Join: join,
+		Credential: base64.RawURLEncoding.EncodeToString(credential)}
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeJoinFile(encoded)
+	if err != nil || decoded != input {
+		t.Fatal("signed join file did not round-trip")
+	}
+	if strings.Contains(fmt.Sprintf("%v %#v", decoded, decoded), input.Credential) ||
+		SelfEnrollmentSystemReserve() != (paasv1.Capacity{MemoryBytes: 256 * 1024 * 1024}) {
+		t.Fatal("join formatting exposed its credential or changed fixed reserve policy")
+	}
+	decoded.Clear()
+	if decoded.Credential != "" {
+		t.Fatal("join credential was not cleared")
+	}
+
+	for name, mutate := range map[string]func(*JoinFile){
+		"different credential": func(value *JoinFile) {
+			value.Credential = base64.RawURLEncoding.EncodeToString(bytesOf(0x42, 32))
+		},
+		"padded credential": func(value *JoinFile) { value.Credential += "=" },
+		"tampered target":   func(value *JoinFile) { value.Join.ExecutionTargetID = "target-b" },
+		"wrong kind":        func(value *JoinFile) { value.Kind = EnrollmentKind },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := input
+			mutate(&changed)
+			source, err := json.Marshal(changed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if value, err := DecodeJoinFile(source); err == nil {
+				value.Clear()
+				t.Fatal("unbound or ambiguous join input was admitted")
+			}
+		})
+	}
+	unknown := strings.Replace(string(encoded), `"join":`, `"privateKey":"forbidden","join":`, 1)
+	duplicate := strings.Replace(string(encoded), `"credential":`, `"credential":"other","credential":`, 1)
+	for _, source := range []string{unknown, duplicate, string(encoded) + `{}`, `null`} {
+		if value, err := DecodeJoinFile([]byte(source)); err == nil {
+			value.Clear()
+			t.Fatal("non-closed join input was admitted")
+		}
+	}
+}
+
+func bytesOf(value byte, count int) []byte {
+	result := make([]byte, count)
+	for index := range result {
+		result[index] = value
+	}
+	return result
+}
 
 func TestControllerConfigurationIsPrivateClosedAndAppendOnly(t *testing.T) {
 	empty := EmptyController("mxi-" + strings.Repeat("a", 32))

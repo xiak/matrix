@@ -23,6 +23,14 @@ import (
 	"github.com/xiak/matrix/app/service/installation/release"
 )
 
+func TestPlatformBackendRejectsNodeJoinPurpose(t *testing.T) {
+	backend := newTestBackend(t, &installEffects{})
+	_, err := backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionStatus, Root: filepath.Join(t.TempDir(), "platform"), Join: "node-join.json",
+	})
+	assertFault(t, err, cli.FaultInvalidArgument, "PLATFORM_JOIN_UNSUPPORTED")
+}
+
 func TestCredentialRecoveryInputIsClosedBoundedAndSecretSafe(t *testing.T) {
 	const source = `{"apiVersion":"installation.matrix.xiak.com/v1","kind":"PlatformCredentialRecoveryInput","commandId":"cmd-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","password":"temporary-Recovery1!"}`
 	input, err := DecodeCredentialRecoveryInput([]byte(source))

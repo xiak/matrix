@@ -94,6 +94,46 @@ func TestNodeLifecycleCannotEnterPlatformEffects(t *testing.T) {
 	}
 }
 
+func TestNodeEnrollmentCompletionRejectionRollsBackBeforeReady(t *testing.T) {
+	platform := newJournal(t)
+	node, err := NewNode(platform.InstallationID, platform.ReleaseTrust,
+		NodeBinding{ExecutionTargetID: "target-a", ConfigurationDigest: digest('a')})
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := lifecycleCommand(ActionInstall, releaseA, '1', 0)
+	started, err := Start(node, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := started.Journal
+	for state.Active.Phase != PhaseCommitting {
+		next, ok := NextPhase(state)
+		if !ok {
+			t.Fatal("node install never reached its completion boundary")
+		}
+		state, err = Advance(state, command.ID, next, state.Active.UpdatedAt.Add(time.Second))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	rejected, err := Fail(
+		state,
+		command.ID,
+		NodeEnrollmentRejectedFailureCode,
+		state.Active.UpdatedAt.Add(time.Second),
+	)
+	if err != nil || rejected.Active == nil || rejected.Active.Phase != PhaseRollingBack ||
+		rejected.Active.FailureCode != NodeEnrollmentRejectedFailureCode {
+		t.Fatalf("completion rejection did not enter rollback: %#v / %v", rejected, err)
+	}
+	uncertain, err := Fail(state, command.ID, "NODE_EFFECT_REJECTED", state.Active.UpdatedAt.Add(time.Second))
+	if err != nil || uncertain.Active != nil || uncertain.Last == nil ||
+		uncertain.Last.Outcome != OutcomeManualIntervention {
+		t.Fatalf("ordinary commit failure lost manual-intervention semantics: %#v / %v", uncertain, err)
+	}
+}
+
 func TestNodeReleaseTransitionsRetainEnrollmentAndLatestCredentials(t *testing.T) {
 	base := newJournal(t)
 	binding := NodeBinding{ExecutionTargetID: "target-a", ConfigurationDigest: digest('a')}

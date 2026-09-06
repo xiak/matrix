@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
 )
 
@@ -115,6 +116,17 @@ func (session *Session) Initialized() (bool, error) {
 }
 
 func (session *Session) Initialize(value lifecycle.Journal) error {
+	return session.initialize(value, false)
+}
+
+// InitializeNode admits only the three exact protected bootstrap artifacts
+// that a node must durably create before its final configuration binding is
+// known. Platform initialization retains the stricter empty-state inventory.
+func (session *Session) InitializeNode(value lifecycle.Journal) error {
+	return session.initialize(value, true)
+}
+
+func (session *Session) initialize(value lifecycle.Journal, nodeEnrollment bool) error {
 	if err := session.validateOpen(); err != nil {
 		return err
 	}
@@ -128,7 +140,7 @@ func (session *Session) Initialize(value lifecycle.Journal) error {
 	if initialized {
 		return ErrAlreadyInitialized
 	}
-	if err := validateUninitializedInventory(session.root, session.state); err != nil {
+	if err := validateUninitializedInventory(session.root, session.state, nodeEnrollment); err != nil {
 		return err
 	}
 	keyPath := filepath.Join(session.state, keyFilename)
@@ -282,7 +294,7 @@ func resolveStateDirectory(root string, create bool) (string, error) {
 	return state, nil
 }
 
-func validateUninitializedInventory(root, state string) error {
+func validateUninitializedInventory(root, state string, nodeEnrollment bool) error {
 	rootEntries, err := os.ReadDir(root)
 	if err != nil || len(rootEntries) != 1 || rootEntries[0].Name() != stateDirectoryName || !rootEntries[0].IsDir() {
 		return ErrOwnershipConflict
@@ -292,8 +304,17 @@ func validateUninitializedInventory(root, state string) error {
 		return ErrOwnershipConflict
 	}
 	for _, entry := range entries {
-		if entry.Name() != lockFilename && entry.Name() != keyFilename {
+		bootstrap := nodeEnrollment && (entry.Name() == filepath.Base(filepath.FromSlash(layout.NodeEnrollmentIntent)) ||
+			entry.Name() == filepath.Base(filepath.FromSlash(layout.NodeEnrollmentAttempt)) ||
+			entry.Name() == filepath.Base(filepath.FromSlash(layout.NodeEnrollmentResponse)))
+		if entry.Name() != lockFilename && entry.Name() != keyFilename && !bootstrap {
 			return ErrOwnershipConflict
+		}
+		if bootstrap {
+			regular, regularErr := regularFileExists(filepath.Join(state, entry.Name()))
+			if regularErr != nil || !regular {
+				return ErrOwnershipConflict
+			}
 		}
 	}
 	return nil

@@ -3,14 +3,26 @@ package nodecommand
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"math/big"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
+	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/cli"
 	"github.com/xiak/matrix/app/service/installation/internal/journal"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
@@ -20,10 +32,299 @@ import (
 	"github.com/xiak/matrix/app/service/installation/release"
 )
 
+func newNodeBackend(t *testing.T, effects *nodeEffects) *Backend {
+	t.Helper()
+	backend, err := NewBackend(effects, effects, effects, effects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return backend
+}
+
+func TestNodeEnrollmentFixtureProducesBoundRoleCertificates(t *testing.T) {
+	request, _ := nodeRequest(t)
+	join, err := readNodeEnrollmentJoin(request.Join)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer join.Clear()
+	intent, err := newEnrollmentIntent(join.Join, "sha256:"+strings.Repeat("a", 64), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer intent.Clear()
+	response, err := testEnrollmentExchangeResponse(join.Join, intent.exchangeRequest(join.Credential))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := paasv1.ValidateNodeEnrollmentExchangeResponse(response); err != nil {
+		t.Fatalf("response: %v", err)
+	}
+	if err := ValidateEnrollmentResponse(intent, response); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNodeEnrollmentRecoversLostExchangeWithoutBlindCredentialReplay(t *testing.T) {
+	request, _ := nodeRequest(t)
+	effects := &nodeEffects{loseExchangeResponse: true}
+	backend := newNodeBackend(t, effects)
+	_, err := backend.Run(context.Background(), request)
+	assertNodeFault(t, err, "NODE_ENROLLMENT_UNAVAILABLE")
+	if effects.exchangeCalls != 1 || effects.enrollmentIntent == nil || !effects.enrollmentAttempted ||
+		effects.enrollmentResponse != nil || effects.remoteExchange == nil {
+		t.Fatal("unknown exchange outcome was not sealed for recovery")
+	}
+	join, err := readNodeEnrollmentJoin(request.Join)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend.now = func() time.Time { return join.Join.ExpiresAt.Add(time.Hour) }
+	intentBytes, err := EncodeEnrollmentIntent(*effects.enrollmentIntent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(intentBytes, []byte(join.Credential)) {
+		t.Fatal("sealed enrollment intent retained the raw join credential")
+	}
+	clear(intentBytes)
+	join.Clear()
+
+	effects.recoveryChallengeFailure = ErrEnrollmentUnavailable
+	_, err = backend.Run(context.Background(), request)
+	assertNodeFault(t, err, "NODE_ENROLLMENT_UNAVAILABLE")
+	if effects.exchangeCalls != 1 || effects.recoveryCalls != 1 || effects.recoveryProofCalls != 0 {
+		t.Fatal("unavailable recovery challenge caused a credential replay")
+	}
+
+	effects.recoveryChallengeFailure = nil
+	result, err := backend.Run(context.Background(), request)
+	if err != nil || result.State != "READY" {
+		t.Fatalf("recover lost exchange: %#v / %v", result, err)
+	}
+	if effects.exchangeCalls != 1 || effects.recoveryCalls != 2 || effects.recoveryProofCalls != 1 ||
+		effects.completionCalls != 1 || effects.enrollmentIntent != nil || effects.enrollmentResponse != nil {
+		t.Fatal("lost response recovery resent the credential or retained bootstrap secrets")
+	}
+}
+
+func TestNodeEnrollmentRecoversExchangeCommittedAfterNotExchangedObservation(t *testing.T) {
+	request, _ := nodeRequest(t)
+	effects := &nodeEffects{enrollmentExchangeFailure: ErrEnrollmentUnavailable}
+	backend := newNodeBackend(t, effects)
+	_, err := backend.Run(context.Background(), request)
+	assertNodeFault(t, err, "NODE_ENROLLMENT_UNAVAILABLE")
+	if effects.exchangeCalls != 1 || effects.enrollmentIntent == nil || !effects.enrollmentAttempted {
+		t.Fatal("unknown exchange was not made recoverable")
+	}
+	effects.enrollmentExchangeFailure = nil
+	effects.exchangeRejectAfterCommit = true
+	result, err := backend.Run(context.Background(), request)
+	if err != nil || result.State != "READY" {
+		t.Fatalf("recover exchange race: %#v / %v", result, err)
+	}
+	if effects.exchangeCalls != 2 || effects.recoveryCalls != 2 || effects.recoveryProofCalls != 1 ||
+		effects.completionCalls != 1 || effects.enrollmentIntent != nil || effects.enrollmentResponse != nil {
+		t.Fatal("exchange race discarded role keys or failed to recover the committed result")
+	}
+}
+
+func TestNodeEnrollmentNeverReplaysExpiredCredentialWhenRecoveryProvesNoExchange(t *testing.T) {
+	request, _ := nodeRequest(t)
+	effects := &nodeEffects{loseExchangeResponse: true}
+	backend := newNodeBackend(t, effects)
+	_, err := backend.Run(context.Background(), request)
+	assertNodeFault(t, err, "NODE_ENROLLMENT_UNAVAILABLE")
+	if effects.exchangeCalls != 1 || effects.enrollmentIntent == nil || !effects.enrollmentAttempted {
+		t.Fatal("unknown exchange outcome was not sealed")
+	}
+	join, err := readNodeEnrollmentJoin(request.Join)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend.now = func() time.Time { return join.Join.ExpiresAt.Add(time.Hour) }
+	join.Clear()
+	// The recovery authority is definitive: the original request did not reach
+	// the server. Once the credential has expired, it must not be sent again.
+	effects.remoteExchange = nil
+	effects.loseExchangeResponse = false
+	_, err = backend.Run(context.Background(), request)
+	assertNodeFault(t, err, "NODE_ENROLLMENT_REJECTED")
+	if effects.exchangeCalls != 1 || effects.recoveryCalls != 1 || effects.recoveryProofCalls != 0 ||
+		effects.enrollmentIntent != nil || effects.enrollmentAttempted || effects.enrollmentResponse != nil {
+		t.Fatal("expired credential was replayed or rejected intent was retained")
+	}
+}
+
+func TestNodeEnrollmentCompletionUnavailableResumesWithoutReexchange(t *testing.T) {
+	request, _ := nodeRequest(t)
+	effects := &nodeEffects{enrollmentCompletionFailure: ErrEnrollmentUnavailable}
+	backend := newNodeBackend(t, effects)
+	_, err := backend.Run(context.Background(), request)
+	assertNodeFault(t, err, "NODE_ENROLLMENT_COMPLETION_PENDING")
+	pending := nodeState(t, request.Root)
+	if pending.Active == nil || pending.Active.Phase != lifecycle.PhaseCommitting || effects.exchangeCalls != 1 ||
+		effects.completionCalls != 1 || effects.rollbacks != 0 || effects.enrollmentIntent == nil || effects.enrollmentResponse == nil {
+		t.Fatal("retryable completion failure lost or rolled back the sealed enrollment")
+	}
+
+	effects.enrollmentCompletionFailure = nil
+	effects.ready = false
+	effects.failPhase, effects.failure = lifecycle.PhaseStarting, ErrVerification
+	_, err = backend.Run(context.Background(), cli.Request{
+		Subject: cli.SubjectNode, Action: lifecycle.ActionStart, Root: request.Root,
+	})
+	assertNodeFault(t, err, "NODE_VERIFICATION_FAILED")
+	stillPending := nodeState(t, request.Root)
+	if stillPending.Active == nil || stillPending.Active.Phase != lifecycle.PhaseCommitting ||
+		effects.exchangeCalls != 1 || effects.completionCalls != 1 || effects.rollbacks != 0 ||
+		effects.enrollmentIntent == nil || effects.enrollmentResponse == nil {
+		t.Fatal("local resume failure after unknown completion rolled back possible remote success")
+	}
+	result, err := backend.Run(context.Background(), cli.Request{
+		Subject: cli.SubjectNode, Action: lifecycle.ActionStart, Root: request.Root,
+	})
+	if err != nil || result.State != "READY" || result.CorrelationID != pending.Active.Command.ID {
+		t.Fatalf("resume node enrollment completion: %#v / %v", result, err)
+	}
+	if effects.exchangeCalls != 1 || effects.completionCalls != 2 || effects.rollbacks != 0 ||
+		effects.enrollmentIntent != nil || effects.enrollmentResponse != nil {
+		t.Fatal("completion retry exchanged again, rolled back, or retained bootstrap state")
+	}
+}
+
+func TestNodeEnrollmentHasNoFallibleEffectAfterRemotePublication(t *testing.T) {
+	request, _ := nodeRequest(t)
+	effects := &nodeEffects{failPhase: lifecycle.PhaseCommitting, failure: ErrVerification}
+	backend := newNodeBackend(t, effects)
+	result, err := backend.Run(context.Background(), request)
+	if err != nil || result.State != "READY" || effects.completionCalls != 1 || effects.failure == nil {
+		t.Fatalf("node enrollment publication ordering: %#v / %v", result, err)
+	}
+	for _, phase := range effects.phases {
+		if phase == lifecycle.PhaseCommitting {
+			t.Fatal("node enrollment ran a local effect after remote publication")
+		}
+	}
+}
+
+func TestNodeEnrollmentSuccessfulCleanupResumesBeforeAnotherStart(t *testing.T) {
+	request, _ := nodeRequest(t)
+	effects := &nodeEffects{cleanupFailure: ErrUnavailable}
+	backend := newNodeBackend(t, effects)
+	_, err := backend.Run(context.Background(), request)
+	assertNodeFault(t, err, "NODE_ENROLLMENT_CLEANUP_PENDING")
+	committed := nodeState(t, request.Root)
+	if committed.Active != nil || committed.CurrentReleaseID == "" || committed.Last == nil ||
+		committed.Last.Outcome != lifecycle.OutcomeSucceeded || effects.enrollmentIntent == nil ||
+		effects.enrollmentResponse == nil || effects.exchangeCalls != 1 || effects.completionCalls != 1 {
+		t.Fatal("successful enrollment cleanup failure lost its committed state")
+	}
+	effects.cleanupFailure = nil
+	result, err := backend.Run(context.Background(), cli.Request{
+		Subject: cli.SubjectNode, Action: lifecycle.ActionStart, Root: request.Root,
+	})
+	if err != nil || result.State != "READY" || effects.enrollmentIntent != nil ||
+		effects.enrollmentResponse != nil || effects.exchangeCalls != 1 || effects.completionCalls != 1 {
+		t.Fatalf("resume successful enrollment cleanup before start: %#v / %v", result, err)
+	}
+}
+
+func TestNodeEnrollmentSuccessfulCleanupReportsSubstitutionAsConflict(t *testing.T) {
+	request, _ := nodeRequest(t)
+	effects := &nodeEffects{cleanupFailure: ErrConflict}
+	backend := newNodeBackend(t, effects)
+
+	_, err := backend.Run(context.Background(), request)
+	assertNodeFault(t, err, "NODE_ENROLLMENT_CLEANUP_CONFLICT")
+	committed := nodeState(t, request.Root)
+	if committed.Active != nil || committed.CurrentReleaseID == "" || committed.Last == nil ||
+		committed.Last.Outcome != lifecycle.OutcomeSucceeded || effects.exchangeCalls != 1 ||
+		effects.completionCalls != 1 || effects.enrollmentIntent == nil || effects.enrollmentResponse == nil {
+		t.Fatal("cleanup substitution conflict changed the committed enrollment")
+	}
+}
+
+func TestNodeEnrollmentCompletionRejectionRollsBackAndCleansOnlyEnrollment(t *testing.T) {
+	request, _ := nodeRequest(t)
+	effects := &nodeEffects{enrollmentCompletionFailure: ErrEnrollmentRejected}
+	backend := newNodeBackend(t, effects)
+	_, err := backend.Run(context.Background(), request)
+	assertNodeFault(t, err, "NODE_ENROLLMENT_REJECTED")
+	failed := nodeState(t, request.Root)
+	if failed.Active != nil || failed.Last == nil || failed.Last.Outcome != lifecycle.OutcomeRolledBack ||
+		failed.CurrentReleaseID != "" || effects.rollbacks != 1 || effects.enrollmentCleanupCalls != 1 ||
+		effects.exchangeCalls != 1 || effects.completionCalls != 1 || effects.enrollmentIntent != nil ||
+		effects.enrollmentResponse != nil {
+		t.Fatal("definitive completion rejection retained services, credentials, or a ready release")
+	}
+	before := journalBytes(t, request.Root)
+	for _, replay := range []cli.Request{
+		{Subject: cli.SubjectNode, Action: lifecycle.ActionStart, Root: request.Root},
+		request,
+	} {
+		_, err = backend.Run(context.Background(), replay)
+		assertNodeFault(t, err, lifecycle.NodeEnrollmentRejectedFailureCode)
+	}
+	if !bytes.Equal(before, journalBytes(t, request.Root)) || effects.rollbacks != 1 ||
+		effects.enrollmentCleanupCalls != 1 || effects.exchangeCalls != 1 || effects.completionCalls != 1 {
+		t.Fatal("completed rejection replay repeated cleanup, exchange, completion, or rollback")
+	}
+}
+
+func TestNodeEnrollmentRejectedCleanupResumesAfterTerminalJournal(t *testing.T) {
+	request, _ := nodeRequest(t)
+	effects := &nodeEffects{
+		enrollmentCompletionFailure: ErrEnrollmentRejected,
+		cleanupFailure:              ErrUnavailable,
+	}
+	backend := newNodeBackend(t, effects)
+	_, err := backend.Run(context.Background(), request)
+	assertNodeFault(t, err, "NODE_ENROLLMENT_CLEANUP_PENDING")
+	terminal := nodeState(t, request.Root)
+	if !rejectedEnrollmentCleanupPending(terminal) || effects.rollbacks != 1 ||
+		effects.enrollmentCleanupCalls != 1 || effects.enrollmentIntent == nil || effects.enrollmentResponse == nil {
+		t.Fatal("cleanup failure was not retained behind a terminal rollback journal")
+	}
+	before := journalBytes(t, request.Root)
+	effects.cleanupFailure = nil
+	_, err = backend.Run(context.Background(), cli.Request{
+		Subject: cli.SubjectNode, Action: lifecycle.ActionStart, Root: request.Root,
+	})
+	assertNodeFault(t, err, "NODE_ENROLLMENT_REJECTED")
+	if !bytes.Equal(before, journalBytes(t, request.Root)) || effects.rollbacks != 1 ||
+		effects.enrollmentCleanupCalls != 1 || effects.enrollmentCleanupResumeCalls != 1 ||
+		effects.exchangeCalls != 1 || effects.completionCalls != 1 ||
+		effects.enrollmentIntent != nil || effects.enrollmentResponse != nil {
+		t.Fatal("terminal cleanup replay changed lifecycle or repeated exchange/completion")
+	}
+}
+
+func TestNodeEnrollmentExchangeRejectionDiscardsUnredeemableIntent(t *testing.T) {
+	request, _ := nodeRequest(t)
+	effects := &nodeEffects{enrollmentExchangeFailure: ErrEnrollmentRejected}
+	backend := newNodeBackend(t, effects)
+	_, err := backend.Run(context.Background(), request)
+	assertNodeFault(t, err, "NODE_ENROLLMENT_REJECTED")
+	if effects.exchangeCalls != 1 || effects.enrollmentIntent != nil || effects.enrollmentAttempted ||
+		effects.enrollmentResponse != nil || effects.completionCalls != 0 || len(effects.phases) != 0 {
+		t.Fatal("definitively rejected exchange retained bootstrap authority or reached node effects")
+	}
+	session, err := journal.Acquire(context.Background(), request.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initialized, stateErr := session.Initialized()
+	closeErr := session.Close()
+	if stateErr != nil || initialized || closeErr != nil {
+		t.Fatal("rejected exchange initialized an installation journal")
+	}
+}
+
 func TestNodeInstallResumesUnknownStartupAndPinsEnrollment(t *testing.T) {
-	request, input := nodeRequest(t)
+	request, _ := nodeRequest(t)
 	effects := &nodeEffects{failPhase: lifecycle.PhaseStarting, failure: ErrOutcomeUnknown}
-	backend, _ := NewBackend(effects)
+	backend := newNodeBackend(t, effects)
 	_, err := backend.Run(context.Background(), request)
 	assertNodeFault(t, err, "EFFECT_OUTCOME_UNKNOWN")
 	state := nodeState(t, request.Root)
@@ -32,15 +333,15 @@ func TestNodeInstallResumesUnknownStartupAndPinsEnrollment(t *testing.T) {
 	}
 	commandID := state.Active.Command.ID
 	before := journalBytes(t, request.Root)
-	input.Node.ExpectedFingerprint = "sha256:" + strings.Repeat("b", 64)
-	writeInput(t, request.Configuration, input)
+	originalJoin := request.Join
+	conflicting, _ := nodeRequest(t)
+	request.Join = conflicting.Join
 	_, err = backend.Run(context.Background(), request)
 	assertNodeFault(t, err, "NODE_ENROLLMENT_CONFLICT")
 	if !bytes.Equal(before, journalBytes(t, request.Root)) {
 		t.Fatal("conflicting enrollment changed the sealed journal")
 	}
-	input.Node.ExpectedFingerprint = "sha256:" + strings.Repeat("a", 64)
-	writeInput(t, request.Configuration, input)
+	request.Join = originalJoin
 	result, err := backend.Run(context.Background(), request)
 	if err != nil || result.State != "READY" || !result.Changed || result.CorrelationID != commandID {
 		t.Fatalf("resume node: %#v / %v", result, err)
@@ -69,7 +370,7 @@ func TestNodeInstallResumesUnknownStartupAndPinsEnrollment(t *testing.T) {
 func TestNodeSupportPreservesJournalAndNeverReconcilesOrResumesAnIntent(t *testing.T) {
 	request, _ := nodeRequest(t)
 	effects := &nodeEffects{supportCreated: true}
-	backend, _ := NewBackend(effects)
+	backend := newNodeBackend(t, effects)
 	installed, err := backend.Run(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
@@ -122,7 +423,7 @@ func TestNodeUpgradeResumesProtectedCandidateAndRollbackKeepsLatestCredentials(t
 	}
 	request, input := nodeRequest(t, fixtures[0])
 	effects := &nodeEffects{}
-	backend, _ := NewBackend(effects)
+	backend := newNodeBackend(t, effects)
 	if _, err := backend.Run(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +461,7 @@ func TestNodeUpgradeResumesProtectedCandidateAndRollbackKeepsLatestCredentials(t
 		t.Fatal(err)
 	}
 	if _, err := backend.Run(context.Background(), cli.Request{Action: lifecycle.ActionRotateCredentials, Root: request.Root,
-		Configuration: request.Configuration, ExpectedConfigurationDigest: before.Node.ConfigurationDigest, RevokePreviousCredentials: true}); err != nil {
+		Configuration: rotationInput(request), ExpectedConfigurationDigest: before.Node.ConfigurationDigest, RevokePreviousCredentials: true}); err != nil {
 		t.Fatal(err)
 	}
 	latest := nodeState(t, request.Root)
@@ -203,7 +504,7 @@ func TestNodeReleaseChangesResumeEveryAcceptedPhase(t *testing.T) {
 			t.Run(string(action)+"/"+string(phase), func(t *testing.T) {
 				request, _ := nodeRequest(t, fixtures[0])
 				effects := &nodeEffects{}
-				backend, _ := NewBackend(effects)
+				backend := newNodeBackend(t, effects)
 				if _, err := backend.Run(context.Background(), request); err != nil {
 					t.Fatal(err)
 				}
@@ -242,7 +543,7 @@ func TestNodeFailedUpgradeRetainsRecoveryIntentAndCannotFabricateReadiness(t *te
 	}
 	request, _ := nodeRequest(t, fixtures[0])
 	effects := &nodeEffects{}
-	backend, _ := NewBackend(effects)
+	backend := newNodeBackend(t, effects)
 	if _, err := backend.Run(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +577,7 @@ func TestNodeReleaseChangeRejectsWrongLineageAndTamperedStagedIntent(t *testing.
 	}
 	request, _ := nodeRequest(t, fixtures[0])
 	effects := &nodeEffects{}
-	backend, _ := NewBackend(effects)
+	backend := newNodeBackend(t, effects)
 	if _, err := backend.Run(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +607,7 @@ func TestNodeReleasePlanRejectsDifferentRuntimeAndCredentialAuthority(t *testing
 		t.Fatal(err)
 	}
 	request, _ := nodeRequest(t, fixtures[0])
-	configuration, material, err := enrollment(request.Root, request.Configuration)
+	configuration, material, err := enrollment(request.Root, rotationInput(request))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -360,7 +661,7 @@ func TestNodeReleasePlanAdmitsOnlyTheDeploymentRuntimePredecessorAsInstalledStat
 		t.Fatal(err)
 	}
 	request, _ := nodeRequest(t, fixtures[1])
-	configuration, material, err := enrollment(request.Root, request.Configuration)
+	configuration, material, err := enrollment(request.Root, rotationInput(request))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -404,19 +705,21 @@ func TestNodeReleasePlanAdmitsOnlyTheDeploymentRuntimePredecessorAsInstalledStat
 
 func TestNodeStartResumesOnlyConfiguredInstallWithoutNewEnrollment(t *testing.T) {
 	for _, phase := range []lifecycle.Phase{lifecycle.PhasePreflight, lifecycle.PhaseStaging,
-		lifecycle.PhaseConfiguring, lifecycle.PhaseStarting, lifecycle.PhaseVerifying, lifecycle.PhaseCommitting} {
+		lifecycle.PhaseConfiguring, lifecycle.PhaseStarting, lifecycle.PhaseVerifying} {
 		t.Run(string(phase), func(t *testing.T) {
 			request, _ := nodeRequest(t)
 			effects := &nodeEffects{failPhase: phase, failure: ErrOutcomeUnknown}
-			backend, _ := NewBackend(effects)
+			backend := newNodeBackend(t, effects)
 			_, err := backend.Run(context.Background(), request)
 			assertNodeFault(t, err, "EFFECT_OUTCOME_UNKNOWN")
 			state := nodeState(t, request.Root)
 			command := state.Active.Command
 			before, calls := journalBytes(t, request.Root), len(effects.phases)
 			effects.ready = false // A guest boot loses its transient services.
-			if err := os.Remove(request.Configuration); err != nil {
-				t.Fatal(err)
+			for _, path := range []string{rotationInput(request), request.Join} {
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
 			}
 			result, err := backend.Run(context.Background(), cli.Request{Action: lifecycle.ActionStart, Root: request.Root})
 			if phase == lifecycle.PhasePreflight || phase == lifecycle.PhaseStaging || phase == lifecycle.PhaseConfiguring {
@@ -442,7 +745,7 @@ func TestNodeBootRejectsTamperedPendingInstallationBeforeEffects(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			request, _ := nodeRequest(t)
 			effects := &nodeEffects{failPhase: lifecycle.PhaseStarting, failure: ErrOutcomeUnknown}
-			backend, _ := NewBackend(effects)
+			backend := newNodeBackend(t, effects)
 			_, err := backend.Run(context.Background(), request)
 			assertNodeFault(t, err, "EFFECT_OUTCOME_UNKNOWN")
 			artifact := layout.NodePrivateKey
@@ -495,7 +798,7 @@ func TestNodeRejectsInvalidInputAndPlatformRootsBeforeEffects(t *testing.T) {
 				}
 				before = journalBytes(t, request.Root)
 			}
-			backend, _ := NewBackend(effects)
+			backend := newNodeBackend(t, effects)
 			if _, err := backend.Run(context.Background(), request); err == nil || len(effects.phases) != 0 || effects.rollbacks != 0 {
 				t.Fatal("invalid node install reached effects")
 			}
@@ -503,8 +806,20 @@ func TestNodeRejectsInvalidInputAndPlatformRootsBeforeEffects(t *testing.T) {
 				if !bytes.Equal(before, journalBytes(t, request.Root)) {
 					t.Fatal("node command changed a platform root")
 				}
-			} else if _, err := os.Lstat(request.Root); !errors.Is(err, os.ErrNotExist) {
-				t.Fatal("invalid enrollment created a root")
+			} else if mode == "platform release" {
+				if _, err := os.Lstat(request.Root); !errors.Is(err, os.ErrNotExist) {
+					t.Fatal("invalid release created a root")
+				}
+			} else {
+				session, err := journal.Acquire(context.Background(), request.Root)
+				if err != nil {
+					t.Fatal("rejected enrollment root cannot be inspected")
+				}
+				initialized, stateErr := session.Initialized()
+				closeErr := session.Close()
+				if stateErr != nil || initialized || closeErr != nil {
+					t.Fatal("invalid enrollment initialized a journal")
+				}
 			}
 		})
 	}
@@ -513,7 +828,7 @@ func TestNodeRejectsInvalidInputAndPlatformRootsBeforeEffects(t *testing.T) {
 func TestNodeStoredCredentialSubstitutionAndUnsupportedActionsFailClosed(t *testing.T) {
 	request, _ := nodeRequest(t)
 	effects := &nodeEffects{}
-	backend, _ := NewBackend(effects)
+	backend := newNodeBackend(t, effects)
 	if _, err := backend.Run(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
@@ -537,7 +852,7 @@ func TestNodeStoredCredentialSubstitutionAndUnsupportedActionsFailClosed(t *test
 func TestNodeFailedVerificationRollsBackOnlySupervisionAndCanRetry(t *testing.T) {
 	request, _ := nodeRequest(t)
 	effects := &nodeEffects{failPhase: lifecycle.PhaseVerifying, failure: ErrVerification}
-	backend, _ := NewBackend(effects)
+	backend := newNodeBackend(t, effects)
 	if _, err := backend.Run(context.Background(), request); err == nil {
 		t.Fatal("failed node verification was committed")
 	}
@@ -566,7 +881,7 @@ func TestNodeCredentialRotationResumesSealedInputWithoutRestoringRetiredKeys(t *
 		t.Run(string(phase), func(t *testing.T) {
 			request, input := nodeRequest(t)
 			effects := &nodeEffects{}
-			backend, _ := NewBackend(effects)
+			backend := newNodeBackend(t, effects)
 			if _, err := backend.Run(context.Background(), request); err != nil {
 				t.Fatal(err)
 			}
@@ -578,7 +893,7 @@ func TestNodeCredentialRotationResumesSealedInputWithoutRestoringRetiredKeys(t *
 				}
 			}
 			rotation := cli.Request{Subject: cli.SubjectNode, Action: lifecycle.ActionRotateCredentials,
-				Root: request.Root, Configuration: request.Configuration,
+				Root: request.Root, Configuration: rotationInput(request),
 				ExpectedConfigurationDigest: original.Node.ConfigurationDigest, RevokePreviousCredentials: true}
 			effects.failPhase, effects.failure = phase, ErrOutcomeUnknown
 			_, err := backend.Run(context.Background(), rotation)
@@ -594,7 +909,7 @@ func TestNodeCredentialRotationResumesSealedInputWithoutRestoringRetiredKeys(t *
 			if _, err := backend.Run(context.Background(), changed); err == nil || !bytes.Equal(before, journalBytes(t, request.Root)) || calls != len(effects.phases) {
 				t.Fatal("active rotation accepted a different retirement policy")
 			}
-			if err := os.Remove(request.Configuration); err != nil {
+			if err := os.Remove(rotationInput(request)); err != nil {
 				t.Fatal(err)
 			}
 			result, err := backend.Run(context.Background(), cli.Request{Action: lifecycle.ActionStart, Root: request.Root})
@@ -610,7 +925,7 @@ func TestNodeCredentialRotationResumesSealedInputWithoutRestoringRetiredKeys(t *
 			if _, err := backend.Run(context.Background(), cli.Request{Action: lifecycle.ActionStart, Root: request.Root}); err != nil {
 				t.Fatal(err)
 			}
-			writeInput(t, request.Configuration, input)
+			writeInput(t, rotationInput(request), input)
 			before = journalBytes(t, request.Root)
 			result, err = backend.Run(context.Background(), rotation)
 			if err != nil || result.Changed || result.CorrelationID != command.ID || !bytes.Equal(before, journalBytes(t, request.Root)) {
@@ -623,7 +938,7 @@ func TestNodeCredentialRotationResumesSealedInputWithoutRestoringRetiredKeys(t *
 func TestNodeCredentialCleanupFailureRetainsCommitAndBlocksAnotherRotation(t *testing.T) {
 	request, input := nodeRequest(t)
 	effects := &nodeEffects{}
-	backend, _ := NewBackend(effects)
+	backend := newNodeBackend(t, effects)
 	if _, err := backend.Run(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
@@ -631,7 +946,7 @@ func TestNodeCredentialCleanupFailureRetainsCommitAndBlocksAnotherRotation(t *te
 	if err := os.WriteFile(input.Node.PrivateKeyFile, []byte("replacement-key"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	rotation := cli.Request{Action: lifecycle.ActionRotateCredentials, Root: request.Root, Configuration: request.Configuration,
+	rotation := cli.Request{Action: lifecycle.ActionRotateCredentials, Root: request.Root, Configuration: rotationInput(request),
 		ExpectedConfigurationDigest: original.Node.ConfigurationDigest, RevokePreviousCredentials: true}
 	effects.cleanupFailure = ErrUnavailable
 	_, err := backend.Run(context.Background(), rotation)
@@ -665,12 +980,12 @@ func TestNodeCredentialRotationRejectsChangedIdentityAndStaleInputBeforeIntent(t
 		t.Run(mode, func(t *testing.T) {
 			request, input := nodeRequest(t)
 			effects := &nodeEffects{}
-			backend, _ := NewBackend(effects)
+			backend := newNodeBackend(t, effects)
 			if _, err := backend.Run(context.Background(), request); err != nil {
 				t.Fatal(err)
 			}
 			rotation := cli.Request{Action: lifecycle.ActionRotateCredentials, Root: request.Root,
-				Configuration: request.Configuration, ExpectedConfigurationDigest: nodeState(t, request.Root).Node.ConfigurationDigest,
+				Configuration: rotationInput(request), ExpectedConfigurationDigest: nodeState(t, request.Root).Node.ConfigurationDigest,
 				RevokePreviousCredentials: true}
 			if os.WriteFile(input.Node.PrivateKeyFile, []byte("new-test-key"), 0o600) != nil {
 				t.Fatal("write replacement fixture")
@@ -695,7 +1010,7 @@ func TestNodeCredentialRotationRejectsChangedIdentityAndStaleInputBeforeIntent(t
 			case "stale digest":
 				rotation.ExpectedConfigurationDigest = "sha256:" + strings.Repeat("b", 64)
 			}
-			writeInput(t, request.Configuration, input)
+			writeInput(t, rotationInput(request), input)
 			before, calls := journalBytes(t, request.Root), len(effects.phases)
 			if _, err := backend.Run(context.Background(), rotation); err == nil || !bytes.Equal(before, journalBytes(t, request.Root)) || calls != len(effects.phases) {
 				t.Fatal("invalid rotation changed intent or native effects")
@@ -705,18 +1020,34 @@ func TestNodeCredentialRotationRejectsChangedIdentityAndStaleInputBeforeIntent(t
 }
 
 type nodeEffects struct {
-	invalid         bool
-	ready           bool
-	failPhase       lifecycle.Phase
-	failure         error
-	cleanupFailure  error
-	rollbackFailure error
-	phases          []lifecycle.Phase
-	rollbacks       int
-	supportCalls    int
-	supportPlan     SupportPlan
-	supportFailure  error
-	supportCreated  bool
+	invalid                      bool
+	ready                        bool
+	failPhase                    lifecycle.Phase
+	failure                      error
+	cleanupFailure               error
+	rollbackFailure              error
+	phases                       []lifecycle.Phase
+	rollbacks                    int
+	supportCalls                 int
+	supportPlan                  SupportPlan
+	supportFailure               error
+	supportCreated               bool
+	enrollmentIntent             *EnrollmentIntent
+	enrollmentAttempted          bool
+	enrollmentResponse           *paasv1.NodeEnrollmentExchangeResponse
+	enrollmentExchangeFailure    error
+	exchangeRejectAfterCommit    bool
+	enrollmentCompletionFailure  error
+	recoveryChallengeFailure     error
+	loseExchangeResponse         bool
+	remoteExchange               *paasv1.NodeEnrollmentExchangeResponse
+	exchangeCalls                int
+	recoveryCalls                int
+	recoveryProofCalls           int
+	completionCalls              int
+	enrollmentCleanupCalls       int
+	enrollmentCleanupPending     bool
+	enrollmentCleanupResumeCalls int
 }
 
 func (effects *nodeEffects) ValidateEnrollment(Plan) error {
@@ -803,6 +1134,242 @@ func (effects *nodeEffects) ReadRotation(root, digest string) (nodeconfig.Config
 func (effects *nodeEffects) FinalizeRotation(context.Context, Plan, lifecycle.Command) error {
 	return effects.cleanupFailure
 }
+
+func (effects *nodeEffects) MachineFingerprint(context.Context, string) (string, error) {
+	return "sha256:" + strings.Repeat("a", 64), nil
+}
+
+func (effects *nodeEffects) ResumeEnrollmentCleanup(string) (bool, error) {
+	if !effects.enrollmentCleanupPending {
+		return false, nil
+	}
+	effects.enrollmentCleanupResumeCalls++
+	if effects.cleanupFailure != nil {
+		return false, effects.cleanupFailure
+	}
+	effects.enrollmentCleanupPending = false
+	effects.clearEnrollmentState()
+	return true, nil
+}
+
+func (effects *nodeEffects) ReadEnrollmentIntent(string) (EnrollmentIntent, bool, error) {
+	if effects.enrollmentIntent == nil {
+		return EnrollmentIntent{}, false, nil
+	}
+	value, err := cloneEnrollmentIntent(*effects.enrollmentIntent)
+	return value, err == nil, err
+}
+
+func (effects *nodeEffects) CreateEnrollmentIntent(_ string, value EnrollmentIntent) error {
+	if effects.enrollmentIntent != nil || ValidateEnrollmentIntent(value) != nil {
+		return ErrConflict
+	}
+	cloned, err := cloneEnrollmentIntent(value)
+	if err != nil {
+		return ErrVerification
+	}
+	effects.enrollmentIntent = &cloned
+	return nil
+}
+
+func (effects *nodeEffects) EnrollmentExchangeAttempted(_ string, value EnrollmentIntent) (bool, error) {
+	if effects.enrollmentIntent == nil || !sameEnrollmentJoin(effects.enrollmentIntent.Join, value.Join) {
+		return false, ErrConflict
+	}
+	return effects.enrollmentAttempted, nil
+}
+
+func (effects *nodeEffects) MarkEnrollmentExchangeAttempted(_ string, value EnrollmentIntent) error {
+	if effects.enrollmentIntent == nil || !sameEnrollmentJoin(effects.enrollmentIntent.Join, value.Join) {
+		return ErrConflict
+	}
+	effects.enrollmentAttempted = true
+	return nil
+}
+
+func (effects *nodeEffects) ReadEnrollmentResponse(
+	_ string,
+	intent EnrollmentIntent,
+) (paasv1.NodeEnrollmentExchangeResponse, bool, error) {
+	if effects.enrollmentResponse == nil {
+		return paasv1.NodeEnrollmentExchangeResponse{}, false, nil
+	}
+	if ValidateEnrollmentResponse(intent, *effects.enrollmentResponse) != nil {
+		return paasv1.NodeEnrollmentExchangeResponse{}, false, ErrVerification
+	}
+	return *effects.enrollmentResponse, true, nil
+}
+
+func (effects *nodeEffects) CreateEnrollmentResponse(
+	_ string,
+	intent EnrollmentIntent,
+	response paasv1.NodeEnrollmentExchangeResponse,
+) error {
+	if effects.enrollmentResponse != nil || ValidateEnrollmentResponse(intent, response) != nil {
+		return ErrConflict
+	}
+	effects.enrollmentResponse = &response
+	return nil
+}
+
+func (effects *nodeEffects) DiscardEnrollmentIntent(_ string, intent EnrollmentIntent) error {
+	if effects.enrollmentIntent == nil || effects.enrollmentResponse != nil ||
+		!sameEnrollmentJoin(effects.enrollmentIntent.Join, intent.Join) {
+		return ErrConflict
+	}
+	effects.enrollmentIntent.Clear()
+	effects.enrollmentIntent = nil
+	effects.enrollmentAttempted = false
+	effects.remoteExchange = nil
+	return nil
+}
+
+func (effects *nodeEffects) FinalizeEnrollment(
+	_ string,
+	intent EnrollmentIntent,
+	response paasv1.NodeEnrollmentExchangeResponse,
+) error {
+	if effects.enrollmentIntent == nil || effects.enrollmentResponse == nil ||
+		!sameEnrollmentJoin(effects.enrollmentIntent.Join, intent.Join) || *effects.enrollmentResponse != response {
+		return ErrConflict
+	}
+	effects.enrollmentCleanupPending = true
+	if effects.cleanupFailure != nil {
+		return effects.cleanupFailure
+	}
+	effects.enrollmentCleanupPending = false
+	effects.clearEnrollmentState()
+	return nil
+}
+
+func (effects *nodeEffects) clearEnrollmentState() {
+	if effects.enrollmentIntent != nil {
+		effects.enrollmentIntent.Clear()
+	}
+	effects.enrollmentIntent = nil
+	effects.enrollmentResponse = nil
+	effects.enrollmentAttempted = false
+	effects.remoteExchange = nil
+}
+
+func (effects *nodeEffects) CleanupRejectedEnrollment(
+	_ context.Context,
+	_ Plan,
+	intent EnrollmentIntent,
+	response paasv1.NodeEnrollmentExchangeResponse,
+) error {
+	effects.enrollmentCleanupCalls++
+	return effects.FinalizeEnrollment("", intent, response)
+}
+
+func (effects *nodeEffects) Exchange(
+	_ context.Context,
+	join paasv1.NodeEnrollmentJoin,
+	request paasv1.ExchangeNodeEnrollmentRequest,
+) (paasv1.NodeEnrollmentExchangeResponse, error) {
+	effects.exchangeCalls++
+	if effects.enrollmentExchangeFailure != nil {
+		return paasv1.NodeEnrollmentExchangeResponse{}, effects.enrollmentExchangeFailure
+	}
+	response, err := testEnrollmentExchangeResponse(join, request)
+	if err != nil {
+		return paasv1.NodeEnrollmentExchangeResponse{}, err
+	}
+	if effects.exchangeRejectAfterCommit {
+		effects.exchangeRejectAfterCommit = false
+		effects.remoteExchange = &response
+		return paasv1.NodeEnrollmentExchangeResponse{}, ErrEnrollmentRejected
+	}
+	if effects.loseExchangeResponse {
+		effects.remoteExchange = &response
+		return paasv1.NodeEnrollmentExchangeResponse{}, ErrEnrollmentUnavailable
+	}
+	return response, nil
+}
+
+func (effects *nodeEffects) CreateRecoveryChallenge(
+	_ context.Context,
+	_ paasv1.NodeEnrollmentJoin,
+	request paasv1.CreateNodeEnrollmentRecoveryChallengeRequest,
+) (paasv1.NodeEnrollmentRecoveryChallenge, error) {
+	effects.recoveryCalls++
+	if effects.recoveryChallengeFailure != nil {
+		return paasv1.NodeEnrollmentRecoveryChallenge{}, effects.recoveryChallengeFailure
+	}
+	if effects.remoteExchange == nil {
+		return paasv1.NodeEnrollmentRecoveryChallenge{}, ErrEnrollmentNotExchanged
+	}
+	issuedAt := time.Now().UTC().Truncate(time.Microsecond)
+	challenge := paasv1.NodeEnrollmentRecoveryChallenge{
+		APIVersion: request.APIVersion, Kind: paasv1.NodeEnrollmentRecoveryChallengeKind,
+		EnrollmentID: request.EnrollmentID, InstallationID: request.InstallationID,
+		ExecutionTargetID: request.ExecutionTargetID, ExchangeID: request.ExchangeID,
+		MachineFingerprint: request.MachineFingerprint, RuntimeContractDigest: request.RuntimeContractDigest,
+		NodePublicKeyFingerprint:      request.NodePublicKeyFingerprint,
+		CollectorPublicKeyFingerprint: request.CollectorPublicKeyFingerprint,
+		Challenge:                     base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 32)),
+		IssuedAt:                      issuedAt, ExpiresAt: issuedAt.Add(time.Minute),
+		Authenticator: base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x24}, 32)),
+	}
+	if paasv1.ValidateNodeEnrollmentRecoveryChallengeForRequest(challenge, request) != nil {
+		return paasv1.NodeEnrollmentRecoveryChallenge{}, ErrEnrollmentRejected
+	}
+	return challenge, nil
+}
+
+func (effects *nodeEffects) RecoverExchange(
+	_ context.Context,
+	_ paasv1.NodeEnrollmentJoin,
+	request paasv1.RecoverNodeEnrollmentExchangeRequest,
+) (paasv1.NodeEnrollmentExchangeResponse, error) {
+	effects.recoveryProofCalls++
+	if effects.remoteExchange == nil || paasv1.ValidateRecoverNodeEnrollmentExchangeRequest(request) != nil {
+		return paasv1.NodeEnrollmentExchangeResponse{}, ErrEnrollmentRejected
+	}
+	proof, err := paasv1.NodeEnrollmentRecoveryProofSigningBytes(request.Challenge)
+	if err != nil {
+		return paasv1.NodeEnrollmentExchangeResponse{}, ErrEnrollmentRejected
+	}
+	verify := func(certificateText, signatureText string) bool {
+		certificateDER, err := base64.RawURLEncoding.Strict().DecodeString(certificateText)
+		if err != nil {
+			return false
+		}
+		certificate, err := x509.ParseCertificate(certificateDER)
+		if err != nil || certificate == nil {
+			return false
+		}
+		signature, signatureErr := base64.RawURLEncoding.Strict().DecodeString(signatureText)
+		public, ok := certificate.PublicKey.(ed25519.PublicKey)
+		return signatureErr == nil && ok && ed25519.Verify(public, proof, signature)
+	}
+	if !verify(effects.remoteExchange.NodeCertificate, request.NodeSignature) ||
+		!verify(effects.remoteExchange.CollectorCertificate, request.CollectorSignature) {
+		return paasv1.NodeEnrollmentExchangeResponse{}, ErrEnrollmentRejected
+	}
+	return *effects.remoteExchange, nil
+}
+
+func (effects *nodeEffects) Complete(
+	_ context.Context,
+	_ paasv1.NodeEnrollmentJoin,
+	request paasv1.CompleteNodeEnrollmentRequest,
+) error {
+	effects.completionCalls++
+	if paasv1.ValidateCompleteNodeEnrollmentRequest(request) != nil {
+		return ErrEnrollmentRejected
+	}
+	return effects.enrollmentCompletionFailure
+}
+
+func cloneEnrollmentIntent(value EnrollmentIntent) (EnrollmentIntent, error) {
+	encoded, err := EncodeEnrollmentIntent(value)
+	if err != nil {
+		return EnrollmentIntent{}, err
+	}
+	defer clear(encoded)
+	return DecodeEnrollmentIntent(encoded)
+}
 func readFixtureNodeCredentials(root, prefix string) (nodeconfig.Configuration, Credentials, error) {
 	source, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(layout.NodeConfiguration)))
 	if err != nil {
@@ -822,6 +1389,101 @@ func readFixtureNodeCredentials(root, prefix string) (nodeconfig.Configuration, 
 		}
 	}
 	return config, material, nil
+}
+
+func testEnrollmentIssuer(installationID string) ([]byte, ed25519.PrivateKey, error) {
+	seed := sha256.Sum256([]byte("matrix nodecommand enrollment test issuer"))
+	private := ed25519.NewKeyFromSeed(seed[:])
+	issuerURI, err := paasv1.NodeEnrollmentIssuerURI(installationID)
+	if err != nil {
+		return nil, nil, err
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "Matrix node enrollment test issuer"},
+		NotBefore:             time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC),
+		NotAfter:              time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC),
+		BasicConstraintsValid: true, IsCA: true, MaxPathLen: 0, MaxPathLenZero: true,
+		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		URIs:     []*url.URL{issuerURI},
+	}
+	certificate, err := x509.CreateCertificate(rand.Reader, template, template, private.Public(), private)
+	if err != nil {
+		return nil, nil, err
+	}
+	return certificate, private, nil
+}
+
+func testEnrollmentExchangeResponse(
+	join paasv1.NodeEnrollmentJoin,
+	request paasv1.ExchangeNodeEnrollmentRequest,
+) (paasv1.NodeEnrollmentExchangeResponse, error) {
+	if paasv1.ValidateExchangeNodeEnrollmentRequest(request) != nil || request.EnrollmentID != join.EnrollmentID ||
+		request.InstallationID != join.InstallationID || request.ExecutionTargetID != join.ExecutionTargetID {
+		return paasv1.NodeEnrollmentExchangeResponse{}, ErrEnrollmentRejected
+	}
+	issuerDER, err := base64.RawURLEncoding.Strict().DecodeString(join.IssuerCertificate)
+	if err != nil {
+		return paasv1.NodeEnrollmentExchangeResponse{}, err
+	}
+	issuer, err := x509.ParseCertificate(issuerDER)
+	if err != nil {
+		return paasv1.NodeEnrollmentExchangeResponse{}, err
+	}
+	_, issuerPrivate, err := testEnrollmentIssuer(request.InstallationID)
+	public, ok := issuer.PublicKey.(ed25519.PublicKey)
+	if err != nil || !ok || !bytes.Equal(public, issuerPrivate.Public().(ed25519.PublicKey)) {
+		return paasv1.NodeEnrollmentExchangeResponse{}, ErrEnrollmentRejected
+	}
+	nodePKIX, collectorPKIX, err := paasv1.NodeEnrollmentExchangePublicKeys(request)
+	if err != nil {
+		return paasv1.NodeEnrollmentExchangeResponse{}, err
+	}
+	nodePublic, err := x509.ParsePKIXPublicKey(nodePKIX)
+	if err != nil {
+		return paasv1.NodeEnrollmentExchangeResponse{}, err
+	}
+	collectorPublic, err := x509.ParsePKIXPublicKey(collectorPKIX)
+	if err != nil {
+		return paasv1.NodeEnrollmentExchangeResponse{}, err
+	}
+	notBefore := time.Now().UTC().Add(-5 * time.Minute).Truncate(time.Second)
+	notAfter := notBefore.Add(24 * time.Hour)
+	roleCertificate := func(role string, public any, address net.IP, usages []x509.ExtKeyUsage, serial int64) (string, error) {
+		identity := &url.URL{Scheme: "spiffe", Host: "matrix.xiak.com",
+			Path: "/installations/" + request.InstallationID + "/" + role + "/" + string(request.ExecutionTargetID)}
+		template := &x509.Certificate{
+			SerialNumber: big.NewInt(serial), NotBefore: notBefore, NotAfter: notAfter,
+			BasicConstraintsValid: true, KeyUsage: x509.KeyUsageDigitalSignature,
+			ExtKeyUsage: usages, URIs: []*url.URL{identity}, IPAddresses: []net.IP{address},
+		}
+		certificate, err := x509.CreateCertificate(rand.Reader, template, issuer, public, issuerPrivate)
+		if err != nil {
+			return "", err
+		}
+		return base64.RawURLEncoding.EncodeToString(certificate), nil
+	}
+	nodeCertificate, err := roleCertificate("nodes", nodePublic, net.ParseIP("192.168.50.10"),
+		[]x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}, 2)
+	if err != nil {
+		return paasv1.NodeEnrollmentExchangeResponse{}, err
+	}
+	collectorCertificate, err := roleCertificate("collectors", collectorPublic, net.ParseIP("127.0.0.1"),
+		[]x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, 3)
+	if err != nil {
+		return paasv1.NodeEnrollmentExchangeResponse{}, err
+	}
+	response := paasv1.NodeEnrollmentExchangeResponse{
+		APIVersion: paasv1.NodeEnrollmentExchangeAPIVersion, Kind: paasv1.NodeEnrollmentExchangeResponseKind,
+		EnrollmentID: request.EnrollmentID, InstallationID: request.InstallationID,
+		ExecutionTargetID: request.ExecutionTargetID, ExchangeID: request.ExchangeID,
+		MachineFingerprint: request.MachineFingerprint, RuntimeContractDigest: request.RuntimeContractDigest,
+		ControllerID: "controller-a", BindingRef: "node-binding-" + strings.Repeat("a", 32),
+		NodeListenAddress: "192.168.50.10:16443", CollectorEndpoint: "https://127.0.0.1:19100",
+		NodeCertificate: nodeCertificate, CollectorCertificate: collectorCertificate,
+		IssuerCertificate:    join.IssuerCertificate,
+		CertificateNotBefore: notBefore, CertificateNotAfter: notAfter,
+	}
+	return response, nil
 }
 
 func nodeRequest(t *testing.T, supplied ...releasetest.Fixture) (cli.Request, nodeconfig.Enrollment) {
@@ -849,13 +1511,53 @@ func nodeRequest(t *testing.T, supplied ...releasetest.Fixture) (cli.Request, no
 	input := nodeconfig.Enrollment{APIVersion: nodeconfig.APIVersion, Kind: nodeconfig.EnrollmentKind,
 		Node: nodeconfig.Configuration{APIVersion: nodeconfig.APIVersion, Kind: nodeconfig.ConfigurationKind,
 			Identity:     nodev1.Identity{InstallationID: "mxi-" + strings.Repeat("a", 32), ExecutionTargetID: "target-a"},
-			ControllerID: "controller-a", BindingRef: "binding-a", ExpectedFingerprint: "sha256:" + strings.Repeat("a", 64),
-			ListenAddress: "127.0.0.1:16443", CollectorEndpoint: "https://127.0.0.1:19100", StoragePath: filepath.Join(root, "runtime", "executor"),
-			CertificateFile: filepath.Join(base, files[0]), PrivateKeyFile: filepath.Join(base, files[1]), TrustFile: filepath.Join(base, files[2])},
+			ControllerID: "controller-a", BindingRef: "node-binding-" + strings.Repeat("a", 32), ExpectedFingerprint: "sha256:" + strings.Repeat("a", 64),
+			ListenAddress: "192.168.50.10:16443", CollectorEndpoint: "https://127.0.0.1:19100", StoragePath: filepath.Join(root, "runtime", "executor"),
+			CertificateFile: filepath.Join(base, files[0]), PrivateKeyFile: filepath.Join(base, files[1]), TrustFile: filepath.Join(base, files[2]),
+			SystemReserve: nodeconfig.SelfEnrollmentSystemReserve()},
 		CollectorCertificateFile: filepath.Join(base, files[3]), CollectorPrivateKeyFile: filepath.Join(base, files[4])}
 	path := filepath.Join(base, "enrollment.json")
 	writeInput(t, path, input)
-	return cli.Request{Action: lifecycle.ActionInstall, Subject: cli.SubjectNode, Root: root, Bundle: fixture.Root, TrustKey: fixture.TrustPath, Configuration: path}, input
+	credential := []byte("0123456789abcdef0123456789abcdef")
+	credentialDigest := sha256.Sum256(credential)
+	issuer, issuerPrivate, err := testEnrollmentIssuer(input.Node.Identity.InstallationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enrollmentID := paasv1.ResourceID("node-enrollment-" + strings.Repeat("a", 32))
+	join := paasv1.NodeEnrollmentJoin{
+		APIVersion: paasv1.NodeEnrollmentJoinAPIVersion, Kind: paasv1.NodeEnrollmentJoinKind,
+		EnrollmentID: enrollmentID, InstallationID: input.Node.Identity.InstallationID,
+		ExecutionTargetID:  paasv1.ResourceID(input.Node.Identity.ExecutionTargetID),
+		ControlPlaneURL:    "https://matrix.internal/api/paas/v1/node-enrollments/" + string(enrollmentID) + "/exchange",
+		CredentialDigest:   "sha256:" + hex.EncodeToString(credentialDigest[:]),
+		ExpiresAt:          time.Now().UTC().Add(15 * time.Minute).Truncate(time.Microsecond),
+		IssuerCertificate:  base64.RawURLEncoding.EncodeToString(issuer),
+		SignatureAlgorithm: paasv1.NodeJoinSignatureEd25519,
+	}
+	commitment, err := paasv1.NodeEnrollmentJoinSigningBytes(join)
+	if err != nil {
+		t.Fatal(err)
+	}
+	join.Signature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(issuerPrivate, commitment))
+	joinInput := nodeconfig.JoinFile{
+		APIVersion: nodeconfig.APIVersion, Kind: nodeconfig.JoinFileKind,
+		Join: join, Credential: base64.RawURLEncoding.EncodeToString(credential),
+	}
+	joinBytes, err := json.Marshal(joinInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joinPath := filepath.Join(base, "join.json")
+	if err := os.WriteFile(joinPath, joinBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return cli.Request{Action: lifecycle.ActionInstall, Subject: cli.SubjectNode, Root: root,
+		Bundle: fixture.Root, TrustKey: fixture.TrustPath, Join: joinPath}, input
+}
+
+func rotationInput(request cli.Request) string {
+	return filepath.Join(filepath.Dir(request.Join), "enrollment.json")
 }
 
 func writeInput(t *testing.T, path string, value nodeconfig.Enrollment) {

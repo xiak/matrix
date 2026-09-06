@@ -152,7 +152,7 @@ func TestNodeCommandsStaySeparateAndRequireProtectedEnrollment(t *testing.T) {
 			})
 			args := []string{"--format", "json", "node", action, "--root", "/srv/node"}
 			if action == "install" {
-				args = append(args, "--bundle", "/media/node", "--trust-key", "/media/trust.json", "--configuration", "/private/enrollment.json")
+				args = append(args, "--bundle", "/media/node", "--trust-key", "/media/trust.json", "--join", "/private/join.json")
 			}
 			if action == "rotate-credentials" {
 				args = append(args, "--configuration", "/private/enrollment.json", "--expected-configuration-digest", "sha256:"+strings.Repeat("a", 64))
@@ -171,6 +171,9 @@ func TestNodeCommandsStaySeparateAndRequireProtectedEnrollment(t *testing.T) {
 			if action == "rotate-credentials" && !request.RevokePreviousCredentials {
 				t.Fatal("node rotation defaulted to retaining the previous trust set")
 			}
+			if action == "install" && request.Join != "/private/join.json" {
+				t.Fatal("node install lost its one-time join input")
+			}
 			if action == "support" && request.SupportOutput != "/srv/node/support/snapshot.json" {
 				t.Fatal("node support lost its explicit evidence destination")
 			}
@@ -182,6 +185,7 @@ func TestNodeCommandsStaySeparateAndRequireProtectedEnrollment(t *testing.T) {
 	}
 	for _, args := range [][]string{
 		{"node", "install", "--root", "/srv/node", "--bundle", "/media/node", "--trust-key", "/media/trust.json"},
+		{"node", "install", "--root", "/srv/node", "--bundle", "/media/node", "--trust-key", "/media/trust.json", "--configuration", "/private/enrollment.json"},
 		{"node", "backup", "--root", "/srv/node"},
 		{"node", "recover", "--root", "/srv/node"},
 		{"node", "start", "--root", "/srv/node", "--configuration", "/private/other.json"},
