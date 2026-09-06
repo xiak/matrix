@@ -113,6 +113,10 @@ func (client *edgeClient) json(
 		request.Header.Set("Authorization", "Bearer "+string(bearer))
 	}
 	for name, value := range headers {
+		if strings.EqualFold(name, "Host") {
+			request.Host = value
+			continue
+		}
 		request.Header.Set(name, value)
 	}
 	response, err := client.http.Do(request)

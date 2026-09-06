@@ -1,8 +1,19 @@
 package phase1e2e
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"math/big"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -249,9 +260,47 @@ func TestNativeReadinessRetryAccommodatesAuthenticatedObservation(t *testing.T) 
 	}
 }
 
+func TestNativeControlPlaneAddressIsOneCanonicalPrivateIPv4Address(t *testing.T) {
+	for _, value := range []string{"10.0.0.1", "172.16.0.1", "192.168.255.254"} {
+		if !validNativeControlPlaneAddress(value) {
+			t.Fatalf("private control-plane address %q was rejected", value)
+		}
+	}
+	for _, value := range []string{
+		"", "8.8.8.8", "127.0.0.1", "0.0.0.0", "169.254.1.1", "224.0.0.1",
+		"::1", "192.168.50.1:8443", "matrix.internal", "192.168.050.001",
+	} {
+		if validNativeControlPlaneAddress(value) {
+			t.Fatalf("external, ambiguous or non-canonical control-plane address %q was accepted", value)
+		}
+	}
+}
+
+func TestNativeEnrollmentTargetIdentityProtectsFirstFitOrdering(t *testing.T) {
+	for _, value := range []paasv1.ResourceID{
+		"execution-target-00000000000000000000000000000000",
+		"execution-target-abcdef0123456789abcdef0123456789",
+	} {
+		if !validNativeEnrollmentTargetID(value) {
+			t.Fatalf("generated enrollment target %q was rejected", value)
+		}
+	}
+	for _, value := range []paasv1.ResourceID{
+		"execution-target-local",
+		"execution-target-ABCDEF0123456789ABCDEF0123456789",
+		"execution-target-abcdef",
+		"execution-target-gggggggggggggggggggggggggggggggg",
+		"target-abcdef0123456789abcdef0123456789",
+	} {
+		if validNativeEnrollmentTargetID(value) {
+			t.Fatalf("ambiguous enrollment target %q was accepted", value)
+		}
+	}
+}
+
 func TestNativeFixtureRejectsAmbiguousOrExternalTargets(t *testing.T) {
 	directory := t.TempDir()
-	valid := nativeFixtureInput{ReleaseA: filepath.Join(directory, "a"), ReleaseB: filepath.Join(directory, "b"), IdentityFile: filepath.Join(directory, "client"), KnownHostsFile: filepath.Join(directory, "known_hosts"), FixtureRoot: "/data/xiak/matrix-native-gate-1", Nodes: []nativeNodeInput{{Port: 2201, Endpoint: "https://172.17.0.1:16443"}, {Port: 2202, Endpoint: "https://172.17.0.1:16444"}}}
+	valid := nativeFixtureInput{ReleaseA: filepath.Join(directory, "a"), ReleaseB: filepath.Join(directory, "b"), IdentityFile: filepath.Join(directory, "client"), KnownHostsFile: filepath.Join(directory, "known_hosts"), FixtureRoot: "/data/xiak/matrix-native-gate-1", ControlPlaneAddress: "192.168.50.1", Nodes: []nativeNodeInput{{Port: 2201, Endpoint: "https://192.168.50.10:16443"}, {Port: 2202, Endpoint: "https://192.168.50.11:16443"}}}
 	for _, scenario := range []struct {
 		name   string
 		change func(*nativeFixtureInput)
@@ -274,6 +323,9 @@ func TestNativeFixtureRejectsAmbiguousOrExternalTargets(t *testing.T) {
 		{"broad fixture root", func(v *nativeFixtureInput) { v.FixtureRoot = "/data/xiak" }},
 		{"outside task area", func(v *nativeFixtureInput) { v.FixtureRoot = "/var/lib/matrix" }},
 		{"unclean fixture root", func(v *nativeFixtureInput) { v.FixtureRoot += "/../other" }},
+		{"public control plane", func(v *nativeFixtureInput) { v.ControlPlaneAddress = "8.8.8.8" }},
+		{"loopback control plane", func(v *nativeFixtureInput) { v.ControlPlaneAddress = "127.0.0.1" }},
+		{"control-plane port", func(v *nativeFixtureInput) { v.ControlPlaneAddress = "192.168.50.1:8443" }},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			input := valid
@@ -286,6 +338,60 @@ func TestNativeFixtureRejectsAmbiguousOrExternalTargets(t *testing.T) {
 	}
 	if validateNativeFixture(valid) != nil {
 		t.Fatal("valid isolated native fixture rejected")
+	}
+	legacy := valid
+	legacy.ControlPlaneAddress = ""
+	if validateNativeFixture(legacy) != nil {
+		t.Fatal("accepted pre-enrollment native fixture was rejected")
+	}
+}
+
+func TestNativeEnrollmentFixtureRequiresThreeIndependentFixedPrivateListeners(t *testing.T) {
+	valid := nativeFixtureInput{
+		ControlPlaneAddress: "192.168.50.1",
+		Nodes: []nativeNodeInput{
+			{Port: 2201, Endpoint: "https://192.168.50.10:16443"},
+			{Port: 2202, Endpoint: "https://192.168.50.11:16443"},
+		},
+	}
+	if validateNativeEnrollmentFixture(valid) != nil {
+		t.Fatal("independent control plane and fixed node listeners were rejected")
+	}
+	for _, scenario := range []struct {
+		name   string
+		change func(*nativeFixtureInput)
+	}{
+		{"missing control plane", func(value *nativeFixtureInput) { value.ControlPlaneAddress = "" }},
+		{"node is control plane", func(value *nativeFixtureInput) {
+			value.ControlPlaneAddress = "192.168.50.10"
+		}},
+		{"same node address", func(value *nativeFixtureInput) {
+			value.Nodes[1].Endpoint = value.Nodes[0].Endpoint
+		}},
+		{"legacy forwarded port", func(value *nativeFixtureInput) {
+			value.Nodes[1].Endpoint = "https://192.168.50.10:16444"
+		}},
+		{"custom management port", func(value *nativeFixtureInput) {
+			value.Nodes[0].Endpoint = "https://192.168.50.10:16444"
+		}},
+		{"public node address", func(value *nativeFixtureInput) {
+			value.Nodes[0].Endpoint = "https://8.8.8.8:16443"
+		}},
+		{"operator listen address", func(value *nativeFixtureInput) {
+			value.Nodes[0].ListenAddress = "192.168.50.10:16443"
+		}},
+		{"operator collector port", func(value *nativeFixtureInput) {
+			value.Nodes[0].CollectorPort = 19100
+		}},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			candidate := valid
+			candidate.Nodes = append([]nativeNodeInput(nil), valid.Nodes...)
+			scenario.change(&candidate)
+			if validateNativeEnrollmentFixture(candidate) == nil {
+				t.Fatal("legacy forwarding or operator-selected listener input was accepted")
+			}
+		})
 	}
 }
 
@@ -345,6 +451,237 @@ func TestNativeReleasePairRequiresTheExplicitDeploymentRuntimePredecessor(t *tes
 			}
 		})
 	}
+}
+
+func TestNativeEnrollmentReleasePairRequiresTwoAdjacentCurrentReleases(t *testing.T) {
+	fixtures, err := releasetest.WriteNodeRuntimeSequence(
+		t.TempDir(), nodeconfig.RuntimeRevision, nodeconfig.RuntimeRevision,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trust, err := os.ReadFile(fixtures[0].TrustPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := release.VerifyDirectory(fixtures[0].Root, trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := release.VerifyDirectory(fixtures[1].Root, trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if validateNativeEnrollmentReleasePair(a, b) != nil {
+		t.Fatal("adjacent current enrollment releases were rejected")
+	}
+
+	for _, scenario := range []struct {
+		name   string
+		change func(*release.VerifiedBundle, *release.VerifiedBundle)
+	}{
+		{"predecessor runtime as source", func(a, _ *release.VerifiedBundle) {
+			a.Manifest.Node.RuntimeRevision = nodeconfig.DeploymentRuntimePredecessorRevision
+			a.Manifest.TopologyDigest = nodeconfig.DeploymentRuntimePredecessorContractDigest()
+		}},
+		{"predecessor runtime as successor", func(_, b *release.VerifiedBundle) {
+			b.Manifest.Node.RuntimeRevision = nodeconfig.DeploymentRuntimePredecessorRevision
+			b.Manifest.TopologyDigest = nodeconfig.DeploymentRuntimePredecessorContractDigest()
+		}},
+		{"non-root source", func(a, _ *release.VerifiedBundle) {
+			a.Manifest.Release.PreviousID = "another-release"
+			a.Manifest.Release.PreviousVersion = "v0.0.1"
+		}},
+		{"non-adjacent successor", func(_, b *release.VerifiedBundle) {
+			b.Manifest.Release.PreviousID = "another-release"
+		}},
+		{"same source commit", func(a, b *release.VerifiedBundle) {
+			b.Manifest.Release.SourceCommit = a.Manifest.Release.SourceCommit
+		}},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			candidateA, candidateB := a, b
+			scenario.change(&candidateA, &candidateB)
+			if validateNativeEnrollmentReleasePair(candidateA, candidateB) == nil {
+				t.Fatal("unsupported or ambiguous current enrollment pair was accepted")
+			}
+		})
+	}
+}
+
+func TestNativeJoinSourceDecryptsOnlyTheBoundCreationEnvelope(t *testing.T) {
+	wrappingKey, _, err := nativeWrappingKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	creation, credential, issuerPrivate := nativeJoinCreationFixture(t, wrappingKey)
+	defer clear(credential)
+	defer clear(issuerPrivate)
+
+	source, decrypted, err := nativeJoinSource(creation, wrappingKey)
+	if err != nil {
+		t.Fatal("valid enrollment creation envelope was rejected")
+	}
+	defer clear(source)
+	defer clear(decrypted)
+	decoded, err := nodeconfig.DecodeJoinFile(source)
+	if err != nil {
+		t.Fatal("assembled join file did not satisfy the installer contract")
+	}
+	defer decoded.Clear()
+	if !bytes.Equal(decrypted, credential) || decoded.Join != creation.Join ||
+		decoded.Credential != base64.RawURLEncoding.EncodeToString(credential) ||
+		!bytes.HasSuffix(source, []byte{'\n'}) ||
+		bytes.Contains(source, []byte(creation.WrappedCredential.Ciphertext)) {
+		t.Fatal("join source did not preserve exactly the signed metadata and decrypted credential")
+	}
+
+	reject := func(t *testing.T, candidate paasv1.CreateNodeEnrollmentResponse, key *rsa.PrivateKey) {
+		t.Helper()
+		candidateSource, candidateCredential, candidateErr := nativeJoinSource(candidate, key)
+		defer clear(candidateSource)
+		defer clear(candidateCredential)
+		if candidateErr == nil || len(candidateSource) != 0 || len(candidateCredential) != 0 {
+			t.Fatal("unbound or undecryptable enrollment creation envelope was accepted")
+		}
+	}
+
+	t.Run("credential digest mismatch", func(t *testing.T) {
+		candidate := creation
+		other := sha256.Sum256([]byte("different enrollment credential"))
+		candidate.Join.CredentialDigest = "sha256:" + hex.EncodeToString(other[:])
+		resignNativeJoin(t, &candidate.Join, issuerPrivate)
+		if paasv1.ValidateCreateNodeEnrollmentResponse(candidate) != nil {
+			t.Fatal("digest-mismatch fixture did not retain a valid signed creation envelope")
+		}
+		reject(t, candidate, wrappingKey)
+	})
+
+	t.Run("cross-enrollment wrapping label", func(t *testing.T) {
+		candidate := creation
+		ciphertext, err := rsa.EncryptOAEP(
+			sha256.New(), rand.Reader, &wrappingKey.PublicKey, credential, nil,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer clear(ciphertext)
+		candidate.WrappedCredential.Ciphertext = base64.RawURLEncoding.EncodeToString(ciphertext)
+		if paasv1.ValidateCreateNodeEnrollmentResponse(candidate) != nil {
+			t.Fatal("wrong-label fixture did not retain a valid public creation envelope")
+		}
+		reject(t, candidate, wrappingKey)
+	})
+
+	t.Run("different wrapping private key", func(t *testing.T) {
+		other, _, err := nativeWrappingKey()
+		if err != nil {
+			t.Fatal(err)
+		}
+		reject(t, creation, other)
+	})
+
+	t.Run("missing wrapping private key", func(t *testing.T) {
+		reject(t, creation, nil)
+	})
+}
+
+func nativeJoinCreationFixture(
+	t *testing.T,
+	wrappingKey *rsa.PrivateKey,
+) (paasv1.CreateNodeEnrollmentResponse, []byte, ed25519.PrivateKey) {
+	t.Helper()
+	now := time.Date(2026, 9, 8, 8, 0, 0, 0, time.UTC)
+	expiresAt := now.Add(20 * time.Minute)
+	installationID := "mxi-" + strings.Repeat("a", 32)
+	enrollmentID := paasv1.ResourceID("node-enrollment-" + strings.Repeat("b", 32))
+	targetID := paasv1.ResourceID("execution-target-" + strings.Repeat("c", 32))
+	credential := make([]byte, 32)
+	for index := range credential {
+		credential[index] = byte(index + 1)
+	}
+	digest := sha256.Sum256(credential)
+
+	issuerPublic, issuerPrivate, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuerURI, err := paasv1.NodeEnrollmentIssuerURI(installationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuerTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "matrix-enrollment-issuer"},
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour),
+		BasicConstraintsValid: true, IsCA: true,
+		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		URIs:     []*url.URL{issuerURI},
+	}
+	issuerDER, err := x509.CreateCertificate(
+		rand.Reader, issuerTemplate, issuerTemplate, issuerPublic, issuerPrivate,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	join := paasv1.NodeEnrollmentJoin{
+		APIVersion: paasv1.NodeEnrollmentJoinAPIVersion, Kind: paasv1.NodeEnrollmentJoinKind,
+		EnrollmentID: enrollmentID, InstallationID: installationID, ExecutionTargetID: targetID,
+		ControlPlaneURL: "https://192.168.50.1:8443/api/paas/v1/node-enrollments/" +
+			string(enrollmentID) + "/exchange",
+		CredentialDigest: "sha256:" + hex.EncodeToString(digest[:]), ExpiresAt: expiresAt,
+		IssuerCertificate:  base64.RawURLEncoding.EncodeToString(issuerDER),
+		SignatureAlgorithm: paasv1.NodeJoinSignatureEd25519,
+	}
+	resignNativeJoin(t, &join, issuerPrivate)
+	label, err := paasv1.NodeEnrollmentCredentialWrappingLabel(
+		join.InstallationID, join.EnrollmentID,
+	)
+	if err != nil {
+		clear(credential)
+		t.Fatal(err)
+	}
+	ciphertext, err := rsa.EncryptOAEP(
+		sha256.New(), rand.Reader, &wrappingKey.PublicKey, credential, label,
+	)
+	clear(label)
+	if err != nil {
+		clear(credential)
+		t.Fatal(err)
+	}
+	defer clear(ciphertext)
+	creation := paasv1.CreateNodeEnrollmentResponse{
+		Enrollment: paasv1.NodeEnrollment{
+			APIVersion: paasv1.APIVersion, Kind: "NodeEnrollment",
+			Metadata: paasv1.ResourceMetadata{
+				ID: enrollmentID, Name: "runtime-native-1",
+				Scope:           paasv1.ResourceScope{Kind: paasv1.AuthorityPlatform},
+				Labels:          map[string]string{nativeRuntimeProfileLabel: nativeRuntimeProfile},
+				ResourceVersion: 1, CreatedAt: now, UpdatedAt: now,
+			},
+			ExecutionTargetID: targetID, ExecutionPoolID: nativeRuntimePool,
+			OperationID: "operation-enroll-runtime-native-1",
+			State:       paasv1.NodeEnrollmentWaitingInstall, ExpiresAt: expiresAt,
+		},
+		Join: join,
+		WrappedCredential: paasv1.WrappedJoinCredential{
+			Algorithm:  paasv1.JoinCredentialRSAOAEP256,
+			Ciphertext: base64.RawURLEncoding.EncodeToString(ciphertext),
+		},
+	}
+	if paasv1.ValidateCreateNodeEnrollmentResponse(creation) != nil {
+		clear(credential)
+		t.Fatal("native join creation fixture is invalid")
+	}
+	return creation, credential, issuerPrivate
+}
+
+func resignNativeJoin(t *testing.T, join *paasv1.NodeEnrollmentJoin, key ed25519.PrivateKey) {
+	t.Helper()
+	commitment, err := paasv1.NodeEnrollmentJoinSigningBytes(*join)
+	if err != nil {
+		t.Fatal(err)
+	}
+	join.Signature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(key, commitment))
 }
 
 func TestNativeDeploymentRuntimeRequiresExactAdvancingProviderNeutralProof(t *testing.T) {
@@ -490,6 +827,75 @@ func TestNativeRetentionRequiresSameRunningContainerAndStart(t *testing.T) {
 			scenario.change(&current)
 			if sameNativeWorkload(baseline, current) {
 				t.Fatal("runtime replacement or downtime accepted as retention")
+			}
+		})
+	}
+}
+
+func TestNativeEnrollmentPreservesEveryRunningPlatformContainer(t *testing.T) {
+	baseline := func() []containerInspection {
+		result := make([]containerInspection, 0, 3)
+		for _, role := range []string{"paas-api", "paas-worker", "postgres"} {
+			var container containerInspection
+			container.ID = role + "-container"
+			container.Config.Image = "sha256:" + strings.Repeat(string(role[0]), 64)
+			container.Config.Labels = map[string]string{
+				"com.xiak.matrix.installation": "installation-test",
+				"com.xiak.matrix.role":         role,
+			}
+			container.State.Running = true
+			container.State.StartedAt = "2026-09-08T00:00:00Z"
+			result = append(result, container)
+		}
+		return result
+	}
+	before := baseline()
+	after := baseline()
+	after[0], after[2] = after[2], after[0]
+	if !preservesNativeEnrollmentRuntime(before, after) {
+		t.Fatal("unchanged running platform was rejected after enrollment observation")
+	}
+
+	for _, scenario := range []struct {
+		name   string
+		change func([]containerInspection) []containerInspection
+	}{
+		{"replacement", func(value []containerInspection) []containerInspection {
+			value[0].ID = "replacement"
+			return value
+		}},
+		{"restart", func(value []containerInspection) []containerInspection {
+			value[0].State.StartedAt = "2026-09-08T00:01:00Z"
+			return value
+		}},
+		{"restart counter", func(value []containerInspection) []containerInspection {
+			value[0].RestartCount++
+			return value
+		}},
+		{"image replacement", func(value []containerInspection) []containerInspection {
+			value[0].Config.Image = "sha256:" + strings.Repeat("f", 64)
+			return value
+		}},
+		{"label mutation", func(value []containerInspection) []containerInspection {
+			value[0].Config.Labels["unexpected"] = "true"
+			return value
+		}},
+		{"stopped", func(value []containerInspection) []containerInspection {
+			value[0].State.Running = false
+			return value
+		}},
+		{"missing", func(value []containerInspection) []containerInspection {
+			return value[:len(value)-1]
+		}},
+		{"additional", func(value []containerInspection) []containerInspection {
+			return append(value, value[0])
+		}},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			candidate := baseline()
+			candidate = scenario.change(candidate)
+			if preservesNativeEnrollmentRuntime(before, candidate) {
+				t.Fatal("platform replacement, restart or inventory change was accepted")
 			}
 		})
 	}

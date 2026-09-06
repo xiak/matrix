@@ -245,7 +245,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return err
 	}
 	emit("original-platform-credential-recovery-without-runtime-restart")
-	if err := value.prepareNativeNodes(ctx, state.InstallationID); err != nil {
+	if err := value.prepareNativeNodes(ctx, state.InstallationID, bearer); err != nil {
 		return err
 	}
 	if err := value.admitNativeNodes(ctx, bearer); err != nil {

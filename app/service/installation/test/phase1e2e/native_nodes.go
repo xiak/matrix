@@ -6,20 +6,27 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"maps"
 	"math/big"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -32,6 +39,7 @@ import (
 	"github.com/xiak/matrix/app/service/installation/internal/nodecommand"
 	"github.com/xiak/matrix/app/service/installation/nodeconfig"
 	"github.com/xiak/matrix/app/service/installation/release"
+	"github.com/xiak/matrix/app/service/installation/topology"
 )
 
 // This is the native companion of the existing signed platform gate, not a
@@ -42,10 +50,13 @@ const nativeFixtureRootPrefix = "/data/xiak/"
 const nativePool paasv1.ResourceID = "offline-native-pool"
 const nativeRuntimePool paasv1.ResourceID = "execution-pool-local"
 const nativeAfterRemovalDeploymentID paasv1.ResourceID = "phase3-runtime-after-removal"
+const nativePlacementFillerRevisionID paasv1.ResourceID = "phase3-placement-filler-r1"
+const nativePlacementFillerDeploymentID paasv1.ResourceID = "phase3-placement-filler"
 const nativeRuntimeProfileLabel = "matrix-profile"
 const nativeRuntimeProfile = "local-compose"
 const nativeCompleteRuntimeSnapshotTimeout = 3 * time.Minute
 const nativeSSHControlPath = "/run/matrix-phase3-native-%C"
+const nativeJoinFilename = "matrix-node-join.json"
 
 const (
 	nativeReadinessTimeout        = 2 * time.Minute
@@ -67,12 +78,13 @@ type nativeNodeInput struct {
 }
 
 type nativeFixtureInput struct {
-	ReleaseA       string            `json:"releaseA"`
-	ReleaseB       string            `json:"releaseB"`
-	IdentityFile   string            `json:"identityFile"`
-	KnownHostsFile string            `json:"knownHostsFile"`
-	FixtureRoot    string            `json:"fixtureRoot"`
-	Nodes          []nativeNodeInput `json:"nodes"`
+	ReleaseA            string            `json:"releaseA"`
+	ReleaseB            string            `json:"releaseB"`
+	IdentityFile        string            `json:"identityFile"`
+	KnownHostsFile      string            `json:"knownHostsFile"`
+	FixtureRoot         string            `json:"fixtureRoot"`
+	ControlPlaneAddress string            `json:"controlPlaneAddress,omitempty"`
+	Nodes               []nativeNodeInput `json:"nodes"`
 }
 
 type nativeHostFacts struct {
@@ -85,15 +97,15 @@ type nativeHostFacts struct {
 }
 
 type nativeNodeState struct {
-	input         nativeNodeInput
-	facts         nativeHostFacts
-	identity      nodev1.Identity
-	binding       string
-	configuration nodeconfig.Configuration
-	digest        string
-	operation     paasv1.Operation
-	auditHash     string
-	workload      nativeWorkload
+	input        nativeNodeInput
+	facts        nativeHostFacts
+	identity     nodev1.Identity
+	enrollmentID paasv1.ResourceID
+	binding      string
+	digest       string
+	operation    paasv1.Operation
+	auditHash    string
+	workload     nativeWorkload
 }
 
 type nativeWorkload struct {
@@ -123,12 +135,14 @@ type nativeTargetLifecycleState struct {
 }
 
 type nativeNodes struct {
-	input             nativeFixtureInput
-	directory         string
-	releases          releasePair
-	controller        nodeconfig.ControllerConfiguration
-	nodes             []nativeNodeState
-	deploymentRuntime bool
+	input              nativeFixtureInput
+	directory          string
+	releases           releasePair
+	controller         nodeconfig.ControllerConfiguration
+	nodes              []nativeNodeState
+	deploymentRuntime  bool
+	usesNodeEnrollment bool
+	forbidden          [][]byte
 }
 
 func validateNativeFixture(input nativeFixtureInput) error {
@@ -139,6 +153,9 @@ func validateNativeFixture(input nativeFixtureInput) error {
 	}
 	if validateNativeFixtureRoot(input.FixtureRoot) != nil {
 		return fail("native-fixture-root")
+	}
+	if input.ControlPlaneAddress != "" && !validNativeControlPlaneAddress(input.ControlPlaneAddress) {
+		return fail("native-fixture-control-plane-address")
 	}
 	if len(input.Nodes) != 2 || input.Nodes[0].Port == input.Nodes[1].Port || input.Nodes[0].Endpoint == input.Nodes[1].Endpoint {
 		return fail("native-fixture-two-distinct-hosts")
@@ -165,6 +182,51 @@ func validateNativeFixture(input nativeFixtureInput) error {
 		}
 	}
 	return nil
+}
+
+func validNativeControlPlaneAddress(value string) bool {
+	address, err := netip.ParseAddr(value)
+	return err == nil && address.Is4() && address.IsPrivate() && !address.IsLoopback() &&
+		!address.IsUnspecified() && !address.IsMulticast() && !address.IsLinkLocalUnicast() &&
+		address.String() == value
+}
+
+func validateNativeEnrollmentFixture(input nativeFixtureInput) error {
+	if !validNativeControlPlaneAddress(input.ControlPlaneAddress) || len(input.Nodes) != 2 {
+		return fail("native-enrollment-fixture")
+	}
+	seen := make(map[netip.Addr]bool, len(input.Nodes))
+	for _, node := range input.Nodes {
+		endpoint, err := url.Parse(node.Endpoint)
+		if err != nil || endpoint == nil {
+			return fail("native-enrollment-fixture")
+		}
+		address, addressErr := netip.ParseAddr(endpoint.Hostname())
+		expected := ""
+		if addressErr == nil {
+			expected = "https://" + net.JoinHostPort(
+				address.String(), strconv.Itoa(int(nodeconfig.DefaultManagementPort)),
+			)
+		}
+		if addressErr != nil || !address.Is4() || !address.IsPrivate() || address.IsLoopback() ||
+			address.IsUnspecified() || address.IsMulticast() || address.IsLinkLocalUnicast() ||
+			node.Endpoint != expected ||
+			node.ListenAddress != "" || node.CollectorPort != 0 || seen[address] ||
+			address.String() == input.ControlPlaneAddress {
+			return fail("native-enrollment-fixture")
+		}
+		seen[address] = true
+	}
+	return nil
+}
+
+func validNativeEnrollmentTargetID(value paasv1.ResourceID) bool {
+	text := string(value)
+	suffix, found := strings.CutPrefix(text, "execution-target-")
+	decoded, err := hex.DecodeString(suffix)
+	defer clear(decoded)
+	return found && err == nil && len(decoded) == 16 && hex.EncodeToString(decoded) == suffix &&
+		value < paasv1.ResourceID("execution-target-local")
 }
 
 func validateNativeFixtureRoot(root string) error {
@@ -204,7 +266,28 @@ func validateNativeReleasePair(a, b release.VerifiedBundle) error {
 	return nil
 }
 
-func (value *gate) prepareNativeNodes(ctx context.Context, installationID string) error {
+func validateNativeEnrollmentReleasePair(a, b release.VerifiedBundle) error {
+	if nodecommand.ValidateRelease(a) != nil || nodecommand.ValidateRelease(b) != nil ||
+		a.Manifest.Node.RuntimeRevision != nodeconfig.RuntimeRevision ||
+		b.Manifest.Node.RuntimeRevision != nodeconfig.RuntimeRevision ||
+		a.Manifest.TopologyDigest != nodeconfig.ContractDigest() ||
+		b.Manifest.TopologyDigest != nodeconfig.ContractDigest() ||
+		a.Manifest.Release.PreviousID != "" || a.Manifest.Release.PreviousVersion != "" ||
+		b.Manifest.Release.PreviousID != a.Manifest.Release.ID ||
+		b.Manifest.Release.PreviousVersion != a.Manifest.Release.Version ||
+		a.Manifest.Release.ID == b.Manifest.Release.ID ||
+		a.Manifest.Release.Version == b.Manifest.Release.Version ||
+		a.Manifest.Release.SourceCommit == b.Manifest.Release.SourceCommit {
+		return fail("native-current-enrollment-release-pair")
+	}
+	return nil
+}
+
+func (value *gate) prepareNativeNodes(
+	ctx context.Context,
+	installationID string,
+	bearer []byte,
+) error {
 	if value.config.nativeNodes == "" {
 		return nil
 	}
@@ -226,25 +309,45 @@ func (value *gate) prepareNativeNodes(ctx context.Context, installationID string
 		return fail("native-release-a")
 	}
 	b, err := release.VerifyDirectory(input.ReleaseB, trust)
-	if err != nil || validateNativeReleasePair(a, b) != nil {
+	usesNodeEnrollment := value.config.multiHostLifecycle
+	if err != nil {
+		return fail("native-release-b")
+	}
+	if usesNodeEnrollment {
+		if validateNativeEnrollmentFixture(input) != nil {
+			return fail("native-enrollment-fixture")
+		}
+		if validateNativeEnrollmentReleasePair(a, b) != nil {
+			return fail("native-current-enrollment-release-pair")
+		}
+	} else if validateNativeReleasePair(a, b) != nil {
 		return fail("native-real-predecessor-pair")
 	}
 	directory, err := os.MkdirTemp(filepath.Dir(value.config.nativeNodes), ".combined-enrollment-")
 	if err != nil {
 		return fail("native-private-fixture")
 	}
-	fixture := &nativeNodes{input: input, directory: directory, releases: releasePair{a: a, b: b}, controller: nodeconfig.EmptyController(installationID), deploymentRuntime: value.config.nativeDeploymentRuntime}
+	fixture := &nativeNodes{
+		input: input, directory: directory, releases: releasePair{a: a, b: b},
+		controller:         nodeconfig.EmptyController(installationID),
+		deploymentRuntime:  value.config.nativeDeploymentRuntime,
+		usesNodeEnrollment: usesNodeEnrollment,
+	}
 	value.nodes = fixture
 	driver, err := os.Executable()
 	if err != nil {
 		return fail("native-probe-driver")
 	}
 	for index, inputNode := range input.Nodes {
-		targetID := paasv1.ResourceID(fmt.Sprintf("offline-native-%d", index+1))
-		if fixture.deploymentRuntime {
-			targetID = paasv1.ResourceID(fmt.Sprintf("a-runtime-native-%d", index+1))
+		node := nativeNodeState{input: inputNode}
+		if !fixture.usesNodeEnrollment {
+			targetID := paasv1.ResourceID(fmt.Sprintf("offline-native-%d", index+1))
+			if fixture.deploymentRuntime {
+				targetID = paasv1.ResourceID(fmt.Sprintf("a-runtime-native-%d", index+1))
+			}
+			node.identity = nodev1.Identity{InstallationID: installationID, ExecutionTargetID: targetID}
+			node.binding = string(targetID) + "-connection"
 		}
-		node := nativeNodeState{input: inputNode, identity: nodev1.Identity{InstallationID: installationID, ExecutionTargetID: targetID}, binding: string(targetID) + "-connection"}
 		fixture.nodes = append(fixture.nodes, node)
 		if err := fixture.waitPrepared(ctx, index); err != nil {
 			return err
@@ -279,6 +382,12 @@ func (value *gate) prepareNativeNodes(ctx context.Context, installationID string
 	left, right := fixture.nodes[0].facts, fixture.nodes[1].facts
 	if left.Fingerprint == right.Fingerprint || left.BootID == right.BootID || left.EngineID == right.EngineID {
 		return fail("native-independent-kernels-and-engines")
+	}
+	if fixture.usesNodeEnrollment {
+		if err := value.enrollNativeNodes(ctx, bearer); err != nil {
+			return err
+		}
+		return value.prepareNativeRuntimeImages(ctx)
 	}
 	if err := fixture.credentials(ctx, value, false); err != nil {
 		return err
@@ -390,7 +499,12 @@ func (fixture *nativeNodes) mxResult(ctx context.Context, index int, successor b
 		Status     string     `json:"status"`
 		Result     cli.Result `json:"result"`
 	}
-	if err != nil || decodeOne(content, &result) != nil || result.APIVersion != "cli.matrix.xiak.com/v1" || result.Kind != "NodeCommandResult" || result.Action != strings.ToUpper(strings.ReplaceAll(action, "-", "_")) || result.Status != "SUCCEEDED" || result.Result.ExecutionTargetID != string(fixture.nodes[index].identity.ExecutionTargetID) {
+	if err != nil || containsAny(content, fixture.forbidden) ||
+		decodeOne(content, &result) != nil || result.APIVersion != "cli.matrix.xiak.com/v1" ||
+		result.Kind != "NodeCommandResult" ||
+		result.Action != strings.ToUpper(strings.ReplaceAll(action, "-", "_")) ||
+		result.Status != "SUCCEEDED" ||
+		result.Result.ExecutionTargetID != string(fixture.nodes[index].identity.ExecutionTargetID) {
 		return cli.Result{}, fail("native-mx-" + action)
 	}
 	return result.Result, nil
@@ -448,6 +562,330 @@ func privateFixtureFile(directory, name string, content []byte) (string, error) 
 		return "", fail("native-private-file")
 	}
 	return path, nil
+}
+
+type nativeJoinMaterial struct {
+	enrollment paasv1.NodeEnrollment
+	source     []byte
+	credential []byte
+}
+
+func (value *nativeJoinMaterial) Clear() {
+	if value == nil {
+		return
+	}
+	clear(value.source)
+	clear(value.credential)
+	value.source = nil
+	value.credential = nil
+}
+
+func nativeWrappingKey() (*rsa.PrivateKey, string, error) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, 3072)
+	if err != nil || privateKey.Validate() != nil {
+		return nil, "", fail("native-enrollment-wrapping-key")
+	}
+	publicKey, err := x509.MarshalPKIXPublicKey(&privateKey.PublicKey)
+	if err != nil {
+		return nil, "", fail("native-enrollment-wrapping-key")
+	}
+	defer clear(publicKey)
+	return privateKey, base64.RawURLEncoding.EncodeToString(publicKey), nil
+}
+
+func nativeJoinSource(
+	creation paasv1.CreateNodeEnrollmentResponse,
+	privateKey *rsa.PrivateKey,
+) ([]byte, []byte, error) {
+	if privateKey == nil || paasv1.ValidateCreateNodeEnrollmentResponse(creation) != nil {
+		return nil, nil, fail("native-enrollment-creation-contract")
+	}
+	ciphertext, err := base64.RawURLEncoding.Strict().DecodeString(
+		creation.WrappedCredential.Ciphertext,
+	)
+	if err != nil || len(ciphertext) != 384 ||
+		base64.RawURLEncoding.EncodeToString(ciphertext) != creation.WrappedCredential.Ciphertext {
+		clear(ciphertext)
+		return nil, nil, fail("native-enrollment-ciphertext")
+	}
+	defer clear(ciphertext)
+	label, err := paasv1.NodeEnrollmentCredentialWrappingLabel(
+		creation.Join.InstallationID, creation.Join.EnrollmentID,
+	)
+	if err != nil {
+		return nil, nil, fail("native-enrollment-wrapping-label")
+	}
+	defer clear(label)
+	credential, err := rsa.DecryptOAEP(sha256.New(), rand.Reader, privateKey, ciphertext, label)
+	if err != nil || len(credential) != 32 {
+		clear(credential)
+		return nil, nil, fail("native-enrollment-credential")
+	}
+	digest := sha256.Sum256(credential)
+	if "sha256:"+hex.EncodeToString(digest[:]) != creation.Join.CredentialDigest {
+		clear(credential)
+		return nil, nil, fail("native-enrollment-credential-digest")
+	}
+	join := nodeconfig.JoinFile{
+		APIVersion: nodeconfig.APIVersion,
+		Kind:       nodeconfig.JoinFileKind,
+		Join:       creation.Join,
+		Credential: base64.RawURLEncoding.EncodeToString(credential),
+	}
+	source, err := json.MarshalIndent(join, "", "  ")
+	if err != nil {
+		clear(credential)
+		return nil, nil, fail("native-enrollment-join-encoding")
+	}
+	source = append(source, '\n')
+	decoded, decodeErr := nodeconfig.DecodeJoinFile(source)
+	decoded.Clear()
+	if decodeErr != nil {
+		clear(source)
+		clear(credential)
+		return nil, nil, fail("native-enrollment-join-encoding")
+	}
+	return source, credential, nil
+}
+
+func (value *gate) createNativeJoin(
+	ctx context.Context,
+	bearer []byte,
+	index int,
+) (nativeJoinMaterial, error) {
+	if value.nodes == nil || !value.nodes.usesNodeEnrollment ||
+		index < 0 || index >= len(value.nodes.nodes) ||
+		!validNativeControlPlaneAddress(value.nodes.input.ControlPlaneAddress) {
+		return nativeJoinMaterial{}, fail("native-enrollment-input")
+	}
+	privateKey, wrappingPublicKey, err := nativeWrappingKey()
+	if err != nil {
+		return nativeJoinMaterial{}, err
+	}
+	poolID, labels := value.nodes.registration()
+	name := fmt.Sprintf("runtime-native-%d", index+1)
+	request := paasv1.CreateNodeEnrollmentRequest{
+		Name: name, Labels: maps.Clone(labels), ExecutionPoolID: poolID,
+		WrappingPublicKey: wrappingPublicKey,
+	}
+	idempotencyKey := fmt.Sprintf("phase3-native-enrollment-%d", index+1)
+	response, err := value.edge.json(
+		ctx, http.MethodPost, "/api/paas/v1/node-enrollments", bearer, request,
+		map[string]string{
+			"Host":            value.nodes.input.ControlPlaneAddress,
+			"Idempotency-Key": idempotencyKey,
+		},
+		http.StatusCreated,
+	)
+	if err != nil {
+		return nativeJoinMaterial{}, fail("native-enrollment-create")
+	}
+	defer clear(response.body)
+	var creation paasv1.CreateNodeEnrollmentResponse
+	expectedOrigin := "https://" + net.JoinHostPort(
+		value.nodes.input.ControlPlaneAddress,
+		strconv.Itoa(int(topology.NodeEnrollmentIngressPort)),
+	)
+	if decodeOne(response.body, &creation) != nil ||
+		paasv1.ValidateCreateNodeEnrollmentResponse(creation) != nil ||
+		creation.Enrollment.Metadata.Name != name ||
+		!maps.Equal(creation.Enrollment.Metadata.Labels, labels) ||
+		creation.Enrollment.ExecutionPoolID != poolID ||
+		creation.Join.InstallationID != value.nodes.controller.InstallationID ||
+		creation.Join.ControlPlaneURL != expectedOrigin+"/api/paas/v1/node-enrollments/"+
+			string(creation.Enrollment.Metadata.ID)+"/exchange" ||
+		response.header.Get("Location") != "/v1/node-enrollments/"+
+			string(creation.Enrollment.Metadata.ID) ||
+		response.header.Get("Operation-Location") != "/v1/platform/operations/"+
+			string(creation.Enrollment.OperationID) ||
+		response.header.Get("ETag") != formatResourceVersion(
+			creation.Enrollment.Metadata.ResourceVersion,
+		) {
+		return nativeJoinMaterial{}, fail("native-enrollment-creation-contract")
+	}
+	source, credential, err := nativeJoinSource(creation, privateKey)
+	if err != nil {
+		return nativeJoinMaterial{}, err
+	}
+	return nativeJoinMaterial{
+		enrollment: creation.Enrollment, source: source, credential: credential,
+	}, nil
+}
+
+type nativeEnrolledConnection struct {
+	InstallationID      string            `json:"installationId"`
+	ExecutionTargetID   paasv1.ResourceID `json:"executionTargetId"`
+	ControllerID        string            `json:"controllerId"`
+	BindingRef          string            `json:"bindingRef"`
+	Endpoint            string            `json:"endpoint"`
+	IdentityFingerprint string            `json:"identityFingerprint"`
+	Enabled             bool              `json:"enabled"`
+}
+
+func (value *gate) nativeEnrollmentConnection(
+	ctx context.Context,
+	index int,
+) (nativeEnrolledConnection, error) {
+	if value.nodes == nil || index < 0 || index >= len(value.nodes.nodes) {
+		return nativeEnrolledConnection{}, fail("native-enrollment-connection-input")
+	}
+	node := value.nodes.nodes[index]
+	ids, err := dockerLines(
+		ctx, "container", "ls", "--quiet",
+		"--filter", "label=com.xiak.matrix.installation="+node.identity.InstallationID,
+		"--filter", "label=com.xiak.matrix.role=postgres",
+	)
+	if err != nil || len(ids) != 1 {
+		return nativeEnrolledConnection{}, fail("native-enrollment-connection-database")
+	}
+	query := fmt.Sprintf(`SELECT json_build_object(
+        'installationId', installation_id,
+        'executionTargetId', execution_target_id,
+        'controllerId', controller_id,
+        'bindingRef', binding_ref,
+        'endpoint', endpoint,
+        'identityFingerprint', identity_fingerprint,
+        'enabled', enabled
+    )::text FROM paas.enrolled_node_connections WHERE execution_target_id='%s'`, node.identity.ExecutionTargetID)
+	content, err := docker(
+		ctx, "container", "exec", "--user", "postgres", ids[0],
+		"psql", "--no-psqlrc", "--tuples-only", "--no-align", "--set", "ON_ERROR_STOP=1",
+		"--username", "matrix", "--dbname", "matrix", "--command", query,
+	)
+	var connection nativeEnrolledConnection
+	if err != nil || decodeOne(content, &connection) != nil || !connection.Enabled ||
+		connection.InstallationID != node.identity.InstallationID ||
+		connection.ExecutionTargetID != node.identity.ExecutionTargetID ||
+		connection.ControllerID != nodeconfig.DefaultControllerID ||
+		paasv1.ValidateID("bindingRef", connection.BindingRef) != nil ||
+		connection.Endpoint != node.input.Endpoint ||
+		connection.IdentityFingerprint != node.facts.Fingerprint {
+		return nativeEnrolledConnection{}, fail("native-enrollment-connection")
+	}
+	return connection, nil
+}
+
+func (value *gate) assertNativeEnrollmentReady(
+	ctx context.Context,
+	bearer []byte,
+	index int,
+) error {
+	node := &value.nodes.nodes[index]
+	var enrollment paasv1.NodeEnrollment
+	header, err := value.edge.get(
+		ctx, "/api/paas/v1/node-enrollments/"+string(node.enrollmentID), bearer, &enrollment,
+	)
+	if err != nil || paasv1.ValidateNodeEnrollment(enrollment) != nil ||
+		enrollment.Metadata.ID != node.enrollmentID ||
+		enrollment.ExecutionTargetID != node.identity.ExecutionTargetID ||
+		enrollment.State != paasv1.NodeEnrollmentReady ||
+		header.Get("ETag") != formatResourceVersion(enrollment.Metadata.ResourceVersion) {
+		return fail("native-enrollment-ready")
+	}
+	var operation paasv1.Operation
+	if _, err = value.edge.get(
+		ctx, "/api/paas/v1/platform/operations/"+string(enrollment.OperationID), bearer, &operation,
+	); err != nil || paasv1.ValidateOperation(operation) != nil ||
+		operation.ID != enrollment.OperationID ||
+		operation.InstallationID != node.identity.InstallationID ||
+		operation.Scope != (paasv1.ResourceScope{Kind: paasv1.AuthorityPlatform}) ||
+		operation.Action != paasv1.OperationRegisterExecutionTarget ||
+		operation.Target != (paasv1.ResourceRef{
+			Kind: "ExecutionTarget", ID: node.identity.ExecutionTargetID,
+		}) || operation.State != paasv1.OperationSucceeded ||
+		node.operation.ID != "" && !reflect.DeepEqual(operation, node.operation) {
+		return fail("native-enrollment-operation")
+	}
+	connection, err := value.nativeEnrollmentConnection(ctx, index)
+	if err != nil {
+		return err
+	}
+	node.binding = connection.BindingRef
+	node.operation = operation
+	return nil
+}
+
+func (value *gate) enrollNativeNodes(ctx context.Context, bearer []byte) error {
+	fixture := value.nodes
+	for index := range fixture.nodes {
+		material, err := value.createNativeJoin(ctx, bearer, index)
+		if err != nil {
+			return err
+		}
+		node := &fixture.nodes[index]
+		node.enrollmentID = material.enrollment.Metadata.ID
+		node.identity = nodev1.Identity{
+			InstallationID:    fixture.controller.InstallationID,
+			ExecutionTargetID: material.enrollment.ExecutionTargetID,
+		}
+		if nodev1.ValidateIdentity(node.identity) != nil ||
+			node.identity.InstallationID != fixture.controller.InstallationID ||
+			!validNativeEnrollmentTargetID(node.identity.ExecutionTargetID) {
+			material.Clear()
+			return fail("native-enrollment-identity")
+		}
+		for previous := 0; previous < index; previous++ {
+			if fixture.nodes[previous].identity.ExecutionTargetID == node.identity.ExecutionTargetID ||
+				fixture.nodes[previous].enrollmentID == node.enrollmentID {
+				material.Clear()
+				return fail("native-enrollment-distinct-identities")
+			}
+		}
+		rawSecret := bytes.Clone(material.credential)
+		encodedSecret := []byte(base64.RawURLEncoding.EncodeToString(material.credential))
+		value.sensitive = append(value.sensitive, rawSecret, encodedSecret)
+		value.edge.addForbidden(rawSecret, encodedSecret)
+		fixture.forbidden = append(fixture.forbidden, rawSecret, encodedSecret)
+
+		joinDirectory, err := os.MkdirTemp(fixture.directory, "node-join-")
+		if err != nil {
+			material.Clear()
+			return fail("native-enrollment-join-file")
+		}
+		joinPath, err := privateFixtureFile(joinDirectory, nativeJoinFilename, material.source)
+		material.Clear()
+		if err != nil {
+			_ = os.Remove(joinDirectory)
+			return err
+		}
+		remoteJoin := path.Join(fixture.root(), nativeJoinFilename)
+		copyErr := fixture.copy(ctx, index, joinPath, remoteJoin, true, false)
+		removeLocalErr := os.Remove(joinPath)
+		removeDirectoryErr := os.Remove(joinDirectory)
+		if copyErr != nil || removeLocalErr != nil || removeDirectoryErr != nil {
+			_, _ = fixture.command(ctx, index, "rm", "--", remoteJoin)
+			return fail("native-enrollment-join-transfer")
+		}
+		result, installErr := fixture.mx(
+			ctx, index, false, "install",
+			"--root", fixture.installationRoot(),
+			"--bundle", fixture.root()+"/node-a",
+			"--trust-key", fixture.root()+"/trust.json",
+			"--join", remoteJoin,
+		)
+		_, removeRemoteErr := fixture.command(ctx, index, "rm", "--", remoteJoin)
+		if installErr != nil {
+			return installErr
+		}
+		if removeRemoteErr != nil {
+			return fail("native-enrollment-join-cleanup")
+		}
+		if !result.Changed || result.ReleaseID != fixture.releases.a.Manifest.Release.ID ||
+			result.PreviousID != "" ||
+			paasv1.ValidateDigest("configurationDigest", result.ConfigurationDigest) != nil {
+			return fail("native-enrollment-install")
+		}
+		node.digest = result.ConfigurationDigest
+		if err := value.assertNativeEnrollmentReady(ctx, bearer, index); err != nil {
+			return err
+		}
+	}
+	sort.Slice(fixture.nodes, func(left, right int) bool {
+		return fixture.nodes[left].identity.ExecutionTargetID <
+			fixture.nodes[right].identity.ExecutionTargetID
+	})
+	emit("two-current-native-hosts-through-atomic-node-enrollment")
+	return nil
 }
 
 func (fixture *nativeNodes) credentials(ctx context.Context, value *gate, rotate bool) error {
@@ -569,7 +1007,7 @@ func (fixture *nativeNodes) credentials(ctx context.Context, value *gate, rotate
 		if err != nil || !result.Changed || paasv1.ValidateDigest("configurationDigest", result.ConfigurationDigest) != nil || result.ConfigurationDigest == node.digest {
 			return fail("native-signed-" + action)
 		}
-		node.configuration, node.digest = configuration, result.ConfigurationDigest
+		node.digest = result.ConfigurationDigest
 		controller.Nodes = append(controller.Nodes, nodeconfig.Connection{BindingRef: node.binding, TargetID: node.identity.ExecutionTargetID, Endpoint: node.input.Endpoint, IdentityFingerprint: node.facts.Fingerprint})
 		if rotate {
 			if err := assertRetiredControllerTLS(ctx, node.input.Endpoint, node.identity, fixture.controller, controller); err != nil {
@@ -650,13 +1088,15 @@ func (value *gate) admitNativeNodes(ctx context.Context, bearer []byte) error {
 			return fail("native-platform-pool")
 		}
 	}
-	for index := range fixture.nodes {
-		node := &fixture.nodes[index]
-		operation, err := value.edge.createResource(ctx, "/api/paas/v1/execution-targets", string(node.identity.ExecutionTargetID), bearer, paasv1.RegisterExecutionTargetRequest{ID: node.identity.ExecutionTargetID, Name: string(node.identity.ExecutionTargetID), ExecutionPoolID: poolID, BindingRef: node.binding, Labels: labels}, paasv1.OperationRegisterExecutionTarget, paasv1.ResourceRef{Kind: "ExecutionTarget", ID: node.identity.ExecutionTargetID})
-		if err != nil || operation.InstallationID != fixture.controller.InstallationID || operation.Scope.TenantID != "" {
-			return fail("native-platform-admission")
+	if !fixture.usesNodeEnrollment {
+		for index := range fixture.nodes {
+			node := &fixture.nodes[index]
+			operation, err := value.edge.createResource(ctx, "/api/paas/v1/execution-targets", string(node.identity.ExecutionTargetID), bearer, paasv1.RegisterExecutionTargetRequest{ID: node.identity.ExecutionTargetID, Name: string(node.identity.ExecutionTargetID), ExecutionPoolID: poolID, BindingRef: node.binding, Labels: labels}, paasv1.OperationRegisterExecutionTarget, paasv1.ResourceRef{Kind: "ExecutionTarget", ID: node.identity.ExecutionTargetID})
+			if err != nil || operation.InstallationID != fixture.controller.InstallationID || operation.Scope.TenantID != "" {
+				return fail("native-platform-admission")
+			}
+			node.operation = operation
 		}
-		node.operation = operation
 	}
 	if err := value.assertNativeNodes(ctx, bearer, false); err != nil {
 		return err
@@ -664,7 +1104,11 @@ func (value *gate) admitNativeNodes(ctx context.Context, bearer []byte) error {
 	if err := value.nativeBackgroundAndOutage(ctx, bearer); err != nil {
 		return err
 	}
-	emit("two-signed-native-hosts-through-platform-admission")
+	if fixture.usesNodeEnrollment {
+		emit("two-signed-native-hosts-without-separate-target-registration")
+	} else {
+		emit("two-signed-native-hosts-through-platform-admission")
+	}
 	return nil
 }
 
@@ -703,7 +1147,10 @@ func (value *gate) assertNativeNodes(ctx context.Context, bearer []byte, success
 			}
 		}
 		cancel()
-		if !matchesNativeObservation(target, *node, fixture.deploymentRuntime, fixture.installationRoot()) {
+		if !matchesNativeObservation(
+			target, *node, fixture.deploymentRuntime, fixture.usesNodeEnrollment,
+			fixture.installationRoot(),
+		) {
 			return fail("native-physical-observation-and-binding")
 		}
 		if _, err := value.nativeStoredTarget(ctx, index); err != nil {
@@ -725,11 +1172,20 @@ func (value *gate) assertNativeNodes(ctx context.Context, bearer []byte, success
 	return value.assertNativeAudit(ctx, bearer)
 }
 
-func matchesNativeObservation(target paasv1.ExecutionTarget, node nativeNodeState, deploymentRuntime bool, installationRoot string) bool {
+func matchesNativeObservation(
+	target paasv1.ExecutionTarget,
+	node nativeNodeState,
+	deploymentRuntime bool,
+	usesNodeEnrollment bool,
+	installationRoot string,
+) bool {
 	usage := target.Status.Usage
 	poolID, workloadSlots := nativePool, int64(0)
 	if deploymentRuntime {
 		poolID, workloadSlots = nativeRuntimePool, 1
+		if usesNodeEnrollment {
+			workloadSlots = node.facts.CPUs
+		}
 	}
 	profileMatches := !deploymentRuntime || target.Metadata.Labels[nativeRuntimeProfileLabel] == nativeRuntimeProfile
 	if paasv1.ValidateExecutionTarget(target) != nil || target.Metadata.ID != node.identity.ExecutionTargetID || target.Metadata.Labels["matrix-machine-fingerprint"] != node.facts.Fingerprint || !profileMatches ||
@@ -853,14 +1309,20 @@ func (value *gate) nativeBackgroundAndOutage(ctx context.Context, bearer []byte)
 		return fail("native-outage-isolation")
 	}
 	node := fixture.nodes[0]
-	poolID, labels := fixture.registration()
-	replay, err := value.edge.json(ctx, http.MethodPost, "/api/paas/v1/execution-targets", bearer, paasv1.RegisterExecutionTargetRequest{ID: node.identity.ExecutionTargetID, Name: string(node.identity.ExecutionTargetID), ExecutionPoolID: poolID, BindingRef: node.binding, Labels: labels}, map[string]string{"Idempotency-Key": string(node.identity.ExecutionTargetID)}, http.StatusOK)
-	var operation paasv1.Operation
-	if err != nil || decodeOne(replay.body, &operation) != nil || !reflect.DeepEqual(operation, node.operation) {
+	if fixture.usesNodeEnrollment {
+		if err := value.assertNativeEnrollmentReady(ctx, bearer, 0); err != nil {
+			return fail("native-outage-enrollment-authority")
+		}
+	} else {
+		poolID, labels := fixture.registration()
+		replay, err := value.edge.json(ctx, http.MethodPost, "/api/paas/v1/execution-targets", bearer, paasv1.RegisterExecutionTargetRequest{ID: node.identity.ExecutionTargetID, Name: string(node.identity.ExecutionTargetID), ExecutionPoolID: poolID, BindingRef: node.binding, Labels: labels}, map[string]string{"Idempotency-Key": string(node.identity.ExecutionTargetID)}, http.StatusOK)
+		var operation paasv1.Operation
+		if err != nil || decodeOne(replay.body, &operation) != nil || !reflect.DeepEqual(operation, node.operation) {
+			clear(replay.body)
+			return fail("native-outage-admission-replay")
+		}
 		clear(replay.body)
-		return fail("native-outage-admission-replay")
 	}
-	clear(replay.body)
 	if result, err := fixture.mx(ctx, 0, false, "start", "--root", fixture.installationRoot()); err != nil || result.ConfigurationDigest != node.digest {
 		return fail("native-reconnect-original-binding")
 	}
@@ -873,6 +1335,48 @@ func (value *gate) nativeBackgroundAndOutage(ctx context.Context, bearer []byte)
 
 func (value *gate) rotateNativeCredentials(ctx context.Context, bearer []byte) error {
 	if value.nodes == nil {
+		return nil
+	}
+	if value.nodes.usesNodeEnrollment {
+		controllerBytes, err := os.ReadFile(filepath.Join(
+			value.config.root, filepath.FromSlash(layout.NodeControllerConfiguration),
+		))
+		if err != nil {
+			return fail("native-enrollment-static-controller")
+		}
+		defer clear(controllerBytes)
+		controller, err := nodeconfig.DecodeController(controllerBytes)
+		if err != nil {
+			return fail("native-enrollment-static-controller")
+		}
+		defer controller.Clear()
+		digest, err := nodeconfig.ControllerDigest(controller)
+		if err != nil || digest != value.controllerConfigDigest ||
+			controller.InstallationID != value.nodes.controller.InstallationID ||
+			len(controller.Nodes) != 0 || len(controller.Certificate) != 0 ||
+			len(controller.PrivateKey) != 0 || len(controller.Trust) != 0 {
+			return fail("native-enrollment-static-controller")
+		}
+		ids, err := dockerLines(ctx, "container", "ls", "--quiet", "--no-trunc")
+		if err != nil {
+			return fail("native-enrollment-platform-baseline")
+		}
+		before, err := inspectContainers(ctx, ids)
+		if err != nil {
+			return err
+		}
+		if err = value.assertNativeNodes(ctx, bearer, false); err != nil {
+			return err
+		}
+		afterIDs, err := dockerLines(ctx, "container", "ls", "--quiet", "--no-trunc")
+		if err != nil {
+			return fail("native-enrollment-platform-preservation")
+		}
+		after, err := inspectContainers(ctx, afterIDs)
+		if err != nil || !preservesNativeEnrollmentRuntime(before, after) {
+			return fail("native-enrollment-platform-preservation")
+		}
+		emit("native-enrollment-authority-without-static-controller-reconfiguration")
 		return nil
 	}
 	ids, err := dockerLines(ctx, "container", "ls", "--quiet", "--no-trunc")
@@ -904,6 +1408,30 @@ func (value *gate) rotateNativeCredentials(ctx context.Context, bearer []byte) e
 	}
 	emit("native-complete-trust-replacement-with-exact-api-only-platform-effect")
 	return nil
+}
+
+func preservesNativeEnrollmentRuntime(before, after []containerInspection) bool {
+	if len(before) != len(after) {
+		return false
+	}
+	byID := make(map[string]containerInspection, len(after))
+	for _, current := range after {
+		if current.ID == "" || byID[current.ID].ID != "" {
+			return false
+		}
+		byID[current.ID] = current
+	}
+	for _, original := range before {
+		current, found := byID[original.ID]
+		if !found || !current.State.Running || !original.State.Running ||
+			current.State.StartedAt != original.State.StartedAt ||
+			current.RestartCount != original.RestartCount ||
+			current.Config.Image != original.Config.Image ||
+			!maps.Equal(current.Config.Labels, original.Config.Labels) {
+			return false
+		}
+	}
+	return true
 }
 
 func preservesNativeRotationRuntime(before, after []containerInspection, installationID string) bool {
@@ -981,6 +1509,110 @@ func nativeRuntimeDeploymentID(index int) paasv1.ResourceID {
 	return paasv1.ResourceID(fmt.Sprintf("phase3-runtime-deployment-%d", index+1))
 }
 
+func (value *gate) createNativePlacementFiller(
+	ctx context.Context,
+	bearer []byte,
+	target nativeNodeState,
+) (*paasv1.Deployment, error) {
+	if target.facts.CPUs <= 1 {
+		return nil, nil
+	}
+	if target.facts.CPUs > (9007199254740991+100)/1000 {
+		return nil, fail("native-placement-filler-capacity")
+	}
+	workload, ok := workloadImage(value.releases.b.Manifest)
+	if !ok {
+		return nil, fail("native-placement-filler-workload")
+	}
+	component := verificationApplicationComponent(workload.SourceDigest)
+	component.Resources.CPUMillis = target.facts.CPUs*1000 - 100
+	revision := paasv1.CreateApplicationRevisionRequest{
+		ID: nativePlacementFillerRevisionID, Name: string(nativePlacementFillerRevisionID),
+		Spec: paasv1.ApplicationRevisionSpec{
+			ApplicationID: applicationID,
+			Revision:      "revision-placement-filler-r1",
+			ContentDigest: fixedDigest(
+				"phase3-placement-filler-r1-" + strconv.FormatInt(component.Resources.CPUMillis, 10),
+			),
+			Components: []paasv1.ApplicationRevisionComponent{component},
+		},
+	}
+	if _, err := value.edge.createResource(
+		ctx, "/api/paas/v1/application-revisions", "phase3-create-placement-filler-r1",
+		bearer, revision, paasv1.OperationCreateApplicationRevision,
+		paasv1.ResourceRef{Kind: "ApplicationRevision", ID: nativePlacementFillerRevisionID},
+	); err != nil {
+		return nil, fail("native-placement-filler-revision")
+	}
+	operation, err := value.edge.mutateDeployment(
+		ctx, http.MethodPost, "/api/paas/v1/deployments", string(nativePlacementFillerDeploymentID), "",
+		bearer,
+		paasv1.CreateDeploymentRequest{
+			ID: nativePlacementFillerDeploymentID, Name: string(nativePlacementFillerDeploymentID),
+			Spec: deploymentSpec(
+				nativePlacementFillerRevisionID, configurationRevisionOne,
+				paasv1.DeploymentDesiredRunning,
+			),
+		},
+		paasv1.OperationDeploy, nativePlacementFillerDeploymentID,
+	)
+	if err != nil {
+		return nil, fail("native-placement-filler-create")
+	}
+	if _, err = value.edge.waitOperation(ctx, bearer, operation.ID); err != nil {
+		return nil, fail("native-placement-filler-operation")
+	}
+	deployment, err := value.edge.waitDeployment(
+		ctx, bearer, nativePlacementFillerDeploymentID, 1, paasv1.DeploymentReady,
+	)
+	if err != nil {
+		return nil, fail("native-placement-filler-convergence")
+	}
+	if _, err = value.waitNativeDeploymentRuntime(
+		ctx, bearer, deployment, target.identity.ExecutionTargetID, time.Time{},
+	); err != nil {
+		return nil, fail("native-placement-filler-target")
+	}
+	return &deployment, nil
+}
+
+func (value *gate) stopNativePlacementFiller(
+	ctx context.Context,
+	bearer []byte,
+	deployment *paasv1.Deployment,
+) error {
+	if deployment == nil {
+		return nil
+	}
+	spec := deployment.Spec
+	spec.DesiredState = paasv1.DeploymentDesiredStopped
+	operation, err := value.edge.mutateDeployment(
+		ctx, http.MethodPut,
+		"/api/paas/v1/deployments/"+string(deployment.Metadata.ID),
+		"phase3-stop-placement-filler", formatResourceVersion(deployment.Metadata.ResourceVersion),
+		bearer, spec, paasv1.OperationStop, deployment.Metadata.ID,
+	)
+	if err != nil {
+		return fail("native-placement-filler-stop")
+	}
+	if _, err = value.edge.waitOperation(ctx, bearer, operation.ID); err != nil {
+		return fail("native-placement-filler-stop-operation")
+	}
+	if _, err = value.edge.waitDeployment(
+		ctx, bearer, deployment.Metadata.ID, deployment.Generation+1, paasv1.DeploymentStopped,
+	); err != nil {
+		return fail("native-placement-filler-stop-convergence")
+	}
+	containers, err := value.nodes.command(
+		ctx, 0, "docker", "container", "ls", "--all", "--quiet", "--filter",
+		"label=com.xiak.matrix.deployment-id="+string(deployment.Metadata.ID),
+	)
+	if err != nil || len(strings.Fields(string(containers))) != 0 {
+		return fail("native-placement-filler-provider-stop")
+	}
+	return nil
+}
+
 func (value *gate) assertNativeDeploymentRuntime(ctx context.Context, bearer []byte) error {
 	if !value.config.nativeDeploymentRuntime {
 		return nil
@@ -995,6 +1627,7 @@ func (value *gate) assertNativeDeploymentRuntime(ctx context.Context, bearer []b
 	deployments := make([]paasv1.Deployment, 0, len(value.nodes.nodes))
 	snapshots := make([]paasv1.DeploymentRuntimeSnapshot, 0, len(value.nodes.nodes))
 	terminalSessions := make([]paasv1.ResourceID, 0, len(value.nodes.nodes))
+	var placementFiller *paasv1.Deployment
 	for index, node := range value.nodes.nodes {
 		id := nativeRuntimeDeploymentID(index)
 		operation, err := value.edge.mutateDeployment(
@@ -1051,6 +1684,15 @@ func (value *gate) assertNativeDeploymentRuntime(ctx context.Context, bearer []b
 		deployments = append(deployments, deployment)
 		snapshots = append(snapshots, second)
 		terminalSessions = append(terminalSessions, terminalSessionID)
+		if value.nodes.usesNodeEnrollment && index == 0 {
+			placementFiller, err = value.createNativePlacementFiller(ctx, bearer, node)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	if err := value.stopNativePlacementFiller(ctx, bearer, placementFiller); err != nil {
+		return err
 	}
 	if snapshots[0].Value.Observation.ExecutionTargetID == snapshots[1].Value.Observation.ExecutionTargetID {
 		return fail("native-runtime-distinct-targets")
@@ -1989,7 +2631,10 @@ func (value *gate) afterNativeRestart(ctx context.Context, installationID string
 			}
 		}
 		observed, err := value.waitNativeStored(ctx, index, paasv1.ExecutionTargetHealthReady, saved.ObservedAt)
-		if err != nil || !matchesNativeObservation(observed, fixture.nodes[index], fixture.deploymentRuntime, fixture.installationRoot()) {
+		if err != nil || !matchesNativeObservation(
+			observed, fixture.nodes[index], fixture.deploymentRuntime,
+			fixture.usesNodeEnrollment, fixture.installationRoot(),
+		) {
 			return fail("native-post-boot-background-reconnection")
 		}
 		if err = value.nativeStoredHistory(ctx, index); err != nil {

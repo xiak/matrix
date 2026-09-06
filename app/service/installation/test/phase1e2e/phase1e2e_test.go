@@ -18,6 +18,31 @@ import (
 	"github.com/xiak/matrix/app/service/installation/release"
 )
 
+func TestEdgeClientSetsTheHTTPAuthorityWithoutAnOriginHeader(t *testing.T) {
+	const authority = "192.168.50.1"
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Host != authority || request.Header.Get("Host") != "" ||
+			request.Header.Get("X-Matrix-Public-Origin") != "" ||
+			request.Header.Get("X-Matrix-Probe") != "present" {
+			http.Error(response, "unexpected request authority", http.StatusBadRequest)
+			return
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer server.Close()
+	client := newEdgeClient(server.URL)
+	defer client.close()
+	result, err := client.json(
+		context.Background(), http.MethodGet, "/authority", nil, nil,
+		map[string]string{"host": authority, "X-Matrix-Probe": "present"}, http.StatusOK,
+	)
+	defer clear(result.body)
+	if err != nil {
+		t.Fatal("edge client did not preserve the explicit HTTP authority boundary")
+	}
+}
+
 func TestEdgeClientAcceptsExpectedProblemResponses(t *testing.T) {
 	for _, scenario := range []struct {
 		name, media string
