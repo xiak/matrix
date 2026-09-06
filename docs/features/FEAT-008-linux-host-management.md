@@ -1631,6 +1631,22 @@ generation and diff checks. This is database/control-plane evidence only: F1
 and F7 remain open until the bootstrap, completion, Audit, UI, supported signed
 release transition and exact release gates pass.
 
+Pushed source `761c2aac177f67127963e2128303bea872a22e60` makes one-time enrollment
+credential storage state-bound: only `WAITING_INSTALL` may retain the salted
+verifier and RSA-wrapped creation envelope. Expiry, revocation and regeneration
+clear all three credential columns in the same authority transaction, while a
+regenerated replacement receives distinct fresh material. The domain rejects
+credential material on every non-waiting state, and the PostgreSQL adapter
+loads the resulting nullable terminal records without weakening their signed
+join identity. A real PostgreSQL 18 gate proved that a waiting row with missing
+material and a verifying row retaining material both fail with SQLSTATE
+`23514`; normal revoke, replace and expiry paths persist SQL `NULL` and remain
+readable and exactly replayable. The fixed schema-3 upgrade gate, fresh combined
+platform migration, full Go suite, vet, focused race checks and stable contract
+generation also passed. This narrows the F9 exposure surface but does not close
+F9; bootstrap exchange, Audit, browser, diagnostics, support artifacts and the
+exact signed-runtime gate remain outstanding.
+
 ## Adoption
 
 - [FEAT-008 fixed-source review](../adoption/FEAT-008-linux-host-management.md)
