@@ -1699,9 +1699,30 @@ paths and a body above 64 KiB. The final source also passed the full Go suite,
 `go vet`, deterministic generation, module verification, focused race and
 Linux suites, and the real PostgreSQL 18 fixed-predecessor upgrade/byte-exact
 rollback gate; every disposable test container and network was removed.
-Lost-response proof-of-possession recovery, completion and real mTLS probe,
-durable dynamic controller connection, node installer, Audit, browser and
-exact signed-runtime closure remain outstanding; F1 through F10 therefore
+
+Pushed source `ccb66a55505ac3e48883b1e4a1215e2e69950d0b` adds the separate
+lost-response recovery ceremony without retaining a second credential or
+creating another host model. A two-minute stateless challenge is authenticated
+with a domain-separated installation key and binds the enrollment,
+installation, target, exchange, machine/runtime commitments and both fixed
+role-key fingerprints. Recovery requires independent Ed25519 proofs from the
+node and collector keys, the same observed private peer and an enrollment still
+in `VERIFYING`. It is read-only, returns only the digest-exact sealed
+exchange result, keeps the resource version unchanged and replays identically
+within the challenge lifetime; wrong proofs, changed intent, expiry and
+revocation fail closed.
+
+The TLS bootstrap route now admits only the exact exchange, recovery-challenge
+and recover actions while preserving the 64 KiB bound and ambient-authority
+stripping. The additive wire surface leaves the database profile, contract
+revision and Compose topology digest unchanged. A fresh PostgreSQL 18 gate
+proved recovery of the persistent result through a restarted issuer/service;
+the locked APISIX 3.17 image proved all three actions through the TLS
+8443-to-loopback boundary. Stable generation, module verification, the full Go
+suite, `go vet`, focused race suites and the Linux container suite also passed,
+and every disposable test container was removed. Completion and its real mTLS
+probe, durable dynamic controller connection, node installer, Audit, browser
+and exact signed-runtime closure remain outstanding; F1 through F10 therefore
 remain open.
 
 ## Adoption
