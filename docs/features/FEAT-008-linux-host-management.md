@@ -1784,11 +1784,28 @@ evidence only. Its
 passed the full-race, PostgreSQL/authority-process and Linux node jobs. The
 Linux job retained the fixed predecessor's configuration-based installation to
 prove the supported upgrade/rollback boundary; it did not exercise a fresh
-current-source self-enrollment. A real native and combined offline gate must
-therefore add the actual create/decrypt/transfer join journey before the
-superseded current-source setup can be removed. Independent Audit delivery, the
-authenticated browser, two real hosts and exact signed-runtime closure also
-remain outstanding. F1 through F10 therefore remain open.
+current-source self-enrollment.
+
+Pushed source `22bbcd4e981c5453f2d9a42faaeee8abbe4a6713` adds a distinct
+current-release native gate without weakening that fixed-predecessor evidence.
+On a root Linux/amd64 systemd host it authenticates a fresh release with no
+predecessor, consumes one protected signed join through the pinned TLS exchange
+and completion routes, starts the real node and collector, observes the host
+through controller mTLS, removes all ephemeral ceremony state, and proves an
+exact replay after the bootstrap ingress is unavailable. The same gate checks
+that the raw or encoded join credential enters neither the durable journal nor
+support evidence. Its
+[Verification run](https://github.com/xiak/matrix/actions/runs/34051196271)
+passed the full-race, PostgreSQL/authority-process and Linux node jobs,
+including both the existing signed upgrade/rollback gate and the new
+current-source self-enrollment step.
+
+This is still a host-side gate with an isolated bootstrap authority fixture,
+not the authenticated browser create/decrypt/transfer journey or the combined
+two-host offline lifecycle. The superseded current-source setup remains until
+that migration is atomic. Independent Audit delivery, two real hosts and exact
+signed-runtime closure also remain outstanding. F1 through F10 therefore
+remain open.
 
 ## Adoption
 
