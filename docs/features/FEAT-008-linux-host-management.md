@@ -1725,6 +1725,39 @@ probe, durable dynamic controller connection, node installer, Audit, browser
 and exact signed-runtime closure remain outstanding; F1 through F10 therefore
 remain open.
 
+Pushed source `b0e18d6f1d265c51e2d796f9ec77e86547b797c1` implements the
+control-plane completion boundary. The public bootstrap request can only
+repeat commitments fixed by the consumed exchange; the service compares every
+field and the observed private peer before a bounded, target-bound outbound
+mTLS capability and identity probe. A successful probe atomically publishes
+the existing ExecutionTarget, allocation, execution-pool snapshot, non-secret
+controller route, terminal registration Operation, Audit outbox fact and READY
+enrollment. Exact replay reads that committed result. Retryable network and
+handshake interruption leave verification open, while definitive identity,
+runtime and resource conflicts atomically fail the enrollment and Operation.
+
+Installation now generates a distinct protected Ed25519 controller client
+identity signed by the enrollment issuer. API and worker read each enrolled
+route through installation-forced RLS before every observation, deployment,
+telemetry or terminal effect, construct no fallback route and reread the
+controller credential for every new TLS connection. Safe target removal
+disables that route in the same authority transaction. The candidate advances
+to IAM 5, Audit 4, PaaS 5 and contract revision 11; its one supported
+predecessor is the exact pushed `ccb66a55505ac3e48883b1e4a1215e2e69950d0b`
+schema-4/revision-10 release, including its issuer and TLS-ingress state.
+
+Fresh and race-enabled PostgreSQL 18 gates proved schema 5, completion,
+failure, replay, RLS, removal and retained-data upgrade, while the fixed
+predecessor executable rejected successor readiness and rollback reconstruction
+remained byte exact. Locked APISIX 3.17 admitted all four bootstrap actions only
+through TLS 1.3 on 8443 to its loopback listener and stripped ambient authority.
+Deterministic generation, module verification, the full Go suite, `go vet`,
+focused race suites, ten focused repetitions and the egress-disabled Linux
+container suite passed, and their disposable containers and volumes were
+removed. This is not P3-6 acceptance: the host-side installer, independent
+Audit delivery, browser journey, two-host lifecycle and exact signed-runtime
+closure remain open, so F1 through F10 remain open.
+
 ## Adoption
 
 - [FEAT-008 fixed-source review](../adoption/FEAT-008-linux-host-management.md)
