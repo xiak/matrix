@@ -1807,6 +1807,41 @@ that migration is atomic. Independent Audit delivery, two real hosts and exact
 signed-runtime closure also remain outstanding. F1 through F10 therefore
 remain open.
 
+Pushed source `6003f17eaaf4bf564e8e42e26913ec646971a5f4` implements the
+console-owned enrollment ceremony. The host workspace accepts only a DNS-label
+name and one current READY execution pool, derives the submitted labels from
+that pool's selector, and exposes no shell, path, endpoint, provider or
+credential input. Browser Web Crypto generates a non-extractable RSA-OAEP-3072
+private key, sends only its SPKI public key, decrypts the 256-bit credential in
+memory, verifies it against the signed join metadata's digest and assembles the
+exact protected join file.
+The download uses the product-owned filename, removes its temporary anchor,
+revokes its object URL and clears mutable plaintext, digest, ciphertext and
+file buffers. No browser storage or logging path is used, and the copied fixed
+install command contains no credential.
+
+Strict response projection rejects unknown fields, invalid timelines, unknown
+states, non-HTTPS public origins, weak ETags, malformed signature encodings and
+non-RSA-3072 envelopes. The console co-polls enrollment and existing host
+inventory without manual refresh, preserves proved facts across transient read
+failure, clears them on authorization loss, and permits only current-version
+revoke or fresh-identity regeneration. It shows the closed diagnostic set and
+links READY to the exact existing host only after that target appears in host
+inventory. Pushed follow-up `b8c8843aa9db2dfa2986d98241d9470a7a5ea694`
+normalizes the one Windows/Linux Next static-export path variation while still
+requiring identical paths and SHA-256 content for all 72 embedded assets.
+
+The exact follow-up source's
+[Verification run](https://github.com/xiak/matrix/actions/runs/34054998970)
+passed the full-race Go job, PostgreSQL/authority-process job, real Linux node
+job and the new independent Node 24 UI job. The UI job passed type checking,
+lint, architecture, contrast, all 143 behavior tests, a production export and
+the embedded-asset comparison. These are automated UI and build facts, not the
+F2 authenticated real-browser journey; the combined two-host offline runtime,
+negative/recovery matrix, lifecycle, transition retention, non-interference
+and exact release evidence also remain outstanding. F1 through F10 therefore
+remain open.
+
 ## Adoption
 
 - [FEAT-008 fixed-source review](../adoption/FEAT-008-linux-host-management.md)
