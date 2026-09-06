@@ -1605,6 +1605,32 @@ cleanup was performed. The temporary clean source worktree was unregistered;
 the final signed `matrix-v0.3.0-host.38.5-acc27112cfb8` directory was separated
 as the release deliverable rather than treated as a running test resource.
 
+P3-6 control-plane admission is now implemented through pushed source
+`f2ce67c2b77957aa261bdd59a635e796ac6004f5`. Platform-authorized revocation
+requires the current strong ETag and an idempotency key, closes either a
+waiting or verifying enrollment and cancels its existing registration
+Operation. Regeneration atomically revokes that attempt and creates a fresh
+enrollment, target identity, one-time credential and Operation while retaining
+only the requested name, pool and allowlisted labels. Exact replays return the
+committed result; changed content, expired or terminal state and stale versions
+fail closed. The PostgreSQL integration verifies installation RLS, denied
+direct writes, salted credential authority, revocation replay and the deferred
+old-to-new replacement relation. Ordinary reads and mutation responses contain
+no recoverable credential material.
+
+Pushed source `65d1f1a2e762d15fd29d1b257ac7e15836c8a8a7` advances the candidate
+database profile to IAM 5, Audit 4, PaaS 4 and contract revision 9, with the
+accepted `acc27112cfb8ee9d35059ac29bd98a97ff20e3ac` profile as its one exact
+predecessor. The real PostgreSQL 18 gate built that predecessor's migration and
+API, retained its tenant work and runtime snapshot across two successor
+migration applications, exercised create/read/revoke/regenerate/expiry on the
+upgraded database, and proved the schema-3 API rejected schema-4 readiness.
+A fresh combined platform migration and a separate fresh PaaS integration also
+passed, as did the full Go suite, vet, focused race checks, stable contract
+generation and diff checks. This is database/control-plane evidence only: F1
+and F7 remain open until the bootstrap, completion, Audit, UI, supported signed
+release transition and exact release gates pass.
+
 ## Adoption
 
 - [FEAT-008 fixed-source review](../adoption/FEAT-008-linux-host-management.md)
