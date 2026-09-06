@@ -1671,11 +1671,38 @@ source, deterministic generation, module verification, the full Go suite,
 `go vet`, focused race suites, Linux installation/topology tests, five fresh
 PostgreSQL 18 integration databases, a PostgreSQL race run and the fixed
 predecessor upgrade/rollback gate passed. This is backend exchange evidence
-only: the installed public APISIX listener is still HTTP/9080, so exchange
-intentionally fails closed until the TLS-ingress slice exists. Lost-response
-proof-of-possession recovery, completion and real mTLS probe, durable dynamic
-controller connection, node installer, Audit, browser and exact signed-runtime
-closure remain outstanding; F1 through F10 therefore remain open.
+only: at that milestone the installed public APISIX listener was still
+HTTP/9080, so exchange intentionally failed closed pending the successor
+TLS-ingress slice below.
+
+Pushed source `04dfab97b3006eac90d28e3a57759d126bcf4adb` supplies the installed
+node-enrollment TLS ingress without exposing a signing key or adding a DNS
+dependency. Installation generates a distinct protected Ed25519 ingress key
+and certificate chain signed by its existing enrollment issuer; the client
+verification name is deterministically derived from the signed installation
+identity. Current topology retains UI/API HTTP on the selected listener, adds
+the fixed host port 8443, and read-only mounts only the ingress chain and key
+into APISIX. A TLS-1.3-only front accepts only readiness and the exact bounded
+exchange path, strips ambient authority, captures the network peer, and
+forwards to an APISIX listener bound only to container loopback. The general
+HTTP route cannot select that exchange route or forge its transport facts.
+
+The signed topology digest advances while database contract revision 10 stays
+unchanged because no API or persistence contract changed. The exact accepted
+predecessor still reconstructs its one HTTP port, routes and APISIX main
+configuration; the latter is pinned independently by digest
+`sha256:a5568af2d039c722a76f56c3724f3e97d9c6f9132abe92db839cc1772034e70b`.
+A real locked APISIX 3.17 container verified the issuer-authenticated SNI,
+TLS 1.3, the 8443-to-loopback exchange route, private observed peer and header
+stripping, while rejecting a different installation name, TLS 1.2, unrelated
+paths and a body above 64 KiB. The final source also passed the full Go suite,
+`go vet`, deterministic generation, module verification, focused race and
+Linux suites, and the real PostgreSQL 18 fixed-predecessor upgrade/byte-exact
+rollback gate; every disposable test container and network was removed.
+Lost-response proof-of-possession recovery, completion and real mTLS probe,
+durable dynamic controller connection, node installer, Audit, browser and
+exact signed-runtime closure remain outstanding; F1 through F10 therefore
+remain open.
 
 ## Adoption
 
