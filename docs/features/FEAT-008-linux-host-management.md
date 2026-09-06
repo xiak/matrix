@@ -1779,9 +1779,14 @@ credential replay or rollback.
 On that exact source, deterministic API generation, module verification, the
 full Go suite, `go vet`, focused race suites, ten focused enrollment repetitions,
 Linux/amd64 cross-build and diff checks passed. This is automated host-side
-evidence only. The real native and combined offline harnesses still require
-atomic migration from the superseded fresh-install configuration input to the
-actual create/decrypt/transfer join journey; independent Audit delivery, the
+evidence only. Its
+[Verification run](https://github.com/xiak/matrix/actions/runs/34049832210)
+passed the full-race, PostgreSQL/authority-process and Linux node jobs. The
+Linux job retained the fixed predecessor's configuration-based installation to
+prove the supported upgrade/rollback boundary; it did not exercise a fresh
+current-source self-enrollment. A real native and combined offline gate must
+therefore add the actual create/decrypt/transfer join journey before the
+superseded current-source setup can be removed. Independent Audit delivery, the
 authenticated browser, two real hosts and exact signed-runtime closure also
 remain outstanding. F1 through F10 therefore remain open.
 
