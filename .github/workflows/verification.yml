@@ -198,6 +198,26 @@ jobs:
             "MATRIX_NODE_UPGRADE_BUNDLE=$RUNNER_TEMP/node-release-b" \
             "MATRIX_NODE_RELEASE_TRUST=$RUNNER_TEMP/node-release-trust.json" \
             "$RUNNER_TEMP/node-runtime.test" -test.v -test.count=1 -test.timeout=330s -test.run='^TestLinuxSignedNodeStartup$'
+      - name: Verify current signed node self-enrollment
+        run: |
+          go run -p 2 ./deploy/cmd/matrix-release assemble --target node --repository "$GITHUB_WORKSPACE" \
+            --collector-archive "$RUNNER_TEMP/node_exporter.tar.gz" --output "$RUNNER_TEMP/node-release-self-enrollment" \
+            --version v0.3.0-node.3 --build-id "ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-self-enrollment" \
+            --created-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --private-key "$RUNNER_TEMP/node-release-private.json" --trust-key "$RUNNER_TEMP/node-release-trust.json"
+          self_enrollment_gate_root="$(sudo mktemp -d /opt/matrix-node-enrollment-ci-XXXXXX)"
+          trap 'sudo rmdir "$self_enrollment_gate_root"' EXIT
+          sudo systemd-run --wait --pipe --collect \
+            --unit="matrix-node-enrollment-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --property=CPUQuota=100% --property=MemoryMax=768M --property=TasksMax=128 \
+            --property=RuntimeMaxSec=180 --property=IPAddressDeny=any \
+            --property=IPAddressAllow=localhost --property=IPAddressAllow=10.0.0.0/8 \
+            --property=IPAddressAllow=172.16.0.0/12 --property=IPAddressAllow=192.168.0.0/16 \
+            /usr/bin/env GOMAXPROCS=2 GOMEMLIMIT=512MiB "TMPDIR=$self_enrollment_gate_root" \
+            MATRIX_NODE_SELF_ENROLLMENT_REAL_RUNTIME=1 \
+            "MATRIX_NODE_SELF_ENROLLMENT_BUNDLE=$RUNNER_TEMP/node-release-self-enrollment" \
+            "MATRIX_NODE_RELEASE_TRUST=$RUNNER_TEMP/node-release-trust.json" \
+            "$RUNNER_TEMP/node-runtime.test" -test.v -test.count=1 -test.timeout=150s -test.run='^TestLinuxCurrentNodeSelfEnrollment$'
       - name: Verify the real node through independent platform authorities
         env:
           POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
