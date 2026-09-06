@@ -1754,9 +1754,15 @@ through TLS 1.3 on 8443 to its loopback listener and stripped ambient authority.
 Deterministic generation, module verification, the full Go suite, `go vet`,
 focused race suites, ten focused repetitions and the egress-disabled Linux
 container suite passed, and their disposable containers and volumes were
-removed. This is not P3-6 acceptance: the host-side installer, independent
-Audit delivery, browser journey, two-host lifecycle and exact signed-runtime
-closure remain open, so F1 through F10 remain open.
+removed. Pushed source `660c7d2e9e1c494891ed0e6083a8337e9b0e4655`
+also supplies the independent-process gate with the same role-separated issuer
+and controller identities required by the installed service. Its
+[Verification run](https://github.com/xiak/matrix/actions/runs/34042093478)
+passed all three full-race, PostgreSQL/authority-process and real Linux node
+jobs, including signed startup, upgrade, rollback and the node through
+independent platform authorities. This is not P3-6 acceptance: the host-side
+installer, independent Audit delivery, browser journey, two-host lifecycle and
+exact signed-runtime closure remain open, so F1 through F10 remain open.
 
 ## Adoption
 

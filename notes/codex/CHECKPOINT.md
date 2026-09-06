@@ -5,7 +5,7 @@
 - Updated: 2026-09-06
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/host-self-enrollment`
-- Pushed verified milestone: `b0e18d6f1d265c51e2d796f9ec77e86547b797c1`
+- Pushed verified milestone: `660c7d2e9e1c494891ed0e6083a8337e9b0e4655`
 
 ## Resume route
 
