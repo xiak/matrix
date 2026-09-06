@@ -117,6 +117,11 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 		paasEnvironment["MATRIX_PAAS_ENROLLMENT_ISSUER_PRIVATE_KEY_FILE"] != "/run/matrix/node-enrollment-issuer-key.der" {
 		t.Fatal("PaaS does not consume the installation-owned enrollment issuer")
 	}
+	if paasEnvironment["MATRIX_PAAS_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE"] != "/run/matrix/node-controller/enrollment-controller.pem" ||
+		paasEnvironment["MATRIX_PAAS_ENROLLMENT_CONTROLLER_PRIVATE_KEY_FILE"] != "/run/matrix/node-controller/enrollment-controller-key.pem" ||
+		paasEnvironment["MATRIX_PAAS_ENROLLMENT_CONTROLLER_TRUST_FILE"] != "/run/matrix/node-controller/enrollment-controller-trust.pem" {
+		t.Fatal("PaaS does not consume the installation-owned enrollment controller")
+	}
 
 	portCount := 0
 	foundExecutorRoot := false
@@ -148,7 +153,9 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			"MATRIX_IAM_AUDIT_WORKER_ID",
 		},
 		"paas-api": {
-			"MATRIX_PAAS_DATABASE_DSN_FILE", "MATRIX_PAAS_ENROLLMENT_ISSUER_CERTIFICATE_FILE",
+			"MATRIX_PAAS_DATABASE_DSN_FILE", "MATRIX_PAAS_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE",
+			"MATRIX_PAAS_ENROLLMENT_CONTROLLER_PRIVATE_KEY_FILE", "MATRIX_PAAS_ENROLLMENT_CONTROLLER_TRUST_FILE",
+			"MATRIX_PAAS_ENROLLMENT_ISSUER_CERTIFICATE_FILE",
 			"MATRIX_PAAS_ENROLLMENT_ISSUER_PRIVATE_KEY_FILE", "MATRIX_PAAS_IAM_ENDPOINT",
 			"MATRIX_PAAS_INSTALLATION_ID", "MATRIX_PAAS_LISTEN_ADDRESS",
 			"MATRIX_PAAS_NODE_CONNECTIONS_FILE",
@@ -167,6 +174,9 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			"DOCKER_CONFIG", "DOCKER_HOST",
 			"MATRIX_PAAS_WORKER_ARTIFACT_CATALOG_FILE", "MATRIX_PAAS_WORKER_BINDING_REF",
 			"MATRIX_PAAS_WORKER_BINDING_ROOT", "MATRIX_PAAS_WORKER_DATABASE_DSN_FILE",
+			"MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE",
+			"MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_PRIVATE_KEY_FILE",
+			"MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_TRUST_FILE",
 			"MATRIX_PAAS_WORKER_EXECUTION_TENANT_ID", "MATRIX_PAAS_WORKER_ID",
 			"MATRIX_PAAS_WORKER_INSTALLATION_ID",
 			"MATRIX_PAAS_WORKER_LISTEN_ADDRESS", "MATRIX_PAAS_WORKER_MACHINE_BINDING_REF",
@@ -427,7 +437,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 }
 
 func TestCompileInstalledPinsCurrentAndFrozenPredecessorTopologyPairs(t *testing.T) {
-	const publishedPredecessorDigest = "sha256:10dcf578fdb965adfef09f7ff3394cf0e79ab598fc894399602dcd6796440f9a"
+	const publishedPredecessorDigest = "sha256:533a0087a560cfc791b23b59a07fb6fd90814b6593030ef2f36944abb59af0ee"
 	if got := SupportedPredecessorContractDigest(); got != publishedPredecessorDigest {
 		t.Fatalf("frozen predecessor topology digest = %q, want %q", got, publishedPredecessorDigest)
 	}
@@ -466,29 +476,54 @@ func TestCompileInstalledPinsCurrentAndFrozenPredecessorTopologyPairs(t *testing
 	if environment["MATRIX_PAAS_TERMINAL_COOKIE_SECURE"] != "false" {
 		t.Fatal("adjacent predecessor lost the retained terminal cookie policy")
 	}
-	if environment[enrollmentIssuerCertificateEnvironment] != "" ||
-		environment[enrollmentIssuerPrivateKeyEnvironment] != "" {
-		t.Fatal("frozen predecessor gained current node enrollment issuer input")
+	if environment[enrollmentIssuerCertificateEnvironment] != enrollmentIssuerCertificateTarget ||
+		environment[enrollmentIssuerPrivateKeyEnvironment] != enrollmentIssuerPrivateKeyTarget {
+		t.Fatal("frozen predecessor lost its node enrollment issuer input")
 	}
+	if environment[enrollmentControllerCertificateEnvironment] != "" ||
+		environment[enrollmentControllerPrivateKeyEnvironment] != "" ||
+		environment[enrollmentControllerTrustEnvironment] != "" {
+		t.Fatal("frozen predecessor gained the successor controller identity")
+	}
+	issuerMounts := 0
 	for _, volume := range document.Services["paas-api"].Volumes {
 		if volume.Target == enrollmentIssuerCertificateTarget || volume.Target == enrollmentIssuerPrivateKeyTarget {
-			t.Fatal("frozen predecessor gained current node enrollment issuer mount")
+			issuerMounts++
 		}
+	}
+	if issuerMounts != 2 {
+		t.Fatal("frozen predecessor lost its enrollment issuer mounts")
+	}
+	workerEnvironment := document.Services["paas-worker"].Environment
+	if workerEnvironment[workerEnrollmentControllerCertificateEnvironment] != "" ||
+		workerEnvironment[workerEnrollmentControllerPrivateKeyEnvironment] != "" ||
+		workerEnvironment[workerEnrollmentControllerTrustEnvironment] != "" {
+		t.Fatal("frozen predecessor worker gained the successor controller identity")
 	}
 	predecessorAPISIX := document.Services["apisix"]
-	if len(predecessorAPISIX.Ports) != 1 ||
-		predecessorAPISIX.Ports[0] != "0.0.0.0:8080:9080/tcp" {
-		t.Fatal("frozen predecessor gained node enrollment TLS ingress")
+	if len(predecessorAPISIX.Ports) != 2 ||
+		predecessorAPISIX.Ports[0] != "0.0.0.0:8080:9080/tcp" ||
+		predecessorAPISIX.Ports[1] != "0.0.0.0:8443:9443/tcp" {
+		t.Fatal("frozen predecessor lost its node enrollment TLS ingress")
 	}
+	ingressMounts := 0
 	for _, volume := range predecessorAPISIX.Volumes {
 		if volume.Target == NodeEnrollmentIngressCertificateTarget || volume.Target == NodeEnrollmentIngressPrivateKeyTarget {
-			t.Fatal("frozen predecessor gained node enrollment ingress identity")
+			ingressMounts++
 		}
+	}
+	if ingressMounts != 2 {
+		t.Fatal("frozen predecessor lost its node enrollment ingress identity")
 	}
 	currentPaaS := mustDecodeCompose(t, gotCurrent.ComposeJSON).Services["paas-api"]
 	if currentPaaS.Environment[enrollmentIssuerCertificateEnvironment] != enrollmentIssuerCertificateTarget ||
 		currentPaaS.Environment[enrollmentIssuerPrivateKeyEnvironment] != enrollmentIssuerPrivateKeyTarget {
 		t.Fatal("current topology lost node enrollment issuer input")
+	}
+	if currentPaaS.Environment[enrollmentControllerCertificateEnvironment] == "" ||
+		currentPaaS.Environment[enrollmentControllerPrivateKeyEnvironment] == "" ||
+		currentPaaS.Environment[enrollmentControllerTrustEnvironment] == "" {
+		t.Fatal("current topology lost node enrollment controller identity")
 	}
 
 	for name, candidate := range map[string]release.Manifest{

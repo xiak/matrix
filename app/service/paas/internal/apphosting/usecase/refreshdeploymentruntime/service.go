@@ -86,6 +86,14 @@ func (service *Service) ProcessNext(ctx context.Context) (bool, error) {
 		return true, nil
 	}
 	observer, routed := service.routes[candidate.ExecutionTargetID]
+	if !routed && service.config.DynamicRoutes != nil {
+		observer, routed, err = service.config.DynamicRoutes.ResolveDeploymentTelemetryObserver(
+			ctx, candidate.ExecutionTargetID,
+		)
+		if err != nil {
+			return true, err
+		}
+	}
 	if !routed {
 		service.schedule(key, startedAt.Add(service.config.FailureBackoff))
 		return true, nil

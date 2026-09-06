@@ -69,6 +69,42 @@ func TestDisconnectionRetainsCapacityAndOriginalSampleTime(t *testing.T) {
 	}
 }
 
+func TestRefreshResolvesCommittedDynamicBindingWithoutRestart(t *testing.T) {
+	service, transaction, adapter, _ := refreshFixture(t)
+	service.bindings = map[string]Binding{}
+	resolver := &dynamicBindingResolver{adapter: adapter}
+	service.config.DynamicBindings = resolver
+	if err := service.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if resolver.calls != 1 || resolver.releases != 1 || adapter.calls != 1 ||
+		resolver.targetID != transaction.registration.Target.Metadata.ID ||
+		resolver.bindingRef != transaction.registration.BindingRef ||
+		resolver.fingerprint != transaction.registration.IdentityFingerprint {
+		t.Fatalf("dynamic binding resolution = %#v adapterCalls=%d", resolver, adapter.calls)
+	}
+}
+
+type dynamicBindingResolver struct {
+	adapter     port.InfrastructureAdapter
+	calls       int
+	releases    int
+	targetID    paasv1.ResourceID
+	bindingRef  string
+	fingerprint string
+}
+
+func (resolver *dynamicBindingResolver) ResolveInfrastructureAdapter(
+	_ context.Context,
+	targetID paasv1.ResourceID,
+	bindingRef string,
+	fingerprint string,
+) (port.InfrastructureAdapter, func(), bool, error) {
+	resolver.calls++
+	resolver.targetID, resolver.bindingRef, resolver.fingerprint = targetID, bindingRef, fingerprint
+	return resolver.adapter, func() { resolver.releases++ }, true, nil
+}
+
 func TestChangedNodeIdentityCannotRebindRegisteredTarget(t *testing.T) {
 	service, transaction, adapter, _ := refreshFixture(t)
 	initial := transaction.registration

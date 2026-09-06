@@ -691,6 +691,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS execution_targets_binding_uq
     ON paas.execution_targets (installation_id, binding_ref);
 CREATE UNIQUE INDEX IF NOT EXISTS execution_targets_fingerprint_uq
     ON paas.execution_targets (installation_id, identity_fingerprint);
+CREATE UNIQUE INDEX IF NOT EXISTS execution_targets_installation_identity_uq
+    ON paas.execution_targets (installation_id, id);
 ALTER TABLE paas.execution_pools DROP CONSTRAINT IF EXISTS execution_pools_installation_valid;
 ALTER TABLE paas.execution_pools ADD CONSTRAINT execution_pools_installation_valid CHECK (
     installation_id IS NULL OR installation_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
@@ -973,6 +975,56 @@ ALTER TABLE paas.node_enrollments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE paas.node_enrollments FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS installation_read ON paas.node_enrollments;
 CREATE POLICY installation_read ON paas.node_enrollments FOR SELECT TO matrix_paas_api
+    USING (installation_id = paas.current_installation_id());
+
+-- Self-enrollment publishes only a non-secret route. The installation-owned
+-- controller certificate, key, and trust bundle remain process inputs and are
+-- deliberately absent from this durable runtime connection.
+CREATE TABLE IF NOT EXISTS paas.enrolled_node_connections (
+    installation_id text COLLATE "C" NOT NULL,
+    execution_target_id text COLLATE "C" NOT NULL,
+    controller_id text COLLATE "C" NOT NULL,
+    binding_ref text COLLATE "C" NOT NULL,
+    endpoint text COLLATE "C" NOT NULL,
+    identity_fingerprint text COLLATE "C" NOT NULL,
+    enabled boolean NOT NULL,
+    created_at timestamptz(6) NOT NULL,
+    updated_at timestamptz(6) NOT NULL,
+    PRIMARY KEY (installation_id, execution_target_id),
+    CONSTRAINT enrolled_node_connections_target_fk
+        FOREIGN KEY (installation_id, execution_target_id)
+        REFERENCES paas.execution_targets (installation_id, id),
+    CONSTRAINT enrolled_node_connections_binding_uq
+        UNIQUE (installation_id, binding_ref),
+    CONSTRAINT enrolled_node_connections_fingerprint_uq
+        UNIQUE (installation_id, identity_fingerprint),
+    CONSTRAINT enrolled_node_connections_identity_valid CHECK ((
+        installation_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND execution_target_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND controller_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND binding_ref COLLATE "C" ~ '^node-binding-[0-9a-f]{32}$'
+        AND identity_fingerprint COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND updated_at >= created_at
+        AND CASE
+            WHEN endpoint COLLATE "C" ~ '^https://[0-9]{1,3}(\.[0-9]{1,3}){3}:[1-9][0-9]{3,4}$'
+            THEN split_part(substring(endpoint from 9), ':', 1)::inet <<= inet '10.0.0.0/8'
+              OR split_part(substring(endpoint from 9), ':', 1)::inet <<= inet '172.16.0.0/12'
+              OR split_part(substring(endpoint from 9), ':', 1)::inet <<= inet '192.168.0.0/16'
+              OR split_part(substring(endpoint from 9), ':', 1)::inet = inet '127.0.0.1'
+            WHEN endpoint COLLATE "C" ~ '^https://\[((fc|fd)[0-9a-f:]*|::1)\]:[1-9][0-9]{3,4}$'
+            THEN substring(endpoint from '^https://\[([^]]+)\]')::inet <<= inet 'fc00::/7'
+              OR substring(endpoint from '^https://\[([^]]+)\]')::inet = inet '::1'
+            ELSE false
+        END
+        AND substring(endpoint from ':([0-9]+)$')::integer BETWEEN 1024 AND 65535
+    ) IS TRUE)
+);
+
+ALTER TABLE paas.enrolled_node_connections ENABLE ROW LEVEL SECURITY;
+ALTER TABLE paas.enrolled_node_connections FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS installation_read ON paas.enrolled_node_connections;
+CREATE POLICY installation_read ON paas.enrolled_node_connections FOR SELECT
+    TO matrix_paas_api, matrix_paas_worker
     USING (installation_id = paas.current_installation_id());
 
 CREATE TABLE IF NOT EXISTS paas.execution_target_allocations (
@@ -2118,7 +2170,16 @@ BEGIN
             AND (jsonb_typeof(submitted_audit_event->'traceparent') <> 'string'
                 OR octet_length(submitted_audit_event->>'traceparent') > 55))
        OR (submitted_audit_event->>'occurredAt')::timestamptz <> effective_now
-       OR (submitted_operation->>'createdAt')::timestamptz <> effective_now THEN
+       OR NOT (
+            (submitted_operation->>'createdAt')::timestamptz = effective_now
+            OR (
+                submitted_operation->>'action' = 'REGISTER_EXECUTION_TARGET'
+                AND submitted_operation->>'state' = 'SUCCEEDED'
+                AND (submitted_operation->>'createdAt')::timestamptz < effective_now
+                AND (submitted_operation->>'updatedAt')::timestamptz = effective_now
+                AND (submitted_operation->>'terminalAt')::timestamptz = effective_now
+            )
+       ) THEN
         RAISE EXCEPTION USING
             ERRCODE = '22023',
             MESSAGE = 'Audit event identity or correlation is invalid';
@@ -3336,6 +3397,263 @@ GRANT EXECUTE ON FUNCTION paas.revoke_node_enrollment(
     text,bigint,text,text,jsonb,jsonb,jsonb,jsonb
 ) TO matrix_paas_api;
 
+CREATE OR REPLACE FUNCTION paas.fail_node_enrollment(
+    requested_enrollment_id text,
+    expected_resource_version bigint,
+    submitted_enrollment jsonb,
+    submitted_operation jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_installation_id text := paas.current_installation_id();
+    current_enrollment paas.node_enrollments%ROWTYPE;
+    current_operation paas.operations%ROWTYPE;
+    diagnostic_code text := submitted_enrollment#>>'{diagnostic,code}';
+BEGIN
+    IF effective_installation_id IS NULL
+       OR requested_enrollment_id COLLATE "C" !~ '^node-enrollment-[0-9a-f]{32}$'
+       OR expected_resource_version NOT BETWEEN 1 AND 9007199254740991
+       OR jsonb_typeof(submitted_enrollment) <> 'object'
+       OR jsonb_typeof(submitted_operation) <> 'object' THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'node enrollment failure input is invalid';
+    END IF;
+    SELECT * INTO current_enrollment FROM paas.node_enrollments
+     WHERE installation_id = effective_installation_id AND id = requested_enrollment_id
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX404', MESSAGE = 'node enrollment is not registered';
+    END IF;
+    SELECT * INTO current_operation FROM paas.operations
+     WHERE authority_key = current_enrollment.authority_key
+       AND id = current_enrollment.operation_id
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'node enrollment operation is missing';
+    END IF;
+    IF current_enrollment.resource_version <> expected_resource_version THEN
+        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'node enrollment changed concurrently';
+    END IF;
+    IF current_enrollment.state <> 'VERIFYING' OR current_operation.state <> 'VERIFYING' THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'node enrollment cannot fail verification';
+    END IF;
+    IF NOT ((
+        submitted_enrollment - 'metadata' - 'state' - 'diagnostic'
+            = current_enrollment.document - 'metadata' - 'state' - 'diagnostic'
+        AND (submitted_enrollment->'metadata') - 'resourceVersion' - 'updatedAt'
+            = (current_enrollment.document->'metadata') - 'resourceVersion' - 'updatedAt'
+        AND submitted_enrollment#>>'{metadata,resourceVersion}'
+            = (current_enrollment.resource_version + 1)::text
+        AND (submitted_enrollment#>>'{metadata,updatedAt}')::timestamptz
+            = transaction_timestamp()
+        AND submitted_enrollment->>'state' = 'FAILED'
+        AND diagnostic_code IN (
+            'IDENTITY_CONFLICT', 'RUNTIME_UNSUPPORTED',
+            'MTLS_VERIFICATION_FAILED', 'RESOURCE_CONFLICT'
+        )
+        AND submitted_enrollment#>>'{diagnostic,retryable}' = 'false'
+        AND (submitted_enrollment#>>'{diagnostic,occurredAt}')::timestamptz
+            = transaction_timestamp()
+        AND (submitted_enrollment->'diagnostic') - ARRAY['code','retryable','occurredAt']
+            = '{}'::jsonb
+        AND submitted_operation - ARRAY['state','updatedAt','terminalAt','error']
+            = current_operation.document - ARRAY['state','updatedAt','terminalAt','error']
+        AND submitted_operation->>'state' = 'FAILED'
+        AND (submitted_operation->>'updatedAt')::timestamptz = transaction_timestamp()
+        AND (submitted_operation->>'terminalAt')::timestamptz = transaction_timestamp()
+        AND submitted_operation->'error' = jsonb_build_object(
+            'type', '/problems/node-enrollment-verification-failed',
+            'title', 'Node enrollment verification failed',
+            'status', 409,
+            'code', 'OPERATION_FAILED',
+            'detail', 'The exchanged node could not be admitted with its fixed identity and runtime contract.',
+            'traceId', current_enrollment.request_id,
+            'retryable', false
+        )
+    ) IS TRUE) THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'node enrollment failure transition is invalid';
+    END IF;
+    UPDATE paas.operations
+       SET state = 'FAILED', updated_at = transaction_timestamp(),
+           terminal_at = transaction_timestamp(), next_attempt_at = transaction_timestamp(),
+           error = submitted_operation->'error',
+           document = submitted_operation
+     WHERE authority_key = current_enrollment.authority_key
+       AND id = current_enrollment.operation_id;
+    UPDATE paas.node_enrollments
+       SET state = 'FAILED', resource_version = current_enrollment.resource_version + 1,
+           sealed_exchange_result_document = NULL, document = submitted_enrollment
+     WHERE installation_id = effective_installation_id AND id = current_enrollment.id;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.fail_node_enrollment(text,bigint,jsonb,jsonb)
+    FROM PUBLIC, matrix_paas_worker;
+GRANT EXECUTE ON FUNCTION paas.fail_node_enrollment(text,bigint,jsonb,jsonb)
+    TO matrix_paas_api;
+
+CREATE OR REPLACE FUNCTION paas.complete_node_enrollment(
+    requested_enrollment_id text,
+    expected_enrollment_version bigint,
+    submitted_enrollment jsonb,
+    submitted_operation jsonb,
+    submitted_target jsonb,
+    submitted_binding_ref text,
+    submitted_identity_fingerprint text,
+    submitted_controller_id text,
+    submitted_endpoint text,
+    expected_pool_version bigint,
+    submitted_pool jsonb,
+    submitted_audit_event jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_installation_id text := paas.current_installation_id();
+    current_enrollment paas.node_enrollments%ROWTYPE;
+    current_operation paas.operations%ROWTYPE;
+    target_id text := submitted_target#>>'{metadata,id}';
+    pool_id text := submitted_target#>>'{spec,executionPoolId}';
+BEGIN
+    IF effective_installation_id IS NULL
+       OR requested_enrollment_id COLLATE "C" !~ '^node-enrollment-[0-9a-f]{32}$'
+       OR expected_enrollment_version NOT BETWEEN 1 AND 9007199254740991
+       OR expected_pool_version NOT BETWEEN 1 AND 9007199254740991
+       OR jsonb_typeof(submitted_enrollment) <> 'object'
+       OR jsonb_typeof(submitted_operation) <> 'object'
+       OR jsonb_typeof(submitted_target) <> 'object'
+       OR jsonb_typeof(submitted_pool) <> 'object'
+       OR jsonb_typeof(submitted_audit_event) <> 'object'
+       OR submitted_binding_ref COLLATE "C" !~ '^node-binding-[0-9a-f]{32}$'
+       OR submitted_identity_fingerprint COLLATE "C" !~ '^sha256:[0-9a-f]{64}$'
+       OR submitted_controller_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'node enrollment completion input is invalid';
+    END IF;
+    SELECT * INTO current_enrollment FROM paas.node_enrollments
+     WHERE installation_id = effective_installation_id AND id = requested_enrollment_id
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX404', MESSAGE = 'node enrollment is not registered';
+    END IF;
+    SELECT * INTO current_operation FROM paas.operations
+     WHERE authority_key = current_enrollment.authority_key
+       AND id = current_enrollment.operation_id
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'node enrollment operation is missing';
+    END IF;
+    IF current_enrollment.resource_version <> expected_enrollment_version THEN
+        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'node enrollment changed concurrently';
+    END IF;
+    IF current_enrollment.state <> 'VERIFYING' OR current_operation.state <> 'VERIFYING'
+       OR transaction_timestamp() >= current_enrollment.expires_at THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'node enrollment cannot be completed';
+    END IF;
+    PERFORM 1 FROM paas.execution_pools
+     WHERE installation_id = effective_installation_id AND id = current_enrollment.execution_pool_id
+       AND resource_version = expected_pool_version
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'execution pool changed concurrently';
+    END IF;
+    IF NOT ((
+        current_enrollment.exchange_document IS NOT NULL
+        AND target_id = current_enrollment.execution_target_id
+        AND pool_id = current_enrollment.execution_pool_id
+        AND submitted_pool#>>'{metadata,id}' = pool_id
+        AND submitted_binding_ref = current_enrollment.exchange_document->>'bindingRef'
+        AND submitted_identity_fingerprint = current_enrollment.machine_fingerprint
+        AND submitted_controller_id = current_enrollment.exchange_document->>'controllerId'
+        AND submitted_endpoint = 'https://' || (current_enrollment.exchange_document->>'nodeListenAddress')
+        AND submitted_enrollment - 'metadata' - 'state' - 'readyAt'
+            = current_enrollment.document - 'metadata' - 'state' - 'readyAt'
+        AND (submitted_enrollment->'metadata') - 'resourceVersion' - 'updatedAt'
+            = (current_enrollment.document->'metadata') - 'resourceVersion' - 'updatedAt'
+        AND submitted_enrollment#>>'{metadata,resourceVersion}'
+            = (current_enrollment.resource_version + 1)::text
+        AND (submitted_enrollment#>>'{metadata,updatedAt}')::timestamptz
+            = transaction_timestamp()
+        AND submitted_enrollment->>'state' = 'READY'
+        AND (submitted_enrollment->>'readyAt')::timestamptz = transaction_timestamp()
+        AND NOT (submitted_enrollment ? 'diagnostic')
+        AND submitted_operation - ARRAY['state','updatedAt','terminalAt']
+            = current_operation.document - ARRAY['state','updatedAt','terminalAt']
+        AND submitted_operation->>'state' = 'SUCCEEDED'
+        AND NOT (submitted_operation ? 'error')
+        AND (submitted_operation->>'updatedAt')::timestamptz = transaction_timestamp()
+        AND (submitted_operation->>'terminalAt')::timestamptz = transaction_timestamp()
+        AND submitted_target->>'apiVersion' = 'paas.matrix.xiak.com/v1'
+        AND submitted_target->>'kind' = 'ExecutionTarget'
+        AND submitted_target#>>'{metadata,name}' = current_enrollment.document#>>'{metadata,name}'
+        AND submitted_target#>'{metadata,scope}' = jsonb_build_object('kind', 'PLATFORM')
+        AND submitted_target#>'{metadata,labels}' =
+            COALESCE(current_enrollment.document#>'{metadata,labels}', '{}'::jsonb)
+            || jsonb_build_object('matrix-machine-fingerprint', submitted_identity_fingerprint)
+        AND submitted_target#>>'{metadata,resourceVersion}' = '1'
+        AND (submitted_target#>>'{metadata,createdAt}')::timestamptz = transaction_timestamp()
+        AND (submitted_target#>>'{metadata,updatedAt}')::timestamptz = transaction_timestamp()
+        AND submitted_target#>'{spec,infrastructureAdapter}' =
+            '{"kind":"INFRASTRUCTURE","name":"nodehttps","contractVersion":"v1"}'::jsonb
+        AND submitted_target#>'{spec,deploymentExecutor}' =
+            '{"kind":"DEPLOYMENT_EXECUTOR","name":"compose","contractVersion":"v1"}'::jsonb
+        AND submitted_target#>>'{spec,desiredState}' = 'ACTIVE'
+        AND submitted_target#>>'{status,health}' = 'READY'
+        AND jsonb_typeof(submitted_target#>'{status,usage}') = 'object'
+        AND (submitted_target#>>'{status,observedAt}')::timestamptz
+            > transaction_timestamp() - interval '15 seconds'
+        AND (submitted_target#>>'{status,observedAt}')::timestamptz
+            <= transaction_timestamp() + interval '2 seconds'
+    ) IS TRUE) THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'node enrollment completion authority is invalid';
+    END IF;
+    IF (SELECT count(*) FROM paas.execution_targets
+         WHERE installation_id = effective_installation_id AND binding_ref IS NOT NULL) >= 128 THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'execution target admission limit reached';
+    END IF;
+    INSERT INTO paas.execution_targets (
+        id, installation_id, execution_pool_id, binding_ref,
+        identity_fingerprint, resource_version, document
+    ) VALUES (
+        target_id, effective_installation_id, pool_id, submitted_binding_ref,
+        submitted_identity_fingerprint, 1, submitted_target
+    );
+    INSERT INTO paas.execution_target_allocations (execution_target_id) VALUES (target_id);
+    INSERT INTO paas.enrolled_node_connections (
+        installation_id, execution_target_id, controller_id, binding_ref,
+        endpoint, identity_fingerprint, enabled, created_at, updated_at
+    ) VALUES (
+        effective_installation_id, target_id, submitted_controller_id, submitted_binding_ref,
+        submitted_endpoint, submitted_identity_fingerprint, true,
+        transaction_timestamp(), transaction_timestamp()
+    );
+    PERFORM paas.store_execution_pool_observation(expected_pool_version, submitted_pool);
+    UPDATE paas.operations
+       SET state = 'SUCCEEDED', updated_at = transaction_timestamp(),
+           terminal_at = transaction_timestamp(), next_attempt_at = transaction_timestamp(),
+           document = submitted_operation
+     WHERE authority_key = current_enrollment.authority_key
+       AND id = current_enrollment.operation_id;
+    UPDATE paas.node_enrollments
+       SET state = 'READY', resource_version = current_enrollment.resource_version + 1,
+           sealed_exchange_result_document = NULL, document = submitted_enrollment
+     WHERE installation_id = effective_installation_id AND id = current_enrollment.id;
+    PERFORM paas.append_audit_outbox(submitted_operation, submitted_audit_event);
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.complete_node_enrollment(
+    text,bigint,jsonb,jsonb,jsonb,text,text,text,text,bigint,jsonb,jsonb
+) FROM PUBLIC, matrix_paas_worker;
+GRANT EXECUTE ON FUNCTION paas.complete_node_enrollment(
+    text,bigint,jsonb,jsonb,jsonb,text,text,text,text,bigint,jsonb,jsonb
+) TO matrix_paas_api;
+
 CREATE OR REPLACE FUNCTION paas.admit_execution_resource(
     submitted_resource jsonb, submitted_operation jsonb, submitted_audit_event jsonb,
     submitted_binding_ref text, submitted_identity_fingerprint text,
@@ -3595,6 +3913,12 @@ BEGIN
        SET resource_version = expected_target_version + 1,
            document = submitted_target
      WHERE target.id = current_target.id;
+    IF operation_action = 'REMOVE_EXECUTION_TARGET' THEN
+        UPDATE paas.enrolled_node_connections AS connection
+           SET enabled = false, updated_at = transaction_timestamp()
+         WHERE connection.installation_id = effective_installation_id
+           AND connection.execution_target_id = effective_target_id;
+    END IF;
     PERFORM paas.store_execution_pool_observation(expected_pool_version, submitted_pool);
     INSERT INTO paas.operations (
         installation_id, id, action, target_kind, target_id,
@@ -4783,11 +5107,14 @@ AS $function$
         AND to_regclass('paas.deployment_runtime_snapshots') IS NOT NULL
         AND to_regclass('paas.deployment_resource_snapshots') IS NOT NULL
         AND to_regclass('paas.terminal_sessions') IS NOT NULL
+        AND to_regclass('paas.enrolled_node_connections') IS NOT NULL
         AND to_regprocedure('paas.current_installation_id()') IS NOT NULL
         AND to_regprocedure('paas.complete_audit_event(text,text,text,text,bigint,text,timestamptz,text)') IS NOT NULL
         AND to_regprocedure('paas.admit_execution_resource(jsonb,jsonb,jsonb,text,text,bigint,jsonb)') IS NOT NULL
         AND to_regprocedure('paas.transition_execution_target(bigint,jsonb,bigint,jsonb,jsonb,jsonb)') IS NOT NULL
         AND to_regprocedure('paas.refresh_execution_target(bigint,jsonb,bigint,jsonb)') IS NOT NULL
+        AND to_regprocedure('paas.fail_node_enrollment(text,bigint,jsonb,jsonb)') IS NOT NULL
+        AND to_regprocedure('paas.complete_node_enrollment(text,bigint,jsonb,jsonb,jsonb,text,text,text,text,bigint,jsonb,jsonb)') IS NOT NULL
         AND to_regprocedure('paas.next_deployment_runtime_candidate(text,text)') IS NOT NULL
         AND to_regprocedure('paas.store_deployment_runtime_snapshot(text,text,bigint,text,text,text,timestamp with time zone,timestamp with time zone,jsonb)') IS NOT NULL
         AND to_regprocedure('paas.valid_deployment_resource_document(jsonb)') IS NOT NULL
@@ -4807,7 +5134,7 @@ AS $function$
              WHERE outbox.status = 'DEAD_LETTER'
                 OR outbox.attempts >= 100
         ),
-        4::bigint,
+        5::bigint,
         transaction_timestamp()
 $function$;
 
@@ -4824,6 +5151,7 @@ AS $function$
     SELECT
         to_regclass('paas.operations') IS NOT NULL
         AND to_regclass('paas.execution_targets') IS NOT NULL
+        AND to_regclass('paas.enrolled_node_connections') IS NOT NULL
         AND to_regclass('paas.adapter_commands') IS NOT NULL
         AND to_regclass('paas.deployment_runtime_snapshots') IS NOT NULL
         AND to_regclass('paas.deployment_resource_snapshots') IS NOT NULL
@@ -4842,7 +5170,7 @@ AS $function$
         AND to_regprocedure(
             'paas.reconcile_local_execution_profile(bigint,jsonb,bigint,jsonb,bigint,jsonb)'
         ) IS NULL,
-        4::bigint,
+        5::bigint,
         transaction_timestamp()
 $function$;
 
@@ -6697,6 +7025,7 @@ GRANT SELECT ON paas.operations TO matrix_paas_api;
 GRANT SELECT ON paas.execution_pools TO matrix_paas_api;
 GRANT SELECT ON paas.execution_targets TO matrix_paas_api;
 GRANT SELECT ON paas.node_enrollments TO matrix_paas_api;
+GRANT SELECT ON paas.enrolled_node_connections TO matrix_paas_api;
 
 GRANT SELECT ON paas.applications TO matrix_paas_worker;
 GRANT SELECT ON paas.configurations TO matrix_paas_worker;
@@ -6708,6 +7037,7 @@ GRANT SELECT ON paas.deployment_generations TO matrix_paas_worker;
 GRANT SELECT ON paas.operations TO matrix_paas_worker;
 GRANT SELECT ON paas.execution_pools TO matrix_paas_worker;
 GRANT SELECT ON paas.execution_targets TO matrix_paas_worker;
+GRANT SELECT ON paas.enrolled_node_connections TO matrix_paas_worker;
 GRANT SELECT, UPDATE (lock_version)
     ON paas.execution_target_allocations TO matrix_paas_worker;
 GRANT SELECT ON paas.adapter_commands TO matrix_paas_worker;

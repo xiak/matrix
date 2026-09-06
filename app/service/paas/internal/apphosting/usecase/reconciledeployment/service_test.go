@@ -90,6 +90,48 @@ func TestWorkerRoutesPersistedPlacementToExactExecutor(t *testing.T) {
 	}
 }
 
+func TestWorkerResolvesCommittedDynamicRouteBeforeEveryEffectBoundary(t *testing.T) {
+	workflow := newFakeWorkflow(paasv1.OperationDeploy)
+	executor := &fakeDeploymentExecutor{
+		effectStates:      []paasv1.AdapterResultState{paasv1.AdapterResultSucceeded},
+		observationPhases: []paasv1.DeploymentPhase{paasv1.DeploymentReady},
+	}
+	resolver := &fakeDynamicRouteResolver{route: DeploymentRoute{
+		ExecutionTargetID: "target-a", BindingRef: "binding-dynamic", Executor: executor,
+	}}
+	worker, err := NewWorker(workflow.queue, workflow, workflow, []DeploymentRoute{{
+		ExecutionTargetID: "target-static", BindingRef: "binding-static", Executor: &fakeDeploymentExecutor{},
+	}}, Config{
+		EffectTimeout: time.Minute, ReconcileBackoff: time.Second, MaxAttempts: 3,
+		Clock: func() time.Time { return workerTime }, DynamicRoutes: resolver,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found, err := worker.ProcessNext(context.Background(), "worker-a"); err != nil || !found {
+		t.Fatalf("process dynamic Deployment found/error = %v/%v", found, err)
+	}
+	if resolver.calls < 3 || executor.applyCalls != 1 || executor.observeCalls != 1 ||
+		workflow.state.EffectRequest.Command.BindingRef != "binding-dynamic" ||
+		workflow.state.ObserveRequest.Command.BindingRef != "binding-dynamic" {
+		t.Fatalf("dynamic route calls=%d executor=%#v state=%#v", resolver.calls, executor, workflow.state)
+	}
+}
+
+type fakeDynamicRouteResolver struct {
+	route DeploymentRoute
+	calls int
+	err   error
+}
+
+func (resolver *fakeDynamicRouteResolver) ResolveDeploymentRoute(
+	_ context.Context,
+	_ paasv1.ResourceID,
+) (DeploymentRoute, bool, error) {
+	resolver.calls++
+	return resolver.route, resolver.route.Executor != nil, resolver.err
+}
+
 func TestWorkerRejectsPlacementWithoutExactExecutorRoute(t *testing.T) {
 	workflow := newFakeWorkflow(paasv1.OperationDeploy)
 	other := &fakeDeploymentExecutor{}

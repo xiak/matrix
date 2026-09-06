@@ -17,8 +17,10 @@ import (
 	composeadapter "github.com/xiak/matrix/app/adapter/apphosting/compose"
 	localmachineadapter "github.com/xiak/matrix/app/adapter/infrastructure/localmachine"
 	localpostgresadapter "github.com/xiak/matrix/app/adapter/managedservice/localpostgres"
+	"github.com/xiak/matrix/app/service/installation/nodeconfig"
 	"github.com/xiak/matrix/app/service/internal/processconfig"
 	"github.com/xiak/matrix/app/service/internal/processhttp"
+	"github.com/xiak/matrix/app/service/paas/cmd/internal/nodeconnections"
 	paaspostgres "github.com/xiak/matrix/app/service/paas/internal/apphosting/data/postgres"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/domain/placement"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/createplacement"
@@ -32,34 +34,37 @@ import (
 )
 
 const (
-	databaseDSNFileEnvironment      = "MATRIX_PAAS_WORKER_DATABASE_DSN_FILE"
-	workerIDEnvironment             = "MATRIX_PAAS_WORKER_ID"
-	bindingRefEnvironment           = "MATRIX_PAAS_WORKER_BINDING_REF"
-	bindingRootEnvironment          = "MATRIX_PAAS_WORKER_BINDING_ROOT"
-	secretRootEnvironment           = "MATRIX_PAAS_WORKER_SECRET_ROOT"
-	artifactCatalogEnvironment      = "MATRIX_PAAS_WORKER_ARTIFACT_CATALOG_FILE"
-	installationIDEnvironment       = "MATRIX_PAAS_WORKER_INSTALLATION_ID"
-	nodeConnectionsFileEnvironment  = "MATRIX_PAAS_WORKER_NODE_CONNECTIONS_FILE"
-	executionTenantEnvironment      = "MATRIX_PAAS_WORKER_EXECUTION_TENANT_ID"
-	machineBindingEnvironment       = "MATRIX_PAAS_WORKER_MACHINE_BINDING_REF"
-	listenAddressEnvironment        = "MATRIX_PAAS_WORKER_LISTEN_ADDRESS"
-	managedPostgresImageEnvironment = "MATRIX_PAAS_WORKER_MANAGED_POSTGRES_IMAGE"
-	pollInterval                    = 250 * time.Millisecond
-	executionTargetRefresh          = time.Minute
-	executionTargetMaximumAge       = 5 * time.Minute
-	executionTargetTimeout          = 5 * time.Second
-	runtimeObservationInterval      = 5 * time.Second
-	runtimeFailureBackoff           = 2 * time.Second
-	runtimeMaximumObservationAge    = 5 * time.Second
-	runtimeMaximumPastClockSkew     = 30 * time.Second
-	runtimeValidityDuration         = 15 * time.Second
-	operationLeaseDuration          = 30 * time.Second
-	effectTimeout                   = 20 * time.Second
-	reconcileBackoff                = time.Second
-	maximumOperationAttempts        = 10
-	placementDecisionTTL            = 5 * time.Minute
-	pendingCapacityClaimTTL         = 10 * time.Minute
-	maximumArtifactCatalogBytes     = 1024 * 1024
+	databaseDSNFileEnvironment           = "MATRIX_PAAS_WORKER_DATABASE_DSN_FILE"
+	workerIDEnvironment                  = "MATRIX_PAAS_WORKER_ID"
+	bindingRefEnvironment                = "MATRIX_PAAS_WORKER_BINDING_REF"
+	bindingRootEnvironment               = "MATRIX_PAAS_WORKER_BINDING_ROOT"
+	secretRootEnvironment                = "MATRIX_PAAS_WORKER_SECRET_ROOT"
+	artifactCatalogEnvironment           = "MATRIX_PAAS_WORKER_ARTIFACT_CATALOG_FILE"
+	installationIDEnvironment            = "MATRIX_PAAS_WORKER_INSTALLATION_ID"
+	nodeConnectionsFileEnvironment       = "MATRIX_PAAS_WORKER_NODE_CONNECTIONS_FILE"
+	enrollmentControllerCertEnvironment  = "MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE"
+	enrollmentControllerKeyEnvironment   = "MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_PRIVATE_KEY_FILE"
+	enrollmentControllerTrustEnvironment = "MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_TRUST_FILE"
+	executionTenantEnvironment           = "MATRIX_PAAS_WORKER_EXECUTION_TENANT_ID"
+	machineBindingEnvironment            = "MATRIX_PAAS_WORKER_MACHINE_BINDING_REF"
+	listenAddressEnvironment             = "MATRIX_PAAS_WORKER_LISTEN_ADDRESS"
+	managedPostgresImageEnvironment      = "MATRIX_PAAS_WORKER_MANAGED_POSTGRES_IMAGE"
+	pollInterval                         = 250 * time.Millisecond
+	executionTargetRefresh               = time.Minute
+	executionTargetMaximumAge            = 5 * time.Minute
+	executionTargetTimeout               = 5 * time.Second
+	runtimeObservationInterval           = 5 * time.Second
+	runtimeFailureBackoff                = 2 * time.Second
+	runtimeMaximumObservationAge         = 5 * time.Second
+	runtimeMaximumPastClockSkew          = 30 * time.Second
+	runtimeValidityDuration              = 15 * time.Second
+	operationLeaseDuration               = 30 * time.Second
+	effectTimeout                        = 20 * time.Second
+	reconcileBackoff                     = time.Second
+	maximumOperationAttempts             = 10
+	placementDecisionTTL                 = 5 * time.Minute
+	pendingCapacityClaimTTL              = 10 * time.Minute
+	maximumArtifactCatalogBytes          = 1024 * 1024
 )
 
 // One remote telemetry cycle includes bounded Docker lifecycle, stats and
@@ -68,18 +73,21 @@ const (
 const runtimeObservationTimeout = 10 * time.Second
 
 type configuration struct {
-	databaseDSNFile      string
-	workerID             string
-	bindingRef           string
-	bindingRoot          string
-	secretRoot           string
-	artifactCatalog      string
-	installationID       string
-	nodeConnectionsFile  string
-	executionTenant      paasv1.TenantID
-	machineBinding       string
-	listenAddress        string
-	managedPostgresImage string
+	databaseDSNFile           string
+	workerID                  string
+	bindingRef                string
+	bindingRoot               string
+	secretRoot                string
+	artifactCatalog           string
+	installationID            string
+	nodeConnectionsFile       string
+	enrollmentControllerCert  string
+	enrollmentControllerKey   string
+	enrollmentControllerTrust string
+	executionTenant           paasv1.TenantID
+	machineBinding            string
+	listenAddress             string
+	managedPostgresImage      string
 }
 
 var localExecutionProfileIDs = refreshexecutionprofile.IDs{
@@ -118,6 +126,18 @@ func run(ctx context.Context) error {
 	if err := pool.Ping(ctx); err != nil {
 		return errors.New("PaaS worker database is unavailable")
 	}
+	connectionRepository, err := paaspostgres.NewEnrolledNodeConnectionRepository(pool)
+	if err != nil {
+		return err
+	}
+	dynamicConnections, err := nodeconnections.NewDynamic(connectionRepository, nodeconnections.DynamicConfig{
+		InstallationID: config.installationID, ControllerID: nodeconfig.DefaultControllerID,
+		CertificateFile: config.enrollmentControllerCert,
+		PrivateKeyFile:  config.enrollmentControllerKey, TrustFile: config.enrollmentControllerTrust,
+	})
+	if err != nil {
+		return err
+	}
 	executionProfile, err := newLocalExecutionProfile(config, pool)
 	if err != nil {
 		return err
@@ -155,7 +175,9 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	routes, runtimeRoutes, closeRoutes, err := newDeploymentRoutes(config, catalog, secrets, executor)
+	routes, runtimeRoutes, dynamicRoutes, closeRoutes, err := newDeploymentRoutes(
+		config, catalog, secrets, executor, dynamicConnections,
+	)
 	if err != nil {
 		return err
 	}
@@ -226,6 +248,7 @@ func run(ctx context.Context) error {
 		reconciledeployment.Config{
 			EffectTimeout:    effectTimeout,
 			ReconcileBackoff: reconcileBackoff, MaxAttempts: maximumOperationAttempts,
+			DynamicRoutes: dynamicRoutes,
 			Clock: func() time.Time {
 				return time.Now().UTC().Truncate(time.Microsecond)
 			},
@@ -248,6 +271,7 @@ func run(ctx context.Context) error {
 			MaximumObservationAge: runtimeMaximumObservationAge,
 			MaximumPastClockSkew:  runtimeMaximumPastClockSkew,
 			ValidityDuration:      runtimeValidityDuration,
+			DynamicRoutes:         dynamicRoutes,
 			Clock: func() time.Time {
 				return time.Now().UTC().Truncate(time.Microsecond)
 			},
@@ -430,23 +454,28 @@ func runWorkerLoop(
 
 func loadConfiguration() (configuration, error) {
 	config := configuration{
-		databaseDSNFile:      os.Getenv(databaseDSNFileEnvironment),
-		workerID:             os.Getenv(workerIDEnvironment),
-		bindingRef:           os.Getenv(bindingRefEnvironment),
-		bindingRoot:          os.Getenv(bindingRootEnvironment),
-		secretRoot:           os.Getenv(secretRootEnvironment),
-		artifactCatalog:      os.Getenv(artifactCatalogEnvironment),
-		installationID:       os.Getenv(installationIDEnvironment),
-		nodeConnectionsFile:  os.Getenv(nodeConnectionsFileEnvironment),
-		executionTenant:      paasv1.TenantID(os.Getenv(executionTenantEnvironment)),
-		machineBinding:       os.Getenv(machineBindingEnvironment),
-		listenAddress:        os.Getenv(listenAddressEnvironment),
-		managedPostgresImage: os.Getenv(managedPostgresImageEnvironment),
+		databaseDSNFile:           os.Getenv(databaseDSNFileEnvironment),
+		workerID:                  os.Getenv(workerIDEnvironment),
+		bindingRef:                os.Getenv(bindingRefEnvironment),
+		bindingRoot:               os.Getenv(bindingRootEnvironment),
+		secretRoot:                os.Getenv(secretRootEnvironment),
+		artifactCatalog:           os.Getenv(artifactCatalogEnvironment),
+		installationID:            os.Getenv(installationIDEnvironment),
+		nodeConnectionsFile:       os.Getenv(nodeConnectionsFileEnvironment),
+		enrollmentControllerCert:  os.Getenv(enrollmentControllerCertEnvironment),
+		enrollmentControllerKey:   os.Getenv(enrollmentControllerKeyEnvironment),
+		enrollmentControllerTrust: os.Getenv(enrollmentControllerTrustEnvironment),
+		executionTenant:           paasv1.TenantID(os.Getenv(executionTenantEnvironment)),
+		machineBinding:            os.Getenv(machineBindingEnvironment),
+		listenAddress:             os.Getenv(listenAddressEnvironment),
+		managedPostgresImage:      os.Getenv(managedPostgresImageEnvironment),
 	}
 	if config.databaseDSNFile == "" || config.workerID == "" ||
 		config.bindingRef == "" || config.bindingRoot == "" ||
 		config.secretRoot == "" || config.artifactCatalog == "" ||
 		config.installationID == "" || config.nodeConnectionsFile == "" ||
+		config.enrollmentControllerCert == "" || config.enrollmentControllerKey == "" ||
+		config.enrollmentControllerTrust == "" ||
 		config.executionTenant == "" || config.machineBinding == "" ||
 		config.listenAddress == "" || config.managedPostgresImage == "" {
 		return configuration{}, errors.New("PaaS worker configuration is incomplete")

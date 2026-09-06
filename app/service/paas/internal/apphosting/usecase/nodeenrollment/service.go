@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +21,7 @@ import (
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/domain"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/executionadmission"
 )
 
 const maximumResourceVersion = uint64(9007199254740991)
@@ -37,10 +39,461 @@ func New(repository Repository, issuer EnrollmentIssuer, config Config) (*Servic
 		config.ManagementPort < paasv1.MinimumNodeEnrollmentListenerPort ||
 		config.CollectorPort < paasv1.MinimumNodeEnrollmentListenerPort ||
 		config.ManagementPort == config.CollectorPort ||
+		config.CompletionProbeTimeout < time.Second || config.CompletionProbeTimeout > 10*time.Second ||
+		config.CompletionProbe == nil || config.CompletionAdmission == nil ||
 		config.MaxTransactionAttempts < 1 || config.MaxTransactionAttempts > 10 {
 		return nil, errors.New("node enrollment service configuration is invalid")
 	}
 	return &Service{repository: repository, issuer: issuer, config: config}, nil
+}
+
+func (service *Service) Complete(ctx context.Context, command CompleteCommand) (CompleteResult, error) {
+	if service == nil || service.repository == nil || service.config.CompletionProbe == nil ||
+		service.config.CompletionAdmission == nil || ctx == nil {
+		return CompleteResult{}, ErrUnavailable
+	}
+	if !validEnrollmentID(command.EnrollmentID) || command.EnrollmentID != command.Request.EnrollmentID ||
+		paasv1.ValidateCompleteNodeEnrollmentRequest(command.Request) != nil {
+		return CompleteResult{}, ErrInvalidArgument
+	}
+	observedPeer, err := normalizeObservedPeer(command.ObservedPeerAddress)
+	if err != nil {
+		return CompleteResult{}, ErrInvalidArgument
+	}
+	var inspected StoredEnrollment
+	var inspectedAt time.Time
+	var result CompleteResult
+	var stopped error
+	err = service.transaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
+		inspected.Clear()
+		stored, found, loadErr := transaction.LoadEnrollment(transactionContext, command.EnrollmentID)
+		if loadErr != nil {
+			return loadErr
+		}
+		if !found {
+			return ErrNotFound
+		}
+		stored, loadErr = service.expireIfDue(transactionContext, transaction, stored)
+		if loadErr != nil {
+			stored.Clear()
+			return loadErr
+		}
+		if !completionRequestMatchesStored(command.Request, stored) || !completionPeerMatchesStored(observedPeer, stored) {
+			stored.Clear()
+			return ErrConflict
+		}
+		switch stored.Enrollment.State {
+		case paasv1.NodeEnrollmentReady:
+			response, replayErr := committedCompletion(transactionContext, transaction, stored, command.Request)
+			stored.Clear()
+			if replayErr != nil {
+				return replayErr
+			}
+			result = CompleteResult{Response: response, Replayed: true}
+			return nil
+		case paasv1.NodeEnrollmentVerifying:
+		case paasv1.NodeEnrollmentExpired:
+			stopped = ErrExpired
+			stored.Clear()
+			return nil
+		case paasv1.NodeEnrollmentRevoked:
+			stopped = ErrRevoked
+			stored.Clear()
+			return nil
+		default:
+			stored.Clear()
+			return ErrInvalidTransition
+		}
+		inspectedAt, loadErr = transaction.TransactionTime(transactionContext)
+		if loadErr != nil || validateTime(inspectedAt) != nil || !inspectedAt.Before(stored.Enrollment.ExpiresAt) {
+			stored.Clear()
+			return ErrUnavailable
+		}
+		inspected = stored
+		return nil
+	})
+	if err != nil || result.Replayed {
+		return result, err
+	}
+	if stopped != nil {
+		return CompleteResult{}, stopped
+	}
+	defer inspected.Clear()
+	connection := completionConnection(*inspected.Exchange)
+	if port.ValidateEnrolledNodeConnection(connection) != nil {
+		return CompleteResult{}, ErrUnavailable
+	}
+	requestDigest, err := completionRequestDigest(command.Request)
+	if err != nil {
+		return CompleteResult{}, ErrInvalidArgument
+	}
+	probeRequest := paasv1.InspectExecutionTargetRequest{Command: paasv1.AdapterCommandEnvelope{
+		OperationID: inspected.Operation.ID,
+		CommandID:   paasv1.CommandID("complete-" + strings.TrimPrefix(inspected.Exchange.ExchangeID, "node-exchange-")),
+		Attempt:     1, Action: paasv1.AdapterInspectExecutionTarget,
+		Scope:             paasv1.ResourceScope{Kind: paasv1.AuthorityPlatform},
+		ExecutionTargetID: inspected.Enrollment.ExecutionTargetID,
+		BindingRef:        connection.BindingRef, RequestDigest: requestDigest,
+		Deadline: inspectedAt.Add(service.config.CompletionProbeTimeout),
+	}}
+	if paasv1.ValidateInspectExecutionTargetRequest(probeRequest) != nil {
+		return CompleteResult{}, ErrUnavailable
+	}
+	probeContext, cancel := context.WithTimeout(ctx, service.config.CompletionProbeTimeout)
+	capabilities, observation, probeErr := service.config.CompletionProbe.Probe(probeContext, connection, probeRequest)
+	cancel()
+	if ctx.Err() != nil {
+		return CompleteResult{}, ctx.Err()
+	}
+	if probeErr != nil {
+		if retryableCompletionProbe(probeErr) {
+			return CompleteResult{}, ErrUnavailable
+		}
+		return CompleteResult{}, service.failCompletion(ctx, command.Request, paasv1.NodeEnrollmentDiagnosticMTLS)
+	}
+	if !validCompletionCapabilities(capabilities) {
+		return CompleteResult{}, service.failCompletion(ctx, command.Request, paasv1.NodeEnrollmentDiagnosticRuntime)
+	}
+	if !validCompletionObservation(observation, connection) {
+		return CompleteResult{}, service.failCompletion(ctx, command.Request, paasv1.NodeEnrollmentDiagnosticIdentity)
+	}
+	if observation.Health != paasv1.ExecutionTargetHealthReady {
+		return CompleteResult{}, ErrUnavailable
+	}
+
+	stopped = nil
+	err = service.transaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
+		stored, found, loadErr := transaction.LoadEnrollment(transactionContext, command.EnrollmentID)
+		if loadErr != nil {
+			return loadErr
+		}
+		if !found {
+			return ErrNotFound
+		}
+		defer stored.Clear()
+		stored, loadErr = service.expireIfDue(transactionContext, transaction, stored)
+		if loadErr != nil {
+			return loadErr
+		}
+		if !completionRequestMatchesStored(command.Request, stored) || !completionPeerMatchesStored(observedPeer, stored) {
+			return ErrConflict
+		}
+		switch stored.Enrollment.State {
+		case paasv1.NodeEnrollmentReady:
+			response, replayErr := committedCompletion(transactionContext, transaction, stored, command.Request)
+			if replayErr != nil {
+				return replayErr
+			}
+			result = CompleteResult{Response: response, Replayed: true}
+			return nil
+		case paasv1.NodeEnrollmentVerifying:
+		case paasv1.NodeEnrollmentExpired:
+			stopped = ErrExpired
+			return nil
+		case paasv1.NodeEnrollmentRevoked:
+			stopped = ErrRevoked
+			return nil
+		default:
+			return ErrInvalidTransition
+		}
+		if stored.Enrollment.Metadata.ResourceVersion != inspected.Enrollment.Metadata.ResourceVersion {
+			return ErrConflict
+		}
+		pool, found, loadErr := transaction.LoadExecutionPool(transactionContext, stored.Enrollment.ExecutionPoolID)
+		if loadErr != nil {
+			return loadErr
+		}
+		if !found {
+			stopped = ErrVerificationFailed
+			return service.failCompletionInTransaction(transactionContext, transaction, stored, paasv1.NodeEnrollmentDiagnosticResource)
+		}
+		registrations, loadErr := transaction.ListExecutionTargets(transactionContext)
+		if loadErr != nil {
+			return loadErr
+		}
+		poolTargets, loadErr := transaction.ListExecutionPoolTargets(transactionContext, pool.Metadata.ID)
+		if loadErr != nil {
+			return loadErr
+		}
+		now, loadErr := transaction.TransactionTime(transactionContext)
+		if loadErr != nil || validateTime(now) != nil {
+			return ErrUnavailable
+		}
+		registration, nextPool, admissionErr := service.config.CompletionAdmission.PrepareEnrollmentTarget(
+			paasv1.RegisterExecutionTargetRequest{
+				ID: stored.Enrollment.ExecutionTargetID, Name: stored.Enrollment.Metadata.Name,
+				Labels:          maps.Clone(stored.Enrollment.Metadata.Labels),
+				ExecutionPoolID: stored.Enrollment.ExecutionPoolID, BindingRef: connection.BindingRef,
+			},
+			executionadmission.Binding{
+				Ref: connection.BindingRef, TargetID: connection.ExecutionTargetID,
+				IdentityFingerprint: connection.IdentityFingerprint,
+			},
+			capabilities, observation, pool, registrations, poolTargets, now,
+		)
+		if admissionErr != nil {
+			if errors.Is(admissionErr, executionadmission.ErrConflict) ||
+				errors.Is(admissionErr, executionadmission.ErrInvalidArgument) {
+				stopped = ErrVerificationFailed
+				return service.failCompletionInTransaction(transactionContext, transaction, stored, paasv1.NodeEnrollmentDiagnosticResource)
+			}
+			return ErrUnavailable
+		}
+		submission, admissionErr := service.config.CompletionAdmission.CompleteEnrollmentRegistration(
+			stored.Operation, stored.CreateAuthorization, now,
+		)
+		if admissionErr != nil {
+			return ErrUnavailable
+		}
+		next, transitionErr := completedEnrollment(stored, submission.Operation, now)
+		if transitionErr != nil {
+			return transitionErr
+		}
+		if loadErr = transaction.CompleteEnrollment(
+			transactionContext, stored, next, registration, connection,
+			pool.Metadata.ResourceVersion, nextPool, submission.AuditEvent,
+		); loadErr != nil {
+			return loadErr
+		}
+		response := paasv1.CompleteNodeEnrollmentResponse{
+			Enrollment:      enrollmentSnapshot(next.Enrollment),
+			ExecutionTarget: registration.Target, Operation: submission.Operation,
+		}
+		if paasv1.ValidateCompleteNodeEnrollmentResponse(response) != nil {
+			return ErrUnavailable
+		}
+		result = CompleteResult{Response: response}
+		return nil
+	})
+	if err != nil {
+		return CompleteResult{}, err
+	}
+	if stopped != nil {
+		return CompleteResult{}, stopped
+	}
+	return result, nil
+}
+
+func completionRequestMatchesStored(request paasv1.CompleteNodeEnrollmentRequest, stored StoredEnrollment) bool {
+	if ValidateStoredEnrollment(stored, request.InstallationID) != nil || stored.Exchange == nil {
+		return false
+	}
+	exchange := stored.Exchange
+	return request.EnrollmentID == exchange.EnrollmentID &&
+		request.InstallationID == exchange.InstallationID &&
+		request.ExecutionTargetID == exchange.ExecutionTargetID &&
+		request.ExchangeID == exchange.ExchangeID &&
+		request.MachineFingerprint == exchange.MachineFingerprint &&
+		request.RuntimeContractDigest == exchange.RuntimeContractDigest &&
+		request.ControllerID == exchange.ControllerID &&
+		request.BindingRef == exchange.BindingRef &&
+		request.NodeListenAddress == exchange.NodeListenAddress &&
+		request.CollectorEndpoint == exchange.CollectorEndpoint &&
+		request.NodePublicKeyFingerprint == exchange.NodePublicKeyFingerprint &&
+		request.CollectorPublicKeyFingerprint == exchange.CollectorPublicKeyFingerprint
+}
+
+func completionPeerMatchesStored(observedPeer string, stored StoredEnrollment) bool {
+	if stored.Exchange == nil {
+		return false
+	}
+	address, _, err := parseStoredNodeAddress(stored.Exchange.NodeListenAddress)
+	return err == nil && address.String() == observedPeer
+}
+
+func completionConnection(exchange StoredExchange) port.EnrolledNodeConnection {
+	return port.EnrolledNodeConnection{
+		InstallationID: exchange.InstallationID, ExecutionTargetID: exchange.ExecutionTargetID,
+		ControllerID: exchange.ControllerID, BindingRef: exchange.BindingRef,
+		Endpoint:            "https://" + exchange.NodeListenAddress,
+		IdentityFingerprint: exchange.MachineFingerprint, Enabled: true,
+	}
+}
+
+func completionRequestDigest(request paasv1.CompleteNodeEnrollmentRequest) (string, error) {
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		return "", err
+	}
+	defer clear(encoded)
+	return domain.DigestPayload(encoded), nil
+}
+
+func retryableCompletionProbe(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var fault paasv1.AdapterFault
+	if errors.As(err, &fault) {
+		return fault.Normalized.Retryable
+	}
+	// Unknown native errors never become durable node identity facts.
+	return true
+}
+
+func validCompletionCapabilities(value paasv1.AdapterCapabilitiesContract) bool {
+	return paasv1.ValidateAdapterCapabilities(value) == nil &&
+		value.Adapter == (paasv1.AdapterRef{
+			Kind: paasv1.AdapterInfrastructure, Name: "nodehttps", ContractVersion: "v1",
+		}) &&
+		slices.Contains(value.Actions, paasv1.AdapterInspectExecutionTarget) &&
+		slices.Contains(value.Actions, paasv1.AdapterObserveExecutionTarget) &&
+		slices.Contains(value.IsolationGuarantees, paasv1.IsolationWorkload)
+}
+
+func validCompletionObservation(value paasv1.ExecutionTargetObservation, connection port.EnrolledNodeConnection) bool {
+	return paasv1.ValidateExecutionTargetObservation(value) == nil &&
+		value.ExecutionTargetID == connection.ExecutionTargetID &&
+		value.IdentityFingerprint == connection.IdentityFingerprint && value.Usage != nil &&
+		len(value.SupportedIsolationGuarantees) > 0
+}
+
+func completedEnrollment(stored StoredEnrollment, operation paasv1.Operation, now time.Time) (StoredEnrollment, error) {
+	if ValidateStoredEnrollment(stored, stored.CreateAuthorization.InstallationID) != nil ||
+		stored.Enrollment.State != paasv1.NodeEnrollmentVerifying ||
+		stored.Enrollment.Metadata.ResourceVersion == maximumResourceVersion ||
+		operation.ID != stored.Operation.ID || operation.State != paasv1.OperationSucceeded {
+		return StoredEnrollment{}, ErrConflict
+	}
+	next := stored
+	next.Enrollment = enrollmentSnapshot(stored.Enrollment)
+	next.Enrollment.State = paasv1.NodeEnrollmentReady
+	next.Enrollment.Metadata.ResourceVersion++
+	next.Enrollment.Metadata.UpdatedAt = now
+	next.Enrollment.ReadyAt = &now
+	next.Operation = operation
+	next.SealedExchangeResult = nil
+	if ValidateStoredEnrollment(next, stored.CreateAuthorization.InstallationID) != nil {
+		return StoredEnrollment{}, ErrConflict
+	}
+	return next, nil
+}
+
+func failedCompletion(stored StoredEnrollment, code paasv1.NodeEnrollmentDiagnosticCode, now time.Time) (StoredEnrollment, error) {
+	if ValidateStoredEnrollment(stored, stored.CreateAuthorization.InstallationID) != nil ||
+		stored.Enrollment.State != paasv1.NodeEnrollmentVerifying ||
+		stored.Enrollment.Metadata.ResourceVersion == maximumResourceVersion ||
+		code == paasv1.NodeEnrollmentDiagnosticExpired || code == paasv1.NodeEnrollmentDiagnosticRevoked ||
+		code == paasv1.NodeEnrollmentDiagnosticListener || code == paasv1.NodeEnrollmentDiagnosticNetworkInterrupted {
+		return StoredEnrollment{}, ErrConflict
+	}
+	next := stored
+	next.Enrollment = enrollmentSnapshot(stored.Enrollment)
+	next.Enrollment.State = paasv1.NodeEnrollmentFailed
+	next.Enrollment.Metadata.ResourceVersion++
+	next.Enrollment.Metadata.UpdatedAt = now
+	next.Enrollment.Diagnostic = &paasv1.NodeEnrollmentDiagnostic{Code: code, OccurredAt: now}
+	next.Operation.State, next.Operation.UpdatedAt, next.Operation.TerminalAt = paasv1.OperationFailed, now, &now
+	next.Operation.Error = &paasv1.Problem{
+		Type: "/problems/node-enrollment-verification-failed", Title: "Node enrollment verification failed",
+		Status: 409, Code: paasv1.ErrorOperationFailed,
+		Detail:  "The exchanged node could not be admitted with its fixed identity and runtime contract.",
+		TraceID: stored.CreateAuthorization.RequestID,
+	}
+	next.SealedExchangeResult = nil
+	if ValidateStoredEnrollment(next, stored.CreateAuthorization.InstallationID) != nil {
+		return StoredEnrollment{}, ErrConflict
+	}
+	return next, nil
+}
+
+func (service *Service) failCompletion(
+	ctx context.Context,
+	request paasv1.CompleteNodeEnrollmentRequest,
+	code paasv1.NodeEnrollmentDiagnosticCode,
+) error {
+	var stopped error
+	err := service.transaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
+		stored, found, loadErr := transaction.LoadEnrollment(transactionContext, request.EnrollmentID)
+		if loadErr != nil {
+			return loadErr
+		}
+		if !found {
+			return ErrNotFound
+		}
+		defer stored.Clear()
+		stored, loadErr = service.expireIfDue(transactionContext, transaction, stored)
+		if loadErr != nil {
+			return loadErr
+		}
+		if !completionRequestMatchesStored(request, stored) {
+			return ErrConflict
+		}
+		switch stored.Enrollment.State {
+		case paasv1.NodeEnrollmentVerifying:
+			return service.failCompletionInTransaction(transactionContext, transaction, stored, code)
+		case paasv1.NodeEnrollmentExpired:
+			stopped = ErrExpired
+			return nil
+		case paasv1.NodeEnrollmentRevoked:
+			stopped = ErrRevoked
+			return nil
+		default:
+			return ErrInvalidTransition
+		}
+	})
+	if err != nil {
+		return err
+	}
+	if stopped != nil {
+		return stopped
+	}
+	return ErrVerificationFailed
+}
+
+func (service *Service) failCompletionInTransaction(
+	ctx context.Context,
+	transaction Transaction,
+	stored StoredEnrollment,
+	code paasv1.NodeEnrollmentDiagnosticCode,
+) error {
+	now, err := transaction.TransactionTime(ctx)
+	if err != nil || validateTime(now) != nil {
+		return ErrUnavailable
+	}
+	next, err := failedCompletion(stored, code, now)
+	if err != nil {
+		return err
+	}
+	return transaction.FailEnrollment(ctx, stored, next)
+}
+
+func committedCompletion(
+	ctx context.Context,
+	transaction Transaction,
+	stored StoredEnrollment,
+	request paasv1.CompleteNodeEnrollmentRequest,
+) (paasv1.CompleteNodeEnrollmentResponse, error) {
+	registration, found, err := transaction.LoadExecutionTarget(ctx, stored.Enrollment.ExecutionTargetID)
+	if err != nil {
+		return paasv1.CompleteNodeEnrollmentResponse{}, err
+	}
+	if !found {
+		return paasv1.CompleteNodeEnrollmentResponse{}, ErrConflict
+	}
+	connection, found, err := transaction.LoadEnrolledNodeConnection(ctx, stored.Enrollment.ExecutionTargetID)
+	if err != nil {
+		return paasv1.CompleteNodeEnrollmentResponse{}, err
+	}
+	expected := completionConnection(*stored.Exchange)
+	if !found || connection != expected || !connection.Enabled ||
+		registration.BindingRef != expected.BindingRef ||
+		registration.IdentityFingerprint != expected.IdentityFingerprint ||
+		registration.Target.Metadata.ID != expected.ExecutionTargetID ||
+		request.NodeListenAddress != strings.TrimPrefix(connection.Endpoint, "https://") {
+		return paasv1.CompleteNodeEnrollmentResponse{}, ErrConflict
+	}
+	response := paasv1.CompleteNodeEnrollmentResponse{
+		Enrollment:      enrollmentSnapshot(stored.Enrollment),
+		ExecutionTarget: registration.Target, Operation: stored.Operation,
+	}
+	if paasv1.ValidateCompleteNodeEnrollmentResponse(response) != nil {
+		return paasv1.CompleteNodeEnrollmentResponse{}, ErrConflict
+	}
+	return response, nil
 }
 
 func (service *Service) Create(ctx context.Context, command CreateCommand) (CreateResult, error) {

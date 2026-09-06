@@ -4,9 +4,14 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
 	"errors"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -37,7 +42,7 @@ import (
 
 const (
 	deploymentRuntimeCompatibilityDSN = "MATRIX_PAAS_RUNTIME_COMPAT_POSTGRES_TEST_DSN"
-	nodeEnrollmentPredecessor         = "acc27112cfb8ee9d35059ac29bd98a97ff20e3ac"
+	enrollmentCompletionPredecessor   = "ccb66a55505ac3e48883b1e4a1215e2e69950d0b"
 	compatibilityAPILogin             = "matrix_paas_api_login"
 	compatibilityWorkerLogin          = "matrix_paas_worker_login"
 	compatibilityAPIPassword          = "mxp1.runtime-compat-api-000000000000000000000000"
@@ -201,7 +206,7 @@ func TestInstallationPartitionUpgradePreservesTenantWork(t *testing.T) {
 	assertOperationQueue(t, ctx, admin, workerPool, retained)
 }
 
-func TestNodeEnrollmentExactPredecessorUpgradeAndRollbackRejection(t *testing.T) {
+func TestEnrollmentCompletionExactPredecessorUpgradeAndRollbackRejection(t *testing.T) {
 	adminDSN := os.Getenv(deploymentRuntimeCompatibilityDSN)
 	if adminDSN == "" {
 		t.Skipf(
@@ -246,7 +251,7 @@ func TestNodeEnrollmentExactPredecessorUpgradeAndRollbackRejection(t *testing.T)
 		ctx,
 		repositoryRoot,
 		temporary,
-		nodeEnrollmentPredecessor,
+		enrollmentCompletionPredecessor,
 	)
 	predecessor := buildFixedPaaSBinaries(t, ctx, predecessorSource, temporary)
 	apiMigrationDSN := compatibilityRuntimeDSN(
@@ -303,7 +308,7 @@ func TestNodeEnrollmentExactPredecessorUpgradeAndRollbackRejection(t *testing.T)
 		predecessorMigrationEnvironment,
 	)
 	if err := paasmigration.Verify(ctx, admin); err == nil {
-		t.Fatal("schema-4 migration verification accepted the predecessor schema")
+		t.Fatal("schema-5 migration verification accepted the predecessor schema")
 	}
 
 	apiPool, err := pgxpool.New(ctx, apiProcessDSN)
@@ -341,7 +346,7 @@ func TestNodeEnrollmentExactPredecessorUpgradeAndRollbackRejection(t *testing.T)
 			apiMigrationDSN,
 			workerMigrationDSN,
 		); err != nil {
-			t.Fatalf("apply node enrollment schema expansion attempt %d: %v", attempt, err)
+			t.Fatalf("apply enrollment completion schema expansion attempt %d: %v", attempt, err)
 		}
 	}
 	if err := paasmigration.VerifyInstalled(
@@ -350,7 +355,7 @@ func TestNodeEnrollmentExactPredecessorUpgradeAndRollbackRejection(t *testing.T)
 		apiMigrationDSN,
 		workerMigrationDSN,
 	); err != nil {
-		t.Fatalf("verify node enrollment schema expansion: %v", err)
+		t.Fatalf("verify enrollment completion schema expansion: %v", err)
 	}
 	if retainedAfter := compatibilityRetainedState(
 		t,
@@ -358,7 +363,7 @@ func TestNodeEnrollmentExactPredecessorUpgradeAndRollbackRejection(t *testing.T)
 		admin,
 		fixture,
 	); retainedAfter != retainedBefore {
-		t.Fatal("node enrollment schema expansion rewrote predecessor tenant work")
+		t.Fatal("enrollment completion schema expansion rewrote predecessor tenant work")
 	}
 	runtimeBefore := createCompatibilityRuntimeSnapshot(
 		t,
@@ -412,13 +417,14 @@ func TestNodeEnrollmentExactPredecessorUpgradeAndRollbackRejection(t *testing.T)
 			},
 		},
 	); err != nil {
-		t.Fatalf("create enrollment pool after schema-3 upgrade: %v", err)
+		t.Fatalf("create enrollment pool after schema-4 upgrade: %v", err)
 	}
 	assertNodeEnrollmentPersistence(
 		t,
 		ctx,
 		admin,
 		apiPool,
+		workerPool,
 		enrollmentInstallationID,
 		enrollmentPoolID,
 		"runtime-compat",
@@ -427,8 +433,8 @@ func TestNodeEnrollmentExactPredecessorUpgradeAndRollbackRejection(t *testing.T)
 
 	// The predecessor's read-only migration verifier audits the still-supported
 	// structural and privilege subset; it is not a release-profile permit. The
-	// schema-3 API must nevertheless fail readiness before serving against
-	// schema 4, which can persist the node enrollment admission ceremony.
+	// schema-4 API must nevertheless fail readiness before serving against
+	// schema 5, which can persist enrollment completion and its connection.
 	// Rollback across this profile boundary requires an authenticated backup.
 	runFixedPaaSMigration(
 		t,
@@ -581,8 +587,8 @@ func buildFixedPaaSBinaries(
 		extension = ".exe"
 	}
 	result := fixedPaaSBinaries{
-		migration: filepath.Join(temporary, "matrix-paas-migrate-r7"+extension),
-		api:       filepath.Join(temporary, "matrix-paas-r7"+extension),
+		migration: filepath.Join(temporary, "matrix-paas-migrate-r10"+extension),
+		api:       filepath.Join(temporary, "matrix-paas-r10"+extension),
 	}
 	for _, build := range []struct {
 		output      string
@@ -665,11 +671,67 @@ func writeCompatibilityFile(
 	value string,
 ) string {
 	t.Helper()
+	return writeCompatibilityBytes(t, temporary, name, []byte(value))
+}
+
+func writeCompatibilityBytes(
+	t *testing.T,
+	temporary string,
+	name string,
+	value []byte,
+) string {
+	t.Helper()
 	path := filepath.Join(temporary, name)
-	if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
+	if err := os.WriteFile(path, value, 0o600); err != nil {
 		t.Fatalf("write protected compatibility file %s", name)
 	}
 	return path
+}
+
+func writeCompatibilityEnrollmentIssuer(
+	t *testing.T,
+	temporary string,
+	installationID string,
+) (string, string) {
+	t.Helper()
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal("generate fixed predecessor enrollment issuer")
+	}
+	issuerURI, err := paasv1.NodeEnrollmentIssuerURI(installationID)
+	if err != nil {
+		t.Fatal("derive fixed predecessor enrollment issuer identity")
+	}
+	now := time.Now().UTC()
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(now.UnixNano()),
+		Subject:      pkix.Name{CommonName: "matrix-runtime-compat-enrollment-issuer"},
+		NotBefore:    now.Add(-time.Hour), NotAfter: now.Add(time.Hour),
+		BasicConstraintsValid: true, IsCA: true, MaxPathLenZero: true,
+		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		URIs:     []*url.URL{issuerURI},
+	}
+	certificateDER, err := x509.CreateCertificate(
+		rand.Reader, template, template, publicKey, privateKey,
+	)
+	if err != nil {
+		t.Fatal("create fixed predecessor enrollment issuer")
+	}
+	privateKeyDER, err := x509.MarshalPKCS8PrivateKey(privateKey)
+	clear(privateKey)
+	if err != nil {
+		clear(certificateDER)
+		t.Fatal("encode fixed predecessor enrollment issuer key")
+	}
+	certificatePath := writeCompatibilityBytes(
+		t, temporary, "enrollment-issuer.der", certificateDER,
+	)
+	privateKeyPath := writeCompatibilityBytes(
+		t, temporary, "enrollment-issuer-key.der", privateKeyDER,
+	)
+	clear(certificateDER)
+	clear(privateKeyDER)
+	return certificatePath, privateKeyPath
 }
 
 func runFixedPaaSMigration(
@@ -984,6 +1046,9 @@ func assertFixedPaaSNotReady(
 		serviceCredential,
 	)
 	dsnPath := writeCompatibilityFile(t, temporary, "paas-process-dsn", apiDSN)
+	issuerCertificatePath, issuerPrivateKeyPath := writeCompatibilityEnrollmentIssuer(
+		t, temporary, "installation-runtime-compat",
+	)
 	identity := iamv1.ServiceIdentity{
 		APIVersion:     iamv1.APIVersion,
 		Kind:           "ServiceIdentity",
@@ -1030,6 +1095,8 @@ func assertFixedPaaSNotReady(
 		"MATRIX_PAAS_RELEASE_ID=matrix-v0.3.0-runtime-7",
 		"MATRIX_PAAS_VERIFICATION_ARTIFACT_DIGEST=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		"MATRIX_PAAS_NODE_CONNECTIONS_FILE=",
+		"MATRIX_PAAS_ENROLLMENT_ISSUER_CERTIFICATE_FILE=" + issuerCertificatePath,
+		"MATRIX_PAAS_ENROLLMENT_ISSUER_PRIVATE_KEY_FILE=" + issuerPrivateKeyPath,
 	})
 	command.Stdout = io.Discard
 	command.Stderr = io.Discard

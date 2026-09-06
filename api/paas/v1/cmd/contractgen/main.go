@@ -192,6 +192,9 @@ func buildPaths() schema {
 			"NodeEnrollmentExchangeResponse",
 		),
 	}
+	paths["/v1/node-enrollments/{nodeEnrollmentId}/complete"] = schema{
+		"post": nodeEnrollmentCompletionOperation(),
+	}
 	paths["/v1/node-enrollments/{nodeEnrollmentId}/revoke"] = schema{
 		"post": nodeEnrollmentLifecycleOperation(
 			"revokeNodeEnrollment",
@@ -352,6 +355,35 @@ func nodeEnrollmentRecoveryOperation(operationID, summary, requestSchema, respon
 			},
 			"400": componentRef("#/components/responses/ProblemResponse"),
 			"401": componentRef("#/components/responses/ProblemResponse"),
+			"404": componentRef("#/components/responses/ProblemResponse"),
+			"409": componentRef("#/components/responses/ProblemResponse"),
+			"410": componentRef("#/components/responses/ProblemResponse"),
+			"413": componentRef("#/components/responses/ProblemResponse"),
+			"415": componentRef("#/components/responses/ProblemResponse"),
+			"500": componentRef("#/components/responses/ProblemResponse"),
+			"503": componentRef("#/components/responses/ProblemResponse"),
+			"504": componentRef("#/components/responses/ProblemResponse"),
+		},
+	}
+}
+
+func nodeEnrollmentCompletionOperation() schema {
+	return schema{
+		"operationId": "completeNodeEnrollment",
+		"summary":     "Probe and atomically register one exchanged Linux node",
+		"description": "Node bootstrap only. Every public commitment is compared with the consumed exchange before a bounded outbound mTLS identity and capability probe.",
+		"security":    []any{},
+		"parameters": []any{
+			pathIDParameter("nodeEnrollmentId"),
+		},
+		"requestBody": jsonRequestBody("CompleteNodeEnrollmentRequest"),
+		"responses": schema{
+			"200": schema{
+				"description": "The exact committed enrollment, existing ExecutionTarget and terminal registration Operation.",
+				"headers":     schema{"ETag": componentRef("#/components/headers/ETag")},
+				"content":     schema{"application/json": schema{"schema": ref("CompleteNodeEnrollmentResponse")}},
+			},
+			"400": componentRef("#/components/responses/ProblemResponse"),
 			"404": componentRef("#/components/responses/ProblemResponse"),
 			"409": componentRef("#/components/responses/ProblemResponse"),
 			"410": componentRef("#/components/responses/ProblemResponse"),
@@ -751,7 +783,7 @@ func structContracts() map[string]reflect.Type {
 		paasv1.WrappedJoinCredential{}, paasv1.CreateNodeEnrollmentResponse{},
 		paasv1.NodeEnrollmentListenerClaim{}, paasv1.ExchangeNodeEnrollmentRequest{}, paasv1.NodeEnrollmentExchangeResponse{},
 		paasv1.CreateNodeEnrollmentRecoveryChallengeRequest{}, paasv1.NodeEnrollmentRecoveryChallenge{},
-		paasv1.RecoverNodeEnrollmentExchangeRequest{},
+		paasv1.RecoverNodeEnrollmentExchangeRequest{}, paasv1.CompleteNodeEnrollmentRequest{}, paasv1.CompleteNodeEnrollmentResponse{},
 		paasv1.AdapterRef{}, paasv1.Capacity{}, paasv1.ExecutionTargetSpec{}, paasv1.ExecutionTargetStatus{}, paasv1.ExecutionTarget{}, paasv1.ExecutionTargetList{},
 		paasv1.ExecutionTargetUsage{}, paasv1.CPUUsage{}, paasv1.CPUUsageValue{}, paasv1.MemoryUsage{}, paasv1.MemoryUsageValue{},
 		paasv1.FilesystemUsage{}, paasv1.FilesystemUsageValue{},
@@ -944,6 +976,10 @@ func applySemanticOverlays(schemas map[string]any) {
 	recoveryProofProperties := recoveryProof["properties"].(schema)
 	recoveryProofProperties["apiVersion"] = schema{"const": paasv1.NodeEnrollmentRecoveryAPIVersion}
 	recoveryProofProperties["kind"] = schema{"const": paasv1.NodeEnrollmentRecoveryProofRequestKind}
+	completionRequest := object(schemas["CompleteNodeEnrollmentRequest"])
+	completionRequestProperties := completionRequest["properties"].(schema)
+	completionRequestProperties["apiVersion"] = schema{"const": paasv1.NodeEnrollmentExchangeAPIVersion}
+	completionRequestProperties["kind"] = schema{"const": paasv1.NodeEnrollmentCompletionRequestKind}
 
 	for _, name := range []string{"ConfigurationRevisionSpec", "ApplicationRevisionSpec", "DeploymentGeneration", "PlacementDecision"} {
 		object(schemas[name])["x-matrix-immutable"] = true
@@ -997,6 +1033,7 @@ func applySemanticOverlays(schemas map[string]any) {
 	for _, recovery := range []schema{recoveryChallengeRequest, recoveryChallenge, recoveryProof} {
 		recovery["x-matrix-visibility"] = "node-bootstrap"
 	}
+	completionRequest["x-matrix-visibility"] = "node-bootstrap"
 	for _, properties := range []schema{recoveryChallengeRequestProperties, recoveryChallengeProperties} {
 		properties["enrollmentId"] = schema{"type": "string", "pattern": `^node-enrollment-[0-9a-f]{32}$`}
 		properties["exchangeId"] = schema{"type": "string", "pattern": `^node-exchange-[0-9a-f]{32}$`}
@@ -1014,6 +1051,14 @@ func applySemanticOverlays(schemas map[string]any) {
 			"type": "string", "minLength": 86, "maxLength": 86,
 			"pattern": `^[A-Za-z0-9_-]{86}$`, "writeOnly": true,
 		}
+	}
+	completionRequestProperties["enrollmentId"] = schema{"type": "string", "pattern": `^node-enrollment-[0-9a-f]{32}$`}
+	completionRequestProperties["exchangeId"] = schema{"type": "string", "pattern": `^node-exchange-[0-9a-f]{32}$`}
+	completionRequestProperties["bindingRef"] = schema{"type": "string", "pattern": `^node-binding-[0-9a-f]{32}$`}
+	completionRequestProperties["nodeListenAddress"] = schema{"type": "string", "minLength": 8, "maxLength": 64}
+	completionRequestProperties["collectorEndpoint"] = schema{
+		"type": "string", "format": "uri", "minLength": 16, "maxLength": 80,
+		"pattern": `^https://(?:127\\.0\\.0\\.1|\\[::1\\]):[1-9][0-9]{3,4}$`,
 	}
 	joinProperties["controlPlaneUrl"] = schema{
 		"type": "string", "format": "uri", "maxLength": 2048,

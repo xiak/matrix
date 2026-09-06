@@ -25,12 +25,46 @@ const (
 type EnrollmentWorkflow interface {
 	Create(context.Context, nodeenrollment.CreateCommand) (nodeenrollment.CreateResult, error)
 	Exchange(context.Context, nodeenrollment.ExchangeCommand) (nodeenrollment.ExchangeResult, error)
+	Complete(context.Context, nodeenrollment.CompleteCommand) (nodeenrollment.CompleteResult, error)
 	CreateRecoveryChallenge(context.Context, nodeenrollment.RecoveryChallengeCommand) (nodeenrollment.RecoveryChallengeResult, error)
 	RecoverExchange(context.Context, nodeenrollment.RecoverExchangeCommand) (nodeenrollment.ExchangeResult, error)
 	Get(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.NodeEnrollment, error)
 	List(context.Context, port.Authorization) (paasv1.NodeEnrollmentList, error)
 	Revoke(context.Context, nodeenrollment.RevokeCommand) (nodeenrollment.RevokeResult, error)
 	Regenerate(context.Context, nodeenrollment.RegenerateCommand) (nodeenrollment.CreateResult, error)
+}
+
+func (value *handler) completeNodeEnrollment(response http.ResponseWriter, request *http.Request) {
+	bootstrap, ok := value.beginNodeEnrollmentBootstrapRequest(
+		response, request, writeNodeEnrollmentCompletionError,
+	)
+	if !ok {
+		return
+	}
+	body, ok := decodeNodeEnrollmentBootstrapBody[paasv1.CompleteNodeEnrollmentRequest](
+		response, request, bootstrap.requestID, "completion", writeNodeEnrollmentCompletionError,
+	)
+	if !ok || body.EnrollmentID != bootstrap.enrollmentID ||
+		paasv1.ValidateCompleteNodeEnrollmentRequest(body) != nil {
+		if ok {
+			writeNodeEnrollmentCompletionError(response, bootstrap.requestID, nodeenrollment.ErrInvalidArgument)
+		}
+		return
+	}
+	result, err := value.enrollment.Complete(request.Context(), nodeenrollment.CompleteCommand{
+		EnrollmentID: bootstrap.enrollmentID, ObservedPeerAddress: bootstrap.observedPeer, Request: body,
+	})
+	if err != nil {
+		writeNodeEnrollmentCompletionError(response, bootstrap.requestID, err)
+		return
+	}
+	if paasv1.ValidateCompleteNodeEnrollmentResponse(result.Response) != nil ||
+		result.Response.Enrollment.Metadata.ID != bootstrap.enrollmentID {
+		writeNodeEnrollmentCompletionError(response, bootstrap.requestID, nodeenrollment.ErrUnavailable)
+		return
+	}
+	response.Header().Set("ETag", resourceVersionETag(result.Response.Enrollment.Metadata.ResourceVersion))
+	writeJSON(response, http.StatusOK, result.Response)
 }
 
 func (value *handler) exchangeNodeEnrollment(response http.ResponseWriter, request *http.Request) {
@@ -282,6 +316,27 @@ func writeNodeEnrollmentRecoveryError(response http.ResponseWriter, requestID st
 		writeProblem(response, requestID, http.StatusGatewayTimeout, paasv1.ErrorDeadlineExceeded, "Deadline exceeded", "node enrollment recovery deadline was exceeded", true)
 	default:
 		writeProblem(response, requestID, http.StatusInternalServerError, paasv1.ErrorInternal, "Internal error", "node enrollment exchange could not be recovered", true)
+	}
+}
+
+func writeNodeEnrollmentCompletionError(response http.ResponseWriter, requestID string, err error) {
+	switch {
+	case errors.Is(err, nodeenrollment.ErrNotFound):
+		writeProblem(response, requestID, http.StatusNotFound, paasv1.ErrorNotFound, "Not found", "node enrollment does not exist", false)
+	case errors.Is(err, nodeenrollment.ErrExpired), errors.Is(err, nodeenrollment.ErrRevoked):
+		writeProblem(response, requestID, http.StatusGone, paasv1.ErrorConflict, "Enrollment unavailable", "node enrollment can no longer be completed", false)
+	case errors.Is(err, nodeenrollment.ErrVerificationFailed):
+		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorOperationFailed, "Enrollment verification failed", "node enrollment verification failed", false)
+	case errors.Is(err, nodeenrollment.ErrConflict), errors.Is(err, nodeenrollment.ErrInvalidTransition):
+		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorConflict, "Enrollment conflict", "node enrollment completion conflicts with current installation authority", false)
+	case errors.Is(err, nodeenrollment.ErrInvalidArgument):
+		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "node enrollment completion request is invalid", false)
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+		writeProblem(response, requestID, http.StatusGatewayTimeout, paasv1.ErrorDeadlineExceeded, "Deadline exceeded", "node enrollment completion deadline was exceeded", true)
+	case errors.Is(err, nodeenrollment.ErrUnavailable), errors.Is(err, nodeenrollment.ErrRetryableTransaction):
+		writeProblem(response, requestID, http.StatusServiceUnavailable, paasv1.ErrorInternal, "Enrollment unavailable", "node enrollment completion is temporarily unavailable", true)
+	default:
+		writeProblem(response, requestID, http.StatusInternalServerError, paasv1.ErrorInternal, "Internal error", "node enrollment could not be completed", true)
 	}
 }
 

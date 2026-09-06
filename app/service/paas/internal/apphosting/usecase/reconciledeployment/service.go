@@ -181,7 +181,7 @@ func (worker *Worker) processLease(
 			if err != nil {
 				return err
 			}
-			route, err := worker.routeForState(state)
+			route, err := worker.routeForState(ctx, state)
 			if err != nil {
 				return err
 			}
@@ -572,7 +572,7 @@ func (worker *Worker) invokeEffect(
 	action paasv1.OperationAction,
 	request paasv1.DeploymentExecutionRequest,
 ) paasv1.AdapterResult {
-	route, routeErr := worker.routeForCommand(request.Command)
+	route, routeErr := worker.routeForCommand(ctx, request.Command)
 	if routeErr != nil {
 		return unknownResult(
 			request.Command.CommandID,
@@ -615,24 +615,47 @@ func (worker *Worker) routeForLease(
 	if err != nil {
 		return DeploymentRoute{}, err
 	}
-	return worker.routeForState(state)
+	return worker.routeForState(ctx, state)
 }
 
-func (worker *Worker) routeForState(state State) (DeploymentRoute, error) {
+func (worker *Worker) routeForState(ctx context.Context, state State) (DeploymentRoute, error) {
 	if state.Placement == nil || state.Placement.Outcome != paasv1.PlacementScheduled {
 		return DeploymentRoute{}, errors.New("Deployment route requires a scheduled placement")
 	}
 	route, found := worker.routes[state.Placement.ExecutionTargetID]
+	if !found && worker.config.DynamicRoutes != nil {
+		var err error
+		route, found, err = worker.config.DynamicRoutes.ResolveDeploymentRoute(
+			ctx, state.Placement.ExecutionTargetID,
+		)
+		if err != nil {
+			return DeploymentRoute{}, errors.New("dynamic Deployment route is unavailable")
+		}
+	}
 	if !found || route.Executor == nil {
 		return DeploymentRoute{}, errors.New("persisted placement has no exact Deployment route")
+	}
+	if route.ExecutionTargetID != state.Placement.ExecutionTargetID ||
+		paasv1.ValidateID("bindingRef", route.BindingRef) != nil {
+		return DeploymentRoute{}, errors.New("persisted placement has an invalid Deployment route")
 	}
 	return route, nil
 }
 
 func (worker *Worker) routeForCommand(
+	ctx context.Context,
 	command paasv1.AdapterCommandEnvelope,
 ) (DeploymentRoute, error) {
 	route, found := worker.routes[command.ExecutionTargetID]
+	if !found && worker.config.DynamicRoutes != nil {
+		var err error
+		route, found, err = worker.config.DynamicRoutes.ResolveDeploymentRoute(
+			ctx, command.ExecutionTargetID,
+		)
+		if err != nil {
+			return DeploymentRoute{}, errors.New("dynamic Deployment route is unavailable")
+		}
+	}
 	if !found || route.Executor == nil || validateRouteCommand(route, command) != nil {
 		return DeploymentRoute{}, errors.New("persisted command has no exact Deployment route")
 	}

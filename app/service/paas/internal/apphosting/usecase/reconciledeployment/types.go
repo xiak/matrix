@@ -118,11 +118,19 @@ type DeploymentRoute struct {
 	Executor          port.DeploymentExecutor
 }
 
+type DynamicRouteResolver interface {
+	ResolveDeploymentRoute(
+		context.Context,
+		paasv1.ResourceID,
+	) (DeploymentRoute, bool, error)
+}
+
 type Config struct {
 	EffectTimeout    time.Duration
 	ReconcileBackoff time.Duration
 	MaxAttempts      uint32
 	Clock            Clock
+	DynamicRoutes    DynamicRouteResolver
 }
 
 type Worker struct {

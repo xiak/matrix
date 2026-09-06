@@ -176,7 +176,7 @@ http {
 		response.TLS.PeerCertificates[0].VerifyHostname(serverName) != nil {
 		t.Fatalf("APISIX TLS readiness status=%d body=%q err=%v", response.StatusCode, body, err)
 	}
-	for _, action := range []string{"exchange", "recovery-challenge", "recover"} {
+	for _, action := range []string{"exchange", "recovery-challenge", "recover", "complete"} {
 		bootstrap := waitForAPISIXEnrollmentBootstrap(t, containerName, baseURL, action, security.Clone())
 		peer := net.ParseIP(bootstrap.Header.Get("X-Matrix-Test-Observed-Peer"))
 		if bootstrap.StatusCode != http.StatusNoContent || peer == nil || !peer.IsPrivate() ||

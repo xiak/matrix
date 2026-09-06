@@ -13,7 +13,9 @@ import (
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/executionadmission"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/nodeenrollment"
+	"github.com/xiak/matrix/app/service/paas/internal/audit"
 )
 
 var _ nodeenrollment.Repository = (*NodeEnrollmentRepository)(nil)
@@ -277,6 +279,77 @@ func (transaction *nodeEnrollmentTransaction) LoadExecutionPool(
 	return value, true, nil
 }
 
+func (transaction *nodeEnrollmentTransaction) LoadExecutionTarget(
+	ctx context.Context,
+	id paasv1.ResourceID,
+) (executionadmission.Registration, bool, error) {
+	value, found, err := (&executionAdmissionTransaction{
+		tx: transaction.tx, installationID: transaction.installationID,
+	}).LoadTarget(ctx, id)
+	return value, found, mapNodeEnrollmentReadError(err)
+}
+
+func (transaction *nodeEnrollmentTransaction) ListExecutionTargets(
+	ctx context.Context,
+) ([]executionadmission.Registration, error) {
+	values, err := (&executionAdmissionTransaction{
+		tx: transaction.tx, installationID: transaction.installationID,
+	}).ListTargets(ctx)
+	return values, mapNodeEnrollmentReadError(err)
+}
+
+func (transaction *nodeEnrollmentTransaction) ListExecutionPoolTargets(
+	ctx context.Context,
+	poolID paasv1.ResourceID,
+) ([]paasv1.ExecutionTarget, error) {
+	values, err := (&executionAdmissionTransaction{
+		tx: transaction.tx, installationID: transaction.installationID,
+	}).ListPoolTargets(ctx, poolID)
+	return values, mapNodeEnrollmentReadError(err)
+}
+
+func mapNodeEnrollmentReadError(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, executionadmission.ErrInvalidArgument):
+		return nodeenrollment.ErrInvalidArgument
+	case errors.Is(err, executionadmission.ErrConflict):
+		return nodeenrollment.ErrConflict
+	default:
+		return err
+	}
+}
+
+func (transaction *nodeEnrollmentTransaction) LoadEnrolledNodeConnection(
+	ctx context.Context,
+	targetID paasv1.ResourceID,
+) (port.EnrolledNodeConnection, bool, error) {
+	if paasv1.ValidateID("executionTargetId", string(targetID)) != nil {
+		return port.EnrolledNodeConnection{}, false, nodeenrollment.ErrInvalidArgument
+	}
+	value := port.EnrolledNodeConnection{InstallationID: transaction.installationID}
+	err := transaction.tx.QueryRow(ctx, `SELECT execution_target_id, controller_id, binding_ref,
+		endpoint, identity_fingerprint, enabled
+		FROM paas.enrolled_node_connections
+		WHERE installation_id = $1 AND execution_target_id = $2`,
+		transaction.installationID, targetID,
+	).Scan(
+		&value.ExecutionTargetID, &value.ControllerID, &value.BindingRef,
+		&value.Endpoint, &value.IdentityFingerprint, &value.Enabled,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return port.EnrolledNodeConnection{}, false, nil
+	}
+	if err != nil {
+		return port.EnrolledNodeConnection{}, false, err
+	}
+	if port.ValidateEnrolledNodeConnection(value) != nil || value.ExecutionTargetID != targetID {
+		return port.EnrolledNodeConnection{}, false, errors.New("stored enrolled node connection is invalid")
+	}
+	return value, true, nil
+}
+
 func (transaction *nodeEnrollmentTransaction) ListEnrollments(
 	ctx context.Context,
 	limit int,
@@ -489,6 +562,93 @@ func (transaction *nodeEnrollmentTransaction) revokeEnrollment(
 		operationDocument,
 		replacementValue,
 		replacementOperationValue,
+	)
+	return err
+}
+
+func (transaction *nodeEnrollmentTransaction) CompleteEnrollment(
+	ctx context.Context,
+	before nodeenrollment.StoredEnrollment,
+	after nodeenrollment.StoredEnrollment,
+	registration executionadmission.Registration,
+	connection port.EnrolledNodeConnection,
+	expectedPoolVersion uint64,
+	pool paasv1.ExecutionPool,
+	event audit.Event,
+) error {
+	if nodeenrollment.ValidateStoredEnrollment(before, transaction.installationID) != nil ||
+		nodeenrollment.ValidateStoredEnrollment(after, transaction.installationID) != nil ||
+		before.Enrollment.State != paasv1.NodeEnrollmentVerifying ||
+		after.Enrollment.State != paasv1.NodeEnrollmentReady ||
+		after.Enrollment.Metadata.ID != before.Enrollment.Metadata.ID ||
+		paasv1.ValidateExecutionTarget(registration.Target) != nil ||
+		registration.Target.Metadata.ID != after.Enrollment.ExecutionTargetID ||
+		registration.Target.Spec.ExecutionPoolID != after.Enrollment.ExecutionPoolID ||
+		port.ValidateEnrolledNodeConnection(connection) != nil || !connection.Enabled ||
+		connection.InstallationID != transaction.installationID ||
+		connection.ExecutionTargetID != registration.Target.Metadata.ID ||
+		connection.BindingRef != registration.BindingRef ||
+		connection.IdentityFingerprint != registration.IdentityFingerprint ||
+		expectedPoolVersion < 1 || expectedPoolVersion > 9007199254740991 ||
+		paasv1.ValidateExecutionPool(pool) != nil || pool.Metadata.ID != after.Enrollment.ExecutionPoolID ||
+		audit.ValidateEvent(event) != nil || event.InstallationID != transaction.installationID ||
+		event.OperationID != after.Operation.ID {
+		return nodeenrollment.ErrInvalidArgument
+	}
+	enrollmentDocument, err := json.Marshal(after.Enrollment)
+	if err != nil {
+		return err
+	}
+	operationDocument, err := json.Marshal(after.Operation)
+	if err != nil {
+		return err
+	}
+	targetDocument, err := json.Marshal(registration.Target)
+	if err != nil {
+		return err
+	}
+	poolDocument, err := json.Marshal(pool)
+	if err != nil {
+		return err
+	}
+	eventDocument, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+	_, err = transaction.tx.Exec(ctx, `SELECT paas.complete_node_enrollment(
+		$1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb
+	)`, before.Enrollment.Metadata.ID, int64(before.Enrollment.Metadata.ResourceVersion),
+		enrollmentDocument, operationDocument, targetDocument,
+		connection.BindingRef, connection.IdentityFingerprint, connection.ControllerID, connection.Endpoint,
+		int64(expectedPoolVersion), poolDocument, eventDocument,
+	)
+	return err
+}
+
+func (transaction *nodeEnrollmentTransaction) FailEnrollment(
+	ctx context.Context,
+	before nodeenrollment.StoredEnrollment,
+	after nodeenrollment.StoredEnrollment,
+) error {
+	if nodeenrollment.ValidateStoredEnrollment(before, transaction.installationID) != nil ||
+		nodeenrollment.ValidateStoredEnrollment(after, transaction.installationID) != nil ||
+		before.Enrollment.State != paasv1.NodeEnrollmentVerifying ||
+		after.Enrollment.State != paasv1.NodeEnrollmentFailed ||
+		after.Enrollment.Metadata.ID != before.Enrollment.Metadata.ID {
+		return nodeenrollment.ErrInvalidArgument
+	}
+	enrollmentDocument, err := json.Marshal(after.Enrollment)
+	if err != nil {
+		return err
+	}
+	operationDocument, err := json.Marshal(after.Operation)
+	if err != nil {
+		return err
+	}
+	_, err = transaction.tx.Exec(ctx, `SELECT paas.fail_node_enrollment(
+		$1,$2,$3::jsonb,$4::jsonb
+	)`, before.Enrollment.Metadata.ID, int64(before.Enrollment.Metadata.ResourceVersion),
+		enrollmentDocument, operationDocument,
 	)
 	return err
 }

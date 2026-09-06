@@ -317,57 +317,22 @@ func (service *Service) RegisterTarget(ctx context.Context, command RegisterTarg
 		if err != nil {
 			return err
 		}
-		if len(registrations) >= MaximumTargets {
-			return ErrConflict
-		}
-		for _, current := range registrations {
-			if current.Target.Metadata.ID == request.ID || current.BindingRef == binding.Ref || current.IdentityFingerprint == binding.IdentityFingerprint {
-				return ErrConflict
-			}
-		}
 		now, err := transaction.TransactionTime(ctx)
 		if err != nil {
 			return err
 		}
-		if !service.validObservation(binding, observation, now) {
-			return ErrUnavailable
-		}
-		labels := maps.Clone(request.Labels)
-		if labels == nil {
-			labels = map[string]string{}
-		}
-		labels[fingerprintLabel] = binding.IdentityFingerprint
-		for key, value := range pool.Spec.ExecutionTargetSelector.MatchLabels {
-			if labels[key] != value {
-				return ErrConflict
-			}
-		}
-		allowed := false
-		for _, guarantee := range observation.SupportedIsolationGuarantees {
-			if !slices.Contains(capabilities.IsolationGuarantees, guarantee) {
-				return ErrUnavailable
-			}
-			allowed = allowed || slices.Contains(pool.Spec.AllowedIsolationGuarantees, guarantee)
-		}
-		if !allowed {
-			return ErrConflict
-		}
-		target = paasv1.ExecutionTarget{APIVersion: paasv1.APIVersion, Kind: "ExecutionTarget", Metadata: metadata(request.ID, request.Name, labels, now),
-			Spec: paasv1.ExecutionTargetSpec{ExecutionPoolID: request.ExecutionPoolID, InfrastructureAdapter: capabilities.Adapter,
-				DeploymentExecutor: paasv1.AdapterRef{Kind: paasv1.AdapterDeploymentExecutor, Name: "compose", ContractVersion: "v1"}, DesiredState: paasv1.ExecutionTargetActive}, Status: statusFromObservation(observation, now)}
-		if paasv1.ValidateExecutionTarget(target) != nil {
-			return ErrInvalidArgument
-		}
-		registration := Registration{Target: target, BindingRef: binding.Ref, IdentityFingerprint: binding.IdentityFingerprint}
 		poolTargets, err := transaction.ListPoolTargets(ctx, pool.Metadata.ID)
 		if err != nil {
 			return err
 		}
 		poolVersion := pool.Metadata.ResourceVersion
-		pool, err = service.poolSnapshot(pool, append(poolTargets, target), now, true)
+		registration, nextPool, err := service.PrepareEnrollmentTarget(
+			request, binding, capabilities, observation, pool, registrations, poolTargets, now,
+		)
 		if err != nil {
 			return err
 		}
+		target, pool = registration.Target, nextPool
 		submission, err := newSubmission(command.Authorization, paasv1.OperationRegisterExecutionTarget, request.ID, fingerprint, digest, now)
 		if err != nil {
 			return err
@@ -382,6 +347,124 @@ func (service *Service) RegisterTarget(ctx context.Context, command RegisterTarg
 		return paasv1.ExecutionTarget{}, paasv1.Operation{}, false, err
 	}
 	return target, operation, replayed, nil
+}
+
+// PrepareEnrollmentTarget applies the existing target-admission invariants to
+// a self-enrollment probe without creating a second Operation or host model.
+// The caller owns the transaction and persists the returned registration and
+// pool snapshot atomically with the enrollment terminal state.
+func (service *Service) PrepareEnrollmentTarget(
+	request paasv1.RegisterExecutionTargetRequest,
+	binding Binding,
+	capabilities paasv1.AdapterCapabilitiesContract,
+	observation paasv1.ExecutionTargetObservation,
+	pool paasv1.ExecutionPool,
+	registrations []Registration,
+	poolTargets []paasv1.ExecutionTarget,
+	now time.Time,
+) (Registration, paasv1.ExecutionPool, error) {
+	if service == nil || paasv1.ValidateRegisterExecutionTargetRequest(request) != nil ||
+		request.ID == builtInTargetID || request.BindingRef != binding.Ref ||
+		binding.TargetID != request.ID ||
+		paasv1.ValidateDigest("identityFingerprint", binding.IdentityFingerprint) != nil ||
+		paasv1.ValidateExecutionPool(pool) != nil || pool.Metadata.ID != request.ExecutionPoolID {
+		return Registration{}, paasv1.ExecutionPool{}, ErrInvalidArgument
+	}
+	if paasv1.ValidateAdapterCapabilities(capabilities) != nil ||
+		capabilities.Adapter.Kind != paasv1.AdapterInfrastructure ||
+		capabilities.Adapter.Name == "localmachine" ||
+		!slices.Contains(capabilities.Actions, paasv1.AdapterInspectExecutionTarget) ||
+		!slices.Contains(capabilities.Actions, paasv1.AdapterObserveExecutionTarget) ||
+		!service.validObservation(binding, observation, now) ||
+		observation.Health != paasv1.ExecutionTargetHealthReady {
+		return Registration{}, paasv1.ExecutionPool{}, ErrUnavailable
+	}
+	if len(registrations) >= MaximumTargets {
+		return Registration{}, paasv1.ExecutionPool{}, ErrConflict
+	}
+	for _, current := range registrations {
+		if current.Target.Metadata.ID == request.ID || current.BindingRef == binding.Ref ||
+			current.IdentityFingerprint == binding.IdentityFingerprint {
+			return Registration{}, paasv1.ExecutionPool{}, ErrConflict
+		}
+	}
+	labels := maps.Clone(request.Labels)
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	labels[fingerprintLabel] = binding.IdentityFingerprint
+	for key, value := range pool.Spec.ExecutionTargetSelector.MatchLabels {
+		if labels[key] != value {
+			return Registration{}, paasv1.ExecutionPool{}, ErrConflict
+		}
+	}
+	allowed := false
+	for _, guarantee := range observation.SupportedIsolationGuarantees {
+		if !slices.Contains(capabilities.IsolationGuarantees, guarantee) {
+			return Registration{}, paasv1.ExecutionPool{}, ErrUnavailable
+		}
+		allowed = allowed || slices.Contains(pool.Spec.AllowedIsolationGuarantees, guarantee)
+	}
+	if !allowed {
+		return Registration{}, paasv1.ExecutionPool{}, ErrConflict
+	}
+	target := paasv1.ExecutionTarget{
+		APIVersion: paasv1.APIVersion, Kind: "ExecutionTarget",
+		Metadata: metadata(request.ID, request.Name, labels, now),
+		Spec: paasv1.ExecutionTargetSpec{
+			ExecutionPoolID:       request.ExecutionPoolID,
+			InfrastructureAdapter: capabilities.Adapter,
+			DeploymentExecutor: paasv1.AdapterRef{
+				Kind: paasv1.AdapterDeploymentExecutor, Name: "compose", ContractVersion: "v1",
+			},
+			DesiredState: paasv1.ExecutionTargetActive,
+		},
+		Status: statusFromObservation(observation, now),
+	}
+	if paasv1.ValidateExecutionTarget(target) != nil {
+		return Registration{}, paasv1.ExecutionPool{}, ErrInvalidArgument
+	}
+	nextPool, err := service.poolSnapshot(pool, append(poolTargets, target), now, true)
+	if err != nil {
+		return Registration{}, paasv1.ExecutionPool{}, err
+	}
+	return Registration{
+		Target: target, BindingRef: binding.Ref, IdentityFingerprint: binding.IdentityFingerprint,
+	}, nextPool, nil
+}
+
+// CompleteEnrollmentRegistration terminates the Operation created with the
+// enrollment and derives its one installation Audit fact. No new Operation or
+// idempotency identity is introduced at completion time.
+func (service *Service) CompleteEnrollmentRegistration(
+	operation paasv1.Operation,
+	authorization port.Authorization,
+	now time.Time,
+) (Submission, error) {
+	if service == nil || paasv1.ValidateOperation(operation) != nil ||
+		port.ValidatePlatformAuthorization(authorization) != nil ||
+		authorization.InstallationID != service.config.InstallationID ||
+		operation.InstallationID != authorization.InstallationID ||
+		operation.RequestedBy != authorization.Subject ||
+		operation.Action != paasv1.OperationRegisterExecutionTarget ||
+		operation.Target.Kind != "ExecutionTarget" ||
+		operation.State != paasv1.OperationVerifying ||
+		len(operation.IdempotencyFingerprint) != len("sha256:")+64 {
+		return Submission{}, ErrInvalidArgument
+	}
+	operation.State, operation.UpdatedAt, operation.TerminalAt = paasv1.OperationSucceeded, now, &now
+	event := audit.Event{
+		SchemaVersion: "v1", EventID: "audit-" + operation.IdempotencyFingerprint[7:],
+		InstallationID: authorization.InstallationID, Actor: authorization.Subject,
+		IAMDecisionID: authorization.DecisionID, Action: audit.ExecutionTargetRegistered,
+		Target: operation.Target, OperationID: operation.ID, RequestDigest: operation.RequestDigest,
+		Result: audit.Succeeded, RequestID: authorization.RequestID, AuditID: authorization.AuditID,
+		TraceParent: authorization.TraceParent, OccurredAt: now,
+	}
+	if paasv1.ValidateOperation(operation) != nil || audit.ValidateEvent(event) != nil {
+		return Submission{}, ErrInvalidArgument
+	}
+	return Submission{Operation: operation, AuditEvent: event}, nil
 }
 
 func (service *Service) TransitionTarget(

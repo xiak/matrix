@@ -8,6 +8,7 @@ import (
 	"time"
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 )
 
 type runtimeRepository struct {
@@ -99,6 +100,48 @@ func TestRefreshStoresOnlyExactCurrentTargetObservation(t *testing.T) {
 	if err != nil || !processed || len(repository.stored) != 1 {
 		t.Fatalf("retargeted observation changed proof: %t/%v/%d", processed, err, len(repository.stored))
 	}
+}
+
+func TestRefreshResolvesCommittedDynamicTelemetryRoute(t *testing.T) {
+	now := time.Date(2026, 8, 30, 1, 2, 3, 0, time.UTC)
+	candidate := runtimeCandidate()
+	repository := &runtimeRepository{candidates: []Candidate{candidate}}
+	observer := &runtimeObserver{
+		value: runtimeObservation(candidate, now), resources: resourceObservation(candidate, now),
+	}
+	resolver := &dynamicRuntimeRouteResolver{observer: observer}
+	service, err := New(repository, []Route{{
+		ExecutionTargetID: "target-static", Observer: &runtimeObserver{},
+	}}, Config{
+		ObservationInterval: 5 * time.Second, FailureBackoff: time.Second,
+		ObservationTimeout: 2 * time.Second, MaximumObservationAge: 5 * time.Second,
+		MaximumPastClockSkew: 30 * time.Second, ValidityDuration: 15 * time.Second,
+		Clock: func() time.Time { return now }, DynamicRoutes: resolver,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	processed, err := service.ProcessNext(context.Background())
+	if err != nil || !processed || resolver.calls != 1 || resolver.targetID != candidate.ExecutionTargetID ||
+		observer.calls != 1 || len(repository.stored) != 1 {
+		t.Fatalf("dynamic runtime route processed=%t calls=%d observed=%d stored=%d err=%v", processed, resolver.calls, observer.calls, len(repository.stored), err)
+	}
+}
+
+type dynamicRuntimeRouteResolver struct {
+	observer port.DeploymentTelemetryObserver
+	targetID paasv1.ResourceID
+	calls    int
+	err      error
+}
+
+func (resolver *dynamicRuntimeRouteResolver) ResolveDeploymentTelemetryObserver(
+	_ context.Context,
+	targetID paasv1.ResourceID,
+) (port.DeploymentTelemetryObserver, bool, error) {
+	resolver.calls++
+	resolver.targetID = targetID
+	return resolver.observer, resolver.observer != nil, resolver.err
 }
 
 func TestRefreshRetainsProofAcrossProviderFailureAndSurfacesDatabaseFailure(t *testing.T) {

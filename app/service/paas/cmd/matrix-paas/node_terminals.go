@@ -7,6 +7,7 @@ import (
 	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	nodehttps "github.com/xiak/matrix/app/adapter/node/https"
+	"github.com/xiak/matrix/app/service/paas/cmd/internal/nodeconnections"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/executionadmission"
 )
@@ -14,6 +15,7 @@ import (
 type nodeTerminalRouter struct {
 	installationID string
 	byBinding      map[string]nodeTerminalRoute
+	dynamic        *nodeconnections.Dynamic
 }
 
 type nodeTerminalRoute struct {
@@ -21,7 +23,7 @@ type nodeTerminalRoute struct {
 	client   *nodehttps.Client
 }
 
-func terminalRouter(installationID string, bindings []executionadmission.Binding) (*nodeTerminalRouter, error) {
+func terminalRouter(installationID string, bindings []executionadmission.Binding, dynamic *nodeconnections.Dynamic) (*nodeTerminalRouter, error) {
 	byBinding := make(map[string]nodeTerminalRoute, len(bindings))
 	for _, binding := range bindings {
 		client, ok := binding.Adapter.(*nodehttps.Client)
@@ -35,10 +37,10 @@ func terminalRouter(installationID string, bindings []executionadmission.Binding
 		}
 		byBinding[binding.Ref] = nodeTerminalRoute{targetID: binding.TargetID, client: client}
 	}
-	if paasv1.ValidateID("installationId", installationID) != nil {
+	if paasv1.ValidateID("installationId", installationID) != nil || dynamic == nil {
 		return nil, errors.New("protected node terminal routes are invalid")
 	}
-	return &nodeTerminalRouter{installationID: installationID, byBinding: byBinding}, nil
+	return &nodeTerminalRouter{installationID: installationID, byBinding: byBinding, dynamic: dynamic}, nil
 }
 
 func (router *nodeTerminalRouter) OpenTerminal(
@@ -51,8 +53,30 @@ func (router *nodeTerminalRouter) OpenTerminal(
 		return nil, port.ErrTerminalRejected
 	}
 	route, found := router.byBinding[bindingRef]
-	if !found || request.Identity != (nodev1.Identity{}) ||
-		request.Request.ExecutionTargetID != route.targetID {
+	if request.Identity != (nodev1.Identity{}) {
+		return nil, port.ErrTerminalRejected
+	}
+	closeClient := func() {}
+	if !found {
+		connection, resolved, err := router.dynamic.Resolve(
+			ctx, request.Request.ExecutionTargetID, bindingRef,
+		)
+		if err != nil || !resolved {
+			return nil, port.ErrTerminalRejected
+		}
+		config, err := router.dynamic.ConnectionConfig(connection)
+		if err != nil {
+			return nil, port.ErrTerminalRejected
+		}
+		client, err := nodehttps.New(config)
+		if err != nil {
+			return nil, port.ErrTerminalRejected
+		}
+		route = nodeTerminalRoute{targetID: connection.ExecutionTargetID, client: client}
+		closeClient = client.Close
+	}
+	defer closeClient()
+	if request.Request.ExecutionTargetID != route.targetID {
 		return nil, port.ErrTerminalRejected
 	}
 	request.Identity = nodev1.Identity{

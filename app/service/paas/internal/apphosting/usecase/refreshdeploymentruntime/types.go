@@ -54,6 +54,13 @@ type Route struct {
 	Observer          port.DeploymentTelemetryObserver
 }
 
+type DynamicRouteResolver interface {
+	ResolveDeploymentTelemetryObserver(
+		context.Context,
+		paasv1.ResourceID,
+	) (port.DeploymentTelemetryObserver, bool, error)
+}
+
 type Config struct {
 	ObservationInterval   time.Duration
 	FailureBackoff        time.Duration
@@ -62,6 +69,7 @@ type Config struct {
 	MaximumPastClockSkew  time.Duration
 	ValidityDuration      time.Duration
 	Clock                 func() time.Time
+	DynamicRoutes         DynamicRouteResolver
 }
 
 type Service struct {

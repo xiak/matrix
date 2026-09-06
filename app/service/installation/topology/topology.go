@@ -53,10 +53,16 @@ var platformServiceNames = []string{
 }
 
 const (
-	enrollmentIssuerCertificateEnvironment = "MATRIX_PAAS_ENROLLMENT_ISSUER_CERTIFICATE_FILE"
-	enrollmentIssuerPrivateKeyEnvironment  = "MATRIX_PAAS_ENROLLMENT_ISSUER_PRIVATE_KEY_FILE"
-	enrollmentIssuerCertificateTarget      = "/run/matrix/node-enrollment-issuer.der"
-	enrollmentIssuerPrivateKeyTarget       = "/run/matrix/node-enrollment-issuer-key.der"
+	enrollmentIssuerCertificateEnvironment           = "MATRIX_PAAS_ENROLLMENT_ISSUER_CERTIFICATE_FILE"
+	enrollmentIssuerPrivateKeyEnvironment            = "MATRIX_PAAS_ENROLLMENT_ISSUER_PRIVATE_KEY_FILE"
+	enrollmentIssuerCertificateTarget                = "/run/matrix/node-enrollment-issuer.der"
+	enrollmentIssuerPrivateKeyTarget                 = "/run/matrix/node-enrollment-issuer-key.der"
+	enrollmentControllerCertificateEnvironment       = "MATRIX_PAAS_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE"
+	enrollmentControllerPrivateKeyEnvironment        = "MATRIX_PAAS_ENROLLMENT_CONTROLLER_PRIVATE_KEY_FILE"
+	enrollmentControllerTrustEnvironment             = "MATRIX_PAAS_ENROLLMENT_CONTROLLER_TRUST_FILE"
+	workerEnrollmentControllerCertificateEnvironment = "MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE"
+	workerEnrollmentControllerPrivateKeyEnvironment  = "MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_PRIVATE_KEY_FILE"
+	workerEnrollmentControllerTrustEnvironment       = "MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_TRUST_FILE"
 )
 
 func ContractDigest() string {
@@ -122,7 +128,7 @@ func contractDescription() contract {
 
 func predecessorContractDescription() contract {
 	description := contractDescription()
-	removeNodeEnrollmentBootstrap(description.Compose.Services)
+	removeEnrollmentControllerIdentity(description.Compose.Services)
 	return description
 }
 
@@ -180,7 +186,7 @@ func compile(manifest release.Manifest, options Options, digest string) (Result,
 	switch digest {
 	case ContractDigest():
 	case SupportedPredecessorContractDigest():
-		removeNodeEnrollmentBootstrap(services)
+		removeEnrollmentControllerIdentity(services)
 	default:
 		return Result{}, errors.New("platform topology contract is unsupported")
 	}
@@ -203,35 +209,18 @@ func compile(manifest release.Manifest, options Options, digest string) (Result,
 	}, nil
 }
 
-func removeNodeEnrollmentBootstrap(services map[string]serviceConfig) {
+func removeEnrollmentControllerIdentity(services map[string]serviceConfig) {
 	paasAPI := services["paas-api"]
-	delete(paasAPI.Environment, enrollmentIssuerCertificateEnvironment)
-	delete(paasAPI.Environment, enrollmentIssuerPrivateKeyEnvironment)
-	volumes := paasAPI.Volumes[:0]
-	for _, volume := range paasAPI.Volumes {
-		if volume.Target != enrollmentIssuerCertificateTarget && volume.Target != enrollmentIssuerPrivateKeyTarget {
-			volumes = append(volumes, volume)
-		}
-	}
-	paasAPI.Volumes = volumes
+	delete(paasAPI.Environment, enrollmentControllerCertificateEnvironment)
+	delete(paasAPI.Environment, enrollmentControllerPrivateKeyEnvironment)
+	delete(paasAPI.Environment, enrollmentControllerTrustEnvironment)
 	services["paas-api"] = paasAPI
 
-	apisix := services["apisix"]
-	ports := apisix.Ports[:0]
-	for _, port := range apisix.Ports {
-		if !strings.HasSuffix(port, ":"+fmt.Sprint(NodeEnrollmentIngressTargetPort)+"/tcp") {
-			ports = append(ports, port)
-		}
-	}
-	apisix.Ports = ports
-	volumes = apisix.Volumes[:0]
-	for _, volume := range apisix.Volumes {
-		if volume.Target != NodeEnrollmentIngressCertificateTarget && volume.Target != NodeEnrollmentIngressPrivateKeyTarget {
-			volumes = append(volumes, volume)
-		}
-	}
-	apisix.Volumes = volumes
-	services["apisix"] = apisix
+	paasWorker := services["paas-worker"]
+	delete(paasWorker.Environment, workerEnrollmentControllerCertificateEnvironment)
+	delete(paasWorker.Environment, workerEnrollmentControllerPrivateKeyEnvironment)
+	delete(paasWorker.Environment, workerEnrollmentControllerTrustEnvironment)
+	services["paas-worker"] = paasWorker
 }
 
 func validateOptions(options Options) error {
@@ -450,16 +439,19 @@ func compileServices(
 		"1.0", "768M", "http://127.0.0.1:8080/ready",
 	)
 	paasAPI.Environment = map[string]string{
-		"MATRIX_PAAS_DATABASE_DSN_FILE":                  "/run/matrix/paas-api-dsn",
-		"MATRIX_PAAS_IAM_ENDPOINT":                       "http://iam:8080",
-		"MATRIX_PAAS_INSTALLATION_ID":                    options.InstallationID,
-		"MATRIX_PAAS_RELEASE_ID":                         manifest.Release.ID,
-		"MATRIX_PAAS_SERVICE_CREDENTIAL_FILE":            "/run/matrix/paas-iam-credential",
-		"MATRIX_PAAS_VERIFICATION_ARTIFACT_DIGEST":       verificationArtifactDigest(manifest),
-		"MATRIX_PAAS_LISTEN_ADDRESS":                     "0.0.0.0:8080",
-		"MATRIX_PAAS_NODE_CONNECTIONS_FILE":              "/run/matrix/node-controller/configuration.json",
-		"MATRIX_PAAS_ENROLLMENT_ISSUER_CERTIFICATE_FILE": "/run/matrix/node-enrollment-issuer.der",
-		"MATRIX_PAAS_ENROLLMENT_ISSUER_PRIVATE_KEY_FILE": "/run/matrix/node-enrollment-issuer-key.der",
+		"MATRIX_PAAS_DATABASE_DSN_FILE":                      "/run/matrix/paas-api-dsn",
+		"MATRIX_PAAS_IAM_ENDPOINT":                           "http://iam:8080",
+		"MATRIX_PAAS_INSTALLATION_ID":                        options.InstallationID,
+		"MATRIX_PAAS_RELEASE_ID":                             manifest.Release.ID,
+		"MATRIX_PAAS_SERVICE_CREDENTIAL_FILE":                "/run/matrix/paas-iam-credential",
+		"MATRIX_PAAS_VERIFICATION_ARTIFACT_DIGEST":           verificationArtifactDigest(manifest),
+		"MATRIX_PAAS_LISTEN_ADDRESS":                         "0.0.0.0:8080",
+		"MATRIX_PAAS_NODE_CONNECTIONS_FILE":                  "/run/matrix/node-controller/configuration.json",
+		"MATRIX_PAAS_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE": "/run/matrix/node-controller/enrollment-controller.pem",
+		"MATRIX_PAAS_ENROLLMENT_CONTROLLER_PRIVATE_KEY_FILE": "/run/matrix/node-controller/enrollment-controller-key.pem",
+		"MATRIX_PAAS_ENROLLMENT_CONTROLLER_TRUST_FILE":       "/run/matrix/node-controller/enrollment-controller-trust.pem",
+		"MATRIX_PAAS_ENROLLMENT_ISSUER_CERTIFICATE_FILE":     "/run/matrix/node-enrollment-issuer.der",
+		"MATRIX_PAAS_ENROLLMENT_ISSUER_PRIVATE_KEY_FILE":     "/run/matrix/node-enrollment-issuer-key.der",
 	}
 	paasAPI.Environment["MATRIX_PAAS_PUBLIC_BASE_PATH"] = "/api/paas/v1"
 	paasAPI.Environment["MATRIX_PAAS_TERMINAL_COOKIE_SECURE"] = "false"
@@ -479,18 +471,21 @@ func compileServices(
 		"2.0", "1G", "http://127.0.0.1:8080/ready",
 	)
 	paasWorker.Environment = map[string]string{
-		"MATRIX_PAAS_WORKER_DATABASE_DSN_FILE":      "/run/matrix/paas-worker-dsn",
-		"MATRIX_PAAS_WORKER_ID":                     "paas-worker-" + strings.TrimPrefix(options.InstallationID, "mxi-"),
-		"MATRIX_PAAS_WORKER_BINDING_REF":            "compose-local-v1",
-		"MATRIX_PAAS_WORKER_BINDING_ROOT":           executorRoot,
-		"MATRIX_PAAS_WORKER_SECRET_ROOT":            workloadSecretRoot,
-		"MATRIX_PAAS_WORKER_ARTIFACT_CATALOG_FILE":  "/run/matrix/artifact-catalog.json",
-		"MATRIX_PAAS_WORKER_INSTALLATION_ID":        options.InstallationID,
-		"MATRIX_PAAS_WORKER_NODE_CONNECTIONS_FILE":  "/run/matrix/node-controller/configuration.json",
-		"MATRIX_PAAS_WORKER_EXECUTION_TENANT_ID":    "organization-default",
-		"MATRIX_PAAS_WORKER_MACHINE_BINDING_REF":    "local-machine-v1",
-		"MATRIX_PAAS_WORKER_LISTEN_ADDRESS":         "0.0.0.0:8080",
-		"MATRIX_PAAS_WORKER_MANAGED_POSTGRES_IMAGE": images["postgres"],
+		"MATRIX_PAAS_WORKER_DATABASE_DSN_FILE":                      "/run/matrix/paas-worker-dsn",
+		"MATRIX_PAAS_WORKER_ID":                                     "paas-worker-" + strings.TrimPrefix(options.InstallationID, "mxi-"),
+		"MATRIX_PAAS_WORKER_BINDING_REF":                            "compose-local-v1",
+		"MATRIX_PAAS_WORKER_BINDING_ROOT":                           executorRoot,
+		"MATRIX_PAAS_WORKER_SECRET_ROOT":                            workloadSecretRoot,
+		"MATRIX_PAAS_WORKER_ARTIFACT_CATALOG_FILE":                  "/run/matrix/artifact-catalog.json",
+		"MATRIX_PAAS_WORKER_INSTALLATION_ID":                        options.InstallationID,
+		"MATRIX_PAAS_WORKER_NODE_CONNECTIONS_FILE":                  "/run/matrix/node-controller/configuration.json",
+		"MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE": "/run/matrix/node-controller/enrollment-controller.pem",
+		"MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_PRIVATE_KEY_FILE": "/run/matrix/node-controller/enrollment-controller-key.pem",
+		"MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_TRUST_FILE":       "/run/matrix/node-controller/enrollment-controller-trust.pem",
+		"MATRIX_PAAS_WORKER_EXECUTION_TENANT_ID":                    "organization-default",
+		"MATRIX_PAAS_WORKER_MACHINE_BINDING_REF":                    "local-machine-v1",
+		"MATRIX_PAAS_WORKER_LISTEN_ADDRESS":                         "0.0.0.0:8080",
+		"MATRIX_PAAS_WORKER_MANAGED_POSTGRES_IMAGE":                 images["postgres"],
 		"DOCKER_HOST":   "unix:///var/run/docker.sock",
 		"DOCKER_CONFIG": "/tmp/docker-config",
 	}

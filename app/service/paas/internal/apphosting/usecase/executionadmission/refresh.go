@@ -219,6 +219,25 @@ func (service *Service) Refresh(ctx context.Context) error {
 
 func (service *Service) refreshTarget(ctx context.Context, initial Registration) error {
 	binding, configured := service.bindings[initial.BindingRef]
+	release := func() {}
+	if !configured && service.config.DynamicBindings != nil {
+		adapter, closeAdapter, found, err := service.config.DynamicBindings.ResolveInfrastructureAdapter(
+			ctx, initial.Target.Metadata.ID, initial.BindingRef, initial.IdentityFingerprint,
+		)
+		if err != nil {
+			return ErrUnavailable
+		}
+		if found && adapter != nil && closeAdapter != nil {
+			binding = Binding{
+				Ref: initial.BindingRef, TargetID: initial.Target.Metadata.ID,
+				IdentityFingerprint: initial.IdentityFingerprint, Adapter: adapter,
+			}
+			configured, release = true, closeAdapter
+		} else if found {
+			return ErrUnavailable
+		}
+	}
+	defer release()
 	var observation paasv1.ExecutionTargetObservation
 	observationErr := ErrUnavailable
 	if configured && binding.TargetID == initial.Target.Metadata.ID && binding.IdentityFingerprint == initial.IdentityFingerprint {

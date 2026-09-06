@@ -563,6 +563,100 @@
         ],
         "type": "object"
       },
+      "CompleteNodeEnrollmentRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "node.enrollment.matrix.xiak.com/v1"
+          },
+          "bindingRef": {
+            "pattern": "^node-binding-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "collectorEndpoint": {
+            "format": "uri",
+            "maxLength": 80,
+            "minLength": 16,
+            "pattern": "^https://(?:127\\\\.0\\\\.0\\\\.1|\\\\[::1\\\\]):[1-9][0-9]{3,4}$",
+            "type": "string"
+          },
+          "collectorPublicKeyFingerprint": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "controllerId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "enrollmentId": {
+            "pattern": "^node-enrollment-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "exchangeId": {
+            "pattern": "^node-exchange-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "executionTargetId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "installationId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "kind": {
+            "const": "NodeEnrollmentCompletionRequest"
+          },
+          "machineFingerprint": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "nodeListenAddress": {
+            "maxLength": 64,
+            "minLength": 8,
+            "type": "string"
+          },
+          "nodePublicKeyFingerprint": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "runtimeContractDigest": {
+            "$ref": "#/components/schemas/Digest"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "enrollmentId",
+          "installationId",
+          "executionTargetId",
+          "exchangeId",
+          "machineFingerprint",
+          "runtimeContractDigest",
+          "controllerId",
+          "bindingRef",
+          "nodeListenAddress",
+          "collectorEndpoint",
+          "nodePublicKeyFingerprint",
+          "collectorPublicKeyFingerprint"
+        ],
+        "type": "object",
+        "x-matrix-visibility": "node-bootstrap"
+      },
+      "CompleteNodeEnrollmentResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "enrollment": {
+            "$ref": "#/components/schemas/NodeEnrollment"
+          },
+          "executionTarget": {
+            "$ref": "#/components/schemas/ExecutionTarget"
+          },
+          "operation": {
+            "$ref": "#/components/schemas/Operation"
+          }
+        },
+        "required": [
+          "enrollment",
+          "executionTarget",
+          "operation"
+        ],
+        "type": "object"
+      },
       "ComponentBinding": {
         "additionalProperties": false,
         "oneOf": [
@@ -7130,6 +7224,78 @@
           }
         },
         "summary": "Get one installation-scoped NodeEnrollment"
+      }
+    },
+    "/v1/node-enrollments/{nodeEnrollmentId}/complete": {
+      "post": {
+        "description": "Node bootstrap only. Every public commitment is compared with the consumed exchange before a bounded outbound mTLS identity and capability probe.",
+        "operationId": "completeNodeEnrollment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "nodeEnrollmentId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompleteNodeEnrollmentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompleteNodeEnrollmentResponse"
+                }
+              }
+            },
+            "description": "The exact committed enrollment, existing ExecutionTarget and terminal registration Operation.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "410": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [],
+        "summary": "Probe and atomically register one exchanged Linux node"
       }
     },
     "/v1/node-enrollments/{nodeEnrollmentId}/exchange": {

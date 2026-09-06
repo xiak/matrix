@@ -104,8 +104,19 @@ func newControllerConnection(
 		security.ServerName = host
 		bounded, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
-		dialer := &tls.Dialer{NetDialer: &net.Dialer{Timeout: 5 * time.Second}, Config: security}
-		return dialer.DialContext(bounded, network, address)
+		raw, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(bounded, network, address)
+		if err != nil {
+			return nil, err
+		}
+		connection := tls.Client(raw, security)
+		if err := connection.HandshakeContext(bounded); err != nil {
+			_ = raw.Close()
+			if definitiveTLSIdentityError(err) {
+				return nil, errTLSIdentity
+			}
+			return nil, err
+		}
+		return connection, nil
 	}
 	return endpoint.String(), connection, nil
 }
@@ -266,6 +277,9 @@ func (client *Client) observe(ctx context.Context, command paasv1.AdapterCommand
 		if errors.Is(operationContext.Err(), context.DeadlineExceeded) {
 			return empty, fault(paasv1.ErrorDeadlineExceeded)
 		}
+		if definitiveTLSIdentityError(err) {
+			return empty, fault(paasv1.ErrorAdapterRejected)
+		}
 		return empty, fault(paasv1.ErrorExecutionTargetUnavailable)
 	}
 	defer response.Body.Close()
@@ -292,6 +306,18 @@ func (client *Client) observe(ctx context.Context, command paasv1.AdapterCommand
 	usage := value.Observation.Usage.Snapshot(time.Now())
 	value.Observation.Usage = &usage
 	return value.Observation, nil
+}
+
+func definitiveTLSIdentityError(err error) bool {
+	if errors.Is(err, errTLSIdentity) {
+		return true
+	}
+	var alert tls.AlertError
+	var recordHeader tls.RecordHeaderError
+	var verification *tls.CertificateVerificationError
+	var operation *net.OpError
+	return errors.As(err, &alert) || errors.As(err, &recordHeader) || errors.As(err, &verification) ||
+		(errors.As(err, &operation) && operation.Op == "remote error" && operation.Net == "")
 }
 
 func responseFault(status int) error {

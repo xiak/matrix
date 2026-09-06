@@ -26,6 +26,7 @@ import (
 	"time"
 
 	apphostingv1 "github.com/xiak/matrix/api/adapter/apphosting/v1"
+	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
@@ -524,7 +525,7 @@ func TestProviderVersionComparisonAcceptsBoundedDistributionMetadata(t *testing.
 }
 
 func TestFrozenPredecessorAPISIXRoutesMatchPublishedContract(t *testing.T) {
-	const publishedDigest = "sha256:ff6db9fbfc840ce4d43059661b12c29434a2807beb57326b76f9543037ab38c6"
+	const publishedDigest = "sha256:afb557295b44d580c969b86fec32c849ca0ba4c2408eb3ff2023a122a499b19c"
 	digest := sha256.Sum256(predecessorAPISIXStandaloneConfig())
 	if got := "sha256:" + hex.EncodeToString(digest[:]); got != publishedDigest {
 		t.Fatalf("frozen predecessor APISIX digest = %q, want %q", got, publishedDigest)
@@ -532,14 +533,17 @@ func TestFrozenPredecessorAPISIXRoutesMatchPublishedContract(t *testing.T) {
 	if bytes.Equal(predecessorAPISIXStandaloneConfig(), apisixStandaloneConfig()) {
 		t.Fatal("current APISIX routes did not advance beyond the frozen predecessor")
 	}
-	const publishedMainDigest = "sha256:a5568af2d039c722a76f56c3724f3e97d9c6f9132abe92db839cc1772034e70b"
+	const publishedMainDigest = "sha256:9bb2541ebf533ec0aa514b35fe763347106147207426132eca71c6851c25b7e4"
 	mainDigest := sha256.Sum256(predecessorAPISIXMainConfig())
 	if got := "sha256:" + hex.EncodeToString(mainDigest[:]); got != publishedMainDigest {
 		t.Fatalf("frozen predecessor APISIX main digest = %q, want %q", got, publishedMainDigest)
 	}
-	if bytes.Equal(predecessorAPISIXMainConfig(), apisixMainConfig()) ||
-		bytes.Contains(predecessorAPISIXMainConfig(), []byte("ssl_protocols: TLSv1.3")) {
-		t.Fatal("frozen predecessor APISIX main configuration gained current TLS ingress")
+	if bytes.Equal(predecessorAPISIXMainConfig(), apisixMainConfig()) {
+		t.Fatal("current APISIX main configuration did not advance beyond the frozen predecessor")
+	}
+	if !bytes.Contains(predecessorAPISIXMainConfig(), []byte("ssl_protocols TLSv1.3;")) ||
+		bytes.Contains(predecessorAPISIXMainConfig(), []byte("recover|complete")) {
+		t.Fatal("frozen predecessor APISIX main configuration differs from its TLS bootstrap contract")
 	}
 }
 
@@ -618,6 +622,40 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		ingressCertificate.IsCA || ingressCertificate.CheckSignatureFrom(certificate) != nil ||
 		bytes.Equal(ingressCertificate.RawSubjectPublicKeyInfo, certificate.RawSubjectPublicKeyInfo) {
 		t.Fatal("staged node enrollment ingress is not installation-authenticated")
+	}
+	controllerCertificatePEM := readTestFile(t, plan.Root, layout.EnrollmentControllerCertificate)
+	controllerPrivateKeyPEM := readTestFile(t, plan.Root, layout.EnrollmentControllerPrivateKey)
+	controllerTrustPEM := readTestFile(t, plan.Root, layout.EnrollmentControllerTrust)
+	defer clear(controllerCertificatePEM)
+	defer clear(controllerPrivateKeyPEM)
+	defer clear(controllerTrustPEM)
+	if _, err := tls.X509KeyPair(controllerCertificatePEM, controllerPrivateKeyPEM); err != nil {
+		t.Fatalf("staged node enrollment controller key pair: %v", err)
+	}
+	controllerBlock, controllerIssuerBytes := pem.Decode(controllerCertificatePEM)
+	controllerIssuerBlock, trailing := pem.Decode(controllerIssuerBytes)
+	trustBlock, trustTrailing := pem.Decode(controllerTrustPEM)
+	if controllerBlock == nil || controllerBlock.Type != "CERTIFICATE" ||
+		controllerIssuerBlock == nil || controllerIssuerBlock.Type != "CERTIFICATE" || len(trailing) != 0 ||
+		trustBlock == nil || trustBlock.Type != "CERTIFICATE" || len(trustTrailing) != 0 ||
+		!bytes.Equal(controllerIssuerBlock.Bytes, issuerCertificate) ||
+		!bytes.Equal(trustBlock.Bytes, issuerCertificate) {
+		t.Fatal("staged node enrollment controller certificate chain is invalid")
+	}
+	controllerCertificate, err := x509.ParseCertificate(controllerBlock.Bytes)
+	controllerURI, controllerURIErr := nodev1.ControllerURI(plan.InstallationID, nodeconfig.DefaultControllerID)
+	if err != nil || controllerCertificate == nil || controllerURIErr != nil ||
+		len(controllerCertificate.URIs) != 1 || controllerCertificate.URIs[0].String() != controllerURI {
+		t.Fatal("staged node enrollment controller certificate identity is invalid")
+	}
+	chains, verifyErr = controllerCertificate.Verify(x509.VerifyOptions{
+		Roots: roots, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	})
+	if verifyErr != nil || len(chains) != 1 || controllerCertificate.IsCA ||
+		controllerCertificate.CheckSignatureFrom(certificate) != nil ||
+		bytes.Equal(controllerCertificate.RawSubjectPublicKeyInfo, certificate.RawSubjectPublicKeyInfo) ||
+		bytes.Equal(controllerCertificate.RawSubjectPublicKeyInfo, ingressCertificate.RawSubjectPublicKeyInfo) {
+		t.Fatal("staged node enrollment controller is not installation-authenticated")
 	}
 
 	serviceCredentials := make(map[iamv1.ServicePurpose][]byte, len(bootstrap.Services))
@@ -723,9 +761,10 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		"uri: /v1/installation:verify",
 		`X-Matrix-Public-Origin: "https://$host:8443"`,
 		"id: matrix-paas-node-enrollment-bootstrap",
-		"node-enrollment-[0-9a-f]{32}/(?:exchange|recovery-challenge|recover)$",
+		"node-enrollment-[0-9a-f]{32}/(?:exchange|recovery-challenge|recover|complete)$",
 		"/api/paas/v1/node-enrollments/*/recovery-challenge",
 		"/api/paas/v1/node-enrollments/*/recover",
+		"/api/paas/v1/node-enrollments/*/complete",
 		`X-Matrix-Observed-Peer: "$http_x_matrix_tls_peer"`,
 		`X-Matrix-Transport-Scheme: "https"`,
 		`- server_port`,
@@ -786,7 +825,7 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		"config_provider: yaml", "stream_plugins: []", "user: root",
 		"client_body_temp_path /tmp/", "node_listen:", "port: 9081",
 		"listen 0.0.0.0:9443 ssl;", "ssl_protocols TLSv1.3;", "ssl_session_tickets off;",
-		"(?:exchange|recovery-challenge|recover)",
+		"(?:exchange|recovery-challenge|recover|complete)",
 		"client_max_body_size 64k;", "client_body_timeout 10s;", "proxy_connect_timeout 3s;",
 		"proxy_set_header X-Matrix-TLS-Peer $remote_addr;", "proxy_pass http://127.0.0.1:9081;",
 		topology.NodeEnrollmentIngressCertificateTarget, topology.NodeEnrollmentIngressPrivateKeyTarget,
@@ -843,6 +882,7 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		readTestFile(t, plan.Root, layout.IAMCredentialRecovery),
 		issuerPrivateKey,
 		ingressPrivateKeyPEM,
+		controllerPrivateKeyPEM,
 		localAuthority.CapabilityKey.CopyBytes(),
 	}
 	for _, credential := range serviceCredentials {
@@ -931,6 +971,44 @@ func TestEnrollmentIngressCannotAdoptSubstitutedMaterial(t *testing.T) {
 			}
 			if !equalSnapshots(before, snapshotManagedCredentials(t, plan.Root)) {
 				t.Fatal("rejected enrollment ingress changed installation credentials")
+			}
+		})
+	}
+}
+
+func TestEnrollmentControllerCannotAdoptSubstitutedMaterial(t *testing.T) {
+	for _, mode := range []string{"certificate", "private key", "trust", "installation identity"} {
+		t.Run(mode, func(t *testing.T) {
+			plan := newInstallPlan(t)
+			if err := stageInstallation(plan, rand.Reader); err != nil {
+				t.Fatalf("stage installation: %v", err)
+			}
+			installationID := plan.InstallationID
+			switch mode {
+			case "certificate", "private key", "trust":
+				relativePath := layout.EnrollmentControllerCertificate
+				if mode == "private key" {
+					relativePath = layout.EnrollmentControllerPrivateKey
+				} else if mode == "trust" {
+					relativePath = layout.EnrollmentControllerTrust
+				}
+				content := readTestFile(t, plan.Root, relativePath)
+				content[len(content)-2] ^= 0x01
+				if err := os.WriteFile(
+					filepath.Join(plan.Root, filepath.FromSlash(relativePath)), content, 0o600,
+				); err != nil {
+					t.Fatalf("substitute enrollment controller %s: %v", mode, err)
+				}
+				clear(content)
+			case "installation identity":
+				installationID = "mxi-22222222222222222222222222222222"
+			}
+			before := snapshotManagedCredentials(t, plan.Root)
+			if err := ensureEnrollmentController(plan.Root, installationID, failingEntropy{}); !errors.Is(err, platformcommand.ErrEffectVerification) {
+				t.Fatalf("substituted enrollment controller %s error = %v", mode, err)
+			}
+			if !equalSnapshots(before, snapshotManagedCredentials(t, plan.Root)) {
+				t.Fatal("rejected enrollment controller changed installation credentials")
 			}
 		})
 	}
@@ -1158,13 +1236,16 @@ func TestUpgradeConfigurationRetainsAndRestoresTheFrozenAdjacentTopology(t *test
 	predecessorMainConfig := readTestFile(t, source.Root, layout.APISIXConfig)
 	if !bytes.Contains(predecessorCompose, []byte("MATRIX_PAAS_PUBLIC_BASE_PATH")) ||
 		!bytes.Contains(predecessorCompose, []byte("MATRIX_PAAS_TERMINAL_COOKIE_SECURE")) ||
-		bytes.Contains(predecessorCompose, []byte("MATRIX_PAAS_ENROLLMENT_ISSUER_CERTIFICATE_FILE")) ||
-		bytes.Contains(predecessorCompose, []byte("MATRIX_PAAS_ENROLLMENT_ISSUER_PRIVATE_KEY_FILE")) ||
-		bytes.Contains(predecessorCompose, []byte(layout.EnrollmentIngressCertificate)) ||
-		bytes.Contains(predecessorCompose, []byte(layout.EnrollmentIngressPrivateKey)) ||
+		!bytes.Contains(predecessorCompose, []byte("MATRIX_PAAS_ENROLLMENT_ISSUER_CERTIFICATE_FILE")) ||
+		!bytes.Contains(predecessorCompose, []byte("MATRIX_PAAS_ENROLLMENT_ISSUER_PRIVATE_KEY_FILE")) ||
+		bytes.Contains(predecessorCompose, []byte("MATRIX_PAAS_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE")) ||
+		bytes.Contains(predecessorCompose, []byte("MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE")) ||
+		!bytes.Contains(predecessorCompose, []byte(layout.EnrollmentIngressCertificate)) ||
+		!bytes.Contains(predecessorCompose, []byte(layout.EnrollmentIngressPrivateKey)) ||
 		!bytes.Contains(predecessorRoutes, []byte("matrix-paas-terminal")) ||
-		bytes.Contains(predecessorRoutes, []byte("X-Matrix-Public-Origin")) ||
-		bytes.Contains(predecessorRoutes, []byte("matrix-paas-node-enrollment-bootstrap")) ||
+		!bytes.Contains(predecessorRoutes, []byte("X-Matrix-Public-Origin")) ||
+		!bytes.Contains(predecessorRoutes, []byte("matrix-paas-node-enrollment-bootstrap")) ||
+		bytes.Contains(predecessorRoutes, []byte("/complete")) ||
 		!bytes.Equal(predecessorMainConfig, predecessorAPISIXMainConfig()) {
 		t.Fatal("frozen adjacent predecessor differs from its signed topology")
 	}
@@ -1188,12 +1269,15 @@ func TestUpgradeConfigurationRetainsAndRestoresTheFrozenAdjacentTopology(t *test
 		!bytes.Contains(successorCompose, []byte("MATRIX_PAAS_TERMINAL_COOKIE_SECURE")) ||
 		!bytes.Contains(successorCompose, []byte("MATRIX_PAAS_ENROLLMENT_ISSUER_CERTIFICATE_FILE")) ||
 		!bytes.Contains(successorCompose, []byte("MATRIX_PAAS_ENROLLMENT_ISSUER_PRIVATE_KEY_FILE")) ||
+		!bytes.Contains(successorCompose, []byte("MATRIX_PAAS_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE")) ||
+		!bytes.Contains(successorCompose, []byte("MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE")) ||
 		!bytes.Contains(successorCompose, []byte(layout.EnrollmentIngressCertificate)) ||
 		!bytes.Contains(successorCompose, []byte(layout.EnrollmentIngressPrivateKey)) ||
 		bytes.Equal(successorRoutes, predecessorRoutes) ||
 		!bytes.Contains(successorRoutes, []byte("matrix-paas-terminal")) ||
 		!bytes.Contains(successorRoutes, []byte("X-Matrix-Public-Origin")) ||
 		!bytes.Contains(successorRoutes, []byte("matrix-paas-node-enrollment-bootstrap")) ||
+		!bytes.Contains(successorRoutes, []byte("/complete")) ||
 		bytes.Equal(successorMainConfig, predecessorMainConfig) ||
 		!bytes.Equal(successorMainConfig, apisixMainConfig()) {
 		t.Fatal("schema upgrade did not advance the exact enrollment route while retaining terminal topology")
@@ -1214,7 +1298,7 @@ func TestUpgradeConfigurationRetainsAndRestoresTheFrozenAdjacentTopology(t *test
 	assertReleaseConfiguration(t, source)
 }
 
-func TestFrozenPredecessorVerificationDoesNotRequireFutureEnrollmentBootstrap(t *testing.T) {
+func TestFrozenPredecessorVerificationDoesNotRequireFutureEnrollmentControllerIdentity(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("local-machine upgrade configuration targets Linux")
 	}
@@ -1222,11 +1306,11 @@ func TestFrozenPredecessorVerificationDoesNotRequireFutureEnrollmentBootstrap(t 
 		t, release.SupportedDatabasePredecessorProfile(), release.CurrentDatabaseProfile(),
 	)
 	for _, relative := range []string{
-		layout.EnrollmentIssuerCertificate, layout.EnrollmentIssuerPrivateKey,
-		layout.EnrollmentIngressCertificate, layout.EnrollmentIngressPrivateKey,
+		layout.EnrollmentControllerCertificate, layout.EnrollmentControllerPrivateKey,
+		layout.EnrollmentControllerTrust,
 	} {
 		if err := os.Remove(filepath.Join(plan.Source.Root, filepath.FromSlash(relative))); err != nil {
-			t.Fatalf("remove future enrollment issuer fixture %q: %v", relative, err)
+			t.Fatalf("remove future enrollment controller fixture %q: %v", relative, err)
 		}
 	}
 	source, err := authenticateInstalledPlan(plan.Source)
@@ -1235,13 +1319,13 @@ func TestFrozenPredecessorVerificationDoesNotRequireFutureEnrollmentBootstrap(t 
 	}
 	defer clear(source.TrustBytes)
 	if _, err := verifiedInstallationConfiguration(source); err != nil {
-		t.Fatalf("verify frozen predecessor without future issuer: %v", err)
+		t.Fatalf("verify frozen predecessor without future controller identity: %v", err)
 	}
 	if err := stageInstallation(plan.Target, rand.Reader); err != nil {
-		t.Fatalf("stage successor issuer: %v", err)
+		t.Fatalf("stage successor controller identity: %v", err)
 	}
-	if err := ensureEnrollmentIngress(plan.Target.Root, plan.Target.InstallationID, nil); err != nil {
-		t.Fatalf("successor staging did not materialize enrollment bootstrap: %v", err)
+	if err := ensureEnrollmentController(plan.Target.Root, plan.Target.InstallationID, nil); err != nil {
+		t.Fatalf("successor staging did not materialize enrollment controller identity: %v", err)
 	}
 }
 
@@ -2672,8 +2756,8 @@ func newUpgradePlan(t *testing.T, profiles ...release.DatabaseProfile) platformc
 	}
 	if source.Bundle.Manifest.TopologyDigest == topology.SupportedPredecessorContractDigest() {
 		for _, relative := range []string{
-			layout.EnrollmentIssuerCertificate, layout.EnrollmentIssuerPrivateKey,
-			layout.EnrollmentIngressCertificate, layout.EnrollmentIngressPrivateKey,
+			layout.EnrollmentControllerCertificate, layout.EnrollmentControllerPrivateKey,
+			layout.EnrollmentControllerTrust,
 		} {
 			if err := os.Remove(filepath.Join(source.Root, filepath.FromSlash(relative))); err != nil {
 				t.Fatalf("remove future predecessor fixture %q: %v", relative, err)
@@ -2773,6 +2857,8 @@ func snapshotManagedCredentials(t *testing.T, root string) map[string]string {
 		layout.InstallationVerifierCredential, layout.AuditCursorKey,
 		layout.EnrollmentIssuerCertificate, layout.EnrollmentIssuerPrivateKey,
 		layout.EnrollmentIngressCertificate, layout.EnrollmentIngressPrivateKey,
+		layout.EnrollmentControllerCertificate, layout.EnrollmentControllerPrivateKey,
+		layout.EnrollmentControllerTrust,
 		layout.BackupSealKey,
 		layout.InitialAdministratorPassword,
 		layout.PostgresPassword, layout.PostgresMigration, layout.IAMAPI,

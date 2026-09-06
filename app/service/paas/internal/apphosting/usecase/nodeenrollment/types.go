@@ -12,6 +12,8 @@ import (
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/executionadmission"
+	"github.com/xiak/matrix/app/service/paas/internal/audit"
 )
 
 const (
@@ -33,6 +35,7 @@ var (
 	ErrCredentialConsumed       = errors.New("node enrollment credential was consumed")
 	ErrRecoveryProofRejected    = errors.New("node enrollment recovery proof was rejected")
 	ErrRecoveryChallengeExpired = errors.New("node enrollment recovery challenge expired")
+	ErrVerificationFailed       = errors.New("node enrollment verification failed")
 	ErrRuntimeUnsupported       = errors.New("node enrollment runtime is unsupported")
 	ErrRetryableTransaction     = errors.New("node enrollment transaction must be retried")
 	ErrUnavailable              = errors.New("node enrollment dependency is unavailable")
@@ -171,7 +174,36 @@ type Config struct {
 	ControllerID                   string
 	ManagementPort                 uint16
 	CollectorPort                  uint16
+	CompletionProbeTimeout         time.Duration
+	CompletionProbe                CompletionProbe
+	CompletionAdmission            CompletionAdmission
 	MaxTransactionAttempts         int
+}
+
+type CompletionProbe interface {
+	Probe(
+		context.Context,
+		port.EnrolledNodeConnection,
+		paasv1.InspectExecutionTargetRequest,
+	) (paasv1.AdapterCapabilitiesContract, paasv1.ExecutionTargetObservation, error)
+}
+
+type CompletionAdmission interface {
+	PrepareEnrollmentTarget(
+		paasv1.RegisterExecutionTargetRequest,
+		executionadmission.Binding,
+		paasv1.AdapterCapabilitiesContract,
+		paasv1.ExecutionTargetObservation,
+		paasv1.ExecutionPool,
+		[]executionadmission.Registration,
+		[]paasv1.ExecutionTarget,
+		time.Time,
+	) (executionadmission.Registration, paasv1.ExecutionPool, error)
+	CompleteEnrollmentRegistration(
+		paasv1.Operation,
+		port.Authorization,
+		time.Time,
+	) (executionadmission.Submission, error)
 }
 
 type CreateCommand struct {
@@ -237,6 +269,25 @@ type RecoverExchangeCommand struct {
 	EnrollmentID        paasv1.ResourceID
 	ObservedPeerAddress string
 	Request             paasv1.RecoverNodeEnrollmentExchangeRequest
+}
+
+type CompleteCommand struct {
+	EnrollmentID        paasv1.ResourceID
+	ObservedPeerAddress string
+	Request             paasv1.CompleteNodeEnrollmentRequest
+}
+
+func (CompleteCommand) String() string {
+	return "node enrollment completion command <redacted>"
+}
+
+func (CompleteCommand) GoString() string {
+	return "node enrollment completion command <redacted>"
+}
+
+type CompleteResult struct {
+	Response paasv1.CompleteNodeEnrollmentResponse
+	Replayed bool
 }
 
 func (RecoverExchangeCommand) String() string {
@@ -311,12 +362,27 @@ type Transaction interface {
 	FindByTerminationFingerprint(context.Context, string) (StoredEnrollment, bool, error)
 	LoadEnrollment(context.Context, paasv1.ResourceID) (StoredEnrollment, bool, error)
 	LoadExecutionPool(context.Context, paasv1.ResourceID) (paasv1.ExecutionPool, bool, error)
+	LoadExecutionTarget(context.Context, paasv1.ResourceID) (executionadmission.Registration, bool, error)
+	ListExecutionTargets(context.Context) ([]executionadmission.Registration, error)
+	ListExecutionPoolTargets(context.Context, paasv1.ResourceID) ([]paasv1.ExecutionTarget, error)
+	LoadEnrolledNodeConnection(context.Context, paasv1.ResourceID) (port.EnrolledNodeConnection, bool, error)
 	ListEnrollments(context.Context, int) ([]StoredEnrollment, error)
 	InsertEnrollment(context.Context, StoredEnrollment) error
 	ExchangeEnrollment(context.Context, StoredEnrollment, StoredEnrollment) error
 	ExpireEnrollment(context.Context, StoredEnrollment, paasv1.NodeEnrollment, paasv1.Operation) error
 	RevokeEnrollment(context.Context, StoredEnrollment, StoredEnrollment) error
 	ReplaceEnrollment(context.Context, StoredEnrollment, StoredEnrollment, StoredEnrollment) error
+	CompleteEnrollment(
+		context.Context,
+		StoredEnrollment,
+		StoredEnrollment,
+		executionadmission.Registration,
+		port.EnrolledNodeConnection,
+		uint64,
+		paasv1.ExecutionPool,
+		audit.Event,
+	) error
+	FailEnrollment(context.Context, StoredEnrollment, StoredEnrollment) error
 }
 
 type Repository interface {

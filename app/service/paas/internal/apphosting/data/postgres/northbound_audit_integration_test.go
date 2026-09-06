@@ -599,6 +599,13 @@ func (integrationEnrollmentWorkflow) Exchange(
 	return nodeenrollment.ExchangeResult{}, nodeenrollment.ErrNotFound
 }
 
+func (integrationEnrollmentWorkflow) Complete(
+	context.Context,
+	nodeenrollment.CompleteCommand,
+) (nodeenrollment.CompleteResult, error) {
+	return nodeenrollment.CompleteResult{}, nodeenrollment.ErrNotFound
+}
+
 func (integrationEnrollmentWorkflow) CreateRecoveryChallenge(
 	context.Context,
 	nodeenrollment.RecoveryChallengeCommand,

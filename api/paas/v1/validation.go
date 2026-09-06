@@ -52,6 +52,7 @@ const (
 	NodeEnrollmentRecoveryChallengeRequestKind     = "NodeEnrollmentRecoveryChallengeRequest"
 	NodeEnrollmentRecoveryChallengeKind            = "NodeEnrollmentRecoveryChallenge"
 	NodeEnrollmentRecoveryProofRequestKind         = "NodeEnrollmentRecoveryProofRequest"
+	NodeEnrollmentCompletionRequestKind            = "NodeEnrollmentCompletionRequest"
 )
 
 var sensitiveKeyFragments = [...]string{
@@ -646,6 +647,52 @@ func ValidateNodeEnrollmentExchangeResponseForRequest(
 		!bytes.Equal(nodeCertificate.RawSubjectPublicKeyInfo, nodeRequest.RawSubjectPublicKeyInfo) ||
 		!bytes.Equal(collectorCertificate.RawSubjectPublicKeyInfo, collectorRequest.RawSubjectPublicKeyInfo) {
 		return errors.New("node enrollment exchange response changes its public keys")
+	}
+	return nil
+}
+
+func ValidateCompleteNodeEnrollmentRequest(value CompleteNodeEnrollmentRequest) error {
+	var problems []error
+	if value.APIVersion != NodeEnrollmentExchangeAPIVersion ||
+		value.Kind != NodeEnrollmentCompletionRequestKind ||
+		!nodeEnrollmentIDPattern.MatchString(string(value.EnrollmentID)) ||
+		!nodeExchangeIDPattern.MatchString(value.ExchangeID) ||
+		!nodeBindingIDPattern.MatchString(value.BindingRef) {
+		problems = append(problems, errors.New("node enrollment completion metadata is invalid"))
+	}
+	problems = append(problems,
+		ValidateID("installationId", value.InstallationID),
+		ValidateID("executionTargetId", string(value.ExecutionTargetID)),
+		ValidateID("controllerId", value.ControllerID),
+		ValidateDigest("machineFingerprint", value.MachineFingerprint),
+		ValidateDigest("runtimeContractDigest", value.RuntimeContractDigest),
+		ValidateDigest("nodePublicKeyFingerprint", value.NodePublicKeyFingerprint),
+		ValidateDigest("collectorPublicKeyFingerprint", value.CollectorPublicKeyFingerprint),
+	)
+	_, nodePort, nodeErr := parseNodeEnrollmentPrivateAddress(value.NodeListenAddress)
+	_, collectorPort, collectorErr := parseNodeEnrollmentCollectorEndpoint(value.CollectorEndpoint)
+	problems = append(problems, nodeErr, collectorErr)
+	if nodeErr == nil && collectorErr == nil && nodePort == collectorPort {
+		problems = append(problems, errors.New("node enrollment completion listener ports must be distinct"))
+	}
+	if value.NodePublicKeyFingerprint == value.CollectorPublicKeyFingerprint {
+		problems = append(problems, errors.New("node enrollment completion public keys must be distinct"))
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateCompleteNodeEnrollmentResponse(value CompleteNodeEnrollmentResponse) error {
+	if ValidateNodeEnrollment(value.Enrollment) != nil ||
+		ValidateExecutionTarget(value.ExecutionTarget) != nil ||
+		ValidateOperation(value.Operation) != nil ||
+		value.Enrollment.State != NodeEnrollmentReady ||
+		value.Enrollment.ExecutionTargetID != value.ExecutionTarget.Metadata.ID ||
+		value.Enrollment.ExecutionPoolID != value.ExecutionTarget.Spec.ExecutionPoolID ||
+		value.Enrollment.OperationID != value.Operation.ID ||
+		value.Operation.Action != OperationRegisterExecutionTarget ||
+		value.Operation.Target != (ResourceRef{Kind: "ExecutionTarget", ID: value.ExecutionTarget.Metadata.ID}) ||
+		value.Operation.State != OperationSucceeded {
+		return errors.New("node enrollment completion response is invalid")
 	}
 	return nil
 }

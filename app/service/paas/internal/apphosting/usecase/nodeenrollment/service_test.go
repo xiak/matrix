@@ -25,6 +25,8 @@ import (
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/executionadmission"
+	"github.com/xiak/matrix/app/service/paas/internal/audit"
 )
 
 func TestCreatePersistsOneWrappedEnrollmentAndExactlyReplaysIt(t *testing.T) {
@@ -234,6 +236,206 @@ func TestLostExchangeResponseRecoversOnlyWithBothPersistedRoleKeys(t *testing.T)
 		EnrollmentID: stored.Enrollment.Metadata.ID, ObservedPeerAddress: "192.168.50.10", Request: proof,
 	}); !errors.Is(err, ErrRecoveryChallengeExpired) {
 		t.Fatalf("expired recovery challenge error = %v", err)
+	}
+}
+
+func TestCompletionProbesOutsideTransactionAndAtomicallyPublishesExactEnrollment(t *testing.T) {
+	service, repository, issuer := enrollmentFixture(t)
+	create := createCommand(t)
+	created, err := service.Create(context.Background(), create)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository.now = repository.now.Add(time.Minute)
+	if _, err := service.Exchange(context.Background(), exchangeCommand(t, created, issuer, "a")); err != nil {
+		t.Fatal(err)
+	}
+	stored := repository.values[created.Response.Enrollment.Metadata.ID]
+	request := completionRequest(t, stored)
+	result, err := service.Complete(context.Background(), CompleteCommand{
+		EnrollmentID: stored.Enrollment.Metadata.ID, ObservedPeerAddress: "192.168.50.10", Request: request,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := repository.values[stored.Enrollment.Metadata.ID]
+	registration := repository.registrations[stored.Enrollment.ExecutionTargetID]
+	connection := repository.connections[stored.Enrollment.ExecutionTargetID]
+	if result.Replayed || paasv1.ValidateCompleteNodeEnrollmentResponse(result.Response) != nil ||
+		current.Enrollment.State != paasv1.NodeEnrollmentReady || current.Enrollment.Metadata.ResourceVersion != 3 ||
+		current.Operation.ID != stored.Operation.ID || current.Operation.State != paasv1.OperationSucceeded ||
+		current.SealedExchangeResult != nil || current.Exchange == nil ||
+		registration.Target.Metadata.ID != stored.Enrollment.ExecutionTargetID ||
+		registration.Target.Metadata.Labels["zone"] != "private-a" ||
+		registration.IdentityFingerprint != stored.Exchange.MachineFingerprint ||
+		connection != completionConnection(*stored.Exchange) || !connection.Enabled ||
+		repository.pool.Metadata.ResourceVersion != 2 || repository.pool.Status.ExecutionTargetCount != 1 ||
+		repository.completeCalls != 1 || repository.failCalls != 0 || len(repository.auditEvents) != 1 ||
+		repository.probe.calls != 1 || repository.probe.probedInsideTransaction {
+		t.Fatalf("completion did not publish one atomic enrollment: result=%#v stored=%#v registration=%#v connection=%#v", result, current, registration, connection)
+	}
+	if repository.probe.request.Command.OperationID != stored.Operation.ID ||
+		repository.probe.request.Command.ExecutionTargetID != stored.Enrollment.ExecutionTargetID ||
+		repository.probe.request.Command.BindingRef != stored.Exchange.BindingRef ||
+		!repository.probe.request.Command.Deadline.Equal(repository.now.Add(5*time.Second)) {
+		t.Fatalf("completion probe did not preserve stored authority: %#v", repository.probe.request)
+	}
+	replayed, err := service.Complete(context.Background(), CompleteCommand{
+		EnrollmentID: stored.Enrollment.Metadata.ID, ObservedPeerAddress: "192.168.50.10", Request: request,
+	})
+	if err != nil || !replayed.Replayed || !reflect.DeepEqual(replayed.Response, result.Response) ||
+		repository.probe.calls != 1 || repository.completeCalls != 1 || len(repository.auditEvents) != 1 {
+		t.Fatalf("completion replay=%#v err=%v probes=%d commits=%d", replayed, err, repository.probe.calls, repository.completeCalls)
+	}
+}
+
+func TestCompletionRejectsEveryChangedCommitmentBeforeProbe(t *testing.T) {
+	for name, mutate := range map[string]func(*CompleteCommand){
+		"peer":         func(value *CompleteCommand) { value.ObservedPeerAddress = "192.168.50.11" },
+		"installation": func(value *CompleteCommand) { value.Request.InstallationID = "installation-b" },
+		"target":       func(value *CompleteCommand) { value.Request.ExecutionTargetID = "target-other" },
+		"exchange": func(value *CompleteCommand) {
+			value.Request.ExchangeID = "node-exchange-" + strings.Repeat("b", 32)
+		},
+		"machine": func(value *CompleteCommand) {
+			value.Request.MachineFingerprint = "sha256:" + strings.Repeat("b", 64)
+		},
+		"runtime": func(value *CompleteCommand) {
+			value.Request.RuntimeContractDigest = "sha256:" + strings.Repeat("b", 64)
+		},
+		"controller": func(value *CompleteCommand) { value.Request.ControllerID = "paas-controller-v2" },
+		"binding": func(value *CompleteCommand) {
+			value.Request.BindingRef = "node-binding-" + strings.Repeat("b", 32)
+		},
+		"node endpoint": func(value *CompleteCommand) { value.Request.NodeListenAddress = "192.168.50.10:17443" },
+		"collector endpoint": func(value *CompleteCommand) {
+			value.Request.CollectorEndpoint = "https://127.0.0.1:19200"
+		},
+		"node key": func(value *CompleteCommand) {
+			value.Request.NodePublicKeyFingerprint = "sha256:" + strings.Repeat("b", 64)
+		},
+		"collector key": func(value *CompleteCommand) {
+			value.Request.CollectorPublicKeyFingerprint = "sha256:" + strings.Repeat("b", 64)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			service, repository, issuer := enrollmentFixture(t)
+			created, err := service.Create(context.Background(), createCommand(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			repository.now = repository.now.Add(time.Minute)
+			if _, err := service.Exchange(context.Background(), exchangeCommand(t, created, issuer, "a")); err != nil {
+				t.Fatal(err)
+			}
+			stored := repository.values[created.Response.Enrollment.Metadata.ID]
+			command := CompleteCommand{
+				EnrollmentID: stored.Enrollment.Metadata.ID, ObservedPeerAddress: "192.168.50.10",
+				Request: completionRequest(t, stored),
+			}
+			mutate(&command)
+			if _, err := service.Complete(context.Background(), command); !errors.Is(err, ErrConflict) {
+				t.Fatalf("changed completion error = %v", err)
+			}
+			current := repository.values[stored.Enrollment.Metadata.ID]
+			if current.Enrollment.State != paasv1.NodeEnrollmentVerifying || current.Enrollment.Metadata.ResourceVersion != 2 ||
+				current.SealedExchangeResult == nil || repository.probe.calls != 0 || repository.completeCalls != 0 ||
+				repository.failCalls != 0 || len(repository.registrations) != 0 || len(repository.connections) != 0 {
+				t.Fatal("changed completion reached probe or persistence")
+			}
+		})
+	}
+}
+
+func TestCompletionKeepsRetryableProbeFailureVerifying(t *testing.T) {
+	service, repository, issuer := enrollmentFixture(t)
+	created, err := service.Create(context.Background(), createCommand(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository.now = repository.now.Add(time.Minute)
+	if _, err := service.Exchange(context.Background(), exchangeCommand(t, created, issuer, "a")); err != nil {
+		t.Fatal(err)
+	}
+	stored := repository.values[created.Response.Enrollment.Metadata.ID]
+	repository.probe.err = paasv1.AdapterFault{Normalized: paasv1.NormalizedAdapterError{
+		Class: paasv1.AdapterErrorUnavailable, Code: paasv1.ErrorAdapterUnavailable,
+		Message: "private node detail must remain normalized", Retryable: true,
+	}}
+	_, err = service.Complete(context.Background(), CompleteCommand{
+		EnrollmentID: stored.Enrollment.Metadata.ID, ObservedPeerAddress: "192.168.50.10",
+		Request: completionRequest(t, stored),
+	})
+	current := repository.values[stored.Enrollment.Metadata.ID]
+	if !errors.Is(err, ErrUnavailable) || current.Enrollment.State != paasv1.NodeEnrollmentVerifying ||
+		current.Enrollment.Metadata.ResourceVersion != 2 || current.SealedExchangeResult == nil ||
+		repository.probe.calls != 1 || repository.completeCalls != 0 || repository.failCalls != 0 ||
+		len(repository.registrations) != 0 || len(repository.connections) != 0 || len(repository.auditEvents) != 0 {
+		t.Fatalf("retryable completion failure was not retained: err=%v stored=%#v", err, current)
+	}
+}
+
+func TestCompletionDefinitiveProbeFailureFailsClosed(t *testing.T) {
+	service, repository, issuer := enrollmentFixture(t)
+	created, err := service.Create(context.Background(), createCommand(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository.now = repository.now.Add(time.Minute)
+	if _, err := service.Exchange(context.Background(), exchangeCommand(t, created, issuer, "a")); err != nil {
+		t.Fatal(err)
+	}
+	stored := repository.values[created.Response.Enrollment.Metadata.ID]
+	repository.probe.err = paasv1.AdapterFault{Normalized: paasv1.NormalizedAdapterError{
+		Class: paasv1.AdapterErrorPermissionDenied, Code: paasv1.ErrorAdapterRejected,
+		Message: "node mTLS identity was rejected", Retryable: false,
+	}}
+	_, err = service.Complete(context.Background(), CompleteCommand{
+		EnrollmentID: stored.Enrollment.Metadata.ID, ObservedPeerAddress: "192.168.50.10",
+		Request: completionRequest(t, stored),
+	})
+	current := repository.values[stored.Enrollment.Metadata.ID]
+	if !errors.Is(err, ErrVerificationFailed) || current.Enrollment.State != paasv1.NodeEnrollmentFailed ||
+		current.Enrollment.Metadata.ResourceVersion != 3 || current.Enrollment.Diagnostic == nil ||
+		current.Enrollment.Diagnostic.Code != paasv1.NodeEnrollmentDiagnosticMTLS ||
+		current.Operation.State != paasv1.OperationFailed || current.Operation.Error == nil ||
+		current.SealedExchangeResult != nil || current.Exchange == nil || repository.failCalls != 1 ||
+		repository.completeCalls != 0 || len(repository.registrations) != 0 || len(repository.connections) != 0 ||
+		len(repository.auditEvents) != 0 {
+		t.Fatalf("definitive completion failure did not fail closed: err=%v stored=%#v", err, current)
+	}
+}
+
+func TestRevocationDuringCompletionProbePreventsPublication(t *testing.T) {
+	service, repository, issuer := enrollmentFixture(t)
+	create := createCommand(t)
+	created, err := service.Create(context.Background(), create)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository.now = repository.now.Add(time.Minute)
+	if _, err := service.Exchange(context.Background(), exchangeCommand(t, created, issuer, "a")); err != nil {
+		t.Fatal(err)
+	}
+	stored := repository.values[created.Response.Enrollment.Metadata.ID]
+	repository.probe.before = func() {
+		_, revokeErr := service.Revoke(context.Background(), RevokeCommand{
+			Authorization: create.Authorization, EnrollmentID: stored.Enrollment.Metadata.ID,
+			ExpectedResourceVersion: 2, IdempotencyKey: "revoke-during-completion",
+		})
+		if revokeErr != nil {
+			t.Errorf("revoke during probe: %v", revokeErr)
+		}
+	}
+	_, err = service.Complete(context.Background(), CompleteCommand{
+		EnrollmentID: stored.Enrollment.Metadata.ID, ObservedPeerAddress: "192.168.50.10",
+		Request: completionRequest(t, stored),
+	})
+	current := repository.values[stored.Enrollment.Metadata.ID]
+	if !errors.Is(err, ErrRevoked) || current.Enrollment.State != paasv1.NodeEnrollmentRevoked ||
+		repository.probe.calls != 1 || repository.completeCalls != 0 || repository.failCalls != 0 ||
+		len(repository.registrations) != 0 || len(repository.connections) != 0 || len(repository.auditEvents) != 0 {
+		t.Fatalf("revocation race published completion: err=%v stored=%#v", err, current)
 	}
 }
 
@@ -493,6 +695,10 @@ type fakeRepository struct {
 	now              time.Time
 	pool             paasv1.ExecutionPool
 	values           map[paasv1.ResourceID]StoredEnrollment
+	registrations    map[paasv1.ResourceID]executionadmission.Registration
+	connections      map[paasv1.ResourceID]port.EnrolledNodeConnection
+	auditEvents      []audit.Event
+	probe            *fakeCompletionProbe
 	failures         []error
 	transactionCalls int
 	insertCalls      int
@@ -500,6 +706,9 @@ type fakeRepository struct {
 	revokeCalls      int
 	replaceCalls     int
 	exchangeCalls    int
+	completeCalls    int
+	failCalls        int
+	active           bool
 }
 
 func (repository *fakeRepository) WithinInstallation(ctx context.Context, installationID string, callback func(context.Context, Transaction) error) error {
@@ -514,6 +723,8 @@ func (repository *fakeRepository) WithinInstallation(ctx context.Context, instal
 			return err
 		}
 	}
+	repository.active = true
+	defer func() { repository.active = false }()
 	return callback(ctx, repository)
 }
 
@@ -546,6 +757,40 @@ func (repository *fakeRepository) LoadEnrollment(_ context.Context, id paasv1.Re
 
 func (repository *fakeRepository) LoadExecutionPool(_ context.Context, id paasv1.ResourceID) (paasv1.ExecutionPool, bool, error) {
 	return repository.pool, repository.pool.Metadata.ID == id, nil
+}
+
+func (repository *fakeRepository) LoadExecutionTarget(_ context.Context, id paasv1.ResourceID) (executionadmission.Registration, bool, error) {
+	registration, found := repository.registrations[id]
+	return registration, found, nil
+}
+
+func (repository *fakeRepository) ListExecutionTargets(context.Context) ([]executionadmission.Registration, error) {
+	values := make([]executionadmission.Registration, 0, len(repository.registrations))
+	for _, registration := range repository.registrations {
+		values = append(values, registration)
+	}
+	sort.Slice(values, func(left, right int) bool {
+		return values[left].Target.Metadata.ID < values[right].Target.Metadata.ID
+	})
+	return values, nil
+}
+
+func (repository *fakeRepository) ListExecutionPoolTargets(_ context.Context, poolID paasv1.ResourceID) ([]paasv1.ExecutionTarget, error) {
+	values := make([]paasv1.ExecutionTarget, 0, len(repository.registrations))
+	for _, registration := range repository.registrations {
+		if registration.Target.Spec.ExecutionPoolID == poolID {
+			values = append(values, registration.Target)
+		}
+	}
+	sort.Slice(values, func(left, right int) bool {
+		return values[left].Metadata.ID < values[right].Metadata.ID
+	})
+	return values, nil
+}
+
+func (repository *fakeRepository) LoadEnrolledNodeConnection(_ context.Context, id paasv1.ResourceID) (port.EnrolledNodeConnection, bool, error) {
+	connection, found := repository.connections[id]
+	return connection, found, nil
 }
 
 func (repository *fakeRepository) ListEnrollments(_ context.Context, limit int) ([]StoredEnrollment, error) {
@@ -652,6 +897,130 @@ func (repository *fakeRepository) ReplaceEnrollment(
 	repository.values[after.Enrollment.Metadata.ID] = cloneStored(after)
 	repository.values[replacement.Enrollment.Metadata.ID] = cloneStored(replacement)
 	return nil
+}
+
+func (repository *fakeRepository) CompleteEnrollment(
+	_ context.Context,
+	before StoredEnrollment,
+	after StoredEnrollment,
+	registration executionadmission.Registration,
+	connection port.EnrolledNodeConnection,
+	expectedPoolVersion uint64,
+	pool paasv1.ExecutionPool,
+	event audit.Event,
+) error {
+	current, found := repository.values[before.Enrollment.Metadata.ID]
+	if !found || current.Enrollment.Metadata.ResourceVersion != before.Enrollment.Metadata.ResourceVersion ||
+		current.Enrollment.State != paasv1.NodeEnrollmentVerifying ||
+		ValidateStoredEnrollment(after, "installation-a") != nil ||
+		after.Enrollment.State != paasv1.NodeEnrollmentReady ||
+		repository.pool.Metadata.ResourceVersion != expectedPoolVersion ||
+		paasv1.ValidateExecutionPool(pool) != nil || pool.Metadata.ID != repository.pool.Metadata.ID ||
+		paasv1.ValidateExecutionTarget(registration.Target) != nil ||
+		registration.Target.Metadata.ID != after.Enrollment.ExecutionTargetID ||
+		registration.Target.Spec.ExecutionPoolID != after.Enrollment.ExecutionPoolID ||
+		port.ValidateEnrolledNodeConnection(connection) != nil ||
+		connection.ExecutionTargetID != registration.Target.Metadata.ID ||
+		connection.BindingRef != registration.BindingRef ||
+		connection.IdentityFingerprint != registration.IdentityFingerprint ||
+		audit.ValidateEvent(event) != nil || event.OperationID != after.Operation.ID {
+		return ErrRetryableTransaction
+	}
+	if _, exists := repository.registrations[registration.Target.Metadata.ID]; exists {
+		return ErrConflict
+	}
+	repository.completeCalls++
+	repository.values[after.Enrollment.Metadata.ID] = cloneStored(after)
+	repository.registrations[registration.Target.Metadata.ID] = registration
+	repository.connections[connection.ExecutionTargetID] = connection
+	repository.pool = pool
+	repository.auditEvents = append(repository.auditEvents, event)
+	return nil
+}
+
+func (repository *fakeRepository) FailEnrollment(_ context.Context, before StoredEnrollment, after StoredEnrollment) error {
+	current, found := repository.values[before.Enrollment.Metadata.ID]
+	if !found || current.Enrollment.Metadata.ResourceVersion != before.Enrollment.Metadata.ResourceVersion ||
+		current.Enrollment.State != paasv1.NodeEnrollmentVerifying ||
+		ValidateStoredEnrollment(after, "installation-a") != nil || after.Enrollment.State != paasv1.NodeEnrollmentFailed {
+		return ErrRetryableTransaction
+	}
+	repository.failCalls++
+	repository.values[after.Enrollment.Metadata.ID] = cloneStored(after)
+	return nil
+}
+
+type fakeCompletionProbe struct {
+	repository              *fakeRepository
+	capabilities            paasv1.AdapterCapabilitiesContract
+	observation             paasv1.ExecutionTargetObservation
+	err                     error
+	before                  func()
+	calls                   int
+	connection              port.EnrolledNodeConnection
+	request                 paasv1.InspectExecutionTargetRequest
+	probedInsideTransaction bool
+}
+
+func (probe *fakeCompletionProbe) Probe(
+	_ context.Context,
+	connection port.EnrolledNodeConnection,
+	request paasv1.InspectExecutionTargetRequest,
+) (paasv1.AdapterCapabilitiesContract, paasv1.ExecutionTargetObservation, error) {
+	probe.calls++
+	probe.probedInsideTransaction = probe.probedInsideTransaction || probe.repository.active
+	probe.connection, probe.request = connection, request
+	if probe.before != nil {
+		probe.before()
+	}
+	if probe.err != nil {
+		return paasv1.AdapterCapabilitiesContract{}, paasv1.ExecutionTargetObservation{}, probe.err
+	}
+	now := probe.repository.now
+	capabilities := probe.capabilities
+	if capabilities.Adapter.Name == "" {
+		capabilities = paasv1.AdapterCapabilitiesContract{
+			Adapter: paasv1.AdapterRef{Kind: paasv1.AdapterInfrastructure, Name: "nodehttps", ContractVersion: "v1"},
+			Actions: []paasv1.AdapterAction{
+				paasv1.AdapterCapabilities,
+				paasv1.AdapterInspectExecutionTarget,
+				paasv1.AdapterObserveExecutionTarget,
+			},
+			IsolationGuarantees: []paasv1.IsolationGuarantee{paasv1.IsolationWorkload},
+			ObservedAt:          now,
+		}
+	}
+	observation := probe.observation
+	if observation.ExecutionTargetID == "" {
+		observation = completionObservation(connection, now)
+	}
+	return capabilities, observation, nil
+}
+
+func completionObservation(connection port.EnrolledNodeConnection, now time.Time) paasv1.ExecutionTargetObservation {
+	return paasv1.ExecutionTargetObservation{
+		ExecutionTargetID: connection.ExecutionTargetID, IdentityFingerprint: connection.IdentityFingerprint,
+		Health:                       paasv1.ExecutionTargetHealthReady,
+		Capacity:                     paasv1.Capacity{CPUMillis: 4000, MemoryBytes: 8 << 30, StorageBytes: 100 << 30, WorkloadSlots: 32},
+		Allocatable:                  paasv1.Capacity{CPUMillis: 3000, MemoryBytes: 6 << 30, StorageBytes: 80 << 30, WorkloadSlots: 24},
+		SupportedIsolationGuarantees: []paasv1.IsolationGuarantee{paasv1.IsolationWorkload}, ObservedAt: now,
+		Usage: &paasv1.ExecutionTargetUsage{
+			ObservedAt: now, ValidUntil: now.Add(15 * time.Second),
+			CPU:              paasv1.CPUUsage{State: paasv1.MeasurementUnavailable},
+			Memory:           paasv1.MemoryUsage{State: paasv1.MeasurementUnavailable},
+			FilesystemsState: paasv1.MeasurementUnavailable,
+		},
+	}
+}
+
+type unusedAdmissionRepository struct{}
+
+func (unusedAdmissionRepository) WithinTransaction(
+	context.Context,
+	string,
+	func(context.Context, executionadmission.Transaction) error,
+) error {
+	return executionadmission.ErrUnavailable
 }
 
 type fakeJoinIssuer struct {
@@ -875,6 +1244,8 @@ func enrollmentFixture(t *testing.T) (*Service, *fakeRepository, *fakeJoinIssuer
 	}
 	repository := &fakeRepository{
 		now: now, values: map[paasv1.ResourceID]StoredEnrollment{},
+		registrations: map[paasv1.ResourceID]executionadmission.Registration{},
+		connections:   map[paasv1.ResourceID]port.EnrolledNodeConnection{},
 		pool: paasv1.ExecutionPool{
 			APIVersion: paasv1.APIVersion, Kind: "ExecutionPool",
 			Metadata: paasv1.ResourceMetadata{
@@ -885,6 +1256,15 @@ func enrollmentFixture(t *testing.T) (*Service, *fakeRepository, *fakeJoinIssuer
 			Status: paasv1.ExecutionPoolStatus{Phase: paasv1.ExecutionPoolUnavailable, ObservedAt: now},
 		},
 	}
+	repository.probe = &fakeCompletionProbe{repository: repository}
+	admission, err := executionadmission.New(unusedAdmissionRepository{}, executionadmission.Config{
+		InstallationID: "installation-a", ObservationTimeout: time.Second,
+		MaximumObservationAge: 15 * time.Second, MaxTransactionAttempts: 3,
+		Clock: func() time.Time { return repository.now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	issuer := &fakeJoinIssuer{installationID: "installation-a", certificate: certificate, privateKey: privateKey, credentials: map[paasv1.ResourceID][]byte{}}
 	service, err := New(repository, issuer, Config{
 		InstallationID: "installation-a", Lifetime: 15 * time.Minute,
@@ -892,6 +1272,9 @@ func enrollmentFixture(t *testing.T) (*Service, *fakeRepository, *fakeJoinIssuer
 		RecoveryChallengeLifetime:      2 * time.Minute,
 		SupportedRuntimeContractDigest: "sha256:" + strings.Repeat("c", 64),
 		ControllerID:                   "paas-controller-v1", ManagementPort: 16443, CollectorPort: 19100,
+		CompletionProbeTimeout: 5 * time.Second,
+		CompletionProbe:        repository.probe,
+		CompletionAdmission:    admission,
 		MaxTransactionAttempts: 3,
 	})
 	if err != nil {
@@ -996,6 +1379,24 @@ func exchangeCommandWithKeys(
 			CollectorCertificateRequest: certificateRequest(collectorPrivateKey),
 		},
 	}, nodePrivateKey, collectorPrivateKey
+}
+
+func completionRequest(t *testing.T, stored StoredEnrollment) paasv1.CompleteNodeEnrollmentRequest {
+	t.Helper()
+	if stored.Exchange == nil {
+		t.Fatal("completion fixture has no exchanged identity")
+	}
+	exchange := stored.Exchange
+	return paasv1.CompleteNodeEnrollmentRequest{
+		APIVersion: paasv1.NodeEnrollmentExchangeAPIVersion, Kind: paasv1.NodeEnrollmentCompletionRequestKind,
+		EnrollmentID: exchange.EnrollmentID, InstallationID: exchange.InstallationID,
+		ExecutionTargetID: exchange.ExecutionTargetID, ExchangeID: exchange.ExchangeID,
+		MachineFingerprint: exchange.MachineFingerprint, RuntimeContractDigest: exchange.RuntimeContractDigest,
+		ControllerID: exchange.ControllerID, BindingRef: exchange.BindingRef,
+		NodeListenAddress: exchange.NodeListenAddress, CollectorEndpoint: exchange.CollectorEndpoint,
+		NodePublicKeyFingerprint:      exchange.NodePublicKeyFingerprint,
+		CollectorPublicKeyFingerprint: exchange.CollectorPublicKeyFingerprint,
+	}
 }
 
 func integrationTestEd25519PrivateKey(t *testing.T) ed25519.PrivateKey {

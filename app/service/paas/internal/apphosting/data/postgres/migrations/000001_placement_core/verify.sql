@@ -18,6 +18,7 @@ BEGIN
             ('execution_pools'),
             ('execution_targets'),
             ('node_enrollments'),
+            ('enrolled_node_connections'),
             ('execution_target_allocations'),
             ('adapter_commands'),
             ('adapter_receipts'),
@@ -71,6 +72,7 @@ BEGIN
             'execution_pools',
             'execution_targets',
             'node_enrollments',
+            'enrolled_node_connections',
             'adapter_commands',
             'adapter_receipts',
             'deployment_observations',
@@ -129,6 +131,10 @@ BEGIN
             ('node_enrollments_exchange_document_valid'),
             ('node_enrollments_sealed_result_valid'),
             ('node_enrollments_document_identity'),
+            ('enrolled_node_connections_target_fk'),
+            ('enrolled_node_connections_binding_uq'),
+            ('enrolled_node_connections_fingerprint_uq'),
+            ('enrolled_node_connections_identity_valid'),
             ('execution_target_allocations_target_fk'),
             ('adapter_commands_operation_action_uq'),
             ('adapter_commands_operation_fk'),
@@ -224,7 +230,8 @@ BEGIN
             ('terminal_sessions'),
             ('placement_decisions'),
             ('capacity_reservations'),
-            ('node_enrollments')
+            ('node_enrollments'),
+            ('enrolled_node_connections')
       ) AS required(table_name)
      WHERE NOT EXISTS (
         SELECT 1
@@ -234,7 +241,7 @@ BEGIN
            AND policyname = CASE
                 WHEN required.table_name IN ('operations', 'audit_outbox')
                     THEN 'authority_isolation'
-                WHEN required.table_name = 'node_enrollments'
+                WHEN required.table_name IN ('node_enrollments', 'enrolled_node_connections')
                     THEN 'installation_read'
                 ELSE 'tenant_isolation'
            END
@@ -352,6 +359,14 @@ BEGIN
             (
                 'revoke_node_enrollment',
                 'requested_enrollment_id text, expected_resource_version bigint, submitted_termination_fingerprint text, submitted_termination_request_digest text, submitted_enrollment jsonb, submitted_operation jsonb, submitted_replacement jsonb, submitted_replacement_operation jsonb'
+            ),
+            (
+                'fail_node_enrollment',
+                'requested_enrollment_id text, expected_resource_version bigint, submitted_enrollment jsonb, submitted_operation jsonb'
+            ),
+            (
+                'complete_node_enrollment',
+                'requested_enrollment_id text, expected_enrollment_version bigint, submitted_enrollment jsonb, submitted_operation jsonb, submitted_target jsonb, submitted_binding_ref text, submitted_identity_fingerprint text, submitted_controller_id text, submitted_endpoint text, expected_pool_version bigint, submitted_pool jsonb, submitted_audit_event jsonb'
             ),
             (
                 'transition_execution_target',
@@ -563,6 +578,7 @@ BEGIN
        OR has_table_privilege('matrix_paas_api', 'paas.execution_pools', 'INSERT, UPDATE, DELETE')
        OR has_table_privilege('matrix_paas_api', 'paas.execution_targets', 'INSERT, UPDATE, DELETE')
        OR has_table_privilege('matrix_paas_api', 'paas.node_enrollments', 'INSERT, UPDATE, DELETE')
+       OR has_table_privilege('matrix_paas_api', 'paas.enrolled_node_connections', 'INSERT, UPDATE, DELETE')
        OR has_table_privilege(
             'matrix_paas_api',
             'paas.audit_outbox',
@@ -718,6 +734,11 @@ BEGIN
        )
        OR has_table_privilege(
             'matrix_paas_worker',
+            'paas.enrolled_node_connections',
+            'INSERT, UPDATE, DELETE'
+       )
+       OR has_table_privilege(
+            'matrix_paas_worker',
             'paas.placement_policies',
             'INSERT, UPDATE, DELETE'
        )
@@ -734,6 +755,8 @@ BEGIN
        OR NOT has_function_privilege('matrix_paas_api', 'paas.exchange_node_enrollment(text,bigint,text,jsonb,jsonb,jsonb,jsonb)', 'EXECUTE')
        OR NOT has_function_privilege('matrix_paas_api', 'paas.expire_node_enrollment(text,bigint,jsonb,jsonb)', 'EXECUTE')
        OR NOT has_function_privilege('matrix_paas_api', 'paas.revoke_node_enrollment(text,bigint,text,text,jsonb,jsonb,jsonb,jsonb)', 'EXECUTE')
+       OR NOT has_function_privilege('matrix_paas_api', 'paas.fail_node_enrollment(text,bigint,jsonb,jsonb)', 'EXECUTE')
+       OR NOT has_function_privilege('matrix_paas_api', 'paas.complete_node_enrollment(text,bigint,jsonb,jsonb,jsonb,text,text,text,text,bigint,jsonb,jsonb)', 'EXECUTE')
        OR NOT has_function_privilege('matrix_paas_api', 'paas.transition_execution_target(bigint,jsonb,bigint,jsonb,jsonb,jsonb)', 'EXECUTE')
        OR NOT has_function_privilege('matrix_paas_api', 'paas.refresh_execution_target(bigint,jsonb,bigint,jsonb)', 'EXECUTE')
        OR EXISTS (
@@ -774,6 +797,8 @@ BEGIN
        OR has_function_privilege('matrix_paas_worker', 'paas.exchange_node_enrollment(text,bigint,text,jsonb,jsonb,jsonb,jsonb)', 'EXECUTE')
        OR has_function_privilege('matrix_paas_worker', 'paas.expire_node_enrollment(text,bigint,jsonb,jsonb)', 'EXECUTE')
        OR has_function_privilege('matrix_paas_worker', 'paas.revoke_node_enrollment(text,bigint,text,text,jsonb,jsonb,jsonb,jsonb)', 'EXECUTE')
+       OR has_function_privilege('matrix_paas_worker', 'paas.fail_node_enrollment(text,bigint,jsonb,jsonb)', 'EXECUTE')
+       OR has_function_privilege('matrix_paas_worker', 'paas.complete_node_enrollment(text,bigint,jsonb,jsonb,jsonb,text,text,text,text,bigint,jsonb,jsonb)', 'EXECUTE')
        OR has_function_privilege('matrix_paas_worker', 'paas.transition_execution_target(bigint,jsonb,bigint,jsonb,jsonb,jsonb)', 'EXECUTE')
        OR has_function_privilege('matrix_paas_worker', 'paas.refresh_execution_target(bigint,jsonb,bigint,jsonb)', 'EXECUTE')
        OR has_function_privilege('matrix_paas_api', 'paas.store_execution_pool_observation(bigint,jsonb)', 'EXECUTE')
@@ -814,6 +839,11 @@ BEGIN
             'SELECT'
        )
        OR NOT has_table_privilege(
+            'matrix_paas_api',
+            'paas.enrolled_node_connections',
+            'SELECT'
+       )
+       OR NOT has_table_privilege(
             'matrix_paas_worker',
             'paas.adapter_commands',
             'SELECT'
@@ -826,6 +856,11 @@ BEGIN
        OR NOT has_table_privilege(
             'matrix_paas_worker',
             'paas.deployment_runtime_snapshots',
+            'SELECT'
+       )
+       OR NOT has_table_privilege(
+            'matrix_paas_worker',
+            'paas.enrolled_node_connections',
             'SELECT'
        )
        OR NOT has_function_privilege(
@@ -1003,7 +1038,9 @@ BEGIN
             'matrix_paas_worker',
             'paas.append_audit_outbox(jsonb, jsonb)',
             'EXECUTE'
-       ) THEN
+       )
+       OR (SELECT schema_version FROM paas.readiness()) IS DISTINCT FROM 5::bigint
+       OR (SELECT schema_version FROM paas.worker_readiness()) IS DISTINCT FROM 5::bigint THEN
         RAISE EXCEPTION 'application roles lack required current privileges';
     END IF;
 END

@@ -96,6 +96,9 @@ func verifiedInstallationConfiguration(
 		if err := ensureEnrollmentIngress(plan.Root, plan.InstallationID, nil); err != nil {
 			return verifiedInstallation{}, errors.New("node enrollment ingress authority is unsafe")
 		}
+		if err := ensureEnrollmentController(plan.Root, plan.InstallationID, nil); err != nil {
+			return verifiedInstallation{}, errors.New("node enrollment controller authority is unsafe")
+		}
 	}
 	catalog, err := installedArtifactCatalogConfig(plan)
 	if err != nil {

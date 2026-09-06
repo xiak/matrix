@@ -220,17 +220,39 @@ func TestRealMTLSBindsBothPeersAndReturnsOnlyTheSelectedNode(t *testing.T) {
 	otherURI, _ := nodev1.ControllerURI(nodeIdentity.InstallationID, "worker-b")
 	other := authority.issue(t, otherURI, x509.ExtKeyUsageClientAuth, false)
 	wrongController := newClient(t, server.URL, other.credentials, nodeIdentity, "worker-b")
-	if _, err := wrongController.ObserveExecutionTarget(context.Background(), paasv1.ObserveExecutionTargetRequest{Command: observationCommand()}); err == nil {
-		t.Fatal("another controller identity passed mTLS")
+	if _, err := wrongController.ObserveExecutionTarget(context.Background(), paasv1.ObserveExecutionTargetRequest{Command: observationCommand()}); !nonRetryableAdapterFault(err, paasv1.ErrorAdapterRejected) {
+		t.Fatalf("another controller identity mTLS error = %v", err)
 	}
 	wrongNodeIdentity := nodeIdentity
 	wrongNodeIdentity.ExecutionTargetID = "target-b"
 	wrongNode := newClient(t, server.URL, controller.credentials, wrongNodeIdentity, controllerID)
 	command := observationCommand()
 	command.ExecutionTargetID = wrongNodeIdentity.ExecutionTargetID
-	if _, err := wrongNode.ObserveExecutionTarget(context.Background(), paasv1.ObserveExecutionTargetRequest{Command: command}); err == nil {
-		t.Fatal("trusted CA alone admitted another node identity")
+	if _, err := wrongNode.ObserveExecutionTarget(context.Background(), paasv1.ObserveExecutionTargetRequest{Command: command}); !nonRetryableAdapterFault(err, paasv1.ErrorAdapterRejected) {
+		t.Fatalf("wrong node identity mTLS error = %v", err)
 	}
+	unreachable := newClient(t, "https://127.0.0.1:1", controller.credentials, nodeIdentity, controllerID)
+	if _, err := unreachable.ObserveExecutionTarget(context.Background(), paasv1.ObserveExecutionTargetRequest{Command: observationCommand()}); !retryableAdapterFault(err, paasv1.ErrorExecutionTargetUnavailable) {
+		t.Fatalf("unreachable node error = %v", err)
+	}
+	interruptedListener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	interruptedDone := make(chan struct{})
+	go func() {
+		defer close(interruptedDone)
+		connection, acceptErr := interruptedListener.Accept()
+		if acceptErr == nil {
+			_ = connection.Close()
+		}
+	}()
+	interrupted := newClient(t, "https://"+interruptedListener.Addr().String(), controller.credentials, nodeIdentity, controllerID)
+	if _, err := interrupted.ObserveExecutionTarget(context.Background(), paasv1.ObserveExecutionTargetRequest{Command: observationCommand()}); !retryableAdapterFault(err, paasv1.ErrorExecutionTargetUnavailable) {
+		t.Fatalf("interrupted TLS handshake error = %v", err)
+	}
+	_ = interruptedListener.Close()
+	<-interruptedDone
 	foreign := newAuthority(t).issue(t, controllerURI, x509.ExtKeyUsageClientAuth, false)
 	expired := authority.issue(t, controllerURI, x509.ExtKeyUsageClientAuth, true)
 	for name, certificate := range map[string]*tls.Certificate{"missing certificate": nil, "untrusted issuer": &foreign.pair, "expired certificate": &expired.pair} {
@@ -249,6 +271,16 @@ func TestRealMTLSBindsBothPeersAndReturnsOnlyTheSelectedNode(t *testing.T) {
 	if calls.Load() != 1 {
 		t.Fatalf("rejected peer reached the observation source: %d calls", calls.Load())
 	}
+}
+
+func nonRetryableAdapterFault(err error, code paasv1.ErrorCode) bool {
+	var fault paasv1.AdapterFault
+	return errors.As(err, &fault) && fault.Normalized.Code == code && !fault.Normalized.Retryable
+}
+
+func retryableAdapterFault(err error, code paasv1.ErrorCode) bool {
+	var fault paasv1.AdapterFault
+	return errors.As(err, &fault) && fault.Normalized.Code == code && fault.Normalized.Retryable
 }
 
 func TestRealMTLSDeploymentBindsExactTargetMaterialsAndObservation(t *testing.T) {

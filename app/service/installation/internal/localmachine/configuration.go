@@ -319,6 +319,14 @@ func artifactCatalogConfig(manifests ...release.Manifest) ([]byte, error) {
 }
 
 func apisixMainConfig() []byte {
+	return replaceStaticAPISIXFragment(
+		predecessorAPISIXMainConfig(),
+		[]byte("(?:exchange|recovery-challenge|recover))$\""),
+		[]byte("(?:exchange|recovery-challenge|recover|complete))$\""),
+	)
+}
+
+func predecessorAPISIXMainConfig() []byte {
 	prefix := []byte(fmt.Sprintf(`apisix:
   node_listen:
     - ip: 0.0.0.0
@@ -328,7 +336,26 @@ func apisixMainConfig() []byte {
   ssl:
     enable: false
 `, topology.NodeEnrollmentIngressLoopbackPort))
-	predecessor := predecessorAPISIXMainConfig()
+	base := []byte(`deployment:
+  role: data_plane
+  role_data_plane:
+    config_provider: yaml
+plugins:
+  - proxy-rewrite
+  - serverless-pre-function
+stream_plugins: []
+nginx_config:
+  user: root
+  error_log: /dev/stderr
+  http:
+    access_log: /dev/stdout
+  http_configuration_snippet: |
+    client_body_temp_path /tmp/client_body_temp;
+    proxy_temp_path /tmp/proxy_temp;
+    fastcgi_temp_path /tmp/fastcgi_temp;
+    uwsgi_temp_path /tmp/uwsgi_temp;
+    scgi_temp_path /tmp/scgi_temp;
+`)
 	marker := []byte("    scgi_temp_path /tmp/scgi_temp;\n")
 	withEnrollmentIngress := []byte(fmt.Sprintf(`    scgi_temp_path /tmp/scgi_temp;
     server {
@@ -367,34 +394,24 @@ func apisixMainConfig() []byte {
 		topology.NodeEnrollmentIngressPrivateKeyTarget,
 		topology.NodeEnrollmentIngressLoopbackPort,
 	))
-	return append(prefix, replaceStaticAPISIXFragment(predecessor, marker, withEnrollmentIngress)...)
-}
-
-func predecessorAPISIXMainConfig() []byte {
-	return []byte(`deployment:
-  role: data_plane
-  role_data_plane:
-    config_provider: yaml
-plugins:
-  - proxy-rewrite
-  - serverless-pre-function
-stream_plugins: []
-nginx_config:
-  user: root
-  error_log: /dev/stderr
-  http:
-    access_log: /dev/stdout
-  http_configuration_snippet: |
-    client_body_temp_path /tmp/client_body_temp;
-    proxy_temp_path /tmp/proxy_temp;
-    fastcgi_temp_path /tmp/fastcgi_temp;
-    uwsgi_temp_path /tmp/uwsgi_temp;
-    scgi_temp_path /tmp/scgi_temp;
-`)
+	return append(prefix, replaceStaticAPISIXFragment(base, marker, withEnrollmentIngress)...)
 }
 
 func apisixStandaloneConfig() []byte {
-	predecessor := predecessorAPISIXStandaloneConfig()
+	withCompletionURI := replaceStaticAPISIXFragment(
+		predecessorAPISIXStandaloneConfig(),
+		[]byte("      - /api/paas/v1/node-enrollments/*/recover\n"),
+		[]byte("      - /api/paas/v1/node-enrollments/*/recover\n      - /api/paas/v1/node-enrollments/*/complete\n"),
+	)
+	return replaceStaticAPISIXFragment(
+		withCompletionURI,
+		[]byte("(?:exchange|recovery-challenge|recover)$\""),
+		[]byte("(?:exchange|recovery-challenge|recover|complete)$\""),
+	)
+}
+
+func predecessorAPISIXStandaloneConfig() []byte {
+	predecessor := apisixStandaloneBaseConfig()
 	withPublicOrigin := replaceStaticAPISIXFragment(
 		predecessor, paasPublicOriginAPISIXPredecessor, paasPublicOriginAPISIXCurrent(),
 	)
@@ -487,7 +504,7 @@ func nodeEnrollmentBootstrapAPISIXRoute() []byte {
 `, topology.NodeEnrollmentIngressLoopbackPort))
 }
 
-func predecessorAPISIXStandaloneConfig() []byte {
+func apisixStandaloneBaseConfig() []byte {
 	return []byte(`routes:
   -
     id: matrix-ready

@@ -8,6 +8,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"io"
 	"log"
 	"math/big"
@@ -26,6 +27,8 @@ import (
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	nodehttps "github.com/xiak/matrix/app/adapter/node/https"
 	"github.com/xiak/matrix/app/service/installation/nodeconfig"
+	"github.com/xiak/matrix/app/service/paas/cmd/internal/nodeconnections"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/executionadmission"
 )
 
@@ -198,6 +201,151 @@ func TestNodeCredentialReloadKeepsTheAdmittedMappingAndNeverFallsBack(t *testing
 			observe(second.serial)
 		})
 	}
+}
+
+func TestDynamicNodeConnectionLoadsCommittedRouteAndProtectedControllerCredential(t *testing.T) {
+	root := t.TempDir()
+	public, authorityKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "dynamic connection fixture"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), IsCA: true,
+		BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
+	}
+	authorityDER, err := x509.CreateCertificate(rand.Reader, authority, authority, public, authorityKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trust := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: authorityDER})
+	trustFile := filepath.Join(root, "enrollment-controller-trust.pem")
+	if err := os.WriteFile(trustFile, trust, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	identity := nodev1.Identity{InstallationID: "installation-a", ExecutionTargetID: "target-dynamic"}
+	nodeURI, _ := nodev1.NodeURI(identity)
+	controllerURI, _ := nodev1.ControllerURI(identity.InstallationID, "controller-a")
+	node := issueConnectionCertificate(t, root, "dynamic-node", nodeURI, x509.ExtKeyUsageServerAuth, authority, authorityKey, trust)
+	controller := issueConnectionCertificate(t, root, "enrollment-controller", controllerURI, x509.ExtKeyUsageClientAuth, authority, authorityKey, trust)
+	var calls atomic.Int32
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		calls.Add(1)
+		response.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	server.TLS, err = nodehttps.ServerTLS(node.credentials, identity, "controller-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.Config.ErrorLog = log.New(io.Discard, "", 0)
+	server.StartTLS()
+	defer server.Close()
+	connection := port.EnrolledNodeConnection{
+		InstallationID: identity.InstallationID, ExecutionTargetID: identity.ExecutionTargetID,
+		ControllerID: "controller-a", BindingRef: "node-binding-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Endpoint: server.URL, IdentityFingerprint: "sha256:" + strings.Repeat("b", 64), Enabled: true,
+	}
+	reader := &dynamicConnectionReader{connection: connection, found: true}
+	resolver, err := nodeconnections.NewDynamic(reader, nodeconnections.DynamicConfig{
+		InstallationID: identity.InstallationID, ControllerID: connection.ControllerID,
+		CertificateFile: controller.certificate, PrivateKeyFile: controller.key, TrustFile: trustFile,
+	})
+	if err != nil {
+		t.Fatalf("create dynamic connection resolver: %v", err)
+	}
+	resolved, found, err := resolver.Resolve(context.Background(), identity.ExecutionTargetID, connection.BindingRef)
+	if err != nil || !found || resolved != connection || reader.installationID != identity.InstallationID {
+		t.Fatalf("resolve committed connection = %#v found=%t err=%v", resolved, found, err)
+	}
+	adapter, closeAdapter, found, err := resolver.ResolveInfrastructureAdapter(
+		context.Background(), identity.ExecutionTargetID, connection.BindingRef, connection.IdentityFingerprint,
+	)
+	if err != nil || !found {
+		t.Fatalf("resolve dynamic infrastructure adapter: found=%t err=%v", found, err)
+	}
+	_, observeErr := adapter.ObserveExecutionTarget(context.Background(), paasv1.ObserveExecutionTargetRequest{
+		Command: paasv1.AdapterCommandEnvelope{
+			OperationID: "operation-dynamic", CommandID: "command-dynamic", Attempt: 1,
+			Action:            paasv1.AdapterObserveExecutionTarget,
+			Scope:             paasv1.ResourceScope{Kind: paasv1.AuthorityPlatform},
+			ExecutionTargetID: identity.ExecutionTargetID, BindingRef: connection.BindingRef,
+			RequestDigest: "sha256:" + strings.Repeat("c", 64),
+			Deadline:      time.Now().UTC().Truncate(time.Microsecond).Add(5 * time.Second),
+		},
+	})
+	closeAdapter()
+	var fault paasv1.AdapterFault
+	if !errors.As(observeErr, &fault) || !fault.Normalized.Retryable || calls.Load() != 1 {
+		t.Fatalf("dynamic mTLS observation error=%v calls=%d", observeErr, calls.Load())
+	}
+	controllerKey, err := os.ReadFile(controller.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(controllerKey)
+	if err := os.WriteFile(controller.key, []byte("invalid replacement"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	adapter, closeAdapter, found, err = resolver.ResolveInfrastructureAdapter(
+		context.Background(), identity.ExecutionTargetID, connection.BindingRef, connection.IdentityFingerprint,
+	)
+	closeAdapter()
+	if err == nil || found || adapter != nil || calls.Load() != 1 || strings.Contains(err.Error(), controller.key) {
+		t.Fatalf("substituted controller key was accepted or exposed: found=%t err=%v calls=%d", found, err, calls.Load())
+	}
+	if err := os.WriteFile(controller.key, controllerKey, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	adapter, closeAdapter, found, err = resolver.ResolveInfrastructureAdapter(
+		context.Background(), identity.ExecutionTargetID, connection.BindingRef, connection.IdentityFingerprint,
+	)
+	if err != nil || !found {
+		t.Fatalf("restored dynamic controller identity did not reload: found=%t err=%v", found, err)
+	}
+	_, observeErr = adapter.ObserveExecutionTarget(context.Background(), paasv1.ObserveExecutionTargetRequest{
+		Command: paasv1.AdapterCommandEnvelope{
+			OperationID: "operation-dynamic", CommandID: "command-dynamic-reloaded", Attempt: 1,
+			Action:            paasv1.AdapterObserveExecutionTarget,
+			Scope:             paasv1.ResourceScope{Kind: paasv1.AuthorityPlatform},
+			ExecutionTargetID: identity.ExecutionTargetID, BindingRef: connection.BindingRef,
+			RequestDigest: "sha256:" + strings.Repeat("d", 64),
+			Deadline:      time.Now().UTC().Truncate(time.Microsecond).Add(5 * time.Second),
+		},
+	})
+	closeAdapter()
+	if !errors.As(observeErr, &fault) || !fault.Normalized.Retryable || calls.Load() != 2 {
+		t.Fatalf("restored dynamic mTLS observation error=%v calls=%d", observeErr, calls.Load())
+	}
+	reader.connection.Enabled = false
+	if _, found, err := resolver.Resolve(context.Background(), identity.ExecutionTargetID, connection.BindingRef); err != nil || found {
+		t.Fatalf("disabled dynamic connection resolved: found=%t err=%v", found, err)
+	}
+	reader.connection = connection
+	reader.connection.InstallationID = "installation-other"
+	if _, found, err := resolver.Resolve(context.Background(), identity.ExecutionTargetID, connection.BindingRef); err == nil || found {
+		t.Fatal("cross-installation dynamic connection was accepted")
+	}
+	if _, err := nodeconnections.NewDynamic(reader, nodeconnections.DynamicConfig{
+		InstallationID: identity.InstallationID, ControllerID: connection.ControllerID,
+		CertificateFile: node.certificate, PrivateKeyFile: node.key, TrustFile: trustFile,
+	}); err == nil {
+		t.Fatal("node-role credential was accepted as a dynamic controller")
+	}
+}
+
+type dynamicConnectionReader struct {
+	connection     port.EnrolledNodeConnection
+	found          bool
+	installationID string
+}
+
+func (reader *dynamicConnectionReader) LoadEnrolledNodeConnection(
+	_ context.Context,
+	installationID string,
+	_ paasv1.ResourceID,
+) (port.EnrolledNodeConnection, bool, error) {
+	reader.installationID = installationID
+	return reader.connection, reader.found, nil
 }
 
 type connectionCertificate struct {

@@ -62,6 +62,8 @@ func TestOpenAPIContractDefinesApplicationPaaSV1(t *testing.T) {
 		"CreateNodeEnrollmentRecoveryChallengeRequest",
 		"NodeEnrollmentRecoveryChallenge",
 		"RecoverNodeEnrollmentExchangeRequest",
+		"CompleteNodeEnrollmentRequest",
+		"CompleteNodeEnrollmentResponse",
 		"PlacementPolicy",
 		"PlacementDecision",
 		"Operation",
@@ -185,6 +187,7 @@ func TestOpenAPINorthboundSurfaceUsesMatrixIAM(t *testing.T) {
 		"/v1/node-enrollments/{nodeEnrollmentId}/exchange":           {"post"},
 		"/v1/node-enrollments/{nodeEnrollmentId}/recovery-challenge": {"post"},
 		"/v1/node-enrollments/{nodeEnrollmentId}/recover":            {"post"},
+		"/v1/node-enrollments/{nodeEnrollmentId}/complete":           {"post"},
 		"/v1/node-enrollments/{nodeEnrollmentId}/revoke":             {"post"},
 		"/v1/node-enrollments/{nodeEnrollmentId}/regenerate":         {"post"},
 		"/v1/platform/operations/{operationId}":                      {"get"},
@@ -224,7 +227,8 @@ func TestOpenAPINorthboundSurfaceUsesMatrixIAM(t *testing.T) {
 			if path == "/ready" ||
 				path == "/v1/node-enrollments/{nodeEnrollmentId}/exchange" ||
 				path == "/v1/node-enrollments/{nodeEnrollmentId}/recovery-challenge" ||
-				path == "/v1/node-enrollments/{nodeEnrollmentId}/recover" {
+				path == "/v1/node-enrollments/{nodeEnrollmentId}/recover" ||
+				path == "/v1/node-enrollments/{nodeEnrollmentId}/complete" {
 				if !overridesSecurity || len(securityOverride.([]any)) != 0 {
 					t.Errorf("%s %s must explicitly omit MatrixIAM authentication", method, path)
 				}
@@ -586,6 +590,8 @@ func TestOpenAPIStructPropertiesAndRequiredFieldsMatchGoTypes(t *testing.T) {
 		"CreateNodeEnrollmentRecoveryChallengeRequest": reflect.TypeOf(CreateNodeEnrollmentRecoveryChallengeRequest{}),
 		"NodeEnrollmentRecoveryChallenge":              reflect.TypeOf(NodeEnrollmentRecoveryChallenge{}),
 		"RecoverNodeEnrollmentExchangeRequest":         reflect.TypeOf(RecoverNodeEnrollmentExchangeRequest{}),
+		"CompleteNodeEnrollmentRequest":                reflect.TypeOf(CompleteNodeEnrollmentRequest{}),
+		"CompleteNodeEnrollmentResponse":               reflect.TypeOf(CompleteNodeEnrollmentResponse{}),
 		"AdapterRef":                                   reflect.TypeOf(AdapterRef{}),
 		"Capacity":                                     reflect.TypeOf(Capacity{}),
 		"ExecutionTargetSpec":                          reflect.TypeOf(ExecutionTargetSpec{}),

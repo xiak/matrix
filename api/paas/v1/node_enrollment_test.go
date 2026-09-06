@@ -448,6 +448,54 @@ func TestNodeEnrollmentRecoveryChallengeBindsExactExchangeAndTwoProofs(t *testin
 	}
 }
 
+func TestNodeEnrollmentCompletionRepeatsOnlyTheFixedExchangeIdentity(t *testing.T) {
+	exchange, response := nodeEnrollmentExchangeFixture(t)
+	nodeKey, collectorKey, err := NodeEnrollmentExchangePublicKeys(exchange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeDigest, collectorDigest := sha256.Sum256(nodeKey), sha256.Sum256(collectorKey)
+	request := CompleteNodeEnrollmentRequest{
+		APIVersion: NodeEnrollmentExchangeAPIVersion, Kind: NodeEnrollmentCompletionRequestKind,
+		EnrollmentID: exchange.EnrollmentID, InstallationID: exchange.InstallationID,
+		ExecutionTargetID: exchange.ExecutionTargetID, ExchangeID: exchange.ExchangeID,
+		MachineFingerprint: exchange.MachineFingerprint, RuntimeContractDigest: exchange.RuntimeContractDigest,
+		ControllerID: response.ControllerID, BindingRef: response.BindingRef,
+		NodeListenAddress: response.NodeListenAddress, CollectorEndpoint: response.CollectorEndpoint,
+		NodePublicKeyFingerprint: "sha256:" + hex.EncodeToString(nodeDigest[:]), CollectorPublicKeyFingerprint: "sha256:" + hex.EncodeToString(collectorDigest[:]),
+	}
+	if err := ValidateCompleteNodeEnrollmentRequest(request); err != nil {
+		t.Fatalf("valid completion request: %v", err)
+	}
+	for name, mutate := range map[string]func(*CompleteNodeEnrollmentRequest){
+		"enrollment": func(value *CompleteNodeEnrollmentRequest) {
+			value.EnrollmentID = "node-enrollment-invalid"
+		},
+		"installation": func(value *CompleteNodeEnrollmentRequest) { value.InstallationID = "" },
+		"target":       func(value *CompleteNodeEnrollmentRequest) { value.ExecutionTargetID = "" },
+		"exchange": func(value *CompleteNodeEnrollmentRequest) {
+			value.ExchangeID = "node-exchange-invalid"
+		},
+		"binding":   func(value *CompleteNodeEnrollmentRequest) { value.BindingRef = "binding-a" },
+		"endpoint":  func(value *CompleteNodeEnrollmentRequest) { value.NodeListenAddress = "8.8.8.8:16443" },
+		"collector": func(value *CompleteNodeEnrollmentRequest) { value.CollectorEndpoint = "https://192.168.50.10:19100" },
+		"shared keys": func(value *CompleteNodeEnrollmentRequest) {
+			value.CollectorPublicKeyFingerprint = value.NodePublicKeyFingerprint
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := request
+			mutate(&changed)
+			if err := ValidateCompleteNodeEnrollmentRequest(changed); err == nil {
+				t.Fatal("invalid completion request was accepted")
+			}
+		})
+	}
+	if strings.Contains(request.String()+request.GoString(), response.NodeListenAddress) {
+		t.Fatal("completion request formatting exposed protected connection details")
+	}
+}
+
 func nodeEnrollmentExchangeFixture(t *testing.T) (ExchangeNodeEnrollmentRequest, NodeEnrollmentExchangeResponse) {
 	t.Helper()
 	now := time.Date(2026, 9, 6, 8, 0, 0, 0, time.UTC)

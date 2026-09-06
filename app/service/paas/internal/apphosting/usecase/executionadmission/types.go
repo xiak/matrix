@@ -36,10 +36,20 @@ type Binding struct {
 type Config struct {
 	InstallationID         string
 	Bindings               []Binding
+	DynamicBindings        DynamicBindingResolver
 	ObservationTimeout     time.Duration
 	MaximumObservationAge  time.Duration
 	MaxTransactionAttempts int
 	Clock                  func() time.Time
+}
+
+type DynamicBindingResolver interface {
+	ResolveInfrastructureAdapter(
+		context.Context,
+		paasv1.ResourceID,
+		string,
+		string,
+	) (port.InfrastructureAdapter, func(), bool, error)
 }
 
 type CreatePoolCommand struct {

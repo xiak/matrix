@@ -18,6 +18,7 @@ import (
 	"github.com/xiak/matrix/app/service/installation/nodeconfig"
 	"github.com/xiak/matrix/app/service/internal/processconfig"
 	"github.com/xiak/matrix/app/service/internal/processhttp"
+	"github.com/xiak/matrix/app/service/paas/cmd/internal/nodeconnections"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/data/enrollmentissuer"
 	iamhttp "github.com/xiak/matrix/app/service/paas/internal/apphosting/data/iamhttp"
 	paaspostgres "github.com/xiak/matrix/app/service/paas/internal/apphosting/data/postgres"
@@ -35,33 +36,39 @@ import (
 )
 
 const (
-	databaseDSNFileEnvironment       = "MATRIX_PAAS_DATABASE_DSN_FILE"
-	iamEndpointEnvironment           = "MATRIX_PAAS_IAM_ENDPOINT"
-	serviceCredentialFileEnvironment = "MATRIX_PAAS_SERVICE_CREDENTIAL_FILE"
-	listenAddressEnvironment         = "MATRIX_PAAS_LISTEN_ADDRESS"
-	installationIDEnvironment        = "MATRIX_PAAS_INSTALLATION_ID"
-	releaseIDEnvironment             = "MATRIX_PAAS_RELEASE_ID"
-	verificationDigestEnvironment    = "MATRIX_PAAS_VERIFICATION_ARTIFACT_DIGEST"
-	nodeConnectionsFileEnvironment   = "MATRIX_PAAS_NODE_CONNECTIONS_FILE"
-	publicBasePathEnvironment        = "MATRIX_PAAS_PUBLIC_BASE_PATH"
-	terminalCookieSecureEnvironment  = "MATRIX_PAAS_TERMINAL_COOKIE_SECURE"
-	enrollmentIssuerCertEnvironment  = "MATRIX_PAAS_ENROLLMENT_ISSUER_CERTIFICATE_FILE"
-	enrollmentIssuerKeyEnvironment   = "MATRIX_PAAS_ENROLLMENT_ISSUER_PRIVATE_KEY_FILE"
+	databaseDSNFileEnvironment           = "MATRIX_PAAS_DATABASE_DSN_FILE"
+	iamEndpointEnvironment               = "MATRIX_PAAS_IAM_ENDPOINT"
+	serviceCredentialFileEnvironment     = "MATRIX_PAAS_SERVICE_CREDENTIAL_FILE"
+	listenAddressEnvironment             = "MATRIX_PAAS_LISTEN_ADDRESS"
+	installationIDEnvironment            = "MATRIX_PAAS_INSTALLATION_ID"
+	releaseIDEnvironment                 = "MATRIX_PAAS_RELEASE_ID"
+	verificationDigestEnvironment        = "MATRIX_PAAS_VERIFICATION_ARTIFACT_DIGEST"
+	nodeConnectionsFileEnvironment       = "MATRIX_PAAS_NODE_CONNECTIONS_FILE"
+	publicBasePathEnvironment            = "MATRIX_PAAS_PUBLIC_BASE_PATH"
+	terminalCookieSecureEnvironment      = "MATRIX_PAAS_TERMINAL_COOKIE_SECURE"
+	enrollmentIssuerCertEnvironment      = "MATRIX_PAAS_ENROLLMENT_ISSUER_CERTIFICATE_FILE"
+	enrollmentIssuerKeyEnvironment       = "MATRIX_PAAS_ENROLLMENT_ISSUER_PRIVATE_KEY_FILE"
+	enrollmentControllerCertEnvironment  = "MATRIX_PAAS_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE"
+	enrollmentControllerKeyEnvironment   = "MATRIX_PAAS_ENROLLMENT_CONTROLLER_PRIVATE_KEY_FILE"
+	enrollmentControllerTrustEnvironment = "MATRIX_PAAS_ENROLLMENT_CONTROLLER_TRUST_FILE"
 )
 
 type configuration struct {
-	databaseDSNFile       string
-	iamEndpoint           string
-	serviceCredentialFile string
-	listenAddress         string
-	installationID        string
-	releaseID             string
-	verificationDigest    string
-	nodeConnectionsFile   string
-	publicBasePath        string
-	terminalCookieSecure  bool
-	enrollmentIssuerCert  string
-	enrollmentIssuerKey   string
+	databaseDSNFile           string
+	iamEndpoint               string
+	serviceCredentialFile     string
+	listenAddress             string
+	installationID            string
+	releaseID                 string
+	verificationDigest        string
+	nodeConnectionsFile       string
+	publicBasePath            string
+	terminalCookieSecure      bool
+	enrollmentIssuerCert      string
+	enrollmentIssuerKey       string
+	enrollmentControllerCert  string
+	enrollmentControllerKey   string
+	enrollmentControllerTrust string
 }
 
 func main() {
@@ -147,7 +154,20 @@ func run(ctx context.Context) error {
 		return err
 	}
 	defer closeBindings()
-	terminalConnector, err := terminalRouter(config.installationID, bindings)
+	connectionRepository, err := paaspostgres.NewEnrolledNodeConnectionRepository(pool)
+	if err != nil {
+		return err
+	}
+	dynamicConnections, err := nodeconnections.NewDynamic(connectionRepository, nodeconnections.DynamicConfig{
+		InstallationID: config.installationID, ControllerID: nodeconfig.DefaultControllerID,
+		CertificateFile: config.enrollmentControllerCert,
+		PrivateKeyFile:  config.enrollmentControllerKey,
+		TrustFile:       config.enrollmentControllerTrust,
+	})
+	if err != nil {
+		return err
+	}
+	terminalConnector, err := terminalRouter(config.installationID, bindings, dynamicConnections)
 	if err != nil {
 		return err
 	}
@@ -156,7 +176,8 @@ func run(ctx context.Context) error {
 		return err
 	}
 	execution, err := executionadmission.New(executionRepository, executionadmission.Config{
-		InstallationID: config.installationID, Bindings: bindings, ObservationTimeout: 5 * time.Second,
+		InstallationID: config.installationID, Bindings: bindings, DynamicBindings: dynamicConnections,
+		ObservationTimeout:    5 * time.Second,
 		MaximumObservationAge: 15 * time.Second, MaxTransactionAttempts: 5,
 	})
 	if err != nil {
@@ -194,6 +215,8 @@ func run(ctx context.Context) error {
 			SupportedRuntimeContractDigest: nodeconfig.ContractDigest(),
 			ControllerID:                   nodeconfig.DefaultControllerID,
 			ManagementPort:                 nodeconfig.DefaultManagementPort, CollectorPort: nodeconfig.DefaultCollectorPort,
+			CompletionProbeTimeout: 5 * time.Second, CompletionProbe: dynamicConnections,
+			CompletionAdmission:    execution,
 			MaxTransactionAttempts: 5,
 		},
 	)
@@ -288,24 +311,29 @@ func loadConfiguration() (configuration, error) {
 		return configuration{}, errors.New("PaaS terminal cookie security configuration is invalid")
 	}
 	config := configuration{
-		databaseDSNFile:       os.Getenv(databaseDSNFileEnvironment),
-		iamEndpoint:           os.Getenv(iamEndpointEnvironment),
-		serviceCredentialFile: os.Getenv(serviceCredentialFileEnvironment),
-		listenAddress:         os.Getenv(listenAddressEnvironment),
-		installationID:        os.Getenv(installationIDEnvironment),
-		releaseID:             os.Getenv(releaseIDEnvironment),
-		verificationDigest:    os.Getenv(verificationDigestEnvironment),
-		nodeConnectionsFile:   os.Getenv(nodeConnectionsFileEnvironment),
-		publicBasePath:        os.Getenv(publicBasePathEnvironment),
-		terminalCookieSecure:  terminalCookieSecure,
-		enrollmentIssuerCert:  os.Getenv(enrollmentIssuerCertEnvironment),
-		enrollmentIssuerKey:   os.Getenv(enrollmentIssuerKeyEnvironment),
+		databaseDSNFile:           os.Getenv(databaseDSNFileEnvironment),
+		iamEndpoint:               os.Getenv(iamEndpointEnvironment),
+		serviceCredentialFile:     os.Getenv(serviceCredentialFileEnvironment),
+		listenAddress:             os.Getenv(listenAddressEnvironment),
+		installationID:            os.Getenv(installationIDEnvironment),
+		releaseID:                 os.Getenv(releaseIDEnvironment),
+		verificationDigest:        os.Getenv(verificationDigestEnvironment),
+		nodeConnectionsFile:       os.Getenv(nodeConnectionsFileEnvironment),
+		publicBasePath:            os.Getenv(publicBasePathEnvironment),
+		terminalCookieSecure:      terminalCookieSecure,
+		enrollmentIssuerCert:      os.Getenv(enrollmentIssuerCertEnvironment),
+		enrollmentIssuerKey:       os.Getenv(enrollmentIssuerKeyEnvironment),
+		enrollmentControllerCert:  os.Getenv(enrollmentControllerCertEnvironment),
+		enrollmentControllerKey:   os.Getenv(enrollmentControllerKeyEnvironment),
+		enrollmentControllerTrust: os.Getenv(enrollmentControllerTrustEnvironment),
 	}
 	if config.databaseDSNFile == "" || config.iamEndpoint == "" ||
 		config.serviceCredentialFile == "" || config.listenAddress == "" ||
 		config.installationID == "" || config.releaseID == "" ||
-		config.verificationDigest == "" || config.enrollmentIssuerCert == "" ||
-		config.enrollmentIssuerKey == "" {
+		config.verificationDigest == "" || config.nodeConnectionsFile == "" ||
+		config.enrollmentIssuerCert == "" || config.enrollmentIssuerKey == "" ||
+		config.enrollmentControllerCert == "" || config.enrollmentControllerKey == "" ||
+		config.enrollmentControllerTrust == "" {
 		return configuration{}, errors.New("PaaS process configuration is incomplete")
 	}
 	return config, nil

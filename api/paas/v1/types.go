@@ -260,6 +260,41 @@ func (RecoverNodeEnrollmentExchangeRequest) GoString() string {
 	return "node enrollment recovery proof <redacted>"
 }
 
+// CompleteNodeEnrollmentRequest repeats only the exact public commitments
+// fixed by the consumed exchange. It cannot select a pool, labels, endpoint,
+// identity or provider; the control plane compares every field before probing
+// the already fixed node over mutually authenticated TLS.
+type CompleteNodeEnrollmentRequest struct {
+	APIVersion                    string     `json:"apiVersion"`
+	Kind                          string     `json:"kind"`
+	EnrollmentID                  ResourceID `json:"enrollmentId"`
+	InstallationID                string     `json:"installationId"`
+	ExecutionTargetID             ResourceID `json:"executionTargetId"`
+	ExchangeID                    string     `json:"exchangeId"`
+	MachineFingerprint            string     `json:"machineFingerprint"`
+	RuntimeContractDigest         string     `json:"runtimeContractDigest"`
+	ControllerID                  string     `json:"controllerId"`
+	BindingRef                    string     `json:"bindingRef"`
+	NodeListenAddress             string     `json:"nodeListenAddress"`
+	CollectorEndpoint             string     `json:"collectorEndpoint"`
+	NodePublicKeyFingerprint      string     `json:"nodePublicKeyFingerprint"`
+	CollectorPublicKeyFingerprint string     `json:"collectorPublicKeyFingerprint"`
+}
+
+func (CompleteNodeEnrollmentRequest) String() string {
+	return "node enrollment completion request <redacted>"
+}
+
+func (CompleteNodeEnrollmentRequest) GoString() string {
+	return "node enrollment completion request <redacted>"
+}
+
+type CompleteNodeEnrollmentResponse struct {
+	Enrollment      NodeEnrollment  `json:"enrollment"`
+	ExecutionTarget ExecutionTarget `json:"executionTarget"`
+	Operation       Operation       `json:"operation"`
+}
+
 type AdapterRef struct {
 	Kind            AdapterKind `json:"kind"`
 	Name            string      `json:"name"`
