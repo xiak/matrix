@@ -1,9 +1,11 @@
 # FEAT-008: existing Linux hosts and remote application delivery
 
-- Status: Phase 3 accepted; P3-0 through P3-5 and Gates A through E complete
+- Status: Phase 3 enrollment extension in progress; accepted P3-0 through
+  P3-5 and Gates A through E remain the fixed baseline, P3-6 is open
 - Target: Matrix PaaS Phase 3
 - Design date: 2026-08-27
-- Branch: `feat/linux-host-management`
+- Active branch: `feat/host-self-enrollment`
+- Accepted baseline branch: `feat/linux-host-management`
 - Fixed integration baseline: `f5ce412ff795abdaf5ba8e5fe112378f1cd1af41`
 
 ## Outcome and scope
@@ -13,6 +15,15 @@ usage. Deploy, update, stop and roll back applications through the existing
 IAM-authorized, audited workflow. Provide live resource views and access to
 the actual running application container. Prove signed offline installation,
 operations, upgrade, rollback and recovery across independent hosts.
+
+P3-6 replaces fresh-host private-key delivery and the separate manual target
+registration step with one observable console journey. A platform operator
+creates a short-lived enrollment, transfers one offline join document to an
+existing Linux host, and runs one `mx node install` command. Node and collector
+private keys are generated on that host. Successful proof of possession and a
+real mTLS probe atomically publish the existing `ExecutionTarget`, its terminal
+Operation and Audit fact; `NodeEnrollment` never becomes a second long-lived
+host model.
 
 The long-term private-cloud direction, optional Kubernetes provider and domain
 boundaries belong to [ADR-0002](../architecture/ADR-0002-product-boundary.md).
@@ -43,11 +54,147 @@ exercise combines these capabilities rather than introducing them late.
 | P3-3: interactive operations | Live host/container UI and terminal in the selected running instance | Successive measurements without reload; real terminal I/O, resize, expiry, disconnect, authorization and audit | Complete |
 | P3-4: multiple hosts | Pool placement, drain, unavailable-node handling and safe removal across two independent hosts | No cross-host/local fallback; identity collision, tenant isolation and concurrent capacity checks | Complete |
 | P3-5: offline release | Platform and nodes install, operate, upgrade, roll back and recover without external access | Complete Gates A-E on exact committed source and signed releases | Complete |
+| P3-6: console self-enrollment | Create, transfer, verify and complete an existing Linux host from the console with host-local keys and no separate registration | Authenticated browser, two real hosts, signed offline install, one-time/revocable exchange, failure cleanup, lifecycle operations and upgrade/rollback retention | In progress |
 
 Start P3-1 after P3-0's donor review. Its basic measurements do not replace
 P3-3's full observability scope. Historical queries, interactive sessions and
 multi-host policy are implemented when their iteration is reached.
-No iteration alone completes the Phase 3 goal.
+The accepted P3-0 through P3-5 evidence is the P3-6 integration baseline, not
+evidence for the new ceremony. FEAT-008 remains open until every P3-6 gate below
+passes on an exact pushed commit.
+
+## P3-6 console self-enrollment target
+
+### User journey and scope
+
+The platform operator enters **Infrastructure -> Host resources**, chooses
+**Enroll Linux host**, supplies a display name, an existing execution pool and
+only installation-allowlisted scheduling labels, then creates an enrollment.
+The console shows its expiry and one-time nature and offers a client-generated
+offline join file plus this fixed-shape command:
+
+```text
+sudo ./mx node install --root /opt/matrix/node --bundle ./matrix-node-release --trust-key ./release-trust.json --join ./matrix-node-join.json
+```
+
+The UI neither accepts nor synthesizes shell fragments, Compose documents,
+host paths, Docker flags, SSH credentials or provider-native parameters. The
+command and filenames are product-owned constants; installation of Linux,
+Docker Engine and Compose, firewall changes, PXE/BMC/VM provisioning and
+Kubernetes node provisioning remain outside this FEAT.
+
+The console follows the enrollment without a manual refresh through
+`WAITING_INSTALL`, `VERIFYING` and `READY`, or the terminal `FAILED`, `EXPIRED`
+and `REVOKED` states. A ready enrollment links to the existing host detail and
+its health/resources, drain, activation and safe-removal controls. A terminal
+unsuccessful attempt exposes a closed actionable diagnostic and may be replaced
+by a new enrollment; it is never reset in place and never reuses an identity
+that reached credential exchange.
+
+### Ownership and contracts
+
+`NodeEnrollment` is an installation-scoped, short-lived apphosting ceremony.
+It owns the requested target name, execution pool, allowlisted labels, generated
+enrollment/target identities, credential commitment, expiry, exchange proof,
+terminal status and sanitized diagnostic. After success, the existing
+`ExecutionTarget`, its registration identity and connection own all durable
+host state. Enrollment history may be retained for Audit correlation, but is
+excluded from placement, capacity, host inventory and ongoing health.
+
+Authenticated platform APIs create/read/list/revoke/regenerate enrollments and
+list selectable execution pools. Creation requires an idempotency key and a
+browser-generated ephemeral RSA-OAEP wrapping public key. The server generates
+the 256-bit join credential, stores only its salted digest, and returns only an
+encrypted envelope plus public, integrity-bound join metadata. Browser code
+decrypts it in memory, creates the join file locally, never writes it to web
+storage or a URL, revokes the download URL and clears its buffers when the
+dialog closes. The copied command contains no credential. A reload loses the
+secret and therefore offers regeneration, which revokes the old attempt and
+creates a new identity instead of weakening one-time semantics.
+
+The node-facing bootstrap API is separate from the IAM session API. The raw
+join credential appears only in the bounded TLS request body for the initial
+exchange; request logging is disabled for that body and no response echoes it.
+The node generates distinct node and collector private keys locally and writes
+them only to protected installation-owned paths. It submits only public-key
+requests, the actual installation and machine identity, and a provider-neutral
+management-listener claim. The server derives the dial address from the
+authenticated installation policy and the observed private-network peer rather
+than accepting a browser-selected or arbitrary endpoint.
+
+Installation owns the enrollment issuer, platform controller credential,
+trust roots and their protected lifecycle. The browser, node bundle and PaaS
+database never receive the CA private key or controller private key. The
+issuer returns role-constrained certificates for the exact installation,
+target and submitted public keys. The existing node mTLS protocol still
+requires both certificate identity and the persisted target identity; a
+provisional certificate alone grants no scheduling, observation or execution
+authority.
+
+### Exchange, atomicity and recovery
+
+An initial exchange is locked by enrollment ID and credential digest. The
+first valid request changes `WAITING_INSTALL` to `VERIFYING`, consumes the
+credential exactly once, fixes the two public keys, machine fingerprint and
+exchange ID, and stores a bounded encrypted certificate result. Concurrent or
+later credential use fails even when the body is identical. Before redeeming,
+the node persists its client-generated exchange ID and public-key commitment.
+If the success response is lost, it resumes through a separate challenge and
+proof-of-possession endpoint; it never sends the consumed credential again and
+can recover only the same stored result.
+
+The node stages the returned credentials, starts only its owned agent and
+collector services, and asks for completion with its new identity. The control
+plane performs a real bounded mTLS identity/capability probe outside the
+database transaction. One transaction then fixes the long-lived connection,
+registers the existing `ExecutionTarget` in the selected pool, completes the
+existing `REGISTER_EXECUTION_TARGET` Operation, writes its installation Audit
+outbox fact and marks the enrollment `READY`. Until that commit there is no
+schedulable target. Exact completion replay returns the committed result;
+changed target, pool, labels, public keys, fingerprint, installation, endpoint
+or exchange identity fails closed.
+
+Expiry or operator revocation prevents first exchange immediately. Revocation
+during verification invalidates the provisional exchange and prevents final
+registration. Definitive validation/probe failure records only a closed reason,
+invalidates provisional credentials and drives the installer to stop/remove
+only its newly owned services and credential files. Bounded network outage
+retains the sealed local exchange intent for retry; lost completion responses
+are reconciled by exact enrollment/target status and never create another
+target. Regeneration always terminates the old enrollment and creates a fresh
+credential and identity.
+
+Long-lived dynamic connections are persisted with the target registration and
+loaded by API and worker processes without recreating the platform or requiring
+`mx platform configure-nodes`. Existing sealed nodes remain readable across
+the supported upgrade/rollback pair. Fresh nodes in the new release no longer
+accept an operator-supplied node/collector private-key enrollment or require a
+second northbound target-registration call; superseded fresh-install paths and
+their tests are removed in the same slice once the replacement gate exists.
+
+Safe removal keeps the existing allocation/work/session preconditions and
+immutable target tombstone. For a dynamically enrolled target the same commit
+also disables its connection identity so new controller calls fail; it does
+not delete customer data, stop Docker, execute remote shell or silently evict
+work. Local uninstall remains an explicit target-host action outside this UI
+journey.
+
+### Secret and diagnostic boundary
+
+Join credentials and all private keys are forbidden from logs, Audit payloads,
+URLs, problem details, Operation results, browser storage, diagnostics and
+support bundles. Ordinary HTTP responses never contain the raw join credential;
+the creation response contains only its RSA-OAEP ciphertext. Enrollment reads
+after creation cannot recover that ciphertext or credential. Certificate and
+CSR bodies are accepted only on the node bootstrap routes and are never
+projected into console resources.
+
+Failures expose only closed codes with operator actions: expired/revoked,
+credential consumed, installation mismatch, identity conflict, unsupported
+runtime, unreachable management listener, mTLS verification failure, resource
+conflict or retryable network interruption. Raw addresses, certificate data,
+provider errors, paths, Docker output and secrets stay behind the adapter
+boundary.
 
 ## Ownership and node design
 
@@ -581,6 +728,26 @@ compatibility baseline begins with the first accepted Phase 3 signed release.
 | C: real runtime/UI | Independent engines run application lifecycle with actual ENV/Secrets/limits/networks; samples respond to controlled CPU/file activity; browser receives successive/stale/recovered samples and opens the exact container with real I/O/resize/expiry/disconnect; specified negative paths |
 | D: clean offline lifecycle | Empty control-plane engine and two empty workload engines with external egress disabled throughout; signed A install/enrollment and Gate C; tamper rejection, failed-candidate rollback, compatible B upgrade and N-1 rollback; backup/recovery, certificate lifecycle, restart, verify/status/support; Phase 2 untouched |
 | E: release closure | Exact committed source: generation drift, module verification, unit/vet/race/repeated tests, architecture, real database/adapters, cross-platform builds, links, donor/secret/path scans and diff checks; applicable independent GitHub gates and signed artifacts; no donor dependency |
+
+The following P3-6 gates reopen FEAT-008 without invalidating the accepted
+baseline evidence:
+
+| P3-6 gate | Required evidence | State |
+| --- | --- | --- |
+| F1: contracts and automated gates | Unit, architecture, API, PostgreSQL, IAM, Audit, security and UI behavior suites cover the new enrollment boundary and all existing Phase 3 regressions | Open |
+| F2: authenticated browser journey | One real browser creates an enrollment, downloads the locally assembled join file, copies the fixed command, follows automatic state changes and enters the resulting existing host detail; direct API calls or mocked state do not substitute | Open |
+| F3: independent hosts and workload | Two separately installed Linux/Docker/Compose hosts enroll independently; the first runs a real application and the second enrolls separately, with no shared identity, credential, resource sample, route or scheduling state | Open |
+| F4: disconnected signed install | With external network unavailable, the target installs and joins from the signed offline release plus join file without pulling packages or images | Open |
+| F5: negative and recovery matrix | Expiry, revocation, credential replay, concurrent exchange, wrong identity, wrong installation, network interruption and lost exchange/completion responses fail closed or recover idempotently without a schedulable half target | Open |
+| F6: post-enrollment lifecycle | Deploy, update, stop, rollback, current host/container resources, drain, reactivate and safe remove all operate through the enrolled target | Open |
+| F7: release transition retention | Supported platform/node upgrade and rollback retain enrolled targets, identity pins, disabled identities, Operations, Audit records and exact replay behavior | Open |
+| F8: non-interference | No remote Linux host, Docker Engine or unrelated workload is restarted, and no Docker prune or broad cleanup occurs | Open |
+| F9: zero secret leakage | Join credentials and private keys are absent from logs, Audit, ordinary HTTP responses, browser storage, problem details, diagnostics and support artifacts; the one creation envelope is ciphertext only | Open |
+| F10: exact release closure | The exact pushed source passes a real offline Compose E2E and every applicable existing Phase 3 gate; signed artifacts and the rolling checkpoint name that commit | Open |
+
+FEAT-008 returns to accepted only when F1 through F10 are all backed by exact
+current evidence. Passing a narrower mock, API-only, single-host or connected
+runtime check cannot close one of these rows.
 
 Tests extend their current owners and prove current behavior, contracts or
 security boundaries. Add a suite only for a new boundary or unowned gate.
