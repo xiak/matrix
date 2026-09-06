@@ -547,6 +547,10 @@ func (service *Service) expireIfDue(ctx context.Context, transaction Transaction
 		return StoredEnrollment{}, err
 	}
 	stored.Enrollment, stored.Operation = next, operation
+	clear(stored.CredentialSalt)
+	stored.CredentialSalt = nil
+	stored.CredentialVerifier = ""
+	stored.WrappedCredential = paasv1.WrappedJoinCredential{}
 	return stored, nil
 }
 
@@ -614,7 +618,9 @@ func terminatedEnrollment(
 	}
 	next := stored
 	next.Enrollment = enrollmentSnapshot(stored.Enrollment)
-	next.CredentialSalt = bytes.Clone(stored.CredentialSalt)
+	next.CredentialSalt = nil
+	next.CredentialVerifier = ""
+	next.WrappedCredential = paasv1.WrappedJoinCredential{}
 	next.Enrollment.State = paasv1.NodeEnrollmentRevoked
 	next.Enrollment.Metadata.ResourceVersion++
 	next.Enrollment.Metadata.UpdatedAt = now
@@ -758,7 +764,6 @@ func ValidateStoredEnrollment(value StoredEnrollment, installationID string) err
 		paasv1.ValidateNodeEnrollment(value.Enrollment),
 		paasv1.ValidateOperation(value.Operation),
 		paasv1.ValidateNodeEnrollmentJoin(value.Join),
-		paasv1.ValidateWrappedJoinCredential(value.WrappedCredential),
 		port.ValidatePlatformAuthorization(value.CreateAuthorization),
 	)
 	if value.Enrollment.Metadata.ID != value.Join.EnrollmentID ||
@@ -769,11 +774,19 @@ func ValidateStoredEnrollment(value StoredEnrollment, installationID string) err
 		value.Operation.Target != (paasv1.ResourceRef{Kind: "ExecutionTarget", ID: value.Enrollment.ExecutionTargetID}) ||
 		value.Operation.InstallationID != installationID || value.Join.InstallationID != installationID ||
 		value.CreateAuthorization.InstallationID != installationID ||
-		value.Operation.RequestedBy != value.CreateAuthorization.Subject ||
-		len(value.CredentialSalt) != 32 ||
-		paasv1.ValidateDigest("credentialVerifier", value.CredentialVerifier) != nil ||
-		value.CredentialVerifier == value.Join.CredentialDigest {
+		value.Operation.RequestedBy != value.CreateAuthorization.Subject {
 		problems = append(problems, errors.New("stored node enrollment authority is inconsistent"))
+	}
+	if value.Enrollment.State == paasv1.NodeEnrollmentWaitingInstall {
+		if paasv1.ValidateWrappedJoinCredential(value.WrappedCredential) != nil ||
+			len(value.CredentialSalt) != 32 ||
+			paasv1.ValidateDigest("credentialVerifier", value.CredentialVerifier) != nil ||
+			value.CredentialVerifier == value.Join.CredentialDigest {
+			problems = append(problems, errors.New("waiting node enrollment credential material is invalid"))
+		}
+	} else if value.WrappedCredential != (paasv1.WrappedJoinCredential{}) ||
+		len(value.CredentialSalt) != 0 || value.CredentialVerifier != "" {
+		problems = append(problems, errors.New("non-waiting node enrollment retains credential material"))
 	}
 	if value.Enrollment.State == paasv1.NodeEnrollmentRevoked {
 		if paasv1.ValidateDigest("terminationFingerprint", value.TerminationFingerprint) != nil ||

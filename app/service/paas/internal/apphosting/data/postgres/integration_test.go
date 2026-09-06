@@ -742,6 +742,27 @@ func assertNodeEnrollmentPersistence(
 		operationState != "ACCEPTED" || operationAction != "REGISTER_EXECUTION_TARGET" || storedCount != 1 {
 		t.Fatal("node enrollment authority or salted credential verifier was not persisted exactly once")
 	}
+	_, err = admin.Exec(ctx, `UPDATE paas.node_enrollments SET credential_salt = NULL
+		WHERE installation_id = $1 AND id = $2`,
+		installationID, created.Response.Enrollment.Metadata.ID,
+	)
+	assertPostgresCode(t, err, "23514")
+	retainingCredential := created.Response.Enrollment
+	consumedAt := retainingCredential.Metadata.CreatedAt.Add(time.Microsecond)
+	retainingCredential.State = paasv1.NodeEnrollmentVerifying
+	retainingCredential.CredentialConsumedAt = &consumedAt
+	retainingCredential.Metadata.ResourceVersion++
+	retainingCredential.Metadata.UpdatedAt = consumedAt
+	if paasv1.ValidateNodeEnrollment(retainingCredential) != nil {
+		t.Fatal("invalid credential-retention attack fixture")
+	}
+	_, err = admin.Exec(ctx, `UPDATE paas.node_enrollments
+		SET state = 'VERIFYING', resource_version = $3, document = $4::jsonb
+		WHERE installation_id = $1 AND id = $2`,
+		installationID, created.Response.Enrollment.Metadata.ID,
+		retainingCredential.Metadata.ResourceVersion, integrationJSON(t, retainingCredential),
+	)
+	assertPostgresCode(t, err, "23514")
 
 	read, err := service.Get(ctx, authorization, created.Response.Enrollment.Metadata.ID)
 	listed, listErr := service.List(ctx, authorization)
@@ -798,15 +819,18 @@ func assertNodeEnrollmentPersistence(
 		t.Fatalf("replay persisted node enrollment revocation: result=%#v err=%v", revokedReplay, err)
 	}
 	var terminationFingerprint, terminationDigest, replacedByID string
+	var revokedCredentialCleared bool
 	if err := admin.QueryRow(ctx, `SELECT
 			COALESCE(termination_idempotency_fingerprint, ''),
 			COALESCE(termination_request_digest, ''),
-			COALESCE(replaced_by_id, '')
+			COALESCE(replaced_by_id, ''),
+			credential_salt IS NULL AND credential_verifier IS NULL
+				AND wrapped_credential_document IS NULL
 		FROM paas.node_enrollments
 		WHERE installation_id = $1 AND id = $2`,
 		installationID, revoked.Enrollment.Metadata.ID,
-	).Scan(&terminationFingerprint, &terminationDigest, &replacedByID); err != nil ||
-		terminationFingerprint == "" || terminationDigest == "" || replacedByID != "" {
+	).Scan(&terminationFingerprint, &terminationDigest, &replacedByID, &revokedCredentialCleared); err != nil ||
+		terminationFingerprint == "" || terminationDigest == "" || replacedByID != "" || !revokedCredentialCleared {
 		t.Fatalf("inspect persisted node enrollment revocation: fingerprint=%q digest=%q replacement=%q err=%v", terminationFingerprint, terminationDigest, replacedByID, err)
 	}
 
@@ -840,8 +864,13 @@ func assertNodeEnrollmentPersistence(
 		t.Fatalf("replay persisted node enrollment regeneration: result=%#v err=%v", regeneratedReplay, err)
 	}
 	var sourceState, sourceOperationState, replacementState string
+	var sourceCredentialCleared, replacementCredentialPresent bool
 	if err := admin.QueryRow(ctx, `SELECT source.state, source_operation.state,
-			replacement.state, source.replaced_by_id
+			replacement.state, source.replaced_by_id,
+			source.credential_salt IS NULL AND source.credential_verifier IS NULL
+				AND source.wrapped_credential_document IS NULL,
+			replacement.credential_salt IS NOT NULL AND replacement.credential_verifier IS NOT NULL
+				AND replacement.wrapped_credential_document IS NOT NULL
 		FROM paas.node_enrollments AS source
 		JOIN paas.operations AS source_operation
 		  ON source_operation.authority_key = source.authority_key
@@ -851,9 +880,11 @@ func assertNodeEnrollmentPersistence(
 		 AND replacement.id = source.replaced_by_id
 		WHERE source.installation_id = $1 AND source.id = $2`,
 		installationID, regenerable.Response.Enrollment.Metadata.ID,
-	).Scan(&sourceState, &sourceOperationState, &replacementState, &replacedByID); err != nil ||
+	).Scan(&sourceState, &sourceOperationState, &replacementState, &replacedByID,
+		&sourceCredentialCleared, &replacementCredentialPresent); err != nil ||
 		sourceState != "REVOKED" || sourceOperationState != "CANCELLED" ||
-		replacementState != "WAITING_INSTALL" || replacedByID != string(regenerated.Response.Enrollment.Metadata.ID) {
+		replacementState != "WAITING_INSTALL" || replacedByID != string(regenerated.Response.Enrollment.Metadata.ID) ||
+		!sourceCredentialCleared || !replacementCredentialPresent {
 		t.Fatalf("inspect atomic enrollment replacement: source=%s operation=%s replacement=%s id=%s err=%v", sourceState, sourceOperationState, replacementState, replacedByID, err)
 	}
 
@@ -885,14 +916,18 @@ func assertNodeEnrollmentPersistence(
 		t.Fatalf("expire persisted node enrollment: enrollment=%#v err=%v", expired, err)
 	}
 	var terminalAt *time.Time
-	if err := admin.QueryRow(ctx, `SELECT operation.state, operation.terminal_at
+	var expiredCredentialCleared bool
+	if err := admin.QueryRow(ctx, `SELECT operation.state, operation.terminal_at,
+			enrollment.credential_salt IS NULL AND enrollment.credential_verifier IS NULL
+				AND enrollment.wrapped_credential_document IS NULL
 		FROM paas.operations AS operation
 		JOIN paas.node_enrollments AS enrollment
 		  ON enrollment.authority_key = operation.authority_key
 		 AND enrollment.operation_id = operation.id
 		WHERE enrollment.installation_id = $1 AND enrollment.id = $2`,
 		installationID, stagedEnrollment.Metadata.ID,
-	).Scan(&operationState, &terminalAt); err != nil || operationState != "CANCELLED" || terminalAt == nil {
+	).Scan(&operationState, &terminalAt, &expiredCredentialCleared); err != nil ||
+		operationState != "CANCELLED" || terminalAt == nil || !expiredCredentialCleared {
 		t.Fatalf("expiration did not close registration Operation atomically: state=%s terminal=%v err=%v", operationState, terminalAt, err)
 	}
 }

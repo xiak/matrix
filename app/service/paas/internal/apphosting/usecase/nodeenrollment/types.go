@@ -48,8 +48,14 @@ type IssuedJoin struct {
 func (IssuedJoin) String() string   { return "issued node join <redacted>" }
 func (IssuedJoin) GoString() string { return "issued node join <redacted>" }
 
-func (value IssuedJoin) Clear() {
+func (value *IssuedJoin) Clear() {
+	if value == nil {
+		return
+	}
 	clear(value.CredentialSalt)
+	value.CredentialSalt = nil
+	value.CredentialVerifier = ""
+	value.WrappedCredential = paasv1.WrappedJoinCredential{}
 }
 
 func ValidateControlPlaneBaseURL(value string) error {
@@ -142,8 +148,14 @@ type StoredEnrollment struct {
 func (StoredEnrollment) String() string   { return "stored node enrollment <redacted>" }
 func (StoredEnrollment) GoString() string { return "stored node enrollment <redacted>" }
 
-func (value StoredEnrollment) Clear() {
+func (value *StoredEnrollment) Clear() {
+	if value == nil {
+		return
+	}
 	clear(value.CredentialSalt)
+	value.CredentialSalt = nil
+	value.CredentialVerifier = ""
+	value.WrappedCredential = paasv1.WrappedJoinCredential{}
 }
 
 type Transaction interface {

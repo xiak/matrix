@@ -748,8 +748,8 @@ CREATE TABLE IF NOT EXISTS paas.node_enrollments (
     resource_version bigint NOT NULL,
     created_at timestamptz(6) NOT NULL,
     expires_at timestamptz(6) NOT NULL,
-    credential_salt bytea NOT NULL,
-    credential_verifier text COLLATE "C" NOT NULL,
+    credential_salt bytea,
+    credential_verifier text COLLATE "C",
     actor_type text COLLATE "C" NOT NULL,
     actor_id text COLLATE "C" NOT NULL,
     iam_decision_id text COLLATE "C" NOT NULL,
@@ -760,7 +760,7 @@ CREATE TABLE IF NOT EXISTS paas.node_enrollments (
     termination_request_digest text COLLATE "C",
     document jsonb NOT NULL,
     join_document jsonb NOT NULL,
-    wrapped_credential_document jsonb NOT NULL,
+    wrapped_credential_document jsonb,
     replaced_by_id text COLLATE "C" GENERATED ALWAYS AS (
         NULLIF(document->>'replacedById', '')
     ) STORED,
@@ -813,14 +813,27 @@ CREATE TABLE IF NOT EXISTS paas.node_enrollments (
         ))
     ),
     CONSTRAINT node_enrollments_credential_valid CHECK (
-        octet_length(credential_salt) = 32
-        AND credential_verifier COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
-        AND credential_verifier <> join_document->>'credentialDigest'
-        AND join_document->>'credentialDigest' COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
-        AND wrapped_credential_document->>'algorithm' = 'RSA_OAEP_256'
-        AND length(wrapped_credential_document->>'ciphertext') = 512
-        AND wrapped_credential_document->>'ciphertext' COLLATE "C" ~ '^[A-Za-z0-9_-]+$'
-        AND (wrapped_credential_document - ARRAY['algorithm', 'ciphertext']) = '{}'::jsonb
+        join_document->>'credentialDigest' COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND (
+            (
+                state = 'WAITING_INSTALL'
+                AND credential_salt IS NOT NULL
+                AND octet_length(credential_salt) = 32
+                AND credential_verifier IS NOT NULL
+                AND credential_verifier COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+                AND credential_verifier <> join_document->>'credentialDigest'
+                AND wrapped_credential_document IS NOT NULL
+                AND wrapped_credential_document->>'algorithm' = 'RSA_OAEP_256'
+                AND length(wrapped_credential_document->>'ciphertext') = 512
+                AND wrapped_credential_document->>'ciphertext' COLLATE "C" ~ '^[A-Za-z0-9_-]+$'
+                AND (wrapped_credential_document - ARRAY['algorithm', 'ciphertext']) = '{}'::jsonb
+            ) OR (
+                state <> 'WAITING_INSTALL'
+                AND credential_salt IS NULL
+                AND credential_verifier IS NULL
+                AND wrapped_credential_document IS NULL
+            )
+        )
     ),
     CONSTRAINT node_enrollments_document_identity CHECK ((
         document->>'apiVersion' = 'paas.matrix.xiak.com/v1'
@@ -2942,7 +2955,8 @@ BEGIN
     END IF;
     UPDATE paas.node_enrollments
        SET state = 'EXPIRED', resource_version = current_enrollment.resource_version + 1,
-           document = submitted_enrollment
+           credential_salt = NULL, credential_verifier = NULL,
+           wrapped_credential_document = NULL, document = submitted_enrollment
      WHERE installation_id = effective_installation_id AND id = current_enrollment.id;
 END
 $function$;
@@ -3069,7 +3083,8 @@ BEGIN
        SET state = 'REVOKED', resource_version = current_enrollment.resource_version + 1,
            termination_idempotency_fingerprint = submitted_termination_fingerprint,
            termination_request_digest = submitted_termination_request_digest,
-           document = submitted_enrollment
+           credential_salt = NULL, credential_verifier = NULL,
+           wrapped_credential_document = NULL, document = submitted_enrollment
      WHERE installation_id = effective_installation_id AND id = current_enrollment.id;
 END
 $function$;

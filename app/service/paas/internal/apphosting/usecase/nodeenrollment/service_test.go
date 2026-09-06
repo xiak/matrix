@@ -86,7 +86,8 @@ func TestEnrollmentReadsExpireWithoutReturningCredentialMaterial(t *testing.T) {
 	}
 	stored := repository.values[enrollment.Metadata.ID]
 	if stored.Operation.State != paasv1.OperationCancelled || stored.Operation.TerminalAt == nil ||
-		stored.Enrollment.Metadata.ResourceVersion != 2 {
+		stored.Enrollment.Metadata.ResourceVersion != 2 || len(stored.CredentialSalt) != 0 ||
+		stored.CredentialVerifier != "" || stored.WrappedCredential != (paasv1.WrappedJoinCredential{}) {
 		t.Fatal("expiration did not close the registration Operation atomically")
 	}
 	listed, err := service.List(context.Background(), command.Authorization)
@@ -101,6 +102,35 @@ func TestEnrollmentReadsExpireWithoutReturningCredentialMaterial(t *testing.T) {
 	}
 	if issuer.calls != 1 {
 		t.Fatal("expired replay issued another credential")
+	}
+}
+
+func TestStoredEnrollmentCredentialMaterialOnlyExistsWhileWaitingInstall(t *testing.T) {
+	service, repository, _ := enrollmentFixture(t)
+	created, err := service.Create(context.Background(), createCommand(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := repository.values[created.Response.Enrollment.Metadata.ID]
+	consumedAt := repository.now.Add(time.Minute)
+	stored.Enrollment.State = paasv1.NodeEnrollmentVerifying
+	stored.Enrollment.CredentialConsumedAt = &consumedAt
+	stored.Enrollment.Metadata.ResourceVersion++
+	stored.Enrollment.Metadata.UpdatedAt = consumedAt
+	stored.Operation.State = paasv1.OperationVerifying
+	stored.Operation.UpdatedAt = consumedAt
+	if ValidateStoredEnrollment(stored, "installation-a") == nil {
+		t.Fatal("verifying enrollment retained one-time credential material")
+	}
+	salt := stored.CredentialSalt
+	stored.Clear()
+	if len(stored.CredentialSalt) != 0 || stored.CredentialVerifier != "" ||
+		stored.WrappedCredential != (paasv1.WrappedJoinCredential{}) ||
+		!bytes.Equal(salt, make([]byte, len(salt))) {
+		t.Fatal("clearing stored enrollment left credential material reachable")
+	}
+	if err := ValidateStoredEnrollment(stored, "installation-a"); err != nil {
+		t.Fatalf("cleared verifying enrollment is invalid: %v", err)
 	}
 }
 
@@ -119,6 +149,9 @@ func TestRevokeClosesWaitingOrVerifyingEnrollmentAndExactlyReplays(t *testing.T)
 	stored.Enrollment.Metadata.UpdatedAt = consumedAt
 	stored.Operation.State = paasv1.OperationVerifying
 	stored.Operation.UpdatedAt = consumedAt
+	stored.CredentialSalt = nil
+	stored.CredentialVerifier = ""
+	stored.WrappedCredential = paasv1.WrappedJoinCredential{}
 	repository.values[stored.Enrollment.Metadata.ID] = cloneStored(stored)
 	repository.now = consumedAt.Add(time.Minute)
 	command := RevokeCommand{
@@ -134,7 +167,9 @@ func TestRevokeClosesWaitingOrVerifyingEnrollmentAndExactlyReplays(t *testing.T)
 		revoked.Enrollment.Metadata.ResourceVersion != 3 || revoked.Enrollment.CredentialConsumedAt == nil ||
 		revoked.Enrollment.Diagnostic == nil || revoked.Enrollment.Diagnostic.Code != paasv1.NodeEnrollmentDiagnosticRevoked ||
 		current.Operation.State != paasv1.OperationCancelled || current.Operation.TerminalAt == nil ||
-		current.TerminationFingerprint == "" || current.TerminationRequestDigest == "" || repository.revokeCalls != 1 {
+		current.TerminationFingerprint == "" || current.TerminationRequestDigest == "" ||
+		len(current.CredentialSalt) != 0 || current.CredentialVerifier != "" ||
+		current.WrappedCredential != (paasv1.WrappedJoinCredential{}) || repository.revokeCalls != 1 {
 		t.Fatalf("revoked enrollment = %#v stored=%#v", revoked, current)
 	}
 	replay, err := service.Revoke(context.Background(), command)
@@ -180,6 +215,10 @@ func TestRegenerateAtomicallyReplacesIdentityAndExactlyReplays(t *testing.T) {
 		source.Enrollment.State != paasv1.NodeEnrollmentRevoked ||
 		source.Enrollment.ReplacedByID != replacement.Response.Enrollment.Metadata.ID ||
 		source.Operation.State != paasv1.OperationCancelled ||
+		len(source.CredentialSalt) != 0 || source.CredentialVerifier != "" ||
+		source.WrappedCredential != (paasv1.WrappedJoinCredential{}) ||
+		len(current.CredentialSalt) != 32 || current.CredentialVerifier == "" ||
+		paasv1.ValidateWrappedJoinCredential(current.WrappedCredential) != nil ||
 		source.TerminationFingerprint != current.Operation.IdempotencyFingerprint ||
 		source.TerminationRequestDigest != current.Operation.RequestDigest ||
 		repository.replaceCalls != 1 || issuer.calls != 2 {
@@ -315,6 +354,10 @@ func (repository *fakeRepository) ExpireEnrollment(_ context.Context, before Sto
 	}
 	repository.expireCalls++
 	current.Enrollment, current.Operation = enrollmentSnapshot(enrollment), operation
+	clear(current.CredentialSalt)
+	current.CredentialSalt = nil
+	current.CredentialVerifier = ""
+	current.WrappedCredential = paasv1.WrappedJoinCredential{}
 	repository.values[enrollment.Metadata.ID] = current
 	return nil
 }

@@ -161,7 +161,7 @@ func (transaction *nodeEnrollmentTransaction) load(
 	)
 	err := transaction.tx.QueryRow(ctx, `SELECT
 			enrollment.id, enrollment.operation_id,
-			enrollment.credential_salt, enrollment.credential_verifier,
+			enrollment.credential_salt, COALESCE(enrollment.credential_verifier, ''),
 			enrollment.document, operation.document,
 			enrollment.join_document, enrollment.wrapped_credential_document,
 			enrollment.actor_type, enrollment.actor_id,
@@ -207,7 +207,8 @@ func (transaction *nodeEnrollmentTransaction) load(
 	if decodeDocument("NodeEnrollment", enrollmentDocument, &stored.Enrollment) != nil ||
 		decodeDocument("Operation", operationDocument, &stored.Operation) != nil ||
 		decodeDocument("NodeEnrollmentJoin", joinDocument, &stored.Join) != nil ||
-		decodeDocument("WrappedJoinCredential", wrappedCredentialDocument, &stored.WrappedCredential) != nil ||
+		(len(wrappedCredentialDocument) > 0 &&
+			decodeDocument("WrappedJoinCredential", wrappedCredentialDocument, &stored.WrappedCredential) != nil) ||
 		string(stored.Enrollment.Metadata.ID) != enrollmentID || string(stored.Operation.ID) != operationID ||
 		nodeenrollment.ValidateStoredEnrollment(stored, transaction.installationID) != nil {
 		stored.Clear()
