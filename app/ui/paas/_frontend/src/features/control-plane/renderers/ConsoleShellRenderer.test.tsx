@@ -5,11 +5,14 @@ import { SessionProvider } from "@/features/auth/application/SessionProvider";
 import type { IamRepository } from "@/features/auth/repositories/iamRepository";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { useConsoleUiStore } from "../application/consoleUiStore";
+import type { NodeEnrollmentCeremony } from "../application/browserNodeEnrollmentCeremony";
 import type { ControlPlaneSnapshot } from "../domain/resources";
 import type { HostInventory } from "../domain/hosts";
+import type { NodeEnrollment, NodeEnrollmentInventory } from "../domain/nodeEnrollments";
 import type { ConsoleSection } from "../domain/selection";
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
 import type { HostInventoryRepository } from "../repositories/hostInventoryRepository";
+import type { NodeEnrollmentRepository } from "../repositories/nodeEnrollmentRepository";
 import { ConsoleShellRenderer } from "./ConsoleShellRenderer";
 
 const navigation = vi.hoisted(() => ({ replace: vi.fn() }));
@@ -83,14 +86,55 @@ const hostSnapshot: HostInventory = {
   }]
 };
 
+function nodeEnrollment(overrides: Partial<NodeEnrollment> = {}): NodeEnrollment {
+  return {
+    id: `node-enrollment-${"1".repeat(32)}`,
+    name: "edge-linux-a",
+    labels: { location: "edge-a" },
+    resourceVersion: 1,
+    createdAt: "2026-09-07T10:00:00Z",
+    updatedAt: "2026-09-07T10:00:00Z",
+    executionTargetId: "target-edge-a",
+    executionPoolId: "linux-pool",
+    operationId: "operation-edge-a",
+    state: "WAITING_INSTALL",
+    expiresAt: "2026-09-07T10:20:00Z",
+    credentialConsumedAt: null,
+    readyAt: null,
+    replacedById: null,
+    diagnostic: null,
+    ...overrides
+  };
+}
+
+const nodeEnrollmentInventory: NodeEnrollmentInventory = {
+  pools: [{
+    id: "linux-pool",
+    name: "linux-pool",
+    resourceVersion: 2,
+    selectorLabels: { location: "edge-a" },
+    phase: "READY",
+    targetCount: 1,
+    readyTargetCount: 1,
+    observedAt: "2026-09-07T10:00:00Z"
+  }],
+  enrollments: []
+};
+
 async function renderConsole({
   section = "overview",
   hostLoad = vi.fn().mockResolvedValue({ items: [] }),
+  nodeEnrollmentCeremony,
+  nodeEnrollmentLoad = vi.fn().mockResolvedValue({ pools: [], enrollments: [] }),
+  nodeEnrollmentRevoke = vi.fn(),
   load = vi.fn().mockResolvedValue(snapshot),
   logout = vi.fn().mockResolvedValue(undefined)
 }: {
   section?: ConsoleSection;
   hostLoad?: HostInventoryRepository["load"];
+  nodeEnrollmentCeremony?: NodeEnrollmentCeremony;
+  nodeEnrollmentLoad?: NodeEnrollmentRepository["load"];
+  nodeEnrollmentRevoke?: NodeEnrollmentRepository["revoke"];
   load?: ControlPlaneRepository["load"];
   logout?: IamRepository["logout"];
 } = {}) {
@@ -101,6 +145,12 @@ async function renderConsole({
     createInstallation: vi.fn()
   };
   const hostRepository: HostInventoryRepository = { load: hostLoad, transition: vi.fn() };
+  const nodeEnrollmentRepository: NodeEnrollmentRepository = {
+    load: nodeEnrollmentLoad,
+    create: vi.fn(),
+    revoke: nodeEnrollmentRevoke,
+    regenerate: vi.fn()
+  };
   const iam: IamRepository = {
     async login() {
       return {
@@ -122,14 +172,14 @@ async function renderConsole({
   const user = userEvent.setup();
   const view = render(
     <SessionProvider repository={iam}>
-      <ConsoleShellRenderer hostRepository={hostRepository} repository={repository} selection={{ section }} />
+      <ConsoleShellRenderer hostRepository={hostRepository} nodeEnrollmentCeremony={nodeEnrollmentCeremony} nodeEnrollmentRepository={nodeEnrollmentRepository} repository={repository} selection={{ section }} />
     </SessionProvider>
   );
   await user.type(screen.getByLabelText("密码", { exact: true }), "renderer-test-password");
   await user.click(screen.getByRole("button", { name: "登录控制台" }));
   await waitFor(() => expect(section === "hosts" ? hostLoad : load).toHaveBeenCalled());
   navigation.replace.mockClear();
-  return { user, view, repository, hostRepository };
+  return { user, view, repository, hostRepository, nodeEnrollmentRepository };
 }
 
 afterEach(() => {
@@ -155,6 +205,88 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.getByText(/资源采样：/)).toBeTruthy();
     expect(screen.getByText(/有效至：/)).toBeTruthy();
     expect(load).not.toHaveBeenCalled();
+  });
+
+  it("creates, regenerates and revokes a one-time Linux host enrollment without putting a credential in the DOM", async () => {
+    const created = nodeEnrollment();
+    const replacement = nodeEnrollment({
+      id: `node-enrollment-${"2".repeat(32)}`,
+      executionTargetId: "target-edge-b",
+      operationId: "operation-edge-b"
+    });
+    const revoked = nodeEnrollment({
+      ...replacement,
+      resourceVersion: 2,
+      updatedAt: "2026-09-07T10:01:00Z",
+      state: "REVOKED",
+      diagnostic: {
+        code: "ENROLLMENT_REVOKED",
+        retryable: false,
+        occurredAt: "2026-09-07T10:01:00Z"
+      }
+    });
+    const ceremony = {
+      create: vi.fn().mockResolvedValue(created),
+      regenerate: vi.fn().mockResolvedValue(replacement)
+    } satisfies NodeEnrollmentCeremony;
+    const revoke = vi.fn().mockResolvedValue(revoked);
+    const { user, view, nodeEnrollmentRepository } = await renderConsole({
+      section: "hosts",
+      hostLoad: vi.fn().mockResolvedValue({ items: [] }),
+      nodeEnrollmentCeremony: ceremony,
+      nodeEnrollmentLoad: vi.fn().mockResolvedValue(nodeEnrollmentInventory),
+      nodeEnrollmentRevoke: revoke
+    });
+
+    await user.click(await screen.findByRole("button", { name: "收起纳管面板" }));
+    await user.click(screen.getByRole("button", { name: "纳管 Linux 主机" }));
+    const pool = await screen.findByRole("combobox", { name: "执行池" });
+    await user.selectOptions(pool, "linux-pool");
+    expect(screen.getByText("location=edge-a")).toBeTruthy();
+    const name = screen.getByRole("textbox", { name: "主机名称" });
+    await user.clear(name);
+    await user.type(name, "edge-linux-a");
+    await user.click(screen.getByRole("button", { name: "创建纳管并下载 join 文件" }));
+
+    expect(await screen.findByText("纳管已创建，join 文件已由浏览器下载")).toBeTruthy();
+    expect(ceremony.create).toHaveBeenCalledWith(
+      nodeEnrollmentRepository,
+      "renderer-test-memory-only-session",
+      expect.any(String),
+      {
+        name: "edge-linux-a",
+        executionPoolId: "linux-pool",
+        labels: { location: "edge-a" }
+      }
+    );
+    expect(screen.getByText(created.id)).toBeTruthy();
+    expect(view.container.textContent).not.toContain("raw-join-credential");
+    expect(view.container.textContent).not.toContain("privateKey");
+
+    await user.click(screen.getByRole("button", { name: "重新生成 join 文件" }));
+    expect(ceremony.regenerate).toHaveBeenCalledWith(
+      nodeEnrollmentRepository,
+      "renderer-test-memory-only-session",
+      expect.any(String),
+      { enrollmentId: created.id, resourceVersion: 1 }
+    );
+    expect(await screen.findByText(replacement.id)).toBeTruthy();
+    expect(screen.queryByText(created.id)).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "撤销纳管" }));
+    await user.click(screen.getByRole("button", { name: "确认撤销" }));
+    expect(revoke).toHaveBeenCalledWith("renderer-test-memory-only-session", {
+      enrollmentId: replacement.id,
+      resourceVersion: 1
+    });
+    expect(await screen.findByText("已撤销")).toBeTruthy();
+
+    const clipboard = vi.spyOn(navigator.clipboard, "writeText");
+    await user.click(screen.getByRole("button", { name: "复制命令" }));
+    expect(clipboard).toHaveBeenCalledWith(
+      "sudo ./mx node install --root /opt/matrix/node --bundle ./matrix-node-release --trust-key ./release-trust.json --join ./matrix-node-join.json"
+    );
+    expect(await screen.findByText("命令已复制；其中不含凭据。")).toBeTruthy();
   });
 
   it.each([

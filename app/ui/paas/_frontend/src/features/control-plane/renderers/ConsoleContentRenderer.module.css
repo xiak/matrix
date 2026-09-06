@@ -344,6 +344,117 @@
   padding-block: var(--xiak-spacing-tight);
 }
 
+.hostPage,
+.enrollmentSection,
+.enrollmentList,
+.enrollmentBody {
+  display: grid;
+  gap: var(--xiak-spacing-roomy);
+}
+
+.sectionHeading,
+.enrollmentIdentity,
+.enrollmentActions,
+.enrollmentConfirmation,
+.enrollmentConfirmation > div {
+  display: flex;
+  align-items: center;
+  gap: var(--xiak-spacing-default);
+}
+
+.sectionHeading {
+  justify-content: space-between;
+}
+
+.sectionHeading > div,
+.enrollmentIdentity > div {
+  display: grid;
+  min-width: 0;
+  gap: var(--xiak-spacing-narrow);
+}
+
+.enrollmentList {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
+}
+
+.enrollmentCard {
+  overflow: hidden;
+}
+
+.enrollmentIdentity > div {
+  flex: 1;
+}
+
+.enrollmentIcon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  place-items: center;
+  border-radius: var(--xiak-radius-control);
+  background: var(--xiak-color-status-info-bg);
+  color: var(--xiak-color-status-info);
+}
+
+.enrollmentIcon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.enrollmentFacts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--xiak-spacing-default);
+  margin: 0;
+}
+
+.enrollmentFacts > div {
+  display: grid;
+  min-width: 0;
+  gap: var(--xiak-spacing-narrow);
+}
+
+.enrollmentFacts dt,
+.enrollmentReplacement {
+  color: var(--xiak-color-text-subtle);
+  font-size: var(--xiak-font-size-caption);
+}
+
+.enrollmentFacts dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.enrollmentDiagnostic,
+.enrollmentConfirmation {
+  border-radius: var(--xiak-radius-control);
+  padding: var(--xiak-spacing-default);
+  background: var(--xiak-color-status-danger-bg);
+  color: var(--xiak-color-status-danger);
+  font-size: var(--xiak-font-size-small);
+  line-height: 1.5;
+}
+
+.enrollmentDiagnostic[data-retryable="true"] {
+  background: var(--xiak-color-status-warning-bg);
+  color: var(--xiak-color-status-warning);
+}
+
+.enrollmentActions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.enrollmentConfirmation {
+  justify-content: space-between;
+}
+
+.enrollmentConfirmation > div {
+  flex: none;
+  gap: var(--xiak-spacing-tight);
+}
+
 .hostList {
   display: grid;
   gap: var(--xiak-spacing-roomy);
@@ -845,9 +956,15 @@
     grid-template-columns: 1fr;
   }
 
+  .enrollmentFacts {
+    grid-template-columns: 1fr;
+  }
+
   .hostActions,
   .hostRemoveConfirmation,
-  .hostRemoveConfirmation > div:last-child {
+  .hostRemoveConfirmation > div:last-child,
+  .enrollmentConfirmation,
+  .enrollmentConfirmation > div {
     align-items: stretch;
     flex-direction: column;
   }

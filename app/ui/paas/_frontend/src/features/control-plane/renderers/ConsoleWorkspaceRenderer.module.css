@@ -125,3 +125,27 @@
   height: 18px;
   color: var(--xiak-color-text-subtle);
 }
+
+.command {
+  display: grid;
+  gap: var(--xiak-spacing-default);
+  border-top: var(--xiak-border-subtle);
+  padding-top: var(--xiak-spacing-roomy);
+}
+
+.command > div {
+  display: grid;
+  gap: var(--xiak-spacing-narrow);
+}
+
+.command > div span,
+.command > small {
+  color: var(--xiak-color-text-subtle);
+  font-size: var(--xiak-font-size-caption);
+  line-height: 1.5;
+}
+
+.command code {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}

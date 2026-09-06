@@ -1,5 +1,6 @@
 import type { ConsoleSection } from "../domain/selection";
 import type { HostMeasurementState } from "../domain/hosts";
+import type { NodeEnrollmentState } from "../domain/nodeEnrollments";
 
 export type RailIconKind = "overview" | "database" | "workloads" | "infrastructure" | "access";
 export type NavigationIconKind =
@@ -121,6 +122,25 @@ export type HostScene = {
   filesystems: HostFilesystemScene[];
 };
 
+export type NodeEnrollmentScene = {
+  id: string;
+  name: string;
+  executionTargetId: string;
+  executionPoolId: string;
+  resourceVersion: number;
+  state: NodeEnrollmentState;
+  stateLabel: string;
+  status: SceneStatus;
+  expiresAt: string;
+  credentialState: string;
+  diagnostic: string | null;
+  retryable: boolean;
+  replacedById: string | null;
+  targetAvailable: boolean;
+  canRevoke: boolean;
+  canRegenerate: boolean;
+};
+
 export type DeploymentScene = {
   id: string;
   name: string;
@@ -218,7 +238,7 @@ export type ConsoleContentScene =
       truncated: boolean;
     }
   | { kind: "regions"; regions: RegionScene[] }
-  | { kind: "hosts"; hosts: HostScene[] }
+  | { kind: "hosts"; hosts: HostScene[]; enrollments: NodeEnrollmentScene[] }
   | { kind: "access" };
 
 export type ConsoleWorkspaceScene =
@@ -236,6 +256,14 @@ export type ConsoleWorkspaceScene =
       readyRegions: number;
       activeOperations: number;
       serviceCount: number;
+    }
+  | {
+      kind: "host-enrollment";
+      pools: Array<{
+        id: string;
+        label: string;
+        selectorLabels: Array<{ key: string; value: string }>;
+      }>;
     }
   | null;
 

@@ -13,11 +13,13 @@ import {
   Database,
   Gauge,
   HardDrive,
+  KeyRound,
   MemoryStick,
   MapPin,
   PackageCheck,
   PackageSearch,
   Server,
+  ShieldX,
   SquareTerminal
 } from "lucide-react";
 import {
@@ -32,7 +34,8 @@ import type {
   ConnectTerminal,
   OpenTerminal,
   TerminalConsoleState,
-  TransitionHost
+  TransitionHost,
+  MutateNodeEnrollment
 } from "../application/ControlPlaneProvider";
 import type { HostLifecycleCommand } from "../domain/hosts";
 import type {
@@ -326,7 +329,7 @@ function HostCard({ disabled, host, onTransition }: { disabled: boolean; host: H
     if (changed) setConfirmingRemove(false);
   }
   return (
-    <Card className={styles.hostCard}>
+    <Card className={styles.hostCard} id={`host-${host.id}`}>
       <Card.Header>
         <div className={styles.hostIdentity}>
           <div className={styles.regionIcon}><Server aria-hidden="true" /></div>
@@ -412,17 +415,109 @@ function HostCard({ disabled, host, onTransition }: { disabled: boolean; host: H
   );
 }
 
-function HostContent({ disabled, onTransition, scene }: {
+function EnrollmentCard({
+  disabled,
+  enrollment,
+  onRegenerate,
+  onRevoke
+}: {
   disabled: boolean;
+  enrollment: Extract<ConsoleContentScene, { kind: "hosts" }>["enrollments"][number];
+  onRegenerate: MutateNodeEnrollment;
+  onRevoke: MutateNodeEnrollment;
+}) {
+  const [confirmingRevoke, setConfirmingRevoke] = useState(false);
+  const command = { enrollmentId: enrollment.id, resourceVersion: enrollment.resourceVersion };
+  return (
+    <Card className={styles.enrollmentCard}>
+      <Card.Body className={styles.enrollmentBody}>
+        <div className={styles.enrollmentIdentity}>
+          <span className={styles.enrollmentIcon}><KeyRound aria-hidden="true" /></span>
+          <div>
+            <strong>{enrollment.name}</strong>
+            <Typography.Code>{enrollment.id}</Typography.Code>
+          </div>
+          <Badge status={enrollment.status}>{enrollment.stateLabel}</Badge>
+        </div>
+        <dl className={styles.enrollmentFacts}>
+          <div><dt>执行池</dt><dd><Typography.Code>{enrollment.executionPoolId}</Typography.Code></dd></div>
+          <div><dt>目标身份</dt><dd><Typography.Code>{enrollment.executionTargetId}</Typography.Code></dd></div>
+          <div><dt>有效至</dt><dd>{enrollment.expiresAt}</dd></div>
+          <div><dt>凭据状态</dt><dd>{enrollment.credentialState}</dd></div>
+        </dl>
+        {enrollment.diagnostic ? (
+          <p className={styles.enrollmentDiagnostic} data-retryable={enrollment.retryable ? "true" : undefined}>
+            {enrollment.diagnostic}
+          </p>
+        ) : null}
+        {enrollment.replacedById ? <p className={styles.enrollmentReplacement}>已由 {enrollment.replacedById} 替代。</p> : null}
+        <div className={styles.enrollmentActions}>
+          {enrollment.state === "READY" && enrollment.targetAvailable ? (
+            <Link className={styles.textLink} href={`#host-${enrollment.executionTargetId}`}>查看已纳管主机</Link>
+          ) : null}
+          {enrollment.state === "READY" && !enrollment.targetAvailable ? (
+            <Typography.Text tone="muted">正在同步主机清单…</Typography.Text>
+          ) : null}
+          {enrollment.canRegenerate ? (
+            <Button disabled={disabled} onClick={() => void onRegenerate(command)} size="small" variant="secondary">
+              <KeyRound aria-hidden="true" />重新生成 join 文件
+            </Button>
+          ) : null}
+          {enrollment.canRevoke && !confirmingRevoke ? (
+            <Button disabled={disabled} onClick={() => setConfirmingRevoke(true)} size="small" variant="ghost">
+              <ShieldX aria-hidden="true" />撤销纳管
+            </Button>
+          ) : null}
+        </div>
+        {confirmingRevoke ? (
+          <div className={styles.enrollmentConfirmation} role="group" aria-label={`确认撤销 ${enrollment.name}`}>
+            <span>撤销后，尚未完成的安装不能注册为可调度主机。</span>
+            <div>
+              <Button disabled={disabled} onClick={() => setConfirmingRevoke(false)} size="small" variant="ghost">取消</Button>
+              <Button disabled={disabled} onClick={() => void onRevoke(command).then((changed) => changed && setConfirmingRevoke(false))} size="small" variant="danger">确认撤销</Button>
+            </div>
+          </div>
+        ) : null}
+      </Card.Body>
+    </Card>
+  );
+}
+
+function HostContent({ disabled, onRegenerate, onRevoke, onTransition, scene }: {
+  disabled: boolean;
+  onRegenerate: MutateNodeEnrollment;
+  onRevoke: MutateNodeEnrollment;
   onTransition: TransitionHost;
   scene: Extract<ConsoleContentScene, { kind: "hosts" }>;
 }) {
-  if (scene.hosts.length === 0) {
-    return <EmptyState title="尚未纳管主机" description="由平台安装器登记并验证主机后，资源采样才会出现在这里。" />;
-  }
   return (
-    <div className={styles.hostList}>
-      {scene.hosts.map((host) => <HostCard disabled={disabled} host={host} key={`${host.id}:${host.resourceVersion}`} onTransition={onTransition} />)}
+    <div className={styles.hostPage}>
+      {scene.enrollments.length > 0 ? (
+        <section className={styles.enrollmentSection} aria-label="主机纳管状态">
+          <div className={styles.sectionHeading}>
+            <div><Typography.Title as="h2" level={3}>最近纳管</Typography.Title><Typography.Text tone="muted">自动刷新 · 一次性凭据不会再次返回</Typography.Text></div>
+            <Badge status="info">{scene.enrollments.length} 个任务</Badge>
+          </div>
+          <div className={styles.enrollmentList}>
+            {scene.enrollments.map((enrollment) => (
+              <EnrollmentCard
+                disabled={disabled}
+                enrollment={enrollment}
+                key={`${enrollment.id}:${enrollment.resourceVersion}`}
+                onRegenerate={onRegenerate}
+                onRevoke={onRevoke}
+              />
+            ))}
+          </div>
+        </section>
+      ) : null}
+      {scene.hosts.length === 0 ? (
+        <EmptyState title="尚未纳管主机" description="请从右侧面板创建纳管并在目标 Linux 主机运行固定安装命令。" />
+      ) : (
+        <div className={styles.hostList}>
+          {scene.hosts.map((host) => <HostCard disabled={disabled} host={host} key={`${host.id}:${host.resourceVersion}`} onTransition={onTransition} />)}
+        </div>
+      )}
     </div>
   );
 }
@@ -586,6 +681,8 @@ export function ConsoleContentRenderer({
   onOpenTerminal,
   onSelectDeployment = () => {},
   onTransitionHost,
+  onRegenerateNodeEnrollment = async () => false,
+  onRevokeNodeEnrollment = async () => false,
   hostMutation = false,
   scene,
   terminal
@@ -595,6 +692,8 @@ export function ConsoleContentRenderer({
   onOpenTerminal: OpenTerminal;
   onSelectDeployment?(deploymentId: string): void;
   onTransitionHost: TransitionHost;
+  onRegenerateNodeEnrollment?: MutateNodeEnrollment;
+  onRevokeNodeEnrollment?: MutateNodeEnrollment;
   hostMutation?: boolean;
   scene: ConsoleContentScene;
   terminal: TerminalConsoleState;
@@ -604,7 +703,15 @@ export function ConsoleContentRenderer({
   if (scene.kind === "catalog") return <CatalogContent scene={scene} />;
   if (scene.kind === "quotas") return <QuotaContent scene={scene} />;
   if (scene.kind === "installations") return <InstallationContent scene={scene} />;
-  if (scene.kind === "hosts") return <HostContent disabled={hostMutation} onTransition={onTransitionHost} scene={scene} />;
+  if (scene.kind === "hosts") return (
+    <HostContent
+      disabled={hostMutation}
+      onRegenerate={onRegenerateNodeEnrollment}
+      onRevoke={onRevokeNodeEnrollment}
+      onTransition={onTransitionHost}
+      scene={scene}
+    />
+  );
   if (scene.kind === "deployments") return (
     <DeploymentContent
       closeTerminal={closeTerminal}

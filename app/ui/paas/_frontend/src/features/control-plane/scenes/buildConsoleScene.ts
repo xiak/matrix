@@ -10,6 +10,11 @@ import type {
   HostTarget
 } from "../domain/hosts";
 import type {
+  NodeEnrollmentDiagnosticCode,
+  NodeEnrollmentInventory,
+  NodeEnrollmentState
+} from "../domain/nodeEnrollments";
+import type {
   DeploymentInstanceHealth,
   DeploymentInstanceState,
   DeploymentInventory,
@@ -343,7 +348,7 @@ function content(section: ConsoleSection, snapshot: ControlPlaneSnapshot): Conso
   if (section === "quotas") return { kind: "quotas", entitlements: entitlementScenes(snapshot) };
   if (section === "installations") return { kind: "installations", installations };
   if (section === "regions") return { kind: "regions", regions: regionScenes(snapshot) };
-  if (section === "hosts") return { kind: "hosts", hosts: [] };
+  if (section === "hosts") return { kind: "hosts", hosts: [], enrollments: [] };
 
   const ready = snapshot.installations.filter((item) => item.phase === "READY").length;
   const active = snapshot.installations.filter((item) => item.phase === "PENDING" || item.phase === "PROVISIONING").length;
@@ -426,14 +431,82 @@ export function buildConsoleScene(
   };
 }
 
-export function buildHostConsoleScene(inventory: HostInventory): ConsoleScene {
+function enrollmentStatus(value: NodeEnrollmentState): SceneStatus {
+  if (value === "READY") return "success";
+  if (value === "FAILED" || value === "EXPIRED" || value === "REVOKED") return "danger";
+  return value === "VERIFYING" ? "warning" : "info";
+}
+
+function enrollmentStateLabel(value: NodeEnrollmentState): string {
+  const labels: Record<NodeEnrollmentState, string> = {
+    WAITING_INSTALL: "等待安装",
+    VERIFYING: "正在验证",
+    READY: "纳管完成",
+    FAILED: "验证失败",
+    EXPIRED: "已过期",
+    REVOKED: "已撤销"
+  };
+  return labels[value];
+}
+
+function enrollmentDiagnostic(value: NodeEnrollmentDiagnosticCode): string {
+  const labels: Record<NodeEnrollmentDiagnosticCode, string> = {
+    ENROLLMENT_EXPIRED: "纳管文件已过期，请创建新的纳管任务。",
+    ENROLLMENT_REVOKED: "纳管已由平台操作者撤销。",
+    CREDENTIAL_CONSUMED: "一次性凭据已被使用，无法再次交换。",
+    INSTALLATION_MISMATCH: "离线包与当前平台安装不匹配。",
+    IDENTITY_CONFLICT: "该机器身份与已有纳管记录冲突。",
+    RUNTIME_UNSUPPORTED: "主机运行时不满足当前签名发布要求。",
+    MANAGEMENT_UNREACHABLE: "平台暂时无法连通主机管理端口，可在网络恢复后重试。",
+    MTLS_VERIFICATION_FAILED: "主机双向 TLS 身份验证失败。",
+    RESOURCE_CONFLICT: "执行池或主机资源状态发生冲突。",
+    NETWORK_INTERRUPTED: "纳管网络中断；安装器会使用本地密封意图安全恢复。"
+  };
+  return labels[value];
+}
+
+const emptyNodeEnrollmentInventory: NodeEnrollmentInventory = { pools: [], enrollments: [] };
+
+export function buildHostConsoleScene(
+  inventory: HostInventory,
+  enrollmentInventory: NodeEnrollmentInventory = emptyNodeEnrollmentInventory
+): ConsoleScene {
+  const enrollments = enrollmentInventory.enrollments.map((item) => ({
+    id: item.id,
+    name: item.name,
+    executionTargetId: item.executionTargetId,
+    executionPoolId: item.executionPoolId,
+    resourceVersion: item.resourceVersion,
+    state: item.state,
+    stateLabel: enrollmentStateLabel(item.state),
+    status: enrollmentStatus(item.state),
+    expiresAt: dateTime(item.expiresAt),
+    credentialState: item.credentialConsumedAt === null ? "一次性凭据尚未使用" : "一次性凭据已消费",
+    diagnostic: item.diagnostic === null ? null : enrollmentDiagnostic(item.diagnostic.code),
+    retryable: item.diagnostic?.retryable ?? false,
+    replacedById: item.replacedById,
+    targetAvailable: inventory.items.some((target) => target.id === item.executionTargetId),
+    canRevoke: item.state === "WAITING_INSTALL" || item.state === "VERIFYING",
+    canRegenerate: item.state === "WAITING_INSTALL" || item.state === "VERIFYING"
+  }));
   return {
     section: "hosts",
     ...sectionCopy.hosts,
     rail: productRail("hosts"),
     navigation: navigation("hosts", undefined, inventory.items.length),
-    content: { kind: "hosts", hosts: hostScenes(inventory) },
-    workspace: null
+    content: { kind: "hosts", hosts: hostScenes(inventory), enrollments },
+    workspace: {
+      kind: "host-enrollment",
+      pools: enrollmentInventory.pools
+        .filter((item) => item.phase === "READY" && !Object.hasOwn(item.selectorLabels, "matrix-machine-fingerprint"))
+        .map((item) => ({
+          id: item.id,
+          label: `${item.name} · ${item.readyTargetCount}/${item.targetCount} 就绪`,
+          selectorLabels: Object.entries(item.selectorLabels)
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([key, labelValue]) => ({ key, value: labelValue }))
+        }))
+    }
   };
 }
 

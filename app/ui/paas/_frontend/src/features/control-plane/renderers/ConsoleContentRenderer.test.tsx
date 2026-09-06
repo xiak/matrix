@@ -107,6 +107,7 @@ describe("ConsoleContentRenderer deployment inventory", () => {
 
 const hostScene = (desiredState: "ACTIVE" | "DRAINING"): Extract<ConsoleContentScene, { kind: "hosts" }> => ({
   kind: "hosts",
+  enrollments: [],
   hosts: [{
     id: "node-a",
     name: "node-a",
@@ -127,6 +128,28 @@ const hostScene = (desiredState: "ACTIVE" | "DRAINING"): Extract<ConsoleContentS
     memory: { state: "AVAILABLE", stateLabel: "有效", status: "success", value: "2 GiB / 8 GiB", progress: 25, detail: "可用 6 GiB" },
     filesystemsState: "有效",
     filesystems: []
+  }]
+});
+
+const readyEnrollmentScene = (targetAvailable: boolean): Extract<ConsoleContentScene, { kind: "hosts" }> => ({
+  ...hostScene("ACTIVE"),
+  enrollments: [{
+    id: "enrollment-ready",
+    name: "node-a",
+    executionTargetId: "node-a",
+    executionPoolId: "linux-hosts",
+    resourceVersion: 11,
+    state: "READY",
+    stateLabel: "已纳管",
+    status: "success",
+    expiresAt: "2026年8月30日 16:30",
+    credentialState: "已兑换",
+    diagnostic: null,
+    retryable: false,
+    replacedById: null,
+    targetAvailable,
+    canRevoke: false,
+    canRegenerate: false
   }]
 });
 
@@ -171,5 +194,24 @@ describe("ConsoleContentRenderer host lifecycle", () => {
       />
     );
     expect((screen.getByRole("button", { name: "停止新调度" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("links a ready enrollment only after its exact host appears in inventory", () => {
+    const common = {
+      closeTerminal: vi.fn().mockResolvedValue(undefined),
+      connectTerminal: () => null,
+      onOpenTerminal: vi.fn().mockResolvedValue(false),
+      onTransitionHost: vi.fn().mockResolvedValue(false),
+      terminal: idleTerminalConsoleState
+    };
+    const pending = render(<ConsoleContentRenderer {...common} scene={readyEnrollmentScene(false)} />);
+    expect(pending.getByText("正在同步主机清单…")).toBeTruthy();
+    expect(pending.queryByRole("link", { name: "查看已纳管主机" })).toBeNull();
+    pending.unmount();
+
+    const ready = render(<ConsoleContentRenderer {...common} scene={readyEnrollmentScene(true)} />);
+    const link = ready.getByRole("link", { name: "查看已纳管主机" });
+    expect(link.getAttribute("href")).toBe("#host-node-a");
+    expect(ready.container.querySelector("#host-node-a")).toBeTruthy();
   });
 });

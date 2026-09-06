@@ -5,12 +5,14 @@ import type { IamRepository } from "@/features/auth/repositories/iamRepository";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import type { ControlPlaneSnapshot, ServiceInstallation } from "../domain/resources";
 import type { HostInventory } from "../domain/hosts";
+import type { NodeEnrollment, NodeEnrollmentInventory } from "../domain/nodeEnrollments";
 import type {
   DeploymentInventory,
   DeploymentRuntimeSnapshot
 } from "../domain/deployments";
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
 import type { HostInventoryRepository } from "../repositories/hostInventoryRepository";
+import type { NodeEnrollmentRepository } from "../repositories/nodeEnrollmentRepository";
 import type { DeploymentInventoryRepository } from "../repositories/deploymentInventoryRepository";
 import type {
   TerminalConnection,
@@ -98,6 +100,34 @@ function deploymentInventory(): DeploymentInventory {
   };
 }
 
+function enrollmentInventory(state: NodeEnrollment["state"]): NodeEnrollmentInventory {
+  const consumed = state === "WAITING_INSTALL" ? null : "2026-09-07T10:00:30Z";
+  return {
+    pools: [{
+      id: "linux-pool", name: "linux-pool", resourceVersion: 1,
+      selectorLabels: { location: "edge-a" }, phase: "READY",
+      targetCount: 1, readyTargetCount: 1, observedAt: "2026-09-07T10:00:00Z"
+    }],
+    enrollments: [{
+      id: `node-enrollment-${"1".repeat(32)}`,
+      name: "edge-linux-a",
+      labels: { location: "edge-a" },
+      resourceVersion: state === "WAITING_INSTALL" ? 1 : state === "VERIFYING" ? 2 : 3,
+      createdAt: "2026-09-07T10:00:00Z",
+      updatedAt: state === "WAITING_INSTALL" ? "2026-09-07T10:00:00Z" : "2026-09-07T10:01:00Z",
+      executionTargetId: "target-edge-a",
+      executionPoolId: "linux-pool",
+      operationId: "operation-edge-a",
+      state,
+      expiresAt: "2026-09-07T10:20:00Z",
+      credentialConsumedAt: consumed,
+      readyAt: state === "READY" ? "2026-09-07T10:01:00Z" : null,
+      replacedById: null,
+      diagnostic: null
+    }]
+  };
+}
+
 function deploymentRuntime(deploymentId = "deployment-alpha", targetId = "node-a"): DeploymentRuntimeSnapshot {
   const suffix = deploymentId.replace("deployment-", "");
   return {
@@ -173,6 +203,9 @@ function Probe() {
   const host = controlPlane.scene?.content.kind === "hosts"
     ? controlPlane.scene.content.hosts[0]
     : null;
+  const enrollment = controlPlane.scene?.content.kind === "hosts"
+    ? controlPlane.scene.content.enrollments[0]
+    : null;
   const deployment = controlPlane.scene?.content.kind === "deployments"
     ? controlPlane.scene.content.deployments.find((item) => item.selected)
     : null;
@@ -200,6 +233,7 @@ function Probe() {
       <span data-testid="phase">{installation?.phase ?? "none"}</span>
       <span data-testid="host">{host?.name ?? "none"}</span>
       <span data-testid="host-state">{host?.desiredState ?? "none"}</span>
+      <span data-testid="enrollment-state">{enrollment?.state ?? "none"}</span>
       <span data-testid="section">{controlPlane.scene?.section ?? "none"}</span>
       <span data-testid="deployment">{deployment?.id ?? "none"}</span>
       <span data-testid="runtime-target">{runtime?.executionTargetId ?? "none"}</span>
@@ -266,6 +300,13 @@ function terminalSession() {
     endedAt: null
   };
 }
+
+const emptyNodeEnrollmentRepository: NodeEnrollmentRepository = {
+  load: vi.fn().mockResolvedValue({ pools: [], enrollments: [] }),
+  create: vi.fn(),
+  revoke: vi.fn(),
+  regenerate: vi.fn()
+};
 
 afterEach(() => {
   cleanup();
@@ -385,7 +426,7 @@ describe("ControlPlaneProvider", () => {
     };
     const screen = render(
       <SessionProvider repository={iamRepository()}>
-        <ControlPlaneProvider hostRepository={hosts} repository={managed} selection={{ section: "hosts" }}>
+        <ControlPlaneProvider hostRepository={hosts} nodeEnrollmentRepository={emptyNodeEnrollmentRepository} repository={managed} selection={{ section: "hosts" }}>
           <Probe />
         </ControlPlaneProvider>
       </SessionProvider>
@@ -404,6 +445,39 @@ describe("ControlPlaneProvider", () => {
     expect(screen.getByRole("status").textContent).toBe("");
   });
 
+  it("follows a host enrollment from waiting through verification to ready without manual refresh", async () => {
+    vi.useFakeTimers();
+    const hosts: HostInventoryRepository = {
+      load: vi.fn().mockResolvedValue(hostInventory()),
+      transition: vi.fn()
+    };
+    const enrollments: NodeEnrollmentRepository = {
+      load: vi.fn()
+        .mockResolvedValueOnce(enrollmentInventory("WAITING_INSTALL"))
+        .mockResolvedValueOnce(enrollmentInventory("VERIFYING"))
+        .mockResolvedValueOnce(enrollmentInventory("READY")),
+      create: vi.fn(),
+      revoke: vi.fn(),
+      regenerate: vi.fn()
+    };
+    const screen = render(
+      <SessionProvider repository={iamRepository()}>
+        <ControlPlaneProvider hostRepository={hosts} nodeEnrollmentRepository={enrollments} selection={{ section: "hosts" }}>
+          <Probe />
+        </ControlPlaneProvider>
+      </SessionProvider>
+    );
+
+    await act(async () => { fireEvent.click(screen.getByText("login")); });
+    expect(screen.getByTestId("enrollment-state").textContent).toBe("WAITING_INSTALL");
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(screen.getByTestId("enrollment-state").textContent).toBe("VERIFYING");
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(screen.getByTestId("enrollment-state").textContent).toBe("READY");
+    expect(enrollments.load).toHaveBeenCalledTimes(3);
+    expect(hosts.load).toHaveBeenCalledTimes(3);
+  });
+
   it("keeps one host request in flight across polling and manual refresh", async () => {
     vi.useFakeTimers();
     let finishSecond!: (value: HostInventory) => void;
@@ -416,7 +490,7 @@ describe("ControlPlaneProvider", () => {
     };
     const screen = render(
       <SessionProvider repository={iamRepository()}>
-        <ControlPlaneProvider hostRepository={hosts} selection={{ section: "hosts" }}>
+        <ControlPlaneProvider hostRepository={hosts} nodeEnrollmentRepository={emptyNodeEnrollmentRepository} selection={{ section: "hosts" }}>
           <Probe />
         </ControlPlaneProvider>
       </SessionProvider>
@@ -450,7 +524,7 @@ describe("ControlPlaneProvider", () => {
     };
     const screen = render(
       <SessionProvider repository={iamRepository()}>
-        <ControlPlaneProvider hostRepository={hosts} selection={{ section: "hosts" }}>
+        <ControlPlaneProvider hostRepository={hosts} nodeEnrollmentRepository={emptyNodeEnrollmentRepository} selection={{ section: "hosts" }}>
           <Probe />
         </ControlPlaneProvider>
       </SessionProvider>
@@ -489,7 +563,7 @@ describe("ControlPlaneProvider", () => {
     };
     const screen = render(
       <SessionProvider repository={iamRepository()}>
-        <ControlPlaneProvider hostRepository={hosts} selection={{ section: "hosts" }}>
+        <ControlPlaneProvider hostRepository={hosts} nodeEnrollmentRepository={emptyNodeEnrollmentRepository} selection={{ section: "hosts" }}>
           <Probe />
         </ControlPlaneProvider>
       </SessionProvider>
@@ -519,7 +593,7 @@ describe("ControlPlaneProvider", () => {
     };
     const view = render(
       <SessionProvider repository={iamRepository()}>
-        <ControlPlaneProvider hostRepository={hosts} repository={managed} selection={{ section: "hosts" }}>
+        <ControlPlaneProvider hostRepository={hosts} nodeEnrollmentRepository={emptyNodeEnrollmentRepository} repository={managed} selection={{ section: "hosts" }}>
           <Probe />
         </ControlPlaneProvider>
       </SessionProvider>
@@ -551,7 +625,7 @@ describe("ControlPlaneProvider", () => {
     };
     const screen = render(
       <SessionProvider repository={iamRepository()}>
-        <ControlPlaneProvider hostRepository={hosts} selection={{ section: "hosts" }}>
+        <ControlPlaneProvider hostRepository={hosts} nodeEnrollmentRepository={emptyNodeEnrollmentRepository} selection={{ section: "hosts" }}>
           <Probe />
         </ControlPlaneProvider>
       </SessionProvider>

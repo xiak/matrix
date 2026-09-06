@@ -12,6 +12,7 @@ export default defineConfig({
     environment: "jsdom",
     globals: false,
     include: ["src/**/*.test.{ts,tsx}"],
+    maxWorkers: 2,
     restoreMocks: true
   }
 });

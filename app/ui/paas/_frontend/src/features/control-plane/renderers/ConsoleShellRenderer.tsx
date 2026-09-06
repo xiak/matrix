@@ -35,10 +35,12 @@ import {
   Typography
 } from "@ui/xiak";
 import { ControlPlaneProvider, useControlPlane } from "../application/ControlPlaneProvider";
+import type { NodeEnrollmentCeremony } from "../application/browserNodeEnrollmentCeremony";
 import { useConsoleUiStore } from "../application/consoleUiStore";
 import type { ControlPlaneRouteSelection } from "../domain/selection";
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
 import type { HostInventoryRepository } from "../repositories/hostInventoryRepository";
+import type { NodeEnrollmentRepository } from "../repositories/nodeEnrollmentRepository";
 import type { DeploymentInventoryRepository } from "../repositories/deploymentInventoryRepository";
 import type { TerminalSessionRepository } from "../repositories/terminalSessionRepository";
 import type {
@@ -197,6 +199,9 @@ function ConsoleShell({ selection }: { selection: ControlPlaneRouteSelection }) 
   const isAccess = scene.section === "access";
   const isHosts = scene.section === "hosts";
   const isDeployments = scene.section === "deployments";
+  const workspaceToggleLabel = isHosts
+    ? workspaceVisible ? "收起纳管面板" : "纳管 Linux 主机"
+    : workspaceVisible ? "收起面板" : "打开面板";
   const contextEyebrow = isAccess ? "Identity and access" : isHosts ? "Infrastructure" : isDeployments ? "Application hosting" : "Managed services";
   const contextTitle = isAccess ? "访问管理" : isHosts ? "基础设施" : isDeployments ? "应用托管" : "托管数据库";
   const ContextIcon = isAccess ? ShieldCheck : isHosts ? Server : isDeployments ? Container : Database;
@@ -345,13 +350,13 @@ function ConsoleShell({ selection }: { selection: ControlPlaneRouteSelection }) 
                       <Button
                         aria-controls="console-workspace"
                         aria-expanded={workspaceVisible}
-                        aria-label={workspaceVisible ? "收起面板" : "打开面板"}
+                        aria-label={workspaceToggleLabel}
                         onClick={toggleWorkspace}
                         size="small"
                         variant={workspaceVisible ? "secondary" : "ghost"}
                       >
                         {workspaceVisible ? <PanelRightClose aria-hidden="true" /> : <PanelRightOpen aria-hidden="true" />}
-                        <span>{workspaceVisible ? "收起面板" : "打开面板"}</span>
+                        <span>{workspaceToggleLabel}</span>
                       </Button>
                     ) : null}
                   </div>
@@ -362,8 +367,10 @@ function ConsoleShell({ selection }: { selection: ControlPlaneRouteSelection }) 
                   <ConsoleContentRenderer
                     closeTerminal={controlPlane.closeTerminal}
                     connectTerminal={controlPlane.connectTerminal}
-                    hostMutation={controlPlane.mutation === "host"}
+                    hostMutation={controlPlane.mutation === "host" || controlPlane.mutation === "enrollment"}
                     onOpenTerminal={controlPlane.openTerminal}
+                    onRegenerateNodeEnrollment={controlPlane.regenerateNodeEnrollment}
+                    onRevokeNodeEnrollment={controlPlane.revokeNodeEnrollment}
                     onSelectDeployment={controlPlane.selectDeployment}
                     onTransitionHost={controlPlane.transitionHost}
                     scene={scene.content}
@@ -412,12 +419,16 @@ function ConsoleShell({ selection }: { selection: ControlPlaneRouteSelection }) 
 export function ConsoleShellRenderer({
   deploymentRepository,
   hostRepository,
+  nodeEnrollmentCeremony,
+  nodeEnrollmentRepository,
   repository,
   terminalRepository,
   selection
 }: {
   deploymentRepository?: DeploymentInventoryRepository;
   hostRepository?: HostInventoryRepository;
+  nodeEnrollmentCeremony?: NodeEnrollmentCeremony;
+  nodeEnrollmentRepository?: NodeEnrollmentRepository;
   repository?: ControlPlaneRepository;
   terminalRepository?: TerminalSessionRepository;
   selection: ControlPlaneRouteSelection;
@@ -433,6 +444,8 @@ export function ConsoleShellRenderer({
     <ControlPlaneProvider
       deploymentRepository={deploymentRepository}
       hostRepository={hostRepository}
+      nodeEnrollmentCeremony={nodeEnrollmentCeremony}
+      nodeEnrollmentRepository={nodeEnrollmentRepository}
       repository={repository}
       selection={selection}
       terminalRepository={terminalRepository}

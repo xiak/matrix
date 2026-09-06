@@ -18,15 +18,22 @@ import type {
   CreateInstallationCommand
 } from "../domain/resources";
 import type { HostInventory, HostLifecycleCommand } from "../domain/hosts";
+import type {
+  CreateNodeEnrollmentCommand,
+  NodeEnrollmentInventory,
+  NodeEnrollmentVersionCommand
+} from "../domain/nodeEnrollments";
 import type { DeploymentInventory, DeploymentRuntimeSnapshot } from "../domain/deployments";
 import type { TerminalServerError, TerminalSession, TerminalSize } from "../domain/terminalSessions";
 import type { ControlPlaneRouteSelection } from "../domain/selection";
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
 import type { HostInventoryRepository } from "../repositories/hostInventoryRepository";
+import type { NodeEnrollmentRepository } from "../repositories/nodeEnrollmentRepository";
 import type { DeploymentInventoryRepository } from "../repositories/deploymentInventoryRepository";
 import type { TerminalConnection, TerminalSessionRepository } from "../repositories/terminalSessionRepository";
 import { httpControlPlaneRepository } from "../repositories/httpControlPlaneRepository";
 import { httpHostInventoryRepository } from "../repositories/httpHostInventoryRepository";
+import { httpNodeEnrollmentRepository } from "../repositories/httpNodeEnrollmentRepository";
 import { httpDeploymentInventoryRepository } from "../repositories/httpDeploymentInventoryRepository";
 import { httpTerminalSessionRepository } from "../repositories/httpTerminalSessionRepository";
 import {
@@ -36,8 +43,12 @@ import {
   buildHostConsoleScene
 } from "../scenes/buildConsoleScene";
 import type { ConsoleScene } from "../scenes/consoleScene";
+import {
+  browserNodeEnrollmentCeremony,
+  type NodeEnrollmentCeremony
+} from "./browserNodeEnrollmentCeremony";
 
-type MutationKind = "quota" | "installation" | "host" | null;
+type MutationKind = "quota" | "installation" | "host" | "enrollment" | null;
 
 export type TerminalConsolePhase = "IDLE" | "CREATING" | "CONNECTING" | "ACTIVE" | "ENDED" | "ERROR";
 
@@ -59,6 +70,8 @@ export type ConnectTerminal = () => TerminalConnection | null;
 
 export type CloseTerminal = () => Promise<void>;
 export type TransitionHost = (command: HostLifecycleCommand) => Promise<boolean>;
+export type CreateNodeEnrollment = (command: CreateNodeEnrollmentCommand) => Promise<boolean>;
+export type MutateNodeEnrollment = (command: NodeEnrollmentVersionCommand) => Promise<boolean>;
 
 type ControlPlaneContextValue = {
   scene: ConsoleScene | null;
@@ -69,6 +82,9 @@ type ControlPlaneContextValue = {
   activateQuota(command: ActivateQuotaCommand): Promise<boolean>;
   createInstallation(command: CreateInstallationCommand): Promise<boolean>;
   transitionHost: TransitionHost;
+  createNodeEnrollment: CreateNodeEnrollment;
+  revokeNodeEnrollment: MutateNodeEnrollment;
+  regenerateNodeEnrollment: MutateNodeEnrollment;
   selectDeployment(deploymentId: string): void;
   terminal: TerminalConsoleState;
   openTerminal: OpenTerminal;
@@ -90,6 +106,8 @@ const unsupportedOpenTerminal: OpenTerminal = async () => false;
 const unsupportedConnectTerminal: ConnectTerminal = () => null;
 const unsupportedCloseTerminal: CloseTerminal = async () => {};
 const unsupportedTransitionHost: TransitionHost = async () => false;
+const unsupportedCreateNodeEnrollment: CreateNodeEnrollment = async () => false;
+const unsupportedMutateNodeEnrollment: MutateNodeEnrollment = async () => false;
 
 function failureMessage(error: unknown, operation: "read" | "write" = "read"): string {
   if (error instanceof HttpProblem && error.status === 401) {
@@ -130,6 +148,39 @@ function hostMutationFailureMessage(error: unknown): string {
     return "主机登记已不存在，请刷新资源清单。";
   }
   return "主机生命周期操作未完成，平台未重启主机、Docker 或工作负载。";
+}
+
+function nodeEnrollmentReadFailureMessage(error: unknown): string {
+  if (error instanceof HttpProblem && error.status === 401) {
+    return "IAM 会话已失效，请注销后重新登录。";
+  }
+  if (error instanceof HttpProblem && error.status === 403) {
+    return "当前角色没有主机纳管查看权限。";
+  }
+  return "主机纳管状态暂时不可用；平台不会把旧状态伪装成最新结果。";
+}
+
+function nodeEnrollmentMutationFailureMessage(error: unknown): string {
+  if (error instanceof HttpProblem && error.status === 401) {
+    return "IAM 会话已失效，浏览器未保留纳管凭据。";
+  }
+  if (error instanceof HttpProblem && error.status === 403) {
+    return "当前角色无权创建、撤销或重新生成主机纳管。";
+  }
+  if (error instanceof HttpProblem && (error.status === 409 || error.status === 412) ||
+      error instanceof Error && error.message === "STALE_NODE_ENROLLMENT_COMMAND") {
+    return "纳管状态已变化；已保留服务端结果，请根据刷新后的状态重试。";
+  }
+  if (error instanceof HttpProblem && error.status === 410) {
+    return "该纳管已过期或撤销，请创建新的纳管任务。";
+  }
+  if (error instanceof HttpProblem && error.status === 404) {
+    return "该纳管记录已不存在，请刷新后重试。";
+  }
+  if (error instanceof Error && error.message === "NODE_ENROLLMENT_JOIN_FILE_NOT_CREATED") {
+    return "一次性 join 文件未能安全生成；浏览器未保留凭据，请对刷新后的活动纳管执行重新生成。";
+  }
+  return "主机纳管操作未完成；浏览器未保留私钥或一次性凭据。";
 }
 
 function deploymentFailureMessage(error: unknown): string {
@@ -303,6 +354,9 @@ function ManagedControlPlaneProvider({
     activateQuota,
     createInstallation,
     transitionHost: unsupportedTransitionHost,
+    createNodeEnrollment: unsupportedCreateNodeEnrollment,
+    revokeNodeEnrollment: unsupportedMutateNodeEnrollment,
+    regenerateNodeEnrollment: unsupportedMutateNodeEnrollment,
     selectDeployment: () => {},
     terminal: idleTerminalConsoleState,
     openTerminal: unsupportedOpenTerminal,
@@ -324,17 +378,22 @@ type HostRequest = {
 
 function HostInventoryProvider({
   children,
+  enrollmentCeremony,
+  enrollmentRepository,
   repository
 }: {
   children: ReactNode;
+  enrollmentCeremony: NodeEnrollmentCeremony;
+  enrollmentRepository: NodeEnrollmentRepository;
   repository: HostInventoryRepository;
 }) {
   const credential = useSessionCredential();
   const [inventory, setInventory] = useState<HostInventory | null>(null);
+  const [enrollmentInventory, setEnrollmentInventory] = useState<NodeEnrollmentInventory | null>(null);
   const [loading, setLoading] = useState(true);
   const [readError, setReadError] = useState<string | null>(null);
   const [mutationError, setMutationError] = useState<string | null>(null);
-  const [hostMutation, setHostMutation] = useState<string | null>(null);
+  const [mutation, setMutation] = useState<MutationKind>(null);
   const active = useRef(false);
   const mutationActive = useRef(false);
   const epoch = useRef(0);
@@ -345,6 +404,7 @@ function HostInventoryProvider({
   const load = useCallback((): Promise<boolean> => {
     if (!credential) {
       setInventory(null);
+      setEnrollmentInventory(null);
       setLoading(false);
       return Promise.resolve(false);
     }
@@ -357,25 +417,42 @@ function HostInventoryProvider({
     setLoading(true);
     slot.promise = Promise.resolve().then(async () => {
       try {
-        const loaded = await repository.load(credential, controller.signal);
+        const [hostResult, enrollmentResult] = await Promise.allSettled([
+          repository.load(credential, controller.signal),
+          enrollmentRepository.load(credential, controller.signal)
+        ]);
         if (controller.signal.aborted || requestEpoch !== epoch.current) return false;
-        setInventory(loaded);
-        setReadError(null);
+
+        const hostAuthorizationFailure = hostResult.status === "rejected" &&
+          hostResult.reason instanceof HttpProblem &&
+          (hostResult.reason.status === 401 || hostResult.reason.status === 403);
+        const enrollmentAuthorizationFailure = enrollmentResult.status === "rejected" &&
+          enrollmentResult.reason instanceof HttpProblem &&
+          (enrollmentResult.reason.status === 401 || enrollmentResult.reason.status === 403);
+        if (hostAuthorizationFailure || enrollmentAuthorizationFailure) {
+          setInventory(null);
+          setEnrollmentInventory(null);
+          setReadError(hostAuthorizationFailure
+            ? hostFailureMessage(hostResult.reason)
+            : nodeEnrollmentReadFailureMessage(enrollmentResult.status === "rejected" ? enrollmentResult.reason : null));
+          return false;
+        }
+
+        if (hostResult.status === "fulfilled") setInventory(hostResult.value);
+        if (enrollmentResult.status === "fulfilled") setEnrollmentInventory(enrollmentResult.value);
+        setReadError(hostResult.status === "rejected"
+          ? hostFailureMessage(hostResult.reason)
+          : enrollmentResult.status === "rejected"
+            ? nodeEnrollmentReadFailureMessage(enrollmentResult.reason)
+            : null);
         return true;
-      } catch (loadError) {
-        if (controller.signal.aborted || requestEpoch !== epoch.current) return false;
-        const authorizationFailure = loadError instanceof HttpProblem &&
-          (loadError.status === 401 || loadError.status === 403);
-        if (authorizationFailure) setInventory(null);
-        setReadError(hostFailureMessage(loadError));
-        return !authorizationFailure;
       } finally {
         if (request.current === slot) request.current = null;
         if (!controller.signal.aborted && requestEpoch === epoch.current) setLoading(false);
       }
     });
     return slot.promise;
-  }, [credential, repository]);
+  }, [credential, enrollmentRepository, repository]);
 
   const scheduleNext = useCallback(() => {
     if (!active.current || !cycle.current) return;
@@ -416,7 +493,7 @@ function HostInventoryProvider({
       return false;
     }
     mutationActive.current = true;
-    setHostMutation(command.targetId);
+    setMutation("host");
     setMutationError(null);
     try {
       const changed = await repository.transition(credential, command);
@@ -432,7 +509,10 @@ function HostInventoryProvider({
     } catch (mutationFailure) {
       const authorizationFailure = mutationFailure instanceof HttpProblem &&
         (mutationFailure.status === 401 || mutationFailure.status === 403);
-      if (authorizationFailure) setInventory(null);
+      if (authorizationFailure) {
+        setInventory(null);
+        setEnrollmentInventory(null);
+      }
       setMutationError(hostMutationFailureMessage(mutationFailure));
       void load().then((continuePolling) => {
         if (continuePolling) scheduleNext();
@@ -440,29 +520,152 @@ function HostInventoryProvider({
       return false;
     } finally {
       mutationActive.current = false;
-      setHostMutation(null);
+      setMutation(null);
     }
   }, [credential, inventory, load, repository, scheduleNext]);
 
+  const createNodeEnrollment = useCallback<CreateNodeEnrollment>(async (command) => {
+    const name = command.name.trim();
+    const pool = enrollmentInventory?.pools.find((item) =>
+      item.id === command.executionPoolId && item.phase === "READY" &&
+      !Object.hasOwn(item.selectorLabels, "matrix-machine-fingerprint")
+    );
+    if (!credential || mutationActive.current) return false;
+    if (!pool || !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(name)) {
+      setMutationError("请选择现有就绪执行池，并使用 DNS 标签格式的主机名称。");
+      return false;
+    }
+    mutationActive.current = true;
+    setMutation("enrollment");
+    setMutationError(null);
+    try {
+      const created = await enrollmentCeremony.create(
+        enrollmentRepository,
+        credential,
+        window.location.origin,
+        { name, executionPoolId: pool.id, labels: { ...pool.selectorLabels } }
+      );
+      setEnrollmentInventory((current) => current ? {
+        ...current,
+        enrollments: [created, ...current.enrollments.filter((item) => item.id !== created.id)]
+      } : current);
+      scheduleNext();
+      return true;
+    } catch (mutationFailure) {
+      const authorizationFailure = mutationFailure instanceof HttpProblem &&
+        (mutationFailure.status === 401 || mutationFailure.status === 403);
+      if (authorizationFailure) {
+        setInventory(null);
+        setEnrollmentInventory(null);
+      }
+      setMutationError(nodeEnrollmentMutationFailureMessage(mutationFailure));
+      if (!authorizationFailure) void load().then((continuePolling) => {
+        if (continuePolling) scheduleNext();
+      });
+      return false;
+    } finally {
+      mutationActive.current = false;
+      setMutation(null);
+    }
+  }, [credential, enrollmentCeremony, enrollmentInventory, enrollmentRepository, load, scheduleNext]);
+
+  const revokeNodeEnrollment = useCallback<MutateNodeEnrollment>(async (command) => {
+    const current = enrollmentInventory?.enrollments.find((item) =>
+      item.id === command.enrollmentId && item.resourceVersion === command.resourceVersion &&
+      (item.state === "WAITING_INSTALL" || item.state === "VERIFYING")
+    );
+    if (!credential || mutationActive.current || !current) return false;
+    mutationActive.current = true;
+    setMutation("enrollment");
+    setMutationError(null);
+    try {
+      const revoked = await enrollmentRepository.revoke(credential, command);
+      setEnrollmentInventory((snapshot) => snapshot ? {
+        ...snapshot,
+        enrollments: snapshot.enrollments.map((item) => item.id === revoked.id ? revoked : item)
+      } : snapshot);
+      scheduleNext();
+      return true;
+    } catch (mutationFailure) {
+      const authorizationFailure = mutationFailure instanceof HttpProblem &&
+        (mutationFailure.status === 401 || mutationFailure.status === 403);
+      if (authorizationFailure) {
+        setInventory(null);
+        setEnrollmentInventory(null);
+      }
+      setMutationError(nodeEnrollmentMutationFailureMessage(mutationFailure));
+      if (!authorizationFailure) void load().then((continuePolling) => {
+        if (continuePolling) scheduleNext();
+      });
+      return false;
+    } finally {
+      mutationActive.current = false;
+      setMutation(null);
+    }
+  }, [credential, enrollmentInventory, enrollmentRepository, load, scheduleNext]);
+
+  const regenerateNodeEnrollment = useCallback<MutateNodeEnrollment>(async (command) => {
+    const current = enrollmentInventory?.enrollments.find((item) =>
+      item.id === command.enrollmentId && item.resourceVersion === command.resourceVersion &&
+      (item.state === "WAITING_INSTALL" || item.state === "VERIFYING")
+    );
+    if (!credential || mutationActive.current || !current) return false;
+    mutationActive.current = true;
+    setMutation("enrollment");
+    setMutationError(null);
+    try {
+      const replacement = await enrollmentCeremony.regenerate(
+        enrollmentRepository,
+        credential,
+        window.location.origin,
+        command
+      );
+      setEnrollmentInventory((snapshot) => snapshot ? {
+        ...snapshot,
+        enrollments: [replacement, ...snapshot.enrollments.filter((item) => item.id !== command.enrollmentId && item.id !== replacement.id)]
+      } : snapshot);
+      scheduleNext();
+      return true;
+    } catch (mutationFailure) {
+      const authorizationFailure = mutationFailure instanceof HttpProblem &&
+        (mutationFailure.status === 401 || mutationFailure.status === 403);
+      if (authorizationFailure) {
+        setInventory(null);
+        setEnrollmentInventory(null);
+      }
+      setMutationError(nodeEnrollmentMutationFailureMessage(mutationFailure));
+      if (!authorizationFailure) void load().then((continuePolling) => {
+        if (continuePolling) scheduleNext();
+      });
+      return false;
+    } finally {
+      mutationActive.current = false;
+      setMutation(null);
+    }
+  }, [credential, enrollmentCeremony, enrollmentInventory, enrollmentRepository, load, scheduleNext]);
+
   const scene = useMemo(
-    () => inventory ? buildHostConsoleScene(inventory) : null,
-    [inventory]
+    () => inventory ? buildHostConsoleScene(inventory, enrollmentInventory ?? undefined) : null,
+    [enrollmentInventory, inventory]
   );
   const value = useMemo<ControlPlaneContextValue>(() => ({
     scene,
     loading,
     error: mutationError ?? readError,
-    mutation: hostMutation === null ? null : "host",
+    mutation,
     reload,
     activateQuota: async () => false,
     createInstallation: async () => false,
     transitionHost,
+    createNodeEnrollment,
+    revokeNodeEnrollment,
+    regenerateNodeEnrollment,
     selectDeployment: () => {},
     terminal: idleTerminalConsoleState,
     openTerminal: unsupportedOpenTerminal,
     connectTerminal: unsupportedConnectTerminal,
     closeTerminal: unsupportedCloseTerminal
-  }), [hostMutation, loading, mutationError, readError, reload, scene, transitionHost]);
+  }), [createNodeEnrollment, loading, mutation, mutationError, readError, regenerateNodeEnrollment, reload, revokeNodeEnrollment, scene, transitionHost]);
 
   return (
     <ControlPlaneContext.Provider value={value}>
@@ -813,6 +1016,9 @@ function DeploymentInventoryProvider({
     activateQuota: async () => false,
     createInstallation: async () => false,
     transitionHost: unsupportedTransitionHost,
+    createNodeEnrollment: unsupportedCreateNodeEnrollment,
+    revokeNodeEnrollment: unsupportedMutateNodeEnrollment,
+    regenerateNodeEnrollment: unsupportedMutateNodeEnrollment,
     selectDeployment,
     terminal,
     openTerminal,
@@ -827,6 +1033,8 @@ export function ControlPlaneProvider({
   children,
   repository = httpControlPlaneRepository,
   hostRepository = httpHostInventoryRepository,
+  nodeEnrollmentRepository = httpNodeEnrollmentRepository,
+  nodeEnrollmentCeremony = browserNodeEnrollmentCeremony,
   deploymentRepository = httpDeploymentInventoryRepository,
   terminalRepository = httpTerminalSessionRepository,
   selection
@@ -834,12 +1042,22 @@ export function ControlPlaneProvider({
   children: ReactNode;
   repository?: ControlPlaneRepository;
   hostRepository?: HostInventoryRepository;
+  nodeEnrollmentRepository?: NodeEnrollmentRepository;
+  nodeEnrollmentCeremony?: NodeEnrollmentCeremony;
   deploymentRepository?: DeploymentInventoryRepository;
   terminalRepository?: TerminalSessionRepository;
   selection: ControlPlaneRouteSelection;
 }) {
   if (selection.section === "hosts") {
-    return <HostInventoryProvider repository={hostRepository}>{children}</HostInventoryProvider>;
+    return (
+      <HostInventoryProvider
+        enrollmentCeremony={nodeEnrollmentCeremony}
+        enrollmentRepository={nodeEnrollmentRepository}
+        repository={hostRepository}
+      >
+        {children}
+      </HostInventoryProvider>
+    );
   }
   if (selection.section === "deployments") {
     return (

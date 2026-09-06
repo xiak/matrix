@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ControlPlaneSnapshot } from "../domain/resources";
 import type { HostInventory } from "../domain/hosts";
+import type { NodeEnrollmentInventory } from "../domain/nodeEnrollments";
 import type { DeploymentInventory, DeploymentRuntimeSnapshot } from "../domain/deployments";
 import {
   buildConsoleScene,
@@ -230,6 +231,66 @@ describe("buildConsoleScene", () => {
         cpu: { value: "25.0%", progress: 25, state: "AVAILABLE" },
         memory: { progress: 25, state: "AVAILABLE" },
         filesystems: [{ mountPoint: "/", progress: 20 }]
+      }]
+    });
+  });
+
+  it("projects closed enrollment states and only installation-owned pool selector labels", () => {
+    const inventory: NodeEnrollmentInventory = {
+      pools: [{
+        id: "linux-pool", name: "linux-pool", resourceVersion: 1,
+        selectorLabels: { location: "edge-a", purpose: "workload" }, phase: "READY",
+        targetCount: 2, readyTargetCount: 1, observedAt: "2026-09-07T10:00:00Z"
+      }, {
+        id: "unavailable-pool", name: "unavailable-pool", resourceVersion: 1,
+        selectorLabels: {}, phase: "UNAVAILABLE",
+        targetCount: 0, readyTargetCount: 0, observedAt: "2026-09-07T10:00:00Z"
+      }],
+      enrollments: [{
+        id: `node-enrollment-${"1".repeat(32)}`,
+        name: "edge-linux-a",
+        labels: { location: "edge-a", purpose: "workload" },
+        resourceVersion: 3,
+        createdAt: "2026-09-07T10:00:00Z",
+        updatedAt: "2026-09-07T10:01:00Z",
+        executionTargetId: "target-edge-a",
+        executionPoolId: "linux-pool",
+        operationId: "operation-edge-a",
+        state: "FAILED",
+        expiresAt: "2026-09-07T10:20:00Z",
+        credentialConsumedAt: "2026-09-07T10:00:30Z",
+        readyAt: null,
+        replacedById: null,
+        diagnostic: {
+          code: "MANAGEMENT_UNREACHABLE",
+          retryable: true,
+          occurredAt: "2026-09-07T10:01:00Z"
+        }
+      }]
+    };
+
+    const scene = buildHostConsoleScene(hosts, inventory);
+
+    expect(scene.content).toMatchObject({
+      kind: "hosts",
+      enrollments: [{
+        stateLabel: "验证失败",
+        credentialState: "一次性凭据已消费",
+        retryable: true,
+        canRevoke: false,
+        canRegenerate: false,
+        diagnostic: "平台暂时无法连通主机管理端口，可在网络恢复后重试。"
+      }]
+    });
+    expect(scene.workspace).toEqual({
+      kind: "host-enrollment",
+      pools: [{
+        id: "linux-pool",
+        label: "linux-pool · 1/2 就绪",
+        selectorLabels: [
+          { key: "location", value: "edge-a" },
+          { key: "purpose", value: "workload" }
+        ]
       }]
     });
   });

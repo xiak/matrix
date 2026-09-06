@@ -4,7 +4,10 @@ import { useMemo, useState, type FormEvent } from "react";
 import {
   Activity,
   CheckCircle2,
+  Clipboard,
   Database,
+  Download,
+  KeyRound,
   MapPin,
   PackagePlus,
   ServerCog,
@@ -12,6 +15,7 @@ import {
 } from "lucide-react";
 import { Badge, Button, Input, Select, Typography } from "@ui/xiak";
 import { useControlPlane } from "../application/ControlPlaneProvider";
+import { NODE_ENROLLMENT_INSTALL_COMMAND } from "../domain/nodeEnrollments";
 import type { ConsoleWorkspaceScene } from "../scenes/consoleScene";
 import styles from "./ConsoleWorkspaceRenderer.module.css";
 
@@ -258,6 +262,113 @@ function PlatformStatus({
   );
 }
 
+const hostNamePatternSource = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?";
+const hostNamePattern = new RegExp(`^${hostNamePatternSource}$`);
+
+function HostEnrollment({
+  feedback,
+  scene
+}: {
+  feedback?: React.ReactNode;
+  scene: Extract<NonNullable<ConsoleWorkspaceScene>, { kind: "host-enrollment" }>;
+}) {
+  const controlPlane = useControlPlane();
+  const [name, setName] = useState("linux-host");
+  const [executionPoolId, setExecutionPoolId] = useState("");
+  const [downloaded, setDownloaded] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const selectedPool = scene.pools.find((item) => item.id === executionPoolId);
+  const canSubmit = Boolean(selectedPool && hostNamePattern.test(name));
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setDownloaded(false);
+    if (!selectedPool) return;
+    setDownloaded(await controlPlane.createNodeEnrollment({
+      name,
+      executionPoolId: selectedPool.id
+    }));
+  }
+
+  async function copyCommand() {
+    setCopyState("idle");
+    try {
+      await navigator.clipboard.writeText(NODE_ENROLLMENT_INSTALL_COMMAND);
+      setCopyState("copied");
+    } catch {
+      setCopyState("failed");
+    }
+  }
+
+  return (
+    <div className={styles.workspace}>
+      <header className={styles.heading}>
+        <div className={styles.headingIcon}><KeyRound aria-hidden="true" /></div>
+        <div>
+          <Typography.Eyebrow>One-time host enrollment</Typography.Eyebrow>
+          <Typography.Title as="h2" level={3}>纳管 Linux 主机</Typography.Title>
+        </div>
+      </header>
+      {feedback}
+      {scene.pools.length === 0 ? (
+        <OrderNotice>没有可用于纳管的就绪执行池。请先配置执行池及其安装侧选择标签。</OrderNotice>
+      ) : (
+        <form className={styles.form} onSubmit={submit}>
+          <Field label="主机名称">
+            <Input
+              invalid={Boolean(name) && !hostNamePattern.test(name)}
+              onChange={(event) => { setName(event.target.value); setDownloaded(false); }}
+              pattern={hostNamePatternSource}
+              required
+              value={name}
+            />
+          </Field>
+          <Field label="执行池">
+            <Select
+              onChange={(event) => { setExecutionPoolId(event.target.value); setDownloaded(false); }}
+              required
+              value={selectedPool?.id ?? ""}
+            >
+              <option disabled value="">请选择现有就绪执行池</option>
+              {scene.pools.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+            </Select>
+          </Field>
+          <div className={styles.resourceSummary}>
+            <KeyRound aria-hidden="true" />
+            <div>
+              <strong>执行池固定的调度标签</strong>
+              <span>
+                {selectedPool?.selectorLabels.length
+                  ? selectedPool.selectorLabels.map((item) => `${item.key}=${item.value}`).join(" · ")
+                  : "所选执行池不要求额外调度标签"}
+              </span>
+            </div>
+          </div>
+          <OrderNotice>
+            浏览器临时生成 RSA-3072 包装密钥，只把公钥发送给平台。一次性凭据仅进入本地下载文件，刷新或关闭页面后无法取回。
+          </OrderNotice>
+          {downloaded ? (
+            <p className={styles.accepted}><CheckCircle2 aria-hidden="true" /> 纳管已创建，join 文件已由浏览器下载</p>
+          ) : null}
+          <Button block disabled={!canSubmit || controlPlane.mutation !== null} size="large" type="submit">
+            <Download aria-hidden="true" />
+            {controlPlane.mutation === "enrollment" ? "正在安全生成…" : "创建纳管并下载 join 文件"}
+          </Button>
+        </form>
+      )}
+      <section className={styles.command} aria-label="固定安装命令">
+        <div><strong>固定安装命令</strong><span>请将签名离线发布目录、信任文件和下载的 join 文件放在当前目录。</span></div>
+        <Typography.Code>{NODE_ENROLLMENT_INSTALL_COMMAND}</Typography.Code>
+        <Button onClick={() => void copyCommand()} size="small" variant="secondary">
+          <Clipboard aria-hidden="true" />复制命令
+        </Button>
+        {copyState === "copied" ? <small role="status">命令已复制；其中不含凭据。</small> : null}
+        {copyState === "failed" ? <small role="alert">浏览器拒绝剪贴板访问，请手动复制上方固定命令。</small> : null}
+      </section>
+    </div>
+  );
+}
+
 export function ConsoleWorkspaceRenderer({
   feedback,
   scene
@@ -267,5 +378,6 @@ export function ConsoleWorkspaceRenderer({
 }) {
   if (scene.kind === "quota-order") return <QuotaOrder feedback={feedback} scene={scene} />;
   if (scene.kind === "installation-order") return <InstallationOrder feedback={feedback} scene={scene} />;
+  if (scene.kind === "host-enrollment") return <HostEnrollment feedback={feedback} scene={scene} />;
   return <PlatformStatus feedback={feedback} scene={scene} />;
 }

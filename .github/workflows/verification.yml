@@ -41,6 +41,26 @@ jobs:
           go vet -p 2 ./...
           go test -race -p 2 ./...
 
+  ui:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: app/ui/paas/_frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '24.19.0'
+          cache: npm
+          cache-dependency-path: app/ui/paas/_frontend/package-lock.json
+      - name: Verify control-plane UI behavior and embedded export
+        run: |
+          npm ci
+          npm run check
+
   authority-process:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
