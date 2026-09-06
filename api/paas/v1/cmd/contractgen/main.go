@@ -146,6 +146,49 @@ func buildPaths() schema {
 		"List installation-scoped ExecutionTargets",
 		"ExecutionTargetList",
 	)
+	executionPools := paths["/v1/execution-pools"].(schema)
+	executionPools["get"] = collectionReadOperation(
+		"listExecutionPools",
+		"List installation-scoped ExecutionPools selectable for enrollment",
+		"ExecutionPoolList",
+	)
+	paths["/v1/node-enrollments"] = schema{
+		"get": collectionReadOperation(
+			"listNodeEnrollments",
+			"List recent installation-scoped NodeEnrollments",
+			"NodeEnrollmentList",
+		),
+		"post": createNodeEnrollmentOperation(
+			"createNodeEnrollment",
+			"Create a short-lived Linux node enrollment with a wrapped one-time credential",
+			"CreateNodeEnrollmentRequest",
+			false,
+		),
+	}
+	paths["/v1/node-enrollments/{nodeEnrollmentId}"] = schema{
+		"get": readOperation(
+			"getNodeEnrollment",
+			"Get one installation-scoped NodeEnrollment",
+			"nodeEnrollmentId",
+			"NodeEnrollment",
+		),
+	}
+	paths["/v1/node-enrollments/{nodeEnrollmentId}/revoke"] = schema{
+		"post": nodeEnrollmentLifecycleOperation(
+			"revokeNodeEnrollment",
+			"Revoke an enrollment before it publishes an ExecutionTarget",
+			"",
+			"NodeEnrollment",
+		),
+	}
+	paths["/v1/node-enrollments/{nodeEnrollmentId}/regenerate"] = schema{
+		"post": createNodeEnrollmentOperation(
+			"regenerateNodeEnrollment",
+			"Revoke an enrollment and create a fresh identity and wrapped credential",
+			"RegenerateNodeEnrollmentRequest",
+			true,
+		),
+	}
 	for _, command := range []struct {
 		name, operationID, summary string
 	}{
@@ -236,6 +279,74 @@ func buildPaths() schema {
 		},
 	}
 	return paths
+}
+
+func createNodeEnrollmentOperation(operationID, summary, bodySchema string, withPath bool) schema {
+	parameters := []any{componentRef("#/components/parameters/IdempotencyKey")}
+	if withPath {
+		parameters = append([]any{pathIDParameter("nodeEnrollmentId"), componentRef("#/components/parameters/IfMatch")}, parameters...)
+	}
+	success := schema{
+		"description": "Enrollment created; the raw credential is present only inside the RSA-OAEP ciphertext.",
+		"headers": schema{
+			"Location":           componentRef("#/components/headers/Location"),
+			"Operation-Location": componentRef("#/components/headers/OperationLocation"),
+			"ETag":               componentRef("#/components/headers/ETag"),
+		},
+		"content": schema{"application/json": schema{"schema": ref("CreateNodeEnrollmentResponse")}},
+	}
+	return schema{
+		"operationId": operationID,
+		"summary":     summary,
+		"parameters":  parameters,
+		"requestBody": jsonRequestBody(bodySchema),
+		"responses": schema{
+			"200": success,
+			"201": success,
+			"400": componentRef("#/components/responses/ProblemResponse"),
+			"401": componentRef("#/components/responses/ProblemResponse"),
+			"403": componentRef("#/components/responses/ProblemResponse"),
+			"404": componentRef("#/components/responses/ProblemResponse"),
+			"409": componentRef("#/components/responses/ProblemResponse"),
+			"412": componentRef("#/components/responses/ProblemResponse"),
+			"415": componentRef("#/components/responses/ProblemResponse"),
+			"428": componentRef("#/components/responses/ProblemResponse"),
+			"500": componentRef("#/components/responses/ProblemResponse"),
+			"503": componentRef("#/components/responses/ProblemResponse"),
+		},
+	}
+}
+
+func nodeEnrollmentLifecycleOperation(operationID, summary, bodySchema, responseSchema string) schema {
+	operation := schema{
+		"operationId": operationID,
+		"summary":     summary,
+		"parameters": []any{
+			pathIDParameter("nodeEnrollmentId"),
+			componentRef("#/components/parameters/IdempotencyKey"),
+			componentRef("#/components/parameters/IfMatch"),
+		},
+		"responses": schema{
+			"200": schema{
+				"description": "Enrollment transition committed or exactly replayed.",
+				"headers":     schema{"ETag": componentRef("#/components/headers/ETag")},
+				"content":     schema{"application/json": schema{"schema": ref(responseSchema)}},
+			},
+			"400": componentRef("#/components/responses/ProblemResponse"),
+			"401": componentRef("#/components/responses/ProblemResponse"),
+			"403": componentRef("#/components/responses/ProblemResponse"),
+			"404": componentRef("#/components/responses/ProblemResponse"),
+			"409": componentRef("#/components/responses/ProblemResponse"),
+			"412": componentRef("#/components/responses/ProblemResponse"),
+			"428": componentRef("#/components/responses/ProblemResponse"),
+			"500": componentRef("#/components/responses/ProblemResponse"),
+			"503": componentRef("#/components/responses/ProblemResponse"),
+		},
+	}
+	if bodySchema != "" {
+		operation["requestBody"] = jsonRequestBody(bodySchema)
+	}
+	return operation
 }
 
 func createTerminalSessionOperation() schema {
@@ -508,46 +619,53 @@ func scalarSchemas() map[string]any {
 
 func enumSchemas() map[string][]string {
 	return map[string][]string{
-		"AuthorityKind":                 stringsOf(paasv1.AuthorityPlatform, paasv1.AuthorityTenant),
-		"TenantStatus":                  stringsOf(paasv1.TenantActive, paasv1.TenantSuspended, paasv1.TenantDeactivated),
-		"ExecutionPoolPhase":            stringsOf(paasv1.ExecutionPoolReady, paasv1.ExecutionPoolDegraded, paasv1.ExecutionPoolUnavailable),
-		"ExecutionTargetHealth":         stringsOf(paasv1.ExecutionTargetHealthUnknown, paasv1.ExecutionTargetHealthReady, paasv1.ExecutionTargetHealthDegraded, paasv1.ExecutionTargetHealthUnavailable),
-		"MeasurementState":              stringsOf(paasv1.MeasurementAvailable, paasv1.MeasurementWarmingUp, paasv1.MeasurementUnavailable, paasv1.MeasurementUnsupported, paasv1.MeasurementStale),
-		"ExecutionTargetDesiredState":   stringsOf(paasv1.ExecutionTargetActive, paasv1.ExecutionTargetDraining, paasv1.ExecutionTargetRemoved),
-		"IsolationGuarantee":            stringsOfSlice(paasv1.IsolationGuarantees()),
-		"PlacementStrategy":             stringsOf(paasv1.PlacementFirstFit, paasv1.PlacementSpread, paasv1.PlacementBinPack),
-		"PlacementOutcome":              stringsOf(paasv1.PlacementScheduled, paasv1.PlacementUnschedulable),
-		"DeploymentDesiredState":        stringsOf(paasv1.DeploymentDesiredRunning, paasv1.DeploymentDesiredStopped),
-		"DeploymentPhase":               stringsOfSlice(paasv1.DeploymentPhases()),
-		"DeploymentInstanceState":       stringsOfSlice(paasv1.DeploymentInstanceStates()),
-		"DeploymentInstanceHealth":      stringsOfSlice(paasv1.DeploymentInstanceHealthStates()),
-		"TerminalSessionState":          stringsOfSlice(paasv1.TerminalSessionStates()),
-		"TerminalSessionOutcome":        stringsOfSlice(paasv1.TerminalSessionOutcomes()),
-		"OperationAction":               stringsOfSlice(paasv1.OperationActions()),
-		"OperationState":                stringsOfSlice(paasv1.OperationStates()),
-		"EvidenceType":                  stringsOf(paasv1.EvidencePolicyDecision, paasv1.EvidencePlacementDecision, paasv1.EvidenceAdapterCommand, paasv1.EvidenceAdapterResult, paasv1.EvidenceObservation, paasv1.EvidenceVerification, paasv1.EvidenceAuditDispatch),
-		"EvidenceSeverity":              stringsOf(paasv1.EvidenceInfo, paasv1.EvidenceWarning, paasv1.EvidenceError),
-		"SubjectType":                   stringsOf(paasv1.SubjectUser, paasv1.SubjectServiceAccount, paasv1.SubjectAgent, paasv1.SubjectSystemUser),
-		"ReadinessState":                stringsOf(paasv1.ReadinessReady, paasv1.ReadinessNotReady),
-		"InstallationVerificationState": stringsOf(paasv1.InstallationVerificationPending, paasv1.InstallationVerificationReady, paasv1.InstallationVerificationFailed),
-		"ErrorCode":                     stringsOfSlice(paasv1.ErrorCodes()),
-		"AdapterKind":                   stringsOf(paasv1.AdapterInfrastructure, paasv1.AdapterDeploymentExecutor, paasv1.AdapterGateway),
-		"AdapterAction":                 stringsOf(paasv1.AdapterCapabilities, paasv1.AdapterInspectExecutionTarget, paasv1.AdapterObserveExecutionTarget, paasv1.AdapterValidateDeployment, paasv1.AdapterApplyDeployment, paasv1.AdapterObserveDeployment, paasv1.AdapterStopDeployment, paasv1.AdapterRollbackDeployment, paasv1.AdapterReconcileRoutes, paasv1.AdapterObserveRoutes, paasv1.AdapterDeleteRoutes),
-		"AdapterResultState":            stringsOf(paasv1.AdapterResultSucceeded, paasv1.AdapterResultInProgress, paasv1.AdapterResultFailed, paasv1.AdapterResultUnknown),
-		"AdapterErrorClass":             stringsOf(paasv1.AdapterErrorValidation, paasv1.AdapterErrorConflict, paasv1.AdapterErrorPermissionDenied, paasv1.AdapterErrorQuotaExceeded, paasv1.AdapterErrorRateLimited, paasv1.AdapterErrorTransient, paasv1.AdapterErrorUnavailable, paasv1.AdapterErrorTimeout, paasv1.AdapterErrorNotFound, paasv1.AdapterErrorUnknownOutcome, paasv1.AdapterErrorInternal),
-		"ArtifactKind":                  stringsOf(paasv1.ArtifactOCIImage, paasv1.ArtifactOCIArtifact, paasv1.ArtifactReleaseBundle),
-		"InputKind":                     stringsOf(paasv1.InputConfiguration, paasv1.InputSecret),
-		"InjectionMode":                 stringsOf(paasv1.InjectionEnvironment, paasv1.InjectionFile),
-		"EndpointProtocol":              stringsOf(paasv1.EndpointHTTP, paasv1.EndpointGRPC, paasv1.EndpointTCP),
-		"EndpointVisibility":            stringsOf(paasv1.EndpointPrivate, paasv1.EndpointPublic),
+		"AuthorityKind":                   stringsOf(paasv1.AuthorityPlatform, paasv1.AuthorityTenant),
+		"TenantStatus":                    stringsOf(paasv1.TenantActive, paasv1.TenantSuspended, paasv1.TenantDeactivated),
+		"ExecutionPoolPhase":              stringsOf(paasv1.ExecutionPoolReady, paasv1.ExecutionPoolDegraded, paasv1.ExecutionPoolUnavailable),
+		"ExecutionTargetHealth":           stringsOf(paasv1.ExecutionTargetHealthUnknown, paasv1.ExecutionTargetHealthReady, paasv1.ExecutionTargetHealthDegraded, paasv1.ExecutionTargetHealthUnavailable),
+		"NodeEnrollmentState":             stringsOfSlice(paasv1.NodeEnrollmentStates()),
+		"NodeEnrollmentDiagnosticCode":    stringsOfSlice(paasv1.NodeEnrollmentDiagnosticCodes()),
+		"JoinCredentialWrappingAlgorithm": stringsOf(paasv1.JoinCredentialRSAOAEP256),
+		"NodeJoinSignatureAlgorithm":      stringsOf(paasv1.NodeJoinSignatureEd25519),
+		"MeasurementState":                stringsOf(paasv1.MeasurementAvailable, paasv1.MeasurementWarmingUp, paasv1.MeasurementUnavailable, paasv1.MeasurementUnsupported, paasv1.MeasurementStale),
+		"ExecutionTargetDesiredState":     stringsOf(paasv1.ExecutionTargetActive, paasv1.ExecutionTargetDraining, paasv1.ExecutionTargetRemoved),
+		"IsolationGuarantee":              stringsOfSlice(paasv1.IsolationGuarantees()),
+		"PlacementStrategy":               stringsOf(paasv1.PlacementFirstFit, paasv1.PlacementSpread, paasv1.PlacementBinPack),
+		"PlacementOutcome":                stringsOf(paasv1.PlacementScheduled, paasv1.PlacementUnschedulable),
+		"DeploymentDesiredState":          stringsOf(paasv1.DeploymentDesiredRunning, paasv1.DeploymentDesiredStopped),
+		"DeploymentPhase":                 stringsOfSlice(paasv1.DeploymentPhases()),
+		"DeploymentInstanceState":         stringsOfSlice(paasv1.DeploymentInstanceStates()),
+		"DeploymentInstanceHealth":        stringsOfSlice(paasv1.DeploymentInstanceHealthStates()),
+		"TerminalSessionState":            stringsOfSlice(paasv1.TerminalSessionStates()),
+		"TerminalSessionOutcome":          stringsOfSlice(paasv1.TerminalSessionOutcomes()),
+		"OperationAction":                 stringsOfSlice(paasv1.OperationActions()),
+		"OperationState":                  stringsOfSlice(paasv1.OperationStates()),
+		"EvidenceType":                    stringsOf(paasv1.EvidencePolicyDecision, paasv1.EvidencePlacementDecision, paasv1.EvidenceAdapterCommand, paasv1.EvidenceAdapterResult, paasv1.EvidenceObservation, paasv1.EvidenceVerification, paasv1.EvidenceAuditDispatch),
+		"EvidenceSeverity":                stringsOf(paasv1.EvidenceInfo, paasv1.EvidenceWarning, paasv1.EvidenceError),
+		"SubjectType":                     stringsOf(paasv1.SubjectUser, paasv1.SubjectServiceAccount, paasv1.SubjectAgent, paasv1.SubjectSystemUser),
+		"ReadinessState":                  stringsOf(paasv1.ReadinessReady, paasv1.ReadinessNotReady),
+		"InstallationVerificationState":   stringsOf(paasv1.InstallationVerificationPending, paasv1.InstallationVerificationReady, paasv1.InstallationVerificationFailed),
+		"ErrorCode":                       stringsOfSlice(paasv1.ErrorCodes()),
+		"AdapterKind":                     stringsOf(paasv1.AdapterInfrastructure, paasv1.AdapterDeploymentExecutor, paasv1.AdapterGateway),
+		"AdapterAction":                   stringsOf(paasv1.AdapterCapabilities, paasv1.AdapterInspectExecutionTarget, paasv1.AdapterObserveExecutionTarget, paasv1.AdapterValidateDeployment, paasv1.AdapterApplyDeployment, paasv1.AdapterObserveDeployment, paasv1.AdapterStopDeployment, paasv1.AdapterRollbackDeployment, paasv1.AdapterReconcileRoutes, paasv1.AdapterObserveRoutes, paasv1.AdapterDeleteRoutes),
+		"AdapterResultState":              stringsOf(paasv1.AdapterResultSucceeded, paasv1.AdapterResultInProgress, paasv1.AdapterResultFailed, paasv1.AdapterResultUnknown),
+		"AdapterErrorClass":               stringsOf(paasv1.AdapterErrorValidation, paasv1.AdapterErrorConflict, paasv1.AdapterErrorPermissionDenied, paasv1.AdapterErrorQuotaExceeded, paasv1.AdapterErrorRateLimited, paasv1.AdapterErrorTransient, paasv1.AdapterErrorUnavailable, paasv1.AdapterErrorTimeout, paasv1.AdapterErrorNotFound, paasv1.AdapterErrorUnknownOutcome, paasv1.AdapterErrorInternal),
+		"ArtifactKind":                    stringsOf(paasv1.ArtifactOCIImage, paasv1.ArtifactOCIArtifact, paasv1.ArtifactReleaseBundle),
+		"InputKind":                       stringsOf(paasv1.InputConfiguration, paasv1.InputSecret),
+		"InjectionMode":                   stringsOf(paasv1.InjectionEnvironment, paasv1.InjectionFile),
+		"EndpointProtocol":                stringsOf(paasv1.EndpointHTTP, paasv1.EndpointGRPC, paasv1.EndpointTCP),
+		"EndpointVisibility":              stringsOf(paasv1.EndpointPrivate, paasv1.EndpointPublic),
 	}
 }
 
 func structContracts() map[string]reflect.Type {
 	values := []any{
 		paasv1.ResourceScope{}, paasv1.ResourceMetadata{}, paasv1.Tenant{},
-		paasv1.LabelSelector{}, paasv1.ExecutionPoolSpec{}, paasv1.ExecutionPoolStatus{}, paasv1.ExecutionPool{},
+		paasv1.LabelSelector{}, paasv1.ExecutionPoolSpec{}, paasv1.ExecutionPoolStatus{}, paasv1.ExecutionPool{}, paasv1.ExecutionPoolList{},
 		paasv1.CreateExecutionPoolRequest{}, paasv1.RegisterExecutionTargetRequest{},
+		paasv1.NodeEnrollmentDiagnostic{}, paasv1.NodeEnrollment{}, paasv1.NodeEnrollmentList{},
+		paasv1.CreateNodeEnrollmentRequest{}, paasv1.RegenerateNodeEnrollmentRequest{}, paasv1.NodeEnrollmentJoin{},
+		paasv1.WrappedJoinCredential{}, paasv1.CreateNodeEnrollmentResponse{},
 		paasv1.AdapterRef{}, paasv1.Capacity{}, paasv1.ExecutionTargetSpec{}, paasv1.ExecutionTargetStatus{}, paasv1.ExecutionTarget{}, paasv1.ExecutionTargetList{},
 		paasv1.ExecutionTargetUsage{}, paasv1.CPUUsage{}, paasv1.CPUUsageValue{}, paasv1.MemoryUsage{}, paasv1.MemoryUsageValue{},
 		paasv1.FilesystemUsage{}, paasv1.FilesystemUsageValue{},
@@ -701,8 +819,10 @@ func applySemanticOverlays(schemas map[string]any) {
 		"Deployment": "Deployment", "DeploymentList": "DeploymentList",
 		"DeploymentGeneration": "DeploymentGeneration", "DeploymentRuntimeSnapshot": "DeploymentRuntimeSnapshot",
 		"TerminalSession": "TerminalSession",
-		"ExecutionPool":   "ExecutionPool", "ExecutionTarget": "ExecutionTarget",
-		"PlacementPolicy": "PlacementPolicy", "PlacementDecision": "PlacementDecision",
+		"ExecutionPool":   "ExecutionPool", "ExecutionPoolList": "ExecutionPoolList",
+		"ExecutionTarget": "ExecutionTarget", "NodeEnrollment": "NodeEnrollment",
+		"NodeEnrollmentList": "NodeEnrollmentList",
+		"PlacementPolicy":    "PlacementPolicy", "PlacementDecision": "PlacementDecision",
 		"Operation": "Operation", "Evidence": "Evidence",
 		"Readiness": "Readiness", "InstallationVerification": "InstallationVerification",
 	}
@@ -715,11 +835,82 @@ func applySemanticOverlays(schemas map[string]any) {
 			properties["kind"] = schema{"const": kind}
 		}
 	}
+	joinProperties := object(schemas["NodeEnrollmentJoin"])["properties"].(schema)
+	joinProperties["apiVersion"] = schema{"const": paasv1.NodeEnrollmentJoinAPIVersion}
+	joinProperties["kind"] = schema{"const": paasv1.NodeEnrollmentJoinKind}
 
 	for _, name := range []string{"ConfigurationRevisionSpec", "ApplicationRevisionSpec", "DeploymentGeneration", "PlacementDecision"} {
 		object(schemas[name])["x-matrix-immutable"] = true
 	}
 	object(schemas["DeploymentList"])["properties"].(schema)["items"].(schema)["maxItems"] = paasv1.MaximumDeploymentListItems
+	object(schemas["ExecutionPoolList"])["properties"].(schema)["items"].(schema)["maxItems"] = paasv1.MaximumExecutionPoolListItems
+	object(schemas["NodeEnrollmentList"])["properties"].(schema)["items"].(schema)["maxItems"] = paasv1.MaximumNodeEnrollmentListItems
+	wrappingKeySchema := schema{
+		"type": "string", "minLength": 512, "maxLength": 1024,
+		"pattern": `^[A-Za-z0-9_-]+$`,
+	}
+	object(schemas["CreateNodeEnrollmentRequest"])["properties"].(schema)["wrappingPublicKey"] = wrappingKeySchema
+	object(schemas["RegenerateNodeEnrollmentRequest"])["properties"].(schema)["wrappingPublicKey"] = wrappingKeySchema
+	joinProperties["controlPlaneUrl"] = schema{
+		"type": "string", "format": "uri", "maxLength": 2048,
+		"pattern": `^https://[^?#]+/api/paas/v1/node-enrollments/node-enrollment-[0-9a-f]{32}/exchange$`,
+	}
+	joinProperties["issuerCertificate"] = schema{
+		"type": "string", "minLength": 1, "maxLength": 16384,
+		"pattern": `^[A-Za-z0-9_-]+$`,
+	}
+	joinProperties["signature"] = schema{
+		"type": "string", "minLength": 86, "maxLength": 86,
+		"pattern": `^[A-Za-z0-9_-]{86}$`,
+	}
+	wrappedProperties := object(schemas["WrappedJoinCredential"])["properties"].(schema)
+	wrappedProperties["ciphertext"] = schema{
+		"type": "string", "minLength": 512, "maxLength": 512,
+		"pattern": `^[A-Za-z0-9_-]{512}$`,
+	}
+	enrollmentProperties := object(schemas["NodeEnrollment"])["properties"].(schema)
+	enrollmentProperties["metadata"] = schema{"allOf": []any{
+		ref("ResourceMetadata"),
+		schema{"properties": schema{"id": schema{"type": "string", "pattern": `^node-enrollment-[0-9a-f]{32}$`}}},
+	}}
+	object(schemas["NodeEnrollment"])["allOf"] = []any{
+		schema{
+			"if":   schema{"properties": schema{"state": schema{"const": string(paasv1.NodeEnrollmentWaitingInstall)}}, "required": []string{"state"}},
+			"then": schema{"properties": schema{"credentialConsumedAt": false, "readyAt": false, "replacedById": false, "diagnostic": false}},
+		},
+		schema{
+			"if":   schema{"properties": schema{"state": schema{"const": string(paasv1.NodeEnrollmentVerifying)}}, "required": []string{"state"}},
+			"then": schema{"required": []string{"credentialConsumedAt"}, "properties": schema{"readyAt": false, "replacedById": false, "diagnostic": false}},
+		},
+		schema{
+			"if":   schema{"properties": schema{"state": schema{"const": string(paasv1.NodeEnrollmentReady)}}, "required": []string{"state"}},
+			"then": schema{"required": []string{"credentialConsumedAt", "readyAt"}, "properties": schema{"replacedById": false, "diagnostic": false}},
+		},
+		schema{
+			"if":   schema{"properties": schema{"state": schema{"const": string(paasv1.NodeEnrollmentFailed)}}, "required": []string{"state"}},
+			"then": schema{"required": []string{"credentialConsumedAt", "diagnostic"}, "properties": schema{"readyAt": false, "replacedById": false}},
+		},
+		schema{
+			"if":   schema{"properties": schema{"state": schema{"const": string(paasv1.NodeEnrollmentExpired)}}, "required": []string{"state"}},
+			"then": schema{"required": []string{"diagnostic"}, "properties": schema{"readyAt": false, "replacedById": false}},
+		},
+		schema{
+			"if":   schema{"properties": schema{"state": schema{"const": string(paasv1.NodeEnrollmentRevoked)}}, "required": []string{"state"}},
+			"then": schema{"required": []string{"diagnostic"}, "properties": schema{"readyAt": false}},
+		},
+	}
+	diagnosticProperties := object(schemas["NodeEnrollmentDiagnostic"])["properties"].(schema)
+	diagnosticProperties["retryable"] = schema{"type": "boolean"}
+	object(schemas["NodeEnrollmentDiagnostic"])["allOf"] = []any{
+		schema{
+			"if":   schema{"properties": schema{"code": schema{"enum": stringsOf(paasv1.NodeEnrollmentDiagnosticListener, paasv1.NodeEnrollmentDiagnosticNetworkInterrupted)}}, "required": []string{"code"}},
+			"then": schema{"properties": schema{"retryable": schema{"const": true}}},
+		},
+		schema{
+			"if":   schema{"properties": schema{"code": schema{"enum": stringsOf(paasv1.NodeEnrollmentDiagnosticExpired, paasv1.NodeEnrollmentDiagnosticRevoked, paasv1.NodeEnrollmentDiagnosticCredentialUsed, paasv1.NodeEnrollmentDiagnosticInstallation, paasv1.NodeEnrollmentDiagnosticIdentity, paasv1.NodeEnrollmentDiagnosticRuntime, paasv1.NodeEnrollmentDiagnosticMTLS, paasv1.NodeEnrollmentDiagnosticResource)}}, "required": []string{"code"}},
+			"then": schema{"properties": schema{"retryable": schema{"const": false}}},
+		},
+	}
 	object(schemas["DeploymentRuntimeObservation"])["properties"].(schema)["instances"].(schema)["maxItems"] = paasv1.MaximumDeploymentRuntimeInstances
 	object(schemas["DeploymentResourceObservation"])["properties"].(schema)["instances"].(schema)["maxItems"] = paasv1.MaximumDeploymentRuntimeInstances
 	for _, name := range []string{"DeploymentRuntimeObservation", "DeploymentResourceObservation", "ObserveDeploymentRuntimeRequest"} {

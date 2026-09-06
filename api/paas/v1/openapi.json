@@ -871,6 +871,52 @@
         ],
         "type": "object"
       },
+      "CreateNodeEnrollmentRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "executionPoolId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "labels": {
+            "$ref": "#/components/schemas/Labels"
+          },
+          "name": {
+            "$ref": "#/components/schemas/Name"
+          },
+          "wrappingPublicKey": {
+            "maxLength": 1024,
+            "minLength": 512,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "executionPoolId",
+          "wrappingPublicKey"
+        ],
+        "type": "object"
+      },
+      "CreateNodeEnrollmentResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "enrollment": {
+            "$ref": "#/components/schemas/NodeEnrollment"
+          },
+          "join": {
+            "$ref": "#/components/schemas/NodeEnrollmentJoin"
+          },
+          "wrappedCredential": {
+            "$ref": "#/components/schemas/WrappedJoinCredential"
+          }
+        },
+        "required": [
+          "enrollment",
+          "join",
+          "wrappedCredential"
+        ],
+        "type": "object"
+      },
       "CreateTerminalSessionRequest": {
         "additionalProperties": false,
         "properties": {
@@ -2335,6 +2381,30 @@
         ],
         "type": "object"
       },
+      "ExecutionPoolList": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "paas.matrix.xiak.com/v1"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ExecutionPool"
+            },
+            "maxItems": 129,
+            "type": "array"
+          },
+          "kind": {
+            "const": "ExecutionPoolList"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "items"
+        ],
+        "type": "object"
+      },
       "ExecutionPoolPhase": {
         "enum": [
           "READY",
@@ -2971,6 +3041,12 @@
         ],
         "type": "string"
       },
+      "JoinCredentialWrappingAlgorithm": {
+        "enum": [
+          "RSA_OAEP_256"
+        ],
+        "type": "string"
+      },
       "LabelSelector": {
         "additionalProperties": false,
         "properties": {
@@ -3104,6 +3180,388 @@
         "maxLength": 63,
         "minLength": 1,
         "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$",
+        "type": "string"
+      },
+      "NodeEnrollment": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "WAITING_INSTALL"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "credentialConsumedAt": false,
+                "diagnostic": false,
+                "readyAt": false,
+                "replacedById": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "VERIFYING"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "diagnostic": false,
+                "readyAt": false,
+                "replacedById": false
+              },
+              "required": [
+                "credentialConsumedAt"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "READY"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "diagnostic": false,
+                "replacedById": false
+              },
+              "required": [
+                "credentialConsumedAt",
+                "readyAt"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "FAILED"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "readyAt": false,
+                "replacedById": false
+              },
+              "required": [
+                "credentialConsumedAt",
+                "diagnostic"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "EXPIRED"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "readyAt": false,
+                "replacedById": false
+              },
+              "required": [
+                "diagnostic"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "REVOKED"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "readyAt": false
+              },
+              "required": [
+                "diagnostic"
+              ]
+            }
+          }
+        ],
+        "properties": {
+          "apiVersion": {
+            "const": "paas.matrix.xiak.com/v1"
+          },
+          "credentialConsumedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "diagnostic": {
+            "$ref": "#/components/schemas/NodeEnrollmentDiagnostic"
+          },
+          "executionPoolId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "executionTargetId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "kind": {
+            "const": "NodeEnrollment"
+          },
+          "metadata": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ResourceMetadata"
+              },
+              {
+                "properties": {
+                  "id": {
+                    "pattern": "^node-enrollment-[0-9a-f]{32}$",
+                    "type": "string"
+                  }
+                }
+              }
+            ]
+          },
+          "operationId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "readyAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "replacedById": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "state": {
+            "$ref": "#/components/schemas/NodeEnrollmentState"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "metadata",
+          "executionTargetId",
+          "executionPoolId",
+          "operationId",
+          "state",
+          "expiresAt"
+        ],
+        "type": "object"
+      },
+      "NodeEnrollmentDiagnostic": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "code": {
+                  "enum": [
+                    "MANAGEMENT_UNREACHABLE",
+                    "NETWORK_INTERRUPTED"
+                  ]
+                }
+              },
+              "required": [
+                "code"
+              ]
+            },
+            "then": {
+              "properties": {
+                "retryable": {
+                  "const": true
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "code": {
+                  "enum": [
+                    "ENROLLMENT_EXPIRED",
+                    "ENROLLMENT_REVOKED",
+                    "CREDENTIAL_CONSUMED",
+                    "INSTALLATION_MISMATCH",
+                    "IDENTITY_CONFLICT",
+                    "RUNTIME_UNSUPPORTED",
+                    "MTLS_VERIFICATION_FAILED",
+                    "RESOURCE_CONFLICT"
+                  ]
+                }
+              },
+              "required": [
+                "code"
+              ]
+            },
+            "then": {
+              "properties": {
+                "retryable": {
+                  "const": false
+                }
+              }
+            }
+          }
+        ],
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/NodeEnrollmentDiagnosticCode"
+          },
+          "occurredAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "retryable": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "code",
+          "retryable",
+          "occurredAt"
+        ],
+        "type": "object"
+      },
+      "NodeEnrollmentDiagnosticCode": {
+        "enum": [
+          "ENROLLMENT_EXPIRED",
+          "ENROLLMENT_REVOKED",
+          "CREDENTIAL_CONSUMED",
+          "INSTALLATION_MISMATCH",
+          "IDENTITY_CONFLICT",
+          "RUNTIME_UNSUPPORTED",
+          "MANAGEMENT_UNREACHABLE",
+          "MTLS_VERIFICATION_FAILED",
+          "RESOURCE_CONFLICT",
+          "NETWORK_INTERRUPTED"
+        ],
+        "type": "string"
+      },
+      "NodeEnrollmentJoin": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "node.enrollment.matrix.xiak.com/v1"
+          },
+          "controlPlaneUrl": {
+            "format": "uri",
+            "maxLength": 2048,
+            "pattern": "^https://[^?#]+/api/paas/v1/node-enrollments/node-enrollment-[0-9a-f]{32}/exchange$",
+            "type": "string"
+          },
+          "credentialDigest": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "enrollmentId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "executionTargetId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "installationId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "issuerCertificate": {
+            "maxLength": 16384,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "type": "string"
+          },
+          "kind": {
+            "const": "NodeEnrollmentJoin"
+          },
+          "signature": {
+            "maxLength": 86,
+            "minLength": 86,
+            "pattern": "^[A-Za-z0-9_-]{86}$",
+            "type": "string"
+          },
+          "signatureAlgorithm": {
+            "$ref": "#/components/schemas/NodeJoinSignatureAlgorithm"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "enrollmentId",
+          "installationId",
+          "executionTargetId",
+          "controlPlaneUrl",
+          "credentialDigest",
+          "expiresAt",
+          "issuerCertificate",
+          "signatureAlgorithm",
+          "signature"
+        ],
+        "type": "object"
+      },
+      "NodeEnrollmentList": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "paas.matrix.xiak.com/v1"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/NodeEnrollment"
+            },
+            "maxItems": 128,
+            "type": "array"
+          },
+          "kind": {
+            "const": "NodeEnrollmentList"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "items"
+        ],
+        "type": "object"
+      },
+      "NodeEnrollmentState": {
+        "enum": [
+          "WAITING_INSTALL",
+          "VERIFYING",
+          "READY",
+          "FAILED",
+          "EXPIRED",
+          "REVOKED"
+        ],
+        "type": "string"
+      },
+      "NodeJoinSignatureAlgorithm": {
+        "enum": [
+          "ED25519"
+        ],
         "type": "string"
       },
       "NormalizedAdapterError": {
@@ -3707,6 +4165,21 @@
         ],
         "type": "string"
       },
+      "RegenerateNodeEnrollmentRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "wrappingPublicKey": {
+            "maxLength": 1024,
+            "minLength": 512,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "wrappingPublicKey"
+        ],
+        "type": "object"
+      },
       "RegisterExecutionTargetRequest": {
         "additionalProperties": false,
         "properties": {
@@ -4121,6 +4594,25 @@
         "required": [
           "installationId",
           "releaseId"
+        ],
+        "type": "object"
+      },
+      "WrappedJoinCredential": {
+        "additionalProperties": false,
+        "properties": {
+          "algorithm": {
+            "$ref": "#/components/schemas/JoinCredentialWrappingAlgorithm"
+          },
+          "ciphertext": {
+            "maxLength": 512,
+            "minLength": 512,
+            "pattern": "^[A-Za-z0-9_-]{512}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "algorithm",
+          "ciphertext"
         ],
         "type": "object"
       }
@@ -5422,6 +5914,48 @@
       }
     },
     "/v1/execution-pools": {
+      "get": {
+        "operationId": "listExecutionPools",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionPoolList"
+                }
+              }
+            },
+            "description": "Current bounded authorized collection.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "List installation-scoped ExecutionPools selectable for enrollment"
+      },
       "post": {
         "operationId": "createExecutionPool",
         "parameters": [
@@ -6058,6 +6592,369 @@
           }
         ],
         "summary": "Run the fixed no-secret installation application probe"
+      }
+    },
+    "/v1/node-enrollments": {
+      "get": {
+        "operationId": "listNodeEnrollments",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeEnrollmentList"
+                }
+              }
+            },
+            "description": "Current bounded authorized collection.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "List recent installation-scoped NodeEnrollments"
+      },
+      "post": {
+        "operationId": "createNodeEnrollment",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateNodeEnrollmentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateNodeEnrollmentResponse"
+                }
+              }
+            },
+            "description": "Enrollment created; the raw credential is present only inside the RSA-OAEP ciphertext.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              },
+              "Operation-Location": {
+                "$ref": "#/components/headers/OperationLocation"
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateNodeEnrollmentResponse"
+                }
+              }
+            },
+            "description": "Enrollment created; the raw credential is present only inside the RSA-OAEP ciphertext.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              },
+              "Operation-Location": {
+                "$ref": "#/components/headers/OperationLocation"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "428": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Create a short-lived Linux node enrollment with a wrapped one-time credential"
+      }
+    },
+    "/v1/node-enrollments/{nodeEnrollmentId}": {
+      "get": {
+        "operationId": "getNodeEnrollment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "nodeEnrollmentId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeEnrollment"
+                }
+              }
+            },
+            "description": "Current tenant-scoped resource.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Get one installation-scoped NodeEnrollment"
+      }
+    },
+    "/v1/node-enrollments/{nodeEnrollmentId}/regenerate": {
+      "post": {
+        "operationId": "regenerateNodeEnrollment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "nodeEnrollmentId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegenerateNodeEnrollmentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateNodeEnrollmentResponse"
+                }
+              }
+            },
+            "description": "Enrollment created; the raw credential is present only inside the RSA-OAEP ciphertext.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              },
+              "Operation-Location": {
+                "$ref": "#/components/headers/OperationLocation"
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateNodeEnrollmentResponse"
+                }
+              }
+            },
+            "description": "Enrollment created; the raw credential is present only inside the RSA-OAEP ciphertext.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              },
+              "Operation-Location": {
+                "$ref": "#/components/headers/OperationLocation"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "428": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Revoke an enrollment and create a fresh identity and wrapped credential"
+      }
+    },
+    "/v1/node-enrollments/{nodeEnrollmentId}/revoke": {
+      "post": {
+        "operationId": "revokeNodeEnrollment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "nodeEnrollmentId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeEnrollment"
+                }
+              }
+            },
+            "description": "Enrollment transition committed or exactly replayed.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "428": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Revoke an enrollment before it publishes an ExecutionTarget"
       }
     },
     "/v1/operations/{operationId}": {

@@ -45,8 +45,17 @@ func TestOpenAPIContractDefinesApplicationPaaSV1(t *testing.T) {
 		"RollbackDeploymentRequest",
 		"DeploymentGeneration",
 		"ExecutionPool",
+		"ExecutionPoolList",
 		"ExecutionTarget",
 		"ExecutionTargetList",
+		"NodeEnrollmentDiagnostic",
+		"NodeEnrollment",
+		"NodeEnrollmentList",
+		"CreateNodeEnrollmentRequest",
+		"RegenerateNodeEnrollmentRequest",
+		"NodeEnrollmentJoin",
+		"WrappedJoinCredential",
+		"CreateNodeEnrollmentResponse",
 		"PlacementPolicy",
 		"PlacementDecision",
 		"Operation",
@@ -83,6 +92,16 @@ func TestOpenAPIContractDefinesApplicationPaaSV1(t *testing.T) {
 	listItems := object(t, listProperties["items"], "ExecutionTargetList.items")
 	if listItems["maxItems"] != json.Number(fmt.Sprint(MaximumExecutionTargetListItems)) {
 		t.Fatalf("ExecutionTargetList.items must be bounded: %#v", listItems)
+	}
+	executionPoolList := schemaObject(t, schemas, "ExecutionPoolList")
+	poolItems := object(t, object(t, executionPoolList["properties"], "ExecutionPoolList.properties")["items"], "ExecutionPoolList.items")
+	if poolItems["maxItems"] != json.Number(fmt.Sprint(MaximumExecutionPoolListItems)) {
+		t.Fatalf("ExecutionPoolList.items must be bounded: %#v", poolItems)
+	}
+	enrollmentList := schemaObject(t, schemas, "NodeEnrollmentList")
+	enrollmentItems := object(t, object(t, enrollmentList["properties"], "NodeEnrollmentList.properties")["items"], "NodeEnrollmentList.items")
+	if enrollmentItems["maxItems"] != json.Number(fmt.Sprint(MaximumNodeEnrollmentListItems)) {
+		t.Fatalf("NodeEnrollmentList.items must be bounded: %#v", enrollmentItems)
 	}
 	deploymentList := schemaObject(t, schemas, "DeploymentList")
 	deploymentItems := object(t, object(t, deploymentList["properties"], "DeploymentList.properties")["items"], "DeploymentList.items")
@@ -148,13 +167,17 @@ func TestOpenAPINorthboundSurfaceUsesMatrixIAM(t *testing.T) {
 	}
 
 	want := map[string][]string{
-		"/v1/execution-pools":                                     {"post"},
+		"/v1/execution-pools":                                     {"get", "post"},
 		"/v1/execution-pools/{executionPoolId}":                   {"get"},
 		"/v1/execution-targets":                                   {"get", "post"},
 		"/v1/execution-targets/{executionTargetId}":               {"get"},
 		"/v1/execution-targets/{executionTargetId}/drain":         {"post"},
 		"/v1/execution-targets/{executionTargetId}/activate":      {"post"},
 		"/v1/execution-targets/{executionTargetId}/remove":        {"post"},
+		"/v1/node-enrollments":                                    {"get", "post"},
+		"/v1/node-enrollments/{nodeEnrollmentId}":                 {"get"},
+		"/v1/node-enrollments/{nodeEnrollmentId}/revoke":          {"post"},
+		"/v1/node-enrollments/{nodeEnrollmentId}/regenerate":      {"post"},
 		"/v1/platform/operations/{operationId}":                   {"get"},
 		"/ready":                                                  {"get"},
 		"/v1/applications":                                        {"post"},
@@ -256,6 +279,10 @@ func TestOpenAPIEnumsMatchGoContract(t *testing.T) {
 		ExecutionTargetDraining,
 		ExecutionTargetRemoved,
 	}))
+	assertExactEnum(t, schemas, "NodeEnrollmentState", stringify(NodeEnrollmentStates()))
+	assertExactEnum(t, schemas, "NodeEnrollmentDiagnosticCode", stringify(NodeEnrollmentDiagnosticCodes()))
+	assertExactEnum(t, schemas, "JoinCredentialWrappingAlgorithm", stringify([]JoinCredentialWrappingAlgorithm{JoinCredentialRSAOAEP256}))
+	assertExactEnum(t, schemas, "NodeJoinSignatureAlgorithm", stringify([]NodeJoinSignatureAlgorithm{NodeJoinSignatureEd25519}))
 	assertExactEnum(t, schemas, "IsolationGuarantee", stringify(IsolationGuarantees()))
 	assertExactEnum(t, schemas, "PlacementStrategy", stringify([]PlacementStrategy{
 		PlacementFirstFit,
@@ -463,6 +490,15 @@ func TestOpenAPIStructPropertiesAndRequiredFieldsMatchGoTypes(t *testing.T) {
 		"ExecutionPoolSpec":                   reflect.TypeOf(ExecutionPoolSpec{}),
 		"ExecutionPoolStatus":                 reflect.TypeOf(ExecutionPoolStatus{}),
 		"ExecutionPool":                       reflect.TypeOf(ExecutionPool{}),
+		"ExecutionPoolList":                   reflect.TypeOf(ExecutionPoolList{}),
+		"NodeEnrollmentDiagnostic":            reflect.TypeOf(NodeEnrollmentDiagnostic{}),
+		"NodeEnrollment":                      reflect.TypeOf(NodeEnrollment{}),
+		"NodeEnrollmentList":                  reflect.TypeOf(NodeEnrollmentList{}),
+		"CreateNodeEnrollmentRequest":         reflect.TypeOf(CreateNodeEnrollmentRequest{}),
+		"RegenerateNodeEnrollmentRequest":     reflect.TypeOf(RegenerateNodeEnrollmentRequest{}),
+		"NodeEnrollmentJoin":                  reflect.TypeOf(NodeEnrollmentJoin{}),
+		"WrappedJoinCredential":               reflect.TypeOf(WrappedJoinCredential{}),
+		"CreateNodeEnrollmentResponse":        reflect.TypeOf(CreateNodeEnrollmentResponse{}),
 		"AdapterRef":                          reflect.TypeOf(AdapterRef{}),
 		"Capacity":                            reflect.TypeOf(Capacity{}),
 		"ExecutionTargetSpec":                 reflect.TypeOf(ExecutionTargetSpec{}),

@@ -34,6 +34,71 @@ const (
 
 type ExecutionTargetDesiredState string
 
+// NodeEnrollmentState is the short-lived admission ceremony state. READY
+// hands long-lived ownership to ExecutionTarget; no state makes an enrollment
+// itself schedulable.
+type NodeEnrollmentState string
+
+const (
+	NodeEnrollmentWaitingInstall NodeEnrollmentState = "WAITING_INSTALL"
+	NodeEnrollmentVerifying      NodeEnrollmentState = "VERIFYING"
+	NodeEnrollmentReady          NodeEnrollmentState = "READY"
+	NodeEnrollmentFailed         NodeEnrollmentState = "FAILED"
+	NodeEnrollmentExpired        NodeEnrollmentState = "EXPIRED"
+	NodeEnrollmentRevoked        NodeEnrollmentState = "REVOKED"
+)
+
+func NodeEnrollmentStates() []NodeEnrollmentState {
+	return []NodeEnrollmentState{
+		NodeEnrollmentWaitingInstall,
+		NodeEnrollmentVerifying,
+		NodeEnrollmentReady,
+		NodeEnrollmentFailed,
+		NodeEnrollmentExpired,
+		NodeEnrollmentRevoked,
+	}
+}
+
+// NodeEnrollmentDiagnosticCode is deliberately closed and carries no native
+// error, endpoint, certificate, path, provider output, or credential detail.
+type NodeEnrollmentDiagnosticCode string
+
+const (
+	NodeEnrollmentDiagnosticExpired            NodeEnrollmentDiagnosticCode = "ENROLLMENT_EXPIRED"
+	NodeEnrollmentDiagnosticRevoked            NodeEnrollmentDiagnosticCode = "ENROLLMENT_REVOKED"
+	NodeEnrollmentDiagnosticCredentialUsed     NodeEnrollmentDiagnosticCode = "CREDENTIAL_CONSUMED"
+	NodeEnrollmentDiagnosticInstallation       NodeEnrollmentDiagnosticCode = "INSTALLATION_MISMATCH"
+	NodeEnrollmentDiagnosticIdentity           NodeEnrollmentDiagnosticCode = "IDENTITY_CONFLICT"
+	NodeEnrollmentDiagnosticRuntime            NodeEnrollmentDiagnosticCode = "RUNTIME_UNSUPPORTED"
+	NodeEnrollmentDiagnosticListener           NodeEnrollmentDiagnosticCode = "MANAGEMENT_UNREACHABLE"
+	NodeEnrollmentDiagnosticMTLS               NodeEnrollmentDiagnosticCode = "MTLS_VERIFICATION_FAILED"
+	NodeEnrollmentDiagnosticResource           NodeEnrollmentDiagnosticCode = "RESOURCE_CONFLICT"
+	NodeEnrollmentDiagnosticNetworkInterrupted NodeEnrollmentDiagnosticCode = "NETWORK_INTERRUPTED"
+)
+
+func NodeEnrollmentDiagnosticCodes() []NodeEnrollmentDiagnosticCode {
+	return []NodeEnrollmentDiagnosticCode{
+		NodeEnrollmentDiagnosticExpired,
+		NodeEnrollmentDiagnosticRevoked,
+		NodeEnrollmentDiagnosticCredentialUsed,
+		NodeEnrollmentDiagnosticInstallation,
+		NodeEnrollmentDiagnosticIdentity,
+		NodeEnrollmentDiagnosticRuntime,
+		NodeEnrollmentDiagnosticListener,
+		NodeEnrollmentDiagnosticMTLS,
+		NodeEnrollmentDiagnosticResource,
+		NodeEnrollmentDiagnosticNetworkInterrupted,
+	}
+}
+
+type JoinCredentialWrappingAlgorithm string
+
+const JoinCredentialRSAOAEP256 JoinCredentialWrappingAlgorithm = "RSA_OAEP_256"
+
+type NodeJoinSignatureAlgorithm string
+
+const NodeJoinSignatureEd25519 NodeJoinSignatureAlgorithm = "ED25519"
+
 type MeasurementState string
 
 const (

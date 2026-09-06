@@ -1,9 +1,15 @@
 package paasv1
 
 import (
+	"crypto/ed25519"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -18,6 +24,15 @@ var (
 	contractVersionPattern      = regexp.MustCompile(`^v[1-9][0-9]*$`)
 	deploymentInstanceIDPattern = regexp.MustCompile(`^instance-[0-9a-f]{32}$`)
 	terminalSessionIDPattern    = regexp.MustCompile(`^terminal-session-[0-9a-f]{32}$`)
+	nodeEnrollmentIDPattern     = regexp.MustCompile(`^node-enrollment-[0-9a-f]{32}$`)
+)
+
+const (
+	MaximumExecutionPoolListItems  = 129
+	MaximumNodeEnrollmentListItems = 128
+	MaximumNodeEnrollmentLifetime  = 30 * time.Minute
+	NodeEnrollmentJoinAPIVersion   = "node.enrollment.matrix.xiak.com/v1"
+	NodeEnrollmentJoinKind         = "NodeEnrollmentJoin"
 )
 
 var sensitiveKeyFragments = [...]string{
@@ -226,6 +241,282 @@ func ValidateCreateExecutionPoolRequest(value CreateExecutionPoolRequest) error 
 		problems = append(problems, errors.New("name must be a DNS label"))
 	}
 	return errors.Join(problems...)
+}
+
+func ValidateExecutionPoolList(value ExecutionPoolList) error {
+	var problems []error
+	if value.APIVersion != APIVersion || value.Kind != "ExecutionPoolList" ||
+		value.Items == nil || len(value.Items) > MaximumExecutionPoolListItems {
+		problems = append(problems, errors.New("execution pool list metadata or size is invalid"))
+	}
+	seen := map[ResourceID]bool{}
+	for _, pool := range value.Items {
+		if ValidateExecutionPool(pool) != nil || seen[pool.Metadata.ID] {
+			problems = append(problems, errors.New("execution pool list contains an invalid or duplicate pool"))
+			continue
+		}
+		seen[pool.Metadata.ID] = true
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateCreateNodeEnrollmentRequest(value CreateNodeEnrollmentRequest) error {
+	problems := []error{
+		ValidateID("executionPoolId", string(value.ExecutionPoolID)),
+		validateLabels("labels", value.Labels),
+		validateWrappingPublicKey(value.WrappingPublicKey),
+	}
+	if !namePattern.MatchString(value.Name) {
+		problems = append(problems, errors.New("name must be a DNS label"))
+	}
+	if _, supplied := value.Labels["matrix-machine-fingerprint"]; supplied {
+		problems = append(problems, errors.New("node identity label is installation-owned"))
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateRegenerateNodeEnrollmentRequest(value RegenerateNodeEnrollmentRequest) error {
+	return validateWrappingPublicKey(value.WrappingPublicKey)
+}
+
+func ValidateNodeEnrollmentDiagnostic(value NodeEnrollmentDiagnostic) error {
+	if !contains(NodeEnrollmentDiagnosticCodes(), value.Code) {
+		return errors.New("node enrollment diagnostic code is invalid")
+	}
+	retryable := value.Code == NodeEnrollmentDiagnosticListener ||
+		value.Code == NodeEnrollmentDiagnosticNetworkInterrupted
+	return errors.Join(
+		validateContractTime("diagnostic.occurredAt", value.OccurredAt),
+		func() error {
+			if value.Retryable != retryable {
+				return errors.New("node enrollment diagnostic retryability is invalid")
+			}
+			return nil
+		}(),
+	)
+}
+
+func ValidateNodeEnrollment(value NodeEnrollment) error {
+	var problems []error
+	if value.APIVersion != APIVersion || value.Kind != "NodeEnrollment" {
+		problems = append(problems, errors.New("node enrollment type metadata is invalid"))
+	}
+	problems = append(problems,
+		ValidateResourceMetadata(value.Metadata),
+		ValidateID("executionTargetId", string(value.ExecutionTargetID)),
+		ValidateID("executionPoolId", string(value.ExecutionPoolID)),
+		ValidateID("operationId", string(value.OperationID)),
+		validateContractTime("expiresAt", value.ExpiresAt),
+	)
+	if value.Metadata.Scope.Kind != AuthorityPlatform {
+		problems = append(problems, errors.New("node enrollment must be platform scoped"))
+	}
+	if !nodeEnrollmentIDPattern.MatchString(string(value.Metadata.ID)) {
+		problems = append(problems, errors.New("node enrollment identity is invalid"))
+	}
+	if !contains(NodeEnrollmentStates(), value.State) {
+		problems = append(problems, errors.New("node enrollment state is invalid"))
+	}
+	if !value.ExpiresAt.After(value.Metadata.CreatedAt) ||
+		value.ExpiresAt.Sub(value.Metadata.CreatedAt) > MaximumNodeEnrollmentLifetime {
+		problems = append(problems, errors.New("node enrollment expiry is invalid"))
+	}
+	if value.CredentialConsumedAt != nil {
+		problems = append(problems, validateContractTime("credentialConsumedAt", *value.CredentialConsumedAt))
+		if value.CredentialConsumedAt.Before(value.Metadata.CreatedAt) ||
+			value.CredentialConsumedAt.After(value.Metadata.UpdatedAt) ||
+			!value.CredentialConsumedAt.Before(value.ExpiresAt) {
+			problems = append(problems, errors.New("node enrollment credential time is invalid"))
+		}
+	}
+	if value.ReadyAt != nil {
+		problems = append(problems, validateContractTime("readyAt", *value.ReadyAt))
+		if value.CredentialConsumedAt == nil || value.ReadyAt.Before(*value.CredentialConsumedAt) ||
+			value.ReadyAt.After(value.Metadata.UpdatedAt) || value.ReadyAt.After(value.ExpiresAt) {
+			problems = append(problems, errors.New("node enrollment ready time is invalid"))
+		}
+	}
+	if value.ReplacedByID != "" && !nodeEnrollmentIDPattern.MatchString(string(value.ReplacedByID)) {
+		problems = append(problems, errors.New("replacement enrollment identity is invalid"))
+	}
+	if value.Diagnostic != nil {
+		problems = append(problems, ValidateNodeEnrollmentDiagnostic(*value.Diagnostic))
+		if value.Diagnostic.OccurredAt.Before(value.Metadata.CreatedAt) ||
+			value.Diagnostic.OccurredAt.After(value.Metadata.UpdatedAt) {
+			problems = append(problems, errors.New("node enrollment diagnostic time is invalid"))
+		}
+	}
+	switch value.State {
+	case NodeEnrollmentWaitingInstall:
+		if value.CredentialConsumedAt != nil || value.ReadyAt != nil || value.ReplacedByID != "" || value.Diagnostic != nil {
+			problems = append(problems, errors.New("waiting node enrollment contains terminal or exchange state"))
+		}
+	case NodeEnrollmentVerifying:
+		if value.CredentialConsumedAt == nil || value.ReadyAt != nil || value.ReplacedByID != "" || value.Diagnostic != nil {
+			problems = append(problems, errors.New("verifying node enrollment state is incomplete"))
+		}
+	case NodeEnrollmentReady:
+		if value.CredentialConsumedAt == nil || value.ReadyAt == nil || value.ReplacedByID != "" || value.Diagnostic != nil {
+			problems = append(problems, errors.New("ready node enrollment state is incomplete"))
+		}
+	case NodeEnrollmentFailed:
+		if value.CredentialConsumedAt == nil || value.ReadyAt != nil || value.ReplacedByID != "" || value.Diagnostic == nil ||
+			(value.Diagnostic != nil && (value.Diagnostic.Code == NodeEnrollmentDiagnosticExpired || value.Diagnostic.Code == NodeEnrollmentDiagnosticRevoked)) {
+			problems = append(problems, errors.New("failed node enrollment state is incomplete"))
+		}
+	case NodeEnrollmentExpired:
+		if value.ReadyAt != nil || value.ReplacedByID != "" || value.Diagnostic == nil ||
+			(value.Diagnostic != nil && value.Diagnostic.Code != NodeEnrollmentDiagnosticExpired) ||
+			value.Metadata.UpdatedAt.Before(value.ExpiresAt) {
+			problems = append(problems, errors.New("expired node enrollment state is incomplete"))
+		}
+	case NodeEnrollmentRevoked:
+		if value.ReadyAt != nil || value.Diagnostic == nil ||
+			(value.Diagnostic != nil && value.Diagnostic.Code != NodeEnrollmentDiagnosticRevoked) {
+			problems = append(problems, errors.New("revoked node enrollment state is incomplete"))
+		}
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateNodeEnrollmentList(value NodeEnrollmentList) error {
+	var problems []error
+	if value.APIVersion != APIVersion || value.Kind != "NodeEnrollmentList" ||
+		value.Items == nil || len(value.Items) > MaximumNodeEnrollmentListItems {
+		problems = append(problems, errors.New("node enrollment list metadata or size is invalid"))
+	}
+	seen := map[ResourceID]bool{}
+	for _, enrollment := range value.Items {
+		if ValidateNodeEnrollment(enrollment) != nil || seen[enrollment.Metadata.ID] {
+			problems = append(problems, errors.New("node enrollment list contains an invalid or duplicate enrollment"))
+			continue
+		}
+		seen[enrollment.Metadata.ID] = true
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateNodeEnrollmentJoin(value NodeEnrollmentJoin) error {
+	commitment, certificate, err := nodeEnrollmentJoinCommitment(value)
+	if err != nil {
+		return err
+	}
+	signature, err := decodeRawURLBase64("node enrollment join signature", value.Signature, ed25519.SignatureSize)
+	if err != nil {
+		return err
+	}
+	publicKey, ok := certificate.PublicKey.(ed25519.PublicKey)
+	if !ok || !ed25519.Verify(publicKey, commitment, signature) {
+		return errors.New("node enrollment join signature is invalid")
+	}
+	return nil
+}
+
+// NodeEnrollmentJoinSigningBytes returns the exact public commitment signed by
+// the installation enrollment issuer. It never contains the raw credential.
+func NodeEnrollmentJoinSigningBytes(value NodeEnrollmentJoin) ([]byte, error) {
+	commitment, _, err := nodeEnrollmentJoinCommitment(value)
+	return commitment, err
+}
+
+func ValidateWrappedJoinCredential(value WrappedJoinCredential) error {
+	if value.Algorithm != JoinCredentialRSAOAEP256 {
+		return errors.New("join credential wrapping algorithm is invalid")
+	}
+	_, err := decodeRawURLBase64("wrapped join credential", value.Ciphertext, 384)
+	return err
+}
+
+func ValidateCreateNodeEnrollmentResponse(value CreateNodeEnrollmentResponse) error {
+	return errors.Join(
+		ValidateNodeEnrollment(value.Enrollment),
+		ValidateNodeEnrollmentJoin(value.Join),
+		ValidateWrappedJoinCredential(value.WrappedCredential),
+		func() error {
+			if value.Enrollment.Metadata.ID != value.Join.EnrollmentID ||
+				value.Enrollment.ExecutionTargetID != value.Join.ExecutionTargetID ||
+				!value.Enrollment.ExpiresAt.Equal(value.Join.ExpiresAt) ||
+				value.Enrollment.State != NodeEnrollmentWaitingInstall {
+				return errors.New("node enrollment creation response is inconsistent")
+			}
+			return nil
+		}(),
+	)
+}
+
+func validateWrappingPublicKey(value string) error {
+	encoded, err := decodeRawURLBase64("wrapping public key", value, -1)
+	if err != nil || len(encoded) < 384 || len(encoded) > 1024 {
+		return errors.New("wrapping public key is invalid")
+	}
+	parsed, err := x509.ParsePKIXPublicKey(encoded)
+	key, ok := parsed.(*rsa.PublicKey)
+	if err != nil || !ok || key.N == nil || key.N.BitLen() != 3072 || key.E != 65537 {
+		return errors.New("wrapping public key must be RSA-3072 with exponent 65537")
+	}
+	return nil
+}
+
+func nodeEnrollmentJoinCommitment(value NodeEnrollmentJoin) ([]byte, *x509.Certificate, error) {
+	var problems []error
+	if value.APIVersion != NodeEnrollmentJoinAPIVersion || value.Kind != NodeEnrollmentJoinKind ||
+		!nodeEnrollmentIDPattern.MatchString(string(value.EnrollmentID)) {
+		problems = append(problems, errors.New("node enrollment join metadata is invalid"))
+	}
+	problems = append(problems,
+		ValidateID("installationId", value.InstallationID),
+		ValidateID("executionTargetId", string(value.ExecutionTargetID)),
+		ValidateDigest("credentialDigest", value.CredentialDigest),
+		validateContractTime("expiresAt", value.ExpiresAt),
+	)
+	endpoint, err := url.Parse(value.ControlPlaneURL)
+	if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.User != nil || endpoint.Opaque != "" ||
+		endpoint.RawQuery != "" || endpoint.ForceQuery || endpoint.Fragment != "" ||
+		endpoint.Path != "/api/paas/v1/node-enrollments/"+url.PathEscape(string(value.EnrollmentID))+"/exchange" {
+		problems = append(problems, errors.New("node enrollment control-plane URL is invalid"))
+	}
+	certificateBytes, certificateErr := decodeRawURLBase64("node enrollment issuer certificate", value.IssuerCertificate, -1)
+	certificate, parseErr := x509.ParseCertificate(certificateBytes)
+	if certificateErr != nil || parseErr != nil || certificate == nil || !certificate.BasicConstraintsValid || !certificate.IsCA ||
+		certificate.PublicKeyAlgorithm != x509.Ed25519 || certificate.KeyUsage&x509.KeyUsageCertSign == 0 ||
+		value.ExpiresAt.Before(certificate.NotBefore) || value.ExpiresAt.After(certificate.NotAfter) {
+		problems = append(problems, errors.New("node enrollment issuer certificate is invalid"))
+	}
+	if value.SignatureAlgorithm != NodeJoinSignatureEd25519 {
+		problems = append(problems, errors.New("node enrollment join signature algorithm is invalid"))
+	}
+	if err := errors.Join(problems...); err != nil {
+		return nil, nil, err
+	}
+	commitment, err := json.Marshal(struct {
+		APIVersion         string                     `json:"apiVersion"`
+		Kind               string                     `json:"kind"`
+		EnrollmentID       ResourceID                 `json:"enrollmentId"`
+		InstallationID     string                     `json:"installationId"`
+		ExecutionTargetID  ResourceID                 `json:"executionTargetId"`
+		ControlPlaneURL    string                     `json:"controlPlaneUrl"`
+		CredentialDigest   string                     `json:"credentialDigest"`
+		ExpiresAt          time.Time                  `json:"expiresAt"`
+		IssuerCertificate  string                     `json:"issuerCertificate"`
+		SignatureAlgorithm NodeJoinSignatureAlgorithm `json:"signatureAlgorithm"`
+	}{value.APIVersion, value.Kind, value.EnrollmentID, value.InstallationID, value.ExecutionTargetID,
+		value.ControlPlaneURL, value.CredentialDigest, value.ExpiresAt, value.IssuerCertificate, value.SignatureAlgorithm})
+	if err != nil {
+		return nil, nil, errors.New("node enrollment join commitment cannot be encoded")
+	}
+	return commitment, certificate, nil
+}
+
+func decodeRawURLBase64(name, value string, exactBytes int) ([]byte, error) {
+	if value == "" || len(value) > 16*1024 || strings.ContainsAny(value, "=\r\n\t ") {
+		return nil, fmt.Errorf("%s is invalid", name)
+	}
+	decoded, err := base64.RawURLEncoding.Strict().DecodeString(value)
+	if err != nil || (exactBytes >= 0 && len(decoded) != exactBytes) ||
+		base64.RawURLEncoding.EncodeToString(decoded) != value {
+		return nil, fmt.Errorf("%s is invalid", name)
+	}
+	return decoded, nil
 }
 
 func ValidateRegisterExecutionTargetRequest(value RegisterExecutionTargetRequest) error {

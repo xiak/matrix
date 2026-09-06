@@ -66,6 +66,87 @@ type CreateExecutionPoolRequest struct {
 	Spec   ExecutionPoolSpec `json:"spec"`
 }
 
+// ExecutionPoolList is the bounded installation-scoped set available to the
+// host-enrollment form. It contains no provider or credential material.
+type ExecutionPoolList struct {
+	APIVersion string          `json:"apiVersion"`
+	Kind       string          `json:"kind"`
+	Items      []ExecutionPool `json:"items"`
+}
+
+type NodeEnrollmentDiagnostic struct {
+	Code       NodeEnrollmentDiagnosticCode `json:"code"`
+	Retryable  bool                         `json:"retryable"`
+	OccurredAt time.Time                    `json:"occurredAt"`
+}
+
+// NodeEnrollment owns only the short-lived admission ceremony. A READY value
+// points at the existing ExecutionTarget, which owns all subsequent host state.
+type NodeEnrollment struct {
+	APIVersion           string                    `json:"apiVersion"`
+	Kind                 string                    `json:"kind"`
+	Metadata             ResourceMetadata          `json:"metadata"`
+	ExecutionTargetID    ResourceID                `json:"executionTargetId"`
+	ExecutionPoolID      ResourceID                `json:"executionPoolId"`
+	OperationID          OperationID               `json:"operationId"`
+	State                NodeEnrollmentState       `json:"state"`
+	ExpiresAt            time.Time                 `json:"expiresAt"`
+	CredentialConsumedAt *time.Time                `json:"credentialConsumedAt,omitempty"`
+	ReadyAt              *time.Time                `json:"readyAt,omitempty"`
+	ReplacedByID         ResourceID                `json:"replacedById,omitempty"`
+	Diagnostic           *NodeEnrollmentDiagnostic `json:"diagnostic,omitempty"`
+}
+
+type NodeEnrollmentList struct {
+	APIVersion string           `json:"apiVersion"`
+	Kind       string           `json:"kind"`
+	Items      []NodeEnrollment `json:"items"`
+}
+
+// CreateNodeEnrollmentRequest contains only operator intent and an ephemeral
+// browser wrapping key. It never accepts a target address, host path, shell,
+// provider option, certificate, private key, or raw join credential.
+type CreateNodeEnrollmentRequest struct {
+	Name              string            `json:"name"`
+	Labels            map[string]string `json:"labels,omitempty"`
+	ExecutionPoolID   ResourceID        `json:"executionPoolId"`
+	WrappingPublicKey string            `json:"wrappingPublicKey"`
+}
+
+type RegenerateNodeEnrollmentRequest struct {
+	WrappingPublicKey string `json:"wrappingPublicKey"`
+}
+
+// NodeEnrollmentJoin is public integrity-bound metadata used to assemble the
+// offline join file. Its URL never contains the one-time credential.
+type NodeEnrollmentJoin struct {
+	APIVersion         string                     `json:"apiVersion"`
+	Kind               string                     `json:"kind"`
+	EnrollmentID       ResourceID                 `json:"enrollmentId"`
+	InstallationID     string                     `json:"installationId"`
+	ExecutionTargetID  ResourceID                 `json:"executionTargetId"`
+	ControlPlaneURL    string                     `json:"controlPlaneUrl"`
+	CredentialDigest   string                     `json:"credentialDigest"`
+	ExpiresAt          time.Time                  `json:"expiresAt"`
+	IssuerCertificate  string                     `json:"issuerCertificate"`
+	SignatureAlgorithm NodeJoinSignatureAlgorithm `json:"signatureAlgorithm"`
+	Signature          string                     `json:"signature"`
+}
+
+// WrappedJoinCredential is the only creation-time representation of the join
+// credential in an HTTP response. Ciphertext is RSA-3072 OAEP-SHA256 output;
+// the raw credential is never returned or persisted by this contract.
+type WrappedJoinCredential struct {
+	Algorithm  JoinCredentialWrappingAlgorithm `json:"algorithm"`
+	Ciphertext string                          `json:"ciphertext"`
+}
+
+type CreateNodeEnrollmentResponse struct {
+	Enrollment        NodeEnrollment        `json:"enrollment"`
+	Join              NodeEnrollmentJoin    `json:"join"`
+	WrappedCredential WrappedJoinCredential `json:"wrappedCredential"`
+}
+
 type AdapterRef struct {
 	Kind            AdapterKind `json:"kind"`
 	Name            string      `json:"name"`
