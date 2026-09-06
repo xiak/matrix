@@ -1647,6 +1647,36 @@ generation also passed. This narrows the F9 exposure surface but does not close
 F9; bootstrap exchange, Audit, browser, diagnostics, support artifacts and the
 exact signed-runtime gate remain outstanding.
 
+Pushed source `e2e32c78194cf252c27c5307ea3afa2a7a76539a` implements the bounded
+control-plane bootstrap exchange. Its separate unauthenticated route accepts
+one strict JSON document of at most 64 KiB, rejects ambient session and
+conditional headers, requires APISIX-provided HTTPS and observed-private-peer
+facts, and never echoes credential or CSR material. The node submits distinct
+host-local Ed25519 certificate requests, a fixed listener claim, machine and
+runtime commitments and a persisted exchange identity. The issuer creates
+installation/target/role-constrained certificates and seals the bounded result
+with an installation-derived AES-256-GCM key. The use case signs outside the
+database transaction, then revalidates and atomically consumes the credential,
+fixes the submitted identities, stores the sealed result and advances only to
+`VERIFYING`; replay, expiry, revocation, changed identity and unsupported
+runtime fail closed.
+
+The PostgreSQL authority adds schema-invariant checks, least-privilege function
+execution, identity uniqueness and an installation advisory lock that prevents
+cross-role key reuse even under `READ COMMITTED`. Contract revision 10 adds the
+issuer files and bootstrap APISIX route while reconstructing the exact
+`acc27112cfb8ee9d35059ac29bd98a97ff20e3ac` topology and APISIX documents for
+the one supported predecessor transition and byte-exact rollback. On the exact
+source, deterministic generation, module verification, the full Go suite,
+`go vet`, focused race suites, Linux installation/topology tests, five fresh
+PostgreSQL 18 integration databases, a PostgreSQL race run and the fixed
+predecessor upgrade/rollback gate passed. This is backend exchange evidence
+only: the installed public APISIX listener is still HTTP/9080, so exchange
+intentionally fails closed until the TLS-ingress slice exists. Lost-response
+proof-of-possession recovery, completion and real mTLS probe, durable dynamic
+controller connection, node installer, Audit, browser and exact signed-runtime
+closure remain outstanding; F1 through F10 therefore remain open.
+
 ## Adoption
 
 - [FEAT-008 fixed-source review](../adoption/FEAT-008-linux-host-management.md)
