@@ -60,7 +60,12 @@ async function join(credentialDigest?: string): Promise<NodeEnrollmentJoin> {
   };
 }
 
-async function encryptedCreation(wrappingPublicKey: string, digest?: string): Promise<NodeEnrollmentCreation> {
+async function encryptedCreation(
+  wrappingPublicKey: string,
+  digest?: string,
+  bindToEnrollment = true
+): Promise<NodeEnrollmentCreation> {
+  const publicJoin = await join(digest);
   const publicKey = await webcrypto.subtle.importKey(
     "spki",
     fromRawURL(wrappingPublicKey),
@@ -68,14 +73,21 @@ async function encryptedCreation(wrappingPublicKey: string, digest?: string): Pr
     false,
     ["encrypt"]
   );
+  const label = new TextEncoder().encode(
+    `matrix-node-enrollment-v1\0${publicJoin.installationId}\0${publicJoin.enrollmentId}`
+  );
+  const algorithm: RsaOaepParams = bindToEnrollment
+    ? { name: "RSA-OAEP", label }
+    : { name: "RSA-OAEP" };
   const ciphertext = new Uint8Array(await webcrypto.subtle.encrypt(
-    { name: "RSA-OAEP" },
+    algorithm,
     publicKey,
     rawCredential
   ));
+  label.fill(0);
   return {
     enrollment: enrollment(),
-    join: await join(digest),
+    join: publicJoin,
     wrappedCredential: { algorithm: "RSA_OAEP_256", ciphertext: rawURL(ciphertext) }
   };
 }
@@ -179,6 +191,28 @@ describe("browserNodeEnrollmentCeremony", () => {
     Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
     const create = vi.fn(async (_credential, _origin, request) =>
       encryptedCreation(request.wrappingPublicKey, `sha256:${"f".repeat(64)}`)
+    );
+
+    await expect(browserNodeEnrollmentCeremony.create(
+      repository(create),
+      "memory-only-session",
+      "https://matrix.example",
+      { name: "edge-linux-a", labels: {}, executionPoolId: "linux-pool" }
+    )).rejects.toThrow("NODE_ENROLLMENT_JOIN_FILE_NOT_CREATED");
+
+    expect(createObjectURL).not.toHaveBeenCalled();
+    expect(document.querySelector("a[download]")).toBeNull();
+  }, 15_000);
+
+  it("rejects ciphertext that is not bound to this installation and enrollment", async () => {
+    vi.stubGlobal("crypto", webcrypto as unknown as Crypto);
+    originalCreateObjectURL = URL.createObjectURL;
+    originalRevokeObjectURL = URL.revokeObjectURL;
+    const createObjectURL = vi.fn();
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectURL });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
+    const create = vi.fn(async (_credential, _origin, request) =>
+      encryptedCreation(request.wrappingPublicKey, undefined, false)
     );
 
     await expect(browserNodeEnrollmentCeremony.create(

@@ -134,8 +134,9 @@ type NodeEnrollmentJoin struct {
 }
 
 // WrappedJoinCredential is the only creation-time representation of the join
-// credential in an HTTP response. Ciphertext is RSA-3072 OAEP-SHA256 output;
-// the raw credential is never returned or persisted by this contract.
+// credential in an HTTP response. Ciphertext is RSA-3072 OAEP-SHA256 output
+// using NodeEnrollmentCredentialWrappingLabel; the raw credential is never
+// returned or persisted by this contract.
 type WrappedJoinCredential struct {
 	Algorithm  JoinCredentialWrappingAlgorithm `json:"algorithm"`
 	Ciphertext string                          `json:"ciphertext"`

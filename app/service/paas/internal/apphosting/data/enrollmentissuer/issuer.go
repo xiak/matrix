@@ -108,12 +108,18 @@ func New(installationID string, certificateDER, privateKeyDER []byte) (*Issuer, 
 
 func (issuer *Issuer) IssueJoin(ctx context.Context, request nodeenrollment.JoinIssueRequest) (nodeenrollment.IssuedJoin, error) {
 	if issuer == nil || issuer.entropy == nil || ctx == nil ||
-		paasv1.ValidateID("enrollmentId", string(request.EnrollmentID)) != nil ||
 		paasv1.ValidateID("executionTargetId", string(request.ExecutionTargetID)) != nil ||
 		request.ExpiresAt.IsZero() ||
 		nodeenrollment.ValidateControlPlaneBaseURL(request.ControlPlaneBaseURL) != nil {
 		return nodeenrollment.IssuedJoin{}, nodeenrollment.ErrInvalidArgument
 	}
+	label, err := paasv1.NodeEnrollmentCredentialWrappingLabel(
+		issuer.installationID, request.EnrollmentID,
+	)
+	if err != nil {
+		return nodeenrollment.IssuedJoin{}, nodeenrollment.ErrInvalidArgument
+	}
+	defer clear(label)
 	if err := ctx.Err(); err != nil {
 		return nodeenrollment.IssuedJoin{}, err
 	}
@@ -136,7 +142,6 @@ func (issuer *Issuer) IssueJoin(ctx context.Context, request nodeenrollment.Join
 		clear(salt)
 		return nodeenrollment.IssuedJoin{}, err
 	}
-	label := []byte("matrix-node-enrollment-v1\x00" + issuer.installationID + "\x00" + string(request.EnrollmentID))
 	ciphertext, err := rsa.EncryptOAEP(sha256.New(), issuer.entropy, wrappingKey, credential, label)
 	if err != nil {
 		clear(salt)

@@ -756,7 +756,13 @@ func assertNodeEnrollmentPersistence(
 	if err != nil {
 		t.Fatal(err)
 	}
-	label := []byte("matrix-node-enrollment-v1\x00" + installationID + "\x00" + string(created.Response.Enrollment.Metadata.ID))
+	label, err := paasv1.NodeEnrollmentCredentialWrappingLabel(
+		installationID, created.Response.Enrollment.Metadata.ID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(label)
 	credential, err := rsa.DecryptOAEP(sha256.New(), rand.Reader, wrappingPrivateKey, ciphertext, label)
 	if err != nil {
 		t.Fatalf("decrypt one-time join credential: %v", err)
@@ -1770,9 +1776,13 @@ func integrationEnrollmentCredential(
 	if err != nil {
 		t.Fatal(err)
 	}
-	label := []byte(
-		"matrix-node-enrollment-v1\x00" + installationID + "\x00" + string(created.Enrollment.Metadata.ID),
+	label, err := paasv1.NodeEnrollmentCredentialWrappingLabel(
+		installationID, created.Enrollment.Metadata.ID,
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(label)
 	credential, err := rsa.DecryptOAEP(sha256.New(), rand.Reader, wrappingPrivateKey, ciphertext, label)
 	clear(ciphertext)
 	if err != nil {

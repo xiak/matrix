@@ -79,9 +79,12 @@ async function decryptCredential(creation: NodeEnrollmentCreation, privateKey: C
     throw new Error("NODE_ENROLLMENT_WRAPPING_ALGORITHM_INVALID");
   }
   const ciphertext = decodeRawURLBase64(creation.wrappedCredential.ciphertext, 384);
+  const label = new TextEncoder().encode(
+    `matrix-node-enrollment-v1\0${creation.join.installationId}\0${creation.join.enrollmentId}`
+  );
   try {
     const plaintext = new Uint8Array(await globalThis.crypto.subtle.decrypt(
-      { name: "RSA-OAEP" },
+      { name: "RSA-OAEP", label },
       privateKey,
       ciphertext
     ));
@@ -100,6 +103,7 @@ async function decryptCredential(creation: NodeEnrollmentCreation, privateKey: C
     }
     return plaintext;
   } finally {
+    label.fill(0);
     ciphertext.fill(0);
   }
 }

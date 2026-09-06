@@ -462,6 +462,20 @@ func NodeEnrollmentJoinSigningBytes(value NodeEnrollmentJoin) ([]byte, error) {
 	return commitment, err
 }
 
+// NodeEnrollmentCredentialWrappingLabel returns the exact RSA-OAEP label that
+// binds one encrypted join credential to its installation and enrollment.
+func NodeEnrollmentCredentialWrappingLabel(
+	installationID string,
+	enrollmentID ResourceID,
+) ([]byte, error) {
+	if ValidateID("installationId", installationID) != nil ||
+		!nodeEnrollmentIDPattern.MatchString(string(enrollmentID)) {
+		return nil, errors.New("node enrollment credential wrapping identity is invalid")
+	}
+	return []byte("matrix-node-enrollment-v1\x00" + installationID + "\x00" +
+		string(enrollmentID)), nil
+}
+
 func ValidateWrappedJoinCredential(value WrappedJoinCredential) error {
 	if value.Algorithm != JoinCredentialRSAOAEP256 {
 		return errors.New("join credential wrapping algorithm is invalid")

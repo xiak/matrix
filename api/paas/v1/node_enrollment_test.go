@@ -19,6 +19,41 @@ import (
 	"time"
 )
 
+func TestNodeEnrollmentCredentialWrappingLabelBindsBothIdentities(t *testing.T) {
+	enrollmentID := ResourceID("node-enrollment-" + strings.Repeat("a", 32))
+	label, err := NodeEnrollmentCredentialWrappingLabel("installation-a", enrollmentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(label)
+	if !bytes.Equal(label, []byte("matrix-node-enrollment-v1\x00installation-a\x00"+string(enrollmentID))) {
+		t.Fatal("credential wrapping label does not preserve the closed protocol commitment")
+	}
+	other, err := NodeEnrollmentCredentialWrappingLabel(
+		"installation-b", ResourceID("node-enrollment-"+strings.Repeat("b", 32)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(other)
+	if bytes.Equal(label, other) {
+		t.Fatal("different installation and enrollment identities shared a wrapping label")
+	}
+	for _, input := range []struct {
+		installationID string
+		enrollmentID   ResourceID
+	}{
+		{"", enrollmentID},
+		{"installation-a", "node-enrollment-a"},
+		{"installation-a", "target-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+	} {
+		if value, err := NodeEnrollmentCredentialWrappingLabel(input.installationID, input.enrollmentID); err == nil {
+			clear(value)
+			t.Fatal("invalid wrapping-label identity was accepted")
+		}
+	}
+}
+
 func TestNodeEnrollmentCreationContractContainsOnlyWrappedCredential(t *testing.T) {
 	request, response, _ := nodeEnrollmentContractFixture(t)
 	if err := ValidateCreateNodeEnrollmentRequest(request); err != nil {

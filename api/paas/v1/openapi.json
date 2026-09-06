@@ -5045,6 +5045,7 @@
             "$ref": "#/components/schemas/JoinCredentialWrappingAlgorithm"
           },
           "ciphertext": {
+            "description": "RSA-3072 OAEP-SHA256 ciphertext whose UTF-8 label is matrix-node-enrollment-v1\\0\u003cinstallationId\u003e\\0\u003cenrollmentId\u003e.",
             "maxLength": 512,
             "minLength": 512,
             "pattern": "^[A-Za-z0-9_-]{512}$",

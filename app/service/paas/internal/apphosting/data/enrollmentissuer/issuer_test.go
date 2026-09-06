@@ -42,7 +42,11 @@ func TestIssueWrapsFreshCredentialAndStoresOnlySaltedVerifier(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	label := []byte("matrix-node-enrollment-v1\x00installation-a\x00" + string(request.EnrollmentID))
+	label, err := paasv1.NodeEnrollmentCredentialWrappingLabel("installation-a", request.EnrollmentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(label)
 	credential, err := rsa.DecryptOAEP(sha256.New(), rand.Reader, wrappingKey, ciphertext, label)
 	if err != nil {
 		t.Fatal(err)

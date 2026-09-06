@@ -112,6 +112,11 @@ dialog closes. The copied command contains no credential. A reload loses the
 secret and therefore offers regeneration, which revokes the old attempt and
 creates a new identity instead of weakening one-time semantics.
 
+The RSA-OAEP-SHA256 envelope uses the exact UTF-8 label
+`matrix-node-enrollment-v1\0<installationId>\0<enrollmentId>`. A ciphertext
+from another installation or enrollment therefore cannot be decrypted as the
+current join even when the same ephemeral wrapping key is involved.
+
 The node-facing bootstrap API is separate from the IAM session API. The raw
 join credential appears only in the bounded TLS request body for the initial
 exchange; request logging is disabled for that body and no response echoes it.

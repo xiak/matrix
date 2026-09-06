@@ -1076,6 +1076,8 @@ func applySemanticOverlays(schemas map[string]any) {
 	wrappedProperties["ciphertext"] = schema{
 		"type": "string", "minLength": 512, "maxLength": 512,
 		"pattern": `^[A-Za-z0-9_-]{512}$`,
+		"description": "RSA-3072 OAEP-SHA256 ciphertext whose UTF-8 label is " +
+			"matrix-node-enrollment-v1\\0<installationId>\\0<enrollmentId>.",
 	}
 	enrollmentProperties := object(schemas["NodeEnrollment"])["properties"].(schema)
 	enrollmentProperties["metadata"] = schema{"allOf": []any{
