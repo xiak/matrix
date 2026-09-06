@@ -70,6 +70,12 @@ func TestEnrollmentReadsExpireWithoutReturningCredentialMaterial(t *testing.T) {
 		t.Fatal(err)
 	}
 	repository.now = created.Response.Enrollment.ExpiresAt
+	if _, err := service.Create(context.Background(), command); !errors.Is(err, ErrExpired) {
+		t.Fatalf("expired create replay error = %v", err)
+	}
+	if repository.expireCalls != 1 {
+		t.Fatal("expired create replay did not commit expiration")
+	}
 	enrollment, err := service.Get(context.Background(), command.Authorization, created.Response.Enrollment.Metadata.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -93,11 +99,104 @@ func TestEnrollmentReadsExpireWithoutReturningCredentialMaterial(t *testing.T) {
 			t.Fatalf("ordinary enrollment read exposed %s", forbidden)
 		}
 	}
-	if _, err := service.Create(context.Background(), command); !errors.Is(err, ErrExpired) {
-		t.Fatalf("expired create replay error = %v", err)
-	}
 	if issuer.calls != 1 {
 		t.Fatal("expired replay issued another credential")
+	}
+}
+
+func TestRevokeClosesWaitingOrVerifyingEnrollmentAndExactlyReplays(t *testing.T) {
+	service, repository, issuer := enrollmentFixture(t)
+	create := createCommand(t)
+	created, err := service.Create(context.Background(), create)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := repository.values[created.Response.Enrollment.Metadata.ID]
+	consumedAt := repository.now.Add(time.Minute)
+	stored.Enrollment.State = paasv1.NodeEnrollmentVerifying
+	stored.Enrollment.CredentialConsumedAt = &consumedAt
+	stored.Enrollment.Metadata.ResourceVersion = 2
+	stored.Enrollment.Metadata.UpdatedAt = consumedAt
+	stored.Operation.State = paasv1.OperationVerifying
+	stored.Operation.UpdatedAt = consumedAt
+	repository.values[stored.Enrollment.Metadata.ID] = cloneStored(stored)
+	repository.now = consumedAt.Add(time.Minute)
+	command := RevokeCommand{
+		Authorization: create.Authorization, EnrollmentID: stored.Enrollment.Metadata.ID,
+		ExpectedResourceVersion: 2, IdempotencyKey: "revoke-host-a",
+	}
+	revoked, err := service.Revoke(context.Background(), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := repository.values[stored.Enrollment.Metadata.ID]
+	if revoked.Replayed || revoked.Enrollment.State != paasv1.NodeEnrollmentRevoked ||
+		revoked.Enrollment.Metadata.ResourceVersion != 3 || revoked.Enrollment.CredentialConsumedAt == nil ||
+		revoked.Enrollment.Diagnostic == nil || revoked.Enrollment.Diagnostic.Code != paasv1.NodeEnrollmentDiagnosticRevoked ||
+		current.Operation.State != paasv1.OperationCancelled || current.Operation.TerminalAt == nil ||
+		current.TerminationFingerprint == "" || current.TerminationRequestDigest == "" || repository.revokeCalls != 1 {
+		t.Fatalf("revoked enrollment = %#v stored=%#v", revoked, current)
+	}
+	replay, err := service.Revoke(context.Background(), command)
+	if err != nil || !replay.Replayed || !reflect.DeepEqual(replay.Enrollment, revoked.Enrollment) || repository.revokeCalls != 1 {
+		t.Fatalf("revoke replay = %#v err=%v calls=%d", replay, err, repository.revokeCalls)
+	}
+	changed := command
+	changed.ExpectedResourceVersion = 3
+	if _, err := service.Revoke(context.Background(), changed); !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatalf("changed revoke replay error = %v", err)
+	}
+	changed.IdempotencyKey = "revoke-host-a-again"
+	if _, err := service.Revoke(context.Background(), changed); !errors.Is(err, ErrRevoked) {
+		t.Fatalf("second revocation error = %v", err)
+	}
+	if _, err := service.Create(context.Background(), create); !errors.Is(err, ErrRevoked) {
+		t.Fatalf("revoked create replay error = %v", err)
+	}
+	if issuer.calls != 1 {
+		t.Fatal("revocation issued another credential")
+	}
+}
+
+func TestRegenerateAtomicallyReplacesIdentityAndExactlyReplays(t *testing.T) {
+	service, repository, issuer := enrollmentFixture(t)
+	create := createCommand(t)
+	created, err := service.Create(context.Background(), create)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := regenerateCommand(t, create, created.Response.Enrollment.Metadata.ID, 1)
+	replacement, err := service.Regenerate(context.Background(), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := repository.values[created.Response.Enrollment.Metadata.ID]
+	current := repository.values[replacement.Response.Enrollment.Metadata.ID]
+	if replacement.Replayed || replacement.Response.Enrollment.Metadata.ID == created.Response.Enrollment.Metadata.ID ||
+		replacement.Response.Enrollment.ExecutionTargetID == created.Response.Enrollment.ExecutionTargetID ||
+		replacement.Response.Enrollment.Metadata.Name != created.Response.Enrollment.Metadata.Name ||
+		!reflect.DeepEqual(replacement.Response.Enrollment.Metadata.Labels, created.Response.Enrollment.Metadata.Labels) ||
+		replacement.Response.Enrollment.ExecutionPoolID != created.Response.Enrollment.ExecutionPoolID ||
+		source.Enrollment.State != paasv1.NodeEnrollmentRevoked ||
+		source.Enrollment.ReplacedByID != replacement.Response.Enrollment.Metadata.ID ||
+		source.Operation.State != paasv1.OperationCancelled ||
+		source.TerminationFingerprint != current.Operation.IdempotencyFingerprint ||
+		source.TerminationRequestDigest != current.Operation.RequestDigest ||
+		repository.replaceCalls != 1 || issuer.calls != 2 {
+		t.Fatalf("regenerated enrollment = %#v source=%#v", replacement, source)
+	}
+	replay, err := service.Regenerate(context.Background(), command)
+	if err != nil || !replay.Replayed || !reflect.DeepEqual(replay.Response, replacement.Response) ||
+		repository.replaceCalls != 1 || issuer.calls != 2 {
+		t.Fatalf("regeneration replay = %#v err=%v", replay, err)
+	}
+	changed := command
+	changed.Request.WrappingPublicKey = createCommand(t).Request.WrappingPublicKey
+	if _, err := service.Regenerate(context.Background(), changed); !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatalf("changed regeneration replay error = %v", err)
+	}
+	if repository.replaceCalls != 1 || issuer.calls != 2 {
+		t.Fatal("changed regeneration replay reached issuance or persistence")
 	}
 }
 
@@ -136,6 +235,8 @@ type fakeRepository struct {
 	transactionCalls int
 	insertCalls      int
 	expireCalls      int
+	revokeCalls      int
+	replaceCalls     int
 }
 
 func (repository *fakeRepository) WithinInstallation(ctx context.Context, installationID string, callback func(context.Context, Transaction) error) error {
@@ -160,6 +261,15 @@ func (repository *fakeRepository) TransactionTime(context.Context) (time.Time, e
 func (repository *fakeRepository) FindByFingerprint(_ context.Context, fingerprint string) (StoredEnrollment, bool, error) {
 	for _, stored := range repository.values {
 		if stored.Operation.IdempotencyFingerprint == fingerprint {
+			return cloneStored(stored), true, nil
+		}
+	}
+	return StoredEnrollment{}, false, nil
+}
+
+func (repository *fakeRepository) FindByTerminationFingerprint(_ context.Context, fingerprint string) (StoredEnrollment, bool, error) {
+	for _, stored := range repository.values {
+		if stored.TerminationFingerprint == fingerprint {
 			return cloneStored(stored), true, nil
 		}
 	}
@@ -206,6 +316,50 @@ func (repository *fakeRepository) ExpireEnrollment(_ context.Context, before Sto
 	repository.expireCalls++
 	current.Enrollment, current.Operation = enrollmentSnapshot(enrollment), operation
 	repository.values[enrollment.Metadata.ID] = current
+	return nil
+}
+
+func (repository *fakeRepository) RevokeEnrollment(_ context.Context, before StoredEnrollment, after StoredEnrollment) error {
+	current, found := repository.values[before.Enrollment.Metadata.ID]
+	if !found || current.Enrollment.Metadata.ResourceVersion != before.Enrollment.Metadata.ResourceVersion ||
+		ValidateStoredEnrollment(after, "installation-a") != nil {
+		return ErrRetryableTransaction
+	}
+	for _, stored := range repository.values {
+		if stored.TerminationFingerprint == after.TerminationFingerprint {
+			return ErrRetryableTransaction
+		}
+	}
+	repository.revokeCalls++
+	repository.values[after.Enrollment.Metadata.ID] = cloneStored(after)
+	return nil
+}
+
+func (repository *fakeRepository) ReplaceEnrollment(
+	_ context.Context,
+	before StoredEnrollment,
+	after StoredEnrollment,
+	replacement StoredEnrollment,
+) error {
+	current, found := repository.values[before.Enrollment.Metadata.ID]
+	if !found || current.Enrollment.Metadata.ResourceVersion != before.Enrollment.Metadata.ResourceVersion ||
+		ValidateStoredEnrollment(after, "installation-a") != nil ||
+		ValidateStoredEnrollment(replacement, "installation-a") != nil ||
+		after.Enrollment.ReplacedByID != replacement.Enrollment.Metadata.ID {
+		return ErrRetryableTransaction
+	}
+	if _, found := repository.values[replacement.Enrollment.Metadata.ID]; found {
+		return ErrRetryableTransaction
+	}
+	for _, stored := range repository.values {
+		if stored.TerminationFingerprint == after.TerminationFingerprint ||
+			stored.Operation.IdempotencyFingerprint == replacement.Operation.IdempotencyFingerprint {
+			return ErrRetryableTransaction
+		}
+	}
+	repository.replaceCalls++
+	repository.values[after.Enrollment.Metadata.ID] = cloneStored(after)
+	repository.values[replacement.Enrollment.Metadata.ID] = cloneStored(replacement)
 	return nil
 }
 
@@ -314,6 +468,25 @@ func createCommand(t *testing.T) CreateCommand {
 		},
 		IdempotencyKey:      "create-host-a",
 		ControlPlaneBaseURL: "https://matrix.internal/api/paas/v1",
+	}
+}
+
+func regenerateCommand(
+	t *testing.T,
+	create CreateCommand,
+	enrollmentID paasv1.ResourceID,
+	expectedResourceVersion uint64,
+) RegenerateCommand {
+	t.Helper()
+	wrapping := createCommand(t).Request.WrappingPublicKey
+	return RegenerateCommand{
+		Authorization: create.Authorization, EnrollmentID: enrollmentID,
+		ExpectedResourceVersion: expectedResourceVersion,
+		IdempotencyKey:          "regenerate-host-a",
+		Request: paasv1.RegenerateNodeEnrollmentRequest{
+			WrappingPublicKey: wrapping,
+		},
+		ControlPlaneBaseURL: create.ControlPlaneBaseURL,
 	}
 }
 

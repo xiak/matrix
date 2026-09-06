@@ -114,8 +114,10 @@ BEGIN
             ('execution_pools_installation_valid'),
             ('node_enrollments_target_uq'),
             ('node_enrollments_operation_uq'),
+            ('node_enrollments_termination_uq'),
             ('node_enrollments_pool_fk'),
             ('node_enrollments_operation_fk'),
+            ('node_enrollments_replacement_fk'),
             ('node_enrollments_identity_valid'),
             ('node_enrollments_state_valid'),
             ('node_enrollments_credential_valid'),
@@ -335,6 +337,10 @@ BEGIN
             (
                 'expire_node_enrollment',
                 'requested_enrollment_id text, expected_resource_version bigint, submitted_enrollment jsonb, submitted_operation jsonb'
+            ),
+            (
+                'revoke_node_enrollment',
+                'requested_enrollment_id text, expected_resource_version bigint, submitted_termination_fingerprint text, submitted_termination_request_digest text, submitted_enrollment jsonb, submitted_operation jsonb, submitted_replacement jsonb, submitted_replacement_operation jsonb'
             ),
             (
                 'transition_execution_target',
@@ -715,6 +721,7 @@ BEGIN
     IF NOT has_function_privilege('matrix_paas_api', 'paas.admit_execution_resource(jsonb,jsonb,jsonb,text,text,bigint,jsonb)', 'EXECUTE')
        OR NOT has_function_privilege('matrix_paas_api', 'paas.create_node_enrollment(jsonb,jsonb,jsonb,jsonb,bytea,text,text,text,text,text,text,text)', 'EXECUTE')
        OR NOT has_function_privilege('matrix_paas_api', 'paas.expire_node_enrollment(text,bigint,jsonb,jsonb)', 'EXECUTE')
+       OR NOT has_function_privilege('matrix_paas_api', 'paas.revoke_node_enrollment(text,bigint,text,text,jsonb,jsonb,jsonb,jsonb)', 'EXECUTE')
        OR NOT has_function_privilege('matrix_paas_api', 'paas.transition_execution_target(bigint,jsonb,bigint,jsonb,jsonb,jsonb)', 'EXECUTE')
        OR NOT has_function_privilege('matrix_paas_api', 'paas.refresh_execution_target(bigint,jsonb,bigint,jsonb)', 'EXECUTE')
        OR EXISTS (
@@ -751,6 +758,9 @@ BEGIN
                    )
        )
        OR has_function_privilege('matrix_paas_worker', 'paas.admit_execution_resource(jsonb,jsonb,jsonb,text,text,bigint,jsonb)', 'EXECUTE')
+       OR has_function_privilege('matrix_paas_worker', 'paas.create_node_enrollment(jsonb,jsonb,jsonb,jsonb,bytea,text,text,text,text,text,text,text)', 'EXECUTE')
+       OR has_function_privilege('matrix_paas_worker', 'paas.expire_node_enrollment(text,bigint,jsonb,jsonb)', 'EXECUTE')
+       OR has_function_privilege('matrix_paas_worker', 'paas.revoke_node_enrollment(text,bigint,text,text,jsonb,jsonb,jsonb,jsonb)', 'EXECUTE')
        OR has_function_privilege('matrix_paas_worker', 'paas.transition_execution_target(bigint,jsonb,bigint,jsonb,jsonb,jsonb)', 'EXECUTE')
        OR has_function_privilege('matrix_paas_worker', 'paas.refresh_execution_target(bigint,jsonb,bigint,jsonb)', 'EXECUTE')
        OR has_function_privilege('matrix_paas_api', 'paas.store_execution_pool_observation(bigint,jsonb)', 'EXECUTE')

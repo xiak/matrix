@@ -756,16 +756,27 @@ CREATE TABLE IF NOT EXISTS paas.node_enrollments (
     request_id text COLLATE "C" NOT NULL,
     audit_id text COLLATE "C",
     traceparent text COLLATE "C",
+    termination_idempotency_fingerprint text COLLATE "C",
+    termination_request_digest text COLLATE "C",
     document jsonb NOT NULL,
     join_document jsonb NOT NULL,
     wrapped_credential_document jsonb NOT NULL,
+    replaced_by_id text COLLATE "C" GENERATED ALWAYS AS (
+        NULLIF(document->>'replacedById', '')
+    ) STORED,
     PRIMARY KEY (installation_id, id),
     CONSTRAINT node_enrollments_target_uq UNIQUE (execution_target_id),
     CONSTRAINT node_enrollments_operation_uq UNIQUE (authority_key, operation_id),
+    CONSTRAINT node_enrollments_termination_uq UNIQUE (
+        installation_id, termination_idempotency_fingerprint
+    ),
     CONSTRAINT node_enrollments_pool_fk FOREIGN KEY (installation_id, execution_pool_id)
         REFERENCES paas.execution_pools (installation_id, id),
     CONSTRAINT node_enrollments_operation_fk FOREIGN KEY (authority_key, operation_id)
         REFERENCES paas.operations (authority_key, id),
+    CONSTRAINT node_enrollments_replacement_fk FOREIGN KEY (installation_id, replaced_by_id)
+        REFERENCES paas.node_enrollments (installation_id, id)
+        DEFERRABLE INITIALLY DEFERRED,
     CONSTRAINT node_enrollments_identity_valid CHECK (
         installation_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND id COLLATE "C" ~ '^node-enrollment-[0-9a-f]{32}$'
@@ -787,6 +798,19 @@ CREATE TABLE IF NOT EXISTS paas.node_enrollments (
         AND resource_version BETWEEN 1 AND 9007199254740991
         AND expires_at > created_at
         AND expires_at <= created_at + interval '30 minutes'
+        AND ((state = 'REVOKED') = (termination_idempotency_fingerprint IS NOT NULL))
+        AND ((termination_idempotency_fingerprint IS NULL) = (termination_request_digest IS NULL))
+        AND (
+            termination_idempotency_fingerprint IS NULL OR (
+                termination_idempotency_fingerprint COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+                AND termination_request_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+            )
+        )
+        AND (replaced_by_id IS NULL OR (
+            state = 'REVOKED'
+            AND replaced_by_id COLLATE "C" ~ '^node-enrollment-[0-9a-f]{32}$'
+            AND replaced_by_id <> id
+        ))
     ),
     CONSTRAINT node_enrollments_credential_valid CHECK (
         octet_length(credential_salt) = 32
@@ -811,6 +835,7 @@ CREATE TABLE IF NOT EXISTS paas.node_enrollments (
         AND document->>'operationId' = operation_id
         AND document->>'state' = state
         AND (document->>'expiresAt')::timestamptz = expires_at
+        AND NULLIF(document->>'replacedById', '') IS NOT DISTINCT FROM replaced_by_id
         AND join_document->>'apiVersion' = 'node.enrollment.matrix.xiak.com/v1'
         AND join_document->>'kind' = 'NodeEnrollmentJoin'
         AND join_document->>'enrollmentId' = id
@@ -2926,6 +2951,135 @@ REVOKE ALL ON FUNCTION paas.expire_node_enrollment(text,bigint,jsonb,jsonb)
     FROM PUBLIC, matrix_paas_worker;
 GRANT EXECUTE ON FUNCTION paas.expire_node_enrollment(text,bigint,jsonb,jsonb)
     TO matrix_paas_api;
+
+CREATE OR REPLACE FUNCTION paas.revoke_node_enrollment(
+    requested_enrollment_id text,
+    expected_resource_version bigint,
+    submitted_termination_fingerprint text,
+    submitted_termination_request_digest text,
+    submitted_enrollment jsonb,
+    submitted_operation jsonb,
+    submitted_replacement jsonb,
+    submitted_replacement_operation jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_installation_id text := paas.current_installation_id();
+    current_enrollment paas.node_enrollments%ROWTYPE;
+    current_operation paas.operations%ROWTYPE;
+    replacement_id text := submitted_enrollment->>'replacedById';
+BEGIN
+    IF effective_installation_id IS NULL
+       OR requested_enrollment_id COLLATE "C" !~ '^node-enrollment-[0-9a-f]{32}$'
+       OR expected_resource_version NOT BETWEEN 1 AND 9007199254740991
+       OR submitted_termination_fingerprint IS NULL
+       OR submitted_termination_fingerprint COLLATE "C" !~ '^sha256:[0-9a-f]{64}$'
+       OR submitted_termination_request_digest IS NULL
+       OR submitted_termination_request_digest COLLATE "C" !~ '^sha256:[0-9a-f]{64}$'
+       OR jsonb_typeof(submitted_enrollment) <> 'object'
+       OR jsonb_typeof(submitted_operation) <> 'object'
+       OR ((submitted_replacement IS NULL) <> (submitted_replacement_operation IS NULL)) THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'node enrollment revocation input is invalid';
+    END IF;
+    SELECT * INTO current_enrollment FROM paas.node_enrollments
+     WHERE installation_id = effective_installation_id AND id = requested_enrollment_id
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX404', MESSAGE = 'node enrollment is not registered';
+    END IF;
+    SELECT * INTO current_operation FROM paas.operations
+     WHERE authority_key = current_enrollment.authority_key
+       AND id = current_enrollment.operation_id
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'node enrollment operation is missing';
+    END IF;
+    IF current_enrollment.resource_version <> expected_resource_version THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX412', MESSAGE = 'node enrollment changed';
+    END IF;
+    IF current_enrollment.state NOT IN ('WAITING_INSTALL', 'VERIFYING')
+       OR current_operation.state NOT IN ('ACCEPTED', 'VERIFYING') THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'node enrollment cannot be revoked';
+    END IF;
+    IF NOT ((
+        submitted_enrollment - 'metadata' - 'state' - 'diagnostic' - 'replacedById'
+            = current_enrollment.document - 'metadata' - 'state' - 'diagnostic' - 'replacedById'
+        AND (submitted_enrollment->'metadata') - 'resourceVersion' - 'updatedAt'
+            = (current_enrollment.document->'metadata') - 'resourceVersion' - 'updatedAt'
+        AND submitted_enrollment#>>'{metadata,resourceVersion}'
+            = (current_enrollment.resource_version + 1)::text
+        AND (submitted_enrollment#>>'{metadata,updatedAt}')::timestamptz
+            = transaction_timestamp()
+        AND submitted_enrollment->>'state' = 'REVOKED'
+        AND submitted_enrollment#>>'{diagnostic,code}' = 'ENROLLMENT_REVOKED'
+        AND submitted_enrollment#>>'{diagnostic,retryable}' = 'false'
+        AND (submitted_enrollment#>>'{diagnostic,occurredAt}')::timestamptz
+            = transaction_timestamp()
+        AND (submitted_enrollment->'diagnostic') - 'code' - 'retryable' - 'occurredAt'
+            = '{}'::jsonb
+        AND submitted_operation - 'state' - 'updatedAt' - 'terminalAt'
+            = current_operation.document - 'state' - 'updatedAt' - 'terminalAt'
+        AND submitted_operation->>'state' = 'CANCELLED'
+        AND (submitted_operation->>'updatedAt')::timestamptz = transaction_timestamp()
+        AND (submitted_operation->>'terminalAt')::timestamptz = transaction_timestamp()
+        AND (
+            (submitted_replacement IS NULL AND replacement_id IS NULL)
+            OR (
+                jsonb_typeof(submitted_replacement) = 'object'
+                AND jsonb_typeof(submitted_replacement_operation) = 'object'
+                AND replacement_id COLLATE "C" ~ '^node-enrollment-[0-9a-f]{32}$'
+                AND replacement_id <> current_enrollment.id
+                AND submitted_replacement#>>'{metadata,id}' = replacement_id
+                AND submitted_replacement#>>'{metadata,name}'
+                    = current_enrollment.document#>>'{metadata,name}'
+                AND submitted_replacement#>'{metadata,labels}'
+                    IS NOT DISTINCT FROM current_enrollment.document#>'{metadata,labels}'
+                AND submitted_replacement->>'executionPoolId' = current_enrollment.execution_pool_id
+                AND submitted_replacement->>'executionTargetId' <> current_enrollment.execution_target_id
+                AND submitted_replacement->>'state' = 'WAITING_INSTALL'
+                AND submitted_replacement_operation->>'id'
+                    = submitted_replacement->>'operationId'
+                AND submitted_replacement_operation->>'action' = 'REGISTER_EXECUTION_TARGET'
+                AND submitted_replacement_operation#>>'{target,kind}' = 'ExecutionTarget'
+                AND submitted_replacement_operation#>>'{target,id}'
+                    = submitted_replacement->>'executionTargetId'
+                AND submitted_replacement_operation->>'idempotencyFingerprint'
+                    = submitted_termination_fingerprint
+                AND submitted_replacement_operation->>'requestDigest'
+                    = submitted_termination_request_digest
+            )
+        )
+    ) IS TRUE) THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'node enrollment revocation transition is invalid';
+    END IF;
+    UPDATE paas.operations
+       SET state = 'CANCELLED', updated_at = transaction_timestamp(),
+           terminal_at = transaction_timestamp(), next_attempt_at = transaction_timestamp(),
+           document = submitted_operation
+     WHERE authority_key = current_enrollment.authority_key
+       AND id = current_enrollment.operation_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'node enrollment operation is missing';
+    END IF;
+    UPDATE paas.node_enrollments
+       SET state = 'REVOKED', resource_version = current_enrollment.resource_version + 1,
+           termination_idempotency_fingerprint = submitted_termination_fingerprint,
+           termination_request_digest = submitted_termination_request_digest,
+           document = submitted_enrollment
+     WHERE installation_id = effective_installation_id AND id = current_enrollment.id;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.revoke_node_enrollment(
+    text,bigint,text,text,jsonb,jsonb,jsonb,jsonb
+) FROM PUBLIC, matrix_paas_worker;
+GRANT EXECUTE ON FUNCTION paas.revoke_node_enrollment(
+    text,bigint,text,text,jsonb,jsonb,jsonb,jsonb
+) TO matrix_paas_api;
 
 CREATE OR REPLACE FUNCTION paas.admit_execution_resource(
     submitted_resource jsonb, submitted_operation jsonb, submitted_audit_event jsonb,

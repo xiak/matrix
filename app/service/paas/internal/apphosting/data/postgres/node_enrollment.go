@@ -119,6 +119,16 @@ func (transaction *nodeEnrollmentTransaction) FindByFingerprint(
 	return transaction.load(ctx, "operation.idempotency_fingerprint", fingerprint)
 }
 
+func (transaction *nodeEnrollmentTransaction) FindByTerminationFingerprint(
+	ctx context.Context,
+	fingerprint string,
+) (nodeenrollment.StoredEnrollment, bool, error) {
+	if paasv1.ValidateDigest("terminationFingerprint", fingerprint) != nil {
+		return nodeenrollment.StoredEnrollment{}, false, nodeenrollment.ErrInvalidArgument
+	}
+	return transaction.load(ctx, "enrollment.termination_idempotency_fingerprint", fingerprint)
+}
+
 func (transaction *nodeEnrollmentTransaction) LoadEnrollment(
 	ctx context.Context,
 	id paasv1.ResourceID,
@@ -134,7 +144,9 @@ func (transaction *nodeEnrollmentTransaction) load(
 	column string,
 	selector string,
 ) (nodeenrollment.StoredEnrollment, bool, error) {
-	if column != "operation.idempotency_fingerprint" && column != "enrollment.id" {
+	if column != "operation.idempotency_fingerprint" &&
+		column != "enrollment.termination_idempotency_fingerprint" &&
+		column != "enrollment.id" {
 		return nodeenrollment.StoredEnrollment{}, false, nodeenrollment.ErrInvalidArgument
 	}
 	var (
@@ -145,6 +157,7 @@ func (transaction *nodeEnrollmentTransaction) load(
 		joinDocument, wrappedCredentialDocument   []byte
 		actorType, actorID, decisionID, requestID string
 		auditID, traceParent                      string
+		terminationFingerprint, terminationDigest string
 	)
 	err := transaction.tx.QueryRow(ctx, `SELECT
 			enrollment.id, enrollment.operation_id,
@@ -153,7 +166,9 @@ func (transaction *nodeEnrollmentTransaction) load(
 			enrollment.join_document, enrollment.wrapped_credential_document,
 			enrollment.actor_type, enrollment.actor_id,
 			enrollment.iam_decision_id, enrollment.request_id,
-			COALESCE(enrollment.audit_id, ''), COALESCE(enrollment.traceparent, '')
+			COALESCE(enrollment.audit_id, ''), COALESCE(enrollment.traceparent, ''),
+			COALESCE(enrollment.termination_idempotency_fingerprint, ''),
+			COALESCE(enrollment.termination_request_digest, '')
 		FROM paas.node_enrollments AS enrollment
 		JOIN paas.operations AS operation
 		  ON operation.authority_key = 'installation:' || enrollment.installation_id
@@ -167,7 +182,7 @@ func (transaction *nodeEnrollmentTransaction) load(
 		&enrollmentDocument, &operationDocument,
 		&joinDocument, &wrappedCredentialDocument,
 		&actorType, &actorID, &decisionID, &requestID,
-		&auditID, &traceParent,
+		&auditID, &traceParent, &terminationFingerprint, &terminationDigest,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nodeenrollment.StoredEnrollment{}, false, nil
@@ -186,6 +201,8 @@ func (transaction *nodeEnrollmentTransaction) load(
 			DecisionID: decisionID, RequestID: requestID,
 			AuditID: auditID, TraceParent: traceParent,
 		},
+		TerminationFingerprint:   terminationFingerprint,
+		TerminationRequestDigest: terminationDigest,
 	}
 	if decodeDocument("NodeEnrollment", enrollmentDocument, &stored.Enrollment) != nil ||
 		decodeDocument("Operation", operationDocument, &stored.Operation) != nil ||
@@ -325,6 +342,83 @@ func (transaction *nodeEnrollmentTransaction) ExpireEnrollment(
 		int64(before.Enrollment.Metadata.ResourceVersion),
 		enrollmentDocument,
 		operationDocument,
+	)
+	return err
+}
+
+func (transaction *nodeEnrollmentTransaction) RevokeEnrollment(
+	ctx context.Context,
+	before nodeenrollment.StoredEnrollment,
+	after nodeenrollment.StoredEnrollment,
+) error {
+	return transaction.revokeEnrollment(ctx, before, after, nil, nil)
+}
+
+func (transaction *nodeEnrollmentTransaction) ReplaceEnrollment(
+	ctx context.Context,
+	before nodeenrollment.StoredEnrollment,
+	after nodeenrollment.StoredEnrollment,
+	replacement nodeenrollment.StoredEnrollment,
+) error {
+	if nodeenrollment.ValidateStoredEnrollment(replacement, transaction.installationID) != nil ||
+		after.Enrollment.ReplacedByID != replacement.Enrollment.Metadata.ID {
+		return nodeenrollment.ErrInvalidArgument
+	}
+	replacementDocument, err := json.Marshal(replacement.Enrollment)
+	if err != nil {
+		return err
+	}
+	replacementOperationDocument, err := json.Marshal(replacement.Operation)
+	if err != nil {
+		return err
+	}
+	if err := transaction.revokeEnrollment(
+		ctx, before, after, replacementDocument, replacementOperationDocument,
+	); err != nil {
+		return err
+	}
+	return transaction.InsertEnrollment(ctx, replacement)
+}
+
+func (transaction *nodeEnrollmentTransaction) revokeEnrollment(
+	ctx context.Context,
+	before nodeenrollment.StoredEnrollment,
+	after nodeenrollment.StoredEnrollment,
+	replacementDocument []byte,
+	replacementOperationDocument []byte,
+) error {
+	if nodeenrollment.ValidateStoredEnrollment(before, transaction.installationID) != nil ||
+		nodeenrollment.ValidateStoredEnrollment(after, transaction.installationID) != nil ||
+		after.Enrollment.Metadata.ID != before.Enrollment.Metadata.ID ||
+		after.TerminationFingerprint == "" || after.TerminationRequestDigest == "" {
+		return nodeenrollment.ErrInvalidArgument
+	}
+	enrollmentDocument, err := json.Marshal(after.Enrollment)
+	if err != nil {
+		return err
+	}
+	operationDocument, err := json.Marshal(after.Operation)
+	if err != nil {
+		return err
+	}
+	var replacementValue any
+	if replacementDocument != nil {
+		replacementValue = replacementDocument
+	}
+	var replacementOperationValue any
+	if replacementOperationDocument != nil {
+		replacementOperationValue = replacementOperationDocument
+	}
+	_, err = transaction.tx.Exec(ctx, `SELECT paas.revoke_node_enrollment(
+		$1,$2,$3,$4,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb
+	)`, before.Enrollment.Metadata.ID,
+		int64(before.Enrollment.Metadata.ResourceVersion),
+		after.TerminationFingerprint,
+		after.TerminationRequestDigest,
+		enrollmentDocument,
+		operationDocument,
+		replacementValue,
+		replacementOperationValue,
 	)
 	return err
 }

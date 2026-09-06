@@ -775,6 +775,88 @@ func assertNodeEnrollmentPersistence(
 		t.Fatal("API login bypassed the node enrollment transition functions")
 	}
 
+	revocableCommand := command
+	revocableCommand.IdempotencyKey = prefix + "-revoke-node"
+	revocableCommand.Request.Name = "enrollment-revoke"
+	revocable, err := service.Create(ctx, revocableCommand)
+	if err != nil {
+		t.Fatalf("create revocable node enrollment: %v", err)
+	}
+	revokeCommand := nodeenrollment.RevokeCommand{
+		Authorization:           authorization,
+		EnrollmentID:            revocable.Response.Enrollment.Metadata.ID,
+		ExpectedResourceVersion: revocable.Response.Enrollment.Metadata.ResourceVersion,
+		IdempotencyKey:          prefix + "-revoke-enrollment",
+	}
+	revoked, err := service.Revoke(ctx, revokeCommand)
+	if err != nil || revoked.Replayed || revoked.Enrollment.State != paasv1.NodeEnrollmentRevoked ||
+		revoked.Enrollment.Metadata.ResourceVersion != 2 || revoked.Enrollment.ReplacedByID != "" {
+		t.Fatalf("revoke persisted node enrollment: result=%#v err=%v", revoked, err)
+	}
+	revokedReplay, err := service.Revoke(ctx, revokeCommand)
+	if err != nil || !revokedReplay.Replayed || !reflect.DeepEqual(revokedReplay.Enrollment, revoked.Enrollment) {
+		t.Fatalf("replay persisted node enrollment revocation: result=%#v err=%v", revokedReplay, err)
+	}
+	var terminationFingerprint, terminationDigest, replacedByID string
+	if err := admin.QueryRow(ctx, `SELECT
+			COALESCE(termination_idempotency_fingerprint, ''),
+			COALESCE(termination_request_digest, ''),
+			COALESCE(replaced_by_id, '')
+		FROM paas.node_enrollments
+		WHERE installation_id = $1 AND id = $2`,
+		installationID, revoked.Enrollment.Metadata.ID,
+	).Scan(&terminationFingerprint, &terminationDigest, &replacedByID); err != nil ||
+		terminationFingerprint == "" || terminationDigest == "" || replacedByID != "" {
+		t.Fatalf("inspect persisted node enrollment revocation: fingerprint=%q digest=%q replacement=%q err=%v", terminationFingerprint, terminationDigest, replacedByID, err)
+	}
+
+	regenerableCommand := command
+	regenerableCommand.IdempotencyKey = prefix + "-regenerable-node"
+	regenerableCommand.Request.Name = "enrollment-regenerate"
+	regenerable, err := service.Create(ctx, regenerableCommand)
+	if err != nil {
+		t.Fatalf("create regenerable node enrollment: %v", err)
+	}
+	regenerateCommand := nodeenrollment.RegenerateCommand{
+		Authorization:           authorization,
+		EnrollmentID:            regenerable.Response.Enrollment.Metadata.ID,
+		ExpectedResourceVersion: regenerable.Response.Enrollment.Metadata.ResourceVersion,
+		IdempotencyKey:          prefix + "-regenerate-enrollment",
+		Request: paasv1.RegenerateNodeEnrollmentRequest{
+			WrappingPublicKey: base64.RawURLEncoding.EncodeToString(wrappingPublicKey),
+		},
+		ControlPlaneBaseURL: command.ControlPlaneBaseURL,
+	}
+	regenerated, err := service.Regenerate(ctx, regenerateCommand)
+	if err != nil || regenerated.Replayed ||
+		regenerated.Response.Enrollment.Metadata.ID == regenerable.Response.Enrollment.Metadata.ID ||
+		regenerated.Response.Enrollment.ExecutionTargetID == regenerable.Response.Enrollment.ExecutionTargetID {
+		t.Fatalf("regenerate persisted node enrollment: result=%#v err=%v", regenerated, err)
+	}
+	regeneratedReplay, err := service.Regenerate(ctx, regenerateCommand)
+	if err != nil || !regeneratedReplay.Replayed ||
+		!reflect.DeepEqual(regeneratedReplay.Response, regenerated.Response) ||
+		!reflect.DeepEqual(regeneratedReplay.Operation, regenerated.Operation) {
+		t.Fatalf("replay persisted node enrollment regeneration: result=%#v err=%v", regeneratedReplay, err)
+	}
+	var sourceState, sourceOperationState, replacementState string
+	if err := admin.QueryRow(ctx, `SELECT source.state, source_operation.state,
+			replacement.state, source.replaced_by_id
+		FROM paas.node_enrollments AS source
+		JOIN paas.operations AS source_operation
+		  ON source_operation.authority_key = source.authority_key
+		 AND source_operation.id = source.operation_id
+		JOIN paas.node_enrollments AS replacement
+		  ON replacement.installation_id = source.installation_id
+		 AND replacement.id = source.replaced_by_id
+		WHERE source.installation_id = $1 AND source.id = $2`,
+		installationID, regenerable.Response.Enrollment.Metadata.ID,
+	).Scan(&sourceState, &sourceOperationState, &replacementState, &replacedByID); err != nil ||
+		sourceState != "REVOKED" || sourceOperationState != "CANCELLED" ||
+		replacementState != "WAITING_INSTALL" || replacedByID != string(regenerated.Response.Enrollment.Metadata.ID) {
+		t.Fatalf("inspect atomic enrollment replacement: source=%s operation=%s replacement=%s id=%s err=%v", sourceState, sourceOperationState, replacementState, replacedByID, err)
+	}
+
 	stagedEnrollment := created.Response.Enrollment
 	stagedEnrollment.ExpiresAt = stagedEnrollment.Metadata.CreatedAt.Add(time.Microsecond)
 	stagedJoin := created.Response.Join

@@ -17,6 +17,8 @@ type EnrollmentWorkflow interface {
 	Create(context.Context, nodeenrollment.CreateCommand) (nodeenrollment.CreateResult, error)
 	Get(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.NodeEnrollment, error)
 	List(context.Context, port.Authorization) (paasv1.NodeEnrollmentList, error)
+	Revoke(context.Context, nodeenrollment.RevokeCommand) (nodeenrollment.RevokeResult, error)
+	Regenerate(context.Context, nodeenrollment.RegenerateCommand) (nodeenrollment.CreateResult, error)
 }
 
 func (value *handler) createNodeEnrollment(response http.ResponseWriter, request *http.Request) {
@@ -68,15 +70,7 @@ func (value *handler) createNodeEnrollment(response http.ResponseWriter, request
 		writeWorkflowError(response, requestID, nodeenrollment.ErrUnavailable)
 		return
 	}
-	status := http.StatusCreated
-	if result.Replayed {
-		status = http.StatusOK
-	}
-	enrollment := result.Response.Enrollment
-	response.Header().Set("Location", "/v1/node-enrollments/"+string(enrollment.Metadata.ID))
-	response.Header().Set("Operation-Location", "/v1/platform/operations/"+string(result.Operation.ID))
-	response.Header().Set("ETag", resourceVersionETag(enrollment.Metadata.ResourceVersion))
-	writeJSON(response, status, result.Response)
+	writeNodeEnrollmentCreation(response, result)
 }
 
 func (value *handler) getNodeEnrollment(response http.ResponseWriter, request *http.Request) {
@@ -125,6 +119,126 @@ func (value *handler) listNodeEnrollments(response http.ResponseWriter, request 
 	}
 	enrollments, err := value.enrollment.List(request.Context(), authorization)
 	writeResource(response, requestID, enrollments, "", err)
+}
+
+func (value *handler) revokeNodeEnrollment(response http.ResponseWriter, request *http.Request) {
+	id, ok := pathResourceID(response, request, "nodeEnrollmentId")
+	if !ok {
+		return
+	}
+	requestID, ok := value.beginExecutionRequest(response, request, true)
+	if !ok {
+		return
+	}
+	if request.ContentLength != 0 || len(request.TransferEncoding) > 0 {
+		writeWorkflowError(response, requestID, nodeenrollment.ErrInvalidArgument)
+		return
+	}
+	expected, ok := parseIfMatch(response, request, requestID)
+	if !ok {
+		return
+	}
+	authorization, ok := value.authorizeRequest(
+		response,
+		request,
+		requestID,
+		port.AuthorizeNodeEnrollmentRevoke,
+		"NodeEnrollment",
+		id,
+	)
+	if !ok {
+		return
+	}
+	result, err := value.enrollment.Revoke(request.Context(), nodeenrollment.RevokeCommand{
+		Authorization: authorization, EnrollmentID: id,
+		ExpectedResourceVersion: expected,
+		IdempotencyKey:          request.Header.Get("Idempotency-Key"),
+	})
+	if err != nil {
+		writeWorkflowError(response, requestID, err)
+		return
+	}
+	if paasv1.ValidateNodeEnrollment(result.Enrollment) != nil ||
+		result.Enrollment.Metadata.ID != id || result.Enrollment.State != paasv1.NodeEnrollmentRevoked {
+		writeWorkflowError(response, requestID, nodeenrollment.ErrUnavailable)
+		return
+	}
+	response.Header().Set("ETag", resourceVersionETag(result.Enrollment.Metadata.ResourceVersion))
+	writeJSON(response, http.StatusOK, result.Enrollment)
+}
+
+func (value *handler) regenerateNodeEnrollment(response http.ResponseWriter, request *http.Request) {
+	id, ok := pathResourceID(response, request, "nodeEnrollmentId")
+	if !ok {
+		return
+	}
+	requestID, ok := value.beginExecutionRequest(response, request, true)
+	if !ok {
+		return
+	}
+	body, ok := decodeJSON[paasv1.RegenerateNodeEnrollmentRequest](
+		value,
+		response,
+		request,
+		requestID,
+	)
+	if !ok {
+		return
+	}
+	if paasv1.ValidateRegenerateNodeEnrollmentRequest(body) != nil {
+		writeWorkflowError(response, requestID, nodeenrollment.ErrInvalidArgument)
+		return
+	}
+	controlPlaneBaseURL, err := nodeEnrollmentControlPlaneBaseURL(request)
+	if err != nil {
+		writeWorkflowError(response, requestID, nodeenrollment.ErrInvalidArgument)
+		return
+	}
+	expected, ok := parseIfMatch(response, request, requestID)
+	if !ok {
+		return
+	}
+	authorization, ok := value.authorizeRequest(
+		response,
+		request,
+		requestID,
+		port.AuthorizeNodeEnrollmentRegenerate,
+		"NodeEnrollment",
+		id,
+	)
+	if !ok {
+		return
+	}
+	result, err := value.enrollment.Regenerate(request.Context(), nodeenrollment.RegenerateCommand{
+		Authorization: authorization, EnrollmentID: id,
+		ExpectedResourceVersion: expected,
+		IdempotencyKey:          request.Header.Get("Idempotency-Key"),
+		Request:                 body,
+		ControlPlaneBaseURL:     controlPlaneBaseURL,
+	})
+	if err != nil {
+		writeWorkflowError(response, requestID, err)
+		return
+	}
+	if paasv1.ValidateCreateNodeEnrollmentResponse(result.Response) != nil ||
+		paasv1.ValidateOperation(result.Operation) != nil ||
+		result.Response.Enrollment.Metadata.ID == id {
+		writeWorkflowError(response, requestID, nodeenrollment.ErrUnavailable)
+		return
+	}
+	writeNodeEnrollmentCreation(response, result)
+}
+
+func writeNodeEnrollmentCreation(response http.ResponseWriter, result nodeenrollment.CreateResult) {
+	status := http.StatusCreated
+	if result.Replayed {
+		status = http.StatusOK
+	}
+	enrollment := result.Response.Enrollment
+	response.Header().Set("Location", "/v1/node-enrollments/"+string(enrollment.Metadata.ID))
+	response.Header().Set("Operation-Location", "/v1/platform/operations/"+string(result.Operation.ID))
+	response.Header().Set("ETag", resourceVersionETag(enrollment.Metadata.ResourceVersion))
+	writeJSON(response, status, result.Response)
 }
 
 func nodeEnrollmentControlPlaneBaseURL(request *http.Request) (string, error) {

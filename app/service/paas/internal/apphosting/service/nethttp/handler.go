@@ -150,6 +150,8 @@ func NewHandler(
 	routes.HandleFunc("POST /v1/node-enrollments", value.createNodeEnrollment)
 	routes.HandleFunc("GET /v1/node-enrollments", value.listNodeEnrollments)
 	routes.HandleFunc("GET /v1/node-enrollments/{nodeEnrollmentId}", value.getNodeEnrollment)
+	routes.HandleFunc("POST /v1/node-enrollments/{nodeEnrollmentId}/revoke", value.revokeNodeEnrollment)
+	routes.HandleFunc("POST /v1/node-enrollments/{nodeEnrollmentId}/regenerate", value.regenerateNodeEnrollment)
 	routes.HandleFunc("POST /v1/execution-targets", value.registerExecutionTarget)
 	routes.HandleFunc("GET /v1/execution-targets", value.listExecutionTargets)
 	routes.HandleFunc("GET /v1/execution-targets/{executionTargetId}", value.getExecutionTarget)
@@ -945,6 +947,8 @@ func writeWorkflowError(response http.ResponseWriter, requestID string, err erro
 		writeProblem(response, requestID, http.StatusServiceUnavailable, paasv1.ErrorInternal, "Enrollment unavailable", "node enrollment is temporarily unavailable", true)
 	case errors.Is(err, nodeenrollment.ErrConflict):
 		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorConflict, "Enrollment conflict", "node enrollment conflicts with current installation authority", false)
+	case errors.Is(err, nodeenrollment.ErrInvalidTransition):
+		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorConflict, "Invalid enrollment transition", "node enrollment cannot make the requested transition", false)
 	case errors.Is(err, nodeenrollment.ErrExpired), errors.Is(err, nodeenrollment.ErrRevoked), errors.Is(err, nodeenrollment.ErrCredentialConsumed):
 		writeProblem(response, requestID, http.StatusGone, paasv1.ErrorConflict, "Enrollment unavailable", "node enrollment can no longer issue its join document", false)
 	case errors.Is(err, applicationlifecycle.ErrInvalidArgument), errors.Is(err, executionadmission.ErrInvalidArgument), errors.Is(err, nodeenrollment.ErrInvalidArgument):

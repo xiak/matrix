@@ -607,6 +607,20 @@ func (integrationEnrollmentWorkflow) List(
 	return paasv1.NodeEnrollmentList{}, nodeenrollment.ErrNotFound
 }
 
+func (integrationEnrollmentWorkflow) Revoke(
+	context.Context,
+	nodeenrollment.RevokeCommand,
+) (nodeenrollment.RevokeResult, error) {
+	return nodeenrollment.RevokeResult{}, nodeenrollment.ErrNotFound
+}
+
+func (integrationEnrollmentWorkflow) Regenerate(
+	context.Context,
+	nodeenrollment.RegenerateCommand,
+) (nodeenrollment.CreateResult, error) {
+	return nodeenrollment.CreateResult{}, nodeenrollment.ErrNotFound
+}
+
 func (ingestor *integrationAuditIngestor) Ingest(
 	_ context.Context,
 	event audit.Event,

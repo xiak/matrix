@@ -18,6 +18,7 @@ var (
 	ErrInvalidArgument      = errors.New("node enrollment request is invalid")
 	ErrNotFound             = errors.New("node enrollment was not found")
 	ErrConflict             = errors.New("node enrollment conflicts with stored authority")
+	ErrInvalidTransition    = errors.New("node enrollment lifecycle transition is invalid")
 	ErrIdempotencyConflict  = errors.New("node enrollment idempotency conflict")
 	ErrResourceVersion      = errors.New("node enrollment resource version conflict")
 	ErrExpired              = errors.New("node enrollment expired")
@@ -105,14 +106,37 @@ type CreateResult struct {
 	Replayed  bool
 }
 
+type RevokeCommand struct {
+	Authorization           port.Authorization
+	EnrollmentID            paasv1.ResourceID
+	ExpectedResourceVersion uint64
+	IdempotencyKey          string
+}
+
+type RevokeResult struct {
+	Enrollment paasv1.NodeEnrollment
+	Replayed   bool
+}
+
+type RegenerateCommand struct {
+	Authorization           port.Authorization
+	EnrollmentID            paasv1.ResourceID
+	ExpectedResourceVersion uint64
+	IdempotencyKey          string
+	Request                 paasv1.RegenerateNodeEnrollmentRequest
+	ControlPlaneBaseURL     string
+}
+
 type StoredEnrollment struct {
-	Enrollment          paasv1.NodeEnrollment
-	Operation           paasv1.Operation
-	Join                paasv1.NodeEnrollmentJoin
-	WrappedCredential   paasv1.WrappedJoinCredential
-	CredentialSalt      []byte `json:"-"`
-	CredentialVerifier  string `json:"-"`
-	CreateAuthorization port.Authorization
+	Enrollment               paasv1.NodeEnrollment
+	Operation                paasv1.Operation
+	Join                     paasv1.NodeEnrollmentJoin
+	WrappedCredential        paasv1.WrappedJoinCredential
+	CredentialSalt           []byte `json:"-"`
+	CredentialVerifier       string `json:"-"`
+	TerminationFingerprint   string `json:"-"`
+	TerminationRequestDigest string `json:"-"`
+	CreateAuthorization      port.Authorization
 }
 
 func (StoredEnrollment) String() string   { return "stored node enrollment <redacted>" }
@@ -125,11 +149,14 @@ func (value StoredEnrollment) Clear() {
 type Transaction interface {
 	TransactionTime(context.Context) (time.Time, error)
 	FindByFingerprint(context.Context, string) (StoredEnrollment, bool, error)
+	FindByTerminationFingerprint(context.Context, string) (StoredEnrollment, bool, error)
 	LoadEnrollment(context.Context, paasv1.ResourceID) (StoredEnrollment, bool, error)
 	LoadExecutionPool(context.Context, paasv1.ResourceID) (paasv1.ExecutionPool, bool, error)
 	ListEnrollments(context.Context, int) ([]StoredEnrollment, error)
 	InsertEnrollment(context.Context, StoredEnrollment) error
 	ExpireEnrollment(context.Context, StoredEnrollment, paasv1.NodeEnrollment, paasv1.Operation) error
+	RevokeEnrollment(context.Context, StoredEnrollment, StoredEnrollment) error
+	ReplaceEnrollment(context.Context, StoredEnrollment, StoredEnrollment, StoredEnrollment) error
 }
 
 type Repository interface {

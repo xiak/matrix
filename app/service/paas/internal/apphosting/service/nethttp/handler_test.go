@@ -72,7 +72,13 @@ func TestNodeEnrollmentHTTPSeparatesOneTimeCreationFromOrdinaryReads(t *testing.
 		DecisionID:     "decision-platform",
 		RequestID:      "request-test",
 	}
-	createResult, createRequest := testNodeEnrollmentResult(t, authorization)
+	createResult, createRequest := testNodeEnrollmentResult(
+		t,
+		authorization,
+		"node-enrollment-0123456789abcdef0123456789abcdef",
+		"execution-target-enrollment-a",
+		"operation-enrollment-a",
+	)
 	authorizer := &fakeAuthorizer{result: &authorization}
 	workflow := &fakeEnrollmentWorkflow{
 		createResult: createResult,
@@ -184,6 +190,138 @@ func TestNodeEnrollmentHTTPSeparatesOneTimeCreationFromOrdinaryReads(t *testing.
 	if response.Code != http.StatusBadRequest || workflow.createCalls != 2 ||
 		authorizer.request != (port.AuthorizationRequest{}) {
 		t.Fatalf("unsigned public origin reached authorization/workflow: status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestNodeEnrollmentHTTPMutationsPreserveVersionAndOneTimeBoundaries(t *testing.T) {
+	authorization := port.Authorization{
+		InstallationID: "installation-a",
+		Subject:        paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "platform-user"},
+		DecisionID:     "decision-platform",
+		RequestID:      "request-test",
+	}
+	source, _ := testNodeEnrollmentResult(
+		t,
+		authorization,
+		"node-enrollment-0123456789abcdef0123456789abcdef",
+		"execution-target-enrollment-a",
+		"operation-enrollment-a",
+	)
+	replacement, replacementRequest := testNodeEnrollmentResult(
+		t,
+		authorization,
+		"node-enrollment-fedcba9876543210fedcba9876543210",
+		"execution-target-enrollment-b",
+		"operation-enrollment-b",
+	)
+	revoked := source.Response.Enrollment
+	revokedAt := revoked.Metadata.UpdatedAt.Add(time.Minute)
+	revoked.State = paasv1.NodeEnrollmentRevoked
+	revoked.Metadata.ResourceVersion++
+	revoked.Metadata.UpdatedAt = revokedAt
+	revoked.Diagnostic = &paasv1.NodeEnrollmentDiagnostic{
+		Code: paasv1.NodeEnrollmentDiagnosticRevoked, OccurredAt: revokedAt,
+	}
+	if paasv1.ValidateNodeEnrollment(revoked) != nil {
+		t.Fatal("invalid revoked node enrollment HTTP fixture")
+	}
+	workflow := &fakeEnrollmentWorkflow{
+		revokeResult:     nodeenrollment.RevokeResult{Enrollment: revoked},
+		regenerateResult: replacement,
+	}
+	authorizer := &fakeAuthorizer{result: &authorization}
+	handler, err := NewHandler(
+		authorizer,
+		&fakeWorkflow{},
+		&fakeExecutionWorkflow{},
+		workflow,
+		&fakeTerminalWorkflow{},
+		&fakeTerminalConnector{},
+		&fakeInstallationVerifier{},
+		Config{
+			NewRequestID: func() (string, error) { return "request-test", nil },
+			Readiness:    func(context.Context) (paasv1.Readiness, error) { return paasv1.Readiness{}, nil },
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sourceID := source.Response.Enrollment.Metadata.ID
+	request := httptest.NewRequest(http.MethodPost, "/v1/node-enrollments/"+string(sourceID)+"/revoke", nil)
+	request.Header.Set("Authorization", "Bearer platform-user")
+	request.Header.Set("Idempotency-Key", "revoke-enrollment-a")
+	request.Header.Set("If-Match", `"1"`)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Header().Get("ETag") != `"2"` ||
+		workflow.revokeCalls != 1 || authorizer.request.Action != port.AuthorizeNodeEnrollmentRevoke ||
+		authorizer.request.Resource != (paasv1.ResourceRef{Kind: "NodeEnrollment", ID: sourceID}) ||
+		workflow.revokeCommand.Authorization != authorization || workflow.revokeCommand.EnrollmentID != sourceID ||
+		workflow.revokeCommand.ExpectedResourceVersion != 1 ||
+		workflow.revokeCommand.IdempotencyKey != "revoke-enrollment-a" {
+		t.Fatalf("node enrollment revoke response=%d body=%s request=%#v command=%#v", response.Code, response.Body.String(), authorizer.request, workflow.revokeCommand)
+	}
+	assertNoEnrollmentCredentialMaterial(t, response.Body.String())
+
+	regenerateRequest := paasv1.RegenerateNodeEnrollmentRequest{
+		WrappingPublicKey: replacementRequest.WrappingPublicKey,
+	}
+	request = jsonRequest(t, http.MethodPost, "/v1/node-enrollments/"+string(sourceID)+"/regenerate", regenerateRequest)
+	request.Header.Set("Authorization", "Bearer platform-user")
+	request.Header.Set("Idempotency-Key", "regenerate-enrollment-a")
+	request.Header.Set("If-Match", `"1"`)
+	request.Header.Set(nodeEnrollmentPublicOriginHeader, "https://matrix.internal")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated || workflow.regenerateCalls != 1 ||
+		authorizer.request.Action != port.AuthorizeNodeEnrollmentRegenerate ||
+		authorizer.request.Resource != (paasv1.ResourceRef{Kind: "NodeEnrollment", ID: sourceID}) ||
+		workflow.regenerateCommand.Authorization != authorization || workflow.regenerateCommand.EnrollmentID != sourceID ||
+		workflow.regenerateCommand.ExpectedResourceVersion != 1 ||
+		workflow.regenerateCommand.IdempotencyKey != "regenerate-enrollment-a" ||
+		workflow.regenerateCommand.ControlPlaneBaseURL != "https://matrix.internal/api/paas/v1" ||
+		workflow.regenerateCommand.Request != regenerateRequest ||
+		response.Header().Get("Location") != "/v1/node-enrollments/"+string(replacement.Response.Enrollment.Metadata.ID) ||
+		response.Header().Get("Operation-Location") != "/v1/platform/operations/"+string(replacement.Operation.ID) ||
+		response.Header().Get("ETag") != `"1"` {
+		t.Fatalf("node enrollment regeneration response=%d body=%s request=%#v command=%#v", response.Code, response.Body.String(), authorizer.request, workflow.regenerateCommand)
+	}
+
+	workflow.regenerateResult.Replayed = true
+	request = jsonRequest(t, http.MethodPost, "/v1/node-enrollments/"+string(sourceID)+"/regenerate", regenerateRequest)
+	request.Header.Set("Authorization", "Bearer platform-user")
+	request.Header.Set("Idempotency-Key", "regenerate-enrollment-a")
+	request.Header.Set("If-Match", `"1"`)
+	request.Header.Set(nodeEnrollmentPublicOriginHeader, "https://matrix.internal")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || workflow.regenerateCalls != 2 {
+		t.Fatalf("node enrollment regeneration replay response=%d body=%s", response.Code, response.Body.String())
+	}
+
+	authorizer.request = port.AuthorizationRequest{}
+	request = jsonRequest(t, http.MethodPost, "/v1/node-enrollments/"+string(sourceID)+"/regenerate", regenerateRequest)
+	request.Header.Set("Authorization", "Bearer platform-user")
+	request.Header.Set("Idempotency-Key", "regenerate-enrollment-a")
+	request.Header.Set(nodeEnrollmentPublicOriginHeader, "https://matrix.internal")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusPreconditionRequired || workflow.regenerateCalls != 2 ||
+		authorizer.request != (port.AuthorizationRequest{}) {
+		t.Fatalf("regeneration without If-Match reached authorization/workflow: status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	authorizer.request = port.AuthorizationRequest{}
+	request = httptest.NewRequest(http.MethodPost, "/v1/node-enrollments/"+string(sourceID)+"/revoke", strings.NewReader(`{}`))
+	request.Header.Set("Authorization", "Bearer platform-user")
+	request.Header.Set("Idempotency-Key", "revoke-enrollment-a")
+	request.Header.Set("If-Match", `"1"`)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || workflow.revokeCalls != 1 ||
+		authorizer.request != (port.AuthorizationRequest{}) {
+		t.Fatalf("revocation body reached authorization/workflow: status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 
@@ -1482,12 +1620,13 @@ func testMetadata(id paasv1.ResourceID, name string) paasv1.ResourceMetadata {
 func testNodeEnrollmentResult(
 	t *testing.T,
 	authorization port.Authorization,
+	enrollmentID paasv1.ResourceID,
+	targetID paasv1.ResourceID,
+	operationID paasv1.OperationID,
 ) (nodeenrollment.CreateResult, paasv1.CreateNodeEnrollmentRequest) {
 	t.Helper()
 	now := time.Date(2026, 8, 25, 18, 0, 0, 0, time.UTC)
 	expiresAt := now.Add(15 * time.Minute)
-	enrollmentID := paasv1.ResourceID("node-enrollment-0123456789abcdef0123456789abcdef")
-	targetID := paasv1.ResourceID("execution-target-enrollment-a")
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -1544,13 +1683,14 @@ func testNodeEnrollmentResult(
 		},
 		ExecutionTargetID: targetID,
 		ExecutionPoolID:   "pool-a",
-		OperationID:       "operation-a",
+		OperationID:       operationID,
 		State:             paasv1.NodeEnrollmentWaitingInstall,
 		ExpiresAt:         expiresAt,
 	}
 	operation := testOperation(
 		"ExecutionTarget", targetID, paasv1.OperationRegisterExecutionTarget, paasv1.OperationAccepted,
 	)
+	operation.ID = operationID
 	operation.Scope = paasv1.ResourceScope{Kind: paasv1.AuthorityPlatform}
 	operation.InstallationID = authorization.InstallationID
 	operation.RequestedBy = authorization.Subject
@@ -1623,9 +1763,17 @@ type fakeEnrollmentWorkflow struct {
 	listAuthorization port.Authorization
 	listResult        paasv1.NodeEnrollmentList
 	listErr           error
+	revokeCommand     nodeenrollment.RevokeCommand
+	revokeResult      nodeenrollment.RevokeResult
+	revokeErr         error
+	regenerateCommand nodeenrollment.RegenerateCommand
+	regenerateResult  nodeenrollment.CreateResult
+	regenerateErr     error
 	createCalls       int
 	readCalls         int
 	listCalls         int
+	revokeCalls       int
+	regenerateCalls   int
 }
 
 func (workflow *fakeEnrollmentWorkflow) Create(
@@ -1652,6 +1800,22 @@ func (workflow *fakeEnrollmentWorkflow) List(
 ) (paasv1.NodeEnrollmentList, error) {
 	workflow.listAuthorization, workflow.listCalls = authorization, workflow.listCalls+1
 	return workflow.listResult, workflow.listErr
+}
+
+func (workflow *fakeEnrollmentWorkflow) Revoke(
+	_ context.Context,
+	command nodeenrollment.RevokeCommand,
+) (nodeenrollment.RevokeResult, error) {
+	workflow.revokeCommand, workflow.revokeCalls = command, workflow.revokeCalls+1
+	return workflow.revokeResult, workflow.revokeErr
+}
+
+func (workflow *fakeEnrollmentWorkflow) Regenerate(
+	_ context.Context,
+	command nodeenrollment.RegenerateCommand,
+) (nodeenrollment.CreateResult, error) {
+	workflow.regenerateCommand, workflow.regenerateCalls = command, workflow.regenerateCalls+1
+	return workflow.regenerateResult, workflow.regenerateErr
 }
 
 func (workflow *fakeExecutionWorkflow) CreatePool(_ context.Context, command executionadmission.CreatePoolCommand) (paasv1.ExecutionPool, paasv1.Operation, bool, error) {
