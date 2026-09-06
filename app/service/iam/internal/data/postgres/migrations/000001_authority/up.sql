@@ -780,6 +780,10 @@ AS $function$
         WHEN 'paas.execution-target.drain' THEN 'EXECUTION_TARGET'
         WHEN 'paas.execution-target.activate' THEN 'EXECUTION_TARGET'
         WHEN 'paas.execution-target.remove' THEN 'EXECUTION_TARGET'
+		WHEN 'paas.node-enrollment.create' THEN 'NODE_ENROLLMENT'
+		WHEN 'paas.node-enrollment.read' THEN 'NODE_ENROLLMENT'
+		WHEN 'paas.node-enrollment.revoke' THEN 'NODE_ENROLLMENT'
+		WHEN 'paas.node-enrollment.regenerate' THEN 'NODE_ENROLLMENT'
         WHEN 'paas.platform-operation.read' THEN 'OPERATION'
         WHEN 'paas.application.create' THEN 'APPLICATION'
         WHEN 'paas.application.read' THEN 'APPLICATION'
@@ -827,6 +831,8 @@ AS $function$
         'paas.execution-target.register', 'paas.execution-target.read',
         'paas.execution-target.drain', 'paas.execution-target.activate',
         'paas.execution-target.remove',
+		'paas.node-enrollment.create', 'paas.node-enrollment.read',
+		'paas.node-enrollment.revoke', 'paas.node-enrollment.regenerate',
         'paas.platform-operation.read', 'audit.platform-record.read',
         'audit.platform-integrity.verify'
     ), false)

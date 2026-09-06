@@ -486,6 +486,9 @@ func ResourceKindForAction(action Action) (ResourceKind, bool) {
 		ActionPaaSExecutionTargetDrain, ActionPaaSExecutionTargetActivate,
 		ActionPaaSExecutionTargetRemove:
 		return ResourceExecutionTarget, true
+	case ActionPaaSNodeEnrollmentCreate, ActionPaaSNodeEnrollmentRead,
+		ActionPaaSNodeEnrollmentRevoke, ActionPaaSNodeEnrollmentRegenerate:
+		return ResourceNodeEnrollment, true
 	case ActionManagedServiceOfferingRead:
 		return ResourceServiceOffering, true
 	case ActionManagedServiceRegionRead:

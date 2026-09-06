@@ -112,6 +112,21 @@ func TestNodeEnrollmentJoinRejectsTamperingAndCredentialURLs(t *testing.T) {
 			},
 			resign: true,
 		},
+		"issuer installation": {
+			mutate: func(value *NodeEnrollmentJoin) { value.InstallationID = "installation-other" },
+			resign: true,
+		},
+		"issuer certificate signature": {
+			mutate: func(value *NodeEnrollmentJoin) {
+				certificate, err := base64.RawURLEncoding.Strict().DecodeString(value.IssuerCertificate)
+				if err != nil {
+					t.Fatal(err)
+				}
+				certificate[len(certificate)-1] ^= 0x01
+				value.IssuerCertificate = base64.RawURLEncoding.EncodeToString(certificate)
+			},
+			resign: true,
+		},
 		"padded signature": {
 			mutate: func(value *NodeEnrollmentJoin) { value.Signature += "=" },
 		},
@@ -233,6 +248,11 @@ func nodeEnrollmentContractFixture(t *testing.T) (CreateNodeEnrollmentRequest, C
 		BasicConstraintsValid: true, IsCA: true,
 		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
 	}
+	issuerURI, err := NodeEnrollmentIssuerURI("installation-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuerTemplate.URIs = append(issuerTemplate.URIs, issuerURI)
 	issuerDER, err := x509.CreateCertificate(rand.Reader, issuerTemplate, issuerTemplate, issuerPublic, issuerPrivate)
 	if err != nil {
 		t.Fatal(err)

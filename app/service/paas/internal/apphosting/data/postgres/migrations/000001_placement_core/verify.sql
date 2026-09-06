@@ -17,6 +17,7 @@ BEGIN
             ('audit_outbox'),
             ('execution_pools'),
             ('execution_targets'),
+            ('node_enrollments'),
             ('execution_target_allocations'),
             ('adapter_commands'),
             ('adapter_receipts'),
@@ -69,6 +70,7 @@ BEGIN
             'audit_outbox',
             'execution_pools',
             'execution_targets',
+            'node_enrollments',
             'adapter_commands',
             'adapter_receipts',
             'deployment_observations',
@@ -110,6 +112,14 @@ BEGIN
             ('execution_targets_installation_pool_fk'),
             ('execution_targets_installation_identity_valid'),
             ('execution_pools_installation_valid'),
+            ('node_enrollments_target_uq'),
+            ('node_enrollments_operation_uq'),
+            ('node_enrollments_pool_fk'),
+            ('node_enrollments_operation_fk'),
+            ('node_enrollments_identity_valid'),
+            ('node_enrollments_state_valid'),
+            ('node_enrollments_credential_valid'),
+            ('node_enrollments_document_identity'),
             ('execution_target_allocations_target_fk'),
             ('adapter_commands_operation_action_uq'),
             ('adapter_commands_operation_fk'),
@@ -204,15 +214,21 @@ BEGIN
             ('deployment_resource_snapshots'),
             ('terminal_sessions'),
             ('placement_decisions'),
-            ('capacity_reservations')
+            ('capacity_reservations'),
+            ('node_enrollments')
       ) AS required(table_name)
      WHERE NOT EXISTS (
         SELECT 1
           FROM pg_catalog.pg_policies
          WHERE schemaname = 'paas'
            AND tablename = required.table_name
-           AND policyname = CASE WHEN required.table_name IN ('operations', 'audit_outbox')
-                THEN 'authority_isolation' ELSE 'tenant_isolation' END
+           AND policyname = CASE
+                WHEN required.table_name IN ('operations', 'audit_outbox')
+                    THEN 'authority_isolation'
+                WHEN required.table_name = 'node_enrollments'
+                    THEN 'installation_read'
+                ELSE 'tenant_isolation'
+           END
     );
     IF missing IS NOT NULL THEN
         RAISE EXCEPTION 'missing apphosting tenant policies: %', missing;
@@ -311,6 +327,14 @@ BEGIN
             (
                 'admit_execution_resource',
                 'submitted_resource jsonb, submitted_operation jsonb, submitted_audit_event jsonb, submitted_binding_ref text, submitted_identity_fingerprint text, expected_pool_version bigint, submitted_pool jsonb'
+            ),
+            (
+                'create_node_enrollment',
+                'submitted_enrollment jsonb, submitted_operation jsonb, submitted_join jsonb, submitted_wrapped_credential jsonb, submitted_credential_salt bytea, submitted_credential_verifier text, submitted_actor_type text, submitted_actor_id text, submitted_iam_decision_id text, submitted_request_id text, submitted_audit_id text, submitted_traceparent text'
+            ),
+            (
+                'expire_node_enrollment',
+                'requested_enrollment_id text, expected_resource_version bigint, submitted_enrollment jsonb, submitted_operation jsonb'
             ),
             (
                 'transition_execution_target',
@@ -521,6 +545,7 @@ BEGIN
        )
        OR has_table_privilege('matrix_paas_api', 'paas.execution_pools', 'INSERT, UPDATE, DELETE')
        OR has_table_privilege('matrix_paas_api', 'paas.execution_targets', 'INSERT, UPDATE, DELETE')
+       OR has_table_privilege('matrix_paas_api', 'paas.node_enrollments', 'INSERT, UPDATE, DELETE')
        OR has_table_privilege(
             'matrix_paas_api',
             'paas.audit_outbox',
@@ -671,6 +696,11 @@ BEGIN
        )
        OR has_table_privilege(
             'matrix_paas_worker',
+            'paas.node_enrollments',
+            'SELECT, INSERT, UPDATE, DELETE'
+       )
+       OR has_table_privilege(
+            'matrix_paas_worker',
             'paas.placement_policies',
             'INSERT, UPDATE, DELETE'
        )
@@ -683,6 +713,8 @@ BEGIN
     END IF;
 
     IF NOT has_function_privilege('matrix_paas_api', 'paas.admit_execution_resource(jsonb,jsonb,jsonb,text,text,bigint,jsonb)', 'EXECUTE')
+       OR NOT has_function_privilege('matrix_paas_api', 'paas.create_node_enrollment(jsonb,jsonb,jsonb,jsonb,bytea,text,text,text,text,text,text,text)', 'EXECUTE')
+       OR NOT has_function_privilege('matrix_paas_api', 'paas.expire_node_enrollment(text,bigint,jsonb,jsonb)', 'EXECUTE')
        OR NOT has_function_privilege('matrix_paas_api', 'paas.transition_execution_target(bigint,jsonb,bigint,jsonb,jsonb,jsonb)', 'EXECUTE')
        OR NOT has_function_privilege('matrix_paas_api', 'paas.refresh_execution_target(bigint,jsonb,bigint,jsonb)', 'EXECUTE')
        OR EXISTS (

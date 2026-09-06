@@ -217,6 +217,10 @@ BEGIN
        OR iam.resource_kind_for_action('paas.execution-target.activate') IS DISTINCT FROM 'EXECUTION_TARGET'
        OR iam.resource_kind_for_action('paas.execution-target.remove') IS DISTINCT FROM 'EXECUTION_TARGET'
        OR iam.resource_kind_for_action('paas.execution-pool.create') IS DISTINCT FROM 'EXECUTION_POOL'
+	   OR iam.resource_kind_for_action('paas.node-enrollment.create') IS DISTINCT FROM 'NODE_ENROLLMENT'
+	   OR iam.resource_kind_for_action('paas.node-enrollment.read') IS DISTINCT FROM 'NODE_ENROLLMENT'
+	   OR iam.resource_kind_for_action('paas.node-enrollment.revoke') IS DISTINCT FROM 'NODE_ENROLLMENT'
+	   OR iam.resource_kind_for_action('paas.node-enrollment.regenerate') IS DISTINCT FROM 'NODE_ENROLLMENT'
        OR iam.resource_kind_for_action('paas.terminal-session.create') IS DISTINCT FROM 'TERMINAL_SESSION'
        OR iam.resource_kind_for_action('paas.terminal-session.close') IS DISTINCT FROM 'TERMINAL_SESSION'
        OR iam.resource_kind_for_action('unsupported') IS NOT NULL
@@ -224,6 +228,10 @@ BEGIN
        OR NOT iam.is_platform_action('paas.execution-target.drain')
        OR NOT iam.is_platform_action('paas.execution-target.activate')
        OR NOT iam.is_platform_action('paas.execution-target.remove')
+	   OR NOT iam.is_platform_action('paas.node-enrollment.create')
+	   OR NOT iam.is_platform_action('paas.node-enrollment.read')
+	   OR NOT iam.is_platform_action('paas.node-enrollment.revoke')
+	   OR NOT iam.is_platform_action('paas.node-enrollment.regenerate')
        OR iam.is_platform_action('paas.application.create')
        OR iam.is_platform_action('unsupported') THEN
         RAISE EXCEPTION 'IAM authorization action mapping is invalid';

@@ -39,6 +39,56 @@ func (service *Service) GetPool(ctx context.Context, authorization port.Authoriz
 	return result, err
 }
 
+func (service *Service) ListPools(ctx context.Context, authorization port.Authorization) (paasv1.ExecutionPoolList, error) {
+	result := paasv1.ExecutionPoolList{
+		APIVersion: paasv1.APIVersion,
+		Kind:       "ExecutionPoolList",
+		Items:      []paasv1.ExecutionPool{},
+	}
+	if err := service.authorize(ctx, authorization); err != nil {
+		return paasv1.ExecutionPoolList{}, err
+	}
+	err := service.transaction(ctx, func(ctx context.Context, transaction Transaction) error {
+		items, err := transaction.ListPoolResources(ctx)
+		if err != nil {
+			return err
+		}
+		if len(items) > paasv1.MaximumExecutionPoolListItems {
+			return ErrConflict
+		}
+		attempt := result
+		attempt.Items = make([]paasv1.ExecutionPool, 0, len(items))
+		for _, item := range items {
+			targets, err := transaction.ListPoolTargets(ctx, item.Metadata.ID)
+			if err != nil {
+				return err
+			}
+			snapshot, err := service.poolSnapshot(
+				item,
+				targets,
+				service.config.Clock().UTC().Truncate(time.Microsecond),
+				false,
+			)
+			if err != nil {
+				return err
+			}
+			attempt.Items = append(attempt.Items, snapshot)
+		}
+		slices.SortFunc(attempt.Items, func(left, right paasv1.ExecutionPool) int {
+			return strings.Compare(string(left.Metadata.ID), string(right.Metadata.ID))
+		})
+		if paasv1.ValidateExecutionPoolList(attempt) != nil {
+			return ErrConflict
+		}
+		result = attempt
+		return nil
+	})
+	if err != nil {
+		return paasv1.ExecutionPoolList{}, err
+	}
+	return result, nil
+}
+
 func (service *Service) GetTarget(ctx context.Context, authorization port.Authorization, id paasv1.ResourceID) (paasv1.ExecutionTarget, error) {
 	var result paasv1.ExecutionTarget
 	if err := service.authorize(ctx, authorization); err != nil {

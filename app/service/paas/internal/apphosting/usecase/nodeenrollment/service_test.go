@@ -218,12 +218,15 @@ type fakeJoinIssuer struct {
 
 func (issuer *fakeJoinIssuer) Issue(_ context.Context, request JoinIssueRequest) (IssuedJoin, error) {
 	issuer.calls++
+	if ValidateControlPlaneBaseURL(request.ControlPlaneBaseURL) != nil {
+		return IssuedJoin{}, ErrInvalidArgument
+	}
 	digest := sha256.Sum256([]byte("credential-" + string(request.EnrollmentID)))
 	join := paasv1.NodeEnrollmentJoin{
 		APIVersion: paasv1.NodeEnrollmentJoinAPIVersion, Kind: paasv1.NodeEnrollmentJoinKind,
 		EnrollmentID: request.EnrollmentID, InstallationID: issuer.installationID,
 		ExecutionTargetID: request.ExecutionTargetID,
-		ControlPlaneURL:   "https://matrix.internal/api/paas/v1/node-enrollments/" + string(request.EnrollmentID) + "/exchange",
+		ControlPlaneURL:   request.ControlPlaneBaseURL + "/node-enrollments/" + string(request.EnrollmentID) + "/exchange",
 		CredentialDigest:  "sha256:" + hex.EncodeToString(digest[:]), ExpiresAt: request.ExpiresAt,
 		IssuerCertificate:  base64.RawURLEncoding.EncodeToString(issuer.certificate),
 		SignatureAlgorithm: paasv1.NodeJoinSignatureEd25519,
@@ -258,6 +261,11 @@ func enrollmentFixture(t *testing.T) (*Service, *fakeRepository, *fakeJoinIssuer
 		BasicConstraintsValid: true, IsCA: true,
 		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
 	}
+	issuerURI, err := paasv1.NodeEnrollmentIssuerURI("installation-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	template.URIs = append(template.URIs, issuerURI)
 	certificate, err := x509.CreateCertificate(rand.Reader, template, template, publicKey, privateKey)
 	if err != nil {
 		t.Fatal(err)
@@ -304,7 +312,8 @@ func createCommand(t *testing.T) CreateCommand {
 			Name: "host-a", ExecutionPoolID: "pool-a", Labels: map[string]string{"zone": "private-a"},
 			WrappingPublicKey: base64.RawURLEncoding.EncodeToString(encoded),
 		},
-		IdempotencyKey: "create-host-a",
+		IdempotencyKey:      "create-host-a",
+		ControlPlaneBaseURL: "https://matrix.internal/api/paas/v1",
 	}
 }
 

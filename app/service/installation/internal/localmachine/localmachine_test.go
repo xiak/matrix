@@ -4,9 +4,11 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -549,6 +551,23 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 	}) {
 		t.Fatal("local recovery authority is not bound to the sealed original primary")
 	}
+	issuerCertificate := readTestFile(t, plan.Root, layout.EnrollmentIssuerCertificate)
+	issuerPrivateKey := readTestFile(t, plan.Root, layout.EnrollmentIssuerPrivateKey)
+	defer clear(issuerPrivateKey)
+	certificate, certificateErr := x509.ParseCertificate(issuerCertificate)
+	parsedIssuerKey, keyErr := x509.ParsePKCS8PrivateKey(issuerPrivateKey)
+	privateKey, privateKeyOK := parsedIssuerKey.(ed25519.PrivateKey)
+	var certificatePublicKey ed25519.PublicKey
+	certificateKeyOK := false
+	if certificate != nil {
+		certificatePublicKey, certificateKeyOK = certificate.PublicKey.(ed25519.PublicKey)
+	}
+	issuerURI, issuerURIErr := paasv1.NodeEnrollmentIssuerURI(plan.InstallationID)
+	if certificateErr != nil || keyErr != nil || !privateKeyOK || !certificateKeyOK ||
+		!bytes.Equal(certificatePublicKey, privateKey.Public().(ed25519.PublicKey)) ||
+		issuerURIErr != nil || len(certificate.URIs) != 1 || certificate.URIs[0].String() != issuerURI.String() {
+		t.Fatal("staged node enrollment issuer is not bound to the installation")
+	}
 
 	serviceCredentials := make(map[iamv1.ServicePurpose][]byte, len(bootstrap.Services))
 	for _, service := range bootstrap.Services {
@@ -651,6 +670,7 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		`- "/managed-services/$1"`,
 		"priority: 100",
 		"uri: /v1/installation:verify",
+		`X-Matrix-Public-Origin: "$scheme://$http_host"`,
 	} {
 		if !bytes.Contains(apisix, []byte(required)) {
 			t.Fatalf("APISIX configuration lacks fixed verifier route %q", required)
@@ -736,6 +756,7 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		readTestFile(t, plan.Root, layout.PostgresPassword),
 		readTestFile(t, plan.Root, layout.BackupSealKey),
 		readTestFile(t, plan.Root, layout.IAMCredentialRecovery),
+		issuerPrivateKey,
 		localAuthority.CapabilityKey.CopyBytes(),
 	}
 	for _, credential := range serviceCredentials {
@@ -755,6 +776,41 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		); !errors.Is(err, platformcommand.ErrEffectConflict) {
 			t.Fatalf("unsafe APISIX runtime replay error=%v", err)
 		}
+	}
+}
+
+func TestEnrollmentIssuerCannotAdoptSubstitutedMaterial(t *testing.T) {
+	for _, mode := range []string{"certificate", "private key", "installation identity"} {
+		t.Run(mode, func(t *testing.T) {
+			plan := newInstallPlan(t)
+			if err := stageInstallation(plan, rand.Reader); err != nil {
+				t.Fatalf("stage installation: %v", err)
+			}
+			installationID := plan.InstallationID
+			switch mode {
+			case "certificate", "private key":
+				relativePath := layout.EnrollmentIssuerCertificate
+				if mode == "private key" {
+					relativePath = layout.EnrollmentIssuerPrivateKey
+				}
+				content := readTestFile(t, plan.Root, relativePath)
+				content[len(content)-1] ^= 0x01
+				if err := os.WriteFile(
+					filepath.Join(plan.Root, filepath.FromSlash(relativePath)), content, 0o600,
+				); err != nil {
+					t.Fatalf("substitute enrollment issuer %s: %v", mode, err)
+				}
+			case "installation identity":
+				installationID = "mxi-22222222222222222222222222222222"
+			}
+			before := snapshotManagedCredentials(t, plan.Root)
+			if err := ensureEnrollmentIssuer(plan.Root, installationID, failingEntropy{}); !errors.Is(err, platformcommand.ErrEffectVerification) {
+				t.Fatalf("substituted enrollment issuer %s error = %v", mode, err)
+			}
+			if !equalSnapshots(before, snapshotManagedCredentials(t, plan.Root)) {
+				t.Fatal("rejected enrollment issuer changed installation credentials")
+			}
+		})
 	}
 }
 
@@ -2523,6 +2579,7 @@ func snapshotManagedCredentials(t *testing.T, root string) map[string]string {
 		layout.ReleaseTrust, layout.IAMBootstrap, layout.AuditIAMCredential,
 		layout.IAMAuditCredential, layout.PaaSIAMCredential, layout.PaaSAuditCredential,
 		layout.InstallationVerifierCredential, layout.AuditCursorKey,
+		layout.EnrollmentIssuerCertificate, layout.EnrollmentIssuerPrivateKey,
 		layout.BackupSealKey,
 		layout.InitialAdministratorPassword,
 		layout.PostgresPassword, layout.PostgresMigration, layout.IAMAPI,

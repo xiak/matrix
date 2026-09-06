@@ -68,6 +68,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 		t.Fatalf("compiled networks = %v", actualNetworks)
 	}
 	controllerMounts := 0
+	enrollmentIssuerMounts := 0
 	for name, raw := range services {
 		service := raw.(map[string]any)
 		mounts, _ := service["volumes"].([]any)
@@ -82,13 +83,28 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			if mount["source"] == path.Join(options.Root, layout.NodeControllerPending) {
 				t.Fatal("pending old credentials were mounted into a service")
 			}
+			if mount["source"] == path.Join(options.Root, layout.EnrollmentIssuerCertificate) ||
+				mount["source"] == path.Join(options.Root, layout.EnrollmentIssuerPrivateKey) {
+				enrollmentIssuerMounts++
+				if name != "paas-api" || mount["read_only"] != true {
+					t.Fatal("node enrollment issuer crossed its PaaS signing boundary")
+				}
+			}
 		}
 	}
 	if controllerMounts != 2 {
 		t.Fatal("controller configuration lacks exact API and worker directory mounts")
 	}
+	if enrollmentIssuerMounts != 2 {
+		t.Fatal("node enrollment issuer lacks exact PaaS certificate and key mounts")
+	}
 	if services["paas-api"].(map[string]any)["environment"].(map[string]any)["MATRIX_PAAS_NODE_CONNECTIONS_FILE"] != "/run/matrix/node-controller/configuration.json" {
 		t.Fatal("PaaS does not consume the signed controller mount")
+	}
+	paasEnvironment := services["paas-api"].(map[string]any)["environment"].(map[string]any)
+	if paasEnvironment["MATRIX_PAAS_ENROLLMENT_ISSUER_CERTIFICATE_FILE"] != "/run/matrix/node-enrollment-issuer.der" ||
+		paasEnvironment["MATRIX_PAAS_ENROLLMENT_ISSUER_PRIVATE_KEY_FILE"] != "/run/matrix/node-enrollment-issuer-key.der" {
+		t.Fatal("PaaS does not consume the installation-owned enrollment issuer")
 	}
 
 	portCount := 0
@@ -121,7 +137,8 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			"MATRIX_IAM_AUDIT_WORKER_ID",
 		},
 		"paas-api": {
-			"MATRIX_PAAS_DATABASE_DSN_FILE", "MATRIX_PAAS_IAM_ENDPOINT",
+			"MATRIX_PAAS_DATABASE_DSN_FILE", "MATRIX_PAAS_ENROLLMENT_ISSUER_CERTIFICATE_FILE",
+			"MATRIX_PAAS_ENROLLMENT_ISSUER_PRIVATE_KEY_FILE", "MATRIX_PAAS_IAM_ENDPOINT",
 			"MATRIX_PAAS_INSTALLATION_ID", "MATRIX_PAAS_LISTEN_ADDRESS",
 			"MATRIX_PAAS_NODE_CONNECTIONS_FILE",
 			"MATRIX_PAAS_PUBLIC_BASE_PATH",

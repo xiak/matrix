@@ -151,6 +151,39 @@ func (transaction *executionAdmissionTransaction) LoadTarget(ctx context.Context
 	return value, err == nil, err
 }
 
+func (transaction *executionAdmissionTransaction) ListPoolResources(ctx context.Context) ([]paasv1.ExecutionPool, error) {
+	rows, err := transaction.tx.Query(ctx, `SELECT id, resource_version, document
+		FROM paas.execution_pools WHERE installation_id = $1
+		ORDER BY id COLLATE "C" LIMIT $2`, transaction.installationID, paasv1.MaximumExecutionPoolListItems+1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	values := make([]paasv1.ExecutionPool, 0)
+	for rows.Next() {
+		var id string
+		var version uint64
+		var document []byte
+		if err := rows.Scan(&id, &version, &document); err != nil {
+			return nil, err
+		}
+		var value paasv1.ExecutionPool
+		if decodeDocument("ExecutionPool", document, &value) != nil ||
+			paasv1.ValidateExecutionPool(value) != nil || string(value.Metadata.ID) != id ||
+			value.Metadata.ResourceVersion != version {
+			return nil, errors.New("stored execution pool is invalid")
+		}
+		values = append(values, value)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(values) > paasv1.MaximumExecutionPoolListItems {
+		return nil, executionadmission.ErrConflict
+	}
+	return values, nil
+}
+
 func (transaction *executionAdmissionTransaction) LoadPoolTarget(ctx context.Context, id paasv1.ResourceID) (paasv1.ExecutionTarget, bool, error) {
 	if paasv1.ValidateID("targetId", string(id)) != nil {
 		return paasv1.ExecutionTarget{}, false, executionadmission.ErrInvalidArgument

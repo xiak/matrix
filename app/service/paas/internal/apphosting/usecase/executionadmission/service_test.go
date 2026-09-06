@@ -122,6 +122,66 @@ func TestListTargetsUsesPersistedSnapshotWithoutProbingOrRenewingIt(t *testing.T
 	}
 }
 
+func TestListPoolsUsesCurrentPersistedMembershipAndStableOrdering(t *testing.T) {
+	service, transaction, adapter, now := refreshFixture(t)
+	poolA := transaction.pool
+	poolA.Status = paasv1.ExecutionPoolStatus{
+		Phase: paasv1.ExecutionPoolUnavailable, ObservedAt: now.Add(-time.Hour),
+	}
+	poolZ := transaction.pool
+	poolZ.Metadata.ID, poolZ.Metadata.Name = "pool-z", "nodes-z"
+	poolZ.Status = paasv1.ExecutionPoolStatus{
+		Phase: paasv1.ExecutionPoolReady, ExecutionTargetCount: 99,
+		ReadyExecutionTargetCount: 99, ObservedAt: now.Add(-time.Hour),
+	}
+	targetA := transaction.registration.Target
+	targetA.Metadata.ID = "target-a"
+	targetA.Spec.ExecutionPoolID = poolA.Metadata.ID
+	targetA.Status.Health = paasv1.ExecutionTargetHealthReady
+	targetA.Spec.DesiredState = paasv1.ExecutionTargetActive
+	targetZ := transaction.registration.Target
+	targetZ.Metadata.ID = "target-z"
+	targetZ.Spec.ExecutionPoolID = poolZ.Metadata.ID
+	targetZ.Status.Health = paasv1.ExecutionTargetHealthDegraded
+	targetZ.Spec.DesiredState = paasv1.ExecutionTargetActive
+	removedZ := targetZ
+	removedZ.Metadata.ID = "target-z-removed"
+	removedZ.Spec.DesiredState = paasv1.ExecutionTargetRemoved
+	transaction.poolResources = []paasv1.ExecutionPool{poolZ, poolA}
+	transaction.poolTargetsByID = map[paasv1.ResourceID][]paasv1.ExecutionTarget{
+		poolA.Metadata.ID: {targetA},
+		poolZ.Metadata.ID: {targetZ, removedZ},
+	}
+	transaction.retryFirst = true
+	authorization := port.Authorization{
+		InstallationID: "installation-a",
+		Subject:        paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "platform-user"},
+		DecisionID:     "decision-list-pools",
+		RequestID:      "request-list-pools",
+	}
+	result, err := service.ListPools(context.Background(), authorization)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paasv1.ValidateExecutionPoolList(result) != nil || len(result.Items) != 2 ||
+		result.Items[0].Metadata.ID != poolA.Metadata.ID || result.Items[1].Metadata.ID != poolZ.Metadata.ID {
+		t.Fatalf("execution pool inventory = %#v", result)
+	}
+	if result.Items[0].Status.Phase != paasv1.ExecutionPoolReady ||
+		result.Items[0].Status.ExecutionTargetCount != 1 ||
+		result.Items[0].Status.ReadyExecutionTargetCount != 1 ||
+		result.Items[1].Status.Phase != paasv1.ExecutionPoolDegraded ||
+		result.Items[1].Status.ExecutionTargetCount != 1 ||
+		result.Items[1].Status.ReadyExecutionTargetCount != 0 ||
+		!result.Items[0].Status.ObservedAt.Equal(now) || !result.Items[1].Status.ObservedAt.Equal(now) {
+		t.Fatalf("execution pool inventory used stale counters: %#v", result.Items)
+	}
+	if adapter.calls != 0 || transaction.calls != 2 ||
+		transaction.poolResources[0].Status.ExecutionTargetCount != 99 {
+		t.Fatal("retried execution pool read probed, duplicated, or mutated persisted state")
+	}
+}
+
 func TestRefreshPreservesWorkerObservedLocalTarget(t *testing.T) {
 	service, transaction, _, now := refreshFixture(t)
 	local := transaction.registration.Target
@@ -300,6 +360,8 @@ type refreshTransaction struct {
 	now             time.Time
 	registration    Registration
 	poolTargets     []paasv1.ExecutionTarget
+	poolResources   []paasv1.ExecutionPool
+	poolTargetsByID map[paasv1.ResourceID][]paasv1.ExecutionTarget
 	pool            paasv1.ExecutionPool
 	calls           int
 	active          bool
@@ -332,13 +394,22 @@ func (transaction *refreshTransaction) FindOperationByFingerprint(_ context.Cont
 func (transaction *refreshTransaction) ListTargets(context.Context) ([]Registration, error) {
 	return []Registration{transaction.registration}, nil
 }
+func (transaction *refreshTransaction) ListPoolResources(context.Context) ([]paasv1.ExecutionPool, error) {
+	if transaction.poolResources != nil {
+		return append([]paasv1.ExecutionPool(nil), transaction.poolResources...), nil
+	}
+	return []paasv1.ExecutionPool{transaction.pool}, nil
+}
 func (transaction *refreshTransaction) ListTargetResources(context.Context) ([]paasv1.ExecutionTarget, error) {
 	if transaction.poolTargets == nil {
 		return []paasv1.ExecutionTarget{transaction.registration.Target}, nil
 	}
 	return append([]paasv1.ExecutionTarget(nil), transaction.poolTargets...), nil
 }
-func (transaction *refreshTransaction) ListPoolTargets(context.Context, paasv1.ResourceID) ([]paasv1.ExecutionTarget, error) {
+func (transaction *refreshTransaction) ListPoolTargets(_ context.Context, id paasv1.ResourceID) ([]paasv1.ExecutionTarget, error) {
+	if transaction.poolTargetsByID != nil {
+		return append([]paasv1.ExecutionTarget(nil), transaction.poolTargetsByID[id]...), nil
+	}
 	if transaction.poolTargets == nil {
 		return []paasv1.ExecutionTarget{transaction.registration.Target}, nil
 	}

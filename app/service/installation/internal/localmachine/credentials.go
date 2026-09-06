@@ -2,15 +2,22 @@ package localmachine
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"crypto/sha256"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"io"
+	"math/big"
 	"net/url"
 	"path/filepath"
 	"strings"
+	"time"
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
+	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
 	"github.com/xiak/matrix/app/service/installation/nodeconfig"
@@ -90,6 +97,9 @@ func stageInstallation(plan platformcommand.InstallPlan, entropy io.Reader) erro
 	if err := ensureLocalCredentialRecoveryAuthority(plan.Root, plan.InstallationID, entropy); err != nil {
 		return err
 	}
+	if err := ensureEnrollmentIssuer(plan.Root, plan.InstallationID, entropy); err != nil {
+		return err
+	}
 	serviceFiles := map[iamv1.ServicePurpose][]string{
 		iamv1.ServiceIAM:                  {layout.IAMAuditCredential},
 		iamv1.ServicePaaS:                 {layout.PaaSIAMCredential, layout.PaaSAuditCredential},
@@ -153,6 +163,109 @@ func stageInstallation(plan platformcommand.InstallPlan, entropy io.Reader) erro
 		}
 	}
 	return nil
+}
+
+func ensureEnrollmentIssuer(root, installationID string, entropy io.Reader) error {
+	keyPath := filepath.FromSlash(layout.EnrollmentIssuerPrivateKey)
+	certificatePath := filepath.FromSlash(layout.EnrollmentIssuerCertificate)
+	keyExists, err := managedFileExists(root, keyPath)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectConflict, err)
+	}
+	certificateExists, err := managedFileExists(root, certificatePath)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectConflict, err)
+	}
+	if !keyExists {
+		if certificateExists {
+			return errors.Join(
+				platformcommand.ErrEffectVerification,
+				errors.New("node enrollment issuer private key is missing"),
+			)
+		}
+		if entropy == nil {
+			return errors.Join(
+				platformcommand.ErrEffectVerification,
+				errors.New("node enrollment issuer is missing"),
+			)
+		}
+		_, privateKey, err := ed25519.GenerateKey(entropy)
+		if err != nil {
+			return errors.Join(platformcommand.ErrEffectUnavailable, errors.New("generate node enrollment issuer failed"))
+		}
+		privateKeyDER, err := x509.MarshalPKCS8PrivateKey(privateKey)
+		clear(privateKey)
+		if err != nil {
+			return errors.Join(platformcommand.ErrEffectUnavailable, errors.New("encode node enrollment issuer failed"))
+		}
+		if err := writeManagedOnce(root, keyPath, privateKeyDER); err != nil {
+			clear(privateKeyDER)
+			return errors.Join(platformcommand.ErrEffectConflict, err)
+		}
+		clear(privateKeyDER)
+	}
+	privateKeyDER, err := readManagedFile(root, keyPath, maximumCredentialFile)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, errors.New("node enrollment issuer private key is invalid"))
+	}
+	defer clear(privateKeyDER)
+	parsedKey, err := x509.ParsePKCS8PrivateKey(privateKeyDER)
+	privateKey, ok := parsedKey.(ed25519.PrivateKey)
+	if err != nil || !ok || len(privateKey) != ed25519.PrivateKeySize {
+		return errors.Join(platformcommand.ErrEffectVerification, errors.New("node enrollment issuer private key is invalid"))
+	}
+	expectedCertificate, err := enrollmentIssuerCertificate(installationID, privateKey)
+	clear(privateKey)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	if !certificateExists {
+		if err := writeManagedOnce(root, certificatePath, expectedCertificate); err != nil {
+			return errors.Join(platformcommand.ErrEffectConflict, err)
+		}
+		return nil
+	}
+	certificate, err := readManagedFile(root, certificatePath, maximumCredentialFile)
+	if err != nil || !bytes.Equal(certificate, expectedCertificate) {
+		clear(certificate)
+		return errors.Join(
+			platformcommand.ErrEffectVerification,
+			errors.New("node enrollment issuer certificate is invalid"),
+		)
+	}
+	clear(certificate)
+	return nil
+}
+
+func enrollmentIssuerCertificate(installationID string, privateKey ed25519.PrivateKey) ([]byte, error) {
+	issuerURI, err := paasv1.NodeEnrollmentIssuerURI(installationID)
+	if err != nil || len(privateKey) != ed25519.PrivateKeySize {
+		return nil, errors.New("node enrollment issuer identity is invalid")
+	}
+	publicKey := privateKey.Public().(ed25519.PublicKey)
+	serialInput := make([]byte, 0, len(installationID)+len(publicKey)+32)
+	serialInput = append(serialInput, "matrix-node-enrollment-issuer/v1\x00"...)
+	serialInput = append(serialInput, installationID...)
+	serialInput = append(serialInput, publicKey...)
+	serialDigest := sha256.Sum256(serialInput)
+	clear(serialInput)
+	serialNumber := new(big.Int).SetBytes(serialDigest[:20])
+	template := &x509.Certificate{
+		SerialNumber:          serialNumber,
+		Subject:               pkix.Name{CommonName: "Matrix node enrollment issuer"},
+		NotBefore:             time.Date(1970, time.January, 1, 0, 0, 0, 0, time.UTC),
+		NotAfter:              time.Date(9999, time.December, 31, 23, 59, 59, 0, time.UTC),
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		MaxPathLenZero:        true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		URIs:                  []*url.URL{issuerURI},
+	}
+	certificate, err := x509.CreateCertificate(strings.NewReader(""), template, template, publicKey, privateKey)
+	if err != nil {
+		return nil, errors.New("encode node enrollment issuer certificate failed")
+	}
+	return certificate, nil
 }
 
 func ensureNodeController(root, installationID string, allowCreate bool) error {

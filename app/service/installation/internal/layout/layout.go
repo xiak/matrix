@@ -42,6 +42,8 @@ const (
 	PaaSIAMCredential              = "secrets/authority/paas-iam-credential"
 	PaaSAuditCredential            = "secrets/authority/paas-audit-credential"
 	InstallationVerifierCredential = "secrets/authority/installation-verifier-iam-credential"
+	EnrollmentIssuerCertificate    = "secrets/authority/node-enrollment-issuer.der"
+	EnrollmentIssuerPrivateKey     = "secrets/authority/node-enrollment-issuer-key.der"
 	AuditCursorKey                 = "secrets/authority/audit-cursor-key"
 	BackupSealKey                  = "secrets/authority/backup-seal-key"
 	InitialAdministratorPassword   = "secrets/operator/initial-admin-password"

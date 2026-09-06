@@ -37,6 +37,10 @@ const (
 	AuthorizeExecutionTargetDrain        = "paas.execution-target.drain"
 	AuthorizeExecutionTargetActivate     = "paas.execution-target.activate"
 	AuthorizeExecutionTargetRemove       = "paas.execution-target.remove"
+	AuthorizeNodeEnrollmentCreate        = "paas.node-enrollment.create"
+	AuthorizeNodeEnrollmentRead          = "paas.node-enrollment.read"
+	AuthorizeNodeEnrollmentRevoke        = "paas.node-enrollment.revoke"
+	AuthorizeNodeEnrollmentRegenerate    = "paas.node-enrollment.regenerate"
 	AuthorizePlatformOperationRead       = "paas.platform-operation.read"
 	AuthorizeTerminalSessionCreate       = "paas.terminal-session.create"
 	AuthorizeTerminalSessionClose        = "paas.terminal-session.close"
@@ -173,6 +177,10 @@ func knownAuthorizationAction(value string) bool {
 		AuthorizeExecutionTargetDrain,
 		AuthorizeExecutionTargetActivate,
 		AuthorizeExecutionTargetRemove,
+		AuthorizeNodeEnrollmentCreate,
+		AuthorizeNodeEnrollmentRead,
+		AuthorizeNodeEnrollmentRevoke,
+		AuthorizeNodeEnrollmentRegenerate,
 		AuthorizePlatformOperationRead,
 		AuthorizeTerminalSessionCreate,
 		AuthorizeTerminalSessionClose,
@@ -190,6 +198,8 @@ func isPlatformAuthorizationAction(value string) bool {
 		AuthorizeExecutionTargetRegister, AuthorizeExecutionTargetRead,
 		AuthorizeExecutionTargetDrain, AuthorizeExecutionTargetActivate,
 		AuthorizeExecutionTargetRemove,
+		AuthorizeNodeEnrollmentCreate, AuthorizeNodeEnrollmentRead,
+		AuthorizeNodeEnrollmentRevoke, AuthorizeNodeEnrollmentRegenerate,
 		AuthorizePlatformOperationRead:
 		return true
 	default:

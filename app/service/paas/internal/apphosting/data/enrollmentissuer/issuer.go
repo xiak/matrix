@@ -25,24 +25,21 @@ const controlPlaneAPIPath = "/api/paas/v1"
 
 type Issuer struct {
 	installationID string
-	baseURL        url.URL
 	certificate    []byte
 	privateKey     ed25519.PrivateKey
 	entropy        io.Reader
 }
 
-func New(installationID, controlPlaneBaseURL string, certificateDER, privateKeyDER []byte) (*Issuer, error) {
+func New(installationID string, certificateDER, privateKeyDER []byte) (*Issuer, error) {
 	if paasv1.ValidateID("installationId", installationID) != nil {
 		return nil, errors.New("node enrollment issuer installation is invalid")
 	}
-	baseURL, err := url.Parse(controlPlaneBaseURL)
-	if err != nil || baseURL.Scheme != "https" || baseURL.Host == "" || baseURL.User != nil || baseURL.Opaque != "" ||
-		baseURL.Path != controlPlaneAPIPath || baseURL.RawPath != "" || baseURL.RawQuery != "" || baseURL.ForceQuery || baseURL.Fragment != "" {
-		return nil, errors.New("node enrollment issuer public URL is invalid")
-	}
 	certificate, err := x509.ParseCertificate(certificateDER)
+	expectedIssuer, issuerErr := paasv1.NodeEnrollmentIssuerURI(installationID)
 	if err != nil || certificate == nil || !certificate.BasicConstraintsValid || !certificate.IsCA ||
-		certificate.PublicKeyAlgorithm != x509.Ed25519 || certificate.KeyUsage&x509.KeyUsageCertSign == 0 {
+		certificate.PublicKeyAlgorithm != x509.Ed25519 || certificate.KeyUsage&x509.KeyUsageCertSign == 0 ||
+		certificate.CheckSignatureFrom(certificate) != nil ||
+		issuerErr != nil || len(certificate.URIs) != 1 || certificate.URIs[0].String() != expectedIssuer.String() {
 		return nil, errors.New("node enrollment issuer certificate is invalid")
 	}
 	parsedKey, err := x509.ParsePKCS8PrivateKey(privateKeyDER)
@@ -54,7 +51,6 @@ func New(installationID, controlPlaneBaseURL string, certificateDER, privateKeyD
 	}
 	return &Issuer{
 		installationID: installationID,
-		baseURL:        *baseURL,
 		certificate:    bytes.Clone(certificateDER),
 		privateKey:     bytes.Clone(privateKey),
 		entropy:        rand.Reader,
@@ -65,7 +61,8 @@ func (issuer *Issuer) Issue(ctx context.Context, request nodeenrollment.JoinIssu
 	if issuer == nil || issuer.entropy == nil || ctx == nil ||
 		paasv1.ValidateID("enrollmentId", string(request.EnrollmentID)) != nil ||
 		paasv1.ValidateID("executionTargetId", string(request.ExecutionTargetID)) != nil ||
-		request.ExpiresAt.IsZero() {
+		request.ExpiresAt.IsZero() ||
+		nodeenrollment.ValidateControlPlaneBaseURL(request.ControlPlaneBaseURL) != nil {
 		return nodeenrollment.IssuedJoin{}, nodeenrollment.ErrInvalidArgument
 	}
 	if err := ctx.Err(); err != nil {
@@ -104,7 +101,11 @@ func (issuer *Issuer) Issue(ctx context.Context, request nodeenrollment.JoinIssu
 	verifierDigest := sha256.Sum256(verifierInput)
 	clear(verifierInput)
 
-	endpoint := issuer.baseURL
+	endpoint, err := url.Parse(request.ControlPlaneBaseURL)
+	if err != nil || endpoint.Path != controlPlaneAPIPath {
+		clear(salt)
+		return nodeenrollment.IssuedJoin{}, nodeenrollment.ErrInvalidArgument
+	}
 	endpoint.Path += "/node-enrollments/" + url.PathEscape(string(request.EnrollmentID)) + "/exchange"
 	join := paasv1.NodeEnrollmentJoin{
 		APIVersion: paasv1.NodeEnrollmentJoinAPIVersion, Kind: paasv1.NodeEnrollmentJoinKind,

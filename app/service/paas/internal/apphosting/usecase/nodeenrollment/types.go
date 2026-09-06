@@ -6,6 +6,7 @@ package nodeenrollment
 import (
 	"context"
 	"errors"
+	"net/url"
 	"strings"
 	"time"
 
@@ -27,10 +28,11 @@ var (
 )
 
 type JoinIssueRequest struct {
-	EnrollmentID      paasv1.ResourceID
-	ExecutionTargetID paasv1.ResourceID
-	ExpiresAt         time.Time
-	WrappingPublicKey string
+	EnrollmentID        paasv1.ResourceID
+	ExecutionTargetID   paasv1.ResourceID
+	ExpiresAt           time.Time
+	WrappingPublicKey   string
+	ControlPlaneBaseURL string
 }
 
 // IssuedJoin contains public creation output plus the only server-side
@@ -47,6 +49,16 @@ func (IssuedJoin) GoString() string { return "issued node join <redacted>" }
 
 func (value IssuedJoin) Clear() {
 	clear(value.CredentialSalt)
+}
+
+func ValidateControlPlaneBaseURL(value string) error {
+	baseURL, err := url.Parse(value)
+	if err != nil || baseURL.Scheme != "https" || baseURL.Host == "" || baseURL.User != nil ||
+		baseURL.Opaque != "" || baseURL.Path != "/api/paas/v1" || baseURL.RawPath != "" ||
+		baseURL.RawQuery != "" || baseURL.ForceQuery || baseURL.Fragment != "" {
+		return errors.New("node enrollment control-plane base URL is invalid")
+	}
+	return nil
 }
 
 func ValidateIssuedJoin(value IssuedJoin, request JoinIssueRequest) error {
@@ -81,9 +93,10 @@ type Config struct {
 }
 
 type CreateCommand struct {
-	Authorization  port.Authorization
-	Request        paasv1.CreateNodeEnrollmentRequest
-	IdempotencyKey string
+	Authorization       port.Authorization
+	Request             paasv1.CreateNodeEnrollmentRequest
+	IdempotencyKey      string
+	ControlPlaneBaseURL string
 }
 
 type CreateResult struct {

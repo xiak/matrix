@@ -28,7 +28,8 @@ func (service *Service) Create(ctx context.Context, command CreateCommand) (Crea
 		return CreateResult{}, err
 	}
 	if paasv1.ValidateCreateNodeEnrollmentRequest(command.Request) != nil ||
-		paasv1.ValidateSafeExternalText("Idempotency-Key", command.IdempotencyKey, 128, true) != nil {
+		paasv1.ValidateSafeExternalText("Idempotency-Key", command.IdempotencyKey, 128, true) != nil ||
+		ValidateControlPlaneBaseURL(command.ControlPlaneBaseURL) != nil {
 		return CreateResult{}, ErrInvalidArgument
 	}
 	fingerprint, requestDigest, err := createIdentity(command)
@@ -73,6 +74,7 @@ func (service *Service) Create(ctx context.Context, command CreateCommand) (Crea
 	issued, err := service.issuer.Issue(ctx, JoinIssueRequest{
 		EnrollmentID: enrollmentID, ExecutionTargetID: targetID,
 		ExpiresAt: expiresAt, WrappingPublicKey: command.Request.WrappingPublicKey,
+		ControlPlaneBaseURL: command.ControlPlaneBaseURL,
 	})
 	if err != nil {
 		if ctx.Err() != nil {
@@ -133,7 +135,7 @@ func (service *Service) Create(ctx context.Context, command CreateCommand) (Crea
 			CredentialVerifier:  issued.CredentialVerifier,
 			CreateAuthorization: command.Authorization,
 		}
-		if validateStoredEnrollment(stored, service.config.InstallationID) != nil {
+		if ValidateStoredEnrollment(stored, service.config.InstallationID) != nil {
 			return ErrUnavailable
 		}
 		return transaction.InsertEnrollment(transactionContext, stored)
@@ -216,7 +218,7 @@ func (service *Service) loadCreateReplay(
 	if err != nil || !found {
 		return StoredEnrollment{}, false, err
 	}
-	if validateStoredEnrollment(stored, service.config.InstallationID) != nil ||
+	if ValidateStoredEnrollment(stored, service.config.InstallationID) != nil ||
 		stored.Operation.RequestDigest != requestDigest || stored.Enrollment.Metadata.ID != enrollmentID {
 		return StoredEnrollment{}, false, ErrIdempotencyConflict
 	}
@@ -239,7 +241,7 @@ func (service *Service) loadCreateReplay(
 }
 
 func (service *Service) expireIfDue(ctx context.Context, transaction Transaction, stored StoredEnrollment) (StoredEnrollment, error) {
-	if validateStoredEnrollment(stored, service.config.InstallationID) != nil {
+	if ValidateStoredEnrollment(stored, service.config.InstallationID) != nil {
 		return StoredEnrollment{}, ErrConflict
 	}
 	if stored.Enrollment.State != paasv1.NodeEnrollmentWaitingInstall &&
@@ -308,9 +310,10 @@ func createIdentity(command CreateCommand) (string, string, error) {
 		return "", "", err
 	}
 	payload, err := json.Marshal(struct {
-		Kind    string                             `json:"kind"`
-		Request paasv1.CreateNodeEnrollmentRequest `json:"request"`
-	}{"CreateNodeEnrollment", command.Request})
+		Kind                string                             `json:"kind"`
+		Request             paasv1.CreateNodeEnrollmentRequest `json:"request"`
+		ControlPlaneBaseURL string                             `json:"controlPlaneBaseUrl"`
+	}{"CreateNodeEnrollment", command.Request, command.ControlPlaneBaseURL})
 	if err != nil {
 		return "", "", err
 	}
@@ -334,7 +337,7 @@ func createResult(stored StoredEnrollment, replayed bool) (CreateResult, error) 
 	return CreateResult{Response: response, Operation: stored.Operation, Replayed: replayed}, nil
 }
 
-func validateStoredEnrollment(value StoredEnrollment, installationID string) error {
+func ValidateStoredEnrollment(value StoredEnrollment, installationID string) error {
 	var problems []error
 	problems = append(problems,
 		paasv1.ValidateNodeEnrollment(value.Enrollment),

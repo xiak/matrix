@@ -412,6 +412,17 @@ func ValidateNodeEnrollmentJoin(value NodeEnrollmentJoin) error {
 	return nil
 }
 
+func NodeEnrollmentIssuerURI(installationID string) (*url.URL, error) {
+	if ValidateID("installationId", installationID) != nil {
+		return nil, errors.New("node enrollment issuer installation is invalid")
+	}
+	return &url.URL{
+		Scheme: "spiffe",
+		Host:   "matrix.xiak.com",
+		Path:   "/installation/" + installationID + "/node-enrollment-issuer",
+	}, nil
+}
+
 // NodeEnrollmentJoinSigningBytes returns the exact public commitment signed by
 // the installation enrollment issuer. It never contains the raw credential.
 func NodeEnrollmentJoinSigningBytes(value NodeEnrollmentJoin) ([]byte, error) {
@@ -477,9 +488,12 @@ func nodeEnrollmentJoinCommitment(value NodeEnrollmentJoin) ([]byte, *x509.Certi
 	}
 	certificateBytes, certificateErr := decodeRawURLBase64("node enrollment issuer certificate", value.IssuerCertificate, -1)
 	certificate, parseErr := x509.ParseCertificate(certificateBytes)
+	expectedIssuer, issuerErr := NodeEnrollmentIssuerURI(value.InstallationID)
 	if certificateErr != nil || parseErr != nil || certificate == nil || !certificate.BasicConstraintsValid || !certificate.IsCA ||
 		certificate.PublicKeyAlgorithm != x509.Ed25519 || certificate.KeyUsage&x509.KeyUsageCertSign == 0 ||
-		value.ExpiresAt.Before(certificate.NotBefore) || value.ExpiresAt.After(certificate.NotAfter) {
+		certificate.CheckSignatureFrom(certificate) != nil ||
+		value.ExpiresAt.Before(certificate.NotBefore) || value.ExpiresAt.After(certificate.NotAfter) ||
+		issuerErr != nil || len(certificate.URIs) != 1 || certificate.URIs[0].String() != expectedIssuer.String() {
 		problems = append(problems, errors.New("node enrollment issuer certificate is invalid"))
 	}
 	if value.SignatureAlgorithm != NodeJoinSignatureEd25519 {

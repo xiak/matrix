@@ -60,14 +60,18 @@ const (
 	ActionIAMPlatformRoleBindingPut    Action = "iam.platform-role-binding.put"
 	ActionIAMPlatformRoleBindingRevoke Action = "iam.platform-role-binding.revoke"
 
-	ActionPaaSExecutionPoolCreate     Action = "paas.execution-pool.create"
-	ActionPaaSExecutionPoolRead       Action = "paas.execution-pool.read"
-	ActionPaaSExecutionTargetRegister Action = "paas.execution-target.register"
-	ActionPaaSExecutionTargetRead     Action = "paas.execution-target.read"
-	ActionPaaSExecutionTargetDrain    Action = "paas.execution-target.drain"
-	ActionPaaSExecutionTargetActivate Action = "paas.execution-target.activate"
-	ActionPaaSExecutionTargetRemove   Action = "paas.execution-target.remove"
-	ActionPaaSPlatformOperationRead   Action = "paas.platform-operation.read"
+	ActionPaaSExecutionPoolCreate      Action = "paas.execution-pool.create"
+	ActionPaaSExecutionPoolRead        Action = "paas.execution-pool.read"
+	ActionPaaSExecutionTargetRegister  Action = "paas.execution-target.register"
+	ActionPaaSExecutionTargetRead      Action = "paas.execution-target.read"
+	ActionPaaSExecutionTargetDrain     Action = "paas.execution-target.drain"
+	ActionPaaSExecutionTargetActivate  Action = "paas.execution-target.activate"
+	ActionPaaSExecutionTargetRemove    Action = "paas.execution-target.remove"
+	ActionPaaSNodeEnrollmentCreate     Action = "paas.node-enrollment.create"
+	ActionPaaSNodeEnrollmentRead       Action = "paas.node-enrollment.read"
+	ActionPaaSNodeEnrollmentRevoke     Action = "paas.node-enrollment.revoke"
+	ActionPaaSNodeEnrollmentRegenerate Action = "paas.node-enrollment.regenerate"
+	ActionPaaSPlatformOperationRead    Action = "paas.platform-operation.read"
 
 	ActionPaaSApplicationCreate           Action = "paas.application.create"
 	ActionPaaSApplicationRead             Action = "paas.application.read"
@@ -121,6 +125,7 @@ const (
 	ResourceInstallation          ResourceKind = "INSTALLATION"
 	ResourceExecutionPool         ResourceKind = "EXECUTION_POOL"
 	ResourceExecutionTarget       ResourceKind = "EXECUTION_TARGET"
+	ResourceNodeEnrollment        ResourceKind = "NODE_ENROLLMENT"
 )
 
 const (
@@ -182,6 +187,10 @@ var allActions = []Action{
 	ActionPaaSExecutionTargetDrain,
 	ActionPaaSExecutionTargetActivate,
 	ActionPaaSExecutionTargetRemove,
+	ActionPaaSNodeEnrollmentCreate,
+	ActionPaaSNodeEnrollmentRead,
+	ActionPaaSNodeEnrollmentRevoke,
+	ActionPaaSNodeEnrollmentRegenerate,
 	ActionPaaSPlatformOperationRead,
 	ActionPaaSApplicationCreate,
 	ActionPaaSApplicationRead,
@@ -239,6 +248,8 @@ func IsPlatformAction(action Action) bool {
 		ActionPaaSExecutionTargetRegister, ActionPaaSExecutionTargetRead,
 		ActionPaaSExecutionTargetDrain, ActionPaaSExecutionTargetActivate,
 		ActionPaaSExecutionTargetRemove,
+		ActionPaaSNodeEnrollmentCreate, ActionPaaSNodeEnrollmentRead,
+		ActionPaaSNodeEnrollmentRevoke, ActionPaaSNodeEnrollmentRegenerate,
 		ActionPaaSPlatformOperationRead, ActionAuditPlatformRecordRead, ActionAuditPlatformIntegrityVerify:
 		return true
 	default:

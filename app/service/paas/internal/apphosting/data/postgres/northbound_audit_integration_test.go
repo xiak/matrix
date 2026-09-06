@@ -22,6 +22,7 @@ import (
 	apphttp "github.com/xiak/matrix/app/service/paas/internal/apphosting/service/nethttp"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/executionadmission"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/nodeenrollment"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/terminalsession"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/verifyinstallation"
 	"github.com/xiak/matrix/app/service/paas/internal/audit"
@@ -466,6 +467,7 @@ func newIntegrationHTTPHandler(
 		integrationHTTPAuthorizer{tenantID: tenantID},
 		workflow,
 		execution,
+		integrationEnrollmentWorkflow{},
 		terminalWorkflow,
 		integrationTerminalConnector{},
 		integrationInstallationVerifier{},
@@ -579,6 +581,30 @@ func decodeStoredAuditEvent(document []byte) (audit.Event, error) {
 type integrationAuditIngestor struct {
 	events            []audit.Event
 	failuresRemaining int
+}
+
+type integrationEnrollmentWorkflow struct{}
+
+func (integrationEnrollmentWorkflow) Create(
+	context.Context,
+	nodeenrollment.CreateCommand,
+) (nodeenrollment.CreateResult, error) {
+	return nodeenrollment.CreateResult{}, nodeenrollment.ErrNotFound
+}
+
+func (integrationEnrollmentWorkflow) Get(
+	context.Context,
+	port.Authorization,
+	paasv1.ResourceID,
+) (paasv1.NodeEnrollment, error) {
+	return paasv1.NodeEnrollment{}, nodeenrollment.ErrNotFound
+}
+
+func (integrationEnrollmentWorkflow) List(
+	context.Context,
+	port.Authorization,
+) (paasv1.NodeEnrollmentList, error) {
+	return paasv1.NodeEnrollmentList{}, nodeenrollment.ErrNotFound
 }
 
 func (ingestor *integrationAuditIngestor) Ingest(

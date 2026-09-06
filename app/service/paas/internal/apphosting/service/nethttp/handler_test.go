@@ -3,10 +3,20 @@ package nethttp
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -18,6 +28,7 @@ import (
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/executionadmission"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/nodeenrollment"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/terminalsession"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/verifyinstallation"
 )
@@ -28,7 +39,7 @@ func TestHandlerReadinessIsOperationalAndSanitized(t *testing.T) {
 		APIVersion: paasv1.APIVersion, Kind: "Readiness", State: paasv1.ReadinessReady,
 		SchemaVersion: 1, CheckedAt: time.Date(2026, 8, 26, 3, 4, 5, 678_000, time.UTC),
 	}
-	handler, err := NewHandler(&fakeAuthorizer{}, &fakeWorkflow{}, &fakeExecutionWorkflow{}, &fakeTerminalWorkflow{}, &fakeTerminalConnector{}, &fakeInstallationVerifier{}, Config{
+	handler, err := NewHandler(&fakeAuthorizer{}, &fakeWorkflow{}, &fakeExecutionWorkflow{}, &fakeEnrollmentWorkflow{}, &fakeTerminalWorkflow{}, &fakeTerminalConnector{}, &fakeInstallationVerifier{}, Config{
 		Readiness: func(context.Context) (paasv1.Readiness, error) {
 			return readiness, readyErr
 		},
@@ -54,10 +65,132 @@ func TestHandlerReadinessIsOperationalAndSanitized(t *testing.T) {
 	}
 }
 
+func TestNodeEnrollmentHTTPSeparatesOneTimeCreationFromOrdinaryReads(t *testing.T) {
+	authorization := port.Authorization{
+		InstallationID: "installation-a",
+		Subject:        paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "platform-user"},
+		DecisionID:     "decision-platform",
+		RequestID:      "request-test",
+	}
+	createResult, createRequest := testNodeEnrollmentResult(t, authorization)
+	authorizer := &fakeAuthorizer{result: &authorization}
+	workflow := &fakeEnrollmentWorkflow{
+		createResult: createResult,
+		readResult:   createResult.Response.Enrollment,
+		listResult: paasv1.NodeEnrollmentList{
+			APIVersion: paasv1.APIVersion,
+			Kind:       "NodeEnrollmentList",
+			Items:      []paasv1.NodeEnrollment{createResult.Response.Enrollment},
+		},
+	}
+	handler, err := NewHandler(
+		authorizer,
+		&fakeWorkflow{},
+		&fakeExecutionWorkflow{},
+		workflow,
+		&fakeTerminalWorkflow{},
+		&fakeTerminalConnector{},
+		&fakeInstallationVerifier{},
+		Config{
+			NewRequestID: func() (string, error) { return "request-test", nil },
+			Readiness:    func(context.Context) (paasv1.Readiness, error) { return paasv1.Readiness{}, nil },
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := jsonRequest(t, http.MethodPost, "/v1/node-enrollments", createRequest)
+	request.Header.Set("Authorization", "Bearer platform-user")
+	request.Header.Set("Idempotency-Key", "enroll-host-a")
+	request.Header.Set(nodeEnrollmentPublicOriginHeader, "https://matrix.internal")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated || workflow.createCalls != 1 ||
+		authorizer.request.Action != port.AuthorizeNodeEnrollmentCreate ||
+		authorizer.request.Resource != (paasv1.ResourceRef{Kind: "NodeEnrollment", ID: "collection"}) ||
+		workflow.createCommand.Authorization != authorization ||
+		workflow.createCommand.IdempotencyKey != "enroll-host-a" ||
+		workflow.createCommand.ControlPlaneBaseURL != "https://matrix.internal/api/paas/v1" ||
+		!reflect.DeepEqual(workflow.createCommand.Request, createRequest) ||
+		response.Header().Get("Location") != "/v1/node-enrollments/"+string(createResult.Response.Enrollment.Metadata.ID) ||
+		response.Header().Get("Operation-Location") != "/v1/platform/operations/"+string(createResult.Operation.ID) ||
+		response.Header().Get("ETag") != `"1"` {
+		t.Fatalf("node enrollment creation response=%d body=%s authorization=%#v command=%#v", response.Code, response.Body.String(), authorizer.request, workflow.createCommand)
+	}
+	var created paasv1.CreateNodeEnrollmentResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil || !reflect.DeepEqual(created, createResult.Response) {
+		t.Fatalf("decode node enrollment creation=%#v err=%v", created, err)
+	}
+	creationBody := response.Body.String()
+
+	workflow.createResult.Replayed = true
+	request = jsonRequest(t, http.MethodPost, "/v1/node-enrollments", createRequest)
+	request.Header.Set("Authorization", "Bearer platform-user")
+	request.Header.Set("Idempotency-Key", "enroll-host-a")
+	request.Header.Set(nodeEnrollmentPublicOriginHeader, "https://matrix.internal")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || workflow.createCalls != 2 ||
+		response.Body.String() != creationBody {
+		t.Fatalf("node enrollment replay response=%d body=%s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/v1/node-enrollments/"+string(createResult.Response.Enrollment.Metadata.ID), nil)
+	request.Header.Set("Authorization", "Bearer platform-user")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || workflow.readCalls != 1 ||
+		authorizer.request.Action != port.AuthorizeNodeEnrollmentRead ||
+		authorizer.request.Resource != (paasv1.ResourceRef{Kind: "NodeEnrollment", ID: createResult.Response.Enrollment.Metadata.ID}) ||
+		workflow.readAuthorization != authorization || workflow.readID != createResult.Response.Enrollment.Metadata.ID ||
+		response.Header().Get("ETag") != `"1"` {
+		t.Fatalf("node enrollment get response=%d body=%s request=%#v", response.Code, response.Body.String(), authorizer.request)
+	}
+	assertNoEnrollmentCredentialMaterial(t, response.Body.String())
+
+	request = httptest.NewRequest(http.MethodGet, "/v1/node-enrollments", nil)
+	request.Header.Set("Authorization", "Bearer platform-user")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || workflow.listCalls != 1 ||
+		authorizer.request.Action != port.AuthorizeNodeEnrollmentRead ||
+		authorizer.request.Resource != (paasv1.ResourceRef{Kind: "NodeEnrollment", ID: "collection"}) ||
+		workflow.listAuthorization != authorization {
+		t.Fatalf("node enrollment list response=%d body=%s request=%#v", response.Code, response.Body.String(), authorizer.request)
+	}
+	assertNoEnrollmentCredentialMaterial(t, response.Body.String())
+
+	authorizer.request = port.AuthorizationRequest{}
+	invalidBody := `{"name":"host-a","executionPoolId":"pool-a","wrappingPublicKey":"` +
+		createRequest.WrappingPublicKey + `","credential":"forged"}`
+	request = httptest.NewRequest(http.MethodPost, "/v1/node-enrollments", strings.NewReader(invalidBody))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer platform-user")
+	request.Header.Set("Idempotency-Key", "enroll-host-a")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || workflow.createCalls != 2 ||
+		authorizer.request != (port.AuthorizationRequest{}) {
+		t.Fatalf("invalid node enrollment reached authorization/workflow: status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	authorizer.request = port.AuthorizationRequest{}
+	request = jsonRequest(t, http.MethodPost, "/v1/node-enrollments", createRequest)
+	request.Header.Set("Authorization", "Bearer platform-user")
+	request.Header.Set("Idempotency-Key", "enroll-host-a")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || workflow.createCalls != 2 ||
+		authorizer.request != (port.AuthorizationRequest{}) {
+		t.Fatalf("unsigned public origin reached authorization/workflow: status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func TestExecutionAdmissionAuthorizesTheActualResourceAndInstallation(t *testing.T) {
 	authorization := port.Authorization{InstallationID: "installation-a", Subject: paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "platform-user"}, DecisionID: "decision-platform", RequestID: "request-test"}
 	authorizer, workflow := &fakeAuthorizer{result: &authorization}, &fakeExecutionWorkflow{}
-	handler, err := NewHandler(authorizer, &fakeWorkflow{}, workflow, &fakeTerminalWorkflow{}, &fakeTerminalConnector{}, &fakeInstallationVerifier{}, Config{
+	handler, err := NewHandler(authorizer, &fakeWorkflow{}, workflow, &fakeEnrollmentWorkflow{}, &fakeTerminalWorkflow{}, &fakeTerminalConnector{}, &fakeInstallationVerifier{}, Config{
 		NewRequestID: func() (string, error) { return "request-test", nil }, Readiness: func(context.Context) (paasv1.Readiness, error) { return paasv1.Readiness{}, nil },
 	})
 	if err != nil {
@@ -123,7 +256,7 @@ func TestExecutionTargetLifecycleRequiresExactPlatformCommandHeaders(t *testing.
 	} {
 		t.Run(test.path, func(t *testing.T) {
 			authorizer, workflow := &fakeAuthorizer{result: &authorization}, &fakeExecutionWorkflow{}
-			handler, err := NewHandler(authorizer, &fakeWorkflow{}, workflow, &fakeTerminalWorkflow{}, &fakeTerminalConnector{}, &fakeInstallationVerifier{}, Config{
+			handler, err := NewHandler(authorizer, &fakeWorkflow{}, workflow, &fakeEnrollmentWorkflow{}, &fakeTerminalWorkflow{}, &fakeTerminalConnector{}, &fakeInstallationVerifier{}, Config{
 				NewRequestID: func() (string, error) { return "request-test", nil },
 				Readiness:    func(context.Context) (paasv1.Readiness, error) { return paasv1.Readiness{}, nil },
 			})
@@ -192,7 +325,7 @@ func TestExecutionTargetInventoryIsPlatformAuthorizedAndSelectorFree(t *testing.
 		Kind:       "ExecutionTargetList",
 		Items:      []paasv1.ExecutionTarget{},
 	}}
-	handler, err := NewHandler(authorizer, &fakeWorkflow{}, workflow, &fakeTerminalWorkflow{}, &fakeTerminalConnector{}, &fakeInstallationVerifier{}, Config{
+	handler, err := NewHandler(authorizer, &fakeWorkflow{}, workflow, &fakeEnrollmentWorkflow{}, &fakeTerminalWorkflow{}, &fakeTerminalConnector{}, &fakeInstallationVerifier{}, Config{
 		NewRequestID: func() (string, error) { return "request-test", nil },
 		Readiness:    func(context.Context) (paasv1.Readiness, error) { return paasv1.Readiness{}, nil },
 	})
@@ -225,6 +358,50 @@ func TestExecutionTargetInventoryIsPlatformAuthorizedAndSelectorFree(t *testing.
 			authorizer.request != (port.AuthorizationRequest{}) {
 			t.Fatalf("execution target selector reached authorization/workflow: status=%d", response.Code)
 		}
+	}
+}
+
+func TestExecutionPoolInventoryIsPlatformAuthorizedAndSelectorFree(t *testing.T) {
+	authorization := port.Authorization{
+		InstallationID: "installation-a",
+		Subject:        paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "platform-user"},
+		DecisionID:     "decision-platform-pool-list",
+		RequestID:      "request-test",
+	}
+	authorizer := &fakeAuthorizer{result: &authorization}
+	workflow := &fakeExecutionWorkflow{poolListResult: paasv1.ExecutionPoolList{
+		APIVersion: paasv1.APIVersion,
+		Kind:       "ExecutionPoolList",
+		Items:      []paasv1.ExecutionPool{},
+	}}
+	handler, err := NewHandler(authorizer, &fakeWorkflow{}, workflow, &fakeEnrollmentWorkflow{}, &fakeTerminalWorkflow{}, &fakeTerminalConnector{}, &fakeInstallationVerifier{}, Config{
+		NewRequestID: func() (string, error) { return "request-test", nil },
+		Readiness:    func(context.Context) (paasv1.Readiness, error) { return paasv1.Readiness{}, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/v1/execution-pools", nil)
+	request.Header.Set("Authorization", "Bearer platform-user")
+	request.Header.Set("X-Tenant-ID", "attacker-tenant")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	var result paasv1.ExecutionPoolList
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &result) != nil ||
+		paasv1.ValidateExecutionPoolList(result) != nil || workflow.poolListCalls != 1 ||
+		authorizer.request.Action != port.AuthorizeExecutionPoolRead ||
+		authorizer.request.Resource != (paasv1.ResourceRef{Kind: "ExecutionPool", ID: "collection"}) ||
+		workflow.poolListAuthorization.InstallationID != "installation-a" || workflow.poolListAuthorization.TenantID != "" {
+		t.Fatalf("execution pool inventory response=%d body=%s authorization=%#v", response.Code, response.Body.String(), authorizer.request)
+	}
+	authorizer.request = port.AuthorizationRequest{}
+	response = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodGet, "/v1/execution-pools?poolId=pool-a", nil)
+	request.Header.Set("Authorization", "Bearer platform-user")
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || workflow.poolListCalls != 1 ||
+		authorizer.request != (port.AuthorizationRequest{}) {
+		t.Fatalf("execution pool selector reached authorization/workflow: status=%d", response.Code)
 	}
 }
 
@@ -620,6 +797,7 @@ func TestTerminalSessionCreationUsesOnlyDigestAndStrictHostCookie(t *testing.T) 
 		authorizer,
 		&fakeWorkflow{},
 		&fakeExecutionWorkflow{},
+		&fakeEnrollmentWorkflow{},
 		terminal,
 		&fakeTerminalConnector{},
 		&fakeInstallationVerifier{},
@@ -734,7 +912,7 @@ func TestTerminalConnectionConsumesCookieBridgesClosedFramesAndEndsDurably(t *te
 		return nodeConnection, nil
 	}}
 	handler, err := NewHandler(
-		&fakeAuthorizer{}, &fakeWorkflow{}, &fakeExecutionWorkflow{}, workflow,
+		&fakeAuthorizer{}, &fakeWorkflow{}, &fakeExecutionWorkflow{}, &fakeEnrollmentWorkflow{}, workflow,
 		connector, &fakeInstallationVerifier{}, Config{
 			NewRequestID: func() (string, error) { return "request-terminal-connect", nil },
 			Readiness: func(context.Context) (paasv1.Readiness, error) {
@@ -840,7 +1018,7 @@ func TestTerminalConnectionConsumesCookieBridgesClosedFramesAndEndsDurably(t *te
 
 func TestTerminalConnectionRejectsAmbientAuthorityBeforeTicketConsumption(t *testing.T) {
 	handler, err := NewHandler(
-		&fakeAuthorizer{}, &fakeWorkflow{}, &fakeExecutionWorkflow{}, &fakeTerminalWorkflow{},
+		&fakeAuthorizer{}, &fakeWorkflow{}, &fakeExecutionWorkflow{}, &fakeEnrollmentWorkflow{}, &fakeTerminalWorkflow{},
 		&fakeTerminalConnector{}, &fakeInstallationVerifier{}, Config{
 			NewRequestID: func() (string, error) { return "request-terminal-negative", nil },
 			Readiness:    func(context.Context) (paasv1.Readiness, error) { return paasv1.Readiness{}, nil },
@@ -1266,7 +1444,7 @@ func mustHandlerWithVerifier(
 	verifier InstallationVerifier,
 ) http.Handler {
 	t.Helper()
-	handler, err := NewHandler(authorizer, workflow, &fakeExecutionWorkflow{}, &fakeTerminalWorkflow{}, &fakeTerminalConnector{}, verifier, Config{
+	handler, err := NewHandler(authorizer, workflow, &fakeExecutionWorkflow{}, &fakeEnrollmentWorkflow{}, &fakeTerminalWorkflow{}, &fakeTerminalConnector{}, verifier, Config{
 		NewRequestID: func() (string, error) { return "request-test", nil },
 		Readiness: func(context.Context) (paasv1.Readiness, error) {
 			return paasv1.Readiness{
@@ -1301,18 +1479,179 @@ func testMetadata(id paasv1.ResourceID, name string) paasv1.ResourceMetadata {
 	}
 }
 
+func testNodeEnrollmentResult(
+	t *testing.T,
+	authorization port.Authorization,
+) (nodeenrollment.CreateResult, paasv1.CreateNodeEnrollmentRequest) {
+	t.Helper()
+	now := time.Date(2026, 8, 25, 18, 0, 0, 0, time.UTC)
+	expiresAt := now.Add(15 * time.Minute)
+	enrollmentID := paasv1.ResourceID("node-enrollment-0123456789abcdef0123456789abcdef")
+	targetID := paasv1.ResourceID("execution-target-enrollment-a")
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificateTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "matrix-test-enrollment-issuer"},
+		NotBefore:             now.Add(-time.Hour),
+		NotAfter:              now.Add(time.Hour),
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+	}
+	issuerURI, err := paasv1.NodeEnrollmentIssuerURI(authorization.InstallationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificateTemplate.URIs = append(certificateTemplate.URIs, issuerURI)
+	certificate, err := x509.CreateCertificate(
+		rand.Reader, certificateTemplate, certificateTemplate, publicKey, privateKey,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentialDigest := sha256.Sum256([]byte("test-node-enrollment-credential"))
+	join := paasv1.NodeEnrollmentJoin{
+		APIVersion:         paasv1.NodeEnrollmentJoinAPIVersion,
+		Kind:               paasv1.NodeEnrollmentJoinKind,
+		EnrollmentID:       enrollmentID,
+		InstallationID:     authorization.InstallationID,
+		ExecutionTargetID:  targetID,
+		ControlPlaneURL:    "https://matrix.internal/api/paas/v1/node-enrollments/" + string(enrollmentID) + "/exchange",
+		CredentialDigest:   "sha256:" + hex.EncodeToString(credentialDigest[:]),
+		ExpiresAt:          expiresAt,
+		IssuerCertificate:  base64.RawURLEncoding.EncodeToString(certificate),
+		SignatureAlgorithm: paasv1.NodeJoinSignatureEd25519,
+	}
+	commitment, err := paasv1.NodeEnrollmentJoinSigningBytes(join)
+	if err != nil {
+		t.Fatal(err)
+	}
+	join.Signature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(privateKey, commitment))
+	enrollment := paasv1.NodeEnrollment{
+		APIVersion: paasv1.APIVersion,
+		Kind:       "NodeEnrollment",
+		Metadata: paasv1.ResourceMetadata{
+			ID:              enrollmentID,
+			Name:            "host-a",
+			Scope:           paasv1.ResourceScope{Kind: paasv1.AuthorityPlatform},
+			Labels:          map[string]string{"zone": "private-a"},
+			ResourceVersion: 1,
+			CreatedAt:       now,
+			UpdatedAt:       now,
+		},
+		ExecutionTargetID: targetID,
+		ExecutionPoolID:   "pool-a",
+		OperationID:       "operation-a",
+		State:             paasv1.NodeEnrollmentWaitingInstall,
+		ExpiresAt:         expiresAt,
+	}
+	operation := testOperation(
+		"ExecutionTarget", targetID, paasv1.OperationRegisterExecutionTarget, paasv1.OperationAccepted,
+	)
+	operation.Scope = paasv1.ResourceScope{Kind: paasv1.AuthorityPlatform}
+	operation.InstallationID = authorization.InstallationID
+	operation.RequestedBy = authorization.Subject
+	response := paasv1.CreateNodeEnrollmentResponse{
+		Enrollment: enrollment,
+		Join:       join,
+		WrappedCredential: paasv1.WrappedJoinCredential{
+			Algorithm:  paasv1.JoinCredentialRSAOAEP256,
+			Ciphertext: base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 384)),
+		},
+	}
+	if paasv1.ValidateCreateNodeEnrollmentResponse(response) != nil || paasv1.ValidateOperation(operation) != nil {
+		t.Fatal("invalid node enrollment HTTP fixture")
+	}
+	wrappingKey, err := rsa.GenerateKey(rand.Reader, 3072)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrappingPublicKey, err := x509.MarshalPKIXPublicKey(&wrappingKey.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := paasv1.CreateNodeEnrollmentRequest{
+		Name:              enrollment.Metadata.Name,
+		ExecutionPoolID:   enrollment.ExecutionPoolID,
+		Labels:            map[string]string{"zone": "private-a"},
+		WrappingPublicKey: base64.RawURLEncoding.EncodeToString(wrappingPublicKey),
+	}
+	if paasv1.ValidateCreateNodeEnrollmentRequest(request) != nil {
+		t.Fatal("invalid create node enrollment HTTP request fixture")
+	}
+	return nodeenrollment.CreateResult{Response: response, Operation: operation}, request
+}
+
+func assertNoEnrollmentCredentialMaterial(t *testing.T, body string) {
+	t.Helper()
+	body = strings.ToLower(body)
+	for _, forbidden := range []string{"wrappedcredential", "ciphertext", "credentialsalt", "credentialverifier"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("ordinary node enrollment response exposed %s: %s", forbidden, body)
+		}
+	}
+}
+
 type fakeExecutionWorkflow struct {
-	createCommand     executionadmission.CreatePoolCommand
-	registerCommand   executionadmission.RegisterTargetCommand
-	transitionCommand executionadmission.TransitionTargetCommand
-	transitionResult  executionadmission.TransitionTargetResult
-	transitionErr     error
+	createCommand         executionadmission.CreatePoolCommand
+	registerCommand       executionadmission.RegisterTargetCommand
+	transitionCommand     executionadmission.TransitionTargetCommand
+	transitionResult      executionadmission.TransitionTargetResult
+	transitionErr         error
+	poolListAuthorization port.Authorization
+	poolListResult        paasv1.ExecutionPoolList
+	listAuthorization     port.Authorization
+	listResult            paasv1.ExecutionTargetList
+	createCalls           int
+	registerCalls         int
+	transitionCalls       int
+	poolListCalls         int
+	listCalls             int
+}
+
+type fakeEnrollmentWorkflow struct {
+	createCommand     nodeenrollment.CreateCommand
+	createResult      nodeenrollment.CreateResult
+	createErr         error
+	readAuthorization port.Authorization
+	readID            paasv1.ResourceID
+	readResult        paasv1.NodeEnrollment
+	readErr           error
 	listAuthorization port.Authorization
-	listResult        paasv1.ExecutionTargetList
+	listResult        paasv1.NodeEnrollmentList
+	listErr           error
 	createCalls       int
-	registerCalls     int
-	transitionCalls   int
+	readCalls         int
 	listCalls         int
+}
+
+func (workflow *fakeEnrollmentWorkflow) Create(
+	_ context.Context,
+	command nodeenrollment.CreateCommand,
+) (nodeenrollment.CreateResult, error) {
+	workflow.createCommand, workflow.createCalls = command, workflow.createCalls+1
+	return workflow.createResult, workflow.createErr
+}
+
+func (workflow *fakeEnrollmentWorkflow) Get(
+	_ context.Context,
+	authorization port.Authorization,
+	id paasv1.ResourceID,
+) (paasv1.NodeEnrollment, error) {
+	workflow.readAuthorization, workflow.readID = authorization, id
+	workflow.readCalls++
+	return workflow.readResult, workflow.readErr
+}
+
+func (workflow *fakeEnrollmentWorkflow) List(
+	_ context.Context,
+	authorization port.Authorization,
+) (paasv1.NodeEnrollmentList, error) {
+	workflow.listAuthorization, workflow.listCalls = authorization, workflow.listCalls+1
+	return workflow.listResult, workflow.listErr
 }
 
 func (workflow *fakeExecutionWorkflow) CreatePool(_ context.Context, command executionadmission.CreatePoolCommand) (paasv1.ExecutionPool, paasv1.Operation, bool, error) {
@@ -1347,6 +1686,17 @@ func (workflow *fakeExecutionWorkflow) TransitionTarget(_ context.Context, comma
 
 func (*fakeExecutionWorkflow) GetPool(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.ExecutionPool, error) {
 	return paasv1.ExecutionPool{}, executionadmission.ErrNotFound
+}
+func (workflow *fakeExecutionWorkflow) ListPools(_ context.Context, authorization port.Authorization) (paasv1.ExecutionPoolList, error) {
+	workflow.poolListAuthorization, workflow.poolListCalls = authorization, workflow.poolListCalls+1
+	if workflow.poolListResult.Items == nil {
+		return paasv1.ExecutionPoolList{
+			APIVersion: paasv1.APIVersion,
+			Kind:       "ExecutionPoolList",
+			Items:      []paasv1.ExecutionPool{},
+		}, nil
+	}
+	return workflow.poolListResult, nil
 }
 func (*fakeExecutionWorkflow) GetTarget(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.ExecutionTarget, error) {
 	return paasv1.ExecutionTarget{}, executionadmission.ErrNotFound

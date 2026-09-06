@@ -88,6 +88,7 @@ type Transaction interface {
 	LoadPool(context.Context, paasv1.ResourceID) (paasv1.ExecutionPool, bool, error)
 	LoadPoolTarget(context.Context, paasv1.ResourceID) (paasv1.ExecutionTarget, bool, error)
 	LoadTarget(context.Context, paasv1.ResourceID) (Registration, bool, error)
+	ListPoolResources(context.Context) ([]paasv1.ExecutionPool, error)
 	ListPoolTargets(context.Context, paasv1.ResourceID) ([]paasv1.ExecutionTarget, error)
 	ListTargets(context.Context) ([]Registration, error)
 	ListTargetResources(context.Context) ([]paasv1.ExecutionTarget, error)

@@ -23,6 +23,7 @@ import (
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/executionadmission"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/nodeenrollment"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/terminalsession"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/verifyinstallation"
 )
@@ -91,6 +92,7 @@ type handler struct {
 	authorizer           port.Authorizer
 	workflow             Workflow
 	execution            ExecutionWorkflow
+	enrollment           EnrollmentWorkflow
 	terminal             TerminalWorkflow
 	terminalConnector    port.TerminalConnector
 	installationVerifier InstallationVerifier
@@ -103,12 +105,13 @@ func NewHandler(
 	authorizer port.Authorizer,
 	workflow Workflow,
 	execution ExecutionWorkflow,
+	enrollment EnrollmentWorkflow,
 	terminal TerminalWorkflow,
 	terminalConnector port.TerminalConnector,
 	installationVerifier InstallationVerifier,
 	config Config,
 ) (http.Handler, error) {
-	if authorizer == nil || workflow == nil || execution == nil || terminal == nil ||
+	if authorizer == nil || workflow == nil || execution == nil || enrollment == nil || terminal == nil ||
 		terminalConnector == nil || installationVerifier == nil {
 		return nil, errors.New("HTTP Authorizer, application, execution and terminal dependencies, and installation verifier are required")
 	}
@@ -134,7 +137,7 @@ func NewHandler(
 		config.NewTerminalTicket = newTerminalTicket
 	}
 	value := &handler{
-		authorizer: authorizer, workflow: workflow, execution: execution,
+		authorizer: authorizer, workflow: workflow, execution: execution, enrollment: enrollment,
 		terminal: terminal, terminalConnector: terminalConnector,
 		installationVerifier: installationVerifier, config: config,
 		terminalRegistry: newTerminalRegistry(),
@@ -142,7 +145,11 @@ func NewHandler(
 	routes := http.NewServeMux()
 	routes.HandleFunc("GET /ready", value.ready)
 	routes.HandleFunc("POST /v1/execution-pools", value.createExecutionPool)
+	routes.HandleFunc("GET /v1/execution-pools", value.listExecutionPools)
 	routes.HandleFunc("GET /v1/execution-pools/{executionPoolId}", value.getExecutionPool)
+	routes.HandleFunc("POST /v1/node-enrollments", value.createNodeEnrollment)
+	routes.HandleFunc("GET /v1/node-enrollments", value.listNodeEnrollments)
+	routes.HandleFunc("GET /v1/node-enrollments/{nodeEnrollmentId}", value.getNodeEnrollment)
 	routes.HandleFunc("POST /v1/execution-targets", value.registerExecutionTarget)
 	routes.HandleFunc("GET /v1/execution-targets", value.listExecutionTargets)
 	routes.HandleFunc("GET /v1/execution-targets/{executionTargetId}", value.getExecutionTarget)
@@ -932,20 +939,28 @@ func writeWorkflowError(response http.ResponseWriter, requestID string, err erro
 		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorConflict, "Execution target transition conflict", "the execution target is not in the required lifecycle state", false)
 	case errors.Is(err, executionadmission.ErrTargetInUse):
 		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorConflict, "Execution target is in use", "live or unresolved work must be completed before removal", true)
-	case errors.Is(err, executionadmission.ErrNotFound):
+	case errors.Is(err, executionadmission.ErrNotFound), errors.Is(err, nodeenrollment.ErrNotFound):
 		writeProblem(response, requestID, http.StatusNotFound, paasv1.ErrorNotFound, "Not found", "the requested installation resource does not exist", false)
-	case errors.Is(err, applicationlifecycle.ErrInvalidArgument), errors.Is(err, executionadmission.ErrInvalidArgument):
+	case errors.Is(err, nodeenrollment.ErrUnavailable), errors.Is(err, nodeenrollment.ErrRetryableTransaction):
+		writeProblem(response, requestID, http.StatusServiceUnavailable, paasv1.ErrorInternal, "Enrollment unavailable", "node enrollment is temporarily unavailable", true)
+	case errors.Is(err, nodeenrollment.ErrConflict):
+		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorConflict, "Enrollment conflict", "node enrollment conflicts with current installation authority", false)
+	case errors.Is(err, nodeenrollment.ErrExpired), errors.Is(err, nodeenrollment.ErrRevoked), errors.Is(err, nodeenrollment.ErrCredentialConsumed):
+		writeProblem(response, requestID, http.StatusGone, paasv1.ErrorConflict, "Enrollment unavailable", "node enrollment can no longer issue its join document", false)
+	case errors.Is(err, applicationlifecycle.ErrInvalidArgument), errors.Is(err, executionadmission.ErrInvalidArgument), errors.Is(err, nodeenrollment.ErrInvalidArgument):
 		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "request violates the apphosting contract", false)
 	case errors.Is(err, applicationlifecycle.ErrNotFound):
 		writeProblem(response, requestID, http.StatusNotFound, paasv1.ErrorNotFound, "Not found", "the requested tenant resource does not exist", false)
 	case errors.Is(err, applicationlifecycle.ErrAlreadyExists):
 		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorAlreadyExists, "Already exists", "the resource already exists", false)
-	case errors.Is(err, applicationlifecycle.ErrIdempotencyConflict), errors.Is(err, executionadmission.ErrIdempotencyConflict):
+	case errors.Is(err, applicationlifecycle.ErrIdempotencyConflict), errors.Is(err, executionadmission.ErrIdempotencyConflict), errors.Is(err, nodeenrollment.ErrIdempotencyConflict):
 		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorIdempotencyConflict, "Idempotency conflict", "Idempotency-Key was already used for different content", false)
 	case errors.Is(err, applicationlifecycle.ErrResourceVersionConflict):
 		writeProblem(response, requestID, http.StatusPreconditionFailed, paasv1.ErrorResourceVersionConflict, "Resource version conflict", "If-Match does not identify the current resource version", false)
 	case errors.Is(err, executionadmission.ErrResourceVersionConflict):
 		writeProblem(response, requestID, http.StatusPreconditionFailed, paasv1.ErrorResourceVersionConflict, "Resource version conflict", "If-Match does not identify the current resource version", false)
+	case errors.Is(err, nodeenrollment.ErrResourceVersion):
+		writeProblem(response, requestID, http.StatusPreconditionFailed, paasv1.ErrorResourceVersionConflict, "Resource version conflict", "If-Match does not identify the current enrollment version", false)
 	case errors.Is(err, applicationlifecycle.ErrNoDesiredChange):
 		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorConflict, "No desired change", "Deployment desired content is unchanged", false)
 	case errors.Is(err, applicationlifecycle.ErrOperationInProgress):

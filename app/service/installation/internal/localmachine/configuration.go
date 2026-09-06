@@ -435,6 +435,8 @@ func apisixStandaloneConfig() []byte {
           - "^/api/paas/(.*)"
           - "/$1"
         headers:
+          set:
+            X-Matrix-Public-Origin: "$scheme://$http_host"
           remove:
             - Matrix-Subject-Credential
     upstream:

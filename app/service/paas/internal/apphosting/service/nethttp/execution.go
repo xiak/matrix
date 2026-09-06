@@ -14,6 +14,7 @@ type ExecutionWorkflow interface {
 	RegisterTarget(context.Context, executionadmission.RegisterTargetCommand) (paasv1.ExecutionTarget, paasv1.Operation, bool, error)
 	TransitionTarget(context.Context, executionadmission.TransitionTargetCommand) (executionadmission.TransitionTargetResult, error)
 	GetPool(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.ExecutionPool, error)
+	ListPools(context.Context, port.Authorization) (paasv1.ExecutionPoolList, error)
 	GetTarget(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.ExecutionTarget, error)
 	ListTargets(context.Context, port.Authorization) (paasv1.ExecutionTargetList, error)
 	GetOperation(context.Context, port.Authorization, paasv1.OperationID) (paasv1.Operation, error)
@@ -159,6 +160,26 @@ func (value *handler) getExecutionPool(response http.ResponseWriter, request *ht
 	}
 	pool, err := value.execution.GetPool(request.Context(), authorization, id)
 	writeResource(response, requestID, pool, "", err)
+}
+
+func (value *handler) listExecutionPools(response http.ResponseWriter, request *http.Request) {
+	requestID, ok := value.beginExecutionRequest(response, request, false)
+	if !ok {
+		return
+	}
+	authorization, ok := value.authorizeRequest(
+		response,
+		request,
+		requestID,
+		port.AuthorizeExecutionPoolRead,
+		"ExecutionPool",
+		"collection",
+	)
+	if !ok {
+		return
+	}
+	pools, err := value.execution.ListPools(request.Context(), authorization)
+	writeResource(response, requestID, pools, "", err)
 }
 
 func (value *handler) getExecutionTarget(response http.ResponseWriter, request *http.Request) {

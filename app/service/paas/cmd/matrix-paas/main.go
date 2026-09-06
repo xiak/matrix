@@ -17,11 +17,13 @@ import (
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/internal/processconfig"
 	"github.com/xiak/matrix/app/service/internal/processhttp"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/data/enrollmentissuer"
 	iamhttp "github.com/xiak/matrix/app/service/paas/internal/apphosting/data/iamhttp"
 	paaspostgres "github.com/xiak/matrix/app/service/paas/internal/apphosting/data/postgres"
 	paashttp "github.com/xiak/matrix/app/service/paas/internal/apphosting/service/nethttp"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/executionadmission"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/nodeenrollment"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/terminalsession"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/verifyinstallation"
 	managedserviceiam "github.com/xiak/matrix/app/service/paas/internal/managedservice/data/iamhttp"
@@ -42,6 +44,8 @@ const (
 	nodeConnectionsFileEnvironment   = "MATRIX_PAAS_NODE_CONNECTIONS_FILE"
 	publicBasePathEnvironment        = "MATRIX_PAAS_PUBLIC_BASE_PATH"
 	terminalCookieSecureEnvironment  = "MATRIX_PAAS_TERMINAL_COOKIE_SECURE"
+	enrollmentIssuerCertEnvironment  = "MATRIX_PAAS_ENROLLMENT_ISSUER_CERTIFICATE_FILE"
+	enrollmentIssuerKeyEnvironment   = "MATRIX_PAAS_ENROLLMENT_ISSUER_PRIVATE_KEY_FILE"
 )
 
 type configuration struct {
@@ -55,6 +59,8 @@ type configuration struct {
 	nodeConnectionsFile   string
 	publicBasePath        string
 	terminalCookieSecure  bool
+	enrollmentIssuerCert  string
+	enrollmentIssuerKey   string
 }
 
 func main() {
@@ -155,6 +161,39 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	issuerCertificate, err := processconfig.ReadFile(config.enrollmentIssuerCert, 64*1024, true)
+	if err != nil {
+		return err
+	}
+	defer clear(issuerCertificate)
+	issuerPrivateKey, err := processconfig.ReadFile(config.enrollmentIssuerKey, 16*1024, true)
+	if err != nil {
+		return err
+	}
+	defer clear(issuerPrivateKey)
+	enrollmentIssuer, err := enrollmentissuer.New(
+		config.installationID,
+		issuerCertificate,
+		issuerPrivateKey,
+	)
+	if err != nil {
+		return err
+	}
+	enrollmentRepository, err := paaspostgres.NewNodeEnrollmentRepository(pool)
+	if err != nil {
+		return err
+	}
+	enrollmentWorkflow, err := nodeenrollment.New(
+		enrollmentRepository,
+		enrollmentIssuer,
+		nodeenrollment.Config{
+			InstallationID: config.installationID,
+			Lifetime:       15 * time.Minute, MaxTransactionAttempts: 5,
+		},
+	)
+	if err != nil {
+		return err
+	}
 	terminalRepository, err := paaspostgres.NewTerminalSessionRepository(pool)
 	if err != nil {
 		return err
@@ -182,7 +221,7 @@ func run(ctx context.Context) error {
 		}
 	}()
 	defer func() { stopRefresh(); <-refreshDone }()
-	apphostingHandler, err := paashttp.NewHandler(authorizer, workflow, execution, terminalWorkflow, terminalConnector, installationVerifier, paashttp.Config{
+	apphostingHandler, err := paashttp.NewHandler(authorizer, workflow, execution, enrollmentWorkflow, terminalWorkflow, terminalConnector, installationVerifier, paashttp.Config{
 		TerminalPublicBasePath: config.publicBasePath,
 		TerminalCookieSecure:   config.terminalCookieSecure,
 		Readiness: func(readinessContext context.Context) (paasv1.Readiness, error) {
@@ -253,11 +292,14 @@ func loadConfiguration() (configuration, error) {
 		nodeConnectionsFile:   os.Getenv(nodeConnectionsFileEnvironment),
 		publicBasePath:        os.Getenv(publicBasePathEnvironment),
 		terminalCookieSecure:  terminalCookieSecure,
+		enrollmentIssuerCert:  os.Getenv(enrollmentIssuerCertEnvironment),
+		enrollmentIssuerKey:   os.Getenv(enrollmentIssuerKeyEnvironment),
 	}
 	if config.databaseDSNFile == "" || config.iamEndpoint == "" ||
 		config.serviceCredentialFile == "" || config.listenAddress == "" ||
 		config.installationID == "" || config.releaseID == "" ||
-		config.verificationDigest == "" {
+		config.verificationDigest == "" || config.enrollmentIssuerCert == "" ||
+		config.enrollmentIssuerKey == "" {
 		return configuration{}, errors.New("PaaS process configuration is incomplete")
 	}
 	return config, nil

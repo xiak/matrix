@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/nodeenrollment"
 )
 
@@ -25,7 +26,7 @@ func TestIssueWrapsFreshCredentialAndStoresOnlySaltedVerifier(t *testing.T) {
 	request := nodeenrollment.JoinIssueRequest{
 		EnrollmentID:      "node-enrollment-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		ExecutionTargetID: "target-a", ExpiresAt: testTime().Add(15 * time.Minute),
-		WrappingPublicKey: wrappingPublic,
+		WrappingPublicKey: wrappingPublic, ControlPlaneBaseURL: "https://matrix.internal/api/paas/v1",
 	}
 	issued, err := issuer.Issue(context.Background(), request)
 	if err != nil {
@@ -80,13 +81,15 @@ func TestIssuerRejectsWeakWrappingKeysAndUntrustedConfiguration(t *testing.T) {
 	request := nodeenrollment.JoinIssueRequest{
 		EnrollmentID:      "node-enrollment-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		ExecutionTargetID: "target-a", ExpiresAt: testTime().Add(15 * time.Minute),
-		WrappingPublicKey: weakPublic,
+		WrappingPublicKey: weakPublic, ControlPlaneBaseURL: "https://matrix.internal/api/paas/v1",
 	}
 	if _, err := issuer.Issue(context.Background(), request); !errors.Is(err, nodeenrollment.ErrInvalidArgument) {
 		t.Fatalf("weak wrapping key error = %v", err)
 	}
 
 	certificate, privateKey := testIssuerMaterial(t)
+	_, validPublic := testWrappingKey(t, 3072)
+	request.WrappingPublicKey = validPublic
 	for name, baseURL := range map[string]string{
 		"http":       "http://matrix.internal/api/paas/v1",
 		"credential": "https://user:password@matrix.internal/api/paas/v1",
@@ -94,10 +97,20 @@ func TestIssuerRejectsWeakWrappingKeysAndUntrustedConfiguration(t *testing.T) {
 		"wrong path": "https://matrix.internal/v1",
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := New("installation-a", baseURL, certificate, privateKey); err == nil {
+			unsafe := request
+			unsafe.ControlPlaneBaseURL = baseURL
+			if _, err := issuer.Issue(context.Background(), unsafe); !errors.Is(err, nodeenrollment.ErrInvalidArgument) {
 				t.Fatal("unsafe public URL was accepted")
 			}
 		})
+	}
+	if _, err := New("installation-other", certificate, privateKey); err == nil {
+		t.Fatal("issuer accepted a certificate for another installation")
+	}
+	corruptedCertificate := bytes.Clone(certificate)
+	corruptedCertificate[len(corruptedCertificate)-1] ^= 0x01
+	if _, err := New("installation-a", corruptedCertificate, privateKey); err == nil {
+		t.Fatal("issuer accepted a certificate with an invalid self-signature")
 	}
 	_, otherPrivate, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -107,13 +120,12 @@ func TestIssuerRejectsWeakWrappingKeysAndUntrustedConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := New("installation-a", "https://matrix.internal/api/paas/v1", certificate, otherDER); err == nil {
+	if _, err := New("installation-a", certificate, otherDER); err == nil {
 		t.Fatal("issuer accepted a mismatched private key")
 	}
 
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, validPublic := testWrappingKey(t, 3072)
 	request.WrappingPublicKey = validPublic
 	if _, err := issuer.Issue(canceled, request); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled issue error = %v", err)
@@ -123,9 +135,7 @@ func TestIssuerRejectsWeakWrappingKeysAndUntrustedConfiguration(t *testing.T) {
 func testIssuer(t *testing.T) *Issuer {
 	t.Helper()
 	certificate, privateKey := testIssuerMaterial(t)
-	issuer, err := New(
-		"installation-a", "https://matrix.internal/api/paas/v1", certificate, privateKey,
-	)
+	issuer, err := New("installation-a", certificate, privateKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,6 +155,11 @@ func testIssuerMaterial(t *testing.T) ([]byte, []byte) {
 		BasicConstraintsValid: true, IsCA: true,
 		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
 	}
+	issuerURI, err := paasv1.NodeEnrollmentIssuerURI("installation-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	template.URIs = append(template.URIs, issuerURI)
 	certificate, err := x509.CreateCertificate(rand.Reader, template, template, publicKey, privateKey)
 	if err != nil {
 		t.Fatal(err)

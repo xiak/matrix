@@ -261,6 +261,8 @@ func compileServices(
 	iamAuditCredential := path.Join(root, layout.IAMAuditCredential)
 	paasIAMCredential := path.Join(root, layout.PaaSIAMCredential)
 	paasAuditCredential := path.Join(root, layout.PaaSAuditCredential)
+	enrollmentIssuerCertificate := path.Join(root, layout.EnrollmentIssuerCertificate)
+	enrollmentIssuerPrivateKey := path.Join(root, layout.EnrollmentIssuerPrivateKey)
 	auditCursorKey := path.Join(root, layout.AuditCursorKey)
 	apisixRoutes := path.Join(root, layout.APISIXRoutes)
 	apisixConfig := path.Join(root, layout.APISIXConfig)
@@ -373,20 +375,24 @@ func compileServices(
 		"1.0", "768M", "http://127.0.0.1:8080/ready",
 	)
 	paasAPI.Environment = map[string]string{
-		"MATRIX_PAAS_DATABASE_DSN_FILE":            "/run/matrix/paas-api-dsn",
-		"MATRIX_PAAS_IAM_ENDPOINT":                 "http://iam:8080",
-		"MATRIX_PAAS_INSTALLATION_ID":              options.InstallationID,
-		"MATRIX_PAAS_RELEASE_ID":                   manifest.Release.ID,
-		"MATRIX_PAAS_SERVICE_CREDENTIAL_FILE":      "/run/matrix/paas-iam-credential",
-		"MATRIX_PAAS_VERIFICATION_ARTIFACT_DIGEST": verificationArtifactDigest(manifest),
-		"MATRIX_PAAS_LISTEN_ADDRESS":               "0.0.0.0:8080",
-		"MATRIX_PAAS_NODE_CONNECTIONS_FILE":        "/run/matrix/node-controller/configuration.json",
+		"MATRIX_PAAS_DATABASE_DSN_FILE":                  "/run/matrix/paas-api-dsn",
+		"MATRIX_PAAS_IAM_ENDPOINT":                       "http://iam:8080",
+		"MATRIX_PAAS_INSTALLATION_ID":                    options.InstallationID,
+		"MATRIX_PAAS_RELEASE_ID":                         manifest.Release.ID,
+		"MATRIX_PAAS_SERVICE_CREDENTIAL_FILE":            "/run/matrix/paas-iam-credential",
+		"MATRIX_PAAS_VERIFICATION_ARTIFACT_DIGEST":       verificationArtifactDigest(manifest),
+		"MATRIX_PAAS_LISTEN_ADDRESS":                     "0.0.0.0:8080",
+		"MATRIX_PAAS_NODE_CONNECTIONS_FILE":              "/run/matrix/node-controller/configuration.json",
+		"MATRIX_PAAS_ENROLLMENT_ISSUER_CERTIFICATE_FILE": "/run/matrix/node-enrollment-issuer.der",
+		"MATRIX_PAAS_ENROLLMENT_ISSUER_PRIVATE_KEY_FILE": "/run/matrix/node-enrollment-issuer-key.der",
 	}
 	paasAPI.Environment["MATRIX_PAAS_PUBLIC_BASE_PATH"] = "/api/paas/v1"
 	paasAPI.Environment["MATRIX_PAAS_TERMINAL_COOKIE_SECURE"] = "false"
 	paasAPI.Volumes = []mount{
 		bind(paasAPIDSN, "/run/matrix/paas-api-dsn", true),
 		bind(paasIAMCredential, "/run/matrix/paas-iam-credential", true),
+		bind(enrollmentIssuerCertificate, "/run/matrix/node-enrollment-issuer.der", true),
+		bind(enrollmentIssuerPrivateKey, "/run/matrix/node-enrollment-issuer-key.der", true),
 		bind(path.Join(root, layout.NodeControllerDirectory), "/run/matrix/node-controller", true),
 	}
 	paasAPI.Tmpfs = append(paasAPI.Tmpfs, "/var/lib/docker:rw,noexec,nosuid,size=16m")

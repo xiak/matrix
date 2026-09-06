@@ -219,6 +219,7 @@ func enumSchemas() map[string][]string {
 			string(iamv1.ResourceAuditRecord),
 			string(iamv1.ResourceAuditChain), string(iamv1.ResourceInstallation),
 			string(iamv1.ResourceExecutionPool), string(iamv1.ResourceExecutionTarget),
+			string(iamv1.ResourceNodeEnrollment),
 		},
 		"DecisionReason": {string(iamv1.DecisionAllowed), string(iamv1.DecisionDenied)},
 		"BootstrapState": {string(iamv1.BootstrapUninitialized), string(iamv1.BootstrapReady)},

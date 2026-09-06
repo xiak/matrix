@@ -2,11 +2,18 @@ package postgres
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"os"
 	"reflect"
 	"strings"
@@ -19,11 +26,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/data/enrollmentissuer"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/domain/placement"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/createplacement"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/executionadmission"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/nodeenrollment"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/operationqueue"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/refreshexecutionprofile"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/transitionreservation"
@@ -506,6 +515,7 @@ func assertExecutionProfileRefresh(
 	if poolInstallation != installationID || targetInstallation != installationID {
 		t.Fatalf("retained local profile was not scoped: pool=%q target=%q", poolInstallation, targetInstallation)
 	}
+	assertNodeEnrollmentPersistence(t, ctx, admin, apiPool, installationID, ids.PoolID, prefix)
 
 	managedTargetID := paasv1.ResourceID(prefix + "-profile-node")
 	managedAdapter := &admissionAdapter{
@@ -547,6 +557,12 @@ func assertExecutionProfileRefresh(
 	pool, err := admission.GetPool(ctx, authorization, ids.PoolID)
 	if err != nil || pool.Status.ExecutionTargetCount != 2 || pool.Status.ReadyExecutionTargetCount != 2 {
 		t.Fatalf("built-in pool did not retain both targets: %#v err=%v", pool, err)
+	}
+	pools, err := admission.ListPools(ctx, authorization)
+	if err != nil || paasv1.ValidateExecutionPoolList(pools) != nil || len(pools.Items) != 1 ||
+		pools.Items[0].Metadata.ID != ids.PoolID || pools.Items[0].Status.ExecutionTargetCount != 2 ||
+		pools.Items[0].Status.ReadyExecutionTargetCount != 2 {
+		t.Fatalf("list installation execution pools: %#v err=%v", pools, err)
 	}
 	localTarget, err := admission.GetTarget(ctx, authorization, ids.TargetID)
 	if err != nil || localTarget.Spec.InfrastructureAdapter.Name != "localmachine" {
@@ -618,6 +634,227 @@ func assertExecutionProfileRefresh(
 	if err := service.Refresh(ctx); !errors.Is(err, refreshexecutionprofile.ErrConflict) {
 		t.Fatalf("execution target identity change error = %v", err)
 	}
+}
+
+func assertNodeEnrollmentPersistence(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	apiPool *pgxpool.Pool,
+	installationID string,
+	poolID paasv1.ResourceID,
+	prefix string,
+) {
+	t.Helper()
+	issuer, issuerPrivateKey := newIntegrationEnrollmentIssuer(t, installationID)
+	repository, err := NewNodeEnrollmentRepository(apiPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := nodeenrollment.New(repository, issuer, nodeenrollment.Config{
+		InstallationID: installationID, Lifetime: 5 * time.Minute, MaxTransactionAttempts: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrappingPrivateKey, err := rsa.GenerateKey(rand.Reader, 3072)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrappingPublicKey, err := x509.MarshalPKIXPublicKey(&wrappingPrivateKey.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorization := port.Authorization{
+		InstallationID: installationID,
+		Subject:        paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "enrollment-platform-user"},
+		DecisionID:     "enrollment-platform-decision",
+		RequestID:      "enrollment-platform-request",
+		AuditID:        "enrollment-platform-audit",
+	}
+	command := nodeenrollment.CreateCommand{
+		Authorization:       authorization,
+		IdempotencyKey:      prefix + "-enroll-node",
+		ControlPlaneBaseURL: "https://matrix.invalid/api/paas/v1",
+		Request: paasv1.CreateNodeEnrollmentRequest{
+			Name:              "enrollment-host",
+			ExecutionPoolID:   poolID,
+			Labels:            map[string]string{"matrix-zone": "integration"},
+			WrappingPublicKey: base64.RawURLEncoding.EncodeToString(wrappingPublicKey),
+		},
+	}
+	created, err := service.Create(ctx, command)
+	if err != nil || created.Replayed || paasv1.ValidateCreateNodeEnrollmentResponse(created.Response) != nil ||
+		created.Operation.State != paasv1.OperationAccepted {
+		t.Fatalf("create persisted node enrollment: result=%#v err=%v", created, err)
+	}
+	replayed, err := service.Create(ctx, command)
+	if err != nil || !replayed.Replayed || !reflect.DeepEqual(replayed.Response, created.Response) ||
+		!reflect.DeepEqual(replayed.Operation, created.Operation) {
+		t.Fatalf("replay persisted node enrollment: result=%#v err=%v", replayed, err)
+	}
+
+	ciphertext, err := base64.RawURLEncoding.Strict().DecodeString(created.Response.WrappedCredential.Ciphertext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	label := []byte("matrix-node-enrollment-v1\x00" + installationID + "\x00" + string(created.Response.Enrollment.Metadata.ID))
+	credential, err := rsa.DecryptOAEP(sha256.New(), rand.Reader, wrappingPrivateKey, ciphertext, label)
+	if err != nil {
+		t.Fatalf("decrypt one-time join credential: %v", err)
+	}
+	defer clear(credential)
+	credentialDigest := sha256.Sum256(credential)
+	if created.Response.Join.CredentialDigest != "sha256:"+hex.EncodeToString(credentialDigest[:]) {
+		t.Fatal("wrapped join credential does not match its signed digest")
+	}
+	var (
+		credentialSalt     []byte
+		credentialVerifier string
+		enrollmentState    string
+		operationState     string
+		operationAction    string
+		storedCount        int
+	)
+	if err := admin.QueryRow(ctx, `SELECT enrollment.credential_salt,
+			enrollment.credential_verifier, enrollment.state,
+			operation.state, operation.action,
+			count(*) OVER ()
+		FROM paas.node_enrollments AS enrollment
+		JOIN paas.operations AS operation
+		  ON operation.authority_key = enrollment.authority_key
+		 AND operation.id = enrollment.operation_id
+		WHERE enrollment.installation_id = $1 AND enrollment.id = $2`,
+		installationID, created.Response.Enrollment.Metadata.ID,
+	).Scan(
+		&credentialSalt, &credentialVerifier, &enrollmentState,
+		&operationState, &operationAction, &storedCount,
+	); err != nil {
+		t.Fatalf("inspect persisted node enrollment: %v", err)
+	}
+	verifierInput := make([]byte, 0, len(credentialSalt)+len(credential))
+	verifierInput = append(verifierInput, credentialSalt...)
+	verifierInput = append(verifierInput, credential...)
+	verifierDigest := sha256.Sum256(verifierInput)
+	clear(verifierInput)
+	if len(credentialSalt) != 32 || credentialVerifier != "sha256:"+hex.EncodeToString(verifierDigest[:]) ||
+		credentialVerifier == created.Response.Join.CredentialDigest || enrollmentState != "WAITING_INSTALL" ||
+		operationState != "ACCEPTED" || operationAction != "REGISTER_EXECUTION_TARGET" || storedCount != 1 {
+		t.Fatal("node enrollment authority or salted credential verifier was not persisted exactly once")
+	}
+
+	read, err := service.Get(ctx, authorization, created.Response.Enrollment.Metadata.ID)
+	listed, listErr := service.List(ctx, authorization)
+	if err != nil || listErr != nil || !reflect.DeepEqual(read, created.Response.Enrollment) || len(listed.Items) != 1 ||
+		!reflect.DeepEqual(listed.Items[0], created.Response.Enrollment) {
+		t.Fatalf("read persisted node enrollment: get=%#v list=%#v errors=%v/%v", read, listed, err, listErr)
+	}
+	ordinaryJSON := strings.ToLower(string(integrationJSON(t, listed)))
+	for _, forbidden := range []string{"wrappedcredential", "ciphertext", "credentialsalt", "credentialverifier"} {
+		if strings.Contains(ordinaryJSON, forbidden) {
+			t.Fatalf("ordinary node enrollment read exposed %s", forbidden)
+		}
+	}
+	var visibleAcrossInstallations bool
+	err = repository.WithinInstallation(ctx, installationID+"-other", func(
+		transactionContext context.Context,
+		transaction nodeenrollment.Transaction,
+	) error {
+		_, visibleAcrossInstallations, err = transaction.LoadEnrollment(
+			transactionContext, created.Response.Enrollment.Metadata.ID,
+		)
+		return err
+	})
+	if err != nil || visibleAcrossInstallations {
+		t.Fatalf("node enrollment crossed installation RLS boundary: visible=%t err=%v", visibleAcrossInstallations, err)
+	}
+	if _, err := apiPool.Exec(ctx, `UPDATE paas.node_enrollments
+		SET resource_version = resource_version WHERE installation_id = $1 AND id = $2`,
+		installationID, created.Response.Enrollment.Metadata.ID,
+	); err == nil {
+		t.Fatal("API login bypassed the node enrollment transition functions")
+	}
+
+	stagedEnrollment := created.Response.Enrollment
+	stagedEnrollment.ExpiresAt = stagedEnrollment.Metadata.CreatedAt.Add(time.Microsecond)
+	stagedJoin := created.Response.Join
+	stagedJoin.ExpiresAt = stagedEnrollment.ExpiresAt
+	stagedJoin.Signature = ""
+	commitment, err := paasv1.NodeEnrollmentJoinSigningBytes(stagedJoin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stagedJoin.Signature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(issuerPrivateKey, commitment))
+	if paasv1.ValidateNodeEnrollment(stagedEnrollment) != nil || paasv1.ValidateNodeEnrollmentJoin(stagedJoin) != nil {
+		t.Fatal("invalid overdue node enrollment fixture")
+	}
+	if _, err := admin.Exec(ctx, `UPDATE paas.node_enrollments
+		SET expires_at = $3, document = $4::jsonb, join_document = $5::jsonb
+		WHERE installation_id = $1 AND id = $2`,
+		installationID, stagedEnrollment.Metadata.ID, stagedEnrollment.ExpiresAt,
+		integrationJSON(t, stagedEnrollment), integrationJSON(t, stagedJoin),
+	); err != nil {
+		t.Fatalf("stage overdue node enrollment: %v", err)
+	}
+	expired, err := service.Get(ctx, authorization, stagedEnrollment.Metadata.ID)
+	if err != nil || expired.State != paasv1.NodeEnrollmentExpired ||
+		expired.Metadata.ResourceVersion != 2 || expired.Diagnostic == nil ||
+		expired.Diagnostic.Code != paasv1.NodeEnrollmentDiagnosticExpired {
+		t.Fatalf("expire persisted node enrollment: enrollment=%#v err=%v", expired, err)
+	}
+	var terminalAt *time.Time
+	if err := admin.QueryRow(ctx, `SELECT operation.state, operation.terminal_at
+		FROM paas.operations AS operation
+		JOIN paas.node_enrollments AS enrollment
+		  ON enrollment.authority_key = operation.authority_key
+		 AND enrollment.operation_id = operation.id
+		WHERE enrollment.installation_id = $1 AND enrollment.id = $2`,
+		installationID, stagedEnrollment.Metadata.ID,
+	).Scan(&operationState, &terminalAt); err != nil || operationState != "CANCELLED" || terminalAt == nil {
+		t.Fatalf("expiration did not close registration Operation atomically: state=%s terminal=%v err=%v", operationState, terminalAt, err)
+	}
+}
+
+func newIntegrationEnrollmentIssuer(
+	t *testing.T,
+	installationID string,
+) (*enrollmentissuer.Issuer, ed25519.PrivateKey) {
+	t.Helper()
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	certificateTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(now.UnixNano()),
+		Subject:               pkix.Name{CommonName: "matrix-integration-enrollment-issuer"},
+		NotBefore:             now.Add(-time.Hour),
+		NotAfter:              now.Add(time.Hour),
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+	}
+	issuerURI, err := paasv1.NodeEnrollmentIssuerURI(installationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificateTemplate.URIs = append(certificateTemplate.URIs, issuerURI)
+	certificateDER, err := x509.CreateCertificate(
+		rand.Reader, certificateTemplate, certificateTemplate, publicKey, privateKey,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateKeyDER, err := x509.MarshalPKCS8PrivateKey(privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuer, err := enrollmentissuer.New(installationID, certificateDER, privateKeyDER)
+	clear(privateKeyDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return issuer, privateKey
 }
 
 func seedIntegrationFixture(
