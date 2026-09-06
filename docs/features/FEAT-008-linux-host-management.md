@@ -1764,6 +1764,27 @@ independent platform authorities. This is not P3-6 acceptance: the host-side
 installer, independent Audit delivery, browser journey, two-host lifecycle and
 exact signed-runtime closure remain open, so F1 through F10 remain open.
 
+Pushed source `61ee882f310ca732e77c2f098edecafb32466e33` implements the
+host-side self-enrollment installer boundary. Fresh node installation accepts
+only the protected signed join file, generates distinct node and collector keys
+locally, persists an immutable exchange intent before sending the one-time
+credential, pins the installation issuer and fixed TLS ceremony, and recovers a
+lost exchange only with both role-key proofs. The installation journal retains
+`COMMITTING` across uncertain completion, publishes no local success before the
+remote atomic registration, and resumes digest-bound cleanup after interruption;
+definitive completion rejection rolls back and removes only proved enrollment
+artifacts. Malformed success responses remain uncertain rather than authorizing
+credential replay or rollback.
+
+On that exact source, deterministic API generation, module verification, the
+full Go suite, `go vet`, focused race suites, ten focused enrollment repetitions,
+Linux/amd64 cross-build and diff checks passed. This is automated host-side
+evidence only. The real native and combined offline harnesses still require
+atomic migration from the superseded fresh-install configuration input to the
+actual create/decrypt/transfer join journey; independent Audit delivery, the
+authenticated browser, two real hosts and exact signed-runtime closure also
+remain outstanding. F1 through F10 therefore remain open.
+
 ## Adoption
 
 - [FEAT-008 fixed-source review](../adoption/FEAT-008-linux-host-management.md)

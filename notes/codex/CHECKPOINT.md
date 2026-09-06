@@ -2,10 +2,10 @@
 
 > Non-authoritative portable memory. Validate against Git and the owning FEAT.
 
-- Updated: 2026-09-06
+- Updated: 2026-09-07
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/host-self-enrollment`
-- Pushed verified milestone: `660c7d2e9e1c494891ed0e6083a8337e9b0e4655`
+- Pushed verified milestone: `61ee882f310ca732e77c2f098edecafb32466e33`
 
 ## Resume route
 
