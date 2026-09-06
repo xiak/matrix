@@ -93,8 +93,8 @@ func verifiedInstallationConfiguration(
 		return verifiedInstallation{}, err
 	}
 	if compiled.ContractDigest == topology.ContractDigest() {
-		if err := ensureEnrollmentIssuer(plan.Root, plan.InstallationID, nil); err != nil {
-			return verifiedInstallation{}, errors.New("node enrollment issuer is unsafe")
+		if err := ensureEnrollmentIngress(plan.Root, plan.InstallationID, nil); err != nil {
+			return verifiedInstallation{}, errors.New("node enrollment ingress authority is unsafe")
 		}
 	}
 	catalog, err := installedArtifactCatalogConfig(plan)
@@ -105,6 +105,10 @@ func verifiedInstallationConfiguration(
 	if err != nil {
 		return verifiedInstallation{}, errors.New("generated APISIX routes are invalid")
 	}
+	mainConfig, err := installedAPISIXMainConfig(staged.Manifest)
+	if err != nil {
+		return verifiedInstallation{}, errors.New("generated APISIX main configuration is invalid")
+	}
 	expectedFiles := []struct {
 		path    string
 		content []byte
@@ -112,7 +116,7 @@ func verifiedInstallationConfiguration(
 		{layout.Compose, compiled.ComposeJSON},
 		{layout.ArtifactCatalog, catalog},
 		{layout.APISIXRoutes, routes},
-		{layout.APISIXConfig, apisixMainConfig()},
+		{layout.APISIXConfig, mainConfig},
 		{layout.APISIXUID, []byte(compiled.ProjectName)},
 	}
 	for _, expected := range expectedFiles {

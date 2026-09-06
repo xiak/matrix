@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -433,6 +435,18 @@ func NodeEnrollmentIssuerURI(installationID string) (*url.URL, error) {
 		Host:   "matrix.xiak.com",
 		Path:   "/installation/" + installationID + "/node-enrollment-issuer",
 	}, nil
+}
+
+// NodeEnrollmentIngressServerName is the installation-bound TLS name used by
+// the bootstrap client. The signed join already commits InstallationID and the
+// issuer certificate, so the connection address can remain independent from
+// this deterministic verification name without relying on customer DNS.
+func NodeEnrollmentIngressServerName(installationID string) (string, error) {
+	if ValidateID("installationId", installationID) != nil {
+		return "", errors.New("node enrollment ingress installation is invalid")
+	}
+	digest := sha256.Sum256([]byte("matrix-node-enrollment-ingress/v1\x00" + installationID))
+	return "mx-" + hex.EncodeToString(digest[:24]) + ".enrollment.matrix.invalid", nil
 }
 
 // NodeEnrollmentJoinSigningBytes returns the exact public commitment signed by

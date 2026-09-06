@@ -17,7 +17,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	manifest := topologyManifest()
 	options := Options{
 		InstallationID: "mxi-" + strings.Repeat("a", 32),
-		Root:           "/srv/matrix", Listener: "127.0.0.1", Port: 8443,
+		Root:           "/srv/matrix", Listener: "127.0.0.1", Port: 8080,
 	}
 	result, err := Compile(manifest, options)
 	if err != nil {
@@ -69,6 +69,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	}
 	controllerMounts := 0
 	enrollmentIssuerMounts := 0
+	enrollmentIngressMounts := 0
 	for name, raw := range services {
 		service := raw.(map[string]any)
 		mounts, _ := service["volumes"].([]any)
@@ -90,6 +91,13 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 					t.Fatal("node enrollment issuer crossed its PaaS signing boundary")
 				}
 			}
+			if mount["source"] == path.Join(options.Root, layout.EnrollmentIngressCertificate) ||
+				mount["source"] == path.Join(options.Root, layout.EnrollmentIngressPrivateKey) {
+				enrollmentIngressMounts++
+				if name != "apisix" || mount["read_only"] != true {
+					t.Fatal("node enrollment ingress identity crossed its APISIX boundary")
+				}
+			}
 		}
 	}
 	if controllerMounts != 2 {
@@ -97,6 +105,9 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	}
 	if enrollmentIssuerMounts != 2 {
 		t.Fatal("node enrollment issuer lacks exact PaaS certificate and key mounts")
+	}
+	if enrollmentIngressMounts != 2 {
+		t.Fatal("node enrollment ingress lacks exact APISIX certificate and key mounts")
 	}
 	if services["paas-api"].(map[string]any)["environment"].(map[string]any)["MATRIX_PAAS_NODE_CONNECTIONS_FILE"] != "/run/matrix/node-controller/configuration.json" {
 		t.Fatal("PaaS does not consume the signed controller mount")
@@ -331,7 +342,9 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 		}
 		if ports, found := service["ports"].([]any); found {
 			portCount += len(ports)
-			if name != "apisix" || len(ports) != 1 || ports[0] != "127.0.0.1:8443:9080/tcp" {
+			if name != "apisix" || len(ports) != 2 ||
+				ports[0] != "127.0.0.1:8080:9080/tcp" ||
+				ports[1] != "127.0.0.1:8443:9443/tcp" {
 				t.Fatalf("service %q has unexpected northbound ports %#v", name, ports)
 			}
 		}
@@ -374,6 +387,12 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 					"/usr/local/apisix/conf/nginx.conf": {
 						path.Join(options.Root, layout.APISIXNginx), false,
 					},
+					"/usr/local/apisix/conf/cert/ssl_PLACE_HOLDER.crt": {
+						path.Join(options.Root, layout.EnrollmentIngressCertificate), true,
+					},
+					"/usr/local/apisix/conf/cert/ssl_PLACE_HOLDER.key": {
+						path.Join(options.Root, layout.EnrollmentIngressPrivateKey), true,
+					},
 				}
 				if len(volumes) != len(expected) {
 					t.Fatalf("APISIX mount count=%d want=%d", len(volumes), len(expected))
@@ -391,7 +410,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			}
 		}
 	}
-	if portCount != 1 || !foundExecutorRoot || !foundDockerSocket || !foundPostgresData ||
+	if portCount != 2 || !foundExecutorRoot || !foundDockerSocket || !foundPostgresData ||
 		!foundAPISIXRuntimeBoundary {
 		t.Fatalf(
 			"platform capability closure: ports=%d executor=%t socket=%t postgres-data=%t apisix=%t",
@@ -456,6 +475,16 @@ func TestCompileInstalledPinsCurrentAndFrozenPredecessorTopologyPairs(t *testing
 			t.Fatal("frozen predecessor gained current node enrollment issuer mount")
 		}
 	}
+	predecessorAPISIX := document.Services["apisix"]
+	if len(predecessorAPISIX.Ports) != 1 ||
+		predecessorAPISIX.Ports[0] != "0.0.0.0:8080:9080/tcp" {
+		t.Fatal("frozen predecessor gained node enrollment TLS ingress")
+	}
+	for _, volume := range predecessorAPISIX.Volumes {
+		if volume.Target == NodeEnrollmentIngressCertificateTarget || volume.Target == NodeEnrollmentIngressPrivateKeyTarget {
+			t.Fatal("frozen predecessor gained node enrollment ingress identity")
+		}
+	}
 	currentPaaS := mustDecodeCompose(t, gotCurrent.ComposeJSON).Services["paas-api"]
 	if currentPaaS.Environment[enrollmentIssuerCertificateEnvironment] != enrollmentIssuerCertificateTarget ||
 		currentPaaS.Environment[enrollmentIssuerPrivateKeyEnvironment] != enrollmentIssuerPrivateKeyTarget {
@@ -511,6 +540,7 @@ func TestCompileRejectsUntrustedTopologyInputs(t *testing.T) {
 		"listener hostname":          func(value *Options) { value.Listener = "localhost" },
 		"listener multicast":         func(value *Options) { value.Listener = "224.0.0.1" },
 		"listener port":              func(value *Options) { value.Port = 0 },
+		"listener port overlap":      func(value *Options) { value.Port = NodeEnrollmentIngressPort },
 		"installation ID": func(value *Options) {
 			value.InstallationID = "customer"
 		},

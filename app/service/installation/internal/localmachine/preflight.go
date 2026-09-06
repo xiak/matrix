@@ -33,7 +33,10 @@ func preflightInstall(
 	runtimeBoundary dockerRuntime,
 	plan platformcommand.InstallPlan,
 ) error {
-	return preflightRelease(ctx, runtimeBoundary, plan, true)
+	return preflightRelease(
+		ctx, runtimeBoundary, plan,
+		[]uint16{plan.Port, topology.NodeEnrollmentIngressPort},
+	)
 }
 
 func preflightUpgrade(
@@ -54,14 +57,18 @@ func preflightUpgrade(
 	); err != nil {
 		return err
 	}
-	return preflightRelease(ctx, runtimeBoundary, plan.Target, false)
+	var freeListeners []uint16
+	if source.Bundle.Manifest.TopologyDigest == topology.SupportedPredecessorContractDigest() {
+		freeListeners = []uint16{topology.NodeEnrollmentIngressPort}
+	}
+	return preflightRelease(ctx, runtimeBoundary, plan.Target, freeListeners)
 }
 
 func preflightRelease(
 	ctx context.Context,
 	runtimeBoundary dockerRuntime,
 	plan platformcommand.InstallPlan,
-	requireFreeListener bool,
+	freeListeners []uint16,
 ) error {
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		return errors.Join(
@@ -129,9 +136,9 @@ func preflightRelease(
 		_ = present
 	}
 
-	if requireFreeListener {
+	for _, port := range freeListeners {
 		listener, err := net.Listen(
-			"tcp4", net.JoinHostPort(plan.Listener, strconv.Itoa(int(plan.Port))),
+			"tcp4", net.JoinHostPort(plan.Listener, strconv.Itoa(int(port))),
 		)
 		if err != nil {
 			return errors.Join(

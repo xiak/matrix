@@ -148,6 +148,21 @@ func TestNodeEnrollmentJoinRejectsTamperingAndCredentialURLs(t *testing.T) {
 	}
 }
 
+func TestNodeEnrollmentIngressServerNameIsDeterministicAndInstallationBound(t *testing.T) {
+	installationID := "mxi-" + strings.Repeat("a", 32)
+	first, err := NodeEnrollmentIngressServerName(installationID)
+	second, secondErr := NodeEnrollmentIngressServerName(installationID)
+	other, otherErr := NodeEnrollmentIngressServerName("mxi-" + strings.Repeat("b", 32))
+	if err != nil || secondErr != nil || otherErr != nil || first != second || first == other ||
+		!strings.HasPrefix(first, "mx-") || !strings.HasSuffix(first, ".enrollment.matrix.invalid") ||
+		len(first) > 253 || strings.Contains(first, installationID) {
+		t.Fatalf("node enrollment ingress names first=%q second=%q other=%q errors=%v/%v/%v", first, second, other, err, secondErr, otherErr)
+	}
+	if _, err := NodeEnrollmentIngressServerName(""); err == nil {
+		t.Fatal("invalid installation produced a node enrollment ingress name")
+	}
+}
+
 func TestNodeEnrollmentStatesAreClosedAndTimeBound(t *testing.T) {
 	_, response, _ := nodeEnrollmentContractFixture(t)
 	waiting := response.Enrollment

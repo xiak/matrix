@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -138,6 +139,14 @@ func replaceReleaseConfiguration(
 	if err != nil {
 		return errors.Join(platformcommand.ErrEffectVerification, err)
 	}
+	beforeMainConfig, err := installedAPISIXMainConfig(beforeBundle.Manifest)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	afterMainConfig, err := installedAPISIXMainConfig(afterBundle.Manifest)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, err)
+	}
 	for _, replacement := range []struct {
 		path          string
 		before, after []byte
@@ -145,6 +154,7 @@ func replaceReleaseConfiguration(
 		{layout.Compose, beforeTopology.ComposeJSON, afterTopology.ComposeJSON},
 		{layout.ArtifactCatalog, beforeCatalog, afterCatalog},
 		{layout.APISIXRoutes, beforeRoutes, afterRoutes},
+		{layout.APISIXConfig, beforeMainConfig, afterMainConfig},
 	} {
 		if err := replaceManagedExpected(
 			after.Root, filepath.FromSlash(replacement.path),
@@ -160,7 +170,6 @@ func replaceReleaseConfiguration(
 		path    string
 		content []byte
 	}{
-		{layout.APISIXConfig, apisixMainConfig()},
 		{layout.APISIXUID, []byte(afterTopology.ProjectName)},
 	} {
 		if err := writeManagedOnce(
@@ -186,6 +195,10 @@ func publishInstallationConfiguration(
 	if err != nil {
 		return errors.Join(platformcommand.ErrEffectVerification, err)
 	}
+	mainConfig, err := installedAPISIXMainConfig(manifest)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, err)
+	}
 	if err := writeManagedOnce(
 		root, filepath.FromSlash(layout.Compose), compiled.ComposeJSON,
 	); err != nil {
@@ -207,7 +220,7 @@ func publishInstallationConfiguration(
 		return errors.Join(platformcommand.ErrEffectConflict, err)
 	}
 	if err := writeManagedOnce(
-		root, filepath.FromSlash(layout.APISIXConfig), apisixMainConfig(),
+		root, filepath.FromSlash(layout.APISIXConfig), mainConfig,
 	); err != nil {
 		return errors.Join(platformcommand.ErrEffectConflict, err)
 	}
@@ -306,6 +319,58 @@ func artifactCatalogConfig(manifests ...release.Manifest) ([]byte, error) {
 }
 
 func apisixMainConfig() []byte {
+	prefix := []byte(fmt.Sprintf(`apisix:
+  node_listen:
+    - ip: 0.0.0.0
+      port: 9080
+    - ip: 127.0.0.1
+      port: %d
+  ssl:
+    enable: false
+`, topology.NodeEnrollmentIngressLoopbackPort))
+	predecessor := predecessorAPISIXMainConfig()
+	marker := []byte("    scgi_temp_path /tmp/scgi_temp;\n")
+	withEnrollmentIngress := []byte(fmt.Sprintf(`    scgi_temp_path /tmp/scgi_temp;
+    server {
+      listen 0.0.0.0:%d ssl;
+      server_name _;
+      ssl_certificate %s;
+      ssl_certificate_key %s;
+      ssl_protocols TLSv1.3;
+      ssl_session_cache off;
+      ssl_session_tickets off;
+      location ~ "^(?:/ready|/api/paas/v1/node-enrollments/node-enrollment-[0-9a-f]{32}/exchange)$" {
+        client_max_body_size 64k;
+        client_body_timeout 10s;
+        proxy_http_version 1.1;
+        proxy_connect_timeout 3s;
+        proxy_send_timeout 10s;
+        proxy_read_timeout 10s;
+        proxy_set_header Host $host;
+        proxy_set_header Authorization "";
+        proxy_set_header Cookie "";
+        proxy_set_header Idempotency-Key "";
+        proxy_set_header If-Match "";
+        proxy_set_header Matrix-Subject-Credential "";
+        proxy_set_header X-Matrix-Public-Origin "";
+        proxy_set_header X-Matrix-Observed-Peer "";
+        proxy_set_header X-Matrix-Transport-Scheme "";
+        proxy_set_header X-Matrix-TLS-Peer $remote_addr;
+        proxy_pass http://127.0.0.1:%d;
+      }
+      location / {
+        return 404;
+      }
+    }
+`, topology.NodeEnrollmentIngressTargetPort,
+		topology.NodeEnrollmentIngressCertificateTarget,
+		topology.NodeEnrollmentIngressPrivateKeyTarget,
+		topology.NodeEnrollmentIngressLoopbackPort,
+	))
+	return append(prefix, replaceStaticAPISIXFragment(predecessor, marker, withEnrollmentIngress)...)
+}
+
+func predecessorAPISIXMainConfig() []byte {
 	return []byte(`deployment:
   role: data_plane
   role_data_plane:
@@ -331,11 +396,12 @@ nginx_config:
 func apisixStandaloneConfig() []byte {
 	predecessor := predecessorAPISIXStandaloneConfig()
 	withPublicOrigin := replaceStaticAPISIXFragment(
-		predecessor, paasPublicOriginAPISIXPredecessor, paasPublicOriginAPISIXCurrent,
+		predecessor, paasPublicOriginAPISIXPredecessor, paasPublicOriginAPISIXCurrent(),
 	)
 	marker := []byte("  -\n    id: matrix-paas-terminal")
-	withExchange := make([]byte, 0, len(nodeEnrollmentExchangeAPISIXRoute)+len(marker))
-	withExchange = append(withExchange, nodeEnrollmentExchangeAPISIXRoute...)
+	exchange := nodeEnrollmentExchangeAPISIXRoute()
+	withExchange := make([]byte, 0, len(exchange)+len(marker))
+	withExchange = append(withExchange, exchange...)
 	withExchange = append(withExchange, marker...)
 	return replaceStaticAPISIXFragment(withPublicOrigin, marker, withExchange)
 }
@@ -357,7 +423,8 @@ var paasPublicOriginAPISIXPredecessor = []byte(`    id: matrix-paas
         headers:
           remove:`)
 
-var paasPublicOriginAPISIXCurrent = []byte(`    id: matrix-paas
+func paasPublicOriginAPISIXCurrent() []byte {
+	return []byte(fmt.Sprintf(`    id: matrix-paas
     uri: /api/paas/*
     plugins:
       proxy-rewrite:
@@ -366,22 +433,33 @@ var paasPublicOriginAPISIXCurrent = []byte(`    id: matrix-paas
           - "/$1"
         headers:
           set:
-            X-Matrix-Public-Origin: "$scheme://$http_host"
+            X-Matrix-Public-Origin: "https://$host:%d"
           remove:
             - X-Matrix-Observed-Peer
-            - X-Matrix-Transport-Scheme`)
+            - X-Matrix-Transport-Scheme
+            - X-Matrix-TLS-Peer`, topology.NodeEnrollmentIngressPort))
+}
 
-var nodeEnrollmentExchangeAPISIXRoute = []byte(`  -
+func nodeEnrollmentExchangeAPISIXRoute() []byte {
+	return []byte(fmt.Sprintf(`  -
     id: matrix-paas-node-enrollment-exchange
     uri: /api/paas/v1/node-enrollments/*/exchange
     methods:
       - POST
     priority: 300
+    timeout:
+      connect: 3
+      send: 10
+      read: 10
     vars:
       -
         - uri
         - "~~"
         - "^/api/paas/v1/node-enrollments/node-enrollment-[0-9a-f]{32}/exchange$"
+      -
+        - server_port
+        - "=="
+        - "%d"
     plugins:
       proxy-rewrite:
         regex_uri:
@@ -389,8 +467,8 @@ var nodeEnrollmentExchangeAPISIXRoute = []byte(`  -
           - "/$1"
         headers:
           set:
-            X-Matrix-Observed-Peer: "$remote_addr"
-            X-Matrix-Transport-Scheme: "$scheme"
+            X-Matrix-Observed-Peer: "$http_x_matrix_tls_peer"
+            X-Matrix-Transport-Scheme: "https"
           remove:
             - Authorization
             - Cookie
@@ -398,11 +476,13 @@ var nodeEnrollmentExchangeAPISIXRoute = []byte(`  -
             - If-Match
             - Matrix-Subject-Credential
             - X-Matrix-Public-Origin
+            - X-Matrix-TLS-Peer
     upstream:
       type: roundrobin
       nodes:
         "paas-api:8080": 1
-`)
+`, topology.NodeEnrollmentIngressLoopbackPort))
+}
 
 func predecessorAPISIXStandaloneConfig() []byte {
 	return []byte(`routes:
@@ -561,5 +641,19 @@ func installedAPISIXStandaloneConfig(manifest release.Manifest) ([]byte, error) 
 		return predecessorAPISIXStandaloneConfig(), nil
 	default:
 		return nil, errors.New("installed release cannot select an APISIX route contract")
+	}
+}
+
+func installedAPISIXMainConfig(manifest release.Manifest) ([]byte, error) {
+	if err := topology.ValidateInstalledContract(manifest); err != nil {
+		return nil, err
+	}
+	switch manifest.Database {
+	case release.CurrentDatabaseProfile():
+		return apisixMainConfig(), nil
+	case release.SupportedDatabasePredecessorProfile():
+		return predecessorAPISIXMainConfig(), nil
+	default:
+		return nil, errors.New("installed release cannot select an APISIX main contract")
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"io"
 	"math/big"
@@ -97,7 +98,7 @@ func stageInstallation(plan platformcommand.InstallPlan, entropy io.Reader) erro
 	if err := ensureLocalCredentialRecoveryAuthority(plan.Root, plan.InstallationID, entropy); err != nil {
 		return err
 	}
-	if err := ensureEnrollmentIssuer(plan.Root, plan.InstallationID, entropy); err != nil {
+	if err := ensureEnrollmentIngress(plan.Root, plan.InstallationID, entropy); err != nil {
 		return err
 	}
 	serviceFiles := map[iamv1.ServicePurpose][]string{
@@ -266,6 +267,186 @@ func enrollmentIssuerCertificate(installationID string, privateKey ed25519.Priva
 		return nil, errors.New("encode node enrollment issuer certificate failed")
 	}
 	return certificate, nil
+}
+
+func ensureEnrollmentIngress(root, installationID string, entropy io.Reader) error {
+	if err := ensureEnrollmentIssuer(root, installationID, entropy); err != nil {
+		return err
+	}
+	keyPath := filepath.FromSlash(layout.EnrollmentIngressPrivateKey)
+	certificatePath := filepath.FromSlash(layout.EnrollmentIngressCertificate)
+	keyExists, err := managedFileExists(root, keyPath)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectConflict, err)
+	}
+	certificateExists, err := managedFileExists(root, certificatePath)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectConflict, err)
+	}
+	if !keyExists {
+		if certificateExists {
+			return errors.Join(
+				platformcommand.ErrEffectVerification,
+				errors.New("node enrollment ingress private key is missing"),
+			)
+		}
+		if entropy == nil {
+			return errors.Join(
+				platformcommand.ErrEffectVerification,
+				errors.New("node enrollment ingress identity is missing"),
+			)
+		}
+		_, privateKey, err := ed25519.GenerateKey(entropy)
+		if err != nil {
+			return errors.Join(platformcommand.ErrEffectUnavailable, errors.New("generate node enrollment ingress failed"))
+		}
+		privateKeyDER, err := x509.MarshalPKCS8PrivateKey(privateKey)
+		clear(privateKey)
+		if err != nil {
+			return errors.Join(platformcommand.ErrEffectUnavailable, errors.New("encode node enrollment ingress failed"))
+		}
+		encodedKey := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privateKeyDER})
+		clear(privateKeyDER)
+		if len(encodedKey) == 0 {
+			return errors.Join(platformcommand.ErrEffectUnavailable, errors.New("encode node enrollment ingress failed"))
+		}
+		if err := writeManagedOnce(root, keyPath, encodedKey); err != nil {
+			clear(encodedKey)
+			return errors.Join(platformcommand.ErrEffectConflict, err)
+		}
+		clear(encodedKey)
+	}
+
+	ingressKeyPEM, err := readManagedFile(root, keyPath, maximumCredentialFile)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, errors.New("node enrollment ingress private key is invalid"))
+	}
+	defer clear(ingressKeyPEM)
+	keyBlock, remaining := pem.Decode(ingressKeyPEM)
+	if keyBlock == nil || keyBlock.Type != "PRIVATE KEY" || len(remaining) != 0 {
+		return errors.Join(platformcommand.ErrEffectVerification, errors.New("node enrollment ingress private key is invalid"))
+	}
+	defer clear(keyBlock.Bytes)
+	parsedIngressKey, err := x509.ParsePKCS8PrivateKey(keyBlock.Bytes)
+	ingressPrivateKey, ok := parsedIngressKey.(ed25519.PrivateKey)
+	if err != nil || !ok || len(ingressPrivateKey) != ed25519.PrivateKeySize {
+		clear(ingressPrivateKey)
+		return errors.Join(platformcommand.ErrEffectVerification, errors.New("node enrollment ingress private key is invalid"))
+	}
+	defer clear(ingressPrivateKey)
+	canonicalKeyDER, err := x509.MarshalPKCS8PrivateKey(ingressPrivateKey)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, errors.New("node enrollment ingress private key is invalid"))
+	}
+	canonicalKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: canonicalKeyDER})
+	clear(canonicalKeyDER)
+	if !bytes.Equal(canonicalKeyPEM, ingressKeyPEM) {
+		clear(canonicalKeyPEM)
+		return errors.Join(platformcommand.ErrEffectVerification, errors.New("node enrollment ingress private key is invalid"))
+	}
+	clear(canonicalKeyPEM)
+
+	issuerCertificateDER, err := readManagedFile(
+		root, filepath.FromSlash(layout.EnrollmentIssuerCertificate), maximumCredentialFile,
+	)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, errors.New("node enrollment issuer certificate is invalid"))
+	}
+	defer clear(issuerCertificateDER)
+	issuerCertificate, err := x509.ParseCertificate(issuerCertificateDER)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, errors.New("node enrollment issuer certificate is invalid"))
+	}
+	issuerKeyDER, err := readManagedFile(
+		root, filepath.FromSlash(layout.EnrollmentIssuerPrivateKey), maximumCredentialFile,
+	)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, errors.New("node enrollment issuer private key is invalid"))
+	}
+	defer clear(issuerKeyDER)
+	parsedIssuerKey, err := x509.ParsePKCS8PrivateKey(issuerKeyDER)
+	issuerPrivateKey, ok := parsedIssuerKey.(ed25519.PrivateKey)
+	if err != nil || !ok || len(issuerPrivateKey) != ed25519.PrivateKeySize {
+		clear(issuerPrivateKey)
+		return errors.Join(platformcommand.ErrEffectVerification, errors.New("node enrollment issuer private key is invalid"))
+	}
+	defer clear(issuerPrivateKey)
+	expectedCertificate, err := enrollmentIngressCertificate(
+		installationID, ingressPrivateKey, issuerPrivateKey, issuerCertificate,
+	)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	defer clear(expectedCertificate)
+	if !certificateExists {
+		if err := writeManagedOnce(root, certificatePath, expectedCertificate); err != nil {
+			return errors.Join(platformcommand.ErrEffectConflict, err)
+		}
+		return nil
+	}
+	certificate, err := readManagedFile(root, certificatePath, maximumCredentialFile)
+	if err != nil || !bytes.Equal(certificate, expectedCertificate) {
+		clear(certificate)
+		return errors.Join(
+			platformcommand.ErrEffectVerification,
+			errors.New("node enrollment ingress certificate is invalid"),
+		)
+	}
+	clear(certificate)
+	return nil
+}
+
+func enrollmentIngressCertificate(
+	installationID string,
+	privateKey ed25519.PrivateKey,
+	issuerPrivateKey ed25519.PrivateKey,
+	issuerCertificate *x509.Certificate,
+) ([]byte, error) {
+	serverName, err := paasv1.NodeEnrollmentIngressServerName(installationID)
+	if err != nil || len(privateKey) != ed25519.PrivateKeySize ||
+		len(issuerPrivateKey) != ed25519.PrivateKeySize || issuerCertificate == nil {
+		return nil, errors.New("node enrollment ingress identity is invalid")
+	}
+	publicKey := privateKey.Public().(ed25519.PublicKey)
+	issuerPublicKey, ok := issuerCertificate.PublicKey.(ed25519.PublicKey)
+	if !ok || !bytes.Equal(issuerPrivateKey.Public().(ed25519.PublicKey), issuerPublicKey) ||
+		issuerCertificate.CheckSignatureFrom(issuerCertificate) != nil {
+		return nil, errors.New("node enrollment ingress issuer is invalid")
+	}
+	serialInput := make([]byte, 0, len(installationID)+len(publicKey)+32)
+	serialInput = append(serialInput, "matrix-node-enrollment-ingress-certificate/v1\x00"...)
+	serialInput = append(serialInput, installationID...)
+	serialInput = append(serialInput, publicKey...)
+	serialDigest := sha256.Sum256(serialInput)
+	clear(serialInput)
+	serialNumber := new(big.Int).SetBytes(serialDigest[:20])
+	template := &x509.Certificate{
+		SerialNumber:          serialNumber,
+		Subject:               pkix.Name{CommonName: "Matrix node enrollment ingress"},
+		NotBefore:             issuerCertificate.NotBefore,
+		NotAfter:              issuerCertificate.NotAfter,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:              []string{serverName},
+	}
+	certificateDER, err := x509.CreateCertificate(
+		strings.NewReader(""), template, issuerCertificate, publicKey, issuerPrivateKey,
+	)
+	if err != nil {
+		return nil, errors.New("encode node enrollment ingress certificate failed")
+	}
+	certificatePEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificateDER})
+	clear(certificateDER)
+	issuerPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: issuerCertificate.Raw})
+	if len(certificatePEM) == 0 || len(issuerPEM) == 0 {
+		clear(certificatePEM)
+		clear(issuerPEM)
+		return nil, errors.New("encode node enrollment ingress certificate failed")
+	}
+	certificatePEM = append(certificatePEM, issuerPEM...)
+	clear(issuerPEM)
+	return certificatePEM, nil
 }
 
 func ensureNodeController(root, installationID string, allowCreate bool) error {

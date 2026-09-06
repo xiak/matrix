@@ -44,6 +44,8 @@ const (
 	InstallationVerifierCredential = "secrets/authority/installation-verifier-iam-credential"
 	EnrollmentIssuerCertificate    = "secrets/authority/node-enrollment-issuer.der"
 	EnrollmentIssuerPrivateKey     = "secrets/authority/node-enrollment-issuer-key.der"
+	EnrollmentIngressCertificate   = "secrets/authority/node-enrollment-ingress.pem"
+	EnrollmentIngressPrivateKey    = "secrets/authority/node-enrollment-ingress-key.pem"
 	AuditCursorKey                 = "secrets/authority/audit-cursor-key"
 	BackupSealKey                  = "secrets/authority/backup-seal-key"
 	InitialAdministratorPassword   = "secrets/operator/initial-admin-password"

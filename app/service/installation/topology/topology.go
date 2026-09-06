@@ -19,7 +19,14 @@ import (
 	"github.com/xiak/matrix/app/service/installation/release"
 )
 
-const ContractVersion = "matrix-platform-compose/v1"
+const (
+	ContractVersion                        = "matrix-platform-compose/v1"
+	NodeEnrollmentIngressPort              = uint16(8443)
+	NodeEnrollmentIngressTargetPort        = uint16(9443)
+	NodeEnrollmentIngressLoopbackPort      = uint16(9081)
+	NodeEnrollmentIngressCertificateTarget = "/usr/local/apisix/conf/cert/ssl_PLACE_HOLDER.crt"
+	NodeEnrollmentIngressPrivateKeyTarget  = "/usr/local/apisix/conf/cert/ssl_PLACE_HOLDER.key"
+)
 
 type Options struct {
 	InstallationID string
@@ -115,7 +122,7 @@ func contractDescription() contract {
 
 func predecessorContractDescription() contract {
 	description := contractDescription()
-	removeEnrollmentIssuer(description.Compose.Services)
+	removeNodeEnrollmentBootstrap(description.Compose.Services)
 	return description
 }
 
@@ -173,7 +180,7 @@ func compile(manifest release.Manifest, options Options, digest string) (Result,
 	switch digest {
 	case ContractDigest():
 	case SupportedPredecessorContractDigest():
-		removeEnrollmentIssuer(services)
+		removeNodeEnrollmentBootstrap(services)
 	default:
 		return Result{}, errors.New("platform topology contract is unsupported")
 	}
@@ -196,7 +203,7 @@ func compile(manifest release.Manifest, options Options, digest string) (Result,
 	}, nil
 }
 
-func removeEnrollmentIssuer(services map[string]serviceConfig) {
+func removeNodeEnrollmentBootstrap(services map[string]serviceConfig) {
 	paasAPI := services["paas-api"]
 	delete(paasAPI.Environment, enrollmentIssuerCertificateEnvironment)
 	delete(paasAPI.Environment, enrollmentIssuerPrivateKeyEnvironment)
@@ -208,6 +215,23 @@ func removeEnrollmentIssuer(services map[string]serviceConfig) {
 	}
 	paasAPI.Volumes = volumes
 	services["paas-api"] = paasAPI
+
+	apisix := services["apisix"]
+	ports := apisix.Ports[:0]
+	for _, port := range apisix.Ports {
+		if !strings.HasSuffix(port, ":"+fmt.Sprint(NodeEnrollmentIngressTargetPort)+"/tcp") {
+			ports = append(ports, port)
+		}
+	}
+	apisix.Ports = ports
+	volumes = apisix.Volumes[:0]
+	for _, volume := range apisix.Volumes {
+		if volume.Target != NodeEnrollmentIngressCertificateTarget && volume.Target != NodeEnrollmentIngressPrivateKeyTarget {
+			volumes = append(volumes, volume)
+		}
+	}
+	apisix.Volumes = volumes
+	services["apisix"] = apisix
 }
 
 func validateOptions(options Options) error {
@@ -222,7 +246,7 @@ func validateOptions(options Options) error {
 	if err != nil || !address.Is4() || address.IsMulticast() || address.String() != options.Listener {
 		problems = append(problems, errors.New("platform listener address is invalid"))
 	}
-	if options.Port == 0 {
+	if options.Port == 0 || options.Port == NodeEnrollmentIngressPort {
 		problems = append(problems, errors.New("platform listener port is invalid"))
 	}
 	return errors.Join(problems...)
@@ -312,6 +336,8 @@ func compileServices(
 	paasAuditCredential := path.Join(root, layout.PaaSAuditCredential)
 	enrollmentIssuerCertificate := path.Join(root, layout.EnrollmentIssuerCertificate)
 	enrollmentIssuerPrivateKey := path.Join(root, layout.EnrollmentIssuerPrivateKey)
+	enrollmentIngressCertificate := path.Join(root, layout.EnrollmentIngressCertificate)
+	enrollmentIngressPrivateKey := path.Join(root, layout.EnrollmentIngressPrivateKey)
 	auditCursorKey := path.Join(root, layout.AuditCursorKey)
 	apisixRoutes := path.Join(root, layout.APISIXRoutes)
 	apisixConfig := path.Join(root, layout.APISIXConfig)
@@ -513,12 +539,18 @@ func compileServices(
 	)
 	apisix.User = "0:0"
 	apisix.Environment = map[string]string{"APISIX_STAND_ALONE": "true"}
-	apisix.Ports = []string{net.JoinHostPort(options.Listener, fmt.Sprint(options.Port)) + ":9080/tcp"}
+	apisix.Ports = []string{
+		net.JoinHostPort(options.Listener, fmt.Sprint(options.Port)) + ":9080/tcp",
+		net.JoinHostPort(options.Listener, fmt.Sprint(NodeEnrollmentIngressPort)) + ":" +
+			fmt.Sprint(NodeEnrollmentIngressTargetPort) + "/tcp",
+	}
 	apisix.Volumes = []mount{
 		bind(apisixConfig, "/usr/local/apisix/conf/config.yaml", true),
 		bind(apisixRoutes, "/usr/local/apisix/conf/apisix.yaml", true),
 		bind(apisixUID, "/usr/local/apisix/conf/apisix.uid", true),
 		bind(apisixNginx, "/usr/local/apisix/conf/nginx.conf", false),
+		bind(enrollmentIngressCertificate, NodeEnrollmentIngressCertificateTarget, true),
+		bind(enrollmentIngressPrivateKey, NodeEnrollmentIngressPrivateKeyTarget, true),
 	}
 	apisix.Tmpfs = append(
 		apisix.Tmpfs,
