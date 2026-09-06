@@ -35,13 +35,22 @@ func (repository *NodeEnrollmentRepository) WithinInstallation(
 	installationID string,
 	callback func(context.Context, nodeenrollment.Transaction) error,
 ) error {
+	return repository.withinInstallation(ctx, installationID, pgx.Serializable, callback)
+}
+
+func (repository *NodeEnrollmentRepository) withinInstallation(
+	ctx context.Context,
+	installationID string,
+	isolation pgx.TxIsoLevel,
+	callback func(context.Context, nodeenrollment.Transaction) error,
+) error {
 	if repository == nil || repository.pool == nil || ctx == nil || callback == nil ||
 		paasv1.ValidateID("installationId", installationID) != nil {
 		return nodeenrollment.ErrInvalidArgument
 	}
 	err := func() error {
 		tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{
-			IsoLevel: pgx.Serializable, AccessMode: pgx.ReadWrite,
+			IsoLevel: isolation, AccessMode: pgx.ReadWrite,
 		})
 		if err != nil {
 			return err
@@ -155,6 +164,7 @@ func (transaction *nodeEnrollmentTransaction) load(
 		credentialVerifier                        string
 		enrollmentDocument, operationDocument     []byte
 		joinDocument, wrappedCredentialDocument   []byte
+		exchangeDocument, sealedResultDocument    []byte
 		actorType, actorID, decisionID, requestID string
 		auditID, traceParent                      string
 		terminationFingerprint, terminationDigest string
@@ -164,6 +174,7 @@ func (transaction *nodeEnrollmentTransaction) load(
 			enrollment.credential_salt, COALESCE(enrollment.credential_verifier, ''),
 			enrollment.document, operation.document,
 			enrollment.join_document, enrollment.wrapped_credential_document,
+			enrollment.exchange_document, enrollment.sealed_exchange_result_document,
 			enrollment.actor_type, enrollment.actor_id,
 			enrollment.iam_decision_id, enrollment.request_id,
 			COALESCE(enrollment.audit_id, ''), COALESCE(enrollment.traceparent, ''),
@@ -181,6 +192,7 @@ func (transaction *nodeEnrollmentTransaction) load(
 		&credentialSalt, &credentialVerifier,
 		&enrollmentDocument, &operationDocument,
 		&joinDocument, &wrappedCredentialDocument,
+		&exchangeDocument, &sealedResultDocument,
 		&actorType, &actorID, &decisionID, &requestID,
 		&auditID, &traceParent, &terminationFingerprint, &terminationDigest,
 	)
@@ -209,8 +221,27 @@ func (transaction *nodeEnrollmentTransaction) load(
 		decodeDocument("NodeEnrollmentJoin", joinDocument, &stored.Join) != nil ||
 		(len(wrappedCredentialDocument) > 0 &&
 			decodeDocument("WrappedJoinCredential", wrappedCredentialDocument, &stored.WrappedCredential) != nil) ||
-		string(stored.Enrollment.Metadata.ID) != enrollmentID || string(stored.Operation.ID) != operationID ||
-		nodeenrollment.ValidateStoredEnrollment(stored, transaction.installationID) != nil {
+		string(stored.Enrollment.Metadata.ID) != enrollmentID || string(stored.Operation.ID) != operationID {
+		stored.Clear()
+		return nodeenrollment.StoredEnrollment{}, false, errors.New("stored node enrollment is invalid")
+	}
+	if len(exchangeDocument) > 0 {
+		var exchange nodeenrollment.StoredExchange
+		if decodeDocument("NodeEnrollmentExchange", exchangeDocument, &exchange) != nil {
+			stored.Clear()
+			return nodeenrollment.StoredEnrollment{}, false, errors.New("stored node enrollment exchange is invalid")
+		}
+		stored.Exchange = &exchange
+	}
+	if len(sealedResultDocument) > 0 {
+		var sealed nodeenrollment.SealedExchangeResult
+		if decodeDocument("SealedNodeEnrollmentExchange", sealedResultDocument, &sealed) != nil {
+			stored.Clear()
+			return nodeenrollment.StoredEnrollment{}, false, errors.New("stored sealed node enrollment exchange is invalid")
+		}
+		stored.SealedExchangeResult = &sealed
+	}
+	if nodeenrollment.ValidateStoredEnrollment(stored, transaction.installationID) != nil {
 		stored.Clear()
 		return nodeenrollment.StoredEnrollment{}, false, errors.New("stored node enrollment is invalid")
 	}
@@ -316,6 +347,44 @@ func (transaction *nodeEnrollmentTransaction) InsertEnrollment(
 		stored.CreateAuthorization.Subject.Type, stored.CreateAuthorization.Subject.ID,
 		stored.CreateAuthorization.DecisionID, stored.CreateAuthorization.RequestID,
 		nullableString(stored.CreateAuthorization.AuditID), nullableString(stored.CreateAuthorization.TraceParent),
+	)
+	return err
+}
+
+func (transaction *nodeEnrollmentTransaction) ExchangeEnrollment(
+	ctx context.Context,
+	before nodeenrollment.StoredEnrollment,
+	after nodeenrollment.StoredEnrollment,
+) error {
+	if nodeenrollment.ValidateStoredEnrollment(before, transaction.installationID) != nil ||
+		nodeenrollment.ValidateStoredEnrollment(after, transaction.installationID) != nil ||
+		before.Enrollment.State != paasv1.NodeEnrollmentWaitingInstall ||
+		after.Enrollment.State != paasv1.NodeEnrollmentVerifying ||
+		after.Exchange == nil || after.SealedExchangeResult == nil ||
+		after.Enrollment.Metadata.ID != before.Enrollment.Metadata.ID {
+		return nodeenrollment.ErrInvalidArgument
+	}
+	enrollmentDocument, err := json.Marshal(after.Enrollment)
+	if err != nil {
+		return err
+	}
+	operationDocument, err := json.Marshal(after.Operation)
+	if err != nil {
+		return err
+	}
+	exchangeDocument, err := json.Marshal(after.Exchange)
+	if err != nil {
+		return err
+	}
+	sealedDocument, err := json.Marshal(after.SealedExchangeResult)
+	if err != nil {
+		return err
+	}
+	_, err = transaction.tx.Exec(ctx, `SELECT paas.exchange_node_enrollment(
+		$1,$2,$3,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb
+	)`, before.Enrollment.Metadata.ID,
+		int64(before.Enrollment.Metadata.ResourceVersion), before.CredentialVerifier,
+		enrollmentDocument, operationDocument, exchangeDocument, sealedDocument,
 	)
 	return err
 }

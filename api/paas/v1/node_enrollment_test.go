@@ -9,6 +9,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"math/big"
+	"net"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -217,6 +219,202 @@ func TestNodeEnrollmentStatesAreClosedAndTimeBound(t *testing.T) {
 	if err := ValidateNodeEnrollment(invalid); err == nil {
 		t.Fatal("diagnostic with false retryability was accepted")
 	}
+}
+
+func TestNodeEnrollmentExchangeBindsDistinctLocalKeysAndIssuedIdentity(t *testing.T) {
+	request, response := nodeEnrollmentExchangeFixture(t)
+	if err := ValidateExchangeNodeEnrollmentRequest(request); err != nil {
+		t.Fatalf("validate exchange request: %v", err)
+	}
+	if err := ValidateNodeEnrollmentExchangeResponse(response); err != nil {
+		t.Fatalf("validate exchange response: %v", err)
+	}
+	if err := ValidateNodeEnrollmentExchangeResponseForRequest(response, request); err != nil {
+		t.Fatalf("bind exchange response: %v", err)
+	}
+	nodeKey, collectorKey, err := NodeEnrollmentExchangePublicKeys(request)
+	if err != nil || len(nodeKey) == 0 || len(collectorKey) == 0 || string(nodeKey) == string(collectorKey) {
+		t.Fatalf("canonical public keys are invalid: node=%d collector=%d err=%v", len(nodeKey), len(collectorKey), err)
+	}
+	if got := request.String(); got != "node enrollment exchange request <redacted>" || strings.Contains(got, request.Credential) {
+		t.Fatalf("exchange formatting leaked credential: %q", got)
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{request.Credential, request.NodeCertificateRequest, request.CollectorCertificateRequest, "privateKey"} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("exchange response leaked request material %q", forbidden)
+		}
+	}
+}
+
+func TestNodeEnrollmentExchangeRequestRejectsCredentialIdentityAndCSRVariation(t *testing.T) {
+	request, _ := nodeEnrollmentExchangeFixture(t)
+	for name, mutate := range map[string]func(*ExchangeNodeEnrollmentRequest){
+		"padded credential":       func(value *ExchangeNodeEnrollmentRequest) { value.Credential += "=" },
+		"short credential":        func(value *ExchangeNodeEnrollmentRequest) { value.Credential = value.Credential[:42] },
+		"wrong installation":      func(value *ExchangeNodeEnrollmentRequest) { value.InstallationID = "" },
+		"wrong exchange identity": func(value *ExchangeNodeEnrollmentRequest) { value.ExchangeID = "exchange-a" },
+		"privileged listener":     func(value *ExchangeNodeEnrollmentRequest) { value.Listener.ManagementPort = 443 },
+		"shared listener": func(value *ExchangeNodeEnrollmentRequest) {
+			value.Listener.CollectorPort = value.Listener.ManagementPort
+		},
+		"shared public key": func(value *ExchangeNodeEnrollmentRequest) {
+			value.CollectorCertificateRequest = value.NodeCertificateRequest
+		},
+		"CSR subject": func(value *ExchangeNodeEnrollmentRequest) {
+			_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{Subject: pkix.Name{CommonName: "caller-owned"}}, privateKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			value.NodeCertificateRequest = base64.RawURLEncoding.EncodeToString(encoded)
+		},
+		"CSR extension": func(value *ExchangeNodeEnrollmentRequest) {
+			_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{DNSNames: []string{"caller.invalid"}}, privateKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			value.NodeCertificateRequest = base64.RawURLEncoding.EncodeToString(encoded)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := request
+			mutate(&changed)
+			if err := ValidateExchangeNodeEnrollmentRequest(changed); err == nil {
+				t.Fatal("invalid exchange request was accepted")
+			}
+		})
+	}
+}
+
+func TestNodeEnrollmentExchangeResponseRejectsRebindingAndCertificateTampering(t *testing.T) {
+	request, response := nodeEnrollmentExchangeFixture(t)
+	for name, mutate := range map[string]func(*NodeEnrollmentExchangeResponse){
+		"public endpoint":      func(value *NodeEnrollmentExchangeResponse) { value.NodeListenAddress = "8.8.8.8:16443" },
+		"remote collector":     func(value *NodeEnrollmentExchangeResponse) { value.CollectorEndpoint = "https://192.168.50.10:19100" },
+		"changed installation": func(value *NodeEnrollmentExchangeResponse) { value.InstallationID = "installation-other" },
+		"changed binding":      func(value *NodeEnrollmentExchangeResponse) { value.BindingRef = "binding-other" },
+		"swapped role certificates": func(value *NodeEnrollmentExchangeResponse) {
+			value.NodeCertificate, value.CollectorCertificate = value.CollectorCertificate, value.NodeCertificate
+		},
+		"tampered certificate": func(value *NodeEnrollmentExchangeResponse) {
+			encoded, err := base64.RawURLEncoding.Strict().DecodeString(value.NodeCertificate)
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded[len(encoded)-1] ^= 1
+			value.NodeCertificate = base64.RawURLEncoding.EncodeToString(encoded)
+		},
+		"overlong lifetime": func(value *NodeEnrollmentExchangeResponse) {
+			value.CertificateNotAfter = value.CertificateNotBefore.Add(MaximumNodeEnrollmentCertificateLifetime + time.Microsecond)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := response
+			mutate(&changed)
+			if err := ValidateNodeEnrollmentExchangeResponse(changed); err == nil {
+				t.Fatal("invalid exchange response was accepted")
+			}
+		})
+	}
+	changed := request
+	changed.ExchangeID = "node-exchange-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	if err := ValidateNodeEnrollmentExchangeResponseForRequest(response, changed); err == nil {
+		t.Fatal("exchange response was rebound to another request")
+	}
+}
+
+func nodeEnrollmentExchangeFixture(t *testing.T) (ExchangeNodeEnrollmentRequest, NodeEnrollmentExchangeResponse) {
+	t.Helper()
+	now := time.Date(2026, 9, 6, 8, 0, 0, 0, time.UTC)
+	notBefore, notAfter := now.Add(-5*time.Minute), now.Add(-5*time.Minute).Add(MaximumNodeEnrollmentCertificateLifetime)
+
+	nodePublic, nodePrivate, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	collectorPublic, collectorPrivate, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csr := func(privateKey ed25519.PrivateKey) string {
+		encoded, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, privateKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return base64.RawURLEncoding.EncodeToString(encoded)
+	}
+	request := ExchangeNodeEnrollmentRequest{
+		APIVersion: NodeEnrollmentExchangeAPIVersion, Kind: NodeEnrollmentExchangeRequestKind,
+		EnrollmentID: "node-enrollment-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", InstallationID: "installation-a",
+		ExecutionTargetID:      "execution-target-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		ExchangeID:             "node-exchange-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Credential:             base64.RawURLEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef")),
+		MachineFingerprint:     "sha256:" + strings.Repeat("a", 64),
+		RuntimeContractDigest:  "sha256:" + strings.Repeat("b", 64),
+		Listener:               NodeEnrollmentListenerClaim{ManagementPort: 16443, CollectorPort: 19100},
+		NodeCertificateRequest: csr(nodePrivate), CollectorCertificateRequest: csr(collectorPrivate),
+	}
+
+	issuerPublic, issuerPrivate, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuerURI, err := NodeEnrollmentIssuerURI(request.InstallationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuerTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "Matrix node enrollment issuer"},
+		NotBefore:             time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC),
+		NotAfter:              time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC),
+		BasicConstraintsValid: true, IsCA: true, MaxPathLenZero: true,
+		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		URIs:     []*url.URL{issuerURI},
+	}
+	issuerDER, err := x509.CreateCertificate(rand.Reader, issuerTemplate, issuerTemplate, issuerPublic, issuerPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roleCertificate := func(role string, publicKey ed25519.PublicKey, address net.IP, usages []x509.ExtKeyUsage, serial int64) string {
+		identityURI, err := url.Parse("spiffe://matrix.xiak.com/installations/" + request.InstallationID + "/" + role + "/" + string(request.ExecutionTargetID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		template := &x509.Certificate{
+			SerialNumber: big.NewInt(serial), NotBefore: notBefore, NotAfter: notAfter,
+			BasicConstraintsValid: true, KeyUsage: x509.KeyUsageDigitalSignature,
+			ExtKeyUsage: usages, URIs: []*url.URL{identityURI}, IPAddresses: []net.IP{address},
+		}
+		encoded, err := x509.CreateCertificate(rand.Reader, template, issuerTemplate, publicKey, issuerPrivate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return base64.RawURLEncoding.EncodeToString(encoded)
+	}
+	response := NodeEnrollmentExchangeResponse{
+		APIVersion: NodeEnrollmentExchangeAPIVersion, Kind: NodeEnrollmentExchangeResponseKind,
+		EnrollmentID: request.EnrollmentID, InstallationID: request.InstallationID,
+		ExecutionTargetID: request.ExecutionTargetID, ExchangeID: request.ExchangeID,
+		MachineFingerprint: request.MachineFingerprint, RuntimeContractDigest: request.RuntimeContractDigest,
+		ControllerID: "paas-controller-v1", BindingRef: "node-binding-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		NodeListenAddress: "192.168.50.10:16443", CollectorEndpoint: "https://127.0.0.1:19100",
+		NodeCertificate:      roleCertificate("nodes", nodePublic, net.ParseIP("192.168.50.10"), []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}, 2),
+		CollectorCertificate: roleCertificate("collectors", collectorPublic, net.ParseIP("127.0.0.1"), []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, 3),
+		IssuerCertificate:    base64.RawURLEncoding.EncodeToString(issuerDER),
+		CertificateNotBefore: notBefore, CertificateNotAfter: notAfter,
+	}
+	return request, response
 }
 
 func nodeEnrollmentContractFixture(t *testing.T) (CreateNodeEnrollmentRequest, CreateNodeEnrollmentResponse, ed25519.PrivateKey) {

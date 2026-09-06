@@ -56,6 +56,9 @@ func TestOpenAPIContractDefinesApplicationPaaSV1(t *testing.T) {
 		"NodeEnrollmentJoin",
 		"WrappedJoinCredential",
 		"CreateNodeEnrollmentResponse",
+		"NodeEnrollmentListenerClaim",
+		"ExchangeNodeEnrollmentRequest",
+		"NodeEnrollmentExchangeResponse",
 		"PlacementPolicy",
 		"PlacementDecision",
 		"Operation",
@@ -176,6 +179,7 @@ func TestOpenAPINorthboundSurfaceUsesMatrixIAM(t *testing.T) {
 		"/v1/execution-targets/{executionTargetId}/remove":        {"post"},
 		"/v1/node-enrollments":                                    {"get", "post"},
 		"/v1/node-enrollments/{nodeEnrollmentId}":                 {"get"},
+		"/v1/node-enrollments/{nodeEnrollmentId}/exchange":        {"post"},
 		"/v1/node-enrollments/{nodeEnrollmentId}/revoke":          {"post"},
 		"/v1/node-enrollments/{nodeEnrollmentId}/regenerate":      {"post"},
 		"/v1/platform/operations/{operationId}":                   {"get"},
@@ -212,9 +216,9 @@ func TestOpenAPINorthboundSurfaceUsesMatrixIAM(t *testing.T) {
 		for _, method := range methods {
 			operation := object(t, pathItem[method], path+" "+method)
 			securityOverride, overridesSecurity := operation["security"]
-			if path == "/ready" {
+			if path == "/ready" || path == "/v1/node-enrollments/{nodeEnrollmentId}/exchange" {
 				if !overridesSecurity || len(securityOverride.([]any)) != 0 {
-					t.Errorf("%s %s must explicitly allow unauthenticated health checks", method, path)
+					t.Errorf("%s %s must explicitly omit MatrixIAM authentication", method, path)
 				}
 			} else if path == "/v1/installation:verify" {
 				if !overridesSecurity {
@@ -480,6 +484,38 @@ func TestExecutionAdapterSchemasExposeReferencesNotProviderControls(t *testing.T
 	}
 }
 
+func TestOpenAPINodeEnrollmentExchangeIsBoundedBootstrapOnly(t *testing.T) {
+	document := loadOpenAPI(t)
+	schemas := openAPISchemas(t, document)
+	request := schemaObject(t, schemas, "ExchangeNodeEnrollmentRequest")
+	response := schemaObject(t, schemas, "NodeEnrollmentExchangeResponse")
+	if request["x-matrix-visibility"] != "node-bootstrap" || response["x-matrix-visibility"] != "node-bootstrap" {
+		t.Fatalf("node exchange visibility is not isolated: request=%#v response=%#v", request["x-matrix-visibility"], response["x-matrix-visibility"])
+	}
+	requestProperties := object(t, request["properties"], "ExchangeNodeEnrollmentRequest.properties")
+	for _, name := range []string{"credential", "nodeCertificateRequest", "collectorCertificateRequest"} {
+		property := object(t, requestProperties[name], "ExchangeNodeEnrollmentRequest."+name)
+		if property["writeOnly"] != true || property["maxLength"] == nil {
+			t.Errorf("%s must be bounded and write-only: %#v", name, property)
+		}
+	}
+	responseProperties := object(t, response["properties"], "NodeEnrollmentExchangeResponse.properties")
+	for _, forbidden := range []string{"credential", "nodeCertificateRequest", "collectorCertificateRequest", "privateKey"} {
+		if _, found := responseProperties[forbidden]; found {
+			t.Errorf("bootstrap response exposes forbidden property %q", forbidden)
+		}
+	}
+	listener := schemaObject(t, schemas, "NodeEnrollmentListenerClaim")
+	listenerProperties := object(t, listener["properties"], "NodeEnrollmentListenerClaim.properties")
+	for _, name := range []string{"managementPort", "collectorPort"} {
+		property := object(t, listenerProperties[name], "NodeEnrollmentListenerClaim."+name)
+		if property["minimum"] != json.Number(fmt.Sprint(MinimumNodeEnrollmentListenerPort)) ||
+			property["maximum"] != json.Number("65535") {
+			t.Errorf("%s is not a bounded non-privileged port: %#v", name, property)
+		}
+	}
+}
+
 func TestOpenAPIStructPropertiesAndRequiredFieldsMatchGoTypes(t *testing.T) {
 	schemas := openAPISchemas(t, loadOpenAPI(t))
 	contracts := map[string]reflect.Type{
@@ -499,6 +535,9 @@ func TestOpenAPIStructPropertiesAndRequiredFieldsMatchGoTypes(t *testing.T) {
 		"NodeEnrollmentJoin":                  reflect.TypeOf(NodeEnrollmentJoin{}),
 		"WrappedJoinCredential":               reflect.TypeOf(WrappedJoinCredential{}),
 		"CreateNodeEnrollmentResponse":        reflect.TypeOf(CreateNodeEnrollmentResponse{}),
+		"NodeEnrollmentListenerClaim":         reflect.TypeOf(NodeEnrollmentListenerClaim{}),
+		"ExchangeNodeEnrollmentRequest":       reflect.TypeOf(ExchangeNodeEnrollmentRequest{}),
+		"NodeEnrollmentExchangeResponse":      reflect.TypeOf(NodeEnrollmentExchangeResponse{}),
 		"AdapterRef":                          reflect.TypeOf(AdapterRef{}),
 		"Capacity":                            reflect.TypeOf(Capacity{}),
 		"ExecutionTargetSpec":                 reflect.TypeOf(ExecutionTargetSpec{}),

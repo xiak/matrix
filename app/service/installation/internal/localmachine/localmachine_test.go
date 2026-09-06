@@ -521,6 +521,17 @@ func TestProviderVersionComparisonAcceptsBoundedDistributionMetadata(t *testing.
 	}
 }
 
+func TestFrozenPredecessorAPISIXRoutesMatchPublishedContract(t *testing.T) {
+	const publishedDigest = "sha256:ff6db9fbfc840ce4d43059661b12c29434a2807beb57326b76f9543037ab38c6"
+	digest := sha256.Sum256(predecessorAPISIXStandaloneConfig())
+	if got := "sha256:" + hex.EncodeToString(digest[:]); got != publishedDigest {
+		t.Fatalf("frozen predecessor APISIX digest = %q, want %q", got, publishedDigest)
+	}
+	if bytes.Equal(predecessorAPISIXStandaloneConfig(), apisixStandaloneConfig()) {
+		t.Fatal("current APISIX routes did not advance beyond the frozen predecessor")
+	}
+}
+
 func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T) {
 	plan := newInstallPlan(t)
 	if err := stageInstallation(plan, rand.Reader); err != nil {
@@ -671,6 +682,10 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		"priority: 100",
 		"uri: /v1/installation:verify",
 		`X-Matrix-Public-Origin: "$scheme://$http_host"`,
+		"id: matrix-paas-node-enrollment-exchange",
+		"node-enrollment-[0-9a-f]{32}/exchange$",
+		`X-Matrix-Observed-Peer: "$remote_addr"`,
+		`X-Matrix-Transport-Scheme: "$scheme"`,
 	} {
 		if !bytes.Contains(apisix, []byte(required)) {
 			t.Fatalf("APISIX configuration lacks fixed verifier route %q", required)
@@ -685,6 +700,27 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 	if bytes.Contains(terminalRoute, []byte("Authorization")) ||
 		bytes.Contains(terminalRoute, []byte("Matrix-Subject-Credential")) {
 		t.Fatal("terminal route must let the PaaS endpoint reject ambient authority")
+	}
+	exchangeStart := bytes.Index(apisix, []byte("id: matrix-paas-node-enrollment-exchange"))
+	if exchangeStart < 0 || terminalStart <= exchangeStart {
+		t.Fatal("node enrollment exchange route is absent or not isolated ahead of general PaaS routing")
+	}
+	exchangeRoute := apisix[exchangeStart:terminalStart]
+	for _, removed := range []string{"Authorization", "Cookie", "Idempotency-Key", "If-Match", "Matrix-Subject-Credential", "X-Matrix-Public-Origin"} {
+		if !bytes.Contains(exchangeRoute, []byte("- "+removed)) {
+			t.Fatalf("node enrollment exchange route does not remove ambient header %q", removed)
+		}
+	}
+	paasStart := bytes.Index(apisix, []byte("id: matrix-paas\n"))
+	managedServiceStart := bytes.Index(apisix, []byte("id: matrix-managed-services"))
+	if paasStart < 0 || managedServiceStart <= paasStart {
+		t.Fatal("general PaaS route is absent or unordered")
+	}
+	paasRoute := apisix[paasStart:managedServiceStart]
+	for _, removed := range []string{"X-Matrix-Observed-Peer", "X-Matrix-Transport-Scheme"} {
+		if !bytes.Contains(paasRoute, []byte("- "+removed)) {
+			t.Fatalf("general PaaS route does not remove bootstrap authority header %q", removed)
+		}
 	}
 	if bytes.Contains(apisix, []byte("matrix-service-auth")) ||
 		bytes.Contains(apisix, []byte("apisix-iam-credential")) {
@@ -1035,8 +1071,12 @@ func TestUpgradeConfigurationRetainsAndRestoresTheFrozenAdjacentTopology(t *test
 	predecessorRoutes := readTestFile(t, source.Root, layout.APISIXRoutes)
 	if !bytes.Contains(predecessorCompose, []byte("MATRIX_PAAS_PUBLIC_BASE_PATH")) ||
 		!bytes.Contains(predecessorCompose, []byte("MATRIX_PAAS_TERMINAL_COOKIE_SECURE")) ||
-		!bytes.Contains(predecessorRoutes, []byte("matrix-paas-terminal")) {
-		t.Fatal("frozen adjacent predecessor lost its retained terminal configuration")
+		bytes.Contains(predecessorCompose, []byte("MATRIX_PAAS_ENROLLMENT_ISSUER_CERTIFICATE_FILE")) ||
+		bytes.Contains(predecessorCompose, []byte("MATRIX_PAAS_ENROLLMENT_ISSUER_PRIVATE_KEY_FILE")) ||
+		!bytes.Contains(predecessorRoutes, []byte("matrix-paas-terminal")) ||
+		bytes.Contains(predecessorRoutes, []byte("X-Matrix-Public-Origin")) ||
+		bytes.Contains(predecessorRoutes, []byte("matrix-paas-node-enrollment-exchange")) {
+		t.Fatal("frozen adjacent predecessor differs from its signed topology")
 	}
 	if _, err := verifiedInstallationConfiguration(source); err != nil {
 		t.Fatalf("verify predecessor installation: %v", err)
@@ -1055,9 +1095,13 @@ func TestUpgradeConfigurationRetainsAndRestoresTheFrozenAdjacentTopology(t *test
 	if bytes.Equal(successorCompose, predecessorCompose) ||
 		!bytes.Contains(successorCompose, []byte("MATRIX_PAAS_PUBLIC_BASE_PATH")) ||
 		!bytes.Contains(successorCompose, []byte("MATRIX_PAAS_TERMINAL_COOKIE_SECURE")) ||
-		!bytes.Equal(successorRoutes, predecessorRoutes) ||
-		!bytes.Contains(successorRoutes, []byte("matrix-paas-terminal")) {
-		t.Fatal("schema upgrade changed the retained terminal topology or release labels were not advanced")
+		!bytes.Contains(successorCompose, []byte("MATRIX_PAAS_ENROLLMENT_ISSUER_CERTIFICATE_FILE")) ||
+		!bytes.Contains(successorCompose, []byte("MATRIX_PAAS_ENROLLMENT_ISSUER_PRIVATE_KEY_FILE")) ||
+		bytes.Equal(successorRoutes, predecessorRoutes) ||
+		!bytes.Contains(successorRoutes, []byte("matrix-paas-terminal")) ||
+		!bytes.Contains(successorRoutes, []byte("X-Matrix-Public-Origin")) ||
+		!bytes.Contains(successorRoutes, []byte("matrix-paas-node-enrollment-exchange")) {
+		t.Fatal("schema upgrade did not advance the exact enrollment route while retaining terminal topology")
 	}
 
 	if err := restoreUpgradeConfiguration(plan); err != nil {
@@ -1070,6 +1114,34 @@ func TestUpgradeConfigurationRetainsAndRestoresTheFrozenAdjacentTopology(t *test
 		t.Fatal("rollback did not restore the exact predecessor APISIX routes")
 	}
 	assertReleaseConfiguration(t, source)
+}
+
+func TestFrozenPredecessorVerificationDoesNotRequireFutureEnrollmentIssuer(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine upgrade configuration targets Linux")
+	}
+	plan := newUpgradePlan(
+		t, release.SupportedDatabasePredecessorProfile(), release.CurrentDatabaseProfile(),
+	)
+	for _, relative := range []string{layout.EnrollmentIssuerCertificate, layout.EnrollmentIssuerPrivateKey} {
+		if err := os.Remove(filepath.Join(plan.Source.Root, filepath.FromSlash(relative))); err != nil {
+			t.Fatalf("remove future enrollment issuer fixture %q: %v", relative, err)
+		}
+	}
+	source, err := authenticateInstalledPlan(plan.Source)
+	if err != nil {
+		t.Fatalf("authenticate frozen predecessor: %v", err)
+	}
+	defer clear(source.TrustBytes)
+	if _, err := verifiedInstallationConfiguration(source); err != nil {
+		t.Fatalf("verify frozen predecessor without future issuer: %v", err)
+	}
+	if err := stageInstallation(plan.Target, rand.Reader); err != nil {
+		t.Fatalf("stage successor issuer: %v", err)
+	}
+	if err := ensureEnrollmentIssuer(plan.Target.Root, plan.Target.InstallationID, nil); err != nil {
+		t.Fatalf("successor staging did not materialize enrollment issuer: %v", err)
+	}
 }
 
 func TestPrepareReleaseRollbackRemovesOnlyCurrentAndRestoresPreviousConfiguration(t *testing.T) {
@@ -1835,12 +1907,12 @@ func TestRecoverBackupRestoresSelectedSnapshotAndConvergesTarget(t *testing.T) {
 	}
 }
 
-func TestPublishedBackupSealRemainsReadableAndProfileCannotBeSubstituted(t *testing.T) {
+func TestPublishedBackupSealRemainsDecodableButDoesNotGrantRuntimeCompatibility(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("local-machine backup effects target Linux")
 	}
 	legacy := release.DatabaseProfile{SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one"}
-	plan, expectation := configuredPlatformStartFixture(t, legacy)
+	plan, expectation := configuredPlatformStartFixture(t)
 	runtimeBoundary := newPlatformStartRuntime(plan, expectation)
 	runtimeBoundary.started = true
 	effects := &Effects{runtime: runtimeBoundary, entropy: rand.Reader, verifier: &recordingInstallationVerifier{}}
@@ -1885,19 +1957,28 @@ func TestPublishedBackupSealRemainsReadableAndProfileCannotBeSubstituted(t *test
 	if err := os.WriteFile(backupPath, sealed, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	source, err := effects.InspectBackup(context.Background(), request.InstalledPlan, request.BackupID)
-	if err != nil || source.Database != legacy {
-		t.Fatalf("read published backup: %#v / %v", source.Database, err)
+	relative := filepath.Join(filepath.FromSlash(layout.BackupDirectory), request.BackupID)
+	decoded, _, err := readVerifiedBackupDirectory(
+		plan.Root, plan.InstallationID, request.BackupID, relative, key,
+	)
+	decodedProfile, profileErr := decoded.databaseProfile()
+	if err != nil || profileErr != nil || decodedProfile != legacy {
+		t.Fatalf("decode published backup: %#v / %v / %v", decodedProfile, err, profileErr)
 	}
-	if err := effects.CreateBackup(context.Background(), request); err != nil {
-		t.Fatalf("replay published backup: %v", err)
+	if _, err := effects.InspectBackup(
+		context.Background(), request.InstalledPlan, request.BackupID,
+	); !errors.Is(err, platformcommand.ErrEffectVerification) {
+		t.Fatalf("legacy backup implied unsupported runtime compatibility: %v", err)
+	}
+	if err := effects.CreateBackup(context.Background(), request); !errors.Is(err, platformcommand.ErrEffectVerification) {
+		t.Fatalf("replay accepted a backup for a different runtime profile: %v", err)
 	}
 	retained, err := os.ReadFile(backupPath)
 	if err != nil || !bytes.Equal(retained, sealed) {
-		t.Fatal("legacy backup replay rewrote its sealed bytes")
+		t.Fatal("rejected legacy backup replay rewrote its sealed bytes")
 	}
 
-	manifest.APIVersion, manifest.SchemaVersion, manifest.Database = backupAPIVersion, 0, release.CurrentDatabaseProfile()
+	manifest.APIVersion, manifest.SchemaVersion, manifest.Database = backupAPIVersion, 0, release.SupportedDatabasePredecessorProfile()
 	substituted, err := sealBackupManifest(manifest, key)
 	if err != nil {
 		t.Fatal(err)
@@ -2487,6 +2568,13 @@ func newUpgradePlan(t *testing.T, profiles ...release.DatabaseProfile) platformc
 	}
 	if err := stageInstallation(source, rand.Reader); err != nil {
 		t.Fatalf("stage upgrade source: %v", err)
+	}
+	if source.Bundle.Manifest.TopologyDigest == topology.SupportedPredecessorContractDigest() {
+		for _, relative := range []string{layout.EnrollmentIssuerCertificate, layout.EnrollmentIssuerPrivateKey} {
+			if err := os.Remove(filepath.Join(source.Root, filepath.FromSlash(relative))); err != nil {
+				t.Fatalf("remove future predecessor fixture %q: %v", relative, err)
+			}
+		}
 	}
 	if source.Bundle.Manifest.TopologyDigest == topology.ContractDigest() {
 		if err := configureInstallation(

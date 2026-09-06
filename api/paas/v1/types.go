@@ -147,6 +147,64 @@ type CreateNodeEnrollmentResponse struct {
 	WrappedCredential WrappedJoinCredential `json:"wrappedCredential"`
 }
 
+// NodeEnrollmentListenerClaim is the provider-neutral network surface that
+// the locally installed node intends to bind. The control plane supplies the
+// addresses from trusted installation policy and the observed TLS peer; a
+// caller can select neither a host name nor an arbitrary endpoint.
+type NodeEnrollmentListenerClaim struct {
+	ManagementPort uint16 `json:"managementPort"`
+	CollectorPort  uint16 `json:"collectorPort"`
+}
+
+// ExchangeNodeEnrollmentRequest is the one bounded bootstrap message that may
+// carry the raw one-time credential. Both private keys remain on the target;
+// only signed PKCS#10 public-key requests cross the node boundary.
+type ExchangeNodeEnrollmentRequest struct {
+	APIVersion                  string                      `json:"apiVersion"`
+	Kind                        string                      `json:"kind"`
+	EnrollmentID                ResourceID                  `json:"enrollmentId"`
+	InstallationID              string                      `json:"installationId"`
+	ExecutionTargetID           ResourceID                  `json:"executionTargetId"`
+	ExchangeID                  string                      `json:"exchangeId"`
+	Credential                  string                      `json:"credential"`
+	MachineFingerprint          string                      `json:"machineFingerprint"`
+	RuntimeContractDigest       string                      `json:"runtimeContractDigest"`
+	Listener                    NodeEnrollmentListenerClaim `json:"listener"`
+	NodeCertificateRequest      string                      `json:"nodeCertificateRequest"`
+	CollectorCertificateRequest string                      `json:"collectorCertificateRequest"`
+}
+
+func (ExchangeNodeEnrollmentRequest) String() string {
+	return "node enrollment exchange request <redacted>"
+}
+
+func (ExchangeNodeEnrollmentRequest) GoString() string {
+	return "node enrollment exchange request <redacted>"
+}
+
+// NodeEnrollmentExchangeResponse is public certificate material returned only
+// by the bootstrap exchange route. It contains no join credential or private
+// key and is sealed before persistence for exact lost-response recovery.
+type NodeEnrollmentExchangeResponse struct {
+	APIVersion            string     `json:"apiVersion"`
+	Kind                  string     `json:"kind"`
+	EnrollmentID          ResourceID `json:"enrollmentId"`
+	InstallationID        string     `json:"installationId"`
+	ExecutionTargetID     ResourceID `json:"executionTargetId"`
+	ExchangeID            string     `json:"exchangeId"`
+	MachineFingerprint    string     `json:"machineFingerprint"`
+	RuntimeContractDigest string     `json:"runtimeContractDigest"`
+	ControllerID          string     `json:"controllerId"`
+	BindingRef            string     `json:"bindingRef"`
+	NodeListenAddress     string     `json:"nodeListenAddress"`
+	CollectorEndpoint     string     `json:"collectorEndpoint"`
+	NodeCertificate       string     `json:"nodeCertificate"`
+	CollectorCertificate  string     `json:"collectorCertificate"`
+	IssuerCertificate     string     `json:"issuerCertificate"`
+	CertificateNotBefore  time.Time  `json:"certificateNotBefore"`
+	CertificateNotAfter   time.Time  `json:"certificateNotAfter"`
+}
+
 type AdapterRef struct {
 	Kind            AdapterKind `json:"kind"`
 	Name            string      `json:"name"`

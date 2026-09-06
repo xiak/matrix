@@ -201,7 +201,7 @@ func TestCredentialRecoveryRetainsOneIntentAndNeverRollsBackCredentials(t *testi
 	}
 }
 
-func TestCredentialRecoveryRejectsUnsupportedProfilesBeforePreparingAnIntent(t *testing.T) {
+func TestCredentialRecoveryRejectsUnrecognizedInstalledProfilesBeforePreparingAnIntent(t *testing.T) {
 	profiles := []struct {
 		name    string
 		profile release.DatabaseProfile
@@ -220,17 +220,26 @@ func TestCredentialRecoveryRejectsUnsupportedProfilesBeforePreparingAnIntent(t *
 			effects := &installEffects{}
 			backend := newTestBackend(t, effects)
 			root := filepath.Join(t.TempDir(), "matrix")
-			if _, err := backend.Run(context.Background(), installRequest(root, fixtures[0])); err != nil {
-				t.Fatal(err)
-			}
-			materializeInstalledRelease(t, root, fixtures[0])
+			seedPublishedInstalledRelease(t, root, fixtures[0])
 			before := readJournal(t, root)
 			_, err = backend.Run(context.Background(), cli.Request{Action: lifecycle.ActionRecoverCredentials, Root: root, RecoveryInput: filepath.Join(root, "private-input.json")})
-			assertFault(t, err, cli.FaultPrecondition, "CREDENTIAL_RECOVERY_PROFILE_UNSUPPORTED")
+			assertFault(t, err, cli.FaultVerification, "INSTALLATION_RELEASE_INVALID")
 			if !reflect.DeepEqual(before, readJournal(t, root)) || effects.credentialPrepareCalls != 0 || len(effects.credentialCalls) != 0 {
-				t.Fatal("unsupported profile reached recovery preparation or changed its journal")
+				t.Fatal("unrecognized installed profile reached recovery preparation or changed its journal")
 			}
 		})
+	}
+}
+
+func TestCredentialRecoveryProfilePolicyRejectsEveryUnretainedContract(t *testing.T) {
+	for _, profile := range []release.DatabaseProfile{
+		{SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one"},
+		{Compatibility: "identical-authority-profile", Authorities: release.AuthoritySchemas{IAM: 3, Audit: 2, PaaS: 2}, ContractRevision: 3},
+		{Compatibility: "identical-authority-profile", Authorities: release.AuthoritySchemas{IAM: 4, Audit: 3, PaaS: 1}, ContractRevision: 4},
+	} {
+		if ValidateCredentialRecoveryProfile(profile) == nil {
+			t.Fatalf("unretained credential recovery profile was admitted: %#v", profile)
+		}
 	}
 }
 
@@ -505,12 +514,7 @@ func TestCrossProfileUpgradeFailureRequiresAuthenticatedRecovery(t *testing.T) {
 	}
 	backend := newTestBackend(t, effects)
 	root := filepath.Join(t.TempDir(), "matrix")
-	if _, err := backend.Run(
-		context.Background(), installRequest(root, fixtures[0]),
-	); err != nil {
-		t.Fatalf("install cross-profile source: %v", err)
-	}
-	materializeInstalledRelease(t, root, fixtures[0])
+	seedPublishedInstalledRelease(t, root, fixtures[0])
 	request := cli.Request{
 		Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[1].Root,
 	}
@@ -727,7 +731,14 @@ func TestUnsupportedDatabaseProfilesRejectBeforeEffectsOrJournalChange(t *testin
 				}
 				before := readJournal(t, root)
 				request := cli.Request{Action: action, Root: root, Bundle: fixtures[1].Root}
+				failureClass := cli.FaultPrecondition
 				failureCode := string(action) + "_SCHEMA_INCOMPATIBLE"
+				if action == lifecycle.ActionUpgrade && profile.source != current {
+					failureClass, failureCode = cli.FaultVerification, "INSTALLATION_RELEASE_INVALID"
+				}
+				if action == lifecycle.ActionRollback {
+					failureClass, failureCode = cli.FaultVerification, "INSTALLATION_RELEASE_INVALID"
+				}
 				if action == lifecycle.ActionRecover {
 					request.BackupID = "backup-" + strings.Repeat("d", 32)
 					effects.recoverySource = RecoverySource{
@@ -736,10 +747,15 @@ func TestUnsupportedDatabaseProfilesRejectBeforeEffectsOrJournalChange(t *testin
 						ReleaseID:    fixtures[0].Manifest.Release.ID, ReleaseDigest: fixtures[0].ManifestDigest,
 						Database: fixtures[0].Manifest.Database,
 					}
-					failureCode = "RECOVERY_TARGET_UNSUPPORTED"
+					failureClass = cli.FaultVerification
+					if profile.target == current {
+						failureCode = "RECOVERY_RELEASE_INVALID"
+					} else {
+						failureCode = "INSTALLATION_RELEASE_INVALID"
+					}
 				}
 				_, err = backend.Run(context.Background(), request)
-				assertFault(t, err, cli.FaultPrecondition, failureCode)
+				assertFault(t, err, failureClass, failureCode)
 				if !reflect.DeepEqual(readJournal(t, root), before) || len(effects.upgradeCalls) != 0 ||
 					len(effects.explicitRollbackCalls) != 0 || len(effects.recoveryCalls) != 0 || effects.observeCalls != 0 {
 					t.Fatal("incompatible profile changed state or reached lifecycle effects")
@@ -749,25 +765,23 @@ func TestUnsupportedDatabaseProfilesRejectBeforeEffectsOrJournalChange(t *testin
 	}
 }
 
-func TestPublishedScalarProfileStillAllowsItsOwnReleasePair(t *testing.T) {
+func TestPublishedScalarManifestDoesNotImplyRuntimeTopologyCompatibility(t *testing.T) {
 	legacy := release.DatabaseProfile{SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one"}
 	fixtures, err := releasetest.WriteSequence(t.TempDir(), 2, legacy, legacy)
 	if err != nil {
 		t.Fatal(err)
 	}
-	backend := newTestBackend(t, &installEffects{observeReady: true})
+	effects := &installEffects{observeReady: true}
+	backend := newTestBackend(t, effects)
 	root := filepath.Join(t.TempDir(), "matrix")
-	if _, err := backend.Run(context.Background(), installRequest(root, fixtures[0])); err != nil {
-		t.Fatal(err)
-	}
-	materializeInstalledRelease(t, root, fixtures[0])
-	if _, err := backend.Run(context.Background(), cli.Request{Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[1].Root}); err != nil {
-		t.Fatalf("upgrade published profile pair: %v", err)
-	}
-	materializeInstalledRelease(t, root, fixtures[1])
-	result, err := backend.Run(context.Background(), cli.Request{Action: lifecycle.ActionRollback, Root: root})
-	if err != nil || result.ReleaseID != fixtures[0].Manifest.Release.ID {
-		t.Fatalf("rollback published profile pair: %#v / %v", result, err)
+	seedPublishedInstalledRelease(t, root, fixtures[0])
+	before := readJournal(t, root)
+	_, err = backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[1].Root,
+	})
+	assertFault(t, err, cli.FaultVerification, "INSTALLATION_RELEASE_INVALID")
+	if !reflect.DeepEqual(before, readJournal(t, root)) || len(effects.upgradeCalls) != 0 {
+		t.Fatal("published manifest envelope bypassed the retained runtime topology boundary")
 	}
 }
 
@@ -781,11 +795,7 @@ func TestFrozenAdjacentProfilePairAllowsUpgradeButRollbackRequiresAuthenticatedR
 	effects := &installEffects{observeReady: true}
 	backend := newTestBackend(t, effects)
 	root := filepath.Join(t.TempDir(), "matrix")
-	installed, err := backend.Run(context.Background(), installRequest(root, fixtures[0]))
-	if err != nil || installed.ReleaseID != fixtures[0].Manifest.Release.ID || !installed.Changed {
-		t.Fatalf("install adjacent profile release: %#v / %v", installed, err)
-	}
-	materializeInstalledRelease(t, root, fixtures[0])
+	seedPublishedInstalledRelease(t, root, fixtures[0])
 	upgraded, err := backend.Run(context.Background(), cli.Request{
 		Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[1].Root,
 	})

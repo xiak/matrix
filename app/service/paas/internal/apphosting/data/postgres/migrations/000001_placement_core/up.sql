@@ -761,8 +761,22 @@ CREATE TABLE IF NOT EXISTS paas.node_enrollments (
     document jsonb NOT NULL,
     join_document jsonb NOT NULL,
     wrapped_credential_document jsonb,
+    exchange_document jsonb,
+    sealed_exchange_result_document jsonb,
     replaced_by_id text COLLATE "C" GENERATED ALWAYS AS (
         NULLIF(document->>'replacedById', '')
+    ) STORED,
+    exchange_id text COLLATE "C" GENERATED ALWAYS AS (
+        NULLIF(exchange_document->>'exchangeId', '')
+    ) STORED,
+    machine_fingerprint text COLLATE "C" GENERATED ALWAYS AS (
+        NULLIF(exchange_document->>'machineFingerprint', '')
+    ) STORED,
+    node_public_key_fingerprint text COLLATE "C" GENERATED ALWAYS AS (
+        NULLIF(exchange_document->>'nodePublicKeyFingerprint', '')
+    ) STORED,
+    collector_public_key_fingerprint text COLLATE "C" GENERATED ALWAYS AS (
+        NULLIF(exchange_document->>'collectorPublicKeyFingerprint', '')
     ) STORED,
     PRIMARY KEY (installation_id, id),
     CONSTRAINT node_enrollments_target_uq UNIQUE (execution_target_id),
@@ -770,6 +784,10 @@ CREATE TABLE IF NOT EXISTS paas.node_enrollments (
     CONSTRAINT node_enrollments_termination_uq UNIQUE (
         installation_id, termination_idempotency_fingerprint
     ),
+    CONSTRAINT node_enrollments_exchange_uq UNIQUE (installation_id, exchange_id),
+    CONSTRAINT node_enrollments_machine_uq UNIQUE (installation_id, machine_fingerprint),
+    CONSTRAINT node_enrollments_node_key_uq UNIQUE (installation_id, node_public_key_fingerprint),
+    CONSTRAINT node_enrollments_collector_key_uq UNIQUE (installation_id, collector_public_key_fingerprint),
     CONSTRAINT node_enrollments_pool_fk FOREIGN KEY (installation_id, execution_pool_id)
         REFERENCES paas.execution_pools (installation_id, id),
     CONSTRAINT node_enrollments_operation_fk FOREIGN KEY (authority_key, operation_id)
@@ -835,6 +853,93 @@ CREATE TABLE IF NOT EXISTS paas.node_enrollments (
             )
         )
     ),
+    CONSTRAINT node_enrollments_exchange_valid CHECK ((
+        (
+            state = 'WAITING_INSTALL'
+            AND NOT (document ? 'credentialConsumedAt')
+            AND exchange_document IS NULL
+            AND sealed_exchange_result_document IS NULL
+        ) OR (
+            state = 'VERIFYING'
+            AND document ? 'credentialConsumedAt'
+            AND exchange_document IS NOT NULL
+            AND sealed_exchange_result_document IS NOT NULL
+        ) OR (
+            state IN ('READY', 'FAILED')
+            AND document ? 'credentialConsumedAt'
+            AND exchange_document IS NOT NULL
+            AND sealed_exchange_result_document IS NULL
+        ) OR (
+            state IN ('EXPIRED', 'REVOKED')
+            AND sealed_exchange_result_document IS NULL
+            AND ((document ? 'credentialConsumedAt') = (exchange_document IS NOT NULL))
+        )
+    ) IS TRUE),
+    CONSTRAINT node_enrollments_exchange_document_valid CHECK ((
+        exchange_document IS NULL OR (
+            exchange_document->>'apiVersion' = 'node.enrollment.matrix.xiak.com/v1'
+            AND exchange_document->>'kind' = 'NodeEnrollmentExchange'
+            AND exchange_document->>'enrollmentId' = id
+            AND exchange_document->>'installationId' = installation_id
+            AND exchange_document->>'executionTargetId' = execution_target_id
+            AND exchange_id COLLATE "C" ~ '^node-exchange-[0-9a-f]{32}$'
+            AND machine_fingerprint COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+            AND exchange_document->>'runtimeContractDigest' COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+            AND exchange_document->>'controllerId' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+            AND exchange_document->>'bindingRef' COLLATE "C" ~ '^node-binding-[0-9a-f]{32}$'
+            AND octet_length(exchange_document->>'nodeListenAddress') BETWEEN 8 AND 64
+            AND exchange_document->>'nodeListenAddress' !~ '[/?#@[:space:][:cntrl:]]'
+            AND CASE
+                WHEN exchange_document->>'nodeListenAddress' COLLATE "C"
+                    ~ '^[0-9]{1,3}(\.[0-9]{1,3}){3}:[1-9][0-9]{3,4}$'
+                THEN split_part(exchange_document->>'nodeListenAddress', ':', 1)::inet <<= inet '10.0.0.0/8'
+                  OR split_part(exchange_document->>'nodeListenAddress', ':', 1)::inet <<= inet '172.16.0.0/12'
+                  OR split_part(exchange_document->>'nodeListenAddress', ':', 1)::inet <<= inet '192.168.0.0/16'
+                WHEN exchange_document->>'nodeListenAddress' COLLATE "C"
+                    ~ '^\[(fc|fd)[0-9a-f:]*\]:[1-9][0-9]{3,4}$'
+                THEN substring(exchange_document->>'nodeListenAddress' from '^\[([^]]+)\]')::inet <<= inet 'fc00::/7'
+                ELSE false
+            END
+            AND substring(exchange_document->>'nodeListenAddress' from ':([0-9]+)$')::integer
+                BETWEEN 1024 AND 65535
+            AND exchange_document->>'collectorEndpoint' COLLATE "C" ~ '^https://(127\.0\.0\.1|\[::1\]):[1-9][0-9]{3,4}$'
+            AND substring(exchange_document->>'collectorEndpoint' from ':([0-9]+)$')::integer
+                BETWEEN 1024 AND 65535
+            AND substring(exchange_document->>'nodeListenAddress' from ':([0-9]+)$')::integer
+                <> substring(exchange_document->>'collectorEndpoint' from ':([0-9]+)$')::integer
+            AND length(exchange_document->>'nodePublicKey') = 59
+            AND exchange_document->>'nodePublicKey' COLLATE "C" ~ '^[A-Za-z0-9_-]{59}$'
+            AND node_public_key_fingerprint COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+            AND length(exchange_document->>'collectorPublicKey') = 59
+            AND exchange_document->>'collectorPublicKey' COLLATE "C" ~ '^[A-Za-z0-9_-]{59}$'
+            AND collector_public_key_fingerprint COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+            AND node_public_key_fingerprint <> collector_public_key_fingerprint
+            AND exchange_document->>'resultDigest' COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+            AND (exchange_document->>'consumedAt')::timestamptz
+                = (document->>'credentialConsumedAt')::timestamptz
+            AND (exchange_document - ARRAY[
+                'apiVersion', 'kind', 'enrollmentId', 'installationId',
+                'executionTargetId', 'exchangeId', 'machineFingerprint',
+                'runtimeContractDigest', 'controllerId', 'bindingRef',
+                'nodeListenAddress', 'collectorEndpoint', 'nodePublicKey',
+                'nodePublicKeyFingerprint', 'collectorPublicKey',
+                'collectorPublicKeyFingerprint', 'resultDigest', 'consumedAt'
+            ]) = '{}'::jsonb
+        )
+    ) IS TRUE),
+    CONSTRAINT node_enrollments_sealed_result_valid CHECK ((
+        sealed_exchange_result_document IS NULL OR (
+            sealed_exchange_result_document->>'algorithm' = 'AES_256_GCM'
+            AND sealed_exchange_result_document->>'keyId' COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+            AND length(sealed_exchange_result_document->>'nonce') = 16
+            AND sealed_exchange_result_document->>'nonce' COLLATE "C" ~ '^[A-Za-z0-9_-]{16}$'
+            AND length(sealed_exchange_result_document->>'ciphertext') BETWEEN 43 AND 87382
+            AND sealed_exchange_result_document->>'ciphertext' COLLATE "C" ~ '^[A-Za-z0-9_-]+$'
+            AND (sealed_exchange_result_document - ARRAY[
+                'algorithm', 'keyId', 'nonce', 'ciphertext'
+            ]) = '{}'::jsonb
+        )
+    ) IS TRUE),
     CONSTRAINT node_enrollments_document_identity CHECK ((
         document->>'apiVersion' = 'paas.matrix.xiak.com/v1'
         AND document->>'kind' = 'NodeEnrollment'
@@ -2887,6 +2992,139 @@ GRANT EXECUTE ON FUNCTION paas.create_node_enrollment(
     jsonb,jsonb,jsonb,jsonb,bytea,text,text,text,text,text,text,text
 ) TO matrix_paas_api;
 
+CREATE OR REPLACE FUNCTION paas.exchange_node_enrollment(
+    requested_enrollment_id text,
+    expected_resource_version bigint,
+    expected_credential_verifier text,
+    submitted_enrollment jsonb,
+    submitted_operation jsonb,
+    submitted_exchange jsonb,
+    submitted_sealed_result jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_installation_id text := paas.current_installation_id();
+    current_enrollment paas.node_enrollments%ROWTYPE;
+    current_operation paas.operations%ROWTYPE;
+    submitted_node_key_fingerprint text := submitted_exchange->>'nodePublicKeyFingerprint';
+    submitted_collector_key_fingerprint text := submitted_exchange->>'collectorPublicKeyFingerprint';
+BEGIN
+    IF effective_installation_id IS NULL
+       OR requested_enrollment_id COLLATE "C" !~ '^node-enrollment-[0-9a-f]{32}$'
+       OR expected_resource_version NOT BETWEEN 1 AND 9007199254740991
+       OR expected_credential_verifier COLLATE "C" !~ '^sha256:[0-9a-f]{64}$'
+       OR jsonb_typeof(submitted_enrollment) <> 'object'
+       OR jsonb_typeof(submitted_operation) <> 'object'
+       OR jsonb_typeof(submitted_exchange) <> 'object'
+       OR jsonb_typeof(submitted_sealed_result) <> 'object' THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'node enrollment exchange input is invalid';
+    END IF;
+    -- Cross-role key uniqueness cannot be expressed by the two same-role
+    -- UNIQUE constraints. Serialize this rare ceremony per installation so
+    -- even a READ COMMITTED caller cannot race the closed cross-role check.
+    PERFORM pg_catalog.pg_advisory_xact_lock(
+        pg_catalog.hashtext('matrix-node-enrollment-exchange/v1'),
+        pg_catalog.hashtext(effective_installation_id)
+    );
+    SELECT * INTO current_enrollment FROM paas.node_enrollments
+     WHERE installation_id = effective_installation_id AND id = requested_enrollment_id
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX404', MESSAGE = 'node enrollment is not registered';
+    END IF;
+    SELECT * INTO current_operation FROM paas.operations
+     WHERE authority_key = current_enrollment.authority_key
+       AND id = current_enrollment.operation_id
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'node enrollment operation is missing';
+    END IF;
+    IF current_enrollment.resource_version <> expected_resource_version THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX412', MESSAGE = 'node enrollment changed';
+    END IF;
+    IF current_enrollment.state <> 'WAITING_INSTALL'
+       OR current_operation.state <> 'ACCEPTED'
+       OR current_enrollment.credential_verifier <> expected_credential_verifier
+       OR transaction_timestamp() >= current_enrollment.expires_at THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'node enrollment cannot exchange its credential';
+    END IF;
+    IF NOT ((
+        submitted_enrollment - 'metadata' - 'state' - 'credentialConsumedAt'
+            = current_enrollment.document - 'metadata' - 'state' - 'credentialConsumedAt'
+        AND (submitted_enrollment->'metadata') - 'resourceVersion' - 'updatedAt'
+            = (current_enrollment.document->'metadata') - 'resourceVersion' - 'updatedAt'
+        AND submitted_enrollment#>>'{metadata,resourceVersion}'
+            = (current_enrollment.resource_version + 1)::text
+        AND (submitted_enrollment#>>'{metadata,updatedAt}')::timestamptz
+            = transaction_timestamp()
+        AND submitted_enrollment->>'state' = 'VERIFYING'
+        AND (submitted_enrollment->>'credentialConsumedAt')::timestamptz
+            = transaction_timestamp()
+        AND NOT (submitted_enrollment ?| ARRAY['readyAt', 'replacedById', 'diagnostic'])
+        AND submitted_operation - 'state' - 'updatedAt'
+            = current_operation.document - 'state' - 'updatedAt'
+        AND submitted_operation->>'state' = 'VERIFYING'
+        AND (submitted_operation->>'updatedAt')::timestamptz = transaction_timestamp()
+        AND NOT (submitted_operation ?| ARRAY['error', 'terminalAt'])
+        AND submitted_exchange->>'apiVersion' = 'node.enrollment.matrix.xiak.com/v1'
+        AND submitted_exchange->>'kind' = 'NodeEnrollmentExchange'
+        AND submitted_exchange->>'enrollmentId' = current_enrollment.id
+        AND submitted_exchange->>'installationId' = effective_installation_id
+        AND submitted_exchange->>'executionTargetId' = current_enrollment.execution_target_id
+        AND (submitted_exchange->>'consumedAt')::timestamptz = transaction_timestamp()
+        AND submitted_exchange->>'exchangeId' COLLATE "C" ~ '^node-exchange-[0-9a-f]{32}$'
+        AND submitted_exchange->>'machineFingerprint' COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND submitted_node_key_fingerprint COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND submitted_collector_key_fingerprint COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND submitted_node_key_fingerprint <> submitted_collector_key_fingerprint
+        AND submitted_sealed_result->>'algorithm' = 'AES_256_GCM'
+        AND submitted_sealed_result->>'keyId' COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND (submitted_sealed_result - ARRAY['algorithm', 'keyId', 'nonce', 'ciphertext']) = '{}'::jsonb
+    ) IS TRUE) THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'node enrollment exchange transition is invalid';
+    END IF;
+    PERFORM 1 FROM paas.node_enrollments
+     WHERE installation_id = effective_installation_id
+       AND id <> current_enrollment.id
+       AND (
+           exchange_id = submitted_exchange->>'exchangeId'
+           OR machine_fingerprint = submitted_exchange->>'machineFingerprint'
+           OR node_public_key_fingerprint IN (submitted_node_key_fingerprint, submitted_collector_key_fingerprint)
+           OR collector_public_key_fingerprint IN (submitted_node_key_fingerprint, submitted_collector_key_fingerprint)
+       )
+     FOR SHARE;
+    IF FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'node enrollment exchange identity is already registered';
+    END IF;
+    UPDATE paas.operations
+       SET state = 'VERIFYING', updated_at = transaction_timestamp(),
+           next_attempt_at = transaction_timestamp(), document = submitted_operation
+     WHERE authority_key = current_enrollment.authority_key
+       AND id = current_enrollment.operation_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'node enrollment operation is missing';
+    END IF;
+    UPDATE paas.node_enrollments
+       SET state = 'VERIFYING', resource_version = current_enrollment.resource_version + 1,
+           credential_salt = NULL, credential_verifier = NULL,
+           wrapped_credential_document = NULL, exchange_document = submitted_exchange,
+           sealed_exchange_result_document = submitted_sealed_result,
+           document = submitted_enrollment
+     WHERE installation_id = effective_installation_id AND id = current_enrollment.id;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.exchange_node_enrollment(
+    text,bigint,text,jsonb,jsonb,jsonb,jsonb
+) FROM PUBLIC, matrix_paas_worker;
+GRANT EXECUTE ON FUNCTION paas.exchange_node_enrollment(
+    text,bigint,text,jsonb,jsonb,jsonb,jsonb
+) TO matrix_paas_api;
+
 CREATE OR REPLACE FUNCTION paas.expire_node_enrollment(
     requested_enrollment_id text,
     expected_resource_version bigint,
@@ -2956,7 +3194,8 @@ BEGIN
     UPDATE paas.node_enrollments
        SET state = 'EXPIRED', resource_version = current_enrollment.resource_version + 1,
            credential_salt = NULL, credential_verifier = NULL,
-           wrapped_credential_document = NULL, document = submitted_enrollment
+           wrapped_credential_document = NULL,
+           sealed_exchange_result_document = NULL, document = submitted_enrollment
      WHERE installation_id = effective_installation_id AND id = current_enrollment.id;
 END
 $function$;
@@ -3084,7 +3323,8 @@ BEGIN
            termination_idempotency_fingerprint = submitted_termination_fingerprint,
            termination_request_digest = submitted_termination_request_digest,
            credential_salt = NULL, credential_verifier = NULL,
-           wrapped_credential_document = NULL, document = submitted_enrollment
+           wrapped_credential_document = NULL,
+           sealed_exchange_result_document = NULL, document = submitted_enrollment
      WHERE installation_id = effective_installation_id AND id = current_enrollment.id;
 END
 $function$;

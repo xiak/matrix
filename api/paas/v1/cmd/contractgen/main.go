@@ -173,6 +173,9 @@ func buildPaths() schema {
 			"NodeEnrollment",
 		),
 	}
+	paths["/v1/node-enrollments/{nodeEnrollmentId}/exchange"] = schema{
+		"post": exchangeNodeEnrollmentOperation(),
+	}
 	paths["/v1/node-enrollments/{nodeEnrollmentId}/revoke"] = schema{
 		"post": nodeEnrollmentLifecycleOperation(
 			"revokeNodeEnrollment",
@@ -279,6 +282,38 @@ func buildPaths() schema {
 		},
 	}
 	return paths
+}
+
+func exchangeNodeEnrollmentOperation() schema {
+	return schema{
+		"operationId": "exchangeNodeEnrollment",
+		"summary":     "Consume one node enrollment credential and issue role-bound certificates",
+		"description": "Node bootstrap only. The credential and PKCS#10 requests are accepted solely in this bounded TLS request body and are never returned or logged.",
+		"security":    []any{},
+		"parameters": []any{
+			pathIDParameter("nodeEnrollmentId"),
+		},
+		"requestBody": jsonRequestBody("ExchangeNodeEnrollmentRequest"),
+		"responses": schema{
+			"200": schema{
+				"description": "The credential was consumed exactly once and this public certificate result was sealed for recovery.",
+				"headers": schema{
+					"ETag": componentRef("#/components/headers/ETag"),
+				},
+				"content": schema{"application/json": schema{"schema": ref("NodeEnrollmentExchangeResponse")}},
+			},
+			"400": componentRef("#/components/responses/ProblemResponse"),
+			"401": componentRef("#/components/responses/ProblemResponse"),
+			"404": componentRef("#/components/responses/ProblemResponse"),
+			"409": componentRef("#/components/responses/ProblemResponse"),
+			"410": componentRef("#/components/responses/ProblemResponse"),
+			"413": componentRef("#/components/responses/ProblemResponse"),
+			"415": componentRef("#/components/responses/ProblemResponse"),
+			"500": componentRef("#/components/responses/ProblemResponse"),
+			"503": componentRef("#/components/responses/ProblemResponse"),
+			"504": componentRef("#/components/responses/ProblemResponse"),
+		},
+	}
 }
 
 func createNodeEnrollmentOperation(operationID, summary, bodySchema string, withPath bool) schema {
@@ -666,6 +701,7 @@ func structContracts() map[string]reflect.Type {
 		paasv1.NodeEnrollmentDiagnostic{}, paasv1.NodeEnrollment{}, paasv1.NodeEnrollmentList{},
 		paasv1.CreateNodeEnrollmentRequest{}, paasv1.RegenerateNodeEnrollmentRequest{}, paasv1.NodeEnrollmentJoin{},
 		paasv1.WrappedJoinCredential{}, paasv1.CreateNodeEnrollmentResponse{},
+		paasv1.NodeEnrollmentListenerClaim{}, paasv1.ExchangeNodeEnrollmentRequest{}, paasv1.NodeEnrollmentExchangeResponse{},
 		paasv1.AdapterRef{}, paasv1.Capacity{}, paasv1.ExecutionTargetSpec{}, paasv1.ExecutionTargetStatus{}, paasv1.ExecutionTarget{}, paasv1.ExecutionTargetList{},
 		paasv1.ExecutionTargetUsage{}, paasv1.CPUUsage{}, paasv1.CPUUsageValue{}, paasv1.MemoryUsage{}, paasv1.MemoryUsageValue{},
 		paasv1.FilesystemUsage{}, paasv1.FilesystemUsageValue{},
@@ -838,6 +874,14 @@ func applySemanticOverlays(schemas map[string]any) {
 	joinProperties := object(schemas["NodeEnrollmentJoin"])["properties"].(schema)
 	joinProperties["apiVersion"] = schema{"const": paasv1.NodeEnrollmentJoinAPIVersion}
 	joinProperties["kind"] = schema{"const": paasv1.NodeEnrollmentJoinKind}
+	exchangeRequest := object(schemas["ExchangeNodeEnrollmentRequest"])
+	exchangeRequestProperties := exchangeRequest["properties"].(schema)
+	exchangeRequestProperties["apiVersion"] = schema{"const": paasv1.NodeEnrollmentExchangeAPIVersion}
+	exchangeRequestProperties["kind"] = schema{"const": paasv1.NodeEnrollmentExchangeRequestKind}
+	exchangeResponse := object(schemas["NodeEnrollmentExchangeResponse"])
+	exchangeResponseProperties := exchangeResponse["properties"].(schema)
+	exchangeResponseProperties["apiVersion"] = schema{"const": paasv1.NodeEnrollmentExchangeAPIVersion}
+	exchangeResponseProperties["kind"] = schema{"const": paasv1.NodeEnrollmentExchangeResponseKind}
 
 	for _, name := range []string{"ConfigurationRevisionSpec", "ApplicationRevisionSpec", "DeploymentGeneration", "PlacementDecision"} {
 		object(schemas[name])["x-matrix-immutable"] = true
@@ -851,6 +895,43 @@ func applySemanticOverlays(schemas map[string]any) {
 	}
 	object(schemas["CreateNodeEnrollmentRequest"])["properties"].(schema)["wrappingPublicKey"] = wrappingKeySchema
 	object(schemas["RegenerateNodeEnrollmentRequest"])["properties"].(schema)["wrappingPublicKey"] = wrappingKeySchema
+	exchangeRequestProperties["enrollmentId"] = schema{"type": "string", "pattern": `^node-enrollment-[0-9a-f]{32}$`}
+	exchangeRequestProperties["exchangeId"] = schema{"type": "string", "pattern": `^node-exchange-[0-9a-f]{32}$`}
+	exchangeRequestProperties["credential"] = schema{
+		"type": "string", "minLength": 43, "maxLength": 43,
+		"pattern": `^[A-Za-z0-9_-]{43}$`, "writeOnly": true,
+	}
+	certificateRequestSchema := schema{
+		"type": "string", "minLength": 86, "maxLength": 5462,
+		"pattern": `^[A-Za-z0-9_-]+$`, "writeOnly": true,
+	}
+	exchangeRequestProperties["nodeCertificateRequest"] = certificateRequestSchema
+	exchangeRequestProperties["collectorCertificateRequest"] = certificateRequestSchema
+	listenerProperties := object(schemas["NodeEnrollmentListenerClaim"])["properties"].(schema)
+	for _, name := range []string{"managementPort", "collectorPort"} {
+		listenerProperties[name] = schema{
+			"type": "integer", "minimum": paasv1.MinimumNodeEnrollmentListenerPort, "maximum": 65535,
+		}
+	}
+	exchangeResponseProperties["enrollmentId"] = schema{"type": "string", "pattern": `^node-enrollment-[0-9a-f]{32}$`}
+	exchangeResponseProperties["exchangeId"] = schema{"type": "string", "pattern": `^node-exchange-[0-9a-f]{32}$`}
+	exchangeResponseProperties["bindingRef"] = schema{"type": "string", "pattern": `^node-binding-[0-9a-f]{32}$`}
+	exchangeResponseProperties["nodeListenAddress"] = schema{
+		"type": "string", "minLength": 8, "maxLength": 64,
+	}
+	exchangeResponseProperties["collectorEndpoint"] = schema{
+		"type": "string", "format": "uri", "minLength": 16, "maxLength": 80,
+		"pattern": `^https://(?:127\\.0\\.0\\.1|\\[::1\\]):[1-9][0-9]{3,4}$`,
+	}
+	certificateSchema := schema{
+		"type": "string", "minLength": 86, "maxLength": 5462,
+		"pattern": `^[A-Za-z0-9_-]+$`,
+	}
+	for _, name := range []string{"nodeCertificate", "collectorCertificate", "issuerCertificate"} {
+		exchangeResponseProperties[name] = certificateSchema
+	}
+	exchangeRequest["x-matrix-visibility"] = "node-bootstrap"
+	exchangeResponse["x-matrix-visibility"] = "node-bootstrap"
 	joinProperties["controlPlaneUrl"] = schema{
 		"type": "string", "format": "uri", "maxLength": 2048,
 		"pattern": `^https://[^?#]+/api/paas/v1/node-enrollments/node-enrollment-[0-9a-f]{32}/exchange$`,

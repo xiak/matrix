@@ -15,6 +15,8 @@ import (
 	"errors"
 	"maps"
 	"math/big"
+	"net"
+	"net/url"
 	"reflect"
 	"sort"
 	"strings"
@@ -105,32 +107,129 @@ func TestEnrollmentReadsExpireWithoutReturningCredentialMaterial(t *testing.T) {
 	}
 }
 
-func TestStoredEnrollmentCredentialMaterialOnlyExistsWhileWaitingInstall(t *testing.T) {
-	service, repository, _ := enrollmentFixture(t)
+func TestExchangeConsumesCredentialOnceAndPersistsOnlyNormalizedPublicIdentity(t *testing.T) {
+	service, repository, issuer := enrollmentFixture(t)
 	created, err := service.Create(context.Background(), createCommand(t))
 	if err != nil {
 		t.Fatal(err)
 	}
+	command := exchangeCommand(t, created, issuer, "a")
+	repository.now = repository.now.Add(time.Minute)
+	result, err := service.Exchange(context.Background(), command)
+	if err != nil {
+		t.Fatal(err)
+	}
 	stored := repository.values[created.Response.Enrollment.Metadata.ID]
-	consumedAt := repository.now.Add(time.Minute)
-	stored.Enrollment.State = paasv1.NodeEnrollmentVerifying
-	stored.Enrollment.CredentialConsumedAt = &consumedAt
-	stored.Enrollment.Metadata.ResourceVersion++
-	stored.Enrollment.Metadata.UpdatedAt = consumedAt
-	stored.Operation.State = paasv1.OperationVerifying
-	stored.Operation.UpdatedAt = consumedAt
-	if ValidateStoredEnrollment(stored, "installation-a") == nil {
+	if result.Enrollment.State != paasv1.NodeEnrollmentVerifying ||
+		result.Enrollment.Metadata.ResourceVersion != 2 || result.Enrollment.CredentialConsumedAt == nil ||
+		stored.Operation.State != paasv1.OperationVerifying || stored.Exchange == nil ||
+		stored.SealedExchangeResult == nil || repository.exchangeCalls != 1 || issuer.exchangeCalls != 1 {
+		t.Fatalf("exchange result is incomplete: result=%#v stored=%#v", result, stored)
+	}
+	if len(stored.CredentialSalt) != 0 || stored.CredentialVerifier != "" ||
+		stored.WrappedCredential != (paasv1.WrappedJoinCredential{}) ||
+		stored.Exchange.ExchangeID != command.Request.ExchangeID ||
+		stored.Exchange.MachineFingerprint != command.Request.MachineFingerprint ||
+		stored.Exchange.NodePublicKey == "" || stored.Exchange.CollectorPublicKey == "" ||
+		stored.Exchange.ResultDigest == "" || ValidateStoredEnrollment(stored, "installation-a") != nil {
+		t.Fatalf("exchange persistence retained credential or lost identity: %#v", stored)
+	}
+	encoded := strings.ToLower(string(mustJSON(t, stored.Exchange)))
+	for _, forbidden := range []string{strings.ToLower(command.Request.Credential), "certificaterequest", "credential", "privatekey"} {
+		if strings.Contains(encoded, forbidden) {
+			t.Fatalf("normalized exchange document leaked %q", forbidden)
+		}
+	}
+	if _, err := service.Exchange(context.Background(), command); !errors.Is(err, ErrCredentialConsumed) {
+		t.Fatalf("credential replay error = %v", err)
+	}
+	if repository.exchangeCalls != 1 || issuer.exchangeCalls != 1 {
+		t.Fatal("credential replay reached issuance or persistence")
+	}
+}
+
+func TestExchangeRejectsWrongCredentialAndAuthorityBeforeIssuance(t *testing.T) {
+	service, repository, issuer := enrollmentFixture(t)
+	created, err := service.Create(context.Background(), createCommand(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := exchangeCommand(t, created, issuer, "a")
+	for name, scenario := range map[string]struct {
+		mutate func(*ExchangeCommand)
+		want   error
+	}{
+		"credential": {func(value *ExchangeCommand) {
+			value.Request.Credential = base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x99}, 32))
+		}, ErrCredentialRejected},
+		"installation": {func(value *ExchangeCommand) { value.Request.InstallationID = "installation-other" }, ErrConflict},
+		"target":       {func(value *ExchangeCommand) { value.Request.ExecutionTargetID = "target-other" }, ErrConflict},
+		"runtime": {func(value *ExchangeCommand) {
+			value.Request.RuntimeContractDigest = "sha256:" + strings.Repeat("e", 64)
+		}, ErrRuntimeUnsupported},
+		"listener":    {func(value *ExchangeCommand) { value.Request.Listener.ManagementPort = 17443 }, ErrInvalidArgument},
+		"public peer": {func(value *ExchangeCommand) { value.ObservedPeerAddress = "8.8.8.8" }, ErrInvalidArgument},
+	} {
+		t.Run(name, func(t *testing.T) {
+			command := valid
+			scenario.mutate(&command)
+			if _, err := service.Exchange(context.Background(), command); !errors.Is(err, scenario.want) {
+				t.Fatalf("exchange error = %v, want %v", err, scenario.want)
+			}
+			stored := repository.values[created.Response.Enrollment.Metadata.ID]
+			if stored.Enrollment.State != paasv1.NodeEnrollmentWaitingInstall || issuer.exchangeCalls != 0 || repository.exchangeCalls != 0 {
+				t.Fatal("rejected exchange changed state or reached certificate issuance")
+			}
+		})
+	}
+}
+
+func TestExchangeCommitsExpiryWithoutCertificateIssuance(t *testing.T) {
+	service, repository, issuer := enrollmentFixture(t)
+	created, err := service.Create(context.Background(), createCommand(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := exchangeCommand(t, created, issuer, "a")
+	repository.now = created.Response.Enrollment.ExpiresAt
+	if _, err := service.Exchange(context.Background(), command); !errors.Is(err, ErrExpired) {
+		t.Fatalf("expired exchange error = %v", err)
+	}
+	stored := repository.values[created.Response.Enrollment.Metadata.ID]
+	if stored.Enrollment.State != paasv1.NodeEnrollmentExpired || repository.expireCalls != 1 ||
+		repository.exchangeCalls != 0 || issuer.exchangeCalls != 0 || stored.Exchange != nil || stored.SealedExchangeResult != nil {
+		t.Fatalf("expired exchange did not close safely: %#v", stored)
+	}
+}
+
+func TestStoredEnrollmentCredentialMaterialOnlyExistsWhileWaitingInstall(t *testing.T) {
+	service, repository, issuer := enrollmentFixture(t)
+	created, err := service.Create(context.Background(), createCommand(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiting := cloneStored(repository.values[created.Response.Enrollment.Metadata.ID])
+	repository.now = repository.now.Add(time.Minute)
+	if _, err := service.Exchange(context.Background(), exchangeCommand(t, created, issuer, "a")); err != nil {
+		t.Fatal(err)
+	}
+	stored := repository.values[created.Response.Enrollment.Metadata.ID]
+	if ValidateStoredEnrollment(stored, "installation-a") != nil || stored.Exchange == nil || stored.SealedExchangeResult == nil {
+		t.Fatal("valid verifying enrollment did not retain only its normalized and sealed exchange")
+	}
+	retaining := cloneStored(stored)
+	retaining.CredentialSalt = bytes.Clone(waiting.CredentialSalt)
+	retaining.CredentialVerifier = waiting.CredentialVerifier
+	retaining.WrappedCredential = waiting.WrappedCredential
+	if ValidateStoredEnrollment(retaining, "installation-a") == nil {
 		t.Fatal("verifying enrollment retained one-time credential material")
 	}
-	salt := stored.CredentialSalt
+	nodePublicKey := stored.Exchange.NodePublicKey
 	stored.Clear()
 	if len(stored.CredentialSalt) != 0 || stored.CredentialVerifier != "" ||
 		stored.WrappedCredential != (paasv1.WrappedJoinCredential{}) ||
-		!bytes.Equal(salt, make([]byte, len(salt))) {
+		stored.Exchange != nil || stored.SealedExchangeResult != nil || nodePublicKey == "" {
 		t.Fatal("clearing stored enrollment left credential material reachable")
-	}
-	if err := ValidateStoredEnrollment(stored, "installation-a"); err != nil {
-		t.Fatalf("cleared verifying enrollment is invalid: %v", err)
 	}
 }
 
@@ -141,18 +240,12 @@ func TestRevokeClosesWaitingOrVerifyingEnrollmentAndExactlyReplays(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	repository.now = repository.now.Add(time.Minute)
+	if _, err := service.Exchange(context.Background(), exchangeCommand(t, created, issuer, "a")); err != nil {
+		t.Fatal(err)
+	}
 	stored := repository.values[created.Response.Enrollment.Metadata.ID]
-	consumedAt := repository.now.Add(time.Minute)
-	stored.Enrollment.State = paasv1.NodeEnrollmentVerifying
-	stored.Enrollment.CredentialConsumedAt = &consumedAt
-	stored.Enrollment.Metadata.ResourceVersion = 2
-	stored.Enrollment.Metadata.UpdatedAt = consumedAt
-	stored.Operation.State = paasv1.OperationVerifying
-	stored.Operation.UpdatedAt = consumedAt
-	stored.CredentialSalt = nil
-	stored.CredentialVerifier = ""
-	stored.WrappedCredential = paasv1.WrappedJoinCredential{}
-	repository.values[stored.Enrollment.Metadata.ID] = cloneStored(stored)
+	consumedAt := repository.now
 	repository.now = consumedAt.Add(time.Minute)
 	command := RevokeCommand{
 		Authorization: create.Authorization, EnrollmentID: stored.Enrollment.Metadata.ID,
@@ -169,7 +262,8 @@ func TestRevokeClosesWaitingOrVerifyingEnrollmentAndExactlyReplays(t *testing.T)
 		current.Operation.State != paasv1.OperationCancelled || current.Operation.TerminalAt == nil ||
 		current.TerminationFingerprint == "" || current.TerminationRequestDigest == "" ||
 		len(current.CredentialSalt) != 0 || current.CredentialVerifier != "" ||
-		current.WrappedCredential != (paasv1.WrappedJoinCredential{}) || repository.revokeCalls != 1 {
+		current.WrappedCredential != (paasv1.WrappedJoinCredential{}) || current.Exchange == nil ||
+		current.SealedExchangeResult != nil || repository.revokeCalls != 1 {
 		t.Fatalf("revoked enrollment = %#v stored=%#v", revoked, current)
 	}
 	replay, err := service.Revoke(context.Background(), command)
@@ -276,6 +370,7 @@ type fakeRepository struct {
 	expireCalls      int
 	revokeCalls      int
 	replaceCalls     int
+	exchangeCalls    int
 }
 
 func (repository *fakeRepository) WithinInstallation(ctx context.Context, installationID string, callback func(context.Context, Transaction) error) error {
@@ -347,6 +442,29 @@ func (repository *fakeRepository) InsertEnrollment(_ context.Context, stored Sto
 	return nil
 }
 
+func (repository *fakeRepository) ExchangeEnrollment(_ context.Context, before StoredEnrollment, after StoredEnrollment) error {
+	current, found := repository.values[before.Enrollment.Metadata.ID]
+	if !found || current.Enrollment.Metadata.ResourceVersion != before.Enrollment.Metadata.ResourceVersion ||
+		current.Enrollment.State != paasv1.NodeEnrollmentWaitingInstall ||
+		ValidateStoredEnrollment(after, "installation-a") != nil || after.Exchange == nil {
+		return ErrRetryableTransaction
+	}
+	for id, stored := range repository.values {
+		if id == before.Enrollment.Metadata.ID || stored.Exchange == nil {
+			continue
+		}
+		if stored.Exchange.ExchangeID == after.Exchange.ExchangeID ||
+			stored.Exchange.MachineFingerprint == after.Exchange.MachineFingerprint ||
+			stored.Exchange.NodePublicKeyFingerprint == after.Exchange.NodePublicKeyFingerprint ||
+			stored.Exchange.CollectorPublicKeyFingerprint == after.Exchange.CollectorPublicKeyFingerprint {
+			return ErrConflict
+		}
+	}
+	repository.exchangeCalls++
+	repository.values[after.Enrollment.Metadata.ID] = cloneStored(after)
+	return nil
+}
+
 func (repository *fakeRepository) ExpireEnrollment(_ context.Context, before StoredEnrollment, enrollment paasv1.NodeEnrollment, operation paasv1.Operation) error {
 	current, found := repository.values[before.Enrollment.Metadata.ID]
 	if !found || current.Enrollment.Metadata.ResourceVersion != before.Enrollment.Metadata.ResourceVersion {
@@ -358,6 +476,7 @@ func (repository *fakeRepository) ExpireEnrollment(_ context.Context, before Sto
 	current.CredentialSalt = nil
 	current.CredentialVerifier = ""
 	current.WrappedCredential = paasv1.WrappedJoinCredential{}
+	current.SealedExchangeResult = nil
 	repository.values[enrollment.Metadata.ID] = current
 	return nil
 }
@@ -411,14 +530,17 @@ type fakeJoinIssuer struct {
 	certificate    []byte
 	privateKey     ed25519.PrivateKey
 	calls          int
+	exchangeCalls  int
+	credentials    map[paasv1.ResourceID][]byte
 }
 
-func (issuer *fakeJoinIssuer) Issue(_ context.Context, request JoinIssueRequest) (IssuedJoin, error) {
+func (issuer *fakeJoinIssuer) IssueJoin(_ context.Context, request JoinIssueRequest) (IssuedJoin, error) {
 	issuer.calls++
 	if ValidateControlPlaneBaseURL(request.ControlPlaneBaseURL) != nil {
 		return IssuedJoin{}, ErrInvalidArgument
 	}
-	digest := sha256.Sum256([]byte("credential-" + string(request.EnrollmentID)))
+	credential := sha256.Sum256([]byte("credential-" + string(request.EnrollmentID) + "-" + string(rune(issuer.calls))))
+	digest := sha256.Sum256(credential[:])
 	join := paasv1.NodeEnrollmentJoin{
 		APIVersion: paasv1.NodeEnrollmentJoinAPIVersion, Kind: paasv1.NodeEnrollmentJoinKind,
 		EnrollmentID: request.EnrollmentID, InstallationID: issuer.installationID,
@@ -433,16 +555,82 @@ func (issuer *fakeJoinIssuer) Issue(_ context.Context, request JoinIssueRequest)
 		return IssuedJoin{}, err
 	}
 	join.Signature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(issuer.privateKey, commitment))
-	verifier := sha256.Sum256([]byte("salted-" + string(request.EnrollmentID)))
+	salt := bytes.Repeat([]byte{0x5a}, 32)
+	verifierInput := append(bytes.Clone(salt), credential[:]...)
+	verifier := sha256.Sum256(verifierInput)
+	clear(verifierInput)
+	issuer.credentials[request.EnrollmentID] = bytes.Clone(credential[:])
 	return IssuedJoin{
 		Join: join,
 		WrappedCredential: paasv1.WrappedJoinCredential{
 			Algorithm:  paasv1.JoinCredentialRSAOAEP256,
 			Ciphertext: base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{byte(issuer.calls)}, 384)),
 		},
-		CredentialSalt:     bytes.Repeat([]byte{0x5a}, 32),
+		CredentialSalt:     salt,
 		CredentialVerifier: "sha256:" + hex.EncodeToString(verifier[:]),
 	}, nil
+}
+
+func (issuer *fakeJoinIssuer) IssueExchange(_ context.Context, request ExchangeIssueRequest) (IssuedExchange, error) {
+	issuer.exchangeCalls++
+	issuerCertificate, err := x509.ParseCertificate(issuer.certificate)
+	if err != nil {
+		return IssuedExchange{}, err
+	}
+	parseKey := func(encoded []byte) (ed25519.PublicKey, error) {
+		parsed, err := x509.ParsePKIXPublicKey(encoded)
+		key, ok := parsed.(ed25519.PublicKey)
+		if err != nil || !ok {
+			return nil, ErrInvalidArgument
+		}
+		return key, nil
+	}
+	nodeKey, err := parseKey(request.NodePublicKey)
+	if err != nil {
+		return IssuedExchange{}, err
+	}
+	collectorKey, err := parseKey(request.CollectorPublicKey)
+	if err != nil {
+		return IssuedExchange{}, err
+	}
+	roleCertificate := func(role string, key ed25519.PublicKey, address net.IP, usages []x509.ExtKeyUsage, serial int64) (string, error) {
+		identityURI, err := url.Parse("spiffe://matrix.xiak.com/installations/" + request.InstallationID + "/" + role + "/" + string(request.ExecutionTargetID))
+		if err != nil {
+			return "", err
+		}
+		template := &x509.Certificate{
+			SerialNumber: big.NewInt(serial), NotBefore: request.CertificateNotBefore, NotAfter: request.CertificateNotAfter,
+			BasicConstraintsValid: true, KeyUsage: x509.KeyUsageDigitalSignature,
+			ExtKeyUsage: usages, URIs: []*url.URL{identityURI}, IPAddresses: []net.IP{address},
+		}
+		encoded, err := x509.CreateCertificate(rand.Reader, template, issuerCertificate, key, issuer.privateKey)
+		return base64.RawURLEncoding.EncodeToString(encoded), err
+	}
+	nodeCertificate, err := roleCertificate("nodes", nodeKey, net.ParseIP(request.ObservedPeerAddress), []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}, 2)
+	if err != nil {
+		return IssuedExchange{}, err
+	}
+	collectorCertificate, err := roleCertificate("collectors", collectorKey, net.ParseIP("127.0.0.1"), []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, 3)
+	if err != nil {
+		return IssuedExchange{}, err
+	}
+	response := paasv1.NodeEnrollmentExchangeResponse{
+		APIVersion: paasv1.NodeEnrollmentExchangeAPIVersion, Kind: paasv1.NodeEnrollmentExchangeResponseKind,
+		EnrollmentID: request.EnrollmentID, InstallationID: request.InstallationID,
+		ExecutionTargetID: request.ExecutionTargetID, ExchangeID: request.ExchangeID,
+		MachineFingerprint: request.MachineFingerprint, RuntimeContractDigest: request.RuntimeContractDigest,
+		ControllerID: request.ControllerID, BindingRef: request.BindingRef,
+		NodeListenAddress: net.JoinHostPort(request.ObservedPeerAddress, "16443"),
+		CollectorEndpoint: "https://127.0.0.1:19100",
+		NodeCertificate:   nodeCertificate, CollectorCertificate: collectorCertificate,
+		IssuerCertificate:    base64.RawURLEncoding.EncodeToString(issuer.certificate),
+		CertificateNotBefore: request.CertificateNotBefore, CertificateNotAfter: request.CertificateNotAfter,
+	}
+	return IssuedExchange{Response: response, Sealed: SealedExchangeResult{
+		Algorithm: ExchangeResultSealAlgorithm, KeyID: "sha256:" + strings.Repeat("d", 64),
+		Nonce:      base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x7a}, 12)),
+		Ciphertext: base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x6b}, 64)),
+	}}, nil
 }
 
 func enrollmentFixture(t *testing.T) (*Service, *fakeRepository, *fakeJoinIssuer) {
@@ -454,8 +642,8 @@ func enrollmentFixture(t *testing.T) (*Service, *fakeRepository, *fakeJoinIssuer
 	}
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "matrix-enrollment-issuer"},
-		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour),
-		BasicConstraintsValid: true, IsCA: true,
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(365 * 24 * time.Hour),
+		BasicConstraintsValid: true, IsCA: true, MaxPathLenZero: true,
 		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
 	}
 	issuerURI, err := paasv1.NodeEnrollmentIssuerURI("installation-a")
@@ -479,9 +667,13 @@ func enrollmentFixture(t *testing.T) (*Service, *fakeRepository, *fakeJoinIssuer
 			Status: paasv1.ExecutionPoolStatus{Phase: paasv1.ExecutionPoolUnavailable, ObservedAt: now},
 		},
 	}
-	issuer := &fakeJoinIssuer{installationID: "installation-a", certificate: certificate, privateKey: privateKey}
+	issuer := &fakeJoinIssuer{installationID: "installation-a", certificate: certificate, privateKey: privateKey, credentials: map[paasv1.ResourceID][]byte{}}
 	service, err := New(repository, issuer, Config{
-		InstallationID: "installation-a", Lifetime: 15 * time.Minute, MaxTransactionAttempts: 3,
+		InstallationID: "installation-a", Lifetime: 15 * time.Minute,
+		CertificateLifetime:            30 * 24 * time.Hour,
+		SupportedRuntimeContractDigest: "sha256:" + strings.Repeat("c", 64),
+		ControllerID:                   "paas-controller-v1", ManagementPort: 16443, CollectorPort: 19100,
+		MaxTransactionAttempts: 3,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -533,10 +725,60 @@ func regenerateCommand(
 	}
 }
 
+func exchangeCommand(
+	t *testing.T,
+	created CreateResult,
+	issuer *fakeJoinIssuer,
+	hexIdentity string,
+) ExchangeCommand {
+	t.Helper()
+	if len(hexIdentity) != 1 || !strings.Contains("0123456789abcdef", hexIdentity) {
+		t.Fatal("test exchange identity must be one lowercase hex character")
+	}
+	certificateRequest := func() string {
+		_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, privateKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return base64.RawURLEncoding.EncodeToString(encoded)
+	}
+	credential := issuer.credentials[created.Response.Enrollment.Metadata.ID]
+	if len(credential) != 32 {
+		t.Fatal("test issuer did not retain its exchange fixture credential")
+	}
+	return ExchangeCommand{
+		EnrollmentID:        created.Response.Enrollment.Metadata.ID,
+		ObservedPeerAddress: "192.168.50.10",
+		Request: paasv1.ExchangeNodeEnrollmentRequest{
+			APIVersion: paasv1.NodeEnrollmentExchangeAPIVersion, Kind: paasv1.NodeEnrollmentExchangeRequestKind,
+			EnrollmentID: created.Response.Enrollment.Metadata.ID, InstallationID: "installation-a",
+			ExecutionTargetID:      created.Response.Enrollment.ExecutionTargetID,
+			ExchangeID:             "node-exchange-" + strings.Repeat(hexIdentity, 32),
+			Credential:             base64.RawURLEncoding.EncodeToString(credential),
+			MachineFingerprint:     "sha256:" + strings.Repeat(hexIdentity, 64),
+			RuntimeContractDigest:  "sha256:" + strings.Repeat("c", 64),
+			Listener:               paasv1.NodeEnrollmentListenerClaim{ManagementPort: 16443, CollectorPort: 19100},
+			NodeCertificateRequest: certificateRequest(), CollectorCertificateRequest: certificateRequest(),
+		},
+	}
+}
+
 func cloneStored(value StoredEnrollment) StoredEnrollment {
 	value.Enrollment = enrollmentSnapshot(value.Enrollment)
 	value.Enrollment.Metadata.Labels = maps.Clone(value.Enrollment.Metadata.Labels)
 	value.CredentialSalt = bytes.Clone(value.CredentialSalt)
+	if value.Exchange != nil {
+		exchange := *value.Exchange
+		value.Exchange = &exchange
+	}
+	if value.SealedExchangeResult != nil {
+		sealed := *value.SealedExchangeResult
+		value.SealedExchangeResult = &sealed
+	}
 	return value
 }
 

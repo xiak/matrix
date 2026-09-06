@@ -14,6 +14,12 @@ import (
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 )
 
+const (
+	StoredExchangeAPIVersion    = "node.enrollment.matrix.xiak.com/v1"
+	StoredExchangeKind          = "NodeEnrollmentExchange"
+	ExchangeResultSealAlgorithm = "AES_256_GCM"
+)
+
 var (
 	ErrInvalidArgument      = errors.New("node enrollment request is invalid")
 	ErrNotFound             = errors.New("node enrollment was not found")
@@ -23,7 +29,9 @@ var (
 	ErrResourceVersion      = errors.New("node enrollment resource version conflict")
 	ErrExpired              = errors.New("node enrollment expired")
 	ErrRevoked              = errors.New("node enrollment was revoked")
+	ErrCredentialRejected   = errors.New("node enrollment credential was rejected")
 	ErrCredentialConsumed   = errors.New("node enrollment credential was consumed")
+	ErrRuntimeUnsupported   = errors.New("node enrollment runtime is unsupported")
 	ErrRetryableTransaction = errors.New("node enrollment transaction must be retried")
 	ErrUnavailable          = errors.New("node enrollment dependency is unavailable")
 )
@@ -87,16 +95,57 @@ func ValidateIssuedJoin(value IssuedJoin, request JoinIssueRequest) error {
 	return errors.Join(problems...)
 }
 
-// JoinIssuer isolates protected enrollment signing material and entropy from
-// the use case and browser-facing transport.
-type JoinIssuer interface {
-	Issue(context.Context, JoinIssueRequest) (IssuedJoin, error)
+type ExchangeIssueRequest struct {
+	EnrollmentID          paasv1.ResourceID
+	InstallationID        string
+	ExecutionTargetID     paasv1.ResourceID
+	ExchangeID            string
+	MachineFingerprint    string
+	RuntimeContractDigest string
+	Listener              paasv1.NodeEnrollmentListenerClaim
+	NodePublicKey         []byte
+	CollectorPublicKey    []byte
+	ObservedPeerAddress   string
+	BindingRef            string
+	ControllerID          string
+	CertificateNotBefore  time.Time
+	CertificateNotAfter   time.Time
+}
+
+type SealedExchangeResult struct {
+	Algorithm  string `json:"algorithm"`
+	KeyID      string `json:"keyId"`
+	Nonce      string `json:"nonce"`
+	Ciphertext string `json:"ciphertext"`
+}
+
+func (SealedExchangeResult) String() string   { return "sealed node exchange result <redacted>" }
+func (SealedExchangeResult) GoString() string { return "sealed node exchange result <redacted>" }
+
+type IssuedExchange struct {
+	Response paasv1.NodeEnrollmentExchangeResponse
+	Sealed   SealedExchangeResult
+}
+
+func (IssuedExchange) String() string   { return "issued node exchange <redacted>" }
+func (IssuedExchange) GoString() string { return "issued node exchange <redacted>" }
+
+// EnrollmentIssuer isolates protected enrollment signing/sealing material and
+// entropy from both browser and node-facing transports.
+type EnrollmentIssuer interface {
+	IssueJoin(context.Context, JoinIssueRequest) (IssuedJoin, error)
+	IssueExchange(context.Context, ExchangeIssueRequest) (IssuedExchange, error)
 }
 
 type Config struct {
-	InstallationID         string
-	Lifetime               time.Duration
-	MaxTransactionAttempts int
+	InstallationID                 string
+	Lifetime                       time.Duration
+	CertificateLifetime            time.Duration
+	SupportedRuntimeContractDigest string
+	ControllerID                   string
+	ManagementPort                 uint16
+	CollectorPort                  uint16
+	MaxTransactionAttempts         int
 }
 
 type CreateCommand struct {
@@ -133,6 +182,45 @@ type RegenerateCommand struct {
 	ControlPlaneBaseURL     string
 }
 
+type ExchangeCommand struct {
+	EnrollmentID        paasv1.ResourceID
+	ObservedPeerAddress string
+	Request             paasv1.ExchangeNodeEnrollmentRequest
+}
+
+func (ExchangeCommand) String() string   { return "node enrollment exchange command <redacted>" }
+func (ExchangeCommand) GoString() string { return "node enrollment exchange command <redacted>" }
+
+type ExchangeResult struct {
+	Enrollment paasv1.NodeEnrollment
+	Response   paasv1.NodeEnrollmentExchangeResponse
+}
+
+// StoredExchange is the normalized public-key and machine identity fixed by a
+// successful one-time credential exchange. CSR bodies and the raw credential
+// are deliberately absent; the exact certificate response is stored only in
+// sealed form beside this document.
+type StoredExchange struct {
+	APIVersion                    string            `json:"apiVersion"`
+	Kind                          string            `json:"kind"`
+	EnrollmentID                  paasv1.ResourceID `json:"enrollmentId"`
+	InstallationID                string            `json:"installationId"`
+	ExecutionTargetID             paasv1.ResourceID `json:"executionTargetId"`
+	ExchangeID                    string            `json:"exchangeId"`
+	MachineFingerprint            string            `json:"machineFingerprint"`
+	RuntimeContractDigest         string            `json:"runtimeContractDigest"`
+	ControllerID                  string            `json:"controllerId"`
+	BindingRef                    string            `json:"bindingRef"`
+	NodeListenAddress             string            `json:"nodeListenAddress"`
+	CollectorEndpoint             string            `json:"collectorEndpoint"`
+	NodePublicKey                 string            `json:"nodePublicKey"`
+	NodePublicKeyFingerprint      string            `json:"nodePublicKeyFingerprint"`
+	CollectorPublicKey            string            `json:"collectorPublicKey"`
+	CollectorPublicKeyFingerprint string            `json:"collectorPublicKeyFingerprint"`
+	ResultDigest                  string            `json:"resultDigest"`
+	ConsumedAt                    time.Time         `json:"consumedAt"`
+}
+
 type StoredEnrollment struct {
 	Enrollment               paasv1.NodeEnrollment
 	Operation                paasv1.Operation
@@ -140,8 +228,10 @@ type StoredEnrollment struct {
 	WrappedCredential        paasv1.WrappedJoinCredential
 	CredentialSalt           []byte `json:"-"`
 	CredentialVerifier       string `json:"-"`
-	TerminationFingerprint   string `json:"-"`
-	TerminationRequestDigest string `json:"-"`
+	Exchange                 *StoredExchange
+	SealedExchangeResult     *SealedExchangeResult `json:"-"`
+	TerminationFingerprint   string                `json:"-"`
+	TerminationRequestDigest string                `json:"-"`
 	CreateAuthorization      port.Authorization
 }
 
@@ -156,6 +246,12 @@ func (value *StoredEnrollment) Clear() {
 	value.CredentialSalt = nil
 	value.CredentialVerifier = ""
 	value.WrappedCredential = paasv1.WrappedJoinCredential{}
+	if value.Exchange != nil {
+		value.Exchange.NodePublicKey = ""
+		value.Exchange.CollectorPublicKey = ""
+	}
+	value.Exchange = nil
+	value.SealedExchangeResult = nil
 }
 
 type Transaction interface {
@@ -166,6 +262,7 @@ type Transaction interface {
 	LoadExecutionPool(context.Context, paasv1.ResourceID) (paasv1.ExecutionPool, bool, error)
 	ListEnrollments(context.Context, int) ([]StoredEnrollment, error)
 	InsertEnrollment(context.Context, StoredEnrollment) error
+	ExchangeEnrollment(context.Context, StoredEnrollment, StoredEnrollment) error
 	ExpireEnrollment(context.Context, StoredEnrollment, paasv1.NodeEnrollment, paasv1.Operation) error
 	RevokeEnrollment(context.Context, StoredEnrollment, StoredEnrollment) error
 	ReplaceEnrollment(context.Context, StoredEnrollment, StoredEnrollment, StoredEnrollment) error
@@ -177,6 +274,6 @@ type Repository interface {
 
 type Service struct {
 	repository Repository
-	issuer     JoinIssuer
+	issuer     EnrollmentIssuer
 	config     Config
 }

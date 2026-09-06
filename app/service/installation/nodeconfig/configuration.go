@@ -36,6 +36,8 @@ const (
 	MinimumCompose                       = "2.33.0"
 	CollectorVersion                     = "1.12.1"
 	NativeRootSyntax                     = "absolute-posix-without-unit-syntax/v1"
+	DefaultManagementPort                = uint16(16443)
+	DefaultCollectorPort                 = uint16(19100)
 )
 
 // ServicePolicy is the fixed native supervision contract, not operator input.

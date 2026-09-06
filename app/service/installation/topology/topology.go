@@ -45,8 +45,23 @@ var platformServiceNames = []string{
 	"paas-audit-dispatcher", "paas-ui", "paas-worker", "postgres",
 }
 
+const (
+	enrollmentIssuerCertificateEnvironment = "MATRIX_PAAS_ENROLLMENT_ISSUER_CERTIFICATE_FILE"
+	enrollmentIssuerPrivateKeyEnvironment  = "MATRIX_PAAS_ENROLLMENT_ISSUER_PRIVATE_KEY_FILE"
+	enrollmentIssuerCertificateTarget      = "/run/matrix/node-enrollment-issuer.der"
+	enrollmentIssuerPrivateKeyTarget       = "/run/matrix/node-enrollment-issuer-key.der"
+)
+
 func ContractDigest() string {
 	return contractDescriptionDigest(contractDescription())
+}
+
+// SupportedPredecessorContractDigest is the exact signed topology emitted by
+// the one platform release that this source can upgrade in place. It remains
+// distinct from ContractDigest so an authenticated database profile cannot be
+// crossed with a different Compose contract.
+func SupportedPredecessorContractDigest() string {
+	return contractDescriptionDigest(predecessorContractDescription())
 }
 
 func contractDescriptionDigest(value contract) string {
@@ -98,6 +113,12 @@ func contractDescription() contract {
 	}
 }
 
+func predecessorContractDescription() contract {
+	description := contractDescription()
+	removeEnrollmentIssuer(description.Compose.Services)
+	return description
+}
+
 func Compile(manifest release.Manifest, options Options) (Result, error) {
 	if err := release.ValidateManifest(manifest); err != nil {
 		return Result{}, fmt.Errorf("release manifest cannot supply platform topology: %w", err)
@@ -109,8 +130,9 @@ func Compile(manifest release.Manifest, options Options) (Result, error) {
 }
 
 // CompileInstalled reconstructs the topology named by an authenticated
-// installed manifest. Database compatibility is checked by the release owner;
-// this package admits only the one currently supported topology digest.
+// installed manifest. The database profile and Compose contract are one
+// authenticated pair; only the current release and its exact predecessor are
+// admitted.
 func CompileInstalled(manifest release.Manifest, options Options) (Result, error) {
 	digest, err := installedContractDigest(manifest)
 	if err != nil {
@@ -128,10 +150,15 @@ func installedContractDigest(manifest release.Manifest) (string, error) {
 	if err := release.ValidateManifest(manifest); err != nil {
 		return "", fmt.Errorf("release manifest cannot supply installed platform topology: %w", err)
 	}
-	if manifest.TopologyDigest != ContractDigest() {
+	switch {
+	case manifest.Database == release.CurrentDatabaseProfile() && manifest.TopologyDigest == ContractDigest():
+		return ContractDigest(), nil
+	case manifest.Database == release.SupportedDatabasePredecessorProfile() &&
+		manifest.TopologyDigest == SupportedPredecessorContractDigest():
+		return SupportedPredecessorContractDigest(), nil
+	default:
 		return "", errors.New("installed platform topology contract is unsupported")
 	}
-	return ContractDigest(), nil
 }
 
 func compile(manifest release.Manifest, options Options, digest string) (Result, error) {
@@ -142,9 +169,17 @@ func compile(manifest release.Manifest, options Options, digest string) (Result,
 	for _, image := range manifest.Images {
 		images[image.Component] = image.ImageID
 	}
+	services := compileServices(manifest, images, options)
+	switch digest {
+	case ContractDigest():
+	case SupportedPredecessorContractDigest():
+		removeEnrollmentIssuer(services)
+	default:
+		return Result{}, errors.New("platform topology contract is unsupported")
+	}
 	document := composeDocument{
 		Name:     "matrix-" + strings.TrimPrefix(options.InstallationID, "mxi-"),
-		Services: compileServices(manifest, images, options),
+		Services: services,
 		Networks: map[string]networkConfig{
 			"control":    {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-control")},
 			"edge":       {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-edge")},
@@ -159,6 +194,20 @@ func compile(manifest release.Manifest, options Options, digest string) (Result,
 	return Result{
 		ProjectName: document.Name, ContractDigest: digest, ComposeJSON: content,
 	}, nil
+}
+
+func removeEnrollmentIssuer(services map[string]serviceConfig) {
+	paasAPI := services["paas-api"]
+	delete(paasAPI.Environment, enrollmentIssuerCertificateEnvironment)
+	delete(paasAPI.Environment, enrollmentIssuerPrivateKeyEnvironment)
+	volumes := paasAPI.Volumes[:0]
+	for _, volume := range paasAPI.Volumes {
+		if volume.Target != enrollmentIssuerCertificateTarget && volume.Target != enrollmentIssuerPrivateKeyTarget {
+			volumes = append(volumes, volume)
+		}
+	}
+	paasAPI.Volumes = volumes
+	services["paas-api"] = paasAPI
 }
 
 func validateOptions(options Options) error {

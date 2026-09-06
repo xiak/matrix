@@ -407,7 +407,11 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	}
 }
 
-func TestCompileInstalledUsesOneTopologyAcrossTheFrozenAdjacentDatabaseProfile(t *testing.T) {
+func TestCompileInstalledPinsCurrentAndFrozenPredecessorTopologyPairs(t *testing.T) {
+	const publishedPredecessorDigest = "sha256:10dcf578fdb965adfef09f7ff3394cf0e79ab598fc894399602dcd6796440f9a"
+	if got := SupportedPredecessorContractDigest(); got != publishedPredecessorDigest {
+		t.Fatalf("frozen predecessor topology digest = %q, want %q", got, publishedPredecessorDigest)
+	}
 	options := Options{InstallationID: "mxi-" + strings.Repeat("b", 32), Root: "/data/xiak/matrix-predecessor", Listener: "0.0.0.0", Port: 8080}
 	current := topologyManifest()
 	wantCurrent, err := Compile(current, options)
@@ -418,11 +422,15 @@ func TestCompileInstalledUsesOneTopologyAcrossTheFrozenAdjacentDatabaseProfile(t
 	if err != nil || !reflect.DeepEqual(gotCurrent, wantCurrent) {
 		t.Fatal("current installed topology changed through predecessor admission")
 	}
+	if ContractDigest() == SupportedPredecessorContractDigest() {
+		t.Fatal("current and frozen predecessor topology digests are not distinct")
+	}
 
 	predecessor := current
 	predecessor.Database = release.SupportedDatabasePredecessorProfile()
-	if compiledTarget, err := Compile(predecessor, options); err != nil || compiledTarget.ContractDigest != ContractDigest() {
-		t.Fatal("shared target topology rejected the adjacent database profile")
+	predecessor.TopologyDigest = SupportedPredecessorContractDigest()
+	if _, err := Compile(predecessor, options); err == nil {
+		t.Fatal("current target compiler accepted the frozen predecessor")
 	}
 	compiled, err := CompileInstalled(predecessor, options)
 	if err != nil || compiled.ContractDigest != predecessor.TopologyDigest {
@@ -439,12 +447,53 @@ func TestCompileInstalledUsesOneTopologyAcrossTheFrozenAdjacentDatabaseProfile(t
 	if environment["MATRIX_PAAS_TERMINAL_COOKIE_SECURE"] != "false" {
 		t.Fatal("adjacent predecessor lost the retained terminal cookie policy")
 	}
-
-	candidate := predecessor
-	candidate.TopologyDigest = digest('f')
-	if _, err := CompileInstalled(candidate, options); err == nil {
-		t.Fatal("mismatched installed topology was admitted")
+	if environment[enrollmentIssuerCertificateEnvironment] != "" ||
+		environment[enrollmentIssuerPrivateKeyEnvironment] != "" {
+		t.Fatal("frozen predecessor gained current node enrollment issuer input")
 	}
+	for _, volume := range document.Services["paas-api"].Volumes {
+		if volume.Target == enrollmentIssuerCertificateTarget || volume.Target == enrollmentIssuerPrivateKeyTarget {
+			t.Fatal("frozen predecessor gained current node enrollment issuer mount")
+		}
+	}
+	currentPaaS := mustDecodeCompose(t, gotCurrent.ComposeJSON).Services["paas-api"]
+	if currentPaaS.Environment[enrollmentIssuerCertificateEnvironment] != enrollmentIssuerCertificateTarget ||
+		currentPaaS.Environment[enrollmentIssuerPrivateKeyEnvironment] != enrollmentIssuerPrivateKeyTarget {
+		t.Fatal("current topology lost node enrollment issuer input")
+	}
+
+	for name, candidate := range map[string]release.Manifest{
+		"current profile with predecessor topology": func() release.Manifest {
+			value := current
+			value.TopologyDigest = SupportedPredecessorContractDigest()
+			return value
+		}(),
+		"predecessor profile with current topology": func() release.Manifest {
+			value := predecessor
+			value.TopologyDigest = ContractDigest()
+			return value
+		}(),
+		"unknown topology": func() release.Manifest {
+			value := predecessor
+			value.TopologyDigest = digest('f')
+			return value
+		}(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := CompileInstalled(candidate, options); err == nil {
+				t.Fatal("mismatched installed topology was admitted")
+			}
+		})
+	}
+}
+
+func mustDecodeCompose(t *testing.T, content []byte) composeDocument {
+	t.Helper()
+	var document composeDocument
+	if err := json.Unmarshal(content, &document); err != nil {
+		t.Fatalf("decode Compose document: %v", err)
+	}
+	return document
 }
 
 func TestCompileRejectsUntrustedTopologyInputs(t *testing.T) {

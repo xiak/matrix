@@ -15,6 +15,7 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
+	"github.com/xiak/matrix/app/service/installation/nodeconfig"
 	"github.com/xiak/matrix/app/service/internal/processconfig"
 	"github.com/xiak/matrix/app/service/internal/processhttp"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/data/enrollmentissuer"
@@ -187,8 +188,12 @@ func run(ctx context.Context) error {
 		enrollmentRepository,
 		enrollmentIssuer,
 		nodeenrollment.Config{
-			InstallationID: config.installationID,
-			Lifetime:       15 * time.Minute, MaxTransactionAttempts: 5,
+			InstallationID: config.installationID, Lifetime: 15 * time.Minute,
+			CertificateLifetime:            30 * 24 * time.Hour,
+			SupportedRuntimeContractDigest: nodeconfig.ContractDigest(),
+			ControllerID:                   nodeconfig.DefaultControllerID,
+			ManagementPort:                 nodeconfig.DefaultManagementPort, CollectorPort: nodeconfig.DefaultCollectorPort,
+			MaxTransactionAttempts: 5,
 		},
 	)
 	if err != nil {

@@ -651,9 +651,14 @@ func assertNodeEnrollmentPersistence(
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, err := nodeenrollment.New(repository, issuer, nodeenrollment.Config{
-		InstallationID: installationID, Lifetime: 5 * time.Minute, MaxTransactionAttempts: 5,
-	})
+	enrollmentConfig := nodeenrollment.Config{
+		InstallationID: installationID, Lifetime: 5 * time.Minute,
+		CertificateLifetime:            30 * 24 * time.Hour,
+		SupportedRuntimeContractDigest: integrationDigest("node-runtime-contract"),
+		ControllerID:                   "paas-controller-v1", ManagementPort: 16443, CollectorPort: 19100,
+		MaxTransactionAttempts: 5,
+	}
+	service, err := nodeenrollment.New(repository, issuer, enrollmentConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -796,6 +801,335 @@ func assertNodeEnrollmentPersistence(
 		t.Fatal("API login bypassed the node enrollment transition functions")
 	}
 
+	exchangeCreateCommand := command
+	exchangeCreateCommand.IdempotencyKey = prefix + "-exchange-node"
+	exchangeCreateCommand.Request.Name = "enrollment-exchange"
+	exchangeCreated, err := service.Create(ctx, exchangeCreateCommand)
+	if err != nil {
+		t.Fatalf("create exchangeable node enrollment: %v", err)
+	}
+	exchangeCredential := integrationEnrollmentCredential(
+		t, exchangeCreated.Response, wrappingPrivateKey, installationID,
+	)
+	defer clear(exchangeCredential)
+	_, nodePrivateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, collectorPrivateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exchangeRequest := integrationEnrollmentExchangeRequest(
+		t, exchangeCreated.Response, exchangeCredential, prefix+"-exchange",
+		nodePrivateKey, collectorPrivateKey,
+	)
+	exchanged, err := service.Exchange(ctx, nodeenrollment.ExchangeCommand{
+		EnrollmentID:        exchangeCreated.Response.Enrollment.Metadata.ID,
+		ObservedPeerAddress: "192.168.50.10", Request: exchangeRequest,
+	})
+	if err != nil || exchanged.Enrollment.State != paasv1.NodeEnrollmentVerifying ||
+		exchanged.Enrollment.Metadata.ResourceVersion != 2 ||
+		paasv1.ValidateNodeEnrollmentExchangeResponseForRequest(exchanged.Response, exchangeRequest) != nil {
+		t.Fatalf("exchange persisted node enrollment: result=%#v err=%v", exchanged, err)
+	}
+	if _, err := service.Exchange(ctx, nodeenrollment.ExchangeCommand{
+		EnrollmentID:        exchangeCreated.Response.Enrollment.Metadata.ID,
+		ObservedPeerAddress: "192.168.50.10", Request: exchangeRequest,
+	}); !errors.Is(err, nodeenrollment.ErrCredentialConsumed) {
+		t.Fatalf("replayed consumed credential error = %v", err)
+	}
+
+	var persistedExchange nodeenrollment.StoredEnrollment
+	err = repository.WithinInstallation(ctx, installationID, func(
+		transactionContext context.Context,
+		transaction nodeenrollment.Transaction,
+	) error {
+		var found bool
+		var loadErr error
+		persistedExchange, found, loadErr = transaction.LoadEnrollment(
+			transactionContext, exchangeCreated.Response.Enrollment.Metadata.ID,
+		)
+		if loadErr != nil {
+			return loadErr
+		}
+		if !found {
+			return errors.New("exchanged enrollment is absent")
+		}
+		return nil
+	})
+	if err != nil || persistedExchange.Exchange == nil || persistedExchange.SealedExchangeResult == nil ||
+		len(persistedExchange.CredentialSalt) != 0 || persistedExchange.CredentialVerifier != "" ||
+		persistedExchange.WrappedCredential.Ciphertext != "" {
+		t.Fatalf("load persisted exchange: stored=%#v err=%v", persistedExchange, err)
+	}
+	defer persistedExchange.Clear()
+	recovered, err := issuer.OpenExchangeResult(
+		ctx, *persistedExchange.Exchange, *persistedExchange.SealedExchangeResult,
+	)
+	if err != nil || !reflect.DeepEqual(recovered, exchanged.Response) {
+		t.Fatalf("recover sealed persisted exchange: response=%#v err=%v", recovered, err)
+	}
+	var exchangeDocument, sealedDocument string
+	var exchangedCredentialCleared bool
+	if err := admin.QueryRow(ctx, `SELECT
+		credential_salt IS NULL AND credential_verifier IS NULL
+			AND wrapped_credential_document IS NULL,
+		exchange_document::text, sealed_exchange_result_document::text
+		FROM paas.node_enrollments
+		WHERE installation_id = $1 AND id = $2`,
+		installationID, exchangeCreated.Response.Enrollment.Metadata.ID,
+	).Scan(&exchangedCredentialCleared, &exchangeDocument, &sealedDocument); err != nil ||
+		!exchangedCredentialCleared || len(exchangeDocument) > 16*1024 || len(sealedDocument) > 64*1024 {
+		t.Fatalf("inspect exchanged credential storage: cleared=%t exchange=%d sealed=%d err=%v", exchangedCredentialCleared, len(exchangeDocument), len(sealedDocument), err)
+	}
+	for _, forbidden := range []string{
+		base64.RawURLEncoding.EncodeToString(exchangeCredential),
+		exchangeRequest.NodeCertificateRequest,
+		exchangeRequest.CollectorCertificateRequest,
+	} {
+		if strings.Contains(exchangeDocument, forbidden) || strings.Contains(sealedDocument, forbidden) {
+			t.Fatal("persisted node exchange retained raw credential or CSR material")
+		}
+	}
+	_, err = admin.Exec(ctx, `UPDATE paas.node_enrollments
+		SET exchange_document = jsonb_set(
+			exchange_document, '{nodeListenAddress}', to_jsonb('8.8.8.8:16443'::text)
+		)
+		WHERE installation_id = $1 AND id = $2`,
+		installationID, exchangeCreated.Response.Enrollment.Metadata.ID,
+	)
+	assertPostgresCode(t, err, "23514")
+
+	concurrentCreateCommand := command
+	concurrentCreateCommand.IdempotencyKey = prefix + "-concurrent-node"
+	concurrentCreateCommand.Request.Name = "enrollment-concurrent"
+	concurrentCreated, err := service.Create(ctx, concurrentCreateCommand)
+	if err != nil {
+		t.Fatalf("create concurrently exchangeable enrollment: %v", err)
+	}
+	concurrentCredential := integrationEnrollmentCredential(
+		t, concurrentCreated.Response, wrappingPrivateKey, installationID,
+	)
+	defer clear(concurrentCredential)
+	concurrentNodePrivateKey := integrationEd25519PrivateKey(t)
+	concurrentCollectorPrivateKey := integrationEd25519PrivateKey(t)
+	concurrentRequest := integrationEnrollmentExchangeRequest(
+		t, concurrentCreated.Response, concurrentCredential, prefix+"-concurrent",
+		concurrentNodePrivateKey, concurrentCollectorPrivateKey,
+	)
+	startExchange := make(chan struct{})
+	exchangeErrors := make(chan error, 2)
+	for range 2 {
+		go func() {
+			<-startExchange
+			_, exchangeErr := service.Exchange(ctx, nodeenrollment.ExchangeCommand{
+				EnrollmentID:        concurrentCreated.Response.Enrollment.Metadata.ID,
+				ObservedPeerAddress: "192.168.50.11", Request: concurrentRequest,
+			})
+			exchangeErrors <- exchangeErr
+		}()
+	}
+	close(startExchange)
+	successes, consumed := 0, 0
+	for range 2 {
+		exchangeErr := <-exchangeErrors
+		switch {
+		case exchangeErr == nil:
+			successes++
+		case errors.Is(exchangeErr, nodeenrollment.ErrCredentialConsumed):
+			consumed++
+		default:
+			t.Fatalf("concurrent node enrollment exchange error = %v", exchangeErr)
+		}
+	}
+	if successes != 1 || consumed != 1 {
+		t.Fatalf("concurrent node exchange outcomes success=%d consumed=%d", successes, consumed)
+	}
+
+	collisionCreateCommand := command
+	collisionCreateCommand.IdempotencyKey = prefix + "-collision-node"
+	collisionCreateCommand.Request.Name = "enrollment-collision"
+	collisionCreated, err := service.Create(ctx, collisionCreateCommand)
+	if err != nil {
+		t.Fatalf("create public-key collision enrollment: %v", err)
+	}
+	collisionCredential := integrationEnrollmentCredential(
+		t, collisionCreated.Response, wrappingPrivateKey, installationID,
+	)
+	defer clear(collisionCredential)
+	collisionCollectorPrivateKey := integrationEd25519PrivateKey(t)
+	collisionRequest := integrationEnrollmentExchangeRequest(
+		t, collisionCreated.Response, collisionCredential, prefix+"-collision",
+		collectorPrivateKey, collisionCollectorPrivateKey,
+	)
+	if _, err := service.Exchange(ctx, nodeenrollment.ExchangeCommand{
+		EnrollmentID:        collisionCreated.Response.Enrollment.Metadata.ID,
+		ObservedPeerAddress: "192.168.50.12", Request: collisionRequest,
+	}); !errors.Is(err, nodeenrollment.ErrConflict) {
+		t.Fatalf("cross-role public-key collision error = %v", err)
+	}
+	collisionEnrollment, err := service.Get(
+		ctx, authorization, collisionCreated.Response.Enrollment.Metadata.ID,
+	)
+	if err != nil || collisionEnrollment.State != paasv1.NodeEnrollmentWaitingInstall ||
+		collisionEnrollment.CredentialConsumedAt != nil {
+		t.Fatalf("public-key collision changed enrollment: %#v / %v", collisionEnrollment, err)
+	}
+	identityCollisionScenarios := []struct {
+		name   string
+		mutate func(*paasv1.ExchangeNodeEnrollmentRequest)
+	}{
+		{name: "exchange-id", mutate: func(value *paasv1.ExchangeNodeEnrollmentRequest) {
+			value.ExchangeID = exchangeRequest.ExchangeID
+		}},
+		{name: "machine", mutate: func(value *paasv1.ExchangeNodeEnrollmentRequest) {
+			value.MachineFingerprint = exchangeRequest.MachineFingerprint
+		}},
+	}
+	for _, scenario := range identityCollisionScenarios {
+		identityCollisionCommand := command
+		identityCollisionCommand.IdempotencyKey = prefix + "-" + scenario.name + "-collision-node"
+		identityCollisionCommand.Request.Name = "enrollment-" + scenario.name + "-collision"
+		identityCollisionCreated, createErr := service.Create(ctx, identityCollisionCommand)
+		if createErr != nil {
+			t.Fatalf("create %s collision enrollment: %v", scenario.name, createErr)
+		}
+		identityCollisionCredential := integrationEnrollmentCredential(
+			t, identityCollisionCreated.Response, wrappingPrivateKey, installationID,
+		)
+		defer clear(identityCollisionCredential)
+		identityCollisionRequest := integrationEnrollmentExchangeRequest(
+			t, identityCollisionCreated.Response, identityCollisionCredential,
+			prefix+"-"+scenario.name+"-collision",
+			integrationEd25519PrivateKey(t), integrationEd25519PrivateKey(t),
+		)
+		scenario.mutate(&identityCollisionRequest)
+		if paasv1.ValidateExchangeNodeEnrollmentRequest(identityCollisionRequest) != nil {
+			t.Fatalf("invalid %s collision fixture", scenario.name)
+		}
+		if _, exchangeErr := service.Exchange(ctx, nodeenrollment.ExchangeCommand{
+			EnrollmentID:        identityCollisionCreated.Response.Enrollment.Metadata.ID,
+			ObservedPeerAddress: "192.168.50.15",
+			Request:             identityCollisionRequest,
+		}); !errors.Is(exchangeErr, nodeenrollment.ErrConflict) {
+			t.Fatalf("%s collision error = %v", scenario.name, exchangeErr)
+		}
+		identityCollisionEnrollment, getErr := service.Get(
+			ctx, authorization, identityCollisionCreated.Response.Enrollment.Metadata.ID,
+		)
+		if getErr != nil || identityCollisionEnrollment.State != paasv1.NodeEnrollmentWaitingInstall ||
+			identityCollisionEnrollment.CredentialConsumedAt != nil {
+			t.Fatalf(
+				"%s collision changed enrollment: %#v / %v",
+				scenario.name, identityCollisionEnrollment, getErr,
+			)
+		}
+	}
+
+	crossRoleCommands := [2]nodeenrollment.CreateCommand{command, command}
+	crossRoleCommands[0].IdempotencyKey = prefix + "-cross-role-node-a"
+	crossRoleCommands[0].Request.Name = "enrollment-cross-role-a"
+	crossRoleCommands[1].IdempotencyKey = prefix + "-cross-role-node-b"
+	crossRoleCommands[1].Request.Name = "enrollment-cross-role-b"
+	var crossRoleCreated [2]nodeenrollment.CreateResult
+	var crossRoleCredentials [2][]byte
+	for index := range crossRoleCommands {
+		crossRoleCreated[index], err = service.Create(ctx, crossRoleCommands[index])
+		if err != nil {
+			t.Fatalf("create concurrent cross-role collision enrollment %d: %v", index, err)
+		}
+		crossRoleCredentials[index] = integrationEnrollmentCredential(
+			t, crossRoleCreated[index].Response, wrappingPrivateKey, installationID,
+		)
+		defer clear(crossRoleCredentials[index])
+	}
+	crossRoleKeyA := integrationEd25519PrivateKey(t)
+	crossRoleKeyB := integrationEd25519PrivateKey(t)
+	crossRoleRequests := [2]paasv1.ExchangeNodeEnrollmentRequest{
+		integrationEnrollmentExchangeRequest(
+			t, crossRoleCreated[0].Response, crossRoleCredentials[0], prefix+"-cross-role-a",
+			crossRoleKeyA, crossRoleKeyB,
+		),
+		integrationEnrollmentExchangeRequest(
+			t, crossRoleCreated[1].Response, crossRoleCredentials[1], prefix+"-cross-role-b",
+			crossRoleKeyB, crossRoleKeyA,
+		),
+	}
+	readCommittedService, err := nodeenrollment.New(
+		&readCommittedNodeEnrollmentRepository{
+			NodeEnrollmentRepository: repository,
+			barrier:                  newConcurrentExchangeBarrier(),
+		},
+		issuer,
+		enrollmentConfig,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type crossRoleOutcome struct {
+		index int
+		err   error
+	}
+	startCrossRoleExchange := make(chan struct{})
+	crossRoleOutcomes := make(chan crossRoleOutcome, len(crossRoleRequests))
+	for index := range crossRoleRequests {
+		go func(index int) {
+			<-startCrossRoleExchange
+			_, exchangeErr := readCommittedService.Exchange(ctx, nodeenrollment.ExchangeCommand{
+				EnrollmentID:        crossRoleCreated[index].Response.Enrollment.Metadata.ID,
+				ObservedPeerAddress: fmt.Sprintf("192.168.50.%d", 13+index),
+				Request:             crossRoleRequests[index],
+			})
+			crossRoleOutcomes <- crossRoleOutcome{index: index, err: exchangeErr}
+		}(index)
+	}
+	close(startCrossRoleExchange)
+	crossRoleSuccesses, crossRoleConflicts := 0, 0
+	for range crossRoleRequests {
+		outcome := <-crossRoleOutcomes
+		switch {
+		case outcome.err == nil:
+			crossRoleSuccesses++
+		case errors.Is(outcome.err, nodeenrollment.ErrConflict):
+			crossRoleConflicts++
+		default:
+			t.Fatalf("concurrent cross-role collision exchange %d error = %v", outcome.index, outcome.err)
+		}
+	}
+	if crossRoleSuccesses != 1 || crossRoleConflicts != 1 {
+		t.Fatalf(
+			"concurrent cross-role key outcomes success=%d conflict=%d",
+			crossRoleSuccesses, crossRoleConflicts,
+		)
+	}
+	waiting, verifying := 0, 0
+	for index := range crossRoleCreated {
+		value, getErr := service.Get(
+			ctx, authorization, crossRoleCreated[index].Response.Enrollment.Metadata.ID,
+		)
+		if getErr != nil {
+			t.Fatalf("read concurrent cross-role collision enrollment %d: %v", index, getErr)
+		}
+		switch value.State {
+		case paasv1.NodeEnrollmentWaitingInstall:
+			if value.CredentialConsumedAt != nil {
+				t.Fatalf("rejected cross-role collision enrollment %d consumed its credential", index)
+			}
+			waiting++
+		case paasv1.NodeEnrollmentVerifying:
+			if value.CredentialConsumedAt == nil {
+				t.Fatalf("accepted cross-role collision enrollment %d retained its credential", index)
+			}
+			verifying++
+		default:
+			t.Fatalf("concurrent cross-role collision enrollment %d state = %s", index, value.State)
+		}
+	}
+	if waiting != 1 || verifying != 1 {
+		t.Fatalf("concurrent cross-role persisted states waiting=%d verifying=%d", waiting, verifying)
+	}
+
 	revocableCommand := command
 	revocableCommand.IdempotencyKey = prefix + "-revoke-node"
 	revocableCommand.Request.Name = "enrollment-revoke"
@@ -932,6 +1266,71 @@ func assertNodeEnrollmentPersistence(
 	}
 }
 
+type readCommittedNodeEnrollmentRepository struct {
+	*NodeEnrollmentRepository
+	barrier *concurrentExchangeBarrier
+}
+
+func (repository *readCommittedNodeEnrollmentRepository) WithinInstallation(
+	ctx context.Context,
+	installationID string,
+	callback func(context.Context, nodeenrollment.Transaction) error,
+) error {
+	return repository.withinInstallation(
+		ctx,
+		installationID,
+		pgx.ReadCommitted,
+		func(transactionContext context.Context, transaction nodeenrollment.Transaction) error {
+			return callback(transactionContext, concurrentExchangeTransaction{
+				Transaction: transaction,
+				barrier:     repository.barrier,
+			})
+		},
+	)
+}
+
+type concurrentExchangeTransaction struct {
+	nodeenrollment.Transaction
+	barrier *concurrentExchangeBarrier
+}
+
+func (transaction concurrentExchangeTransaction) ExchangeEnrollment(
+	ctx context.Context,
+	before nodeenrollment.StoredEnrollment,
+	after nodeenrollment.StoredEnrollment,
+) error {
+	if err := transaction.barrier.wait(ctx); err != nil {
+		return err
+	}
+	return transaction.Transaction.ExchangeEnrollment(ctx, before, after)
+}
+
+type concurrentExchangeBarrier struct {
+	mutex   sync.Mutex
+	arrived int
+	ready   chan struct{}
+}
+
+func newConcurrentExchangeBarrier() *concurrentExchangeBarrier {
+	return &concurrentExchangeBarrier{ready: make(chan struct{})}
+}
+
+func (barrier *concurrentExchangeBarrier) wait(ctx context.Context) error {
+	barrier.mutex.Lock()
+	barrier.arrived++
+	if barrier.arrived == 2 {
+		close(barrier.ready)
+	}
+	ready := barrier.ready
+	barrier.mutex.Unlock()
+	select {
+	case <-ready:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func newIntegrationEnrollmentIssuer(
 	t *testing.T,
 	installationID string,
@@ -946,9 +1345,10 @@ func newIntegrationEnrollmentIssuer(
 		SerialNumber:          big.NewInt(now.UnixNano()),
 		Subject:               pkix.Name{CommonName: "matrix-integration-enrollment-issuer"},
 		NotBefore:             now.Add(-time.Hour),
-		NotAfter:              now.Add(time.Hour),
+		NotAfter:              now.Add(365 * 24 * time.Hour),
 		BasicConstraintsValid: true,
 		IsCA:                  true,
+		MaxPathLenZero:        true,
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
 	}
 	issuerURI, err := paasv1.NodeEnrollmentIssuerURI(installationID)
@@ -966,12 +1366,86 @@ func newIntegrationEnrollmentIssuer(
 	if err != nil {
 		t.Fatal(err)
 	}
-	issuer, err := enrollmentissuer.New(installationID, certificateDER, privateKeyDER)
+	issuer, err := enrollmentissuer.New(
+		installationID, certificateDER, privateKeyDER,
+	)
 	clear(privateKeyDER)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return issuer, privateKey
+}
+
+func integrationEnrollmentCredential(
+	t *testing.T,
+	created paasv1.CreateNodeEnrollmentResponse,
+	wrappingPrivateKey *rsa.PrivateKey,
+	installationID string,
+) []byte {
+	t.Helper()
+	ciphertext, err := base64.RawURLEncoding.Strict().DecodeString(created.WrappedCredential.Ciphertext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	label := []byte(
+		"matrix-node-enrollment-v1\x00" + installationID + "\x00" + string(created.Enrollment.Metadata.ID),
+	)
+	credential, err := rsa.DecryptOAEP(sha256.New(), rand.Reader, wrappingPrivateKey, ciphertext, label)
+	clear(ciphertext)
+	if err != nil {
+		t.Fatalf("decrypt integration enrollment credential: %v", err)
+	}
+	digest := sha256.Sum256(credential)
+	if len(credential) != 32 || created.Join.CredentialDigest != "sha256:"+hex.EncodeToString(digest[:]) {
+		clear(credential)
+		t.Fatal("integration enrollment credential differs from its signed commitment")
+	}
+	return credential
+}
+
+func integrationEd25519PrivateKey(t *testing.T) ed25519.PrivateKey {
+	t.Helper()
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return privateKey
+}
+
+func integrationEnrollmentExchangeRequest(
+	t *testing.T,
+	created paasv1.CreateNodeEnrollmentResponse,
+	credential []byte,
+	identitySeed string,
+	nodePrivateKey ed25519.PrivateKey,
+	collectorPrivateKey ed25519.PrivateKey,
+) paasv1.ExchangeNodeEnrollmentRequest {
+	t.Helper()
+	certificateRequest := func(privateKey ed25519.PrivateKey) string {
+		encoded, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, privateKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return base64.RawURLEncoding.EncodeToString(encoded)
+	}
+	identityDigest := sha256.Sum256([]byte(identitySeed))
+	request := paasv1.ExchangeNodeEnrollmentRequest{
+		APIVersion:   paasv1.NodeEnrollmentExchangeAPIVersion,
+		Kind:         paasv1.NodeEnrollmentExchangeRequestKind,
+		EnrollmentID: created.Enrollment.Metadata.ID, InstallationID: created.Join.InstallationID,
+		ExecutionTargetID:           created.Enrollment.ExecutionTargetID,
+		ExchangeID:                  "node-exchange-" + hex.EncodeToString(identityDigest[:16]),
+		Credential:                  base64.RawURLEncoding.EncodeToString(credential),
+		MachineFingerprint:          integrationDigest(identitySeed + "-machine"),
+		RuntimeContractDigest:       integrationDigest("node-runtime-contract"),
+		Listener:                    paasv1.NodeEnrollmentListenerClaim{ManagementPort: 16443, CollectorPort: 19100},
+		NodeCertificateRequest:      certificateRequest(nodePrivateKey),
+		CollectorCertificateRequest: certificateRequest(collectorPrivateKey),
+	}
+	if err := paasv1.ValidateExchangeNodeEnrollmentRequest(request); err != nil {
+		t.Fatalf("build integration enrollment exchange request: %v", err)
+	}
+	return request
 }
 
 func seedIntegrationFixture(

@@ -83,9 +83,6 @@ func verifiedInstallationConfiguration(
 	if err != nil {
 		return verifiedInstallation{}, err
 	}
-	if err := ensureEnrollmentIssuer(plan.Root, plan.InstallationID, nil); err != nil {
-		return verifiedInstallation{}, errors.New("node enrollment issuer is unsafe")
-	}
 	compiled, err := topology.CompileInstalled(staged.Manifest, topology.Options{
 		InstallationID: plan.InstallationID,
 		Root:           plan.Root,
@@ -94,6 +91,11 @@ func verifiedInstallationConfiguration(
 	})
 	if err != nil {
 		return verifiedInstallation{}, err
+	}
+	if compiled.ContractDigest == topology.ContractDigest() {
+		if err := ensureEnrollmentIssuer(plan.Root, plan.InstallationID, nil); err != nil {
+			return verifiedInstallation{}, errors.New("node enrollment issuer is unsafe")
+		}
 	}
 	catalog, err := installedArtifactCatalogConfig(plan)
 	if err != nil {

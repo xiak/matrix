@@ -150,6 +150,7 @@ func NewHandler(
 	routes.HandleFunc("POST /v1/node-enrollments", value.createNodeEnrollment)
 	routes.HandleFunc("GET /v1/node-enrollments", value.listNodeEnrollments)
 	routes.HandleFunc("GET /v1/node-enrollments/{nodeEnrollmentId}", value.getNodeEnrollment)
+	routes.HandleFunc("POST /v1/node-enrollments/{nodeEnrollmentId}/exchange", value.exchangeNodeEnrollment)
 	routes.HandleFunc("POST /v1/node-enrollments/{nodeEnrollmentId}/revoke", value.revokeNodeEnrollment)
 	routes.HandleFunc("POST /v1/node-enrollments/{nodeEnrollmentId}/regenerate", value.regenerateNodeEnrollment)
 	routes.HandleFunc("POST /v1/execution-targets", value.registerExecutionTarget)

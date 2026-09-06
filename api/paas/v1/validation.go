@@ -1,6 +1,7 @@
 package paasv1
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rsa"
 	"crypto/x509"
@@ -9,8 +10,12 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
+	"net/netip"
 	"net/url"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -25,14 +30,21 @@ var (
 	deploymentInstanceIDPattern = regexp.MustCompile(`^instance-[0-9a-f]{32}$`)
 	terminalSessionIDPattern    = regexp.MustCompile(`^terminal-session-[0-9a-f]{32}$`)
 	nodeEnrollmentIDPattern     = regexp.MustCompile(`^node-enrollment-[0-9a-f]{32}$`)
+	nodeExchangeIDPattern       = regexp.MustCompile(`^node-exchange-[0-9a-f]{32}$`)
+	nodeBindingIDPattern        = regexp.MustCompile(`^node-binding-[0-9a-f]{32}$`)
 )
 
 const (
-	MaximumExecutionPoolListItems  = 129
-	MaximumNodeEnrollmentListItems = 128
-	MaximumNodeEnrollmentLifetime  = 30 * time.Minute
-	NodeEnrollmentJoinAPIVersion   = "node.enrollment.matrix.xiak.com/v1"
-	NodeEnrollmentJoinKind         = "NodeEnrollmentJoin"
+	MaximumExecutionPoolListItems            = 129
+	MaximumNodeEnrollmentListItems           = 128
+	MaximumNodeEnrollmentLifetime            = 30 * time.Minute
+	MaximumNodeEnrollmentCertificateLifetime = 30 * 24 * time.Hour
+	MinimumNodeEnrollmentListenerPort        = 1024
+	NodeEnrollmentJoinAPIVersion             = "node.enrollment.matrix.xiak.com/v1"
+	NodeEnrollmentJoinKind                   = "NodeEnrollmentJoin"
+	NodeEnrollmentExchangeAPIVersion         = "node.enrollment.matrix.xiak.com/v1"
+	NodeEnrollmentExchangeRequestKind        = "NodeEnrollmentExchangeRequest"
+	NodeEnrollmentExchangeResponseKind       = "NodeEnrollmentExchangeResponse"
 )
 
 var sensitiveKeyFragments = [...]string{
@@ -453,6 +465,269 @@ func ValidateCreateNodeEnrollmentResponse(value CreateNodeEnrollmentResponse) er
 			return nil
 		}(),
 	)
+}
+
+func ValidateExchangeNodeEnrollmentRequest(value ExchangeNodeEnrollmentRequest) error {
+	_, _, err := nodeEnrollmentExchangePublicKeys(value)
+	return err
+}
+
+// NodeEnrollmentExchangePublicKeys returns canonical PKIX public-key bytes
+// only after the complete exchange request has passed its closed contract.
+// It never exposes or derives either target-host private key.
+func NodeEnrollmentExchangePublicKeys(value ExchangeNodeEnrollmentRequest) ([]byte, []byte, error) {
+	node, collector, err := nodeEnrollmentExchangePublicKeys(value)
+	if err != nil {
+		return nil, nil, err
+	}
+	return bytes.Clone(node.RawSubjectPublicKeyInfo), bytes.Clone(collector.RawSubjectPublicKeyInfo), nil
+}
+
+func nodeEnrollmentExchangePublicKeys(value ExchangeNodeEnrollmentRequest) (*x509.CertificateRequest, *x509.CertificateRequest, error) {
+	var problems []error
+	if value.APIVersion != NodeEnrollmentExchangeAPIVersion ||
+		value.Kind != NodeEnrollmentExchangeRequestKind ||
+		!nodeEnrollmentIDPattern.MatchString(string(value.EnrollmentID)) ||
+		!nodeExchangeIDPattern.MatchString(value.ExchangeID) {
+		problems = append(problems, errors.New("node enrollment exchange metadata is invalid"))
+	}
+	problems = append(problems,
+		ValidateID("installationId", value.InstallationID),
+		ValidateID("executionTargetId", string(value.ExecutionTargetID)),
+		ValidateDigest("machineFingerprint", value.MachineFingerprint),
+		ValidateDigest("runtimeContractDigest", value.RuntimeContractDigest),
+	)
+	if _, err := decodeRawURLBase64("node enrollment credential", value.Credential, 32); err != nil {
+		problems = append(problems, errors.New("node enrollment credential is invalid"))
+	}
+	if value.Listener.ManagementPort < MinimumNodeEnrollmentListenerPort ||
+		value.Listener.CollectorPort < MinimumNodeEnrollmentListenerPort ||
+		value.Listener.ManagementPort == value.Listener.CollectorPort {
+		problems = append(problems, errors.New("node enrollment listener claim is invalid"))
+	}
+	nodeRequest, nodeErr := parseNodeEnrollmentCertificateRequest("node", value.NodeCertificateRequest)
+	collectorRequest, collectorErr := parseNodeEnrollmentCertificateRequest("collector", value.CollectorCertificateRequest)
+	problems = append(problems, nodeErr, collectorErr)
+	if nodeRequest != nil && collectorRequest != nil &&
+		bytes.Equal(nodeRequest.RawSubjectPublicKeyInfo, collectorRequest.RawSubjectPublicKeyInfo) {
+		problems = append(problems, errors.New("node enrollment public keys must be distinct"))
+	}
+	return nodeRequest, collectorRequest, errors.Join(problems...)
+}
+
+func parseNodeEnrollmentCertificateRequest(name, value string) (*x509.CertificateRequest, error) {
+	encoded, err := decodeRawURLBase64(name+" certificate request", value, -1)
+	if err != nil || len(encoded) < 64 || len(encoded) > 4096 {
+		return nil, errors.New("node enrollment certificate request is invalid")
+	}
+	request, err := x509.ParseCertificateRequest(encoded)
+	if err != nil || request == nil || request.CheckSignature() != nil ||
+		request.PublicKeyAlgorithm != x509.Ed25519 || request.SignatureAlgorithm != x509.PureEd25519 ||
+		request.Subject.String() != "" || !bytes.Equal(request.RawSubject, []byte{0x30, 0x00}) ||
+		len(request.Attributes) != 0 || len(request.Extensions) != 0 || len(request.ExtraExtensions) != 0 ||
+		len(request.DNSNames) != 0 || len(request.EmailAddresses) != 0 || len(request.IPAddresses) != 0 ||
+		len(request.URIs) != 0 {
+		return nil, errors.New("node enrollment certificate request is invalid")
+	}
+	publicKey, ok := request.PublicKey.(ed25519.PublicKey)
+	if !ok || len(publicKey) != ed25519.PublicKeySize {
+		return nil, errors.New("node enrollment certificate request is invalid")
+	}
+	return request, nil
+}
+
+func ValidateNodeEnrollmentExchangeResponse(value NodeEnrollmentExchangeResponse) error {
+	var problems []error
+	if value.APIVersion != NodeEnrollmentExchangeAPIVersion ||
+		value.Kind != NodeEnrollmentExchangeResponseKind ||
+		!nodeEnrollmentIDPattern.MatchString(string(value.EnrollmentID)) ||
+		!nodeExchangeIDPattern.MatchString(value.ExchangeID) ||
+		!nodeBindingIDPattern.MatchString(value.BindingRef) {
+		problems = append(problems, errors.New("node enrollment exchange response metadata is invalid"))
+	}
+	problems = append(problems,
+		ValidateID("installationId", value.InstallationID),
+		ValidateID("executionTargetId", string(value.ExecutionTargetID)),
+		ValidateID("controllerId", value.ControllerID),
+		ValidateDigest("machineFingerprint", value.MachineFingerprint),
+		ValidateDigest("runtimeContractDigest", value.RuntimeContractDigest),
+		validateContractTime("certificateNotBefore", value.CertificateNotBefore),
+		validateContractTime("certificateNotAfter", value.CertificateNotAfter),
+	)
+	if !value.CertificateNotAfter.After(value.CertificateNotBefore) ||
+		value.CertificateNotAfter.Sub(value.CertificateNotBefore) > MaximumNodeEnrollmentCertificateLifetime {
+		problems = append(problems, errors.New("node enrollment certificate lifetime is invalid"))
+	}
+	nodeAddress, nodePort, nodeAddressErr := parseNodeEnrollmentPrivateAddress(value.NodeListenAddress)
+	collectorAddress, collectorPort, collectorAddressErr := parseNodeEnrollmentCollectorEndpoint(value.CollectorEndpoint)
+	problems = append(problems, nodeAddressErr, collectorAddressErr)
+	if nodeAddressErr == nil && collectorAddressErr == nil && nodePort == collectorPort {
+		problems = append(problems, errors.New("node enrollment listener ports must be distinct"))
+	}
+	issuer, issuerErr := parseNodeEnrollmentIssuer(value.IssuerCertificate, value.InstallationID)
+	nodeCertificate, nodeErr := parseNodeEnrollmentRoleCertificate(
+		value.NodeCertificate,
+		value.InstallationID,
+		value.ExecutionTargetID,
+		"nodes",
+		nodeAddress,
+		[]x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		issuer,
+		value.CertificateNotBefore,
+		value.CertificateNotAfter,
+	)
+	collectorCertificate, collectorErr := parseNodeEnrollmentRoleCertificate(
+		value.CollectorCertificate,
+		value.InstallationID,
+		value.ExecutionTargetID,
+		"collectors",
+		collectorAddress,
+		[]x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		issuer,
+		value.CertificateNotBefore,
+		value.CertificateNotAfter,
+	)
+	problems = append(problems, issuerErr, nodeErr, collectorErr)
+	if nodeCertificate != nil && collectorCertificate != nil &&
+		bytes.Equal(nodeCertificate.RawSubjectPublicKeyInfo, collectorCertificate.RawSubjectPublicKeyInfo) {
+		problems = append(problems, errors.New("node enrollment certificates reuse one public key"))
+	}
+	return errors.Join(problems...)
+}
+
+// ValidateNodeEnrollmentExchangeResponseForRequest binds an issued result to
+// the exact locally persisted exchange intent and both CSR public keys.
+func ValidateNodeEnrollmentExchangeResponseForRequest(
+	response NodeEnrollmentExchangeResponse,
+	request ExchangeNodeEnrollmentRequest,
+) error {
+	if ValidateExchangeNodeEnrollmentRequest(request) != nil ||
+		ValidateNodeEnrollmentExchangeResponse(response) != nil ||
+		response.EnrollmentID != request.EnrollmentID ||
+		response.InstallationID != request.InstallationID ||
+		response.ExecutionTargetID != request.ExecutionTargetID ||
+		response.ExchangeID != request.ExchangeID ||
+		response.MachineFingerprint != request.MachineFingerprint ||
+		response.RuntimeContractDigest != request.RuntimeContractDigest {
+		return errors.New("node enrollment exchange response differs from its request")
+	}
+	_, managementPort, managementErr := parseNodeEnrollmentPrivateAddress(response.NodeListenAddress)
+	_, collectorPort, collectorErr := parseNodeEnrollmentCollectorEndpoint(response.CollectorEndpoint)
+	if managementErr != nil || collectorErr != nil ||
+		managementPort != request.Listener.ManagementPort || collectorPort != request.Listener.CollectorPort {
+		return errors.New("node enrollment exchange response changes its listener claim")
+	}
+	nodeRequest, collectorRequest, err := nodeEnrollmentExchangePublicKeys(request)
+	if err != nil {
+		return err
+	}
+	nodeCertificate, nodeErr := decodeNodeEnrollmentCertificate(response.NodeCertificate)
+	collectorCertificate, collectorCertificateErr := decodeNodeEnrollmentCertificate(response.CollectorCertificate)
+	if nodeErr != nil || collectorCertificateErr != nil ||
+		!bytes.Equal(nodeCertificate.RawSubjectPublicKeyInfo, nodeRequest.RawSubjectPublicKeyInfo) ||
+		!bytes.Equal(collectorCertificate.RawSubjectPublicKeyInfo, collectorRequest.RawSubjectPublicKeyInfo) {
+		return errors.New("node enrollment exchange response changes its public keys")
+	}
+	return nil
+}
+
+func parseNodeEnrollmentPrivateAddress(value string) (netip.Addr, uint16, error) {
+	host, portText, err := net.SplitHostPort(value)
+	port, portErr := strconv.ParseUint(portText, 10, 16)
+	address, addressErr := netip.ParseAddr(host)
+	if err != nil || portErr != nil || addressErr != nil ||
+		port < MinimumNodeEnrollmentListenerPort || address.Is4In6() || !address.IsPrivate() ||
+		address.IsLoopback() || address.IsUnspecified() || address.IsMulticast() || address.IsLinkLocalUnicast() ||
+		net.JoinHostPort(address.String(), strconv.FormatUint(port, 10)) != value {
+		return netip.Addr{}, 0, errors.New("node enrollment management address is invalid")
+	}
+	return address, uint16(port), nil
+}
+
+func parseNodeEnrollmentCollectorEndpoint(value string) (netip.Addr, uint16, error) {
+	endpoint, err := url.Parse(value)
+	if err != nil || endpoint.Scheme != "https" || endpoint.User != nil || endpoint.Opaque != "" ||
+		endpoint.Path != "" || endpoint.RawPath != "" || endpoint.RawQuery != "" || endpoint.ForceQuery ||
+		endpoint.Fragment != "" {
+		return netip.Addr{}, 0, errors.New("node enrollment collector endpoint is invalid")
+	}
+	host, portText, splitErr := net.SplitHostPort(endpoint.Host)
+	port, portErr := strconv.ParseUint(portText, 10, 16)
+	address, addressErr := netip.ParseAddr(host)
+	if splitErr != nil || portErr != nil || addressErr != nil || port < MinimumNodeEnrollmentListenerPort ||
+		address.Is4In6() || !address.IsLoopback() ||
+		"https://"+net.JoinHostPort(address.String(), strconv.FormatUint(port, 10)) != value {
+		return netip.Addr{}, 0, errors.New("node enrollment collector endpoint is invalid")
+	}
+	return address, uint16(port), nil
+}
+
+func parseNodeEnrollmentIssuer(value, installationID string) (*x509.Certificate, error) {
+	encoded, err := decodeRawURLBase64("node enrollment exchange issuer certificate", value, -1)
+	certificate, parseErr := x509.ParseCertificate(encoded)
+	expectedURI, uriErr := NodeEnrollmentIssuerURI(installationID)
+	if err != nil || parseErr != nil || certificate == nil || uriErr != nil ||
+		!certificate.BasicConstraintsValid || !certificate.IsCA || !certificate.MaxPathLenZero || certificate.MaxPathLen != 0 ||
+		certificate.PublicKeyAlgorithm != x509.Ed25519 || certificate.SignatureAlgorithm != x509.PureEd25519 ||
+		certificate.KeyUsage != x509.KeyUsageCertSign|x509.KeyUsageDigitalSignature ||
+		certificate.CheckSignatureFrom(certificate) != nil || len(certificate.URIs) != 1 ||
+		certificate.URIs[0].String() != expectedURI.String() {
+		return nil, errors.New("node enrollment exchange issuer certificate is invalid")
+	}
+	return certificate, nil
+}
+
+func parseNodeEnrollmentRoleCertificate(
+	value string,
+	installationID string,
+	targetID ResourceID,
+	role string,
+	address netip.Addr,
+	usages []x509.ExtKeyUsage,
+	issuer *x509.Certificate,
+	notBefore time.Time,
+	notAfter time.Time,
+) (*x509.Certificate, error) {
+	certificate, err := decodeNodeEnrollmentCertificate(value)
+	expectedURI := (&url.URL{
+		Scheme: "spiffe", Host: "matrix.xiak.com",
+		Path: "/installations/" + installationID + "/" + role + "/" + string(targetID),
+	}).String()
+	publicKey, publicKeyOK := certificatePublicKey(certificate)
+	if err != nil || issuer == nil || !address.IsValid() || !publicKeyOK || len(publicKey) != ed25519.PublicKeySize ||
+		certificate.SignatureAlgorithm != x509.PureEd25519 || certificate.IsCA || !certificate.BasicConstraintsValid ||
+		certificate.SerialNumber == nil || certificate.SerialNumber.Sign() <= 0 ||
+		certificate.Subject.String() != "" || !bytes.Equal(certificate.RawSubject, []byte{0x30, 0x00}) ||
+		certificate.KeyUsage != x509.KeyUsageDigitalSignature || !slices.Equal(certificate.ExtKeyUsage, usages) ||
+		len(certificate.UnknownExtKeyUsage) != 0 || len(certificate.DNSNames) != 0 || len(certificate.EmailAddresses) != 0 ||
+		len(certificate.URIs) != 1 || certificate.URIs[0].String() != expectedURI ||
+		len(certificate.IPAddresses) != 1 || !certificate.IPAddresses[0].Equal(net.IP(address.AsSlice())) ||
+		!certificate.NotBefore.Equal(notBefore) || !certificate.NotAfter.Equal(notAfter) ||
+		certificate.NotBefore.Before(issuer.NotBefore) || certificate.NotAfter.After(issuer.NotAfter) ||
+		certificate.CheckSignatureFrom(issuer) != nil {
+		return nil, errors.New("node enrollment role certificate is invalid")
+	}
+	return certificate, nil
+}
+
+func decodeNodeEnrollmentCertificate(value string) (*x509.Certificate, error) {
+	encoded, err := decodeRawURLBase64("node enrollment role certificate", value, -1)
+	if err != nil || len(encoded) > 4096 {
+		return nil, errors.New("node enrollment role certificate is invalid")
+	}
+	certificate, err := x509.ParseCertificate(encoded)
+	if err != nil || certificate == nil {
+		return nil, errors.New("node enrollment role certificate is invalid")
+	}
+	return certificate, nil
+}
+
+func certificatePublicKey(certificate *x509.Certificate) (ed25519.PublicKey, bool) {
+	if certificate == nil || certificate.PublicKeyAlgorithm != x509.Ed25519 {
+		return nil, false
+	}
+	publicKey, ok := certificate.PublicKey.(ed25519.PublicKey)
+	return publicKey, ok
 }
 
 func validateWrappingPublicKey(value string) error {

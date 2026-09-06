@@ -592,6 +592,13 @@ func (integrationEnrollmentWorkflow) Create(
 	return nodeenrollment.CreateResult{}, nodeenrollment.ErrNotFound
 }
 
+func (integrationEnrollmentWorkflow) Exchange(
+	context.Context,
+	nodeenrollment.ExchangeCommand,
+) (nodeenrollment.ExchangeResult, error) {
+	return nodeenrollment.ExchangeResult{}, nodeenrollment.ErrNotFound
+}
+
 func (integrationEnrollmentWorkflow) Get(
 	context.Context,
 	port.Authorization,

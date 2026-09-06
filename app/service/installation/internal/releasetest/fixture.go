@@ -116,6 +116,9 @@ func writeSequence(
 			if manifest.Database.SchemaVersion != 0 {
 				manifest.APIVersion = release.LegacyManifestAPIVersion
 			}
+			if manifest.Database == release.SupportedDatabasePredecessorProfile() {
+				manifest.TopologyDigest = topology.SupportedPredecessorContractDigest()
+			}
 		}
 		commit := strings.Repeat(string("abcdef12"[index]), 40)
 		version := fmt.Sprintf("v0.%d.0", index+1)

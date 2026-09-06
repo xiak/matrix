@@ -2353,6 +2353,77 @@
         ],
         "type": "string"
       },
+      "ExchangeNodeEnrollmentRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "node.enrollment.matrix.xiak.com/v1"
+          },
+          "collectorCertificateRequest": {
+            "maxLength": 5462,
+            "minLength": 86,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "type": "string",
+            "writeOnly": true
+          },
+          "credential": {
+            "maxLength": 43,
+            "minLength": 43,
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "type": "string",
+            "writeOnly": true
+          },
+          "enrollmentId": {
+            "pattern": "^node-enrollment-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "exchangeId": {
+            "pattern": "^node-exchange-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "executionTargetId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "installationId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "kind": {
+            "const": "NodeEnrollmentExchangeRequest"
+          },
+          "listener": {
+            "$ref": "#/components/schemas/NodeEnrollmentListenerClaim"
+          },
+          "machineFingerprint": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "nodeCertificateRequest": {
+            "maxLength": 5462,
+            "minLength": 86,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "type": "string",
+            "writeOnly": true
+          },
+          "runtimeContractDigest": {
+            "$ref": "#/components/schemas/Digest"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "enrollmentId",
+          "installationId",
+          "executionTargetId",
+          "exchangeId",
+          "credential",
+          "machineFingerprint",
+          "runtimeContractDigest",
+          "listener",
+          "nodeCertificateRequest",
+          "collectorCertificateRequest"
+        ],
+        "type": "object",
+        "x-matrix-visibility": "node-bootstrap"
+      },
       "ExecutionPool": {
         "additionalProperties": false,
         "properties": {
@@ -3462,6 +3533,101 @@
         ],
         "type": "string"
       },
+      "NodeEnrollmentExchangeResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "node.enrollment.matrix.xiak.com/v1"
+          },
+          "bindingRef": {
+            "pattern": "^node-binding-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "certificateNotAfter": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "certificateNotBefore": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "collectorCertificate": {
+            "maxLength": 5462,
+            "minLength": 86,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "type": "string"
+          },
+          "collectorEndpoint": {
+            "format": "uri",
+            "maxLength": 80,
+            "minLength": 16,
+            "pattern": "^https://(?:127\\\\.0\\\\.0\\\\.1|\\\\[::1\\\\]):[1-9][0-9]{3,4}$",
+            "type": "string"
+          },
+          "controllerId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "enrollmentId": {
+            "pattern": "^node-enrollment-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "exchangeId": {
+            "pattern": "^node-exchange-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "executionTargetId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "installationId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "issuerCertificate": {
+            "maxLength": 5462,
+            "minLength": 86,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "type": "string"
+          },
+          "kind": {
+            "const": "NodeEnrollmentExchangeResponse"
+          },
+          "machineFingerprint": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "nodeCertificate": {
+            "maxLength": 5462,
+            "minLength": 86,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "type": "string"
+          },
+          "nodeListenAddress": {
+            "maxLength": 64,
+            "minLength": 8,
+            "type": "string"
+          },
+          "runtimeContractDigest": {
+            "$ref": "#/components/schemas/Digest"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "enrollmentId",
+          "installationId",
+          "executionTargetId",
+          "exchangeId",
+          "machineFingerprint",
+          "runtimeContractDigest",
+          "controllerId",
+          "bindingRef",
+          "nodeListenAddress",
+          "collectorEndpoint",
+          "nodeCertificate",
+          "collectorCertificate",
+          "issuerCertificate",
+          "certificateNotBefore",
+          "certificateNotAfter"
+        ],
+        "type": "object",
+        "x-matrix-visibility": "node-bootstrap"
+      },
       "NodeEnrollmentJoin": {
         "additionalProperties": false,
         "properties": {
@@ -3544,6 +3710,26 @@
           "apiVersion",
           "kind",
           "items"
+        ],
+        "type": "object"
+      },
+      "NodeEnrollmentListenerClaim": {
+        "additionalProperties": false,
+        "properties": {
+          "collectorPort": {
+            "maximum": 65535,
+            "minimum": 1024,
+            "type": "integer"
+          },
+          "managementPort": {
+            "maximum": 65535,
+            "minimum": 1024,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "managementPort",
+          "collectorPort"
         ],
         "type": "object"
       },
@@ -6783,6 +6969,81 @@
           }
         },
         "summary": "Get one installation-scoped NodeEnrollment"
+      }
+    },
+    "/v1/node-enrollments/{nodeEnrollmentId}/exchange": {
+      "post": {
+        "description": "Node bootstrap only. The credential and PKCS#10 requests are accepted solely in this bounded TLS request body and are never returned or logged.",
+        "operationId": "exchangeNodeEnrollment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "nodeEnrollmentId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExchangeNodeEnrollmentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeEnrollmentExchangeResponse"
+                }
+              }
+            },
+            "description": "The credential was consumed exactly once and this public certificate result was sealed for recovery.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "410": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [],
+        "summary": "Consume one node enrollment credential and issue role-bound certificates"
       }
     },
     "/v1/node-enrollments/{nodeEnrollmentId}/regenerate": {

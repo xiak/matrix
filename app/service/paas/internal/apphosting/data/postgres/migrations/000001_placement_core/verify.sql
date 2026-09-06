@@ -115,12 +115,19 @@ BEGIN
             ('node_enrollments_target_uq'),
             ('node_enrollments_operation_uq'),
             ('node_enrollments_termination_uq'),
+            ('node_enrollments_exchange_uq'),
+            ('node_enrollments_machine_uq'),
+            ('node_enrollments_node_key_uq'),
+            ('node_enrollments_collector_key_uq'),
             ('node_enrollments_pool_fk'),
             ('node_enrollments_operation_fk'),
             ('node_enrollments_replacement_fk'),
             ('node_enrollments_identity_valid'),
             ('node_enrollments_state_valid'),
             ('node_enrollments_credential_valid'),
+            ('node_enrollments_exchange_valid'),
+            ('node_enrollments_exchange_document_valid'),
+            ('node_enrollments_sealed_result_valid'),
             ('node_enrollments_document_identity'),
             ('execution_target_allocations_target_fk'),
             ('adapter_commands_operation_action_uq'),
@@ -333,6 +340,10 @@ BEGIN
             (
                 'create_node_enrollment',
                 'submitted_enrollment jsonb, submitted_operation jsonb, submitted_join jsonb, submitted_wrapped_credential jsonb, submitted_credential_salt bytea, submitted_credential_verifier text, submitted_actor_type text, submitted_actor_id text, submitted_iam_decision_id text, submitted_request_id text, submitted_audit_id text, submitted_traceparent text'
+            ),
+            (
+                'exchange_node_enrollment',
+                'requested_enrollment_id text, expected_resource_version bigint, expected_credential_verifier text, submitted_enrollment jsonb, submitted_operation jsonb, submitted_exchange jsonb, submitted_sealed_result jsonb'
             ),
             (
                 'expire_node_enrollment',
@@ -720,6 +731,7 @@ BEGIN
 
     IF NOT has_function_privilege('matrix_paas_api', 'paas.admit_execution_resource(jsonb,jsonb,jsonb,text,text,bigint,jsonb)', 'EXECUTE')
        OR NOT has_function_privilege('matrix_paas_api', 'paas.create_node_enrollment(jsonb,jsonb,jsonb,jsonb,bytea,text,text,text,text,text,text,text)', 'EXECUTE')
+       OR NOT has_function_privilege('matrix_paas_api', 'paas.exchange_node_enrollment(text,bigint,text,jsonb,jsonb,jsonb,jsonb)', 'EXECUTE')
        OR NOT has_function_privilege('matrix_paas_api', 'paas.expire_node_enrollment(text,bigint,jsonb,jsonb)', 'EXECUTE')
        OR NOT has_function_privilege('matrix_paas_api', 'paas.revoke_node_enrollment(text,bigint,text,text,jsonb,jsonb,jsonb,jsonb)', 'EXECUTE')
        OR NOT has_function_privilege('matrix_paas_api', 'paas.transition_execution_target(bigint,jsonb,bigint,jsonb,jsonb,jsonb)', 'EXECUTE')
@@ -759,6 +771,7 @@ BEGIN
        )
        OR has_function_privilege('matrix_paas_worker', 'paas.admit_execution_resource(jsonb,jsonb,jsonb,text,text,bigint,jsonb)', 'EXECUTE')
        OR has_function_privilege('matrix_paas_worker', 'paas.create_node_enrollment(jsonb,jsonb,jsonb,jsonb,bytea,text,text,text,text,text,text,text)', 'EXECUTE')
+       OR has_function_privilege('matrix_paas_worker', 'paas.exchange_node_enrollment(text,bigint,text,jsonb,jsonb,jsonb,jsonb)', 'EXECUTE')
        OR has_function_privilege('matrix_paas_worker', 'paas.expire_node_enrollment(text,bigint,jsonb,jsonb)', 'EXECUTE')
        OR has_function_privilege('matrix_paas_worker', 'paas.revoke_node_enrollment(text,bigint,text,text,jsonb,jsonb,jsonb,jsonb)', 'EXECUTE')
        OR has_function_privilege('matrix_paas_worker', 'paas.transition_execution_target(bigint,jsonb,bigint,jsonb,jsonb,jsonb)', 'EXECUTE')

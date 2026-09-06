@@ -1,6 +1,7 @@
 package localmachine
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"path/filepath"
@@ -328,6 +329,82 @@ nginx_config:
 }
 
 func apisixStandaloneConfig() []byte {
+	predecessor := predecessorAPISIXStandaloneConfig()
+	withPublicOrigin := replaceStaticAPISIXFragment(
+		predecessor, paasPublicOriginAPISIXPredecessor, paasPublicOriginAPISIXCurrent,
+	)
+	marker := []byte("  -\n    id: matrix-paas-terminal")
+	withExchange := make([]byte, 0, len(nodeEnrollmentExchangeAPISIXRoute)+len(marker))
+	withExchange = append(withExchange, nodeEnrollmentExchangeAPISIXRoute...)
+	withExchange = append(withExchange, marker...)
+	return replaceStaticAPISIXFragment(withPublicOrigin, marker, withExchange)
+}
+
+func replaceStaticAPISIXFragment(content, old, replacement []byte) []byte {
+	if bytes.Count(content, old) != 1 {
+		panic("static APISIX route fragment is not unique")
+	}
+	return bytes.Replace(content, old, replacement, 1)
+}
+
+var paasPublicOriginAPISIXPredecessor = []byte(`    id: matrix-paas
+    uri: /api/paas/*
+    plugins:
+      proxy-rewrite:
+        regex_uri:
+          - "^/api/paas/(.*)"
+          - "/$1"
+        headers:
+          remove:`)
+
+var paasPublicOriginAPISIXCurrent = []byte(`    id: matrix-paas
+    uri: /api/paas/*
+    plugins:
+      proxy-rewrite:
+        regex_uri:
+          - "^/api/paas/(.*)"
+          - "/$1"
+        headers:
+          set:
+            X-Matrix-Public-Origin: "$scheme://$http_host"
+          remove:
+            - X-Matrix-Observed-Peer
+            - X-Matrix-Transport-Scheme`)
+
+var nodeEnrollmentExchangeAPISIXRoute = []byte(`  -
+    id: matrix-paas-node-enrollment-exchange
+    uri: /api/paas/v1/node-enrollments/*/exchange
+    methods:
+      - POST
+    priority: 300
+    vars:
+      -
+        - uri
+        - "~~"
+        - "^/api/paas/v1/node-enrollments/node-enrollment-[0-9a-f]{32}/exchange$"
+    plugins:
+      proxy-rewrite:
+        regex_uri:
+          - "^/api/paas/(.*)"
+          - "/$1"
+        headers:
+          set:
+            X-Matrix-Observed-Peer: "$remote_addr"
+            X-Matrix-Transport-Scheme: "$scheme"
+          remove:
+            - Authorization
+            - Cookie
+            - Idempotency-Key
+            - If-Match
+            - Matrix-Subject-Credential
+            - X-Matrix-Public-Origin
+    upstream:
+      type: roundrobin
+      nodes:
+        "paas-api:8080": 1
+`)
+
+func predecessorAPISIXStandaloneConfig() []byte {
 	return []byte(`routes:
   -
     id: matrix-ready
@@ -435,8 +512,6 @@ func apisixStandaloneConfig() []byte {
           - "^/api/paas/(.*)"
           - "/$1"
         headers:
-          set:
-            X-Matrix-Public-Origin: "$scheme://$http_host"
           remove:
             - Matrix-Subject-Credential
     upstream:
@@ -479,5 +554,12 @@ func installedAPISIXStandaloneConfig(manifest release.Manifest) ([]byte, error) 
 	if err := topology.ValidateInstalledContract(manifest); err != nil {
 		return nil, err
 	}
-	return apisixStandaloneConfig(), nil
+	switch manifest.Database {
+	case release.CurrentDatabaseProfile():
+		return apisixStandaloneConfig(), nil
+	case release.SupportedDatabasePredecessorProfile():
+		return predecessorAPISIXStandaloneConfig(), nil
+	default:
+		return nil, errors.New("installed release cannot select an APISIX route contract")
+	}
 }

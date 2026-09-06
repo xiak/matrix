@@ -14,8 +14,10 @@ import (
 	"encoding/json"
 	"errors"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strings"
 	"sync"
@@ -322,6 +324,171 @@ func TestNodeEnrollmentHTTPMutationsPreserveVersionAndOneTimeBoundaries(t *testi
 	if response.Code != http.StatusBadRequest || workflow.revokeCalls != 1 ||
 		authorizer.request != (port.AuthorizationRequest{}) {
 		t.Fatalf("revocation body reached authorization/workflow: status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestNodeEnrollmentExchangeUsesOnlyProtectedTLSPeerAndBoundedBody(t *testing.T) {
+	exchangeRequest, exchangeResponse := testNodeEnrollmentExchangeFixture(t)
+	consumedAt := exchangeResponse.CertificateNotBefore.Add(5 * time.Minute)
+	enrollment := paasv1.NodeEnrollment{
+		APIVersion: paasv1.APIVersion, Kind: "NodeEnrollment",
+		Metadata: paasv1.ResourceMetadata{
+			ID: exchangeRequest.EnrollmentID, Name: "host-a",
+			Scope: paasv1.ResourceScope{Kind: paasv1.AuthorityPlatform}, Labels: map[string]string{"zone": "private-a"},
+			ResourceVersion: 2, CreatedAt: consumedAt.Add(-time.Minute), UpdatedAt: consumedAt,
+		},
+		ExecutionTargetID: exchangeRequest.ExecutionTargetID, ExecutionPoolID: "pool-a",
+		OperationID: "operation-enrollment-a", State: paasv1.NodeEnrollmentVerifying,
+		ExpiresAt: consumedAt.Add(14 * time.Minute), CredentialConsumedAt: &consumedAt,
+	}
+	if err := paasv1.ValidateNodeEnrollment(enrollment); err != nil {
+		t.Fatalf("invalid exchanged enrollment fixture: %v", err)
+	}
+	workflow := &fakeEnrollmentWorkflow{exchangeResult: nodeenrollment.ExchangeResult{
+		Enrollment: enrollment, Response: exchangeResponse,
+	}}
+	authorizer := &fakeAuthorizer{}
+	handler, err := NewHandler(
+		authorizer, &fakeWorkflow{}, &fakeExecutionWorkflow{}, workflow,
+		&fakeTerminalWorkflow{}, &fakeTerminalConnector{}, &fakeInstallationVerifier{},
+		Config{NewRequestID: func() (string, error) { return "request-test", nil }, Readiness: func(context.Context) (paasv1.Readiness, error) { return paasv1.Readiness{}, nil }},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := jsonRequest(t, http.MethodPost, "/v1/node-enrollments/"+string(exchangeRequest.EnrollmentID)+"/exchange", exchangeRequest)
+	request.Header.Set(nodeEnrollmentTransportSchemeHeader, "https")
+	request.Header.Set(nodeEnrollmentObservedPeerHeader, "192.168.50.10")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Header().Get("ETag") != `"2"` ||
+		workflow.exchangeCalls != 1 || workflow.exchangeCommand.EnrollmentID != exchangeRequest.EnrollmentID ||
+		workflow.exchangeCommand.ObservedPeerAddress != "192.168.50.10" ||
+		!reflect.DeepEqual(workflow.exchangeCommand.Request, exchangeRequest) ||
+		authorizer.request != (port.AuthorizationRequest{}) {
+		t.Fatalf("node exchange response=%d body=%s command=%#v authorization=%#v", response.Code, response.Body.String(), workflow.exchangeCommand, authorizer.request)
+	}
+	var exchanged paasv1.NodeEnrollmentExchangeResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &exchanged); err != nil || !reflect.DeepEqual(exchanged, exchangeResponse) {
+		t.Fatalf("decode node exchange=%#v err=%v", exchanged, err)
+	}
+	for _, secret := range []string{exchangeRequest.Credential, exchangeRequest.NodeCertificateRequest, exchangeRequest.CollectorCertificateRequest} {
+		if strings.Contains(response.Body.String(), secret) {
+			t.Fatal("node exchange response echoed request credential material")
+		}
+	}
+}
+
+func TestNodeEnrollmentExchangeRejectsUnprotectedOrUserAuthenticatedRequests(t *testing.T) {
+	exchangeRequest, _ := testNodeEnrollmentExchangeFixture(t)
+	path := "/v1/node-enrollments/" + string(exchangeRequest.EnrollmentID) + "/exchange"
+	tests := map[string]func(*http.Request){
+		"missing TLS proof":   func(request *http.Request) { request.Header.Del(nodeEnrollmentTransportSchemeHeader) },
+		"plaintext transport": func(request *http.Request) { request.Header.Set(nodeEnrollmentTransportSchemeHeader, "http") },
+		"public peer":         func(request *http.Request) { request.Header.Set(nodeEnrollmentObservedPeerHeader, "8.8.8.8") },
+		"duplicate peer":      func(request *http.Request) { request.Header.Add(nodeEnrollmentObservedPeerHeader, "192.168.50.11") },
+		"user credential":     func(request *http.Request) { request.Header.Set("Authorization", "Bearer user") },
+		"subject credential":  func(request *http.Request) { request.Header.Set("Matrix-Subject-Credential", "Bearer subject") },
+		"cookie":              func(request *http.Request) { request.Header.Set("Cookie", "session=forbidden") },
+		"idempotency key":     func(request *http.Request) { request.Header.Set("Idempotency-Key", "forbidden") },
+		"resource version":    func(request *http.Request) { request.Header.Set("If-Match", `"1"`) },
+		"content encoding":    func(request *http.Request) { request.Header["Content-Encoding"] = []string{""} },
+		"query":               func(request *http.Request) { request.URL.RawQuery = "debug=true" },
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			workflow := &fakeEnrollmentWorkflow{}
+			authorizer := &fakeAuthorizer{}
+			handler, err := NewHandler(
+				authorizer, &fakeWorkflow{}, &fakeExecutionWorkflow{}, workflow,
+				&fakeTerminalWorkflow{}, &fakeTerminalConnector{}, &fakeInstallationVerifier{},
+				Config{NewRequestID: func() (string, error) { return "request-test", nil }, Readiness: func(context.Context) (paasv1.Readiness, error) { return paasv1.Readiness{}, nil }},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := jsonRequest(t, http.MethodPost, path, exchangeRequest)
+			request.Header.Set(nodeEnrollmentTransportSchemeHeader, "https")
+			request.Header.Set(nodeEnrollmentObservedPeerHeader, "192.168.50.10")
+			mutate(request)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusBadRequest || workflow.exchangeCalls != 0 ||
+				authorizer.request != (port.AuthorizationRequest{}) ||
+				strings.Contains(response.Body.String(), exchangeRequest.Credential) {
+				t.Fatalf("unprotected exchange status=%d body=%s calls=%d authorization=%#v", response.Code, response.Body.String(), workflow.exchangeCalls, authorizer.request)
+			}
+		})
+	}
+}
+
+func TestNodeEnrollmentExchangeRequiresOneJSONContentType(t *testing.T) {
+	exchangeRequest, _ := testNodeEnrollmentExchangeFixture(t)
+	path := "/v1/node-enrollments/" + string(exchangeRequest.EnrollmentID) + "/exchange"
+	tests := map[string]func(*http.Request){
+		"missing":   func(request *http.Request) { request.Header.Del("Content-Type") },
+		"wrong":     func(request *http.Request) { request.Header.Set("Content-Type", "text/plain") },
+		"duplicate": func(request *http.Request) { request.Header.Add("Content-Type", "application/json") },
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			workflow := &fakeEnrollmentWorkflow{}
+			handler, err := NewHandler(
+				&fakeAuthorizer{}, &fakeWorkflow{}, &fakeExecutionWorkflow{}, workflow,
+				&fakeTerminalWorkflow{}, &fakeTerminalConnector{}, &fakeInstallationVerifier{},
+				Config{NewRequestID: func() (string, error) { return "request-test", nil }, Readiness: func(context.Context) (paasv1.Readiness, error) { return paasv1.Readiness{}, nil }},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := jsonRequest(t, http.MethodPost, path, exchangeRequest)
+			request.Header.Set(nodeEnrollmentTransportSchemeHeader, "https")
+			request.Header.Set(nodeEnrollmentObservedPeerHeader, "192.168.50.10")
+			mutate(request)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusUnsupportedMediaType || workflow.exchangeCalls != 0 ||
+				strings.Contains(response.Body.String(), exchangeRequest.Credential) {
+				t.Fatalf("content type status=%d body=%s calls=%d", response.Code, response.Body.String(), workflow.exchangeCalls)
+			}
+		})
+	}
+}
+
+func TestNodeEnrollmentExchangeBoundsAndSanitizesCredentialFailure(t *testing.T) {
+	exchangeRequest, _ := testNodeEnrollmentExchangeFixture(t)
+	path := "/v1/node-enrollments/" + string(exchangeRequest.EnrollmentID) + "/exchange"
+	workflow := &fakeEnrollmentWorkflow{exchangeErr: errors.New("adapter included secret: " + exchangeRequest.Credential + ": " + nodeenrollment.ErrCredentialRejected.Error())}
+	workflow.exchangeErr = errors.Join(nodeenrollment.ErrCredentialRejected, workflow.exchangeErr)
+	handler, err := NewHandler(
+		&fakeAuthorizer{}, &fakeWorkflow{}, &fakeExecutionWorkflow{}, workflow,
+		&fakeTerminalWorkflow{}, &fakeTerminalConnector{}, &fakeInstallationVerifier{},
+		Config{NewRequestID: func() (string, error) { return "request-test", nil }, Readiness: func(context.Context) (paasv1.Readiness, error) { return paasv1.Readiness{}, nil }},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := jsonRequest(t, http.MethodPost, path, exchangeRequest)
+	request.Header.Set(nodeEnrollmentTransportSchemeHeader, "https")
+	request.Header.Set(nodeEnrollmentObservedPeerHeader, "192.168.50.10")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized || workflow.exchangeCalls != 1 ||
+		strings.Contains(response.Body.String(), exchangeRequest.Credential) ||
+		strings.Contains(response.Body.String(), "adapter included secret") {
+		t.Fatalf("credential failure status=%d body=%s calls=%d", response.Code, response.Body.String(), workflow.exchangeCalls)
+	}
+
+	workflow.exchangeCalls = 0
+	request = httptest.NewRequest(http.MethodPost, path, strings.NewReader(strings.Repeat("x", int(maximumNodeEnrollmentExchangeBody)+1)))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(nodeEnrollmentTransportSchemeHeader, "https")
+	request.Header.Set(nodeEnrollmentObservedPeerHeader, "192.168.50.10")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusRequestEntityTooLarge || workflow.exchangeCalls != 0 {
+		t.Fatalf("oversized exchange status=%d body=%s calls=%d", response.Code, response.Body.String(), workflow.exchangeCalls)
 	}
 }
 
@@ -1725,6 +1892,88 @@ func testNodeEnrollmentResult(
 	return nodeenrollment.CreateResult{Response: response, Operation: operation}, request
 }
 
+func testNodeEnrollmentExchangeFixture(t *testing.T) (paasv1.ExchangeNodeEnrollmentRequest, paasv1.NodeEnrollmentExchangeResponse) {
+	t.Helper()
+	now := time.Date(2026, 9, 6, 8, 0, 0, 0, time.UTC)
+	notBefore, notAfter := now.Add(-5*time.Minute), now.Add(24*time.Hour)
+	nodePublic, nodePrivate, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	collectorPublic, collectorPrivate, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificateRequest := func(privateKey ed25519.PrivateKey) string {
+		encoded, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, privateKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return base64.RawURLEncoding.EncodeToString(encoded)
+	}
+	request := paasv1.ExchangeNodeEnrollmentRequest{
+		APIVersion: paasv1.NodeEnrollmentExchangeAPIVersion, Kind: paasv1.NodeEnrollmentExchangeRequestKind,
+		EnrollmentID: "node-enrollment-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", InstallationID: "installation-a",
+		ExecutionTargetID:  "execution-target-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		ExchangeID:         "node-exchange-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Credential:         base64.RawURLEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef")),
+		MachineFingerprint: "sha256:" + strings.Repeat("a", 64), RuntimeContractDigest: "sha256:" + strings.Repeat("b", 64),
+		Listener:               paasv1.NodeEnrollmentListenerClaim{ManagementPort: 16443, CollectorPort: 19100},
+		NodeCertificateRequest: certificateRequest(nodePrivate), CollectorCertificateRequest: certificateRequest(collectorPrivate),
+	}
+	issuerPublic, issuerPrivate, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuerURI, err := paasv1.NodeEnrollmentIssuerURI(request.InstallationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuerTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "Matrix node enrollment issuer"},
+		NotBefore: time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC), NotAfter: time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC),
+		BasicConstraintsValid: true, IsCA: true, MaxPathLenZero: true,
+		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature, URIs: []*url.URL{issuerURI},
+	}
+	issuerDER, err := x509.CreateCertificate(rand.Reader, issuerTemplate, issuerTemplate, issuerPublic, issuerPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roleCertificate := func(role string, publicKey ed25519.PublicKey, address net.IP, usages []x509.ExtKeyUsage, serial int64) string {
+		identityURI, err := url.Parse("spiffe://matrix.xiak.com/installations/" + request.InstallationID + "/" + role + "/" + string(request.ExecutionTargetID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		template := &x509.Certificate{
+			SerialNumber: big.NewInt(serial), NotBefore: notBefore, NotAfter: notAfter,
+			BasicConstraintsValid: true, KeyUsage: x509.KeyUsageDigitalSignature,
+			ExtKeyUsage: usages, URIs: []*url.URL{identityURI}, IPAddresses: []net.IP{address},
+		}
+		encoded, err := x509.CreateCertificate(rand.Reader, template, issuerTemplate, publicKey, issuerPrivate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return base64.RawURLEncoding.EncodeToString(encoded)
+	}
+	response := paasv1.NodeEnrollmentExchangeResponse{
+		APIVersion: paasv1.NodeEnrollmentExchangeAPIVersion, Kind: paasv1.NodeEnrollmentExchangeResponseKind,
+		EnrollmentID: request.EnrollmentID, InstallationID: request.InstallationID,
+		ExecutionTargetID: request.ExecutionTargetID, ExchangeID: request.ExchangeID,
+		MachineFingerprint: request.MachineFingerprint, RuntimeContractDigest: request.RuntimeContractDigest,
+		ControllerID: "paas-controller-v1", BindingRef: "node-binding-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		NodeListenAddress: "192.168.50.10:16443", CollectorEndpoint: "https://127.0.0.1:19100",
+		NodeCertificate:      roleCertificate("nodes", nodePublic, net.ParseIP("192.168.50.10"), []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}, 2),
+		CollectorCertificate: roleCertificate("collectors", collectorPublic, net.ParseIP("127.0.0.1"), []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, 3),
+		IssuerCertificate:    base64.RawURLEncoding.EncodeToString(issuerDER),
+		CertificateNotBefore: notBefore, CertificateNotAfter: notAfter,
+	}
+	if paasv1.ValidateExchangeNodeEnrollmentRequest(request) != nil ||
+		paasv1.ValidateNodeEnrollmentExchangeResponseForRequest(response, request) != nil {
+		t.Fatal("invalid node enrollment exchange HTTP fixture")
+	}
+	return request, response
+}
+
 func assertNoEnrollmentCredentialMaterial(t *testing.T, body string) {
 	t.Helper()
 	body = strings.ToLower(body)
@@ -1756,6 +2005,9 @@ type fakeEnrollmentWorkflow struct {
 	createCommand     nodeenrollment.CreateCommand
 	createResult      nodeenrollment.CreateResult
 	createErr         error
+	exchangeCommand   nodeenrollment.ExchangeCommand
+	exchangeResult    nodeenrollment.ExchangeResult
+	exchangeErr       error
 	readAuthorization port.Authorization
 	readID            paasv1.ResourceID
 	readResult        paasv1.NodeEnrollment
@@ -1770,6 +2022,7 @@ type fakeEnrollmentWorkflow struct {
 	regenerateResult  nodeenrollment.CreateResult
 	regenerateErr     error
 	createCalls       int
+	exchangeCalls     int
 	readCalls         int
 	listCalls         int
 	revokeCalls       int
@@ -1782,6 +2035,14 @@ func (workflow *fakeEnrollmentWorkflow) Create(
 ) (nodeenrollment.CreateResult, error) {
 	workflow.createCommand, workflow.createCalls = command, workflow.createCalls+1
 	return workflow.createResult, workflow.createErr
+}
+
+func (workflow *fakeEnrollmentWorkflow) Exchange(
+	_ context.Context,
+	command nodeenrollment.ExchangeCommand,
+) (nodeenrollment.ExchangeResult, error) {
+	workflow.exchangeCommand, workflow.exchangeCalls = command, workflow.exchangeCalls+1
+	return workflow.exchangeResult, workflow.exchangeErr
 }
 
 func (workflow *fakeEnrollmentWorkflow) Get(

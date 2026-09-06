@@ -11,8 +11,10 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,7 +30,7 @@ func TestIssueWrapsFreshCredentialAndStoresOnlySaltedVerifier(t *testing.T) {
 		ExecutionTargetID: "target-a", ExpiresAt: testTime().Add(15 * time.Minute),
 		WrappingPublicKey: wrappingPublic, ControlPlaneBaseURL: "https://matrix.internal/api/paas/v1",
 	}
-	issued, err := issuer.Issue(context.Background(), request)
+	issued, err := issuer.IssueJoin(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +65,7 @@ func TestIssueWrapsFreshCredentialAndStoresOnlySaltedVerifier(t *testing.T) {
 		t.Fatal("raw credential escaped its RSA envelope")
 	}
 
-	second, err := issuer.Issue(context.Background(), request)
+	second, err := issuer.IssueJoin(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +85,7 @@ func TestIssuerRejectsWeakWrappingKeysAndUntrustedConfiguration(t *testing.T) {
 		ExecutionTargetID: "target-a", ExpiresAt: testTime().Add(15 * time.Minute),
 		WrappingPublicKey: weakPublic, ControlPlaneBaseURL: "https://matrix.internal/api/paas/v1",
 	}
-	if _, err := issuer.Issue(context.Background(), request); !errors.Is(err, nodeenrollment.ErrInvalidArgument) {
+	if _, err := issuer.IssueJoin(context.Background(), request); !errors.Is(err, nodeenrollment.ErrInvalidArgument) {
 		t.Fatalf("weak wrapping key error = %v", err)
 	}
 
@@ -99,7 +101,7 @@ func TestIssuerRejectsWeakWrappingKeysAndUntrustedConfiguration(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			unsafe := request
 			unsafe.ControlPlaneBaseURL = baseURL
-			if _, err := issuer.Issue(context.Background(), unsafe); !errors.Is(err, nodeenrollment.ErrInvalidArgument) {
+			if _, err := issuer.IssueJoin(context.Background(), unsafe); !errors.Is(err, nodeenrollment.ErrInvalidArgument) {
 				t.Fatal("unsafe public URL was accepted")
 			}
 		})
@@ -127,8 +129,146 @@ func TestIssuerRejectsWeakWrappingKeysAndUntrustedConfiguration(t *testing.T) {
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
 	request.WrappingPublicKey = validPublic
-	if _, err := issuer.Issue(canceled, request); !errors.Is(err, context.Canceled) {
+	if _, err := issuer.IssueJoin(canceled, request); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled issue error = %v", err)
+	}
+}
+
+func TestIssueExchangeSignsDistinctRolesAndSealsRecoverableResult(t *testing.T) {
+	certificate, privateKey := testIssuerMaterial(t)
+	issuer, err := New("installation-a", certificate, privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodePublic, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	collectorPublic, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeSPKI, err := x509.MarshalPKIXPublicKey(nodePublic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	collectorSPKI, err := x509.MarshalPKIXPublicKey(collectorPublic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := nodeenrollment.ExchangeIssueRequest{
+		EnrollmentID: "node-enrollment-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", InstallationID: "installation-a",
+		ExecutionTargetID:  "execution-target-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		ExchangeID:         "node-exchange-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		MachineFingerprint: "sha256:" + strings.Repeat("a", 64), RuntimeContractDigest: "sha256:" + strings.Repeat("b", 64),
+		Listener:      paasv1.NodeEnrollmentListenerClaim{ManagementPort: 16443, CollectorPort: 19100},
+		NodePublicKey: nodeSPKI, CollectorPublicKey: collectorSPKI, ObservedPeerAddress: "192.168.50.10",
+		BindingRef: "node-binding-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ControllerID: "paas-controller-v1",
+		CertificateNotBefore: testTime(), CertificateNotAfter: testTime().Add(30 * 24 * time.Hour),
+	}
+	issued, err := issuer.IssueExchange(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paasv1.ValidateNodeEnrollmentExchangeResponse(issued.Response) != nil ||
+		nodeenrollment.ValidateSealedExchangeResult(issued.Sealed) != nil ||
+		issued.Response.NodeListenAddress != "192.168.50.10:16443" ||
+		issued.Response.CollectorEndpoint != "https://127.0.0.1:19100" {
+		t.Fatal("issued exchange does not preserve the exact role and listener contract")
+	}
+
+	encodedResponse, err := json.Marshal(issued.Response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exchange := nodeenrollment.StoredExchange{
+		APIVersion: nodeenrollment.StoredExchangeAPIVersion, Kind: nodeenrollment.StoredExchangeKind,
+		EnrollmentID: request.EnrollmentID, InstallationID: request.InstallationID,
+		ExecutionTargetID: request.ExecutionTargetID, ExchangeID: request.ExchangeID,
+		MachineFingerprint: request.MachineFingerprint, RuntimeContractDigest: request.RuntimeContractDigest,
+		ControllerID: request.ControllerID, BindingRef: request.BindingRef,
+		NodeListenAddress: issued.Response.NodeListenAddress, CollectorEndpoint: issued.Response.CollectorEndpoint,
+		NodePublicKey: base64.RawURLEncoding.EncodeToString(nodeSPKI), NodePublicKeyFingerprint: testDigest(nodeSPKI),
+		CollectorPublicKey: base64.RawURLEncoding.EncodeToString(collectorSPKI), CollectorPublicKeyFingerprint: testDigest(collectorSPKI),
+		ResultDigest: testDigest(encodedResponse), ConsumedAt: testTime(),
+	}
+	clear(encodedResponse)
+	if err := nodeenrollment.ValidateStoredExchange(exchange); err != nil {
+		t.Fatalf("invalid stored exchange fixture: %v", err)
+	}
+
+	// A process restart derives the same encryption subkey from the protected
+	// issuer key; no independent key file or topology compatibility path exists.
+	restarted, err := New("installation-a", certificate, privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, err := restarted.OpenExchangeResult(context.Background(), exchange, issued.Sealed)
+	if err != nil || opened != issued.Response {
+		t.Fatalf("open sealed exchange after restart: %#v / %v", opened, err)
+	}
+
+	tamperedCiphertext, err := base64.RawURLEncoding.Strict().DecodeString(issued.Sealed.Ciphertext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tamperedCiphertext[len(tamperedCiphertext)-1] ^= 1
+	tampered := issued.Sealed
+	tampered.Ciphertext = base64.RawURLEncoding.EncodeToString(tamperedCiphertext)
+	clear(tamperedCiphertext)
+	if _, err := restarted.OpenExchangeResult(context.Background(), exchange, tampered); !errors.Is(err, nodeenrollment.ErrInvalidArgument) {
+		t.Fatalf("tampered ciphertext error = %v", err)
+	}
+	rebound := exchange
+	rebound.ExchangeID = "node-exchange-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	if _, err := restarted.OpenExchangeResult(context.Background(), rebound, issued.Sealed); !errors.Is(err, nodeenrollment.ErrInvalidArgument) {
+		t.Fatalf("rebound exchange error = %v", err)
+	}
+	other := testIssuer(t)
+	if _, err := other.OpenExchangeResult(context.Background(), exchange, issued.Sealed); !errors.Is(err, nodeenrollment.ErrInvalidArgument) {
+		t.Fatalf("different installation key error = %v", err)
+	}
+}
+
+func TestIssueExchangeRejectsCallerSelectedAuthority(t *testing.T) {
+	issuer := testIssuer(t)
+	nodePublic, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	collectorPublic, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeSPKI, _ := x509.MarshalPKIXPublicKey(nodePublic)
+	collectorSPKI, _ := x509.MarshalPKIXPublicKey(collectorPublic)
+	valid := nodeenrollment.ExchangeIssueRequest{
+		EnrollmentID: "node-enrollment-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", InstallationID: "installation-a",
+		ExecutionTargetID: "execution-target-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		ExchangeID:        "node-exchange-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", MachineFingerprint: "sha256:" + strings.Repeat("a", 64),
+		RuntimeContractDigest: "sha256:" + strings.Repeat("b", 64), Listener: paasv1.NodeEnrollmentListenerClaim{ManagementPort: 16443, CollectorPort: 19100},
+		NodePublicKey: nodeSPKI, CollectorPublicKey: collectorSPKI, ObservedPeerAddress: "192.168.50.10",
+		BindingRef: "node-binding-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ControllerID: "paas-controller-v1",
+		CertificateNotBefore: testTime(), CertificateNotAfter: testTime().Add(30 * 24 * time.Hour),
+	}
+	for name, mutate := range map[string]func(*nodeenrollment.ExchangeIssueRequest){
+		"wrong installation": func(value *nodeenrollment.ExchangeIssueRequest) { value.InstallationID = "installation-b" },
+		"public peer":        func(value *nodeenrollment.ExchangeIssueRequest) { value.ObservedPeerAddress = "8.8.8.8" },
+		"shared role key": func(value *nodeenrollment.ExchangeIssueRequest) {
+			value.CollectorPublicKey = value.NodePublicKey
+		},
+		"caller binding": func(value *nodeenrollment.ExchangeIssueRequest) { value.BindingRef = "binding-caller" },
+		"overlong certificate": func(value *nodeenrollment.ExchangeIssueRequest) {
+			value.CertificateNotAfter = value.CertificateNotBefore.Add(paasv1.MaximumNodeEnrollmentCertificateLifetime + time.Second)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := valid
+			mutate(&changed)
+			if _, err := issuer.IssueExchange(context.Background(), changed); !errors.Is(err, nodeenrollment.ErrInvalidArgument) {
+				t.Fatalf("unsafe exchange issue error = %v", err)
+			}
+		})
 	}
 }
 
@@ -151,8 +291,8 @@ func testIssuerMaterial(t *testing.T) ([]byte, []byte) {
 	now := testTime()
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "matrix-enrollment-issuer"},
-		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour),
-		BasicConstraintsValid: true, IsCA: true,
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(365 * 24 * time.Hour),
+		BasicConstraintsValid: true, IsCA: true, MaxPathLenZero: true,
 		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
 	}
 	issuerURI, err := paasv1.NodeEnrollmentIssuerURI("installation-a")
@@ -186,4 +326,9 @@ func testWrappingKey(t *testing.T, bits int) (*rsa.PrivateKey, string) {
 
 func testTime() time.Time {
 	return time.Date(2026, 9, 6, 8, 0, 0, 0, time.UTC)
+}
+
+func testDigest(value []byte) string {
+	digest := sha256.Sum256(value)
+	return "sha256:" + hex.EncodeToString(digest[:])
 }
