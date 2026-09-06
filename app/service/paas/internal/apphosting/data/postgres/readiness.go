@@ -11,11 +11,11 @@ import (
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
 
-// The deployment-runtime objects are an additive expansion of the published
-// PaaS schema-2 compatibility floor. Revision-4 binaries ignore them and keep
-// accepting the same readiness tuple during an exact rollback; this binary
-// separately verifies the new object and function shapes in its migration.
-const paasDatabaseSchemaVersion = 3
+// Node enrollment adds installation-scoped admission state and mutation
+// functions to the accepted PaaS schema-3 boundary. Schema-3 binaries must not
+// serve against this expanded authority contract; the fixed predecessor gate
+// proves retained data and fail-closed rollback behavior.
+const paasDatabaseSchemaVersion = 4
 
 func (repository *ApplicationRepository) Readiness(
 	ctx context.Context,

@@ -37,7 +37,7 @@ import (
 
 const (
 	deploymentRuntimeCompatibilityDSN = "MATRIX_PAAS_RUNTIME_COMPAT_POSTGRES_TEST_DSN"
-	hostLifecyclePredecessor          = "5344b739b4284e2f6f42a12165105d9b0e349bdc"
+	nodeEnrollmentPredecessor         = "acc27112cfb8ee9d35059ac29bd98a97ff20e3ac"
 	compatibilityAPILogin             = "matrix_paas_api_login"
 	compatibilityWorkerLogin          = "matrix_paas_worker_login"
 	compatibilityAPIPassword          = "mxp1.runtime-compat-api-000000000000000000000000"
@@ -201,7 +201,7 @@ func TestInstallationPartitionUpgradePreservesTenantWork(t *testing.T) {
 	assertOperationQueue(t, ctx, admin, workerPool, retained)
 }
 
-func TestHostLifecycleExactPredecessorUpgradeAndRollbackRejection(t *testing.T) {
+func TestNodeEnrollmentExactPredecessorUpgradeAndRollbackRejection(t *testing.T) {
 	adminDSN := os.Getenv(deploymentRuntimeCompatibilityDSN)
 	if adminDSN == "" {
 		t.Skipf(
@@ -246,7 +246,7 @@ func TestHostLifecycleExactPredecessorUpgradeAndRollbackRejection(t *testing.T) 
 		ctx,
 		repositoryRoot,
 		temporary,
-		hostLifecyclePredecessor,
+		nodeEnrollmentPredecessor,
 	)
 	predecessor := buildFixedPaaSBinaries(t, ctx, predecessorSource, temporary)
 	apiMigrationDSN := compatibilityRuntimeDSN(
@@ -303,7 +303,7 @@ func TestHostLifecycleExactPredecessorUpgradeAndRollbackRejection(t *testing.T) 
 		predecessorMigrationEnvironment,
 	)
 	if err := paasmigration.Verify(ctx, admin); err == nil {
-		t.Fatal("schema-3 migration verification accepted the predecessor schema")
+		t.Fatal("schema-4 migration verification accepted the predecessor schema")
 	}
 
 	apiPool, err := pgxpool.New(ctx, apiProcessDSN)
@@ -341,7 +341,7 @@ func TestHostLifecycleExactPredecessorUpgradeAndRollbackRejection(t *testing.T) 
 			apiMigrationDSN,
 			workerMigrationDSN,
 		); err != nil {
-			t.Fatalf("apply host lifecycle schema expansion attempt %d: %v", attempt, err)
+			t.Fatalf("apply node enrollment schema expansion attempt %d: %v", attempt, err)
 		}
 	}
 	if err := paasmigration.VerifyInstalled(
@@ -350,7 +350,7 @@ func TestHostLifecycleExactPredecessorUpgradeAndRollbackRejection(t *testing.T) 
 		apiMigrationDSN,
 		workerMigrationDSN,
 	); err != nil {
-		t.Fatalf("verify host lifecycle schema expansion: %v", err)
+		t.Fatalf("verify node enrollment schema expansion: %v", err)
 	}
 	if retainedAfter := compatibilityRetainedState(
 		t,
@@ -358,7 +358,7 @@ func TestHostLifecycleExactPredecessorUpgradeAndRollbackRejection(t *testing.T) 
 		admin,
 		fixture,
 	); retainedAfter != retainedBefore {
-		t.Fatal("host lifecycle schema expansion rewrote predecessor tenant work")
+		t.Fatal("node enrollment schema expansion rewrote predecessor tenant work")
 	}
 	runtimeBefore := createCompatibilityRuntimeSnapshot(
 		t,
@@ -369,12 +369,66 @@ func TestHostLifecycleExactPredecessorUpgradeAndRollbackRejection(t *testing.T) 
 		fixture,
 		retained,
 	)
+	enrollmentInstallationID := "runtime-compat-enrollment"
+	enrollmentRepository, err := NewExecutionAdmissionRepository(apiPool)
+	if err != nil {
+		t.Fatal("create upgraded enrollment admission repository")
+	}
+	enrollmentAdmission, err := executionadmission.New(
+		enrollmentRepository,
+		executionadmission.Config{
+			InstallationID:         enrollmentInstallationID,
+			ObservationTimeout:     time.Second,
+			MaximumObservationAge:  15 * time.Second,
+			MaxTransactionAttempts: 3,
+		},
+	)
+	if err != nil {
+		t.Fatal("create upgraded enrollment admission use case")
+	}
+	enrollmentAuthorization := port.Authorization{
+		InstallationID: enrollmentInstallationID,
+		Subject: paasv1.SubjectRef{
+			Type: paasv1.SubjectUser,
+			ID:   "runtime-compat-enrollment-user",
+		},
+		DecisionID: "runtime-compat-enrollment-decision",
+		RequestID:  "runtime-compat-enrollment-request",
+	}
+	enrollmentPoolID := paasv1.ResourceID("runtime-compat-enrollment-pool")
+	if _, _, _, err := enrollmentAdmission.CreatePool(
+		ctx,
+		executionadmission.CreatePoolCommand{
+			Authorization:  enrollmentAuthorization,
+			IdempotencyKey: "runtime-compat-enrollment-pool",
+			Request: paasv1.CreateExecutionPoolRequest{
+				ID:   enrollmentPoolID,
+				Name: "runtime-compat-enrollment",
+				Spec: paasv1.ExecutionPoolSpec{
+					AllowedIsolationGuarantees: []paasv1.IsolationGuarantee{
+						paasv1.IsolationWorkload,
+					},
+				},
+			},
+		},
+	); err != nil {
+		t.Fatalf("create enrollment pool after schema-3 upgrade: %v", err)
+	}
+	assertNodeEnrollmentPersistence(
+		t,
+		ctx,
+		admin,
+		apiPool,
+		enrollmentInstallationID,
+		enrollmentPoolID,
+		"runtime-compat",
+	)
 	rollbackStateBefore := compatibilityRetainedState(t, ctx, admin, fixture)
 
 	// The predecessor's read-only migration verifier audits the still-supported
 	// structural and privilege subset; it is not a release-profile permit. The
-	// schema-2 API must nevertheless fail readiness before serving against
-	// schema 3, which can persist REMOVED tombstones and lifecycle facts.
+	// schema-3 API must nevertheless fail readiness before serving against
+	// schema 4, which can persist the node enrollment admission ceremony.
 	// Rollback across this profile boundary requires an authenticated backup.
 	runFixedPaaSMigration(
 		t,
