@@ -4,11 +4,17 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -27,12 +33,14 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	auditmigration "github.com/xiak/matrix/app/service/audit/migration"
 	iammigration "github.com/xiak/matrix/app/service/iam/migration"
+	"github.com/xiak/matrix/app/service/installation/nodeconfig"
 	installationrelease "github.com/xiak/matrix/app/service/installation/release"
 	paasmigration "github.com/xiak/matrix/app/service/paas/migration"
 )
@@ -59,6 +67,108 @@ const (
 	auditServiceCredential = "mx1.ProcessAuditServiceCredential000000000000001"
 	verifierCredential     = "mx1.ProcessVerifierCredential0000000000000001"
 )
+
+type processEnrollmentAuthority struct {
+	issuerCertificatePath     string
+	issuerPrivateKeyPath      string
+	controllerCertificatePath string
+	controllerPrivateKeyPath  string
+	controllerTrustPath       string
+}
+
+func writeProcessEnrollmentAuthority(
+	t *testing.T,
+	directory string,
+	installationID string,
+) processEnrollmentAuthority {
+	t.Helper()
+	issuerPublicKey, issuerPrivateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(issuerPrivateKey)
+	issuerURI, err := paasv1.NodeEnrollmentIssuerURI(installationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuerTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "process enrollment issuer"},
+		NotBefore:             time.Date(1970, time.January, 1, 0, 0, 0, 0, time.UTC),
+		NotAfter:              time.Date(9999, time.December, 31, 23, 59, 59, 0, time.UTC),
+		BasicConstraintsValid: true, IsCA: true, MaxPathLenZero: true,
+		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		URIs:     []*url.URL{issuerURI},
+	}
+	issuerCertificate, err := x509.CreateCertificate(
+		rand.Reader, issuerTemplate, issuerTemplate, issuerPublicKey, issuerPrivateKey,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuerPrivateKeyDER, err := x509.MarshalPKCS8PrivateKey(issuerPrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(issuerPrivateKeyDER)
+
+	controllerPublicKey, controllerPrivateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(controllerPrivateKey)
+	controllerURIText, err := nodev1.ControllerURI(installationID, nodeconfig.DefaultControllerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controllerURI, err := url.Parse(controllerURIText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	controllerTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: "process enrollment controller"},
+		NotBefore: now.Add(-time.Minute), NotAfter: now.Add(time.Hour),
+		BasicConstraintsValid: true, KeyUsage: x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, URIs: []*url.URL{controllerURI},
+	}
+	controllerCertificateDER, err := x509.CreateCertificate(
+		rand.Reader, controllerTemplate, issuerTemplate, controllerPublicKey, issuerPrivateKey,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controllerPrivateKeyDER, err := x509.MarshalPKCS8PrivateKey(controllerPrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(controllerPrivateKeyDER)
+	controllerCertificate := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: controllerCertificateDER})
+	controllerPrivateKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: controllerPrivateKeyDER})
+	controllerTrust := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: issuerCertificate})
+	if len(controllerCertificate) == 0 || len(controllerPrivateKeyPEM) == 0 || len(controllerTrust) == 0 {
+		t.Fatal("encode process enrollment authority")
+	}
+	defer clear(controllerCertificate)
+	defer clear(controllerPrivateKeyPEM)
+	defer clear(controllerTrust)
+	return processEnrollmentAuthority{
+		issuerCertificatePath: writeProtectedFile(
+			t, directory, "enrollment-issuer.der", issuerCertificate,
+		),
+		issuerPrivateKeyPath: writeProtectedFile(
+			t, directory, "enrollment-issuer-key.der", issuerPrivateKeyDER,
+		),
+		controllerCertificatePath: writeProtectedFile(
+			t, directory, "enrollment-controller.crt", controllerCertificate,
+		),
+		controllerPrivateKeyPath: writeProtectedFile(
+			t, directory, "enrollment-controller.key", controllerPrivateKeyPEM,
+		),
+		controllerTrustPath: writeProtectedFile(
+			t, directory, "enrollment-controller-trust.crt", controllerTrust,
+		),
+	}
+}
 
 func TestRuntimeDSNBindsLeastPrivilegeLogin(t *testing.T) {
 	admin, err := pgx.ParseConfig("postgres://migration:admin-password@127.0.0.1:55432/matrix_authority_process_unit?sslmode=disable&user=postgres&password=query-admin")
@@ -482,6 +592,7 @@ func runAuthorityProcesses(t *testing.T, dsnVariable string, nodeFixture func(*t
 	temporary := t.TempDir()
 	binaries := buildAuthorityBinaries(t, ctx, root, temporary)
 	bootstrap := processBootstrap(t)
+	enrollmentAuthority := writeProcessEnrollmentAuthority(t, temporary, bootstrap.InstallationID)
 	node := nodeFixture(t, temporary, bootstrap.InstallationID)
 	bootstrapBytes, err := iamv1.EncodeBootstrapDocument(bootstrap)
 	if err != nil {
@@ -596,6 +707,11 @@ func runAuthorityProcesses(t *testing.T, dsnVariable string, nodeFixture func(*t
 		"MATRIX_PAAS_RELEASE_ID=matrix-v0.1.0-process",
 		"MATRIX_PAAS_VERIFICATION_ARTIFACT_DIGEST=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		"MATRIX_PAAS_NODE_CONNECTIONS_FILE=" + node.configurationPath,
+		"MATRIX_PAAS_ENROLLMENT_ISSUER_CERTIFICATE_FILE=" + enrollmentAuthority.issuerCertificatePath,
+		"MATRIX_PAAS_ENROLLMENT_ISSUER_PRIVATE_KEY_FILE=" + enrollmentAuthority.issuerPrivateKeyPath,
+		"MATRIX_PAAS_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE=" + enrollmentAuthority.controllerCertificatePath,
+		"MATRIX_PAAS_ENROLLMENT_CONTROLLER_PRIVATE_KEY_FILE=" + enrollmentAuthority.controllerPrivateKeyPath,
+		"MATRIX_PAAS_ENROLLMENT_CONTROLLER_TRUST_FILE=" + enrollmentAuthority.controllerTrustPath,
 	}
 	paasDispatcherEnvironment := func(credentialPath string, workerID string) []string {
 		return []string{
