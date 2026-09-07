@@ -389,6 +389,26 @@ func TestOfflineLifecycleTimeoutRemainsBoundedByRuntimeScope(t *testing.T) {
 	}
 }
 
+func TestAutomaticUpgradeRollbackAcceptsEitherBoundedVerificationObserver(t *testing.T) {
+	for _, scenario := range []struct {
+		name   string
+		code   string
+		accept bool
+	}{
+		{name: "start observer", code: "START_VERIFICATION_FAILED", accept: true},
+		{name: "platform observer", code: "PLATFORM_VERIFICATION_FAILED", accept: true},
+		{name: "dependency outage", code: "DEPENDENCY_UNAVAILABLE"},
+		{name: "manual recovery", code: "AUTHENTICATED_RECOVERY_REQUIRED"},
+		{name: "missing code"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			if accepted := automaticRollbackVerificationFailure(scenario.code); accepted != scenario.accept {
+				t.Fatalf("verification observer accepted=%t, want %t", accepted, scenario.accept)
+			}
+		})
+	}
+}
+
 func TestReleasePairRequiresCompatibleImmediatePredecessor(t *testing.T) {
 	for _, scenario := range []struct {
 		name   string

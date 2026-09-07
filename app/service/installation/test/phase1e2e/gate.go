@@ -1273,9 +1273,30 @@ func (value *gate) failedUpgrade(
 	waitErr := <-waited
 	wantExit, wantClass, wantCode := 5, "VERIFICATION_FAILED", "PLATFORM_VERIFICATION_FAILED"
 	wantOutcome := lifecycle.OutcomeRolledBack
-	if value.releases.a.Manifest.Database != value.releases.b.Manifest.Database {
+	sameDatabaseProfile := value.releases.a.Manifest.Database == value.releases.b.Manifest.Database
+	if !sameDatabaseProfile {
 		wantExit, wantClass, wantCode = 3, "PRECONDITION_FAILED", "AUTHENTICATED_RECOVERY_REQUIRED"
 		wantOutcome = lifecycle.OutcomeManualIntervention
+	}
+	state, err := readJournal(ctx, value.config.root)
+	if err != nil || state.Active != nil || state.Last == nil ||
+		state.Last.Command.Action != lifecycle.ActionUpgrade ||
+		state.Last.Command.BackupID == "" || state.Last.Outcome != wantOutcome ||
+		state.CurrentReleaseID != value.releases.a.Manifest.Release.ID ||
+		state.CurrentReleaseDigest != value.releases.a.ManifestSHA256 {
+		return "", fail("failed-upgrade-journal")
+	}
+	if sameDatabaseProfile {
+		// The injector removes the candidate gateway while Compose is finishing
+		// its bounded health wait. Either the start observer or the immediately
+		// following platform verifier may win that race; both are definitive
+		// verification failures and must produce the same automatic rollback.
+		if !automaticRollbackVerificationFailure(state.Last.FailureCode) {
+			return "", fail("failed-upgrade-journal")
+		}
+		wantCode = state.Last.FailureCode
+	} else if state.Last.FailureCode != wantCode {
+		return "", fail("failed-upgrade-journal")
 	}
 	if err := validateExpectedMXFailure(
 		waitErr, stdout, stderr, "upgrade", value.forbidden(secret, password, bearer),
@@ -1283,16 +1304,11 @@ func (value *gate) failedUpgrade(
 	); err != nil {
 		return "", err
 	}
-	state, err := readJournal(ctx, value.config.root)
-	if err != nil || state.Active != nil || state.Last == nil ||
-		state.Last.Command.Action != lifecycle.ActionUpgrade ||
-		state.Last.Command.BackupID == "" || state.Last.Outcome != wantOutcome ||
-		state.Last.FailureCode != wantCode ||
-		state.CurrentReleaseID != value.releases.a.Manifest.Release.ID ||
-		state.CurrentReleaseDigest != value.releases.a.ManifestSHA256 {
-		return "", fail("failed-upgrade-journal")
-	}
 	return state.Last.Command.BackupID, nil
+}
+
+func automaticRollbackVerificationFailure(code string) bool {
+	return code == "START_VERIFICATION_FAILED" || code == "PLATFORM_VERIFICATION_FAILED"
 }
 
 func (value *gate) assertWorkload(
