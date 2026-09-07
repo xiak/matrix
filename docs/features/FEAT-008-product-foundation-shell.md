@@ -1,6 +1,6 @@
 # FEAT-008: Private-cloud product foundation and unified shell
 
-- Status: In progress; UX and architecture complete; Gate A discovery runtime and Gate B unified-shell slice implemented; fixed productless-predecessor lifecycle compatibility implemented; real offline lifecycle and authenticated-browser evidence pending
+- Status: In progress; UX and architecture complete; Gate A discovery runtime and Gate B unified-shell slice implemented; fixed productless-predecessor offline lifecycle verified; fresh current-release, second-product, and authenticated-browser evidence pending
 - Target release: Unscheduled multi-product release
 - Contract: `installation.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -194,14 +194,31 @@ tenant-authority, offline, upgrade/rollback/recovery, and
   recovery. Backend transition tests cover upgrade plus explicit rollback;
   the configuration restoration test also passes in a network-disabled Linux
   container.
+- Live product readiness is observed before the list's committed observation
+  time, so a real downstream `checkedAt` is not misclassified as future data.
+  Productless backup recovery streams the two fixed post-product IAM function
+  removals and the authenticated `pg_restore` SQL through one
+  `psql --single-transaction`; restore failure cannot leave the compatibility
+  cleanup partially committed.
+- A fresh privileged Docker-in-Docker host with outer network mode `none`,
+  Docker 27.5.1, and zero initial images, containers, and volumes completed the
+  cross-version lifecycle from signed Release A
+  `matrix-v0.1.0-c88a84f379af` to signed Release B
+  `matrix-v0.2.0-ea4e80820e4a`. It passed old-release installation, real
+  IAM/PaaS/Audit behavior, a failed candidate with automatic rollback, a
+  successful B upgrade with exactly one signed Application PaaS product in
+  `READY`, explicit rollback with discovery unavailable, old-backup recovery,
+  application rollback and stop, bounded support leakage scans, and a restart
+  of the entire isolated host followed by status and verification.
 - On this implementation slice, `go generate ./...`, `go test ./...`,
   `go vet ./...`, `go test -race ./...`, ten repeated installation contract
   runs, Linux cross-builds, and `git diff --check` pass.
 
-This evidence closes only the authority-migration prerequisite for Gate C. A
-network-disabled signed-release install plus injected-failure upgrade,
-automatic rollback, explicit rollback, backup recovery, and matching UI/API
-inventory evidence remain required before Gate C can pass.
+This evidence closes the fixed productless-to-product-foundation compatibility
+portion of Gate C. Gate C remains open until a fresh current product release
+installs from an empty root and an upgrade adds a fixture second product with
+matching UI/API/component behavior. The authenticated browser and
+accessibility evidence in Gate B also remains open.
 
 ## Deferred
 
