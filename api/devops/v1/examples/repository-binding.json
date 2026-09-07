@@ -1,0 +1,26 @@
+{
+  "apiVersion": "devops.matrix.xiak.com/v1",
+  "kind": "RepositoryBinding",
+  "metadata": {
+    "id": "repository-binding-api",
+    "name": "api",
+    "scope": {
+      "tenantId": "organization-acme"
+    },
+    "resourceVersion": 1,
+    "createdAt": "2026-09-07T04:05:06Z",
+    "updatedAt": "2026-09-07T04:05:06Z"
+  },
+  "projectId": "devops-project-platform",
+  "spec": {
+    "sourceConnectionId": "source-connection-primary",
+    "externalRepositoryId": "42",
+    "repositoryPath": "platform/api",
+    "trustedDefaultBranch": "main"
+  },
+  "contentDigest": "sha256:ba641c4f85296cb2b0a43014403aeb941fe7dd233f15c9296e0d3bc1bac7b453",
+  "status": {
+    "health": "PENDING",
+    "observedAt": "2026-09-07T04:05:06Z"
+  }
+}

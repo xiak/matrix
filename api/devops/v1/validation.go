@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -13,10 +14,15 @@ import (
 )
 
 var (
-	idPattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
-	namePattern   = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
-	digestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
-	fieldPattern  = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9.\[\]-]{0,127}$`)
+	idPattern                = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+	namePattern              = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+	digestPattern            = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	fieldPattern             = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9.\[\]-]{0,127}$`)
+	hostPattern              = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$`)
+	repositorySegmentPattern = regexp.MustCompile(
+		`^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$`,
+	)
+	branchPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$`)
 )
 
 func ValidateID(name, value string) error {
@@ -48,8 +54,8 @@ func ValidateResourceMetadata(value ResourceMetadata) error {
 	if !namePattern.MatchString(value.Name) {
 		problems = append(problems, errors.New("metadata.name must be a DNS label"))
 	}
-	if value.ResourceVersion == 0 {
-		problems = append(problems, errors.New("metadata.resourceVersion must be positive"))
+	if value.ResourceVersion == 0 || value.ResourceVersion > MaximumContractInteger {
+		problems = append(problems, errors.New("metadata.resourceVersion is invalid"))
 	}
 	if value.UpdatedAt.Before(value.CreatedAt) {
 		problems = append(problems, errors.New("metadata.updatedAt cannot precede createdAt"))
@@ -73,6 +79,117 @@ func ValidateCreateDevOpsProjectRequest(value CreateDevOpsProjectRequest) error 
 		problems = append(problems, errors.New("name must be a DNS label"))
 	}
 	return errors.Join(problems...)
+}
+
+func ValidateSourceConnectionSpec(value SourceConnectionSpec) error {
+	var problems []error
+	problems = append(problems,
+		ValidateID("spec.adapterId", string(value.AdapterID)),
+		ValidateID("spec.webhookSecretRef", string(value.WebhookSecretRef)),
+		ValidateID("spec.fetchCredentialRef", string(value.FetchCredentialRef)),
+		ValidateID("spec.reportCredentialRef", string(value.ReportCredentialRef)),
+		validateEndpointOrigins(value.AllowedEndpointOrigins),
+	)
+	if value.WebhookSecretRef == value.FetchCredentialRef ||
+		value.WebhookSecretRef == value.ReportCredentialRef ||
+		value.FetchCredentialRef == value.ReportCredentialRef {
+		problems = append(problems, errors.New("source connection credential references must be distinct"))
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateSourceConnectionStatus(value SourceConnectionStatus) error {
+	if !contains(SourceConnectionHealthStates(), value.Health) {
+		return errors.New("source connection health is invalid")
+	}
+	return validateContractTime("status.observedAt", value.ObservedAt)
+}
+
+func ValidateSourceConnection(value SourceConnection) error {
+	var problems []error
+	if value.APIVersion != APIVersion || value.Kind != "SourceConnection" {
+		problems = append(problems, errors.New("source connection type metadata is invalid"))
+	}
+	problems = append(problems,
+		ValidateResourceMetadata(value.Metadata),
+		ValidateSourceConnectionSpec(value.Spec),
+		ValidateSourceConnectionStatus(value.Status),
+	)
+	if value.Status.ObservedAt.Before(value.Metadata.CreatedAt) ||
+		value.Status.ObservedAt.After(value.Metadata.UpdatedAt) {
+		problems = append(problems, errors.New("source connection observation time is invalid"))
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateCreateSourceConnectionRequest(value CreateSourceConnectionRequest) error {
+	var problems []error
+	problems = append(problems,
+		ValidateID("id", string(value.ID)),
+		ValidateSourceConnectionSpec(value.Spec),
+	)
+	if !namePattern.MatchString(value.Name) {
+		problems = append(problems, errors.New("name must be a DNS label"))
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateUpdateSourceConnectionRequest(value UpdateSourceConnectionRequest) error {
+	return ValidateSourceConnectionSpec(value.Spec)
+}
+
+func ValidateRepositoryBindingSpec(value RepositoryBindingSpec) error {
+	return errors.Join(
+		ValidateID("spec.sourceConnectionId", string(value.SourceConnectionID)),
+		ValidateID("spec.externalRepositoryId", string(value.ExternalRepositoryID)),
+		validateRepositoryPath(value.RepositoryPath),
+		validateTrustedBranch(value.TrustedDefaultBranch),
+	)
+}
+
+func ValidateRepositoryBindingStatus(value RepositoryBindingStatus) error {
+	if !contains(RepositoryBindingHealthStates(), value.Health) {
+		return errors.New("repository binding health is invalid")
+	}
+	return validateContractTime("status.observedAt", value.ObservedAt)
+}
+
+func ValidateRepositoryBinding(value RepositoryBinding) error {
+	var problems []error
+	if value.APIVersion != APIVersion || value.Kind != "RepositoryBinding" {
+		problems = append(problems, errors.New("repository binding type metadata is invalid"))
+	}
+	problems = append(problems,
+		ValidateResourceMetadata(value.Metadata),
+		ValidateID("projectId", string(value.ProjectID)),
+		ValidateRepositoryBindingSpec(value.Spec),
+		validateExactDigest(
+			"contentDigest", value.ContentDigest, RepositoryBindingSpecDigest(value.Spec),
+		),
+		ValidateRepositoryBindingStatus(value.Status),
+	)
+	if value.Status.ObservedAt.Before(value.Metadata.CreatedAt) ||
+		value.Status.ObservedAt.After(value.Metadata.UpdatedAt) {
+		problems = append(problems, errors.New("repository binding observation time is invalid"))
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateCreateRepositoryBindingRequest(value CreateRepositoryBindingRequest) error {
+	var problems []error
+	problems = append(problems,
+		ValidateID("id", string(value.ID)),
+		ValidateID("projectId", string(value.ProjectID)),
+		ValidateRepositoryBindingSpec(value.Spec),
+	)
+	if !namePattern.MatchString(value.Name) {
+		problems = append(problems, errors.New("name must be a DNS label"))
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateUpdateRepositoryBindingRequest(value UpdateRepositoryBindingRequest) error {
+	return ValidateRepositoryBindingSpec(value.Spec)
 }
 
 func ValidatePipelineDraftSpec(value PipelineDraftSpec) error {
@@ -106,8 +223,8 @@ func ValidatePipelineRevisionReference(value PipelineRevisionReference) error {
 		ValidateID("activeRevision.id", string(value.ID)),
 		ValidateDigest("activeRevision.contentDigest", value.ContentDigest),
 	)
-	if value.Revision == 0 {
-		problems = append(problems, errors.New("activeRevision.revision must be positive"))
+	if value.Revision == 0 || value.Revision > MaximumContractInteger {
+		problems = append(problems, errors.New("activeRevision.revision is invalid"))
 	}
 	return errors.Join(problems...)
 }
@@ -156,6 +273,7 @@ func ValidatePipelineRevisionSpec(value PipelineRevisionSpec) error {
 	var problems []error
 	problems = append(problems,
 		ValidateID("spec.repositoryBindingId", string(value.RepositoryBindingID)),
+		ValidateDigest("spec.repositoryBindingDigest", value.RepositoryBindingDigest),
 		ValidateDigest("spec.toolchainImageDigest", value.ToolchainImageDigest),
 		ValidateVerificationLimits(value.Limits),
 	)
@@ -197,8 +315,8 @@ func ValidatePipelineRevision(value PipelineRevision) error {
 		ValidateSubjectRef(value.ActivatedBy),
 		validateContractTime("activatedAt", value.ActivatedAt),
 	)
-	if value.Revision == 0 {
-		problems = append(problems, errors.New("revision must be positive"))
+	if value.Revision == 0 || value.Revision > MaximumContractInteger {
+		problems = append(problems, errors.New("revision is invalid"))
 	}
 	contentDigest := PipelineRevisionSpecDigest(value.Spec)
 	problems = append(problems, validateExactDigest("contentDigest", value.ContentDigest, contentDigest))
@@ -296,6 +414,90 @@ func validateContractTime(name string, value time.Time) error {
 	if value.IsZero() || value.Location() != time.UTC || value != value.Round(0) ||
 		value.Nanosecond()%1_000 != 0 {
 		return fmt.Errorf("%s is invalid", name)
+	}
+	return nil
+}
+
+func validateEndpointOrigins(values []string) error {
+	if len(values) == 0 || len(values) > 8 {
+		return errors.New("allowedEndpointOrigins must contain between one and eight origins")
+	}
+	var problems []error
+	previous := ""
+	for index, value := range values {
+		if value <= previous {
+			problems = append(problems, errors.New("allowedEndpointOrigins must be sorted and unique"))
+		}
+		previous = value
+		if validateEndpointOrigin(value) != nil {
+			problems = append(problems, fmt.Errorf("allowedEndpointOrigins[%d] is invalid", index))
+		}
+	}
+	return errors.Join(problems...)
+}
+
+func validateEndpointOrigin(value string) error {
+	if validateSafeText("endpoint origin", value, 1, 512) != nil {
+		return errors.New("endpoint origin is invalid")
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" ||
+		parsed.User != nil || parsed.Opaque != "" || parsed.Path != "" ||
+		parsed.RawPath != "" || parsed.RawQuery != "" || parsed.ForceQuery ||
+		parsed.Fragment != "" || parsed.String() != value {
+		return errors.New("endpoint origin must be a canonical HTTPS origin")
+	}
+	host := parsed.Hostname()
+	if host == "" || host != strings.ToLower(host) || !hostPattern.MatchString(host) ||
+		strings.Contains(host, "..") || host == "localhost" ||
+		strings.HasSuffix(host, ".localhost") {
+		return errors.New("endpoint origin host is invalid")
+	}
+	for _, label := range strings.Split(host, ".") {
+		if len(label) == 0 || len(label) > 63 || strings.HasPrefix(label, "-") ||
+			strings.HasSuffix(label, "-") {
+			return errors.New("endpoint origin host is invalid")
+		}
+	}
+	port := parsed.Port()
+	if port != "" {
+		numeric, err := strconv.Atoi(port)
+		if err != nil || numeric < 1 || numeric > 65535 ||
+			strconv.Itoa(numeric) != port {
+			return errors.New("endpoint origin port is invalid")
+		}
+	}
+	return nil
+}
+
+func validateRepositoryPath(value string) error {
+	if validateSafeText("repositoryPath", value, 3, 257) != nil {
+		return errors.New("repositoryPath is invalid")
+	}
+	segments := strings.Split(value, "/")
+	if len(segments) != 2 {
+		return errors.New("repositoryPath must contain exactly owner and repository")
+	}
+	for _, segment := range segments {
+		if !repositorySegmentPattern.MatchString(segment) || segment == "." ||
+			segment == ".." || strings.Contains(segment, "..") {
+			return errors.New("repositoryPath contains an invalid segment")
+		}
+	}
+	return nil
+}
+
+func validateTrustedBranch(value string) error {
+	if !branchPattern.MatchString(value) || strings.Contains(value, "..") ||
+		strings.Contains(value, "//") || strings.Contains(value, "@{") ||
+		strings.HasSuffix(value, "/") || strings.HasSuffix(value, ".") {
+		return errors.New("trustedDefaultBranch is invalid")
+	}
+	for _, segment := range strings.Split(value, "/") {
+		if segment == "" || strings.HasPrefix(segment, ".") ||
+			strings.HasSuffix(segment, ".lock") {
+			return errors.New("trustedDefaultBranch is invalid")
+		}
 	}
 	return nil
 }

@@ -2,7 +2,6 @@ package domain
 
 import (
 	"errors"
-	"math"
 	"time"
 
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
@@ -39,17 +38,23 @@ func NewDevOpsProject(
 
 func NewPipeline(
 	request devopsv1.CreatePipelineRequest,
-	scope devopsv1.ResourceScope,
+	project devopsv1.DevOpsProject,
+	binding devopsv1.RepositoryBinding,
 	createdAt time.Time,
 ) (devopsv1.Pipeline, error) {
 	if err := devopsv1.ValidateCreatePipelineRequest(request); err != nil {
 		return devopsv1.Pipeline{}, err
 	}
+	if err := validateBindingForProject(project, binding); err != nil ||
+		request.ProjectID != project.Metadata.ID ||
+		request.Draft.RepositoryBindingID != binding.Metadata.ID {
+		return devopsv1.Pipeline{}, ErrReferenceMismatch
+	}
 	pipeline := devopsv1.Pipeline{
 		APIVersion: devopsv1.APIVersion,
 		Kind:       "Pipeline",
 		Metadata: devopsv1.ResourceMetadata{
-			ID: request.ID, Name: request.Name, Scope: scope,
+			ID: request.ID, Name: request.Name, Scope: project.Metadata.Scope,
 			ResourceVersion: 1, CreatedAt: createdAt, UpdatedAt: createdAt,
 		},
 		ProjectID: request.ProjectID,
@@ -68,6 +73,7 @@ func UpdatePipelineDraft(
 	current devopsv1.Pipeline,
 	expectedResourceVersion uint64,
 	request devopsv1.UpdatePipelineDraftRequest,
+	binding devopsv1.RepositoryBinding,
 	updatedAt time.Time,
 ) (devopsv1.Pipeline, error) {
 	if err := devopsv1.ValidatePipeline(current); err != nil {
@@ -76,14 +82,14 @@ func UpdatePipelineDraft(
 	if err := devopsv1.ValidateUpdatePipelineDraftRequest(request); err != nil {
 		return devopsv1.Pipeline{}, err
 	}
-	if expectedResourceVersion == 0 || expectedResourceVersion != current.Metadata.ResourceVersion {
-		return devopsv1.Pipeline{}, ErrVersionConflict
+	if devopsv1.ValidateRepositoryBinding(binding) != nil ||
+		current.Metadata.Scope != binding.Metadata.Scope ||
+		current.ProjectID != binding.ProjectID ||
+		request.Draft.RepositoryBindingID != binding.Metadata.ID {
+		return devopsv1.Pipeline{}, ErrReferenceMismatch
 	}
-	if current.Metadata.ResourceVersion == math.MaxUint64 {
-		return devopsv1.Pipeline{}, ErrVersionExhausted
-	}
-	if !updatedAt.After(current.Metadata.UpdatedAt) {
-		return devopsv1.Pipeline{}, ErrInvalidTime
+	if err := validateMutation(current.Metadata, expectedResourceVersion, updatedAt); err != nil {
+		return devopsv1.Pipeline{}, err
 	}
 	digest := devopsv1.PipelineDraftSpecDigest(request.Draft)
 	if digest == current.Draft.ContentDigest {
@@ -104,6 +110,7 @@ func ActivatePipeline(
 	current devopsv1.Pipeline,
 	expectedResourceVersion uint64,
 	actor devopsv1.SubjectRef,
+	binding devopsv1.RepositoryBinding,
 	activatedAt time.Time,
 ) (devopsv1.PipelineActivation, error) {
 	if err := devopsv1.ValidatePipeline(current); err != nil {
@@ -112,24 +119,24 @@ func ActivatePipeline(
 	if err := devopsv1.ValidateSubjectRef(actor); err != nil {
 		return devopsv1.PipelineActivation{}, err
 	}
-	if expectedResourceVersion == 0 || expectedResourceVersion != current.Metadata.ResourceVersion {
-		return devopsv1.PipelineActivation{}, ErrVersionConflict
+	if devopsv1.ValidateRepositoryBinding(binding) != nil ||
+		current.Metadata.Scope != binding.Metadata.Scope ||
+		current.ProjectID != binding.ProjectID ||
+		current.Draft.Spec.RepositoryBindingID != binding.Metadata.ID {
+		return devopsv1.PipelineActivation{}, ErrReferenceMismatch
 	}
-	if current.Metadata.ResourceVersion == math.MaxUint64 {
-		return devopsv1.PipelineActivation{}, ErrVersionExhausted
-	}
-	if !activatedAt.After(current.Metadata.UpdatedAt) {
-		return devopsv1.PipelineActivation{}, ErrInvalidTime
+	if err := validateMutation(current.Metadata, expectedResourceVersion, activatedAt); err != nil {
+		return devopsv1.PipelineActivation{}, err
 	}
 
 	revisionNumber := uint64(1)
 	if current.ActiveRevision != nil {
-		if current.ActiveRevision.Revision == math.MaxUint64 {
+		if current.ActiveRevision.Revision >= devopsv1.MaximumContractInteger {
 			return devopsv1.PipelineActivation{}, ErrVersionExhausted
 		}
 		revisionNumber = current.ActiveRevision.Revision + 1
 	}
-	revisionSpec := resolveRevisionSpec(current.Draft.Spec)
+	revisionSpec := resolveRevisionSpec(current.Draft.Spec, binding)
 	if err := devopsv1.ValidatePipelineRevisionSpec(revisionSpec); err != nil {
 		return devopsv1.PipelineActivation{}, err
 	}
@@ -177,17 +184,21 @@ func ActivatePipeline(
 	return activation, nil
 }
 
-func resolveRevisionSpec(draft devopsv1.PipelineDraftSpec) devopsv1.PipelineRevisionSpec {
+func resolveRevisionSpec(
+	draft devopsv1.PipelineDraftSpec,
+	binding devopsv1.RepositoryBinding,
+) devopsv1.PipelineRevisionSpec {
 	return devopsv1.PipelineRevisionSpec{
-		RepositoryBindingID:  draft.RepositoryBindingID,
-		TriggerPolicy:        draft.TriggerPolicy,
-		VerificationProfile:  draft.VerificationProfile,
-		ExecutorProfile:      devopsv1.ExecutorMatrixNativeIsolatedV1,
-		ToolchainImageDigest: devopsv1.Go126OfflineToolchainImageDigest,
-		DependencyEgress:     draft.DependencyEgress,
-		ReporterPolicy:       draft.ReporterPolicy,
-		Steps:                devopsv1.FixedVerificationSteps(),
-		Limits:               devopsv1.FixedVerificationLimits(),
+		RepositoryBindingID:     draft.RepositoryBindingID,
+		RepositoryBindingDigest: binding.ContentDigest,
+		TriggerPolicy:           draft.TriggerPolicy,
+		VerificationProfile:     draft.VerificationProfile,
+		ExecutorProfile:         devopsv1.ExecutorMatrixNativeIsolatedV1,
+		ToolchainImageDigest:    devopsv1.Go126OfflineToolchainImageDigest,
+		DependencyEgress:        draft.DependencyEgress,
+		ReporterPolicy:          draft.ReporterPolicy,
+		Steps:                   devopsv1.FixedVerificationSteps(),
+		Limits:                  devopsv1.FixedVerificationLimits(),
 	}
 }
 

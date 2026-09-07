@@ -82,34 +82,46 @@ func buildDocument() object {
 			"ResourceID": opaqueIDSchema(),
 		},
 		Enums: map[string][]string{
-			"TriggerPolicy":          openapi31.StringValues(devopsv1.TriggerPolicies()),
-			"VerificationProfile":    openapi31.StringValues(devopsv1.VerificationProfiles()),
-			"ExecutorProfile":        openapi31.StringValues(devopsv1.ExecutorProfiles()),
-			"DependencyEgressPolicy": openapi31.StringValues(devopsv1.DependencyEgressPolicies()),
-			"ReporterPolicy":         openapi31.StringValues(devopsv1.ReporterPolicies()),
-			"VerificationStepKind":   openapi31.StringValues(devopsv1.VerificationStepKinds()),
-			"SubjectKind":            openapi31.StringValues(devopsv1.SubjectKinds()),
-			"ErrorCode":              openapi31.StringValues(devopsv1.ErrorCodes()),
+			"TriggerPolicy":           openapi31.StringValues(devopsv1.TriggerPolicies()),
+			"VerificationProfile":     openapi31.StringValues(devopsv1.VerificationProfiles()),
+			"ExecutorProfile":         openapi31.StringValues(devopsv1.ExecutorProfiles()),
+			"DependencyEgressPolicy":  openapi31.StringValues(devopsv1.DependencyEgressPolicies()),
+			"ReporterPolicy":          openapi31.StringValues(devopsv1.ReporterPolicies()),
+			"VerificationStepKind":    openapi31.StringValues(devopsv1.VerificationStepKinds()),
+			"SubjectKind":             openapi31.StringValues(devopsv1.SubjectKinds()),
+			"SourceConnectionHealth":  openapi31.StringValues(devopsv1.SourceConnectionHealthStates()),
+			"RepositoryBindingHealth": openapi31.StringValues(devopsv1.RepositoryBindingHealthStates()),
+			"ErrorCode":               openapi31.StringValues(devopsv1.ErrorCodes()),
 		},
 		Structs: map[string]reflect.Type{
-			"ResourceScope":              openapi31.StructType[devopsv1.ResourceScope](),
-			"ResourceMetadata":           openapi31.StructType[devopsv1.ResourceMetadata](),
-			"DevOpsProject":              openapi31.StructType[devopsv1.DevOpsProject](),
-			"CreateDevOpsProjectRequest": openapi31.StructType[devopsv1.CreateDevOpsProjectRequest](),
-			"PipelineDraftSpec":          openapi31.StructType[devopsv1.PipelineDraftSpec](),
-			"PipelineDraft":              openapi31.StructType[devopsv1.PipelineDraft](),
-			"PipelineRevisionReference":  openapi31.StructType[devopsv1.PipelineRevisionReference](),
-			"Pipeline":                   openapi31.StructType[devopsv1.Pipeline](),
-			"CreatePipelineRequest":      openapi31.StructType[devopsv1.CreatePipelineRequest](),
-			"UpdatePipelineDraftRequest": openapi31.StructType[devopsv1.UpdatePipelineDraftRequest](),
-			"VerificationStep":           openapi31.StructType[devopsv1.VerificationStep](),
-			"VerificationLimits":         openapi31.StructType[devopsv1.VerificationLimits](),
-			"PipelineRevisionSpec":       openapi31.StructType[devopsv1.PipelineRevisionSpec](),
-			"SubjectRef":                 openapi31.StructType[devopsv1.SubjectRef](),
-			"PipelineRevision":           openapi31.StructType[devopsv1.PipelineRevision](),
-			"PipelineActivation":         openapi31.StructType[devopsv1.PipelineActivation](),
-			"FieldViolation":             openapi31.StructType[devopsv1.FieldViolation](),
-			"Problem":                    openapi31.StructType[devopsv1.Problem](),
+			"ResourceScope":                  openapi31.StructType[devopsv1.ResourceScope](),
+			"ResourceMetadata":               openapi31.StructType[devopsv1.ResourceMetadata](),
+			"DevOpsProject":                  openapi31.StructType[devopsv1.DevOpsProject](),
+			"CreateDevOpsProjectRequest":     openapi31.StructType[devopsv1.CreateDevOpsProjectRequest](),
+			"SourceConnectionSpec":           openapi31.StructType[devopsv1.SourceConnectionSpec](),
+			"SourceConnectionStatus":         openapi31.StructType[devopsv1.SourceConnectionStatus](),
+			"SourceConnection":               openapi31.StructType[devopsv1.SourceConnection](),
+			"CreateSourceConnectionRequest":  openapi31.StructType[devopsv1.CreateSourceConnectionRequest](),
+			"UpdateSourceConnectionRequest":  openapi31.StructType[devopsv1.UpdateSourceConnectionRequest](),
+			"RepositoryBindingSpec":          openapi31.StructType[devopsv1.RepositoryBindingSpec](),
+			"RepositoryBindingStatus":        openapi31.StructType[devopsv1.RepositoryBindingStatus](),
+			"RepositoryBinding":              openapi31.StructType[devopsv1.RepositoryBinding](),
+			"CreateRepositoryBindingRequest": openapi31.StructType[devopsv1.CreateRepositoryBindingRequest](),
+			"UpdateRepositoryBindingRequest": openapi31.StructType[devopsv1.UpdateRepositoryBindingRequest](),
+			"PipelineDraftSpec":              openapi31.StructType[devopsv1.PipelineDraftSpec](),
+			"PipelineDraft":                  openapi31.StructType[devopsv1.PipelineDraft](),
+			"PipelineRevisionReference":      openapi31.StructType[devopsv1.PipelineRevisionReference](),
+			"Pipeline":                       openapi31.StructType[devopsv1.Pipeline](),
+			"CreatePipelineRequest":          openapi31.StructType[devopsv1.CreatePipelineRequest](),
+			"UpdatePipelineDraftRequest":     openapi31.StructType[devopsv1.UpdatePipelineDraftRequest](),
+			"VerificationStep":               openapi31.StructType[devopsv1.VerificationStep](),
+			"VerificationLimits":             openapi31.StructType[devopsv1.VerificationLimits](),
+			"PipelineRevisionSpec":           openapi31.StructType[devopsv1.PipelineRevisionSpec](),
+			"SubjectRef":                     openapi31.StructType[devopsv1.SubjectRef](),
+			"PipelineRevision":               openapi31.StructType[devopsv1.PipelineRevision](),
+			"PipelineActivation":             openapi31.StructType[devopsv1.PipelineActivation](),
+			"FieldViolation":                 openapi31.StructType[devopsv1.FieldViolation](),
+			"Problem":                        openapi31.StructType[devopsv1.Problem](),
 		},
 		FieldOverlay:  fieldOverlay,
 		SchemaOverlay: applySemanticOverlays,
@@ -127,6 +139,38 @@ func buildPaths() object {
 		"/v1/projects/{projectId}": object{
 			"get": readOperation(
 				"getDevOpsProject", "Get a DevOps project", "projectId", "DevOpsProject",
+			),
+		},
+		"/v1/source-connections": object{
+			"post": createOperation(
+				"createSourceConnection", "Create a source connection",
+				"CreateSourceConnectionRequest", "SourceConnection",
+			),
+		},
+		"/v1/source-connections/{sourceConnectionId}": object{
+			"get": readOperation(
+				"getSourceConnection", "Get a source connection",
+				"sourceConnectionId", "SourceConnection",
+			),
+			"put": updateResourceOperation(
+				"updateSourceConnection", "Replace source connection credential references",
+				"sourceConnectionId", "UpdateSourceConnectionRequest", "SourceConnection",
+			),
+		},
+		"/v1/repository-bindings": object{
+			"post": createOperation(
+				"createRepositoryBinding", "Create a repository binding",
+				"CreateRepositoryBindingRequest", "RepositoryBinding",
+			),
+		},
+		"/v1/repository-bindings/{repositoryBindingId}": object{
+			"get": readOperation(
+				"getRepositoryBinding", "Get a repository binding",
+				"repositoryBindingId", "RepositoryBinding",
+			),
+			"put": updateResourceOperation(
+				"updateRepositoryBinding", "Replace a repository binding specification",
+				"repositoryBindingId", "UpdateRepositoryBindingRequest", "RepositoryBinding",
 			),
 		},
 		"/v1/pipelines": object{
@@ -201,6 +245,27 @@ func updateDraftOperation() object {
 	}
 }
 
+func updateResourceOperation(
+	operationID, summary, pathParameter, requestSchema, responseSchema string,
+) object {
+	responses := openapi31.ProblemResponses("400", "401", "403", "404", "409", "412", "422", "500", "503")
+	responses["200"] = response(
+		"Updated resource.", responseSchema,
+		object{"ETag": openapi31.ComponentRef("#/components/headers/ETag")},
+	)
+	return object{
+		"operationId": operationID,
+		"summary":     summary,
+		"parameters": []any{
+			openapi31.PathIDParameter(pathParameter),
+			openapi31.ComponentRef("#/components/parameters/IdempotencyKey"),
+			openapi31.ComponentRef("#/components/parameters/IfMatch"),
+		},
+		"requestBody": openapi31.JSONRequestBody(requestSchema),
+		"responses":   responses,
+	}
+}
+
 func activateOperation() object {
 	responses := openapi31.ProblemResponses("401", "403", "404", "409", "412", "422", "500", "503")
 	responses["201"] = response(
@@ -246,11 +311,35 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 		}
 	case "resourceVersion", "revision":
 		base["minimum"] = 1
+		base["maximum"] = devopsv1.MaximumContractInteger
 	case "ordinal":
 		base["minimum"] = 1
 		base["maximum"] = 2
-	case "contentDigest", "toolchainImageDigest":
+	case "contentDigest", "repositoryBindingDigest", "toolchainImageDigest":
 		base = object{"type": "string", "pattern": `^sha256:[0-9a-f]{64}$`}
+	case "allowedEndpointOrigins":
+		base = object{
+			"type": "array", "minItems": 1, "maxItems": 8,
+			"uniqueItems": true,
+			"items": object{
+				"type": "string", "format": "uri", "minLength": 1, "maxLength": 512,
+				"pattern": `^https://[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?$`,
+				"not":     object{"pattern": `^https://(?:[a-z0-9-]+\.)*localhost(?::|$)`},
+			},
+		}
+	case "repositoryPath":
+		base = object{
+			"type": "string", "minLength": 3, "maxLength": 257,
+			"pattern": `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`,
+		}
+	case "trustedDefaultBranch":
+		base = object{
+			"type": "string", "minLength": 1, "maxLength": 128,
+			"pattern": `^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$`,
+			"not": object{
+				"pattern": `(?:\.\.|//|@\{|(?:^|/)\.|\.lock(?:/|$)|[/.]$)`,
+			},
+		}
 	case "status":
 		if owner == "Problem" {
 			base["minimum"] = 400
@@ -292,6 +381,8 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 func applySemanticOverlays(schemas object) {
 	for owner, kind := range map[string]string{
 		"DevOpsProject":      "DevOpsProject",
+		"SourceConnection":   "SourceConnection",
+		"RepositoryBinding":  "RepositoryBinding",
 		"Pipeline":           "Pipeline",
 		"PipelineRevision":   "PipelineRevision",
 		"PipelineActivation": "PipelineActivation",

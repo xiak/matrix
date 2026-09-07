@@ -97,6 +97,56 @@
         ],
         "type": "object"
       },
+      "CreateRepositoryBindingRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "name": {
+            "maxLength": 63,
+            "minLength": 1,
+            "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$",
+            "type": "string"
+          },
+          "projectId": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/RepositoryBindingSpec"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "projectId",
+          "spec"
+        ],
+        "type": "object"
+      },
+      "CreateSourceConnectionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "name": {
+            "maxLength": 63,
+            "minLength": 1,
+            "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$",
+            "type": "string"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/SourceConnectionSpec"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "spec"
+        ],
+        "type": "object"
+      },
       "DependencyEgressPolicy": {
         "enum": [
           "NONE"
@@ -208,6 +258,7 @@
           },
           "revision": {
             "$ref": "#/components/schemas/PipelineRevision",
+            "maximum": 9007199254740991,
             "minimum": 1
           }
         },
@@ -357,6 +408,10 @@
           "reporterPolicy": {
             "$ref": "#/components/schemas/ReporterPolicy"
           },
+          "repositoryBindingDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
           "repositoryBindingId": {
             "$ref": "#/components/schemas/ResourceID"
           },
@@ -415,6 +470,7 @@
           "executorProfile",
           "limits",
           "reporterPolicy",
+          "repositoryBindingDigest",
           "repositoryBindingId",
           "steps",
           "toolchainImageDigest",
@@ -660,6 +716,100 @@
         ],
         "type": "string"
       },
+      "RepositoryBinding": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "devops.matrix.xiak.com/v1"
+          },
+          "contentDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "kind": {
+            "const": "RepositoryBinding"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/ResourceMetadata"
+          },
+          "projectId": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/RepositoryBindingSpec"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RepositoryBindingStatus"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "contentDigest",
+          "kind",
+          "metadata",
+          "projectId",
+          "spec",
+          "status"
+        ],
+        "type": "object"
+      },
+      "RepositoryBindingHealth": {
+        "enum": [
+          "PENDING",
+          "READY",
+          "UNAVAILABLE"
+        ],
+        "type": "string"
+      },
+      "RepositoryBindingSpec": {
+        "additionalProperties": false,
+        "properties": {
+          "externalRepositoryId": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "repositoryPath": {
+            "maxLength": 257,
+            "minLength": 3,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+            "type": "string"
+          },
+          "sourceConnectionId": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "trustedDefaultBranch": {
+            "maxLength": 128,
+            "minLength": 1,
+            "not": {
+              "pattern": "(?:\\.\\.|//|@\\{|(?:^|/)\\.|\\.lock(?:/|$)|[/.]$)"
+            },
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "externalRepositoryId",
+          "repositoryPath",
+          "sourceConnectionId",
+          "trustedDefaultBranch"
+        ],
+        "type": "object"
+      },
+      "RepositoryBindingStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "health": {
+            "$ref": "#/components/schemas/RepositoryBindingHealth"
+          },
+          "observedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "health",
+          "observedAt"
+        ],
+        "type": "object"
+      },
       "ResourceID": {
         "maxLength": 128,
         "minLength": 1,
@@ -715,6 +865,99 @@
         ],
         "type": "object"
       },
+      "SourceConnection": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "devops.matrix.xiak.com/v1"
+          },
+          "kind": {
+            "const": "SourceConnection"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/ResourceMetadata"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/SourceConnectionSpec"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SourceConnectionStatus"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "metadata",
+          "spec",
+          "status"
+        ],
+        "type": "object"
+      },
+      "SourceConnectionHealth": {
+        "enum": [
+          "PENDING",
+          "READY",
+          "UNAVAILABLE"
+        ],
+        "type": "string"
+      },
+      "SourceConnectionSpec": {
+        "additionalProperties": false,
+        "properties": {
+          "adapterId": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "allowedEndpointOrigins": {
+            "items": {
+              "format": "uri",
+              "maxLength": 512,
+              "minLength": 1,
+              "not": {
+                "pattern": "^https://(?:[a-z0-9-]+\\.)*localhost(?::|$)"
+              },
+              "pattern": "^https://[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?$",
+              "type": "string"
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "fetchCredentialRef": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "reportCredentialRef": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "webhookSecretRef": {
+            "$ref": "#/components/schemas/ResourceID"
+          }
+        },
+        "required": [
+          "adapterId",
+          "allowedEndpointOrigins",
+          "fetchCredentialRef",
+          "reportCredentialRef",
+          "webhookSecretRef"
+        ],
+        "type": "object"
+      },
+      "SourceConnectionStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "health": {
+            "$ref": "#/components/schemas/SourceConnectionHealth"
+          },
+          "observedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "health",
+          "observedAt"
+        ],
+        "type": "object"
+      },
       "SubjectKind": {
         "enum": [
           "USER",
@@ -764,6 +1007,30 @@
         },
         "required": [
           "draft"
+        ],
+        "type": "object"
+      },
+      "UpdateRepositoryBindingRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "spec": {
+            "$ref": "#/components/schemas/RepositoryBindingSpec"
+          }
+        },
+        "required": [
+          "spec"
+        ],
+        "type": "object"
+      },
+      "UpdateSourceConnectionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "spec": {
+            "$ref": "#/components/schemas/SourceConnectionSpec"
+          }
+        },
+        "required": [
+          "spec"
         ],
         "type": "object"
       },
@@ -1273,6 +1540,386 @@
           }
         },
         "summary": "Get a DevOps project"
+      }
+    },
+    "/v1/repository-bindings": {
+      "post": {
+        "operationId": "createRepositoryBinding",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRepositoryBindingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepositoryBinding"
+                }
+              }
+            },
+            "description": "Created resource.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Create a repository binding"
+      }
+    },
+    "/v1/repository-bindings/{repositoryBindingId}": {
+      "get": {
+        "operationId": "getRepositoryBinding",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "repositoryBindingId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepositoryBinding"
+                }
+              }
+            },
+            "description": "Current authorized resource.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Get a repository binding"
+      },
+      "put": {
+        "operationId": "updateRepositoryBinding",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "repositoryBindingId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateRepositoryBindingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepositoryBinding"
+                }
+              }
+            },
+            "description": "Updated resource.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Replace a repository binding specification"
+      }
+    },
+    "/v1/source-connections": {
+      "post": {
+        "operationId": "createSourceConnection",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSourceConnectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceConnection"
+                }
+              }
+            },
+            "description": "Created resource.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Create a source connection"
+      }
+    },
+    "/v1/source-connections/{sourceConnectionId}": {
+      "get": {
+        "operationId": "getSourceConnection",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sourceConnectionId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceConnection"
+                }
+              }
+            },
+            "description": "Current authorized resource.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Get a source connection"
+      },
+      "put": {
+        "operationId": "updateSourceConnection",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sourceConnectionId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSourceConnectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceConnection"
+                }
+              }
+            },
+            "description": "Updated resource.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Replace source connection credential references"
       }
     }
   },

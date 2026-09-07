@@ -26,6 +26,38 @@ func TestDevOpsContractsAcceptTrustedActivation(t *testing.T) {
 	if err := ValidateDevOpsProject(project); err != nil {
 		t.Fatalf("validate project: %v", err)
 	}
+	connection := SourceConnection{
+		APIVersion: APIVersion, Kind: "SourceConnection",
+		Metadata: ResourceMetadata{
+			ID: "source-connection-primary", Name: "primary", Scope: activation.Pipeline.Metadata.Scope,
+			ResourceVersion: 1, CreatedAt: activation.Pipeline.Metadata.CreatedAt,
+			UpdatedAt: activation.Pipeline.Metadata.CreatedAt,
+		},
+		Spec: validSourceConnectionSpec(),
+		Status: SourceConnectionStatus{
+			Health: SourceConnectionPending, ObservedAt: activation.Pipeline.Metadata.CreatedAt,
+		},
+	}
+	if err := ValidateSourceConnection(connection); err != nil {
+		t.Fatalf("validate source connection: %v", err)
+	}
+	bindingSpec := validRepositoryBindingSpec()
+	binding := RepositoryBinding{
+		APIVersion: APIVersion, Kind: "RepositoryBinding",
+		Metadata: ResourceMetadata{
+			ID: "repository-binding-api", Name: "api", Scope: activation.Pipeline.Metadata.Scope,
+			ResourceVersion: 1, CreatedAt: activation.Pipeline.Metadata.CreatedAt,
+			UpdatedAt: activation.Pipeline.Metadata.CreatedAt,
+		},
+		ProjectID: "devops-project-platform", Spec: bindingSpec,
+		ContentDigest: RepositoryBindingSpecDigest(bindingSpec),
+		Status: RepositoryBindingStatus{
+			Health: RepositoryBindingPending, ObservedAt: activation.Pipeline.Metadata.CreatedAt,
+		},
+	}
+	if err := ValidateRepositoryBinding(binding); err != nil {
+		t.Fatalf("validate repository binding: %v", err)
+	}
 }
 
 func TestDevOpsExamplesPassExecutableValidation(t *testing.T) {
@@ -36,6 +68,30 @@ func TestDevOpsExamplesPassExecutableValidation(t *testing.T) {
 	project := decodeDevOpsExample[DevOpsProject](t, "examples/devops-project.json")
 	if err := ValidateDevOpsProject(project); err != nil {
 		t.Fatalf("validate project: %v", err)
+	}
+	connectionRequest := decodeDevOpsExample[CreateSourceConnectionRequest](t, "examples/create-source-connection-request.json")
+	if err := ValidateCreateSourceConnectionRequest(connectionRequest); err != nil {
+		t.Fatalf("validate source connection request: %v", err)
+	}
+	connectionUpdate := decodeDevOpsExample[UpdateSourceConnectionRequest](t, "examples/update-source-connection-request.json")
+	if err := ValidateUpdateSourceConnectionRequest(connectionUpdate); err != nil {
+		t.Fatalf("validate source connection update: %v", err)
+	}
+	connection := decodeDevOpsExample[SourceConnection](t, "examples/source-connection.json")
+	if err := ValidateSourceConnection(connection); err != nil {
+		t.Fatalf("validate source connection: %v", err)
+	}
+	bindingRequest := decodeDevOpsExample[CreateRepositoryBindingRequest](t, "examples/create-repository-binding-request.json")
+	if err := ValidateCreateRepositoryBindingRequest(bindingRequest); err != nil {
+		t.Fatalf("validate repository binding request: %v", err)
+	}
+	bindingUpdate := decodeDevOpsExample[UpdateRepositoryBindingRequest](t, "examples/update-repository-binding-request.json")
+	if err := ValidateUpdateRepositoryBindingRequest(bindingUpdate); err != nil {
+		t.Fatalf("validate repository binding update: %v", err)
+	}
+	binding := decodeDevOpsExample[RepositoryBinding](t, "examples/repository-binding.json")
+	if err := ValidateRepositoryBinding(binding); err != nil {
+		t.Fatalf("validate repository binding: %v", err)
 	}
 	pipelineRequest := decodeDevOpsExample[CreatePipelineRequest](t, "examples/create-pipeline-request.json")
 	if err := ValidateCreatePipelineRequest(pipelineRequest); err != nil {
@@ -91,6 +147,12 @@ func TestPipelineValidationRejectsAuthorityAndProfileDrift(t *testing.T) {
 		"actor": func(value *PipelineActivation) {
 			value.Revision.ActivatedBy.Kind = SubjectKind("PROVIDER_USER")
 		},
+		"unsafe JSON version": func(value *PipelineActivation) {
+			value.Pipeline.Metadata.ResourceVersion = MaximumContractInteger + 1
+		},
+		"binding snapshot": func(value *PipelineActivation) {
+			value.Revision.Spec.RepositoryBindingDigest = "sha256:" + strings.Repeat("f", 64)
+		},
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -145,11 +207,59 @@ func TestDevOpsDecoderRejectsForgedAmbiguousAndOversizeInput(t *testing.T) {
 func TestCallerOwnedRequestsContainNoServerAuthorityOrEscapeHatch(t *testing.T) {
 	roots := []reflect.Type{
 		reflect.TypeOf(CreateDevOpsProjectRequest{}),
+		reflect.TypeOf(CreateSourceConnectionRequest{}),
+		reflect.TypeOf(UpdateSourceConnectionRequest{}),
+		reflect.TypeOf(CreateRepositoryBindingRequest{}),
+		reflect.TypeOf(UpdateRepositoryBindingRequest{}),
 		reflect.TypeOf(CreatePipelineRequest{}),
 		reflect.TypeOf(UpdatePipelineDraftRequest{}),
 	}
 	for _, root := range roots {
 		assertClosedRequestType(t, root, map[reflect.Type]bool{})
+	}
+}
+
+func TestSourceAndRepositoryContractsFailClosed(t *testing.T) {
+	connection := validSourceConnectionSpec()
+	for name, mutate := range map[string]func(*SourceConnectionSpec){
+		"plaintext credential alias": func(value *SourceConnectionSpec) {
+			value.ReportCredentialRef = value.FetchCredentialRef
+		},
+		"insecure endpoint": func(value *SourceConnectionSpec) {
+			value.AllowedEndpointOrigins = []string{"http://git.internal.example"}
+		},
+		"endpoint path": func(value *SourceConnectionSpec) {
+			value.AllowedEndpointOrigins = []string{"https://git.internal.example/api"}
+		},
+		"unordered endpoints": func(value *SourceConnectionSpec) {
+			value.AllowedEndpointOrigins = []string{
+				"https://z.internal.example", "https://a.internal.example",
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := connection
+			value.AllowedEndpointOrigins = append([]string(nil), connection.AllowedEndpointOrigins...)
+			mutate(&value)
+			if err := ValidateSourceConnectionSpec(value); err == nil {
+				t.Fatal("invalid source connection specification was accepted")
+			}
+		})
+	}
+	binding := validRepositoryBindingSpec()
+	for name, mutate := range map[string]func(*RepositoryBindingSpec){
+		"repository traversal": func(value *RepositoryBindingSpec) { value.RepositoryPath = "../api" },
+		"extra path segment":   func(value *RepositoryBindingSpec) { value.RepositoryPath = "org/team/api" },
+		"unsafe branch":        func(value *RepositoryBindingSpec) { value.TrustedDefaultBranch = "feature/../main" },
+		"lock branch":          func(value *RepositoryBindingSpec) { value.TrustedDefaultBranch = "refs/main.lock" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := binding
+			mutate(&value)
+			if err := ValidateRepositoryBindingSpec(value); err == nil {
+				t.Fatal("invalid repository binding specification was accepted")
+			}
+		})
 	}
 }
 
@@ -163,6 +273,12 @@ func TestFixedVerificationStepsReturnIndependentCopies(t *testing.T) {
 }
 
 func TestPipelineDigestsAndIdentitiesAreDeterministicAndScoped(t *testing.T) {
+	binding := validRepositoryBindingSpec()
+	bindingDigest := RepositoryBindingSpecDigest(binding)
+	binding.RepositoryPath = "platform/worker"
+	if RepositoryBindingSpecDigest(binding) == bindingDigest {
+		t.Fatal("repository binding digest did not bind normalized repository identity")
+	}
 	draft := validDraftSpec()
 	if first, second := PipelineDraftSpecDigest(draft), PipelineDraftSpecDigest(draft); first != second {
 		t.Fatalf("draft digest is not deterministic: %q != %q", first, second)
@@ -230,7 +346,7 @@ func assertClosedRequestType(t *testing.T, contract reflect.Type, seen map[refle
 			for _, forbidden := range []string{
 				"tenantid", "scope", "resourceversion", "createdat", "updatedat",
 				"actor", "activatedby", "credential", "secret", "payload", "native",
-				"command", "argv", "path", "image", "steps", "limits", "executorprofile",
+				"command", "argv", "hostpath", "workingdirectory", "image", "steps", "limits", "executorprofile",
 			} {
 				if normalized == forbidden || strings.HasSuffix(normalized, forbidden) {
 					t.Fatalf("request contains server-owned or unsafe field %s.%s", contract, field.Name)

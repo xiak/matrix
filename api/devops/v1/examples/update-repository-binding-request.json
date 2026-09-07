@@ -1,0 +1,8 @@
+{
+  "spec": {
+    "sourceConnectionId": "source-connection-primary",
+    "externalRepositoryId": "42",
+    "repositoryPath": "platform/api",
+    "trustedDefaultBranch": "release/v1"
+  }
+}

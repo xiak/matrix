@@ -7,6 +7,8 @@ type DependencyEgressPolicy string
 type ReporterPolicy string
 type VerificationStepKind string
 type SubjectKind string
+type SourceConnectionHealth string
+type RepositoryBindingHealth string
 type ErrorCode string
 
 const (
@@ -37,6 +39,18 @@ const (
 const (
 	SubjectUser           SubjectKind = "USER"
 	SubjectServiceAccount SubjectKind = "SERVICE_ACCOUNT"
+)
+
+const (
+	SourceConnectionPending     SourceConnectionHealth = "PENDING"
+	SourceConnectionReady       SourceConnectionHealth = "READY"
+	SourceConnectionUnavailable SourceConnectionHealth = "UNAVAILABLE"
+)
+
+const (
+	RepositoryBindingPending     RepositoryBindingHealth = "PENDING"
+	RepositoryBindingReady       RepositoryBindingHealth = "READY"
+	RepositoryBindingUnavailable RepositoryBindingHealth = "UNAVAILABLE"
 )
 
 const (
@@ -76,6 +90,22 @@ func VerificationStepKinds() []VerificationStepKind {
 
 func SubjectKinds() []SubjectKind {
 	return []SubjectKind{SubjectUser, SubjectServiceAccount}
+}
+
+func SourceConnectionHealthStates() []SourceConnectionHealth {
+	return []SourceConnectionHealth{
+		SourceConnectionPending,
+		SourceConnectionReady,
+		SourceConnectionUnavailable,
+	}
+}
+
+func RepositoryBindingHealthStates() []RepositoryBindingHealth {
+	return []RepositoryBindingHealth{
+		RepositoryBindingPending,
+		RepositoryBindingReady,
+		RepositoryBindingUnavailable,
+	}
 }
 
 func ErrorCodes() []ErrorCode {

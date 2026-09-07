@@ -2,7 +2,6 @@ package domain
 
 import (
 	"errors"
-	"math"
 	"testing"
 	"time"
 
@@ -23,7 +22,8 @@ func TestProjectAndPipelineCreationDeriveServerOwnedState(t *testing.T) {
 		t.Fatalf("project metadata = %#v", project.Metadata)
 	}
 
-	pipeline, err := NewPipeline(validCreatePipelineRequest(), scope, at)
+	binding := mustRepositoryBinding(t, "repository-binding-api")
+	pipeline, err := NewPipeline(validCreatePipelineRequest(), project, binding, at)
 	if err != nil {
 		t.Fatalf("create Pipeline: %v", err)
 	}
@@ -41,6 +41,7 @@ func TestDraftUpdateIsOptimisticAndDoesNotChangeActiveRevision(t *testing.T) {
 		pipeline,
 		pipeline.Metadata.ResourceVersion,
 		devopsv1.SubjectRef{Kind: devopsv1.SubjectUser, ID: "user-alice"},
+		mustRepositoryBinding(t, "repository-binding-api"),
 		pipeline.Metadata.UpdatedAt.Add(time.Minute),
 	)
 	if err != nil {
@@ -53,6 +54,7 @@ func TestDraftUpdateIsOptimisticAndDoesNotChangeActiveRevision(t *testing.T) {
 		current,
 		current.Metadata.ResourceVersion,
 		request,
+		mustRepositoryBinding(t, "repository-binding-next"),
 		current.Metadata.UpdatedAt.Add(time.Minute),
 	)
 	if err != nil {
@@ -85,6 +87,7 @@ func TestActivationResolvesOneImmutableTrustedRevision(t *testing.T) {
 		pipeline,
 		pipeline.Metadata.ResourceVersion,
 		actor,
+		mustRepositoryBinding(t, "repository-binding-api"),
 		activatedAt,
 	)
 	if err != nil {
@@ -99,6 +102,7 @@ func TestActivationResolvesOneImmutableTrustedRevision(t *testing.T) {
 	}
 	if revision.Spec.ExecutorProfile != devopsv1.ExecutorMatrixNativeIsolatedV1 ||
 		revision.Spec.ToolchainImageDigest != devopsv1.Go126OfflineToolchainImageDigest ||
+		revision.Spec.RepositoryBindingDigest != mustRepositoryBinding(t, "repository-binding-api").ContentDigest ||
 		revision.Spec.DependencyEgress != devopsv1.DependencyEgressNone ||
 		revision.Spec.Limits != devopsv1.FixedVerificationLimits() {
 		t.Fatalf("resolved execution profile = %#v", revision.Spec)
@@ -130,6 +134,7 @@ func TestActivationRejectsUnchangedAndStaleDrafts(t *testing.T) {
 		pipeline,
 		pipeline.Metadata.ResourceVersion,
 		actor,
+		mustRepositoryBinding(t, "repository-binding-api"),
 		pipeline.Metadata.UpdatedAt.Add(time.Minute),
 	)
 	if err != nil {
@@ -139,6 +144,7 @@ func TestActivationRejectsUnchangedAndStaleDrafts(t *testing.T) {
 		activation.Pipeline,
 		activation.Pipeline.Metadata.ResourceVersion,
 		actor,
+		mustRepositoryBinding(t, "repository-binding-api"),
 		activation.Pipeline.Metadata.UpdatedAt.Add(time.Minute),
 	)
 	if !errors.Is(err, ErrUnchangedDraft) {
@@ -148,6 +154,7 @@ func TestActivationRejectsUnchangedAndStaleDrafts(t *testing.T) {
 		activation.Pipeline,
 		pipeline.Metadata.ResourceVersion,
 		actor,
+		mustRepositoryBinding(t, "repository-binding-api"),
 		activation.Pipeline.Metadata.UpdatedAt.Add(time.Minute),
 	)
 	if !errors.Is(err, ErrVersionConflict) {
@@ -162,6 +169,7 @@ func TestSecondActivationKeepsFirstRevisionImmutable(t *testing.T) {
 		pipeline,
 		pipeline.Metadata.ResourceVersion,
 		actor,
+		mustRepositoryBinding(t, "repository-binding-api"),
 		pipeline.Metadata.UpdatedAt.Add(time.Minute),
 	)
 	if err != nil {
@@ -174,6 +182,7 @@ func TestSecondActivationKeepsFirstRevisionImmutable(t *testing.T) {
 		first.Pipeline,
 		first.Pipeline.Metadata.ResourceVersion,
 		request,
+		mustRepositoryBinding(t, "repository-binding-next"),
 		first.Pipeline.Metadata.UpdatedAt.Add(time.Minute),
 	)
 	if err != nil {
@@ -183,6 +192,7 @@ func TestSecondActivationKeepsFirstRevisionImmutable(t *testing.T) {
 		updated,
 		updated.Metadata.ResourceVersion,
 		actor,
+		mustRepositoryBinding(t, "repository-binding-next"),
 		updated.Metadata.UpdatedAt.Add(time.Minute),
 	)
 	if err != nil {
@@ -197,6 +207,56 @@ func TestSecondActivationKeepsFirstRevisionImmutable(t *testing.T) {
 	}
 }
 
+func TestActivationSealsUpdatedRepositoryBindingWithoutDraftMutation(t *testing.T) {
+	project := mustDevOpsProject(t)
+	connection := mustSourceConnection(t)
+	binding := mustRepositoryBinding(t, "repository-binding-api")
+	pipeline, err := NewPipeline(validCreatePipelineRequest(), project, binding, domainTime())
+	if err != nil {
+		t.Fatalf("create Pipeline: %v", err)
+	}
+	actor := devopsv1.SubjectRef{Kind: devopsv1.SubjectUser, ID: "user-alice"}
+	first, err := ActivatePipeline(
+		pipeline,
+		pipeline.Metadata.ResourceVersion,
+		actor,
+		binding,
+		domainTime().Add(time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("activate first binding snapshot: %v", err)
+	}
+	request := devopsv1.UpdateRepositoryBindingRequest{Spec: binding.Spec}
+	request.Spec.TrustedDefaultBranch = "release/v1"
+	updatedBinding, err := UpdateRepositoryBinding(
+		binding,
+		binding.Metadata.ResourceVersion,
+		request,
+		project,
+		connection,
+		domainTime().Add(2*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("update repository binding: %v", err)
+	}
+	second, err := ActivatePipeline(
+		first.Pipeline,
+		first.Pipeline.Metadata.ResourceVersion,
+		actor,
+		updatedBinding,
+		domainTime().Add(3*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("activate updated binding snapshot: %v", err)
+	}
+	if second.Revision.Revision != 2 ||
+		first.Revision.Spec.RepositoryBindingDigest != binding.ContentDigest ||
+		second.Revision.Spec.RepositoryBindingDigest != updatedBinding.ContentDigest ||
+		first.Revision.Spec.RepositoryBindingDigest == second.Revision.Spec.RepositoryBindingDigest {
+		t.Fatalf("repository snapshots first=%#v second=%#v", first.Revision, second.Revision)
+	}
+}
+
 func TestPipelineMutationsFailClosedAtBoundaryValues(t *testing.T) {
 	pipeline := mustNewPipeline(t)
 	request := devopsv1.UpdatePipelineDraftRequest{Draft: pipeline.Draft.Spec}
@@ -205,15 +265,17 @@ func TestPipelineMutationsFailClosedAtBoundaryValues(t *testing.T) {
 		pipeline,
 		pipeline.Metadata.ResourceVersion,
 		request,
+		mustRepositoryBinding(t, "repository-binding-next"),
 		pipeline.Metadata.UpdatedAt,
 	); !errors.Is(err, ErrInvalidTime) {
 		t.Fatalf("non-monotonic time error = %v", err)
 	}
-	pipeline.Metadata.ResourceVersion = math.MaxUint64
+	pipeline.Metadata.ResourceVersion = devopsv1.MaximumContractInteger
 	if _, err := UpdatePipelineDraft(
 		pipeline,
-		math.MaxUint64,
+		devopsv1.MaximumContractInteger,
 		request,
+		mustRepositoryBinding(t, "repository-binding-next"),
 		pipeline.Metadata.UpdatedAt.Add(time.Minute),
 	); !errors.Is(err, ErrVersionExhausted) {
 		t.Fatalf("version exhaustion error = %v", err)
@@ -236,15 +298,86 @@ func validCreatePipelineRequest() devopsv1.CreatePipelineRequest {
 
 func mustNewPipeline(t *testing.T) devopsv1.Pipeline {
 	t.Helper()
+	project := mustDevOpsProject(t)
+	binding := mustRepositoryBinding(t, "repository-binding-api")
 	pipeline, err := NewPipeline(
 		validCreatePipelineRequest(),
-		devopsv1.ResourceScope{TenantID: "organization-acme"},
+		project,
+		binding,
 		domainTime(),
 	)
 	if err != nil {
 		t.Fatalf("create Pipeline: %v", err)
 	}
 	return pipeline
+}
+
+func mustDevOpsProject(t *testing.T) devopsv1.DevOpsProject {
+	t.Helper()
+	project, err := NewDevOpsProject(
+		devopsv1.CreateDevOpsProjectRequest{ID: "devops-project-platform", Name: "platform"},
+		devopsv1.ResourceScope{TenantID: "organization-acme"},
+		domainTime(),
+	)
+	if err != nil {
+		t.Fatalf("create DevOps project: %v", err)
+	}
+	return project
+}
+
+func mustSourceConnection(t *testing.T) devopsv1.SourceConnection {
+	t.Helper()
+	connection, err := NewSourceConnection(
+		validCreateSourceConnectionRequest(),
+		devopsv1.ResourceScope{TenantID: "organization-acme"},
+		domainTime(),
+	)
+	if err != nil {
+		t.Fatalf("create source connection: %v", err)
+	}
+	return connection
+}
+
+func mustRepositoryBinding(t *testing.T, id devopsv1.ResourceID) devopsv1.RepositoryBinding {
+	t.Helper()
+	request := validCreateRepositoryBindingRequest()
+	request.ID = id
+	request.Name = "api"
+	binding, err := NewRepositoryBinding(
+		request,
+		mustDevOpsProject(t),
+		mustSourceConnection(t),
+		domainTime(),
+	)
+	if err != nil {
+		t.Fatalf("create repository binding: %v", err)
+	}
+	return binding
+}
+
+func validCreateSourceConnectionRequest() devopsv1.CreateSourceConnectionRequest {
+	return devopsv1.CreateSourceConnectionRequest{
+		ID: "source-connection-primary", Name: "primary",
+		Spec: devopsv1.SourceConnectionSpec{
+			AdapterID:              "source-adapter-change-v1",
+			AllowedEndpointOrigins: []string{"https://git.internal.example"},
+			WebhookSecretRef:       "secret-webhook-primary",
+			FetchCredentialRef:     "credential-fetch-read",
+			ReportCredentialRef:    "credential-report-write",
+		},
+	}
+}
+
+func validCreateRepositoryBindingRequest() devopsv1.CreateRepositoryBindingRequest {
+	return devopsv1.CreateRepositoryBindingRequest{
+		ID: "repository-binding-api", Name: "api", ProjectID: "devops-project-platform",
+		Spec: devopsv1.RepositoryBindingSpec{
+			SourceConnectionID:   "source-connection-primary",
+			ExternalRepositoryID: "42",
+			RepositoryPath:       "platform/api",
+			TrustedDefaultBranch: "main",
+		},
+	}
 }
 
 func domainTime() time.Time {

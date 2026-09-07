@@ -26,15 +26,15 @@
       "contentDigest": "sha256:ad45bb2d16b6b680b77d9222651b17f4f78066f29b494064ff2da48e656c3871"
     },
     "activeRevision": {
-      "id": "pipeline-revision-119d298ce8270465025b2220674a8b31ae528485a276ab39",
+      "id": "pipeline-revision-8c089bacd77776938bdfa0c1cbc79e67e4d5041fa0543de8",
       "revision": 1,
-      "contentDigest": "sha256:1a88741c3b3feb901beb026f477a62daa95609cc83e7194c0f721e753f7161b9"
+      "contentDigest": "sha256:6f1da2f9846fe523241dc8f55200727fac79342a14baaa2bd5727e5485c03926"
     }
   },
   "revision": {
     "apiVersion": "devops.matrix.xiak.com/v1",
     "kind": "PipelineRevision",
-    "id": "pipeline-revision-119d298ce8270465025b2220674a8b31ae528485a276ab39",
+    "id": "pipeline-revision-8c089bacd77776938bdfa0c1cbc79e67e4d5041fa0543de8",
     "scope": {
       "tenantId": "organization-acme"
     },
@@ -43,6 +43,7 @@
     "revision": 1,
     "spec": {
       "repositoryBindingId": "repository-binding-api",
+      "repositoryBindingDigest": "sha256:ba641c4f85296cb2b0a43014403aeb941fe7dd233f15c9296e0d3bc1bac7b453",
       "triggerPolicy": "CHANGE",
       "verificationProfile": "GO_1_26_OFFLINE_V1",
       "executorProfile": "MATRIX_NATIVE_ISOLATED_V1",
@@ -69,7 +70,7 @@
         "maxLogBytes": 8388608
       }
     },
-    "contentDigest": "sha256:1a88741c3b3feb901beb026f477a62daa95609cc83e7194c0f721e753f7161b9",
+    "contentDigest": "sha256:6f1da2f9846fe523241dc8f55200727fac79342a14baaa2bd5727e5485c03926",
     "activatedBy": {
       "kind": "USER",
       "id": "user-alice"

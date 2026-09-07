@@ -22,14 +22,20 @@ func TestEveryDevOpsOpenAPISchemaCompiles(t *testing.T) {
 func TestDevOpsExamplesValidateAgainstOpenAPI(t *testing.T) {
 	document := loadDevOpsOpenAPI(t)
 	examples := map[string]string{
-		"examples/create-devops-project-request.json": "CreateDevOpsProjectRequest",
-		"examples/devops-project.json":                "DevOpsProject",
-		"examples/create-pipeline-request.json":       "CreatePipelineRequest",
-		"examples/update-pipeline-draft-request.json": "UpdatePipelineDraftRequest",
-		"examples/pipeline.json":                      "Pipeline",
-		"examples/pipeline-revision.json":             "PipelineRevision",
-		"examples/pipeline-activation.json":           "PipelineActivation",
-		"examples/problem.json":                       "Problem",
+		"examples/create-devops-project-request.json":     "CreateDevOpsProjectRequest",
+		"examples/devops-project.json":                    "DevOpsProject",
+		"examples/create-source-connection-request.json":  "CreateSourceConnectionRequest",
+		"examples/update-source-connection-request.json":  "UpdateSourceConnectionRequest",
+		"examples/source-connection.json":                 "SourceConnection",
+		"examples/create-repository-binding-request.json": "CreateRepositoryBindingRequest",
+		"examples/update-repository-binding-request.json": "UpdateRepositoryBindingRequest",
+		"examples/repository-binding.json":                "RepositoryBinding",
+		"examples/create-pipeline-request.json":           "CreatePipelineRequest",
+		"examples/update-pipeline-draft-request.json":     "UpdatePipelineDraftRequest",
+		"examples/pipeline.json":                          "Pipeline",
+		"examples/pipeline-revision.json":                 "PipelineRevision",
+		"examples/pipeline-activation.json":               "PipelineActivation",
+		"examples/problem.json":                           "Problem",
 	}
 	for path, schemaName := range examples {
 		t.Run(path, func(t *testing.T) {
@@ -57,11 +63,33 @@ func TestDevOpsSchemasRejectAuthorityAndTrustedProfileDrift(t *testing.T) {
 		t.Fatal("caller-supplied tenant authority passed schema validation")
 	}
 
+	connectionSchema := compileDevOpsOpenAPISchema(t, document, "CreateSourceConnectionRequest")
+	connection := loadDevOpsSchemaExample(t, "examples/create-source-connection-request.json")
+	connection["spec"].(map[string]any)["allowedEndpointOrigins"] = []any{"https://localhost"}
+	if err := connectionSchema.Validate(connection); err == nil {
+		t.Fatal("loopback source endpoint passed schema validation")
+	}
+
+	bindingSchema := compileDevOpsOpenAPISchema(t, document, "CreateRepositoryBindingRequest")
+	binding := loadDevOpsSchemaExample(t, "examples/create-repository-binding-request.json")
+	binding["spec"].(map[string]any)["trustedDefaultBranch"] = "feature/../main"
+	if err := bindingSchema.Validate(binding); err == nil {
+		t.Fatal("unsafe trusted branch passed schema validation")
+	}
+
 	revisionSchema := compileDevOpsOpenAPISchema(t, document, "PipelineRevision")
 	revision := loadDevOpsSchemaExample(t, "examples/pipeline-revision.json")
 	revision["spec"].(map[string]any)["toolchainImageDigest"] = "sha256:" + strings.Repeat("f", 64)
 	if err := revisionSchema.Validate(revision); err == nil {
 		t.Fatal("unapproved toolchain passed schema validation")
+	}
+
+	revision = loadDevOpsSchemaExample(t, "examples/pipeline-revision.json")
+	revision["spec"].(map[string]any)["repositoryBindingDigest"] = "sha256:" + strings.Repeat("f", 64)
+	if err := revisionSchema.Validate(revision); err != nil {
+		// The schema can validate digest shape but only executable validation can
+		// bind it to a stored RepositoryBinding snapshot.
+		t.Fatalf("well-formed repository binding digest rejected by schema: %v", err)
 	}
 
 	revision = loadDevOpsSchemaExample(t, "examples/pipeline-revision.json")

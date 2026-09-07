@@ -8,6 +8,17 @@ import (
 	"hash"
 )
 
+// RepositoryBindingSpecDigest seals the normalized repository identity without
+// relying on JSON field order or provider-specific serialization.
+func RepositoryBindingSpecDigest(value RepositoryBindingSpec) string {
+	digest := newContractDigest("matrix-devops-repository-binding-v1")
+	writeString(digest, string(value.SourceConnectionID))
+	writeString(digest, string(value.ExternalRepositoryID))
+	writeString(digest, value.RepositoryPath)
+	writeString(digest, value.TrustedDefaultBranch)
+	return digest.sum()
+}
+
 // PipelineDraftSpecDigest seals every tenant-selectable field without relying
 // on JSON field order or ambiguous delimiter escaping.
 func PipelineDraftSpecDigest(value PipelineDraftSpec) string {
@@ -24,6 +35,7 @@ func PipelineDraftSpecDigest(value PipelineDraftSpec) string {
 func PipelineRevisionSpecDigest(value PipelineRevisionSpec) string {
 	digest := newContractDigest("matrix-devops-pipeline-revision-v1")
 	writeString(digest, string(value.RepositoryBindingID))
+	writeString(digest, value.RepositoryBindingDigest)
 	writeString(digest, string(value.TriggerPolicy))
 	writeString(digest, string(value.VerificationProfile))
 	writeString(digest, string(value.ExecutorProfile))
@@ -56,7 +68,8 @@ func PipelineRevisionID(
 ) (ResourceID, error) {
 	if ValidateResourceScope(scope) != nil ||
 		ValidateID("pipelineId", string(pipelineID)) != nil ||
-		revision == 0 || ValidateDigest("contentDigest", contentDigest) != nil {
+		revision == 0 || revision > MaximumContractInteger ||
+		ValidateDigest("contentDigest", contentDigest) != nil {
 		return "", errors.New("pipeline revision identity input is invalid")
 	}
 	digest := newContractDigest("matrix-devops-pipeline-revision-identity-v1")

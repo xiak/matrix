@@ -1,8 +1,8 @@
 # FEAT-007: Repository change validation
 
 - Status: In progress; UX, architecture, donor analysis, implementation
-  baseline, Gate A contract/domain slice, and shared authority catalog
-  complete; persistence and run lifecycle pending
+  baseline, Gate A project/Pipeline/source-resource contract and domain slices,
+  and shared authority catalog complete; persistence and run lifecycle pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -370,10 +370,31 @@ index is generalized from PaaS-only to product operations without retaining a
 parallel compatibility index. A clean PostgreSQL 18 fixture has applied IAM
 and Audit migrations twice and exercised every IAM/Audit catalog entry.
 
-This slice does not complete Gate A. SourceConnection, RepositoryBinding,
-SourceEvent, PipelineRun, log, replay/cancellation/lease/fence/reconciliation,
-quota, pagination, DevOps credential enrollment, use-case/HTTP authority
-integration, and delivery PostgreSQL/RLS work remain pending.
+The source-resource slice adds provider-neutral `SourceConnection` and
+`RepositoryBinding` contracts, create/update commands, resource health, UI-safe
+repository coordinates, and their declared HTTP contract surfaces. A
+connection carries only an
+opaque installed-adapter identity, one to eight sorted canonical HTTPS origins,
+and three distinct secret-store references. The adapter identity and endpoint
+allowlist cannot be replaced in place; an update may rotate only the webhook,
+fetch, and report references and resets health to `PENDING`. Plaintext secrets,
+provider objects, endpoint paths, loopback names, ambiguous ports, unsafe Git
+branches, and repository path traversal fail closed.
+
+RepositoryBinding mutations prove same-tenant project/connection authority and
+seal the normalized connection ID, external repository ID, two-segment display
+path, and trusted default branch into a canonical digest. Pipeline creation and
+draft replacement require a binding owned by the same project. Activation
+seals the binding digest into the immutable PipelineRevision, so a later
+binding update cannot retarget an existing revision; activating the updated
+binding creates a new revision even when the tenant-owned Pipeline draft did
+not otherwise change. Resource and revision versions are capped at the largest
+integer exactly representable by all JSON consumers.
+
+These slices do not complete Gate A. SourceEvent, PipelineRun, log,
+replay/cancellation/lease/fence/reconciliation, quota, pagination, DevOps
+credential enrollment, use-case/HTTP authority integration, and delivery
+PostgreSQL/RLS work remain pending.
 
 Current verification evidence:
 

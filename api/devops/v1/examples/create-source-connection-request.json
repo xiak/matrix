@@ -1,0 +1,13 @@
+{
+  "id": "source-connection-primary",
+  "name": "primary",
+  "spec": {
+    "adapterId": "source-adapter-change-v1",
+    "allowedEndpointOrigins": [
+      "https://git.internal.example"
+    ],
+    "webhookSecretRef": "secret-webhook-primary",
+    "fetchCredentialRef": "credential-fetch-read",
+    "reportCredentialRef": "credential-report-write"
+  }
+}

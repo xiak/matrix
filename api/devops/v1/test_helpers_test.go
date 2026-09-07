@@ -20,18 +20,38 @@ func validDraftSpec() PipelineDraftSpec {
 	}
 }
 
+func validSourceConnectionSpec() SourceConnectionSpec {
+	return SourceConnectionSpec{
+		AdapterID:              "source-adapter-change-v1",
+		AllowedEndpointOrigins: []string{"https://git.internal.example"},
+		WebhookSecretRef:       "secret-webhook-primary",
+		FetchCredentialRef:     "credential-fetch-read",
+		ReportCredentialRef:    "credential-report-write",
+	}
+}
+
+func validRepositoryBindingSpec() RepositoryBindingSpec {
+	return RepositoryBindingSpec{
+		SourceConnectionID:   "source-connection-primary",
+		ExternalRepositoryID: "42",
+		RepositoryPath:       "platform/api",
+		TrustedDefaultBranch: "main",
+	}
+}
+
 func validRevisionSpec() PipelineRevisionSpec {
 	draft := validDraftSpec()
 	return PipelineRevisionSpec{
-		RepositoryBindingID:  draft.RepositoryBindingID,
-		TriggerPolicy:        draft.TriggerPolicy,
-		VerificationProfile:  draft.VerificationProfile,
-		ExecutorProfile:      ExecutorMatrixNativeIsolatedV1,
-		ToolchainImageDigest: Go126OfflineToolchainImageDigest,
-		DependencyEgress:     draft.DependencyEgress,
-		ReporterPolicy:       draft.ReporterPolicy,
-		Steps:                FixedVerificationSteps(),
-		Limits:               FixedVerificationLimits(),
+		RepositoryBindingID:     draft.RepositoryBindingID,
+		RepositoryBindingDigest: RepositoryBindingSpecDigest(validRepositoryBindingSpec()),
+		TriggerPolicy:           draft.TriggerPolicy,
+		VerificationProfile:     draft.VerificationProfile,
+		ExecutorProfile:         ExecutorMatrixNativeIsolatedV1,
+		ToolchainImageDigest:    Go126OfflineToolchainImageDigest,
+		DependencyEgress:        draft.DependencyEgress,
+		ReporterPolicy:          draft.ReporterPolicy,
+		Steps:                   FixedVerificationSteps(),
+		Limits:                  FixedVerificationLimits(),
 	}
 }
 
