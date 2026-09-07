@@ -227,6 +227,64 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 	}
 }
 
+func TestStageUpgradePreservesLegacyIAMBootstrapAndAddsPlatformCredential(t *testing.T) {
+	plan := newInstallPlan(t)
+	if err := stageInstallation(plan, rand.Reader); err != nil {
+		t.Fatalf("stage current installation fixture: %v", err)
+	}
+	currentBytes := readTestFile(t, plan.Root, layout.IAMBootstrap)
+	current, err := iamv1.DecodeBootstrapDocument(bytes.NewReader(currentBytes))
+	if err != nil {
+		t.Fatalf("decode current IAM bootstrap: %v", err)
+	}
+	legacy := current
+	legacy.Services = make([]iamv1.BootstrapServiceCredential, 0, len(current.Services)-1)
+	for _, service := range current.Services {
+		if service.Purpose != iamv1.ServicePlatform {
+			legacy.Services = append(legacy.Services, service)
+		}
+	}
+	legacyBytes, err := iamv1.EncodeBootstrapReplayDocument(legacy)
+	if err != nil {
+		t.Fatalf("encode legacy IAM bootstrap: %v", err)
+	}
+	bootstrapPath := filepath.Join(plan.Root, filepath.FromSlash(layout.IAMBootstrap))
+	if err := os.WriteFile(bootstrapPath, legacyBytes, 0o600); err != nil {
+		t.Fatalf("install legacy IAM bootstrap fixture: %v", err)
+	}
+	platformPath := filepath.Join(plan.Root, filepath.FromSlash(layout.PlatformIAMCredential))
+	if err := os.Remove(platformPath); err != nil {
+		t.Fatalf("remove post-legacy platform credential fixture: %v", err)
+	}
+
+	if err := stageInstallation(plan, bytes.NewReader(bytes.Repeat([]byte{0x42}, 32))); err != nil {
+		t.Fatalf("stage legacy upgrade: %v", err)
+	}
+	storedLegacy := readTestFile(t, plan.Root, layout.IAMBootstrap)
+	if !bytes.Equal(storedLegacy, legacyBytes) {
+		t.Fatal("legacy upgrade rewrote the rollback-owned IAM bootstrap")
+	}
+	if _, err := iamv1.DecodeBootstrapDocument(bytes.NewReader(storedLegacy)); err == nil {
+		t.Fatal("legacy upgrade changed the old bootstrap into the current contract")
+	}
+	if _, err := iamv1.DecodeBootstrapReplayDocument(bytes.NewReader(storedLegacy)); err != nil {
+		t.Fatalf("stored legacy bootstrap cannot replay: %v", err)
+	}
+	platformCredential := readTestFile(t, plan.Root, layout.PlatformIAMCredential)
+	if !validGeneratedCredential(platformCredential, "mx1.", false) {
+		t.Fatal("legacy upgrade did not generate a valid platform credential")
+	}
+
+	if err := stageInstallation(plan, failingEntropy{}); err != nil {
+		t.Fatalf("replay legacy staging without entropy: %v", err)
+	}
+	if replayed := readTestFile(t, plan.Root, layout.PlatformIAMCredential); !bytes.Equal(
+		replayed, platformCredential,
+	) {
+		t.Fatal("legacy staging replay rotated the platform credential")
+	}
+}
+
 func TestUpgradeConfigurationReplacesOnlyReleaseDerivedFilesAndReplaysBothWays(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("local-machine upgrade configuration targets Linux")
@@ -371,6 +429,49 @@ func TestLoadInstallImagesKeepsStartedFailureOutcomeUnknown(t *testing.T) {
 	}
 }
 
+func TestIAMMigrationArgumentsBindInstallationWithoutCredentialValue(t *testing.T) {
+	plan := newInstallPlan(t)
+	if err := stageInstallation(plan, rand.Reader); err != nil {
+		t.Fatalf("stage IAM migration fixture: %v", err)
+	}
+	var imageID string
+	for _, image := range plan.Bundle.Manifest.Images {
+		if image.Component == "iam" {
+			imageID = image.ImageID
+			break
+		}
+	}
+	if imageID == "" {
+		t.Fatal("IAM image identity is absent from fixture")
+	}
+	arguments, err := migrationArguments(
+		plan,
+		"matrix-test",
+		"network-test",
+		imageID,
+		platformMigrations[0],
+		"verify",
+	)
+	if err != nil {
+		t.Fatalf("compile IAM migration arguments: %v", err)
+	}
+	if !hasArgumentPair(
+		arguments,
+		"--env",
+		migrationInstallationIDEnvironment+"="+plan.InstallationID,
+	) || !hasArgumentPair(
+		arguments,
+		"--env",
+		"MATRIX_MIGRATION_PLATFORM_IAM_CREDENTIAL_FILE=/run/matrix/platform-iam-credential",
+	) {
+		t.Fatalf("IAM migration arguments lack fixed installation bindings: %q", strings.Join(arguments, " "))
+	}
+	credential := readTestFile(t, plan.Root, layout.PlatformIAMCredential)
+	if bytes.Contains([]byte(strings.Join(arguments, " ")), credential) {
+		t.Fatal("IAM migration arguments contain platform credential material")
+	}
+}
+
 func TestMigrateInstallationUsesFixedGoBinariesWithoutCredentialArguments(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("local-machine migration effects target Linux")
@@ -410,6 +511,7 @@ func TestMigrateInstallationUsesFixedGoBinariesWithoutCredentialArguments(t *tes
 		readTestFile(t, plan.Root, layout.PostgresMigration),
 		readTestFile(t, plan.Root, layout.IAMAPI),
 		readTestFile(t, plan.Root, layout.IAMWorker),
+		readTestFile(t, plan.Root, layout.PlatformIAMCredential),
 		readTestFile(t, plan.Root, layout.AuditRuntime),
 		readTestFile(t, plan.Root, layout.PaaSAPI),
 		readTestFile(t, plan.Root, layout.PaaSWorker),
@@ -429,6 +531,22 @@ func TestMigrateInstallationUsesFixedGoBinariesWithoutCredentialArguments(t *tes
 			if bytes.Contains([]byte(joined), secret) {
 				t.Fatalf("migration command %d contains database credential material", index)
 			}
+		}
+		isIAM := wantEntrypoints[index] == "/matrix/bin/matrix-iam-migrate"
+		installationBound := hasArgumentPair(
+			arguments,
+			"--env",
+			migrationInstallationIDEnvironment+"="+plan.InstallationID,
+		)
+		if installationBound != isIAM {
+			t.Fatalf("migration command %d installation binding=%t want=%t", index, installationBound, isIAM)
+		}
+		if hasArgumentPair(
+			arguments,
+			"--env",
+			"MATRIX_MIGRATION_PLATFORM_IAM_CREDENTIAL_FILE=/run/matrix/platform-iam-credential",
+		) != isIAM {
+			t.Fatalf("migration command %d platform credential binding differs", index)
 		}
 	}
 	installation, err := verifiedInstallationConfiguration(plan)

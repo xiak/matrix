@@ -13,12 +13,15 @@ func (service *Authority) Bootstrap(
 	ctx context.Context,
 	document iamv1.BootstrapDocument,
 ) (iamv1.BootstrapStatus, error) {
-	if iamv1.ValidateBootstrapDocument(document) != nil {
+	if iamv1.ValidateBootstrapReplayDocument(document) != nil {
 		return iamv1.BootstrapStatus{}, ErrInvalidArgument
 	}
 	contentDigest, err := authority.BootstrapDigest(document)
 	if err != nil {
 		return iamv1.BootstrapStatus{}, ErrUnavailable
+	}
+	if iamv1.IsLegacyBootstrapReplayDocument(document) {
+		return service.replayLegacyBootstrap(ctx, document, contentDigest)
 	}
 	passwordHash, err := service.passwords.Hash(document.Administrator.Password)
 	if err != nil {
@@ -100,6 +103,35 @@ func (service *Authority) Bootstrap(
 	if iamv1.ValidateBootstrapStatus(status) != nil || status.State != iamv1.BootstrapReady ||
 		status.ContentDigest != contentDigest || status.InstallationID != document.InstallationID {
 		return iamv1.BootstrapStatus{}, ErrUnavailable
+	}
+	return status, nil
+}
+
+func (service *Authority) replayLegacyBootstrap(
+	ctx context.Context,
+	document iamv1.BootstrapDocument,
+	contentDigest string,
+) (iamv1.BootstrapStatus, error) {
+	var status iamv1.BootstrapStatus
+	err := service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
+		var err error
+		status, err = transaction.BootstrapStatus(transactionContext)
+		if err != nil {
+			return err
+		}
+		if iamv1.ValidateBootstrapStatus(status) != nil {
+			return ErrUnavailable
+		}
+		if status.State != iamv1.BootstrapReady ||
+			status.InstallationID != document.InstallationID ||
+			status.OrganizationID != document.Organization.ID ||
+			status.ContentDigest != contentDigest {
+			return ErrConflict
+		}
+		return nil
+	})
+	if err != nil {
+		return iamv1.BootstrapStatus{}, err
 	}
 	return status, nil
 }

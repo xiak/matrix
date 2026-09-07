@@ -102,6 +102,30 @@ BEGIN
         RAISE EXCEPTION 'IAM schema contains plaintext credential columns';
     END IF;
 
+    IF to_regprocedure(
+            'iam.ensure_platform_service(text,text,text,text,text)'
+       ) IS NULL
+       OR to_regprocedure(
+            'iam.verify_platform_service(text,text,text,text)'
+       ) IS NULL
+       OR iam.resource_kind_for_action('installation.product.read')
+            IS DISTINCT FROM 'INSTALLATION'
+       OR NOT EXISTS (
+            SELECT 1
+              FROM pg_catalog.pg_constraint AS constraint_row
+              JOIN pg_catalog.pg_class AS class
+                ON class.oid = constraint_row.conrelid
+              JOIN pg_catalog.pg_namespace AS namespace
+                ON namespace.oid = class.relnamespace
+             WHERE namespace.nspname = 'iam'
+               AND class.relname = 'service_credentials'
+               AND constraint_row.conname = 'service_credentials_values_valid'
+               AND constraint_row.contype = 'c'
+               AND constraint_row.convalidated
+       ) THEN
+        RAISE EXCEPTION 'IAM platform authority schema is invalid';
+    END IF;
+
     IF NOT has_function_privilege(
             'matrix_iam_api',
             'iam.apply_bootstrap(text,text,text,text,text,text,text,text,jsonb,jsonb)',
@@ -174,6 +198,26 @@ BEGIN
        )
        OR has_function_privilege(
             'matrix_iam_api', 'iam.assert_user_audit_actor(text,text,jsonb)', 'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_iam_api',
+            'iam.ensure_platform_service(text,text,text,text,text)',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_iam_worker',
+            'iam.ensure_platform_service(text,text,text,text,text)',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_iam_api',
+            'iam.verify_platform_service(text,text,text,text)',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_iam_worker',
+            'iam.verify_platform_service(text,text,text,text)',
+            'EXECUTE'
        ) THEN
         RAISE EXCEPTION 'IAM API/worker function authority is invalid';
     END IF;

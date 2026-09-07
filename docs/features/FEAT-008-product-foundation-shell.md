@@ -1,6 +1,6 @@
 # FEAT-008: Private-cloud product foundation and unified shell
 
-- Status: In progress; UX and architecture complete; Gate A discovery runtime and Gate B unified-shell slice implemented, lifecycle and authenticated-browser evidence pending
+- Status: In progress; UX and architecture complete; Gate A discovery runtime and Gate B unified-shell slice implemented; legacy-authority upgrade prerequisite verified; full lifecycle and authenticated-browser evidence pending
 - Target release: Unscheduled multi-product release
 - Contract: `installation.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -157,6 +157,34 @@ Common generation-drift, schema, architecture, unit, vet, race, repeated,
 cross-platform build, Markdown-link, accessibility, security-header,
 tenant-authority, offline, upgrade/rollback/recovery, and
 `git diff --check` gates pass on the same committed worktree.
+
+## Current implementation evidence
+
+- Fresh bootstrap remains a strict five-service contract. The only retained
+  pre-product compatibility is the exact four-service bootstrap inventory,
+  accepted solely as an equal replay of an existing `READY` receipt with the
+  same installation, organization, and canonical content digest.
+- Upgrade staging preserves that legacy bootstrap byte-for-byte for rollback
+  and creates the installation-owned Platform credential once in its separate
+  fixed secret path. Repeated staging consumes no entropy and never rotates it.
+- The IAM migration changes the closed database constraint, enrolls or verifies
+  exactly `service-platform` under the migration authority, keeps the legacy
+  bootstrap receipt unchanged, and emits one additional sanitized
+  `iam.bootstrap.applied` Audit fact with a fixed migration actor/request
+  identity. IAM API and worker roles cannot execute the migration-only
+  functions; retaining the accepted action keeps the event consumable after
+  an N-1 rollback.
+- A disposable PostgreSQL 18 integration run applied every platform migration
+  twice, installed a fixed four-service legacy authority state, enrolled the
+  Platform service twice, proved one credential and one Audit fact, preserved
+  the old receipt, rejected a different credential, and reverified runtime
+  schema isolation. Unit and contract tests also pin the accepted legacy
+  canonical digest and reject legacy initialization, reordering, or mutation.
+
+This evidence closes only the authority-migration prerequisite for Gate C. A
+network-disabled signed-release install plus injected-failure upgrade,
+automatic rollback, explicit rollback, backup recovery, and matching UI/API
+inventory evidence remain required before Gate C can pass.
 
 ## Deferred
 

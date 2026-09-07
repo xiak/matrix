@@ -251,6 +251,55 @@ func TestIAMCoreUsecasesBindCredentialsAndRecordClosedAuthorization(t *testing.T
 	}
 }
 
+func TestIAMLegacyBootstrapCanOnlyReplayAnExactReadyReceipt(t *testing.T) {
+	transaction := newCoreTransaction()
+	repository := &coreRepository{transaction: transaction}
+	service, err := NewAuthority(repository, Config{})
+	if err != nil {
+		t.Fatalf("create IAM authority: %v", err)
+	}
+	current := coreBootstrap(t)
+	legacy := current
+	legacy.Services = append(
+		[]iamv1.BootstrapServiceCredential(nil),
+		current.Services[:1]...,
+	)
+	legacy.Services = append(legacy.Services, current.Services[2:]...)
+	digest, err := authority.BootstrapDigest(legacy)
+	if err != nil {
+		t.Fatalf("digest legacy bootstrap: %v", err)
+	}
+	if _, err := service.Bootstrap(context.Background(), legacy); !errors.Is(err, ErrConflict) {
+		t.Fatalf("uninitialized legacy bootstrap error=%v, want conflict", err)
+	}
+	if transaction.contentDigest != "" {
+		t.Fatal("legacy bootstrap seeded an uninitialized authority")
+	}
+	appliedAt := transaction.now
+	transaction.status = iamv1.BootstrapStatus{
+		APIVersion: iamv1.APIVersion, Kind: "BootstrapStatus", State: iamv1.BootstrapReady,
+		InstallationID: legacy.InstallationID, OrganizationID: legacy.Organization.ID,
+		ContentDigest: digest, AppliedAt: &appliedAt,
+	}
+	transaction.contentDigest = digest
+	replayed, err := service.Bootstrap(context.Background(), legacy)
+	if err != nil || replayed != transaction.status {
+		t.Fatalf("replay legacy bootstrap: status=%#v err=%v", replayed, err)
+	}
+
+	changed := legacy
+	changed.Services = append([]iamv1.BootstrapServiceCredential(nil), legacy.Services...)
+	changed.Services[1].Credential = coreSecret(t, "mx1.ChangedLegacyCredential0000000000000000001")
+	if _, err := service.Bootstrap(context.Background(), changed); !errors.Is(err, ErrConflict) {
+		t.Fatalf("changed legacy bootstrap error=%v, want conflict", err)
+	}
+	wrongOrganization := legacy
+	wrongOrganization.Organization.ID = "organization-other"
+	if _, err := service.Bootstrap(context.Background(), wrongOrganization); !errors.Is(err, ErrConflict) {
+		t.Fatalf("cross-organization legacy bootstrap error=%v, want conflict", err)
+	}
+}
+
 type coreRepository struct {
 	transaction *coreTransaction
 }

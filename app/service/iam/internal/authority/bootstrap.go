@@ -23,7 +23,7 @@ type BootstrapReceipt struct {
 }
 
 func BootstrapDigest(document iamv1.BootstrapDocument) (string, error) {
-	encoded, err := iamv1.EncodeBootstrapDocument(document)
+	encoded, err := iamv1.EncodeBootstrapReplayDocument(document)
 	if err != nil {
 		return "", err
 	}

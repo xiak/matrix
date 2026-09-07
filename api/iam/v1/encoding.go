@@ -16,11 +16,24 @@ func DecodeRequest(reader io.Reader, destination any) error {
 }
 
 func DecodeBootstrapDocument(reader io.Reader) (BootstrapDocument, error) {
+	return decodeBootstrapDocument(reader, ValidateBootstrapDocument)
+}
+
+// DecodeBootstrapReplayDocument is the narrow upgrade/restart decoder for an
+// installer-owned bootstrap file that may predate the PLATFORM service.
+func DecodeBootstrapReplayDocument(reader io.Reader) (BootstrapDocument, error) {
+	return decodeBootstrapDocument(reader, ValidateBootstrapReplayDocument)
+}
+
+func decodeBootstrapDocument(
+	reader io.Reader,
+	validate func(BootstrapDocument) error,
+) (BootstrapDocument, error) {
 	var document BootstrapDocument
 	if err := contractjson.DecodeObject(reader, MaxBootstrapBytes, &document); err != nil {
 		return BootstrapDocument{}, err
 	}
-	if err := ValidateBootstrapDocument(document); err != nil {
+	if err := validate(document); err != nil {
 		return BootstrapDocument{}, err
 	}
 	return document, nil
@@ -29,7 +42,21 @@ func DecodeBootstrapDocument(reader io.Reader) (BootstrapDocument, error) {
 // EncodeBootstrapDocument is the only contract encoder that intentionally
 // emits bootstrap credential material.
 func EncodeBootstrapDocument(document BootstrapDocument) ([]byte, error) {
-	if err := ValidateBootstrapDocument(document); err != nil {
+	return encodeBootstrapDocument(document, ValidateBootstrapDocument)
+}
+
+// EncodeBootstrapReplayDocument canonicalizes a current or exact legacy
+// bootstrap document for equality and digest checks. Fresh bootstrap writers
+// must continue to use EncodeBootstrapDocument.
+func EncodeBootstrapReplayDocument(document BootstrapDocument) ([]byte, error) {
+	return encodeBootstrapDocument(document, ValidateBootstrapReplayDocument)
+}
+
+func encodeBootstrapDocument(
+	document BootstrapDocument,
+	validate func(BootstrapDocument) error,
+) ([]byte, error) {
+	if err := validate(document); err != nil {
 		return nil, err
 	}
 	type administratorWire struct {

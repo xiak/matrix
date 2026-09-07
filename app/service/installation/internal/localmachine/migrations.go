@@ -13,6 +13,8 @@ import (
 
 const migrationWaitSeconds = "120"
 
+const migrationInstallationIDEnvironment = "MATRIX_MIGRATION_INSTALLATION_ID"
+
 type migrationMount struct {
 	relative    string
 	destination string
@@ -20,19 +22,22 @@ type migrationMount struct {
 }
 
 type migrationDefinition struct {
-	component  string
-	name       string
-	entrypoint string
-	mounts     []migrationMount
+	component          string
+	name               string
+	entrypoint         string
+	bindInstallationID bool
+	mounts             []migrationMount
 }
 
 var platformMigrations = []migrationDefinition{
 	{
 		component: "iam", name: "iam", entrypoint: "/matrix/bin/matrix-iam-migrate",
+		bindInstallationID: true,
 		mounts: []migrationMount{
 			{layout.PostgresMigration, "/run/matrix/migration-dsn", "MATRIX_MIGRATION_DATABASE_DSN_FILE"},
 			{layout.IAMAPI, "/run/matrix/iam-api-dsn", "MATRIX_MIGRATION_IAM_API_DSN_FILE"},
 			{layout.IAMWorker, "/run/matrix/iam-worker-dsn", "MATRIX_MIGRATION_IAM_WORKER_DSN_FILE"},
+			{layout.PlatformIAMCredential, "/run/matrix/platform-iam-credential", "MATRIX_MIGRATION_PLATFORM_IAM_CREDENTIAL_FILE"},
 		},
 	},
 	{
@@ -283,6 +288,12 @@ func migrationArguments(
 			arguments,
 			"--mount", "type=bind,src="+source+",dst="+mount.destination+",readonly",
 			"--env", mount.environment+"="+mount.destination,
+		)
+	}
+	if migration.bindInstallationID {
+		arguments = append(
+			arguments,
+			"--env", migrationInstallationIDEnvironment+"="+plan.InstallationID,
 		)
 	}
 	arguments = append(arguments, "--entrypoint", migration.entrypoint, imageID, mode)

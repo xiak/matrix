@@ -163,3 +163,13 @@ var allServicePurposes = []ServicePurpose{
 	ServiceAudit,
 	ServiceInstallationVerifier,
 }
+
+// legacyBootstrapServicePurposes is the fixed v0.1 inventory retained only so
+// an accepted installation can replay its original signed-in-place authority
+// seed while upgrading. It is deliberately excluded from public enumeration.
+var legacyBootstrapServicePurposes = []ServicePurpose{
+	ServiceIAM,
+	ServicePaaS,
+	ServiceAudit,
+	ServiceInstallationVerifier,
+}

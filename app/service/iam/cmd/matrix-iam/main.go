@@ -77,7 +77,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	document, err := iamv1.DecodeBootstrapDocument(bytes.NewReader(bootstrapBytes))
+	document, err := iamv1.DecodeBootstrapReplayDocument(bytes.NewReader(bootstrapBytes))
 	clear(bootstrapBytes)
 	if err != nil {
 		return errors.New("IAM bootstrap document is invalid")

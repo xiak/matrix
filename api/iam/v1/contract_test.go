@@ -159,6 +159,45 @@ func TestIAMCredentialsRequireExplicitEncoding(t *testing.T) {
 	}
 }
 
+func TestIAMLegacyBootstrapIsReplayOnly(t *testing.T) {
+	document := decodeIAMExample[BootstrapDocument](t, "examples/bootstrap-document.json")
+	legacyServices := make([]BootstrapServiceCredential, 0, len(document.Services)-1)
+	for _, service := range document.Services {
+		if service.Purpose != ServicePlatform {
+			legacyServices = append(legacyServices, service)
+		}
+	}
+	document.Services = legacyServices
+
+	encoded, err := EncodeBootstrapReplayDocument(document)
+	if err != nil {
+		t.Fatalf("encode legacy bootstrap replay: %v", err)
+	}
+	if _, err := DecodeBootstrapDocument(bytes.NewReader(encoded)); err == nil {
+		t.Fatal("ordinary bootstrap decoder accepted a legacy service inventory")
+	}
+	decoded, err := DecodeBootstrapReplayDocument(bytes.NewReader(encoded))
+	if err != nil || !IsLegacyBootstrapReplayDocument(decoded) {
+		t.Fatalf("decode legacy bootstrap replay: legacy=%t err=%v", IsLegacyBootstrapReplayDocument(decoded), err)
+	}
+	if _, err := EncodeBootstrapDocument(decoded); err == nil {
+		t.Fatal("ordinary bootstrap encoder accepted a legacy service inventory")
+	}
+
+	reordered := document
+	reordered.Services = append([]BootstrapServiceCredential(nil), document.Services...)
+	reordered.Services[0], reordered.Services[1] = reordered.Services[1], reordered.Services[0]
+	if ValidateBootstrapReplayDocument(reordered) == nil || IsLegacyBootstrapReplayDocument(reordered) {
+		t.Fatal("legacy bootstrap replay accepted a reordered service inventory")
+	}
+	changed := document
+	changed.Services = append([]BootstrapServiceCredential(nil), document.Services...)
+	changed.Services[1].Purpose = ServicePlatform
+	if ValidateBootstrapReplayDocument(changed) == nil {
+		t.Fatal("legacy bootstrap replay accepted a changed service inventory")
+	}
+}
+
 func TestIAMOpenAPICredentialBoundaries(t *testing.T) {
 	document := loadIAMOpenAPI(t)
 	paths := mustIAMObject(t, document["paths"], "paths")

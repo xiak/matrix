@@ -139,7 +139,7 @@ func ensureIAMBootstrap(root, installationID string, entropy io.Reader) (stagedC
 		if err != nil {
 			return stagedCredentials{}, errors.Join(platformcommand.ErrEffectVerification, err)
 		}
-		document, err := iamv1.DecodeBootstrapDocument(bytes.NewReader(content))
+		document, err := iamv1.DecodeBootstrapReplayDocument(bytes.NewReader(content))
 		clear(content)
 		if err != nil || document.InstallationID != installationID {
 			return stagedCredentials{}, errors.Join(
@@ -147,7 +147,18 @@ func ensureIAMBootstrap(root, installationID string, entropy io.Reader) (stagedC
 				errors.New("stored IAM bootstrap is invalid"),
 			)
 		}
-		return credentialsFromBootstrap(document), nil
+		credentials := credentialsFromBootstrap(document)
+		if iamv1.IsLegacyBootstrapReplayDocument(document) {
+			platformCredential, err := ensureGeneratedCredential(
+				root, layout.PlatformIAMCredential, entropy, "mx1.", false,
+			)
+			if err != nil {
+				credentials.clear()
+				return stagedCredentials{}, err
+			}
+			credentials.services[iamv1.ServicePlatform] = platformCredential
+		}
+		return credentials, nil
 	}
 
 	administratorText, err := randomCredential(entropy, "mxp1.", true)
