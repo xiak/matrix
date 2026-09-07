@@ -1,8 +1,9 @@
 # FEAT-007: Repository change validation
 
 - Status: In progress; UX, architecture, donor analysis, implementation
-  baseline, Gate A project/Pipeline/source-resource contract and domain slices,
-  and shared authority catalog complete; persistence and run lifecycle pending
+  baseline, Gate A project/Pipeline/source-resource contract, domain,
+  configuration transaction/persistence, and shared authority slices complete;
+  HTTP integration and run lifecycle pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -391,10 +392,31 @@ binding creates a new revision even when the tenant-owned Pipeline draft did
 not otherwise change. Resource and revision versions are capped at the largest
 integer exactly representable by all JSON consumers.
 
+The configuration workflow now carries the IAM decision as an action- and
+resource-bound trusted value through eight exact mutations: project and source
+connection creation, source credential-reference rotation, repository binding
+creation/update, Pipeline creation/draft replacement, and immutable revision
+activation. A delivery-internal durable command record derives its stable
+identity from tenant, subject, command, target, and idempotency key. Equal
+replay returns the original successful result snapshot even after later
+updates; a changed request conflicts. This record is not a second public
+Operation resource and does not expand the v1 API.
+
+The delivery-owned PostgreSQL 18 schema stores projects, connections,
+bindings, binding snapshots, Pipelines, immutable revisions, command records,
+and sanitized Audit outbox facts. Every row is tenant-leading and protected by
+forced RLS. Composite foreign keys prove same-tenant project, connection,
+binding, and Pipeline ownership; each PipelineRevision references the exact
+binding digest snapshot it sealed. The owner, migrator, API, and worker roles
+are distinct: API writes only through one constrained security-definer
+transaction, cannot read the Audit outbox, and worker currently has no table
+access. The migration is repeatable and participates in the platform-wide
+cross-schema credential boundary test.
+
 These slices do not complete Gate A. SourceEvent, PipelineRun, log,
 replay/cancellation/lease/fence/reconciliation, quota, pagination, DevOps
-credential enrollment, use-case/HTTP authority integration, and delivery
-PostgreSQL/RLS work remain pending.
+credential enrollment, HTTP IAM/Audit adapters, Audit dispatch, and real
+service composition remain pending.
 
 Current verification evidence:
 
@@ -408,6 +430,13 @@ Current verification evidence:
 - deterministic OpenAPI generation-drift tests and `git diff --check`
 - real PostgreSQL 18 double-apply and catalog integration tests for the IAM and
   Audit extensions
+- full in-memory configuration journeys proving action-bound authorization,
+  equal/changed replay, transaction retry, result snapshots, and binding-safe
+  reactivation
+- real PostgreSQL 18 configuration journeys proving double apply, exact
+  runtime identities, forced cross-tenant isolation, function-only API writes,
+  a table-blind worker, immutable binding/revision history, sanitized Audit
+  outbox correlation, and the four-schema platform migration boundary
 
 ## Incremental acceptance
 

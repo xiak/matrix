@@ -14,6 +14,7 @@ import (
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	auditmigration "github.com/xiak/matrix/app/service/audit/migration"
+	devopsmigration "github.com/xiak/matrix/app/service/devops/migration"
 	iammigration "github.com/xiak/matrix/app/service/iam/migration"
 	paasmigration "github.com/xiak/matrix/app/service/paas/migration"
 )
@@ -45,12 +46,14 @@ func TestPlatformMigrationIntegration(t *testing.T) {
 		`SELECT to_regnamespace('iam') IS NULL
 		        AND to_regnamespace('audit') IS NULL
 		        AND to_regnamespace('paas') IS NULL
+		        AND to_regnamespace('delivery') IS NULL
 		        AND NOT EXISTS (
 		            SELECT 1 FROM pg_catalog.pg_roles
 		             WHERE rolname IN (
 		                'matrix_iam_api_login', 'matrix_iam_worker_login',
 		                'matrix_audit_runtime_login',
-		                'matrix_paas_api_login', 'matrix_paas_worker_login'
+		                'matrix_paas_api_login', 'matrix_paas_worker_login',
+		                'matrix_devops_api_login', 'matrix_devops_worker_login'
 		             )
 		        )`,
 	).Scan(&clean); err != nil || !clean {
@@ -62,6 +65,8 @@ func TestPlatformMigrationIntegration(t *testing.T) {
 	auditRuntime := runtimeDSN(t, adminDSN, "matrix_audit_runtime_login", "mxp1.audit-runtime-00000000000000000000000000000")
 	paasAPI := runtimeDSN(t, adminDSN, "matrix_paas_api_login", "mxp1.paas-api-0000000000000000000000000000000000")
 	paasWorker := runtimeDSN(t, adminDSN, "matrix_paas_worker_login", "mxp1.paas-worker-0000000000000000000000000000000")
+	devopsAPI := runtimeDSN(t, adminDSN, "matrix_devops_api_login", "mxp1.devops-api-000000000000000000000000000000")
+	devopsWorker := runtimeDSN(t, adminDSN, "matrix_devops_worker_login", "mxp1.devops-worker-0000000000000000000000000000")
 
 	for attempt := 1; attempt <= 2; attempt++ {
 		if err := iammigration.Apply(ctx, adminDSN, iamAPI, iamWorker); err != nil {
@@ -73,6 +78,9 @@ func TestPlatformMigrationIntegration(t *testing.T) {
 		if err := paasmigration.Apply(ctx, adminDSN, paasAPI, paasWorker); err != nil {
 			t.Fatalf("apply PaaS migration attempt %d: %v", attempt, err)
 		}
+		if err := devopsmigration.Apply(ctx, adminDSN, devopsAPI, devopsWorker); err != nil {
+			t.Fatalf("apply DevOps migration attempt %d: %v", attempt, err)
+		}
 	}
 	if err := iammigration.VerifyInstalled(ctx, adminDSN, iamAPI, iamWorker); err != nil {
 		t.Fatalf("verify installed IAM migration: %v", err)
@@ -83,6 +91,9 @@ func TestPlatformMigrationIntegration(t *testing.T) {
 	if err := paasmigration.VerifyInstalled(ctx, adminDSN, paasAPI, paasWorker); err != nil {
 		t.Fatalf("verify installed PaaS migration: %v", err)
 	}
+	if err := devopsmigration.VerifyInstalled(ctx, adminDSN, devopsAPI, devopsWorker); err != nil {
+		t.Fatalf("verify installed DevOps migration: %v", err)
+	}
 	assertLegacyIAMPlatformEnrollment(t, ctx, admin, adminDSN, iamAPI, iamWorker)
 
 	for _, runtime := range []struct {
@@ -90,11 +101,13 @@ func TestPlatformMigrationIntegration(t *testing.T) {
 		allowed string
 		denied  []string
 	}{
-		{iamAPI, "iam", []string{"audit", "paas"}},
-		{iamWorker, "iam", []string{"audit", "paas"}},
-		{auditRuntime, "audit", []string{"iam", "paas"}},
-		{paasAPI, "paas", []string{"iam", "audit"}},
-		{paasWorker, "paas", []string{"iam", "audit"}},
+		{iamAPI, "iam", []string{"audit", "delivery", "paas"}},
+		{iamWorker, "iam", []string{"audit", "delivery", "paas"}},
+		{auditRuntime, "audit", []string{"delivery", "iam", "paas"}},
+		{paasAPI, "paas", []string{"audit", "delivery", "iam"}},
+		{paasWorker, "paas", []string{"audit", "delivery", "iam"}},
+		{devopsAPI, "delivery", []string{"audit", "iam", "paas"}},
+		{devopsWorker, "delivery", []string{"audit", "iam", "paas"}},
 	} {
 		assertSchemaBoundary(t, ctx, runtime.dsn, runtime.allowed, runtime.denied)
 	}
