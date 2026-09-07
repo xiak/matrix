@@ -74,7 +74,7 @@ The console shows its expiry and one-time nature and offers a client-generated
 offline join file plus this fixed-shape command:
 
 ```text
-sudo ./mx node install --root /opt/matrix/node --bundle ./matrix-node-release --trust-key ./release-trust.json --join ./matrix-node-join.json
+sudo ./mx node install --root /opt/matrix-node --bundle ./matrix-node-release --trust-key ./release-trust.json --join ./matrix-node-join.json
 ```
 
 The UI neither accepts nor synthesizes shell fragments, Compose documents,

@@ -284,7 +284,7 @@ describe("ConsoleShellRenderer", () => {
     const clipboard = vi.spyOn(navigator.clipboard, "writeText");
     await user.click(screen.getByRole("button", { name: "复制命令" }));
     expect(clipboard).toHaveBeenCalledWith(
-      "sudo ./mx node install --root /opt/matrix/node --bundle ./matrix-node-release --trust-key ./release-trust.json --join ./matrix-node-join.json"
+      "sudo ./mx node install --root /opt/matrix-node --bundle ./matrix-node-release --trust-key ./release-trust.json --join ./matrix-node-join.json"
     );
     expect(await screen.findByText("命令已复制；其中不含凭据。")).toBeTruthy();
   });

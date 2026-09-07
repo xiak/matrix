@@ -1,6 +1,6 @@
 export const NODE_ENROLLMENT_JOIN_FILE_NAME = "matrix-node-join.json";
 export const NODE_ENROLLMENT_INSTALL_COMMAND =
-  "sudo ./mx node install --root /opt/matrix/node --bundle ./matrix-node-release --trust-key ./release-trust.json --join ./matrix-node-join.json";
+  "sudo ./mx node install --root /opt/matrix-node --bundle ./matrix-node-release --trust-key ./release-trust.json --join ./matrix-node-join.json";
 
 export type NodeEnrollmentState =
   | "WAITING_INSTALL"
