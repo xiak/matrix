@@ -914,10 +914,10 @@ func authenticateJournalRelease(
 	releaseRoot := filepath.Join(
 		root, filepath.FromSlash(layout.ReleaseDirectory(releaseID)),
 	)
-	bundle, err := release.VerifyDirectory(releaseRoot, trustBytes)
+	bundle, err := release.VerifyInstalledDirectory(releaseRoot, trustBytes)
 	if err != nil || bundle.Manifest.Release.ID != releaseID ||
 		bundle.ManifestSHA256 != digest ||
-		bundle.Manifest.TopologyDigest != topology.ContractDigest() {
+		topology.ValidateInstalledContract(bundle.Manifest) != nil {
 		return release.VerifiedBundle{}, errors.New("committed release authentication failed")
 	}
 	return bundle, nil

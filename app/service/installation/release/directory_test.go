@@ -131,6 +131,18 @@ func TestVerifyDirectoryAuthenticatesExactRegularFileInventory(t *testing.T) {
 	}
 }
 
+func TestVerifyInstalledDirectoryKeepsCandidateVerificationStrict(t *testing.T) {
+	fixture := writeLegacyBundleFixture(t)
+	if _, err := VerifyDirectory(fixture.root, fixture.trust); err == nil {
+		t.Fatal("strict directory verification admitted a productless predecessor")
+	}
+	verified, err := VerifyInstalledDirectory(fixture.root, fixture.trust)
+	if err != nil || !IsLegacyProductlessManifest(verified.Manifest) ||
+		verified.ManifestSHA256 == "" {
+		t.Fatalf("verify installed predecessor directory = %#v / %v", verified, err)
+	}
+}
+
 type bundleFixture struct {
 	root     string
 	trust    []byte
@@ -138,6 +150,18 @@ type bundleFixture struct {
 }
 
 func writeBundleFixture(t *testing.T) bundleFixture {
+	return writeBundleFixtureForManifest(t, validManifest(), false)
+}
+
+func writeLegacyBundleFixture(t *testing.T) bundleFixture {
+	return writeBundleFixtureForManifest(t, validLegacyProductlessManifest(), true)
+}
+
+func writeBundleFixtureForManifest(
+	t *testing.T,
+	manifest Manifest,
+	legacyProductless bool,
+) bundleFixture {
 	t.Helper()
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -152,7 +176,6 @@ func writeBundleFixture(t *testing.T) bundleFixture {
 		t.Fatalf("encode trust root: %v", err)
 	}
 	root := filepath.Clean(t.TempDir())
-	manifest := validManifest()
 	for index := range manifest.Files {
 		file := &manifest.Files[index]
 		content := []byte("payload:" + file.Path)
@@ -171,9 +194,14 @@ func writeBundleFixture(t *testing.T) bundleFixture {
 		digest := sha256.Sum256(content)
 		file.SHA256 = "sha256:" + hex.EncodeToString(digest[:])
 	}
-	manifestBytes, err := EncodeCanonical(manifest)
-	if err != nil {
-		t.Fatalf("encode manifest: %v", err)
+	var manifestBytes []byte
+	if legacyProductless {
+		manifestBytes = encodeLegacyProductlessForTest(t, manifest)
+	} else {
+		manifestBytes, err = EncodeCanonical(manifest)
+		if err != nil {
+			t.Fatalf("encode manifest: %v", err)
+		}
 	}
 	if err := os.WriteFile(filepath.Join(root, ManifestFilename), manifestBytes, 0o600); err != nil {
 		t.Fatalf("write manifest: %v", err)

@@ -33,7 +33,7 @@ func TestReleasePairAllowsReleaseSpecificWorkloadImages(t *testing.T) {
 	}}
 	b := release.VerifiedBundle{Manifest: release.Manifest{
 		Release: release.ReleaseIdentity{
-			ID: "release-b", Version: "v0.2.0", SourceCommit: "commit",
+			ID: "release-b", Version: "v0.2.0", SourceCommit: "different-commit",
 			PreviousID: "release-a", PreviousVersion: "v0.1.0",
 		},
 		Images: []release.Image{{Purpose: release.ImageWorkload, SourceDigest: "sha256:b"}},
@@ -56,14 +56,10 @@ func optionsFromEnvironment() (options, error) {
 		edge:       defaultEdgeEndpoint,
 		afterStart: phase == "after-restart",
 	}
-	for _, path := range []string{config.root, config.releaseA, config.trustKey} {
+	for _, path := range []string{config.root, config.releaseA, config.releaseB, config.trustKey} {
 		if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path {
 			return options{}, fail("command-input")
 		}
-	}
-	if !config.afterStart && (config.releaseB == "" || !filepath.IsAbs(config.releaseB) ||
-		filepath.Clean(config.releaseB) != config.releaseB) {
-		return options{}, fail("command-input")
 	}
 	return config, nil
 }
@@ -77,12 +73,9 @@ func runGate(ctx context.Context, config options) error {
 		return fail("release-authentication")
 	}
 	defer clear(trust)
-	a, err := release.VerifyDirectory(config.releaseA, trust)
+	a, err := release.VerifyInstalledDirectory(config.releaseA, trust)
 	if err != nil {
 		return fail("release-a-authentication")
-	}
-	if config.afterStart {
-		return newGate(config, releasePair{a: a}).afterRestart(ctx)
 	}
 	b, err := release.VerifyDirectory(config.releaseB, trust)
 	if err != nil {
@@ -90,6 +83,9 @@ func runGate(ctx context.Context, config options) error {
 	}
 	if err := validateReleasePair(a, b); err != nil {
 		return err
+	}
+	if config.afterStart {
+		return newGate(config, releasePair{a: a, b: b}).afterRestart(ctx)
 	}
 	return newGate(config, releasePair{a: a, b: b}).beforeRestart(ctx)
 }

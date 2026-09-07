@@ -79,8 +79,23 @@ func ReadTrustRootFile(target string) ([]byte, TrustRoot, error) {
 
 func Verify(manifestBytes, signature, trustBytes []byte) (Manifest, error) {
 	manifest, err := DecodeCanonical(manifestBytes)
-	if err != nil {
-		return Manifest{}, err
+	return verifyDecodedManifest(manifest, err, manifestBytes, signature, trustBytes)
+}
+
+// VerifyInstalled preserves signature verification for the fixed accepted
+// predecessor wire contract. New release inputs must continue to call Verify.
+func VerifyInstalled(manifestBytes, signature, trustBytes []byte) (Manifest, error) {
+	manifest, err := DecodeInstalledCanonical(manifestBytes)
+	return verifyDecodedManifest(manifest, err, manifestBytes, signature, trustBytes)
+}
+
+func verifyDecodedManifest(
+	manifest Manifest,
+	manifestErr error,
+	manifestBytes, signature, trustBytes []byte,
+) (Manifest, error) {
+	if manifestErr != nil {
+		return Manifest{}, manifestErr
 	}
 	trust, err := DecodeTrustRoot(trustBytes)
 	if err != nil {

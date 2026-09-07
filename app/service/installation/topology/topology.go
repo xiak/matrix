@@ -21,6 +21,15 @@ import (
 
 const ContractVersion = "matrix-platform-compose/v1"
 
+const legacyProductlessContractDigest = "sha256:6f8e3bd951426da4033b3234f2b8fcebd053a9b809d98c8a3476962062a0cf2f"
+
+type compileProfile uint8
+
+const (
+	currentProfile compileProfile = iota
+	legacyProductlessProfile
+)
+
 type Options struct {
 	InstallationID string
 	Root           string
@@ -75,7 +84,7 @@ func contractDescription() contract {
 	}
 	document := composeDocument{
 		Name:     "matrix-00000000000000000000000000000000",
-		Services: compileServices(manifest, images, options),
+		Services: compileServices(manifest, images, options, currentProfile),
 		Networks: map[string]networkConfig{
 			"control": {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-control")},
 			"edge":    {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-edge")},
@@ -109,7 +118,7 @@ func Compile(manifest release.Manifest, options Options) (Result, error) {
 	}
 	document := composeDocument{
 		Name:     "matrix-" + strings.TrimPrefix(options.InstallationID, "mxi-"),
-		Services: compileServices(manifest, images, options),
+		Services: compileServices(manifest, images, options, currentProfile),
 		Networks: map[string]networkConfig{
 			"control": {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-control")},
 			"edge":    {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-edge")},
@@ -123,6 +132,121 @@ func Compile(manifest release.Manifest, options Options) (Result, error) {
 	return Result{
 		ProjectName: document.Name, ContractDigest: ContractDigest(), ComposeJSON: content,
 	}, nil
+}
+
+// ValidateInstalledContract admits only the current topology contract or the
+// exact accepted productless predecessor. Candidate releases must compare
+// directly with ContractDigest instead.
+func ValidateInstalledContract(manifest release.Manifest) error {
+	if err := release.ValidateInstalledManifest(manifest); err != nil {
+		return errors.New("installed release manifest contract is unsupported")
+	}
+	expected := ContractDigest()
+	if release.IsLegacyProductlessManifest(manifest) {
+		expected = legacyProductlessContractDigest
+		if legacyProductlessImplementationDigest() != expected {
+			return errors.New("installed release topology implementation is unsupported")
+		}
+	}
+	if manifest.TopologyDigest != expected {
+		return errors.New("installed release topology contract digest is unsupported")
+	}
+	return nil
+}
+
+// CompileInstalled reconstructs provider input for authenticated lifecycle
+// source, rollback, and recovery releases. It is intentionally separate from
+// the strict current Compile entry point used by installation candidates.
+func CompileInstalled(manifest release.Manifest, options Options) (Result, error) {
+	if err := ValidateInstalledContract(manifest); err != nil {
+		return Result{}, err
+	}
+	if !release.IsLegacyProductlessManifest(manifest) {
+		return Compile(manifest, options)
+	}
+	if err := validateOptions(options); err != nil {
+		return Result{}, err
+	}
+	images := make(map[string]string, len(manifest.Images))
+	for _, image := range manifest.Images {
+		images[image.Component] = image.ImageID
+	}
+	document := composeDocument{
+		Name: "matrix-" + strings.TrimPrefix(options.InstallationID, "mxi-"),
+		Services: compileServices(
+			manifest, images, options, legacyProductlessProfile,
+		),
+		Networks: map[string]networkConfig{
+			"control": {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-control")},
+			"edge":    {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-edge")},
+			"web":     {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-web")},
+		},
+	}
+	content, err := json.Marshal(document)
+	if err != nil {
+		return Result{}, errors.New("encode installed platform Compose topology failed")
+	}
+	return Result{
+		ProjectName: document.Name, ContractDigest: legacyProductlessContractDigest,
+		ComposeJSON: content,
+	}, nil
+}
+
+func legacyProductlessImplementationDigest() string {
+	content, err := json.Marshal(legacyProductlessContractDescription())
+	if err != nil {
+		panic("static legacy platform topology contract cannot be encoded")
+	}
+	digest := sha256.Sum256(content)
+	return "sha256:" + hex.EncodeToString(digest[:])
+}
+
+func legacyProductlessContractDescription() contract {
+	options := Options{
+		InstallationID: "mxi-00000000000000000000000000000000",
+		Root:           "/matrix-installation-root",
+		Listener:       "0.0.0.0",
+		Port:           1,
+	}
+	manifest := release.Manifest{Release: release.ReleaseIdentity{
+		ID: "matrix-v0.0.0-000000000000", SourceCommit: strings.Repeat("0", 40),
+		BuildID: "matrix-release-build",
+	}}
+	components := []string{
+		"apisix", "audit", "iam", "paas", "paas-ui", "postgres", "verification",
+	}
+	images := make(map[string]string, len(components))
+	for _, component := range components {
+		images[component] = "sha256:" + strings.Repeat("0", 64)
+		purpose := release.ImagePlatform
+		if component == "verification" {
+			purpose = release.ImageWorkload
+		}
+		manifest.Images = append(manifest.Images, release.Image{
+			Component: component, Purpose: purpose,
+			SourceDigest: "sha256:" + strings.Repeat("0", 64),
+		})
+	}
+	document := composeDocument{
+		Name: "matrix-00000000000000000000000000000000",
+		Services: compileServices(
+			manifest, images, options, legacyProductlessProfile,
+		),
+		Networks: map[string]networkConfig{
+			"control": {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-control")},
+			"edge":    {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-edge")},
+			"web":     {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-web")},
+		},
+	}
+	return contract{
+		Version: ContractVersion,
+		Substitutions: []string{
+			"installationId", "installationRoot", "listenerAddress", "listenerPort",
+			"releaseId", "releaseBuildId", "sourceCommit", "signedImageIds",
+			"verificationArtifactDigest",
+		},
+		Compose: document,
+	}
 }
 
 func validateOptions(options Options) error {
@@ -212,6 +336,7 @@ func compileServices(
 	manifest release.Manifest,
 	images map[string]string,
 	options Options,
+	profile compileProfile,
 ) map[string]serviceConfig {
 	root := options.Root
 	postgresPassword := path.Join(root, layout.PostgresPassword)
@@ -357,30 +482,6 @@ func compileServices(
 	paasAPI.Tmpfs = append(paasAPI.Tmpfs, "/var/lib/docker:rw,noexec,nosuid,size=16m")
 	paasAPI.DependsOn = healthy("postgres", "iam")
 
-	platformAPI := service(
-		"platform-api", "platform", images["platform"], []string{"control"},
-		[]string{"/matrix/bin/matrix-platform"},
-		"0.5", "256M", "http://127.0.0.1:8080/ready",
-	)
-	platformAPI.Environment = map[string]string{
-		"MATRIX_PLATFORM_IAM_CREDENTIAL_FILE":    "/run/matrix/platform-iam-credential",
-		"MATRIX_PLATFORM_IAM_ENDPOINT":           "http://iam:8080",
-		"MATRIX_PLATFORM_INSTALLATION_ID":        options.InstallationID,
-		"MATRIX_PLATFORM_LISTEN_ADDRESS":         "0.0.0.0:8080",
-		"MATRIX_PLATFORM_PAAS_ENDPOINT":          "http://paas-api:8080",
-		"MATRIX_PLATFORM_RELEASE_ID":             manifest.Release.ID,
-		"MATRIX_PLATFORM_RELEASE_MANIFEST_FILE":  "/run/matrix/release.json",
-		"MATRIX_PLATFORM_RELEASE_SIGNATURE_FILE": "/run/matrix/release.sig",
-		"MATRIX_PLATFORM_RELEASE_TRUST_FILE":     "/run/matrix/release-trust.json",
-	}
-	platformAPI.Volumes = []mount{
-		bind(platformIAMCredential, "/run/matrix/platform-iam-credential", true),
-		bind(releaseManifest, "/run/matrix/release.json", true),
-		bind(releaseSignature, "/run/matrix/release.sig", true),
-		bind(releaseTrust, "/run/matrix/release-trust.json", true),
-	}
-	platformAPI.DependsOn = healthy("iam", "paas-api")
-
 	paasWorker := service(
 		"paas-worker", "paas", images["paas"], []string{"control"},
 		[]string{"/matrix/bin/matrix-paas-worker"},
@@ -428,14 +529,22 @@ func compileServices(
 	paasAudit.Tmpfs = append(paasAudit.Tmpfs, "/var/lib/docker:rw,noexec,nosuid,size=16m")
 	paasAudit.DependsOn = healthy("postgres", "audit")
 
+	uiName := "matrix-ui"
+	uiComponent := "matrix-ui"
+	uiEntrypoint := "/matrix/bin/matrix-ui"
+	uiEnvironmentKey := "MATRIX_UI_LISTEN_ADDRESS"
+	if profile == legacyProductlessProfile {
+		uiName = "paas-ui"
+		uiComponent = "paas-ui"
+		uiEntrypoint = "/matrix/bin/matrix-paas-ui"
+		uiEnvironmentKey = "MATRIX_PAAS_UI_LISTEN_ADDRESS"
+	}
 	ui := service(
-		"matrix-ui", "matrix-ui", images["matrix-ui"], []string{"web"},
-		[]string{"/matrix/bin/matrix-ui"},
+		uiName, uiComponent, images[uiComponent], []string{"web"},
+		[]string{uiEntrypoint},
 		"0.5", "256M", "http://127.0.0.1:8080/ready",
 	)
-	ui.Environment = map[string]string{
-		"MATRIX_UI_LISTEN_ADDRESS": "0.0.0.0:8080",
-	}
+	ui.Environment = map[string]string{uiEnvironmentKey: "0.0.0.0:8080"}
 
 	apisix := service(
 		"apisix", "apisix", images["apisix"], []string{"control", "edge", "web"}, nil,
@@ -455,14 +564,45 @@ func compileServices(
 		"/usr/local/apisix/logs:rw,nosuid,size=16m,mode=0700,uid=0,gid=0",
 	)
 	apisix.CapAdd = []string{"CAP_CHOWN", "CAP_SETGID", "CAP_SETUID"}
-	apisix.DependsOn = healthy("audit", "iam", "matrix-ui", "paas-api", "platform-api")
-
-	return map[string]serviceConfig{
+	services := map[string]serviceConfig{
 		"apisix": apisix, "audit": audit, "iam": iam,
-		"iam-audit-dispatcher": iamAudit, "matrix-ui": ui, "paas-api": paasAPI,
+		"iam-audit-dispatcher": iamAudit, uiName: ui, "paas-api": paasAPI,
 		"paas-audit-dispatcher": paasAudit, "paas-worker": paasWorker,
-		"platform-api": platformAPI, "postgres": postgres,
+		"postgres": postgres,
 	}
+	if profile == legacyProductlessProfile {
+		apisix.DependsOn = healthy("audit", "iam", "paas-api", "paas-ui")
+		services["apisix"] = apisix
+		return services
+	}
+
+	platformAPI := service(
+		"platform-api", "platform", images["platform"], []string{"control"},
+		[]string{"/matrix/bin/matrix-platform"},
+		"0.5", "256M", "http://127.0.0.1:8080/ready",
+	)
+	platformAPI.Environment = map[string]string{
+		"MATRIX_PLATFORM_IAM_CREDENTIAL_FILE":    "/run/matrix/platform-iam-credential",
+		"MATRIX_PLATFORM_IAM_ENDPOINT":           "http://iam:8080",
+		"MATRIX_PLATFORM_INSTALLATION_ID":        options.InstallationID,
+		"MATRIX_PLATFORM_LISTEN_ADDRESS":         "0.0.0.0:8080",
+		"MATRIX_PLATFORM_PAAS_ENDPOINT":          "http://paas-api:8080",
+		"MATRIX_PLATFORM_RELEASE_ID":             manifest.Release.ID,
+		"MATRIX_PLATFORM_RELEASE_MANIFEST_FILE":  "/run/matrix/release.json",
+		"MATRIX_PLATFORM_RELEASE_SIGNATURE_FILE": "/run/matrix/release.sig",
+		"MATRIX_PLATFORM_RELEASE_TRUST_FILE":     "/run/matrix/release-trust.json",
+	}
+	platformAPI.Volumes = []mount{
+		bind(platformIAMCredential, "/run/matrix/platform-iam-credential", true),
+		bind(releaseManifest, "/run/matrix/release.json", true),
+		bind(releaseSignature, "/run/matrix/release.sig", true),
+		bind(releaseTrust, "/run/matrix/release-trust.json", true),
+	}
+	platformAPI.DependsOn = healthy("iam", "paas-api")
+	apisix.DependsOn = healthy("audit", "iam", "matrix-ui", "paas-api", "platform-api")
+	services["apisix"] = apisix
+	services["platform-api"] = platformAPI
+	return services
 }
 
 func platformServiceLabels(

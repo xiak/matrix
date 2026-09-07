@@ -1,6 +1,8 @@
 package topology
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"path"
 	"reflect"
@@ -12,6 +14,53 @@ import (
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/release"
 )
+
+func TestInstalledCompilerReproducesAcceptedProductlessTopology(t *testing.T) {
+	if actual := ContractDigest(); actual != "sha256:fded554408ad1cc28db2da97f10bff6b7cb3989aec87e21462b7d9099deaa3c4" {
+		t.Fatalf("current topology contract digest drifted: %s", actual)
+	}
+	if actual := legacyProductlessImplementationDigest(); actual != legacyProductlessContractDigest {
+		t.Fatalf("productless topology implementation drifted: %s", actual)
+	}
+	manifest := legacyTopologyManifest()
+	options := Options{
+		InstallationID: "mxi-" + strings.Repeat("a", 32),
+		Root:           "/srv/matrix", Listener: "127.0.0.1", Port: 8443,
+	}
+	if _, err := Compile(manifest, options); err == nil {
+		t.Fatal("strict candidate compiler admitted the productless predecessor")
+	}
+	result, err := CompileInstalled(manifest, options)
+	if err != nil {
+		t.Fatalf("compile installed productless predecessor: %v", err)
+	}
+	digest := sha256.Sum256(result.ComposeJSON)
+	if actual := "sha256:" + hex.EncodeToString(digest[:]); actual != "sha256:885a2478e75f43719f54d89db4f51b653316ee099c8e85be938ba420832b4936" {
+		t.Fatalf("productless Compose bytes drifted: %s", actual)
+	}
+	var document composeDocument
+	if err := json.Unmarshal(result.ComposeJSON, &document); err != nil {
+		t.Fatalf("decode productless Compose: %v", err)
+	}
+	wantServices := []string{
+		"apisix", "audit", "iam", "iam-audit-dispatcher", "paas-api",
+		"paas-audit-dispatcher", "paas-ui", "paas-worker", "postgres",
+	}
+	actualServices := make([]string, 0, len(document.Services))
+	for name := range document.Services {
+		actualServices = append(actualServices, name)
+	}
+	slices.Sort(actualServices)
+	if !slices.Equal(actualServices, wantServices) {
+		t.Fatalf("productless services = %v, want %v", actualServices, wantServices)
+	}
+
+	drifted := manifest
+	drifted.TopologyDigest = digestValue('0')
+	if err := ValidateInstalledContract(drifted); err == nil {
+		t.Fatal("a different productless topology digest must fail")
+	}
+}
 
 func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	manifest := topologyManifest()
@@ -456,6 +505,64 @@ func topologyManifest() release.Manifest {
 		Products:       []release.Product{release.ApplicationPaaSProduct("v0.1.0")},
 		TopologyDigest: ContractDigest(), Files: files, Images: images,
 	}
+}
+
+func legacyTopologyManifest() release.Manifest {
+	commit := "c88a84f379afcf94431e2aca7332fe6ec3136dc7"
+	requirements := []release.ImageRequirement{
+		{Component: "apisix", Purpose: release.ImagePlatform, HealthContract: "northbound-ready-v1"},
+		{Component: "audit", Purpose: release.ImagePlatform, HealthContract: "audit-ready-deduplicate-v1"},
+		{Component: "iam", Purpose: release.ImagePlatform, HealthContract: "iam-ready-authorize-v1"},
+		{Component: "paas", Purpose: release.ImagePlatform, HealthContract: "paas-ready-worker-compose-v1"},
+		{Component: "paas-ui", Purpose: release.ImagePlatform, HealthContract: "paas-ui-ready-v1"},
+		{Component: "postgres", Purpose: release.ImagePlatform, HealthContract: "postgres-ready-schema-v1"},
+		{Component: "verification", Purpose: release.ImageWorkload, HealthContract: "application-probe-v1"},
+	}
+	files := []release.File{{
+		Path: "bin/mx", MediaType: "application/vnd.matrix.executable",
+		Size: 1024, SHA256: digestValue('1'), Executable: true,
+	}}
+	images := make([]release.Image, 0, len(requirements))
+	fileDigests := "2345678"
+	imageDigests := "89abcde"
+	sourceDigests := "ef01234"
+	for index, requirement := range requirements {
+		archive := "images/" + requirement.Component + ".tar"
+		files = append(files, release.File{
+			Path: archive, MediaType: "application/vnd.docker.image.archive",
+			Size: 1024 + uint64(index), SHA256: digestValue(fileDigests[index]),
+		})
+		images = append(images, release.Image{
+			Component: requirement.Component, Purpose: requirement.Purpose, ArchivePath: archive,
+			ImageID: digestValue(imageDigests[index]), SourceDigest: digestValue(sourceDigests[index]),
+			OS: "linux", Architecture: "amd64", HealthContract: requirement.HealthContract,
+		})
+	}
+	slices.SortFunc(files, func(left, right release.File) int {
+		return strings.Compare(left.Path, right.Path)
+	})
+	return release.Manifest{
+		APIVersion: release.ManifestAPIVersion, Kind: release.ManifestKind,
+		Release: release.ReleaseIdentity{
+			ID: "matrix-v0.1.0-" + commit[:12], Version: "v0.1.0", SourceCommit: commit,
+			BuildID: "build-gate-a", CreatedAt: time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC),
+		},
+		Signer: release.Signer{KeyID: "xiak-release-2026", Algorithm: release.SignatureAlgorithm},
+		Host: release.HostProfile{
+			OS: "linux", Architecture: "amd64", MinimumDocker: "27.5.1",
+			MinimumCompose: "2.33.0", CommandContract: "v1",
+		},
+		MinimumFreeBytes: 4 * 1024 * 1024 * 1024,
+		Database: release.DatabaseProfile{
+			SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one",
+		},
+		Products: nil, TopologyDigest: legacyProductlessContractDigest,
+		Files: files, Images: images,
+	}
+}
+
+func digestValue(value byte) string {
+	return "sha256:" + strings.Repeat(string(value), 64)
 }
 
 func digest(value byte) string {

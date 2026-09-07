@@ -62,6 +62,31 @@ func DecodeCanonical(content []byte) (Manifest, error) {
 	return manifest, nil
 }
 
+// DecodeInstalledCanonical authenticates the current manifest contract or the
+// one fixed, accepted productless predecessor contract. It must never be used
+// for a new installation or an upgrade target.
+func DecodeInstalledCanonical(content []byte) (Manifest, error) {
+	if manifest, err := DecodeCanonical(content); err == nil {
+		return manifest, nil
+	}
+	if len(content) == 0 || len(content) > maximumManifestBytes {
+		return Manifest{}, errors.New("installed release manifest size is invalid")
+	}
+	var legacy legacyProductlessManifest
+	if err := decodeStrict(content, &legacy); err != nil {
+		return Manifest{}, errors.New("installed release manifest is invalid")
+	}
+	manifest := manifestFromLegacyProductless(legacy)
+	if err := validateLegacyProductlessManifest(manifest); err != nil {
+		return Manifest{}, errors.New("installed release manifest is unsupported")
+	}
+	encoded, err := json.Marshal(legacy)
+	if err != nil || !bytes.Equal(encoded, content) {
+		return Manifest{}, errors.New("installed release manifest is not canonical")
+	}
+	return manifest, nil
+}
+
 func ValidateManifest(manifest Manifest) error {
 	var problems []error
 	if manifest.APIVersion != ManifestAPIVersion || manifest.Kind != ManifestKind {
@@ -81,6 +106,70 @@ func ValidateManifest(manifest Manifest) error {
 		problems = append(problems, errors.New("minimum free space is outside the supported range"))
 	}
 	return errors.Join(problems...)
+}
+
+// ValidateInstalledManifest retains exactly one signed predecessor contract
+// for N-1 lifecycle operations. Candidate releases always use ValidateManifest.
+func ValidateInstalledManifest(manifest Manifest) error {
+	if err := ValidateManifest(manifest); err == nil {
+		return nil
+	}
+	return validateLegacyProductlessManifest(manifest)
+}
+
+// IsLegacyProductlessManifest reports only manifests that satisfy the complete
+// fixed predecessor release contract. The topology package separately pins its
+// accepted contract digest before compiling provider configuration.
+func IsLegacyProductlessManifest(manifest Manifest) bool {
+	return validateLegacyProductlessManifest(manifest) == nil
+}
+
+func validateLegacyProductlessManifest(manifest Manifest) error {
+	var problems []error
+	if manifest.APIVersion != ManifestAPIVersion || manifest.Kind != ManifestKind {
+		problems = append(problems, errors.New("release type is unsupported"))
+	}
+	if manifest.Release.SourceCommit != legacyProductlessSourceCommit {
+		problems = append(problems, errors.New("legacy release lineage is unsupported"))
+	}
+	if manifest.Products != nil {
+		problems = append(problems, errors.New("legacy release product inventory must be absent"))
+	}
+	if manifest.Host != (HostProfile{
+		OS: "linux", Architecture: "amd64",
+		MinimumDocker: legacyProductlessDocker, MinimumCompose: legacyProductlessCompose,
+		CommandContract: "v1",
+	}) || manifest.MinimumFreeBytes != legacyProductlessFreeBytes ||
+		manifest.Database != (DatabaseProfile{
+			SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one",
+		}) || len(manifest.Files) != len(legacyProductlessRequiredImages())+1 {
+		problems = append(problems, errors.New("legacy release build profile is unsupported"))
+	}
+	problems = append(problems,
+		validateReleaseIdentity(manifest.Release),
+		validateSigner(manifest.Signer),
+		validateHost(manifest.Host),
+		validateDatabase(manifest.Database),
+		validateDigest("topologyDigest", manifest.TopologyDigest),
+		validateFiles(manifest.Files),
+		validateImagesAgainst(
+			manifest.Images, manifest.Files, legacyProductlessRequiredImages(),
+		),
+	)
+	if manifest.MinimumFreeBytes < minimumFreeBytes || manifest.MinimumFreeBytes > maximumFreeBytes {
+		problems = append(problems, errors.New("minimum free space is outside the supported range"))
+	}
+	return errors.Join(problems...)
+}
+
+func manifestFromLegacyProductless(value legacyProductlessManifest) Manifest {
+	return Manifest{
+		APIVersion: value.APIVersion, Kind: value.Kind, Release: value.Release,
+		Signer: value.Signer, Host: value.Host,
+		MinimumFreeBytes: value.MinimumFreeBytes, Database: value.Database,
+		Products: nil, TopologyDigest: value.TopologyDigest,
+		Files: value.Files, Images: value.Images,
+	}
 }
 
 func validateReleaseIdentity(value ReleaseIdentity) error {
@@ -389,7 +478,10 @@ func validateFiles(files []File) error {
 }
 
 func validateImages(images []Image, files []File) error {
-	required := RequiredImages()
+	return validateImagesAgainst(images, files, RequiredImages())
+}
+
+func validateImagesAgainst(images []Image, files []File, required []ImageRequirement) error {
 	if len(images) != len(required) {
 		return errors.New("release image inventory is incomplete")
 	}

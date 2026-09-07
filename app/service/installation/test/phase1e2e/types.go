@@ -41,8 +41,7 @@ func validateReleasePair(a, b release.VerifiedBundle) error {
 		b.Manifest.Release.PreviousID != a.Manifest.Release.ID ||
 		b.Manifest.Release.PreviousVersion != a.Manifest.Release.Version ||
 		a.Manifest.Release.ID == b.Manifest.Release.ID ||
-		a.Manifest.Release.Version == b.Manifest.Release.Version ||
-		a.Manifest.Release.SourceCommit != b.Manifest.Release.SourceCommit {
+		a.Manifest.Release.Version == b.Manifest.Release.Version {
 		return fail("release-pair-contract")
 	}
 	if _, ok := workloadImage(a.Manifest); !ok {

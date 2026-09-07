@@ -97,6 +97,64 @@ func TestManifestCanonicalSignatureAndTamperRejection(t *testing.T) {
 	}
 }
 
+func TestInstalledManifestAdmitsOnlyAcceptedProductlessPredecessor(t *testing.T) {
+	legacy := validLegacyProductlessManifest()
+	content := encodeLegacyProductlessForTest(t, legacy)
+	if _, err := DecodeCanonical(content); err == nil {
+		t.Fatal("strict candidate decoder admitted the productless predecessor")
+	}
+	decoded, err := DecodeInstalledCanonical(content)
+	if err != nil || !IsLegacyProductlessManifest(decoded) ||
+		decoded.Release.ID != legacy.Release.ID || decoded.Products != nil {
+		t.Fatalf("decode installed predecessor = %#v / %v", decoded, err)
+	}
+
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate predecessor signing key: %v", err)
+	}
+	trust, err := NewTrustRoot(legacy.Signer.KeyID, publicKey)
+	if err != nil {
+		t.Fatalf("create predecessor trust root: %v", err)
+	}
+	trustBytes, err := EncodeTrustRoot(trust)
+	if err != nil {
+		t.Fatalf("encode predecessor trust root: %v", err)
+	}
+	if _, err := VerifyInstalled(
+		content, ed25519.Sign(privateKey, content), trustBytes,
+	); err != nil {
+		t.Fatalf("verify signed installed predecessor: %v", err)
+	}
+	if _, err := Verify(content, ed25519.Sign(privateKey, content), trustBytes); err == nil {
+		t.Fatal("strict candidate verifier admitted the productless predecessor")
+	}
+
+	wrongLineage := legacy
+	wrongLineage.Release.SourceCommit = strings.Repeat("b", 40)
+	wrongLineage.Release.ID = "matrix-v0.1.0-" + wrongLineage.Release.SourceCommit[:12]
+	if _, err := DecodeInstalledCanonical(
+		encodeLegacyProductlessForTest(t, wrongLineage),
+	); err == nil {
+		t.Fatal("an unaccepted productless source lineage must fail")
+	}
+	wrongInventory := legacy
+	wrongInventory.Images = slices.Clone(legacy.Images)
+	wrongInventory.Images[4].HealthContract = "matrix-ui-ready-v1"
+	if _, err := DecodeInstalledCanonical(
+		encodeLegacyProductlessForTest(t, wrongInventory),
+	); err == nil {
+		t.Fatal("a changed predecessor image contract must fail")
+	}
+	pretty, err := json.MarshalIndent(legacyProductlessFromManifest(legacy), "", "  ")
+	if err != nil {
+		t.Fatalf("pretty encode predecessor manifest: %v", err)
+	}
+	if _, err := DecodeInstalledCanonical(pretty); err == nil {
+		t.Fatal("a non-canonical predecessor manifest must fail")
+	}
+}
+
 func TestManifestRejectsUnsafeOrIncompleteInventory(t *testing.T) {
 	tests := map[string]func(*Manifest){
 		"path traversal": func(value *Manifest) {
@@ -295,6 +353,71 @@ func validManifest() Manifest {
 		Database:         DatabaseProfile{SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one"},
 		Products:         []Product{ApplicationPaaSProduct("v0.1.0")},
 		TopologyDigest:   digest('f'), Files: files, Images: images,
+	}
+}
+
+func validLegacyProductlessManifest() Manifest {
+	commit := legacyProductlessSourceCommit
+	files := []File{{
+		Path: "bin/mx", MediaType: mediaExecutable,
+		Size: 1024, SHA256: digest('1'), Executable: true,
+	}}
+	required := legacyProductlessRequiredImages()
+	images := make([]Image, 0, len(required))
+	fileDigests := "2345678"
+	imageDigests := "89abcde"
+	sourceDigests := "ef01234"
+	for index, requirement := range required {
+		archive := "images/" + requirement.Component + ".tar"
+		files = append(files, File{
+			Path: archive, MediaType: mediaDockerArchive,
+			Size: 1024 + uint64(index), SHA256: digest(fileDigests[index]),
+		})
+		images = append(images, Image{
+			Component: requirement.Component, Purpose: requirement.Purpose, ArchivePath: archive,
+			ImageID: digest(imageDigests[index]), SourceDigest: digest(sourceDigests[index]),
+			OS: "linux", Architecture: "amd64", HealthContract: requirement.HealthContract,
+		})
+	}
+	slices.SortFunc(files, func(left, right File) int {
+		return strings.Compare(left.Path, right.Path)
+	})
+	return Manifest{
+		APIVersion: ManifestAPIVersion, Kind: ManifestKind,
+		Release: ReleaseIdentity{
+			ID: "matrix-v0.1.0-" + commit[:12], Version: "v0.1.0",
+			SourceCommit: commit, BuildID: "accepted-productless-release",
+			CreatedAt: time.Date(2026, 8, 25, 12, 0, 0, 123000000, time.UTC),
+		},
+		Signer: Signer{KeyID: "xiak-release-2026", Algorithm: SignatureAlgorithm},
+		Host: HostProfile{
+			OS: "linux", Architecture: "amd64", MinimumDocker: legacyProductlessDocker,
+			MinimumCompose: legacyProductlessCompose, CommandContract: "v1",
+		},
+		MinimumFreeBytes: legacyProductlessFreeBytes,
+		Database:         DatabaseProfile{SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one"},
+		Products:         nil,
+		TopologyDigest:   "sha256:6f8e3bd951426da4033b3234f2b8fcebd053a9b809d98c8a3476962062a0cf2f",
+		Files:            files,
+		Images:           images,
+	}
+}
+
+func encodeLegacyProductlessForTest(t *testing.T, manifest Manifest) []byte {
+	t.Helper()
+	encoded, err := json.Marshal(legacyProductlessFromManifest(manifest))
+	if err != nil {
+		t.Fatalf("encode productless predecessor: %v", err)
+	}
+	return encoded
+}
+
+func legacyProductlessFromManifest(manifest Manifest) legacyProductlessManifest {
+	return legacyProductlessManifest{
+		APIVersion: manifest.APIVersion, Kind: manifest.Kind, Release: manifest.Release,
+		Signer: manifest.Signer, Host: manifest.Host,
+		MinimumFreeBytes: manifest.MinimumFreeBytes, Database: manifest.Database,
+		TopologyDigest: manifest.TopologyDigest, Files: manifest.Files, Images: manifest.Images,
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xiak/matrix/app/service/installation/internal/cli"
 	"github.com/xiak/matrix/app/service/installation/internal/journal"
@@ -220,6 +221,43 @@ func TestUpgradeBindsImmediatePredecessorAndBackupBeforePublishing(t *testing.T)
 		state.PreviousReleaseDigest != fixtures[0].ManifestDigest ||
 		state.Last == nil || state.Last.Command.BackupID != result.BackupID {
 		t.Fatalf("upgraded journal = %#v", state)
+	}
+}
+
+func TestUpgradeAndRollbackAuthenticateOnlyTheFixedProductlessPredecessor(t *testing.T) {
+	fixtures, err := releasetest.WriteProductFoundationUpgrade(t.TempDir())
+	if err != nil {
+		t.Fatalf("write product-foundation upgrade fixtures: %v", err)
+	}
+	legacy, target := fixtures[0], fixtures[1]
+	effects := &installEffects{observeReady: true}
+	backend := newTestBackend(t, effects)
+
+	_, err = backend.Run(context.Background(), installRequest(
+		filepath.Join(t.TempDir(), "strict-install"), legacy,
+	))
+	assertFault(t, err, cli.FaultVerification, "RELEASE_BUNDLE_INVALID")
+
+	root := filepath.Join(t.TempDir(), "matrix")
+	initializeInstalledReleaseJournal(t, root, legacy)
+	materializeProductlessInstalledRelease(t, root, legacy)
+	result, err := backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionUpgrade, Root: root, Bundle: target.Root,
+	})
+	if err != nil || result.ReleaseID != target.Manifest.Release.ID ||
+		result.PreviousID != legacy.Manifest.Release.ID ||
+		effects.upgradePlan.Source.ReleaseID != legacy.Manifest.Release.ID {
+		t.Fatalf("upgrade productless predecessor = %#v / %v", result, err)
+	}
+
+	materializeInstalledRelease(t, root, target)
+	result, err = backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionRollback, Root: root,
+	})
+	if err != nil || result.ReleaseID != legacy.Manifest.Release.ID ||
+		result.PreviousID != "" ||
+		effects.explicitRollbackPlan.Previous.ReleaseID != legacy.Manifest.Release.ID {
+		t.Fatalf("rollback productless predecessor = %#v / %v", result, err)
 	}
 }
 
@@ -1143,5 +1181,82 @@ func materializeInstalledRelease(
 		filepath.Join(root, filepath.FromSlash(layout.ReleaseDirectory(fixture.Manifest.Release.ID))),
 	); err != nil {
 		t.Fatalf("stage installed release: %v", err)
+	}
+}
+
+func materializeProductlessInstalledRelease(
+	t *testing.T,
+	root string,
+	fixture releasetest.Fixture,
+) {
+	t.Helper()
+	trustBytes, err := os.ReadFile(fixture.TrustPath)
+	if err != nil {
+		t.Fatalf("read productless fixture trust: %v", err)
+	}
+	if _, err := release.VerifyInstalledDirectory(fixture.Root, trustBytes); err != nil {
+		t.Fatalf("verify productless fixture release: %v", err)
+	}
+	trustTarget := filepath.Join(root, filepath.FromSlash(layout.ReleaseTrust))
+	if err := os.MkdirAll(filepath.Dir(trustTarget), 0o700); err != nil {
+		t.Fatalf("create productless trust directory: %v", err)
+	}
+	if err := os.WriteFile(trustTarget, trustBytes, 0o600); err != nil {
+		t.Fatalf("write productless installed trust: %v", err)
+	}
+	destination := filepath.Join(
+		root, filepath.FromSlash(layout.ReleaseDirectory(fixture.Manifest.Release.ID)),
+	)
+	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
+		t.Fatalf("create productless release parent: %v", err)
+	}
+	if err := os.CopyFS(destination, os.DirFS(fixture.Root)); err != nil {
+		t.Fatalf("copy productless installed release: %v", err)
+	}
+}
+
+func initializeInstalledReleaseJournal(
+	t *testing.T,
+	root string,
+	fixture releasetest.Fixture,
+) {
+	t.Helper()
+	state, err := lifecycle.New(
+		"mxi-11111111111111111111111111111111",
+		lifecycle.ReleaseTrust{
+			KeyID: fixture.Trust.KeyID, Fingerprint: fixture.Trust.PublicKeyFingerprint,
+		},
+	)
+	if err != nil {
+		t.Fatalf("create installed predecessor journal: %v", err)
+	}
+	at := time.Date(2026, 9, 7, 1, 0, 0, 0, time.UTC)
+	started, err := lifecycle.Start(state, lifecycle.Command{
+		ID: "cmd-11111111111111111111111111111111", Action: lifecycle.ActionInstall,
+		InputDigest: fixture.ManifestDigest, TargetReleaseID: fixture.Manifest.Release.ID,
+		RequestedAt: at,
+	})
+	if err != nil {
+		t.Fatalf("start installed predecessor journal: %v", err)
+	}
+	state = started.Journal
+	for state.Active != nil {
+		next, ok := lifecycle.NextPhase(state.Active.Command.Action, state.Active.Phase)
+		if !ok {
+			t.Fatalf("installed predecessor phase %s has no successor", state.Active.Phase)
+		}
+		at = at.Add(time.Microsecond)
+		state, err = lifecycle.Advance(state, state.Active.Command.ID, next, at)
+		if err != nil {
+			t.Fatalf("advance installed predecessor journal: %v", err)
+		}
+	}
+	session, err := journal.Acquire(context.Background(), root)
+	if err != nil {
+		t.Fatalf("acquire installed predecessor journal: %v", err)
+	}
+	defer session.Close()
+	if err := session.Initialize(state); err != nil {
+		t.Fatalf("initialize installed predecessor journal: %v", err)
 	}
 }

@@ -36,10 +36,10 @@ func authenticateInstalledPlan(
 		clear(trustBytes)
 		return platformcommand.InstallPlan{}, err
 	}
-	bundle, err := release.VerifyDirectory(releaseRoot, trustBytes)
+	bundle, err := release.VerifyInstalledDirectory(releaseRoot, trustBytes)
 	if err != nil || bundle.Manifest.Release.ID != installed.ReleaseID ||
 		bundle.ManifestSHA256 != installed.ReleaseDigest ||
-		bundle.Manifest.TopologyDigest != topology.ContractDigest() {
+		topology.ValidateInstalledContract(bundle.Manifest) != nil {
 		clear(trustBytes)
 		return platformcommand.InstallPlan{}, errors.New(
 			"installed release differs from the sealed current pointer",
@@ -69,6 +69,23 @@ func verifiedStagedBundle(plan platformcommand.InstallPlan) (release.VerifiedBun
 	return staged, nil
 }
 
+func verifiedLifecycleBundle(plan platformcommand.InstallPlan) (release.VerifiedBundle, error) {
+	root, err := managedPath(
+		plan.Root,
+		filepath.FromSlash(layout.ReleaseDirectory(plan.Bundle.Manifest.Release.ID)),
+	)
+	if err != nil {
+		return release.VerifiedBundle{}, err
+	}
+	staged, err := release.VerifyInstalledDirectory(root, plan.TrustBytes)
+	if err != nil || staged.ManifestSHA256 != plan.Bundle.ManifestSHA256 ||
+		staged.Manifest.Release.ID != plan.Bundle.Manifest.Release.ID ||
+		topology.ValidateInstalledContract(staged.Manifest) != nil {
+		return release.VerifiedBundle{}, errors.New("installed release differs from the lifecycle plan")
+	}
+	return staged, nil
+}
+
 type verifiedInstallation struct {
 	bundle      release.VerifiedBundle
 	topology    topology.Result
@@ -78,11 +95,11 @@ type verifiedInstallation struct {
 func verifiedInstallationConfiguration(
 	plan platformcommand.InstallPlan,
 ) (verifiedInstallation, error) {
-	staged, err := verifiedStagedBundle(plan)
+	staged, err := verifiedLifecycleBundle(plan)
 	if err != nil {
 		return verifiedInstallation{}, err
 	}
-	compiled, err := topology.Compile(staged.Manifest, topology.Options{
+	compiled, err := topology.CompileInstalled(staged.Manifest, topology.Options{
 		InstallationID: plan.InstallationID,
 		Root:           plan.Root,
 		Listener:       plan.Listener,
@@ -101,7 +118,7 @@ func verifiedInstallationConfiguration(
 	}{
 		{layout.Compose, compiled.ComposeJSON},
 		{layout.ArtifactCatalog, catalog},
-		{layout.APISIXRoutes, apisixStandaloneConfig()},
+		{layout.APISIXRoutes, installedAPISIXStandaloneConfig(staged.Manifest)},
 		{layout.APISIXConfig, apisixMainConfig()},
 		{layout.APISIXUID, []byte(compiled.ProjectName)},
 	}

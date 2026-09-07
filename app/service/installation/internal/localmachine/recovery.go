@@ -615,12 +615,12 @@ func authenticateRecoveryPlan(
 				errors.New("recovery plan identity is invalid"),
 			)
 	}
-	currentBundle, err := verifiedStagedBundle(plan.Current)
+	currentBundle, err := verifiedLifecycleBundle(plan.Current)
 	if err != nil {
 		return platformcommand.InstallPlan{}, platformcommand.InstallPlan{}, backupManifest{},
 			errors.Join(platformcommand.ErrEffectVerification, err)
 	}
-	targetBundle, err := verifiedStagedBundle(plan.Target)
+	targetBundle, err := verifiedLifecycleBundle(plan.Target)
 	if err != nil {
 		return platformcommand.InstallPlan{}, platformcommand.InstallPlan{}, backupManifest{},
 			errors.Join(platformcommand.ErrEffectVerification, err)

@@ -17,6 +17,7 @@ import (
 
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
+	installationv1 "github.com/xiak/matrix/api/installation/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
 
@@ -267,6 +268,22 @@ func (client *edgeClient) get(
 		return nil, errors.New("PaaS read response failed")
 	}
 	return response.header, nil
+}
+
+func (client *edgeClient) installedProducts(
+	ctx context.Context,
+	bearer []byte,
+) (installationv1.InstalledProductList, error) {
+	var products installationv1.InstalledProductList
+	if _, err := client.get(
+		ctx, "/api/platform/v1/installed-products", bearer, &products,
+	); err != nil {
+		return installationv1.InstalledProductList{}, err
+	}
+	if err := installationv1.ValidateInstalledProductList(products); err != nil {
+		return installationv1.InstalledProductList{}, errors.New("installed-product response failed")
+	}
+	return products, nil
 }
 
 func (client *edgeClient) waitOperation(

@@ -15,6 +15,15 @@ const (
 	BuiltImageLabelComponent    = "com.xiak.matrix.component"
 	BuiltImageLabelSourceCommit = "com.xiak.matrix.source-commit"
 	BuiltImageLabelBuildID      = "com.xiak.matrix.build-id"
+
+	// legacyProductlessSourceCommit is the exact accepted Phase 1 runtime
+	// lineage that predates the signed product inventory. It is admitted only
+	// when authenticating an already-installed release for lifecycle replay;
+	// current release assembly and new installation stay on Manifest.
+	legacyProductlessSourceCommit = "c88a84f379afcf94431e2aca7332fe6ec3136dc7"
+	legacyProductlessDocker       = "27.5.1"
+	legacyProductlessCompose      = "2.33.0"
+	legacyProductlessFreeBytes    = uint64(4 * 1024 * 1024 * 1024)
 )
 
 type Manifest struct {
@@ -26,6 +35,22 @@ type Manifest struct {
 	MinimumFreeBytes uint64          `json:"minimumFreeBytes"`
 	Database         DatabaseProfile `json:"database"`
 	Products         []Product       `json:"products"`
+	TopologyDigest   string          `json:"topologyDigest"`
+	Files            []File          `json:"files"`
+	Images           []Image         `json:"images"`
+}
+
+// legacyProductlessManifest preserves the exact canonical wire shape emitted
+// by the accepted Phase 1 release builder. Do not add fields: its sole purpose
+// is signature-preserving authentication of an installed predecessor.
+type legacyProductlessManifest struct {
+	APIVersion       string          `json:"apiVersion"`
+	Kind             string          `json:"kind"`
+	Release          ReleaseIdentity `json:"release"`
+	Signer           Signer          `json:"signer"`
+	Host             HostProfile     `json:"host"`
+	MinimumFreeBytes uint64          `json:"minimumFreeBytes"`
+	Database         DatabaseProfile `json:"database"`
 	TopologyDigest   string          `json:"topologyDigest"`
 	Files            []File          `json:"files"`
 	Images           []Image         `json:"images"`
@@ -124,6 +149,18 @@ func RequiredImages() []ImageRequirement {
 		{Component: "matrix-ui", Purpose: ImagePlatform, HealthContract: "matrix-ui-ready-v1"},
 		{Component: "paas", Purpose: ImagePlatform, HealthContract: "paas-ready-worker-compose-v1"},
 		{Component: "platform", Purpose: ImagePlatform, HealthContract: "product-discovery-ready-v1"},
+		{Component: "postgres", Purpose: ImagePlatform, HealthContract: "postgres-ready-schema-v1"},
+		{Component: "verification", Purpose: ImageWorkload, HealthContract: "application-probe-v1"},
+	}
+}
+
+func legacyProductlessRequiredImages() []ImageRequirement {
+	return []ImageRequirement{
+		{Component: "apisix", Purpose: ImagePlatform, HealthContract: "northbound-ready-v1"},
+		{Component: "audit", Purpose: ImagePlatform, HealthContract: "audit-ready-deduplicate-v1"},
+		{Component: "iam", Purpose: ImagePlatform, HealthContract: "iam-ready-authorize-v1"},
+		{Component: "paas", Purpose: ImagePlatform, HealthContract: "paas-ready-worker-compose-v1"},
+		{Component: "paas-ui", Purpose: ImagePlatform, HealthContract: "paas-ui-ready-v1"},
 		{Component: "postgres", Purpose: ImagePlatform, HealthContract: "postgres-ready-schema-v1"},
 		{Component: "verification", Purpose: ImageWorkload, HealthContract: "application-probe-v1"},
 	}

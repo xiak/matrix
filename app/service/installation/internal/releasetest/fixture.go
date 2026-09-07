@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -62,7 +63,33 @@ func WriteSequence(base string, count int) ([]Fixture, error) {
 	return writeManifests(base, manifests)
 }
 
+// WriteProductFoundationUpgrade creates an exact productless predecessor and
+// a strict current immediate successor under one test trust root. It exercises
+// compatibility consumers but is never a runtime release assembler.
+func WriteProductFoundationUpgrade(base string) ([]Fixture, error) {
+	legacy := ProductlessManifest()
+	target := Manifest()
+	targetCommit := strings.Repeat("b", 40)
+	target.Release = release.ReleaseIdentity{
+		ID: "matrix-v0.2.0-" + targetCommit[:12], Version: "v0.2.0",
+		SourceCommit: targetCommit, BuildID: "product-foundation-target",
+		CreatedAt:       legacy.Release.CreatedAt.Add(time.Hour),
+		PreviousID:      legacy.Release.ID,
+		PreviousVersion: legacy.Release.Version,
+	}
+	target.Products = []release.Product{release.ApplicationPaaSProduct(target.Release.Version)}
+	return writeManifestsWithLegacy(base, []release.Manifest{legacy, target}, map[int]bool{0: true})
+}
+
 func writeManifests(base string, manifests []release.Manifest) ([]Fixture, error) {
+	return writeManifestsWithLegacy(base, manifests, nil)
+}
+
+func writeManifestsWithLegacy(
+	base string,
+	manifests []release.Manifest,
+	legacyIndexes map[int]bool,
+) ([]Fixture, error) {
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, errors.New("generate fixture release key failed")
@@ -104,7 +131,12 @@ func writeManifests(base string, manifests []release.Manifest) ([]Fixture, error
 			digest := sha256.Sum256(content)
 			declaration.SHA256 = "sha256:" + hex.EncodeToString(digest[:])
 		}
-		manifestBytes, err := release.EncodeCanonical(manifest)
+		var manifestBytes []byte
+		if legacyIndexes[index] {
+			manifestBytes, err = encodeProductlessManifest(manifest)
+		} else {
+			manifestBytes, err = release.EncodeCanonical(manifest)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -126,6 +158,28 @@ func writeManifests(base string, manifests []release.Manifest) ([]Fixture, error
 		})
 	}
 	return fixtures, nil
+}
+
+type productlessManifest struct {
+	APIVersion       string                  `json:"apiVersion"`
+	Kind             string                  `json:"kind"`
+	Release          release.ReleaseIdentity `json:"release"`
+	Signer           release.Signer          `json:"signer"`
+	Host             release.HostProfile     `json:"host"`
+	MinimumFreeBytes uint64                  `json:"minimumFreeBytes"`
+	Database         release.DatabaseProfile `json:"database"`
+	TopologyDigest   string                  `json:"topologyDigest"`
+	Files            []release.File          `json:"files"`
+	Images           []release.Image         `json:"images"`
+}
+
+func encodeProductlessManifest(manifest release.Manifest) ([]byte, error) {
+	return json.Marshal(productlessManifest{
+		APIVersion: manifest.APIVersion, Kind: manifest.Kind, Release: manifest.Release,
+		Signer: manifest.Signer, Host: manifest.Host,
+		MinimumFreeBytes: manifest.MinimumFreeBytes, Database: manifest.Database,
+		TopologyDigest: manifest.TopologyDigest, Files: manifest.Files, Images: manifest.Images,
+	})
 }
 
 func Manifest() release.Manifest {
@@ -170,6 +224,60 @@ func Manifest() release.Manifest {
 		},
 		Products:       []release.Product{release.ApplicationPaaSProduct("v0.1.0")},
 		TopologyDigest: topology.ContractDigest(), Files: files, Images: images,
+	}
+}
+
+func ProductlessManifest() release.Manifest {
+	requirements := []release.ImageRequirement{
+		{Component: "apisix", Purpose: release.ImagePlatform, HealthContract: "northbound-ready-v1"},
+		{Component: "audit", Purpose: release.ImagePlatform, HealthContract: "audit-ready-deduplicate-v1"},
+		{Component: "iam", Purpose: release.ImagePlatform, HealthContract: "iam-ready-authorize-v1"},
+		{Component: "paas", Purpose: release.ImagePlatform, HealthContract: "paas-ready-worker-compose-v1"},
+		{Component: "paas-ui", Purpose: release.ImagePlatform, HealthContract: "paas-ui-ready-v1"},
+		{Component: "postgres", Purpose: release.ImagePlatform, HealthContract: "postgres-ready-schema-v1"},
+		{Component: "verification", Purpose: release.ImageWorkload, HealthContract: "application-probe-v1"},
+	}
+	files := []release.File{{
+		Path: "bin/mx", MediaType: "application/vnd.matrix.executable",
+		Size: 1, SHA256: stableDigest("legacy-executable:mx"), Executable: true,
+	}}
+	images := make([]release.Image, 0, len(requirements))
+	for _, requirement := range requirements {
+		archive := "images/" + requirement.Component + ".tar"
+		files = append(files, release.File{
+			Path: archive, MediaType: "application/vnd.docker.image.archive",
+			Size: 1, SHA256: stableDigest("legacy-archive:" + requirement.Component),
+		})
+		images = append(images, release.Image{
+			Component: requirement.Component, Purpose: requirement.Purpose, ArchivePath: archive,
+			ImageID:      stableDigest("legacy-image:" + requirement.Component),
+			SourceDigest: stableDigest("legacy-source:" + requirement.Component),
+			OS:           "linux", Architecture: "amd64", HealthContract: requirement.HealthContract,
+		})
+	}
+	slices.SortFunc(files, func(left, right release.File) int {
+		return strings.Compare(left.Path, right.Path)
+	})
+	commit := "c88a84f379afcf94431e2aca7332fe6ec3136dc7"
+	return release.Manifest{
+		APIVersion: release.ManifestAPIVersion, Kind: release.ManifestKind,
+		Release: release.ReleaseIdentity{
+			ID: "matrix-v0.1.0-" + commit[:12], Version: "v0.1.0",
+			SourceCommit: commit, BuildID: "accepted-productless-release",
+			CreatedAt: time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC),
+		},
+		Signer: release.Signer{KeyID: "xiak-release-2026", Algorithm: release.SignatureAlgorithm},
+		Host: release.HostProfile{
+			OS: "linux", Architecture: "amd64", MinimumDocker: "27.5.1",
+			MinimumCompose: "2.33.0", CommandContract: "v1",
+		},
+		MinimumFreeBytes: 4 * 1024 * 1024 * 1024,
+		Database: release.DatabaseProfile{
+			SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one",
+		},
+		Products:       nil,
+		TopologyDigest: "sha256:6f8e3bd951426da4033b3234f2b8fcebd053a9b809d98c8a3476962062a0cf2f",
+		Files:          files, Images: images,
 	}
 }
 

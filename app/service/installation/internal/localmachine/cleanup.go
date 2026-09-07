@@ -21,7 +21,7 @@ func rollbackInstallation(
 	runtimeBoundary dockerRuntime,
 	plan platformcommand.InstallPlan,
 ) error {
-	compiled, err := topology.Compile(plan.Bundle.Manifest, topology.Options{
+	compiled, err := topology.CompileInstalled(plan.Bundle.Manifest, topology.Options{
 		InstallationID: plan.InstallationID,
 		Root:           plan.Root,
 		Listener:       plan.Listener,
@@ -180,8 +180,9 @@ func expectedMigrationCleanupIdentities(
 	for _, image := range plan.Bundle.Manifest.Images {
 		images[image.Component] = image.ImageID
 	}
-	result := make(map[string]migrationCleanupIdentity, len(platformMigrations)*2)
-	for _, migration := range platformMigrations {
+	migrations := platformMigrationsFor(plan.Bundle.Manifest)
+	result := make(map[string]migrationCleanupIdentity, len(migrations)*2)
+	for _, migration := range migrations {
 		imageID := images[migration.component]
 		if imageID == "" {
 			return nil, errors.New("migration cleanup image identity is absent")

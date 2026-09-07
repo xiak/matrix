@@ -1,6 +1,6 @@
 # FEAT-008: Private-cloud product foundation and unified shell
 
-- Status: In progress; UX and architecture complete; Gate A discovery runtime and Gate B unified-shell slice implemented; legacy-authority upgrade prerequisite verified; full lifecycle and authenticated-browser evidence pending
+- Status: In progress; UX and architecture complete; Gate A discovery runtime and Gate B unified-shell slice implemented; fixed productless-predecessor lifecycle compatibility implemented; real offline lifecycle and authenticated-browser evidence pending
 - Target release: Unscheduled multi-product release
 - Contract: `installation.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -180,6 +180,23 @@ tenant-authority, offline, upgrade/rollback/recovery, and
   the old receipt, rejected a different credential, and reverified runtime
   schema isolation. Unit and contract tests also pin the accepted legacy
   canonical digest and reject legacy initialization, reordering, or mutation.
+- Installed-release authentication admits only the signed canonical
+  productless predecessor from source commit
+  `c88a84f379afcf94431e2aca7332fe6ec3136dc7`, with its fixed Docker/Compose
+  floor, four-GiB space floor, schema profile, seven-image inventory, topology
+  digest, and gateway configuration. New installation, target staging, and
+  upgrade-candidate verification remain on the strict current product
+  manifest contract.
+- The current `mx` lifecycle can authenticate that predecessor, compile its
+  byte-pinned nine-service Compose topology, run its three legacy migration
+  verifiers without requiring the future Platform credential, and restore its
+  exact Compose and APISIX inputs after failure, explicit rollback, or backup
+  recovery. Backend transition tests cover upgrade plus explicit rollback;
+  the configuration restoration test also passes in a network-disabled Linux
+  container.
+- On this implementation slice, `go generate ./...`, `go test ./...`,
+  `go vet ./...`, `go test -race ./...`, ten repeated installation contract
+  runs, Linux cross-builds, and `git diff --check` pass.
 
 This evidence closes only the authority-migration prerequisite for Gate C. A
 network-disabled signed-release install plus injected-failure upgrade,

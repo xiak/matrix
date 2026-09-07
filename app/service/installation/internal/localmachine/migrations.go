@@ -9,6 +9,7 @@ import (
 
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
+	"github.com/xiak/matrix/app/service/installation/release"
 )
 
 const migrationWaitSeconds = "120"
@@ -55,6 +56,24 @@ var platformMigrations = []migrationDefinition{
 			{layout.PaaSWorker, "/run/matrix/paas-worker-dsn", "MATRIX_MIGRATION_PAAS_WORKER_DSN_FILE"},
 		},
 	},
+}
+
+func platformMigrationsFor(manifest release.Manifest) []migrationDefinition {
+	if !release.IsLegacyProductlessManifest(manifest) {
+		return platformMigrations
+	}
+	return []migrationDefinition{
+		{
+			component: "iam", name: "iam", entrypoint: "/matrix/bin/matrix-iam-migrate",
+			mounts: []migrationMount{
+				{layout.PostgresMigration, "/run/matrix/migration-dsn", "MATRIX_MIGRATION_DATABASE_DSN_FILE"},
+				{layout.IAMAPI, "/run/matrix/iam-api-dsn", "MATRIX_MIGRATION_IAM_API_DSN_FILE"},
+				{layout.IAMWorker, "/run/matrix/iam-worker-dsn", "MATRIX_MIGRATION_IAM_WORKER_DSN_FILE"},
+			},
+		},
+		platformMigrations[1],
+		platformMigrations[2],
+	}
 }
 
 func migrateInstallation(
@@ -159,6 +178,7 @@ func runMigrationModesOnNetwork(
 	for _, image := range installation.bundle.Manifest.Images {
 		images[image.Component] = image.ImageID
 	}
+	migrations := platformMigrationsFor(plan.Bundle.Manifest)
 	for _, mode := range modes {
 		if mode != "apply" && mode != "verify" {
 			return errors.Join(
@@ -166,7 +186,7 @@ func runMigrationModesOnNetwork(
 				errors.New("migration action is unsupported"),
 			)
 		}
-		for _, migration := range platformMigrations {
+		for _, migration := range migrations {
 			imageID, found := images[migration.component]
 			if !found {
 				return errors.Join(

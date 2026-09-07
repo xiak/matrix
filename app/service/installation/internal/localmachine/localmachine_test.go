@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -328,6 +330,62 @@ func TestUpgradeConfigurationReplacesOnlyReleaseDerivedFilesAndReplaysBothWays(t
 	}
 }
 
+func TestProductFoundationUpgradeRestoresExactProductlessConfiguration(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine product-foundation configuration targets Linux")
+	}
+	plan := newProductFoundationUpgradePlan(t)
+	source, err := authenticateInstalledPlan(plan.Source)
+	if err != nil {
+		t.Fatalf("authenticate productless predecessor: %v", err)
+	}
+	defer clear(source.TrustBytes)
+	beforeCompose := readTestFile(t, source.Root, layout.Compose)
+	beforeRoutes := readTestFile(t, source.Root, layout.APISIXRoutes)
+	legacyBootstrap := readTestFile(t, source.Root, layout.IAMBootstrap)
+	if !release.IsLegacyProductlessManifest(source.Bundle.Manifest) ||
+		bytes.Contains(beforeRoutes, []byte("matrix-platform")) ||
+		!bytes.Contains(beforeRoutes, []byte(`"paas-ui:8080": 1`)) {
+		t.Fatal("installed predecessor does not expose the fixed productless configuration")
+	}
+
+	if err := stageInstallation(
+		plan.Target, bytes.NewReader(bytes.Repeat([]byte{0x42}, 32)),
+	); err != nil {
+		t.Fatalf("stage product-foundation target: %v", err)
+	}
+	if actual := readTestFile(t, source.Root, layout.IAMBootstrap); !bytes.Equal(actual, legacyBootstrap) {
+		t.Fatal("target staging rewrote the rollback-owned productless bootstrap")
+	}
+	if credential := readTestFile(t, source.Root, layout.PlatformIAMCredential); !validGeneratedCredential(
+		credential, "mx1.", false,
+	) {
+		t.Fatal("target staging did not enroll a bounded Platform credential")
+	}
+	runtimeBoundary := newImageRuntime(plan.Target.Bundle.Manifest, true)
+	if err := configureUpgrade(context.Background(), runtimeBoundary, plan); err != nil {
+		t.Fatalf("configure product-foundation upgrade: %v", err)
+	}
+	currentRoutes := readTestFile(t, source.Root, layout.APISIXRoutes)
+	if !bytes.Contains(currentRoutes, []byte("matrix-platform")) ||
+		!bytes.Contains(currentRoutes, []byte(`"matrix-ui:8080": 1`)) ||
+		bytes.Contains(currentRoutes, []byte(`"paas-ui:8080": 1`)) {
+		t.Fatal("target configuration did not publish the unified product shell")
+	}
+	if err := restoreUpgradeConfiguration(plan); err != nil {
+		t.Fatalf("restore productless predecessor configuration: %v", err)
+	}
+	if actual := readTestFile(t, source.Root, layout.Compose); !bytes.Equal(actual, beforeCompose) {
+		t.Fatal("rollback did not restore byte-exact productless Compose input")
+	}
+	if actual := readTestFile(t, source.Root, layout.APISIXRoutes); !bytes.Equal(actual, beforeRoutes) {
+		t.Fatal("rollback did not restore byte-exact productless APISIX input")
+	}
+	if err := restoreUpgradeConfiguration(plan); err != nil {
+		t.Fatalf("replay productless predecessor restoration: %v", err)
+	}
+}
+
 func TestPrepareReleaseRollbackRemovesOnlyCurrentAndRestoresPreviousConfiguration(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("local-machine release rollback targets Linux")
@@ -469,6 +527,34 @@ func TestIAMMigrationArgumentsBindInstallationWithoutCredentialValue(t *testing.
 	credential := readTestFile(t, plan.Root, layout.PlatformIAMCredential)
 	if bytes.Contains([]byte(strings.Join(arguments, " ")), credential) {
 		t.Fatal("IAM migration arguments contain platform credential material")
+	}
+}
+
+func TestProductlessMigrationProfileDoesNotRequireFuturePlatformCredential(t *testing.T) {
+	legacy := releasetest.ProductlessManifest()
+	migrations := platformMigrationsFor(legacy)
+	if len(migrations) != 3 || migrations[0].name != "iam" ||
+		migrations[0].bindInstallationID || len(migrations[0].mounts) != 3 {
+		t.Fatalf("productless migration profile = %#v", migrations)
+	}
+	for _, mount := range migrations[0].mounts {
+		if mount.relative == layout.PlatformIAMCredential ||
+			mount.environment == "MATRIX_MIGRATION_PLATFORM_IAM_CREDENTIAL_FILE" {
+			t.Fatal("productless migration profile requires a future Platform credential")
+		}
+	}
+	current := platformMigrationsFor(releasetest.Manifest())
+	if len(current) != len(platformMigrations) || !current[0].bindInstallationID ||
+		len(current[0].mounts) != 4 ||
+		current[0].mounts[3].relative != layout.PlatformIAMCredential {
+		t.Fatalf("current migration profile lost its Platform authority binding: %#v", current)
+	}
+}
+
+func TestProductlessAPISIXContractRemainsByteExact(t *testing.T) {
+	digest := sha256.Sum256(legacyProductlessAPISIXStandaloneConfig())
+	if actual := "sha256:" + hex.EncodeToString(digest[:]); actual != "sha256:54ab64082c49cf1ca7e3665c72dc0a89b28831ebf94997c6016f3e70f7a1b1a3" {
+		t.Fatalf("productless APISIX contract drifted: %s", actual)
 	}
 }
 
@@ -1421,6 +1507,96 @@ func newUpgradePlan(t *testing.T) platformcommand.UpgradePlan {
 		Source: installedPlanFrom(source), Target: target,
 		BackupID:  "backup-11111111111111111111111111111111",
 		CreatedAt: time.Date(2026, 8, 26, 6, 0, 0, 0, time.UTC),
+	}
+}
+
+func newProductFoundationUpgradePlan(t *testing.T) platformcommand.UpgradePlan {
+	t.Helper()
+	fixtures, err := releasetest.WriteProductFoundationUpgrade(t.TempDir())
+	if err != nil {
+		t.Fatalf("write product-foundation release fixtures: %v", err)
+	}
+	trustBytes, err := os.ReadFile(fixtures[0].TrustPath)
+	if err != nil {
+		t.Fatalf("read product-foundation release trust: %v", err)
+	}
+	legacy, err := release.VerifyInstalledDirectory(fixtures[0].Root, trustBytes)
+	if err != nil {
+		t.Fatalf("verify productless predecessor fixture: %v", err)
+	}
+	targetBundle, err := release.VerifyDirectory(fixtures[1].Root, trustBytes)
+	if err != nil {
+		t.Fatalf("verify product-foundation target fixture: %v", err)
+	}
+	root := filepath.Clean(t.TempDir())
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatalf("protect product-foundation installation root: %v", err)
+	}
+	target := platformcommand.InstallPlan{
+		Root: root, InstallationID: "mxi-11111111111111111111111111111111",
+		CorrelationID: "cmd-11111111111111111111111111111111",
+		Listener:      "0.0.0.0", Port: 8080, Bundle: targetBundle,
+		Trust: fixtures[0].Trust, TrustBytes: trustBytes,
+	}
+	if err := stageInstallation(target, rand.Reader); err != nil {
+		t.Fatalf("prepare product-foundation target staging: %v", err)
+	}
+	if err := configureInstallation(
+		context.Background(), newImageRuntime(target.Bundle.Manifest, true), target,
+	); err != nil {
+		t.Fatalf("prepare current configuration fixture: %v", err)
+	}
+	legacyDestination := filepath.Join(
+		root, filepath.FromSlash(layout.ReleaseDirectory(legacy.Manifest.Release.ID)),
+	)
+	if err := os.CopyFS(legacyDestination, os.DirFS(fixtures[0].Root)); err != nil {
+		t.Fatalf("materialize productless predecessor fixture: %v", err)
+	}
+
+	currentBootstrapBytes := readTestFile(t, root, layout.IAMBootstrap)
+	currentBootstrap, err := iamv1.DecodeBootstrapDocument(bytes.NewReader(currentBootstrapBytes))
+	if err != nil {
+		t.Fatalf("decode current bootstrap fixture: %v", err)
+	}
+	legacyBootstrap := currentBootstrap
+	legacyBootstrap.Services = make(
+		[]iamv1.BootstrapServiceCredential, 0, len(currentBootstrap.Services)-1,
+	)
+	for _, service := range currentBootstrap.Services {
+		if service.Purpose != iamv1.ServicePlatform {
+			legacyBootstrap.Services = append(legacyBootstrap.Services, service)
+		}
+	}
+	legacyBootstrapBytes, err := iamv1.EncodeBootstrapReplayDocument(legacyBootstrap)
+	if err != nil {
+		t.Fatalf("encode productless bootstrap fixture: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(root, filepath.FromSlash(layout.IAMBootstrap)),
+		legacyBootstrapBytes, 0o600,
+	); err != nil {
+		t.Fatalf("write productless bootstrap fixture: %v", err)
+	}
+	if err := os.Remove(
+		filepath.Join(root, filepath.FromSlash(layout.PlatformIAMCredential)),
+	); err != nil {
+		t.Fatalf("remove future Platform credential fixture: %v", err)
+	}
+	if err := replaceReleaseConfiguration(
+		target, target.Bundle.Manifest, legacy.Manifest,
+	); err != nil {
+		t.Fatalf("publish productless predecessor configuration: %v", err)
+	}
+	source := platformcommand.InstalledPlan{
+		Root: root, InstallationID: target.InstallationID,
+		CorrelationID: target.CorrelationID, Listener: target.Listener, Port: target.Port,
+		ReleaseID: legacy.Manifest.Release.ID, ReleaseDigest: legacy.ManifestSHA256,
+		TrustKeyID: target.Trust.KeyID, TrustFingerprint: target.Trust.PublicKeyFingerprint,
+	}
+	return platformcommand.UpgradePlan{
+		Source: source, Target: target,
+		BackupID:  "backup-11111111111111111111111111111111",
+		CreatedAt: time.Date(2026, 9, 7, 6, 0, 0, 0, time.UTC),
 	}
 }
 

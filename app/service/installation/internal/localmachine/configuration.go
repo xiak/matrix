@@ -105,11 +105,11 @@ func replaceReleaseConfiguration(
 		InstallationID: plan.InstallationID, Root: plan.Root,
 		Listener: plan.Listener, Port: plan.Port,
 	}
-	beforeTopology, err := topology.Compile(before, options)
+	beforeTopology, err := topology.CompileInstalled(before, options)
 	if err != nil {
 		return errors.Join(platformcommand.ErrEffectVerification, err)
 	}
-	afterTopology, err := topology.Compile(after, options)
+	afterTopology, err := topology.CompileInstalled(after, options)
 	if err != nil || afterTopology.ProjectName != beforeTopology.ProjectName {
 		return errors.Join(
 			platformcommand.ErrEffectVerification,
@@ -124,12 +124,15 @@ func replaceReleaseConfiguration(
 	if err != nil {
 		return errors.Join(platformcommand.ErrEffectVerification, err)
 	}
+	beforeRoutes := installedAPISIXStandaloneConfig(before)
+	afterRoutes := installedAPISIXStandaloneConfig(after)
 	for _, replacement := range []struct {
 		path          string
 		before, after []byte
 	}{
 		{layout.Compose, beforeTopology.ComposeJSON, afterTopology.ComposeJSON},
 		{layout.ArtifactCatalog, beforeCatalog, afterCatalog},
+		{layout.APISIXRoutes, beforeRoutes, afterRoutes},
 	} {
 		if err := replaceManagedExpected(
 			plan.Root, filepath.FromSlash(replacement.path),
@@ -145,7 +148,6 @@ func replaceReleaseConfiguration(
 		path    string
 		content []byte
 	}{
-		{layout.APISIXRoutes, apisixStandaloneConfig()},
 		{layout.APISIXConfig, apisixMainConfig()},
 		{layout.APISIXUID, []byte(afterTopology.ProjectName)},
 	} {
@@ -161,6 +163,13 @@ func replaceReleaseConfiguration(
 		return errors.Join(platformcommand.ErrEffectConflict, err)
 	}
 	return nil
+}
+
+func installedAPISIXStandaloneConfig(manifest release.Manifest) []byte {
+	if release.IsLegacyProductlessManifest(manifest) {
+		return legacyProductlessAPISIXStandaloneConfig()
+	}
+	return apisixStandaloneConfig()
 }
 
 func publishInstallationConfiguration(
