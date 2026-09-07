@@ -3,10 +3,10 @@
 > Non-authoritative portable memory. Validate it against Git and the owning
 > FEAT before continuing.
 
-- Updated: 2026-09-07
+- Updated: 2026-09-08
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `3e77593`
+- Current pushed implementation baseline: `bbb0137`
 
 ## Goal
 
@@ -20,19 +20,22 @@ and acceptance sequence.
 - FEAT-007 owns the current DevOps implementation work and remains
   `In progress`. Its fixed source-provider, executor, egress, limit, retention,
   IAM, and Audit baseline is complete.
-- The first Gate A slice now provides the strict provider-neutral
-  `api/devops/v1` Go/OpenAPI contract and pure `delivery` rules for DevOps
-  project creation, Pipeline draft creation/replacement, and immutable revision
-  activation. Activation seals the fixed toolchain digest, isolation profile,
-  ordered verification steps, egress, limits, actor, tenant, and deterministic
-  identity. Full tests, vet, race, repeated tests, fuzzing, Linux/amd64
-  cross-build, schema drift, architecture, and diff checks passed before
-  `3e77593` was pushed.
-- Gate A is not complete. Persistence/RLS, use cases, HTTP, IAM/Audit
-  integration, SourceConnection, RepositoryBinding, SourceEvent, PipelineRun,
-  logs, replay/cancellation, leases/fences, reconciliation, quotas, and
-  pagination remain pending. Read FEAT-007 and its owning code/tests before
-  continuing.
+- Gate A now has strict provider-neutral contracts and pure `delivery` rules
+  for projects, SourceConnections, RepositoryBindings, Pipeline drafts, and
+  immutable activation. The pushed `bbb0137` slice adds action-bound IAM
+  authorization values, durable equal/conflicting command replay, exact result
+  snapshots, Audit outbox facts, and a delivery-owned PostgreSQL 18 schema with
+  owner/migrator/API/worker roles, forced tenant RLS, composite ownership links,
+  immutable binding snapshots, and immutable PipelineRevisions.
+- Full tests, vet, race, repeated tests, Linux/amd64 cross-build, and real
+  PostgreSQL 18 tests passed. The database migration applied twice both alone
+  and with IAM, Audit, and PaaS; real API/worker credentials proved cross-schema
+  confinement, function-only API writes, a table-blind worker, tenant
+  isolation, exact replay snapshots, and Audit correlation.
+- Gate A is not complete. HTTP, IAM/Audit adapters and outbox dispatch,
+  DevOps credential enrollment, SourceEvent, PipelineRun, logs,
+  replay/cancellation, leases/fences, reconciliation, quotas, and pagination
+  remain pending. Read FEAT-007 and its owning code/tests before continuing.
 - FEAT-008 also remains `In progress`. Its product foundation and productless
   lifecycle paths are verified, but its real second-product transition and
   authenticated-browser/accessibility gates remain open; the real DevOps
@@ -51,9 +54,10 @@ and acceptance sequence.
 ## Continuation
 
 Resume from FEAT-007 and Git state. Complete the current project/Pipeline
-activation vertical slice through delivery-owned PostgreSQL/RLS, use cases,
-HTTP, and IAM/Audit boundaries before expanding the contract to change events
-and runs. Use the real DevOps product later to close FEAT-008's second-product
-transition. Preserve pragmatic DDD, the modular-monolith boundary,
-replacement-first pre-v1 changes, fixed-donor classification, and the exact
-repository-local Git identity `Xiak <Jellal@aliyun.com>`.
+activation vertical through IAM/Audit HTTP adapters, Audit outbox dispatch,
+the DevOps HTTP service, and real process-boundary tests before expanding the
+contract to change events and runs. Use the real DevOps product later to close
+FEAT-008's second-product transition. Preserve pragmatic DDD, the
+modular-monolith boundary, replacement-first pre-v1 changes, fixed-donor
+classification, and the exact repository-local Git identity
+`Xiak <Jellal@aliyun.com>`.
