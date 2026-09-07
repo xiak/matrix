@@ -78,6 +78,8 @@ it.
 | [Artifact configuration](https://coding.net/help/docs/cd/pipe/artifacts.html) and [artifacts in processes](https://coding.net/help/docs/cd/pipe/artifacts/in-pipelines.html) | Expected-artifact matching and cross-stage/process propagation, including digest-shaped Docker references and fallback behavior. |
 | [Manual confirmation](https://coding.net/help/docs/cd/pipe/stages/manual.html) | Named approvers, separate notification and approval roles, bounded waiting, and a future promotion gate. |
 | [Security logs](https://coding.net/help/docs/admin/security-log.html) | Operator, repository, and artifact activity are visible as distinct audit categories. |
+| [Tencent Cloud CODING purchasing guide](https://cloud.tencent.com/document/product/1726/96976) | The public-cloud service lifecycle currently stops new purchases, renewals, and eventually the service itself. |
+| [CODING private deployment](https://coding.net/products/private) and [deployment FAQ](https://coding.net/help/docs/start/faq.html) | Commercial pure-intranet/hybrid deployment exists, but it is a separately delivered, capacity-heavy product rather than a redistributable Matrix component. |
 
 ### CODING engine assessment
 
@@ -109,6 +111,23 @@ or default runner. A future Jenkins integration could only be evaluated as an
 optional BuildExecutor adapter for an existing enterprise installation, with
 the same closed request, isolation, receipt, provenance, and secret-boundary
 conformance gates as any other executor.
+
+### Availability and packaging constraint
+
+The Tencent Cloud purchasing guide observed on 2026-09-07 says standard CODING
+ended on 2025-09-01, all new purchases ended on 2025-09-30, renewals ended on
+2026-03-30, and the public service is scheduled to stop on 2028-09-30. Matrix
+therefore must not make the CODING public SaaS a required or default backend
+for new installations.
+
+CODING still advertises commercial pure-intranet, hybrid-cloud, and third-party
+private deployment. Its FAQ estimates a POC at about six 16-core/32-GiB
+machines and sizes a delivery environment after assessment. That is evidence
+that a private CODING installation can be an enterprise integration target,
+not evidence that Matrix may redistribute it or include it in the Phase 1
+Compose footprint. Until an explicit vendor agreement and supported package
+exist, the only admissible product option is `connect existing CODING`; the
+customer or vendor owns its license and lifecycle.
 
 ## Prow adoption decisions
 
@@ -158,6 +177,8 @@ own contracts and implementation, not copy a proprietary API, UI, or schema.
 | Credential IDs, project tokens, and runtime credential resolution | `ADAPT` only at adapter boundaries | Store references rather than plaintext and authorize every use. Source fetch, publisher, reporter, and deploy identities stay separate; generic credentials and secret-valued launch parameters are never made available to untrusted build steps. |
 | Operation, repository, and artifact logs | `ADAPT` | Emit normalized, immutable Matrix Audit facts with tenant, subject, action, resource, command identity, and outcome. Search/export views are not the authority, and native payloads, command lines, credentials, or mutable provider text are not copied into Audit. |
 | Jenkins-based classic CI/QCI, Cloud-Native Build, plugins, UI, APIs, schemas, and deployment implementation | `REJECT` | Public documentation spans multiple product generations and cannot establish a stable reusable contract. Matrix gains no CODING or Jenkins build/runtime dependency and copies no proprietary implementation or product vocabulary into its public API. |
+| CODING as a selectable Matrix product | `ADAPT` as a deferred connected-provider profile | Matrix may offer `connect existing CODING` for a customer-licensed SaaS/private instance. The adapter triggers one bound plan by exact commit, observes/cancels by stable external identity, verifies artifacts, and maps results into DeliveryRun. It does not redistribute CODING, silently provision an expiring public service, or let CODING mutate apphosting state. |
+| Matrix-packaged CODING private deployment | `REJECT` without commercial and runtime evidence | A catalog tile cannot imply redistribution rights or operational support. A future packaging FEAT requires vendor authorization, exact distributable/version, offline artifacts, capacity, upgrade/rollback, backup/restore, security, support ownership, and real installation gates. |
 
 ## Material gaps exposed by both comparisons
 
@@ -209,6 +230,12 @@ own contracts and implementation, not copy a proprietary API, UI, or schema.
    modes, one isolated builder, one OCI publisher, and one apphosting-owned
    deployment path; later FEATs may grow the product without weakening those
    identities.
+9. **Provider lifecycle.** A selectable external provider needs an explicit
+   availability and support state. CODING public SaaS is already closed to new
+   purchases and renewals and has a published 2028 stop date. Matrix must keep
+   native delivery viable, surface connected-provider health/lifecycle, and
+   fail activation when the customer-owned provider cannot satisfy the
+   contract; it cannot strand Matrix applications behind one vendor.
 
 ## Concept mapping
 
@@ -237,6 +264,7 @@ own contracts and implementation, not copy a proprietary API, UI, or schema.
 | Cloud account / infrastructure | `apphosting` ExecutionTarget and its adapters | Delivery cannot see or use provider credentials or mutate infrastructure directly. |
 | Credential manager | IAM authorization plus adapter-owned secret references | Resolve minimum credentials only in the adapter that needs them; build code receives none of these authorities. |
 | Operation/security logs | `audit` facts plus delivery read models | Audit is immutable authority; UI history and exported reports are projections. |
+| Existing CODING installation | Optional future BuildExecutor/source/artifact adapters | Expose one `connect existing CODING` profile with normalized Matrix runs; keep configuration details and vendor lifecycle outside Matrix authority. |
 
 ## Admission recommendation
 
@@ -252,6 +280,12 @@ OCI registry/publisher, approved dependency egress, apphosting-owned digest
 distribution, IAM/Audit contract extensions, and log retention. Those choices
 determine the first real adapters; they do not change the provider-neutral
 delivery/apphosting boundary.
+
+After the native path is proven, an existing customer-licensed CODING instance
+may become a selectable connected profile. It is not the default because its
+public SaaS has a published end-of-service schedule, and it is not a bundled
+Matrix product without separate private-deployment authorization and runtime
+evidence.
 
 No Prow source, generated file, API type, configuration, binary, image,
 manifest, or dependency is copied or referenced by Matrix build/runtime code.

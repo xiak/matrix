@@ -47,6 +47,36 @@ Accepting this context changes the shared product map in
 updated in the implementation slice, after this proposal is accepted; this
 analysis does not silently make that cross-FEAT decision.
 
+## Unified product experience and execution choice
+
+Matrix presents one DevOps product experience for repository identity, source
+events, pipeline revisions, runs, logs, artifacts, and the linked application
+deployment. Users should not need a different Matrix resource model or Audit
+view merely because execution is delegated to another supported system.
+
+The experience does not imply that Matrix must host Git, reproduce every
+provider's pipeline editor, or own every executor. A future activated
+PipelineRevision selects one vetted execution profile; that selection is
+immutable for every DeliveryRun using the revision:
+
+| Profile | Product behavior | Authority boundary |
+| --- | --- | --- |
+| Matrix native | Matrix admits the source event, runs the fixed workflow on an isolated BuildExecutor, publishes the verified OCI artifact, and asks apphosting to deploy it. | This is the first Gate A-C target and the default product authority. |
+| CODING connected | Matrix connects to an existing, customer-licensed CODING SaaS or private installation, triggers an already bound build plan for the exact commit, observes its run, verifies the resulting digest/provenance, and then asks apphosting to deploy. | Deferred until real CODING trigger, observe, cancel, webhook, artifact, revocation, and outage semantics pass the same adapter gates. CODING is an executor/artifact provider, not Matrix deployment truth. |
+
+A connected provider may contribute its own detailed editor and logs through
+links or bounded projections, while Matrix retains a normalized run summary and
+correlation. Provider-native job configuration, arbitrary parameters, secrets,
+and errors do not become Matrix public contracts.
+
+Using CODING to deploy directly would create an externally managed deployment,
+not an apphosting Deployment. That distinct observational mode is deferred; a
+single run cannot let both CODING and Matrix race to mutate the same target.
+Redistributing or installing CODING itself is also not implied by a connector.
+Any Matrix-packaged private CODING offering requires a separate commercial
+license, supported distribution, lifecycle, capacity, upgrade, backup, and
+acceptance decision.
+
 ## Minimal resource model
 
 | Resource | Mutability | Purpose |
@@ -54,7 +84,7 @@ analysis does not silently make that cross-FEAT decision.
 | `SourceConnection` | Metadata/status versioned | Tenant-bound provider identity plus references to webhook and fetch credentials; never secret plaintext. |
 | `RepositoryBinding` | Spec/status versioned | Stable provider repository identity, default branch, source connection, and target Matrix Application/Deployment. |
 | `Pipeline` | Metadata versioned | Stable identity and active immutable revision. |
-| `PipelineRevision` | Immutable | Trusted trigger policy, fixed build profile, approved dependency egress, artifact destination, and deployment policy. |
+| `PipelineRevision` | Immutable | Trusted trigger policy, fixed execution/build profile, approved dependency egress, artifact destination, and deployment policy. |
 | `SourceEvent` | Immutable | Provider, delivery identity, repository, event kind, exact commit, trusted base commit where applicable, and verified payload digest. |
 | `DeliveryRun` | Immutable input/status versioned | Exact source event, commit, pipeline revision, mode, task results, output digest/provenance, and terminal result. |
 
@@ -296,7 +326,9 @@ trains, multi-environment promotion, production approval, canary/blue-green
 rollout, deployment rollback policy, scheduled jobs, test result analytics,
 elastic runner autoscaling, shared cache, matrix builds, nested
 virtualization, customer-defined executor plugins, and multiple source
-providers are outside the first slice.
+providers are outside the first slice. A CODING connected profile, direct
+external CD observation, and private CODING packaging are later independently
+accepted slices rather than hidden requirements of the native path.
 
 Prow inspection, the Tencent CODING product benchmark, and the resulting
 `REUSE`/`ADAPT`/`REFERENCE`/`REJECT` decisions are owned by the
