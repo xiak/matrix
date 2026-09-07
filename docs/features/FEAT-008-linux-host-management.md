@@ -1,7 +1,7 @@
 # FEAT-008: existing Linux hosts and remote application delivery
 
-- Status: Phase 3 enrollment extension in progress; accepted P3-0 through
-  P3-5 and Gates A through E remain the fixed baseline, P3-6 is open
+- Status: Accepted; P3-0 through P3-6, Gates A through E and Gates F1 through
+  F10 are complete on pushed source `be3c4a96b4381426c01cd6315eaa3713c2855982`
 - Target: Matrix PaaS Phase 3
 - Design date: 2026-08-27
 - Active branch: `feat/host-self-enrollment`
@@ -54,7 +54,7 @@ exercise combines these capabilities rather than introducing them late.
 | P3-3: interactive operations | Live host/container UI and terminal in the selected running instance | Successive measurements without reload; real terminal I/O, resize, expiry, disconnect, authorization and audit | Complete |
 | P3-4: multiple hosts | Pool placement, drain, unavailable-node handling and safe removal across two independent hosts | No cross-host/local fallback; identity collision, tenant isolation and concurrent capacity checks | Complete |
 | P3-5: offline release | Platform and nodes install, operate, upgrade, roll back and recover without external access | Complete Gates A-E on exact committed source and signed releases | Complete |
-| P3-6: console self-enrollment | Create, transfer, verify and complete an existing Linux host from the console with host-local keys and no separate registration | Authenticated browser, two real hosts, signed offline install, one-time/revocable exchange, failure cleanup, lifecycle operations and upgrade/rollback retention | In progress |
+| P3-6: console self-enrollment | Create, transfer, verify and complete an existing Linux host from the console with host-local keys and no separate registration | Authenticated browser, two real hosts, signed offline install, one-time/revocable exchange, failure cleanup, lifecycle operations and upgrade/rollback retention | Complete |
 
 Start P3-1 after P3-0's donor review. Its basic measurements do not replace
 P3-3's full observability scope. Historical queries, interactive sessions and
@@ -739,16 +739,16 @@ baseline evidence:
 
 | P3-6 gate | Required evidence | State |
 | --- | --- | --- |
-| F1: contracts and automated gates | Unit, architecture, API, PostgreSQL, IAM, Audit, security and UI behavior suites cover the new enrollment boundary and all existing Phase 3 regressions | Open |
-| F2: authenticated browser journey | One real browser creates an enrollment, downloads the locally assembled join file, copies the fixed command, follows automatic state changes and enters the resulting existing host detail; direct API calls or mocked state do not substitute | Open |
-| F3: independent hosts and workload | Two separately installed Linux/Docker/Compose hosts enroll independently; the first runs a real application and the second enrolls separately, with no shared identity, credential, resource sample, route or scheduling state | Open |
-| F4: disconnected signed install | With external network unavailable, the target installs and joins from the signed offline release plus join file without pulling packages or images | Open |
-| F5: negative and recovery matrix | Expiry, revocation, credential replay, concurrent exchange, wrong identity, wrong installation, network interruption and lost exchange/completion responses fail closed or recover idempotently without a schedulable half target | Open |
-| F6: post-enrollment lifecycle | Deploy, update, stop, rollback, current host/container resources, drain, reactivate and safe remove all operate through the enrolled target | Open |
-| F7: release transition retention | Supported platform/node upgrade and rollback retain enrolled targets, identity pins, disabled identities, Operations, Audit records and exact replay behavior | Open |
-| F8: non-interference | No remote Linux host, Docker Engine or unrelated workload is restarted, and no Docker prune or broad cleanup occurs | Open |
-| F9: zero secret leakage | Join credentials and private keys are absent from logs, Audit, ordinary HTTP responses, browser storage, problem details, diagnostics and support artifacts; the one creation envelope is ciphertext only | Open |
-| F10: exact release closure | The exact pushed source passes a real offline Compose E2E and every applicable existing Phase 3 gate; signed artifacts and the rolling checkpoint name that commit | Open |
+| F1: contracts and automated gates | Unit, architecture, API, PostgreSQL, IAM, Audit, security and UI behavior suites cover the new enrollment boundary and all existing Phase 3 regressions | Complete |
+| F2: authenticated browser journey | One real browser creates an enrollment, downloads the locally assembled join file, copies the fixed command, follows automatic state changes and enters the resulting existing host detail; direct API calls or mocked state do not substitute | Complete |
+| F3: independent hosts and workload | Two separately installed Linux/Docker/Compose hosts enroll independently; the first runs a real application and the second enrolls separately, with no shared identity, credential, resource sample, route or scheduling state | Complete |
+| F4: disconnected signed install | With external network unavailable, the target installs and joins from the signed offline release plus join file without pulling packages or images | Complete |
+| F5: negative and recovery matrix | Expiry, revocation, credential replay, concurrent exchange, wrong identity, wrong installation, network interruption and lost exchange/completion responses fail closed or recover idempotently without a schedulable half target | Complete |
+| F6: post-enrollment lifecycle | Deploy, update, stop, rollback, current host/container resources, drain, reactivate and safe remove all operate through the enrolled target | Complete |
+| F7: release transition retention | Supported platform/node upgrade and rollback retain enrolled targets, identity pins, disabled identities, Operations, Audit records and exact replay behavior | Complete |
+| F8: non-interference | No remote Linux host, Docker Engine or unrelated workload is restarted, and no Docker prune or broad cleanup occurs | Complete |
+| F9: zero secret leakage | Join credentials and private keys are absent from logs, Audit, ordinary HTTP responses, browser storage, problem details, diagnostics and support artifacts; the one creation envelope is ciphertext only | Complete |
+| F10: exact release closure | The exact pushed source passes a real offline Compose E2E and every applicable existing Phase 3 gate; signed artifacts and the rolling checkpoint name that commit | Complete |
 
 FEAT-008 returns to accepted only when F1 through F10 are all backed by exact
 current evidence. Passing a narrower mock, API-only, single-host or connected
@@ -1846,6 +1846,107 @@ F2 authenticated real-browser journey; the combined two-host offline runtime,
 negative/recovery matrix, lifecycle, transition retention, non-interference
 and exact release evidence also remain outstanding. F1 through F10 therefore
 remain open.
+
+P3-6 acceptance closes on exact pushed source
+`be3c4a96b4381426c01cd6315eaa3713c2855982`. Its
+[verification run](https://github.com/xiak/matrix/actions/runs/34093252964)
+completed in 5m59s: the full-race Go job, independent UI job,
+PostgreSQL/authority-process job and real Linux node-process job all passed.
+Together they exercised deterministic generation, module verification,
+`go test -race -p 2 ./...`, UI type/lint/architecture/contrast/behavior and
+production-export checks, real PostgreSQL/IAM/Audit authority boundaries, and
+signed Linux startup, self-enrollment, upgrade and rollback. This closes F1
+and supplies the independent exact-source half of F10.
+
+An authenticated real browser completed the console ceremony for three
+passwordless-root Ubuntu 22.04 hosts with Docker Engine 29.1.3 and Compose
+2.40.3. From **Infrastructure -> Host resources** it created each enrollment,
+downloaded the browser-assembled protected join document, copied the fixed
+product command, and co-polled the enrollment and existing host inventory to
+the three **Enrollment complete** host details without a manual target
+registration. The durable mappings are:
+
+- `cicd-1` / `172.30.1.201`: enrollment
+  `node-enrollment-f7bea5cd46b976a310a0b3233e86bb1d`, target
+  `execution-target-d166dfe6a54ae4ff14a0c949fe671ce4`;
+- `cicd-2` / `172.30.1.202`: enrollment
+  `node-enrollment-a1a6d104134fbb77d113acc9d54667bc`, target
+  `execution-target-e970075b14136c5dfd505101aca75359`;
+- `cicd-3` / `172.30.1.203`: enrollment
+  `node-enrollment-a46c956ac0b4651c88a3f221979f5c8b`, target
+  `execution-target-1270d8d99db0c8b523370b491e1a322a`.
+
+All three host-local `mx node status` and `mx node verify` commands returned
+`READY` with their exact independent target and configuration digest. The
+control plane retained three `READY` enrollments, three enabled target-bound
+HTTPS routes and a `local` execution pool at 4/4 ready with independently
+advancing live resource samples. After final gate isolation, the real platform
+was restored to nine healthy services, its existing probe application was
+restarted, the console relay returned HTTP 200 and the same 4/4 state resumed.
+This real-browser and independent-host evidence closes F2 and contributes to
+F3.
+
+The exact source also produced two signed offline platform releases:
+`matrix-v0.3.0-enrollment-f10-a-be3c4a96b438` with release-manifest SHA-256
+`13a37a81fc7d0ebb01275a79525863b1d906da6938af9f64ad4c800263bf176a`, and
+its supported successor `matrix-v0.3.0-enrollment-f10-b-be3c4a96b438` with
+SHA-256 `16d8980b28d8150ea943da7f761b7b3670ef272e93c1fc3be97678fe55b7b102`.
+Both name source `be3c4a96b4381426c01cd6315eaa3713c2855982`, database profile IAM 5 /
+Audit 4 / PaaS 5, contract revision 11 and topology digest
+`sha256:3b5e33844c8f9fc90bcad489a071cc292b1b42d65dbe387adb05ffec562d9178`.
+With external TCP access to `1.1.1.1:443` denied and an initially image-empty
+task engine, the 542.27-second real Compose gate installed release A, enrolled
+two independent native Linux/Docker/Compose guests, ran two real applications,
+and completed deploy, update, stop, rollback, resources, signed terminal,
+drain, remove-block, reactivate and safe tombstone removal. It then exercised
+automatic upgrade/rollback and the compatible release-B transition while
+retaining identities, connection disablement, Operations, Audit and replay
+semantics. The gate ended with `signed-multi-host-lifecycle-complete`; its
+1,060-byte log SHA-256 is
+`a3761e44c0a547cd3ef8acf0f2530d2ad893d22bafed6fdba37ea3ab4d46aaa7`.
+This closes F3, F4, F6, F7 and the runtime half of F10.
+
+F5 is covered both inside that isolated runtime (bootstrap outage, lost
+response recovery, bounded background failure and atomic lifecycle
+transitions) and by the exact-source unit/race/PostgreSQL matrix. In
+particular, the current tests expire reads without credential disclosure,
+consume an exchange once, require both persisted role keys for recovery,
+reject every changed completion commitment before probing, distinguish
+retryable from definitive probe failure, fence revocation racing completion,
+reject wrong credentials and authority before issuance, close expiry without
+certificate issuance, exactly replay revocation, and serialize concurrent
+same-role and cross-role identity collisions. The native installer suites add
+wrong installation, replay after ingress loss, interrupted completion and
+definitive-cleanup coverage; no rejected path publishes a schedulable target.
+
+F8 retained both native guests' boot and Docker Engine identities throughout
+the offline gate: node 1 remained
+`a58df78f-456b-49df-a73b-9b92dc9cc550` /
+`eafd1e16-51cf-4779-b510-51bbc89481a8`, and node 2 remained
+`3f1c670e-7673-4a22-929d-6397a35bbd60` /
+`6e704f67-51e0-4770-9e62-d36b5dd1019c`. The three real hosts likewise
+required no Linux or Docker restart. On `172.30.1.203`, all 15 pre-existing
+`matrix-integration-*` container IDs and ports, including the existing 8443
+gateway binding, matched the before snapshot after enrollment and after final
+platform restoration. Cleanup removed only exact task-owned units, images,
+Compose projects and validated fixture roots; no Docker prune or broad cleanup
+was run.
+
+F9's platform support artifact has SHA-256
+`b97b268014db00dcbea80fa0633cf59c86849b78df3f40ac8395d64e4903c12e`;
+the two node support artifacts have SHA-256
+`9f56919850985df288aec64d3666a835d6c519e0220cf2d1a9edb14f95d5115d`
+and `72cac9648698cab595ab4175075026d76bc59b98d6849e2633522111f79917cd`.
+Private-key, raw/encoded join-credential and forbidden Audit-field scans passed
+for those artifacts, platform/container logs and Audit. Both gate enrollments
+and all three real-host enrollments retained SQL `NULL` for credential salt,
+verifier and wrapped creation envelope after consumption. UI behavior tests
+spy on the browser Storage API and prove the in-memory decrypt/download path
+performs no storage read or write, removes its anchor, revokes its object URL
+and clears plaintext buffers; authentication tests require both local and
+session storage to remain empty. The real browser session also returned to
+login on a fresh document navigation, confirming its page-memory boundary.
+All transferred one-time join files were removed after successful import.
 
 ## Adoption
 

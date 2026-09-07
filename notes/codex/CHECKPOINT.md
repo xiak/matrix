@@ -5,8 +5,10 @@
 - Updated: 2026-09-07
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/host-self-enrollment`
-- Pushed verified milestone: `b8c8843aa9db2dfa2986d98241d9470a7a5ea694`
-- Verification: [run 34054998970](https://github.com/xiak/matrix/actions/runs/34054998970)
+- Accepted pushed source: `be3c4a96b4381426c01cd6315eaa3713c2855982`
+- Verification: [run 34093252964](https://github.com/xiak/matrix/actions/runs/34093252964)
+- Final signed offline gate: 542.27s, log SHA-256
+  `a3761e44c0a547cd3ef8acf0f2530d2ad893d22bafed6fdba37ea3ab4d46aaa7`
 
 ## Resume route
 
@@ -17,10 +19,9 @@
 3. [ADR-0002](../../docs/architecture/ADR-0002-product-boundary.md) owns the
    cloud-platform direction and optional-provider boundary.
 
-Acceptance and remaining work are recorded in the FEAT; a pushed milestone
-does not imply release acceptance. Continue its first unfinished iteration,
-one usable slice at a time. Keep Phase 2 isolated and preserve its branch,
-worktree and runtime. Follow AGENTS.md's single-owner documentation and
-behavior-based testing rules.
+FEAT-008 records the complete P3-6 acceptance evidence and is accepted on the
+exact source above. Keep Phase 2 isolated and preserve its branch, worktree and
+runtime. Follow AGENTS.md's single-owner documentation and behavior-based
+testing rules for any successor work.
 
 Replace this checkpoint only at another committed-and-pushed milestone.
