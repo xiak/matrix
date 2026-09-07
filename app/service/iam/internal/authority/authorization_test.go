@@ -164,6 +164,67 @@ func TestEveryIAMActionHasOnlyFixedRoleAuthority(t *testing.T) {
 	}
 }
 
+func TestDevOpsRolesAreProductScopedAndLeastPrivilege(t *testing.T) {
+	readActions := []iamv1.Action{
+		iamv1.ActionDevOpsProjectRead,
+		iamv1.ActionDevOpsSourceConnectionRead,
+		iamv1.ActionDevOpsRepositoryBindingRead,
+		iamv1.ActionDevOpsPipelineRead,
+		iamv1.ActionDevOpsRunRead,
+		iamv1.ActionDevOpsLogRead,
+	}
+	for _, action := range readActions {
+		if !RoleAllows(iamv1.RoleDevOpsAdmin, action) ||
+			!RoleAllows(iamv1.RoleDevOpsDeveloper, action) ||
+			!RoleAllows(iamv1.RoleDevOpsViewer, action) {
+			t.Fatalf("DevOps read action %q is missing role authority", action)
+		}
+	}
+	developerActions := []iamv1.Action{
+		iamv1.ActionDevOpsPipelineCreate,
+		iamv1.ActionDevOpsPipelineUpdate,
+		iamv1.ActionDevOpsPipelineActivate,
+		iamv1.ActionDevOpsRunReplay,
+		iamv1.ActionDevOpsRunCancel,
+	}
+	for _, action := range developerActions {
+		if !RoleAllows(iamv1.RoleDevOpsAdmin, action) ||
+			!RoleAllows(iamv1.RoleDevOpsDeveloper, action) ||
+			RoleAllows(iamv1.RoleDevOpsViewer, action) {
+			t.Fatalf("DevOps developer action %q has an invalid privilege boundary", action)
+		}
+	}
+	adminOnlyActions := []iamv1.Action{
+		iamv1.ActionDevOpsProjectCreate,
+		iamv1.ActionDevOpsSourceConnectionCreate,
+		iamv1.ActionDevOpsSourceConnectionUpdate,
+		iamv1.ActionDevOpsRepositoryBindingCreate,
+		iamv1.ActionDevOpsRepositoryBindingUpdate,
+	}
+	for _, action := range adminOnlyActions {
+		if !RoleAllows(iamv1.RoleDevOpsAdmin, action) ||
+			RoleAllows(iamv1.RoleDevOpsDeveloper, action) ||
+			RoleAllows(iamv1.RoleDevOpsViewer, action) {
+			t.Fatalf("DevOps administrative action %q has an invalid privilege boundary", action)
+		}
+	}
+	for _, role := range []iamv1.BuiltinRole{
+		iamv1.RoleDevOpsAdmin, iamv1.RoleDevOpsDeveloper, iamv1.RoleDevOpsViewer,
+	} {
+		if !RoleAllows(role, iamv1.ActionInstallationProductRead) ||
+			RoleAllows(role, iamv1.ActionPaaSApplicationRead) ||
+			RoleAllows(role, iamv1.ActionAuditRecordRead) {
+			t.Fatalf("DevOps role %q escaped its product boundary", role)
+		}
+	}
+	if !ServiceCanRequest(iamv1.ServiceDevOps, iamv1.ActionDevOpsPipelineActivate) ||
+		ServiceCanRequest(iamv1.ServiceDevOps, iamv1.ActionPaaSDeploymentCreate) ||
+		ServiceCanRequest(iamv1.ServicePaaS, iamv1.ActionDevOpsPipelineActivate) ||
+		RoleAllows(iamv1.RoleDevOpsAdmin, iamv1.Action("devops.unregistered.execute")) {
+		t.Fatal("DevOps service action ownership is invalid")
+	}
+}
+
 func TestAuthorizationDeniesAServiceOutsideItsProductBoundary(t *testing.T) {
 	now := authorityTestTime()
 	context := authoritySubject(now, iamv1.RolePaaSDeveloper)

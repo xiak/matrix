@@ -193,6 +193,9 @@ func enumSchemas() map[string][]string {
 			string(iamv1.ResourceSession), string(iamv1.ResourceApplication), string(iamv1.ResourceConfiguration),
 			string(iamv1.ResourceConfigurationRevision), string(iamv1.ResourceApplicationRevision),
 			string(iamv1.ResourceDeployment), string(iamv1.ResourceOperation), string(iamv1.ResourceAuditRecord),
+			string(iamv1.ResourceDevOpsProject), string(iamv1.ResourceSourceConnection),
+			string(iamv1.ResourceRepositoryBinding), string(iamv1.ResourcePipeline),
+			string(iamv1.ResourcePipelineRun), string(iamv1.ResourcePipelineLog),
 			string(iamv1.ResourceAuditChain), string(iamv1.ResourceInstallation),
 		},
 		"DecisionReason": {string(iamv1.DecisionAllowed), string(iamv1.DecisionDenied)},
@@ -273,7 +276,7 @@ func applySemanticOverlays(schemas object) {
 
 	bootstrap := schemas["BootstrapDocument"].(object)
 	bootstrapProperties := bootstrap["properties"].(object)
-	servicePurposes := iamv1.AllServicePurposes()
+	servicePurposes := iamv1.BootstrapServicePurposes()
 	prefixItems := make([]any, len(servicePurposes))
 	for index, purpose := range servicePurposes {
 		prefixItems[index] = object{

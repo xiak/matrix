@@ -33,7 +33,7 @@ func ValidateDigest(name, value string) error {
 }
 
 func ValidateBootstrapDocument(value BootstrapDocument) error {
-	return validateBootstrapDocument(value, AllServicePurposes())
+	return validateBootstrapDocument(value, BootstrapServicePurposes())
 }
 
 // ValidateBootstrapReplayDocument accepts either the current bootstrap
@@ -41,7 +41,7 @@ func ValidateBootstrapDocument(value BootstrapDocument) error {
 // only for replaying an already-applied installation during upgrade; callers
 // must not use it to seed a new authority.
 func ValidateBootstrapReplayDocument(value BootstrapDocument) error {
-	expected := AllServicePurposes()
+	expected := BootstrapServicePurposes()
 	if len(value.Services) == len(legacyBootstrapServicePurposes) {
 		expected = legacyBootstrapServicePurposes
 	}
@@ -462,6 +462,21 @@ func ResourceKindForAction(action Action) (ResourceKind, bool) {
 		return ResourceDeployment, true
 	case ActionPaaSOperationRead:
 		return ResourceOperation, true
+	case ActionDevOpsProjectCreate, ActionDevOpsProjectRead:
+		return ResourceDevOpsProject, true
+	case ActionDevOpsSourceConnectionCreate, ActionDevOpsSourceConnectionRead,
+		ActionDevOpsSourceConnectionUpdate:
+		return ResourceSourceConnection, true
+	case ActionDevOpsRepositoryBindingCreate, ActionDevOpsRepositoryBindingRead,
+		ActionDevOpsRepositoryBindingUpdate:
+		return ResourceRepositoryBinding, true
+	case ActionDevOpsPipelineCreate, ActionDevOpsPipelineRead,
+		ActionDevOpsPipelineUpdate, ActionDevOpsPipelineActivate:
+		return ResourcePipeline, true
+	case ActionDevOpsRunRead, ActionDevOpsRunReplay, ActionDevOpsRunCancel:
+		return ResourcePipelineRun, true
+	case ActionDevOpsLogRead:
+		return ResourcePipelineLog, true
 	case ActionAuditRecordRead:
 		return ResourceAuditRecord, true
 	case ActionAuditIntegrityVerify:

@@ -198,6 +198,29 @@ func TestIAMLegacyBootstrapIsReplayOnly(t *testing.T) {
 	}
 }
 
+func TestIAMOptionalServiceCatalogDoesNotExpandFoundationBootstrap(t *testing.T) {
+	all := AllServicePurposes()
+	bootstrap := BootstrapServicePurposes()
+	if len(all) != len(bootstrap)+1 || all[3] != ServiceDevOps {
+		t.Fatalf("service purpose catalog = %#v", all)
+	}
+	for _, purpose := range bootstrap {
+		if purpose == ServiceDevOps {
+			t.Fatal("optional DevOps service was included in Foundation bootstrap")
+		}
+	}
+	document := decodeIAMExample[BootstrapDocument](t, "examples/bootstrap-document.json")
+	if err := ValidateBootstrapDocument(document); err != nil {
+		t.Fatalf("fixed Foundation bootstrap rejected after catalog expansion: %v", err)
+	}
+	credential := document.Services[0]
+	credential.Purpose = ServiceDevOps
+	document.Services = append(document.Services, credential)
+	if err := ValidateBootstrapDocument(document); err == nil {
+		t.Fatal("Foundation bootstrap accepted an optional DevOps credential")
+	}
+}
+
 func TestIAMOpenAPICredentialBoundaries(t *testing.T) {
 	document := loadIAMOpenAPI(t)
 	paths := mustIAMObject(t, document["paths"], "paths")

@@ -12,9 +12,10 @@ type ReadinessState string
 type InstallationVerificationState string
 
 const (
-	SourceIAM   Source = "IAM"
-	SourcePaaS  Source = "PAAS"
-	SourceAudit Source = "AUDIT"
+	SourceIAM    Source = "IAM"
+	SourcePaaS   Source = "PAAS"
+	SourceDevOps Source = "DEVOPS"
+	SourceAudit  Source = "AUDIT"
 )
 
 const (
@@ -42,6 +43,15 @@ const (
 	ActionPaaSDeploymentStopped            Action = "paas.deployment.stopped"
 	ActionPaaSDeploymentRolledBack         Action = "paas.deployment.rolled-back"
 
+	ActionDevOpsProjectCreated            Action = "devops.project.created"
+	ActionDevOpsSourceConnectionCreated   Action = "devops.source-connection.created"
+	ActionDevOpsSourceConnectionUpdated   Action = "devops.source-connection.updated"
+	ActionDevOpsRepositoryBindingCreated  Action = "devops.repository-binding.created"
+	ActionDevOpsRepositoryBindingUpdated  Action = "devops.repository-binding.updated"
+	ActionDevOpsPipelineCreated           Action = "devops.pipeline.created"
+	ActionDevOpsPipelineDraftUpdated      Action = "devops.pipeline.draft-updated"
+	ActionDevOpsPipelineRevisionActivated Action = "devops.pipeline-revision.activated"
+
 	ActionAuditRecordsRead       Action = "audit.records.read"
 	ActionAuditIntegrityVerified Action = "audit.integrity.verified"
 )
@@ -57,6 +67,11 @@ const (
 	TargetConfigurationRevision TargetKind = "CONFIGURATION_REVISION"
 	TargetApplicationRevision   TargetKind = "APPLICATION_REVISION"
 	TargetDeployment            TargetKind = "DEPLOYMENT"
+	TargetDevOpsProject         TargetKind = "DEVOPS_PROJECT"
+	TargetSourceConnection      TargetKind = "SOURCE_CONNECTION"
+	TargetRepositoryBinding     TargetKind = "REPOSITORY_BINDING"
+	TargetPipeline              TargetKind = "PIPELINE"
+	TargetPipelineRevision      TargetKind = "PIPELINE_REVISION"
 	TargetAuditRecords          TargetKind = "AUDIT_RECORDS"
 	TargetAuditChain            TargetKind = "AUDIT_CHAIN"
 )
@@ -128,6 +143,14 @@ var allActions = []Action{
 	ActionPaaSDeploymentUpdated,
 	ActionPaaSDeploymentStopped,
 	ActionPaaSDeploymentRolledBack,
+	ActionDevOpsProjectCreated,
+	ActionDevOpsSourceConnectionCreated,
+	ActionDevOpsSourceConnectionUpdated,
+	ActionDevOpsRepositoryBindingCreated,
+	ActionDevOpsRepositoryBindingUpdated,
+	ActionDevOpsPipelineCreated,
+	ActionDevOpsPipelineDraftUpdated,
+	ActionDevOpsPipelineRevisionActivated,
 	ActionAuditRecordsRead,
 	ActionAuditIntegrityVerified,
 }
@@ -188,6 +211,38 @@ var actionContracts = map[Action]ActionContract{
 	},
 	ActionPaaSDeploymentRolledBack: {
 		Source: SourcePaaS, Target: TargetDeployment, Results: []Result{ResultAccepted},
+		IAMDecisionRequired: true, OperationRequired: true,
+	},
+	ActionDevOpsProjectCreated: {
+		Source: SourceDevOps, Target: TargetDevOpsProject, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, OperationRequired: true,
+	},
+	ActionDevOpsSourceConnectionCreated: {
+		Source: SourceDevOps, Target: TargetSourceConnection, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, OperationRequired: true,
+	},
+	ActionDevOpsSourceConnectionUpdated: {
+		Source: SourceDevOps, Target: TargetSourceConnection, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, OperationRequired: true,
+	},
+	ActionDevOpsRepositoryBindingCreated: {
+		Source: SourceDevOps, Target: TargetRepositoryBinding, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, OperationRequired: true,
+	},
+	ActionDevOpsRepositoryBindingUpdated: {
+		Source: SourceDevOps, Target: TargetRepositoryBinding, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, OperationRequired: true,
+	},
+	ActionDevOpsPipelineCreated: {
+		Source: SourceDevOps, Target: TargetPipeline, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, OperationRequired: true,
+	},
+	ActionDevOpsPipelineDraftUpdated: {
+		Source: SourceDevOps, Target: TargetPipeline, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, OperationRequired: true,
+	},
+	ActionDevOpsPipelineRevisionActivated: {
+		Source: SourceDevOps, Target: TargetPipelineRevision, Results: []Result{ResultSucceeded},
 		IAMDecisionRequired: true, OperationRequired: true,
 	},
 	ActionAuditRecordsRead: {

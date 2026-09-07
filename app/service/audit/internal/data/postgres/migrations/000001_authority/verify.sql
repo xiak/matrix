@@ -2,6 +2,31 @@ DO $matrix_audit_verify$
 DECLARE
     missing text;
 BEGIN
+    PERFORM audit.assert_event(
+        'DEVOPS',
+        'event-verify-devops',
+        'organization-verify-devops',
+        jsonb_build_object(
+            'apiVersion', 'audit.matrix.xiak.com/v1',
+            'kind', 'AuditEvent',
+            'eventId', 'event-verify-devops',
+            'tenantId', 'organization-verify-devops',
+            'actor', jsonb_build_object('type', 'USER', 'id', 'principal-verify'),
+            'iamDecisionId', 'decision-verify-devops',
+            'action', 'devops.pipeline-revision.activated',
+            'target', jsonb_build_object(
+                'kind', 'PIPELINE_REVISION', 'id', 'revision-verify-devops'
+            ),
+            'result', 'SUCCEEDED',
+            'requestDigest',
+                'sha256:6666666666666666666666666666666666666666666666666666666666666666',
+            'requestId', 'request-verify-devops',
+            'correlationId', 'correlation-verify-devops',
+            'operationId', 'operation-verify-devops',
+            'occurredAt', '2026-09-07T03:04:05.000000Z'
+        )
+    );
+
     SELECT string_agg(required.name, ', ' ORDER BY required.name)
       INTO missing
       FROM (VALUES
@@ -151,8 +176,29 @@ BEGIN
         RAISE EXCEPTION 'Audit runtime function authority is invalid';
     END IF;
 
-    IF to_regclass('audit.records_paas_operation_uq') IS NULL THEN
-        RAISE EXCEPTION 'Audit PaaS operation identity is not unique';
+    IF to_regclass('audit.records_product_operation_uq') IS NULL
+       OR to_regclass('audit.records_paas_operation_uq') IS NOT NULL
+       OR NOT EXISTS (
+            SELECT 1
+              FROM pg_catalog.pg_constraint AS constraint_row
+              JOIN pg_catalog.pg_class AS class
+                ON class.oid = constraint_row.conrelid
+              JOIN pg_catalog.pg_namespace AS namespace
+                ON namespace.oid = class.relnamespace
+             WHERE namespace.nspname = 'audit'
+               AND class.relname IN ('records', 'event_registry')
+               AND constraint_row.conname IN (
+                    'records_values_valid', 'event_registry_values_valid'
+               )
+               AND constraint_row.contype = 'c'
+               AND constraint_row.convalidated
+               AND position(
+                    'DEVOPS' IN pg_catalog.pg_get_constraintdef(constraint_row.oid)
+               ) > 0
+            GROUP BY namespace.nspname
+            HAVING count(*) = 2
+       ) THEN
+        RAISE EXCEPTION 'Audit product operation identity is not unique';
     END IF;
 
     IF to_regnamespace('iam') IS NOT NULL

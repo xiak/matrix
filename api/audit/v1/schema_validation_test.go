@@ -41,6 +41,7 @@ func TestAuditExamplesValidateAgainstOpenAPISchemas(t *testing.T) {
 	document := loadAuditOpenAPI(t)
 	examples := map[string]string{
 		"examples/event-paas.json":            "Event",
+		"examples/event-devops.json":          "Event",
 		"examples/event-iam-denied.json":      "Event",
 		"examples/ingestion-result.json":      "IngestionResult",
 		"examples/query-records-request.json": "QueryRecordsRequest",

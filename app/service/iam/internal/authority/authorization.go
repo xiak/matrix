@@ -159,6 +159,8 @@ func ServiceCanRequest(purpose iamv1.ServicePurpose, action iamv1.Action) bool {
 		return action == iamv1.ActionInstallationProductRead
 	case iamv1.ServicePaaS:
 		return strings.HasPrefix(string(action), "paas.")
+	case iamv1.ServiceDevOps:
+		return strings.HasPrefix(string(action), "devops.")
 	case iamv1.ServiceAudit:
 		return strings.HasPrefix(string(action), "audit.")
 	case iamv1.ServiceInstallationVerifier:
@@ -202,6 +204,36 @@ func RoleAllows(role iamv1.BuiltinRole, action iamv1.Action) bool {
 			iamv1.ActionPaaSApplicationRevisionRead,
 			iamv1.ActionPaaSDeploymentRead,
 			iamv1.ActionPaaSOperationRead:
+			return true
+		}
+	case iamv1.RoleDevOpsAdmin:
+		return action == iamv1.ActionInstallationProductRead ||
+			(strings.HasPrefix(string(action), "devops.") && knownAction(action))
+	case iamv1.RoleDevOpsDeveloper:
+		switch action {
+		case iamv1.ActionInstallationProductRead,
+			iamv1.ActionDevOpsProjectRead,
+			iamv1.ActionDevOpsSourceConnectionRead,
+			iamv1.ActionDevOpsRepositoryBindingRead,
+			iamv1.ActionDevOpsPipelineCreate,
+			iamv1.ActionDevOpsPipelineRead,
+			iamv1.ActionDevOpsPipelineUpdate,
+			iamv1.ActionDevOpsPipelineActivate,
+			iamv1.ActionDevOpsRunRead,
+			iamv1.ActionDevOpsRunReplay,
+			iamv1.ActionDevOpsRunCancel,
+			iamv1.ActionDevOpsLogRead:
+			return true
+		}
+	case iamv1.RoleDevOpsViewer:
+		switch action {
+		case iamv1.ActionInstallationProductRead,
+			iamv1.ActionDevOpsProjectRead,
+			iamv1.ActionDevOpsSourceConnectionRead,
+			iamv1.ActionDevOpsRepositoryBindingRead,
+			iamv1.ActionDevOpsPipelineRead,
+			iamv1.ActionDevOpsRunRead,
+			iamv1.ActionDevOpsLogRead:
 			return true
 		}
 	case iamv1.RoleAuditReader:

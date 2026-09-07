@@ -169,8 +169,8 @@ func ensureIAMBootstrap(root, installationID string, entropy io.Reader) (stagedC
 	if err != nil {
 		return stagedCredentials{}, errors.Join(platformcommand.ErrEffectVerification, err)
 	}
-	services := make([]iamv1.BootstrapServiceCredential, 0, len(iamv1.AllServicePurposes()))
-	for _, purpose := range iamv1.AllServicePurposes() {
+	services := make([]iamv1.BootstrapServiceCredential, 0, len(iamv1.BootstrapServicePurposes()))
+	for _, purpose := range iamv1.BootstrapServicePurposes() {
 		credentialText, err := randomCredential(entropy, "mx1.", false)
 		if err != nil {
 			return stagedCredentials{}, errors.Join(platformcommand.ErrEffectUnavailable, err)

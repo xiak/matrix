@@ -110,6 +110,8 @@ BEGIN
        ) IS NULL
        OR iam.resource_kind_for_action('installation.product.read')
             IS DISTINCT FROM 'INSTALLATION'
+       OR iam.resource_kind_for_action('devops.pipeline.activate')
+            IS DISTINCT FROM 'PIPELINE'
        OR NOT EXISTS (
             SELECT 1
               FROM pg_catalog.pg_constraint AS constraint_row
@@ -122,6 +124,24 @@ BEGIN
                AND constraint_row.conname = 'service_credentials_values_valid'
                AND constraint_row.contype = 'c'
                AND constraint_row.convalidated
+               AND position(
+                    'DEVOPS' IN pg_catalog.pg_get_constraintdef(constraint_row.oid)
+               ) > 0
+       ) OR NOT EXISTS (
+            SELECT 1
+              FROM pg_catalog.pg_constraint AS constraint_row
+              JOIN pg_catalog.pg_class AS class
+                ON class.oid = constraint_row.conrelid
+              JOIN pg_catalog.pg_namespace AS namespace
+                ON namespace.oid = class.relnamespace
+             WHERE namespace.nspname = 'iam'
+               AND class.relname = 'role_bindings'
+               AND constraint_row.conname = 'role_bindings_values_valid'
+               AND constraint_row.contype = 'c'
+               AND constraint_row.convalidated
+               AND position(
+                    'DEVOPS_ADMIN' IN pg_catalog.pg_get_constraintdef(constraint_row.oid)
+               ) > 0
        ) THEN
         RAISE EXCEPTION 'IAM platform authority schema is invalid';
     END IF;

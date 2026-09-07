@@ -108,6 +108,7 @@ CREATE TABLE IF NOT EXISTS iam.role_bindings (
         AND principal_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND role_name IN (
             'ORGANIZATION_ADMIN', 'PAAS_DEVELOPER', 'PAAS_VIEWER',
+            'DEVOPS_ADMIN', 'DEVOPS_DEVELOPER', 'DEVOPS_VIEWER',
             'AUDIT_READER', 'INSTALLATION_VERIFIER'
         )
         AND resource_version BETWEEN 1 AND 9007199254740991
@@ -115,6 +116,25 @@ CREATE TABLE IF NOT EXISTS iam.role_bindings (
         AND (revoked_at IS NULL OR revoked_at >= created_at)
     )
 );
+
+-- CREATE TABLE IF NOT EXISTS retains an already-installed closed role enum.
+-- Recreate it so an optional DevOps product may bind its fixed roles without
+-- changing the Foundation bootstrap inventory.
+ALTER TABLE iam.role_bindings
+    DROP CONSTRAINT IF EXISTS role_bindings_values_valid;
+ALTER TABLE iam.role_bindings
+    ADD CONSTRAINT role_bindings_values_valid CHECK (
+        id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND principal_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND role_name IN (
+            'ORGANIZATION_ADMIN', 'PAAS_DEVELOPER', 'PAAS_VIEWER',
+            'DEVOPS_ADMIN', 'DEVOPS_DEVELOPER', 'DEVOPS_VIEWER',
+            'AUDIT_READER', 'INSTALLATION_VERIFIER'
+        )
+        AND resource_version BETWEEN 1 AND 9007199254740991
+        AND updated_at >= created_at
+        AND (revoked_at IS NULL OR revoked_at >= created_at)
+    );
 
 CREATE TABLE IF NOT EXISTS iam.user_credentials (
     tenant_id text COLLATE "C" NOT NULL,
@@ -154,7 +174,7 @@ CREATE TABLE IF NOT EXISTS iam.service_credentials (
         REFERENCES iam.principals (tenant_id, id),
     CONSTRAINT service_credentials_purpose_uq UNIQUE (tenant_id, purpose),
     CONSTRAINT service_credentials_values_valid CHECK (
-        purpose IN ('IAM', 'PLATFORM', 'PAAS', 'AUDIT', 'INSTALLATION_VERIFIER')
+        purpose IN ('IAM', 'PLATFORM', 'PAAS', 'DEVOPS', 'AUDIT', 'INSTALLATION_VERIFIER')
         AND lookup_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
         AND verification_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
         AND lookup_digest <> verification_digest
@@ -163,13 +183,14 @@ CREATE TABLE IF NOT EXISTS iam.service_credentials (
 );
 
 -- CREATE TABLE IF NOT EXISTS does not replace the accepted v0.1 constraint.
--- Recreate only this closed enum constraint so an in-place upgrade can enroll
--- the Foundation platform service without rewriting the legacy bootstrap.
+-- Recreate this closed enum constraint so an in-place upgrade can enroll the
+-- Foundation platform or a selected optional product without rewriting the
+-- legacy bootstrap.
 ALTER TABLE iam.service_credentials
     DROP CONSTRAINT IF EXISTS service_credentials_values_valid;
 ALTER TABLE iam.service_credentials
     ADD CONSTRAINT service_credentials_values_valid CHECK (
-        purpose IN ('IAM', 'PLATFORM', 'PAAS', 'AUDIT', 'INSTALLATION_VERIFIER')
+        purpose IN ('IAM', 'PLATFORM', 'PAAS', 'DEVOPS', 'AUDIT', 'INSTALLATION_VERIFIER')
         AND lookup_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
         AND verification_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
         AND lookup_digest <> verification_digest
@@ -940,6 +961,22 @@ AS $function$
         WHEN 'paas.deployment.stop' THEN 'DEPLOYMENT'
         WHEN 'paas.deployment.read' THEN 'DEPLOYMENT'
         WHEN 'paas.operation.read' THEN 'OPERATION'
+        WHEN 'devops.project.create' THEN 'DEVOPS_PROJECT'
+        WHEN 'devops.project.read' THEN 'DEVOPS_PROJECT'
+        WHEN 'devops.source-connection.create' THEN 'SOURCE_CONNECTION'
+        WHEN 'devops.source-connection.read' THEN 'SOURCE_CONNECTION'
+        WHEN 'devops.source-connection.update' THEN 'SOURCE_CONNECTION'
+        WHEN 'devops.repository-binding.create' THEN 'REPOSITORY_BINDING'
+        WHEN 'devops.repository-binding.read' THEN 'REPOSITORY_BINDING'
+        WHEN 'devops.repository-binding.update' THEN 'REPOSITORY_BINDING'
+        WHEN 'devops.pipeline.create' THEN 'PIPELINE'
+        WHEN 'devops.pipeline.read' THEN 'PIPELINE'
+        WHEN 'devops.pipeline.update' THEN 'PIPELINE'
+        WHEN 'devops.pipeline.activate' THEN 'PIPELINE'
+        WHEN 'devops.run.read' THEN 'PIPELINE_RUN'
+        WHEN 'devops.run.replay' THEN 'PIPELINE_RUN'
+        WHEN 'devops.run.cancel' THEN 'PIPELINE_RUN'
+        WHEN 'devops.log.read' THEN 'PIPELINE_LOG'
         WHEN 'audit.record.read' THEN 'AUDIT_RECORD'
         WHEN 'audit.integrity.verify' THEN 'AUDIT_CHAIN'
         WHEN 'installation.product.read' THEN 'INSTALLATION'
@@ -1710,6 +1747,7 @@ BEGIN
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR submitted_role_name NOT IN (
             'ORGANIZATION_ADMIN', 'PAAS_DEVELOPER', 'PAAS_VIEWER',
+            'DEVOPS_ADMIN', 'DEVOPS_DEVELOPER', 'DEVOPS_VIEWER',
             'AUDIT_READER', 'INSTALLATION_VERIFIER'
        ) THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'role binding mutation is invalid';

@@ -1,8 +1,8 @@
 # FEAT-007: Repository change validation
 
-- Status: In progress; UX, architecture, donor analysis, and implementation
-  baseline complete; Gate A contract/domain slice complete, persistence and
-  run lifecycle pending
+- Status: In progress; UX, architecture, donor analysis, implementation
+  baseline, Gate A contract/domain slice, and shared authority catalog
+  complete; persistence and run lifecycle pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -353,10 +353,27 @@ projections, and mutable fixed-profile catalogs fail closed. The domain imports
 only standard-library packages and the public DevOps contract; it contains no
 provider, executor, PaaS, persistence, or donor dependency.
 
+The shared authority slice now registers `DEVOPS` as an optional service
+identity and binds every DevOps IAM action to one resource kind, one service
+owner, and the fixed administrator/developer/viewer privilege matrix. The
+closed service-identity catalog is deliberately separate from the exact
+five-service Foundation bootstrap inventory, so a Foundation-only installation
+does not receive a dormant DevOps credential. PostgreSQL upgrades replace the
+closed IAM role/purpose constraints in place while preserving both current and
+legacy bootstrap replay shapes.
+
+Audit now accepts the credential-derived `DEVOPS` source and the exact user
+mutation facts for project, connection, binding, Pipeline draft, and immutable
+revision activation. Go validation, canonical replay checks, generated OpenAPI,
+and PostgreSQL use the same closed action contracts. The operation identity
+index is generalized from PaaS-only to product operations without retaining a
+parallel compatibility index. A clean PostgreSQL 18 fixture has applied IAM
+and Audit migrations twice and exercised every IAM/Audit catalog entry.
+
 This slice does not complete Gate A. SourceConnection, RepositoryBinding,
 SourceEvent, PipelineRun, log, replay/cancellation/lease/fence/reconciliation,
-quota, pagination, use-case, HTTP, IAM/Audit integration, and PostgreSQL/RLS
-work remain pending.
+quota, pagination, DevOps credential enrollment, use-case/HTTP authority
+integration, and delivery PostgreSQL/RLS work remain pending.
 
 Current verification evidence:
 
@@ -368,6 +385,8 @@ Current verification evidence:
   untrusted repository-binding identifiers
 - Linux/amd64 CGO-disabled cross-build of the new contract and domain packages
 - deterministic OpenAPI generation-drift tests and `git diff --check`
+- real PostgreSQL 18 double-apply and catalog integration tests for the IAM and
+  Audit extensions
 
 ## Incremental acceptance
 

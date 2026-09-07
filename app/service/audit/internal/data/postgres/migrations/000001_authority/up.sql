@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS audit.records (
     CONSTRAINT records_values_valid CHECK (
         tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND sequence BETWEEN 1 AND 9007199254740991
-        AND source IN ('IAM', 'PAAS', 'AUDIT')
+        AND source IN ('IAM', 'PAAS', 'DEVOPS', 'AUDIT')
         AND event_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND length(canonical_document) BETWEEN 1 AND 131072
         AND canonical_document LIKE
@@ -69,15 +69,39 @@ CREATE TABLE IF NOT EXISTS audit.records (
     )
 );
 
+-- Reapply the closed source constraint for installations created before the
+-- optional DevOps producer existed. Existing records remain immutable.
+ALTER TABLE audit.records
+    DROP CONSTRAINT IF EXISTS records_values_valid;
+ALTER TABLE audit.records
+    ADD CONSTRAINT records_values_valid CHECK (
+        tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND sequence BETWEEN 1 AND 9007199254740991
+        AND source IN ('IAM', 'PAAS', 'DEVOPS', 'AUDIT')
+        AND event_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND length(canonical_document) BETWEEN 1 AND 131072
+        AND canonical_document LIKE
+            '{"canonicalVersion":"matrix.audit.canonical-event.v1",%'
+        AND content_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND previous_hash COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND record_hash COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND retention = 'INDEFINITE'
+        AND event_document->>'apiVersion' = 'audit.matrix.xiak.com/v1'
+        AND event_document->>'kind' = 'AuditEvent'
+        AND event_document->>'eventId' = event_id
+        AND event_document->>'tenantId' = tenant_id
+    );
+
 CREATE INDEX IF NOT EXISTS records_tenant_time_desc_idx
     ON audit.records (tenant_id, ingested_at DESC, sequence DESC);
 CREATE INDEX IF NOT EXISTS records_tenant_action_desc_idx
     ON audit.records (tenant_id, (event_document->>'action'), sequence DESC);
 CREATE INDEX IF NOT EXISTS records_tenant_actor_desc_idx
     ON audit.records (tenant_id, (event_document#>>'{actor,id}'), sequence DESC);
-CREATE UNIQUE INDEX IF NOT EXISTS records_paas_operation_uq
+DROP INDEX IF EXISTS audit.records_paas_operation_uq;
+CREATE UNIQUE INDEX IF NOT EXISTS records_product_operation_uq
     ON audit.records (tenant_id, (event_document->>'operationId'))
-    WHERE source = 'PAAS';
+    WHERE source IN ('PAAS', 'DEVOPS');
 
 CREATE TABLE IF NOT EXISTS audit.event_registry (
     source text COLLATE "C" NOT NULL,
@@ -92,7 +116,7 @@ CREATE TABLE IF NOT EXISTS audit.event_registry (
         tenant_id, sequence
     ) REFERENCES audit.records (tenant_id, sequence),
     CONSTRAINT event_registry_values_valid CHECK (
-        source IN ('IAM', 'PAAS', 'AUDIT')
+        source IN ('IAM', 'PAAS', 'DEVOPS', 'AUDIT')
         AND event_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND sequence BETWEEN 1 AND 9007199254740991
@@ -100,6 +124,18 @@ CREATE TABLE IF NOT EXISTS audit.event_registry (
         AND record_hash COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
     )
 );
+
+ALTER TABLE audit.event_registry
+    DROP CONSTRAINT IF EXISTS event_registry_values_valid;
+ALTER TABLE audit.event_registry
+    ADD CONSTRAINT event_registry_values_valid CHECK (
+        source IN ('IAM', 'PAAS', 'DEVOPS', 'AUDIT')
+        AND event_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND sequence BETWEEN 1 AND 9007199254740991
+        AND content_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND record_hash COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+    );
 
 ALTER TABLE audit.tenant_heads ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit.tenant_heads FORCE ROW LEVEL SECURITY;
@@ -193,6 +229,14 @@ BEGIN
         ('paas.deployment.updated', 'PAAS', 'DEPLOYMENT', 'ACCEPTED', true, true, true),
         ('paas.deployment.stopped', 'PAAS', 'DEPLOYMENT', 'ACCEPTED', true, true, true),
         ('paas.deployment.rolled-back', 'PAAS', 'DEPLOYMENT', 'ACCEPTED', true, true, true),
+        ('devops.project.created', 'DEVOPS', 'DEVOPS_PROJECT', 'SUCCEEDED', true, true, true),
+        ('devops.source-connection.created', 'DEVOPS', 'SOURCE_CONNECTION', 'SUCCEEDED', true, true, true),
+        ('devops.source-connection.updated', 'DEVOPS', 'SOURCE_CONNECTION', 'SUCCEEDED', true, true, true),
+        ('devops.repository-binding.created', 'DEVOPS', 'REPOSITORY_BINDING', 'SUCCEEDED', true, true, true),
+        ('devops.repository-binding.updated', 'DEVOPS', 'REPOSITORY_BINDING', 'SUCCEEDED', true, true, true),
+        ('devops.pipeline.created', 'DEVOPS', 'PIPELINE', 'SUCCEEDED', true, true, true),
+        ('devops.pipeline.draft-updated', 'DEVOPS', 'PIPELINE', 'SUCCEEDED', true, true, true),
+        ('devops.pipeline-revision.activated', 'DEVOPS', 'PIPELINE_REVISION', 'SUCCEEDED', true, true, true),
         ('audit.records.read', 'AUDIT', 'AUDIT_RECORDS', 'SUCCEEDED', true, true, false),
         ('audit.integrity.verified', 'AUDIT', 'AUDIT_CHAIN', 'SUCCEEDED', true, true, false)
       ) AS contract(
@@ -321,7 +365,7 @@ SECURITY DEFINER
 SET search_path = pg_catalog, pg_temp
 AS $function$
 BEGIN
-    IF submitted_source NOT IN ('IAM', 'PAAS', 'AUDIT')
+    IF submitted_source NOT IN ('IAM', 'PAAS', 'DEVOPS', 'AUDIT')
        OR COALESCE(submitted_event_id, '') COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'Audit event identity is invalid';
@@ -350,7 +394,7 @@ DECLARE
     stored_tenant_id text;
     stored_sequence bigint;
 BEGIN
-    IF submitted_source NOT IN ('IAM', 'PAAS', 'AUDIT')
+    IF submitted_source NOT IN ('IAM', 'PAAS', 'DEVOPS', 'AUDIT')
        OR COALESCE(submitted_event_id, '') COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'Audit event identity is invalid';
@@ -606,7 +650,13 @@ BEGIN
             'paas.configuration-revision.created',
             'paas.application-revision.created', 'paas.deployment.created',
             'paas.deployment.updated', 'paas.deployment.stopped',
-            'paas.deployment.rolled-back', 'audit.records.read',
+            'paas.deployment.rolled-back',
+            'devops.project.created', 'devops.source-connection.created',
+            'devops.source-connection.updated',
+            'devops.repository-binding.created',
+            'devops.repository-binding.updated', 'devops.pipeline.created',
+            'devops.pipeline.draft-updated',
+            'devops.pipeline-revision.activated', 'audit.records.read',
             'audit.integrity.verified'
        ))
        OR ((submitted_actor_type IS NULL) <> (submitted_actor_id IS NULL))

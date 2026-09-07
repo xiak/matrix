@@ -50,7 +50,7 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		t.Fatalf("decode staged IAM bootstrap: %v", err)
 	}
 	if bootstrap.InstallationID != plan.InstallationID ||
-		len(bootstrap.Services) != len(iamv1.AllServicePurposes()) {
+		len(bootstrap.Services) != len(iamv1.BootstrapServicePurposes()) {
 		t.Fatalf("staged IAM bootstrap identity = %#v", bootstrap)
 	}
 

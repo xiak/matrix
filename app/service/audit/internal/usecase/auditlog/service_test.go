@@ -15,6 +15,24 @@ import (
 
 const testDigest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
+func TestDevOpsServiceIdentityOwnsOnlyTheDevOpsAuditSource(t *testing.T) {
+	identity := iamv1.ServiceIdentity{
+		APIVersion:     iamv1.APIVersion,
+		Kind:           "ServiceIdentity",
+		OrganizationID: "organization-example",
+		PrincipalID:    "service-devops",
+		Purpose:        iamv1.ServiceDevOps,
+	}
+	source, err := sourceForIdentity(identity)
+	if err != nil || source != auditv1.SourceDevOps {
+		t.Fatalf("DevOps Audit source = %q err=%v", source, err)
+	}
+	identity.Purpose = iamv1.ServiceInstallationVerifier
+	if _, err := sourceForIdentity(identity); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("non-producer service identity error=%v, want unauthenticated", err)
+	}
+}
+
 func TestAuditUsecasesBindIAMAndAuditEveryAuthorizedRead(t *testing.T) {
 	transaction := newAuditTransaction()
 	repository := &auditRepository{transaction: transaction}

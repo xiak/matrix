@@ -115,6 +115,8 @@ func sourceForIdentity(identity iamv1.ServiceIdentity) (auditv1.Source, error) {
 		return auditv1.SourceIAM, nil
 	case iamv1.ServicePaaS:
 		return auditv1.SourcePaaS, nil
+	case iamv1.ServiceDevOps:
+		return auditv1.SourceDevOps, nil
 	case iamv1.ServiceAudit:
 		return auditv1.SourceAudit, nil
 	default:

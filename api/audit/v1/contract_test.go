@@ -16,6 +16,7 @@ func TestAuditExamplesPassDomainValidation(t *testing.T) {
 		run  func(*testing.T)
 	}{
 		{"PaaS event", validAuditEvent("examples/event-paas.json", SourcePaaS)},
+		{"DevOps event", validAuditEvent("examples/event-devops.json", SourceDevOps)},
 		{"denied IAM event", validAuditEvent("examples/event-iam-denied.json", SourceIAM)},
 		{"ingestion result", validAuditExample[IngestionResult]("examples/ingestion-result.json", ValidateIngestionResult)},
 		{"query request", validAuditExample[QueryRecordsRequest]("examples/query-records-request.json", ValidateQueryRecordsRequest)},

@@ -553,7 +553,7 @@ func applyIAMBootstrap(
 		PasswordHash: "$matrix-iam-v1$argon2id$v=19$m=65536,t=3,p=1$" +
 			strings.Repeat("A", 22) + "$" + strings.Repeat("A", 43),
 	}
-	for _, purpose := range iamv1.AllServicePurposes() {
+	for _, purpose := range iamv1.BootstrapServicePurposes() {
 		purposeText := string(purpose)
 		fixture.Services = append(fixture.Services, iamBootstrapService{
 			Purpose:            purposeText,

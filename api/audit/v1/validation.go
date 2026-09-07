@@ -311,7 +311,7 @@ func ValidateProblem(value Problem) error {
 }
 
 func knownSource(value Source) bool {
-	return value == SourceIAM || value == SourcePaaS || value == SourceAudit
+	return value == SourceIAM || value == SourcePaaS || value == SourceDevOps || value == SourceAudit
 }
 
 func containsResult(values []Result, target Result) bool {

@@ -1,0 +1,23 @@
+{
+  "apiVersion": "audit.matrix.xiak.com/v1",
+  "kind": "AuditEvent",
+  "eventId": "event-pipeline-revision-activated",
+  "tenantId": "organization-example",
+  "actor": {
+    "type": "USER",
+    "id": "principal-developer"
+  },
+  "iamDecisionId": "decision-pipeline-activate",
+  "action": "devops.pipeline-revision.activated",
+  "target": {
+    "kind": "PIPELINE_REVISION",
+    "id": "pipeline-revision-example"
+  },
+  "result": "SUCCEEDED",
+  "requestDigest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+  "requestId": "request-pipeline-activate",
+  "correlationId": "correlation-pipeline-activate",
+  "operationId": "operation-pipeline-activate",
+  "traceparent": "00-5bf92f3577b34da6a3ce929d0e0e4736-10f067aa0ba902b7-01",
+  "occurredAt": "2026-09-07T03:04:05.000000Z"
+}
