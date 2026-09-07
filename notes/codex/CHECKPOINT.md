@@ -6,7 +6,7 @@
 - Updated: 2026-09-07
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `ea4e808`
+- Current pushed implementation baseline: `e2249bc`
 
 ## Goal
 
@@ -26,10 +26,13 @@ and acceptance sequence.
   `ea4e808` Release B, including failed-upgrade rollback, product readiness,
   explicit rollback, old-backup recovery, support leakage checks, and whole
   host restart.
-- FEAT-008 is not accepted yet. It still requires a fresh current-release
-  install, a fixture second-product transition, and authenticated-browser and
-  accessibility evidence. Keep those gaps in the owning FEAT rather than
-  duplicating their acceptance details here.
+- A separate clean network-disabled host verified that two current
+  `e2249bc` releases install from an empty root, expose the exact signed PaaS
+  product as ready, preserve it across every lifecycle transition, and recover
+  after a whole-host restart without using the legacy path.
+- FEAT-008 is not accepted yet. It still requires a fixture second-product
+  transition and authenticated-browser/accessibility evidence. Keep those gaps
+  in the owning FEAT rather than duplicating their acceptance details here.
 
 ## Adoption boundary
 

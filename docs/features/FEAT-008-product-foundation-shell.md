@@ -1,6 +1,6 @@
 # FEAT-008: Private-cloud product foundation and unified shell
 
-- Status: In progress; UX and architecture complete; Gate A discovery runtime and Gate B unified-shell slice implemented; fixed productless-predecessor offline lifecycle verified; fresh current-release, second-product, and authenticated-browser evidence pending
+- Status: In progress; UX and architecture complete; Gate A discovery runtime and Gate B unified-shell slice implemented; fixed productless-predecessor and fresh current-release offline lifecycles verified; second-product and authenticated-browser evidence pending
 - Target release: Unscheduled multi-product release
 - Contract: `installation.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -210,15 +210,23 @@ tenant-authority, offline, upgrade/rollback/recovery, and
   `READY`, explicit rollback with discovery unavailable, old-backup recovery,
   application rollback and stop, bounded support leakage scans, and a restart
   of the entire isolated host followed by status and verification.
+- A second clean network-disabled host completed the same lifecycle using two
+  signed releases built from current commit `e2249bc`. Release A
+  `matrix-v0.1.0-e2249bcdd535` installed the Foundation, Matrix UI, Platform
+  API, and Application PaaS from an empty root; its first authenticated product
+  read returned exactly the signed Application PaaS version and route in
+  `READY`. Failed upgrade, successful upgrade, explicit rollback, backup
+  recovery, application behavior, zero-leakage support evidence, and full-host
+  restart also passed without falling through the legacy compatibility path.
 - On this implementation slice, `go generate ./...`, `go test ./...`,
   `go vet ./...`, `go test -race ./...`, ten repeated installation contract
   runs, Linux cross-builds, and `git diff --check` pass.
 
 This evidence closes the fixed productless-to-product-foundation compatibility
-portion of Gate C. Gate C remains open until a fresh current product release
-installs from an empty root and an upgrade adds a fixture second product with
-matching UI/API/component behavior. The authenticated browser and
-accessibility evidence in Gate B also remains open.
+portion and the fresh-current-install portion of Gate C. Gate C remains open
+until an upgrade adds a fixture second product with matching UI/API/component
+behavior. The authenticated browser and accessibility evidence in Gate B also
+remains open.
 
 ## Deferred
 
