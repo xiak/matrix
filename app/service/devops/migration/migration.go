@@ -8,6 +8,10 @@ import (
 	"github.com/xiak/matrix/app/service/internal/postgresmigration"
 )
 
+func Bootstrap(ctx context.Context, executor postgresmigration.Executor) error {
+	return postgresmigration.Bootstrap(ctx, executor, devopsmigrations.Source())
+}
+
 func Up(ctx context.Context, executor postgresmigration.Executor) error {
 	return postgresmigration.Up(ctx, executor, devopsmigrations.Source())
 }

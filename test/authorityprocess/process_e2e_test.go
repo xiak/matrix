@@ -25,6 +25,7 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	auditmigration "github.com/xiak/matrix/app/service/audit/migration"
+	devopsmigration "github.com/xiak/matrix/app/service/devops/migration"
 	iammigration "github.com/xiak/matrix/app/service/iam/migration"
 	paasmigration "github.com/xiak/matrix/app/service/paas/migration"
 )
@@ -37,6 +38,8 @@ const (
 	auditRuntimeLogin = "matrix_authority_process_audit_runtime"
 	paasAPILogin      = "matrix_authority_process_paas_api"
 	paasWorkerLogin   = "matrix_authority_process_paas_worker"
+	devopsAPILogin    = "matrix_authority_process_devops_api"
+	devopsWorkerLogin = "matrix_authority_process_devops_worker"
 	processDBPassword = "matrix-authority-process-test-only"
 
 	initialAdminPassword     = "Initial-Process-Admin-Password-49!"
@@ -46,13 +49,15 @@ const (
 	initialDeveloperPassword = "Initial-Process-Developer-Password-57!"
 	changedDeveloperPassword = "Changed-Process-Developer-Password-61!"
 
-	iamServiceCredential   = "mx1.ProcessIAMServiceCredential00000000000000001"
-	paasServiceCredential  = "mx1.ProcessPaaSServiceCredential0000000000000001"
-	auditServiceCredential = "mx1.ProcessAuditServiceCredential000000000000001"
-	verifierCredential     = "mx1.ProcessVerifierCredential0000000000000001"
+	iamServiceCredential      = "mx1.ProcessIAMServiceCredential00000000000000001"
+	platformServiceCredential = "mx1.PlatformProcessCredential0000000000000001"
+	paasServiceCredential     = "mx1.ProcessPaaSServiceCredential0000000000000001"
+	auditServiceCredential    = "mx1.ProcessAuditServiceCredential000000000000001"
+	devopsServiceCredential   = "mx1.ProcessDevOpsServiceCredential00000000000001"
+	verifierCredential        = "mx1.ProcessVerifierCredential0000000000000001"
 )
 
-func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
+func TestIndependentIAMAuditPaaSAndDevOpsProcesses(t *testing.T) {
 	dsn := os.Getenv(authorityProcessDSN)
 	if dsn == "" {
 		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", authorityProcessDSN)
@@ -127,6 +132,18 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		"paas-worker-dsn",
 		[]byte(runtimeDSN(adminConfig, paasWorkerLogin, processDBPassword)),
 	)
+	devopsDSNPath := writeProtectedFile(
+		t,
+		temporary,
+		"devops-dsn",
+		[]byte(runtimeDSN(adminConfig, devopsAPILogin, processDBPassword)),
+	)
+	devopsWorkerDSNPath := writeProtectedFile(
+		t,
+		temporary,
+		"devops-worker-dsn",
+		[]byte(runtimeDSN(adminConfig, devopsWorkerLogin, processDBPassword)),
+	)
 	auditCredentialPath := writeProtectedFile(
 		t,
 		temporary,
@@ -145,6 +162,12 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		"paas-service-credential",
 		[]byte(paasServiceCredential),
 	)
+	devopsCredentialPath := writeProtectedFile(
+		t,
+		temporary,
+		"devops-service-credential",
+		[]byte(devopsServiceCredential),
+	)
 	wrongCredentialPath := writeProtectedFile(
 		t,
 		temporary,
@@ -161,11 +184,14 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	iamAddress := freeAddress(t)
 	auditAddress := freeAddress(t)
 	paasAddress := freeAddress(t)
+	devopsAddress := freeAddress(t)
 	iamDispatcherAddress := freeAddress(t)
 	paasDispatcherAddress := freeAddress(t)
+	devopsDispatcherAddress := freeAddress(t)
 	iamEndpoint := "http://" + iamAddress
 	auditEndpoint := "http://" + auditAddress
 	paasEndpoint := "http://" + paasAddress
+	devopsEndpoint := "http://" + devopsAddress
 	iamEnvironment := []string{
 		"MATRIX_IAM_DATABASE_DSN_FILE=" + iamDSNPath,
 		"MATRIX_IAM_BOOTSTRAP_FILE=" + bootstrapPath,
@@ -205,6 +231,19 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 			"MATRIX_PAAS_AUDIT_LISTEN_ADDRESS=" + paasDispatcherAddress,
 		}
 	}
+	devopsEnvironment := []string{
+		"MATRIX_DEVOPS_DATABASE_DSN_FILE=" + devopsDSNPath,
+		"MATRIX_DEVOPS_IAM_ENDPOINT=" + iamEndpoint,
+		"MATRIX_DEVOPS_SERVICE_CREDENTIAL_FILE=" + devopsCredentialPath,
+		"MATRIX_DEVOPS_LISTEN_ADDRESS=" + devopsAddress,
+	}
+	devopsDispatcherEnvironment := []string{
+		"MATRIX_DEVOPS_AUDIT_DATABASE_DSN_FILE=" + devopsWorkerDSNPath,
+		"MATRIX_DEVOPS_AUDIT_ENDPOINT=" + auditEndpoint,
+		"MATRIX_DEVOPS_AUDIT_CREDENTIAL_FILE=" + devopsCredentialPath,
+		"MATRIX_DEVOPS_AUDIT_WORKER_ID=devops-audit-worker-a",
+		"MATRIX_DEVOPS_AUDIT_LISTEN_ADDRESS=" + devopsDispatcherAddress,
+	}
 	children := make([]*childProcess, 0)
 	sensitive := []string{
 		initialAdminPassword,
@@ -216,8 +255,10 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		"Initial-Outage-User-Password-68!",
 		"Initial-Dead-Letter-Password-79!",
 		iamServiceCredential,
+		platformServiceCredential,
 		paasServiceCredential,
 		auditServiceCredential,
+		devopsServiceCredential,
 		"mx1.ProcessWrongIAMCredential000000000000000001",
 		verifierCredential,
 	}
@@ -259,6 +300,8 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	waitHTTPStatus(t, ctx, dispatcher, "http://"+iamDispatcherAddress+"/ready", http.StatusOK)
 	waitAllIAMOutboxDelivered(t, ctx, admin)
 	assertIAMEventsStoredOnce(t, ctx, admin)
+	enrollDevOpsService(t, ctx, dsn, bootstrap.InstallationID)
+	waitAllIAMOutboxDelivered(t, ctx, admin)
 	paasProcess := start(binaries.paas, paasEnvironment)
 	waitHTTPStatus(t, ctx, paasProcess, paasEndpoint+"/ready", http.StatusOK)
 	paasDispatcher := start(
@@ -266,6 +309,10 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		paasDispatcherEnvironment(paasCredentialPath, "paas-audit-worker-a"),
 	)
 	waitHTTPStatus(t, ctx, paasDispatcher, "http://"+paasDispatcherAddress+"/ready", http.StatusOK)
+	devopsProcess := start(binaries.devops, devopsEnvironment)
+	waitHTTPStatus(t, ctx, devopsProcess, devopsEndpoint+"/ready", http.StatusOK)
+	devopsDispatcher := start(binaries.devopsDispatcher, devopsDispatcherEnvironment)
+	waitHTTPStatus(t, ctx, devopsDispatcher, "http://"+devopsDispatcherAddress+"/ready", http.StatusOK)
 	paasInstallationVerification := verifyPaaSInstallation(
 		t,
 		paasEndpoint,
@@ -307,6 +354,8 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		changedAdminPassword,
 		"request-admin-password",
 	)
+	exerciseDevOpsConfigurationJourney(t, ctx, admin, devopsEndpoint, adminLogin.Credential)
+	waitAllDevOpsOutboxDelivered(t, ctx, admin)
 	assertCrossTenantIAMBindingRejected(t, ctx, admin, iamEndpoint, adminLogin.Credential)
 	waitAllIAMOutboxDelivered(t, ctx, admin)
 	adminPage := queryAudit(t, auditEndpoint, adminLogin.Credential, auditv1.QueryRecordsRequest{PageSize: 200}, http.StatusOK)
@@ -447,6 +496,14 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		initialReaderPassword,
 		"request-create-reader",
 	)
+	putIAMBinding(
+		t,
+		iamEndpoint,
+		adminLogin.Credential,
+		reader.ID,
+		iamv1.RoleDevOpsViewer,
+		"request-bind-devops-viewer",
+	)
 	binding := putIAMBinding(
 		t,
 		iamEndpoint,
@@ -471,6 +528,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		changedReaderPassword,
 		"request-reader-password",
 	)
+	assertDevOpsViewerAccess(t, ctx, admin, devopsEndpoint, readerLogin.Credential)
 	createPaaSApplication(
 		t,
 		paasEndpoint,
@@ -517,6 +575,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	assertAuditAccessRecorded(t, ctx, admin, auditv1.ActionAuditIntegrityVerified, "principal-admin")
 	iamProcess.stop()
 	waitHTTPStatus(t, ctx, paasProcess, paasEndpoint+"/ready", http.StatusServiceUnavailable)
+	waitHTTPStatus(t, ctx, devopsProcess, devopsEndpoint+"/ready", http.StatusServiceUnavailable)
 	createPaaSApplication(
 		t,
 		paasEndpoint,
@@ -537,6 +596,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	iamProcess = start(binaries.iam, iamEnvironment)
 	waitHTTPStatus(t, ctx, iamProcess, iamEndpoint+"/ready", http.StatusOK)
 	waitHTTPStatus(t, ctx, paasProcess, paasEndpoint+"/ready", http.StatusOK)
+	waitHTTPStatus(t, ctx, devopsProcess, devopsEndpoint+"/ready", http.StatusOK)
 	paasProcess.stop()
 	wrongPaaSEnvironment := append([]string(nil), paasEnvironment...)
 	wrongPaaSEnvironment[2] = "MATRIX_PAAS_SERVICE_CREDENTIAL_FILE=" + wrongCredentialPath
@@ -712,8 +772,10 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		initialDeveloperPassword,
 		changedDeveloperPassword,
 		iamServiceCredential,
+		platformServiceCredential,
 		paasServiceCredential,
 		auditServiceCredential,
+		devopsServiceCredential,
 		adminLogin.Credential,
 		readerLogin.Credential,
 		developerLogin.Credential,
@@ -721,11 +783,13 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 }
 
 type binarySet struct {
-	iam            string
-	audit          string
-	dispatcher     string
-	paas           string
-	paasDispatcher string
+	iam              string
+	audit            string
+	dispatcher       string
+	paas             string
+	paasDispatcher   string
+	devops           string
+	devopsDispatcher string
 }
 
 func buildAuthorityBinaries(
@@ -755,6 +819,11 @@ func buildAuthorityBinaries(
 		dispatcher:     build("matrix-iam-audit-dispatcher", "./app/service/iam/cmd/matrix-iam-audit-dispatcher"),
 		paas:           build("matrix-paas", "./app/service/paas/cmd/matrix-paas"),
 		paasDispatcher: build("matrix-paas-audit-dispatcher", "./app/service/paas/cmd/matrix-paas-audit-dispatcher"),
+		devops:         build("matrix-devops", "./app/service/devops/cmd/matrix-devops"),
+		devopsDispatcher: build(
+			"matrix-devops-audit-dispatcher",
+			"./app/service/devops/cmd/matrix-devops-audit-dispatcher",
+		),
 	}
 }
 
@@ -866,6 +935,7 @@ func waitHTTPStatus(
 type processResponse struct {
 	Status int
 	Body   []byte
+	Header http.Header
 }
 
 func performJSON(
@@ -885,6 +955,21 @@ func performJSONWithIdempotency(
 	endpoint string,
 	bearer string,
 	idempotencyKey string,
+	body any,
+) processResponse {
+	t.Helper()
+	return performJSONWithPreconditions(
+		t, method, endpoint, bearer, idempotencyKey, "", body,
+	)
+}
+
+func performJSONWithPreconditions(
+	t *testing.T,
+	method string,
+	endpoint string,
+	bearer string,
+	idempotencyKey string,
+	ifMatch string,
 	body any,
 ) processResponse {
 	t.Helper()
@@ -909,6 +994,9 @@ func performJSONWithIdempotency(
 	if idempotencyKey != "" {
 		request.Header.Set("Idempotency-Key", idempotencyKey)
 	}
+	if ifMatch != "" {
+		request.Header.Set("If-Match", ifMatch)
+	}
 	response, err := processHTTPClient().Do(request)
 	if err != nil {
 		t.Fatalf("call authority HTTP endpoint: %v", err)
@@ -918,7 +1006,9 @@ func performJSONWithIdempotency(
 	if err != nil {
 		t.Fatalf("read authority HTTP response: %v", err)
 	}
-	return processResponse{Status: response.StatusCode, Body: responseBody}
+	return processResponse{
+		Status: response.StatusCode, Body: responseBody, Header: response.Header.Clone(),
+	}
 }
 
 var authorityHTTPClient = newProcessHTTPClient()
@@ -1804,6 +1894,15 @@ func assertAuthorityPlaintextAbsent(
 					 WHERE document::text LIKE '%' || $1 || '%'
 				)
 				OR EXISTS (
+					SELECT 1 FROM delivery.audit_outbox
+					 WHERE document::text LIKE '%' || $1 || '%'
+				)
+				OR EXISTS (
+					SELECT 1 FROM delivery.mutations
+					 WHERE document::text LIKE '%' || $1 || '%'
+					    OR result_document::text LIKE '%' || $1 || '%'
+				)
+				OR EXISTS (
 					SELECT 1 FROM audit.records
 					 WHERE event_document::text LIKE '%' || $1 || '%'
 					    OR canonical_document LIKE '%' || $1 || '%'
@@ -1859,7 +1958,7 @@ func processBootstrap(t *testing.T) iamv1.BootstrapDocument {
 		},
 		Services: []iamv1.BootstrapServiceCredential{
 			service(iamv1.ServiceIAM, "service-iam", iamServiceCredential),
-			service(iamv1.ServicePlatform, "service-platform", "mx1.PlatformProcessCredential0000000000000001"),
+			service(iamv1.ServicePlatform, "service-platform", platformServiceCredential),
 			service(iamv1.ServicePaaS, "service-paas", paasServiceCredential),
 			service(iamv1.ServiceAudit, "service-audit", auditServiceCredential),
 			service(iamv1.ServiceInstallationVerifier, "service-verifier", verifierCredential),
@@ -1898,16 +1997,17 @@ func assertPostgres18(t *testing.T, ctx context.Context, admin *pgx.Conn) {
 
 func assertCleanSchemas(t *testing.T, ctx context.Context, admin *pgx.Conn) {
 	t.Helper()
-	var iamExists, auditExists, paasExists bool
+	var iamExists, auditExists, paasExists, deliveryExists bool
 	if err := admin.QueryRow(
 		ctx,
 		`SELECT to_regnamespace('iam') IS NOT NULL,
 		        to_regnamespace('audit') IS NOT NULL,
-		        to_regnamespace('paas') IS NOT NULL`,
-	).Scan(&iamExists, &auditExists, &paasExists); err != nil {
+		        to_regnamespace('paas') IS NOT NULL,
+		        to_regnamespace('delivery') IS NOT NULL`,
+	).Scan(&iamExists, &auditExists, &paasExists, &deliveryExists); err != nil {
 		t.Fatalf("inspect platform process schemas: %v", err)
 	}
-	if iamExists || auditExists || paasExists {
+	if iamExists || auditExists || paasExists || deliveryExists {
 		t.Fatal("platform process integration database is not clean")
 	}
 }
@@ -1924,6 +2024,9 @@ func applyPlatformSchemas(
 	if err := auditmigration.Bootstrap(ctx, admin); err != nil {
 		t.Fatalf("bootstrap platform Audit schema: %v", err)
 	}
+	if err := devopsmigration.Bootstrap(ctx, admin); err != nil {
+		t.Fatalf("bootstrap platform DevOps schema: %v", err)
+	}
 	if err := iammigration.Up(ctx, admin); err != nil {
 		t.Fatalf("apply platform IAM schema: %v", err)
 	}
@@ -1933,6 +2036,9 @@ func applyPlatformSchemas(
 	if err := paasmigration.Up(ctx, admin); err != nil {
 		t.Fatalf("apply platform PaaS schema: %v", err)
 	}
+	if err := devopsmigration.Up(ctx, admin); err != nil {
+		t.Fatalf("apply platform DevOps schema: %v", err)
+	}
 	if err := iammigration.Verify(ctx, admin); err != nil {
 		t.Fatalf("verify platform IAM schema: %v", err)
 	}
@@ -1941,6 +2047,9 @@ func applyPlatformSchemas(
 	}
 	if err := paasmigration.Verify(ctx, admin); err != nil {
 		t.Fatalf("verify platform PaaS schema: %v", err)
+	}
+	if err := devopsmigration.Verify(ctx, admin); err != nil {
+		t.Fatalf("verify platform DevOps schema: %v", err)
 	}
 }
 
@@ -1955,6 +2064,8 @@ func createProcessLogins(t *testing.T, ctx context.Context, admin *pgx.Conn) {
 		{auditRuntimeLogin, "matrix_audit_runtime"},
 		{paasAPILogin, "matrix_paas_api"},
 		{paasWorkerLogin, "matrix_paas_worker"},
+		{devopsAPILogin, "matrix_devops_api"},
+		{devopsWorkerLogin, "matrix_devops_worker"},
 	} {
 		statement := fmt.Sprintf(`DO $matrix_process_role$
 		BEGIN
@@ -2140,6 +2251,12 @@ func assertCrossSchemaIsolation(
 		{iamWorkerLogin, "SELECT * FROM paas.audit_outbox_snapshot()"},
 		{auditRuntimeLogin, "SELECT * FROM iam.bootstrap_status()"},
 		{auditRuntimeLogin, "SELECT * FROM paas.readiness()"},
+		{devopsAPILogin, "SELECT * FROM iam.bootstrap_status()"},
+		{devopsAPILogin, "SELECT * FROM audit.readiness()"},
+		{devopsWorkerLogin, "SELECT * FROM paas.readiness()"},
+		{paasAPILogin, "SELECT * FROM delivery.readiness()"},
+		{iamAPILogin, "SELECT * FROM delivery.readiness()"},
+		{auditRuntimeLogin, "SELECT * FROM delivery.readiness()"},
 	} {
 		config := adminConfig.Copy()
 		config.User = attack.login

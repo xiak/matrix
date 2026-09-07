@@ -3,7 +3,7 @@
 - Status: In progress; UX, architecture, donor analysis, implementation
   baseline, Gate A project/Pipeline/source-resource contract, domain,
   configuration transaction/persistence, and shared authority slices complete;
-  HTTP integration and run lifecycle pending
+  configuration HTTP/process integration complete; run lifecycle pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -441,9 +441,18 @@ commit it, and only then uses the migration identity to idempotently enroll
 `service-devops`; existing installations converge directly. Runtime roles
 cannot call the release-service enrollment functions.
 
+The real authority-process gate now builds and starts IAM, Audit, Application
+PaaS, DevOps, and all three Audit dispatchers against one clean PostgreSQL 18
+database. A real caller session creates a DevOps project, source connection,
+repository binding, Pipeline draft, and immutable revision over HTTP. The gate
+proves equal and conflicting command replay, exact ETags and nested revision
+reads, cross-parent concealment, IAM-derived tenant and actor identity, DevOps
+Viewer read-only access, IAM-outage readiness, five correlated DevOps Audit
+facts, cross-schema role confinement, and unchanged PaaS behavior.
+
 These slices do not complete Gate A. SourceEvent, PipelineRun, logs,
-replay/cancellation/lease/fence/reconciliation, quota, pagination, and the real
-cross-process HTTP journey remain pending.
+replay/cancellation/lease/fence/reconciliation, quota, and pagination remain
+pending.
 
 Current verification evidence:
 
@@ -463,6 +472,10 @@ Current verification evidence:
   reactivation
 - strict DevOps HTTP, IAM HTTP, Audit HTTP, outbox-dispatch, product discovery,
   signed topology-selection, and release-assembly tests
+- real PostgreSQL 18 authority-process journey across IAM, Audit, PaaS,
+  DevOps, and their Audit dispatchers, including authorization denial,
+  idempotency conflict, immutable revision reads, readiness failure, and exact
+  Audit correlation
 - real PostgreSQL 18 configuration journeys proving double apply, exact
   runtime identities, forced cross-tenant isolation, function-only API writes,
   a table-blind worker, immutable binding/revision history, sanitized Audit
