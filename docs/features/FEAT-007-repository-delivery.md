@@ -2,8 +2,9 @@
 
 - Status: In progress; UX, architecture, donor analysis, implementation
   baseline, Gate A project/Pipeline/source-resource contract, domain,
-  configuration transaction/persistence, and shared authority slices complete;
-  configuration HTTP/process integration complete; run lifecycle pending
+  configuration transaction/persistence, shared authority, durable run
+  admission, and authenticated Gitea ingress slices complete; run lifecycle
+  pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -239,6 +240,28 @@ replay authority. One fetch token and one status-report token are separately
 scoped to the bound repository. The adapter accepts no form body, compatibility
 header fallback, payload secret, provider membership, provider role, or raw
 provider object as Matrix authority.
+
+The northbound ingress is
+`POST /api/devops/v1/source-ingress/{tenantId}/{sourceConnectionId}`. The path
+values select an exact SourceConnection and its verification key; they grant no
+tenant or user authority. A higher-priority APISIX route removes bearer,
+caller-authority, idempotency, precondition, correlation, and trace headers
+before forwarding, while the normal DevOps API route continues to carry the
+caller Bearer credential to IAM. The service assigns the request and Audit
+correlation identity, returns `204` only after the admission transaction
+commits, gives equal replay the same response, and maps changed replay, stale
+configuration, queue exhaustion, and temporary dependency failure to closed
+`409`, `412`, `429`, and `503` outcomes.
+
+An installed DevOps product owns a read-only
+`secrets/devops/source-webhooks` runtime mount. Each tenant plus opaque webhook
+secret reference is length-framed and SHA-256-derived into one portable
+directory name; the directory contains a mandatory `current` and optional
+distinct `previous` value. Values are 32--128 visible ASCII bytes in private
+regular files, never environment variables or URL components. A missing
+connection or missing key has the same unauthenticated outcome as a forged
+signature; unsafe files, invalid key material, or backend failure make ingress
+unavailable without exposing a path or secret.
 
 The source adapter fetches only the binding's immutable head and trusted base
 commits with system/global Git configuration, hooks, redirects, submodules,
@@ -500,9 +523,30 @@ limit, while a tenant-scoped transaction lock plus serializable retry prevents
 concurrent fan-out from exceeding it. API and worker roles cannot directly
 write admission tables or read the internal generalized Audit-operation table.
 
-These slices do not complete Gate A. The authenticated provider adapter, run
-state transitions, logs, manual replay/cancellation, lease/fence/reconciliation,
-remaining quotas, and pagination remain pending.
+The authenticated ingress slice adds a provider-neutral orchestration boundary
+in front of that transaction and a fixed Gitea `1.27.3` adapter behind it. The
+adapter authenticates the untouched body against both rotation candidates
+before interpreting JSON, rejects duplicate keys at any depth and bounded JSON
+complexity, and accepts only the fixed delivery UUID, event, actions,
+repository identity, HTTPS origins, object format, exact head/base commits, and
+target branch. It emits no provider user, role, label, URL, or raw object.
+Admission compares both the SourceConnection resource version used for HMAC
+verification and the payload target branch with the current binding inside the
+serializable transaction, closing secret-rotation and branch-retarget races;
+equal replay still returns before mutable readiness or Pipeline state is used.
+
+The runtime now wires the Gitea adapter, installation-owned file resolver,
+tenant-isolated PostgreSQL SourceConnection read, and existing atomic admission
+use case into the DevOps HTTP service. The selected release creates and mounts
+the private source-secret root and exposes the isolated APISIX webhook route;
+an installation without DevOps receives none of those resources. The
+provider-native ingress remains an adapter protocol and is deliberately absent
+from the provider-neutral public resource OpenAPI.
+
+These slices do not complete Gate A. Run state transitions, source health
+reconciliation and operator secret provisioning experience, logs, manual
+replay/cancellation,
+lease/fence/reconciliation, remaining quotas, and pagination remain pending.
 
 Current verification evidence:
 
@@ -535,6 +579,15 @@ Current verification evidence:
   changed-replay conflict, atomic queue rejection, cross-tenant concealment,
   and exactly one success when two two-run events concurrently contend at 30
   queued runs; the same scenario passed on five additional fresh instances
+- fixed Gitea adapter tests, five-second authenticated-payload fuzzing, and
+  HTTP tests proving current/previous HMAC keys,
+  authentication-before-decoding, duplicate/case-folded key rejection,
+  provider-field minimization, endpoint-origin and object-format binding,
+  exact closed HTTP outcomes, 1 MiB enforcement, and IAM-header isolation
+- real PostgreSQL 18 ingress journey from a private file key through signed
+  Gitea normalization and tenant-scoped SourceConnection read to atomic
+  two-Pipeline fan-out, equal replay after mutable configuration becomes
+  pending, and signed changed-payload conflict
 - data-bearing migration reapply preserving 13 configuration mutations,
   16 SourceEvents, 32 PipelineRuns, and 61 generalized Audit operations/outbox
   facts, plus the real Audit authority accepting the two closed DevOps actions

@@ -16,7 +16,7 @@ import (
 )
 
 func TestInstalledCompilerReproducesAcceptedProductlessTopology(t *testing.T) {
-	if actual := ContractDigest(); actual != "sha256:d48a0b64e7075fc90610de46e373bfdf8fdc504fbdbe49f7a74b101c1eb255c6" {
+	if actual := ContractDigest(); actual != "sha256:30ce7581c502fc2147c176c794f05af3ea0780ab668068e1065da82e2cbc5773" {
 		t.Fatalf("current topology contract digest drifted: %s", actual)
 	}
 	if actual := legacyProductlessImplementationDigest(); actual != legacyProductlessContractDigest {
@@ -122,6 +122,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	foundDockerSocket := false
 	foundPostgresData := false
 	foundAPISIXRuntimeBoundary := false
+	foundDevOpsSourceSecrets := false
 	expectedEntrypoints := map[string]string{
 		"audit":                   "/matrix/bin/matrix-audit",
 		"devops-api":              "/matrix/bin/matrix-devops",
@@ -147,6 +148,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 		"devops-api": {
 			"MATRIX_DEVOPS_DATABASE_DSN_FILE", "MATRIX_DEVOPS_IAM_ENDPOINT",
 			"MATRIX_DEVOPS_LISTEN_ADDRESS", "MATRIX_DEVOPS_SERVICE_CREDENTIAL_FILE",
+			"MATRIX_DEVOPS_WEBHOOK_SECRET_ROOT",
 		},
 		"devops-audit-dispatcher": {
 			"MATRIX_DEVOPS_AUDIT_CREDENTIAL_FILE", "MATRIX_DEVOPS_AUDIT_DATABASE_DSN_FILE",
@@ -376,6 +378,9 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 				if name == "postgres" && source == options.Root+"/data/postgres" {
 					foundPostgresData = target == "/var/lib/postgresql" && mount["read_only"] != true
 				}
+				if name == "devops-api" && source == options.Root+"/secrets/devops/source-webhooks" {
+					foundDevOpsSourceSecrets = target == "/run/matrix/devops-source-secrets" && mount["read_only"] == true
+				}
 			}
 			if name == "apisix" {
 				expected := map[string]struct {
@@ -412,11 +417,11 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 		}
 	}
 	if portCount != 1 || !foundExecutorRoot || !foundDockerSocket || !foundPostgresData ||
-		!foundAPISIXRuntimeBoundary {
+		!foundAPISIXRuntimeBoundary || !foundDevOpsSourceSecrets {
 		t.Fatalf(
-			"platform capability closure: ports=%d executor=%t socket=%t postgres-data=%t apisix=%t",
+			"platform capability closure: ports=%d executor=%t socket=%t postgres-data=%t apisix=%t devops-source-secrets=%t",
 			portCount, foundExecutorRoot, foundDockerSocket, foundPostgresData,
-			foundAPISIXRuntimeBoundary,
+			foundAPISIXRuntimeBoundary, foundDevOpsSourceSecrets,
 		)
 	}
 	encoded := string(result.ComposeJSON)

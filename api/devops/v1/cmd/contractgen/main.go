@@ -544,6 +544,7 @@ func applySemanticOverlays(schemas object) {
 		problemStatusRule(devopsv1.ErrorNotFound, []int{404}),
 		problemStatusRule(devopsv1.ErrorMethodNotAllowed, []int{405}),
 		problemStatusRule(devopsv1.ErrorConflict, []int{409}),
+		problemStatusRule(devopsv1.ErrorResourceExhausted, []int{429}),
 		problemStatusRule(devopsv1.ErrorPayloadTooLarge, []int{413}),
 		problemStatusRule(devopsv1.ErrorUnsupportedMediaType, []int{415}),
 		problemStatusRule(devopsv1.ErrorPreconditionRequired, []int{428}),

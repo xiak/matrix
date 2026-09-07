@@ -55,7 +55,7 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 	}
 	for _, optional := range []string{
 		layout.DevOpsIAMCredential, layout.DevOpsAuditCredential,
-		layout.DevOpsAPI, layout.DevOpsWorker,
+		layout.DevOpsAPI, layout.DevOpsWorker, layout.DevOpsSourceSecretRoot,
 	} {
 		if _, err := os.Lstat(filepath.Join(plan.Root, filepath.FromSlash(optional))); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("unselected DevOps secret %q exists or cannot be inspected: %v", optional, err)
@@ -270,6 +270,11 @@ func TestStageDevOpsProductCredentialsAreSelectedAndStable(t *testing.T) {
 		validateDatabaseDSN(string(workerDSN), "matrix_devops_worker_login") != nil {
 		t.Fatal("DevOps database identities are invalid")
 	}
+	secretRoot := filepath.Join(plan.Root, filepath.FromSlash(layout.DevOpsSourceSecretRoot))
+	if info, err := os.Lstat(secretRoot); err != nil || !info.IsDir() ||
+		(runtime.GOOS != "windows" && info.Mode().Perm() != 0o700) {
+		t.Fatalf("selected DevOps source-secret root is unsafe: %v / %#v", err, info)
+	}
 	before := map[string]string{
 		layout.DevOpsIAMCredential:   string(iamCredential),
 		layout.DevOpsAuditCredential: string(auditCredential),
@@ -296,10 +301,23 @@ func TestStageDevOpsProductCredentialsAreSelectedAndStable(t *testing.T) {
 	}
 	routes := apisixStandaloneConfig(plan.Bundle.Manifest)
 	compose := compiled.ComposeJSON
-	if !bytes.Contains(routes, []byte("id: matrix-devops")) ||
+	sourceRouteStart := bytes.Index(routes, []byte("id: matrix-devops-source-ingress"))
+	devOpsRouteStart := bytes.Index(routes, []byte("id: matrix-devops\n"))
+	uiRouteStart := bytes.Index(routes, []byte("id: matrix-ui"))
+	if sourceRouteStart < 0 || devOpsRouteStart <= sourceRouteStart || uiRouteStart <= devOpsRouteStart ||
+		!bytes.Contains(routes[sourceRouteStart:devOpsRouteStart], []byte("- Authorization")) ||
+		bytes.Contains(routes[devOpsRouteStart:uiRouteStart], []byte("- Authorization")) {
+		t.Fatal("DevOps webhook and IAM API authority headers are not isolated")
+	}
+	if !bytes.Contains(routes, []byte("id: matrix-devops-source-ingress")) ||
+		!bytes.Contains(routes, []byte("priority: 200")) ||
+		!bytes.Contains(routes, []byte("- Authorization")) ||
+		!bytes.Contains(routes, []byte("id: matrix-devops")) ||
 		!bytes.Contains(routes, []byte(`"devops-api:8080": 1`)) ||
 		!bytes.Contains(compose, []byte(`"devops-api"`)) ||
-		!bytes.Contains(compose, []byte(`"devops-audit-dispatcher"`)) {
+		!bytes.Contains(compose, []byte(`"devops-audit-dispatcher"`)) ||
+		!bytes.Contains(compose, []byte(`"MATRIX_DEVOPS_WEBHOOK_SECRET_ROOT"`)) ||
+		!bytes.Contains(compose, []byte(`/run/matrix/devops-source-secrets`)) {
 		t.Fatal("selected DevOps product is absent from compiled installation configuration")
 	}
 }

@@ -25,8 +25,9 @@ func TestHandlerReadinessIsAnonymousExactAndSanitized(t *testing.T) {
 		SchemaVersion: 1, CheckedAt: time.Date(2026, 9, 8, 4, 5, 6, 789_000, time.UTC),
 	}
 	handler, err := NewHandler(&fakeAuthorizer{}, newFakeWorkflow(t), Config{
-		Readiness:    func(context.Context) (devopsv1.Readiness, error) { return readiness, readyErr },
-		NewRequestID: func() (string, error) { return "request-test", nil },
+		Readiness:     func(context.Context) (devopsv1.Readiness, error) { return readiness, readyErr },
+		NewRequestID:  func() (string, error) { return "request-test", nil },
+		SourceIngress: &fakeSourceIngress{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -235,8 +236,9 @@ func mustHandler(t *testing.T, authorizer *fakeAuthorizer, workflow *fakeWorkflo
 		SchemaVersion: 1, CheckedAt: time.Date(2026, 9, 8, 4, 5, 6, 0, time.UTC),
 	}
 	handler, err := NewHandler(authorizer, workflow, Config{
-		Readiness:    func(context.Context) (devopsv1.Readiness, error) { return readiness, nil },
-		NewRequestID: func() (string, error) { return "request-test", nil },
+		Readiness:     func(context.Context) (devopsv1.Readiness, error) { return readiness, nil },
+		NewRequestID:  func() (string, error) { return "request-test", nil },
+		SourceIngress: &fakeSourceIngress{},
 	})
 	if err != nil {
 		t.Fatal(err)

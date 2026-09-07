@@ -13,6 +13,7 @@ import (
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/pipelineconfiguration"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runadmission"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/sourceingress"
 )
 
 var (
@@ -20,6 +21,7 @@ var (
 	_ pipelineconfiguration.Transaction = (*configurationTransaction)(nil)
 	_ runadmission.Repository           = (*ControlPlaneRepository)(nil)
 	_ runadmission.Transaction          = (*admissionTransaction)(nil)
+	_ sourceingress.ConnectionReader    = (*ControlPlaneRepository)(nil)
 )
 
 // ControlPlaneRepository owns configuration and authenticated source-admission

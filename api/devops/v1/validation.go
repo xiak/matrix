@@ -151,6 +151,12 @@ func ValidateRepositoryBindingSpec(value RepositoryBindingSpec) error {
 	)
 }
 
+// ValidateTrustedDefaultBranch exposes the same closed branch-name contract to
+// provider adapters without making provider payload types part of this API.
+func ValidateTrustedDefaultBranch(value string) error {
+	return validateTrustedBranch(value)
+}
+
 func ValidateRepositoryBindingStatus(value RepositoryBindingStatus) error {
 	if !contains(RepositoryBindingHealthStates(), value.Health) {
 		return errors.New("repository binding health is invalid")
@@ -601,6 +607,8 @@ func errorCodeAcceptsStatus(code ErrorCode, status int) bool {
 		return status == 405
 	case ErrorConflict:
 		return status == 409
+	case ErrorResourceExhausted:
+		return status == 429
 	case ErrorPayloadTooLarge:
 		return status == 413
 	case ErrorUnsupportedMediaType:

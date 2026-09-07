@@ -217,6 +217,7 @@
           "NOT_FOUND",
           "METHOD_NOT_ALLOWED",
           "CONFLICT",
+          "RESOURCE_EXHAUSTED",
           "PAYLOAD_TOO_LARGE",
           "UNSUPPORTED_MEDIA_TYPE",
           "PRECONDITION_REQUIRED",
@@ -1118,6 +1119,27 @@
                 "status": {
                   "enum": [
                     409
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "code": {
+                  "const": "RESOURCE_EXHAUSTED"
+                }
+              },
+              "required": [
+                "code"
+              ]
+            },
+            "then": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    429
                   ]
                 }
               }

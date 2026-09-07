@@ -315,7 +315,8 @@ func admissionCommand() Command {
 	return Command{
 		Change: domain.NormalizedChange{
 			Scope:              devopsv1.ResourceScope{TenantID: "organization-acme"},
-			SourceConnectionID: "source-connection-primary", ExternalRepositoryID: "42",
+			SourceConnectionID: "source-connection-primary", VerifiedSourceConnectionVersion: 1,
+			ExternalRepositoryID: "42", TrustedBaseBranch: "main",
 			DeliveryID:             "123e4567-e89b-42d3-a456-426614174000",
 			CanonicalPayloadDigest: "sha256:" + strings.Repeat("a", 64),
 			Change: devopsv1.ChangeIdentity{

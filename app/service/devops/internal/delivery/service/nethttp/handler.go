@@ -10,6 +10,8 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/port"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/pipelineconfiguration"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runadmission"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/sourceingress"
 )
 
 type Workflow interface {
@@ -29,13 +31,19 @@ type Workflow interface {
 }
 
 type Config struct {
-	Readiness    func(context.Context) (devopsv1.Readiness, error)
-	NewRequestID func() (string, error)
+	Readiness     func(context.Context) (devopsv1.Readiness, error)
+	NewRequestID  func() (string, error)
+	SourceIngress SourceIngress
+}
+
+type SourceIngress interface {
+	Receive(context.Context, sourceingress.Command) (runadmission.Result, error)
 }
 
 type handler struct {
 	authorizer port.Authorizer
 	workflow   Workflow
+	ingress    SourceIngress
 	config     Config
 	routes     *http.ServeMux
 }
@@ -46,19 +54,20 @@ func NewHandler(authorizer port.Authorizer, workflow Workflow, config Config) (h
 	if authorizer == nil || workflow == nil {
 		return nil, errors.New("DevOps HTTP Authorizer and workflow are required")
 	}
-	if config.Readiness == nil {
-		return nil, errors.New("DevOps HTTP readiness check is required")
+	if config.Readiness == nil || config.SourceIngress == nil {
+		return nil, errors.New("DevOps HTTP readiness and source ingress are required")
 	}
 	if config.NewRequestID == nil {
 		config.NewRequestID = newRequestID
 	}
-	value := &handler{authorizer: authorizer, workflow: workflow, config: config}
+	value := &handler{authorizer: authorizer, workflow: workflow, ingress: config.SourceIngress, config: config}
 	routes := http.NewServeMux()
 	routes.HandleFunc("/ready", value.ready)
 	routes.HandleFunc("/v1/projects", value.projects)
 	routes.HandleFunc("/v1/projects/{projectId}", value.project)
 	routes.HandleFunc("/v1/source-connections", value.sourceConnections)
 	routes.HandleFunc("/v1/source-connections/{sourceConnectionId}", value.sourceConnection)
+	routes.HandleFunc("/v1/source-ingress/{tenantId}/{sourceConnectionId}", value.sourceWebhook)
 	routes.HandleFunc("/v1/repository-bindings", value.repositoryBindings)
 	routes.HandleFunc("/v1/repository-bindings/{repositoryBindingId}", value.repositoryBinding)
 	routes.HandleFunc("/v1/pipelines", value.pipelines)

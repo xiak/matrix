@@ -2,11 +2,15 @@ package postgres_test
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -18,12 +22,15 @@ import (
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/gitea"
 	devopspostgres "github.com/xiak/matrix/app/service/devops/internal/delivery/data/postgres"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/webhooksecretfile"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/domain"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/port"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/auditdispatch"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/pipelineconfiguration"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runadmission"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/sourceingress"
 	devopsmigration "github.com/xiak/matrix/app/service/devops/migration"
 )
 
@@ -110,6 +117,7 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 	}
 
 	bindingOne := bindingRequest("binding-integration-one", projectID, connectionID, "matrix/service")
+	bindingOne.Spec.ExternalRepositoryID = "42"
 	bindingOneResult, err := usecase.CreateRepositoryBinding(ctx, pipelineconfiguration.CreateRepositoryBindingCommand{
 		Authorization: auth(iamv1.ActionDevOpsRepositoryBindingCreate, iamv1.ResourceRepositoryBinding, bindingOne.ID),
 		Request:       bindingOne, IdempotencyKey: "create-binding-integration-one",
@@ -204,6 +212,19 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		WHERE tenant_id = 'tenant-one' AND id = $1`, bindingOne.ID); err != nil {
 		t.Fatalf("mark repository binding fixture ready: %v", err)
 	}
+	ingressConnection, found, err := repository.ReadSourceConnection(
+		ctx, devopsv1.ResourceScope{TenantID: "tenant-one"}, connectionID,
+	)
+	if err != nil || !found || ingressConnection.Metadata.ResourceVersion != 2 ||
+		ingressConnection.Spec.WebhookSecretRef != rotated.WebhookSecretRef ||
+		ingressConnection.Status.Health != devopsv1.SourceConnectionReady {
+		t.Fatalf("read endpoint-bound SourceConnection=%#v found=%t err=%v", ingressConnection, found, err)
+	}
+	if _, found, err := repository.ReadSourceConnection(
+		ctx, devopsv1.ResourceScope{TenantID: "tenant-other"}, connectionID,
+	); err != nil || found {
+		t.Fatalf("cross-tenant source ingress read found=%t err=%v", found, err)
+	}
 	admissionUsecase, err := runadmission.NewUsecase(
 		repository,
 		runadmission.Config{MaxTransactionAttempts: 5},
@@ -211,12 +232,32 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	firstAdmissionCommand := sourceAdmissionCommand(
-		connectionID,
-		updatedBinding.Value.Spec.ExternalRepositoryID,
-		"123e4567-e89b-42d3-a456-426614174001",
+	secretRoot := t.TempDir()
+	secretDirectory, err := webhooksecretfile.DirectoryName(
+		devopsv1.ResourceScope{TenantID: "tenant-one"}, rotated.WebhookSecretRef,
 	)
-	firstAdmission, err := admissionUsecase.Admit(ctx, firstAdmissionCommand)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(secretRoot, secretDirectory), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	webhookSecret := []byte("integration-webhook-secret-000000001")
+	if err := os.WriteFile(filepath.Join(secretRoot, secretDirectory, "current"), webhookSecret, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	secretResolver, err := webhooksecretfile.NewResolver(secretRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ingressUsecase, err := sourceingress.NewUsecase(
+		repository, secretResolver, admissionUsecase, gitea.NewAdapter(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstAdmissionCommand := signedGiteaIngressCommand(webhookSecret, false)
+	firstAdmission, err := ingressUsecase.Receive(ctx, firstAdmissionCommand)
 	if err != nil || firstAdmission.Replayed || len(firstAdmission.Admission.Runs) != 2 {
 		t.Fatalf("admit first source event=%#v err=%v", firstAdmission, err)
 	}
@@ -224,15 +265,14 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		firstAdmission.Admission.Runs[1].PipelineID != secondaryPipelineID {
 		t.Fatalf("persisted run fan-out=%#v", firstAdmission.Admission.Runs)
 	}
-	equalReplay, err := admissionUsecase.Admit(ctx, firstAdmissionCommand)
+	equalReplay, err := ingressUsecase.Receive(ctx, firstAdmissionCommand)
 	if err != nil || !equalReplay.Replayed ||
 		equalReplay.Admission.Event != firstAdmission.Admission.Event ||
 		len(equalReplay.Admission.Runs) != len(firstAdmission.Admission.Runs) {
 		t.Fatalf("equal source replay=%#v err=%v", equalReplay, err)
 	}
-	changedReplay := firstAdmissionCommand
-	changedReplay.Change.CanonicalPayloadDigest = "sha256:" + strings.Repeat("b", 64)
-	if _, err := admissionUsecase.Admit(ctx, changedReplay); !errors.Is(err, runadmission.ErrReplayConflict) {
+	changedReplay := signedGiteaIngressCommand(webhookSecret, true)
+	if _, err := ingressUsecase.Receive(ctx, changedReplay); !errors.Is(err, runadmission.ErrReplayConflict) {
 		t.Fatalf("changed source replay error=%v", err)
 	}
 
@@ -317,7 +357,7 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		WHERE tenant_id = 'tenant-one' AND id = $1`, bindingOne.ID); err != nil {
 		t.Fatalf("make admitted repository binding unavailable: %v", err)
 	}
-	replayAfterDraftReplacement, err := admissionUsecase.Admit(ctx, firstAdmissionCommand)
+	replayAfterDraftReplacement, err := ingressUsecase.Receive(ctx, firstAdmissionCommand)
 	if err != nil || !replayAfterDraftReplacement.Replayed ||
 		len(replayAfterDraftReplacement.Admission.Runs) != 2 {
 		t.Fatalf("replay after mutable draft replacement=%#v err=%v", replayAfterDraftReplacement, err)
@@ -554,17 +594,65 @@ func sourceAdmissionCommand(
 ) runadmission.Command {
 	return runadmission.Command{
 		Change: domain.NormalizedChange{
-			Scope:                  devopsv1.ResourceScope{TenantID: "tenant-one"},
-			SourceConnectionID:     connectionID,
-			ExternalRepositoryID:   externalRepositoryID,
-			DeliveryID:             deliveryID,
-			CanonicalPayloadDigest: "sha256:" + strings.Repeat("a", 64),
+			Scope:                           devopsv1.ResourceScope{TenantID: "tenant-one"},
+			SourceConnectionID:              connectionID,
+			VerifiedSourceConnectionVersion: 2,
+			ExternalRepositoryID:            externalRepositoryID,
+			TrustedBaseBranch:               "release",
+			DeliveryID:                      deliveryID,
+			CanonicalPayloadDigest:          "sha256:" + strings.Repeat("a", 64),
 			Change: devopsv1.ChangeIdentity{
 				Number: 42, Action: devopsv1.ChangeUpdated,
 				HeadCommit:        strings.Repeat("1", 40),
 				TrustedBaseCommit: strings.Repeat("2", 40),
 			},
 		},
+		RequestID: "request-admission-integration", CorrelationID: "correlation-admission-integration",
+		TraceParent: "00-5bf92f3577b34da6a3ce929d0e0e4736-10f067aa0ba902b7-01",
+	}
+}
+
+func signedGiteaIngressCommand(secret []byte, changed bool) sourceingress.Command {
+	extra := ""
+	if changed {
+		extra = `,"sender":{"id":99,"login":"ignored-provider-user"}`
+	}
+	body := []byte(fmt.Sprintf(`{
+  "action":"synchronized",
+  "number":42,
+  "repository":{
+    "id":42,
+    "full_name":"matrix/service",
+    "url":"https://gitea.example.com/api/v1/repos/matrix/service",
+    "html_url":"https://gitea.example.com/matrix/service",
+    "clone_url":"https://gitea.example.com/matrix/service.git",
+    "object_format_name":"sha1"
+  },
+  "pull_request":{
+    "number":42,
+    "base":{
+      "ref":"release",
+      "sha":"%s",
+      "repo_id":42,
+      "repo":{
+        "id":42,
+        "full_name":"matrix/service",
+        "url":"https://gitea.example.com/api/v1/repos/matrix/service",
+        "html_url":"https://gitea.example.com/matrix/service",
+        "clone_url":"https://gitea.example.com/matrix/service.git",
+        "object_format_name":"sha1"
+      }
+    },
+    "head":{"ref":"feature/change","sha":"%s","repo_id":77}
+  }%s
+}`, strings.Repeat("2", 40), strings.Repeat("1", 40), extra))
+	mac := hmac.New(sha256.New, secret)
+	_, _ = mac.Write(body)
+	return sourceingress.Command{
+		Scope:              devopsv1.ResourceScope{TenantID: "tenant-one"},
+		SourceConnectionID: "connection-integration", ProviderEvent: "pull_request",
+		DeliveryID: "123e4567-e89b-42d3-a456-426614174001",
+		Signature:  hex.EncodeToString(mac.Sum(nil)), Body: body,
 		RequestID: "request-admission-integration", CorrelationID: "correlation-admission-integration",
 		TraceParent: "00-5bf92f3577b34da6a3ce929d0e0e4736-10f067aa0ba902b7-01",
 	}

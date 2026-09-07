@@ -66,6 +66,11 @@ func TestAuthenticatedChangeCreatesImmutableEventAndQueuedRun(t *testing.T) {
 	if err := ValidateSourceEventReplay(event, change); err != nil {
 		t.Fatalf("equal SourceEvent replay: %v", err)
 	}
+	rotatedVerification := change
+	rotatedVerification.VerifiedSourceConnectionVersion++
+	if err := ValidateSourceEventReplay(event, rotatedVerification); err != nil {
+		t.Fatalf("connection rotation changed equal replay: %v", err)
+	}
 	changedFields := []struct {
 		name   string
 		change func(*NormalizedChange)
@@ -112,6 +117,18 @@ func TestSourceEventAdmissionFailsClosed(t *testing.T) {
 	mismatched.ExternalRepositoryID = "repository-other"
 	if _, err := NewSourceEvent(mismatched, connection, binding, receivedAt); !errors.Is(err, ErrReferenceMismatch) {
 		t.Fatalf("repository mismatch error=%v", err)
+	}
+
+	staleConnection := change
+	staleConnection.VerifiedSourceConnectionVersion++
+	if _, err := NewSourceEvent(staleConnection, connection, binding, receivedAt); !errors.Is(err, ErrReferenceMismatch) {
+		t.Fatalf("source connection version mismatch error=%v", err)
+	}
+
+	wrongBase := change
+	wrongBase.TrustedBaseBranch = "release/v2"
+	if _, err := NewSourceEvent(wrongBase, connection, binding, receivedAt); !errors.Is(err, ErrReferenceMismatch) {
+		t.Fatalf("trusted base branch mismatch error=%v", err)
 	}
 
 	if _, err := NewSourceEvent(change, connection, binding, domainTime().Add(-time.Minute)); !errors.Is(err, ErrInvalidTime) {
@@ -199,11 +216,13 @@ func readySource(t *testing.T) (devopsv1.SourceConnection, devopsv1.RepositoryBi
 
 func normalizedChange() NormalizedChange {
 	return NormalizedChange{
-		Scope:                  devopsv1.ResourceScope{TenantID: "organization-acme"},
-		SourceConnectionID:     "source-connection-primary",
-		ExternalRepositoryID:   "42",
-		DeliveryID:             "123e4567-e89b-42d3-a456-426614174000",
-		CanonicalPayloadDigest: "sha256:" + strings.Repeat("a", 64),
+		Scope:                           devopsv1.ResourceScope{TenantID: "organization-acme"},
+		SourceConnectionID:              "source-connection-primary",
+		VerifiedSourceConnectionVersion: 1,
+		ExternalRepositoryID:            "42",
+		TrustedBaseBranch:               "main",
+		DeliveryID:                      "123e4567-e89b-42d3-a456-426614174000",
+		CanonicalPayloadDigest:          "sha256:" + strings.Repeat("a", 64),
 		Change: devopsv1.ChangeIdentity{
 			Number: 42, Action: devopsv1.ChangeOpened,
 			HeadCommit:        strings.Repeat("1", 40),

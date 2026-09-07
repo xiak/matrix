@@ -110,6 +110,7 @@ const (
 	ErrorNotFound             ErrorCode = "NOT_FOUND"
 	ErrorMethodNotAllowed     ErrorCode = "METHOD_NOT_ALLOWED"
 	ErrorConflict             ErrorCode = "CONFLICT"
+	ErrorResourceExhausted    ErrorCode = "RESOURCE_EXHAUSTED"
 	ErrorPayloadTooLarge      ErrorCode = "PAYLOAD_TOO_LARGE"
 	ErrorUnsupportedMediaType ErrorCode = "UNSUPPORTED_MEDIA_TYPE"
 	ErrorPreconditionRequired ErrorCode = "PRECONDITION_REQUIRED"
@@ -218,6 +219,7 @@ func ErrorCodes() []ErrorCode {
 		ErrorNotFound,
 		ErrorMethodNotAllowed,
 		ErrorConflict,
+		ErrorResourceExhausted,
 		ErrorPayloadTooLarge,
 		ErrorUnsupportedMediaType,
 		ErrorPreconditionRequired,

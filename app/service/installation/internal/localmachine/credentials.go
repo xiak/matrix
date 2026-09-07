@@ -86,6 +86,11 @@ func stageInstallation(plan platformcommand.InstallPlan, entropy io.Reader) erro
 		}
 	}
 	if staged.Manifest.IncludesProduct(release.ProductDevOps) {
+		for _, directory := range []string{"secrets/devops", layout.DevOpsSourceSecretRoot} {
+			if _, err := ensureManagedDirectory(plan.Root, filepath.FromSlash(directory)); err != nil {
+				return err
+			}
+		}
 		credential, err := ensureGeneratedCredential(
 			plan.Root, layout.DevOpsIAMCredential, entropy, "mx1.", false,
 		)

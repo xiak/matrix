@@ -386,6 +386,31 @@ func apisixStandaloneConfig(manifest release.Manifest) []byte {
 	}
 	marker := []byte("  -\n    id: matrix-ui\n")
 	devopsRoute := []byte(`  -
+    id: matrix-devops-source-ingress
+    uri: /api/devops/v1/source-ingress/*
+    priority: 200
+    plugins:
+      proxy-rewrite:
+        regex_uri:
+          - "^/api/devops/(.*)"
+          - "/$1"
+        headers:
+          remove:
+            - Authorization
+            - Idempotency-Key
+            - If-Match
+            - Matrix-Correlation-ID
+            - Matrix-Subject-Credential
+            - Matrix-Tenant-ID
+            - X-Tenant-ID
+            - Matrix-Organization-ID
+            - X-Organization-ID
+            - traceparent
+    upstream:
+      type: roundrobin
+      nodes:
+        "devops-api:8080": 1
+  -
     id: matrix-devops
     uri: /api/devops/*
     plugins:

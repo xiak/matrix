@@ -17,12 +17,14 @@ var (
 // it has authenticated and bounded the untouched provider request. It carries
 // no provider user or role as Matrix authority.
 type NormalizedChange struct {
-	Scope                  devopsv1.ResourceScope
-	SourceConnectionID     devopsv1.ResourceID
-	ExternalRepositoryID   devopsv1.ResourceID
-	DeliveryID             string
-	CanonicalPayloadDigest string
-	Change                 devopsv1.ChangeIdentity
+	Scope                           devopsv1.ResourceScope
+	SourceConnectionID              devopsv1.ResourceID
+	VerifiedSourceConnectionVersion uint64
+	ExternalRepositoryID            devopsv1.ResourceID
+	TrustedBaseBranch               string
+	DeliveryID                      string
+	CanonicalPayloadDigest          string
+	Change                          devopsv1.ChangeIdentity
 }
 
 func NewSourceEvent(
@@ -39,8 +41,10 @@ func NewSourceEvent(
 		connection.Metadata.Scope != change.Scope ||
 		binding.Metadata.Scope != change.Scope ||
 		connection.Metadata.ID != change.SourceConnectionID ||
+		connection.Metadata.ResourceVersion != change.VerifiedSourceConnectionVersion ||
 		binding.Spec.SourceConnectionID != connection.Metadata.ID ||
-		binding.Spec.ExternalRepositoryID != change.ExternalRepositoryID {
+		binding.Spec.ExternalRepositoryID != change.ExternalRepositoryID ||
+		binding.Spec.TrustedDefaultBranch != change.TrustedBaseBranch {
 		return devopsv1.SourceEvent{}, ErrReferenceMismatch
 	}
 	if connection.Status.Health != devopsv1.SourceConnectionReady ||
@@ -85,8 +89,10 @@ func NewSourceEvent(
 }
 
 // ValidateSourceEventReplay compares only authenticated delivery content. It
-// deliberately ignores mutable configuration and the later receipt time so an
-// equal delivery returns the original admission after configuration changes.
+// deliberately ignores mutable configuration, the transient verified
+// connection version, and the later receipt time so an equal delivery returns
+// the original admission after configuration changes. The authenticated raw
+// payload digest already seals its transient target branch.
 func ValidateSourceEventReplay(event devopsv1.SourceEvent, change NormalizedChange) error {
 	if devopsv1.ValidateSourceEvent(event) != nil || ValidateNormalizedChange(change) != nil {
 		return ErrSourceEventReplayChanged
@@ -179,9 +185,14 @@ func ValidateNormalizedChange(value NormalizedChange) error {
 	if errors.Join(
 		identityErr,
 		devopsv1.ValidateID("externalRepositoryId", string(value.ExternalRepositoryID)),
+		devopsv1.ValidateTrustedDefaultBranch(value.TrustedBaseBranch),
 		devopsv1.ValidateDigest("canonicalPayloadDigest", value.CanonicalPayloadDigest),
 		devopsv1.ValidateChangeIdentity(value.Change),
 	) != nil {
+		return errors.New("normalized change is invalid")
+	}
+	if value.VerifiedSourceConnectionVersion == 0 ||
+		value.VerifiedSourceConnectionVersion > devopsv1.MaximumContractInteger {
 		return errors.New("normalized change is invalid")
 	}
 	return nil

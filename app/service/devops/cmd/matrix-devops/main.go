@@ -12,10 +12,14 @@ import (
 
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/gitea"
 	iamhttp "github.com/xiak/matrix/app/service/devops/internal/delivery/data/iamhttp"
 	devopspostgres "github.com/xiak/matrix/app/service/devops/internal/delivery/data/postgres"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/webhooksecretfile"
 	devopshttp "github.com/xiak/matrix/app/service/devops/internal/delivery/service/nethttp"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/pipelineconfiguration"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runadmission"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/sourceingress"
 	"github.com/xiak/matrix/app/service/internal/processconfig"
 	"github.com/xiak/matrix/app/service/internal/processhttp"
 )
@@ -24,6 +28,7 @@ const (
 	databaseDSNFileEnvironment       = "MATRIX_DEVOPS_DATABASE_DSN_FILE"
 	iamEndpointEnvironment           = "MATRIX_DEVOPS_IAM_ENDPOINT"
 	serviceCredentialFileEnvironment = "MATRIX_DEVOPS_SERVICE_CREDENTIAL_FILE"
+	webhookSecretRootEnvironment     = "MATRIX_DEVOPS_WEBHOOK_SECRET_ROOT"
 	listenAddressEnvironment         = "MATRIX_DEVOPS_LISTEN_ADDRESS"
 )
 
@@ -31,6 +36,7 @@ type configuration struct {
 	databaseDSNFile       string
 	iamEndpoint           string
 	serviceCredentialFile string
+	webhookSecretRoot     string
 	listenAddress         string
 }
 
@@ -90,7 +96,24 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	admission, err := runadmission.NewUsecase(
+		repository, runadmission.Config{MaxTransactionAttempts: 5},
+	)
+	if err != nil {
+		return err
+	}
+	secretResolver, err := webhooksecretfile.NewResolver(config.webhookSecretRoot)
+	if err != nil {
+		return err
+	}
+	ingress, err := sourceingress.NewUsecase(
+		repository, secretResolver, admission, gitea.NewAdapter(),
+	)
+	if err != nil {
+		return err
+	}
 	handler, err := devopshttp.NewHandler(authorizer, workflow, devopshttp.Config{
+		SourceIngress: ingress,
 		Readiness: func(readinessContext context.Context) (devopsv1.Readiness, error) {
 			readiness, checkErr := repository.Readiness(readinessContext)
 			if checkErr != nil || readiness.State != devopsv1.ReadinessReady {
@@ -113,10 +136,12 @@ func loadConfiguration() (configuration, error) {
 		databaseDSNFile:       os.Getenv(databaseDSNFileEnvironment),
 		iamEndpoint:           os.Getenv(iamEndpointEnvironment),
 		serviceCredentialFile: os.Getenv(serviceCredentialFileEnvironment),
+		webhookSecretRoot:     os.Getenv(webhookSecretRootEnvironment),
 		listenAddress:         os.Getenv(listenAddressEnvironment),
 	}
 	if config.databaseDSNFile == "" || config.iamEndpoint == "" ||
-		config.serviceCredentialFile == "" || config.listenAddress == "" {
+		config.serviceCredentialFile == "" || config.webhookSecretRoot == "" ||
+		config.listenAddress == "" {
 		return configuration{}, errors.New("DevOps process configuration is incomplete")
 	}
 	return config, nil

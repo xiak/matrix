@@ -372,6 +372,7 @@ func compileServices(
 	artifactCatalog := path.Join(root, layout.ArtifactCatalog)
 	executorRoot := path.Join(root, layout.ExecutorRoot)
 	workloadSecretRoot := path.Join(root, layout.WorkloadSecretRoot)
+	devopsSourceSecretRoot := path.Join(root, layout.DevOpsSourceSecretRoot)
 	service := func(
 		name string,
 		component string,
@@ -590,10 +591,12 @@ func compileServices(
 			"MATRIX_DEVOPS_IAM_ENDPOINT":            "http://iam:8080",
 			"MATRIX_DEVOPS_LISTEN_ADDRESS":          "0.0.0.0:8080",
 			"MATRIX_DEVOPS_SERVICE_CREDENTIAL_FILE": "/run/matrix/devops-iam-credential",
+			"MATRIX_DEVOPS_WEBHOOK_SECRET_ROOT":     "/run/matrix/devops-source-secrets",
 		}
 		devopsAPI.Volumes = []mount{
 			bind(devopsAPIDSN, "/run/matrix/devops-api-dsn", true),
 			bind(devopsIAMCredential, "/run/matrix/devops-iam-credential", true),
+			bind(devopsSourceSecretRoot, "/run/matrix/devops-source-secrets", true),
 		}
 		devopsAPI.DependsOn = healthy("postgres", "iam")
 
