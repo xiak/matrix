@@ -22,3 +22,17 @@ sources:
     paths:
       - docs/paas
     mode: redesign-for-independent-product
+  kubernetesProw:
+    repository: kubernetes-sigs/prow
+    commit: 1a000594c40919068dd43a5704f279f273135d18
+    paths:
+      - pkg/github
+      - pkg/hook
+      - pkg/plugins/trigger
+      - pkg/apis/prowjobs/v1
+      - pkg/plank
+      - pkg/scheduler
+      - pkg/crier
+      - pkg/pod-utils
+      - site/content/en/docs
+    mode: reference-and-selective-adaptation
