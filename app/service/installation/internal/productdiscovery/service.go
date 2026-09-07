@@ -98,14 +98,29 @@ func (service *Service) List(
 	}); err != nil {
 		return installationv1.InstalledProductList{}, err
 	}
-	observedAt := service.now().UTC().Truncate(time.Microsecond)
-	if !validClockTime(observedAt) {
+	startedAt := service.now().UTC().Truncate(time.Microsecond)
+	if !validClockTime(startedAt) {
 		return installationv1.InstalledProductList{}, ErrUnavailable
 	}
-	products := make([]installationv1.InstalledProduct, 0, len(service.products))
+	type observedProduct struct {
+		observation ProductObservation
+		err         error
+	}
+	observations := make([]observedProduct, 0, len(service.products))
 	for _, declared := range service.products {
 		id := installationv1.ProductID(declared.ID)
 		observation, err := service.observer.Observe(ctx, id)
+		observations = append(observations, observedProduct{observation: observation, err: err})
+	}
+	observedAt := service.now().UTC().Truncate(time.Microsecond)
+	if !validClockTime(observedAt) || observedAt.Before(startedAt) {
+		return installationv1.InstalledProductList{}, ErrUnavailable
+	}
+	products := make([]installationv1.InstalledProduct, 0, len(service.products))
+	for index, declared := range service.products {
+		id := installationv1.ProductID(declared.ID)
+		observation := observations[index].observation
+		err := observations[index].err
 		if err != nil || invalidObservation(observation, observedAt) {
 			observation = ProductObservation{
 				State:      installationv1.ProductUnavailable,

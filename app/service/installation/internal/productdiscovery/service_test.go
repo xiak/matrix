@@ -79,6 +79,42 @@ func TestListNormalizesUnavailableAndStaleProductObservation(t *testing.T) {
 	}
 }
 
+func TestListCommitsObservationTimeAfterLiveDependencyChecks(t *testing.T) {
+	startedAt := discoveryTime()
+	observedAt := startedAt.Add(time.Millisecond)
+	committedAt := observedAt.Add(time.Millisecond)
+	dependencyObserved := false
+	observer := &recordingObserver{
+		observations: map[installationv1.ProductID]ProductObservation{
+			installationv1.ProductApplicationPaaS: {
+				State: installationv1.ProductReady, ObservedAt: observedAt,
+			},
+		},
+		onObserve: func() { dependencyObserved = true },
+	}
+	service, err := NewService(
+		releasetest.Manifest(), &recordingAuthorizer{}, observer,
+		Config{
+			InstallationID: "installation-example",
+			Now: func() time.Time {
+				if dependencyObserved {
+					return committedAt
+				}
+				return startedAt
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.List(context.Background(), "Bearer credential", "request-live-products")
+	if err != nil || result.ObservedAt != committedAt || len(result.Products) != 1 ||
+		result.Products[0].State != installationv1.ProductReady ||
+		result.Products[0].ObservedAt != observedAt {
+		t.Fatalf("live installed product projection = %#v / %v", result, err)
+	}
+}
+
 func TestListFailsBeforeObservationWhenAuthorizationFails(t *testing.T) {
 	authorizer := &recordingAuthorizer{err: ErrPermissionDenied}
 	observer := &recordingObserver{}
@@ -144,6 +180,7 @@ type recordingObserver struct {
 	observations map[installationv1.ProductID]ProductObservation
 	observed     []installationv1.ProductID
 	err          error
+	onObserve    func()
 }
 
 func (value *recordingObserver) Observe(
@@ -151,6 +188,9 @@ func (value *recordingObserver) Observe(
 	id installationv1.ProductID,
 ) (ProductObservation, error) {
 	value.observed = append(value.observed, id)
+	if value.onObserve != nil {
+		value.onObserve()
+	}
 	return value.observations[id], value.err
 }
 
