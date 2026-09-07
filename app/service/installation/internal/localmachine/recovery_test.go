@@ -1,6 +1,7 @@
 package localmachine
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,37 @@ import (
 )
 
 const recoveryProbeConfigHash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+func TestLegacyProductlessRestoreUsesOneFixedDatabaseTransaction(t *testing.T) {
+	runtimeBoundary := &legacyRestorePipelineRuntime{
+		archive: []byte("authenticated productless archive"),
+	}
+	if err := restoreLegacyProductlessDatabaseDump(
+		context.Background(), runtimeBoundary,
+		bytes.NewReader(runtimeBoundary.archive), "postgres-productless",
+	); err != nil {
+		t.Fatalf("restore productless database: %v", err)
+	}
+	if !hasArgumentPair(runtimeBoundary.generatorArguments, "--user", "postgres") ||
+		!hasArgumentPair(runtimeBoundary.generatorArguments, "--file", "-") ||
+		!slices.Contains(runtimeBoundary.generatorArguments, "--clean") ||
+		!slices.Contains(runtimeBoundary.generatorArguments, "--if-exists") ||
+		slices.Contains(runtimeBoundary.generatorArguments, "--dbname") ||
+		slices.Contains(runtimeBoundary.generatorArguments, "--single-transaction") {
+		t.Fatalf("productless restore generator arguments = %v", runtimeBoundary.generatorArguments)
+	}
+	if !hasArgumentPair(runtimeBoundary.restoreArguments, "--user", "postgres") ||
+		!hasArgumentPair(runtimeBoundary.restoreArguments, "--set", "ON_ERROR_STOP=1") ||
+		!hasArgumentPair(runtimeBoundary.restoreArguments, "--dbname", "matrix") ||
+		!slices.Contains(runtimeBoundary.restoreArguments, "--single-transaction") ||
+		!slices.Contains(runtimeBoundary.restoreArguments, "--no-psqlrc") {
+		t.Fatalf("productless transactional restore arguments = %v", runtimeBoundary.restoreArguments)
+	}
+	want := legacyProductlessRestorePrelude + "DROP SCHEMA iam;\n"
+	if string(runtimeBoundary.restoreInput) != want {
+		t.Fatalf("productless transactional restore input = %q, want %q", runtimeBoundary.restoreInput, want)
+	}
+}
 
 func TestRecoveryRemovesOnlyTheProvedFixedVerificationProjectAndReplays(t *testing.T) {
 	plan := newInstallPlan(t)
@@ -131,6 +163,46 @@ type recoveryProbeInspector struct {
 	installationRoot string
 	root             string
 	state            RecoveryProjectState
+}
+
+type legacyRestorePipelineRuntime struct {
+	archive            []byte
+	generatorArguments []string
+	restoreArguments   []string
+	restoreInput       []byte
+}
+
+func (runtimeBoundary *legacyRestorePipelineRuntime) Run(
+	context.Context,
+	io.Reader,
+	...string,
+) ([]byte, bool, error) {
+	return nil, false, errors.New("productless restore test does not use buffered Docker commands")
+}
+
+func (runtimeBoundary *legacyRestorePipelineRuntime) RunTo(
+	_ context.Context,
+	input io.Reader,
+	output io.Writer,
+	arguments ...string,
+) (bool, error) {
+	switch {
+	case slices.Contains(arguments, "pg_restore"):
+		runtimeBoundary.generatorArguments = slices.Clone(arguments)
+		archive, err := io.ReadAll(input)
+		if err != nil || !bytes.Equal(archive, runtimeBoundary.archive) {
+			return true, errors.New("productless restore archive changed")
+		}
+		_, err = io.WriteString(output, "DROP SCHEMA iam;\n")
+		return true, err
+	case slices.Contains(arguments, "psql"):
+		runtimeBoundary.restoreArguments = slices.Clone(arguments)
+		content, err := io.ReadAll(input)
+		runtimeBoundary.restoreInput = append([]byte(nil), content...)
+		return true, err
+	default:
+		return false, errors.New("productless restore command is unexpected")
+	}
 }
 
 func newRecoveryProbeInspector(

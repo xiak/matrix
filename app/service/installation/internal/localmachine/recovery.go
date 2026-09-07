@@ -19,6 +19,11 @@ const (
 	recoveryVerificationTenantID    = paasv1.TenantID("organization-default")
 	recoveryVerificationComponent   = "probe"
 	recoveryVerificationDownTimeout = "30"
+	// These are the only schema objects introduced after the accepted
+	// productless backup contract that pg_restore cannot discover and clean.
+	legacyProductlessRestorePrelude = `DROP FUNCTION IF EXISTS iam.ensure_platform_service(text,text,text,text,text);
+DROP FUNCTION IF EXISTS iam.verify_platform_service(text,text,text,text);
+`
 )
 
 type recoveryVerificationParticipant struct {
@@ -129,6 +134,7 @@ func recoverBackup(
 	}
 	if err := restoreDatabaseDump(
 		ctx, streaming, plan.Current.Root, dumpRelative, postgresID,
+		target.Bundle.Manifest,
 	); err != nil {
 		return err
 	}
@@ -747,6 +753,7 @@ func restoreDatabaseDump(
 	root string,
 	relative string,
 	postgresID string,
+	targetManifest release.Manifest,
 ) error {
 	target, err := managedPath(root, relative)
 	if err != nil {
@@ -757,6 +764,11 @@ func restoreDatabaseDump(
 		return errors.Join(platformcommand.ErrEffectVerification, err)
 	}
 	defer file.Close()
+	if release.IsLegacyProductlessManifest(targetManifest) {
+		return restoreLegacyProductlessDatabaseDump(
+			ctx, runtimeBoundary, file, postgresID,
+		)
+	}
 	started, err := runtimeBoundary.RunTo(
 		ctx, file, io.Discard,
 		"exec", "--interactive", "--user", "postgres", postgresID,
@@ -773,6 +785,69 @@ func restoreDatabaseDump(
 	}
 	if !started {
 		return errors.Join(platformcommand.ErrEffectUnavailable, err)
+	}
+	if ctx.Err() != nil {
+		return errors.Join(platformcommand.ErrEffectOutcomeUnknown, ctx.Err())
+	}
+	return errors.Join(
+		platformcommand.ErrEffectVerification,
+		errors.New("PostgreSQL backup recovery failed"),
+	)
+}
+
+func restoreLegacyProductlessDatabaseDump(
+	ctx context.Context,
+	runtimeBoundary streamingDockerRuntime,
+	archive io.Reader,
+	postgresID string,
+) error {
+	// Stream generated restore SQL back into one psql transaction with the
+	// fixed N-1 cleanup prefix. Executing the prefix separately would leave the
+	// current database partially changed if the authenticated restore failed.
+	pipeReader, pipeWriter := io.Pipe()
+	pipelineContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type result struct {
+		started bool
+		err     error
+	}
+	generated := make(chan result, 1)
+	go func() {
+		started, err := runtimeBoundary.RunTo(
+			pipelineContext, archive, pipeWriter,
+			"exec", "--interactive", "--user", "postgres", postgresID,
+			"pg_restore", "--clean", "--if-exists", "--no-privileges",
+			"--no-password", "--username", "matrix", "--file", "-",
+		)
+		if err != nil {
+			_ = pipeWriter.CloseWithError(err)
+		} else {
+			_ = pipeWriter.Close()
+		}
+		generated <- result{started: started, err: err}
+	}()
+
+	restoreInput := io.MultiReader(
+		strings.NewReader(legacyProductlessRestorePrelude), pipeReader,
+	)
+	restored, restoreErr := runtimeBoundary.RunTo(
+		pipelineContext, restoreInput, io.Discard,
+		"exec", "--interactive", "--user", "postgres", postgresID,
+		"psql", "--no-psqlrc", "--set", "ON_ERROR_STOP=1",
+		"--single-transaction", "--no-password", "--username", "matrix",
+		"--dbname", "matrix",
+	)
+	if restoreErr != nil {
+		_ = pipeReader.CloseWithError(restoreErr)
+		cancel()
+	}
+	generatedResult := <-generated
+	_ = pipeReader.Close()
+	if generatedResult.err == nil && restoreErr == nil {
+		return nil
+	}
+	if !generatedResult.started || !restored {
+		return errors.Join(platformcommand.ErrEffectUnavailable, generatedResult.err, restoreErr)
 	}
 	if ctx.Err() != nil {
 		return errors.Join(platformcommand.ErrEffectOutcomeUnknown, ctx.Err())
