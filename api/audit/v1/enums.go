@@ -51,6 +51,8 @@ const (
 	ActionDevOpsPipelineCreated           Action = "devops.pipeline.created"
 	ActionDevOpsPipelineDraftUpdated      Action = "devops.pipeline.draft-updated"
 	ActionDevOpsPipelineRevisionActivated Action = "devops.pipeline-revision.activated"
+	ActionDevOpsSourceEventAdmitted       Action = "devops.source-event.admitted"
+	ActionDevOpsPipelineRunCreated        Action = "devops.pipeline-run.created"
 
 	ActionAuditRecordsRead       Action = "audit.records.read"
 	ActionAuditIntegrityVerified Action = "audit.integrity.verified"
@@ -72,6 +74,8 @@ const (
 	TargetRepositoryBinding     TargetKind = "REPOSITORY_BINDING"
 	TargetPipeline              TargetKind = "PIPELINE"
 	TargetPipelineRevision      TargetKind = "PIPELINE_REVISION"
+	TargetSourceEvent           TargetKind = "SOURCE_EVENT"
+	TargetPipelineRun           TargetKind = "PIPELINE_RUN"
 	TargetAuditRecords          TargetKind = "AUDIT_RECORDS"
 	TargetAuditChain            TargetKind = "AUDIT_CHAIN"
 )
@@ -151,6 +155,8 @@ var allActions = []Action{
 	ActionDevOpsPipelineCreated,
 	ActionDevOpsPipelineDraftUpdated,
 	ActionDevOpsPipelineRevisionActivated,
+	ActionDevOpsSourceEventAdmitted,
+	ActionDevOpsPipelineRunCreated,
 	ActionAuditRecordsRead,
 	ActionAuditIntegrityVerified,
 }
@@ -244,6 +250,14 @@ var actionContracts = map[Action]ActionContract{
 	ActionDevOpsPipelineRevisionActivated: {
 		Source: SourceDevOps, Target: TargetPipelineRevision, Results: []Result{ResultSucceeded},
 		IAMDecisionRequired: true, OperationRequired: true,
+	},
+	ActionDevOpsSourceEventAdmitted: {
+		Source: SourceDevOps, Target: TargetSourceEvent, Results: []Result{ResultAccepted},
+		OperationRequired: true,
+	},
+	ActionDevOpsPipelineRunCreated: {
+		Source: SourceDevOps, Target: TargetPipelineRun, Results: []Result{ResultAccepted},
+		OperationRequired: true,
 	},
 	ActionAuditRecordsRead: {
 		Source: SourceAudit, Target: TargetAuditRecords, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true,

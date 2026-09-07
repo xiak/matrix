@@ -11,7 +11,7 @@ import (
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 )
 
-func (repository *ConfigurationRepository) Readiness(ctx context.Context) (devopsv1.Readiness, error) {
+func (repository *ControlPlaneRepository) Readiness(ctx context.Context) (devopsv1.Readiness, error) {
 	if repository == nil || repository.pool == nil || ctx == nil {
 		return devopsv1.Readiness{}, errors.New("DevOps readiness repository is unavailable")
 	}

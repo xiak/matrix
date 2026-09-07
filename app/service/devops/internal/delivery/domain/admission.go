@@ -8,8 +8,9 @@ import (
 )
 
 var (
-	ErrSourceNotReady    = errors.New("source configuration is not ready")
-	ErrPipelineNotActive = errors.New("Pipeline has no matching active revision")
+	ErrSourceNotReady           = errors.New("source configuration is not ready")
+	ErrPipelineNotActive        = errors.New("Pipeline has no matching active revision")
+	ErrSourceEventReplayChanged = errors.New("source event replay content changed")
 )
 
 // NormalizedChange is the provider-neutral output of a source adapter after
@@ -30,7 +31,7 @@ func NewSourceEvent(
 	binding devopsv1.RepositoryBinding,
 	receivedAt time.Time,
 ) (devopsv1.SourceEvent, error) {
-	if err := validateNormalizedChange(change); err != nil {
+	if err := ValidateNormalizedChange(change); err != nil {
 		return devopsv1.SourceEvent{}, err
 	}
 	if devopsv1.ValidateSourceConnection(connection) != nil ||
@@ -81,6 +82,24 @@ func NewSourceEvent(
 		return devopsv1.SourceEvent{}, err
 	}
 	return event, nil
+}
+
+// ValidateSourceEventReplay compares only authenticated delivery content. It
+// deliberately ignores mutable configuration and the later receipt time so an
+// equal delivery returns the original admission after configuration changes.
+func ValidateSourceEventReplay(event devopsv1.SourceEvent, change NormalizedChange) error {
+	if devopsv1.ValidateSourceEvent(event) != nil || ValidateNormalizedChange(change) != nil {
+		return ErrSourceEventReplayChanged
+	}
+	if event.Scope != change.Scope ||
+		event.Spec.SourceConnectionID != change.SourceConnectionID ||
+		event.Spec.ExternalRepositoryID != change.ExternalRepositoryID ||
+		event.Spec.DeliveryID != change.DeliveryID ||
+		event.Spec.CanonicalPayloadDigest != change.CanonicalPayloadDigest ||
+		event.Spec.Change != change.Change {
+		return ErrSourceEventReplayChanged
+	}
+	return nil
 }
 
 func NewPipelineRun(
@@ -151,7 +170,7 @@ func NewPipelineRun(
 	return run, nil
 }
 
-func validateNormalizedChange(value NormalizedChange) error {
+func ValidateNormalizedChange(value NormalizedChange) error {
 	_, identityErr := devopsv1.SourceEventID(
 		value.Scope,
 		value.SourceConnectionID,

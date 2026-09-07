@@ -80,7 +80,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	repository, err := devopspostgres.NewConfigurationRepository(pool)
+	repository, err := devopspostgres.NewControlPlaneRepository(pool)
 	if err != nil {
 		return err
 	}

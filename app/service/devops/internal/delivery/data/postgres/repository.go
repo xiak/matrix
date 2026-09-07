@@ -12,27 +12,30 @@ import (
 
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/pipelineconfiguration"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runadmission"
 )
 
 var (
-	_ pipelineconfiguration.Repository  = (*ConfigurationRepository)(nil)
+	_ pipelineconfiguration.Repository  = (*ControlPlaneRepository)(nil)
 	_ pipelineconfiguration.Transaction = (*configurationTransaction)(nil)
+	_ runadmission.Repository           = (*ControlPlaneRepository)(nil)
+	_ runadmission.Transaction          = (*admissionTransaction)(nil)
 )
 
-// ConfigurationRepository owns the atomic API mutation boundary. Worker
-// effects use the distinct matrix_devops_worker database role.
-type ConfigurationRepository struct {
+// ControlPlaneRepository owns configuration and authenticated source-admission
+// transactions. Worker effects use the distinct matrix_devops_worker role.
+type ControlPlaneRepository struct {
 	pool *pgxpool.Pool
 }
 
-func NewConfigurationRepository(pool *pgxpool.Pool) (*ConfigurationRepository, error) {
+func NewControlPlaneRepository(pool *pgxpool.Pool) (*ControlPlaneRepository, error) {
 	if pool == nil {
 		return nil, errors.New("PostgreSQL connection pool is required")
 	}
-	return &ConfigurationRepository{pool: pool}, nil
+	return &ControlPlaneRepository{pool: pool}, nil
 }
 
-func (repository *ConfigurationRepository) WithinTransaction(
+func (repository *ControlPlaneRepository) WithinTransaction(
 	ctx context.Context,
 	tenantID devopsv1.TenantID,
 	callback func(context.Context, pipelineconfiguration.Transaction) error,
@@ -92,7 +95,12 @@ func mapTransactionError(err error) error {
 		switch postgresError.Code {
 		case "MX409":
 			return fmt.Errorf("execute delivery configuration transaction: %w", pipelineconfiguration.ErrResourceVersionConflict)
-		case "40001", "40P01", "23505":
+		case "23505":
+			if postgresError.ConstraintName == "repository_bindings_source_repository_uq" {
+				return fmt.Errorf("execute delivery configuration transaction: %w", pipelineconfiguration.ErrAlreadyExists)
+			}
+			return fmt.Errorf("execute delivery configuration transaction: %w", pipelineconfiguration.ErrRetryableTransaction)
+		case "40001", "40P01":
 			return fmt.Errorf("execute delivery configuration transaction: %w", pipelineconfiguration.ErrRetryableTransaction)
 		case "23503":
 			return fmt.Errorf("execute delivery configuration transaction: %w", pipelineconfiguration.ErrPreconditionFailed)

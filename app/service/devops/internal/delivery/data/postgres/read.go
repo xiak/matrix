@@ -135,14 +135,15 @@ func (transaction *configurationTransaction) LoadRepositoryBinding(
 	if err := devopsv1.ValidateID("repositoryBindingId", string(id)); err != nil {
 		return devopsv1.RepositoryBinding{}, false, err
 	}
-	var projectID, connectionID, contentDigest string
+	var projectID, connectionID, externalRepositoryID, contentDigest string
 	var resourceVersion uint64
 	var document []byte
 	err := transaction.tx.QueryRow(ctx,
-		`SELECT project_id, source_connection_id, content_digest, resource_version, document
+		`SELECT project_id, source_connection_id, external_repository_id,
+		        content_digest, resource_version, document
 		   FROM delivery.repository_bindings WHERE tenant_id = $1 AND id = $2`,
 		string(transaction.tenantID), string(id),
-	).Scan(&projectID, &connectionID, &contentDigest, &resourceVersion, &document)
+	).Scan(&projectID, &connectionID, &externalRepositoryID, &contentDigest, &resourceVersion, &document)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return devopsv1.RepositoryBinding{}, false, nil
 	}
@@ -158,7 +159,8 @@ func (transaction *configurationTransaction) LoadRepositoryBinding(
 	}
 	if value.Metadata.ID != id || value.Metadata.Scope.TenantID != transaction.tenantID ||
 		value.Metadata.ResourceVersion != resourceVersion || string(value.ProjectID) != projectID ||
-		string(value.Spec.SourceConnectionID) != connectionID || value.ContentDigest != contentDigest {
+		string(value.Spec.SourceConnectionID) != connectionID ||
+		string(value.Spec.ExternalRepositoryID) != externalRepositoryID || value.ContentDigest != contentDigest {
 		return value, false, errors.New("stored RepositoryBinding relational identity mismatch")
 	}
 	return value, true, nil

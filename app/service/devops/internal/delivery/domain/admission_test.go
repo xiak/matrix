@@ -63,6 +63,38 @@ func TestAuthenticatedChangeCreatesImmutableEventAndQueuedRun(t *testing.T) {
 	if err != nil || replayedRun.ID != run.ID || replayedRun.InputDigest != run.InputDigest {
 		t.Fatalf("PipelineRun derivation is not deterministic: %#v err=%v", replayedRun, err)
 	}
+	if err := ValidateSourceEventReplay(event, change); err != nil {
+		t.Fatalf("equal SourceEvent replay: %v", err)
+	}
+	changedFields := []struct {
+		name   string
+		change func(*NormalizedChange)
+	}{
+		{name: "tenant", change: func(value *NormalizedChange) { value.Scope.TenantID = "organization-other" }},
+		{name: "source connection", change: func(value *NormalizedChange) { value.SourceConnectionID = "source-connection-other" }},
+		{name: "external repository", change: func(value *NormalizedChange) { value.ExternalRepositoryID = "43" }},
+		{name: "delivery", change: func(value *NormalizedChange) { value.DeliveryID = "123e4567-e89b-42d3-a456-426614174001" }},
+		{name: "payload digest", change: func(value *NormalizedChange) { value.CanonicalPayloadDigest = "sha256:" + strings.Repeat("b", 64) }},
+		{name: "change number", change: func(value *NormalizedChange) { value.Change.Number++ }},
+		{name: "change action", change: func(value *NormalizedChange) { value.Change.Action = devopsv1.ChangeUpdated }},
+		{name: "head commit", change: func(value *NormalizedChange) { value.Change.HeadCommit = strings.Repeat("3", 40) }},
+		{name: "trusted base commit", change: func(value *NormalizedChange) { value.Change.TrustedBaseCommit = strings.Repeat("4", 40) }},
+	}
+	for _, test := range changedFields {
+		t.Run("changed "+test.name, func(t *testing.T) {
+			changed := change
+			test.change(&changed)
+			if err := ValidateSourceEventReplay(event, changed); !errors.Is(err, ErrSourceEventReplayChanged) {
+				t.Fatalf("changed SourceEvent replay error=%v", err)
+			}
+		})
+	}
+	laterConfiguration := event
+	laterConfiguration.Spec.RepositoryBindingDigest = "sha256:" + strings.Repeat("c", 64)
+	laterConfiguration.ContentDigest = devopsv1.SourceEventSpecDigest(laterConfiguration.Spec)
+	if err := ValidateSourceEventReplay(laterConfiguration, change); err != nil {
+		t.Fatalf("stored configuration snapshot changed replay identity: %v", err)
+	}
 }
 
 func TestSourceEventAdmissionFailsClosed(t *testing.T) {

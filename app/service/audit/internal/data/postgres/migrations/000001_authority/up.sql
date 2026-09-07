@@ -237,6 +237,8 @@ BEGIN
         ('devops.pipeline.created', 'DEVOPS', 'PIPELINE', 'SUCCEEDED', true, true, true),
         ('devops.pipeline.draft-updated', 'DEVOPS', 'PIPELINE', 'SUCCEEDED', true, true, true),
         ('devops.pipeline-revision.activated', 'DEVOPS', 'PIPELINE_REVISION', 'SUCCEEDED', true, true, true),
+        ('devops.source-event.admitted', 'DEVOPS', 'SOURCE_EVENT', 'ACCEPTED', false, false, true),
+        ('devops.pipeline-run.created', 'DEVOPS', 'PIPELINE_RUN', 'ACCEPTED', false, false, true),
         ('audit.records.read', 'AUDIT', 'AUDIT_RECORDS', 'SUCCEEDED', true, true, false),
         ('audit.integrity.verified', 'AUDIT', 'AUDIT_CHAIN', 'SUCCEEDED', true, true, false)
       ) AS contract(
@@ -656,7 +658,9 @@ BEGIN
             'devops.repository-binding.created',
             'devops.repository-binding.updated', 'devops.pipeline.created',
             'devops.pipeline.draft-updated',
-            'devops.pipeline-revision.activated', 'audit.records.read',
+            'devops.pipeline-revision.activated',
+            'devops.source-event.admitted', 'devops.pipeline-run.created',
+            'audit.records.read',
             'audit.integrity.verified'
        ))
        OR ((submitted_actor_type IS NULL) <> (submitted_actor_id IS NULL))

@@ -489,10 +489,20 @@ configuration and exact normalized commits, preserve the active revision when
 an unrelated draft is later replaced, and derive the server-owned
 `QUEUED / RECEIVE / EVENT_ADMITTED` state without invoking an executor.
 
-These slices do not complete Gate A. The durable atomic SourceEvent/PipelineRun
-admission transaction, authenticated provider adapter, queue-limit enforcement,
-logs, replay/cancellation/lease/fence/reconciliation, quota, and pagination
-remain pending.
+The durable admission slice now resolves the current ready SourceConnection and
+the unique `(SourceConnection, external repository)` binding, snapshots every
+matching active revision in Pipeline identity order, and atomically commits one
+SourceEvent, zero or more immutable PipelineRuns, and one Audit fact per stored
+resource. Equal delivery replay returns that original admission before reading
+mutable configuration; changed authenticated content conflicts. Both the use
+case and the security-definer function enforce the fixed 32-run tenant queue
+limit, while a tenant-scoped transaction lock plus serializable retry prevents
+concurrent fan-out from exceeding it. API and worker roles cannot directly
+write admission tables or read the internal generalized Audit-operation table.
+
+These slices do not complete Gate A. The authenticated provider adapter, run
+state transitions, logs, manual replay/cancellation, lease/fence/reconciliation,
+remaining quotas, and pagination remain pending.
 
 Current verification evidence:
 
@@ -520,6 +530,17 @@ Current verification evidence:
   runtime identities, forced cross-tenant isolation, function-only API writes,
   a table-blind worker, immutable binding/revision history, sanitized Audit
   outbox correlation, and the four-schema platform migration boundary
+- real PostgreSQL 18 admission journeys proving deterministic two-Pipeline
+  fan-out, equal replay after mutable configuration becomes unavailable,
+  changed-replay conflict, atomic queue rejection, cross-tenant concealment,
+  and exactly one success when two two-run events concurrently contend at 30
+  queued runs; the same scenario passed on five additional fresh instances
+- data-bearing migration reapply preserving 13 configuration mutations,
+  16 SourceEvents, 32 PipelineRuns, and 61 generalized Audit operations/outbox
+  facts, plus the real Audit authority accepting the two closed DevOps actions
+- fixed `0d387dd` data-bearing upgrade preserving all 11 legacy mutations and
+  outbox facts, backfilling current/revision external repository identities and
+  generalized Audit operations, and removing every temporary upgrade policy
 
 ## Incremental acceptance
 

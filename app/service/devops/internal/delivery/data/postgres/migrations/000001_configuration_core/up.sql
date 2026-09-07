@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS delivery.repository_bindings (
     id text COLLATE "C" NOT NULL,
     project_id text COLLATE "C" NOT NULL,
     source_connection_id text COLLATE "C" NOT NULL,
+    external_repository_id text COLLATE "C" NOT NULL,
     content_digest text COLLATE "C" NOT NULL,
     resource_version bigint NOT NULL,
     document jsonb NOT NULL,
@@ -93,6 +94,7 @@ CREATE TABLE IF NOT EXISTS delivery.repository_bindings (
         AND id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND project_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND source_connection_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND external_repository_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
     ),
     CONSTRAINT repository_bindings_digest_valid CHECK (
         content_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
@@ -107,6 +109,7 @@ CREATE TABLE IF NOT EXISTS delivery.repository_bindings (
         AND document#>>'{metadata,scope,tenantId}' = tenant_id
         AND document->>'projectId' = project_id
         AND document#>>'{spec,sourceConnectionId}' = source_connection_id
+        AND document#>>'{spec,externalRepositoryId}' = external_repository_id
         AND document->>'contentDigest' = content_digest
         AND CASE
             WHEN document#>>'{metadata,resourceVersion}' ~ '^[1-9][0-9]*$'
@@ -121,6 +124,7 @@ CREATE TABLE IF NOT EXISTS delivery.repository_binding_revisions (
     binding_id text COLLATE "C" NOT NULL,
     project_id text COLLATE "C" NOT NULL,
     source_connection_id text COLLATE "C" NOT NULL,
+    external_repository_id text COLLATE "C" NOT NULL,
     content_digest text COLLATE "C" NOT NULL,
     resource_version bigint NOT NULL,
     created_at timestamptz(6) NOT NULL,
@@ -143,6 +147,7 @@ CREATE TABLE IF NOT EXISTS delivery.repository_binding_revisions (
         AND binding_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND project_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND source_connection_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND external_repository_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND content_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
         AND resource_version BETWEEN 1 AND 9007199254740991
     ),
@@ -153,6 +158,7 @@ CREATE TABLE IF NOT EXISTS delivery.repository_binding_revisions (
         AND document#>>'{metadata,scope,tenantId}' = tenant_id
         AND document->>'projectId' = project_id
         AND document#>>'{spec,sourceConnectionId}' = source_connection_id
+        AND document#>>'{spec,externalRepositoryId}' = external_repository_id
         AND document->>'contentDigest' = content_digest
         AND CASE
             WHEN document#>>'{metadata,resourceVersion}' ~ '^[1-9][0-9]*$'
@@ -162,6 +168,111 @@ CREATE TABLE IF NOT EXISTS delivery.repository_binding_revisions (
         AND (document#>>'{metadata,updatedAt}')::timestamptz = created_at
     )
 );
+
+DROP POLICY IF EXISTS owner_schema_upgrade ON delivery.repository_bindings;
+CREATE POLICY owner_schema_upgrade ON delivery.repository_bindings
+    TO matrix_devops_owner USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS owner_schema_upgrade ON delivery.repository_binding_revisions;
+CREATE POLICY owner_schema_upgrade ON delivery.repository_binding_revisions
+    TO matrix_devops_owner USING (true) WITH CHECK (true);
+
+ALTER TABLE delivery.repository_bindings
+    ADD COLUMN IF NOT EXISTS external_repository_id text COLLATE "C";
+UPDATE delivery.repository_bindings
+   SET external_repository_id = document#>>'{spec,externalRepositoryId}'
+ WHERE external_repository_id IS NULL;
+ALTER TABLE delivery.repository_bindings
+    ALTER COLUMN external_repository_id SET NOT NULL,
+    DROP CONSTRAINT IF EXISTS repository_bindings_ids_valid,
+    DROP CONSTRAINT IF EXISTS repository_bindings_document_identity;
+ALTER TABLE delivery.repository_bindings
+    ADD CONSTRAINT repository_bindings_ids_valid CHECK (
+        tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND project_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND source_connection_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND external_repository_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    ),
+    ADD CONSTRAINT repository_bindings_document_identity CHECK (
+        document->>'apiVersion' = 'devops.matrix.xiak.com/v1'
+        AND document->>'kind' = 'RepositoryBinding'
+        AND document#>>'{metadata,id}' = id
+        AND document#>>'{metadata,scope,tenantId}' = tenant_id
+        AND document->>'projectId' = project_id
+        AND document#>>'{spec,sourceConnectionId}' = source_connection_id
+        AND document#>>'{spec,externalRepositoryId}' = external_repository_id
+        AND document->>'contentDigest' = content_digest
+        AND CASE
+            WHEN document#>>'{metadata,resourceVersion}' ~ '^[1-9][0-9]*$'
+            THEN (document#>>'{metadata,resourceVersion}')::numeric = resource_version
+            ELSE false
+        END
+    );
+
+ALTER TABLE delivery.repository_binding_revisions
+    ADD COLUMN IF NOT EXISTS external_repository_id text COLLATE "C";
+UPDATE delivery.repository_binding_revisions
+   SET external_repository_id = document#>>'{spec,externalRepositoryId}'
+ WHERE external_repository_id IS NULL;
+ALTER TABLE delivery.repository_binding_revisions
+    ALTER COLUMN external_repository_id SET NOT NULL,
+    DROP CONSTRAINT IF EXISTS repository_binding_revisions_values_valid,
+    DROP CONSTRAINT IF EXISTS repository_binding_revisions_document_identity;
+ALTER TABLE delivery.repository_binding_revisions
+    ADD CONSTRAINT repository_binding_revisions_values_valid CHECK (
+        tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND binding_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND project_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND source_connection_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND external_repository_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND content_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND resource_version BETWEEN 1 AND 9007199254740991
+    ),
+    ADD CONSTRAINT repository_binding_revisions_document_identity CHECK (
+        document->>'apiVersion' = 'devops.matrix.xiak.com/v1'
+        AND document->>'kind' = 'RepositoryBinding'
+        AND document#>>'{metadata,id}' = binding_id
+        AND document#>>'{metadata,scope,tenantId}' = tenant_id
+        AND document->>'projectId' = project_id
+        AND document#>>'{spec,sourceConnectionId}' = source_connection_id
+        AND document#>>'{spec,externalRepositoryId}' = external_repository_id
+        AND document->>'contentDigest' = content_digest
+        AND CASE
+            WHEN document#>>'{metadata,resourceVersion}' ~ '^[1-9][0-9]*$'
+            THEN (document#>>'{metadata,resourceVersion}')::numeric = resource_version
+            ELSE false
+        END
+        AND (document#>>'{metadata,updatedAt}')::timestamptz = created_at
+    );
+
+DO $matrix_repository_source_identity_constraints$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_constraint
+         WHERE connamespace = 'delivery'::regnamespace
+           AND conname = 'repository_bindings_source_repository_uq'
+    ) THEN
+        ALTER TABLE delivery.repository_bindings
+            ADD CONSTRAINT repository_bindings_source_repository_uq
+            UNIQUE (tenant_id, source_connection_id, external_repository_id);
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_constraint
+         WHERE connamespace = 'delivery'::regnamespace
+           AND conname = 'repository_binding_revisions_source_identity_uq'
+    ) THEN
+        ALTER TABLE delivery.repository_binding_revisions
+            ADD CONSTRAINT repository_binding_revisions_source_identity_uq
+            UNIQUE (
+                tenant_id, binding_id, content_digest, project_id,
+                source_connection_id, external_repository_id
+            );
+    END IF;
+END
+$matrix_repository_source_identity_constraints$;
+
+DROP POLICY owner_schema_upgrade ON delivery.repository_bindings;
+DROP POLICY owner_schema_upgrade ON delivery.repository_binding_revisions;
 
 CREATE TABLE IF NOT EXISTS delivery.pipelines (
     tenant_id text COLLATE "C" NOT NULL,
@@ -281,6 +392,199 @@ BEGIN
 END
 $matrix_pipeline_active_fk$;
 
+DO $matrix_pipeline_run_revision_identity$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_constraint
+         WHERE connamespace = 'delivery'::regnamespace
+           AND conname = 'pipeline_revisions_run_identity_uq'
+    ) THEN
+        ALTER TABLE delivery.pipeline_revisions
+            ADD CONSTRAINT pipeline_revisions_run_identity_uq UNIQUE (
+                tenant_id, id, content_digest, pipeline_id, project_id,
+                repository_binding_id, repository_binding_digest
+            );
+    END IF;
+END
+$matrix_pipeline_run_revision_identity$;
+
+CREATE TABLE IF NOT EXISTS delivery.source_events (
+    tenant_id text COLLATE "C" NOT NULL,
+    id text COLLATE "C" NOT NULL,
+    project_id text COLLATE "C" NOT NULL,
+    source_connection_id text COLLATE "C" NOT NULL,
+    repository_binding_id text COLLATE "C" NOT NULL,
+    repository_binding_digest text COLLATE "C" NOT NULL,
+    external_repository_id text COLLATE "C" NOT NULL,
+    delivery_id text COLLATE "C" NOT NULL,
+    canonical_payload_digest text COLLATE "C" NOT NULL,
+    content_digest text COLLATE "C" NOT NULL,
+    received_at timestamptz(6) NOT NULL,
+    document jsonb NOT NULL,
+    PRIMARY KEY (tenant_id, id),
+    CONSTRAINT source_events_delivery_uq UNIQUE (
+        tenant_id, source_connection_id, delivery_id
+    ),
+    CONSTRAINT source_events_run_identity_uq UNIQUE (
+        tenant_id, id, content_digest, project_id,
+        repository_binding_id, repository_binding_digest
+    ),
+    CONSTRAINT source_events_binding_snapshot_fk FOREIGN KEY (
+        tenant_id, repository_binding_id, repository_binding_digest,
+        project_id, source_connection_id, external_repository_id
+    ) REFERENCES delivery.repository_binding_revisions (
+        tenant_id, binding_id, content_digest,
+        project_id, source_connection_id, external_repository_id
+    ),
+    CONSTRAINT source_events_values_valid CHECK (
+        tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND id COLLATE "C" ~ '^source-event-[0-9a-f]{48}$'
+        AND project_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND source_connection_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND repository_binding_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND external_repository_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND delivery_id COLLATE "C" ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+        AND repository_binding_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND canonical_payload_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND content_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+    ),
+    CONSTRAINT source_events_document_identity CHECK (
+        document->>'apiVersion' = 'devops.matrix.xiak.com/v1'
+        AND document->>'kind' = 'SourceEvent'
+        AND document->>'id' = id
+        AND document#>>'{scope,tenantId}' = tenant_id
+        AND document#>>'{spec,projectId}' = project_id
+        AND document#>>'{spec,sourceConnectionId}' = source_connection_id
+        AND document#>>'{spec,repositoryBindingId}' = repository_binding_id
+        AND document#>>'{spec,repositoryBindingDigest}' = repository_binding_digest
+        AND document#>>'{spec,externalRepositoryId}' = external_repository_id
+        AND document#>>'{spec,deliveryId}' = delivery_id
+        AND document#>>'{spec,canonicalPayloadDigest}' = canonical_payload_digest
+        AND document->>'contentDigest' = content_digest
+        AND (document->>'receivedAt')::timestamptz = received_at
+    )
+);
+
+CREATE TABLE IF NOT EXISTS delivery.pipeline_runs (
+    tenant_id text COLLATE "C" NOT NULL,
+    id text COLLATE "C" NOT NULL,
+    source_event_id text COLLATE "C" NOT NULL,
+    source_event_digest text COLLATE "C" NOT NULL,
+    pipeline_id text COLLATE "C" NOT NULL,
+    project_id text COLLATE "C" NOT NULL,
+    pipeline_revision_id text COLLATE "C" NOT NULL,
+    pipeline_revision_digest text COLLATE "C" NOT NULL,
+    repository_binding_id text COLLATE "C" NOT NULL,
+    repository_binding_digest text COLLATE "C" NOT NULL,
+    state text COLLATE "C" NOT NULL,
+    stage text COLLATE "C" NOT NULL,
+    reason text COLLATE "C",
+    resource_version bigint NOT NULL,
+    completed_at timestamptz(6),
+    created_at timestamptz(6) NOT NULL,
+    updated_at timestamptz(6) NOT NULL,
+    document jsonb NOT NULL,
+    PRIMARY KEY (tenant_id, id),
+    CONSTRAINT pipeline_runs_event_revision_uq UNIQUE (
+        tenant_id, source_event_id, pipeline_revision_id
+    ),
+    CONSTRAINT pipeline_runs_source_event_fk FOREIGN KEY (
+        tenant_id, source_event_id, source_event_digest, project_id,
+        repository_binding_id, repository_binding_digest
+    ) REFERENCES delivery.source_events (
+        tenant_id, id, content_digest, project_id,
+        repository_binding_id, repository_binding_digest
+    ),
+    CONSTRAINT pipeline_runs_revision_fk FOREIGN KEY (
+        tenant_id, pipeline_revision_id, pipeline_revision_digest,
+        pipeline_id, project_id, repository_binding_id,
+        repository_binding_digest
+    ) REFERENCES delivery.pipeline_revisions (
+        tenant_id, id, content_digest, pipeline_id, project_id,
+        repository_binding_id, repository_binding_digest
+    ),
+    CONSTRAINT pipeline_runs_values_valid CHECK (
+        tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND id COLLATE "C" ~ '^pipeline-run-[0-9a-f]{48}$'
+        AND source_event_id COLLATE "C" ~ '^source-event-[0-9a-f]{48}$'
+        AND pipeline_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND project_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND pipeline_revision_id COLLATE "C" ~ '^pipeline-revision-[0-9a-f]{48}$'
+        AND repository_binding_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND source_event_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND pipeline_revision_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND repository_binding_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND resource_version BETWEEN 1 AND 9007199254740991
+        AND updated_at >= created_at
+        AND state IN (
+            'QUEUED', 'FETCHING', 'VERIFYING', 'REPORTING', 'SUCCEEDED',
+            'FAILED', 'CANCELLED', 'RECONCILING', 'MANUAL_INTERVENTION'
+        )
+        AND stage IN ('RECEIVE', 'FETCH', 'VERIFY', 'REPORT')
+        AND (reason IS NULL OR reason IN (
+            'EVENT_ADMITTED', 'COMPLETED', 'SOURCE_UNAVAILABLE',
+            'COMMIT_MISMATCH', 'EXECUTOR_UNAVAILABLE', 'VERIFICATION_FAILED',
+            'DEADLINE_EXCEEDED', 'REPORT_UNAVAILABLE', 'REPORT_CONFLICT',
+            'CANCELLED', 'EXTERNAL_EFFECT_UNCERTAIN',
+            'RECONCILIATION_EXHAUSTED'
+        ))
+        AND (
+            (state = 'QUEUED' AND stage = 'RECEIVE'
+                AND reason = 'EVENT_ADMITTED' AND resource_version = 1
+                AND completed_at IS NULL AND created_at = updated_at)
+            OR (state = 'FETCHING' AND stage = 'FETCH'
+                AND reason IS NULL AND completed_at IS NULL)
+            OR (state = 'VERIFYING' AND stage = 'VERIFY'
+                AND reason IS NULL AND completed_at IS NULL)
+            OR (state = 'REPORTING' AND stage = 'REPORT'
+                AND reason IS NULL AND completed_at IS NULL)
+            OR (state = 'SUCCEEDED' AND stage = 'REPORT'
+                AND reason = 'COMPLETED' AND completed_at = updated_at)
+            OR (state = 'FAILED' AND reason IN (
+                    'SOURCE_UNAVAILABLE', 'COMMIT_MISMATCH',
+                    'EXECUTOR_UNAVAILABLE', 'VERIFICATION_FAILED',
+                    'DEADLINE_EXCEEDED', 'REPORT_UNAVAILABLE', 'REPORT_CONFLICT'
+                ) AND completed_at = updated_at)
+            OR (state = 'CANCELLED' AND reason = 'CANCELLED'
+                AND completed_at = updated_at)
+            OR (state = 'RECONCILING' AND stage = 'REPORT'
+                AND reason = 'EXTERNAL_EFFECT_UNCERTAIN' AND completed_at IS NULL)
+            OR (state = 'MANUAL_INTERVENTION' AND stage = 'REPORT'
+                AND reason = 'RECONCILIATION_EXHAUSTED'
+                AND completed_at = updated_at)
+        )
+    ),
+    CONSTRAINT pipeline_runs_document_identity CHECK (
+        document->>'apiVersion' = 'devops.matrix.xiak.com/v1'
+        AND document->>'kind' = 'PipelineRun'
+        AND document->>'id' = id
+        AND document#>>'{scope,tenantId}' = tenant_id
+        AND document->>'projectId' = project_id
+        AND document->>'pipelineId' = pipeline_id
+        AND document#>>'{input,sourceEventId}' = source_event_id
+        AND document#>>'{input,sourceEventDigest}' = source_event_digest
+        AND document#>>'{input,pipelineRevisionId}' = pipeline_revision_id
+        AND document#>>'{input,pipelineRevisionDigest}' = pipeline_revision_digest
+        AND document#>>'{input,repositoryBindingId}' = repository_binding_id
+        AND document#>>'{input,repositoryBindingDigest}' = repository_binding_digest
+        AND document->>'inputDigest' COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND document#>>'{status,state}' = state
+        AND document#>>'{status,stage}' = stage
+        AND document#>>'{status,reason}' IS NOT DISTINCT FROM reason
+        AND (document#>>'{status,resourceVersion}')::numeric = resource_version
+        AND (document#>>'{status,observedAt}')::timestamptz = updated_at
+        AND (
+            (completed_at IS NULL AND NOT ((document#>'{status}') ? 'completedAt'))
+            OR (document#>>'{status,completedAt}')::timestamptz = completed_at
+        )
+        AND (document->>'createdAt')::timestamptz = created_at
+        AND (document->>'updatedAt')::timestamptz = updated_at
+    )
+);
+
+CREATE INDEX IF NOT EXISTS pipeline_runs_tenant_queue_idx
+    ON delivery.pipeline_runs (tenant_id, state, created_at, id);
+
 CREATE TABLE IF NOT EXISTS delivery.mutations (
     tenant_id text COLLATE "C" NOT NULL,
     id text COLLATE "C" NOT NULL,
@@ -333,6 +637,83 @@ CREATE TABLE IF NOT EXISTS delivery.mutations (
     )
 );
 
+CREATE TABLE IF NOT EXISTS delivery.audit_operations (
+    tenant_id text COLLATE "C" NOT NULL,
+    id text COLLATE "C" NOT NULL,
+    operation_kind text COLLATE "C" NOT NULL,
+    target_kind text COLLATE "C" NOT NULL,
+    target_id text COLLATE "C" NOT NULL,
+    created_at timestamptz(6) NOT NULL,
+    PRIMARY KEY (tenant_id, id),
+    CONSTRAINT audit_operations_values_valid CHECK (
+        tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND target_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND (
+            (operation_kind = 'CONFIGURATION_MUTATION'
+                AND target_kind IN (
+                    'DEVOPS_PROJECT', 'SOURCE_CONNECTION',
+                    'REPOSITORY_BINDING', 'PIPELINE', 'PIPELINE_REVISION'
+                ))
+            OR (operation_kind = 'SOURCE_EVENT_ADMISSION'
+                AND target_kind = 'SOURCE_EVENT' AND id = target_id)
+            OR (operation_kind = 'PIPELINE_RUN_CREATION'
+                AND target_kind = 'PIPELINE_RUN' AND id = target_id)
+        )
+    )
+);
+
+DROP POLICY IF EXISTS owner_schema_upgrade ON delivery.mutations;
+CREATE POLICY owner_schema_upgrade ON delivery.mutations
+    TO matrix_devops_owner USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS owner_schema_upgrade ON delivery.audit_operations;
+CREATE POLICY owner_schema_upgrade ON delivery.audit_operations
+    TO matrix_devops_owner USING (true) WITH CHECK (true);
+
+INSERT INTO delivery.audit_operations (
+    tenant_id, id, operation_kind, target_kind, target_id, created_at
+)
+SELECT tenant_id, id, 'CONFIGURATION_MUTATION', target_kind, target_id, created_at
+  FROM delivery.mutations
+ON CONFLICT (tenant_id, id) DO NOTHING;
+
+DROP POLICY owner_schema_upgrade ON delivery.mutations;
+
+DO $matrix_audit_operation_constraints$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_constraint
+         WHERE connamespace = 'delivery'::regnamespace
+           AND conname = 'mutations_audit_operation_fk'
+    ) THEN
+        ALTER TABLE delivery.mutations
+            ADD CONSTRAINT mutations_audit_operation_fk
+            FOREIGN KEY (tenant_id, id)
+            REFERENCES delivery.audit_operations (tenant_id, id);
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_constraint
+         WHERE connamespace = 'delivery'::regnamespace
+           AND conname = 'source_events_audit_operation_fk'
+    ) THEN
+        ALTER TABLE delivery.source_events
+            ADD CONSTRAINT source_events_audit_operation_fk
+            FOREIGN KEY (tenant_id, id)
+            REFERENCES delivery.audit_operations (tenant_id, id);
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_constraint
+         WHERE connamespace = 'delivery'::regnamespace
+           AND conname = 'pipeline_runs_audit_operation_fk'
+    ) THEN
+        ALTER TABLE delivery.pipeline_runs
+            ADD CONSTRAINT pipeline_runs_audit_operation_fk
+            FOREIGN KEY (tenant_id, id)
+            REFERENCES delivery.audit_operations (tenant_id, id);
+    END IF;
+END
+$matrix_audit_operation_constraints$;
+
 CREATE TABLE IF NOT EXISTS delivery.audit_outbox (
     tenant_id text COLLATE "C" NOT NULL,
     event_id text COLLATE "C" NOT NULL,
@@ -350,7 +731,7 @@ CREATE TABLE IF NOT EXISTS delivery.audit_outbox (
     document jsonb NOT NULL,
     PRIMARY KEY (tenant_id, event_id),
     CONSTRAINT audit_outbox_operation_fk FOREIGN KEY (tenant_id, operation_id)
-        REFERENCES delivery.mutations (tenant_id, id),
+        REFERENCES delivery.audit_operations (tenant_id, id),
     CONSTRAINT audit_outbox_values_valid CHECK (
         tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND event_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
@@ -372,6 +753,15 @@ CREATE TABLE IF NOT EXISTS delivery.audit_outbox (
 
 ALTER TABLE delivery.audit_outbox
     ADD COLUMN IF NOT EXISTS delivered_at timestamptz(6);
+
+ALTER TABLE delivery.audit_outbox
+    DROP CONSTRAINT IF EXISTS audit_outbox_operation_fk;
+ALTER TABLE delivery.audit_outbox
+    ADD CONSTRAINT audit_outbox_operation_fk
+    FOREIGN KEY (tenant_id, operation_id)
+    REFERENCES delivery.audit_operations (tenant_id, id);
+
+DROP POLICY owner_schema_upgrade ON delivery.audit_operations;
 
 DO $matrix_audit_outbox_state_constraint$
 BEGIN
@@ -412,8 +802,14 @@ ALTER TABLE delivery.pipelines ENABLE ROW LEVEL SECURITY;
 ALTER TABLE delivery.pipelines FORCE ROW LEVEL SECURITY;
 ALTER TABLE delivery.pipeline_revisions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE delivery.pipeline_revisions FORCE ROW LEVEL SECURITY;
+ALTER TABLE delivery.source_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE delivery.source_events FORCE ROW LEVEL SECURITY;
+ALTER TABLE delivery.pipeline_runs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE delivery.pipeline_runs FORCE ROW LEVEL SECURITY;
 ALTER TABLE delivery.mutations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE delivery.mutations FORCE ROW LEVEL SECURITY;
+ALTER TABLE delivery.audit_operations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE delivery.audit_operations FORCE ROW LEVEL SECURITY;
 ALTER TABLE delivery.audit_outbox ENABLE ROW LEVEL SECURITY;
 ALTER TABLE delivery.audit_outbox FORCE ROW LEVEL SECURITY;
 
@@ -424,7 +820,8 @@ BEGIN
     FOREACH table_name IN ARRAY ARRAY[
         'projects', 'source_connections', 'repository_bindings',
         'repository_binding_revisions', 'pipelines', 'pipeline_revisions',
-        'mutations', 'audit_outbox'
+        'source_events', 'pipeline_runs', 'mutations', 'audit_operations',
+        'audit_outbox'
     ]
     LOOP
         IF NOT EXISTS (
@@ -723,19 +1120,22 @@ BEGIN
            AND resource_version = expected_resource_version;
     WHEN 'CREATE_REPOSITORY_BINDING' THEN
         INSERT INTO delivery.repository_bindings (
-            tenant_id, id, project_id, source_connection_id,
+            tenant_id, id, project_id, source_connection_id, external_repository_id,
             content_digest, resource_version, document
         ) VALUES (
             effective_tenant_id, resource_id, submitted_resource->>'projectId',
             submitted_resource#>>'{spec,sourceConnectionId}',
+            submitted_resource#>>'{spec,externalRepositoryId}',
             submitted_resource->>'contentDigest', 1, submitted_resource
         );
         INSERT INTO delivery.repository_binding_revisions (
             tenant_id, binding_id, project_id, source_connection_id,
+            external_repository_id,
             content_digest, resource_version, created_at, document
         ) VALUES (
             effective_tenant_id, resource_id, submitted_resource->>'projectId',
             submitted_resource#>>'{spec,sourceConnectionId}',
+            submitted_resource#>>'{spec,externalRepositoryId}',
             submitted_resource->>'contentDigest', 1, effective_now, submitted_resource
         );
     WHEN 'UPDATE_REPOSITORY_BINDING' THEN
@@ -754,6 +1154,7 @@ BEGIN
         END IF;
         UPDATE delivery.repository_bindings
            SET source_connection_id = submitted_resource#>>'{spec,sourceConnectionId}',
+               external_repository_id = submitted_resource#>>'{spec,externalRepositoryId}',
                content_digest = submitted_resource->>'contentDigest',
                resource_version = expected_resource_version + 1,
                document = submitted_resource
@@ -761,10 +1162,12 @@ BEGIN
            AND resource_version = expected_resource_version;
         INSERT INTO delivery.repository_binding_revisions (
             tenant_id, binding_id, project_id, source_connection_id,
+            external_repository_id,
             content_digest, resource_version, created_at, document
         ) VALUES (
             effective_tenant_id, resource_id, submitted_resource->>'projectId',
             submitted_resource#>>'{spec,sourceConnectionId}',
+            submitted_resource#>>'{spec,externalRepositoryId}',
             submitted_resource->>'contentDigest', expected_resource_version + 1,
             effective_now, submitted_resource
         );
@@ -856,6 +1259,14 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'delivery resource version conflict';
     END IF;
 
+    INSERT INTO delivery.audit_operations (
+        tenant_id, id, operation_kind, target_kind, target_id, created_at
+    ) VALUES (
+        effective_tenant_id, submitted_mutation->>'id',
+        'CONFIGURATION_MUTATION', expected_audit_target, audit_target_id,
+        effective_now
+    );
+
     INSERT INTO delivery.mutations (
         tenant_id, id, mutation_kind, command_target_id, target_kind, target_id,
         idempotency_fingerprint, request_digest, result_kind, created_at,
@@ -877,6 +1288,380 @@ BEGIN
     );
 END
 $function$;
+
+CREATE OR REPLACE FUNCTION delivery.commit_run_admission(
+    submitted_event jsonb,
+    submitted_runs jsonb,
+    submitted_audit_events jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text;
+    effective_now timestamptz(6);
+    admitted_event_id text;
+    admitted_project_id text;
+    admitted_source_connection_id text;
+    admitted_repository_binding_id text;
+    admitted_repository_binding_digest text;
+    admitted_external_repository_id text;
+    admitted_delivery_id text;
+    admitted_canonical_payload_digest text;
+    admitted_content_digest text;
+    submitted_run_count integer;
+    expected_run_count bigint;
+    queued_run_count bigint;
+    run_index integer;
+    audit_index integer;
+    run_document jsonb;
+    audit_document jsonb;
+    expected_action text;
+    expected_target_kind text;
+    expected_target_id text;
+    expected_request_digest text;
+    first_request_id text;
+    first_correlation_id text;
+    first_traceparent text;
+BEGIN
+    effective_tenant_id := delivery.current_tenant_id();
+    effective_now := transaction_timestamp();
+    IF effective_tenant_id IS NULL THEN
+        RAISE EXCEPTION USING ERRCODE = '42501',
+            MESSAGE = 'valid transaction-local delivery tenant is required';
+    END IF;
+    IF jsonb_typeof(submitted_event) IS DISTINCT FROM 'object'
+       OR jsonb_typeof(submitted_runs) IS DISTINCT FROM 'array'
+       OR jsonb_typeof(submitted_audit_events) IS DISTINCT FROM 'array'
+       OR octet_length(submitted_event::text) > 131072
+       OR octet_length(submitted_runs::text) > 8388608
+       OR octet_length(submitted_audit_events::text) > 8388608 THEN
+        RAISE EXCEPTION USING ERRCODE = '22023',
+            MESSAGE = 'run admission documents are invalid';
+    END IF;
+
+    submitted_run_count := jsonb_array_length(submitted_runs);
+    IF submitted_run_count NOT BETWEEN 0 AND 32
+       OR jsonb_array_length(submitted_audit_events) <> submitted_run_count + 1 THEN
+        RAISE EXCEPTION USING ERRCODE = '22023',
+            MESSAGE = 'run admission fan-out is invalid';
+    END IF;
+
+    admitted_event_id := submitted_event->>'id';
+    admitted_project_id := submitted_event#>>'{spec,projectId}';
+    admitted_source_connection_id := submitted_event#>>'{spec,sourceConnectionId}';
+    admitted_repository_binding_id := submitted_event#>>'{spec,repositoryBindingId}';
+    admitted_repository_binding_digest := submitted_event#>>'{spec,repositoryBindingDigest}';
+    admitted_external_repository_id := submitted_event#>>'{spec,externalRepositoryId}';
+    admitted_delivery_id := submitted_event#>>'{spec,deliveryId}';
+    admitted_canonical_payload_digest := submitted_event#>>'{spec,canonicalPayloadDigest}';
+    admitted_content_digest := submitted_event->>'contentDigest';
+
+    IF NOT (submitted_event ?& ARRAY[
+            'apiVersion', 'kind', 'id', 'scope', 'spec',
+            'contentDigest', 'receivedAt'
+       ])
+       OR (submitted_event - ARRAY[
+            'apiVersion', 'kind', 'id', 'scope', 'spec',
+            'contentDigest', 'receivedAt'
+       ]) <> '{}'::jsonb
+       OR jsonb_typeof(submitted_event->'scope') IS DISTINCT FROM 'object'
+       OR jsonb_typeof(submitted_event->'spec') IS DISTINCT FROM 'object'
+       OR jsonb_typeof(submitted_event#>'{spec,change}') IS DISTINCT FROM 'object'
+       OR ((submitted_event->'scope') - ARRAY['tenantId']) <> '{}'::jsonb
+       OR NOT ((submitted_event->'scope') ?& ARRAY['tenantId'])
+       OR ((submitted_event->'spec') - ARRAY[
+            'projectId', 'sourceConnectionId', 'repositoryBindingId',
+            'repositoryBindingDigest', 'externalRepositoryId', 'deliveryId',
+            'canonicalPayloadDigest', 'change'
+       ]) <> '{}'::jsonb
+       OR NOT ((submitted_event->'spec') ?& ARRAY[
+            'projectId', 'sourceConnectionId', 'repositoryBindingId',
+            'repositoryBindingDigest', 'externalRepositoryId', 'deliveryId',
+            'canonicalPayloadDigest', 'change'
+       ])
+       OR ((submitted_event#>'{spec,change}') - ARRAY[
+            'number', 'action', 'headCommit', 'trustedBaseCommit'
+       ]) <> '{}'::jsonb
+       OR NOT ((submitted_event#>'{spec,change}') ?& ARRAY[
+            'number', 'action', 'headCommit', 'trustedBaseCommit'
+       ])
+       OR submitted_event->>'apiVersion' IS DISTINCT FROM 'devops.matrix.xiak.com/v1'
+       OR submitted_event->>'kind' IS DISTINCT FROM 'SourceEvent'
+       OR submitted_event#>>'{scope,tenantId}' IS DISTINCT FROM effective_tenant_id
+       OR COALESCE(admitted_event_id, '') COLLATE "C" !~ '^source-event-[0-9a-f]{48}$'
+       OR COALESCE(admitted_project_id, '') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR COALESCE(admitted_source_connection_id, '') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR COALESCE(admitted_repository_binding_id, '') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR COALESCE(admitted_external_repository_id, '') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR COALESCE(admitted_delivery_id, '') COLLATE "C" !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+       OR COALESCE(admitted_repository_binding_digest, '') COLLATE "C" !~ '^sha256:[0-9a-f]{64}$'
+       OR COALESCE(admitted_canonical_payload_digest, '') COLLATE "C" !~ '^sha256:[0-9a-f]{64}$'
+       OR COALESCE(admitted_content_digest, '') COLLATE "C" !~ '^sha256:[0-9a-f]{64}$'
+       OR submitted_event#>>'{spec,change,action}' NOT IN ('OPENED', 'REOPENED', 'UPDATED')
+       OR COALESCE(submitted_event#>>'{spec,change,number}', '') COLLATE "C" !~ '^[1-9][0-9]*$'
+       OR (submitted_event#>>'{spec,change,number}')::numeric > 9007199254740991
+       OR COALESCE(submitted_event#>>'{spec,change,headCommit}', '') COLLATE "C"
+            !~ '^([0-9a-f]{40}|[0-9a-f]{64})$'
+       OR COALESCE(submitted_event#>>'{spec,change,trustedBaseCommit}', '') COLLATE "C"
+            !~ '^([0-9a-f]{40}|[0-9a-f]{64})$'
+       OR COALESCE(submitted_event->>'receivedAt', '') COLLATE "C"
+            !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,6})?Z$'
+       OR NOT pg_input_is_valid(COALESCE(submitted_event->>'receivedAt', ''), 'timestamptz')
+       OR (submitted_event->>'receivedAt')::timestamptz IS DISTINCT FROM effective_now THEN
+        RAISE EXCEPTION USING ERRCODE = '22023',
+            MESSAGE = 'SourceEvent admission document is invalid';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+          FROM delivery.source_connections AS connection
+          JOIN delivery.repository_bindings AS binding
+            ON binding.tenant_id = connection.tenant_id
+           AND binding.source_connection_id = connection.id
+         WHERE connection.tenant_id = effective_tenant_id
+           AND connection.id = admitted_source_connection_id
+           AND connection.document#>>'{status,health}' = 'READY'
+           AND binding.id = admitted_repository_binding_id
+           AND binding.project_id = admitted_project_id
+           AND binding.external_repository_id = admitted_external_repository_id
+           AND binding.content_digest = admitted_repository_binding_digest
+           AND binding.document#>>'{status,health}' = 'READY'
+    ) THEN
+        RAISE EXCEPTION USING ERRCODE = '23503',
+            MESSAGE = 'SourceEvent has no ready repository binding';
+    END IF;
+
+    PERFORM pg_advisory_xact_lock(
+        hashtextextended('matrix-devops-queued-runs-v1:' || effective_tenant_id, 0)
+    );
+    SELECT count(*) INTO expected_run_count
+      FROM delivery.pipelines AS pipeline
+      JOIN delivery.pipeline_revisions AS revision
+        ON revision.tenant_id = pipeline.tenant_id
+       AND revision.id = pipeline.active_revision_id
+       AND revision.pipeline_id = pipeline.id
+       AND revision.revision = pipeline.active_revision
+       AND revision.content_digest = pipeline.active_revision_digest
+     WHERE pipeline.tenant_id = effective_tenant_id
+       AND revision.project_id = admitted_project_id
+       AND revision.repository_binding_id = admitted_repository_binding_id
+       AND revision.repository_binding_digest = admitted_repository_binding_digest
+       AND revision.document#>>'{spec,triggerPolicy}' = 'CHANGE';
+    IF expected_run_count <> submitted_run_count THEN
+        RAISE EXCEPTION USING ERRCODE = '23503',
+            MESSAGE = 'PipelineRun fan-out does not match active revisions';
+    END IF;
+    SELECT count(*) INTO queued_run_count
+      FROM delivery.pipeline_runs
+     WHERE tenant_id = effective_tenant_id AND state = 'QUEUED';
+    IF queued_run_count + submitted_run_count > 32 THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX429',
+            MESSAGE = 'tenant queued-run capacity is exhausted';
+    END IF;
+
+    INSERT INTO delivery.audit_operations (
+        tenant_id, id, operation_kind, target_kind, target_id, created_at
+    ) VALUES (
+        effective_tenant_id, admitted_event_id, 'SOURCE_EVENT_ADMISSION',
+        'SOURCE_EVENT', admitted_event_id, effective_now
+    );
+    INSERT INTO delivery.source_events (
+        tenant_id, id, project_id, source_connection_id,
+        repository_binding_id, repository_binding_digest,
+        external_repository_id, delivery_id, canonical_payload_digest,
+        content_digest, received_at, document
+    ) VALUES (
+        effective_tenant_id, admitted_event_id, admitted_project_id,
+        admitted_source_connection_id, admitted_repository_binding_id,
+        admitted_repository_binding_digest, admitted_external_repository_id,
+        admitted_delivery_id, admitted_canonical_payload_digest,
+        admitted_content_digest, effective_now, submitted_event
+    );
+
+    IF submitted_run_count > 0 THEN
+        FOR run_index IN 0..submitted_run_count - 1 LOOP
+            run_document := submitted_runs->run_index;
+            IF jsonb_typeof(run_document) IS DISTINCT FROM 'object'
+               OR NOT (run_document ?& ARRAY[
+                    'apiVersion', 'kind', 'id', 'scope', 'projectId',
+                    'pipelineId', 'input', 'inputDigest', 'status',
+                    'createdAt', 'updatedAt'
+               ])
+               OR (run_document - ARRAY[
+                    'apiVersion', 'kind', 'id', 'scope', 'projectId',
+                    'pipelineId', 'input', 'inputDigest', 'status',
+                    'createdAt', 'updatedAt'
+               ]) <> '{}'::jsonb
+               OR jsonb_typeof(run_document->'scope') IS DISTINCT FROM 'object'
+               OR jsonb_typeof(run_document->'input') IS DISTINCT FROM 'object'
+               OR jsonb_typeof(run_document#>'{input,change}') IS DISTINCT FROM 'object'
+               OR jsonb_typeof(run_document->'status') IS DISTINCT FROM 'object'
+               OR ((run_document->'scope') - ARRAY['tenantId']) <> '{}'::jsonb
+               OR ((run_document->'input') - ARRAY[
+                    'sourceEventId', 'sourceEventDigest', 'pipelineRevisionId',
+                    'pipelineRevisionDigest', 'repositoryBindingId',
+                    'repositoryBindingDigest', 'change'
+               ]) <> '{}'::jsonb
+               OR ((run_document->'status') - ARRAY[
+                    'state', 'stage', 'reason', 'resourceVersion', 'observedAt'
+               ]) <> '{}'::jsonb
+               OR run_document->>'apiVersion' IS DISTINCT FROM 'devops.matrix.xiak.com/v1'
+               OR run_document->>'kind' IS DISTINCT FROM 'PipelineRun'
+               OR run_document#>>'{scope,tenantId}' IS DISTINCT FROM effective_tenant_id
+               OR run_document->>'projectId' IS DISTINCT FROM admitted_project_id
+               OR COALESCE(run_document->>'id', '') COLLATE "C" !~ '^pipeline-run-[0-9a-f]{48}$'
+               OR COALESCE(run_document->>'pipelineId', '') COLLATE "C"
+                    !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+               OR run_document#>>'{input,sourceEventId}' IS DISTINCT FROM admitted_event_id
+               OR run_document#>>'{input,sourceEventDigest}' IS DISTINCT FROM admitted_content_digest
+               OR run_document#>>'{input,repositoryBindingId}' IS DISTINCT FROM admitted_repository_binding_id
+               OR run_document#>>'{input,repositoryBindingDigest}' IS DISTINCT FROM admitted_repository_binding_digest
+               OR run_document#>'{input,change}' IS DISTINCT FROM submitted_event#>'{spec,change}'
+               OR COALESCE(run_document#>>'{input,pipelineRevisionId}', '') COLLATE "C"
+                    !~ '^pipeline-revision-[0-9a-f]{48}$'
+               OR COALESCE(run_document#>>'{input,pipelineRevisionDigest}', '') COLLATE "C"
+                    !~ '^sha256:[0-9a-f]{64}$'
+               OR COALESCE(run_document->>'inputDigest', '') COLLATE "C"
+                    !~ '^sha256:[0-9a-f]{64}$'
+               OR run_document#>>'{status,state}' IS DISTINCT FROM 'QUEUED'
+               OR run_document#>>'{status,stage}' IS DISTINCT FROM 'RECEIVE'
+               OR run_document#>>'{status,reason}' IS DISTINCT FROM 'EVENT_ADMITTED'
+               OR run_document#>>'{status,resourceVersion}' IS DISTINCT FROM '1'
+               OR (run_document#>>'{status,observedAt}')::timestamptz IS DISTINCT FROM effective_now
+               OR (run_document->>'createdAt')::timestamptz IS DISTINCT FROM effective_now
+               OR (run_document->>'updatedAt')::timestamptz IS DISTINCT FROM effective_now
+               OR NOT EXISTS (
+                    SELECT 1
+                      FROM delivery.pipelines AS pipeline
+                      JOIN delivery.pipeline_revisions AS revision
+                        ON revision.tenant_id = pipeline.tenant_id
+                       AND revision.id = pipeline.active_revision_id
+                       AND revision.pipeline_id = pipeline.id
+                       AND revision.revision = pipeline.active_revision
+                       AND revision.content_digest = pipeline.active_revision_digest
+                     WHERE pipeline.tenant_id = effective_tenant_id
+                       AND pipeline.id = run_document->>'pipelineId'
+                       AND pipeline.project_id = admitted_project_id
+                       AND revision.id = run_document#>>'{input,pipelineRevisionId}'
+                       AND revision.content_digest = run_document#>>'{input,pipelineRevisionDigest}'
+                       AND revision.repository_binding_id = admitted_repository_binding_id
+                       AND revision.repository_binding_digest = admitted_repository_binding_digest
+                       AND revision.document#>>'{spec,triggerPolicy}' = 'CHANGE'
+               ) THEN
+                RAISE EXCEPTION USING ERRCODE = '22023',
+                    MESSAGE = 'queued PipelineRun admission document is invalid';
+            END IF;
+
+            INSERT INTO delivery.audit_operations (
+                tenant_id, id, operation_kind, target_kind, target_id, created_at
+            ) VALUES (
+                effective_tenant_id, run_document->>'id',
+                'PIPELINE_RUN_CREATION', 'PIPELINE_RUN',
+                run_document->>'id', effective_now
+            );
+            INSERT INTO delivery.pipeline_runs (
+                tenant_id, id, source_event_id, source_event_digest,
+                pipeline_id, project_id, pipeline_revision_id,
+                pipeline_revision_digest, repository_binding_id,
+                repository_binding_digest, state, stage, reason,
+                resource_version, completed_at, created_at, updated_at, document
+            ) VALUES (
+                effective_tenant_id, run_document->>'id', admitted_event_id,
+                admitted_content_digest, run_document->>'pipelineId',
+                admitted_project_id,
+                run_document#>>'{input,pipelineRevisionId}',
+                run_document#>>'{input,pipelineRevisionDigest}',
+                admitted_repository_binding_id, admitted_repository_binding_digest,
+                'QUEUED', 'RECEIVE', 'EVENT_ADMITTED', 1, NULL,
+                effective_now, effective_now, run_document
+            );
+        END LOOP;
+    END IF;
+
+    first_request_id := submitted_audit_events#>>'{0,requestId}';
+    first_correlation_id := submitted_audit_events#>>'{0,correlationId}';
+    first_traceparent := submitted_audit_events#>>'{0,traceparent}';
+    FOR audit_index IN 0..submitted_run_count LOOP
+        audit_document := submitted_audit_events->audit_index;
+        IF audit_index = 0 THEN
+            expected_action := 'devops.source-event.admitted';
+            expected_target_kind := 'SOURCE_EVENT';
+            expected_target_id := admitted_event_id;
+            expected_request_digest := admitted_content_digest;
+        ELSE
+            run_document := submitted_runs->(audit_index - 1);
+            expected_action := 'devops.pipeline-run.created';
+            expected_target_kind := 'PIPELINE_RUN';
+            expected_target_id := run_document->>'id';
+            expected_request_digest := run_document->>'inputDigest';
+        END IF;
+        IF jsonb_typeof(audit_document) IS DISTINCT FROM 'object'
+           OR NOT (audit_document ?& ARRAY[
+                'apiVersion', 'kind', 'eventId', 'tenantId', 'actor',
+                'action', 'target', 'result', 'requestDigest', 'requestId',
+                'correlationId', 'operationId', 'occurredAt'
+           ])
+           OR (audit_document - ARRAY[
+                'apiVersion', 'kind', 'eventId', 'tenantId', 'actor',
+                'action', 'target', 'result', 'requestDigest', 'requestId',
+                'correlationId', 'operationId', 'traceparent', 'occurredAt'
+           ]) <> '{}'::jsonb
+           OR jsonb_typeof(audit_document->'actor') IS DISTINCT FROM 'object'
+           OR jsonb_typeof(audit_document->'target') IS DISTINCT FROM 'object'
+           OR ((audit_document->'actor') - ARRAY['type', 'id']) <> '{}'::jsonb
+           OR ((audit_document->'target') - ARRAY['kind', 'id']) <> '{}'::jsonb
+           OR audit_document->>'apiVersion' IS DISTINCT FROM 'audit.matrix.xiak.com/v1'
+           OR audit_document->>'kind' IS DISTINCT FROM 'AuditEvent'
+           OR audit_document->>'tenantId' IS DISTINCT FROM effective_tenant_id
+           OR audit_document#>>'{actor,type}' IS DISTINCT FROM 'SYSTEM'
+           OR audit_document#>>'{actor,id}' IS DISTINCT FROM 'system-devops-source-ingress'
+           OR audit_document ? 'iamDecisionId'
+           OR audit_document->>'action' IS DISTINCT FROM expected_action
+           OR audit_document#>>'{target,kind}' IS DISTINCT FROM expected_target_kind
+           OR audit_document#>>'{target,id}' IS DISTINCT FROM expected_target_id
+           OR audit_document->>'result' IS DISTINCT FROM 'ACCEPTED'
+           OR audit_document->>'requestDigest' IS DISTINCT FROM expected_request_digest
+           OR audit_document->>'operationId' IS DISTINCT FROM expected_target_id
+           OR audit_document->>'requestId' IS DISTINCT FROM first_request_id
+           OR audit_document->>'correlationId' IS DISTINCT FROM first_correlation_id
+           OR COALESCE(audit_document->>'traceparent', '')
+                IS DISTINCT FROM COALESCE(first_traceparent, '')
+           OR COALESCE(audit_document->>'eventId', '') COLLATE "C"
+                !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+           OR COALESCE(audit_document->>'requestId', '') COLLATE "C"
+                !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+           OR COALESCE(audit_document->>'correlationId', '') COLLATE "C"
+                !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+           OR (audit_document ? 'traceparent' AND (
+                COALESCE(audit_document->>'traceparent', '') COLLATE "C"
+                    !~ '^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$'
+                OR split_part(audit_document->>'traceparent', '-', 2) = repeat('0', 32)
+                OR split_part(audit_document->>'traceparent', '-', 3) = repeat('0', 16)
+           ))
+           OR (audit_document->>'occurredAt')::timestamptz IS DISTINCT FROM effective_now THEN
+            RAISE EXCEPTION USING ERRCODE = '22023',
+                MESSAGE = 'run admission Audit fact is invalid';
+        END IF;
+
+        INSERT INTO delivery.audit_outbox (
+            tenant_id, event_id, operation_id, status, available_at, attempts,
+            fencing_token, created_at, updated_at, document
+        ) VALUES (
+            effective_tenant_id, audit_document->>'eventId', expected_target_id,
+            'PENDING', effective_now, 0, 0, effective_now, effective_now,
+            audit_document
+        );
+    END LOOP;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION delivery.commit_run_admission(jsonb, jsonb, jsonb)
+    FROM PUBLIC, matrix_devops_worker;
+GRANT EXECUTE ON FUNCTION delivery.commit_run_admission(jsonb, jsonb, jsonb)
+    TO matrix_devops_api;
 
 CREATE OR REPLACE FUNCTION delivery.claim_audit_event(
     requested_worker_id text,
@@ -1071,8 +1856,14 @@ AS $function$
         AND to_regclass('delivery.repository_bindings') IS NOT NULL
         AND to_regclass('delivery.pipelines') IS NOT NULL
         AND to_regclass('delivery.pipeline_revisions') IS NOT NULL
+        AND to_regclass('delivery.source_events') IS NOT NULL
+        AND to_regclass('delivery.pipeline_runs') IS NOT NULL
+        AND to_regclass('delivery.audit_operations') IS NOT NULL
         AND to_regprocedure(
             'delivery.commit_configuration_mutation(text,bigint,jsonb,jsonb,jsonb,jsonb,jsonb)'
+        ) IS NOT NULL
+        AND to_regprocedure(
+            'delivery.commit_run_admission(jsonb,jsonb,jsonb)'
         ) IS NOT NULL
         AND NOT EXISTS (
             SELECT 1 FROM delivery.audit_outbox AS outbox
@@ -1135,6 +1926,8 @@ GRANT SELECT ON delivery.repository_bindings TO matrix_devops_api;
 GRANT SELECT ON delivery.repository_binding_revisions TO matrix_devops_api;
 GRANT SELECT ON delivery.pipelines TO matrix_devops_api;
 GRANT SELECT ON delivery.pipeline_revisions TO matrix_devops_api;
+GRANT SELECT ON delivery.source_events TO matrix_devops_api;
+GRANT SELECT ON delivery.pipeline_runs TO matrix_devops_api;
 GRANT SELECT ON delivery.mutations TO matrix_devops_api;
 
 COMMIT;

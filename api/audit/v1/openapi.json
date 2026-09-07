@@ -39,6 +39,8 @@
           "devops.pipeline.created",
           "devops.pipeline.draft-updated",
           "devops.pipeline-revision.activated",
+          "devops.source-event.admitted",
+          "devops.pipeline-run.created",
           "audit.records.read",
           "audit.integrity.verified"
         ],
@@ -683,6 +685,58 @@
                   "properties": {
                     "action": {
                       "const": "devops.pipeline-revision.activated"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "DEVOPS"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "devops.source-event.admitted"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "DEVOPS"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "devops.pipeline-run.created"
                     }
                   },
                   "required": [
@@ -1758,6 +1812,76 @@
             "if": {
               "properties": {
                 "action": {
+                  "const": "devops.source-event.admitted"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "iamDecisionId": false,
+                "result": {
+                  "enum": [
+                    "ACCEPTED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "SOURCE_EVENT"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "operationId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "devops.pipeline-run.created"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "iamDecisionId": false,
+                "result": {
+                  "enum": [
+                    "ACCEPTED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "PIPELINE_RUN"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "operationId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
                   "const": "audit.records.read"
                 }
               },
@@ -2227,6 +2351,8 @@
           "REPOSITORY_BINDING",
           "PIPELINE",
           "PIPELINE_REVISION",
+          "SOURCE_EVENT",
+          "PIPELINE_RUN",
           "AUDIT_RECORDS",
           "AUDIT_CHAIN"
         ],

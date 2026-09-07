@@ -52,7 +52,8 @@ BEGIN
         VALUES
             ('projects'), ('source_connections'), ('repository_bindings'),
             ('repository_binding_revisions'), ('pipelines'),
-            ('pipeline_revisions'), ('mutations'), ('audit_outbox')
+            ('pipeline_revisions'), ('source_events'), ('pipeline_runs'),
+            ('mutations'), ('audit_operations'), ('audit_outbox')
       ) AS required(name)
      WHERE to_regclass('delivery.' || required.name) IS NULL;
     IF missing IS NOT NULL THEN
@@ -79,7 +80,8 @@ BEGIN
         VALUES
             ('projects'), ('source_connections'), ('repository_bindings'),
             ('repository_binding_revisions'), ('pipelines'),
-            ('pipeline_revisions'), ('mutations'), ('audit_outbox')
+            ('pipeline_revisions'), ('source_events'), ('pipeline_runs'),
+            ('mutations'), ('audit_operations'), ('audit_outbox')
      ) AS required(table_name)
      WHERE NOT EXISTS (
         SELECT 1 FROM information_schema.columns AS column_info
@@ -95,6 +97,13 @@ BEGIN
      );
     IF missing IS NOT NULL THEN
         RAISE EXCEPTION 'delivery tenant-leading policy is missing: %', missing;
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM pg_catalog.pg_policies AS policy
+         WHERE policy.schemaname = 'delivery'
+           AND policy.policyname = 'owner_schema_upgrade'
+    ) THEN
+        RAISE EXCEPTION 'temporary delivery schema-upgrade policy remains installed';
     END IF;
     IF NOT EXISTS (
         SELECT 1 FROM pg_catalog.pg_policies AS policy
@@ -125,14 +134,24 @@ BEGIN
         VALUES
             ('repository_bindings_project_fk'),
             ('repository_bindings_connection_fk'),
+            ('repository_bindings_source_repository_uq'),
             ('repository_binding_revisions_binding_fk'),
             ('repository_binding_revisions_project_fk'),
             ('repository_binding_revisions_connection_fk'),
+            ('repository_binding_revisions_source_identity_uq'),
             ('pipelines_project_fk'), ('pipelines_binding_fk'),
             ('pipeline_revisions_pipeline_fk'),
             ('pipeline_revisions_binding_snapshot_fk'),
+            ('pipeline_revisions_run_identity_uq'),
             ('pipelines_active_revision_fk'),
-            ('mutations_idempotency_uq'), ('audit_outbox_operation_fk'),
+            ('source_events_delivery_uq'), ('source_events_run_identity_uq'),
+            ('source_events_binding_snapshot_fk'),
+            ('source_events_audit_operation_fk'),
+            ('pipeline_runs_event_revision_uq'),
+            ('pipeline_runs_source_event_fk'), ('pipeline_runs_revision_fk'),
+            ('pipeline_runs_audit_operation_fk'),
+            ('mutations_idempotency_uq'), ('mutations_audit_operation_fk'),
+            ('audit_outbox_operation_fk'),
             ('audit_outbox_delivery_state_valid')
       ) AS required(name)
      WHERE NOT EXISTS (
@@ -149,6 +168,15 @@ BEGIN
            AND condeferrable AND condeferred
     ) THEN
         RAISE EXCEPTION 'Pipeline active revision ownership link is not deferred';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1
+          FROM pg_catalog.pg_constraint AS constraint_info
+         WHERE constraint_info.connamespace = 'delivery'::regnamespace
+           AND constraint_info.conname = 'audit_outbox_operation_fk'
+           AND constraint_info.confrelid = 'delivery.audit_operations'::regclass
+    ) THEN
+        RAISE EXCEPTION 'delivery Audit outbox does not reference generalized operations';
     END IF;
 
     IF NOT EXISTS (
@@ -171,6 +199,8 @@ BEGIN
       INTO missing
       FROM (
         VALUES
+            ('commit_run_admission',
+             'submitted_event jsonb, submitted_runs jsonb, submitted_audit_events jsonb'),
             ('claim_audit_event',
              'requested_worker_id text, requested_lease_seconds integer'),
             ('complete_audit_event',
@@ -192,7 +222,7 @@ BEGIN
            AND owner_role.rolname = 'matrix_devops_owner'
      );
     IF missing IS NOT NULL THEN
-        RAISE EXCEPTION 'delivery Audit/readiness functions are missing or unsafe: %', missing;
+        RAISE EXCEPTION 'delivery protected functions are missing or unsafe: %', missing;
     END IF;
 
     IF has_schema_privilege('matrix_devops_api', 'delivery', 'CREATE')
@@ -208,6 +238,14 @@ BEGIN
             'matrix_devops_worker',
             'delivery.commit_configuration_mutation(text,bigint,jsonb,jsonb,jsonb,jsonb,jsonb)',
             'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_devops_api',
+            'delivery.commit_run_admission(jsonb,jsonb,jsonb)', 'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_devops_worker',
+            'delivery.commit_run_admission(jsonb,jsonb,jsonb)', 'EXECUTE'
        )
        OR NOT has_function_privilege(
             'matrix_devops_api', 'delivery.readiness()', 'EXECUTE'
@@ -251,7 +289,8 @@ BEGIN
     FOREACH table_name IN ARRAY ARRAY[
         'projects', 'source_connections', 'repository_bindings',
         'repository_binding_revisions', 'pipelines', 'pipeline_revisions',
-        'mutations', 'audit_outbox'
+        'source_events', 'pipeline_runs', 'mutations', 'audit_operations',
+        'audit_outbox'
     ]
     LOOP
         IF has_table_privilege(
@@ -263,15 +302,16 @@ BEGIN
         ) THEN
             RAISE EXCEPTION 'unsafe direct table privilege on delivery.%', table_name;
         END IF;
-        IF table_name <> 'audit_outbox'
+        IF table_name NOT IN ('audit_outbox', 'audit_operations')
            AND NOT has_table_privilege(
                 'matrix_devops_api', 'delivery.' || table_name, 'SELECT'
            ) THEN
             RAISE EXCEPTION 'DevOps API cannot read delivery.%', table_name;
         END IF;
     END LOOP;
-    IF has_table_privilege('matrix_devops_api', 'delivery.audit_outbox', 'SELECT') THEN
-        RAISE EXCEPTION 'DevOps API can read the Audit outbox';
+    IF has_table_privilege('matrix_devops_api', 'delivery.audit_outbox', 'SELECT')
+       OR has_table_privilege('matrix_devops_api', 'delivery.audit_operations', 'SELECT') THEN
+        RAISE EXCEPTION 'DevOps API can read internal Audit tables';
     END IF;
 
     IF EXISTS (
