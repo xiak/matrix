@@ -1,8 +1,11 @@
-# FEAT-007 adoption review: Prow and Tencent CODING DevOps
+# Matrix DevOps adoption review: Prow and Tencent CODING DevOps
 
 - Status: Complete for donor and product-reference analysis; no implementation
   accepted
-- Target: [`FEAT-007 Repository-triggered CI/CD delivery`](../features/FEAT-007-repository-delivery.md)
+- Targets: [`FEAT-007 Repository change validation`](../features/FEAT-007-repository-delivery.md),
+  [`FEAT-009 Mainline OCI publication`](../features/FEAT-009-mainline-oci-publication.md),
+  [`FEAT-010 Application PaaS continuous delivery`](../features/FEAT-010-paas-continuous-delivery.md),
+  and [`FEAT-011 CODING connected execution provider`](../features/FEAT-011-coding-connected-provider.md)
 - Review date: 2026-09-07
 - Direct donor dependency allowed: No
 
@@ -28,9 +31,9 @@ Prow is primarily a Kubernetes-native job and source-review automation system.
 Its core creates jobs from source events, runs arbitrary Kubernetes/Tekton job
 specifications, reports results, automates merges, and removes old resources.
 It can perform delivery only because a trusted postsubmit job may carry
-deployment credentials and run provider-native commands. It does not own the
-immutable OCI publication, provenance, promotion, Matrix Deployment, or
-application-runtime verification required by the FEAT-007 target.
+deployment credentials and run provider-native commands. It does not own
+Matrix's immutable OCI publication, provenance, product handoff, Deployment,
+or application-runtime verification boundaries.
 
 The decision is therefore:
 
@@ -38,7 +41,8 @@ The decision is therefore:
   identity, reconcile-before-create behavior, separated status reporting,
   bounded concurrency concepts, trust-boundary tests, cleanup concerns, and
   CODING's explicit source → build → artifact → application delivery journey.
-- `NO-GO`: reuse Prow binaries/packages, make Kubernetes a FEAT-007 prerequisite,
+- `NO-GO`: reuse Prow binaries/packages, make Kubernetes a Matrix control-plane
+  prerequisite,
   accept arbitrary PodSpecs/pipelines, mount publisher or deployment
   credentials into build code, treat a successful job exit as CD truth, use a
   previous/default artifact after a match failure, or build a general DevOps
@@ -106,8 +110,9 @@ but calling the whole CODING DevOps product a Jenkins skin is not:
    materially different from classic Jenkins CI.
 
 Matrix adopts the product lessons, not the engine. Jenkins is not admitted as
-FEAT-007's control plane, domain model, pipeline language, credential system,
-or default runner. A future Jenkins integration could only be evaluated as an
+Matrix DevOps's control plane, domain model, pipeline language, credential
+system, or default runner. A future Jenkins integration could only be
+evaluated as an
 optional BuildExecutor adapter for an existing enterprise installation, with
 the same closed request, isolation, receipt, provenance, and secret-boundary
 conformance gates as any other executor.
@@ -146,7 +151,7 @@ a proposed Matrix implementation size.
 | `clonerefs`, `entrypoint`, `initupload`, `sidecar`, and `pkg/pod-utils` | 118 files / 15,016 text lines | `REFERENCE` | Stage separation, exact base/head checkout, process deadlines/grace, captured exit status, bounded metadata, and log/artifact finalization are valuable runner test categories. The implementations decorate Kubernetes Pods, rewrite entrypoints, pass broad job JSON/environment data, mount source/storage secrets, and rely on GCS/S3 conventions. Secret censoring after build code received a secret is defense in depth, not Matrix's primary boundary; fetch, publisher, IAM, and deployment credentials must never enter build code. |
 | Separate service/build/trusted-cluster guidance in `scaling.md`, `getting-started-deploy.md`, and `more-prow.md` | 3 documents | `ADAPT` as a mandatory isolation gate | Prow explicitly warns that malicious change code may escape a container, steal cluster secrets, or attack control services, and recommends separating untrusted tests from trusted publish/deploy jobs and the service cluster. Matrix adopts the threat model, but not Kubernetes clusters as the public guarantee. FEAT-007 cannot run arbitrary build code on the current production Compose host under only `WORKLOAD` isolation. |
 | `cmd/gangway` and `pkg/gangway` | 10 files / 3,273 text lines | `REFERENCE` | Create/get/list run operations and server-side job allowlists confirm a small northbound surface. Generated gRPC, Google auth, ProwJob fields, and job-name authorization are rejected; Matrix uses strict versioned HTTP contracts and IAM-derived tenant/action authority. |
-| `cmd/deck` and `pkg/spyglass` | 172 files / 32,149 text lines | `REFERENCE` for UX; `REJECT` as code | Run history, status, log/artifact inspection, rerun, abort, and source-review links inform a later Matrix UI slice. The implementation is coupled to ProwJob, Kubernetes, GitHub membership/OAuth, GCS/TestGrid, and its own frontend. Matrix extends its existing PaaS UI and IAM boundary instead. |
+| `cmd/deck` and `pkg/spyglass` | 172 files / 32,149 text lines | `REFERENCE` for UX; `REJECT` as code | Run history, status, log/artifact inspection, rerun, abort, and source-review links inform the Matrix DevOps UI. The implementation is coupled to ProwJob, Kubernetes, GitHub membership/OAuth, GCS/TestGrid, and its own frontend. Matrix uses its unified platform shell, product-owned UI module, and IAM boundary instead. |
 | `cmd/sinker` and `cmd/horologium` | 6 files / 2,823 lines | `REFERENCE`; scheduled runs `REJECT` for the first slice | Explicit retention, resource cleanup, metrics, and preserving scheduling anchors are useful operational concerns. Deleting aged ProwJobs/Pods cannot define Matrix record retention, Audit integrity, or artifact policy. Periodic pipelines are explicitly deferred. |
 | `cmd/tide` and `pkg/tide` | 20 files / 16,605 text lines | `REJECT` for FEAT-007 first slice | Batch retesting against a current base and merge eligibility are mature source-review capabilities, but merge queues and branch administration are separate business policy and greatly expand provider permissions. Matrix first reports checks and never merges source. |
 | `pkg/plugins` suite | 154 files / 65,096 text lines | `REJECT` | Approval, labels, ownership, issue management, chat-ops, and third-party automation are a contributor-governance product. Importing them would turn the delivery slice into a GitHub bot platform and duplicate IAM policy. Selected threat cases may be cited by later FEATs without retaining the suite. |
@@ -167,17 +172,17 @@ own contracts and implementation, not copy a proprietary API, UI, or schema.
 
 | CODING product slice | Decision | Matrix treatment |
 | --- | --- | --- |
-| Code trigger → CI → artifact repository → application CD journey | `REFERENCE` | Keep one traceable journey and shared correlation from SourceEvent through DeliveryRun, OCI digest, apphosting Operation, and Deployment generation. Do not make source hosting, test management, project planning, or a full DevOps suite part of FEAT-007. |
+| Code trigger → CI → artifact repository → application CD journey | `REFERENCE` | Keep one traceable journey and shared correlation from SourceEvent through PipelineRun, ArtifactVersion, DeliveryAttempt, apphosting Operation, and Deployment generation. Do not make source hosting, test management, project planning, or a full DevOps suite part of the first release. |
 | UI-hosted or repository-hosted pipeline definitions, configuration lock, and revision history | `ADAPT` selectively | Preserve a trusted draft/activate flow whose activation creates an immutable PipelineRevision. Repository-owned pipeline execution, arbitrary Jenkins/CIFile syntax, restoration that mutates an active revision, and a visual DAG editor remain outside the first slice. |
 | Push/MR/path/actor trigger filters and superseded-run cancellation | `ADAPT` | The provider adapter normalizes one provider's event while trusted PipelineRevision policy selects CHANGE or MAINLINE. A branch or tag is resolved and frozen to an exact commit before admission; cancellation stops future work without assuming an external effect was absent. |
 | Artifact repository and expected-artifact binding | `ADAPT` with a stricter invariant | Make the registry/publisher a first-class boundary and carry immutable digest plus provenance into apphosting. Reject CODING's documented previous/default-artifact fallback for Matrix: mismatch, missing digest, or unverifiable provenance fails closed. |
 | Application-centric deployment, release form, manual confirmation, and promotion between environments | `REFERENCE`; promotion deferred | Preserve the separation between build completion and an application release decision. AppHosting remains owner of Application, Deployment, rollout and rollback. Production approval, release forms, environments, and promotion become later FEATs only after one automatic MAINLINE path is proven. |
-| Flexible deployment stages, strategies, provider cloud accounts, Kubernetes/host actions, and Spinnaker-derived infrastructure | `REJECT` for FEAT-007 | These are mature product capabilities but cross the Matrix product boundary. Delivery submits a typed request to apphosting and cannot accept provider manifests, host scripts, kubeconfig, service-account credentials, or direct infrastructure mutations. |
+| Flexible deployment stages, strategies, provider cloud accounts, Kubernetes/host actions, and Spinnaker-derived infrastructure | `REJECT` for the first release | These are mature product capabilities but cross the Matrix product boundary. Delivery submits a typed request to apphosting and cannot accept provider manifests, host scripts, kubeconfig, service-account credentials, or direct infrastructure mutations. |
 | Managed and self-hosted build node pools | `REFERENCE` for scheduling and operations | Preserve explicit capacity, eligibility, health, drain, and run history concepts. Do not accept persistent workspace/cache, default access by all pipelines, root execution, or a registered agent as proof of hostile-build isolation; the Matrix BuildExecutor must pass its own security gates. |
 | Credential IDs, project tokens, and runtime credential resolution | `ADAPT` only at adapter boundaries | Store references rather than plaintext and authorize every use. Source fetch, publisher, reporter, and deploy identities stay separate; generic credentials and secret-valued launch parameters are never made available to untrusted build steps. |
 | Operation, repository, and artifact logs | `ADAPT` | Emit normalized, immutable Matrix Audit facts with tenant, subject, action, resource, command identity, and outcome. Search/export views are not the authority, and native payloads, command lines, credentials, or mutable provider text are not copied into Audit. |
 | Jenkins-based classic CI/QCI, Cloud-Native Build, plugins, UI, APIs, schemas, and deployment implementation | `REJECT` | Public documentation spans multiple product generations and cannot establish a stable reusable contract. Matrix gains no CODING or Jenkins build/runtime dependency and copies no proprietary implementation or product vocabulary into its public API. |
-| CODING as a selectable Matrix product | `ADAPT` as a deferred connected-provider profile | Matrix may offer `connect existing CODING` for a customer-licensed SaaS/private instance. The adapter triggers one bound plan by exact commit, observes/cancels by stable external identity, verifies artifacts, and maps results into DeliveryRun. It does not redistribute CODING, silently provision an expiring public service, or let CODING mutate apphosting state. |
+| CODING as a selectable Matrix execution provider | `ADAPT` as a deferred connected-provider profile | Matrix may offer `connect existing CODING` for a customer-licensed SaaS/private instance. The adapter triggers one bound plan by exact commit, observes/cancels by stable external identity, verifies artifacts, and maps results into PipelineRun and ArtifactVersion. It does not redistribute CODING, silently provision an expiring public service, or let CODING mutate apphosting state. |
 | Matrix-packaged CODING private deployment | `REJECT` without commercial and runtime evidence | A catalog tile cannot imply redistribution rights or operational support. A future packaging FEAT requires vendor authorization, exact distributable/version, offline artifacts, capacity, upgrade/rollback, backup/restore, security, support ownership, and real installation gates. |
 
 ## Material gaps exposed by both comparisons
@@ -186,7 +191,7 @@ own contracts and implementation, not copy a proprietary API, UI, or schema.
    is acknowledged before handler completion. The delivery GUID becomes a
    label, while each ProwJob receives a newly generated UUID; no durable
    `(connection, delivery, payload digest)` equality/conflict boundary is
-   present in this path. Matrix must commit SourceEvent, DeliveryRun, and Audit
+   present in this path. Matrix must commit SourceEvent, PipelineRun, and Audit
    outbox before returning success.
 2. **Execution isolation.** Prow gains its isolation from separately operated
    Kubernetes build clusters. Matrix v0.1 currently proves only application
@@ -202,7 +207,7 @@ own contracts and implementation, not copy a proprietary API, UI, or schema.
    a verifiable source → pipeline → builder → OCI digest chain, and fail-closed
    binding. FEAT-004 additionally resolves only images already present on the
    target; apphosting must own a new digest-preserving availability/import path
-   before FEAT-007 can complete CD.
+   before FEAT-010 can complete CD.
 4. **CD truth.** Prow documents deployment as a trusted postsubmit job running
    `kubectl apply` with credentials. Matrix must instead call the existing
    apphosting API, record its Operation and Deployment generation, and wait for
@@ -243,11 +248,11 @@ own contracts and implementation, not copy a proprietary API, UI, or schema.
 | --- | --- | --- |
 | Hook plus trigger plugin | `delivery` webhook use case + source-provider adapter | Normalize one closed provider event, authenticate it, persist before acknowledgement, select exact PipelineRevision. |
 | Presubmit / postsubmit | `CHANGE` / `MAINLINE` run mode | Keep the trust distinction; only MAINLINE may request delivery. |
-| ProwJob spec/status | `DeliveryRun` immutable input and versioned status | Preserve exact source/run identity; remove all Kubernetes/provider-native fields. |
+| ProwJob spec/status | `PipelineRun` immutable input and versioned status | Preserve exact source/run identity; remove all Kubernetes/provider-native fields. |
 | Scheduler + Plank/controller-manager | `delivery` worker + build placement + `BuildExecutor` | Use durable intent, lease/fence, receipt, observation, quota, and exact isolation rather than Kubernetes cache semantics. |
 | Pod utilities | Source snapshotter, isolated process wrapper, log collector, artifact handoff | Reimplement at the runner boundary with least privilege and no publisher/deployer credentials in build code. |
 | Crier | `CheckReporter` outbox worker | One supported provider, deterministic report command, retry/reconcile, and recorded receipt. |
-| Deck / Spyglass | Existing Matrix PaaS UI | Later views over Matrix APIs and log authorization; no Prow frontend reuse. |
+| Deck / Spyglass | Unified Matrix UI and DevOps product module | Build views over Matrix APIs and log authorization; no Prow frontend reuse. |
 | Sinker | Delivery retention/cleanup policy | Clean ephemeral runner state independently from immutable Audit and retained run metadata. |
 | Tide / plugins / periodic jobs | Deferred FEATs | Do not enter the first CI-to-CD vertical slice. |
 
@@ -256,11 +261,11 @@ own contracts and implementation, not copy a proprietary API, UI, or schema.
 | CODING concept | Matrix target owner | Treatment |
 | --- | --- | --- |
 | Project/code repository | External provider plus `delivery` RepositoryBinding | Matrix binds one provider repository; source hosting and project planning are not in scope. |
-| CI pipeline/build plan | `delivery` Pipeline, immutable PipelineRevision, and DeliveryRun | Retain stable identity, immutable activated policy, history, and run visibility; keep the first execution graph closed. |
+| CI pipeline/build plan | `delivery` Pipeline, immutable PipelineRevision, and PipelineRun | Retain stable identity, immutable activated policy, history, and run visibility; keep the first execution graph closed. |
 | Build node pool | BuildExecutor adapter and installation-owned capacity | Schedule only eligible isolated capacity with tenant quota, health, drain, and hard security guarantees. |
 | Artifact repository / expected artifact | ArtifactPublisher plus apphosting-owned artifact availability | Publish and bind by exact digest and provenance; never select previous/default/latest on failure. |
 | CD application | `apphosting` Application | Reuse the product-level application perspective without creating a second application model in `delivery`. |
-| Deployment process / release form | DeliveryRun handoff to apphosting Operation | The first MAINLINE policy is automatic and fixed; approval, promotion, and release forms are later policies. |
+| Deployment process / release form | DeliveryAttempt handoff to apphosting Operation | The first MAINLINE policy is automatic and fixed; approval, promotion, and release forms are later policies. |
 | Cloud account / infrastructure | `apphosting` ExecutionTarget and its adapters | Delivery cannot see or use provider credentials or mutate infrastructure directly. |
 | Credential manager | IAM authorization plus adapter-owned secret references | Resolve minimum credentials only in the adapter that needs them; build code receives none of these authorities. |
 | Operation/security logs | `audit` facts plus delivery read models | Audit is immutable authority; UI history and exported reports are projections. |
@@ -268,18 +273,20 @@ own contracts and implementation, not copy a proprietary API, UI, or schema.
 
 ## Admission recommendation
 
-FEAT-007 is technically viable. Prow is the more useful control-plane donor;
+The split Matrix DevOps target is technically viable. Prow is the more useful
+control-plane donor;
 Tencent CODING is the more useful end-to-end product reference. Together they
 reinforce rather than replace the target boundary: `delivery` owns verified
 source-to-artifact workflow, while `apphosting` owns deployment truth.
 
-Implementation should not begin by porting either system. Before Gate A
-implementation is accepted, the product must select one real source provider
-and prove an implementation plan for a separate untrusted build boundary, an
-OCI registry/publisher, approved dependency egress, apphosting-owned digest
-distribution, IAM/Audit contract extensions, and log retention. Those choices
-determine the first real adapters; they do not change the provider-neutral
-delivery/apphosting boundary.
+Implementation begins with FEAT-008 and FEAT-007, not by porting either
+system. Before FEAT-007 Gate A implementation is accepted, the product must
+pin one real source provider and prove an implementation plan for a separate
+untrusted build boundary, approved dependency egress, IAM/Audit contract
+extensions, and log retention. FEAT-009 separately owns the OCI
+registry/publisher boundary; FEAT-010 owns apphosting digest availability and
+deployment handoff. Those choices determine real adapters without changing the
+provider-neutral delivery/apphosting boundary.
 
 After the native path is proven, an existing customer-licensed CODING instance
 may become a selectable connected profile. It is not the default because its

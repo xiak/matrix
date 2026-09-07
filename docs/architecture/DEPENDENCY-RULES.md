@@ -6,7 +6,7 @@ is admitted.
 ## Allowed direction
 
 ```text
-app/ui/paas ────────┐
+app/ui/platform ────┐
 app/service/* ──────┼──> api/*
 app/adapter/* ──────┘
 
@@ -17,8 +17,8 @@ deploy/* assembles released artifacts; application code never imports it.
 The arrows describe source dependencies. Runtime calls may point outward
 through service-owned ports without reversing the source dependency rules.
 
-Inside a PaaS bounded context such as `apphosting`, `installation`, or
-`operation`:
+Inside a Matrix bounded context such as `apphosting`, `delivery`,
+`installation`, or `operation`:
 
 ```text
 service/<transport> -> usecase/<command> -> domain
@@ -68,6 +68,19 @@ cmd/<binary> -> service/usecase + concrete adapters
 18. Offline distribution artifacts are assembled under `deploy/`; product
     lifecycle policy remains in the `installation` context and is exercised
     through explicit ports.
+19. Foundation contains only authorities or mechanisms with at least two real
+    product consumers and one compatibility contract. It cannot become a
+    catch-all product-services package.
+20. Product-to-product integration uses the provider product's versioned public
+    API and a narrowly authorized service identity. Application PaaS cannot
+    depend on DevOps; DevOps cannot read or write apphosting storage.
+21. The DevOps `BuildExecutor` and Application PaaS
+    `DeploymentExecutor` remain separately owned contracts. They cannot share
+    a universal executor, credential, provider payload, or conformance suite.
+22. The platform UI shell may compose product UI modules in one deployable, but
+    shell and modules consume public APIs only. Installed-product navigation
+    comes from the installation-owned signed release inventory and readiness,
+    not from hard-coded availability or a mutable browser plugin manifest.
 
 These rules refine the product boundary in
 [ADR-0002](ADR-0002-product-boundary.md). Architecture tests, rather than

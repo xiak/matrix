@@ -1,4 +1,4 @@
-# Matrix PaaS
+# Matrix
 
 - [Features](docs/features/README.md)
 - [Architecture decisions](docs/architecture/README.md)

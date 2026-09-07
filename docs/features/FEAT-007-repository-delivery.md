@@ -1,336 +1,270 @@
-# FEAT-007: Repository-triggered CI/CD delivery
+# FEAT-007: Repository change validation
 
-- Status: Proposed; Prow adoption and Tencent CODING product benchmark complete,
+- Status: Proposed; UX, architecture, and donor analysis complete;
   implementation not started
-- Target release: Unscheduled post-v0.1
-- Proposed contract: `delivery.matrix.xiak.com/v1`
+- Target product: Matrix DevOps v0.1
+- Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
+- Depends on: [FEAT-008 product foundation and shell](FEAT-008-product-foundation-shell.md)
 
 ## Outcome
 
-Deliver the smallest enterprise CI/CD loop for the private Matrix Application
-PaaS: a verified source event selects an immutable pipeline revision and exact
-commit, an isolated runner verifies and builds that source into an OCI
-artifact, and a successful mainline run hands the verified digest to the
-existing application-hosting API for deployment. A change-request run reports
-its check result but cannot deploy.
+Deliver the first independently useful Matrix DevOps vertical slice: a verified
+change-request event from one self-hostable source provider selects an exact
+commit and immutable pipeline revision, runs bounded verification on an
+isolated Matrix Native executor, reports one source-provider check, and exposes
+the correlated run and sanitized log evidence in the unified Matrix UI.
 
-This target is deliberately fixed before inspecting either the Prow donor or
-the Tencent CODING product reference. It is not a general workflow engine,
-hosted source-control product, arbitrary remote shell service, or
-Kubernetes-native CI platform.
+This slice proves CI control-plane authority without publishing an artifact or
+deploying an application. Mainline OCI publication belongs to
+[FEAT-009](FEAT-009-mainline-oci-publication.md); deployment belongs to
+[FEAT-010](FEAT-010-paas-continuous-delivery.md); connecting an existing
+CODING installation belongs to
+[FEAT-011](FEAT-011-coding-connected-provider.md).
+
+It is not hosted source control, a general DAG engine, arbitrary remote shell,
+a Jenkins-compatible service, a Kubernetes-native API, a merge queue, or a
+developer-project-management suite.
 
 ## Boundary and ownership
 
-`delivery` is a new logical bounded context inside the PaaS modular monolith.
-It does not justify a new deployable service in the first slice.
+`delivery` is the DevOps product bounded context. The first implementation
+may be composed in one service process, but it owns a schema, roles, ports, and
+public contract separate from Application PaaS.
 
 | Concern | Owner |
 | --- | --- |
-| Source connection, repository binding, normalized source event, pipeline and immutable revision, delivery run and task attempts | `delivery` |
-| Application, ApplicationRevision, Deployment generation, placement, application rollback, and runtime observation | `apphosting` |
-| Organization, principal, delivery service account, authorization decision, and credential revocation | `iam` |
-| Unified immutable security and delivery facts | `audit` |
-| OCI storage and digest verification | An artifact-publisher adapter behind a `delivery`-owned port |
-| Source-provider webhooks, commit status, and source archive acquisition | Source-provider adapters behind `delivery`-owned ports |
-| Isolated source verification and image construction | A build-executor adapter behind a `delivery`-owned port |
+| DevOps project, source connection, repository binding, source event, pipeline and immutable revision, PipelineRun, task attempts, normalized logs, and check-report receipt | `delivery` |
+| Organization, principal, service identity, role, session, and authorization decision | `iam` |
+| Immutable security and DevOps facts | `audit` |
+| Installed DevOps product discovery and readiness | `installation` |
+| Provider webhook, source fetch, and commit-status protocol | One source-provider adapter behind delivery-owned ports |
+| Untrusted verification execution | One `BuildExecutor` adapter behind a delivery-owned port |
+| Application and deployment state | `apphosting`; unused by this slice |
 
-The first implementation remains under the existing PaaS process and schema,
-with tenant-leading keys, forced row-level security, and role-separated API
-and worker database access. The context owns its tables and never reads or
-writes IAM, Audit, or application-hosting tables directly. Cross-context work
-uses explicit versioned contracts even when the initial composition is in one
-process.
+Every stored row is tenant-leading and forced-row-level-security protected.
+API and worker roles remain separate. Delivery never reads or writes IAM,
+Audit, installation, or apphosting tables. Cross-context effects use versioned
+HTTP contracts and narrowly authorized service identities.
 
-Accepting this context changes the shared product map in
-[`ADR-0002`](../architecture/ADR-0002-product-boundary.md). That ADR must be
-updated in the implementation slice, after this proposal is accepted; this
-analysis does not silently make that cross-FEAT decision.
+## Product experience
 
-## Unified product experience and execution choice
+The platform shell supplies login, organization context, installed-product
+navigation, readiness, and safe global correlation. Selecting **DevOps** opens
+a product-local navigation with **Code**, **Pipelines**, and **Runs**. Artifact
+and Delivery navigation is absent until its owning FEAT is installed; an empty
+screen must not imply a capability exists.
 
-Matrix presents one DevOps product experience for repository identity, source
-events, pipeline revisions, runs, logs, artifacts, and the linked application
-deployment. Users should not need a different Matrix resource model or Audit
-view merely because execution is delegated to another supported system.
+The first journey is:
 
-The experience does not imply that Matrix must host Git, reproduce every
-provider's pipeline editor, or own every executor. A future activated
-PipelineRevision selects one vetted execution profile; that selection is
-immutable for every DeliveryRun using the revision:
+```text
+Connect repository -> create pipeline draft -> activate immutable revision
+ -> open/change a pull request -> inspect run -> inspect exact check/log evidence
+```
 
-| Profile | Product behavior | Authority boundary |
-| --- | --- | --- |
-| Matrix native | Matrix admits the source event, runs the fixed workflow on an isolated BuildExecutor, publishes the verified OCI artifact, and asks apphosting to deploy it. | This is the first Gate A-C target and the default product authority. |
-| CODING connected | Matrix connects to an existing, customer-licensed CODING SaaS or private installation, triggers an already bound build plan for the exact commit, observes its run, verifies the resulting digest/provenance, and then asks apphosting to deploy. | Deferred until real CODING trigger, observe, cancel, webhook, artifact, revocation, and outage semantics pass the same adapter gates. CODING is an executor/artifact provider, not Matrix deployment truth. |
+The pipeline page shows the bound repository, change trigger, current immutable
+revision, executor profile, limits, connection health, and latest runs. The run
+page keeps source and execution identity visible while navigating:
 
-A connected provider may contribute its own detailed editor and logs through
-links or bounded projections, while Matrix retains a normalized run summary and
-correlation. Provider-native job configuration, arbitrary parameters, secrets,
-and errors do not become Matrix public contracts.
+```text
+RECEIVE -> FETCH -> VERIFY -> REPORT
+```
 
-Using CODING to deploy directly would create an externally managed deployment,
-not an apphosting Deployment. That distinct observational mode is deferred; a
-single run cannot let both CODING and Matrix race to mutate the same target.
-Redistributing or installing CODING itself is also not implied by a connector.
-Any Matrix-packaged private CODING offering requires a separate commercial
-license, supported distribution, lifecycle, capacity, upgrade, backup, and
-acceptance decision.
+Each stage exposes normalized state, bounded duration, current/terminal reason,
+and authorized sanitized logs. The detail view shows the exact repository
+identity, change number, head and trusted base commits, event identity,
+pipeline revision, executor identity, check-report receipt, initiator, and
+Audit correlation. Provider-native pages may be linked but never embedded as
+Matrix authority.
 
-## Minimal resource model
+Empty, loading, denied, unavailable, stale-provider, cancelled,
+manual-intervention, and terminal failure states are designed states, not raw
+error pages. Keyboard navigation, visible focus, WCAG AA contrast, reduced
+motion, 360-pixel layout, and Chinese/English text expansion are acceptance
+requirements.
+
+## Resource and trust model
 
 | Resource | Mutability | Purpose |
 | --- | --- | --- |
-| `SourceConnection` | Metadata/status versioned | Tenant-bound provider identity plus references to webhook and fetch credentials; never secret plaintext. |
-| `RepositoryBinding` | Spec/status versioned | Stable provider repository identity, default branch, source connection, and target Matrix Application/Deployment. |
-| `Pipeline` | Metadata versioned | Stable identity and active immutable revision. |
-| `PipelineRevision` | Immutable | Trusted trigger policy, fixed execution/build profile, approved dependency egress, artifact destination, and deployment policy. |
-| `SourceEvent` | Immutable | Provider, delivery identity, repository, event kind, exact commit, trusted base commit where applicable, and verified payload digest. |
-| `DeliveryRun` | Immutable input/status versioned | Exact source event, commit, pipeline revision, mode, task results, output digest/provenance, and terminal result. |
+| `DevOpsProject` | Metadata/status versioned | Organization-owned namespace for repositories, pipelines, and runs; it grants no infrastructure authority. |
+| `SourceConnection` | Metadata/status versioned | Tenant-bound provider identity, endpoint allowlist, health, and secret references; never plaintext credentials. |
+| `RepositoryBinding` | Spec/status versioned | Stable provider repository identity, fetch/report connection, and trusted default branch. |
+| `Pipeline` | Metadata versioned | Stable identity plus one active immutable revision. |
+| `PipelineRevision` | Immutable | Bound repository, `CHANGE` trigger policy, trusted verification profile, approved dependency egress, limits, and reporter policy. |
+| `SourceEvent` | Immutable | Provider delivery identity, canonical payload digest, repository, change identity, exact head commit, trusted base commit, and admitted time. |
+| `PipelineRun` | Immutable input/status versioned | Exact event and revision, deterministic stages, attempts, normalized result, and correlation. |
 
-Names, branches, tags, and labels are selectors or display data. Only provider
-repository identity, immutable commit ID, pipeline revision ID, canonical
-digests, and IAM-derived tenant/subject are authorities.
+Names, branch names, labels, URLs, and display text are not authority. Provider
+repository identity, immutable commits, PipelineRevision ID, canonical payload
+digest, IAM-derived tenant/subject, and durable command identities are.
 
-A UI may eventually edit a pipeline draft, but activation always creates a
-new immutable PipelineRevision. A repository-owned YAML/Jenkinsfile, mutable
-UI document, restored configuration revision, or caller parameter cannot
-silently change the revision already selected by a SourceEvent.
+A draft is mutable only before activation. Activation creates a new
+PipelineRevision and never changes a revision referenced by a run. The first
+revision supports a closed ordered list of verification steps. Each step
+selects an installation-approved, digest-pinned toolchain image; bounded argv,
+working directory under the source root, non-secret literals, CPU, memory,
+disk, process, log, and time limits; and one named egress policy. It cannot
+select a host shell, host path, container socket, privileged mode, provider
+object, credential, or deployment target.
 
-## First vertical slice
+## Admission and workflow
 
-The first slice supports one source-provider adapter and two trigger modes:
+1. The webhook endpoint is bound to one SourceConnection. It enforces request
+   size, media type, provider event kind, current/rotating signature, delivery
+   identity, and any signed-time/replay rule supported by the selected
+   protocol before decoding bounded fields.
+2. Provider delivery identity plus canonical payload digest gives equal-replay
+   success and changed-replay conflict. The transaction stores SourceEvent,
+   selects the already-active PipelineRevision, creates the PipelineRun, and
+   writes a sanitized Audit outbox fact before acknowledging the webhook.
+3. The acquisition adapter fetches from the bound repository and proves the
+   advertised head and trusted base commits. Redirects, submodules, large-file
+   objects, commit mismatch, and unapproved endpoints fail closed. Its
+   credential never enters the verification environment.
+4. A worker claims each due stage with a lease and monotonic fencing token,
+   stores deterministic command intent, commits, and calls the adapter outside
+   the transaction. Only the current fence may commit a result.
+5. Build code is untrusted and ephemeral. It receives the content-addressed
+   source snapshot and closed verification profile, but no source-provider,
+   reporter, IAM, Audit, PaaS, host, executor-control, or future registry
+   credential.
+6. The reporter sends one pending and one terminal check under a deterministic
+   report identity. Timeout or connection loss is observed before retry; equal
+   provider replay succeeds, while contradictory receipt enters reconciliation.
+7. A manual replay selects the exact SourceEvent and PipelineRevision of an
+   existing run and creates a linked new run. It cannot resolve a branch again
+   or substitute a definition, commit, provider, or policy.
 
-- `CHANGE`: a verified change-request event runs fetch, verify, and build. It
-  reports one provider check and has no deployment authority.
-- `MAINLINE`: a verified push to the configured default branch runs fetch,
-  verify, build, publish, provenance verification, and deployment through the
-  ordinary application-hosting API.
-
-A manual replay selects only the exact SourceEvent and PipelineRevision pair
-from an existing DeliveryRun. It creates a new run linked to the earlier run;
-it cannot substitute a branch head, mutable tag, build definition, artifact,
-or deployment target.
-
-Artifact matching is fail-closed. If the selected run does not produce and
-verify its expected digest, delivery cannot fall back to the previous run's
-artifact, a configured default, a mutable tag, or a regex-selected latest
-version.
-
-The accepted workflow is fixed rather than a DAG or general YAML DSL:
+The state machine is:
 
 ```text
-RECEIVED -> FETCHING -> VERIFYING -> BUILDING
-                                   |        \
-                                   |         -> FAILED
-                                   v
-                              PUBLISHING -> DEPLOYING -> CONFIRMING -> SUCCEEDED
-                                   |              |           |
-                                   +--------------+-----------+-> FAILED
-
-CHANGE runs terminate successfully after BUILDING and check reporting.
-Uncertain external outcomes enter RECONCILING before any effect is retried.
+QUEUED -> FETCHING -> VERIFYING -> REPORTING -> SUCCEEDED
+   |          |            |           |
+   +----------+------------+-----------+-> FAILED
+   +----------+------------+-----------+-> CANCELLED
+                         uncertain external effect -> RECONCILING
+                         exhausted reconciliation -> MANUAL_INTERVENTION
 ```
 
-Cancellation stops future work and requests cancellation of a current build;
-it never assumes that an unconfirmed provider, artifact, or deployment effect
-did not happen. A bounded deadline or exhausted reconciliation ends in
-`MANUAL_INTERVENTION` rather than blind replay. `SUCCEEDED`, `FAILED`,
-`CANCELLED`, and `MANUAL_INTERVENTION` are terminal; `FAILED` carries a closed
-failure class that distinguishes source verification, build, publication,
-deployment, policy, and platform failures without native error text.
+Cancellation prevents future stages and requests cancellation of active
+execution. It never claims an unconfirmed external effect did not happen.
+`SUCCEEDED`, `FAILED`, `CANCELLED`, and `MANUAL_INTERVENTION` are
+terminal. Failure uses a closed safe class; native error text never crosses
+the adapter boundary.
 
-## Trust and execution profile
+## Security, quota, and retention
 
-1. A webhook is admitted only after size, media type, provider identity, and
-   current secret signature validation. A signed timestamp and replay window
-   are required when the selected provider protocol supplies one. Provider
-   delivery identity plus canonical payload digest always gives equal-replay
-   success and changed-replay conflict; only normalized bounded fields are
-   retained, never the raw provider payload.
-2. Trigger policy and build configuration come from the already trusted
-   PipelineRevision. A change-request head cannot replace its own pipeline,
-   runner policy, secret grants, artifact destination, or deployment target.
-3. Source acquisition resolves the advertised commit from the bound repository
-   and produces a content-addressed source bundle. Redirects, submodules,
-   large-file objects, and commit mismatch fail closed unless explicitly
-   admitted by the immutable profile.
-4. Source fetch credentials terminate in the acquisition adapter. Build code
-   never receives source-provider, artifact-publisher, IAM, Audit, PaaS, host,
-   or runner-control credentials.
-5. Build code is untrusted. It runs ephemerally under a separately schedulable
-   build isolation guarantee, with bounded CPU, memory, disk, time, processes,
-   output, and approved dependency egress. It receives no Docker socket, host
-   path, privileged mode, or control-plane network path.
-6. The runner accepts a closed build request, not caller-provided host shell,
-   Kubernetes PodSpec, Compose document, privileged flags, or provider-native
-   object. A source-owned Dockerfile may be an input only inside the isolated
-   builder; it is never executed by the control-plane host shell.
-7. The build executor returns an OCI layout plus normalized evidence. A
-   separate publisher attaches registry credentials, publishes by digest, and
-   returns the immutable locator, manifest digest, source digest, pipeline
-   revision, builder identity, and bounded provenance.
-8. Deployment uses a narrowly authorized delivery service identity and the
-   public application-hosting contract. IAM must authorize one narrowly typed
-   service-as-subject delivery action bound to the exact tenant,
-   PipelineRevision, target Application, and Deployment. `delivery` cannot
-   write an ApplicationRevision, Deployment, Operation, receipt, or
-   observation table.
-9. Logs and evidence are bounded and sanitized at ingestion. Secrets, tokens,
-   environment dumps, source-provider payloads, native runner errors, absolute
-   host paths, and arbitrary credential-bearing command lines are forbidden
-   from API responses, Audit, status, and support output.
-10. Tenant concurrency, queue depth, running time, stored log bytes, and
-    artifact production are quota-bound. Admission and scheduling are fair
-    across tenants; provider retries cannot bypass quota.
+- IAM receives closed actions for DevOps project, connection, repository,
+  pipeline, run read/replay/cancel, and log read. Built-in DevOps administrator,
+  developer, and viewer roles are organization-scoped; no provider membership
+  becomes Matrix authority.
+- Source fetch and check-report credentials are separate secret references,
+  resolved only inside their adapters. Rotation and revocation affect the next
+  effect without restarting the control plane.
+- Tenant concurrency, queue depth, running time, resource use, stored log
+  bytes, event rate, and replay rate are bounded. Scheduling is fair across
+  tenants; webhook retries cannot bypass quota.
+- Logs are bounded, chunked, ordered, and sanitized at ingestion. Secrets,
+  tokens, environment dumps, raw webhook payloads, provider-native errors,
+  arbitrary command lines, and absolute host paths are forbidden from API,
+  UI, Audit, and support evidence.
+- PipelineRun metadata and Audit facts survive cleanup of ephemeral source and
+  executor state. Exact log retention and installation-owned storage are fixed
+  before implementation; silent unbounded retention is rejected.
 
-The application `DeploymentExecutor` is not a build runner. It continues to
-accept only the bounded Matrix application profile and verified, already
-available artifacts. Build execution and deployment execution have different
-credentials, networks, capabilities, evidence, and conformance suites.
+## Implementation prerequisites
 
-## Prerequisites and cross-FEAT changes
+Before the first code slice is admitted:
 
-Implementation cannot begin as a Prow port. The first adapter choices and
-authority extensions must be accepted explicitly:
+1. Pin one self-hostable source provider and exact tested API/webhook version.
+   The initial recommendation is Gitea because it supports a small private test
+   fixture; it is an external connected service, not a bundled Matrix product.
+2. Select one separately schedulable Matrix Native BuildExecutor profile and
+   prove that malicious source cannot reach the Matrix control plane, runtime
+   hosts, container socket, other tenants, or adapter credentials. The current
+   Application PaaS Compose `WORKLOAD` guarantee is insufficient.
+3. Fix one dependency-egress policy, resolver/cache ownership, log store,
+   retention duration, maximum run shape, and installation capacity profile.
+4. Extend IAM's closed action/role catalog and Audit's closed event union
+   without arbitrary attributes or generic service impersonation.
 
-1. Select one real source provider and its self-hosted/offline support profile.
-   The public delivery contract stays provider-neutral, while webhook headers,
-   signatures, API credentials, commit statuses, and rate limits stay in that
-   adapter.
-2. Provide a separately schedulable untrusted build boundary. The existing
-   single-engine Compose `WORKLOAD` guarantee is an application boundary, not
-   evidence that hostile build code cannot escape, reach control services, or
-   steal host credentials.
-3. Select one OCI registry or content-addressed artifact store and an isolated
-   publisher. Build code emits an OCI layout without receiving publisher
-   credentials.
-4. Extend the apphosting-owned artifact availability path so the exact verified
-   digest can reach the selected ExecutionTarget before apply. FEAT-004 only
-   resolves images already present on its Docker Engine and deliberately
-   deferred automatic image distribution. Delivery cannot bypass that owner by
-   pulling or loading images directly on a runtime host.
-5. Extend IAM's closed action/role catalog and service-as-subject boundary for
-   the exact delivery action, and extend Audit's closed event union for
-   delivery facts. No generic service impersonation or arbitrary Audit
-   attributes are introduced.
-6. Define bounded log/artifact retention and its installation-owned storage;
-   deleting ephemeral runner state cannot delete retained DeliveryRun metadata
-   or immutable Audit records.
-
-## Transactions and external effects
-
-1. Webhook admission validates authority, stores/replays SourceEvent, creates
-   the exact DeliveryRun, and writes a sanitized Audit outbox fact in one
-   tenant transaction.
-2. A worker claims a due task with a lease and monotonic fencing token, stores
-   deterministic command intent, commits, then invokes an adapter outside the
-   database transaction.
-3. Results commit only under the current fence. A timeout or connection loss
-   is observed/reconciled before replay. Deterministic command identity excludes
-   attempt number.
-4. Commit-status reporting is an idempotent external effect derived from the
-   DeliveryRun and terminal check result. Provider failure cannot rewrite the
-   run result and remains durably retryable.
-5. Publication and apphosting-owned artifact availability must finish, and the
-   digest/provenance must verify, before the deployment command is admitted. A
-   failed or cancelled build cannot mutate application desired state.
-6. The application-hosting Operation ID and target Deployment generation are
-   recorded as external receipts. Delivery success requires the ordinary PaaS
-   operation to reach its verified successful state; delivery does not invent
-   a second deployment truth.
-
-## Required ports
-
-- `SourceEventVerifier`: authenticate and normalize one supported provider's
-  bounded event envelope.
-- `SourceSnapshotter`: acquire one exact commit and produce a verified source
-  bundle without exposing fetch credentials.
-- `CheckReporter`: publish one idempotent normalized check state.
-- `BuildExecutor`: apply, observe, and cancel an isolated closed build request.
-- `ArtifactPublisher`: publish and verify one OCI result by digest without
-  exposing credentials to build code.
-- IAM `Authorizer`, Audit ingestion, and the public application-hosting client
-  remain existing authority boundaries rather than delivery-owned substitutes.
-
-Concrete ports are admitted only with the first real adapter and its
-conformance tests. The names above describe required boundaries; they do not
-authorize empty interfaces or speculative packages during analysis.
+These choices refine adapters and release inventory; they cannot weaken the
+provider-neutral public resource model.
 
 ## Incremental acceptance
 
-### Gate A: contract, domain, and security policy
+### Gate A: contract, domain, and persistence
 
-1. Strict Go/OpenAPI contracts prove immutable commit and PipelineRevision
-   selection, event equal replay/changed conflict, closed enums, tenant scope,
-   optimistic concurrency, manual replay identity, and sanitized problems.
-2. Unit and property tests prove valid DeliveryRun transitions, deterministic
-   command identities, quota admission, cancellation, deadline, fence, and
-   observe-before-retry behavior.
-3. Adversarial tests reject forged/stale/oversized webhooks, branch-to-commit
-   substitution, untrusted pipeline replacement, unauthorized deploy mode,
-   secret serialization, provider payload leakage, and cross-tenant access.
-4. Architecture tests prove `delivery` does not import provider SDK models into
-   domain contracts and cannot use the application executor or another
-   context's persistence as its control path.
-5. IAM and Audit contract tests prove the delivery service identity cannot use
-   generic user authority, target another PipelineRevision or Deployment, or
-   emit an open-ended event; revocation and authority outage fail closed.
+1. Strict Go/OpenAPI contracts cover every resource, command, page/cursor,
+   problem, enum, and example; unknown fields, duplicates, oversize bodies,
+   tenant selectors, provider-native data, and unsafe text fail closed.
+2. Immutable revision activation, event equality/conflict, deterministic run
+   identity, state transitions, cancellation, replay, lease/fence,
+   reconciliation, quota, and sanitized failure/log behavior pass unit, race,
+   fuzz, and repeated tests.
+3. Clean PostgreSQL applies the delivery schema twice and proves separate
+   migration/API/worker roles, forced tenant isolation, database-time
+   leases, stale-fence rejection, API-only writes, and no cross-schema access.
+4. Architecture tests prove the delivery context owns its ports, depends only
+   on public contracts, does not import Prow/provider implementations into the
+   domain, and does not share the PaaS DeploymentExecutor.
 
-### Gate B: durable control plane and adapters
+### Gate B: real CI vertical slice
 
-1. A clean supported PostgreSQL database applies migrations twice and proves
-   forced tenant isolation, API/worker privilege separation, immutable inputs,
-   outbox atomicity, lease recovery, stale-fence rejection, and bounded quota
-   concurrency.
-2. A real supported source provider proves signature rotation, delivery
-   deduplication, exact-commit fetch, force-push immunity after admission,
-   check reporting, outage retry, and revocation without restart.
-3. A real isolated builder proves hard resource/deadline limits, approved-only
-   egress, no host or control-plane reachability, no credential exposure, and
-   deterministic association of source, builder, output digest, and
-   provenance.
-4. A real registry proves publish reconciliation, immutable digest retrieval,
-   changed-content conflict, and credentials inaccessible to build steps.
+1. A real pinned source-provider fixture sends a signed change event. Equal
+   delivery replay is one run; changed replay, forged/rotated signatures,
+   wrong event, oversize body, endpoint redirect, and commit mismatch fail
+   closed.
+2. Real PostgreSQL, IAM, Audit, source fetch, isolated BuildExecutor, and check
+   reporter run as process/network boundaries. The exact commit is verified,
+   the immutable profile runs once, and one provider check plus Matrix Audit
+   evidence correlate to the same run.
+3. Malicious repositories attempt host/container-socket access, control-plane
+   access, credential theft, cross-tenant reads, fork-bomb/resource escape,
+   oversized logs, path traversal, symlink escape, and unapproved egress. The
+   executor contains them without leaking native or secret data.
+4. Kill/restart at every external-effect boundary proves lease recovery,
+   fencing, observe-before-retry, cancellation, bounded reconciliation, no
+   duplicate check outcome, and no acknowledged event loss.
 
-### Gate C: real CI-to-CD vertical slice
+### Gate C: product UI and offline release
 
-1. In a disposable network-controlled environment, a signed change event for
-   an exact commit triggers one CHANGE run, reports its final check, and cannot
-   create or update a Deployment.
-2. A mainline event for the accepted commit triggers one MAINLINE run, builds
-   and publishes one OCI digest, makes that exact digest available through the
-   apphosting-owned path, creates an immutable ApplicationRevision, and
-   advances exactly one Deployment generation through the real PaaS API.
-3. Duplicate/out-of-order events, worker and provider restarts, timeouts at
-   every external-effect boundary, and stale workers neither duplicate effects
-   nor deploy a different commit. Unknown effects reconcile before retry.
-4. A failing or cancelled verification/build never publishes or deploys. An
-   application rollout failure remains an apphosting failure linked from the
-   DeliveryRun and does not falsify artifact provenance.
-5. Malicious source attempts to read credentials, mount host paths, reach the
-   control plane, escape resource limits, spoof logs, or replace trusted policy
-   fail without cross-tenant effects or sensitive evidence leakage.
+1. Through the real APISIX edge and platform shell, an authorized user creates
+   a DevOps project, connection, repository binding, draft, and immutable
+   revision; a viewer cannot mutate them and another tenant cannot observe
+   them.
+2. A real change event drives the visible RECEIVE/FETCH/VERIFY/REPORT stages.
+   Desktop and 360-pixel UI tests cover success, failure, cancellation,
+   provider outage, stale data, denied log access, empty/loading states,
+   keyboard use, focus, contrast, and no raw/secret/path leakage.
+3. The signed offline release declares DevOps installed, starts its control
+   plane and isolated executor integration without Internet access, verifies
+   readiness through product discovery, and repeats the source-to-check flow
+   against the local provider fixture.
+4. Backup, upgrade, rollback, recovery, restart, and support evidence preserve
+   or deliberately retire DevOps state under installation-owned policy without
+   changing Application PaaS behavior.
 
-The common generation-drift, unit, architecture, vet, race, repeated,
-cross-platform build, Markdown-link, donor-dependency, tenant-authority,
-secret-leakage, and `git diff --check` gates must pass on one worktree.
+Common generation-drift, schema, architecture, unit, vet, race, repeated,
+cross-platform build, Markdown-link, stale-term, donor-dependency,
+tenant-authority, vulnerability, license, accessibility, and
+`git diff --check` gates pass on the same committed worktree.
 
-## Explicitly deferred
+## Adoption
 
-General DAG/workflow syntax, repository-owned CIFile/Jenkinsfile execution,
-visual pipeline design, arbitrary host commands, caller-provided PodSpecs or
-Compose files, source-code hosting, merge queues, branch protection
-administration, approval plugins, chat-ops commands, release forms, release
-trains, multi-environment promotion, production approval, canary/blue-green
-rollout, deployment rollback policy, scheduled jobs, test result analytics,
-elastic runner autoscaling, shared cache, matrix builds, nested
-virtualization, customer-defined executor plugins, and multiple source
-providers are outside the first slice. A CODING connected profile, direct
-external CD observation, and private CODING packaging are later independently
-accepted slices rather than hidden requirements of the native path.
+The fixed Prow commit, CODING product benchmark, detailed
+`REUSE`/`ADAPT`/`REFERENCE`/`REJECT` decisions, and evidence limits are
+owned by the
+[FEAT-007 adoption review](../adoption/FEAT-007-repository-delivery.md).
+No donor code, API type, configuration, binary, image, or dependency is a
+Matrix build/runtime input.
 
-Prow inspection, the Tencent CODING product benchmark, and the resulting
-`REUSE`/`ADAPT`/`REFERENCE`/`REJECT` decisions are owned by the
-[`FEAT-007 adoption review`](../adoption/FEAT-007-repository-delivery.md), not
-this target.
+## Deferred
+
+Mainline publication, artifact repository UX, Application PaaS delivery,
+production approval, environment promotion, release forms, deployment
+strategies, schedules, merge queues, source hosting, visual DAG editing,
+arbitrary pipeline YAML/Jenkinsfile compatibility, persistent workspaces,
+cross-run caches, native Kubernetes objects, and CODING-connected execution
+remain outside this slice.
