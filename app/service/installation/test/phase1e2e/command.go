@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -487,6 +488,80 @@ func expectedPlatformServices(
 	return compiled, services, nil
 }
 
+func expectedPlatformPortBindings(composeJSON []byte) (map[string][]string, error) {
+	var document struct {
+		Services map[string]struct {
+			Ports []string `json:"ports"`
+		} `json:"services"`
+	}
+	if json.Unmarshal(composeJSON, &document) != nil || len(document.Services) == 0 {
+		return nil, errors.New("compiled platform edge inventory is invalid")
+	}
+	result := make(map[string][]string, len(document.Services))
+	published := 0
+	for service, configuration := range document.Services {
+		bindings := make([]string, 0, len(configuration.Ports))
+		for _, value := range configuration.Ports {
+			separator := strings.LastIndexByte(value, ':')
+			if separator <= 0 || separator == len(value)-1 {
+				return nil, errors.New("compiled platform edge binding is invalid")
+			}
+			host, hostPort, err := net.SplitHostPort(value[:separator])
+			if err != nil {
+				return nil, errors.New("compiled platform edge binding is invalid")
+			}
+			binding, err := canonicalPlatformPortBinding(value[separator+1:], host, hostPort)
+			if err != nil {
+				return nil, err
+			}
+			bindings = append(bindings, binding)
+			published++
+		}
+		slices.Sort(bindings)
+		result[service] = bindings
+	}
+	if published == 0 {
+		return nil, errors.New("compiled platform edge inventory is empty")
+	}
+	return result, nil
+}
+
+func canonicalPlatformPortBinding(containerPort, host, hostPort string) (string, error) {
+	port, protocol, found := strings.Cut(containerPort, "/")
+	hostNumber, hostErr := strconv.ParseUint(hostPort, 10, 16)
+	containerNumber, containerErr := strconv.ParseUint(port, 10, 16)
+	if !found || protocol != "tcp" || net.ParseIP(host) == nil || hostErr != nil ||
+		containerErr != nil || hostNumber == 0 || containerNumber == 0 ||
+		strconv.FormatUint(hostNumber, 10) != hostPort || strconv.FormatUint(containerNumber, 10) != port {
+		return "", errors.New("platform edge binding is invalid")
+	}
+	return host + "|" + hostPort + "|" + containerPort, nil
+}
+
+func matchesPlatformPortBindings(expected []string, actual map[string][]json.RawMessage) bool {
+	observed := make([]string, 0, len(expected))
+	for containerPort, values := range actual {
+		for _, value := range values {
+			var binding struct {
+				HostIP   string `json:"HostIp"`
+				HostPort string `json:"HostPort"`
+			}
+			if decodeOne(value, &binding) != nil {
+				return false
+			}
+			canonical, err := canonicalPlatformPortBinding(
+				containerPort, binding.HostIP, binding.HostPort,
+			)
+			if err != nil {
+				return false
+			}
+			observed = append(observed, canonical)
+		}
+	}
+	slices.Sort(observed)
+	return slices.Equal(expected, observed)
+}
+
 func assertPlatform(
 	ctx context.Context,
 	root string,
@@ -498,7 +573,11 @@ func assertPlatform(
 		state.PreviousRelease != wantPrevious || state.Active != nil {
 		return lifecycle.Journal{}, fail("platform-journal")
 	}
-	_, expected, err := expectedPlatformServices(manifest, root, state.InstallationID)
+	compiled, expected, err := expectedPlatformServices(manifest, root, state.InstallationID)
+	if err != nil {
+		return lifecycle.Journal{}, fail("platform-topology-contract")
+	}
+	expectedPorts, err := expectedPlatformPortBindings(compiled.ComposeJSON)
 	if err != nil {
 		return lifecycle.Journal{}, fail("platform-topology-contract")
 	}
@@ -515,7 +594,6 @@ func assertPlatform(
 		return lifecycle.Journal{}, fail("platform-container-inspection")
 	}
 	seen := make(map[string]struct{}, len(inspections))
-	published := 0
 	for _, inspection := range inspections {
 		role := inspection.Config.Labels["com.xiak.matrix.role"]
 		if _, ok := expected[role]; !ok || inspection.Config.Labels["com.xiak.matrix.release"] != manifest.Release.ID ||
@@ -528,15 +606,13 @@ func assertPlatform(
 			return lifecycle.Journal{}, fail("platform-container-identity")
 		}
 		seen[role] = struct{}{}
-		for _, bindings := range inspection.HostConfig.PortBindings {
-			published += len(bindings)
+		if !matchesPlatformPortBindings(expectedPorts[role], inspection.HostConfig.PortBindings) {
+			stage := "platform-port-boundary"
+			if role == "apisix" {
+				stage = "platform-edge-boundary"
+			}
+			return lifecycle.Journal{}, fail(stage)
 		}
-		if role != "apisix" && len(inspection.HostConfig.PortBindings) != 0 {
-			return lifecycle.Journal{}, fail("platform-port-boundary")
-		}
-	}
-	if published != 1 {
-		return lifecycle.Journal{}, fail("platform-edge-boundary")
 	}
 	return state, nil
 }

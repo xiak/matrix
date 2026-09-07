@@ -15,8 +15,50 @@ import (
 
 	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
+	"github.com/xiak/matrix/app/service/installation/internal/releasetest"
 	"github.com/xiak/matrix/app/service/installation/release"
+	"github.com/xiak/matrix/app/service/installation/topology"
 )
+
+func TestPlatformEdgeBoundaryFollowsTheSignedTopology(t *testing.T) {
+	compiled, _, err := expectedPlatformServices(
+		releasetest.Manifest(), "/data/xiak/platform-edge-test", "mxi-"+strings.Repeat("a", 32),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := expectedPlatformPortBindings(compiled.ComposeJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "0.0.0.0|8080|9080/tcp,0.0.0.0|8443|9443/tcp"
+	if strings.Join(expected["apisix"], ",") != want ||
+		len(expected["paas-api"]) != 0 || compiled.ContractDigest != topology.ContractDigest() {
+		t.Fatalf("compiled edge bindings = %#v", expected)
+	}
+	actual := map[string][]json.RawMessage{
+		"9080/tcp": {json.RawMessage(`{"HostIp":"0.0.0.0","HostPort":"8080"}`)},
+		"9443/tcp": {json.RawMessage(`{"HostIp":"0.0.0.0","HostPort":"8443"}`)},
+	}
+	if !matchesPlatformPortBindings(expected["apisix"], actual) {
+		t.Fatal("exact UI/API and enrollment TLS edges were rejected")
+	}
+	delete(actual, "9443/tcp")
+	if matchesPlatformPortBindings(expected["apisix"], actual) {
+		t.Fatal("the pre-enrollment single-edge shape was accepted")
+	}
+	extra := map[string][]json.RawMessage{
+		"9999/tcp": {json.RawMessage(`{"HostIp":"0.0.0.0","HostPort":"9999"}`)},
+	}
+	if matchesPlatformPortBindings(expected["paas-api"], extra) {
+		t.Fatal("a non-edge service published a host port")
+	}
+	if matchesPlatformPortBindings(expected["apisix"], map[string][]json.RawMessage{
+		"9080/tcp": {json.RawMessage(`{"HostIp":"0.0.0.0","HostPort":"8080","extra":true}`)},
+	}) {
+		t.Fatal("an unrecognized Docker binding shape was accepted")
+	}
+}
 
 func TestEdgeClientSetsTheHTTPAuthorityWithoutAnOriginHeader(t *testing.T) {
 	const authority = "192.168.50.1"
