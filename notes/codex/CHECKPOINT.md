@@ -6,7 +6,7 @@
 - Updated: 2026-09-08
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `3139ecf`
+- Current pushed implementation baseline: `a47cdc8`
 
 ## Goal
 
@@ -18,21 +18,24 @@ architecture, FEAT, implementation, test, and release gates.
 
 - FEAT-007 remains the authoritative owner and is `In progress`; read it and
   the directly owning code/tests before continuing.
-- Pushed `565ff98` closes the fenced provider-neutral run lifecycle; pushed
-  `3139ecf` makes every terminal worker transition atomically emit one
-  deterministic Audit Operation/outbox fact with closed outcome and reason.
-- Audit canonicalization/OpenAPI/SQL accept outcome and reason only for the
-  `devops.pipeline-run.completed` action. Nonterminal transitions cannot emit
-  that fact, stale fences cannot duplicate it, and the legacy unaudited worker
-  function is deleted on upgrade.
+- Pushed `a47cdc8` exposes IAM-authorized `GET /v1/runs/{runId}` and bodyless
+  `POST /v1/runs/{runId}/cancel` with exact ETags, `If-Match`, deterministic
+  idempotency equality/conflict, and tenant-concealed lookup.
+- Cancellation records a canonical public request time and atomic user Audit
+  fact. Effect-free runs terminate with a separate control-actor fact; a run
+  with an intent remains pending, invalidates its old lease/fence, and recovers
+  that same intent only in `OBSERVE`. Future stages are forbidden while a
+  definitive observed terminal remains truthful.
 - API and worker identities remain table-blind outside exact protected
-  functions. Fresh and repeat PostgreSQL 18 journeys produced five facts for
-  five terminal transitions; a data-bearing upgrade from pushed `7363b29`
-  preserved 13 mutations, 16 SourceEvents, 32 PipelineRuns, nine task intents,
-  and all 61 existing Audit facts.
-- Full tests, vet, affected race and 20-run repeated suites, Linux/amd64
-  CGO-disabled build, Audit authority integration, and delivery integration
-  passed.
+  functions. A fresh PostgreSQL 18 journey produced 17 mutations, 16
+  SourceEvents, 32 PipelineRuns, nine task intents, four cancellation facts,
+  six terminal facts, and 71 Audit operations/outbox facts.
+- A data-bearing upgrade from pushed `3139ecf` preserved all
+  `13/16/32/9/66/66` records, backfilled all three historical cancelled runs,
+  reapplied cleanly, and passed current catalog verification.
+- Full tests, vet, affected race and 20-run repeated suites, five-second state
+  fuzzing, Linux/amd64 CGO-disabled builds, fresh PostgreSQL 18 integration,
+  and data-bearing upgrade verification passed.
 - The user-owned untracked `app/ui/paas/` tree remains untouched.
 
 ## Adoption boundary
@@ -45,10 +48,10 @@ architecture, FEAT, implementation, test, and release gates.
 
 ## Continuation
 
-Continue FEAT-007 with the authorized public PipelineRun read/cancel boundary.
-Cancellation must stop future stages, expose pending cancellation while an
-effect may exist, and never claim an uncertain effect did not happen. Do not
-invoke source acquisition, executor, or reporter effects yet. Preserve
-pragmatic DDD, replacement-first pre-v1 changes, optional-product isolation,
-and repository-local Git identity
-`Xiak <Jellal@aliyun.com>`.
+Continue FEAT-007 with the public manual replay boundary. A replay must select
+the exact original SourceEvent and immutable PipelineRevision, create one
+linked new PipelineRun under a deterministic command identity, and never
+resolve mutable source or pipeline configuration again. Do not invoke source
+acquisition, executor, or reporter effects yet. Preserve pragmatic DDD,
+replacement-first pre-v1 changes, optional-product isolation, and
+repository-local Git identity `Xiak <Jellal@aliyun.com>`.
