@@ -1,7 +1,7 @@
 # FEAT-007: Repository change validation
 
-- Status: Proposed; UX, architecture, and donor analysis complete;
-  implementation not started
+- Status: In progress; UX, architecture, donor analysis, and implementation
+  baseline complete; Gate A implementation not started
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -173,24 +173,164 @@ the adapter boundary.
   executor state. Exact log retention and installation-owned storage are fixed
   before implementation; silent unbounded retention is rejected.
 
-## Implementation prerequisites
+## Fixed implementation baseline
 
-Before the first code slice is admitted:
+The first code slice uses the following closed baseline. Changing a version,
+digest, limit, trust path, or retention class requires replacing this design
+before the affected implementation is accepted; a mutable tag or runtime
+default is never authority.
 
-1. Pin one self-hostable source provider and exact tested API/webhook version.
-   The initial recommendation is Gitea because it supports a small private test
-   fixture; it is an external connected service, not a bundled Matrix product.
-2. Select one separately schedulable Matrix Native BuildExecutor profile and
-   prove that malicious source cannot reach the Matrix control plane, runtime
-   hosts, container socket, other tenants, or adapter credentials. The current
-   Application PaaS Compose `WORKLOAD` guarantee is insufficient.
-3. Fix one dependency-egress policy, resolver/cache ownership, log store,
-   retention duration, maximum run shape, and installation capacity profile.
-4. Extend IAM's closed action/role catalog and Audit's closed event union
-   without arbitrary attributes or generic service impersonation.
+### Source-provider fixture and adapter
 
-These choices refine adapters and release inventory; they cannot weaken the
-provider-neutral public resource model.
+The one Gate B/C provider is Gitea `1.27.3`. Acceptance uses the official
+rootless Linux/amd64 image
+`docker.gitea.com/gitea@sha256:95b0ae18fb99b4a579b3dd383ea5ad8d8f77534c030c1fe554e6378ac8a5c496`.
+Gitea remains a customer-owned connected source system and a test fixture; it
+is not declared as a Matrix product, copied into the Matrix release, or given
+Matrix IAM authority. Version `1.27.3` is the minimum tested protocol because
+it fixes the hook-permission issue affecting `1.27.2` and earlier. The fixed
+evidence is the official
+[release](https://github.com/go-gitea/gitea/releases/tag/v1.27.3),
+[security advisory](https://github.com/go-gitea/gitea/security/advisories/GHSA-pq8x-xpgp-rvmh),
+[rootless image guidance](https://docs.gitea.com/installation/install-with-docker-rootless/),
+[webhook contract](https://docs.gitea.com/usage/repository/webhooks/), and
+[commit-status API](https://docs.gitea.com/api/operations/repo-create-status/)
+as observed on the target design date.
+
+Only endpoint-bound `pull_request` deliveries with action `opened`,
+`reopened`, or `synchronized`, JSON media type, a canonical UUID
+`X-Gitea-Delivery`, exact `X-Gitea-Event`, and a lowercase hexadecimal
+`X-Gitea-Signature` HMAC-SHA256 over the untouched bounded body are admitted.
+Gitea supplies no signed delivery time in this contract, so Matrix makes the
+durable `(SourceConnection, delivery UUID, raw payload digest)` equality or
+conflict decision before acknowledging; a caller timestamp is never used for
+replay authority. One fetch token and one status-report token are separately
+scoped to the bound repository. The adapter accepts no form body, compatibility
+header fallback, payload secret, provider membership, provider role, or raw
+provider object as Matrix authority.
+
+The source adapter fetches only the binding's immutable head and trusted base
+commits with system/global Git configuration, hooks, redirects, submodules,
+and LFS disabled. It validates both objects, emits a deterministic archive of
+the exact head tree without `.git`, and hashes that archive before handing it
+to the executor. Fetch and report credentials remain in their respective
+adapters and never enter the source archive, task environment, log, database,
+Audit event, or support output.
+
+### Matrix Native executor
+
+Untrusted verification never runs on the Foundation/Application-PaaS host.
+The accepted profile requires a dedicated Linux/amd64 runner node with no
+tenant runtime or control-plane data, Docker `29.x`, and gVisor
+`release-20260831.0` installed as the `runsc` runtime. Its fixed offline
+x86-64 archive is
+`sha256:b9ccc6e14ca4eb2c2e65ff66e011f3b7e79d3275fb12eab747b19f95caf8e891`.
+The release page and checksummed multi-binary installation model are described
+by the official gVisor
+[release](https://github.com/google/gvisor/releases/tag/release-20260831.0),
+[installation guide](https://gvisor.dev/docs/user_guide/install/), and
+[Docker runtime guide](https://gvisor.dev/docs/user_guide/quick_start/docker/).
+The runner installer consumes the release-carried archive and checksum; it
+cannot download `latest`, invoke the package manager, or let `runsc install`
+fetch missing sidecars.
+
+The runner agent polls one mutually authenticated executor endpoint and may
+receive only a current fenced task, its content-addressed source archive, and
+closed profile identity. Its credential cannot call IAM, Audit, PaaS, source
+provider, reporter, PostgreSQL, another runner, or an administrative executor
+operation. The node firewall permits only that endpoint. Draining or losing a
+runner stops new claims and leaves the control plane to reconcile the current
+lease; registration or heartbeat alone is not evidence of isolation.
+
+The sole first-release toolchain is `GO_1_26_OFFLINE_V1`, built from
+`docker.io/library/golang@sha256:07558d5472e9acb5fc5656b485e963602e925e00111b8ad676a804306e711ba3`
+(Linux/amd64 `1.26.8-alpine3.23`) and carried as an authenticated offline image.
+It runs exactly `go test -mod=vendor -count=1 ./...` followed by
+`go vet -mod=vendor ./...`, with `CGO_ENABLED=0`, `GOPROXY=off`,
+`GOSUMDB=off`, an empty credential environment, and no caller-supplied argv.
+Repositories using this profile must vendor every non-standard-library module.
+
+Each step uses `runsc`, network `none`, a read-only root filesystem, UID/GID
+`65532`, all capabilities dropped, `no-new-privileges`, no devices, no host or
+container socket, no secret mount, and only a validated read-only source mount
+plus fresh bounded tmpfs work/cache directories. The executor verifies the
+runtime name and image ID from Docker inspection rather than trusting process
+output from the sandbox. A missing runtime, changed image, unsupported host,
+or failed negative isolation probe makes the executor ineligible.
+
+### Egress, limits, storage, and retention
+
+`NONE` is the only dependency-egress policy in this slice. Source acquisition
+and status reporting occur in credential-isolated adapters; the verification
+sandbox has no interface or DNS configuration. Proxy variables, host aliases,
+registry access, package mirrors, persistent caches, and cross-run workspaces
+are rejected. A future dependency proxy is a new reviewed profile, not a
+configuration change to this one.
+
+The first release fixes these maximums:
+
+| Boundary | Limit |
+| --- | ---: |
+| Webhook body | 1 MiB |
+| Source archive / expanded tree / paths | 64 MiB / 512 MiB / 20,000 |
+| Verification steps | Exactly 2 sequential fixed steps |
+| Per-step / whole-run wall time | 10 minutes / 20 minutes |
+| Sandbox CPU / memory / writable tmpfs / processes | 2 cores / 2 GiB / 2 GiB / 256 |
+| Log line / chunk / whole run | 16 KiB / 64 KiB / 8 MiB |
+| Active runs per tenant / queued runs per tenant | 2 / 32 |
+| Active runs per runner node | 4 |
+
+The dedicated runner profile therefore requires at least 4 logical CPUs,
+8 GiB memory, and 20 GiB installation-owned free storage after toolchain
+import. The DevOps control-plane addition reserves 2 CPUs, 2 GiB memory, and
+8 GiB free storage on the Matrix host. These are eligibility floors, not
+capacity inferred from container registration or provider claims.
+
+Sanitized UTF-8 log chunks are appended in the tenant-leading `delivery`
+schema; there is no first-release object store. Control bytes, invalid UTF-8,
+ANSI escape sequences, token-shaped values, absolute paths, and lines over the
+fixed limit are rejected or replaced with a closed marker before commit.
+Logs expire after 14 days, normalized SourceEvent/PipelineRun metadata after
+90 days, and terminal runner source/work/cache state after one hour. Immutable
+Audit facts remain under Audit's indefinite retention. Cleanup is a fenced
+delivery-owned operation and cannot delete active/reconciling runs or Audit
+records.
+
+### IAM and Audit extension
+
+IAM adds service purpose `DEVOPS` and built-in roles `DEVOPS_ADMIN`,
+`DEVOPS_DEVELOPER`, and `DEVOPS_VIEWER`. The closed user-action catalog is:
+
+- project `create|read`;
+- source connection `create|read|update`;
+- repository binding `create|read|update`;
+- pipeline `create|read|update|activate`;
+- run `read|replay|cancel`;
+- log `read`.
+
+Organization administrators receive the same DevOps product authority as a
+DevOps administrator. Developers may read all listed resources, create and
+update pipelines, activate revisions, replay/cancel runs, and read logs, but
+cannot create/update provider connections or repository bindings. Viewers may
+only read resources, runs, and logs. Product discovery remains the separate
+Foundation action already granted to product roles. Service credentials may
+request only their owning prefix and cannot impersonate a user or reuse an
+installation/PaaS purpose.
+
+Audit adds source `DEVOPS` and exact facts for project, connection, binding,
+pipeline, and immutable revision creation; SourceEvent admission; PipelineRun
+creation, replay, cancellation, and terminal completion; check-report receipt;
+and authorized log read. User mutations carry the exact IAM decision and
+Operation identity. Authenticated webhooks and fenced workers use their own
+closed system/service actors and never invent a user decision. Facts contain
+only Matrix IDs, canonical digests, closed outcomes/reasons, and correlation;
+provider payloads, repository URLs, branches as authority, native errors,
+logs, commands, credentials, and host paths are forbidden.
+
+These choices close the four implementation prerequisites. They refine
+adapters and release inventory without weakening the provider-neutral public
+resource model. Gate A starts with public contracts and pure domain invariants;
+no Gitea, Docker, gVisor, or PostgreSQL type may enter that domain.
 
 ## Incremental acceptance
 
