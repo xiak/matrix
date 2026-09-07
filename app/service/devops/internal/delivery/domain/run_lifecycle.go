@@ -11,6 +11,7 @@ import (
 var (
 	ErrPipelineRunTerminal          = errors.New("PipelineRun is terminal")
 	ErrInvalidPipelineRunTransition = errors.New("PipelineRun transition is invalid")
+	ErrPipelineRunCancellationSet   = errors.New("PipelineRun cancellation is already requested")
 )
 
 // AdvancePipelineRun applies one durable, externally visible state change.
@@ -27,6 +28,13 @@ func AdvancePipelineRun(
 	}
 	if err := ValidatePipelineRunTransition(current.Status.State, nextState, reason); err != nil {
 		return devopsv1.PipelineRun{}, err
+	}
+	if current.Status.CancellationRequestedAt != nil &&
+		!terminalPipelineRunState(nextState) && nextState != devopsv1.PipelineRunReconciling {
+		return devopsv1.PipelineRun{}, fmt.Errorf(
+			"%w: cancellation prevents future stages",
+			ErrInvalidPipelineRunTransition,
+		)
 	}
 	if err := validateRunTransitionTime(current.UpdatedAt, observedAt); err != nil {
 		return devopsv1.PipelineRun{}, err
@@ -53,6 +61,66 @@ func AdvancePipelineRun(
 	if err := devopsv1.ValidatePipelineRun(next); err != nil {
 		return devopsv1.PipelineRun{}, fmt.Errorf(
 			"%w: resulting PipelineRun is invalid: %v",
+			ErrInvalidPipelineRunTransition,
+			err,
+		)
+	}
+	return next, nil
+}
+
+// RequestPipelineRunCancellation records the public request first. It closes
+// the run immediately only when the transaction proves that no command intent
+// can have an external effect; otherwise the current intent must be observed.
+func RequestPipelineRunCancellation(
+	current devopsv1.PipelineRun,
+	expectedResourceVersion uint64,
+	effectMayExist bool,
+	requestedAt time.Time,
+) (devopsv1.PipelineRun, error) {
+	if err := devopsv1.ValidatePipelineRun(current); err != nil {
+		return devopsv1.PipelineRun{}, fmt.Errorf("validate current PipelineRun: %w", err)
+	}
+	if terminalPipelineRunState(current.Status.State) {
+		return devopsv1.PipelineRun{}, ErrPipelineRunTerminal
+	}
+	if current.Status.ResourceVersion != expectedResourceVersion {
+		return devopsv1.PipelineRun{}, ErrVersionConflict
+	}
+	if current.Status.CancellationRequestedAt != nil {
+		return devopsv1.PipelineRun{}, ErrPipelineRunCancellationSet
+	}
+	if current.Status.ResourceVersion >= devopsv1.MaximumContractInteger {
+		return devopsv1.PipelineRun{}, ErrVersionExhausted
+	}
+	if err := validateRunTransitionTime(current.UpdatedAt, requestedAt); err != nil {
+		return devopsv1.PipelineRun{}, err
+	}
+	if effectMayExist && current.Status.State == devopsv1.PipelineRunQueued {
+		return devopsv1.PipelineRun{}, fmt.Errorf(
+			"%w: queued PipelineRun cannot have an external effect",
+			ErrInvalidPipelineRunTransition,
+		)
+	}
+	if !effectMayExist && current.Status.State == devopsv1.PipelineRunReconciling {
+		return devopsv1.PipelineRun{}, fmt.Errorf(
+			"%w: reconciling PipelineRun must retain its uncertain intent",
+			ErrInvalidPipelineRunTransition,
+		)
+	}
+
+	next := current
+	next.Status.ResourceVersion++
+	next.Status.ObservedAt = requestedAt
+	next.Status.CancellationRequestedAt = &requestedAt
+	next.UpdatedAt = requestedAt
+	if !effectMayExist {
+		next.Status.State = devopsv1.PipelineRunCancelled
+		next.Status.Reason = devopsv1.PipelineRunReasonCancelled
+		next.Status.CompletedAt = &requestedAt
+	}
+	if err := devopsv1.ValidatePipelineRun(next); err != nil {
+		return devopsv1.PipelineRun{}, fmt.Errorf(
+			"%w: resulting cancellation state is invalid: %v",
 			ErrInvalidPipelineRunTransition,
 			err,
 		)

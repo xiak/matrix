@@ -158,6 +158,24 @@ func TestPipelineActivationEndpointAcceptsNoCallerBody(t *testing.T) {
 	}
 }
 
+func TestPipelineRunCancellationEndpointAcceptsNoCallerBodyAndRequiresGuards(t *testing.T) {
+	document := loadDevOpsOpenAPI(t)
+	paths := document["paths"].(map[string]any)
+	operation := paths["/v1/runs/{runId}/cancel"].(map[string]any)["post"].(map[string]any)
+	if _, found := operation["requestBody"]; found {
+		t.Fatal("PipelineRun cancellation unexpectedly accepts caller-controlled content")
+	}
+	parameters := operation["parameters"].([]any)
+	if len(parameters) != 3 || parameters[0].(map[string]any)["name"] != "runId" ||
+		parameters[1].(map[string]any)["$ref"] != "#/components/parameters/IdempotencyKey" ||
+		parameters[2].(map[string]any)["$ref"] != "#/components/parameters/IfMatch" {
+		t.Fatalf("PipelineRun cancellation parameters = %#v", parameters)
+	}
+	if _, found := paths["/v1/runs/{runId}"].(map[string]any)["get"]; !found {
+		t.Fatal("PipelineRun read operation is missing")
+	}
+}
+
 func TestPipelineRevisionReadBindsParentPipelineAndReadinessIsAnonymous(t *testing.T) {
 	document := loadDevOpsOpenAPI(t)
 	paths := document["paths"].(map[string]any)

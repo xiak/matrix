@@ -4,7 +4,8 @@
   baseline, Gate A project/Pipeline/source-resource contract, domain,
   configuration transaction/persistence, shared authority, durable run
   admission, authenticated Gitea ingress, fenced run-lifecycle foundation,
-  and terminal Audit facts complete; source/executor/reporter effects pending
+  IAM-authorized run read/cancellation, and terminal Audit facts complete;
+  source/executor/reporter effects pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -586,10 +587,22 @@ requests use the separate IAM-bound
 transition function is deleted on upgrade so a worker cannot bypass terminal
 fact creation.
 
+The public run-control slice now exposes IAM-authorized `GET /v1/runs/{runId}`
+and bodyless `POST /v1/runs/{runId}/cancel`. Cancellation requires both an
+exact `If-Match` resource version and `Idempotency-Key`; equal replay returns
+the original PipelineRun snapshot, changed replay conflicts, and tenant-scoped
+lookup conceals foreign runs. The atomic database boundary records the request
+time, cancellation Operation and user Audit fact. A run with no possible
+external effect becomes `CANCELLED` in that transaction and receives a
+separate control-actor terminal fact. A run with a durable intent remains in
+its current state, loses the old lease/fence, and makes that exact intent due
+for `OBSERVE`; no future stage may begin after the request, but a definitive
+observed success or failure remains truthful.
+
 These slices do not complete Gate A. Source health reconciliation and operator
-secret provisioning experience, logs, public manual replay/cancellation,
-concurrent cross-tenant fairness evidence, remaining runtime quotas,
-check-receipt Audit facts, and pagination remain pending.
+secret provisioning experience, logs, public manual replay, concurrent
+cross-tenant fairness evidence, remaining runtime quotas, check-receipt Audit
+facts, and pagination remain pending.
 
 Current verification evidence:
 
@@ -631,26 +644,36 @@ Current verification evidence:
   Gitea normalization and tenant-scoped SourceConnection read to atomic
   two-Pipeline fan-out, equal replay after mutable configuration becomes
   pending, and signed changed-payload conflict
-- pure lifecycle and queue tests covering every legal stage, stage-specific
-  failure rejection, cancellation from every nonterminal state, terminal
-  immutability, intent identity, repository drift, and reconciliation bounds;
-  a five-second transition fuzz run completed 67,861 executions without
-  producing an invalid accepted status
+- pure lifecycle, run-control, and queue tests covering every legal stage,
+  stage-specific failure rejection, immediate versus pending cancellation,
+  future-stage prevention, exact/changed replay, stale versions, mismatched IAM
+  authority, terminal truth and immutability, intent identity, repository
+  drift, and reconciliation bounds; the current five-second transition fuzz
+  run completed 48,645 executions without producing an invalid accepted status
+- strict OpenAPI and HTTP tests proving exact run-read/cancel IAM resources,
+  bodyless cancellation, required `If-Match` and `Idempotency-Key` guards,
+  stable ETags, closed error mappings, and validation before authorization
 - real PostgreSQL 18 run-lifecycle journey proving data-bearing digest
-  backfill, deterministic `EXECUTE` claims, same-intent `OBSERVE` recovery,
-  stale-fence rejection, successful and cancelled terminals, uncertain report
-  retention, current-fence lease renewal, ten deferred observations,
+  backfill, tenant-concealed public reads, immediate queued cancellation,
+  pending active cancellation, deterministic `EXECUTE` claims, same-intent
+  `OBSERVE` recovery, cancellation-invalidated leases and stale fences,
+  successful and cancelled terminals, uncertain report retention,
+  current-fence lease renewal, ten deferred observations,
   manual-intervention gating, migration reapply, the concurrent two-active-run
   tenant ceiling, and API/worker table and function confinement
 - closed Audit/OpenAPI validation and a real PostgreSQL 18 authority journey
   accepting only valid PipelineRun completion outcome/reason pairs; the
-  delivery journey proves five terminal transitions create exactly five
-  atomic, deterministic completion facts while nonterminal transitions create
-  none
-- data-bearing migration reapply preserving 13 configuration mutations,
-  16 SourceEvents, 32 PipelineRuns, nine task intents, and 66 generalized
-  Audit operations/outbox facts, plus the real Audit authority accepting the
-  closed DevOps actions and outcome projection
+  delivery journey proves six terminal transitions create exactly six atomic,
+  deterministic completion facts, four public cancellation requests create
+  exactly four IAM-bound accepted facts, and nonterminal worker transitions
+  create no completion fact; the fresh journey contains 17 mutations, 16
+  SourceEvents, 32 PipelineRuns, nine task intents, and 71 Audit
+  operations/outbox facts
+- fixed `3139ecf` data-bearing upgrade preserving all 13 configuration
+  mutations, 16 SourceEvents, 32 PipelineRuns, nine task intents, and 66 Audit
+  operations/outbox facts; all three historical cancelled runs gain a
+  canonical cancellation request time equal to their completion time, and the
+  new API-only cancellation functions pass catalog verification
 - fixed `7363b29` data-bearing upgrade preserving all 13 mutations, 16
   SourceEvents, 32 PipelineRuns, nine task intents, and 61 pre-existing Audit
   facts while replacing the legacy transition function with the audited

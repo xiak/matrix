@@ -109,18 +109,78 @@ func TestPipelineRunLifecycleClosesEveryNonterminalState(t *testing.T) {
 		devopsv1.PipelineRunReconciling,
 	} {
 		run := lifecycleRunAtState(t, state)
+		requestedAt := run.UpdatedAt.Add(time.Microsecond)
+		requested, err := RequestPipelineRunCancellation(
+			run, run.Status.ResourceVersion, state != devopsv1.PipelineRunQueued, requestedAt,
+		)
+		if err != nil {
+			t.Fatalf("request cancellation from %s: %v", state, err)
+		}
+		if requested.Status.CancellationRequestedAt == nil ||
+			!requested.Status.CancellationRequestedAt.Equal(requestedAt) {
+			t.Fatalf("request cancellation from %s omitted request time: %#v", state, requested.Status)
+		}
+		if state == devopsv1.PipelineRunQueued {
+			if requested.Status.State != devopsv1.PipelineRunCancelled || requested.Status.CompletedAt == nil {
+				t.Fatalf("safe queued cancellation did not complete: %#v", requested.Status)
+			}
+			continue
+		}
 		cancelled, err := AdvancePipelineRun(
-			run,
+			requested,
 			devopsv1.PipelineRunCancelled,
 			devopsv1.PipelineRunReasonCancelled,
-			run.UpdatedAt.Add(time.Microsecond),
+			requested.UpdatedAt.Add(time.Microsecond),
 		)
 		if err != nil {
 			t.Fatalf("cancel %s: %v", state, err)
 		}
-		if cancelled.Status.Stage != run.Status.Stage || cancelled.Status.CompletedAt == nil {
+		if cancelled.Status.Stage != run.Status.Stage || cancelled.Status.CompletedAt == nil ||
+			cancelled.Status.CancellationRequestedAt == nil {
 			t.Fatalf("cancel %s changed stage or omitted completion: %#v", state, cancelled.Status)
 		}
+	}
+}
+
+func TestPipelineRunCancellationPreventsFutureStagesAndKeepsTruthfulTerminal(t *testing.T) {
+	fetching := lifecycleRunAtState(t, devopsv1.PipelineRunFetching)
+	requested, err := RequestPipelineRunCancellation(
+		fetching, fetching.Status.ResourceVersion, true, fetching.UpdatedAt.Add(time.Microsecond),
+	)
+	if err != nil || requested.Status.State != devopsv1.PipelineRunFetching || requested.Status.CompletedAt != nil {
+		t.Fatalf("pending cancellation=%#v err=%v", requested, err)
+	}
+	if _, err := AdvancePipelineRun(
+		requested, devopsv1.PipelineRunVerifying, "", requested.UpdatedAt.Add(time.Microsecond),
+	); !errors.Is(err, ErrInvalidPipelineRunTransition) {
+		t.Fatalf("cancellation allowed a future stage: %v", err)
+	}
+	failed, err := AdvancePipelineRun(
+		requested, devopsv1.PipelineRunFailed, devopsv1.PipelineRunReasonCommitMismatch,
+		requested.UpdatedAt.Add(time.Microsecond),
+	)
+	if err != nil || failed.Status.State != devopsv1.PipelineRunFailed ||
+		failed.Status.CancellationRequestedAt == nil {
+		t.Fatalf("definitive effect result after cancellation=%#v err=%v", failed, err)
+	}
+
+	queued := lifecycleRunAtState(t, devopsv1.PipelineRunQueued)
+	if _, err := RequestPipelineRunCancellation(
+		queued, queued.Status.ResourceVersion+1, false, queued.UpdatedAt.Add(time.Microsecond),
+	); !errors.Is(err, ErrVersionConflict) {
+		t.Fatalf("stale cancellation precondition error=%v", err)
+	}
+	if _, err := RequestPipelineRunCancellation(
+		queued, queued.Status.ResourceVersion, true, queued.UpdatedAt.Add(time.Microsecond),
+	); !errors.Is(err, ErrInvalidPipelineRunTransition) {
+		t.Fatalf("queued run claimed an external effect: %v", err)
+	}
+	reporting := lifecycleRunAtState(t, devopsv1.PipelineRunReporting)
+	immediate, err := RequestPipelineRunCancellation(
+		reporting, reporting.Status.ResourceVersion, false, reporting.UpdatedAt.Add(time.Microsecond),
+	)
+	if err != nil || immediate.Status.State != devopsv1.PipelineRunCancelled {
+		t.Fatalf("effect-free reporting cancellation=%#v err=%v", immediate, err)
 	}
 }
 

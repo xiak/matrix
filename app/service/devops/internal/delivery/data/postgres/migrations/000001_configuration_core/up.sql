@@ -481,6 +481,7 @@ CREATE TABLE IF NOT EXISTS delivery.pipeline_runs (
     stage text COLLATE "C" NOT NULL,
     reason text COLLATE "C",
     resource_version bigint NOT NULL,
+    cancellation_requested_at timestamptz(6),
     completed_at timestamptz(6),
     created_at timestamptz(6) NOT NULL,
     updated_at timestamptz(6) NOT NULL,
@@ -592,11 +593,51 @@ CREATE POLICY owner_schema_upgrade ON delivery.pipeline_runs
 
 ALTER TABLE delivery.pipeline_runs
     ADD COLUMN IF NOT EXISTS input_digest text COLLATE "C";
+ALTER TABLE delivery.pipeline_runs
+    ADD COLUMN IF NOT EXISTS cancellation_requested_at timestamptz(6);
 UPDATE delivery.pipeline_runs
    SET input_digest = document->>'inputDigest'
  WHERE input_digest IS NULL;
+UPDATE delivery.pipeline_runs
+   SET cancellation_requested_at =
+       (document#>>'{status,cancellationRequestedAt}')::timestamptz
+ WHERE cancellation_requested_at IS NULL
+   AND document#>'{status}' ? 'cancellationRequestedAt';
+UPDATE delivery.pipeline_runs
+   SET cancellation_requested_at = completed_at,
+       document = jsonb_set(
+           document,
+           '{status,cancellationRequestedAt}',
+           to_jsonb(to_char(
+               completed_at AT TIME ZONE 'UTC',
+               'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+           )),
+           true
+       )
+ WHERE state = 'CANCELLED'
+   AND cancellation_requested_at IS NULL;
 ALTER TABLE delivery.pipeline_runs
     ALTER COLUMN input_digest SET NOT NULL;
+
+ALTER TABLE delivery.pipeline_runs
+    DROP CONSTRAINT IF EXISTS pipeline_runs_cancellation_valid;
+ALTER TABLE delivery.pipeline_runs
+    ADD CONSTRAINT pipeline_runs_cancellation_valid CHECK (
+        (
+            cancellation_requested_at IS NULL
+            AND NOT (document#>'{status}' ? 'cancellationRequestedAt')
+            AND state <> 'CANCELLED'
+        )
+        OR (
+            cancellation_requested_at IS NOT NULL
+            AND state <> 'QUEUED'
+            AND cancellation_requested_at >= created_at
+            AND cancellation_requested_at <= updated_at
+            AND document#>'{status}' ? 'cancellationRequestedAt'
+            AND (document#>>'{status,cancellationRequestedAt}')::timestamptz
+                = cancellation_requested_at
+        )
+    );
 
 DO $matrix_pipeline_run_task_identity$
 BEGIN
@@ -705,17 +746,25 @@ CREATE TABLE IF NOT EXISTS delivery.mutations (
         AND mutation_kind IN (
             'CREATE_PROJECT', 'CREATE_SOURCE_CONNECTION', 'UPDATE_SOURCE_CONNECTION',
             'CREATE_REPOSITORY_BINDING', 'UPDATE_REPOSITORY_BINDING',
-            'CREATE_PIPELINE', 'UPDATE_PIPELINE_DRAFT', 'ACTIVATE_PIPELINE'
-        )
-        AND target_kind IN (
-            'DEVOPS_PROJECT', 'SOURCE_CONNECTION', 'REPOSITORY_BINDING',
-            'PIPELINE', 'PIPELINE_REVISION'
+            'CREATE_PIPELINE', 'UPDATE_PIPELINE_DRAFT', 'ACTIVATE_PIPELINE',
+            'CANCEL_PIPELINE_RUN'
         )
         AND idempotency_fingerprint COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
         AND request_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
-        AND result_kind IN (
-            'DevOpsProject', 'SourceConnection', 'RepositoryBinding',
-            'Pipeline', 'PipelineActivation'
+        AND (
+            (mutation_kind = 'CANCEL_PIPELINE_RUN'
+                AND command_target_id = target_id
+                AND target_kind = 'PIPELINE_RUN'
+                AND result_kind = 'PipelineRun')
+            OR (mutation_kind <> 'CANCEL_PIPELINE_RUN'
+                AND target_kind IN (
+                    'DEVOPS_PROJECT', 'SOURCE_CONNECTION',
+                    'REPOSITORY_BINDING', 'PIPELINE', 'PIPELINE_REVISION'
+                )
+                AND result_kind IN (
+                    'DevOpsProject', 'SourceConnection', 'RepositoryBinding',
+                    'Pipeline', 'PipelineActivation'
+                ))
         )
     ),
     CONSTRAINT mutations_document_identity CHECK (
@@ -733,6 +782,39 @@ CREATE TABLE IF NOT EXISTS delivery.mutations (
         AND result_document->>'kind' = result_kind
     )
 );
+
+ALTER TABLE delivery.mutations
+    DROP CONSTRAINT IF EXISTS mutations_values_valid;
+ALTER TABLE delivery.mutations
+    ADD CONSTRAINT mutations_values_valid CHECK (
+        tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND command_target_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND target_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND mutation_kind IN (
+            'CREATE_PROJECT', 'CREATE_SOURCE_CONNECTION', 'UPDATE_SOURCE_CONNECTION',
+            'CREATE_REPOSITORY_BINDING', 'UPDATE_REPOSITORY_BINDING',
+            'CREATE_PIPELINE', 'UPDATE_PIPELINE_DRAFT', 'ACTIVATE_PIPELINE',
+            'CANCEL_PIPELINE_RUN'
+        )
+        AND idempotency_fingerprint COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND request_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND (
+            (mutation_kind = 'CANCEL_PIPELINE_RUN'
+                AND command_target_id = target_id
+                AND target_kind = 'PIPELINE_RUN'
+                AND result_kind = 'PipelineRun')
+            OR (mutation_kind <> 'CANCEL_PIPELINE_RUN'
+                AND target_kind IN (
+                    'DEVOPS_PROJECT', 'SOURCE_CONNECTION',
+                    'REPOSITORY_BINDING', 'PIPELINE', 'PIPELINE_REVISION'
+                )
+                AND result_kind IN (
+                    'DevOpsProject', 'SourceConnection', 'RepositoryBinding',
+                    'Pipeline', 'PipelineActivation'
+                ))
+        )
+    );
 
 CREATE TABLE IF NOT EXISTS delivery.audit_operations (
     tenant_id text COLLATE "C" NOT NULL,
@@ -756,6 +838,10 @@ CREATE TABLE IF NOT EXISTS delivery.audit_operations (
                 AND target_kind = 'SOURCE_EVENT' AND id = target_id)
             OR (operation_kind = 'PIPELINE_RUN_CREATION'
                 AND target_kind = 'PIPELINE_RUN' AND id = target_id)
+            OR (operation_kind = 'PIPELINE_RUN_CANCELLATION'
+                AND target_kind = 'PIPELINE_RUN'
+                AND target_id COLLATE "C" ~ '^pipeline-run-[0-9a-f]{48}$'
+                AND id COLLATE "C" ~ '^operation-[0-9a-f]{64}$')
             OR (operation_kind = 'PIPELINE_RUN_TERMINAL'
                 AND target_kind = 'PIPELINE_RUN'
                 AND target_id COLLATE "C" ~ '^pipeline-run-[0-9a-f]{48}$'
@@ -782,6 +868,10 @@ ALTER TABLE delivery.audit_operations
                 AND target_kind = 'SOURCE_EVENT' AND id = target_id)
             OR (operation_kind = 'PIPELINE_RUN_CREATION'
                 AND target_kind = 'PIPELINE_RUN' AND id = target_id)
+            OR (operation_kind = 'PIPELINE_RUN_CANCELLATION'
+                AND target_kind = 'PIPELINE_RUN'
+                AND target_id COLLATE "C" ~ '^pipeline-run-[0-9a-f]{48}$'
+                AND id COLLATE "C" ~ '^operation-[0-9a-f]{64}$')
             OR (operation_kind = 'PIPELINE_RUN_TERMINAL'
                 AND target_kind = 'PIPELINE_RUN'
                 AND target_id COLLATE "C" ~ '^pipeline-run-[0-9a-f]{48}$'
@@ -800,7 +890,12 @@ CREATE POLICY owner_schema_upgrade ON delivery.audit_operations
 INSERT INTO delivery.audit_operations (
     tenant_id, id, operation_kind, target_kind, target_id, created_at
 )
-SELECT tenant_id, id, 'CONFIGURATION_MUTATION', target_kind, target_id, created_at
+SELECT tenant_id, id,
+       CASE mutation_kind
+           WHEN 'CANCEL_PIPELINE_RUN' THEN 'PIPELINE_RUN_CANCELLATION'
+           ELSE 'CONFIGURATION_MUTATION'
+       END,
+       target_kind, target_id, created_at
   FROM delivery.mutations
 ON CONFLICT (tenant_id, id) DO NOTHING;
 
@@ -1453,6 +1548,533 @@ BEGIN
     );
 END
 $function$;
+
+CREATE OR REPLACE FUNCTION delivery.lock_pipeline_run_for_cancellation(
+    requested_run_id text
+)
+RETURNS TABLE (run_document jsonb, effect_may_exist boolean)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text;
+    locked_document jsonb;
+    pending_command_id text;
+BEGIN
+    effective_tenant_id := delivery.current_tenant_id();
+    IF effective_tenant_id IS NULL THEN
+        RAISE EXCEPTION USING ERRCODE = '42501',
+            MESSAGE = 'valid transaction-local delivery tenant is required';
+    END IF;
+    IF requested_run_id IS NULL
+       OR requested_run_id COLLATE "C" !~ '^pipeline-run-[0-9a-f]{48}$' THEN
+        RAISE EXCEPTION USING ERRCODE = '22023',
+            MESSAGE = 'PipelineRun cancellation identity is invalid';
+    END IF;
+
+    SELECT run.document
+      INTO locked_document
+      FROM delivery.pipeline_runs AS run
+     WHERE run.tenant_id = effective_tenant_id
+       AND run.id = requested_run_id
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+
+    SELECT task.command_id
+      INTO pending_command_id
+      FROM delivery.pipeline_run_tasks AS task
+     WHERE task.tenant_id = effective_tenant_id
+       AND task.run_id = requested_run_id
+       AND task.status = 'INTENT'
+     LIMIT 1
+     FOR UPDATE;
+
+    run_document := locked_document;
+    effect_may_exist := pending_command_id IS NOT NULL;
+    RETURN NEXT;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION delivery.lock_pipeline_run_for_cancellation(text)
+    FROM PUBLIC, matrix_devops_worker;
+GRANT EXECUTE ON FUNCTION delivery.lock_pipeline_run_for_cancellation(text)
+    TO matrix_devops_api;
+
+CREATE OR REPLACE FUNCTION delivery.commit_pipeline_run_cancellation(
+    expected_resource_version bigint,
+    submitted_run_document jsonb,
+    submitted_operation jsonb,
+    submitted_cancellation_event jsonb,
+    submitted_terminal_event jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text;
+    effective_now timestamptz(6);
+    requested_run_id text;
+    current_state text;
+    current_stage text;
+    current_reason text;
+    current_resource_version bigint;
+    current_cancellation_requested_at timestamptz(6);
+    current_completed_at timestamptz(6);
+    current_updated_at timestamptz(6);
+    current_run_document jsonb;
+    current_command_id text;
+    effect_may_exist boolean;
+    terminal boolean;
+    operation_id text;
+    expected_cancellation_event_id text;
+    terminal_operation_id text;
+    expected_terminal_event_id text;
+    affected_rows bigint;
+BEGIN
+    effective_tenant_id := delivery.current_tenant_id();
+    effective_now := transaction_timestamp();
+    IF effective_tenant_id IS NULL THEN
+        RAISE EXCEPTION USING ERRCODE = '42501',
+            MESSAGE = 'valid transaction-local delivery tenant is required';
+    END IF;
+    IF expected_resource_version IS NULL
+       OR expected_resource_version NOT BETWEEN 1 AND 9007199254740991
+       OR jsonb_typeof(submitted_run_document) IS DISTINCT FROM 'object'
+       OR jsonb_typeof(submitted_operation) IS DISTINCT FROM 'object'
+       OR jsonb_typeof(submitted_cancellation_event) IS DISTINCT FROM 'object'
+       OR (submitted_terminal_event IS NOT NULL
+           AND jsonb_typeof(submitted_terminal_event) IS DISTINCT FROM 'object') THEN
+        RAISE EXCEPTION USING ERRCODE = '22023',
+            MESSAGE = 'PipelineRun cancellation documents are invalid';
+    END IF;
+
+    requested_run_id := submitted_operation->>'runId';
+    IF COALESCE(requested_run_id, '') COLLATE "C"
+            !~ '^pipeline-run-[0-9a-f]{48}$' THEN
+        RAISE EXCEPTION USING ERRCODE = '22023',
+            MESSAGE = 'PipelineRun cancellation target is invalid';
+    END IF;
+
+    SELECT run.state,
+           run.stage,
+           run.reason,
+           run.resource_version,
+           run.cancellation_requested_at,
+           run.completed_at,
+           run.updated_at,
+           run.document
+      INTO current_state,
+           current_stage,
+           current_reason,
+           current_resource_version,
+           current_cancellation_requested_at,
+           current_completed_at,
+           current_updated_at,
+           current_run_document
+      FROM delivery.pipeline_runs AS run
+     WHERE run.tenant_id = effective_tenant_id
+       AND run.id = requested_run_id
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX404',
+            MESSAGE = 'PipelineRun does not exist';
+    END IF;
+    IF current_resource_version <> expected_resource_version THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409',
+            MESSAGE = 'PipelineRun version conflict';
+    END IF;
+    IF current_state IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'MANUAL_INTERVENTION')
+       OR current_completed_at IS NOT NULL THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX410',
+            MESSAGE = 'terminal PipelineRun cannot be cancelled';
+    END IF;
+    IF current_cancellation_requested_at IS NOT NULL THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX411',
+            MESSAGE = 'PipelineRun cancellation is already requested';
+    END IF;
+    IF current_resource_version >= 9007199254740991 THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409',
+            MESSAGE = 'PipelineRun resource version is exhausted';
+    END IF;
+    IF effective_now <= current_updated_at THEN
+        RAISE EXCEPTION USING ERRCODE = '40001',
+            MESSAGE = 'PipelineRun cancellation observation time did not advance';
+    END IF;
+
+    SELECT task.command_id
+      INTO current_command_id
+      FROM delivery.pipeline_run_tasks AS task
+     WHERE task.tenant_id = effective_tenant_id
+       AND task.run_id = requested_run_id
+       AND task.status = 'INTENT'
+     LIMIT 1
+     FOR UPDATE;
+    effect_may_exist := current_command_id IS NOT NULL;
+    IF current_state = 'QUEUED' AND effect_may_exist THEN
+        RAISE EXCEPTION USING ERRCODE = '55000',
+            MESSAGE = 'queued PipelineRun cannot have an external effect';
+    END IF;
+    IF current_state = 'RECONCILING' AND NOT effect_may_exist THEN
+        RAISE EXCEPTION USING ERRCODE = '55000',
+            MESSAGE = 'reconciling PipelineRun lost its uncertain intent';
+    END IF;
+    terminal := NOT effect_may_exist;
+
+    IF jsonb_typeof(submitted_run_document->'status') IS DISTINCT FROM 'object'
+       OR NOT ((submitted_run_document->'status') ?& ARRAY[
+            'state', 'stage', 'resourceVersion', 'observedAt',
+            'cancellationRequestedAt'
+       ])
+       OR ((submitted_run_document->'status') - ARRAY[
+            'state', 'stage', 'reason', 'resourceVersion', 'observedAt',
+            'cancellationRequestedAt', 'completedAt'
+       ]) <> '{}'::jsonb
+       OR (submitted_run_document - ARRAY['status', 'updatedAt']) IS DISTINCT FROM
+            (current_run_document - ARRAY['status', 'updatedAt'])
+       OR submitted_run_document#>>'{status,state}' IS DISTINCT FROM
+            (CASE WHEN terminal THEN 'CANCELLED' ELSE current_state END)
+       OR submitted_run_document#>>'{status,stage}' IS DISTINCT FROM current_stage
+       OR submitted_run_document#>>'{status,reason}' IS DISTINCT FROM
+            (CASE WHEN terminal THEN 'CANCELLED' ELSE current_reason END)
+       OR submitted_run_document#>>'{status,resourceVersion}' IS DISTINCT FROM
+            (current_resource_version + 1)::text
+       OR COALESCE(submitted_run_document#>>'{status,observedAt}', '') COLLATE "C"
+            !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,6})?Z$'
+       OR NOT pg_input_is_valid(
+            COALESCE(submitted_run_document#>>'{status,observedAt}', ''),
+            'timestamptz'
+       )
+       OR (submitted_run_document#>>'{status,observedAt}')::timestamptz
+            IS DISTINCT FROM effective_now
+       OR COALESCE(
+            submitted_run_document#>>'{status,cancellationRequestedAt}', ''
+          ) COLLATE "C"
+            !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,6})?Z$'
+       OR NOT pg_input_is_valid(
+            COALESCE(
+                submitted_run_document#>>'{status,cancellationRequestedAt}', ''
+            ),
+            'timestamptz'
+       )
+       OR (submitted_run_document#>>'{status,cancellationRequestedAt}')::timestamptz
+            IS DISTINCT FROM effective_now
+       OR COALESCE(submitted_run_document->>'updatedAt', '') COLLATE "C"
+            !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,6})?Z$'
+       OR NOT pg_input_is_valid(
+            COALESCE(submitted_run_document->>'updatedAt', ''), 'timestamptz'
+       )
+       OR (submitted_run_document->>'updatedAt')::timestamptz
+            IS DISTINCT FROM effective_now
+       OR (terminal AND (
+            NOT (submitted_run_document->'status' ? 'completedAt')
+            OR COALESCE(
+                submitted_run_document#>>'{status,completedAt}', ''
+            ) COLLATE "C"
+                !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,6})?Z$'
+            OR NOT pg_input_is_valid(
+                COALESCE(submitted_run_document#>>'{status,completedAt}', ''),
+                'timestamptz'
+            )
+            OR (submitted_run_document#>>'{status,completedAt}')::timestamptz
+                IS DISTINCT FROM effective_now
+       ))
+       OR (NOT terminal AND submitted_run_document->'status' ? 'completedAt') THEN
+        RAISE EXCEPTION USING ERRCODE = '22023',
+            MESSAGE = 'submitted PipelineRun cancellation differs from database state';
+    END IF;
+
+    operation_id := submitted_operation->>'id';
+    IF jsonb_typeof(submitted_operation->'requestedBy') IS DISTINCT FROM 'object'
+       OR jsonb_typeof(submitted_operation->'iamResource') IS DISTINCT FROM 'object'
+       OR jsonb_typeof(submitted_operation->'target') IS DISTINCT FROM 'object'
+       OR NOT (submitted_operation ?& ARRAY[
+            'schemaVersion', 'id', 'tenantId', 'kind', 'commandTargetId',
+            'runId', 'requestedBy', 'iamDecisionId', 'iamAction', 'iamResource',
+            'expectedResourceVersion', 'idempotencyFingerprint', 'requestDigest',
+            'resultKind', 'target', 'requestId', 'correlationId', 'createdAt'
+       ])
+       OR (submitted_operation - ARRAY[
+            'schemaVersion', 'id', 'tenantId', 'kind', 'commandTargetId',
+            'runId', 'requestedBy', 'iamDecisionId', 'iamAction', 'iamResource',
+            'expectedResourceVersion', 'idempotencyFingerprint', 'requestDigest',
+            'resultKind', 'target', 'requestId', 'correlationId', 'traceparent',
+            'createdAt'
+       ]) <> '{}'::jsonb
+       OR ((submitted_operation->'requestedBy') - ARRAY['kind', 'id']) <> '{}'::jsonb
+       OR ((submitted_operation->'iamResource') - ARRAY['kind', 'id']) <> '{}'::jsonb
+       OR ((submitted_operation->'target') - ARRAY['kind', 'id']) <> '{}'::jsonb
+       OR submitted_operation->>'schemaVersion' IS DISTINCT FROM 'v1'
+       OR submitted_operation->>'tenantId' IS DISTINCT FROM effective_tenant_id
+       OR submitted_operation->>'kind' IS DISTINCT FROM 'CANCEL_PIPELINE_RUN'
+       OR submitted_operation->>'commandTargetId' IS DISTINCT FROM requested_run_id
+       OR submitted_operation->>'iamAction' IS DISTINCT FROM 'devops.run.cancel'
+       OR submitted_operation#>>'{iamResource,kind}' IS DISTINCT FROM 'PIPELINE_RUN'
+       OR submitted_operation#>>'{iamResource,id}' IS DISTINCT FROM requested_run_id
+       OR submitted_operation#>>'{target,kind}' IS DISTINCT FROM 'PIPELINE_RUN'
+       OR submitted_operation#>>'{target,id}' IS DISTINCT FROM requested_run_id
+       OR submitted_operation->>'resultKind' IS DISTINCT FROM 'PipelineRun'
+       OR COALESCE(operation_id, '') COLLATE "C" !~ '^operation-[0-9a-f]{64}$'
+       OR operation_id IS DISTINCT FROM 'operation-' || encode(
+            sha256(
+                convert_to('matrix-devops-operation-v1', 'UTF8')
+                || decode('00', 'hex')
+                || convert_to(
+                    submitted_operation->>'idempotencyFingerprint', 'UTF8'
+                )
+            ),
+            'hex'
+       )
+       OR COALESCE(submitted_operation#>>'{requestedBy,id}', '') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_operation#>>'{requestedBy,kind}' NOT IN ('USER', 'SERVICE_ACCOUNT')
+       OR COALESCE(submitted_operation->>'iamDecisionId', '') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR COALESCE(submitted_operation->>'idempotencyFingerprint', '') COLLATE "C"
+            !~ '^sha256:[0-9a-f]{64}$'
+       OR COALESCE(submitted_operation->>'requestDigest', '') COLLATE "C"
+            !~ '^sha256:[0-9a-f]{64}$'
+       OR COALESCE(submitted_operation->>'requestId', '') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR COALESCE(submitted_operation->>'correlationId', '') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR NOT pg_input_is_valid(
+            COALESCE(submitted_operation->>'expectedResourceVersion', ''),
+            'bigint'
+       )
+       OR (submitted_operation->>'expectedResourceVersion')::bigint
+            IS DISTINCT FROM expected_resource_version
+       OR NOT pg_input_is_valid(
+            COALESCE(submitted_operation->>'createdAt', ''), 'timestamptz'
+       )
+       OR (submitted_operation->>'createdAt')::timestamptz
+            IS DISTINCT FROM effective_now
+       OR (
+            submitted_operation ? 'traceparent'
+            AND COALESCE(submitted_operation->>'traceparent', '') COLLATE "C"
+                !~ '^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$'
+       ) THEN
+        RAISE EXCEPTION USING ERRCODE = '22023',
+            MESSAGE = 'PipelineRun cancellation Operation is invalid';
+    END IF;
+
+    expected_cancellation_event_id := 'audit-' || encode(
+        sha256(
+            convert_to('matrix-devops-audit-event-v1', 'UTF8')
+            || decode('00', 'hex')
+            || convert_to(operation_id, 'UTF8')
+        ),
+        'hex'
+    );
+    IF jsonb_typeof(submitted_cancellation_event->'actor') IS DISTINCT FROM 'object'
+       OR jsonb_typeof(submitted_cancellation_event->'target') IS DISTINCT FROM 'object'
+       OR NOT (submitted_cancellation_event ?& ARRAY[
+            'apiVersion', 'kind', 'eventId', 'tenantId', 'actor',
+            'iamDecisionId', 'action', 'target', 'result', 'requestDigest',
+            'requestId', 'correlationId', 'operationId', 'occurredAt'
+       ])
+       OR (submitted_cancellation_event - ARRAY[
+            'apiVersion', 'kind', 'eventId', 'tenantId', 'actor',
+            'iamDecisionId', 'action', 'target', 'result', 'requestDigest',
+            'requestId', 'correlationId', 'operationId', 'traceparent',
+            'occurredAt'
+       ]) <> '{}'::jsonb
+       OR ((submitted_cancellation_event->'actor') - ARRAY['type', 'id']) <> '{}'::jsonb
+       OR ((submitted_cancellation_event->'target') - ARRAY['kind', 'id']) <> '{}'::jsonb
+       OR submitted_cancellation_event->>'apiVersion'
+            IS DISTINCT FROM 'audit.matrix.xiak.com/v1'
+       OR submitted_cancellation_event->>'kind' IS DISTINCT FROM 'AuditEvent'
+       OR submitted_cancellation_event->>'eventId'
+            IS DISTINCT FROM expected_cancellation_event_id
+       OR submitted_cancellation_event->>'tenantId' IS DISTINCT FROM effective_tenant_id
+       OR submitted_cancellation_event->'actor'
+            IS DISTINCT FROM jsonb_build_object(
+                'type', submitted_operation#>>'{requestedBy,kind}',
+                'id', submitted_operation#>>'{requestedBy,id}'
+            )
+       OR submitted_cancellation_event->>'iamDecisionId'
+            IS DISTINCT FROM submitted_operation->>'iamDecisionId'
+       OR submitted_cancellation_event->>'action'
+            IS DISTINCT FROM 'devops.pipeline-run.cancellation-requested'
+       OR submitted_cancellation_event->'target'
+            IS DISTINCT FROM jsonb_build_object('kind', 'PIPELINE_RUN', 'id', requested_run_id)
+       OR submitted_cancellation_event->>'result' IS DISTINCT FROM 'ACCEPTED'
+       OR submitted_cancellation_event->>'requestDigest'
+            IS DISTINCT FROM submitted_operation->>'requestDigest'
+       OR submitted_cancellation_event->>'requestId'
+            IS DISTINCT FROM submitted_operation->>'requestId'
+       OR submitted_cancellation_event->>'correlationId'
+            IS DISTINCT FROM submitted_operation->>'correlationId'
+       OR submitted_cancellation_event->>'operationId' IS DISTINCT FROM operation_id
+       OR (submitted_cancellation_event ? 'traceparent')
+            IS DISTINCT FROM (submitted_operation ? 'traceparent')
+       OR submitted_cancellation_event->>'traceparent'
+            IS DISTINCT FROM submitted_operation->>'traceparent'
+       OR NOT pg_input_is_valid(
+            COALESCE(submitted_cancellation_event->>'occurredAt', ''),
+            'timestamptz'
+       )
+       OR (submitted_cancellation_event->>'occurredAt')::timestamptz
+            IS DISTINCT FROM effective_now THEN
+        RAISE EXCEPTION USING ERRCODE = '22023',
+            MESSAGE = 'PipelineRun cancellation Audit fact is invalid';
+    END IF;
+
+    IF terminal THEN
+        terminal_operation_id := requested_run_id || ':terminal:' ||
+            (current_resource_version + 1)::text;
+        expected_terminal_event_id := 'audit-' || encode(
+            sha256(
+                convert_to('matrix-devops-audit-event-v1', 'UTF8')
+                || decode('00', 'hex')
+                || convert_to(terminal_operation_id, 'UTF8')
+            ),
+            'hex'
+        );
+        IF jsonb_typeof(submitted_terminal_event) IS DISTINCT FROM 'object'
+           OR jsonb_typeof(submitted_terminal_event->'actor') IS DISTINCT FROM 'object'
+           OR jsonb_typeof(submitted_terminal_event->'target') IS DISTINCT FROM 'object'
+           OR NOT (submitted_terminal_event ?& ARRAY[
+                'apiVersion', 'kind', 'eventId', 'tenantId', 'actor',
+                'action', 'target', 'result', 'outcome', 'reason',
+                'requestDigest', 'requestId', 'correlationId',
+                'operationId', 'occurredAt'
+           ])
+           OR (submitted_terminal_event - ARRAY[
+                'apiVersion', 'kind', 'eventId', 'tenantId', 'actor',
+                'action', 'target', 'result', 'outcome', 'reason',
+                'requestDigest', 'requestId', 'correlationId',
+                'operationId', 'occurredAt'
+           ]) <> '{}'::jsonb
+           OR ((submitted_terminal_event->'actor') - ARRAY['type', 'id']) <> '{}'::jsonb
+           OR ((submitted_terminal_event->'target') - ARRAY['kind', 'id']) <> '{}'::jsonb
+           OR submitted_terminal_event->>'apiVersion'
+                IS DISTINCT FROM 'audit.matrix.xiak.com/v1'
+           OR submitted_terminal_event->>'kind' IS DISTINCT FROM 'AuditEvent'
+           OR submitted_terminal_event->>'eventId'
+                IS DISTINCT FROM expected_terminal_event_id
+           OR submitted_terminal_event->>'tenantId' IS DISTINCT FROM effective_tenant_id
+           OR submitted_terminal_event->'actor' IS DISTINCT FROM
+                jsonb_build_object('type', 'SYSTEM', 'id', 'system-devops-run-control')
+           OR submitted_terminal_event ? 'iamDecisionId'
+           OR submitted_terminal_event ? 'traceparent'
+           OR submitted_terminal_event->>'action'
+                IS DISTINCT FROM 'devops.pipeline-run.completed'
+           OR submitted_terminal_event->'target' IS DISTINCT FROM
+                jsonb_build_object('kind', 'PIPELINE_RUN', 'id', requested_run_id)
+           OR submitted_terminal_event->>'result' IS DISTINCT FROM 'SUCCEEDED'
+           OR submitted_terminal_event->>'outcome' IS DISTINCT FROM 'CANCELLED'
+           OR submitted_terminal_event->>'reason' IS DISTINCT FROM 'CANCELLED'
+           OR submitted_terminal_event->>'requestDigest'
+                IS DISTINCT FROM current_run_document->>'inputDigest'
+           OR submitted_terminal_event->>'requestId'
+                IS DISTINCT FROM submitted_operation->>'requestId'
+           OR submitted_terminal_event->>'correlationId' IS DISTINCT FROM requested_run_id
+           OR submitted_terminal_event->>'operationId'
+                IS DISTINCT FROM terminal_operation_id
+           OR NOT pg_input_is_valid(
+                COALESCE(submitted_terminal_event->>'occurredAt', ''),
+                'timestamptz'
+           )
+           OR (submitted_terminal_event->>'occurredAt')::timestamptz
+                IS DISTINCT FROM effective_now THEN
+            RAISE EXCEPTION USING ERRCODE = '22023',
+                MESSAGE = 'PipelineRun cancellation terminal Audit fact is invalid';
+        END IF;
+    ELSIF submitted_terminal_event IS NOT NULL THEN
+        RAISE EXCEPTION USING ERRCODE = '22023',
+            MESSAGE = 'pending PipelineRun cancellation cannot emit a terminal Audit fact';
+    END IF;
+
+    INSERT INTO delivery.audit_operations (
+        tenant_id, id, operation_kind, target_kind, target_id, created_at
+    ) VALUES (
+        effective_tenant_id, operation_id, 'PIPELINE_RUN_CANCELLATION',
+        'PIPELINE_RUN', requested_run_id, effective_now
+    );
+    INSERT INTO delivery.mutations (
+        tenant_id, id, mutation_kind, command_target_id, target_kind, target_id,
+        idempotency_fingerprint, request_digest, result_kind, created_at,
+        document, result_document
+    ) VALUES (
+        effective_tenant_id, operation_id, 'CANCEL_PIPELINE_RUN',
+        requested_run_id, 'PIPELINE_RUN', requested_run_id,
+        submitted_operation->>'idempotencyFingerprint',
+        submitted_operation->>'requestDigest', 'PipelineRun', effective_now,
+        submitted_operation, submitted_run_document
+    );
+    UPDATE delivery.pipeline_runs AS cancelled
+       SET state = CASE WHEN terminal THEN 'CANCELLED' ELSE current_state END,
+           reason = CASE WHEN terminal THEN 'CANCELLED' ELSE current_reason END,
+           resource_version = current_resource_version + 1,
+           cancellation_requested_at = effective_now,
+           completed_at = CASE WHEN terminal THEN effective_now ELSE NULL END,
+           updated_at = effective_now,
+           document = submitted_run_document
+     WHERE cancelled.tenant_id = effective_tenant_id
+       AND cancelled.id = requested_run_id
+       AND cancelled.resource_version = expected_resource_version;
+    GET DIAGNOSTICS affected_rows = ROW_COUNT;
+    IF affected_rows <> 1 THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409',
+            MESSAGE = 'PipelineRun cancellation version conflict';
+    END IF;
+    IF effect_may_exist THEN
+        UPDATE delivery.pipeline_run_tasks AS task
+           SET available_at = effective_now,
+               lease_expires_at = CASE
+                   WHEN task.lease_owner IS NULL THEN NULL
+                   ELSE effective_now
+               END,
+               updated_at = effective_now
+         WHERE task.tenant_id = effective_tenant_id
+           AND task.run_id = requested_run_id
+           AND task.command_id = current_command_id
+           AND task.status = 'INTENT';
+        GET DIAGNOSTICS affected_rows = ROW_COUNT;
+        IF affected_rows <> 1 THEN
+            RAISE EXCEPTION USING ERRCODE = '40001',
+                MESSAGE = 'PipelineRun cancellation intent changed concurrently';
+        END IF;
+    END IF;
+    INSERT INTO delivery.audit_outbox (
+        tenant_id, event_id, operation_id, status, available_at, attempts,
+        fencing_token, created_at, updated_at, document
+    ) VALUES (
+        effective_tenant_id, expected_cancellation_event_id, operation_id,
+        'PENDING', effective_now, 0, 0, effective_now, effective_now,
+        submitted_cancellation_event
+    );
+
+    IF terminal THEN
+        INSERT INTO delivery.audit_operations (
+            tenant_id, id, operation_kind, target_kind, target_id, created_at
+        ) VALUES (
+            effective_tenant_id, terminal_operation_id, 'PIPELINE_RUN_TERMINAL',
+            'PIPELINE_RUN', requested_run_id, effective_now
+        );
+        INSERT INTO delivery.audit_outbox (
+            tenant_id, event_id, operation_id, status, available_at, attempts,
+            fencing_token, created_at, updated_at, document
+        ) VALUES (
+            effective_tenant_id, expected_terminal_event_id,
+            terminal_operation_id, 'PENDING', effective_now, 0, 0,
+            effective_now, effective_now, submitted_terminal_event
+        );
+    END IF;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION delivery.commit_pipeline_run_cancellation(
+    bigint, jsonb, jsonb, jsonb, jsonb
+) FROM PUBLIC, matrix_devops_worker;
+GRANT EXECUTE ON FUNCTION delivery.commit_pipeline_run_cancellation(
+    bigint, jsonb, jsonb, jsonb, jsonb
+) TO matrix_devops_api;
 
 CREATE OR REPLACE FUNCTION delivery.commit_run_admission(
     submitted_event jsonb,
@@ -2202,6 +2824,7 @@ DECLARE
     current_state text;
     current_stage text;
     current_resource_version bigint;
+    current_cancellation_requested_at timestamptz(6);
     current_updated_at timestamptz(6);
     current_run_document jsonb;
     current_task_stage text;
@@ -2241,6 +2864,7 @@ BEGIN
     SELECT run.state,
            run.stage,
            run.resource_version,
+           run.cancellation_requested_at,
            run.updated_at,
            run.document,
            task.stage,
@@ -2252,6 +2876,7 @@ BEGIN
       INTO current_state,
            current_stage,
            current_resource_version,
+           current_cancellation_requested_at,
            current_updated_at,
            current_run_document,
            current_task_stage,
@@ -2311,6 +2936,13 @@ BEGIN
                 ))
         ));
     IF NOT transition_allowed OR NOT reason_allowed
+       OR (current_cancellation_requested_at IS NOT NULL
+            AND requested_state NOT IN (
+                'SUCCEEDED', 'FAILED', 'CANCELLED',
+                'RECONCILING', 'MANUAL_INTERVENTION'
+            ))
+       OR (requested_state = 'CANCELLED'
+            AND current_cancellation_requested_at IS NULL)
        OR (requested_state = 'MANUAL_INTERVENTION'
             AND current_reconciliation_attempts < 10)
        OR current_resource_version >= 9007199254740991 THEN
@@ -2337,15 +2969,17 @@ BEGIN
        OR NOT ((submitted_run_document->'status') ?& ARRAY[
             'state', 'stage', 'resourceVersion', 'observedAt'
        ])
-       OR ((submitted_run_document->'status') - ARRAY[
+        OR ((submitted_run_document->'status') - ARRAY[
             'state', 'stage', 'reason', 'resourceVersion',
-            'observedAt', 'completedAt'
-       ]) <> '{}'::jsonb
+            'observedAt', 'cancellationRequestedAt', 'completedAt'
+        ]) <> '{}'::jsonb
        OR (submitted_run_document - ARRAY['status', 'updatedAt']) IS DISTINCT FROM
             (current_run_document - ARRAY['status', 'updatedAt'])
        OR submitted_run_document#>>'{status,state}' IS DISTINCT FROM requested_state
        OR submitted_run_document#>>'{status,stage}' IS DISTINCT FROM next_stage
-       OR submitted_run_document#>>'{status,reason}' IS DISTINCT FROM requested_reason
+        OR submitted_run_document#>>'{status,reason}' IS DISTINCT FROM requested_reason
+        OR submitted_run_document#>'{status,cancellationRequestedAt}'
+            IS DISTINCT FROM current_run_document#>'{status,cancellationRequestedAt}'
        OR submitted_run_document#>>'{status,resourceVersion}' IS DISTINCT FROM
             (current_resource_version + 1)::text
        OR COALESCE(submitted_run_document#>>'{status,observedAt}', '') COLLATE "C"
@@ -2601,6 +3235,14 @@ BEGIN
         ),
         '{updatedAt}', to_jsonb(effective_time_text), false
     );
+    IF current_run_document#>'{status,cancellationRequestedAt}' IS NOT NULL THEN
+        next_document := jsonb_set(
+            next_document,
+            '{status,cancellationRequestedAt}',
+            current_run_document#>'{status,cancellationRequestedAt}',
+            true
+        );
+    END IF;
     UPDATE delivery.pipeline_runs AS transitioned
        SET state = 'RECONCILING',
            stage = 'REPORT',
@@ -2923,6 +3565,12 @@ AS $function$
             'delivery.commit_configuration_mutation(text,bigint,jsonb,jsonb,jsonb,jsonb,jsonb)'
         ) IS NOT NULL
         AND to_regprocedure(
+            'delivery.lock_pipeline_run_for_cancellation(text)'
+        ) IS NOT NULL
+        AND to_regprocedure(
+            'delivery.commit_pipeline_run_cancellation(bigint,jsonb,jsonb,jsonb,jsonb)'
+        ) IS NOT NULL
+        AND to_regprocedure(
             'delivery.commit_run_admission(jsonb,jsonb,jsonb)'
         ) IS NOT NULL
         AND to_regprocedure(
@@ -2964,6 +3612,19 @@ AS $function$
                      WHERE task.tenant_id = run.tenant_id
                        AND task.run_id = run.id
                        AND task.stage = 'REPORT'
+                       AND task.status = 'INTENT'
+                )
+        )
+        AND NOT EXISTS (
+            SELECT 1 FROM delivery.pipeline_runs AS run
+             WHERE run.cancellation_requested_at IS NOT NULL
+               AND run.state NOT IN (
+                    'SUCCEEDED', 'FAILED', 'CANCELLED', 'MANUAL_INTERVENTION'
+               )
+               AND NOT EXISTS (
+                    SELECT 1 FROM delivery.pipeline_run_tasks AS task
+                     WHERE task.tenant_id = run.tenant_id
+                       AND task.run_id = run.id
                        AND task.status = 'INTENT'
                )
         )
@@ -3037,6 +3698,19 @@ AS $function$
                      WHERE task.tenant_id = run.tenant_id
                        AND task.run_id = run.id
                        AND task.stage = 'REPORT'
+                       AND task.status = 'INTENT'
+                )
+        )
+        AND NOT EXISTS (
+            SELECT 1 FROM delivery.pipeline_runs AS run
+             WHERE run.cancellation_requested_at IS NOT NULL
+               AND run.state NOT IN (
+                    'SUCCEEDED', 'FAILED', 'CANCELLED', 'MANUAL_INTERVENTION'
+               )
+               AND NOT EXISTS (
+                    SELECT 1 FROM delivery.pipeline_run_tasks AS task
+                     WHERE task.tenant_id = run.tenant_id
+                       AND task.run_id = run.id
                        AND task.status = 'INTENT'
                )
         )

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +31,7 @@ import (
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/auditdispatch"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/pipelineconfiguration"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runadmission"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runcontrol"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runlifecycle"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/sourceingress"
 	devopsmigration "github.com/xiak/matrix/app/service/devops/migration"
@@ -80,6 +82,10 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	usecase, err := pipelineconfiguration.NewUsecase(repository, pipelineconfiguration.Config{MaxTransactionAttempts: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runController, err := runcontrol.NewService(repository, runcontrol.Config{MaxTransactionAttempts: 5})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -435,6 +441,41 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatalf("forced RLS cross-tenant admission read: %v", err)
 	}
+	queuedRun := firstAdmission.Admission.Runs[0]
+	if readRun, err := runController.Get(ctx, runcontrol.GetQuery{
+		Authorization: auth(iamv1.ActionDevOpsRunRead, iamv1.ResourcePipelineRun, queuedRun.ID),
+		RunID:         queuedRun.ID,
+	}); err != nil || readRun != queuedRun {
+		t.Fatalf("read authorized PipelineRun=%#v err=%v", readRun, err)
+	}
+	otherTenantRead := auth(iamv1.ActionDevOpsRunRead, iamv1.ResourcePipelineRun, queuedRun.ID)
+	otherTenantRead.TenantID = "tenant-other"
+	if _, err := runController.Get(ctx, runcontrol.GetQuery{
+		Authorization: otherTenantRead, RunID: queuedRun.ID,
+	}); !errors.Is(err, runcontrol.ErrNotFound) {
+		t.Fatalf("cross-tenant PipelineRun read error=%v", err)
+	}
+	queuedCancellation := runcontrol.CancelCommand{
+		Authorization: auth(iamv1.ActionDevOpsRunCancel, iamv1.ResourcePipelineRun, queuedRun.ID),
+		RunID:         queuedRun.ID, ExpectedResourceVersion: queuedRun.Status.ResourceVersion,
+		IdempotencyKey: "cancel-queued-integration",
+	}
+	cancelledQueued, err := runController.Cancel(ctx, queuedCancellation)
+	if err != nil || cancelledQueued.Replayed ||
+		cancelledQueued.Value.Status.State != devopsv1.PipelineRunCancelled ||
+		cancelledQueued.Value.Status.CancellationRequestedAt == nil ||
+		cancelledQueued.Value.Status.CompletedAt == nil {
+		t.Fatalf("cancel queued PipelineRun=%#v err=%v", cancelledQueued, err)
+	}
+	replayedQueued, err := runController.Cancel(ctx, queuedCancellation)
+	if err != nil || !replayedQueued.Replayed || !reflect.DeepEqual(replayedQueued.Value, cancelledQueued.Value) {
+		t.Fatalf("replay queued PipelineRun cancellation=%#v err=%v", replayedQueued, err)
+	}
+	changedQueued := queuedCancellation
+	changedQueued.ExpectedResourceVersion++
+	if _, err := runController.Cancel(ctx, changedQueued); !errors.Is(err, runcontrol.ErrIdempotencyConflict) {
+		t.Fatalf("changed PipelineRun cancellation replay error=%v", err)
+	}
 
 	assertDenied(t, func() error {
 		_, err := pool.Exec(ctx, `INSERT INTO delivery.projects (tenant_id,id,resource_version,document) VALUES ('tenant-one','forbidden',1,'{}')`)
@@ -468,8 +509,9 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		_, err := pool.Exec(ctx, `SELECT count(*) FROM delivery.pipeline_run_tasks`)
 		return err
 	})
-	assertRunLifecyclePersistenceAndFencing(t, ctx, admin, workerPool)
+	assertRunLifecyclePersistenceAndFencing(t, ctx, admin, workerPool, runController)
 	assertTerminalAuditFacts(t, ctx, admin)
+	assertCancellationAuditFacts(t, ctx, admin)
 	outbox, err := devopspostgres.NewAuditOutboxRepository(workerPool)
 	if err != nil {
 		t.Fatal(err)
@@ -479,10 +521,10 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		t.Fatalf("DevOps Audit worker readiness=%#v err=%v", workerReadiness, err)
 	}
 	snapshot, err := outbox.Snapshot(ctx)
-	if err != nil || snapshot.Pending != 66 || snapshot.Delivered != 0 {
+	if err != nil || snapshot.Pending != 71 || snapshot.Delivered != 0 {
 		t.Fatalf("initial Audit outbox snapshot=%#v err=%v", snapshot, err)
 	}
-	for index := 0; index < 66; index++ {
+	for index := 0; index < 71; index++ {
 		claim, found, err := outbox.Claim(ctx, "audit-worker-integration", 30*time.Second)
 		if err != nil || !found {
 			t.Fatalf("claim Audit event %d=%#v found=%t err=%v", index, claim, found, err)
@@ -510,7 +552,7 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		t.Fatalf("empty Audit claim=%#v found=%t err=%v", claim, found, err)
 	}
 	snapshot, err = outbox.Snapshot(ctx)
-	if err != nil || snapshot.Delivered != 66 || snapshot.Pending != 0 || snapshot.Leased != 0 ||
+	if err != nil || snapshot.Delivered != 71 || snapshot.Pending != 0 || snapshot.Leased != 0 ||
 		snapshot.Retry != 0 || snapshot.DeadLetter != 0 || snapshot.ExpiredLease != 0 {
 		t.Fatalf("delivered Audit outbox snapshot=%#v err=%v", snapshot, err)
 	}
@@ -537,8 +579,8 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 	); err != nil {
 		t.Fatalf("read delivery evidence: %v", err)
 	}
-	if mutationCount != 13 || sourceEventCount != 16 || runCount != 32 || runTaskCount != 9 ||
-		operationCount != 66 || auditCount != 66 ||
+	if mutationCount != 17 || sourceEventCount != 16 || runCount != 32 || runTaskCount != 9 ||
+		operationCount != 71 || auditCount != 71 ||
 		bindingRevisionCount != 2 || pipelineRevisionCount != 3 {
 		t.Fatalf(
 			"evidence counts mutation=%d event=%d run=%d task=%d operation=%d audit=%d binding=%d pipeline=%d",
@@ -582,6 +624,7 @@ func assertTerminalAuditFacts(t *testing.T, ctx context.Context, admin *pgx.Conn
 	}
 	defer rows.Close()
 	counts := map[auditv1.Outcome]int{}
+	actorCounts := map[auditv1.ActorID]int{}
 	count := 0
 	for rows.Next() {
 		var operationKind, targetID string
@@ -595,20 +638,72 @@ func assertTerminalAuditFacts(t *testing.T, ctx context.Context, admin *pgx.Conn
 		}
 		if err := auditv1.ValidateEventForSource(auditv1.SourceDevOps, event); err != nil ||
 			operationKind != "PIPELINE_RUN_TERMINAL" || event.Action != auditv1.ActionDevOpsPipelineRunCompleted ||
-			event.Target.ID != targetID || event.Actor.ID != "system-devops-run-worker" ||
+			event.Target.ID != targetID ||
+			(event.Actor.ID != "system-devops-run-worker" && event.Actor.ID != "system-devops-run-control") ||
 			event.IAMDecisionID != "" {
 			t.Fatalf("PipelineRun terminal Audit fact=%#v operation=%s target=%s err=%v", event, operationKind, targetID, err)
 		}
 		counts[event.Outcome]++
+		actorCounts[event.Actor.ID]++
 		count++
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if count != 5 || counts[auditv1.OutcomeSucceeded] != 1 ||
-		counts[auditv1.OutcomeCancelled] != 3 || counts[auditv1.OutcomeManualIntervention] != 1 ||
-		counts[auditv1.OutcomeFailed] != 0 {
-		t.Fatalf("PipelineRun terminal Audit outcome counts=%#v total=%d", counts, count)
+	if count != 6 || counts[auditv1.OutcomeSucceeded] != 1 ||
+		counts[auditv1.OutcomeCancelled] != 4 || counts[auditv1.OutcomeManualIntervention] != 1 ||
+		counts[auditv1.OutcomeFailed] != 0 || actorCounts["system-devops-run-worker"] != 5 ||
+		actorCounts["system-devops-run-control"] != 1 {
+		t.Fatalf("PipelineRun terminal Audit outcome counts=%#v actors=%#v total=%d", counts, actorCounts, count)
+	}
+}
+
+func assertCancellationAuditFacts(t *testing.T, ctx context.Context, admin *pgx.Conn) {
+	t.Helper()
+	rows, err := admin.Query(ctx, `SELECT operation.target_id, mutation.document, outbox.document
+		FROM delivery.audit_operations AS operation
+		JOIN delivery.mutations AS mutation
+		  ON mutation.tenant_id = operation.tenant_id AND mutation.id = operation.id
+		JOIN delivery.audit_outbox AS outbox
+		  ON outbox.tenant_id = operation.tenant_id AND outbox.operation_id = operation.id
+		WHERE operation.operation_kind = 'PIPELINE_RUN_CANCELLATION'
+		ORDER BY operation.id`)
+	if err != nil {
+		t.Fatalf("read PipelineRun cancellation facts: %v", err)
+	}
+	defer rows.Close()
+	count := 0
+	for rows.Next() {
+		var targetID string
+		var operationDocument, eventDocument []byte
+		if err := rows.Scan(&targetID, &operationDocument, &eventDocument); err != nil {
+			t.Fatal(err)
+		}
+		var operation runcontrol.CancellationOperation
+		var event auditv1.Event
+		if err := json.Unmarshal(operationDocument, &operation); err != nil {
+			t.Fatalf("decode PipelineRun cancellation Operation: %v", err)
+		}
+		if err := json.Unmarshal(eventDocument, &event); err != nil {
+			t.Fatalf("decode PipelineRun cancellation Audit fact: %v", err)
+		}
+		if err := runcontrol.ValidateCancellationOperation(operation); err != nil ||
+			auditv1.ValidateEventForSource(auditv1.SourceDevOps, event) != nil ||
+			string(operation.RunID) != targetID || event.Target.ID != targetID ||
+			event.Action != auditv1.ActionDevOpsPipelineRunCancellationRequested ||
+			event.Result != auditv1.ResultAccepted || event.Outcome != "" || event.Reason != "" ||
+			event.Actor.ID != auditv1.ActorID(operation.RequestedBy.ID) ||
+			string(event.IAMDecisionID) != operation.IAMDecisionID {
+			t.Fatalf("PipelineRun cancellation operation=%#v event=%#v target=%s err=%v",
+				operation, event, targetID, err)
+		}
+		count++
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if count != 4 {
+		t.Fatalf("PipelineRun cancellation fact count=%d", count)
 	}
 }
 
@@ -617,6 +712,7 @@ func assertRunLifecyclePersistenceAndFencing(
 	ctx context.Context,
 	admin *pgx.Conn,
 	workerPool *pgxpool.Pool,
+	runController *runcontrol.Service,
 ) {
 	t.Helper()
 	repository, err := devopspostgres.NewRunTaskRepository(workerPool)
@@ -751,14 +847,47 @@ func assertRunLifecyclePersistenceAndFencing(
 		t, ctx, queue, "", devopsv1.PipelineRunFetching,
 		devopsv1.PipelineRunStageFetch,
 	)
+	pending, err := runController.Cancel(ctx, runcontrol.CancelCommand{
+		Authorization: auth(
+			iamv1.ActionDevOpsRunCancel, iamv1.ResourcePipelineRun, cancelledTask.Run.ID,
+		),
+		RunID: cancelledTask.Run.ID, ExpectedResourceVersion: cancelledTask.Run.Status.ResourceVersion,
+		IdempotencyKey: "cancel-active-integration",
+	})
+	if err != nil || pending.Value.Status.CompletedAt != nil ||
+		pending.Value.Status.CancellationRequestedAt == nil ||
+		pending.Value.Status.State != devopsv1.PipelineRunFetching {
+		t.Fatalf("request active PipelineRun cancellation=%#v err=%v", pending, err)
+	}
+	if _, err := queue.Renew(ctx, cancelledTask); !errors.Is(err, runlifecycle.ErrStaleLease) {
+		t.Fatalf("cancelled PipelineRun retained its old lease: %v", err)
+	}
+	staleCancellation := cancelledTask
+	staleCancellation.Run = pending.Value
+	if _, err := queue.Advance(ctx, runlifecycle.Transition{
+		Lease: staleCancellation, State: devopsv1.PipelineRunCancelled,
+		Reason: devopsv1.PipelineRunReasonCancelled,
+	}); !errors.Is(err, runlifecycle.ErrStaleLease) {
+		t.Fatalf("cancelled PipelineRun accepted its old fence: %v", err)
+	}
+	recoveredCancellation := claimExpectedRunStage(
+		t, ctx, queue, cancelledTask.Run.ID, devopsv1.PipelineRunFetching,
+		devopsv1.PipelineRunStageFetch,
+	)
+	if recoveredCancellation.Mode != runlifecycle.ClaimObserve ||
+		recoveredCancellation.Intent != cancelledTask.Intent ||
+		recoveredCancellation.Run.Status.CancellationRequestedAt == nil {
+		t.Fatalf("cancelled PipelineRun did not recover its exact intent: %#v", recoveredCancellation)
+	}
 	cancelled, err := queue.Advance(ctx, runlifecycle.Transition{
-		Lease:  cancelledTask,
-		State:  devopsv1.PipelineRunCancelled,
+		Lease: recoveredCancellation, State: devopsv1.PipelineRunCancelled,
 		Reason: devopsv1.PipelineRunReasonCancelled,
 	})
 	if err != nil || cancelled.Status.CompletedAt == nil ||
-		cancelled.Status.Stage != devopsv1.PipelineRunStageFetch {
-		t.Fatalf("cancel active PipelineRun=%#v err=%v", cancelled, err)
+		cancelled.Status.Stage != devopsv1.PipelineRunStageFetch ||
+		cancelled.Status.CancellationRequestedAt == nil ||
+		!cancelled.Status.CancellationRequestedAt.Equal(*pending.Value.Status.CancellationRequestedAt) {
+		t.Fatalf("complete active PipelineRun cancellation=%#v err=%v", cancelled, err)
 	}
 
 	type claimResult struct {
@@ -792,7 +921,20 @@ func assertRunLifecyclePersistenceAndFencing(
 		t.Fatalf("concurrent active-run quota claims=%#v", activeRuns)
 	}
 	for _, active := range activeRuns {
-		makeRunTaskDue(t, ctx, admin, active.Intent.CommandID)
+		pending, err := runController.Cancel(ctx, runcontrol.CancelCommand{
+			Authorization: auth(
+				iamv1.ActionDevOpsRunCancel, iamv1.ResourcePipelineRun, active.Run.ID,
+			),
+			RunID: active.Run.ID, ExpectedResourceVersion: active.Run.Status.ResourceVersion,
+			IdempotencyKey: "cancel-quota-" + string(active.Run.ID),
+		})
+		if err != nil || pending.Value.Status.CancellationRequestedAt == nil ||
+			pending.Value.Status.CompletedAt != nil {
+			t.Fatalf("request quota PipelineRun cancellation=%#v err=%v", pending, err)
+		}
+		if _, err := queue.Renew(ctx, active); !errors.Is(err, runlifecycle.ErrStaleLease) {
+			t.Fatalf("quota PipelineRun retained its old lease: %v", err)
+		}
 		recovered = claimExpectedRunStage(
 			t, ctx, queue, active.Run.ID, devopsv1.PipelineRunFetching,
 			devopsv1.PipelineRunStageFetch,

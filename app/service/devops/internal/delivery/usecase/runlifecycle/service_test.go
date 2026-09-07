@@ -127,45 +127,6 @@ func TestQueueRejectsPrematureManualInterventionAndRepositoryDrift(t *testing.T)
 	}
 }
 
-func TestTerminalAuditEventPreservesClosedOutcomeAndHidesWorkerIdentity(t *testing.T) {
-	tests := []struct {
-		name    string
-		state   devopsv1.PipelineRunState
-		reason  devopsv1.PipelineRunReason
-		outcome string
-	}{
-		{"succeeded", devopsv1.PipelineRunSucceeded, devopsv1.PipelineRunReasonCompleted, "SUCCEEDED"},
-		{"failed", devopsv1.PipelineRunFailed, devopsv1.PipelineRunReasonVerificationFailed, "FAILED"},
-		{"cancelled", devopsv1.PipelineRunCancelled, devopsv1.PipelineRunReasonCancelled, "CANCELLED"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			lease := taskLease(t, devopsv1.PipelineRunReporting, ClaimExecute, 1, 0)
-			terminal, err := domain.AdvancePipelineRun(
-				lease.Run, test.state, test.reason, lease.Run.UpdatedAt.Add(time.Microsecond),
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
-			event, err := NewTerminalAuditEvent(terminal, lease.Intent.CommandID)
-			if err != nil || string(event.Outcome) != test.outcome ||
-				string(event.Reason) != string(test.reason) || event.RequestDigest != terminal.InputDigest ||
-				event.Actor.ID != terminalAuditActorID || string(event.Actor.ID) == lease.WorkerID ||
-				event.RequestID != lease.Intent.CommandID || event.CorrelationID != string(terminal.ID) {
-				t.Fatalf("terminal Audit event=%#v err=%v", event, err)
-			}
-			replayed, err := NewTerminalAuditEvent(terminal, lease.Intent.CommandID)
-			if err != nil || replayed != event {
-				t.Fatalf("terminal Audit replay=%#v err=%v", replayed, err)
-			}
-		})
-	}
-	lease := taskLease(t, devopsv1.PipelineRunFetching, ClaimExecute, 1, 0)
-	if _, err := NewTerminalAuditEvent(lease.Run, lease.Intent.CommandID); err == nil {
-		t.Fatal("nonterminal PipelineRun produced a completion Audit event")
-	}
-}
-
 type fakeRepository struct {
 	lease          Lease
 	found          bool

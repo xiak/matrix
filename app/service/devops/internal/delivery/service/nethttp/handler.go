@@ -11,6 +11,7 @@ import (
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/port"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/pipelineconfiguration"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runadmission"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runcontrol"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/sourceingress"
 )
 
@@ -34,16 +35,23 @@ type Config struct {
 	Readiness     func(context.Context) (devopsv1.Readiness, error)
 	NewRequestID  func() (string, error)
 	SourceIngress SourceIngress
+	RunControl    RunControl
 }
 
 type SourceIngress interface {
 	Receive(context.Context, sourceingress.Command) (runadmission.Result, error)
 }
 
+type RunControl interface {
+	Get(context.Context, runcontrol.GetQuery) (devopsv1.PipelineRun, error)
+	Cancel(context.Context, runcontrol.CancelCommand) (runcontrol.Result, error)
+}
+
 type handler struct {
 	authorizer port.Authorizer
 	workflow   Workflow
 	ingress    SourceIngress
+	runControl RunControl
 	config     Config
 	routes     *http.ServeMux
 }
@@ -54,13 +62,16 @@ func NewHandler(authorizer port.Authorizer, workflow Workflow, config Config) (h
 	if authorizer == nil || workflow == nil {
 		return nil, errors.New("DevOps HTTP Authorizer and workflow are required")
 	}
-	if config.Readiness == nil || config.SourceIngress == nil {
-		return nil, errors.New("DevOps HTTP readiness and source ingress are required")
+	if config.Readiness == nil || config.SourceIngress == nil || config.RunControl == nil {
+		return nil, errors.New("DevOps HTTP readiness, source ingress, and run control are required")
 	}
 	if config.NewRequestID == nil {
 		config.NewRequestID = newRequestID
 	}
-	value := &handler{authorizer: authorizer, workflow: workflow, ingress: config.SourceIngress, config: config}
+	value := &handler{
+		authorizer: authorizer, workflow: workflow, ingress: config.SourceIngress,
+		runControl: config.RunControl, config: config,
+	}
 	routes := http.NewServeMux()
 	routes.HandleFunc("/ready", value.ready)
 	routes.HandleFunc("/v1/projects", value.projects)
@@ -75,6 +86,8 @@ func NewHandler(authorizer port.Authorizer, workflow Workflow, config Config) (h
 	routes.HandleFunc("/v1/pipelines/{pipelineId}/draft", value.pipelineDraft)
 	routes.HandleFunc("/v1/pipelines/{pipelineId}/activate", value.pipelineActivation)
 	routes.HandleFunc("/v1/pipelines/{pipelineId}/revisions/{pipelineRevisionId}", value.pipelineRevision)
+	routes.HandleFunc("/v1/runs/{runId}", value.pipelineRun)
+	routes.HandleFunc("/v1/runs/{runId}/cancel", value.pipelineRunCancellation)
 	routes.HandleFunc("/", value.notFound)
 	value.routes = routes
 	return value, nil

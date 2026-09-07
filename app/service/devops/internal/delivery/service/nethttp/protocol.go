@@ -19,6 +19,7 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/port"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/pipelineconfiguration"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runcontrol"
 )
 
 var forbiddenAuthorityHeaders = []string{
@@ -314,8 +315,27 @@ func writeWorkflowError(response http.ResponseWriter, requestID string, err erro
 	case errors.Is(err, pipelineconfiguration.ErrPreconditionFailed):
 		writeProblem(response, requestID, http.StatusPreconditionFailed,
 			devopsv1.ErrorPreconditionFailed, "Precondition failed", "a referenced DevOps resource no longer satisfies this request", false)
+	case errors.Is(err, runcontrol.ErrInvalidArgument):
+		writeProblem(response, requestID, http.StatusUnprocessableEntity,
+			devopsv1.ErrorInvalidArgument, "Invalid argument", "request violates the PipelineRun control contract", false)
+	case errors.Is(err, runcontrol.ErrNotFound):
+		writeProblem(response, requestID, http.StatusNotFound,
+			devopsv1.ErrorNotFound, "Not found", "the requested tenant PipelineRun does not exist", false)
+	case errors.Is(err, runcontrol.ErrIdempotencyConflict):
+		writeProblem(response, requestID, http.StatusConflict,
+			devopsv1.ErrorConflict, "Idempotency conflict", "Idempotency-Key was used for a different cancellation", false)
+	case errors.Is(err, runcontrol.ErrResourceVersionConflict):
+		writeProblem(response, requestID, http.StatusPreconditionFailed,
+			devopsv1.ErrorPreconditionFailed, "Precondition failed", "If-Match does not identify the current PipelineRun version", false)
+	case errors.Is(err, runcontrol.ErrNoDesiredChange):
+		writeProblem(response, requestID, http.StatusConflict,
+			devopsv1.ErrorConflict, "No desired change", "PipelineRun cancellation is already requested", false)
+	case errors.Is(err, runcontrol.ErrTerminal):
+		writeProblem(response, requestID, http.StatusConflict,
+			devopsv1.ErrorConflict, "Terminal PipelineRun", "a terminal PipelineRun cannot be cancelled", false)
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded),
-		errors.Is(err, pipelineconfiguration.ErrRetryableTransaction):
+		errors.Is(err, pipelineconfiguration.ErrRetryableTransaction),
+		errors.Is(err, runcontrol.ErrRetryableTransaction):
 		writeProblem(response, requestID, http.StatusServiceUnavailable,
 			devopsv1.ErrorUnavailable, "DevOps unavailable", "the DevOps workflow is temporarily unavailable", true)
 	default:

@@ -251,12 +251,13 @@ type PipelineRunInput struct {
 }
 
 type PipelineRunStatus struct {
-	State           PipelineRunState  `json:"state"`
-	Stage           PipelineRunStage  `json:"stage"`
-	Reason          PipelineRunReason `json:"reason,omitempty"`
-	ResourceVersion uint64            `json:"resourceVersion"`
-	ObservedAt      time.Time         `json:"observedAt"`
-	CompletedAt     *time.Time        `json:"completedAt,omitempty"`
+	State                   PipelineRunState  `json:"state"`
+	Stage                   PipelineRunStage  `json:"stage"`
+	Reason                  PipelineRunReason `json:"reason,omitempty"`
+	ResourceVersion         uint64            `json:"resourceVersion"`
+	ObservedAt              time.Time         `json:"observedAt"`
+	CancellationRequestedAt *time.Time        `json:"cancellationRequestedAt,omitempty"`
+	CompletedAt             *time.Time        `json:"completedAt,omitempty"`
 }
 
 type PipelineRun struct {

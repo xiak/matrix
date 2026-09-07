@@ -1,4 +1,6 @@
-package runlifecycle
+// Package runaudit projects PipelineRun lifecycle facts into Audit's closed
+// indefinite-retention contract.
+package runaudit
 
 import (
 	"crypto/sha256"
@@ -10,22 +12,28 @@ import (
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 )
 
-const terminalAuditActorID = "system-devops-run-worker"
+const (
+	WorkerActorID  = "system-devops-run-worker"
+	ControlActorID = "system-devops-run-control"
+)
 
-// NewTerminalAuditEvent projects the exact terminal PipelineRun outcome into
-// Audit's indefinite-retention contract. The worker identity is deliberately
-// normalized: scheduler instance names and host identity are not Audit facts.
-func NewTerminalAuditEvent(run devopsv1.PipelineRun, requestID string) (auditv1.Event, error) {
+// NewTerminalEvent projects the exact terminal PipelineRun outcome. Callers
+// select one closed normalized actor; scheduler instances and host identities
+// are deliberately not Audit facts.
+func NewTerminalEvent(run devopsv1.PipelineRun, requestID, actorID string) (auditv1.Event, error) {
 	if err := devopsv1.ValidatePipelineRun(run); err != nil {
 		return auditv1.Event{}, err
 	}
 	if err := devopsv1.ValidateID("requestId", requestID); err != nil {
 		return auditv1.Event{}, err
 	}
+	if actorID != WorkerActorID && actorID != ControlActorID {
+		return auditv1.Event{}, errors.New("PipelineRun terminal Audit actor is invalid")
+	}
 	if run.Status.CompletedAt == nil {
 		return auditv1.Event{}, errors.New("PipelineRun terminal Audit requires a terminal run")
 	}
-	outcome, reason, err := terminalAuditOutcome(run.Status)
+	outcome, reason, err := terminalOutcome(run.Status)
 	if err != nil {
 		return auditv1.Event{}, err
 	}
@@ -38,7 +46,7 @@ func NewTerminalAuditEvent(run devopsv1.PipelineRun, requestID string) (auditv1.
 		TenantID:   auditv1.TenantID(run.Scope.TenantID),
 		Actor: auditv1.ActorReference{
 			Type: auditv1.ActorSystem,
-			ID:   terminalAuditActorID,
+			ID:   auditv1.ActorID(actorID),
 		},
 		Action: auditv1.ActionDevOpsPipelineRunCompleted,
 		Target: auditv1.TargetReference{
@@ -60,7 +68,7 @@ func NewTerminalAuditEvent(run devopsv1.PipelineRun, requestID string) (auditv1.
 	return event, nil
 }
 
-func terminalAuditOutcome(status devopsv1.PipelineRunStatus) (auditv1.Outcome, auditv1.Reason, error) {
+func terminalOutcome(status devopsv1.PipelineRunStatus) (auditv1.Outcome, auditv1.Reason, error) {
 	switch status.State {
 	case devopsv1.PipelineRunSucceeded:
 		return auditv1.OutcomeSucceeded, auditv1.ReasonCompleted, nil

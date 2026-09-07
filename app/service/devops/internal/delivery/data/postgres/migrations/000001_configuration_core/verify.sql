@@ -139,6 +139,15 @@ BEGIN
         RAISE EXCEPTION 'PipelineRun relational input digest is missing';
     END IF;
     IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns AS column_info
+         WHERE column_info.table_schema = 'delivery'
+           AND column_info.table_name = 'pipeline_runs'
+           AND column_info.column_name = 'cancellation_requested_at'
+           AND column_info.data_type = 'timestamp with time zone'
+    ) THEN
+        RAISE EXCEPTION 'PipelineRun cancellation timestamp is missing';
+    END IF;
+    IF NOT EXISTS (
         SELECT 1 FROM pg_catalog.pg_policies AS policy
          WHERE policy.schemaname = 'delivery'
            AND policy.tablename = 'pipeline_runs'
@@ -186,6 +195,7 @@ BEGIN
             ('pipeline_runs_audit_operation_fk'),
             ('pipeline_runs_task_identity_uq'),
             ('pipeline_runs_input_digest_valid'),
+            ('pipeline_runs_cancellation_valid'),
             ('pipeline_run_tasks_command_uq'), ('pipeline_run_tasks_run_fk'),
             ('pipeline_run_tasks_values_valid'),
             ('mutations_idempotency_uq'), ('mutations_audit_operation_fk'),
@@ -239,6 +249,10 @@ BEGIN
         VALUES
             ('commit_run_admission',
              'submitted_event jsonb, submitted_runs jsonb, submitted_audit_events jsonb'),
+            ('lock_pipeline_run_for_cancellation',
+             'requested_run_id text'),
+            ('commit_pipeline_run_cancellation',
+             'expected_resource_version bigint, submitted_run_document jsonb, submitted_operation jsonb, submitted_cancellation_event jsonb, submitted_terminal_event jsonb'),
             ('claim_pipeline_run_task',
              'requested_worker_id text, requested_lease_seconds integer'),
             ('renew_pipeline_run_task',
@@ -291,6 +305,24 @@ BEGIN
        OR has_function_privilege(
             'matrix_devops_worker',
             'delivery.commit_configuration_mutation(text,bigint,jsonb,jsonb,jsonb,jsonb,jsonb)',
+            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_devops_api',
+            'delivery.lock_pipeline_run_for_cancellation(text)', 'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_devops_worker',
+            'delivery.lock_pipeline_run_for_cancellation(text)', 'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_devops_api',
+            'delivery.commit_pipeline_run_cancellation(bigint,jsonb,jsonb,jsonb,jsonb)',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_devops_worker',
+            'delivery.commit_pipeline_run_cancellation(bigint,jsonb,jsonb,jsonb,jsonb)',
             'EXECUTE'
        )
        OR NOT has_function_privilege(

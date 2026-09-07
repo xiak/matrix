@@ -16,6 +16,7 @@ import (
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/domain"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/port"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/pipelineconfiguration"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runcontrol"
 )
 
 func TestHandlerReadinessIsAnonymousExactAndSanitized(t *testing.T) {
@@ -28,6 +29,7 @@ func TestHandlerReadinessIsAnonymousExactAndSanitized(t *testing.T) {
 		Readiness:     func(context.Context) (devopsv1.Readiness, error) { return readiness, readyErr },
 		NewRequestID:  func() (string, error) { return "request-test", nil },
 		SourceIngress: &fakeSourceIngress{},
+		RunControl:    newFakeRunControl(t),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -229,7 +231,117 @@ func TestHandlerNormalizesMethodAndWorkflowFailures(t *testing.T) {
 	}
 }
 
+func TestHandlerReadsAndCancelsPipelineRunThroughExactIAMAuthority(t *testing.T) {
+	authorizer := &fakeAuthorizer{}
+	workflow := newFakeWorkflow(t)
+	control := newFakeRunControl(t)
+	handler := mustHandlerWithControl(t, authorizer, workflow, control)
+	path := "/v1/runs/" + string(control.run.ID)
+
+	request := httptest.NewRequest(http.MethodGet, path, nil)
+	request.Header.Set("Authorization", "Bearer caller-credential")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Header().Get("ETag") != `"1"` ||
+		authorizer.request.Action != iamv1.ActionDevOpsRunRead ||
+		authorizer.request.Resource != (iamv1.ResourceReference{
+			Kind: iamv1.ResourcePipelineRun, ID: string(control.run.ID),
+		}) || control.get.RunID != control.run.ID {
+		t.Fatalf("read status=%d headers=%#v authority=%#v query=%#v body=%s",
+			response.Code, response.Header(), authorizer.request, control.get, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodPost, path+"/cancel", nil)
+	request.Header.Set("Authorization", "Bearer caller-credential")
+	request.Header.Set("If-Match", `"1"`)
+	request.Header.Set("Idempotency-Key", "cancel-run-one")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Header().Get("ETag") != `"2"` ||
+		authorizer.request.Action != iamv1.ActionDevOpsRunCancel ||
+		control.cancel.RunID != control.run.ID || control.cancel.ExpectedResourceVersion != 1 ||
+		control.cancel.IdempotencyKey != "cancel-run-one" {
+		t.Fatalf("cancel status=%d headers=%#v authority=%#v command=%#v body=%s",
+			response.Code, response.Header(), authorizer.request, control.cancel, response.Body.String())
+	}
+	var cancelled devopsv1.PipelineRun
+	if err := json.Unmarshal(response.Body.Bytes(), &cancelled); err != nil ||
+		cancelled.Status.State != devopsv1.PipelineRunCancelled ||
+		cancelled.Status.CancellationRequestedAt == nil {
+		t.Fatalf("cancelled run=%#v err=%v", cancelled, err)
+	}
+}
+
+func TestHandlerRejectsPipelineRunCancellationBodyAndMissingGuardBeforeIAM(t *testing.T) {
+	authorizer := &fakeAuthorizer{}
+	control := newFakeRunControl(t)
+	handler := mustHandlerWithControl(t, authorizer, newFakeWorkflow(t), control)
+	path := "/v1/runs/" + string(control.run.ID) + "/cancel"
+
+	request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
+	request.Header.Set("Authorization", "Bearer caller-credential")
+	request.Header.Set("If-Match", `"1"`)
+	request.Header.Set("Idempotency-Key", "cancel-run-one")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	assertProblem(t, response, http.StatusBadRequest, devopsv1.ErrorInvalidArgument)
+
+	request = httptest.NewRequest(http.MethodPost, path, nil)
+	request.Header.Set("Authorization", "Bearer caller-credential")
+	request.Header.Set("Idempotency-Key", "cancel-run-one")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	assertProblem(t, response, http.StatusPreconditionRequired, devopsv1.ErrorPreconditionRequired)
+	if authorizer.calls != 0 || control.cancelCalls != 0 {
+		t.Fatal("invalid cancellation crossed the IAM or run-control boundary")
+	}
+}
+
+func TestHandlerNormalizesPipelineRunControlFailures(t *testing.T) {
+	tests := map[string]struct {
+		err    error
+		status int
+		code   devopsv1.ErrorCode
+	}{
+		"invalid":              {runcontrol.ErrInvalidArgument, 422, devopsv1.ErrorInvalidArgument},
+		"not found":            {runcontrol.ErrNotFound, 404, devopsv1.ErrorNotFound},
+		"idempotency conflict": {runcontrol.ErrIdempotencyConflict, 409, devopsv1.ErrorConflict},
+		"version conflict":     {runcontrol.ErrResourceVersionConflict, 412, devopsv1.ErrorPreconditionFailed},
+		"already requested":    {runcontrol.ErrNoDesiredChange, 409, devopsv1.ErrorConflict},
+		"terminal":             {runcontrol.ErrTerminal, 409, devopsv1.ErrorConflict},
+		"retryable":            {runcontrol.ErrRetryableTransaction, 503, devopsv1.ErrorUnavailable},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			control := newFakeRunControl(t)
+			control.err = errors.Join(test.err, errors.New("native cancellation detail must not leak"))
+			handler := mustHandlerWithControl(t, &fakeAuthorizer{}, newFakeWorkflow(t), control)
+			request := httptest.NewRequest(
+				http.MethodPost, "/v1/runs/"+string(control.run.ID)+"/cancel", nil,
+			)
+			request.Header.Set("Authorization", "Bearer caller-credential")
+			request.Header.Set("If-Match", `"1"`)
+			request.Header.Set("Idempotency-Key", "cancel-run-one")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			assertProblem(t, response, test.status, test.code)
+			if strings.Contains(response.Body.String(), "native cancellation") {
+				t.Fatal("native PipelineRun control error leaked")
+			}
+		})
+	}
+}
+
 func mustHandler(t *testing.T, authorizer *fakeAuthorizer, workflow *fakeWorkflow) http.Handler {
+	return mustHandlerWithControl(t, authorizer, workflow, newFakeRunControl(t))
+}
+
+func mustHandlerWithControl(
+	t *testing.T,
+	authorizer *fakeAuthorizer,
+	workflow *fakeWorkflow,
+	control *fakeRunControl,
+) http.Handler {
 	t.Helper()
 	readiness := devopsv1.Readiness{
 		APIVersion: devopsv1.APIVersion, Kind: "Readiness", State: devopsv1.ReadinessReady,
@@ -239,11 +351,82 @@ func mustHandler(t *testing.T, authorizer *fakeAuthorizer, workflow *fakeWorkflo
 		Readiness:     func(context.Context) (devopsv1.Readiness, error) { return readiness, nil },
 		NewRequestID:  func() (string, error) { return "request-test", nil },
 		SourceIngress: &fakeSourceIngress{},
+		RunControl:    control,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return handler
+}
+
+type fakeRunControl struct {
+	run         devopsv1.PipelineRun
+	get         runcontrol.GetQuery
+	cancel      runcontrol.CancelCommand
+	err         error
+	getCalls    int
+	cancelCalls int
+}
+
+func newFakeRunControl(t *testing.T) *fakeRunControl {
+	t.Helper()
+	now := time.Date(2026, 9, 8, 4, 0, 0, 0, time.UTC)
+	scope := devopsv1.ResourceScope{TenantID: "tenant-authorized"}
+	input := devopsv1.PipelineRunInput{
+		SourceEventID:           "source-event-111111111111111111111111111111111111111111111111",
+		SourceEventDigest:       "sha256:" + strings.Repeat("1", 64),
+		PipelineRevisionID:      "pipeline-revision-222222222222222222222222222222222222222222222222",
+		PipelineRevisionDigest:  "sha256:" + strings.Repeat("2", 64),
+		RepositoryBindingID:     "binding-one",
+		RepositoryBindingDigest: "sha256:" + strings.Repeat("3", 64),
+		Change: devopsv1.ChangeIdentity{
+			Number: 1, Action: devopsv1.ChangeOpened,
+			HeadCommit: strings.Repeat("4", 40), TrustedBaseCommit: strings.Repeat("5", 40),
+		},
+	}
+	digest := devopsv1.PipelineRunInputDigest(input)
+	id, err := devopsv1.PipelineRunID(scope, input.SourceEventID, input.PipelineRevisionID, digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := devopsv1.PipelineRun{
+		APIVersion: devopsv1.APIVersion, Kind: "PipelineRun", ID: id, Scope: scope,
+		ProjectID: "project-one", PipelineID: "pipeline-one", Input: input, InputDigest: digest,
+		Status: devopsv1.PipelineRunStatus{
+			State: devopsv1.PipelineRunQueued, Stage: devopsv1.PipelineRunStageReceive,
+			Reason: devopsv1.PipelineRunReasonEventAdmitted, ResourceVersion: 1, ObservedAt: now,
+		},
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := devopsv1.ValidatePipelineRun(run); err != nil {
+		t.Fatal(err)
+	}
+	return &fakeRunControl{run: run}
+}
+
+func (control *fakeRunControl) Get(
+	_ context.Context,
+	query runcontrol.GetQuery,
+) (devopsv1.PipelineRun, error) {
+	control.getCalls++
+	control.get = query
+	return control.run, control.err
+}
+
+func (control *fakeRunControl) Cancel(
+	_ context.Context,
+	command runcontrol.CancelCommand,
+) (runcontrol.Result, error) {
+	control.cancelCalls++
+	control.cancel = command
+	if control.err != nil {
+		return runcontrol.Result{}, control.err
+	}
+	cancelled, err := domain.RequestPipelineRunCancellation(
+		control.run, command.ExpectedResourceVersion, false,
+		control.run.UpdatedAt.Add(time.Microsecond),
+	)
+	return runcontrol.Result{Value: cancelled}, err
 }
 
 func jsonRequest(t *testing.T, method, path string, value any) *http.Request {

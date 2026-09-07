@@ -216,6 +216,14 @@ func buildPaths() object {
 		"/v1/pipelines/{pipelineId}/revisions/{pipelineRevisionId}": object{
 			"get": readPipelineRevisionOperation(),
 		},
+		"/v1/runs/{runId}": object{
+			"get": readOperation(
+				"getPipelineRun", "Get a PipelineRun", "runId", "PipelineRun",
+			),
+		},
+		"/v1/runs/{runId}/cancel": object{
+			"post": cancelPipelineRunOperation(),
+		},
 	}
 }
 
@@ -312,6 +320,27 @@ func activateOperation() object {
 		"description": "No caller body is accepted; IAM supplies the actor and If-Match selects the exact draft resource version.",
 		"parameters": []any{
 			openapi31.PathIDParameter("pipelineId"),
+			openapi31.ComponentRef("#/components/parameters/IdempotencyKey"),
+			openapi31.ComponentRef("#/components/parameters/IfMatch"),
+		},
+		"responses": responses,
+	}
+}
+
+func cancelPipelineRunOperation() object {
+	responses := openapi31.ProblemResponses(
+		"400", "401", "403", "404", "405", "409", "412", "422", "428", "500", "503",
+	)
+	responses["200"] = response(
+		"PipelineRun with its durable cancellation request.", "PipelineRun",
+		object{"ETag": openapi31.ComponentRef("#/components/headers/ETag")},
+	)
+	return object{
+		"operationId": "cancelPipelineRun",
+		"summary":     "Request PipelineRun cancellation",
+		"description": "No caller body is accepted. A run with a possible external effect remains nonterminal with cancellationRequestedAt until the fenced worker observes the same intent.",
+		"parameters": []any{
+			openapi31.PathIDParameter("runId"),
 			openapi31.ComponentRef("#/components/parameters/IdempotencyKey"),
 			openapi31.ComponentRef("#/components/parameters/IfMatch"),
 		},
@@ -569,6 +598,7 @@ func pipelineRunStatusRule(
 	}
 	if state == devopsv1.PipelineRunQueued {
 		then["properties"].(object)["resourceVersion"] = object{"const": 1}
+		then["properties"].(object)["cancellationRequestedAt"] = false
 	}
 	if len(reasons) == 0 {
 		then["not"] = object{
@@ -589,6 +619,9 @@ func pipelineRunStatusRule(
 		} else {
 			then["not"] = object{"required": []string{"completedAt"}}
 		}
+	}
+	if state == devopsv1.PipelineRunCancelled {
+		then["required"] = []string{"reason", "cancellationRequestedAt", "completedAt"}
 	}
 	return object{
 		"if": object{

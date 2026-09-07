@@ -13,6 +13,7 @@ import (
 
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/domain"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runaudit"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runlifecycle"
 )
 
@@ -175,7 +176,9 @@ func (repository *RunTaskRepository) Advance(
 	}
 	var auditDocument any
 	if expected.Status.CompletedAt != nil {
-		event, eventErr := runlifecycle.NewTerminalAuditEvent(expected, transition.Lease.Intent.CommandID)
+		event, eventErr := runaudit.NewTerminalEvent(
+			expected, transition.Lease.Intent.CommandID, runaudit.WorkerActorID,
+		)
 		if eventErr != nil {
 			return devopsv1.PipelineRun{}, fmt.Errorf("build PipelineRun terminal Audit fact: %w", eventErr)
 		}

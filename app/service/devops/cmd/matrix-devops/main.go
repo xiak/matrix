@@ -19,6 +19,7 @@ import (
 	devopshttp "github.com/xiak/matrix/app/service/devops/internal/delivery/service/nethttp"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/pipelineconfiguration"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runadmission"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runcontrol"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/sourceingress"
 	"github.com/xiak/matrix/app/service/internal/processconfig"
 	"github.com/xiak/matrix/app/service/internal/processhttp"
@@ -96,6 +97,12 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	runController, err := runcontrol.NewService(
+		repository, runcontrol.Config{MaxTransactionAttempts: 5},
+	)
+	if err != nil {
+		return err
+	}
 	admission, err := runadmission.NewUsecase(
 		repository, runadmission.Config{MaxTransactionAttempts: 5},
 	)
@@ -113,7 +120,7 @@ func run(ctx context.Context) error {
 		return err
 	}
 	handler, err := devopshttp.NewHandler(authorizer, workflow, devopshttp.Config{
-		SourceIngress: ingress,
+		SourceIngress: ingress, RunControl: runController,
 		Readiness: func(readinessContext context.Context) (devopsv1.Readiness, error) {
 			readiness, checkErr := repository.Readiness(readinessContext)
 			if checkErr != nil || readiness.State != devopsv1.ReadinessReady {

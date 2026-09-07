@@ -431,6 +431,12 @@ func ValidatePipelineRunStatus(value PipelineRunStatus) error {
 		problems = append(problems, errors.New("PipelineRun status resourceVersion is invalid"))
 	}
 	problems = append(problems, validateContractTime("status.observedAt", value.ObservedAt))
+	if value.CancellationRequestedAt != nil {
+		problems = append(problems, validateContractTime("status.cancellationRequestedAt", *value.CancellationRequestedAt))
+		if value.CancellationRequestedAt.After(value.ObservedAt) {
+			problems = append(problems, errors.New("PipelineRun cancellation request exceeds its observation time"))
+		}
+	}
 	if value.CompletedAt != nil {
 		problems = append(problems, validateContractTime("status.completedAt", *value.CompletedAt))
 		if value.CompletedAt.After(value.ObservedAt) {
@@ -442,7 +448,7 @@ func ValidatePipelineRunStatus(value PipelineRunStatus) error {
 	case PipelineRunQueued:
 		if value.Stage != PipelineRunStageReceive ||
 			value.Reason != PipelineRunReasonEventAdmitted ||
-			value.ResourceVersion != 1 || value.CompletedAt != nil {
+			value.ResourceVersion != 1 || value.CancellationRequestedAt != nil || value.CompletedAt != nil {
 			problems = append(problems, errors.New("queued PipelineRun status is invalid"))
 		}
 	case PipelineRunFetching:
@@ -467,7 +473,7 @@ func ValidatePipelineRunStatus(value PipelineRunStatus) error {
 			problems = append(problems, errors.New("failed PipelineRun status is invalid"))
 		}
 	case PipelineRunCancelled:
-		if value.Reason != PipelineRunReasonCancelled || value.CompletedAt == nil {
+		if value.Reason != PipelineRunReasonCancelled || value.CancellationRequestedAt == nil || value.CompletedAt == nil {
 			problems = append(problems, errors.New("cancelled PipelineRun status is invalid"))
 		}
 	case PipelineRunReconciling:
@@ -517,6 +523,9 @@ func ValidatePipelineRun(value PipelineRun) error {
 	}
 	if value.Status.CompletedAt != nil && !value.Status.CompletedAt.Equal(value.UpdatedAt) {
 		problems = append(problems, errors.New("terminal PipelineRun timestamp is invalid"))
+	}
+	if value.Status.CancellationRequestedAt != nil && value.Status.CancellationRequestedAt.Before(value.CreatedAt) {
+		problems = append(problems, errors.New("PipelineRun cancellation request predates creation"))
 	}
 	return errors.Join(problems...)
 }

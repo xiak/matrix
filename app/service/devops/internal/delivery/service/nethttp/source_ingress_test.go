@@ -163,6 +163,7 @@ func sourceIngressHandler(t *testing.T, authorizer *fakeAuthorizer, ingress *fak
 		Readiness:     func(context.Context) (devopsv1.Readiness, error) { return readiness, nil },
 		NewRequestID:  func() (string, error) { return "request-webhook", nil },
 		SourceIngress: ingress,
+		RunControl:    newFakeRunControl(t),
 	})
 	if err != nil {
 		t.Fatal(err)
