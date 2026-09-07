@@ -74,7 +74,7 @@ func auditContentDigest(identity iamv1.ServiceIdentity, event auditv1.Event, evi
 		}
 		return digest, nil
 	}
-	expectedAction, expectedID := auditDecisionTarget(event)
+	expectedAction, expectedID := auditDecisionTarget(event, decision.Action)
 	expectedKind, known := iamv1.ResourceKindForAction(expectedAction)
 	if !known || decision.Subject.Type != iamv1.PrincipalUser || decision.Action != expectedAction ||
 		decision.Resource.Kind != expectedKind || decision.Resource.ID != expectedID || !authority.ServiceCanRequest(identity.Purpose, expectedAction) {
@@ -83,7 +83,7 @@ func auditContentDigest(identity iamv1.ServiceIdentity, event auditv1.Event, evi
 	return digest, nil
 }
 
-func auditDecisionTarget(event auditv1.Event) (iamv1.Action, string) {
+func auditDecisionTarget(event auditv1.Event, decisionAction iamv1.Action) (iamv1.Action, string) {
 	switch event.Action {
 	case auditv1.ActionPaaSApplicationCreated:
 		return iamv1.ActionPaaSApplicationCreate, "collection"
@@ -104,6 +104,14 @@ func auditDecisionTarget(event auditv1.Event) (iamv1.Action, string) {
 	case auditv1.ActionPaaSExecutionPoolCreated:
 		return iamv1.ActionPaaSExecutionPoolCreate, event.Target.ID
 	case auditv1.ActionPaaSExecutionTargetRegistered:
+		// Self-enrollment authorizes creation of the short-lived ceremony before
+		// the target identity exists. Its successful completion atomically emits
+		// the existing target-registration fact, so the original collection
+		// authority remains its historical proof. Direct registration continues
+		// to require authority for the exact target.
+		if decisionAction == iamv1.ActionPaaSNodeEnrollmentCreate {
+			return iamv1.ActionPaaSNodeEnrollmentCreate, "collection"
+		}
 		return iamv1.ActionPaaSExecutionTargetRegister, event.Target.ID
 	case auditv1.ActionPaaSExecutionTargetDrained:
 		return iamv1.ActionPaaSExecutionTargetDrain, event.Target.ID

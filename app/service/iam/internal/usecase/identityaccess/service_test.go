@@ -191,6 +191,43 @@ func TestAuditProofClosedHistoricalMappings(t *testing.T) {
 	}
 }
 
+func TestAuditProofBindsAtomicEnrollmentToItsCollectionAuthority(t *testing.T) {
+	identity, event, evidence := historicalAuditFixture(
+		auditv1.ActionPaaSExecutionTargetRegistered,
+		iamv1.ActionPaaSNodeEnrollmentCreate,
+		"collection",
+	)
+	if _, err := auditContentDigest(identity, event, evidence); err != nil {
+		t.Fatalf("enrollment-backed target registration rejected: %v", err)
+	}
+
+	for name, attack := range map[string]func(*auditv1.Event, *AuditEvidence){
+		"other enrollment action": func(_ *auditv1.Event, proof *AuditEvidence) {
+			proof.Decision.Action = iamv1.ActionPaaSNodeEnrollmentRead
+		},
+		"non-collection enrollment resource": func(_ *auditv1.Event, proof *AuditEvidence) {
+			proof.Decision.Resource.ID = "enrollment-forged"
+		},
+		"wrong enrollment resource kind": func(_ *auditv1.Event, proof *AuditEvidence) {
+			proof.Decision.Resource.Kind = iamv1.ResourceExecutionTarget
+		},
+		"other target mutation": func(event *auditv1.Event, _ *AuditEvidence) {
+			event.Action = auditv1.ActionPaaSExecutionTargetDrained
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			forgedEvent := event
+			forgedEvidence := evidence
+			decision := *evidence.Decision
+			forgedEvidence.Decision = &decision
+			attack(&forgedEvent, &forgedEvidence)
+			if _, err := auditContentDigest(identity, forgedEvent, forgedEvidence); !errors.Is(err, ErrForbidden) {
+				t.Fatalf("forged enrollment proof error=%v", err)
+			}
+		})
+	}
+}
+
 func TestAuditProofVerifierIsNotGenericServiceAuthority(t *testing.T) {
 	for _, probe := range []struct {
 		event  auditv1.Action

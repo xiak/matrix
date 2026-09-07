@@ -1041,7 +1041,7 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 	}
 	passwordChange(primaryB, primaryBPassword, primaryBChanged)
 	t.Run("event-bound historical producer authority", func(t *testing.T) {
-		proveHistoricalProducerHTTP(t, ctx, handler, admin, map[string]string{tenantA: root, tenantB: primaryB})
+		proveHistoricalProducerHTTP(t, ctx, handler, admin, root, map[string]string{tenantA: root, tenantB: primaryB})
 	})
 	request(http.MethodPost, "/v1/audit-producer:resolve", paasCredential,
 		map[string]any{"organizationId": tenantB}, http.StatusBadRequest)
@@ -1581,7 +1581,7 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 	assertIAMSecretsAbsent(t, ctx, database, initial, changed, recovered, operator, primary, memberSession, delegateSession)
 }
 
-func proveHistoricalProducerHTTP(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, tenants map[string]string) {
+func proveHistoricalProducerHTTP(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, platformActor string, tenants map[string]string) {
 	t.Helper()
 	post := func(path, bearer string, body any, status int) *httptest.ResponseRecorder {
 		t.Helper()
@@ -1696,6 +1696,55 @@ func proveHistoricalProducerHTTP(t *testing.T, ctx context.Context, handler http
 		if response := performIAMRequest(handler, http.MethodGet, "/v1/auth/me", session.Credential, nil); response.Code != http.StatusUnauthorized {
 			t.Fatal("historical proof revived revoked session")
 		}
+	}
+	platformAuthorization := iamv1.AuthorizationRequest{
+		Action: iamv1.ActionPaaSNodeEnrollmentCreate,
+		Resource: iamv1.ResourceReference{
+			Kind: iamv1.ResourceNodeEnrollment,
+			ID:   "collection",
+		},
+		RequestID:     "request-proof-node-enrollment",
+		CorrelationID: "correlation-proof-node-enrollment",
+	}
+	encodedAuthorization, err := json.Marshal(platformAuthorization)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decisionResponse := performIAMRequestWithSubject(handler, encodedAuthorization, paasCredential, platformActor)
+	var enrollmentDecision iamv1.AuthorizationDecision
+	if decisionResponse.Code != http.StatusOK || json.Unmarshal(decisionResponse.Body.Bytes(), &enrollmentDecision) != nil ||
+		!enrollmentDecision.Allowed || enrollmentDecision.Subject == nil || enrollmentDecision.InstallationID != "installation-http-integration" {
+		t.Fatalf("node enrollment lacked platform authority: status=%d decision=%#v", decisionResponse.Code, enrollmentDecision)
+	}
+	enrollmentEvent := auditv1.Event{
+		APIVersion: auditv1.APIVersion,
+		Kind:       "AuditEvent",
+		EventID:    auditv1.EventID("event-" + string(enrollmentDecision.ID)),
+		Actor: auditv1.ActorReference{
+			Type: auditv1.ActorType(enrollmentDecision.Subject.Type),
+			ID:   auditv1.ActorID(enrollmentDecision.Subject.ID),
+		},
+		IAMDecisionID:  auditv1.DecisionID(enrollmentDecision.ID),
+		Action:         auditv1.ActionPaaSExecutionTargetRegistered,
+		Target:         auditv1.TargetReference{Kind: auditv1.TargetExecutionTarget, ID: "execution-target-enrolled-proof"},
+		Result:         auditv1.ResultSucceeded,
+		RequestDigest:  "sha256:" + strings.Repeat("a", 64),
+		RequestID:      enrollmentDecision.RequestID,
+		CorrelationID:  platformAuthorization.CorrelationID,
+		OperationID:    "operation-enrolled-proof",
+		OccurredAt:     enrollmentDecision.DecidedAt.Add(time.Microsecond),
+		InstallationID: enrollmentDecision.InstallationID,
+	}
+	resolve(paasCredential, enrollmentEvent, http.StatusOK)
+	for _, attack := range []func(*auditv1.Event){
+		func(event *auditv1.Event) { event.RequestID = "request-forged" },
+		func(event *auditv1.Event) { event.CorrelationID = "correlation-forged" },
+		func(event *auditv1.Event) { event.InstallationID = "installation-forged" },
+		func(event *auditv1.Event) { event.Actor.ID = "principal-forged" },
+	} {
+		forged := enrollmentEvent
+		attack(&forged)
+		resolve(paasCredential, forged, http.StatusForbidden)
 	}
 	rows, err := database.Query(ctx, `SELECT DISTINCT ON (event_document->>'action') event_document FROM iam.audit_outbox ORDER BY event_document->>'action',event_id`)
 	if err != nil {
