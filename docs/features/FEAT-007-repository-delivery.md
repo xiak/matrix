@@ -167,6 +167,34 @@ reconciliation, after which and only after which the current fence may commit
 `MANUAL_INTERVENTION`. Lease ownership, retries, and observation counts are
 worker coordination and do not invent public PipelineRun status changes.
 
+### Manual replay contract
+
+The first replay surface is bodyless
+`POST /v1/runs/{sourceRunId}/replay`. IAM authorizes
+`devops.run.replay` against that exact source PipelineRun; `If-Match` must name
+its current terminal resource version, and `Idempotency-Key` identifies one
+user intent. A nonterminal or foreign source run, stale version, full tenant
+queue, missing guard, and changed use of the same key fail closed. Equal replay
+returns the originally created run without consulting current connection,
+binding, Pipeline draft, active revision, branch, or provider state.
+
+The new PipelineRun copies the source run's immutable `Input` and
+`InputDigest` exactly. A separate immutable `replay` cause records the selected
+source run, deterministic replay command, and IAM-authorized subject; it is
+not part of the executor input digest. The new run identity is derived from
+tenant, source run, command, and that unchanged input digest, so replaying a
+replay is allowed and links to the immediately selected run without building
+an unbounded embedded chain. It starts at resource version 1 in
+`QUEUED / RECEIVE / EVENT_ADMITTED` and is subject to the same 32-run tenant
+queue limit and later lifecycle rules.
+
+One transaction locks the source run, serializes the tenant queue, inserts the
+new run, a `REPLAY_PIPELINE_RUN` mutation result, and one
+`devops.pipeline-run.replayed` Audit fact carrying the exact IAM decision and
+new-run target. It starts no source, executor, or reporter effect. Admission
+queries exclude replay descendants so an equal provider delivery continues to
+return only the original deterministic event fan-out.
+
 ### Normalized admission contract
 
 The provider adapter emits a `NormalizedChange` only after authenticating the
