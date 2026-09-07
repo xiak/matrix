@@ -1,7 +1,8 @@
 # FEAT-007: Repository change validation
 
 - Status: In progress; UX, architecture, donor analysis, and implementation
-  baseline complete; Gate A implementation not started
+  baseline complete; Gate A contract/domain slice complete, persistence and
+  run lifecycle pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -331,6 +332,42 @@ These choices close the four implementation prerequisites. They refine
 adapters and release inventory without weakening the provider-neutral public
 resource model. Gate A starts with public contracts and pure domain invariants;
 no Gitea, Docker, gVisor, or PostgreSQL type may enter that domain.
+
+## Implementation progress
+
+The first Gate A slice implements the provider-neutral
+[`api/devops/v1`](../../api/devops/v1/README.md) contract and the pure
+`delivery` rules for DevOps project creation, Pipeline draft creation and
+optimistic replacement, and immutable revision activation. The activated
+revision resolves and seals the fixed toolchain digest, Matrix Native isolation
+profile, ordered `GO_TEST`/`GO_VET` steps, `NONE` egress, reporter policy, and
+resource limits. Caller-controlled tenant, actor, command, image, executor,
+step, limit, provider payload, credential, and secret fields are absent from
+mutation requests and rejected by strict decoding/OpenAPI schemas.
+
+Activation binds the IAM-derived actor, tenant, Pipeline, project, monotonically
+increasing revision number, canonical content digest, and UTC timestamp into a
+deterministic revision identity. Stale resource versions, unchanged drafts,
+non-monotonic time, version exhaustion, profile drift, cross-tenant activation
+projections, and mutable fixed-profile catalogs fail closed. The domain imports
+only standard-library packages and the public DevOps contract; it contains no
+provider, executor, PaaS, persistence, or donor dependency.
+
+This slice does not complete Gate A. SourceConnection, RepositoryBinding,
+SourceEvent, PipelineRun, log, replay/cancellation/lease/fence/reconciliation,
+quota, pagination, use-case, HTTP, IAM/Audit integration, and PostgreSQL/RLS
+work remain pending.
+
+Current verification evidence:
+
+- `go test ./...`
+- `go vet ./...`
+- `go test -race ./api/devops/v1/... ./app/service/devops/internal/delivery/domain`
+- `go test -count=20 ./api/devops/v1/... ./app/service/devops/internal/delivery/domain`
+- five-second native fuzz runs for draft digest framing and activation with
+  untrusted repository-binding identifiers
+- Linux/amd64 CGO-disabled cross-build of the new contract and domain packages
+- deterministic OpenAPI generation-drift tests and `git diff --check`
 
 ## Incremental acceptance
 
