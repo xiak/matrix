@@ -155,6 +155,8 @@ func ServiceCanRequest(purpose iamv1.ServicePurpose, action iamv1.Action) bool {
 	switch purpose {
 	case iamv1.ServiceIAM:
 		return strings.HasPrefix(string(action), "iam.")
+	case iamv1.ServicePlatform:
+		return action == iamv1.ActionInstallationProductRead
 	case iamv1.ServicePaaS:
 		return strings.HasPrefix(string(action), "paas.")
 	case iamv1.ServiceAudit:
@@ -172,6 +174,8 @@ func RoleAllows(role iamv1.BuiltinRole, action iamv1.Action) bool {
 		return action != iamv1.ActionInstallationVerify && knownAction(action)
 	case iamv1.RolePaaSDeveloper:
 		switch action {
+		case iamv1.ActionInstallationProductRead:
+			return true
 		case iamv1.ActionPaaSApplicationCreate,
 			iamv1.ActionPaaSApplicationRead,
 			iamv1.ActionPaaSConfigurationCreate,
@@ -190,6 +194,8 @@ func RoleAllows(role iamv1.BuiltinRole, action iamv1.Action) bool {
 		}
 	case iamv1.RolePaaSViewer:
 		switch action {
+		case iamv1.ActionInstallationProductRead:
+			return true
 		case iamv1.ActionPaaSApplicationRead,
 			iamv1.ActionPaaSConfigurationRead,
 			iamv1.ActionPaaSConfigurationRevisionRead,
@@ -199,7 +205,9 @@ func RoleAllows(role iamv1.BuiltinRole, action iamv1.Action) bool {
 			return true
 		}
 	case iamv1.RoleAuditReader:
-		return action == iamv1.ActionAuditRecordRead || action == iamv1.ActionAuditIntegrityVerify
+		return action == iamv1.ActionAuditRecordRead ||
+			action == iamv1.ActionAuditIntegrityVerify ||
+			action == iamv1.ActionInstallationProductRead
 	case iamv1.RoleInstallationVerifier:
 		return action == iamv1.ActionInstallationVerify
 	}

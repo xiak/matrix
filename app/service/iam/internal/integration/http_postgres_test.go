@@ -615,6 +615,7 @@ func iamHTTPBootstrap(t *testing.T) iamv1.BootstrapDocument {
 		},
 		Services: []iamv1.BootstrapServiceCredential{
 			service(iamv1.ServiceIAM, "service-iam", "mx1.IAMHTTPIntegrationCredential0000000000000001"),
+			service(iamv1.ServicePlatform, "service-platform", "mx1.PlatformHTTPIntegrationCredential000000001"),
 			service(iamv1.ServicePaaS, "service-paas", paasCredential),
 			service(iamv1.ServiceAudit, "service-audit", auditCredential),
 			service(iamv1.ServiceInstallationVerifier, "service-verifier", verifierCredential),

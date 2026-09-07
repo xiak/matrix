@@ -63,9 +63,10 @@ const (
 	ActionPaaSDeploymentRead              Action = "paas.deployment.read"
 	ActionPaaSOperationRead               Action = "paas.operation.read"
 
-	ActionAuditRecordRead      Action = "audit.record.read"
-	ActionAuditIntegrityVerify Action = "audit.integrity.verify"
-	ActionInstallationVerify   Action = "installation.verify"
+	ActionAuditRecordRead         Action = "audit.record.read"
+	ActionAuditIntegrityVerify    Action = "audit.integrity.verify"
+	ActionInstallationProductRead Action = "installation.product.read"
+	ActionInstallationVerify      Action = "installation.verify"
 )
 
 const (
@@ -96,6 +97,7 @@ const (
 
 const (
 	ServiceIAM                  ServicePurpose = "IAM"
+	ServicePlatform             ServicePurpose = "PLATFORM"
 	ServicePaaS                 ServicePurpose = "PAAS"
 	ServiceAudit                ServicePurpose = "AUDIT"
 	ServiceInstallationVerifier ServicePurpose = "INSTALLATION_VERIFIER"
@@ -142,6 +144,7 @@ var allActions = []Action{
 	ActionPaaSOperationRead,
 	ActionAuditRecordRead,
 	ActionAuditIntegrityVerify,
+	ActionInstallationProductRead,
 	ActionInstallationVerify,
 }
 
@@ -155,6 +158,7 @@ var allBuiltinRoles = []BuiltinRole{
 
 var allServicePurposes = []ServicePurpose{
 	ServiceIAM,
+	ServicePlatform,
 	ServicePaaS,
 	ServiceAudit,
 	ServiceInstallationVerifier,

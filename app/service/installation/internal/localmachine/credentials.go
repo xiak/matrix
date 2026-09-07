@@ -65,6 +65,7 @@ func stageInstallation(plan platformcommand.InstallPlan, entropy io.Reader) erro
 	defer credentials.clear()
 	serviceFiles := map[iamv1.ServicePurpose][]string{
 		iamv1.ServiceIAM:                  {layout.IAMAuditCredential},
+		iamv1.ServicePlatform:             {layout.PlatformIAMCredential},
 		iamv1.ServicePaaS:                 {layout.PaaSIAMCredential, layout.PaaSAuditCredential},
 		iamv1.ServiceAudit:                {layout.AuditIAMCredential},
 		iamv1.ServiceInstallationVerifier: {layout.InstallationVerifierCredential},
@@ -220,6 +221,8 @@ func servicePrincipalID(purpose iamv1.ServicePurpose) iamv1.PrincipalID {
 	switch purpose {
 	case iamv1.ServiceIAM:
 		return "service-iam"
+	case iamv1.ServicePlatform:
+		return "service-platform"
 	case iamv1.ServicePaaS:
 		return "service-paas"
 	case iamv1.ServiceAudit:

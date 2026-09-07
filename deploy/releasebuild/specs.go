@@ -23,11 +23,12 @@ var binarySpecifications = []binarySpecification{
 	{name: "matrix-iam", packagePath: "./app/service/iam/cmd/matrix-iam"},
 	{name: "matrix-iam-audit-dispatcher", packagePath: "./app/service/iam/cmd/matrix-iam-audit-dispatcher"},
 	{name: "matrix-iam-migrate", packagePath: "./app/service/iam/cmd/matrix-iam-migrate"},
+	{name: "matrix-ui", packagePath: "./app/ui/platform/cmd/matrix-ui"},
 	{name: "matrix-paas", packagePath: "./app/service/paas/cmd/matrix-paas"},
 	{name: "matrix-paas-audit-dispatcher", packagePath: "./app/service/paas/cmd/matrix-paas-audit-dispatcher"},
 	{name: "matrix-paas-migrate", packagePath: "./app/service/paas/cmd/matrix-paas-migrate"},
-	{name: "matrix-paas-ui", packagePath: "./app/ui/paas/cmd/matrix-paas-ui"},
 	{name: "matrix-paas-worker", packagePath: "./app/service/paas/cmd/matrix-paas-worker"},
+	{name: "matrix-platform", packagePath: "./app/service/installation/cmd/matrix-platform"},
 	{name: "matrix-verification", packagePath: "./app/service/installation/cmd/matrix-verification"},
 	{name: "mx", packagePath: "./app/service/installation/cmd/mx"},
 }
@@ -53,6 +54,11 @@ var imageRecipes = []imageRecipe{
 		binaries: []string{"matrix-iam", "matrix-iam-audit-dispatcher", "matrix-iam-migrate", "matrix-health"},
 	},
 	{
+		component: "matrix-ui", baseReference: "scratch",
+		binaries:   []string{"matrix-ui", "matrix-health"},
+		entrypoint: "/matrix/bin/matrix-ui",
+	},
+	{
 		component: "paas", baseReference: DockerBaseReference,
 		binaries: []string{
 			"matrix-paas", "matrix-paas-audit-dispatcher", "matrix-paas-migrate",
@@ -60,9 +66,9 @@ var imageRecipes = []imageRecipe{
 		},
 	},
 	{
-		component: "paas-ui", baseReference: "scratch",
-		binaries:   []string{"matrix-paas-ui", "matrix-health"},
-		entrypoint: "/matrix/bin/matrix-paas-ui",
+		component: "platform", baseReference: "scratch",
+		binaries:   []string{"matrix-platform", "matrix-health"},
+		entrypoint: "/matrix/bin/matrix-platform",
 	},
 	{
 		component: "verification", baseReference: "scratch",

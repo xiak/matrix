@@ -313,6 +313,21 @@ func apisixStandaloneConfig() []byte {
       nodes:
         "audit:8080": 1
   -
+    id: matrix-platform
+    uri: /api/platform/*
+    plugins:
+      proxy-rewrite:
+        regex_uri:
+          - "^/api/platform/(.*)"
+          - "/$1"
+        headers:
+          remove:
+            - Matrix-Subject-Credential
+    upstream:
+      type: roundrobin
+      nodes:
+        "platform-api:8080": 1
+  -
     id: matrix-paas-installation-verification
     uri: /api/paas/v1/installation:verify
     priority: 100
@@ -353,7 +368,7 @@ func apisixStandaloneConfig() []byte {
     upstream:
       type: roundrobin
       nodes:
-        "paas-ui:8080": 1
+        "matrix-ui:8080": 1
 #END
 `)
 }

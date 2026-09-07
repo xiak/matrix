@@ -326,6 +326,9 @@ func newManifest(
 			SchemaVersion: databaseSchemaVersion,
 			Compatibility: "expand-contract-n-minus-one",
 		},
+		Products: []installationrelease.Product{
+			installationrelease.ApplicationPaaSProduct(config.Version),
+		},
 		TopologyDigest: topology.ContractDigest(), Files: files, Images: images,
 	}
 }

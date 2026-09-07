@@ -443,7 +443,7 @@ func ResourceKindForAction(action Action) (ResourceKind, bool) {
 		return ResourceAuditRecord, true
 	case ActionAuditIntegrityVerify:
 		return ResourceAuditChain, true
-	case ActionInstallationVerify:
+	case ActionInstallationProductRead, ActionInstallationVerify:
 		return ResourceInstallation, true
 	default:
 		return "", false

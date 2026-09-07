@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Matrix 私有云</title>
+  <link rel="stylesheet" href="/assets/app.5ec06f0a.css">
+  <script defer src="/assets/app.17897b0f.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#workspace">跳到主要内容</a>
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Matrix 私有云首页">
+        <span class="brand-mark" aria-hidden="true">M</span>
+        <span><strong>Matrix</strong><small>PRIVATE CLOUD</small></span>
+      </a>
+      <div class="platform-context">
+        <span class="environment-pill"><i aria-hidden="true"></i>私有云基础平台</span>
+        <span class="release-label" id="release-label">等待身份验证</span>
+      </div>
+      <div class="identity" id="identity" hidden>
+        <span><small>当前组织</small><strong id="organization-name">—</strong></span>
+        <button class="quiet-button" type="button" id="forget-session">退出</button>
+      </div>
+    </header>
+
+    <div class="shell-body">
+      <aside class="product-rail" id="product-navigation" aria-label="已安装产品" hidden>
+        <p class="rail-label">产品</p>
+        <nav id="product-list"></nav>
+        <div class="rail-foundation">
+          <span class="rail-icon" aria-hidden="true">⌘</span>
+          <span><strong>基础平台</strong><small>身份 · 审计 · 安装</small></span>
+        </div>
+      </aside>
+
+      <main id="workspace" tabindex="-1">
+        <section class="login-view" id="login-view" aria-labelledby="login-title">
+          <div class="login-copy">
+            <p class="eyebrow">ONE PLATFORM · OPTIONAL PRODUCTS</p>
+            <h1 id="login-title">从代码到运行，<br><span>一条可信交付链。</span></h1>
+            <p>统一身份、产品入口与运行证据。产品能力只在签名发布清单声明并通过实时就绪检查后出现。</p>
+            <div class="trust-strip" aria-label="平台信任边界">
+              <span>签名发布</span><span>最小权限</span><span>离线可验收</span>
+            </div>
+          </div>
+          <section class="login-card" aria-label="登录 Matrix">
+            <div class="card-kicker">MATRIX IAM</div>
+            <h2>登录私有云</h2>
+            <p>会话凭据只保留在当前页面内存中。</p>
+            <form id="login-form">
+              <label for="login-name">登录名</label>
+              <input id="login-name" name="loginName" value="admin" required autocomplete="username">
+              <label for="password">密码</label>
+              <input id="password" name="password" type="password" required autocomplete="current-password">
+              <button class="primary-button" type="submit">建立安全会话 <span aria-hidden="true">→</span></button>
+            </form>
+          </section>
+        </section>
+
+        <section class="loading-view" id="loading-view" hidden aria-live="polite">
+          <span class="spinner" aria-hidden="true"></span>
+          <h1>正在读取已安装产品</h1>
+          <p>以当前 IAM 身份核对签名发布清单与实时状态。</p>
+        </section>
+
+        <section class="empty-view" id="empty-view" hidden aria-labelledby="empty-title">
+          <p class="eyebrow">PRODUCT DISCOVERY</p>
+          <h1 id="empty-title">没有可访问的产品</h1>
+          <p id="empty-detail">当前身份没有任何已安装产品的查看权限。</p>
+          <button class="secondary-button" type="button" id="retry-products">重新读取</button>
+        </section>
+
+        <section class="product-view" id="paas-view" hidden aria-labelledby="paas-title">
+          <div class="product-heading">
+            <div>
+              <p class="breadcrumb">Matrix / <span>Application PaaS</span></p>
+              <h1 id="paas-title">应用平台</h1>
+              <p>把不可变应用配置交给平台，再由受控执行器完成部署。</p>
+            </div>
+            <div class="product-state" id="product-state" role="status">
+              <span class="state-dot" aria-hidden="true"></span>
+              <span><small>产品状态</small><strong id="product-state-label">检查中</strong></span>
+            </div>
+          </div>
+
+          <div class="notice" id="product-notice" hidden role="alert">
+            <strong id="product-notice-title">产品当前不可用</strong>
+            <span id="product-notice-detail">平台已保护所有变更操作。</span>
+          </div>
+
+          <div class="product-summary" aria-label="产品与发布信息">
+            <article><small>产品版本</small><strong id="product-version">—</strong><span>来自签名清单</span></article>
+            <article><small>当前发布</small><strong id="release-id">—</strong><span id="release-version">—</span></article>
+            <article><small>状态观测</small><strong id="observed-at">—</strong><span>实时产品探针</span></article>
+          </div>
+
+          <nav class="local-nav" aria-label="Application PaaS 功能">
+            <button type="button" class="active" aria-current="page">配置工作区</button>
+            <button type="button" disabled title="将在后续纵向切片启用">应用</button>
+            <button type="button" disabled title="将在后续纵向切片启用">部署</button>
+            <button type="button" disabled title="将在后续纵向切片启用">运行证据</button>
+          </nav>
+
+          <div class="workspace-grid">
+            <section class="workspace-card">
+              <div class="section-title">
+                <span>01</span>
+                <div><h2>应用与配置</h2><p>创建受租户权限保护的应用配置空间。</p></div>
+              </div>
+              <form id="workspace-form">
+                <div class="field-grid">
+                  <label for="application-id">应用 ID<input id="application-id" value="example-app" required pattern="[a-z0-9][a-z0-9._-]+"></label>
+                  <label for="application-name">应用名称<input id="application-name" value="Example application" required></label>
+                  <label for="configuration-id">配置 ID<input id="configuration-id" value="example-app-runtime" required pattern="[a-z0-9][a-z0-9._-]+"></label>
+                  <label for="configuration-name">配置名称<input id="configuration-name" value="Runtime environment" required></label>
+                </div>
+                <button class="primary-button mutation-control" type="submit" id="create-workspace">创建应用与配置</button>
+              </form>
+            </section>
+
+            <section class="workspace-card accent-card">
+              <div class="section-title">
+                <span>02</span>
+                <div><h2>不可变配置修订</h2><p>普通配置通过 ENV 注入；敏感值请使用 Secret。</p></div>
+              </div>
+              <form id="configuration-form">
+                <div class="field-grid">
+                  <label for="revision-id">修订 ID<input id="revision-id" value="example-app-runtime-r1" required pattern="[a-z0-9][a-z0-9._-]+"></label>
+                  <label for="revision-name">修订名称<input id="revision-name" value="Runtime revision 1" required></label>
+                </div>
+                <label for="configuration-values">环境变量（每行 KEY=value）
+                  <textarea id="configuration-values" rows="7" spellcheck="false">APP_ENV=production
+LOG_LEVEL=info</textarea>
+                </label>
+                <button class="primary-button mutation-control" type="submit">发布配置修订</button>
+              </form>
+            </section>
+          </div>
+        </section>
+
+        <section class="empty-view" id="unsupported-view" hidden aria-labelledby="unsupported-title">
+          <p class="eyebrow">PRODUCT MODULE</p>
+          <h1 id="unsupported-title">产品模块尚未随此 UI 交付</h1>
+          <p>签名产品清单与当前 UI 版本不一致，平台已阻止进入未知界面。</p>
+        </section>
+
+        <section class="empty-view" id="route-not-found-view" hidden aria-labelledby="route-not-found-title">
+          <p class="eyebrow">404 · MATRIX</p>
+          <h1 id="route-not-found-title">找不到这个页面</h1>
+          <p>该地址不属于当前安装中可访问的产品。</p>
+          <button class="secondary-button" type="button" id="go-home">返回产品首页</button>
+        </section>
+      </main>
+    </div>
+
+    <div class="global-status" id="global-status" aria-live="polite" aria-atomic="true">
+      <span id="status-dot" aria-hidden="true"></span><p id="status">请先登录</p>
+    </div>
+  </div>
+</body>
+</html>

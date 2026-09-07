@@ -25,6 +25,7 @@ type Manifest struct {
 	Host             HostProfile     `json:"host"`
 	MinimumFreeBytes uint64          `json:"minimumFreeBytes"`
 	Database         DatabaseProfile `json:"database"`
+	Products         []Product       `json:"products"`
 	TopologyDigest   string          `json:"topologyDigest"`
 	Files            []File          `json:"files"`
 	Images           []Image         `json:"images"`
@@ -56,6 +57,22 @@ type HostProfile struct {
 type DatabaseProfile struct {
 	SchemaVersion uint64 `json:"schemaVersion"`
 	Compatibility string `json:"compatibility"`
+}
+
+type ProductID string
+
+const (
+	ProductApplicationPaaS ProductID = "APPLICATION_PAAS"
+	ProductDevOps          ProductID = "DEVOPS"
+)
+
+type Product struct {
+	ID                 ProductID   `json:"id"`
+	Version            string      `json:"version"`
+	RouteKey           string      `json:"routeKey"`
+	ReadinessContract  string      `json:"readinessContract"`
+	RequiredComponents []string    `json:"requiredComponents"`
+	Dependencies       []ProductID `json:"dependencies"`
 }
 
 type File struct {
@@ -104,10 +121,22 @@ func RequiredImages() []ImageRequirement {
 		{Component: "apisix", Purpose: ImagePlatform, HealthContract: "northbound-ready-v1"},
 		{Component: "audit", Purpose: ImagePlatform, HealthContract: "audit-ready-deduplicate-v1"},
 		{Component: "iam", Purpose: ImagePlatform, HealthContract: "iam-ready-authorize-v1"},
+		{Component: "matrix-ui", Purpose: ImagePlatform, HealthContract: "matrix-ui-ready-v1"},
 		{Component: "paas", Purpose: ImagePlatform, HealthContract: "paas-ready-worker-compose-v1"},
-		{Component: "paas-ui", Purpose: ImagePlatform, HealthContract: "paas-ui-ready-v1"},
+		{Component: "platform", Purpose: ImagePlatform, HealthContract: "product-discovery-ready-v1"},
 		{Component: "postgres", Purpose: ImagePlatform, HealthContract: "postgres-ready-schema-v1"},
 		{Component: "verification", Purpose: ImageWorkload, HealthContract: "application-probe-v1"},
+	}
+}
+
+func ApplicationPaaSProduct(version string) Product {
+	return Product{
+		ID:                 ProductApplicationPaaS,
+		Version:            version,
+		RouteKey:           "paas",
+		ReadinessContract:  "application-paas-ready-v1",
+		RequiredComponents: []string{"paas"},
+		Dependencies:       []ProductID{},
 	}
 }
 

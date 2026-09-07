@@ -72,6 +72,7 @@ func ValidateManifest(manifest Manifest) error {
 		validateSigner(manifest.Signer),
 		validateHost(manifest.Host),
 		validateDatabase(manifest.Database),
+		validateProducts(manifest.Products, manifest.Images),
 		validateDigest("topologyDigest", manifest.TopologyDigest),
 		validateFiles(manifest.Files),
 		validateImages(manifest.Images, manifest.Files),
@@ -239,6 +240,104 @@ func validateDatabase(value DatabaseProfile) error {
 		return errors.New("release database profile is invalid")
 	}
 	return nil
+}
+
+func validateProducts(products []Product, images []Image) error {
+	if len(products) == 0 || len(products) > 16 {
+		return errors.New("release product inventory size is invalid")
+	}
+	availableComponents := make(map[string]struct{}, len(images))
+	for _, image := range images {
+		if image.Purpose == ImagePlatform {
+			availableComponents[image.Component] = struct{}{}
+		}
+	}
+	knownProducts := make(map[ProductID]struct{}, len(products))
+	previous := ProductID("")
+	for _, product := range products {
+		if _, duplicate := knownProducts[product.ID]; duplicate || previous >= product.ID {
+			return errors.New("release products are duplicated or not sorted")
+		}
+		knownProducts[product.ID] = struct{}{}
+		previous = product.ID
+		expected, known := productContract(product.ID, product.Version)
+		if !known || !versionPattern.MatchString(product.Version) ||
+			product.RouteKey != expected.RouteKey ||
+			product.ReadinessContract != expected.ReadinessContract ||
+			!slices.Equal(product.RequiredComponents, expected.RequiredComponents) ||
+			!slices.Equal(product.Dependencies, expected.Dependencies) {
+			return errors.New("release product declaration is invalid")
+		}
+		for _, component := range product.RequiredComponents {
+			if _, available := availableComponents[component]; !available {
+				return errors.New("release product component is unavailable")
+			}
+		}
+	}
+	for _, product := range products {
+		for _, dependency := range product.Dependencies {
+			if _, installed := knownProducts[dependency]; !installed || dependency == product.ID {
+				return errors.New("release product dependency is unavailable")
+			}
+		}
+	}
+	if productDependenciesCycle(products) {
+		return errors.New("release product dependencies contain a cycle")
+	}
+	return nil
+}
+
+func productContract(id ProductID, version string) (Product, bool) {
+	switch id {
+	case ProductApplicationPaaS:
+		return ApplicationPaaSProduct(version), true
+	case ProductDevOps:
+		return Product{
+			ID:                 ProductDevOps,
+			Version:            version,
+			RouteKey:           "devops",
+			ReadinessContract:  "devops-ready-v1",
+			RequiredComponents: []string{"devops"},
+			Dependencies:       []ProductID{},
+		}, true
+	default:
+		return Product{}, false
+	}
+}
+
+func productDependenciesCycle(products []Product) bool {
+	dependencies := make(map[ProductID][]ProductID, len(products))
+	for _, product := range products {
+		dependencies[product.ID] = product.Dependencies
+	}
+	const (
+		visiting = uint8(1)
+		visited  = uint8(2)
+	)
+	state := make(map[ProductID]uint8, len(products))
+	var visit func(ProductID) bool
+	visit = func(id ProductID) bool {
+		switch state[id] {
+		case visiting:
+			return true
+		case visited:
+			return false
+		}
+		state[id] = visiting
+		for _, dependency := range dependencies[id] {
+			if visit(dependency) {
+				return true
+			}
+		}
+		state[id] = visited
+		return false
+	}
+	for id := range dependencies {
+		if visit(id) {
+			return true
+		}
+	}
+	return false
 }
 
 func validateFiles(files []File) error {

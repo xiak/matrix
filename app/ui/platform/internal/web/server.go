@@ -1,6 +1,6 @@
-// Package web serves the independent Phase 1 PaaS browser application. The
-// browser talks only to the public IAM and PaaS routes exposed by APISIX; this
-// process owns no authority credential and never proxies user requests.
+// Package web serves the Matrix private-cloud product shell. The browser talks
+// only to public APISIX routes; this process owns no authority credential and
+// never proxies user requests.
 package web
 
 import (
@@ -13,6 +13,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
@@ -22,7 +23,10 @@ const APIVersion = "ui.matrix.xiak.com/v1"
 
 const maximumDigestRequestBytes = 1024 * 1024
 
-//go:embed assets/*
+// The explicit inventory prevents generated or machine-local directories from
+// becoming release inputs through a wildcard.
+//
+//go:embed assets/index.html assets/app.5ec06f0a.css assets/app.17897b0f.js
 var content embed.FS
 
 type readiness struct {
@@ -43,43 +47,59 @@ type digestResponse struct {
 
 func NewHandler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /{$}", serveAsset("assets/index.html", "text/html; charset=utf-8"))
-	mux.HandleFunc("GET /assets/app.css", serveAsset("assets/app.css", "text/css; charset=utf-8"))
-	mux.HandleFunc("GET /assets/app.js", serveAsset("assets/app.js", "text/javascript; charset=utf-8"))
+	shell := serveAsset("assets/index.html", "text/html; charset=utf-8", "no-store")
+	mux.HandleFunc("GET /{$}", shell)
+	mux.HandleFunc("GET /assets/app.5ec06f0a.css", serveAsset(
+		"assets/app.5ec06f0a.css", "text/css; charset=utf-8", "public, max-age=31536000, immutable",
+	))
+	mux.HandleFunc("GET /assets/app.17897b0f.js", serveAsset(
+		"assets/app.17897b0f.js", "text/javascript; charset=utf-8", "public, max-age=31536000, immutable",
+	))
 	mux.HandleFunc("GET /ready", serveReadiness)
 	mux.HandleFunc("POST /ui/v1/configuration-digest", serveConfigurationDigest)
+	mux.HandleFunc("GET /{route...}", func(response http.ResponseWriter, request *http.Request) {
+		if strings.HasPrefix(request.URL.Path, "/assets/") ||
+			strings.HasPrefix(request.URL.Path, "/api/") ||
+			strings.HasPrefix(request.URL.Path, "/ui/") {
+			writeProblem(response, http.StatusNotFound, "ROUTE_NOT_FOUND")
+			return
+		}
+		shell(response, request)
+	})
 	return securityHeaders(mux)
 }
 
-func serveAsset(name, contentType string) http.HandlerFunc {
+func serveAsset(name, contentType, cacheControl string) http.HandlerFunc {
 	asset, err := content.ReadFile(name)
 	if err != nil {
-		panic("embedded PaaS UI asset is missing")
+		panic("embedded Matrix UI asset is missing")
 	}
 	return func(response http.ResponseWriter, request *http.Request) {
-		if request.URL.RawQuery != "" || request.ContentLength > 0 || len(request.TransferEncoding) > 0 {
+		if !validEmptyRequest(request) {
 			writeProblem(response, http.StatusBadRequest, "INVALID_REQUEST")
 			return
 		}
 		response.Header().Set("Content-Type", contentType)
-		response.Header().Set("Cache-Control", "no-store")
+		response.Header().Set("Cache-Control", cacheControl)
 		response.WriteHeader(http.StatusOK)
 		_, _ = response.Write(asset)
 	}
 }
 
 func serveReadiness(response http.ResponseWriter, request *http.Request) {
-	if request.URL.RawQuery != "" || request.ContentLength > 0 || len(request.TransferEncoding) > 0 {
+	if !validEmptyRequest(request) {
 		writeProblem(response, http.StatusBadRequest, "INVALID_REQUEST")
 		return
 	}
 	writeJSON(response, http.StatusOK, readiness{
-		APIVersion: APIVersion, Kind: "PaaSUIReadiness", State: "READY",
+		APIVersion: APIVersion, Kind: "MatrixUIReadiness", State: "READY",
 	})
 }
 
 func serveConfigurationDigest(response http.ResponseWriter, request *http.Request) {
-	if request.URL.RawQuery != "" || request.ContentLength > maximumDigestRequestBytes {
+	if request.URL.RawQuery != "" || request.ContentLength < 0 ||
+		request.ContentLength > maximumDigestRequestBytes ||
+		len(request.TransferEncoding) > 0 || request.Header.Get("Content-Encoding") != "" {
 		writeProblem(response, http.StatusBadRequest, "INVALID_REQUEST")
 		return
 	}
@@ -103,10 +123,16 @@ func serveConfigurationDigest(response http.ResponseWriter, request *http.Reques
 	})
 }
 
+func validEmptyRequest(request *http.Request) bool {
+	return request.URL.RawQuery == "" && request.ContentLength == 0 &&
+		len(request.TransferEncoding) == 0 && request.Header.Get("Content-Encoding") == ""
+}
+
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		response.Header().Set("Content-Security-Policy", "default-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'")
+		response.Header().Set("Content-Security-Policy", "default-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; script-src 'self'; style-src 'self'")
 		response.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
+		response.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 		response.Header().Set("Referrer-Policy", "no-referrer")
 		response.Header().Set("X-Content-Type-Options", "nosniff")
 		response.Header().Set("X-Frame-Options", "DENY")
@@ -139,11 +165,11 @@ func writeProblem(response http.ResponseWriter, status int, code string) {
 
 func Serve(ctx context.Context, address string, handler http.Handler) error {
 	if ctx == nil || address == "" || handler == nil {
-		return errors.New("PaaS UI server configuration is invalid")
+		return errors.New("Matrix UI server configuration is invalid")
 	}
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
-		return errors.New("PaaS UI listener cannot start")
+		return errors.New("Matrix UI listener cannot start")
 	}
 	defer listener.Close()
 	server := &http.Server{
@@ -159,12 +185,12 @@ func Serve(ctx context.Context, address string, handler http.Handler) error {
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
-		return errors.New("PaaS UI server stopped unexpectedly")
+		return errors.New("Matrix UI server stopped unexpectedly")
 	case <-ctx.Done():
 		shutdownContext, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if err := server.Shutdown(shutdownContext); err != nil {
-			return errors.New("PaaS UI server cannot stop gracefully")
+			return errors.New("Matrix UI server cannot stop gracefully")
 		}
 		return nil
 	}

@@ -77,10 +77,11 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 		"audit":                 "/matrix/bin/matrix-audit",
 		"iam":                   "/matrix/bin/matrix-iam",
 		"iam-audit-dispatcher":  "/matrix/bin/matrix-iam-audit-dispatcher",
+		"matrix-ui":             "/matrix/bin/matrix-ui",
 		"paas-api":              "/matrix/bin/matrix-paas",
 		"paas-audit-dispatcher": "/matrix/bin/matrix-paas-audit-dispatcher",
-		"paas-ui":               "/matrix/bin/matrix-paas-ui",
 		"paas-worker":           "/matrix/bin/matrix-paas-worker",
+		"platform-api":          "/matrix/bin/matrix-platform",
 	}
 	expectedEnvironmentKeys := map[string][]string{
 		"audit": {
@@ -108,7 +109,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			"MATRIX_PAAS_AUDIT_ENDPOINT", "MATRIX_PAAS_AUDIT_LISTEN_ADDRESS",
 			"MATRIX_PAAS_AUDIT_WORKER_ID",
 		},
-		"paas-ui": {"MATRIX_PAAS_UI_LISTEN_ADDRESS"},
+		"matrix-ui": {"MATRIX_UI_LISTEN_ADDRESS"},
 		"paas-worker": {
 			"DOCKER_CONFIG", "DOCKER_HOST",
 			"MATRIX_PAAS_WORKER_ARTIFACT_CATALOG_FILE", "MATRIX_PAAS_WORKER_BINDING_REF",
@@ -117,12 +118,19 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			"MATRIX_PAAS_WORKER_LISTEN_ADDRESS", "MATRIX_PAAS_WORKER_MACHINE_BINDING_REF",
 			"MATRIX_PAAS_WORKER_SECRET_ROOT",
 		},
+		"platform-api": {
+			"MATRIX_PLATFORM_IAM_CREDENTIAL_FILE", "MATRIX_PLATFORM_IAM_ENDPOINT",
+			"MATRIX_PLATFORM_INSTALLATION_ID", "MATRIX_PLATFORM_LISTEN_ADDRESS",
+			"MATRIX_PLATFORM_PAAS_ENDPOINT", "MATRIX_PLATFORM_RELEASE_ID",
+			"MATRIX_PLATFORM_RELEASE_MANIFEST_FILE", "MATRIX_PLATFORM_RELEASE_SIGNATURE_FILE",
+			"MATRIX_PLATFORM_RELEASE_TRUST_FILE",
+		},
 	}
 	expectedImageComponents := map[string]string{
 		"apisix": "apisix", "audit": "audit", "iam": "iam",
-		"iam-audit-dispatcher": "iam", "paas-api": "paas",
-		"paas-audit-dispatcher": "paas", "paas-ui": "paas-ui",
-		"paas-worker": "paas",
+		"iam-audit-dispatcher": "iam", "matrix-ui": "matrix-ui", "paas-api": "paas",
+		"paas-audit-dispatcher": "paas",
+		"paas-worker":           "paas", "platform-api": "platform",
 	}
 	for name, raw := range services {
 		service, ok := raw.(map[string]any)
@@ -412,9 +420,9 @@ func topologyManifest() release.Manifest {
 	}}
 	required := release.RequiredImages()
 	images := make([]release.Image, 0, len(required))
-	fileDigests := "2345678"
-	imageDigests := "89abcde"
-	sourceDigests := "ef01234"
+	fileDigests := "23456789"
+	imageDigests := "89abcdef"
+	sourceDigests := "ef012345"
 	for index, requirement := range required {
 		archive := "images/" + requirement.Component + ".tar"
 		files = append(files, release.File{
@@ -445,6 +453,7 @@ func topologyManifest() release.Manifest {
 		Database: release.DatabaseProfile{
 			SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one",
 		},
+		Products:       []release.Product{release.ApplicationPaaSProduct("v0.1.0")},
 		TopologyDigest: ContractDigest(), Files: files, Images: images,
 	}
 }

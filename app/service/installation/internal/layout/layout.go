@@ -23,6 +23,7 @@ const (
 	IAMBootstrap                   = "secrets/authority/iam-bootstrap.json"
 	AuditIAMCredential             = "secrets/authority/audit-iam-credential"
 	IAMAuditCredential             = "secrets/authority/iam-audit-credential"
+	PlatformIAMCredential          = "secrets/authority/platform-iam-credential"
 	PaaSIAMCredential              = "secrets/authority/paas-iam-credential"
 	PaaSAuditCredential            = "secrets/authority/paas-audit-credential"
 	InstallationVerifierCredential = "secrets/authority/installation-verifier-iam-credential"

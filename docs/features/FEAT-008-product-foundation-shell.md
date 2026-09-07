@@ -1,6 +1,6 @@
 # FEAT-008: Private-cloud product foundation and unified shell
 
-- Status: Proposed; UX and architecture complete; implementation not started
+- Status: In progress; UX and architecture complete; Gate A discovery runtime and Gate B unified-shell slice implemented, lifecycle and authenticated-browser evidence pending
 - Target release: Unscheduled multi-product release
 - Contract: `installation.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -54,11 +54,13 @@ observation time. It exposes no native health payload, internal URL, image,
 credential, filesystem path, or undisclosed product. Discovery is read-only;
 install, add, remove, upgrade, and rollback remain `mx platform` operations.
 
-The API derives release inventory from the installation journal already bound
-to the running service. Caller headers, query parameters, UI configuration,
-database rows outside installation, and downstream self-registration cannot
-add a product. A declared product is `READY` only when every required
-component proves the exact release-compatible readiness contract.
+The API derives release inventory from the authenticated committed-release
+manifest mounted by the installation topology and checks its identity against
+the release bound to the running service. Caller headers, query parameters, UI
+configuration, database rows outside installation, and downstream
+self-registration cannot add a product. A declared product is `READY` only
+when every required component proves the exact release-compatible readiness
+contract.
 
 ## Unified UX
 

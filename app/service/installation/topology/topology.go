@@ -41,8 +41,8 @@ type contract struct {
 }
 
 var platformServiceNames = []string{
-	"apisix", "audit", "iam", "iam-audit-dispatcher", "paas-api",
-	"paas-audit-dispatcher", "paas-ui", "paas-worker", "postgres",
+	"apisix", "audit", "iam", "iam-audit-dispatcher", "matrix-ui",
+	"paas-api", "paas-audit-dispatcher", "paas-worker", "platform-api", "postgres",
 }
 
 func ContractDigest() string {
@@ -225,7 +225,12 @@ func compileServices(
 	iamAuditCredential := path.Join(root, layout.IAMAuditCredential)
 	paasIAMCredential := path.Join(root, layout.PaaSIAMCredential)
 	paasAuditCredential := path.Join(root, layout.PaaSAuditCredential)
+	platformIAMCredential := path.Join(root, layout.PlatformIAMCredential)
 	auditCursorKey := path.Join(root, layout.AuditCursorKey)
+	releaseTrust := path.Join(root, layout.ReleaseTrust)
+	releaseRoot := path.Join(root, layout.ReleaseDirectory(manifest.Release.ID))
+	releaseManifest := path.Join(releaseRoot, release.ManifestFilename)
+	releaseSignature := path.Join(releaseRoot, release.SignatureFilename)
 	apisixRoutes := path.Join(root, layout.APISIXRoutes)
 	apisixConfig := path.Join(root, layout.APISIXConfig)
 	apisixUID := path.Join(root, layout.APISIXUID)
@@ -352,6 +357,30 @@ func compileServices(
 	paasAPI.Tmpfs = append(paasAPI.Tmpfs, "/var/lib/docker:rw,noexec,nosuid,size=16m")
 	paasAPI.DependsOn = healthy("postgres", "iam")
 
+	platformAPI := service(
+		"platform-api", "platform", images["platform"], []string{"control"},
+		[]string{"/matrix/bin/matrix-platform"},
+		"0.5", "256M", "http://127.0.0.1:8080/ready",
+	)
+	platformAPI.Environment = map[string]string{
+		"MATRIX_PLATFORM_IAM_CREDENTIAL_FILE":    "/run/matrix/platform-iam-credential",
+		"MATRIX_PLATFORM_IAM_ENDPOINT":           "http://iam:8080",
+		"MATRIX_PLATFORM_INSTALLATION_ID":        options.InstallationID,
+		"MATRIX_PLATFORM_LISTEN_ADDRESS":         "0.0.0.0:8080",
+		"MATRIX_PLATFORM_PAAS_ENDPOINT":          "http://paas-api:8080",
+		"MATRIX_PLATFORM_RELEASE_ID":             manifest.Release.ID,
+		"MATRIX_PLATFORM_RELEASE_MANIFEST_FILE":  "/run/matrix/release.json",
+		"MATRIX_PLATFORM_RELEASE_SIGNATURE_FILE": "/run/matrix/release.sig",
+		"MATRIX_PLATFORM_RELEASE_TRUST_FILE":     "/run/matrix/release-trust.json",
+	}
+	platformAPI.Volumes = []mount{
+		bind(platformIAMCredential, "/run/matrix/platform-iam-credential", true),
+		bind(releaseManifest, "/run/matrix/release.json", true),
+		bind(releaseSignature, "/run/matrix/release.sig", true),
+		bind(releaseTrust, "/run/matrix/release-trust.json", true),
+	}
+	platformAPI.DependsOn = healthy("iam", "paas-api")
+
 	paasWorker := service(
 		"paas-worker", "paas", images["paas"], []string{"control"},
 		[]string{"/matrix/bin/matrix-paas-worker"},
@@ -400,12 +429,12 @@ func compileServices(
 	paasAudit.DependsOn = healthy("postgres", "audit")
 
 	ui := service(
-		"paas-ui", "paas-ui", images["paas-ui"], []string{"web"},
-		[]string{"/matrix/bin/matrix-paas-ui"},
+		"matrix-ui", "matrix-ui", images["matrix-ui"], []string{"web"},
+		[]string{"/matrix/bin/matrix-ui"},
 		"0.5", "256M", "http://127.0.0.1:8080/ready",
 	)
 	ui.Environment = map[string]string{
-		"MATRIX_PAAS_UI_LISTEN_ADDRESS": "0.0.0.0:8080",
+		"MATRIX_UI_LISTEN_ADDRESS": "0.0.0.0:8080",
 	}
 
 	apisix := service(
@@ -426,13 +455,13 @@ func compileServices(
 		"/usr/local/apisix/logs:rw,nosuid,size=16m,mode=0700,uid=0,gid=0",
 	)
 	apisix.CapAdd = []string{"CAP_CHOWN", "CAP_SETGID", "CAP_SETUID"}
-	apisix.DependsOn = healthy("audit", "iam", "paas-api", "paas-ui")
+	apisix.DependsOn = healthy("audit", "iam", "matrix-ui", "paas-api", "platform-api")
 
 	return map[string]serviceConfig{
 		"apisix": apisix, "audit": audit, "iam": iam,
-		"iam-audit-dispatcher": iamAudit, "paas-api": paasAPI,
-		"paas-audit-dispatcher": paasAudit, "paas-ui": ui, "paas-worker": paasWorker,
-		"postgres": postgres,
+		"iam-audit-dispatcher": iamAudit, "matrix-ui": ui, "paas-api": paasAPI,
+		"paas-audit-dispatcher": paasAudit, "paas-worker": paasWorker,
+		"platform-api": platformAPI, "postgres": postgres,
 	}
 }
 

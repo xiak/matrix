@@ -64,6 +64,7 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 	}()
 	serviceFiles := map[iamv1.ServicePurpose][]string{
 		iamv1.ServiceIAM:                  {layout.IAMAuditCredential},
+		iamv1.ServicePlatform:             {layout.PlatformIAMCredential},
 		iamv1.ServicePaaS:                 {layout.PaaSIAMCredential, layout.PaaSAuditCredential},
 		iamv1.ServiceAudit:                {layout.AuditIAMCredential},
 		iamv1.ServiceInstallationVerifier: {layout.InstallationVerifierCredential},
@@ -143,7 +144,9 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 	apisix := readTestFile(t, plan.Root, layout.APISIXRoutes)
 	for _, required := range []string{
 		"uri: /api/audit/v1/installation:verify",
+		"uri: /api/platform/*",
 		"uri: /api/paas/v1/installation:verify",
+		`"platform-api:8080": 1`,
 		"priority: 100",
 		"uri: /v1/installation:verify",
 	} {
@@ -1349,7 +1352,8 @@ func snapshotManagedCredentials(t *testing.T, root string) map[string]string {
 	t.Helper()
 	paths := []string{
 		layout.ReleaseTrust, layout.IAMBootstrap, layout.AuditIAMCredential,
-		layout.IAMAuditCredential, layout.PaaSIAMCredential, layout.PaaSAuditCredential,
+		layout.IAMAuditCredential, layout.PlatformIAMCredential,
+		layout.PaaSIAMCredential, layout.PaaSAuditCredential,
 		layout.InstallationVerifierCredential, layout.AuditCursorKey,
 		layout.BackupSealKey,
 		layout.InitialAdministratorPassword,

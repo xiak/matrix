@@ -168,6 +168,7 @@ func Manifest() release.Manifest {
 		Database: release.DatabaseProfile{
 			SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one",
 		},
+		Products:       []release.Product{release.ApplicationPaaSProduct("v0.1.0")},
 		TopologyDigest: topology.ContractDigest(), Files: files, Images: images,
 	}
 }

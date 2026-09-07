@@ -375,6 +375,7 @@ func TestInstallationKeepsGoOnlyClosedLifecycleBoundaries(t *testing.T) {
 			if _, isOS := osAliases[identifier.Name]; isOS &&
 				relative != "app/service/installation/cmd/mx/main.go" &&
 				relative != "app/service/installation/cmd/matrix-health/main.go" &&
+				relative != "app/service/installation/cmd/matrix-platform/main.go" &&
 				relative != "app/service/installation/cmd/matrix-verification/main.go" {
 				t.Errorf("%s: only installation process entry points may call os.Exit", relative)
 			}
@@ -409,6 +410,44 @@ func TestOfflineReleaseAssemblyUsesGoOrchestration(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("inspect offline release assembly: %v", err)
+	}
+}
+
+func TestUnifiedUIConsumesPublicContractsWithoutServiceInternals(t *testing.T) {
+	root := repositoryRoot(t)
+	uiRoot := filepath.Join(root, "app", "ui", "platform")
+	err := filepath.WalkDir(uiRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || filepath.Ext(path) != ".go" {
+			return nil
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+		if err != nil {
+			return err
+		}
+		for _, declaration := range file.Imports {
+			imported, err := strconv.Unquote(declaration.Path.Value)
+			if err != nil {
+				return err
+			}
+			if strings.HasPrefix(imported, modulePath+"app/service/") {
+				t.Errorf(
+					"%s: unified UI cannot import service implementation %q",
+					filepath.ToSlash(relative),
+					imported,
+				)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("inspect unified UI dependencies: %v", err)
 	}
 }
 

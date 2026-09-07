@@ -148,6 +148,34 @@ func TestManifestRejectsUnsafeOrIncompleteInventory(t *testing.T) {
 			value.Release.PreviousVersion = "v0.0.9"
 			value.Release.PreviousID = "matrix-v0.0.9-not-a-commit"
 		},
+		"missing product": func(value *Manifest) {
+			value.Products = nil
+		},
+		"duplicate product": func(value *Manifest) {
+			value.Products = append(value.Products, value.Products[0])
+		},
+		"unknown product": func(value *Manifest) {
+			value.Products[0].ID = ProductID("UNKNOWN")
+		},
+		"product version": func(value *Manifest) {
+			value.Products[0].Version = "latest"
+		},
+		"product route": func(value *Manifest) {
+			value.Products[0].RouteKey = "arbitrary-route"
+		},
+		"product component": func(value *Manifest) {
+			value.Products[0].RequiredComponents = []string{"apisix"}
+		},
+		"unavailable product component": func(value *Manifest) {
+			value.Products = append(value.Products, Product{
+				ID:                 ProductDevOps,
+				Version:            "v0.1.0",
+				RouteKey:           "devops",
+				ReadinessContract:  "devops-ready-v1",
+				RequiredComponents: []string{"devops"},
+				Dependencies:       []ProductID{},
+			})
+		},
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -233,9 +261,9 @@ func validManifest() Manifest {
 	}}
 	required := RequiredImages()
 	images := make([]Image, 0, len(required))
-	fileDigests := "2345678"
-	imageDigests := "89abcde"
-	sourceDigests := "ef01234"
+	fileDigests := "23456789"
+	imageDigests := "89abcdef"
+	sourceDigests := "ef012345"
 	for index, requirement := range required {
 		archive := "images/" + requirement.Component + ".tar"
 		files = append(files, File{
@@ -265,6 +293,7 @@ func validManifest() Manifest {
 		},
 		MinimumFreeBytes: minimumFreeBytes,
 		Database:         DatabaseProfile{SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one"},
+		Products:         []Product{ApplicationPaaSProduct("v0.1.0")},
 		TopologyDigest:   digest('f'), Files: files, Images: images,
 	}
 }

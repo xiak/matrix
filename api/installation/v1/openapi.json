@@ -1,0 +1,394 @@
+{
+  "components": {
+    "responses": {
+      "ProblemResponse": {
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        },
+        "description": "Normalized RFC 9457-style installation problem."
+      }
+    },
+    "schemas": {
+      "InstalledProduct": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "id": {
+                  "const": "APPLICATION_PAAS"
+                }
+              },
+              "required": [
+                "id"
+              ]
+            },
+            "then": {
+              "properties": {
+                "routeKey": {
+                  "const": "paas"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "id": {
+                  "const": "DEVOPS"
+                }
+              },
+              "required": [
+                "id"
+              ]
+            },
+            "then": {
+              "properties": {
+                "routeKey": {
+                  "const": "devops"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "READY"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "reason": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "DEGRADED",
+                    "UNAVAILABLE"
+                  ]
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "required": [
+                "reason"
+              ]
+            }
+          }
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/ProductID"
+          },
+          "observedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/ProductReason"
+          },
+          "routeKey": {
+            "maxLength": 32,
+            "minLength": 1,
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ProductState"
+          },
+          "version": {
+            "pattern": "^v(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z](?:[0-9A-Za-z.-]{0,62}[0-9A-Za-z])?)?$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "observedAt",
+          "routeKey",
+          "state",
+          "version"
+        ],
+        "type": "object"
+      },
+      "InstalledProductList": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "installation.matrix.xiak.com/v1"
+          },
+          "kind": {
+            "const": "InstalledProductList"
+          },
+          "observedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "products": {
+            "items": {
+              "$ref": "#/components/schemas/InstalledProduct"
+            },
+            "maxItems": 16,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "releaseId": {
+            "pattern": "^matrix-v(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z](?:[0-9A-Za-z.-]{0,62}[0-9A-Za-z])?)?-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "releaseVersion": {
+            "pattern": "^v(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z](?:[0-9A-Za-z.-]{0,62}[0-9A-Za-z])?)?$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "observedAt",
+          "products",
+          "releaseId",
+          "releaseVersion"
+        ],
+        "type": "object"
+      },
+      "Problem": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "pattern": "^[a-z][a-z0-9.]{2,127}$",
+            "type": "string"
+          },
+          "detail": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "requestId": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "status": {
+            "maximum": 599,
+            "minimum": 400,
+            "type": "integer"
+          },
+          "title": {
+            "maxLength": 160,
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": {
+            "format": "uri",
+            "pattern": "^https://errors\\.matrix\\.xiak\\.com/",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "requestId",
+          "status",
+          "title",
+          "type"
+        ],
+        "type": "object"
+      },
+      "ProductID": {
+        "enum": [
+          "APPLICATION_PAAS",
+          "DEVOPS"
+        ],
+        "type": "string"
+      },
+      "ProductReason": {
+        "enum": [
+          "DEPENDENCY_UNAVAILABLE",
+          "OBSERVATION_STALE"
+        ],
+        "type": "string"
+      },
+      "ProductState": {
+        "enum": [
+          "READY",
+          "DEGRADED",
+          "UNAVAILABLE"
+        ],
+        "type": "string"
+      },
+      "Readiness": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "READY"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "required": [
+                "releaseId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "NOT_READY"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "releaseId": false
+              }
+            }
+          }
+        ],
+        "properties": {
+          "apiVersion": {
+            "const": "installation.matrix.xiak.com/v1"
+          },
+          "checkedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "kind": {
+            "const": "Readiness"
+          },
+          "releaseId": {
+            "pattern": "^matrix-v(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z](?:[0-9A-Za-z.-]{0,62}[0-9A-Za-z])?)?-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ReadinessState"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "checkedAt",
+          "kind",
+          "state"
+        ],
+        "type": "object"
+      },
+      "ReadinessState": {
+        "enum": [
+          "READY",
+          "NOT_READY"
+        ],
+        "type": "string"
+      },
+      "Timestamp": {
+        "format": "date-time",
+        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?Z$",
+        "type": "string"
+      }
+    },
+    "securitySchemes": {
+      "UserSession": {
+        "description": "Opaque IAM user session credential.",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "title": "Matrix Installation v1 contracts",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/ready": {
+      "get": {
+        "operationId": "getInstallationReadiness",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Readiness"
+                }
+              }
+            },
+            "description": "Current installation state."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [],
+        "summary": "Get installation discovery readiness"
+      }
+    },
+    "/v1/installed-products": {
+      "get": {
+        "operationId": "listInstalledProducts",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstalledProductList"
+                }
+              }
+            },
+            "description": "Current installation state."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [
+          {
+            "UserSession": []
+          }
+        ],
+        "summary": "List authorized installed products"
+      }
+    }
+  },
+  "security": [
+    {
+      "UserSession": []
+    }
+  ]
+}

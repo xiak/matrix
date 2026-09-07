@@ -16,7 +16,7 @@ import (
 
 const maximumCommandOutputBytes = 1024 * 1024
 
-var buildTagPattern = regexp.MustCompile(`^matrix-release-build/(?:apisix|audit|iam|paas|paas-ui|verification):[0-9a-f]{24}$`)
+var buildTagPattern = regexp.MustCompile(`^matrix-release-build/(?:apisix|audit|iam|matrix-ui|paas|platform|verification):[0-9a-f]{24}$`)
 
 type localCommand struct {
 	program string

@@ -36,6 +36,7 @@
           "paas.operation.read",
           "audit.record.read",
           "audit.integrity.verify",
+          "installation.product.read",
           "installation.verify"
         ],
         "type": "string"
@@ -624,6 +625,32 @@
                   "properties": {
                     "kind": {
                       "const": "AUDIT_CHAIN"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "installation.product.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "INSTALLATION"
                     }
                   },
                   "required": [
@@ -1261,6 +1288,32 @@
             "if": {
               "properties": {
                 "action": {
+                  "const": "installation.product.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "INSTALLATION"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
                   "const": "installation.verify"
                 }
               },
@@ -1326,8 +1379,8 @@
           },
           "services": {
             "items": false,
-            "maxItems": 4,
-            "minItems": 4,
+            "maxItems": 5,
+            "minItems": 5,
             "prefixItems": [
               {
                 "allOf": [
@@ -1338,6 +1391,20 @@
                     "properties": {
                       "purpose": {
                         "const": "IAM"
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/BootstrapServiceCredential"
+                  },
+                  {
+                    "properties": {
+                      "purpose": {
+                        "const": "PLATFORM"
                       }
                     }
                   }
@@ -2135,6 +2202,7 @@
       "ServicePurpose": {
         "enum": [
           "IAM",
+          "PLATFORM",
           "PAAS",
           "AUDIT",
           "INSTALLATION_VERIFIER"

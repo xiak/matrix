@@ -1859,6 +1859,7 @@ func processBootstrap(t *testing.T) iamv1.BootstrapDocument {
 		},
 		Services: []iamv1.BootstrapServiceCredential{
 			service(iamv1.ServiceIAM, "service-iam", iamServiceCredential),
+			service(iamv1.ServicePlatform, "service-platform", "mx1.PlatformProcessCredential0000000000000001"),
 			service(iamv1.ServicePaaS, "service-paas", paasServiceCredential),
 			service(iamv1.ServiceAudit, "service-audit", auditServiceCredential),
 			service(iamv1.ServiceInstallationVerifier, "service-verifier", verifierCredential),
