@@ -6,7 +6,7 @@
 - Updated: 2026-09-08
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `2d43660`
+- Current pushed implementation baseline: `00fc256`
 
 ## Goal
 
@@ -42,10 +42,16 @@ and acceptance sequence.
   read-only viewer access, immutable nested revision reads, IAM-outage
   readiness, cross-schema confinement, five correlated DevOps Audit facts,
   and unchanged PaaS behavior.
-- Gate A is not complete. SourceEvent, PipelineRun, logs,
-  replay/cancellation, execution leases/fences, reconciliation, quotas, and
-  pagination remain pending. Read FEAT-007 and its owning code/tests before
-  continuing.
+- The pushed `00fc256` normalized-admission slice adds strict `SourceEvent`
+  and `PipelineRun` contracts, generated OpenAPI schemas, validating examples,
+  framed digests, replay-colliding event identity, deterministic run identity,
+  and pure constructors that bind only ready source configuration and the
+  exact active immutable revision. Initial runs are server-owned
+  `QUEUED / RECEIVE / EVENT_ADMITTED` records and cause no executor effect.
+- Gate A is not complete. Durable atomic event/run admission, authenticated
+  provider ingress, queue enforcement, logs, replay/cancellation, execution
+  leases/fences, reconciliation, quotas, and pagination remain pending. Read
+  FEAT-007 and its owning code/tests before continuing.
 - FEAT-008 remains `In progress`. Its real DevOps second-product transition is
   now represented in release, installation, topology, readiness, and discovery;
   authenticated-browser and accessibility acceptance still remain open.
@@ -63,8 +69,11 @@ and acceptance sequence.
 ## Continuation
 
 Resume from FEAT-007 and Git state. The project/Pipeline configuration vertical
-is closed through its real network/process gate; expand next into the immutable
-SourceEvent and PipelineRun admission slice without starting executor effects.
-Preserve pragmatic DDD, the modular-monolith boundary, replacement-first pre-v1
-changes, fixed-donor classification, and the exact repository-local Git
-identity `Xiak <Jellal@aliyun.com>`.
+is closed through its real network/process gate, and the immutable event/run
+contract and pure admission rules are closed. Implement next the delivery-owned
+PostgreSQL transaction that stores one SourceEvent, atomically fans out
+deterministic queued runs for matching active revisions, enforces the tenant
+queue limit, returns equal replay, and conflicts on changed replay. Do not start
+executor effects. Preserve pragmatic DDD, the modular-monolith boundary,
+replacement-first pre-v1 changes, fixed-donor classification, and the exact
+repository-local Git identity `Xiak <Jellal@aliyun.com>`.
