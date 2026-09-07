@@ -240,6 +240,26 @@ func TestPlatformIAMDecisionKeepsActualResourceAndInstallation(t *testing.T) {
 	}
 }
 
+func TestNodeEnrollmentAuthorizationMapsToIAMAuthority(t *testing.T) {
+	request, err := toIAMRequest(port.AuthorizationRequest{
+		Credential: "Bearer " + testSubjectCredential,
+		Action:     port.AuthorizeNodeEnrollmentCreate,
+		Resource:   paasv1.ResourceRef{Kind: "NodeEnrollment", ID: "collection"},
+		RequestID:  "request-node-enrollment-create",
+	})
+	if err != nil {
+		t.Fatalf("map node enrollment authorization: %v", err)
+	}
+	if request.Action != iamv1.ActionPaaSNodeEnrollmentCreate ||
+		request.Resource != (iamv1.ResourceReference{
+			Kind: iamv1.ResourceNodeEnrollment,
+			ID:   "collection",
+		}) || request.RequestID != "request-node-enrollment-create" ||
+		request.CorrelationID != request.RequestID {
+		t.Fatalf("IAM node enrollment authorization request=%#v", request)
+	}
+}
+
 func newTestClient(t *testing.T, endpoint string) *Client {
 	t.Helper()
 	credential, err := iamv1.NewSecret(testServiceCredential)

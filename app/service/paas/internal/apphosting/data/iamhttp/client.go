@@ -272,6 +272,8 @@ func toIAMResourceKind(kind string) (iamv1.ResourceKind, error) {
 		return iamv1.ResourceExecutionPool, nil
 	case "ExecutionTarget":
 		return iamv1.ResourceExecutionTarget, nil
+	case "NodeEnrollment":
+		return iamv1.ResourceNodeEnrollment, nil
 	case "TerminalSession":
 		return iamv1.ResourceTerminalSession, nil
 	default:
