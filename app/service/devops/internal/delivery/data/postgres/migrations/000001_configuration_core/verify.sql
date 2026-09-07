@@ -244,7 +244,7 @@ BEGIN
             ('renew_pipeline_run_task',
              'requested_tenant_id text, requested_run_id text, requested_command_id text, requested_worker_id text, expected_fencing_token bigint, requested_lease_seconds integer'),
             ('advance_pipeline_run_task',
-             'requested_tenant_id text, requested_run_id text, requested_command_id text, requested_worker_id text, expected_fencing_token bigint, requested_state text, requested_reason text'),
+             'requested_tenant_id text, requested_run_id text, requested_command_id text, requested_worker_id text, expected_fencing_token bigint, requested_state text, requested_reason text, submitted_run_document jsonb, submitted_audit_event jsonb'),
             ('mark_pipeline_run_report_uncertain',
              'requested_tenant_id text, requested_run_id text, requested_command_id text, requested_worker_id text, expected_fencing_token bigint, requested_next_attempt_at timestamp with time zone'),
             ('defer_pipeline_run_reconciliation',
@@ -271,6 +271,12 @@ BEGIN
      );
     IF missing IS NOT NULL THEN
         RAISE EXCEPTION 'delivery protected functions are missing or unsafe: %', missing;
+    END IF;
+
+    IF to_regprocedure(
+        'delivery.advance_pipeline_run_task(text,text,text,text,bigint,text,text)'
+    ) IS NOT NULL THEN
+        RAISE EXCEPTION 'legacy PipelineRun transition function bypasses terminal Audit';
     END IF;
 
     IF has_schema_privilege('matrix_devops_api', 'delivery', 'CREATE')
@@ -321,12 +327,12 @@ BEGIN
        )
        OR NOT has_function_privilege(
             'matrix_devops_worker',
-            'delivery.advance_pipeline_run_task(text,text,text,text,bigint,text,text)',
+            'delivery.advance_pipeline_run_task(text,text,text,text,bigint,text,text,jsonb,jsonb)',
             'EXECUTE'
        )
        OR has_function_privilege(
             'matrix_devops_api',
-            'delivery.advance_pipeline_run_task(text,text,text,text,bigint,text,text)',
+            'delivery.advance_pipeline_run_task(text,text,text,text,bigint,text,text,jsonb,jsonb)',
             'EXECUTE'
        )
        OR NOT has_function_privilege(

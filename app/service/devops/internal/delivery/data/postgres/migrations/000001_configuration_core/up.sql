@@ -756,9 +756,39 @@ CREATE TABLE IF NOT EXISTS delivery.audit_operations (
                 AND target_kind = 'SOURCE_EVENT' AND id = target_id)
             OR (operation_kind = 'PIPELINE_RUN_CREATION'
                 AND target_kind = 'PIPELINE_RUN' AND id = target_id)
+            OR (operation_kind = 'PIPELINE_RUN_TERMINAL'
+                AND target_kind = 'PIPELINE_RUN'
+                AND target_id COLLATE "C" ~ '^pipeline-run-[0-9a-f]{48}$'
+                AND id COLLATE "C" ~ '^pipeline-run-[0-9a-f]{48}:terminal:[1-9][0-9]{0,15}$'
+                AND split_part(id, ':', 1) = target_id)
         )
     )
 );
+
+ALTER TABLE delivery.audit_operations
+    DROP CONSTRAINT IF EXISTS audit_operations_values_valid;
+ALTER TABLE delivery.audit_operations
+    ADD CONSTRAINT audit_operations_values_valid CHECK (
+        tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND target_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND (
+            (operation_kind = 'CONFIGURATION_MUTATION'
+                AND target_kind IN (
+                    'DEVOPS_PROJECT', 'SOURCE_CONNECTION',
+                    'REPOSITORY_BINDING', 'PIPELINE', 'PIPELINE_REVISION'
+                ))
+            OR (operation_kind = 'SOURCE_EVENT_ADMISSION'
+                AND target_kind = 'SOURCE_EVENT' AND id = target_id)
+            OR (operation_kind = 'PIPELINE_RUN_CREATION'
+                AND target_kind = 'PIPELINE_RUN' AND id = target_id)
+            OR (operation_kind = 'PIPELINE_RUN_TERMINAL'
+                AND target_kind = 'PIPELINE_RUN'
+                AND target_id COLLATE "C" ~ '^pipeline-run-[0-9a-f]{48}$'
+                AND id COLLATE "C" ~ '^pipeline-run-[0-9a-f]{48}:terminal:[1-9][0-9]{0,15}$'
+                AND split_part(id, ':', 1) = target_id)
+        )
+    );
 
 DROP POLICY IF EXISTS owner_schema_upgrade ON delivery.mutations;
 CREATE POLICY owner_schema_upgrade ON delivery.mutations
@@ -973,6 +1003,16 @@ BEGIN
            AND policyname = 'owner_run_worker'
     ) THEN
         CREATE POLICY owner_run_worker ON delivery.pipeline_run_tasks
+            TO matrix_devops_owner
+            USING (true)
+            WITH CHECK (true);
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_policies
+         WHERE schemaname = 'delivery' AND tablename = 'audit_operations'
+           AND policyname = 'owner_run_worker'
+    ) THEN
+        CREATE POLICY owner_run_worker ON delivery.audit_operations
             TO matrix_devops_owner
             USING (true)
             WITH CHECK (true);
@@ -2139,6 +2179,9 @@ GRANT EXECUTE ON FUNCTION delivery.renew_pipeline_run_task(
     text, text, text, text, bigint, integer
 ) TO matrix_devops_worker;
 
+DROP FUNCTION IF EXISTS delivery.advance_pipeline_run_task(
+    text, text, text, text, bigint, text, text
+);
 CREATE OR REPLACE FUNCTION delivery.advance_pipeline_run_task(
     requested_tenant_id text,
     requested_run_id text,
@@ -2146,7 +2189,9 @@ CREATE OR REPLACE FUNCTION delivery.advance_pipeline_run_task(
     requested_worker_id text,
     expected_fencing_token bigint,
     requested_state text,
-    requested_reason text
+    requested_reason text,
+    submitted_run_document jsonb,
+    submitted_audit_event jsonb
 )
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -2170,9 +2215,9 @@ DECLARE
     terminal boolean;
     next_stage text;
     effective_now timestamptz(6);
-    effective_time_text text;
-    next_status jsonb;
     next_document jsonb;
+    terminal_operation_id text;
+    expected_audit_event_id text;
 BEGIN
     IF requested_tenant_id IS NULL
        OR requested_tenant_id COLLATE "C"
@@ -2186,7 +2231,8 @@ BEGIN
        OR requested_worker_id COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR expected_fencing_token IS NULL
-       OR expected_fencing_token NOT BETWEEN 1 AND 9007199254740991 THEN
+       OR expected_fencing_token NOT BETWEEN 1 AND 9007199254740991
+       OR jsonb_typeof(submitted_run_document) IS DISTINCT FROM 'object' THEN
         RAISE EXCEPTION USING
             ERRCODE = '22023',
             MESSAGE = 'PipelineRun task transition identity is invalid';
@@ -2287,26 +2333,108 @@ BEGIN
         transaction_timestamp(),
         current_updated_at + interval '1 microsecond'
     );
-    effective_time_text := to_char(
-        effective_now AT TIME ZONE 'UTC',
-        'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
-    );
-    next_status := jsonb_build_object(
-        'state', requested_state,
-        'stage', next_stage,
-        'resourceVersion', current_resource_version + 1,
-        'observedAt', effective_time_text
-    );
-    IF requested_reason IS NOT NULL THEN
-        next_status := next_status || jsonb_build_object('reason', requested_reason);
+    IF jsonb_typeof(submitted_run_document->'status') IS DISTINCT FROM 'object'
+       OR NOT ((submitted_run_document->'status') ?& ARRAY[
+            'state', 'stage', 'resourceVersion', 'observedAt'
+       ])
+       OR ((submitted_run_document->'status') - ARRAY[
+            'state', 'stage', 'reason', 'resourceVersion',
+            'observedAt', 'completedAt'
+       ]) <> '{}'::jsonb
+       OR (submitted_run_document - ARRAY['status', 'updatedAt']) IS DISTINCT FROM
+            (current_run_document - ARRAY['status', 'updatedAt'])
+       OR submitted_run_document#>>'{status,state}' IS DISTINCT FROM requested_state
+       OR submitted_run_document#>>'{status,stage}' IS DISTINCT FROM next_stage
+       OR submitted_run_document#>>'{status,reason}' IS DISTINCT FROM requested_reason
+       OR submitted_run_document#>>'{status,resourceVersion}' IS DISTINCT FROM
+            (current_resource_version + 1)::text
+       OR COALESCE(submitted_run_document#>>'{status,observedAt}', '') COLLATE "C"
+            !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,6})?Z$'
+       OR NOT pg_input_is_valid(
+            COALESCE(submitted_run_document#>>'{status,observedAt}', ''),
+            'timestamptz'
+       )
+       OR (submitted_run_document#>>'{status,observedAt}')::timestamptz IS DISTINCT FROM effective_now
+       OR COALESCE(submitted_run_document->>'updatedAt', '') COLLATE "C"
+            !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,6})?Z$'
+       OR NOT pg_input_is_valid(
+            COALESCE(submitted_run_document->>'updatedAt', ''), 'timestamptz'
+       )
+       OR (submitted_run_document->>'updatedAt')::timestamptz IS DISTINCT FROM effective_now
+       OR (terminal AND (
+            NOT (submitted_run_document->'status' ? 'completedAt')
+            OR COALESCE(submitted_run_document#>>'{status,completedAt}', '') COLLATE "C"
+                !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,6})?Z$'
+            OR NOT pg_input_is_valid(
+                COALESCE(submitted_run_document#>>'{status,completedAt}', ''),
+                'timestamptz'
+            )
+            OR (submitted_run_document#>>'{status,completedAt}')::timestamptz IS DISTINCT FROM effective_now
+       ))
+       OR (NOT terminal AND submitted_run_document->'status' ? 'completedAt') THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'submitted PipelineRun transition document differs from database state';
     END IF;
+    next_document := submitted_run_document;
+
     IF terminal THEN
-        next_status := next_status || jsonb_build_object('completedAt', effective_time_text);
+        terminal_operation_id := requested_run_id || ':terminal:' ||
+            (current_resource_version + 1)::text;
+        expected_audit_event_id := 'audit-' || encode(
+            sha256(
+                convert_to('matrix-devops-audit-event-v1', 'UTF8')
+                || decode('00', 'hex')
+                || convert_to(terminal_operation_id, 'UTF8')
+            ),
+            'hex'
+        );
+        IF jsonb_typeof(submitted_audit_event) IS DISTINCT FROM 'object'
+           OR NOT (submitted_audit_event ?& ARRAY[
+                'apiVersion', 'kind', 'eventId', 'tenantId', 'actor',
+                'action', 'target', 'result', 'outcome', 'reason',
+                'requestDigest', 'requestId', 'correlationId',
+                'operationId', 'occurredAt'
+           ])
+           OR (submitted_audit_event - ARRAY[
+                'apiVersion', 'kind', 'eventId', 'tenantId', 'actor',
+                'action', 'target', 'result', 'outcome', 'reason',
+                'requestDigest', 'requestId', 'correlationId',
+                'operationId', 'occurredAt'
+           ]) <> '{}'::jsonb
+           OR jsonb_typeof(submitted_audit_event->'actor') IS DISTINCT FROM 'object'
+           OR jsonb_typeof(submitted_audit_event->'target') IS DISTINCT FROM 'object'
+           OR ((submitted_audit_event->'actor') - ARRAY['type', 'id']) <> '{}'::jsonb
+           OR ((submitted_audit_event->'target') - ARRAY['kind', 'id']) <> '{}'::jsonb
+           OR submitted_audit_event->>'apiVersion' IS DISTINCT FROM 'audit.matrix.xiak.com/v1'
+           OR submitted_audit_event->>'kind' IS DISTINCT FROM 'AuditEvent'
+           OR submitted_audit_event->>'eventId' IS DISTINCT FROM expected_audit_event_id
+           OR submitted_audit_event->>'tenantId' IS DISTINCT FROM requested_tenant_id
+           OR submitted_audit_event#>>'{actor,type}' IS DISTINCT FROM 'SYSTEM'
+           OR submitted_audit_event#>>'{actor,id}' IS DISTINCT FROM 'system-devops-run-worker'
+           OR submitted_audit_event ? 'iamDecisionId'
+           OR submitted_audit_event ? 'traceparent'
+           OR submitted_audit_event->>'action' IS DISTINCT FROM 'devops.pipeline-run.completed'
+           OR submitted_audit_event#>>'{target,kind}' IS DISTINCT FROM 'PIPELINE_RUN'
+           OR submitted_audit_event#>>'{target,id}' IS DISTINCT FROM requested_run_id
+           OR submitted_audit_event->>'result' IS DISTINCT FROM 'SUCCEEDED'
+           OR submitted_audit_event->>'outcome' IS DISTINCT FROM requested_state
+           OR submitted_audit_event->>'reason' IS DISTINCT FROM requested_reason
+           OR submitted_audit_event->>'requestDigest' IS DISTINCT FROM
+                current_run_document->>'inputDigest'
+           OR submitted_audit_event->>'requestId' IS DISTINCT FROM requested_command_id
+           OR submitted_audit_event->>'correlationId' IS DISTINCT FROM requested_run_id
+           OR submitted_audit_event->>'operationId' IS DISTINCT FROM terminal_operation_id
+           OR (submitted_audit_event->>'occurredAt')::timestamptz IS DISTINCT FROM effective_now THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '22023',
+                MESSAGE = 'PipelineRun terminal Audit fact is invalid';
+        END IF;
+    ELSIF submitted_audit_event IS NOT NULL THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'nonterminal PipelineRun transition cannot emit a terminal Audit fact';
     END IF;
-    next_document := jsonb_set(
-        jsonb_set(current_run_document, '{status}', next_status, false),
-        '{updatedAt}', to_jsonb(effective_time_text), false
-    );
 
     UPDATE delivery.pipeline_runs AS transitioned
        SET state = requested_state,
@@ -2327,15 +2455,32 @@ BEGIN
      WHERE completed.tenant_id = requested_tenant_id
        AND completed.run_id = requested_run_id
        AND completed.command_id = requested_command_id;
+    IF terminal THEN
+        INSERT INTO delivery.audit_operations (
+            tenant_id, id, operation_kind, target_kind, target_id, created_at
+        ) VALUES (
+            requested_tenant_id, terminal_operation_id,
+            'PIPELINE_RUN_TERMINAL', 'PIPELINE_RUN', requested_run_id,
+            effective_now
+        );
+        INSERT INTO delivery.audit_outbox (
+            tenant_id, event_id, operation_id, status, available_at, attempts,
+            fencing_token, created_at, updated_at, document
+        ) VALUES (
+            requested_tenant_id, submitted_audit_event->>'eventId',
+            terminal_operation_id, 'PENDING', effective_now, 0, 0,
+            effective_now, effective_now, submitted_audit_event
+        );
+    END IF;
     RETURN next_document;
 END
 $function$;
 
 REVOKE ALL ON FUNCTION delivery.advance_pipeline_run_task(
-    text, text, text, text, bigint, text, text
+    text, text, text, text, bigint, text, text, jsonb, jsonb
 ) FROM PUBLIC, matrix_devops_api;
 GRANT EXECUTE ON FUNCTION delivery.advance_pipeline_run_task(
-    text, text, text, text, bigint, text, text
+    text, text, text, text, bigint, text, text, jsonb, jsonb
 ) TO matrix_devops_worker;
 
 CREATE OR REPLACE FUNCTION delivery.mark_pipeline_run_report_uncertain(
@@ -2787,8 +2932,11 @@ AS $function$
             'delivery.renew_pipeline_run_task(text,text,text,text,bigint,integer)'
         ) IS NOT NULL
         AND to_regprocedure(
-            'delivery.advance_pipeline_run_task(text,text,text,text,bigint,text,text)'
+            'delivery.advance_pipeline_run_task(text,text,text,text,bigint,text,text,jsonb,jsonb)'
         ) IS NOT NULL
+        AND to_regprocedure(
+            'delivery.advance_pipeline_run_task(text,text,text,text,bigint,text,text)'
+        ) IS NULL
         AND to_regprocedure(
             'delivery.mark_pipeline_run_report_uncertain(text,text,text,text,bigint,timestamp with time zone)'
         ) IS NOT NULL
@@ -2857,8 +3005,11 @@ AS $function$
             'delivery.renew_pipeline_run_task(text,text,text,text,bigint,integer)'
         ) IS NOT NULL
         AND to_regprocedure(
-            'delivery.advance_pipeline_run_task(text,text,text,text,bigint,text,text)'
+            'delivery.advance_pipeline_run_task(text,text,text,text,bigint,text,text,jsonb,jsonb)'
         ) IS NOT NULL
+        AND to_regprocedure(
+            'delivery.advance_pipeline_run_task(text,text,text,text,bigint,text,text)'
+        ) IS NULL
         AND to_regprocedure(
             'delivery.mark_pipeline_run_report_uncertain(text,text,text,text,bigint,timestamp with time zone)'
         ) IS NOT NULL

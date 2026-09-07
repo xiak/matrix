@@ -469,6 +469,7 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		return err
 	})
 	assertRunLifecyclePersistenceAndFencing(t, ctx, admin, workerPool)
+	assertTerminalAuditFacts(t, ctx, admin)
 	outbox, err := devopspostgres.NewAuditOutboxRepository(workerPool)
 	if err != nil {
 		t.Fatal(err)
@@ -478,10 +479,10 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		t.Fatalf("DevOps Audit worker readiness=%#v err=%v", workerReadiness, err)
 	}
 	snapshot, err := outbox.Snapshot(ctx)
-	if err != nil || snapshot.Pending != 61 || snapshot.Delivered != 0 {
+	if err != nil || snapshot.Pending != 66 || snapshot.Delivered != 0 {
 		t.Fatalf("initial Audit outbox snapshot=%#v err=%v", snapshot, err)
 	}
-	for index := 0; index < 61; index++ {
+	for index := 0; index < 66; index++ {
 		claim, found, err := outbox.Claim(ctx, "audit-worker-integration", 30*time.Second)
 		if err != nil || !found {
 			t.Fatalf("claim Audit event %d=%#v found=%t err=%v", index, claim, found, err)
@@ -509,7 +510,7 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		t.Fatalf("empty Audit claim=%#v found=%t err=%v", claim, found, err)
 	}
 	snapshot, err = outbox.Snapshot(ctx)
-	if err != nil || snapshot.Delivered != 61 || snapshot.Pending != 0 || snapshot.Leased != 0 ||
+	if err != nil || snapshot.Delivered != 66 || snapshot.Pending != 0 || snapshot.Leased != 0 ||
 		snapshot.Retry != 0 || snapshot.DeadLetter != 0 || snapshot.ExpiredLease != 0 {
 		t.Fatalf("delivered Audit outbox snapshot=%#v err=%v", snapshot, err)
 	}
@@ -537,7 +538,7 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		t.Fatalf("read delivery evidence: %v", err)
 	}
 	if mutationCount != 13 || sourceEventCount != 16 || runCount != 32 || runTaskCount != 9 ||
-		operationCount != 61 || auditCount != 61 ||
+		operationCount != 66 || auditCount != 66 ||
 		bindingRevisionCount != 2 || pipelineRevisionCount != 3 {
 		t.Fatalf(
 			"evidence counts mutation=%d event=%d run=%d task=%d operation=%d audit=%d binding=%d pipeline=%d",
@@ -565,6 +566,49 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func assertTerminalAuditFacts(t *testing.T, ctx context.Context, admin *pgx.Conn) {
+	t.Helper()
+	rows, err := admin.Query(ctx, `SELECT operation.operation_kind, operation.target_id, outbox.document
+		FROM delivery.audit_operations AS operation
+		JOIN delivery.audit_outbox AS outbox
+		  ON outbox.tenant_id = operation.tenant_id AND outbox.operation_id = operation.id
+		WHERE operation.operation_kind = 'PIPELINE_RUN_TERMINAL'
+		ORDER BY operation.id`)
+	if err != nil {
+		t.Fatalf("read PipelineRun terminal Audit facts: %v", err)
+	}
+	defer rows.Close()
+	counts := map[auditv1.Outcome]int{}
+	count := 0
+	for rows.Next() {
+		var operationKind, targetID string
+		var document []byte
+		if err := rows.Scan(&operationKind, &targetID, &document); err != nil {
+			t.Fatal(err)
+		}
+		var event auditv1.Event
+		if err := json.Unmarshal(document, &event); err != nil {
+			t.Fatalf("decode PipelineRun terminal Audit fact: %v", err)
+		}
+		if err := auditv1.ValidateEventForSource(auditv1.SourceDevOps, event); err != nil ||
+			operationKind != "PIPELINE_RUN_TERMINAL" || event.Action != auditv1.ActionDevOpsPipelineRunCompleted ||
+			event.Target.ID != targetID || event.Actor.ID != "system-devops-run-worker" ||
+			event.IAMDecisionID != "" {
+			t.Fatalf("PipelineRun terminal Audit fact=%#v operation=%s target=%s err=%v", event, operationKind, targetID, err)
+		}
+		counts[event.Outcome]++
+		count++
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if count != 5 || counts[auditv1.OutcomeSucceeded] != 1 ||
+		counts[auditv1.OutcomeCancelled] != 3 || counts[auditv1.OutcomeManualIntervention] != 1 ||
+		counts[auditv1.OutcomeFailed] != 0 {
+		t.Fatalf("PipelineRun terminal Audit outcome counts=%#v total=%d", counts, count)
 	}
 }
 

@@ -1607,6 +1607,10 @@ func authorityAuditEvent(
 	if contract.OperationRequired {
 		event.OperationID = auditv1.OperationID("operation-" + eventID)
 	}
+	if contract.OutcomeRequired {
+		event.Outcome = auditv1.OutcomeSucceeded
+		event.Reason = auditv1.ReasonCompleted
+	}
 	return event
 }
 

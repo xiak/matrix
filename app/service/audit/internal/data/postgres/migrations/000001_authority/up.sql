@@ -239,6 +239,8 @@ BEGIN
         ('devops.pipeline-revision.activated', 'DEVOPS', 'PIPELINE_REVISION', 'SUCCEEDED', true, true, true),
         ('devops.source-event.admitted', 'DEVOPS', 'SOURCE_EVENT', 'ACCEPTED', false, false, true),
         ('devops.pipeline-run.created', 'DEVOPS', 'PIPELINE_RUN', 'ACCEPTED', false, false, true),
+        ('devops.pipeline-run.cancellation-requested', 'DEVOPS', 'PIPELINE_RUN', 'ACCEPTED', true, true, true),
+        ('devops.pipeline-run.completed', 'DEVOPS', 'PIPELINE_RUN', 'SUCCEEDED', false, false, true),
         ('audit.records.read', 'AUDIT', 'AUDIT_RECORDS', 'SUCCEEDED', true, true, false),
         ('audit.integrity.verified', 'AUDIT', 'AUDIT_CHAIN', 'SUCCEEDED', true, true, false)
       ) AS contract(
@@ -274,7 +276,8 @@ BEGIN
        OR (submitted_event - ARRAY[
             'apiVersion', 'kind', 'eventId', 'tenantId', 'actor',
             'iamDecisionId', 'action', 'target', 'result', 'requestDigest',
-            'requestId', 'correlationId', 'operationId', 'traceparent',
+            'outcome', 'reason', 'requestId', 'correlationId',
+            'operationId', 'traceparent',
             'occurredAt'
        ]) <> '{}'::jsonb
        OR ((submitted_event->'actor') - ARRAY['type', 'id']) <> '{}'::jsonb
@@ -289,6 +292,10 @@ BEGIN
             AND jsonb_typeof(submitted_event->'operationId') <> 'string')
        OR (submitted_event ? 'traceparent'
             AND jsonb_typeof(submitted_event->'traceparent') <> 'string')
+       OR (submitted_event ? 'outcome'
+            AND jsonb_typeof(submitted_event->'outcome') <> 'string')
+       OR (submitted_event ? 'reason'
+            AND jsonb_typeof(submitted_event->'reason') <> 'string')
        OR octet_length(submitted_event::text) > 131072
        OR submitted_event->>'apiVersion' IS DISTINCT FROM 'audit.matrix.xiak.com/v1'
        OR submitted_event->>'kind' IS DISTINCT FROM 'AuditEvent'
@@ -333,6 +340,26 @@ BEGIN
        OR (NOT iam_decision_permitted AND submitted_event ? 'iamDecisionId')
        OR (operation_required AND NOT (submitted_event ? 'operationId'))
        OR (NOT operation_required AND submitted_event ? 'operationId')
+       OR (action_name = 'devops.pipeline-run.completed' AND (
+            NOT (submitted_event ?& ARRAY['outcome', 'reason'])
+            OR NOT (
+                (submitted_event->>'outcome' = 'SUCCEEDED'
+                    AND submitted_event->>'reason' = 'COMPLETED')
+                OR (submitted_event->>'outcome' = 'FAILED'
+                    AND submitted_event->>'reason' IN (
+                        'SOURCE_UNAVAILABLE', 'COMMIT_MISMATCH',
+                        'EXECUTOR_UNAVAILABLE', 'VERIFICATION_FAILED',
+                        'DEADLINE_EXCEEDED', 'REPORT_UNAVAILABLE',
+                        'REPORT_CONFLICT'
+                    ))
+                OR (submitted_event->>'outcome' = 'CANCELLED'
+                    AND submitted_event->>'reason' = 'CANCELLED')
+                OR (submitted_event->>'outcome' = 'MANUAL_INTERVENTION'
+                    AND submitted_event->>'reason' = 'RECONCILIATION_EXHAUSTED')
+            )
+       ))
+       OR (action_name <> 'devops.pipeline-run.completed'
+            AND (submitted_event ? 'outcome' OR submitted_event ? 'reason'))
        OR (action_name = 'iam.authorization.decided'
             AND submitted_event#>>'{target,id}' IS DISTINCT FROM
                 submitted_event->>'iamDecisionId') THEN
@@ -660,6 +687,8 @@ BEGIN
             'devops.pipeline.draft-updated',
             'devops.pipeline-revision.activated',
             'devops.source-event.admitted', 'devops.pipeline-run.created',
+            'devops.pipeline-run.cancellation-requested',
+            'devops.pipeline-run.completed',
             'audit.records.read',
             'audit.integrity.verified'
        ))

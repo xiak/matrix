@@ -57,6 +57,20 @@ func TestReplayIdentityAcceptsEqualCanonicalContentAndConflictsOnChange(t *testi
 	}
 }
 
+func TestCanonicalPipelineRunCompletionRetainsOutcomeAndReason(t *testing.T) {
+	event := auditAuthorityEvent("event-run-completed", "organization-example", auditv1.ActionDevOpsPipelineRunCompleted)
+	event.Outcome = auditv1.OutcomeFailed
+	event.Reason = auditv1.ReasonVerificationFailed
+	fact, err := Canonicalize(auditv1.SourceDevOps, event)
+	if err != nil {
+		t.Fatalf("canonicalize PipelineRun completion: %v", err)
+	}
+	if !strings.Contains(fact.Document, `"outcome":"FAILED"`) ||
+		!strings.Contains(fact.Document, `"reason":"VERIFICATION_FAILED"`) {
+		t.Fatalf("canonical PipelineRun fact lost outcome or reason: %s", fact.Document)
+	}
+}
+
 func auditAuthorityEvent(eventID, tenantID string, action auditv1.Action) auditv1.Event {
 	contract, known := auditv1.ContractForAction(action)
 	if !known {

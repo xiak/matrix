@@ -5,6 +5,8 @@ type ActorType string
 type Action string
 type TargetKind string
 type Result string
+type Outcome string
+type Reason string
 type IngestionOutcome string
 type RetentionPolicy string
 type VerificationState string
@@ -43,16 +45,18 @@ const (
 	ActionPaaSDeploymentStopped            Action = "paas.deployment.stopped"
 	ActionPaaSDeploymentRolledBack         Action = "paas.deployment.rolled-back"
 
-	ActionDevOpsProjectCreated            Action = "devops.project.created"
-	ActionDevOpsSourceConnectionCreated   Action = "devops.source-connection.created"
-	ActionDevOpsSourceConnectionUpdated   Action = "devops.source-connection.updated"
-	ActionDevOpsRepositoryBindingCreated  Action = "devops.repository-binding.created"
-	ActionDevOpsRepositoryBindingUpdated  Action = "devops.repository-binding.updated"
-	ActionDevOpsPipelineCreated           Action = "devops.pipeline.created"
-	ActionDevOpsPipelineDraftUpdated      Action = "devops.pipeline.draft-updated"
-	ActionDevOpsPipelineRevisionActivated Action = "devops.pipeline-revision.activated"
-	ActionDevOpsSourceEventAdmitted       Action = "devops.source-event.admitted"
-	ActionDevOpsPipelineRunCreated        Action = "devops.pipeline-run.created"
+	ActionDevOpsProjectCreated                   Action = "devops.project.created"
+	ActionDevOpsSourceConnectionCreated          Action = "devops.source-connection.created"
+	ActionDevOpsSourceConnectionUpdated          Action = "devops.source-connection.updated"
+	ActionDevOpsRepositoryBindingCreated         Action = "devops.repository-binding.created"
+	ActionDevOpsRepositoryBindingUpdated         Action = "devops.repository-binding.updated"
+	ActionDevOpsPipelineCreated                  Action = "devops.pipeline.created"
+	ActionDevOpsPipelineDraftUpdated             Action = "devops.pipeline.draft-updated"
+	ActionDevOpsPipelineRevisionActivated        Action = "devops.pipeline-revision.activated"
+	ActionDevOpsSourceEventAdmitted              Action = "devops.source-event.admitted"
+	ActionDevOpsPipelineRunCreated               Action = "devops.pipeline-run.created"
+	ActionDevOpsPipelineRunCancellationRequested Action = "devops.pipeline-run.cancellation-requested"
+	ActionDevOpsPipelineRunCompleted             Action = "devops.pipeline-run.completed"
 
 	ActionAuditRecordsRead       Action = "audit.records.read"
 	ActionAuditIntegrityVerified Action = "audit.integrity.verified"
@@ -88,6 +92,26 @@ const (
 )
 
 const (
+	OutcomeSucceeded          Outcome = "SUCCEEDED"
+	OutcomeFailed             Outcome = "FAILED"
+	OutcomeCancelled          Outcome = "CANCELLED"
+	OutcomeManualIntervention Outcome = "MANUAL_INTERVENTION"
+)
+
+const (
+	ReasonCompleted               Reason = "COMPLETED"
+	ReasonSourceUnavailable       Reason = "SOURCE_UNAVAILABLE"
+	ReasonCommitMismatch          Reason = "COMMIT_MISMATCH"
+	ReasonExecutorUnavailable     Reason = "EXECUTOR_UNAVAILABLE"
+	ReasonVerificationFailed      Reason = "VERIFICATION_FAILED"
+	ReasonDeadlineExceeded        Reason = "DEADLINE_EXCEEDED"
+	ReasonReportUnavailable       Reason = "REPORT_UNAVAILABLE"
+	ReasonReportConflict          Reason = "REPORT_CONFLICT"
+	ReasonCancelled               Reason = "CANCELLED"
+	ReasonReconciliationExhausted Reason = "RECONCILIATION_EXHAUSTED"
+)
+
+const (
 	IngestionAccepted  IngestionOutcome = "ACCEPTED"
 	IngestionDuplicate IngestionOutcome = "DUPLICATE"
 )
@@ -115,6 +139,7 @@ type ActionContract struct {
 	IAMDecisionPermitted bool
 	IAMDecisionRequired  bool
 	OperationRequired    bool
+	OutcomeRequired      bool
 }
 
 func AllActions() []Action {
@@ -157,6 +182,8 @@ var allActions = []Action{
 	ActionDevOpsPipelineRevisionActivated,
 	ActionDevOpsSourceEventAdmitted,
 	ActionDevOpsPipelineRunCreated,
+	ActionDevOpsPipelineRunCancellationRequested,
+	ActionDevOpsPipelineRunCompleted,
 	ActionAuditRecordsRead,
 	ActionAuditIntegrityVerified,
 }
@@ -258,6 +285,14 @@ var actionContracts = map[Action]ActionContract{
 	ActionDevOpsPipelineRunCreated: {
 		Source: SourceDevOps, Target: TargetPipelineRun, Results: []Result{ResultAccepted},
 		OperationRequired: true,
+	},
+	ActionDevOpsPipelineRunCancellationRequested: {
+		Source: SourceDevOps, Target: TargetPipelineRun, Results: []Result{ResultAccepted},
+		IAMDecisionRequired: true, OperationRequired: true,
+	},
+	ActionDevOpsPipelineRunCompleted: {
+		Source: SourceDevOps, Target: TargetPipelineRun, Results: []Result{ResultSucceeded},
+		OperationRequired: true, OutcomeRequired: true,
 	},
 	ActionAuditRecordsRead: {
 		Source: SourceAudit, Target: TargetAuditRecords, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true,

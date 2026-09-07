@@ -87,6 +87,10 @@ func TestAuditActionCatalogIsClosedAndSourceBound(t *testing.T) {
 		if contract.OperationRequired {
 			event.OperationID = "operation-example"
 		}
+		if contract.OutcomeRequired {
+			event.Outcome = OutcomeSucceeded
+			event.Reason = ReasonCompleted
+		}
 		if err := ValidateEventForSource(contract.Source, event); err != nil {
 			t.Fatalf("valid action contract %q rejected: %v", action, err)
 		}
@@ -96,6 +100,39 @@ func TestAuditActionCatalogIsClosedAndSourceBound(t *testing.T) {
 	}
 	if _, known := ContractForAction(Action("audit.unregistered")); known {
 		t.Fatal("unregistered Audit action has a contract")
+	}
+}
+
+func TestPipelineRunCompletionRequiresClosedOutcomeAndReason(t *testing.T) {
+	event := Event{
+		APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-run-completed",
+		TenantID: "organization-example", Actor: ActorReference{Type: ActorSystem, ID: "system-devops-run-worker"},
+		Action: ActionDevOpsPipelineRunCompleted,
+		Target: TargetReference{Kind: TargetPipelineRun, ID: "pipeline-run-example"},
+		Result: ResultSucceeded, Outcome: OutcomeFailed, Reason: ReasonVerificationFailed,
+		RequestDigest: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+		RequestID:     "pipeline-run-example:verify:1", CorrelationID: "pipeline-run-example",
+		OperationID: "pipeline-run-example:terminal:4",
+		OccurredAt:  time.Date(2026, 9, 8, 3, 4, 5, 0, time.UTC),
+	}
+	if err := ValidateEventForSource(SourceDevOps, event); err != nil {
+		t.Fatalf("valid PipelineRun completion rejected: %v", err)
+	}
+	event.Reason = ReasonCompleted
+	if err := ValidateEventForSource(SourceDevOps, event); err == nil {
+		t.Fatal("FAILED PipelineRun completion accepted COMPLETED reason")
+	}
+	event.Reason = ReasonVerificationFailed
+	event.Outcome = ""
+	if err := ValidateEventForSource(SourceDevOps, event); err == nil {
+		t.Fatal("PipelineRun completion without outcome was accepted")
+	}
+	event.Action = ActionDevOpsPipelineRunCreated
+	event.Result = ResultAccepted
+	event.OperationID = "pipeline-run-example"
+	event.Outcome = OutcomeFailed
+	if err := ValidateEventForSource(SourceDevOps, event); err == nil {
+		t.Fatal("PipelineRun creation accepted terminal outcome fields")
 	}
 }
 

@@ -58,6 +58,8 @@ func Canonicalize(source auditv1.Source, event auditv1.Event) (CanonicalFact, er
 			Action:        event.Action,
 			Target:        event.Target,
 			Result:        event.Result,
+			Outcome:       event.Outcome,
+			Reason:        event.Reason,
 			RequestDigest: event.RequestDigest,
 			RequestID:     event.RequestID,
 			CorrelationID: event.CorrelationID,
@@ -139,6 +141,8 @@ type canonicalEvent struct {
 	Action        auditv1.Action          `json:"action"`
 	Target        auditv1.TargetReference `json:"target"`
 	Result        auditv1.Result          `json:"result"`
+	Outcome       auditv1.Outcome         `json:"outcome,omitempty"`
+	Reason        auditv1.Reason          `json:"reason,omitempty"`
 	RequestDigest string                  `json:"requestDigest"`
 	RequestID     string                  `json:"requestId"`
 	CorrelationID string                  `json:"correlationId"`

@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -148,14 +149,49 @@ func (repository *RunTaskRepository) Advance(
 	); err != nil || transition.State == devopsv1.PipelineRunReconciling {
 		return devopsv1.PipelineRun{}, fmt.Errorf("advance PipelineRun task: %w", runlifecycle.ErrInvalidTransition)
 	}
+	tx, err := repository.pool.Begin(ctx)
+	if err != nil {
+		return devopsv1.PipelineRun{}, fmt.Errorf("begin PipelineRun task transition: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	var effectiveNow time.Time
+	if err := tx.QueryRow(
+		ctx,
+		`SELECT greatest(transaction_timestamp(), $1::timestamptz + interval '1 microsecond')`,
+		transition.Lease.Run.UpdatedAt,
+	).Scan(&effectiveNow); err != nil {
+		return devopsv1.PipelineRun{}, fmt.Errorf("read PipelineRun transition time: %w", err)
+	}
+	effectiveNow = effectiveNow.UTC()
+	expected, err := domain.AdvancePipelineRun(
+		transition.Lease.Run, transition.State, transition.Reason, effectiveNow,
+	)
+	if err != nil {
+		return devopsv1.PipelineRun{}, fmt.Errorf("advance PipelineRun task: %w", runlifecycle.ErrInvalidTransition)
+	}
+	runDocument, err := json.Marshal(expected)
+	if err != nil {
+		return devopsv1.PipelineRun{}, fmt.Errorf("encode PipelineRun transition: %w", err)
+	}
+	var auditDocument any
+	if expected.Status.CompletedAt != nil {
+		event, eventErr := runlifecycle.NewTerminalAuditEvent(expected, transition.Lease.Intent.CommandID)
+		if eventErr != nil {
+			return devopsv1.PipelineRun{}, fmt.Errorf("build PipelineRun terminal Audit fact: %w", eventErr)
+		}
+		auditDocument, err = json.Marshal(event)
+		if err != nil {
+			return devopsv1.PipelineRun{}, fmt.Errorf("encode PipelineRun terminal Audit fact: %w", err)
+		}
+	}
 	var reason any
 	if transition.Reason != "" {
 		reason = transition.Reason
 	}
 	var document []byte
-	err := repository.pool.QueryRow(
+	err = tx.QueryRow(
 		ctx,
-		`SELECT delivery.advance_pipeline_run_task($1, $2, $3, $4, $5, $6, $7)`,
+		`SELECT delivery.advance_pipeline_run_task($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 		transition.Lease.TenantID,
 		transition.Lease.Run.ID,
 		transition.Lease.Intent.CommandID,
@@ -163,11 +199,20 @@ func (repository *RunTaskRepository) Advance(
 		int64(transition.Lease.FencingToken),
 		transition.State,
 		reason,
+		runDocument,
+		auditDocument,
 	).Scan(&document)
 	if err != nil {
 		return devopsv1.PipelineRun{}, mapRunLifecycleError("advance PipelineRun task", err)
 	}
-	return decodePipelineRun(document)
+	updated, err := decodePipelineRun(document)
+	if err != nil {
+		return devopsv1.PipelineRun{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return devopsv1.PipelineRun{}, mapRunLifecycleError("commit PipelineRun task transition", err)
+	}
+	return updated, nil
 }
 
 func (repository *RunTaskRepository) MarkReportUncertain(

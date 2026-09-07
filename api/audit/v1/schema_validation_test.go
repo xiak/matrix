@@ -102,3 +102,48 @@ func TestAuditOpenAPIEnforcesClosedEventUnion(t *testing.T) {
 		t.Fatal("complete verification with nextSequence must fail schema validation")
 	}
 }
+
+func TestAuditOpenAPIClosesPipelineRunCompletionOutcome(t *testing.T) {
+	document := loadAuditOpenAPI(t)
+	eventSchema := compileAuditOpenAPISchema(t, document, "Event")
+	event := map[string]any{
+		"apiVersion": APIVersion,
+		"kind":       "AuditEvent",
+		"eventId":    "event-run-completed",
+		"tenantId":   "organization-example",
+		"actor": map[string]any{
+			"type": string(ActorSystem), "id": "system-devops-run-worker",
+		},
+		"action": string(ActionDevOpsPipelineRunCompleted),
+		"target": map[string]any{
+			"kind": string(TargetPipelineRun), "id": "pipeline-run-example",
+		},
+		"result":        string(ResultSucceeded),
+		"outcome":       string(OutcomeFailed),
+		"reason":        string(ReasonVerificationFailed),
+		"requestDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+		"requestId":     "pipeline-run-example:verify:1",
+		"correlationId": "pipeline-run-example",
+		"operationId":   "pipeline-run-example:terminal:4",
+		"occurredAt":    "2026-09-08T03:04:05.000000Z",
+	}
+	if err := eventSchema.Validate(event); err != nil {
+		t.Fatalf("valid PipelineRun completion rejected: %v", err)
+	}
+	event["reason"] = string(ReasonCompleted)
+	if err := eventSchema.Validate(event); err == nil {
+		t.Fatal("FAILED PipelineRun completion accepted COMPLETED reason")
+	}
+	event["reason"] = string(ReasonVerificationFailed)
+	delete(event, "outcome")
+	if err := eventSchema.Validate(event); err == nil {
+		t.Fatal("PipelineRun completion without outcome was accepted")
+	}
+	event["action"] = string(ActionDevOpsPipelineRunCreated)
+	event["result"] = string(ResultAccepted)
+	event["operationId"] = "pipeline-run-example"
+	event["outcome"] = string(OutcomeFailed)
+	if err := eventSchema.Validate(event); err == nil {
+		t.Fatal("PipelineRun creation accepted terminal outcome fields")
+	}
+}

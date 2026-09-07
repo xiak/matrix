@@ -70,6 +70,11 @@ func ValidateEvent(value Event) error {
 		if !contract.OperationRequired && value.OperationID != "" {
 			problems = append(problems, errors.New("Audit action cannot contain an Operation"))
 		}
+		if contract.OutcomeRequired {
+			problems = append(problems, validatePipelineRunOutcome(value.Outcome, value.Reason))
+		} else if value.Outcome != "" || value.Reason != "" {
+			problems = append(problems, errors.New("Audit action cannot contain an outcome or reason"))
+		}
 	}
 	if value.IAMDecisionID != "" {
 		problems = append(problems, ValidateID("iamDecisionId", string(value.IAMDecisionID)))
@@ -85,6 +90,31 @@ func ValidateEvent(value Event) error {
 		problems = append(problems, validateTraceParent(value.TraceParent))
 	}
 	return errors.Join(problems...)
+}
+
+func validatePipelineRunOutcome(outcome Outcome, reason Reason) error {
+	switch outcome {
+	case OutcomeSucceeded:
+		if reason == ReasonCompleted {
+			return nil
+		}
+	case OutcomeFailed:
+		switch reason {
+		case ReasonSourceUnavailable, ReasonCommitMismatch, ReasonExecutorUnavailable,
+			ReasonVerificationFailed, ReasonDeadlineExceeded, ReasonReportUnavailable,
+			ReasonReportConflict:
+			return nil
+		}
+	case OutcomeCancelled:
+		if reason == ReasonCancelled {
+			return nil
+		}
+	case OutcomeManualIntervention:
+		if reason == ReasonReconciliationExhausted {
+			return nil
+		}
+	}
+	return errors.New("Audit PipelineRun outcome and reason differ")
 }
 
 func ValidateEventForSource(source Source, value Event) error {

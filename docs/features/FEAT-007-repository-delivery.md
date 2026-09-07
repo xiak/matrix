@@ -3,8 +3,8 @@
 - Status: In progress; UX, architecture, donor analysis, implementation
   baseline, Gate A project/Pipeline/source-resource contract, domain,
   configuration transaction/persistence, shared authority, durable run
-  admission, authenticated Gitea ingress, and fenced run-lifecycle foundation
-  slices complete; source/executor/reporter effects pending
+  admission, authenticated Gitea ingress, fenced run-lifecycle foundation,
+  and terminal Audit facts complete; source/executor/reporter effects pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -575,10 +575,21 @@ cannot exceed either side of the tenant quota.
 No source acquisition, executor, reporter, or worker loop is connected yet, so
 the new boundary cannot perform an external effect.
 
+Every fenced worker transition now submits the exact next PipelineRun document
+to the database boundary. A terminal transition atomically stores a distinct
+Audit Operation and outbox fact with a normalized system actor, deterministic
+identity, immutable run-input digest, and closed `outcome`/`reason`; a
+nonterminal transition cannot submit one. Audit validates and canonicalizes
+those fields only for `devops.pipeline-run.completed`, while cancellation
+requests use the separate IAM-bound
+`devops.pipeline-run.cancellation-requested` action. The legacy seven-argument
+transition function is deleted on upgrade so a worker cannot bypass terminal
+fact creation.
+
 These slices do not complete Gate A. Source health reconciliation and operator
 secret provisioning experience, logs, public manual replay/cancellation,
 concurrent cross-tenant fairness evidence, remaining runtime quotas,
-terminal/check-receipt Audit facts, and pagination remain pending.
+check-receipt Audit facts, and pagination remain pending.
 
 Current verification evidence:
 
@@ -631,10 +642,19 @@ Current verification evidence:
   retention, current-fence lease renewal, ten deferred observations,
   manual-intervention gating, migration reapply, the concurrent two-active-run
   tenant ceiling, and API/worker table and function confinement
+- closed Audit/OpenAPI validation and a real PostgreSQL 18 authority journey
+  accepting only valid PipelineRun completion outcome/reason pairs; the
+  delivery journey proves five terminal transitions create exactly five
+  atomic, deterministic completion facts while nonterminal transitions create
+  none
 - data-bearing migration reapply preserving 13 configuration mutations,
-  16 SourceEvents, 32 PipelineRuns, nine task intents, and 61 generalized
+  16 SourceEvents, 32 PipelineRuns, nine task intents, and 66 generalized
   Audit operations/outbox facts, plus the real Audit authority accepting the
-  two closed DevOps actions
+  closed DevOps actions and outcome projection
+- fixed `7363b29` data-bearing upgrade preserving all 13 mutations, 16
+  SourceEvents, 32 PipelineRuns, nine task intents, and 61 pre-existing Audit
+  facts while replacing the legacy transition function with the audited
+  signature
 - fixed `0d387dd` data-bearing upgrade preserving all 11 legacy mutations and
   outbox facts, backfilling current/revision external repository identities and
   generalized Audit operations, and removing every temporary upgrade policy
