@@ -51,6 +51,42 @@
       }
     },
     "schemas": {
+      "ChangeAction": {
+        "enum": [
+          "OPENED",
+          "REOPENED",
+          "UPDATED"
+        ],
+        "type": "string"
+      },
+      "ChangeIdentity": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/ChangeAction"
+          },
+          "headCommit": {
+            "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+            "type": "string"
+          },
+          "number": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "trustedBaseCommit": {
+            "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "headCommit",
+          "number",
+          "trustedBaseCommit"
+        ],
+        "type": "object"
+      },
       "CreateDevOpsProjectRequest": {
         "additionalProperties": false,
         "properties": {
@@ -480,6 +516,480 @@
           "toolchainImageDigest",
           "triggerPolicy",
           "verificationProfile"
+        ],
+        "type": "object"
+      },
+      "PipelineRun": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "devops.matrix.xiak.com/v1"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "input": {
+            "$ref": "#/components/schemas/PipelineRunInput"
+          },
+          "inputDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "kind": {
+            "const": "PipelineRun"
+          },
+          "pipelineId": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "projectId": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ResourceScope"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PipelineRunStatus"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "createdAt",
+          "id",
+          "input",
+          "inputDigest",
+          "kind",
+          "pipelineId",
+          "projectId",
+          "scope",
+          "status",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "PipelineRunInput": {
+        "additionalProperties": false,
+        "properties": {
+          "change": {
+            "$ref": "#/components/schemas/ChangeIdentity"
+          },
+          "pipelineRevisionDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "pipelineRevisionId": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "repositoryBindingDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "repositoryBindingId": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "sourceEventDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "sourceEventId": {
+            "$ref": "#/components/schemas/ResourceID"
+          }
+        },
+        "required": [
+          "change",
+          "pipelineRevisionDigest",
+          "pipelineRevisionId",
+          "repositoryBindingDigest",
+          "repositoryBindingId",
+          "sourceEventDigest",
+          "sourceEventId"
+        ],
+        "type": "object"
+      },
+      "PipelineRunReason": {
+        "enum": [
+          "EVENT_ADMITTED",
+          "COMPLETED",
+          "SOURCE_UNAVAILABLE",
+          "COMMIT_MISMATCH",
+          "EXECUTOR_UNAVAILABLE",
+          "VERIFICATION_FAILED",
+          "DEADLINE_EXCEEDED",
+          "REPORT_UNAVAILABLE",
+          "REPORT_CONFLICT",
+          "CANCELLED",
+          "EXTERNAL_EFFECT_UNCERTAIN",
+          "RECONCILIATION_EXHAUSTED"
+        ],
+        "type": "string"
+      },
+      "PipelineRunStage": {
+        "enum": [
+          "RECEIVE",
+          "FETCH",
+          "VERIFY",
+          "REPORT"
+        ],
+        "type": "string"
+      },
+      "PipelineRunState": {
+        "enum": [
+          "QUEUED",
+          "FETCHING",
+          "VERIFYING",
+          "REPORTING",
+          "SUCCEEDED",
+          "FAILED",
+          "CANCELLED",
+          "RECONCILING",
+          "MANUAL_INTERVENTION"
+        ],
+        "type": "string"
+      },
+      "PipelineRunStatus": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "QUEUED"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "not": {
+                "required": [
+                  "completedAt"
+                ]
+              },
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "EVENT_ADMITTED"
+                  ]
+                },
+                "resourceVersion": {
+                  "const": 1
+                },
+                "stage": {
+                  "enum": [
+                    "RECEIVE"
+                  ]
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "FETCHING"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "reason"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "completedAt"
+                    ]
+                  }
+                ]
+              },
+              "properties": {
+                "stage": {
+                  "enum": [
+                    "FETCH"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "VERIFYING"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "reason"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "completedAt"
+                    ]
+                  }
+                ]
+              },
+              "properties": {
+                "stage": {
+                  "enum": [
+                    "VERIFY"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "REPORTING"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "reason"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "completedAt"
+                    ]
+                  }
+                ]
+              },
+              "properties": {
+                "stage": {
+                  "enum": [
+                    "REPORT"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "SUCCEEDED"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "COMPLETED"
+                  ]
+                },
+                "stage": {
+                  "enum": [
+                    "REPORT"
+                  ]
+                }
+              },
+              "required": [
+                "reason",
+                "completedAt"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "FAILED"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "SOURCE_UNAVAILABLE",
+                    "COMMIT_MISMATCH",
+                    "EXECUTOR_UNAVAILABLE",
+                    "VERIFICATION_FAILED",
+                    "DEADLINE_EXCEEDED",
+                    "REPORT_UNAVAILABLE",
+                    "REPORT_CONFLICT"
+                  ]
+                },
+                "stage": {
+                  "enum": [
+                    "RECEIVE",
+                    "FETCH",
+                    "VERIFY",
+                    "REPORT"
+                  ]
+                }
+              },
+              "required": [
+                "reason",
+                "completedAt"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "CANCELLED"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "CANCELLED"
+                  ]
+                },
+                "stage": {
+                  "enum": [
+                    "RECEIVE",
+                    "FETCH",
+                    "VERIFY",
+                    "REPORT"
+                  ]
+                }
+              },
+              "required": [
+                "reason",
+                "completedAt"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "RECONCILING"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "not": {
+                "required": [
+                  "completedAt"
+                ]
+              },
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "EXTERNAL_EFFECT_UNCERTAIN"
+                  ]
+                },
+                "stage": {
+                  "enum": [
+                    "REPORT"
+                  ]
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "MANUAL_INTERVENTION"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "RECONCILIATION_EXHAUSTED"
+                  ]
+                },
+                "stage": {
+                  "enum": [
+                    "REPORT"
+                  ]
+                }
+              },
+              "required": [
+                "reason",
+                "completedAt"
+              ]
+            }
+          }
+        ],
+        "properties": {
+          "completedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "observedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/PipelineRunReason"
+          },
+          "resourceVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/PipelineRunStage"
+          },
+          "state": {
+            "$ref": "#/components/schemas/PipelineRunState"
+          }
+        },
+        "required": [
+          "observedAt",
+          "resourceVersion",
+          "stage",
+          "state"
         ],
         "type": "object"
       },
@@ -1080,6 +1590,90 @@
         "required": [
           "health",
           "observedAt"
+        ],
+        "type": "object"
+      },
+      "SourceEvent": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "devops.matrix.xiak.com/v1"
+          },
+          "contentDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "kind": {
+            "const": "SourceEvent"
+          },
+          "receivedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ResourceScope"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/SourceEventSpec"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "contentDigest",
+          "id",
+          "kind",
+          "receivedAt",
+          "scope",
+          "spec"
+        ],
+        "type": "object"
+      },
+      "SourceEventSpec": {
+        "additionalProperties": false,
+        "properties": {
+          "canonicalPayloadDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "change": {
+            "$ref": "#/components/schemas/ChangeIdentity"
+          },
+          "deliveryId": {
+            "format": "uuid",
+            "not": {
+              "const": "00000000-0000-0000-0000-000000000000"
+            },
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "externalRepositoryId": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "projectId": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "repositoryBindingDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "repositoryBindingId": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "sourceConnectionId": {
+            "$ref": "#/components/schemas/ResourceID"
+          }
+        },
+        "required": [
+          "canonicalPayloadDigest",
+          "change",
+          "deliveryId",
+          "externalRepositoryId",
+          "projectId",
+          "repositoryBindingDigest",
+          "repositoryBindingId",
+          "sourceConnectionId"
         ],
         "type": "object"
       },

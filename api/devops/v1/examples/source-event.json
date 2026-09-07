@@ -1,0 +1,25 @@
+{
+  "apiVersion": "devops.matrix.xiak.com/v1",
+  "kind": "SourceEvent",
+  "id": "source-event-c4de7a55ee49a4b5212f3d29272f7be310105fbc9b300d62",
+  "scope": {
+    "tenantId": "organization-acme"
+  },
+  "spec": {
+    "projectId": "devops-project-platform",
+    "sourceConnectionId": "source-connection-primary",
+    "repositoryBindingId": "repository-binding-api",
+    "repositoryBindingDigest": "sha256:ba641c4f85296cb2b0a43014403aeb941fe7dd233f15c9296e0d3bc1bac7b453",
+    "externalRepositoryId": "42",
+    "deliveryId": "123e4567-e89b-42d3-a456-426614174000",
+    "canonicalPayloadDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "change": {
+      "number": 42,
+      "action": "OPENED",
+      "headCommit": "1111111111111111111111111111111111111111",
+      "trustedBaseCommit": "2222222222222222222222222222222222222222"
+    }
+  },
+  "contentDigest": "sha256:45ea0910bd3873f69b167184c9883a4007ea997024f27f7ddd1b273fc9b1a2cf",
+  "receivedAt": "2026-09-07T04:07:06Z"
+}

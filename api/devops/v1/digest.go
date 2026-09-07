@@ -81,6 +81,84 @@ func PipelineRevisionID(
 	return ResourceID("pipeline-revision-" + hex.EncodeToString(sum[:24])), nil
 }
 
+// SourceEventSpecDigest seals every normalized event field independently of
+// JSON serialization. It intentionally includes the raw-payload digest rather
+// than the raw provider document.
+func SourceEventSpecDigest(value SourceEventSpec) string {
+	digest := newContractDigest("matrix-devops-source-event-v1")
+	writeString(digest, string(value.ProjectID))
+	writeString(digest, string(value.SourceConnectionID))
+	writeString(digest, string(value.RepositoryBindingID))
+	writeString(digest, value.RepositoryBindingDigest)
+	writeString(digest, string(value.ExternalRepositoryID))
+	writeString(digest, value.DeliveryID)
+	writeString(digest, value.CanonicalPayloadDigest)
+	writeChangeIdentity(digest, value.Change)
+	return digest.sum()
+}
+
+// SourceEventID binds replay identity to the authenticated tenant and source
+// endpoint. Content is excluded so a changed replay collides instead of
+// silently producing a second SourceEvent.
+func SourceEventID(
+	scope ResourceScope,
+	sourceConnectionID ResourceID,
+	deliveryID string,
+) (ResourceID, error) {
+	if ValidateResourceScope(scope) != nil ||
+		ValidateID("sourceConnectionId", string(sourceConnectionID)) != nil ||
+		validateDeliveryID(deliveryID) != nil {
+		return "", errors.New("source event identity input is invalid")
+	}
+	digest := newContractDigest("matrix-devops-source-event-identity-v1")
+	writeString(digest, string(scope.TenantID))
+	writeString(digest, string(sourceConnectionID))
+	writeString(digest, deliveryID)
+	sum := digest.hash.Sum(nil)
+	return ResourceID("source-event-" + hex.EncodeToString(sum[:24])), nil
+}
+
+// PipelineRunInputDigest seals all immutable inputs required after admission.
+func PipelineRunInputDigest(value PipelineRunInput) string {
+	digest := newContractDigest("matrix-devops-pipeline-run-input-v1")
+	writeString(digest, string(value.SourceEventID))
+	writeString(digest, value.SourceEventDigest)
+	writeString(digest, string(value.PipelineRevisionID))
+	writeString(digest, value.PipelineRevisionDigest)
+	writeString(digest, string(value.RepositoryBindingID))
+	writeString(digest, value.RepositoryBindingDigest)
+	writeChangeIdentity(digest, value.Change)
+	return digest.sum()
+}
+
+func PipelineRunID(
+	scope ResourceScope,
+	sourceEventID ResourceID,
+	pipelineRevisionID ResourceID,
+	inputDigest string,
+) (ResourceID, error) {
+	if ValidateResourceScope(scope) != nil ||
+		ValidateID("sourceEventId", string(sourceEventID)) != nil ||
+		ValidateID("pipelineRevisionId", string(pipelineRevisionID)) != nil ||
+		ValidateDigest("inputDigest", inputDigest) != nil {
+		return "", errors.New("PipelineRun identity input is invalid")
+	}
+	digest := newContractDigest("matrix-devops-pipeline-run-identity-v1")
+	writeString(digest, string(scope.TenantID))
+	writeString(digest, string(sourceEventID))
+	writeString(digest, string(pipelineRevisionID))
+	writeString(digest, inputDigest)
+	sum := digest.hash.Sum(nil)
+	return ResourceID("pipeline-run-" + hex.EncodeToString(sum[:24])), nil
+}
+
+func writeChangeIdentity(digest *contractDigest, value ChangeIdentity) {
+	writeUint64(digest, value.Number)
+	writeString(digest, string(value.Action))
+	writeString(digest, value.HeadCommit)
+	writeString(digest, value.TrustedBaseCommit)
+}
+
 type contractDigest struct {
 	hash hash.Hash
 }

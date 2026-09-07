@@ -60,6 +60,72 @@ func TestDevOpsContractsAcceptTrustedActivation(t *testing.T) {
 	}
 }
 
+func TestSourceEventAndPipelineRunContracts(t *testing.T) {
+	event := validSourceEvent(t)
+	if err := ValidateSourceEvent(event); err != nil {
+		t.Fatalf("validate SourceEvent: %v", err)
+	}
+	run := validPipelineRun(t)
+	if err := ValidatePipelineRun(run); err != nil {
+		t.Fatalf("validate PipelineRun: %v", err)
+	}
+
+	for name, mutate := range map[string]func(*SourceEvent){
+		"identity": func(value *SourceEvent) { value.ID = "source-event-forged" },
+		"delivery": func(value *SourceEvent) { value.Spec.DeliveryID = "not-a-uuid" },
+		"payload digest": func(value *SourceEvent) {
+			value.Spec.CanonicalPayloadDigest = "sha256:" + strings.Repeat("f", 64)
+		},
+		"content digest": func(value *SourceEvent) {
+			value.ContentDigest = "sha256:" + strings.Repeat("f", 64)
+		},
+		"provider action": func(value *SourceEvent) {
+			value.Spec.Change.Action = ChangeAction("SYNCHRONIZED")
+		},
+		"uppercase commit": func(value *SourceEvent) {
+			value.Spec.Change.HeadCommit = strings.Repeat("A", 40)
+		},
+	} {
+		t.Run("SourceEvent "+name, func(t *testing.T) {
+			value := event
+			mutate(&value)
+			if err := ValidateSourceEvent(value); err == nil {
+				t.Fatal("invalid SourceEvent was accepted")
+			}
+		})
+	}
+
+	for name, mutate := range map[string]func(*PipelineRun){
+		"identity": func(value *PipelineRun) { value.ID = "pipeline-run-forged" },
+		"event digest": func(value *PipelineRun) {
+			value.Input.SourceEventDigest = "sha256:" + strings.Repeat("e", 64)
+		},
+		"input digest": func(value *PipelineRun) {
+			value.InputDigest = "sha256:" + strings.Repeat("e", 64)
+		},
+		"queued stage": func(value *PipelineRun) {
+			value.Status.Stage = PipelineRunStageFetch
+		},
+		"queued version": func(value *PipelineRun) { value.Status.ResourceVersion = 2 },
+		"terminal without time": func(value *PipelineRun) {
+			value.Status.State = PipelineRunSucceeded
+			value.Status.Stage = PipelineRunStageReport
+			value.Status.Reason = PipelineRunReasonCompleted
+		},
+		"observation drift": func(value *PipelineRun) {
+			value.UpdatedAt = value.UpdatedAt.Add(time.Second)
+		},
+	} {
+		t.Run("PipelineRun "+name, func(t *testing.T) {
+			value := run
+			mutate(&value)
+			if err := ValidatePipelineRun(value); err == nil {
+				t.Fatal("invalid PipelineRun was accepted")
+			}
+		})
+	}
+}
+
 func TestDevOpsExamplesPassExecutableValidation(t *testing.T) {
 	projectRequest := decodeDevOpsExample[CreateDevOpsProjectRequest](t, "examples/create-devops-project-request.json")
 	if err := ValidateCreateDevOpsProjectRequest(projectRequest); err != nil {
@@ -112,6 +178,14 @@ func TestDevOpsExamplesPassExecutableValidation(t *testing.T) {
 	activation := decodeDevOpsExample[PipelineActivation](t, "examples/pipeline-activation.json")
 	if err := ValidatePipelineActivation(activation); err != nil {
 		t.Fatalf("validate activation: %v", err)
+	}
+	event := decodeDevOpsExample[SourceEvent](t, "examples/source-event.json")
+	if err := ValidateSourceEvent(event); err != nil {
+		t.Fatalf("validate source event: %v", err)
+	}
+	run := decodeDevOpsExample[PipelineRun](t, "examples/pipeline-run.json")
+	if err := ValidatePipelineRun(run); err != nil {
+		t.Fatalf("validate Pipeline run: %v", err)
 	}
 	readiness := decodeDevOpsExample[Readiness](t, "examples/readiness.json")
 	if err := ValidateReadiness(readiness); err != nil {
@@ -303,6 +377,42 @@ func TestPipelineDigestsAndIdentitiesAreDeterministicAndScoped(t *testing.T) {
 	spec.Limits.ProcessLimit++
 	if PipelineRevisionSpecDigest(spec) == digest {
 		t.Fatal("revision digest did not bind execution limits")
+	}
+	event := validSourceEvent(t)
+	eventID, err := SourceEventID(event.Scope, event.Spec.SourceConnectionID, event.Spec.DeliveryID)
+	if err != nil || eventID != event.ID {
+		t.Fatalf("derive SourceEvent ID=%q err=%v", eventID, err)
+	}
+	changedDeliveryID, err := SourceEventID(
+		event.Scope,
+		event.Spec.SourceConnectionID,
+		"223e4567-e89b-42d3-a456-426614174000",
+	)
+	if err != nil || changedDeliveryID == eventID {
+		t.Fatalf("SourceEvent delivery identity=%q err=%v", changedDeliveryID, err)
+	}
+	changedContent := event.Spec
+	changedContent.CanonicalPayloadDigest = "sha256:" + strings.Repeat("b", 64)
+	changedContentID, err := SourceEventID(
+		event.Scope,
+		changedContent.SourceConnectionID,
+		changedContent.DeliveryID,
+	)
+	if err != nil || changedContentID != eventID {
+		t.Fatalf("changed replay escaped SourceEvent identity=%q err=%v", changedContentID, err)
+	}
+	if SourceEventSpecDigest(changedContent) == event.ContentDigest {
+		t.Fatal("changed replay retained the original SourceEvent content digest")
+	}
+	run := validPipelineRun(t)
+	changedRun, err := PipelineRunID(
+		run.Scope,
+		run.Input.SourceEventID,
+		"pipeline-revision-other",
+		run.InputDigest,
+	)
+	if err != nil || changedRun == run.ID {
+		t.Fatalf("PipelineRun revision identity=%q err=%v", changedRun, err)
 	}
 }
 

@@ -203,6 +203,76 @@ type PipelineActivation struct {
 	Revision   PipelineRevision `json:"revision"`
 }
 
+// ChangeIdentity is provider-neutral, authenticated source identity. Commit
+// values are Git object IDs; CanonicalPayloadDigest below is the security
+// digest of the untouched provider request.
+type ChangeIdentity struct {
+	Number            uint64       `json:"number"`
+	Action            ChangeAction `json:"action"`
+	HeadCommit        string       `json:"headCommit"`
+	TrustedBaseCommit string       `json:"trustedBaseCommit"`
+}
+
+// SourceEventSpec contains the immutable normalized fields admitted from one
+// authenticated source-provider delivery. Provider-native payloads and actor
+// claims are deliberately absent.
+type SourceEventSpec struct {
+	ProjectID               ResourceID     `json:"projectId"`
+	SourceConnectionID      ResourceID     `json:"sourceConnectionId"`
+	RepositoryBindingID     ResourceID     `json:"repositoryBindingId"`
+	RepositoryBindingDigest string         `json:"repositoryBindingDigest"`
+	ExternalRepositoryID    ResourceID     `json:"externalRepositoryId"`
+	DeliveryID              string         `json:"deliveryId"`
+	CanonicalPayloadDigest  string         `json:"canonicalPayloadDigest"`
+	Change                  ChangeIdentity `json:"change"`
+}
+
+type SourceEvent struct {
+	APIVersion    string          `json:"apiVersion"`
+	Kind          string          `json:"kind"`
+	ID            ResourceID      `json:"id"`
+	Scope         ResourceScope   `json:"scope"`
+	Spec          SourceEventSpec `json:"spec"`
+	ContentDigest string          `json:"contentDigest"`
+	ReceivedAt    time.Time       `json:"receivedAt"`
+}
+
+// PipelineRunInput seals the immutable event and PipelineRevision selected at
+// admission. The duplicated commits and binding digests avoid consulting
+// mutable configuration during later execution and support evidence reads.
+type PipelineRunInput struct {
+	SourceEventID           ResourceID     `json:"sourceEventId"`
+	SourceEventDigest       string         `json:"sourceEventDigest"`
+	PipelineRevisionID      ResourceID     `json:"pipelineRevisionId"`
+	PipelineRevisionDigest  string         `json:"pipelineRevisionDigest"`
+	RepositoryBindingID     ResourceID     `json:"repositoryBindingId"`
+	RepositoryBindingDigest string         `json:"repositoryBindingDigest"`
+	Change                  ChangeIdentity `json:"change"`
+}
+
+type PipelineRunStatus struct {
+	State           PipelineRunState  `json:"state"`
+	Stage           PipelineRunStage  `json:"stage"`
+	Reason          PipelineRunReason `json:"reason,omitempty"`
+	ResourceVersion uint64            `json:"resourceVersion"`
+	ObservedAt      time.Time         `json:"observedAt"`
+	CompletedAt     *time.Time        `json:"completedAt,omitempty"`
+}
+
+type PipelineRun struct {
+	APIVersion  string            `json:"apiVersion"`
+	Kind        string            `json:"kind"`
+	ID          ResourceID        `json:"id"`
+	Scope       ResourceScope     `json:"scope"`
+	ProjectID   ResourceID        `json:"projectId"`
+	PipelineID  ResourceID        `json:"pipelineId"`
+	Input       PipelineRunInput  `json:"input"`
+	InputDigest string            `json:"inputDigest"`
+	Status      PipelineRunStatus `json:"status"`
+	CreatedAt   time.Time         `json:"createdAt"`
+	UpdatedAt   time.Time         `json:"updatedAt"`
+}
+
 type Readiness struct {
 	APIVersion    string         `json:"apiVersion"`
 	Kind          string         `json:"kind"`

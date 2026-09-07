@@ -22,7 +22,11 @@ var (
 	repositorySegmentPattern = regexp.MustCompile(
 		`^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$`,
 	)
-	branchPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$`)
+	branchPattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$`)
+	deliveryIDPattern = regexp.MustCompile(
+		`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`,
+	)
+	gitObjectIDPattern = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
 )
 
 func ValidateID(name, value string) error {
@@ -345,6 +349,172 @@ func ValidatePipelineActivation(value PipelineActivation) error {
 	return errors.Join(problems...)
 }
 
+func ValidateChangeIdentity(value ChangeIdentity) error {
+	var problems []error
+	if value.Number == 0 || value.Number > MaximumContractInteger {
+		problems = append(problems, errors.New("change number is invalid"))
+	}
+	if !contains(ChangeActions(), value.Action) {
+		problems = append(problems, errors.New("change action is invalid"))
+	}
+	if !gitObjectIDPattern.MatchString(value.HeadCommit) {
+		problems = append(problems, errors.New("head commit is invalid"))
+	}
+	if !gitObjectIDPattern.MatchString(value.TrustedBaseCommit) {
+		problems = append(problems, errors.New("trusted base commit is invalid"))
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateSourceEventSpec(value SourceEventSpec) error {
+	return errors.Join(
+		ValidateID("spec.projectId", string(value.ProjectID)),
+		ValidateID("spec.sourceConnectionId", string(value.SourceConnectionID)),
+		ValidateID("spec.repositoryBindingId", string(value.RepositoryBindingID)),
+		ValidateDigest("spec.repositoryBindingDigest", value.RepositoryBindingDigest),
+		ValidateID("spec.externalRepositoryId", string(value.ExternalRepositoryID)),
+		validateDeliveryID(value.DeliveryID),
+		ValidateDigest("spec.canonicalPayloadDigest", value.CanonicalPayloadDigest),
+		ValidateChangeIdentity(value.Change),
+	)
+}
+
+func ValidateSourceEvent(value SourceEvent) error {
+	var problems []error
+	if value.APIVersion != APIVersion || value.Kind != "SourceEvent" {
+		problems = append(problems, errors.New("source event type metadata is invalid"))
+	}
+	problems = append(problems,
+		ValidateID("id", string(value.ID)),
+		ValidateResourceScope(value.Scope),
+		ValidateSourceEventSpec(value.Spec),
+		validateExactDigest("contentDigest", value.ContentDigest, SourceEventSpecDigest(value.Spec)),
+		validateContractTime("receivedAt", value.ReceivedAt),
+	)
+	expectedID, err := SourceEventID(value.Scope, value.Spec.SourceConnectionID, value.Spec.DeliveryID)
+	if err != nil || value.ID != expectedID {
+		problems = append(problems, errors.New("source event identity is invalid"))
+	}
+	return errors.Join(problems...)
+}
+
+func ValidatePipelineRunInput(value PipelineRunInput) error {
+	return errors.Join(
+		ValidateID("input.sourceEventId", string(value.SourceEventID)),
+		ValidateDigest("input.sourceEventDigest", value.SourceEventDigest),
+		ValidateID("input.pipelineRevisionId", string(value.PipelineRevisionID)),
+		ValidateDigest("input.pipelineRevisionDigest", value.PipelineRevisionDigest),
+		ValidateID("input.repositoryBindingId", string(value.RepositoryBindingID)),
+		ValidateDigest("input.repositoryBindingDigest", value.RepositoryBindingDigest),
+		ValidateChangeIdentity(value.Change),
+	)
+}
+
+func ValidatePipelineRunStatus(value PipelineRunStatus) error {
+	var problems []error
+	if !contains(PipelineRunStates(), value.State) {
+		problems = append(problems, errors.New("PipelineRun state is invalid"))
+	}
+	if !contains(PipelineRunStages(), value.Stage) {
+		problems = append(problems, errors.New("PipelineRun stage is invalid"))
+	}
+	if value.Reason != "" && !contains(PipelineRunReasons(), value.Reason) {
+		problems = append(problems, errors.New("PipelineRun reason is invalid"))
+	}
+	if value.ResourceVersion == 0 || value.ResourceVersion > MaximumContractInteger {
+		problems = append(problems, errors.New("PipelineRun status resourceVersion is invalid"))
+	}
+	problems = append(problems, validateContractTime("status.observedAt", value.ObservedAt))
+	if value.CompletedAt != nil {
+		problems = append(problems, validateContractTime("status.completedAt", *value.CompletedAt))
+		if value.CompletedAt.After(value.ObservedAt) {
+			problems = append(problems, errors.New("PipelineRun completion exceeds its observation time"))
+		}
+	}
+
+	switch value.State {
+	case PipelineRunQueued:
+		if value.Stage != PipelineRunStageReceive ||
+			value.Reason != PipelineRunReasonEventAdmitted ||
+			value.ResourceVersion != 1 || value.CompletedAt != nil {
+			problems = append(problems, errors.New("queued PipelineRun status is invalid"))
+		}
+	case PipelineRunFetching:
+		if value.Stage != PipelineRunStageFetch || value.Reason != "" || value.CompletedAt != nil {
+			problems = append(problems, errors.New("fetching PipelineRun status is invalid"))
+		}
+	case PipelineRunVerifying:
+		if value.Stage != PipelineRunStageVerify || value.Reason != "" || value.CompletedAt != nil {
+			problems = append(problems, errors.New("verifying PipelineRun status is invalid"))
+		}
+	case PipelineRunReporting:
+		if value.Stage != PipelineRunStageReport || value.Reason != "" || value.CompletedAt != nil {
+			problems = append(problems, errors.New("reporting PipelineRun status is invalid"))
+		}
+	case PipelineRunSucceeded:
+		if value.Stage != PipelineRunStageReport || value.Reason != PipelineRunReasonCompleted ||
+			value.CompletedAt == nil {
+			problems = append(problems, errors.New("succeeded PipelineRun status is invalid"))
+		}
+	case PipelineRunFailed:
+		if !pipelineRunFailureReason(value.Reason) || value.CompletedAt == nil {
+			problems = append(problems, errors.New("failed PipelineRun status is invalid"))
+		}
+	case PipelineRunCancelled:
+		if value.Reason != PipelineRunReasonCancelled || value.CompletedAt == nil {
+			problems = append(problems, errors.New("cancelled PipelineRun status is invalid"))
+		}
+	case PipelineRunReconciling:
+		if value.Stage != PipelineRunStageReport ||
+			value.Reason != PipelineRunReasonExternalEffectUncertain || value.CompletedAt != nil {
+			problems = append(problems, errors.New("reconciling PipelineRun status is invalid"))
+		}
+	case PipelineRunManualIntervention:
+		if value.Stage != PipelineRunStageReport ||
+			value.Reason != PipelineRunReasonReconciliationExhausted || value.CompletedAt == nil {
+			problems = append(problems, errors.New("manual-intervention PipelineRun status is invalid"))
+		}
+	}
+	return errors.Join(problems...)
+}
+
+func ValidatePipelineRun(value PipelineRun) error {
+	var problems []error
+	if value.APIVersion != APIVersion || value.Kind != "PipelineRun" {
+		problems = append(problems, errors.New("PipelineRun type metadata is invalid"))
+	}
+	problems = append(problems,
+		ValidateID("id", string(value.ID)),
+		ValidateResourceScope(value.Scope),
+		ValidateID("projectId", string(value.ProjectID)),
+		ValidateID("pipelineId", string(value.PipelineID)),
+		ValidatePipelineRunInput(value.Input),
+		validateExactDigest("inputDigest", value.InputDigest, PipelineRunInputDigest(value.Input)),
+		ValidatePipelineRunStatus(value.Status),
+		validateContractTime("createdAt", value.CreatedAt),
+		validateContractTime("updatedAt", value.UpdatedAt),
+	)
+	expectedID, err := PipelineRunID(
+		value.Scope,
+		value.Input.SourceEventID,
+		value.Input.PipelineRevisionID,
+		value.InputDigest,
+	)
+	if err != nil || value.ID != expectedID {
+		problems = append(problems, errors.New("PipelineRun identity is invalid"))
+	}
+	if value.UpdatedAt.Before(value.CreatedAt) || !value.UpdatedAt.Equal(value.Status.ObservedAt) {
+		problems = append(problems, errors.New("PipelineRun observation time is invalid"))
+	}
+	if value.Status.State == PipelineRunQueued && !value.CreatedAt.Equal(value.UpdatedAt) {
+		problems = append(problems, errors.New("queued PipelineRun timestamps are invalid"))
+	}
+	if value.Status.CompletedAt != nil && !value.Status.CompletedAt.Equal(value.UpdatedAt) {
+		problems = append(problems, errors.New("terminal PipelineRun timestamp is invalid"))
+	}
+	return errors.Join(problems...)
+}
+
 func ValidateReadiness(value Readiness) error {
 	var problems []error
 	if value.APIVersion != APIVersion || value.Kind != "Readiness" {
@@ -358,6 +528,28 @@ func ValidateReadiness(value Readiness) error {
 	}
 	problems = append(problems, validateContractTime("readiness.checkedAt", value.CheckedAt))
 	return errors.Join(problems...)
+}
+
+func validateDeliveryID(value string) error {
+	if !deliveryIDPattern.MatchString(value) || value == "00000000-0000-0000-0000-000000000000" {
+		return errors.New("deliveryId must be a canonical non-zero UUID")
+	}
+	return nil
+}
+
+func pipelineRunFailureReason(value PipelineRunReason) bool {
+	switch value {
+	case PipelineRunReasonSourceUnavailable,
+		PipelineRunReasonCommitMismatch,
+		PipelineRunReasonExecutorUnavailable,
+		PipelineRunReasonVerificationFailed,
+		PipelineRunReasonDeadlineExceeded,
+		PipelineRunReasonReportUnavailable,
+		PipelineRunReasonReportConflict:
+		return true
+	default:
+		return false
+	}
 }
 
 func ValidateProblem(value Problem) error {

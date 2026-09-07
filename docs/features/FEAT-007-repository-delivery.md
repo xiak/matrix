@@ -155,6 +155,35 @@ execution. It never claims an unconfirmed external effect did not happen.
 terminal. Failure uses a closed safe class; native error text never crosses
 the adapter boundary.
 
+### Normalized admission contract
+
+The provider adapter emits a `NormalizedChange` only after authenticating the
+untouched request. `delivery` accepts exactly `OPENED`, `REOPENED`, or
+`UPDATED`; the Gitea adapter maps `synchronized` to `UPDATED`. Delivery IDs are
+canonical non-zero lowercase UUIDs. Git object identities are lowercase 40- or
+64-hex strings; they are content identifiers rather than security digests.
+Change numbers are positive JSON-safe integers. Provider users, URLs, labels,
+branches other than the binding's trusted default branch, and raw payload
+fields do not cross this boundary.
+
+A `SourceEvent` ID is deterministically derived from tenant, SourceConnection,
+and delivery ID, so changed content cannot escape replay detection by choosing
+a new resource ID. Its content digest separately seals the project,
+RepositoryBinding and binding digest, external repository identity, normalized
+action/change number, exact head and base commits, and canonical raw-payload
+digest. Equal `(SourceConnection, delivery ID, content digest)` replay returns
+the original admission; the same identity with a changed digest conflicts.
+
+Each matching active Pipeline revision produces one deterministic
+`PipelineRun`, keyed by tenant, SourceEvent, immutable PipelineRevision, and
+its sealed input digest. The run input repeats the exact event, binding, commit,
+and revision digests needed for authorization, scheduling, and support without
+re-resolving mutable configuration. A newly admitted run is resource version
+1 in `QUEUED / RECEIVE / EVENT_ADMITTED`; no executor effect exists yet. Later
+states follow the fixed state machine above and carry only closed safe reasons.
+Multiple active Pipelines may share one SourceEvent, but admission is atomic
+and must fit the tenant's fixed queue limit; partial fan-out is forbidden.
+
 ## Security, quota, and retention
 
 - IAM receives closed actions for DevOps project, connection, repository,
@@ -450,9 +479,20 @@ reads, cross-parent concealment, IAM-derived tenant and actor identity, DevOps
 Viewer read-only access, IAM-outage readiness, five correlated DevOps Audit
 facts, cross-schema role confinement, and unchanged PaaS behavior.
 
-These slices do not complete Gate A. SourceEvent, PipelineRun, logs,
-replay/cancellation/lease/fence/reconciliation, quota, and pagination remain
-pending.
+The normalized-admission contract now defines executable and generated
+OpenAPI schemas plus validating examples for immutable `SourceEvent` and
+`PipelineRun` projections. Framed digests and deterministic identities make a
+changed delivery retain the original event identity while changing its sealed
+content, and bind each run to one event and the exact active immutable
+PipelineRevision. Pure domain constructors admit only ready same-tenant source
+configuration and exact normalized commits, preserve the active revision when
+an unrelated draft is later replaced, and derive the server-owned
+`QUEUED / RECEIVE / EVENT_ADMITTED` state without invoking an executor.
+
+These slices do not complete Gate A. The durable atomic SourceEvent/PipelineRun
+admission transaction, authenticated provider adapter, queue-limit enforcement,
+logs, replay/cancellation/lease/fence/reconciliation, quota, and pagination
+remain pending.
 
 Current verification evidence:
 
@@ -460,8 +500,8 @@ Current verification evidence:
 - `go vet ./...`
 - `go test -race ./api/devops/v1/... ./app/service/devops/internal/delivery/domain`
 - `go test -count=20 ./api/devops/v1/... ./app/service/devops/internal/delivery/domain`
-- five-second native fuzz runs for draft digest framing and activation with
-  untrusted repository-binding identifiers
+- five-second native fuzz runs for draft/event digest framing and activation
+  with untrusted repository-binding identifiers
 - Linux/amd64 CGO-disabled cross-build of the new contract and domain packages
 - deterministic OpenAPI generation-drift tests and `git diff --check`
 - real PostgreSQL 18 double-apply and catalog integration tests for the IAM and

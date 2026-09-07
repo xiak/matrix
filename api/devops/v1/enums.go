@@ -11,6 +11,10 @@ type SourceConnectionHealth string
 type RepositoryBindingHealth string
 type ReadinessState string
 type ErrorCode string
+type ChangeAction string
+type PipelineRunState string
+type PipelineRunStage string
+type PipelineRunReason string
 
 const (
 	TriggerChange TriggerPolicy = "CHANGE"
@@ -57,6 +61,46 @@ const (
 const (
 	ReadinessReady    ReadinessState = "READY"
 	ReadinessNotReady ReadinessState = "NOT_READY"
+)
+
+const (
+	ChangeOpened   ChangeAction = "OPENED"
+	ChangeReopened ChangeAction = "REOPENED"
+	ChangeUpdated  ChangeAction = "UPDATED"
+)
+
+const (
+	PipelineRunQueued             PipelineRunState = "QUEUED"
+	PipelineRunFetching           PipelineRunState = "FETCHING"
+	PipelineRunVerifying          PipelineRunState = "VERIFYING"
+	PipelineRunReporting          PipelineRunState = "REPORTING"
+	PipelineRunSucceeded          PipelineRunState = "SUCCEEDED"
+	PipelineRunFailed             PipelineRunState = "FAILED"
+	PipelineRunCancelled          PipelineRunState = "CANCELLED"
+	PipelineRunReconciling        PipelineRunState = "RECONCILING"
+	PipelineRunManualIntervention PipelineRunState = "MANUAL_INTERVENTION"
+)
+
+const (
+	PipelineRunStageReceive PipelineRunStage = "RECEIVE"
+	PipelineRunStageFetch   PipelineRunStage = "FETCH"
+	PipelineRunStageVerify  PipelineRunStage = "VERIFY"
+	PipelineRunStageReport  PipelineRunStage = "REPORT"
+)
+
+const (
+	PipelineRunReasonEventAdmitted           PipelineRunReason = "EVENT_ADMITTED"
+	PipelineRunReasonCompleted               PipelineRunReason = "COMPLETED"
+	PipelineRunReasonSourceUnavailable       PipelineRunReason = "SOURCE_UNAVAILABLE"
+	PipelineRunReasonCommitMismatch          PipelineRunReason = "COMMIT_MISMATCH"
+	PipelineRunReasonExecutorUnavailable     PipelineRunReason = "EXECUTOR_UNAVAILABLE"
+	PipelineRunReasonVerificationFailed      PipelineRunReason = "VERIFICATION_FAILED"
+	PipelineRunReasonDeadlineExceeded        PipelineRunReason = "DEADLINE_EXCEEDED"
+	PipelineRunReasonReportUnavailable       PipelineRunReason = "REPORT_UNAVAILABLE"
+	PipelineRunReasonReportConflict          PipelineRunReason = "REPORT_CONFLICT"
+	PipelineRunReasonCancelled               PipelineRunReason = "CANCELLED"
+	PipelineRunReasonExternalEffectUncertain PipelineRunReason = "EXTERNAL_EFFECT_UNCERTAIN"
+	PipelineRunReasonReconciliationExhausted PipelineRunReason = "RECONCILIATION_EXHAUSTED"
 )
 
 const (
@@ -120,6 +164,50 @@ func RepositoryBindingHealthStates() []RepositoryBindingHealth {
 
 func ReadinessStates() []ReadinessState {
 	return []ReadinessState{ReadinessReady, ReadinessNotReady}
+}
+
+func ChangeActions() []ChangeAction {
+	return []ChangeAction{ChangeOpened, ChangeReopened, ChangeUpdated}
+}
+
+func PipelineRunStates() []PipelineRunState {
+	return []PipelineRunState{
+		PipelineRunQueued,
+		PipelineRunFetching,
+		PipelineRunVerifying,
+		PipelineRunReporting,
+		PipelineRunSucceeded,
+		PipelineRunFailed,
+		PipelineRunCancelled,
+		PipelineRunReconciling,
+		PipelineRunManualIntervention,
+	}
+}
+
+func PipelineRunStages() []PipelineRunStage {
+	return []PipelineRunStage{
+		PipelineRunStageReceive,
+		PipelineRunStageFetch,
+		PipelineRunStageVerify,
+		PipelineRunStageReport,
+	}
+}
+
+func PipelineRunReasons() []PipelineRunReason {
+	return []PipelineRunReason{
+		PipelineRunReasonEventAdmitted,
+		PipelineRunReasonCompleted,
+		PipelineRunReasonSourceUnavailable,
+		PipelineRunReasonCommitMismatch,
+		PipelineRunReasonExecutorUnavailable,
+		PipelineRunReasonVerificationFailed,
+		PipelineRunReasonDeadlineExceeded,
+		PipelineRunReasonReportUnavailable,
+		PipelineRunReasonReportConflict,
+		PipelineRunReasonCancelled,
+		PipelineRunReasonExternalEffectUncertain,
+		PipelineRunReasonReconciliationExhausted,
+	}
 }
 
 func ErrorCodes() []ErrorCode {

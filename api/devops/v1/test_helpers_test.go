@@ -92,6 +92,79 @@ func validPipelineActivation(t *testing.T) PipelineActivation {
 	}
 }
 
+func validSourceEvent(t *testing.T) SourceEvent {
+	t.Helper()
+	activation := validPipelineActivation(t)
+	spec := SourceEventSpec{
+		ProjectID:               activation.Pipeline.ProjectID,
+		SourceConnectionID:      validRepositoryBindingSpec().SourceConnectionID,
+		RepositoryBindingID:     activation.Revision.Spec.RepositoryBindingID,
+		RepositoryBindingDigest: activation.Revision.Spec.RepositoryBindingDigest,
+		ExternalRepositoryID:    validRepositoryBindingSpec().ExternalRepositoryID,
+		DeliveryID:              "123e4567-e89b-42d3-a456-426614174000",
+		CanonicalPayloadDigest:  "sha256:" + string(bytes.Repeat([]byte{'a'}, 64)),
+		Change: ChangeIdentity{
+			Number: 42, Action: ChangeOpened,
+			HeadCommit:        string(bytes.Repeat([]byte{'1'}, 40)),
+			TrustedBaseCommit: string(bytes.Repeat([]byte{'2'}, 40)),
+		},
+	}
+	id, err := SourceEventID(
+		activation.Revision.Scope,
+		spec.SourceConnectionID,
+		spec.DeliveryID,
+	)
+	if err != nil {
+		t.Fatalf("derive SourceEvent ID: %v", err)
+	}
+	return SourceEvent{
+		APIVersion:    APIVersion,
+		Kind:          "SourceEvent",
+		ID:            id,
+		Scope:         activation.Revision.Scope,
+		Spec:          spec,
+		ContentDigest: SourceEventSpecDigest(spec),
+		ReceivedAt:    activation.Revision.ActivatedAt.Add(time.Minute),
+	}
+}
+
+func validPipelineRun(t *testing.T) PipelineRun {
+	t.Helper()
+	event := validSourceEvent(t)
+	activation := validPipelineActivation(t)
+	input := PipelineRunInput{
+		SourceEventID:           event.ID,
+		SourceEventDigest:       event.ContentDigest,
+		PipelineRevisionID:      activation.Revision.ID,
+		PipelineRevisionDigest:  activation.Revision.ContentDigest,
+		RepositoryBindingID:     event.Spec.RepositoryBindingID,
+		RepositoryBindingDigest: event.Spec.RepositoryBindingDigest,
+		Change:                  event.Spec.Change,
+	}
+	digest := PipelineRunInputDigest(input)
+	id, err := PipelineRunID(event.Scope, event.ID, activation.Revision.ID, digest)
+	if err != nil {
+		t.Fatalf("derive PipelineRun ID: %v", err)
+	}
+	return PipelineRun{
+		APIVersion:  APIVersion,
+		Kind:        "PipelineRun",
+		ID:          id,
+		Scope:       event.Scope,
+		ProjectID:   event.Spec.ProjectID,
+		PipelineID:  activation.Pipeline.Metadata.ID,
+		Input:       input,
+		InputDigest: digest,
+		Status: PipelineRunStatus{
+			State: PipelineRunQueued, Stage: PipelineRunStageReceive,
+			Reason: PipelineRunReasonEventAdmitted, ResourceVersion: 1,
+			ObservedAt: event.ReceivedAt,
+		},
+		CreatedAt: event.ReceivedAt,
+		UpdatedAt: event.ReceivedAt,
+	}
+}
+
 func loadDevOpsOpenAPI(t *testing.T) map[string]any {
 	t.Helper()
 	source, err := os.ReadFile("openapi.json")

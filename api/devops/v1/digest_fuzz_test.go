@@ -39,3 +39,22 @@ func FuzzRepositoryBindingDigestIsFramed(f *testing.F) {
 		}
 	})
 }
+
+func FuzzSourceEventDigestIsFramed(f *testing.F) {
+	f.Add("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	f.Add("a", "ab")
+	f.Fuzz(func(t *testing.T, first, second string) {
+		left := validSourceEvent(t).Spec
+		right := left
+		left.CanonicalPayloadDigest = first
+		right.CanonicalPayloadDigest = second
+		leftDigest := SourceEventSpecDigest(left)
+		rightDigest := SourceEventSpecDigest(right)
+		if first == second && leftDigest != rightDigest {
+			t.Fatal("equal event inputs produced different digests")
+		}
+		if first != second && leftDigest == rightDigest {
+			t.Fatal("distinct framed payload digests produced the same event digest")
+		}
+	})
+}

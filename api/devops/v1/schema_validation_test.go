@@ -35,6 +35,8 @@ func TestDevOpsExamplesValidateAgainstOpenAPI(t *testing.T) {
 		"examples/pipeline.json":                          "Pipeline",
 		"examples/pipeline-revision.json":                 "PipelineRevision",
 		"examples/pipeline-activation.json":               "PipelineActivation",
+		"examples/source-event.json":                      "SourceEvent",
+		"examples/pipeline-run.json":                      "PipelineRun",
 		"examples/readiness.json":                         "Readiness",
 		"examples/problem.json":                           "Problem",
 	}
@@ -104,6 +106,28 @@ func TestDevOpsSchemasRejectAuthorityAndTrustedProfileDrift(t *testing.T) {
 	revision["spec"].(map[string]any)["limits"].(map[string]any)["processLimit"] = float64(257)
 	if err := revisionSchema.Validate(revision); err == nil {
 		t.Fatal("changed execution limit passed schema validation")
+	}
+
+	eventSchema := compileDevOpsOpenAPISchema(t, document, "SourceEvent")
+	event := loadDevOpsSchemaExample(t, "examples/source-event.json")
+	event["spec"].(map[string]any)["change"].(map[string]any)["headCommit"] = strings.Repeat("A", 40)
+	if err := eventSchema.Validate(event); err == nil {
+		t.Fatal("uppercase Git object ID passed schema validation")
+	}
+
+	runSchema := compileDevOpsOpenAPISchema(t, document, "PipelineRun")
+	run := loadDevOpsSchemaExample(t, "examples/pipeline-run.json")
+	run["inputDigest"] = "sha256:" + strings.Repeat("e", 64)
+	if err := runSchema.Validate(run); err != nil {
+		// JSON Schema can constrain digest shape, while executable validation
+		// binds the digest to the complete immutable input.
+		t.Fatalf("well-formed changed run input digest rejected by schema: %v", err)
+	}
+
+	run = loadDevOpsSchemaExample(t, "examples/pipeline-run.json")
+	run["status"].(map[string]any)["resourceVersion"] = float64(2)
+	if err := runSchema.Validate(run); err == nil {
+		t.Fatal("queued run with changed resource version passed schema validation")
 	}
 }
 

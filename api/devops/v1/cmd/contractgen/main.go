@@ -92,6 +92,10 @@ func buildDocument() object {
 			"SourceConnectionHealth":  openapi31.StringValues(devopsv1.SourceConnectionHealthStates()),
 			"RepositoryBindingHealth": openapi31.StringValues(devopsv1.RepositoryBindingHealthStates()),
 			"ReadinessState":          openapi31.StringValues(devopsv1.ReadinessStates()),
+			"ChangeAction":            openapi31.StringValues(devopsv1.ChangeActions()),
+			"PipelineRunState":        openapi31.StringValues(devopsv1.PipelineRunStates()),
+			"PipelineRunStage":        openapi31.StringValues(devopsv1.PipelineRunStages()),
+			"PipelineRunReason":       openapi31.StringValues(devopsv1.PipelineRunReasons()),
 			"ErrorCode":               openapi31.StringValues(devopsv1.ErrorCodes()),
 		},
 		Structs: map[string]reflect.Type{
@@ -121,6 +125,12 @@ func buildDocument() object {
 			"SubjectRef":                     openapi31.StructType[devopsv1.SubjectRef](),
 			"PipelineRevision":               openapi31.StructType[devopsv1.PipelineRevision](),
 			"PipelineActivation":             openapi31.StructType[devopsv1.PipelineActivation](),
+			"ChangeIdentity":                 openapi31.StructType[devopsv1.ChangeIdentity](),
+			"SourceEventSpec":                openapi31.StructType[devopsv1.SourceEventSpec](),
+			"SourceEvent":                    openapi31.StructType[devopsv1.SourceEvent](),
+			"PipelineRunInput":               openapi31.StructType[devopsv1.PipelineRunInput](),
+			"PipelineRunStatus":              openapi31.StructType[devopsv1.PipelineRunStatus](),
+			"PipelineRun":                    openapi31.StructType[devopsv1.PipelineRun](),
 			"Readiness":                      openapi31.StructType[devopsv1.Readiness](),
 			"FieldViolation":                 openapi31.StructType[devopsv1.FieldViolation](),
 			"Problem":                        openapi31.StructType[devopsv1.Problem](),
@@ -336,14 +346,25 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 			"type": "string", "minLength": 1, "maxLength": 63,
 			"pattern": `^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`,
 		}
-	case "resourceVersion", "revision", "schemaVersion":
+	case "resourceVersion", "revision", "schemaVersion", "number":
 		base["minimum"] = 1
 		base["maximum"] = devopsv1.MaximumContractInteger
 	case "ordinal":
 		base["minimum"] = 1
 		base["maximum"] = 2
-	case "contentDigest", "repositoryBindingDigest", "toolchainImageDigest":
+	case "contentDigest", "repositoryBindingDigest", "toolchainImageDigest",
+		"canonicalPayloadDigest", "sourceEventDigest", "pipelineRevisionDigest", "inputDigest":
 		base = object{"type": "string", "pattern": `^sha256:[0-9a-f]{64}$`}
+	case "deliveryId":
+		base = object{
+			"type": "string", "format": "uuid",
+			"pattern": `^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`,
+			"not":     object{"const": "00000000-0000-0000-0000-000000000000"},
+		}
+	case "headCommit", "trustedBaseCommit":
+		base = object{
+			"type": "string", "pattern": `^(?:[0-9a-f]{40}|[0-9a-f]{64})$`,
+		}
 	case "allowedEndpointOrigins":
 		base = object{
 			"type": "array", "minItems": 1, "maxItems": 8,
@@ -413,6 +434,8 @@ func applySemanticOverlays(schemas object) {
 		"Pipeline":           "Pipeline",
 		"PipelineRevision":   "PipelineRevision",
 		"PipelineActivation": "PipelineActivation",
+		"SourceEvent":        "SourceEvent",
+		"PipelineRun":        "PipelineRun",
 	} {
 		properties := schemas[owner].(object)["properties"].(object)
 		properties["apiVersion"] = object{"const": devopsv1.APIVersion}
@@ -453,6 +476,66 @@ func applySemanticOverlays(schemas object) {
 		},
 	}
 
+	status := schemas["PipelineRunStatus"].(object)
+	status["allOf"] = []any{
+		pipelineRunStatusRule(
+			devopsv1.PipelineRunQueued,
+			[]devopsv1.PipelineRunStage{devopsv1.PipelineRunStageReceive},
+			[]devopsv1.PipelineRunReason{devopsv1.PipelineRunReasonEventAdmitted},
+			false,
+		),
+		pipelineRunStatusRule(
+			devopsv1.PipelineRunFetching,
+			[]devopsv1.PipelineRunStage{devopsv1.PipelineRunStageFetch}, nil, false,
+		),
+		pipelineRunStatusRule(
+			devopsv1.PipelineRunVerifying,
+			[]devopsv1.PipelineRunStage{devopsv1.PipelineRunStageVerify}, nil, false,
+		),
+		pipelineRunStatusRule(
+			devopsv1.PipelineRunReporting,
+			[]devopsv1.PipelineRunStage{devopsv1.PipelineRunStageReport}, nil, false,
+		),
+		pipelineRunStatusRule(
+			devopsv1.PipelineRunSucceeded,
+			[]devopsv1.PipelineRunStage{devopsv1.PipelineRunStageReport},
+			[]devopsv1.PipelineRunReason{devopsv1.PipelineRunReasonCompleted},
+			true,
+		),
+		pipelineRunStatusRule(
+			devopsv1.PipelineRunFailed,
+			devopsv1.PipelineRunStages(),
+			[]devopsv1.PipelineRunReason{
+				devopsv1.PipelineRunReasonSourceUnavailable,
+				devopsv1.PipelineRunReasonCommitMismatch,
+				devopsv1.PipelineRunReasonExecutorUnavailable,
+				devopsv1.PipelineRunReasonVerificationFailed,
+				devopsv1.PipelineRunReasonDeadlineExceeded,
+				devopsv1.PipelineRunReasonReportUnavailable,
+				devopsv1.PipelineRunReasonReportConflict,
+			},
+			true,
+		),
+		pipelineRunStatusRule(
+			devopsv1.PipelineRunCancelled,
+			devopsv1.PipelineRunStages(),
+			[]devopsv1.PipelineRunReason{devopsv1.PipelineRunReasonCancelled},
+			true,
+		),
+		pipelineRunStatusRule(
+			devopsv1.PipelineRunReconciling,
+			[]devopsv1.PipelineRunStage{devopsv1.PipelineRunStageReport},
+			[]devopsv1.PipelineRunReason{devopsv1.PipelineRunReasonExternalEffectUncertain},
+			false,
+		),
+		pipelineRunStatusRule(
+			devopsv1.PipelineRunManualIntervention,
+			[]devopsv1.PipelineRunStage{devopsv1.PipelineRunStageReport},
+			[]devopsv1.PipelineRunReason{devopsv1.PipelineRunReasonReconciliationExhausted},
+			true,
+		),
+	}
+
 	problem := schemas["Problem"].(object)
 	problem["allOf"] = []any{
 		problemStatusRule(devopsv1.ErrorInvalidArgument, []int{400, 422}),
@@ -467,6 +550,51 @@ func applySemanticOverlays(schemas object) {
 		problemStatusRule(devopsv1.ErrorPreconditionFailed, []int{412}),
 		problemStatusRule(devopsv1.ErrorInternal, []int{500}),
 		problemStatusRule(devopsv1.ErrorUnavailable, []int{503}),
+	}
+}
+
+func pipelineRunStatusRule(
+	state devopsv1.PipelineRunState,
+	stages []devopsv1.PipelineRunStage,
+	reasons []devopsv1.PipelineRunReason,
+	completed bool,
+) object {
+	stageValues := make([]any, len(stages))
+	for index, stage := range stages {
+		stageValues[index] = string(stage)
+	}
+	then := object{
+		"properties": object{"stage": object{"enum": stageValues}},
+	}
+	if state == devopsv1.PipelineRunQueued {
+		then["properties"].(object)["resourceVersion"] = object{"const": 1}
+	}
+	if len(reasons) == 0 {
+		then["not"] = object{
+			"anyOf": []any{
+				object{"required": []string{"reason"}},
+				object{"required": []string{"completedAt"}},
+			},
+		}
+	} else {
+		reasonValues := make([]any, len(reasons))
+		for index, reason := range reasons {
+			reasonValues[index] = string(reason)
+		}
+		then["properties"].(object)["reason"] = object{"enum": reasonValues}
+		then["required"] = []string{"reason"}
+		if completed {
+			then["required"] = []string{"reason", "completedAt"}
+		} else {
+			then["not"] = object{"required": []string{"completedAt"}}
+		}
+	}
+	return object{
+		"if": object{
+			"properties": object{"state": object{"const": string(state)}},
+			"required":   []string{"state"},
+		},
+		"then": then,
 	}
 }
 
