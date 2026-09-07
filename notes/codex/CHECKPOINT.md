@@ -6,7 +6,7 @@
 - Updated: 2026-09-08
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `bbb0137`
+- Current pushed implementation baseline: `9ca97c8`
 
 ## Goal
 
@@ -20,26 +20,29 @@ and acceptance sequence.
 - FEAT-007 owns the current DevOps implementation work and remains
   `In progress`. Its fixed source-provider, executor, egress, limit, retention,
   IAM, and Audit baseline is complete.
-- Gate A now has strict provider-neutral contracts and pure `delivery` rules
-  for projects, SourceConnections, RepositoryBindings, Pipeline drafts, and
-  immutable activation. The pushed `bbb0137` slice adds action-bound IAM
-  authorization values, durable equal/conflicting command replay, exact result
-  snapshots, Audit outbox facts, and a delivery-owned PostgreSQL 18 schema with
-  owner/migrator/API/worker roles, forced tenant RLS, composite ownership links,
-  immutable binding snapshots, and immutable PipelineRevisions.
-- Full tests, vet, race, repeated tests, Linux/amd64 cross-build, and real
-  PostgreSQL 18 tests passed. The database migration applied twice both alone
-  and with IAM, Audit, and PaaS; real API/worker credentials proved cross-schema
-  confinement, function-only API writes, a table-blind worker, tenant
-  isolation, exact replay snapshots, and Audit correlation.
-- Gate A is not complete. HTTP, IAM/Audit adapters and outbox dispatch,
-  DevOps credential enrollment, SourceEvent, PipelineRun, logs,
-  replay/cancellation, leases/fences, reconciliation, quotas, and pagination
-  remain pending. Read FEAT-007 and its owning code/tests before continuing.
-- FEAT-008 also remains `In progress`. Its product foundation and productless
-  lifecycle paths are verified, but its real second-product transition and
-  authenticated-browser/accessibility gates remain open; the real DevOps
-  product should close the second-product gate instead of a long-lived fake.
+- Gate A now has strict provider-neutral configuration contracts and pure
+  `delivery` rules for projects, SourceConnections, RepositoryBindings,
+  Pipeline drafts, and immutable activation. The pushed `9ca97c8` slice adds
+  strict public HTTP reads/readiness, action-bound IAM and Audit HTTP adapters,
+  durable Audit outbox dispatch with leases/fences/dead letters, and separate
+  DevOps API and Audit-dispatcher processes.
+- A signed release manifest is now the sole optional-product authority.
+  Selecting DevOps derives its service identity and credentials, enrolls it
+  through the IAM migration boundary, includes the DevOps release image and
+  binaries, composes the two DevOps processes and APISIX route, and exposes
+  authenticated product discovery. PaaS-only releases contain none of those
+  DevOps resources.
+- Full repository tests and vet passed after the slice. Race and repeated
+  package tests passed for the affected authorities; PostgreSQL 18 integration
+  proved idempotent Platform/DevOps enrollment, strict role confinement,
+  outbox claiming/completion, and readiness behavior.
+- Gate A is not complete. A real cross-process HTTP journey plus SourceEvent,
+  PipelineRun, logs, replay/cancellation, execution leases/fences,
+  reconciliation, quotas, and pagination remain pending. Read FEAT-007 and its
+  owning code/tests before continuing.
+- FEAT-008 remains `In progress`. Its real DevOps second-product transition is
+  now represented in release, installation, topology, readiness, and discovery;
+  authenticated-browser and accessibility acceptance still remain open.
 
 ## Adoption boundary
 
@@ -53,11 +56,9 @@ and acceptance sequence.
 
 ## Continuation
 
-Resume from FEAT-007 and Git state. Complete the current project/Pipeline
-activation vertical through IAM/Audit HTTP adapters, Audit outbox dispatch,
-the DevOps HTTP service, and real process-boundary tests before expanding the
-contract to change events and runs. Use the real DevOps product later to close
-FEAT-008's second-product transition. Preserve pragmatic DDD, the
-modular-monolith boundary, replacement-first pre-v1 changes, fixed-donor
-classification, and the exact repository-local Git identity
-`Xiak <Jellal@aliyun.com>`.
+Resume from FEAT-007 and Git state. Close the current project/Pipeline
+configuration vertical with a real network/process journey through DevOps,
+IAM, Audit, and PostgreSQL before expanding the contract to change events and
+runs. Preserve pragmatic DDD, the modular-monolith boundary,
+replacement-first pre-v1 changes, fixed-donor classification, and the exact
+repository-local Git identity `Xiak <Jellal@aliyun.com>`.
