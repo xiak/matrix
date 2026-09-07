@@ -21,6 +21,7 @@ const identifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const namePattern = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const digestPattern = /^sha256:[0-9a-f]{64}$/;
 const rawURLBase64Pattern = /^[A-Za-z0-9_-]+$/;
+const nodeEnrollmentIngressPort = "8443";
 const states = new Set<NodeEnrollmentState>([
   "WAITING_INSTALL", "VERIFYING", "READY", "FAILED", "EXPIRED", "REVOKED"
 ]);
@@ -249,10 +250,16 @@ function publicOrigin(value: string): string {
   } catch {
     throw invalid("node enrollment public origin");
   }
-  if (parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "" ||
+  if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
+      parsed.username !== "" || parsed.password !== "" ||
       parsed.pathname !== "/" || parsed.search !== "" || parsed.hash !== "" || parsed.origin !== value) {
     throw invalid("node enrollment public origin");
   }
+  // The console is served by the signed HTTP edge, while node bootstrap owns
+  // a separate TLS-only listener. Keep the browser from selecting an endpoint:
+  // retain only the current authority host and use the product-owned port.
+  parsed.protocol = "https:";
+  parsed.port = nodeEnrollmentIngressPort;
   return parsed.origin;
 }
 

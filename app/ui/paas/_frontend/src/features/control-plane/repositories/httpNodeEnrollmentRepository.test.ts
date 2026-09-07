@@ -4,7 +4,8 @@ import { httpNodeEnrollmentRepository } from "./httpNodeEnrollmentRepository";
 
 const firstEnrollmentID = `node-enrollment-${"1".repeat(32)}`;
 const secondEnrollmentID = `node-enrollment-${"2".repeat(32)}`;
-const publicOrigin = "https://matrix.example";
+const consoleOrigin = "http://192.168.50.1:8080";
+const publicOrigin = "https://192.168.50.1:8443";
 
 function rawURL(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString("base64url");
@@ -143,11 +144,11 @@ describe("httpNodeEnrollmentRepository", () => {
     }
   });
 
-  it("creates with the exact public origin, idempotency boundary and wrapping public key", async () => {
+  it("maps the signed HTTP console authority to the fixed TLS enrollment edge", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(creation(), 201, { ETag: '"1"' }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await httpNodeEnrollmentRepository.create("platform-session", publicOrigin, {
+    const result = await httpNodeEnrollmentRepository.create("platform-session", consoleOrigin, {
       name: "edge-linux-a",
       labels: { location: "edge-a" },
       executionPoolId: "linux-pool",
@@ -205,7 +206,7 @@ describe("httpNodeEnrollmentRepository", () => {
 
     const replacement = await httpNodeEnrollmentRepository.regenerate(
       "platform-session",
-      publicOrigin,
+      consoleOrigin,
       { enrollmentId: firstEnrollmentID, resourceVersion: 1 },
       "fresh-browser-public-key"
     );
@@ -232,7 +233,7 @@ describe("httpNodeEnrollmentRepository", () => {
     await expect(httpNodeEnrollmentRepository.revoke("session", {
       enrollmentId: firstEnrollmentID, resourceVersion: 1
     })).rejects.toThrow("STALE_NODE_ENROLLMENT_COMMAND");
-    await expect(httpNodeEnrollmentRepository.create("session", "http://matrix.example", {
+    await expect(httpNodeEnrollmentRepository.create("session", "ftp://matrix.example", {
       name: "edge-linux-a", labels: {}, executionPoolId: "linux-pool", wrappingPublicKey: "key"
     })).rejects.toThrow("INVALID_NODE_ENROLLMENT_PUBLIC_ORIGIN_RESPONSE");
     await expect(httpNodeEnrollmentRepository.create("session", publicOrigin, {
