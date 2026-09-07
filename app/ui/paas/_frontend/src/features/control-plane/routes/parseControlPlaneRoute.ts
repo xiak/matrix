@@ -1,6 +1,17 @@
 import type { ControlPlaneRouteSelection } from "../domain/selection";
 
-const known = new Set(["catalog", "quotas", "installations", "regions", "access"]);
+const known = new Set([
+  "products",
+  "resources",
+  "operations",
+  "catalog",
+  "quotas",
+  "installations",
+  "regions",
+  "devops",
+  "observability",
+  "access"
+]);
 
 export function parseControlPlaneRoute(
   segments?: string[]

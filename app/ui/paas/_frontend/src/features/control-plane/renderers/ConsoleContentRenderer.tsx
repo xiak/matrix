@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { AccountAccessRenderer } from "@/features/auth/renderers/AccountAccessRenderer";
+import type { AccountRepository } from "@/features/auth/repositories/iamRepository";
 import {
   ArrowRight,
   Box,
@@ -24,6 +25,7 @@ import type {
   InstallationScene,
   SceneStatus
 } from "../scenes/consoleScene";
+import { ExperienceContentRenderer, type ResourceScope } from "./ExperienceContentRenderer";
 import styles from "./ConsoleContentRenderer.module.css";
 
 const metricIcons: Record<string, typeof Database> = {
@@ -267,8 +269,26 @@ function RegionContent({ scene }: { scene: Extract<ConsoleContentScene, { kind: 
   );
 }
 
-export function ConsoleContentRenderer({ scene }: { scene: ConsoleContentScene }) {
-  if (scene.kind === "access") return <AccountAccessRenderer />;
+export function ConsoleContentRenderer({
+  accountRepository,
+  scene,
+  scope
+}: {
+  accountRepository?: AccountRepository;
+  scene: ConsoleContentScene;
+  scope?: ResourceScope;
+}) {
+  if (scene.kind === "access") return <AccountAccessRenderer repository={accountRepository} />;
+  if (
+    scene.kind === "cloud-overview" ||
+    scene.kind === "products" ||
+    scene.kind === "resources" ||
+    scene.kind === "operations" ||
+    scene.kind === "devops" ||
+    scene.kind === "observability"
+  ) {
+    return <ExperienceContentRenderer scene={scene} scope={scope} />;
+  }
   if (scene.kind === "overview") return <OverviewContent scene={scene} />;
   if (scene.kind === "catalog") return <CatalogContent scene={scene} />;
   if (scene.kind === "quotas") return <QuotaContent scene={scene} />;

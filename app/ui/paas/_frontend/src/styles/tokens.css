@@ -17,6 +17,15 @@
   --xiak-palette-blue-600: #2860df;
   --xiak-palette-blue-700: #2050c3;
   --xiak-palette-blue-800: #1d439c;
+  --xiak-palette-blue-200: #c7d9fb;
+  --xiak-palette-navy-700: #1c3958;
+  --xiak-palette-navy-800: #142942;
+  --xiak-palette-navy-900: #0d1b2a;
+  --xiak-palette-navy-200: #bdc9d8;
+  --xiak-palette-violet-50: #f1edff;
+  --xiak-palette-violet-700: #6546b8;
+  --xiak-palette-cyan-50: #e6f7f8;
+  --xiak-palette-cyan-700: #176b78;
   --xiak-palette-green-50: #ecf8f1;
   --xiak-palette-green-700: #147549;
   --xiak-palette-amber-50: #fff7e8;
@@ -44,9 +53,16 @@
   --xiak-color-bg-skeleton-active: var(--xiak-palette-slate-200);
   --xiak-color-bg-overlay: var(--xiak-palette-overlay);
   --xiak-color-bg-tooltip: var(--xiak-palette-slate-900);
+  --xiak-color-bg-global: var(--xiak-palette-navy-900);
+  --xiak-color-bg-global-hover: var(--xiak-palette-navy-800);
+  --xiak-color-border-global: var(--xiak-palette-navy-700);
+  --xiak-color-text-global: var(--xiak-palette-white);
+  --xiak-color-text-global-muted: var(--xiak-palette-navy-200);
   --xiak-color-text-tooltip: var(--xiak-palette-white);
   --xiak-color-accent-haze: var(--xiak-palette-blue-50);
   --xiak-color-accent-haze-hover: var(--xiak-palette-blue-100);
+  --xiak-color-accent-glow: var(--xiak-palette-blue-200);
+  --xiak-color-border-accent: var(--xiak-palette-blue-200);
   --xiak-color-border-subtle: var(--xiak-palette-slate-200);
   --xiak-color-border-control: var(--xiak-palette-slate-400);
   --xiak-color-border-control-hover: var(--xiak-palette-slate-500);
@@ -77,6 +93,10 @@
   --xiak-color-status-warning-bg: var(--xiak-palette-amber-50);
   --xiak-color-status-danger: var(--xiak-palette-red-700);
   --xiak-color-status-danger-bg: var(--xiak-palette-red-50);
+  --xiak-color-product-devops: var(--xiak-palette-violet-700);
+  --xiak-color-product-devops-bg: var(--xiak-palette-violet-50);
+  --xiak-color-product-observability: var(--xiak-palette-cyan-700);
+  --xiak-color-product-observability-bg: var(--xiak-palette-cyan-50);
 
   --xiak-border-width: 1px;
   --xiak-border-style: solid;
@@ -90,6 +110,7 @@
   --xiak-shadow-header: 0 1px 2px var(--xiak-palette-shadow-soft);
   --xiak-shadow-panel: 0 1px 3px var(--xiak-palette-shadow-soft);
   --xiak-shadow-elevated: 0 16px 48px var(--xiak-palette-shadow-strong);
+  --xiak-shadow-card-hover: 0 10px 26px var(--xiak-palette-shadow-strong);
   --xiak-shadow-focus: 0 0 0 3px var(--xiak-palette-focus);
 
   --xiak-spacing-none: 0;
@@ -116,17 +137,20 @@
   --xiak-letter-spacing-heading: -0.025em;
   --xiak-letter-spacing-eyebrow: 0.08em;
 
-  --xiak-layout-header-height: 52px;
+  --xiak-layout-header-height: 56px;
   --xiak-layout-rail-width: 64px;
-  --xiak-layout-context-width: 220px;
+  --xiak-layout-context-width: 240px;
   --xiak-layout-sider-width: calc(var(--xiak-layout-rail-width) + var(--xiak-layout-context-width));
-  --xiak-layout-workspace-width: 336px;
-  --xiak-content-header-height: 76px;
-  --xiak-content-header-height-compact: 68px;
+  --xiak-layout-workspace-width: 360px;
+  --xiak-layout-content-max-width: 1440px;
+  --xiak-layout-search-width: 520px;
+  --xiak-content-header-height: 72px;
+  --xiak-content-header-height-compact: 64px;
   --xiak-control-height-small: 32px;
   --xiak-control-height: 40px;
   --xiak-control-height-large: 44px;
   --xiak-badge-height: 24px;
+  --xiak-table-row-height: 56px;
   --xiak-status-dot-size: 6px;
   --xiak-resize-hit-width: 10px;
   --xiak-resize-line-width: 2px;
@@ -138,6 +162,9 @@
   --xiak-z-resize: 40;
   --xiak-z-backdrop: 80;
   --xiak-z-overlay: 90;
+  --xiak-z-global-backdrop: 110;
+  --xiak-z-global-header: 120;
+  --xiak-z-popover: 130;
   --xiak-motion-fast: 130ms;
   --xiak-motion-panel: 220ms;
   --xiak-motion-skeleton: 1.5s;

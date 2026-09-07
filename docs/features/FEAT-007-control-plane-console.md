@@ -252,6 +252,102 @@ the active task reachable. The login route and every authenticated route must
 remain keyboard usable, visibly focused, reduced-motion compatible, and
 readable at 360 CSS pixels without horizontal page scrolling.
 
+### Unified cloud UX system and preview
+
+The console shell is product-independent. The global layer owns organization,
+project and region scope, product discovery, cross-product search, running
+Operations, notifications, and principal identity. Each bounded product owns
+only its product rail destination, local navigation, resource pages, and
+contextual workflow. This keeps the interaction model stable while private-
+cloud foundation, PaaS, DevOps, and observability capabilities are added, and
+does not require a second console shell if a later release introduces public-
+cloud regions.
+
+The information architecture is shallow and task-oriented:
+
+```text
+Matrix Cloud
+  -> Cloud overview
+     -> Products and services
+     -> Resource center
+     -> Operations and tasks
+  -> Cloud foundation
+     -> Regions and nodes
+  -> PaaS
+     -> Service catalog -> quota -> installation -> Operation
+  -> DevOps
+     -> Delivery overview and pipelines
+  -> Observability
+     -> Service health and alerts
+  -> Security and access
+     -> Users, roles, account settings, and tenant administration
+```
+
+The visual contract is owned by semantic tokens and `@ui/xiak`; feature
+renderers may compose these primitives into a dashboard, resource collection,
+or workflow but do not create competing control dimensions. The desktop
+reference dimensions are:
+
+| Component or region | Contract | UX purpose |
+| --- | --- | --- |
+| Global header | `56px` high | Persistent search, scope, Operations, notifications, and identity |
+| Product rail | `64px` wide; `40px` targets | Fast product switching with learned icons and labels on hover/focus |
+| Product context navigation | `240px` wide; `48px` minimum item height | Product-local IA with label, description, and actionable count |
+| Page header | `72px` desktop; `64px` compact | Breadcrumb, page identity, and contextual actions |
+| Primary controls | `32px` small, `40px` default, `44px` large | Predictable density and touch/click targeting by task importance |
+| Status badge | `24px` high | Comparable state language without changing row geometry |
+| Resource table row | `56px` high | Two-line identity plus scannable product, scope, state, and time |
+| Context workspace | `360px` default; `320–460px` adjustable | Review or inspect without losing the source page |
+| Content canvas | `1440px` maximum; `24px` desktop gutter | Readable line length on large displays with dense cloud data |
+| Panel geometry | `12px` radius; `12/16/24/32px` spacing rhythm | One consistent surface and spacing system across products |
+
+Four page compositions are admitted: a cloud overview with readiness and
+attention-first metrics; a collection page with local search, filters, table,
+empty state, and resource links; a product dashboard with health or delivery
+metrics and recent activity; and an action workflow with a contextual review
+panel. New products must adopt one of these compositions before adding a new
+template. A new public component is introduced only after a second real use
+proves a shared invariant; feature-specific charts, pipeline rows, and alert
+summaries remain product composites meanwhile.
+
+The interaction contract includes:
+
+- one product launcher and one `Ctrl/Cmd+K` search position on every page;
+- keyboard selection and direct navigation from search results to the owning
+  product or resource page;
+- persistent project and region scope that immediately filters resource
+  collections without hiding the active scope;
+- global running-Operation and notification indicators, with progress,
+  severity, owner, and time visible before entering a detail page;
+- explicit loading, empty, unavailable, running, success, warning, and failed
+  states; no spinner or success message substitutes for known progress;
+- `Escape` dismissal, visible focus, native selects, keyboard-resizable
+  context panels, and reduced-motion handling;
+- a product/context drawer below `920px`, compact global controls below
+  `720px`, and a rail-free mobile workspace below `620px`. Collections may
+  scroll within their own table region, but the page shell must not scroll
+  horizontally at `360px`.
+
+The design decisions use primary product guidance, not visual copying:
+[Cloudscape service navigation](https://cloudscape.design/patterns/general/service-navigation/)
+separates global search and utilities from task-oriented product navigation;
+[Google Cloud resource organization](https://docs.cloud.google.com/docs/get-started/organize-resources)
+anchors resources below organizations and projects;
+[Azure portal structure](https://learn.microsoft.com/en-us/azure/azure-portal/azure-portal-overview)
+keeps the global header, scope, search, notifications, service menu, and
+working pane stable; and
+[Alibaba Cloud Resource Center](https://www.alibabacloud.com/help/en/resource-management/resource-center/product-overview/resource-center-overview)
+provides a cross-product, cross-region resource view that returns users to the
+owning product console for operations.
+
+Development builds, or builds explicitly configured with
+`NEXT_PUBLIC_MATRIX_UX_PREVIEW=1`, expose a visibly labelled `MOCK` journey.
+Its in-memory IAM, control-plane, resource, pipeline, health, alert, and
+Operation repositories exist only to validate information architecture,
+components, dimensions, layout, and interaction before every backend exists.
+They never ship as implicit production truth and do not satisfy Gate B or Gate
+C real-authority and installed-release evidence.
+
 ## Public API and authority
 
 The managed-service API provides only the bounded routes needed by the journey:
@@ -342,10 +438,10 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 - Gate A implementation replaces the Phase 1 page with the complete donor-
   shaped App Router -> route -> provider -> repository -> scene -> renderer ->
-  public-component chain, eight static routes, memory-only IAM sessions,
+  public-component chain, twelve static routes, memory-only IAM sessions,
   deterministic Go embedding, strict CSP hashes, and a four-region shell.
   The console layout retains its provider across child-route navigation.
-  Source gates cover the light theme, 20 semantic contrast pairs, and 51
+  Source gates cover the light theme, 20 semantic contrast pairs, and 67
   frontend tests, including visible failed revocation, logout during failed
   or pending resource loads, keyboard workspace sizing, and native instance-ID
   validation. The installed `44fa1c7` candidate proves the light login page,
@@ -373,6 +469,24 @@ and `git diff --check` gates must pass on the same committed worktree.
   development-runtime IAM gate, not the installed-release PaaS purchase/deploy
   journey; 360-pixel and full keyboard acceptance remain open. Backend account
   and isolation evidence belongs to FEAT-006.
+- The unified-cloud UX preview replaces the provisional console composition
+  with the dimensioned shell and interaction contract above. It adds product
+  and service discovery, a cross-product Resource Center, global project and
+  region scope, searchable resources and pages, an Operation center, a
+  notification center, DevOps delivery state, and observability health and
+  alert views. Browser verification at the development runtime completed the
+  one-click entry, product launcher, global search, direct product navigation,
+  notification panel, project-scoped resource filtering, and the `390px`
+  navigation drawer. A separate `360px` inspection proved the open drawer and
+  resource workspace match the viewport width without page-level horizontal
+  overflow. The PaaS journey also activated a MOCK quota, submitted an
+  installation, showed its pending Operation, and resolved it to a stable
+  endpoint. Component tests cover requested-route return, search keyboard
+  navigation, scope filtering, route projection, and a mutable in-memory
+  installation journey.
+  This is UX and interaction evidence over explicitly labelled MOCK data; it
+  does not replace the remaining authenticated installed-release browser gate
+  or any real backend acceptance.
 - Gate B authority is complete for the admitted PostgreSQL slice: the closed
   managed-service Go/OpenAPI contract now includes collection and single-
   resource reads for offerings, regions, quota entitlements, service

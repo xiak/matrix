@@ -6,11 +6,13 @@ import type { IamRepository } from "@/features/auth/repositories/iamRepository";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { useConsoleUiStore } from "../application/consoleUiStore";
 import type { ControlPlaneSnapshot } from "../domain/resources";
+import type { ExperienceSnapshot } from "../domain/experience";
 import type { ConsoleSection } from "../domain/selection";
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
+import { previewExperienceSnapshot } from "../repositories/previewExperienceSnapshot";
 import { ConsoleShellRenderer } from "./ConsoleShellRenderer";
 
-const navigation = vi.hoisted(() => ({ replace: vi.fn() }));
+const navigation = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn() }));
 
 vi.mock("next/navigation", () => ({ useRouter: () => navigation }));
 
@@ -54,10 +56,12 @@ const snapshot: ControlPlaneSnapshot = {
 
 async function renderConsole({
   section = "overview",
+  experience,
   load = vi.fn().mockResolvedValue(snapshot),
   logout = vi.fn().mockResolvedValue(undefined)
 }: {
   section?: ConsoleSection;
+  experience?: ExperienceSnapshot;
   load?: ControlPlaneRepository["load"];
   logout?: IamRepository["logout"];
 } = {}) {
@@ -88,7 +92,7 @@ async function renderConsole({
   const user = userEvent.setup();
   const view = render(
     <SessionProvider repository={iam}>
-      <ConsoleShellRenderer repository={repository} selection={{ section }} />
+      <ConsoleShellRenderer experience={experience} repository={repository} selection={{ section }} />
     </SessionProvider>
   );
   await user.type(screen.getByLabelText("密码", { exact: true }), "renderer-test-password");
@@ -178,5 +182,27 @@ describe("ConsoleShellRenderer", () => {
       expect(nativePattern.test(id)).toBe(false);
       expect(submit.disabled).toBe(true);
     }
+  });
+
+  it("supports global search and keyboard navigation in preview mode", async () => {
+    const { user } = await renderConsole({ experience: previewExperienceSnapshot });
+    expect((await screen.findByRole("heading", { level: 1 })).textContent).toBe("云控制台");
+
+    const search = screen.getByRole("combobox", { name: "搜索产品、资源和页面" });
+    await user.click(search);
+    await user.type(search, "支付");
+    expect(screen.getByRole("option", { name: /支付服务/ })).toBeTruthy();
+    await user.keyboard("{Enter}");
+    expect(navigation.push).toHaveBeenCalledWith("/console/observability/");
+  });
+
+  it("applies the persistent project scope to unified resources", async () => {
+    const { user } = await renderConsole({ section: "resources", experience: previewExperienceSnapshot });
+    await screen.findByRole("heading", { level: 1, name: "资源中心" });
+    await user.selectOptions(screen.getByRole("combobox", { name: "选择项目范围" }), "platform-dev");
+
+    expect(screen.getByRole("link", { name: "edge-worker-01" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Matrix 开发库" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "订单主库" })).toBeNull();
   });
 });

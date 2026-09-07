@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ControlPlaneSnapshot } from "../domain/resources";
+import { previewExperienceSnapshot } from "../repositories/previewExperienceSnapshot";
 import { buildConsoleScene } from "./buildConsoleScene";
 
 const snapshot: ControlPlaneSnapshot = {
@@ -93,6 +94,25 @@ describe("buildConsoleScene", () => {
     const serialized = JSON.stringify(buildConsoleScene("catalog", snapshot)).toLowerCase();
     for (const forbidden of ["guild", "channel", "message", "friend", "discord"]) {
       expect(serialized).not.toContain(forbidden);
+    }
+  });
+
+  it("projects the unified private-cloud experience without changing live contracts", () => {
+    const overview = buildConsoleScene("overview", snapshot, previewExperienceSnapshot);
+    expect(overview.preview).toBe(true);
+    expect(overview.title).toBe("云控制台");
+    expect(overview.scope?.projects).toHaveLength(3);
+    expect(overview.search.some((item) => item.label === "支付服务")).toBe(true);
+    expect(overview.noticeCount).toBe(2);
+    expect(overview.content.kind).toBe("cloud-overview");
+
+    const devops = buildConsoleScene("devops", snapshot, previewExperienceSnapshot);
+    expect(devops.productName).toBe("研发效能");
+    expect(devops.navigation.map((item) => item.id)).toEqual(["devops"]);
+    expect(devops.content.kind).toBe("devops");
+    if (devops.content.kind === "devops") {
+      expect(devops.content.pipelines).toHaveLength(4);
+      expect(devops.content.pipelines.find((item) => item.name === "checkout-api")?.stateLabel).toBe("执行中");
     }
   });
 });

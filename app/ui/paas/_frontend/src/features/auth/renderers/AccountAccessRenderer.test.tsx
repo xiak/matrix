@@ -51,6 +51,15 @@ async function openAccess(repository = accounts(), iamRepository = iam()) {
 afterEach(() => { cleanup(); vi.clearAllMocks(); localStorage.clear(); sessionStorage.clear(); });
 
 describe("qualified login", () => {
+  it("returns a primary user to the originally requested console page", async () => {
+    const repository = iam();
+    const user = userEvent.setup();
+    render(<SessionProvider repository={repository}><LoginRenderer returnTo="/console/resources/" /></SessionProvider>);
+    await user.type(screen.getByLabelText("密码", { exact: true }), "Only-Test-Password-49!");
+    await user.click(screen.getByRole("button", { name: "登录控制台" }));
+    await waitFor(() => expect(navigation.replace).toHaveBeenCalledWith("/console/resources/"));
+  });
+
   it("uses one text identifier, clears secrets on mode change, and preserves IAM's account namespace", async () => {
     const repository = iam();
     const user = userEvent.setup();

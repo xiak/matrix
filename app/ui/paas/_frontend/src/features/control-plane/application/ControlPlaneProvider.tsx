@@ -11,6 +11,7 @@ import {
 } from "react";
 import { useSessionCredential } from "@/features/auth/application/SessionProvider";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
+import type { ExperienceSnapshot } from "../domain/experience";
 import type {
   ActivateQuotaCommand,
   ControlPlaneSnapshot,
@@ -48,10 +49,12 @@ function loadMessage(error: unknown): string {
 
 export function ControlPlaneProvider({
   children,
+  experience,
   repository = httpControlPlaneRepository,
   selection
 }: {
   children: ReactNode;
+  experience?: ExperienceSnapshot;
   repository?: ControlPlaneRepository;
   selection: ControlPlaneRouteSelection;
 }) {
@@ -175,8 +178,8 @@ export function ControlPlaneProvider({
   }, [credential, repository]);
 
   const scene = useMemo(
-    () => isAccess ? buildAccessConsoleScene() : snapshot ? buildConsoleScene(selection.section, snapshot) : null,
-    [isAccess, selection.section, snapshot]
+    () => isAccess ? buildAccessConsoleScene(experience) : snapshot ? buildConsoleScene(selection.section, snapshot, experience) : null,
+    [experience, isAccess, selection.section, snapshot]
   );
   const value = useMemo<ControlPlaneContextValue>(() => ({
     scene,

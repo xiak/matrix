@@ -1,15 +1,30 @@
 "use client";
 
-import { useEffect, useState, type PointerEvent as ReactPointerEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent
+} from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
+  Activity,
+  Bell,
   Boxes,
+  ChartNoAxesCombined,
+  ChevronDown,
   ChevronRight,
   CircleGauge,
+  CloudCog,
   Database,
   Gauge,
+  GitBranch,
+  Grid2X2,
   LayoutDashboard,
+  Layers3,
   LogOut,
   MapPin,
   Menu,
@@ -17,14 +32,18 @@ import {
   PanelRightClose,
   PanelRightOpen,
   RefreshCcw,
+  Search,
   ServerCog,
   ShieldCheck,
+  Workflow,
   X
 } from "lucide-react";
-import { LoginRenderer } from "@/features/auth/renderers/LoginRenderer";
 import { useSession } from "@/features/auth/application/SessionProvider";
+import { LoginRenderer } from "@/features/auth/renderers/LoginRenderer";
+import type { AccountRepository } from "@/features/auth/repositories/iamRepository";
 import {
   App,
+  Badge,
   Button,
   ContentPage,
   Layout,
@@ -34,9 +53,12 @@ import {
 } from "@ui/xiak";
 import { ControlPlaneProvider, useControlPlane } from "../application/ControlPlaneProvider";
 import { useConsoleUiStore } from "../application/consoleUiStore";
+import type { ExperienceSnapshot } from "../domain/experience";
 import type { ControlPlaneRouteSelection } from "../domain/selection";
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
 import type {
+  ExperienceIconKind,
+  GlobalSearchResultScene,
   NavigationIconKind,
   RailIconKind
 } from "../scenes/consoleScene";
@@ -47,25 +69,48 @@ import styles from "./ConsoleShellRenderer.module.css";
 const railIcons = {
   overview: LayoutDashboard,
   database: Database,
+  devops: GitBranch,
+  observability: ChartNoAxesCombined,
   access: ShieldCheck
 } satisfies Record<RailIconKind, typeof Database>;
 
 const navigationIcons = {
+  overview: LayoutDashboard,
+  products: Grid2X2,
+  resources: Boxes,
+  operations: Activity,
   catalog: PackageSearch,
   quota: Gauge,
   installation: ServerCog,
   region: MapPin,
+  pipeline: Workflow,
+  observability: ChartNoAxesCombined,
   access: ShieldCheck
 } satisfies Record<NavigationIconKind, typeof Database>;
+
+const experienceIcons = {
+  foundation: CloudCog,
+  paas: Layers3,
+  devops: GitBranch,
+  observability: ChartNoAxesCombined,
+  security: ShieldCheck
+} satisfies Record<ExperienceIconKind, typeof Boxes>;
 
 function ShellFrame({ children }: { children: React.ReactNode }) {
   return (
     <App.Frame className={styles.shellContainer}>
       <App.Background />
-      <App.Layers>
-        <App.Layer>{children}</App.Layer>
-      </App.Layers>
+      <App.Layers><App.Layer>{children}</App.Layer></App.Layers>
     </App.Frame>
+  );
+}
+
+function Brand({ compact = false }: { compact?: boolean }) {
+  return (
+    <Link aria-label="Matrix Cloud 控制台首页" className={styles.brand} href="/console/">
+      <span className={styles.brandMark}><Boxes aria-hidden="true" /></span>
+      {compact ? null : <span><strong>Matrix</strong><small>Cloud</small></span>}
+    </Link>
   );
 }
 
@@ -81,41 +126,22 @@ function LoadingShell({ error, logout, retry, revoking, sessionError }: {
       <App>
         <App.Base>
           <Layout.Header className={styles.topbar}>
-            <div className={styles.topbarBrand}><Boxes aria-hidden="true" /><strong>Matrix</strong></div>
-            <div className={styles.topbarPath}><span>Control Plane</span><ChevronRight aria-hidden="true" /><span>Managed Services</span></div>
-            <Button
-              aria-label="注销并撤销 IAM 会话"
-              className={styles.loadingLogout}
-              disabled={revoking}
-              onClick={logout}
-              size="small"
-              variant="ghost"
-            >
+            <Brand />
+            <div className={styles.loadingPath}><span>统一云控制台</span><ChevronRight aria-hidden="true" /><span>正在加载</span></div>
+            <Button aria-label="注销并撤销 IAM 会话" className={styles.loadingLogout} disabled={revoking} onClick={logout} size="small" variant="ghost">
               <LogOut aria-hidden="true" />{revoking ? "正在注销…" : "注销"}
             </Button>
           </Layout.Header>
           <Layout>
             <Sider className={styles.sider}>
-              <Sider.RailMenu className={styles.railLoading}>
-                <div className={styles.railLogo}><Boxes aria-hidden="true" /></div>
-                <Skeleton /><Skeleton />
-              </Sider.RailMenu>
-              <Sider.ContextMenu className={`${styles.contextMenu} ${styles.contextLoading}`}>
-                <Skeleton />
-                <Skeleton />
-                <Skeleton />
-                <Skeleton />
-              </Sider.ContextMenu>
+              <Sider.RailMenu className={styles.railLoading}><Skeleton /><Skeleton /><Skeleton /></Sider.RailMenu>
+              <Sider.ContextMenu className={`${styles.contextMenu} ${styles.contextLoading}`}><Skeleton /><Skeleton /><Skeleton /><Skeleton /></Sider.ContextMenu>
             </Sider>
             <Layout.Content>
               <ContentPage>
                 <ContentPage.Header><Skeleton className={styles.headerSkeleton} /></ContentPage.Header>
                 <ContentPage.Body>
-                  {sessionError ? (
-                    <div className={styles.errorBanner} role="alert">
-                      <ShieldCheck aria-hidden="true" /><span>{sessionError}</span>
-                    </div>
-                  ) : null}
+                  {sessionError ? <div className={styles.errorBanner} role="alert"><ShieldCheck aria-hidden="true" /><span>{sessionError}</span></div> : null}
                   {error ? (
                     <div className={styles.unavailable} role="alert">
                       <ServerCog aria-hidden="true" />
@@ -124,11 +150,7 @@ function LoadingShell({ error, logout, retry, revoking, sessionError }: {
                       <Button onClick={retry} variant="secondary"><RefreshCcw aria-hidden="true" />重试</Button>
                       <Link href="/console/access/">进入访问管理</Link>
                     </div>
-                  ) : (
-                    <div className={styles.loadingGrid} aria-label="正在加载控制面">
-                      <Skeleton /><Skeleton /><Skeleton /><Skeleton />
-                    </div>
-                  )}
+                  ) : <div className={styles.loadingGrid} aria-label="正在加载控制面"><Skeleton /><Skeleton /><Skeleton /><Skeleton /></div>}
                 </ContentPage.Body>
               </ContentPage>
             </Layout.Content>
@@ -141,11 +163,37 @@ function LoadingShell({ error, logout, retry, revoking, sessionError }: {
 
 type WorkspaceSize = "compact" | "medium" | "wide";
 
-function ConsoleShell() {
+function SearchResult({ active, index, item, onChoose, onHover }: {
+  active: boolean;
+  index: number;
+  item: GlobalSearchResultScene;
+  onChoose(): void;
+  onHover(index: number): void;
+}) {
+  const Icon = experienceIcons[item.icon];
+  return (
+    <Link
+      aria-selected={active}
+      className={styles.searchResult}
+      data-active={active ? "true" : undefined}
+      href={item.href}
+      onClick={onChoose}
+      onMouseEnter={() => onHover(index)}
+      role="option"
+    >
+      <span className={styles.searchResultIcon} data-product={item.icon}><Icon aria-hidden="true" /></span>
+      <span><strong>{item.label}</strong><small>{item.description}</small></span>
+      <em>{item.category}</em>
+    </Link>
+  );
+}
+
+function ConsoleShell({ accountRepository }: { accountRepository?: AccountRepository }) {
   const router = useRouter();
   const session = useSession();
   const controlPlane = useControlPlane();
   const scene = controlPlane.scene;
+  const searchInput = useRef<HTMLInputElement>(null);
   const sidebarOverlayOpen = useConsoleUiStore((state) => state.sidebarOverlayOpen);
   const workspaceOpen = useConsoleUiStore((state) => state.workspaceOpen);
   const openSidebar = useConsoleUiStore((state) => state.openSidebar);
@@ -153,18 +201,44 @@ function ConsoleShell() {
   const toggleWorkspace = useConsoleUiStore((state) => state.toggleWorkspace);
   const closeWorkspace = useConsoleUiStore((state) => state.closeWorkspace);
   const [workspaceSize, setWorkspaceSize] = useState<WorkspaceSize>("medium");
+  const [projectId, setProjectId] = useState("all");
+  const [regionId, setRegionId] = useState("all");
+  const [productMenuOpen, setProductMenuOpen] = useState(false);
+  const [noticesOpen, setNoticesOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [activeSearchIndex, setActiveSearchIndex] = useState(0);
+
+  const searchResults = useMemo(() => {
+    if (!scene) return [];
+    const normalized = searchQuery.trim().toLocaleLowerCase("zh-CN");
+    const results = normalized
+      ? scene.search.filter((item) => [item.label, item.description, item.category]
+        .some((value) => value.toLocaleLowerCase("zh-CN").includes(normalized)))
+      : scene.search;
+    return results.slice(0, 8);
+  }, [scene, searchQuery]);
 
   useEffect(() => {
-    if (!sidebarOverlayOpen && !workspaceOpen) return;
-    const escape = (event: KeyboardEvent) => {
+    const shortcuts = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === "k") {
+        event.preventDefault();
+        setProductMenuOpen(false);
+        setNoticesOpen(false);
+        setSearchOpen(true);
+        searchInput.current?.focus();
+      }
       if (event.key === "Escape") {
         closeSidebar();
         closeWorkspace();
+        setProductMenuOpen(false);
+        setNoticesOpen(false);
+        setSearchOpen(false);
       }
     };
-    window.addEventListener("keydown", escape);
-    return () => window.removeEventListener("keydown", escape);
-  }, [closeSidebar, closeWorkspace, sidebarOverlayOpen, workspaceOpen]);
+    window.addEventListener("keydown", shortcuts);
+    return () => window.removeEventListener("keydown", shortcuts);
+  }, [closeSidebar, closeWorkspace]);
 
   async function logout() {
     if (await session.logout()) router.replace("/");
@@ -184,12 +258,42 @@ function ConsoleShell() {
 
   const workspaceVisible = Boolean(scene.workspace && workspaceOpen);
   const principal = session.current;
+  const productResults = scene.search.filter((item) => item.category === "产品");
+  const globalOverlayOpen = productMenuOpen || noticesOpen || searchOpen;
+  const ProductContextIcon = railIcons[scene.productIcon];
+
+  function closeGlobalOverlays() {
+    setProductMenuOpen(false);
+    setNoticesOpen(false);
+    setSearchOpen(false);
+  }
+
+  function chooseSearchResult(href: string) {
+    closeGlobalOverlays();
+    setSearchQuery("");
+    router.push(href);
+  }
+
+  function handleSearchKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveSearchIndex((index) => Math.min(index + 1, Math.max(0, searchResults.length - 1)));
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveSearchIndex((index) => Math.max(0, index - 1));
+    }
+    if (event.key === "Enter" && searchResults[activeSearchIndex]) {
+      event.preventDefault();
+      chooseSearchResult(searchResults[activeSearchIndex].href);
+    }
+  }
 
   function resizeWorkspace(event: ReactPointerEvent<HTMLDivElement>) {
     event.preventDefault();
     const update = (pointer: PointerEvent) => {
       const width = window.innerWidth - pointer.clientX;
-      setWorkspaceSize(width < 320 ? "compact" : width > 430 ? "wide" : "medium");
+      setWorkspaceSize(width < 330 ? "compact" : width > 450 ? "wide" : "medium");
     };
     const finish = () => {
       window.removeEventListener("pointermove", update);
@@ -202,44 +306,134 @@ function ConsoleShell() {
   return (
     <ShellFrame>
       <App>
-        <App.Base
-          className={styles.shellBase}
-          data-sidebar-overlay-open={sidebarOverlayOpen ? "true" : "false"}
-          data-workspace-overlay-open={workspaceVisible ? "true" : "false"}
-        >
+        <App.Base className={styles.shellBase} data-sidebar-overlay-open={sidebarOverlayOpen ? "true" : "false"} data-workspace-overlay-open={workspaceVisible ? "true" : "false"}>
           <Layout.Header className={styles.topbar}>
-            <div className={styles.topbarBrand}><Boxes aria-hidden="true" /><strong>Matrix</strong></div>
-            <div className={styles.topbarPath}>
-              <span>Control Plane</span><ChevronRight aria-hidden="true" /><strong>{scene.title}</strong>
+            <div className={styles.topbarStart}>
+              <Brand />
+              {scene.preview ? (
+                <div className={styles.launcherWrap}>
+                  <button
+                    aria-expanded={productMenuOpen}
+                    aria-haspopup="dialog"
+                    className={styles.launcherButton}
+                    onClick={() => {
+                      setProductMenuOpen((open) => !open);
+                      setNoticesOpen(false);
+                      setSearchOpen(false);
+                    }}
+                    type="button"
+                  ><Grid2X2 aria-hidden="true" /><span>产品</span><ChevronDown aria-hidden="true" /></button>
+                  {productMenuOpen ? (
+                    <section aria-label="云产品入口" className={styles.productMenu} role="dialog">
+                      <header><div><strong>产品与服务</strong><span>按工作场景进入 Matrix Cloud</span></div><Link href="/console/products/" onClick={closeGlobalOverlays}>查看全部</Link></header>
+                      <div className={styles.productMenuGrid}>
+                        {productResults.map((product) => {
+                          const Icon = experienceIcons[product.icon];
+                          return (
+                            <Link className={styles.productMenuItem} href={product.href} key={product.id} onClick={closeGlobalOverlays}>
+                              <span data-product={product.icon}><Icon aria-hidden="true" /></span>
+                              <div><strong>{product.label}</strong><small>{product.description}</small></div>
+                              <ChevronRight aria-hidden="true" />
+                            </Link>
+                          );
+                        })}
+                      </div>
+                    </section>
+                  ) : null}
+                </div>
+              ) : <div className={styles.legacyPath}><span>Control Plane</span><ChevronRight aria-hidden="true" /><strong>{scene.productName}</strong></div>}
             </div>
-            <div className={styles.topbarStatus}>
-              <ShieldCheck aria-hidden="true" />
-              <span>{principal?.session.organizationId ?? "organization"}</span>
+
+            {scene.preview ? (
+              <div className={styles.globalSearch} data-open={searchOpen ? "true" : undefined}>
+                <Search aria-hidden="true" />
+                <input
+                  aria-autocomplete="list"
+                  aria-controls="global-search-results"
+                  aria-expanded={searchOpen}
+                  aria-label="搜索产品、资源和页面"
+                  onChange={(event) => {
+                    setSearchQuery(event.target.value);
+                    setActiveSearchIndex(0);
+                  }}
+                  onFocus={() => {
+                    setSearchOpen(true);
+                    setProductMenuOpen(false);
+                    setNoticesOpen(false);
+                  }}
+                  onKeyDown={handleSearchKeyDown}
+                  placeholder="搜索产品、资源和页面"
+                  ref={searchInput}
+                  role="combobox"
+                  value={searchQuery}
+                />
+                <kbd>Ctrl K</kbd>
+                {searchOpen ? (
+                  <div aria-label="搜索结果" className={styles.searchPanel} id="global-search-results" role="listbox">
+                    <div className={styles.searchPanelHeader}><span>{searchQuery ? `“${searchQuery}” 的结果` : "快速访问"}</span><small>↑↓ 选择 · Enter 打开</small></div>
+                    {searchResults.length ? searchResults.map((item, index) => (
+                      <SearchResult active={index === activeSearchIndex} index={index} item={item} key={item.id} onChoose={() => chooseSearchResult(item.href)} onHover={setActiveSearchIndex} />
+                    )) : <div className={styles.searchEmpty}><PackageSearch aria-hidden="true" /><span>没有匹配的产品或资源</span></div>}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            <div className={styles.topbarTools}>
+              {scene.preview && scene.scope ? (
+                <div aria-label="全局资源范围" className={styles.scopeControls}>
+                  <span className={styles.organizationScope}><ShieldCheck aria-hidden="true" /><span>{scene.scope.organization.name}</span></span>
+                  <label><span>项目</span><select aria-label="选择项目范围" onChange={(event) => setProjectId(event.target.value)} value={projectId}>{scene.scope.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select><ChevronDown aria-hidden="true" /></label>
+                  <label><span>区域</span><select aria-label="选择区域范围" onChange={(event) => setRegionId(event.target.value)} value={regionId}>{scene.scope.regions.map((region) => <option key={region.id} value={region.id}>{region.name}</option>)}</select><ChevronDown aria-hidden="true" /></label>
+                </div>
+              ) : null}
+              {scene.preview ? <span className={styles.previewChip}>MOCK 体验</span> : null}
+              {scene.preview ? <Link aria-label={`操作与任务，${scene.activeOperationCount} 个执行中`} className={styles.topbarIconButton} href="/console/operations/"><Activity aria-hidden="true" />{scene.activeOperationCount ? <span>{scene.activeOperationCount}</span> : null}</Link> : null}
+              {scene.preview ? (
+                <div className={styles.noticeWrap}>
+                  <button
+                    aria-expanded={noticesOpen}
+                    aria-label={`通知，${scene.noticeCount} 个待处理`}
+                    className={styles.topbarIconButton}
+                    onClick={() => {
+                      setNoticesOpen((open) => !open);
+                      setProductMenuOpen(false);
+                      setSearchOpen(false);
+                    }}
+                    type="button"
+                  ><Bell aria-hidden="true" />{scene.noticeCount ? <span>{scene.noticeCount}</span> : null}</button>
+                  {noticesOpen ? (
+                    <section aria-label="通知中心" className={styles.noticePanel} role="dialog">
+                      <header><div><strong>通知中心</strong><span>{scene.noticeCount} 个事项需要处理</span></div><Link href="/console/observability/" onClick={closeGlobalOverlays}>告警中心</Link></header>
+                      <div className={styles.noticeList}>
+                        {scene.notices.map((notice) => (
+                          <Link href="/console/observability/" key={notice.id} onClick={closeGlobalOverlays}>
+                            <span data-status={notice.status} />
+                            <div><strong>{notice.title}</strong><small>{notice.serviceName} · {notice.startedAt}</small></div>
+                            <Badge status={notice.status}>{notice.severityLabel}</Badge>
+                          </Link>
+                        ))}
+                      </div>
+                    </section>
+                  ) : null}
+                </div>
+              ) : null}
+              <span className={styles.topbarAvatar} title={principal?.loginName ?? "用户"}>{principal?.loginName.slice(0, 1).toUpperCase() ?? "U"}</span>
             </div>
           </Layout.Header>
+
+          {globalOverlayOpen ? <button aria-label="关闭全局浮层" className={styles.globalBackdrop} onClick={closeGlobalOverlays} type="button" /> : null}
 
           <Layout>
             <Sider className={styles.sider}>
               <Sider.RailMenu aria-label="产品导航" className={styles.rail}>
-                <Link aria-label="Matrix 控制面" className={styles.railLogo} href="/console/">
-                  <Boxes aria-hidden="true" />
-                </Link>
+                <Link aria-label="控制台首页" className={styles.railHome} href="/console/" onClick={closeSidebar}><LayoutDashboard aria-hidden="true" /></Link>
                 <span className={styles.railDivider} />
-                {scene.rail.map((item) => {
+                {scene.rail.slice(1).map((item) => {
                   const Icon = railIcons[item.icon];
                   return (
-                    <Link
-                      aria-current={item.selected ? "page" : undefined}
-                      aria-label={item.label}
-                      className={styles.railItem}
-                      data-selected={item.selected ? "true" : undefined}
-                      href={item.href}
-                      key={item.id}
-                      onClick={closeSidebar}
-                    >
-                      <span className={styles.railIndicator} />
-                      <Icon aria-hidden="true" />
-                      <span className={styles.railTooltip}>{item.label}</span>
+                    <Link aria-current={item.selected ? "page" : undefined} aria-label={item.label} className={styles.railItem} data-selected={item.selected ? "true" : undefined} href={item.href} key={item.id} onClick={closeSidebar}>
+                      <span className={styles.railIndicator} /><Icon aria-hidden="true" /><span className={styles.railTooltip}>{item.label}</span>
                     </Link>
                   );
                 })}
@@ -247,50 +441,29 @@ function ConsoleShell() {
 
               <Sider.ContextMenu className={styles.contextMenu}>
                 <div className={styles.contextHeader}>
-                  <div><Typography.Eyebrow>{scene.section === "access" ? "Identity and access" : "Managed services"}</Typography.Eyebrow><strong>{scene.section === "access" ? "访问管理" : "托管数据库"}</strong></div>
-                  {scene.section === "access" ? <ShieldCheck aria-hidden="true" /> : <Database aria-hidden="true" />}
+                  <span className={styles.contextProductIcon}><ProductContextIcon aria-hidden="true" /></span>
+                  <div><Typography.Eyebrow>{scene.productEyebrow}</Typography.Eyebrow><strong>{scene.productName}</strong></div>
+                  <button aria-label="关闭导航" className={styles.contextCloseButton} onClick={closeSidebar} type="button"><X aria-hidden="true" /></button>
                 </div>
                 <nav aria-label="控制台导航" className={styles.contextNavigation}>
-                  <p>控制面</p>
+                  <p>功能导航</p>
                   {scene.navigation.map((item) => {
                     const Icon = navigationIcons[item.icon];
                     return (
-                      <Link
-                        aria-current={item.selected ? "page" : undefined}
-                        className={styles.contextItem}
-                        data-selected={item.selected ? "true" : undefined}
-                        href={item.href}
-                        key={item.id}
-                        onClick={closeSidebar}
-                      >
-                        <Icon aria-hidden="true" />
-                        <span><strong>{item.label}</strong><small>{item.description}</small></span>
-                        {typeof item.count === "number" ? <em>{item.count}</em> : null}
+                      <Link aria-current={item.selected ? "page" : undefined} className={styles.contextItem} data-selected={item.selected ? "true" : undefined} href={item.href} key={item.id} onClick={closeSidebar}>
+                        <Icon aria-hidden="true" /><span><strong>{item.label}</strong><small>{item.description}</small></span>{typeof item.count === "number" ? <em>{item.count}</em> : null}
                       </Link>
                     );
                   })}
                 </nav>
                 <div className={styles.contextCallout}>
                   <CircleGauge aria-hidden="true" />
-                  <div><strong>本机部署</strong><span>PostgreSQL · 托管服务</span></div>
+                  <div><strong>{scene.preview ? "体验环境" : "本机部署"}</strong><span>{scene.preview ? "前端 MOCK · 不写入后端" : "PostgreSQL · 托管服务"}</span></div>
                 </div>
                 <div className={styles.userDock}>
-                  <div className={styles.avatar} aria-hidden="true">
-                    {principal?.loginName.slice(0, 1).toUpperCase() ?? "U"}
-                  </div>
-                  <div className={styles.userIdentity}>
-                    <strong>{principal?.loginName ?? "用户"}</strong>
-                    <span>{principal?.session.principalId ?? "IAM session"}</span>
-                  </div>
-                  <button
-                    aria-label="注销并撤销 IAM 会话"
-                    className={styles.logoutButton}
-                    disabled={session.phase === "revoking"}
-                    onClick={() => void logout()}
-                    type="button"
-                  >
-                    <LogOut aria-hidden="true" />
-                  </button>
+                  <div className={styles.avatar} aria-hidden="true">{principal?.loginName.slice(0, 1).toUpperCase() ?? "U"}</div>
+                  <div className={styles.userIdentity}><strong>{principal?.loginName ?? "用户"}</strong><span>{principal?.session.principalId ?? "IAM session"}</span></div>
+                  <button aria-label="注销并撤销 IAM 会话" className={styles.logoutButton} disabled={session.phase === "revoking"} onClick={() => void logout()} type="button"><LogOut aria-hidden="true" /></button>
                 </div>
               </Sider.ContextMenu>
               <Sider.ResizeHandle />
@@ -303,51 +476,26 @@ function ConsoleShell() {
                 <ContentPage.Header>
                   <div className={styles.pageHeading}>
                     <button aria-label="打开产品导航" className={styles.mobileMenuButton} onClick={openSidebar} type="button"><Menu aria-hidden="true" /></button>
-                    <div><Typography.Eyebrow>{scene.eyebrow}</Typography.Eyebrow><Typography.Title as="h1" level={2}>{scene.title}</Typography.Title></div>
+                    <div><span className={styles.breadcrumb}>{scene.productName}<ChevronRight aria-hidden="true" />{scene.title}</span><Typography.Title as="h1" level={2}>{scene.title}</Typography.Title></div>
                   </div>
                   <div className={styles.pageActions}>
-                    {scene.section !== "access" ? <Button aria-label="刷新" disabled={controlPlane.loading} onClick={() => void controlPlane.reload()} size="small" variant="ghost">
-                      <RefreshCcw aria-hidden="true" /><span>刷新</span>
-                    </Button> : null}
-                    {scene.workspace ? (
-                      <Button
-                        aria-controls="console-workspace"
-                        aria-expanded={workspaceVisible}
-                        aria-label={workspaceVisible ? "收起面板" : "打开面板"}
-                        onClick={toggleWorkspace}
-                        size="small"
-                        variant={workspaceVisible ? "secondary" : "ghost"}
-                      >
-                        {workspaceVisible ? <PanelRightClose aria-hidden="true" /> : <PanelRightOpen aria-hidden="true" />}
-                        <span>{workspaceVisible ? "收起面板" : "打开面板"}</span>
-                      </Button>
-                    ) : null}
+                    {scene.section !== "access" ? <Button aria-label="刷新" disabled={controlPlane.loading} onClick={() => void controlPlane.reload()} size="small" variant="ghost"><RefreshCcw aria-hidden="true" /><span>刷新</span></Button> : null}
+                    {scene.workspace ? <Button aria-controls="console-workspace" aria-expanded={workspaceVisible} aria-label={workspaceVisible ? "收起面板" : "打开面板"} onClick={toggleWorkspace} size="small" variant={workspaceVisible ? "secondary" : "ghost"}>{workspaceVisible ? <PanelRightClose aria-hidden="true" /> : <PanelRightOpen aria-hidden="true" />}<span>{workspaceVisible ? "收起面板" : "打开面板"}</span></Button> : null}
                   </div>
                 </ContentPage.Header>
                 <ContentPage.Body>
-                  <div className={styles.pageIntro}>{scene.description}</div>
-                  {session.error ? (
-                    <div className={styles.errorBanner} role="alert">
-                      <ShieldCheck aria-hidden="true" /><span>{session.error}</span>
-                    </div>
-                  ) : null}
-                  {controlPlane.error ? (
-                    <div className={styles.errorBanner} role="alert">
-                      <ServerCog aria-hidden="true" /><span>{controlPlane.error}</span>
-                    </div>
-                  ) : null}
-                  <ConsoleContentRenderer scene={scene.content} />
+                  <div className={styles.pageCanvas}>
+                    <div className={styles.pageIntro}>{scene.description}</div>
+                    {session.error ? <div className={styles.errorBanner} role="alert"><ShieldCheck aria-hidden="true" /><span>{session.error}</span></div> : null}
+                    {controlPlane.error ? <div className={styles.errorBanner} role="alert"><ServerCog aria-hidden="true" /><span>{controlPlane.error}</span></div> : null}
+                    <ConsoleContentRenderer accountRepository={accountRepository} scene={scene.content} scope={{ projectId, regionId }} />
+                  </div>
                 </ContentPage.Body>
               </ContentPage>
             </Layout.Content>
 
             <button aria-label="关闭上下文面板" className={styles.workspaceBackdrop} onClick={closeWorkspace} type="button" />
-            <Layout.Workspace
-              className={styles.workspacePane}
-              data-size={workspaceSize}
-              data-visible={workspaceVisible ? "true" : "false"}
-              id="console-workspace"
-            >
+            <Layout.Workspace className={styles.workspacePane} data-size={workspaceSize} data-visible={workspaceVisible ? "true" : "false"} id="console-workspace">
               <div
                 aria-label="调整上下文面板宽度"
                 aria-orientation="vertical"
@@ -377,23 +525,18 @@ function ConsoleShell() {
   );
 }
 
-export function ConsoleShellRenderer({
-  repository,
-  selection
-}: {
+export function ConsoleShellRenderer({ accountRepository, experience, repository, selection }: {
+  accountRepository?: AccountRepository;
+  experience?: ExperienceSnapshot;
   repository?: ControlPlaneRepository;
   selection: ControlPlaneRouteSelection;
 }) {
   const session = useSession();
-  if (
-    !session.current ||
-    (session.phase !== "authenticated" && session.phase !== "revoking")
-  ) {
-    return <LoginRenderer />;
-  }
+  const returnTo = selection.section === "overview" ? "/console/" : `/console/${selection.section}/`;
+  if (!session.current || (session.phase !== "authenticated" && session.phase !== "revoking")) return <LoginRenderer returnTo={returnTo} />;
   return (
-    <ControlPlaneProvider repository={repository} selection={selection}>
-      <ConsoleShell />
+    <ControlPlaneProvider experience={experience} repository={repository} selection={selection}>
+      <ConsoleShell accountRepository={accountRepository} />
     </ControlPlaneProvider>
   );
 }

@@ -104,6 +104,54 @@
   padding-bottom: var(--xiak-spacing-default);
 }
 
+.previewEntry {
+  display: grid;
+  gap: var(--xiak-spacing-comfortable);
+  border: var(--xiak-border-width) var(--xiak-border-style) var(--xiak-color-border-accent);
+  border-radius: var(--xiak-radius-panel);
+  padding: var(--xiak-spacing-comfortable);
+  background: var(--xiak-color-accent-haze);
+}
+
+.previewEntry p {
+  color: var(--xiak-color-text-muted);
+  font-size: var(--xiak-font-size-small);
+  line-height: 1.6;
+}
+
+.previewBadge {
+  display: inline-flex;
+  width: max-content;
+  align-items: center;
+  gap: var(--xiak-spacing-tight);
+  color: var(--xiak-color-accent-text);
+  font-size: var(--xiak-font-size-caption);
+  font-weight: var(--xiak-font-weight-bold);
+  letter-spacing: var(--xiak-letter-spacing-eyebrow);
+  text-transform: uppercase;
+}
+
+.previewBadge svg {
+  width: 15px;
+  height: 15px;
+}
+
+.loginSeparator {
+  display: flex;
+  align-items: center;
+  gap: var(--xiak-spacing-default);
+  color: var(--xiak-color-text-subtle);
+  font-size: var(--xiak-font-size-caption);
+}
+
+.loginSeparator::before,
+.loginSeparator::after {
+  height: var(--xiak-border-width);
+  flex: 1;
+  background: var(--xiak-color-border-subtle);
+  content: "";
+}
+
 .form input {
   min-height: var(--xiak-control-height-large);
   font-weight: var(--xiak-font-weight-medium);

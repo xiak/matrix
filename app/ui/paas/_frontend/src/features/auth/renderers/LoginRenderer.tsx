@@ -2,12 +2,25 @@
 
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { Boxes, Database, Gauge, KeyRound, LockKeyhole, MapPin, ShieldCheck } from "lucide-react";
+import {
+  Boxes,
+  ChartNoAxesCombined,
+  Database,
+  Gauge,
+  GitBranch,
+  KeyRound,
+  Layers3,
+  LockKeyhole,
+  MapPin,
+  ShieldCheck,
+  Sparkles
+} from "lucide-react";
 import { App, Button, Input, Typography } from "@ui/xiak";
+import { uxPreviewEnabled } from "@/infrastructure/runtime/uxPreviewMode";
 import { useSession } from "../application/SessionProvider";
 import styles from "./LoginRenderer.module.css";
 
-export function LoginRenderer() {
+export function LoginRenderer({ returnTo = "/console/" }: { returnTo?: string }) {
   const router = useRouter();
   const session = useSession();
   const [loginMode, setLoginMode] = useState<"primary" | "subaccount">("primary");
@@ -31,7 +44,13 @@ export function LoginRenderer() {
     }
     const outcome = await session.login(identifier, password);
     setPassword("");
-    if (outcome === "authenticated") router.replace(loginMode === "subaccount" ? "/console/access/" : "/console/");
+    if (outcome === "authenticated") router.replace(loginMode === "subaccount" ? "/console/access/" : returnTo);
+  }
+
+  async function enterPreview() {
+    setFormError(null);
+    const outcome = await session.login("preview-admin", "experience-only");
+    if (outcome === "authenticated") router.replace(returnTo);
   }
 
   async function submitPasswordChange(event: FormEvent<HTMLFormElement>) {
@@ -46,7 +65,7 @@ export function LoginRenderer() {
     if (accepted) {
       setNewPassword("");
       setConfirmedPassword("");
-      router.replace(session.current?.loginName.includes("@") ? "/console/access/" : "/console/");
+      router.replace(session.current?.loginName.includes("@") ? "/console/access/" : returnTo);
     }
   }
 
@@ -72,17 +91,24 @@ export function LoginRenderer() {
               </div>
               <Typography.Eyebrow>Matrix · Cloud Console</Typography.Eyebrow>
               <Typography.Title className={styles.brandTitle} id="login-heading">
-                <span>让服务部署</span>
-                <span>简单而有序</span>
+                <span>{uxPreviewEnabled ? "一个入口，管理" : "让服务部署"}</span>
+                <span>{uxPreviewEnabled ? "整套云能力" : "简单而有序"}</span>
               </Typography.Title>
               <p className={styles.lead}>
-                集中管理数据库、服务配额与部署区域。
-                从一个 PostgreSQL 实例开始。
+                {uxPreviewEnabled
+                  ? "从基础资源到 PaaS、DevOps 与可观测性，在同一上下文中交付和运营。"
+                  : "集中管理数据库、服务配额与部署区域。从一个 PostgreSQL 实例开始。"}
               </p>
               <div className={styles.capabilities}>
-                <div><Database aria-hidden="true" /><span>托管数据库</span></div>
-                <div><Gauge aria-hidden="true" /><span>按需开通配额</span></div>
-                <div><MapPin aria-hidden="true" /><span>选择区域部署</span></div>
+                {uxPreviewEnabled ? <>
+                  <div><Layers3 aria-hidden="true" /><span>统一资源视图</span></div>
+                  <div><GitBranch aria-hidden="true" /><span>持续交付</span></div>
+                  <div><ChartNoAxesCombined aria-hidden="true" /><span>全栈可观测</span></div>
+                </> : <>
+                  <div><Database aria-hidden="true" /><span>托管数据库</span></div>
+                  <div><Gauge aria-hidden="true" /><span>按需开通配额</span></div>
+                  <div><MapPin aria-hidden="true" /><span>选择区域部署</span></div>
+                </>}
               </div>
             </section>
 
@@ -181,11 +207,27 @@ export function LoginRenderer() {
               ) : (
                 <>
                   <div className={styles.cardHeading}>
-                    <Typography.Title as="h2" level={2}>{loginMode === "primary" ? "主账号登录" : "子账号登录"}</Typography.Title>
+                    {uxPreviewEnabled ? <Typography.Eyebrow>UX preview · Mock data</Typography.Eyebrow> : null}
+                    <Typography.Title as="h2" level={2}>
+                      {uxPreviewEnabled ? "体验统一云控制台" : loginMode === "primary" ? "主账号登录" : "子账号登录"}
+                    </Typography.Title>
                     <Typography.Text tone="muted">
-                      {loginMode === "primary" ? "登录 Matrix，管理你的服务与资源" : "使用所属主账号的 ID 或专属别名登录"}
+                      {uxPreviewEnabled
+                        ? "使用预置组织、项目与资源，在不连接生产后端的情况下走查完整体验。"
+                        : loginMode === "primary" ? "登录 Matrix，管理你的服务与资源" : "使用所属主账号的 ID 或专属别名登录"}
                     </Typography.Text>
                   </div>
+                  {uxPreviewEnabled ? <>
+                    <div className={styles.previewEntry}>
+                      <div className={styles.previewBadge}><Sparkles aria-hidden="true" /><span>体验环境</span></div>
+                      <p>包含云基础平台、PaaS、DevOps、可观测与 IAM 的关联场景。</p>
+                      <Button block disabled={session.phase === "authenticating"} onClick={() => void enterPreview()} size="large">
+                        <Sparkles aria-hidden="true" />
+                        {session.phase === "authenticating" ? "正在准备体验环境…" : "一键进入体验控制台"}
+                      </Button>
+                    </div>
+                    <div className={styles.loginSeparator}><span>或使用 IAM 账号登录</span></div>
+                  </> : null}
                   <div aria-label="登录方式" className={styles.loginModes} role="group">
                     {(["primary", "subaccount"] as const).map((mode) => (
                       <Button aria-pressed={loginMode === mode} disabled={session.phase === "authenticating"} key={mode}
@@ -241,7 +283,7 @@ export function LoginRenderer() {
               )}
               <p className={styles.securityNote}>
                 <ShieldCheck aria-hidden="true" />
-                <span>会话仅在当前页面保留，刷新后需重新登录。</span>
+                <span>{uxPreviewEnabled ? "体验数据不会写入真实平台；会话仍只保留在当前页面内存。" : "会话仅在当前页面保留，刷新后需重新登录。"}</span>
               </p>
             </section>
           </main>
