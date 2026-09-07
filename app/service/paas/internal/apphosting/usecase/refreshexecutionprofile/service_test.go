@@ -202,6 +202,27 @@ func TestRefreshPreservesManagedTargetsAndLocalReadiness(t *testing.T) {
 	if err := service.Ready(context.Background()); err != nil {
 		t.Fatalf("local readiness depended on managed target: %v", err)
 	}
+
+	repository.snapshot.Targets[1].Spec.DesiredState = paasv1.ExecutionTargetRemoved
+	repository.snapshot.Targets[1].Status.Health = paasv1.ExecutionTargetHealthReady
+	repository.snapshot.Targets[1].Status.SupportedIsolationGuarantees = []paasv1.IsolationGuarantee{
+		paasv1.IsolationWorkload,
+	}
+	repository.snapshot.TransactionTime = profileTestTime.Add(3 * time.Second)
+	adapter.observation.ObservedAt = repository.snapshot.TransactionTime
+	if err := service.Refresh(context.Background()); err != nil {
+		t.Fatalf("refresh profile with retained managed tombstone: %v", err)
+	}
+	if len(repository.snapshot.Targets) != 2 ||
+		repository.snapshot.Targets[1].Spec.DesiredState != paasv1.ExecutionTargetRemoved ||
+		repository.snapshot.Pool.Status.Phase != paasv1.ExecutionPoolReady ||
+		repository.snapshot.Pool.Status.ExecutionTargetCount != 1 ||
+		repository.snapshot.Pool.Status.ReadyExecutionTargetCount != 1 {
+		t.Fatalf("removed target changed active pool membership: %#v", repository.snapshot)
+	}
+	if err := service.Ready(context.Background()); err != nil {
+		t.Fatalf("retained managed tombstone made the local profile unready: %v", err)
+	}
 }
 
 func TestRefreshRejectsStoredProfileSelectorDrift(t *testing.T) {

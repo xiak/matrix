@@ -345,6 +345,7 @@ func (service *Service) aggregatePoolStatus(
 		return "", 0, 0, false
 	}
 	seen := make(map[paasv1.ResourceID]bool, len(targets))
+	var count uint32
 	var ready uint32
 	degraded := false
 	for _, target := range targets {
@@ -352,6 +353,13 @@ func (service *Service) aggregatePoolStatus(
 			return "", 0, 0, false
 		}
 		seen[target.Metadata.ID] = true
+		// Removal retains an immutable target tombstone, but the tombstone is no
+		// longer pool membership. Excluding it here keeps the fixed local-profile
+		// refresher consistent with admission refresh and placement inventory.
+		if target.Spec.DesiredState == paasv1.ExecutionTargetRemoved {
+			continue
+		}
+		count++
 		maximumAge := managedObservationMaximumAge
 		if target.Spec.InfrastructureAdapter.Name == "localmachine" {
 			maximumAge = service.config.MaximumObservationAge
@@ -363,7 +371,6 @@ func (service *Service) aggregatePoolStatus(
 		}
 		degraded = degraded || (fresh && target.Status.Health == paasv1.ExecutionTargetHealthDegraded)
 	}
-	count := uint32(len(targets))
 	phase := paasv1.ExecutionPoolUnavailable
 	if ready > 0 || degraded {
 		phase = paasv1.ExecutionPoolDegraded
