@@ -9,6 +9,7 @@ type VerificationStepKind string
 type SubjectKind string
 type SourceConnectionHealth string
 type RepositoryBindingHealth string
+type ReadinessState string
 type ErrorCode string
 
 const (
@@ -54,14 +55,23 @@ const (
 )
 
 const (
-	ErrorInvalidArgument    ErrorCode = "INVALID_ARGUMENT"
-	ErrorUnauthenticated    ErrorCode = "UNAUTHENTICATED"
-	ErrorForbidden          ErrorCode = "FORBIDDEN"
-	ErrorNotFound           ErrorCode = "NOT_FOUND"
-	ErrorConflict           ErrorCode = "CONFLICT"
-	ErrorPreconditionFailed ErrorCode = "PRECONDITION_FAILED"
-	ErrorInternal           ErrorCode = "INTERNAL"
-	ErrorUnavailable        ErrorCode = "UNAVAILABLE"
+	ReadinessReady    ReadinessState = "READY"
+	ReadinessNotReady ReadinessState = "NOT_READY"
+)
+
+const (
+	ErrorInvalidArgument      ErrorCode = "INVALID_ARGUMENT"
+	ErrorUnauthenticated      ErrorCode = "UNAUTHENTICATED"
+	ErrorForbidden            ErrorCode = "FORBIDDEN"
+	ErrorNotFound             ErrorCode = "NOT_FOUND"
+	ErrorMethodNotAllowed     ErrorCode = "METHOD_NOT_ALLOWED"
+	ErrorConflict             ErrorCode = "CONFLICT"
+	ErrorPayloadTooLarge      ErrorCode = "PAYLOAD_TOO_LARGE"
+	ErrorUnsupportedMediaType ErrorCode = "UNSUPPORTED_MEDIA_TYPE"
+	ErrorPreconditionRequired ErrorCode = "PRECONDITION_REQUIRED"
+	ErrorPreconditionFailed   ErrorCode = "PRECONDITION_FAILED"
+	ErrorInternal             ErrorCode = "INTERNAL"
+	ErrorUnavailable          ErrorCode = "UNAVAILABLE"
 )
 
 func TriggerPolicies() []TriggerPolicy {
@@ -108,13 +118,21 @@ func RepositoryBindingHealthStates() []RepositoryBindingHealth {
 	}
 }
 
+func ReadinessStates() []ReadinessState {
+	return []ReadinessState{ReadinessReady, ReadinessNotReady}
+}
+
 func ErrorCodes() []ErrorCode {
 	return []ErrorCode{
 		ErrorInvalidArgument,
 		ErrorUnauthenticated,
 		ErrorForbidden,
 		ErrorNotFound,
+		ErrorMethodNotAllowed,
 		ErrorConflict,
+		ErrorPayloadTooLarge,
+		ErrorUnsupportedMediaType,
+		ErrorPreconditionRequired,
 		ErrorPreconditionFailed,
 		ErrorInternal,
 		ErrorUnavailable,

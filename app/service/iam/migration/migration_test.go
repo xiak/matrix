@@ -7,55 +7,80 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 )
 
-func TestPlatformServiceArgumentsAreDeterministicAndInstallationBound(t *testing.T) {
-	credentialText := "mx1.PlatformMigrationCredential000000000000000001"
-	credential, err := iamv1.NewSecret(credentialText)
+func TestReleaseServiceArgumentsAreDeterministicAndInstallationBound(t *testing.T) {
+	platform := testServiceCredential(t, "mx1.PlatformMigrationCredential000000000000000001")
+	devops := testServiceCredential(t, "mx1.DevOpsMigrationCredential00000000000000000001")
+	bindings := []ReleaseServiceBinding{
+		{Purpose: iamv1.ServicePlatform, Credential: platform},
+		{Purpose: iamv1.ServiceDevOps, Credential: devops},
+	}
+	first, err := releaseServiceArguments("installation-example", bindings)
 	if err != nil {
-		t.Fatalf("create platform migration credential: %v", err)
+		t.Fatalf("derive release service arguments: %v", err)
 	}
-	binding := PlatformServiceBinding{
-		InstallationID: "installation-example",
-		Credential:     credential,
+	second, err := releaseServiceArguments("installation-example", bindings)
+	if err != nil || len(second) != len(first) {
+		t.Fatalf("repeat release service arguments=%#v err=%v, want %#v", second, err, first)
 	}
-	first, err := platformServiceArguments(binding)
-	if err != nil {
-		t.Fatalf("derive platform service arguments: %v", err)
+	for index := range first {
+		if second[index] != first[index] ||
+			iamv1.ValidateDigest("lookupDigest", first[index].lookupDigest) != nil ||
+			iamv1.ValidateDigest("verificationDigest", first[index].verificationDigest) != nil ||
+			iamv1.ValidateDigest("requestDigest", first[index].requestDigest) != nil ||
+			first[index].lookupDigest == first[index].verificationDigest {
+			t.Fatalf("release service digests are invalid: %#v", first[index])
+		}
 	}
-	second, err := platformServiceArguments(binding)
-	if err != nil || second != first {
-		t.Fatalf("repeat platform service arguments=%#v err=%v, want %#v", second, err, first)
-	}
-	if iamv1.ValidateDigest("lookupDigest", first.lookupDigest) != nil ||
-		iamv1.ValidateDigest("verificationDigest", first.verificationDigest) != nil ||
-		iamv1.ValidateDigest("requestDigest", first.requestDigest) != nil ||
-		first.lookupDigest == first.verificationDigest {
-		t.Fatalf("platform service digests are invalid: %#v", first)
+	if first[0].principalID != "service-platform" || first[1].principalID != "service-devops" ||
+		first[0].requestDigest == first[1].requestDigest {
+		t.Fatalf("release service identities are invalid: %#v", first)
 	}
 
-	other := binding
-	other.InstallationID = "installation-other"
-	otherArguments, err := platformServiceArguments(other)
+	other, err := releaseServiceArguments("installation-other", bindings)
 	if err != nil {
 		t.Fatalf("derive other installation arguments: %v", err)
 	}
-	if otherArguments.lookupDigest != first.lookupDigest ||
-		otherArguments.verificationDigest != first.verificationDigest ||
-		otherArguments.requestDigest == first.requestDigest {
-		t.Fatalf("platform enrollment request is not installation-bound: %#v / %#v", first, otherArguments)
+	if other[1].lookupDigest != first[1].lookupDigest ||
+		other[1].verificationDigest != first[1].verificationDigest ||
+		other[1].requestDigest == first[1].requestDigest {
+		t.Fatalf("release enrollment request is not installation-bound: %#v / %#v", first, other)
 	}
 }
 
-func TestPlatformServiceArgumentsRejectInvalidBindingWithoutSecretLeak(t *testing.T) {
-	credentialText := "mx1.PlatformMigrationSecretMustRemainRedacted000001"
-	credential, err := iamv1.NewSecret(credentialText)
-	if err != nil {
-		t.Fatalf("create platform migration credential: %v", err)
+func TestReleaseServiceArgumentsRejectInvalidBindingsWithoutSecretLeak(t *testing.T) {
+	credentialText := "mx1.ReleaseMigrationSecretMustRemainRedacted0000001"
+	credential := testServiceCredential(t, credentialText)
+	tests := [][]ReleaseServiceBinding{
+		nil,
+		{{Purpose: iamv1.ServiceDevOps, Credential: credential}},
+		{
+			{Purpose: iamv1.ServicePlatform, Credential: credential},
+			{Purpose: iamv1.ServicePlatform, Credential: credential},
+		},
+		{
+			{Purpose: iamv1.ServicePlatform, Credential: credential},
+			{Purpose: iamv1.ServicePaaS, Credential: credential},
+		},
 	}
-	_, err = platformServiceArguments(PlatformServiceBinding{
-		InstallationID: "invalid installation",
-		Credential:     credential,
-	})
+	for _, bindings := range tests {
+		_, err := releaseServiceArguments("installation-example", bindings)
+		if err == nil || strings.Contains(err.Error(), credentialText) {
+			t.Fatalf("invalid release bindings=%#v error=%v", bindings, err)
+		}
+	}
+	_, err := releaseServiceArguments("invalid installation", []ReleaseServiceBinding{{
+		Purpose: iamv1.ServicePlatform, Credential: credential,
+	}})
 	if err == nil || strings.Contains(err.Error(), credentialText) {
-		t.Fatalf("invalid platform binding error=%v", err)
+		t.Fatalf("invalid installation binding error=%v", err)
 	}
+}
+
+func testServiceCredential(t *testing.T, value string) iamv1.Secret {
+	t.Helper()
+	credential, err := iamv1.NewSecret(value)
+	if err != nil {
+		t.Fatalf("create service credential: %v", err)
+	}
+	return credential
 }

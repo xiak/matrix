@@ -35,6 +35,7 @@ func TestDevOpsExamplesValidateAgainstOpenAPI(t *testing.T) {
 		"examples/pipeline.json":                          "Pipeline",
 		"examples/pipeline-revision.json":                 "PipelineRevision",
 		"examples/pipeline-activation.json":               "PipelineActivation",
+		"examples/readiness.json":                         "Readiness",
 		"examples/problem.json":                           "Problem",
 	}
 	for path, schemaName := range examples {
@@ -130,6 +131,25 @@ func TestPipelineActivationEndpointAcceptsNoCallerBody(t *testing.T) {
 		if !found {
 			t.Errorf("activation is missing %s", reference)
 		}
+	}
+}
+
+func TestPipelineRevisionReadBindsParentPipelineAndReadinessIsAnonymous(t *testing.T) {
+	document := loadDevOpsOpenAPI(t)
+	paths := document["paths"].(map[string]any)
+	if _, legacy := paths["/v1/pipeline-revisions/{pipelineRevisionId}"]; legacy {
+		t.Fatal("unscoped Pipeline revision route remains in the v1 contract")
+	}
+	operation := paths["/v1/pipelines/{pipelineId}/revisions/{pipelineRevisionId}"].(map[string]any)["get"].(map[string]any)
+	parameters := operation["parameters"].([]any)
+	if len(parameters) != 2 || parameters[0].(map[string]any)["name"] != "pipelineId" ||
+		parameters[1].(map[string]any)["name"] != "pipelineRevisionId" {
+		t.Fatalf("Pipeline revision parameters = %#v", parameters)
+	}
+	readiness := paths["/ready"].(map[string]any)["get"].(map[string]any)
+	security, found := readiness["security"].([]any)
+	if !found || len(security) != 0 {
+		t.Fatalf("readiness security = %#v", readiness["security"])
 	}
 }
 

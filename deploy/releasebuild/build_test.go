@@ -126,7 +126,7 @@ func TestAssembleProducesAuthenticatedCompleteRelease(t *testing.T) {
 	}
 	if len(effects.binaries) != len(binarySpecifications) ||
 		len(effects.dockerfiles) != len(imageRecipes) ||
-		len(effects.saved) != len(installationrelease.RequiredImages()) ||
+		len(effects.saved) != len(installationrelease.RequiredImages(result.Manifest.Products)) ||
 		len(effects.removed) != len(imageRecipes) {
 		t.Fatalf("fixed build closure is incomplete: binaries=%d images=%d archives=%d cleanup=%d",
 			len(effects.binaries), len(effects.dockerfiles), len(effects.saved), len(effects.removed))

@@ -100,7 +100,7 @@ func ValidateManifest(manifest Manifest) error {
 		validateProducts(manifest.Products, manifest.Images),
 		validateDigest("topologyDigest", manifest.TopologyDigest),
 		validateFiles(manifest.Files),
-		validateImages(manifest.Images, manifest.Files),
+		validateImages(manifest.Products, manifest.Images, manifest.Files),
 	)
 	if manifest.MinimumFreeBytes < minimumFreeBytes || manifest.MinimumFreeBytes > maximumFreeBytes {
 		problems = append(problems, errors.New("minimum free space is outside the supported range"))
@@ -332,8 +332,9 @@ func validateDatabase(value DatabaseProfile) error {
 }
 
 func validateProducts(products []Product, images []Image) error {
-	if len(products) == 0 || len(products) > 16 {
-		return errors.New("release product inventory size is invalid")
+	if len(products) == 0 || len(products) > 16 ||
+		products[0].ID != ProductApplicationPaaS {
+		return errors.New("release product inventory is invalid")
 	}
 	availableComponents := make(map[string]struct{}, len(images))
 	for _, image := range images {
@@ -381,14 +382,7 @@ func productContract(id ProductID, version string) (Product, bool) {
 	case ProductApplicationPaaS:
 		return ApplicationPaaSProduct(version), true
 	case ProductDevOps:
-		return Product{
-			ID:                 ProductDevOps,
-			Version:            version,
-			RouteKey:           "devops",
-			ReadinessContract:  "devops-ready-v1",
-			RequiredComponents: []string{"devops"},
-			Dependencies:       []ProductID{},
-		}, true
+		return DevOpsProduct(version), true
 	default:
 		return Product{}, false
 	}
@@ -477,8 +471,8 @@ func validateFiles(files []File) error {
 	return nil
 }
 
-func validateImages(images []Image, files []File) error {
-	return validateImagesAgainst(images, files, RequiredImages())
+func validateImages(products []Product, images []Image, files []File) error {
+	return validateImagesAgainst(images, files, RequiredImages(products))
 }
 
 func validateImagesAgainst(images []Image, files []File, required []ImageRequirement) error {

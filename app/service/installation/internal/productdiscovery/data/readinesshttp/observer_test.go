@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 	installationv1 "github.com/xiak/matrix/api/installation/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
@@ -49,6 +50,32 @@ func TestObserverMapsOnlyValidatedPaaSReadiness(t *testing.T) {
 				t.Fatalf("not-ready PaaS mapped to %#v", result)
 			}
 		})
+	}
+}
+
+func TestObserverMapsOnlyValidatedDevOpsReadiness(t *testing.T) {
+	now := time.Date(2026, 9, 7, 4, 5, 6, 0, time.UTC)
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet || request.URL.Path != "/ready" || request.URL.RawQuery != "" {
+			t.Errorf("readiness request = %s %s", request.Method, request.URL.String())
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(response).Encode(devopsv1.Readiness{
+			APIVersion: devopsv1.APIVersion, Kind: "Readiness",
+			State: devopsv1.ReadinessReady, SchemaVersion: 1, CheckedAt: now,
+		})
+	}))
+	defer server.Close()
+	observer, err := NewObserver(Config{
+		PaaSEndpoint: server.URL, DevOpsEndpoint: server.URL, HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatalf("create DevOps readiness observer: %v", err)
+	}
+	result, err := observer.Observe(context.Background(), installationv1.ProductDevOps)
+	if err != nil || result.State != installationv1.ProductReady ||
+		result.Reason != "" || result.ObservedAt != now {
+		t.Fatalf("DevOps observation = %#v / %v", result, err)
 	}
 }
 

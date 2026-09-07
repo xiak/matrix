@@ -16,7 +16,7 @@ import (
 )
 
 func TestInstalledCompilerReproducesAcceptedProductlessTopology(t *testing.T) {
-	if actual := ContractDigest(); actual != "sha256:fded554408ad1cc28db2da97f10bff6b7cb3989aec87e21462b7d9099deaa3c4" {
+	if actual := ContractDigest(); actual != "sha256:d48a0b64e7075fc90610de46e373bfdf8fdc504fbdbe49f7a74b101c1eb255c6" {
 		t.Fatalf("current topology contract digest drifted: %s", actual)
 	}
 	if actual := legacyProductlessImplementationDigest(); actual != legacyProductlessContractDigest {
@@ -123,14 +123,16 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	foundPostgresData := false
 	foundAPISIXRuntimeBoundary := false
 	expectedEntrypoints := map[string]string{
-		"audit":                 "/matrix/bin/matrix-audit",
-		"iam":                   "/matrix/bin/matrix-iam",
-		"iam-audit-dispatcher":  "/matrix/bin/matrix-iam-audit-dispatcher",
-		"matrix-ui":             "/matrix/bin/matrix-ui",
-		"paas-api":              "/matrix/bin/matrix-paas",
-		"paas-audit-dispatcher": "/matrix/bin/matrix-paas-audit-dispatcher",
-		"paas-worker":           "/matrix/bin/matrix-paas-worker",
-		"platform-api":          "/matrix/bin/matrix-platform",
+		"audit":                   "/matrix/bin/matrix-audit",
+		"devops-api":              "/matrix/bin/matrix-devops",
+		"devops-audit-dispatcher": "/matrix/bin/matrix-devops-audit-dispatcher",
+		"iam":                     "/matrix/bin/matrix-iam",
+		"iam-audit-dispatcher":    "/matrix/bin/matrix-iam-audit-dispatcher",
+		"matrix-ui":               "/matrix/bin/matrix-ui",
+		"paas-api":                "/matrix/bin/matrix-paas",
+		"paas-audit-dispatcher":   "/matrix/bin/matrix-paas-audit-dispatcher",
+		"paas-worker":             "/matrix/bin/matrix-paas-worker",
+		"platform-api":            "/matrix/bin/matrix-platform",
 	}
 	expectedEnvironmentKeys := map[string][]string{
 		"audit": {
@@ -141,6 +143,15 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 		"iam": {
 			"MATRIX_IAM_BOOTSTRAP_FILE", "MATRIX_IAM_DATABASE_DSN_FILE",
 			"MATRIX_IAM_LISTEN_ADDRESS",
+		},
+		"devops-api": {
+			"MATRIX_DEVOPS_DATABASE_DSN_FILE", "MATRIX_DEVOPS_IAM_ENDPOINT",
+			"MATRIX_DEVOPS_LISTEN_ADDRESS", "MATRIX_DEVOPS_SERVICE_CREDENTIAL_FILE",
+		},
+		"devops-audit-dispatcher": {
+			"MATRIX_DEVOPS_AUDIT_CREDENTIAL_FILE", "MATRIX_DEVOPS_AUDIT_DATABASE_DSN_FILE",
+			"MATRIX_DEVOPS_AUDIT_ENDPOINT", "MATRIX_DEVOPS_AUDIT_LISTEN_ADDRESS",
+			"MATRIX_DEVOPS_AUDIT_WORKER_ID",
 		},
 		"iam-audit-dispatcher": {
 			"MATRIX_IAM_AUDIT_CREDENTIAL_FILE", "MATRIX_IAM_AUDIT_DATABASE_DSN_FILE",
@@ -168,7 +179,8 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			"MATRIX_PAAS_WORKER_SECRET_ROOT",
 		},
 		"platform-api": {
-			"MATRIX_PLATFORM_IAM_CREDENTIAL_FILE", "MATRIX_PLATFORM_IAM_ENDPOINT",
+			"MATRIX_PLATFORM_DEVOPS_ENDPOINT", "MATRIX_PLATFORM_IAM_CREDENTIAL_FILE",
+			"MATRIX_PLATFORM_IAM_ENDPOINT",
 			"MATRIX_PLATFORM_INSTALLATION_ID", "MATRIX_PLATFORM_LISTEN_ADDRESS",
 			"MATRIX_PLATFORM_PAAS_ENDPOINT", "MATRIX_PLATFORM_RELEASE_ID",
 			"MATRIX_PLATFORM_RELEASE_MANIFEST_FILE", "MATRIX_PLATFORM_RELEASE_SIGNATURE_FILE",
@@ -176,7 +188,8 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 		},
 	}
 	expectedImageComponents := map[string]string{
-		"apisix": "apisix", "audit": "audit", "iam": "iam",
+		"apisix": "apisix", "audit": "audit", "devops-api": "devops",
+		"devops-audit-dispatcher": "devops", "iam": "iam",
 		"iam-audit-dispatcher": "iam", "matrix-ui": "matrix-ui", "paas-api": "paas",
 		"paas-audit-dispatcher": "paas",
 		"paas-worker":           "paas", "platform-api": "platform",
@@ -414,6 +427,41 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	}
 }
 
+func TestCompileOmitsUnselectedDevOpsProduct(t *testing.T) {
+	manifest := topologyManifest()
+	manifest.Products = manifest.Products[:1]
+	manifest.Images = slices.DeleteFunc(manifest.Images, func(image release.Image) bool {
+		return image.Component == "devops"
+	})
+	manifest.Files = slices.DeleteFunc(manifest.Files, func(file release.File) bool {
+		return file.Path == "images/devops.tar"
+	})
+	result, err := Compile(manifest, Options{
+		InstallationID: "mxi-" + strings.Repeat("a", 32), Root: "/srv/matrix",
+		Listener: "127.0.0.1", Port: 8443,
+	})
+	if err != nil {
+		t.Fatalf("compile PaaS-only topology: %v", err)
+	}
+	var document composeDocument
+	if err := json.Unmarshal(result.ComposeJSON, &document); err != nil {
+		t.Fatalf("decode PaaS-only topology: %v", err)
+	}
+	if _, found := document.Services["devops-api"]; found {
+		t.Fatal("PaaS-only topology contains DevOps API")
+	}
+	if _, found := document.Services["devops-audit-dispatcher"]; found {
+		t.Fatal("PaaS-only topology contains DevOps Audit dispatcher")
+	}
+	platform := document.Services["platform-api"]
+	if _, found := platform.Environment["MATRIX_PLATFORM_DEVOPS_ENDPOINT"]; found {
+		t.Fatal("PaaS-only product discovery can probe an undeclared DevOps endpoint")
+	}
+	if _, found := document.Services["apisix"].DependsOn["devops-api"]; found {
+		t.Fatal("PaaS-only gateway depends on unselected DevOps")
+	}
+}
+
 func TestCompileRejectsUntrustedTopologyInputs(t *testing.T) {
 	valid := Options{
 		InstallationID: "mxi-" + strings.Repeat("a", 32),
@@ -467,11 +515,15 @@ func topologyManifest() release.Manifest {
 		Path: "bin/mx", MediaType: "application/vnd.matrix.executable",
 		Size: 1024, SHA256: digest('1'), Executable: true,
 	}}
-	required := release.RequiredImages()
+	products := []release.Product{
+		release.ApplicationPaaSProduct("v0.1.0"),
+		release.DevOpsProduct("v0.1.0"),
+	}
+	required := release.RequiredImages(products)
 	images := make([]release.Image, 0, len(required))
-	fileDigests := "23456789"
-	imageDigests := "89abcdef"
-	sourceDigests := "ef012345"
+	fileDigests := "23456789a"
+	imageDigests := "789abcdef"
+	sourceDigests := "abcdef012"
 	for index, requirement := range required {
 		archive := "images/" + requirement.Component + ".tar"
 		files = append(files, release.File{
@@ -502,7 +554,7 @@ func topologyManifest() release.Manifest {
 		Database: release.DatabaseProfile{
 			SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one",
 		},
-		Products:       []release.Product{release.ApplicationPaaSProduct("v0.1.0")},
+		Products:       products,
 		TopologyDigest: ContractDigest(), Files: files, Images: images,
 	}
 }

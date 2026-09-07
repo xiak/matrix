@@ -19,6 +19,8 @@ const (
 	AuditRuntime      = "secrets/database/audit-runtime-dsn"
 	PaaSAPI           = "secrets/database/paas-api-dsn"
 	PaaSWorker        = "secrets/database/paas-worker-dsn"
+	DevOpsAPI         = "secrets/database/devops-api-dsn"
+	DevOpsWorker      = "secrets/database/devops-worker-dsn"
 
 	IAMBootstrap                   = "secrets/authority/iam-bootstrap.json"
 	AuditIAMCredential             = "secrets/authority/audit-iam-credential"
@@ -26,6 +28,8 @@ const (
 	PlatformIAMCredential          = "secrets/authority/platform-iam-credential"
 	PaaSIAMCredential              = "secrets/authority/paas-iam-credential"
 	PaaSAuditCredential            = "secrets/authority/paas-audit-credential"
+	DevOpsIAMCredential            = "secrets/authority/devops-iam-credential"
+	DevOpsAuditCredential          = "secrets/authority/devops-audit-credential"
 	InstallationVerifierCredential = "secrets/authority/installation-verifier-iam-credential"
 	AuditCursorKey                 = "secrets/authority/audit-cursor-key"
 	BackupSealKey                  = "secrets/authority/backup-seal-key"

@@ -200,6 +200,45 @@ func (transaction *configurationTransaction) LoadPipeline(
 	return value, true, nil
 }
 
+func (transaction *configurationTransaction) LoadPipelineRevision(
+	ctx context.Context,
+	id devopsv1.ResourceID,
+) (devopsv1.PipelineRevision, bool, error) {
+	if err := devopsv1.ValidateID("pipelineRevisionId", string(id)); err != nil {
+		return devopsv1.PipelineRevision{}, false, err
+	}
+	var pipelineID, projectID, bindingID, bindingDigest, contentDigest string
+	var revision uint64
+	var activatedAt time.Time
+	var document []byte
+	err := transaction.tx.QueryRow(ctx,
+		`SELECT pipeline_id, project_id, repository_binding_id, repository_binding_digest,
+		        revision, content_digest, activated_at, document
+		   FROM delivery.pipeline_revisions WHERE tenant_id = $1 AND id = $2`,
+		string(transaction.tenantID), string(id),
+	).Scan(&pipelineID, &projectID, &bindingID, &bindingDigest, &revision, &contentDigest, &activatedAt, &document)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return devopsv1.PipelineRevision{}, false, nil
+	}
+	if err != nil {
+		return devopsv1.PipelineRevision{}, false, fmt.Errorf("load PipelineRevision: %w", err)
+	}
+	var value devopsv1.PipelineRevision
+	if err := decodeDocument("PipelineRevision", document, &value); err != nil {
+		return value, false, err
+	}
+	if err := devopsv1.ValidatePipelineRevision(value); err != nil {
+		return value, false, fmt.Errorf("validate stored PipelineRevision: %w", err)
+	}
+	if value.ID != id || value.Scope.TenantID != transaction.tenantID ||
+		string(value.PipelineID) != pipelineID || string(value.ProjectID) != projectID ||
+		string(value.Spec.RepositoryBindingID) != bindingID || value.Spec.RepositoryBindingDigest != bindingDigest ||
+		value.Revision != revision || value.ContentDigest != contentDigest || !value.ActivatedAt.Equal(activatedAt.UTC()) {
+		return value, false, errors.New("stored PipelineRevision relational identity mismatch")
+	}
+	return value, true, nil
+}
+
 func (transaction *configurationTransaction) queryResource(
 	ctx context.Context,
 	table string,

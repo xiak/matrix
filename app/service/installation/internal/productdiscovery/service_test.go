@@ -44,6 +44,37 @@ func TestListAuthorizesAndProjectsOnlySignedProducts(t *testing.T) {
 	}
 }
 
+func TestListProjectsSelectedDevOpsWithIndependentReadiness(t *testing.T) {
+	now := discoveryTime()
+	observer := &recordingObserver{observations: map[installationv1.ProductID]ProductObservation{
+		installationv1.ProductApplicationPaaS: {
+			State: installationv1.ProductReady, ObservedAt: now,
+		},
+		installationv1.ProductDevOps: {
+			State:  installationv1.ProductUnavailable,
+			Reason: installationv1.ReasonDependencyUnavailable, ObservedAt: now,
+		},
+	}}
+	service, err := NewService(
+		releasetest.DevOpsManifest(), &recordingAuthorizer{}, observer,
+		Config{InstallationID: "installation-example", Now: func() time.Time { return now }},
+	)
+	if err != nil {
+		t.Fatalf("create multi-product discovery service: %v", err)
+	}
+	result, err := service.List(context.Background(), "Bearer credential", "request-products")
+	if err != nil || len(result.Products) != 2 ||
+		result.Products[0].ID != installationv1.ProductApplicationPaaS ||
+		result.Products[1].ID != installationv1.ProductDevOps ||
+		result.Products[1].RouteKey != "devops" ||
+		result.Products[1].State != installationv1.ProductUnavailable ||
+		!slices.Equal(observer.observed, []installationv1.ProductID{
+			installationv1.ProductApplicationPaaS, installationv1.ProductDevOps,
+		}) {
+		t.Fatalf("multi-product projection=%#v observed=%v err=%v", result, observer.observed, err)
+	}
+}
+
 func TestListNormalizesUnavailableAndStaleProductObservation(t *testing.T) {
 	now := discoveryTime()
 	for name, observation := range map[string]ProductObservation{

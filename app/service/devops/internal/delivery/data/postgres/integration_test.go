@@ -19,6 +19,7 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	devopspostgres "github.com/xiak/matrix/app/service/devops/internal/delivery/data/postgres"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/port"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/auditdispatch"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/pipelineconfiguration"
 	devopsmigration "github.com/xiak/matrix/app/service/devops/migration"
 )
@@ -178,6 +179,28 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 	if err != nil || thirdActivation.Value.Revision.Revision != 3 {
 		t.Fatalf("activate third revision=%#v err=%v", thirdActivation, err)
 	}
+	readPipeline, err := usecase.GetPipeline(ctx, pipelineconfiguration.GetPipelineQuery{
+		Authorization: auth(iamv1.ActionDevOpsPipelineRead, iamv1.ResourcePipeline, pipelineID),
+		PipelineID:    pipelineID,
+	})
+	if err != nil || readPipeline.Metadata.ResourceVersion != thirdActivation.Value.Pipeline.Metadata.ResourceVersion {
+		t.Fatalf("read current Pipeline=%#v err=%v", readPipeline, err)
+	}
+	readRevision, err := usecase.GetPipelineRevision(ctx, pipelineconfiguration.GetPipelineRevisionQuery{
+		Authorization: auth(iamv1.ActionDevOpsPipelineRead, iamv1.ResourcePipeline, pipelineID),
+		PipelineID:    pipelineID, PipelineRevisionID: firstActivation.Value.Revision.ID,
+	})
+	if err != nil || readRevision.ID != firstActivation.Value.Revision.ID ||
+		readRevision.ContentDigest != firstActivation.Value.Revision.ContentDigest {
+		t.Fatalf("read immutable PipelineRevision=%#v err=%v", readRevision, err)
+	}
+	_, err = usecase.GetPipelineRevision(ctx, pipelineconfiguration.GetPipelineRevisionQuery{
+		Authorization: auth(iamv1.ActionDevOpsPipelineRead, iamv1.ResourcePipeline, "pipeline-other"),
+		PipelineID:    "pipeline-other", PipelineRevisionID: firstActivation.Value.Revision.ID,
+	})
+	if !errors.Is(err, pipelineconfiguration.ErrNotFound) {
+		t.Fatalf("cross-parent PipelineRevision error=%v", err)
+	}
 
 	replayedDraft, err := usecase.UpdatePipelineDraft(ctx, pipelineconfiguration.UpdatePipelineDraftCommand{
 		Authorization: auth(iamv1.ActionDevOpsPipelineUpdate, iamv1.ResourcePipeline, pipelineID),
@@ -218,12 +241,60 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		return err
 	})
 	assertDenied(t, func() error { _, err := pool.Exec(ctx, `SELECT count(*) FROM delivery.audit_outbox`); return err })
-	worker, err := pgx.Connect(ctx, workerDSN)
-	if err != nil {
-		t.Fatal("connect DevOps worker role")
+	readiness, err := repository.Readiness(ctx)
+	if err != nil || readiness.State != devopsv1.ReadinessReady {
+		t.Fatalf("DevOps API readiness=%#v err=%v", readiness, err)
 	}
-	defer worker.Close(context.Background())
-	assertDenied(t, func() error { _, err := worker.Exec(ctx, `SELECT count(*) FROM delivery.projects`); return err })
+	workerPool, err := pgxpool.New(ctx, workerDSN)
+	if err != nil {
+		t.Fatal("connect DevOps worker pool")
+	}
+	defer workerPool.Close()
+	assertDenied(t, func() error { _, err := workerPool.Exec(ctx, `SELECT count(*) FROM delivery.projects`); return err })
+	outbox, err := devopspostgres.NewAuditOutboxRepository(workerPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workerReadiness, err := outbox.Readiness(ctx)
+	if err != nil || workerReadiness.State != devopsv1.ReadinessReady {
+		t.Fatalf("DevOps Audit worker readiness=%#v err=%v", workerReadiness, err)
+	}
+	snapshot, err := outbox.Snapshot(ctx)
+	if err != nil || snapshot.Pending != 11 || snapshot.Delivered != 0 {
+		t.Fatalf("initial Audit outbox snapshot=%#v err=%v", snapshot, err)
+	}
+	for index := 0; index < 11; index++ {
+		claim, found, err := outbox.Claim(ctx, "audit-worker-integration", 30*time.Second)
+		if err != nil || !found {
+			t.Fatalf("claim Audit event %d=%#v found=%t err=%v", index, claim, found, err)
+		}
+		if err := auditv1.ValidateEventForSource(auditv1.SourceDevOps, claim.Event); err != nil {
+			t.Fatalf("claimed Audit event %d: %v", index, err)
+		}
+		if index == 0 {
+			err = outbox.Complete(ctx, auditdispatch.Completion{
+				TenantID: claim.TenantID, EventID: claim.EventID, WorkerID: "audit-worker-integration",
+				FencingToken: claim.FencingToken + 1, Outcome: auditdispatch.OutcomeDelivered,
+			})
+			if !errors.Is(err, auditdispatch.ErrStaleLease) {
+				t.Fatalf("stale Audit fence error=%v", err)
+			}
+		}
+		if err := outbox.Complete(ctx, auditdispatch.Completion{
+			TenantID: claim.TenantID, EventID: claim.EventID, WorkerID: "audit-worker-integration",
+			FencingToken: claim.FencingToken, Outcome: auditdispatch.OutcomeDelivered,
+		}); err != nil {
+			t.Fatalf("complete Audit event %d: %v", index, err)
+		}
+	}
+	if claim, found, err := outbox.Claim(ctx, "audit-worker-integration", 30*time.Second); err != nil || found {
+		t.Fatalf("empty Audit claim=%#v found=%t err=%v", claim, found, err)
+	}
+	snapshot, err = outbox.Snapshot(ctx)
+	if err != nil || snapshot.Delivered != 11 || snapshot.Pending != 0 || snapshot.Leased != 0 ||
+		snapshot.Retry != 0 || snapshot.DeadLetter != 0 || snapshot.ExpiredLease != 0 {
+		t.Fatalf("delivered Audit outbox snapshot=%#v err=%v", snapshot, err)
+	}
 
 	var mutationCount, auditCount, bindingRevisionCount, pipelineRevisionCount int
 	if err := admin.QueryRow(ctx, `SELECT

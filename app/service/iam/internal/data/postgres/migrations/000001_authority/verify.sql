@@ -103,11 +103,17 @@ BEGIN
     END IF;
 
     IF to_regprocedure(
-            'iam.ensure_platform_service(text,text,text,text,text)'
+            'iam.ensure_release_service(text,text,text,text,text)'
        ) IS NULL
        OR to_regprocedure(
-            'iam.verify_platform_service(text,text,text,text)'
+            'iam.verify_release_service(text,text,text,text)'
        ) IS NULL
+       OR to_regprocedure(
+            'iam.ensure_platform_service(text,text,text,text,text)'
+       ) IS NOT NULL
+       OR to_regprocedure(
+            'iam.verify_platform_service(text,text,text,text)'
+       ) IS NOT NULL
        OR iam.resource_kind_for_action('installation.product.read')
             IS DISTINCT FROM 'INSTALLATION'
        OR iam.resource_kind_for_action('devops.pipeline.activate')
@@ -143,7 +149,7 @@ BEGIN
                     'DEVOPS_ADMIN' IN pg_catalog.pg_get_constraintdef(constraint_row.oid)
                ) > 0
        ) THEN
-        RAISE EXCEPTION 'IAM platform authority schema is invalid';
+        RAISE EXCEPTION 'IAM release authority schema is invalid';
     END IF;
 
     IF NOT has_function_privilege(
@@ -219,24 +225,24 @@ BEGIN
        OR has_function_privilege(
             'matrix_iam_api', 'iam.assert_user_audit_actor(text,text,jsonb)', 'EXECUTE'
        )
-       OR has_function_privilege(
+        OR has_function_privilege(
             'matrix_iam_api',
-            'iam.ensure_platform_service(text,text,text,text,text)',
+            'iam.ensure_release_service(text,text,text,text,text)',
             'EXECUTE'
        )
        OR has_function_privilege(
             'matrix_iam_worker',
-            'iam.ensure_platform_service(text,text,text,text,text)',
+            'iam.ensure_release_service(text,text,text,text,text)',
             'EXECUTE'
        )
        OR has_function_privilege(
             'matrix_iam_api',
-            'iam.verify_platform_service(text,text,text,text)',
+            'iam.verify_release_service(text,text,text,text)',
             'EXECUTE'
        )
        OR has_function_privilege(
             'matrix_iam_worker',
-            'iam.verify_platform_service(text,text,text,text)',
+            'iam.verify_release_service(text,text,text,text)',
             'EXECUTE'
        ) THEN
         RAISE EXCEPTION 'IAM API/worker function authority is invalid';

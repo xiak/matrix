@@ -37,6 +37,14 @@ func Write(base string) (Fixture, error) {
 	return fixtures[0], nil
 }
 
+func WriteDevOps(base string) (Fixture, error) {
+	fixtures, err := writeManifests(base, []release.Manifest{DevOpsManifest()})
+	if err != nil {
+		return Fixture{}, err
+	}
+	return fixtures[0], nil
+}
+
 // WriteSequence creates signed immediate-successor fixtures under one trust
 // root. It is intentionally metadata-only and never substitutes for a real
 // offline release in runtime acceptance.
@@ -183,7 +191,20 @@ func encodeProductlessManifest(manifest release.Manifest) ([]byte, error) {
 }
 
 func Manifest() release.Manifest {
-	required := release.RequiredImages()
+	products := []release.Product{release.ApplicationPaaSProduct("v0.1.0")}
+	return manifest(products)
+}
+
+func DevOpsManifest() release.Manifest {
+	products := []release.Product{
+		release.ApplicationPaaSProduct("v0.1.0"),
+		release.DevOpsProduct("v0.1.0"),
+	}
+	return manifest(products)
+}
+
+func manifest(products []release.Product) release.Manifest {
+	required := release.RequiredImages(products)
 	files := []release.File{{
 		Path: "bin/mx", MediaType: "application/vnd.matrix.executable",
 		Size: 1, SHA256: stableDigest("executable:mx"), Executable: true,
@@ -222,7 +243,7 @@ func Manifest() release.Manifest {
 		Database: release.DatabaseProfile{
 			SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one",
 		},
-		Products:       []release.Product{release.ApplicationPaaSProduct("v0.1.0")},
+		Products:       products,
 		TopologyDigest: topology.ContractDigest(), Files: files, Images: images,
 	}
 }

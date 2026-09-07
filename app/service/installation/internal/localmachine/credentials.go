@@ -46,7 +46,8 @@ func stageInstallation(plan platformcommand.InstallPlan, entropy io.Reader) erro
 	if err != nil {
 		return err
 	}
-	if _, err := release.StageDirectory(plan.Bundle, plan.TrustBytes, destination); err != nil {
+	staged, err := release.StageDirectory(plan.Bundle, plan.TrustBytes, destination)
+	if err != nil {
 		if errors.Is(err, release.ErrStageConflict) {
 			return errors.Join(platformcommand.ErrEffectConflict, err)
 		}
@@ -82,6 +83,20 @@ func stageInstallation(plan platformcommand.InstallPlan, entropy io.Reader) erro
 			if err := writeManagedOnce(plan.Root, filepath.FromSlash(path), credential); err != nil {
 				return errors.Join(platformcommand.ErrEffectConflict, err)
 			}
+		}
+	}
+	if staged.Manifest.IncludesProduct(release.ProductDevOps) {
+		credential, err := ensureGeneratedCredential(
+			plan.Root, layout.DevOpsIAMCredential, entropy, "mx1.", false,
+		)
+		if err != nil {
+			return err
+		}
+		defer clear(credential)
+		if err := writeManagedOnce(
+			plan.Root, filepath.FromSlash(layout.DevOpsAuditCredential), credential,
+		); err != nil {
+			return errors.Join(platformcommand.ErrEffectConflict, err)
 		}
 	}
 	if err := writeManagedOnce(
@@ -123,6 +138,19 @@ func stageInstallation(plan platformcommand.InstallPlan, entropy io.Reader) erro
 	} {
 		if err := ensureRuntimeDSN(plan.Root, login.path, login.role, entropy); err != nil {
 			return err
+		}
+	}
+	if staged.Manifest.IncludesProduct(release.ProductDevOps) {
+		for _, login := range []struct {
+			path string
+			role string
+		}{
+			{path: layout.DevOpsAPI, role: "matrix_devops_api_login"},
+			{path: layout.DevOpsWorker, role: "matrix_devops_worker_login"},
+		} {
+			if err := ensureRuntimeDSN(plan.Root, login.path, login.role, entropy); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -236,6 +264,8 @@ func servicePrincipalID(purpose iamv1.ServicePurpose) iamv1.PrincipalID {
 		return "service-platform"
 	case iamv1.ServicePaaS:
 		return "service-paas"
+	case iamv1.ServiceDevOps:
+		return "service-devops"
 	case iamv1.ServiceAudit:
 		return "service-audit"
 	case iamv1.ServiceInstallationVerifier:

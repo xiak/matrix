@@ -413,10 +413,37 @@ transaction, cannot read the Audit outbox, and worker currently has no table
 access. The migration is repeatable and participates in the platform-wide
 cross-schema credential boundary test.
 
-These slices do not complete Gate A. SourceEvent, PipelineRun, log,
-replay/cancellation/lease/fence/reconciliation, quota, pagination, DevOps
-credential enrollment, HTTP IAM/Audit adapters, Audit dispatch, and real
-service composition remain pending.
+The HTTP slice exposes only the generated nested resource paths, including
+Pipeline-scoped revision reads and unauthenticated readiness. It derives every
+request identity server-side, rejects caller authority headers, strictly
+decodes bounded JSON, distinguishes media type, payload size, method,
+precondition-required, and precondition-failed outcomes, and normalizes all
+failures without native detail. Reads and writes authorize the exact IAM action
+and resource before touching the repository; IAM alone derives tenant and
+subject identity.
+
+The IAM adapter authenticates DevOps with its own service credential while
+forwarding the caller Bearer credential, binds correlation and trace context,
+rejects authorization-response drift, and requires the `DEVOPS` service
+identity for readiness. The Audit adapter and dispatcher claim durable outbox
+facts with leases and fencing, accept only exact `ACCEPTED|DUPLICATE` receipts,
+retry transient failure with a bounded backoff, and dead-letter terminal or
+exhausted delivery. API and worker database identities remain table-blind
+outside their security-definer functions, and readiness fails closed on an
+exhausted or dead-lettered Audit fact.
+
+The signed release now supplies an independently built DevOps image and selects
+the DevOps API, Audit dispatcher, database identities, IAM/Audit credentials,
+gateway route, and product-readiness endpoint as one closed topology slice.
+An unselected inventory receives none of those runtime capabilities. Fresh
+installation keeps the exact five-service Foundation bootstrap, starts IAM to
+commit it, and only then uses the migration identity to idempotently enroll
+`service-devops`; existing installations converge directly. Runtime roles
+cannot call the release-service enrollment functions.
+
+These slices do not complete Gate A. SourceEvent, PipelineRun, logs,
+replay/cancellation/lease/fence/reconciliation, quota, pagination, and the real
+cross-process HTTP journey remain pending.
 
 Current verification evidence:
 
@@ -429,10 +456,13 @@ Current verification evidence:
 - Linux/amd64 CGO-disabled cross-build of the new contract and domain packages
 - deterministic OpenAPI generation-drift tests and `git diff --check`
 - real PostgreSQL 18 double-apply and catalog integration tests for the IAM and
-  Audit extensions
+  Audit extensions, release-selected Platform/DevOps credential enrollment,
+  equal replay, changed-credential rejection, and exact Audit facts
 - full in-memory configuration journeys proving action-bound authorization,
   equal/changed replay, transaction retry, result snapshots, and binding-safe
   reactivation
+- strict DevOps HTTP, IAM HTTP, Audit HTTP, outbox-dispatch, product discovery,
+  signed topology-selection, and release-assembly tests
 - real PostgreSQL 18 configuration journeys proving double apply, exact
   runtime identities, forced cross-tenant isolation, function-only API writes,
   a table-blind worker, immutable binding/revision history, sanitized Audit

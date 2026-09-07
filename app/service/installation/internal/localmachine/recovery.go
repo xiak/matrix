@@ -21,7 +21,9 @@ const (
 	recoveryVerificationDownTimeout = "30"
 	// These are the only schema objects introduced after the accepted
 	// productless backup contract that pg_restore cannot discover and clean.
-	legacyProductlessRestorePrelude = `DROP FUNCTION IF EXISTS iam.ensure_platform_service(text,text,text,text,text);
+	legacyProductlessRestorePrelude = `DROP FUNCTION IF EXISTS iam.ensure_release_service(text,text,text,text,text);
+DROP FUNCTION IF EXISTS iam.verify_release_service(text,text,text,text);
+DROP FUNCTION IF EXISTS iam.ensure_platform_service(text,text,text,text,text);
 DROP FUNCTION IF EXISTS iam.verify_platform_service(text,text,text,text);
 `
 )

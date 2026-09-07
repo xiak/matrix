@@ -179,7 +179,11 @@
           "UNAUTHENTICATED",
           "FORBIDDEN",
           "NOT_FOUND",
+          "METHOD_NOT_ALLOWED",
           "CONFLICT",
+          "PAYLOAD_TOO_LARGE",
+          "UNSUPPORTED_MEDIA_TYPE",
+          "PRECONDITION_REQUIRED",
           "PRECONDITION_FAILED",
           "INTERNAL",
           "UNAVAILABLE"
@@ -571,6 +575,27 @@
             "if": {
               "properties": {
                 "code": {
+                  "const": "METHOD_NOT_ALLOWED"
+                }
+              },
+              "required": [
+                "code"
+              ]
+            },
+            "then": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    405
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "code": {
                   "const": "CONFLICT"
                 }
               },
@@ -583,6 +608,69 @@
                 "status": {
                   "enum": [
                     409
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "code": {
+                  "const": "PAYLOAD_TOO_LARGE"
+                }
+              },
+              "required": [
+                "code"
+              ]
+            },
+            "then": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    413
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "code": {
+                  "const": "UNSUPPORTED_MEDIA_TYPE"
+                }
+              },
+              "required": [
+                "code"
+              ]
+            },
+            "then": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    415
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "code": {
+                  "const": "PRECONDITION_REQUIRED"
+                }
+              },
+              "required": [
+                "code"
+              ]
+            },
+            "then": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    428
                   ]
                 }
               }
@@ -709,6 +797,43 @@
           "type"
         ],
         "type": "object"
+      },
+      "Readiness": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "type": "string"
+          },
+          "checkedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "schemaVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ReadinessState"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "checkedAt",
+          "kind",
+          "schemaVersion",
+          "state"
+        ],
+        "type": "object"
+      },
+      "ReadinessState": {
+        "enum": [
+          "READY",
+          "NOT_READY"
+        ],
+        "type": "string"
       },
       "ReporterPolicy": {
         "enum": [
@@ -1116,55 +1241,32 @@
   },
   "openapi": "3.1.0",
   "paths": {
-    "/v1/pipeline-revisions/{pipelineRevisionId}": {
+    "/ready": {
       "get": {
-        "operationId": "getPipelineRevision",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "pipelineRevisionId",
-            "required": true,
-            "schema": {
-              "maxLength": 128,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
-              "type": "string"
-            }
-          }
-        ],
+        "operationId": "getDevOpsReadiness",
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PipelineRevision"
+                  "$ref": "#/components/schemas/Readiness"
                 }
               }
             },
-            "description": "Current authorized resource.",
-            "headers": {
-              "ETag": {
-                "$ref": "#/components/headers/ETag"
-              }
-            }
+            "description": "DevOps is ready."
           },
-          "401": {
+          "400": {
             "$ref": "#/components/responses/ProblemResponse"
           },
-          "403": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "404": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "500": {
+          "405": {
             "$ref": "#/components/responses/ProblemResponse"
           },
           "503": {
             "$ref": "#/components/responses/ProblemResponse"
           }
         },
-        "summary": "Get an immutable Pipeline revision"
+        "security": [],
+        "summary": "Get DevOps readiness"
       }
     },
     "/v1/pipelines": {
@@ -1213,7 +1315,19 @@
           "403": {
             "$ref": "#/components/responses/ProblemResponse"
           },
+          "405": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
           "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
             "$ref": "#/components/responses/ProblemResponse"
           },
           "422": {
@@ -1261,6 +1375,9 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
           "401": {
             "$ref": "#/components/responses/ProblemResponse"
           },
@@ -1268,6 +1385,9 @@
             "$ref": "#/components/responses/ProblemResponse"
           },
           "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "405": {
             "$ref": "#/components/responses/ProblemResponse"
           },
           "500": {
@@ -1322,6 +1442,9 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
           "401": {
             "$ref": "#/components/responses/ProblemResponse"
           },
@@ -1331,6 +1454,9 @@
           "404": {
             "$ref": "#/components/responses/ProblemResponse"
           },
+          "405": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
           "409": {
             "$ref": "#/components/responses/ProblemResponse"
           },
@@ -1338,6 +1464,9 @@
             "$ref": "#/components/responses/ProblemResponse"
           },
           "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "428": {
             "$ref": "#/components/responses/ProblemResponse"
           },
           "500": {
@@ -1410,13 +1539,25 @@
           "404": {
             "$ref": "#/components/responses/ProblemResponse"
           },
+          "405": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
           "409": {
             "$ref": "#/components/responses/ProblemResponse"
           },
           "412": {
             "$ref": "#/components/responses/ProblemResponse"
           },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
           "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "428": {
             "$ref": "#/components/responses/ProblemResponse"
           },
           "500": {
@@ -1427,6 +1568,74 @@
           }
         },
         "summary": "Replace a Pipeline draft"
+      }
+    },
+    "/v1/pipelines/{pipelineId}/revisions/{pipelineRevisionId}": {
+      "get": {
+        "operationId": "getPipelineRevision",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pipelineId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "pipelineRevisionId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineRevision"
+                }
+              }
+            },
+            "description": "Current authorized resource.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "405": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Get an immutable Pipeline revision"
       }
     },
     "/v1/projects": {
@@ -1475,7 +1684,19 @@
           "403": {
             "$ref": "#/components/responses/ProblemResponse"
           },
+          "405": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
           "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
             "$ref": "#/components/responses/ProblemResponse"
           },
           "422": {
@@ -1523,6 +1744,9 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
           "401": {
             "$ref": "#/components/responses/ProblemResponse"
           },
@@ -1530,6 +1754,9 @@
             "$ref": "#/components/responses/ProblemResponse"
           },
           "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "405": {
             "$ref": "#/components/responses/ProblemResponse"
           },
           "500": {
@@ -1588,7 +1815,19 @@
           "403": {
             "$ref": "#/components/responses/ProblemResponse"
           },
+          "405": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
           "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
             "$ref": "#/components/responses/ProblemResponse"
           },
           "422": {
@@ -1636,6 +1875,9 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
           "401": {
             "$ref": "#/components/responses/ProblemResponse"
           },
@@ -1643,6 +1885,9 @@
             "$ref": "#/components/responses/ProblemResponse"
           },
           "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "405": {
             "$ref": "#/components/responses/ProblemResponse"
           },
           "500": {
@@ -1713,13 +1958,25 @@
           "404": {
             "$ref": "#/components/responses/ProblemResponse"
           },
+          "405": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
           "409": {
             "$ref": "#/components/responses/ProblemResponse"
           },
           "412": {
             "$ref": "#/components/responses/ProblemResponse"
           },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
           "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "428": {
             "$ref": "#/components/responses/ProblemResponse"
           },
           "500": {
@@ -1778,7 +2035,19 @@
           "403": {
             "$ref": "#/components/responses/ProblemResponse"
           },
+          "405": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
           "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
             "$ref": "#/components/responses/ProblemResponse"
           },
           "422": {
@@ -1826,6 +2095,9 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
           "401": {
             "$ref": "#/components/responses/ProblemResponse"
           },
@@ -1833,6 +2105,9 @@
             "$ref": "#/components/responses/ProblemResponse"
           },
           "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "405": {
             "$ref": "#/components/responses/ProblemResponse"
           },
           "500": {
@@ -1903,13 +2178,25 @@
           "404": {
             "$ref": "#/components/responses/ProblemResponse"
           },
+          "405": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
           "409": {
             "$ref": "#/components/responses/ProblemResponse"
           },
           "412": {
             "$ref": "#/components/responses/ProblemResponse"
           },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
           "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "428": {
             "$ref": "#/components/responses/ProblemResponse"
           },
           "500": {

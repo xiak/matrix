@@ -94,7 +94,7 @@ func TestPlatformMigrationIntegration(t *testing.T) {
 	if err := devopsmigration.VerifyInstalled(ctx, adminDSN, devopsAPI, devopsWorker); err != nil {
 		t.Fatalf("verify installed DevOps migration: %v", err)
 	}
-	assertLegacyIAMPlatformEnrollment(t, ctx, admin, adminDSN, iamAPI, iamWorker)
+	assertLegacyIAMReleaseServiceEnrollment(t, ctx, admin, adminDSN, iamAPI, iamWorker)
 
 	for _, runtime := range []struct {
 		dsn     string
@@ -120,7 +120,7 @@ func TestPlatformMigrationIntegration(t *testing.T) {
 	}
 }
 
-func assertLegacyIAMPlatformEnrollment(
+func assertLegacyIAMReleaseServiceEnrollment(
 	t *testing.T,
 	ctx context.Context,
 	admin *pgx.Conn,
@@ -132,75 +132,97 @@ func assertLegacyIAMPlatformEnrollment(
 	if err != nil {
 		t.Fatalf("create legacy-upgrade platform credential: %v", err)
 	}
-	binding := iammigration.PlatformServiceBinding{
-		InstallationID: "installation-legacy-upgrade",
-		Credential:     credential,
+	devopsText := "mx1.DevOpsLegacyUpgradeCredential0000000000000001"
+	devopsCredential, err := iamv1.NewSecret(devopsText)
+	if err != nil {
+		t.Fatalf("create DevOps release credential: %v", err)
+	}
+	installationID := "installation-legacy-upgrade"
+	bindings := []iammigration.ReleaseServiceBinding{
+		{Purpose: iamv1.ServicePlatform, Credential: credential},
+		{Purpose: iamv1.ServiceDevOps, Credential: devopsCredential},
 	}
 	if err := iammigration.ApplyForInstallation(
-		ctx, adminDSN, apiDSN, workerDSN, binding,
+		ctx, adminDSN, apiDSN, workerDSN, installationID, bindings,
 	); err != nil {
-		t.Fatalf("apply platform binding before IAM bootstrap: %v", err)
+		t.Fatalf("apply release service bindings before IAM bootstrap: %v", err)
 	}
-	var platformCount int
+	var serviceCount int
 	if err := admin.QueryRow(
 		ctx,
-		"SELECT count(*) FROM iam.service_credentials WHERE purpose = 'PLATFORM'",
-	).Scan(&platformCount); err != nil || platformCount != 0 {
-		t.Fatalf("uninitialized platform credential count=%d err=%v", platformCount, err)
+		"SELECT count(*) FROM iam.service_credentials WHERE purpose IN ('PLATFORM', 'DEVOPS')",
+	).Scan(&serviceCount); err != nil || serviceCount != 0 {
+		t.Fatalf("uninitialized release credential count=%d err=%v", serviceCount, err)
 	}
 
-	seedLegacyIAMAuthority(t, ctx, admin, binding.InstallationID)
+	seedLegacyIAMAuthority(t, ctx, admin, installationID)
 	legacyReceipt := "sha256:" + strings.Repeat("4", 64)
 	for attempt := 1; attempt <= 2; attempt++ {
 		if err := iammigration.ApplyForInstallation(
-			ctx, adminDSN, apiDSN, workerDSN, binding,
+			ctx, adminDSN, apiDSN, workerDSN, installationID, bindings,
 		); err != nil {
-			t.Fatalf("enroll legacy platform service attempt %d: %v", attempt, err)
+			t.Fatalf("enroll release services attempt %d: %v", attempt, err)
 		}
 	}
 	if err := iammigration.VerifyInstalledForInstallation(
-		ctx, adminDSN, apiDSN, workerDSN, binding,
+		ctx, adminDSN, apiDSN, workerDSN, installationID, bindings,
 	); err != nil {
-		t.Fatalf("verify legacy platform service: %v", err)
+		t.Fatalf("verify release services: %v", err)
 	}
 	var receipt string
 	var expansionEvents int
 	if err := admin.QueryRow(
 		ctx,
 		`SELECT
-		    (SELECT count(*) FROM iam.service_credentials WHERE purpose = 'PLATFORM'),
+		    (SELECT count(*) FROM iam.service_credentials
+		      WHERE purpose IN ('PLATFORM', 'DEVOPS')),
 		    (SELECT content_digest FROM iam.bootstrap_receipts WHERE singleton),
 		    (SELECT count(*) FROM iam.audit_outbox
 		      WHERE event_document#>>'{actor,id}' = 'iam-migration'
 		        AND event_document->>'action' = 'iam.bootstrap.applied')`,
-	).Scan(&platformCount, &receipt, &expansionEvents); err != nil ||
-		platformCount != 1 || receipt != legacyReceipt || expansionEvents != 1 {
+	).Scan(&serviceCount, &receipt, &expansionEvents); err != nil ||
+		serviceCount != 2 || receipt != legacyReceipt || expansionEvents != 2 {
 		t.Fatalf(
-			"legacy platform enrollment count=%d receipt=%q events=%d err=%v",
-			platformCount, receipt, expansionEvents, err,
+			"release service enrollment count=%d receipt=%q events=%d err=%v",
+			serviceCount, receipt, expansionEvents, err,
 		)
 	}
-	var eventDocument []byte
-	if err := admin.QueryRow(
+	var eventDocuments [][]byte
+	rows, err := admin.Query(
 		ctx,
 		`SELECT event_document FROM iam.audit_outbox
 		  WHERE event_document#>>'{actor,id}' = 'iam-migration'
-		    AND event_document->>'action' = 'iam.bootstrap.applied'`,
-	).Scan(&eventDocument); err != nil {
-		t.Fatalf("read platform expansion Audit event: %v", err)
+		    AND event_document->>'action' = 'iam.bootstrap.applied'
+		  ORDER BY event_id`,
+	)
+	if err != nil {
+		t.Fatalf("read release expansion Audit events: %v", err)
 	}
-	var event auditv1.Event
-	decodeErr := json.Unmarshal(eventDocument, &event)
-	validationErr := auditv1.ValidateEventForSource(auditv1.SourceIAM, event)
-	if decodeErr != nil || validationErr != nil ||
-		event.Action != auditv1.ActionIAMBootstrapApplied ||
-		event.Target.ID != binding.InstallationID {
-		t.Fatalf(
-			"platform expansion Audit event=%#v decode=%v validation=%v",
-			event, decodeErr, validationErr,
-		)
+	for rows.Next() {
+		var document []byte
+		if err := rows.Scan(&document); err != nil {
+			t.Fatalf("scan release expansion Audit event: %v", err)
+		}
+		eventDocuments = append(eventDocuments, document)
 	}
-	assertLegacyIAMDatabaseReplay(t, ctx, apiDSN, binding.InstallationID, legacyReceipt)
+	rows.Close()
+	if rows.Err() != nil || len(eventDocuments) != 2 {
+		t.Fatalf("read release expansion Audit events count=%d rows=%v", len(eventDocuments), rows.Err())
+	}
+	for _, eventDocument := range eventDocuments {
+		var event auditv1.Event
+		decodeErr := json.Unmarshal(eventDocument, &event)
+		validationErr := auditv1.ValidateEventForSource(auditv1.SourceIAM, event)
+		if decodeErr != nil || validationErr != nil ||
+			event.Action != auditv1.ActionIAMBootstrapApplied ||
+			event.Target.ID != installationID {
+			t.Fatalf(
+				"release expansion Audit event=%#v decode=%v validation=%v",
+				event, decodeErr, validationErr,
+			)
+		}
+	}
+	assertLegacyIAMDatabaseReplay(t, ctx, apiDSN, installationID, legacyReceipt)
 
 	wrongText := "mx1.WrongPlatformLegacyCredential00000000000000001"
 	wrongCredential, err := iamv1.NewSecret(wrongText)
@@ -212,9 +234,10 @@ func assertLegacyIAMPlatformEnrollment(
 		adminDSN,
 		apiDSN,
 		workerDSN,
-		iammigration.PlatformServiceBinding{
-			InstallationID: binding.InstallationID,
-			Credential:     wrongCredential,
+		installationID,
+		[]iammigration.ReleaseServiceBinding{
+			{Purpose: iamv1.ServicePlatform, Credential: wrongCredential},
+			{Purpose: iamv1.ServiceDevOps, Credential: devopsCredential},
 		},
 	)
 	if err == nil || strings.Contains(err.Error(), wrongText) {

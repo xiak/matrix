@@ -650,12 +650,15 @@ BEGIN
 END
 $function$;
 
--- Upgrade-only authority expansion. Runtime roles receive no EXECUTE grant.
--- The original four-service bootstrap receipt remains unchanged so the
--- previous accepted release can be restored without a compatibility file.
-CREATE OR REPLACE FUNCTION iam.ensure_platform_service(
+-- Release-selected authority expansion. Runtime roles receive no EXECUTE
+-- grant. The original four/five-service bootstrap receipts remain unchanged
+-- so accepted predecessors can be restored without a compatibility file.
+DROP FUNCTION IF EXISTS iam.ensure_platform_service(text, text, text, text, text);
+DROP FUNCTION IF EXISTS iam.verify_platform_service(text, text, text, text);
+
+CREATE OR REPLACE FUNCTION iam.ensure_release_service(
     submitted_installation_id text,
-    submitted_principal_id text,
+    submitted_purpose text,
     submitted_lookup_digest text,
     submitted_verification_digest text,
     submitted_request_digest text
@@ -668,20 +671,33 @@ AS $function$
 DECLARE
     receipt iam.bootstrap_receipts%ROWTYPE;
     effective_now timestamptz(6) := transaction_timestamp();
+    service_principal_id text;
+    service_display_name text;
     request_id text;
     event_id text;
     audit_event jsonb;
 BEGIN
+    CASE submitted_purpose
+        WHEN 'PLATFORM' THEN
+            service_principal_id := 'service-platform';
+            service_display_name := 'PLATFORM';
+        WHEN 'DEVOPS' THEN
+            service_principal_id := 'service-devops';
+            service_display_name := 'DEVOPS';
+        ELSE
+            RAISE EXCEPTION USING
+                ERRCODE = '22023',
+                MESSAGE = 'IAM release service enrollment input is invalid';
+    END CASE;
     IF submitted_installation_id COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-       OR submitted_principal_id IS DISTINCT FROM 'service-platform'
        OR submitted_lookup_digest COLLATE "C" !~ '^sha256:[0-9a-f]{64}$'
        OR submitted_verification_digest COLLATE "C" !~ '^sha256:[0-9a-f]{64}$'
        OR submitted_request_digest COLLATE "C" !~ '^sha256:[0-9a-f]{64}$'
        OR submitted_lookup_digest = submitted_verification_digest THEN
         RAISE EXCEPTION USING
             ERRCODE = '22023',
-            MESSAGE = 'IAM platform service enrollment input is invalid';
+            MESSAGE = 'IAM release service enrollment input is invalid';
     END IF;
 
     SELECT * INTO receipt
@@ -692,18 +708,18 @@ BEGIN
         IF EXISTS (
             SELECT 1 FROM iam.service_credential_index AS indexed
              WHERE indexed.lookup_digest = submitted_lookup_digest
-                OR indexed.principal_id = submitted_principal_id
+                OR indexed.principal_id = service_principal_id
         ) THEN
             RAISE EXCEPTION USING
                 ERRCODE = '23505',
-                MESSAGE = 'IAM platform service conflicts with uninitialized authority';
+                MESSAGE = 'IAM release service conflicts with uninitialized authority';
         END IF;
         RETURN 'UNINITIALIZED';
     END IF;
     IF receipt.installation_id IS DISTINCT FROM submitted_installation_id THEN
         RAISE EXCEPTION USING
             ERRCODE = '23505',
-            MESSAGE = 'IAM platform service installation conflicts with bootstrap receipt';
+            MESSAGE = 'IAM release service installation conflicts with bootstrap receipt';
     END IF;
 
     PERFORM set_config('matrix.iam_tenant_id', receipt.organization_id, true);
@@ -718,14 +734,14 @@ BEGIN
            AND indexed.principal_id = credential.principal_id
            AND indexed.lookup_digest = credential.lookup_digest
          WHERE principal.tenant_id = receipt.organization_id
-           AND principal.id = submitted_principal_id
+           AND principal.id = service_principal_id
            AND principal.principal_type = 'SERVICE_ACCOUNT'
            AND principal.login_name IS NULL
-           AND principal.display_name = 'PLATFORM'
+           AND principal.display_name = service_display_name
            AND principal.status = 'ACTIVE'
            AND NOT principal.must_change_password
            AND principal.resource_version = 1
-           AND credential.purpose = 'PLATFORM'
+           AND credential.purpose = submitted_purpose
            AND credential.lookup_digest = submitted_lookup_digest
            AND credential.verification_digest = submitted_verification_digest
            AND credential.revoked_at IS NULL
@@ -735,41 +751,42 @@ BEGIN
     IF EXISTS (
         SELECT 1 FROM iam.principals AS principal
          WHERE principal.tenant_id = receipt.organization_id
-           AND principal.id = submitted_principal_id
+           AND principal.id = service_principal_id
     ) OR EXISTS (
         SELECT 1 FROM iam.service_credentials AS credential
          WHERE credential.tenant_id = receipt.organization_id
-           AND credential.purpose = 'PLATFORM'
+           AND credential.purpose = submitted_purpose
     ) OR EXISTS (
         SELECT 1 FROM iam.service_credential_index AS indexed
          WHERE indexed.lookup_digest = submitted_lookup_digest
     ) THEN
         RAISE EXCEPTION USING
             ERRCODE = '23505',
-            MESSAGE = 'IAM platform service conflicts with installed authority';
+            MESSAGE = 'IAM release service conflicts with installed authority';
     END IF;
 
     INSERT INTO iam.principals (
         tenant_id, id, principal_type, display_name, status,
         must_change_password, resource_version, created_at, updated_at
     ) VALUES (
-        receipt.organization_id, submitted_principal_id, 'SERVICE_ACCOUNT',
-        'PLATFORM', 'ACTIVE', false, 1, effective_now, effective_now
+        receipt.organization_id, service_principal_id, 'SERVICE_ACCOUNT',
+        service_display_name, 'ACTIVE', false, 1, effective_now, effective_now
     );
     INSERT INTO iam.service_credentials (
         tenant_id, principal_id, purpose, lookup_digest,
         verification_digest, created_at
     ) VALUES (
-        receipt.organization_id, submitted_principal_id, 'PLATFORM',
+        receipt.organization_id, service_principal_id, submitted_purpose,
         submitted_lookup_digest, submitted_verification_digest, effective_now
     );
     INSERT INTO iam.service_credential_index (
         lookup_digest, tenant_id, principal_id
     ) VALUES (
-        submitted_lookup_digest, receipt.organization_id, submitted_principal_id
+        submitted_lookup_digest, receipt.organization_id, service_principal_id
     );
 
-    request_id := 'migration-platform-' || substring(submitted_request_digest FROM 8);
+    request_id := 'migration-' || lower(submitted_purpose) || '-' ||
+        substring(submitted_request_digest FROM 8);
     event_id := 'event-' || request_id;
     audit_event := jsonb_build_object(
         'apiVersion', 'audit.matrix.xiak.com/v1',
@@ -812,9 +829,9 @@ BEGIN
 END
 $function$;
 
-CREATE OR REPLACE FUNCTION iam.verify_platform_service(
+CREATE OR REPLACE FUNCTION iam.verify_release_service(
     submitted_installation_id text,
-    submitted_principal_id text,
+    submitted_purpose text,
     submitted_lookup_digest text,
     submitted_verification_digest text
 )
@@ -825,16 +842,29 @@ SET search_path = pg_catalog, pg_temp
 AS $function$
 DECLARE
     receipt iam.bootstrap_receipts%ROWTYPE;
+    service_principal_id text;
+    service_display_name text;
 BEGIN
+    CASE submitted_purpose
+        WHEN 'PLATFORM' THEN
+            service_principal_id := 'service-platform';
+            service_display_name := 'PLATFORM';
+        WHEN 'DEVOPS' THEN
+            service_principal_id := 'service-devops';
+            service_display_name := 'DEVOPS';
+        ELSE
+            RAISE EXCEPTION USING
+                ERRCODE = '22023',
+                MESSAGE = 'IAM release service verification input is invalid';
+    END CASE;
     IF submitted_installation_id COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-       OR submitted_principal_id IS DISTINCT FROM 'service-platform'
        OR submitted_lookup_digest COLLATE "C" !~ '^sha256:[0-9a-f]{64}$'
        OR submitted_verification_digest COLLATE "C" !~ '^sha256:[0-9a-f]{64}$'
        OR submitted_lookup_digest = submitted_verification_digest THEN
         RAISE EXCEPTION USING
             ERRCODE = '22023',
-            MESSAGE = 'IAM platform service verification input is invalid';
+            MESSAGE = 'IAM release service verification input is invalid';
     END IF;
     SELECT * INTO receipt
       FROM iam.bootstrap_receipts
@@ -843,18 +873,18 @@ BEGIN
         IF EXISTS (
             SELECT 1 FROM iam.service_credential_index AS indexed
              WHERE indexed.lookup_digest = submitted_lookup_digest
-                OR indexed.principal_id = submitted_principal_id
+                OR indexed.principal_id = service_principal_id
         ) THEN
             RAISE EXCEPTION USING
                 ERRCODE = '23505',
-                MESSAGE = 'IAM platform service conflicts with uninitialized authority';
+                MESSAGE = 'IAM release service conflicts with uninitialized authority';
         END IF;
         RETURN 'UNINITIALIZED';
     END IF;
     IF receipt.installation_id IS DISTINCT FROM submitted_installation_id THEN
         RAISE EXCEPTION USING
             ERRCODE = '23505',
-            MESSAGE = 'IAM platform service installation conflicts with bootstrap receipt';
+            MESSAGE = 'IAM release service installation conflicts with bootstrap receipt';
     END IF;
     PERFORM set_config('matrix.iam_tenant_id', receipt.organization_id, true);
     IF NOT EXISTS (
@@ -868,21 +898,21 @@ BEGIN
            AND indexed.principal_id = credential.principal_id
            AND indexed.lookup_digest = credential.lookup_digest
          WHERE principal.tenant_id = receipt.organization_id
-           AND principal.id = submitted_principal_id
+           AND principal.id = service_principal_id
            AND principal.principal_type = 'SERVICE_ACCOUNT'
            AND principal.login_name IS NULL
-           AND principal.display_name = 'PLATFORM'
+           AND principal.display_name = service_display_name
            AND principal.status = 'ACTIVE'
            AND NOT principal.must_change_password
            AND principal.resource_version = 1
-           AND credential.purpose = 'PLATFORM'
+           AND credential.purpose = submitted_purpose
            AND credential.lookup_digest = submitted_lookup_digest
            AND credential.verification_digest = submitted_verification_digest
            AND credential.revoked_at IS NULL
     ) THEN
         RAISE EXCEPTION USING
             ERRCODE = '23505',
-            MESSAGE = 'IAM platform service differs from installed authority';
+            MESSAGE = 'IAM release service differs from installed authority';
     END IF;
     RETURN 'READY';
 END

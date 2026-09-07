@@ -203,6 +203,14 @@ type PipelineActivation struct {
 	Revision   PipelineRevision `json:"revision"`
 }
 
+type Readiness struct {
+	APIVersion    string         `json:"apiVersion"`
+	Kind          string         `json:"kind"`
+	State         ReadinessState `json:"state"`
+	SchemaVersion uint64         `json:"schemaVersion"`
+	CheckedAt     time.Time      `json:"checkedAt"`
+}
+
 type FieldViolation struct {
 	Field       string `json:"field"`
 	Description string `json:"description"`

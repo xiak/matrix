@@ -345,6 +345,21 @@ func ValidatePipelineActivation(value PipelineActivation) error {
 	return errors.Join(problems...)
 }
 
+func ValidateReadiness(value Readiness) error {
+	var problems []error
+	if value.APIVersion != APIVersion || value.Kind != "Readiness" {
+		problems = append(problems, errors.New("readiness type metadata is invalid"))
+	}
+	if !contains(ReadinessStates(), value.State) {
+		problems = append(problems, errors.New("readiness state is invalid"))
+	}
+	if value.SchemaVersion == 0 || value.SchemaVersion > MaximumContractInteger {
+		problems = append(problems, errors.New("readiness schemaVersion is invalid"))
+	}
+	problems = append(problems, validateContractTime("readiness.checkedAt", value.CheckedAt))
+	return errors.Join(problems...)
+}
+
 func ValidateProblem(value Problem) error {
 	var problems []error
 	parsed, err := url.Parse(value.Type)
@@ -390,8 +405,16 @@ func errorCodeAcceptsStatus(code ErrorCode, status int) bool {
 		return status == 403
 	case ErrorNotFound:
 		return status == 404
+	case ErrorMethodNotAllowed:
+		return status == 405
 	case ErrorConflict:
 		return status == 409
+	case ErrorPayloadTooLarge:
+		return status == 413
+	case ErrorUnsupportedMediaType:
+		return status == 415
+	case ErrorPreconditionRequired:
+		return status == 428
 	case ErrorPreconditionFailed:
 		return status == 412
 	case ErrorInternal:

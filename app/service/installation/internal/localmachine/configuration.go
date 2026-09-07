@@ -1,6 +1,7 @@
 package localmachine
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"path/filepath"
@@ -169,7 +170,7 @@ func installedAPISIXStandaloneConfig(manifest release.Manifest) []byte {
 	if release.IsLegacyProductlessManifest(manifest) {
 		return legacyProductlessAPISIXStandaloneConfig()
 	}
-	return apisixStandaloneConfig()
+	return apisixStandaloneConfig(manifest)
 }
 
 func publishInstallationConfiguration(
@@ -193,7 +194,7 @@ func publishInstallationConfiguration(
 		return errors.Join(platformcommand.ErrEffectConflict, err)
 	}
 	if err := writeManagedOnce(
-		root, filepath.FromSlash(layout.APISIXRoutes), apisixStandaloneConfig(),
+		root, filepath.FromSlash(layout.APISIXRoutes), apisixStandaloneConfig(manifest),
 	); err != nil {
 		return errors.Join(platformcommand.ErrEffectConflict, err)
 	}
@@ -261,8 +262,8 @@ nginx_config:
 `)
 }
 
-func apisixStandaloneConfig() []byte {
-	return []byte(`routes:
+func apisixStandaloneConfig(manifest release.Manifest) []byte {
+	content := []byte(`routes:
   -
     id: matrix-ready
     uri: /ready
@@ -380,4 +381,25 @@ func apisixStandaloneConfig() []byte {
         "matrix-ui:8080": 1
 #END
 `)
+	if !manifest.IncludesProduct(release.ProductDevOps) {
+		return content
+	}
+	marker := []byte("  -\n    id: matrix-ui\n")
+	devopsRoute := []byte(`  -
+    id: matrix-devops
+    uri: /api/devops/*
+    plugins:
+      proxy-rewrite:
+        regex_uri:
+          - "^/api/devops/(.*)"
+          - "/$1"
+        headers:
+          remove:
+            - Matrix-Subject-Credential
+    upstream:
+      type: roundrobin
+      nodes:
+        "devops-api:8080": 1
+`)
+	return bytes.Replace(content, marker, append(devopsRoute, marker...), 1)
 }

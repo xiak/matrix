@@ -53,6 +53,14 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		len(bootstrap.Services) != len(iamv1.BootstrapServicePurposes()) {
 		t.Fatalf("staged IAM bootstrap identity = %#v", bootstrap)
 	}
+	for _, optional := range []string{
+		layout.DevOpsIAMCredential, layout.DevOpsAuditCredential,
+		layout.DevOpsAPI, layout.DevOpsWorker,
+	} {
+		if _, err := os.Lstat(filepath.Join(plan.Root, filepath.FromSlash(optional))); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("unselected DevOps secret %q exists or cannot be inspected: %v", optional, err)
+		}
+	}
 
 	serviceCredentials := make(map[iamv1.ServicePurpose][]byte, len(bootstrap.Services))
 	for _, service := range bootstrap.Services {
@@ -157,8 +165,10 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		}
 	}
 	if bytes.Contains(apisix, []byte("matrix-service-auth")) ||
-		bytes.Contains(apisix, []byte("apisix-iam-credential")) {
-		t.Fatal("APISIX must preserve user Bearer credentials for IAM and Audit")
+		bytes.Contains(apisix, []byte("apisix-iam-credential")) ||
+		bytes.Contains(apisix, []byte("matrix-devops")) ||
+		bytes.Contains(apisix, []byte("devops-api:8080")) {
+		t.Fatal("PaaS-only APISIX routes leak authority or expose unselected DevOps")
 	}
 	readyStart := bytes.Index(apisix, []byte("id: matrix-ready"))
 	readyEnd := bytes.Index(apisix, []byte("id: matrix-iam"))
@@ -226,6 +236,71 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		); !errors.Is(err, platformcommand.ErrEffectConflict) {
 			t.Fatalf("unsafe APISIX runtime replay error=%v", err)
 		}
+	}
+}
+
+func TestStageDevOpsProductCredentialsAreSelectedAndStable(t *testing.T) {
+	plan := newDevOpsInstallPlan(t)
+	if err := stageInstallation(plan, rand.Reader); err != nil {
+		t.Fatalf("stage DevOps installation: %v", err)
+	}
+	bootstrapBytes := readTestFile(t, plan.Root, layout.IAMBootstrap)
+	bootstrap, err := iamv1.DecodeBootstrapDocument(bytes.NewReader(bootstrapBytes))
+	if err != nil || len(bootstrap.Services) != len(iamv1.BootstrapServicePurposes()) {
+		t.Fatalf("DevOps staging changed Foundation bootstrap: %#v / %v", bootstrap, err)
+	}
+	for _, service := range bootstrap.Services {
+		if service.Purpose == iamv1.ServiceDevOps {
+			t.Fatal("optional DevOps credential entered Foundation bootstrap")
+		}
+	}
+	iamCredential := readTestFile(t, plan.Root, layout.DevOpsIAMCredential)
+	auditCredential := readTestFile(t, plan.Root, layout.DevOpsAuditCredential)
+	defer clear(iamCredential)
+	defer clear(auditCredential)
+	if !bytes.Equal(iamCredential, auditCredential) ||
+		!validGeneratedCredential(iamCredential, "mx1.", false) {
+		t.Fatal("DevOps service credentials are absent or inconsistent")
+	}
+	apiDSN := readTestFile(t, plan.Root, layout.DevOpsAPI)
+	workerDSN := readTestFile(t, plan.Root, layout.DevOpsWorker)
+	defer clear(apiDSN)
+	defer clear(workerDSN)
+	if validateDatabaseDSN(string(apiDSN), "matrix_devops_api_login") != nil ||
+		validateDatabaseDSN(string(workerDSN), "matrix_devops_worker_login") != nil {
+		t.Fatal("DevOps database identities are invalid")
+	}
+	before := map[string]string{
+		layout.DevOpsIAMCredential:   string(iamCredential),
+		layout.DevOpsAuditCredential: string(auditCredential),
+		layout.DevOpsAPI:             string(apiDSN),
+		layout.DevOpsWorker:          string(workerDSN),
+	}
+	if err := stageInstallation(plan, failingEntropy{}); err != nil {
+		t.Fatalf("replay DevOps staging without entropy: %v", err)
+	}
+	for path, expected := range before {
+		actual := readTestFile(t, plan.Root, path)
+		if string(actual) != expected {
+			clear(actual)
+			t.Fatalf("DevOps staging replay changed %s", path)
+		}
+		clear(actual)
+	}
+	compiled, err := topology.Compile(plan.Bundle.Manifest, topology.Options{
+		InstallationID: plan.InstallationID, Root: "/matrix-installation-root",
+		Listener: plan.Listener, Port: plan.Port,
+	})
+	if err != nil {
+		t.Fatalf("compile DevOps installation: %v", err)
+	}
+	routes := apisixStandaloneConfig(plan.Bundle.Manifest)
+	compose := compiled.ComposeJSON
+	if !bytes.Contains(routes, []byte("id: matrix-devops")) ||
+		!bytes.Contains(routes, []byte(`"devops-api:8080": 1`)) ||
+		!bytes.Contains(compose, []byte(`"devops-api"`)) ||
+		!bytes.Contains(compose, []byte(`"devops-audit-dispatcher"`)) {
+		t.Fatal("selected DevOps product is absent from compiled installation configuration")
 	}
 }
 
@@ -549,6 +624,13 @@ func TestProductlessMigrationProfileDoesNotRequireFuturePlatformCredential(t *te
 		current[0].mounts[3].relative != layout.PlatformIAMCredential {
 		t.Fatalf("current migration profile lost its Platform authority binding: %#v", current)
 	}
+	devops := platformMigrationsFor(releasetest.DevOpsManifest())
+	if len(devops) != len(platformMigrations)+1 || len(devops[0].mounts) != 5 ||
+		devops[0].mounts[4].relative != layout.DevOpsIAMCredential ||
+		devops[3].component != "devops" ||
+		devops[3].entrypoint != "/matrix/bin/matrix-devops-migrate" {
+		t.Fatalf("DevOps migration profile is incomplete: %#v", devops)
+	}
 }
 
 func TestProductlessAPISIXContractRemainsByteExact(t *testing.T) {
@@ -655,6 +737,53 @@ func TestMigrateInstallationUsesFixedGoBinariesWithoutCredentialArguments(t *tes
 	for _, arguments := range runtimeBoundary.runs {
 		if arguments[len(arguments)-1] != "verify" {
 			t.Fatalf("migration verification applied state: %q", strings.Join(arguments, " "))
+		}
+	}
+}
+
+func TestMigrateDevOpsBootstrapsIAMThenEnrollsReleaseService(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine migration effects target Linux")
+	}
+	plan := newDevOpsInstallPlan(t)
+	if err := stageInstallation(plan, rand.Reader); err != nil {
+		t.Fatalf("stage DevOps installation: %v", err)
+	}
+	images := newImageRuntime(plan.Bundle.Manifest, true)
+	if err := configureInstallation(context.Background(), images, plan); err != nil {
+		t.Fatalf("configure DevOps installation: %v", err)
+	}
+	compiled, err := topology.Compile(plan.Bundle.Manifest, topology.Options{
+		InstallationID: plan.InstallationID, Root: plan.Root,
+		Listener: plan.Listener, Port: plan.Port,
+	})
+	if err != nil {
+		t.Fatalf("compile DevOps migration topology: %v", err)
+	}
+	runtimeBoundary := newMigrationRuntime(plan, compiled.ProjectName)
+	if err := migrateInstallation(context.Background(), runtimeBoundary, plan); err != nil {
+		t.Fatalf("migrate DevOps installation: %v", err)
+	}
+	if runtimeBoundary.composeCalls != 2 || len(runtimeBoundary.runs) != 10 {
+		t.Fatalf("DevOps migration calls compose=%d run=%d", runtimeBoundary.composeCalls, len(runtimeBoundary.runs))
+	}
+	wantEntrypoints := []string{
+		"/matrix/bin/matrix-iam-migrate", "/matrix/bin/matrix-audit-migrate",
+		"/matrix/bin/matrix-paas-migrate", "/matrix/bin/matrix-devops-migrate",
+		"/matrix/bin/matrix-iam-migrate", "/matrix/bin/matrix-audit-migrate",
+		"/matrix/bin/matrix-paas-migrate", "/matrix/bin/matrix-devops-migrate",
+		"/matrix/bin/matrix-iam-migrate", "/matrix/bin/matrix-iam-migrate",
+	}
+	for index, arguments := range runtimeBoundary.runs {
+		if !hasArgumentPair(arguments, "--entrypoint", wantEntrypoints[index]) {
+			t.Fatalf("DevOps migration command %d entrypoint=%q", index, strings.Join(arguments, " "))
+		}
+		isIAM := wantEntrypoints[index] == "/matrix/bin/matrix-iam-migrate"
+		if hasArgumentPair(
+			arguments, "--env",
+			"MATRIX_MIGRATION_DEVOPS_IAM_CREDENTIAL_FILE=/run/matrix/devops-iam-credential",
+		) != isIAM {
+			t.Fatalf("DevOps credential exposed to wrong migration command %d", index)
 		}
 	}
 }
@@ -1439,7 +1568,20 @@ func TestGeneratedCredentialKindsCannotBeSubstituted(t *testing.T) {
 
 func newInstallPlan(t *testing.T) platformcommand.InstallPlan {
 	t.Helper()
-	fixture, err := releasetest.Write(t.TempDir())
+	return newInstallPlanWithFixture(t, releasetest.Write)
+}
+
+func newDevOpsInstallPlan(t *testing.T) platformcommand.InstallPlan {
+	t.Helper()
+	return newInstallPlanWithFixture(t, releasetest.WriteDevOps)
+}
+
+func newInstallPlanWithFixture(
+	t *testing.T,
+	writeFixture func(string) (releasetest.Fixture, error),
+) platformcommand.InstallPlan {
+	t.Helper()
+	fixture, err := writeFixture(t.TempDir())
 	if err != nil {
 		t.Fatalf("write release fixture: %v", err)
 	}
@@ -2366,8 +2508,8 @@ func (runtimeBoundary *migrationRuntime) Run(
 	case "compose":
 		if !hasArgumentPair(arguments, "--pull", "never") ||
 			!slices.Contains(arguments, "--no-build") ||
-			arguments[len(arguments)-1] != "postgres" {
-			return nil, true, errors.New("PostgreSQL Compose start is not offline")
+			(arguments[len(arguments)-1] != "postgres" && arguments[len(arguments)-1] != "iam") {
+			return nil, true, errors.New("migration Compose start is not offline")
 		}
 		runtimeBoundary.composeCalls++
 		return nil, true, nil

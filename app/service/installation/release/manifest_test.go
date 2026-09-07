@@ -209,6 +209,9 @@ func TestManifestRejectsUnsafeOrIncompleteInventory(t *testing.T) {
 		"missing product": func(value *Manifest) {
 			value.Products = nil
 		},
+		"missing release-line PaaS baseline": func(value *Manifest) {
+			value.Products = []Product{DevOpsProduct("v0.1.0")}
+		},
 		"duplicate product": func(value *Manifest) {
 			value.Products = append(value.Products, value.Products[0])
 		},
@@ -317,7 +320,8 @@ func validManifest() Manifest {
 		Path: "bin/mx", MediaType: mediaExecutable,
 		Size: 1024, SHA256: digest('1'), Executable: true,
 	}}
-	required := RequiredImages()
+	products := []Product{ApplicationPaaSProduct("v0.1.0")}
+	required := RequiredImages(products)
 	images := make([]Image, 0, len(required))
 	fileDigests := "23456789"
 	imageDigests := "89abcdef"
@@ -351,7 +355,7 @@ func validManifest() Manifest {
 		},
 		MinimumFreeBytes: minimumFreeBytes,
 		Database:         DatabaseProfile{SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one"},
-		Products:         []Product{ApplicationPaaSProduct("v0.1.0")},
+		Products:         products,
 		TopologyDigest:   digest('f'), Files: files, Images: images,
 	}
 }

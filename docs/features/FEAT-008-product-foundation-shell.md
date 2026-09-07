@@ -166,20 +166,34 @@ tenant-authority, offline, upgrade/rollback/recovery, and
   same installation, organization, and canonical content digest.
 - Upgrade staging preserves that legacy bootstrap byte-for-byte for rollback
   and creates the installation-owned Platform credential once in its separate
-  fixed secret path. Repeated staging consumes no entropy and never rotates it.
-- The IAM migration changes the closed database constraint, enrolls or verifies
-  exactly `service-platform` under the migration authority, keeps the legacy
-  bootstrap receipt unchanged, and emits one additional sanitized
-  `iam.bootstrap.applied` Audit fact with a fixed migration actor/request
-  identity. IAM API and worker roles cannot execute the migration-only
-  functions; retaining the accepted action keeps the event consumable after
-  an N-1 rollback.
+  fixed secret path. A signed inventory containing `DEVOPS` additionally
+  creates DevOps IAM/Audit credentials and API/worker database identities;
+  inventories without it create none. Repeated staging consumes no entropy and
+  never rotates an equal credential.
+- The IAM migration replaces the Platform-only expansion with a closed
+  release-service enrollment accepting canonical `PLATFORM` followed by
+  optional `DEVOPS`. Purpose determines the fixed principal; no environment
+  input can choose an arbitrary identity. Fresh installation first commits the
+  unchanged five-service Foundation bootstrap and then reruns this
+  migration-only boundary to enroll `service-devops`. Existing and legacy
+  installations converge directly while preserving their bootstrap receipt.
+  IAM API and worker roles cannot execute either enrollment or verification.
 - A disposable PostgreSQL 18 integration run applied every platform migration
-  twice, installed a fixed four-service legacy authority state, enrolled the
-  Platform service twice, proved one credential and one Audit fact, preserved
-  the old receipt, rejected a different credential, and reverified runtime
-  schema isolation. Unit and contract tests also pin the accepted legacy
-  canonical digest and reject legacy initialization, reordering, or mutation.
+  twice, installed a fixed four-service legacy authority state, enrolled both
+  release services twice, proved two credentials and two sanitized
+  `iam.bootstrap.applied` facts, preserved the old receipt, rejected a changed
+  credential, and reverified runtime schema isolation. Unit and contract tests
+  also pin the accepted legacy canonical digest and reject legacy
+  initialization, reordering, or mutation.
+- Required release images are now derived from the closed signed product
+  inventory. This release line keeps Application PaaS as its required first
+  product and admits DevOps only in canonical second position. The fixed
+  release assembler includes Application PaaS and DevOps,
+  builds the DevOps API/migrator/Audit-dispatch binaries into one independent
+  image, and the topology adds its two runtime processes, secret mounts,
+  database identities, gateway route, and readiness endpoint only when
+  `DEVOPS` is selected. Product discovery validates and projects independent
+  PaaS and DevOps readiness observations.
 - Installed-release authentication admits only the signed canonical
   productless predecessor from source commit
   `c88a84f379afcf94431e2aca7332fe6ec3136dc7`, with its fixed Docker/Compose
@@ -196,8 +210,9 @@ tenant-authority, offline, upgrade/rollback/recovery, and
   container.
 - Live product readiness is observed before the list's committed observation
   time, so a real downstream `checkedAt` is not misclassified as future data.
-  Productless backup recovery streams the two fixed post-product IAM function
-  removals and the authenticated `pg_restore` SQL through one
+  Productless backup recovery streams removal of the current release-service
+  functions and their exact superseded Platform-only predecessors together
+  with the authenticated `pg_restore` SQL through one
   `psql --single-transaction`; restore failure cannot leave the compatibility
   cleanup partially committed.
 - A fresh privileged Docker-in-Docker host with outer network mode `none`,

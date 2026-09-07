@@ -50,7 +50,8 @@ type contract struct {
 }
 
 var platformServiceNames = []string{
-	"apisix", "audit", "iam", "iam-audit-dispatcher", "matrix-ui",
+	"apisix", "audit", "devops-api", "devops-audit-dispatcher", "iam",
+	"iam-audit-dispatcher", "matrix-ui",
 	"paas-api", "paas-audit-dispatcher", "paas-worker", "platform-api", "postgres",
 }
 
@@ -74,8 +75,12 @@ func contractDescription() contract {
 		ID: "matrix-v0.0.0-000000000000", SourceCommit: strings.Repeat("0", 40),
 		BuildID: "matrix-release-build",
 	}}
-	images := make(map[string]string, len(release.RequiredImages()))
-	for _, requirement := range release.RequiredImages() {
+	manifest.Products = []release.Product{
+		release.ApplicationPaaSProduct("v0.0.0"),
+		release.DevOpsProduct("v0.0.0"),
+	}
+	images := make(map[string]string, len(release.RequiredImages(manifest.Products)))
+	for _, requirement := range release.RequiredImages(manifest.Products) {
 		images[requirement.Component] = "sha256:" + strings.Repeat("0", 64)
 		manifest.Images = append(manifest.Images, release.Image{
 			Component: requirement.Component, Purpose: requirement.Purpose,
@@ -345,11 +350,15 @@ func compileServices(
 	auditRuntimeDSN := path.Join(root, layout.AuditRuntime)
 	paasAPIDSN := path.Join(root, layout.PaaSAPI)
 	paasWorkerDSN := path.Join(root, layout.PaaSWorker)
+	devopsAPIDSN := path.Join(root, layout.DevOpsAPI)
+	devopsWorkerDSN := path.Join(root, layout.DevOpsWorker)
 	bootstrapIAM := path.Join(root, layout.IAMBootstrap)
 	auditIAMCredential := path.Join(root, layout.AuditIAMCredential)
 	iamAuditCredential := path.Join(root, layout.IAMAuditCredential)
 	paasIAMCredential := path.Join(root, layout.PaaSIAMCredential)
 	paasAuditCredential := path.Join(root, layout.PaaSAuditCredential)
+	devopsIAMCredential := path.Join(root, layout.DevOpsIAMCredential)
+	devopsAuditCredential := path.Join(root, layout.DevOpsAuditCredential)
 	platformIAMCredential := path.Join(root, layout.PlatformIAMCredential)
 	auditCursorKey := path.Join(root, layout.AuditCursorKey)
 	releaseTrust := path.Join(root, layout.ReleaseTrust)
@@ -570,6 +579,44 @@ func compileServices(
 		"paas-audit-dispatcher": paasAudit, "paas-worker": paasWorker,
 		"postgres": postgres,
 	}
+	if profile == currentProfile && manifest.IncludesProduct(release.ProductDevOps) {
+		devopsAPI := service(
+			"devops-api", "devops", images["devops"], []string{"control"},
+			[]string{"/matrix/bin/matrix-devops"},
+			"1.0", "768M", "http://127.0.0.1:8080/ready",
+		)
+		devopsAPI.Environment = map[string]string{
+			"MATRIX_DEVOPS_DATABASE_DSN_FILE":       "/run/matrix/devops-api-dsn",
+			"MATRIX_DEVOPS_IAM_ENDPOINT":            "http://iam:8080",
+			"MATRIX_DEVOPS_LISTEN_ADDRESS":          "0.0.0.0:8080",
+			"MATRIX_DEVOPS_SERVICE_CREDENTIAL_FILE": "/run/matrix/devops-iam-credential",
+		}
+		devopsAPI.Volumes = []mount{
+			bind(devopsAPIDSN, "/run/matrix/devops-api-dsn", true),
+			bind(devopsIAMCredential, "/run/matrix/devops-iam-credential", true),
+		}
+		devopsAPI.DependsOn = healthy("postgres", "iam")
+
+		devopsAudit := service(
+			"devops-audit-dispatcher", "devops", images["devops"], []string{"control"},
+			[]string{"/matrix/bin/matrix-devops-audit-dispatcher"},
+			"0.5", "384M", "http://127.0.0.1:8080/ready",
+		)
+		devopsAudit.Environment = map[string]string{
+			"MATRIX_DEVOPS_AUDIT_CREDENTIAL_FILE":   "/run/matrix/devops-audit-credential",
+			"MATRIX_DEVOPS_AUDIT_DATABASE_DSN_FILE": "/run/matrix/devops-worker-dsn",
+			"MATRIX_DEVOPS_AUDIT_ENDPOINT":          "http://audit:8080",
+			"MATRIX_DEVOPS_AUDIT_LISTEN_ADDRESS":    "0.0.0.0:8080",
+			"MATRIX_DEVOPS_AUDIT_WORKER_ID":         "devops-audit-" + strings.TrimPrefix(options.InstallationID, "mxi-"),
+		}
+		devopsAudit.Volumes = []mount{
+			bind(devopsWorkerDSN, "/run/matrix/devops-worker-dsn", true),
+			bind(devopsAuditCredential, "/run/matrix/devops-audit-credential", true),
+		}
+		devopsAudit.DependsOn = healthy("postgres", "audit")
+		services["devops-api"] = devopsAPI
+		services["devops-audit-dispatcher"] = devopsAudit
+	}
 	if profile == legacyProductlessProfile {
 		apisix.DependsOn = healthy("audit", "iam", "paas-api", "paas-ui")
 		services["apisix"] = apisix
@@ -599,7 +646,13 @@ func compileServices(
 		bind(releaseTrust, "/run/matrix/release-trust.json", true),
 	}
 	platformAPI.DependsOn = healthy("iam", "paas-api")
-	apisix.DependsOn = healthy("audit", "iam", "matrix-ui", "paas-api", "platform-api")
+	apisixDependencies := []string{"audit", "iam", "matrix-ui", "paas-api", "platform-api"}
+	if manifest.IncludesProduct(release.ProductDevOps) {
+		platformAPI.Environment["MATRIX_PLATFORM_DEVOPS_ENDPOINT"] = "http://devops-api:8080"
+		platformAPI.DependsOn["devops-api"] = dependency{Condition: "service_healthy"}
+		apisixDependencies = append(apisixDependencies, "devops-api")
+	}
+	apisix.DependsOn = healthy(apisixDependencies...)
 	services["apisix"] = apisix
 	services["platform-api"] = platformAPI
 	return services

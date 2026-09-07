@@ -344,6 +344,7 @@ CREATE TABLE IF NOT EXISTS delivery.audit_outbox (
     lease_owner text COLLATE "C",
     lease_expires_at timestamptz(6),
     last_error_code text COLLATE "C",
+    delivered_at timestamptz(6),
     created_at timestamptz(6) NOT NULL,
     updated_at timestamptz(6) NOT NULL,
     document jsonb NOT NULL,
@@ -368,6 +369,36 @@ CREATE TABLE IF NOT EXISTS delivery.audit_outbox (
         AND document->>'operationId' = operation_id
     )
 );
+
+ALTER TABLE delivery.audit_outbox
+    ADD COLUMN IF NOT EXISTS delivered_at timestamptz(6);
+
+DO $matrix_audit_outbox_state_constraint$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_constraint
+         WHERE connamespace = 'delivery'::regnamespace
+           AND conname = 'audit_outbox_delivery_state_valid'
+    ) THEN
+        ALTER TABLE delivery.audit_outbox
+            ADD CONSTRAINT audit_outbox_delivery_state_valid CHECK (
+                ((status = 'LEASED') = (lease_owner IS NOT NULL))
+                AND (
+                    (status = 'DELIVERED'
+                        AND delivered_at IS NOT NULL
+                        AND delivered_at >= created_at
+                        AND last_error_code IS NULL)
+                    OR (status = 'DEAD_LETTER'
+                        AND delivered_at IS NULL
+                        AND last_error_code IS NOT NULL)
+                    OR (status IN ('PENDING', 'LEASED', 'RETRY')
+                        AND delivered_at IS NULL
+                        AND last_error_code IS NULL)
+                )
+            );
+    END IF;
+END
+$matrix_audit_outbox_state_constraint$;
 
 ALTER TABLE delivery.projects ENABLE ROW LEVEL SECURITY;
 ALTER TABLE delivery.projects FORCE ROW LEVEL SECURITY;
@@ -411,6 +442,21 @@ BEGIN
     END LOOP;
 END
 $matrix_delivery_policy$;
+
+DO $matrix_audit_outbox_owner_policy$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_policies
+         WHERE schemaname = 'delivery' AND tablename = 'audit_outbox'
+           AND policyname = 'owner_dispatch'
+    ) THEN
+        CREATE POLICY owner_dispatch ON delivery.audit_outbox
+            TO matrix_devops_owner
+            USING (true)
+            WITH CHECK (true);
+    END IF;
+END
+$matrix_audit_outbox_owner_policy$;
 
 CREATE OR REPLACE FUNCTION delivery.commit_configuration_mutation(
     requested_kind text,
@@ -831,6 +877,244 @@ BEGIN
     );
 END
 $function$;
+
+CREATE OR REPLACE FUNCTION delivery.claim_audit_event(
+    requested_worker_id text,
+    requested_lease_seconds integer
+)
+RETURNS TABLE (
+    tenant_id text,
+    event_id text,
+    attempts integer,
+    fencing_token bigint,
+    lease_expires_at timestamptz,
+    document jsonb
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+BEGIN
+    IF requested_worker_id IS NULL
+       OR requested_worker_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_lease_seconds IS NULL
+       OR requested_lease_seconds NOT BETWEEN 1 AND 300 THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'Audit claim parameters are invalid';
+    END IF;
+    RETURN QUERY
+    WITH candidate AS (
+        SELECT pending.tenant_id, pending.event_id
+          FROM delivery.audit_outbox AS pending
+         WHERE pending.attempts < 100
+           AND pending.fencing_token < 9007199254740991
+           AND (
+                (pending.status IN ('PENDING', 'RETRY')
+                    AND pending.available_at <= transaction_timestamp())
+                OR (pending.status = 'LEASED'
+                    AND pending.lease_expires_at <= transaction_timestamp())
+           )
+         ORDER BY pending.available_at, pending.created_at,
+                  pending.tenant_id COLLATE "C", pending.event_id COLLATE "C"
+         LIMIT 1
+         FOR UPDATE SKIP LOCKED
+    )
+    UPDATE delivery.audit_outbox AS claimed
+       SET status = 'LEASED',
+           attempts = claimed.attempts + 1,
+           lease_owner = requested_worker_id,
+           lease_expires_at = transaction_timestamp()
+                + make_interval(secs => requested_lease_seconds),
+           fencing_token = claimed.fencing_token + 1,
+           last_error_code = NULL,
+           delivered_at = NULL,
+           updated_at = transaction_timestamp()
+      FROM candidate
+     WHERE claimed.tenant_id = candidate.tenant_id
+       AND claimed.event_id = candidate.event_id
+    RETURNING claimed.tenant_id, claimed.event_id, claimed.attempts,
+              claimed.fencing_token, claimed.lease_expires_at, claimed.document;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION delivery.claim_audit_event(text, integer)
+    FROM PUBLIC, matrix_devops_api;
+GRANT EXECUTE ON FUNCTION delivery.claim_audit_event(text, integer)
+    TO matrix_devops_worker;
+
+CREATE OR REPLACE FUNCTION delivery.complete_audit_event(
+    requested_tenant_id text,
+    requested_event_id text,
+    requested_worker_id text,
+    expected_fencing_token bigint,
+    requested_outcome text,
+    requested_retry_at timestamptz,
+    requested_error_code text
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    affected_rows bigint;
+BEGIN
+    IF requested_tenant_id IS NULL
+       OR requested_tenant_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_event_id IS NULL
+       OR requested_event_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_worker_id IS NULL
+       OR requested_worker_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR expected_fencing_token IS NULL
+       OR expected_fencing_token NOT BETWEEN 1 AND 9007199254740991
+       OR requested_outcome NOT IN ('DELIVERED', 'RETRY', 'DEAD_LETTER')
+       OR (requested_outcome = 'RETRY'
+            AND (requested_retry_at IS NULL
+                OR requested_retry_at <= transaction_timestamp()
+                OR requested_retry_at > transaction_timestamp() + interval '24 hours'))
+       OR (requested_outcome <> 'RETRY' AND requested_retry_at IS NOT NULL)
+       OR (requested_outcome = 'DEAD_LETTER'
+            AND (requested_error_code IS NULL
+                OR requested_error_code COLLATE "C" !~ '^[A-Z][A-Z0-9_]{0,63}$'))
+       OR (requested_outcome <> 'DEAD_LETTER' AND requested_error_code IS NOT NULL) THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'Audit completion parameters are invalid';
+    END IF;
+
+    UPDATE delivery.audit_outbox AS event
+       SET status = requested_outcome,
+           available_at = CASE
+                WHEN requested_outcome = 'RETRY' THEN requested_retry_at
+                ELSE event.available_at
+           END,
+           lease_owner = NULL,
+           lease_expires_at = NULL,
+           last_error_code = CASE
+                WHEN requested_outcome = 'DEAD_LETTER' THEN requested_error_code
+                ELSE NULL
+           END,
+           delivered_at = CASE
+                WHEN requested_outcome = 'DELIVERED' THEN transaction_timestamp()
+                ELSE NULL
+           END,
+           updated_at = transaction_timestamp()
+     WHERE event.tenant_id = requested_tenant_id
+       AND event.event_id = requested_event_id
+       AND event.status = 'LEASED'
+       AND event.lease_owner = requested_worker_id
+       AND event.fencing_token = expected_fencing_token
+       AND event.lease_expires_at > clock_timestamp();
+    GET DIAGNOSTICS affected_rows = ROW_COUNT;
+    IF affected_rows <> 1 THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'MX412',
+            MESSAGE = 'Audit event lease or fencing token is stale';
+    END IF;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION delivery.complete_audit_event(
+    text, text, text, bigint, text, timestamptz, text
+) FROM PUBLIC, matrix_devops_api;
+GRANT EXECUTE ON FUNCTION delivery.complete_audit_event(
+    text, text, text, bigint, text, timestamptz, text
+) TO matrix_devops_worker;
+
+CREATE OR REPLACE FUNCTION delivery.audit_outbox_snapshot()
+RETURNS TABLE (
+    pending_count bigint,
+    leased_count bigint,
+    retry_count bigint,
+    delivered_count bigint,
+    dead_letter_count bigint,
+    expired_lease_count bigint
+)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+    SELECT
+        count(*) FILTER (WHERE status = 'PENDING'),
+        count(*) FILTER (WHERE status = 'LEASED'),
+        count(*) FILTER (WHERE status = 'RETRY'),
+        count(*) FILTER (WHERE status = 'DELIVERED'),
+        count(*) FILTER (WHERE status = 'DEAD_LETTER'),
+        count(*) FILTER (
+            WHERE status = 'LEASED'
+              AND lease_expires_at <= transaction_timestamp()
+        )
+    FROM delivery.audit_outbox
+$function$;
+
+REVOKE ALL ON FUNCTION delivery.audit_outbox_snapshot()
+    FROM PUBLIC, matrix_devops_api;
+GRANT EXECUTE ON FUNCTION delivery.audit_outbox_snapshot()
+    TO matrix_devops_worker;
+
+CREATE OR REPLACE FUNCTION delivery.readiness()
+RETURNS TABLE (ready boolean, schema_version bigint, checked_at timestamptz)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+    SELECT
+        to_regclass('delivery.projects') IS NOT NULL
+        AND to_regclass('delivery.source_connections') IS NOT NULL
+        AND to_regclass('delivery.repository_bindings') IS NOT NULL
+        AND to_regclass('delivery.pipelines') IS NOT NULL
+        AND to_regclass('delivery.pipeline_revisions') IS NOT NULL
+        AND to_regprocedure(
+            'delivery.commit_configuration_mutation(text,bigint,jsonb,jsonb,jsonb,jsonb,jsonb)'
+        ) IS NOT NULL
+        AND NOT EXISTS (
+            SELECT 1 FROM delivery.audit_outbox AS outbox
+             WHERE outbox.status = 'DEAD_LETTER'
+                OR outbox.attempts >= 100
+                OR outbox.fencing_token >= 9007199254740991
+        ),
+        1::bigint,
+        transaction_timestamp()
+$function$;
+
+REVOKE ALL ON FUNCTION delivery.readiness()
+    FROM PUBLIC, matrix_devops_worker;
+GRANT EXECUTE ON FUNCTION delivery.readiness() TO matrix_devops_api;
+
+CREATE OR REPLACE FUNCTION delivery.worker_readiness()
+RETURNS TABLE (ready boolean, schema_version bigint, checked_at timestamptz)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+    SELECT
+        to_regclass('delivery.audit_outbox') IS NOT NULL
+        AND to_regprocedure('delivery.claim_audit_event(text,integer)') IS NOT NULL
+        AND to_regprocedure(
+            'delivery.complete_audit_event(text,text,text,bigint,text,timestamptz,text)'
+        ) IS NOT NULL
+        AND to_regprocedure('delivery.audit_outbox_snapshot()') IS NOT NULL
+        AND NOT EXISTS (
+            SELECT 1 FROM delivery.audit_outbox AS outbox
+             WHERE outbox.status = 'DEAD_LETTER'
+                OR outbox.attempts >= 100
+                OR outbox.fencing_token >= 9007199254740991
+        ),
+        1::bigint,
+        transaction_timestamp()
+$function$;
+
+REVOKE ALL ON FUNCTION delivery.worker_readiness()
+    FROM PUBLIC, matrix_devops_api;
+GRANT EXECUTE ON FUNCTION delivery.worker_readiness() TO matrix_devops_worker;
 
 REVOKE ALL ON FUNCTION delivery.current_tenant_id() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION delivery.current_tenant_id()

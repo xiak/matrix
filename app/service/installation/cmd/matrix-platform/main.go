@@ -34,6 +34,7 @@ const (
 	releaseSignatureFileEnvironment = "MATRIX_PLATFORM_RELEASE_SIGNATURE_FILE"
 	releaseTrustFileEnvironment     = "MATRIX_PLATFORM_RELEASE_TRUST_FILE"
 	paasEndpointEnvironment         = "MATRIX_PLATFORM_PAAS_ENDPOINT"
+	devopsEndpointEnvironment       = "MATRIX_PLATFORM_DEVOPS_ENDPOINT"
 
 	maximumManifestBytes   int64 = 1024 * 1024
 	maximumSignatureBytes  int64 = 64
@@ -51,6 +52,7 @@ type configuration struct {
 	releaseSignatureFile string
 	releaseTrustFile     string
 	paasEndpoint         string
+	devopsEndpoint       string
 }
 
 func main() {
@@ -88,6 +90,7 @@ func loadConfiguration(lookup func(string) string) (configuration, error) {
 		releaseSignatureFile: lookup(releaseSignatureFileEnvironment),
 		releaseTrustFile:     lookup(releaseTrustFileEnvironment),
 		paasEndpoint:         lookup(paasEndpointEnvironment),
+		devopsEndpoint:       lookup(devopsEndpointEnvironment),
 	}
 	if config.listenAddress == "" || config.iamEndpoint == "" ||
 		config.iamCredentialFile == "" || config.releaseID == "" ||
@@ -138,6 +141,9 @@ func buildHandler(config configuration) (http.Handler, error) {
 	if err != nil || manifest.Release.ID != config.releaseID {
 		return nil, errors.New("platform release identity cannot be authenticated")
 	}
+	if manifest.IncludesProduct(release.ProductDevOps) != (config.devopsEndpoint != "") {
+		return nil, errors.New("platform product readiness configuration differs from release")
+	}
 
 	credentialText, err := processconfig.ReadText(
 		config.iamCredentialFile,
@@ -159,7 +165,7 @@ func buildHandler(config configuration) (http.Handler, error) {
 		return nil, err
 	}
 	observer, err := readinesshttp.NewObserver(readinesshttp.Config{
-		PaaSEndpoint: config.paasEndpoint,
+		PaaSEndpoint: config.paasEndpoint, DevOpsEndpoint: config.devopsEndpoint,
 	})
 	if err != nil {
 		return nil, err

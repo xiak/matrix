@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -155,6 +156,51 @@ func TestPipelineConfigurationJourneyIsAtomicIdempotentAndSnapshotBound(t *testi
 		t.Fatalf("third activation=%#v err=%v", thirdActivation, err)
 	}
 
+	readProject, err := usecase.GetProject(ctx, GetProjectQuery{
+		Authorization: authorization(iamv1.ActionDevOpsProjectRead, iamv1.ResourceDevOpsProject, projectRequest.ID),
+		ProjectID:     projectRequest.ID,
+	})
+	if err != nil || readProject != project.Value {
+		t.Fatalf("read Project=%#v err=%v", readProject, err)
+	}
+	readConnection, err := usecase.GetSourceConnection(ctx, GetSourceConnectionQuery{
+		Authorization:      authorization(iamv1.ActionDevOpsSourceConnectionRead, iamv1.ResourceSourceConnection, connectionRequest.ID),
+		SourceConnectionID: connectionRequest.ID,
+	})
+	if err != nil || readConnection.Metadata.ResourceVersion != rotated.Value.Metadata.ResourceVersion {
+		t.Fatalf("read SourceConnection=%#v err=%v", readConnection, err)
+	}
+	readBinding, err := usecase.GetRepositoryBinding(ctx, GetRepositoryBindingQuery{
+		Authorization:       authorization(iamv1.ActionDevOpsRepositoryBindingRead, iamv1.ResourceRepositoryBinding, bindingRequest.ID),
+		RepositoryBindingID: bindingRequest.ID,
+	})
+	if err != nil || readBinding.ContentDigest != updatedBinding.Value.ContentDigest {
+		t.Fatalf("read RepositoryBinding=%#v err=%v", readBinding, err)
+	}
+	readPipeline, err := usecase.GetPipeline(ctx, GetPipelineQuery{
+		Authorization: authorization(iamv1.ActionDevOpsPipelineRead, iamv1.ResourcePipeline, pipelineRequest.ID),
+		PipelineID:    pipelineRequest.ID,
+	})
+	if err != nil || readPipeline.Metadata.ResourceVersion != thirdActivation.Value.Pipeline.Metadata.ResourceVersion {
+		t.Fatalf("read Pipeline=%#v err=%v", readPipeline, err)
+	}
+	readRevision, err := usecase.GetPipelineRevision(ctx, GetPipelineRevisionQuery{
+		Authorization:      authorization(iamv1.ActionDevOpsPipelineRead, iamv1.ResourcePipeline, pipelineRequest.ID),
+		PipelineID:         pipelineRequest.ID,
+		PipelineRevisionID: firstActivation.Value.Revision.ID,
+	})
+	if err != nil || !reflect.DeepEqual(readRevision, firstActivation.Value.Revision) {
+		t.Fatalf("read immutable PipelineRevision=%#v err=%v", readRevision, err)
+	}
+	_, err = usecase.GetPipelineRevision(ctx, GetPipelineRevisionQuery{
+		Authorization:      authorization(iamv1.ActionDevOpsPipelineRead, iamv1.ResourcePipeline, "pipeline-other"),
+		PipelineID:         "pipeline-other",
+		PipelineRevisionID: firstActivation.Value.Revision.ID,
+	})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-parent PipelineRevision error=%v", err)
+	}
+
 	replayedDraft, err := usecase.UpdatePipelineDraft(ctx, UpdatePipelineDraftCommand{
 		Authorization:           authorization(iamv1.ActionDevOpsPipelineUpdate, iamv1.ResourcePipeline, pipelineRequest.ID),
 		PipelineID:              pipelineRequest.ID,
@@ -255,6 +301,7 @@ type memoryState struct {
 	connections map[devopsv1.ResourceID]devopsv1.SourceConnection
 	bindings    map[devopsv1.ResourceID]devopsv1.RepositoryBinding
 	pipelines   map[devopsv1.ResourceID]devopsv1.Pipeline
+	revisions   map[devopsv1.ResourceID]devopsv1.PipelineRevision
 	mutations   map[string]StoredMutation
 	audits      map[string]auditv1.Event
 }
@@ -271,6 +318,7 @@ func newMemoryRepository() *memoryRepository {
 	return &memoryRepository{state: &memoryState{
 		projects: map[devopsv1.ResourceID]devopsv1.DevOpsProject{}, connections: map[devopsv1.ResourceID]devopsv1.SourceConnection{},
 		bindings: map[devopsv1.ResourceID]devopsv1.RepositoryBinding{}, pipelines: map[devopsv1.ResourceID]devopsv1.Pipeline{},
+		revisions: map[devopsv1.ResourceID]devopsv1.PipelineRevision{},
 		mutations: map[string]StoredMutation{}, audits: map[string]auditv1.Event{},
 	}, now: time.Date(2026, 9, 7, 10, 0, 0, 0, time.UTC)}
 }
@@ -315,6 +363,10 @@ func (tx *memoryTransaction) LoadPipeline(_ context.Context, id devopsv1.Resourc
 	v, ok := tx.repository.state.pipelines[id]
 	return v, ok, nil
 }
+func (tx *memoryTransaction) LoadPipelineRevision(_ context.Context, id devopsv1.ResourceID) (devopsv1.PipelineRevision, bool, error) {
+	v, ok := tx.repository.state.revisions[id]
+	return v, ok, nil
+}
 func (tx *memoryTransaction) CreateProject(_ context.Context, v devopsv1.DevOpsProject, s Submission) error {
 	tx.repository.state.projects[v.Metadata.ID] = v
 	return tx.record(s)
@@ -345,6 +397,7 @@ func (tx *memoryTransaction) UpdatePipelineDraft(_ context.Context, _ uint64, v 
 }
 func (tx *memoryTransaction) ActivatePipeline(_ context.Context, _ uint64, v devopsv1.PipelineActivation, s Submission) error {
 	tx.repository.state.pipelines[v.Pipeline.Metadata.ID] = v.Pipeline
+	tx.repository.state.revisions[v.Revision.ID] = v.Revision
 	return tx.record(s)
 }
 func (tx *memoryTransaction) record(s Submission) error {

@@ -100,16 +100,17 @@ func Assemble(ctx context.Context, config Config, effects Effects) (Result, erro
 		return Result{}, err
 	}
 
-	images, tags, err := buildImages(ctx, config, effects, workspace, bundle, binaries)
+	products := builtProducts(config.Version)
+	images, tags, err := buildImages(ctx, config, effects, workspace, bundle, binaries, products)
 	defer removeBuildTags(tags, effects)
 	if err != nil {
 		return Result{}, err
 	}
-	files, err := inventoryPayloads(bundle)
+	files, err := inventoryPayloads(bundle, products)
 	if err != nil {
 		return Result{}, err
 	}
-	manifest := newManifest(config, files, images)
+	manifest := newManifest(config, files, images, products)
 	manifestBytes, err := installationrelease.EncodeCanonical(manifest)
 	if err != nil {
 		return Result{}, errors.New("release manifest construction failed")
@@ -171,8 +172,9 @@ func validateConfig(config Config) (Config, installationrelease.TrustRoot, error
 	if err != nil {
 		return Config{}, installationrelease.TrustRoot{}, err
 	}
-	placeholderFiles, placeholderImages := placeholderPayloads()
-	if err := installationrelease.ValidateManifest(newManifest(config, placeholderFiles, placeholderImages)); err != nil {
+	products := builtProducts(config.Version)
+	placeholderFiles, placeholderImages := placeholderPayloads(products)
+	if err := installationrelease.ValidateManifest(newManifest(config, placeholderFiles, placeholderImages, products)); err != nil {
 		return Config{}, installationrelease.TrustRoot{}, errors.New("release build metadata is invalid")
 	}
 	return config, trust, nil
@@ -205,6 +207,7 @@ func buildImages(
 	workspace string,
 	bundle string,
 	binaries map[string]string,
+	products []installationrelease.Product,
 ) ([]installationrelease.Image, []string, error) {
 	token, err := randomBuildToken(config.Entropy)
 	if err != nil {
@@ -234,8 +237,9 @@ func buildImages(
 		return nil, tags, errors.New("PaaS image Docker Compose contract failed")
 	}
 
-	images := make([]installationrelease.Image, 0, len(installationrelease.RequiredImages()))
-	for _, requirement := range installationrelease.RequiredImages() {
+	required := installationrelease.RequiredImages(products)
+	images := make([]installationrelease.Image, 0, len(required))
+	for _, requirement := range required {
 		image, found := metadata[requirement.Component]
 		if !found || validateImageMetadata(image) != nil {
 			return nil, tags, errors.New("release image inventory is incomplete")
@@ -270,9 +274,12 @@ func verifyBaseImages(ctx context.Context, effects Effects) error {
 	return nil
 }
 
-func inventoryPayloads(bundle string) ([]installationrelease.File, error) {
+func inventoryPayloads(
+	bundle string,
+	products []installationrelease.Product,
+) ([]installationrelease.File, error) {
 	paths := []string{"bin/mx"}
-	for _, requirement := range installationrelease.RequiredImages() {
+	for _, requirement := range installationrelease.RequiredImages(products) {
 		paths = append(paths, "images/"+requirement.Component+".tar")
 	}
 	slices.Sort(paths)
@@ -300,6 +307,7 @@ func newManifest(
 	config Config,
 	files []installationrelease.File,
 	images []installationrelease.Image,
+	products []installationrelease.Product,
 ) installationrelease.Manifest {
 	releaseID := ""
 	if len(config.SourceCommit) >= 12 {
@@ -326,20 +334,21 @@ func newManifest(
 			SchemaVersion: databaseSchemaVersion,
 			Compatibility: "expand-contract-n-minus-one",
 		},
-		Products: []installationrelease.Product{
-			installationrelease.ApplicationPaaSProduct(config.Version),
-		},
+		Products:       products,
 		TopologyDigest: topology.ContractDigest(), Files: files, Images: images,
 	}
 }
 
-func placeholderPayloads() ([]installationrelease.File, []installationrelease.Image) {
+func placeholderPayloads(
+	products []installationrelease.Product,
+) ([]installationrelease.File, []installationrelease.Image) {
 	files := []installationrelease.File{{
 		Path: "bin/mx", MediaType: "application/vnd.matrix.executable",
 		Size: 1, SHA256: placeholderDigest("mx"), Executable: true,
 	}}
-	images := make([]installationrelease.Image, 0, len(installationrelease.RequiredImages()))
-	for _, requirement := range installationrelease.RequiredImages() {
+	required := installationrelease.RequiredImages(products)
+	images := make([]installationrelease.Image, 0, len(required))
+	for _, requirement := range required {
 		archive := "images/" + requirement.Component + ".tar"
 		files = append(files, installationrelease.File{
 			Path: archive, MediaType: "application/vnd.docker.image.archive",
@@ -356,6 +365,13 @@ func placeholderPayloads() ([]installationrelease.File, []installationrelease.Im
 		return strings.Compare(left.Path, right.Path)
 	})
 	return files, images
+}
+
+func builtProducts(version string) []installationrelease.Product {
+	return []installationrelease.Product{
+		installationrelease.ApplicationPaaSProduct(version),
+		installationrelease.DevOpsProduct(version),
+	}
 }
 
 func placeholderDigest(value string) string {

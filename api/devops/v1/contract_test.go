@@ -113,6 +113,10 @@ func TestDevOpsExamplesPassExecutableValidation(t *testing.T) {
 	if err := ValidatePipelineActivation(activation); err != nil {
 		t.Fatalf("validate activation: %v", err)
 	}
+	readiness := decodeDevOpsExample[Readiness](t, "examples/readiness.json")
+	if err := ValidateReadiness(readiness); err != nil {
+		t.Fatalf("validate readiness: %v", err)
+	}
 	problem := decodeDevOpsExample[Problem](t, "examples/problem.json")
 	if err := ValidateProblem(problem); err != nil {
 		t.Fatalf("validate problem: %v", err)
@@ -320,6 +324,21 @@ func TestProblemCodeAndStatusAreBound(t *testing.T) {
 	problem.Status = 409
 	if err := ValidateProblem(problem); err == nil {
 		t.Fatal("precondition error with conflict status was accepted")
+	}
+}
+
+func TestPreconditionProblemCodesAreDistinct(t *testing.T) {
+	required := Problem{
+		Type:  "https://errors.matrix.xiak.com/devops/precondition-required",
+		Title: "A precondition is required", Status: 428,
+		Code: ErrorPreconditionRequired, TraceID: "trace-required", Retryable: false,
+	}
+	if err := ValidateProblem(required); err != nil {
+		t.Fatalf("validate required precondition problem: %v", err)
+	}
+	required.Status = 412
+	if err := ValidateProblem(required); err == nil {
+		t.Fatal("missing-precondition code accepted a failed-precondition status")
 	}
 }
 

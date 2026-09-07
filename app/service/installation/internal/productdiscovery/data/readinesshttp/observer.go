@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/xiak/matrix/api/contractjson"
+	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 	installationv1 "github.com/xiak/matrix/api/installation/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/productdiscovery"
@@ -19,19 +20,29 @@ var _ productdiscovery.ProductObserver = (*Observer)(nil)
 const defaultTimeout = 3 * time.Second
 
 type Config struct {
-	PaaSEndpoint string
-	HTTPClient   *http.Client
+	PaaSEndpoint   string
+	DevOpsEndpoint string
+	HTTPClient     *http.Client
 }
 
 type Observer struct {
-	paasEndpoint url.URL
-	http         *http.Client
+	paasEndpoint   url.URL
+	devopsEndpoint *url.URL
+	http           *http.Client
 }
 
 func NewObserver(config Config) (*Observer, error) {
 	endpoint, err := url.Parse(config.PaaSEndpoint)
 	if err != nil || !validEndpoint(endpoint) {
 		return nil, errors.New("PaaS readiness endpoint is invalid")
+	}
+	var devopsEndpoint *url.URL
+	if config.DevOpsEndpoint != "" {
+		parsed, err := url.Parse(config.DevOpsEndpoint)
+		if err != nil || !validEndpoint(parsed) {
+			return nil, errors.New("DevOps readiness endpoint is invalid")
+		}
+		devopsEndpoint = parsed
 	}
 	client := config.HTTPClient
 	if client == nil {
@@ -53,18 +64,28 @@ func NewObserver(config Config) (*Observer, error) {
 	client.CheckRedirect = func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}
-	return &Observer{paasEndpoint: *endpoint, http: client}, nil
+	return &Observer{paasEndpoint: *endpoint, devopsEndpoint: devopsEndpoint, http: client}, nil
 }
 
 func (observer *Observer) Observe(
 	ctx context.Context,
 	product installationv1.ProductID,
 ) (productdiscovery.ProductObservation, error) {
-	if observer == nil || observer.http == nil || ctx == nil ||
-		product != installationv1.ProductApplicationPaaS {
+	if observer == nil || observer.http == nil || ctx == nil {
 		return productdiscovery.ProductObservation{}, productdiscovery.ErrUnavailable
 	}
-	endpoint := observer.paasEndpoint
+	var endpoint url.URL
+	switch product {
+	case installationv1.ProductApplicationPaaS:
+		endpoint = observer.paasEndpoint
+	case installationv1.ProductDevOps:
+		if observer.devopsEndpoint == nil {
+			return productdiscovery.ProductObservation{}, productdiscovery.ErrUnavailable
+		}
+		endpoint = *observer.devopsEndpoint
+	default:
+		return productdiscovery.ProductObservation{}, productdiscovery.ErrUnavailable
+	}
 	endpoint.Path = "/ready"
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
@@ -79,19 +100,36 @@ func (observer *Observer) Observe(
 		return productdiscovery.ProductObservation{}, productdiscovery.ErrUnavailable
 	}
 	defer response.Body.Close()
-	var readiness paasv1.Readiness
 	if response.StatusCode != http.StatusOK ||
-		!authorityhttp.ResponseIsJSON(response) ||
-		contractjson.DecodeObject(response.Body, 64*1024, &readiness) != nil ||
-		paasv1.ValidateReadiness(readiness) != nil {
+		!authorityhttp.ResponseIsJSON(response) {
 		return productdiscovery.ProductObservation{}, productdiscovery.ErrUnavailable
+	}
+	state := ""
+	checkedAt := time.Time{}
+	switch product {
+	case installationv1.ProductApplicationPaaS:
+		var readiness paasv1.Readiness
+		if contractjson.DecodeObject(response.Body, 64*1024, &readiness) != nil ||
+			paasv1.ValidateReadiness(readiness) != nil {
+			return productdiscovery.ProductObservation{}, productdiscovery.ErrUnavailable
+		}
+		state = string(readiness.State)
+		checkedAt = readiness.CheckedAt
+	case installationv1.ProductDevOps:
+		var readiness devopsv1.Readiness
+		if contractjson.DecodeObject(response.Body, 64*1024, &readiness) != nil ||
+			devopsv1.ValidateReadiness(readiness) != nil {
+			return productdiscovery.ProductObservation{}, productdiscovery.ErrUnavailable
+		}
+		state = string(readiness.State)
+		checkedAt = readiness.CheckedAt
 	}
 	result := productdiscovery.ProductObservation{
 		State:      installationv1.ProductUnavailable,
 		Reason:     installationv1.ReasonDependencyUnavailable,
-		ObservedAt: readiness.CheckedAt,
+		ObservedAt: checkedAt,
 	}
-	if readiness.State == paasv1.ReadinessReady {
+	if state == "READY" {
 		result.State = installationv1.ProductReady
 		result.Reason = ""
 	}

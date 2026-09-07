@@ -17,7 +17,8 @@ import (
 const (
 	installationIDEnvironment         = "MATRIX_MIGRATION_INSTALLATION_ID"
 	platformCredentialFileEnvironment = "MATRIX_MIGRATION_PLATFORM_IAM_CREDENTIAL_FILE"
-	maximumPlatformCredentialBytes    = 16 * 1024
+	devopsCredentialFileEnvironment   = "MATRIX_MIGRATION_DEVOPS_IAM_CREDENTIAL_FILE"
+	maximumReleaseCredentialBytes     = 16 * 1024
 )
 
 var dsnFileEnvironments = []string{
@@ -36,44 +37,66 @@ func main() {
 }
 
 func run(ctx context.Context, arguments []string) error {
-	binding, err := loadPlatformServiceBinding()
+	installationID, bindings, err := loadReleaseServiceBindings()
 	if err != nil {
 		return err
 	}
 	return migrationprocess.Run(ctx, arguments, migrationprocess.Configuration{
 		DSNFileEnvironments: dsnFileEnvironments,
 		Apply: func(ctx context.Context, values []string) error {
-			return iammigration.ApplyForInstallation(ctx, values[0], values[1], values[2], binding)
+			return iammigration.ApplyForInstallation(
+				ctx, values[0], values[1], values[2], installationID, bindings,
+			)
 		},
 		Verify: func(ctx context.Context, values []string) error {
 			return iammigration.VerifyInstalledForInstallation(
-				ctx, values[0], values[1], values[2], binding,
+				ctx, values[0], values[1], values[2], installationID, bindings,
 			)
 		},
 	})
 }
 
-func loadPlatformServiceBinding() (iammigration.PlatformServiceBinding, error) {
+func loadReleaseServiceBindings() (string, []iammigration.ReleaseServiceBinding, error) {
 	installationID := os.Getenv(installationIDEnvironment)
-	credentialPath := os.Getenv(platformCredentialFileEnvironment)
-	if iamv1.ValidateID("installationId", installationID) != nil || credentialPath == "" {
-		return iammigration.PlatformServiceBinding{}, errors.New("migration process configuration is incomplete")
+	if iamv1.ValidateID("installationId", installationID) != nil {
+		return "", nil, errors.New("migration process configuration is incomplete")
+	}
+	platform, err := loadReleaseServiceCredential(platformCredentialFileEnvironment)
+	if err != nil {
+		return "", nil, err
+	}
+	bindings := []iammigration.ReleaseServiceBinding{{
+		Purpose: iamv1.ServicePlatform, Credential: platform,
+	}}
+	if os.Getenv(devopsCredentialFileEnvironment) != "" {
+		devops, err := loadReleaseServiceCredential(devopsCredentialFileEnvironment)
+		if err != nil {
+			return "", nil, err
+		}
+		bindings = append(bindings, iammigration.ReleaseServiceBinding{
+			Purpose: iamv1.ServiceDevOps, Credential: devops,
+		})
+	}
+	return installationID, bindings, nil
+}
+
+func loadReleaseServiceCredential(environment string) (iamv1.Secret, error) {
+	credentialPath := os.Getenv(environment)
+	if credentialPath == "" {
+		return iamv1.Secret{}, errors.New("migration process configuration is incomplete")
 	}
 	credentialBytes, err := processconfig.ReadFile(
 		credentialPath,
-		maximumPlatformCredentialBytes,
+		maximumReleaseCredentialBytes,
 		true,
 	)
 	if err != nil {
-		return iammigration.PlatformServiceBinding{}, errors.New("migration process configuration is invalid")
+		return iamv1.Secret{}, errors.New("migration process configuration is invalid")
 	}
 	credential, secretErr := iamv1.NewSecret(string(credentialBytes))
 	clear(credentialBytes)
 	if secretErr != nil {
-		return iammigration.PlatformServiceBinding{}, errors.New("migration process configuration is invalid")
+		return iamv1.Secret{}, errors.New("migration process configuration is invalid")
 	}
-	return iammigration.PlatformServiceBinding{
-		InstallationID: installationID,
-		Credential:     credential,
-	}, nil
+	return credential, nil
 }

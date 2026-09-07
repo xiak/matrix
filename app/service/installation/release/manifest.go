@@ -2,7 +2,11 @@
 // Matrix installation lifecycle commands.
 package release
 
-import "time"
+import (
+	"slices"
+	"strings"
+	"time"
+)
 
 const (
 	ManifestAPIVersion = "installation.matrix.xiak.com/v1"
@@ -141,17 +145,32 @@ type TrustRoot struct {
 	PublicKeyFingerprint string `json:"publicKeyFingerprint"`
 }
 
-func RequiredImages() []ImageRequirement {
-	return []ImageRequirement{
+func RequiredImages(products []Product) []ImageRequirement {
+	required := []ImageRequirement{
 		{Component: "apisix", Purpose: ImagePlatform, HealthContract: "northbound-ready-v1"},
 		{Component: "audit", Purpose: ImagePlatform, HealthContract: "audit-ready-deduplicate-v1"},
 		{Component: "iam", Purpose: ImagePlatform, HealthContract: "iam-ready-authorize-v1"},
 		{Component: "matrix-ui", Purpose: ImagePlatform, HealthContract: "matrix-ui-ready-v1"},
-		{Component: "paas", Purpose: ImagePlatform, HealthContract: "paas-ready-worker-compose-v1"},
 		{Component: "platform", Purpose: ImagePlatform, HealthContract: "product-discovery-ready-v1"},
 		{Component: "postgres", Purpose: ImagePlatform, HealthContract: "postgres-ready-schema-v1"},
-		{Component: "verification", Purpose: ImageWorkload, HealthContract: "application-probe-v1"},
 	}
+	for _, product := range products {
+		switch product.ID {
+		case ProductApplicationPaaS:
+			required = append(required,
+				ImageRequirement{Component: "paas", Purpose: ImagePlatform, HealthContract: "paas-ready-worker-compose-v1"},
+				ImageRequirement{Component: "verification", Purpose: ImageWorkload, HealthContract: "application-probe-v1"},
+			)
+		case ProductDevOps:
+			required = append(required, ImageRequirement{
+				Component: "devops", Purpose: ImagePlatform, HealthContract: "devops-ready-v1",
+			})
+		}
+	}
+	slices.SortFunc(required, func(left, right ImageRequirement) int {
+		return strings.Compare(left.Component, right.Component)
+	})
+	return required
 }
 
 func legacyProductlessRequiredImages() []ImageRequirement {
@@ -175,6 +194,28 @@ func ApplicationPaaSProduct(version string) Product {
 		RequiredComponents: []string{"paas"},
 		Dependencies:       []ProductID{},
 	}
+}
+
+func DevOpsProduct(version string) Product {
+	return Product{
+		ID:                 ProductDevOps,
+		Version:            version,
+		RouteKey:           "devops",
+		ReadinessContract:  "devops-ready-v1",
+		RequiredComponents: []string{"devops"},
+		Dependencies:       []ProductID{},
+	}
+}
+
+// IncludesProduct reports membership in the authenticated product inventory.
+// Callers must validate the manifest before using the result as authority.
+func (manifest Manifest) IncludesProduct(id ProductID) bool {
+	for _, product := range manifest.Products {
+		if product.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 // BuiltImageLabels is the authenticated build-metadata surface inherited by

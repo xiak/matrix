@@ -8,7 +8,7 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 )
 
-func TestAuthorizationIsBoundToExactMutation(t *testing.T) {
+func TestAuthorizationIsBoundToExactRequest(t *testing.T) {
 	value := Authorization{
 		TenantID:   "tenant-one",
 		Subject:    devopsv1.SubjectRef{Kind: devopsv1.SubjectUser, ID: "user-one"},
@@ -18,7 +18,7 @@ func TestAuthorizationIsBoundToExactMutation(t *testing.T) {
 		RequestID:  "request-one", CorrelationID: "correlation-one",
 		TraceParent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
 	}
-	if err := ValidateAuthorizationForMutation(
+	if err := ValidateAuthorizationForRequest(
 		value, iamv1.ActionDevOpsPipelineActivate, iamv1.ResourcePipeline, "pipeline-one",
 	); err != nil {
 		t.Fatalf("validate matching authorization: %v", err)
@@ -33,7 +33,7 @@ func TestAuthorizationIsBoundToExactMutation(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			changed := value
 			mutate(&changed)
-			if ValidateAuthorizationForMutation(
+			if ValidateAuthorizationForRequest(
 				changed, iamv1.ActionDevOpsPipelineActivate, iamv1.ResourcePipeline, "pipeline-one",
 			) == nil {
 				t.Fatal("mismatched authorization was accepted")
@@ -51,5 +51,16 @@ func TestAuthorizationRequestRejectsUnsafeCredentialWithoutEchoingIt(t *testing.
 	})
 	if err == nil || strings.Contains(err.Error(), secret) {
 		t.Fatalf("unsafe credential error=%v", err)
+	}
+}
+
+func TestAuthorizationRequestRejectsInvalidTraceParent(t *testing.T) {
+	err := ValidateAuthorizationRequest(AuthorizationRequest{
+		Credential: "bearer-secret", Action: iamv1.ActionDevOpsProjectRead,
+		Resource:  iamv1.ResourceReference{Kind: iamv1.ResourceDevOpsProject, ID: "project-one"},
+		RequestID: "request-one", CorrelationID: "correlation-one", TraceParent: "forged",
+	})
+	if err == nil {
+		t.Fatal("invalid traceparent was accepted")
 	}
 }

@@ -91,6 +91,7 @@ func buildDocument() object {
 			"SubjectKind":             openapi31.StringValues(devopsv1.SubjectKinds()),
 			"SourceConnectionHealth":  openapi31.StringValues(devopsv1.SourceConnectionHealthStates()),
 			"RepositoryBindingHealth": openapi31.StringValues(devopsv1.RepositoryBindingHealthStates()),
+			"ReadinessState":          openapi31.StringValues(devopsv1.ReadinessStates()),
 			"ErrorCode":               openapi31.StringValues(devopsv1.ErrorCodes()),
 		},
 		Structs: map[string]reflect.Type{
@@ -120,6 +121,7 @@ func buildDocument() object {
 			"SubjectRef":                     openapi31.StructType[devopsv1.SubjectRef](),
 			"PipelineRevision":               openapi31.StructType[devopsv1.PipelineRevision](),
 			"PipelineActivation":             openapi31.StructType[devopsv1.PipelineActivation](),
+			"Readiness":                      openapi31.StructType[devopsv1.Readiness](),
 			"FieldViolation":                 openapi31.StructType[devopsv1.FieldViolation](),
 			"Problem":                        openapi31.StructType[devopsv1.Problem](),
 		},
@@ -130,6 +132,19 @@ func buildDocument() object {
 
 func buildPaths() object {
 	return object{
+		"/ready": object{
+			"get": object{
+				"operationId": "getDevOpsReadiness",
+				"summary":     "Get DevOps readiness",
+				"security":    []any{},
+				"responses": object{
+					"200": response("DevOps is ready.", "Readiness", nil),
+					"400": openapi31.ComponentRef("#/components/responses/ProblemResponse"),
+					"405": openapi31.ComponentRef("#/components/responses/ProblemResponse"),
+					"503": openapi31.ComponentRef("#/components/responses/ProblemResponse"),
+				},
+			},
+		},
 		"/v1/projects": object{
 			"post": createOperation(
 				"createDevOpsProject", "Create a DevOps project",
@@ -188,17 +203,14 @@ func buildPaths() object {
 		"/v1/pipelines/{pipelineId}/activate": object{
 			"post": activateOperation(),
 		},
-		"/v1/pipeline-revisions/{pipelineRevisionId}": object{
-			"get": readOperation(
-				"getPipelineRevision", "Get an immutable Pipeline revision",
-				"pipelineRevisionId", "PipelineRevision",
-			),
+		"/v1/pipelines/{pipelineId}/revisions/{pipelineRevisionId}": object{
+			"get": readPipelineRevisionOperation(),
 		},
 	}
 }
 
 func createOperation(operationID, summary, requestSchema, responseSchema string) object {
-	responses := openapi31.ProblemResponses("400", "401", "403", "409", "422", "500", "503")
+	responses := openapi31.ProblemResponses("400", "401", "403", "405", "409", "412", "413", "415", "422", "500", "503")
 	responses["201"] = response(
 		"Created resource.", responseSchema,
 		object{"ETag": openapi31.ComponentRef("#/components/headers/ETag"), "Location": openapi31.ComponentRef("#/components/headers/Location")},
@@ -213,7 +225,7 @@ func createOperation(operationID, summary, requestSchema, responseSchema string)
 }
 
 func readOperation(operationID, summary, pathParameter, responseSchema string) object {
-	responses := openapi31.ProblemResponses("401", "403", "404", "500", "503")
+	responses := openapi31.ProblemResponses("400", "401", "403", "404", "405", "500", "503")
 	responses["200"] = response(
 		"Current authorized resource.", responseSchema,
 		object{"ETag": openapi31.ComponentRef("#/components/headers/ETag")},
@@ -226,8 +238,20 @@ func readOperation(operationID, summary, pathParameter, responseSchema string) o
 	}
 }
 
+func readPipelineRevisionOperation() object {
+	operation := readOperation(
+		"getPipelineRevision", "Get an immutable Pipeline revision",
+		"pipelineRevisionId", "PipelineRevision",
+	)
+	operation["parameters"] = []any{
+		openapi31.PathIDParameter("pipelineId"),
+		openapi31.PathIDParameter("pipelineRevisionId"),
+	}
+	return operation
+}
+
 func updateDraftOperation() object {
-	responses := openapi31.ProblemResponses("400", "401", "403", "404", "409", "412", "422", "500", "503")
+	responses := openapi31.ProblemResponses("400", "401", "403", "404", "405", "409", "412", "413", "415", "422", "428", "500", "503")
 	responses["200"] = response(
 		"Pipeline with the updated mutable draft.", "Pipeline",
 		object{"ETag": openapi31.ComponentRef("#/components/headers/ETag")},
@@ -248,7 +272,7 @@ func updateDraftOperation() object {
 func updateResourceOperation(
 	operationID, summary, pathParameter, requestSchema, responseSchema string,
 ) object {
-	responses := openapi31.ProblemResponses("400", "401", "403", "404", "409", "412", "422", "500", "503")
+	responses := openapi31.ProblemResponses("400", "401", "403", "404", "405", "409", "412", "413", "415", "422", "428", "500", "503")
 	responses["200"] = response(
 		"Updated resource.", responseSchema,
 		object{"ETag": openapi31.ComponentRef("#/components/headers/ETag")},
@@ -267,7 +291,7 @@ func updateResourceOperation(
 }
 
 func activateOperation() object {
-	responses := openapi31.ProblemResponses("401", "403", "404", "409", "412", "422", "500", "503")
+	responses := openapi31.ProblemResponses("400", "401", "403", "404", "405", "409", "412", "422", "428", "500", "503")
 	responses["201"] = response(
 		"Atomic Pipeline and immutable revision result.", "PipelineActivation",
 		object{"ETag": openapi31.ComponentRef("#/components/headers/ETag"), "Location": openapi31.ComponentRef("#/components/headers/Location")},
@@ -286,13 +310,16 @@ func activateOperation() object {
 }
 
 func response(description, schemaName string, headers object) object {
-	return object{
+	result := object{
 		"description": description,
-		"headers":     headers,
 		"content": object{
 			"application/json": object{"schema": openapi31.Ref(schemaName)},
 		},
 	}
+	if headers != nil {
+		result["headers"] = headers
+	}
+	return result
 }
 
 func opaqueIDSchema() object {
@@ -309,7 +336,7 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 			"type": "string", "minLength": 1, "maxLength": 63,
 			"pattern": `^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`,
 		}
-	case "resourceVersion", "revision":
+	case "resourceVersion", "revision", "schemaVersion":
 		base["minimum"] = 1
 		base["maximum"] = devopsv1.MaximumContractInteger
 	case "ordinal":
@@ -432,7 +459,11 @@ func applySemanticOverlays(schemas object) {
 		problemStatusRule(devopsv1.ErrorUnauthenticated, []int{401}),
 		problemStatusRule(devopsv1.ErrorForbidden, []int{403}),
 		problemStatusRule(devopsv1.ErrorNotFound, []int{404}),
+		problemStatusRule(devopsv1.ErrorMethodNotAllowed, []int{405}),
 		problemStatusRule(devopsv1.ErrorConflict, []int{409}),
+		problemStatusRule(devopsv1.ErrorPayloadTooLarge, []int{413}),
+		problemStatusRule(devopsv1.ErrorUnsupportedMediaType, []int{415}),
+		problemStatusRule(devopsv1.ErrorPreconditionRequired, []int{428}),
 		problemStatusRule(devopsv1.ErrorPreconditionFailed, []int{412}),
 		problemStatusRule(devopsv1.ErrorInternal, []int{500}),
 		problemStatusRule(devopsv1.ErrorUnavailable, []int{503}),

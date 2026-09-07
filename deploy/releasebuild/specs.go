@@ -20,6 +20,9 @@ var binarySpecifications = []binarySpecification{
 	{name: "matrix-audit", packagePath: "./app/service/audit/cmd/matrix-audit"},
 	{name: "matrix-audit-migrate", packagePath: "./app/service/audit/cmd/matrix-audit-migrate"},
 	{name: "matrix-health", packagePath: "./app/service/installation/cmd/matrix-health"},
+	{name: "matrix-devops", packagePath: "./app/service/devops/cmd/matrix-devops"},
+	{name: "matrix-devops-audit-dispatcher", packagePath: "./app/service/devops/cmd/matrix-devops-audit-dispatcher"},
+	{name: "matrix-devops-migrate", packagePath: "./app/service/devops/cmd/matrix-devops-migrate"},
 	{name: "matrix-iam", packagePath: "./app/service/iam/cmd/matrix-iam"},
 	{name: "matrix-iam-audit-dispatcher", packagePath: "./app/service/iam/cmd/matrix-iam-audit-dispatcher"},
 	{name: "matrix-iam-migrate", packagePath: "./app/service/iam/cmd/matrix-iam-migrate"},
@@ -48,6 +51,13 @@ var imageRecipes = []imageRecipe{
 	{
 		component: "audit", baseReference: "scratch",
 		binaries: []string{"matrix-audit", "matrix-audit-migrate", "matrix-health"},
+	},
+	{
+		component: "devops", baseReference: "scratch",
+		binaries: []string{
+			"matrix-devops", "matrix-devops-audit-dispatcher", "matrix-devops-migrate",
+			"matrix-health",
+		},
 	},
 	{
 		component: "iam", baseReference: "scratch",

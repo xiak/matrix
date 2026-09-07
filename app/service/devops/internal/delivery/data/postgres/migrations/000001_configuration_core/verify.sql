@@ -96,6 +96,28 @@ BEGIN
     IF missing IS NOT NULL THEN
         RAISE EXCEPTION 'delivery tenant-leading policy is missing: %', missing;
     END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_policies AS policy
+         WHERE policy.schemaname = 'delivery'
+           AND policy.tablename = 'audit_outbox'
+           AND policy.policyname = 'owner_dispatch'
+           AND policy.permissive = 'PERMISSIVE'
+           AND policy.cmd = 'ALL'
+           AND policy.roles = ARRAY['matrix_devops_owner']::name[]
+           AND policy.qual = 'true'
+           AND policy.with_check = 'true'
+    ) THEN
+        RAISE EXCEPTION 'delivery Audit owner dispatch policy is missing or unsafe';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns AS column_info
+         WHERE column_info.table_schema = 'delivery'
+           AND column_info.table_name = 'audit_outbox'
+           AND column_info.column_name = 'delivered_at'
+           AND column_info.data_type = 'timestamp with time zone'
+    ) THEN
+        RAISE EXCEPTION 'delivery Audit completion timestamp is missing';
+    END IF;
 
     SELECT string_agg(required.name, ', ' ORDER BY required.name)
       INTO missing
@@ -110,7 +132,8 @@ BEGIN
             ('pipeline_revisions_pipeline_fk'),
             ('pipeline_revisions_binding_snapshot_fk'),
             ('pipelines_active_revision_fk'),
-            ('mutations_idempotency_uq'), ('audit_outbox_operation_fk')
+            ('mutations_idempotency_uq'), ('audit_outbox_operation_fk'),
+            ('audit_outbox_delivery_state_valid')
       ) AS required(name)
      WHERE NOT EXISTS (
         SELECT 1 FROM pg_catalog.pg_constraint
@@ -144,6 +167,34 @@ BEGIN
         RAISE EXCEPTION 'delivery configuration transaction function is missing or unsafe';
     END IF;
 
+    SELECT string_agg(required.name, ', ' ORDER BY required.name)
+      INTO missing
+      FROM (
+        VALUES
+            ('claim_audit_event',
+             'requested_worker_id text, requested_lease_seconds integer'),
+            ('complete_audit_event',
+             'requested_tenant_id text, requested_event_id text, requested_worker_id text, expected_fencing_token bigint, requested_outcome text, requested_retry_at timestamp with time zone, requested_error_code text'),
+            ('audit_outbox_snapshot', ''),
+            ('readiness', ''),
+            ('worker_readiness', '')
+      ) AS required(name, arguments)
+     WHERE NOT EXISTS (
+        SELECT 1
+          FROM pg_catalog.pg_proc AS procedure
+          JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = procedure.pronamespace
+          JOIN pg_catalog.pg_roles AS owner_role ON owner_role.oid = procedure.proowner
+         WHERE namespace.nspname = 'delivery'
+           AND procedure.proname = required.name
+           AND pg_catalog.pg_get_function_identity_arguments(procedure.oid) = required.arguments
+           AND procedure.prosecdef
+           AND 'search_path=pg_catalog, pg_temp' = ANY(procedure.proconfig)
+           AND owner_role.rolname = 'matrix_devops_owner'
+     );
+    IF missing IS NOT NULL THEN
+        RAISE EXCEPTION 'delivery Audit/readiness functions are missing or unsafe: %', missing;
+    END IF;
+
     IF has_schema_privilege('matrix_devops_api', 'delivery', 'CREATE')
        OR has_schema_privilege('matrix_devops_worker', 'delivery', 'CREATE')
        OR NOT has_schema_privilege('matrix_devops_api', 'delivery', 'USAGE')
@@ -157,6 +208,42 @@ BEGIN
             'matrix_devops_worker',
             'delivery.commit_configuration_mutation(text,bigint,jsonb,jsonb,jsonb,jsonb,jsonb)',
             'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_devops_api', 'delivery.readiness()', 'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_devops_worker', 'delivery.readiness()', 'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_devops_worker', 'delivery.worker_readiness()', 'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_devops_api', 'delivery.worker_readiness()', 'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_devops_worker',
+            'delivery.claim_audit_event(text,integer)', 'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_devops_api',
+            'delivery.claim_audit_event(text,integer)', 'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_devops_worker',
+            'delivery.complete_audit_event(text,text,text,bigint,text,timestamptz,text)',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_devops_api',
+            'delivery.complete_audit_event(text,text,text,bigint,text,timestamptz,text)',
+            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_devops_worker', 'delivery.audit_outbox_snapshot()', 'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_devops_api', 'delivery.audit_outbox_snapshot()', 'EXECUTE'
        ) THEN
         RAISE EXCEPTION 'delivery schema or function privileges are invalid';
     END IF;

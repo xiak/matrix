@@ -14,6 +14,7 @@ import (
 
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/domain"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/port"
 )
@@ -29,6 +30,125 @@ type executionPlan[T any] struct {
 	result          func(T) MutationResult
 	replay          func(MutationResult) (T, error)
 	persist         func(context.Context, Transaction, T, Submission) error
+}
+
+func (usecase *Usecase) GetProject(
+	ctx context.Context,
+	query GetProjectQuery,
+) (devopsv1.DevOpsProject, error) {
+	return readConfiguration(ctx, usecase, query.Authorization,
+		iamv1.ActionDevOpsProjectRead, iamv1.ResourceDevOpsProject, query.ProjectID,
+		func(ctx context.Context, tx Transaction) (devopsv1.DevOpsProject, bool, error) {
+			return tx.LoadProject(ctx, query.ProjectID)
+		})
+}
+
+func (usecase *Usecase) GetSourceConnection(
+	ctx context.Context,
+	query GetSourceConnectionQuery,
+) (devopsv1.SourceConnection, error) {
+	return readConfiguration(ctx, usecase, query.Authorization,
+		iamv1.ActionDevOpsSourceConnectionRead, iamv1.ResourceSourceConnection, query.SourceConnectionID,
+		func(ctx context.Context, tx Transaction) (devopsv1.SourceConnection, bool, error) {
+			return tx.LoadSourceConnection(ctx, query.SourceConnectionID)
+		})
+}
+
+func (usecase *Usecase) GetRepositoryBinding(
+	ctx context.Context,
+	query GetRepositoryBindingQuery,
+) (devopsv1.RepositoryBinding, error) {
+	return readConfiguration(ctx, usecase, query.Authorization,
+		iamv1.ActionDevOpsRepositoryBindingRead, iamv1.ResourceRepositoryBinding, query.RepositoryBindingID,
+		func(ctx context.Context, tx Transaction) (devopsv1.RepositoryBinding, bool, error) {
+			return tx.LoadRepositoryBinding(ctx, query.RepositoryBindingID)
+		})
+}
+
+func (usecase *Usecase) GetPipeline(
+	ctx context.Context,
+	query GetPipelineQuery,
+) (devopsv1.Pipeline, error) {
+	return readConfiguration(ctx, usecase, query.Authorization,
+		iamv1.ActionDevOpsPipelineRead, iamv1.ResourcePipeline, query.PipelineID,
+		func(ctx context.Context, tx Transaction) (devopsv1.Pipeline, bool, error) {
+			return tx.LoadPipeline(ctx, query.PipelineID)
+		})
+}
+
+func (usecase *Usecase) GetPipelineRevision(
+	ctx context.Context,
+	query GetPipelineRevisionQuery,
+) (devopsv1.PipelineRevision, error) {
+	if err := devopsv1.ValidateID("pipelineRevisionId", string(query.PipelineRevisionID)); err != nil {
+		return devopsv1.PipelineRevision{}, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
+	}
+	value, err := readConfiguration(ctx, usecase, query.Authorization,
+		iamv1.ActionDevOpsPipelineRead, iamv1.ResourcePipeline, query.PipelineID,
+		func(ctx context.Context, tx Transaction) (devopsv1.PipelineRevision, bool, error) {
+			return tx.LoadPipelineRevision(ctx, query.PipelineRevisionID)
+		})
+	if err != nil {
+		return devopsv1.PipelineRevision{}, err
+	}
+	if value.PipelineID != query.PipelineID {
+		return devopsv1.PipelineRevision{}, ErrNotFound
+	}
+	return value, nil
+}
+
+func readConfiguration[T any](
+	ctx context.Context,
+	usecase *Usecase,
+	authorization port.Authorization,
+	action iamv1.Action,
+	resourceKind iamv1.ResourceKind,
+	resourceID devopsv1.ResourceID,
+	load func(context.Context, Transaction) (T, bool, error),
+) (T, error) {
+	var zero T
+	if usecase == nil || usecase.repository == nil {
+		return zero, errors.New("pipeline configuration use case is nil")
+	}
+	if ctx == nil {
+		return zero, errors.New("pipeline configuration context is nil")
+	}
+	if load == nil {
+		return zero, errors.New("pipeline configuration loader is required")
+	}
+	if err := errors.Join(
+		devopsv1.ValidateID("resourceId", string(resourceID)),
+		port.ValidateAuthorizationForRequest(authorization, action, resourceKind, resourceID),
+	); err != nil {
+		return zero, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
+	}
+	var result T
+	var transactionErr error
+	for attempt := 0; attempt < usecase.config.MaxTransactionAttempts; attempt++ {
+		result = zero
+		transactionErr = usecase.repository.WithinTransaction(ctx, authorization.TenantID,
+			func(txCtx context.Context, tx Transaction) error {
+				value, found, err := load(txCtx, tx)
+				if err != nil {
+					return err
+				}
+				if !found {
+					return ErrNotFound
+				}
+				result = value
+				return nil
+			})
+		if transactionErr == nil {
+			return result, nil
+		}
+		if !errors.Is(transactionErr, ErrRetryableTransaction) {
+			return zero, transactionErr
+		}
+		if err := ctx.Err(); err != nil {
+			return zero, err
+		}
+	}
+	return zero, fmt.Errorf("pipeline configuration transaction attempts exhausted: %w", transactionErr)
 }
 
 func (usecase *Usecase) CreateProject(
@@ -414,7 +534,7 @@ func validateCommand(auth port.Authorization, kind MutationKind, targetID devops
 	}
 	var problems []error
 	problems = append(problems, requestErr,
-		port.ValidateAuthorizationForMutation(auth, contract.IAMAction, contract.IAMResourceKind, targetID),
+		port.ValidateAuthorizationForRequest(auth, contract.IAMAction, contract.IAMResourceKind, targetID),
 		devopsv1.ValidateID("targetId", string(targetID)), validateIdempotencyKey(idempotencyKey),
 	)
 	if expectedVersion > devopsv1.MaximumContractInteger ||

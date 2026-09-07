@@ -39,6 +39,33 @@ func TestBuildHandlerAuthenticatesExactRelease(t *testing.T) {
 	}
 }
 
+func TestBuildHandlerBindsDevOpsReadinessToSignedInventory(t *testing.T) {
+	fixture, err := releasetest.WriteDevOps(t.TempDir())
+	if err != nil {
+		t.Fatalf("write signed DevOps release fixture: %v", err)
+	}
+	credentialFile := filepath.Join(t.TempDir(), "platform-iam-credential")
+	if err := os.WriteFile(credentialFile, []byte("platform-service-credential"), 0o600); err != nil {
+		t.Fatalf("write platform credential: %v", err)
+	}
+	config := configuration{
+		listenAddress: "127.0.0.1:8080", iamEndpoint: "http://iam:8080",
+		iamCredentialFile:    credentialFile,
+		installationID:       "mxi-0123456789abcdef0123456789abcdef",
+		releaseID:            fixture.Manifest.Release.ID,
+		releaseManifestFile:  filepath.Join(fixture.Root, release.ManifestFilename),
+		releaseSignatureFile: filepath.Join(fixture.Root, release.SignatureFilename),
+		releaseTrustFile:     fixture.TrustPath, paasEndpoint: "http://paas-api:8080",
+	}
+	if _, err := buildHandler(config); err == nil {
+		t.Fatal("signed DevOps inventory was accepted without its readiness endpoint")
+	}
+	config.devopsEndpoint = "http://devops-api:8080"
+	if handler, err := buildHandler(config); err != nil || handler == nil {
+		t.Fatalf("build DevOps product-discovery handler = %T / %v", handler, err)
+	}
+}
+
 func TestBuildHandlerRejectsTamperedManifestAndInvalidConfiguration(t *testing.T) {
 	fixture, err := releasetest.Write(t.TempDir())
 	if err != nil {

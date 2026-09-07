@@ -132,6 +132,7 @@ type Transaction interface {
 	LoadSourceConnection(context.Context, devopsv1.ResourceID) (devopsv1.SourceConnection, bool, error)
 	LoadRepositoryBinding(context.Context, devopsv1.ResourceID) (devopsv1.RepositoryBinding, bool, error)
 	LoadPipeline(context.Context, devopsv1.ResourceID) (devopsv1.Pipeline, bool, error)
+	LoadPipelineRevision(context.Context, devopsv1.ResourceID) (devopsv1.PipelineRevision, bool, error)
 	CreateProject(context.Context, devopsv1.DevOpsProject, Submission) error
 	CreateSourceConnection(context.Context, devopsv1.SourceConnection, Submission) error
 	UpdateSourceConnection(context.Context, uint64, devopsv1.SourceConnection, Submission) error
@@ -158,6 +159,32 @@ type Usecase struct {
 type Result[T any] struct {
 	Value    T
 	Replayed bool
+}
+
+type GetProjectQuery struct {
+	Authorization port.Authorization
+	ProjectID     devopsv1.ResourceID
+}
+
+type GetSourceConnectionQuery struct {
+	Authorization      port.Authorization
+	SourceConnectionID devopsv1.ResourceID
+}
+
+type GetRepositoryBindingQuery struct {
+	Authorization       port.Authorization
+	RepositoryBindingID devopsv1.ResourceID
+}
+
+type GetPipelineQuery struct {
+	Authorization port.Authorization
+	PipelineID    devopsv1.ResourceID
+}
+
+type GetPipelineRevisionQuery struct {
+	Authorization      port.Authorization
+	PipelineID         devopsv1.ResourceID
+	PipelineRevisionID devopsv1.ResourceID
 }
 
 type CreateProjectCommand struct {

@@ -28,6 +28,7 @@ type AuthorizationRequest struct {
 	Resource      iamv1.ResourceReference
 	RequestID     string
 	CorrelationID string
+	TraceParent   string
 }
 
 // Authorization is the trusted, action-bound IAM result used by delivery.
@@ -64,6 +65,7 @@ func ValidateAuthorizationRequest(value AuthorizationRequest) error {
 		devopsv1.ValidateID("authorization.requestId", value.RequestID),
 		devopsv1.ValidateID("authorization.correlationId", value.CorrelationID),
 	)
+	problems = append(problems, ValidateTraceParent(value.TraceParent))
 	return errors.Join(problems...)
 }
 
@@ -83,13 +85,18 @@ func ValidateAuthorization(value Authorization) error {
 	} else if value.Resource.Kind != expectedKind {
 		problems = append(problems, errors.New("authorization action and resource kind differ"))
 	}
-	if value.TraceParent != "" && !traceParentPattern.MatchString(value.TraceParent) {
-		problems = append(problems, errors.New("authorization traceparent is invalid"))
-	}
+	problems = append(problems, ValidateTraceParent(value.TraceParent))
 	return errors.Join(problems...)
 }
 
-func ValidateAuthorizationForMutation(
+func ValidateTraceParent(value string) error {
+	if value != "" && !traceParentPattern.MatchString(value) {
+		return errors.New("traceparent is invalid")
+	}
+	return nil
+}
+
+func ValidateAuthorizationForRequest(
 	value Authorization,
 	action iamv1.Action,
 	resourceKind iamv1.ResourceKind,
@@ -99,7 +106,7 @@ func ValidateAuthorizationForMutation(
 	problems = append(problems, ValidateAuthorization(value))
 	if value.Action != action || value.Resource.Kind != resourceKind ||
 		value.Resource.ID != string(resourceID) {
-		problems = append(problems, errors.New("IAM decision does not authorize this mutation"))
+		problems = append(problems, errors.New("IAM decision does not authorize this request"))
 	}
 	return errors.Join(problems...)
 }
