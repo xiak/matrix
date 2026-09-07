@@ -6,7 +6,7 @@
 - Updated: 2026-09-08
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `00fc256`
+- Current pushed implementation baseline: `13edb6a`
 
 ## Goal
 
@@ -32,10 +32,9 @@ and acceptance sequence.
   binaries, composes the two DevOps processes and APISIX route, and exposes
   authenticated product discovery. PaaS-only releases contain none of those
   DevOps resources.
-- Full repository tests and vet passed after the slice. Race and repeated
-  package tests passed for the affected authorities; PostgreSQL 18 integration
-  proved idempotent Platform/DevOps enrollment, strict role confinement,
-  outbox claiming/completion, and readiness behavior.
+- Full repository tests and vet passed after the current slice. Race, repeated,
+  fuzz, Linux cross-build, and PostgreSQL 18 integration gates passed for the
+  affected boundaries.
 - The pushed `2d43660` authority-process gate builds and starts IAM, Audit,
   Application PaaS, DevOps, and all three Audit dispatchers against PostgreSQL
   18. It proves the authenticated configuration journey, exact replay,
@@ -48,10 +47,15 @@ and acceptance sequence.
   and pure constructors that bind only ready source configuration and the
   exact active immutable revision. Initial runs are server-owned
   `QUEUED / RECEIVE / EVENT_ADMITTED` records and cause no executor effect.
-- Gate A is not complete. Durable atomic event/run admission, authenticated
-  provider ingress, queue enforcement, logs, replay/cancellation, execution
-  leases/fences, reconciliation, quotas, and pagination remain pending. Read
-  FEAT-007 and its owning code/tests before continuing.
+- The pushed `13edb6a` slice adds the durable serializable admission boundary:
+  equal/changed delivery replay, deterministic multi-Pipeline fan-out, the
+  fixed tenant queue limit under concurrency, atomic SourceEvent/PipelineRun
+  plus Audit outbox persistence, forced tenant isolation, and data-bearing
+  upgrade from `0d387dd`. No executor effect is started.
+- Gate A is not complete. Authenticated provider ingress, run state changes,
+  logs, manual replay/cancellation, execution leases/fences, reconciliation,
+  remaining quotas, and pagination remain pending. Read FEAT-007 and its owning
+  code/tests before continuing.
 - FEAT-008 remains `In progress`. Its real DevOps second-product transition is
   now represented in release, installation, topology, readiness, and discovery;
   authenticated-browser and accessibility acceptance still remain open.
@@ -68,12 +72,12 @@ and acceptance sequence.
 
 ## Continuation
 
-Resume from FEAT-007 and Git state. The project/Pipeline configuration vertical
-is closed through its real network/process gate, and the immutable event/run
-contract and pure admission rules are closed. Implement next the delivery-owned
-PostgreSQL transaction that stores one SourceEvent, atomically fans out
-deterministic queued runs for matching active revisions, enforces the tenant
-queue limit, returns equal replay, and conflicts on changed replay. Do not start
-executor effects. Preserve pragmatic DDD, the modular-monolith boundary,
+Resume from FEAT-007 and Git state. Configuration and durable immutable run
+admission are closed through real PostgreSQL boundaries. Implement next the
+fixed Gitea protocol's authenticated, endpoint-bound webhook adapter and HTTP
+ingress: bound request size/media/event/delivery/signature inputs, emit only a
+validated provider-neutral NormalizedChange, call the existing admission use
+case, and acknowledge only after its atomic commit. Do not start executor
+effects. Preserve pragmatic DDD, the modular-monolith boundary,
 replacement-first pre-v1 changes, fixed-donor classification, and the exact
 repository-local Git identity `Xiak <Jellal@aliyun.com>`.
