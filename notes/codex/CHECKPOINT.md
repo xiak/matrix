@@ -6,7 +6,7 @@
 - Updated: 2026-09-08
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `d5029c0`
+- Current pushed implementation baseline: `565ff98`
 
 ## Goal
 
@@ -18,19 +18,23 @@ architecture, FEAT, implementation, test, and release gates.
 
 - FEAT-007 remains the authoritative owner and is `In progress`; read it and
   the directly owning code/tests before continuing.
-- Pushed `d5029c0` closes the first authenticated source-ingress slice: the
-  selected DevOps runtime receives an endpoint-bound Gitea `1.27.3` webhook,
-  verifies its untouched body with current/previous private file keys, emits a
-  provider-neutral change, and invokes the existing atomic run admission.
-- Admission now compares the SourceConnection version used for HMAC and the
-  signed target branch inside the serializable transaction. Equal replay still
-  succeeds without depending on current source readiness or Pipeline state.
-- Only a selected DevOps product receives the private source-secret root and
-  high-priority APISIX ingress route. Webhook traffic cannot carry IAM or
-  caller correlation headers; normal DevOps APIs retain Bearer authorization.
+- Pushed `565ff98` closes the provider-neutral run-lifecycle foundation. The
+  pure domain owns the legal state graph, stage-safe failure reasons,
+  cancellation completion, monotonic versions, and terminal immutability.
+- A delivery-owned task row persists one deterministic command identity before
+  a future adapter effect. First claims are `EXECUTE`; every expired-lease
+  takeover keeps that identity and is `OBSERVE`. Database-time renewal and
+  monotonic fences reject stale results and stale renewals.
+- Reporting uncertainty retains the original report intent through at most ten
+  inconclusive observations; only then can the current fence commit manual
+  intervention. Admission and claims share a tenant lock enforcing two active
+  and 32 queued runs under concurrency.
+- API and worker identities remain table-blind outside their exact protected
+  functions. A PostgreSQL 18 data-bearing upgrade backfilled all 32 runs from
+  pushed baseline `ca47883`, and fresh, repeat, cross-schema, and live-task
+  migration verification passed.
 - Full tests, vet, affected race and 20-run repeated suites, Linux/amd64
-  CGO-disabled build, a five-second authenticated-payload fuzz run, and the
-  updated PostgreSQL 18 source-to-two-run integration journey passed.
+  CGO-disabled build, and a five-second lifecycle fuzz run passed.
 - The user-owned untracked `app/ui/paas/` tree remains untouched.
 
 ## Adoption boundary
@@ -43,9 +47,8 @@ architecture, FEAT, implementation, test, and release gates.
 
 ## Continuation
 
-Continue FEAT-007 with the run-lifecycle foundation: close the current
-state-transition, cancellation, lease/fence, and reconciliation contracts and
-their tenant-isolated PostgreSQL worker boundary before invoking any source,
-executor, or reporter effect. Preserve pragmatic DDD, replacement-first pre-v1
-changes, optional-product isolation, and repository-local Git identity
+Continue FEAT-007 by closing terminal lifecycle Audit and the authorized public
+run read/cancel boundary before invoking source acquisition, executor, or
+reporter effects. Preserve pragmatic DDD, replacement-first pre-v1 changes,
+optional-product isolation, and repository-local Git identity
 `Xiak <Jellal@aliyun.com>`.
