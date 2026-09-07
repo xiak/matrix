@@ -3,8 +3,8 @@
 - Status: In progress; UX, architecture, donor analysis, implementation
   baseline, Gate A project/Pipeline/source-resource contract, domain,
   configuration transaction/persistence, shared authority, durable run
-  admission, and authenticated Gitea ingress slices complete; run lifecycle
-  pending
+  admission, authenticated Gitea ingress, and fenced run-lifecycle foundation
+  slices complete; source/executor/reporter effects pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -155,6 +155,16 @@ execution. It never claims an unconfirmed external effect did not happen.
 `SUCCEEDED`, `FAILED`, `CANCELLED`, and `MANUAL_INTERVENTION` are
 terminal. Failure uses a closed safe class; native error text never crosses
 the adapter boundary.
+
+Each `FETCH`, `VERIFY`, or `REPORT` stage has one durable command intent whose
+identity is exactly `<PipelineRun ID>:<lowercase stage>:<attempt>`. The first
+lease of an intent authorizes `EXECUTE`; every expired-lease takeover retains
+that identity and authorizes only `OBSERVE`. A definitive result completes the
+intent and advances the public run once. An uncertain report retains the same
+intent in `RECONCILING`; ten inconclusive observations exhaust automatic
+reconciliation, after which and only after which the current fence may commit
+`MANUAL_INTERVENTION`. Lease ownership, retries, and observation counts are
+worker coordination and do not invent public PipelineRun status changes.
 
 ### Normalized admission contract
 
@@ -333,6 +343,7 @@ The first release fixes these maximums:
 | Log line / chunk / whole run | 16 KiB / 64 KiB / 8 MiB |
 | Active runs per tenant / queued runs per tenant | 2 / 32 |
 | Active runs per runner node | 4 |
+| Inconclusive report reconciliation observations | 10 |
 
 The dedicated runner profile therefore requires at least 4 logical CPUs,
 8 GiB memory, and 20 GiB installation-owned free storage after toolchain
@@ -543,10 +554,31 @@ an installation without DevOps receives none of those resources. The
 provider-native ingress remains an adapter protocol and is deliberately absent
 from the provider-neutral public resource OpenAPI.
 
-These slices do not complete Gate A. Run state transitions, source health
-reconciliation and operator secret provisioning experience, logs, manual
-replay/cancellation,
-lease/fence/reconciliation, remaining quotas, and pagination remain pending.
+The run-lifecycle foundation now owns the closed provider-neutral transition
+graph, stage-specific safe failure reasons, terminal immutability, monotonic
+status versions, and cancellation completion rules. A delivery-owned task
+queue stores the immutable run input digest and deterministic per-stage command
+intent before any future adapter call. PostgreSQL database time grants
+short-lived leases with monotonic fencing tokens; an expired intent can only be
+claimed in observe-before-retry mode, and only the current unexpired fence can
+advance the run. Report uncertainty keeps the original report identity through
+a bounded ten-observation reconciliation cycle before manual intervention.
+
+The worker remains table-blind and reaches this state solely through five
+security-definer functions. Forced RLS covers the tenant-leading task table;
+the API cannot read it or execute worker functions, and the worker cannot read
+PipelineRuns or task rows directly. The migration backfills the relational
+input digest of already-admitted runs and is repeatable with live task history.
+The same tenant transaction lock used by admission serializes the fixed
+two-active-run limit with queue claims, so concurrent admission and scheduling
+cannot exceed either side of the tenant quota.
+No source acquisition, executor, reporter, or worker loop is connected yet, so
+the new boundary cannot perform an external effect.
+
+These slices do not complete Gate A. Source health reconciliation and operator
+secret provisioning experience, logs, public manual replay/cancellation,
+concurrent cross-tenant fairness evidence, remaining runtime quotas,
+terminal/check-receipt Audit facts, and pagination remain pending.
 
 Current verification evidence:
 
@@ -588,9 +620,21 @@ Current verification evidence:
   Gitea normalization and tenant-scoped SourceConnection read to atomic
   two-Pipeline fan-out, equal replay after mutable configuration becomes
   pending, and signed changed-payload conflict
+- pure lifecycle and queue tests covering every legal stage, stage-specific
+  failure rejection, cancellation from every nonterminal state, terminal
+  immutability, intent identity, repository drift, and reconciliation bounds;
+  a five-second transition fuzz run completed 67,861 executions without
+  producing an invalid accepted status
+- real PostgreSQL 18 run-lifecycle journey proving data-bearing digest
+  backfill, deterministic `EXECUTE` claims, same-intent `OBSERVE` recovery,
+  stale-fence rejection, successful and cancelled terminals, uncertain report
+  retention, current-fence lease renewal, ten deferred observations,
+  manual-intervention gating, migration reapply, the concurrent two-active-run
+  tenant ceiling, and API/worker table and function confinement
 - data-bearing migration reapply preserving 13 configuration mutations,
-  16 SourceEvents, 32 PipelineRuns, and 61 generalized Audit operations/outbox
-  facts, plus the real Audit authority accepting the two closed DevOps actions
+  16 SourceEvents, 32 PipelineRuns, nine task intents, and 61 generalized
+  Audit operations/outbox facts, plus the real Audit authority accepting the
+  two closed DevOps actions
 - fixed `0d387dd` data-bearing upgrade preserving all 11 legacy mutations and
   outbox facts, backfilling current/revision external repository identities and
   generalized Audit operations, and removing every temporary upgrade policy

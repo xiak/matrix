@@ -53,7 +53,8 @@ BEGIN
             ('projects'), ('source_connections'), ('repository_bindings'),
             ('repository_binding_revisions'), ('pipelines'),
             ('pipeline_revisions'), ('source_events'), ('pipeline_runs'),
-            ('mutations'), ('audit_operations'), ('audit_outbox')
+            ('pipeline_run_tasks'), ('mutations'), ('audit_operations'),
+            ('audit_outbox')
       ) AS required(name)
      WHERE to_regclass('delivery.' || required.name) IS NULL;
     IF missing IS NOT NULL THEN
@@ -81,7 +82,8 @@ BEGIN
             ('projects'), ('source_connections'), ('repository_bindings'),
             ('repository_binding_revisions'), ('pipelines'),
             ('pipeline_revisions'), ('source_events'), ('pipeline_runs'),
-            ('mutations'), ('audit_operations'), ('audit_outbox')
+            ('pipeline_run_tasks'), ('mutations'), ('audit_operations'),
+            ('audit_outbox')
      ) AS required(table_name)
      WHERE NOT EXISTS (
         SELECT 1 FROM information_schema.columns AS column_info
@@ -127,6 +129,38 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'delivery Audit completion timestamp is missing';
     END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns AS column_info
+         WHERE column_info.table_schema = 'delivery'
+           AND column_info.table_name = 'pipeline_runs'
+           AND column_info.column_name = 'input_digest'
+           AND column_info.is_nullable = 'NO'
+    ) THEN
+        RAISE EXCEPTION 'PipelineRun relational input digest is missing';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_policies AS policy
+         WHERE policy.schemaname = 'delivery'
+           AND policy.tablename = 'pipeline_runs'
+           AND policy.policyname = 'owner_run_worker'
+           AND policy.permissive = 'PERMISSIVE'
+           AND policy.cmd = 'ALL'
+           AND policy.roles = ARRAY['matrix_devops_owner']::name[]
+           AND policy.qual = 'true'
+           AND policy.with_check = 'true'
+    ) OR NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_policies AS policy
+         WHERE policy.schemaname = 'delivery'
+           AND policy.tablename = 'pipeline_run_tasks'
+           AND policy.policyname = 'owner_run_worker'
+           AND policy.permissive = 'PERMISSIVE'
+           AND policy.cmd = 'ALL'
+           AND policy.roles = ARRAY['matrix_devops_owner']::name[]
+           AND policy.qual = 'true'
+           AND policy.with_check = 'true'
+    ) THEN
+        RAISE EXCEPTION 'delivery run-worker owner policies are missing or unsafe';
+    END IF;
 
     SELECT string_agg(required.name, ', ' ORDER BY required.name)
       INTO missing
@@ -150,6 +184,10 @@ BEGIN
             ('pipeline_runs_event_revision_uq'),
             ('pipeline_runs_source_event_fk'), ('pipeline_runs_revision_fk'),
             ('pipeline_runs_audit_operation_fk'),
+            ('pipeline_runs_task_identity_uq'),
+            ('pipeline_runs_input_digest_valid'),
+            ('pipeline_run_tasks_command_uq'), ('pipeline_run_tasks_run_fk'),
+            ('pipeline_run_tasks_values_valid'),
             ('mutations_idempotency_uq'), ('mutations_audit_operation_fk'),
             ('audit_outbox_operation_fk'),
             ('audit_outbox_delivery_state_valid')
@@ -201,6 +239,16 @@ BEGIN
         VALUES
             ('commit_run_admission',
              'submitted_event jsonb, submitted_runs jsonb, submitted_audit_events jsonb'),
+            ('claim_pipeline_run_task',
+             'requested_worker_id text, requested_lease_seconds integer'),
+            ('renew_pipeline_run_task',
+             'requested_tenant_id text, requested_run_id text, requested_command_id text, requested_worker_id text, expected_fencing_token bigint, requested_lease_seconds integer'),
+            ('advance_pipeline_run_task',
+             'requested_tenant_id text, requested_run_id text, requested_command_id text, requested_worker_id text, expected_fencing_token bigint, requested_state text, requested_reason text'),
+            ('mark_pipeline_run_report_uncertain',
+             'requested_tenant_id text, requested_run_id text, requested_command_id text, requested_worker_id text, expected_fencing_token bigint, requested_next_attempt_at timestamp with time zone'),
+            ('defer_pipeline_run_reconciliation',
+             'requested_tenant_id text, requested_run_id text, requested_command_id text, requested_worker_id text, expected_fencing_token bigint, requested_next_attempt_at timestamp with time zone'),
             ('claim_audit_event',
              'requested_worker_id text, requested_lease_seconds integer'),
             ('complete_audit_event',
@@ -254,6 +302,54 @@ BEGIN
             'matrix_devops_worker', 'delivery.readiness()', 'EXECUTE'
        )
        OR NOT has_function_privilege(
+            'matrix_devops_worker',
+            'delivery.claim_pipeline_run_task(text,integer)', 'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_devops_api',
+            'delivery.claim_pipeline_run_task(text,integer)', 'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_devops_worker',
+            'delivery.renew_pipeline_run_task(text,text,text,text,bigint,integer)',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_devops_api',
+            'delivery.renew_pipeline_run_task(text,text,text,text,bigint,integer)',
+            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_devops_worker',
+            'delivery.advance_pipeline_run_task(text,text,text,text,bigint,text,text)',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_devops_api',
+            'delivery.advance_pipeline_run_task(text,text,text,text,bigint,text,text)',
+            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_devops_worker',
+            'delivery.mark_pipeline_run_report_uncertain(text,text,text,text,bigint,timestamp with time zone)',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_devops_api',
+            'delivery.mark_pipeline_run_report_uncertain(text,text,text,text,bigint,timestamp with time zone)',
+            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_devops_worker',
+            'delivery.defer_pipeline_run_reconciliation(text,text,text,text,bigint,timestamp with time zone)',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_devops_api',
+            'delivery.defer_pipeline_run_reconciliation(text,text,text,text,bigint,timestamp with time zone)',
+            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
             'matrix_devops_worker', 'delivery.worker_readiness()', 'EXECUTE'
        )
        OR has_function_privilege(
@@ -289,8 +385,8 @@ BEGIN
     FOREACH table_name IN ARRAY ARRAY[
         'projects', 'source_connections', 'repository_bindings',
         'repository_binding_revisions', 'pipelines', 'pipeline_revisions',
-        'source_events', 'pipeline_runs', 'mutations', 'audit_operations',
-        'audit_outbox'
+        'source_events', 'pipeline_runs', 'pipeline_run_tasks', 'mutations',
+        'audit_operations', 'audit_outbox'
     ]
     LOOP
         IF has_table_privilege(
@@ -302,14 +398,15 @@ BEGIN
         ) THEN
             RAISE EXCEPTION 'unsafe direct table privilege on delivery.%', table_name;
         END IF;
-        IF table_name NOT IN ('audit_outbox', 'audit_operations')
+        IF table_name NOT IN ('pipeline_run_tasks', 'audit_outbox', 'audit_operations')
            AND NOT has_table_privilege(
                 'matrix_devops_api', 'delivery.' || table_name, 'SELECT'
            ) THEN
             RAISE EXCEPTION 'DevOps API cannot read delivery.%', table_name;
         END IF;
     END LOOP;
-    IF has_table_privilege('matrix_devops_api', 'delivery.audit_outbox', 'SELECT')
+    IF has_table_privilege('matrix_devops_api', 'delivery.pipeline_run_tasks', 'SELECT')
+       OR has_table_privilege('matrix_devops_api', 'delivery.audit_outbox', 'SELECT')
        OR has_table_privilege('matrix_devops_api', 'delivery.audit_operations', 'SELECT') THEN
         RAISE EXCEPTION 'DevOps API can read internal Audit tables';
     END IF;

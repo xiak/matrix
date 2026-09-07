@@ -30,6 +30,7 @@ import (
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/auditdispatch"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/pipelineconfiguration"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runadmission"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runlifecycle"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/sourceingress"
 	devopsmigration "github.com/xiak/matrix/app/service/devops/migration"
 )
@@ -459,6 +460,15 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		_, err := workerPool.Exec(ctx, `SELECT count(*) FROM delivery.source_events`)
 		return err
 	})
+	assertDenied(t, func() error {
+		_, err := workerPool.Exec(ctx, `SELECT count(*) FROM delivery.pipeline_run_tasks`)
+		return err
+	})
+	assertDenied(t, func() error {
+		_, err := pool.Exec(ctx, `SELECT count(*) FROM delivery.pipeline_run_tasks`)
+		return err
+	})
+	assertRunLifecyclePersistenceAndFencing(t, ctx, admin, workerPool)
 	outbox, err := devopspostgres.NewAuditOutboxRepository(workerPool)
 	if err != nil {
 		t.Fatal(err)
@@ -510,27 +520,28 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		t.Fatalf("verify reapplied DevOps migration with durable admission data: %v", err)
 	}
 
-	var mutationCount, sourceEventCount, runCount, operationCount int
+	var mutationCount, sourceEventCount, runCount, runTaskCount, operationCount int
 	var auditCount, bindingRevisionCount, pipelineRevisionCount int
 	if err := admin.QueryRow(ctx, `SELECT
 		(SELECT count(*) FROM delivery.mutations),
 		(SELECT count(*) FROM delivery.source_events),
 		(SELECT count(*) FROM delivery.pipeline_runs),
+		(SELECT count(*) FROM delivery.pipeline_run_tasks),
 		(SELECT count(*) FROM delivery.audit_operations),
 		(SELECT count(*) FROM delivery.audit_outbox),
 		(SELECT count(*) FROM delivery.repository_binding_revisions WHERE binding_id = 'binding-integration-one'),
 		(SELECT count(*) FROM delivery.pipeline_revisions WHERE pipeline_id = 'pipeline-integration')`).Scan(
-		&mutationCount, &sourceEventCount, &runCount, &operationCount,
+		&mutationCount, &sourceEventCount, &runCount, &runTaskCount, &operationCount,
 		&auditCount, &bindingRevisionCount, &pipelineRevisionCount,
 	); err != nil {
 		t.Fatalf("read delivery evidence: %v", err)
 	}
-	if mutationCount != 13 || sourceEventCount != 16 || runCount != 32 ||
+	if mutationCount != 13 || sourceEventCount != 16 || runCount != 32 || runTaskCount != 9 ||
 		operationCount != 61 || auditCount != 61 ||
 		bindingRevisionCount != 2 || pipelineRevisionCount != 3 {
 		t.Fatalf(
-			"evidence counts mutation=%d event=%d run=%d operation=%d audit=%d binding=%d pipeline=%d",
-			mutationCount, sourceEventCount, runCount, operationCount,
+			"evidence counts mutation=%d event=%d run=%d task=%d operation=%d audit=%d binding=%d pipeline=%d",
+			mutationCount, sourceEventCount, runCount, runTaskCount, operationCount,
 			auditCount, bindingRevisionCount, pipelineRevisionCount,
 		)
 	}
@@ -555,6 +566,244 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func assertRunLifecyclePersistenceAndFencing(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	workerPool *pgxpool.Pool,
+) {
+	t.Helper()
+	repository, err := devopspostgres.NewRunTaskRepository(workerPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue, err := runlifecycle.NewQueue(repository, runlifecycle.Config{LeaseDuration: 30 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first, found, err := queue.ClaimNext(ctx, "run-worker-first")
+	if err != nil || !found || first.Mode != runlifecycle.ClaimExecute ||
+		first.Run.Status.State != devopsv1.PipelineRunFetching ||
+		first.Intent.Stage != devopsv1.PipelineRunStageFetch || first.FencingToken != 1 {
+		t.Fatalf("first PipelineRun task claim=%#v found=%t err=%v", first, found, err)
+	}
+	renewedFirst, err := queue.Renew(ctx, first)
+	if err != nil || renewedFirst.LeaseExpiresAt.Before(first.LeaseExpiresAt) {
+		t.Fatalf("renew first PipelineRun task=%#v err=%v", renewedFirst, err)
+	}
+	makeRunTaskDue(t, ctx, admin, first.Intent.CommandID)
+	recovered, found, err := queue.ClaimNext(ctx, "run-worker-recovered")
+	if err != nil || !found || recovered.Mode != runlifecycle.ClaimObserve ||
+		recovered.Run.ID != first.Run.ID || recovered.Intent != first.Intent ||
+		recovered.FencingToken != first.FencingToken+1 {
+		t.Fatalf("recovered PipelineRun task claim=%#v found=%t err=%v", recovered, found, err)
+	}
+	if _, err := queue.Renew(ctx, first); !errors.Is(err, runlifecycle.ErrStaleLease) {
+		t.Fatalf("stale PipelineRun task renewal error=%v", err)
+	}
+	_, err = queue.Advance(ctx, runlifecycle.Transition{
+		Lease: first, State: devopsv1.PipelineRunVerifying,
+	})
+	if !errors.Is(err, runlifecycle.ErrStaleLease) {
+		t.Fatalf("stale PipelineRun task fence error=%v", err)
+	}
+	if _, err := queue.Advance(ctx, runlifecycle.Transition{
+		Lease: recovered, State: devopsv1.PipelineRunVerifying,
+	}); err != nil {
+		t.Fatalf("complete recovered fetch task: %v", err)
+	}
+	verify := claimExpectedRunStage(
+		t, ctx, queue, recovered.Run.ID, devopsv1.PipelineRunVerifying,
+		devopsv1.PipelineRunStageVerify,
+	)
+	if _, err := queue.Advance(ctx, runlifecycle.Transition{
+		Lease: verify, State: devopsv1.PipelineRunReporting,
+	}); err != nil {
+		t.Fatalf("complete verify task: %v", err)
+	}
+	report := claimExpectedRunStage(
+		t, ctx, queue, recovered.Run.ID, devopsv1.PipelineRunReporting,
+		devopsv1.PipelineRunStageReport,
+	)
+	succeeded, err := queue.Advance(ctx, runlifecycle.Transition{
+		Lease:  report,
+		State:  devopsv1.PipelineRunSucceeded,
+		Reason: devopsv1.PipelineRunReasonCompleted,
+	})
+	if err != nil || succeeded.Status.CompletedAt == nil {
+		t.Fatalf("complete successful PipelineRun=%#v err=%v", succeeded, err)
+	}
+
+	fetch := claimExpectedRunStage(
+		t, ctx, queue, "", devopsv1.PipelineRunFetching,
+		devopsv1.PipelineRunStageFetch,
+	)
+	if _, err := queue.Advance(ctx, runlifecycle.Transition{
+		Lease: fetch, State: devopsv1.PipelineRunVerifying,
+	}); err != nil {
+		t.Fatalf("advance reconciliation run to verify: %v", err)
+	}
+	verify = claimExpectedRunStage(
+		t, ctx, queue, fetch.Run.ID, devopsv1.PipelineRunVerifying,
+		devopsv1.PipelineRunStageVerify,
+	)
+	if _, err := queue.Advance(ctx, runlifecycle.Transition{
+		Lease: verify, State: devopsv1.PipelineRunReporting,
+	}); err != nil {
+		t.Fatalf("advance reconciliation run to report: %v", err)
+	}
+	report = claimExpectedRunStage(
+		t, ctx, queue, fetch.Run.ID, devopsv1.PipelineRunReporting,
+		devopsv1.PipelineRunStageReport,
+	)
+	reconciling, err := queue.MarkReportUncertain(ctx, runlifecycle.Reconciliation{
+		Lease: report, NextAttemptAt: databaseFuture(),
+	})
+	if err != nil || reconciling.Status.State != devopsv1.PipelineRunReconciling {
+		t.Fatalf("mark report uncertain=%#v err=%v", reconciling, err)
+	}
+	makeRunTaskDue(t, ctx, admin, report.Intent.CommandID)
+	observed := claimExpectedRunStage(
+		t, ctx, queue, fetch.Run.ID, devopsv1.PipelineRunReconciling,
+		devopsv1.PipelineRunStageReport,
+	)
+	if observed.Mode != runlifecycle.ClaimObserve || observed.Intent.CommandID != report.Intent.CommandID {
+		t.Fatalf("reconciliation replaced report intent: %#v", observed)
+	}
+	for expected := uint64(1); expected <= runlifecycle.MaximumReconciliationAttempts; expected++ {
+		attempts, err := queue.DeferReconciliation(ctx, runlifecycle.Reconciliation{
+			Lease: observed, NextAttemptAt: databaseFuture(),
+		})
+		if err != nil || attempts != expected {
+			t.Fatalf("defer reconciliation %d returned %d: %v", expected, attempts, err)
+		}
+		makeRunTaskDue(t, ctx, admin, report.Intent.CommandID)
+		observed = claimExpectedRunStage(
+			t, ctx, queue, fetch.Run.ID, devopsv1.PipelineRunReconciling,
+			devopsv1.PipelineRunStageReport,
+		)
+		if observed.ReconciliationAttempts != expected {
+			t.Fatalf("reconciliation attempts=%d want=%d", observed.ReconciliationAttempts, expected)
+		}
+	}
+	if _, err := queue.DeferReconciliation(ctx, runlifecycle.Reconciliation{
+		Lease: observed, NextAttemptAt: databaseFuture(),
+	}); !errors.Is(err, runlifecycle.ErrReconciliationExhausted) {
+		t.Fatalf("exhausted reconciliation deferral error=%v", err)
+	}
+	manual, err := queue.Advance(ctx, runlifecycle.Transition{
+		Lease:  observed,
+		State:  devopsv1.PipelineRunManualIntervention,
+		Reason: devopsv1.PipelineRunReasonReconciliationExhausted,
+	})
+	if err != nil || manual.Status.CompletedAt == nil {
+		t.Fatalf("complete manual-intervention PipelineRun=%#v err=%v", manual, err)
+	}
+
+	cancelledTask := claimExpectedRunStage(
+		t, ctx, queue, "", devopsv1.PipelineRunFetching,
+		devopsv1.PipelineRunStageFetch,
+	)
+	cancelled, err := queue.Advance(ctx, runlifecycle.Transition{
+		Lease:  cancelledTask,
+		State:  devopsv1.PipelineRunCancelled,
+		Reason: devopsv1.PipelineRunReasonCancelled,
+	})
+	if err != nil || cancelled.Status.CompletedAt == nil ||
+		cancelled.Status.Stage != devopsv1.PipelineRunStageFetch {
+		t.Fatalf("cancel active PipelineRun=%#v err=%v", cancelled, err)
+	}
+
+	type claimResult struct {
+		lease runlifecycle.Lease
+		found bool
+		err   error
+	}
+	startClaims := make(chan struct{})
+	claimResults := make(chan claimResult, 3)
+	for index := 0; index < 3; index++ {
+		index := index
+		go func() {
+			<-startClaims
+			lease, found, err := queue.ClaimNext(ctx, fmt.Sprintf("run-worker-quota-%d", index))
+			claimResults <- claimResult{lease: lease, found: found, err: err}
+		}()
+	}
+	close(startClaims)
+	activeRuns := make([]runlifecycle.Lease, 0, runlifecycle.MaximumActiveRuns)
+	for range 3 {
+		result := <-claimResults
+		if result.err != nil {
+			t.Fatalf("concurrent active-run claim: %v", result.err)
+		}
+		if result.found {
+			activeRuns = append(activeRuns, result.lease)
+		}
+	}
+	if uint64(len(activeRuns)) != runlifecycle.MaximumActiveRuns ||
+		activeRuns[0].Run.ID == activeRuns[1].Run.ID {
+		t.Fatalf("concurrent active-run quota claims=%#v", activeRuns)
+	}
+	for _, active := range activeRuns {
+		makeRunTaskDue(t, ctx, admin, active.Intent.CommandID)
+		recovered = claimExpectedRunStage(
+			t, ctx, queue, active.Run.ID, devopsv1.PipelineRunFetching,
+			devopsv1.PipelineRunStageFetch,
+		)
+		if _, err := queue.Advance(ctx, runlifecycle.Transition{
+			Lease:  recovered,
+			State:  devopsv1.PipelineRunCancelled,
+			Reason: devopsv1.PipelineRunReasonCancelled,
+		}); err != nil {
+			t.Fatalf("cancel quota test PipelineRun: %v", err)
+		}
+	}
+}
+
+func claimExpectedRunStage(
+	t *testing.T,
+	ctx context.Context,
+	queue *runlifecycle.Queue,
+	expectedRunID devopsv1.ResourceID,
+	expectedState devopsv1.PipelineRunState,
+	expectedStage devopsv1.PipelineRunStage,
+) runlifecycle.Lease {
+	t.Helper()
+	lease, found, err := queue.ClaimNext(ctx, "run-worker-current")
+	if err != nil || !found ||
+		(expectedRunID != "" && lease.Run.ID != expectedRunID) ||
+		lease.Run.Status.State != expectedState || lease.Intent.Stage != expectedStage {
+		t.Fatalf(
+			"claim %s/%s run=%s returned %#v found=%t err=%v",
+			expectedState, expectedStage, expectedRunID, lease, found, err,
+		)
+	}
+	return lease
+}
+
+func makeRunTaskDue(t *testing.T, ctx context.Context, admin *pgx.Conn, commandID string) {
+	t.Helper()
+	result, err := admin.Exec(
+		ctx,
+		`UPDATE delivery.pipeline_run_tasks
+		    SET available_at = transaction_timestamp(),
+		        lease_expires_at = CASE
+		            WHEN lease_owner IS NULL THEN NULL
+		            ELSE transaction_timestamp() - interval '1 microsecond'
+		        END
+		  WHERE command_id = $1 AND status = 'INTENT'`,
+		commandID,
+	)
+	if err != nil || result.RowsAffected() != 1 {
+		t.Fatalf("make PipelineRun task due rows=%d err=%v", result.RowsAffected(), err)
+	}
+}
+
+func databaseFuture() time.Time {
+	return time.Now().UTC().Truncate(time.Microsecond).Add(time.Minute)
 }
 
 func runtimeDSN(t *testing.T, adminDSN, role, password string) string {

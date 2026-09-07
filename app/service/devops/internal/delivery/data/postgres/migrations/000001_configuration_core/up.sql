@@ -468,6 +468,7 @@ CREATE TABLE IF NOT EXISTS delivery.source_events (
 CREATE TABLE IF NOT EXISTS delivery.pipeline_runs (
     tenant_id text COLLATE "C" NOT NULL,
     id text COLLATE "C" NOT NULL,
+    input_digest text COLLATE "C" NOT NULL,
     source_event_id text COLLATE "C" NOT NULL,
     source_event_digest text COLLATE "C" NOT NULL,
     pipeline_id text COLLATE "C" NOT NULL,
@@ -567,7 +568,7 @@ CREATE TABLE IF NOT EXISTS delivery.pipeline_runs (
         AND document#>>'{input,pipelineRevisionDigest}' = pipeline_revision_digest
         AND document#>>'{input,repositoryBindingId}' = repository_binding_id
         AND document#>>'{input,repositoryBindingDigest}' = repository_binding_digest
-        AND document->>'inputDigest' COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND document->>'inputDigest' = input_digest
         AND document#>>'{status,state}' = state
         AND document#>>'{status,stage}' = stage
         AND document#>>'{status,reason}' IS NOT DISTINCT FROM reason
@@ -584,6 +585,102 @@ CREATE TABLE IF NOT EXISTS delivery.pipeline_runs (
 
 CREATE INDEX IF NOT EXISTS pipeline_runs_tenant_queue_idx
     ON delivery.pipeline_runs (tenant_id, state, created_at, id);
+
+DROP POLICY IF EXISTS owner_schema_upgrade ON delivery.pipeline_runs;
+CREATE POLICY owner_schema_upgrade ON delivery.pipeline_runs
+    TO matrix_devops_owner USING (true) WITH CHECK (true);
+
+ALTER TABLE delivery.pipeline_runs
+    ADD COLUMN IF NOT EXISTS input_digest text COLLATE "C";
+UPDATE delivery.pipeline_runs
+   SET input_digest = document->>'inputDigest'
+ WHERE input_digest IS NULL;
+ALTER TABLE delivery.pipeline_runs
+    ALTER COLUMN input_digest SET NOT NULL;
+
+DO $matrix_pipeline_run_task_identity$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_constraint
+         WHERE connamespace = 'delivery'::regnamespace
+           AND conname = 'pipeline_runs_task_identity_uq'
+    ) THEN
+        ALTER TABLE delivery.pipeline_runs
+            ADD CONSTRAINT pipeline_runs_task_identity_uq
+            UNIQUE (tenant_id, id, input_digest);
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_constraint
+         WHERE connamespace = 'delivery'::regnamespace
+           AND conname = 'pipeline_runs_input_digest_valid'
+    ) THEN
+        ALTER TABLE delivery.pipeline_runs
+            ADD CONSTRAINT pipeline_runs_input_digest_valid CHECK (
+                input_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+                AND document->>'inputDigest' = input_digest
+            );
+    END IF;
+END
+$matrix_pipeline_run_task_identity$;
+
+DROP POLICY owner_schema_upgrade ON delivery.pipeline_runs;
+
+CREATE TABLE IF NOT EXISTS delivery.pipeline_run_tasks (
+    tenant_id text COLLATE "C" NOT NULL,
+    run_id text COLLATE "C" NOT NULL,
+    input_digest text COLLATE "C" NOT NULL,
+    stage text COLLATE "C" NOT NULL,
+    attempt bigint NOT NULL,
+    command_id text COLLATE "C" NOT NULL,
+    status text COLLATE "C" NOT NULL,
+    available_at timestamptz(6) NOT NULL,
+    lease_owner text COLLATE "C",
+    lease_expires_at timestamptz(6),
+    fencing_token bigint NOT NULL,
+    reconciliation_attempts bigint NOT NULL,
+    last_claimed_at timestamptz(6),
+    completed_at timestamptz(6),
+    created_at timestamptz(6) NOT NULL,
+    updated_at timestamptz(6) NOT NULL,
+    PRIMARY KEY (tenant_id, run_id, stage, attempt),
+    CONSTRAINT pipeline_run_tasks_command_uq UNIQUE (tenant_id, command_id),
+    CONSTRAINT pipeline_run_tasks_run_fk FOREIGN KEY (
+        tenant_id, run_id, input_digest
+    ) REFERENCES delivery.pipeline_runs (tenant_id, id, input_digest)
+        ON DELETE CASCADE,
+    CONSTRAINT pipeline_run_tasks_values_valid CHECK (
+        tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND run_id COLLATE "C" ~ '^pipeline-run-[0-9a-f]{48}$'
+        AND input_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND stage IN ('FETCH', 'VERIFY', 'REPORT')
+        AND attempt BETWEEN 1 AND 100
+        AND command_id = run_id || ':' || lower(stage) || ':' || attempt::text
+        AND command_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND status IN ('INTENT', 'COMPLETED')
+        AND fencing_token BETWEEN 0 AND 9007199254740991
+        AND reconciliation_attempts BETWEEN 0 AND 10
+        AND ((lease_owner IS NULL) = (lease_expires_at IS NULL))
+        AND (lease_owner IS NULL OR lease_owner COLLATE "C"
+            ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+        AND ((fencing_token = 0) = (last_claimed_at IS NULL))
+        AND ((status = 'COMPLETED') = (completed_at IS NOT NULL))
+        AND (status = 'INTENT' OR lease_owner IS NULL)
+        AND available_at >= created_at
+        AND updated_at >= created_at
+        AND (last_claimed_at IS NULL OR last_claimed_at >= created_at)
+        AND (last_claimed_at IS NULL OR updated_at >= last_claimed_at)
+        AND (lease_expires_at IS NULL OR lease_expires_at > last_claimed_at)
+        AND (completed_at IS NULL OR completed_at >= created_at)
+    )
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS pipeline_run_tasks_open_uq
+    ON delivery.pipeline_run_tasks (tenant_id, run_id)
+    WHERE status = 'INTENT';
+CREATE INDEX IF NOT EXISTS pipeline_run_tasks_due_idx
+    ON delivery.pipeline_run_tasks (
+        status, available_at, lease_expires_at, tenant_id, run_id
+    );
 
 CREATE TABLE IF NOT EXISTS delivery.mutations (
     tenant_id text COLLATE "C" NOT NULL,
@@ -806,6 +903,8 @@ ALTER TABLE delivery.source_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE delivery.source_events FORCE ROW LEVEL SECURITY;
 ALTER TABLE delivery.pipeline_runs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE delivery.pipeline_runs FORCE ROW LEVEL SECURITY;
+ALTER TABLE delivery.pipeline_run_tasks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE delivery.pipeline_run_tasks FORCE ROW LEVEL SECURITY;
 ALTER TABLE delivery.mutations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE delivery.mutations FORCE ROW LEVEL SECURITY;
 ALTER TABLE delivery.audit_operations ENABLE ROW LEVEL SECURITY;
@@ -820,7 +919,8 @@ BEGIN
     FOREACH table_name IN ARRAY ARRAY[
         'projects', 'source_connections', 'repository_bindings',
         'repository_binding_revisions', 'pipelines', 'pipeline_revisions',
-        'source_events', 'pipeline_runs', 'mutations', 'audit_operations',
+        'source_events', 'pipeline_runs', 'pipeline_run_tasks',
+        'mutations', 'audit_operations',
         'audit_outbox'
     ]
     LOOP
@@ -854,6 +954,31 @@ BEGIN
     END IF;
 END
 $matrix_audit_outbox_owner_policy$;
+
+DO $matrix_run_worker_owner_policy$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_policies
+         WHERE schemaname = 'delivery' AND tablename = 'pipeline_runs'
+           AND policyname = 'owner_run_worker'
+    ) THEN
+        CREATE POLICY owner_run_worker ON delivery.pipeline_runs
+            TO matrix_devops_owner
+            USING (true)
+            WITH CHECK (true);
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_policies
+         WHERE schemaname = 'delivery' AND tablename = 'pipeline_run_tasks'
+           AND policyname = 'owner_run_worker'
+    ) THEN
+        CREATE POLICY owner_run_worker ON delivery.pipeline_run_tasks
+            TO matrix_devops_owner
+            USING (true)
+            WITH CHECK (true);
+    END IF;
+END
+$matrix_run_worker_owner_policy$;
 
 CREATE OR REPLACE FUNCTION delivery.commit_configuration_mutation(
     requested_kind text,
@@ -1563,13 +1688,13 @@ BEGIN
                 run_document->>'id', effective_now
             );
             INSERT INTO delivery.pipeline_runs (
-                tenant_id, id, source_event_id, source_event_digest,
+                tenant_id, id, input_digest, source_event_id, source_event_digest,
                 pipeline_id, project_id, pipeline_revision_id,
                 pipeline_revision_digest, repository_binding_id,
                 repository_binding_digest, state, stage, reason,
                 resource_version, completed_at, created_at, updated_at, document
             ) VALUES (
-                effective_tenant_id, run_document->>'id', admitted_event_id,
+                effective_tenant_id, run_document->>'id', run_document->>'inputDigest', admitted_event_id,
                 admitted_content_digest, run_document->>'pipelineId',
                 admitted_project_id,
                 run_document#>>'{input,pipelineRevisionId}',
@@ -1662,6 +1787,795 @@ REVOKE ALL ON FUNCTION delivery.commit_run_admission(jsonb, jsonb, jsonb)
     FROM PUBLIC, matrix_devops_worker;
 GRANT EXECUTE ON FUNCTION delivery.commit_run_admission(jsonb, jsonb, jsonb)
     TO matrix_devops_api;
+
+CREATE OR REPLACE FUNCTION delivery.claim_pipeline_run_task(
+    requested_worker_id text,
+    requested_lease_seconds integer
+)
+RETURNS TABLE (
+    tenant_id text,
+    run_id text,
+    command_id text,
+    input_digest text,
+    stage text,
+    attempt bigint,
+    claim_mode text,
+    fencing_token bigint,
+    lease_expires_at timestamptz,
+    reconciliation_attempts bigint,
+    run_document jsonb
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    selected_tenant_id text;
+    selected_run_id text;
+    selected_input_digest text;
+    selected_state text;
+    selected_stage text;
+    selected_resource_version bigint;
+    selected_updated_at timestamptz(6);
+    selected_run_document jsonb;
+    selected_task_stage text;
+    selected_task_attempt bigint;
+    selected_command_id text;
+    selected_fencing_token bigint;
+    selected_reconciliation_attempts bigint;
+    effective_stage text;
+    effective_attempt bigint;
+    effective_command_id text;
+    effective_fencing_token bigint;
+    effective_lease_expires_at timestamptz(6);
+    effective_now timestamptz(6);
+    effective_time_text text;
+    effective_run_document jsonb;
+    effective_claim_mode text;
+BEGIN
+    IF requested_worker_id IS NULL
+       OR requested_worker_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_lease_seconds IS NULL
+       OR requested_lease_seconds NOT BETWEEN 1 AND 300 THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'PipelineRun task claim parameters are invalid';
+    END IF;
+
+    SELECT run.tenant_id,
+           run.id,
+           run.input_digest,
+           run.state,
+           run.stage,
+           run.resource_version,
+           run.updated_at,
+           run.document,
+           task.stage,
+           task.attempt,
+           task.command_id,
+           task.fencing_token,
+           task.reconciliation_attempts
+      INTO selected_tenant_id,
+           selected_run_id,
+           selected_input_digest,
+           selected_state,
+           selected_stage,
+           selected_resource_version,
+           selected_updated_at,
+           selected_run_document,
+           selected_task_stage,
+           selected_task_attempt,
+           selected_command_id,
+           selected_fencing_token,
+           selected_reconciliation_attempts
+      FROM delivery.pipeline_runs AS run
+      LEFT JOIN LATERAL (
+            SELECT pending.stage,
+                   pending.attempt,
+                   pending.command_id,
+                   pending.available_at,
+                   pending.lease_owner,
+                   pending.lease_expires_at,
+                   pending.fencing_token,
+                   pending.reconciliation_attempts
+              FROM delivery.pipeline_run_tasks AS pending
+             WHERE pending.tenant_id = run.tenant_id
+               AND pending.run_id = run.id
+               AND pending.status = 'INTENT'
+             LIMIT 1
+      ) AS task ON true
+     WHERE run.state NOT IN (
+            'SUCCEEDED', 'FAILED', 'CANCELLED', 'MANUAL_INTERVENTION'
+       )
+       AND run.resource_version < 9007199254740991
+       AND (
+            (task.command_id IS NOT NULL
+                AND task.available_at <= transaction_timestamp()
+                AND task.fencing_token < 9007199254740991
+                AND (task.lease_owner IS NULL
+                    OR task.lease_expires_at <= transaction_timestamp()))
+            OR (task.command_id IS NULL
+                AND run.state IN ('QUEUED', 'FETCHING', 'VERIFYING', 'REPORTING'))
+       )
+       AND (
+            run.state <> 'QUEUED'
+            OR (
+                SELECT count(*)
+                  FROM delivery.pipeline_runs AS active
+                 WHERE active.tenant_id = run.tenant_id
+                   AND active.state IN (
+                        'FETCHING', 'VERIFYING', 'REPORTING', 'RECONCILING'
+                   )
+            ) < 2
+       )
+     ORDER BY (
+            SELECT max(history.last_claimed_at)
+              FROM delivery.pipeline_run_tasks AS history
+             WHERE history.tenant_id = run.tenant_id
+       ) ASC NULLS FIRST,
+       CASE
+            WHEN task.command_id IS NOT NULL THEN 0
+            WHEN run.state <> 'QUEUED' THEN 1
+            ELSE 2
+       END,
+       COALESCE(task.available_at, run.updated_at),
+       run.created_at,
+       run.tenant_id COLLATE "C",
+       run.id COLLATE "C"
+     LIMIT 1
+     FOR UPDATE OF run SKIP LOCKED;
+
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+
+    IF selected_state = 'QUEUED' THEN
+        PERFORM pg_advisory_xact_lock(
+            hashtextextended(
+                'matrix-devops-queued-runs-v1:' || selected_tenant_id,
+                0
+            )
+        );
+        IF (
+            SELECT count(*)
+              FROM delivery.pipeline_runs AS active
+             WHERE active.tenant_id = selected_tenant_id
+               AND active.state IN (
+                    'FETCHING', 'VERIFYING', 'REPORTING', 'RECONCILING'
+               )
+        ) >= 2 THEN
+            RETURN;
+        END IF;
+    END IF;
+
+    effective_now := greatest(
+        transaction_timestamp(),
+        selected_updated_at + interval '1 microsecond'
+    );
+    effective_time_text := to_char(
+        effective_now AT TIME ZONE 'UTC',
+        'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+    );
+    effective_lease_expires_at := effective_now
+        + make_interval(secs => requested_lease_seconds);
+    effective_run_document := selected_run_document;
+
+    IF selected_command_id IS NULL THEN
+        effective_stage := CASE selected_state
+            WHEN 'QUEUED' THEN 'FETCH'
+            WHEN 'FETCHING' THEN 'FETCH'
+            WHEN 'VERIFYING' THEN 'VERIFY'
+            WHEN 'REPORTING' THEN 'REPORT'
+            ELSE NULL
+        END;
+        IF effective_stage IS NULL THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '55000',
+                MESSAGE = 'PipelineRun has no claimable task stage';
+        END IF;
+
+        SELECT COALESCE(max(history.attempt), 0) + 1
+          INTO effective_attempt
+          FROM delivery.pipeline_run_tasks AS history
+         WHERE history.tenant_id = selected_tenant_id
+           AND history.run_id = selected_run_id
+           AND history.stage = effective_stage;
+        IF effective_attempt NOT BETWEEN 1 AND 100 THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '55000',
+                MESSAGE = 'PipelineRun task attempts are exhausted';
+        END IF;
+        effective_command_id := selected_run_id || ':' || lower(effective_stage)
+            || ':' || effective_attempt::text;
+        effective_fencing_token := 1;
+        selected_reconciliation_attempts := 0;
+        effective_claim_mode := 'EXECUTE';
+
+        IF selected_state = 'QUEUED' THEN
+            effective_run_document := jsonb_set(
+                jsonb_set(
+                    selected_run_document,
+                    '{status}',
+                    jsonb_build_object(
+                        'state', 'FETCHING',
+                        'stage', 'FETCH',
+                        'resourceVersion', selected_resource_version + 1,
+                        'observedAt', effective_time_text
+                    ),
+                    false
+                ),
+                '{updatedAt}',
+                to_jsonb(effective_time_text),
+                false
+            );
+            UPDATE delivery.pipeline_runs AS claimed_run
+               SET state = 'FETCHING',
+                   stage = 'FETCH',
+                   reason = NULL,
+                   resource_version = selected_resource_version + 1,
+                   updated_at = effective_now,
+                   document = effective_run_document
+             WHERE claimed_run.tenant_id = selected_tenant_id
+               AND claimed_run.id = selected_run_id;
+        END IF;
+
+        INSERT INTO delivery.pipeline_run_tasks (
+            tenant_id, run_id, input_digest, stage, attempt, command_id,
+            status, available_at, lease_owner, lease_expires_at,
+            fencing_token, reconciliation_attempts, last_claimed_at,
+            created_at, updated_at
+        ) VALUES (
+            selected_tenant_id, selected_run_id, selected_input_digest,
+            effective_stage, effective_attempt, effective_command_id,
+            'INTENT', effective_now, requested_worker_id,
+            effective_lease_expires_at, effective_fencing_token,
+            selected_reconciliation_attempts, effective_now,
+            effective_now, effective_now
+        );
+    ELSE
+        effective_stage := selected_task_stage;
+        effective_attempt := selected_task_attempt;
+        effective_command_id := selected_command_id;
+        effective_fencing_token := selected_fencing_token + 1;
+        effective_claim_mode := 'OBSERVE';
+        UPDATE delivery.pipeline_run_tasks AS claimed_task
+           SET lease_owner = requested_worker_id,
+               lease_expires_at = effective_lease_expires_at,
+               fencing_token = effective_fencing_token,
+               last_claimed_at = effective_now,
+               updated_at = effective_now
+         WHERE claimed_task.tenant_id = selected_tenant_id
+           AND claimed_task.run_id = selected_run_id
+           AND claimed_task.stage = selected_task_stage
+           AND claimed_task.attempt = selected_task_attempt
+           AND claimed_task.status = 'INTENT';
+    END IF;
+
+    RETURN QUERY SELECT
+        selected_tenant_id,
+        selected_run_id,
+        effective_command_id,
+        selected_input_digest,
+        effective_stage,
+        effective_attempt,
+        effective_claim_mode,
+        effective_fencing_token,
+        effective_lease_expires_at,
+        selected_reconciliation_attempts,
+        effective_run_document;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION delivery.claim_pipeline_run_task(text, integer)
+    FROM PUBLIC, matrix_devops_api;
+GRANT EXECUTE ON FUNCTION delivery.claim_pipeline_run_task(text, integer)
+    TO matrix_devops_worker;
+
+CREATE OR REPLACE FUNCTION delivery.renew_pipeline_run_task(
+    requested_tenant_id text,
+    requested_run_id text,
+    requested_command_id text,
+    requested_worker_id text,
+    expected_fencing_token bigint,
+    requested_lease_seconds integer
+)
+RETURNS timestamptz
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    renewed_expires_at timestamptz(6);
+BEGIN
+    IF requested_tenant_id IS NULL
+       OR requested_tenant_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_run_id IS NULL
+       OR requested_run_id COLLATE "C" !~ '^pipeline-run-[0-9a-f]{48}$'
+       OR requested_command_id IS NULL
+       OR requested_command_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_worker_id IS NULL
+       OR requested_worker_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR expected_fencing_token IS NULL
+       OR expected_fencing_token NOT BETWEEN 1 AND 9007199254740991
+       OR requested_lease_seconds IS NULL
+       OR requested_lease_seconds NOT BETWEEN 1 AND 300 THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'PipelineRun task renewal parameters are invalid';
+    END IF;
+
+    UPDATE delivery.pipeline_run_tasks AS task
+       SET lease_expires_at = greatest(
+                task.lease_expires_at,
+                transaction_timestamp()
+                    + make_interval(secs => requested_lease_seconds)
+           ),
+           updated_at = transaction_timestamp()
+     WHERE task.tenant_id = requested_tenant_id
+       AND task.run_id = requested_run_id
+       AND task.command_id = requested_command_id
+       AND task.status = 'INTENT'
+       AND task.lease_owner = requested_worker_id
+       AND task.fencing_token = expected_fencing_token
+       AND task.lease_expires_at > clock_timestamp()
+    RETURNING task.lease_expires_at INTO renewed_expires_at;
+    IF renewed_expires_at IS NULL THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'MX412',
+            MESSAGE = 'PipelineRun task lease or fencing token is stale';
+    END IF;
+    RETURN renewed_expires_at;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION delivery.renew_pipeline_run_task(
+    text, text, text, text, bigint, integer
+) FROM PUBLIC, matrix_devops_api;
+GRANT EXECUTE ON FUNCTION delivery.renew_pipeline_run_task(
+    text, text, text, text, bigint, integer
+) TO matrix_devops_worker;
+
+CREATE OR REPLACE FUNCTION delivery.advance_pipeline_run_task(
+    requested_tenant_id text,
+    requested_run_id text,
+    requested_command_id text,
+    requested_worker_id text,
+    expected_fencing_token bigint,
+    requested_state text,
+    requested_reason text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    current_state text;
+    current_stage text;
+    current_resource_version bigint;
+    current_updated_at timestamptz(6);
+    current_run_document jsonb;
+    current_task_stage text;
+    current_task_status text;
+    current_lease_owner text;
+    current_lease_expires_at timestamptz(6);
+    current_fencing_token bigint;
+    current_reconciliation_attempts bigint;
+    transition_allowed boolean;
+    reason_allowed boolean;
+    terminal boolean;
+    next_stage text;
+    effective_now timestamptz(6);
+    effective_time_text text;
+    next_status jsonb;
+    next_document jsonb;
+BEGIN
+    IF requested_tenant_id IS NULL
+       OR requested_tenant_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_run_id IS NULL
+       OR requested_run_id COLLATE "C" !~ '^pipeline-run-[0-9a-f]{48}$'
+       OR requested_command_id IS NULL
+       OR requested_command_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_worker_id IS NULL
+       OR requested_worker_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR expected_fencing_token IS NULL
+       OR expected_fencing_token NOT BETWEEN 1 AND 9007199254740991 THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'PipelineRun task transition identity is invalid';
+    END IF;
+
+    SELECT run.state,
+           run.stage,
+           run.resource_version,
+           run.updated_at,
+           run.document,
+           task.stage,
+           task.status,
+           task.lease_owner,
+           task.lease_expires_at,
+           task.fencing_token,
+           task.reconciliation_attempts
+      INTO current_state,
+           current_stage,
+           current_resource_version,
+           current_updated_at,
+           current_run_document,
+           current_task_stage,
+           current_task_status,
+           current_lease_owner,
+           current_lease_expires_at,
+           current_fencing_token,
+           current_reconciliation_attempts
+      FROM delivery.pipeline_runs AS run
+      JOIN delivery.pipeline_run_tasks AS task
+        ON task.tenant_id = run.tenant_id
+       AND task.run_id = run.id
+       AND task.command_id = requested_command_id
+     WHERE run.tenant_id = requested_tenant_id
+       AND run.id = requested_run_id
+     FOR UPDATE OF run, task;
+    IF NOT FOUND
+       OR current_task_status <> 'INTENT'
+       OR current_lease_owner IS DISTINCT FROM requested_worker_id
+       OR current_fencing_token <> expected_fencing_token
+       OR current_lease_expires_at IS NULL
+       OR current_lease_expires_at <= clock_timestamp()
+       OR current_task_stage <> current_stage THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'MX412',
+            MESSAGE = 'PipelineRun task lease or fencing token is stale';
+    END IF;
+
+    transition_allowed :=
+        (current_state = 'FETCHING'
+            AND requested_state IN ('VERIFYING', 'FAILED', 'CANCELLED'))
+        OR (current_state = 'VERIFYING'
+            AND requested_state IN ('REPORTING', 'FAILED', 'CANCELLED'))
+        OR (current_state = 'REPORTING'
+            AND requested_state IN ('SUCCEEDED', 'FAILED', 'CANCELLED'))
+        OR (current_state = 'RECONCILING'
+            AND requested_state IN (
+                'SUCCEEDED', 'FAILED', 'CANCELLED', 'MANUAL_INTERVENTION'
+            ));
+    reason_allowed :=
+        (requested_state IN ('VERIFYING', 'REPORTING') AND requested_reason IS NULL)
+        OR (requested_state = 'SUCCEEDED' AND requested_reason = 'COMPLETED')
+        OR (requested_state = 'CANCELLED' AND requested_reason = 'CANCELLED')
+        OR (requested_state = 'MANUAL_INTERVENTION'
+            AND requested_reason = 'RECONCILIATION_EXHAUSTED')
+        OR (requested_state = 'FAILED' AND (
+            (current_state = 'FETCHING' AND requested_reason IN (
+                'SOURCE_UNAVAILABLE', 'COMMIT_MISMATCH', 'DEADLINE_EXCEEDED'
+            ))
+            OR (current_state = 'VERIFYING' AND requested_reason IN (
+                'EXECUTOR_UNAVAILABLE', 'VERIFICATION_FAILED', 'DEADLINE_EXCEEDED'
+            ))
+            OR (current_state IN ('REPORTING', 'RECONCILING')
+                AND requested_reason IN (
+                    'VERIFICATION_FAILED', 'REPORT_UNAVAILABLE',
+                    'REPORT_CONFLICT', 'DEADLINE_EXCEEDED'
+                ))
+        ));
+    IF NOT transition_allowed OR NOT reason_allowed
+       OR (requested_state = 'MANUAL_INTERVENTION'
+            AND current_reconciliation_attempts < 10)
+       OR current_resource_version >= 9007199254740991 THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '55000',
+            MESSAGE = 'PipelineRun task transition is invalid';
+    END IF;
+
+    terminal := requested_state IN (
+        'SUCCEEDED', 'FAILED', 'CANCELLED', 'MANUAL_INTERVENTION'
+    );
+    next_stage := CASE requested_state
+        WHEN 'VERIFYING' THEN 'VERIFY'
+        WHEN 'REPORTING' THEN 'REPORT'
+        WHEN 'SUCCEEDED' THEN 'REPORT'
+        WHEN 'MANUAL_INTERVENTION' THEN 'REPORT'
+        ELSE current_stage
+    END;
+    effective_now := greatest(
+        transaction_timestamp(),
+        current_updated_at + interval '1 microsecond'
+    );
+    effective_time_text := to_char(
+        effective_now AT TIME ZONE 'UTC',
+        'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+    );
+    next_status := jsonb_build_object(
+        'state', requested_state,
+        'stage', next_stage,
+        'resourceVersion', current_resource_version + 1,
+        'observedAt', effective_time_text
+    );
+    IF requested_reason IS NOT NULL THEN
+        next_status := next_status || jsonb_build_object('reason', requested_reason);
+    END IF;
+    IF terminal THEN
+        next_status := next_status || jsonb_build_object('completedAt', effective_time_text);
+    END IF;
+    next_document := jsonb_set(
+        jsonb_set(current_run_document, '{status}', next_status, false),
+        '{updatedAt}', to_jsonb(effective_time_text), false
+    );
+
+    UPDATE delivery.pipeline_runs AS transitioned
+       SET state = requested_state,
+           stage = next_stage,
+           reason = requested_reason,
+           resource_version = current_resource_version + 1,
+           completed_at = CASE WHEN terminal THEN effective_now ELSE NULL END,
+           updated_at = effective_now,
+           document = next_document
+     WHERE transitioned.tenant_id = requested_tenant_id
+       AND transitioned.id = requested_run_id;
+    UPDATE delivery.pipeline_run_tasks AS completed
+       SET status = 'COMPLETED',
+           lease_owner = NULL,
+           lease_expires_at = NULL,
+           completed_at = effective_now,
+           updated_at = effective_now
+     WHERE completed.tenant_id = requested_tenant_id
+       AND completed.run_id = requested_run_id
+       AND completed.command_id = requested_command_id;
+    RETURN next_document;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION delivery.advance_pipeline_run_task(
+    text, text, text, text, bigint, text, text
+) FROM PUBLIC, matrix_devops_api;
+GRANT EXECUTE ON FUNCTION delivery.advance_pipeline_run_task(
+    text, text, text, text, bigint, text, text
+) TO matrix_devops_worker;
+
+CREATE OR REPLACE FUNCTION delivery.mark_pipeline_run_report_uncertain(
+    requested_tenant_id text,
+    requested_run_id text,
+    requested_command_id text,
+    requested_worker_id text,
+    expected_fencing_token bigint,
+    requested_next_attempt_at timestamptz
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    current_state text;
+    current_stage text;
+    current_resource_version bigint;
+    current_updated_at timestamptz(6);
+    current_run_document jsonb;
+    current_task_status text;
+    current_lease_owner text;
+    current_lease_expires_at timestamptz(6);
+    current_fencing_token bigint;
+    effective_now timestamptz(6);
+    effective_time_text text;
+    next_document jsonb;
+BEGIN
+    IF requested_tenant_id IS NULL
+       OR requested_tenant_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_run_id IS NULL
+       OR requested_run_id COLLATE "C" !~ '^pipeline-run-[0-9a-f]{48}$'
+       OR requested_command_id IS NULL
+       OR requested_command_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_worker_id IS NULL
+       OR requested_worker_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR expected_fencing_token IS NULL
+       OR expected_fencing_token NOT BETWEEN 1 AND 9007199254740991
+       OR requested_next_attempt_at IS NULL
+       OR date_trunc('microseconds', requested_next_attempt_at)
+            <> requested_next_attempt_at
+       OR requested_next_attempt_at <= transaction_timestamp()
+       OR requested_next_attempt_at > transaction_timestamp() + interval '24 hours' THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'PipelineRun report uncertainty parameters are invalid';
+    END IF;
+
+    SELECT run.state,
+           run.stage,
+           run.resource_version,
+           run.updated_at,
+           run.document,
+           task.status,
+           task.lease_owner,
+           task.lease_expires_at,
+           task.fencing_token
+      INTO current_state,
+           current_stage,
+           current_resource_version,
+           current_updated_at,
+           current_run_document,
+           current_task_status,
+           current_lease_owner,
+           current_lease_expires_at,
+           current_fencing_token
+      FROM delivery.pipeline_runs AS run
+      JOIN delivery.pipeline_run_tasks AS task
+        ON task.tenant_id = run.tenant_id
+       AND task.run_id = run.id
+       AND task.command_id = requested_command_id
+       AND task.stage = 'REPORT'
+     WHERE run.tenant_id = requested_tenant_id
+       AND run.id = requested_run_id
+     FOR UPDATE OF run, task;
+    IF NOT FOUND
+       OR current_state <> 'REPORTING'
+       OR current_stage <> 'REPORT'
+       OR current_task_status <> 'INTENT'
+       OR current_lease_owner IS DISTINCT FROM requested_worker_id
+       OR current_fencing_token <> expected_fencing_token
+       OR current_lease_expires_at IS NULL
+       OR current_lease_expires_at <= clock_timestamp() THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'MX412',
+            MESSAGE = 'PipelineRun task lease or fencing token is stale';
+    END IF;
+    IF current_resource_version >= 9007199254740991 THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '55000',
+            MESSAGE = 'PipelineRun resource version is exhausted';
+    END IF;
+
+    effective_now := greatest(
+        transaction_timestamp(),
+        current_updated_at + interval '1 microsecond'
+    );
+    effective_time_text := to_char(
+        effective_now AT TIME ZONE 'UTC',
+        'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+    );
+    next_document := jsonb_set(
+        jsonb_set(
+            current_run_document,
+            '{status}',
+            jsonb_build_object(
+                'state', 'RECONCILING',
+                'stage', 'REPORT',
+                'reason', 'EXTERNAL_EFFECT_UNCERTAIN',
+                'resourceVersion', current_resource_version + 1,
+                'observedAt', effective_time_text
+            ),
+            false
+        ),
+        '{updatedAt}', to_jsonb(effective_time_text), false
+    );
+    UPDATE delivery.pipeline_runs AS transitioned
+       SET state = 'RECONCILING',
+           stage = 'REPORT',
+           reason = 'EXTERNAL_EFFECT_UNCERTAIN',
+           resource_version = current_resource_version + 1,
+           updated_at = effective_now,
+           document = next_document
+     WHERE transitioned.tenant_id = requested_tenant_id
+       AND transitioned.id = requested_run_id;
+    UPDATE delivery.pipeline_run_tasks AS uncertain
+       SET available_at = requested_next_attempt_at,
+           lease_owner = NULL,
+           lease_expires_at = NULL,
+           updated_at = effective_now
+     WHERE uncertain.tenant_id = requested_tenant_id
+       AND uncertain.run_id = requested_run_id
+       AND uncertain.command_id = requested_command_id;
+    RETURN next_document;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION delivery.mark_pipeline_run_report_uncertain(
+    text, text, text, text, bigint, timestamptz
+) FROM PUBLIC, matrix_devops_api;
+GRANT EXECUTE ON FUNCTION delivery.mark_pipeline_run_report_uncertain(
+    text, text, text, text, bigint, timestamptz
+) TO matrix_devops_worker;
+
+CREATE OR REPLACE FUNCTION delivery.defer_pipeline_run_reconciliation(
+    requested_tenant_id text,
+    requested_run_id text,
+    requested_command_id text,
+    requested_worker_id text,
+    expected_fencing_token bigint,
+    requested_next_attempt_at timestamptz
+)
+RETURNS bigint
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    current_attempts bigint;
+    affected_rows bigint;
+BEGIN
+    IF requested_tenant_id IS NULL
+       OR requested_tenant_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_run_id IS NULL
+       OR requested_run_id COLLATE "C" !~ '^pipeline-run-[0-9a-f]{48}$'
+       OR requested_command_id IS NULL
+       OR requested_command_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_worker_id IS NULL
+       OR requested_worker_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR expected_fencing_token IS NULL
+       OR expected_fencing_token NOT BETWEEN 1 AND 9007199254740991
+       OR requested_next_attempt_at IS NULL
+       OR date_trunc('microseconds', requested_next_attempt_at)
+            <> requested_next_attempt_at
+       OR requested_next_attempt_at <= transaction_timestamp()
+       OR requested_next_attempt_at > transaction_timestamp() + interval '24 hours' THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'PipelineRun reconciliation deferral parameters are invalid';
+    END IF;
+
+    SELECT task.reconciliation_attempts
+      INTO current_attempts
+      FROM delivery.pipeline_runs AS run
+      JOIN delivery.pipeline_run_tasks AS task
+        ON task.tenant_id = run.tenant_id
+       AND task.run_id = run.id
+       AND task.command_id = requested_command_id
+       AND task.stage = 'REPORT'
+     WHERE run.tenant_id = requested_tenant_id
+       AND run.id = requested_run_id
+       AND run.state = 'RECONCILING'
+       AND task.status = 'INTENT'
+       AND task.lease_owner = requested_worker_id
+       AND task.fencing_token = expected_fencing_token
+       AND task.lease_expires_at > clock_timestamp()
+     FOR UPDATE OF run, task;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'MX412',
+            MESSAGE = 'PipelineRun task lease or fencing token is stale';
+    END IF;
+    IF current_attempts >= 10 THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'MX410',
+            MESSAGE = 'PipelineRun reconciliation attempts are exhausted';
+    END IF;
+
+    UPDATE delivery.pipeline_run_tasks AS deferred
+       SET reconciliation_attempts = current_attempts + 1,
+           available_at = requested_next_attempt_at,
+           lease_owner = NULL,
+           lease_expires_at = NULL,
+           updated_at = transaction_timestamp()
+     WHERE deferred.tenant_id = requested_tenant_id
+       AND deferred.run_id = requested_run_id
+       AND deferred.command_id = requested_command_id;
+    GET DIAGNOSTICS affected_rows = ROW_COUNT;
+    IF affected_rows <> 1 THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'MX412',
+            MESSAGE = 'PipelineRun task lease or fencing token is stale';
+    END IF;
+    RETURN current_attempts + 1;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION delivery.defer_pipeline_run_reconciliation(
+    text, text, text, text, bigint, timestamptz
+) FROM PUBLIC, matrix_devops_api;
+GRANT EXECUTE ON FUNCTION delivery.defer_pipeline_run_reconciliation(
+    text, text, text, text, bigint, timestamptz
+) TO matrix_devops_worker;
 
 CREATE OR REPLACE FUNCTION delivery.claim_audit_event(
     requested_worker_id text,
@@ -1858,6 +2772,7 @@ AS $function$
         AND to_regclass('delivery.pipeline_revisions') IS NOT NULL
         AND to_regclass('delivery.source_events') IS NOT NULL
         AND to_regclass('delivery.pipeline_runs') IS NOT NULL
+        AND to_regclass('delivery.pipeline_run_tasks') IS NOT NULL
         AND to_regclass('delivery.audit_operations') IS NOT NULL
         AND to_regprocedure(
             'delivery.commit_configuration_mutation(text,bigint,jsonb,jsonb,jsonb,jsonb,jsonb)'
@@ -1865,6 +2780,54 @@ AS $function$
         AND to_regprocedure(
             'delivery.commit_run_admission(jsonb,jsonb,jsonb)'
         ) IS NOT NULL
+        AND to_regprocedure(
+            'delivery.claim_pipeline_run_task(text,integer)'
+        ) IS NOT NULL
+        AND to_regprocedure(
+            'delivery.renew_pipeline_run_task(text,text,text,text,bigint,integer)'
+        ) IS NOT NULL
+        AND to_regprocedure(
+            'delivery.advance_pipeline_run_task(text,text,text,text,bigint,text,text)'
+        ) IS NOT NULL
+        AND to_regprocedure(
+            'delivery.mark_pipeline_run_report_uncertain(text,text,text,text,bigint,timestamp with time zone)'
+        ) IS NOT NULL
+        AND to_regprocedure(
+            'delivery.defer_pipeline_run_reconciliation(text,text,text,text,bigint,timestamp with time zone)'
+        ) IS NOT NULL
+        AND NOT EXISTS (
+            SELECT 1
+              FROM delivery.pipeline_run_tasks AS task
+              JOIN delivery.pipeline_runs AS run
+                ON run.tenant_id = task.tenant_id AND run.id = task.run_id
+             WHERE task.fencing_token >= 9007199254740991
+                OR (task.status = 'INTENT' AND (
+                    run.state IN (
+                        'SUCCEEDED', 'FAILED', 'CANCELLED', 'MANUAL_INTERVENTION'
+                    )
+                    OR task.stage <> run.stage
+                ))
+        )
+        AND NOT EXISTS (
+            SELECT 1 FROM delivery.pipeline_runs AS run
+             WHERE run.state = 'RECONCILING'
+               AND NOT EXISTS (
+                    SELECT 1 FROM delivery.pipeline_run_tasks AS task
+                     WHERE task.tenant_id = run.tenant_id
+                       AND task.run_id = run.id
+                       AND task.stage = 'REPORT'
+                       AND task.status = 'INTENT'
+               )
+        )
+        AND NOT EXISTS (
+            SELECT active.tenant_id
+              FROM delivery.pipeline_runs AS active
+             WHERE active.state IN (
+                'FETCHING', 'VERIFYING', 'REPORTING', 'RECONCILING'
+             )
+             GROUP BY active.tenant_id
+            HAVING count(*) > 2
+        )
         AND NOT EXISTS (
             SELECT 1 FROM delivery.audit_outbox AS outbox
              WHERE outbox.status = 'DEAD_LETTER'
@@ -1888,6 +2851,53 @@ SET search_path = pg_catalog, pg_temp
 AS $function$
     SELECT
         to_regclass('delivery.audit_outbox') IS NOT NULL
+        AND to_regclass('delivery.pipeline_run_tasks') IS NOT NULL
+        AND to_regprocedure('delivery.claim_pipeline_run_task(text,integer)') IS NOT NULL
+        AND to_regprocedure(
+            'delivery.renew_pipeline_run_task(text,text,text,text,bigint,integer)'
+        ) IS NOT NULL
+        AND to_regprocedure(
+            'delivery.advance_pipeline_run_task(text,text,text,text,bigint,text,text)'
+        ) IS NOT NULL
+        AND to_regprocedure(
+            'delivery.mark_pipeline_run_report_uncertain(text,text,text,text,bigint,timestamp with time zone)'
+        ) IS NOT NULL
+        AND to_regprocedure(
+            'delivery.defer_pipeline_run_reconciliation(text,text,text,text,bigint,timestamp with time zone)'
+        ) IS NOT NULL
+        AND NOT EXISTS (
+            SELECT 1
+              FROM delivery.pipeline_run_tasks AS task
+              JOIN delivery.pipeline_runs AS run
+                ON run.tenant_id = task.tenant_id AND run.id = task.run_id
+             WHERE task.fencing_token >= 9007199254740991
+                OR (task.status = 'INTENT' AND (
+                    run.state IN (
+                        'SUCCEEDED', 'FAILED', 'CANCELLED', 'MANUAL_INTERVENTION'
+                    )
+                    OR task.stage <> run.stage
+                ))
+        )
+        AND NOT EXISTS (
+            SELECT 1 FROM delivery.pipeline_runs AS run
+             WHERE run.state = 'RECONCILING'
+               AND NOT EXISTS (
+                    SELECT 1 FROM delivery.pipeline_run_tasks AS task
+                     WHERE task.tenant_id = run.tenant_id
+                       AND task.run_id = run.id
+                       AND task.stage = 'REPORT'
+                       AND task.status = 'INTENT'
+               )
+        )
+        AND NOT EXISTS (
+            SELECT active.tenant_id
+              FROM delivery.pipeline_runs AS active
+             WHERE active.state IN (
+                'FETCHING', 'VERIFYING', 'REPORTING', 'RECONCILING'
+             )
+             GROUP BY active.tenant_id
+            HAVING count(*) > 2
+        )
         AND to_regprocedure('delivery.claim_audit_event(text,integer)') IS NOT NULL
         AND to_regprocedure(
             'delivery.complete_audit_event(text,text,text,bigint,text,timestamptz,text)'
