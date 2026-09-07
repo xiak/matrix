@@ -6946,7 +6946,8 @@ BEGIN
     ) INTO total_count, ready_count, degraded_count
       FROM paas.execution_targets AS target
      WHERE target.installation_id = requested_installation_id
-       AND target.execution_pool_id = pool_id;
+       AND target.execution_pool_id = pool_id
+       AND target.document#>>'{spec,desiredState}' <> 'REMOVED';
     IF total_count NOT BETWEEN 1 AND 129
        OR submitted_pool#>>'{status,executionTargetCount}' <> total_count::text
        OR submitted_pool#>>'{status,readyExecutionTargetCount}' <> ready_count::text
