@@ -6,7 +6,7 @@
 - Updated: 2026-09-07
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `e2249bc`
+- Current pushed implementation baseline: `3e77593`
 
 ## Goal
 
@@ -17,22 +17,26 @@ and acceptance sequence.
 
 ## Current milestone
 
-- FEAT-008 owns the current product-foundation work and remains `In progress`.
-  Its unified shell, signed installed-product discovery, legacy IAM authority
-  migration, and fixed productless-predecessor lifecycle compatibility are
-  implemented. Read that FEAT and owning code/tests before continuing.
-- A clean Docker-in-Docker host with outer network mode `none` verified the
-  signed cross-version lifecycle from accepted source `c88a84f` Release A to
-  `ea4e808` Release B, including failed-upgrade rollback, product readiness,
-  explicit rollback, old-backup recovery, support leakage checks, and whole
-  host restart.
-- A separate clean network-disabled host verified that two current
-  `e2249bc` releases install from an empty root, expose the exact signed PaaS
-  product as ready, preserve it across every lifecycle transition, and recover
-  after a whole-host restart without using the legacy path.
-- FEAT-008 is not accepted yet. It still requires a fixture second-product
-  transition and authenticated-browser/accessibility evidence. Keep those gaps
-  in the owning FEAT rather than duplicating their acceptance details here.
+- FEAT-007 owns the current DevOps implementation work and remains
+  `In progress`. Its fixed source-provider, executor, egress, limit, retention,
+  IAM, and Audit baseline is complete.
+- The first Gate A slice now provides the strict provider-neutral
+  `api/devops/v1` Go/OpenAPI contract and pure `delivery` rules for DevOps
+  project creation, Pipeline draft creation/replacement, and immutable revision
+  activation. Activation seals the fixed toolchain digest, isolation profile,
+  ordered verification steps, egress, limits, actor, tenant, and deterministic
+  identity. Full tests, vet, race, repeated tests, fuzzing, Linux/amd64
+  cross-build, schema drift, architecture, and diff checks passed before
+  `3e77593` was pushed.
+- Gate A is not complete. Persistence/RLS, use cases, HTTP, IAM/Audit
+  integration, SourceConnection, RepositoryBinding, SourceEvent, PipelineRun,
+  logs, replay/cancellation, leases/fences, reconciliation, quotas, and
+  pagination remain pending. Read FEAT-007 and its owning code/tests before
+  continuing.
+- FEAT-008 also remains `In progress`. Its product foundation and productless
+  lifecycle paths are verified, but its real second-product transition and
+  authenticated-browser/accessibility gates remain open; the real DevOps
+  product should close the second-product gate instead of a long-lived fake.
 
 ## Adoption boundary
 
@@ -46,8 +50,10 @@ and acceptance sequence.
 
 ## Continuation
 
-Resume from FEAT-008 and Git state. Close its remaining real-runtime gates
-before claiming product-foundation acceptance, then proceed to the DevOps FEAT
-vertical slices. Preserve pragmatic DDD, the modular-monolith boundary,
+Resume from FEAT-007 and Git state. Complete the current project/Pipeline
+activation vertical slice through delivery-owned PostgreSQL/RLS, use cases,
+HTTP, and IAM/Audit boundaries before expanding the contract to change events
+and runs. Use the real DevOps product later to close FEAT-008's second-product
+transition. Preserve pragmatic DDD, the modular-monolith boundary,
 replacement-first pre-v1 changes, fixed-donor classification, and the exact
 repository-local Git identity `Xiak <Jellal@aliyun.com>`.
