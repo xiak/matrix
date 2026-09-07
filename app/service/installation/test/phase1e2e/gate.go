@@ -115,6 +115,11 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	}
 	defer clear(bearer)
 	value.edge.addForbidden(bearer)
+	if err := value.assertCommittedProductDiscovery(
+		ctx, bearer, value.releases.a.Manifest,
+	); err != nil {
+		return err
+	}
 	emit("iam-user-authority-through-apisix")
 
 	secret, secretDigest, err := value.provisionSecret()
@@ -195,7 +200,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err := value.repeatedStatusAndVerify(ctx, value.releases.a.Manifest, value.releases.a.Manifest.Release.ID, ""); err != nil {
 		return err
 	}
-	if err := value.assertProductDiscoveryUnavailable(ctx, bearer); err != nil {
+	if err := value.assertCommittedProductDiscovery(ctx, bearer, value.releases.a.Manifest); err != nil {
 		return err
 	}
 	emit("automatic-upgrade-rollback")
@@ -227,7 +232,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	); err != nil {
 		return err
 	}
-	if err := value.assertInstalledProducts(ctx, bearer, value.releases.b.Manifest); err != nil {
+	if err := value.assertCommittedProductDiscovery(ctx, bearer, value.releases.b.Manifest); err != nil {
 		return err
 	}
 	emit("release-b-upgrade-preservation")
@@ -249,7 +254,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err := value.repeatedStatusAndVerify(ctx, value.releases.a.Manifest, value.releases.a.Manifest.Release.ID, ""); err != nil {
 		return err
 	}
-	if err := value.assertProductDiscoveryUnavailable(ctx, bearer); err != nil {
+	if err := value.assertCommittedProductDiscovery(ctx, bearer, value.releases.a.Manifest); err != nil {
 		return err
 	}
 	emit("explicit-platform-rollback")
@@ -280,7 +285,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err := value.repeatedStatusAndVerify(ctx, value.releases.a.Manifest, value.releases.a.Manifest.Release.ID, ""); err != nil {
 		return err
 	}
-	if err := value.assertProductDiscoveryUnavailable(ctx, bearer); err != nil {
+	if err := value.assertCommittedProductDiscovery(ctx, bearer, value.releases.a.Manifest); err != nil {
 		return err
 	}
 	emit("backup-recovery")
@@ -448,6 +453,17 @@ func (value *gate) assertInstalledProducts(
 		}
 	}
 	return nil
+}
+
+func (value *gate) assertCommittedProductDiscovery(
+	ctx context.Context,
+	bearer []byte,
+	manifest release.Manifest,
+) error {
+	if len(manifest.Products) == 0 {
+		return value.assertProductDiscoveryUnavailable(ctx, bearer)
+	}
+	return value.assertInstalledProducts(ctx, bearer, manifest)
 }
 
 func (value *gate) assertProductDiscoveryUnavailable(
