@@ -1,6 +1,7 @@
 # FEAT-007: Repository-triggered CI/CD delivery
 
-- Status: Proposed; Prow adoption analysis complete, implementation not started
+- Status: Proposed; Prow adoption and Tencent CODING product benchmark complete,
+  implementation not started
 - Target release: Unscheduled post-v0.1
 - Proposed contract: `delivery.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -14,9 +15,10 @@ artifact, and a successful mainline run hands the verified digest to the
 existing application-hosting API for deployment. A change-request run reports
 its check result but cannot deploy.
 
-This target is deliberately fixed before inspecting the Prow donor. It is not
-a general workflow engine, hosted source-control product, arbitrary remote
-shell service, or Kubernetes-native CI platform.
+This target is deliberately fixed before inspecting either the Prow donor or
+the Tencent CODING product reference. It is not a general workflow engine,
+hosted source-control product, arbitrary remote shell service, or
+Kubernetes-native CI platform.
 
 ## Boundary and ownership
 
@@ -60,6 +62,11 @@ Names, branches, tags, and labels are selectors or display data. Only provider
 repository identity, immutable commit ID, pipeline revision ID, canonical
 digests, and IAM-derived tenant/subject are authorities.
 
+A UI may eventually edit a pipeline draft, but activation always creates a
+new immutable PipelineRevision. A repository-owned YAML/Jenkinsfile, mutable
+UI document, restored configuration revision, or caller parameter cannot
+silently change the revision already selected by a SourceEvent.
+
 ## First vertical slice
 
 The first slice supports one source-provider adapter and two trigger modes:
@@ -74,6 +81,11 @@ A manual replay selects only the exact SourceEvent and PipelineRevision pair
 from an existing DeliveryRun. It creates a new run linked to the earlier run;
 it cannot substitute a branch head, mutable tag, build definition, artifact,
 or deployment target.
+
+Artifact matching is fail-closed. If the selected run does not produce and
+verify its expected digest, delivery cannot fall back to the previous run's
+artifact, a configured default, a mutable tag, or a regex-selected latest
+version.
 
 The accepted workflow is fixed rather than a DAG or general YAML DSL:
 
@@ -276,15 +288,17 @@ secret-leakage, and `git diff --check` gates must pass on one worktree.
 
 ## Explicitly deferred
 
-General DAG/workflow syntax, arbitrary host commands, caller-provided PodSpecs
-or Compose files, merge queues, branch protection administration, approval
-plugins, chat-ops commands, release trains, multi-environment promotion,
-production approval, canary/blue-green rollout, deployment rollback policy,
-scheduled jobs, test result analytics, elastic runner autoscaling, shared
-cache, matrix builds, nested virtualization, customer-defined executor
-plugins, and multiple source providers are outside the first slice.
+General DAG/workflow syntax, repository-owned CIFile/Jenkinsfile execution,
+visual pipeline design, arbitrary host commands, caller-provided PodSpecs or
+Compose files, source-code hosting, merge queues, branch protection
+administration, approval plugins, chat-ops commands, release forms, release
+trains, multi-environment promotion, production approval, canary/blue-green
+rollout, deployment rollback policy, scheduled jobs, test result analytics,
+elastic runner autoscaling, shared cache, matrix builds, nested
+virtualization, customer-defined executor plugins, and multiple source
+providers are outside the first slice.
 
-Prow inspection and the resulting `REUSE`/`ADAPT`/`REFERENCE`/`REJECT`
-decisions are owned by the
+Prow inspection, the Tencent CODING product benchmark, and the resulting
+`REUSE`/`ADAPT`/`REFERENCE`/`REJECT` decisions are owned by the
 [`FEAT-007 adoption review`](../adoption/FEAT-007-repository-delivery.md), not
 this target.

@@ -36,3 +36,26 @@ sources:
       - pkg/pod-utils
       - site/content/en/docs
     mode: reference-and-selective-adaptation
+  tencentCodingDevOps:
+    product: Tencent CODING DevOps
+    documentationRoot: https://coding.net/help/docs/
+    observedAt: 2026-09-07
+    pages:
+      - ci/intro.html
+      - devops/ci/start.html
+      - qci/infra/customize-node.html
+      - cnb/intro.html
+      - cnb/pipelines/internal-steps.html
+      - qci/intro/quick-start.html
+      - ci/configuration/trigger.html
+      - ci/node/pool.html
+      - admin/credential.html
+      - cd/intro.html
+      - cd/console.html
+      - cd/pipe/overview.html
+      - cd/pipe/artifacts.html
+      - cd/pipe/artifacts/in-pipelines.html
+      - cd/pipe/stages/manual.html
+      - admin/security-log.html
+    mutableDocumentation: true
+    mode: product-benchmark-only
