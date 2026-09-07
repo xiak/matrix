@@ -6,7 +6,7 @@
 - Updated: 2026-09-08
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `9ca97c8`
+- Current pushed implementation baseline: `2d43660`
 
 ## Goal
 
@@ -36,10 +36,16 @@ and acceptance sequence.
   package tests passed for the affected authorities; PostgreSQL 18 integration
   proved idempotent Platform/DevOps enrollment, strict role confinement,
   outbox claiming/completion, and readiness behavior.
-- Gate A is not complete. A real cross-process HTTP journey plus SourceEvent,
-  PipelineRun, logs, replay/cancellation, execution leases/fences,
-  reconciliation, quotas, and pagination remain pending. Read FEAT-007 and its
-  owning code/tests before continuing.
+- The pushed `2d43660` authority-process gate builds and starts IAM, Audit,
+  Application PaaS, DevOps, and all three Audit dispatchers against PostgreSQL
+  18. It proves the authenticated configuration journey, exact replay,
+  read-only viewer access, immutable nested revision reads, IAM-outage
+  readiness, cross-schema confinement, five correlated DevOps Audit facts,
+  and unchanged PaaS behavior.
+- Gate A is not complete. SourceEvent, PipelineRun, logs,
+  replay/cancellation, execution leases/fences, reconciliation, quotas, and
+  pagination remain pending. Read FEAT-007 and its owning code/tests before
+  continuing.
 - FEAT-008 remains `In progress`. Its real DevOps second-product transition is
   now represented in release, installation, topology, readiness, and discovery;
   authenticated-browser and accessibility acceptance still remain open.
@@ -56,9 +62,9 @@ and acceptance sequence.
 
 ## Continuation
 
-Resume from FEAT-007 and Git state. Close the current project/Pipeline
-configuration vertical with a real network/process journey through DevOps,
-IAM, Audit, and PostgreSQL before expanding the contract to change events and
-runs. Preserve pragmatic DDD, the modular-monolith boundary,
-replacement-first pre-v1 changes, fixed-donor classification, and the exact
-repository-local Git identity `Xiak <Jellal@aliyun.com>`.
+Resume from FEAT-007 and Git state. The project/Pipeline configuration vertical
+is closed through its real network/process gate; expand next into the immutable
+SourceEvent and PipelineRun admission slice without starting executor effects.
+Preserve pragmatic DDD, the modular-monolith boundary, replacement-first pre-v1
+changes, fixed-donor classification, and the exact repository-local Git
+identity `Xiak <Jellal@aliyun.com>`.
