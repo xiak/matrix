@@ -105,6 +105,9 @@ func TestIAMActionCatalogHasOneResourceKind(t *testing.T) {
 	if _, known := ResourceKindForAction(Action("paas.unregistered.execute")); known {
 		t.Fatal("unregistered action has a resource binding")
 	}
+	if kind, known := ResourceKindForAction(ActionDevOpsLogRead); !known || kind != ResourcePipelineRun {
+		t.Fatalf("DevOps log read resource=%q known=%t, want exact PipelineRun", kind, known)
+	}
 }
 
 func TestIAMCredentialsRequireExplicitEncoding(t *testing.T) {

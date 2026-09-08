@@ -181,6 +181,61 @@ func (transaction *runControlTransaction) LoadPipelineRun(
 	return run, true, nil
 }
 
+func (transaction *runControlTransaction) ReadPipelineRunLogs(
+	ctx context.Context,
+	runID devopsv1.ResourceID,
+	afterSequence uint64,
+	submission runcontrol.LogReadSubmission,
+) (devopsv1.PipelineRunLogPage, bool, error) {
+	if err := errors.Join(
+		devopsv1.ValidatePipelineRunID("runId", runID),
+		runcontrol.ValidateLogReadSubmission(submission),
+	); err != nil {
+		return devopsv1.PipelineRunLogPage{}, false, err
+	}
+	if afterSequence > uint64(devopsv1.FixedMaxLogBytes) ||
+		submission.Operation.TenantID != transaction.tenantID ||
+		submission.Operation.RunID != runID ||
+		submission.Operation.AfterSequence != afterSequence {
+		return devopsv1.PipelineRunLogPage{}, false, errors.New("PipelineRun log read differs from transaction identity")
+	}
+	operationDocument, err := json.Marshal(submission.Operation)
+	if err != nil {
+		return devopsv1.PipelineRunLogPage{}, false, fmt.Errorf("encode PipelineRun log read Operation: %w", err)
+	}
+	auditDocument, err := json.Marshal(submission.AuditEvent)
+	if err != nil {
+		return devopsv1.PipelineRunLogPage{}, false, fmt.Errorf("encode PipelineRun log read Audit fact: %w", err)
+	}
+	var document []byte
+	err = transaction.tx.QueryRow(
+		ctx,
+		`SELECT page_document
+		   FROM delivery.read_pipeline_run_logs($1, $2, $3::jsonb, $4::jsonb)`,
+		string(runID), int64(afterSequence), operationDocument, auditDocument,
+	).Scan(&document)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return devopsv1.PipelineRunLogPage{}, false, nil
+	}
+	if err != nil {
+		return devopsv1.PipelineRunLogPage{}, false, fmt.Errorf("read PipelineRun logs: %w", err)
+	}
+	if int64(len(document)) > devopsv1.FixedMaxLogPageBytes {
+		return devopsv1.PipelineRunLogPage{}, false, errors.New("stored PipelineRun log page exceeds its public bound")
+	}
+	var page devopsv1.PipelineRunLogPage
+	if err := decodeDocument("PipelineRun log page", document, &page); err != nil {
+		return devopsv1.PipelineRunLogPage{}, false, err
+	}
+	if err := devopsv1.ValidatePipelineRunLogPage(page); err != nil {
+		return devopsv1.PipelineRunLogPage{}, false, fmt.Errorf("validate stored PipelineRun log page: %w", err)
+	}
+	if page.RunID != runID || page.AfterSequence != afterSequence {
+		return devopsv1.PipelineRunLogPage{}, false, errors.New("stored PipelineRun log page identity mismatch")
+	}
+	return page, true, nil
+}
+
 func (transaction *runControlTransaction) LockPipelineRunForCancellation(
 	ctx context.Context,
 	id devopsv1.ResourceID,

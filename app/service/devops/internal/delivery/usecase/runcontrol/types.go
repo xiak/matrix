@@ -35,6 +35,7 @@ const (
 	cancellationResultKind = "PipelineRun"
 	replayKind             = "REPLAY_PIPELINE_RUN"
 	replayResultKind       = "PipelineRun"
+	logReadKind            = "READ_PIPELINE_RUN_LOGS"
 )
 
 type CancellationOperation struct {
@@ -91,6 +92,30 @@ type StoredReplay struct {
 	Result    devopsv1.PipelineRun
 }
 
+type LogReadOperation struct {
+	SchemaVersion string                  `json:"schemaVersion"`
+	ID            string                  `json:"id"`
+	TenantID      devopsv1.TenantID       `json:"tenantId"`
+	Kind          string                  `json:"kind"`
+	RunID         devopsv1.ResourceID     `json:"runId"`
+	RequestedBy   devopsv1.SubjectRef     `json:"requestedBy"`
+	IAMDecisionID string                  `json:"iamDecisionId"`
+	IAMAction     iamv1.Action            `json:"iamAction"`
+	IAMResource   iamv1.ResourceReference `json:"iamResource"`
+	AfterSequence uint64                  `json:"afterSequence"`
+	RequestDigest string                  `json:"requestDigest"`
+	Target        auditv1.TargetReference `json:"target"`
+	RequestID     string                  `json:"requestId"`
+	CorrelationID string                  `json:"correlationId"`
+	TraceParent   string                  `json:"traceparent,omitempty"`
+	CreatedAt     time.Time               `json:"createdAt"`
+}
+
+type LogReadSubmission struct {
+	Operation  LogReadOperation
+	AuditEvent auditv1.Event
+}
+
 type ReplaySubmission struct {
 	Operation  ReplayOperation
 	Result     devopsv1.PipelineRun
@@ -109,6 +134,7 @@ type Transaction interface {
 	FindCancellation(context.Context, string) (StoredCancellation, bool, error)
 	FindReplay(context.Context, string) (StoredReplay, bool, error)
 	LoadPipelineRun(context.Context, devopsv1.ResourceID) (devopsv1.PipelineRun, bool, error)
+	ReadPipelineRunLogs(context.Context, devopsv1.ResourceID, uint64, LogReadSubmission) (devopsv1.PipelineRunLogPage, bool, error)
 	LockPipelineRunForCancellation(context.Context, devopsv1.ResourceID) (devopsv1.PipelineRun, bool, bool, error)
 	LockPipelineRunForReplay(context.Context, devopsv1.ResourceID, uint64) (devopsv1.PipelineRun, time.Time, bool, error)
 	CommitPipelineRunCancellation(context.Context, uint64, Submission) error
@@ -131,6 +157,12 @@ type Service struct {
 type GetQuery struct {
 	Authorization port.Authorization
 	RunID         devopsv1.ResourceID
+}
+
+type LogQuery struct {
+	Authorization port.Authorization
+	RunID         devopsv1.ResourceID
+	AfterSequence uint64
 }
 
 type CancelCommand struct {
@@ -297,6 +329,66 @@ func ValidateReplaySubmission(value ReplaySubmission) error {
 		event.CorrelationID != operation.CorrelationID || string(event.OperationID) != operation.ID ||
 		event.TraceParent != operation.TraceParent || !event.OccurredAt.Equal(operation.CreatedAt) {
 		problems = append(problems, errors.New("replay Audit event differs from its Operation"))
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateLogReadOperation(value LogReadOperation) error {
+	var problems []error
+	problems = append(problems,
+		devopsv1.ValidateID("logRead.id", value.ID),
+		devopsv1.ValidateID("logRead.tenantId", string(value.TenantID)),
+		devopsv1.ValidatePipelineRunID("logRead.runId", value.RunID),
+		devopsv1.ValidateSubjectRef(value.RequestedBy),
+		devopsv1.ValidateID("logRead.iamDecisionId", value.IAMDecisionID),
+		devopsv1.ValidateID("logRead.iamResource.id", value.IAMResource.ID),
+		devopsv1.ValidateDigest("logRead.requestDigest", value.RequestDigest),
+		devopsv1.ValidateID("logRead.requestId", value.RequestID),
+		devopsv1.ValidateID("logRead.correlationId", value.CorrelationID),
+	)
+	if value.SchemaVersion != "v1" || value.Kind != logReadKind ||
+		value.Target != (auditv1.TargetReference{Kind: auditv1.TargetPipelineRun, ID: string(value.RunID)}) {
+		problems = append(problems, errors.New("log read Operation identity is invalid"))
+	}
+	if value.IAMAction != iamv1.ActionDevOpsLogRead ||
+		value.IAMResource.Kind != iamv1.ResourcePipelineRun ||
+		value.IAMResource.ID != string(value.RunID) {
+		problems = append(problems, errors.New("log read Operation authority is invalid"))
+	}
+	if value.AfterSequence > uint64(devopsv1.FixedMaxLogBytes) ||
+		value.RequestDigest != logReadRequestDigest(value.RunID, value.AfterSequence) ||
+		value.ID != logReadOperationID(value) {
+		problems = append(problems, errors.New("log read Operation cursor identity is invalid"))
+	}
+	if value.CreatedAt.IsZero() || value.CreatedAt.Location() != time.UTC ||
+		value.CreatedAt != value.CreatedAt.Round(0) || value.CreatedAt.Nanosecond()%1_000 != 0 {
+		problems = append(problems, errors.New("log read createdAt must be UTC with microsecond precision"))
+	}
+	if value.TraceParent != "" && !traceParentPattern.MatchString(value.TraceParent) {
+		problems = append(problems, errors.New("log read traceparent is invalid"))
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateLogReadSubmission(value LogReadSubmission) error {
+	var problems []error
+	problems = append(problems,
+		ValidateLogReadOperation(value.Operation),
+		auditv1.ValidateEventForSource(auditv1.SourceDevOps, value.AuditEvent),
+	)
+	operation := value.Operation
+	event := value.AuditEvent
+	if event.EventID != logReadAuditEventID(operation.ID) ||
+		event.TenantID != auditv1.TenantID(operation.TenantID) ||
+		event.Actor != (auditv1.ActorReference{Type: auditv1.ActorType(operation.RequestedBy.Kind), ID: auditv1.ActorID(operation.RequestedBy.ID)}) ||
+		string(event.IAMDecisionID) != operation.IAMDecisionID ||
+		event.Action != auditv1.ActionDevOpsPipelineRunLogsRead ||
+		event.Target != operation.Target || event.Result != auditv1.ResultSucceeded ||
+		event.Outcome != "" || event.Reason != "" ||
+		event.RequestDigest != operation.RequestDigest || event.RequestID != operation.RequestID ||
+		event.CorrelationID != operation.CorrelationID || string(event.OperationID) != operation.ID ||
+		event.TraceParent != operation.TraceParent || !event.OccurredAt.Equal(operation.CreatedAt) {
+		problems = append(problems, errors.New("log read Audit event differs from its Operation"))
 	}
 	return errors.Join(problems...)
 }

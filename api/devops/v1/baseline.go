@@ -12,6 +12,8 @@ const (
 	FixedMaxLogBytes        int64  = 8 * 1024 * 1024
 	FixedMaxLogLineBytes    int64  = 16 * 1024
 	FixedMaxLogChunkBytes   int64  = 64 * 1024
+	FixedLogPageChunkCount         = 4
+	FixedMaxLogPageBytes    int64  = 640 * 1024
 
 	MaximumSourceArchiveBytes  int64  = 64 * 1024 * 1024
 	MaximumSourceExpandedBytes int64  = 512 * 1024 * 1024

@@ -473,10 +473,9 @@ func ResourceKindForAction(action Action) (ResourceKind, bool) {
 	case ActionDevOpsPipelineCreate, ActionDevOpsPipelineRead,
 		ActionDevOpsPipelineUpdate, ActionDevOpsPipelineActivate:
 		return ResourcePipeline, true
-	case ActionDevOpsRunRead, ActionDevOpsRunReplay, ActionDevOpsRunCancel:
+	case ActionDevOpsRunRead, ActionDevOpsRunReplay, ActionDevOpsRunCancel,
+		ActionDevOpsLogRead:
 		return ResourcePipelineRun, true
-	case ActionDevOpsLogRead:
-		return ResourcePipelineLog, true
 	case ActionAuditRecordRead:
 		return ResourceAuditRecord, true
 	case ActionAuditIntegrityVerify:

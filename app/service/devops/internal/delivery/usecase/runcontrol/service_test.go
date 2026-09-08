@@ -2,6 +2,7 @@ package runcontrol
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -43,6 +44,77 @@ func TestRunControlReadsAndCancelsAnEffectFreeRunAtomically(t *testing.T) {
 	})
 	if err != nil || !replayed.Replayed || replayed.Value != first || tx.commitCalls != 1 {
 		t.Fatalf("replayed cancellation=%#v commits=%d err=%v", replayed, tx.commitCalls, err)
+	}
+}
+
+func TestRunControlReadsBoundedNormalizedLogsAndCommitsSanitizedAudit(t *testing.T) {
+	run := controlRun(t)
+	readAt := run.UpdatedAt.Add(time.Second)
+	page := devopsv1.PipelineRunLogPage{
+		APIVersion: devopsv1.APIVersion, Kind: "PipelineRunLogPage",
+		RunID: run.ID, AfterSequence: 0, NextSequence: 1,
+		Chunks: []devopsv1.PipelineRunLogChunk{{
+			Sequence: 1,
+			Step:     devopsv1.VerificationStep{Ordinal: 1, Kind: devopsv1.VerificationStepGoTest},
+			Content:  "[stdout] test ok\n", ExpiresAt: readAt.Add(14 * 24 * time.Hour),
+		}},
+		ReadAt: readAt,
+	}
+	tx := &fakeTransaction{now: readAt, run: run, logPage: page, logFound: true}
+	service := controlService(t, tx)
+	result, err := service.Logs(context.Background(), LogQuery{
+		Authorization: controlAuthorization(iamv1.ActionDevOpsLogRead, run.ID),
+		RunID:         run.ID, AfterSequence: 0,
+	})
+	if err != nil || result.NextSequence != 1 || len(result.Chunks) != 1 ||
+		tx.logReadCalls != 1 ||
+		tx.logSubmission.AuditEvent.Action != auditv1.ActionDevOpsPipelineRunLogsRead ||
+		tx.logSubmission.AuditEvent.Target.ID != string(run.ID) ||
+		tx.logSubmission.AuditEvent.RequestDigest == "" {
+		t.Fatalf("log page=%#v submission=%#v calls=%d err=%v", result, tx.logSubmission, tx.logReadCalls, err)
+	}
+	auditDocument, err := json.Marshal(tx.logSubmission.AuditEvent)
+	if err != nil || strings.Contains(string(auditDocument), "test ok") ||
+		strings.Contains(string(auditDocument), "executionId") ||
+		strings.Contains(string(auditDocument), "contentDigest") {
+		t.Fatalf("log implementation data crossed the Audit fact: %s", auditDocument)
+	}
+
+	page.AfterSequence = 1
+	page.NextSequence = 1
+	page.Chunks = []devopsv1.PipelineRunLogChunk{}
+	tx.logPage = page
+	query := LogQuery{
+		Authorization: controlAuthorization(iamv1.ActionDevOpsLogRead, run.ID),
+		RunID:         run.ID, AfterSequence: 1,
+	}
+	result, err = service.Logs(context.Background(), query)
+	if err != nil || result.AfterSequence != 1 || result.NextSequence != 1 || len(result.Chunks) != 0 {
+		t.Fatalf("empty continuation=%#v err=%v", result, err)
+	}
+}
+
+func TestRunControlLogReadFailsClosedForAuthorityCursorAndMissingRun(t *testing.T) {
+	run := controlRun(t)
+	tx := &fakeTransaction{now: run.UpdatedAt.Add(time.Second), run: run}
+	service := controlService(t, tx)
+	if _, err := service.Logs(context.Background(), LogQuery{
+		Authorization: controlAuthorization(iamv1.ActionDevOpsRunRead, run.ID),
+		RunID:         run.ID,
+	}); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("mismatched log authority error=%v", err)
+	}
+	if _, err := service.Logs(context.Background(), LogQuery{
+		Authorization: controlAuthorization(iamv1.ActionDevOpsLogRead, run.ID),
+		RunID:         run.ID, AfterSequence: uint64(devopsv1.FixedMaxLogBytes) + 1,
+	}); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("oversized log cursor error=%v", err)
+	}
+	if _, err := service.Logs(context.Background(), LogQuery{
+		Authorization: controlAuthorization(iamv1.ActionDevOpsLogRead, run.ID),
+		RunID:         run.ID,
+	}); !errors.Is(err, ErrNotFound) || tx.logReadCalls != 1 {
+		t.Fatalf("missing log run calls=%d error=%v", tx.logReadCalls, err)
 	}
 }
 
@@ -177,8 +249,12 @@ type fakeTransaction struct {
 	storedReplay      *StoredReplay
 	submission        Submission
 	replaySubmission  ReplaySubmission
+	logPage           devopsv1.PipelineRunLogPage
+	logFound          bool
+	logSubmission     LogReadSubmission
 	commitCalls       int
 	replayCommitCalls int
+	logReadCalls      int
 }
 
 func (tx *fakeTransaction) TransactionTime(context.Context) (time.Time, error) { return tx.now, nil }
@@ -199,6 +275,23 @@ func (tx *fakeTransaction) FindReplay(_ context.Context, fingerprint string) (St
 
 func (tx *fakeTransaction) LoadPipelineRun(context.Context, devopsv1.ResourceID) (devopsv1.PipelineRun, bool, error) {
 	return tx.run, true, nil
+}
+
+func (tx *fakeTransaction) ReadPipelineRunLogs(
+	_ context.Context,
+	runID devopsv1.ResourceID,
+	afterSequence uint64,
+	submission LogReadSubmission,
+) (devopsv1.PipelineRunLogPage, bool, error) {
+	if err := ValidateLogReadSubmission(submission); err != nil {
+		return devopsv1.PipelineRunLogPage{}, false, err
+	}
+	if submission.Operation.RunID != runID || submission.Operation.AfterSequence != afterSequence {
+		return devopsv1.PipelineRunLogPage{}, false, errors.New("log read submission identity mismatch")
+	}
+	tx.logReadCalls++
+	tx.logSubmission = submission
+	return tx.logPage, tx.logFound, nil
 }
 
 func (tx *fakeTransaction) LockPipelineRunForCancellation(

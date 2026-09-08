@@ -3,11 +3,14 @@ package runcontrol
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -44,6 +47,56 @@ func (service *Service) Get(ctx context.Context, query GetQuery) (devopsv1.Pipel
 			return ErrNotFound
 		}
 		result = value
+		return nil
+	})
+	return result, err
+}
+
+func (service *Service) Logs(ctx context.Context, query LogQuery) (devopsv1.PipelineRunLogPage, error) {
+	if service == nil || service.repository == nil {
+		return devopsv1.PipelineRunLogPage{}, errors.New("PipelineRun control service is nil")
+	}
+	if ctx == nil {
+		return devopsv1.PipelineRunLogPage{}, errors.New("PipelineRun log read context is nil")
+	}
+	if err := errors.Join(
+		devopsv1.ValidatePipelineRunID("runId", query.RunID),
+		port.ValidateAuthorizationForRequest(
+			query.Authorization, iamv1.ActionDevOpsLogRead, iamv1.ResourcePipelineRun, query.RunID,
+		),
+		validateLogCursor(query.AfterSequence),
+	); err != nil {
+		return devopsv1.PipelineRunLogPage{}, formatInvalid(err)
+	}
+
+	var result devopsv1.PipelineRunLogPage
+	err := service.retry(ctx, query.Authorization.TenantID, func(txCtx context.Context, tx Transaction) error {
+		now, err := tx.TransactionTime(txCtx)
+		if err != nil {
+			return err
+		}
+		operation := newLogReadOperation(query, now)
+		submission := LogReadSubmission{
+			Operation: operation, AuditEvent: newLogReadEvent(operation),
+		}
+		if err := ValidateLogReadSubmission(submission); err != nil {
+			return fmt.Errorf("invalid PipelineRun log read submission: %w", err)
+		}
+		page, found, err := tx.ReadPipelineRunLogs(
+			txCtx, query.RunID, query.AfterSequence, submission,
+		)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return ErrNotFound
+		}
+		if devopsv1.ValidatePipelineRunLogPage(page) != nil ||
+			page.RunID != query.RunID || page.AfterSequence != query.AfterSequence ||
+			!page.ReadAt.Equal(now) {
+			return errors.New("stored PipelineRun log page is invalid")
+		}
+		result = page
 		return nil
 	})
 	return result, err
@@ -318,9 +371,84 @@ func newReplayEvent(operation ReplayOperation) auditv1.Event {
 	}
 }
 
+func newLogReadOperation(query LogQuery, now time.Time) LogReadOperation {
+	operation := LogReadOperation{
+		SchemaVersion: "v1", TenantID: query.Authorization.TenantID,
+		Kind: logReadKind, RunID: query.RunID, RequestedBy: query.Authorization.Subject,
+		IAMDecisionID: query.Authorization.DecisionID, IAMAction: query.Authorization.Action,
+		IAMResource: query.Authorization.Resource, AfterSequence: query.AfterSequence,
+		RequestDigest: logReadRequestDigest(query.RunID, query.AfterSequence),
+		Target:        auditv1.TargetReference{Kind: auditv1.TargetPipelineRun, ID: string(query.RunID)},
+		RequestID:     query.Authorization.RequestID, CorrelationID: query.Authorization.CorrelationID,
+		TraceParent: query.Authorization.TraceParent, CreatedAt: now,
+	}
+	operation.ID = logReadOperationID(operation)
+	return operation
+}
+
+func newLogReadEvent(operation LogReadOperation) auditv1.Event {
+	return auditv1.Event{
+		APIVersion: auditv1.APIVersion, Kind: "AuditEvent",
+		EventID:       logReadAuditEventID(operation.ID),
+		TenantID:      auditv1.TenantID(operation.TenantID),
+		Actor:         auditv1.ActorReference{Type: auditv1.ActorType(operation.RequestedBy.Kind), ID: auditv1.ActorID(operation.RequestedBy.ID)},
+		IAMDecisionID: auditv1.DecisionID(operation.IAMDecisionID),
+		Action:        auditv1.ActionDevOpsPipelineRunLogsRead,
+		Target:        operation.Target, Result: auditv1.ResultSucceeded,
+		RequestDigest: operation.RequestDigest, RequestID: operation.RequestID,
+		CorrelationID: operation.CorrelationID, OperationID: auditv1.OperationID(operation.ID),
+		TraceParent: operation.TraceParent, OccurredAt: operation.CreatedAt,
+	}
+}
+
+func logReadRequestDigest(runID devopsv1.ResourceID, afterSequence uint64) string {
+	digest := sha256.New()
+	writeLogReadDigestString(digest, "matrix-devops-pipeline-run-log-read-v1")
+	writeLogReadDigestString(digest, string(runID))
+	writeLogReadDigestUint64(digest, afterSequence)
+	return "sha256:" + hex.EncodeToString(digest.Sum(nil))
+}
+
+func logReadOperationID(operation LogReadOperation) string {
+	digest := sha256.New()
+	writeLogReadDigestString(digest, "matrix-devops-log-read-operation-v1")
+	writeLogReadDigestString(digest, string(operation.TenantID))
+	writeLogReadDigestString(digest, string(operation.RequestedBy.Kind))
+	writeLogReadDigestString(digest, string(operation.RequestedBy.ID))
+	writeLogReadDigestString(digest, operation.IAMDecisionID)
+	writeLogReadDigestString(digest, operation.RequestID)
+	writeLogReadDigestString(digest, operation.CorrelationID)
+	writeLogReadDigestString(digest, operation.TraceParent)
+	writeLogReadDigestString(digest, operation.RequestDigest)
+	return "operation-" + hex.EncodeToString(digest.Sum(nil))
+}
+
+func logReadAuditEventID(operationID string) auditv1.EventID {
+	digest := sha256.Sum256([]byte("matrix-devops-audit-event-v1\x00" + operationID))
+	return auditv1.EventID("audit-" + hex.EncodeToString(digest[:]))
+}
+
+func writeLogReadDigestString(destination hash.Hash, value string) {
+	writeLogReadDigestUint64(destination, uint64(len(value)))
+	_, _ = destination.Write([]byte(value))
+}
+
+func writeLogReadDigestUint64(destination hash.Hash, value uint64) {
+	var encoded [8]byte
+	binary.BigEndian.PutUint64(encoded[:], value)
+	_, _ = destination.Write(encoded[:])
+}
+
 func validateExpectedVersion(value uint64) error {
 	if value == 0 || value > devopsv1.MaximumContractInteger {
 		return errors.New("expected resource version is invalid")
+	}
+	return nil
+}
+
+func validateLogCursor(value uint64) error {
+	if value > uint64(devopsv1.FixedMaxLogBytes) {
+		return errors.New("PipelineRun log cursor is invalid")
 	}
 	return nil
 }

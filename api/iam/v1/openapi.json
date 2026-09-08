@@ -1004,7 +1004,7 @@
                 "resource": {
                   "properties": {
                     "kind": {
-                      "const": "PIPELINE_LOG"
+                      "const": "PIPELINE_RUN"
                     }
                   },
                   "required": [
@@ -2070,7 +2070,7 @@
                 "resource": {
                   "properties": {
                     "kind": {
-                      "const": "PIPELINE_LOG"
+                      "const": "PIPELINE_RUN"
                     }
                   },
                   "required": [
@@ -2893,7 +2893,6 @@
           "REPOSITORY_BINDING",
           "PIPELINE",
           "PIPELINE_RUN",
-          "PIPELINE_LOG",
           "AUDIT_CHAIN",
           "INSTALLATION"
         ],

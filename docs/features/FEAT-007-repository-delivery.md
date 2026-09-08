@@ -15,9 +15,9 @@
   executor-gateway process, ordered runner step journal, runner workspace
   publication, bounded native output normalization, closed sandbox container
   lifecycle, port-driven cross-step runner workflow, authenticated durable log
-  relay, and fenced tenant-leading normalized-log persistence complete;
-  physical runner process composition, public log read, and reporter effects
-  pending
+  relay, fenced tenant-leading normalized-log persistence, and IAM-authorized
+  audited public log reads complete; physical runner process composition and
+  reporter effects pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -635,6 +635,30 @@ conflicts, task completion closes the append authority, and every batch gets
 the fixed 14-day expiry. A failed or unproved drain retains the VERIFY intent
 for fenced observation instead of advancing with missing evidence.
 
+The public read surface is
+`GET /v1/runs/{runId}/logs[?afterSequence=<cursor>]`. IAM authorizes
+`devops.log.read` against that exact `PipelineRun`; there is no separately
+addressable `PipelineLog` authority resource. The query is either absent or
+one canonical unsigned decimal cursor from zero through 8 MiB. Repeated,
+empty, signed, zero-padded, unknown, or out-of-range query values fail before
+authorization. A successful response is `PipelineRunLogPage`, is bounded to
+four chunks and 640 KiB, carries `Cache-Control: no-store`, and exposes only
+the run and cursors, ordered step/sequence, normalized content, chunk expiry,
+continuation, retention truncation, and database read time. Executor and
+container identities, native counters, commands, environment, paths, and
+integrity digests remain private. `hasMore` comes from one bounded lookahead;
+`truncated` reports that a chunk after the requested cursor has expired, so an
+empty retained page is not confused with complete historical evidence.
+
+The API database role can invoke only a table-blind `SECURITY DEFINER`
+function. It derives the tenant and time from the transaction, conceals a
+foreign run as missing, selects only unexpired normalized chunks, recomputes
+the cursor-bound request and operation identities, and atomically writes one
+IAM-bound `devops.pipeline-run.logs-read` Audit fact before returning the
+page. The fact contains no log content or executor implementation data; an
+independent resource kind, changed action, or injected log payload fails
+closed inside PostgreSQL.
+
 This adapts Prow's observe-before-create, state-specific timeout, bounded grace,
 and durable result-marker behavior. It deliberately replaces Pod identity,
 cluster/cache semantics, environment-carried job configuration, and storage
@@ -774,10 +798,9 @@ requires equal sequence replay without duplication and conflict on changed
 content. A complete receipt is recorded locally before gateway completion and
 is acknowledged only after that completion succeeds.
 
-The public IAM/Audit log-read surface, the physical runner process that composes
-these ports, selected release topology, and a real process journey remain
-subsequent slices, so no process yet invokes this workflow against repository
-code.
+The physical runner process that composes these ports, selected release
+topology, and a real process journey remain subsequent slices, so no process
+yet invokes this workflow against repository code.
 
 ### Egress, limits, storage, and retention
 
@@ -1217,9 +1240,9 @@ and DevOps API readiness once any SourceConnection exists.
 These slices do not complete Gate A. Source readiness, credential lifecycle,
 observation, acquisition through an installed isolated process, the fenced
 BuildExecutor boundary, and authenticated tenant-leading normalized-log
-persistence are complete. Physical runner execution, public log reads,
+persistence and public log reads are complete. Physical runner execution,
 reporting, remaining runtime quotas, check-receipt Audit facts, and pagination
-remain pending.
+for other collection resources remain pending.
 
 Current verification evidence:
 
@@ -1403,6 +1426,16 @@ Current verification evidence:
   affected packages pass race detection and twenty-run repetition on Windows
   plus twenty runs in the fixed disconnected Go 1.26.8 Linux/amd64 image with
   read-only source and module cache
+- strict public `PipelineRunLogPage` OpenAPI, validation, use-case, and HTTP
+  tests proving exact `PipelineRun` IAM authority, canonical optional cursors,
+  four-chunk lookahead pagination, bounded `no-store` responses, empty and
+  retention-truncated pages, and exclusion of executor IDs, native counters,
+  commands, environment, paths, and digests. A real fixed PostgreSQL 18.6
+  journey proves table-blind API-only reads, forced tenant concealment,
+  database-time expiry, transactional sanitized Audit facts, and independent
+  rejection of a `PIPELINE_LOG` resource, changed Audit action, or injected log
+  payload; the shared IAM/Audit authority journey accepts the new action while
+  keeping the Go and database action catalogs equal
 - the shared source-archive reader proves the portable receipt independently,
   matches it to the private deterministic store, structurally inspects and
   hashes the archive before handoff, and verifies its length and digest again
@@ -1485,10 +1518,10 @@ Current verification evidence:
   immutability, intent identity, repository drift, and reconciliation bounds;
   the transition fuzz run completed 48,645 executions without producing an
   invalid accepted status
-- strict OpenAPI and HTTP tests proving exact run-read/cancel/replay IAM
+- strict OpenAPI and HTTP tests proving exact run-read/cancel/replay/log IAM
   resources, bodyless commands, required `If-Match` and `Idempotency-Key`
-  guards, replay `Location`/ETag, closed error mappings, and validation before
-  authorization
+  guards, replay `Location`/ETag, canonical log cursor and `no-store` response,
+  closed error mappings, and validation before authorization
 - real PostgreSQL 18 run-lifecycle journey proving data-bearing digest
   backfill, tenant-concealed public reads, immediate queued cancellation,
   pending active cancellation, deterministic `EXECUTE` claims, same-intent
@@ -1505,8 +1538,9 @@ Current verification evidence:
   exactly two IAM-bound accepted facts, and nonterminal worker transitions
   create no completion fact; both replay generations have no task before a
   worker claim. The fresh journey contains 23 mutations, 16 SourceEvents, 34
-  PipelineRuns, ten task intents, two BuildExecutor receipts, and 84 Audit
-  operations/outbox facts, including five source-health transitions
+  PipelineRuns, ten task intents, two BuildExecutor receipts, and 88 Audit
+  operations/outbox facts, including five source-health transitions and four
+  authorized public log-read facts
 - fixed `10fea16` data-bearing upgrade preserving all 17 mutations, 16
   SourceEvents, 32 PipelineRuns, nine task intents, and 71 Audit
   operations/outbox facts while backfilling each original run's creation

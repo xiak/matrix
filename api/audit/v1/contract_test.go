@@ -162,6 +162,34 @@ func TestPipelineRunReplayRequiresIAMAndCarriesNoTerminalOutcome(t *testing.T) {
 	}
 }
 
+func TestPipelineRunLogReadRequiresIAMAndCarriesNoLogPayload(t *testing.T) {
+	event := Event{
+		APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-run-logs-read",
+		TenantID:      "organization-example",
+		Actor:         ActorReference{Type: ActorUser, ID: "user-reader"},
+		IAMDecisionID: "decision-run-logs-read",
+		Action:        ActionDevOpsPipelineRunLogsRead,
+		Target:        TargetReference{Kind: TargetPipelineRun, ID: "pipeline-run-example"},
+		Result:        ResultSucceeded,
+		RequestDigest: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+		RequestID:     "request-run-logs-read", CorrelationID: "correlation-run-logs-read",
+		OperationID: "operation-run-logs-read",
+		OccurredAt:  time.Date(2026, 9, 9, 3, 4, 5, 0, time.UTC),
+	}
+	if err := ValidateEventForSource(SourceDevOps, event); err != nil {
+		t.Fatalf("valid PipelineRun log read rejected: %v", err)
+	}
+	event.IAMDecisionID = ""
+	if err := ValidateEventForSource(SourceDevOps, event); err == nil {
+		t.Fatal("PipelineRun log read without IAM decision was accepted")
+	}
+	event.IAMDecisionID = "decision-run-logs-read"
+	event.Outcome = OutcomeSucceeded
+	if err := ValidateEventForSource(SourceDevOps, event); err == nil {
+		t.Fatal("PipelineRun log read accepted an executor outcome")
+	}
+}
+
 func TestAuditWireTypesHaveNoArbitraryPayloadEscapeHatch(t *testing.T) {
 	roots := []reflect.Type{
 		reflect.TypeOf(Event{}), reflect.TypeOf(AuditRecord{}), reflect.TypeOf(IngestionResult{}),

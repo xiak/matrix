@@ -140,6 +140,8 @@ func buildDocument() object {
 			"PipelineRunReplay":              openapi31.StructType[devopsv1.PipelineRunReplay](),
 			"PipelineRunStatus":              openapi31.StructType[devopsv1.PipelineRunStatus](),
 			"PipelineRun":                    openapi31.StructType[devopsv1.PipelineRun](),
+			"PipelineRunLogChunk":            openapi31.StructType[devopsv1.PipelineRunLogChunk](),
+			"PipelineRunLogPage":             openapi31.StructType[devopsv1.PipelineRunLogPage](),
 			"Readiness":                      openapi31.StructType[devopsv1.Readiness](),
 			"FieldViolation":                 openapi31.StructType[devopsv1.FieldViolation](),
 			"Problem":                        openapi31.StructType[devopsv1.Problem](),
@@ -228,6 +230,9 @@ func buildPaths() object {
 		"/v1/runs/{runId}": object{
 			"get": readPipelineRunOperation(),
 		},
+		"/v1/runs/{runId}/logs": object{
+			"get": readPipelineRunLogsOperation(),
+		},
 		"/v1/runs/{runId}/cancel": object{
 			"post": cancelPipelineRunOperation(),
 		},
@@ -284,6 +289,31 @@ func readPipelineRunOperation() object {
 	)
 	operation["parameters"] = []any{pipelineRunIDParameter()}
 	return operation
+}
+
+func readPipelineRunLogsOperation() object {
+	responses := openapi31.ProblemResponses("400", "401", "403", "404", "405", "500", "503")
+	responses["200"] = response(
+		"One authorized, fixed-size page of retained normalized log chunks.",
+		"PipelineRunLogPage", nil,
+	)
+	return object{
+		"operationId": "getPipelineRunLogs",
+		"summary":     "Read retained normalized PipelineRun logs",
+		"description": "Authorization is evaluated against the exact PipelineRun. The fixed page contains no executor identity, native output, command, environment, credential, digest, or host path; each successful read commits one sanitized Audit fact.",
+		"parameters": []any{
+			pipelineRunIDParameter(),
+			object{
+				"name": "afterSequence", "in": "query", "required": false,
+				"description": "Exclusive normalized-log sequence cursor; omitted means zero.",
+				"schema": object{
+					"type": "integer", "format": "int64", "minimum": 0,
+					"maximum": devopsv1.FixedMaxLogBytes, "default": 0,
+				},
+			},
+		},
+		"responses": responses,
+	}
 }
 
 func updateDraftOperation() object {
@@ -446,6 +476,12 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 	case "resourceVersion", "revision", "schemaVersion", "number":
 		base["minimum"] = 1
 		base["maximum"] = devopsv1.MaximumContractInteger
+	case "sequence":
+		base["minimum"] = 1
+		base["maximum"] = devopsv1.FixedMaxLogBytes
+	case "afterSequence", "nextSequence":
+		base["minimum"] = 0
+		base["maximum"] = devopsv1.FixedMaxLogBytes
 	case "ordinal":
 		base["minimum"] = 1
 		base["maximum"] = 2
@@ -515,6 +551,15 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 	case "violations":
 		base["maxItems"] = 32
 		base["uniqueItems"] = true
+	case "content":
+		if owner == "PipelineRunLogChunk" {
+			base["minLength"] = 1
+			base["maxLength"] = devopsv1.FixedMaxLogChunkBytes
+		}
+	case "chunks":
+		if owner == "PipelineRunLogPage" {
+			base["maxItems"] = devopsv1.FixedLogPageChunkCount
+		}
 	}
 	return base
 }
@@ -529,6 +574,7 @@ func applySemanticOverlays(schemas object) {
 		"PipelineActivation": "PipelineActivation",
 		"SourceEvent":        "SourceEvent",
 		"PipelineRun":        "PipelineRun",
+		"PipelineRunLogPage": "PipelineRunLogPage",
 	} {
 		properties := schemas[owner].(object)["properties"].(object)
 		properties["apiVersion"] = object{"const": devopsv1.APIVersion}

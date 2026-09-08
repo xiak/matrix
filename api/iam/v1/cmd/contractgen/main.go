@@ -195,7 +195,7 @@ func enumSchemas() map[string][]string {
 			string(iamv1.ResourceDeployment), string(iamv1.ResourceOperation), string(iamv1.ResourceAuditRecord),
 			string(iamv1.ResourceDevOpsProject), string(iamv1.ResourceSourceConnection),
 			string(iamv1.ResourceRepositoryBinding), string(iamv1.ResourcePipeline),
-			string(iamv1.ResourcePipelineRun), string(iamv1.ResourcePipelineLog),
+			string(iamv1.ResourcePipelineRun),
 			string(iamv1.ResourceAuditChain), string(iamv1.ResourceInstallation),
 		},
 		"DecisionReason": {string(iamv1.DecisionAllowed), string(iamv1.DecisionDenied)},

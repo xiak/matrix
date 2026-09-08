@@ -579,6 +579,61 @@ func ValidatePipelineRun(value PipelineRun) error {
 	return errors.Join(problems...)
 }
 
+func ValidatePipelineRunLogChunk(value PipelineRunLogChunk) error {
+	var problems []error
+	if !contains(FixedVerificationSteps(), value.Step) {
+		problems = append(problems, errors.New("PipelineRun log step is invalid"))
+	}
+	if value.Sequence == 0 || value.Sequence > uint64(FixedMaxLogBytes) {
+		problems = append(problems, errors.New("PipelineRun log sequence is invalid"))
+	}
+	problems = append(problems,
+		validatePipelineRunLogContent(value.Content),
+		validateContractTime("log.expiresAt", value.ExpiresAt),
+	)
+	return errors.Join(problems...)
+}
+
+func ValidatePipelineRunLogPage(value PipelineRunLogPage) error {
+	var problems []error
+	if value.APIVersion != APIVersion || value.Kind != "PipelineRunLogPage" {
+		problems = append(problems, errors.New("PipelineRun log page type metadata is invalid"))
+	}
+	problems = append(problems,
+		ValidatePipelineRunID("runId", value.RunID),
+		validateContractTime("readAt", value.ReadAt),
+	)
+	if value.AfterSequence > uint64(FixedMaxLogBytes) ||
+		value.NextSequence > uint64(FixedMaxLogBytes) ||
+		value.NextSequence < value.AfterSequence {
+		problems = append(problems, errors.New("PipelineRun log cursor is invalid"))
+	}
+	if value.Chunks == nil || len(value.Chunks) > FixedLogPageChunkCount {
+		problems = append(problems, errors.New("PipelineRun log page size is invalid"))
+	}
+	next := value.AfterSequence
+	for index, chunk := range value.Chunks {
+		problems = append(problems, ValidatePipelineRunLogChunk(chunk))
+		if chunk.Sequence <= next {
+			problems = append(problems, errors.New("PipelineRun log chunks are not ordered after the cursor"))
+		}
+		if !chunk.ExpiresAt.After(value.ReadAt) {
+			problems = append(problems, errors.New("PipelineRun log chunk is expired"))
+		}
+		next = chunk.Sequence
+		if index > 0 && value.Chunks[index-1].Step.Ordinal > chunk.Step.Ordinal {
+			problems = append(problems, errors.New("PipelineRun log steps are not ordered"))
+		}
+	}
+	if value.NextSequence != next {
+		problems = append(problems, errors.New("PipelineRun log next cursor is invalid"))
+	}
+	if value.HasMore && len(value.Chunks) != FixedLogPageChunkCount {
+		problems = append(problems, errors.New("PipelineRun log continuation is invalid"))
+	}
+	return errors.Join(problems...)
+}
+
 func ValidateReadiness(value Readiness) error {
 	var problems []error
 	if value.APIVersion != APIVersion || value.Kind != "Readiness" {
@@ -816,6 +871,30 @@ func validateSafeText(name, value string, minimum, maximum int) error {
 	for _, character := range value {
 		if unicode.IsControl(character) || character == unicode.ReplacementChar {
 			return fmt.Errorf("%s is invalid", name)
+		}
+	}
+	return nil
+}
+
+func validatePipelineRunLogContent(value string) error {
+	if len(value) == 0 || int64(len(value)) > FixedMaxLogChunkBytes ||
+		!utf8.ValidString(value) {
+		return errors.New("PipelineRun log content is invalid")
+	}
+	for _, character := range value {
+		if character != '\n' && character != '\t' && unicode.IsControl(character) {
+			return errors.New("PipelineRun log content is invalid")
+		}
+	}
+	lines := strings.Split(value, "\n")
+	for index, line := range lines {
+		if line == "" && index == len(lines)-1 {
+			continue
+		}
+		if (!strings.HasPrefix(line, "[stdout] ") &&
+			!strings.HasPrefix(line, "[stderr] ")) ||
+			int64(len(line)) > int64(len("[stdout] "))+FixedMaxLogLineBytes {
+			return errors.New("PipelineRun log content is invalid")
 		}
 	}
 	return nil

@@ -1006,7 +1006,7 @@ AS $function$
         WHEN 'devops.run.read' THEN 'PIPELINE_RUN'
         WHEN 'devops.run.replay' THEN 'PIPELINE_RUN'
         WHEN 'devops.run.cancel' THEN 'PIPELINE_RUN'
-        WHEN 'devops.log.read' THEN 'PIPELINE_LOG'
+        WHEN 'devops.log.read' THEN 'PIPELINE_RUN'
         WHEN 'audit.record.read' THEN 'AUDIT_RECORD'
         WHEN 'audit.integrity.verify' THEN 'AUDIT_CHAIN'
         WHEN 'installation.product.read' THEN 'INSTALLATION'

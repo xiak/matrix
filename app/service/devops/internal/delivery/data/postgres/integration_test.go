@@ -705,7 +705,7 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		return err
 	})
 	assertRunLifecyclePersistenceAndFencing(
-		t, ctx, admin, workerPool, sourceFetcher, buildRepository, runController,
+		t, ctx, admin, pool, workerPool, sourceFetcher, buildRepository, runController,
 	)
 	assertTerminalAuditFacts(t, ctx, admin)
 	assertCancellationAuditFacts(t, ctx, admin)
@@ -719,10 +719,10 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		t.Fatalf("DevOps Audit worker readiness=%#v err=%v", workerReadiness, err)
 	}
 	snapshot, err := outbox.Snapshot(ctx)
-	if err != nil || snapshot.Pending != 84 || snapshot.Delivered != 0 {
+	if err != nil || snapshot.Pending != 88 || snapshot.Delivered != 0 {
 		t.Fatalf("initial Audit outbox snapshot=%#v err=%v", snapshot, err)
 	}
-	for index := 0; index < 84; index++ {
+	for index := 0; index < 88; index++ {
 		claim, found, err := outbox.Claim(ctx, "audit-worker-integration", 30*time.Second)
 		if err != nil || !found {
 			t.Fatalf("claim Audit event %d=%#v found=%t err=%v", index, claim, found, err)
@@ -750,7 +750,7 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		t.Fatalf("empty Audit claim=%#v found=%t err=%v", claim, found, err)
 	}
 	snapshot, err = outbox.Snapshot(ctx)
-	if err != nil || snapshot.Delivered != 84 || snapshot.Pending != 0 || snapshot.Leased != 0 ||
+	if err != nil || snapshot.Delivered != 88 || snapshot.Pending != 0 || snapshot.Leased != 0 ||
 		snapshot.Retry != 0 || snapshot.DeadLetter != 0 || snapshot.ExpiredLease != 0 {
 		t.Fatalf("delivered Audit outbox snapshot=%#v err=%v", snapshot, err)
 	}
@@ -861,7 +861,7 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		t.Fatalf("read delivery evidence: %v", err)
 	}
 	if mutationCount != 23 || sourceEventCount != 16 || runCount != 34 || runTaskCount != 10 ||
-		operationCount != 84 || auditCount != 84 || buildReceiptCount != 2 ||
+		operationCount != 88 || auditCount != 88 || buildReceiptCount != 2 ||
 		bindingRevisionCount != 2 || pipelineRevisionCount != 3 {
 		t.Fatalf(
 			"evidence counts mutation=%d event=%d run=%d task=%d operation=%d audit=%d build=%d binding=%d pipeline=%d",
@@ -1455,6 +1455,7 @@ func assertRunLifecyclePersistenceAndFencing(
 	t *testing.T,
 	ctx context.Context,
 	admin *pgx.Conn,
+	apiPool *pgxpool.Pool,
 	workerPool *pgxpool.Pool,
 	sourceFetcher *devopspostgres.SourceAcquisitionRepository,
 	buildRepository *devopspostgres.BuildExecutionRepository,
@@ -1572,6 +1573,9 @@ func assertRunLifecyclePersistenceAndFencing(
 	}
 	firstBuildLog := assertBuildLogPersistence(
 		t, ctx, admin, workerPool, buildRepository, firstBuild, recoveredBuild,
+	)
+	assertPublicBuildLogRead(
+		t, ctx, admin, apiPool, runController, recoveredBuild.Lease.Run.ID,
 	)
 	if _, err := buildRepository.Complete(ctx, buildexecution.Completion{
 		Command: firstBuild, State: devopsv1.PipelineRunReporting,
@@ -1996,10 +2000,14 @@ func assertBuildLogPersistence(
 	request := buildRequest(t, current)
 	first := postgresBuildLogBatch(
 		t, request, request.Steps[0], devopsbuildv1.LogProgress{},
-		[]string{"[stdout] test ok\n", "[stdout] coverage ok\n"},
+		[]string{
+			"[stdout] test ok\n", "[stdout] coverage ok\n",
+			"[stderr] race scan ok\n", "[stdout] package scan ok\n",
+		},
 	)
 	second := postgresBuildLogBatch(
-		t, request, request.Steps[1], first.Next, []string{"[stdout] vet ok\n"},
+		t, request, request.Steps[1], first.Next,
+		[]string{"[stdout] vet ok\n", "[stdout] analyzer ok\n"},
 	)
 	if err := repository.AppendLogs(
 		ctx, stale, first,
@@ -2057,6 +2065,250 @@ func assertBuildLogPersistence(
 		)
 	}
 	return first
+}
+
+func assertPublicBuildLogRead(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	apiPool *pgxpool.Pool,
+	runController *runcontrol.Service,
+	runID devopsv1.ResourceID,
+) {
+	t.Helper()
+	read := func(after uint64) devopsv1.PipelineRunLogPage {
+		page, err := runController.Logs(ctx, runcontrol.LogQuery{
+			Authorization: auth(
+				iamv1.ActionDevOpsLogRead, iamv1.ResourcePipelineRun, runID,
+			),
+			RunID: runID, AfterSequence: after,
+		})
+		if err != nil {
+			t.Fatalf("read PipelineRun logs after %d: %v", after, err)
+		}
+		if err := devopsv1.ValidatePipelineRunLogPage(page); err != nil {
+			t.Fatalf("validate PipelineRun logs after %d: %v", after, err)
+		}
+		return page
+	}
+	first := read(0)
+	if len(first.Chunks) != devopsv1.FixedLogPageChunkCount || !first.HasMore ||
+		first.Truncated || first.NextSequence != 4 {
+		t.Fatalf("first public PipelineRun log page=%#v", first)
+	}
+	for _, chunk := range first.Chunks {
+		if chunk.Step != (devopsv1.VerificationStep{
+			Ordinal: 1, Kind: devopsv1.VerificationStepGoTest,
+		}) || !chunk.ExpiresAt.After(first.ReadAt) {
+			t.Fatalf("first public PipelineRun log chunk=%#v", chunk)
+		}
+	}
+	second := read(first.NextSequence)
+	if len(second.Chunks) != 2 || second.HasMore || second.Truncated ||
+		second.NextSequence != 6 {
+		t.Fatalf("second public PipelineRun log page=%#v", second)
+	}
+	for _, chunk := range second.Chunks {
+		if chunk.Step != (devopsv1.VerificationStep{
+			Ordinal: 2, Kind: devopsv1.VerificationStepGoVet,
+		}) {
+			t.Fatalf("second public PipelineRun log chunk=%#v", chunk)
+		}
+	}
+	empty := read(second.NextSequence)
+	if len(empty.Chunks) != 0 || empty.HasMore || empty.Truncated ||
+		empty.NextSequence != second.NextSequence {
+		t.Fatalf("empty public PipelineRun log page=%#v", empty)
+	}
+	otherTenant := authForTenant(
+		"tenant-two", iamv1.ActionDevOpsLogRead, iamv1.ResourcePipelineRun, runID,
+	)
+	if _, err := runController.Logs(ctx, runcontrol.LogQuery{
+		Authorization: otherTenant, RunID: runID,
+	}); !errors.Is(err, runcontrol.ErrNotFound) {
+		t.Fatalf("cross-tenant PipelineRun log read error=%v", err)
+	}
+	if _, err := admin.Exec(
+		ctx,
+		`UPDATE delivery.pipeline_run_logs
+		    SET created_at = transaction_timestamp() - interval '15 days',
+		        expires_at = transaction_timestamp() - interval '1 day'
+		  WHERE tenant_id = 'tenant-one' AND run_id = $1 AND step_ordinal = 1`,
+		runID,
+	); err != nil {
+		t.Fatalf("expire first PipelineRun log batch: %v", err)
+	}
+	truncatedAuthorization := auth(
+		iamv1.ActionDevOpsLogRead, iamv1.ResourcePipelineRun, runID,
+	)
+	truncatedAuthorization.RequestID = "request-log-retention-truncated"
+	truncated, err := runController.Logs(ctx, runcontrol.LogQuery{
+		Authorization: truncatedAuthorization, RunID: runID,
+	})
+	if err != nil || !truncated.Truncated || truncated.HasMore ||
+		len(truncated.Chunks) != 2 || truncated.Chunks[0].Sequence != 5 ||
+		truncated.NextSequence != 6 {
+		t.Fatalf("retention-truncated PipelineRun logs=%#v err=%v", truncated, err)
+	}
+
+	var count, digestCount int
+	var sanitized bool
+	if err := admin.QueryRow(
+		ctx,
+		`SELECT count(*),
+		        count(DISTINCT outbox.document->>'requestDigest'),
+		        bool_and(
+		            outbox.document->>'action' = 'devops.pipeline-run.logs-read'
+		            AND outbox.document#>>'{target,kind}' = 'PIPELINE_RUN'
+		            AND outbox.document#>>'{target,id}' = $1
+		            AND outbox.document->>'result' = 'SUCCEEDED'
+		            AND outbox.document->>'iamDecisionId' = $2
+		            AND outbox.document::text NOT LIKE '%test ok%'
+		            AND outbox.document::text NOT LIKE '%executionId%'
+		            AND outbox.document::text NOT LIKE '%contentDigest%'
+		        )
+		   FROM delivery.audit_operations AS operation
+		   JOIN delivery.audit_outbox AS outbox
+		     ON outbox.tenant_id = operation.tenant_id
+		    AND outbox.operation_id = operation.id
+		  WHERE operation.tenant_id = 'tenant-one'
+		    AND operation.operation_kind = 'PIPELINE_RUN_LOG_READ'
+		    AND operation.target_kind = 'PIPELINE_RUN'
+		    AND operation.target_id = $1`,
+		runID, "decision-"+string(runID),
+	).Scan(&count, &digestCount, &sanitized); err != nil ||
+		count != 4 || digestCount != 3 || !sanitized {
+		t.Fatalf("PipelineRun log Audit count=%d digests=%d sanitized=%t err=%v",
+			count, digestCount, sanitized, err)
+	}
+	assertPipelineRunLogReadTamperRejected(t, ctx, admin, apiPool, runID)
+}
+
+func assertPipelineRunLogReadTamperRejected(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	apiPool *pgxpool.Pool,
+	runID devopsv1.ResourceID,
+) {
+	t.Helper()
+	var eventDocument []byte
+	if err := admin.QueryRow(
+		ctx,
+		`SELECT outbox.document
+		   FROM delivery.audit_operations AS operation
+		   JOIN delivery.audit_outbox AS outbox
+		     ON outbox.tenant_id = operation.tenant_id
+		    AND outbox.operation_id = operation.id
+		  WHERE operation.tenant_id = 'tenant-one'
+		    AND operation.operation_kind = 'PIPELINE_RUN_LOG_READ'
+		    AND operation.target_id = $1
+		    AND outbox.document->>'requestId' = 'request-integration'
+		  ORDER BY operation.created_at, operation.id
+		  LIMIT 1`,
+		runID,
+	).Scan(&eventDocument); err != nil {
+		t.Fatalf("load PipelineRun log Audit fixture: %v", err)
+	}
+	var event auditv1.Event
+	if err := json.Unmarshal(eventDocument, &event); err != nil {
+		t.Fatalf("decode PipelineRun log Audit fixture: %v", err)
+	}
+	operation := runcontrol.LogReadOperation{
+		SchemaVersion: "v1", ID: string(event.OperationID), TenantID: "tenant-one",
+		Kind: "READ_PIPELINE_RUN_LOGS", RunID: runID,
+		RequestedBy: devopsv1.SubjectRef{
+			Kind: devopsv1.SubjectKind(event.Actor.Type), ID: string(event.Actor.ID),
+		},
+		IAMDecisionID: string(event.IAMDecisionID), IAMAction: iamv1.ActionDevOpsLogRead,
+		IAMResource:   iamv1.ResourceReference{Kind: iamv1.ResourcePipelineRun, ID: string(runID)},
+		RequestDigest: event.RequestDigest,
+		Target:        event.Target,
+		RequestID:     event.RequestID, CorrelationID: event.CorrelationID,
+		TraceParent: event.TraceParent, CreatedAt: event.OccurredAt,
+	}
+	matched := false
+	for _, cursor := range []uint64{0, 4, 6} {
+		operation.AfterSequence = cursor
+		if runcontrol.ValidateLogReadOperation(operation) == nil {
+			matched = true
+			break
+		}
+	}
+	if !matched || runcontrol.ValidateLogReadSubmission(runcontrol.LogReadSubmission{
+		Operation: operation, AuditEvent: event,
+	}) != nil {
+		t.Fatal("stored PipelineRun log Audit fixture does not reconstruct its Operation")
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(map[string]any, map[string]any)
+	}{
+		{
+			name: "independent log resource",
+			mutate: func(operation, _ map[string]any) {
+				operation["iamResource"].(map[string]any)["kind"] = "PIPELINE_LOG"
+			},
+		},
+		{
+			name: "changed Audit action",
+			mutate: func(_ map[string]any, audit map[string]any) {
+				audit["action"] = string(auditv1.ActionDevOpsPipelineRunCompleted)
+			},
+		},
+		{
+			name: "log content in Audit",
+			mutate: func(_ map[string]any, audit map[string]any) {
+				audit["content"] = "[stdout] forbidden"
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run("database rejects PipelineRun log read "+test.name, func(t *testing.T) {
+			tx, err := apiPool.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = tx.Rollback(context.Background()) }()
+			if _, err := tx.Exec(ctx, "SET LOCAL TIME ZONE 'UTC'"); err != nil {
+				t.Fatal(err)
+			}
+			var tenant string
+			if err := tx.QueryRow(
+				ctx, "SELECT set_config('matrix.devops_tenant_id', 'tenant-one', true)",
+			).Scan(&tenant); err != nil || tenant != "tenant-one" {
+				t.Fatalf("set PipelineRun log tenant=%q err=%v", tenant, err)
+			}
+			var now time.Time
+			if err := tx.QueryRow(ctx, "SELECT transaction_timestamp()").Scan(&now); err != nil {
+				t.Fatal(err)
+			}
+			currentOperation := operation
+			currentOperation.CreatedAt = now.UTC()
+			currentEvent := event
+			currentEvent.OccurredAt = now.UTC()
+			var operationMap, eventMap map[string]any
+			operationBytes, _ := json.Marshal(currentOperation)
+			eventBytes, _ := json.Marshal(currentEvent)
+			if json.Unmarshal(operationBytes, &operationMap) != nil ||
+				json.Unmarshal(eventBytes, &eventMap) != nil {
+				t.Fatal("decode PipelineRun log tamper fixture")
+			}
+			test.mutate(operationMap, eventMap)
+			operationBytes, _ = json.Marshal(operationMap)
+			eventBytes, _ = json.Marshal(eventMap)
+			var page []byte
+			err = tx.QueryRow(
+				ctx,
+				`SELECT page_document FROM delivery.read_pipeline_run_logs(
+				    $1, $2, $3::jsonb, $4::jsonb
+				)`,
+				runID, int64(operation.AfterSequence), operationBytes, eventBytes,
+			).Scan(&page)
+			assertPostgresCode(t, err, "22023")
+		})
+	}
 }
 
 func assertBuildLogTamperRejected(

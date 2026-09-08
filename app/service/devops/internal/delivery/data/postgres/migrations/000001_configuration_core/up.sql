@@ -1136,6 +1136,10 @@ CREATE TABLE IF NOT EXISTS delivery.audit_operations (
                 AND target_id COLLATE "C" ~ '^pipeline-run-[0-9a-f]{48}$'
                 AND id COLLATE "C" ~ '^pipeline-run-[0-9a-f]{48}:terminal:[1-9][0-9]{0,15}$'
                 AND split_part(id, ':', 1) = target_id)
+            OR (operation_kind = 'PIPELINE_RUN_LOG_READ'
+                AND target_kind = 'PIPELINE_RUN'
+                AND target_id COLLATE "C" ~ '^pipeline-run-[0-9a-f]{48}$'
+                AND id COLLATE "C" ~ '^operation-[0-9a-f]{64}$')
             OR (operation_kind = 'SOURCE_HEALTH_OBSERVATION'
                 AND target_kind IN ('SOURCE_CONNECTION', 'REPOSITORY_BINDING')
                 AND id COLLATE "C" ~ '^source-observation-[0-9a-f]{64}$')
@@ -1173,6 +1177,10 @@ ALTER TABLE delivery.audit_operations
                 AND target_id COLLATE "C" ~ '^pipeline-run-[0-9a-f]{48}$'
                 AND id COLLATE "C" ~ '^pipeline-run-[0-9a-f]{48}:terminal:[1-9][0-9]{0,15}$'
                 AND split_part(id, ':', 1) = target_id)
+            OR (operation_kind = 'PIPELINE_RUN_LOG_READ'
+                AND target_kind = 'PIPELINE_RUN'
+                AND target_id COLLATE "C" ~ '^pipeline-run-[0-9a-f]{48}$'
+                AND id COLLATE "C" ~ '^operation-[0-9a-f]{64}$')
             OR (operation_kind = 'SOURCE_HEALTH_OBSERVATION'
                 AND target_kind IN ('SOURCE_CONNECTION', 'REPOSITORY_BINDING')
                 AND id COLLATE "C" ~ '^source-observation-[0-9a-f]{64}$')
@@ -4572,6 +4580,401 @@ GRANT EXECUTE ON FUNCTION delivery.append_build_logs(
     text, text, text, text, bigint, jsonb
 ) TO matrix_devops_worker;
 
+CREATE OR REPLACE FUNCTION delivery.read_pipeline_run_logs(
+    requested_run_id text,
+    requested_after_sequence bigint,
+    submitted_operation jsonb,
+    submitted_audit_event jsonb
+)
+RETURNS TABLE (page_document jsonb)
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text;
+    effective_now timestamptz(6);
+    requested_by_kind text;
+    requested_by_id text;
+    expected_request_digest text;
+    expected_operation_id text;
+    expected_event_id text;
+    selected_chunks jsonb;
+    selected_next_sequence bigint;
+    selected_has_more boolean;
+    selected_truncated boolean;
+    operation_inserted integer;
+    event_inserted integer;
+BEGIN
+    effective_tenant_id := delivery.current_tenant_id();
+    effective_now := transaction_timestamp();
+
+    IF requested_run_id IS NULL
+       OR requested_run_id COLLATE "C" !~ '^pipeline-run-[0-9a-f]{48}$'
+       OR requested_after_sequence IS NULL
+       OR requested_after_sequence NOT BETWEEN 0 AND 8388608
+       OR jsonb_typeof(submitted_operation) IS DISTINCT FROM 'object'
+       OR NOT (submitted_operation ?& ARRAY[
+            'schemaVersion', 'id', 'tenantId', 'kind', 'runId',
+            'requestedBy', 'iamDecisionId', 'iamAction', 'iamResource',
+            'afterSequence', 'requestDigest', 'target', 'requestId',
+            'correlationId', 'createdAt'
+       ])
+       OR (submitted_operation - ARRAY[
+            'schemaVersion', 'id', 'tenantId', 'kind', 'runId',
+            'requestedBy', 'iamDecisionId', 'iamAction', 'iamResource',
+            'afterSequence', 'requestDigest', 'target', 'requestId',
+            'correlationId', 'traceparent', 'createdAt'
+       ]) <> '{}'::jsonb
+       OR jsonb_typeof(submitted_operation->'requestedBy')
+            IS DISTINCT FROM 'object'
+       OR NOT (submitted_operation->'requestedBy' ?& ARRAY['kind', 'id'])
+       OR ((submitted_operation->'requestedBy') - ARRAY['kind', 'id'])
+            <> '{}'::jsonb
+       OR jsonb_typeof(submitted_operation->'iamResource')
+            IS DISTINCT FROM 'object'
+       OR NOT (submitted_operation->'iamResource' ?& ARRAY['kind', 'id'])
+       OR ((submitted_operation->'iamResource') - ARRAY['kind', 'id'])
+            <> '{}'::jsonb
+       OR jsonb_typeof(submitted_operation->'target')
+            IS DISTINCT FROM 'object'
+       OR NOT (submitted_operation->'target' ?& ARRAY['kind', 'id'])
+       OR ((submitted_operation->'target') - ARRAY['kind', 'id'])
+            <> '{}'::jsonb
+       OR jsonb_typeof(submitted_operation->'schemaVersion')
+            IS DISTINCT FROM 'string'
+       OR jsonb_typeof(submitted_operation->'id') IS DISTINCT FROM 'string'
+       OR jsonb_typeof(submitted_operation->'tenantId') IS DISTINCT FROM 'string'
+       OR jsonb_typeof(submitted_operation->'kind') IS DISTINCT FROM 'string'
+       OR jsonb_typeof(submitted_operation->'runId') IS DISTINCT FROM 'string'
+       OR jsonb_typeof(submitted_operation#>'{requestedBy,kind}')
+            IS DISTINCT FROM 'string'
+       OR jsonb_typeof(submitted_operation#>'{requestedBy,id}')
+            IS DISTINCT FROM 'string'
+       OR jsonb_typeof(submitted_operation->'iamDecisionId')
+            IS DISTINCT FROM 'string'
+       OR jsonb_typeof(submitted_operation->'iamAction')
+            IS DISTINCT FROM 'string'
+       OR jsonb_typeof(submitted_operation#>'{iamResource,kind}')
+            IS DISTINCT FROM 'string'
+       OR jsonb_typeof(submitted_operation#>'{iamResource,id}')
+            IS DISTINCT FROM 'string'
+       OR jsonb_typeof(submitted_operation->'afterSequence')
+            IS DISTINCT FROM 'number'
+       OR NOT pg_input_is_valid(
+            COALESCE(submitted_operation->>'afterSequence', ''), 'bigint'
+       )
+       OR jsonb_typeof(submitted_operation->'requestDigest')
+            IS DISTINCT FROM 'string'
+       OR jsonb_typeof(submitted_operation#>'{target,kind}')
+            IS DISTINCT FROM 'string'
+       OR jsonb_typeof(submitted_operation#>'{target,id}')
+            IS DISTINCT FROM 'string'
+       OR jsonb_typeof(submitted_operation->'requestId')
+            IS DISTINCT FROM 'string'
+       OR jsonb_typeof(submitted_operation->'correlationId')
+            IS DISTINCT FROM 'string'
+       OR jsonb_typeof(submitted_operation->'createdAt')
+            IS DISTINCT FROM 'string'
+       OR (submitted_operation ? 'traceparent'
+            AND jsonb_typeof(submitted_operation->'traceparent')
+                IS DISTINCT FROM 'string') THEN
+        RAISE EXCEPTION USING ERRCODE = '22023',
+            MESSAGE = 'PipelineRun log read Operation is invalid';
+    END IF;
+
+    requested_by_kind := submitted_operation#>>'{requestedBy,kind}';
+    requested_by_id := submitted_operation#>>'{requestedBy,id}';
+    IF submitted_operation->>'schemaVersion' IS DISTINCT FROM 'v1'
+       OR submitted_operation->>'tenantId' IS DISTINCT FROM effective_tenant_id
+       OR submitted_operation->>'kind' IS DISTINCT FROM 'READ_PIPELINE_RUN_LOGS'
+       OR submitted_operation->>'runId' IS DISTINCT FROM requested_run_id
+       OR requested_by_kind NOT IN ('USER', 'SERVICE_ACCOUNT')
+       OR COALESCE(requested_by_id, '') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR COALESCE(submitted_operation->>'iamDecisionId', '') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_operation->>'iamAction' IS DISTINCT FROM 'devops.log.read'
+       OR submitted_operation->'iamResource' IS DISTINCT FROM
+            jsonb_build_object('kind', 'PIPELINE_RUN', 'id', requested_run_id)
+       OR (submitted_operation->>'afterSequence')::bigint
+            IS DISTINCT FROM requested_after_sequence
+       OR submitted_operation->'target' IS DISTINCT FROM
+            jsonb_build_object('kind', 'PIPELINE_RUN', 'id', requested_run_id)
+       OR COALESCE(submitted_operation->>'requestId', '') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR COALESCE(submitted_operation->>'correlationId', '') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR (submitted_operation ? 'traceparent' AND (
+            submitted_operation->>'traceparent' COLLATE "C"
+                !~ '^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$'
+       ))
+       OR COALESCE(submitted_operation->>'createdAt', '') COLLATE "C"
+            !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,6})?Z$'
+       OR NOT pg_input_is_valid(
+            COALESCE(submitted_operation->>'createdAt', ''), 'timestamptz'
+       ) THEN
+        RAISE EXCEPTION USING ERRCODE = '22023',
+            MESSAGE = 'PipelineRun log read Operation identity is invalid';
+    END IF;
+    IF (submitted_operation->>'createdAt')::timestamptz
+            IS DISTINCT FROM effective_now THEN
+        RAISE EXCEPTION USING ERRCODE = '22023',
+            MESSAGE = 'PipelineRun log read time is invalid';
+    END IF;
+
+    expected_request_digest := 'sha256:' || encode(sha256(
+        int8send(octet_length(convert_to(
+            'matrix-devops-pipeline-run-log-read-v1', 'UTF8'
+        ))::bigint)
+        || convert_to('matrix-devops-pipeline-run-log-read-v1', 'UTF8')
+        || int8send(octet_length(convert_to(
+            requested_run_id, 'UTF8'
+        ))::bigint) || convert_to(requested_run_id, 'UTF8')
+        || int8send(requested_after_sequence)
+    ), 'hex');
+    IF submitted_operation->>'requestDigest'
+            IS DISTINCT FROM expected_request_digest THEN
+        RAISE EXCEPTION USING ERRCODE = '22023',
+            MESSAGE = 'PipelineRun log read request digest is invalid';
+    END IF;
+
+    expected_operation_id := 'operation-' || encode(sha256(
+        int8send(octet_length(convert_to(
+            'matrix-devops-log-read-operation-v1', 'UTF8'
+        ))::bigint)
+        || convert_to('matrix-devops-log-read-operation-v1', 'UTF8')
+        || int8send(octet_length(convert_to(
+            effective_tenant_id, 'UTF8'
+        ))::bigint) || convert_to(effective_tenant_id, 'UTF8')
+        || int8send(octet_length(convert_to(
+            requested_by_kind, 'UTF8'
+        ))::bigint) || convert_to(requested_by_kind, 'UTF8')
+        || int8send(octet_length(convert_to(
+            requested_by_id, 'UTF8'
+        ))::bigint) || convert_to(requested_by_id, 'UTF8')
+        || int8send(octet_length(convert_to(
+            submitted_operation->>'iamDecisionId', 'UTF8'
+        ))::bigint) || convert_to(submitted_operation->>'iamDecisionId', 'UTF8')
+        || int8send(octet_length(convert_to(
+            submitted_operation->>'requestId', 'UTF8'
+        ))::bigint) || convert_to(submitted_operation->>'requestId', 'UTF8')
+        || int8send(octet_length(convert_to(
+            submitted_operation->>'correlationId', 'UTF8'
+        ))::bigint) || convert_to(submitted_operation->>'correlationId', 'UTF8')
+        || int8send(octet_length(convert_to(
+            COALESCE(submitted_operation->>'traceparent', ''), 'UTF8'
+        ))::bigint) || convert_to(
+            COALESCE(submitted_operation->>'traceparent', ''), 'UTF8'
+        )
+        || int8send(octet_length(convert_to(
+            expected_request_digest, 'UTF8'
+        ))::bigint) || convert_to(expected_request_digest, 'UTF8')
+    ), 'hex');
+    IF submitted_operation->>'id' IS DISTINCT FROM expected_operation_id THEN
+        RAISE EXCEPTION USING ERRCODE = '22023',
+            MESSAGE = 'PipelineRun log read Operation digest is invalid';
+    END IF;
+
+    expected_event_id := 'audit-' || encode(sha256(
+        convert_to('matrix-devops-audit-event-v1', 'UTF8')
+        || decode('00', 'hex')
+        || convert_to(expected_operation_id, 'UTF8')
+    ), 'hex');
+    IF jsonb_typeof(submitted_audit_event) IS DISTINCT FROM 'object'
+       OR NOT (submitted_audit_event ?& ARRAY[
+            'apiVersion', 'kind', 'eventId', 'tenantId', 'actor',
+            'iamDecisionId', 'action', 'target', 'result', 'requestDigest',
+            'requestId', 'correlationId', 'operationId', 'occurredAt'
+       ])
+       OR (submitted_audit_event - ARRAY[
+            'apiVersion', 'kind', 'eventId', 'tenantId', 'actor',
+            'iamDecisionId', 'action', 'target', 'result', 'requestDigest',
+            'requestId', 'correlationId', 'operationId', 'traceparent',
+            'occurredAt'
+       ]) <> '{}'::jsonb
+       OR jsonb_typeof(submitted_audit_event->'actor') IS DISTINCT FROM 'object'
+       OR NOT (submitted_audit_event->'actor' ?& ARRAY['type', 'id'])
+       OR ((submitted_audit_event->'actor') - ARRAY['type', 'id']) <> '{}'::jsonb
+       OR jsonb_typeof(submitted_audit_event->'target') IS DISTINCT FROM 'object'
+       OR NOT (submitted_audit_event->'target' ?& ARRAY['kind', 'id'])
+       OR ((submitted_audit_event->'target') - ARRAY['kind', 'id']) <> '{}'::jsonb
+       OR (submitted_audit_event ? 'traceparent'
+            AND jsonb_typeof(submitted_audit_event->'traceparent')
+                IS DISTINCT FROM 'string')
+       OR submitted_audit_event->>'apiVersion'
+            IS DISTINCT FROM 'audit.matrix.xiak.com/v1'
+       OR submitted_audit_event->>'kind' IS DISTINCT FROM 'AuditEvent'
+       OR submitted_audit_event->>'eventId' IS DISTINCT FROM expected_event_id
+       OR submitted_audit_event->>'tenantId' IS DISTINCT FROM effective_tenant_id
+       OR submitted_audit_event->'actor' IS DISTINCT FROM jsonb_build_object(
+            'type', requested_by_kind, 'id', requested_by_id
+       )
+       OR submitted_audit_event->>'iamDecisionId'
+            IS DISTINCT FROM submitted_operation->>'iamDecisionId'
+       OR submitted_audit_event->>'action'
+            IS DISTINCT FROM 'devops.pipeline-run.logs-read'
+       OR submitted_audit_event->'target' IS DISTINCT FROM
+            jsonb_build_object('kind', 'PIPELINE_RUN', 'id', requested_run_id)
+       OR submitted_audit_event->>'result' IS DISTINCT FROM 'SUCCEEDED'
+       OR submitted_audit_event->>'requestDigest'
+            IS DISTINCT FROM expected_request_digest
+       OR submitted_audit_event->>'requestId'
+            IS DISTINCT FROM submitted_operation->>'requestId'
+       OR submitted_audit_event->>'correlationId'
+            IS DISTINCT FROM submitted_operation->>'correlationId'
+       OR submitted_audit_event->>'operationId'
+            IS DISTINCT FROM expected_operation_id
+       OR COALESCE(submitted_audit_event->>'traceparent', '')
+            IS DISTINCT FROM COALESCE(submitted_operation->>'traceparent', '')
+       OR COALESCE(submitted_audit_event->>'occurredAt', '') COLLATE "C"
+            !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,6})?Z$'
+       OR NOT pg_input_is_valid(
+            COALESCE(submitted_audit_event->>'occurredAt', ''), 'timestamptz'
+       )
+       OR octet_length(submitted_audit_event::text) > 131072 THEN
+        RAISE EXCEPTION USING ERRCODE = '22023',
+            MESSAGE = 'PipelineRun log read Audit fact is invalid';
+    END IF;
+    IF (submitted_audit_event->>'occurredAt')::timestamptz
+            IS DISTINCT FROM effective_now THEN
+        RAISE EXCEPTION USING ERRCODE = '22023',
+            MESSAGE = 'PipelineRun log read Audit time is invalid';
+    END IF;
+
+    PERFORM 1
+      FROM delivery.pipeline_runs AS run
+     WHERE run.tenant_id = effective_tenant_id
+       AND run.id = requested_run_id;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+
+    WITH available AS MATERIALIZED (
+        SELECT log.step_ordinal,
+               log.step_kind,
+               log.expires_at,
+               (chunk.value->>'sequence')::bigint AS sequence,
+               chunk.value->>'content' AS content
+          FROM delivery.pipeline_run_logs AS log
+          CROSS JOIN LATERAL jsonb_array_elements(log.document->'chunks')
+               WITH ORDINALITY AS chunk(value, ordinal)
+         WHERE log.tenant_id = effective_tenant_id
+           AND log.run_id = requested_run_id
+           AND log.expires_at > effective_now
+           AND (chunk.value->>'sequence')::bigint > requested_after_sequence
+         ORDER BY (chunk.value->>'sequence')::bigint
+         LIMIT 5
+    ), numbered AS (
+        SELECT available.*,
+               row_number() OVER (ORDER BY available.sequence) AS page_ordinal
+          FROM available
+    )
+    SELECT COALESCE(
+               jsonb_agg(
+                   jsonb_build_object(
+                       'sequence', numbered.sequence,
+                       'step', jsonb_build_object(
+                           'ordinal', numbered.step_ordinal,
+                           'kind', numbered.step_kind
+                       ),
+                       'content', numbered.content,
+                       'expiresAt', to_char(
+                           numbered.expires_at AT TIME ZONE 'UTC',
+                           'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+                       )
+                   ) ORDER BY numbered.sequence
+               ) FILTER (WHERE numbered.page_ordinal <= 4),
+               '[]'::jsonb
+           ),
+           COALESCE(
+               max(numbered.sequence) FILTER (WHERE numbered.page_ordinal <= 4),
+               requested_after_sequence
+           ),
+           count(*) > 4
+      INTO selected_chunks, selected_next_sequence, selected_has_more
+      FROM numbered;
+
+    SELECT EXISTS (
+        SELECT 1
+          FROM delivery.pipeline_run_logs AS log
+          CROSS JOIN LATERAL jsonb_array_elements(log.document->'chunks')
+               AS chunk(value)
+         WHERE log.tenant_id = effective_tenant_id
+           AND log.run_id = requested_run_id
+           AND log.expires_at <= effective_now
+           AND (chunk.value->>'sequence')::bigint > requested_after_sequence
+    ) INTO selected_truncated;
+
+    INSERT INTO delivery.audit_operations (
+        tenant_id, id, operation_kind, target_kind, target_id, created_at
+    ) VALUES (
+        effective_tenant_id, expected_operation_id,
+        'PIPELINE_RUN_LOG_READ', 'PIPELINE_RUN', requested_run_id, effective_now
+    ) ON CONFLICT (tenant_id, id) DO NOTHING;
+    GET DIAGNOSTICS operation_inserted = ROW_COUNT;
+    IF operation_inserted = 0 AND NOT EXISTS (
+        SELECT 1
+          FROM delivery.audit_operations AS operation
+         WHERE operation.tenant_id = effective_tenant_id
+           AND operation.id = expected_operation_id
+           AND operation.operation_kind = 'PIPELINE_RUN_LOG_READ'
+           AND operation.target_kind = 'PIPELINE_RUN'
+           AND operation.target_id = requested_run_id
+           AND operation.created_at = effective_now
+    ) THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409',
+            MESSAGE = 'PipelineRun log read Operation conflicts';
+    END IF;
+
+    INSERT INTO delivery.audit_outbox (
+        tenant_id, event_id, operation_id, status, available_at, attempts,
+        fencing_token, created_at, updated_at, document
+    ) VALUES (
+        effective_tenant_id, expected_event_id, expected_operation_id,
+        'PENDING', effective_now, 0, 0, effective_now, effective_now,
+        submitted_audit_event
+    ) ON CONFLICT (tenant_id, event_id) DO NOTHING;
+    GET DIAGNOSTICS event_inserted = ROW_COUNT;
+    IF event_inserted = 0 AND NOT EXISTS (
+        SELECT 1
+          FROM delivery.audit_outbox AS outbox
+         WHERE outbox.tenant_id = effective_tenant_id
+           AND outbox.event_id = expected_event_id
+           AND outbox.operation_id = expected_operation_id
+           AND outbox.document = submitted_audit_event
+    ) THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409',
+            MESSAGE = 'PipelineRun log read Audit fact conflicts';
+    END IF;
+
+    page_document := jsonb_build_object(
+        'apiVersion', 'devops.matrix.xiak.com/v1',
+        'kind', 'PipelineRunLogPage',
+        'runId', requested_run_id,
+        'afterSequence', requested_after_sequence,
+        'nextSequence', selected_next_sequence,
+        'chunks', selected_chunks,
+        'hasMore', selected_has_more,
+        'truncated', selected_truncated,
+        'readAt', to_char(
+            effective_now AT TIME ZONE 'UTC',
+            'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+        )
+    );
+    RETURN NEXT;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION delivery.read_pipeline_run_logs(
+    text, bigint, jsonb, jsonb
+) FROM PUBLIC, matrix_devops_worker, matrix_devops_source_fetcher,
+       matrix_devops_source_observer;
+GRANT EXECUTE ON FUNCTION delivery.read_pipeline_run_logs(
+    text, bigint, jsonb, jsonb
+) TO matrix_devops_api;
+
 DROP FUNCTION IF EXISTS delivery.advance_pipeline_run_task(
     text, text, text, text, bigint, text, text
 );
@@ -6726,6 +7129,9 @@ AS $function$
         ) IS NOT NULL
         AND to_regprocedure(
             'delivery.append_build_logs(text,text,text,text,bigint,jsonb)'
+        ) IS NOT NULL
+        AND to_regprocedure(
+            'delivery.read_pipeline_run_logs(text,bigint,jsonb,jsonb)'
         ) IS NOT NULL
         AND to_regprocedure(
             'delivery.complete_build_task(text,text,text,text,bigint,text,text,jsonb,jsonb,jsonb)'

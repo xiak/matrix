@@ -46,6 +46,7 @@
           "devops.pipeline-run.replayed",
           "devops.pipeline-run.cancellation-requested",
           "devops.pipeline-run.completed",
+          "devops.pipeline-run.logs-read",
           "audit.records.read",
           "audit.integrity.verified"
         ],
@@ -872,6 +873,32 @@
                   "properties": {
                     "action": {
                       "const": "devops.pipeline-run.completed"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "DEVOPS"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "devops.pipeline-run.logs-read"
                     }
                   },
                   "required": [
@@ -2247,6 +2274,43 @@
                 "operationId",
                 "outcome",
                 "reason"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "devops.pipeline-run.logs-read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "outcome": false,
+                "reason": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "PIPELINE_RUN"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "iamDecisionId",
+                "operationId"
               ]
             }
           },

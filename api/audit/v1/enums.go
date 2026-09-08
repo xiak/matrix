@@ -60,6 +60,7 @@ const (
 	ActionDevOpsPipelineRunReplayed                 Action = "devops.pipeline-run.replayed"
 	ActionDevOpsPipelineRunCancellationRequested    Action = "devops.pipeline-run.cancellation-requested"
 	ActionDevOpsPipelineRunCompleted                Action = "devops.pipeline-run.completed"
+	ActionDevOpsPipelineRunLogsRead                 Action = "devops.pipeline-run.logs-read"
 
 	ActionAuditRecordsRead       Action = "audit.records.read"
 	ActionAuditIntegrityVerified Action = "audit.integrity.verified"
@@ -190,6 +191,7 @@ var allActions = []Action{
 	ActionDevOpsPipelineRunReplayed,
 	ActionDevOpsPipelineRunCancellationRequested,
 	ActionDevOpsPipelineRunCompleted,
+	ActionDevOpsPipelineRunLogsRead,
 	ActionAuditRecordsRead,
 	ActionAuditIntegrityVerified,
 }
@@ -311,6 +313,10 @@ var actionContracts = map[Action]ActionContract{
 	ActionDevOpsPipelineRunCompleted: {
 		Source: SourceDevOps, Target: TargetPipelineRun, Results: []Result{ResultSucceeded},
 		OperationRequired: true, OutcomeRequired: true,
+	},
+	ActionDevOpsPipelineRunLogsRead: {
+		Source: SourceDevOps, Target: TargetPipelineRun, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, OperationRequired: true,
 	},
 	ActionAuditRecordsRead: {
 		Source: SourceAudit, Target: TargetAuditRecords, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true,

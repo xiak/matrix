@@ -105,7 +105,6 @@ const (
 	ResourceRepositoryBinding     ResourceKind = "REPOSITORY_BINDING"
 	ResourcePipeline              ResourceKind = "PIPELINE"
 	ResourcePipelineRun           ResourceKind = "PIPELINE_RUN"
-	ResourcePipelineLog           ResourceKind = "PIPELINE_LOG"
 	ResourceAuditRecord           ResourceKind = "AUDIT_RECORD"
 	ResourceAuditChain            ResourceKind = "AUDIT_CHAIN"
 	ResourceInstallation          ResourceKind = "INSTALLATION"

@@ -1,0 +1,21 @@
+{
+  "apiVersion": "devops.matrix.xiak.com/v1",
+  "kind": "PipelineRunLogPage",
+  "runId": "pipeline-run-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "afterSequence": 0,
+  "nextSequence": 1,
+  "chunks": [
+    {
+      "sequence": 1,
+      "step": {
+        "ordinal": 1,
+        "kind": "GO_TEST"
+      },
+      "content": "[stdout] test ok\n",
+      "expiresAt": "2026-09-23T03:04:05.123456Z"
+    }
+  ],
+  "hasMore": false,
+  "truncated": false,
+  "readAt": "2026-09-09T03:04:05.123456Z"
+}

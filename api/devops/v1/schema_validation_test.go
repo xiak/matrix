@@ -37,6 +37,7 @@ func TestDevOpsExamplesValidateAgainstOpenAPI(t *testing.T) {
 		"examples/pipeline-activation.json":               "PipelineActivation",
 		"examples/source-event.json":                      "SourceEvent",
 		"examples/pipeline-run.json":                      "PipelineRun",
+		"examples/pipeline-run-log-page.json":             "PipelineRunLogPage",
 		"examples/readiness.json":                         "Readiness",
 		"examples/problem.json":                           "Problem",
 	}
@@ -54,6 +55,28 @@ func TestDevOpsExamplesValidateAgainstOpenAPI(t *testing.T) {
 				t.Fatalf("%s does not satisfy %s: %v", path, schemaName, err)
 			}
 		})
+	}
+}
+
+func TestPipelineRunLogEndpointIsFixedCursorAndPubliclySanitized(t *testing.T) {
+	document := loadDevOpsOpenAPI(t)
+	paths := document["paths"].(map[string]any)
+	operation := paths["/v1/runs/{runId}/logs"].(map[string]any)["get"].(map[string]any)
+	parameters := operation["parameters"].([]any)
+	if len(parameters) != 2 || parameters[0].(map[string]any)["name"] != "runId" ||
+		parameters[1].(map[string]any)["name"] != "afterSequence" {
+		t.Fatalf("PipelineRun log parameters = %#v", parameters)
+	}
+	query := parameters[1].(map[string]any)["schema"].(map[string]any)
+	if query["default"] != float64(0) || query["maximum"] != float64(FixedMaxLogBytes) {
+		t.Fatalf("PipelineRun log cursor schema = %#v", query)
+	}
+	schema := compileDevOpsOpenAPISchema(t, document, "PipelineRunLogPage")
+	page := loadDevOpsSchemaExample(t, "examples/pipeline-run-log-page.json")
+	chunk := page["chunks"].([]any)[0].(map[string]any)
+	chunk["executionId"] = "sha256:" + strings.Repeat("f", 64)
+	if err := schema.Validate(page); err == nil {
+		t.Fatal("executor identity crossed the public PipelineRun log schema")
 	}
 }
 

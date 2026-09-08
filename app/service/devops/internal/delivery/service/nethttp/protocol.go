@@ -36,11 +36,29 @@ func (value *handler) acceptEnvelope(
 	method string,
 	acceptBody bool,
 ) bool {
+	return value.acceptEnvelopeMode(response, request, method, acceptBody, false)
+}
+
+func (value *handler) acceptQueryEnvelope(
+	response http.ResponseWriter,
+	request *http.Request,
+	method string,
+) bool {
+	return value.acceptEnvelopeMode(response, request, method, false, true)
+}
+
+func (value *handler) acceptEnvelopeMode(
+	response http.ResponseWriter,
+	request *http.Request,
+	method string,
+	acceptBody bool,
+	acceptQuery bool,
+) bool {
 	if request.Method != method {
 		methodNotAllowed(response, request, method)
 		return false
 	}
-	if request.URL.RawQuery != "" {
+	if !acceptQuery && request.URL.RawQuery != "" {
 		writeProblem(response, requestID(request), http.StatusBadRequest,
 			devopsv1.ErrorInvalidArgument, "Invalid argument", "query parameters are not accepted", false)
 		return false

@@ -286,6 +286,31 @@ type PipelineRun struct {
 	UpdatedAt   time.Time          `json:"updatedAt"`
 }
 
+// PipelineRunLogChunk is the public, normalized evidence for one verification
+// step. Executor identities, native byte counts, integrity digests, commands,
+// paths, and environment data remain behind the delivery boundary.
+type PipelineRunLogChunk struct {
+	Sequence  uint64           `json:"sequence"`
+	Step      VerificationStep `json:"step"`
+	Content   string           `json:"content"`
+	ExpiresAt time.Time        `json:"expiresAt"`
+}
+
+// PipelineRunLogPage is an exact-cursor, fixed-size page. Truncated is true
+// when retained output after the requested cursor has already expired; an
+// empty page is therefore distinguishable from output that never existed.
+type PipelineRunLogPage struct {
+	APIVersion    string                `json:"apiVersion"`
+	Kind          string                `json:"kind"`
+	RunID         ResourceID            `json:"runId"`
+	AfterSequence uint64                `json:"afterSequence"`
+	NextSequence  uint64                `json:"nextSequence"`
+	Chunks        []PipelineRunLogChunk `json:"chunks"`
+	HasMore       bool                  `json:"hasMore"`
+	Truncated     bool                  `json:"truncated"`
+	ReadAt        time.Time             `json:"readAt"`
+}
+
 type Readiness struct {
 	APIVersion    string         `json:"apiVersion"`
 	Kind          string         `json:"kind"`

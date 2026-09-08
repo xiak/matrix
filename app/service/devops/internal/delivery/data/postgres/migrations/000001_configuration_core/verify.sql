@@ -406,6 +406,8 @@ BEGIN
              'requested_tenant_id text, requested_run_id text, requested_command_id text, requested_worker_id text, expected_fencing_token bigint, requested_lease_seconds integer'),
             ('append_build_logs',
              'requested_tenant_id text, requested_run_id text, requested_command_id text, requested_worker_id text, expected_fencing_token bigint, submitted_batch jsonb'),
+            ('read_pipeline_run_logs',
+             'requested_run_id text, requested_after_sequence bigint, submitted_operation jsonb, submitted_audit_event jsonb'),
             ('complete_build_task',
              'requested_tenant_id text, requested_run_id text, requested_command_id text, requested_worker_id text, expected_fencing_token bigint, requested_state text, requested_reason text, submitted_receipt jsonb, submitted_run_document jsonb, submitted_audit_event jsonb'),
             ('renew_pipeline_run_task',
@@ -587,6 +589,26 @@ BEGIN
        OR has_function_privilege(
             'matrix_devops_api',
             'delivery.append_build_logs(text,text,text,text,bigint,jsonb)',
+            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_devops_api',
+            'delivery.read_pipeline_run_logs(text,bigint,jsonb,jsonb)',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_devops_worker',
+            'delivery.read_pipeline_run_logs(text,bigint,jsonb,jsonb)',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_devops_source_fetcher',
+            'delivery.read_pipeline_run_logs(text,bigint,jsonb,jsonb)',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_devops_source_observer',
+            'delivery.read_pipeline_run_logs(text,bigint,jsonb,jsonb)',
             'EXECUTE'
        )
        OR NOT has_function_privilege(

@@ -232,8 +232,10 @@ BEGIN
         ('devops.project.created', 'DEVOPS', 'DEVOPS_PROJECT', 'SUCCEEDED', true, true, true),
         ('devops.source-connection.created', 'DEVOPS', 'SOURCE_CONNECTION', 'SUCCEEDED', true, true, true),
         ('devops.source-connection.updated', 'DEVOPS', 'SOURCE_CONNECTION', 'SUCCEEDED', true, true, true),
+        ('devops.source-connection.health-transitioned', 'DEVOPS', 'SOURCE_CONNECTION', 'SUCCEEDED', false, false, true),
         ('devops.repository-binding.created', 'DEVOPS', 'REPOSITORY_BINDING', 'SUCCEEDED', true, true, true),
         ('devops.repository-binding.updated', 'DEVOPS', 'REPOSITORY_BINDING', 'SUCCEEDED', true, true, true),
+        ('devops.repository-binding.health-transitioned', 'DEVOPS', 'REPOSITORY_BINDING', 'SUCCEEDED', false, false, true),
         ('devops.pipeline.created', 'DEVOPS', 'PIPELINE', 'SUCCEEDED', true, true, true),
         ('devops.pipeline.draft-updated', 'DEVOPS', 'PIPELINE', 'SUCCEEDED', true, true, true),
         ('devops.pipeline-revision.activated', 'DEVOPS', 'PIPELINE_REVISION', 'SUCCEEDED', true, true, true),
@@ -242,6 +244,7 @@ BEGIN
         ('devops.pipeline-run.replayed', 'DEVOPS', 'PIPELINE_RUN', 'ACCEPTED', true, true, true),
         ('devops.pipeline-run.cancellation-requested', 'DEVOPS', 'PIPELINE_RUN', 'ACCEPTED', true, true, true),
         ('devops.pipeline-run.completed', 'DEVOPS', 'PIPELINE_RUN', 'SUCCEEDED', false, false, true),
+        ('devops.pipeline-run.logs-read', 'DEVOPS', 'PIPELINE_RUN', 'SUCCEEDED', true, true, true),
         ('audit.records.read', 'AUDIT', 'AUDIT_RECORDS', 'SUCCEEDED', true, true, false),
         ('audit.integrity.verified', 'AUDIT', 'AUDIT_CHAIN', 'SUCCEEDED', true, true, false)
       ) AS contract(
@@ -683,14 +686,18 @@ BEGIN
             'paas.deployment.rolled-back',
             'devops.project.created', 'devops.source-connection.created',
             'devops.source-connection.updated',
+            'devops.source-connection.health-transitioned',
             'devops.repository-binding.created',
-            'devops.repository-binding.updated', 'devops.pipeline.created',
+            'devops.repository-binding.updated',
+            'devops.repository-binding.health-transitioned',
+            'devops.pipeline.created',
             'devops.pipeline.draft-updated',
             'devops.pipeline-revision.activated',
             'devops.source-event.admitted', 'devops.pipeline-run.created',
             'devops.pipeline-run.replayed',
             'devops.pipeline-run.cancellation-requested',
             'devops.pipeline-run.completed',
+            'devops.pipeline-run.logs-read',
             'audit.records.read',
             'audit.integrity.verified'
        ))

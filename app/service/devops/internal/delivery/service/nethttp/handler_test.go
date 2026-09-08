@@ -272,6 +272,59 @@ func TestHandlerReadsAndCancelsPipelineRunThroughExactIAMAuthority(t *testing.T)
 	}
 }
 
+func TestHandlerReadsPipelineRunLogsThroughExactIAMAuthority(t *testing.T) {
+	authorizer := &fakeAuthorizer{}
+	control := newFakeRunControl(t)
+	handler := mustHandlerWithControl(t, authorizer, newFakeWorkflow(t), control)
+	path := "/v1/runs/" + string(control.run.ID) + "/logs?afterSequence=0"
+	request := httptest.NewRequest(http.MethodGet, path, nil)
+	request.Header.Set("Authorization", "Bearer caller-credential")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" ||
+		response.Header().Get("ETag") != "" ||
+		authorizer.request.Action != iamv1.ActionDevOpsLogRead ||
+		authorizer.request.Resource != (iamv1.ResourceReference{
+			Kind: iamv1.ResourcePipelineRun, ID: string(control.run.ID),
+		}) || control.logs.RunID != control.run.ID || control.logs.AfterSequence != 0 {
+		t.Fatalf("log read status=%d headers=%#v authority=%#v query=%#v body=%s",
+			response.Code, response.Header(), authorizer.request, control.logs, response.Body.String())
+	}
+	var page devopsv1.PipelineRunLogPage
+	if err := json.Unmarshal(response.Body.Bytes(), &page); err != nil ||
+		devopsv1.ValidatePipelineRunLogPage(page) != nil ||
+		len(page.Chunks) != 1 || strings.Contains(response.Body.String(), "executionId") ||
+		strings.Contains(response.Body.String(), "contentDigest") {
+		t.Fatalf("public log page=%#v err=%v body=%s", page, err, response.Body.String())
+	}
+}
+
+func TestHandlerRejectsNoncanonicalPipelineRunLogQueriesBeforeIAM(t *testing.T) {
+	authorizer := &fakeAuthorizer{}
+	control := newFakeRunControl(t)
+	handler := mustHandlerWithControl(t, authorizer, newFakeWorkflow(t), control)
+	base := "/v1/runs/" + string(control.run.ID) + "/logs"
+	for _, query := range []string{
+		"?afterSequence=", "?afterSequence=01", "?afterSequence=-1",
+		"?afterSequence=0&afterSequence=1", "?limit=4",
+		"?afterSequence=8388609",
+	} {
+		request := httptest.NewRequest(http.MethodGet, base+query, nil)
+		request.Header.Set("Authorization", "Bearer caller-credential")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		assertProblem(t, response, http.StatusBadRequest, devopsv1.ErrorInvalidArgument)
+	}
+	request := httptest.NewRequest(http.MethodGet, base, strings.NewReader("forbidden"))
+	request.Header.Set("Authorization", "Bearer caller-credential")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	assertProblem(t, response, http.StatusBadRequest, devopsv1.ErrorInvalidArgument)
+	if authorizer.calls != 0 || control.logCalls != 0 {
+		t.Fatal("invalid log read crossed the IAM or run-control boundary")
+	}
+}
+
 func TestHandlerRejectsPipelineRunCancellationBodyAndMissingGuardBeforeIAM(t *testing.T) {
 	authorizer := &fakeAuthorizer{}
 	control := newFakeRunControl(t)
@@ -433,11 +486,14 @@ func mustHandlerWithControl(
 
 type fakeRunControl struct {
 	run         devopsv1.PipelineRun
+	logPage     devopsv1.PipelineRunLogPage
 	get         runcontrol.GetQuery
+	logs        runcontrol.LogQuery
 	cancel      runcontrol.CancelCommand
 	replay      runcontrol.ReplayCommand
 	err         error
 	getCalls    int
+	logCalls    int
 	cancelCalls int
 	replayCalls int
 }
@@ -475,7 +531,20 @@ func newFakeRunControl(t *testing.T) *fakeRunControl {
 	if err := devopsv1.ValidatePipelineRun(run); err != nil {
 		t.Fatal(err)
 	}
-	return &fakeRunControl{run: run}
+	readAt := now.Add(time.Second)
+	return &fakeRunControl{
+		run: run,
+		logPage: devopsv1.PipelineRunLogPage{
+			APIVersion: devopsv1.APIVersion, Kind: "PipelineRunLogPage",
+			RunID: run.ID, AfterSequence: 0, NextSequence: 1,
+			Chunks: []devopsv1.PipelineRunLogChunk{{
+				Sequence: 1,
+				Step:     devopsv1.VerificationStep{Ordinal: 1, Kind: devopsv1.VerificationStepGoTest},
+				Content:  "[stdout] test ok\n", ExpiresAt: readAt.Add(14 * 24 * time.Hour),
+			}},
+			ReadAt: readAt,
+		},
+	}
 }
 
 func (control *fakeRunControl) Get(
@@ -485,6 +554,24 @@ func (control *fakeRunControl) Get(
 	control.getCalls++
 	control.get = query
 	return control.run, control.err
+}
+
+func (control *fakeRunControl) Logs(
+	_ context.Context,
+	query runcontrol.LogQuery,
+) (devopsv1.PipelineRunLogPage, error) {
+	control.logCalls++
+	control.logs = query
+	if control.err != nil {
+		return devopsv1.PipelineRunLogPage{}, control.err
+	}
+	page := control.logPage
+	page.AfterSequence = query.AfterSequence
+	if query.AfterSequence != 0 {
+		page.NextSequence = query.AfterSequence
+		page.Chunks = []devopsv1.PipelineRunLogChunk{}
+	}
+	return page, nil
 }
 
 func (control *fakeRunControl) Cancel(

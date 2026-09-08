@@ -622,6 +622,86 @@
         ],
         "type": "object"
       },
+      "PipelineRunLogChunk": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "maxLength": 65536,
+            "minLength": 1,
+            "type": "string"
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "sequence": {
+            "maximum": 8388608,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "step": {
+            "$ref": "#/components/schemas/VerificationStep"
+          }
+        },
+        "required": [
+          "content",
+          "expiresAt",
+          "sequence",
+          "step"
+        ],
+        "type": "object"
+      },
+      "PipelineRunLogPage": {
+        "additionalProperties": false,
+        "properties": {
+          "afterSequence": {
+            "maximum": 8388608,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "apiVersion": {
+            "const": "devops.matrix.xiak.com/v1"
+          },
+          "chunks": {
+            "items": {
+              "$ref": "#/components/schemas/PipelineRunLogChunk"
+            },
+            "maxItems": 4,
+            "type": "array"
+          },
+          "hasMore": {
+            "type": "boolean"
+          },
+          "kind": {
+            "const": "PipelineRunLogPage"
+          },
+          "nextSequence": {
+            "maximum": 8388608,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "readAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "runId": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "afterSequence",
+          "apiVersion",
+          "chunks",
+          "hasMore",
+          "kind",
+          "nextSequence",
+          "readAt",
+          "runId",
+          "truncated"
+        ],
+        "type": "object"
+      },
       "PipelineRunReason": {
         "enum": [
           "EVENT_ADMITTED",
@@ -2949,6 +3029,70 @@
           }
         },
         "summary": "Request PipelineRun cancellation"
+      }
+    },
+    "/v1/runs/{runId}/logs": {
+      "get": {
+        "description": "Authorization is evaluated against the exact PipelineRun. The fixed page contains no executor identity, native output, command, environment, credential, digest, or host path; each successful read commits one sanitized Audit fact.",
+        "operationId": "getPipelineRunLogs",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "runId",
+            "required": true,
+            "schema": {
+              "pattern": "^pipeline-run-[0-9a-f]{48}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exclusive normalized-log sequence cursor; omitted means zero.",
+            "in": "query",
+            "name": "afterSequence",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "format": "int64",
+              "maximum": 8388608,
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineRunLogPage"
+                }
+              }
+            },
+            "description": "One authorized, fixed-size page of retained normalized log chunks."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "405": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Read retained normalized PipelineRun logs"
       }
     },
     "/v1/runs/{runId}/replay": {
