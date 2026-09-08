@@ -6,7 +6,7 @@
 - Updated: 2026-09-08
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `32b8035`
+- Current pushed implementation baseline: `3f9322f`
 
 ## Goal
 
@@ -75,6 +75,18 @@ architecture, FEAT, implementation, test, and release gates.
   execution fuzz campaign, and twenty runs in the fixed disconnected Go 1.26.8
   Linux/amd64 image pass. This is parser/sanitizer evidence only: no container
   response is wired to it and no normalized log is persisted yet.
+- Pushed `3f9322f` replaces the private journal state with a schema-v2 ordered
+  step chain. The exact two request steps progress only through durable
+  `PENDING`, `STARTED`, and one closed conclusion; step two cannot start before
+  fsynced step-one success. Archive-free same-runner recovery preserves this
+  chain and may continue the next pending step, while an already-started step
+  must be observed. Cancellation is now representable both before any sandbox
+  effect and during a started step. A terminal receipt must exactly match the
+  stored conclusions, and semantic validation rejects changed/out-of-order
+  replay and recomputed step-chain rollback. The production mTLS round-trip now
+  persists both step conclusions before terminal completion. Full tests/vet,
+  Windows race and twenty-run repetition, and twenty fixed disconnected Linux/
+  amd64 runs pass. No container is created by this slice.
 - Full tests and vet, architecture tests, focused race and 20-run suites, and
   the same focused suites run twenty times in the fixed disconnected Go 1.26.8
   Linux/amd64 image with read-only source and no module lookup. The physical
