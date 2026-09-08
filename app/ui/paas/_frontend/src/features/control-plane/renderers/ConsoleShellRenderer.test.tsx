@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionProvider } from "@/features/auth/application/SessionProvider";
@@ -195,6 +195,44 @@ describe("ConsoleShellRenderer", () => {
 
     const install = screen.getByRole("button", { name: "安装服务" });
     expect(install.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("contains compact navigation focus and restores the menu trigger", async () => {
+    const { user } = await renderConsole();
+    const trigger = await screen.findByRole("button", { name: "打开产品导航" });
+
+    await user.click(trigger);
+
+    const dialog = screen.getByRole("dialog", { name: "产品导航" });
+    const close = within(dialog).getByRole("button", { name: "关闭导航" });
+    const links = within(dialog).getAllByRole("link");
+    await waitFor(() => expect(document.activeElement).toBe(close));
+
+    await user.keyboard("{Shift>}{Tab}{/Shift}");
+    expect(document.activeElement).toBe(links[links.length - 1]);
+    await user.keyboard("{Tab}");
+    expect(document.activeElement).toBe(close);
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+    expect(screen.queryByRole("dialog", { name: "产品导航" })).toBeNull();
+  });
+
+  it("moves focus into the workspace and returns it after Escape", async () => {
+    const { user } = await renderConsole({ section: "installations" });
+    await user.click(await screen.findByRole("button", { name: "收起安装配置" }));
+    const trigger = screen.getByRole("button", { name: "安装服务" });
+
+    await user.click(trigger);
+
+    const workspace = document.getElementById("console-workspace");
+    expect(workspace).toBeTruthy();
+    const close = within(workspace as HTMLElement).getByRole("button", { name: "关闭上下文面板" });
+    await waitFor(() => expect(document.activeElement).toBe(close));
+    await user.keyboard("{Escape}");
+
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
   });
 
   it("supports global search and keyboard navigation in preview mode", async () => {

@@ -339,6 +339,11 @@ The interaction contract includes:
 - contextual workspaces are opened by business-task labels such as `激活配额`
   and `安装服务`, not generic panel terminology; their expanded labels state
   exactly which configuration or status surface will be collapsed;
+- compact product-navigation and contextual-workspace drawers move focus into
+  the active surface, keep `Tab` and `Shift+Tab` within it, and return focus to
+  the invoking control when `Escape` dismisses it. The persistent desktop
+  product navigation remains an ordinary navigation region rather than a
+  modal focus context;
 - operation history supports keyword and lifecycle-state filtering, announces
   the result count, and uses native summary disclosure for structured audit
   context and state-specific next-step guidance;
@@ -462,7 +467,7 @@ and `git diff --check` gates must pass on the same committed worktree.
   public-component chain, twelve static routes, memory-only IAM sessions,
   deterministic Go embedding, strict CSP hashes, and a four-region shell.
   The console layout retains its provider across child-route navigation.
-  Source gates cover the light theme, 20 semantic contrast pairs, and 78
+  Source gates cover the light theme, 20 semantic contrast pairs, and 80
   frontend tests, including visible failed revocation, logout during failed
   or pending resource loads, keyboard workspace sizing, and native instance-ID
   validation. The installed `44fa1c7` candidate proves the light login page,

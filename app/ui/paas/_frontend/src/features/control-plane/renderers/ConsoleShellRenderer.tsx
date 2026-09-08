@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -167,6 +168,35 @@ const workspaceActions = {
   primary: boolean;
 }>;
 
+const focusableControlSelector = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  '[tabindex="0"]:not([role="separator"])'
+].join(",");
+
+function loopOverlayFocus(
+  event: ReactKeyboardEvent<HTMLElement>,
+  container: HTMLElement | null
+) {
+  if (event.key !== "Tab" || !container) return;
+  const controls = Array.from(
+    container.querySelectorAll<HTMLElement>(focusableControlSelector)
+  ).filter((control) => control.getAttribute("aria-hidden") !== "true");
+  const first = controls[0];
+  const last = controls[controls.length - 1];
+  if (!first || !last) return;
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
 function SearchResult({ active, index, item, onChoose, onHover }: {
   active: boolean;
   index: number;
@@ -197,6 +227,13 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
   const controlPlane = useControlPlane();
   const scene = controlPlane.scene;
   const searchInput = useRef<HTMLInputElement>(null);
+  const sidebarPanel = useRef<HTMLDivElement>(null);
+  const sidebarTrigger = useRef<HTMLButtonElement>(null);
+  const sidebarCloseButton = useRef<HTMLButtonElement>(null);
+  const workspacePanel = useRef<HTMLElement>(null);
+  const workspaceTrigger = useRef<HTMLButtonElement>(null);
+  const workspaceCloseButton = useRef<HTMLButtonElement>(null);
+  const workspaceFocusRequested = useRef(false);
   const sidebarOverlayOpen = useConsoleUiStore((state) => state.sidebarOverlayOpen);
   const workspaceOpen = useConsoleUiStore((state) => state.workspaceOpen);
   const openSidebar = useConsoleUiStore((state) => state.openSidebar);
@@ -214,6 +251,17 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
   const [searchQuery, setSearchQuery] = useState("");
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
 
+  const closeSidebarAndRestoreFocus = useCallback(() => {
+    const shouldRestore = sidebarOverlayOpen;
+    closeSidebar();
+    if (shouldRestore) window.setTimeout(() => sidebarTrigger.current?.focus(), 0);
+  }, [closeSidebar, sidebarOverlayOpen]);
+
+  const closeWorkspaceAndRestoreFocus = useCallback(() => {
+    closeWorkspace();
+    window.setTimeout(() => workspaceTrigger.current?.focus(), 0);
+  }, [closeWorkspace]);
+
   const searchResults = useMemo(() => {
     if (!scene) return [];
     const normalized = searchQuery.trim().toLocaleLowerCase("zh-CN");
@@ -223,6 +271,16 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
       : scene.search;
     return results.slice(0, 8);
   }, [scene, searchQuery]);
+
+  useEffect(() => {
+    if (sidebarOverlayOpen) sidebarCloseButton.current?.focus();
+  }, [sidebarOverlayOpen]);
+
+  useEffect(() => {
+    if (!workspaceOpen || !workspaceFocusRequested.current) return;
+    workspaceFocusRequested.current = false;
+    workspaceCloseButton.current?.focus();
+  }, [workspaceOpen]);
 
   useEffect(() => {
     const shortcuts = (event: KeyboardEvent) => {
@@ -236,18 +294,34 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
         searchInput.current?.focus();
       }
       if (event.key === "Escape") {
-        closeSidebar();
-        closeWorkspace();
-        setProductMenuOpen(false);
-        setScopeOpen(false);
-        setNoticesOpen(false);
-        setAccountMenuOpen(false);
-        setSearchOpen(false);
+        if (productMenuOpen || scopeOpen || noticesOpen || accountMenuOpen || searchOpen) {
+          setProductMenuOpen(false);
+          setScopeOpen(false);
+          setNoticesOpen(false);
+          setAccountMenuOpen(false);
+          setSearchOpen(false);
+          return;
+        }
+        if (sidebarOverlayOpen) {
+          closeSidebarAndRestoreFocus();
+          return;
+        }
+        if (workspaceOpen) closeWorkspaceAndRestoreFocus();
       }
     };
     window.addEventListener("keydown", shortcuts);
     return () => window.removeEventListener("keydown", shortcuts);
-  }, [closeSidebar, closeWorkspace]);
+  }, [
+    accountMenuOpen,
+    closeSidebarAndRestoreFocus,
+    closeWorkspaceAndRestoreFocus,
+    noticesOpen,
+    productMenuOpen,
+    scopeOpen,
+    searchOpen,
+    sidebarOverlayOpen,
+    workspaceOpen
+  ]);
 
   async function logout() {
     if (await session.logout()) {
@@ -323,6 +397,38 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
     };
     window.addEventListener("pointermove", update);
     window.addEventListener("pointerup", finish);
+  }
+
+  function toggleWorkspaceWithFocus() {
+    if (workspaceVisible) {
+      closeWorkspaceAndRestoreFocus();
+      return;
+    }
+    workspaceFocusRequested.current = true;
+    toggleWorkspace();
+  }
+
+  function handleSidebarKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (!sidebarOverlayOpen) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeSidebarAndRestoreFocus();
+      return;
+    }
+    loopOverlayFocus(event, sidebarPanel.current);
+  }
+
+  function handleWorkspaceKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeWorkspaceAndRestoreFocus();
+      return;
+    }
+    if (typeof window.matchMedia === "function" && window.matchMedia("(max-width: 920px)").matches) {
+      loopOverlayFocus(event, workspacePanel.current);
+    }
   }
 
   return (
@@ -433,30 +539,38 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
           <Layout>
             <Sider className={styles.sider}>
               <Sider.RailMenu aria-label="产品导航" className={styles.rail}>
-                <Link aria-label="控制台首页" className={styles.railHome} href="/console/" onClick={closeSidebar}><LayoutDashboard aria-hidden="true" /></Link>
+                <Link aria-label="控制台首页" className={styles.railHome} href="/console/" onClick={closeSidebarAndRestoreFocus}><LayoutDashboard aria-hidden="true" /></Link>
                 <span className={styles.railDivider} />
                 {scene.rail.slice(1).map((item) => {
                   const Icon = railIcons[item.icon];
                   return (
-                    <Link aria-current={item.selected ? "page" : undefined} aria-label={item.label} className={styles.railItem} data-selected={item.selected ? "true" : undefined} href={item.href} key={item.id} onClick={closeSidebar}>
+                    <Link aria-current={item.selected ? "page" : undefined} aria-label={item.label} className={styles.railItem} data-selected={item.selected ? "true" : undefined} href={item.href} key={item.id} onClick={closeSidebarAndRestoreFocus}>
                       <span className={styles.railIndicator} /><Icon aria-hidden="true" /><span className={styles.railTooltip}>{item.label}</span>
                     </Link>
                   );
                 })}
               </Sider.RailMenu>
 
-              <Sider.ContextMenu className={styles.contextMenu}>
+              <Sider.ContextMenu
+                aria-label={sidebarOverlayOpen ? "产品导航" : undefined}
+                aria-modal={sidebarOverlayOpen ? true : undefined}
+                className={styles.contextMenu}
+                id="console-product-navigation"
+                onKeyDown={handleSidebarKeyDown}
+                ref={sidebarPanel}
+                role={sidebarOverlayOpen ? "dialog" : undefined}
+              >
                 <div className={styles.contextHeader}>
                   <span className={styles.contextProductIcon}><ProductContextIcon aria-hidden="true" /></span>
                   <div><Typography.Eyebrow>{scene.productEyebrow}</Typography.Eyebrow><strong>{scene.productName}</strong></div>
-                  <button aria-label="关闭导航" className={styles.contextCloseButton} onClick={closeSidebar} type="button"><X aria-hidden="true" /></button>
+                  <button aria-label="关闭导航" className={styles.contextCloseButton} onClick={closeSidebarAndRestoreFocus} ref={sidebarCloseButton} type="button"><X aria-hidden="true" /></button>
                 </div>
                 <nav aria-label="控制台导航" className={styles.contextNavigation}>
                   <p>功能导航</p>
                   {scene.navigation.map((item) => {
                     const Icon = navigationIcons[item.icon];
                     return (
-                      <Link aria-current={item.selected ? "page" : undefined} className={styles.contextItem} data-selected={item.selected ? "true" : undefined} href={item.href} key={item.id} onClick={closeSidebar}>
+                      <Link aria-current={item.selected ? "page" : undefined} className={styles.contextItem} data-selected={item.selected ? "true" : undefined} href={item.href} key={item.id} onClick={closeSidebarAndRestoreFocus}>
                         <Icon aria-hidden="true" /><span><strong>{item.label}</strong><small>{item.description}</small></span>{typeof item.count === "number" ? <em>{item.count}</em> : null}
                       </Link>
                     );
@@ -470,18 +584,18 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
               <Sider.ResizeHandle />
             </Sider>
 
-            <button aria-label="关闭导航" className={styles.overlayBackdrop} onClick={closeSidebar} type="button" />
+            <button aria-hidden="true" aria-label="关闭导航" className={styles.overlayBackdrop} onClick={closeSidebarAndRestoreFocus} tabIndex={-1} type="button" />
 
             <Layout.Content>
               <ContentPage>
                 <ContentPage.Header>
                   <div className={styles.pageHeading}>
-                    <button aria-label="打开产品导航" className={styles.mobileMenuButton} onClick={openSidebar} type="button"><Menu aria-hidden="true" /></button>
+                    <button aria-controls="console-product-navigation" aria-expanded={sidebarOverlayOpen} aria-label="打开产品导航" className={styles.mobileMenuButton} onClick={openSidebar} ref={sidebarTrigger} type="button"><Menu aria-hidden="true" /></button>
                     <div><span className={styles.breadcrumb}>{scene.productName}<ChevronRight aria-hidden="true" />{scene.title}</span><Typography.Title as="h1" level={2}>{scene.title}</Typography.Title></div>
                   </div>
                   <div className={styles.pageActions}>
                     {scene.section !== "access" ? <Button aria-label="刷新" disabled={controlPlane.loading} onClick={() => void controlPlane.reload()} size="small" variant="ghost"><RefreshCcw aria-hidden="true" /><span>刷新</span></Button> : null}
-                    {workspaceAction && WorkspaceActionIcon ? <Button aria-controls="console-workspace" aria-expanded={workspaceVisible} aria-label={workspaceVisible ? workspaceAction.expanded : workspaceAction.collapsed} onClick={toggleWorkspace} size="small" variant={workspaceVisible || !workspaceAction.primary ? "secondary" : "primary"}>{workspaceVisible ? <PanelRightClose aria-hidden="true" /> : <WorkspaceActionIcon aria-hidden="true" />}<span>{workspaceVisible ? workspaceAction.expanded : workspaceAction.collapsed}</span></Button> : null}
+                    {workspaceAction && WorkspaceActionIcon ? <Button aria-controls="console-workspace" aria-expanded={workspaceVisible} aria-label={workspaceVisible ? workspaceAction.expanded : workspaceAction.collapsed} onClick={toggleWorkspaceWithFocus} ref={workspaceTrigger} size="small" variant={workspaceVisible || !workspaceAction.primary ? "secondary" : "primary"}>{workspaceVisible ? <PanelRightClose aria-hidden="true" /> : <WorkspaceActionIcon aria-hidden="true" />}<span>{workspaceVisible ? workspaceAction.expanded : workspaceAction.collapsed}</span></Button> : null}
                   </div>
                 </ContentPage.Header>
                 <ContentPage.Body>
@@ -513,8 +627,8 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
               </ContentPage>
             </Layout.Content>
 
-            <button aria-label="关闭上下文面板" className={styles.workspaceBackdrop} onClick={closeWorkspace} type="button" />
-            <Layout.Workspace className={styles.workspacePane} data-size={workspaceSize} data-visible={workspaceVisible ? "true" : "false"} id="console-workspace">
+            <button aria-hidden="true" aria-label="关闭上下文面板" className={styles.workspaceBackdrop} onClick={closeWorkspaceAndRestoreFocus} tabIndex={-1} type="button" />
+            <Layout.Workspace className={styles.workspacePane} data-size={workspaceSize} data-visible={workspaceVisible ? "true" : "false"} id="console-workspace" onKeyDown={handleWorkspaceKeyDown} ref={workspacePanel}>
               <div
                 aria-label="调整上下文面板宽度"
                 aria-orientation="vertical"
@@ -534,7 +648,7 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
                 role="separator"
                 tabIndex={0}
               />
-              <button aria-label="关闭上下文面板" className={styles.workspaceCloseButton} onClick={closeWorkspace} type="button"><X aria-hidden="true" /></button>
+              <button aria-label="关闭上下文面板" className={styles.workspaceCloseButton} onClick={closeWorkspaceAndRestoreFocus} ref={workspaceCloseButton} type="button"><X aria-hidden="true" /></button>
               {scene.workspace ? <ConsoleWorkspaceRenderer scene={scene.workspace} /> : null}
             </Layout.Workspace>
           </Layout>
