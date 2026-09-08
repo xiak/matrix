@@ -6,7 +6,7 @@
 - Updated: 2026-09-08
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `3f9322f`
+- Current pushed implementation baseline: `8679c2f`
 
 ## Goal
 
@@ -17,83 +17,31 @@ architecture, FEAT, implementation, test, and release gates.
 ## Current milestone
 
 - FEAT-007 remains the authoritative owner and is `In progress`; read it and
-  the directly owning code/tests before continuing.
-- Pushed `c9acd5f` adds the outbound-only production runner client and its
-  independent private journal behind the strict TLS 1.3 gateway. Canonical
-  assignment metadata and a complete-request digest bind staging before archive
-  consumption; verified source is atomically published before an effect marker,
-  then immutable generations preserve renewal, cancellation, recovery fencing,
-  normalized terminal receipt, and acknowledgement. Certificate-derived runner
-  identity, OS-exclusive directory ownership, strict file shape, and archive,
-  request, state-chain, identity, symlink, and restart checks fail closed. A real
-  mTLS journey persists claim through acknowledgement and recovers it after
-  restart without giving the journal any network, database, product, provider,
-  Docker, or process-execution authority.
-- Pushed `83bde3c` composes the physical table-blind build-worker command from
-  its PostgreSQL repository, read-only archive store, strict mTLS admin client,
-  independent heartbeat, and readiness endpoint. A shared protected client-
-  certificate loader binds exact SPIFFE identity and pinned server roots, while
-  architecture tests deny provider, runner, Docker, IAM, Audit, and PaaS
-  authority. Its focused suites pass race/repetition and fixed disconnected
-  Linux/amd64 tests with read-only source/module cache and lookup disabled.
-- Pushed `3cd0607` adds the runner's closed Docker Engine API `v1.46`
-  boundary over a protected root-owned Unix socket. Preflight fails before
-  claim unless Docker `29.x`, Linux/amd64, `runsc`, resource-limit support,
-  node capacity, installation-owned free storage, the pinned image ID/digest,
-  and a trusted negative-isolation probe all pass. Host-side inspection binds
-  the probe's image, command, environment, runtime, no-network/no-IPC,
-  read-only root, empty authority, resource limits, terminal state, and network
-  attachment; outcome ambiguity is cleaned by randomized controlled name. The
-  same adapter derives immutable `go test`/`go vet` container requests with
-  exact user, environment, read-only source mount, and bounded tmpfs, but does
-  not execute them yet. Unit, race, repetition, fixed disconnected Linux Unix-
-  socket, and real read-only Docker `29.6.2` evidence pass; the current Docker
-  Desktop host correctly fails closed because `runsc` is absent, which is not
-  gVisor-isolation evidence.
-- Pushed `b796b51` adds the OS-exclusive, runner-bound workspace store between
-  the journal archive and sandbox request. The shared archive codec now visits
-  bounded regular-file members without surrendering gzip/tar validation; the
-  workspace independently rehashes compressed input, atomically publishes
-  fsynced `0444`/`0555` content beneath `os.Root`, and seals a canonical full-
-  request/execution/archive/tree manifest. Equal reuse and restart rescan every
-  file and require archive, manifest, globally sorted content/mode digest, and
-  exact parent-directory set to agree. Foreign identity, changed request or
-  input, link, special/extra/writable entries, file-directory collision,
-  cancellation, unsafe roots, abandoned staging, and close ambiguity fail
-  closed. Windows race/repetition and fixed disconnected Linux/amd64 suites
-  pass, including the Linux handoff of only this source root to both immutable
-  Docker step plans; no repository code executes yet.
-- Pushed `32b8035` adds the runner-owned, run-shared native-output boundary.
-  A strict Docker multiplex decoder reconstructs split stdout/stderr lines and
-  emits monotonic UTF-8 chunks while independently bounding native and
-  normalized bytes to 8 MiB, lines to 16 KiB, and chunks to 64 KiB. Unsafe
-  lines are replaced in full for invalid UTF-8, control/ANSI bytes, credential-
-  shaped assignments and token formats, URL user information, absolute Unix,
-  drive, or UNC paths, and overlong content. Malformed, truncated, empty, or
-  over-budget streams poison the shared budget so a partial parse cannot be
-  resumed. Full tests/vet, Windows race and twenty-run repetition, a 547,883-
-  execution fuzz campaign, and twenty runs in the fixed disconnected Go 1.26.8
-  Linux/amd64 image pass. This is parser/sanitizer evidence only: no container
-  response is wired to it and no normalized log is persisted yet.
-- Pushed `3f9322f` replaces the private journal state with a schema-v2 ordered
-  step chain. The exact two request steps progress only through durable
-  `PENDING`, `STARTED`, and one closed conclusion; step two cannot start before
-  fsynced step-one success. Archive-free same-runner recovery preserves this
-  chain and may continue the next pending step, while an already-started step
-  must be observed. Cancellation is now representable both before any sandbox
-  effect and during a started step. A terminal receipt must exactly match the
-  stored conclusions, and semantic validation rejects changed/out-of-order
-  replay and recomputed step-chain rollback. The production mTLS round-trip now
-  persists both step conclusions before terminal completion. Full tests/vet,
-  Windows race and twenty-run repetition, and twenty fixed disconnected Linux/
-  amd64 runs pass. No container is created by this slice.
-- Full tests and vet, architecture tests, focused race and 20-run suites, and
-  the same focused suites run twenty times in the fixed disconnected Go 1.26.8
-  Linux/amd64 image with read-only source and no module lookup. The physical
-  dedicated runner process, sandbox lifecycle/cancellation, real response
-  hookup, normalized-log persistence, real cross-process journey, reporter,
-  UI, and offline release remain pending.
-- The user-owned untracked `app/ui/paas/` tree remains untouched.
+  the directly owning code/tests before continuing. Earlier accepted slices are
+  preserved in Git and summarized there rather than repeated here.
+- Pushed `8679c2f` closes the Docker Engine lifecycle for one immutable runner
+  step. The adapter creates and proves a deterministic stopped container,
+  starts only that fixed ID, follows bounded multiplexed output, waits and
+  re-inspects the same ID, closes ordinary and OOM exits, cancels created or
+  running work, and deletes only proved non-running work. Same-name replacement,
+  configuration/state drift, malformed or incomplete responses, and mutating
+  transport ambiguity fail closed without native error disclosure. Fixed
+  blocking `local` log rotation bounds daemon storage, failure cleanup has a
+  ten-second deadline, and post-delete absence is observed.
+- The same pushed slice replaces the pre-v1 journal step record with a
+  digest-bound canonical first-start time. It is fsynced with `STARTED`, remains
+  unchanged on replay/restart, is bounded by the request/lease, and prevents a
+  recovered or later step from renewing or moving the ordered step clock
+  backwards.
+- Evidence on that worktree: full `go test ./...`, full `go vet ./...`, focused
+  Windows race detection with twenty repetitions, and twenty focused runs in
+  the fixed disconnected Go 1.26.8 Linux/amd64 image with read-only source and
+  module cache all pass. The shared output decoder also passed a 746,472-
+  execution fuzz campaign.
+- This proves the sandbox adapter boundary, not physical execution. No runner
+  process yet composes gateway polling, journal recovery, workspace publication,
+  step deadlines, sandbox lifecycle, normalized-log delivery, and receipt
+  completion; repository code therefore still does not execute.
 
 ## Adoption boundary
 
@@ -105,21 +53,17 @@ architecture, FEAT, implementation, test, and release gates.
 
 ## Continuation
 
-Continue FEAT-007 with the smallest independently testable physical-execution
-slice behind the accepted BuildExecutor port: add the Docker Engine lifecycle
-for the already-closed step plans with create/attach/start/wait/inspect/kill/
-delete recovery, fixed step/run deadlines, cancellation, feed the already-
-bounded normalized-output decoder, and verify host-side postconditions; then
-compose the dedicated runner process around gateway client, journal, workspace,
-and sandbox. Do not claim
-repository-code isolation until a dedicated `runsc` node passes the malicious-
-repository and real-runtime gates.
-Keep runner authority away from
-PostgreSQL, source/report credentials, IAM, Audit, PaaS, and admin operations.
-Do not claim repository
-code is isolated until the dedicated Linux/amd64 runner, pinned offline
-toolchain, gVisor, no-egress, resource, malicious-repository, restart, and
-sanitized-log gates really pass; do not couple it to PaaS execution or begin
-formal UI integration before that real boundary passes. Preserve pragmatic
-DDD, replacement-first pre-v1 changes, optional-product isolation, and
-repository-local Git identity `Xiak <Jellal@aliyun.com>`.
+Continue FEAT-007 with the smallest physical-runner vertical slice: compose the
+outbound runner client, private journal, verified workspace, and closed Docker
+sandbox around fixed lease/step/run deadlines and cancellation. Preserve
+observe-before-effect recovery and do not duplicate an already-started step.
+Then add the tenant-leading normalized-log handoff required by that composition.
+
+Do not claim repository-code isolation until a dedicated Linux/amd64 runner
+with the pinned offline toolchain and `runsc` passes the real no-egress,
+resource, malicious-repository, restart, and log-sanitization gates. Keep runner
+authority away from PostgreSQL, source/report credentials, IAM, Audit, PaaS,
+and executor-admin operations. Do not begin formal UI integration before that
+real boundary passes. Preserve pragmatic DDD, replacement-first pre-v1 changes,
+optional-product isolation, and repository-local Git identity
+`Xiak <Jellal@aliyun.com>`.
