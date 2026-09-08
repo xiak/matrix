@@ -64,6 +64,12 @@ func buildDocument() object {
 				"description": "Canonical URI of the created resource.",
 				"schema":      object{"type": "string"},
 			},
+			"RetryAfter": object{
+				"description": "Seconds the caller should wait before retrying the command.",
+				"schema": object{
+					"type": "string", "pattern": `^[1-9][0-9]*$`,
+				},
+			},
 		},
 		Responses: object{
 			"ProblemResponse": object{
@@ -129,6 +135,7 @@ func buildDocument() object {
 			"SourceEventSpec":                openapi31.StructType[devopsv1.SourceEventSpec](),
 			"SourceEvent":                    openapi31.StructType[devopsv1.SourceEvent](),
 			"PipelineRunInput":               openapi31.StructType[devopsv1.PipelineRunInput](),
+			"PipelineRunReplay":              openapi31.StructType[devopsv1.PipelineRunReplay](),
 			"PipelineRunStatus":              openapi31.StructType[devopsv1.PipelineRunStatus](),
 			"PipelineRun":                    openapi31.StructType[devopsv1.PipelineRun](),
 			"Readiness":                      openapi31.StructType[devopsv1.Readiness](),
@@ -217,12 +224,13 @@ func buildPaths() object {
 			"get": readPipelineRevisionOperation(),
 		},
 		"/v1/runs/{runId}": object{
-			"get": readOperation(
-				"getPipelineRun", "Get a PipelineRun", "runId", "PipelineRun",
-			),
+			"get": readPipelineRunOperation(),
 		},
 		"/v1/runs/{runId}/cancel": object{
 			"post": cancelPipelineRunOperation(),
+		},
+		"/v1/runs/{runId}/replay": object{
+			"post": replayPipelineRunOperation(),
 		},
 	}
 }
@@ -265,6 +273,14 @@ func readPipelineRevisionOperation() object {
 		openapi31.PathIDParameter("pipelineId"),
 		openapi31.PathIDParameter("pipelineRevisionId"),
 	}
+	return operation
+}
+
+func readPipelineRunOperation() object {
+	operation := readOperation(
+		"getPipelineRun", "Get a PipelineRun", "runId", "PipelineRun",
+	)
+	operation["parameters"] = []any{pipelineRunIDParameter()}
 	return operation
 }
 
@@ -340,7 +356,40 @@ func cancelPipelineRunOperation() object {
 		"summary":     "Request PipelineRun cancellation",
 		"description": "No caller body is accepted. A run with a possible external effect remains nonterminal with cancellationRequestedAt until the fenced worker observes the same intent.",
 		"parameters": []any{
-			openapi31.PathIDParameter("runId"),
+			pipelineRunIDParameter(),
+			openapi31.ComponentRef("#/components/parameters/IdempotencyKey"),
+			openapi31.ComponentRef("#/components/parameters/IfMatch"),
+		},
+		"responses": responses,
+	}
+}
+
+func replayPipelineRunOperation() object {
+	responses := openapi31.ProblemResponses(
+		"400", "401", "403", "404", "405", "409", "412", "422", "428", "429", "500", "503",
+	)
+	responses["429"] = object{
+		"description": "Queued PipelineRun capacity is exhausted.",
+		"headers": object{
+			"Retry-After": openapi31.ComponentRef("#/components/headers/RetryAfter"),
+		},
+		"content": object{
+			"application/problem+json": object{"schema": openapi31.Ref("Problem")},
+		},
+	}
+	responses["201"] = response(
+		"New queued PipelineRun with the selected run's immutable input.", "PipelineRun",
+		object{
+			"ETag":     openapi31.ComponentRef("#/components/headers/ETag"),
+			"Location": openapi31.ComponentRef("#/components/headers/Location"),
+		},
+	)
+	return object{
+		"operationId": "replayPipelineRun",
+		"summary":     "Replay a terminal PipelineRun",
+		"description": "No caller body is accepted. If-Match selects the exact terminal source version; the new run copies its immutable executor input without consulting mutable configuration.",
+		"parameters": []any{
+			pipelineRunIDParameter(),
 			openapi31.ComponentRef("#/components/parameters/IdempotencyKey"),
 			openapi31.ComponentRef("#/components/parameters/IfMatch"),
 		},
@@ -368,8 +417,25 @@ func opaqueIDSchema() object {
 	}
 }
 
+func pipelineRunIDParameter() object {
+	return object{
+		"name": "runId", "in": "path", "required": true,
+		"schema": object{
+			"type": "string", "pattern": `^pipeline-run-[0-9a-f]{48}$`,
+		},
+	}
+}
+
 func fieldOverlay(owner string, field reflect.StructField, jsonName string, base object) object {
 	switch jsonName {
+	case "sourceRunId":
+		if owner == "PipelineRunReplay" {
+			base = object{"type": "string", "pattern": `^pipeline-run-[0-9a-f]{48}$`}
+		}
+	case "commandId":
+		if owner == "PipelineRunReplay" {
+			base = object{"type": "string", "pattern": `^operation-[0-9a-f]{64}$`}
+		}
 	case "name":
 		base = object{
 			"type": "string", "minLength": 1, "maxLength": 63,

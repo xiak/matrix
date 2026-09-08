@@ -176,6 +176,53 @@ func TestPipelineRunCancellationEndpointAcceptsNoCallerBodyAndRequiresGuards(t *
 	}
 }
 
+func TestPipelineRunReplaySchemaAndEndpointSealTheManualCause(t *testing.T) {
+	document := loadDevOpsOpenAPI(t)
+	runSchema := compileDevOpsOpenAPISchema(t, document, "PipelineRun")
+	run := loadDevOpsSchemaExample(t, "examples/pipeline-run.json")
+	run["replay"] = map[string]any{
+		"sourceRunId": "pipeline-run-" + strings.Repeat("8", 48),
+		"commandId":   "operation-" + strings.Repeat("9", 64),
+		"requestedBy": map[string]any{
+			"kind": string(SubjectUser), "id": "user-replay",
+		},
+	}
+	if err := runSchema.Validate(run); err != nil {
+		t.Fatalf("valid replay cause rejected by schema: %v", err)
+	}
+	run["replay"].(map[string]any)["sourceRunId"] = "pipeline-run-forged"
+	if err := runSchema.Validate(run); err == nil {
+		t.Fatal("noncanonical replay source passed schema validation")
+	}
+
+	paths := document["paths"].(map[string]any)
+	operation := paths["/v1/runs/{runId}/replay"].(map[string]any)["post"].(map[string]any)
+	if _, found := operation["requestBody"]; found {
+		t.Fatal("PipelineRun replay unexpectedly accepts caller-controlled content")
+	}
+	parameters := operation["parameters"].([]any)
+	if len(parameters) != 3 || parameters[0].(map[string]any)["name"] != "runId" ||
+		parameters[1].(map[string]any)["$ref"] != "#/components/parameters/IdempotencyKey" ||
+		parameters[2].(map[string]any)["$ref"] != "#/components/parameters/IfMatch" {
+		t.Fatalf("PipelineRun replay parameters = %#v", parameters)
+	}
+	pathSchema := parameters[0].(map[string]any)["schema"].(map[string]any)
+	if pathSchema["pattern"] != `^pipeline-run-[0-9a-f]{48}$` {
+		t.Fatalf("PipelineRun replay path schema = %#v", pathSchema)
+	}
+	responses := operation["responses"].(map[string]any)
+	created := responses["201"].(map[string]any)
+	headers := created["headers"].(map[string]any)
+	if headers["ETag"] == nil || headers["Location"] == nil {
+		t.Fatalf("PipelineRun replay responses = %#v", responses)
+	}
+	tooManyRequests := responses["429"].(map[string]any)
+	retryHeaders := tooManyRequests["headers"].(map[string]any)
+	if retryHeaders["Retry-After"].(map[string]any)["$ref"] != "#/components/headers/RetryAfter" {
+		t.Fatalf("PipelineRun replay 429 response = %#v", tooManyRequests)
+	}
+}
+
 func TestPipelineRevisionReadBindsParentPipelineAndReadinessIsAnonymous(t *testing.T) {
 	document := loadDevOpsOpenAPI(t)
 	paths := document["paths"].(map[string]any)

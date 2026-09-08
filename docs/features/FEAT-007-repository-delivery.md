@@ -4,7 +4,7 @@
   baseline, Gate A project/Pipeline/source-resource contract, domain,
   configuration transaction/persistence, shared authority, durable run
   admission, authenticated Gitea ingress, fenced run-lifecycle foundation,
-  IAM-authorized run read/cancellation, and terminal Audit facts complete;
+  IAM-authorized run read/cancellation/manual replay, and terminal Audit facts complete;
   source/executor/reporter effects pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
@@ -627,19 +627,34 @@ its current state, loses the old lease/fence, and makes that exact intent due
 for `OBSERVE`; no future stage may begin after the request, but a definitive
 observed success or failure remains truthful.
 
+The same run-control boundary now exposes bodyless
+`POST /v1/runs/{sourceRunId}/replay` for an exact terminal source version. A
+successful command creates a distinct queued PipelineRun while copying the
+source `Input` and `InputDigest` byte-for-byte; a separate top-level cause
+records only the direct source run, deterministic command, and IAM-authorized
+subject. The atomic transaction locks and revalidates the terminal source,
+serializes the existing 32-run tenant queue, writes the new run and
+`REPLAY_PIPELINE_RUN` mutation, and emits one IAM-bound
+`devops.pipeline-run.replayed` fact before any worker intent exists. Equal
+command replay returns its original creation snapshot even if that result has
+since transitioned; changed replay conflicts. Replaying a terminal replay is
+supported without embedding an ancestry chain, while provider-delivery reads
+exclude all replay descendants and keep returning only the original fan-out.
+
 These slices do not complete Gate A. Source health reconciliation and operator
-secret provisioning experience, logs, public manual replay, concurrent
-cross-tenant fairness evidence, remaining runtime quotas, check-receipt Audit
-facts, and pagination remain pending.
+secret provisioning experience, logs, concurrent cross-tenant fairness
+evidence, remaining runtime quotas, check-receipt Audit facts, and pagination
+remain pending.
 
 Current verification evidence:
 
 - `go test ./...`
 - `go vet ./...`
-- `go test -race ./api/devops/v1/... ./app/service/devops/internal/delivery/domain`
-- `go test -count=20 ./api/devops/v1/... ./app/service/devops/internal/delivery/domain`
+- `go test -race` and `go test -count=20` across the DevOps/Audit contracts,
+  delivery domain, admission, run control, HTTP, and PostgreSQL adapter packages
 - five-second native fuzz runs for draft/event digest framing and activation
-  with untrusted repository-binding identifiers
+  with untrusted repository-binding identifiers; the manual-replay identity
+  run completed 512,956 executions
 - Linux/amd64 CGO-disabled cross-build of the new contract and domain packages
 - deterministic OpenAPI generation-drift tests and `git diff --check`
 - real PostgreSQL 18 double-apply and catalog integration tests for the IAM and
@@ -674,13 +689,15 @@ Current verification evidence:
   pending, and signed changed-payload conflict
 - pure lifecycle, run-control, and queue tests covering every legal stage,
   stage-specific failure rejection, immediate versus pending cancellation,
-  future-stage prevention, exact/changed replay, stale versions, mismatched IAM
-  authority, terminal truth and immutability, intent identity, repository
-  drift, and reconciliation bounds; the current five-second transition fuzz
-  run completed 48,645 executions without producing an invalid accepted status
-- strict OpenAPI and HTTP tests proving exact run-read/cancel IAM resources,
-  bodyless cancellation, required `If-Match` and `Idempotency-Key` guards,
-  stable ETags, closed error mappings, and validation before authorization
+  future-stage prevention, direct-source manual replay, equal/changed command
+  replay, stale versions, mismatched IAM authority, terminal truth and
+  immutability, intent identity, repository drift, and reconciliation bounds;
+  the transition fuzz run completed 48,645 executions without producing an
+  invalid accepted status
+- strict OpenAPI and HTTP tests proving exact run-read/cancel/replay IAM
+  resources, bodyless commands, required `If-Match` and `Idempotency-Key`
+  guards, replay `Location`/ETag, closed error mappings, and validation before
+  authorization
 - real PostgreSQL 18 run-lifecycle journey proving data-bearing digest
   backfill, tenant-concealed public reads, immediate queued cancellation,
   pending active cancellation, deterministic `EXECUTE` claims, same-intent
@@ -691,12 +708,19 @@ Current verification evidence:
   tenant ceiling, and API/worker table and function confinement
 - closed Audit/OpenAPI validation and a real PostgreSQL 18 authority journey
   accepting only valid PipelineRun completion outcome/reason pairs; the
-  delivery journey proves six terminal transitions create exactly six atomic,
-  deterministic completion facts, four public cancellation requests create
-  exactly four IAM-bound accepted facts, and nonterminal worker transitions
-  create no completion fact; the fresh journey contains 17 mutations, 16
+  delivery journey proves seven terminal transitions create exactly seven
+  atomic deterministic completion facts, five public cancellation requests
+  create exactly five IAM-bound accepted facts, two manual replays create
+  exactly two IAM-bound accepted facts, and nonterminal worker transitions
+  create no completion fact; both replay generations have no task before a
+  worker claim. The fresh journey contains 20 mutations, 16 SourceEvents, 34
+  PipelineRuns, nine task intents, and 75 Audit operations/outbox facts
+- fixed `10fea16` data-bearing upgrade preserving all 17 mutations, 16
   SourceEvents, 32 PipelineRuns, nine task intents, and 71 Audit
-  operations/outbox facts
+  operations/outbox facts while backfilling each original run's creation
+  operation. A replay through the upgraded API then preserves the selected
+  input exactly, and a further migration reapply/verify preserves the resulting
+  18 mutations, 33 PipelineRuns, and 72 operations/outbox facts
 - fixed `3139ecf` data-bearing upgrade preserving all 13 configuration
   mutations, 16 SourceEvents, 32 PipelineRuns, nine task intents, and 66 Audit
   operations/outbox facts; all three historical cancelled runs gain a

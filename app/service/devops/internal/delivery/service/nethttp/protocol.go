@@ -323,7 +323,7 @@ func writeWorkflowError(response http.ResponseWriter, requestID string, err erro
 			devopsv1.ErrorNotFound, "Not found", "the requested tenant PipelineRun does not exist", false)
 	case errors.Is(err, runcontrol.ErrIdempotencyConflict):
 		writeProblem(response, requestID, http.StatusConflict,
-			devopsv1.ErrorConflict, "Idempotency conflict", "Idempotency-Key was used for a different cancellation", false)
+			devopsv1.ErrorConflict, "Idempotency conflict", "Idempotency-Key was used for a different PipelineRun command", false)
 	case errors.Is(err, runcontrol.ErrResourceVersionConflict):
 		writeProblem(response, requestID, http.StatusPreconditionFailed,
 			devopsv1.ErrorPreconditionFailed, "Precondition failed", "If-Match does not identify the current PipelineRun version", false)
@@ -333,6 +333,13 @@ func writeWorkflowError(response http.ResponseWriter, requestID string, err erro
 	case errors.Is(err, runcontrol.ErrTerminal):
 		writeProblem(response, requestID, http.StatusConflict,
 			devopsv1.ErrorConflict, "Terminal PipelineRun", "a terminal PipelineRun cannot be cancelled", false)
+	case errors.Is(err, runcontrol.ErrNotTerminal):
+		writeProblem(response, requestID, http.StatusConflict,
+			devopsv1.ErrorConflict, "Nonterminal PipelineRun", "only a terminal PipelineRun can be replayed", false)
+	case errors.Is(err, runcontrol.ErrQueueCapacityExceeded):
+		response.Header().Set("Retry-After", "30")
+		writeProblem(response, requestID, http.StatusTooManyRequests,
+			devopsv1.ErrorResourceExhausted, "Queue capacity exhausted", "tenant queued-run capacity is exhausted", true)
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded),
 		errors.Is(err, pipelineconfiguration.ErrRetryableTransaction),
 		errors.Is(err, runcontrol.ErrRetryableTransaction):

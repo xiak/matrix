@@ -477,6 +477,138 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		t.Fatalf("changed PipelineRun cancellation replay error=%v", err)
 	}
 
+	runReplay := runcontrol.ReplayCommand{
+		Authorization: auth(
+			iamv1.ActionDevOpsRunReplay, iamv1.ResourcePipelineRun,
+			cancelledQueued.Value.ID,
+		),
+		SourceRunID:             cancelledQueued.Value.ID,
+		ExpectedResourceVersion: cancelledQueued.Value.Status.ResourceVersion,
+		IdempotencyKey:          "replay-terminal-integration",
+	}
+	replayedRun, err := runController.Replay(ctx, runReplay)
+	if err != nil || replayedRun.Replayed || replayedRun.Value.Replay == nil ||
+		replayedRun.Value.Replay.SourceRunID != cancelledQueued.Value.ID ||
+		replayedRun.Value.Replay.RequestedBy != runReplay.Authorization.Subject ||
+		!reflect.DeepEqual(replayedRun.Value.Input, cancelledQueued.Value.Input) ||
+		replayedRun.Value.InputDigest != cancelledQueued.Value.InputDigest ||
+		replayedRun.Value.Status.State != devopsv1.PipelineRunQueued ||
+		replayedRun.Value.Status.ResourceVersion != 1 {
+		t.Fatalf("replay terminal PipelineRun=%#v err=%v", replayedRun, err)
+	}
+	readReplayedRun, err := runController.Get(ctx, runcontrol.GetQuery{
+		Authorization: auth(
+			iamv1.ActionDevOpsRunRead, iamv1.ResourcePipelineRun, replayedRun.Value.ID,
+		),
+		RunID: replayedRun.Value.ID,
+	})
+	if err != nil || !reflect.DeepEqual(readReplayedRun, replayedRun.Value) {
+		t.Fatalf("read replayed PipelineRun=%#v err=%v", readReplayedRun, err)
+	}
+	exactRunReplay, err := runController.Replay(ctx, runReplay)
+	if err != nil || !exactRunReplay.Replayed ||
+		!reflect.DeepEqual(exactRunReplay.Value, replayedRun.Value) {
+		t.Fatalf("equal manual replay=%#v err=%v", exactRunReplay, err)
+	}
+	changedRunReplay := runReplay
+	changedRunReplay.ExpectedResourceVersion++
+	if _, err := runController.Replay(ctx, changedRunReplay); !errors.Is(err, runcontrol.ErrIdempotencyConflict) {
+		t.Fatalf("changed manual replay error=%v", err)
+	}
+	capacityRunReplay := runReplay
+	capacityRunReplay.IdempotencyKey = "replay-terminal-at-capacity"
+	if _, err := runController.Replay(ctx, capacityRunReplay); !errors.Is(err, runcontrol.ErrQueueCapacityExceeded) {
+		t.Fatalf("manual replay queue-capacity error=%v", err)
+	}
+	nonterminalRun := firstAdmission.Admission.Runs[1]
+	if _, err := runController.Replay(ctx, runcontrol.ReplayCommand{
+		Authorization: auth(
+			iamv1.ActionDevOpsRunReplay, iamv1.ResourcePipelineRun, nonterminalRun.ID,
+		),
+		SourceRunID:             nonterminalRun.ID,
+		ExpectedResourceVersion: nonterminalRun.Status.ResourceVersion,
+		IdempotencyKey:          "replay-nonterminal-integration",
+	}); !errors.Is(err, runcontrol.ErrNotTerminal) {
+		t.Fatalf("nonterminal manual replay error=%v", err)
+	}
+	staleRunReplay := runReplay
+	staleRunReplay.ExpectedResourceVersion--
+	staleRunReplay.IdempotencyKey = "replay-stale-integration"
+	if _, err := runController.Replay(ctx, staleRunReplay); !errors.Is(err, runcontrol.ErrResourceVersionConflict) {
+		t.Fatalf("stale manual replay error=%v", err)
+	}
+	otherTenantReplay := runReplay
+	otherTenantReplay.Authorization.TenantID = "tenant-other"
+	otherTenantReplay.IdempotencyKey = "replay-other-tenant-integration"
+	if _, err := runController.Replay(ctx, otherTenantReplay); !errors.Is(err, runcontrol.ErrNotFound) {
+		t.Fatalf("cross-tenant manual replay error=%v", err)
+	}
+	cancelledReplay, err := runController.Cancel(ctx, runcontrol.CancelCommand{
+		Authorization: auth(
+			iamv1.ActionDevOpsRunCancel, iamv1.ResourcePipelineRun, replayedRun.Value.ID,
+		),
+		RunID:                   replayedRun.Value.ID,
+		ExpectedResourceVersion: replayedRun.Value.Status.ResourceVersion,
+		IdempotencyKey:          "cancel-replayed-run-integration",
+	})
+	if err != nil || cancelledReplay.Value.Replay == nil ||
+		cancelledReplay.Value.Replay.SourceRunID != cancelledQueued.Value.ID ||
+		cancelledReplay.Value.Status.State != devopsv1.PipelineRunCancelled {
+		t.Fatalf("cancel replayed PipelineRun=%#v err=%v", cancelledReplay, err)
+	}
+	exactReplayAfterTransition, err := runController.Replay(ctx, runReplay)
+	if err != nil || !exactReplayAfterTransition.Replayed ||
+		!reflect.DeepEqual(exactReplayAfterTransition.Value, replayedRun.Value) {
+		t.Fatalf("equal replay after result transition=%#v err=%v", exactReplayAfterTransition, err)
+	}
+	descendantReplay, err := runController.Replay(ctx, runcontrol.ReplayCommand{
+		Authorization: auth(
+			iamv1.ActionDevOpsRunReplay, iamv1.ResourcePipelineRun,
+			cancelledReplay.Value.ID,
+		),
+		SourceRunID:             cancelledReplay.Value.ID,
+		ExpectedResourceVersion: cancelledReplay.Value.Status.ResourceVersion,
+		IdempotencyKey:          "replay-replayed-run-integration",
+	})
+	if err != nil || descendantReplay.Value.Replay == nil ||
+		descendantReplay.Value.Replay.SourceRunID != replayedRun.Value.ID ||
+		descendantReplay.Value.Replay.SourceRunID == cancelledQueued.Value.ID ||
+		!reflect.DeepEqual(descendantReplay.Value.Input, cancelledQueued.Value.Input) ||
+		descendantReplay.Value.InputDigest != cancelledQueued.Value.InputDigest {
+		t.Fatalf("replay descendant=%#v err=%v", descendantReplay, err)
+	}
+	var prematureTaskCount int
+	if err := admin.QueryRow(ctx, `SELECT count(*)
+		FROM delivery.pipeline_run_tasks
+		WHERE run_id IN ($1, $2)`, replayedRun.Value.ID, descendantReplay.Value.ID).Scan(
+		&prematureTaskCount,
+	); err != nil || prematureTaskCount != 0 {
+		t.Fatalf("manual replay created executor intent count=%d err=%v", prematureTaskCount, err)
+	}
+	admissionAfterManualReplay, err := ingressUsecase.Receive(ctx, firstAdmissionCommand)
+	if err != nil || !admissionAfterManualReplay.Replayed ||
+		len(admissionAfterManualReplay.Admission.Runs) != 2 ||
+		admissionAfterManualReplay.Admission.Runs[0].Replay != nil ||
+		admissionAfterManualReplay.Admission.Runs[1].Replay != nil {
+		t.Fatalf("source replay included manual descendants=%#v err=%v", admissionAfterManualReplay, err)
+	}
+	forgedReplayTransaction, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := forgedReplayTransaction.Exec(
+		ctx, `SELECT set_config('matrix.devops_tenant_id', 'tenant-one', true)`,
+	); err != nil {
+		t.Fatal(err)
+	}
+	_, err = forgedReplayTransaction.Exec(
+		ctx, `SELECT delivery.commit_pipeline_run_replay(1, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb)`,
+	)
+	assertPostgresCode(t, err, "22023")
+	if err := forgedReplayTransaction.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+
 	assertDenied(t, func() error {
 		_, err := pool.Exec(ctx, `INSERT INTO delivery.projects (tenant_id,id,resource_version,document) VALUES ('tenant-one','forbidden',1,'{}')`)
 		return err
@@ -506,12 +638,26 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		return err
 	})
 	assertDenied(t, func() error {
+		_, err := workerPool.Exec(
+			ctx, `SELECT * FROM delivery.lock_pipeline_run_for_replay($1, $2)`,
+			queuedRun.ID, queuedRun.Status.ResourceVersion,
+		)
+		return err
+	})
+	assertDenied(t, func() error {
+		_, err := workerPool.Exec(
+			ctx, `SELECT delivery.commit_pipeline_run_replay(1, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb)`,
+		)
+		return err
+	})
+	assertDenied(t, func() error {
 		_, err := pool.Exec(ctx, `SELECT count(*) FROM delivery.pipeline_run_tasks`)
 		return err
 	})
 	assertRunLifecyclePersistenceAndFencing(t, ctx, admin, workerPool, runController)
 	assertTerminalAuditFacts(t, ctx, admin)
 	assertCancellationAuditFacts(t, ctx, admin)
+	assertReplayAuditFacts(t, ctx, admin)
 	outbox, err := devopspostgres.NewAuditOutboxRepository(workerPool)
 	if err != nil {
 		t.Fatal(err)
@@ -521,10 +667,10 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		t.Fatalf("DevOps Audit worker readiness=%#v err=%v", workerReadiness, err)
 	}
 	snapshot, err := outbox.Snapshot(ctx)
-	if err != nil || snapshot.Pending != 71 || snapshot.Delivered != 0 {
+	if err != nil || snapshot.Pending != 75 || snapshot.Delivered != 0 {
 		t.Fatalf("initial Audit outbox snapshot=%#v err=%v", snapshot, err)
 	}
-	for index := 0; index < 71; index++ {
+	for index := 0; index < 75; index++ {
 		claim, found, err := outbox.Claim(ctx, "audit-worker-integration", 30*time.Second)
 		if err != nil || !found {
 			t.Fatalf("claim Audit event %d=%#v found=%t err=%v", index, claim, found, err)
@@ -552,7 +698,7 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		t.Fatalf("empty Audit claim=%#v found=%t err=%v", claim, found, err)
 	}
 	snapshot, err = outbox.Snapshot(ctx)
-	if err != nil || snapshot.Delivered != 71 || snapshot.Pending != 0 || snapshot.Leased != 0 ||
+	if err != nil || snapshot.Delivered != 75 || snapshot.Pending != 0 || snapshot.Leased != 0 ||
 		snapshot.Retry != 0 || snapshot.DeadLetter != 0 || snapshot.ExpiredLease != 0 {
 		t.Fatalf("delivered Audit outbox snapshot=%#v err=%v", snapshot, err)
 	}
@@ -579,8 +725,8 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 	); err != nil {
 		t.Fatalf("read delivery evidence: %v", err)
 	}
-	if mutationCount != 17 || sourceEventCount != 16 || runCount != 32 || runTaskCount != 9 ||
-		operationCount != 71 || auditCount != 71 ||
+	if mutationCount != 20 || sourceEventCount != 16 || runCount != 34 || runTaskCount != 9 ||
+		operationCount != 75 || auditCount != 75 ||
 		bindingRevisionCount != 2 || pipelineRevisionCount != 3 {
 		t.Fatalf(
 			"evidence counts mutation=%d event=%d run=%d task=%d operation=%d audit=%d binding=%d pipeline=%d",
@@ -650,10 +796,10 @@ func assertTerminalAuditFacts(t *testing.T, ctx context.Context, admin *pgx.Conn
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if count != 6 || counts[auditv1.OutcomeSucceeded] != 1 ||
-		counts[auditv1.OutcomeCancelled] != 4 || counts[auditv1.OutcomeManualIntervention] != 1 ||
+	if count != 7 || counts[auditv1.OutcomeSucceeded] != 1 ||
+		counts[auditv1.OutcomeCancelled] != 5 || counts[auditv1.OutcomeManualIntervention] != 1 ||
 		counts[auditv1.OutcomeFailed] != 0 || actorCounts["system-devops-run-worker"] != 5 ||
-		actorCounts["system-devops-run-control"] != 1 {
+		actorCounts["system-devops-run-control"] != 2 {
 		t.Fatalf("PipelineRun terminal Audit outcome counts=%#v actors=%#v total=%d", counts, actorCounts, count)
 	}
 }
@@ -702,8 +848,66 @@ func assertCancellationAuditFacts(t *testing.T, ctx context.Context, admin *pgx.
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if count != 4 {
+	if count != 5 {
 		t.Fatalf("PipelineRun cancellation fact count=%d", count)
+	}
+}
+
+func assertReplayAuditFacts(t *testing.T, ctx context.Context, admin *pgx.Conn) {
+	t.Helper()
+	rows, err := admin.Query(ctx, `SELECT operation.target_id, mutation.command_target_id,
+		mutation.document, mutation.result_document, outbox.document
+		FROM delivery.audit_operations AS operation
+		JOIN delivery.mutations AS mutation
+		  ON mutation.tenant_id = operation.tenant_id AND mutation.id = operation.id
+		JOIN delivery.audit_outbox AS outbox
+		  ON outbox.tenant_id = operation.tenant_id AND outbox.operation_id = operation.id
+		WHERE operation.operation_kind = 'PIPELINE_RUN_REPLAY'
+		ORDER BY operation.id`)
+	if err != nil {
+		t.Fatalf("read PipelineRun replay facts: %v", err)
+	}
+	defer rows.Close()
+	count := 0
+	for rows.Next() {
+		var targetID, sourceRunID string
+		var operationDocument, resultDocument, eventDocument []byte
+		if err := rows.Scan(
+			&targetID, &sourceRunID, &operationDocument, &resultDocument, &eventDocument,
+		); err != nil {
+			t.Fatal(err)
+		}
+		var operation runcontrol.ReplayOperation
+		var result devopsv1.PipelineRun
+		var event auditv1.Event
+		if err := json.Unmarshal(operationDocument, &operation); err != nil {
+			t.Fatalf("decode PipelineRun replay Operation: %v", err)
+		}
+		if err := json.Unmarshal(resultDocument, &result); err != nil {
+			t.Fatalf("decode PipelineRun replay result: %v", err)
+		}
+		if err := json.Unmarshal(eventDocument, &event); err != nil {
+			t.Fatalf("decode PipelineRun replay Audit fact: %v", err)
+		}
+		if err := runcontrol.ValidateStoredReplay(runcontrol.StoredReplay{
+			Operation: operation, Result: result,
+		}); err != nil || auditv1.ValidateEventForSource(auditv1.SourceDevOps, event) != nil ||
+			string(operation.SourceRunID) != sourceRunID || string(result.ID) != targetID ||
+			result.Replay == nil || string(result.Replay.CommandID) != operation.ID ||
+			event.Action != auditv1.ActionDevOpsPipelineRunReplayed ||
+			event.Target.ID != targetID || event.Result != auditv1.ResultAccepted ||
+			event.Actor.ID != auditv1.ActorID(operation.RequestedBy.ID) ||
+			string(event.IAMDecisionID) != operation.IAMDecisionID {
+			t.Fatalf("PipelineRun replay operation=%#v result=%#v event=%#v source=%s target=%s err=%v",
+				operation, result, event, sourceRunID, targetID, err)
+		}
+		count++
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("PipelineRun replay fact count=%d", count)
 	}
 }
 
@@ -1099,5 +1303,13 @@ func assertDenied(t *testing.T, action func() error) {
 	var postgresError *pgconn.PgError
 	if !errors.As(err, &postgresError) || postgresError.Code != "42501" {
 		t.Fatalf("database action error=%v, want permission denied", err)
+	}
+}
+
+func assertPostgresCode(t *testing.T, err error, code string) {
+	t.Helper()
+	var postgresError *pgconn.PgError
+	if !errors.As(err, &postgresError) || postgresError.Code != code {
+		t.Fatalf("database action error=%v, want PostgreSQL code %s", err, code)
 	}
 }

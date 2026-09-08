@@ -126,6 +126,67 @@ func TestSourceEventAndPipelineRunContracts(t *testing.T) {
 	}
 }
 
+func TestReplayedPipelineRunPreservesInputAndSealsManualCause(t *testing.T) {
+	source := validPipelineRun(t)
+	completedAt := source.UpdatedAt.Add(time.Second)
+	source.Status = PipelineRunStatus{
+		State: PipelineRunSucceeded, Stage: PipelineRunStageReport,
+		Reason: PipelineRunReasonCompleted, ResourceVersion: 4,
+		ObservedAt: completedAt, CompletedAt: &completedAt,
+	}
+	source.UpdatedAt = completedAt
+	if err := ValidatePipelineRun(source); err != nil {
+		t.Fatalf("validate replay source: %v", err)
+	}
+	commandID := ResourceID("operation-" + strings.Repeat("8", 64))
+	replayedAt := completedAt.Add(time.Microsecond)
+	id, err := ReplayedPipelineRunID(source.Scope, source.ID, commandID, source.InputDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed := PipelineRun{
+		APIVersion: APIVersion, Kind: "PipelineRun", ID: id, Scope: source.Scope,
+		ProjectID: source.ProjectID, PipelineID: source.PipelineID,
+		Input: source.Input, InputDigest: source.InputDigest,
+		Replay: &PipelineRunReplay{
+			SourceRunID: source.ID, CommandID: commandID,
+			RequestedBy: SubjectRef{Kind: SubjectUser, ID: "user-replay"},
+		},
+		Status: PipelineRunStatus{
+			State: PipelineRunQueued, Stage: PipelineRunStageReceive,
+			Reason: PipelineRunReasonEventAdmitted, ResourceVersion: 1,
+			ObservedAt: replayedAt,
+		},
+		CreatedAt: replayedAt, UpdatedAt: replayedAt,
+	}
+	if err := ValidatePipelineRun(replayed); err != nil {
+		t.Fatalf("validate replayed PipelineRun: %v", err)
+	}
+	if replayed.Input != source.Input || replayed.InputDigest != source.InputDigest || replayed.ID == source.ID {
+		t.Fatalf("replay changed immutable executor input: source=%#v replay=%#v", source, replayed)
+	}
+
+	for name, mutate := range map[string]func(*PipelineRun){
+		"source identity": func(value *PipelineRun) { value.Replay.SourceRunID = "run-forged" },
+		"command":         func(value *PipelineRun) { value.Replay.CommandID = "" },
+		"actor":           func(value *PipelineRun) { value.Replay.RequestedBy.ID = "" },
+		"derived identity": func(value *PipelineRun) {
+			value.Replay.CommandID = "operation-" + ResourceID(strings.Repeat("9", 64))
+		},
+		"self reference": func(value *PipelineRun) { value.Replay.SourceRunID = value.ID },
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := replayed
+			cause := *replayed.Replay
+			value.Replay = &cause
+			mutate(&value)
+			if err := ValidatePipelineRun(value); err == nil {
+				t.Fatal("invalid replayed PipelineRun was accepted")
+			}
+		})
+	}
+}
+
 func TestDevOpsExamplesPassExecutableValidation(t *testing.T) {
 	projectRequest := decodeDevOpsExample[CreateDevOpsProjectRequest](t, "examples/create-devops-project-request.json")
 	if err := ValidateCreateDevOpsProjectRequest(projectRequest); err != nil {
@@ -413,6 +474,17 @@ func TestPipelineDigestsAndIdentitiesAreDeterministicAndScoped(t *testing.T) {
 	)
 	if err != nil || changedRun == run.ID {
 		t.Fatalf("PipelineRun revision identity=%q err=%v", changedRun, err)
+	}
+	replayCommand := ResourceID("operation-" + strings.Repeat("8", 64))
+	replayedRun, err := ReplayedPipelineRunID(run.Scope, run.ID, replayCommand, run.InputDigest)
+	if err != nil || replayedRun == run.ID {
+		t.Fatalf("replayed PipelineRun identity=%q err=%v", replayedRun, err)
+	}
+	changedReplay, err := ReplayedPipelineRunID(
+		run.Scope, run.ID, "operation-"+ResourceID(strings.Repeat("9", 64)), run.InputDigest,
+	)
+	if err != nil || changedReplay == replayedRun {
+		t.Fatalf("changed replay command identity=%q err=%v", changedReplay, err)
 	}
 }
 

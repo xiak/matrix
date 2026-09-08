@@ -477,6 +477,9 @@ CREATE TABLE IF NOT EXISTS delivery.pipeline_runs (
     pipeline_revision_digest text COLLATE "C" NOT NULL,
     repository_binding_id text COLLATE "C" NOT NULL,
     repository_binding_digest text COLLATE "C" NOT NULL,
+    replay_of_run_id text COLLATE "C",
+    replay_command_id text COLLATE "C",
+    creation_operation_id text COLLATE "C" NOT NULL,
     state text COLLATE "C" NOT NULL,
     stage text COLLATE "C" NOT NULL,
     reason text COLLATE "C",
@@ -487,8 +490,8 @@ CREATE TABLE IF NOT EXISTS delivery.pipeline_runs (
     updated_at timestamptz(6) NOT NULL,
     document jsonb NOT NULL,
     PRIMARY KEY (tenant_id, id),
-    CONSTRAINT pipeline_runs_event_revision_uq UNIQUE (
-        tenant_id, source_event_id, pipeline_revision_id
+    CONSTRAINT pipeline_runs_replay_command_uq UNIQUE (
+        tenant_id, replay_command_id
     ),
     CONSTRAINT pipeline_runs_source_event_fk FOREIGN KEY (
         tenant_id, source_event_id, source_event_digest, project_id,
@@ -505,6 +508,9 @@ CREATE TABLE IF NOT EXISTS delivery.pipeline_runs (
         tenant_id, id, content_digest, pipeline_id, project_id,
         repository_binding_id, repository_binding_digest
     ),
+    CONSTRAINT pipeline_runs_replay_source_fk FOREIGN KEY (
+        tenant_id, replay_of_run_id
+    ) REFERENCES delivery.pipeline_runs (tenant_id, id),
     CONSTRAINT pipeline_runs_values_valid CHECK (
         tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND id COLLATE "C" ~ '^pipeline-run-[0-9a-f]{48}$'
@@ -595,6 +601,12 @@ ALTER TABLE delivery.pipeline_runs
     ADD COLUMN IF NOT EXISTS input_digest text COLLATE "C";
 ALTER TABLE delivery.pipeline_runs
     ADD COLUMN IF NOT EXISTS cancellation_requested_at timestamptz(6);
+ALTER TABLE delivery.pipeline_runs
+    ADD COLUMN IF NOT EXISTS replay_of_run_id text COLLATE "C";
+ALTER TABLE delivery.pipeline_runs
+    ADD COLUMN IF NOT EXISTS replay_command_id text COLLATE "C";
+ALTER TABLE delivery.pipeline_runs
+    ADD COLUMN IF NOT EXISTS creation_operation_id text COLLATE "C";
 UPDATE delivery.pipeline_runs
    SET input_digest = document->>'inputDigest'
  WHERE input_digest IS NULL;
@@ -616,8 +628,83 @@ UPDATE delivery.pipeline_runs
        )
  WHERE state = 'CANCELLED'
    AND cancellation_requested_at IS NULL;
+UPDATE delivery.pipeline_runs
+   SET creation_operation_id = id
+ WHERE creation_operation_id IS NULL;
 ALTER TABLE delivery.pipeline_runs
     ALTER COLUMN input_digest SET NOT NULL;
+ALTER TABLE delivery.pipeline_runs
+    ALTER COLUMN creation_operation_id SET NOT NULL;
+
+ALTER TABLE delivery.pipeline_runs
+    DROP CONSTRAINT IF EXISTS pipeline_runs_event_revision_uq;
+CREATE UNIQUE INDEX IF NOT EXISTS pipeline_runs_event_revision_original_uq
+    ON delivery.pipeline_runs (
+        tenant_id, source_event_id, pipeline_revision_id
+    )
+    WHERE replay_of_run_id IS NULL;
+
+DO $matrix_pipeline_run_replay_identity$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_constraint
+         WHERE connamespace = 'delivery'::regnamespace
+           AND conname = 'pipeline_runs_replay_command_uq'
+    ) THEN
+        ALTER TABLE delivery.pipeline_runs
+            ADD CONSTRAINT pipeline_runs_replay_command_uq
+            UNIQUE (tenant_id, replay_command_id);
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_constraint
+         WHERE connamespace = 'delivery'::regnamespace
+           AND conname = 'pipeline_runs_replay_source_fk'
+    ) THEN
+        ALTER TABLE delivery.pipeline_runs
+            ADD CONSTRAINT pipeline_runs_replay_source_fk FOREIGN KEY (
+                tenant_id, replay_of_run_id
+            ) REFERENCES delivery.pipeline_runs (tenant_id, id);
+    END IF;
+END
+$matrix_pipeline_run_replay_identity$;
+
+ALTER TABLE delivery.pipeline_runs
+    DROP CONSTRAINT IF EXISTS pipeline_runs_replay_valid;
+ALTER TABLE delivery.pipeline_runs
+    ADD CONSTRAINT pipeline_runs_replay_valid CHECK (
+        (
+            replay_of_run_id IS NULL
+            AND replay_command_id IS NULL
+            AND creation_operation_id = id
+            AND NOT (document ? 'replay')
+        )
+        OR (
+            replay_of_run_id IS NOT NULL
+            AND replay_command_id IS NOT NULL
+            AND creation_operation_id = replay_command_id
+            AND replay_of_run_id <> id
+            AND replay_of_run_id COLLATE "C" ~ '^pipeline-run-[0-9a-f]{48}$'
+            AND replay_command_id COLLATE "C" ~ '^operation-[0-9a-f]{64}$'
+            AND document ? 'replay'
+            AND jsonb_typeof(document->'replay') = 'object'
+            AND (document->'replay') ?& ARRAY[
+                'sourceRunId', 'commandId', 'requestedBy'
+            ]
+            AND ((document->'replay') - ARRAY[
+                'sourceRunId', 'commandId', 'requestedBy'
+            ]) = '{}'::jsonb
+            AND document#>>'{replay,sourceRunId}' = replay_of_run_id
+            AND document#>>'{replay,commandId}' = replay_command_id
+            AND jsonb_typeof(document#>'{replay,requestedBy}') = 'object'
+            AND (document#>'{replay,requestedBy}') ?& ARRAY['kind', 'id']
+            AND ((document#>'{replay,requestedBy}') - ARRAY['kind', 'id']) = '{}'::jsonb
+            AND document#>>'{replay,requestedBy,kind}' IN (
+                'USER', 'SERVICE_ACCOUNT'
+            )
+            AND document#>>'{replay,requestedBy,id}' COLLATE "C"
+                ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        )
+    );
 
 ALTER TABLE delivery.pipeline_runs
     DROP CONSTRAINT IF EXISTS pipeline_runs_cancellation_valid;
@@ -747,7 +834,7 @@ CREATE TABLE IF NOT EXISTS delivery.mutations (
             'CREATE_PROJECT', 'CREATE_SOURCE_CONNECTION', 'UPDATE_SOURCE_CONNECTION',
             'CREATE_REPOSITORY_BINDING', 'UPDATE_REPOSITORY_BINDING',
             'CREATE_PIPELINE', 'UPDATE_PIPELINE_DRAFT', 'ACTIVATE_PIPELINE',
-            'CANCEL_PIPELINE_RUN'
+            'CANCEL_PIPELINE_RUN', 'REPLAY_PIPELINE_RUN'
         )
         AND idempotency_fingerprint COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
         AND request_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
@@ -756,7 +843,13 @@ CREATE TABLE IF NOT EXISTS delivery.mutations (
                 AND command_target_id = target_id
                 AND target_kind = 'PIPELINE_RUN'
                 AND result_kind = 'PipelineRun')
-            OR (mutation_kind <> 'CANCEL_PIPELINE_RUN'
+            OR (mutation_kind = 'REPLAY_PIPELINE_RUN'
+                AND command_target_id <> target_id
+                AND target_kind = 'PIPELINE_RUN'
+                AND result_kind = 'PipelineRun')
+            OR (mutation_kind NOT IN (
+                    'CANCEL_PIPELINE_RUN', 'REPLAY_PIPELINE_RUN'
+                )
                 AND target_kind IN (
                     'DEVOPS_PROJECT', 'SOURCE_CONNECTION',
                     'REPOSITORY_BINDING', 'PIPELINE', 'PIPELINE_REVISION'
@@ -795,7 +888,7 @@ ALTER TABLE delivery.mutations
             'CREATE_PROJECT', 'CREATE_SOURCE_CONNECTION', 'UPDATE_SOURCE_CONNECTION',
             'CREATE_REPOSITORY_BINDING', 'UPDATE_REPOSITORY_BINDING',
             'CREATE_PIPELINE', 'UPDATE_PIPELINE_DRAFT', 'ACTIVATE_PIPELINE',
-            'CANCEL_PIPELINE_RUN'
+            'CANCEL_PIPELINE_RUN', 'REPLAY_PIPELINE_RUN'
         )
         AND idempotency_fingerprint COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
         AND request_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
@@ -804,7 +897,13 @@ ALTER TABLE delivery.mutations
                 AND command_target_id = target_id
                 AND target_kind = 'PIPELINE_RUN'
                 AND result_kind = 'PipelineRun')
-            OR (mutation_kind <> 'CANCEL_PIPELINE_RUN'
+            OR (mutation_kind = 'REPLAY_PIPELINE_RUN'
+                AND command_target_id <> target_id
+                AND target_kind = 'PIPELINE_RUN'
+                AND result_kind = 'PipelineRun')
+            OR (mutation_kind NOT IN (
+                    'CANCEL_PIPELINE_RUN', 'REPLAY_PIPELINE_RUN'
+                )
                 AND target_kind IN (
                     'DEVOPS_PROJECT', 'SOURCE_CONNECTION',
                     'REPOSITORY_BINDING', 'PIPELINE', 'PIPELINE_REVISION'
@@ -842,6 +941,10 @@ CREATE TABLE IF NOT EXISTS delivery.audit_operations (
                 AND target_kind = 'PIPELINE_RUN'
                 AND target_id COLLATE "C" ~ '^pipeline-run-[0-9a-f]{48}$'
                 AND id COLLATE "C" ~ '^operation-[0-9a-f]{64}$')
+            OR (operation_kind = 'PIPELINE_RUN_REPLAY'
+                AND target_kind = 'PIPELINE_RUN'
+                AND target_id COLLATE "C" ~ '^pipeline-run-[0-9a-f]{48}$'
+                AND id COLLATE "C" ~ '^operation-[0-9a-f]{64}$')
             OR (operation_kind = 'PIPELINE_RUN_TERMINAL'
                 AND target_kind = 'PIPELINE_RUN'
                 AND target_id COLLATE "C" ~ '^pipeline-run-[0-9a-f]{48}$'
@@ -872,6 +975,10 @@ ALTER TABLE delivery.audit_operations
                 AND target_kind = 'PIPELINE_RUN'
                 AND target_id COLLATE "C" ~ '^pipeline-run-[0-9a-f]{48}$'
                 AND id COLLATE "C" ~ '^operation-[0-9a-f]{64}$')
+            OR (operation_kind = 'PIPELINE_RUN_REPLAY'
+                AND target_kind = 'PIPELINE_RUN'
+                AND target_id COLLATE "C" ~ '^pipeline-run-[0-9a-f]{48}$'
+                AND id COLLATE "C" ~ '^operation-[0-9a-f]{64}$')
             OR (operation_kind = 'PIPELINE_RUN_TERMINAL'
                 AND target_kind = 'PIPELINE_RUN'
                 AND target_id COLLATE "C" ~ '^pipeline-run-[0-9a-f]{48}$'
@@ -893,6 +1000,7 @@ INSERT INTO delivery.audit_operations (
 SELECT tenant_id, id,
        CASE mutation_kind
            WHEN 'CANCEL_PIPELINE_RUN' THEN 'PIPELINE_RUN_CANCELLATION'
+           WHEN 'REPLAY_PIPELINE_RUN' THEN 'PIPELINE_RUN_REPLAY'
            ELSE 'CONFIGURATION_MUTATION'
        END,
        target_kind, target_id, created_at
@@ -900,6 +1008,9 @@ SELECT tenant_id, id,
 ON CONFLICT (tenant_id, id) DO NOTHING;
 
 DROP POLICY owner_schema_upgrade ON delivery.mutations;
+
+ALTER TABLE delivery.pipeline_runs
+    DROP CONSTRAINT IF EXISTS pipeline_runs_audit_operation_fk;
 
 DO $matrix_audit_operation_constraints$
 BEGIN
@@ -930,7 +1041,7 @@ BEGIN
     ) THEN
         ALTER TABLE delivery.pipeline_runs
             ADD CONSTRAINT pipeline_runs_audit_operation_fk
-            FOREIGN KEY (tenant_id, id)
+            FOREIGN KEY (tenant_id, creation_operation_id)
             REFERENCES delivery.audit_operations (tenant_id, id);
     END IF;
 END
@@ -2076,6 +2187,434 @@ GRANT EXECUTE ON FUNCTION delivery.commit_pipeline_run_cancellation(
     bigint, jsonb, jsonb, jsonb, jsonb
 ) TO matrix_devops_api;
 
+CREATE OR REPLACE FUNCTION delivery.lock_pipeline_run_for_replay(
+    requested_source_run_id text,
+    expected_resource_version bigint
+)
+RETURNS TABLE (run_document jsonb, replayed_at timestamptz(6))
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text;
+    locked_state text;
+    locked_resource_version bigint;
+    locked_completed_at timestamptz(6);
+    locked_updated_at timestamptz(6);
+    locked_document jsonb;
+BEGIN
+    effective_tenant_id := delivery.current_tenant_id();
+    IF effective_tenant_id IS NULL THEN
+        RAISE EXCEPTION USING ERRCODE = '42501',
+            MESSAGE = 'valid transaction-local delivery tenant is required';
+    END IF;
+    IF COALESCE(requested_source_run_id, '') COLLATE "C"
+            !~ '^pipeline-run-[0-9a-f]{48}$'
+       OR expected_resource_version IS NULL
+       OR expected_resource_version NOT BETWEEN 1 AND 9007199254740991 THEN
+        RAISE EXCEPTION USING ERRCODE = '22023',
+            MESSAGE = 'PipelineRun replay selector is invalid';
+    END IF;
+
+    SELECT run.state, run.resource_version, run.completed_at,
+           run.updated_at, run.document
+      INTO locked_state, locked_resource_version, locked_completed_at,
+           locked_updated_at, locked_document
+      FROM delivery.pipeline_runs AS run
+     WHERE run.tenant_id = effective_tenant_id
+       AND run.id = requested_source_run_id
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX404',
+            MESSAGE = 'PipelineRun does not exist';
+    END IF;
+    IF locked_resource_version <> expected_resource_version THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409',
+            MESSAGE = 'PipelineRun version conflict';
+    END IF;
+    IF locked_state NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'MANUAL_INTERVENTION')
+       OR locked_completed_at IS NULL THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX412',
+            MESSAGE = 'nonterminal PipelineRun cannot be replayed';
+    END IF;
+
+    run_document := locked_document;
+    replayed_at := greatest(
+        transaction_timestamp()::timestamptz(6),
+        locked_updated_at + interval '1 microsecond'
+    );
+    RETURN NEXT;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION delivery.lock_pipeline_run_for_replay(text, bigint)
+    FROM PUBLIC, matrix_devops_worker;
+GRANT EXECUTE ON FUNCTION delivery.lock_pipeline_run_for_replay(text, bigint)
+    TO matrix_devops_api;
+
+CREATE OR REPLACE FUNCTION delivery.commit_pipeline_run_replay(
+    expected_resource_version bigint,
+    submitted_run_document jsonb,
+    submitted_operation jsonb,
+    submitted_audit_event jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text;
+    effective_now timestamptz(6);
+    source_run_id text;
+    source_input_digest text;
+    source_event_id text;
+    source_event_digest text;
+    source_pipeline_id text;
+    source_project_id text;
+    source_pipeline_revision_id text;
+    source_pipeline_revision_digest text;
+    source_repository_binding_id text;
+    source_repository_binding_digest text;
+    source_state text;
+    source_resource_version bigint;
+    source_completed_at timestamptz(6);
+    source_updated_at timestamptz(6);
+    source_run_document jsonb;
+    replayed_run_id text;
+    operation_id text;
+    expected_audit_event_id text;
+    queued_run_count bigint;
+BEGIN
+    effective_tenant_id := delivery.current_tenant_id();
+    IF effective_tenant_id IS NULL THEN
+        RAISE EXCEPTION USING ERRCODE = '42501',
+            MESSAGE = 'valid transaction-local delivery tenant is required';
+    END IF;
+    IF expected_resource_version IS NULL
+       OR expected_resource_version NOT BETWEEN 1 AND 9007199254740991
+       OR jsonb_typeof(submitted_run_document) IS DISTINCT FROM 'object'
+       OR jsonb_typeof(submitted_operation) IS DISTINCT FROM 'object'
+       OR jsonb_typeof(submitted_audit_event) IS DISTINCT FROM 'object'
+       OR octet_length(submitted_run_document::text) > 131072
+       OR octet_length(submitted_operation::text) > 131072
+       OR octet_length(submitted_audit_event::text) > 131072 THEN
+        RAISE EXCEPTION USING ERRCODE = '22023',
+            MESSAGE = 'PipelineRun replay documents are invalid';
+    END IF;
+
+    source_run_id := submitted_operation->>'sourceRunId';
+    IF COALESCE(source_run_id, '') COLLATE "C"
+            !~ '^pipeline-run-[0-9a-f]{48}$' THEN
+        RAISE EXCEPTION USING ERRCODE = '22023',
+            MESSAGE = 'PipelineRun replay source is invalid';
+    END IF;
+
+    SELECT run.input_digest, run.source_event_id, run.source_event_digest,
+           run.pipeline_id, run.project_id, run.pipeline_revision_id,
+           run.pipeline_revision_digest, run.repository_binding_id,
+           run.repository_binding_digest, run.state, run.resource_version,
+           run.completed_at, run.updated_at, run.document
+      INTO source_input_digest, source_event_id, source_event_digest,
+           source_pipeline_id, source_project_id, source_pipeline_revision_id,
+           source_pipeline_revision_digest, source_repository_binding_id,
+           source_repository_binding_digest, source_state,
+           source_resource_version, source_completed_at, source_updated_at,
+           source_run_document
+      FROM delivery.pipeline_runs AS run
+     WHERE run.tenant_id = effective_tenant_id
+       AND run.id = source_run_id
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX404',
+            MESSAGE = 'PipelineRun does not exist';
+    END IF;
+    IF source_resource_version <> expected_resource_version THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409',
+            MESSAGE = 'PipelineRun version conflict';
+    END IF;
+    IF source_state NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'MANUAL_INTERVENTION')
+       OR source_completed_at IS NULL THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX412',
+            MESSAGE = 'nonterminal PipelineRun cannot be replayed';
+    END IF;
+    effective_now := greatest(
+        transaction_timestamp()::timestamptz(6),
+        source_updated_at + interval '1 microsecond'
+    );
+
+    replayed_run_id := submitted_run_document->>'id';
+    operation_id := submitted_operation->>'id';
+    IF jsonb_typeof(submitted_run_document->'scope') IS DISTINCT FROM 'object'
+       OR jsonb_typeof(submitted_run_document->'input') IS DISTINCT FROM 'object'
+       OR jsonb_typeof(submitted_run_document->'replay') IS DISTINCT FROM 'object'
+       OR jsonb_typeof(submitted_run_document#>'{replay,requestedBy}') IS DISTINCT FROM 'object'
+       OR jsonb_typeof(submitted_run_document->'status') IS DISTINCT FROM 'object'
+       OR NOT (submitted_run_document ?& ARRAY[
+            'apiVersion', 'kind', 'id', 'scope', 'projectId', 'pipelineId',
+            'input', 'inputDigest', 'replay', 'status', 'createdAt', 'updatedAt'
+       ])
+       OR (submitted_run_document - ARRAY[
+            'apiVersion', 'kind', 'id', 'scope', 'projectId', 'pipelineId',
+            'input', 'inputDigest', 'replay', 'status', 'createdAt', 'updatedAt'
+       ]) <> '{}'::jsonb
+       OR ((submitted_run_document->'scope') - ARRAY['tenantId']) <> '{}'::jsonb
+       OR NOT ((submitted_run_document->'scope') ?& ARRAY['tenantId'])
+       OR ((submitted_run_document->'replay') - ARRAY[
+            'sourceRunId', 'commandId', 'requestedBy'
+       ]) <> '{}'::jsonb
+       OR NOT ((submitted_run_document->'replay') ?& ARRAY[
+            'sourceRunId', 'commandId', 'requestedBy'
+       ])
+       OR ((submitted_run_document#>'{replay,requestedBy}') - ARRAY['kind', 'id'])
+            <> '{}'::jsonb
+       OR NOT ((submitted_run_document#>'{replay,requestedBy}') ?& ARRAY['kind', 'id'])
+       OR ((submitted_run_document->'status') - ARRAY[
+            'state', 'stage', 'reason', 'resourceVersion', 'observedAt'
+       ]) <> '{}'::jsonb
+       OR NOT ((submitted_run_document->'status') ?& ARRAY[
+            'state', 'stage', 'reason', 'resourceVersion', 'observedAt'
+       ])
+       OR submitted_run_document->>'apiVersion'
+            IS DISTINCT FROM 'devops.matrix.xiak.com/v1'
+       OR submitted_run_document->>'kind' IS DISTINCT FROM 'PipelineRun'
+       OR submitted_run_document#>>'{scope,tenantId}' IS DISTINCT FROM effective_tenant_id
+       OR COALESCE(replayed_run_id, '') COLLATE "C"
+            !~ '^pipeline-run-[0-9a-f]{48}$'
+       OR replayed_run_id IS NOT DISTINCT FROM source_run_id
+       OR submitted_run_document->>'projectId' IS DISTINCT FROM source_project_id
+       OR submitted_run_document->>'pipelineId' IS DISTINCT FROM source_pipeline_id
+       OR submitted_run_document->'input' IS DISTINCT FROM source_run_document->'input'
+       OR submitted_run_document->>'inputDigest' IS DISTINCT FROM source_input_digest
+       OR submitted_run_document#>>'{replay,sourceRunId}' IS DISTINCT FROM source_run_id
+       OR submitted_run_document#>>'{replay,commandId}' IS DISTINCT FROM operation_id
+       OR submitted_run_document#>'{replay,requestedBy}'
+            IS DISTINCT FROM submitted_operation->'requestedBy'
+       OR submitted_run_document#>>'{status,state}' IS DISTINCT FROM 'QUEUED'
+       OR submitted_run_document#>>'{status,stage}' IS DISTINCT FROM 'RECEIVE'
+       OR submitted_run_document#>>'{status,reason}' IS DISTINCT FROM 'EVENT_ADMITTED'
+       OR submitted_run_document#>>'{status,resourceVersion}' IS DISTINCT FROM '1'
+       OR COALESCE(submitted_run_document#>>'{status,observedAt}', '') COLLATE "C"
+            !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,6})?Z$'
+       OR NOT pg_input_is_valid(
+            COALESCE(submitted_run_document#>>'{status,observedAt}', ''),
+            'timestamptz'
+       )
+       OR (submitted_run_document#>>'{status,observedAt}')::timestamptz
+            IS DISTINCT FROM effective_now
+       OR COALESCE(submitted_run_document->>'createdAt', '') COLLATE "C"
+            !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,6})?Z$'
+       OR NOT pg_input_is_valid(
+            COALESCE(submitted_run_document->>'createdAt', ''), 'timestamptz'
+       )
+       OR (submitted_run_document->>'createdAt')::timestamptz
+            IS DISTINCT FROM effective_now
+       OR submitted_run_document->>'updatedAt'
+            IS DISTINCT FROM submitted_run_document->>'createdAt' THEN
+        RAISE EXCEPTION USING ERRCODE = '22023',
+            MESSAGE = 'queued PipelineRun replay document is invalid';
+    END IF;
+
+    IF jsonb_typeof(submitted_operation->'requestedBy') IS DISTINCT FROM 'object'
+       OR jsonb_typeof(submitted_operation->'iamResource') IS DISTINCT FROM 'object'
+       OR jsonb_typeof(submitted_operation->'target') IS DISTINCT FROM 'object'
+       OR NOT (submitted_operation ?& ARRAY[
+            'schemaVersion', 'id', 'tenantId', 'kind', 'commandTargetId',
+            'sourceRunId', 'requestedBy', 'iamDecisionId', 'iamAction',
+            'iamResource', 'expectedResourceVersion', 'idempotencyFingerprint',
+            'requestDigest', 'resultKind', 'target', 'requestId',
+            'correlationId', 'createdAt'
+       ])
+       OR (submitted_operation - ARRAY[
+            'schemaVersion', 'id', 'tenantId', 'kind', 'commandTargetId',
+            'sourceRunId', 'requestedBy', 'iamDecisionId', 'iamAction',
+            'iamResource', 'expectedResourceVersion', 'idempotencyFingerprint',
+            'requestDigest', 'resultKind', 'target', 'requestId',
+            'correlationId', 'traceparent', 'createdAt'
+       ]) <> '{}'::jsonb
+       OR ((submitted_operation->'requestedBy') - ARRAY['kind', 'id']) <> '{}'::jsonb
+       OR NOT ((submitted_operation->'requestedBy') ?& ARRAY['kind', 'id'])
+       OR ((submitted_operation->'iamResource') - ARRAY['kind', 'id']) <> '{}'::jsonb
+       OR NOT ((submitted_operation->'iamResource') ?& ARRAY['kind', 'id'])
+       OR ((submitted_operation->'target') - ARRAY['kind', 'id']) <> '{}'::jsonb
+       OR NOT ((submitted_operation->'target') ?& ARRAY['kind', 'id'])
+       OR submitted_operation->>'schemaVersion' IS DISTINCT FROM 'v1'
+       OR submitted_operation->>'tenantId' IS DISTINCT FROM effective_tenant_id
+       OR submitted_operation->>'kind' IS DISTINCT FROM 'REPLAY_PIPELINE_RUN'
+       OR submitted_operation->>'commandTargetId' IS DISTINCT FROM source_run_id
+       OR submitted_operation->>'iamAction' IS DISTINCT FROM 'devops.run.replay'
+       OR submitted_operation#>>'{iamResource,kind}' IS DISTINCT FROM 'PIPELINE_RUN'
+       OR submitted_operation#>>'{iamResource,id}' IS DISTINCT FROM source_run_id
+       OR submitted_operation#>>'{target,kind}' IS DISTINCT FROM 'PIPELINE_RUN'
+       OR submitted_operation#>>'{target,id}' IS DISTINCT FROM replayed_run_id
+       OR submitted_operation->>'resultKind' IS DISTINCT FROM 'PipelineRun'
+       OR COALESCE(operation_id, '') COLLATE "C" !~ '^operation-[0-9a-f]{64}$'
+       OR operation_id IS DISTINCT FROM 'operation-' || encode(
+            sha256(
+                convert_to('matrix-devops-operation-v1', 'UTF8')
+                || decode('00', 'hex')
+                || convert_to(
+                    submitted_operation->>'idempotencyFingerprint', 'UTF8'
+                )
+            ),
+            'hex'
+       )
+       OR COALESCE(submitted_operation#>>'{requestedBy,id}', '') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_operation#>>'{requestedBy,kind}' NOT IN ('USER', 'SERVICE_ACCOUNT')
+       OR COALESCE(submitted_operation->>'iamDecisionId', '') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR COALESCE(submitted_operation->>'idempotencyFingerprint', '') COLLATE "C"
+            !~ '^sha256:[0-9a-f]{64}$'
+       OR COALESCE(submitted_operation->>'requestDigest', '') COLLATE "C"
+            !~ '^sha256:[0-9a-f]{64}$'
+       OR COALESCE(submitted_operation->>'requestId', '') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR COALESCE(submitted_operation->>'correlationId', '') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR NOT pg_input_is_valid(
+            COALESCE(submitted_operation->>'expectedResourceVersion', ''), 'bigint'
+       )
+       OR (submitted_operation->>'expectedResourceVersion')::bigint
+            IS DISTINCT FROM expected_resource_version
+       OR NOT pg_input_is_valid(
+            COALESCE(submitted_operation->>'createdAt', ''), 'timestamptz'
+       )
+       OR (submitted_operation->>'createdAt')::timestamptz
+            IS DISTINCT FROM effective_now
+       OR (
+            submitted_operation ? 'traceparent'
+            AND COALESCE(submitted_operation->>'traceparent', '') COLLATE "C"
+                !~ '^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$'
+       ) THEN
+        RAISE EXCEPTION USING ERRCODE = '22023',
+            MESSAGE = 'PipelineRun replay Operation is invalid';
+    END IF;
+
+    expected_audit_event_id := 'audit-' || encode(
+        sha256(
+            convert_to('matrix-devops-audit-event-v1', 'UTF8')
+            || decode('00', 'hex')
+            || convert_to(operation_id, 'UTF8')
+        ),
+        'hex'
+    );
+    IF jsonb_typeof(submitted_audit_event->'actor') IS DISTINCT FROM 'object'
+       OR jsonb_typeof(submitted_audit_event->'target') IS DISTINCT FROM 'object'
+       OR NOT (submitted_audit_event ?& ARRAY[
+            'apiVersion', 'kind', 'eventId', 'tenantId', 'actor',
+            'iamDecisionId', 'action', 'target', 'result', 'requestDigest',
+            'requestId', 'correlationId', 'operationId', 'occurredAt'
+       ])
+       OR (submitted_audit_event - ARRAY[
+            'apiVersion', 'kind', 'eventId', 'tenantId', 'actor',
+            'iamDecisionId', 'action', 'target', 'result', 'requestDigest',
+            'requestId', 'correlationId', 'operationId', 'traceparent',
+            'occurredAt'
+       ]) <> '{}'::jsonb
+       OR ((submitted_audit_event->'actor') - ARRAY['type', 'id']) <> '{}'::jsonb
+       OR ((submitted_audit_event->'target') - ARRAY['kind', 'id']) <> '{}'::jsonb
+       OR submitted_audit_event->>'apiVersion'
+            IS DISTINCT FROM 'audit.matrix.xiak.com/v1'
+       OR submitted_audit_event->>'kind' IS DISTINCT FROM 'AuditEvent'
+       OR submitted_audit_event->>'eventId' IS DISTINCT FROM expected_audit_event_id
+       OR submitted_audit_event->>'tenantId' IS DISTINCT FROM effective_tenant_id
+       OR submitted_audit_event->'actor' IS DISTINCT FROM
+            jsonb_build_object(
+                'type', submitted_operation#>>'{requestedBy,kind}',
+                'id', submitted_operation#>>'{requestedBy,id}'
+            )
+       OR submitted_audit_event->>'iamDecisionId'
+            IS DISTINCT FROM submitted_operation->>'iamDecisionId'
+       OR submitted_audit_event->>'action'
+            IS DISTINCT FROM 'devops.pipeline-run.replayed'
+       OR submitted_audit_event->'target' IS DISTINCT FROM
+            jsonb_build_object('kind', 'PIPELINE_RUN', 'id', replayed_run_id)
+       OR submitted_audit_event->>'result' IS DISTINCT FROM 'ACCEPTED'
+       OR submitted_audit_event->>'requestDigest'
+            IS DISTINCT FROM submitted_operation->>'requestDigest'
+       OR submitted_audit_event->>'requestId'
+            IS DISTINCT FROM submitted_operation->>'requestId'
+       OR submitted_audit_event->>'correlationId'
+            IS DISTINCT FROM submitted_operation->>'correlationId'
+       OR submitted_audit_event->>'operationId' IS DISTINCT FROM operation_id
+       OR (submitted_audit_event ? 'traceparent')
+            IS DISTINCT FROM (submitted_operation ? 'traceparent')
+       OR submitted_audit_event->>'traceparent'
+            IS DISTINCT FROM submitted_operation->>'traceparent'
+       OR NOT pg_input_is_valid(
+            COALESCE(submitted_audit_event->>'occurredAt', ''), 'timestamptz'
+       )
+       OR (submitted_audit_event->>'occurredAt')::timestamptz
+            IS DISTINCT FROM effective_now THEN
+        RAISE EXCEPTION USING ERRCODE = '22023',
+            MESSAGE = 'PipelineRun replay Audit fact is invalid';
+    END IF;
+
+    PERFORM pg_advisory_xact_lock(
+        hashtextextended('matrix-devops-queued-runs-v1:' || effective_tenant_id, 0)
+    );
+    SELECT count(*) INTO queued_run_count
+      FROM delivery.pipeline_runs
+     WHERE tenant_id = effective_tenant_id AND state = 'QUEUED';
+    IF queued_run_count >= 32 THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX429',
+            MESSAGE = 'tenant queued-run capacity is exhausted';
+    END IF;
+
+    INSERT INTO delivery.audit_operations (
+        tenant_id, id, operation_kind, target_kind, target_id, created_at
+    ) VALUES (
+        effective_tenant_id, operation_id, 'PIPELINE_RUN_REPLAY',
+        'PIPELINE_RUN', replayed_run_id, effective_now
+    );
+    INSERT INTO delivery.mutations (
+        tenant_id, id, mutation_kind, command_target_id, target_kind, target_id,
+        idempotency_fingerprint, request_digest, result_kind, created_at,
+        document, result_document
+    ) VALUES (
+        effective_tenant_id, operation_id, 'REPLAY_PIPELINE_RUN', source_run_id,
+        'PIPELINE_RUN', replayed_run_id,
+        submitted_operation->>'idempotencyFingerprint',
+        submitted_operation->>'requestDigest', 'PipelineRun', effective_now,
+        submitted_operation, submitted_run_document
+    );
+    INSERT INTO delivery.pipeline_runs (
+        tenant_id, id, input_digest, source_event_id, source_event_digest,
+        pipeline_id, project_id, pipeline_revision_id,
+        pipeline_revision_digest, repository_binding_id,
+        repository_binding_digest, replay_of_run_id, replay_command_id,
+        creation_operation_id, state, stage, reason, resource_version,
+        cancellation_requested_at, completed_at, created_at, updated_at,
+        document
+    ) VALUES (
+        effective_tenant_id, replayed_run_id, source_input_digest,
+        source_event_id, source_event_digest, source_pipeline_id,
+        source_project_id, source_pipeline_revision_id,
+        source_pipeline_revision_digest, source_repository_binding_id,
+        source_repository_binding_digest, source_run_id, operation_id,
+        operation_id, 'QUEUED', 'RECEIVE', 'EVENT_ADMITTED', 1,
+        NULL, NULL, effective_now, effective_now, submitted_run_document
+    );
+    INSERT INTO delivery.audit_outbox (
+        tenant_id, event_id, operation_id, status, available_at, attempts,
+        fencing_token, created_at, updated_at, document
+    ) VALUES (
+        effective_tenant_id, expected_audit_event_id, operation_id,
+        'PENDING', effective_now, 0, 0, effective_now, effective_now,
+        submitted_audit_event
+    );
+END
+$function$;
+
+REVOKE ALL ON FUNCTION delivery.commit_pipeline_run_replay(
+    bigint, jsonb, jsonb, jsonb
+) FROM PUBLIC, matrix_devops_worker;
+GRANT EXECUTE ON FUNCTION delivery.commit_pipeline_run_replay(
+    bigint, jsonb, jsonb, jsonb
+) TO matrix_devops_api;
+
 CREATE OR REPLACE FUNCTION delivery.commit_run_admission(
     submitted_event jsonb,
     submitted_runs jsonb,
@@ -2353,7 +2892,8 @@ BEGIN
                 tenant_id, id, input_digest, source_event_id, source_event_digest,
                 pipeline_id, project_id, pipeline_revision_id,
                 pipeline_revision_digest, repository_binding_id,
-                repository_binding_digest, state, stage, reason,
+                repository_binding_digest, creation_operation_id,
+                state, stage, reason,
                 resource_version, completed_at, created_at, updated_at, document
             ) VALUES (
                 effective_tenant_id, run_document->>'id', run_document->>'inputDigest', admitted_event_id,
@@ -2362,7 +2902,7 @@ BEGIN
                 run_document#>>'{input,pipelineRevisionId}',
                 run_document#>>'{input,pipelineRevisionDigest}',
                 admitted_repository_binding_id, admitted_repository_binding_digest,
-                'QUEUED', 'RECEIVE', 'EVENT_ADMITTED', 1, NULL,
+                run_document->>'id', 'QUEUED', 'RECEIVE', 'EVENT_ADMITTED', 1, NULL,
                 effective_now, effective_now, run_document
             );
         END LOOP;
@@ -3569,6 +4109,12 @@ AS $function$
         ) IS NOT NULL
         AND to_regprocedure(
             'delivery.commit_pipeline_run_cancellation(bigint,jsonb,jsonb,jsonb,jsonb)'
+        ) IS NOT NULL
+        AND to_regprocedure(
+            'delivery.lock_pipeline_run_for_replay(text,bigint)'
+        ) IS NOT NULL
+        AND to_regprocedure(
+            'delivery.commit_pipeline_run_replay(bigint,jsonb,jsonb,jsonb)'
         ) IS NOT NULL
         AND to_regprocedure(
             'delivery.commit_run_admission(jsonb,jsonb,jsonb)'

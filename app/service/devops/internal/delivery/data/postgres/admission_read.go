@@ -80,6 +80,7 @@ func (transaction *admissionTransaction) loadPipelineRunsForEvent(
 		        state, stage, reason, resource_version, created_at, updated_at, document
 		   FROM delivery.pipeline_runs
 		  WHERE tenant_id = $1 AND source_event_id = $2
+		    AND replay_of_run_id IS NULL
 		  ORDER BY pipeline_id COLLATE "C"`,
 		string(transaction.tenantID), string(event.ID),
 	)

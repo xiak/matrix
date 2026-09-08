@@ -142,6 +142,24 @@ func TestAdmissionRejectsUntrustedContextAndAuditDrift(t *testing.T) {
 	if err := ValidateAdmission(invalid); err == nil {
 		t.Fatal("admission accepted a run detached from its event")
 	}
+	descendant := valid.Admission
+	descendant.Runs = append([]devopsv1.PipelineRun(nil), descendant.Runs...)
+	sourceRunID := descendant.Runs[0].ID
+	commandID := devopsv1.ResourceID("operation-" + strings.Repeat("8", 64))
+	descendant.Runs[0].Replay = &devopsv1.PipelineRunReplay{
+		SourceRunID: sourceRunID, CommandID: commandID,
+		RequestedBy: devopsv1.SubjectRef{Kind: devopsv1.SubjectUser, ID: "user-replay"},
+	}
+	descendant.Runs[0].ID, err = devopsv1.ReplayedPipelineRunID(
+		descendant.Runs[0].Scope, sourceRunID, commandID,
+		descendant.Runs[0].InputDigest,
+	)
+	if err != nil || devopsv1.ValidatePipelineRun(descendant.Runs[0]) != nil {
+		t.Fatalf("construct replay descendant: %v", err)
+	}
+	if err := ValidateAdmission(descendant); err == nil {
+		t.Fatal("provider admission accepted a manual replay descendant")
+	}
 }
 
 type fakeAdmissionRepository struct {

@@ -12,6 +12,13 @@
         "schema": {
           "type": "string"
         }
+      },
+      "RetryAfter": {
+        "description": "Seconds the caller should wait before retrying the command.",
+        "schema": {
+          "pattern": "^[1-9][0-9]*$",
+          "type": "string"
+        }
       }
     },
     "parameters": {
@@ -548,6 +555,9 @@
           "projectId": {
             "$ref": "#/components/schemas/ResourceID"
           },
+          "replay": {
+            "$ref": "#/components/schemas/PipelineRunReplay"
+          },
           "scope": {
             "$ref": "#/components/schemas/ResourceScope"
           },
@@ -628,6 +638,28 @@
           "RECONCILIATION_EXHAUSTED"
         ],
         "type": "string"
+      },
+      "PipelineRunReplay": {
+        "additionalProperties": false,
+        "properties": {
+          "commandId": {
+            "pattern": "^operation-[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "requestedBy": {
+            "$ref": "#/components/schemas/SubjectRef"
+          },
+          "sourceRunId": {
+            "pattern": "^pipeline-run-[0-9a-f]{48}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "commandId",
+          "requestedBy",
+          "sourceRunId"
+        ],
+        "type": "object"
       },
       "PipelineRunStage": {
         "enum": [
@@ -2619,9 +2651,7 @@
             "name": "runId",
             "required": true,
             "schema": {
-              "maxLength": 128,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "pattern": "^pipeline-run-[0-9a-f]{48}$",
               "type": "string"
             }
           }
@@ -2677,9 +2707,7 @@
             "name": "runId",
             "required": true,
             "schema": {
-              "maxLength": 128,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "pattern": "^pipeline-run-[0-9a-f]{48}$",
               "type": "string"
             }
           },
@@ -2741,6 +2769,98 @@
           }
         },
         "summary": "Request PipelineRun cancellation"
+      }
+    },
+    "/v1/runs/{runId}/replay": {
+      "post": {
+        "description": "No caller body is accepted. If-Match selects the exact terminal source version; the new run copies its immutable executor input without consulting mutable configuration.",
+        "operationId": "replayPipelineRun",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "runId",
+            "required": true,
+            "schema": {
+              "pattern": "^pipeline-run-[0-9a-f]{48}$",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineRun"
+                }
+              }
+            },
+            "description": "New queued PipelineRun with the selected run's immutable input.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "405": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "428": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Queued PipelineRun capacity is exhausted.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Replay a terminal PipelineRun"
       }
     },
     "/v1/source-connections": {

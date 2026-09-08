@@ -160,6 +160,8 @@ func mapRunControlTransactionError(err error) error {
 		errors.Is(err, runcontrol.ErrResourceVersionConflict) ||
 		errors.Is(err, runcontrol.ErrNoDesiredChange) ||
 		errors.Is(err, runcontrol.ErrTerminal) ||
+		errors.Is(err, runcontrol.ErrNotTerminal) ||
+		errors.Is(err, runcontrol.ErrQueueCapacityExceeded) ||
 		errors.Is(err, runcontrol.ErrRetryableTransaction) {
 		return err
 	}
@@ -174,6 +176,10 @@ func mapRunControlTransactionError(err error) error {
 			return fmt.Errorf("execute PipelineRun control transaction: %w", runcontrol.ErrTerminal)
 		case "MX411":
 			return fmt.Errorf("execute PipelineRun control transaction: %w", runcontrol.ErrNoDesiredChange)
+		case "MX412":
+			return fmt.Errorf("execute PipelineRun control transaction: %w", runcontrol.ErrNotTerminal)
+		case "MX429":
+			return fmt.Errorf("execute PipelineRun control transaction: %w", runcontrol.ErrQueueCapacityExceeded)
 		case "23505", "40001", "40P01":
 			return fmt.Errorf("execute PipelineRun control transaction: %w", runcontrol.ErrRetryableTransaction)
 		}

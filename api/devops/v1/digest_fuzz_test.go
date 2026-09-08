@@ -1,6 +1,10 @@
 package devopsv1
 
-import "testing"
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"testing"
+)
 
 func FuzzPipelineDraftDigestIsFramed(f *testing.F) {
 	f.Add("binding-a", "binding-b")
@@ -55,6 +59,36 @@ func FuzzSourceEventDigestIsFramed(f *testing.F) {
 		}
 		if first != second && leftDigest == rightDigest {
 			t.Fatal("distinct framed payload digests produced the same event digest")
+		}
+	})
+}
+
+func FuzzReplayedPipelineRunIdentityIsFramed(f *testing.F) {
+	f.Add("replay-one", "replay-two")
+	f.Add("a", "ab")
+	f.Fuzz(func(t *testing.T, first, second string) {
+		run := validPipelineRun(t)
+		commandID := func(value string) ResourceID {
+			digest := sha256.Sum256([]byte(value))
+			return ResourceID("operation-" + hex.EncodeToString(digest[:]))
+		}
+		left, err := ReplayedPipelineRunID(
+			run.Scope, run.ID, commandID(first), run.InputDigest,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		right, err := ReplayedPipelineRunID(
+			run.Scope, run.ID, commandID(second), run.InputDigest,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if first == second && left != right {
+			t.Fatal("equal replay commands produced different identities")
+		}
+		if first != second && commandID(first) != commandID(second) && left == right {
+			t.Fatal("distinct framed replay commands produced the same identity")
 		}
 	})
 }

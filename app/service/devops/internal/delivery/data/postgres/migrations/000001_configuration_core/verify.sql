@@ -147,6 +147,28 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'PipelineRun cancellation timestamp is missing';
     END IF;
+    IF (
+        SELECT count(*)
+          FROM information_schema.columns AS column_info
+         WHERE column_info.table_schema = 'delivery'
+           AND column_info.table_name = 'pipeline_runs'
+           AND (
+                (column_info.column_name IN ('replay_of_run_id', 'replay_command_id')
+                    AND column_info.is_nullable = 'YES')
+                OR (column_info.column_name = 'creation_operation_id'
+                    AND column_info.is_nullable = 'NO')
+           )
+    ) <> 3 THEN
+        RAISE EXCEPTION 'PipelineRun replay identity columns are missing or unsafe';
+    END IF;
+    IF to_regclass('delivery.pipeline_runs_event_revision_original_uq') IS NULL
+       OR EXISTS (
+            SELECT 1 FROM pg_catalog.pg_constraint
+             WHERE connamespace = 'delivery'::regnamespace
+               AND conname = 'pipeline_runs_event_revision_uq'
+       ) THEN
+        RAISE EXCEPTION 'PipelineRun original-admission uniqueness is invalid';
+    END IF;
     IF NOT EXISTS (
         SELECT 1 FROM pg_catalog.pg_policies AS policy
          WHERE policy.schemaname = 'delivery'
@@ -190,9 +212,11 @@ BEGIN
             ('source_events_delivery_uq'), ('source_events_run_identity_uq'),
             ('source_events_binding_snapshot_fk'),
             ('source_events_audit_operation_fk'),
-            ('pipeline_runs_event_revision_uq'),
             ('pipeline_runs_source_event_fk'), ('pipeline_runs_revision_fk'),
             ('pipeline_runs_audit_operation_fk'),
+            ('pipeline_runs_replay_command_uq'),
+            ('pipeline_runs_replay_source_fk'),
+            ('pipeline_runs_replay_valid'),
             ('pipeline_runs_task_identity_uq'),
             ('pipeline_runs_input_digest_valid'),
             ('pipeline_runs_cancellation_valid'),
@@ -253,6 +277,10 @@ BEGIN
              'requested_run_id text'),
             ('commit_pipeline_run_cancellation',
              'expected_resource_version bigint, submitted_run_document jsonb, submitted_operation jsonb, submitted_cancellation_event jsonb, submitted_terminal_event jsonb'),
+            ('lock_pipeline_run_for_replay',
+             'requested_source_run_id text, expected_resource_version bigint'),
+            ('commit_pipeline_run_replay',
+             'expected_resource_version bigint, submitted_run_document jsonb, submitted_operation jsonb, submitted_audit_event jsonb'),
             ('claim_pipeline_run_task',
              'requested_worker_id text, requested_lease_seconds integer'),
             ('renew_pipeline_run_task',
@@ -323,6 +351,24 @@ BEGIN
        OR has_function_privilege(
             'matrix_devops_worker',
             'delivery.commit_pipeline_run_cancellation(bigint,jsonb,jsonb,jsonb,jsonb)',
+            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_devops_api',
+            'delivery.lock_pipeline_run_for_replay(text,bigint)', 'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_devops_worker',
+            'delivery.lock_pipeline_run_for_replay(text,bigint)', 'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_devops_api',
+            'delivery.commit_pipeline_run_replay(bigint,jsonb,jsonb,jsonb)',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_devops_worker',
+            'delivery.commit_pipeline_run_replay(bigint,jsonb,jsonb,jsonb)',
             'EXECUTE'
        )
        OR NOT has_function_privilege(

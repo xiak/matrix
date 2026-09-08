@@ -176,6 +176,64 @@ func NewPipelineRun(
 	return run, nil
 }
 
+// ReplayPipelineRun creates a new queued run from a terminal run without
+// consulting mutable source, binding, Pipeline, or provider state. The replay
+// cause is kept outside Input so an executor receives byte-for-byte equivalent
+// immutable input.
+func ReplayPipelineRun(
+	source devopsv1.PipelineRun,
+	commandID devopsv1.ResourceID,
+	requestedBy devopsv1.SubjectRef,
+	replayedAt time.Time,
+) (devopsv1.PipelineRun, error) {
+	if devopsv1.ValidatePipelineRun(source) != nil ||
+		devopsv1.ValidateOperationID("commandId", commandID) != nil ||
+		devopsv1.ValidateSubjectRef(requestedBy) != nil {
+		return devopsv1.PipelineRun{}, ErrReferenceMismatch
+	}
+	if !terminalPipelineRunState(source.Status.State) {
+		return devopsv1.PipelineRun{}, ErrPipelineRunNotTerminal
+	}
+	if !replayedAt.After(source.UpdatedAt) || replayedAt.Location() != time.UTC ||
+		replayedAt != replayedAt.Round(0) || replayedAt.Nanosecond()%1_000 != 0 {
+		return devopsv1.PipelineRun{}, ErrInvalidTime
+	}
+	id, err := devopsv1.ReplayedPipelineRunID(
+		source.Scope, source.ID, commandID, source.InputDigest,
+	)
+	if err != nil {
+		return devopsv1.PipelineRun{}, ErrReferenceMismatch
+	}
+	run := devopsv1.PipelineRun{
+		APIVersion:  devopsv1.APIVersion,
+		Kind:        "PipelineRun",
+		ID:          id,
+		Scope:       source.Scope,
+		ProjectID:   source.ProjectID,
+		PipelineID:  source.PipelineID,
+		Input:       source.Input,
+		InputDigest: source.InputDigest,
+		Replay: &devopsv1.PipelineRunReplay{
+			SourceRunID: source.ID,
+			CommandID:   commandID,
+			RequestedBy: requestedBy,
+		},
+		Status: devopsv1.PipelineRunStatus{
+			State:           devopsv1.PipelineRunQueued,
+			Stage:           devopsv1.PipelineRunStageReceive,
+			Reason:          devopsv1.PipelineRunReasonEventAdmitted,
+			ResourceVersion: 1,
+			ObservedAt:      replayedAt,
+		},
+		CreatedAt: replayedAt,
+		UpdatedAt: replayedAt,
+	}
+	if err := devopsv1.ValidatePipelineRun(run); err != nil {
+		return devopsv1.PipelineRun{}, err
+	}
+	return run, nil
+}
+
 func ValidateNormalizedChange(value NormalizedChange) error {
 	_, identityErr := devopsv1.SourceEventID(
 		value.Scope,

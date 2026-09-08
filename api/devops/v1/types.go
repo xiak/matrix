@@ -260,18 +260,28 @@ type PipelineRunStatus struct {
 	CompletedAt             *time.Time        `json:"completedAt,omitempty"`
 }
 
+// PipelineRunReplay records the immutable IAM-authorized cause of a manual
+// replay. It deliberately lives outside PipelineRunInput so replayed work has
+// the exact same executor input and input digest as the selected source run.
+type PipelineRunReplay struct {
+	SourceRunID ResourceID `json:"sourceRunId"`
+	CommandID   ResourceID `json:"commandId"`
+	RequestedBy SubjectRef `json:"requestedBy"`
+}
+
 type PipelineRun struct {
-	APIVersion  string            `json:"apiVersion"`
-	Kind        string            `json:"kind"`
-	ID          ResourceID        `json:"id"`
-	Scope       ResourceScope     `json:"scope"`
-	ProjectID   ResourceID        `json:"projectId"`
-	PipelineID  ResourceID        `json:"pipelineId"`
-	Input       PipelineRunInput  `json:"input"`
-	InputDigest string            `json:"inputDigest"`
-	Status      PipelineRunStatus `json:"status"`
-	CreatedAt   time.Time         `json:"createdAt"`
-	UpdatedAt   time.Time         `json:"updatedAt"`
+	APIVersion  string             `json:"apiVersion"`
+	Kind        string             `json:"kind"`
+	ID          ResourceID         `json:"id"`
+	Scope       ResourceScope      `json:"scope"`
+	ProjectID   ResourceID         `json:"projectId"`
+	PipelineID  ResourceID         `json:"pipelineId"`
+	Input       PipelineRunInput   `json:"input"`
+	InputDigest string             `json:"inputDigest"`
+	Replay      *PipelineRunReplay `json:"replay,omitempty"`
+	Status      PipelineRunStatus  `json:"status"`
+	CreatedAt   time.Time          `json:"createdAt"`
+	UpdatedAt   time.Time          `json:"updatedAt"`
 }
 
 type Readiness struct {

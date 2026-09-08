@@ -10,6 +10,7 @@ import (
 
 var (
 	ErrPipelineRunTerminal          = errors.New("PipelineRun is terminal")
+	ErrPipelineRunNotTerminal       = errors.New("PipelineRun is not terminal")
 	ErrInvalidPipelineRunTransition = errors.New("PipelineRun transition is invalid")
 	ErrPipelineRunCancellationSet   = errors.New("PipelineRun cancellation is already requested")
 )

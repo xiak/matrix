@@ -136,6 +136,32 @@ func TestPipelineRunCompletionRequiresClosedOutcomeAndReason(t *testing.T) {
 	}
 }
 
+func TestPipelineRunReplayRequiresIAMAndCarriesNoTerminalOutcome(t *testing.T) {
+	event := Event{
+		APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-run-replayed",
+		TenantID:      "organization-example",
+		Actor:         ActorReference{Type: ActorUser, ID: "user-replay"},
+		Action:        ActionDevOpsPipelineRunReplayed,
+		Target:        TargetReference{Kind: TargetPipelineRun, ID: "pipeline-run-replayed"},
+		Result:        ResultAccepted,
+		RequestDigest: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+		RequestID:     "request-replay", CorrelationID: "correlation-replay",
+		OperationID: "operation-replay",
+		OccurredAt:  time.Date(2026, 9, 8, 3, 4, 5, 0, time.UTC),
+	}
+	if err := ValidateEventForSource(SourceDevOps, event); err == nil {
+		t.Fatal("PipelineRun replay without IAM decision was accepted")
+	}
+	event.IAMDecisionID = "decision-replay"
+	if err := ValidateEventForSource(SourceDevOps, event); err != nil {
+		t.Fatalf("valid PipelineRun replay rejected: %v", err)
+	}
+	event.Outcome = OutcomeSucceeded
+	if err := ValidateEventForSource(SourceDevOps, event); err == nil {
+		t.Fatal("PipelineRun replay accepted terminal outcome fields")
+	}
+}
+
 func TestAuditWireTypesHaveNoArbitraryPayloadEscapeHatch(t *testing.T) {
 	roots := []reflect.Type{
 		reflect.TypeOf(Event{}), reflect.TypeOf(AuditRecord{}), reflect.TypeOf(IngestionResult{}),

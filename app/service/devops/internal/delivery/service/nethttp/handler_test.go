@@ -297,6 +297,73 @@ func TestHandlerRejectsPipelineRunCancellationBodyAndMissingGuardBeforeIAM(t *te
 	}
 }
 
+func TestHandlerReplaysPipelineRunThroughExactIAMAuthority(t *testing.T) {
+	authorizer := &fakeAuthorizer{}
+	control := newFakeRunControl(t)
+	terminal, err := domain.RequestPipelineRunCancellation(
+		control.run, control.run.Status.ResourceVersion, false,
+		control.run.UpdatedAt.Add(time.Microsecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	control.run = terminal
+	handler := mustHandlerWithControl(t, authorizer, newFakeWorkflow(t), control)
+	path := "/v1/runs/" + string(terminal.ID) + "/replay"
+	request := httptest.NewRequest(http.MethodPost, path, nil)
+	request.Header.Set("Authorization", "Bearer caller-credential")
+	request.Header.Set("If-Match", `"2"`)
+	request.Header.Set("Idempotency-Key", "replay-run-one")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated || response.Header().Get("ETag") != `"1"` ||
+		authorizer.request.Action != iamv1.ActionDevOpsRunReplay ||
+		control.replay.SourceRunID != terminal.ID || control.replay.ExpectedResourceVersion != 2 ||
+		control.replay.IdempotencyKey != "replay-run-one" {
+		t.Fatalf("replay status=%d headers=%#v authority=%#v command=%#v body=%s",
+			response.Code, response.Header(), authorizer.request, control.replay, response.Body.String())
+	}
+	var replayed devopsv1.PipelineRun
+	if err := json.Unmarshal(response.Body.Bytes(), &replayed); err != nil ||
+		replayed.Replay == nil || replayed.Replay.SourceRunID != terminal.ID ||
+		response.Header().Get("Location") != "/v1/runs/"+string(replayed.ID) {
+		t.Fatalf("replayed run=%#v headers=%#v err=%v", replayed, response.Header(), err)
+	}
+}
+
+func TestHandlerRejectsPipelineRunReplayBodyAndMissingGuardBeforeIAM(t *testing.T) {
+	authorizer := &fakeAuthorizer{}
+	control := newFakeRunControl(t)
+	handler := mustHandlerWithControl(t, authorizer, newFakeWorkflow(t), control)
+	path := "/v1/runs/" + string(control.run.ID) + "/replay"
+
+	request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
+	request.Header.Set("Authorization", "Bearer caller-credential")
+	request.Header.Set("If-Match", `"1"`)
+	request.Header.Set("Idempotency-Key", "replay-run-one")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	assertProblem(t, response, http.StatusBadRequest, devopsv1.ErrorInvalidArgument)
+
+	request = httptest.NewRequest(http.MethodPost, path, nil)
+	request.Header.Set("Authorization", "Bearer caller-credential")
+	request.Header.Set("Idempotency-Key", "replay-run-one")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	assertProblem(t, response, http.StatusPreconditionRequired, devopsv1.ErrorPreconditionRequired)
+
+	request = httptest.NewRequest(http.MethodPost, "/v1/runs/pipeline-run-forged/replay", nil)
+	request.Header.Set("Authorization", "Bearer caller-credential")
+	request.Header.Set("If-Match", `"1"`)
+	request.Header.Set("Idempotency-Key", "replay-run-one")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	assertProblem(t, response, http.StatusBadRequest, devopsv1.ErrorInvalidArgument)
+	if authorizer.calls != 0 || control.replayCalls != 0 {
+		t.Fatal("invalid replay crossed the IAM or run-control boundary")
+	}
+}
+
 func TestHandlerNormalizesPipelineRunControlFailures(t *testing.T) {
 	tests := map[string]struct {
 		err    error
@@ -309,6 +376,8 @@ func TestHandlerNormalizesPipelineRunControlFailures(t *testing.T) {
 		"version conflict":     {runcontrol.ErrResourceVersionConflict, 412, devopsv1.ErrorPreconditionFailed},
 		"already requested":    {runcontrol.ErrNoDesiredChange, 409, devopsv1.ErrorConflict},
 		"terminal":             {runcontrol.ErrTerminal, 409, devopsv1.ErrorConflict},
+		"not terminal":         {runcontrol.ErrNotTerminal, 409, devopsv1.ErrorConflict},
+		"queue capacity":       {runcontrol.ErrQueueCapacityExceeded, 429, devopsv1.ErrorResourceExhausted},
 		"retryable":            {runcontrol.ErrRetryableTransaction, 503, devopsv1.ErrorUnavailable},
 	}
 	for name, test := range tests {
@@ -325,6 +394,9 @@ func TestHandlerNormalizesPipelineRunControlFailures(t *testing.T) {
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, request)
 			assertProblem(t, response, test.status, test.code)
+			if test.status == http.StatusTooManyRequests && response.Header().Get("Retry-After") != "30" {
+				t.Fatalf("Retry-After=%q", response.Header().Get("Retry-After"))
+			}
 			if strings.Contains(response.Body.String(), "native cancellation") {
 				t.Fatal("native PipelineRun control error leaked")
 			}
@@ -363,9 +435,11 @@ type fakeRunControl struct {
 	run         devopsv1.PipelineRun
 	get         runcontrol.GetQuery
 	cancel      runcontrol.CancelCommand
+	replay      runcontrol.ReplayCommand
 	err         error
 	getCalls    int
 	cancelCalls int
+	replayCalls int
 }
 
 func newFakeRunControl(t *testing.T) *fakeRunControl {
@@ -427,6 +501,22 @@ func (control *fakeRunControl) Cancel(
 		control.run.UpdatedAt.Add(time.Microsecond),
 	)
 	return runcontrol.Result{Value: cancelled}, err
+}
+
+func (control *fakeRunControl) Replay(
+	_ context.Context,
+	command runcontrol.ReplayCommand,
+) (runcontrol.Result, error) {
+	control.replayCalls++
+	control.replay = command
+	if control.err != nil {
+		return runcontrol.Result{}, control.err
+	}
+	replayed, err := domain.ReplayPipelineRun(
+		control.run, "operation-"+devopsv1.ResourceID(strings.Repeat("9", 64)),
+		command.Authorization.Subject, control.run.UpdatedAt.Add(time.Microsecond),
+	)
+	return runcontrol.Result{Value: replayed}, err
 }
 
 func jsonRequest(t *testing.T, method, path string, value any) *http.Request {

@@ -26,12 +26,28 @@ var (
 	deliveryIDPattern = regexp.MustCompile(
 		`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`,
 	)
-	gitObjectIDPattern = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
+	gitObjectIDPattern   = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
+	pipelineRunIDPattern = regexp.MustCompile(`^pipeline-run-[0-9a-f]{48}$`)
+	operationIDPattern   = regexp.MustCompile(`^operation-[0-9a-f]{64}$`)
 )
 
 func ValidateID(name, value string) error {
 	if !idPattern.MatchString(value) {
 		return fmt.Errorf("%s must be an opaque 1-128 character identifier", name)
+	}
+	return nil
+}
+
+func ValidatePipelineRunID(name string, value ResourceID) error {
+	if !pipelineRunIDPattern.MatchString(string(value)) {
+		return fmt.Errorf("%s must be a canonical PipelineRun identity", name)
+	}
+	return nil
+}
+
+func ValidateOperationID(name string, value ResourceID) error {
+	if !operationIDPattern.MatchString(string(value)) {
+		return fmt.Errorf("%s must be a canonical Operation identity", name)
 	}
 	return nil
 }
@@ -416,6 +432,16 @@ func ValidatePipelineRunInput(value PipelineRunInput) error {
 	)
 }
 
+func ValidatePipelineRunReplay(value PipelineRunReplay) error {
+	var problems []error
+	problems = append(problems,
+		ValidatePipelineRunID("replay.sourceRunId", value.SourceRunID),
+		ValidateOperationID("replay.commandId", value.CommandID),
+		ValidateSubjectRef(value.RequestedBy),
+	)
+	return errors.Join(problems...)
+}
+
 func ValidatePipelineRunStatus(value PipelineRunStatus) error {
 	var problems []error
 	if !contains(PipelineRunStates(), value.State) {
@@ -506,12 +532,27 @@ func ValidatePipelineRun(value PipelineRun) error {
 		validateContractTime("createdAt", value.CreatedAt),
 		validateContractTime("updatedAt", value.UpdatedAt),
 	)
-	expectedID, err := PipelineRunID(
-		value.Scope,
-		value.Input.SourceEventID,
-		value.Input.PipelineRevisionID,
-		value.InputDigest,
-	)
+	var expectedID ResourceID
+	var err error
+	if value.Replay == nil {
+		expectedID, err = PipelineRunID(
+			value.Scope,
+			value.Input.SourceEventID,
+			value.Input.PipelineRevisionID,
+			value.InputDigest,
+		)
+	} else {
+		problems = append(problems, ValidatePipelineRunReplay(*value.Replay))
+		expectedID, err = ReplayedPipelineRunID(
+			value.Scope,
+			value.Replay.SourceRunID,
+			value.Replay.CommandID,
+			value.InputDigest,
+		)
+		if value.Replay.SourceRunID == value.ID {
+			problems = append(problems, errors.New("PipelineRun cannot replay itself"))
+		}
+	}
 	if err != nil || value.ID != expectedID {
 		problems = append(problems, errors.New("PipelineRun identity is invalid"))
 	}

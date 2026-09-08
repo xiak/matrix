@@ -152,6 +152,30 @@ func PipelineRunID(
 	return ResourceID("pipeline-run-" + hex.EncodeToString(sum[:24])), nil
 }
 
+// ReplayedPipelineRunID derives a distinct run identity while preserving the
+// source run's immutable executor input digest. CommandID is the deterministic
+// identity of the authorized replay command.
+func ReplayedPipelineRunID(
+	scope ResourceScope,
+	sourceRunID ResourceID,
+	commandID ResourceID,
+	inputDigest string,
+) (ResourceID, error) {
+	if ValidateResourceScope(scope) != nil ||
+		ValidatePipelineRunID("sourceRunId", sourceRunID) != nil ||
+		ValidateOperationID("commandId", commandID) != nil ||
+		ValidateDigest("inputDigest", inputDigest) != nil {
+		return "", errors.New("replayed PipelineRun identity input is invalid")
+	}
+	digest := newContractDigest("matrix-devops-replayed-pipeline-run-identity-v1")
+	writeString(digest, string(scope.TenantID))
+	writeString(digest, string(sourceRunID))
+	writeString(digest, string(commandID))
+	writeString(digest, inputDigest)
+	sum := digest.hash.Sum(nil)
+	return ResourceID("pipeline-run-" + hex.EncodeToString(sum[:24])), nil
+}
+
 func writeChangeIdentity(digest *contractDigest, value ChangeIdentity) {
 	writeUint64(digest, value.Number)
 	writeString(digest, string(value.Action))

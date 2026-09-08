@@ -102,6 +102,72 @@ func TestAuthenticatedChangeCreatesImmutableEventAndQueuedRun(t *testing.T) {
 	}
 }
 
+func TestTerminalPipelineRunReplayCopiesSealedInputAndLinksOnlyDirectSource(t *testing.T) {
+	source := lifecycleRun(t)
+	completedAt := source.UpdatedAt.Add(time.Microsecond)
+	source, err := RequestPipelineRunCancellation(
+		source, source.Status.ResourceVersion, false, completedAt,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actor := devopsv1.SubjectRef{Kind: devopsv1.SubjectUser, ID: "user-replay"}
+	commandID := devopsv1.ResourceID("operation-" + strings.Repeat("8", 64))
+	replayed, err := ReplayPipelineRun(source, commandID, actor, completedAt.Add(time.Microsecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed.Replay == nil || replayed.Replay.SourceRunID != source.ID ||
+		replayed.Replay.CommandID != commandID || replayed.Replay.RequestedBy != actor ||
+		replayed.Input != source.Input || replayed.InputDigest != source.InputDigest ||
+		replayed.Status.State != devopsv1.PipelineRunQueued || replayed.Status.ResourceVersion != 1 {
+		t.Fatalf("replayed PipelineRun did not preserve direct sealed input: %#v", replayed)
+	}
+
+	replayedTerminalAt := replayed.UpdatedAt.Add(time.Microsecond)
+	replayedTerminal, err := RequestPipelineRunCancellation(
+		replayed, replayed.Status.ResourceVersion, false, replayedTerminalAt,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondCommandID := devopsv1.ResourceID("operation-" + strings.Repeat("9", 64))
+	second, err := ReplayPipelineRun(
+		replayedTerminal, secondCommandID, actor, replayedTerminalAt.Add(time.Microsecond),
+	)
+	if err != nil || second.Replay == nil || second.Replay.SourceRunID != replayed.ID ||
+		second.Input != source.Input || second.InputDigest != source.InputDigest {
+		t.Fatalf("replay descendant=%#v err=%v", second, err)
+	}
+	if second.Replay.SourceRunID == source.ID {
+		t.Fatal("replay embedded the ancestor chain instead of its direct source")
+	}
+}
+
+func TestPipelineRunReplayRejectsNonterminalOrInvalidCause(t *testing.T) {
+	source := lifecycleRun(t)
+	actor := devopsv1.SubjectRef{Kind: devopsv1.SubjectUser, ID: "user-replay"}
+	commandID := devopsv1.ResourceID("operation-" + strings.Repeat("8", 64))
+	if _, err := ReplayPipelineRun(
+		source, commandID, actor, source.UpdatedAt.Add(time.Microsecond),
+	); !errors.Is(err, ErrPipelineRunNotTerminal) {
+		t.Fatalf("nonterminal replay error=%v", err)
+	}
+	terminalAt := source.UpdatedAt.Add(time.Microsecond)
+	source, err := RequestPipelineRunCancellation(
+		source, source.Status.ResourceVersion, false, terminalAt,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReplayPipelineRun(source, "", actor, terminalAt.Add(time.Microsecond)); !errors.Is(err, ErrReferenceMismatch) {
+		t.Fatalf("invalid replay command error=%v", err)
+	}
+	if _, err := ReplayPipelineRun(source, commandID, actor, terminalAt); !errors.Is(err, ErrInvalidTime) {
+		t.Fatalf("nonadvancing replay time error=%v", err)
+	}
+}
+
 func TestSourceEventAdmissionFailsClosed(t *testing.T) {
 	connection, binding := readySource(t)
 	change := normalizedChange()

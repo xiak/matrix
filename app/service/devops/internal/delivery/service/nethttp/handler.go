@@ -45,6 +45,7 @@ type SourceIngress interface {
 type RunControl interface {
 	Get(context.Context, runcontrol.GetQuery) (devopsv1.PipelineRun, error)
 	Cancel(context.Context, runcontrol.CancelCommand) (runcontrol.Result, error)
+	Replay(context.Context, runcontrol.ReplayCommand) (runcontrol.Result, error)
 }
 
 type handler struct {
@@ -88,6 +89,7 @@ func NewHandler(authorizer port.Authorizer, workflow Workflow, config Config) (h
 	routes.HandleFunc("/v1/pipelines/{pipelineId}/revisions/{pipelineRevisionId}", value.pipelineRevision)
 	routes.HandleFunc("/v1/runs/{runId}", value.pipelineRun)
 	routes.HandleFunc("/v1/runs/{runId}/cancel", value.pipelineRunCancellation)
+	routes.HandleFunc("/v1/runs/{runId}/replay", value.pipelineRunReplay)
 	routes.HandleFunc("/", value.notFound)
 	value.routes = routes
 	return value, nil

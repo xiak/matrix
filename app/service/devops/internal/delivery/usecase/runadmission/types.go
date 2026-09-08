@@ -105,7 +105,7 @@ func ValidateAdmission(value Admission) error {
 	var previousPipelineID devopsv1.ResourceID
 	for index, run := range value.Runs {
 		problems = append(problems, devopsv1.ValidatePipelineRun(run))
-		if run.Scope != value.Event.Scope ||
+		if run.Replay != nil || run.Scope != value.Event.Scope ||
 			run.ProjectID != value.Event.Spec.ProjectID ||
 			run.Input.SourceEventID != value.Event.ID ||
 			run.Input.SourceEventDigest != value.Event.ContentDigest ||

@@ -93,6 +93,70 @@ func TestRunControlRejectsMismatchedAuthorityAndPreconditions(t *testing.T) {
 	}); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("missing cancellation precondition error=%v", err)
 	}
+	if _, err := service.Replay(context.Background(), ReplayCommand{
+		Authorization: controlAuthorization(iamv1.ActionDevOpsRunRead, run.ID),
+		SourceRunID:   run.ID, ExpectedResourceVersion: 1, IdempotencyKey: "replay-run",
+	}); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("mismatched replay authority error=%v", err)
+	}
+	if _, err := service.Replay(context.Background(), ReplayCommand{
+		Authorization: controlAuthorization(iamv1.ActionDevOpsRunReplay, run.ID),
+		SourceRunID:   run.ID, ExpectedResourceVersion: 0, IdempotencyKey: "replay-run",
+	}); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("missing replay precondition error=%v", err)
+	}
+}
+
+func TestRunControlReplaysTerminalRunFromSealedInputAtomically(t *testing.T) {
+	source := controlRun(t)
+	terminalAt := source.UpdatedAt.Add(time.Microsecond)
+	var err error
+	source, err = domain.RequestPipelineRunCancellation(
+		source, source.Status.ResourceVersion, false, terminalAt,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx := &fakeTransaction{now: terminalAt.Add(time.Second), run: source}
+	service := controlService(t, tx)
+	command := ReplayCommand{
+		Authorization: controlAuthorization(iamv1.ActionDevOpsRunReplay, source.ID),
+		SourceRunID:   source.ID, ExpectedResourceVersion: source.Status.ResourceVersion,
+		IdempotencyKey: "replay-terminal-run",
+	}
+	result, err := service.Replay(context.Background(), command)
+	if err != nil || result.Replayed || result.Value.Replay == nil ||
+		result.Value.Replay.SourceRunID != source.ID ||
+		result.Value.Replay.RequestedBy != command.Authorization.Subject ||
+		result.Value.Input != source.Input || result.Value.InputDigest != source.InputDigest ||
+		result.Value.Status.State != devopsv1.PipelineRunQueued ||
+		tx.replaySubmission.AuditEvent.Action != auditv1.ActionDevOpsPipelineRunReplayed {
+		t.Fatalf("replayed PipelineRun=%#v submission=%#v err=%v", result, tx.replaySubmission, err)
+	}
+	first := result.Value
+	tx.now = tx.now.Add(time.Hour)
+	repeated, err := service.Replay(context.Background(), command)
+	if err != nil || !repeated.Replayed || repeated.Value != first || tx.replayCommitCalls != 1 {
+		t.Fatalf("equal replay=%#v commits=%d err=%v", repeated, tx.replayCommitCalls, err)
+	}
+	command.ExpectedResourceVersion++
+	if _, err := service.Replay(context.Background(), command); !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatalf("changed replay error=%v", err)
+	}
+}
+
+func TestRunControlRejectsReplayOfNonterminalRun(t *testing.T) {
+	source := controlRun(t)
+	tx := &fakeTransaction{now: source.UpdatedAt.Add(time.Second), run: source}
+	service := controlService(t, tx)
+	_, err := service.Replay(context.Background(), ReplayCommand{
+		Authorization: controlAuthorization(iamv1.ActionDevOpsRunReplay, source.ID),
+		SourceRunID:   source.ID, ExpectedResourceVersion: source.Status.ResourceVersion,
+		IdempotencyKey: "replay-nonterminal-run",
+	})
+	if !errors.Is(err, ErrNotTerminal) || tx.replayCommitCalls != 0 {
+		t.Fatalf("nonterminal replay commits=%d error=%v", tx.replayCommitCalls, err)
+	}
 }
 
 type fakeRepository struct{ tx *fakeTransaction }
@@ -106,12 +170,15 @@ func (repository *fakeRepository) WithinRunControlTransaction(
 }
 
 type fakeTransaction struct {
-	now            time.Time
-	run            devopsv1.PipelineRun
-	effectMayExist bool
-	stored         *StoredCancellation
-	submission     Submission
-	commitCalls    int
+	now               time.Time
+	run               devopsv1.PipelineRun
+	effectMayExist    bool
+	stored            *StoredCancellation
+	storedReplay      *StoredReplay
+	submission        Submission
+	replaySubmission  ReplaySubmission
+	commitCalls       int
+	replayCommitCalls int
 }
 
 func (tx *fakeTransaction) TransactionTime(context.Context) (time.Time, error) { return tx.now, nil }
@@ -123,6 +190,13 @@ func (tx *fakeTransaction) FindCancellation(_ context.Context, fingerprint strin
 	return *tx.stored, true, nil
 }
 
+func (tx *fakeTransaction) FindReplay(_ context.Context, fingerprint string) (StoredReplay, bool, error) {
+	if tx.storedReplay == nil || tx.storedReplay.Operation.IdempotencyFingerprint != fingerprint {
+		return StoredReplay{}, false, nil
+	}
+	return *tx.storedReplay, true, nil
+}
+
 func (tx *fakeTransaction) LoadPipelineRun(context.Context, devopsv1.ResourceID) (devopsv1.PipelineRun, bool, error) {
 	return tx.run, true, nil
 }
@@ -132,6 +206,14 @@ func (tx *fakeTransaction) LockPipelineRunForCancellation(
 	devopsv1.ResourceID,
 ) (devopsv1.PipelineRun, bool, bool, error) {
 	return tx.run, tx.effectMayExist, true, nil
+}
+
+func (tx *fakeTransaction) LockPipelineRunForReplay(
+	_ context.Context,
+	_ devopsv1.ResourceID,
+	_ uint64,
+) (devopsv1.PipelineRun, time.Time, bool, error) {
+	return tx.run, tx.now, true, nil
 }
 
 func (tx *fakeTransaction) CommitPipelineRunCancellation(
@@ -146,6 +228,20 @@ func (tx *fakeTransaction) CommitPipelineRunCancellation(
 	tx.submission = submission
 	tx.run = submission.Result
 	tx.stored = &StoredCancellation{Operation: submission.Operation, Result: submission.Result}
+	return nil
+}
+
+func (tx *fakeTransaction) CommitPipelineRunReplay(
+	_ context.Context,
+	_ uint64,
+	submission ReplaySubmission,
+) error {
+	if err := ValidateReplaySubmission(submission); err != nil {
+		return err
+	}
+	tx.replayCommitCalls++
+	tx.replaySubmission = submission
+	tx.storedReplay = &StoredReplay{Operation: submission.Operation, Result: submission.Result}
 	return nil
 }
 
