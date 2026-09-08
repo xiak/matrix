@@ -6,7 +6,7 @@
 - Updated: 2026-09-08
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `d1cbc64`
+- Current pushed implementation baseline: `5c2ff67`
 
 ## Goal
 
@@ -19,39 +19,20 @@ architecture, FEAT, implementation, test, and release gates.
 - FEAT-007 remains the authoritative owner and is `In progress`; read it and
   the directly owning code/tests before continuing. Earlier accepted slices are
   preserved in Git and summarized there rather than repeated here.
-- Pushed `8679c2f` closes the Docker Engine lifecycle for one immutable runner
-  step. The adapter creates and proves a deterministic stopped container,
-  starts only that fixed ID, follows bounded multiplexed output, waits and
-  re-inspects the same ID, closes ordinary and OOM exits, cancels created or
-  running work, and deletes only proved non-running work. Same-name replacement,
-  configuration/state drift, malformed or incomplete responses, and mutating
-  transport ambiguity fail closed without native error disclosure. Fixed
-  blocking `local` log rotation bounds daemon storage, failure cleanup has a
-  ten-second deadline, and post-delete absence is observed.
-- The same pushed slice replaces the pre-v1 journal step record with a
-  digest-bound canonical first-start time. It is fsynced with `STARTED`, remains
-  unchanged on replay/restart, is bounded by the request/lease, and prevents a
-  recovered or later step from renewing or moving the ordered step clock
-  backwards.
-- Pushed `88bec23` makes the whole-run 8 MiB native/normalized log budget
-  recovery-stable. A pure validated cursor carries only both cumulative byte
-  counts and the last sequence; the sandbox restores it, while journal schema
-  v3 advances it only atomically with a started step's conclusion. Backwards,
-  partial, changed-replay, pending-cancellation, poisoned, and recomputed-chain
-  cursor states fail closed; native output is not journaled.
-- Pushed `d1cbc64` closes completion recovery after lease expiry: a locally
-  terminal receipt may accept only a same-runner increasing fence while its
-  steps, log cursor, and receipt remain exact, then replay completion through
-  the real mTLS runner path. Acknowledged state remains immutable.
+- Pushed `5c2ff67` closes the port-driven durable runner workflow over the
+  already accepted runner client, private journal, immutable workspace, and
+  closed Docker sandbox. Claim commit precedes effects; lease renewal precedes
+  workspace work; recovery observes before create; cancellation, fixed
+  deadlines, log-cursor handoff, cleanup, local terminal replay, and gateway
+  acknowledgement retain one fenced truth. Concrete authorities remain behind
+  delivery ports.
 - Evidence on that worktree: full `go test ./...`, full `go vet ./...`, focused
   Windows race detection with twenty repetitions, and twenty focused runs in
   the fixed disconnected Go 1.26.8 Linux/amd64 image with read-only source and
-  module cache all pass. The shared output decoder additionally passed a
-  1,241,687-execution fuzz campaign.
-- This proves the sandbox adapter boundary, not physical execution. No runner
-  process yet composes gateway polling, journal recovery, workspace publication,
-  step deadlines, sandbox lifecycle, normalized-log delivery, and receipt
-  completion; repository code therefore still does not execute.
+  module cache all pass.
+- This proves orchestration against controlled boundaries, not a physical
+  runner process. Production normalized-log persistence, process composition,
+  selected release topology, and real repository execution remain pending.
 
 ## Adoption boundary
 
@@ -63,11 +44,11 @@ architecture, FEAT, implementation, test, and release gates.
 
 ## Continuation
 
-Continue FEAT-007 with the smallest physical-runner vertical slice: compose the
-outbound runner client, private journal, verified workspace, and closed Docker
-sandbox around fixed lease/step/run deadlines and cancellation. Preserve
-observe-before-effect recovery and do not duplicate an already-started step.
-Then add the tenant-leading normalized-log handoff required by that composition.
+Continue FEAT-007 with the tenant-leading normalized-log persistence boundary:
+make sequence replay idempotent, changed replay conflicting, access
+tenant-derived, and retention bounded across the gateway/control-plane split.
+Then compose the dedicated runner process and selected release topology around
+the already pushed workflow.
 
 Do not claim repository-code isolation until a dedicated Linux/amd64 runner
 with the pinned offline toolchain and `runsc` passes the real no-egress,
