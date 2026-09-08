@@ -13,9 +13,10 @@
   execution persistence, versioned admin/runner transport contract, durable
   executor-gateway spool, TLS 1.3 mTLS admin/runner HTTP boundary, and isolated
   executor-gateway process, ordered runner step journal, runner workspace
-  publication, bounded native output normalization, and closed sandbox
-  container lifecycle complete; physical runner composition, reporter effects,
-  and normalized-log persistence pending
+  publication, bounded native output normalization, closed sandbox container
+  lifecycle, and port-driven cross-step runner workflow complete; physical
+  runner process composition, reporter effects, and normalized-log persistence
+  pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -734,9 +735,27 @@ is allowed only after exact non-running inspection and succeeds only after the
 deterministic name is proved absent; failure cleanup retains a fixed ten-second
 deadline.
 
-Cross-step runner orchestration, tenant-leading normalized-log persistence,
-and physical runner composition remain subsequent slices, so no process yet
-invokes this boundary against repository code.
+The port-driven runner workflow now commits a claimed assignment and its archive
+before the first sandbox effect, renews its short lease synchronously before
+workspace work and periodically thereafter, and serializes every renewal with
+the journal transition that adopts its fence. It replays local terminal truth
+before claiming, resumes an already-started step by observation before create,
+never lets an `OBSERVE` recovery authorize a first effect, and treats a
+`CANCEL` recovery before the effect marker without touching the sandbox. Each
+fixed step is started durably, follows the deterministic container, publishes
+an exactly validated run-leading log batch before atomically concluding the
+step and its cursor, and deletes only concluded containers under the fixed
+cleanup deadline. User cancellation closes as `CANCELLED`; the fixed step
+deadline closes as `FAILED`; caller shutdown and lost lease authority leave an
+observable open effect without inventing a conclusion. The normalized-log port
+requires equal sequence replay without duplication and conflict on changed
+content. A complete receipt is recorded locally before gateway completion and
+is acknowledged only after that completion succeeds.
+
+Tenant-leading normalized-log persistence, the physical runner process that
+composes these ports, selected release topology, and a real process journey
+remain subsequent slices, so no process yet invokes this workflow against
+repository code.
 
 ### Egress, limits, storage, and retention
 
@@ -1081,16 +1100,21 @@ recovery, while an already-started step must first be observed by the later
 runner orchestration. A locally terminal receipt whose gateway completion did
 not arrive may also accept a same-runner increasing fence without changing its
 steps, log cursor, or receipt, so completion remains replayable after lease
-expiry. A cancellation before any sandbox effect durably cancels
-the next step and can produce the closed terminal receipt without inventing an
-effect. The physical build-worker command now composes only its table-blind
-PostgreSQL repository, read-only source archive, exact mTLS admin identity,
-executor-gateway client, independent heartbeat, and readiness endpoint. The
-dedicated runner process that composes its journal, workspace, tested sandbox
-lifecycle, and outbound client, selected release topology, normalized-log
-persistence, and a real PostgreSQL-to-runner process journey remain pending.
-The closed Docker Engine adapter, pre-claim eligibility probe, and content-bound
-read-only workspace are present, but no repository code executes yet.
+expiry. A cancellation before any sandbox effect durably cancels the next step
+and can produce the closed terminal receipt without inventing an effect. The
+port-driven runner use case now owns claim commit, initial and periodic renewal,
+workspace publication, observe-before-create step recovery, ordered sandbox
+execution, cancellation/deadline containment, validated log handoff,
+concluded-container cleanup, and local-terminal-first completion. Its strict
+architecture boundary imports only public runner contracts, pure log
+invariants, and side-effect ports. The physical build-worker command now
+composes only its table-blind PostgreSQL repository, read-only source archive,
+exact mTLS admin identity, executor-gateway client, independent heartbeat, and
+readiness endpoint. The dedicated runner process, production normalized-log
+adapter, selected release topology, and a real PostgreSQL-to-runner process
+journey remain pending. The closed Docker Engine adapter, pre-claim eligibility
+probe, content-bound read-only workspace, and orchestration use case are
+present, but no repository code executes yet.
 
 Every fenced worker transition now submits the exact next PipelineRun document
 to the database boundary. A terminal transition atomically stores a distinct
@@ -1327,6 +1351,20 @@ Current verification evidence:
   image; a Linux integration also proves the returned source root is the sole
   bind mount accepted by both immutable step plans. This is filesystem and
   request-shape evidence, not repository-code or gVisor execution evidence
+- port-driven runner-workflow tests using the real private journal and workspace
+  prove archive commit before sandbox effects, synchronous initial and periodic
+  lease renewal, two ordered steps, observation before recovery creation,
+  `OBSERVE` deferral before a first effect, cancellation before and during an
+  effect, fixed-deadline failure, run-leading validated log handoff, cleanup,
+  local-terminal replay, completion acknowledgement, and lease-loss containment
+  without an invented conclusion. A strict architecture test keeps every
+  concrete filesystem, HTTP, Docker, process, database, provider, PaaS, and
+  Kubernetes dependency behind a port. The workflow and affected journal,
+  workspace, sandbox, runner-client, log, port, and architecture packages pass
+  race detection and twenty-run repetition on Windows and twenty runs in the
+  fixed disconnected Go 1.26.8 Linux/amd64 image with read-only source and
+  module cache; this is orchestration evidence, not physical runner-process,
+  normalized-log persistence, repository-execution, or gVisor evidence
 - the shared source-archive reader proves the portable receipt independently,
   matches it to the private deterministic store, structurally inspects and
   hashes the archive before handoff, and verifies its length and digest again

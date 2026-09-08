@@ -14,6 +14,7 @@ func TestRunnerJournalKeepsTransportAndExecutionAuthorityOut(t *testing.T) {
 	allowedMatrix := map[string]bool{
 		"github.com/xiak/matrix/api/adapter/devopsbuild/v1":                         true,
 		"github.com/xiak/matrix/api/devops/v1":                                      true,
+		"github.com/xiak/matrix/app/service/devops/internal/delivery/port":          true,
 		"github.com/xiak/matrix/app/service/devops/internal/delivery/runnerlog":     true,
 		"github.com/xiak/matrix/app/service/devops/internal/delivery/sourcearchive": true,
 	}

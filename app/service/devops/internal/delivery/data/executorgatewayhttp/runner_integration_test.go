@@ -18,6 +18,7 @@ import (
 	devopsbuildv1 "github.com/xiak/matrix/api/adapter/devopsbuild/v1"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/executorspoolfile"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/runnerjournalfile"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/port"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/runnerlog"
 )
 
@@ -54,14 +55,14 @@ func TestRunnerClientAndJournalCompleteDurableMTLSRoundTrip(t *testing.T) {
 		t.Fatalf("claim found=%t assignment=%#v err=%v", found, assignment, err)
 	}
 	received, err := claim.Commit(context.Background())
-	if err != nil || received.Phase != runnerjournalfile.PhaseReceived ||
+	if err != nil || received.Phase != port.RunnerJournalReceived ||
 		received.Assignment != assignment {
 		t.Fatalf("durable claim = %#v / %v", received, err)
 	}
 	started, err := journal.MarkEffectStarted(
 		context.Background(), received.Assignment, now.Add(time.Second),
 	)
-	if err != nil || started.Phase != runnerjournalfile.PhaseEffectStarted {
+	if err != nil || started.Phase != port.RunnerJournalEffectStarted {
 		t.Fatalf("durable effect marker = %#v / %v", started, err)
 	}
 
@@ -100,7 +101,7 @@ func TestRunnerClientAndJournalCompleteDurableMTLSRoundTrip(t *testing.T) {
 	terminal, err := journal.RecordReceipt(
 		context.Background(), progress.Assignment, receipt,
 	)
-	if err != nil || terminal.Phase != runnerjournalfile.PhaseTerminal {
+	if err != nil || terminal.Phase != port.RunnerJournalTerminal {
 		t.Fatalf("durable terminal receipt = %#v / %v", terminal, err)
 	}
 	if err := client.Complete(context.Background(), progress.Assignment, receipt); err != nil {
@@ -109,7 +110,7 @@ func TestRunnerClientAndJournalCompleteDurableMTLSRoundTrip(t *testing.T) {
 	acknowledged, err := journal.Acknowledge(
 		context.Background(), progress.Assignment, receipt,
 	)
-	if err != nil || acknowledged.Phase != runnerjournalfile.PhaseAcknowledged {
+	if err != nil || acknowledged.Phase != port.RunnerJournalAcknowledged {
 		t.Fatalf("durable acknowledgement = %#v / %v", acknowledged, err)
 	}
 
@@ -118,7 +119,7 @@ func TestRunnerClientAndJournalCompleteDurableMTLSRoundTrip(t *testing.T) {
 		t.Fatalf("restart completed journal: %v", err)
 	}
 	loaded, err := restarted.Load(context.Background(), assignment.ExecutionID)
-	if err != nil || loaded.Phase != runnerjournalfile.PhaseAcknowledged ||
+	if err != nil || loaded.Phase != port.RunnerJournalAcknowledged ||
 		loaded.Receipt == nil || *loaded.Receipt != receipt {
 		t.Fatalf("restarted completed entry = %#v / %v", loaded, err)
 	}
@@ -191,7 +192,7 @@ func TestRunnerClientRecoversLocallyTerminalReceiptAfterLeaseExpiry(t *testing.T
 	terminal, err := journal.RecordReceipt(
 		context.Background(), failed.Assignment, receipt,
 	)
-	if err != nil || terminal.Phase != runnerjournalfile.PhaseTerminal {
+	if err != nil || terminal.Phase != port.RunnerJournalTerminal {
 		t.Fatalf("local terminal = %#v / %v", terminal, err)
 	}
 
@@ -214,7 +215,7 @@ func TestRunnerClientRecoversLocallyTerminalReceiptAfterLeaseExpiry(t *testing.T
 		t.Fatalf("recovery claim found=%t assignment=%#v err=%v", found, recovery, err)
 	}
 	recovered, err := recoveryClaim.Commit(context.Background())
-	if err != nil || recovered.Phase != runnerjournalfile.PhaseTerminal ||
+	if err != nil || recovered.Phase != port.RunnerJournalTerminal ||
 		recovered.Receipt == nil || *recovered.Receipt != receipt {
 		t.Fatalf("recovered local terminal = %#v / %v", recovered, err)
 	}
@@ -226,7 +227,7 @@ func TestRunnerClientRecoversLocallyTerminalReceiptAfterLeaseExpiry(t *testing.T
 	acknowledged, err := journal.Acknowledge(
 		context.Background(), recovered.Assignment, receipt,
 	)
-	if err != nil || acknowledged.Phase != runnerjournalfile.PhaseAcknowledged {
+	if err != nil || acknowledged.Phase != port.RunnerJournalAcknowledged {
 		t.Fatalf("recovered acknowledgement = %#v / %v", acknowledged, err)
 	}
 }

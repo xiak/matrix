@@ -240,7 +240,7 @@ func TestLogChunksStayBoundedUnderLargeAlternatingOutput(t *testing.T) {
 		t.Fatalf("chunk count = %d, error = %v", len(chunks), err)
 	}
 	for index, chunk := range chunks {
-		if chunk.Sequence != uint64(index+1) || len(chunk.Content) > maximumLogChunkBytes ||
+		if chunk.Sequence != uint64(index+1) || len(chunk.Content) > runnerlog.MaximumChunkBytes ||
 			!utf8.ValidString(chunk.Content) {
 			t.Fatalf("chunk %d = %#v", index, chunk)
 		}
@@ -264,7 +264,7 @@ func FuzzLogBudgetDockerStream(f *testing.F) {
 		for index, chunk := range chunks {
 			total += len(chunk.Content)
 			if chunk.Sequence != uint64(index+1) || len(chunk.Content) == 0 ||
-				len(chunk.Content) > maximumLogChunkBytes || !utf8.ValidString(chunk.Content) {
+				len(chunk.Content) > runnerlog.MaximumChunkBytes || !utf8.ValidString(chunk.Content) {
 				t.Fatalf("chunk %d = %#v", index, chunk)
 			}
 			for _, character := range chunk.Content {

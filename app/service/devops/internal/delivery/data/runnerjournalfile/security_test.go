@@ -12,6 +12,7 @@ import (
 	"time"
 
 	devopsbuildv1 "github.com/xiak/matrix/api/adapter/devopsbuild/v1"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/port"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/runnerlog"
 )
 
@@ -133,7 +134,7 @@ func TestJournalDetectsPublishedTampering(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		state.Steps[0].Phase = StepPending
+		state.Steps[0].Phase = port.RunnerStepPending
 		sealState(&state)
 		content, err = json.Marshal(state)
 		if err != nil {

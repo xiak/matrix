@@ -17,6 +17,7 @@ import (
 
 	devopsbuildv1 "github.com/xiak/matrix/api/adapter/devopsbuild/v1"
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/port"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/runnerlog"
 )
 
@@ -29,21 +30,13 @@ var (
 	ErrOutcomeUnknown = errors.New("runner journal outcome is unknown")
 )
 
-type Entry struct {
-	Assignment            devopsbuildv1.Assignment
-	Phase                 Phase
-	EffectID              string
-	CancellationRequested bool
-	Steps                 [2]StepProgress
-	LogProgress           runnerlog.Progress
-	Receipt               *devopsbuildv1.Receipt
-}
-
 type Journal struct {
 	rootPath string
 	runnerID string
 	mutex    sync.Mutex
 }
+
+var _ port.RunnerJournal = (*Journal)(nil)
 
 type Claim struct {
 	journal    *Journal
@@ -98,7 +91,11 @@ func (journal *Journal) RunnerID() string {
 	return journal.runnerID
 }
 
-func (journal *Journal) BeginClaim(ctx context.Context) (*Claim, error) {
+func (journal *Journal) BeginClaim(ctx context.Context) (port.RunnerClaim, error) {
+	return journal.beginClaim(ctx)
+}
+
+func (journal *Journal) beginClaim(ctx context.Context) (*Claim, error) {
 	if journal == nil || ctx == nil || !validRunnerID(journal.runnerID) {
 		return nil, ErrInvalid
 	}
@@ -175,42 +172,42 @@ func (claim *Claim) Destination(
 	return archive, nil
 }
 
-func (claim *Claim) Commit(ctx context.Context) (Entry, error) {
+func (claim *Claim) Commit(ctx context.Context) (port.RunnerJournalEntry, error) {
 	if claim == nil || ctx == nil {
-		return Entry{}, ErrInvalid
+		return port.RunnerJournalEntry{}, ErrInvalid
 	}
 	claim.mutex.Lock()
 	defer claim.mutex.Unlock()
 	if claim.done || claim.journal == nil || claim.assignment == nil {
-		return Entry{}, ErrInvalid
+		return port.RunnerJournalEntry{}, ErrInvalid
 	}
 	if err := ctx.Err(); err != nil {
-		return Entry{}, err
+		return port.RunnerJournalEntry{}, err
 	}
 	if claim.archive != nil {
 		syncErr := claim.archive.Sync()
 		closeErr := claim.archive.Close()
 		claim.archive = nil
 		if syncErr != nil || closeErr != nil {
-			return Entry{}, errors.Join(ErrUnavailable, syncErr, closeErr)
+			return port.RunnerJournalEntry{}, errors.Join(ErrUnavailable, syncErr, closeErr)
 		}
 	}
 	claim.journal.mutex.Lock()
 	defer claim.journal.mutex.Unlock()
 	root, err := claim.journal.openRoot()
 	if err != nil {
-		return Entry{}, err
+		return port.RunnerJournalEntry{}, err
 	}
 	defer root.Close()
 	content, err := readPrivateFile(
 		root, claim.staging+"/"+assignmentName, devopsbuildv1.MaximumDocumentBytes,
 	)
 	if err != nil {
-		return Entry{}, err
+		return port.RunnerJournalEntry{}, err
 	}
 	assignment, err := devopsbuildv1.DecodeAssignment(content)
 	if err != nil || assignment != *claim.assignment {
-		return Entry{}, errors.Join(ErrUnavailable, err)
+		return port.RunnerJournalEntry{}, errors.Join(ErrUnavailable, err)
 	}
 	if assignment.Mode == devopsbuildv1.AssignmentExecute {
 		return claim.commitExecute(ctx, root, assignment)
@@ -222,51 +219,51 @@ func (claim *Claim) commitExecute(
 	ctx context.Context,
 	root *os.Root,
 	assignment devopsbuildv1.Assignment,
-) (Entry, error) {
+) (port.RunnerJournalEntry, error) {
 	archive, err := openVerifiedArchive(
 		ctx, root, claim.staging+"/"+archiveName, assignment.Request,
 	)
 	if err != nil {
-		return Entry{}, err
+		return port.RunnerJournalEntry{}, err
 	}
 	if err := archive.Close(); err != nil {
-		return Entry{}, errors.Join(ErrUnavailable, err)
+		return port.RunnerJournalEntry{}, errors.Join(ErrUnavailable, err)
 	}
 	key := executionKey(assignment.ExecutionID)
 	if _, err := root.Lstat(key); !errors.Is(err, os.ErrNotExist) {
 		if err == nil {
-			return Entry{}, ErrConflict
+			return port.RunnerJournalEntry{}, ErrConflict
 		}
-		return Entry{}, errors.Join(ErrUnavailable, err)
+		return port.RunnerJournalEntry{}, errors.Join(ErrUnavailable, err)
 	}
 	executionCount, err := countExecutionDirectories(root)
 	if err != nil || executionCount >= maximumJournalExecutions {
-		return Entry{}, errors.Join(ErrUnavailable, err)
+		return port.RunnerJournalEntry{}, errors.Join(ErrUnavailable, err)
 	}
 	state, err := initialState(claim.journal.runnerID, assignment)
 	if err != nil {
-		return Entry{}, err
+		return port.RunnerJournalEntry{}, err
 	}
 	stateContent, err := encodeState(assignment.Request, state)
 	if err != nil || writePrivateFile(
 		root, claim.staging+"/"+stateFileName(state.Version), stateContent,
 	) != nil {
-		return Entry{}, ErrUnavailable
+		return port.RunnerJournalEntry{}, ErrUnavailable
 	}
 	if err := syncDirectory(root, claim.staging); err != nil {
-		return Entry{}, errors.Join(ErrUnavailable, err)
+		return port.RunnerJournalEntry{}, errors.Join(ErrUnavailable, err)
 	}
 	if err := validateStagingShape(
 		root, claim.staging, true, stateFileName(state.Version),
 	); err != nil {
-		return Entry{}, err
+		return port.RunnerJournalEntry{}, err
 	}
 	if err := root.Rename(claim.staging, key); err != nil {
-		return Entry{}, errors.Join(ErrUnavailable, err)
+		return port.RunnerJournalEntry{}, errors.Join(ErrUnavailable, err)
 	}
 	claim.done = true
 	if err := syncDirectory(root, "."); err != nil {
-		return Entry{}, errors.Join(ErrOutcomeUnknown, err)
+		return port.RunnerJournalEntry{}, errors.Join(ErrOutcomeUnknown, err)
 	}
 	return entryFrom(assignment, state), nil
 }
@@ -275,31 +272,31 @@ func (claim *Claim) commitRecovery(
 	ctx context.Context,
 	root *os.Root,
 	assignment devopsbuildv1.Assignment,
-) (Entry, error) {
+) (port.RunnerJournalEntry, error) {
 	if assignment.Mode != devopsbuildv1.AssignmentObserve &&
 		assignment.Mode != devopsbuildv1.AssignmentCancel {
-		return Entry{}, ErrInvalid
+		return port.RunnerJournalEntry{}, ErrInvalid
 	}
 	if err := validateStagingShape(root, claim.staging, false, ""); err != nil {
-		return Entry{}, err
+		return port.RunnerJournalEntry{}, err
 	}
 	key := executionKey(assignment.ExecutionID)
 	execution, found, err := readExecution(
 		ctx, root, key, claim.journal.runnerID, true,
 	)
 	if err != nil {
-		return Entry{}, err
+		return port.RunnerJournalEntry{}, err
 	}
 	if !found {
-		return Entry{}, ErrNotFound
+		return port.RunnerJournalEntry{}, ErrNotFound
 	}
 	if execution.assignment.Request != assignment.Request ||
-		execution.state.Phase == PhaseAcknowledged ||
+		execution.state.Phase == port.RunnerJournalAcknowledged ||
 		assignment.FencingToken <= execution.state.FencingToken ||
 		!assignment.LeaseExpiresAt.After(execution.state.LeaseExpiresAt) ||
 		(assignment.Mode == devopsbuildv1.AssignmentObserve &&
 			execution.state.CancellationRequested) {
-		return Entry{}, ErrStale
+		return port.RunnerJournalEntry{}, ErrStale
 	}
 	next := nextState(execution.state)
 	next.Mode = assignment.Mode
@@ -309,13 +306,13 @@ func (claim *Claim) commitRecovery(
 		assignment.Mode == devopsbuildv1.AssignmentCancel
 	sealState(&next)
 	if err := appendState(root, execution, next); err != nil {
-		return Entry{}, err
+		return port.RunnerJournalEntry{}, err
 	}
 	claim.done = true
 	removeErr := root.RemoveAll(claim.staging)
 	syncErr := syncDirectory(root, ".")
 	if removeErr != nil || syncErr != nil {
-		return Entry{}, errors.Join(ErrOutcomeUnknown, removeErr, syncErr)
+		return port.RunnerJournalEntry{}, errors.Join(ErrOutcomeUnknown, removeErr, syncErr)
 	}
 	return entryFrom(assignment, next), nil
 }
@@ -356,30 +353,30 @@ func (claim *Claim) Abort() error {
 func (journal *Journal) Load(
 	ctx context.Context,
 	executionID string,
-) (Entry, error) {
+) (port.RunnerJournalEntry, error) {
 	if journal == nil || ctx == nil || executionKey(executionID) == "" {
-		return Entry{}, ErrInvalid
+		return port.RunnerJournalEntry{}, ErrInvalid
 	}
 	journal.mutex.Lock()
 	defer journal.mutex.Unlock()
 	root, err := journal.openRoot()
 	if err != nil {
-		return Entry{}, err
+		return port.RunnerJournalEntry{}, err
 	}
 	defer root.Close()
 	execution, found, err := readExecution(
 		ctx, root, executionKey(executionID), journal.runnerID, true,
 	)
 	if err != nil {
-		return Entry{}, err
+		return port.RunnerJournalEntry{}, err
 	}
 	if !found {
-		return Entry{}, ErrNotFound
+		return port.RunnerJournalEntry{}, ErrNotFound
 	}
 	return entryFromCurrent(execution), nil
 }
 
-func (journal *Journal) Entries(ctx context.Context) ([]Entry, error) {
+func (journal *Journal) Entries(ctx context.Context) ([]port.RunnerJournalEntry, error) {
 	if journal == nil || ctx == nil {
 		return nil, ErrInvalid
 	}
@@ -394,7 +391,7 @@ func (journal *Journal) Entries(ctx context.Context) ([]Entry, error) {
 	if err != nil {
 		return nil, err
 	}
-	entries := make([]Entry, 0, len(keys))
+	entries := make([]port.RunnerJournalEntry, 0, len(keys))
 	for _, key := range keys {
 		execution, found, readErr := readExecution(
 			ctx, root, key, journal.runnerID, true,
@@ -421,7 +418,7 @@ func (journal *Journal) MarkEffectStarted(
 	ctx context.Context,
 	assignment devopsbuildv1.Assignment,
 	observedAt time.Time,
-) (Entry, error) {
+) (port.RunnerJournalEntry, error) {
 	return journal.change(ctx, assignment, func(execution storedExecution) (stateRecord, bool, error) {
 		if validateJournalTime(observedAt) != nil ||
 			observedAt.Before(assignment.Request.StartedAt) ||
@@ -429,16 +426,16 @@ func (journal *Journal) MarkEffectStarted(
 			!observedAt.Before(assignment.Request.DeadlineAt) {
 			return stateRecord{}, false, ErrStale
 		}
-		if execution.state.Phase == PhaseEffectStarted {
+		if execution.state.Phase == port.RunnerJournalEffectStarted {
 			return execution.state, false, nil
 		}
-		if execution.state.Phase != PhaseReceived ||
+		if execution.state.Phase != port.RunnerJournalReceived ||
 			execution.state.Mode != devopsbuildv1.AssignmentExecute ||
 			execution.state.CancellationRequested {
 			return stateRecord{}, false, ErrConflict
 		}
 		next := nextState(execution.state)
-		next.Phase = PhaseEffectStarted
+		next.Phase = port.RunnerJournalEffectStarted
 		sealState(&next)
 		return next, true, nil
 	})
@@ -448,15 +445,15 @@ func (journal *Journal) ApplyRenewal(
 	ctx context.Context,
 	assignment devopsbuildv1.Assignment,
 	renewal devopsbuildv1.Renewal,
-) (Entry, error) {
+) (port.RunnerJournalEntry, error) {
 	if devopsbuildv1.ValidateRenewal(assignment.Request, renewal) != nil ||
 		renewal.ExecutionID != assignment.ExecutionID ||
 		renewal.FencingToken != assignment.FencingToken {
-		return Entry{}, ErrInvalid
+		return port.RunnerJournalEntry{}, ErrInvalid
 	}
 	return journal.change(ctx, assignment, func(execution storedExecution) (stateRecord, bool, error) {
-		if execution.state.Phase != PhaseReceived &&
-			execution.state.Phase != PhaseEffectStarted {
+		if execution.state.Phase != port.RunnerJournalReceived &&
+			execution.state.Phase != port.RunnerJournalEffectStarted {
 			return stateRecord{}, false, ErrConflict
 		}
 		if renewal.LeaseExpiresAt.Before(execution.state.LeaseExpiresAt) ||
@@ -482,28 +479,28 @@ func (journal *Journal) MarkStepStarted(
 	assignment devopsbuildv1.Assignment,
 	step devopsv1.VerificationStep,
 	startedAt time.Time,
-) (Entry, error) {
+) (port.RunnerJournalEntry, error) {
 	index, found := requestStepIndex(assignment.Request, step)
 	if !found || validateJournalTime(startedAt) != nil {
-		return Entry{}, ErrInvalid
+		return port.RunnerJournalEntry{}, ErrInvalid
 	}
 	if startedAt.Before(assignment.Request.StartedAt) ||
 		!startedAt.Before(assignment.LeaseExpiresAt) ||
 		!startedAt.Before(assignment.Request.DeadlineAt) {
-		return Entry{}, ErrStale
+		return port.RunnerJournalEntry{}, ErrStale
 	}
 	return journal.change(ctx, assignment, func(execution storedExecution) (stateRecord, bool, error) {
 		current := execution.state.Steps[index].Phase
-		if current == StepStarted {
+		if current == port.RunnerStepStarted {
 			return execution.state, false, nil
 		}
-		if execution.state.Phase != PhaseEffectStarted ||
-			execution.state.CancellationRequested || current != StepPending ||
-			(index == 1 && execution.state.Steps[0].Phase != StepPassed) {
+		if execution.state.Phase != port.RunnerJournalEffectStarted ||
+			execution.state.CancellationRequested || current != port.RunnerStepPending ||
+			(index == 1 && execution.state.Steps[0].Phase != port.RunnerStepPassed) {
 			return stateRecord{}, false, ErrConflict
 		}
 		next := nextState(execution.state)
-		next.Steps[index].Phase = StepStarted
+		next.Steps[index].Phase = port.RunnerStepStarted
 		next.Steps[index].StartedAt = startedAt
 		if !validStepProgress(assignment.Request, next.Steps) {
 			return stateRecord{}, false, ErrConflict
@@ -523,11 +520,11 @@ func (journal *Journal) RecordStepConclusion(
 	step devopsv1.VerificationStep,
 	conclusion devopsbuildv1.StepConclusion,
 	logProgress runnerlog.Progress,
-) (Entry, error) {
+) (port.RunnerJournalEntry, error) {
 	index, found := requestStepIndex(assignment.Request, step)
 	want := stepPhaseFromConclusion(conclusion)
 	if !found || want == "" || runnerlog.Validate(logProgress) != nil {
-		return Entry{}, ErrInvalid
+		return port.RunnerJournalEntry{}, ErrInvalid
 	}
 	return journal.change(ctx, assignment, func(execution storedExecution) (stateRecord, bool, error) {
 		current := execution.state.Steps[index].Phase
@@ -537,19 +534,19 @@ func (journal *Journal) RecordStepConclusion(
 			}
 			return execution.state, false, nil
 		}
-		if execution.state.Phase != PhaseReceived &&
-			execution.state.Phase != PhaseEffectStarted {
+		if execution.state.Phase != port.RunnerJournalReceived &&
+			execution.state.Phase != port.RunnerJournalEffectStarted {
 			return stateRecord{}, false, ErrConflict
 		}
-		if current == StepPending &&
-			(want != StepCancelled || !execution.state.CancellationRequested) {
+		if current == port.RunnerStepPending &&
+			(want != port.RunnerStepCancelled || !execution.state.CancellationRequested) {
 			return stateRecord{}, false, ErrConflict
 		}
-		if current != StepPending && current != StepStarted {
+		if current != port.RunnerStepPending && current != port.RunnerStepStarted {
 			return stateRecord{}, false, ErrConflict
 		}
-		if (current == StepPending && logProgress != execution.state.LogProgress) ||
-			(current == StepStarted && runnerlog.ValidateAdvance(
+		if (current == port.RunnerStepPending && logProgress != execution.state.LogProgress) ||
+			(current == port.RunnerStepStarted && runnerlog.ValidateAdvance(
 				execution.state.LogProgress, logProgress,
 			) != nil) {
 			return stateRecord{}, false, ErrConflict
@@ -569,24 +566,24 @@ func (journal *Journal) RecordReceipt(
 	ctx context.Context,
 	assignment devopsbuildv1.Assignment,
 	receipt devopsbuildv1.Receipt,
-) (Entry, error) {
+) (port.RunnerJournalEntry, error) {
 	if devopsbuildv1.ValidateReceipt(assignment.Request, receipt) != nil ||
 		receipt.ExecutorID != journal.RunnerID() {
-		return Entry{}, ErrInvalid
+		return port.RunnerJournalEntry{}, ErrInvalid
 	}
 	return journal.change(ctx, assignment, func(execution storedExecution) (stateRecord, bool, error) {
-		if execution.state.Phase == PhaseTerminal && execution.state.Receipt != nil &&
+		if execution.state.Phase == port.RunnerJournalTerminal && execution.state.Receipt != nil &&
 			*execution.state.Receipt == receipt {
 			return execution.state, false, nil
 		}
 		if !progressMatchesReceipt(execution.state.Steps, receipt) ||
-			(execution.state.Phase != PhaseEffectStarted &&
-				(execution.state.Phase != PhaseReceived ||
+			(execution.state.Phase != port.RunnerJournalEffectStarted &&
+				(execution.state.Phase != port.RunnerJournalReceived ||
 					!execution.state.CancellationRequested)) {
 			return stateRecord{}, false, ErrConflict
 		}
 		next := nextState(execution.state)
-		next.Phase = PhaseTerminal
+		next.Phase = port.RunnerJournalTerminal
 		next.Receipt = &receipt
 		sealState(&next)
 		return next, true, nil
@@ -597,19 +594,19 @@ func (journal *Journal) Acknowledge(
 	ctx context.Context,
 	assignment devopsbuildv1.Assignment,
 	receipt devopsbuildv1.Receipt,
-) (Entry, error) {
+) (port.RunnerJournalEntry, error) {
 	return journal.change(ctx, assignment, func(execution storedExecution) (stateRecord, bool, error) {
 		if execution.state.Receipt == nil || *execution.state.Receipt != receipt {
 			return stateRecord{}, false, ErrConflict
 		}
-		if execution.state.Phase == PhaseAcknowledged {
+		if execution.state.Phase == port.RunnerJournalAcknowledged {
 			return execution.state, false, nil
 		}
-		if execution.state.Phase != PhaseTerminal {
+		if execution.state.Phase != port.RunnerJournalTerminal {
 			return stateRecord{}, false, ErrConflict
 		}
 		next := nextState(execution.state)
-		next.Phase = PhaseAcknowledged
+		next.Phase = port.RunnerJournalAcknowledged
 		sealState(&next)
 		return next, true, nil
 	})
@@ -647,40 +644,40 @@ func (journal *Journal) change(
 	ctx context.Context,
 	assignment devopsbuildv1.Assignment,
 	transition func(storedExecution) (stateRecord, bool, error),
-) (Entry, error) {
+) (port.RunnerJournalEntry, error) {
 	if journal == nil || ctx == nil || transition == nil ||
 		devopsbuildv1.ValidateAssignment(assignment) != nil {
-		return Entry{}, ErrInvalid
+		return port.RunnerJournalEntry{}, ErrInvalid
 	}
 	journal.mutex.Lock()
 	defer journal.mutex.Unlock()
 	root, err := journal.openRoot()
 	if err != nil {
-		return Entry{}, err
+		return port.RunnerJournalEntry{}, err
 	}
 	defer root.Close()
 	execution, found, err := readExecution(
 		ctx, root, executionKey(assignment.ExecutionID), journal.runnerID, true,
 	)
 	if err != nil {
-		return Entry{}, err
+		return port.RunnerJournalEntry{}, err
 	}
 	if !found {
-		return Entry{}, ErrNotFound
+		return port.RunnerJournalEntry{}, ErrNotFound
 	}
 	current := currentAssignment(execution)
 	if current != assignment {
-		return Entry{}, ErrStale
+		return port.RunnerJournalEntry{}, ErrStale
 	}
 	next, changed, err := transition(execution)
 	if err != nil {
-		return Entry{}, err
+		return port.RunnerJournalEntry{}, err
 	}
 	if !changed {
 		return entryFrom(current, execution.state), nil
 	}
 	if err := appendState(root, execution, next); err != nil {
-		return Entry{}, err
+		return port.RunnerJournalEntry{}, err
 	}
 	return entryFrom(currentAssignment(storedExecution{
 		assignment: execution.assignment, state: next,
@@ -695,12 +692,12 @@ func currentAssignment(execution storedExecution) devopsbuildv1.Assignment {
 	return assignment
 }
 
-func entryFromCurrent(execution storedExecution) Entry {
+func entryFromCurrent(execution storedExecution) port.RunnerJournalEntry {
 	return entryFrom(currentAssignment(execution), execution.state)
 }
 
-func entryFrom(assignment devopsbuildv1.Assignment, state stateRecord) Entry {
-	entry := Entry{
+func entryFrom(assignment devopsbuildv1.Assignment, state stateRecord) port.RunnerJournalEntry {
+	entry := port.RunnerJournalEntry{
 		Assignment: assignment, Phase: state.Phase, EffectID: state.EffectID,
 		CancellationRequested: state.CancellationRequested, Steps: state.Steps,
 		LogProgress: state.LogProgress,
@@ -712,14 +709,14 @@ func entryFrom(assignment devopsbuildv1.Assignment, state stateRecord) Entry {
 	return entry
 }
 
-func stepPhaseFromConclusion(value devopsbuildv1.StepConclusion) StepPhase {
+func stepPhaseFromConclusion(value devopsbuildv1.StepConclusion) port.RunnerStepPhase {
 	switch value {
 	case devopsbuildv1.StepConclusionPassed:
-		return StepPassed
+		return port.RunnerStepPassed
 	case devopsbuildv1.StepConclusionFailed:
-		return StepFailed
+		return port.RunnerStepFailed
 	case devopsbuildv1.StepConclusionCancelled:
-		return StepCancelled
+		return port.RunnerStepCancelled
 	default:
 		return ""
 	}

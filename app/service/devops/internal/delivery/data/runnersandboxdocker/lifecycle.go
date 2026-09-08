@@ -11,6 +11,7 @@ import (
 	"strconv"
 
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/runnerlog"
 )
 
 const maximumLogTransportBytes = devopsv1.FixedMaxLogBytes * 9
@@ -33,7 +34,7 @@ const (
 
 type StepResult struct {
 	State  StepState
-	Chunks []LogChunk
+	Chunks []runnerlog.Chunk
 }
 
 // CreateStep creates one deterministic fixed-profile container and proves its
@@ -368,7 +369,7 @@ func (client *Client) readStepLogs(
 	containerID string,
 	budget *LogBudget,
 	follow bool,
-) ([]LogChunk, error) {
+) ([]runnerlog.Chunk, error) {
 	if client == nil || ctx == nil || budget == nil || !validContainerID(containerID) {
 		return nil, ErrInvalid
 	}

@@ -16,8 +16,7 @@ import (
 )
 
 const (
-	maximumLogLineBytes  = 16 * 1024
-	maximumLogChunkBytes = 64 * 1024
+	maximumLogLineBytes = 16 * 1024
 
 	stdoutStream = byte(1)
 	stderrStream = byte(2)
@@ -27,11 +26,6 @@ var (
 	ErrLogInvalid = errors.New("runner sandbox log stream is invalid")
 	ErrLogLimit   = errors.New("runner sandbox log limit was exceeded")
 )
-
-type LogChunk struct {
-	Sequence uint64
-	Content  string
-}
 
 // LogBudget is shared by both fixed verification steps. It bounds native bytes
 // before normalization and normalized bytes after stream labels and markers.
@@ -92,7 +86,7 @@ func (budget *LogBudget) invalidate() {
 	budget.mutex.Unlock()
 }
 
-func (budget *LogBudget) DecodeDockerStream(source io.Reader) ([]LogChunk, error) {
+func (budget *LogBudget) DecodeDockerStream(source io.Reader) ([]runnerlog.Chunk, error) {
 	if budget == nil || source == nil {
 		return nil, ErrInvalid
 	}
@@ -117,7 +111,7 @@ type logDecoder struct {
 	stdout   logLine
 	stderr   logLine
 	order    uint64
-	chunks   []LogChunk
+	chunks   []runnerlog.Chunk
 	buffered []byte
 }
 
@@ -244,13 +238,13 @@ func (decoder *logDecoder) emitLine(line *logLine, label string, newline bool) e
 		return ErrLogLimit
 	}
 	decoder.budget.normalizedBytes += int64(len(output))
-	if len(decoder.buffered) > 0 && len(decoder.buffered)+len(output) > maximumLogChunkBytes {
+	if len(decoder.buffered) > 0 && len(decoder.buffered)+len(output) > runnerlog.MaximumChunkBytes {
 		if err := decoder.flushChunk(); err != nil {
 			return err
 		}
 	}
 	decoder.buffered = append(decoder.buffered, output...)
-	if len(decoder.buffered) == maximumLogChunkBytes {
+	if len(decoder.buffered) == runnerlog.MaximumChunkBytes {
 		return decoder.flushChunk()
 	}
 	return nil
@@ -263,7 +257,7 @@ func (decoder *logDecoder) flushChunk() error {
 	if decoder.budget.sequence == ^uint64(0) {
 		return ErrLogInvalid
 	}
-	decoder.chunks = append(decoder.chunks, LogChunk{
+	decoder.chunks = append(decoder.chunks, runnerlog.Chunk{
 		Sequence: decoder.budget.sequence + 1,
 		Content:  string(decoder.buffered),
 	})

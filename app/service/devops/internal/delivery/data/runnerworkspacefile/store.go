@@ -20,6 +20,7 @@ import (
 
 	devopsbuildv1 "github.com/xiak/matrix/api/adapter/devopsbuild/v1"
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/port"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/sourcearchive"
 )
 
@@ -42,11 +43,7 @@ var (
 	ErrOutcomeUnknown = errors.New("runner workspace outcome is unknown")
 )
 
-type Workspace struct {
-	ExecutionID string
-	TreeDigest  string
-	SourceRoot  string
-}
+var _ port.RunnerWorkspaceStore = (*Store)(nil)
 
 type Store struct {
 	rootPath  string
@@ -127,9 +124,9 @@ func (store *Store) Ensure(
 	executionID string,
 	request devopsbuildv1.Request,
 	archive io.ReadCloser,
-) (workspace Workspace, result error) {
+) (workspace port.RunnerWorkspace, result error) {
 	if archive == nil {
-		return Workspace{}, ErrInvalid
+		return port.RunnerWorkspace{}, ErrInvalid
 	}
 	defer func() {
 		if closeErr := archive.Close(); closeErr != nil {
@@ -138,39 +135,39 @@ func (store *Store) Ensure(
 			} else {
 				result = errors.Join(result, ErrUnavailable, closeErr)
 			}
-			workspace = Workspace{}
+			workspace = port.RunnerWorkspace{}
 		}
 	}()
 	if store == nil || ctx == nil || devopsbuildv1.ValidateRequest(request) != nil {
-		return Workspace{}, ErrInvalid
+		return port.RunnerWorkspace{}, ErrInvalid
 	}
 	wantExecutionID, err := devopsbuildv1.ExecutionID(request)
 	if err != nil || executionID != wantExecutionID {
-		return Workspace{}, ErrInvalid
+		return port.RunnerWorkspace{}, ErrInvalid
 	}
 	if err := ctx.Err(); err != nil {
-		return Workspace{}, err
+		return port.RunnerWorkspace{}, err
 	}
 	store.mutex.Lock()
 	defer store.mutex.Unlock()
 	if store.closed || store.ownership == nil {
-		return Workspace{}, ErrUnavailable
+		return port.RunnerWorkspace{}, ErrUnavailable
 	}
 	root, err := store.openRoot()
 	if err != nil {
-		return Workspace{}, err
+		return port.RunnerWorkspace{}, err
 	}
 	defer root.Close()
 	key := executionKey(executionID)
 	info, err := root.Lstat(key)
 	if err == nil {
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || !privateMode(info.Mode(), 0o700) {
-			return Workspace{}, ErrUnavailable
+			return port.RunnerWorkspace{}, ErrUnavailable
 		}
 		return store.reuse(ctx, root, key, executionID, request, archive)
 	}
 	if !errors.Is(err, os.ErrNotExist) {
-		return Workspace{}, errors.Join(ErrUnavailable, err)
+		return port.RunnerWorkspace{}, errors.Join(ErrUnavailable, err)
 	}
 	return store.publish(ctx, root, key, executionID, request, archive)
 }
@@ -182,22 +179,22 @@ func (store *Store) reuse(
 	executionID string,
 	request devopsbuildv1.Request,
 	archive io.Reader,
-) (Workspace, error) {
+) (port.RunnerWorkspace, error) {
 	value, err := readManifest(root, key)
 	if err != nil {
-		return Workspace{}, err
+		return port.RunnerWorkspace{}, err
 	}
 	if value.RunnerID != store.runnerID ||
 		validateManifestRequest(value, executionID, request) != nil {
-		return Workspace{}, ErrConflict
+		return port.RunnerWorkspace{}, ErrConflict
 	}
 	archiveTree, err := consumeArchive(ctx, archive, request, nil)
 	if err != nil {
-		return Workspace{}, err
+		return port.RunnerWorkspace{}, err
 	}
 	publishedTree, err := scanPublishedTree(ctx, root, key)
 	if err != nil || archiveTree != publishedTree || !manifestMatchesTree(value, publishedTree) {
-		return Workspace{}, errors.Join(ErrUnavailable, err)
+		return port.RunnerWorkspace{}, errors.Join(ErrUnavailable, err)
 	}
 	return store.workspace(root, key, value)
 }
@@ -209,27 +206,27 @@ func (store *Store) publish(
 	executionID string,
 	request devopsbuildv1.Request,
 	archive io.Reader,
-) (workspace Workspace, result error) {
+) (workspace port.RunnerWorkspace, result error) {
 	keys, err := listWorkspaceKeys(root)
 	if err != nil || len(keys) >= maximumWorkspaces {
-		return Workspace{}, errors.Join(ErrUnavailable, err)
+		return port.RunnerWorkspace{}, errors.Join(ErrUnavailable, err)
 	}
 	staging, err := createStaging(root, key)
 	if err != nil {
-		return Workspace{}, errors.Join(ErrUnavailable, err)
+		return port.RunnerWorkspace{}, errors.Join(ErrUnavailable, err)
 	}
 	published := false
 	defer func() {
 		if !published {
 			if cleanupErr := discardStaging(root, staging); cleanupErr != nil {
-				workspace = Workspace{}
+				workspace = port.RunnerWorkspace{}
 				result = errors.Join(result, ErrUnavailable, cleanupErr)
 			}
 		}
 	}()
 	sourceRoot := staging + "/" + sourceDirectoryName
 	if err := root.Mkdir(sourceRoot, 0o700); err != nil {
-		return Workspace{}, errors.Join(ErrUnavailable, err)
+		return port.RunnerWorkspace{}, errors.Join(ErrUnavailable, err)
 	}
 	tree, err := consumeArchive(
 		ctx,
@@ -240,35 +237,35 @@ func (store *Store) publish(
 		},
 	)
 	if err != nil {
-		return Workspace{}, err
+		return port.RunnerWorkspace{}, err
 	}
 	if err := sealSourceTree(root, sourceRoot); err != nil {
-		return Workspace{}, err
+		return port.RunnerWorkspace{}, err
 	}
 	value, err := newManifest(store.runnerID, executionID, request, tree)
 	if err != nil {
-		return Workspace{}, err
+		return port.RunnerWorkspace{}, err
 	}
 	content, err := encodeManifest(value)
 	if err != nil || writePrivateFile(root, staging+"/"+manifestName, content) != nil {
-		return Workspace{}, errors.Join(ErrUnavailable, err)
+		return port.RunnerWorkspace{}, errors.Join(ErrUnavailable, err)
 	}
 	if err := syncDirectory(root, staging); err != nil {
-		return Workspace{}, errors.Join(ErrUnavailable, err)
+		return port.RunnerWorkspace{}, errors.Join(ErrUnavailable, err)
 	}
 	if err := validateWorkspaceShape(root, staging); err != nil {
-		return Workspace{}, err
+		return port.RunnerWorkspace{}, err
 	}
 	confirmed, err := scanTree(ctx, root, sourceRoot)
 	if err != nil || confirmed != tree || !manifestMatchesTree(value, confirmed) {
-		return Workspace{}, errors.Join(ErrUnavailable, err)
+		return port.RunnerWorkspace{}, errors.Join(ErrUnavailable, err)
 	}
 	if err := root.Rename(staging, key); err != nil {
-		return Workspace{}, errors.Join(ErrUnavailable, err)
+		return port.RunnerWorkspace{}, errors.Join(ErrUnavailable, err)
 	}
 	published = true
 	if err := syncDirectory(root, "."); err != nil {
-		return Workspace{}, errors.Join(ErrOutcomeUnknown, err)
+		return port.RunnerWorkspace{}, errors.Join(ErrOutcomeUnknown, err)
 	}
 	return store.workspace(root, key, value)
 }
@@ -277,14 +274,14 @@ func (store *Store) workspace(
 	root *os.Root,
 	key string,
 	value manifest,
-) (Workspace, error) {
+) (port.RunnerWorkspace, error) {
 	sourceRoot := filepath.Join(store.rootPath, key, sourceDirectoryName)
 	info, err := root.Lstat(key + "/" + sourceDirectoryName)
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() ||
 		!privateMode(info.Mode(), 0o555) {
-		return Workspace{}, errors.Join(ErrUnavailable, err)
+		return port.RunnerWorkspace{}, errors.Join(ErrUnavailable, err)
 	}
-	return Workspace{
+	return port.RunnerWorkspace{
 		ExecutionID: value.ExecutionID,
 		TreeDigest:  value.TreeDigest,
 		SourceRoot:  sourceRoot,

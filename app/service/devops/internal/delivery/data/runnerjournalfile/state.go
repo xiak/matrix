@@ -14,33 +14,9 @@ import (
 
 	devopsbuildv1 "github.com/xiak/matrix/api/adapter/devopsbuild/v1"
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/port"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/runnerlog"
 )
-
-type Phase string
-type StepPhase string
-
-const (
-	PhaseReceived      Phase = "RECEIVED"
-	PhaseEffectStarted Phase = "EFFECT_STARTED"
-	PhaseTerminal      Phase = "TERMINAL"
-	PhaseAcknowledged  Phase = "ACKNOWLEDGED"
-)
-
-const (
-	StepPending   StepPhase = "PENDING"
-	StepStarted   StepPhase = "STARTED"
-	StepPassed    StepPhase = "PASSED"
-	StepFailed    StepPhase = "FAILED"
-	StepCancelled StepPhase = "CANCELLED"
-)
-
-type StepProgress struct {
-	Ordinal   uint32                        `json:"ordinal"`
-	Kind      devopsv1.VerificationStepKind `json:"kind"`
-	Phase     StepPhase                     `json:"phase"`
-	StartedAt time.Time                     `json:"startedAt"`
-}
 
 type stateRecord struct {
 	SchemaVersion         uint32                       `json:"schemaVersion"`
@@ -48,13 +24,13 @@ type stateRecord struct {
 	ExecutionID           string                       `json:"executionId"`
 	RequestDigest         string                       `json:"requestDigest"`
 	RunnerID              string                       `json:"runnerId"`
-	Phase                 Phase                        `json:"phase"`
+	Phase                 port.RunnerJournalPhase      `json:"phase"`
 	Mode                  devopsbuildv1.AssignmentMode `json:"mode"`
 	FencingToken          uint64                       `json:"fencingToken"`
 	LeaseExpiresAt        time.Time                    `json:"leaseExpiresAt"`
 	EffectID              string                       `json:"effectId"`
 	CancellationRequested bool                         `json:"cancellationRequested"`
-	Steps                 [2]StepProgress              `json:"steps"`
+	Steps                 [2]port.RunnerStepProgress   `json:"steps"`
 	LogProgress           runnerlog.Progress           `json:"logProgress"`
 	Receipt               *devopsbuildv1.Receipt       `json:"receipt"`
 	PreviousDigest        string                       `json:"previousDigest"`
@@ -79,7 +55,7 @@ func initialState(
 		ExecutionID:    assignment.ExecutionID,
 		RequestDigest:  requestDigest,
 		RunnerID:       runnerID,
-		Phase:          PhaseReceived,
+		Phase:          port.RunnerJournalReceived,
 		Mode:           assignment.Mode,
 		FencingToken:   assignment.FencingToken,
 		LeaseExpiresAt: assignment.LeaseExpiresAt,
@@ -166,7 +142,7 @@ func validateState(request devopsbuildv1.Request, value stateRecord) error {
 		return ErrUnavailable
 	}
 	if value.Version == 1 {
-		if value.PreviousDigest != "" || value.Phase != PhaseReceived ||
+		if value.PreviousDigest != "" || value.Phase != port.RunnerJournalReceived ||
 			value.Mode != devopsbuildv1.AssignmentExecute || value.FencingToken != 1 ||
 			value.CancellationRequested || value.Steps != initialStepProgress(request) ||
 			value.LogProgress != (runnerlog.Progress{}) ||
@@ -190,16 +166,16 @@ func validateState(request devopsbuildv1.Request, value stateRecord) error {
 		return ErrUnavailable
 	}
 	switch value.Phase {
-	case PhaseReceived:
+	case port.RunnerJournalReceived:
 		if value.Receipt != nil || (value.Steps != initialStepProgress(request) &&
 			(!value.CancellationRequested || !pendingCancellation(value.Steps))) {
 			return ErrUnavailable
 		}
-	case PhaseEffectStarted:
+	case port.RunnerJournalEffectStarted:
 		if value.Receipt != nil {
 			return ErrUnavailable
 		}
-	case PhaseTerminal, PhaseAcknowledged:
+	case port.RunnerJournalTerminal, port.RunnerJournalAcknowledged:
 		if value.Receipt == nil ||
 			devopsbuildv1.ValidateReceipt(request, *value.Receipt) != nil ||
 			value.Receipt.ExecutorID != value.RunnerID ||
@@ -227,8 +203,8 @@ func validateTransition(previous, next stateRecord) error {
 			next.Phase != previous.Phase || next.Steps != previous.Steps ||
 			next.LogProgress != previous.LogProgress ||
 			!equalReceipt(next.Receipt, previous.Receipt) ||
-			(previous.Phase != PhaseReceived && previous.Phase != PhaseEffectStarted &&
-				previous.Phase != PhaseTerminal) ||
+			(previous.Phase != port.RunnerJournalReceived && previous.Phase != port.RunnerJournalEffectStarted &&
+				previous.Phase != port.RunnerJournalTerminal) ||
 			!next.LeaseExpiresAt.After(previous.LeaseExpiresAt) ||
 			(next.Mode == devopsbuildv1.AssignmentObserve && next.CancellationRequested) ||
 			(next.Mode == devopsbuildv1.AssignmentCancel && !next.CancellationRequested) {
@@ -244,8 +220,8 @@ func validateTransition(previous, next stateRecord) error {
 			if !next.LeaseExpiresAt.Equal(previous.LeaseExpiresAt) ||
 				next.CancellationRequested != previous.CancellationRequested ||
 				!equalReceipt(next.Receipt, previous.Receipt) ||
-				(previous.Phase != PhaseEffectStarted &&
-					(previous.Phase != PhaseReceived || !next.CancellationRequested)) ||
+				(previous.Phase != port.RunnerJournalEffectStarted &&
+					(previous.Phase != port.RunnerJournalReceived || !next.CancellationRequested)) ||
 				!validStepTransition(
 					previous.Steps, next.Steps, next.CancellationRequested,
 					previous.LogProgress, next.LogProgress,
@@ -255,7 +231,7 @@ func validateTransition(previous, next stateRecord) error {
 			return nil
 		}
 		if next.LogProgress != previous.LogProgress ||
-			(next.Phase != PhaseReceived && next.Phase != PhaseEffectStarted) ||
+			(next.Phase != port.RunnerJournalReceived && next.Phase != port.RunnerJournalEffectStarted) ||
 			!equalReceipt(next.Receipt, previous.Receipt) ||
 			(next.LeaseExpiresAt.Equal(previous.LeaseExpiresAt) &&
 				next.CancellationRequested == previous.CancellationRequested) {
@@ -269,18 +245,18 @@ func validateTransition(previous, next stateRecord) error {
 		return ErrUnavailable
 	}
 	switch {
-	case previous.Phase == PhaseReceived && next.Phase == PhaseEffectStarted &&
+	case previous.Phase == port.RunnerJournalReceived && next.Phase == port.RunnerJournalEffectStarted &&
 		previous.Mode == devopsbuildv1.AssignmentExecute &&
 		!previous.CancellationRequested && next.Steps == previous.Steps:
 		return nil
-	case previous.Phase == PhaseReceived && next.Phase == PhaseTerminal &&
+	case previous.Phase == port.RunnerJournalReceived && next.Phase == port.RunnerJournalTerminal &&
 		previous.CancellationRequested && next.CancellationRequested &&
 		next.Steps == previous.Steps:
 		return nil
-	case previous.Phase == PhaseEffectStarted && next.Phase == PhaseTerminal &&
+	case previous.Phase == port.RunnerJournalEffectStarted && next.Phase == port.RunnerJournalTerminal &&
 		next.Steps == previous.Steps:
 		return nil
-	case previous.Phase == PhaseTerminal && next.Phase == PhaseAcknowledged &&
+	case previous.Phase == port.RunnerJournalTerminal && next.Phase == port.RunnerJournalAcknowledged &&
 		next.Steps == previous.Steps:
 		return nil
 	default:
@@ -328,32 +304,31 @@ func digestState(value stateRecord) string {
 	return "sha256:" + hex.EncodeToString(digest.Sum(nil))
 }
 
-func initialStepProgress(request devopsbuildv1.Request) [2]StepProgress {
-	return [2]StepProgress{
-		{Ordinal: request.Steps[0].Ordinal, Kind: request.Steps[0].Kind, Phase: StepPending},
-		{Ordinal: request.Steps[1].Ordinal, Kind: request.Steps[1].Kind, Phase: StepPending},
+func initialStepProgress(request devopsbuildv1.Request) [2]port.RunnerStepProgress {
+	return [2]port.RunnerStepProgress{
+		{Ordinal: request.Steps[0].Ordinal, Kind: request.Steps[0].Kind, Phase: port.RunnerStepPending},
+		{Ordinal: request.Steps[1].Ordinal, Kind: request.Steps[1].Kind, Phase: port.RunnerStepPending},
 	}
 }
 
 func validStepProgress(
 	request devopsbuildv1.Request,
-	steps [2]StepProgress,
-) bool {
+	steps [2]port.RunnerStepProgress) bool {
 	for index, step := range steps {
 		if step.Ordinal != request.Steps[index].Ordinal ||
 			step.Kind != request.Steps[index].Kind {
 			return false
 		}
 		switch step.Phase {
-		case StepPending:
+		case port.RunnerStepPending:
 			if !step.StartedAt.IsZero() {
 				return false
 			}
-		case StepStarted, StepPassed, StepFailed:
+		case port.RunnerStepStarted, port.RunnerStepPassed, port.RunnerStepFailed:
 			if !validStepStart(request, step.StartedAt) {
 				return false
 			}
-		case StepCancelled:
+		case port.RunnerStepCancelled:
 			if !step.StartedAt.IsZero() && !validStepStart(request, step.StartedAt) {
 				return false
 			}
@@ -362,15 +337,15 @@ func validStepProgress(
 		}
 	}
 	left, right := steps[0].Phase, steps[1].Phase
-	validOrder := (left == StepPending && right == StepPending) ||
-		(left == StepStarted && right == StepPending) ||
-		(left == StepPassed && right == StepPending) ||
-		(left == StepFailed && right == StepPending) ||
-		(left == StepCancelled && right == StepPending) ||
-		(left == StepPassed && right == StepStarted) ||
-		(left == StepPassed && right == StepPassed) ||
-		(left == StepPassed && right == StepFailed) ||
-		(left == StepPassed && right == StepCancelled)
+	validOrder := (left == port.RunnerStepPending && right == port.RunnerStepPending) ||
+		(left == port.RunnerStepStarted && right == port.RunnerStepPending) ||
+		(left == port.RunnerStepPassed && right == port.RunnerStepPending) ||
+		(left == port.RunnerStepFailed && right == port.RunnerStepPending) ||
+		(left == port.RunnerStepCancelled && right == port.RunnerStepPending) ||
+		(left == port.RunnerStepPassed && right == port.RunnerStepStarted) ||
+		(left == port.RunnerStepPassed && right == port.RunnerStepPassed) ||
+		(left == port.RunnerStepPassed && right == port.RunnerStepFailed) ||
+		(left == port.RunnerStepPassed && right == port.RunnerStepCancelled)
 	if !validOrder {
 		return false
 	}
@@ -383,14 +358,13 @@ func validStepStart(request devopsbuildv1.Request, value time.Time) bool {
 		value.Before(request.DeadlineAt)
 }
 
-func pendingCancellation(steps [2]StepProgress) bool {
-	return (steps[0].Phase == StepCancelled && steps[1].Phase == StepPending) ||
-		(steps[0].Phase == StepPassed && steps[1].Phase == StepCancelled)
+func pendingCancellation(steps [2]port.RunnerStepProgress) bool {
+	return (steps[0].Phase == port.RunnerStepCancelled && steps[1].Phase == port.RunnerStepPending) ||
+		(steps[0].Phase == port.RunnerStepPassed && steps[1].Phase == port.RunnerStepCancelled)
 }
 
 func progressMatchesReceipt(
-	steps [2]StepProgress,
-	receipt devopsbuildv1.Receipt,
+	steps [2]port.RunnerStepProgress, receipt devopsbuildv1.Receipt,
 ) bool {
 	for index, step := range steps {
 		if step.Ordinal != receipt.Steps[index].Ordinal ||
@@ -402,15 +376,15 @@ func progressMatchesReceipt(
 	return true
 }
 
-func stepReceiptConclusion(value StepPhase) devopsbuildv1.StepConclusion {
+func stepReceiptConclusion(value port.RunnerStepPhase) devopsbuildv1.StepConclusion {
 	switch value {
-	case StepPassed:
+	case port.RunnerStepPassed:
 		return devopsbuildv1.StepConclusionPassed
-	case StepFailed:
+	case port.RunnerStepFailed:
 		return devopsbuildv1.StepConclusionFailed
-	case StepCancelled:
+	case port.RunnerStepCancelled:
 		return devopsbuildv1.StepConclusionCancelled
-	case StepPending:
+	case port.RunnerStepPending:
 		return devopsbuildv1.StepConclusionNotRun
 	default:
 		return ""
@@ -418,9 +392,7 @@ func stepReceiptConclusion(value StepPhase) devopsbuildv1.StepConclusion {
 }
 
 func validStepTransition(
-	previous [2]StepProgress,
-	next [2]StepProgress,
-	cancellationRequested bool,
+	previous [2]port.RunnerStepProgress, next [2]port.RunnerStepProgress, cancellationRequested bool,
 	previousLog runnerlog.Progress,
 	nextLog runnerlog.Progress,
 ) bool {
@@ -445,16 +417,16 @@ func validStepTransition(
 		return false
 	}
 	from, to := previous[changed].Phase, next[changed].Phase
-	if from == StepPending {
+	if from == port.RunnerStepPending {
 		return nextLog == previousLog &&
-			((!cancellationRequested && to == StepStarted &&
+			((!cancellationRequested && to == port.RunnerStepStarted &&
 				!next[changed].StartedAt.IsZero()) ||
-				(cancellationRequested && to == StepCancelled &&
+				(cancellationRequested && to == port.RunnerStepCancelled &&
 					next[changed].StartedAt.IsZero()))
 	}
-	return from == StepStarted &&
+	return from == port.RunnerStepStarted &&
 		previous[changed].StartedAt == next[changed].StartedAt &&
-		(to == StepPassed || to == StepFailed || to == StepCancelled) &&
+		(to == port.RunnerStepPassed || to == port.RunnerStepFailed || to == port.RunnerStepCancelled) &&
 		runnerlog.ValidateAdvance(previousLog, nextLog) == nil
 }
 

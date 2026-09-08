@@ -58,3 +58,27 @@ func TestProgressAdvanceIsAtomicAndMonotonic(t *testing.T) {
 		}
 	}
 }
+
+func TestLogBatchExactlyAccountsForCursorAdvance(t *testing.T) {
+	previous := Progress{NativeBytes: 10, NormalizedBytes: 20, LastSequence: 2}
+	next := Progress{NativeBytes: 20, NormalizedBytes: 24, LastSequence: 4}
+	chunks := []Chunk{{Sequence: 3, Content: "ok\n"}, {Sequence: 4, Content: "x"}}
+	if err := ValidateBatch(previous, next, chunks); err != nil {
+		t.Fatalf("valid batch: %v", err)
+	}
+	if err := ValidateBatch(previous, previous, nil); err != nil {
+		t.Fatalf("empty batch: %v", err)
+	}
+	invalid := [][]Chunk{
+		nil,
+		{{Sequence: 4, Content: "ok\n"}, {Sequence: 5, Content: "x"}},
+		{{Sequence: 3, Content: "ok\n"}},
+		{{Sequence: 3, Content: "ok\x00"}, {Sequence: 4, Content: "x"}},
+		{{Sequence: 3, Content: ""}, {Sequence: 4, Content: "ok\nx"}},
+	}
+	for _, batch := range invalid {
+		if err := ValidateBatch(previous, next, batch); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("invalid batch %#v: %v", batch, err)
+		}
+	}
+}

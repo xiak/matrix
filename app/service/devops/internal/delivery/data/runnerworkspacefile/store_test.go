@@ -16,6 +16,7 @@ import (
 
 	devopsbuildv1 "github.com/xiak/matrix/api/adapter/devopsbuild/v1"
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/port"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/sourcearchive"
 )
 
@@ -119,8 +120,8 @@ func TestStoreOwnershipAndRunnerIdentityAreExclusive(t *testing.T) {
 }
 
 func TestStoreRejectsWorkspaceAndManifestTampering(t *testing.T) {
-	tests := map[string]func(*testing.T, string, Workspace){
-		"writable mode": func(t *testing.T, _ string, workspace Workspace) {
+	tests := map[string]func(*testing.T, string, port.RunnerWorkspace){
+		"writable mode": func(t *testing.T, _ string, workspace port.RunnerWorkspace) {
 			if runtime.GOOS == "windows" {
 				t.Skip("Windows does not preserve Unix executable and write mode bits")
 			}
@@ -128,7 +129,7 @@ func TestStoreRejectsWorkspaceAndManifestTampering(t *testing.T) {
 				t.Fatal(err)
 			}
 		},
-		"changed content": func(t *testing.T, _ string, workspace Workspace) {
+		"changed content": func(t *testing.T, _ string, workspace port.RunnerWorkspace) {
 			name := filepath.Join(workspace.SourceRoot, "go.mod")
 			if err := os.Chmod(name, 0o644); err != nil {
 				t.Fatal(err)
@@ -140,7 +141,7 @@ func TestStoreRejectsWorkspaceAndManifestTampering(t *testing.T) {
 				t.Fatal(err)
 			}
 		},
-		"extra directory": func(t *testing.T, _ string, workspace Workspace) {
+		"extra directory": func(t *testing.T, _ string, workspace port.RunnerWorkspace) {
 			if err := os.Chmod(workspace.SourceRoot, 0o755); err != nil {
 				t.Fatal(err)
 			}
@@ -155,7 +156,7 @@ func TestStoreRejectsWorkspaceAndManifestTampering(t *testing.T) {
 				t.Fatal(err)
 			}
 		},
-		"changed manifest": func(t *testing.T, root string, workspace Workspace) {
+		"changed manifest": func(t *testing.T, root string, workspace port.RunnerWorkspace) {
 			name := filepath.Join(root, executionKey(workspace.ExecutionID), manifestName)
 			content, err := os.ReadFile(name)
 			if err != nil {
@@ -173,7 +174,7 @@ func TestStoreRejectsWorkspaceAndManifestTampering(t *testing.T) {
 			mutate(t, rootPath, workspace)
 			if got, err := store.Ensure(
 				context.Background(), workspace.ExecutionID, request, archiveReader(archive),
-			); err == nil || got != (Workspace{}) || !errors.Is(err, ErrUnavailable) {
+			); err == nil || got != (port.RunnerWorkspace{}) || !errors.Is(err, ErrUnavailable) {
 				t.Fatalf("workspace = %#v, error = %v", got, err)
 			}
 		})
@@ -196,7 +197,7 @@ func TestStoreRejectsSymlinkAndCrossExecutionReplay(t *testing.T) {
 		}
 		if got, err := store.Ensure(
 			context.Background(), workspace.ExecutionID, request, archiveReader(archive),
-		); err == nil || got != (Workspace{}) || !errors.Is(err, ErrUnavailable) {
+		); err == nil || got != (port.RunnerWorkspace{}) || !errors.Is(err, ErrUnavailable) {
 			t.Fatalf("workspace = %#v, error = %v", got, err)
 		}
 	})
@@ -210,7 +211,7 @@ func TestStoreRejectsSymlinkAndCrossExecutionReplay(t *testing.T) {
 		}
 		if got, err := store.Ensure(
 			context.Background(), workspace.ExecutionID, request, archiveReader(archive),
-		); !errors.Is(err, ErrConflict) || got != (Workspace{}) {
+		); !errors.Is(err, ErrConflict) || got != (port.RunnerWorkspace{}) {
 			t.Fatalf("workspace = %#v, error = %v", got, err)
 		}
 	})
@@ -246,7 +247,7 @@ func TestStoreRejectsInvalidArchiveAndRemovesStaging(t *testing.T) {
 			}
 			if got, err := store.Ensure(
 				context.Background(), executionID, request, archiveReader(archive),
-			); err == nil || got != (Workspace{}) || !errors.Is(err, ErrUnavailable) {
+			); err == nil || got != (port.RunnerWorkspace{}) || !errors.Is(err, ErrUnavailable) {
 				t.Fatalf("workspace = %#v, error = %v", got, err)
 			}
 			entries, err := os.ReadDir(rootPath)
@@ -298,7 +299,7 @@ func TestStorePreservesPublishedTruthWhenArchiveCloseIsAmbiguous(t *testing.T) {
 	}
 	if workspace, err := store.Ensure(
 		context.Background(), executionID, request, reader,
-	); workspace != (Workspace{}) || !errors.Is(err, ErrOutcomeUnknown) ||
+	); workspace != (port.RunnerWorkspace{}) || !errors.Is(err, ErrOutcomeUnknown) ||
 		strings.Contains(err.Error(), "module example") {
 		t.Fatalf("workspace = %#v, error = %v", workspace, err)
 	}
@@ -348,7 +349,7 @@ func TestStoreRejectsUnsafeRootAndCancelledInput(t *testing.T) {
 	cancel()
 	if workspace, err := store.Ensure(
 		ctx, executionID, request, archiveReader(archive),
-	); workspace != (Workspace{}) || !errors.Is(err, context.Canceled) {
+	); workspace != (port.RunnerWorkspace{}) || !errors.Is(err, context.Canceled) {
 		t.Fatalf("workspace = %#v, error = %v", workspace, err)
 	}
 }
@@ -356,7 +357,7 @@ func TestStoreRejectsUnsafeRootAndCancelledInput(t *testing.T) {
 func publishedWorkspace(
 	t *testing.T,
 	identity byte,
-) (string, *Store, devopsbuildv1.Request, []byte, Workspace) {
+) (string, *Store, devopsbuildv1.Request, []byte, port.RunnerWorkspace) {
 	t.Helper()
 	rootPath := workspaceRoot(t)
 	store, err := New(rootPath, workspaceRunnerID(identity))

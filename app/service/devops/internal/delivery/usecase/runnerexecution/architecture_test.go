@@ -1,4 +1,4 @@
-package runnersandboxdocker
+package runnerexecution
 
 import (
 	"go/parser"
@@ -10,16 +10,16 @@ import (
 	"testing"
 )
 
-func TestRunnerSandboxOwnsOnlyClosedLocalDockerAuthority(t *testing.T) {
-	allowedMatrix := map[string]bool{
+func TestRunnerExecutionKeepsSideEffectAuthorityBehindPorts(t *testing.T) {
+	allowed := map[string]bool{
+		"context": true,
+		"errors":  true,
+		"sync":    true,
+		"time":    true,
+		"github.com/xiak/matrix/api/adapter/devopsbuild/v1":                     true,
 		"github.com/xiak/matrix/api/devops/v1":                                  true,
 		"github.com/xiak/matrix/app/service/devops/internal/delivery/port":      true,
 		"github.com/xiak/matrix/app/service/devops/internal/delivery/runnerlog": true,
-	}
-	forbiddenStandard := map[string]bool{
-		"database/sql": true,
-		"os/exec":      true,
-		"plugin":       true,
 	}
 	entries, err := os.ReadDir(".")
 	if err != nil {
@@ -41,18 +41,12 @@ func TestRunnerSandboxOwnsOnlyClosedLocalDockerAuthority(t *testing.T) {
 			if err != nil {
 				t.Fatalf("decode import in %s: %v", path, err)
 			}
-			if forbiddenStandard[importPath] {
-				t.Errorf("runner sandbox imports forbidden authority %q at %s", importPath, files.Position(imported.Pos()))
-				continue
-			}
-			if strings.HasPrefix(importPath, "github.com/xiak/matrix/") &&
-				!allowedMatrix[importPath] {
-				t.Errorf("runner sandbox crosses Matrix boundary through %q at %s", importPath, files.Position(imported.Pos()))
-				continue
-			}
-			if strings.Contains(importPath, ".") && importPath != "golang.org/x/sys/unix" &&
-				!strings.HasPrefix(importPath, "github.com/xiak/matrix/") {
-				t.Errorf("runner sandbox imports unapproved external package %q at %s", importPath, files.Position(imported.Pos()))
+			if !allowed[importPath] {
+				t.Errorf(
+					"runner execution imports side-effect or unapproved boundary %q at %s",
+					importPath,
+					files.Position(imported.Pos()),
+				)
 			}
 		}
 	}

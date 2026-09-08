@@ -1,4 +1,5 @@
-// Package port owns delivery's boundaries to independently deployed services.
+// Package port owns delivery's boundaries to side effects and independently
+// deployed services.
 package port
 
 import (

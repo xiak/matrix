@@ -13,7 +13,10 @@ import (
 	"time"
 
 	devopsbuildv1 "github.com/xiak/matrix/api/adapter/devopsbuild/v1"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/port"
 )
+
+var _ port.RunnerGateway = (*RunnerClient)(nil)
 
 var (
 	ErrRunnerInvalid        = errors.New("executor runner request is invalid")

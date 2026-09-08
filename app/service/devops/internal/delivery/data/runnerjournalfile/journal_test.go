@@ -15,6 +15,7 @@ import (
 
 	devopsbuildv1 "github.com/xiak/matrix/api/adapter/devopsbuild/v1"
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/port"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/runnerlog"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/sourcearchive"
 )
@@ -36,7 +37,7 @@ func TestJournalPersistsLifecycleAcrossRestart(t *testing.T) {
 	request, archive := journalExecutionFixture(t, 'a', journalStart())
 	assignment := journalAssignment(t, request, devopsbuildv1.AssignmentExecute, 1, 2*time.Minute)
 	entry := commitJournalAssignment(t, journal, assignment, archive)
-	if entry.Assignment != assignment || entry.Phase != PhaseReceived ||
+	if entry.Assignment != assignment || entry.Phase != port.RunnerJournalReceived ||
 		entry.EffectID == "" || entry.CancellationRequested ||
 		entry.Steps != initialStepProgress(request) || entry.Receipt != nil {
 		t.Fatalf("received entry = %#v", entry)
@@ -48,26 +49,26 @@ func TestJournalPersistsLifecycleAcrossRestart(t *testing.T) {
 		t.Fatalf("restart journal: %v", err)
 	}
 	loaded, err := restarted.Load(context.Background(), assignment.ExecutionID)
-	if err != nil || loaded.Assignment != assignment || loaded.Phase != PhaseReceived {
+	if err != nil || loaded.Assignment != assignment || loaded.Phase != port.RunnerJournalReceived {
 		t.Fatalf("restarted entry = %#v / %v", loaded, err)
 	}
 	started, err := restarted.MarkEffectStarted(
 		context.Background(), assignment, request.StartedAt.Add(time.Second),
 	)
-	if err != nil || started.Phase != PhaseEffectStarted || started.EffectID != entry.EffectID {
+	if err != nil || started.Phase != port.RunnerJournalEffectStarted || started.EffectID != entry.EffectID {
 		t.Fatalf("effect-started entry = %#v / %v", started, err)
 	}
 	replayed, err := restarted.MarkEffectStarted(
 		context.Background(), assignment, request.StartedAt.Add(2*time.Second),
 	)
-	if err != nil || replayed.Phase != PhaseEffectStarted || replayed.EffectID != entry.EffectID {
+	if err != nil || replayed.Phase != port.RunnerJournalEffectStarted || replayed.EffectID != entry.EffectID {
 		t.Fatalf("effect replay = %#v / %v", replayed, err)
 	}
 	started, err = restarted.MarkStepStarted(
 		context.Background(), replayed.Assignment, request.Steps[0],
 		request.StartedAt.Add(3*time.Second),
 	)
-	if err != nil || started.Steps[0].Phase != StepStarted {
+	if err != nil || started.Steps[0].Phase != port.RunnerStepStarted {
 		t.Fatalf("step-started entry = %#v / %v", started, err)
 	}
 
@@ -79,7 +80,7 @@ func TestJournalPersistsLifecycleAcrossRestart(t *testing.T) {
 		LeaseExpiresAt: assignment.LeaseExpiresAt.Add(time.Minute),
 	}
 	renewed, err := restarted.ApplyRenewal(context.Background(), started.Assignment, renewal)
-	if err != nil || renewed.Phase != PhaseEffectStarted ||
+	if err != nil || renewed.Phase != port.RunnerJournalEffectStarted ||
 		!renewed.Assignment.LeaseExpiresAt.Equal(renewal.LeaseExpiresAt) {
 		t.Fatalf("renewed entry = %#v / %v", renewed, err)
 	}
@@ -92,8 +93,8 @@ func TestJournalPersistsLifecycleAcrossRestart(t *testing.T) {
 		context.Background(), cancelled.Assignment, request.Steps[0],
 		devopsbuildv1.StepConclusionCancelled, runnerlog.Progress{},
 	)
-	if err != nil || cancelled.Steps[0].Phase != StepCancelled ||
-		cancelled.Steps[1].Phase != StepPending {
+	if err != nil || cancelled.Steps[0].Phase != port.RunnerStepCancelled ||
+		cancelled.Steps[1].Phase != port.RunnerStepPending {
 		t.Fatalf("cancelled step = %#v / %v", cancelled, err)
 	}
 
@@ -102,25 +103,25 @@ func TestJournalPersistsLifecycleAcrossRestart(t *testing.T) {
 		devopsbuildv1.StepConclusionCancelled, devopsbuildv1.StepConclusionNotRun,
 	)
 	terminal, err := restarted.RecordReceipt(context.Background(), cancelled.Assignment, receipt)
-	if err != nil || terminal.Phase != PhaseTerminal || terminal.Receipt == nil ||
+	if err != nil || terminal.Phase != port.RunnerJournalTerminal || terminal.Receipt == nil ||
 		*terminal.Receipt != receipt {
 		t.Fatalf("terminal entry = %#v / %v", terminal, err)
 	}
 	replayed, err = restarted.RecordReceipt(context.Background(), cancelled.Assignment, receipt)
-	if err != nil || replayed.Phase != PhaseTerminal || replayed.Receipt == nil ||
+	if err != nil || replayed.Phase != port.RunnerJournalTerminal || replayed.Receipt == nil ||
 		*replayed.Receipt != receipt {
 		t.Fatalf("terminal replay = %#v / %v", replayed, err)
 	}
 	acknowledged, err := restarted.Acknowledge(
 		context.Background(), cancelled.Assignment, receipt,
 	)
-	if err != nil || acknowledged.Phase != PhaseAcknowledged {
+	if err != nil || acknowledged.Phase != port.RunnerJournalAcknowledged {
 		t.Fatalf("acknowledged entry = %#v / %v", acknowledged, err)
 	}
 	replayed, err = restarted.Acknowledge(
 		context.Background(), cancelled.Assignment, receipt,
 	)
-	if err != nil || replayed.Phase != PhaseAcknowledged {
+	if err != nil || replayed.Phase != port.RunnerJournalAcknowledged {
 		t.Fatalf("acknowledgement replay = %#v / %v", replayed, err)
 	}
 
@@ -129,7 +130,7 @@ func TestJournalPersistsLifecycleAcrossRestart(t *testing.T) {
 		t.Fatalf("restart acknowledged journal: %v", err)
 	}
 	entries, err := finalJournal.Entries(context.Background())
-	if err != nil || len(entries) != 1 || entries[0].Phase != PhaseAcknowledged ||
+	if err != nil || len(entries) != 1 || entries[0].Phase != port.RunnerJournalAcknowledged ||
 		entries[0].Receipt == nil || *entries[0].Receipt != receipt {
 		t.Fatalf("final entries = %#v / %v", entries, err)
 	}
@@ -164,7 +165,7 @@ func TestJournalPersistsOrderedStepProgressAcrossRestart(t *testing.T) {
 		context.Background(), started.Assignment, request.Steps[0],
 		request.StartedAt.Add(2*time.Second),
 	)
-	if err != nil || started.Steps[0].Phase != StepStarted {
+	if err != nil || started.Steps[0].Phase != port.RunnerStepStarted {
 		t.Fatalf("first step started = %#v / %v", started, err)
 	}
 	replayed, err := journal.MarkStepStarted(
@@ -181,8 +182,8 @@ func TestJournalPersistsOrderedStepProgressAcrossRestart(t *testing.T) {
 		context.Background(), started.Assignment, request.Steps[0],
 		devopsbuildv1.StepConclusionPassed, firstLogProgress,
 	)
-	if err != nil || passed.Steps[0].Phase != StepPassed ||
-		passed.Steps[1].Phase != StepPending || passed.LogProgress != firstLogProgress {
+	if err != nil || passed.Steps[0].Phase != port.RunnerStepPassed ||
+		passed.Steps[1].Phase != port.RunnerStepPending || passed.LogProgress != firstLogProgress {
 		t.Fatalf("first step passed = %#v / %v", passed, err)
 	}
 
@@ -202,7 +203,7 @@ func TestJournalPersistsOrderedStepProgressAcrossRestart(t *testing.T) {
 		context.Background(), loaded.Assignment, request.Steps[1],
 		request.StartedAt.Add(4*time.Second),
 	)
-	if err != nil || second.Steps[1].Phase != StepStarted {
+	if err != nil || second.Steps[1].Phase != port.RunnerStepStarted {
 		t.Fatalf("second step started = %#v / %v", second, err)
 	}
 	if _, err := restarted.RecordStepConclusion(
@@ -220,7 +221,7 @@ func TestJournalPersistsOrderedStepProgressAcrossRestart(t *testing.T) {
 		context.Background(), second.Assignment, request.Steps[1],
 		devopsbuildv1.StepConclusionFailed, secondLogProgress,
 	)
-	if err != nil || failed.Steps[1].Phase != StepFailed ||
+	if err != nil || failed.Steps[1].Phase != port.RunnerStepFailed ||
 		failed.LogProgress != secondLogProgress {
 		t.Fatalf("second step failed = %#v / %v", failed, err)
 	}
@@ -252,7 +253,7 @@ func TestJournalPersistsOrderedStepProgressAcrossRestart(t *testing.T) {
 		devopsbuildv1.StepConclusionPassed, devopsbuildv1.StepConclusionFailed,
 	)
 	terminal, err := restarted.RecordReceipt(context.Background(), failed.Assignment, receipt)
-	if err != nil || terminal.Phase != PhaseTerminal || terminal.Receipt == nil ||
+	if err != nil || terminal.Phase != port.RunnerJournalTerminal || terminal.Receipt == nil ||
 		*terminal.Receipt != receipt {
 		t.Fatalf("terminal entry = %#v / %v", terminal, err)
 	}
@@ -296,7 +297,7 @@ func TestJournalAdvancesTerminalFenceForCompletionRecovery(t *testing.T) {
 		devopsbuildv1.StepConclusionFailed, devopsbuildv1.StepConclusionNotRun,
 	)
 	terminal, err := journal.RecordReceipt(context.Background(), failed.Assignment, receipt)
-	if err != nil || terminal.Phase != PhaseTerminal {
+	if err != nil || terminal.Phase != port.RunnerJournalTerminal {
 		t.Fatalf("terminal entry = %#v / %v", terminal, err)
 	}
 
@@ -308,7 +309,7 @@ func TestJournalAdvancesTerminalFenceForCompletionRecovery(t *testing.T) {
 		t, request, devopsbuildv1.AssignmentObserve, 2, 3*time.Minute,
 	)
 	recovered := commitJournalAssignment(t, restarted, recovery, nil)
-	if recovered.Assignment != recovery || recovered.Phase != PhaseTerminal ||
+	if recovered.Assignment != recovery || recovered.Phase != port.RunnerJournalTerminal ||
 		recovered.LogProgress != logProgress || recovered.Receipt == nil ||
 		*recovered.Receipt != receipt || recovered.Steps != terminal.Steps {
 		t.Fatalf("recovered terminal entry = %#v", recovered)
@@ -321,7 +322,7 @@ func TestJournalAdvancesTerminalFenceForCompletionRecovery(t *testing.T) {
 	acknowledged, err := restarted.Acknowledge(
 		context.Background(), recovered.Assignment, receipt,
 	)
-	if err != nil || acknowledged.Phase != PhaseAcknowledged {
+	if err != nil || acknowledged.Phase != port.RunnerJournalAcknowledged {
 		t.Fatalf("acknowledged recovered terminal = %#v / %v", acknowledged, err)
 	}
 }
@@ -397,7 +398,7 @@ func TestJournalPersistsCanonicalStepStartWithoutRenewingItsClock(t *testing.T) 
 	}
 	loaded, err := restarted.Load(context.Background(), assignment.ExecutionID)
 	if err != nil || loaded.Steps[0].StartedAt != firstStart ||
-		loaded.Steps[0].Phase != StepPassed {
+		loaded.Steps[0].Phase != port.RunnerStepPassed {
 		t.Fatalf("loaded progress = %#v / %v", loaded, err)
 	}
 }
@@ -415,7 +416,7 @@ func TestJournalRecoveryAdvancesFenceWithoutReplacingArchive(t *testing.T) {
 
 	observe := journalAssignment(t, request, devopsbuildv1.AssignmentObserve, 2, 3*time.Minute)
 	observed := commitJournalAssignment(t, journal, observe, nil)
-	if observed.Assignment != observe || observed.Phase != PhaseReceived ||
+	if observed.Assignment != observe || observed.Phase != port.RunnerJournalReceived ||
 		observed.CancellationRequested {
 		t.Fatalf("observed recovery = %#v", observed)
 	}
@@ -476,8 +477,8 @@ func TestJournalRecoveryAdvancesFenceWithoutReplacingArchive(t *testing.T) {
 		context.Background(), cancelled.Assignment, request.Steps[0],
 		devopsbuildv1.StepConclusionCancelled, runnerlog.Progress{},
 	)
-	if err != nil || cancelled.Phase != PhaseReceived ||
-		cancelled.Steps[0].Phase != StepCancelled {
+	if err != nil || cancelled.Phase != port.RunnerJournalReceived ||
+		cancelled.Steps[0].Phase != port.RunnerStepCancelled {
 		t.Fatalf("cancel before effect = %#v / %v", cancelled, err)
 	}
 	cancelReceipt := journalReceipt(
@@ -487,7 +488,7 @@ func TestJournalRecoveryAdvancesFenceWithoutReplacingArchive(t *testing.T) {
 	terminal, err := journal.RecordReceipt(
 		context.Background(), cancelled.Assignment, cancelReceipt,
 	)
-	if err != nil || terminal.Phase != PhaseTerminal {
+	if err != nil || terminal.Phase != port.RunnerJournalTerminal {
 		t.Fatalf("terminal cancellation before effect = %#v / %v", terminal, err)
 	}
 
@@ -521,7 +522,7 @@ func TestJournalRemovesAbandonedClaimBeforeRecovery(t *testing.T) {
 	}
 	request, archive := journalExecutionFixture(t, 'e', journalStart())
 	assignment := journalAssignment(t, request, devopsbuildv1.AssignmentExecute, 1, 2*time.Minute)
-	claim, err := journal.BeginClaim(context.Background())
+	claim, err := journal.beginClaim(context.Background())
 	if err != nil {
 		t.Fatalf("begin abandoned claim: %v", err)
 	}
@@ -563,7 +564,7 @@ func beginJournalClaim(
 	archive []byte,
 ) *Claim {
 	t.Helper()
-	claim, err := journal.BeginClaim(context.Background())
+	claim, err := journal.beginClaim(context.Background())
 	if err != nil {
 		t.Fatalf("begin claim: %v", err)
 	}
@@ -589,7 +590,7 @@ func commitJournalAssignment(
 	journal *Journal,
 	assignment devopsbuildv1.Assignment,
 	archive []byte,
-) Entry {
+) port.RunnerJournalEntry {
 	t.Helper()
 	claim := beginJournalClaim(t, journal, assignment, archive)
 	entry, err := claim.Commit(context.Background())

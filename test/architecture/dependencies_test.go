@@ -518,6 +518,16 @@ func assertAllowedDependency(
 		)
 	}
 
+	if !strings.HasSuffix(source, "_test.go") &&
+		strings.HasPrefix(source, "app/service/devops/internal/delivery/usecase/") &&
+		strings.HasPrefix(imported, modulePath+"app/service/devops/internal/delivery/data/") {
+		t.Errorf(
+			"%s: DevOps delivery use case cannot import concrete data adapter %q",
+			source,
+			imported,
+		)
+	}
+
 	if executorGatewaySource(source) && executorGatewayAuthority(imported) {
 		t.Errorf(
 			"%s: executor gateway boundary cannot import authority-bearing package %q",
