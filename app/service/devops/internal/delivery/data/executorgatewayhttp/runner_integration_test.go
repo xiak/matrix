@@ -75,21 +75,37 @@ func TestRunnerClientAndJournalCompleteDurableMTLSRoundTrip(t *testing.T) {
 	if err != nil || !renewed.Assignment.LeaseExpiresAt.Equal(renewal.LeaseExpiresAt) {
 		t.Fatalf("durable renewal = %#v / %v", renewed, err)
 	}
+	progress := renewed
+	for _, step := range request.Steps {
+		progress, err = journal.MarkStepStarted(
+			context.Background(), progress.Assignment, step,
+		)
+		if err != nil {
+			t.Fatalf("durable step start = %#v / %v", progress, err)
+		}
+		progress, err = journal.RecordStepConclusion(
+			context.Background(), progress.Assignment, step,
+			devopsbuildv1.StepConclusionPassed,
+		)
+		if err != nil {
+			t.Fatalf("durable step conclusion = %#v / %v", progress, err)
+		}
+	}
 	receipt := gatewayReceipt(
 		request, client.RunnerID(), devopsbuildv1.ConclusionPassed,
 		devopsbuildv1.StepConclusionPassed, devopsbuildv1.StepConclusionPassed,
 	)
 	terminal, err := journal.RecordReceipt(
-		context.Background(), renewed.Assignment, receipt,
+		context.Background(), progress.Assignment, receipt,
 	)
 	if err != nil || terminal.Phase != runnerjournalfile.PhaseTerminal {
 		t.Fatalf("durable terminal receipt = %#v / %v", terminal, err)
 	}
-	if err := client.Complete(context.Background(), renewed.Assignment, receipt); err != nil {
+	if err := client.Complete(context.Background(), progress.Assignment, receipt); err != nil {
 		t.Fatalf("complete over mTLS: %v", err)
 	}
 	acknowledged, err := journal.Acknowledge(
-		context.Background(), renewed.Assignment, receipt,
+		context.Background(), progress.Assignment, receipt,
 	)
 	if err != nil || acknowledged.Phase != runnerjournalfile.PhaseAcknowledged {
 		t.Fatalf("durable acknowledgement = %#v / %v", acknowledged, err)

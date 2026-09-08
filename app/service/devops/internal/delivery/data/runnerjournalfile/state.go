@@ -17,6 +17,7 @@ import (
 )
 
 type Phase string
+type StepPhase string
 
 const (
 	PhaseReceived      Phase = "RECEIVED"
@@ -24,6 +25,20 @@ const (
 	PhaseTerminal      Phase = "TERMINAL"
 	PhaseAcknowledged  Phase = "ACKNOWLEDGED"
 )
+
+const (
+	StepPending   StepPhase = "PENDING"
+	StepStarted   StepPhase = "STARTED"
+	StepPassed    StepPhase = "PASSED"
+	StepFailed    StepPhase = "FAILED"
+	StepCancelled StepPhase = "CANCELLED"
+)
+
+type StepProgress struct {
+	Ordinal uint32                        `json:"ordinal"`
+	Kind    devopsv1.VerificationStepKind `json:"kind"`
+	Phase   StepPhase                     `json:"phase"`
+}
 
 type stateRecord struct {
 	SchemaVersion         uint32                       `json:"schemaVersion"`
@@ -37,6 +52,7 @@ type stateRecord struct {
 	LeaseExpiresAt        time.Time                    `json:"leaseExpiresAt"`
 	EffectID              string                       `json:"effectId"`
 	CancellationRequested bool                         `json:"cancellationRequested"`
+	Steps                 [2]StepProgress              `json:"steps"`
 	Receipt               *devopsbuildv1.Receipt       `json:"receipt"`
 	PreviousDigest        string                       `json:"previousDigest"`
 	ContentDigest         string                       `json:"contentDigest"`
@@ -55,7 +71,7 @@ func initialState(
 		return stateRecord{}, ErrInvalid
 	}
 	state := stateRecord{
-		SchemaVersion:  1,
+		SchemaVersion:  2,
 		Version:        1,
 		ExecutionID:    assignment.ExecutionID,
 		RequestDigest:  requestDigest,
@@ -65,6 +81,7 @@ func initialState(
 		FencingToken:   assignment.FencingToken,
 		LeaseExpiresAt: assignment.LeaseExpiresAt,
 		EffectID:       effectID(assignment.ExecutionID),
+		Steps:          initialStepProgress(assignment.Request),
 	}
 	sealState(&state)
 	if err := validateState(assignment.Request, state); err != nil {
@@ -128,7 +145,7 @@ func decodeState(
 func validateState(request devopsbuildv1.Request, value stateRecord) error {
 	executionID, err := devopsbuildv1.ExecutionID(request)
 	requestDigest, requestDigestErr := devopsbuildv1.DigestRequest(request)
-	if err != nil || value.SchemaVersion != 1 || value.Version == 0 ||
+	if err != nil || value.SchemaVersion != 2 || value.Version == 0 ||
 		value.Version > devopsv1.MaximumContractInteger || value.ExecutionID != executionID ||
 		requestDigestErr != nil || value.RequestDigest != requestDigest ||
 		devopsv1.ValidateDigest("runnerState.requestDigest", value.RequestDigest) != nil ||
@@ -141,10 +158,14 @@ func validateState(request devopsbuildv1.Request, value stateRecord) error {
 		value.ContentDigest != digestState(value) {
 		return ErrUnavailable
 	}
+	if !validStepProgress(request, value.Steps) {
+		return ErrUnavailable
+	}
 	if value.Version == 1 {
 		if value.PreviousDigest != "" || value.Phase != PhaseReceived ||
 			value.Mode != devopsbuildv1.AssignmentExecute || value.FencingToken != 1 ||
-			value.CancellationRequested || value.Receipt != nil {
+			value.CancellationRequested || value.Steps != initialStepProgress(request) ||
+			value.Receipt != nil {
 			return ErrUnavailable
 		}
 	} else if devopsv1.ValidateDigest(
@@ -164,14 +185,20 @@ func validateState(request devopsbuildv1.Request, value stateRecord) error {
 		return ErrUnavailable
 	}
 	switch value.Phase {
-	case PhaseReceived, PhaseEffectStarted:
+	case PhaseReceived:
+		if value.Receipt != nil || (value.Steps != initialStepProgress(request) &&
+			(!value.CancellationRequested || !pendingCancellation(value.Steps))) {
+			return ErrUnavailable
+		}
+	case PhaseEffectStarted:
 		if value.Receipt != nil {
 			return ErrUnavailable
 		}
 	case PhaseTerminal, PhaseAcknowledged:
 		if value.Receipt == nil ||
 			devopsbuildv1.ValidateReceipt(request, *value.Receipt) != nil ||
-			value.Receipt.ExecutorID != value.RunnerID {
+			value.Receipt.ExecutorID != value.RunnerID ||
+			!progressMatchesReceipt(value.Steps, *value.Receipt) {
 			return ErrUnavailable
 		}
 	default:
@@ -192,7 +219,8 @@ func validateTransition(previous, next stateRecord) error {
 	}
 	if next.FencingToken > previous.FencingToken {
 		if next.Mode == devopsbuildv1.AssignmentExecute ||
-			next.Phase != previous.Phase || !equalReceipt(next.Receipt, previous.Receipt) ||
+			next.Phase != previous.Phase || next.Steps != previous.Steps ||
+			!equalReceipt(next.Receipt, previous.Receipt) ||
 			(previous.Phase != PhaseReceived && previous.Phase != PhaseEffectStarted) ||
 			!next.LeaseExpiresAt.After(previous.LeaseExpiresAt) ||
 			(next.Mode == devopsbuildv1.AssignmentObserve && next.CancellationRequested) ||
@@ -205,6 +233,17 @@ func validateTransition(previous, next stateRecord) error {
 		return ErrUnavailable
 	}
 	if next.Phase == previous.Phase {
+		if next.Steps != previous.Steps {
+			if !next.LeaseExpiresAt.Equal(previous.LeaseExpiresAt) ||
+				next.CancellationRequested != previous.CancellationRequested ||
+				!equalReceipt(next.Receipt, previous.Receipt) ||
+				(previous.Phase != PhaseEffectStarted &&
+					(previous.Phase != PhaseReceived || !next.CancellationRequested)) ||
+				!validStepTransition(previous.Steps, next.Steps, next.CancellationRequested) {
+				return ErrUnavailable
+			}
+			return nil
+		}
 		if (next.Phase != PhaseReceived && next.Phase != PhaseEffectStarted) ||
 			!equalReceipt(next.Receipt, previous.Receipt) ||
 			(next.LeaseExpiresAt.Equal(previous.LeaseExpiresAt) &&
@@ -220,11 +259,17 @@ func validateTransition(previous, next stateRecord) error {
 	switch {
 	case previous.Phase == PhaseReceived && next.Phase == PhaseEffectStarted &&
 		previous.Mode == devopsbuildv1.AssignmentExecute &&
-		!previous.CancellationRequested:
+		!previous.CancellationRequested && next.Steps == previous.Steps:
 		return nil
-	case previous.Phase == PhaseEffectStarted && next.Phase == PhaseTerminal:
+	case previous.Phase == PhaseReceived && next.Phase == PhaseTerminal &&
+		previous.CancellationRequested && next.CancellationRequested &&
+		next.Steps == previous.Steps:
 		return nil
-	case previous.Phase == PhaseTerminal && next.Phase == PhaseAcknowledged:
+	case previous.Phase == PhaseEffectStarted && next.Phase == PhaseTerminal &&
+		next.Steps == previous.Steps:
+		return nil
+	case previous.Phase == PhaseTerminal && next.Phase == PhaseAcknowledged &&
+		next.Steps == previous.Steps:
 		return nil
 	default:
 		return ErrUnavailable
@@ -233,7 +278,7 @@ func validateTransition(previous, next stateRecord) error {
 
 func digestState(value stateRecord) string {
 	digest := sha256.New()
-	writeStateString(digest, "matrix-devops-runner-journal-state-v1")
+	writeStateString(digest, "matrix-devops-runner-journal-state-v2")
 	writeStateUint64(digest, uint64(value.SchemaVersion))
 	writeStateUint64(digest, value.Version)
 	for _, field := range []string{
@@ -254,12 +299,122 @@ func digestState(value stateRecord) string {
 	} else {
 		writeStateUint64(digest, 0)
 	}
+	for _, step := range value.Steps {
+		writeStateUint64(digest, uint64(step.Ordinal))
+		writeStateString(digest, string(step.Kind))
+		writeStateString(digest, string(step.Phase))
+	}
 	if value.Receipt == nil {
 		writeStateString(digest, "")
 	} else {
 		writeStateString(digest, value.Receipt.ContentDigest)
 	}
 	return "sha256:" + hex.EncodeToString(digest.Sum(nil))
+}
+
+func initialStepProgress(request devopsbuildv1.Request) [2]StepProgress {
+	return [2]StepProgress{
+		{Ordinal: request.Steps[0].Ordinal, Kind: request.Steps[0].Kind, Phase: StepPending},
+		{Ordinal: request.Steps[1].Ordinal, Kind: request.Steps[1].Kind, Phase: StepPending},
+	}
+}
+
+func validStepProgress(
+	request devopsbuildv1.Request,
+	steps [2]StepProgress,
+) bool {
+	for index, step := range steps {
+		if step.Ordinal != request.Steps[index].Ordinal ||
+			step.Kind != request.Steps[index].Kind {
+			return false
+		}
+	}
+	left, right := steps[0].Phase, steps[1].Phase
+	return (left == StepPending && right == StepPending) ||
+		(left == StepStarted && right == StepPending) ||
+		(left == StepPassed && right == StepPending) ||
+		(left == StepFailed && right == StepPending) ||
+		(left == StepCancelled && right == StepPending) ||
+		(left == StepPassed && right == StepStarted) ||
+		(left == StepPassed && right == StepPassed) ||
+		(left == StepPassed && right == StepFailed) ||
+		(left == StepPassed && right == StepCancelled)
+}
+
+func pendingCancellation(steps [2]StepProgress) bool {
+	return (steps[0].Phase == StepCancelled && steps[1].Phase == StepPending) ||
+		(steps[0].Phase == StepPassed && steps[1].Phase == StepCancelled)
+}
+
+func progressMatchesReceipt(
+	steps [2]StepProgress,
+	receipt devopsbuildv1.Receipt,
+) bool {
+	for index, step := range steps {
+		if step.Ordinal != receipt.Steps[index].Ordinal ||
+			step.Kind != receipt.Steps[index].Kind ||
+			stepReceiptConclusion(step.Phase) != receipt.Steps[index].Conclusion {
+			return false
+		}
+	}
+	return true
+}
+
+func stepReceiptConclusion(value StepPhase) devopsbuildv1.StepConclusion {
+	switch value {
+	case StepPassed:
+		return devopsbuildv1.StepConclusionPassed
+	case StepFailed:
+		return devopsbuildv1.StepConclusionFailed
+	case StepCancelled:
+		return devopsbuildv1.StepConclusionCancelled
+	case StepPending:
+		return devopsbuildv1.StepConclusionNotRun
+	default:
+		return ""
+	}
+}
+
+func validStepTransition(
+	previous [2]StepProgress,
+	next [2]StepProgress,
+	cancellationRequested bool,
+) bool {
+	changed := -1
+	for index := range previous {
+		if previous[index].Ordinal != next[index].Ordinal ||
+			previous[index].Kind != next[index].Kind {
+			return false
+		}
+		if previous[index].Phase != next[index].Phase {
+			if changed >= 0 {
+				return false
+			}
+			changed = index
+		}
+	}
+	if changed < 0 {
+		return false
+	}
+	from, to := previous[changed].Phase, next[changed].Phase
+	if from == StepPending {
+		return (!cancellationRequested && to == StepStarted) ||
+			(cancellationRequested && to == StepCancelled)
+	}
+	return from == StepStarted &&
+		(to == StepPassed || to == StepFailed || to == StepCancelled)
+}
+
+func requestStepIndex(
+	request devopsbuildv1.Request,
+	step devopsv1.VerificationStep,
+) (int, bool) {
+	for index, expected := range request.Steps {
+		if expected == step {
+			return index, true
+		}
+	}
+	return 0, false
 }
 
 func equalReceipt(left, right *devopsbuildv1.Receipt) bool {

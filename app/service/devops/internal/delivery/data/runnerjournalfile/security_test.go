@@ -105,6 +105,46 @@ func TestJournalDetectsPublishedTampering(t *testing.T) {
 		}
 	})
 
+	t.Run("step state chain", func(t *testing.T) {
+		root, journal, assignment, _ := committedJournalFixture(t, 'a')
+		started, err := journal.MarkEffectStarted(
+			context.Background(), assignment,
+			assignment.Request.StartedAt.Add(time.Second),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := journal.MarkStepStarted(
+			context.Background(), started.Assignment,
+			assignment.Request.Steps[0],
+		); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(
+			journalExecutionPath(root, assignment.ExecutionID), stateFileName(3),
+		)
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		state, err := decodeState(assignment.Request, content)
+		if err != nil {
+			t.Fatal(err)
+		}
+		state.Steps[0].Phase = StepPending
+		sealState(&state)
+		content, err = json.Marshal(state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := New(root, journalRunnerID('a')); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("recomputed step rollback error = %v", err)
+		}
+	})
+
 	t.Run("assignment canonical form", func(t *testing.T) {
 		root, journal, assignment, _ := committedJournalFixture(t, '3')
 		path := filepath.Join(

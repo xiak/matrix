@@ -16,6 +16,7 @@ import (
 	"time"
 
 	devopsbuildv1 "github.com/xiak/matrix/api/adapter/devopsbuild/v1"
+	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 )
 
 var (
@@ -32,6 +33,7 @@ type Entry struct {
 	Phase                 Phase
 	EffectID              string
 	CancellationRequested bool
+	Steps                 [2]StepProgress
 	Receipt               *devopsbuildv1.Receipt
 }
 
@@ -471,6 +473,77 @@ func (journal *Journal) ApplyRenewal(
 	})
 }
 
+// MarkStepStarted durably authorizes exactly one next fixed sandbox step. The
+// caller must commit this transition before creating or starting its container.
+func (journal *Journal) MarkStepStarted(
+	ctx context.Context,
+	assignment devopsbuildv1.Assignment,
+	step devopsv1.VerificationStep,
+) (Entry, error) {
+	index, found := requestStepIndex(assignment.Request, step)
+	if !found {
+		return Entry{}, ErrInvalid
+	}
+	return journal.change(ctx, assignment, func(execution storedExecution) (stateRecord, bool, error) {
+		current := execution.state.Steps[index].Phase
+		if current == StepStarted {
+			return execution.state, false, nil
+		}
+		if execution.state.Phase != PhaseEffectStarted ||
+			execution.state.CancellationRequested || current != StepPending ||
+			(index == 1 && execution.state.Steps[0].Phase != StepPassed) {
+			return stateRecord{}, false, ErrConflict
+		}
+		next := nextState(execution.state)
+		next.Steps[index].Phase = StepStarted
+		if !validStepProgress(assignment.Request, next.Steps) {
+			return stateRecord{}, false, ErrConflict
+		}
+		sealState(&next)
+		return next, true, nil
+	})
+}
+
+// RecordStepConclusion seals normalized sandbox evidence before a later
+// terminal receipt can be accepted. A pending step may become CANCELLED only
+// when the durable assignment already carries cancellation.
+func (journal *Journal) RecordStepConclusion(
+	ctx context.Context,
+	assignment devopsbuildv1.Assignment,
+	step devopsv1.VerificationStep,
+	conclusion devopsbuildv1.StepConclusion,
+) (Entry, error) {
+	index, found := requestStepIndex(assignment.Request, step)
+	want := stepPhaseFromConclusion(conclusion)
+	if !found || want == "" {
+		return Entry{}, ErrInvalid
+	}
+	return journal.change(ctx, assignment, func(execution storedExecution) (stateRecord, bool, error) {
+		current := execution.state.Steps[index].Phase
+		if current == want {
+			return execution.state, false, nil
+		}
+		if execution.state.Phase != PhaseReceived &&
+			execution.state.Phase != PhaseEffectStarted {
+			return stateRecord{}, false, ErrConflict
+		}
+		if current == StepPending &&
+			(want != StepCancelled || !execution.state.CancellationRequested) {
+			return stateRecord{}, false, ErrConflict
+		}
+		if current != StepPending && current != StepStarted {
+			return stateRecord{}, false, ErrConflict
+		}
+		next := nextState(execution.state)
+		next.Steps[index].Phase = want
+		if !validStepProgress(assignment.Request, next.Steps) {
+			return stateRecord{}, false, ErrConflict
+		}
+		sealState(&next)
+		return next, true, nil
+	})
+}
+
 func (journal *Journal) RecordReceipt(
 	ctx context.Context,
 	assignment devopsbuildv1.Assignment,
@@ -485,7 +558,10 @@ func (journal *Journal) RecordReceipt(
 			*execution.state.Receipt == receipt {
 			return execution.state, false, nil
 		}
-		if execution.state.Phase != PhaseEffectStarted {
+		if !progressMatchesReceipt(execution.state.Steps, receipt) ||
+			(execution.state.Phase != PhaseEffectStarted &&
+				(execution.state.Phase != PhaseReceived ||
+					!execution.state.CancellationRequested)) {
 			return stateRecord{}, false, ErrConflict
 		}
 		next := nextState(execution.state)
@@ -605,13 +681,26 @@ func entryFromCurrent(execution storedExecution) Entry {
 func entryFrom(assignment devopsbuildv1.Assignment, state stateRecord) Entry {
 	entry := Entry{
 		Assignment: assignment, Phase: state.Phase, EffectID: state.EffectID,
-		CancellationRequested: state.CancellationRequested,
+		CancellationRequested: state.CancellationRequested, Steps: state.Steps,
 	}
 	if state.Receipt != nil {
 		receipt := *state.Receipt
 		entry.Receipt = &receipt
 	}
 	return entry
+}
+
+func stepPhaseFromConclusion(value devopsbuildv1.StepConclusion) StepPhase {
+	switch value {
+	case devopsbuildv1.StepConclusionPassed:
+		return StepPassed
+	case devopsbuildv1.StepConclusionFailed:
+		return StepFailed
+	case devopsbuildv1.StepConclusionCancelled:
+		return StepCancelled
+	default:
+		return ""
+	}
 }
 
 func ensureIdentity(root *os.Root, runnerID string) error {

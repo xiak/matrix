@@ -12,9 +12,10 @@
   process, fenced BuildExecutor contract/use case, and table-blind PostgreSQL
   execution persistence, versioned admin/runner transport contract, durable
   executor-gateway spool, TLS 1.3 mTLS admin/runner HTTP boundary, and isolated
-  executor-gateway process, runner workspace publication, and bounded native
-  output normalization complete; physical build-worker/runner and reporter
-  effects plus normalized-log persistence pending
+  executor-gateway process, ordered runner step journal, runner workspace
+  publication, and bounded native output normalization complete; physical
+  build-worker/runner and reporter effects plus normalized-log persistence
+  pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -1041,7 +1042,15 @@ listener. Its independent private journal binds the complete canonical request
 before accepting archive bytes, reinspects the finished archive before atomic
 publication, holds an OS-level exclusive directory lock, and persists strict
 `RECEIVED`, `EFFECT_STARTED`, `TERMINAL`, and `ACKNOWLEDGED` generations with
-request digests, recovery fences, cancellation, and normalized receipts. The
+request digests, recovery fences, cancellation, exact ordered `PENDING`,
+`STARTED`, `PASSED`, `FAILED`, or `CANCELLED` step progress, and normalized
+receipts. A step start is fsynced before its deterministic container side
+effect may be invoked; step two cannot be authorized before durable step-one
+success. The journal permits the same runner to continue the next unstarted
+step after an archive-free increasing-fence recovery, while an already-started
+step must first be observed by the later runner orchestration. A cancellation
+before any sandbox effect durably cancels the next step and can produce the
+closed terminal receipt without inventing an effect. The
 physical build-worker command now composes only its table-blind PostgreSQL
 repository, read-only source archive, exact mTLS admin identity, executor-gateway
 client, independent heartbeat, and readiness endpoint. The dedicated runner
@@ -1214,18 +1223,20 @@ Current verification evidence:
   canonical metadata binding before archive consumption, complete-request
   digests distinct from retry-stable execution identity, structural archive
   reinspection, fsynced atomic publication, OS-exclusive directory ownership,
-  abandoned-claim cleanup, strict effect/terminal/acknowledged transitions,
-  lease renewal, durable cancellation, archive-free increasing-fence recovery,
-  same-runner restart, and rejection of changed request, stale fence, duplicate
-  execution, foreign identity/entry, unsafe mode, symlink, archive, assignment,
-  state, and recomputed request-digest tampering. A real TLS 1.3 mTLS journey
-  claims through the production client directly into the journal, persists the
-  pre-effect marker and renewal, submits the normalized receipt, acknowledges
-  it locally, and recovers the same terminal truth after restart. The contract,
-  spool, gateway, runner client, journal, and gateway-command suites pass race
-  detection and twenty-run repetition on Windows, plus twenty runs in the
-  fixed disconnected Go 1.26.8 Linux/amd64 image with read-only source and no
-  module lookup
+  abandoned-claim cleanup, strict effect/step/terminal/acknowledged transitions,
+  lease renewal, durable cancellation before or during an effect, enforced
+  step order, idempotent step replay, archive-free increasing-fence recovery
+  that preserves completed progress, same-runner restart, and rejection of
+  changed conclusions, out-of-order steps, changed request, stale fence,
+  duplicate execution, foreign identity/entry, unsafe mode, symlink, archive,
+  assignment, state, and recomputed request-digest or step-chain tampering. A
+  real TLS 1.3 mTLS journey claims through the production client directly into
+  the journal, persists the pre-effect marker, renewal, and both ordered step
+  conclusions, submits the normalized receipt, acknowledges it locally, and
+  recovers the same terminal truth after restart. The contract, spool, gateway,
+  runner client, journal, and gateway-command suites pass race detection and
+  twenty-run repetition on Windows, plus twenty runs in the fixed disconnected
+  Go 1.26.8 Linux/amd64 image with read-only source and no module lookup
 - physical build-worker command and shared process-mTLS tests proving a closed
   environment, protected canonical private key and certificate chain, exact
   SPIFFE client identity, self-signed server-root validation, rejection of

@@ -36,7 +36,8 @@ func TestJournalPersistsLifecycleAcrossRestart(t *testing.T) {
 	assignment := journalAssignment(t, request, devopsbuildv1.AssignmentExecute, 1, 2*time.Minute)
 	entry := commitJournalAssignment(t, journal, assignment, archive)
 	if entry.Assignment != assignment || entry.Phase != PhaseReceived ||
-		entry.EffectID == "" || entry.CancellationRequested || entry.Receipt != nil {
+		entry.EffectID == "" || entry.CancellationRequested ||
+		entry.Steps != initialStepProgress(request) || entry.Receipt != nil {
 		t.Fatalf("received entry = %#v", entry)
 	}
 	assertJournalArchive(t, journal, assignment.ExecutionID, archive)
@@ -61,6 +62,12 @@ func TestJournalPersistsLifecycleAcrossRestart(t *testing.T) {
 	if err != nil || replayed.Phase != PhaseEffectStarted || replayed.EffectID != entry.EffectID {
 		t.Fatalf("effect replay = %#v / %v", replayed, err)
 	}
+	started, err = restarted.MarkStepStarted(
+		context.Background(), replayed.Assignment, request.Steps[0],
+	)
+	if err != nil || started.Steps[0].Phase != StepStarted {
+		t.Fatalf("step-started entry = %#v / %v", started, err)
+	}
 
 	renewal := devopsbuildv1.Renewal{
 		APIVersion:     devopsbuildv1.APIVersion,
@@ -69,7 +76,7 @@ func TestJournalPersistsLifecycleAcrossRestart(t *testing.T) {
 		FencingToken:   assignment.FencingToken,
 		LeaseExpiresAt: assignment.LeaseExpiresAt.Add(time.Minute),
 	}
-	renewed, err := restarted.ApplyRenewal(context.Background(), assignment, renewal)
+	renewed, err := restarted.ApplyRenewal(context.Background(), started.Assignment, renewal)
 	if err != nil || renewed.Phase != PhaseEffectStarted ||
 		!renewed.Assignment.LeaseExpiresAt.Equal(renewal.LeaseExpiresAt) {
 		t.Fatalf("renewed entry = %#v / %v", renewed, err)
@@ -78,6 +85,14 @@ func TestJournalPersistsLifecycleAcrossRestart(t *testing.T) {
 	cancelled, err := restarted.ApplyRenewal(context.Background(), renewed.Assignment, renewal)
 	if err != nil || !cancelled.CancellationRequested {
 		t.Fatalf("cancelled renewal = %#v / %v", cancelled, err)
+	}
+	cancelled, err = restarted.RecordStepConclusion(
+		context.Background(), cancelled.Assignment, request.Steps[0],
+		devopsbuildv1.StepConclusionCancelled,
+	)
+	if err != nil || cancelled.Steps[0].Phase != StepCancelled ||
+		cancelled.Steps[1].Phase != StepPending {
+		t.Fatalf("cancelled step = %#v / %v", cancelled, err)
 	}
 
 	receipt := journalReceipt(
@@ -118,6 +133,98 @@ func TestJournalPersistsLifecycleAcrossRestart(t *testing.T) {
 	}
 	if _, err := New(root, journalRunnerID('b')); !errors.Is(err, ErrConflict) {
 		t.Fatalf("different runner identity error = %v", err)
+	}
+}
+
+func TestJournalPersistsOrderedStepProgressAcrossRestart(t *testing.T) {
+	root := journalRoot(t)
+	runnerID := journalRunnerID('9')
+	journal, err := New(root, runnerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, archive := journalExecutionFixture(t, '9', journalStart())
+	assignment := journalAssignment(t, request, devopsbuildv1.AssignmentExecute, 1, 2*time.Minute)
+	commitJournalAssignment(t, journal, assignment, archive)
+	started, err := journal.MarkEffectStarted(
+		context.Background(), assignment, request.StartedAt.Add(time.Second),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := journal.MarkStepStarted(
+		context.Background(), started.Assignment, request.Steps[1],
+	); !errors.Is(err, ErrConflict) {
+		t.Fatalf("second step before first error = %v", err)
+	}
+	started, err = journal.MarkStepStarted(
+		context.Background(), started.Assignment, request.Steps[0],
+	)
+	if err != nil || started.Steps[0].Phase != StepStarted {
+		t.Fatalf("first step started = %#v / %v", started, err)
+	}
+	replayed, err := journal.MarkStepStarted(
+		context.Background(), started.Assignment, request.Steps[0],
+	)
+	if err != nil || replayed.Steps != started.Steps {
+		t.Fatalf("first step replay = %#v / %v", replayed, err)
+	}
+	passed, err := journal.RecordStepConclusion(
+		context.Background(), started.Assignment, request.Steps[0],
+		devopsbuildv1.StepConclusionPassed,
+	)
+	if err != nil || passed.Steps[0].Phase != StepPassed ||
+		passed.Steps[1].Phase != StepPending {
+		t.Fatalf("first step passed = %#v / %v", passed, err)
+	}
+
+	restarted, err := New(root, runnerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observe := journalAssignment(
+		t, request, devopsbuildv1.AssignmentObserve, 2, 3*time.Minute,
+	)
+	loaded := commitJournalAssignment(t, restarted, observe, nil)
+	if loaded.Assignment != observe || loaded.Steps != passed.Steps {
+		t.Fatalf("recovered progress = %#v", loaded)
+	}
+	second, err := restarted.MarkStepStarted(
+		context.Background(), loaded.Assignment, request.Steps[1],
+	)
+	if err != nil || second.Steps[1].Phase != StepStarted {
+		t.Fatalf("second step started = %#v / %v", second, err)
+	}
+	failed, err := restarted.RecordStepConclusion(
+		context.Background(), second.Assignment, request.Steps[1],
+		devopsbuildv1.StepConclusionFailed,
+	)
+	if err != nil || failed.Steps[1].Phase != StepFailed {
+		t.Fatalf("second step failed = %#v / %v", failed, err)
+	}
+	if _, err := restarted.RecordStepConclusion(
+		context.Background(), failed.Assignment, request.Steps[1],
+		devopsbuildv1.StepConclusionPassed,
+	); !errors.Is(err, ErrConflict) {
+		t.Fatalf("changed step replay error = %v", err)
+	}
+	changedReceipt := journalReceipt(
+		request, runnerID, devopsbuildv1.ConclusionPassed,
+		devopsbuildv1.StepConclusionPassed, devopsbuildv1.StepConclusionPassed,
+	)
+	if _, err := restarted.RecordReceipt(
+		context.Background(), failed.Assignment, changedReceipt,
+	); !errors.Is(err, ErrConflict) {
+		t.Fatalf("receipt contradicting step progress error = %v", err)
+	}
+	receipt := journalReceipt(
+		request, runnerID, devopsbuildv1.ConclusionFailed,
+		devopsbuildv1.StepConclusionPassed, devopsbuildv1.StepConclusionFailed,
+	)
+	terminal, err := restarted.RecordReceipt(context.Background(), failed.Assignment, receipt)
+	if err != nil || terminal.Phase != PhaseTerminal || terminal.Receipt == nil ||
+		*terminal.Receipt != receipt {
+		t.Fatalf("terminal entry = %#v / %v", terminal, err)
 	}
 }
 
@@ -182,6 +289,24 @@ func TestJournalRecoveryAdvancesFenceWithoutReplacingArchive(t *testing.T) {
 	}
 	if err := claim.Abort(); err != nil {
 		t.Fatalf("abort observe after cancellation: %v", err)
+	}
+	cancelled, err = journal.RecordStepConclusion(
+		context.Background(), cancelled.Assignment, request.Steps[0],
+		devopsbuildv1.StepConclusionCancelled,
+	)
+	if err != nil || cancelled.Phase != PhaseReceived ||
+		cancelled.Steps[0].Phase != StepCancelled {
+		t.Fatalf("cancel before effect = %#v / %v", cancelled, err)
+	}
+	cancelReceipt := journalReceipt(
+		request, runnerID, devopsbuildv1.ConclusionCancelled,
+		devopsbuildv1.StepConclusionCancelled, devopsbuildv1.StepConclusionNotRun,
+	)
+	terminal, err := journal.RecordReceipt(
+		context.Background(), cancelled.Assignment, cancelReceipt,
+	)
+	if err != nil || terminal.Phase != PhaseTerminal {
+		t.Fatalf("terminal cancellation before effect = %#v / %v", terminal, err)
 	}
 
 	missingRequest, _ := journalExecutionFixture(t, 'd', journalStart().Add(time.Second))
