@@ -173,6 +173,44 @@ func (store *Store) Observe(
 	return observe(ctx, root, commandKey(command), command)
 }
 
+// Open re-proves the stored receipt and archive before returning a stream that
+// also verifies complete, unchanged consumption at the executor boundary.
+func (store *Store) Open(
+	ctx context.Context,
+	expected sourcearchive.Receipt,
+) (io.ReadCloser, error) {
+	if store == nil || ctx == nil || sourcearchive.ValidateReceipt(expected) != nil {
+		return nil, sourceUnavailable(sourcearchive.ErrInvalid)
+	}
+	root, err := store.openRoot()
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	key := receiptKey(expected)
+	stored, found, err := readPublishedReceipt(ctx, root, key)
+	if err != nil || !found || stored != expected {
+		if err == nil {
+			err = sourcearchive.ErrInvalid
+		}
+		return nil, sourceUnavailable(err)
+	}
+	name, err := archiveName(stored.ArchiveDigest)
+	if err != nil {
+		return nil, sourceUnavailable(err)
+	}
+	file, err := openVerifiedArchive(ctx, root, key+"/"+name, stored)
+	if err != nil {
+		return nil, err
+	}
+	return &verifiedArchiveReader{
+		file:           file,
+		digest:         sha256.New(),
+		expectedBytes:  stored.ArchiveBytes,
+		expectedDigest: stored.ArchiveDigest,
+	}, nil
+}
+
 func (store *Store) openRoot() (*os.Root, error) {
 	cleaned, err := validateRoot(store.rootPath)
 	if err != nil || cleaned != store.rootPath {
@@ -190,6 +228,28 @@ func observe(
 	root *os.Root,
 	key string,
 	command sourceacquisition.Command,
+) (sourcearchive.Receipt, bool, error) {
+	receipt, found, err := readPublishedReceipt(ctx, root, key)
+	if err != nil || !found {
+		return sourcearchive.Receipt{}, found, err
+	}
+	if sourceacquisition.ValidateReceipt(command, receipt) != nil {
+		return sourcearchive.Receipt{}, false, sourceUnavailable(sourcearchive.ErrInvalid)
+	}
+	name, err := archiveName(receipt.ArchiveDigest)
+	if err != nil {
+		return sourcearchive.Receipt{}, false, sourceUnavailable(err)
+	}
+	if err := verifyArchive(ctx, root, key+"/"+name, receipt); err != nil {
+		return sourcearchive.Receipt{}, false, err
+	}
+	return receipt, true, nil
+}
+
+func readPublishedReceipt(
+	ctx context.Context,
+	root *os.Root,
+	key string,
 ) (sourcearchive.Receipt, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return sourcearchive.Receipt{}, false, err
@@ -220,14 +280,13 @@ func observe(
 		return sourcearchive.Receipt{}, false, sourceUnavailable(errors.Join(readErr, closeErr))
 	}
 	receipt, err := decodeReceipt(receiptDocument)
-	if err != nil || sourceacquisition.ValidateReceipt(command, receipt) != nil {
+	if err != nil || sourcearchive.ValidateReceipt(receipt) != nil {
 		return sourcearchive.Receipt{}, false, sourceUnavailable(err)
 	}
-	archiveName, err := archiveName(receipt.ArchiveDigest)
+	name, err := archiveName(receipt.ArchiveDigest)
 	if err != nil {
 		return sourcearchive.Receipt{}, false, sourceUnavailable(err)
 	}
-
 	directoryFile, err := root.Open(key)
 	if err != nil {
 		return sourcearchive.Receipt{}, false, sourceUnavailable(err)
@@ -238,11 +297,8 @@ func observe(
 		return sourcearchive.Receipt{}, false, sourceUnavailable(errors.Join(readDirectoryErr, closeErr))
 	}
 	if closeErr != nil || len(entries) != 2 || !containsEntry(entries, receiptName) ||
-		!containsEntry(entries, archiveName) {
+		!containsEntry(entries, name) {
 		return sourcearchive.Receipt{}, false, sourceUnavailable(closeErr)
-	}
-	if err := verifyArchive(ctx, root, key+"/"+archiveName, receipt); err != nil {
-		return sourcearchive.Receipt{}, false, err
 	}
 	return receipt, true, nil
 }
@@ -253,25 +309,48 @@ func verifyArchive(
 	archivePath string,
 	receipt sourcearchive.Receipt,
 ) error {
+	file, err := openVerifiedArchive(ctx, root, archivePath, receipt)
+	if err != nil {
+		return err
+	}
+	return sourceUnavailableOnError(file.Close())
+}
+
+func openVerifiedArchive(
+	ctx context.Context,
+	root *os.Root,
+	archivePath string,
+	receipt sourcearchive.Receipt,
+) (*os.File, error) {
 	info, err := root.Lstat(archivePath)
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() ||
 		!privateMode(info.Mode(), 0o600) || info.Size() != receipt.ArchiveBytes ||
 		info.Size() <= 0 || info.Size() > sourcearchive.MaximumArchiveBytes {
-		return sourceUnavailable(err)
+		return nil, sourceUnavailable(err)
 	}
 	file, err := root.Open(archivePath)
 	if err != nil {
-		return sourceUnavailable(err)
+		return nil, sourceUnavailable(err)
+	}
+	actualInfo, statErr := file.Stat()
+	if statErr != nil || !actualInfo.Mode().IsRegular() ||
+		actualInfo.Size() != receipt.ArchiveBytes {
+		_ = file.Close()
+		return nil, sourceUnavailable(statErr)
 	}
 	digest := sha256.New()
 	content, inspectErr := sourcearchive.Inspect(ctx, io.TeeReader(file, digest))
-	closeErr := file.Close()
-	if inspectErr != nil || closeErr != nil ||
+	if inspectErr != nil ||
 		"sha256:"+hex.EncodeToString(digest.Sum(nil)) != receipt.ArchiveDigest ||
 		content.ExpandedBytes != receipt.ExpandedBytes || content.PathCount != receipt.PathCount {
-		return sourceUnavailable(errors.Join(inspectErr, closeErr))
+		_ = file.Close()
+		return nil, sourceUnavailable(inspectErr)
 	}
-	return nil
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		_ = file.Close()
+		return nil, sourceUnavailable(err)
+	}
+	return file, nil
 }
 
 func decodeReceipt(document []byte) (sourcearchive.Receipt, error) {
@@ -305,11 +384,33 @@ func archiveName(digest string) (string, error) {
 }
 
 func commandKey(command sourceacquisition.Command) string {
+	return archiveKey(
+		command.Lease.TenantID,
+		command.Lease.Run.ID,
+		command.Lease.Intent.CommandID,
+		command.Lease.Run.InputDigest,
+	)
+}
+
+func receiptKey(receipt sourcearchive.Receipt) string {
+	return archiveKey(
+		receipt.TenantID,
+		receipt.RunID,
+		receipt.CommandID,
+		receipt.InputDigest,
+	)
+}
+
+func archiveKey(
+	tenantID devopsv1.TenantID,
+	runID devopsv1.ResourceID,
+	commandID string,
+	inputDigest string,
+) string {
 	digest := sha256.New()
 	_, _ = digest.Write([]byte("matrix-devops-source-archive-command-v1"))
 	for _, value := range []string{
-		string(command.Lease.TenantID), string(command.Lease.Run.ID),
-		command.Lease.Intent.CommandID, command.Lease.Run.InputDigest,
+		string(tenantID), string(runID), commandID, inputDigest,
 	} {
 		var size [8]byte
 		binary.BigEndian.PutUint64(size[:], uint64(len(value)))
@@ -317,6 +418,88 @@ func commandKey(command sourceacquisition.Command) string {
 		_, _ = digest.Write([]byte(value))
 	}
 	return hex.EncodeToString(digest.Sum(nil))
+}
+
+func sourceUnavailableOnError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return sourceUnavailable(err)
+}
+
+type verifiedArchiveReader struct {
+	file           *os.File
+	digest         hash.Hash
+	expectedBytes  int64
+	expectedDigest string
+	readBytes      int64
+	completed      bool
+	closed         bool
+	validationErr  error
+}
+
+func (reader *verifiedArchiveReader) Read(value []byte) (int, error) {
+	if reader == nil || reader.file == nil || reader.closed {
+		return 0, os.ErrClosed
+	}
+	if reader.validationErr != nil {
+		return 0, reader.validationErr
+	}
+	if reader.completed {
+		return 0, io.EOF
+	}
+	read, err := reader.file.Read(value)
+	if read > 0 {
+		_, _ = reader.digest.Write(value[:read])
+		reader.readBytes += int64(read)
+		if reader.readBytes > reader.expectedBytes {
+			reader.validationErr = sourceUnavailable(sourcearchive.ErrInvalid)
+			return read, reader.validationErr
+		}
+	}
+	if err != nil && !errors.Is(err, io.EOF) {
+		reader.validationErr = sourceUnavailable(err)
+		return read, reader.validationErr
+	}
+	if errors.Is(err, io.EOF) {
+		return read, reader.finish()
+	}
+	return read, nil
+}
+
+func (reader *verifiedArchiveReader) Close() error {
+	if reader == nil || reader.file == nil || reader.closed {
+		return os.ErrClosed
+	}
+	if reader.validationErr == nil && !reader.completed {
+		if reader.readBytes == reader.expectedBytes {
+			var trailing [1]byte
+			read, err := reader.file.Read(trailing[:])
+			if read > 0 {
+				_, _ = reader.digest.Write(trailing[:read])
+				reader.readBytes += int64(read)
+				reader.validationErr = sourceUnavailable(sourcearchive.ErrInvalid)
+			} else if errors.Is(err, io.EOF) {
+				_ = reader.finish()
+			} else if err != nil {
+				reader.validationErr = sourceUnavailable(err)
+			}
+		} else {
+			reader.validationErr = sourceUnavailable(io.ErrUnexpectedEOF)
+		}
+	}
+	reader.closed = true
+	return errors.Join(reader.validationErr, sourceUnavailableOnError(reader.file.Close()))
+}
+
+func (reader *verifiedArchiveReader) finish() error {
+	if reader.readBytes != reader.expectedBytes ||
+		"sha256:"+hex.EncodeToString(reader.digest.Sum(nil)) != reader.expectedDigest {
+		reader.validationErr = sourceUnavailable(sourcearchive.ErrInvalid)
+		return reader.validationErr
+	}
+	reader.completed = true
+	return io.EOF
 }
 
 func createStaging(root *os.Root, key string) (string, error) {

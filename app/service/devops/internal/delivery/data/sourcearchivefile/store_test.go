@@ -78,6 +78,81 @@ func TestStorePublishesOnceAndTakeoverReprovesExactArchive(t *testing.T) {
 	}
 }
 
+func TestStoreOpenReprovesReceiptAndCompleteStream(t *testing.T) {
+	t.Run("complete stream", func(t *testing.T) {
+		_, store, _, receipt := publishedStore(t)
+		archive, err := store.Open(context.Background(), receipt)
+		if err != nil {
+			t.Fatalf("open source archive: %v", err)
+		}
+		content, inspectErr := sourcearchive.Inspect(context.Background(), archive)
+		closeErr := archive.Close()
+		if inspectErr != nil || closeErr != nil ||
+			content.ExpandedBytes != receipt.ExpandedBytes ||
+			content.PathCount != receipt.PathCount {
+			t.Fatalf(
+				"opened source archive content=%#v inspect=%v close=%v",
+				content,
+				inspectErr,
+				closeErr,
+			)
+		}
+	})
+
+	t.Run("changed receipt", func(t *testing.T) {
+		_, store, _, receipt := publishedStore(t)
+		receipt.ArchiveDigest = "sha256:" + strings.Repeat("0", 64)
+		if archive, err := store.Open(context.Background(), receipt); err == nil ||
+			archive != nil || !errors.Is(err, sourceacquisition.ErrSourceUnavailable) {
+			t.Fatalf("changed receipt archive=%v err=%v", archive, err)
+		}
+	})
+
+	t.Run("partial consumption", func(t *testing.T) {
+		_, store, _, receipt := publishedStore(t)
+		archive, err := store.Open(context.Background(), receipt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := archive.Read(make([]byte, 1)); err != nil {
+			t.Fatalf("read source archive prefix: %v", err)
+		}
+		if err := archive.Close(); !errors.Is(err, sourceacquisition.ErrSourceUnavailable) {
+			t.Fatalf("partial source archive close error=%v", err)
+		}
+	})
+
+	t.Run("changed during consumption", func(t *testing.T) {
+		rootPath, store, command, receipt := publishedStore(t)
+		archive, err := store.Open(context.Background(), receipt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		name, err := archiveName(receipt.ArchiveDigest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		changed, err := os.OpenFile(
+			filepath.Join(rootPath, commandKey(command), name),
+			os.O_APPEND|os.O_WRONLY,
+			0,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, writeErr := changed.Write([]byte{0})
+		closeChangedErr := changed.Close()
+		if writeErr != nil || closeChangedErr != nil {
+			t.Fatalf("change opened source archive write=%v close=%v", writeErr, closeChangedErr)
+		}
+		_, readErr := io.Copy(io.Discard, archive)
+		closeErr := archive.Close()
+		if !errors.Is(errors.Join(readErr, closeErr), sourceacquisition.ErrSourceUnavailable) {
+			t.Fatalf("changed source archive read=%v close=%v", readErr, closeErr)
+		}
+	})
+}
+
 func TestStoreNeverPublishesPartialOrStructurallyInvalidContent(t *testing.T) {
 	rootPath := privateRoot(t)
 	store, err := New(rootPath)

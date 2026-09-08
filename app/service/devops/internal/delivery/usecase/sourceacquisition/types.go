@@ -154,23 +154,15 @@ func ValidateReceipt(command Command, value sourcearchive.Receipt) error {
 	var problems []error
 	problems = append(problems,
 		ValidateCommand(command),
-		devopsv1.ValidateID("sourceArchive.commandId", value.CommandID),
-		devopsv1.ValidateDigest("sourceArchive.inputDigest", value.InputDigest),
-		devopsv1.ValidateDigest("sourceArchive.archiveDigest", value.ArchiveDigest),
+		sourcearchive.ValidateReceipt(value),
 	)
 	if value.TenantID != command.Lease.TenantID ||
 		value.RunID != command.Lease.Run.ID ||
 		value.CommandID != command.Lease.Intent.CommandID ||
 		value.InputDigest != command.Lease.Run.InputDigest ||
 		value.HeadCommit != command.Lease.Run.Input.Change.HeadCommit ||
-		value.TrustedBaseCommit != command.Lease.Run.Input.Change.TrustedBaseCommit ||
-		value.MediaType != ArchiveMediaType {
+		value.TrustedBaseCommit != command.Lease.Run.Input.Change.TrustedBaseCommit {
 		problems = append(problems, errors.New("source archive receipt does not bind its command"))
-	}
-	if value.ArchiveBytes <= 0 || value.ArchiveBytes > MaximumArchiveBytes ||
-		value.ExpandedBytes < 0 || value.ExpandedBytes > MaximumExpandedBytes ||
-		value.PathCount > MaximumPathCount {
-		problems = append(problems, errors.New("source archive receipt exceeds its closed limits"))
 	}
 	if err := errors.Join(problems...); err != nil {
 		return errors.Join(ErrInvalidReceipt, err)

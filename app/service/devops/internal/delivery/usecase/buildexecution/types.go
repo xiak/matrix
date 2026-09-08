@@ -80,9 +80,7 @@ func ValidateCommand(value Command) error {
 	problems = append(problems,
 		runlifecycle.ValidateLease(value.Lease),
 		devopsv1.ValidatePipelineRevision(value.Revision),
-		devopsv1.ValidateID("sourceArchive.commandId", value.Archive.CommandID),
-		devopsv1.ValidateDigest("sourceArchive.inputDigest", value.Archive.InputDigest),
-		devopsv1.ValidateDigest("sourceArchive.archiveDigest", value.Archive.ArchiveDigest),
+		sourcearchive.ValidateReceipt(value.Archive),
 		validateCanonicalTime("build.startedAt", value.StartedAt),
 		validateCanonicalTime("build.deadlineAt", value.DeadlineAt),
 	)
@@ -111,13 +109,6 @@ func ValidateCommand(value Command) error {
 		value.Archive.MediaType != sourcearchive.MediaType ||
 		!validStageCommandID(value.Archive.CommandID, run.ID, "fetch") {
 		problems = append(problems, errors.New("source archive does not bind the PipelineRun"))
-	}
-	if value.Archive.ArchiveBytes < 1 ||
-		value.Archive.ArchiveBytes > sourcearchive.MaximumArchiveBytes ||
-		value.Archive.ExpandedBytes < 0 ||
-		value.Archive.ExpandedBytes > sourcearchive.MaximumExpandedBytes ||
-		value.Archive.PathCount > sourcearchive.MaximumPathCount {
-		problems = append(problems, errors.New("source archive exceeds its closed limits"))
 	}
 	if value.StartedAt.Before(run.UpdatedAt) ||
 		!value.StartedAt.Before(lease.LeaseExpiresAt) ||

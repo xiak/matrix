@@ -882,17 +882,17 @@ topology mounts one read-only DSN, the read-only fetch-purpose root, and one
 private writable archive root; it joins only the internal control and
 source-egress networks and receives no other product or execution authority.
 
-The BuildExecutor boundary and pure fenced `VERIFY` use case now close the
-authority passed to untrusted execution. The use case validates the exact run,
-PipelineRevision, source receipt, deadline, and worker before opening the
-archive; first claims execute while recovered claims only observe or cancel.
-It renews the lease around every executor call, preserves an uncertain command
-without exposing adapter diagnostics, fails closed on definitive absence or a
-contradictory receipt, and hands both successful and verification-failed
-receipts to the reporting stage. The physical executor adapter, PostgreSQL
-receipt/claim transaction, independent runner process, mutual TLS transport,
-sandbox, and normalized log persistence remain pending and this slice executes
-no repository code.
+The BuildExecutor boundary, pure fenced `VERIFY` use case, and table-blind
+PostgreSQL adapter now close the control-plane authority passed toward
+untrusted execution. The use case validates the exact run, PipelineRevision,
+source receipt, deadline, and worker before opening the archive; first claims
+execute while recovered claims only observe or cancel. Database-time claims
+bind and preserve the execution window, and a strict normalized receipt must
+be stored atomically before `REPORTING` can be entered. Lease renewal, stale
+fencing, receipt tampering, and the generic-transition bypass fail closed. The
+physical executor adapter, selected-only build process, independent runner,
+mutual TLS transport, sandbox, and normalized log persistence remain pending;
+no repository code executes yet.
 
 Every fenced worker transition now submits the exact next PipelineRun document
 to the database boundary. A terminal transition atomically stores a distinct
@@ -1024,6 +1024,11 @@ Current verification evidence:
   uncertainty, source-archive failure, definitive executor absence, invalid
   receipt rejection, native-error sanitization, and passed/failed handoff to
   the reporter
+- the shared source-archive reader proves the portable receipt independently,
+  matches it to the private deterministic store, structurally inspects and
+  hashes the archive before handoff, and verifies its length and digest again
+  across complete stream consumption; changed receipts, partial reads, and
+  mutation after opening fail closed without exposing a host path
 - real PostgreSQL 18 BuildExecutor persistence journey proving heartbeat-
   gated readiness, a table-blind worker, `VERIFY`-only build claims,
   `REPORT`-only generic claims, database-created and takeover-stable 20-minute
