@@ -6,7 +6,7 @@
 - Updated: 2026-09-08
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `c9acd5f`
+- Current pushed implementation baseline: `83bde3c`
 
 ## Goal
 
@@ -29,11 +29,18 @@ architecture, FEAT, implementation, test, and release gates.
   mTLS journey persists claim through acknowledgement and recovers it after
   restart without giving the journal any network, database, product, provider,
   Docker, or process-execution authority.
+- Pushed `83bde3c` composes the physical table-blind build-worker command from
+  its PostgreSQL repository, read-only archive store, strict mTLS admin client,
+  independent heartbeat, and readiness endpoint. A shared protected client-
+  certificate loader binds exact SPIFFE identity and pinned server roots, while
+  architecture tests deny provider, runner, Docker, IAM, Audit, and PaaS
+  authority. Its focused suites pass race/repetition and fixed disconnected
+  Linux/amd64 tests with read-only source/module cache and lookup disabled.
 - Full tests and vet, architecture tests, focused race and 20-run suites, and
   the same focused suites run twenty times in the fixed disconnected Go 1.26.8
   Linux/amd64 image with read-only source and no module lookup. The physical
-  build-worker and runner process composition, sandbox, normalized logs,
-  reporter, UI, and offline release remain pending.
+  dedicated runner process, sandbox, real cross-process journey, normalized
+  logs, reporter, UI, and offline release remain pending.
 - The user-owned untracked `app/ui/paas/` tree remains untouched.
 
 ## Adoption boundary
@@ -47,9 +54,9 @@ architecture, FEAT, implementation, test, and release gates.
 ## Continuation
 
 Continue FEAT-007 with the smallest independently testable physical-execution
-slice behind the accepted BuildExecutor port: compose the table-blind build
-worker and dedicated runner processes around the accepted gateway/client/journal
-boundary, without executing repository code until the sandbox gate is present.
+slice behind the accepted BuildExecutor port: compose the dedicated runner
+process around the accepted gateway/client/journal boundary, without executing
+repository code until the sandbox gate and eligibility preflight are present.
 Keep runner authority away from
 PostgreSQL, source/report credentials, IAM, Audit, PaaS, and admin operations.
 Do not claim repository
