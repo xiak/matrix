@@ -8,8 +8,9 @@
   source-readiness contract, installation-operator source credential
   lifecycle, source-observer runtime, source-acquisition runtime design,
   fenced acquisition use case, deterministic archive store, and real Gitea
-  fetch protocol, source-acquisition persistence, and isolated source-fetcher
-  process complete; executor/reporter effects pending
+  fetch protocol, source-acquisition persistence, isolated source-fetcher
+  process, and fenced BuildExecutor contract/use case complete; executor
+  persistence/runner and reporter effects pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -529,6 +530,35 @@ as `CANCELLED` whether or not the final archive was observed.
 
 ### Matrix Native executor
 
+The delivery control plane creates a closed `VERIFY` command before any
+executor effect. It binds the current lease/fencing token, immutable
+PipelineRevision, stored source-archive receipt, database-created start time,
+and fixed 20-minute deadline. The resulting provider-neutral `BuildRequest`
+contains only tenant/run/command/input identities, archive digest and bounded
+sizes, revision identity and digest, the fixed verification/executor/toolchain
+profiles, `NONE` egress, the exact two ordered steps, fixed limits, and the two
+times. Source paths, arbitrary argv or environment, credentials, provider
+objects, report authority, and PaaS data cannot cross this port.
+
+Only the first fence may call `Execute` with the archive stream. A takeover
+fence calls `Observe` or `Cancel` against the same deterministic command and
+never resubmits the archive. Transport ambiguity, caller shutdown, timeout
+during an effect, or lease-renewal loss preserves the open command for fenced
+observation. An already-expired recovered execution must be cancelled and its
+absence or terminal receipt observed before the control plane may commit a
+deadline outcome.
+
+The normalized terminal receipt repeats the command/run/input/archive/revision
+identities, executor and pinned profile identities, one closed conclusion, the
+exact two step conclusions, and a deterministic content digest. Both `PASSED`
+and verification `FAILED` receipts advance `VERIFYING -> REPORTING`; the later
+CheckReporter owns the provider-visible terminal check and is the only stage
+that converts that evidence into `SUCCEEDED` or
+`FAILED / VERIFICATION_FAILED`. User cancellation may terminate without a
+report. Native output, diagnostics, container identifiers, paths, and logs are
+not receipt fields; bounded normalized-log storage is a separate pending
+boundary.
+
 Untrusted verification never runs on the Foundation/Application-PaaS host.
 The accepted profile requires a dedicated Linux/amd64 runner node with no
 tenant runtime or control-plane data, Docker `29.x`, and gVisor
@@ -852,6 +882,18 @@ topology mounts one read-only DSN, the read-only fetch-purpose root, and one
 private writable archive root; it joins only the internal control and
 source-egress networks and receives no other product or execution authority.
 
+The BuildExecutor boundary and pure fenced `VERIFY` use case now close the
+authority passed to untrusted execution. The use case validates the exact run,
+PipelineRevision, source receipt, deadline, and worker before opening the
+archive; first claims execute while recovered claims only observe or cancel.
+It renews the lease around every executor call, preserves an uncertain command
+without exposing adapter diagnostics, fails closed on definitive absence or a
+contradictory receipt, and hands both successful and verification-failed
+receipts to the reporting stage. The physical executor adapter, PostgreSQL
+receipt/claim transaction, independent runner process, mutual TLS transport,
+sandbox, and normalized log persistence remain pending and this slice executes
+no repository code.
+
 Every fenced worker transition now submits the exact next PipelineRun document
 to the database boundary. A terminal transition atomically stores a distinct
 Audit Operation and outbox fact with a normalized system actor, deterministic
@@ -929,9 +971,10 @@ configuration-write capability. Its heartbeat gates both process readiness
 and DevOps API readiness once any SourceConnection exists.
 
 These slices do not complete Gate A. Source readiness, credential lifecycle,
-observation, and acquisition through an installed isolated process are
-complete. Executor execution, reporting, normalized logs, remaining runtime
-quotas, check-receipt Audit facts, and pagination remain pending.
+observation, acquisition through an installed isolated process, and the pure
+fenced BuildExecutor boundary are complete. Executor persistence and physical
+execution, reporting, normalized logs, remaining runtime quotas, check-receipt
+Audit facts, and pagination remain pending.
 
 Current verification evidence:
 
@@ -974,6 +1017,13 @@ Current verification evidence:
   redirect credential forwarding, SHA-1-only admission, safe path/mode
   handling, and tamper/partial/symlink rejection; the four focused packages
   pass the race detector and 20-run repetition
+- BuildExecutor contract and fenced execution-use-case tests proving closed
+  request authority, deterministic terminal receipts, exact run/revision/
+  archive/deadline binding before effects, execute-versus-observe recovery,
+  cancellation and expired-build cancellation, lease renewal and lease-loss
+  uncertainty, source-archive failure, definitive executor absence, invalid
+  receipt rejection, native-error sanitization, and passed/failed handoff to
+  the reporter
 - the same pinned real Gitea gate creates a branch, commit, and pull request,
   fetches only its trusted default-branch and pull-head refs through the
   production pure-Go adapter, verifies both immutable commits, and reproduces

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/sourcearchive"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runlifecycle"
 )
 
@@ -77,10 +78,10 @@ func (service *Service) FetchOnce(ctx context.Context) (Result, error) {
 		})
 	}
 
-	var operation func(context.Context) (SourceArchiveReceipt, bool, error)
+	var operation func(context.Context) (sourcearchive.Receipt, bool, error)
 	switch command.Lease.Mode {
 	case runlifecycle.ClaimExecute:
-		operation = func(effectContext context.Context) (SourceArchiveReceipt, bool, error) {
+		operation = func(effectContext context.Context) (sourcearchive.Receipt, bool, error) {
 			receipt, publishErr := service.archiveStore.Publish(
 				effectContext,
 				command,
@@ -91,7 +92,7 @@ func (service *Service) FetchOnce(ctx context.Context) (Result, error) {
 			return receipt, publishErr == nil, publishErr
 		}
 	case runlifecycle.ClaimObserve:
-		operation = func(effectContext context.Context) (SourceArchiveReceipt, bool, error) {
+		operation = func(effectContext context.Context) (sourcearchive.Receipt, bool, error) {
 			return service.archiveStore.Observe(effectContext, command)
 		}
 	default:
@@ -134,8 +135,8 @@ func (service *Service) FetchOnce(ctx context.Context) (Result, error) {
 func (service *Service) performWithRenewal(
 	ctx context.Context,
 	command Command,
-	operation func(context.Context) (SourceArchiveReceipt, bool, error),
-) (SourceArchiveReceipt, bool, bool, error, error) {
+	operation func(context.Context) (sourcearchive.Receipt, bool, error),
+) (sourcearchive.Receipt, bool, bool, error, error) {
 	effectContext, cancel := context.WithTimeout(ctx, service.config.Deadline)
 	renewalDone := make(chan error, 1)
 	go service.renewUntilDone(effectContext, command.Lease, renewalDone, cancel)
@@ -145,10 +146,10 @@ func (service *Service) performWithRenewal(
 	cancel()
 	renewalErr := <-renewalDone
 	if renewalErr != nil {
-		return SourceArchiveReceipt{}, false, false, operationErr, renewalErr
+		return sourcearchive.Receipt{}, false, false, operationErr, renewalErr
 	}
 	if timedOut {
-		return SourceArchiveReceipt{}, false, true, context.DeadlineExceeded, nil
+		return sourcearchive.Receipt{}, false, true, context.DeadlineExceeded, nil
 	}
 	return receipt, found, false, operationErr, nil
 }
@@ -208,7 +209,12 @@ func (service *Service) complete(
 	if err != nil {
 		return result, err
 	}
-	if err := validateReturnedRun(completion, updated); err != nil {
+	if err := runlifecycle.ValidateReturnedTransition(
+		completion.Command.Lease.Run,
+		updated,
+		completion.State,
+		completion.Reason,
+	); err != nil {
 		return result, err
 	}
 	result.Run = updated
@@ -220,37 +226,4 @@ func (service *Service) Readiness(ctx context.Context) (devopsv1.Readiness, erro
 		return devopsv1.Readiness{}, errors.New("source fetcher readiness is unavailable")
 	}
 	return service.repository.Readiness(ctx)
-}
-
-func validateReturnedRun(completion Completion, updated devopsv1.PipelineRun) error {
-	current := completion.Command.Lease.Run
-	if devopsv1.ValidatePipelineRun(updated) != nil ||
-		updated.ID != current.ID || updated.Scope != current.Scope ||
-		updated.ProjectID != current.ProjectID || updated.PipelineID != current.PipelineID ||
-		updated.Input != current.Input || updated.InputDigest != current.InputDigest ||
-		!equalReplay(updated.Replay, current.Replay) || updated.CreatedAt != current.CreatedAt ||
-		!equalTimePointer(
-			updated.Status.CancellationRequestedAt,
-			current.Status.CancellationRequestedAt,
-		) ||
-		updated.Status.State != completion.State || updated.Status.Reason != completion.Reason ||
-		updated.Status.ResourceVersion != current.Status.ResourceVersion+1 ||
-		!updated.UpdatedAt.After(current.UpdatedAt) {
-		return errors.New("repository returned a mismatched source acquisition transition")
-	}
-	return nil
-}
-
-func equalReplay(left, right *devopsv1.PipelineRunReplay) bool {
-	if left == nil || right == nil {
-		return left == nil && right == nil
-	}
-	return *left == *right
-}
-
-func equalTimePointer(left, right *time.Time) bool {
-	if left == nil || right == nil {
-		return left == nil && right == nil
-	}
-	return *left == *right
 }

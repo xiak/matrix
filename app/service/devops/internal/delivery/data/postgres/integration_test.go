@@ -28,6 +28,7 @@ import (
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/sourcecredentialfile"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/domain"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/port"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/sourcearchive"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/auditdispatch"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/pipelineconfiguration"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runadmission"
@@ -1762,8 +1763,8 @@ func claimExpectedSourceFetch(
 
 func sourceArchiveReceipt(
 	command sourceacquisition.Command,
-) *sourceacquisition.SourceArchiveReceipt {
-	return &sourceacquisition.SourceArchiveReceipt{
+) *sourcearchive.Receipt {
+	return &sourcearchive.Receipt{
 		TenantID:          command.Lease.TenantID,
 		RunID:             command.Lease.Run.ID,
 		CommandID:         command.Lease.Intent.CommandID,

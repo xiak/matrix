@@ -102,7 +102,7 @@ func (queue *Queue) Advance(
 	if err != nil {
 		return devopsv1.PipelineRun{}, err
 	}
-	if err := validateReturnedTransition(transition.Lease.Run, updated, transition.State, transition.Reason); err != nil {
+	if err := ValidateReturnedTransition(transition.Lease.Run, updated, transition.State, transition.Reason); err != nil {
 		return devopsv1.PipelineRun{}, err
 	}
 	return updated, nil
@@ -132,7 +132,7 @@ func (queue *Queue) MarkReportUncertain(
 	if err != nil {
 		return devopsv1.PipelineRun{}, err
 	}
-	if err := validateReturnedTransition(
+	if err := ValidateReturnedTransition(
 		reconciliation.Lease.Run,
 		updated,
 		devopsv1.PipelineRunReconciling,
@@ -259,7 +259,7 @@ func ValidateLeaseGuard(guard LeaseGuard) error {
 	return errors.Join(problems...)
 }
 
-func validateReturnedTransition(
+func ValidateReturnedTransition(
 	current, updated devopsv1.PipelineRun,
 	state devopsv1.PipelineRunState,
 	reason devopsv1.PipelineRunReason,
@@ -270,13 +270,31 @@ func validateReturnedTransition(
 	if updated.ID != current.ID || updated.Scope != current.Scope ||
 		updated.ProjectID != current.ProjectID || updated.PipelineID != current.PipelineID ||
 		updated.Input != current.Input || updated.InputDigest != current.InputDigest ||
-		updated.CreatedAt != current.CreatedAt || updated.Status.State != state ||
+		!equalReplay(updated.Replay, current.Replay) ||
+		!equalTimePointer(
+			updated.Status.CancellationRequestedAt,
+			current.Status.CancellationRequestedAt,
+		) || updated.CreatedAt != current.CreatedAt || updated.Status.State != state ||
 		updated.Status.Reason != reason ||
 		updated.Status.ResourceVersion != current.Status.ResourceVersion+1 ||
 		!updated.UpdatedAt.After(current.UpdatedAt) {
 		return errors.New("repository returned a mismatched PipelineRun transition")
 	}
 	return nil
+}
+
+func equalReplay(left, right *devopsv1.PipelineRunReplay) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
+func equalTimePointer(left, right *time.Time) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 func validateDeferralTime(current, next time.Time) error {

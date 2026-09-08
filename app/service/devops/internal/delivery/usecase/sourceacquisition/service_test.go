@@ -13,6 +13,7 @@ import (
 
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/domain"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/sourcearchive"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runlifecycle"
 )
 
@@ -325,7 +326,7 @@ func (fetcher *fakeFetcher) Fetch(
 }
 
 type fakeArchiveStore struct {
-	observed      SourceArchiveReceipt
+	observed      sourcearchive.Receipt
 	observedFound bool
 	publishErr    error
 	observeErr    error
@@ -337,15 +338,15 @@ func (store *fakeArchiveStore) Publish(
 	_ context.Context,
 	command Command,
 	write ArchiveWriter,
-) (SourceArchiveReceipt, error) {
+) (sourcearchive.Receipt, error) {
 	store.publishCalls++
 	if store.publishErr != nil {
-		return SourceArchiveReceipt{}, store.publishErr
+		return sourcearchive.Receipt{}, store.publishErr
 	}
 	var archive bytes.Buffer
 	content, err := write(&archive)
 	if err != nil {
-		return SourceArchiveReceipt{}, err
+		return sourcearchive.Receipt{}, err
 	}
 	return testReceipt(command, archive.Bytes(), content), nil
 }
@@ -353,7 +354,7 @@ func (store *fakeArchiveStore) Publish(
 func (store *fakeArchiveStore) Observe(
 	context.Context,
 	Command,
-) (SourceArchiveReceipt, bool, error) {
+) (sourcearchive.Receipt, bool, error) {
 	store.observeCalls++
 	return store.observed, store.observedFound, store.observeErr
 }
@@ -482,7 +483,7 @@ func testReceipt(
 	command Command,
 	payload []byte,
 	content ArchiveContent,
-) SourceArchiveReceipt {
+) sourcearchive.Receipt {
 	digest := sha256.Sum256(payload)
 	return receiptFromDigest(command, digest[:], int64(len(payload)), content)
 }
@@ -492,8 +493,8 @@ func receiptFromDigest(
 	digest []byte,
 	archiveBytes int64,
 	content ArchiveContent,
-) SourceArchiveReceipt {
-	return SourceArchiveReceipt{
+) sourcearchive.Receipt {
+	return sourcearchive.Receipt{
 		TenantID: command.Lease.TenantID, RunID: command.Lease.Run.ID,
 		CommandID: command.Lease.Intent.CommandID, InputDigest: command.Lease.Run.InputDigest,
 		HeadCommit:        command.Lease.Run.Input.Change.HeadCommit,

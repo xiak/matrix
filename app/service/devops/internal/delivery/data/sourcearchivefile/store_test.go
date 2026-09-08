@@ -173,7 +173,7 @@ func TestStoreRejectsUnsafeRootAndBoundedWriterOverflow(t *testing.T) {
 
 func publishedStore(
 	t *testing.T,
-) (string, *Store, sourceacquisition.Command, sourceacquisition.SourceArchiveReceipt) {
+) (string, *Store, sourceacquisition.Command, sourcearchive.Receipt) {
 	t.Helper()
 	rootPath := privateRoot(t)
 	store, err := New(rootPath)

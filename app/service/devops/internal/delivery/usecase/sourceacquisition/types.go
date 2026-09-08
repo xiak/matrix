@@ -50,22 +50,6 @@ type Command struct {
 
 type ArchiveContent = sourcearchive.Content
 
-// SourceArchiveReceipt is non-secret evidence. A host path is deliberately
-// absent so persistence and later executors can trust identity, not layout.
-type SourceArchiveReceipt struct {
-	TenantID          devopsv1.TenantID   `json:"tenantId"`
-	RunID             devopsv1.ResourceID `json:"runId"`
-	CommandID         string              `json:"commandId"`
-	InputDigest       string              `json:"inputDigest"`
-	HeadCommit        string              `json:"headCommit"`
-	TrustedBaseCommit string              `json:"trustedBaseCommit"`
-	MediaType         string              `json:"mediaType"`
-	ArchiveDigest     string              `json:"archiveDigest"`
-	ArchiveBytes      int64               `json:"archiveBytes"`
-	ExpandedBytes     int64               `json:"expandedBytes"`
-	PathCount         uint64              `json:"pathCount"`
-}
-
 type ArchiveWriter func(io.Writer) (ArchiveContent, error)
 
 type Repository interface {
@@ -81,15 +65,15 @@ type SourceFetcher interface {
 }
 
 type ArchiveStore interface {
-	Publish(context.Context, Command, ArchiveWriter) (SourceArchiveReceipt, error)
-	Observe(context.Context, Command) (SourceArchiveReceipt, bool, error)
+	Publish(context.Context, Command, ArchiveWriter) (sourcearchive.Receipt, error)
+	Observe(context.Context, Command) (sourcearchive.Receipt, bool, error)
 }
 
 type Completion struct {
 	Command Command
 	State   devopsv1.PipelineRunState
 	Reason  devopsv1.PipelineRunReason
-	Receipt *SourceArchiveReceipt
+	Receipt *sourcearchive.Receipt
 }
 
 type Config struct {
@@ -166,7 +150,7 @@ func ValidateArchiveContent(value ArchiveContent) error {
 	return nil
 }
 
-func ValidateReceipt(command Command, value SourceArchiveReceipt) error {
+func ValidateReceipt(command Command, value sourcearchive.Receipt) error {
 	var problems []error
 	problems = append(problems,
 		ValidateCommand(command),

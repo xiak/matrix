@@ -47,14 +47,14 @@ func (store *Store) Publish(
 	ctx context.Context,
 	command sourceacquisition.Command,
 	write sourceacquisition.ArchiveWriter,
-) (sourceacquisition.SourceArchiveReceipt, error) {
+) (sourcearchive.Receipt, error) {
 	if store == nil || ctx == nil || write == nil ||
 		sourceacquisition.ValidateCommand(command) != nil {
-		return sourceacquisition.SourceArchiveReceipt{}, sourceacquisition.ErrSourceUnavailable
+		return sourcearchive.Receipt{}, sourceacquisition.ErrSourceUnavailable
 	}
 	root, err := store.openRoot()
 	if err != nil {
-		return sourceacquisition.SourceArchiveReceipt{}, err
+		return sourcearchive.Receipt{}, err
 	}
 	defer root.Close()
 	key := commandKey(command)
@@ -64,7 +64,7 @@ func (store *Store) Publish(
 
 	stagingName, err := createStaging(root, key)
 	if err != nil {
-		return sourceacquisition.SourceArchiveReceipt{}, sourceUnavailable(err)
+		return sourcearchive.Receipt{}, sourceUnavailable(err)
 	}
 	published := false
 	defer func() {
@@ -76,7 +76,7 @@ func (store *Store) Publish(
 	archivePath := stagingName + "/" + archiveTemporary
 	archiveFile, err := root.OpenFile(archivePath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
-		return sourceacquisition.SourceArchiveReceipt{}, sourceUnavailable(err)
+		return sourcearchive.Receipt{}, sourceUnavailable(err)
 	}
 	bounded := &boundedWriter{destination: archiveFile, digest: sha256.New()}
 	content, writeErr := write(bounded)
@@ -91,12 +91,12 @@ func (store *Store) Publish(
 	}
 	closeErr := archiveFile.Close()
 	if writeErr != nil || closeErr != nil {
-		return sourceacquisition.SourceArchiveReceipt{}, sourceUnavailable(errors.Join(writeErr, closeErr))
+		return sourcearchive.Receipt{}, sourceUnavailable(errors.Join(writeErr, closeErr))
 	}
 
 	digestHex := hex.EncodeToString(bounded.digest.Sum(nil))
 	archiveName := digestHex + ".tar.gz"
-	receipt := sourceacquisition.SourceArchiveReceipt{
+	receipt := sourcearchive.Receipt{
 		TenantID: command.Lease.TenantID, RunID: command.Lease.Run.ID,
 		CommandID: command.Lease.Intent.CommandID, InputDigest: command.Lease.Run.InputDigest,
 		HeadCommit:        command.Lease.Run.Input.Change.HeadCommit,
@@ -106,23 +106,23 @@ func (store *Store) Publish(
 		PathCount: content.PathCount,
 	}
 	if err := sourceacquisition.ValidateReceipt(command, receipt); err != nil {
-		return sourceacquisition.SourceArchiveReceipt{}, sourceUnavailable(err)
+		return sourcearchive.Receipt{}, sourceUnavailable(err)
 	}
 	if err := root.Rename(archivePath, stagingName+"/"+archiveName); err != nil {
-		return sourceacquisition.SourceArchiveReceipt{}, sourceUnavailable(err)
+		return sourcearchive.Receipt{}, sourceUnavailable(err)
 	}
 	if err := verifyArchive(ctx, root, stagingName+"/"+archiveName, receipt); err != nil {
-		return sourceacquisition.SourceArchiveReceipt{}, err
+		return sourcearchive.Receipt{}, err
 	}
 
 	receiptDocument, err := json.Marshal(receipt)
 	if err != nil || int64(len(receiptDocument)) > maximumReceiptSize {
-		return sourceacquisition.SourceArchiveReceipt{}, sourceUnavailable(err)
+		return sourcearchive.Receipt{}, sourceUnavailable(err)
 	}
 	receiptPath := stagingName + "/" + receiptTemporary
 	receiptFile, err := root.OpenFile(receiptPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
-		return sourceacquisition.SourceArchiveReceipt{}, sourceUnavailable(err)
+		return sourcearchive.Receipt{}, sourceUnavailable(err)
 	}
 	written, writeErr := receiptFile.Write(receiptDocument)
 	if writeErr == nil && written != len(receiptDocument) {
@@ -133,25 +133,25 @@ func (store *Store) Publish(
 	}
 	closeErr = receiptFile.Close()
 	if writeErr != nil || closeErr != nil {
-		return sourceacquisition.SourceArchiveReceipt{}, sourceUnavailable(errors.Join(writeErr, closeErr))
+		return sourcearchive.Receipt{}, sourceUnavailable(errors.Join(writeErr, closeErr))
 	}
 	if err := root.Rename(receiptPath, stagingName+"/"+receiptName); err != nil {
-		return sourceacquisition.SourceArchiveReceipt{}, sourceUnavailable(err)
+		return sourcearchive.Receipt{}, sourceUnavailable(err)
 	}
 	if err := syncDirectory(root, stagingName); err != nil {
-		return sourceacquisition.SourceArchiveReceipt{}, sourceUnavailable(err)
+		return sourcearchive.Receipt{}, sourceUnavailable(err)
 	}
 	if err := root.Rename(stagingName, key); err != nil {
 		if existing, found, observeErr := observe(ctx, root, key, command); observeErr == nil && found {
 			return existing, nil
 		}
-		return sourceacquisition.SourceArchiveReceipt{}, sourceUnavailable(err)
+		return sourcearchive.Receipt{}, sourceUnavailable(err)
 	}
 	published = true
 	if err := syncDirectory(root, "."); err != nil {
 		// The final directory is already visible. Return no receipt so the
 		// current fence cannot claim durability; a takeover will re-observe it.
-		return sourceacquisition.SourceArchiveReceipt{}, errors.Join(
+		return sourcearchive.Receipt{}, errors.Join(
 			sourceacquisition.ErrArchiveUncertain, err,
 		)
 	}
@@ -161,13 +161,13 @@ func (store *Store) Publish(
 func (store *Store) Observe(
 	ctx context.Context,
 	command sourceacquisition.Command,
-) (sourceacquisition.SourceArchiveReceipt, bool, error) {
+) (sourcearchive.Receipt, bool, error) {
 	if store == nil || ctx == nil || sourceacquisition.ValidateCommand(command) != nil {
-		return sourceacquisition.SourceArchiveReceipt{}, false, sourceacquisition.ErrSourceUnavailable
+		return sourcearchive.Receipt{}, false, sourceacquisition.ErrSourceUnavailable
 	}
 	root, err := store.openRoot()
 	if err != nil {
-		return sourceacquisition.SourceArchiveReceipt{}, false, err
+		return sourcearchive.Receipt{}, false, err
 	}
 	defer root.Close()
 	return observe(ctx, root, commandKey(command), command)
@@ -190,17 +190,17 @@ func observe(
 	root *os.Root,
 	key string,
 	command sourceacquisition.Command,
-) (sourceacquisition.SourceArchiveReceipt, bool, error) {
+) (sourcearchive.Receipt, bool, error) {
 	if err := ctx.Err(); err != nil {
-		return sourceacquisition.SourceArchiveReceipt{}, false, err
+		return sourcearchive.Receipt{}, false, err
 	}
 	directory, err := root.Lstat(key)
 	if errors.Is(err, os.ErrNotExist) {
-		return sourceacquisition.SourceArchiveReceipt{}, false, nil
+		return sourcearchive.Receipt{}, false, nil
 	}
 	if err != nil || directory.Mode()&os.ModeSymlink != 0 || !directory.IsDir() ||
 		!privateMode(directory.Mode(), 0o700) {
-		return sourceacquisition.SourceArchiveReceipt{}, false, sourceUnavailable(err)
+		return sourcearchive.Receipt{}, false, sourceUnavailable(err)
 	}
 
 	receiptPath := key + "/" + receiptName
@@ -208,41 +208,41 @@ func observe(
 	if err != nil || receiptInfo.Mode()&os.ModeSymlink != 0 || !receiptInfo.Mode().IsRegular() ||
 		!privateMode(receiptInfo.Mode(), 0o600) || receiptInfo.Size() <= 0 ||
 		receiptInfo.Size() > maximumReceiptSize {
-		return sourceacquisition.SourceArchiveReceipt{}, false, sourceUnavailable(err)
+		return sourcearchive.Receipt{}, false, sourceUnavailable(err)
 	}
 	receiptFile, err := root.Open(receiptPath)
 	if err != nil {
-		return sourceacquisition.SourceArchiveReceipt{}, false, sourceUnavailable(err)
+		return sourcearchive.Receipt{}, false, sourceUnavailable(err)
 	}
 	receiptDocument, readErr := io.ReadAll(io.LimitReader(receiptFile, maximumReceiptSize+1))
 	closeErr := receiptFile.Close()
 	if readErr != nil || closeErr != nil || int64(len(receiptDocument)) != receiptInfo.Size() {
-		return sourceacquisition.SourceArchiveReceipt{}, false, sourceUnavailable(errors.Join(readErr, closeErr))
+		return sourcearchive.Receipt{}, false, sourceUnavailable(errors.Join(readErr, closeErr))
 	}
 	receipt, err := decodeReceipt(receiptDocument)
 	if err != nil || sourceacquisition.ValidateReceipt(command, receipt) != nil {
-		return sourceacquisition.SourceArchiveReceipt{}, false, sourceUnavailable(err)
+		return sourcearchive.Receipt{}, false, sourceUnavailable(err)
 	}
 	archiveName, err := archiveName(receipt.ArchiveDigest)
 	if err != nil {
-		return sourceacquisition.SourceArchiveReceipt{}, false, sourceUnavailable(err)
+		return sourcearchive.Receipt{}, false, sourceUnavailable(err)
 	}
 
 	directoryFile, err := root.Open(key)
 	if err != nil {
-		return sourceacquisition.SourceArchiveReceipt{}, false, sourceUnavailable(err)
+		return sourcearchive.Receipt{}, false, sourceUnavailable(err)
 	}
 	entries, readDirectoryErr := directoryFile.ReadDir(3)
 	closeErr = directoryFile.Close()
 	if readDirectoryErr != nil && !errors.Is(readDirectoryErr, io.EOF) {
-		return sourceacquisition.SourceArchiveReceipt{}, false, sourceUnavailable(errors.Join(readDirectoryErr, closeErr))
+		return sourcearchive.Receipt{}, false, sourceUnavailable(errors.Join(readDirectoryErr, closeErr))
 	}
 	if closeErr != nil || len(entries) != 2 || !containsEntry(entries, receiptName) ||
 		!containsEntry(entries, archiveName) {
-		return sourceacquisition.SourceArchiveReceipt{}, false, sourceUnavailable(closeErr)
+		return sourcearchive.Receipt{}, false, sourceUnavailable(closeErr)
 	}
 	if err := verifyArchive(ctx, root, key+"/"+archiveName, receipt); err != nil {
-		return sourceacquisition.SourceArchiveReceipt{}, false, err
+		return sourcearchive.Receipt{}, false, err
 	}
 	return receipt, true, nil
 }
@@ -251,7 +251,7 @@ func verifyArchive(
 	ctx context.Context,
 	root *os.Root,
 	archivePath string,
-	receipt sourceacquisition.SourceArchiveReceipt,
+	receipt sourcearchive.Receipt,
 ) error {
 	info, err := root.Lstat(archivePath)
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() ||
@@ -274,20 +274,20 @@ func verifyArchive(
 	return nil
 }
 
-func decodeReceipt(document []byte) (sourceacquisition.SourceArchiveReceipt, error) {
+func decodeReceipt(document []byte) (sourcearchive.Receipt, error) {
 	decoder := json.NewDecoder(bytes.NewReader(document))
 	decoder.DisallowUnknownFields()
-	var receipt sourceacquisition.SourceArchiveReceipt
+	var receipt sourcearchive.Receipt
 	if err := decoder.Decode(&receipt); err != nil {
-		return sourceacquisition.SourceArchiveReceipt{}, err
+		return sourcearchive.Receipt{}, err
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return sourceacquisition.SourceArchiveReceipt{}, sourcearchive.ErrInvalid
+		return sourcearchive.Receipt{}, sourcearchive.ErrInvalid
 	}
 	canonical, err := json.Marshal(receipt)
 	if err != nil || !bytes.Equal(canonical, document) {
-		return sourceacquisition.SourceArchiveReceipt{}, sourcearchive.ErrInvalid
+		return sourcearchive.Receipt{}, sourcearchive.ErrInvalid
 	}
 	return receipt, nil
 }
