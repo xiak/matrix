@@ -850,6 +850,11 @@ Current verification evidence:
   permission, cancellation, and closed unavailable reasons; the observer,
   resolver, command loop, use case, Audit contract, and topology suites pass
   race and 20-run repetition
+- the opt-in provider protocol gate passes against the exact pinned rootless
+  Gitea `1.27.3` image digest through an HTTPS test boundary: it provisions a
+  private repository and separate fetch/report tokens, then proves the real
+  version, current-user, repository identity/origin/default-branch, and
+  pull/push permission responses without making the fixture a release input
 - installation and topology tests proving the selected-only source-observer
   login, four read-only mounts, exact process environment, provider-egress
   network confinement, offline binary inclusion, heartbeat-gated API
