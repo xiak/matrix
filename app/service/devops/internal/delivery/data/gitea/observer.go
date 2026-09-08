@@ -218,13 +218,14 @@ type userResponse struct {
 }
 
 type repositoryResponse struct {
-	ID            int64       `json:"id"`
-	FullName      string      `json:"full_name"`
-	URL           string      `json:"url"`
-	HTMLURL       string      `json:"html_url"`
-	CloneURL      string      `json:"clone_url"`
-	DefaultBranch string      `json:"default_branch"`
-	Permissions   *permission `json:"permissions"`
+	ID               int64       `json:"id"`
+	FullName         string      `json:"full_name"`
+	URL              string      `json:"url"`
+	HTMLURL          string      `json:"html_url"`
+	CloneURL         string      `json:"clone_url"`
+	DefaultBranch    string      `json:"default_branch"`
+	ObjectFormatName string      `json:"object_format_name"`
+	Permissions      *permission `json:"permissions"`
 }
 
 type permission struct {
@@ -303,7 +304,8 @@ func repositoryMatches(
 	if repository.ID < 1 || uint64(repository.ID) > devopsv1.MaximumContractInteger ||
 		strconv.FormatInt(repository.ID, 10) != string(binding.Spec.ExternalRepositoryID) ||
 		repository.FullName != binding.Spec.RepositoryPath ||
-		repository.DefaultBranch != binding.Spec.TrustedDefaultBranch {
+		repository.DefaultBranch != binding.Spec.TrustedDefaultBranch ||
+		repository.ObjectFormatName != "sha1" {
 		return false
 	}
 	return repositoryUsesEndpointOrigin(hookRepository{

@@ -6,8 +6,10 @@
   admission, authenticated Gitea ingress, fenced run-lifecycle foundation,
   IAM-authorized run read/cancellation/manual replay, terminal Audit facts,
   source-readiness contract, installation-operator source credential
-  lifecycle, source-observer runtime, and source-acquisition runtime design
-  complete; source acquisition/executor/reporter effects pending
+  lifecycle, source-observer runtime, source-acquisition runtime design,
+  fenced acquisition use case, deterministic archive store, and real Gitea
+  fetch protocol complete; source-acquisition persistence/process integration
+  plus executor/reporter effects pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -493,7 +495,10 @@ devices, and other modes fail closed. Headers carry zero time, fixed numeric
 ownership, no host names, and no provider metadata. An LFS pointer remains its
 ordinary Git blob and no LFS object is fetched. The writer enforces the fixed
 64-MiB compressed archive, 512-MiB expanded-blob, and 20,000-path limits while
-streaming.
+streaming. One archived path is at most 4,096 UTF-8 bytes and one component at
+most 255 bytes. The preceding smart-HTTP advertisement is capped at 1 MiB and
+the upload-pack response at 576 MiB, so an untrusted provider cannot turn the
+in-memory object store into an unbounded protocol buffer.
 
 The archive adapter stages a private directory below the validated archive
 root, fsyncs the archive and canonical non-secret receipt, and atomically
@@ -588,7 +593,7 @@ The first release fixes these maximums:
 
 The dedicated runner profile therefore requires at least 4 logical CPUs,
 8 GiB memory, and 20 GiB installation-owned free storage after toolchain
-import. The DevOps control-plane addition reserves 2 CPUs, 2 GiB memory, and
+import. The DevOps control-plane addition reserves 3 CPUs, 3 GiB memory, and
 8 GiB free storage on the Matrix host. These are eligibility floors, not
 capacity inferred from container registration or provider claims.
 
@@ -816,8 +821,21 @@ input digest of already-admitted runs and is repeatable with live task history.
 The same tenant transaction lock used by admission serializes the fixed
 two-active-run limit with queue claims, so concurrent admission and scheduling
 cannot exceed either side of the tenant quota.
-No source acquisition, executor, reporter, or worker loop is connected yet, so
-the new boundary cannot perform an external effect.
+
+The source-acquisition slice now validates one closed command across the
+PipelineRun lease, current SourceConnection, immutable RepositoryBinding
+snapshot, PipelineRevision, and SourceEvent before any effect. A first fence
+may invoke the fixed `go-git v5.19.2` Gitea adapter; a recovered fence can only
+reprove an already-published archive. The pure archive codec sorts safe paths,
+normalizes headers, rejects non-regular Git modes and ambiguous gzip/tar
+content, and enforces every byte/path limit. Its filesystem adapter stages
+private files, hashes and parses the complete archive, writes a canonical
+path-free receipt, fsyncs both, and atomically renames the command directory;
+equal publication is observed rather than overwritten. Lease-renewal loss or
+caller shutdown leaves the intent open, while exact provider, commit, deadline,
+and cancellation outcomes remain closed. The PostgreSQL receipt transaction
+and source-fetcher process are not connected yet, so no installed runtime can
+claim this effect.
 
 Every fenced worker transition now submits the exact next PipelineRun document
 to the database boundary. A terminal transition atomically stores a distinct
@@ -934,6 +952,23 @@ Current verification evidence:
   private repository and separate fetch/report tokens, then proves the real
   version, current-user, repository identity/origin/default-branch, and
   pull/push permission responses without making the fixture a release input
+- source-acquisition use-case, archive-codec, private-filesystem, and Gitea
+  adapter tests proving five-way immutable command binding, execute-versus-
+  observe fencing, lease renewal, shutdown recovery, closed failure mapping,
+  atomic idempotent publication, canonical receipt replay, full rehash/parse,
+  bounded protocol responses, exact HTTPS smart-Git request shapes, no
+  redirect credential forwarding, SHA-1-only admission, safe path/mode
+  handling, and tamper/partial/symlink rejection; the four focused packages
+  pass the race detector and 20-run repetition
+- the same pinned real Gitea gate creates a branch, commit, and pull request,
+  fetches only its trusted default-branch and pull-head refs through the
+  production pure-Go adapter, verifies both immutable commits, and reproduces
+  the exact head tree as a deterministic archive without `.git`; the
+  disposable container, repository, and token are removed after the gate
+- full repository tests pass with the release-baseline Go `1.26.8` toolchain;
+  `govulncheck v1.7.0` reports zero reachable symbol or imported-package
+  vulnerabilities after `x/crypto v0.56.0`, with only its unused, unimported
+  `openpgp` package reported at module level
 - installation and topology tests proving the selected-only source-observer
   login, four read-only mounts, exact process environment, provider-egress
   network confinement, offline binary inclusion, heartbeat-gated API

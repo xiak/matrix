@@ -82,6 +82,7 @@ func TestRepositoryObservationDistinguishesIdentityAndPermissions(t *testing.T) 
 	}{
 		{name: "missing repository", mode: observerServerMode{missingRepository: true}, reason: devopsv1.RepositoryBindingReasonRepositoryUnavailable},
 		{name: "identity mismatch", mode: observerServerMode{mismatchIdentity: true}, reason: devopsv1.RepositoryBindingReasonIdentityMismatch},
+		{name: "unsupported object format", mode: observerServerMode{unsupportedFormat: true}, reason: devopsv1.RepositoryBindingReasonIdentityMismatch},
 		{name: "fetch denied", mode: observerServerMode{denyFetch: true}, reason: devopsv1.RepositoryBindingReasonFetchPermissionDenied},
 		{name: "report denied", mode: observerServerMode{denyReport: true}, reason: devopsv1.RepositoryBindingReasonReportPermissionDenied},
 	}
@@ -137,6 +138,7 @@ type observerServerMode struct {
 	redirectVersion   bool
 	missingRepository bool
 	mismatchIdentity  bool
+	unsupportedFormat bool
 	denyFetch         bool
 	denyReport        bool
 	delay             time.Duration
@@ -193,14 +195,18 @@ func newObserverServer(t *testing.T, mode observerServerMode) *httptest.Server {
 			pull := token == observerFetch && !mode.denyFetch || token == observerReport
 			push := token == observerReport && !mode.denyReport
 			fullName := "matrix/service"
+			objectFormat := "sha1"
 			if mode.mismatchIdentity {
 				fullName = "matrix/other"
 			}
+			if mode.unsupportedFormat {
+				objectFormat = "sha256"
+			}
 			_, _ = fmt.Fprintf(response,
-				`{"id":42,"full_name":%q,"url":%q,"html_url":%q,"clone_url":%q,"default_branch":"main","permissions":{"pull":%t,"push":%t}}`,
+				`{"id":42,"full_name":%q,"url":%q,"html_url":%q,"clone_url":%q,"default_branch":"main","object_format_name":%q,"permissions":{"pull":%t,"push":%t}}`,
 				fullName, serverURL(request)+"/api/v1/repos/matrix/service",
 				serverURL(request)+"/matrix/service", serverURL(request)+"/matrix/service.git",
-				pull, push,
+				objectFormat, pull, push,
 			)
 		default:
 			response.WriteHeader(http.StatusNotFound)

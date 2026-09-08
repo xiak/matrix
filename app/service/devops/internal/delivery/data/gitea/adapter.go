@@ -193,7 +193,7 @@ func repositoryUsesEndpointOrigin(repository hookRepository, endpointOrigin stri
 }
 
 func objectFormatMatches(format, objectID string) bool {
-	return format == "sha1" && len(objectID) == 40 || format == "sha256" && len(objectID) == 64
+	return format == "sha1" && len(objectID) == 40
 }
 
 func decodeSignature(value string) ([]byte, bool) {
