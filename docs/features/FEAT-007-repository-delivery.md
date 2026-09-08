@@ -317,11 +317,14 @@ An installed DevOps product owns three purpose-separated credential roots:
 `secrets/devops/source-webhooks`, `secrets/devops/source-fetch`, and
 `secrets/devops/source-report`. Each purpose, tenant, and opaque reference is
 length-framed and SHA-256-derived into one portable directory name. Every
-directory contains a mandatory `current` private regular file. Only a webhook
-directory may also contain one distinct `previous` value during an explicit
-rotation window. Webhook values are 32--128 visible ASCII bytes and Gitea token
-values are 32--256 visible ASCII bytes; none enters an environment variable or
-URL component. A missing connection or webhook key has the same
+directory contains one mandatory private regular `material.json` file with a
+strict canonical, versioned envelope. The envelope always has `current`; only
+a webhook envelope may also have one distinct `previous` value during an
+explicit rotation window. A single atomic replacement therefore publishes or
+retires the complete accepted set without exposing a half-rotated pair to a
+reader. Webhook values are 32--128 visible ASCII bytes and Gitea token values
+are 32--256 visible ASCII bytes; none enters an environment variable or URL
+component. A missing connection or webhook key has the same
 unauthenticated outcome as a forged signature; unsafe files, invalid key
 material, or backend failure make ingress unavailable without exposing a path
 or secret.
@@ -406,8 +409,9 @@ Both commands acquire the installation lock, authenticate the committed
 release state, require DevOps in the signed product inventory, reject symlinks
 and non-private/non-regular input, and write only through an atomic private-file
 replacement. `apply` leaves the input file untouched. For webhook rotation it
-moves a distinct old `current` to `previous`; for fetch/report it replaces only
-`current`. Equal apply is a no-op. `retire-previous` is the only supported way
+publishes the old `current` as `previous` in the same envelope replacement; for
+fetch/report it replaces the envelope's sole `current`. Equal apply is a no-op.
+`retire-previous` atomically removes `previous` and is the only supported way
 to end dual webhook acceptance. Human and JSON output contain only the purpose,
 tenant, reference, and `APPLIED|UNCHANGED|PREVIOUS_RETIRED` state. They never
 contain a value, digest, path, provider response, or native error.
