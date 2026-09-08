@@ -4,8 +4,9 @@
   baseline, Gate A project/Pipeline/source-resource contract, domain,
   configuration transaction/persistence, shared authority, durable run
   admission, authenticated Gitea ingress, fenced run-lifecycle foundation,
-  IAM-authorized run read/cancellation/manual replay, and terminal Audit facts complete;
-  source/executor/reporter effects pending
+  IAM-authorized run read/cancellation/manual replay, terminal Audit facts,
+  and source-readiness/operator-credential design complete;
+  source observer/executor/reporter effects pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -66,6 +67,26 @@ Connect repository -> create pipeline draft -> activate immutable revision
  -> open/change a pull request -> inspect run -> inspect exact check/log evidence
 ```
 
+Connecting a repository is deliberately split between a tenant administrator
+and an installation operator. In **Code > Connections**, the administrator
+selects the fixed Gitea adapter, enters one canonical HTTPS provider origin,
+and assigns three opaque references for webhook verification, source fetch,
+and check reporting. The browser never accepts or reveals a secret value. It
+shows a copyable, non-secret `mx devops source-credential` command for each
+reference; an operator runs those commands on the Matrix host with a private
+input file. This follows CODING's useful credential-reference experience while
+keeping secret custody outside the product API and untrusted execution.
+
+The connection and each repository binding show a closed health state, closed
+reason, last observation time, and a **Recheck** affordance that only schedules
+reconciliation. `PENDING` means configuration has not yet been proved,
+`READY` means every required bounded observation succeeded recently, and
+`UNAVAILABLE` means a safe actionable category failed. Provider response text,
+user identity, token scope names, filesystem paths, and credential material are
+never rendered. A stale `READY` observation is not admission authority: the UI
+marks it stale and webhook admission fails closed until a fresh observation is
+committed.
+
 The pipeline page shows the bound repository, change trigger, current immutable
 revision, executor profile, limits, connection health, and latest runs. The run
 page keeps source and execution identity visible while navigating:
@@ -92,7 +113,7 @@ requirements.
 | Resource | Mutability | Purpose |
 | --- | --- | --- |
 | `DevOpsProject` | Metadata/status versioned | Organization-owned namespace for repositories, pipelines, and runs; it grants no infrastructure authority. |
-| `SourceConnection` | Metadata/status versioned | Tenant-bound provider identity, endpoint allowlist, health, and secret references; never plaintext credentials. |
+| `SourceConnection` | Metadata/status versioned | Tenant-bound provider identity, exact endpoint origin, health, and secret references; never plaintext credentials. |
 | `RepositoryBinding` | Spec/status versioned | Stable provider repository identity, fetch/report connection, and trusted default branch. |
 | `Pipeline` | Metadata versioned | Stable identity plus one active immutable revision. |
 | `PipelineRevision` | Immutable | Bound repository, `CHANGE` trigger policy, trusted verification profile, approved dependency egress, limits, and reporter policy. |
@@ -292,17 +313,109 @@ commits, gives equal replay the same response, and maps changed replay, stale
 configuration, queue exhaustion, and temporary dependency failure to closed
 `409`, `412`, `429`, and `503` outcomes.
 
-An installed DevOps product owns a read-only
-`secrets/devops/source-webhooks` runtime mount. Each tenant plus opaque webhook
-secret reference is length-framed and SHA-256-derived into one portable
-directory name; the directory contains a mandatory `current` and optional
-distinct `previous` value. Values are 32--128 visible ASCII bytes in private
-regular files, never environment variables or URL components. A missing
-connection or missing key has the same unauthenticated outcome as a forged
-signature; unsafe files, invalid key material, or backend failure make ingress
-unavailable without exposing a path or secret.
+An installed DevOps product owns three purpose-separated credential roots:
+`secrets/devops/source-webhooks`, `secrets/devops/source-fetch`, and
+`secrets/devops/source-report`. Each purpose, tenant, and opaque reference is
+length-framed and SHA-256-derived into one portable directory name. Every
+directory contains a mandatory `current` private regular file. Only a webhook
+directory may also contain one distinct `previous` value during an explicit
+rotation window. Webhook values are 32--128 visible ASCII bytes and Gitea token
+values are 32--256 visible ASCII bytes; none enters an environment variable or
+URL component. A missing connection or webhook key has the same
+unauthenticated outcome as a forged signature; unsafe files, invalid key
+material, or backend failure make ingress unavailable without exposing a path
+or secret.
 
-The source adapter fetches only the binding's immutable head and trusted base
+### Source readiness and operator credential custody
+
+`SourceConnection.spec.endpointOrigin` is one immutable canonical HTTPS origin,
+not an ordered endpoint list. The fixed Gitea adapter constructs version,
+identity, repository, fetch, and reporting requests from that origin and the
+validated two-segment repository path. It never selects a first entry, follows
+a redirect, or trusts a provider-returned URL as a new authority. Split API and
+clone hosts require distinct SourceConnections in a later explicit adapter
+contract; the first release supports a root-hosted Gitea instance only.
+
+Connection status has one of these valid state/reason pairs:
+
+| Health | Reason | Meaning |
+| --- | --- | --- |
+| `PENDING` | `CONFIGURATION_CHANGED` | A create or credential-reference change has not been observed. |
+| `READY` | `OBSERVED` | All credential files are safe, the provider version is supported, and both provider tokens authenticate. |
+| `UNAVAILABLE` | `SECRET_UNAVAILABLE` | A required current credential is absent, unsafe, or invalid. |
+| `UNAVAILABLE` | `PROVIDER_UNAVAILABLE` | Bounded TLS, HTTP, response, or timeout validation failed. |
+| `UNAVAILABLE` | `PROVIDER_UNSUPPORTED` | The provider does not match the release-carried compatibility catalog. |
+| `UNAVAILABLE` | `CREDENTIAL_REJECTED` | Either provider token did not authenticate. |
+
+RepositoryBinding status has one of these valid state/reason pairs:
+
+| Health | Reason | Meaning |
+| --- | --- | --- |
+| `PENDING` | `CONFIGURATION_CHANGED` | A create or repository retarget has not been observed. |
+| `PENDING` | `CONNECTION_NOT_READY` | Its SourceConnection is pending or its last ready observation is stale. |
+| `READY` | `OBSERVED` | Both credentials see the exact repository identity and trusted default branch; fetch can read and report can write. |
+| `UNAVAILABLE` | `REPOSITORY_UNAVAILABLE` | The repository cannot be observed without retaining provider-native detail. |
+| `UNAVAILABLE` | `IDENTITY_MISMATCH` | Provider ID, path, origin, or trusted default branch differs from the binding. |
+| `UNAVAILABLE` | `FETCH_PERMISSION_DENIED` | The fetch identity lacks read authority. |
+| `UNAVAILABLE` | `REPORT_PERMISSION_DENIED` | The reporting identity lacks write authority. |
+
+The Gitea `1.27.3` observer performs only bounded read operations: one exact
+`GET /api/v1/version`, authenticated `GET /api/v1/user` calls for the fetch and
+report tokens, then an authenticated
+`GET /api/v1/repos/{owner}/{repository}` with each token for a binding. It
+requires strict JSON, a 64-KiB response ceiling, a five-second request deadline,
+TLS verification, no redirects, the fixed supported version, exact repository
+identity/path/default branch and returned URL origins, `pull` permission for
+fetch, and `push` permission for reporting. It does not create a status as a
+health test. One failed observation immediately fails closed; there is no
+last-known-good admission fallback.
+
+A separate `matrix-devops-source-observer` process owns this reconciliation.
+It has a distinct table-blind `matrix_devops_source_observer` database identity,
+read-only access to the three credential roots, and provider egress only. It
+cannot call IAM or Audit, claim PipelineRun tasks, mutate configuration specs,
+or read another Matrix schema. A delivery-owned reconciliation table provides
+oldest-due claims, a 30-second lease, monotonic fencing, and tenant-fair
+selection. Create/update schedules an immediate observation; successful or
+failed completion schedules the next check after 60 seconds. A connection
+transition schedules all dependent bindings. The current fence and exact
+resource version must still match when status is committed, so a stale probe
+cannot make changed configuration ready. A ready observation is admission
+authority for at most two minutes.
+
+Status observations update `metadata.resourceVersion`, `metadata.updatedAt`,
+`status.observedAt`, health, and reason atomically without changing a binding's
+spec digest or immutable revision history. Equal observations refresh time;
+only health/reason transitions emit a normalized delivery Audit fact through
+the existing outbox. Provider text and credential-derived identity are absent
+from both status and Audit. The DevOps readiness endpoint fails when configured
+connections exist and the observer heartbeat is stale, so product discovery
+does not advertise a healthy control plane that can no longer refresh source
+authority.
+
+The installation-owned CLI surface is exactly:
+
+```text
+mx devops source-credential apply --root <installation> --tenant <id>
+  --purpose WEBHOOK|FETCH|REPORT --reference <id> --from-file <private-file>
+mx devops source-credential retire-previous --root <installation>
+  --tenant <id> --purpose WEBHOOK --reference <id>
+```
+
+Both commands acquire the installation lock, authenticate the committed
+release state, require DevOps in the signed product inventory, reject symlinks
+and non-private/non-regular input, and write only through an atomic private-file
+replacement. `apply` leaves the input file untouched. For webhook rotation it
+moves a distinct old `current` to `previous`; for fetch/report it replaces only
+`current`. Equal apply is a no-op. `retire-previous` is the only supported way
+to end dual webhook acceptance. Human and JSON output contain only the purpose,
+tenant, reference, and `APPLIED|UNCHANGED|PREVIOUS_RETIRED` state. They never
+contain a value, digest, path, provider response, or native error.
+
+The DevOps API receives only the webhook root. The source observer receives all
+three roots because proving readiness is its sole side effect; later fetch and
+report workers receive only their own purpose root. The source adapter fetches
+only the binding's immutable head and trusted base
 commits with system/global Git configuration, hooks, redirects, submodules,
 and LFS disabled. It validates both objects, emits a deterministic archive of
 the exact head tree without `.git`, and hashes that archive before handing it
@@ -467,12 +580,15 @@ The source-resource slice adds provider-neutral `SourceConnection` and
 `RepositoryBinding` contracts, create/update commands, resource health, UI-safe
 repository coordinates, and their declared HTTP contract surfaces. A
 connection carries only an
-opaque installed-adapter identity, one to eight sorted canonical HTTPS origins,
-and three distinct secret-store references. The adapter identity and endpoint
-allowlist cannot be replaced in place; an update may rotate only the webhook,
-fetch, and report references and resets health to `PENDING`. Plaintext secrets,
-provider objects, endpoint paths, loopback names, ambiguous ports, unsafe Git
-branches, and repository path traversal fail closed.
+opaque installed-adapter identity, one exact canonical HTTPS origin, and three
+distinct secret-store references. The adapter identity and endpoint origin
+cannot be replaced in place; an update may rotate only the webhook, fetch, and
+report references and resets health to
+`PENDING / CONFIGURATION_CHANGED`. Plaintext secrets, provider objects,
+endpoint paths, loopback names, ambiguous ports, unsafe Git branches, and
+repository path traversal fail closed. This pre-v1 replacement removes the
+ambiguous endpoint list rather than retaining a compatibility alias: a later
+fetch or report effect can now derive exactly one authorized provider target.
 
 RepositoryBinding mutations prove same-tenant project/connection authority and
 seal the normalized connection ID, external repository ID, two-segment display
@@ -641,10 +757,10 @@ since transitioned; changed replay conflicts. Replaying a terminal replay is
 supported without embedding an ancestry chain, while provider-delivery reads
 exclude all replay descendants and keep returning only the original fan-out.
 
-These slices do not complete Gate A. Source health reconciliation and operator
-secret provisioning experience, logs, concurrent cross-tenant fairness
-evidence, remaining runtime quotas, check-receipt Audit facts, and pagination
-remain pending.
+These slices do not complete Gate A. The source readiness and operator
+credential contract above is designed but not yet implemented. Logs,
+concurrent cross-tenant fairness evidence, remaining runtime quotas,
+check-receipt Audit facts, and pagination also remain pending.
 
 Current verification evidence:
 
@@ -742,22 +858,27 @@ Current verification evidence:
    problem, enum, and example; unknown fields, duplicates, oversize bodies,
    tenant selectors, provider-native data, and unsafe text fail closed.
 2. Immutable revision activation, event equality/conflict, deterministic run
-   identity, state transitions, cancellation, replay, lease/fence,
-   reconciliation, quota, and sanitized failure/log behavior pass unit, race,
-   fuzz, and repeated tests.
+   identity, state transitions, cancellation, replay, source-health freshness,
+   lease/fence, reconciliation, quota, and sanitized failure/log behavior pass
+   unit, race, fuzz, and repeated tests.
 3. Clean PostgreSQL applies the delivery schema twice and proves separate
-   migration/API/worker roles, forced tenant isolation, database-time
-   leases, stale-fence rejection, API-only writes, and no cross-schema access.
+   migration/API/worker/source-observer roles, forced tenant isolation,
+   database-time leases, stale-fence and stale-resource rejection, API-only
+   configuration writes, observer-only health writes, and no cross-schema
+   access.
 4. Architecture tests prove the delivery context owns its ports, depends only
    on public contracts, does not import Prow/provider implementations into the
    domain, and does not share the PaaS DeploymentExecutor.
 
 ### Gate B: real CI vertical slice
 
-1. A real pinned source-provider fixture sends a signed change event. Equal
-   delivery replay is one run; changed replay, forged/rotated signatures,
-   wrong event, oversize body, endpoint redirect, and commit mismatch fail
-   closed.
+1. Operator CLI provisioning plus the source observer make one real pinned
+   source-provider connection and repository binding ready without a secret
+   crossing browser/API, argv, environment, logs, Audit, or support output. A
+   signed change event then creates one run; equal delivery replay is one run,
+   while missing/unsafe credentials, unsupported version, permission loss,
+   stale health, changed replay, forged/retired signatures, wrong event,
+   oversize body, endpoint redirect, and commit mismatch fail closed.
 2. Real PostgreSQL, IAM, Audit, source fetch, isolated BuildExecutor, and check
    reporter run as process/network boundaries. The exact commit is verified,
    the immutable profile runs once, and one provider check plus Matrix Audit
@@ -773,9 +894,11 @@ Current verification evidence:
 ### Gate C: product UI and offline release
 
 1. Through the real APISIX edge and platform shell, an authorized user creates
-   a DevOps project, connection, repository binding, draft, and immutable
-   revision; a viewer cannot mutate them and another tenant cannot observe
-   them.
+   a DevOps project, exact-origin connection, repository binding, draft, and
+   immutable revision, sees pending/ready/unavailable/stale source states, and
+   can schedule but not forge a recheck; a viewer cannot mutate them and
+   another tenant cannot observe them. An installation operator provisions and
+   rotates the referenced credentials with the release-carried `mx` CLI.
 2. A real change event drives the visible RECEIVE/FETCH/VERIFY/REPORT stages.
    Desktop and 360-pixel UI tests cover success, failure, cancellation,
    provider outage, stale data, denied log access, empty/loading states,
