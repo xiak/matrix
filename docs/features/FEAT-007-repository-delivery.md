@@ -6,8 +6,8 @@
   admission, authenticated Gitea ingress, fenced run-lifecycle foundation,
   IAM-authorized run read/cancellation/manual replay, terminal Audit facts,
   source-readiness contract, installation-operator source credential
-  lifecycle, and source-observer runtime complete;
-  source acquisition/executor/reporter effects pending
+  lifecycle, source-observer runtime, and source-acquisition runtime design
+  complete; source acquisition/executor/reporter effects pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -442,6 +442,85 @@ the exact head tree without `.git`, and hashes that archive before handing it
 to the executor. Fetch and report credentials remain in their respective
 adapters and never enter the source archive, task environment, log, database,
 Audit event, or support output.
+
+### Source acquisition runtime
+
+`matrix-devops-source-fetcher` is the only first-release process allowed to
+turn an admitted change into a source archive. It has a distinct
+`matrix_devops_source_fetcher` database role/login, the read-only `FETCH`
+credential root, one installation-owned archive root, and the internal control
+plus source-egress networks. It receives no webhook/report credential, IAM or
+Audit service credential, executor authority, container socket, PaaS state, or
+direct table access. A ten-second database heartbeat with a thirty-second
+freshness limit gates both its own readiness and DevOps API readiness.
+
+The fixed implementation is pure Go
+[`go-git` `v5.19.2`](https://github.com/go-git/go-git/releases/tag/v5.19.2)
+at upstream commit `3eeb238da61eb9c7a324f3ee04f990ce89175642` and module sum
+`h1:wkfn7vOlUBu8ivAWKBWisTiwJK4jYHzTF8Ndv1LyGqY=`. This is the first stable
+release containing both the filesystem-reference and worktree-symlink fixes;
+it also contains the earlier malformed-object and cross-host credential
+redirect fixes documented in the upstream
+[`GHSA-qgq7-7hm3-q39j`](https://github.com/go-git/go-git/security/advisories/GHSA-qgq7-7hm3-q39j),
+[`GHSA-hc8v-wwc9-vgxm`](https://github.com/go-git/go-git/security/advisories/GHSA-hc8v-wwc9-vgxm),
+[`GHSA-389r-gv7p-r3rp`](https://github.com/go-git/go-git/security/advisories/GHSA-389r-gv7p-r3rp),
+and
+[`GHSA-3xc5-wrhm-f963`](https://github.com/go-git/go-git/security/advisories/GHSA-3xc5-wrhm-f963).
+Matrix uses only ephemeral in-memory object storage and never creates a Git
+worktree. The fetch transport accepts only the exact canonical HTTPS origin,
+uses verified system roots with TLS 1.2 or newer, disables proxies and every
+redirect, and never places a credential in a URL. No system/global repository
+configuration, subprocess, hook, submodule, LFS client, SSH/file/git protocol,
+tag, or caller-selected refspec is consulted.
+
+The fixed Gitea adapter supports only SHA-1 repositories in v0.1. The source
+observer rejects another `object_format_name`, so unsupported repositories
+cannot become admission-ready even though the provider-neutral public contract
+continues to reserve 64-hex object identities for a future adapter. For one
+change it fetches exactly the trusted `refs/heads/<default>` and Gitea
+`refs/pull/<number>/head` tips at depth one, then proves that both advertised
+tips and both decoded commit objects equal the immutable base/head identities
+sealed into the run. Any ref movement or object mismatch is
+`COMMIT_MISMATCH`; authentication, protocol, format, tree, limit, and storage
+failures are `SOURCE_UNAVAILABLE`; the closed acquisition deadline is
+`DEADLINE_EXCEEDED`.
+
+The head tree is walked without checkout and encoded as one deterministic gzip
+tar stream. Entries are byte-sorted safe UTF-8 relative paths; only regular
+`0644` and executable `0755` blobs are accepted. `.git` path components,
+absolute/parent paths, control characters, symlinks, gitlinks/submodules,
+devices, and other modes fail closed. Headers carry zero time, fixed numeric
+ownership, no host names, and no provider metadata. An LFS pointer remains its
+ordinary Git blob and no LFS object is fetched. The writer enforces the fixed
+64-MiB compressed archive, 512-MiB expanded-blob, and 20,000-path limits while
+streaming.
+
+The archive adapter stages a private directory below the validated archive
+root, fsyncs the archive and canonical non-secret receipt, and atomically
+renames the directory to a deterministic command-derived location. The archive
+filename contains its SHA-256 content digest; the receipt binds tenant, run,
+command, run-input digest, exact head/base commits, media type, archive digest
+and byte size, expanded bytes, and path count. Neither the receipt nor the
+database stores a host path. Re-observation rehashes and structurally validates
+the published archive before returning the same receipt.
+
+`delivery.source_archives` is an internal tenant-leading, forced-RLS receipt
+table. A fetch success transaction verifies the current lease/fence and exact
+run/source/binding identities, inserts that receipt, completes the durable
+FETCH intent, and advances `FETCHING -> VERIFYING`; every other database path
+is forbidden from making that transition without the matching receipt. A
+terminal fetch failure/cancellation writes no receipt and uses the existing
+atomic PipelineRun completion Audit fact.
+
+The first lease may fetch and publish. A takeover after lease expiry remains
+`OBSERVE` only: a valid final directory completes the same command, while a
+missing, partial, changed, or invalid directory fails safely and never
+recontacts Gitea. Publishing the directory before the database transaction
+makes a crash recoverable; a database failure leaves the same immutable effect
+available for the next fence. Temporary or orphan content is never executable
+authority and is removed only by the later fenced retention operation. A
+cancellation invalidates the old fence, prevents VERIFY, and terminates the run
+as `CANCELLED` whether or not the final archive was observed.
 
 ### Matrix Native executor
 
