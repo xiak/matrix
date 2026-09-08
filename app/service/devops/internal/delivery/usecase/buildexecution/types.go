@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
+	devopsbuildv1 "github.com/xiak/matrix/api/adapter/devopsbuild/v1"
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/domain"
-	"github.com/xiak/matrix/app/service/devops/internal/delivery/port"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/sourcearchive"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runlifecycle"
 )
@@ -59,7 +59,7 @@ type Completion struct {
 	Command Command
 	State   devopsv1.PipelineRunState
 	Reason  devopsv1.PipelineRunReason
-	Receipt *port.BuildReceipt
+	Receipt *devopsbuildv1.Receipt
 }
 
 type Config struct {
@@ -117,7 +117,7 @@ func ValidateCommand(value Command) error {
 	}
 	request, err := requestForCommand(value)
 	if err == nil {
-		err = port.ValidateBuildRequest(request)
+		err = devopsbuildv1.ValidateRequest(request)
 	}
 	problems = append(problems, err)
 	if err := errors.Join(problems...); err != nil {
@@ -126,12 +126,12 @@ func ValidateCommand(value Command) error {
 	return nil
 }
 
-func requestForCommand(value Command) (port.BuildRequest, error) {
+func requestForCommand(value Command) (devopsbuildv1.Request, error) {
 	steps := value.Revision.Spec.Steps
 	if len(steps) != 2 {
-		return port.BuildRequest{}, ErrInvalidCommand
+		return devopsbuildv1.Request{}, ErrInvalidCommand
 	}
-	request := port.BuildRequest{
+	request := devopsbuildv1.Request{
 		TenantID:               value.Lease.TenantID,
 		RunID:                  value.Lease.Run.ID,
 		CommandID:              value.Lease.Intent.CommandID,
@@ -151,8 +151,8 @@ func requestForCommand(value Command) (port.BuildRequest, error) {
 		StartedAt:              value.StartedAt,
 		DeadlineAt:             value.DeadlineAt,
 	}
-	if err := port.ValidateBuildRequest(request); err != nil {
-		return port.BuildRequest{}, errors.Join(ErrInvalidCommand, err)
+	if err := devopsbuildv1.ValidateRequest(request); err != nil {
+		return devopsbuildv1.Request{}, errors.Join(ErrInvalidCommand, err)
 	}
 	return request, nil
 }
@@ -173,7 +173,7 @@ func ValidateCompletion(value Completion) error {
 		return err
 	}
 	if value.Receipt != nil {
-		if err := port.ValidateBuildReceipt(request, *value.Receipt); err != nil {
+		if err := devopsbuildv1.ValidateReceipt(request, *value.Receipt); err != nil {
 			return errors.Join(ErrInvalidReceipt, err)
 		}
 	}
@@ -181,8 +181,8 @@ func ValidateCompletion(value Completion) error {
 	case devopsv1.PipelineRunReporting:
 		if value.Reason != "" || value.Receipt == nil ||
 			value.Command.Lease.Run.Status.CancellationRequestedAt != nil ||
-			(value.Receipt.Conclusion != port.BuildPassed &&
-				value.Receipt.Conclusion != port.BuildFailed) {
+			(value.Receipt.Conclusion != devopsbuildv1.ConclusionPassed &&
+				value.Receipt.Conclusion != devopsbuildv1.ConclusionFailed) {
 			return errors.New("reporting requires one definitive build receipt")
 		}
 	case devopsv1.PipelineRunFailed:
@@ -190,7 +190,8 @@ func ValidateCompletion(value Completion) error {
 			value.Reason != devopsv1.PipelineRunReasonDeadlineExceeded {
 			return errors.New("failed build execution has an invalid reason")
 		}
-		if value.Receipt != nil && value.Receipt.Conclusion != port.BuildCancelled {
+		if value.Receipt != nil &&
+			value.Receipt.Conclusion != devopsbuildv1.ConclusionCancelled {
 			return errors.New("failed build execution has a contradictory receipt")
 		}
 	case devopsv1.PipelineRunCancelled:

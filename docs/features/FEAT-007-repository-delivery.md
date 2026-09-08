@@ -10,7 +10,8 @@
   fenced acquisition use case, deterministic archive store, and real Gitea
   fetch protocol, source-acquisition persistence, isolated source-fetcher
   process, fenced BuildExecutor contract/use case, and table-blind PostgreSQL
-  execution persistence complete; physical runner and reporter effects pending
+  execution persistence plus versioned executor-submission transport contract
+  complete; physical runner and reporter effects pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -943,10 +944,18 @@ source receipt, deadline, and worker before opening the archive; first claims
 execute while recovered claims only observe or cancel. Database-time claims
 bind and preserve the execution window, and a strict normalized receipt must
 be stored atomically before `REPORTING` can be entered. Lease renewal, stale
-fencing, receipt tampering, and the generic-transition bypass fail closed. The
-physical executor adapter, selected-only build process, independent runner,
-mutual TLS transport, sandbox, and normalized log persistence remain pending;
-no repository code executes yet.
+fencing, receipt tampering, and the generic-transition bypass fail closed.
+
+The versioned `api/adapter/devopsbuild/v1` boundary now owns the cross-process
+request and normalized terminal receipt instead of duplicating them inside the
+service-local port. It strictly encodes canonical submission/receipt
+documents, derives a framed deterministic execution digest, and streams an
+eight-byte-length-framed request followed by exactly the declared archive
+bytes while independently enforcing the archive length and SHA-256 digest.
+The delivery port retains only executor capability and outcome errors. The
+physical executor adapter, selected-only build process, gateway, independent
+runner, mutual TLS listeners, durable spool, sandbox, and normalized log
+persistence remain pending; no repository code executes yet.
 
 Every fenced worker transition now submits the exact next PipelineRun document
 to the database boundary. A terminal transition atomically stores a distinct
@@ -1071,13 +1080,15 @@ Current verification evidence:
   redirect credential forwarding, SHA-1-only admission, safe path/mode
   handling, and tamper/partial/symlink rejection; the four focused packages
   pass the race detector and 20-run repetition
-- BuildExecutor contract and fenced execution-use-case tests proving closed
-  request authority, deterministic terminal receipts, exact run/revision/
-  archive/deadline binding before effects, execute-versus-observe recovery,
-  cancellation and expired-build cancellation, lease renewal and lease-loss
-  uncertainty, source-archive failure, definitive executor absence, invalid
-  receipt rejection, native-error sanitization, and passed/failed handoff to
-  the reporter
+- versioned BuildExecutor adapter-contract and fenced execution-use-case tests
+  proving closed request authority, canonical strict submission/receipt
+  documents, deterministic execution and terminal-receipt digests, exact
+  archive framing/length/hash, short/changed/trailing archive rejection, exact
+  run/revision/archive/deadline binding before effects, execute-versus-observe
+  recovery, cancellation and expired-build cancellation, lease renewal and
+  lease-loss uncertainty, source-archive failure, definitive executor absence,
+  invalid receipt rejection, native-error sanitization, and passed/failed
+  handoff to the reporter
 - the shared source-archive reader proves the portable receipt independently,
   matches it to the private deterministic store, structurally inspects and
   hashes the archive before handoff, and verifies its length and digest again

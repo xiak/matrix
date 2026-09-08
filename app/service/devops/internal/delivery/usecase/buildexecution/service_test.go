@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	devopsbuildv1 "github.com/xiak/matrix/api/adapter/devopsbuild/v1"
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/domain"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/port"
@@ -18,7 +19,10 @@ import (
 )
 
 func TestBuildWorkerExecutesClosedCommandAndHandsPassedOrFailedReceiptToReporter(t *testing.T) {
-	for _, conclusion := range []port.BuildConclusion{port.BuildPassed, port.BuildFailed} {
+	for _, conclusion := range []devopsbuildv1.Conclusion{
+		devopsbuildv1.ConclusionPassed,
+		devopsbuildv1.ConclusionFailed,
+	} {
 		t.Run(string(conclusion), func(t *testing.T) {
 			command := buildCommand(t, runlifecycle.ClaimExecute)
 			repository := newBuildRepository(command)
@@ -45,7 +49,7 @@ func TestBuildWorkerExecutesClosedCommandAndHandsPassedOrFailedReceiptToReporter
 					repository.completion,
 				)
 			}
-			if port.ValidateBuildRequest(executor.request) != nil ||
+			if devopsbuildv1.ValidateRequest(executor.request) != nil ||
 				executor.request.SourceArchiveDigest != command.Archive.ArchiveDigest ||
 				executor.request.PipelineRevisionDigest != command.Revision.ContentDigest {
 				t.Fatalf("executor request=%#v", executor.request)
@@ -58,7 +62,9 @@ func TestRecoveredBuildOnlyObservesTheDeterministicCommand(t *testing.T) {
 	command := buildCommand(t, runlifecycle.ClaimObserve)
 	repository := newBuildRepository(command)
 	archives := &fakeArchiveReader{content: []byte("must not be opened")}
-	executor := &fakeBuildExecutor{conclusion: port.BuildPassed, observeFound: true}
+	executor := &fakeBuildExecutor{
+		conclusion: devopsbuildv1.ConclusionPassed, observeFound: true,
+	}
 	service := buildService(t, repository, archives, executor)
 
 	result, err := service.BuildOnce(context.Background())
@@ -96,7 +102,7 @@ func TestCancellationDoesNotStartAndRecoveredEffectIsCancelled(t *testing.T) {
 			repository := newBuildRepository(command)
 			archives := &fakeArchiveReader{content: []byte("must not be opened")}
 			executor := &fakeBuildExecutor{
-				conclusion:  port.BuildCancelled,
+				conclusion:  devopsbuildv1.ConclusionCancelled,
 				cancelFound: mode == runlifecycle.ClaimObserve,
 			}
 			service := buildService(t, repository, archives, executor)
@@ -146,10 +152,10 @@ func TestDefinitiveExecutorAbsenceAndInvalidReceiptFailClosed(t *testing.T) {
 	for name, executor := range map[string]*fakeBuildExecutor{
 		"unavailable": {executeErr: port.ErrBuildUnavailable},
 		"invalid receipt": {
-			conclusion: port.BuildPassed,
-			mutateReceipt: func(value *port.BuildReceipt) {
+			conclusion: devopsbuildv1.ConclusionPassed,
+			mutateReceipt: func(value *devopsbuildv1.Receipt) {
 				value.SourceArchiveDigest = "sha256:" + strings.Repeat("f", 64)
-				value.ContentDigest = port.DigestBuildReceipt(*value)
+				value.ContentDigest = devopsbuildv1.DigestReceipt(*value)
 			},
 		},
 	} {
@@ -208,7 +214,9 @@ func TestExpiredRecoveredBuildCancelsBeforeCommittingDeadline(t *testing.T) {
 	command.DeadlineAt = command.DeadlineAt.Add(shift)
 	command.Lease.LeaseExpiresAt = time.Now().UTC().Add(LeaseDuration).Truncate(time.Microsecond)
 	repository := newBuildRepository(command)
-	executor := &fakeBuildExecutor{conclusion: port.BuildCancelled, cancelFound: true}
+	executor := &fakeBuildExecutor{
+		conclusion: devopsbuildv1.ConclusionCancelled, cancelFound: true,
+	}
 	service := buildService(
 		t,
 		repository,
@@ -228,7 +236,9 @@ func TestExpiredRecoveredBuildCancelsBeforeCommittingDeadline(t *testing.T) {
 func TestBuildRenewsLeaseDuringExecutorCall(t *testing.T) {
 	command := buildCommand(t, runlifecycle.ClaimExecute)
 	repository := newBuildRepository(command)
-	executor := &fakeBuildExecutor{conclusion: port.BuildPassed, delay: 40 * time.Millisecond}
+	executor := &fakeBuildExecutor{
+		conclusion: devopsbuildv1.ConclusionPassed, delay: 40 * time.Millisecond,
+	}
 	service := buildService(
 		t,
 		repository,
@@ -249,7 +259,9 @@ func TestBuildLeaseLossCancelsEffectAndRetainsIntentForObservation(t *testing.T)
 	repository := newBuildRepository(command)
 	secret := "stale lease contained database-secret-value"
 	repository.renewErr = errors.New(secret)
-	executor := &fakeBuildExecutor{conclusion: port.BuildPassed, delay: time.Second}
+	executor := &fakeBuildExecutor{
+		conclusion: devopsbuildv1.ConclusionPassed, delay: time.Second,
+	}
 	service := buildService(
 		t,
 		repository,
@@ -448,87 +460,87 @@ func (reader *fakeArchiveReader) Open(
 }
 
 type fakeBuildExecutor struct {
-	conclusion    port.BuildConclusion
+	conclusion    devopsbuildv1.Conclusion
 	executeErr    error
 	observeErr    error
 	cancelErr     error
 	observeFound  bool
 	cancelFound   bool
 	delay         time.Duration
-	mutateReceipt func(*port.BuildReceipt)
+	mutateReceipt func(*devopsbuildv1.Receipt)
 	executeCalls  int
 	observeCalls  int
 	cancelCalls   int
-	request       port.BuildRequest
+	request       devopsbuildv1.Request
 	archive       []byte
 }
 
 func (executor *fakeBuildExecutor) Execute(
 	ctx context.Context,
-	request port.BuildRequest,
+	request devopsbuildv1.Request,
 	archive io.Reader,
-) (port.BuildReceipt, error) {
+) (devopsbuildv1.Receipt, error) {
 	executor.executeCalls++
 	executor.request = request
 	executor.archive, _ = io.ReadAll(archive)
 	if executor.delay > 0 {
 		select {
 		case <-ctx.Done():
-			return port.BuildReceipt{}, ctx.Err()
+			return devopsbuildv1.Receipt{}, ctx.Err()
 		case <-time.After(executor.delay):
 		}
 	}
 	if executor.executeErr != nil {
-		return port.BuildReceipt{}, executor.executeErr
+		return devopsbuildv1.Receipt{}, executor.executeErr
 	}
 	return executor.receipt(request), nil
 }
 
 func (executor *fakeBuildExecutor) Observe(
 	_ context.Context,
-	request port.BuildRequest,
-) (port.BuildReceipt, bool, error) {
+	request devopsbuildv1.Request,
+) (devopsbuildv1.Receipt, bool, error) {
 	executor.observeCalls++
 	executor.request = request
 	if executor.observeErr != nil {
-		return port.BuildReceipt{}, executor.observeFound, executor.observeErr
+		return devopsbuildv1.Receipt{}, executor.observeFound, executor.observeErr
 	}
 	if !executor.observeFound {
-		return port.BuildReceipt{}, false, nil
+		return devopsbuildv1.Receipt{}, false, nil
 	}
 	return executor.receipt(request), true, nil
 }
 
 func (executor *fakeBuildExecutor) Cancel(
 	_ context.Context,
-	request port.BuildRequest,
-) (port.BuildReceipt, bool, error) {
+	request devopsbuildv1.Request,
+) (devopsbuildv1.Receipt, bool, error) {
 	executor.cancelCalls++
 	executor.request = request
 	if executor.cancelErr != nil {
-		return port.BuildReceipt{}, executor.cancelFound, executor.cancelErr
+		return devopsbuildv1.Receipt{}, executor.cancelFound, executor.cancelErr
 	}
 	if !executor.cancelFound {
-		return port.BuildReceipt{}, false, nil
+		return devopsbuildv1.Receipt{}, false, nil
 	}
 	return executor.receipt(request), true, nil
 }
 
-func (executor *fakeBuildExecutor) receipt(request port.BuildRequest) port.BuildReceipt {
+func (executor *fakeBuildExecutor) receipt(request devopsbuildv1.Request) devopsbuildv1.Receipt {
 	conclusion := executor.conclusion
 	if conclusion == "" {
-		conclusion = port.BuildPassed
+		conclusion = devopsbuildv1.ConclusionPassed
 	}
-	first := port.BuildStepPassed
-	second := port.BuildStepPassed
+	first := devopsbuildv1.StepConclusionPassed
+	second := devopsbuildv1.StepConclusionPassed
 	switch conclusion {
-	case port.BuildFailed:
-		second = port.BuildStepFailed
-	case port.BuildCancelled:
-		first = port.BuildStepCancelled
-		second = port.BuildStepNotRun
+	case devopsbuildv1.ConclusionFailed:
+		second = devopsbuildv1.StepConclusionFailed
+	case devopsbuildv1.ConclusionCancelled:
+		first = devopsbuildv1.StepConclusionCancelled
+		second = devopsbuildv1.StepConclusionNotRun
 	}
-	receipt := port.BuildReceipt{
+	receipt := devopsbuildv1.Receipt{
 		TenantID:               request.TenantID,
 		RunID:                  request.RunID,
 		CommandID:              request.CommandID,
@@ -540,7 +552,7 @@ func (executor *fakeBuildExecutor) receipt(request port.BuildRequest) port.Build
 		ExecutorProfile:        request.ExecutorProfile,
 		ToolchainImageDigest:   request.ToolchainImageDigest,
 		Conclusion:             conclusion,
-		Steps: [2]port.BuildStepReceipt{
+		Steps: [2]devopsbuildv1.StepReceipt{
 			{Ordinal: request.Steps[0].Ordinal, Kind: request.Steps[0].Kind, Conclusion: first},
 			{Ordinal: request.Steps[1].Ordinal, Kind: request.Steps[1].Kind, Conclusion: second},
 		},
@@ -549,7 +561,7 @@ func (executor *fakeBuildExecutor) receipt(request port.BuildRequest) port.Build
 		executor.mutateReceipt(&receipt)
 	}
 	if receipt.ContentDigest == "" {
-		receipt.ContentDigest = port.DigestBuildReceipt(receipt)
+		receipt.ContentDigest = devopsbuildv1.DigestReceipt(receipt)
 	}
 	return receipt
 }

@@ -10,6 +10,10 @@ const (
 	FixedWritableBytes      int64  = 2 * 1024 * 1024 * 1024
 	FixedProcessLimit       uint32 = 256
 	FixedMaxLogBytes        int64  = 8 * 1024 * 1024
+
+	MaximumSourceArchiveBytes  int64  = 64 * 1024 * 1024
+	MaximumSourceExpandedBytes int64  = 512 * 1024 * 1024
+	MaximumSourcePathCount     uint64 = 20_000
 )
 
 // FixedVerificationSteps returns a copy so callers cannot mutate the trusted

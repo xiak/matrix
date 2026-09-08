@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	devopsbuildv1 "github.com/xiak/matrix/api/adapter/devopsbuild/v1"
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
@@ -1571,13 +1572,13 @@ func assertRunLifecyclePersistenceAndFencing(
 	}
 	if _, err := buildRepository.Complete(ctx, buildexecution.Completion{
 		Command: firstBuild, State: devopsv1.PipelineRunReporting,
-		Receipt: buildReceipt(firstBuild, port.BuildPassed),
+		Receipt: buildReceipt(firstBuild, devopsbuildv1.ConclusionPassed),
 	}); !errors.Is(err, runlifecycle.ErrStaleLease) {
 		t.Fatalf("stale build task completion error=%v", err)
 	}
 	if _, err := buildRepository.Complete(ctx, buildexecution.Completion{
 		Command: recoveredBuild, State: devopsv1.PipelineRunReporting,
-		Receipt: buildReceipt(recoveredBuild, port.BuildPassed),
+		Receipt: buildReceipt(recoveredBuild, devopsbuildv1.ConclusionPassed),
 	}); err != nil {
 		t.Fatalf("complete recovered build task: %v", err)
 	}
@@ -1608,7 +1609,7 @@ func assertRunLifecyclePersistenceAndFencing(
 	)
 	if _, err := buildRepository.Complete(ctx, buildexecution.Completion{
 		Command: build, State: devopsv1.PipelineRunReporting,
-		Receipt: buildReceipt(build, port.BuildFailed),
+		Receipt: buildReceipt(build, devopsbuildv1.ConclusionFailed),
 	}); err != nil {
 		t.Fatalf("advance reconciliation run to report: %v", err)
 	}
@@ -1866,7 +1867,7 @@ func assertBuildReceiptTamperRejected(
 	command buildexecution.Command,
 ) {
 	t.Helper()
-	validDocument, err := json.Marshal(buildReceipt(command, port.BuildPassed))
+	validDocument, err := json.Marshal(buildReceipt(command, devopsbuildv1.ConclusionPassed))
 	if err != nil {
 		t.Fatalf("encode build receipt fixture: %v", err)
 	}
@@ -1940,14 +1941,14 @@ func assertBuildReceiptTamperRejected(
 
 func buildReceipt(
 	command buildexecution.Command,
-	conclusion port.BuildConclusion,
-) *port.BuildReceipt {
-	first := port.BuildStepPassed
-	second := port.BuildStepPassed
-	if conclusion == port.BuildFailed {
-		second = port.BuildStepFailed
+	conclusion devopsbuildv1.Conclusion,
+) *devopsbuildv1.Receipt {
+	first := devopsbuildv1.StepConclusionPassed
+	second := devopsbuildv1.StepConclusionPassed
+	if conclusion == devopsbuildv1.ConclusionFailed {
+		second = devopsbuildv1.StepConclusionFailed
 	}
-	receipt := port.BuildReceipt{
+	receipt := devopsbuildv1.Receipt{
 		TenantID:               command.Lease.TenantID,
 		RunID:                  command.Lease.Run.ID,
 		CommandID:              command.Lease.Intent.CommandID,
@@ -1959,7 +1960,7 @@ func buildReceipt(
 		ExecutorProfile:        command.Revision.Spec.ExecutorProfile,
 		ToolchainImageDigest:   command.Revision.Spec.ToolchainImageDigest,
 		Conclusion:             conclusion,
-		Steps: [2]port.BuildStepReceipt{
+		Steps: [2]devopsbuildv1.StepReceipt{
 			{
 				Ordinal: command.Revision.Spec.Steps[0].Ordinal,
 				Kind:    command.Revision.Spec.Steps[0].Kind, Conclusion: first,
@@ -1970,7 +1971,7 @@ func buildReceipt(
 			},
 		},
 	}
-	receipt.ContentDigest = port.DigestBuildReceipt(receipt)
+	receipt.ContentDigest = devopsbuildv1.DigestReceipt(receipt)
 	return &receipt
 }
 

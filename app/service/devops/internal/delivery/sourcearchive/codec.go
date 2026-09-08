@@ -16,14 +16,16 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 )
 
 const (
 	MediaType = "application/vnd.matrix.devops.source.v1+tar+gzip"
 
-	MaximumArchiveBytes   = int64(64 * 1024 * 1024)
-	MaximumExpandedBytes  = int64(512 * 1024 * 1024)
-	MaximumPathCount      = uint64(20_000)
+	MaximumArchiveBytes   = devopsv1.MaximumSourceArchiveBytes
+	MaximumExpandedBytes  = devopsv1.MaximumSourceExpandedBytes
+	MaximumPathCount      = devopsv1.MaximumSourcePathCount
 	MaximumPathBytes      = 4 * 1024
 	MaximumComponentBytes = 255
 

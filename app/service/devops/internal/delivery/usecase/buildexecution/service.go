@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	devopsbuildv1 "github.com/xiak/matrix/api/adapter/devopsbuild/v1"
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/port"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runlifecycle"
@@ -19,7 +20,7 @@ type Service struct {
 	renewalInterval time.Duration
 }
 
-type buildOperation func(context.Context) (port.BuildReceipt, bool, error)
+type buildOperation func(context.Context) (devopsbuildv1.Receipt, bool, error)
 
 func NewService(
 	repository Repository,
@@ -113,23 +114,23 @@ func (service *Service) BuildOnce(ctx context.Context) (Result, error) {
 	var operation buildOperation
 	switch command.Lease.Mode {
 	case runlifecycle.ClaimExecute:
-		operation = func(effectContext context.Context) (port.BuildReceipt, bool, error) {
+		operation = func(effectContext context.Context) (devopsbuildv1.Receipt, bool, error) {
 			archive, openErr := service.archives.Open(effectContext, command.Archive)
 			if openErr != nil || archive == nil {
 				if archive != nil {
 					_ = archive.Close()
 				}
-				return port.BuildReceipt{}, false, ErrArchiveUnavailable
+				return devopsbuildv1.Receipt{}, false, ErrArchiveUnavailable
 			}
 			receipt, executeErr := service.executor.Execute(effectContext, request, archive)
 			closeErr := archive.Close()
 			if closeErr != nil {
-				return port.BuildReceipt{}, false, port.ErrBuildOutcomeUnknown
+				return devopsbuildv1.Receipt{}, false, port.ErrBuildOutcomeUnknown
 			}
 			return receipt, executeErr == nil, executeErr
 		}
 	case runlifecycle.ClaimObserve:
-		operation = func(effectContext context.Context) (port.BuildReceipt, bool, error) {
+		operation = func(effectContext context.Context) (devopsbuildv1.Receipt, bool, error) {
 			return service.executor.Observe(effectContext, request)
 		}
 	default:
@@ -153,7 +154,7 @@ func (service *Service) BuildOnce(ctx context.Context) (Result, error) {
 			nil,
 		)
 	}
-	if err := port.ValidateBuildReceipt(request, receipt); err != nil {
+	if err := devopsbuildv1.ValidateReceipt(request, receipt); err != nil {
 		return service.fail(
 			ctx,
 			result,
@@ -169,7 +170,7 @@ func (service *Service) settleCancellation(
 	ctx context.Context,
 	result Result,
 	command Command,
-	request port.BuildRequest,
+	request devopsbuildv1.Request,
 ) (Result, error) {
 	receipt, retained, operationErr := service.cancelWithRenewal(ctx, command, request)
 	if ctx.Err() != nil {
@@ -199,7 +200,7 @@ func (service *Service) settleCancellation(
 	if operationErr != nil && !errors.Is(operationErr, port.ErrBuildUnavailable) {
 		return result, ErrExecutionUncertain
 	}
-	if retained && port.ValidateBuildReceipt(request, receipt) != nil {
+	if retained && devopsbuildv1.ValidateReceipt(request, receipt) != nil {
 		return service.fail(
 			ctx,
 			result,
@@ -208,7 +209,7 @@ func (service *Service) settleCancellation(
 			nil,
 		)
 	}
-	var stored *port.BuildReceipt
+	var stored *devopsbuildv1.Receipt
 	if retained {
 		stored = &receipt
 	}
@@ -224,7 +225,7 @@ func (service *Service) settleDeadline(
 	ctx context.Context,
 	result Result,
 	command Command,
-	request port.BuildRequest,
+	request devopsbuildv1.Request,
 ) (Result, error) {
 	receipt, retained, operationErr := service.cancelWithRenewal(ctx, command, request)
 	if ctx.Err() != nil {
@@ -257,7 +258,7 @@ func (service *Service) settleDeadline(
 		return result, ErrExecutionUncertain
 	}
 	if retained {
-		if err := port.ValidateBuildReceipt(request, receipt); err != nil {
+		if err := devopsbuildv1.ValidateReceipt(request, receipt); err != nil {
 			return service.fail(
 				ctx,
 				result,
@@ -266,7 +267,8 @@ func (service *Service) settleDeadline(
 				nil,
 			)
 		}
-		if receipt.Conclusion == port.BuildPassed || receipt.Conclusion == port.BuildFailed {
+		if receipt.Conclusion == devopsbuildv1.ConclusionPassed ||
+			receipt.Conclusion == devopsbuildv1.ConclusionFailed {
 			return service.completeReceipt(ctx, result, command, receipt)
 		}
 	}
@@ -282,20 +284,20 @@ func (service *Service) settleDeadline(
 func (service *Service) cancelWithRenewal(
 	ctx context.Context,
 	command Command,
-	request port.BuildRequest,
-) (port.BuildReceipt, bool, error) {
+	request devopsbuildv1.Request,
+) (devopsbuildv1.Receipt, bool, error) {
 	deadline := time.Now().UTC().Add(service.config.CancelGrace)
 	receipt, retained, timedOut, operationErr, coordinationErr :=
 		service.performWithRenewal(
 			ctx,
 			command,
 			deadline,
-			func(effectContext context.Context) (port.BuildReceipt, bool, error) {
+			func(effectContext context.Context) (devopsbuildv1.Receipt, bool, error) {
 				return service.executor.Cancel(effectContext, request)
 			},
 		)
 	if coordinationErr != nil || timedOut {
-		return port.BuildReceipt{}, false, ErrExecutionUncertain
+		return devopsbuildv1.Receipt{}, false, ErrExecutionUncertain
 	}
 	return receipt, retained, operationErr
 }
@@ -304,16 +306,16 @@ func (service *Service) completeReceipt(
 	ctx context.Context,
 	result Result,
 	command Command,
-	receipt port.BuildReceipt,
+	receipt devopsbuildv1.Receipt,
 ) (Result, error) {
 	switch receipt.Conclusion {
-	case port.BuildPassed, port.BuildFailed:
+	case devopsbuildv1.ConclusionPassed, devopsbuildv1.ConclusionFailed:
 		return service.complete(ctx, result, Completion{
 			Command: command,
 			State:   devopsv1.PipelineRunReporting,
 			Receipt: &receipt,
 		})
-	case port.BuildCancelled:
+	case devopsbuildv1.ConclusionCancelled:
 		return service.fail(
 			ctx,
 			result,
@@ -337,7 +339,7 @@ func (service *Service) performWithRenewal(
 	command Command,
 	deadline time.Time,
 	operation buildOperation,
-) (port.BuildReceipt, bool, bool, error, error) {
+) (devopsbuildv1.Receipt, bool, bool, error, error) {
 	effectContext, cancel := context.WithDeadline(ctx, deadline)
 	renewalDone := make(chan error, 1)
 	go service.renewUntilDone(effectContext, command.Lease, renewalDone, cancel)
@@ -390,7 +392,7 @@ func (service *Service) fail(
 	result Result,
 	command Command,
 	reason devopsv1.PipelineRunReason,
-	receipt *port.BuildReceipt,
+	receipt *devopsbuildv1.Receipt,
 ) (Result, error) {
 	return service.complete(ctx, result, Completion{
 		Command: command,
@@ -439,9 +441,9 @@ func uncertainBuildError(err error) bool {
 }
 
 func optionalReceipt(
-	receipt port.BuildReceipt,
+	receipt devopsbuildv1.Receipt,
 	retained bool,
-) *port.BuildReceipt {
+) *devopsbuildv1.Receipt {
 	if !retained {
 		return nil
 	}
