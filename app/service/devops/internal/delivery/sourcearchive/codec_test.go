@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -109,6 +110,51 @@ func TestInspectRejectsArchiveAmbiguityAndUnsafeHeaders(t *testing.T) {
 	concatenated := append(append([]byte(nil), valid...), valid...)
 	if _, err := Inspect(context.Background(), bytes.NewReader(concatenated)); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("concatenated gzip error=%v", err)
+	}
+}
+
+func TestVisitRetainsArchiveValidationAndBoundsEachMember(t *testing.T) {
+	var archive bytes.Buffer
+	want := []File{
+		testFile("README.md", "matrix\n", false),
+		testFile("cmd/matrix/main.go", "package main\n", true),
+	}
+	content, err := Write(context.Background(), &archive, want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var visited []string
+	got, err := Visit(
+		context.Background(),
+		bytes.NewReader(archive.Bytes()),
+		func(member Member, body io.Reader) error {
+			value, readErr := io.ReadAll(body)
+			if readErr != nil {
+				return readErr
+			}
+			visited = append(visited, member.Path+":"+string(value))
+			if member.Path == "cmd/matrix/main.go" && !member.Executable {
+				t.Fatal("executable bit was lost")
+			}
+			return nil
+		},
+	)
+	if err != nil || got != content || !slices.Equal(
+		visited,
+		[]string{"README.md:matrix\n", "cmd/matrix/main.go:package main\n"},
+	) {
+		t.Fatalf("visited=%q content=%#v want=%#v err=%v", visited, got, content, err)
+	}
+
+	if _, err := Visit(
+		context.Background(),
+		bytes.NewReader(archive.Bytes()),
+		func(Member, io.Reader) error { return nil },
+	); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("unconsumed member error=%v", err)
+	}
+	if _, err := Visit(context.Background(), bytes.NewReader(archive.Bytes()), nil); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("nil visitor error=%v", err)
 	}
 }
 

@@ -671,14 +671,31 @@ capability/security flags, resources, mounts, logging mode, terminal state,
 and network attachment before declaring the node eligible. Failure still
 forces bounded container deletion.
 
-The same adapter now derives, but does not yet execute, the two immutable step
-requests. Each has its exact command, pinned image, numeric user, empty
+The runner workspace adapter consumes the journal's verified archive into a
+separate private root under an OS-exclusive, closed runner identity. It
+independently rechecks compressed length and digest while the
+shared archive codec retains canonical gzip/tar header, order, type, mode,
+path, count, expanded-size, and trailing-byte validation. Regular files alone
+are created beneath `os.Root`; parent directories are bounded, file/directory
+collisions fail, every file is fsynced and sealed `0444` or `0555`, every
+directory is sealed `0555`, and publication is one fsynced rename from an
+unpredictable private staging directory. A canonical manifest binds the full
+request digest, execution, runner, archive, counts, and a content-and-mode tree
+digest. Equal reuse and restart read every file again and require the archive,
+manifest, and globally sorted filesystem tree to agree; links, special files,
+extra/empty directories, writable modes, filesystem-boundary changes, foreign
+identity, changed requests, and partial staging fail closed. Native paths are
+absent from the manifest and only the re-proved source root can enter the
+sandbox adapter.
+
+That sandbox adapter now derives, but does not yet execute, the two immutable
+step requests. Each has its exact command, pinned image, numeric user, empty
 credential/proxy environment, `NONE` network, `runsc`, two CPUs, 2 GiB memory
 with no extra swap, 256 processes, and exactly 2 GiB of fresh tmpfs split into
 a 512 MiB executable work directory and 1.5 GiB non-executable cache. The sole
-host mount is one canonical, non-recursive, read-only source directory; native
-Engine request fields remain private to the adapter. Safe archive expansion,
-step execution/cancellation, bounded normalized logs, and the physical runner
+host mount is the workspace adapter's canonical, non-recursive, read-only
+source directory; native Engine request fields remain private to the adapter.
+Step execution/cancellation, bounded normalized logs, and the physical runner
 composition remain subsequent slices, so repository code still does not run.
 
 ### Egress, limits, storage, and retention
@@ -1012,10 +1029,11 @@ request digests, recovery fences, cancellation, and normalized receipts. The
 physical build-worker command now composes only its table-blind PostgreSQL
 repository, read-only source archive, exact mTLS admin identity, executor-gateway
 client, independent heartbeat, and readiness endpoint. The dedicated runner
-process, safe workspace expansion, sandbox execution/cancellation, selected
-release topology, normalized log persistence, and a real PostgreSQL-to-runner
-process journey remain pending. The closed Docker Engine adapter and
-pre-claim eligibility probe are present, but no repository code executes yet.
+process, sandbox execution/cancellation, selected release topology, normalized
+log persistence, and a real PostgreSQL-to-runner process journey remain
+pending. The closed Docker Engine adapter, pre-claim eligibility probe, and
+content-bound read-only workspace are present, but no repository code executes
+yet.
 
 Every fenced worker transition now submits the exact next PipelineRun document
 to the database boundary. A terminal transition atomically stores a distinct
@@ -1220,6 +1238,20 @@ Current verification evidence:
   against Docker `29.6.2` verifies the production Unix-socket transport and
   pinned image inspection, and proves the current Docker Desktop host fails
   closed at `RUNSC_RUNTIME`; it is not evidence of gVisor isolation
+- runner-workspace and shared archive-codec tests proving callback content is
+  member-bounded without duplicating gzip/tar validation, independent raw
+  archive length/hash checks, atomic private staging, OS-exclusive ownership,
+  runner/request/execution-bound canonical manifests, globally ordered
+  content-and-mode tree digests, exact read-only file and directory modes,
+  directory-count bounding, full equal-replay and restart revalidation, and
+  rejection of foreign runner identity, changed request/archive/content/mode,
+  links, extra directories, file/directory collisions, partial publication,
+  unsafe roots, cancellation, and close ambiguity. The workspace, archive,
+  and sandbox packages pass race detection and twenty-run repetition on
+  Windows plus twenty runs in the fixed disconnected Go 1.26.8 Linux/amd64
+  image; a Linux integration also proves the returned source root is the sole
+  bind mount accepted by both immutable step plans. This is filesystem and
+  request-shape evidence, not repository-code or gVisor execution evidence
 - the shared source-archive reader proves the portable receipt independently,
   matches it to the private deterministic store, structurally inspects and
   hashes the archive before handoff, and verifies its length and digest again

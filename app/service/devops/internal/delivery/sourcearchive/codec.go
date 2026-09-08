@@ -41,6 +41,15 @@ type Content struct {
 	PathCount     uint64
 }
 
+// Member is one validated regular file in canonical archive order. A visitor
+// receives a reader bounded to exactly Size bytes and cannot reach the next
+// member.
+type Member struct {
+	Path       string
+	Executable bool
+	Size       int64
+}
+
 // File is one already-authorized Git blob. Open must return that exact blob;
 // Write verifies its declared size and closes it before opening the next file.
 type File struct {
@@ -123,6 +132,29 @@ func Write(ctx context.Context, destination io.Writer, files []File) (Content, e
 }
 
 func Inspect(ctx context.Context, archive io.Reader) (Content, error) {
+	return consume(ctx, archive, nil)
+}
+
+// Visit validates the complete archive while handing each member to visitor.
+// The visitor must consume exactly the member's bounded content before it
+// returns. Archive framing, ordering, headers, limits, and trailing bytes stay
+// owned by this package rather than by filesystem adapters.
+func Visit(
+	ctx context.Context,
+	archive io.Reader,
+	visitor func(Member, io.Reader) error,
+) (Content, error) {
+	if visitor == nil {
+		return Content{}, ErrInvalid
+	}
+	return consume(ctx, archive, visitor)
+}
+
+func consume(
+	ctx context.Context,
+	archive io.Reader,
+	visitor func(Member, io.Reader) error,
+) (Content, error) {
 	if ctx == nil || archive == nil {
 		return Content{}, ErrInvalid
 	}
@@ -158,10 +190,20 @@ func Inspect(ctx context.Context, archive io.Reader) (Content, error) {
 			_ = gzipReader.Close()
 			return Content{}, ErrInvalid
 		}
-		copied, copyErr := io.CopyN(io.Discard, tarReader, header.Size)
-		if copyErr != nil || copied != header.Size {
+		memberReader := &io.LimitedReader{
+			R: &contextReader{ctx: ctx, reader: tarReader}, N: header.Size,
+		}
+		var visitErr error
+		if visitor == nil {
+			_, visitErr = io.Copy(io.Discard, memberReader)
+		} else {
+			visitErr = visitor(Member{
+				Path: header.Name, Executable: header.Mode == 0o755, Size: header.Size,
+			}, memberReader)
+		}
+		if visitErr != nil || memberReader.N != 0 || ctx.Err() != nil {
 			_ = gzipReader.Close()
-			return Content{}, ErrInvalid
+			return Content{}, errors.Join(ErrInvalid, visitErr)
 		}
 		previousPath = header.Name
 		content.PathCount++
