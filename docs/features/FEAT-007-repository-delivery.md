@@ -10,8 +10,9 @@
   fenced acquisition use case, deterministic archive store, and real Gitea
   fetch protocol, source-acquisition persistence, isolated source-fetcher
   process, fenced BuildExecutor contract/use case, and table-blind PostgreSQL
-  execution persistence plus versioned executor-submission transport contract
-  complete; physical runner and reporter effects pending
+  execution persistence, versioned admin/runner transport contract, and
+  durable executor-gateway spool complete; physical runner and reporter
+  effects pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -952,9 +953,25 @@ service-local port. It strictly encodes canonical submission/receipt
 documents, derives a framed deterministic execution digest, and streams an
 eight-byte-length-framed request followed by exactly the declared archive
 bytes while independently enforcing the archive length and SHA-256 digest.
-The delivery port retains only executor capability and outcome errors. The
-physical executor adapter, selected-only build process, gateway, independent
-runner, mutual TLS listeners, durable spool, sandbox, and normalized log
+The admin control and runner assignment/renewal/completion documents are
+separately closed: runner identity remains connection-derived, only the first
+`EXECUTE` assignment carries an archive, and recovery assignments can only be
+`OBSERVE` or `CANCEL`. The delivery port retains only executor capability and
+outcome errors.
+
+The executor gateway's private filesystem spool now atomically publishes an
+inspected archive, canonical request, and initial state under its deterministic
+execution digest. Immutable state generations form a strict consecutive
+SHA-256 chain and are fsynced before acknowledgement. Equal create and
+terminal completion replay observe the original state; changed authority or
+receipt conflicts. The queue assigns the oldest eligible execution for 30
+seconds with a monotonic fence, never gives an expired possible effect to a
+different runner identity, and gives only the same runner an archive-free
+`OBSERVE` or `CANCEL` recovery assignment. Renewal cannot cross the fixed build
+deadline and carries the durable cancellation bit. Restart, partial staging
+cleanup, canonical file modes/shapes, archive reinspection, and symlink/content
+tamper fail closed. The physical executor client and gateway processes, mutual
+TLS listeners, independent runner journal, sandbox, and normalized log
 persistence remain pending; no repository code executes yet.
 
 Every fenced worker transition now submits the exact next PipelineRun document
@@ -1089,6 +1106,14 @@ Current verification evidence:
   lease-loss uncertainty, source-archive failure, definitive executor absence,
   invalid receipt rejection, native-error sanitization, and passed/failed
   handoff to the reporter
+- executor-gateway spool tests proving atomic create, equal and changed replay,
+  restart recovery, strict temporary cleanup and private file shape, oldest-
+  eligible assignment, archive-only first delivery, different-runner takeover
+  denial, same-runner `OBSERVE`/`CANCEL` recovery, lease renewal, deadline cap,
+  cancellation propagation, stale-fence rejection, terminal equal replay,
+  changed-receipt conflict, consecutive digest-bound state history, and
+  submission/archive/state tamper rejection; the public runner documents and
+  spool suites pass race detection and 20-run repetition
 - the shared source-archive reader proves the portable receipt independently,
   matches it to the private deterministic store, structurally inspects and
   hashes the archive before handoff, and verifies its length and digest again
