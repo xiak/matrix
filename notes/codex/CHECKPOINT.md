@@ -3,10 +3,10 @@
 > Non-authoritative portable memory. Validate it against Git and the owning
 > FEAT before continuing.
 
-- Updated: 2026-09-08
+- Updated: 2026-09-09
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `5c2ff67`
+- Current pushed implementation baseline: `502f7ac`
 
 ## Goal
 
@@ -19,20 +19,26 @@ architecture, FEAT, implementation, test, and release gates.
 - FEAT-007 remains the authoritative owner and is `In progress`; read it and
   the directly owning code/tests before continuing. Earlier accepted slices are
   preserved in Git and summarized there rather than repeated here.
-- Pushed `5c2ff67` closes the port-driven durable runner workflow over the
-  already accepted runner client, private journal, immutable workspace, and
-  closed Docker sandbox. Claim commit precedes effects; lease renewal precedes
-  workspace work; recovery observes before create; cancellation, fixed
-  deadlines, log-cursor handoff, cleanup, local terminal replay, and gateway
-  acknowledgement retain one fenced truth. Concrete authorities remain behind
-  delivery ports.
+- Pushed `502f7ac` closes normalized-log relay and tenant persistence over the
+  prior runner workflow. The runner publishes canonical labeled-line batches
+  under its mTLS identity and gateway fence; the private gateway spool stores
+  at most two ordered batches with exact replay; the build worker drains them
+  while its database lease remains active and persists them before completing
+  VERIFY.
+- PostgreSQL owns tenant-leading forced-RLS log batches and a table-blind
+  current-fence append function that independently proves execution, chunk, and
+  batch digests, ordering, normalization shape, equality/conflict, and the
+  fixed 14-day retention deadline. A failed or unproved drain retains the
+  command for fenced observation.
 - Evidence on that worktree: full `go test ./...`, full `go vet ./...`, focused
   Windows race detection with twenty repetitions, and twenty focused runs in
   the fixed disconnected Go 1.26.8 Linux/amd64 image with read-only source and
-  module cache all pass.
-- This proves orchestration against controlled boundaries, not a physical
-  runner process. Production normalized-log persistence, process composition,
-  selected release topology, and real repository execution remain pending.
+  module cache all pass. A clean fixed PostgreSQL 18.6 instance passes double
+  migration, catalog verification, current/stale fence, replay, tamper,
+  ordering, retention-deadline, and completion-closure checks.
+- This proves durable normalized-log persistence, not its public IAM/Audit read
+  surface, physical runner process, selected release topology, or real
+  repository execution.
 
 ## Adoption boundary
 
@@ -44,11 +50,11 @@ architecture, FEAT, implementation, test, and release gates.
 
 ## Continuation
 
-Continue FEAT-007 with the tenant-leading normalized-log persistence boundary:
-make sequence replay idempotent, changed replay conflicting, access
-tenant-derived, and retention bounded across the gateway/control-plane split.
-Then compose the dedicated runner process and selected release topology around
-the already pushed workflow.
+Continue FEAT-007 with the tenant-derived public normalized-log read boundary:
+define bounded cursor/page contracts, authorize `devops.log.read` against the
+exact PipelineRun through IAM, commit one sanitized Audit fact, and expose only
+stored normalized chunks. Then compose the dedicated runner process and
+selected release topology around the pushed workflow.
 
 Do not claim repository-code isolation until a dedicated Linux/amd64 runner
 with the pinned offline toolchain and `runsc` passes the real no-egress,
