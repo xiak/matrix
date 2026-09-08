@@ -6,7 +6,7 @@
 - Updated: 2026-09-08
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `fd96275`
+- Current pushed implementation baseline: `caf8283`
 
 ## Goal
 
@@ -18,23 +18,24 @@ architecture, FEAT, implementation, test, and release gates.
 
 - FEAT-007 remains the authoritative owner and is `In progress`; read it and
   the directly owning code/tests before continuing.
-- Pushed `fd96275` adds IAM-authorized, bodyless terminal PipelineRun replay
-  with exact preconditions, stable idempotency, direct-source lineage, sealed
-  input reuse, shared queue capacity, and one atomic replay Audit fact.
-- Exact retry returns the stored creation snapshot after later transitions;
-  replay descendants remain outside provider-delivery fan-out and create no
-  worker task before claim.
-- API and worker identities remain table-blind outside exact protected
-  functions. The fresh PostgreSQL 18 journey produced 20 mutations, 16
-  SourceEvents, 34 PipelineRuns, nine task intents, two replay facts, five
-  cancellation facts, seven terminal facts, and 75 Audit operations/outbox
-  facts.
-- A data-bearing upgrade from pushed `10fea16` preserved the prior
-  `17/16/32/9/71/71` records, backfilled original-run creation identities,
-  admitted a replay through the upgraded API, and reapplied/verified cleanly.
-- Full tests, vet, affected race and 20-run repeated suites, five-second state
-  fuzzing, Linux/amd64 CGO-disabled builds, fresh PostgreSQL 18 integration,
-  and data-bearing upgrade verification passed.
+- Pushed `8ca8c97` replaces endpoint arrays with one exact `endpointOrigin`,
+  adds closed source/binding health reasons and pure observed-status
+  transitions, enforces two-minute source freshness at admission, and upgrades
+  historical single-origin data while refusing ambiguous multi-origin data.
+- Pushed `caf8283` adds the exact installation-owned
+  `mx devops source-credential apply|retire-previous` surface. It authenticates
+  the sealed installation journal, pinned trust root, committed signed release,
+  and selected DevOps product while holding the installation lock; plaintext
+  enters only through a protected regular input file and never output.
+- DevOps installation now owns separate webhook/fetch/report roots. A
+  purpose/tenant/reference-bound directory contains one strict canonical
+  `material.json`; one durable file replacement atomically rotates or retires
+  current/previous webhook values. The API resolver consumes this format and
+  the superseded two-file resolver is deleted without an alias.
+- Full tests and vet, focused race and 20-run repeated suites, Linux/amd64
+  CGO-disabled builds, and the same focused filesystem suites in a disposable
+  disconnected Debian container passed. The earlier PostgreSQL 18 source
+  contract and data-bearing upgrade gates remain green in FEAT-007 evidence.
 - The user-owned untracked `app/ui/paas/` tree remains untouched.
 
 ## Adoption boundary
@@ -47,10 +48,11 @@ architecture, FEAT, implementation, test, and release gates.
 
 ## Continuation
 
-Continue FEAT-007 from its owning pending list with the smallest source-health
-reconciliation and operator secret-provisioning slice before adding source,
-executor, or reporter effects. Reuse the existing SourceConnection contract
-and installation-owned secret boundary; first tighten the FEAT acceptance
-contract, then implement and verify the vertical slice. Preserve pragmatic
-DDD, replacement-first pre-v1 changes, optional-product isolation, and
-repository-local Git identity `Xiak <Jellal@aliyun.com>`.
+Continue FEAT-007 with the smallest source-observer reconciliation slice:
+observer-only database authority, lease/fence queue, exact Gitea read probes,
+health commits/Audit transitions, heartbeat readiness, and only the three
+purpose mounts that process requires. Do not begin executor/reporter effects or
+formal UI integration until this source-readiness runtime boundary passes its
+real PostgreSQL/provider gates. Preserve pragmatic DDD, replacement-first
+pre-v1 changes, optional-product isolation, and repository-local Git identity
+`Xiak <Jellal@aliyun.com>`.
