@@ -6,7 +6,7 @@
 - Updated: 2026-09-08
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `e33e83b`
+- Current pushed implementation baseline: `0c8bf84`
 
 ## Goal
 
@@ -18,20 +18,18 @@ architecture, FEAT, implementation, test, and release gates.
 
 - FEAT-007 remains the authoritative owner and is `In progress`; read it and
   the directly owning code/tests before continuing.
-- Pushed `bfe834b` adds table-blind PostgreSQL persistence for the existing
-  fenced `VERIFY` use case. Generic claims are now `REPORT`-only; build claims
-  atomically bind the immutable revision and source receipt to a database-time
-  execution window, preserve that window across fencing takeover, and store a
-  strict digest-bound terminal receipt before `REPORTING` can be entered.
-- Full tests, vet, architecture tests, focused race and 20-run suites, a
-  Linux/amd64 CGO-disabled full build, a fresh PostgreSQL 18 build journey, and
-  the four-product PostgreSQL migration journey pass. Receipt shape, binding,
-  digest, stale-fence, renewal, missing-receipt bypass, and passed/failed paths
-  are exercised. Pushed `e33e83b` also adds the shared read-only archive stream:
-  it re-proves the portable receipt and archive before handoff and detects
-  partial or changed consumption; focused tests pass in the fixed disconnected
-  Go 1.26.8 Linux/amd64 image. The physical isolated runner, transport,
-  sandbox, normalized logs, and reporter remain pending.
+- Pushed `972f70a` fixes the accepted three-process executor security boundary
+  and two-role mTLS transport in FEAT-007. Pushed `0c8bf84` moves request and
+  terminal-receipt ownership from the service-local port into the versioned
+  `api/adapter/devopsbuild/v1` cross-process contract, adds canonical strict
+  documents, deterministic execution identity, and exact length/digest-bound
+  archive streaming, and leaves the local port as capability plus outcome
+  errors only.
+- Full tests and vet, architecture tests, focused race and 20-run suites, and
+  focused tests in the fixed disconnected Go 1.26.8 Linux/amd64 image pass.
+  Short, changed, and trailing archives and noncanonical/unknown documents fail
+  closed. The physical gateway, runner transport, sandbox, normalized logs,
+  and reporter remain pending.
 - The user-owned untracked `app/ui/paas/` tree remains untouched.
 
 ## Adoption boundary
@@ -45,13 +43,13 @@ architecture, FEAT, implementation, test, and release gates.
 ## Continuation
 
 Continue FEAT-007 with the smallest independently testable physical-execution
-slice behind the accepted BuildExecutor port: a selected-only control-plane
-process and authenticated runner transport that keep the runner away from
-PostgreSQL, source/report credentials, IAM, Audit, PaaS, and administrative
-executor operations. Do not claim repository code is isolated until the
-dedicated Linux/amd64 runner, pinned offline toolchain, gVisor, no-egress,
-resource, malicious-repository, restart, and sanitized-log gates really pass;
-do not couple it to PaaS execution or begin formal UI integration before that
-real boundary passes. Preserve pragmatic DDD, replacement-first pre-v1
-changes, optional-product isolation, and repository-local Git identity
-`Xiak <Jellal@aliyun.com>`.
+slice behind the accepted BuildExecutor port: the executor gateway's private
+durable spool and build-worker-only admin boundary, followed by the separate
+runner role. Keep runner authority away from PostgreSQL, source/report
+credentials, IAM, Audit, PaaS, and admin operations. Do not claim repository
+code is isolated until the dedicated Linux/amd64 runner, pinned offline
+toolchain, gVisor, no-egress, resource, malicious-repository, restart, and
+sanitized-log gates really pass; do not couple it to PaaS execution or begin
+formal UI integration before that real boundary passes. Preserve pragmatic
+DDD, replacement-first pre-v1 changes, optional-product isolation, and
+repository-local Git identity `Xiak <Jellal@aliyun.com>`.
