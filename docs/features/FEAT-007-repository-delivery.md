@@ -655,6 +655,32 @@ runtime name and image ID from Docker inspection rather than trusting process
 output from the sandbox. A missing runtime, changed image, unsupported host,
 or failed negative isolation probe makes the executor ineligible.
 
+The runner's closed Engine adapter pins API `v1.46` over one configured,
+root-owned, non-world-accessible Unix socket; it has no TCP, proxy, redirect,
+CLI, or Docker SDK path. Before any task may be claimed it checks Docker
+`29.x`, the daemon API range, Linux/amd64, `runsc`, kernel resource-limit
+support, the CPU/memory floors, the installation-owned storage floor, and the
+exact local image ID plus repository digest. It then runs only a randomized,
+trusted probe from that pinned image and re-inspects the resulting container
+through the Engine: the probe checks UID/GID, empty capabilities,
+`no-new-privileges`, no non-loopback interface or route, a read-only root,
+absence of the Docker socket and sensitive devices, and empty proxy and common
+credential variables. The host-side inspection independently checks the
+image, command, environment, `runsc`, network/IPC modes, read-only root,
+capability/security flags, resources, mounts, logging mode, terminal state,
+and network attachment before declaring the node eligible. Failure still
+forces bounded container deletion.
+
+The same adapter now derives, but does not yet execute, the two immutable step
+requests. Each has its exact command, pinned image, numeric user, empty
+credential/proxy environment, `NONE` network, `runsc`, two CPUs, 2 GiB memory
+with no extra swap, 256 processes, and exactly 2 GiB of fresh tmpfs split into
+a 512 MiB executable work directory and 1.5 GiB non-executable cache. The sole
+host mount is one canonical, non-recursive, read-only source directory; native
+Engine request fields remain private to the adapter. Safe archive expansion,
+step execution/cancellation, bounded normalized logs, and the physical runner
+composition remain subsequent slices, so repository code still does not run.
+
 ### Egress, limits, storage, and retention
 
 `NONE` is the only dependency-egress policy in this slice. Source acquisition
@@ -986,9 +1012,10 @@ request digests, recovery fences, cancellation, and normalized receipts. The
 physical build-worker command now composes only its table-blind PostgreSQL
 repository, read-only source archive, exact mTLS admin identity, executor-gateway
 client, independent heartbeat, and readiness endpoint. The dedicated runner
-process, sandbox, selected release topology, normalized log persistence, and a
-real PostgreSQL-to-runner process journey remain pending; no repository code
-executes yet.
+process, safe workspace expansion, sandbox execution/cancellation, selected
+release topology, normalized log persistence, and a real PostgreSQL-to-runner
+process journey remain pending. The closed Docker Engine adapter and
+pre-claim eligibility probe are present, but no repository code executes yet.
 
 Every fenced worker transition now submits the exact next PipelineRun document
 to the database boundary. A terminal transition atomically stores a distinct
@@ -1180,6 +1207,19 @@ Current verification evidence:
   the fixed disconnected Go 1.26.8 Linux/amd64 image using read-only source and
   module cache with module lookup disabled; real cross-process PostgreSQL
   execution remains a Gate B item
+- closed runner-sandbox adapter tests proving deterministic exact `go test`
+  and `go vet` requests, fixed image/API/runtime/user/environment, no network,
+  read-only root and source, dropped capabilities, `no-new-privileges`, no
+  device/socket/secret mounts, fixed CPU/memory/no-extra-swap/PID/tmpfs limits,
+  sensitive-path and mutation rejection, bounded sanitized Engine responses,
+  pre-claim Docker/API/platform/runtime/resource/storage/image gates, and a
+  trusted negative probe whose command and host-side inspection must agree and
+  whose container is deleted after failure. The package passes race detection
+  and twenty-run repetition on Windows and twenty runs in the fixed
+  disconnected Go 1.26.8 Linux/amd64 image. A real read-only Engine journey
+  against Docker `29.6.2` verifies the production Unix-socket transport and
+  pinned image inspection, and proves the current Docker Desktop host fails
+  closed at `RUNSC_RUNTIME`; it is not evidence of gVisor isolation
 - the shared source-archive reader proves the portable receipt independently,
   matches it to the private deterministic store, structurally inspects and
   hashes the archive before handoff, and verifies its length and digest again
