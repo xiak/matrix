@@ -25,8 +25,8 @@ import {
   MapPin,
   Menu,
   PackageSearch,
+  PackagePlus,
   PanelRightClose,
-  PanelRightOpen,
   RefreshCcw,
   Search,
   ServerCog,
@@ -52,6 +52,7 @@ import type { ExperienceSnapshot } from "../domain/experience";
 import type { ControlPlaneRouteSelection } from "../domain/selection";
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
 import type {
+  ConsoleWorkspaceScene,
   GlobalSearchResultScene,
   NavigationIconKind,
   RailIconKind
@@ -154,6 +155,17 @@ function LoadingShell({ error, logout, retry, revoking, sessionError }: {
 }
 
 type WorkspaceSize = "compact" | "medium" | "wide";
+
+const workspaceActions = {
+  "quota-order": { collapsed: "激活配额", expanded: "收起配额配置", icon: PackagePlus, primary: true },
+  "installation-order": { collapsed: "安装服务", expanded: "收起安装配置", icon: ServerCog, primary: true },
+  "platform-status": { collapsed: "查看平台状态", expanded: "收起平台状态", icon: Activity, primary: false }
+} satisfies Record<NonNullable<ConsoleWorkspaceScene>["kind"], {
+  collapsed: string;
+  expanded: string;
+  icon: typeof Activity;
+  primary: boolean;
+}>;
 
 function SearchResult({ active, index, item, onChoose, onHover }: {
   active: boolean;
@@ -258,6 +270,8 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
   }
 
   const workspaceVisible = Boolean(scene.workspace && workspaceOpen);
+  const workspaceAction = scene.workspace ? workspaceActions[scene.workspace.kind] : null;
+  const WorkspaceActionIcon = workspaceAction?.icon;
   const principal = session.current;
   const productResults = scene.search.filter((item) => item.category === "产品");
   const globalOverlayOpen = productMenuOpen || scopeOpen || noticesOpen || accountMenuOpen || searchOpen;
@@ -467,7 +481,7 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
                   </div>
                   <div className={styles.pageActions}>
                     {scene.section !== "access" ? <Button aria-label="刷新" disabled={controlPlane.loading} onClick={() => void controlPlane.reload()} size="small" variant="ghost"><RefreshCcw aria-hidden="true" /><span>刷新</span></Button> : null}
-                    {scene.workspace ? <Button aria-controls="console-workspace" aria-expanded={workspaceVisible} aria-label={workspaceVisible ? "收起面板" : "打开面板"} onClick={toggleWorkspace} size="small" variant={workspaceVisible ? "secondary" : "ghost"}>{workspaceVisible ? <PanelRightClose aria-hidden="true" /> : <PanelRightOpen aria-hidden="true" />}<span>{workspaceVisible ? "收起面板" : "打开面板"}</span></Button> : null}
+                    {workspaceAction && WorkspaceActionIcon ? <Button aria-controls="console-workspace" aria-expanded={workspaceVisible} aria-label={workspaceVisible ? workspaceAction.expanded : workspaceAction.collapsed} onClick={toggleWorkspace} size="small" variant={workspaceVisible || !workspaceAction.primary ? "secondary" : "primary"}>{workspaceVisible ? <PanelRightClose aria-hidden="true" /> : <WorkspaceActionIcon aria-hidden="true" />}<span>{workspaceVisible ? workspaceAction.expanded : workspaceAction.collapsed}</span></Button> : null}
                   </div>
                 </ContentPage.Header>
                 <ContentPage.Body>

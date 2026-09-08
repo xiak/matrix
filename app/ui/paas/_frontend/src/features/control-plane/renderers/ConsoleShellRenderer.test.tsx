@@ -186,6 +186,17 @@ describe("ConsoleShellRenderer", () => {
     }
   });
 
+  it("names the workspace toggle after the installation task instead of its container", async () => {
+    const { user } = await renderConsole({ section: "installations" });
+    const collapse = await screen.findByRole("button", { name: "收起安装配置" });
+    expect(collapse.getAttribute("aria-expanded")).toBe("true");
+
+    await user.click(collapse);
+
+    const install = screen.getByRole("button", { name: "安装服务" });
+    expect(install.getAttribute("aria-expanded")).toBe("false");
+  });
+
   it("supports global search and keyboard navigation in preview mode", async () => {
     const { user } = await renderConsole({ experience: previewExperienceSnapshot });
     expect((await screen.findByRole("heading", { level: 1 })).textContent).toBe("云控制台");

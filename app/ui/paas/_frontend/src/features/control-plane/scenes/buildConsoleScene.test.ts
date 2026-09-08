@@ -7,7 +7,7 @@ const snapshot: ControlPlaneSnapshot = {
   offerings: [{
     id: "postgresql-18",
     kind: "POSTGRESQL",
-    displayName: "PostgreSQL",
+    displayName: "PostgreSQL 18",
     description: "托管关系数据库",
     engineFamily: "PostgreSQL",
     engineVersion: "18",
@@ -79,6 +79,10 @@ describe("buildConsoleScene", () => {
 
   it("exposes install choices only from available quota and ready regions", () => {
     const scene = buildConsoleScene("installations", snapshot);
+    expect(scene.content.kind).toBe("installations");
+    if (scene.content.kind === "installations") {
+      expect(scene.content.installations[0]?.engine).toBe("PostgreSQL 18");
+    }
     expect(scene.workspace).toMatchObject({
       kind: "installation-order",
       entitlementOptions: [{

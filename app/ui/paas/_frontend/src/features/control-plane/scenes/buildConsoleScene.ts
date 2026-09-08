@@ -133,17 +133,20 @@ function installationStatus(phase: ServiceInstallation["phase"]): SceneStatus {
 function installationScenes(snapshot: ControlPlaneSnapshot): InstallationScene[] {
   const offerings = new Map(snapshot.offerings.map((item) => [item.id, item]));
   const regions = new Map(snapshot.regions.map((item) => [item.id, item]));
-  return snapshot.installations.map((installation) => ({
-    id: installation.id,
-    name: installation.name,
-    engine: `${offerings.get(installation.offeringId)?.displayName ?? "Managed service"} ${installation.engineVersion}`,
-    regionName: regions.get(installation.regionId)?.displayName ?? installation.regionId,
-    phase: installation.phase,
-    status: installationStatus(installation.phase),
-    endpoint: installation.endpoint,
-    operationId: installation.operation.id,
-    observedAt: dateTime(installation.operation.observedAt)
-  }));
+  return snapshot.installations.map((installation) => {
+    const offering = offerings.get(installation.offeringId);
+    return {
+      id: installation.id,
+      name: installation.name,
+      engine: `${offering?.engineFamily ?? "Managed service"} ${installation.engineVersion}`,
+      regionName: regions.get(installation.regionId)?.displayName ?? installation.regionId,
+      phase: installation.phase,
+      status: installationStatus(installation.phase),
+      endpoint: installation.endpoint,
+      operationId: installation.operation.id,
+      observedAt: dateTime(installation.operation.observedAt)
+    };
+  });
 }
 
 function entitlementScenes(snapshot: ControlPlaneSnapshot): EntitlementScene[] {

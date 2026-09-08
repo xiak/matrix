@@ -9,6 +9,7 @@ import {
   Boxes,
   ChartNoAxesCombined,
   CheckCircle2,
+  ChevronDown,
   CloudCog,
   Database,
   GitBranch,
@@ -19,7 +20,7 @@ import {
   ShieldCheck,
   Workflow
 } from "lucide-react";
-import { Badge, Card, ContentLayout, Input, Typography } from "@ui/xiak";
+import { Badge, Card, ContentLayout, Input, Select, Typography } from "@ui/xiak";
 import type {
   AlertScene,
   ConsoleContentScene,
@@ -169,27 +170,57 @@ function ResourceTable({ resources, scope, compact = false }: {
   );
 }
 
+function OperationSummary({ operation }: { operation: OperationScene }) {
+  return <>
+    <span className={styles.operationMarker} data-status={operation.status} aria-hidden="true" />
+    <div className={styles.operationMain}>
+      <div className={styles.operationHeading}>
+        <div><strong>{operation.action}</strong><span>{operation.target}</span></div>
+        <Badge status={operation.status}>{operation.stateLabel}</Badge>
+      </div>
+      {operation.status === "info" ? <progress aria-label={`${operation.action}进度`} max={100} value={operation.progress} /> : null}
+      <div className={styles.operationMeta}>
+        <span>{operation.productName}</span><span>{operation.actor}</span><span>{operation.startedAt}</span>
+      </div>
+    </div>
+  </>;
+}
+
+function operationGuidance(operation: OperationScene): string {
+  if (operation.status === "info") return "任务仍在执行；刷新后可查看控制面返回的最新进度。";
+  if (operation.status === "success") return "任务已完成；操作标识和发起人可用于后续审计追踪。";
+  if (operation.status === "danger") return "任务执行失败；请先核对目标资源状态，再从所属产品重新提交。";
+  return "当前状态尚未终结；请刷新后再决定下一步操作。";
+}
+
 function OperationList({ operations, compact = false }: { operations: OperationScene[]; compact?: boolean }) {
   if (operations.length === 0) {
     return <EmptyState title="还没有操作记录" description="创建资源或运行交付任务后，进度会显示在这里。" />;
   }
   return (
     <div className={styles.operationList}>
-      {operations.map((operation) => (
+      {operations.map((operation) => compact ? (
         <article className={styles.operationRow} key={operation.id}>
-          <span className={styles.operationMarker} data-status={operation.status} aria-hidden="true" />
-          <div className={styles.operationMain}>
-            <div className={styles.operationHeading}>
-              <div><strong>{operation.action}</strong><span>{operation.target}</span></div>
-              <Badge status={operation.status}>{operation.stateLabel}</Badge>
-            </div>
-            {operation.status === "info" ? <progress aria-label={`${operation.action}进度`} max={100} value={operation.progress} /> : null}
-            <div className={styles.operationMeta}>
-              <span>{operation.productName}</span><span>{operation.actor}</span><span>{operation.startedAt}</span>
-              {compact ? null : <Typography.Code>{operation.id}</Typography.Code>}
-            </div>
-          </div>
+          <div className={styles.operationCompactSummary}><OperationSummary operation={operation} /></div>
         </article>
+      ) : (
+        <details className={styles.operationRow} key={operation.id}>
+          <summary aria-label={`${operation.action}：${operation.target}，${operation.stateLabel}，查看详情`} className={styles.operationSummary}>
+            <OperationSummary operation={operation} />
+            <span className={styles.operationDetailCue}>详情<ChevronDown aria-hidden="true" /></span>
+          </summary>
+          <div className={styles.operationDetails}>
+            <p data-status={operation.status}>{operationGuidance(operation)}</p>
+            <dl>
+              <div><dt>操作标识</dt><dd><Typography.Code>{operation.id}</Typography.Code></dd></div>
+              <div><dt>执行进度</dt><dd>{operation.progress}%</dd></div>
+              <div><dt>发起人</dt><dd>{operation.actor}</dd></div>
+              <div><dt>所属产品</dt><dd>{operation.productName}</dd></div>
+              <div><dt>目标</dt><dd>{operation.target}</dd></div>
+              <div><dt>开始时间</dt><dd>{operation.startedAt}</dd></div>
+            </dl>
+          </div>
+        </details>
       ))}
     </div>
   );
@@ -307,10 +338,33 @@ function Resources({ scene, scope }: {
 }
 
 function Operations({ scene }: { scene: Extract<ConsoleContentScene, { kind: "operations" }> }) {
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState<"all" | "info" | "success" | "danger">("all");
+  const operations = useMemo(() => {
+    const normalized = query.trim().toLocaleLowerCase("zh-CN");
+    return scene.operations.filter((operation) => (
+      (status === "all" || operation.status === status) &&
+      (!normalized || [operation.id, operation.action, operation.target, operation.productName, operation.actor, operation.stateLabel]
+        .some((value) => value.toLocaleLowerCase("zh-CN").includes(normalized)))
+    ));
+  }, [query, scene.operations, status]);
+
   return (
     <Card>
       <Card.Header><div><Typography.Title as="h2" level={3}>最近操作</Typography.Title><Typography.Text tone="muted">跨产品保留一致的执行状态与责任人上下文</Typography.Text></div><Badge status="info">{scene.operations.filter((item) => item.status === "info").length} 个执行中</Badge></Card.Header>
-      <Card.Body><OperationList operations={scene.operations} /></Card.Body>
+      <Card.Body>
+        <div className={styles.operationToolbar}>
+          <label className={styles.operationSearch}><Search aria-hidden="true" /><span className={styles.visuallyHidden}>搜索操作</span><Input onChange={(event) => setQuery(event.target.value)} placeholder="操作、目标、ID 或发起人" value={query} /></label>
+          <Select aria-label="筛选操作状态" onChange={(event) => setStatus(event.target.value as typeof status)} value={status}>
+            <option value="all">全部状态</option>
+            <option value="info">执行中</option>
+            <option value="danger">失败</option>
+            <option value="success">已完成</option>
+          </Select>
+          <span aria-live="polite" className={styles.operationCount}>{operations.length} 个结果</span>
+        </div>
+        {operations.length || scene.operations.length === 0 ? <OperationList operations={operations} /> : <EmptyState title="没有匹配的操作" description="调整关键词或状态筛选条件。" />}
+      </Card.Body>
     </Card>
   );
 }
