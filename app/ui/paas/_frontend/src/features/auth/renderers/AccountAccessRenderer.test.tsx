@@ -95,6 +95,33 @@ describe("qualified login", () => {
 });
 
 describe("account access", () => {
+  it("uses one keyboard-operable tablist for the access sections", async () => {
+    const { user } = await openAccess();
+    await screen.findByText("Developer A");
+    const tablist = screen.getByRole("tablist", { name: "访问管理页面" });
+    const users = within(tablist).getByRole("tab", { name: "用户" });
+    const permissions = within(tablist).getByRole("tab", { name: "权限" });
+    const tenants = within(tablist).getByRole("tab", { name: "租户管理" });
+
+    expect(within(tablist).getAllByRole("tab")).toHaveLength(4);
+    expect(within(tablist).queryByRole("button", { name: "刷新账号信息" })).toBeNull();
+    expect(users.getAttribute("aria-selected")).toBe("true");
+    expect(users.tabIndex).toBe(0);
+    users.focus();
+    await user.keyboard("{ArrowRight}");
+    expect(document.activeElement).toBe(permissions);
+    expect(permissions.getAttribute("aria-selected")).toBe("true");
+    const panel = screen.getByRole("tabpanel", { name: "权限" });
+    expect(permissions.getAttribute("aria-controls")).toBe(panel.id);
+
+    await user.keyboard("{End}");
+    expect(document.activeElement).toBe(tenants);
+    expect(tenants.getAttribute("aria-selected")).toBe("true");
+    await user.keyboard("{Home}");
+    expect(document.activeElement).toBe(users);
+    expect(users.getAttribute("aria-selected")).toBe("true");
+  });
+
   it("separates the resource owner from subusers and defaults creation to no business grant", async () => {
     const { user, repository, view } = await openAccess();
     await screen.findByText("Developer A");
@@ -115,7 +142,7 @@ describe("account access", () => {
     const repository = accounts();
     const { user } = await openAccess(repository);
     await screen.findByText("Developer A");
-    await user.click(screen.getByRole("button", { name: "用户设置" }));
+    await user.click(screen.getByRole("tab", { name: "用户设置" }));
     await user.type(screen.getByLabelText(/^主账号别名/), "acme");
     await user.click(screen.getByRole("button", { name: "保存别名" }));
     await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "set-alias", alias: "acme", resourceVersion: 1 }));
@@ -130,7 +157,7 @@ describe("account access", () => {
     await screen.findByText("尚未授予业务权限");
     expect(repository.listUsers).not.toHaveBeenCalled();
     expect(repository.listAccounts).not.toHaveBeenCalled();
-    expect(screen.queryByRole("button", { name: "租户管理" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "租户管理" })).toBeNull();
     expect(screen.queryByRole("button", { name: "保存别名" })).toBeNull();
     expect(screen.getByText("username@tenant-a")).toBeTruthy();
   });

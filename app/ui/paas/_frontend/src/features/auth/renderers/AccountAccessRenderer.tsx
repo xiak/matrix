@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useId, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { Building2, KeyRound, Plus, RefreshCcw, ShieldCheck, UserRound, Users } from "lucide-react";
 import { Badge, Button, Card, Input, Select, Typography } from "@ui/xiak";
 import { AccountAccessProvider, useAccountAccess } from "../application/AccountAccessProvider";
@@ -11,9 +11,62 @@ import styles from "./AccountAccessRenderer.module.css";
 
 const loginPattern = "[a-z][a-z0-9._\\-]{2,63}";
 const aliasPattern = "[a-z][a-z0-9\\-]{1,61}[a-z0-9]";
+type AccountAccessTab = "users" | "permissions" | "settings" | "tenants";
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return <label className={styles.field}><span>{label}</span>{children}</label>;
+}
+
+function AccountAccessTabs({
+  canCreateOrganizations,
+  canManage,
+  onChange,
+  panelId,
+  value
+}: {
+  canCreateOrganizations: boolean;
+  canManage: boolean;
+  onChange(value: AccountAccessTab): void;
+  panelId: string;
+  value: AccountAccessTab;
+}) {
+  const tabRefs = useRef<Partial<Record<AccountAccessTab, HTMLButtonElement | null>>>({});
+  const tabs: Array<{ icon: ReactNode; label: string; value: AccountAccessTab }> = [
+    ...(canManage ? [{ icon: <Users aria-hidden="true" />, label: "用户", value: "users" as const }] : []),
+    { icon: <ShieldCheck aria-hidden="true" />, label: "权限", value: "permissions" },
+    { icon: <UserRound aria-hidden="true" />, label: "用户设置", value: "settings" },
+    ...(canCreateOrganizations ? [{ icon: <Building2 aria-hidden="true" />, label: "租户管理", value: "tenants" as const }] : [])
+  ];
+
+  function selectFromKeyboard(event: KeyboardEvent<HTMLButtonElement>, index: number) {
+    let nextIndex: number | undefined;
+    if (event.key === "ArrowRight") nextIndex = (index + 1) % tabs.length;
+    if (event.key === "ArrowLeft") nextIndex = (index - 1 + tabs.length) % tabs.length;
+    if (event.key === "Home") nextIndex = 0;
+    if (event.key === "End") nextIndex = tabs.length - 1;
+    if (nextIndex === undefined) return;
+    event.preventDefault();
+    const nextTab = tabs[nextIndex];
+    if (!nextTab) return;
+    onChange(nextTab.value);
+    tabRefs.current[nextTab.value]?.focus();
+  }
+
+  return <div aria-label="访问管理页面" className={styles.tabs} role="tablist">
+      {tabs.map((tab, index) => <Button
+        aria-controls={panelId}
+        aria-selected={tab.value === value}
+        className={styles.tab}
+        id={`${panelId}-${tab.value}`}
+        key={tab.value}
+        onClick={() => onChange(tab.value)}
+        onKeyDown={(event) => selectFromKeyboard(event, index)}
+        ref={(element) => { tabRefs.current[tab.value] = element; }}
+        role="tab"
+        tabIndex={tab.value === value ? 0 : -1}
+        variant={tab.value === value ? "secondary" : "ghost"}
+      >{tab.icon}{tab.label}</Button>)}
+    </div>;
 }
 
 function PasswordField({ value, onChange }: { value: string; onChange(value: string): void }) {
@@ -80,9 +133,9 @@ function UserAccess({ user, onClose }: { user: AccountUserScene; onClose(): void
     if (await access.execute({ kind: "reset-password", principalId: user.id, resourceVersion: user.resourceVersion, initialPassword })) setResettingPassword(false);
   }
   return <Card>
-    <Card.Header>
-      <div><Typography.Title as="h2" level={3}>{user.name}</Typography.Title><Typography.Text tone="muted">{user.qualifiedName}</Typography.Text></div>
-      <Button onClick={onClose} size="small" variant="ghost">关闭详情</Button>
+    <Card.Header className={styles.actionHeader}>
+      <div className={styles.headerCopy}><Typography.Title as="h2" level={3}>{user.name}</Typography.Title><Typography.Text tone="muted">{user.qualifiedName}</Typography.Text></div>
+      <Button className={styles.headerAction} onClick={onClose} size="small" variant="ghost">关闭详情</Button>
     </Card.Header>
     <Card.Body className={styles.detail}>
       <div className={styles.sectionHeading}><ShieldCheck aria-hidden="true" /><strong>已授予权限（内置角色）</strong></div>
@@ -134,9 +187,9 @@ function UserDirectory({ scene }: { scene: AccountAccessScene }) {
   const selected = scene.users.find((user) => user.id === selectedId);
   return <div className={styles.stack}>
     <Card>
-      <Card.Header>
-        <div><Typography.Title as="h2" level={3}>子用户</Typography.Title><Typography.Text tone="muted">独立身份与凭据，共享主账号资源空间，按授权访问</Typography.Text></div>
-        <Button disabled={access.busy || access.loading} onClick={() => { setCreating(true); setSelectedId(null); }} size="small"><Plus aria-hidden="true" />创建用户</Button>
+      <Card.Header className={styles.actionHeader}>
+        <div className={styles.headerCopy}><Typography.Title as="h2" level={3}>子用户</Typography.Title><Typography.Text tone="muted">独立身份与凭据，共享主账号资源空间，按授权访问</Typography.Text></div>
+        <Button className={styles.headerAction} disabled={access.busy || access.loading} onClick={() => { setCreating(true); setSelectedId(null); }} size="small"><Plus aria-hidden="true" />创建用户</Button>
       </Card.Header>
       <div aria-label="租户用户列表" className={styles.tableWrap} role="region" tabIndex={0}>
         <table className={styles.table}>
@@ -184,7 +237,7 @@ function TenantDirectory({ scene }: { scene: AccountAccessScene }) {
   const [creating, setCreating] = useState(false);
   return <div className={styles.stack}>
     <Card>
-      <Card.Header><div><Typography.Title as="h2" level={3}>租户账号</Typography.Title><Typography.Text tone="muted">仅平台初始管理员可开通租户</Typography.Text></div><Button disabled={access.busy || access.loading} onClick={() => setCreating(true)} size="small"><Plus aria-hidden="true" />开通租户</Button></Card.Header>
+      <Card.Header className={styles.actionHeader}><div className={styles.headerCopy}><Typography.Title as="h2" level={3}>租户账号</Typography.Title><Typography.Text tone="muted">仅平台初始管理员可开通租户</Typography.Text></div><Button className={styles.headerAction} disabled={access.busy || access.loading} onClick={() => setCreating(true)} size="small"><Plus aria-hidden="true" />开通租户</Button></Card.Header>
       <div aria-label="租户账号列表" className={styles.tableWrap} role="region" tabIndex={0}>
         <table className={styles.table}><thead><tr><th>租户</th><th>主账号登录名</th><th>主账号别名</th></tr></thead>
           <tbody>{scene.accounts.map((account) => <tr key={account.id}><td><strong>{account.name}</strong><small>{account.id}</small></td><td>{account.primaryLoginName}</td><td>{account.loginAlias ?? "未设置"}</td></tr>)}</tbody>
@@ -211,17 +264,13 @@ function PermissionCatalog() {
 function AccountAccessContent() {
   const access = useAccountAccess();
   const scene = access.scene;
-  const [selection, setSelection] = useState<"users" | "permissions" | "settings" | "tenants">("users");
+  const panelId = `${useId()}-access-panel`;
+  const [selection, setSelection] = useState<AccountAccessTab>("users");
   const tab = selection === "permissions" ? selection : !scene?.canManage ? "settings" : selection === "tenants" && !scene.canCreateOrganizations ? "users" : selection;
   return <section aria-label="账号与权限" aria-busy={access.loading || access.busy} className={styles.stack}>
     <div className={styles.toolbar}>
-      <div aria-label="访问管理页面" className={styles.tabs} role="group">
-        {scene?.canManage ? <Button aria-pressed={tab === "users"} onClick={() => setSelection("users")} variant={tab === "users" ? "secondary" : "ghost"}><Users aria-hidden="true" />用户</Button> : null}
-        {scene ? <Button aria-pressed={tab === "permissions"} onClick={() => setSelection("permissions")} variant={tab === "permissions" ? "secondary" : "ghost"}><ShieldCheck aria-hidden="true" />权限</Button> : null}
-        <Button aria-pressed={tab === "settings"} onClick={() => setSelection("settings")} variant={tab === "settings" ? "secondary" : "ghost"}><UserRound aria-hidden="true" />用户设置</Button>
-        {scene?.canCreateOrganizations ? <Button aria-pressed={tab === "tenants"} onClick={() => setSelection("tenants")} variant={tab === "tenants" ? "secondary" : "ghost"}><Building2 aria-hidden="true" />租户管理</Button> : null}
-      </div>
-      <Button aria-label="刷新账号信息" disabled={access.loading || access.busy} onClick={access.reload} size="small" variant="ghost"><RefreshCcw aria-hidden="true" />刷新</Button>
+      {scene ? <AccountAccessTabs canCreateOrganizations={scene.canCreateOrganizations} canManage={scene.canManage} onChange={setSelection} panelId={panelId} value={tab} /> : null}
+      <Button aria-label="刷新账号信息" className={styles.refreshButton} disabled={access.loading || access.busy} onClick={access.reload} size="small" variant="ghost"><RefreshCcw aria-hidden="true" /><span className={styles.refreshLabel}>刷新</span></Button>
     </div>
     {access.error ? <p className={styles.error} role="alert">{access.error}</p> : null}
     {access.success ? <p className={styles.success} role="status">{access.success}</p> : null}
@@ -232,7 +281,9 @@ function AccountAccessContent() {
         <div><small>所属账号 · 资源归属</small><strong>{scene.accountName}</strong><small>{scene.accountId}</small></div>
         <div><small>当前登录用户</small><strong>{scene.identityLabel}<Badge status="info">{scene.isPrimary ? "主账号" : "IAM 子用户"}</Badge></strong><small>{scene.roles.join(" · ") || "尚未授予业务权限"}</small></div>
       </div>
-      {tab === "users" ? <UserDirectory scene={scene} /> : tab === "tenants" ? <TenantDirectory scene={scene} /> : tab === "permissions" ? <PermissionCatalog /> : <UserSettings key={scene.accountVersion} scene={scene} />}
+      <div aria-labelledby={`${panelId}-${tab}`} className={styles.tabPanel} id={panelId} role="tabpanel" tabIndex={0}>
+        {tab === "users" ? <UserDirectory scene={scene} /> : tab === "tenants" ? <TenantDirectory scene={scene} /> : tab === "permissions" ? <PermissionCatalog /> : <UserSettings key={scene.accountVersion} scene={scene} />}
+      </div>
     </> : null}
   </section>;
 }

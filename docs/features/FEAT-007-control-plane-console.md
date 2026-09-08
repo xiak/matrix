@@ -327,6 +327,10 @@ The interaction contract includes:
   navigation contains no duplicate account dock. The menu exposes `menu` and
   `menuitem` semantics, a separated dangerous logout action, roving arrow and
   `Home`/`End` focus, and `Escape` dismissal that restores trigger focus;
+- access-management sections expose one semantic `tablist`; arrow keys and
+  `Home`/`End` both select and focus tabs. At compact widths the tabs remain
+  one horizontally browsable row beside a fixed refresh action, while card-
+  header actions stack deliberately instead of compressing their labels;
 - explicit loading, empty, unavailable, running, success, warning, and failed
   states; no spinner or success message substitutes for known progress;
 - `Escape` dismissal, visible focus, native selects, keyboard-resizable
@@ -449,7 +453,7 @@ and `git diff --check` gates must pass on the same committed worktree.
   public-component chain, twelve static routes, memory-only IAM sessions,
   deterministic Go embedding, strict CSP hashes, and a four-region shell.
   The console layout retains its provider across child-route navigation.
-  Source gates cover the light theme, 20 semantic contrast pairs, and 72
+  Source gates cover the light theme, 20 semantic contrast pairs, and 73
   frontend tests, including visible failed revocation, logout during failed
   or pending resource loads, keyboard workspace sizing, and native instance-ID
   validation. The installed `44fa1c7` candidate proves the light login page,
@@ -475,8 +479,12 @@ and `git diff --check` gates must pass on the same committed worktree.
   verified that IAM remains navigable when the PaaS upstream is unavailable.
   Browser inspection informed the explicit-choice grant default. This is a
   development-runtime IAM gate, not the installed-release PaaS purchase/deploy
-  journey; 360-pixel and full keyboard acceptance remain open. Backend account
-  and isolation evidence belongs to FEAT-006.
+  journey. Compact development-browser inspection additionally proves a
+  single-row horizontally browsable tablist, fixed refresh control, deliberate
+  card-header action stacking, no page overflow, and arrow/`Home`/`End` focus
+  movement at a viewport narrower than `360px`. Authenticated installed-release
+  360-pixel and full-keyboard acceptance remain open. Backend account and
+  isolation evidence belongs to FEAT-006.
 - The unified-cloud UX preview replaces the provisional console composition
   with the dimensioned shell and interaction contract above. It adds product
   and service discovery, a cross-product Resource Center, global project and

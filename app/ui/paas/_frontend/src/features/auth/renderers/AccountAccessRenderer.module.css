@@ -8,7 +8,6 @@
 }
 
 .toolbar,
-.tabs,
 .actions,
 .roleTags,
 .sectionHeading {
@@ -19,8 +18,50 @@
 }
 
 .toolbar {
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
   gap: var(--xiak-spacing-default);
+}
+
+.tabs {
+  display: flex;
+  grid-column: 1;
+  min-width: 0;
+  align-items: center;
+  gap: var(--xiak-spacing-tight);
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+}
+
+.tab,
+.refreshButton,
+.headerAction {
+  flex: none;
+  white-space: nowrap;
+}
+
+.refreshButton {
+  grid-column: 2;
+}
+
+.tabPanel {
+  min-width: 0;
+}
+
+.tabPanel:focus-visible {
+  outline: 2px solid var(--xiak-color-border-focus);
+  outline-offset: 2px;
+}
+
+.actionHeader {
+  align-items: flex-start;
+}
+
+.headerCopy {
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .identity {
@@ -227,6 +268,26 @@
 }
 
 @media (max-width: 600px) {
+  .refreshButton {
+    width: var(--xiak-control-height);
+    min-height: var(--xiak-control-height);
+    padding-inline: 0;
+  }
+
+  .refreshLabel {
+    display: none;
+  }
+
+  .actionHeader {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .headerAction {
+    width: 100%;
+    min-height: var(--xiak-control-height);
+  }
+
   .facts > div {
     grid-template-columns: minmax(0, 1fr);
     gap: var(--xiak-spacing-narrow);
