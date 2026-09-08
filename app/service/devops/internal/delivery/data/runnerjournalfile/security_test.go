@@ -117,6 +117,7 @@ func TestJournalDetectsPublishedTampering(t *testing.T) {
 		if _, err := journal.MarkStepStarted(
 			context.Background(), started.Assignment,
 			assignment.Request.Steps[0],
+			assignment.Request.StartedAt.Add(2*time.Second),
 		); err != nil {
 			t.Fatal(err)
 		}

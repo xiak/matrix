@@ -28,6 +28,8 @@ const (
 	containerUser   = "65532:65532"
 	stepWorkingDir  = "/workspace/src"
 	probeWorkingDir = "/tmp"
+	stepLogMaxSize  = "64m"
+	stepLogMaxFiles = "2"
 )
 
 var (
@@ -126,6 +128,7 @@ func NewStepPlan(
 		return ContainerPlan{}, ErrInvalid
 	}
 	request := fixedContainerRequest(command, stepWorkingDir)
+	request.HostConfig.LogConfig = fixedStepLogConfig()
 	request.Labels = map[string]string{
 		"com.xiak.matrix.devops.effect": effectID,
 		"com.xiak.matrix.devops.step":   strconv.FormatUint(uint64(step.Ordinal), 10),
@@ -412,7 +415,7 @@ func validateContainerRequest(value containerCreateRequest) error {
 		host.ContainerIDFile != "" || len(host.Devices) != 0 || len(host.DeviceRequests) != 0 ||
 		len(host.DNS) != 0 || len(host.DNSOptions) != 0 || len(host.DNSSearch) != 0 ||
 		len(host.ExtraHosts) != 0 || len(host.GroupAdd) != 0 || host.IpcMode != "none" ||
-		len(host.Links) != 0 || host.LogConfig.Type != "none" || len(host.LogConfig.Config) != 0 ||
+		len(host.Links) != 0 ||
 		host.Memory != devopsv1.FixedMemoryBytes || host.MemorySwap != devopsv1.FixedMemoryBytes ||
 		host.NanoCPUs != devopsv1.FixedCPUMillis*1_000_000 || host.NetworkMode != "none" ||
 		host.PidMode != "" || host.PidsLimit == nil || *host.PidsLimit != int64(devopsv1.FixedProcessLimit) ||
@@ -429,7 +432,8 @@ func validateContainerRequest(value containerCreateRequest) error {
 		if value.WorkingDir != stepWorkingDir || mounted.Type != "bind" ||
 			!validSourceRoot(mounted.Source) || mounted.Target != stepWorkingDir ||
 			!mounted.ReadOnly || mounted.Consistency != "" ||
-			mounted.BindOptions != (bindOptions{Propagation: "rprivate", NonRecursive: true}) {
+			mounted.BindOptions != (bindOptions{Propagation: "rprivate", NonRecursive: true}) ||
+			!equalLogConfig(host.LogConfig, fixedStepLogConfig()) {
 			return ErrInvalid
 		}
 		ordinal := value.Labels["com.xiak.matrix.devops.step"]
@@ -441,6 +445,7 @@ func validateContainerRequest(value containerCreateRequest) error {
 			return ErrInvalid
 		}
 	} else if value.WorkingDir != probeWorkingDir ||
+		!equalLogConfig(host.LogConfig, logConfig{Type: "none", Config: map[string]string{}}) ||
 		!equalStrings(value.Cmd, []string{"/bin/sh", "-c", isolationProbeScript}) ||
 		!equalStringMap(
 			value.Labels,
@@ -449,6 +454,22 @@ func validateContainerRequest(value containerCreateRequest) error {
 		return ErrInvalid
 	}
 	return nil
+}
+
+func fixedStepLogConfig() logConfig {
+	return logConfig{
+		Type: "local",
+		Config: map[string]string{
+			"compress": "false",
+			"max-file": stepLogMaxFiles,
+			"max-size": stepLogMaxSize,
+			"mode":     "blocking",
+		},
+	}
+}
+
+func equalLogConfig(left, right logConfig) bool {
+	return left.Type == right.Type && equalStringMap(left.Config, right.Config)
 }
 
 func equalTmpfs(value map[string]string) bool {

@@ -64,6 +64,7 @@ func TestJournalPersistsLifecycleAcrossRestart(t *testing.T) {
 	}
 	started, err = restarted.MarkStepStarted(
 		context.Background(), replayed.Assignment, request.Steps[0],
+		request.StartedAt.Add(3*time.Second),
 	)
 	if err != nil || started.Steps[0].Phase != StepStarted {
 		t.Fatalf("step-started entry = %#v / %v", started, err)
@@ -154,17 +155,20 @@ func TestJournalPersistsOrderedStepProgressAcrossRestart(t *testing.T) {
 	}
 	if _, err := journal.MarkStepStarted(
 		context.Background(), started.Assignment, request.Steps[1],
+		request.StartedAt.Add(2*time.Second),
 	); !errors.Is(err, ErrConflict) {
 		t.Fatalf("second step before first error = %v", err)
 	}
 	started, err = journal.MarkStepStarted(
 		context.Background(), started.Assignment, request.Steps[0],
+		request.StartedAt.Add(2*time.Second),
 	)
 	if err != nil || started.Steps[0].Phase != StepStarted {
 		t.Fatalf("first step started = %#v / %v", started, err)
 	}
 	replayed, err := journal.MarkStepStarted(
 		context.Background(), started.Assignment, request.Steps[0],
+		request.StartedAt.Add(2*time.Second),
 	)
 	if err != nil || replayed.Steps != started.Steps {
 		t.Fatalf("first step replay = %#v / %v", replayed, err)
@@ -191,6 +195,7 @@ func TestJournalPersistsOrderedStepProgressAcrossRestart(t *testing.T) {
 	}
 	second, err := restarted.MarkStepStarted(
 		context.Background(), loaded.Assignment, request.Steps[1],
+		request.StartedAt.Add(4*time.Second),
 	)
 	if err != nil || second.Steps[1].Phase != StepStarted {
 		t.Fatalf("second step started = %#v / %v", second, err)
@@ -225,6 +230,82 @@ func TestJournalPersistsOrderedStepProgressAcrossRestart(t *testing.T) {
 	if err != nil || terminal.Phase != PhaseTerminal || terminal.Receipt == nil ||
 		*terminal.Receipt != receipt {
 		t.Fatalf("terminal entry = %#v / %v", terminal, err)
+	}
+}
+
+func TestJournalPersistsCanonicalStepStartWithoutRenewingItsClock(t *testing.T) {
+	root := journalRoot(t)
+	runnerID := journalRunnerID('8')
+	journal, err := New(root, runnerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, archive := journalExecutionFixture(t, '8', journalStart())
+	assignment := journalAssignment(
+		t, request, devopsbuildv1.AssignmentExecute, 1, 2*time.Minute,
+	)
+	commitJournalAssignment(t, journal, assignment, archive)
+	started, err := journal.MarkEffectStarted(
+		context.Background(), assignment, request.StartedAt.Add(time.Second),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		at   time.Time
+		want error
+	}{
+		{name: "before request", at: request.StartedAt.Add(-time.Microsecond), want: ErrStale},
+		{name: "at lease", at: assignment.LeaseExpiresAt, want: ErrStale},
+		{name: "non canonical", at: request.StartedAt.Add(time.Nanosecond), want: ErrInvalid},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := journal.MarkStepStarted(
+				context.Background(), started.Assignment, request.Steps[0], test.at,
+			); !errors.Is(err, test.want) {
+				t.Fatalf("error = %v, want %v", err, test.want)
+			}
+		})
+	}
+
+	firstStart := request.StartedAt.Add(10 * time.Second)
+	progress, err := journal.MarkStepStarted(
+		context.Background(), started.Assignment, request.Steps[0], firstStart,
+	)
+	if err != nil || progress.Steps[0].StartedAt != firstStart {
+		t.Fatalf("progress = %#v / %v", progress, err)
+	}
+	replayed, err := journal.MarkStepStarted(
+		context.Background(), progress.Assignment, request.Steps[0], firstStart.Add(time.Second),
+	)
+	if err != nil || replayed.Steps != progress.Steps ||
+		replayed.Steps[0].StartedAt != firstStart {
+		t.Fatalf("replayed progress = %#v / %v", replayed, err)
+	}
+	passed, err := journal.RecordStepConclusion(
+		context.Background(), replayed.Assignment, request.Steps[0],
+		devopsbuildv1.StepConclusionPassed,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := journal.MarkStepStarted(
+		context.Background(), passed.Assignment, request.Steps[1], firstStart.Add(-time.Second),
+	); !errors.Is(err, ErrConflict) {
+		t.Fatalf("earlier second-step start error = %v", err)
+	}
+
+	restarted, err := New(root, runnerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := restarted.Load(context.Background(), assignment.ExecutionID)
+	if err != nil || loaded.Steps[0].StartedAt != firstStart ||
+		loaded.Steps[0].Phase != StepPassed {
+		t.Fatalf("loaded progress = %#v / %v", loaded, err)
 	}
 }
 

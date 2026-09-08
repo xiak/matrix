@@ -13,9 +13,9 @@
   execution persistence, versioned admin/runner transport contract, durable
   executor-gateway spool, TLS 1.3 mTLS admin/runner HTTP boundary, and isolated
   executor-gateway process, ordered runner step journal, runner workspace
-  publication, and bounded native output normalization complete; physical
-  build-worker/runner and reporter effects plus normalized-log persistence
-  pending
+  publication, bounded native output normalization, and closed sandbox
+  container lifecycle complete; physical runner composition, reporter effects,
+  and normalized-log persistence pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -691,13 +691,17 @@ identity, changed requests, and partial staging fail closed. Native paths are
 absent from the manifest and only the re-proved source root can enter the
 sandbox adapter.
 
-That sandbox adapter now derives, but does not yet execute, the two immutable
-step requests. Each has its exact command, pinned image, numeric user, empty
-credential/proxy environment, `NONE` network, `runsc`, two CPUs, 2 GiB memory
+That sandbox adapter now derives and can drive the Docker lifecycle for either
+of the two immutable step requests. Each has its exact command, pinned image,
+numeric user, empty credential/proxy environment, `NONE` network, `runsc`, two
+CPUs, 2 GiB memory
 with no extra swap, 256 processes, and exactly 2 GiB of fresh tmpfs split into
 a 512 MiB executable work directory and 1.5 GiB non-executable cache. The sole
 host mount is the workspace adapter's canonical, non-recursive, read-only
-source directory; native Engine request fields remain private to the adapter.
+source directory. Native Engine request fields remain private to the adapter.
+Step containers use Docker's `local` log driver in blocking mode with
+compression disabled and two 64 MiB rotated files; both creation and every
+later inspection require that exact logging profile.
 
 The same adapter owns one mutex-protected output budget shared by both fixed
 steps. Its bounded Docker multiplex decoder accepts only complete stdout or
@@ -711,9 +715,21 @@ assignments or token formats, URL user information, and Unix, drive, or UNC
 absolute paths are replaced in full by closed markers; native content is never
 partially retained beside a marker.
 
-Step execution/cancellation, feeding real container output through this
-decoder, tenant-leading normalized-log persistence, and physical runner
-composition remain subsequent slices, so repository code still does not run.
+The adapter creates a deterministic stopped container, revalidates every fixed
+field before start, fixes that exact container ID across each effect, starts it,
+streams its bounded multiplexed logs through the shared decoder, waits, and
+re-inspects the terminal state. It closes ordinary nonzero and OOM exits as
+step failures. Cancellation distinguishes a not-yet-started container from a
+confirmed `SIGKILL`; terminal work wins the race. Mutating transport ambiguity,
+same-name replacement, changed configuration or state, malformed responses,
+and incomplete log bodies fail closed without exposing daemon text. Deletion
+is allowed only after exact non-running inspection and succeeds only after the
+deterministic name is proved absent; failure cleanup retains a fixed ten-second
+deadline.
+
+Cross-step runner orchestration, tenant-leading normalized-log persistence,
+and physical runner composition remain subsequent slices, so no process yet
+invokes this boundary against repository code.
 
 ### Egress, limits, storage, and retention
 
@@ -1043,22 +1059,24 @@ before accepting archive bytes, reinspects the finished archive before atomic
 publication, holds an OS-level exclusive directory lock, and persists strict
 `RECEIVED`, `EFFECT_STARTED`, `TERMINAL`, and `ACKNOWLEDGED` generations with
 request digests, recovery fences, cancellation, exact ordered `PENDING`,
-`STARTED`, `PASSED`, `FAILED`, or `CANCELLED` step progress, and normalized
-receipts. A step start is fsynced before its deterministic container side
-effect may be invoked; step two cannot be authorized before durable step-one
-success. The journal permits the same runner to continue the next unstarted
-step after an archive-free increasing-fence recovery, while an already-started
-step must first be observed by the later runner orchestration. A cancellation
-before any sandbox effect durably cancels the next step and can produce the
-closed terminal receipt without inventing an effect. The
-physical build-worker command now composes only its table-blind PostgreSQL
-repository, read-only source archive, exact mTLS admin identity, executor-gateway
-client, independent heartbeat, and readiness endpoint. The dedicated runner
-process, sandbox execution/cancellation, selected release topology, normalized
-log persistence, and a real PostgreSQL-to-runner process journey remain
-pending. The closed Docker Engine adapter, pre-claim eligibility probe, and
-content-bound read-only workspace are present, but no repository code executes
-yet.
+`STARTED`, `PASSED`, `FAILED`, or `CANCELLED` step progress, the canonical first
+start time of each invoked step, and normalized receipts. A step start and its
+time are fsynced before its deterministic container side effect may be invoked;
+replay preserves that first time, so recovery cannot renew the fixed per-step
+clock. Step two cannot be authorized before durable step-one success or with a
+start time earlier than step one. The journal permits the same runner to
+continue the next unstarted step after an archive-free increasing-fence
+recovery, while an already-started step must first be observed by the later
+runner orchestration. A cancellation before any sandbox effect durably cancels
+the next step and can produce the closed terminal receipt without inventing an
+effect. The physical build-worker command now composes only its table-blind
+PostgreSQL repository, read-only source archive, exact mTLS admin identity,
+executor-gateway client, independent heartbeat, and readiness endpoint. The
+dedicated runner process that composes its journal, workspace, tested sandbox
+lifecycle, and outbound client, selected release topology, normalized-log
+persistence, and a real PostgreSQL-to-runner process journey remain pending.
+The closed Docker Engine adapter, pre-claim eligibility probe, and content-bound
+read-only workspace are present, but no repository code executes yet.
 
 Every fenced worker transition now submits the exact next PipelineRun document
 to the database boundary. A terminal transition atomically stores a distinct
@@ -1256,10 +1274,16 @@ Current verification evidence:
   and `go vet` requests, fixed image/API/runtime/user/environment, no network,
   read-only root and source, dropped capabilities, `no-new-privileges`, no
   device/socket/secret mounts, fixed CPU/memory/no-extra-swap/PID/tmpfs limits,
-  sensitive-path and mutation rejection, bounded sanitized Engine responses,
+  exact blocking local-log rotation, sensitive-path and mutation rejection,
+  bounded sanitized Engine responses,
   pre-claim Docker/API/platform/runtime/resource/storage/image gates, and a
   trusted negative probe whose command and host-side inspection must agree and
-  whose container is deleted after failure. The run-shared output tests prove
+  whose container is deleted under a fixed cleanup deadline after failure. The
+  lifecycle tests prove exact create/inspect/start/log/wait/delete ordering,
+  container-ID continuity, terminal and deletion replay, ordinary and OOM
+  failure, pre-start and running cancellation, same-name replacement rejection,
+  non-running-only deletion, mutating-outcome ambiguity, sanitized errors, and
+  poisoned partial-log reuse. The run-shared output tests prove
   strict Docker multiplex framing, split/interleaved stream reconstruction,
   monotonic bounded chunks, independent native/normalized whole-run limits,
   complete closed-marker replacement for unsafe lines, poisoned reuse after

@@ -479,10 +479,16 @@ func (journal *Journal) MarkStepStarted(
 	ctx context.Context,
 	assignment devopsbuildv1.Assignment,
 	step devopsv1.VerificationStep,
+	startedAt time.Time,
 ) (Entry, error) {
 	index, found := requestStepIndex(assignment.Request, step)
-	if !found {
+	if !found || validateJournalTime(startedAt) != nil {
 		return Entry{}, ErrInvalid
+	}
+	if startedAt.Before(assignment.Request.StartedAt) ||
+		!startedAt.Before(assignment.LeaseExpiresAt) ||
+		!startedAt.Before(assignment.Request.DeadlineAt) {
+		return Entry{}, ErrStale
 	}
 	return journal.change(ctx, assignment, func(execution storedExecution) (stateRecord, bool, error) {
 		current := execution.state.Steps[index].Phase
@@ -496,6 +502,7 @@ func (journal *Journal) MarkStepStarted(
 		}
 		next := nextState(execution.state)
 		next.Steps[index].Phase = StepStarted
+		next.Steps[index].StartedAt = startedAt
 		if !validStepProgress(assignment.Request, next.Steps) {
 			return stateRecord{}, false, ErrConflict
 		}

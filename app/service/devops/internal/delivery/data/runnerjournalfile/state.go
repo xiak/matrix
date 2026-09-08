@@ -35,9 +35,10 @@ const (
 )
 
 type StepProgress struct {
-	Ordinal uint32                        `json:"ordinal"`
-	Kind    devopsv1.VerificationStepKind `json:"kind"`
-	Phase   StepPhase                     `json:"phase"`
+	Ordinal   uint32                        `json:"ordinal"`
+	Kind      devopsv1.VerificationStepKind `json:"kind"`
+	Phase     StepPhase                     `json:"phase"`
+	StartedAt time.Time                     `json:"startedAt"`
 }
 
 type stateRecord struct {
@@ -303,6 +304,7 @@ func digestState(value stateRecord) string {
 		writeStateUint64(digest, uint64(step.Ordinal))
 		writeStateString(digest, string(step.Kind))
 		writeStateString(digest, string(step.Phase))
+		writeStateString(digest, step.StartedAt.Format(time.RFC3339Nano))
 	}
 	if value.Receipt == nil {
 		writeStateString(digest, "")
@@ -328,9 +330,25 @@ func validStepProgress(
 			step.Kind != request.Steps[index].Kind {
 			return false
 		}
+		switch step.Phase {
+		case StepPending:
+			if !step.StartedAt.IsZero() {
+				return false
+			}
+		case StepStarted, StepPassed, StepFailed:
+			if !validStepStart(request, step.StartedAt) {
+				return false
+			}
+		case StepCancelled:
+			if !step.StartedAt.IsZero() && !validStepStart(request, step.StartedAt) {
+				return false
+			}
+		default:
+			return false
+		}
 	}
 	left, right := steps[0].Phase, steps[1].Phase
-	return (left == StepPending && right == StepPending) ||
+	validOrder := (left == StepPending && right == StepPending) ||
 		(left == StepStarted && right == StepPending) ||
 		(left == StepPassed && right == StepPending) ||
 		(left == StepFailed && right == StepPending) ||
@@ -339,6 +357,16 @@ func validStepProgress(
 		(left == StepPassed && right == StepPassed) ||
 		(left == StepPassed && right == StepFailed) ||
 		(left == StepPassed && right == StepCancelled)
+	if !validOrder {
+		return false
+	}
+	return steps[1].StartedAt.IsZero() ||
+		(!steps[0].StartedAt.IsZero() && !steps[1].StartedAt.Before(steps[0].StartedAt))
+}
+
+func validStepStart(request devopsbuildv1.Request, value time.Time) bool {
+	return validateJournalTime(value) == nil && !value.Before(request.StartedAt) &&
+		value.Before(request.DeadlineAt)
 }
 
 func pendingCancellation(steps [2]StepProgress) bool {
@@ -386,7 +414,11 @@ func validStepTransition(
 			previous[index].Kind != next[index].Kind {
 			return false
 		}
-		if previous[index].Phase != next[index].Phase {
+		if previous[index].Phase == next[index].Phase {
+			if previous[index].StartedAt != next[index].StartedAt {
+				return false
+			}
+		} else {
 			if changed >= 0 {
 				return false
 			}
@@ -398,10 +430,13 @@ func validStepTransition(
 	}
 	from, to := previous[changed].Phase, next[changed].Phase
 	if from == StepPending {
-		return (!cancellationRequested && to == StepStarted) ||
-			(cancellationRequested && to == StepCancelled)
+		return (!cancellationRequested && to == StepStarted &&
+			!next[changed].StartedAt.IsZero()) ||
+			(cancellationRequested && to == StepCancelled &&
+				next[changed].StartedAt.IsZero())
 	}
 	return from == StepStarted &&
+		previous[changed].StartedAt == next[changed].StartedAt &&
 		(to == StepPassed || to == StepFailed || to == StepCancelled)
 }
 

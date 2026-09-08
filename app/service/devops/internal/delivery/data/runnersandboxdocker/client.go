@@ -14,6 +14,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"time"
 
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 )
@@ -25,6 +26,7 @@ const (
 	maximumInfoBytes    = 1024 * 1024
 	maximumInspectBytes = 1024 * 1024
 	maximumWaitBytes    = 64 * 1024
+	cleanupTimeout      = 10 * time.Second
 )
 
 type Client struct {
@@ -161,17 +163,24 @@ func (client *Client) runIsolationProbe(ctx context.Context) (result error) {
 		maximumVersionBytes,
 		&created,
 	); err != nil {
-		cleanupErr := client.deleteProbe(context.WithoutCancel(ctx), name)
+		cleanupContext, cancelCleanup := boundedCleanupContext(ctx)
+		cleanupErr := client.deleteProbe(cleanupContext, name)
+		cancelCleanup()
 		return errors.Join(err, cleanupErr)
 	}
 	if !validContainerID(created.ID) || len(created.Warnings) != 0 {
-		if cleanupErr := client.deleteProbe(context.WithoutCancel(ctx), name); cleanupErr != nil {
+		cleanupContext, cancelCleanup := boundedCleanupContext(ctx)
+		cleanupErr := client.deleteProbe(cleanupContext, name)
+		cancelCleanup()
+		if cleanupErr != nil {
 			return errors.Join(ErrUnavailable, cleanupErr)
 		}
 		return ErrIneligible
 	}
 	defer func() {
-		cleanupErr := client.deleteContainer(context.WithoutCancel(ctx), created.ID)
+		cleanupContext, cancelCleanup := boundedCleanupContext(ctx)
+		cleanupErr := client.deleteContainer(cleanupContext, created.ID)
+		cancelCleanup()
 		if cleanupErr != nil {
 			result = errors.Join(ErrUnavailable, result, cleanupErr)
 		}
@@ -206,6 +215,10 @@ func (client *Client) runIsolationProbe(ctx context.Context) (result error) {
 		return ErrIneligible
 	}
 	return nil
+}
+
+func boundedCleanupContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(parent), cleanupTimeout)
 }
 
 func (client *Client) deleteContainer(ctx context.Context, containerID string) error {
@@ -398,9 +411,11 @@ type waitError struct {
 }
 
 type containerInspection struct {
-	ID     string `json:"Id"`
-	Image  string `json:"Image"`
-	Config struct {
+	ID           string `json:"Id"`
+	Name         string `json:"Name"`
+	Image        string `json:"Image"`
+	RestartCount int64  `json:"RestartCount"`
+	Config       struct {
 		Image           string            `json:"Image"`
 		Cmd             []string          `json:"Cmd"`
 		Entrypoint      []string          `json:"Entrypoint"`
@@ -418,11 +433,15 @@ type containerInspection struct {
 	} `json:"Config"`
 	HostConfig hostConfig `json:"HostConfig"`
 	State      struct {
-		Status   string `json:"Status"`
-		Running  bool   `json:"Running"`
-		Paused   bool   `json:"Paused"`
-		Dead     bool   `json:"Dead"`
-		ExitCode int64  `json:"ExitCode"`
+		Status     string `json:"Status"`
+		Running    bool   `json:"Running"`
+		Paused     bool   `json:"Paused"`
+		Restarting bool   `json:"Restarting"`
+		OOMKilled  bool   `json:"OOMKilled"`
+		Dead       bool   `json:"Dead"`
+		PID        int64  `json:"Pid"`
+		ExitCode   int64  `json:"ExitCode"`
+		Error      string `json:"Error"`
 	} `json:"State"`
 	NetworkSettings struct {
 		Networks map[string]json.RawMessage `json:"Networks"`
@@ -449,7 +468,8 @@ func validProbeInspection(
 	want containerCreateRequest,
 ) bool {
 	config := value.Config
-	if value.ID != containerID || value.Image != devopsv1.Go126OfflineToolchainImageDigest ||
+	if value.ID != containerID || value.RestartCount != 0 ||
+		value.Image != devopsv1.Go126OfflineToolchainImageDigest ||
 		config.Image != want.Image || !equalStrings(config.Cmd, want.Cmd) ||
 		len(config.Entrypoint) != 0 || !equalEnvironment(config.Env, want.Env) ||
 		config.User != want.User || config.WorkingDir != want.WorkingDir ||
@@ -457,7 +477,8 @@ func validProbeInspection(
 		!config.AttachStderr || config.OpenStdin || config.StdinOnce || config.Tty ||
 		!equalStringMap(config.Labels, want.Labels) ||
 		value.State.Status != "exited" || value.State.Running || value.State.Paused ||
-		value.State.Dead || value.State.ExitCode != 0 ||
+		value.State.Restarting || value.State.OOMKilled || value.State.Dead ||
+		value.State.PID != 0 || value.State.ExitCode != 0 || value.State.Error != "" ||
 		!validInspectedHostConfig(value.HostConfig, want.HostConfig) ||
 		!validNoneNetworks(value.NetworkSettings.Networks) {
 		return false
@@ -472,8 +493,8 @@ func validInspectedHostConfig(value, want hostConfig) bool {
 		len(value.DNS) == 0 && len(value.DNSOptions) == 0 && len(value.DNSSearch) == 0 &&
 		len(value.ExtraHosts) == 0 && len(value.GroupAdd) == 0 && value.IpcMode == want.IpcMode &&
 		len(value.Links) == 0 && value.LogConfig.Type == want.LogConfig.Type &&
-		len(value.LogConfig.Config) == 0 && value.Memory == want.Memory &&
-		value.MemorySwap == want.MemorySwap && len(value.Mounts) == 0 &&
+		equalStringMap(value.LogConfig.Config, want.LogConfig.Config) && value.Memory == want.Memory &&
+		value.MemorySwap == want.MemorySwap && equalMounts(value.Mounts, want.Mounts) &&
 		value.NanoCPUs == want.NanoCPUs && value.NetworkMode == want.NetworkMode &&
 		value.PidMode == "" && value.PidsLimit != nil && want.PidsLimit != nil &&
 		*value.PidsLimit == *want.PidsLimit && len(value.PortBindings) == 0 &&
@@ -483,6 +504,18 @@ func validInspectedHostConfig(value, want hostConfig) bool {
 		equalStrings(value.SecurityOpt, want.SecurityOpt) && value.ShmSize == want.ShmSize &&
 		len(value.StorageOpt) == 0 && len(value.Sysctls) == 0 && equalStringMap(value.Tmpfs, want.Tmpfs) &&
 		len(value.Ulimits) == 0 && value.UTSMode == "" && len(value.VolumesFrom) == 0
+}
+
+func equalMounts(left, right []mount) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func equalEnvironment(left, right []string) bool {

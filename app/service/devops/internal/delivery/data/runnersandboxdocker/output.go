@@ -46,6 +46,15 @@ func NewLogBudget() *LogBudget {
 	return &LogBudget{}
 }
 
+func (budget *LogBudget) invalidate() {
+	if budget == nil {
+		return
+	}
+	budget.mutex.Lock()
+	budget.failed = true
+	budget.mutex.Unlock()
+}
+
 func (budget *LogBudget) DecodeDockerStream(source io.Reader) ([]LogChunk, error) {
 	if budget == nil || source == nil {
 		return nil, ErrInvalid

@@ -79,6 +79,7 @@ func TestRunnerClientAndJournalCompleteDurableMTLSRoundTrip(t *testing.T) {
 	for _, step := range request.Steps {
 		progress, err = journal.MarkStepStarted(
 			context.Background(), progress.Assignment, step,
+			now.Add(time.Duration(step.Ordinal)*time.Second),
 		)
 		if err != nil {
 			t.Fatalf("durable step start = %#v / %v", progress, err)

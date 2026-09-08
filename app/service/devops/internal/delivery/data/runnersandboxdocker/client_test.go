@@ -187,6 +187,30 @@ func TestPreflightRejectsFailedIsolationAndStillDeletesProbe(t *testing.T) {
 	}
 }
 
+func TestIsolationProbeInspectionRejectsUnsafeTerminalMetadata(t *testing.T) {
+	plan, err := newProbePlan("matrix-runner-isolation-probe-0123456789abcdef")
+	if err != nil {
+		t.Fatal(err)
+	}
+	containerID := strings.Repeat("c", 64)
+	tests := map[string]func(*containerInspection){
+		"restart count": func(value *containerInspection) { value.RestartCount = 1 },
+		"restarting":    func(value *containerInspection) { value.State.Restarting = true },
+		"out of memory": func(value *containerInspection) { value.State.OOMKilled = true },
+		"live process":  func(value *containerInspection) { value.State.PID = 42 },
+		"native error":  func(value *containerInspection) { value.State.Error = "native-secret" },
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			inspection := successfulProbeInspection(containerID, plan.request)
+			mutate(&inspection)
+			if validProbeInspection(inspection, containerID, plan.request) {
+				t.Fatalf("unsafe probe inspection accepted: %#v", inspection.State)
+			}
+		})
+	}
+}
+
 func TestEngineResponseValidationIsBoundedAndSanitized(t *testing.T) {
 	transport := roundTripFunc(func(*http.Request) (*http.Response, error) {
 		response := jsonResponse(t, http.StatusOK, daemonVersion{})
