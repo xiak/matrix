@@ -129,6 +129,108 @@ func TestRunnerClientAndJournalCompleteDurableMTLSRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRunnerClientRecoversLocallyTerminalReceiptAfterLeaseExpiry(t *testing.T) {
+	spool := gatewaySpool(t)
+	pki := newGatewayTestPKI(t)
+	request, archive := gatewayExecutionFixture(t, '8')
+	createGatewayExecution(t, spool, request, archive)
+	now := request.StartedAt.Add(2 * time.Second)
+	server := startRunnerServer(t, spool, pki, func() time.Time { return now })
+	client, err := NewRunnerClient(
+		server.URL, gatewayServerName, pki.runnerOneCertificate,
+		pki.serverRoots, runnerNamespace,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journalRoot := t.TempDir()
+	if err := os.Chmod(journalRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := runnerjournalfile.New(journalRoot, client.RunnerID())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	claim, err := journal.BeginClaim(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	assignment, found, err := client.Claim(context.Background(), claim.Destination)
+	if err != nil || !found {
+		_ = claim.Abort()
+		t.Fatalf("initial claim found=%t assignment=%#v err=%v", found, assignment, err)
+	}
+	received, err := claim.Commit(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := journal.MarkEffectStarted(
+		context.Background(), received.Assignment, now.Add(time.Second),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err = journal.MarkStepStarted(
+		context.Background(), started.Assignment, request.Steps[0], now.Add(2*time.Second),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, err := journal.RecordStepConclusion(
+		context.Background(), started.Assignment, request.Steps[0],
+		devopsbuildv1.StepConclusionFailed, runnerlog.Progress{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt := gatewayReceipt(
+		request, client.RunnerID(), devopsbuildv1.ConclusionFailed,
+		devopsbuildv1.StepConclusionFailed, devopsbuildv1.StepConclusionNotRun,
+	)
+	terminal, err := journal.RecordReceipt(
+		context.Background(), failed.Assignment, receipt,
+	)
+	if err != nil || terminal.Phase != runnerjournalfile.PhaseTerminal {
+		t.Fatalf("local terminal = %#v / %v", terminal, err)
+	}
+
+	now = assignment.LeaseExpiresAt.Add(time.Microsecond)
+	if err := client.Complete(
+		context.Background(), terminal.Assignment, receipt,
+	); !errors.Is(err, ErrRunnerStale) {
+		t.Fatalf("expired completion error = %v", err)
+	}
+	recoveryClaim, err := journal.BeginClaim(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery, found, err := client.Claim(
+		context.Background(), recoveryClaim.Destination,
+	)
+	if err != nil || !found || recovery.Mode != devopsbuildv1.AssignmentObserve ||
+		recovery.FencingToken != assignment.FencingToken+1 {
+		_ = recoveryClaim.Abort()
+		t.Fatalf("recovery claim found=%t assignment=%#v err=%v", found, recovery, err)
+	}
+	recovered, err := recoveryClaim.Commit(context.Background())
+	if err != nil || recovered.Phase != runnerjournalfile.PhaseTerminal ||
+		recovered.Receipt == nil || *recovered.Receipt != receipt {
+		t.Fatalf("recovered local terminal = %#v / %v", recovered, err)
+	}
+	if err := client.Complete(
+		context.Background(), recovered.Assignment, receipt,
+	); err != nil {
+		t.Fatalf("recovered completion: %v", err)
+	}
+	acknowledged, err := journal.Acknowledge(
+		context.Background(), recovered.Assignment, receipt,
+	)
+	if err != nil || acknowledged.Phase != runnerjournalfile.PhaseAcknowledged {
+		t.Fatalf("recovered acknowledgement = %#v / %v", acknowledged, err)
+	}
+}
+
 func TestRunnerClientClaimsRenewsAndCompletesCurrentFence(t *testing.T) {
 	spool := gatewaySpool(t)
 	pki := newGatewayTestPKI(t)

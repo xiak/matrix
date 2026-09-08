@@ -258,6 +258,74 @@ func TestJournalPersistsOrderedStepProgressAcrossRestart(t *testing.T) {
 	}
 }
 
+func TestJournalAdvancesTerminalFenceForCompletionRecovery(t *testing.T) {
+	root := journalRoot(t)
+	runnerID := journalRunnerID('7')
+	journal, err := New(root, runnerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, archive := journalExecutionFixture(t, '7', journalStart())
+	execute := journalAssignment(t, request, devopsbuildv1.AssignmentExecute, 1, 2*time.Minute)
+	commitJournalAssignment(t, journal, execute, archive)
+	started, err := journal.MarkEffectStarted(
+		context.Background(), execute, request.StartedAt.Add(time.Second),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err = journal.MarkStepStarted(
+		context.Background(), started.Assignment, request.Steps[0],
+		request.StartedAt.Add(2*time.Second),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logProgress := runnerlog.Progress{
+		NativeBytes: 10, NormalizedBytes: 20, LastSequence: 1,
+	}
+	failed, err := journal.RecordStepConclusion(
+		context.Background(), started.Assignment, request.Steps[0],
+		devopsbuildv1.StepConclusionFailed, logProgress,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt := journalReceipt(
+		request, runnerID, devopsbuildv1.ConclusionFailed,
+		devopsbuildv1.StepConclusionFailed, devopsbuildv1.StepConclusionNotRun,
+	)
+	terminal, err := journal.RecordReceipt(context.Background(), failed.Assignment, receipt)
+	if err != nil || terminal.Phase != PhaseTerminal {
+		t.Fatalf("terminal entry = %#v / %v", terminal, err)
+	}
+
+	restarted, err := New(root, runnerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery := journalAssignment(
+		t, request, devopsbuildv1.AssignmentObserve, 2, 3*time.Minute,
+	)
+	recovered := commitJournalAssignment(t, restarted, recovery, nil)
+	if recovered.Assignment != recovery || recovered.Phase != PhaseTerminal ||
+		recovered.LogProgress != logProgress || recovered.Receipt == nil ||
+		*recovered.Receipt != receipt || recovered.Steps != terminal.Steps {
+		t.Fatalf("recovered terminal entry = %#v", recovered)
+	}
+	if _, err := restarted.RecordReceipt(
+		context.Background(), recovered.Assignment, receipt,
+	); err != nil {
+		t.Fatalf("replay terminal receipt: %v", err)
+	}
+	acknowledged, err := restarted.Acknowledge(
+		context.Background(), recovered.Assignment, receipt,
+	)
+	if err != nil || acknowledged.Phase != PhaseAcknowledged {
+		t.Fatalf("acknowledged recovered terminal = %#v / %v", acknowledged, err)
+	}
+}
+
 func TestJournalPersistsCanonicalStepStartWithoutRenewingItsClock(t *testing.T) {
 	root := journalRoot(t)
 	runnerID := journalRunnerID('8')

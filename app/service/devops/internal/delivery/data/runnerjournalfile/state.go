@@ -227,7 +227,8 @@ func validateTransition(previous, next stateRecord) error {
 			next.Phase != previous.Phase || next.Steps != previous.Steps ||
 			next.LogProgress != previous.LogProgress ||
 			!equalReceipt(next.Receipt, previous.Receipt) ||
-			(previous.Phase != PhaseReceived && previous.Phase != PhaseEffectStarted) ||
+			(previous.Phase != PhaseReceived && previous.Phase != PhaseEffectStarted &&
+				previous.Phase != PhaseTerminal) ||
 			!next.LeaseExpiresAt.After(previous.LeaseExpiresAt) ||
 			(next.Mode == devopsbuildv1.AssignmentObserve && next.CancellationRequested) ||
 			(next.Mode == devopsbuildv1.AssignmentCancel && !next.CancellationRequested) {

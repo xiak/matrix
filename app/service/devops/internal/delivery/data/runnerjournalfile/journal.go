@@ -294,7 +294,7 @@ func (claim *Claim) commitRecovery(
 		return Entry{}, ErrNotFound
 	}
 	if execution.assignment.Request != assignment.Request ||
-		execution.state.Phase == PhaseTerminal || execution.state.Phase == PhaseAcknowledged ||
+		execution.state.Phase == PhaseAcknowledged ||
 		assignment.FencingToken <= execution.state.FencingToken ||
 		!assignment.LeaseExpiresAt.After(execution.state.LeaseExpiresAt) ||
 		(assignment.Mode == devopsbuildv1.AssignmentObserve &&

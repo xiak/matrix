@@ -1078,7 +1078,10 @@ and must match on replay; pending cancellation cannot invent output. The
 journal permits the same runner to
 continue the next unstarted step after an archive-free increasing-fence
 recovery, while an already-started step must first be observed by the later
-runner orchestration. A cancellation before any sandbox effect durably cancels
+runner orchestration. A locally terminal receipt whose gateway completion did
+not arrive may also accept a same-runner increasing fence without changing its
+steps, log cursor, or receipt, so completion remains replayable after lease
+expiry. A cancellation before any sandbox effect durably cancels
 the next step and can produce the closed terminal receipt without inventing an
 effect. The physical build-worker command now composes only its table-blind
 PostgreSQL repository, read-only source archive, exact mTLS admin identity,
@@ -1256,15 +1259,17 @@ Current verification evidence:
   lease renewal, durable cancellation before or during an effect, enforced
   step order, idempotent step replay, atomic monotonic log-cursor persistence,
   archive-free increasing-fence recovery that preserves completed step and log
-  progress, same-runner restart, and rejection of
+  progress, locally terminal completion recovery after lease expiry,
+  same-runner restart, and rejection of
   changed conclusions, out-of-order steps, changed request, stale fence,
   duplicate execution, foreign identity/entry, unsafe mode, symlink, archive,
   assignment, state, invalid/changed/backwards log cursors, and recomputed
   request-digest, step-chain, or log-chain tampering. A
-  real TLS 1.3 mTLS journey claims through the production client directly into
-  the journal, persists the pre-effect marker, renewal, and both ordered step
-  conclusions, submits the normalized receipt, acknowledges it locally, and
-  recovers the same terminal truth after restart. The contract, spool, gateway,
+  real TLS 1.3 mTLS journeys claim through the production client directly into
+  the journal, persist the pre-effect marker, renewal, and ordered step
+  conclusions, submit and acknowledge the normalized receipt, recover the same
+  terminal truth after restart, and replay a locally terminal receipt through
+  a new same-runner fence after the original lease expires. The contract, spool, gateway,
   runner client, journal, and gateway-command suites pass race detection and
   twenty-run repetition on Windows, plus twenty runs in the fixed disconnected
   Go 1.26.8 Linux/amd64 image with read-only source and no module lookup
