@@ -15,8 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 )
 
 const (
@@ -391,6 +389,7 @@ type daemonInfo struct {
 
 type imageInspection struct {
 	ID           string   `json:"Id"`
+	RepoTags     []string `json:"RepoTags"`
 	RepoDigests  []string `json:"RepoDigests"`
 	OS           string   `json:"Os"`
 	Architecture string   `json:"Architecture"`
@@ -449,17 +448,22 @@ type containerInspection struct {
 }
 
 func validToolchainImage(value imageInspection) bool {
-	if value.ID != ToolchainImageID ||
-		value.OS != "linux" || value.Architecture != "amd64" {
+	if value.OS != "linux" || value.Architecture != "amd64" ||
+		len(value.RepoTags) != 1 || value.RepoTags[0] != ToolchainImage {
 		return false
 	}
-	wantSuffix := "@" + devopsv1.Go126OfflineToolchainImageDigest
-	for _, digest := range value.RepoDigests {
-		if strings.HasSuffix(digest, wantSuffix) {
-			return true
-		}
+	switch value.ID {
+	case ToolchainSourceID:
+		return len(value.RepoDigests) == 1 && value.RepoDigests[0] == ToolchainLocalDigest
+	case ToolchainArchiveConfigID:
+		return len(value.RepoDigests) == 0
+	default:
+		return false
 	}
-	return false
+}
+
+func validToolchainImageID(value string) bool {
+	return value == ToolchainSourceID || value == ToolchainArchiveConfigID
 }
 
 func validProbeInspection(
@@ -469,7 +473,7 @@ func validProbeInspection(
 ) bool {
 	config := value.Config
 	if value.ID != containerID || value.RestartCount != 0 ||
-		value.Image != ToolchainImageID ||
+		!validToolchainImageID(value.Image) ||
 		config.Image != want.Image || !equalStrings(config.Cmd, want.Cmd) ||
 		len(config.Entrypoint) != 0 || !equalEnvironment(config.Env, want.Env) ||
 		config.User != want.User || config.WorkingDir != want.WorkingDir ||

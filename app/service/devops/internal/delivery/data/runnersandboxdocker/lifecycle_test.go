@@ -638,7 +638,7 @@ func (engine *stepEngine) inspection() containerInspection {
 	}
 	value.ID = engine.id
 	value.Name = "/" + engine.plan.Name()
-	value.Image = ToolchainImageID
+	value.Image = ToolchainSourceID
 	value.HostConfig = request.HostConfig
 	value.NetworkSettings.Networks = map[string]json.RawMessage{"none": json.RawMessage(`{}`)}
 	value.State.ExitCode = engine.exitCode

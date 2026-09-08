@@ -301,7 +301,7 @@ func stageRunnerPayloads(
 		bundle, filepath.FromSlash(installationrelease.RunnerToolchainArchivePath),
 	)
 	toolchain, err := effects.SaveImage(ctx, RunnerToolchainSourceID, toolchainTarget)
-	if err != nil || toolchain.ID != RunnerToolchainLoadID ||
+	if err != nil || toolchain.ID != RunnerToolchainArchiveConfigID ||
 		validateImageMetadata(toolchain) != nil {
 		return errors.New("save fixed runner toolchain image failed")
 	}

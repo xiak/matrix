@@ -1,7 +1,10 @@
 package devopsv1
 
 const (
-	Go126OfflineToolchainImageDigest = "sha256:07558d5472e9acb5fc5656b485e963602e925e00111b8ad676a804306e711ba3"
+	Go126OfflineToolchainImageDigest          = "sha256:07558d5472e9acb5fc5656b485e963602e925e00111b8ad676a804306e711ba3"
+	Go126OfflineToolchainArchiveConfigDigest  = "sha256:2e6f40580dfa8312d4aab4f49e5ab214d0daa5999ed51be6eb6fe1f246378e4f"
+	Go126OfflineToolchainLocalReference       = "matrix.local/matrix-devops/go-1.26-offline-v1:07558d5472e9"
+	Go126OfflineToolchainLocalDigestReference = "matrix.local/matrix-devops/go-1.26-offline-v1@" + Go126OfflineToolchainImageDigest
 
 	FixedStepTimeoutSeconds uint32 = 600
 	FixedRunTimeoutSeconds  uint32 = 1_200

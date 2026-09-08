@@ -95,8 +95,8 @@ func TestLocalRunnerToolchainStagesPinnedOfflineImage(t *testing.T) {
 	}
 	output := filepath.Join(t.TempDir(), "go-1.26-offline-v1.tar")
 	loaded, err := effects.SaveImage(context.Background(), image.ID, output)
-	if err != nil || loaded.ID != RunnerToolchainLoadID ||
+	if err != nil || loaded.ID != RunnerToolchainArchiveConfigID ||
 		loaded.OS != "linux" || loaded.Architecture != "amd64" {
-		t.Fatalf("portable toolchain identity=%#v err=%v", loaded, err)
+		t.Fatalf("authenticated toolchain archive config=%#v err=%v", loaded, err)
 	}
 }

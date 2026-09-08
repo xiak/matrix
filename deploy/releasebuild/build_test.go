@@ -102,7 +102,7 @@ func (fake *fakeEffects) SaveImage(_ context.Context, imageID, output string) (I
 		ID: testDigest("load:" + imageID), OS: "linux", Architecture: "amd64",
 	}
 	if imageID == RunnerToolchainSourceID {
-		identity.ID = RunnerToolchainLoadID
+		identity.ID = RunnerToolchainArchiveConfigID
 	}
 	fake.saved[imageID] = identity
 	return identity, os.WriteFile(output, []byte("docker-archive:"+imageID), 0o600)

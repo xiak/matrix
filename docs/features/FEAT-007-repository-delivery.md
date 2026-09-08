@@ -721,9 +721,15 @@ and grants no work or administrative operation.
 The sole first-release toolchain is `GO_1_26_OFFLINE_V1`, built from
 `docker.io/library/golang@sha256:07558d5472e9acb5fc5656b485e963602e925e00111b8ad676a804306e711ba3`
 (Linux/amd64 `1.26.8-alpine3.23`) and carried as an authenticated offline image.
-That value is the repository/OCI-manifest digest; the portable archive's
-Docker config/image ID is independently fixed as
+That value is the repository/OCI-manifest digest; the archive's independently
+authenticated Docker configuration digest is
 `sha256:2e6f40580dfa8312d4aab4f49e5ab214d0daa5999ed51be6eb6fe1f246378e4f`.
+The installer loads the untagged signed archive and assigns only
+`matrix.local/matrix-devops/go-1.26-offline-v1:07558d5472e9`. Docker 29's
+containerd image store exposes the source digest as the image ID and the exact
+same local repository at that digest; its classic image store instead exposes
+the configuration digest as the image ID with no repository digest. The runner
+accepts only those two complete, store-specific metadata profiles.
 It runs exactly `go test -mod=vendor -count=1 ./...` followed by
 `go vet -mod=vendor ./...`, with `CGO_ENABLED=0`, `GOPROXY=off`,
 `GOSUMDB=off`, an empty credential environment, and no caller-supplied argv.
@@ -741,8 +747,9 @@ The runner's closed Engine adapter pins API `v1.46` over one configured,
 root-owned, non-world-accessible Unix socket; it has no TCP, proxy, redirect,
 CLI, or Docker SDK path. Before any task may be claimed it checks Docker
 `29.x`, the daemon API range, Linux/amd64, `runsc`, kernel resource-limit
-support, the CPU/memory floors, the installation-owned storage floor, and the
-exact local image ID plus repository digest. It then runs only a randomized,
+support, the CPU/memory floors, the installation-owned storage floor, and one
+of the two exact authenticated local-tag/image metadata profiles. It then runs
+only a randomized,
 trusted probe from that pinned image and re-inspects the resulting container
 through the Engine: the probe checks UID/GID, empty capabilities,
 `no-new-privileges`, no non-loopback interface or route, a read-only root,
@@ -1487,8 +1494,13 @@ Current verification evidence:
   missing, extra, tampered, non-regular, unpinned gVisor, or changed-checksum
   content. Production staging copies and hashes the official
   `release-20260831.0` `.tar.zstd` artifact in one pass, and a real Docker image
-  save proves the pinned repository digest loads as the separately pinned
-  config/image ID. Four-slot enrollment proves distinct node-local P-256 keys,
+  save authenticates the pinned repository/OCI digest through the separately
+  pinned archive configuration digest. A network-none Docker `29.6.2` DinD gate
+  then loads that untagged archive and assigns the sole fixed Matrix-local tag
+  against both the default containerd and explicitly selected classic image
+  stores: the former proves the exact source-ID/local-RepoDigest profile and the
+  latter the exact config-ID/no-RepoDigest profile. Four-slot enrollment proves
+  distinct node-local P-256 keys,
   canonical CSRs and SPIFFE identities, disjoint journal/workspace roots,
   operator-pinned server/runner CA fingerprints, certificate-to-CSR public-key
   binding, no platform-held runner private key, entropy-free equal replay, and

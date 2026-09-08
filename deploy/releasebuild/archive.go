@@ -55,12 +55,11 @@ type imageConfig struct {
 	OS           string `json:"os"`
 }
 
-// inspectImageArchive derives the identity that a classic Docker daemon uses
-// after `docker image load`. Containerd-backed builders expose an OCI
-// manifest/index digest as Image.Id, while the portable load identity is the
-// digest of the image configuration named by manifest.json. The OCI chain is
-// verified when those identities differ so an unrelated config cannot be
-// substituted into the signed release.
+// inspectImageArchive authenticates the image configuration named by
+// manifest.json and its chain from the inspected source digest. It deliberately
+// does not call the configuration digest a load identity: Docker 29's
+// containerd store retains the source manifest digest after `docker image
+// load`, while the classic store exposes this configuration digest.
 func inspectImageArchive(archive, sourceID string) (ImageMetadata, error) {
 	if !validArchiveDigest(sourceID) {
 		return ImageMetadata{}, errors.New("source image identity is invalid")
@@ -111,7 +110,7 @@ func inspectImageArchive(archive, sourceID string) (ImageMetadata, error) {
 	}
 	identity := ImageMetadata{ID: configID, OS: config.OS, Architecture: config.Architecture}
 	if validateImageMetadata(identity) != nil {
-		return ImageMetadata{}, errors.New("Docker archive load identity is invalid")
+		return ImageMetadata{}, errors.New("Docker archive config identity is invalid")
 	}
 	if sourceID == configID {
 		return identity, nil

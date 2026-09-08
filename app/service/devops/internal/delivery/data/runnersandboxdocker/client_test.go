@@ -34,7 +34,7 @@ func TestPreflightProvesPinnedHostAndIsolationBeforeEligibility(t *testing.T) {
 			return jsonResponse(t, http.StatusOK, eligibleInfo()), nil
 		case request.Method == http.MethodGet && strings.HasPrefix(request.URL.Path, "/v1.46/images/"):
 			return jsonResponse(t, http.StatusOK, imageInspection{
-				ID: devopsImageID(), RepoDigests: []string{"golang@" + devopsImageDigest()},
+				ID: devopsImageID(), RepoTags: []string{ToolchainImage}, RepoDigests: []string{ToolchainLocalDigest},
 				OS: "linux", Architecture: "amd64",
 			}), nil
 		case request.Method == http.MethodPost && request.URL.Path == "/v1.46/containers/create":
@@ -107,6 +107,61 @@ func TestPreflightProvesPinnedHostAndIsolationBeforeEligibility(t *testing.T) {
 	}
 }
 
+func TestToolchainImageAcceptsOnlyInstalledOfflineIdentity(t *testing.T) {
+	tests := []struct {
+		name  string
+		value imageInspection
+		want  bool
+	}{
+		{
+			name: "Docker 29 containerd store",
+			value: imageInspection{
+				ID: ToolchainSourceID, RepoTags: []string{ToolchainImage}, RepoDigests: []string{ToolchainLocalDigest},
+				OS: "linux", Architecture: "amd64",
+			},
+			want: true,
+		},
+		{
+			name: "Docker 29 classic store",
+			value: imageInspection{
+				ID: ToolchainArchiveConfigID, RepoTags: []string{ToolchainImage}, RepoDigests: []string{},
+				OS: "linux", Architecture: "amd64",
+			},
+			want: true,
+		},
+		{
+			name: "remote source reference",
+			value: imageInspection{
+				ID:          ToolchainSourceID,
+				RepoTags:    []string{"golang:1.26"},
+				RepoDigests: []string{"golang@" + ToolchainSourceID},
+				OS:          "linux", Architecture: "amd64",
+			},
+		},
+		{
+			name: "additional mutable tag",
+			value: imageInspection{
+				ID: ToolchainSourceID, RepoTags: []string{ToolchainImage, "matrix.local/extra:latest"},
+				RepoDigests: []string{}, OS: "linux", Architecture: "amd64",
+			},
+		},
+		{
+			name: "untrusted image identity",
+			value: imageInspection{
+				ID: "sha256:" + strings.Repeat("f", 64), RepoTags: []string{ToolchainImage}, RepoDigests: []string{},
+				OS: "linux", Architecture: "amd64",
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := validToolchainImage(test.value); got != test.want {
+				t.Fatalf("validToolchainImage(%#v) = %v, want %v", test.value, got, test.want)
+			}
+		})
+	}
+}
+
 func TestPreflightFailsClosedBeforeProbeWhenRunscIsMissing(t *testing.T) {
 	callCount := 0
 	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
@@ -152,7 +207,7 @@ func TestPreflightRejectsFailedIsolationAndStillDeletesProbe(t *testing.T) {
 		case request.Method == http.MethodGet && request.URL.Path == infoPath():
 			return jsonResponse(t, http.StatusOK, eligibleInfo()), nil
 		case request.Method == http.MethodGet && strings.HasPrefix(request.URL.Path, "/v1.46/images/"):
-			return jsonResponse(t, http.StatusOK, imageInspection{ID: devopsImageID(), RepoDigests: []string{"golang@" + devopsImageDigest()}, OS: "linux", Architecture: "amd64"}), nil
+			return jsonResponse(t, http.StatusOK, imageInspection{ID: devopsImageID(), RepoTags: []string{ToolchainImage}, RepoDigests: []string{ToolchainLocalDigest}, OS: "linux", Architecture: "amd64"}), nil
 		case request.Method == http.MethodPost && request.URL.Path == "/v1.46/containers/create":
 			if err := json.NewDecoder(request.Body).Decode(&probeRequest); err != nil {
 				t.Fatal(err)
@@ -208,6 +263,21 @@ func TestIsolationProbeInspectionRejectsUnsafeTerminalMetadata(t *testing.T) {
 				t.Fatalf("unsafe probe inspection accepted: %#v", inspection.State)
 			}
 		})
+	}
+}
+
+func TestIsolationProbeAcceptsBothAuthenticatedDockerStoreIdentities(t *testing.T) {
+	plan, err := newProbePlan("matrix-runner-isolation-probe-0123456789abcdef")
+	if err != nil {
+		t.Fatal(err)
+	}
+	containerID := strings.Repeat("d", 64)
+	for _, imageID := range []string{ToolchainSourceID, ToolchainArchiveConfigID} {
+		inspection := successfulProbeInspection(containerID, plan.request)
+		inspection.Image = imageID
+		if !validProbeInspection(inspection, containerID, plan.request) {
+			t.Fatalf("authenticated Docker image identity %q was rejected", imageID)
+		}
 	}
 }
 
@@ -349,10 +419,6 @@ func querySuffix(request *http.Request) string {
 	return "?" + request.URL.RawQuery
 }
 
-func devopsImageDigest() string {
-	return strings.TrimPrefix(ToolchainImage, "docker.io/library/golang@")
-}
-
 func devopsImageID() string {
-	return ToolchainImageID
+	return ToolchainSourceID
 }

@@ -67,7 +67,7 @@ func TestImageArchiveMapsContainerdSourceToPortableLoadIdentity(t *testing.T) {
 	}
 	if identity.ID != configID || identity.ID == sourceID ||
 		identity.OS != "linux" || identity.Architecture != "amd64" {
-		t.Fatalf("portable identity = %#v", identity)
+		t.Fatalf("authenticated archive config identity = %#v", identity)
 	}
 	if _, err := inspectImageArchive(archive, testDigest("unrelated-source")); err == nil {
 		t.Fatal("archive unrelated to the inspected source identity was accepted")

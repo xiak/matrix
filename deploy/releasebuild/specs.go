@@ -3,18 +3,18 @@ package releasebuild
 import installationrelease "github.com/xiak/matrix/app/service/installation/release"
 
 const (
-	APISIXBaseReference      = "apache/apisix:3.17.0-debian"
-	APISIXBaseImageID        = "sha256:6cbf65f3085d1386bfd636b7e88400c163c3641841909e674af7896a5766b092"
-	DockerBaseReference      = "docker:27.5.1-dind-alpine3.21"
-	DockerBaseImageID        = "sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce"
-	PostgresReference        = "postgres:18"
-	PostgresImageID          = "sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a"
-	RunnerToolchainReference = installationrelease.RunnerToolchainImage
-	RunnerToolchainSourceID  = installationrelease.RunnerToolchainImageDigest
-	RunnerToolchainLoadID    = installationrelease.RunnerToolchainImageID
-	RunnerGVisorSHA256       = installationrelease.RunnerGVisorArchiveSHA256
-	minimumDockerVersion     = "27.5.1"
-	minimumComposeVersion    = "2.33.0"
+	APISIXBaseReference            = "apache/apisix:3.17.0-debian"
+	APISIXBaseImageID              = "sha256:6cbf65f3085d1386bfd636b7e88400c163c3641841909e674af7896a5766b092"
+	DockerBaseReference            = "docker:27.5.1-dind-alpine3.21"
+	DockerBaseImageID              = "sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce"
+	PostgresReference              = "postgres:18"
+	PostgresImageID                = "sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a"
+	RunnerToolchainReference       = installationrelease.RunnerToolchainSourceReference
+	RunnerToolchainSourceID        = installationrelease.RunnerToolchainSourceDigest
+	RunnerToolchainArchiveConfigID = installationrelease.RunnerToolchainArchiveConfigDigest
+	RunnerGVisorSHA256             = installationrelease.RunnerGVisorArchiveSHA256
+	minimumDockerVersion           = "27.5.1"
+	minimumComposeVersion          = "2.33.0"
 )
 
 type binarySpecification struct {

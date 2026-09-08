@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 )
 
 const (
@@ -29,23 +31,25 @@ const (
 	legacyProductlessCompose      = "2.33.0"
 	legacyProductlessFreeBytes    = uint64(4 * 1024 * 1024 * 1024)
 
-	RunnerBinaryPath           = "runner/linux-amd64/bin/matrix-devops-runner"
-	RunnerToolchainArchivePath = "runner/linux-amd64/images/go-1.26-offline-v1.tar"
-	RunnerGVisorArchivePath    = "runner/linux-amd64/runtime/gvisor-x86_64.tar.zstd"
-	RunnerGVisorChecksumPath   = "runner/linux-amd64/runtime/gvisor-x86_64.tar.zstd.sha256"
-	RunnerGVisorRelease        = "release-20260831.0"
-	RunnerGVisorArchiveSHA256  = "sha256:b9ccc6e14ca4eb2c2e65ff66e011f3b7e79d3275fb12eab747b19f95caf8e891"
-	RunnerToolchainID          = "GO_1_26_OFFLINE_V1"
-	RunnerToolchainImage       = "docker.io/library/golang@sha256:07558d5472e9acb5fc5656b485e963602e925e00111b8ad676a804306e711ba3"
-	RunnerToolchainImageDigest = "sha256:07558d5472e9acb5fc5656b485e963602e925e00111b8ad676a804306e711ba3"
-	RunnerToolchainImageID     = "sha256:2e6f40580dfa8312d4aab4f49e5ab214d0daa5999ed51be6eb6fe1f246378e4f"
-	RunnerEngineAPIVersion     = "1.46"
-	RunnerDockerRelease        = "29.x"
-	RunnerRuntimeName          = "runsc"
-	RunnerMaximumSlots         = uint8(4)
-	RunnerMinimumLogicalCPUs   = uint16(4)
-	RunnerMinimumMemoryBytes   = uint64(8 * 1024 * 1024 * 1024)
-	RunnerMinimumStorageBytes  = uint64(20 * 1024 * 1024 * 1024)
+	RunnerBinaryPath                    = "runner/linux-amd64/bin/matrix-devops-runner"
+	RunnerToolchainArchivePath          = "runner/linux-amd64/images/go-1.26-offline-v1.tar"
+	RunnerGVisorArchivePath             = "runner/linux-amd64/runtime/gvisor-x86_64.tar.zstd"
+	RunnerGVisorChecksumPath            = "runner/linux-amd64/runtime/gvisor-x86_64.tar.zstd.sha256"
+	RunnerGVisorRelease                 = "release-20260831.0"
+	RunnerGVisorArchiveSHA256           = "sha256:b9ccc6e14ca4eb2c2e65ff66e011f3b7e79d3275fb12eab747b19f95caf8e891"
+	RunnerToolchainID                   = "GO_1_26_OFFLINE_V1"
+	RunnerToolchainSourceReference      = "docker.io/library/golang@" + devopsv1.Go126OfflineToolchainImageDigest
+	RunnerToolchainSourceDigest         = devopsv1.Go126OfflineToolchainImageDigest
+	RunnerToolchainArchiveConfigDigest  = devopsv1.Go126OfflineToolchainArchiveConfigDigest
+	RunnerToolchainLocalReference       = devopsv1.Go126OfflineToolchainLocalReference
+	RunnerToolchainLocalDigestReference = devopsv1.Go126OfflineToolchainLocalDigestReference
+	RunnerEngineAPIVersion              = "1.46"
+	RunnerDockerRelease                 = "29.x"
+	RunnerRuntimeName                   = "runsc"
+	RunnerMaximumSlots                  = uint8(4)
+	RunnerMinimumLogicalCPUs            = uint16(4)
+	RunnerMinimumMemoryBytes            = uint64(8 * 1024 * 1024 * 1024)
+	RunnerMinimumStorageBytes           = uint64(20 * 1024 * 1024 * 1024)
 )
 
 type Manifest struct {

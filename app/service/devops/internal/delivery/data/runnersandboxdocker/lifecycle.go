@@ -540,7 +540,7 @@ func (reader *logCountingReader) Read(destination []byte) (int, error) {
 func validatedStepState(value containerInspection, plan ContainerPlan) (StepState, bool) {
 	config := value.Config
 	if !validContainerID(value.ID) || value.Name != "/"+plan.Name() || value.RestartCount != 0 ||
-		value.Image != ToolchainImageID ||
+		!validToolchainImageID(value.Image) ||
 		config.Image != plan.request.Image || !equalStrings(config.Cmd, plan.request.Cmd) ||
 		len(config.Entrypoint) != 0 || !equalEnvironment(config.Env, plan.request.Env) ||
 		config.User != plan.request.User || config.WorkingDir != plan.request.WorkingDir ||
