@@ -9,8 +9,8 @@
   lifecycle, source-observer runtime, source-acquisition runtime design,
   fenced acquisition use case, deterministic archive store, and real Gitea
   fetch protocol, source-acquisition persistence, isolated source-fetcher
-  process, and fenced BuildExecutor contract/use case complete; executor
-  persistence/runner and reporter effects pending
+  process, fenced BuildExecutor contract/use case, and table-blind PostgreSQL
+  execution persistence complete; physical runner and reporter effects pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -972,9 +972,9 @@ and DevOps API readiness once any SourceConnection exists.
 
 These slices do not complete Gate A. Source readiness, credential lifecycle,
 observation, acquisition through an installed isolated process, and the pure
-fenced BuildExecutor boundary are complete. Executor persistence and physical
-execution, reporting, normalized logs, remaining runtime quotas, check-receipt
-Audit facts, and pagination remain pending.
+fenced BuildExecutor boundary plus its table-blind PostgreSQL persistence are
+complete. Physical execution, reporting, normalized logs, remaining runtime
+quotas, check-receipt Audit facts, and pagination remain pending.
 
 Current verification evidence:
 
@@ -1024,6 +1024,13 @@ Current verification evidence:
   uncertainty, source-archive failure, definitive executor absence, invalid
   receipt rejection, native-error sanitization, and passed/failed handoff to
   the reporter
+- real PostgreSQL 18 BuildExecutor persistence journey proving heartbeat-
+  gated readiness, a table-blind worker, `VERIFY`-only build claims,
+  `REPORT`-only generic claims, database-created and takeover-stable 20-minute
+  execution windows, monotonic fencing and current-only lease renewal, strict
+  receipt shape/binding/digest validation, passed and failed receipts, atomic
+  `VERIFYING -> REPORTING`, missing-receipt bypass rejection, double apply,
+  and compatibility with the four-product migration boundary
 - the same pinned real Gitea gate creates a branch, commit, and pull request,
   fetches only its trusted default-branch and pull-head refs through the
   production pure-Go adapter, verifies both immutable commits, and reproduces
@@ -1114,8 +1121,8 @@ Current verification evidence:
   exactly two IAM-bound accepted facts, and nonterminal worker transitions
   create no completion fact; both replay generations have no task before a
   worker claim. The fresh journey contains 23 mutations, 16 SourceEvents, 34
-  PipelineRuns, ten task intents, and 84 Audit operations/outbox facts,
-  including five source-health transitions
+  PipelineRuns, ten task intents, two BuildExecutor receipts, and 84 Audit
+  operations/outbox facts, including five source-health transitions
 - fixed `10fea16` data-bearing upgrade preserving all 17 mutations, 16
   SourceEvents, 32 PipelineRuns, nine task intents, and 71 Audit
   operations/outbox facts while backfilling each original run's creation

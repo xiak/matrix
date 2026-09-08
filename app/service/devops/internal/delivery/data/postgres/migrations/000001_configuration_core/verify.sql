@@ -63,10 +63,11 @@ BEGIN
             ('projects'), ('source_connections'), ('repository_bindings'),
             ('repository_binding_revisions'), ('pipelines'),
             ('pipeline_revisions'), ('source_events'), ('pipeline_runs'),
-            ('pipeline_run_tasks'), ('source_archives'),
+            ('pipeline_run_tasks'), ('source_archives'), ('build_receipts'),
             ('mutations'), ('audit_operations'),
             ('audit_outbox'), ('source_observation_tasks'),
-            ('source_fetcher_heartbeat'), ('source_observer_heartbeat')
+            ('source_fetcher_heartbeat'), ('source_observer_heartbeat'),
+            ('build_worker_heartbeat')
       ) AS required(name)
      WHERE to_regclass('delivery.' || required.name) IS NULL;
     IF missing IS NOT NULL THEN
@@ -94,7 +95,7 @@ BEGIN
             ('projects'), ('source_connections'), ('repository_bindings'),
             ('repository_binding_revisions'), ('pipelines'),
             ('pipeline_revisions'), ('source_events'), ('pipeline_runs'),
-            ('pipeline_run_tasks'), ('source_archives'),
+            ('pipeline_run_tasks'), ('source_archives'), ('build_receipts'),
             ('mutations'), ('audit_operations'),
             ('audit_outbox'), ('source_observation_tasks')
      ) AS required(table_name)
@@ -234,6 +235,29 @@ BEGIN
       INTO missing
       FROM (
         VALUES
+            ('pipeline_revisions'), ('pipeline_runs'),
+            ('pipeline_run_tasks'), ('source_archives'), ('build_receipts'),
+            ('build_worker_heartbeat'), ('audit_operations'), ('audit_outbox')
+      ) AS required(table_name)
+     WHERE NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_policies AS policy
+         WHERE policy.schemaname = 'delivery'
+           AND policy.tablename = required.table_name
+           AND policy.policyname = 'owner_build_worker'
+           AND policy.permissive = 'PERMISSIVE'
+           AND policy.cmd = 'ALL'
+           AND policy.roles = ARRAY['matrix_devops_owner']::name[]
+           AND policy.qual = 'true'
+           AND policy.with_check = 'true'
+     );
+    IF missing IS NOT NULL THEN
+        RAISE EXCEPTION 'delivery build-worker owner policies are missing or unsafe: %', missing;
+    END IF;
+
+    SELECT string_agg(required.table_name, ', ' ORDER BY required.table_name)
+      INTO missing
+      FROM (
+        VALUES
             ('source_connections'), ('repository_bindings'),
             ('source_observation_tasks'), ('source_observer_heartbeat'),
             ('audit_operations'), ('audit_outbox')
@@ -268,6 +292,7 @@ BEGIN
             ('pipeline_revisions_pipeline_fk'),
             ('pipeline_revisions_binding_snapshot_fk'),
             ('pipeline_revisions_run_identity_uq'),
+            ('pipeline_revisions_build_receipt_uq'),
             ('pipelines_active_revision_fk'),
             ('source_events_delivery_uq'), ('source_events_run_identity_uq'),
             ('source_events_binding_snapshot_fk'),
@@ -284,12 +309,16 @@ BEGIN
             ('pipeline_run_tasks_values_valid'),
             ('source_archives_command_uq'), ('source_archives_run_fk'),
             ('source_archives_values_valid'),
+            ('build_receipts_command_uq'), ('build_receipts_run_fk'),
+            ('build_receipts_revision_fk'), ('build_receipts_values_valid'),
             ('mutations_idempotency_uq'), ('mutations_audit_operation_fk'),
             ('audit_outbox_operation_fk'),
             ('audit_outbox_delivery_state_valid'),
             ('source_observation_tasks_values_valid'),
             ('source_fetcher_heartbeat_singleton'),
             ('source_fetcher_heartbeat_worker_valid'),
+            ('build_worker_heartbeat_singleton'),
+            ('build_worker_heartbeat_worker_valid'),
             ('source_observer_heartbeat_singleton'),
             ('source_observer_heartbeat_worker_valid')
       ) AS required(name)
@@ -352,6 +381,8 @@ BEGIN
              'requested_worker_id text, requested_lease_seconds integer'),
             ('claim_pipeline_run_task_internal',
              'requested_worker_id text, requested_lease_seconds integer, requested_stages text[]'),
+            ('renew_pipeline_run_task_internal',
+             'requested_tenant_id text, requested_run_id text, requested_command_id text, requested_worker_id text, expected_fencing_token bigint, requested_lease_seconds integer, requested_stage text'),
             ('record_source_fetcher_heartbeat',
              'requested_worker_id text'),
             ('claim_source_fetch_task',
@@ -359,6 +390,14 @@ BEGIN
             ('renew_source_fetch_task',
              'requested_tenant_id text, requested_run_id text, requested_command_id text, requested_worker_id text, expected_fencing_token bigint, requested_lease_seconds integer'),
             ('complete_source_fetch_task',
+             'requested_tenant_id text, requested_run_id text, requested_command_id text, requested_worker_id text, expected_fencing_token bigint, requested_state text, requested_reason text, submitted_receipt jsonb, submitted_run_document jsonb, submitted_audit_event jsonb'),
+            ('record_build_worker_heartbeat',
+             'requested_worker_id text'),
+            ('claim_build_task',
+             'requested_worker_id text, requested_lease_seconds integer'),
+            ('renew_build_task',
+             'requested_tenant_id text, requested_run_id text, requested_command_id text, requested_worker_id text, expected_fencing_token bigint, requested_lease_seconds integer'),
+            ('complete_build_task',
              'requested_tenant_id text, requested_run_id text, requested_command_id text, requested_worker_id text, expected_fencing_token bigint, requested_state text, requested_reason text, submitted_receipt jsonb, submitted_run_document jsonb, submitted_audit_event jsonb'),
             ('renew_pipeline_run_task',
              'requested_tenant_id text, requested_run_id text, requested_command_id text, requested_worker_id text, expected_fencing_token bigint, requested_lease_seconds integer'),
@@ -380,6 +419,7 @@ BEGIN
             ('complete_source_observation',
              'requested_tenant_id text, requested_resource_kind text, requested_resource_id text, expected_resource_version bigint, requested_worker_id text, expected_fencing_token bigint, submitted_resource jsonb, submitted_audit_event jsonb'),
             ('source_fetcher_readiness', ''),
+            ('build_worker_readiness', ''),
             ('source_observer_readiness', ''),
             ('readiness', ''),
             ('worker_readiness', '')
@@ -398,6 +438,28 @@ BEGIN
      );
     IF missing IS NOT NULL THEN
         RAISE EXCEPTION 'delivery protected functions are missing or unsafe: %', missing;
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+          FROM unnest(ARRAY[
+            'delivery.claim_pipeline_run_task_internal(text,integer,text[])',
+            'delivery.renew_pipeline_run_task_internal(text,text,text,text,bigint,integer,text)'
+          ]) AS internal_function(identity)
+         WHERE has_function_privilege(
+                'matrix_devops_api', internal_function.identity, 'EXECUTE'
+            )
+            OR has_function_privilege(
+                'matrix_devops_worker', internal_function.identity, 'EXECUTE'
+            )
+            OR has_function_privilege(
+                'matrix_devops_source_fetcher', internal_function.identity, 'EXECUTE'
+            )
+            OR has_function_privilege(
+                'matrix_devops_source_observer', internal_function.identity, 'EXECUTE'
+            )
+    ) THEN
+        RAISE EXCEPTION 'a DevOps runtime can execute an internal task function';
     END IF;
 
     IF to_regprocedure(
@@ -481,6 +543,50 @@ BEGIN
        OR has_function_privilege(
             'matrix_devops_api',
             'delivery.claim_pipeline_run_task(text,integer)', 'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_devops_worker',
+            'delivery.record_build_worker_heartbeat(text)', 'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_devops_api',
+            'delivery.record_build_worker_heartbeat(text)', 'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_devops_worker',
+            'delivery.claim_build_task(text,integer)', 'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_devops_api',
+            'delivery.claim_build_task(text,integer)', 'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_devops_worker',
+            'delivery.renew_build_task(text,text,text,text,bigint,integer)',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_devops_api',
+            'delivery.renew_build_task(text,text,text,text,bigint,integer)',
+            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_devops_worker',
+            'delivery.complete_build_task(text,text,text,text,bigint,text,text,jsonb,jsonb,jsonb)',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_devops_api',
+            'delivery.complete_build_task(text,text,text,text,bigint,text,text,jsonb,jsonb,jsonb)',
+            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_devops_worker',
+            'delivery.build_worker_readiness()', 'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_devops_api',
+            'delivery.build_worker_readiness()', 'EXECUTE'
        )
        OR NOT has_function_privilege(
             'matrix_devops_worker',
@@ -637,6 +743,34 @@ BEGIN
           JOIN pg_catalog.pg_namespace AS namespace
             ON namespace.oid = function_info.pronamespace
          WHERE namespace.nspname = 'delivery'
+           AND function_info.proname IN (
+                'record_build_worker_heartbeat',
+                'claim_build_task',
+                'renew_build_task',
+                'complete_build_task',
+                'build_worker_readiness'
+           )
+           AND (
+                has_function_privilege(
+                    'matrix_devops_api', function_info.oid, 'EXECUTE'
+                )
+                OR has_function_privilege(
+                    'matrix_devops_source_fetcher', function_info.oid, 'EXECUTE'
+                )
+                OR has_function_privilege(
+                    'matrix_devops_source_observer', function_info.oid, 'EXECUTE'
+                )
+           )
+    ) THEN
+        RAISE EXCEPTION 'another DevOps runtime can execute a build-worker function';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+          FROM pg_catalog.pg_proc AS function_info
+          JOIN pg_catalog.pg_namespace AS namespace
+            ON namespace.oid = function_info.pronamespace
+         WHERE namespace.nspname = 'delivery'
            AND has_function_privilege(
                 'matrix_devops_source_fetcher', function_info.oid, 'EXECUTE'
            )
@@ -691,9 +825,10 @@ BEGIN
         'projects', 'source_connections', 'repository_bindings',
         'repository_binding_revisions', 'pipelines', 'pipeline_revisions',
         'source_events', 'pipeline_runs', 'pipeline_run_tasks',
-        'source_archives', 'mutations',
+        'source_archives', 'build_receipts', 'mutations',
         'audit_operations', 'audit_outbox', 'source_observation_tasks',
-        'source_fetcher_heartbeat', 'source_observer_heartbeat'
+        'source_fetcher_heartbeat', 'source_observer_heartbeat',
+        'build_worker_heartbeat'
     ]
     LOOP
         IF has_table_privilege(
@@ -713,8 +848,9 @@ BEGIN
         END IF;
         IF table_name NOT IN (
             'pipeline_run_tasks', 'audit_outbox', 'audit_operations',
-            'source_archives', 'source_observation_tasks',
-            'source_fetcher_heartbeat', 'source_observer_heartbeat'
+            'source_archives', 'build_receipts', 'source_observation_tasks',
+            'source_fetcher_heartbeat', 'source_observer_heartbeat',
+            'build_worker_heartbeat'
         )
            AND NOT has_table_privilege(
                 'matrix_devops_api', 'delivery.' || table_name, 'SELECT'
@@ -727,7 +863,9 @@ BEGIN
        OR has_table_privilege('matrix_devops_api', 'delivery.audit_operations', 'SELECT')
        OR has_table_privilege('matrix_devops_api', 'delivery.source_observation_tasks', 'SELECT')
        OR has_table_privilege('matrix_devops_api', 'delivery.source_archives', 'SELECT')
+       OR has_table_privilege('matrix_devops_api', 'delivery.build_receipts', 'SELECT')
        OR has_table_privilege('matrix_devops_api', 'delivery.source_fetcher_heartbeat', 'SELECT')
+       OR has_table_privilege('matrix_devops_api', 'delivery.build_worker_heartbeat', 'SELECT')
        OR has_table_privilege('matrix_devops_api', 'delivery.source_observer_heartbeat', 'SELECT') THEN
         RAISE EXCEPTION 'DevOps API can read internal Audit tables';
     END IF;

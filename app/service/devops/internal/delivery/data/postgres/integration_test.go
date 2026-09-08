@@ -30,6 +30,7 @@ import (
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/port"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/sourcearchive"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/auditdispatch"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/buildexecution"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/pipelineconfiguration"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runadmission"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runcontrol"
@@ -671,6 +672,11 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		t.Fatal("connect DevOps worker pool")
 	}
 	defer workerPool.Close()
+	buildRepository, err := devopspostgres.NewBuildExecutionRepository(workerPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertBuildWorkerAuthorityAndHeartbeat(t, ctx, workerPool, buildRepository)
 	assertDenied(t, func() error { _, err := workerPool.Exec(ctx, `SELECT count(*) FROM delivery.projects`); return err })
 	assertDenied(t, func() error {
 		_, err := workerPool.Exec(ctx, `SELECT count(*) FROM delivery.source_events`)
@@ -698,7 +704,7 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		return err
 	})
 	assertRunLifecyclePersistenceAndFencing(
-		t, ctx, admin, workerPool, sourceFetcher, runController,
+		t, ctx, admin, workerPool, sourceFetcher, buildRepository, runController,
 	)
 	assertTerminalAuditFacts(t, ctx, admin)
 	assertCancellationAuditFacts(t, ctx, admin)
@@ -836,6 +842,7 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 	}
 
 	var mutationCount, sourceEventCount, runCount, runTaskCount, operationCount int
+	var buildReceiptCount int
 	var auditCount, bindingRevisionCount, pipelineRevisionCount int
 	if err := admin.QueryRow(ctx, `SELECT
 		(SELECT count(*) FROM delivery.mutations),
@@ -844,20 +851,21 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		(SELECT count(*) FROM delivery.pipeline_run_tasks),
 		(SELECT count(*) FROM delivery.audit_operations),
 		(SELECT count(*) FROM delivery.audit_outbox),
+		(SELECT count(*) FROM delivery.build_receipts),
 		(SELECT count(*) FROM delivery.repository_binding_revisions WHERE binding_id = 'binding-integration-one'),
 		(SELECT count(*) FROM delivery.pipeline_revisions WHERE pipeline_id = 'pipeline-integration')`).Scan(
 		&mutationCount, &sourceEventCount, &runCount, &runTaskCount, &operationCount,
-		&auditCount, &bindingRevisionCount, &pipelineRevisionCount,
+		&auditCount, &buildReceiptCount, &bindingRevisionCount, &pipelineRevisionCount,
 	); err != nil {
 		t.Fatalf("read delivery evidence: %v", err)
 	}
 	if mutationCount != 23 || sourceEventCount != 16 || runCount != 34 || runTaskCount != 10 ||
-		operationCount != 84 || auditCount != 84 ||
+		operationCount != 84 || auditCount != 84 || buildReceiptCount != 2 ||
 		bindingRevisionCount != 2 || pipelineRevisionCount != 3 {
 		t.Fatalf(
-			"evidence counts mutation=%d event=%d run=%d task=%d operation=%d audit=%d binding=%d pipeline=%d",
+			"evidence counts mutation=%d event=%d run=%d task=%d operation=%d audit=%d build=%d binding=%d pipeline=%d",
 			mutationCount, sourceEventCount, runCount, runTaskCount, operationCount,
-			auditCount, bindingRevisionCount, pipelineRevisionCount,
+			auditCount, buildReceiptCount, bindingRevisionCount, pipelineRevisionCount,
 		)
 	}
 	rows, err := admin.Query(ctx, `SELECT document FROM delivery.audit_outbox ORDER BY event_id`)
@@ -959,6 +967,42 @@ func assertSourceFetcherAuthorityAndHeartbeat(
 	apiReadiness, err = controlPlane.Readiness(ctx)
 	if err != nil || apiReadiness.State != devopsv1.ReadinessReady {
 		t.Fatalf("DevOps API source-fetcher readiness=%#v err=%v", apiReadiness, err)
+	}
+}
+
+func assertBuildWorkerAuthorityAndHeartbeat(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	repository *devopspostgres.BuildExecutionRepository,
+) {
+	t.Helper()
+	readiness, err := repository.Readiness(ctx)
+	if err != nil || readiness.State != devopsv1.ReadinessNotReady {
+		t.Fatalf("build worker admitted a missing heartbeat=%#v err=%v", readiness, err)
+	}
+	for _, table := range []string{
+		"pipeline_runs", "pipeline_run_tasks", "source_archives",
+		"build_receipts", "build_worker_heartbeat", "pipeline_revisions",
+	} {
+		table := table
+		assertDenied(t, func() error {
+			_, deniedErr := pool.Exec(ctx, `SELECT count(*) FROM delivery.`+table)
+			return deniedErr
+		})
+	}
+	assertDenied(t, func() error {
+		_, deniedErr := pool.Exec(
+			ctx, `SELECT * FROM delivery.claim_source_fetch_task('forged-build-worker', 30)`,
+		)
+		return deniedErr
+	})
+	if _, err := repository.Heartbeat(ctx, "build-worker-integration"); err != nil {
+		t.Fatalf("record build worker heartbeat: %v", err)
+	}
+	readiness, err = repository.Readiness(ctx)
+	if err != nil || readiness.State != devopsv1.ReadinessReady {
+		t.Fatalf("build worker readiness=%#v err=%v", readiness, err)
 	}
 }
 
@@ -1412,6 +1456,7 @@ func assertRunLifecyclePersistenceAndFencing(
 	admin *pgx.Conn,
 	workerPool *pgxpool.Pool,
 	sourceFetcher *devopspostgres.SourceAcquisitionRepository,
+	buildRepository *devopspostgres.BuildExecutionRepository,
 	runController *runcontrol.Service,
 ) {
 	t.Helper()
@@ -1482,14 +1527,59 @@ func assertRunLifecyclePersistenceAndFencing(
 	}); err != nil {
 		t.Fatalf("complete recovered fetch task: %v", err)
 	}
-	verify := claimExpectedRunStage(
-		t, ctx, queue, recovered.Run.ID, devopsv1.PipelineRunVerifying,
-		devopsv1.PipelineRunStageVerify,
+	if lease, found, err := queue.ClaimNext(ctx, "run-worker-no-verify"); err != nil || found {
+		t.Fatalf("general worker claimed VERIFY=%#v found=%t err=%v", lease, found, err)
+	}
+	firstBuild := claimExpectedBuild(
+		t, ctx, buildRepository, recovered.Run.ID, runlifecycle.ClaimExecute,
 	)
+	assertBuildReceiptTamperRejected(t, ctx, admin, workerPool, firstBuild)
 	if _, err := queue.Advance(ctx, runlifecycle.Transition{
-		Lease: verify, State: devopsv1.PipelineRunReporting,
+		Lease: firstBuild.Lease, State: devopsv1.PipelineRunReporting,
+	}); !errors.Is(err, runlifecycle.ErrInvalidTransition) {
+		t.Fatalf("VERIFY bypassed its build receipt: %v", err)
+	}
+	makeRunTaskDue(t, ctx, admin, firstBuild.Lease.Intent.CommandID)
+	recoveredBuild := claimExpectedBuild(
+		t, ctx, buildRepository, recovered.Run.ID, runlifecycle.ClaimObserve,
+	)
+	if !recoveredBuild.StartedAt.Equal(firstBuild.StartedAt) ||
+		!recoveredBuild.DeadlineAt.Equal(firstBuild.DeadlineAt) {
+		t.Fatalf(
+			"build takeover changed execution window first=%s/%s recovered=%s/%s",
+			firstBuild.StartedAt,
+			firstBuild.DeadlineAt,
+			recoveredBuild.StartedAt,
+			recoveredBuild.DeadlineAt,
+		)
+	}
+	if _, err := buildRepository.Renew(
+		ctx, firstBuild.Lease.Guard(), buildexecution.LeaseDuration,
+	); !errors.Is(err, runlifecycle.ErrStaleLease) {
+		t.Fatalf("stale build task renewal error=%v", err)
+	}
+	renewedBuildLease, err := buildRepository.Renew(
+		ctx, recoveredBuild.Lease.Guard(), buildexecution.LeaseDuration,
+	)
+	if err != nil || !renewedBuildLease.After(recoveredBuild.Lease.LeaseExpiresAt) {
+		t.Fatalf(
+			"renew current build task old=%s new=%s err=%v",
+			recoveredBuild.Lease.LeaseExpiresAt,
+			renewedBuildLease,
+			err,
+		)
+	}
+	if _, err := buildRepository.Complete(ctx, buildexecution.Completion{
+		Command: firstBuild, State: devopsv1.PipelineRunReporting,
+		Receipt: buildReceipt(firstBuild, port.BuildPassed),
+	}); !errors.Is(err, runlifecycle.ErrStaleLease) {
+		t.Fatalf("stale build task completion error=%v", err)
+	}
+	if _, err := buildRepository.Complete(ctx, buildexecution.Completion{
+		Command: recoveredBuild, State: devopsv1.PipelineRunReporting,
+		Receipt: buildReceipt(recoveredBuild, port.BuildPassed),
 	}); err != nil {
-		t.Fatalf("complete verify task: %v", err)
+		t.Fatalf("complete recovered build task: %v", err)
 	}
 	report := claimExpectedRunStage(
 		t, ctx, queue, recovered.Run.ID, devopsv1.PipelineRunReporting,
@@ -1513,12 +1603,12 @@ func assertRunLifecyclePersistenceAndFencing(
 	}); err != nil {
 		t.Fatalf("advance reconciliation run to verify: %v", err)
 	}
-	verify = claimExpectedRunStage(
-		t, ctx, queue, fetch.Run.ID, devopsv1.PipelineRunVerifying,
-		devopsv1.PipelineRunStageVerify,
+	build := claimExpectedBuild(
+		t, ctx, buildRepository, fetch.Run.ID, runlifecycle.ClaimExecute,
 	)
-	if _, err := queue.Advance(ctx, runlifecycle.Transition{
-		Lease: verify, State: devopsv1.PipelineRunReporting,
+	if _, err := buildRepository.Complete(ctx, buildexecution.Completion{
+		Command: build, State: devopsv1.PipelineRunReporting,
+		Receipt: buildReceipt(build, port.BuildFailed),
 	}); err != nil {
 		t.Fatalf("advance reconciliation run to report: %v", err)
 	}
@@ -1737,6 +1827,151 @@ func claimExpectedRunStage(
 		)
 	}
 	return lease
+}
+
+func claimExpectedBuild(
+	t *testing.T,
+	ctx context.Context,
+	repository *devopspostgres.BuildExecutionRepository,
+	expectedRunID devopsv1.ResourceID,
+	expectedMode runlifecycle.ClaimMode,
+) buildexecution.Command {
+	t.Helper()
+	command, found, err := repository.Claim(
+		ctx, "build-worker-current", buildexecution.LeaseDuration,
+	)
+	if err != nil || !found || command.Lease.Run.ID != expectedRunID ||
+		command.Lease.Run.Status.State != devopsv1.PipelineRunVerifying ||
+		command.Lease.Intent.Stage != devopsv1.PipelineRunStageVerify ||
+		command.Lease.Mode != expectedMode ||
+		command.DeadlineAt.Sub(command.StartedAt) != buildexecution.ExecutionDeadline ||
+		command.Archive.RunID != expectedRunID ||
+		command.Revision.ID != command.Lease.Run.Input.PipelineRevisionID {
+		t.Fatalf(
+			"claim VERIFY run=%s returned %#v found=%t err=%v",
+			expectedRunID,
+			command,
+			found,
+			err,
+		)
+	}
+	return command
+}
+
+func assertBuildReceiptTamperRejected(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	workerPool *pgxpool.Pool,
+	command buildexecution.Command,
+) {
+	t.Helper()
+	validDocument, err := json.Marshal(buildReceipt(command, port.BuildPassed))
+	if err != nil {
+		t.Fatalf("encode build receipt fixture: %v", err)
+	}
+	tests := []struct {
+		name        string
+		wantMessage string
+		mutate      func(map[string]any)
+	}{
+		{
+			name:        "unknown field",
+			wantMessage: "build receipt shape is invalid",
+			mutate: func(document map[string]any) {
+				document["nativeOutput"] = "must-not-cross-boundary"
+			},
+		},
+		{
+			name:        "archive binding",
+			wantMessage: "build receipt authority is invalid",
+			mutate: func(document map[string]any) {
+				document["sourceArchiveDigest"] = "sha256:" + strings.Repeat("0", 64)
+			},
+		},
+		{
+			name:        "content digest",
+			wantMessage: "build receipt digest is invalid",
+			mutate: func(document map[string]any) {
+				document["contentDigest"] = "sha256:" + strings.Repeat("0", 64)
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run("database rejects build receipt "+test.name, func(t *testing.T) {
+			var document map[string]any
+			if err := json.Unmarshal(validDocument, &document); err != nil {
+				t.Fatalf("decode build receipt fixture: %v", err)
+			}
+			test.mutate(document)
+			submitted, err := json.Marshal(document)
+			if err != nil {
+				t.Fatalf("encode changed build receipt: %v", err)
+			}
+			_, err = workerPool.Exec(
+				ctx,
+				`SELECT delivery.complete_build_task(
+				    $1, $2, $3, $4, $5, 'REPORTING', NULL::text,
+				    $6::jsonb, NULL::jsonb, NULL::jsonb
+				)`,
+				command.Lease.TenantID,
+				command.Lease.Run.ID,
+				command.Lease.Intent.CommandID,
+				command.Lease.WorkerID,
+				int64(command.Lease.FencingToken),
+				submitted,
+			)
+			var postgresError *pgconn.PgError
+			if !errors.As(err, &postgresError) || postgresError.Code != "22023" ||
+				postgresError.Message != test.wantMessage {
+				t.Fatalf("changed build receipt error=%v", err)
+			}
+		})
+	}
+	var count int
+	if err := admin.QueryRow(
+		ctx,
+		`SELECT count(*) FROM delivery.build_receipts WHERE run_id = $1`,
+		command.Lease.Run.ID,
+	).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("rejected build receipts persisted count=%d err=%v", count, err)
+	}
+}
+
+func buildReceipt(
+	command buildexecution.Command,
+	conclusion port.BuildConclusion,
+) *port.BuildReceipt {
+	first := port.BuildStepPassed
+	second := port.BuildStepPassed
+	if conclusion == port.BuildFailed {
+		second = port.BuildStepFailed
+	}
+	receipt := port.BuildReceipt{
+		TenantID:               command.Lease.TenantID,
+		RunID:                  command.Lease.Run.ID,
+		CommandID:              command.Lease.Intent.CommandID,
+		InputDigest:            command.Lease.Run.InputDigest,
+		SourceArchiveDigest:    command.Archive.ArchiveDigest,
+		PipelineRevisionID:     command.Revision.ID,
+		PipelineRevisionDigest: command.Revision.ContentDigest,
+		ExecutorID:             "executor-integration",
+		ExecutorProfile:        command.Revision.Spec.ExecutorProfile,
+		ToolchainImageDigest:   command.Revision.Spec.ToolchainImageDigest,
+		Conclusion:             conclusion,
+		Steps: [2]port.BuildStepReceipt{
+			{
+				Ordinal: command.Revision.Spec.Steps[0].Ordinal,
+				Kind:    command.Revision.Spec.Steps[0].Kind, Conclusion: first,
+			},
+			{
+				Ordinal: command.Revision.Spec.Steps[1].Ordinal,
+				Kind:    command.Revision.Spec.Steps[1].Kind, Conclusion: second,
+			},
+		},
+	}
+	receipt.ContentDigest = port.DigestBuildReceipt(receipt)
+	return &receipt
 }
 
 func claimExpectedSourceFetch(
