@@ -6,7 +6,7 @@
 - Updated: 2026-09-09
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `1bfba7c`
+- Current pushed implementation baseline: `543df1f`
 
 ## Goal
 
@@ -30,6 +30,13 @@ architecture, FEAT, implementation, test, and release gates.
   through an API-only table-blind function. The IAM action no longer invents a
   separate `PIPELINE_LOG` resource; Go, OpenAPI, and database catalogs bind it
   to `PIPELINE_RUN`.
+- Pushed `543df1f` composes one outbound-only, certificate-bound runner slot
+  from the production gateway/log client, OS-locked private journal/workspace,
+  closed Docker/runsc sandbox, and runner workflow. It replays local terminal
+  truth before a 30-second-bounded eligibility proof and every claim; readiness
+  is loopback-only and appears only after the first successful cycle. One slot
+  is serial; the future node topology may compose at most four distinct
+  credentials and disjoint roots.
 - Evidence on that worktree: full `go test ./...`, full `go vet ./...`, focused
   Windows race detection with twenty repetitions, and twenty focused runs in
   the fixed disconnected Go 1.26.8 Linux/amd64 image with read-only source and
@@ -37,10 +44,13 @@ architecture, FEAT, implementation, test, and release gates.
   migration, function privilege verification, four/two-chunk continuation,
   empty reads, forced tenant concealment, expiry truncation, transactional
   Audit, and independent resource/action/payload tamper checks; the combined
-  IAM/Audit authority journey also passes.
+  IAM/Audit authority journey also passes. Runner command, workflow, sandbox,
+  journal, workspace, transport, port, and architecture packages pass Windows
+  race detection and twenty repetitions plus twenty runs in the fixed
+  disconnected Go image.
 - This proves durable normalized-log persistence and its public read boundary,
-  not the physical runner process, selected release topology, reporter effect,
-  or real repository execution under gVisor.
+  plus physical runner composition, not selected release topology, reporter
+  effect, or real repository execution under gVisor.
 
 ## Adoption boundary
 
@@ -52,12 +62,12 @@ architecture, FEAT, implementation, test, and release gates.
 
 ## Continuation
 
-Continue FEAT-007 by composing the dedicated runner process around the pushed
-runner workflow and adding only the selected DevOps release topology. Preserve
-the existing mTLS runner-only authority, private journal/workspace roots,
-closed Docker/gVisor eligibility, fixed toolchain, bounded renewal, and
-restart-before-effect rules; add process/readiness and architecture gates
-before attempting the real repository journey. Reporter effects remain a
+Continue FEAT-007 with the selected DevOps executor release boundary: add the
+build worker and dual-listener executor gateway only when DevOps is selected,
+provision purpose-separated protected mTLS material and a private spool, and
+carry an independently installable runner artifact/node contract without
+placing Docker authority or a runner on the Foundation/PaaS host. Preserve the
+four-slot maximum as distinct credentials and roots. Reporter effects remain a
 separate subsequent slice.
 
 Do not claim repository-code isolation until a dedicated Linux/amd64 runner
