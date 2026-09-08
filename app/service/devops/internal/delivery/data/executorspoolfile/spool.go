@@ -19,6 +19,7 @@ const RunnerLeaseDuration = 30 * time.Second
 
 var (
 	ErrInvalid         = errors.New("executor spool input is invalid")
+	ErrNotFound        = errors.New("executor spool execution was not found")
 	ErrUnavailable     = errors.New("executor spool is unavailable")
 	ErrConflict        = errors.New("executor spool identity conflicts")
 	ErrOutcomeUnknown  = errors.New("executor spool outcome is unknown")
@@ -28,11 +29,6 @@ var (
 type Spool struct {
 	rootPath string
 	mutex    sync.Mutex
-}
-
-type Renewal struct {
-	LeaseExpiresAt        time.Time
-	CancellationRequested bool
 }
 
 func New(rootPath string) (*Spool, error) {
@@ -191,7 +187,7 @@ func (spool *Spool) Observe(
 		return devopsbuildv1.Observation{}, err
 	}
 	if !found {
-		return devopsbuildv1.Observation{}, ErrUnavailable
+		return devopsbuildv1.Observation{}, ErrNotFound
 	}
 	return observation(execution.request, execution.state)
 }
@@ -218,7 +214,7 @@ func (spool *Spool) Cancel(
 		return devopsbuildv1.Observation{}, err
 	}
 	if !found {
-		return devopsbuildv1.Observation{}, ErrUnavailable
+		return devopsbuildv1.Observation{}, ErrNotFound
 	}
 	current := execution.state
 	switch current.Phase {
@@ -380,24 +376,24 @@ func (spool *Spool) Renew(
 	executionID string,
 	fencingToken uint64,
 	observedAt time.Time,
-) (Renewal, error) {
+) (devopsbuildv1.Renewal, error) {
 	if spool == nil || ctx == nil || devopsv1.ValidateID("runnerId", runnerID) != nil ||
 		executionKey(executionID) == "" || fencingToken == 0 ||
 		fencingToken > devopsv1.MaximumContractInteger || validateSpoolTime(observedAt) != nil {
-		return Renewal{}, ErrInvalid
+		return devopsbuildv1.Renewal{}, ErrInvalid
 	}
 	spool.mutex.Lock()
 	defer spool.mutex.Unlock()
 	root, err := spool.openRoot()
 	if err != nil {
-		return Renewal{}, err
+		return devopsbuildv1.Renewal{}, err
 	}
 	defer root.Close()
 	execution, found, err := readExecution(
 		ctx, root, executionKey(executionID), nil, false,
 	)
 	if err != nil {
-		return Renewal{}, err
+		return devopsbuildv1.Renewal{}, err
 	}
 	if !found || execution.state.Phase != phaseAssigned ||
 		execution.state.RunnerID != runnerID ||
@@ -405,7 +401,7 @@ func (spool *Spool) Renew(
 		execution.state.LeaseExpiresAt == nil ||
 		!observedAt.Before(*execution.state.LeaseExpiresAt) ||
 		!observedAt.Before(execution.request.DeadlineAt) {
-		return Renewal{}, ErrStaleAssignment
+		return devopsbuildv1.Renewal{}, ErrStaleAssignment
 	}
 	leaseExpiresAt := observedAt.Add(RunnerLeaseDuration)
 	if leaseExpiresAt.After(execution.request.DeadlineAt) {
@@ -416,14 +412,22 @@ func (spool *Spool) Renew(
 		next.LeaseExpiresAt = &leaseExpiresAt
 		sealState(&next)
 		if err := appendState(root, execution, next); err != nil {
-			return Renewal{}, err
+			return devopsbuildv1.Renewal{}, err
 		}
 		execution.state = next
 	}
-	return Renewal{
+	renewal := devopsbuildv1.Renewal{
+		APIVersion:            devopsbuildv1.APIVersion,
+		Kind:                  devopsbuildv1.RenewalKind,
+		ExecutionID:           executionID,
+		FencingToken:          fencingToken,
 		LeaseExpiresAt:        *execution.state.LeaseExpiresAt,
 		CancellationRequested: execution.state.CancellationRequested,
-	}, nil
+	}
+	if err := devopsbuildv1.ValidateRenewal(execution.request, renewal); err != nil {
+		return devopsbuildv1.Renewal{}, errors.Join(ErrUnavailable, err)
+	}
+	return renewal, nil
 }
 
 func (spool *Spool) Complete(
@@ -453,7 +457,7 @@ func (spool *Spool) Complete(
 		return devopsbuildv1.Observation{}, err
 	}
 	if !found {
-		return devopsbuildv1.Observation{}, ErrUnavailable
+		return devopsbuildv1.Observation{}, ErrNotFound
 	}
 	if execution.state.Phase == phaseTerminal {
 		if execution.state.RunnerID == runnerID &&
@@ -471,7 +475,8 @@ func (spool *Spool) Complete(
 		!observedAt.Before(execution.request.DeadlineAt) {
 		return devopsbuildv1.Observation{}, ErrStaleAssignment
 	}
-	if err := devopsbuildv1.ValidateReceipt(execution.request, receipt); err != nil {
+	if err := devopsbuildv1.ValidateReceipt(execution.request, receipt); err != nil ||
+		receipt.ExecutorID != runnerID {
 		return devopsbuildv1.Observation{}, errors.Join(ErrInvalid, err)
 	}
 	next := nextState(execution.state)
@@ -508,7 +513,7 @@ func (spool *Spool) Request(
 		return devopsbuildv1.Request{}, err
 	}
 	if !found {
-		return devopsbuildv1.Request{}, ErrUnavailable
+		return devopsbuildv1.Request{}, ErrNotFound
 	}
 	return execution.request, nil
 }

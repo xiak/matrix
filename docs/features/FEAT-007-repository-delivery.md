@@ -10,9 +10,9 @@
   fenced acquisition use case, deterministic archive store, and real Gitea
   fetch protocol, source-acquisition persistence, isolated source-fetcher
   process, fenced BuildExecutor contract/use case, and table-blind PostgreSQL
-  execution persistence, versioned admin/runner transport contract, and
-  durable executor-gateway spool complete; physical runner and reporter
-  effects pending
+  execution persistence, versioned admin/runner transport contract, durable
+  executor-gateway spool, and TLS 1.3 mTLS admin/runner HTTP boundary complete;
+  physical gateway/runner process composition and reporter effects pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -970,9 +970,10 @@ different runner identity, and gives only the same runner an archive-free
 `OBSERVE` or `CANCEL` recovery assignment. Renewal cannot cross the fixed build
 deadline and carries the durable cancellation bit. Restart, partial staging
 cleanup, canonical file modes/shapes, archive reinspection, and symlink/content
-tamper fail closed. The physical executor client and gateway processes, mutual
-TLS listeners, independent runner journal, sandbox, and normalized log
-persistence remain pending; no repository code executes yet.
+tamper fail closed. The strict TLS 1.3 admin client and separate admin/runner
+mTLS HTTP handlers now drive this spool over real sockets. The physical gateway
+and runner process composition, independent runner journal, sandbox, and
+normalized log persistence remain pending; no repository code executes yet.
 
 Every fenced worker transition now submits the exact next PipelineRun document
 to the database boundary. A terminal transition atomically stores a distinct
@@ -1114,6 +1115,15 @@ Current verification evidence:
   changed-receipt conflict, consecutive digest-bound state history, and
   submission/archive/state tamper rejection; the public runner documents and
   spool suites pass race detection and 20-run repetition
+- executor-gateway transport tests over real TLS sockets proving TLS 1.3-only
+  negotiation, separate admin and runner client roots, exact build-worker
+  identity, runner-namespace authorization, certificate-derived opaque runner
+  identity, authority-free canonical requests, bounded headers and bodies,
+  admin create/observe/cancel recovery, archive-only first assignment,
+  different-runner denial, current-fence renewal and cancellation propagation,
+  archive-free same-runner recovery, terminal acknowledgement replay, changed
+  completion conflict, and empty sanitized failures; the transport, spool, and
+  public-contract suites pass race detection and 20-run repetition
 - the shared source-archive reader proves the portable receipt independently,
   matches it to the private deterministic store, structurally inspects and
   hashes the archive before handoff, and verifies its length and digest again

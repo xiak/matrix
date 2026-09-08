@@ -144,6 +144,24 @@ func TestQueuedCancellationIsDurableIdempotentAndNeverAssigned(t *testing.T) {
 	}
 }
 
+func TestMissingExecutionIsDistinctFromUnavailableStorage(t *testing.T) {
+	spool, err := New(spoolRoot(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, _ := executionFixture(t, 'a', fixtureStart())
+	if _, err := spool.Observe(
+		context.Background(), request,
+	); !errors.Is(err, ErrNotFound) || errors.Is(err, ErrUnavailable) {
+		t.Fatalf("missing execution error=%v", err)
+	}
+	if _, err := spool.Cancel(
+		context.Background(), request,
+	); !errors.Is(err, ErrNotFound) || errors.Is(err, ErrUnavailable) {
+		t.Fatalf("missing cancellation error=%v", err)
+	}
+}
+
 func TestRunnerAssignmentRenewalCancellationAndTerminalReplayAreFenced(t *testing.T) {
 	root := spoolRoot(t)
 	spool, err := New(root)
@@ -203,6 +221,15 @@ func TestRunnerAssignmentRenewalCancellationAndTerminalReplayAreFenced(t *testin
 		devopsbuildv1.StepConclusionNotRun,
 	)
 	completedAt := renewedAt.Add(11 * time.Second)
+	mismatchedRunner := receipt
+	mismatchedRunner.ExecutorID = "runner-two"
+	mismatchedRunner.ContentDigest = devopsbuildv1.DigestReceipt(mismatchedRunner)
+	if _, err := spool.Complete(
+		context.Background(), "runner-one", assignment.ExecutionID,
+		assignment.FencingToken, mismatchedRunner, completedAt,
+	); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("mismatched runner receipt error=%v", err)
+	}
 	terminal, err := spool.Complete(
 		context.Background(), "runner-one", assignment.ExecutionID,
 		assignment.FencingToken, receipt, completedAt,
@@ -554,7 +581,7 @@ func receiptFixture(
 		SourceArchiveDigest:    request.SourceArchiveDigest,
 		PipelineRevisionID:     request.PipelineRevisionID,
 		PipelineRevisionDigest: request.PipelineRevisionDigest,
-		ExecutorID:             "executor-one",
+		ExecutorID:             "runner-one",
 		ExecutorProfile:        request.ExecutorProfile,
 		ToolchainImageDigest:   request.ToolchainImageDigest,
 		Conclusion:             conclusion,

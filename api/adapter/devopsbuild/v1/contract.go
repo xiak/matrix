@@ -19,9 +19,11 @@ import (
 )
 
 const (
-	APIVersion     = "devopsbuild.adapter.matrix.xiak.com/v1"
-	SubmissionKind = "BuildSubmission"
-	ReceiptKind    = "BuildReceipt"
+	APIVersion        = "devopsbuild.adapter.matrix.xiak.com/v1"
+	SubmissionKind    = "BuildSubmission"
+	ReceiptKind       = "BuildReceipt"
+	DocumentMediaType = "application/vnd.matrix.devops.build.v1+json"
+	FramedMediaType   = "application/vnd.matrix.devops.build-frame.v1"
 
 	MaximumDocumentBytes = 64 * 1024
 )
