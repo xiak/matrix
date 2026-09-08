@@ -251,10 +251,16 @@ func WriteAssignment(destination io.Writer, value Assignment, archive io.Reader)
 	return nil
 }
 
-// ReadAssignment writes archive bytes only for EXECUTE. Callers must pass a
-// non-nil staging destination exactly for that mode.
-func ReadAssignment(source io.Reader, archiveDestination io.Writer) (Assignment, error) {
-	if source == nil {
+// AssignmentDestination binds canonical metadata to caller-owned staging
+// before any archive byte is consumed. It must return a writer exactly for an
+// EXECUTE assignment and nil for an archive-free recovery assignment.
+type AssignmentDestination func(Assignment) (io.Writer, error)
+
+func ReadAssignment(
+	source io.Reader,
+	destination AssignmentDestination,
+) (Assignment, error) {
+	if source == nil || destination == nil {
 		return Assignment{}, ErrInvalidSubmission
 	}
 	var header [8]byte
@@ -270,7 +276,14 @@ func ReadAssignment(source io.Reader, archiveDestination io.Writer) (Assignment,
 		return Assignment{}, errors.Join(ErrInvalidSubmission, err)
 	}
 	assignment, err := DecodeAssignment(metadata)
-	if err != nil || (assignment.Mode == AssignmentExecute) != (archiveDestination != nil) {
+	if err != nil {
+		return Assignment{}, ErrInvalidSubmission
+	}
+	archiveDestination, destinationErr := destination(assignment)
+	if destinationErr != nil {
+		return Assignment{}, errors.Join(ErrInvalidSubmission, destinationErr)
+	}
+	if (assignment.Mode == AssignmentExecute) != (archiveDestination != nil) {
 		return Assignment{}, ErrInvalidSubmission
 	}
 	if assignment.Mode == AssignmentExecute {

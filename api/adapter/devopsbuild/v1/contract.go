@@ -233,6 +233,18 @@ func ExecutionID(value Request) (string, error) {
 	return "sha256:" + hex.EncodeToString(digest.Sum(nil)), nil
 }
 
+// DigestRequest binds every field of a valid Request to the canonical v1
+// Submission document. Durable adapters use it in addition to ExecutionID,
+// whose deliberately smaller identity remains stable across safe retries.
+func DigestRequest(value Request) (string, error) {
+	document, err := EncodeSubmission(value)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(document)
+	return "sha256:" + hex.EncodeToString(digest[:]), nil
+}
+
 func EncodeSubmission(request Request) ([]byte, error) {
 	if err := ValidateRequest(request); err != nil {
 		return nil, err

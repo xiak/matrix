@@ -2,6 +2,8 @@ package devopsbuildv1
 
 import (
 	"bytes"
+	"errors"
+	"io"
 	"testing"
 	"time"
 )
@@ -23,15 +25,33 @@ func TestAssignmentFramesArchiveOnlyForFirstExecution(t *testing.T) {
 		t.Fatalf("write execute assignment: %v", err)
 	}
 	var restored bytes.Buffer
-	decoded, err := ReadAssignment(bytes.NewReader(frame.Bytes()), &restored)
+	decoded, err := ReadAssignment(
+		bytes.NewReader(frame.Bytes()),
+		func(Assignment) (io.Writer, error) { return &restored, nil },
+	)
 	if err != nil || decoded != execute || !bytes.Equal(restored.Bytes(), archive) {
 		t.Fatalf("read execute assignment = %#v / %q / %v", decoded, restored.Bytes(), err)
 	}
 	if err := WriteAssignment(&bytes.Buffer{}, execute, nil); err == nil {
 		t.Fatal("execute assignment without archive was accepted")
 	}
-	if _, err := ReadAssignment(bytes.NewReader(frame.Bytes()), nil); err == nil {
+	if _, err := ReadAssignment(
+		bytes.NewReader(frame.Bytes()),
+		func(Assignment) (io.Writer, error) { return nil, nil },
+	); err == nil {
 		t.Fatal("execute assignment without archive destination was accepted")
+	}
+	destinationFailure := errors.New("destination failed")
+	bound := Assignment{}
+	if _, err := ReadAssignment(
+		bytes.NewReader(frame.Bytes()),
+		func(actual Assignment) (io.Writer, error) {
+			bound = actual
+			return nil, destinationFailure
+		},
+	); !errors.Is(err, ErrInvalidSubmission) || !errors.Is(err, destinationFailure) ||
+		bound != execute {
+		t.Fatalf("destination failure = %v after binding %#v", err, bound)
 	}
 
 	for _, mode := range []AssignmentMode{AssignmentObserve, AssignmentCancel} {
@@ -43,8 +63,15 @@ func TestAssignmentFramesArchiveOnlyForFirstExecution(t *testing.T) {
 			if err := WriteAssignment(&recoveryFrame, recovery, nil); err != nil {
 				t.Fatalf("write recovery assignment: %v", err)
 			}
-			decoded, err := ReadAssignment(bytes.NewReader(recoveryFrame.Bytes()), nil)
-			if err != nil || decoded != recovery {
+			bound := false
+			decoded, err := ReadAssignment(
+				bytes.NewReader(recoveryFrame.Bytes()),
+				func(actual Assignment) (io.Writer, error) {
+					bound = actual == recovery
+					return nil, nil
+				},
+			)
+			if err != nil || decoded != recovery || !bound {
 				t.Fatalf("read recovery assignment = %#v / %v", decoded, err)
 			}
 			if err := WriteAssignment(
@@ -53,12 +80,16 @@ func TestAssignmentFramesArchiveOnlyForFirstExecution(t *testing.T) {
 				t.Fatal("recovery assignment carried an archive")
 			}
 			if _, err := ReadAssignment(
-				bytes.NewReader(recoveryFrame.Bytes()), &bytes.Buffer{},
+				bytes.NewReader(recoveryFrame.Bytes()),
+				func(Assignment) (io.Writer, error) { return &bytes.Buffer{}, nil },
 			); err == nil {
 				t.Fatal("recovery assignment accepted an archive destination")
 			}
 			withTrailing := append(append([]byte(nil), recoveryFrame.Bytes()...), 'x')
-			if _, err := ReadAssignment(bytes.NewReader(withTrailing), nil); err == nil {
+			if _, err := ReadAssignment(
+				bytes.NewReader(withTrailing),
+				func(Assignment) (io.Writer, error) { return nil, nil },
+			); err == nil {
 				t.Fatal("recovery assignment accepted trailing content")
 			}
 		})

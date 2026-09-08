@@ -231,6 +231,42 @@ func TestExecutionIDIsDeterministicAndFramed(t *testing.T) {
 	}
 }
 
+func TestDigestRequestBindsFieldsOutsideExecutionIdentity(t *testing.T) {
+	request := requestFixture([]byte("canonical source archive"))
+	first, err := DigestRequest(request)
+	if err != nil {
+		t.Fatalf("digest request: %v", err)
+	}
+	replayed, err := DigestRequest(request)
+	if err != nil || replayed != first {
+		t.Fatalf("replayed digest = %q / %v, want %q", replayed, err, first)
+	}
+
+	changed := request
+	changed.SourceExpandedBytes++
+	changedExecutionID, err := ExecutionID(changed)
+	if err != nil {
+		t.Fatalf("derive changed execution identity: %v", err)
+	}
+	originalExecutionID, err := ExecutionID(request)
+	if err != nil || changedExecutionID != originalExecutionID {
+		t.Fatalf("execution identity unexpectedly changed: %q / %v, want %q", changedExecutionID, err, originalExecutionID)
+	}
+	changedDigest, err := DigestRequest(changed)
+	if err != nil || changedDigest == first {
+		t.Fatalf("changed request digest = %q / %v, original %q", changedDigest, err, first)
+	}
+	if err := devopsv1.ValidateDigest("requestDigest", first); err != nil {
+		t.Fatalf("request digest is not canonical: %v", err)
+	}
+
+	invalid := request
+	invalid.DeadlineAt = invalid.StartedAt
+	if _, err := DigestRequest(invalid); err == nil {
+		t.Fatal("invalid request was digested")
+	}
+}
+
 func requestFixture(archive []byte) Request {
 	runID := devopsv1.ResourceID("pipeline-run-" + strings.Repeat("a", 48))
 	startedAt := time.Date(2026, 9, 8, 10, 11, 12, 123000, time.UTC)

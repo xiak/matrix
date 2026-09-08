@@ -515,7 +515,12 @@ func waitForProcessAssignment(
 			t.Fatalf("runner claim status=%d body=%q", response.StatusCode, body)
 		}
 		var archive bytes.Buffer
-		assignment, err := devopsbuildv1.ReadAssignment(response.Body, &archive)
+		assignment, err := devopsbuildv1.ReadAssignment(
+			response.Body,
+			func(devopsbuildv1.Assignment) (io.Writer, error) {
+				return &archive, nil
+			},
+		)
 		if err != nil {
 			t.Fatal(err)
 		}

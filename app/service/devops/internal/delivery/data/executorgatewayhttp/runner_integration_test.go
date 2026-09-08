@@ -11,12 +11,231 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"testing"
 	"time"
 
 	devopsbuildv1 "github.com/xiak/matrix/api/adapter/devopsbuild/v1"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/executorspoolfile"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/runnerjournalfile"
 )
+
+func TestRunnerClientAndJournalCompleteDurableMTLSRoundTrip(t *testing.T) {
+	spool := gatewaySpool(t)
+	pki := newGatewayTestPKI(t)
+	request, archive := gatewayExecutionFixture(t, '9')
+	createGatewayExecution(t, spool, request, archive)
+	now := request.StartedAt.Add(2 * time.Second)
+	server := startRunnerServer(t, spool, pki, func() time.Time { return now })
+	client, err := NewRunnerClient(
+		server.URL, gatewayServerName, pki.runnerOneCertificate,
+		pki.serverRoots, runnerNamespace,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journalRoot := t.TempDir()
+	if err := os.Chmod(journalRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := runnerjournalfile.New(journalRoot, client.RunnerID())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	claim, err := journal.BeginClaim(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	assignment, found, err := client.Claim(context.Background(), claim.Destination)
+	if err != nil || !found {
+		_ = claim.Abort()
+		t.Fatalf("claim found=%t assignment=%#v err=%v", found, assignment, err)
+	}
+	received, err := claim.Commit(context.Background())
+	if err != nil || received.Phase != runnerjournalfile.PhaseReceived ||
+		received.Assignment != assignment {
+		t.Fatalf("durable claim = %#v / %v", received, err)
+	}
+	started, err := journal.MarkEffectStarted(
+		context.Background(), received.Assignment, now.Add(time.Second),
+	)
+	if err != nil || started.Phase != runnerjournalfile.PhaseEffectStarted {
+		t.Fatalf("durable effect marker = %#v / %v", started, err)
+	}
+
+	now = now.Add(2 * time.Second)
+	renewal, err := client.Renew(context.Background(), started.Assignment)
+	if err != nil {
+		t.Fatalf("renew over mTLS: %v", err)
+	}
+	renewed, err := journal.ApplyRenewal(
+		context.Background(), started.Assignment, renewal,
+	)
+	if err != nil || !renewed.Assignment.LeaseExpiresAt.Equal(renewal.LeaseExpiresAt) {
+		t.Fatalf("durable renewal = %#v / %v", renewed, err)
+	}
+	receipt := gatewayReceipt(
+		request, client.RunnerID(), devopsbuildv1.ConclusionPassed,
+		devopsbuildv1.StepConclusionPassed, devopsbuildv1.StepConclusionPassed,
+	)
+	terminal, err := journal.RecordReceipt(
+		context.Background(), renewed.Assignment, receipt,
+	)
+	if err != nil || terminal.Phase != runnerjournalfile.PhaseTerminal {
+		t.Fatalf("durable terminal receipt = %#v / %v", terminal, err)
+	}
+	if err := client.Complete(context.Background(), renewed.Assignment, receipt); err != nil {
+		t.Fatalf("complete over mTLS: %v", err)
+	}
+	acknowledged, err := journal.Acknowledge(
+		context.Background(), renewed.Assignment, receipt,
+	)
+	if err != nil || acknowledged.Phase != runnerjournalfile.PhaseAcknowledged {
+		t.Fatalf("durable acknowledgement = %#v / %v", acknowledged, err)
+	}
+
+	restarted, err := runnerjournalfile.New(journalRoot, client.RunnerID())
+	if err != nil {
+		t.Fatalf("restart completed journal: %v", err)
+	}
+	loaded, err := restarted.Load(context.Background(), assignment.ExecutionID)
+	if err != nil || loaded.Phase != runnerjournalfile.PhaseAcknowledged ||
+		loaded.Receipt == nil || *loaded.Receipt != receipt {
+		t.Fatalf("restarted completed entry = %#v / %v", loaded, err)
+	}
+	status, err := spool.Observe(context.Background(), request)
+	if err != nil || status.State != devopsbuildv1.ExecutionTerminal ||
+		status.Receipt == nil || *status.Receipt != receipt {
+		t.Fatalf("gateway terminal state = %#v / %v", status, err)
+	}
+}
+
+func TestRunnerClientClaimsRenewsAndCompletesCurrentFence(t *testing.T) {
+	spool := gatewaySpool(t)
+	pki := newGatewayTestPKI(t)
+	request, archive := gatewayExecutionFixture(t, 'a')
+	createGatewayExecution(t, spool, request, archive)
+	now := request.StartedAt.Add(2 * time.Second)
+	server := startRunnerServer(t, spool, pki, func() time.Time { return now })
+	client, err := NewRunnerClient(
+		server.URL, gatewayServerName, pki.runnerOneCertificate,
+		pki.serverRoots, runnerNamespace,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := NewRunnerClient(
+		server.URL, gatewayServerName, pki.runnerTwoCertificate,
+		pki.serverRoots, runnerNamespace,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.RunnerID() != testRunnerID(t, runnerOneIdentity) ||
+		other.RunnerID() == client.RunnerID() {
+		t.Fatalf("runner identities=%q/%q", client.RunnerID(), other.RunnerID())
+	}
+
+	var received bytes.Buffer
+	assignment, found, err := client.Claim(
+		context.Background(),
+		func(devopsbuildv1.Assignment) (io.Writer, error) { return &received, nil },
+	)
+	if err != nil || !found || assignment.Mode != devopsbuildv1.AssignmentExecute ||
+		!bytes.Equal(received.Bytes(), archive) {
+		t.Fatalf(
+			"client claim=%#v found=%t bytes=%d err=%v",
+			assignment, found, received.Len(), err,
+		)
+	}
+	if _, err := other.Renew(context.Background(), assignment); !errors.Is(err, ErrRunnerStale) {
+		t.Fatalf("other runner renewal error=%v", err)
+	}
+	now = now.Add(time.Second)
+	renewal, err := client.Renew(context.Background(), assignment)
+	if err != nil || renewal.CancellationRequested ||
+		!renewal.LeaseExpiresAt.Equal(now.Add(executorspoolfile.RunnerLeaseDuration)) {
+		t.Fatalf("client renewal=%#v err=%v", renewal, err)
+	}
+	if _, err := spool.Cancel(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Second)
+	renewal, err = client.Renew(context.Background(), assignment)
+	if err != nil || !renewal.CancellationRequested {
+		t.Fatalf("client cancellation renewal=%#v err=%v", renewal, err)
+	}
+
+	receipt := gatewayReceipt(
+		request, client.RunnerID(), devopsbuildv1.ConclusionCancelled,
+		devopsbuildv1.StepConclusionCancelled, devopsbuildv1.StepConclusionNotRun,
+	)
+	if err := other.Complete(context.Background(), assignment, receipt); !errors.Is(err, ErrRunnerInvalid) {
+		t.Fatalf("other runner receipt identity error=%v", err)
+	}
+	if err := client.Complete(context.Background(), assignment, receipt); err != nil {
+		t.Fatalf("client complete error=%v", err)
+	}
+	if err := client.Complete(context.Background(), assignment, receipt); err != nil {
+		t.Fatalf("client completion replay error=%v", err)
+	}
+	changed := gatewayReceipt(
+		request, client.RunnerID(), devopsbuildv1.ConclusionFailed,
+		devopsbuildv1.StepConclusionFailed, devopsbuildv1.StepConclusionNotRun,
+	)
+	if err := client.Complete(context.Background(), assignment, changed); !errors.Is(err, ErrRunnerStale) {
+		t.Fatalf("changed completion error=%v", err)
+	}
+	bound := false
+	if _, found, err := client.Claim(
+		context.Background(),
+		func(devopsbuildv1.Assignment) (io.Writer, error) {
+			bound = true
+			return nil, nil
+		},
+	); err != nil || found || bound {
+		t.Fatalf(
+			"terminal claim found=%t destination-bound=%t err=%v",
+			found, bound, err,
+		)
+	}
+}
+
+func TestRunnerClientRejectsNonRunnerCertificateAndConfiguration(t *testing.T) {
+	pki := newGatewayTestPKI(t)
+	for name, certificate := range map[string]tls.Certificate{
+		"admin identity":    pki.adminCertificate,
+		"outside namespace": pki.runnerOutsideCertificate,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := NewRunnerClient(
+				"https://gateway.test", gatewayServerName, certificate,
+				pki.serverRoots, runnerNamespace,
+			); err == nil {
+				t.Fatal("non-runner client certificate was accepted")
+			}
+		})
+	}
+	if _, err := NewRunnerClient(
+		"http://gateway.test", gatewayServerName, pki.runnerOneCertificate,
+		pki.serverRoots, runnerNamespace,
+	); err == nil {
+		t.Fatal("non-TLS runner origin was accepted")
+	}
+	if _, err := NewRunnerClient(
+		"https://gateway.test", "UPPER.gateway.test", pki.runnerOneCertificate,
+		pki.serverRoots, runnerNamespace,
+	); err == nil {
+		t.Fatal("noncanonical runner server identity was accepted")
+	}
+	if _, err := NewRunnerClient(
+		"https://gateway.test", gatewayServerName, pki.runnerOneCertificate,
+		pki.serverRoots, "https://not-spiffe",
+	); err == nil {
+		t.Fatal("non-SPIFFE runner namespace was accepted")
+	}
+}
 
 func TestRunnerMTLSListenerBindsIdentityFenceAndArchive(t *testing.T) {
 	spool := gatewaySpool(t)
@@ -286,11 +505,15 @@ func claimRunner(
 		t.Fatalf("claim response=%d headers=%v", response.StatusCode, response.Header)
 	}
 	var archive bytes.Buffer
-	var destination io.Writer
-	if wantArchive {
-		destination = &archive
-	}
-	assignment, err := devopsbuildv1.ReadAssignment(response.Body, destination)
+	assignment, err := devopsbuildv1.ReadAssignment(
+		response.Body,
+		func(devopsbuildv1.Assignment) (io.Writer, error) {
+			if wantArchive {
+				return &archive, nil
+			}
+			return nil, nil
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

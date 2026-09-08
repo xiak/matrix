@@ -976,9 +976,15 @@ mTLS HTTP handlers now drive this spool over real sockets. The independent
 gateway process loads canonical protected key/certificate inputs, rejects
 overlapping role trust roots, holds an OS-level exclusive spool lock, and
 couples two explicit bounded TLS listeners so either failure stops the whole
-process. The physical build worker and runner processes, independent runner
-journal, sandbox, and normalized log persistence remain pending; no repository
-code executes yet.
+process. The outbound-only runner client derives its opaque identity from the
+runner certificate and can only claim, renew, and complete through that role's
+listener. Its independent private journal binds the complete canonical request
+before accepting archive bytes, reinspects the finished archive before atomic
+publication, holds an OS-level exclusive directory lock, and persists strict
+`RECEIVED`, `EFFECT_STARTED`, `TERMINAL`, and `ACKNOWLEDGED` generations with
+request digests, recovery fences, cancellation, and normalized receipts. The
+physical build-worker and runner process composition, sandbox, and normalized
+log persistence remain pending; no repository code executes yet.
 
 Every fenced worker transition now submits the exact next PipelineRun document
 to the database boundary. A terminal transition atomically stores a distinct
@@ -1138,6 +1144,23 @@ Current verification evidence:
   Docker, process-exec, and Prow/Kubernetes authority from the gateway source,
   while the fixed disconnected Go 1.26.8 Linux/amd64 suite proves the Linux
   lock and gateway composition twenty times without module lookup
+- outbound runner-client and independent private-journal tests proving
+  certificate-derived identity, no proxy/redirect/compression authority,
+  canonical metadata binding before archive consumption, complete-request
+  digests distinct from retry-stable execution identity, structural archive
+  reinspection, fsynced atomic publication, OS-exclusive directory ownership,
+  abandoned-claim cleanup, strict effect/terminal/acknowledged transitions,
+  lease renewal, durable cancellation, archive-free increasing-fence recovery,
+  same-runner restart, and rejection of changed request, stale fence, duplicate
+  execution, foreign identity/entry, unsafe mode, symlink, archive, assignment,
+  state, and recomputed request-digest tampering. A real TLS 1.3 mTLS journey
+  claims through the production client directly into the journal, persists the
+  pre-effect marker and renewal, submits the normalized receipt, acknowledges
+  it locally, and recovers the same terminal truth after restart. The contract,
+  spool, gateway, runner client, journal, and gateway-command suites pass race
+  detection and twenty-run repetition on Windows, plus twenty runs in the
+  fixed disconnected Go 1.26.8 Linux/amd64 image with read-only source and no
+  module lookup
 - the shared source-archive reader proves the portable receipt independently,
   matches it to the private deterministic store, structurally inspects and
   hashes the archive before handoff, and verifies its length and digest again

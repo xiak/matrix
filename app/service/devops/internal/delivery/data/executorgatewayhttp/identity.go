@@ -3,6 +3,7 @@ package executorgatewayhttp
 import (
 	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"net/url"
@@ -28,7 +29,13 @@ func peerSPIFFEIdentity(state *tls.ConnectionState) (*url.URL, error) {
 		len(state.VerifiedChains) == 0 || len(state.PeerCertificates) == 0 {
 		return nil, errors.New("executor peer is not mutually authenticated")
 	}
-	leaf := state.PeerCertificates[0]
+	return certificateSPIFFEIdentity(state.PeerCertificates[0])
+}
+
+func certificateSPIFFEIdentity(leaf *x509.Certificate) (*url.URL, error) {
+	if leaf == nil {
+		return nil, errors.New("executor peer certificate is invalid")
+	}
 	if len(leaf.URIs) != 1 || len(leaf.DNSNames) != 0 || len(leaf.EmailAddresses) != 0 ||
 		len(leaf.IPAddresses) != 0 {
 		return nil, errors.New("executor peer identity is ambiguous")
@@ -49,11 +56,18 @@ func runnerPeerIdentity(
 	namespace *url.URL,
 ) (*url.URL, error) {
 	actual, err := peerSPIFFEIdentity(state)
-	if err != nil || namespace == nil || actual.Host != namespace.Host ||
-		!strings.HasPrefix(actual.Path, namespace.Path+"/") {
+	if err != nil || runnerIdentityInNamespace(actual, namespace) != nil {
 		return nil, errors.New("executor runner identity is unauthorized")
 	}
 	return actual, nil
+}
+
+func runnerIdentityInNamespace(identity, namespace *url.URL) error {
+	if identity == nil || namespace == nil || identity.Host != namespace.Host ||
+		!strings.HasPrefix(identity.Path, namespace.Path+"/") {
+		return errors.New("executor runner identity is unauthorized")
+	}
+	return nil
 }
 
 // runnerID is deliberately opaque. Certificate rotation preserves ownership

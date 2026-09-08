@@ -51,7 +51,7 @@ func initialState(request devopsbuildv1.Request) (stateRecord, error) {
 	if err != nil {
 		return stateRecord{}, err
 	}
-	requestDigest, err := digestRequest(request)
+	requestDigest, err := devopsbuildv1.DigestRequest(request)
 	if err != nil {
 		return stateRecord{}, err
 	}
@@ -120,7 +120,7 @@ func decodeState(request devopsbuildv1.Request, content []byte) (stateRecord, er
 
 func validateState(request devopsbuildv1.Request, value stateRecord) error {
 	executionID, err := devopsbuildv1.ExecutionID(request)
-	requestDigest, requestDigestErr := digestRequest(request)
+	requestDigest, requestDigestErr := devopsbuildv1.DigestRequest(request)
 	if err != nil || value.Format != stateFormat || value.Kind != stateKind ||
 		value.Version == 0 || value.Version > devopsv1.MaximumContractInteger ||
 		requestDigestErr != nil || value.ExecutionID != executionID ||
@@ -285,15 +285,6 @@ func digestState(value stateRecord) string {
 	}
 	writeStateString(digest, receiptDigest)
 	return "sha256:" + hex.EncodeToString(digest.Sum(nil))
-}
-
-func digestRequest(value devopsbuildv1.Request) (string, error) {
-	document, err := devopsbuildv1.EncodeSubmission(value)
-	if err != nil {
-		return "", err
-	}
-	digest := sha256.Sum256(document)
-	return "sha256:" + hex.EncodeToString(digest[:]), nil
 }
 
 func validateSpoolTime(value time.Time) error {
