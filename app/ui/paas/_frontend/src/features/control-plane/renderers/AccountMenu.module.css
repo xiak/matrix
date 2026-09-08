@@ -41,20 +41,6 @@
   font-size: var(--xiak-font-size-small);
 }
 
-.panel {
-  position: absolute;
-  top: calc(100% + var(--xiak-spacing-default));
-  right: 0;
-  z-index: var(--xiak-z-popover);
-  width: min(320px, calc(100vw - var(--xiak-spacing-roomy) * 2));
-  overflow: hidden;
-  border: var(--xiak-border-subtle);
-  border-radius: var(--xiak-radius-panel);
-  background: var(--xiak-color-bg-panel);
-  color: var(--xiak-color-text-base);
-  box-shadow: var(--xiak-shadow-elevated);
-}
-
 .header {
   display: grid;
   min-width: 0;
@@ -266,14 +252,4 @@
 .menuItem:disabled {
   cursor: not-allowed;
   opacity: var(--xiak-opacity-disabled);
-}
-
-@container matrix-control-shell (max-width: 720px) {
-  .panel {
-    position: fixed;
-    top: calc(var(--xiak-layout-header-height) + var(--xiak-spacing-tight));
-    right: var(--xiak-spacing-tight);
-    left: var(--xiak-spacing-tight);
-    width: auto;
-  }
 }

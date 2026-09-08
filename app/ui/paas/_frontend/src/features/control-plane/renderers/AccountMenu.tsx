@@ -8,6 +8,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent
 } from "react";
 import { ChevronRight, LogOut, ShieldCheck } from "lucide-react";
+import { HeaderPopover } from "./HeaderPopover";
 import styles from "./AccountMenu.module.css";
 
 export type AccountIdentity = Readonly<{
@@ -92,12 +93,12 @@ export function AccountMenu({ identity, onLogout, onOpenChange, open, revoking }
       </button>
 
       {open ? (
-        <section
-          aria-label="账号菜单"
-          className={styles.panel}
+        <HeaderPopover
+          align="end"
           id={accountMenuId}
+          label="账号菜单"
           onKeyDown={handlePanelKeyDown}
-          role="dialog"
+          size="compact"
         >
           <header className={styles.header}>
             <span aria-hidden="true" className={styles.panelAvatar}>{initial}</span>
@@ -152,7 +153,7 @@ export function AccountMenu({ identity, onLogout, onOpenChange, open, revoking }
               </li>
             </ul>
           </div>
-        </section>
+        </HeaderPopover>
       ) : null}
     </div>
   );

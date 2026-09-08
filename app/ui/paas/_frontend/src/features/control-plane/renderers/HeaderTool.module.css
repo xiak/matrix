@@ -1,0 +1,47 @@
+.iconButton {
+  position: relative;
+  display: flex;
+  width: 34px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--xiak-radius-control);
+  padding: 0;
+  background: transparent;
+  color: var(--xiak-color-text-global-muted);
+  cursor: pointer;
+  outline: none;
+}
+
+.iconButton:hover,
+.iconButton[aria-expanded="true"] {
+  background: var(--xiak-color-bg-global-hover);
+  color: var(--xiak-color-text-global);
+}
+
+.iconButton:focus-visible {
+  box-shadow: var(--xiak-shadow-focus);
+}
+
+.iconButton > svg {
+  width: 18px;
+  height: 18px;
+}
+
+.iconButton > span {
+  position: absolute;
+  top: 1px;
+  right: 0;
+  display: grid;
+  min-width: 16px;
+  height: 16px;
+  place-items: center;
+  border: 2px var(--xiak-border-style) var(--xiak-color-bg-global);
+  border-radius: var(--xiak-radius-pill);
+  background: var(--xiak-color-danger);
+  color: var(--xiak-color-text-on-danger);
+  font-size: 0.625rem;
+  font-weight: var(--xiak-font-weight-bold);
+  line-height: 1;
+}

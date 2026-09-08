@@ -1,0 +1,66 @@
+.root {
+  position: relative;
+}
+
+.list {
+  display: grid;
+  max-height: 420px;
+  overflow: auto;
+  margin: 0;
+  padding: var(--xiak-spacing-tight);
+  list-style: none;
+}
+
+.list li > a {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--xiak-spacing-default);
+  align-items: center;
+  border-radius: var(--xiak-radius-control);
+  padding: var(--xiak-spacing-default);
+  color: var(--xiak-color-text-base);
+  outline: none;
+}
+
+.list li > a:hover,
+.list li > a:focus-visible {
+  background: var(--xiak-color-bg-panel-hover);
+}
+
+.list li > a > span:first-child {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--xiak-radius-pill);
+  background: var(--xiak-color-status-neutral);
+}
+
+.list li > a > span[data-status="danger"] {
+  background: var(--xiak-color-status-danger);
+}
+
+.list li > a > span[data-status="warning"] {
+  background: var(--xiak-color-status-warning);
+}
+
+.list li > a > span[data-status="info"] {
+  background: var(--xiak-color-status-info);
+}
+
+.copy {
+  display: grid;
+  min-width: 0;
+  gap: var(--xiak-spacing-narrow);
+}
+
+.copy strong,
+.copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.copy small {
+  color: var(--xiak-color-text-subtle);
+  font-size: var(--xiak-font-size-caption);
+}

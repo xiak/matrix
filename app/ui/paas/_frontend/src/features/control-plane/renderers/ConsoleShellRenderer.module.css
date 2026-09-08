@@ -26,9 +26,7 @@
 .topbarTools,
 .loadingPath,
 .legacyPath,
-.launcherButton,
-.organizationScope,
-.topbarIconButton {
+.organizationScope {
   display: flex;
   align-items: center;
 }
@@ -42,8 +40,6 @@
 }
 
 .brand:focus-visible,
-.launcherButton:focus-visible,
-.topbarIconButton:focus-visible,
 .scopeControls label:focus-within,
 .globalSearch:focus-within {
   box-shadow: var(--xiak-shadow-focus);
@@ -87,45 +83,7 @@
   gap: var(--xiak-spacing-tight);
 }
 
-.launcherWrap,
-.noticeWrap {
-  position: relative;
-}
-
-.launcherButton {
-  min-height: 34px;
-  gap: var(--xiak-spacing-tight);
-  border: var(--xiak-border-width) var(--xiak-border-style) var(--xiak-color-border-global);
-  border-radius: var(--xiak-radius-control);
-  padding-inline: var(--xiak-spacing-default);
-  background: transparent;
-  color: var(--xiak-color-text-global-muted);
-  cursor: pointer;
-  font: inherit;
-  font-size: var(--xiak-font-size-small);
-  font-weight: var(--xiak-font-weight-semibold);
-  outline: none;
-}
-
-.launcherButton:hover,
-.launcherButton[aria-expanded="true"] {
-  background: var(--xiak-color-bg-global-hover);
-  color: var(--xiak-color-text-global);
-}
-
-.launcherButton svg:first-child {
-  width: 16px;
-  height: 16px;
-}
-
-.launcherButton svg:last-child {
-  width: 13px;
-  height: 13px;
-}
-
-.productMenu,
-.searchPanel,
-.noticePanel {
+.searchPanel {
   position: absolute;
   top: calc(100% + var(--xiak-spacing-default));
   z-index: var(--xiak-z-popover);
@@ -137,103 +95,12 @@
   box-shadow: var(--xiak-shadow-elevated);
 }
 
-.productMenu {
-  left: 0;
-  width: min(680px, calc(100vw - var(--xiak-spacing-roomy) * 2));
-}
-
-.productMenu header,
-.noticePanel header {
-  display: flex;
-  min-height: 64px;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--xiak-spacing-default);
-  border-bottom: var(--xiak-border-subtle);
-  padding: var(--xiak-spacing-default) var(--xiak-spacing-comfortable);
-}
-
-.productMenu header > div,
-.noticePanel header > div {
-  display: grid;
-  gap: var(--xiak-spacing-micro);
-}
-
-.productMenu header span,
-.noticePanel header span {
-  color: var(--xiak-color-text-subtle);
-  font-size: var(--xiak-font-size-caption);
-}
-
-.productMenu header a,
-.noticePanel header a {
-  color: var(--xiak-color-accent-text);
-  font-size: var(--xiak-font-size-small);
-  font-weight: var(--xiak-font-weight-semibold);
-}
-
-.productMenuGrid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--xiak-spacing-narrow);
-  padding: var(--xiak-spacing-tight);
-}
-
-.productMenuItem {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: auto 1fr auto;
-  gap: var(--xiak-spacing-default);
-  align-items: center;
-  border-radius: var(--xiak-radius-control);
-  padding: var(--xiak-spacing-default);
-  color: var(--xiak-color-text-base);
-  outline: none;
-}
-
-.productMenuItem:hover,
-.productMenuItem:focus-visible {
-  background: var(--xiak-color-bg-panel-hover);
-}
-
-.productMenuItem > span,
-.searchResultIcon {
-  display: grid;
-  width: 36px;
-  height: 36px;
-  place-items: center;
-  border-radius: var(--xiak-radius-control);
-  background: var(--xiak-color-accent-haze);
-  color: var(--xiak-color-accent-text);
-}
-
-.productMenuItem > span[data-product="devops"],
-.searchResultIcon[data-product="devops"] {
-  background: var(--xiak-color-product-devops-bg);
-  color: var(--xiak-color-product-devops);
-}
-
-.productMenuItem > span[data-product="observability"],
-.searchResultIcon[data-product="observability"] {
-  background: var(--xiak-color-product-observability-bg);
-  color: var(--xiak-color-product-observability);
-}
-
-.productMenuItem > span svg,
-.searchResultIcon svg {
-  width: 18px;
-  height: 18px;
-}
-
-.productMenuItem > div,
 .searchResult > span:nth-child(2) {
   display: grid;
   min-width: 0;
   gap: var(--xiak-spacing-micro);
 }
 
-.productMenuItem strong,
-.productMenuItem small,
 .searchResult strong,
 .searchResult small {
   overflow: hidden;
@@ -241,16 +108,9 @@
   white-space: nowrap;
 }
 
-.productMenuItem small,
 .searchResult small {
   color: var(--xiak-color-text-subtle);
   font-size: var(--xiak-font-size-caption);
-}
-
-.productMenuItem > svg {
-  width: 15px;
-  height: 15px;
-  color: var(--xiak-color-text-subtle);
 }
 
 .globalSearch {
@@ -481,114 +341,6 @@
   font-size: var(--xiak-font-size-caption);
   font-weight: var(--xiak-font-weight-bold);
   white-space: nowrap;
-}
-
-.topbarIconButton {
-  position: relative;
-  width: 34px;
-  height: 34px;
-  justify-content: center;
-  border: 0;
-  border-radius: var(--xiak-radius-control);
-  padding: 0;
-  background: transparent;
-  color: var(--xiak-color-text-global-muted);
-  cursor: pointer;
-  outline: none;
-}
-
-.topbarIconButton:hover,
-.topbarIconButton[aria-expanded="true"] {
-  background: var(--xiak-color-bg-global-hover);
-  color: var(--xiak-color-text-global);
-}
-
-.topbarIconButton > svg {
-  width: 18px;
-  height: 18px;
-}
-
-.topbarIconButton > span {
-  position: absolute;
-  top: 1px;
-  right: 0;
-  display: grid;
-  min-width: 16px;
-  height: 16px;
-  place-items: center;
-  border: 2px var(--xiak-border-style) var(--xiak-color-bg-global);
-  border-radius: var(--xiak-radius-pill);
-  background: var(--xiak-color-danger);
-  color: var(--xiak-color-text-on-danger);
-  font-size: 0.625rem;
-  font-weight: var(--xiak-font-weight-bold);
-  line-height: 1;
-}
-
-.noticePanel {
-  right: 0;
-  width: min(440px, calc(100vw - var(--xiak-spacing-roomy) * 2));
-}
-
-.noticeList {
-  display: grid;
-  max-height: 420px;
-  overflow: auto;
-  padding: var(--xiak-spacing-tight);
-}
-
-.noticeList > a {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: auto 1fr auto;
-  gap: var(--xiak-spacing-default);
-  align-items: center;
-  border-radius: var(--xiak-radius-control);
-  padding: var(--xiak-spacing-default);
-  color: var(--xiak-color-text-base);
-  outline: none;
-}
-
-.noticeList > a:hover,
-.noticeList > a:focus-visible {
-  background: var(--xiak-color-bg-panel-hover);
-}
-
-.noticeList > a > span:first-child {
-  width: 8px;
-  height: 8px;
-  border-radius: var(--xiak-radius-pill);
-  background: var(--xiak-color-status-neutral);
-}
-
-.noticeList > a > span[data-status="danger"] {
-  background: var(--xiak-color-status-danger);
-}
-
-.noticeList > a > span[data-status="warning"] {
-  background: var(--xiak-color-status-warning);
-}
-
-.noticeList > a > span[data-status="info"] {
-  background: var(--xiak-color-status-info);
-}
-
-.noticeList > a > div {
-  display: grid;
-  min-width: 0;
-  gap: var(--xiak-spacing-narrow);
-}
-
-.noticeList strong,
-.noticeList small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.noticeList small {
-  color: var(--xiak-color-text-subtle);
-  font-size: var(--xiak-font-size-caption);
 }
 
 .globalBackdrop {
@@ -1180,16 +932,8 @@
   }
 
   .brand > span:last-child,
-  .launcherButton span,
-  .launcherButton svg:last-child,
   .previewChip {
     display: none;
-  }
-
-  .launcherButton {
-    width: 34px;
-    justify-content: center;
-    padding: 0;
   }
 
   .globalSearch {
@@ -1202,28 +946,12 @@
     display: none;
   }
 
-  .productMenu {
-    position: fixed;
-    top: calc(var(--xiak-layout-header-height) + var(--xiak-spacing-tight));
-    right: var(--xiak-spacing-tight);
-    left: var(--xiak-spacing-tight);
-    width: auto;
-  }
-
   .searchPanel {
     position: fixed;
     top: calc(var(--xiak-layout-header-height) + var(--xiak-spacing-tight));
     right: var(--xiak-spacing-tight);
     left: var(--xiak-spacing-tight);
     min-width: 0;
-  }
-
-  .noticePanel {
-    position: fixed;
-    top: calc(var(--xiak-layout-header-height) + var(--xiak-spacing-tight));
-    right: var(--xiak-spacing-tight);
-    left: var(--xiak-spacing-tight);
-    width: auto;
   }
 
   .searchPanelHeader small {
@@ -1250,10 +978,6 @@
   .shellBase[data-sidebar-overlay-open="true"] .overlayBackdrop,
   .shellBase[data-workspace-overlay-open="true"] .workspaceBackdrop {
     left: 0;
-  }
-
-  .productMenuGrid {
-    grid-template-columns: minmax(0, 1fr);
   }
 
   .operationShortcut {

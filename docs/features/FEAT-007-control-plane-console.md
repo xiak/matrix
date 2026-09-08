@@ -312,9 +312,12 @@ summaries remain product composites meanwhile.
 
 The interaction contract includes:
 
-- one product launcher and one `Ctrl/Cmd+K` search position on every page;
+- one explicitly named product launcher and one `Ctrl/Cmd+K` search position
+  on every page, including when compact layout hides the visible launcher text;
 - keyboard selection and direct navigation from search results to the owning
   product or resource page;
+- product, notification, and account header popovers focus their first action
+  on open and restore the triggering control when `Escape` dismisses them;
 - persistent project and region scope that immediately filters resource
   collections without hiding the active scope;
 - global running-Operation and notification indicators, with progress,
@@ -446,7 +449,7 @@ and `git diff --check` gates must pass on the same committed worktree.
   public-component chain, twelve static routes, memory-only IAM sessions,
   deterministic Go embedding, strict CSP hashes, and a four-region shell.
   The console layout retains its provider across child-route navigation.
-  Source gates cover the light theme, 20 semantic contrast pairs, and 70
+  Source gates cover the light theme, 20 semantic contrast pairs, and 72
   frontend tests, including visible failed revocation, logout during failed
   or pending resource loads, keyboard workspace sizing, and native instance-ID
   validation. The installed `44fa1c7` candidate proves the light login page,
@@ -484,15 +487,20 @@ and `git diff --check` gates must pass on the same committed worktree.
   notification panel, project-scoped resource filtering, and the `390px`
   navigation drawer. A separate `360px` inspection proved the open drawer and
   resource workspace match the viewport width without page-level horizontal
-  overflow. Principal identity and logout now live in one global header
+  overflow. A follow-up compact-header audit found and replaced an unnamed
+  product trigger. Product discovery and notifications now use independently
+  tested `ProductLauncher` and `NotificationCenter` composites over one shared
+  header-popover surface; both keep explicit compact names, move focus into the
+  panel, and restore it on `Escape`. Principal identity and logout live in one
+  global header
   `AccountMenu` composite instead of being duplicated in product-local
   navigation. Its grouped icon, label, description, separator, and danger-state
   rows have semantic menu behavior and keyboard focus management. The PaaS
   journey also activated a MOCK quota, submitted an
   installation, showed its pending Operation, and resolved it to a stable
-  endpoint. Component tests cover requested-route return, search keyboard
-  navigation, scope filtering, route projection, and a mutable in-memory
-  installation journey.
+  endpoint. Component tests cover requested-route return, global-header focus,
+  search keyboard navigation, scope filtering, route projection, and a mutable
+  in-memory installation journey.
   This is UX and interaction evidence over explicitly labelled MOCK data; it
   does not replace the remaining authenticated installed-release browser gate
   or any real backend acceptance.

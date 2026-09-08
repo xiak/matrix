@@ -12,19 +12,16 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   Activity,
-  Bell,
   Boxes,
   ChartNoAxesCombined,
   ChevronDown,
   ChevronRight,
   CircleGauge,
-  CloudCog,
   Database,
   Gauge,
   GitBranch,
   Grid2X2,
   LayoutDashboard,
-  Layers3,
   LogOut,
   MapPin,
   Menu,
@@ -43,7 +40,6 @@ import { LoginRenderer } from "@/features/auth/renderers/LoginRenderer";
 import type { AccountRepository } from "@/features/auth/repositories/iamRepository";
 import {
   App,
-  Badge,
   Button,
   ContentPage,
   Layout,
@@ -57,7 +53,6 @@ import type { ExperienceSnapshot } from "../domain/experience";
 import type { ControlPlaneRouteSelection } from "../domain/selection";
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
 import type {
-  ExperienceIconKind,
   GlobalSearchResultScene,
   NavigationIconKind,
   RailIconKind
@@ -65,6 +60,10 @@ import type {
 import { AccountMenu } from "./AccountMenu";
 import { ConsoleContentRenderer } from "./ConsoleContentRenderer";
 import { ConsoleWorkspaceRenderer } from "./ConsoleWorkspaceRenderer";
+import { ExperienceIconTile } from "./ExperienceIconTile";
+import headerToolStyles from "./HeaderTool.module.css";
+import { NotificationCenter } from "./NotificationCenter";
+import { ProductLauncher } from "./ProductLauncher";
 import styles from "./ConsoleShellRenderer.module.css";
 
 const railIcons = {
@@ -88,14 +87,6 @@ const navigationIcons = {
   observability: ChartNoAxesCombined,
   access: ShieldCheck
 } satisfies Record<NavigationIconKind, typeof Database>;
-
-const experienceIcons = {
-  foundation: CloudCog,
-  paas: Layers3,
-  devops: GitBranch,
-  observability: ChartNoAxesCombined,
-  security: ShieldCheck
-} satisfies Record<ExperienceIconKind, typeof Boxes>;
 
 function ShellFrame({ children }: { children: React.ReactNode }) {
   return (
@@ -171,7 +162,6 @@ function SearchResult({ active, index, item, onChoose, onHover }: {
   onChoose(): void;
   onHover(index: number): void;
 }) {
-  const Icon = experienceIcons[item.icon];
   return (
     <Link
       aria-selected={active}
@@ -182,7 +172,7 @@ function SearchResult({ active, index, item, onChoose, onHover }: {
       onMouseEnter={() => onHover(index)}
       role="option"
     >
-      <span className={styles.searchResultIcon} data-product={item.icon}><Icon aria-hidden="true" /></span>
+      <ExperienceIconTile kind={item.icon} />
       <span><strong>{item.label}</strong><small>{item.description}</small></span>
       <em>{item.category}</em>
     </Link>
@@ -325,37 +315,17 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
             <div className={styles.topbarStart}>
               <Brand />
               {scene.preview ? (
-                <div className={styles.launcherWrap}>
-                  <button
-                    aria-expanded={productMenuOpen}
-                    aria-haspopup="dialog"
-                    className={styles.launcherButton}
-                    onClick={() => {
-                      setProductMenuOpen((open) => !open);
-                      setNoticesOpen(false);
-                      setAccountMenuOpen(false);
-                      setSearchOpen(false);
-                    }}
-                    type="button"
-                  ><Grid2X2 aria-hidden="true" /><span>产品</span><ChevronDown aria-hidden="true" /></button>
-                  {productMenuOpen ? (
-                    <section aria-label="云产品入口" className={styles.productMenu} role="dialog">
-                      <header><div><strong>产品与服务</strong><span>按工作场景进入 Matrix Cloud</span></div><Link href="/console/products/" onClick={closeGlobalOverlays}>查看全部</Link></header>
-                      <div className={styles.productMenuGrid}>
-                        {productResults.map((product) => {
-                          const Icon = experienceIcons[product.icon];
-                          return (
-                            <Link className={styles.productMenuItem} href={product.href} key={product.id} onClick={closeGlobalOverlays}>
-                              <span data-product={product.icon}><Icon aria-hidden="true" /></span>
-                              <div><strong>{product.label}</strong><small>{product.description}</small></div>
-                              <ChevronRight aria-hidden="true" />
-                            </Link>
-                          );
-                        })}
-                      </div>
-                    </section>
-                  ) : null}
-                </div>
+                <ProductLauncher
+                  onOpenChange={(open) => {
+                    setProductMenuOpen(open);
+                    if (!open) return;
+                    setNoticesOpen(false);
+                    setAccountMenuOpen(false);
+                    setSearchOpen(false);
+                  }}
+                  open={productMenuOpen}
+                  products={productResults}
+                />
               ) : <div className={styles.legacyPath}><span>Control Plane</span><ChevronRight aria-hidden="true" /><strong>{scene.productName}</strong></div>}
             </div>
 
@@ -404,36 +374,20 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
                 </div>
               ) : null}
               {scene.preview ? <span className={styles.previewChip}>MOCK 体验</span> : null}
-              {scene.preview ? <Link aria-label={`操作与任务，${scene.activeOperationCount} 个执行中`} className={`${styles.topbarIconButton} ${styles.operationShortcut}`} href="/console/operations/"><Activity aria-hidden="true" />{scene.activeOperationCount ? <span>{scene.activeOperationCount}</span> : null}</Link> : null}
+              {scene.preview ? <Link aria-label={`操作与任务，${scene.activeOperationCount} 个执行中`} className={`${headerToolStyles.iconButton} ${styles.operationShortcut}`} href="/console/operations/"><Activity aria-hidden="true" />{scene.activeOperationCount ? <span>{scene.activeOperationCount}</span> : null}</Link> : null}
               {scene.preview ? (
-                <div className={styles.noticeWrap}>
-                  <button
-                    aria-expanded={noticesOpen}
-                    aria-label={`通知，${scene.noticeCount} 个待处理`}
-                    className={styles.topbarIconButton}
-                    onClick={() => {
-                      setNoticesOpen((open) => !open);
-                      setProductMenuOpen(false);
-                      setAccountMenuOpen(false);
-                      setSearchOpen(false);
-                    }}
-                    type="button"
-                  ><Bell aria-hidden="true" />{scene.noticeCount ? <span>{scene.noticeCount}</span> : null}</button>
-                  {noticesOpen ? (
-                    <section aria-label="通知中心" className={styles.noticePanel} role="dialog">
-                      <header><div><strong>通知中心</strong><span>{scene.noticeCount} 个事项需要处理</span></div><Link href="/console/observability/" onClick={closeGlobalOverlays}>告警中心</Link></header>
-                      <div className={styles.noticeList}>
-                        {scene.notices.map((notice) => (
-                          <Link href="/console/observability/" key={notice.id} onClick={closeGlobalOverlays}>
-                            <span data-status={notice.status} />
-                            <div><strong>{notice.title}</strong><small>{notice.serviceName} · {notice.startedAt}</small></div>
-                            <Badge status={notice.status}>{notice.severityLabel}</Badge>
-                          </Link>
-                        ))}
-                      </div>
-                    </section>
-                  ) : null}
-                </div>
+                <NotificationCenter
+                  count={scene.noticeCount}
+                  notices={scene.notices}
+                  onOpenChange={(open) => {
+                    setNoticesOpen(open);
+                    if (!open) return;
+                    setProductMenuOpen(false);
+                    setAccountMenuOpen(false);
+                    setSearchOpen(false);
+                  }}
+                  open={noticesOpen}
+                />
               ) : null}
               <AccountMenu
                 identity={{
