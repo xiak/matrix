@@ -306,10 +306,11 @@ func TestInstallationKeepsGoOnlyClosedLifecycleBoundaries(t *testing.T) {
 	root := repositoryRoot(t)
 	installationRoot := filepath.Join(root, "app", "service", "installation")
 	allowedExternal := map[string]struct{}{
-		"github.com/spf13/cobra":   {},
-		"github.com/spf13/pflag":   {},
-		"golang.org/x/sys/unix":    {},
-		"golang.org/x/sys/windows": {},
+		"github.com/klauspost/compress/zstd": {},
+		"github.com/spf13/cobra":             {},
+		"github.com/spf13/pflag":             {},
+		"golang.org/x/sys/unix":              {},
+		"golang.org/x/sys/windows":           {},
 	}
 	err := filepath.WalkDir(installationRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -49,7 +50,7 @@ func TestRunnerNodeCreateEnrollAndReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	storedRequest, err := os.ReadFile(filepath.Join(nodeRoot, runnerRequestFilename))
+	storedRequest, err := os.ReadFile(filepath.Join(nodeRoot, runnernodecommand.EnrollmentRequestFilename))
 	if err != nil || !bytes.Equal(storedRequest, requestBytes) {
 		t.Fatal("runner request was not stored canonically")
 	}
@@ -88,6 +89,15 @@ func TestRunnerNodeCreateEnrollAndReplay(t *testing.T) {
 		t.Fatal("runner request digest is empty")
 	} else if right, _ := runnerenrollment.RequestDigest(replayed); left != right {
 		t.Fatal("runner request replay changed its identity")
+	}
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(nodeRoot, 0o711); err != nil {
+			t.Fatal(err)
+		}
+		installedReplay, err := readExistingRunnerRequest(nodeRoot)
+		if err != nil || !equalRunnerRequests(installedReplay, request) {
+			t.Fatalf("installed search-only runner root could not replay: %v", err)
+		}
 	}
 
 	effects.entropy = rand.Reader

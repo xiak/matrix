@@ -291,8 +291,9 @@ func ValidateGatewayOrigin(value string) error {
 	if host == "" || strings.ToLower(host) != host {
 		return errors.New("runner gateway host is invalid")
 	}
-	if address := net.ParseIP(host); address != nil && address.String() != host {
-		return errors.New("runner gateway address is not canonical")
+	address := net.ParseIP(host)
+	if address == nil || address.String() != host {
+		return errors.New("runner gateway must be a canonical literal address")
 	}
 	return nil
 }

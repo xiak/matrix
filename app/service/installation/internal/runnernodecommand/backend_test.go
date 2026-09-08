@@ -1,12 +1,16 @@
 package runnernodecommand_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
+	"math/big"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -22,15 +26,19 @@ import (
 	"github.com/xiak/matrix/app/service/installation/internal/runnerenrollment"
 	"github.com/xiak/matrix/app/service/installation/internal/runnernodecommand"
 	"github.com/xiak/matrix/app/service/installation/release"
+	"github.com/xiak/matrix/app/service/installation/topology"
 )
 
 type fakeEffects struct {
-	bundle       release.VerifiedBundle
-	request      runnerenrollment.Request
-	pins         runnerenrollment.AuthorityPins
-	exported     bool
-	createCalled bool
-	enrollCalled bool
+	bundle        release.VerifiedBundle
+	request       runnerenrollment.Request
+	pins          runnerenrollment.AuthorityPins
+	exported      bool
+	createCalled  bool
+	enrollCalled  bool
+	installCalled bool
+	installPlan   runnernodecommand.InstallPlan
+	enrollment    runnerenrollment.SignedEnrollment
 }
 
 func (fake *fakeEffects) AuthenticateRunnerRelease(
@@ -64,6 +72,24 @@ func (fake *fakeEffects) EnrollRunner(
 ) (runnerenrollment.SignedEnrollment, error) {
 	fake.enrollCalled = true
 	return runnerenrollment.SignedEnrollment{}, nil
+}
+
+func (fake *fakeEffects) ReadRunnerEnrollment(
+	context.Context, string,
+) (runnerenrollment.SignedEnrollment, error) {
+	return fake.enrollment, nil
+}
+
+func (fake *fakeEffects) InstallRunnerNode(
+	_ context.Context, plan runnernodecommand.InstallPlan,
+) (runnernodecommand.InstallationEvidence, error) {
+	fake.installCalled = true
+	fake.installPlan = plan
+	digest, _ := runnerenrollment.RequestDigest(plan.Request)
+	return runnernodecommand.InstallationEvidence{
+		ReleaseID: plan.Request.ReleaseID, InstallationID: plan.Request.InstallationID,
+		NodeID: plan.Request.NodeID, Slots: uint8(len(plan.Request.Slots)), RequestDigest: digest,
+	}, nil
 }
 
 func TestRunnerReleaseExportAuthenticatesIdleSelectedInstallation(t *testing.T) {
@@ -151,7 +177,61 @@ func TestRunnerEnrollmentRejectsForeignInstallationBeforeSigning(t *testing.T) {
 	}
 }
 
+func TestRunnerInstallAuthenticatesRealSignedEnrollmentBeforeEffect(t *testing.T) {
+	manifest := releasetest.DevOpsManifest()
+	serverCA, _ := runnerTestAuthority(t, "server", 11)
+	runnerCA, runnerKey := runnerTestAuthority(t, "runner", 12)
+	pins, err := runnerenrollment.NewAuthorityPins(serverCA, runnerCA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := enrollmentRequestWithPins(
+		t, manifest.Release.ID, "mxi-11111111111111111111111111111111", pins,
+	)
+	enrollment := signedEnrollmentForRequest(t, request, serverCA, runnerCA, runnerKey)
+	effects := &fakeEffects{
+		bundle: release.VerifiedBundle{Manifest: manifest}, request: request, enrollment: enrollment,
+	}
+	backend, err := runnernodecommand.NewBackend(effects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := backend.RunRunnerNode(context.Background(), cli.RunnerNodeRequest{
+		Operation: cli.RunnerNodeInstall, Root: filepath.Join(t.TempDir(), "runner"),
+		Release: filepath.Join(t.TempDir(), "release"), TrustKey: filepath.Join(t.TempDir(), "trust.json"),
+		EnrollmentFile: filepath.Join(t.TempDir(), "enrollment.json"),
+	})
+	if err != nil || !effects.installCalled || result.State != "INSTALLED" ||
+		result.ReleaseID != request.ReleaseID || result.InstallationID != request.InstallationID ||
+		result.NodeID != request.NodeID || result.Slots != 1 || result.RequestDigest == "" ||
+		effects.installPlan.Root == "" ||
+		runnerenrollment.ValidateEnrollmentAgainstRequest(effects.installPlan.Enrollment, effects.installPlan.Request) != nil {
+		t.Fatalf("install result=%#v called=%t err=%v", result, effects.installCalled, err)
+	}
+
+	effects.installCalled = false
+	effects.enrollment = runnerenrollment.SignedEnrollment{}
+	_, err = backend.RunRunnerNode(context.Background(), cli.RunnerNodeRequest{
+		Operation: cli.RunnerNodeInstall, Root: filepath.Join(t.TempDir(), "runner"),
+		Release: filepath.Join(t.TempDir(), "release"), TrustKey: filepath.Join(t.TempDir(), "trust.json"),
+		EnrollmentFile: filepath.Join(t.TempDir(), "enrollment.json"),
+	})
+	assertFault(t, err, cli.FaultPrecondition, "RUNNER_ENROLLMENT_REQUEST_MISMATCH")
+	if effects.installCalled {
+		t.Fatal("invalid signed enrollment reached the install effect")
+	}
+}
+
 func enrollmentRequest(t *testing.T, releaseID, installationID string) runnerenrollment.Request {
+	return enrollmentRequestWithPins(t, releaseID, installationID, authorityPins())
+}
+
+func enrollmentRequestWithPins(
+	t *testing.T,
+	releaseID string,
+	installationID string,
+	pins runnerenrollment.AuthorityPins,
+) runnerenrollment.Request {
 	t.Helper()
 	identity := runnerenrollment.SlotIdentity(installationID, "runner-one", 1)
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -171,13 +251,96 @@ func enrollmentRequest(t *testing.T, releaseID, installationID string) runnerenr
 	}
 	request, err := runnerenrollment.NewRequest(
 		releaseID, installationID, "runner-one", "https://192.0.2.10:8444",
-		authorityPins(),
+		pins,
 		[]runnerenrollment.SlotRequest{{Index: 1, Identity: identity, CSR: csr}},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return request
+}
+
+func signedEnrollmentForRequest(
+	t *testing.T,
+	request runnerenrollment.Request,
+	serverCA []byte,
+	runnerCA []byte,
+	runnerKey *ecdsa.PrivateKey,
+) runnerenrollment.SignedEnrollment {
+	t.Helper()
+	requestDigest, err := runnerenrollment.RequestDigest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, _ := pem.Decode(runnerCA)
+	authority, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csr, err := x509.ParseCertificateRequest(request.Slots[0].CSR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := url.Parse(request.Slots[0].Identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf := &x509.Certificate{
+		SerialNumber: big.NewInt(101),
+		Subject:      runnerenrollment.SlotCertificateSubject(request.NodeID, 1),
+		NotBefore:    authority.NotBefore, NotAfter: authority.NotAfter,
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true, URIs: []*url.URL{identity},
+	}
+	encodedLeaf, err := x509.CreateCertificate(rand.Reader, leaf, authority, csr.PublicKey, runnerKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate := bytes.Join([][]byte{
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: encodedLeaf}), runnerCA,
+	}, nil)
+	document := runnerenrollment.EnrollmentDocument{
+		APIVersion: runnerenrollment.APIVersion, Kind: runnerenrollment.SignedEnrollmentKind,
+		RequestDigest: requestDigest, ReleaseID: request.ReleaseID,
+		InstallationID: request.InstallationID, NodeID: request.NodeID,
+		GatewayOrigin:     request.GatewayOrigin,
+		GatewayServerName: topology.DevOpsExecutorGatewayServerName,
+		RunnerNamespace:   request.RunnerNamespace, ServerCA: serverCA, RunnerCA: runnerCA,
+		Slots: []runnerenrollment.IssuedSlot{{
+			Index: 1, Identity: request.Slots[0].Identity, Certificate: certificate,
+		}},
+	}
+	signed, err := runnerenrollment.NewSignedEnrollment(document, runnerKey, rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return signed
+}
+
+func runnerTestAuthority(
+	t *testing.T,
+	role string,
+	serial int64,
+) ([]byte, *ecdsa.PrivateKey) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(serial),
+		Subject:               pkix.Name{Organization: []string{"Matrix"}, CommonName: "test " + role},
+		NotBefore:             time.Date(2026, 9, 9, 0, 0, 0, 0, time.UTC),
+		NotAfter:              time.Date(2031, 9, 9, 0, 0, 0, 0, time.UTC),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true, IsCA: true, MaxPathLen: 0, MaxPathLenZero: true,
+	}
+	encoded, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: encoded}), key
 }
 
 func authorityPins() runnerenrollment.AuthorityPins {

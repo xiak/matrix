@@ -17,6 +17,8 @@ import (
 	"github.com/xiak/matrix/app/service/installation/release"
 )
 
+const EnrollmentRequestFilename = "enrollment-request.json"
+
 var (
 	ErrEffectInput          = errors.New("runner node effect input is invalid")
 	ErrEffectConflict       = errors.New("runner node filesystem ownership conflicts")
@@ -51,12 +53,29 @@ type EnrollPlan struct {
 	Output         string
 }
 
+type InstallPlan struct {
+	Root       string
+	Bundle     release.VerifiedBundle
+	Request    runnerenrollment.Request
+	Enrollment runnerenrollment.SignedEnrollment
+}
+
+type InstallationEvidence struct {
+	ReleaseID      string
+	InstallationID string
+	NodeID         string
+	Slots          uint8
+	RequestDigest  string
+}
+
 type Effects interface {
 	AuthenticateRunnerRelease(context.Context, string, string) (release.VerifiedBundle, error)
 	CreateRunnerRequest(context.Context, CreateRequestPlan) (runnerenrollment.Request, error)
 	ExportRunnerRelease(context.Context, ExportReleasePlan) (runnerenrollment.AuthorityPins, error)
 	ReadRunnerRequest(context.Context, string) (runnerenrollment.Request, error)
+	ReadRunnerEnrollment(context.Context, string) (runnerenrollment.SignedEnrollment, error)
 	EnrollRunner(context.Context, EnrollPlan) (runnerenrollment.SignedEnrollment, error)
+	InstallRunnerNode(context.Context, InstallPlan) (InstallationEvidence, error)
 }
 
 type Backend struct {
@@ -86,12 +105,15 @@ func (backend *Backend) RunRunnerNode(
 	if err := validateRequest(request); err != nil {
 		return cli.RunnerNodeResult{}, fault(cli.FaultInvalidArgument, "RUNNER_NODE_INPUT_INVALID")
 	}
-	if request.Operation == cli.RunnerNodeCreateRequest {
+	if request.Operation == cli.RunnerNodeCreateRequest || request.Operation == cli.RunnerNodeInstall {
 		bundle, err := backend.effects.AuthenticateRunnerRelease(
 			ctx, request.Release, request.TrustKey,
 		)
 		if err != nil {
 			return cli.RunnerNodeResult{}, effectFault(err)
+		}
+		if request.Operation == cli.RunnerNodeInstall {
+			return backend.install(ctx, request, bundle)
 		}
 		created, err := backend.effects.CreateRunnerRequest(ctx, CreateRequestPlan{
 			Root: request.Root, Bundle: bundle, InstallationID: request.InstallationID,
@@ -194,6 +216,45 @@ func (backend *Backend) RunRunnerNode(
 	}
 }
 
+func (backend *Backend) install(
+	ctx context.Context,
+	request cli.RunnerNodeRequest,
+	bundle release.VerifiedBundle,
+) (cli.RunnerNodeResult, error) {
+	stored, err := backend.effects.ReadRunnerRequest(
+		ctx, filepath.Join(request.Root, EnrollmentRequestFilename),
+	)
+	if err != nil {
+		return cli.RunnerNodeResult{}, effectFault(err)
+	}
+	enrollment, err := backend.effects.ReadRunnerEnrollment(ctx, request.EnrollmentFile)
+	if err != nil {
+		return cli.RunnerNodeResult{}, effectFault(err)
+	}
+	if stored.ReleaseID != bundle.Manifest.Release.ID ||
+		runnerenrollment.ValidateEnrollmentAgainstRequest(enrollment, stored) != nil {
+		return cli.RunnerNodeResult{}, fault(cli.FaultPrecondition, "RUNNER_ENROLLMENT_REQUEST_MISMATCH")
+	}
+	evidence, err := backend.effects.InstallRunnerNode(ctx, InstallPlan{
+		Root: request.Root, Bundle: bundle, Request: stored, Enrollment: enrollment,
+	})
+	if err != nil {
+		return cli.RunnerNodeResult{}, effectFault(err)
+	}
+	digest, digestErr := runnerenrollment.RequestDigest(stored)
+	if digestErr != nil || evidence != (InstallationEvidence{
+		ReleaseID: stored.ReleaseID, InstallationID: stored.InstallationID,
+		NodeID: stored.NodeID, Slots: uint8(len(stored.Slots)), RequestDigest: digest,
+	}) {
+		return cli.RunnerNodeResult{}, fault(cli.FaultInternal, "RUNNER_INSTALL_RESULT_INVALID")
+	}
+	return cli.RunnerNodeResult{
+		State: "INSTALLED", ReleaseID: evidence.ReleaseID,
+		InstallationID: evidence.InstallationID, NodeID: evidence.NodeID,
+		Slots: evidence.Slots, RequestDigest: evidence.RequestDigest,
+	}, nil
+}
+
 func authenticateSelectedRelease(
 	root string,
 	state lifecycle.Journal,
@@ -228,7 +289,8 @@ func validateRequest(request cli.RunnerNodeRequest) error {
 		if !cleanAbsolute(request.Root) || !cleanAbsolute(request.Output) ||
 			request.Release != "" || request.TrustKey != "" || request.InstallationID != "" ||
 			request.NodeID != "" || request.Slots != 0 || request.GatewayOrigin != "" ||
-			request.ServerCAPin != "" || request.RunnerCAPin != "" || request.RequestFile != "" {
+			request.ServerCAPin != "" || request.RunnerCAPin != "" || request.RequestFile != "" ||
+			request.EnrollmentFile != "" {
 			return errors.New("runner release export input is invalid")
 		}
 	case cli.RunnerNodeCreateRequest:
@@ -242,15 +304,24 @@ func validateRequest(request cli.RunnerNodeRequest) error {
 				ServerCAFingerprint: request.ServerCAPin,
 				RunnerCAFingerprint: request.RunnerCAPin,
 			}) != nil ||
-			request.RequestFile != "" || request.Output != "" {
+			request.RequestFile != "" || request.EnrollmentFile != "" || request.Output != "" {
 			return errors.New("runner request input is invalid")
 		}
 	case cli.RunnerNodeEnroll:
 		if !cleanAbsolute(request.Root) || !cleanAbsolute(request.RequestFile) ||
 			!cleanAbsolute(request.Output) || request.Release != "" || request.TrustKey != "" ||
 			request.InstallationID != "" || request.NodeID != "" || request.Slots != 0 ||
-			request.GatewayOrigin != "" || request.ServerCAPin != "" || request.RunnerCAPin != "" {
+			request.GatewayOrigin != "" || request.ServerCAPin != "" || request.RunnerCAPin != "" ||
+			request.EnrollmentFile != "" {
 			return errors.New("runner enrollment input is invalid")
+		}
+	case cli.RunnerNodeInstall:
+		if !cleanAbsolute(request.Root) || !cleanAbsolute(request.Release) ||
+			!cleanAbsolute(request.TrustKey) || !cleanAbsolute(request.EnrollmentFile) ||
+			request.InstallationID != "" || request.NodeID != "" || request.Slots != 0 ||
+			request.GatewayOrigin != "" || request.ServerCAPin != "" || request.RunnerCAPin != "" ||
+			request.RequestFile != "" || request.Output != "" {
+			return errors.New("runner installation input is invalid")
 		}
 	default:
 		return errors.New("runner node operation is invalid")

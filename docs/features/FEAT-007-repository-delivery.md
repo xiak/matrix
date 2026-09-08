@@ -19,8 +19,9 @@
   audited public log reads, physical runner process composition, and selected
   control-plane execution topology with installation-owned mTLS material
   complete; authenticated standalone runner-node release export and pinned-CA
-  CSR enrollment complete; dedicated-node installation, real isolated
-  execution, and reporter effects pending
+  CSR enrollment complete; dedicated-node installer implementation,
+  controlled-host Linux integration, and authentic-material evidence complete;
+  real dedicated-host isolated execution and reporter effects pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -1218,9 +1219,25 @@ installation authority fingerprints, creates one-to-four disjoint node-local
 keys and CSRs bound to those fingerprints, and signs matching certificates
 without ever receiving runner private keys. Equal request/enrollment replay is
 stable, while changed node use, changed authority pins, foreign installations,
-tampered payloads, and PaaS-only releases fail closed. Dedicated-node runtime
-installation and a real PostgreSQL-to-runner process journey remain pending,
-so no repository code executes yet.
+tampered payloads, and PaaS-only releases fail closed. The node-side
+`mx devops runner-node install` command now authenticates that exported subset
+and the signed CSR-matching enrollment, rejects unsupported or unsafe hosts
+before publishing runtime material, and atomically installs an exact
+root-owned inventory. A pinned pure-Go
+`github.com/klauspost/compress` `v1.20.0` zstd reader extracts and re-verifies
+only the fixed gVisor archive entries without a package manager, network,
+shell, or ambient decompressor. The Linux/amd64
+adapter serializes convergence with one host lock, accepts only an absent or
+exact dedicated Docker configuration, creates one non-shared system account
+per slot, assigns disjoint private roots, validates nftables and systemd
+profiles before publication, activates the UID-bound gateway-only firewall
+before Docker or runner processes, loads and re-inspects one exact local
+toolchain image identity, and requires exact loopback readiness. Runner units
+are disabled before convergence and again after every failed activation, while
+the fail-closed firewall remains active. A real dedicated Linux host running
+systemd, nftables, Docker `29.x`, and the pinned `runsc`, plus the end-to-end
+PostgreSQL-to-runner process journey, remain pending, so no repository code
+executes yet.
 
 Every fenced worker transition now submits the exact next PipelineRun document
 to the database boundary. A terminal transition atomically stores a distinct
@@ -1513,6 +1530,26 @@ Current verification evidence:
   runs in the fixed disconnected Linux/amd64 image with read-only source and
   module cache; this is distribution and enrollment evidence, not
   dedicated-node installation or gVisor execution
+- dedicated runner-node installation tests proving the closed CLI request and
+  non-secret result, release/enrollment/request rebinding, Linux/amd64 root
+  preflight before material publication, exact root-owned installed inventory,
+  fixed-entry single-threaded bounded zstd extraction, equal replay, and
+  rejection of DNS gateway authority, changed payload/PKI, links, foreign host
+  profiles, shared Docker configuration, account reuse, path drift, and
+  unowned material. Root Linux filesystem integration behind a closed fake
+  command boundary proves one account per slot, disjoint ownership, exact
+  systemd and nftables rendering and validation, firewall-before-Docker-before-
+  toolchain-before-runner activation, exact Docker `29.x` API and `runsc`
+  inspection, toolchain cleanup, readiness-gated success, global locking, and
+  stop-plus-disable containment on failure. All repository tests and vet pass
+  on Windows; the affected installer, runner-command, and CLI packages pass
+  race detection and twenty-run repetition on Windows plus twenty runs in the
+  fixed disconnected Go 1.26.8 Linux/amd64 image with read-only source and
+  module cache. A separate disconnected Linux integration installs the actual
+  current runner binary, pinned official gVisor archive, and real Docker-save
+  toolchain archive, then re-verifies the complete material inventory and
+  extracted binaries. This is installer and filesystem evidence; it is not a
+  real systemd/nftables/Docker/runsc host or repository-code execution gate
 - selected-product installation and topology tests proving journal-stable PKI
   issuance time, three disjoint P-256 authorities, exact gateway and
   build-worker identities, canonical write-once authority storage,

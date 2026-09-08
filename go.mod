@@ -6,6 +6,7 @@ require (
 	github.com/go-git/go-billy/v5 v5.9.0
 	github.com/go-git/go-git/v5 v5.19.2
 	github.com/jackc/pgx/v5 v5.10.0
+	github.com/klauspost/compress v1.20.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10

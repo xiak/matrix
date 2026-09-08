@@ -130,6 +130,9 @@ func TestEnrollmentRequestRejectsExpandedOrUnsafeNodeAuthority(t *testing.T) {
 	base := []SlotRequest{{Index: 1, Identity: identity, CSR: csr}}
 	pins := testAuthorityPins()
 	tests := map[string]func() (Request, error){
+		"DNS gateway": func() (Request, error) {
+			return NewRequest(testReleaseID, testInstallationID, testNodeID, "https://runner.example.test:8444", pins, base)
+		},
 		"non canonical gateway": func() (Request, error) {
 			return NewRequest(testReleaseID, testInstallationID, testNodeID, "https://EXAMPLE.com:8444", pins, base)
 		},

@@ -40,6 +40,7 @@ const (
 	actionRunnerNodeExportRelease        commandAction = "RUNNER_NODE_EXPORT_RELEASE"
 	actionRunnerNodeRequest              commandAction = "RUNNER_NODE_REQUEST"
 	actionRunnerNodeEnroll               commandAction = "RUNNER_NODE_ENROLL"
+	actionRunnerNodeInstall              commandAction = "RUNNER_NODE_INSTALL"
 )
 
 type invocationError struct {
@@ -78,6 +79,7 @@ type runnerNodeOptions struct {
 	serverCAPin    string
 	runnerCAPin    string
 	requestFile    string
+	enrollmentFile string
 	output         string
 }
 
@@ -226,7 +228,7 @@ func newRunnerNodeCommand(
 		},
 	}
 	for _, operation := range []RunnerNodeOperation{
-		RunnerNodeExportRelease, RunnerNodeCreateRequest, RunnerNodeEnroll,
+		RunnerNodeExportRelease, RunnerNodeCreateRequest, RunnerNodeEnroll, RunnerNodeInstall,
 	} {
 		runner.AddCommand(newRunnerNodeOperationCommand(out, backend, operation, format))
 	}
@@ -244,11 +246,13 @@ func newRunnerNodeOperationCommand(
 		RunnerNodeExportRelease: "export-release",
 		RunnerNodeCreateRequest: "request",
 		RunnerNodeEnroll:        "enroll",
+		RunnerNodeInstall:       "install",
 	}[operation]
 	short := map[RunnerNodeOperation]string{
 		RunnerNodeExportRelease: "Export the authenticated dedicated-runner release subset",
 		RunnerNodeCreateRequest: "Create node-local runner keys and a CSR request",
 		RunnerNodeEnroll:        "Enroll a runner CSR request into this installation",
+		RunnerNodeInstall:       "Install an enrolled dedicated runner node",
 	}[operation]
 	action := runnerNodeAction(operation)
 	command := &cobra.Command{
@@ -263,7 +267,7 @@ func newRunnerNodeOperationCommand(
 				NodeID: options.nodeID, Slots: options.slots,
 				GatewayOrigin: options.gatewayOrigin, ServerCAPin: options.serverCAPin,
 				RunnerCAPin: options.runnerCAPin, RequestFile: options.requestFile,
-				Output: options.output,
+				EnrollmentFile: options.enrollmentFile, Output: options.output,
 			})
 			if err != nil {
 				return &invocationError{action: action, err: err}
@@ -274,7 +278,7 @@ func newRunnerNodeOperationCommand(
 				NodeID: options.nodeID, Slots: options.slots,
 				GatewayOrigin: options.gatewayOrigin, ServerCAPin: options.serverCAPin,
 				RunnerCAPin: options.runnerCAPin, RequestFile: options.requestFile,
-				Output: options.output,
+				EnrollmentFile: options.enrollmentFile, Output: options.output,
 			}
 			if err := validateRunnerNodeResult(request, result); err != nil {
 				return &invocationError{action: action, err: err}
@@ -304,6 +308,11 @@ func newRunnerNodeOperationCommand(
 		flags.StringVar(&options.root, "root", "", "absolute Matrix installation root")
 		flags.StringVar(&options.requestFile, "request", "", "runner-node enrollment request file")
 		flags.StringVar(&options.output, "output", "", "new signed enrollment response file")
+	case RunnerNodeInstall:
+		flags.StringVar(&options.root, "root", "", "private runner-node root created by request")
+		flags.StringVar(&options.release, "release", "", "authenticated dedicated-runner release directory")
+		flags.StringVar(&options.trustKey, "trust-key", "", "out-of-band release trust root")
+		flags.StringVar(&options.enrollmentFile, "enrollment", "", "signed runner enrollment response file")
 	}
 	return command
 }
@@ -328,6 +337,11 @@ func validateRunnerNodeFlags(operation RunnerNodeOperation, options *runnerNodeO
 		if strings.TrimSpace(options.requestFile) == "" || strings.TrimSpace(options.output) == "" {
 			return errors.New("runner enrollment request and output are required")
 		}
+	case RunnerNodeInstall:
+		if strings.TrimSpace(options.release) == "" || strings.TrimSpace(options.trustKey) == "" ||
+			strings.TrimSpace(options.enrollmentFile) == "" {
+			return errors.New("runner release, trust, and enrollment are required")
+		}
 	default:
 		return errors.New("runner node operation is invalid")
 	}
@@ -342,6 +356,8 @@ func runnerNodeAction(operation RunnerNodeOperation) commandAction {
 		return actionRunnerNodeRequest
 	case RunnerNodeEnroll:
 		return actionRunnerNodeEnroll
+	case RunnerNodeInstall:
+		return actionRunnerNodeInstall
 	default:
 		return ""
 	}
@@ -525,6 +541,8 @@ func actionForCommand(command *cobra.Command) commandAction {
 			return actionRunnerNodeRequest
 		case "enroll":
 			return actionRunnerNodeEnroll
+		case "install":
+			return actionRunnerNodeInstall
 		}
 	}
 	switch command.Name() {
@@ -739,7 +757,7 @@ func writeFailure(out io.Writer, format outputFormat, action commandAction, faul
 		if action == actionSourceCredentialApply || action == actionSourceCredentialRetirePrevious {
 			kind = "SourceCredentialCommandFailure"
 		} else if action == actionRunnerNodeExportRelease || action == actionRunnerNodeRequest ||
-			action == actionRunnerNodeEnroll {
+			action == actionRunnerNodeEnroll || action == actionRunnerNodeInstall {
 			kind = "RunnerNodeCommandFailure"
 		}
 		return writeJSONLine(out, failureEnvelope{

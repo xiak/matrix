@@ -332,6 +332,19 @@ func TestRunnerNodeCommandsBuildClosedRequests(t *testing.T) {
 				RequestFile: "/media/enrollment-request.json", Output: "/media/enrollment.json",
 			},
 		},
+		{
+			name: "install",
+			args: []string{
+				"devops", "runner-node", "install", "--root", "/srv/matrix-runner",
+				"--release", "/media/runner-release", "--trust-key", "/media/release-trust.json",
+				"--enrollment", "/media/enrollment.json",
+			},
+			want: RunnerNodeRequest{
+				Operation: RunnerNodeInstall, Root: "/srv/matrix-runner",
+				Release: "/media/runner-release", TrustKey: "/media/release-trust.json",
+				EnrollmentFile: "/media/enrollment.json",
+			},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -350,6 +363,8 @@ func TestRunnerNodeCommandsBuildClosedRequests(t *testing.T) {
 					result.State = "ENROLLED"
 					if request.Operation == RunnerNodeCreateRequest {
 						result.State = "REQUESTED"
+					} else if request.Operation == RunnerNodeInstall {
+						result.State = "INSTALLED"
 					}
 					result.InstallationID = "mxi-11111111111111111111111111111111"
 					result.NodeID = "runner-one"
@@ -368,7 +383,9 @@ func TestRunnerNodeCommandsBuildClosedRequests(t *testing.T) {
 			if exit != ExitSuccess || got != test.want || errOut.Len() != 0 {
 				t.Fatalf("runner command exit=%d request=%#v output=%q", exit, got, errOut.String())
 			}
-			for _, secretPath := range []string{test.want.TrustKey, test.want.RequestFile, test.want.Output} {
+			for _, secretPath := range []string{
+				test.want.TrustKey, test.want.RequestFile, test.want.EnrollmentFile, test.want.Output,
+			} {
 				if secretPath != "" && strings.Contains(out.String(), secretPath) {
 					t.Fatalf("runner command disclosed native path %q", secretPath)
 				}

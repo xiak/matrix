@@ -18,6 +18,7 @@ type Effects struct {
 	entropy          io.Reader
 	verifier         installationVerifier
 	projectInspector RecoveryProjectInspector
+	runnerSystem     runnerNodeSystem
 }
 
 func NewEffects(projectInspector RecoveryProjectInspector) *Effects {
@@ -25,6 +26,7 @@ func NewEffects(projectInspector RecoveryProjectInspector) *Effects {
 		runtime: localDockerRuntime{}, entropy: rand.Reader,
 		verifier:         newHTTPInstallationVerifier(nil),
 		projectInspector: projectInspector,
+		runnerSystem:     newRunnerNodeSystem(),
 	}
 }
 

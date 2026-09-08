@@ -25,9 +25,8 @@ import (
 )
 
 const (
-	runnerRequestFilename = "enrollment-request.json"
-	maximumRunnerRequest  = 128 * 1024
-	maximumEnrollment     = 256 * 1024
+	maximumRunnerRequest = 128 * 1024
+	maximumEnrollment    = 256 * 1024
 )
 
 var _ runnernodecommand.Effects = (*Effects)(nil)
@@ -184,7 +183,7 @@ func (effects *Effects) CreateRunnerRequest(
 	defer clear(requestBytes)
 	err = publishPrivateDirectory(plan.Root, func(staging string) error {
 		if err := writePrivateFile(
-			filepath.Join(staging, runnerRequestFilename), requestBytes, false,
+			filepath.Join(staging, runnernodecommand.EnrollmentRequestFilename), requestBytes, false,
 		); err != nil {
 			return err
 		}
@@ -234,6 +233,28 @@ func (effects *Effects) ReadRunnerRequest(
 		return runnerenrollment.Request{}, errors.Join(runnernodecommand.ErrEffectVerification, err)
 	}
 	return request, nil
+}
+
+func (effects *Effects) ReadRunnerEnrollment(
+	ctx context.Context,
+	path string,
+) (runnerenrollment.SignedEnrollment, error) {
+	if effects == nil || ctx == nil {
+		return runnerenrollment.SignedEnrollment{}, runnernodecommand.ErrEffectUnavailable
+	}
+	if err := ctx.Err(); err != nil {
+		return runnerenrollment.SignedEnrollment{}, err
+	}
+	content, err := processconfig.ReadFile(path, maximumEnrollment, false)
+	if err != nil {
+		return runnerenrollment.SignedEnrollment{}, errors.Join(runnernodecommand.ErrEffectInput, err)
+	}
+	defer clear(content)
+	enrollment, err := runnerenrollment.DecodeSignedEnrollment(content)
+	if err != nil {
+		return runnerenrollment.SignedEnrollment{}, errors.Join(runnernodecommand.ErrEffectVerification, err)
+	}
+	return enrollment, nil
 }
 
 func (effects *Effects) EnrollRunner(
@@ -413,11 +434,11 @@ func readRunnerAuthorityPins(root, installationID string) (runnerenrollment.Auth
 }
 
 func readExistingRunnerRequest(root string) (runnerenrollment.Request, error) {
-	if err := validateManagedRoot(root); err != nil {
+	if err := validateRunnerNodeRoot(root); err != nil {
 		return runnerenrollment.Request{}, err
 	}
 	content, err := processconfig.ReadFile(
-		filepath.Join(root, runnerRequestFilename), maximumRunnerRequest, false,
+		filepath.Join(root, runnernodecommand.EnrollmentRequestFilename), maximumRunnerRequest, false,
 	)
 	if err != nil {
 		return runnerenrollment.Request{}, err

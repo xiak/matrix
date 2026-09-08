@@ -76,6 +76,7 @@ const (
 	RunnerNodeExportRelease RunnerNodeOperation = "EXPORT_RELEASE"
 	RunnerNodeCreateRequest RunnerNodeOperation = "REQUEST"
 	RunnerNodeEnroll        RunnerNodeOperation = "ENROLL"
+	RunnerNodeInstall       RunnerNodeOperation = "INSTALL"
 )
 
 type RunnerNodeRequest struct {
@@ -90,6 +91,7 @@ type RunnerNodeRequest struct {
 	ServerCAPin    string
 	RunnerCAPin    string
 	RequestFile    string
+	EnrollmentFile string
 	Output         string
 }
 
@@ -208,6 +210,8 @@ func validateRunnerNodeResult(
 		wantState = "REQUESTED"
 	case RunnerNodeEnroll:
 		wantState = "ENROLLED"
+	case RunnerNodeInstall:
+		wantState = "INSTALLED"
 	default:
 		return errors.New("runner node operation is invalid")
 	}
