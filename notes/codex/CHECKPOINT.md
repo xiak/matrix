@@ -6,7 +6,7 @@
 - Updated: 2026-09-08
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `676d2cc`
+- Current pushed implementation baseline: `7b0f66d`
 
 ## Goal
 
@@ -18,18 +18,16 @@ architecture, FEAT, implementation, test, and release gates.
 
 - FEAT-007 remains the authoritative owner and is `In progress`; read it and
   the directly owning code/tests before continuing.
-- Pushed `676d2cc` adds the fenced source-acquisition use case, deterministic
-  provider-neutral gzip/tar codec, private atomic filesystem archive and
-  canonical path-free receipt, and fixed pure-Go Gitea smart-HTTP fetcher.
-  Execute claims may contact Gitea; recovered claims only rehash and parse an
-  already-published archive. Commit, deadline, cancellation, lease-loss,
-  redirect, SHA-1, path, mode, size, and tamper behavior is closed.
-- The opt-in protocol gate passes against the exact pinned Gitea `1.27.3`
-  digest by creating a real branch, commit, and pull request, fetching only its
-  trusted base and pull-head refs, and reproducing the head tree without
-  `.git`. Full repository tests pass on Go `1.26.8`; focused race and 20-run
-  suites pass; `govulncheck v1.7.0` reports zero reachable vulnerabilities
-  after upgrading `x/crypto` to `v0.56.0`.
+- Pushed `7b0f66d` completes source acquisition through the installed runtime:
+  a forced-RLS archive-receipt table, table-blind source-fetcher role with
+  exactly five functions, exclusive `FETCH` claims, fenced atomic receipt/run
+  completion, heartbeat-gated readiness, and the selected-only
+  `matrix-devops-source-fetcher` process and offline binary.
+- The fresh DevOps and four-product PostgreSQL 18 journeys pass, including
+  double apply, missing-receipt bypass rejection, failure/cancellation without
+  receipts, fencing recovery, exact cross-schema denial, and two valid archive
+  receipts. Full tests and vet pass on Go `1.26.8`; focused race and 20-run
+  suites plus Linux/amd64 CGO-disabled full build pass.
 - The user-owned untracked `app/ui/paas/` tree remains untouched.
 
 ## Adoption boundary
@@ -42,13 +40,11 @@ architecture, FEAT, implementation, test, and release gates.
 
 ## Continuation
 
-Continue FEAT-007 by connecting the completed acquisition boundary to one
-tenant-leading forced-RLS archive-receipt table, an exact table-blind
-source-fetcher role/function set, atomic `FETCHING -> VERIFYING` receipt
-transaction, heartbeat-gated readiness, and the selected-only
-`matrix-devops-source-fetcher` process/topology. Prove clean/double PostgreSQL
-18 apply, fairness, fencing, bypass rejection, crash observation, private mount
-authority, and offline binary inclusion before BuildExecutor, reporter, or
-formal UI integration. Preserve pragmatic DDD, replacement-first pre-v1
-changes, optional-product isolation, and repository-local Git identity
-`Xiak <Jellal@aliyun.com>`.
+Continue FEAT-007 with the smallest independently testable Matrix Native
+BuildExecutor vertical slice, consuming only the immutable source receipt and
+the existing `VERIFY` fence. Follow the fixed dedicated-runner, offline
+toolchain, gVisor, no-egress, resource, and sanitized-log boundaries already
+owned by FEAT-007; do not couple it to PaaS execution or begin formal UI
+integration before the real executor boundary passes. Preserve pragmatic DDD,
+replacement-first pre-v1 changes, optional-product isolation, and
+repository-local Git identity `Xiak <Jellal@aliyun.com>`.
