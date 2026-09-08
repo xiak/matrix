@@ -62,6 +62,7 @@ import type {
   NavigationIconKind,
   RailIconKind
 } from "../scenes/consoleScene";
+import { AccountMenu } from "./AccountMenu";
 import { ConsoleContentRenderer } from "./ConsoleContentRenderer";
 import { ConsoleWorkspaceRenderer } from "./ConsoleWorkspaceRenderer";
 import styles from "./ConsoleShellRenderer.module.css";
@@ -194,7 +195,6 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
   const controlPlane = useControlPlane();
   const scene = controlPlane.scene;
   const searchInput = useRef<HTMLInputElement>(null);
-  const accountTrigger = useRef<HTMLButtonElement>(null);
   const sidebarOverlayOpen = useConsoleUiStore((state) => state.sidebarOverlayOpen);
   const workspaceOpen = useConsoleUiStore((state) => state.workspaceOpen);
   const openSidebar = useConsoleUiStore((state) => state.openSidebar);
@@ -232,7 +232,6 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
         searchInput.current?.focus();
       }
       if (event.key === "Escape") {
-        if (accountMenuOpen) accountTrigger.current?.focus();
         closeSidebar();
         closeWorkspace();
         setProductMenuOpen(false);
@@ -243,7 +242,7 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
     };
     window.addEventListener("keydown", shortcuts);
     return () => window.removeEventListener("keydown", shortcuts);
-  }, [accountMenuOpen, closeSidebar, closeWorkspace]);
+  }, [closeSidebar, closeWorkspace]);
 
   async function logout() {
     if (await session.logout()) {
@@ -436,44 +435,24 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
                   ) : null}
                 </div>
               ) : null}
-              <div className={styles.accountWrap}>
-                <button
-                  aria-expanded={accountMenuOpen}
-                  aria-haspopup="dialog"
-                  aria-label={`${accountMenuOpen ? "关闭" : "打开"}账号菜单，当前用户 ${principalName}`}
-                  className={styles.accountTrigger}
-                  onClick={() => {
-                    setAccountMenuOpen((open) => !open);
-                    setProductMenuOpen(false);
-                    setNoticesOpen(false);
-                    setSearchOpen(false);
-                  }}
-                  ref={accountTrigger}
-                  type="button"
-                >
-                  <span aria-hidden="true" className={styles.topbarAvatar}>{principalName.slice(0, 1).toUpperCase()}</span>
-                </button>
-                {accountMenuOpen ? (
-                  <section aria-label="账号菜单" className={styles.accountPanel} role="dialog">
-                    <header className={styles.accountPanelHeader}>
-                      <span aria-hidden="true" className={styles.accountPanelAvatar}>{principalName.slice(0, 1).toUpperCase()}</span>
-                      <div className={styles.accountIdentity}>
-                        <small>当前登录用户</small>
-                        <strong>{principalName}</strong>
-                        <span>{principalId}</span>
-                      </div>
-                    </header>
-                    <dl className={styles.accountMetadata}>
-                      <div><dt>当前租户</dt><dd><strong>{tenantName}</strong>{tenantId ? <span>{tenantId}</span> : null}</dd></div>
-                      <div><dt>账号类型</dt><dd>{accountType}</dd></div>
-                    </dl>
-                    <div className={styles.accountActions}>
-                      <Link href="/console/access/" onClick={closeGlobalOverlays}><ShieldCheck aria-hidden="true" /><span>账号与权限</span><ChevronRight aria-hidden="true" /></Link>
-                      <button aria-label="注销并撤销 IAM 会话" disabled={session.phase === "revoking"} onClick={() => void logout()} type="button"><LogOut aria-hidden="true" /><span>{session.phase === "revoking" ? "正在退出…" : "退出登录"}</span></button>
-                    </div>
-                  </section>
-                ) : null}
-              </div>
+              <AccountMenu
+                identity={{
+                  accountType,
+                  loginName: principalName,
+                  principalId,
+                  tenant: { id: tenantId, name: tenantName }
+                }}
+                onLogout={() => void logout()}
+                onOpenChange={(open) => {
+                  setAccountMenuOpen(open);
+                  if (!open) return;
+                  setProductMenuOpen(false);
+                  setNoticesOpen(false);
+                  setSearchOpen(false);
+                }}
+                open={accountMenuOpen}
+                revoking={session.phase === "revoking"}
+              />
             </div>
           </Layout.Header>
 

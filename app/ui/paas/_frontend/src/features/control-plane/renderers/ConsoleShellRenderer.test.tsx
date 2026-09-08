@@ -113,7 +113,7 @@ describe("ConsoleShellRenderer", () => {
     const logout = vi.fn().mockRejectedValue(new Error("private upstream diagnostic"));
     const { user, view } = await renderConsole({ logout });
     await user.click(await screen.findByRole("button", { name: /打开账号菜单/ }));
-    await user.click(screen.getByRole("button", { name: "注销并撤销 IAM 会话" }));
+    await user.click(screen.getByRole("menuitem", { name: "注销并撤销 IAM 会话" }));
 
     expect((await screen.findByRole("alert")).textContent).toContain("会话仍保留");
     expect(screen.queryByRole("dialog", { name: "账号菜单" })).toBeNull();
@@ -209,8 +209,8 @@ describe("ConsoleShellRenderer", () => {
     expect(menu.textContent).toContain("admin");
     expect(menu.textContent).toContain("principal-test");
     expect(menu.textContent).toContain("organization-test");
-    expect(screen.getAllByRole("button", { name: "注销并撤销 IAM 会话" })).toHaveLength(1);
-    expect(screen.getByRole("link", { name: "账号与权限" })).toBeTruthy();
+    expect(screen.getAllByRole("menuitem", { name: "注销并撤销 IAM 会话" })).toHaveLength(1);
+    expect(screen.getByRole("menuitem", { name: /账号与权限/ })).toBeTruthy();
 
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog", { name: "账号菜单" })).toBeNull();

@@ -320,8 +320,10 @@ The interaction contract includes:
 - global running-Operation and notification indicators, with progress,
   severity, owner, and time visible before entering a detail page;
 - one global principal entry in the header; its account panel owns tenant and
-  principal identity, access settings, and logout, while product-local
-  navigation contains no duplicate account dock;
+  principal identity plus a grouped account-action menu, while product-local
+  navigation contains no duplicate account dock. The menu exposes `menu` and
+  `menuitem` semantics, a separated dangerous logout action, roving arrow and
+  `Home`/`End` focus, and `Escape` dismissal that restores trigger focus;
 - explicit loading, empty, unavailable, running, success, warning, and failed
   states; no spinner or success message substitutes for known progress;
 - `Escape` dismissal, visible focus, native selects, keyboard-resizable
@@ -444,7 +446,7 @@ and `git diff --check` gates must pass on the same committed worktree.
   public-component chain, twelve static routes, memory-only IAM sessions,
   deterministic Go embedding, strict CSP hashes, and a four-region shell.
   The console layout retains its provider across child-route navigation.
-  Source gates cover the light theme, 20 semantic contrast pairs, and 68
+  Source gates cover the light theme, 20 semantic contrast pairs, and 70
   frontend tests, including visible failed revocation, logout during failed
   or pending resource loads, keyboard workspace sizing, and native instance-ID
   validation. The installed `44fa1c7` candidate proves the light login page,
@@ -482,8 +484,10 @@ and `git diff --check` gates must pass on the same committed worktree.
   notification panel, project-scoped resource filtering, and the `390px`
   navigation drawer. A separate `360px` inspection proved the open drawer and
   resource workspace match the viewport width without page-level horizontal
-  overflow. Principal identity and logout now live in one global header account
-  panel instead of being duplicated in product-local navigation. The PaaS
+  overflow. Principal identity and logout now live in one global header
+  `AccountMenu` composite instead of being duplicated in product-local
+  navigation. Its grouped icon, label, description, separator, and danger-state
+  rows have semantic menu behavior and keyboard focus management. The PaaS
   journey also activated a MOCK quota, submitted an
   installation, showed its pending Operation, and resolved it to a stable
   endpoint. Component tests cover requested-route return, search keyboard
