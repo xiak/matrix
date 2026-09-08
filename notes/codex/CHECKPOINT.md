@@ -6,7 +6,7 @@
 - Updated: 2026-09-08
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `e8a0afd`
+- Current pushed implementation baseline: `c9acd5f`
 
 ## Goal
 
@@ -18,25 +18,22 @@ architecture, FEAT, implementation, test, and release gates.
 
 - FEAT-007 remains the authoritative owner and is `In progress`; read it and
   the directly owning code/tests before continuing.
-- Pushed `e8a0afd` adds the strict TLS 1.3 executor-gateway transport over the
-  versioned admin/runner documents and private durable spool. The real-socket
-  admin client streams exact input and recovers create/observe/cancel; separate
-  admin and runner mTLS handlers enforce distinct roots, exact build-worker or
-  runner-namespace identity, authority-free requests, certificate-derived
-  opaque runner ownership, archive-only first assignment, current lease/fence,
-  cancellation, and idempotent terminal completion. The independent gateway
-  binary reads canonical protected key/certificate inputs, rejects overlapping
-  role signing roots, holds one OS-level spool lock, and couples its two bounded
-  mTLS listeners without receiving any product, database, provider, Docker, or
-  process-execution authority.
+- Pushed `c9acd5f` adds the outbound-only production runner client and its
+  independent private journal behind the strict TLS 1.3 gateway. Canonical
+  assignment metadata and a complete-request digest bind staging before archive
+  consumption; verified source is atomically published before an effect marker,
+  then immutable generations preserve renewal, cancellation, recovery fencing,
+  normalized terminal receipt, and acknowledgement. Certificate-derived runner
+  identity, OS-exclusive directory ownership, strict file shape, and archive,
+  request, state-chain, identity, symlink, and restart checks fail closed. A real
+  mTLS journey persists claim through acknowledgement and recovers it after
+  restart without giving the journal any network, database, product, provider,
+  Docker, or process-execution authority.
 - Full tests and vet, architecture tests, focused race and 20-run suites, and
-  focused tests in the fixed disconnected Go 1.26.8 Linux/amd64 image pass.
-  Equal/changed replay, restart, deadline cap, cross-role/cross-runner access,
-  stale fence, unsafe authority/header/body/file shapes, TLS downgrade,
-  symlink, and content tamper paths fail closed. The same focused suites pass
-  20 times in the fixed disconnected Go 1.26.8 Linux/amd64 image. Physical
-  executor-gateway process composition. The physical build worker and runner,
-  runner journal and sandbox, normalized logs, and reporter remain pending.
+  the same focused suites run twenty times in the fixed disconnected Go 1.26.8
+  Linux/amd64 image with read-only source and no module lookup. The physical
+  build-worker and runner process composition, sandbox, normalized logs,
+  reporter, UI, and offline release remain pending.
 - The user-owned untracked `app/ui/paas/` tree remains untouched.
 
 ## Adoption boundary
@@ -50,10 +47,10 @@ architecture, FEAT, implementation, test, and release gates.
 ## Continuation
 
 Continue FEAT-007 with the smallest independently testable physical-execution
-slice behind the accepted BuildExecutor port: add the outbound-only runner
-client and independent runner journal against the now-physical gateway, then
-compose the table-blind build worker and runner processes. Keep
-runner authority away from
+slice behind the accepted BuildExecutor port: compose the table-blind build
+worker and dedicated runner processes around the accepted gateway/client/journal
+boundary, without executing repository code until the sandbox gate is present.
+Keep runner authority away from
 PostgreSQL, source/report credentials, IAM, Audit, PaaS, and admin operations.
 Do not claim repository
 code is isolated until the dedicated Linux/amd64 runner, pinned offline
