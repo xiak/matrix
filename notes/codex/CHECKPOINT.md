@@ -6,7 +6,7 @@
 - Updated: 2026-09-08
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `3cd0607`
+- Current pushed implementation baseline: `b796b51`
 
 ## Goal
 
@@ -50,6 +50,19 @@ architecture, FEAT, implementation, test, and release gates.
   socket, and real read-only Docker `29.6.2` evidence pass; the current Docker
   Desktop host correctly fails closed because `runsc` is absent, which is not
   gVisor-isolation evidence.
+- Pushed `b796b51` adds the OS-exclusive, runner-bound workspace store between
+  the journal archive and sandbox request. The shared archive codec now visits
+  bounded regular-file members without surrendering gzip/tar validation; the
+  workspace independently rehashes compressed input, atomically publishes
+  fsynced `0444`/`0555` content beneath `os.Root`, and seals a canonical full-
+  request/execution/archive/tree manifest. Equal reuse and restart rescan every
+  file and require archive, manifest, globally sorted content/mode digest, and
+  exact parent-directory set to agree. Foreign identity, changed request or
+  input, link, special/extra/writable entries, file-directory collision,
+  cancellation, unsafe roots, abandoned staging, and close ambiguity fail
+  closed. Windows race/repetition and fixed disconnected Linux/amd64 suites
+  pass, including the Linux handoff of only this source root to both immutable
+  Docker step plans; no repository code executes yet.
 - Full tests and vet, architecture tests, focused race and 20-run suites, and
   the same focused suites run twenty times in the fixed disconnected Go 1.26.8
   Linux/amd64 image with read-only source and no module lookup. The physical
@@ -69,12 +82,13 @@ architecture, FEAT, implementation, test, and release gates.
 ## Continuation
 
 Continue FEAT-007 with the smallest independently testable physical-execution
-slice behind the accepted BuildExecutor port: compose the dedicated runner
-process around the accepted gateway/client/journal boundary. First safely
-expand the journal's already-verified archive into a private, content-bound,
-read-only source workspace without symlinks, special files, path traversal, or
-cross-execution reuse; then connect the closed step executor. Do not execute
-repository code merely because the request-shape and preflight gates exist.
+slice behind the accepted BuildExecutor port: add the Docker Engine lifecycle
+for the already-closed step plans with create/attach/start/wait/inspect/kill/
+delete recovery, fixed step/run deadlines, cancellation, bounded normalized
+output, and host-side postcondition checks; then compose the dedicated runner
+process around gateway client, journal, workspace, and sandbox. Do not claim
+repository-code isolation until a dedicated `runsc` node passes the malicious-
+repository and real-runtime gates.
 Keep runner authority away from
 PostgreSQL, source/report credentials, IAM, Audit, PaaS, and admin operations.
 Do not claim repository
