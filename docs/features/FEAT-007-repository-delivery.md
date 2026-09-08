@@ -12,8 +12,9 @@
   process, fenced BuildExecutor contract/use case, and table-blind PostgreSQL
   execution persistence, versioned admin/runner transport contract, durable
   executor-gateway spool, TLS 1.3 mTLS admin/runner HTTP boundary, and isolated
-  executor-gateway process complete; physical build-worker/runner and reporter
-  effects pending
+  executor-gateway process, runner workspace publication, and bounded native
+  output normalization complete; physical build-worker/runner and reporter
+  effects plus normalized-log persistence pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -559,8 +560,9 @@ CheckReporter owns the provider-visible terminal check and is the only stage
 that converts that evidence into `SUCCEEDED` or
 `FAILED / VERIFICATION_FAILED`. User cancellation may terminate without a
 report. Native output, diagnostics, container identifiers, paths, and logs are
-not receipt fields; bounded normalized-log storage is a separate pending
-boundary.
+not receipt fields. The runner owns native-output normalization before handoff;
+tenant-leading bounded normalized-log persistence remains a separate pending
+delivery boundary.
 
 #### Executor control and runner transport
 
@@ -695,7 +697,21 @@ with no extra swap, 256 processes, and exactly 2 GiB of fresh tmpfs split into
 a 512 MiB executable work directory and 1.5 GiB non-executable cache. The sole
 host mount is the workspace adapter's canonical, non-recursive, read-only
 source directory; native Engine request fields remain private to the adapter.
-Step execution/cancellation, bounded normalized logs, and the physical runner
+
+The same adapter owns one mutex-protected output budget shared by both fixed
+steps. Its bounded Docker multiplex decoder accepts only complete stdout or
+stderr frames, reconstructs per-stream lines across frame boundaries, and
+emits run-monotonic UTF-8 chunks no larger than 64 KiB. Both native payload and
+normalized output independently stop at 8 MiB. Invalid headers, truncated or
+empty frames, counter corruption, sequence exhaustion, and either size limit
+poison the budget so a partial untrusted parse cannot be resumed. Lines over
+16 KiB, invalid UTF-8, ANSI escapes, control characters, credential-shaped
+assignments or token formats, URL user information, and Unix, drive, or UNC
+absolute paths are replaced in full by closed markers; native content is never
+partially retained beside a marker.
+
+Step execution/cancellation, feeding real container output through this
+decoder, tenant-leading normalized-log persistence, and physical runner
 composition remain subsequent slices, so repository code still does not run.
 
 ### Egress, limits, storage, and retention
@@ -1232,12 +1248,17 @@ Current verification evidence:
   sensitive-path and mutation rejection, bounded sanitized Engine responses,
   pre-claim Docker/API/platform/runtime/resource/storage/image gates, and a
   trusted negative probe whose command and host-side inspection must agree and
-  whose container is deleted after failure. The package passes race detection
-  and twenty-run repetition on Windows and twenty runs in the fixed
-  disconnected Go 1.26.8 Linux/amd64 image. A real read-only Engine journey
-  against Docker `29.6.2` verifies the production Unix-socket transport and
-  pinned image inspection, and proves the current Docker Desktop host fails
-  closed at `RUNSC_RUNTIME`; it is not evidence of gVisor isolation
+  whose container is deleted after failure. The run-shared output tests prove
+  strict Docker multiplex framing, split/interleaved stream reconstruction,
+  monotonic bounded chunks, independent native/normalized whole-run limits,
+  complete closed-marker replacement for unsafe lines, poisoned reuse after
+  malformed or oversized input, safe UTF-8 preservation, and fuzzed arbitrary
+  native bytes. The package passes race detection and twenty-run repetition on
+  Windows and twenty runs in the fixed disconnected Go 1.26.8 Linux/amd64
+  image. A real read-only Engine journey against Docker `29.6.2` verifies the
+  production Unix-socket transport and pinned image inspection, and proves the
+  current Docker Desktop host fails closed at `RUNSC_RUNTIME`; it is not
+  evidence of container execution, log persistence, or gVisor isolation
 - runner-workspace and shared archive-codec tests proving callback content is
   member-bounded without duplicating gzip/tar validation, independent raw
   archive length/hash checks, atomic private staging, OS-exclusive ownership,
