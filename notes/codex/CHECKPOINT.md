@@ -6,7 +6,7 @@
 - Updated: 2026-09-08
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `caf8283`
+- Current pushed implementation baseline: `1575d07`
 
 ## Goal
 
@@ -18,24 +18,18 @@ architecture, FEAT, implementation, test, and release gates.
 
 - FEAT-007 remains the authoritative owner and is `In progress`; read it and
   the directly owning code/tests before continuing.
-- Pushed `8ca8c97` replaces endpoint arrays with one exact `endpointOrigin`,
-  adds closed source/binding health reasons and pure observed-status
-  transitions, enforces two-minute source freshness at admission, and upgrades
-  historical single-origin data while refusing ambiguous multi-origin data.
-- Pushed `caf8283` adds the exact installation-owned
-  `mx devops source-credential apply|retire-previous` surface. It authenticates
-  the sealed installation journal, pinned trust root, committed signed release,
-  and selected DevOps product while holding the installation lock; plaintext
-  enters only through a protected regular input file and never output.
-- DevOps installation now owns separate webhook/fetch/report roots. A
-  purpose/tenant/reference-bound directory contains one strict canonical
-  `material.json`; one durable file replacement atomically rotates or retires
-  current/previous webhook values. The API resolver consumes this format and
-  the superseded two-file resolver is deleted without an alias.
-- Full tests and vet, focused race and 20-run repeated suites, Linux/amd64
-  CGO-disabled builds, and the same focused filesystem suites in a disposable
-  disconnected Debian container passed. The earlier PostgreSQL 18 source
-  contract and data-bearing upgrade gates remain green in FEAT-007 evidence.
+- Pushed `4e00ae2` adds the distinct Source Observer runtime, purpose-bound
+  Gitea `1.27.3` read adapter, observer-only PostgreSQL identity, tenant-fair
+  database queue, heartbeat/readiness boundary, health-transition Audit facts,
+  and selected-only installation/release topology.
+- Real PostgreSQL 18 gates prove double apply, exact four-function authority,
+  heartbeat failure closure, cross-tenant fairness, monotonic fencing,
+  stale-fence/resource rejection, equal-refresh behavior, sanitized Audit, and
+  four-schema isolation. Full tests/vet, focused race and repeated suites, and
+  Linux/amd64 CGO-disabled builds pass.
+- Pushed `1575d07` adds and passes the opt-in protocol gate against the exact
+  pinned rootless Gitea image digest, with a private repository and separate
+  fetch/report tokens behind the required HTTPS boundary.
 - The user-owned untracked `app/ui/paas/` tree remains untouched.
 
 ## Adoption boundary
@@ -48,11 +42,12 @@ architecture, FEAT, implementation, test, and release gates.
 
 ## Continuation
 
-Continue FEAT-007 with the smallest source-observer reconciliation slice:
-observer-only database authority, lease/fence queue, exact Gitea read probes,
-health commits/Audit transitions, heartbeat readiness, and only the three
-purpose mounts that process requires. Do not begin executor/reporter effects or
-formal UI integration until this source-readiness runtime boundary passes its
-real PostgreSQL/provider gates. Preserve pragmatic DDD, replacement-first
-pre-v1 changes, optional-product isolation, and repository-local Git identity
+Continue FEAT-007 with the smallest source-acquisition/FETCH slice: seal the
+provider-neutral source archive contract, add the exact Gitea/Git effect behind
+it, and connect it to the existing fenced PipelineRun task workflow with only
+the fetch credential root. Prove exact commits, redirect/submodule/LFS/hook and
+path rejection, cancellation, recovery, bounded storage, provider isolation,
+and real PostgreSQL/Gitea behavior before beginning BuildExecutor, reporter, or
+formal UI integration. Preserve pragmatic DDD, replacement-first pre-v1
+changes, optional-product isolation, and repository-local Git identity
 `Xiak <Jellal@aliyun.com>`.
