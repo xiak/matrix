@@ -6,7 +6,7 @@
 - Updated: 2026-09-08
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `8679c2f`
+- Current pushed implementation baseline: `88bec23`
 
 ## Goal
 
@@ -33,11 +33,17 @@ architecture, FEAT, implementation, test, and release gates.
   unchanged on replay/restart, is bounded by the request/lease, and prevents a
   recovered or later step from renewing or moving the ordered step clock
   backwards.
+- Pushed `88bec23` makes the whole-run 8 MiB native/normalized log budget
+  recovery-stable. A pure validated cursor carries only both cumulative byte
+  counts and the last sequence; the sandbox restores it, while journal schema
+  v3 advances it only atomically with a started step's conclusion. Backwards,
+  partial, changed-replay, pending-cancellation, poisoned, and recomputed-chain
+  cursor states fail closed; native output is not journaled.
 - Evidence on that worktree: full `go test ./...`, full `go vet ./...`, focused
   Windows race detection with twenty repetitions, and twenty focused runs in
   the fixed disconnected Go 1.26.8 Linux/amd64 image with read-only source and
-  module cache all pass. The shared output decoder also passed a 746,472-
-  execution fuzz campaign.
+  module cache all pass. The shared output decoder additionally passed a
+  1,241,687-execution fuzz campaign.
 - This proves the sandbox adapter boundary, not physical execution. No runner
   process yet composes gateway polling, journal recovery, workspace publication,
   step deadlines, sandbox lifecycle, normalized-log delivery, and receipt
