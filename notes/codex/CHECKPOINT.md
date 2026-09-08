@@ -6,7 +6,7 @@
 - Updated: 2026-09-08
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `7b0f66d`
+- Current pushed implementation baseline: `9e76f3d`
 
 ## Goal
 
@@ -18,16 +18,16 @@ architecture, FEAT, implementation, test, and release gates.
 
 - FEAT-007 remains the authoritative owner and is `In progress`; read it and
   the directly owning code/tests before continuing.
-- Pushed `7b0f66d` completes source acquisition through the installed runtime:
-  a forced-RLS archive-receipt table, table-blind source-fetcher role with
-  exactly five functions, exclusive `FETCH` claims, fenced atomic receipt/run
-  completion, heartbeat-gated readiness, and the selected-only
-  `matrix-devops-source-fetcher` process and offline binary.
-- The fresh DevOps and four-product PostgreSQL 18 journeys pass, including
-  double apply, missing-receipt bypass rejection, failure/cancellation without
-  receipts, fencing recovery, exact cross-schema denial, and two valid archive
-  receipts. Full tests and vet pass on Go `1.26.8`; focused race and 20-run
-  suites plus Linux/amd64 CGO-disabled full build pass.
+- Pushed `9e76f3d` adds the provider-neutral BuildExecutor port and pure fenced
+  `VERIFY` use case. Its closed command binds the current run, immutable
+  PipelineRevision, stored source receipt, fixed profile/limits, and deadline;
+  first claims execute while takeover fences only observe or cancel. A
+  normalized digest-bound receipt sends both passed and verification-failed
+  outcomes to the later reporter, while uncertainty preserves the intent.
+- Full tests, vet, architecture tests, focused race and 20-run suites, and a
+  Linux/amd64 CGO-disabled full build pass. This is a pure authority/workflow
+  boundary: PostgreSQL persistence, the physical isolated runner, transport,
+  sandbox, normalized logs, and reporter remain pending.
 - The user-owned untracked `app/ui/paas/` tree remains untouched.
 
 ## Adoption boundary
@@ -40,11 +40,12 @@ architecture, FEAT, implementation, test, and release gates.
 
 ## Continuation
 
-Continue FEAT-007 with the smallest independently testable Matrix Native
-BuildExecutor vertical slice, consuming only the immutable source receipt and
-the existing `VERIFY` fence. Follow the fixed dedicated-runner, offline
-toolchain, gVisor, no-egress, resource, and sanitized-log boundaries already
-owned by FEAT-007; do not couple it to PaaS execution or begin formal UI
-integration before the real executor boundary passes. Preserve pragmatic DDD,
-replacement-first pre-v1 changes, optional-product isolation, and
-repository-local Git identity `Xiak <Jellal@aliyun.com>`.
+Continue FEAT-007 with the smallest independently testable persistence and
+process slice for the existing BuildExecutor use case: table-blind fenced
+`VERIFY` claim/renew/complete functions, normalized build-receipt storage, and
+an independent selected-only worker boundary. Do not claim repository code is
+isolated until the dedicated runner, offline toolchain, gVisor, no-egress,
+resource, and sanitized-log gates really pass; do not couple it to PaaS
+execution or begin formal UI integration before that real boundary passes.
+Preserve pragmatic DDD, replacement-first pre-v1 changes, optional-product
+isolation, and repository-local Git identity `Xiak <Jellal@aliyun.com>`.
