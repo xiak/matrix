@@ -757,8 +757,27 @@ since transitioned; changed replay conflicts. Replaying a terminal replay is
 supported without embedding an ancestry chain, while provider-delivery reads
 exclude all replay descendants and keep returning only the original fan-out.
 
-These slices do not complete Gate A. The source readiness and operator
-credential contract above is designed but not yet implemented. Logs,
+The source-readiness contract slice now replaces the ambiguous endpoint array
+with one immutable `endpointOrigin`, adds closed health/reason pairs to both
+source resources, and makes a ready observation valid for admission for at
+most two minutes. Pure domain observation transitions increment resource
+versions, reject stale observations and invalid state/reason pairs, distinguish
+state transitions from equal refreshes, and preserve RepositoryBinding spec
+digests. The generated OpenAPI and examples expose only the replacement shape;
+the removed array has no alias.
+
+The repeatable PostgreSQL migration deterministically converts historical
+single-origin connection documents and stored command results, adds reasons to
+current and immutable binding snapshots, and refuses a legacy multi-origin
+document instead of selecting an endpoint. Its narrowly scoped owner policies
+exist only inside the migration transaction and are removed before runtime.
+The source observer process, operator credential commands, reconciliation
+queue, health Audit facts, and purpose-separated runtime mounts remain to be
+implemented.
+
+These slices do not complete Gate A. The source-readiness public contract,
+domain transitions, freshness rule, and legacy data replacement are complete;
+the observer runtime and operator credential commands remain pending. Logs,
 concurrent cross-tenant fairness evidence, remaining runtime quotas,
 check-receipt Audit facts, and pagination also remain pending.
 
@@ -789,6 +808,11 @@ Current verification evidence:
   runtime identities, forced cross-tenant isolation, function-only API writes,
   a table-blind worker, immutable binding/revision history, sanitized Audit
   outbox correlation, and the four-schema platform migration boundary
+- real PostgreSQL 18 source-contract upgrade proving deterministic replacement
+  of legacy single-origin documents and command snapshots, health-reason
+  backfill across current and immutable resources, removal of temporary owner
+  policies, repeatability with durable run/Audit data, and rejection of an
+  ambiguous multi-origin legacy connection
 - real PostgreSQL 18 admission journeys proving deterministic two-Pipeline
   fan-out, equal replay after mutable configuration becomes unavailable,
   changed-replay conflict, atomic queue rejection, cross-tenant concealment,

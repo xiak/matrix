@@ -279,7 +279,7 @@ func readyAdmissionRepository(t *testing.T, pipelineCount int) *fakeAdmissionRep
 	connection, err := domain.NewSourceConnection(devopsv1.CreateSourceConnectionRequest{
 		ID: "source-connection-primary", Name: "primary",
 		Spec: devopsv1.SourceConnectionSpec{
-			AdapterID: "source-adapter-one", AllowedEndpointOrigins: []string{"https://git.example.com"},
+			AdapterID: "source-adapter-one", EndpointOrigin: "https://git.example.com",
 			WebhookSecretRef: "webhook-secret", FetchCredentialRef: "fetch-secret", ReportCredentialRef: "report-secret",
 		},
 	}, scope, base)
@@ -287,6 +287,7 @@ func readyAdmissionRepository(t *testing.T, pipelineCount int) *fakeAdmissionRep
 		t.Fatal(err)
 	}
 	connection.Status.Health = devopsv1.SourceConnectionReady
+	connection.Status.Reason = devopsv1.SourceConnectionReasonObserved
 	binding, err := domain.NewRepositoryBinding(devopsv1.CreateRepositoryBindingRequest{
 		ID: "repository-binding-api", Name: "api", ProjectID: project.Metadata.ID,
 		Spec: devopsv1.RepositoryBindingSpec{
@@ -298,6 +299,7 @@ func readyAdmissionRepository(t *testing.T, pipelineCount int) *fakeAdmissionRep
 		t.Fatal(err)
 	}
 	binding.Status.Health = devopsv1.RepositoryBindingReady
+	binding.Status.Reason = devopsv1.RepositoryBindingReasonObserved
 	activations := make([]devopsv1.PipelineActivation, pipelineCount)
 	for index := 0; index < pipelineCount; index++ {
 		letter := string(rune('a' + index))

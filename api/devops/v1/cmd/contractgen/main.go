@@ -88,21 +88,23 @@ func buildDocument() object {
 			"ResourceID": opaqueIDSchema(),
 		},
 		Enums: map[string][]string{
-			"TriggerPolicy":           openapi31.StringValues(devopsv1.TriggerPolicies()),
-			"VerificationProfile":     openapi31.StringValues(devopsv1.VerificationProfiles()),
-			"ExecutorProfile":         openapi31.StringValues(devopsv1.ExecutorProfiles()),
-			"DependencyEgressPolicy":  openapi31.StringValues(devopsv1.DependencyEgressPolicies()),
-			"ReporterPolicy":          openapi31.StringValues(devopsv1.ReporterPolicies()),
-			"VerificationStepKind":    openapi31.StringValues(devopsv1.VerificationStepKinds()),
-			"SubjectKind":             openapi31.StringValues(devopsv1.SubjectKinds()),
-			"SourceConnectionHealth":  openapi31.StringValues(devopsv1.SourceConnectionHealthStates()),
-			"RepositoryBindingHealth": openapi31.StringValues(devopsv1.RepositoryBindingHealthStates()),
-			"ReadinessState":          openapi31.StringValues(devopsv1.ReadinessStates()),
-			"ChangeAction":            openapi31.StringValues(devopsv1.ChangeActions()),
-			"PipelineRunState":        openapi31.StringValues(devopsv1.PipelineRunStates()),
-			"PipelineRunStage":        openapi31.StringValues(devopsv1.PipelineRunStages()),
-			"PipelineRunReason":       openapi31.StringValues(devopsv1.PipelineRunReasons()),
-			"ErrorCode":               openapi31.StringValues(devopsv1.ErrorCodes()),
+			"TriggerPolicy":                 openapi31.StringValues(devopsv1.TriggerPolicies()),
+			"VerificationProfile":           openapi31.StringValues(devopsv1.VerificationProfiles()),
+			"ExecutorProfile":               openapi31.StringValues(devopsv1.ExecutorProfiles()),
+			"DependencyEgressPolicy":        openapi31.StringValues(devopsv1.DependencyEgressPolicies()),
+			"ReporterPolicy":                openapi31.StringValues(devopsv1.ReporterPolicies()),
+			"VerificationStepKind":          openapi31.StringValues(devopsv1.VerificationStepKinds()),
+			"SubjectKind":                   openapi31.StringValues(devopsv1.SubjectKinds()),
+			"SourceConnectionHealth":        openapi31.StringValues(devopsv1.SourceConnectionHealthStates()),
+			"SourceConnectionHealthReason":  openapi31.StringValues(devopsv1.SourceConnectionHealthReasons()),
+			"RepositoryBindingHealth":       openapi31.StringValues(devopsv1.RepositoryBindingHealthStates()),
+			"RepositoryBindingHealthReason": openapi31.StringValues(devopsv1.RepositoryBindingHealthReasons()),
+			"ReadinessState":                openapi31.StringValues(devopsv1.ReadinessStates()),
+			"ChangeAction":                  openapi31.StringValues(devopsv1.ChangeActions()),
+			"PipelineRunState":              openapi31.StringValues(devopsv1.PipelineRunStates()),
+			"PipelineRunStage":              openapi31.StringValues(devopsv1.PipelineRunStages()),
+			"PipelineRunReason":             openapi31.StringValues(devopsv1.PipelineRunReasons()),
+			"ErrorCode":                     openapi31.StringValues(devopsv1.ErrorCodes()),
 		},
 		Structs: map[string]reflect.Type{
 			"ResourceScope":                  openapi31.StructType[devopsv1.ResourceScope](),
@@ -460,15 +462,11 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 		base = object{
 			"type": "string", "pattern": `^(?:[0-9a-f]{40}|[0-9a-f]{64})$`,
 		}
-	case "allowedEndpointOrigins":
+	case "endpointOrigin":
 		base = object{
-			"type": "array", "minItems": 1, "maxItems": 8,
-			"uniqueItems": true,
-			"items": object{
-				"type": "string", "format": "uri", "minLength": 1, "maxLength": 512,
-				"pattern": `^https://[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?$`,
-				"not":     object{"pattern": `^https://(?:[a-z0-9-]+\.)*localhost(?::|$)`},
-			},
+			"type": "string", "format": "uri", "minLength": 1, "maxLength": 512,
+			"pattern": `^https://[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?$`,
+			"not":     object{"pattern": `^https://(?:[a-z0-9-]+\.)*localhost(?::|$)`},
 		}
 	case "repositoryPath":
 		base = object{
@@ -571,6 +569,51 @@ func applySemanticOverlays(schemas object) {
 		},
 	}
 
+	connectionStatus := schemas["SourceConnectionStatus"].(object)
+	connectionStatus["allOf"] = []any{
+		healthReasonRule(
+			string(devopsv1.SourceConnectionPending),
+			[]string{string(devopsv1.SourceConnectionReasonConfigurationChanged)},
+		),
+		healthReasonRule(
+			string(devopsv1.SourceConnectionReady),
+			[]string{string(devopsv1.SourceConnectionReasonObserved)},
+		),
+		healthReasonRule(
+			string(devopsv1.SourceConnectionUnavailable),
+			openapi31.StringValues([]devopsv1.SourceConnectionHealthReason{
+				devopsv1.SourceConnectionReasonSecretUnavailable,
+				devopsv1.SourceConnectionReasonProviderUnavailable,
+				devopsv1.SourceConnectionReasonProviderUnsupported,
+				devopsv1.SourceConnectionReasonCredentialRejected,
+			}),
+		),
+	}
+
+	bindingStatus := schemas["RepositoryBindingStatus"].(object)
+	bindingStatus["allOf"] = []any{
+		healthReasonRule(
+			string(devopsv1.RepositoryBindingPending),
+			openapi31.StringValues([]devopsv1.RepositoryBindingHealthReason{
+				devopsv1.RepositoryBindingReasonConfigurationChanged,
+				devopsv1.RepositoryBindingReasonConnectionNotReady,
+			}),
+		),
+		healthReasonRule(
+			string(devopsv1.RepositoryBindingReady),
+			[]string{string(devopsv1.RepositoryBindingReasonObserved)},
+		),
+		healthReasonRule(
+			string(devopsv1.RepositoryBindingUnavailable),
+			openapi31.StringValues([]devopsv1.RepositoryBindingHealthReason{
+				devopsv1.RepositoryBindingReasonRepositoryUnavailable,
+				devopsv1.RepositoryBindingReasonIdentityMismatch,
+				devopsv1.RepositoryBindingReasonFetchPermissionDenied,
+				devopsv1.RepositoryBindingReasonReportPermissionDenied,
+			}),
+		),
+	}
+
 	status := schemas["PipelineRunStatus"].(object)
 	status["allOf"] = []any{
 		pipelineRunStatusRule(
@@ -646,6 +689,19 @@ func applySemanticOverlays(schemas object) {
 		problemStatusRule(devopsv1.ErrorPreconditionFailed, []int{412}),
 		problemStatusRule(devopsv1.ErrorInternal, []int{500}),
 		problemStatusRule(devopsv1.ErrorUnavailable, []int{503}),
+	}
+}
+
+func healthReasonRule(health string, reasons []string) object {
+	return object{
+		"if": object{
+			"properties": object{"health": object{"const": health}},
+			"required":   []string{"health"},
+		},
+		"then": object{
+			"properties": object{"reason": object{"enum": reasons}},
+			"required":   []string{"reason"},
+		},
 	}
 }
 

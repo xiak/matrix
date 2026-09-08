@@ -175,8 +175,15 @@ func TestSourceEventAdmissionFailsClosed(t *testing.T) {
 
 	pending := connection
 	pending.Status.Health = devopsv1.SourceConnectionPending
+	pending.Status.Reason = devopsv1.SourceConnectionReasonConfigurationChanged
 	if _, err := NewSourceEvent(change, pending, binding, receivedAt); !errors.Is(err, ErrSourceNotReady) {
 		t.Fatalf("pending connection error=%v", err)
+	}
+
+	if _, err := NewSourceEvent(
+		change, connection, binding, receivedAt.Add(time.Microsecond),
+	); !errors.Is(err, ErrSourceNotReady) {
+		t.Fatalf("stale source health error=%v", err)
 	}
 
 	mismatched := change
@@ -275,8 +282,10 @@ func readySource(t *testing.T) (devopsv1.SourceConnection, devopsv1.RepositoryBi
 	t.Helper()
 	connection := mustSourceConnection(t)
 	connection.Status.Health = devopsv1.SourceConnectionReady
+	connection.Status.Reason = devopsv1.SourceConnectionReasonObserved
 	binding := mustRepositoryBinding(t, "repository-binding-api")
 	binding.Status.Health = devopsv1.RepositoryBindingReady
+	binding.Status.Reason = devopsv1.RepositoryBindingReasonObserved
 	return connection, binding
 }
 

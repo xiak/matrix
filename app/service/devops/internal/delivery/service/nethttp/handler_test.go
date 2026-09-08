@@ -594,7 +594,7 @@ func newFakeWorkflow(t *testing.T) *fakeWorkflow {
 	connection, err := domain.NewSourceConnection(devopsv1.CreateSourceConnectionRequest{
 		ID: "connection-one", Name: "connection-one",
 		Spec: devopsv1.SourceConnectionSpec{
-			AdapterID: "source-adapter-one", AllowedEndpointOrigins: []string{"https://git.example.com"},
+			AdapterID: "source-adapter-one", EndpointOrigin: "https://git.example.com",
 			WebhookSecretRef: "secret-webhook", FetchCredentialRef: "secret-fetch", ReportCredentialRef: "secret-report",
 		},
 	}, scope, now)

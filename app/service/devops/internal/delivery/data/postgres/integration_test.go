@@ -102,7 +102,7 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 
 	connectionID := devopsv1.ResourceID("connection-integration")
 	connectionSpec := devopsv1.SourceConnectionSpec{
-		AdapterID: "source-adapter-gitea-v1", AllowedEndpointOrigins: []string{"https://gitea.example.com"},
+		AdapterID: "source-adapter-gitea-v1", EndpointOrigin: "https://gitea.example.com",
 		WebhookSecretRef: "secret-webhook-v1", FetchCredentialRef: "secret-fetch-v1", ReportCredentialRef: "secret-report-v1",
 	}
 	connection, err := usecase.CreateSourceConnection(ctx, pipelineconfiguration.CreateSourceConnectionCommand{
@@ -210,12 +210,18 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 	}
 
 	if _, err := admin.Exec(ctx, `UPDATE delivery.source_connections
-		SET document = jsonb_set(document, '{status,health}', '"READY"')
+		SET document = jsonb_set(
+			jsonb_set(document, '{status,health}', '"READY"'),
+			'{status,reason}', '"OBSERVED"'
+		)
 		WHERE tenant_id = 'tenant-one' AND id = $1`, connectionID); err != nil {
 		t.Fatalf("mark source connection fixture ready: %v", err)
 	}
 	if _, err := admin.Exec(ctx, `UPDATE delivery.repository_bindings
-		SET document = jsonb_set(document, '{status,health}', '"READY"')
+		SET document = jsonb_set(
+			jsonb_set(document, '{status,health}', '"READY"'),
+			'{status,reason}', '"OBSERVED"'
+		)
 		WHERE tenant_id = 'tenant-one' AND id = $1`, bindingOne.ID); err != nil {
 		t.Fatalf("mark repository binding fixture ready: %v", err)
 	}
@@ -355,12 +361,18 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		t.Fatalf("activate third revision=%#v err=%v", thirdActivation, err)
 	}
 	if _, err := admin.Exec(ctx, `UPDATE delivery.source_connections
-		SET document = jsonb_set(document, '{status,health}', '"PENDING"')
+		SET document = jsonb_set(
+			jsonb_set(document, '{status,health}', '"PENDING"'),
+			'{status,reason}', '"CONFIGURATION_CHANGED"'
+		)
 		WHERE tenant_id = 'tenant-one' AND id = $1`, connectionID); err != nil {
 		t.Fatalf("make current source connection unavailable: %v", err)
 	}
 	if _, err := admin.Exec(ctx, `UPDATE delivery.repository_bindings
-		SET document = jsonb_set(document, '{status,health}', '"PENDING"')
+		SET document = jsonb_set(
+			jsonb_set(document, '{status,health}', '"PENDING"'),
+			'{status,reason}', '"CONFIGURATION_CHANGED"'
+		)
 		WHERE tenant_id = 'tenant-one' AND id = $1`, bindingOne.ID); err != nil {
 		t.Fatalf("make admitted repository binding unavailable: %v", err)
 	}
@@ -702,11 +714,92 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		snapshot.Retry != 0 || snapshot.DeadLetter != 0 || snapshot.ExpiredLease != 0 {
 		t.Fatalf("delivered Audit outbox snapshot=%#v err=%v", snapshot, err)
 	}
+	legacySourceStatements := []struct {
+		query string
+		args  []any
+	}{
+		{query: `UPDATE delivery.source_connections
+		   SET document = jsonb_set(
+				document #- '{spec,endpointOrigin}' #- '{status,reason}',
+				'{spec,allowedEndpointOrigins}',
+				jsonb_build_array(document#>'{spec,endpointOrigin}'),
+				true
+		   )
+		 WHERE tenant_id = 'tenant-one' AND id = $1`, args: []any{connectionID}},
+		{query: `UPDATE delivery.repository_bindings
+		   SET document = document #- '{status,reason}'
+		 WHERE tenant_id = 'tenant-one' AND id = $1`, args: []any{bindingOne.ID}},
+		{query: `UPDATE delivery.repository_binding_revisions
+		   SET document = document #- '{status,reason}'
+		 WHERE tenant_id = 'tenant-one' AND binding_id = $1`, args: []any{bindingOne.ID}},
+		{query: `UPDATE delivery.mutations
+		   SET result_document = jsonb_set(
+				result_document #- '{sourceConnection,spec,endpointOrigin}' #- '{sourceConnection,status,reason}',
+				'{sourceConnection,spec,allowedEndpointOrigins}',
+				jsonb_build_array(result_document#>'{sourceConnection,spec,endpointOrigin}'),
+				true
+		   )
+		 WHERE tenant_id = 'tenant-one'
+		   AND mutation_kind = 'CREATE_SOURCE_CONNECTION'`},
+		{query: `UPDATE delivery.mutations
+		   SET result_document = result_document #- '{repositoryBinding,status,reason}'
+		 WHERE tenant_id = 'tenant-one'
+		   AND mutation_kind = 'CREATE_REPOSITORY_BINDING'`},
+	}
+	for index, statement := range legacySourceStatements {
+		if _, err := admin.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatalf("stage legacy source contract fixture %d: %v", index, err)
+		}
+	}
 	if err := devopsmigration.Apply(ctx, adminDSN, apiDSN, workerDSN); err != nil {
 		t.Fatalf("reapply DevOps migration with durable admission data: %v", err)
 	}
 	if err := devopsmigration.VerifyInstalled(ctx, adminDSN, apiDSN, workerDSN); err != nil {
 		t.Fatalf("verify reapplied DevOps migration with durable admission data: %v", err)
+	}
+	var migratedOrigin, connectionReason, bindingReason, revisionReason string
+	var mutationOrigin, mutationConnectionReason, mutationBindingReason string
+	if err := admin.QueryRow(ctx, `SELECT
+		(SELECT document#>>'{spec,endpointOrigin}'
+		   FROM delivery.source_connections
+		  WHERE tenant_id = 'tenant-one' AND id = $1),
+		(SELECT document#>>'{status,reason}'
+		   FROM delivery.source_connections
+		  WHERE tenant_id = 'tenant-one' AND id = $1),
+		(SELECT document#>>'{status,reason}'
+		   FROM delivery.repository_bindings
+		  WHERE tenant_id = 'tenant-one' AND id = $2),
+		(SELECT document#>>'{status,reason}'
+		   FROM delivery.repository_binding_revisions
+		  WHERE tenant_id = 'tenant-one' AND binding_id = $2
+		  ORDER BY resource_version LIMIT 1),
+		(SELECT result_document#>>'{sourceConnection,spec,endpointOrigin}'
+		   FROM delivery.mutations
+		  WHERE tenant_id = 'tenant-one' AND mutation_kind = 'CREATE_SOURCE_CONNECTION'),
+		(SELECT result_document#>>'{sourceConnection,status,reason}'
+		   FROM delivery.mutations
+		  WHERE tenant_id = 'tenant-one' AND mutation_kind = 'CREATE_SOURCE_CONNECTION'),
+		(SELECT result_document#>>'{repositoryBinding,status,reason}'
+		   FROM delivery.mutations
+		  WHERE tenant_id = 'tenant-one' AND mutation_kind = 'CREATE_REPOSITORY_BINDING'
+		  ORDER BY created_at LIMIT 1)
+	`, connectionID, bindingOne.ID).Scan(
+		&migratedOrigin, &connectionReason, &bindingReason, &revisionReason,
+		&mutationOrigin, &mutationConnectionReason, &mutationBindingReason,
+	); err != nil {
+		t.Fatalf("read migrated source contract: %v", err)
+	}
+	if migratedOrigin != connectionSpec.EndpointOrigin || mutationOrigin != connectionSpec.EndpointOrigin ||
+		connectionReason != string(devopsv1.SourceConnectionReasonConfigurationChanged) ||
+		bindingReason != string(devopsv1.RepositoryBindingReasonConfigurationChanged) ||
+		revisionReason != string(devopsv1.RepositoryBindingReasonConfigurationChanged) ||
+		mutationConnectionReason != string(devopsv1.SourceConnectionReasonConfigurationChanged) ||
+		mutationBindingReason != string(devopsv1.RepositoryBindingReasonConfigurationChanged) {
+		t.Fatalf(
+			"migrated source contract origin=%q/%q reason=%q/%q/%q/%q/%q",
+			migratedOrigin, mutationOrigin, connectionReason, bindingReason,
+			revisionReason, mutationConnectionReason, mutationBindingReason,
+		)
 	}
 
 	var mutationCount, sourceEventCount, runCount, runTaskCount, operationCount int
@@ -754,6 +847,29 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE delivery.source_connections
+		SET document = jsonb_set(
+			document #- '{spec,endpointOrigin}',
+			'{spec,allowedEndpointOrigins}',
+			jsonb_build_array('"https://gitea.example.com"'::jsonb, '"https://mirror.example.com"'::jsonb),
+			true
+		)
+		WHERE tenant_id = 'tenant-one' AND id = $1`, connectionID); err != nil {
+		t.Fatalf("stage ambiguous legacy source contract: %v", err)
+	}
+	if err := devopsmigration.Apply(ctx, adminDSN, apiDSN, workerDSN); err == nil {
+		t.Fatal("ambiguous legacy source endpoint migration succeeded")
+	}
+	if _, err := admin.Exec(ctx, `UPDATE delivery.source_connections
+		SET document = jsonb_set(
+			document #- '{spec,allowedEndpointOrigins}',
+			'{spec,endpointOrigin}',
+			'"https://gitea.example.com"'::jsonb,
+			true
+		)
+		WHERE tenant_id = 'tenant-one' AND id = $1`, connectionID); err != nil {
+		t.Fatalf("restore exact source endpoint after negative gate: %v", err)
 	}
 }
 

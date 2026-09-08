@@ -139,11 +139,11 @@ func exerciseDevOpsConfigurationJourney(
 	connectionRequest := devopsv1.CreateSourceConnectionRequest{
 		ID: devopsSourceConnectionID, Name: "gitea-process",
 		Spec: devopsv1.SourceConnectionSpec{
-			AdapterID:              "source-adapter-gitea-v1",
-			AllowedEndpointOrigins: []string{"https://gitea.process.example"},
-			WebhookSecretRef:       "secret-webhook-process",
-			FetchCredentialRef:     "secret-fetch-process",
-			ReportCredentialRef:    "secret-report-process",
+			AdapterID:           "source-adapter-gitea-v1",
+			EndpointOrigin:      "https://gitea.process.example",
+			WebhookSecretRef:    "secret-webhook-process",
+			FetchCredentialRef:  "secret-fetch-process",
+			ReportCredentialRef: "secret-report-process",
 		},
 	}
 	connectionResponse := performJSONWithIdempotency(

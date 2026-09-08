@@ -22,11 +22,11 @@ func validDraftSpec() PipelineDraftSpec {
 
 func validSourceConnectionSpec() SourceConnectionSpec {
 	return SourceConnectionSpec{
-		AdapterID:              "source-adapter-change-v1",
-		AllowedEndpointOrigins: []string{"https://git.internal.example"},
-		WebhookSecretRef:       "secret-webhook-primary",
-		FetchCredentialRef:     "credential-fetch-read",
-		ReportCredentialRef:    "credential-report-write",
+		AdapterID:           "source-adapter-change-v1",
+		EndpointOrigin:      "https://git.internal.example",
+		WebhookSecretRef:    "secret-webhook-primary",
+		FetchCredentialRef:  "credential-fetch-read",
+		ReportCredentialRef: "credential-report-write",
 	}
 }
 

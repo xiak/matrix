@@ -235,10 +235,14 @@ func ingressConnection() devopsv1.SourceConnection {
 			CreatedAt: now, UpdatedAt: now,
 		},
 		Spec: devopsv1.SourceConnectionSpec{
-			AdapterID: "adapter-one", AllowedEndpointOrigins: []string{"https://git.example.com"},
+			AdapterID: "adapter-one", EndpointOrigin: "https://git.example.com",
 			WebhookSecretRef: "webhook-secret", FetchCredentialRef: "fetch-secret", ReportCredentialRef: "report-secret",
 		},
-		Status: devopsv1.SourceConnectionStatus{Health: devopsv1.SourceConnectionReady, ObservedAt: now},
+		Status: devopsv1.SourceConnectionStatus{
+			Health:     devopsv1.SourceConnectionReady,
+			Reason:     devopsv1.SourceConnectionReasonObserved,
+			ObservedAt: now,
+		},
 	}
 }
 

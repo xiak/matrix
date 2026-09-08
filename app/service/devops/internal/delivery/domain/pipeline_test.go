@@ -359,11 +359,11 @@ func validCreateSourceConnectionRequest() devopsv1.CreateSourceConnectionRequest
 	return devopsv1.CreateSourceConnectionRequest{
 		ID: "source-connection-primary", Name: "primary",
 		Spec: devopsv1.SourceConnectionSpec{
-			AdapterID:              "source-adapter-change-v1",
-			AllowedEndpointOrigins: []string{"https://git.internal.example"},
-			WebhookSecretRef:       "secret-webhook-primary",
-			FetchCredentialRef:     "credential-fetch-read",
-			ReportCredentialRef:    "credential-report-write",
+			AdapterID:           "source-adapter-change-v1",
+			EndpointOrigin:      "https://git.internal.example",
+			WebhookSecretRef:    "secret-webhook-primary",
+			FetchCredentialRef:  "credential-fetch-read",
+			ReportCredentialRef: "credential-report-write",
 		},
 	}
 }

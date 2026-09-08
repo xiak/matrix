@@ -32,21 +32,22 @@ type CreateDevOpsProjectRequest struct {
 	Name string     `json:"name"`
 }
 
-// SourceConnectionSpec binds one installed source adapter to an exact endpoint
-// allowlist and secret-store references. Secret values never cross this
+// SourceConnectionSpec binds one installed source adapter to one exact endpoint
+// origin and secret-store references. Secret values never cross this
 // contract. Adapter and endpoint identity are immutable after creation;
 // update replaces only credential references.
 type SourceConnectionSpec struct {
-	AdapterID              ResourceID `json:"adapterId"`
-	AllowedEndpointOrigins []string   `json:"allowedEndpointOrigins"`
-	WebhookSecretRef       ResourceID `json:"webhookSecretRef"`
-	FetchCredentialRef     ResourceID `json:"fetchCredentialRef"`
-	ReportCredentialRef    ResourceID `json:"reportCredentialRef"`
+	AdapterID           ResourceID `json:"adapterId"`
+	EndpointOrigin      string     `json:"endpointOrigin"`
+	WebhookSecretRef    ResourceID `json:"webhookSecretRef"`
+	FetchCredentialRef  ResourceID `json:"fetchCredentialRef"`
+	ReportCredentialRef ResourceID `json:"reportCredentialRef"`
 }
 
 type SourceConnectionStatus struct {
-	Health     SourceConnectionHealth `json:"health"`
-	ObservedAt time.Time              `json:"observedAt"`
+	Health     SourceConnectionHealth       `json:"health"`
+	Reason     SourceConnectionHealthReason `json:"reason"`
+	ObservedAt time.Time                    `json:"observedAt"`
 }
 
 type SourceConnection struct {
@@ -78,8 +79,9 @@ type RepositoryBindingSpec struct {
 }
 
 type RepositoryBindingStatus struct {
-	Health     RepositoryBindingHealth `json:"health"`
-	ObservedAt time.Time               `json:"observedAt"`
+	Health     RepositoryBindingHealth       `json:"health"`
+	Reason     RepositoryBindingHealthReason `json:"reason"`
+	ObservedAt time.Time                     `json:"observedAt"`
 }
 
 type RepositoryBinding struct {

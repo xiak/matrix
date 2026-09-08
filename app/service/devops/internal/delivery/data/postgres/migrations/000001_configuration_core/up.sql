@@ -1478,8 +1478,8 @@ BEGIN
             RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'SourceConnection version conflict';
         END IF;
         IF current_document#>>'{spec,adapterId}' IS DISTINCT FROM submitted_resource#>>'{spec,adapterId}'
-           OR current_document#>'{spec,allowedEndpointOrigins}'
-                IS DISTINCT FROM submitted_resource#>'{spec,allowedEndpointOrigins}'
+           OR current_document#>>'{spec,endpointOrigin}'
+                IS DISTINCT FROM submitted_resource#>>'{spec,endpointOrigin}'
            OR current_document#>>'{metadata,name}' IS DISTINCT FROM submitted_resource#>>'{metadata,name}'
            OR current_document#>>'{metadata,createdAt}' IS DISTINCT FROM submitted_resource#>>'{metadata,createdAt}' THEN
             RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'SourceConnection immutable identity changed';
@@ -4083,6 +4083,226 @@ REVOKE ALL ON FUNCTION delivery.audit_outbox_snapshot()
     FROM PUBLIC, matrix_devops_api;
 GRANT EXECUTE ON FUNCTION delivery.audit_outbox_snapshot()
     TO matrix_devops_worker;
+
+DROP POLICY IF EXISTS owner_source_contract_upgrade
+    ON delivery.source_connections;
+CREATE POLICY owner_source_contract_upgrade
+    ON delivery.source_connections
+    TO matrix_devops_owner USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS owner_source_contract_upgrade
+    ON delivery.repository_bindings;
+CREATE POLICY owner_source_contract_upgrade
+    ON delivery.repository_bindings
+    TO matrix_devops_owner USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS owner_source_contract_upgrade
+    ON delivery.repository_binding_revisions;
+CREATE POLICY owner_source_contract_upgrade
+    ON delivery.repository_binding_revisions
+    TO matrix_devops_owner USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS owner_source_contract_upgrade
+    ON delivery.mutations;
+CREATE POLICY owner_source_contract_upgrade
+    ON delivery.mutations
+    TO matrix_devops_owner USING (true) WITH CHECK (true);
+
+DO $matrix_devops_exact_source_origin$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+          FROM delivery.source_connections
+         WHERE document#>'{spec,allowedEndpointOrigins}' IS NOT NULL
+           AND CASE
+                WHEN jsonb_typeof(document#>'{spec,allowedEndpointOrigins}') = 'array'
+                THEN jsonb_array_length(document#>'{spec,allowedEndpointOrigins}') <> 1
+                  OR (
+                    document#>'{spec,endpointOrigin}' IS NOT NULL
+                    AND document#>>'{spec,endpointOrigin}'
+                        IS DISTINCT FROM document#>>'{spec,allowedEndpointOrigins,0}'
+                  )
+                ELSE true
+               END
+    ) OR EXISTS (
+        SELECT 1
+          FROM delivery.mutations
+         WHERE result_document#>'{sourceConnection,spec,allowedEndpointOrigins}' IS NOT NULL
+           AND CASE
+                WHEN jsonb_typeof(result_document#>'{sourceConnection,spec,allowedEndpointOrigins}') = 'array'
+                THEN jsonb_array_length(result_document#>'{sourceConnection,spec,allowedEndpointOrigins}') <> 1
+                  OR (
+                    result_document#>'{sourceConnection,spec,endpointOrigin}' IS NOT NULL
+                    AND result_document#>>'{sourceConnection,spec,endpointOrigin}'
+                        IS DISTINCT FROM result_document#>>'{sourceConnection,spec,allowedEndpointOrigins,0}'
+                  )
+                ELSE true
+               END
+    ) THEN
+        RAISE EXCEPTION USING ERRCODE = '22023',
+            MESSAGE = 'legacy SourceConnection must contain exactly one endpoint origin';
+    END IF;
+END
+$matrix_devops_exact_source_origin$;
+
+UPDATE delivery.source_connections
+   SET document = jsonb_set(
+        document #- '{spec,allowedEndpointOrigins}',
+        '{spec,endpointOrigin}',
+        document#>'{spec,allowedEndpointOrigins,0}',
+        true
+   )
+ WHERE document#>'{spec,allowedEndpointOrigins}' IS NOT NULL;
+
+UPDATE delivery.mutations
+   SET result_document = jsonb_set(
+        result_document #- '{sourceConnection,spec,allowedEndpointOrigins}',
+        '{sourceConnection,spec,endpointOrigin}',
+        result_document#>'{sourceConnection,spec,allowedEndpointOrigins,0}',
+        true
+   )
+ WHERE result_document#>'{sourceConnection,spec,allowedEndpointOrigins}' IS NOT NULL;
+
+UPDATE delivery.source_connections
+   SET document = jsonb_set(
+        document,
+        '{status,reason}',
+        to_jsonb(CASE document#>>'{status,health}'
+            WHEN 'PENDING' THEN 'CONFIGURATION_CHANGED'
+            WHEN 'READY' THEN 'OBSERVED'
+            ELSE 'PROVIDER_UNAVAILABLE'
+        END),
+        true
+   )
+ WHERE document#>'{status,reason}' IS NULL;
+
+UPDATE delivery.repository_bindings
+   SET document = jsonb_set(
+        document,
+        '{status,reason}',
+        to_jsonb(CASE document#>>'{status,health}'
+            WHEN 'PENDING' THEN 'CONFIGURATION_CHANGED'
+            WHEN 'READY' THEN 'OBSERVED'
+            ELSE 'REPOSITORY_UNAVAILABLE'
+        END),
+        true
+   )
+ WHERE document#>'{status,reason}' IS NULL;
+
+UPDATE delivery.repository_binding_revisions
+   SET document = jsonb_set(
+        document,
+        '{status,reason}',
+        to_jsonb(CASE document#>>'{status,health}'
+            WHEN 'PENDING' THEN 'CONFIGURATION_CHANGED'
+            WHEN 'READY' THEN 'OBSERVED'
+            ELSE 'REPOSITORY_UNAVAILABLE'
+        END),
+        true
+   )
+ WHERE document#>'{status,reason}' IS NULL;
+
+UPDATE delivery.mutations
+   SET result_document = jsonb_set(
+        result_document,
+        '{sourceConnection,status,reason}',
+        to_jsonb(CASE result_document#>>'{sourceConnection,status,health}'
+            WHEN 'PENDING' THEN 'CONFIGURATION_CHANGED'
+            WHEN 'READY' THEN 'OBSERVED'
+            ELSE 'PROVIDER_UNAVAILABLE'
+        END),
+        true
+   )
+ WHERE result_document#>'{sourceConnection,status}' IS NOT NULL
+   AND result_document#>'{sourceConnection,status,reason}' IS NULL;
+
+UPDATE delivery.mutations
+   SET result_document = jsonb_set(
+        result_document,
+        '{repositoryBinding,status,reason}',
+        to_jsonb(CASE result_document#>>'{repositoryBinding,status,health}'
+            WHEN 'PENDING' THEN 'CONFIGURATION_CHANGED'
+            WHEN 'READY' THEN 'OBSERVED'
+            ELSE 'REPOSITORY_UNAVAILABLE'
+        END),
+        true
+   )
+ WHERE result_document#>'{repositoryBinding,status}' IS NOT NULL
+   AND result_document#>'{repositoryBinding,status,reason}' IS NULL;
+
+DO $matrix_devops_source_contract_valid$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+          FROM delivery.source_connections
+         WHERE document#>'{spec,allowedEndpointOrigins}' IS NOT NULL
+            OR jsonb_typeof(document#>'{spec,endpointOrigin}') IS DISTINCT FROM 'string'
+            OR (
+                document#>>'{status,health}' = 'PENDING'
+                AND document#>>'{status,reason}' = 'CONFIGURATION_CHANGED'
+                OR document#>>'{status,health}' = 'READY'
+                AND document#>>'{status,reason}' = 'OBSERVED'
+                OR document#>>'{status,health}' = 'UNAVAILABLE'
+                AND document#>>'{status,reason}' IN (
+                    'SECRET_UNAVAILABLE', 'PROVIDER_UNAVAILABLE',
+                    'PROVIDER_UNSUPPORTED', 'CREDENTIAL_REJECTED'
+                )
+            ) IS NOT TRUE
+    ) OR EXISTS (
+        SELECT 1
+          FROM delivery.repository_bindings
+         WHERE (
+                document#>>'{status,health}' = 'PENDING'
+                AND document#>>'{status,reason}' IN (
+                    'CONFIGURATION_CHANGED', 'CONNECTION_NOT_READY'
+                )
+                OR document#>>'{status,health}' = 'READY'
+                AND document#>>'{status,reason}' = 'OBSERVED'
+                OR document#>>'{status,health}' = 'UNAVAILABLE'
+                AND document#>>'{status,reason}' IN (
+                    'REPOSITORY_UNAVAILABLE', 'IDENTITY_MISMATCH',
+                    'FETCH_PERMISSION_DENIED', 'REPORT_PERMISSION_DENIED'
+                )
+            ) IS NOT TRUE
+    ) OR EXISTS (
+        SELECT 1
+          FROM delivery.repository_binding_revisions
+         WHERE (
+                document#>>'{status,health}' = 'PENDING'
+                AND document#>>'{status,reason}' IN (
+                    'CONFIGURATION_CHANGED', 'CONNECTION_NOT_READY'
+                )
+                OR document#>>'{status,health}' = 'READY'
+                AND document#>>'{status,reason}' = 'OBSERVED'
+                OR document#>>'{status,health}' = 'UNAVAILABLE'
+                AND document#>>'{status,reason}' IN (
+                    'REPOSITORY_UNAVAILABLE', 'IDENTITY_MISMATCH',
+                    'FETCH_PERMISSION_DENIED', 'REPORT_PERMISSION_DENIED'
+                )
+            ) IS NOT TRUE
+    ) OR EXISTS (
+        SELECT 1
+          FROM delivery.mutations
+         WHERE result_document#>'{sourceConnection}' IS NOT NULL
+           AND (
+                result_document#>'{sourceConnection,spec,allowedEndpointOrigins}' IS NOT NULL
+                OR jsonb_typeof(result_document#>'{sourceConnection,spec,endpointOrigin}')
+                    IS DISTINCT FROM 'string'
+                OR result_document#>'{sourceConnection,status,reason}' IS NULL
+           )
+    ) OR EXISTS (
+        SELECT 1
+          FROM delivery.mutations
+         WHERE result_document#>'{repositoryBinding}' IS NOT NULL
+           AND result_document#>'{repositoryBinding,status,reason}' IS NULL
+    ) THEN
+        RAISE EXCEPTION USING ERRCODE = '22023',
+            MESSAGE = 'source readiness contract migration is incomplete';
+    END IF;
+END
+$matrix_devops_source_contract_valid$;
+
+DROP POLICY owner_source_contract_upgrade ON delivery.source_connections;
+DROP POLICY owner_source_contract_upgrade ON delivery.repository_bindings;
+DROP POLICY owner_source_contract_upgrade ON delivery.repository_binding_revisions;
+DROP POLICY owner_source_contract_upgrade ON delivery.mutations;
 
 CREATE OR REPLACE FUNCTION delivery.readiness()
 RETURNS TABLE (ready boolean, schema_version bigint, checked_at timestamptz)

@@ -1455,6 +1455,18 @@
         ],
         "type": "string"
       },
+      "RepositoryBindingHealthReason": {
+        "enum": [
+          "CONFIGURATION_CHANGED",
+          "CONNECTION_NOT_READY",
+          "OBSERVED",
+          "REPOSITORY_UNAVAILABLE",
+          "IDENTITY_MISMATCH",
+          "FETCH_PERMISSION_DENIED",
+          "REPORT_PERMISSION_DENIED"
+        ],
+        "type": "string"
+      },
       "RepositoryBindingSpec": {
         "additionalProperties": false,
         "properties": {
@@ -1490,17 +1502,99 @@
       },
       "RepositoryBindingStatus": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "health": {
+                  "const": "PENDING"
+                }
+              },
+              "required": [
+                "health"
+              ]
+            },
+            "then": {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "CONFIGURATION_CHANGED",
+                    "CONNECTION_NOT_READY"
+                  ]
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "health": {
+                  "const": "READY"
+                }
+              },
+              "required": [
+                "health"
+              ]
+            },
+            "then": {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "OBSERVED"
+                  ]
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "health": {
+                  "const": "UNAVAILABLE"
+                }
+              },
+              "required": [
+                "health"
+              ]
+            },
+            "then": {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "REPOSITORY_UNAVAILABLE",
+                    "IDENTITY_MISMATCH",
+                    "FETCH_PERMISSION_DENIED",
+                    "REPORT_PERMISSION_DENIED"
+                  ]
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            }
+          }
+        ],
         "properties": {
           "health": {
             "$ref": "#/components/schemas/RepositoryBindingHealth"
           },
           "observedAt": {
             "$ref": "#/components/schemas/Timestamp"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/RepositoryBindingHealthReason"
           }
         },
         "required": [
           "health",
-          "observedAt"
+          "observedAt",
+          "reason"
         ],
         "type": "object"
       },
@@ -1595,27 +1689,32 @@
         ],
         "type": "string"
       },
+      "SourceConnectionHealthReason": {
+        "enum": [
+          "CONFIGURATION_CHANGED",
+          "OBSERVED",
+          "SECRET_UNAVAILABLE",
+          "PROVIDER_UNAVAILABLE",
+          "PROVIDER_UNSUPPORTED",
+          "CREDENTIAL_REJECTED"
+        ],
+        "type": "string"
+      },
       "SourceConnectionSpec": {
         "additionalProperties": false,
         "properties": {
           "adapterId": {
             "$ref": "#/components/schemas/ResourceID"
           },
-          "allowedEndpointOrigins": {
-            "items": {
-              "format": "uri",
-              "maxLength": 512,
-              "minLength": 1,
-              "not": {
-                "pattern": "^https://(?:[a-z0-9-]+\\.)*localhost(?::|$)"
-              },
-              "pattern": "^https://[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?$",
-              "type": "string"
+          "endpointOrigin": {
+            "format": "uri",
+            "maxLength": 512,
+            "minLength": 1,
+            "not": {
+              "pattern": "^https://(?:[a-z0-9-]+\\.)*localhost(?::|$)"
             },
-            "maxItems": 8,
-            "minItems": 1,
-            "type": "array",
-            "uniqueItems": true
+            "pattern": "^https://[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?$",
+            "type": "string"
           },
           "fetchCredentialRef": {
             "$ref": "#/components/schemas/ResourceID"
@@ -1629,7 +1728,7 @@
         },
         "required": [
           "adapterId",
-          "allowedEndpointOrigins",
+          "endpointOrigin",
           "fetchCredentialRef",
           "reportCredentialRef",
           "webhookSecretRef"
@@ -1638,17 +1737,98 @@
       },
       "SourceConnectionStatus": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "health": {
+                  "const": "PENDING"
+                }
+              },
+              "required": [
+                "health"
+              ]
+            },
+            "then": {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "CONFIGURATION_CHANGED"
+                  ]
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "health": {
+                  "const": "READY"
+                }
+              },
+              "required": [
+                "health"
+              ]
+            },
+            "then": {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "OBSERVED"
+                  ]
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "health": {
+                  "const": "UNAVAILABLE"
+                }
+              },
+              "required": [
+                "health"
+              ]
+            },
+            "then": {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "SECRET_UNAVAILABLE",
+                    "PROVIDER_UNAVAILABLE",
+                    "PROVIDER_UNSUPPORTED",
+                    "CREDENTIAL_REJECTED"
+                  ]
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            }
+          }
+        ],
         "properties": {
           "health": {
             "$ref": "#/components/schemas/SourceConnectionHealth"
           },
           "observedAt": {
             "$ref": "#/components/schemas/Timestamp"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/SourceConnectionHealthReason"
           }
         },
         "required": [
           "health",
-          "observedAt"
+          "observedAt",
+          "reason"
         ],
         "type": "object"
       },

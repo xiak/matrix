@@ -108,7 +108,7 @@ func ValidateSourceConnectionSpec(value SourceConnectionSpec) error {
 		ValidateID("spec.webhookSecretRef", string(value.WebhookSecretRef)),
 		ValidateID("spec.fetchCredentialRef", string(value.FetchCredentialRef)),
 		ValidateID("spec.reportCredentialRef", string(value.ReportCredentialRef)),
-		validateEndpointOrigins(value.AllowedEndpointOrigins),
+		validateEndpointOrigin(value.EndpointOrigin),
 	)
 	if value.WebhookSecretRef == value.FetchCredentialRef ||
 		value.WebhookSecretRef == value.ReportCredentialRef ||
@@ -119,10 +119,14 @@ func ValidateSourceConnectionSpec(value SourceConnectionSpec) error {
 }
 
 func ValidateSourceConnectionStatus(value SourceConnectionStatus) error {
-	if !contains(SourceConnectionHealthStates(), value.Health) {
-		return errors.New("source connection health is invalid")
+	var problems []error
+	if !contains(SourceConnectionHealthStates(), value.Health) ||
+		!contains(SourceConnectionHealthReasons(), value.Reason) ||
+		!validSourceConnectionHealthPair(value.Health, value.Reason) {
+		problems = append(problems, errors.New("source connection health is invalid"))
 	}
-	return validateContractTime("status.observedAt", value.ObservedAt)
+	problems = append(problems, validateContractTime("status.observedAt", value.ObservedAt))
+	return errors.Join(problems...)
 }
 
 func ValidateSourceConnection(value SourceConnection) error {
@@ -174,10 +178,14 @@ func ValidateTrustedDefaultBranch(value string) error {
 }
 
 func ValidateRepositoryBindingStatus(value RepositoryBindingStatus) error {
-	if !contains(RepositoryBindingHealthStates(), value.Health) {
-		return errors.New("repository binding health is invalid")
+	var problems []error
+	if !contains(RepositoryBindingHealthStates(), value.Health) ||
+		!contains(RepositoryBindingHealthReasons(), value.Reason) ||
+		!validRepositoryBindingHealthPair(value.Health, value.Reason) {
+		problems = append(problems, errors.New("repository binding health is invalid"))
 	}
-	return validateContractTime("status.observedAt", value.ObservedAt)
+	problems = append(problems, validateContractTime("status.observedAt", value.ObservedAt))
+	return errors.Join(problems...)
 }
 
 func ValidateRepositoryBinding(value RepositoryBinding) error {
@@ -691,24 +699,6 @@ func validateContractTime(name string, value time.Time) error {
 	return nil
 }
 
-func validateEndpointOrigins(values []string) error {
-	if len(values) == 0 || len(values) > 8 {
-		return errors.New("allowedEndpointOrigins must contain between one and eight origins")
-	}
-	var problems []error
-	previous := ""
-	for index, value := range values {
-		if value <= previous {
-			problems = append(problems, errors.New("allowedEndpointOrigins must be sorted and unique"))
-		}
-		previous = value
-		if validateEndpointOrigin(value) != nil {
-			problems = append(problems, fmt.Errorf("allowedEndpointOrigins[%d] is invalid", index))
-		}
-	}
-	return errors.Join(problems...)
-}
-
 func validateEndpointOrigin(value string) error {
 	if validateSafeText("endpoint origin", value, 1, 512) != nil {
 		return errors.New("endpoint origin is invalid")
@@ -741,6 +731,49 @@ func validateEndpointOrigin(value string) error {
 		}
 	}
 	return nil
+}
+
+func validSourceConnectionHealthPair(
+	health SourceConnectionHealth,
+	reason SourceConnectionHealthReason,
+) bool {
+	switch health {
+	case SourceConnectionPending:
+		return reason == SourceConnectionReasonConfigurationChanged
+	case SourceConnectionReady:
+		return reason == SourceConnectionReasonObserved
+	case SourceConnectionUnavailable:
+		switch reason {
+		case SourceConnectionReasonSecretUnavailable,
+			SourceConnectionReasonProviderUnavailable,
+			SourceConnectionReasonProviderUnsupported,
+			SourceConnectionReasonCredentialRejected:
+			return true
+		}
+	}
+	return false
+}
+
+func validRepositoryBindingHealthPair(
+	health RepositoryBindingHealth,
+	reason RepositoryBindingHealthReason,
+) bool {
+	switch health {
+	case RepositoryBindingPending:
+		return reason == RepositoryBindingReasonConfigurationChanged ||
+			reason == RepositoryBindingReasonConnectionNotReady
+	case RepositoryBindingReady:
+		return reason == RepositoryBindingReasonObserved
+	case RepositoryBindingUnavailable:
+		switch reason {
+		case RepositoryBindingReasonRepositoryUnavailable,
+			RepositoryBindingReasonIdentityMismatch,
+			RepositoryBindingReasonFetchPermissionDenied,
+			RepositoryBindingReasonReportPermissionDenied:
+			return true
+		}
+	}
+	return false
 }
 
 func validateRepositoryPath(value string) error {

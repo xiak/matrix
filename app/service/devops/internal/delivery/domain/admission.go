@@ -13,6 +13,8 @@ var (
 	ErrSourceEventReplayChanged = errors.New("source event replay content changed")
 )
 
+const MaximumSourceHealthAge = 2 * time.Minute
+
 // NormalizedChange is the provider-neutral output of a source adapter after
 // it has authenticated and bounded the untouched provider request. It carries
 // no provider user or role as Matrix authority.
@@ -48,7 +50,11 @@ func NewSourceEvent(
 		return devopsv1.SourceEvent{}, ErrReferenceMismatch
 	}
 	if connection.Status.Health != devopsv1.SourceConnectionReady ||
-		binding.Status.Health != devopsv1.RepositoryBindingReady {
+		connection.Status.Reason != devopsv1.SourceConnectionReasonObserved ||
+		binding.Status.Health != devopsv1.RepositoryBindingReady ||
+		binding.Status.Reason != devopsv1.RepositoryBindingReasonObserved ||
+		receivedAt.Sub(connection.Status.ObservedAt) > MaximumSourceHealthAge ||
+		receivedAt.Sub(binding.Status.ObservedAt) > MaximumSourceHealthAge {
 		return devopsv1.SourceEvent{}, ErrSourceNotReady
 	}
 	if receivedAt.Before(connection.Metadata.UpdatedAt) ||

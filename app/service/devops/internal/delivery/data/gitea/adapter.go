@@ -86,7 +86,7 @@ func (*Adapter) AuthenticateAndNormalize(
 	if json.Unmarshal(request.Body, &payload) != nil {
 		return sourceingress.ProviderChange{}, sourceingress.ErrInvalidArgument
 	}
-	return normalizePayload(payload, request.Connection.Spec.AllowedEndpointOrigins)
+	return normalizePayload(payload, request.Connection.Spec.EndpointOrigin)
 }
 
 type pullRequestPayload struct {
@@ -120,7 +120,7 @@ type hookRepository struct {
 
 func normalizePayload(
 	payload pullRequestPayload,
-	allowedOrigins []string,
+	endpointOrigin string,
 ) (sourceingress.ProviderChange, error) {
 	if payload.PullRequest == nil || payload.Repository == nil ||
 		payload.Number < 1 || uint64(payload.Number) > devopsv1.MaximumContractInteger ||
@@ -129,8 +129,8 @@ func normalizePayload(
 		payload.PullRequest.Base.RepoID != payload.Repository.ID ||
 		payload.PullRequest.Base.Repo == nil ||
 		!sameRepository(*payload.Repository, *payload.PullRequest.Base.Repo) ||
-		!repositoryUsesAllowedOrigins(*payload.Repository, allowedOrigins) ||
-		!repositoryUsesAllowedOrigins(*payload.PullRequest.Base.Repo, allowedOrigins) {
+		!repositoryUsesEndpointOrigin(*payload.Repository, endpointOrigin) ||
+		!repositoryUsesEndpointOrigin(*payload.PullRequest.Base.Repo, endpointOrigin) {
 		return sourceingress.ProviderChange{}, sourceingress.ErrInvalidArgument
 	}
 	action, found := mapAction(payload.Action)
@@ -175,8 +175,8 @@ func sameRepository(left, right hookRepository) bool {
 		left.CloneURL == right.CloneURL && left.ObjectFormatName == right.ObjectFormatName
 }
 
-func repositoryUsesAllowedOrigins(repository hookRepository, allowed []string) bool {
-	if len(allowed) == 0 {
+func repositoryUsesEndpointOrigin(repository hookRepository, endpointOrigin string) bool {
+	if endpointOrigin == "" {
 		return false
 	}
 	for _, raw := range []string{repository.URL, repository.HTMLURL, repository.CloneURL} {
@@ -185,15 +185,7 @@ func repositoryUsesAllowedOrigins(repository hookRepository, allowed []string) b
 			parsed.Opaque != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
 			return false
 		}
-		origin := parsed.Scheme + "://" + parsed.Host
-		found := false
-		for _, candidate := range allowed {
-			if origin == candidate {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if parsed.Scheme+"://"+parsed.Host != endpointOrigin {
 			return false
 		}
 	}

@@ -21,6 +21,7 @@
   "contentDigest": "sha256:ba641c4f85296cb2b0a43014403aeb941fe7dd233f15c9296e0d3bc1bac7b453",
   "status": {
     "health": "PENDING",
+    "reason": "CONFIGURATION_CHANGED",
     "observedAt": "2026-09-07T04:05:06Z"
   }
 }

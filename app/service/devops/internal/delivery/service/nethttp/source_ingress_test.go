@@ -189,7 +189,7 @@ func validHTTPAdmission(t *testing.T) runadmission.Result {
 	connection, err := domain.NewSourceConnection(devopsv1.CreateSourceConnectionRequest{
 		ID: "connection-one", Name: "connection-one",
 		Spec: devopsv1.SourceConnectionSpec{
-			AdapterID: "source-adapter-gitea-v1", AllowedEndpointOrigins: []string{"https://git.example.com"},
+			AdapterID: "source-adapter-gitea-v1", EndpointOrigin: "https://git.example.com",
 			WebhookSecretRef: "webhook-secret", FetchCredentialRef: "fetch-secret", ReportCredentialRef: "report-secret",
 		},
 	}, scope, now)
@@ -197,6 +197,7 @@ func validHTTPAdmission(t *testing.T) runadmission.Result {
 		t.Fatal(err)
 	}
 	connection.Status.Health = devopsv1.SourceConnectionReady
+	connection.Status.Reason = devopsv1.SourceConnectionReasonObserved
 	project, err := domain.NewDevOpsProject(devopsv1.CreateDevOpsProjectRequest{
 		ID: "project-one", Name: "project-one",
 	}, scope, now)
@@ -214,6 +215,7 @@ func validHTTPAdmission(t *testing.T) runadmission.Result {
 		t.Fatal(err)
 	}
 	binding.Status.Health = devopsv1.RepositoryBindingReady
+	binding.Status.Reason = devopsv1.RepositoryBindingReasonObserved
 	event, err := domain.NewSourceEvent(domain.NormalizedChange{
 		Scope: scope, SourceConnectionID: connection.Metadata.ID,
 		VerifiedSourceConnectionVersion: connection.Metadata.ResourceVersion,

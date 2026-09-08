@@ -68,9 +68,15 @@ func TestDevOpsSchemasRejectAuthorityAndTrustedProfileDrift(t *testing.T) {
 
 	connectionSchema := compileDevOpsOpenAPISchema(t, document, "CreateSourceConnectionRequest")
 	connection := loadDevOpsSchemaExample(t, "examples/create-source-connection-request.json")
-	connection["spec"].(map[string]any)["allowedEndpointOrigins"] = []any{"https://localhost"}
+	connection["spec"].(map[string]any)["endpointOrigin"] = "https://localhost"
 	if err := connectionSchema.Validate(connection); err == nil {
 		t.Fatal("loopback source endpoint passed schema validation")
+	}
+	connectionResourceSchema := compileDevOpsOpenAPISchema(t, document, "SourceConnection")
+	connectionResource := loadDevOpsSchemaExample(t, "examples/source-connection.json")
+	connectionResource["status"].(map[string]any)["reason"] = "OBSERVED"
+	if err := connectionResourceSchema.Validate(connectionResource); err == nil {
+		t.Fatal("mismatched source health reason passed schema validation")
 	}
 
 	bindingSchema := compileDevOpsOpenAPISchema(t, document, "CreateRepositoryBindingRequest")
@@ -78,6 +84,12 @@ func TestDevOpsSchemasRejectAuthorityAndTrustedProfileDrift(t *testing.T) {
 	binding["spec"].(map[string]any)["trustedDefaultBranch"] = "feature/../main"
 	if err := bindingSchema.Validate(binding); err == nil {
 		t.Fatal("unsafe trusted branch passed schema validation")
+	}
+	bindingResourceSchema := compileDevOpsOpenAPISchema(t, document, "RepositoryBinding")
+	bindingResource := loadDevOpsSchemaExample(t, "examples/repository-binding.json")
+	bindingResource["status"].(map[string]any)["reason"] = "OBSERVED"
+	if err := bindingResourceSchema.Validate(bindingResource); err == nil {
+		t.Fatal("mismatched repository health reason passed schema validation")
 	}
 
 	revisionSchema := compileDevOpsOpenAPISchema(t, document, "PipelineRevision")

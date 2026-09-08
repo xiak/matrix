@@ -8,7 +8,9 @@ type ReporterPolicy string
 type VerificationStepKind string
 type SubjectKind string
 type SourceConnectionHealth string
+type SourceConnectionHealthReason string
 type RepositoryBindingHealth string
+type RepositoryBindingHealthReason string
 type ReadinessState string
 type ErrorCode string
 type ChangeAction string
@@ -53,9 +55,28 @@ const (
 )
 
 const (
+	SourceConnectionReasonConfigurationChanged SourceConnectionHealthReason = "CONFIGURATION_CHANGED"
+	SourceConnectionReasonObserved             SourceConnectionHealthReason = "OBSERVED"
+	SourceConnectionReasonSecretUnavailable    SourceConnectionHealthReason = "SECRET_UNAVAILABLE"
+	SourceConnectionReasonProviderUnavailable  SourceConnectionHealthReason = "PROVIDER_UNAVAILABLE"
+	SourceConnectionReasonProviderUnsupported  SourceConnectionHealthReason = "PROVIDER_UNSUPPORTED"
+	SourceConnectionReasonCredentialRejected   SourceConnectionHealthReason = "CREDENTIAL_REJECTED"
+)
+
+const (
 	RepositoryBindingPending     RepositoryBindingHealth = "PENDING"
 	RepositoryBindingReady       RepositoryBindingHealth = "READY"
 	RepositoryBindingUnavailable RepositoryBindingHealth = "UNAVAILABLE"
+)
+
+const (
+	RepositoryBindingReasonConfigurationChanged   RepositoryBindingHealthReason = "CONFIGURATION_CHANGED"
+	RepositoryBindingReasonConnectionNotReady     RepositoryBindingHealthReason = "CONNECTION_NOT_READY"
+	RepositoryBindingReasonObserved               RepositoryBindingHealthReason = "OBSERVED"
+	RepositoryBindingReasonRepositoryUnavailable  RepositoryBindingHealthReason = "REPOSITORY_UNAVAILABLE"
+	RepositoryBindingReasonIdentityMismatch       RepositoryBindingHealthReason = "IDENTITY_MISMATCH"
+	RepositoryBindingReasonFetchPermissionDenied  RepositoryBindingHealthReason = "FETCH_PERMISSION_DENIED"
+	RepositoryBindingReasonReportPermissionDenied RepositoryBindingHealthReason = "REPORT_PERMISSION_DENIED"
 )
 
 const (
@@ -155,11 +176,34 @@ func SourceConnectionHealthStates() []SourceConnectionHealth {
 	}
 }
 
+func SourceConnectionHealthReasons() []SourceConnectionHealthReason {
+	return []SourceConnectionHealthReason{
+		SourceConnectionReasonConfigurationChanged,
+		SourceConnectionReasonObserved,
+		SourceConnectionReasonSecretUnavailable,
+		SourceConnectionReasonProviderUnavailable,
+		SourceConnectionReasonProviderUnsupported,
+		SourceConnectionReasonCredentialRejected,
+	}
+}
+
 func RepositoryBindingHealthStates() []RepositoryBindingHealth {
 	return []RepositoryBindingHealth{
 		RepositoryBindingPending,
 		RepositoryBindingReady,
 		RepositoryBindingUnavailable,
+	}
+}
+
+func RepositoryBindingHealthReasons() []RepositoryBindingHealthReason {
+	return []RepositoryBindingHealthReason{
+		RepositoryBindingReasonConfigurationChanged,
+		RepositoryBindingReasonConnectionNotReady,
+		RepositoryBindingReasonObserved,
+		RepositoryBindingReasonRepositoryUnavailable,
+		RepositoryBindingReasonIdentityMismatch,
+		RepositoryBindingReasonFetchPermissionDenied,
+		RepositoryBindingReasonReportPermissionDenied,
 	}
 }
 

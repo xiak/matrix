@@ -35,7 +35,8 @@ func TestDevOpsContractsAcceptTrustedActivation(t *testing.T) {
 		},
 		Spec: validSourceConnectionSpec(),
 		Status: SourceConnectionStatus{
-			Health: SourceConnectionPending, ObservedAt: activation.Pipeline.Metadata.CreatedAt,
+			Health: SourceConnectionPending, Reason: SourceConnectionReasonConfigurationChanged,
+			ObservedAt: activation.Pipeline.Metadata.CreatedAt,
 		},
 	}
 	if err := ValidateSourceConnection(connection); err != nil {
@@ -52,7 +53,8 @@ func TestDevOpsContractsAcceptTrustedActivation(t *testing.T) {
 		ProjectID: "devops-project-platform", Spec: bindingSpec,
 		ContentDigest: RepositoryBindingSpecDigest(bindingSpec),
 		Status: RepositoryBindingStatus{
-			Health: RepositoryBindingPending, ObservedAt: activation.Pipeline.Metadata.CreatedAt,
+			Health: RepositoryBindingPending, Reason: RepositoryBindingReasonConfigurationChanged,
+			ObservedAt: activation.Pipeline.Metadata.CreatedAt,
 		},
 	}
 	if err := ValidateRepositoryBinding(binding); err != nil {
@@ -365,20 +367,14 @@ func TestSourceAndRepositoryContractsFailClosed(t *testing.T) {
 			value.ReportCredentialRef = value.FetchCredentialRef
 		},
 		"insecure endpoint": func(value *SourceConnectionSpec) {
-			value.AllowedEndpointOrigins = []string{"http://git.internal.example"}
+			value.EndpointOrigin = "http://git.internal.example"
 		},
 		"endpoint path": func(value *SourceConnectionSpec) {
-			value.AllowedEndpointOrigins = []string{"https://git.internal.example/api"}
-		},
-		"unordered endpoints": func(value *SourceConnectionSpec) {
-			value.AllowedEndpointOrigins = []string{
-				"https://z.internal.example", "https://a.internal.example",
-			}
+			value.EndpointOrigin = "https://git.internal.example/api"
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			value := connection
-			value.AllowedEndpointOrigins = append([]string(nil), connection.AllowedEndpointOrigins...)
 			mutate(&value)
 			if err := ValidateSourceConnectionSpec(value); err == nil {
 				t.Fatal("invalid source connection specification was accepted")
@@ -399,6 +395,48 @@ func TestSourceAndRepositoryContractsFailClosed(t *testing.T) {
 				t.Fatal("invalid repository binding specification was accepted")
 			}
 		})
+	}
+}
+
+func TestSourceHealthContractsAcceptOnlyClosedStateReasonPairs(t *testing.T) {
+	now := time.Date(2026, 9, 8, 1, 2, 3, 0, time.UTC)
+	validConnections := []SourceConnectionStatus{
+		{Health: SourceConnectionPending, Reason: SourceConnectionReasonConfigurationChanged, ObservedAt: now},
+		{Health: SourceConnectionReady, Reason: SourceConnectionReasonObserved, ObservedAt: now},
+		{Health: SourceConnectionUnavailable, Reason: SourceConnectionReasonSecretUnavailable, ObservedAt: now},
+		{Health: SourceConnectionUnavailable, Reason: SourceConnectionReasonProviderUnavailable, ObservedAt: now},
+		{Health: SourceConnectionUnavailable, Reason: SourceConnectionReasonProviderUnsupported, ObservedAt: now},
+		{Health: SourceConnectionUnavailable, Reason: SourceConnectionReasonCredentialRejected, ObservedAt: now},
+	}
+	for _, status := range validConnections {
+		if err := ValidateSourceConnectionStatus(status); err != nil {
+			t.Fatalf("valid source connection status %#v: %v", status, err)
+		}
+	}
+	invalidConnection := validConnections[1]
+	invalidConnection.Reason = SourceConnectionReasonProviderUnavailable
+	if ValidateSourceConnectionStatus(invalidConnection) == nil {
+		t.Fatal("mismatched ready source reason was accepted")
+	}
+
+	validBindings := []RepositoryBindingStatus{
+		{Health: RepositoryBindingPending, Reason: RepositoryBindingReasonConfigurationChanged, ObservedAt: now},
+		{Health: RepositoryBindingPending, Reason: RepositoryBindingReasonConnectionNotReady, ObservedAt: now},
+		{Health: RepositoryBindingReady, Reason: RepositoryBindingReasonObserved, ObservedAt: now},
+		{Health: RepositoryBindingUnavailable, Reason: RepositoryBindingReasonRepositoryUnavailable, ObservedAt: now},
+		{Health: RepositoryBindingUnavailable, Reason: RepositoryBindingReasonIdentityMismatch, ObservedAt: now},
+		{Health: RepositoryBindingUnavailable, Reason: RepositoryBindingReasonFetchPermissionDenied, ObservedAt: now},
+		{Health: RepositoryBindingUnavailable, Reason: RepositoryBindingReasonReportPermissionDenied, ObservedAt: now},
+	}
+	for _, status := range validBindings {
+		if err := ValidateRepositoryBindingStatus(status); err != nil {
+			t.Fatalf("valid repository binding status %#v: %v", status, err)
+		}
+	}
+	invalidBinding := validBindings[2]
+	invalidBinding.Reason = RepositoryBindingReasonIdentityMismatch
+	if ValidateRepositoryBindingStatus(invalidBinding) == nil {
+		t.Fatal("mismatched ready repository reason was accepted")
 	}
 }
 

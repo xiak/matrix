@@ -49,9 +49,9 @@ func TestPipelineConfigurationJourneyIsAtomicIdempotentAndSnapshotBound(t *testi
 	}
 
 	connectionSpec := devopsv1.SourceConnectionSpec{
-		AdapterID:              "source-adapter-gitea-v1",
-		AllowedEndpointOrigins: []string{"https://gitea.example.com"},
-		WebhookSecretRef:       "secret-webhook-1", FetchCredentialRef: "secret-fetch-1",
+		AdapterID:        "source-adapter-gitea-v1",
+		EndpointOrigin:   "https://gitea.example.com",
+		WebhookSecretRef: "secret-webhook-1", FetchCredentialRef: "secret-fetch-1",
 		ReportCredentialRef: "secret-report-1",
 	}
 	connectionRequest := devopsv1.CreateSourceConnectionRequest{ID: "connection-one", Name: "connection-one", Spec: connectionSpec}

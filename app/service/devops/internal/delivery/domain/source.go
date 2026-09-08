@@ -2,7 +2,6 @@ package domain
 
 import (
 	"errors"
-	"slices"
 	"time"
 
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
@@ -12,7 +11,18 @@ var (
 	ErrUnchangedSpec               = errors.New("resource specification is unchanged")
 	ErrImmutableConnectionIdentity = errors.New("source connection identity is immutable")
 	ErrReferenceMismatch           = errors.New("referenced resource does not share the required authority")
+	ErrInvalidHealthObservation    = errors.New("source health observation is invalid")
 )
+
+type SourceConnectionHealthObservation struct {
+	Health devopsv1.SourceConnectionHealth
+	Reason devopsv1.SourceConnectionHealthReason
+}
+
+type RepositoryBindingHealthObservation struct {
+	Health devopsv1.RepositoryBindingHealth
+	Reason devopsv1.RepositoryBindingHealthReason
+}
 
 func NewSourceConnection(
 	request devopsv1.CreateSourceConnectionRequest,
@@ -29,9 +39,11 @@ func NewSourceConnection(
 			ID: request.ID, Name: request.Name, Scope: scope,
 			ResourceVersion: 1, CreatedAt: createdAt, UpdatedAt: createdAt,
 		},
-		Spec: cloneSourceConnectionSpec(request.Spec),
+		Spec: request.Spec,
 		Status: devopsv1.SourceConnectionStatus{
-			Health: devopsv1.SourceConnectionPending, ObservedAt: createdAt,
+			Health:     devopsv1.SourceConnectionPending,
+			Reason:     devopsv1.SourceConnectionReasonConfigurationChanged,
+			ObservedAt: createdAt,
 		},
 	}
 	if err := devopsv1.ValidateSourceConnection(connection); err != nil {
@@ -56,7 +68,7 @@ func UpdateSourceConnection(
 		return devopsv1.SourceConnection{}, err
 	}
 	if current.Spec.AdapterID != request.Spec.AdapterID ||
-		!slices.Equal(current.Spec.AllowedEndpointOrigins, request.Spec.AllowedEndpointOrigins) {
+		current.Spec.EndpointOrigin != request.Spec.EndpointOrigin {
 		return devopsv1.SourceConnection{}, ErrImmutableConnectionIdentity
 	}
 	if equalSourceConnectionSpec(current.Spec, request.Spec) {
@@ -66,9 +78,11 @@ func UpdateSourceConnection(
 	updated := current
 	updated.Metadata.ResourceVersion++
 	updated.Metadata.UpdatedAt = updatedAt
-	updated.Spec = cloneSourceConnectionSpec(request.Spec)
+	updated.Spec = request.Spec
 	updated.Status = devopsv1.SourceConnectionStatus{
-		Health: devopsv1.SourceConnectionPending, ObservedAt: updatedAt,
+		Health:     devopsv1.SourceConnectionPending,
+		Reason:     devopsv1.SourceConnectionReasonConfigurationChanged,
+		ObservedAt: updatedAt,
 	}
 	if err := devopsv1.ValidateSourceConnection(updated); err != nil {
 		return devopsv1.SourceConnection{}, err
@@ -103,7 +117,9 @@ func NewRepositoryBinding(
 		Spec:          request.Spec,
 		ContentDigest: devopsv1.RepositoryBindingSpecDigest(request.Spec),
 		Status: devopsv1.RepositoryBindingStatus{
-			Health: devopsv1.RepositoryBindingPending, ObservedAt: createdAt,
+			Health:     devopsv1.RepositoryBindingPending,
+			Reason:     devopsv1.RepositoryBindingReasonConfigurationChanged,
+			ObservedAt: createdAt,
 		},
 	}
 	if err := devopsv1.ValidateRepositoryBinding(binding); err != nil {
@@ -148,12 +164,75 @@ func UpdateRepositoryBinding(
 	updated.Spec = request.Spec
 	updated.ContentDigest = digest
 	updated.Status = devopsv1.RepositoryBindingStatus{
-		Health: devopsv1.RepositoryBindingPending, ObservedAt: updatedAt,
+		Health:     devopsv1.RepositoryBindingPending,
+		Reason:     devopsv1.RepositoryBindingReasonConfigurationChanged,
+		ObservedAt: updatedAt,
 	}
 	if err := devopsv1.ValidateRepositoryBinding(updated); err != nil {
 		return devopsv1.RepositoryBinding{}, err
 	}
 	return updated, nil
+}
+
+func ObserveSourceConnectionHealth(
+	current devopsv1.SourceConnection,
+	expectedResourceVersion uint64,
+	observation SourceConnectionHealthObservation,
+	observedAt time.Time,
+) (devopsv1.SourceConnection, bool, error) {
+	if devopsv1.ValidateSourceConnection(current) != nil ||
+		observation.Health == devopsv1.SourceConnectionPending {
+		return devopsv1.SourceConnection{}, false, ErrInvalidHealthObservation
+	}
+	if err := validateMutation(current.Metadata, expectedResourceVersion, observedAt); err != nil {
+		return devopsv1.SourceConnection{}, false, err
+	}
+	status := devopsv1.SourceConnectionStatus{
+		Health: observation.Health, Reason: observation.Reason, ObservedAt: observedAt,
+	}
+	if devopsv1.ValidateSourceConnectionStatus(status) != nil {
+		return devopsv1.SourceConnection{}, false, ErrInvalidHealthObservation
+	}
+	transitioned := current.Status.Health != status.Health || current.Status.Reason != status.Reason
+	updated := current
+	updated.Metadata.ResourceVersion++
+	updated.Metadata.UpdatedAt = observedAt
+	updated.Status = status
+	if devopsv1.ValidateSourceConnection(updated) != nil {
+		return devopsv1.SourceConnection{}, false, ErrInvalidHealthObservation
+	}
+	return updated, transitioned, nil
+}
+
+func ObserveRepositoryBindingHealth(
+	current devopsv1.RepositoryBinding,
+	expectedResourceVersion uint64,
+	observation RepositoryBindingHealthObservation,
+	observedAt time.Time,
+) (devopsv1.RepositoryBinding, bool, error) {
+	if devopsv1.ValidateRepositoryBinding(current) != nil ||
+		(observation.Health == devopsv1.RepositoryBindingPending &&
+			observation.Reason != devopsv1.RepositoryBindingReasonConnectionNotReady) {
+		return devopsv1.RepositoryBinding{}, false, ErrInvalidHealthObservation
+	}
+	if err := validateMutation(current.Metadata, expectedResourceVersion, observedAt); err != nil {
+		return devopsv1.RepositoryBinding{}, false, err
+	}
+	status := devopsv1.RepositoryBindingStatus{
+		Health: observation.Health, Reason: observation.Reason, ObservedAt: observedAt,
+	}
+	if devopsv1.ValidateRepositoryBindingStatus(status) != nil {
+		return devopsv1.RepositoryBinding{}, false, ErrInvalidHealthObservation
+	}
+	transitioned := current.Status.Health != status.Health || current.Status.Reason != status.Reason
+	updated := current
+	updated.Metadata.ResourceVersion++
+	updated.Metadata.UpdatedAt = observedAt
+	updated.Status = status
+	if devopsv1.ValidateRepositoryBinding(updated) != nil || updated.ContentDigest != current.ContentDigest {
+		return devopsv1.RepositoryBinding{}, false, ErrInvalidHealthObservation
+	}
+	return updated, transitioned, nil
 }
 
 func validateConnectionForProject(
@@ -204,14 +283,8 @@ func validateMutation(
 
 func equalSourceConnectionSpec(left, right devopsv1.SourceConnectionSpec) bool {
 	return left.AdapterID == right.AdapterID &&
-		slices.Equal(left.AllowedEndpointOrigins, right.AllowedEndpointOrigins) &&
+		left.EndpointOrigin == right.EndpointOrigin &&
 		left.WebhookSecretRef == right.WebhookSecretRef &&
 		left.FetchCredentialRef == right.FetchCredentialRef &&
 		left.ReportCredentialRef == right.ReportCredentialRef
-}
-
-func cloneSourceConnectionSpec(value devopsv1.SourceConnectionSpec) devopsv1.SourceConnectionSpec {
-	cloned := value
-	cloned.AllowedEndpointOrigins = append([]string(nil), value.AllowedEndpointOrigins...)
-	return cloned
 }
