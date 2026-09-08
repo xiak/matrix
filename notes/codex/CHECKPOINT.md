@@ -6,7 +6,7 @@
 - Updated: 2026-09-08
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `88bec23`
+- Current pushed implementation baseline: `d1cbc64`
 
 ## Goal
 
@@ -39,6 +39,10 @@ architecture, FEAT, implementation, test, and release gates.
   v3 advances it only atomically with a started step's conclusion. Backwards,
   partial, changed-replay, pending-cancellation, poisoned, and recomputed-chain
   cursor states fail closed; native output is not journaled.
+- Pushed `d1cbc64` closes completion recovery after lease expiry: a locally
+  terminal receipt may accept only a same-runner increasing fence while its
+  steps, log cursor, and receipt remain exact, then replay completion through
+  the real mTLS runner path. Acknowledged state remains immutable.
 - Evidence on that worktree: full `go test ./...`, full `go vet ./...`, focused
   Windows race detection with twenty repetitions, and twenty focused runs in
   the fixed disconnected Go 1.26.8 Linux/amd64 image with read-only source and
