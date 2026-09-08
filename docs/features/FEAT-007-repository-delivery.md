@@ -16,8 +16,9 @@
   publication, bounded native output normalization, closed sandbox container
   lifecycle, port-driven cross-step runner workflow, authenticated durable log
   relay, fenced tenant-leading normalized-log persistence, and IAM-authorized
-  audited public log reads complete; physical runner process composition and
-  reporter effects pending
+  audited public log reads, and physical runner process composition complete;
+  selected runner release topology, real isolated execution, and reporter
+  effects pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -689,6 +690,20 @@ operation. The node firewall permits only that endpoint. Draining or losing a
 runner stops new claims and leaves the control plane to reconcile the current
 lease; registration or heartbeat alone is not evidence of isolation.
 
+One `matrix-devops-runner` process is one certificate-bound execution slot and
+owns at most one active assignment. A selected runner-node installation may
+compose at most four independently credentialed slots with disjoint journal
+and workspace roots beneath the same private installation-owned storage root;
+sharing a credential or either mutable root is forbidden. Before every claim,
+the slot first replays any locally terminal receipt and then completes a
+30-second-bounded Docker/runtime/resource/toolchain/storage/isolation preflight.
+It does not become ready before that first successful no-error cycle. An
+eligibility, gateway, journal, workspace, renewal, or orchestration failure
+removes readiness and stops the process; an idle slot waits ten seconds before
+re-proving eligibility and polling again, while a completed claim immediately
+continues to the next cycle. The readiness listener is canonical loopback only
+and grants no work or administrative operation.
+
 The sole first-release toolchain is `GO_1_26_OFFLINE_V1`, built from
 `docker.io/library/golang@sha256:07558d5472e9acb5fc5656b485e963602e925e00111b8ad676a804306e711ba3`
 (Linux/amd64 `1.26.8-alpine3.23`) and carried as an authenticated offline image.
@@ -798,8 +813,9 @@ requires equal sequence replay without duplication and conflict on changed
 content. A complete receipt is recorded locally before gateway completion and
 is acknowledged only after that completion succeeds.
 
-The physical runner process that composes these ports, selected release
-topology, and a real process journey remain subsequent slices, so no process
+The outbound-only physical runner process now composes these ports. Its
+selected release packaging, independently credentialed node topology, and a
+real process journey remain subsequent slices, so no accepted release process
 yet invokes this workflow against repository code.
 
 ### Egress, limits, storage, and retention
@@ -1155,11 +1171,13 @@ architecture boundary imports only public runner contracts, pure log
 invariants, and side-effect ports. The physical build-worker command now
 composes only its table-blind PostgreSQL repository, read-only source archive,
 exact mTLS admin identity, executor-gateway client, independent heartbeat, and
-readiness endpoint. The dedicated runner process, production normalized-log
-adapter, selected release topology, and a real PostgreSQL-to-runner process
-journey remain pending. The closed Docker Engine adapter, pre-claim eligibility
-probe, content-bound read-only workspace, and orchestration use case are
-present, but no repository code executes yet.
+readiness endpoint. The dedicated runner command now derives its opaque runner
+identity from protected mTLS material, takes OS-exclusive journal/workspace
+ownership, composes the production runner gateway/log client and closed Docker
+sandbox, requires a fresh bounded eligibility proof before every claim, and
+exposes only loopback readiness after its first proved cycle. The selected
+release topology and a real PostgreSQL-to-runner process journey remain
+pending, so no repository code executes yet.
 
 Every fenced worker transition now submits the exact next PipelineRun document
 to the database boundary. A terminal transition atomically stores a distinct
@@ -1240,7 +1258,8 @@ and DevOps API readiness once any SourceConnection exists.
 These slices do not complete Gate A. Source readiness, credential lifecycle,
 observation, acquisition through an installed isolated process, the fenced
 BuildExecutor boundary, and authenticated tenant-leading normalized-log
-persistence and public log reads are complete. Physical runner execution,
+persistence, public log reads, and physical runner process composition are
+complete. Selected runner-node release topology, real isolated execution,
 reporting, remaining runtime quotas, check-receipt Audit facts, and pagination
 for other collection resources remain pending.
 
@@ -1409,8 +1428,22 @@ Current verification evidence:
   workspace, sandbox, runner-client, log, port, and architecture packages pass
   race detection and twenty-run repetition on Windows and twenty runs in the
   fixed disconnected Go 1.26.8 Linux/amd64 image with read-only source and
-  module cache; this is orchestration evidence, not physical runner-process,
-  repository-execution, or gVisor evidence
+  module cache; this is orchestration evidence, not repository-execution or
+  gVisor evidence
+- physical runner-command tests proving complete closed environment
+  configuration, canonical loopback-only readiness, disjoint private durable
+  roots under one storage boundary, credential/socket separation, one serial
+  certificate-bound slot, first-cycle readiness, immediate post-claim drain,
+  dependency-failure shutdown, closed error output, and preflight-before-claim
+  enforcement. An architecture gate permits only the runner transport,
+  journal, workspace, sandbox, orchestration, mTLS, and readiness boundaries
+  and excludes database, provider, reporter, IAM, Audit, PaaS, process-exec,
+  third-party Docker SDK, Prow, and Kubernetes authority. Command, workflow,
+  sandbox, and architecture packages pass race detection and twenty-run
+  repetition on Windows and in the fixed disconnected Go 1.26.8 Linux/amd64
+  image with read-only source and module cache; this is process-composition
+  evidence, not selected release, real repository execution, or gVisor
+  isolation evidence
 - versioned normalized-log contract, gateway spool, and build-worker drain
   tests prove complete labeled-line grammar, 64 KiB chunks, run-leading byte and
   sequence cursors, exact two-step ordering, atomic spool publication and

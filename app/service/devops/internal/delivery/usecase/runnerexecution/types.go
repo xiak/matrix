@@ -14,6 +14,7 @@ const (
 	RenewalInterval   = 10 * time.Second
 	CancellationGrace = 30 * time.Second
 	CleanupTimeout    = 10 * time.Second
+	PreflightTimeout  = 30 * time.Second
 )
 
 var (

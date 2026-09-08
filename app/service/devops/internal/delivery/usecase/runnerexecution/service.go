@@ -59,6 +59,12 @@ func (service *Service) WorkOnce(ctx context.Context) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
+	preflightContext, cancelPreflight := context.WithTimeout(ctx, PreflightTimeout)
+	preflightErr := service.sandbox.Preflight(preflightContext)
+	cancelPreflight()
+	if preflightErr != nil {
+		return Result{}, errors.Join(ErrUnavailable, recoveryErr, preflightErr)
+	}
 	claim, err := service.journal.BeginClaim(ctx)
 	if err != nil || claim == nil {
 		return Result{}, errors.Join(ErrUnavailable, recoveryErr, err)

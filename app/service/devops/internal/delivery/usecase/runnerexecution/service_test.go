@@ -27,7 +27,8 @@ func TestRunnerExecutesTwoStepsPublishesLogsAndAcknowledges(t *testing.T) {
 	harness := newRunnerHarness(t, '1')
 	result, err := harness.service.WorkOnce(context.Background())
 	if err != nil || !result.Claimed || !result.Acknowledged || result.Deferred ||
-		result.ExecutionID != harness.assignment.ExecutionID {
+		result.ExecutionID != harness.assignment.ExecutionID ||
+		harness.sandbox.preflightCount() != 1 {
 		t.Fatalf("result = %#v / %v", result, err)
 	}
 	entry, err := harness.journal.Load(context.Background(), harness.assignment.ExecutionID)
@@ -50,6 +51,22 @@ func TestRunnerExecutesTwoStepsPublishesLogsAndAcknowledges(t *testing.T) {
 	if chunks := harness.logs.snapshot(); len(chunks) != 2 ||
 		chunks[0].Sequence != 1 || chunks[1].Sequence != 2 {
 		t.Fatalf("published chunks = %#v", chunks)
+	}
+}
+
+func TestRunnerPreflightFailsClosedBeforeClaim(t *testing.T) {
+	harness := newRunnerHarness(t, '2')
+	harness.sandbox.preflightErr = errors.New("unsafe runner host")
+
+	result, err := harness.service.WorkOnce(context.Background())
+	if result != (Result{}) || !errors.Is(err, ErrUnavailable) ||
+		harness.sandbox.preflightCount() != 1 || len(harness.gateway.queue) != 1 ||
+		len(harness.sandbox.callSnapshot()) != 0 || len(harness.gateway.completions) != 0 {
+		t.Fatalf(
+			"preflight result=%#v err=%v checks=%d queue=%d calls=%#v completions=%#v",
+			result, err, harness.sandbox.preflightCount(), len(harness.gateway.queue),
+			harness.sandbox.callSnapshot(), harness.gateway.completions,
+		)
 	}
 }
 
@@ -498,12 +515,21 @@ type fakeRunnerSandbox struct {
 	mutex            sync.Mutex
 	states           map[uint32]port.RunnerSandboxState
 	calls            []string
+	preflights       int
+	preflightErr     error
 	blockUntilCancel bool
 	cancelled        chan struct{}
 	following        chan struct{}
 	cancelOnce       sync.Once
 	followOnce       sync.Once
 	cancels          int
+}
+
+func (sandbox *fakeRunnerSandbox) Preflight(_ context.Context) error {
+	sandbox.mutex.Lock()
+	defer sandbox.mutex.Unlock()
+	sandbox.preflights++
+	return sandbox.preflightErr
 }
 
 func newFakeRunnerSandbox() *fakeRunnerSandbox {
@@ -644,6 +670,12 @@ func (sandbox *fakeRunnerSandbox) callSnapshot() []string {
 	sandbox.mutex.Lock()
 	defer sandbox.mutex.Unlock()
 	return append([]string(nil), sandbox.calls...)
+}
+
+func (sandbox *fakeRunnerSandbox) preflightCount() int {
+	sandbox.mutex.Lock()
+	defer sandbox.mutex.Unlock()
+	return sandbox.preflights
 }
 
 func (sandbox *fakeRunnerSandbox) setState(

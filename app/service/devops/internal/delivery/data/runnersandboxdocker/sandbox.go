@@ -23,6 +23,20 @@ func NewSandbox(client *Client) (*Sandbox, error) {
 	return &Sandbox{client: client}, nil
 }
 
+func (sandbox *Sandbox) Preflight(ctx context.Context) error {
+	if sandbox == nil || sandbox.client == nil || ctx == nil {
+		return ErrInvalid
+	}
+	report, err := sandbox.client.Preflight(ctx)
+	if err != nil {
+		return err
+	}
+	if !report.Eligible || report.Reason != "" {
+		return ErrIneligible
+	}
+	return nil
+}
+
 func (sandbox *Sandbox) Create(ctx context.Context, reference port.RunnerStepReference) error {
 	plan, err := sandbox.plan(reference)
 	if err != nil {

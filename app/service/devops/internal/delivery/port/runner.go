@@ -129,6 +129,9 @@ type RunnerSandboxResult struct {
 }
 
 type RunnerSandbox interface {
+	// Preflight proves the fixed host, runtime, resource, toolchain, storage,
+	// and negative-isolation profile immediately before a claim is allowed.
+	Preflight(context.Context) error
 	Create(context.Context, RunnerStepReference) error
 	Start(context.Context, RunnerStepReference) error
 	Observe(context.Context, RunnerStepReference) (RunnerSandboxState, error)

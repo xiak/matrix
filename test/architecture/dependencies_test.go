@@ -543,6 +543,14 @@ func assertAllowedDependency(
 			imported,
 		)
 	}
+
+	if runnerSource(source) && runnerAuthority(imported) {
+		t.Errorf(
+			"%s: runner boundary cannot import unrelated authority-bearing package %q",
+			source,
+			imported,
+		)
+	}
 }
 
 func buildWorkerSource(source string) bool {
@@ -614,6 +622,39 @@ func executorGatewayAuthority(imported string) bool {
 		}
 	}
 	return false
+}
+
+func runnerSource(source string) bool {
+	return !strings.HasSuffix(source, "_test.go") && strings.HasPrefix(
+		source,
+		"app/service/devops/cmd/matrix-devops-runner/",
+	)
+}
+
+func runnerAuthority(imported string) bool {
+	if imported == "database/sql" || imported == "os/exec" ||
+		strings.HasPrefix(imported, "github.com/jackc/pgx/") ||
+		strings.HasPrefix(imported, "github.com/docker/") ||
+		strings.HasPrefix(imported, "k8s.io/") {
+		return true
+	}
+	if !strings.HasPrefix(imported, modulePath+"app/service/") {
+		return false
+	}
+	for _, allowed := range []string{
+		modulePath + "app/service/devops/internal/delivery/data/executorgatewayhttp",
+		modulePath + "app/service/devops/internal/delivery/data/runnerjournalfile",
+		modulePath + "app/service/devops/internal/delivery/data/runnersandboxdocker",
+		modulePath + "app/service/devops/internal/delivery/data/runnerworkspacefile",
+		modulePath + "app/service/devops/internal/delivery/usecase/runnerexecution",
+		modulePath + "app/service/internal/processhttp",
+		modulePath + "app/service/internal/processmtls",
+	} {
+		if imported == allowed {
+			return false
+		}
+	}
+	return true
 }
 
 func isThirdPartyImport(imported string) bool {
