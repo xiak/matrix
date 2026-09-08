@@ -983,8 +983,12 @@ before accepting archive bytes, reinspects the finished archive before atomic
 publication, holds an OS-level exclusive directory lock, and persists strict
 `RECEIVED`, `EFFECT_STARTED`, `TERMINAL`, and `ACKNOWLEDGED` generations with
 request digests, recovery fences, cancellation, and normalized receipts. The
-physical build-worker and runner process composition, sandbox, and normalized
-log persistence remain pending; no repository code executes yet.
+physical build-worker command now composes only its table-blind PostgreSQL
+repository, read-only source archive, exact mTLS admin identity, executor-gateway
+client, independent heartbeat, and readiness endpoint. The dedicated runner
+process, sandbox, selected release topology, normalized log persistence, and a
+real PostgreSQL-to-runner process journey remain pending; no repository code
+executes yet.
 
 Every fenced worker transition now submits the exact next PipelineRun document
 to the database boundary. A terminal transition atomically stores a distinct
@@ -1161,6 +1165,21 @@ Current verification evidence:
   detection and twenty-run repetition on Windows, plus twenty runs in the
   fixed disconnected Go 1.26.8 Linux/amd64 image with read-only source and no
   module lookup
+- physical build-worker command and shared process-mTLS tests proving a closed
+  environment, protected canonical private key and certificate chain, exact
+  SPIFFE client identity, self-signed server-root validation, rejection of
+  mismatched keys, ambiguous SANs, duplicate roots, noncanonical PEM, expired
+  material, and unsafe key permissions. The process composes only the
+  table-blind build repository, read-only source archive, executor admin client,
+  heartbeat-gated readiness, and one drain-while-claimed loop whose heartbeat
+  continues during a long build and whose dependency or coordination failure
+  stops the process. An architecture gate excludes provider, reporter, runner
+  journal, executor spool, Docker/process-exec, Kubernetes, IAM, Audit, and PaaS
+  authority. The process-mTLS, command, build-execution, and admin-client suites
+  pass race detection and twenty-run repetition on Windows and twenty runs in
+  the fixed disconnected Go 1.26.8 Linux/amd64 image using read-only source and
+  module cache with module lookup disabled; real cross-process PostgreSQL
+  execution remains a Gate B item
 - the shared source-archive reader proves the portable receipt independently,
   matches it to the private deterministic store, structurally inspects and
   hashes the archive before handoff, and verifies its length and digest again

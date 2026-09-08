@@ -525,6 +525,44 @@ func assertAllowedDependency(
 			imported,
 		)
 	}
+
+	if buildWorkerSource(source) && buildWorkerAuthority(imported) {
+		t.Errorf(
+			"%s: build worker boundary cannot import unrelated authority-bearing package %q",
+			source,
+			imported,
+		)
+	}
+}
+
+func buildWorkerSource(source string) bool {
+	return !strings.HasSuffix(source, "_test.go") && strings.HasPrefix(
+		source,
+		"app/service/devops/cmd/matrix-devops-build-worker/",
+	)
+}
+
+func buildWorkerAuthority(imported string) bool {
+	if imported == "os/exec" || strings.HasPrefix(imported, "github.com/docker/") ||
+		strings.HasPrefix(imported, "k8s.io/") {
+		return true
+	}
+	for _, forbidden := range []string{
+		modulePath + "app/service/paas/",
+		modulePath + "app/service/iam/",
+		modulePath + "app/service/audit/",
+		modulePath + "app/service/devops/internal/delivery/data/audithttp",
+		modulePath + "app/service/devops/internal/delivery/data/executorspoolfile",
+		modulePath + "app/service/devops/internal/delivery/data/gitea",
+		modulePath + "app/service/devops/internal/delivery/data/iamhttp",
+		modulePath + "app/service/devops/internal/delivery/data/runnerjournalfile",
+		modulePath + "app/service/devops/internal/delivery/data/sourcecredentialfile",
+	} {
+		if strings.HasPrefix(imported, forbidden) {
+			return true
+		}
+	}
+	return false
 }
 
 func executorGatewaySource(source string) bool {
