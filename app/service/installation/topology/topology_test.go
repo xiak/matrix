@@ -662,7 +662,7 @@ func TestCompileOmitsUnselectedDevOpsProduct(t *testing.T) {
 		return image.Component == "devops"
 	})
 	manifest.Files = slices.DeleteFunc(manifest.Files, func(file release.File) bool {
-		return file.Path == "images/devops.tar"
+		return file.Path == "images/devops.tar" || slices.Contains(release.RunnerPayloadPaths(), file.Path)
 	})
 	result, err := Compile(manifest, Options{
 		InstallationID: "mxi-" + strings.Repeat("a", 32), Root: "/srv/matrix",
@@ -771,6 +771,22 @@ func topologyManifest() release.Manifest {
 	}
 	required := release.RequiredImages(products)
 	images := make([]release.Image, 0, len(required))
+	for _, runnerPath := range release.RunnerPayloadPaths() {
+		file := release.File{
+			Path: runnerPath, MediaType: "application/vnd.docker.image.archive",
+			Size: 1024, SHA256: digest('6'),
+		}
+		switch runnerPath {
+		case release.RunnerBinaryPath:
+			file.MediaType = "application/vnd.matrix.executable"
+			file.Executable = true
+		case release.RunnerGVisorArchivePath:
+			file.MediaType = "application/vnd.matrix.gvisor.tar+zstd"
+		case release.RunnerGVisorChecksumPath:
+			file.MediaType = "text/plain"
+		}
+		files = append(files, file)
+	}
 	fileDigests := "23456789a"
 	imageDigests := "789abcdef"
 	sourceDigests := "abcdef012"

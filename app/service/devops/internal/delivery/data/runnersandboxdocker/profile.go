@@ -18,6 +18,7 @@ const (
 	EngineAPIVersion = "1.46"
 	RuntimeName      = "runsc"
 	ToolchainImage   = "docker.io/library/golang@" + devopsv1.Go126OfflineToolchainImageDigest
+	ToolchainImageID = "sha256:2e6f40580dfa8312d4aab4f49e5ab214d0daa5999ed51be6eb6fe1f246378e4f"
 
 	minimumLogicalCPUs  = 4
 	minimumMemoryBytes  = 8 * 1024 * 1024 * 1024

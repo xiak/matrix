@@ -22,6 +22,7 @@ const (
 
 	mediaExecutable    = "application/vnd.matrix.executable"
 	mediaDockerArchive = "application/vnd.docker.image.archive"
+	mediaGVisorArchive = "application/vnd.matrix.gvisor.tar+zstd"
 	mediaMarkdown      = "text/markdown"
 	mediaPlainText     = "text/plain"
 )
@@ -100,6 +101,7 @@ func ValidateManifest(manifest Manifest) error {
 		validateProducts(manifest.Products, manifest.Images),
 		validateDigest("topologyDigest", manifest.TopologyDigest),
 		validateFiles(manifest.Files),
+		validateRunnerPayloads(manifest.Products, manifest.Files),
 		validateImages(manifest.Products, manifest.Images, manifest.Files),
 	)
 	if manifest.MinimumFreeBytes < minimumFreeBytes || manifest.MinimumFreeBytes > maximumFreeBytes {
@@ -453,6 +455,23 @@ func validateFiles(files []File) error {
 			if file.MediaType != mediaDockerArchive || file.Executable {
 				return errors.New("release image archive payload is invalid")
 			}
+		case file.Path == RunnerBinaryPath:
+			if file.MediaType != mediaExecutable || !file.Executable {
+				return errors.New("release runner executable payload is invalid")
+			}
+		case file.Path == RunnerToolchainArchivePath:
+			if file.MediaType != mediaDockerArchive || file.Executable {
+				return errors.New("release runner toolchain payload is invalid")
+			}
+		case file.Path == RunnerGVisorArchivePath:
+			if file.MediaType != mediaGVisorArchive || file.Executable {
+				return errors.New("release runner gVisor payload is invalid")
+			}
+		case file.Path == RunnerGVisorChecksumPath:
+			if file.MediaType != mediaPlainText || file.Executable ||
+				file.Size > maximumManifestBytes {
+				return errors.New("release runner gVisor checksum payload is invalid")
+			}
 		case strings.HasPrefix(file.Path, "docs/") && strings.HasSuffix(file.Path, ".md"):
 			if file.MediaType != mediaMarkdown || file.Executable || file.Size > maximumManifestBytes {
 				return errors.New("release documentation payload is invalid")
@@ -467,6 +486,35 @@ func validateFiles(files []File) error {
 	}
 	if !foundExecutable {
 		return errors.New("release mx payload is missing")
+	}
+	return nil
+}
+
+func validateRunnerPayloads(products []Product, files []File) error {
+	wantsRunner := false
+	for _, product := range products {
+		if product.ID == ProductDevOps {
+			wantsRunner = true
+			break
+		}
+	}
+	declared := make(map[string]File, len(RunnerPayloadPaths()))
+	for _, file := range files {
+		for _, runnerPath := range RunnerPayloadPaths() {
+			if file.Path == runnerPath {
+				declared[file.Path] = file
+				break
+			}
+		}
+	}
+	if !wantsRunner {
+		if len(declared) != 0 {
+			return errors.New("unselected DevOps runner payload is present")
+		}
+		return nil
+	}
+	if len(declared) != len(RunnerPayloadPaths()) {
+		return errors.New("selected DevOps runner payload is incomplete")
 	}
 	return nil
 }

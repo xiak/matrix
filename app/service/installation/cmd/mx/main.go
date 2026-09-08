@@ -11,6 +11,7 @@ import (
 	"github.com/xiak/matrix/app/service/installation/internal/cli"
 	"github.com/xiak/matrix/app/service/installation/internal/localmachine"
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
+	"github.com/xiak/matrix/app/service/installation/internal/runnernodecommand"
 	"github.com/xiak/matrix/app/service/installation/internal/sourcecredentialcommand"
 )
 
@@ -64,10 +65,17 @@ func main() {
 		_, _ = os.Stderr.WriteString("Matrix CLI initialization failed\n")
 		os.Exit(cli.ExitInternal)
 	}
+	runnerNodeBackend, err := runnernodecommand.NewBackend(effects)
+	if err != nil {
+		stop()
+		_, _ = os.Stderr.WriteString("Matrix CLI initialization failed\n")
+		os.Exit(cli.ExitInternal)
+	}
 	exitCode := cli.Run(ctx, os.Args[1:], cli.Streams{
 		In: os.Stdin, Out: os.Stdout, ErrOut: os.Stderr,
 	}, cli.Backends{
 		Platform: platformBackend, SourceCredential: sourceCredentialBackend,
+		RunnerNode: runnerNodeBackend,
 	})
 	stop()
 	os.Exit(exitCode)

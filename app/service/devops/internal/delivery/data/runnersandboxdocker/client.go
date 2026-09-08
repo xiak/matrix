@@ -449,7 +449,7 @@ type containerInspection struct {
 }
 
 func validToolchainImage(value imageInspection) bool {
-	if value.ID != devopsv1.Go126OfflineToolchainImageDigest ||
+	if value.ID != ToolchainImageID ||
 		value.OS != "linux" || value.Architecture != "amd64" {
 		return false
 	}
@@ -469,7 +469,7 @@ func validProbeInspection(
 ) bool {
 	config := value.Config
 	if value.ID != containerID || value.RestartCount != 0 ||
-		value.Image != devopsv1.Go126OfflineToolchainImageDigest ||
+		value.Image != ToolchainImageID ||
 		config.Image != want.Image || !equalStrings(config.Cmd, want.Cmd) ||
 		len(config.Entrypoint) != 0 || !equalEnvironment(config.Env, want.Env) ||
 		config.User != want.User || config.WorkingDir != want.WorkingDir ||

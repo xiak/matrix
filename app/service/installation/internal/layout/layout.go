@@ -54,6 +54,7 @@ const (
 	DevOpsExecutorRunnerCA      = "secrets/devops/executor-pki/runner-client-ca.crt"
 	DevOpsBuildWorkerClientCert = "secrets/devops/executor-pki/build-worker.crt"
 	DevOpsBuildWorkerClientKey  = "secrets/devops/executor-pki/build-worker.key"
+	DevOpsRunnerEnrollmentRoot  = "secrets/devops/runner-enrollments"
 	BackupDirectory             = "backups"
 	SupportDirectory            = "support"
 )

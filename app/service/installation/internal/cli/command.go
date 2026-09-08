@@ -37,6 +37,9 @@ type commandAction string
 const (
 	actionSourceCredentialApply          commandAction = "SOURCE_CREDENTIAL_APPLY"
 	actionSourceCredentialRetirePrevious commandAction = "SOURCE_CREDENTIAL_RETIRE_PREVIOUS"
+	actionRunnerNodeExportRelease        commandAction = "RUNNER_NODE_EXPORT_RELEASE"
+	actionRunnerNodeRequest              commandAction = "RUNNER_NODE_REQUEST"
+	actionRunnerNodeEnroll               commandAction = "RUNNER_NODE_ENROLL"
 )
 
 type invocationError struct {
@@ -64,11 +67,25 @@ type sourceCredentialOptions struct {
 	fromFile  string
 }
 
+type runnerNodeOptions struct {
+	root           string
+	release        string
+	trustKey       string
+	installationID string
+	nodeID         string
+	slots          uint8
+	gatewayOrigin  string
+	serverCAPin    string
+	runnerCAPin    string
+	requestFile    string
+	output         string
+}
+
 func NewCommand(streams Streams, backends Backends) (*cobra.Command, error) {
 	if err := validateStreams(streams); err != nil {
 		return nil, err
 	}
-	if backends.Platform == nil || backends.SourceCredential == nil {
+	if backends.Platform == nil || backends.SourceCredential == nil || backends.RunnerNode == nil {
 		return nil, errors.New("Matrix CLI backends are required")
 	}
 	format := string(formatHuman)
@@ -118,7 +135,9 @@ func NewCommand(streams Streams, backends Backends) (*cobra.Command, error) {
 		newPlatformCommand(streams.Out, backends.Platform, lifecycle.ActionRecover, &format),
 		newPlatformCommand(streams.Out, backends.Platform, lifecycle.ActionSupport, &format),
 	)
-	root.AddCommand(newDevOpsCommand(streams.Out, backends.SourceCredential, &format))
+	root.AddCommand(newDevOpsCommand(
+		streams.Out, backends.SourceCredential, backends.RunnerNode, &format,
+	))
 	return root, nil
 }
 
@@ -161,7 +180,8 @@ func newPlatformCommand(
 
 func newDevOpsCommand(
 	out io.Writer,
-	backend SourceCredentialBackend,
+	sourceBackend SourceCredentialBackend,
+	runnerBackend RunnerNodeBackend,
 	format *string,
 ) *cobra.Command {
 	devops := &cobra.Command{
@@ -182,14 +202,149 @@ func newDevOpsCommand(
 	}
 	source.AddCommand(
 		newSourceCredentialOperationCommand(
-			out, backend, SourceCredentialApply, format,
+			out, sourceBackend, SourceCredentialApply, format,
 		),
 		newSourceCredentialOperationCommand(
-			out, backend, SourceCredentialRetirePrevious, format,
+			out, sourceBackend, SourceCredentialRetirePrevious, format,
 		),
 	)
-	devops.AddCommand(source)
+	devops.AddCommand(source, newRunnerNodeCommand(out, runnerBackend, format))
 	return devops
+}
+
+func newRunnerNodeCommand(
+	out io.Writer,
+	backend RunnerNodeBackend,
+	format *string,
+) *cobra.Command {
+	runner := &cobra.Command{
+		Use:   "runner-node",
+		Short: "Provision dedicated Matrix DevOps runner nodes",
+		Args:  cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			return command.Help()
+		},
+	}
+	for _, operation := range []RunnerNodeOperation{
+		RunnerNodeExportRelease, RunnerNodeCreateRequest, RunnerNodeEnroll,
+	} {
+		runner.AddCommand(newRunnerNodeOperationCommand(out, backend, operation, format))
+	}
+	return runner
+}
+
+func newRunnerNodeOperationCommand(
+	out io.Writer,
+	backend RunnerNodeBackend,
+	operation RunnerNodeOperation,
+	format *string,
+) *cobra.Command {
+	options := &runnerNodeOptions{}
+	name := map[RunnerNodeOperation]string{
+		RunnerNodeExportRelease: "export-release",
+		RunnerNodeCreateRequest: "request",
+		RunnerNodeEnroll:        "enroll",
+	}[operation]
+	short := map[RunnerNodeOperation]string{
+		RunnerNodeExportRelease: "Export the authenticated dedicated-runner release subset",
+		RunnerNodeCreateRequest: "Create node-local runner keys and a CSR request",
+		RunnerNodeEnroll:        "Enroll a runner CSR request into this installation",
+	}[operation]
+	action := runnerNodeAction(operation)
+	command := &cobra.Command{
+		Use: name, Short: short, Args: cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			if err := validateRunnerNodeFlags(operation, options); err != nil {
+				return &invocationError{action: action, usage: true, err: err}
+			}
+			result, err := backend.RunRunnerNode(command.Context(), RunnerNodeRequest{
+				Operation: operation, Root: options.root, Release: options.release,
+				TrustKey: options.trustKey, InstallationID: options.installationID,
+				NodeID: options.nodeID, Slots: options.slots,
+				GatewayOrigin: options.gatewayOrigin, ServerCAPin: options.serverCAPin,
+				RunnerCAPin: options.runnerCAPin, RequestFile: options.requestFile,
+				Output: options.output,
+			})
+			if err != nil {
+				return &invocationError{action: action, err: err}
+			}
+			request := RunnerNodeRequest{
+				Operation: operation, Root: options.root, Release: options.release,
+				TrustKey: options.trustKey, InstallationID: options.installationID,
+				NodeID: options.nodeID, Slots: options.slots,
+				GatewayOrigin: options.gatewayOrigin, ServerCAPin: options.serverCAPin,
+				RunnerCAPin: options.runnerCAPin, RequestFile: options.requestFile,
+				Output: options.output,
+			}
+			if err := validateRunnerNodeResult(request, result); err != nil {
+				return &invocationError{action: action, err: err}
+			}
+			if err := writeRunnerNodeSuccess(out, outputFormat(*format), action, result); err != nil {
+				return &invocationError{action: action, err: err}
+			}
+			return nil
+		},
+	}
+	flags := command.Flags()
+	switch operation {
+	case RunnerNodeExportRelease:
+		flags.StringVar(&options.root, "root", "", "absolute Matrix installation root")
+		flags.StringVar(&options.output, "output", "", "new dedicated-runner release directory")
+	case RunnerNodeCreateRequest:
+		flags.StringVar(&options.root, "root", "", "new private runner-node root")
+		flags.StringVar(&options.release, "release", "", "authenticated dedicated-runner release directory")
+		flags.StringVar(&options.trustKey, "trust-key", "", "out-of-band release trust root")
+		flags.StringVar(&options.installationID, "installation", "", "target Matrix installation identity")
+		flags.StringVar(&options.nodeID, "node", "", "runner node identity")
+		flags.Uint8Var(&options.slots, "slots", 0, "independent execution slots (1-4)")
+		flags.StringVar(&options.gatewayOrigin, "gateway-origin", "", "outbound HTTPS executor gateway origin")
+		flags.StringVar(&options.serverCAPin, "server-ca-fingerprint", "", "server CA fingerprint from the trusted platform export")
+		flags.StringVar(&options.runnerCAPin, "runner-ca-fingerprint", "", "runner CA fingerprint from the trusted platform export")
+	case RunnerNodeEnroll:
+		flags.StringVar(&options.root, "root", "", "absolute Matrix installation root")
+		flags.StringVar(&options.requestFile, "request", "", "runner-node enrollment request file")
+		flags.StringVar(&options.output, "output", "", "new signed enrollment response file")
+	}
+	return command
+}
+
+func validateRunnerNodeFlags(operation RunnerNodeOperation, options *runnerNodeOptions) error {
+	if options == nil || strings.TrimSpace(options.root) == "" {
+		return errors.New("runner node root is required")
+	}
+	switch operation {
+	case RunnerNodeExportRelease:
+		if strings.TrimSpace(options.output) == "" {
+			return errors.New("runner release output is required")
+		}
+	case RunnerNodeCreateRequest:
+		if strings.TrimSpace(options.release) == "" || strings.TrimSpace(options.trustKey) == "" ||
+			strings.TrimSpace(options.installationID) == "" || strings.TrimSpace(options.nodeID) == "" ||
+			options.slots == 0 || options.slots > 4 || strings.TrimSpace(options.gatewayOrigin) == "" ||
+			strings.TrimSpace(options.serverCAPin) == "" || strings.TrimSpace(options.runnerCAPin) == "" {
+			return errors.New("runner enrollment request identity is required")
+		}
+	case RunnerNodeEnroll:
+		if strings.TrimSpace(options.requestFile) == "" || strings.TrimSpace(options.output) == "" {
+			return errors.New("runner enrollment request and output are required")
+		}
+	default:
+		return errors.New("runner node operation is invalid")
+	}
+	return nil
+}
+
+func runnerNodeAction(operation RunnerNodeOperation) commandAction {
+	switch operation {
+	case RunnerNodeExportRelease:
+		return actionRunnerNodeExportRelease
+	case RunnerNodeCreateRequest:
+		return actionRunnerNodeRequest
+	case RunnerNodeEnroll:
+		return actionRunnerNodeEnroll
+	default:
+		return ""
+	}
 }
 
 func newSourceCredentialOperationCommand(
@@ -362,6 +517,16 @@ func actionForCommand(command *cobra.Command) commandAction {
 			return actionSourceCredentialRetirePrevious
 		}
 	}
+	if command.Parent() != nil && command.Parent().Name() == "runner-node" {
+		switch command.Name() {
+		case "export-release":
+			return actionRunnerNodeExportRelease
+		case "request":
+			return actionRunnerNodeRequest
+		case "enroll":
+			return actionRunnerNodeEnroll
+		}
+	}
 	switch command.Name() {
 	case "install":
 		return commandAction(lifecycle.ActionInstall)
@@ -477,6 +642,14 @@ type sourceCredentialSuccessEnvelope struct {
 	Result     SourceCredentialResult `json:"result"`
 }
 
+type runnerNodeSuccessEnvelope struct {
+	APIVersion string           `json:"apiVersion"`
+	Kind       string           `json:"kind"`
+	Action     commandAction    `json:"action"`
+	Status     string           `json:"status"`
+	Result     RunnerNodeResult `json:"result"`
+}
+
 type failureEnvelope struct {
 	APIVersion string        `json:"apiVersion"`
 	Kind       string        `json:"kind"`
@@ -530,12 +703,44 @@ func writeSourceCredentialSuccess(
 	return err
 }
 
+func writeRunnerNodeSuccess(
+	out io.Writer,
+	format outputFormat,
+	action commandAction,
+	result RunnerNodeResult,
+) error {
+	if format == formatJSON {
+		return writeJSONLine(out, runnerNodeSuccessEnvelope{
+			APIVersion: OutputAPIVersion, Kind: "RunnerNodeCommandResult",
+			Action: action, Status: "SUCCEEDED", Result: result,
+		})
+	}
+	_, err := fmt.Fprintf(
+		out, "%s SUCCEEDED state=%s release=%s", action, result.State, result.ReleaseID,
+	)
+	if err == nil && result.ServerCAPin != "" {
+		_, err = fmt.Fprintf(
+			out, " server-ca=%s runner-ca=%s", result.ServerCAPin, result.RunnerCAPin,
+		)
+	}
+	if err == nil && result.NodeID != "" {
+		_, err = fmt.Fprintf(out, " node=%s slots=%d request=%s", result.NodeID, result.Slots, result.RequestDigest)
+	}
+	if err == nil {
+		_, err = io.WriteString(out, "\n")
+	}
+	return err
+}
+
 func writeFailure(out io.Writer, format outputFormat, action commandAction, fault *Fault) error {
 	message := faultMessage(fault.Class)
 	if format == formatJSON {
 		kind := "PlatformCommandFailure"
 		if action == actionSourceCredentialApply || action == actionSourceCredentialRetirePrevious {
 			kind = "SourceCredentialCommandFailure"
+		} else if action == actionRunnerNodeExportRelease || action == actionRunnerNodeRequest ||
+			action == actionRunnerNodeEnroll {
+			kind = "RunnerNodeCommandFailure"
 		}
 		return writeJSONLine(out, failureEnvelope{
 			APIVersion: OutputAPIVersion, Kind: kind, Action: action,

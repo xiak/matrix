@@ -18,7 +18,8 @@
   relay, fenced tenant-leading normalized-log persistence, and IAM-authorized
   audited public log reads, physical runner process composition, and selected
   control-plane execution topology with installation-owned mTLS material
-  complete; standalone runner-node release/enrollment, real isolated
+  complete; authenticated standalone runner-node release export and pinned-CA
+  CSR enrollment complete; dedicated-node installation, real isolated
   execution, and reporter effects pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
@@ -672,7 +673,7 @@ Untrusted verification never runs on the Foundation/Application-PaaS host.
 The accepted profile requires a dedicated Linux/amd64 runner node with no
 tenant runtime or control-plane data, Docker `29.x`, and gVisor
 `release-20260831.0` installed as the `runsc` runtime. Its fixed offline
-x86-64 archive is
+x86-64 `.tar.zstd` archive is
 `sha256:b9ccc6e14ca4eb2c2e65ff66e011f3b7e79d3275fb12eab747b19f95caf8e891`.
 The release page and checksummed multi-binary installation model are described
 by the official gVisor
@@ -682,6 +683,18 @@ by the official gVisor
 The runner installer consumes the release-carried archive and checksum; it
 cannot download `latest`, invoke the package manager, or let `runsc install`
 fetch missing sidecars.
+
+The installation-side export copies only the outer signed manifest/signature,
+`mx`, the runner executable, the fixed toolchain image archive, and the fixed
+gVisor archive/checksum into an independently verifiable directory. It also
+reports the exact SHA-256 fingerprints of the installation's executor-server
+and runner-client authorities. The operator transfers those fingerprints to
+the runner through an independently trusted channel before CSR creation. Every
+CSR request binds both fingerprints, and a signed enrollment response must
+carry the exact pinned authorities; a response cannot bootstrap trust in a new
+self-declared CA. Each slot's P-256 private key is generated and retained only
+under its node-local private root, while the platform stores only the canonical
+signed public enrollment record.
 
 The runner agent polls one mutually authenticated executor endpoint and may
 receive only a current fenced task, its content-addressed source archive, and
@@ -708,6 +721,9 @@ and grants no work or administrative operation.
 The sole first-release toolchain is `GO_1_26_OFFLINE_V1`, built from
 `docker.io/library/golang@sha256:07558d5472e9acb5fc5656b485e963602e925e00111b8ad676a804306e711ba3`
 (Linux/amd64 `1.26.8-alpine3.23`) and carried as an authenticated offline image.
+That value is the repository/OCI-manifest digest; the portable archive's
+Docker config/image ID is independently fixed as
+`sha256:2e6f40580dfa8312d4aab4f49e5ab214d0daa5999ed51be6eb6fe1f246378e4f`.
 It runs exactly `go test -mod=vendor -count=1 ./...` followed by
 `go vet -mod=vendor ./...`, with `CGO_ENABLED=0`, `GOPROXY=off`,
 `GOSUMDB=off`, an empty credential environment, and no caller-supplied argv.
@@ -1187,9 +1203,17 @@ private keys never enter a runtime container. The gateway's admin listener
 stays on the internal control network, its health listener is loopback-only,
 and only the TLS 1.3 runner listener is published on fixed port `8444`.
 PaaS-only staging and topology contain none of these files, directories,
-processes, or ports. The standalone runner artifact, runner certificate
-enrollment, dedicated-node installation, and a real PostgreSQL-to-runner
-process journey remain pending, so no repository code executes yet.
+processes, or ports. A DevOps-selected signed release now carries an exact
+standalone Linux/amd64 runner subset: `mx`, `matrix-devops-runner`, the pinned
+offline Go toolchain image, and the pinned gVisor `.tar.zstd` archive plus its
+checksum. The operator CLI exports and re-verifies that subset, reports the
+installation authority fingerprints, creates one-to-four disjoint node-local
+keys and CSRs bound to those fingerprints, and signs matching certificates
+without ever receiving runner private keys. Equal request/enrollment replay is
+stable, while changed node use, changed authority pins, foreign installations,
+tampered payloads, and PaaS-only releases fail closed. Dedicated-node runtime
+installation and a real PostgreSQL-to-runner process journey remain pending,
+so no repository code executes yet.
 
 Every fenced worker transition now submits the exact next PipelineRun document
 to the database boundary. A terminal transition atomically stores a distinct
@@ -1272,7 +1296,7 @@ observation, acquisition through an installed isolated process, the fenced
 BuildExecutor boundary, and authenticated tenant-leading normalized-log
 persistence, public log reads, and physical runner process composition are
 complete together with the selected DevOps control-plane release topology.
-Standalone runner-node release/enrollment, real isolated execution, reporting,
+Dedicated runner-node runtime installation, real isolated execution, reporting,
 remaining runtime quotas, check-receipt Audit facts, and pagination for other
 collection resources remain pending.
 
@@ -1454,9 +1478,29 @@ Current verification evidence:
   third-party Docker SDK, Prow, and Kubernetes authority. Command, workflow,
   sandbox, and architecture packages pass race detection and twenty-run
   repetition on Windows and in the fixed disconnected Go 1.26.8 Linux/amd64
-  image with read-only source and module cache; this is process-composition
-  evidence, not standalone runner release, real repository execution, or gVisor
-  isolation evidence
+  image with read-only source and module cache; that earlier gate is
+  process-composition evidence only, not standalone runner release, real
+  repository execution, or gVisor isolation evidence
+- signed runner-release and CSR-enrollment tests proving the DevOps product
+  requires the exact runner-only payload while PaaS-only releases reject it;
+  the transferable subset retains the outer release signature and rejects
+  missing, extra, tampered, non-regular, unpinned gVisor, or changed-checksum
+  content. Production staging copies and hashes the official
+  `release-20260831.0` `.tar.zstd` artifact in one pass, and a real Docker image
+  save proves the pinned repository digest loads as the separately pinned
+  config/image ID. Four-slot enrollment proves distinct node-local P-256 keys,
+  canonical CSRs and SPIFFE identities, disjoint journal/workspace roots,
+  operator-pinned server/runner CA fingerprints, certificate-to-CSR public-key
+  binding, no platform-held runner private key, entropy-free equal replay, and
+  rejection of a self-consistent response carrying an unpinned authority,
+  changed node input, foreign installation, or fifth slot. A release assembly
+  integration re-verifies the authentic gVisor and toolchain artifacts through
+  the independently transferable signed subset. All affected release,
+  enrollment, operator-command, local-machine, release-build, and sandbox
+  packages pass race detection and twenty-run repetition on Windows and twenty
+  runs in the fixed disconnected Linux/amd64 image with read-only source and
+  module cache; this is distribution and enrollment evidence, not
+  dedicated-node installation or gVisor execution
 - selected-product installation and topology tests proving journal-stable PKI
   issuance time, three disjoint P-256 authorities, exact gateway and
   build-worker identities, canonical write-once authority storage,

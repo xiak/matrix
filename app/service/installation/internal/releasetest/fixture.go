@@ -210,6 +210,28 @@ func manifest(products []release.Product) release.Manifest {
 		Size: 1, SHA256: stableDigest("executable:mx"), Executable: true,
 	}}
 	images := make([]release.Image, 0, len(required))
+	for _, product := range products {
+		if product.ID != release.ProductDevOps {
+			continue
+		}
+		for _, runnerPath := range release.RunnerPayloadPaths() {
+			file := release.File{
+				Path: runnerPath, MediaType: "application/vnd.docker.image.archive",
+				Size: 1, SHA256: stableDigest("runner:" + runnerPath),
+			}
+			switch runnerPath {
+			case release.RunnerBinaryPath:
+				file.MediaType = "application/vnd.matrix.executable"
+				file.Executable = true
+			case release.RunnerGVisorArchivePath:
+				file.MediaType = "application/vnd.matrix.gvisor.tar+zstd"
+			case release.RunnerGVisorChecksumPath:
+				file.MediaType = "text/plain"
+			}
+			files = append(files, file)
+		}
+		break
+	}
 	for _, requirement := range required {
 		archive := "images/" + requirement.Component + ".tar"
 		files = append(files, release.File{

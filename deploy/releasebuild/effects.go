@@ -3,6 +3,8 @@ package releasebuild
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -16,7 +18,7 @@ import (
 
 const maximumCommandOutputBytes = 1024 * 1024
 
-var buildTagPattern = regexp.MustCompile(`^matrix-release-build/(?:apisix|audit|iam|matrix-ui|paas|platform|verification):[0-9a-f]{24}$`)
+var buildTagPattern = regexp.MustCompile(`^matrix-release-build/(?:apisix|audit|devops|iam|matrix-ui|paas|platform|verification):[0-9a-f]{24}$`)
 
 type localCommand struct {
 	program string
@@ -135,6 +137,60 @@ func (effects *LocalEffects) SaveImage(
 	return identity, nil
 }
 
+func (effects *LocalEffects) StageRunnerSandbox(
+	ctx context.Context,
+	source string,
+	output string,
+) (RunnerSandboxMetadata, error) {
+	if effects == nil || ctx == nil || source == "" || output == "" ||
+		!filepath.IsAbs(source) || filepath.Clean(source) != source ||
+		!filepath.IsAbs(output) || filepath.Clean(output) != output {
+		return RunnerSandboxMetadata{}, errors.New("runner sandbox staging effect is invalid")
+	}
+	if err := ctx.Err(); err != nil {
+		return RunnerSandboxMetadata{}, err
+	}
+	info, err := os.Lstat(source)
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 ||
+		info.Mode()&os.ModeSymlink != 0 {
+		return RunnerSandboxMetadata{}, errors.New("runner sandbox input is unsafe")
+	}
+	input, err := os.Open(source)
+	if err != nil {
+		return RunnerSandboxMetadata{}, errors.New("open runner sandbox input failed")
+	}
+	defer input.Close()
+	openedInfo, statErr := input.Stat()
+	if statErr != nil || !openedInfo.Mode().IsRegular() || !os.SameFile(info, openedInfo) {
+		return RunnerSandboxMetadata{}, errors.New("runner sandbox input is unsafe")
+	}
+	target, err := os.OpenFile(output, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return RunnerSandboxMetadata{}, errors.New("create runner sandbox payload failed")
+	}
+	succeeded := false
+	defer func() {
+		_ = target.Close()
+		if !succeeded {
+			_ = os.Remove(output)
+		}
+	}()
+	if err := os.Chmod(output, 0o600); err != nil {
+		return RunnerSandboxMetadata{}, errors.New("protect runner sandbox payload failed")
+	}
+	hasher := sha256.New()
+	written, copyErr := io.Copy(io.MultiWriter(target, hasher), input)
+	finalInfo, finalStatErr := input.Stat()
+	digest := "sha256:" + hex.EncodeToString(hasher.Sum(nil))
+	if copyErr != nil || written != info.Size() || finalStatErr != nil ||
+		!os.SameFile(info, finalInfo) || finalInfo.Size() != info.Size() ||
+		digest != RunnerGVisorSHA256 || target.Sync() != nil || target.Close() != nil {
+		return RunnerSandboxMetadata{}, errors.New("copy runner sandbox payload failed")
+	}
+	succeeded = true
+	return RunnerSandboxMetadata{SHA256: digest, Size: uint64(written)}, nil
+}
+
 func (effects *LocalEffects) VerifyPaaSCLI(ctx context.Context, imageID string) error {
 	if effects == nil || effects.run == nil || validateImageMetadata(ImageMetadata{
 		ID: imageID, OS: "linux", Architecture: "amd64",
@@ -238,7 +294,8 @@ func allowedBinaryPackage(value string) bool {
 
 func allowedImageReference(value string) bool {
 	return value == APISIXBaseReference || value == DockerBaseReference ||
-		value == PostgresReference || buildTagPattern.MatchString(value)
+		value == PostgresReference || value == RunnerToolchainReference ||
+		buildTagPattern.MatchString(value)
 }
 
 func compareVersion(left, right string) int {

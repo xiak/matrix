@@ -34,7 +34,7 @@ func TestPreflightProvesPinnedHostAndIsolationBeforeEligibility(t *testing.T) {
 			return jsonResponse(t, http.StatusOK, eligibleInfo()), nil
 		case request.Method == http.MethodGet && strings.HasPrefix(request.URL.Path, "/v1.46/images/"):
 			return jsonResponse(t, http.StatusOK, imageInspection{
-				ID: devopsImageDigest(), RepoDigests: []string{"golang@" + devopsImageDigest()},
+				ID: devopsImageID(), RepoDigests: []string{"golang@" + devopsImageDigest()},
 				OS: "linux", Architecture: "amd64",
 			}), nil
 		case request.Method == http.MethodPost && request.URL.Path == "/v1.46/containers/create":
@@ -97,7 +97,7 @@ func TestPreflightProvesPinnedHostAndIsolationBeforeEligibility(t *testing.T) {
 	if !report.Eligible || report.Reason != "" || report.DockerVersion != "29.6.2" ||
 		report.EngineAPIVersion != "1.55" || report.LogicalCPUs != 8 ||
 		report.MemoryBytes != 16*1024*1024*1024 ||
-		report.StorageFreeBytes != minimumStorageBytes+1 || report.ImageID != devopsImageDigest() {
+		report.StorageFreeBytes != minimumStorageBytes+1 || report.ImageID != devopsImageID() {
 		t.Fatalf("report = %#v", report)
 	}
 	if len(calls) != 8 || !strings.HasPrefix(calls[2], "GET /v1.46/images/") ||
@@ -152,7 +152,7 @@ func TestPreflightRejectsFailedIsolationAndStillDeletesProbe(t *testing.T) {
 		case request.Method == http.MethodGet && request.URL.Path == infoPath():
 			return jsonResponse(t, http.StatusOK, eligibleInfo()), nil
 		case request.Method == http.MethodGet && strings.HasPrefix(request.URL.Path, "/v1.46/images/"):
-			return jsonResponse(t, http.StatusOK, imageInspection{ID: devopsImageDigest(), RepoDigests: []string{"golang@" + devopsImageDigest()}, OS: "linux", Architecture: "amd64"}), nil
+			return jsonResponse(t, http.StatusOK, imageInspection{ID: devopsImageID(), RepoDigests: []string{"golang@" + devopsImageDigest()}, OS: "linux", Architecture: "amd64"}), nil
 		case request.Method == http.MethodPost && request.URL.Path == "/v1.46/containers/create":
 			if err := json.NewDecoder(request.Body).Decode(&probeRequest); err != nil {
 				t.Fatal(err)
@@ -280,7 +280,7 @@ func successfulProbeInspection(
 ) containerInspection {
 	var value containerInspection
 	value.ID = containerID
-	value.Image = devopsImageDigest()
+	value.Image = devopsImageID()
 	value.Config.Image = request.Image
 	value.Config.Cmd = append([]string(nil), request.Cmd...)
 	value.Config.Entrypoint = []string{}
@@ -351,4 +351,8 @@ func querySuffix(request *http.Request) string {
 
 func devopsImageDigest() string {
 	return strings.TrimPrefix(ToolchainImage, "docker.io/library/golang@")
+}
+
+func devopsImageID() string {
+	return ToolchainImageID
 }

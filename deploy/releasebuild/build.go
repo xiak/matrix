@@ -34,6 +34,7 @@ type SigningMaterial struct {
 type Config struct {
 	RepositoryRoot  string
 	Output          string
+	GVisorArchive   string
 	Version         string
 	BuildID         string
 	SourceCommit    string
@@ -56,11 +57,17 @@ type ImageMetadata struct {
 	Architecture string
 }
 
+type RunnerSandboxMetadata struct {
+	SHA256 string
+	Size   uint64
+}
+
 type Effects interface {
 	BuildGoBinary(context.Context, string, string, string) error
 	InspectImage(context.Context, string) (ImageMetadata, error)
 	BuildImage(context.Context, string, string) error
 	SaveImage(context.Context, string, string) (ImageMetadata, error)
+	StageRunnerSandbox(context.Context, string, string) (RunnerSandboxMetadata, error)
 	VerifyPaaSCLI(context.Context, string) error
 	RemoveBuildTag(context.Context, string) error
 }
@@ -88,7 +95,10 @@ func Assemble(ctx context.Context, config Config, effects Effects) (Result, erro
 	bundle := filepath.Join(workspace, "bundle")
 	if err := os.Mkdir(bundle, 0o700); err != nil ||
 		os.Mkdir(filepath.Join(bundle, "bin"), 0o700) != nil ||
-		os.Mkdir(filepath.Join(bundle, "images"), 0o700) != nil {
+		os.Mkdir(filepath.Join(bundle, "images"), 0o700) != nil ||
+		os.MkdirAll(filepath.Join(bundle, "runner", "linux-amd64", "bin"), 0o700) != nil ||
+		os.MkdirAll(filepath.Join(bundle, "runner", "linux-amd64", "images"), 0o700) != nil ||
+		os.MkdirAll(filepath.Join(bundle, "runner", "linux-amd64", "runtime"), 0o700) != nil {
 		return Result{}, errors.New("create release bundle workspace failed")
 	}
 
@@ -97,6 +107,9 @@ func Assemble(ctx context.Context, config Config, effects Effects) (Result, erro
 		return Result{}, err
 	}
 	if err := copyRegularFile(binaries["mx"], filepath.Join(bundle, "bin", "mx"), 0o700); err != nil {
+		return Result{}, err
+	}
+	if err := stageRunnerPayloads(ctx, config, effects, bundle, binaries); err != nil {
 		return Result{}, err
 	}
 
@@ -145,6 +158,12 @@ func validateConfig(config Config) (Config, installationrelease.TrustRoot, error
 			filepath.Clean(candidate) != candidate || isFilesystemRoot(candidate) {
 			return Config{}, installationrelease.TrustRoot{}, errors.New("release build path is invalid")
 		}
+	}
+	if config.GVisorArchive == "" || len(config.GVisorArchive) > 4096 ||
+		!filepath.IsAbs(config.GVisorArchive) ||
+		filepath.Clean(config.GVisorArchive) != config.GVisorArchive ||
+		isFilesystemRoot(config.GVisorArchive) {
+		return Config{}, installationrelease.TrustRoot{}, errors.New("runner gVisor archive path is invalid")
 	}
 	repositoryInfo, err := os.Lstat(config.RepositoryRoot)
 	if err != nil || !repositoryInfo.IsDir() || repositoryInfo.Mode()&os.ModeSymlink != 0 {
@@ -260,11 +279,62 @@ func buildImages(
 	return images, tags, nil
 }
 
+func stageRunnerPayloads(
+	ctx context.Context,
+	config Config,
+	effects Effects,
+	bundle string,
+	binaries map[string]string,
+) error {
+	runnerBinary, found := binaries["matrix-devops-runner"]
+	if !found {
+		return errors.New("runner release executable is missing")
+	}
+	if err := copyRegularFile(
+		runnerBinary,
+		filepath.Join(bundle, filepath.FromSlash(installationrelease.RunnerBinaryPath)),
+		0o700,
+	); err != nil {
+		return err
+	}
+	toolchainTarget := filepath.Join(
+		bundle, filepath.FromSlash(installationrelease.RunnerToolchainArchivePath),
+	)
+	toolchain, err := effects.SaveImage(ctx, RunnerToolchainSourceID, toolchainTarget)
+	if err != nil || toolchain.ID != RunnerToolchainLoadID ||
+		validateImageMetadata(toolchain) != nil {
+		return errors.New("save fixed runner toolchain image failed")
+	}
+	gvisorTarget := filepath.Join(
+		bundle, filepath.FromSlash(installationrelease.RunnerGVisorArchivePath),
+	)
+	gvisor, err := effects.StageRunnerSandbox(
+		ctx, config.GVisorArchive, gvisorTarget,
+	)
+	if err != nil || gvisor.SHA256 != RunnerGVisorSHA256 || gvisor.Size == 0 {
+		return errors.New("stage fixed runner gVisor archive failed")
+	}
+	size, _, err := hashRegularFile(gvisorTarget)
+	if err != nil || size != gvisor.Size {
+		return errors.New("staged runner gVisor archive is invalid")
+	}
+	checksumTarget := filepath.Join(
+		bundle, filepath.FromSlash(installationrelease.RunnerGVisorChecksumPath),
+	)
+	if err := writeExclusive(
+		checksumTarget, installationrelease.RunnerGVisorChecksumContent(), 0o600,
+	); err != nil {
+		return errors.New("write runner gVisor checksum failed")
+	}
+	return nil
+}
+
 func verifyBaseImages(ctx context.Context, effects Effects) error {
 	for _, required := range []struct{ reference, id string }{
 		{APISIXBaseReference, APISIXBaseImageID},
 		{DockerBaseReference, DockerBaseImageID},
 		{PostgresReference, PostgresImageID},
+		{RunnerToolchainReference, RunnerToolchainSourceID},
 	} {
 		image, err := effects.InspectImage(ctx, required.reference)
 		if err != nil || image.ID != required.id || validateImageMetadata(image) != nil {
@@ -282,6 +352,12 @@ func inventoryPayloads(
 	for _, requirement := range installationrelease.RequiredImages(products) {
 		paths = append(paths, "images/"+requirement.Component+".tar")
 	}
+	for _, product := range products {
+		if product.ID == installationrelease.ProductDevOps {
+			paths = append(paths, installationrelease.RunnerPayloadPaths()...)
+			break
+		}
+	}
 	slices.Sort(paths)
 	files := make([]installationrelease.File, 0, len(paths))
 	for _, relative := range paths {
@@ -294,9 +370,14 @@ func inventoryPayloads(
 			Path: relative, Size: size, SHA256: digest,
 			MediaType: "application/vnd.docker.image.archive",
 		}
-		if relative == "bin/mx" {
+		switch relative {
+		case "bin/mx", installationrelease.RunnerBinaryPath:
 			file.MediaType = "application/vnd.matrix.executable"
 			file.Executable = true
+		case installationrelease.RunnerGVisorArchivePath:
+			file.MediaType = "application/vnd.matrix.gvisor.tar+zstd"
+		case installationrelease.RunnerGVisorChecksumPath:
+			file.MediaType = "text/plain"
 		}
 		files = append(files, file)
 	}
@@ -346,6 +427,28 @@ func placeholderPayloads(
 		Path: "bin/mx", MediaType: "application/vnd.matrix.executable",
 		Size: 1, SHA256: placeholderDigest("mx"), Executable: true,
 	}}
+	for _, product := range products {
+		if product.ID != installationrelease.ProductDevOps {
+			continue
+		}
+		for _, runnerPath := range installationrelease.RunnerPayloadPaths() {
+			file := installationrelease.File{
+				Path: runnerPath, MediaType: "application/vnd.docker.image.archive",
+				Size: 1, SHA256: placeholderDigest(runnerPath),
+			}
+			switch runnerPath {
+			case installationrelease.RunnerBinaryPath:
+				file.MediaType = "application/vnd.matrix.executable"
+				file.Executable = true
+			case installationrelease.RunnerGVisorArchivePath:
+				file.MediaType = "application/vnd.matrix.gvisor.tar+zstd"
+			case installationrelease.RunnerGVisorChecksumPath:
+				file.MediaType = "text/plain"
+			}
+			files = append(files, file)
+		}
+		break
+	}
 	required := installationrelease.RequiredImages(products)
 	images := make([]installationrelease.Image, 0, len(required))
 	for _, requirement := range required {

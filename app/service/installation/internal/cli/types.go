@@ -70,9 +70,48 @@ type SourceCredentialBackend interface {
 	RunSourceCredential(context.Context, SourceCredentialRequest) (SourceCredentialResult, error)
 }
 
+type RunnerNodeOperation string
+
+const (
+	RunnerNodeExportRelease RunnerNodeOperation = "EXPORT_RELEASE"
+	RunnerNodeCreateRequest RunnerNodeOperation = "REQUEST"
+	RunnerNodeEnroll        RunnerNodeOperation = "ENROLL"
+)
+
+type RunnerNodeRequest struct {
+	Operation      RunnerNodeOperation
+	Root           string
+	Release        string
+	TrustKey       string
+	InstallationID string
+	NodeID         string
+	Slots          uint8
+	GatewayOrigin  string
+	ServerCAPin    string
+	RunnerCAPin    string
+	RequestFile    string
+	Output         string
+}
+
+type RunnerNodeResult struct {
+	State          string `json:"state"`
+	ReleaseID      string `json:"releaseId"`
+	InstallationID string `json:"installationId,omitempty"`
+	NodeID         string `json:"nodeId,omitempty"`
+	Slots          uint8  `json:"slots,omitempty"`
+	RequestDigest  string `json:"requestDigest,omitempty"`
+	ServerCAPin    string `json:"serverCAFingerprint,omitempty"`
+	RunnerCAPin    string `json:"runnerCAFingerprint,omitempty"`
+}
+
+type RunnerNodeBackend interface {
+	RunRunnerNode(context.Context, RunnerNodeRequest) (RunnerNodeResult, error)
+}
+
 type Backends struct {
 	Platform         PlatformBackend
 	SourceCredential SourceCredentialBackend
+	RunnerNode       RunnerNodeBackend
 }
 
 type FaultClass string
@@ -103,6 +142,7 @@ var (
 	faultCodePattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]{2,63}$`)
 	safeStatePattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]{1,63}$`)
 	safeIDPattern    = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$`)
+	sha256Pattern    = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 )
 
 func NewFault(class FaultClass, code string) (*Fault, error) {
@@ -154,6 +194,46 @@ func validateSourceCredentialResult(
 		}),
 		devopsv1.ValidateID("sourceCredentialRef", result.Reference),
 	)
+}
+
+func validateRunnerNodeResult(
+	request RunnerNodeRequest,
+	result RunnerNodeResult,
+) error {
+	wantState := ""
+	switch request.Operation {
+	case RunnerNodeExportRelease:
+		wantState = "EXPORTED"
+	case RunnerNodeCreateRequest:
+		wantState = "REQUESTED"
+	case RunnerNodeEnroll:
+		wantState = "ENROLLED"
+	default:
+		return errors.New("runner node operation is invalid")
+	}
+	if result.State != wantState || !safeIDPattern.MatchString(result.ReleaseID) ||
+		(request.Operation != RunnerNodeExportRelease &&
+			(!safeIDPattern.MatchString(result.InstallationID) ||
+				!safeIDPattern.MatchString(result.NodeID) || result.Slots == 0 || result.Slots > 4 ||
+				!sha256Pattern.MatchString(result.RequestDigest))) {
+		return errors.New("runner node result state is invalid")
+	}
+	if request.Operation == RunnerNodeExportRelease {
+		if !sha256Pattern.MatchString(result.ServerCAPin) ||
+			!sha256Pattern.MatchString(result.RunnerCAPin) || result.ServerCAPin == result.RunnerCAPin ||
+			result.InstallationID != "" || result.NodeID != "" || result.Slots != 0 ||
+			result.RequestDigest != "" {
+			return errors.New("runner release trust result is invalid")
+		}
+	} else if result.ServerCAPin != "" || result.RunnerCAPin != "" {
+		return errors.New("runner node result authority is invalid")
+	}
+	if request.Operation == RunnerNodeCreateRequest &&
+		(result.InstallationID != request.InstallationID || result.NodeID != request.NodeID ||
+			result.Slots != request.Slots) {
+		return errors.New("runner node result identity is invalid")
+	}
+	return nil
 }
 
 func validateFault(fault *Fault) error {

@@ -152,7 +152,7 @@ func TestSourceCredentialCommandSurfaceBuildsExactRequests(t *testing.T) {
 			var out, errOut bytes.Buffer
 			command, err := NewCommand(
 				Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut},
-				Backends{Platform: noopPlatformBackend(), SourceCredential: sourceBackend},
+				Backends{Platform: noopPlatformBackend(), SourceCredential: sourceBackend, RunnerNode: noopRunnerNodeBackend()},
 			)
 			if err != nil {
 				t.Fatal(err)
@@ -214,7 +214,7 @@ func TestSourceCredentialJSONAndFailureNeverExposeNativeMaterial(t *testing.T) {
 	exit := Run(
 		context.Background(), requestArgs,
 		Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut},
-		Backends{Platform: noopPlatformBackend(), SourceCredential: sourceBackend},
+		Backends{Platform: noopPlatformBackend(), SourceCredential: sourceBackend, RunnerNode: noopRunnerNodeBackend()},
 	)
 	if exit != ExitSuccess || errOut.Len() != 0 ||
 		strings.Contains(out.String(), "/secure/report-token") {
@@ -242,7 +242,7 @@ func TestSourceCredentialJSONAndFailureNeverExposeNativeMaterial(t *testing.T) {
 	exit = Run(
 		context.Background(), requestArgs,
 		Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut},
-		Backends{Platform: noopPlatformBackend(), SourceCredential: sourceBackend},
+		Backends{Platform: noopPlatformBackend(), SourceCredential: sourceBackend, RunnerNode: noopRunnerNodeBackend()},
 	)
 	if exit != ExitInternal || out.Len() != 0 ||
 		strings.Contains(errOut.String(), "report-secret-value") ||
@@ -275,7 +275,7 @@ func TestSourceCredentialUsageFailsBeforeBackend(t *testing.T) {
 			exit := Run(
 				context.Background(), args,
 				Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut},
-				Backends{Platform: noopPlatformBackend(), SourceCredential: sourceBackend},
+				Backends{Platform: noopPlatformBackend(), SourceCredential: sourceBackend, RunnerNode: noopRunnerNodeBackend()},
 			)
 			if exit != ExitInvalidInput || out.Len() != 0 ||
 				!strings.Contains(errOut.String(), "INVALID_COMMAND_INPUT") {
@@ -285,6 +285,120 @@ func TestSourceCredentialUsageFailsBeforeBackend(t *testing.T) {
 	}
 	if called {
 		t.Fatal("source credential backend was called for invalid usage")
+	}
+}
+
+func TestRunnerNodeCommandsBuildClosedRequests(t *testing.T) {
+	serverCAPin := "sha256:" + strings.Repeat("a", 64)
+	runnerCAPin := "sha256:" + strings.Repeat("b", 64)
+	tests := []struct {
+		name string
+		args []string
+		want RunnerNodeRequest
+	}{
+		{
+			name: "export",
+			args: []string{"devops", "runner-node", "export-release", "--root", "/srv/matrix", "--output", "/media/runner-release"},
+			want: RunnerNodeRequest{Operation: RunnerNodeExportRelease, Root: "/srv/matrix", Output: "/media/runner-release"},
+		},
+		{
+			name: "request",
+			args: []string{
+				"devops", "runner-node", "request", "--root", "/srv/matrix-runner",
+				"--release", "/media/runner-release", "--trust-key", "/media/release-trust.json",
+				"--installation", "mxi-11111111111111111111111111111111",
+				"--node", "runner-one", "--slots", "4",
+				"--gateway-origin", "https://192.0.2.10:8444",
+				"--server-ca-fingerprint", serverCAPin,
+				"--runner-ca-fingerprint", runnerCAPin,
+			},
+			want: RunnerNodeRequest{
+				Operation: RunnerNodeCreateRequest, Root: "/srv/matrix-runner",
+				Release: "/media/runner-release", TrustKey: "/media/release-trust.json",
+				InstallationID: "mxi-11111111111111111111111111111111",
+				NodeID:         "runner-one", Slots: 4, GatewayOrigin: "https://192.0.2.10:8444",
+				ServerCAPin: serverCAPin, RunnerCAPin: runnerCAPin,
+			},
+		},
+		{
+			name: "enroll",
+			args: []string{
+				"devops", "runner-node", "enroll", "--root", "/srv/matrix",
+				"--request", "/media/enrollment-request.json",
+				"--output", "/media/enrollment.json",
+			},
+			want: RunnerNodeRequest{
+				Operation: RunnerNodeEnroll, Root: "/srv/matrix",
+				RequestFile: "/media/enrollment-request.json", Output: "/media/enrollment.json",
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var got RunnerNodeRequest
+			backend := runnerNodeBackendFunc(func(
+				_ context.Context, request RunnerNodeRequest,
+			) (RunnerNodeResult, error) {
+				got = request
+				result := RunnerNodeResult{
+					State: "EXPORTED", ReleaseID: "matrix-v0.1.0-aaaaaaaaaaaa",
+					ServerCAPin: serverCAPin, RunnerCAPin: runnerCAPin,
+				}
+				if request.Operation != RunnerNodeExportRelease {
+					result.ServerCAPin = ""
+					result.RunnerCAPin = ""
+					result.State = "ENROLLED"
+					if request.Operation == RunnerNodeCreateRequest {
+						result.State = "REQUESTED"
+					}
+					result.InstallationID = "mxi-11111111111111111111111111111111"
+					result.NodeID = "runner-one"
+					result.Slots = 4
+					result.RequestDigest = "sha256:" + strings.Repeat("a", 64)
+				}
+				return result, nil
+			})
+			backends := testBackends(noopPlatformBackend())
+			backends.RunnerNode = backend
+			var out, errOut bytes.Buffer
+			exit := Run(
+				context.Background(), test.args,
+				Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut}, backends,
+			)
+			if exit != ExitSuccess || got != test.want || errOut.Len() != 0 {
+				t.Fatalf("runner command exit=%d request=%#v output=%q", exit, got, errOut.String())
+			}
+			for _, secretPath := range []string{test.want.TrustKey, test.want.RequestFile, test.want.Output} {
+				if secretPath != "" && strings.Contains(out.String(), secretPath) {
+					t.Fatalf("runner command disclosed native path %q", secretPath)
+				}
+			}
+		})
+	}
+}
+
+func TestRunnerNodeUsageRejectsFifthSlotBeforeBackend(t *testing.T) {
+	called := false
+	backends := testBackends(noopPlatformBackend())
+	backends.RunnerNode = runnerNodeBackendFunc(func(
+		context.Context, RunnerNodeRequest,
+	) (RunnerNodeResult, error) {
+		called = true
+		return RunnerNodeResult{}, nil
+	})
+	var out, errOut bytes.Buffer
+	exit := Run(context.Background(), []string{
+		"devops", "runner-node", "request", "--root", "/srv/runner",
+		"--release", "/media/release", "--trust-key", "/media/trust",
+		"--installation", "mxi-11111111111111111111111111111111",
+		"--node", "runner-one", "--slots", "5",
+		"--gateway-origin", "https://192.0.2.10:8444",
+		"--server-ca-fingerprint", "sha256:" + strings.Repeat("a", 64),
+		"--runner-ca-fingerprint", "sha256:" + strings.Repeat("b", 64),
+	}, Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut}, backends)
+	if exit != ExitInvalidInput || called || out.Len() != 0 ||
+		!strings.Contains(errOut.String(), "INVALID_COMMAND_INPUT") {
+		t.Fatalf("invalid runner slots exit=%d called=%t output=%q", exit, called, errOut.String())
 	}
 }
 
@@ -418,9 +532,30 @@ func (function sourceCredentialBackendFunc) RunSourceCredential(
 	return function(ctx, request)
 }
 
+type runnerNodeBackendFunc func(
+	context.Context,
+	RunnerNodeRequest,
+) (RunnerNodeResult, error)
+
+func (function runnerNodeBackendFunc) RunRunnerNode(
+	ctx context.Context,
+	request RunnerNodeRequest,
+) (RunnerNodeResult, error) {
+	return function(ctx, request)
+}
+
 func noopPlatformBackend() backendFunc {
 	return backendFunc(func(context.Context, Request) (Result, error) {
 		return Result{State: "READY"}, nil
+	})
+}
+
+func noopRunnerNodeBackend() runnerNodeBackendFunc {
+	return runnerNodeBackendFunc(func(
+		context.Context,
+		RunnerNodeRequest,
+	) (RunnerNodeResult, error) {
+		return RunnerNodeResult{State: "EXPORTED", ReleaseID: "matrix-v0.1.0-aaaaaaaaaaaa"}, nil
 	})
 }
 
@@ -433,6 +568,7 @@ func testBackends(platform PlatformBackend) Backends {
 		) (SourceCredentialResult, error) {
 			return sourceCredentialResult(request, "UNCHANGED"), nil
 		}),
+		RunnerNode: noopRunnerNodeBackend(),
 	}
 }
 
