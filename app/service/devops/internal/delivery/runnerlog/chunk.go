@@ -3,9 +3,9 @@ package runnerlog
 import (
 	"unicode"
 	"unicode/utf8"
-)
 
-const MaximumChunkBytes = 64 * 1024
+	devopsv1 "github.com/xiak/matrix/api/devops/v1"
+)
 
 // Chunk is sanitized UTF-8 output with a run-wide monotonic sequence.
 type Chunk struct {
@@ -33,7 +33,8 @@ func ValidateBatch(previous, next Progress, chunks []Chunk) error {
 	var normalizedBytes int64
 	for index, chunk := range chunks {
 		if chunk.Sequence != previous.LastSequence+uint64(index)+1 ||
-			len(chunk.Content) == 0 || len(chunk.Content) > MaximumChunkBytes ||
+			len(chunk.Content) == 0 ||
+			int64(len(chunk.Content)) > devopsv1.FixedMaxLogChunkBytes ||
 			!utf8.ValidString(chunk.Content) {
 			return ErrInvalid
 		}

@@ -475,10 +475,18 @@ func TestSpoolStartupRemovesOnlyStrictTemporaryEntries(t *testing.T) {
 	if err := os.WriteFile(temporary, []byte("partial"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	logTemporary := filepath.Join(
+		root,
+		".logs-"+strings.Repeat("d", 64)+"-00000000000000000001-"+
+			strings.Repeat("e", 16)+".tmp",
+	)
+	if err := os.WriteFile(logTemporary, []byte("partial"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := New(root); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{staging, temporary} {
+	for _, path := range []string{staging, temporary, logTemporary} {
 		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("temporary path survived recovery %s: %v", path, err)
 		}

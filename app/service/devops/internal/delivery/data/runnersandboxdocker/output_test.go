@@ -134,7 +134,9 @@ func TestLogBudgetReplacesUnsafeLinesWithoutLeakingContent(t *testing.T) {
 		{name: "file URL", content: []byte("open file:///var/lib/matrix/private\n"), marker: "[matrix:absolute-path]"},
 		{name: "Windows path", content: []byte("open C:\\matrix\\private\n"), marker: "[matrix:absolute-path]"},
 		{name: "UNC path", content: []byte("open \\\\server\\private\n"), marker: "[matrix:absolute-path]"},
-		{name: "long", content: append(bytes.Repeat([]byte("x"), maximumLogLineBytes+1), '\n'), marker: "[matrix:line-too-long]"},
+		{name: "long", content: append(bytes.Repeat(
+			[]byte("x"), int(devopsv1.FixedMaxLogLineBytes)+1,
+		), '\n'), marker: "[matrix:line-too-long]"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -240,7 +242,8 @@ func TestLogChunksStayBoundedUnderLargeAlternatingOutput(t *testing.T) {
 		t.Fatalf("chunk count = %d, error = %v", len(chunks), err)
 	}
 	for index, chunk := range chunks {
-		if chunk.Sequence != uint64(index+1) || len(chunk.Content) > runnerlog.MaximumChunkBytes ||
+		if chunk.Sequence != uint64(index+1) ||
+			int64(len(chunk.Content)) > devopsv1.FixedMaxLogChunkBytes ||
 			!utf8.ValidString(chunk.Content) {
 			t.Fatalf("chunk %d = %#v", index, chunk)
 		}
@@ -264,7 +267,8 @@ func FuzzLogBudgetDockerStream(f *testing.F) {
 		for index, chunk := range chunks {
 			total += len(chunk.Content)
 			if chunk.Sequence != uint64(index+1) || len(chunk.Content) == 0 ||
-				len(chunk.Content) > runnerlog.MaximumChunkBytes || !utf8.ValidString(chunk.Content) {
+				int64(len(chunk.Content)) > devopsv1.FixedMaxLogChunkBytes ||
+				!utf8.ValidString(chunk.Content) {
 				t.Fatalf("chunk %d = %#v", index, chunk)
 			}
 			for _, character := range chunk.Content {

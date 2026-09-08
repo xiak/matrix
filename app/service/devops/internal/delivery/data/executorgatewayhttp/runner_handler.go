@@ -40,6 +40,14 @@ type RunnerSpool interface {
 		devopsbuildv1.Receipt,
 		time.Time,
 	) (devopsbuildv1.Observation, error)
+	AppendLogs(
+		context.Context,
+		string,
+		string,
+		uint64,
+		devopsbuildv1.LogBatch,
+		time.Time,
+	) error
 	Request(context.Context, string) (devopsbuildv1.Request, error)
 }
 
@@ -161,15 +169,21 @@ func (handler *runnerHandler) execution(
 	parts := strings.Split(remainder, "/")
 	if remainder == request.URL.Path || len(parts) != 2 ||
 		devopsv1.ValidateDigest("executionId", parts[0]) != nil ||
-		(parts[1] != "renew" && parts[1] != "complete") {
+		(parts[1] != "renew" && parts[1] != "complete" && parts[1] != "logs") {
 		writeEmpty(response, http.StatusNotFound)
 		return
 	}
-	if !hasSingleHeader(request, "Accept", devopsbuildv1.DocumentMediaType) {
+	mediaType := devopsbuildv1.DocumentMediaType
+	maximumBytes := int64(devopsbuildv1.MaximumDocumentBytes)
+	if parts[1] == "logs" {
+		mediaType = devopsbuildv1.LogDocumentMediaType
+		maximumBytes = devopsbuildv1.MaximumLogDocumentBytes
+	}
+	if !hasSingleHeader(request, "Accept", mediaType) {
 		writeEmpty(response, http.StatusNotAcceptable)
 		return
 	}
-	content, ok := readDocumentRequest(response, request)
+	content, ok := readSizedRequest(response, request, mediaType, maximumBytes)
 	if !ok {
 		writeEmpty(response, http.StatusBadRequest)
 		return
@@ -183,7 +197,35 @@ func (handler *runnerHandler) execution(
 		handler.renew(response, request, runnerID, buildRequest, content)
 		return
 	}
+	if parts[1] == "logs" {
+		handler.logs(response, request, runnerID, buildRequest, parts[0], content)
+		return
+	}
 	handler.complete(response, request, runnerID, buildRequest, content)
+}
+
+func (handler *runnerHandler) logs(
+	response http.ResponseWriter,
+	request *http.Request,
+	runnerID string,
+	buildRequest devopsbuildv1.Request,
+	executionID string,
+	content []byte,
+) {
+	appendRequest, err := devopsbuildv1.DecodeLogAppend(buildRequest, content)
+	if err != nil || appendRequest.Batch.ExecutionID != executionID {
+		writeEmpty(response, http.StatusBadRequest)
+		return
+	}
+	if err := handler.spool.AppendLogs(
+		request.Context(), runnerID, executionID,
+		appendRequest.FencingToken, appendRequest.Batch,
+		canonicalGatewayTime(handler.now()),
+	); err != nil {
+		writeSpoolError(response, err)
+		return
+	}
+	writeEmpty(response, http.StatusNoContent)
 }
 
 func (handler *runnerHandler) renew(
@@ -247,14 +289,27 @@ func readDocumentRequest(
 	response http.ResponseWriter,
 	request *http.Request,
 ) ([]byte, bool) {
-	if !hasSingleHeader(request, "Content-Type", devopsbuildv1.DocumentMediaType) ||
+	return readSizedRequest(
+		response, request, devopsbuildv1.DocumentMediaType,
+		int64(devopsbuildv1.MaximumDocumentBytes),
+	)
+}
+
+func readSizedRequest(
+	response http.ResponseWriter,
+	request *http.Request,
+	contentType string,
+	maximumBytes int64,
+) ([]byte, bool) {
+	if maximumBytes <= 0 ||
+		!hasSingleHeader(request, "Content-Type", contentType) ||
 		request.ContentLength <= 0 ||
-		request.ContentLength > devopsbuildv1.MaximumDocumentBytes ||
+		request.ContentLength > maximumBytes ||
 		len(request.TransferEncoding) != 0 {
 		return nil, false
 	}
 	request.Body = http.MaxBytesReader(
-		response, request.Body, devopsbuildv1.MaximumDocumentBytes,
+		response, request.Body, maximumBytes,
 	)
 	content, err := io.ReadAll(request.Body)
 	if err != nil || int64(len(content)) != request.ContentLength {

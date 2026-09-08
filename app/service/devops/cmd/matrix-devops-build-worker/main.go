@@ -122,6 +122,7 @@ func run(ctx context.Context) error {
 		repository,
 		archives,
 		executor,
+		executor,
 		buildexecution.Config{
 			WorkerID:      config.workerID,
 			LeaseDuration: buildexecution.LeaseDuration,

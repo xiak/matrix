@@ -14,8 +14,9 @@
   executor-gateway spool, TLS 1.3 mTLS admin/runner HTTP boundary, and isolated
   executor-gateway process, ordered runner step journal, runner workspace
   publication, bounded native output normalization, closed sandbox container
-  lifecycle, and port-driven cross-step runner workflow complete; physical
-  runner process composition, reporter effects, and normalized-log persistence
+  lifecycle, port-driven cross-step runner workflow, authenticated durable log
+  relay, and fenced tenant-leading normalized-log persistence complete;
+  physical runner process composition, public log read, and reporter effects
   pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
@@ -563,8 +564,8 @@ that converts that evidence into `SUCCEEDED` or
 `FAILED / VERIFICATION_FAILED`. User cancellation may terminate without a
 report. Native output, diagnostics, container identifiers, paths, and logs are
 not receipt fields. The runner owns native-output normalization before handoff;
-tenant-leading bounded normalized-log persistence remains a separate pending
-delivery boundary.
+the separate normalized-log boundary persists that evidence before the build
+worker may commit the receipt.
 
 #### Executor control and runner transport
 
@@ -581,16 +582,17 @@ receives the runner's Docker authority, and the runner never joins a Matrix
 product or database network.
 
 The gateway's admin listener accepts only the build-worker certificate and
-supports the three `BuildExecutor` operations: create-or-observe one
+supports the three `BuildExecutor` operations—create-or-observe one
 deterministic execution with its bounded source stream, observe it, and request
-cancellation. The runner listener trusts a separate runner-client root and
-supports only oldest-eligible assignment claim, current-fence renewal with a
-cancellation flag, and current-fence terminal completion. It exposes no admin
-operation. Both listeners require TLS 1.3, an exact configured server identity,
-bounded headers and bodies, no proxy or redirect, and strict canonical
-versioned documents from `api/adapter/devopsbuild/v1`; bearer tokens, cookies,
-caller-selected URLs, native Docker data, paths, argv, and environment fields
-are absent.
+cancellation—plus exact-cursor `BuildLogSource` reads. The runner listener
+trusts a separate runner-client root and supports only oldest-eligible
+assignment claim, current-fence renewal with a cancellation flag,
+current-fence normalized-log append, and current-fence terminal completion. It
+exposes no admin operation. Both listeners require TLS 1.3, an exact configured
+server identity, bounded headers and bodies, no proxy or redirect, and strict
+canonical versioned documents from `api/adapter/devopsbuild/v1`; bearer tokens,
+cookies, caller-selected URLs, native Docker data, paths, argv, and environment
+fields are absent.
 
 An admin create streams a length-framed canonical `BuildRequest` followed by
 exactly the declared archive bytes. The gateway revalidates the closed request,
@@ -612,6 +614,26 @@ only the cancellation bit. A terminal receipt must match the current runner,
 fence, request, fixed profile, step order, and digest before its atomic durable
 publication; native output is rejected. Acknowledgement loss is equal replay,
 while a changed terminal replay is a conflict.
+
+Each completed step may append one canonical batch of complete normalized
+`[stdout]`/`[stderr]` lines. The gateway binds it to the certificate-derived
+runner, active gateway fence, immutable execution request, strict cumulative
+native/normalized byte cursor, increasing step and sequence, and the fixed
+two-batch maximum before atomically publishing it in the private spool. An
+equal batch may replay under a later fence held by the same recovering runner;
+changed content, reused or partial sequence, foreign identity, expired lease,
+and changed request conflict. The terminal receipt remains log-free.
+
+Before completing the database VERIFY intent, the build worker drains whole
+batches from sequence zero while its database lease renewal remains active.
+The table-blind `append_build_logs` function independently binds the current
+VERIFY worker and fence, recomputes the execution, chunk, and batch digests,
+enforces the normalized line grammar, proves the preceding cursor and step,
+and inserts at most two batches into tenant-leading
+`delivery.pipeline_run_logs`. Equal replay is idempotent, changed replay
+conflicts, task completion closes the append authority, and every batch gets
+the fixed 14-day expiry. A failed or unproved drain retains the VERIFY intent
+for fenced observation instead of advancing with missing evidence.
 
 This adapts Prow's observe-before-create, state-specific timeout, bounded grace,
 and durable result-marker behavior. It deliberately replaces Pod identity,
@@ -752,10 +774,10 @@ requires equal sequence replay without duplication and conflict on changed
 content. A complete receipt is recorded locally before gateway completion and
 is acknowledged only after that completion succeeds.
 
-Tenant-leading normalized-log persistence, the physical runner process that
-composes these ports, selected release topology, and a real process journey
-remain subsequent slices, so no process yet invokes this workflow against
-repository code.
+The public IAM/Audit log-read surface, the physical runner process that composes
+these ports, selected release topology, and a real process journey remain
+subsequent slices, so no process yet invokes this workflow against repository
+code.
 
 ### Egress, limits, storage, and retention
 
@@ -1193,10 +1215,11 @@ configuration-write capability. Its heartbeat gates both process readiness
 and DevOps API readiness once any SourceConnection exists.
 
 These slices do not complete Gate A. Source readiness, credential lifecycle,
-observation, acquisition through an installed isolated process, and the pure
-fenced BuildExecutor boundary plus its table-blind PostgreSQL persistence are
-complete. Physical execution, reporting, normalized logs, remaining runtime
-quotas, check-receipt Audit facts, and pagination remain pending.
+observation, acquisition through an installed isolated process, the fenced
+BuildExecutor boundary, and authenticated tenant-leading normalized-log
+persistence are complete. Physical runner execution, public log reads,
+reporting, remaining runtime quotas, check-receipt Audit facts, and pagination
+remain pending.
 
 Current verification evidence:
 
@@ -1364,7 +1387,22 @@ Current verification evidence:
   race detection and twenty-run repetition on Windows and twenty runs in the
   fixed disconnected Go 1.26.8 Linux/amd64 image with read-only source and
   module cache; this is orchestration evidence, not physical runner-process,
-  normalized-log persistence, repository-execution, or gVisor evidence
+  repository-execution, or gVisor evidence
+- versioned normalized-log contract, gateway spool, and build-worker drain
+  tests prove complete labeled-line grammar, 64 KiB chunks, run-leading byte and
+  sequence cursors, exact two-step ordering, atomic spool publication and
+  restart validation, mTLS role/fence binding, foreign-runner denial, exact
+  replay across a recovered runner fence, changed and mid-batch conflict, and
+  terminal reads. The build use case retains the VERIFY intent when log
+  evidence cannot be drained and persists every proved batch before its
+  receipt. A real fixed PostgreSQL 18.6 migration journey proves a
+  tenant-leading forced-RLS table, table-blind current-fence writes, independent
+  execution/chunk/batch digest verification, five malformed/tampered document
+  rejections, idempotent equality, ordered two-batch storage, exact 14-day
+  expiry, stale-fence rejection, and append closure after task completion. All
+  affected packages pass race detection and twenty-run repetition on Windows
+  plus twenty runs in the fixed disconnected Go 1.26.8 Linux/amd64 image with
+  read-only source and module cache
 - the shared source-archive reader proves the portable receipt independently,
   matches it to the private deterministic store, structurally inspects and
   hashes the archive before handoff, and verifies its length and digest again

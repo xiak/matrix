@@ -147,6 +147,8 @@ type RunnerLogPublisher interface {
 		context.Context,
 		devopsbuildv1.Assignment,
 		devopsv1.VerificationStep,
+		runnerlog.Progress,
+		runnerlog.Progress,
 		[]runnerlog.Chunk,
 	) error
 }

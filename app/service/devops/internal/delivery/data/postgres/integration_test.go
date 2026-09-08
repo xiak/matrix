@@ -1570,6 +1570,9 @@ func assertRunLifecyclePersistenceAndFencing(
 			err,
 		)
 	}
+	firstBuildLog := assertBuildLogPersistence(
+		t, ctx, admin, workerPool, buildRepository, firstBuild, recoveredBuild,
+	)
 	if _, err := buildRepository.Complete(ctx, buildexecution.Completion{
 		Command: firstBuild, State: devopsv1.PipelineRunReporting,
 		Receipt: buildReceipt(firstBuild, devopsbuildv1.ConclusionPassed),
@@ -1581,6 +1584,11 @@ func assertRunLifecyclePersistenceAndFencing(
 		Receipt: buildReceipt(recoveredBuild, devopsbuildv1.ConclusionPassed),
 	}); err != nil {
 		t.Fatalf("complete recovered build task: %v", err)
+	}
+	if err := buildRepository.AppendLogs(
+		ctx, recoveredBuild, firstBuildLog,
+	); !errors.Is(err, runlifecycle.ErrStaleLease) {
+		t.Fatalf("completed build accepted a log replay: %v", err)
 	}
 	report := claimExpectedRunStage(
 		t, ctx, queue, recovered.Run.ID, devopsv1.PipelineRunReporting,
@@ -1973,6 +1981,230 @@ func buildReceipt(
 	}
 	receipt.ContentDigest = devopsbuildv1.DigestReceipt(receipt)
 	return &receipt
+}
+
+func assertBuildLogPersistence(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	workerPool *pgxpool.Pool,
+	repository *devopspostgres.BuildExecutionRepository,
+	stale buildexecution.Command,
+	current buildexecution.Command,
+) devopsbuildv1.LogBatch {
+	t.Helper()
+	request := buildRequest(t, current)
+	first := postgresBuildLogBatch(
+		t, request, request.Steps[0], devopsbuildv1.LogProgress{},
+		[]string{"[stdout] test ok\n", "[stdout] coverage ok\n"},
+	)
+	second := postgresBuildLogBatch(
+		t, request, request.Steps[1], first.Next, []string{"[stdout] vet ok\n"},
+	)
+	if err := repository.AppendLogs(
+		ctx, stale, first,
+	); !errors.Is(err, runlifecycle.ErrStaleLease) {
+		t.Fatalf("stale build log fence error=%v", err)
+	}
+	assertBuildLogTamperRejected(t, ctx, workerPool, current, first)
+	if err := repository.AppendLogs(ctx, current, first); err != nil {
+		t.Fatalf("append first build logs: %v", err)
+	}
+	if err := repository.AppendLogs(ctx, current, first); err != nil {
+		t.Fatalf("replay equal first build logs: %v", err)
+	}
+	changed := first
+	changed.Chunks = append([]devopsbuildv1.LogChunk(nil), first.Chunks...)
+	changed.Chunks[0].Content = "[stdout] best ok\n"
+	changed.Chunks[0].ContentDigest = devopsbuildv1.DigestLogChunk(
+		changed.ExecutionID, changed.Step, changed.Chunks[0],
+	)
+	changed.ContentDigest = devopsbuildv1.DigestLogBatch(changed)
+	if err := repository.AppendLogs(ctx, current, changed); err == nil {
+		t.Fatal("changed build log sequence replay succeeded")
+	} else {
+		assertPostgresCode(t, err, "MX409")
+	}
+	if err := repository.AppendLogs(ctx, current, second); err != nil {
+		t.Fatalf("append second build logs: %v", err)
+	}
+
+	var (
+		count           int
+		minimumSequence int64
+		maximumSequence int64
+		maximumBytes    int64
+		expiredExactly  bool
+	)
+	if err := admin.QueryRow(
+		ctx,
+		`SELECT count(*), min(last_sequence), max(last_sequence),
+		        max(next_normalized_bytes),
+		        bool_and(expires_at = created_at + interval '14 days')
+		   FROM delivery.pipeline_run_logs
+		  WHERE tenant_id = $1 AND run_id = $2 AND command_id = $3`,
+		current.Lease.TenantID,
+		current.Lease.Run.ID,
+		current.Lease.Intent.CommandID,
+	).Scan(
+		&count, &minimumSequence, &maximumSequence, &maximumBytes, &expiredExactly,
+	); err != nil || count != 2 || minimumSequence != int64(first.Next.LastSequence) ||
+		maximumSequence != int64(second.Next.LastSequence) ||
+		maximumBytes != second.Next.NormalizedBytes || !expiredExactly {
+		t.Fatalf(
+			"stored build logs count=%d sequence=%d..%d bytes=%d retention=%t err=%v",
+			count, minimumSequence, maximumSequence, maximumBytes, expiredExactly, err,
+		)
+	}
+	return first
+}
+
+func assertBuildLogTamperRejected(
+	t *testing.T,
+	ctx context.Context,
+	workerPool *pgxpool.Pool,
+	command buildexecution.Command,
+	batch devopsbuildv1.LogBatch,
+) {
+	t.Helper()
+	valid, err := json.Marshal(batch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name        string
+		wantMessage string
+		mutate      func(map[string]any)
+	}{
+		{
+			name: "unknown field", wantMessage: "build log batch is invalid",
+			mutate: func(value map[string]any) { value["native"] = "forbidden" },
+		},
+		{
+			name: "execution identity", wantMessage: "build log execution identity is invalid",
+			mutate: func(value map[string]any) {
+				value["executionId"] = "sha256:" + strings.Repeat("f", 64)
+			},
+		},
+		{
+			name: "chunk digest", wantMessage: "build log chunk digest is invalid",
+			mutate: func(value map[string]any) {
+				value["chunks"].([]any)[0].(map[string]any)["contentDigest"] =
+					"sha256:" + strings.Repeat("f", 64)
+			},
+		},
+		{
+			name: "batch digest", wantMessage: "build log batch digest is invalid",
+			mutate: func(value map[string]any) {
+				value["contentDigest"] = "sha256:" + strings.Repeat("f", 64)
+			},
+		},
+		{
+			name: "control content", wantMessage: "build log chunk content is invalid",
+			mutate: func(value map[string]any) {
+				value["chunks"].([]any)[0].(map[string]any)["content"] =
+					"[stdout] unsafe\x1b[31m"
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run("database rejects build log "+test.name, func(t *testing.T) {
+			var document map[string]any
+			if err := json.Unmarshal(valid, &document); err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(document)
+			submitted, err := json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = workerPool.Exec(
+				ctx,
+				`SELECT delivery.append_build_logs($1, $2, $3, $4, $5, $6)`,
+				command.Lease.TenantID,
+				command.Lease.Run.ID,
+				command.Lease.Intent.CommandID,
+				command.Lease.WorkerID,
+				int64(command.Lease.FencingToken),
+				submitted,
+			)
+			var postgresError *pgconn.PgError
+			if !errors.As(err, &postgresError) || postgresError.Code != "22023" ||
+				postgresError.Message != test.wantMessage {
+				t.Fatalf("changed build logs error=%v", err)
+			}
+		})
+	}
+}
+
+func buildRequest(
+	t *testing.T,
+	command buildexecution.Command,
+) devopsbuildv1.Request {
+	t.Helper()
+	steps := command.Revision.Spec.Steps
+	request := devopsbuildv1.Request{
+		TenantID:               command.Lease.TenantID,
+		RunID:                  command.Lease.Run.ID,
+		CommandID:              command.Lease.Intent.CommandID,
+		InputDigest:            command.Lease.Run.InputDigest,
+		SourceArchiveDigest:    command.Archive.ArchiveDigest,
+		SourceArchiveBytes:     command.Archive.ArchiveBytes,
+		SourceExpandedBytes:    command.Archive.ExpandedBytes,
+		SourcePathCount:        command.Archive.PathCount,
+		PipelineRevisionID:     command.Revision.ID,
+		PipelineRevisionDigest: command.Revision.ContentDigest,
+		VerificationProfile:    command.Revision.Spec.VerificationProfile,
+		ExecutorProfile:        command.Revision.Spec.ExecutorProfile,
+		ToolchainImageDigest:   command.Revision.Spec.ToolchainImageDigest,
+		DependencyEgress:       command.Revision.Spec.DependencyEgress,
+		Steps:                  [2]devopsv1.VerificationStep{steps[0], steps[1]},
+		Limits:                 command.Revision.Spec.Limits,
+		StartedAt:              command.StartedAt,
+		DeadlineAt:             command.DeadlineAt,
+	}
+	if err := devopsbuildv1.ValidateRequest(request); err != nil {
+		t.Fatal(err)
+	}
+	return request
+}
+
+func postgresBuildLogBatch(
+	t *testing.T,
+	request devopsbuildv1.Request,
+	step devopsv1.VerificationStep,
+	previous devopsbuildv1.LogProgress,
+	contents []string,
+) devopsbuildv1.LogBatch {
+	t.Helper()
+	executionID, err := devopsbuildv1.ExecutionID(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := devopsbuildv1.LogBatch{
+		ExecutionID: executionID,
+		Step:        step,
+		Previous:    previous,
+		Next:        previous,
+		Chunks:      make([]devopsbuildv1.LogChunk, len(contents)),
+	}
+	for index, content := range contents {
+		batch.Chunks[index] = devopsbuildv1.LogChunk{
+			Sequence: previous.LastSequence + uint64(index) + 1,
+			Content:  content,
+		}
+		batch.Chunks[index].ContentDigest = devopsbuildv1.DigestLogChunk(
+			batch.ExecutionID, batch.Step, batch.Chunks[index],
+		)
+		batch.Next.NativeBytes += int64(len(content))
+		batch.Next.NormalizedBytes += int64(len(content))
+	}
+	batch.Next.LastSequence += uint64(len(contents))
+	batch.ContentDigest = devopsbuildv1.DigestLogBatch(batch)
+	if err := devopsbuildv1.ValidateLogBatch(request, batch); err != nil {
+		t.Fatal(err)
+	}
+	return batch
 }
 
 func claimExpectedSourceFetch(

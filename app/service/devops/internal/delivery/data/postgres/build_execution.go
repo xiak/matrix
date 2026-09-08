@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	devopsbuildv1 "github.com/xiak/matrix/api/adapter/devopsbuild/v1"
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/buildexecution"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runlifecycle"
@@ -170,6 +171,42 @@ func (repository *BuildExecutionRepository) Renew(
 		return time.Time{}, mapRunLifecycleError("renew build task", err)
 	}
 	return expiresAt.UTC(), nil
+}
+
+func (repository *BuildExecutionRepository) AppendLogs(
+	ctx context.Context,
+	command buildexecution.Command,
+	batch devopsbuildv1.LogBatch,
+) error {
+	if repository == nil || repository.pool == nil || ctx == nil {
+		return errors.New("build log repository is unavailable")
+	}
+	if err := buildexecution.ValidateLogAppend(command, batch); err != nil {
+		return err
+	}
+	document, err := json.Marshal(batch)
+	if err != nil {
+		return fmt.Errorf("encode build logs: %w", err)
+	}
+	lease := command.Lease
+	var storedSequence int64
+	err = repository.pool.QueryRow(
+		ctx,
+		`SELECT delivery.append_build_logs($1, $2, $3, $4, $5, $6)`,
+		lease.TenantID,
+		lease.Run.ID,
+		lease.Intent.CommandID,
+		lease.WorkerID,
+		int64(lease.FencingToken),
+		document,
+	).Scan(&storedSequence)
+	if err != nil {
+		return mapRunLifecycleError("append build logs", err)
+	}
+	if storedSequence <= 0 || uint64(storedSequence) != batch.Next.LastSequence {
+		return errors.New("stored build log cursor is invalid")
+	}
+	return nil
 }
 
 func (repository *BuildExecutionRepository) Complete(

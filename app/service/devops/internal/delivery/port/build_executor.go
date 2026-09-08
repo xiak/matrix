@@ -28,3 +28,13 @@ type BuildExecutor interface {
 	Observe(context.Context, devopsbuildv1.Request) (devopsbuildv1.Receipt, bool, error)
 	Cancel(context.Context, devopsbuildv1.Request) (devopsbuildv1.Receipt, bool, error)
 }
+
+// BuildLogSource exposes normalized durable runner output independently from
+// the terminal receipt. Callers advance only at complete batch boundaries.
+type BuildLogSource interface {
+	ReadLogs(
+		context.Context,
+		devopsbuildv1.Request,
+		uint64,
+	) (devopsbuildv1.LogBatch, bool, error)
+}

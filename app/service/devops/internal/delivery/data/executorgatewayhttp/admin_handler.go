@@ -25,6 +25,11 @@ type AdminSpool interface {
 	Create(context.Context, io.Reader) (devopsbuildv1.Observation, error)
 	Observe(context.Context, devopsbuildv1.Request) (devopsbuildv1.Observation, error)
 	Cancel(context.Context, devopsbuildv1.Request) (devopsbuildv1.Observation, error)
+	ReadLogs(
+		context.Context,
+		devopsbuildv1.Request,
+		uint64,
+	) (devopsbuildv1.LogBatch, bool, error)
 }
 
 type adminHandler struct {
@@ -56,15 +61,15 @@ func (handler *adminHandler) ServeHTTP(response http.ResponseWriter, request *ht
 		writeEmpty(response, http.StatusMethodNotAllowed)
 		return
 	}
-	if !hasSingleHeader(request, "Accept", devopsbuildv1.DocumentMediaType) {
-		writeEmpty(response, http.StatusNotAcceptable)
-		return
-	}
 	if request.URL.Path == executionsPath {
+		if !hasSingleHeader(request, "Accept", devopsbuildv1.DocumentMediaType) {
+			writeEmpty(response, http.StatusNotAcceptable)
+			return
+		}
 		handler.create(response, request)
 		return
 	}
-	handler.control(response, request)
+	handler.execution(response, request)
 }
 
 func (handler *adminHandler) create(
@@ -91,7 +96,7 @@ func (handler *adminHandler) create(
 	writeObservation(response, observation, status)
 }
 
-func (handler *adminHandler) control(
+func (handler *adminHandler) execution(
 	response http.ResponseWriter,
 	request *http.Request,
 ) {
@@ -100,8 +105,16 @@ func (handler *adminHandler) control(
 	parts := strings.Split(remainder, "/")
 	if remainder == request.URL.Path || len(parts) != 2 ||
 		devopsv1.ValidateDigest("executionId", parts[0]) != nil ||
-		(parts[1] != "observe" && parts[1] != "cancel") {
+		(parts[1] != "observe" && parts[1] != "cancel" && parts[1] != "logs") {
 		writeEmpty(response, http.StatusNotFound)
+		return
+	}
+	accept := devopsbuildv1.DocumentMediaType
+	if parts[1] == "logs" {
+		accept = devopsbuildv1.LogDocumentMediaType
+	}
+	if !hasSingleHeader(request, "Accept", accept) {
+		writeEmpty(response, http.StatusNotAcceptable)
 		return
 	}
 	content, ok := readDocumentRequest(response, request)
@@ -109,14 +122,29 @@ func (handler *adminHandler) control(
 		writeEmpty(response, http.StatusBadRequest)
 		return
 	}
+	if parts[1] == "logs" {
+		handler.logs(response, request, parts[0], content)
+		return
+	}
+	handler.control(response, request, parts[0], parts[1], content)
+}
+
+func (handler *adminHandler) control(
+	response http.ResponseWriter,
+	request *http.Request,
+	executionID string,
+	operation string,
+	content []byte,
+) {
 	var err error
 	action, buildRequest, err := devopsbuildv1.DecodeControl(content)
 	wantAction := devopsbuildv1.ControlObserve
-	if parts[1] == "cancel" {
+	if operation == "cancel" {
 		wantAction = devopsbuildv1.ControlCancel
 	}
-	executionID, executionErr := devopsbuildv1.ExecutionID(buildRequest)
-	if err != nil || executionErr != nil || action != wantAction || executionID != parts[0] {
+	requestExecutionID, executionErr := devopsbuildv1.ExecutionID(buildRequest)
+	if err != nil || executionErr != nil || action != wantAction ||
+		requestExecutionID != executionID {
 		writeEmpty(response, http.StatusBadRequest)
 		return
 	}
@@ -131,6 +159,40 @@ func (handler *adminHandler) control(
 		return
 	}
 	writeObservation(response, observation, http.StatusOK)
+}
+
+func (handler *adminHandler) logs(
+	response http.ResponseWriter,
+	request *http.Request,
+	executionID string,
+	content []byte,
+) {
+	buildRequest, afterSequence, err := devopsbuildv1.DecodeLogRead(content)
+	requestExecutionID, executionErr := devopsbuildv1.ExecutionID(buildRequest)
+	if err != nil || executionErr != nil || requestExecutionID != executionID {
+		writeEmpty(response, http.StatusBadRequest)
+		return
+	}
+	batch, found, err := handler.spool.ReadLogs(
+		request.Context(), buildRequest, afterSequence,
+	)
+	if err != nil {
+		writeSpoolError(response, err)
+		return
+	}
+	if !found {
+		writeEmpty(response, http.StatusNoContent)
+		return
+	}
+	encoded, err := devopsbuildv1.EncodeLogBatch(buildRequest, batch)
+	if err != nil || int64(len(encoded)) > devopsbuildv1.MaximumLogDocumentBytes {
+		writeEmpty(response, http.StatusServiceUnavailable)
+		return
+	}
+	response.Header().Set("Content-Type", devopsbuildv1.LogDocumentMediaType)
+	response.Header().Set("Content-Length", strconv.Itoa(len(encoded)))
+	response.WriteHeader(http.StatusOK)
+	_, _ = response.Write(encoded)
 }
 
 func writeObservation(

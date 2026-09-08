@@ -13,10 +13,13 @@ import (
 	"time"
 
 	devopsbuildv1 "github.com/xiak/matrix/api/adapter/devopsbuild/v1"
+	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/port"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/runnerlog"
 )
 
 var _ port.RunnerGateway = (*RunnerClient)(nil)
+var _ port.RunnerLogPublisher = (*RunnerClient)(nil)
 
 var (
 	ErrRunnerInvalid        = errors.New("executor runner request is invalid")
@@ -114,7 +117,7 @@ func (client *RunnerClient) Claim(
 	}
 	response, err := client.post(
 		ctx, client.origin+runnerClaimsPath,
-		devopsbuildv1.FramedMediaType, content,
+		devopsbuildv1.DocumentMediaType, devopsbuildv1.FramedMediaType, content,
 	)
 	if err != nil {
 		return devopsbuildv1.Assignment{}, false, err
@@ -160,7 +163,10 @@ func (client *RunnerClient) Renew(
 		return devopsbuildv1.Renewal{}, ErrRunnerInvalid
 	}
 	target := client.executionTarget(assignment.ExecutionID, "renew")
-	response, err := client.post(ctx, target, devopsbuildv1.DocumentMediaType, content)
+	response, err := client.post(
+		ctx, target, devopsbuildv1.DocumentMediaType,
+		devopsbuildv1.DocumentMediaType, content,
+	)
 	if err != nil {
 		return devopsbuildv1.Renewal{}, err
 	}
@@ -204,7 +210,56 @@ func (client *RunnerClient) Complete(
 		return ErrRunnerInvalid
 	}
 	target := client.executionTarget(assignment.ExecutionID, "complete")
-	response, err := client.post(ctx, target, devopsbuildv1.DocumentMediaType, content)
+	response, err := client.post(
+		ctx, target, devopsbuildv1.DocumentMediaType,
+		devopsbuildv1.DocumentMediaType, content,
+	)
+	if err != nil {
+		return err
+	}
+	return closeEmptyRunnerResponse(response, http.StatusNoContent)
+}
+
+func (client *RunnerClient) Publish(
+	ctx context.Context,
+	assignment devopsbuildv1.Assignment,
+	step devopsv1.VerificationStep,
+	previous runnerlog.Progress,
+	next runnerlog.Progress,
+	chunks []runnerlog.Chunk,
+) error {
+	if client == nil || client.httpClient == nil || client.runnerID == "" || ctx == nil ||
+		devopsbuildv1.ValidateAssignment(assignment) != nil ||
+		runnerlog.ValidateBatch(previous, next, chunks) != nil || len(chunks) == 0 {
+		return ErrRunnerInvalid
+	}
+	batch := devopsbuildv1.LogBatch{
+		ExecutionID: assignment.ExecutionID,
+		Step:        step,
+		Previous:    transportLogProgress(previous),
+		Next:        transportLogProgress(next),
+		Chunks:      make([]devopsbuildv1.LogChunk, len(chunks)),
+	}
+	for index, chunk := range chunks {
+		batch.Chunks[index] = devopsbuildv1.LogChunk{
+			Sequence: chunk.Sequence, Content: chunk.Content,
+		}
+		batch.Chunks[index].ContentDigest = devopsbuildv1.DigestLogChunk(
+			batch.ExecutionID, batch.Step, batch.Chunks[index],
+		)
+	}
+	batch.ContentDigest = devopsbuildv1.DigestLogBatch(batch)
+	content, err := devopsbuildv1.EncodeLogAppend(
+		assignment.Request, assignment.FencingToken, batch,
+	)
+	if err != nil {
+		return ErrRunnerInvalid
+	}
+	target := client.executionTarget(assignment.ExecutionID, "logs")
+	response, err := client.post(
+		ctx, target, devopsbuildv1.LogDocumentMediaType,
+		devopsbuildv1.LogDocumentMediaType, content,
+	)
 	if err != nil {
 		return err
 	}
@@ -219,6 +274,7 @@ func (client *RunnerClient) executionTarget(executionID, action string) string {
 func (client *RunnerClient) post(
 	ctx context.Context,
 	target string,
+	contentType string,
 	accept string,
 	content []byte,
 ) (*http.Response, error) {
@@ -229,7 +285,7 @@ func (client *RunnerClient) post(
 		return nil, ErrRunnerInvalid
 	}
 	request.ContentLength = int64(len(content))
-	request.Header.Set("Content-Type", devopsbuildv1.DocumentMediaType)
+	request.Header.Set("Content-Type", contentType)
 	request.Header.Set("Accept", accept)
 	request.Header.Set("User-Agent", "matrix-devops-runner/v1")
 	response, err := client.httpClient.Do(request)
@@ -240,6 +296,13 @@ func (client *RunnerClient) post(
 		return nil, ErrRunnerOutcomeUnknown
 	}
 	return response, nil
+}
+
+func transportLogProgress(value runnerlog.Progress) devopsbuildv1.LogProgress {
+	return devopsbuildv1.LogProgress{
+		NativeBytes: value.NativeBytes, NormalizedBytes: value.NormalizedBytes,
+		LastSequence: value.LastSequence,
+	}
 }
 
 func readRunnerDocument(response *http.Response) ([]byte, error) {

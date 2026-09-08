@@ -319,6 +319,9 @@ func (spool *Spool) Claim(
 	if err != nil || !found {
 		return devopsbuildv1.Assignment{}, nil, false, errors.Join(ErrUnavailable, err)
 	}
+	if _, err := readLogBatches(ctx, root, execution); err != nil {
+		return devopsbuildv1.Assignment{}, nil, false, err
+	}
 	leaseExpiresAt := observedAt.Add(RunnerLeaseDuration)
 	if leaseExpiresAt.After(execution.request.DeadlineAt) {
 		leaseExpiresAt = execution.request.DeadlineAt
@@ -458,6 +461,9 @@ func (spool *Spool) Complete(
 	}
 	if !found {
 		return devopsbuildv1.Observation{}, ErrNotFound
+	}
+	if _, err := readLogBatches(ctx, root, execution); err != nil {
+		return devopsbuildv1.Observation{}, err
 	}
 	if execution.state.Phase == phaseTerminal {
 		if execution.state.RunnerID == runnerID &&

@@ -231,7 +231,8 @@ func (service *Service) publishAndConclude(
 		}
 		if len(result.Chunks) > 0 {
 			if err := service.logs.Publish(
-				ctx, entry.Assignment, step, result.Chunks,
+				ctx, entry.Assignment, step, entry.LogProgress,
+				result.LogProgress, result.Chunks,
 			); err != nil {
 				return port.RunnerJournalEntry{}, errors.Join(ErrOutcomeUnknown, err)
 			}

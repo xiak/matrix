@@ -121,6 +121,43 @@ func (client *AdminClient) Cancel(
 	return client.await(ctx, request, observation, devopsbuildv1.ControlCancel)
 }
 
+func (client *AdminClient) ReadLogs(
+	ctx context.Context,
+	request devopsbuildv1.Request,
+	afterSequence uint64,
+) (devopsbuildv1.LogBatch, bool, error) {
+	if client == nil || client.httpClient == nil || ctx == nil ||
+		devopsbuildv1.ValidateRequest(request) != nil {
+		return devopsbuildv1.LogBatch{}, false, port.ErrBuildConflict
+	}
+	content, err := devopsbuildv1.EncodeLogRead(request, afterSequence)
+	if err != nil {
+		return devopsbuildv1.LogBatch{}, false, port.ErrBuildConflict
+	}
+	executionID, _ := devopsbuildv1.ExecutionID(request)
+	target := client.origin + executionsPath + "/" +
+		url.PathEscape(executionID) + "/logs"
+	httpRequest, err := http.NewRequestWithContext(
+		ctx, http.MethodPost, target, bytes.NewReader(content),
+	)
+	if err != nil {
+		return devopsbuildv1.LogBatch{}, false, port.ErrBuildConflict
+	}
+	httpRequest.ContentLength = int64(len(content))
+	setRequestHeaders(
+		httpRequest, devopsbuildv1.DocumentMediaType,
+		devopsbuildv1.LogDocumentMediaType,
+	)
+	response, err := client.httpClient.Do(httpRequest)
+	if err != nil {
+		if ctx.Err() != nil {
+			return devopsbuildv1.LogBatch{}, false, ctx.Err()
+		}
+		return devopsbuildv1.LogBatch{}, false, port.ErrBuildUnavailable
+	}
+	return decodeLogResponse(request, afterSequence, response)
+}
+
 func (client *AdminClient) create(
 	ctx context.Context,
 	request devopsbuildv1.Request,
@@ -150,7 +187,10 @@ func (client *AdminClient) create(
 		return devopsbuildv1.Observation{}, port.ErrBuildConflict
 	}
 	httpRequest.ContentLength = contentLength
-	setRequestHeaders(httpRequest, devopsbuildv1.FramedMediaType)
+	setRequestHeaders(
+		httpRequest, devopsbuildv1.FramedMediaType,
+		devopsbuildv1.DocumentMediaType,
+	)
 	response, requestErr := client.httpClient.Do(httpRequest)
 	_ = reader.CloseWithError(requestErr)
 	writeErr := <-writeDone
@@ -186,7 +226,10 @@ func (client *AdminClient) control(
 		return devopsbuildv1.Observation{}, port.ErrBuildConflict
 	}
 	httpRequest.ContentLength = int64(len(content))
-	setRequestHeaders(httpRequest, devopsbuildv1.DocumentMediaType)
+	setRequestHeaders(
+		httpRequest, devopsbuildv1.DocumentMediaType,
+		devopsbuildv1.DocumentMediaType,
+	)
 	response, err := client.httpClient.Do(httpRequest)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -277,9 +320,64 @@ func decodeAdminResponse(
 	return observation, nil
 }
 
-func setRequestHeaders(request *http.Request, contentType string) {
+func decodeLogResponse(
+	request devopsbuildv1.Request,
+	afterSequence uint64,
+	response *http.Response,
+) (devopsbuildv1.LogBatch, bool, error) {
+	if response == nil || response.Body == nil {
+		return devopsbuildv1.LogBatch{}, false, port.ErrBuildOutcomeUnknown
+	}
+	defer response.Body.Close()
+	if response.StatusCode == http.StatusNoContent {
+		content, readErr := io.ReadAll(io.LimitReader(response.Body, 1))
+		if readErr != nil || len(content) != 0 || response.ContentLength != 0 ||
+			len(response.TransferEncoding) != 0 ||
+			response.Header.Get("Content-Encoding") != "" ||
+			response.Header.Get("Content-Type") != "" {
+			return devopsbuildv1.LogBatch{}, false, port.ErrBuildOutcomeUnknown
+		}
+		return devopsbuildv1.LogBatch{}, false, nil
+	}
+	if response.StatusCode != http.StatusOK {
+		content, readErr := io.ReadAll(io.LimitReader(response.Body, 1))
+		if readErr != nil || len(content) != 0 || response.ContentLength != 0 ||
+			len(response.TransferEncoding) != 0 ||
+			response.Header.Get("Content-Encoding") != "" {
+			return devopsbuildv1.LogBatch{}, false, port.ErrBuildOutcomeUnknown
+		}
+		switch response.StatusCode {
+		case http.StatusBadRequest, http.StatusConflict:
+			return devopsbuildv1.LogBatch{}, false, port.ErrBuildConflict
+		case http.StatusNotFound, http.StatusServiceUnavailable:
+			return devopsbuildv1.LogBatch{}, false, port.ErrBuildUnavailable
+		default:
+			return devopsbuildv1.LogBatch{}, false, port.ErrBuildOutcomeUnknown
+		}
+	}
+	if !responseHasSingleHeader(
+		response, "Content-Type", devopsbuildv1.LogDocumentMediaType,
+	) || response.Header.Get("Content-Encoding") != "" ||
+		len(response.TransferEncoding) != 0 || response.ContentLength <= 0 ||
+		response.ContentLength > devopsbuildv1.MaximumLogDocumentBytes {
+		return devopsbuildv1.LogBatch{}, false, port.ErrBuildOutcomeUnknown
+	}
+	content, err := io.ReadAll(io.LimitReader(
+		response.Body, devopsbuildv1.MaximumLogDocumentBytes+1,
+	))
+	if err != nil || int64(len(content)) != response.ContentLength {
+		return devopsbuildv1.LogBatch{}, false, port.ErrBuildOutcomeUnknown
+	}
+	batch, err := devopsbuildv1.DecodeLogBatch(request, content)
+	if err != nil || batch.Previous.LastSequence != afterSequence {
+		return devopsbuildv1.LogBatch{}, false, port.ErrBuildOutcomeUnknown
+	}
+	return batch, true, nil
+}
+
+func setRequestHeaders(request *http.Request, contentType, accept string) {
 	request.Header.Set("Content-Type", contentType)
-	request.Header.Set("Accept", devopsbuildv1.DocumentMediaType)
+	request.Header.Set("Accept", accept)
 	request.Header.Set("User-Agent", "matrix-devops-build-worker/v1")
 }
 
@@ -347,3 +445,4 @@ func validServerName(value string) bool {
 }
 
 var _ port.BuildExecutor = (*AdminClient)(nil)
+var _ port.BuildLogSource = (*AdminClient)(nil)

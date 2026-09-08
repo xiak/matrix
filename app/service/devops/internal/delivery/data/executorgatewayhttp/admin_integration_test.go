@@ -167,7 +167,10 @@ func TestAdminListenerRejectsWrongIdentityTLSVersionAndBearerAuthority(t *testin
 		t.Fatal(err)
 	}
 	httpRequest.ContentLength = int64(len(control))
-	setRequestHeaders(httpRequest, devopsbuildv1.DocumentMediaType)
+	setRequestHeaders(
+		httpRequest, devopsbuildv1.DocumentMediaType,
+		devopsbuildv1.DocumentMediaType,
+	)
 	httpRequest.Header.Set("Authorization", "Bearer must-not-enter")
 	response, err := authorized.httpClient.Do(httpRequest)
 	if err != nil {

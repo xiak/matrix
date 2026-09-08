@@ -64,6 +64,7 @@ BEGIN
             ('repository_binding_revisions'), ('pipelines'),
             ('pipeline_revisions'), ('source_events'), ('pipeline_runs'),
             ('pipeline_run_tasks'), ('source_archives'), ('build_receipts'),
+            ('pipeline_run_logs'),
             ('mutations'), ('audit_operations'),
             ('audit_outbox'), ('source_observation_tasks'),
             ('source_fetcher_heartbeat'), ('source_observer_heartbeat'),
@@ -96,6 +97,7 @@ BEGIN
             ('repository_binding_revisions'), ('pipelines'),
             ('pipeline_revisions'), ('source_events'), ('pipeline_runs'),
             ('pipeline_run_tasks'), ('source_archives'), ('build_receipts'),
+            ('pipeline_run_logs'),
             ('mutations'), ('audit_operations'),
             ('audit_outbox'), ('source_observation_tasks')
      ) AS required(table_name)
@@ -176,12 +178,13 @@ BEGIN
         RAISE EXCEPTION 'PipelineRun replay identity columns are missing or unsafe';
     END IF;
     IF to_regclass('delivery.pipeline_runs_event_revision_original_uq') IS NULL
+       OR to_regclass('delivery.pipeline_run_logs_expiry_idx') IS NULL
        OR EXISTS (
             SELECT 1 FROM pg_catalog.pg_constraint
              WHERE connamespace = 'delivery'::regnamespace
                AND conname = 'pipeline_runs_event_revision_uq'
        ) THEN
-        RAISE EXCEPTION 'PipelineRun original-admission uniqueness is invalid';
+        RAISE EXCEPTION 'PipelineRun or log indexes are invalid';
     END IF;
     IF NOT EXISTS (
         SELECT 1 FROM pg_catalog.pg_policies AS policy
@@ -237,6 +240,7 @@ BEGIN
         VALUES
             ('pipeline_revisions'), ('pipeline_runs'),
             ('pipeline_run_tasks'), ('source_archives'), ('build_receipts'),
+            ('pipeline_run_logs'),
             ('build_worker_heartbeat'), ('audit_operations'), ('audit_outbox')
       ) AS required(table_name)
      WHERE NOT EXISTS (
@@ -311,6 +315,9 @@ BEGIN
             ('source_archives_values_valid'),
             ('build_receipts_command_uq'), ('build_receipts_run_fk'),
             ('build_receipts_revision_fk'), ('build_receipts_values_valid'),
+            ('pipeline_run_logs_command_step_uq'),
+            ('pipeline_run_logs_run_fk'), ('pipeline_run_logs_task_fk'),
+            ('pipeline_run_logs_values_valid'),
             ('mutations_idempotency_uq'), ('mutations_audit_operation_fk'),
             ('audit_outbox_operation_fk'),
             ('audit_outbox_delivery_state_valid'),
@@ -397,6 +404,8 @@ BEGIN
              'requested_worker_id text, requested_lease_seconds integer'),
             ('renew_build_task',
              'requested_tenant_id text, requested_run_id text, requested_command_id text, requested_worker_id text, expected_fencing_token bigint, requested_lease_seconds integer'),
+            ('append_build_logs',
+             'requested_tenant_id text, requested_run_id text, requested_command_id text, requested_worker_id text, expected_fencing_token bigint, submitted_batch jsonb'),
             ('complete_build_task',
              'requested_tenant_id text, requested_run_id text, requested_command_id text, requested_worker_id text, expected_fencing_token bigint, requested_state text, requested_reason text, submitted_receipt jsonb, submitted_run_document jsonb, submitted_audit_event jsonb'),
             ('renew_pipeline_run_task',
@@ -568,6 +577,16 @@ BEGIN
        OR has_function_privilege(
             'matrix_devops_api',
             'delivery.renew_build_task(text,text,text,text,bigint,integer)',
+            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_devops_worker',
+            'delivery.append_build_logs(text,text,text,text,bigint,jsonb)',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_devops_api',
+            'delivery.append_build_logs(text,text,text,text,bigint,jsonb)',
             'EXECUTE'
        )
        OR NOT has_function_privilege(
@@ -747,6 +766,7 @@ BEGIN
                 'record_build_worker_heartbeat',
                 'claim_build_task',
                 'renew_build_task',
+                'append_build_logs',
                 'complete_build_task',
                 'build_worker_readiness'
            )
@@ -825,7 +845,7 @@ BEGIN
         'projects', 'source_connections', 'repository_bindings',
         'repository_binding_revisions', 'pipelines', 'pipeline_revisions',
         'source_events', 'pipeline_runs', 'pipeline_run_tasks',
-        'source_archives', 'build_receipts', 'mutations',
+        'source_archives', 'build_receipts', 'pipeline_run_logs', 'mutations',
         'audit_operations', 'audit_outbox', 'source_observation_tasks',
         'source_fetcher_heartbeat', 'source_observer_heartbeat',
         'build_worker_heartbeat'
@@ -848,7 +868,8 @@ BEGIN
         END IF;
         IF table_name NOT IN (
             'pipeline_run_tasks', 'audit_outbox', 'audit_operations',
-            'source_archives', 'build_receipts', 'source_observation_tasks',
+            'source_archives', 'build_receipts', 'pipeline_run_logs',
+            'source_observation_tasks',
             'source_fetcher_heartbeat', 'source_observer_heartbeat',
             'build_worker_heartbeat'
         )
@@ -864,6 +885,7 @@ BEGIN
        OR has_table_privilege('matrix_devops_api', 'delivery.source_observation_tasks', 'SELECT')
        OR has_table_privilege('matrix_devops_api', 'delivery.source_archives', 'SELECT')
        OR has_table_privilege('matrix_devops_api', 'delivery.build_receipts', 'SELECT')
+       OR has_table_privilege('matrix_devops_api', 'delivery.pipeline_run_logs', 'SELECT')
        OR has_table_privilege('matrix_devops_api', 'delivery.source_fetcher_heartbeat', 'SELECT')
        OR has_table_privilege('matrix_devops_api', 'delivery.build_worker_heartbeat', 'SELECT')
        OR has_table_privilege('matrix_devops_api', 'delivery.source_observer_heartbeat', 'SELECT') THEN

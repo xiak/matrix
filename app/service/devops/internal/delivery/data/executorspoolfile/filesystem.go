@@ -26,6 +26,7 @@ const (
 	ownershipLockName  = ".gateway.lock"
 	maximumRootEntries = 256
 	maximumStateFiles  = 512
+	maximumLogBatches  = 2
 	stagingAttempts    = 16
 )
 
@@ -33,6 +34,7 @@ type storedExecution struct {
 	key     string
 	request devopsbuildv1.Request
 	state   stateRecord
+	entries executionEntries
 }
 
 func (spool *Spool) openRoot() (*os.Root, error) {
@@ -81,6 +83,16 @@ func recoverTemporaryEntries(root *os.Root) error {
 			continue
 		}
 		if validStateTemporaryName(name) {
+			if entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() {
+				return ErrUnavailable
+			}
+			if err := root.Remove(name); err != nil {
+				return err
+			}
+			removed = true
+			continue
+		}
+		if validLogTemporaryName(name) {
 			if entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() {
 				return ErrUnavailable
 			}
@@ -206,11 +218,14 @@ func readExecution(
 			return storedExecution{}, false, errors.Join(ErrUnavailable, closeErr)
 		}
 	}
-	return storedExecution{key: key, request: request, state: current}, true, nil
+	return storedExecution{
+		key: key, request: request, state: current, entries: entries,
+	}, true, nil
 }
 
 type executionEntries struct {
 	stateNames []string
+	logNames   []string
 }
 
 func readExecutionEntries(root *os.Root, key string) (executionEntries, error) {
@@ -218,17 +233,18 @@ func readExecutionEntries(root *os.Root, key string) (executionEntries, error) {
 	if err != nil {
 		return executionEntries{}, errors.Join(ErrUnavailable, err)
 	}
-	entries, readErr := directory.ReadDir(maximumStateFiles + 3)
+	entries, readErr := directory.ReadDir(maximumStateFiles + maximumLogBatches + 3)
 	closeErr := directory.Close()
 	if readErr != nil && !errors.Is(readErr, io.EOF) {
 		return executionEntries{}, errors.Join(ErrUnavailable, readErr, closeErr)
 	}
-	if closeErr != nil || len(entries) > maximumStateFiles+2 {
+	if closeErr != nil || len(entries) > maximumStateFiles+maximumLogBatches+2 {
 		return executionEntries{}, errors.Join(ErrUnavailable, closeErr)
 	}
 	foundSubmission := false
 	foundArchive := false
 	stateNames := make([]string, 0, len(entries)-2)
+	logNames := make([]string, 0, maximumLogBatches)
 	for _, entry := range entries {
 		if entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() {
 			return executionEntries{}, ErrUnavailable
@@ -245,18 +261,24 @@ func readExecutionEntries(root *os.Root, key string) (executionEntries, error) {
 			}
 			foundArchive = true
 		default:
-			if _, ok := stateVersion(entry.Name()); !ok {
-				return executionEntries{}, ErrUnavailable
+			if _, ok := stateVersion(entry.Name()); ok {
+				stateNames = append(stateNames, entry.Name())
+				continue
 			}
-			stateNames = append(stateNames, entry.Name())
+			if _, ok := logLastSequence(entry.Name()); ok {
+				logNames = append(logNames, entry.Name())
+				continue
+			}
+			return executionEntries{}, ErrUnavailable
 		}
 	}
 	if !foundSubmission || !foundArchive || len(stateNames) == 0 ||
-		len(stateNames) > maximumStateFiles {
+		len(stateNames) > maximumStateFiles || len(logNames) > maximumLogBatches {
 		return executionEntries{}, ErrUnavailable
 	}
 	sort.Strings(stateNames)
-	return executionEntries{stateNames: stateNames}, nil
+	sort.Strings(logNames)
+	return executionEntries{stateNames: stateNames, logNames: logNames}, nil
 }
 
 func openVerifiedArchive(

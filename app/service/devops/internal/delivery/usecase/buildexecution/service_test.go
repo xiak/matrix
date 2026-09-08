@@ -254,6 +254,94 @@ func TestBuildRenewsLeaseDuringExecutorCall(t *testing.T) {
 	}
 }
 
+func TestBuildPersistsOrderedLogBatchesBeforeCompletingReceipt(t *testing.T) {
+	command := buildCommand(t, runlifecycle.ClaimExecute)
+	request, err := requestForCommand(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := buildLogBatch(
+		t, request, request.Steps[0], devopsbuildv1.LogProgress{},
+		[]string{"[stdout] test ok\n", "[stdout] coverage ok\n"},
+	)
+	second := buildLogBatch(
+		t, request, request.Steps[1], first.Next, []string{"[stdout] vet ok\n"},
+	)
+	repository := newBuildRepository(command)
+	service, err := NewService(
+		repository,
+		&fakeArchiveReader{content: []byte("source archive")},
+		&fakeBuildExecutor{conclusion: devopsbuildv1.ConclusionPassed},
+		&fakeBuildLogSource{batches: []devopsbuildv1.LogBatch{first, second}},
+		Config{
+			WorkerID: "build-worker-one", LeaseDuration: LeaseDuration,
+			Deadline: ExecutionDeadline, CancelGrace: CancellationGrace,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.BuildOnce(context.Background())
+	if err != nil || result.Run.Status.State != devopsv1.PipelineRunReporting ||
+		len(repository.logBatches) != 2 ||
+		repository.logBatches[0].ContentDigest != first.ContentDigest ||
+		repository.logBatches[1].ContentDigest != second.ContentDigest ||
+		strings.Join(repository.events, ",") != "logs,logs,complete" {
+		t.Fatalf(
+			"result=%#v err=%v logs=%#v events=%v",
+			result, err, repository.logBatches, repository.events,
+		)
+	}
+}
+
+func TestBuildRetainsIntentWhenLogDrainCannotBeProved(t *testing.T) {
+	command := buildCommand(t, runlifecycle.ClaimExecute)
+	for name, source := range map[string]*fakeBuildLogSource{
+		"unavailable": {err: errors.New("gateway exposed token-secret-value")},
+		"invalid chain": {
+			forceFirst: true,
+			batches: []devopsbuildv1.LogBatch{func() devopsbuildv1.LogBatch {
+				request, err := requestForCommand(command)
+				if err != nil {
+					t.Fatal(err)
+				}
+				previous := devopsbuildv1.LogProgress{
+					NativeBytes: 4, NormalizedBytes: 4, LastSequence: 1,
+				}
+				return buildLogBatch(
+					t, request, request.Steps[1], previous, []string{"[stdout] late\n"},
+				)
+			}()},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			repository := newBuildRepository(command)
+			service, err := NewService(
+				repository,
+				&fakeArchiveReader{content: []byte("source archive")},
+				&fakeBuildExecutor{conclusion: devopsbuildv1.ConclusionPassed},
+				source,
+				Config{
+					WorkerID: "build-worker-one", LeaseDuration: LeaseDuration,
+					Deadline: ExecutionDeadline, CancelGrace: CancellationGrace,
+				},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, buildErr := service.BuildOnce(context.Background())
+			if !errors.Is(buildErr, ErrExecutionUncertain) ||
+				strings.Contains(buildErr.Error(), "token-secret-value") ||
+				!result.Claimed || repository.completeCalls != 0 {
+				t.Fatalf(
+					"result=%#v err=%v complete=%d",
+					result, buildErr, repository.completeCalls,
+				)
+			}
+		})
+	}
+}
+
 func TestBuildLeaseLossCancelsEffectAndRetainsIntentForObservation(t *testing.T) {
 	command := buildCommand(t, runlifecycle.ClaimExecute)
 	repository := newBuildRepository(command)
@@ -356,13 +444,20 @@ func TestBuildServiceRejectsOpenConfiguration(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			candidate := valid
 			mutate(&candidate)
-			if _, err := NewService(repository, archives, executor, candidate); err == nil {
+			if _, err := NewService(
+				repository, archives, executor, &fakeBuildLogSource{}, candidate,
+			); err == nil {
 				t.Fatal("open build configuration was accepted")
 			}
 		})
 	}
-	if _, err := NewService(nil, archives, executor, valid); err == nil {
+	if _, err := NewService(
+		nil, archives, executor, &fakeBuildLogSource{}, valid,
+	); err == nil {
 		t.Fatal("nil build repository was accepted")
+	}
+	if _, err := NewService(repository, archives, executor, nil, valid); err == nil {
+		t.Fatal("nil build log source was accepted")
 	}
 }
 
@@ -375,6 +470,8 @@ type fakeBuildRepository struct {
 	renewCount    int
 	renewErr      error
 	lastExpiry    time.Time
+	logBatches    []devopsbuildv1.LogBatch
+	events        []string
 }
 
 func newBuildRepository(command Command) *fakeBuildRepository {
@@ -412,6 +509,19 @@ func (repository *fakeBuildRepository) Renew(
 	return repository.lastExpiry, nil
 }
 
+func (repository *fakeBuildRepository) AppendLogs(
+	_ context.Context,
+	command Command,
+	batch devopsbuildv1.LogBatch,
+) error {
+	if err := ValidateLogAppend(command, batch); err != nil {
+		return err
+	}
+	repository.logBatches = append(repository.logBatches, batch)
+	repository.events = append(repository.events, "logs")
+	return nil
+}
+
 func (repository *fakeBuildRepository) renewCalls() int {
 	repository.mu.Lock()
 	defer repository.mu.Unlock()
@@ -424,6 +534,7 @@ func (repository *fakeBuildRepository) Complete(
 ) (devopsv1.PipelineRun, error) {
 	repository.completeCalls++
 	repository.completion = completion
+	repository.events = append(repository.events, "complete")
 	return domain.AdvancePipelineRun(
 		completion.Command.Lease.Run,
 		completion.State,
@@ -473,6 +584,69 @@ type fakeBuildExecutor struct {
 	cancelCalls   int
 	request       devopsbuildv1.Request
 	archive       []byte
+}
+
+type fakeBuildLogSource struct {
+	batches    []devopsbuildv1.LogBatch
+	err        error
+	forceFirst bool
+}
+
+func (source *fakeBuildLogSource) ReadLogs(
+	_ context.Context,
+	_ devopsbuildv1.Request,
+	afterSequence uint64,
+) (devopsbuildv1.LogBatch, bool, error) {
+	if source.err != nil {
+		return devopsbuildv1.LogBatch{}, false, source.err
+	}
+	if source.forceFirst && len(source.batches) > 0 {
+		return source.batches[0], true, nil
+	}
+	for _, batch := range source.batches {
+		if batch.Previous.LastSequence == afterSequence {
+			return batch, true, nil
+		}
+	}
+	return devopsbuildv1.LogBatch{}, false, nil
+}
+
+func buildLogBatch(
+	t *testing.T,
+	request devopsbuildv1.Request,
+	step devopsv1.VerificationStep,
+	previous devopsbuildv1.LogProgress,
+	contents []string,
+) devopsbuildv1.LogBatch {
+	t.Helper()
+	executionID, err := devopsbuildv1.ExecutionID(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := devopsbuildv1.LogBatch{
+		ExecutionID: executionID,
+		Step:        step,
+		Previous:    previous,
+		Next:        previous,
+		Chunks:      make([]devopsbuildv1.LogChunk, len(contents)),
+	}
+	for index, content := range contents {
+		batch.Chunks[index] = devopsbuildv1.LogChunk{
+			Sequence: previous.LastSequence + uint64(index) + 1,
+			Content:  content,
+		}
+		batch.Chunks[index].ContentDigest = devopsbuildv1.DigestLogChunk(
+			batch.ExecutionID, batch.Step, batch.Chunks[index],
+		)
+		batch.Next.NativeBytes += int64(len(content))
+		batch.Next.NormalizedBytes += int64(len(content))
+	}
+	batch.Next.LastSequence += uint64(len(contents))
+	batch.ContentDigest = devopsbuildv1.DigestLogBatch(batch)
+	if err := devopsbuildv1.ValidateLogBatch(request, batch); err != nil {
+		t.Fatal(err)
+	}
+	return batch
 }
 
 func (executor *fakeBuildExecutor) Execute(
@@ -573,12 +747,13 @@ func buildService(
 	executor port.BuildExecutor,
 ) *Service {
 	t.Helper()
-	service, err := NewService(repository, archives, executor, Config{
-		WorkerID:      "build-worker-one",
-		LeaseDuration: LeaseDuration,
-		Deadline:      ExecutionDeadline,
-		CancelGrace:   CancellationGrace,
-	})
+	service, err := NewService(
+		repository, archives, executor, &fakeBuildLogSource{}, Config{
+			WorkerID:      "build-worker-one",
+			LeaseDuration: LeaseDuration,
+			Deadline:      ExecutionDeadline,
+			CancelGrace:   CancellationGrace,
+		})
 	if err != nil {
 		t.Fatal(err)
 	}

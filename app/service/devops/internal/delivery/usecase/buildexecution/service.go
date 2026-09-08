@@ -16,6 +16,7 @@ type Service struct {
 	repository      Repository
 	archives        ArchiveReader
 	executor        port.BuildExecutor
+	logs            port.BuildLogSource
 	config          Config
 	renewalInterval time.Duration
 }
@@ -26,9 +27,10 @@ func NewService(
 	repository Repository,
 	archives ArchiveReader,
 	executor port.BuildExecutor,
+	logs port.BuildLogSource,
 	config Config,
 ) (*Service, error) {
-	if repository == nil || archives == nil || executor == nil {
+	if repository == nil || archives == nil || executor == nil || logs == nil {
 		return nil, errors.New("build execution boundaries are required")
 	}
 	if devopsv1.ValidateID("buildWorker.workerId", config.WorkerID) != nil ||
@@ -41,6 +43,7 @@ func NewService(
 		repository:      repository,
 		archives:        archives,
 		executor:        executor,
+		logs:            logs,
 		config:          config,
 		renewalInterval: HeartbeatInterval,
 	}, nil
@@ -62,7 +65,7 @@ func (service *Service) Heartbeat(ctx context.Context) (time.Time, error) {
 
 func (service *Service) BuildOnce(ctx context.Context) (Result, error) {
 	if service == nil || service.repository == nil || service.archives == nil ||
-		service.executor == nil || ctx == nil {
+		service.executor == nil || service.logs == nil || ctx == nil {
 		return Result{}, errors.New("build worker is unavailable")
 	}
 	command, found, err := service.repository.Claim(
@@ -124,14 +127,20 @@ func (service *Service) BuildOnce(ctx context.Context) (Result, error) {
 			}
 			receipt, executeErr := service.executor.Execute(effectContext, request, archive)
 			closeErr := archive.Close()
+			retained := executeErr == nil
 			if closeErr != nil {
-				return devopsbuildv1.Receipt{}, false, port.ErrBuildOutcomeUnknown
+				executeErr = errors.Join(executeErr, port.ErrBuildOutcomeUnknown)
 			}
-			return receipt, executeErr == nil, executeErr
+			return service.drainAfterOperation(
+				effectContext, command, request, receipt, retained, executeErr,
+			)
 		}
 	case runlifecycle.ClaimObserve:
 		operation = func(effectContext context.Context) (devopsbuildv1.Receipt, bool, error) {
-			return service.executor.Observe(effectContext, request)
+			receipt, retained, observeErr := service.executor.Observe(effectContext, request)
+			return service.drainAfterOperation(
+				effectContext, command, request, receipt, retained, observeErr,
+			)
 		}
 	default:
 		return result, ErrInvalidCommand
@@ -293,13 +302,66 @@ func (service *Service) cancelWithRenewal(
 			command,
 			deadline,
 			func(effectContext context.Context) (devopsbuildv1.Receipt, bool, error) {
-				return service.executor.Cancel(effectContext, request)
+				receipt, retained, cancelErr := service.executor.Cancel(effectContext, request)
+				return service.drainAfterOperation(
+					effectContext, command, request, receipt, retained, cancelErr,
+				)
 			},
 		)
 	if coordinationErr != nil || timedOut {
 		return devopsbuildv1.Receipt{}, false, ErrExecutionUncertain
 	}
 	return receipt, retained, operationErr
+}
+
+func (service *Service) drainAfterOperation(
+	ctx context.Context,
+	command Command,
+	request devopsbuildv1.Request,
+	receipt devopsbuildv1.Receipt,
+	retained bool,
+	operationErr error,
+) (devopsbuildv1.Receipt, bool, error) {
+	if !retained && (errors.Is(operationErr, port.ErrBuildUnavailable) ||
+		errors.Is(operationErr, port.ErrBuildConflict) ||
+		errors.Is(operationErr, ErrArchiveUnavailable)) {
+		return receipt, retained, operationErr
+	}
+	if err := service.drainLogs(ctx, command, request); err != nil {
+		return receipt, retained, ErrExecutionUncertain
+	}
+	return receipt, retained, operationErr
+}
+
+func (service *Service) drainLogs(
+	ctx context.Context,
+	command Command,
+	request devopsbuildv1.Request,
+) error {
+	progress := devopsbuildv1.LogProgress{}
+	var previousStep uint32
+	for count := 0; ; count++ {
+		batch, found, err := service.logs.ReadLogs(
+			ctx, request, progress.LastSequence,
+		)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return nil
+		}
+		if count >= len(request.Steps) ||
+			devopsbuildv1.ValidateLogBatch(request, batch) != nil ||
+			batch.Previous != progress || batch.Step.Ordinal <= previousStep ||
+			ValidateLogAppend(command, batch) != nil {
+			return ErrInvalidLogs
+		}
+		if err := service.repository.AppendLogs(ctx, command, batch); err != nil {
+			return err
+		}
+		progress = batch.Next
+		previousStep = batch.Step.Ordinal
+	}
 }
 
 func (service *Service) completeReceipt(

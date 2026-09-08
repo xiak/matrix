@@ -919,6 +919,83 @@ CREATE TABLE IF NOT EXISTS delivery.build_receipts (
     )
 );
 
+CREATE TABLE IF NOT EXISTS delivery.pipeline_run_logs (
+    tenant_id text COLLATE "C" NOT NULL,
+    run_id text COLLATE "C" NOT NULL,
+    command_id text COLLATE "C" NOT NULL,
+    input_digest text COLLATE "C" NOT NULL,
+    execution_id text COLLATE "C" NOT NULL,
+    step_ordinal bigint NOT NULL,
+    step_kind text COLLATE "C" NOT NULL,
+    previous_native_bytes bigint NOT NULL,
+    previous_normalized_bytes bigint NOT NULL,
+    previous_sequence bigint NOT NULL,
+    next_native_bytes bigint NOT NULL,
+    next_normalized_bytes bigint NOT NULL,
+    last_sequence bigint NOT NULL,
+    chunk_count bigint NOT NULL,
+    content_digest text COLLATE "C" NOT NULL,
+    created_at timestamptz(6) NOT NULL,
+    expires_at timestamptz(6) NOT NULL,
+    document jsonb NOT NULL,
+    PRIMARY KEY (tenant_id, run_id, last_sequence),
+    CONSTRAINT pipeline_run_logs_command_step_uq UNIQUE (
+        tenant_id, command_id, step_ordinal
+    ),
+    CONSTRAINT pipeline_run_logs_run_fk FOREIGN KEY (
+        tenant_id, run_id, input_digest
+    ) REFERENCES delivery.pipeline_runs (tenant_id, id, input_digest)
+        ON DELETE CASCADE,
+    CONSTRAINT pipeline_run_logs_task_fk FOREIGN KEY (
+        tenant_id, command_id
+    ) REFERENCES delivery.pipeline_run_tasks (tenant_id, command_id)
+        ON DELETE CASCADE,
+    CONSTRAINT pipeline_run_logs_values_valid CHECK (
+        tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND run_id COLLATE "C" ~ '^pipeline-run-[0-9a-f]{48}$'
+        AND command_id = run_id || ':verify:' ||
+            split_part(command_id, ':', 3)
+        AND command_id COLLATE "C"
+            ~ '^pipeline-run-[0-9a-f]{48}:verify:([1-9]|[1-9][0-9]|100)$'
+        AND input_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND execution_id COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND (
+            (step_ordinal = 1 AND step_kind = 'GO_TEST')
+            OR (step_ordinal = 2 AND step_kind = 'GO_VET')
+        )
+        AND previous_native_bytes BETWEEN 0 AND 8388608
+        AND previous_normalized_bytes BETWEEN 0 AND 8388608
+        AND previous_sequence BETWEEN 0 AND 8388608
+        AND next_native_bytes BETWEEN 1 AND 8388608
+        AND next_normalized_bytes BETWEEN 1 AND 8388608
+        AND last_sequence BETWEEN 1 AND 8388608
+        AND next_native_bytes > previous_native_bytes
+        AND next_normalized_bytes > previous_normalized_bytes
+        AND last_sequence > previous_sequence
+        AND ((previous_native_bytes = 0) = (previous_normalized_bytes = 0))
+        AND ((previous_native_bytes = 0) = (previous_sequence = 0))
+        AND chunk_count BETWEEN 1 AND 1024
+        AND last_sequence - previous_sequence = chunk_count
+        AND content_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND expires_at = created_at + interval '14 days'
+        AND document->>'executionId' = execution_id
+        AND (document#>>'{step,ordinal}')::bigint = step_ordinal
+        AND document#>>'{step,kind}' = step_kind
+        AND (document#>>'{previous,nativeBytes}')::bigint = previous_native_bytes
+        AND (document#>>'{previous,normalizedBytes}')::bigint =
+            previous_normalized_bytes
+        AND (document#>>'{previous,lastSequence}')::bigint = previous_sequence
+        AND (document#>>'{next,nativeBytes}')::bigint = next_native_bytes
+        AND (document#>>'{next,normalizedBytes}')::bigint = next_normalized_bytes
+        AND (document#>>'{next,lastSequence}')::bigint = last_sequence
+        AND jsonb_array_length(document->'chunks') = chunk_count
+        AND document->>'contentDigest' = content_digest
+    )
+);
+
+CREATE INDEX IF NOT EXISTS pipeline_run_logs_expiry_idx
+    ON delivery.pipeline_run_logs (expires_at, tenant_id, run_id);
+
 CREATE TABLE IF NOT EXISTS delivery.mutations (
     tenant_id text COLLATE "C" NOT NULL,
     id text COLLATE "C" NOT NULL,
@@ -1358,6 +1435,8 @@ ALTER TABLE delivery.source_archives ENABLE ROW LEVEL SECURITY;
 ALTER TABLE delivery.source_archives FORCE ROW LEVEL SECURITY;
 ALTER TABLE delivery.build_receipts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE delivery.build_receipts FORCE ROW LEVEL SECURITY;
+ALTER TABLE delivery.pipeline_run_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE delivery.pipeline_run_logs FORCE ROW LEVEL SECURITY;
 ALTER TABLE delivery.mutations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE delivery.mutations FORCE ROW LEVEL SECURITY;
 ALTER TABLE delivery.audit_operations ENABLE ROW LEVEL SECURITY;
@@ -1381,7 +1460,7 @@ BEGIN
         'projects', 'source_connections', 'repository_bindings',
         'repository_binding_revisions', 'pipelines', 'pipeline_revisions',
         'source_events', 'pipeline_runs', 'pipeline_run_tasks',
-        'source_archives', 'build_receipts',
+        'source_archives', 'build_receipts', 'pipeline_run_logs',
         'mutations', 'audit_operations',
         'audit_outbox', 'source_observation_tasks'
     ]
@@ -1483,7 +1562,8 @@ DECLARE
 BEGIN
     FOREACH table_name IN ARRAY ARRAY[
         'pipeline_revisions', 'pipeline_runs', 'pipeline_run_tasks',
-        'source_archives', 'build_receipts', 'build_worker_heartbeat',
+        'source_archives', 'build_receipts', 'pipeline_run_logs',
+        'build_worker_heartbeat',
         'audit_operations', 'audit_outbox'
     ]
     LOOP
@@ -4075,6 +4155,423 @@ GRANT EXECUTE ON FUNCTION delivery.renew_build_task(
     text, text, text, text, bigint, integer
 ) TO matrix_devops_worker;
 
+CREATE OR REPLACE FUNCTION delivery.append_build_logs(
+    requested_tenant_id text,
+    requested_run_id text,
+    requested_command_id text,
+    requested_worker_id text,
+    expected_fencing_token bigint,
+    submitted_batch jsonb
+)
+RETURNS bigint
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    current_task record;
+    existing_log record;
+    previous_log record;
+    has_previous boolean;
+    batch_step_ordinal bigint;
+    batch_step_kind text;
+    previous_native_bytes bigint;
+    previous_normalized_bytes bigint;
+    previous_sequence bigint;
+    next_native_bytes bigint;
+    next_normalized_bytes bigint;
+    next_sequence bigint;
+    submitted_chunk_count bigint;
+    chunk_record record;
+    chunk_sequence bigint;
+    chunk_content text;
+    expected_execution_id text;
+    expected_chunk_digest text;
+    expected_batch_material bytea;
+    expected_batch_digest text;
+    normalized_delta bigint := 0;
+BEGIN
+    IF requested_tenant_id IS NULL
+       OR requested_tenant_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_run_id IS NULL
+       OR requested_run_id COLLATE "C" !~ '^pipeline-run-[0-9a-f]{48}$'
+       OR requested_command_id IS NULL
+       OR requested_command_id COLLATE "C"
+            !~ '^pipeline-run-[0-9a-f]{48}:verify:([1-9]|[1-9][0-9]|100)$'
+       OR split_part(requested_command_id, ':', 1) <> requested_run_id
+       OR requested_worker_id IS NULL
+       OR requested_worker_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR expected_fencing_token IS NULL
+       OR expected_fencing_token NOT BETWEEN 1 AND 9007199254740991
+       OR jsonb_typeof(submitted_batch) IS DISTINCT FROM 'object'
+       OR NOT (submitted_batch ?& ARRAY[
+            'executionId', 'step', 'previous', 'next', 'chunks', 'contentDigest'
+       ])
+       OR (submitted_batch - ARRAY[
+            'executionId', 'step', 'previous', 'next', 'chunks', 'contentDigest'
+       ]) <> '{}'::jsonb
+       OR jsonb_typeof(submitted_batch->'executionId') IS DISTINCT FROM 'string'
+       OR jsonb_typeof(submitted_batch->'step') IS DISTINCT FROM 'object'
+       OR NOT (submitted_batch->'step' ?& ARRAY['ordinal', 'kind'])
+       OR ((submitted_batch->'step') - ARRAY['ordinal', 'kind']) <> '{}'::jsonb
+       OR jsonb_typeof(submitted_batch#>'{step,ordinal}') IS DISTINCT FROM 'number'
+       OR NOT pg_input_is_valid(
+            COALESCE(submitted_batch#>>'{step,ordinal}', ''), 'bigint'
+       )
+       OR jsonb_typeof(submitted_batch#>'{step,kind}') IS DISTINCT FROM 'string'
+       OR jsonb_typeof(submitted_batch->'previous') IS DISTINCT FROM 'object'
+       OR NOT (submitted_batch->'previous' ?& ARRAY[
+            'nativeBytes', 'normalizedBytes', 'lastSequence'
+       ])
+       OR ((submitted_batch->'previous') - ARRAY[
+            'nativeBytes', 'normalizedBytes', 'lastSequence'
+       ]) <> '{}'::jsonb
+       OR jsonb_typeof(submitted_batch#>'{previous,nativeBytes}')
+            IS DISTINCT FROM 'number'
+       OR NOT pg_input_is_valid(
+            COALESCE(submitted_batch#>>'{previous,nativeBytes}', ''), 'bigint'
+       )
+       OR jsonb_typeof(submitted_batch#>'{previous,normalizedBytes}')
+            IS DISTINCT FROM 'number'
+       OR NOT pg_input_is_valid(
+            COALESCE(submitted_batch#>>'{previous,normalizedBytes}', ''), 'bigint'
+       )
+       OR jsonb_typeof(submitted_batch#>'{previous,lastSequence}')
+            IS DISTINCT FROM 'number'
+       OR NOT pg_input_is_valid(
+            COALESCE(submitted_batch#>>'{previous,lastSequence}', ''), 'bigint'
+       )
+       OR jsonb_typeof(submitted_batch->'next') IS DISTINCT FROM 'object'
+       OR NOT (submitted_batch->'next' ?& ARRAY[
+            'nativeBytes', 'normalizedBytes', 'lastSequence'
+       ])
+       OR ((submitted_batch->'next') - ARRAY[
+            'nativeBytes', 'normalizedBytes', 'lastSequence'
+       ]) <> '{}'::jsonb
+       OR jsonb_typeof(submitted_batch#>'{next,nativeBytes}')
+            IS DISTINCT FROM 'number'
+       OR NOT pg_input_is_valid(
+            COALESCE(submitted_batch#>>'{next,nativeBytes}', ''), 'bigint'
+       )
+       OR jsonb_typeof(submitted_batch#>'{next,normalizedBytes}')
+            IS DISTINCT FROM 'number'
+       OR NOT pg_input_is_valid(
+            COALESCE(submitted_batch#>>'{next,normalizedBytes}', ''), 'bigint'
+       )
+       OR jsonb_typeof(submitted_batch#>'{next,lastSequence}')
+            IS DISTINCT FROM 'number'
+       OR NOT pg_input_is_valid(
+            COALESCE(submitted_batch#>>'{next,lastSequence}', ''), 'bigint'
+       )
+       OR jsonb_typeof(submitted_batch->'chunks') IS DISTINCT FROM 'array'
+       OR jsonb_typeof(submitted_batch->'contentDigest') IS DISTINCT FROM 'string'
+       OR COALESCE(submitted_batch->>'contentDigest', '') COLLATE "C"
+            !~ '^sha256:[0-9a-f]{64}$' THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'build log batch is invalid';
+    END IF;
+
+    batch_step_ordinal := (submitted_batch#>>'{step,ordinal}')::bigint;
+    batch_step_kind := submitted_batch#>>'{step,kind}';
+    previous_native_bytes :=
+        (submitted_batch#>>'{previous,nativeBytes}')::bigint;
+    previous_normalized_bytes :=
+        (submitted_batch#>>'{previous,normalizedBytes}')::bigint;
+    previous_sequence :=
+        (submitted_batch#>>'{previous,lastSequence}')::bigint;
+    next_native_bytes := (submitted_batch#>>'{next,nativeBytes}')::bigint;
+    next_normalized_bytes :=
+        (submitted_batch#>>'{next,normalizedBytes}')::bigint;
+    next_sequence := (submitted_batch#>>'{next,lastSequence}')::bigint;
+    submitted_chunk_count := jsonb_array_length(submitted_batch->'chunks');
+
+    IF COALESCE(submitted_batch->>'executionId', '') COLLATE "C"
+            !~ '^sha256:[0-9a-f]{64}$'
+       OR NOT (
+            (batch_step_ordinal = 1 AND batch_step_kind = 'GO_TEST')
+            OR (batch_step_ordinal = 2 AND batch_step_kind = 'GO_VET')
+       )
+       OR previous_native_bytes NOT BETWEEN 0 AND 8388608
+       OR previous_normalized_bytes NOT BETWEEN 0 AND 8388608
+       OR previous_sequence NOT BETWEEN 0 AND 8388608
+       OR next_native_bytes NOT BETWEEN 1 AND 8388608
+       OR next_normalized_bytes NOT BETWEEN 1 AND 8388608
+       OR next_sequence NOT BETWEEN 1 AND 8388608
+       OR ((previous_native_bytes = 0) <> (previous_normalized_bytes = 0))
+       OR ((previous_native_bytes = 0) <> (previous_sequence = 0))
+       OR next_native_bytes <= previous_native_bytes
+       OR next_normalized_bytes <= previous_normalized_bytes
+       OR next_sequence <= previous_sequence
+       OR submitted_chunk_count NOT BETWEEN 1 AND 1024
+       OR next_sequence - previous_sequence <> submitted_chunk_count THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'build log progress is invalid';
+    END IF;
+
+    SELECT task.input_digest,
+           run.pipeline_revision_digest,
+           archive.archive_digest
+      INTO current_task
+      FROM delivery.pipeline_run_tasks AS task
+      JOIN delivery.pipeline_runs AS run
+        ON run.tenant_id = task.tenant_id
+       AND run.id = task.run_id
+       AND run.input_digest = task.input_digest
+      JOIN delivery.source_archives AS archive
+        ON archive.tenant_id = task.tenant_id
+       AND archive.run_id = task.run_id
+       AND archive.input_digest = task.input_digest
+     WHERE task.tenant_id = requested_tenant_id
+       AND task.run_id = requested_run_id
+       AND task.command_id = requested_command_id
+       AND task.stage = 'VERIFY'
+       AND task.status = 'INTENT'
+       AND task.lease_owner = requested_worker_id
+       AND task.fencing_token = expected_fencing_token
+       AND task.lease_expires_at > transaction_timestamp()
+       AND run.state = 'VERIFYING'
+       AND run.stage = 'VERIFY'
+     FOR UPDATE OF task;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'MX412',
+            MESSAGE = 'build log lease or fencing token is stale';
+    END IF;
+
+    expected_execution_id := 'sha256:' || encode(sha256(
+        int8send(octet_length(convert_to(
+            'matrix-devops-build-execution-v1', 'UTF8'
+        ))::bigint)
+        || convert_to('matrix-devops-build-execution-v1', 'UTF8')
+        || int8send(octet_length(convert_to(
+            requested_command_id, 'UTF8'
+        ))::bigint) || convert_to(requested_command_id, 'UTF8')
+        || int8send(octet_length(convert_to(
+            current_task.input_digest, 'UTF8'
+        ))::bigint) || convert_to(current_task.input_digest, 'UTF8')
+        || int8send(octet_length(convert_to(
+            current_task.pipeline_revision_digest, 'UTF8'
+        ))::bigint) || convert_to(current_task.pipeline_revision_digest, 'UTF8')
+        || int8send(octet_length(convert_to(
+            current_task.archive_digest, 'UTF8'
+        ))::bigint) || convert_to(current_task.archive_digest, 'UTF8')
+    ), 'hex');
+    IF submitted_batch->>'executionId' IS DISTINCT FROM expected_execution_id THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'build log execution identity is invalid';
+    END IF;
+
+    expected_batch_material :=
+        int8send(octet_length(convert_to(
+            'matrix-devops-build-log-batch-v1', 'UTF8'
+        ))::bigint)
+        || convert_to('matrix-devops-build-log-batch-v1', 'UTF8')
+        || int8send(octet_length(convert_to(
+            expected_execution_id, 'UTF8'
+        ))::bigint) || convert_to(expected_execution_id, 'UTF8')
+        || int8send(batch_step_ordinal)
+        || int8send(octet_length(convert_to(
+            batch_step_kind, 'UTF8'
+        ))::bigint) || convert_to(batch_step_kind, 'UTF8')
+        || int8send(previous_native_bytes)
+        || int8send(previous_normalized_bytes)
+        || int8send(previous_sequence)
+        || int8send(next_native_bytes)
+        || int8send(next_normalized_bytes)
+        || int8send(next_sequence)
+        || int8send(submitted_chunk_count);
+
+    FOR chunk_record IN
+        SELECT value, ordinal
+          FROM jsonb_array_elements(submitted_batch->'chunks')
+               WITH ORDINALITY AS chunk(value, ordinal)
+         ORDER BY ordinal
+    LOOP
+        IF jsonb_typeof(chunk_record.value) IS DISTINCT FROM 'object'
+           OR NOT (chunk_record.value ?& ARRAY[
+                'sequence', 'content', 'contentDigest'
+           ])
+           OR (chunk_record.value - ARRAY[
+                'sequence', 'content', 'contentDigest'
+           ]) <> '{}'::jsonb
+           OR jsonb_typeof(chunk_record.value->'sequence')
+                IS DISTINCT FROM 'number'
+           OR NOT pg_input_is_valid(
+                COALESCE(chunk_record.value->>'sequence', ''), 'bigint'
+           )
+           OR jsonb_typeof(chunk_record.value->'content')
+                IS DISTINCT FROM 'string'
+           OR jsonb_typeof(chunk_record.value->'contentDigest')
+                IS DISTINCT FROM 'string' THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '22023',
+                MESSAGE = 'build log chunk is invalid';
+        END IF;
+        chunk_sequence := (chunk_record.value->>'sequence')::bigint;
+        chunk_content := chunk_record.value->>'content';
+        IF chunk_sequence <> previous_sequence + chunk_record.ordinal
+           OR octet_length(convert_to(chunk_content, 'UTF8')) NOT BETWEEN 1 AND 65536
+           OR COALESCE(chunk_record.value->>'contentDigest', '') COLLATE "C"
+                !~ '^sha256:[0-9a-f]{64}$'
+           OR EXISTS (
+                SELECT 1
+                  FROM generate_series(1, char_length(chunk_content)) AS position(index)
+                 WHERE ascii(substr(chunk_content, position.index, 1))
+                        BETWEEN 0 AND 8
+                    OR ascii(substr(chunk_content, position.index, 1))
+                        IN (11, 12)
+                    OR ascii(substr(chunk_content, position.index, 1))
+                        BETWEEN 14 AND 31
+                    OR ascii(substr(chunk_content, position.index, 1))
+                        BETWEEN 127 AND 159
+           )
+           OR EXISTS (
+                SELECT 1
+                  FROM regexp_split_to_table(chunk_content, E'\\n') AS line(value)
+                 WHERE octet_length(convert_to(line.value, 'UTF8')) > 16393
+                    OR (line.value <> '' AND left(line.value, 9) NOT IN (
+                        '[stdout] ', '[stderr] '
+                    ))
+           ) THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '22023',
+                MESSAGE = 'build log chunk content is invalid';
+        END IF;
+
+        expected_chunk_digest := 'sha256:' || encode(sha256(
+            int8send(octet_length(convert_to(
+                'matrix-devops-build-log-chunk-v1', 'UTF8'
+            ))::bigint)
+            || convert_to('matrix-devops-build-log-chunk-v1', 'UTF8')
+            || int8send(octet_length(convert_to(
+                expected_execution_id, 'UTF8'
+            ))::bigint) || convert_to(expected_execution_id, 'UTF8')
+            || int8send(batch_step_ordinal)
+            || int8send(octet_length(convert_to(
+                batch_step_kind, 'UTF8'
+            ))::bigint) || convert_to(batch_step_kind, 'UTF8')
+            || int8send(chunk_sequence)
+            || int8send(octet_length(convert_to(
+                chunk_content, 'UTF8'
+            ))::bigint) || convert_to(chunk_content, 'UTF8')
+        ), 'hex');
+        IF chunk_record.value->>'contentDigest'
+                IS DISTINCT FROM expected_chunk_digest THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '22023',
+                MESSAGE = 'build log chunk digest is invalid';
+        END IF;
+        normalized_delta := normalized_delta +
+            octet_length(convert_to(chunk_content, 'UTF8'));
+        expected_batch_material := expected_batch_material
+            || int8send(chunk_sequence)
+            || int8send(octet_length(convert_to(
+                expected_chunk_digest, 'UTF8'
+            ))::bigint) || convert_to(expected_chunk_digest, 'UTF8');
+    END LOOP;
+
+    expected_batch_digest := 'sha256:' || encode(
+        sha256(expected_batch_material), 'hex'
+    );
+    IF normalized_delta <> next_normalized_bytes - previous_normalized_bytes
+       OR submitted_batch->>'contentDigest'
+            IS DISTINCT FROM expected_batch_digest THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'build log batch digest is invalid';
+    END IF;
+
+    SELECT log.document
+      INTO existing_log
+      FROM delivery.pipeline_run_logs AS log
+     WHERE log.tenant_id = requested_tenant_id
+       AND log.run_id = requested_run_id
+       AND log.last_sequence = next_sequence;
+    IF FOUND THEN
+        IF existing_log.document = submitted_batch THEN
+            RETURN next_sequence;
+        END IF;
+        RAISE EXCEPTION USING
+            ERRCODE = 'MX409',
+            MESSAGE = 'build log sequence conflicts';
+    END IF;
+
+    SELECT log.step_ordinal,
+           log.next_native_bytes,
+           log.next_normalized_bytes,
+           log.last_sequence
+      INTO previous_log
+      FROM delivery.pipeline_run_logs AS log
+     WHERE log.tenant_id = requested_tenant_id
+       AND log.run_id = requested_run_id
+     ORDER BY log.last_sequence DESC
+     LIMIT 1;
+    has_previous := FOUND;
+
+    IF EXISTS (
+        SELECT 1
+          FROM delivery.pipeline_run_logs AS log
+         WHERE log.tenant_id = requested_tenant_id
+           AND log.run_id = requested_run_id
+           AND log.step_ordinal = batch_step_ordinal
+    ) OR (
+        has_previous AND (
+            previous_native_bytes <> previous_log.next_native_bytes
+            OR previous_normalized_bytes <> previous_log.next_normalized_bytes
+            OR previous_sequence <> previous_log.last_sequence
+            OR batch_step_ordinal <= previous_log.step_ordinal
+        )
+    ) OR (
+        NOT has_previous AND (
+            previous_native_bytes <> 0
+            OR previous_normalized_bytes <> 0
+            OR previous_sequence <> 0
+        )
+    ) OR (
+        SELECT count(*) >= 2
+          FROM delivery.pipeline_run_logs AS log
+         WHERE log.tenant_id = requested_tenant_id
+           AND log.run_id = requested_run_id
+    ) THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'MX409',
+            MESSAGE = 'build log order conflicts';
+    END IF;
+
+    INSERT INTO delivery.pipeline_run_logs (
+        tenant_id, run_id, command_id, input_digest, execution_id,
+        step_ordinal, step_kind,
+        previous_native_bytes, previous_normalized_bytes, previous_sequence,
+        next_native_bytes, next_normalized_bytes, last_sequence, chunk_count,
+        content_digest, created_at, expires_at, document
+    ) VALUES (
+        requested_tenant_id, requested_run_id, requested_command_id,
+        current_task.input_digest, expected_execution_id,
+        batch_step_ordinal, batch_step_kind,
+        previous_native_bytes, previous_normalized_bytes, previous_sequence,
+        next_native_bytes, next_normalized_bytes, next_sequence,
+        submitted_chunk_count, submitted_batch->>'contentDigest',
+        transaction_timestamp(), transaction_timestamp() + interval '14 days',
+        submitted_batch
+    );
+    RETURN next_sequence;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION delivery.append_build_logs(
+    text, text, text, text, bigint, jsonb
+) FROM PUBLIC, matrix_devops_api, matrix_devops_source_fetcher,
+       matrix_devops_source_observer;
+GRANT EXECUTE ON FUNCTION delivery.append_build_logs(
+    text, text, text, text, bigint, jsonb
+) TO matrix_devops_worker;
+
 DROP FUNCTION IF EXISTS delivery.advance_pipeline_run_task(
     text, text, text, text, bigint, text, text
 );
@@ -6216,6 +6713,7 @@ AS $function$
         AND to_regclass('delivery.pipeline_run_tasks') IS NOT NULL
         AND to_regclass('delivery.source_archives') IS NOT NULL
         AND to_regclass('delivery.build_receipts') IS NOT NULL
+        AND to_regclass('delivery.pipeline_run_logs') IS NOT NULL
         AND to_regclass('delivery.build_worker_heartbeat') IS NOT NULL
         AND to_regprocedure(
             'delivery.record_build_worker_heartbeat(text)'
@@ -6225,6 +6723,9 @@ AS $function$
         ) IS NOT NULL
         AND to_regprocedure(
             'delivery.renew_build_task(text,text,text,text,bigint,integer)'
+        ) IS NOT NULL
+        AND to_regprocedure(
+            'delivery.append_build_logs(text,text,text,text,bigint,jsonb)'
         ) IS NOT NULL
         AND to_regprocedure(
             'delivery.complete_build_task(text,text,text,text,bigint,text,text,jsonb,jsonb,jsonb)'
@@ -6263,6 +6764,43 @@ AS $function$
                 OR receipt.source_archive_digest <> archive.archive_digest
                 OR receipt.pipeline_revision_id <> run.pipeline_revision_id
                 OR receipt.pipeline_revision_digest <> run.pipeline_revision_digest
+        )
+        AND NOT EXISTS (
+            SELECT 1
+              FROM delivery.pipeline_run_logs AS log
+              JOIN delivery.pipeline_run_tasks AS task
+                ON task.tenant_id = log.tenant_id
+               AND task.command_id = log.command_id
+              JOIN delivery.pipeline_runs AS run
+                ON run.tenant_id = log.tenant_id
+               AND run.id = log.run_id
+               AND run.input_digest = log.input_digest
+             WHERE task.run_id <> log.run_id
+                OR task.input_digest <> log.input_digest
+                OR task.stage <> 'VERIFY'
+                OR log.expires_at <> log.created_at + interval '14 days'
+                OR (log.previous_sequence = 0 AND EXISTS (
+                    SELECT 1
+                      FROM delivery.pipeline_run_logs AS earlier
+                     WHERE earlier.tenant_id = log.tenant_id
+                       AND earlier.run_id = log.run_id
+                       AND earlier.last_sequence < log.last_sequence
+                ))
+                OR (log.previous_sequence > 0 AND NOT EXISTS (
+                    SELECT 1
+                      FROM delivery.pipeline_run_logs AS earlier
+                     WHERE earlier.tenant_id = log.tenant_id
+                       AND earlier.run_id = log.run_id
+                       AND earlier.last_sequence = log.previous_sequence
+                       AND earlier.next_native_bytes = log.previous_native_bytes
+                       AND earlier.next_normalized_bytes =
+                            log.previous_normalized_bytes
+                       AND earlier.step_ordinal < log.step_ordinal
+                ))
+                OR (SELECT count(*)
+                      FROM delivery.pipeline_run_logs AS sibling
+                     WHERE sibling.tenant_id = log.tenant_id
+                       AND sibling.run_id = log.run_id) > 2
         ),
         1::bigint,
         transaction_timestamp()
@@ -6414,6 +6952,7 @@ AS $function$
         AND to_regclass('delivery.pipeline_run_tasks') IS NOT NULL
         AND to_regclass('delivery.source_archives') IS NOT NULL
         AND to_regclass('delivery.build_receipts') IS NOT NULL
+        AND to_regclass('delivery.pipeline_run_logs') IS NOT NULL
         AND to_regclass('delivery.source_fetcher_heartbeat') IS NOT NULL
         AND to_regclass('delivery.build_worker_heartbeat') IS NOT NULL
         AND to_regclass('delivery.audit_operations') IS NOT NULL
@@ -6454,6 +6993,9 @@ AS $function$
         ) IS NOT NULL
         AND to_regprocedure(
             'delivery.renew_build_task(text,text,text,text,bigint,integer)'
+        ) IS NOT NULL
+        AND to_regprocedure(
+            'delivery.append_build_logs(text,text,text,text,bigint,jsonb)'
         ) IS NOT NULL
         AND to_regprocedure(
             'delivery.complete_build_task(text,text,text,text,bigint,text,text,jsonb,jsonb,jsonb)'

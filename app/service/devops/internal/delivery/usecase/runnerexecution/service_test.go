@@ -671,6 +671,8 @@ func (logs *fakeRunnerLogs) Publish(
 	_ context.Context,
 	_ devopsbuildv1.Assignment,
 	_ devopsv1.VerificationStep,
+	_ runnerlog.Progress,
+	_ runnerlog.Progress,
 	chunks []runnerlog.Chunk,
 ) error {
 	logs.mutex.Lock()

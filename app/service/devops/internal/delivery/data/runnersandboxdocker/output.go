@@ -16,8 +16,6 @@ import (
 )
 
 const (
-	maximumLogLineBytes = 16 * 1024
-
 	stdoutStream = byte(1)
 	stderrStream = byte(2)
 )
@@ -183,7 +181,7 @@ func (decoder *logDecoder) consumeFrame(
 				continue
 			}
 			line.content = append(line.content, value)
-			if len(line.content) > maximumLogLineBytes {
+			if int64(len(line.content)) > devopsv1.FixedMaxLogLineBytes {
 				line.content = line.content[:0]
 				line.overflow = true
 			}
@@ -238,13 +236,14 @@ func (decoder *logDecoder) emitLine(line *logLine, label string, newline bool) e
 		return ErrLogLimit
 	}
 	decoder.budget.normalizedBytes += int64(len(output))
-	if len(decoder.buffered) > 0 && len(decoder.buffered)+len(output) > runnerlog.MaximumChunkBytes {
+	if len(decoder.buffered) > 0 &&
+		int64(len(decoder.buffered)+len(output)) > devopsv1.FixedMaxLogChunkBytes {
 		if err := decoder.flushChunk(); err != nil {
 			return err
 		}
 	}
 	decoder.buffered = append(decoder.buffered, output...)
-	if len(decoder.buffered) == runnerlog.MaximumChunkBytes {
+	if int64(len(decoder.buffered)) == devopsv1.FixedMaxLogChunkBytes {
 		return decoder.flushChunk()
 	}
 	return nil

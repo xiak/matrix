@@ -29,6 +29,7 @@ const (
 var (
 	ErrInvalidCommand     = errors.New("build execution command is invalid")
 	ErrInvalidReceipt     = errors.New("build execution receipt is invalid")
+	ErrInvalidLogs        = errors.New("build execution logs are invalid")
 	ErrArchiveUnavailable = errors.New("source archive is unavailable to the build executor")
 	ErrExecutionUncertain = errors.New("build execution requires fenced observation")
 )
@@ -47,6 +48,7 @@ type Repository interface {
 	Heartbeat(context.Context, string) (time.Time, error)
 	Claim(context.Context, string, time.Duration) (Command, bool, error)
 	Renew(context.Context, runlifecycle.LeaseGuard, time.Duration) (time.Time, error)
+	AppendLogs(context.Context, Command, devopsbuildv1.LogBatch) error
 	Complete(context.Context, Completion) (devopsv1.PipelineRun, error)
 	Readiness(context.Context) (devopsv1.Readiness, error)
 }
@@ -201,6 +203,17 @@ func ValidateCompletion(value Completion) error {
 		}
 	default:
 		return errors.New("build execution completion target is invalid")
+	}
+	return nil
+}
+
+func ValidateLogAppend(command Command, batch devopsbuildv1.LogBatch) error {
+	if err := ValidateCommand(command); err != nil {
+		return err
+	}
+	request, err := requestForCommand(command)
+	if err != nil || devopsbuildv1.ValidateLogBatch(request, batch) != nil {
+		return errors.Join(ErrInvalidLogs, err)
 	}
 	return nil
 }
