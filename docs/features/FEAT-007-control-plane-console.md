@@ -470,14 +470,20 @@ and `git diff --check` gates must pass on the same committed worktree.
   Source gates cover the light theme, 20 semantic contrast pairs, and 80
   frontend tests, including visible failed revocation, logout during failed
   or pending resource loads, keyboard workspace sizing, and native instance-ID
-  validation. The installed `44fa1c7` candidate proves the light login page,
-  local-only asset URLs, no browser errors, and no horizontal overflow at
-  1280 pixels. Direct anonymous visits to all five console entry routes render
-  the login form without console navigation, overflow, or browser warnings and
-  errors. The current source still requires installed-release browser
-  verification of authentication, route transitions, keyboard use, and
-  360-pixel layouts; source and component checks do not substitute for that
-  acceptance.
+  validation. Application commit
+  `29821adb012535d525d1ba274aff03143bc3c11c` produced the signed candidate
+  `matrix-v1.8.0-29821adb0125` with manifest SHA-256
+  `93bcd8dc15d66c83486d833922a0fdeb225d3093aa49a8a8a468cbc8c3bcc1e6`.
+  It installed to `READY` in a fresh external-network-disabled Docker
+  namespace and passed post-journey platform verification. Its real IAM browser
+  session completed login, client-side catalog/quota/installation transitions,
+  one development-shape quota activation, and one PostgreSQL installation from
+  queued state to a running endpoint before logout revoked the session. The
+  `360px` browser target yielded a narrower `319px` effective content viewport:
+  the shell and access route had no page-level horizontal overflow, the service
+  table owned its horizontal scroll, and both compact drawers contained and
+  restored keyboard focus. Direct anonymous entry after logout rendered only
+  the login surface with an empty password field and no console navigation.
 - The tenant-account UI adds an independently loadable `/console/access/`
   route with user, permissions, user-settings, and bootstrap-only tenant
   management views. One qualified child-login field replaces a tenant selector;
@@ -497,8 +503,10 @@ and `git diff --check` gates must pass on the same committed worktree.
   single-row horizontally browsable tablist, fixed refresh control, deliberate
   card-header action stacking, no page overflow, and arrow/`Home`/`End` focus
   movement at a viewport narrower than `360px`. Authenticated installed-release
-  360-pixel and full-keyboard acceptance remain open. Backend account and
-  isolation evidence belongs to FEAT-006.
+  evidence from the `29821ad` candidate separately proves the same four-tab
+  semantic navigation, arrow-key selection/focus, account-menu entry, and no
+  page overflow at the `360px` browser target. Backend account and isolation
+  evidence belongs to FEAT-006.
 - The unified-cloud UX preview replaces the provisional console composition
   with the dimensioned shell and interaction contract above. It adds product
   and service discovery, a cross-product Resource Center, global project and
@@ -530,12 +538,13 @@ and `git diff --check` gates must pass on the same committed worktree.
   in an offering display name, and workspace toggles expose the actual quota,
   installation, or platform-status task. Operation history now has searchable
   and status-filtered collection controls plus keyboard-native details instead
-  of a static feed. Component tests cover requested-route return, global-header focus,
-  search keyboard navigation, scope filtering, route projection, and a mutable
-  in-memory installation journey.
-  This is UX and interaction evidence over explicitly labelled MOCK data; it
-  does not replace the remaining authenticated installed-release browser gate
-  or any real backend acceptance.
+  of a static feed. Component tests cover requested-route return,
+  global-header and compact-drawer focus, search keyboard navigation, scope
+  filtering, route projection, and a mutable in-memory installation journey.
+  This explicitly labelled MOCK evidence validates future-product IA and
+  interaction only. The separate installed `29821ad` journey proves current
+  real IAM, quota, installation, and runtime integration; MOCK data does not
+  substitute for those backend authorities.
 - Gate B authority is complete for the admitted PostgreSQL slice: the closed
   managed-service Go/OpenAPI contract now includes collection and single-
   resource reads for offerings, regions, quota entitlements, service
@@ -602,14 +611,18 @@ without the required witness is rejected; and replay cannot replace the
 original backup's witness. Provider inventory failures remain normalized and
 do not expose native details.
 
-The new account slice has not been applied to the existing running
-installation; its IAM and Audit schemas and binaries must be upgraded together.
-No permission application/approval or expiring-grant UI is implemented.
+The account slice was verified only in the disposable signed candidate
+installation; an operator upgrade must continue to move its IAM and Audit
+schemas and binaries together. No permission application/approval or expiring-
+grant UI is implemented.
 
-Final acceptance still requires the authenticated installed-release browser
-journey, client-side route transitions, keyboard use, and 360-pixel layouts.
-API, source, component, and anonymous-page checks do not substitute for those
-remaining browser gates.
+Gate A authenticated installed-release browser acceptance is closed by the
+`29821ad` candidate: real IAM login/logout, client-side route transitions, real
+quota and installation mutations, semantic keyboard interactions, compact
+focus management, and narrower-than-`360px` layouts all passed before a final
+platform `VERIFY` returned `READY`. API, source, component, MOCK, or anonymous-
+page checks were not used as substitutes for that browser evidence. The
+unchanged platform lifecycle and recovery evidence remains owned by Gate C.
 
 ## Deferred
 
