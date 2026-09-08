@@ -6,7 +6,7 @@
 - Updated: 2026-09-08
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `9e76f3d`
+- Current pushed implementation baseline: `bfe834b`
 
 ## Goal
 
@@ -18,16 +18,17 @@ architecture, FEAT, implementation, test, and release gates.
 
 - FEAT-007 remains the authoritative owner and is `In progress`; read it and
   the directly owning code/tests before continuing.
-- Pushed `9e76f3d` adds the provider-neutral BuildExecutor port and pure fenced
-  `VERIFY` use case. Its closed command binds the current run, immutable
-  PipelineRevision, stored source receipt, fixed profile/limits, and deadline;
-  first claims execute while takeover fences only observe or cancel. A
-  normalized digest-bound receipt sends both passed and verification-failed
-  outcomes to the later reporter, while uncertainty preserves the intent.
-- Full tests, vet, architecture tests, focused race and 20-run suites, and a
-  Linux/amd64 CGO-disabled full build pass. This is a pure authority/workflow
-  boundary: PostgreSQL persistence, the physical isolated runner, transport,
-  sandbox, normalized logs, and reporter remain pending.
+- Pushed `bfe834b` adds table-blind PostgreSQL persistence for the existing
+  fenced `VERIFY` use case. Generic claims are now `REPORT`-only; build claims
+  atomically bind the immutable revision and source receipt to a database-time
+  execution window, preserve that window across fencing takeover, and store a
+  strict digest-bound terminal receipt before `REPORTING` can be entered.
+- Full tests, vet, architecture tests, focused race and 20-run suites, a
+  Linux/amd64 CGO-disabled full build, a fresh PostgreSQL 18 build journey, and
+  the four-product PostgreSQL migration journey pass. Receipt shape, binding,
+  digest, stale-fence, renewal, missing-receipt bypass, and passed/failed paths
+  are exercised. The physical isolated runner, transport, sandbox, normalized
+  logs, and reporter remain pending.
 - The user-owned untracked `app/ui/paas/` tree remains untouched.
 
 ## Adoption boundary
@@ -40,12 +41,14 @@ architecture, FEAT, implementation, test, and release gates.
 
 ## Continuation
 
-Continue FEAT-007 with the smallest independently testable persistence and
-process slice for the existing BuildExecutor use case: table-blind fenced
-`VERIFY` claim/renew/complete functions, normalized build-receipt storage, and
-an independent selected-only worker boundary. Do not claim repository code is
-isolated until the dedicated runner, offline toolchain, gVisor, no-egress,
-resource, and sanitized-log gates really pass; do not couple it to PaaS
-execution or begin formal UI integration before that real boundary passes.
-Preserve pragmatic DDD, replacement-first pre-v1 changes, optional-product
-isolation, and repository-local Git identity `Xiak <Jellal@aliyun.com>`.
+Continue FEAT-007 with the smallest independently testable physical-execution
+slice behind the accepted BuildExecutor port: a selected-only control-plane
+process and authenticated runner transport that keep the runner away from
+PostgreSQL, source/report credentials, IAM, Audit, PaaS, and administrative
+executor operations. Do not claim repository code is isolated until the
+dedicated Linux/amd64 runner, pinned offline toolchain, gVisor, no-egress,
+resource, malicious-repository, restart, and sanitized-log gates really pass;
+do not couple it to PaaS execution or begin formal UI integration before that
+real boundary passes. Preserve pragmatic DDD, replacement-first pre-v1
+changes, optional-product isolation, and repository-local Git identity
+`Xiak <Jellal@aliyun.com>`.
