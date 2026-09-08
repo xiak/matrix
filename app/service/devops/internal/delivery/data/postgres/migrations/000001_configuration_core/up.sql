@@ -2,7 +2,8 @@ BEGIN;
 SET LOCAL ROLE matrix_devops_owner;
 
 REVOKE ALL ON SCHEMA delivery FROM PUBLIC;
-GRANT USAGE ON SCHEMA delivery TO matrix_devops_api, matrix_devops_worker;
+GRANT USAGE ON SCHEMA delivery
+    TO matrix_devops_api, matrix_devops_worker, matrix_devops_source_observer;
 
 CREATE OR REPLACE FUNCTION delivery.current_tenant_id()
 RETURNS text
@@ -950,6 +951,9 @@ CREATE TABLE IF NOT EXISTS delivery.audit_operations (
                 AND target_id COLLATE "C" ~ '^pipeline-run-[0-9a-f]{48}$'
                 AND id COLLATE "C" ~ '^pipeline-run-[0-9a-f]{48}:terminal:[1-9][0-9]{0,15}$'
                 AND split_part(id, ':', 1) = target_id)
+            OR (operation_kind = 'SOURCE_HEALTH_OBSERVATION'
+                AND target_kind IN ('SOURCE_CONNECTION', 'REPOSITORY_BINDING')
+                AND id COLLATE "C" ~ '^source-observation-[0-9a-f]{64}$')
         )
     )
 );
@@ -984,6 +988,9 @@ ALTER TABLE delivery.audit_operations
                 AND target_id COLLATE "C" ~ '^pipeline-run-[0-9a-f]{48}$'
                 AND id COLLATE "C" ~ '^pipeline-run-[0-9a-f]{48}:terminal:[1-9][0-9]{0,15}$'
                 AND split_part(id, ':', 1) = target_id)
+            OR (operation_kind = 'SOURCE_HEALTH_OBSERVATION'
+                AND target_kind IN ('SOURCE_CONNECTION', 'REPOSITORY_BINDING')
+                AND id COLLATE "C" ~ '^source-observation-[0-9a-f]{64}$')
         )
     );
 
@@ -1123,6 +1130,84 @@ BEGIN
 END
 $matrix_audit_outbox_state_constraint$;
 
+CREATE TABLE IF NOT EXISTS delivery.source_observation_tasks (
+    tenant_id text COLLATE "C" NOT NULL,
+    resource_kind text COLLATE "C" NOT NULL,
+    resource_id text COLLATE "C" NOT NULL,
+    resource_version bigint NOT NULL,
+    available_at timestamptz(6) NOT NULL,
+    lease_owner text COLLATE "C",
+    lease_expires_at timestamptz(6),
+    fencing_token bigint NOT NULL,
+    last_claimed_at timestamptz(6),
+    created_at timestamptz(6) NOT NULL,
+    updated_at timestamptz(6) NOT NULL,
+    PRIMARY KEY (tenant_id, resource_kind, resource_id),
+    CONSTRAINT source_observation_tasks_values_valid CHECK (
+        tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND resource_kind IN ('SOURCE_CONNECTION', 'REPOSITORY_BINDING')
+        AND resource_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND resource_version BETWEEN 1 AND 9007199254740991
+        AND fencing_token BETWEEN 0 AND 9007199254740991
+        AND ((lease_owner IS NULL) = (lease_expires_at IS NULL))
+        AND (lease_owner IS NULL OR lease_owner COLLATE "C"
+            ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+        AND ((fencing_token = 0) = (last_claimed_at IS NULL))
+        AND available_at >= created_at
+        AND updated_at >= created_at
+        AND (last_claimed_at IS NULL OR last_claimed_at >= created_at)
+        AND (last_claimed_at IS NULL OR updated_at >= last_claimed_at)
+        AND (lease_expires_at IS NULL OR lease_expires_at > last_claimed_at)
+    )
+);
+
+CREATE INDEX IF NOT EXISTS source_observation_tasks_due_idx
+    ON delivery.source_observation_tasks (
+        available_at, lease_expires_at, tenant_id, resource_kind, resource_id
+    );
+
+CREATE TABLE IF NOT EXISTS delivery.source_observer_heartbeat (
+    singleton boolean PRIMARY KEY DEFAULT true,
+    worker_id text COLLATE "C" NOT NULL,
+    observed_at timestamptz(6) NOT NULL,
+    CONSTRAINT source_observer_heartbeat_singleton CHECK (singleton),
+    CONSTRAINT source_observer_heartbeat_worker_valid CHECK (
+        worker_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    )
+);
+
+INSERT INTO delivery.source_observation_tasks (
+    tenant_id, resource_kind, resource_id, resource_version, available_at,
+    fencing_token, created_at, updated_at
+)
+SELECT source.tenant_id, 'SOURCE_CONNECTION', source.id,
+       source.resource_version, transaction_timestamp(), 0,
+       transaction_timestamp(), transaction_timestamp()
+  FROM delivery.source_connections AS source
+ON CONFLICT ON CONSTRAINT source_observation_tasks_pkey DO UPDATE
+   SET resource_version = excluded.resource_version,
+       available_at = excluded.available_at,
+       lease_owner = NULL,
+       lease_expires_at = NULL,
+       updated_at = excluded.updated_at
+ WHERE source_observation_tasks.resource_version <> excluded.resource_version;
+
+INSERT INTO delivery.source_observation_tasks (
+    tenant_id, resource_kind, resource_id, resource_version, available_at,
+    fencing_token, created_at, updated_at
+)
+SELECT binding.tenant_id, 'REPOSITORY_BINDING', binding.id,
+       binding.resource_version, transaction_timestamp(), 0,
+       transaction_timestamp(), transaction_timestamp()
+  FROM delivery.repository_bindings AS binding
+ON CONFLICT ON CONSTRAINT source_observation_tasks_pkey DO UPDATE
+   SET resource_version = excluded.resource_version,
+       available_at = excluded.available_at,
+       lease_owner = NULL,
+       lease_expires_at = NULL,
+       updated_at = excluded.updated_at
+ WHERE source_observation_tasks.resource_version <> excluded.resource_version;
+
 ALTER TABLE delivery.projects ENABLE ROW LEVEL SECURITY;
 ALTER TABLE delivery.projects FORCE ROW LEVEL SECURITY;
 ALTER TABLE delivery.source_connections ENABLE ROW LEVEL SECURITY;
@@ -1147,6 +1232,10 @@ ALTER TABLE delivery.audit_operations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE delivery.audit_operations FORCE ROW LEVEL SECURITY;
 ALTER TABLE delivery.audit_outbox ENABLE ROW LEVEL SECURITY;
 ALTER TABLE delivery.audit_outbox FORCE ROW LEVEL SECURITY;
+ALTER TABLE delivery.source_observation_tasks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE delivery.source_observation_tasks FORCE ROW LEVEL SECURITY;
+ALTER TABLE delivery.source_observer_heartbeat ENABLE ROW LEVEL SECURITY;
+ALTER TABLE delivery.source_observer_heartbeat FORCE ROW LEVEL SECURITY;
 
 DO $matrix_delivery_policy$
 DECLARE
@@ -1157,7 +1246,7 @@ BEGIN
         'repository_binding_revisions', 'pipelines', 'pipeline_revisions',
         'source_events', 'pipeline_runs', 'pipeline_run_tasks',
         'mutations', 'audit_operations',
-        'audit_outbox'
+        'audit_outbox', 'source_observation_tasks'
     ]
     LOOP
         IF NOT EXISTS (
@@ -1225,6 +1314,31 @@ BEGIN
     END IF;
 END
 $matrix_run_worker_owner_policy$;
+
+DO $matrix_source_observer_owner_policy$
+DECLARE
+    table_name text;
+BEGIN
+    FOREACH table_name IN ARRAY ARRAY[
+        'source_connections', 'repository_bindings',
+        'source_observation_tasks', 'source_observer_heartbeat',
+        'audit_operations', 'audit_outbox'
+    ]
+    LOOP
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_catalog.pg_policies
+             WHERE schemaname = 'delivery' AND tablename = table_name
+               AND policyname = 'owner_source_observer'
+        ) THEN
+            EXECUTE format(
+                'CREATE POLICY owner_source_observer ON delivery.%I '
+                'TO matrix_devops_owner USING (true) WITH CHECK (true)',
+                table_name
+            );
+        END IF;
+    END LOOP;
+END
+$matrix_source_observer_owner_policy$;
 
 CREATE OR REPLACE FUNCTION delivery.commit_configuration_mutation(
     requested_kind text,
@@ -1628,6 +1742,58 @@ BEGIN
     GET DIAGNOSTICS affected = ROW_COUNT;
     IF affected <> 1 THEN
         RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'delivery resource version conflict';
+    END IF;
+
+    IF requested_kind IN (
+        'CREATE_SOURCE_CONNECTION', 'UPDATE_SOURCE_CONNECTION',
+        'CREATE_REPOSITORY_BINDING', 'UPDATE_REPOSITORY_BINDING'
+    ) THEN
+        INSERT INTO delivery.source_observation_tasks (
+            tenant_id, resource_kind, resource_id, resource_version,
+            available_at, fencing_token, created_at, updated_at
+        ) VALUES (
+            effective_tenant_id,
+            CASE
+                WHEN requested_kind IN (
+                    'CREATE_SOURCE_CONNECTION', 'UPDATE_SOURCE_CONNECTION'
+                ) THEN 'SOURCE_CONNECTION'
+                ELSE 'REPOSITORY_BINDING'
+            END,
+            resource_id,
+            (submitted_resource#>>'{metadata,resourceVersion}')::bigint,
+            effective_now, 0, effective_now, effective_now
+        )
+        ON CONFLICT ON CONSTRAINT source_observation_tasks_pkey DO UPDATE
+           SET resource_version = excluded.resource_version,
+               available_at = excluded.available_at,
+               lease_owner = NULL,
+               lease_expires_at = NULL,
+               updated_at = greatest(
+                   excluded.updated_at,
+                   source_observation_tasks.last_claimed_at
+               );
+    END IF;
+
+    IF requested_kind = 'UPDATE_SOURCE_CONNECTION' THEN
+        INSERT INTO delivery.source_observation_tasks (
+            tenant_id, resource_kind, resource_id, resource_version,
+            available_at, fencing_token, created_at, updated_at
+        )
+        SELECT binding.tenant_id, 'REPOSITORY_BINDING', binding.id,
+               binding.resource_version, effective_now, 0,
+               effective_now, effective_now
+          FROM delivery.repository_bindings AS binding
+         WHERE binding.tenant_id = effective_tenant_id
+           AND binding.source_connection_id = resource_id
+        ON CONFLICT ON CONSTRAINT source_observation_tasks_pkey DO UPDATE
+           SET resource_version = excluded.resource_version,
+               available_at = excluded.available_at,
+               lease_owner = NULL,
+               lease_expires_at = NULL,
+               updated_at = greatest(
+                   excluded.updated_at,
+                   source_observation_tasks.last_claimed_at
+               );
     END IF;
 
     INSERT INTO delivery.audit_operations (
@@ -4304,6 +4470,623 @@ DROP POLICY owner_source_contract_upgrade ON delivery.repository_bindings;
 DROP POLICY owner_source_contract_upgrade ON delivery.repository_binding_revisions;
 DROP POLICY owner_source_contract_upgrade ON delivery.mutations;
 
+CREATE OR REPLACE FUNCTION delivery.record_source_observer_heartbeat(
+    requested_worker_id text
+)
+RETURNS timestamptz
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_observed_at timestamptz(6);
+BEGIN
+    IF requested_worker_id IS NULL
+       OR requested_worker_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'source observer heartbeat identity is invalid';
+    END IF;
+
+    INSERT INTO delivery.source_observer_heartbeat (
+        singleton, worker_id, observed_at
+    ) VALUES (
+        true, requested_worker_id, transaction_timestamp()
+    )
+    ON CONFLICT (singleton) DO UPDATE
+       SET worker_id = CASE
+               WHEN excluded.observed_at >= source_observer_heartbeat.observed_at
+               THEN excluded.worker_id
+               ELSE source_observer_heartbeat.worker_id
+           END,
+           observed_at = greatest(
+               excluded.observed_at,
+               source_observer_heartbeat.observed_at
+           )
+    RETURNING observed_at INTO effective_observed_at;
+
+    RETURN effective_observed_at;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION delivery.record_source_observer_heartbeat(text)
+    FROM PUBLIC, matrix_devops_api, matrix_devops_worker;
+GRANT EXECUTE ON FUNCTION delivery.record_source_observer_heartbeat(text)
+    TO matrix_devops_source_observer;
+
+CREATE OR REPLACE FUNCTION delivery.claim_source_observation(
+    requested_worker_id text,
+    requested_lease_seconds integer
+)
+RETURNS TABLE (
+    tenant_id text,
+    resource_kind text,
+    resource_id text,
+    resource_version bigint,
+    fencing_token bigint,
+    claimed_at timestamptz,
+    lease_expires_at timestamptz,
+    connection_document jsonb,
+    binding_document jsonb
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    selected_tenant_id text;
+    selected_resource_kind text;
+    selected_resource_id text;
+    selected_resource_version bigint;
+    selected_fencing_token bigint;
+    selected_last_claimed_at timestamptz(6);
+    effective_fencing_token bigint;
+    effective_claimed_at timestamptz(6);
+    effective_lease_expires_at timestamptz(6);
+    selected_connection_document jsonb;
+    selected_binding_document jsonb;
+BEGIN
+    IF requested_worker_id IS NULL
+       OR requested_worker_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_lease_seconds IS DISTINCT FROM 30 THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'source observation claim parameters are invalid';
+    END IF;
+
+    SELECT task.tenant_id,
+           task.resource_kind,
+           task.resource_id,
+           task.resource_version,
+           task.fencing_token,
+           task.last_claimed_at
+      INTO selected_tenant_id,
+           selected_resource_kind,
+           selected_resource_id,
+           selected_resource_version,
+           selected_fencing_token,
+           selected_last_claimed_at
+      FROM delivery.source_observation_tasks AS task
+     WHERE task.available_at <= transaction_timestamp()
+       AND task.resource_version < 9007199254740991
+       AND task.fencing_token < 9007199254740991
+       AND (
+            task.lease_owner IS NULL
+            OR task.lease_expires_at <= transaction_timestamp()
+       )
+       AND (
+            (task.resource_kind = 'SOURCE_CONNECTION' AND EXISTS (
+                SELECT 1
+                  FROM delivery.source_connections AS source
+                 WHERE source.tenant_id = task.tenant_id
+                   AND source.id = task.resource_id
+                   AND source.resource_version = task.resource_version
+            ))
+            OR (task.resource_kind = 'REPOSITORY_BINDING' AND EXISTS (
+                SELECT 1
+                  FROM delivery.repository_bindings AS binding
+                  JOIN delivery.source_connections AS source
+                    ON source.tenant_id = binding.tenant_id
+                   AND source.id = binding.source_connection_id
+                 WHERE binding.tenant_id = task.tenant_id
+                   AND binding.id = task.resource_id
+                   AND binding.resource_version = task.resource_version
+            ))
+       )
+     ORDER BY (
+            SELECT max(fairness.last_claimed_at)
+              FROM delivery.source_observation_tasks AS fairness
+             WHERE fairness.tenant_id = task.tenant_id
+       ) ASC NULLS FIRST,
+       task.available_at,
+       task.tenant_id COLLATE "C",
+       task.resource_kind COLLATE "C",
+       task.resource_id COLLATE "C"
+     LIMIT 1
+     FOR UPDATE OF task SKIP LOCKED;
+
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+
+    effective_claimed_at := greatest(
+        transaction_timestamp(),
+        selected_last_claimed_at + interval '1 microsecond'
+    );
+    effective_fencing_token := selected_fencing_token + 1;
+    effective_lease_expires_at := effective_claimed_at
+        + make_interval(secs => requested_lease_seconds);
+
+    UPDATE delivery.source_observation_tasks AS claimed
+       SET lease_owner = requested_worker_id,
+           lease_expires_at = effective_lease_expires_at,
+           fencing_token = effective_fencing_token,
+           last_claimed_at = effective_claimed_at,
+           updated_at = effective_claimed_at
+     WHERE claimed.tenant_id = selected_tenant_id
+       AND claimed.resource_kind = selected_resource_kind
+       AND claimed.resource_id = selected_resource_id;
+
+    IF selected_resource_kind = 'SOURCE_CONNECTION' THEN
+        SELECT source.document
+          INTO selected_connection_document
+          FROM delivery.source_connections AS source
+         WHERE source.tenant_id = selected_tenant_id
+           AND source.id = selected_resource_id
+           AND source.resource_version = selected_resource_version;
+        selected_binding_document := NULL;
+    ELSE
+        SELECT source.document, binding.document
+          INTO selected_connection_document, selected_binding_document
+          FROM delivery.repository_bindings AS binding
+          JOIN delivery.source_connections AS source
+            ON source.tenant_id = binding.tenant_id
+           AND source.id = binding.source_connection_id
+         WHERE binding.tenant_id = selected_tenant_id
+           AND binding.id = selected_resource_id
+           AND binding.resource_version = selected_resource_version;
+    END IF;
+
+    IF selected_connection_document IS NULL
+       OR (selected_resource_kind = 'REPOSITORY_BINDING'
+            AND selected_binding_document IS NULL) THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '55000',
+            MESSAGE = 'source observation resource disappeared during claim';
+    END IF;
+
+    RETURN QUERY SELECT
+        selected_tenant_id,
+        selected_resource_kind,
+        selected_resource_id,
+        selected_resource_version,
+        effective_fencing_token,
+        effective_claimed_at,
+        effective_lease_expires_at,
+        selected_connection_document,
+        selected_binding_document;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION delivery.claim_source_observation(text, integer)
+    FROM PUBLIC, matrix_devops_api, matrix_devops_worker;
+GRANT EXECUTE ON FUNCTION delivery.claim_source_observation(text, integer)
+    TO matrix_devops_source_observer;
+
+CREATE OR REPLACE FUNCTION delivery.complete_source_observation(
+    requested_tenant_id text,
+    requested_resource_kind text,
+    requested_resource_id text,
+    expected_resource_version bigint,
+    requested_worker_id text,
+    expected_fencing_token bigint,
+    submitted_resource jsonb,
+    submitted_audit_event jsonb
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    current_document jsonb;
+    current_queue_version bigint;
+    current_lease_owner text;
+    current_lease_expires_at timestamptz(6);
+    current_fencing_token bigint;
+    expected_document_kind text;
+    expected_target_kind text;
+    expected_audit_action text;
+    effective_now timestamptz(6);
+    effective_time_text text;
+    observation_payload text;
+    expected_request_digest text;
+    expected_operation_id text;
+    expected_event_id text;
+    transitioned boolean;
+    health_pair_valid boolean;
+    affected integer;
+BEGIN
+    IF requested_tenant_id IS NULL
+       OR requested_tenant_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_resource_kind NOT IN (
+            'SOURCE_CONNECTION', 'REPOSITORY_BINDING'
+       )
+       OR requested_resource_id IS NULL
+       OR requested_resource_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR expected_resource_version IS NULL
+       OR expected_resource_version NOT BETWEEN 1 AND 9007199254740990
+       OR requested_worker_id IS NULL
+       OR requested_worker_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR expected_fencing_token IS NULL
+       OR expected_fencing_token NOT BETWEEN 1 AND 9007199254740991
+       OR jsonb_typeof(submitted_resource) IS DISTINCT FROM 'object'
+       OR (
+            submitted_audit_event IS NOT NULL
+            AND jsonb_typeof(submitted_audit_event) IS DISTINCT FROM 'object'
+       ) THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'source observation completion parameters are invalid';
+    END IF;
+
+    expected_document_kind := CASE requested_resource_kind
+        WHEN 'SOURCE_CONNECTION' THEN 'SourceConnection'
+        ELSE 'RepositoryBinding'
+    END;
+    expected_target_kind := requested_resource_kind;
+    expected_audit_action := CASE requested_resource_kind
+        WHEN 'SOURCE_CONNECTION'
+            THEN 'devops.source-connection.health-transitioned'
+        ELSE 'devops.repository-binding.health-transitioned'
+    END;
+
+    IF requested_resource_kind = 'SOURCE_CONNECTION' THEN
+        SELECT source.document
+          INTO current_document
+          FROM delivery.source_connections AS source
+         WHERE source.tenant_id = requested_tenant_id
+           AND source.id = requested_resource_id
+         FOR UPDATE;
+    ELSE
+        SELECT binding.document
+          INTO current_document
+          FROM delivery.repository_bindings AS binding
+         WHERE binding.tenant_id = requested_tenant_id
+           AND binding.id = requested_resource_id
+         FOR UPDATE;
+    END IF;
+
+    IF current_document IS NULL
+       OR (current_document#>>'{metadata,resourceVersion}')::numeric
+            IS DISTINCT FROM expected_resource_version THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'MX412',
+            MESSAGE = 'source observation resource version is stale';
+    END IF;
+
+    SELECT task.resource_version,
+           task.lease_owner,
+           task.lease_expires_at,
+           task.fencing_token
+      INTO current_queue_version,
+           current_lease_owner,
+           current_lease_expires_at,
+           current_fencing_token
+      FROM delivery.source_observation_tasks AS task
+     WHERE task.tenant_id = requested_tenant_id
+       AND task.resource_kind = requested_resource_kind
+       AND task.resource_id = requested_resource_id
+     FOR UPDATE;
+
+    IF NOT FOUND
+       OR current_queue_version IS DISTINCT FROM expected_resource_version
+       OR current_lease_owner IS DISTINCT FROM requested_worker_id
+       OR current_fencing_token IS DISTINCT FROM expected_fencing_token
+       OR current_lease_expires_at <= transaction_timestamp() THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'MX412',
+            MESSAGE = 'source observation lease or fencing token is stale';
+    END IF;
+
+    effective_now := greatest(
+        transaction_timestamp(),
+        (current_document#>>'{metadata,updatedAt}')::timestamptz
+            + interval '1 microsecond'
+    );
+    effective_time_text := to_char(
+        effective_now AT TIME ZONE 'UTC',
+        'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+    );
+
+    IF jsonb_typeof(submitted_resource->'metadata') IS DISTINCT FROM 'object'
+       OR jsonb_typeof(submitted_resource->'status') IS DISTINCT FROM 'object'
+       OR submitted_resource->>'apiVersion'
+            IS DISTINCT FROM 'devops.matrix.xiak.com/v1'
+       OR submitted_resource->>'kind' IS DISTINCT FROM expected_document_kind
+       OR submitted_resource#>>'{metadata,scope,tenantId}'
+            IS DISTINCT FROM requested_tenant_id
+       OR submitted_resource#>>'{metadata,id}'
+            IS DISTINCT FROM requested_resource_id
+       OR (submitted_resource#>>'{metadata,resourceVersion}')::numeric
+            IS DISTINCT FROM expected_resource_version + 1
+       OR (submitted_resource#>>'{metadata,updatedAt}')::timestamptz
+            IS DISTINCT FROM effective_now
+       OR (submitted_resource#>>'{status,observedAt}')::timestamptz
+            IS DISTINCT FROM effective_now
+       OR (submitted_resource - ARRAY['metadata', 'status'])
+            IS DISTINCT FROM (current_document - ARRAY['metadata', 'status'])
+       OR ((submitted_resource->'metadata')
+            - ARRAY['resourceVersion', 'updatedAt'])
+            IS DISTINCT FROM ((current_document->'metadata')
+                - ARRAY['resourceVersion', 'updatedAt'])
+       OR ((submitted_resource->'status')
+            - ARRAY['health', 'reason', 'observedAt']) <> '{}'::jsonb THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'source observation resource document is invalid';
+    END IF;
+
+    health_pair_valid := CASE requested_resource_kind
+        WHEN 'SOURCE_CONNECTION' THEN
+            (submitted_resource#>>'{status,health}' = 'READY'
+                AND submitted_resource#>>'{status,reason}' = 'OBSERVED')
+            OR (submitted_resource#>>'{status,health}' = 'UNAVAILABLE'
+                AND submitted_resource#>>'{status,reason}' IN (
+                    'SECRET_UNAVAILABLE', 'PROVIDER_UNAVAILABLE',
+                    'PROVIDER_UNSUPPORTED', 'CREDENTIAL_REJECTED'
+                ))
+        ELSE
+            (submitted_resource#>>'{status,health}' = 'PENDING'
+                AND submitted_resource#>>'{status,reason}'
+                    = 'CONNECTION_NOT_READY')
+            OR (submitted_resource#>>'{status,health}' = 'READY'
+                AND submitted_resource#>>'{status,reason}' = 'OBSERVED')
+            OR (submitted_resource#>>'{status,health}' = 'UNAVAILABLE'
+                AND submitted_resource#>>'{status,reason}' IN (
+                    'REPOSITORY_UNAVAILABLE', 'IDENTITY_MISMATCH',
+                    'FETCH_PERMISSION_DENIED', 'REPORT_PERMISSION_DENIED'
+                ))
+    END;
+    IF NOT health_pair_valid THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'source observation health pair is invalid';
+    END IF;
+
+    transitioned := current_document#>>'{status,health}'
+            IS DISTINCT FROM submitted_resource#>>'{status,health}'
+        OR current_document#>>'{status,reason}'
+            IS DISTINCT FROM submitted_resource#>>'{status,reason}';
+    observation_payload := array_to_string(ARRAY[
+        'matrix-devops-source-health-observation-v1',
+        expected_target_kind,
+        requested_tenant_id,
+        requested_resource_id,
+        submitted_resource#>>'{status,health}',
+        submitted_resource#>>'{status,reason}',
+        (expected_resource_version + 1)::text,
+        effective_time_text
+    ], E'\n');
+    expected_request_digest := 'sha256:' || encode(
+        sha256(convert_to(observation_payload, 'UTF8')), 'hex'
+    );
+    expected_operation_id := 'source-observation-'
+        || substring(expected_request_digest FROM 8);
+    expected_event_id := 'audit-' || encode(
+        sha256(
+            convert_to('matrix-devops-audit-event-v1', 'UTF8')
+            || decode('00', 'hex')
+            || convert_to(expected_operation_id, 'UTF8')
+        ),
+        'hex'
+    );
+
+    IF transitioned AND (
+        submitted_audit_event IS NULL
+        OR NOT (submitted_audit_event ?& ARRAY[
+            'apiVersion', 'kind', 'eventId', 'tenantId', 'actor',
+            'action', 'target', 'result', 'requestDigest', 'requestId',
+            'correlationId', 'operationId', 'occurredAt'
+        ])
+        OR (submitted_audit_event - ARRAY[
+            'apiVersion', 'kind', 'eventId', 'tenantId', 'actor',
+            'action', 'target', 'result', 'requestDigest', 'requestId',
+            'correlationId', 'operationId', 'occurredAt'
+        ]) <> '{}'::jsonb
+        OR jsonb_typeof(submitted_audit_event->'actor') IS DISTINCT FROM 'object'
+        OR jsonb_typeof(submitted_audit_event->'target') IS DISTINCT FROM 'object'
+        OR ((submitted_audit_event->'actor') - ARRAY['type', 'id']) <> '{}'::jsonb
+        OR ((submitted_audit_event->'target') - ARRAY['kind', 'id']) <> '{}'::jsonb
+        OR submitted_audit_event->>'apiVersion'
+            IS DISTINCT FROM 'audit.matrix.xiak.com/v1'
+        OR submitted_audit_event->>'kind' IS DISTINCT FROM 'AuditEvent'
+        OR submitted_audit_event->>'eventId' IS DISTINCT FROM expected_event_id
+        OR submitted_audit_event->>'tenantId' IS DISTINCT FROM requested_tenant_id
+        OR submitted_audit_event#>>'{actor,type}' IS DISTINCT FROM 'SYSTEM'
+        OR submitted_audit_event#>>'{actor,id}'
+            IS DISTINCT FROM 'system-devops-source-observer'
+        OR submitted_audit_event->>'action' IS DISTINCT FROM expected_audit_action
+        OR submitted_audit_event#>>'{target,kind}'
+            IS DISTINCT FROM expected_target_kind
+        OR submitted_audit_event#>>'{target,id}'
+            IS DISTINCT FROM requested_resource_id
+        OR submitted_audit_event->>'result' IS DISTINCT FROM 'SUCCEEDED'
+        OR submitted_audit_event->>'requestDigest'
+            IS DISTINCT FROM expected_request_digest
+        OR submitted_audit_event->>'requestId'
+            IS DISTINCT FROM expected_operation_id
+        OR submitted_audit_event->>'correlationId'
+            IS DISTINCT FROM requested_resource_id
+        OR submitted_audit_event->>'operationId'
+            IS DISTINCT FROM expected_operation_id
+        OR (submitted_audit_event->>'occurredAt')::timestamptz
+            IS DISTINCT FROM effective_now
+    ) THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'source health transition Audit fact is invalid';
+    ELSIF NOT transitioned AND submitted_audit_event IS NOT NULL THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'equal source health observation cannot emit Audit';
+    END IF;
+
+    IF requested_resource_kind = 'SOURCE_CONNECTION' THEN
+        UPDATE delivery.source_connections AS source
+           SET resource_version = expected_resource_version + 1,
+               document = submitted_resource
+         WHERE source.tenant_id = requested_tenant_id
+           AND source.id = requested_resource_id
+           AND source.resource_version = expected_resource_version;
+    ELSE
+        UPDATE delivery.repository_bindings AS binding
+           SET resource_version = expected_resource_version + 1,
+               document = submitted_resource
+         WHERE binding.tenant_id = requested_tenant_id
+           AND binding.id = requested_resource_id
+           AND binding.resource_version = expected_resource_version;
+    END IF;
+    GET DIAGNOSTICS affected = ROW_COUNT;
+    IF affected <> 1 THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'MX412',
+            MESSAGE = 'source observation resource version is stale';
+    END IF;
+
+    UPDATE delivery.source_observation_tasks AS task
+       SET resource_version = expected_resource_version + 1,
+           available_at = effective_now + interval '60 seconds',
+           lease_owner = NULL,
+           lease_expires_at = NULL,
+           updated_at = effective_now
+     WHERE task.tenant_id = requested_tenant_id
+       AND task.resource_kind = requested_resource_kind
+       AND task.resource_id = requested_resource_id
+       AND task.resource_version = expected_resource_version
+       AND task.lease_owner = requested_worker_id
+       AND task.fencing_token = expected_fencing_token;
+    GET DIAGNOSTICS affected = ROW_COUNT;
+    IF affected <> 1 THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'MX412',
+            MESSAGE = 'source observation lease or fencing token is stale';
+    END IF;
+
+    IF transitioned AND requested_resource_kind = 'SOURCE_CONNECTION' THEN
+        INSERT INTO delivery.source_observation_tasks (
+            tenant_id, resource_kind, resource_id, resource_version,
+            available_at, fencing_token, created_at, updated_at
+        )
+        SELECT binding.tenant_id, 'REPOSITORY_BINDING', binding.id,
+               binding.resource_version, effective_now, 0,
+               effective_now, effective_now
+          FROM delivery.repository_bindings AS binding
+         WHERE binding.tenant_id = requested_tenant_id
+           AND binding.source_connection_id = requested_resource_id
+        ON CONFLICT ON CONSTRAINT source_observation_tasks_pkey DO UPDATE
+           SET resource_version = excluded.resource_version,
+               available_at = least(
+                   source_observation_tasks.available_at,
+                   excluded.available_at
+               ),
+               lease_owner = NULL,
+               lease_expires_at = NULL,
+               updated_at = greatest(
+                   excluded.updated_at,
+                   source_observation_tasks.last_claimed_at
+               );
+    END IF;
+
+    IF transitioned THEN
+        INSERT INTO delivery.audit_operations (
+            tenant_id, id, operation_kind, target_kind, target_id, created_at
+        ) VALUES (
+            requested_tenant_id, expected_operation_id,
+            'SOURCE_HEALTH_OBSERVATION', expected_target_kind,
+            requested_resource_id, effective_now
+        );
+        INSERT INTO delivery.audit_outbox (
+            tenant_id, event_id, operation_id, status, available_at,
+            attempts, fencing_token, created_at, updated_at, document
+        ) VALUES (
+            requested_tenant_id, expected_event_id, expected_operation_id,
+            'PENDING', effective_now, 0, 0, effective_now, effective_now,
+            submitted_audit_event
+        );
+    END IF;
+
+    RETURN submitted_resource;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION delivery.complete_source_observation(
+    text, text, text, bigint, text, bigint, jsonb, jsonb
+) FROM PUBLIC, matrix_devops_api, matrix_devops_worker;
+GRANT EXECUTE ON FUNCTION delivery.complete_source_observation(
+    text, text, text, bigint, text, bigint, jsonb, jsonb
+) TO matrix_devops_source_observer;
+
+CREATE OR REPLACE FUNCTION delivery.source_observer_readiness()
+RETURNS TABLE (ready boolean, schema_version bigint, checked_at timestamptz)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+    SELECT
+        to_regclass('delivery.source_observation_tasks') IS NOT NULL
+        AND to_regclass('delivery.source_observer_heartbeat') IS NOT NULL
+        AND to_regprocedure(
+            'delivery.record_source_observer_heartbeat(text)'
+        ) IS NOT NULL
+        AND to_regprocedure(
+            'delivery.claim_source_observation(text,integer)'
+        ) IS NOT NULL
+        AND to_regprocedure(
+            'delivery.complete_source_observation(text,text,text,bigint,text,bigint,jsonb,jsonb)'
+        ) IS NOT NULL
+        AND EXISTS (
+            SELECT 1
+              FROM delivery.source_observer_heartbeat AS heartbeat
+             WHERE heartbeat.singleton
+               AND heartbeat.observed_at <= transaction_timestamp()
+               AND heartbeat.observed_at
+                    >= transaction_timestamp() - interval '30 seconds'
+        )
+        AND NOT EXISTS (
+            SELECT 1
+              FROM delivery.source_observation_tasks AS task
+             WHERE task.fencing_token >= 9007199254740991
+                OR (task.resource_kind = 'SOURCE_CONNECTION' AND NOT EXISTS (
+                    SELECT 1
+                      FROM delivery.source_connections AS source
+                     WHERE source.tenant_id = task.tenant_id
+                       AND source.id = task.resource_id
+                       AND source.resource_version = task.resource_version
+                ))
+                OR (task.resource_kind = 'REPOSITORY_BINDING' AND NOT EXISTS (
+                    SELECT 1
+                      FROM delivery.repository_bindings AS binding
+                     WHERE binding.tenant_id = task.tenant_id
+                       AND binding.id = task.resource_id
+                       AND binding.resource_version = task.resource_version
+                ))
+        ),
+        1::bigint,
+        transaction_timestamp()
+$function$;
+
+REVOKE ALL ON FUNCTION delivery.source_observer_readiness()
+    FROM PUBLIC, matrix_devops_api, matrix_devops_worker;
+GRANT EXECUTE ON FUNCTION delivery.source_observer_readiness()
+    TO matrix_devops_source_observer;
+
 CREATE OR REPLACE FUNCTION delivery.readiness()
 RETURNS TABLE (ready boolean, schema_version bigint, checked_at timestamptz)
 LANGUAGE sql
@@ -4321,6 +5104,8 @@ AS $function$
         AND to_regclass('delivery.pipeline_runs') IS NOT NULL
         AND to_regclass('delivery.pipeline_run_tasks') IS NOT NULL
         AND to_regclass('delivery.audit_operations') IS NOT NULL
+        AND to_regclass('delivery.source_observation_tasks') IS NOT NULL
+        AND to_regclass('delivery.source_observer_heartbeat') IS NOT NULL
         AND to_regprocedure(
             'delivery.commit_configuration_mutation(text,bigint,jsonb,jsonb,jsonb,jsonb,jsonb)'
         ) IS NOT NULL
@@ -4341,6 +5126,15 @@ AS $function$
         ) IS NOT NULL
         AND to_regprocedure(
             'delivery.claim_pipeline_run_task(text,integer)'
+        ) IS NOT NULL
+        AND to_regprocedure(
+            'delivery.record_source_observer_heartbeat(text)'
+        ) IS NOT NULL
+        AND to_regprocedure(
+            'delivery.claim_source_observation(text,integer)'
+        ) IS NOT NULL
+        AND to_regprocedure(
+            'delivery.complete_source_observation(text,text,text,bigint,text,bigint,jsonb,jsonb)'
         ) IS NOT NULL
         AND to_regprocedure(
             'delivery.renew_pipeline_run_task(text,text,text,text,bigint,integer)'
@@ -4408,13 +5202,24 @@ AS $function$
              WHERE outbox.status = 'DEAD_LETTER'
                 OR outbox.attempts >= 100
                 OR outbox.fencing_token >= 9007199254740991
+        )
+        AND (
+            NOT EXISTS (SELECT 1 FROM delivery.source_connections)
+            OR EXISTS (
+                SELECT 1
+                  FROM delivery.source_observer_heartbeat AS heartbeat
+                 WHERE heartbeat.singleton
+                   AND heartbeat.observed_at <= transaction_timestamp()
+                   AND heartbeat.observed_at
+                        >= transaction_timestamp() - interval '30 seconds'
+            )
         ),
         1::bigint,
         transaction_timestamp()
 $function$;
 
 REVOKE ALL ON FUNCTION delivery.readiness()
-    FROM PUBLIC, matrix_devops_worker;
+    FROM PUBLIC, matrix_devops_worker, matrix_devops_source_observer;
 GRANT EXECUTE ON FUNCTION delivery.readiness() TO matrix_devops_api;
 
 CREATE OR REPLACE FUNCTION delivery.worker_readiness()
@@ -4505,7 +5310,7 @@ AS $function$
 $function$;
 
 REVOKE ALL ON FUNCTION delivery.worker_readiness()
-    FROM PUBLIC, matrix_devops_api;
+    FROM PUBLIC, matrix_devops_api, matrix_devops_source_observer;
 GRANT EXECUTE ON FUNCTION delivery.worker_readiness() TO matrix_devops_worker;
 
 REVOKE ALL ON FUNCTION delivery.current_tenant_id() FROM PUBLIC;
@@ -4520,7 +5325,7 @@ GRANT EXECUTE ON FUNCTION delivery.commit_configuration_mutation(
 
 REVOKE ALL ON ALL TABLES IN SCHEMA delivery FROM PUBLIC;
 REVOKE ALL ON ALL TABLES IN SCHEMA delivery
-    FROM matrix_devops_api, matrix_devops_worker;
+    FROM matrix_devops_api, matrix_devops_worker, matrix_devops_source_observer;
 GRANT SELECT ON delivery.projects TO matrix_devops_api;
 GRANT SELECT ON delivery.source_connections TO matrix_devops_api;
 GRANT SELECT ON delivery.repository_bindings TO matrix_devops_api;
@@ -4530,5 +5335,17 @@ GRANT SELECT ON delivery.pipeline_revisions TO matrix_devops_api;
 GRANT SELECT ON delivery.source_events TO matrix_devops_api;
 GRANT SELECT ON delivery.pipeline_runs TO matrix_devops_api;
 GRANT SELECT ON delivery.mutations TO matrix_devops_api;
+
+REVOKE ALL ON ALL FUNCTIONS IN SCHEMA delivery
+    FROM matrix_devops_source_observer;
+GRANT EXECUTE ON FUNCTION delivery.record_source_observer_heartbeat(text)
+    TO matrix_devops_source_observer;
+GRANT EXECUTE ON FUNCTION delivery.claim_source_observation(text, integer)
+    TO matrix_devops_source_observer;
+GRANT EXECUTE ON FUNCTION delivery.complete_source_observation(
+    text, text, text, bigint, text, bigint, jsonb, jsonb
+) TO matrix_devops_source_observer;
+GRANT EXECUTE ON FUNCTION delivery.source_observer_readiness()
+    TO matrix_devops_source_observer;
 
 COMMIT;

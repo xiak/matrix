@@ -34,8 +34,10 @@
           "devops.project.created",
           "devops.source-connection.created",
           "devops.source-connection.updated",
+          "devops.source-connection.health-transitioned",
           "devops.repository-binding.created",
           "devops.repository-binding.updated",
+          "devops.repository-binding.health-transitioned",
           "devops.pipeline.created",
           "devops.pipeline.draft-updated",
           "devops.pipeline-revision.activated",
@@ -583,6 +585,32 @@
                 "event": {
                   "properties": {
                     "action": {
+                      "const": "devops.source-connection.health-transitioned"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "DEVOPS"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
                       "const": "devops.repository-binding.created"
                     }
                   },
@@ -610,6 +638,32 @@
                   "properties": {
                     "action": {
                       "const": "devops.repository-binding.updated"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "DEVOPS"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "devops.repository-binding.health-transitioned"
                     }
                   },
                   "required": [
@@ -1756,6 +1810,43 @@
             "if": {
               "properties": {
                 "action": {
+                  "const": "devops.source-connection.health-transitioned"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "iamDecisionId": false,
+                "outcome": false,
+                "reason": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "SOURCE_CONNECTION"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "operationId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
                   "const": "devops.repository-binding.created"
                 }
               },
@@ -1822,6 +1913,43 @@
               },
               "required": [
                 "iamDecisionId",
+                "operationId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "devops.repository-binding.health-transitioned"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "iamDecisionId": false,
+                "outcome": false,
+                "reason": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "REPOSITORY_BINDING"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
                 "operationId"
               ]
             }

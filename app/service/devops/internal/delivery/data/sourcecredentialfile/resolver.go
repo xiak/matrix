@@ -16,22 +16,82 @@ import (
 )
 
 type Resolver struct {
-	root string
+	purpose sourcecredential.Purpose
+	root    string
 }
 
 var _ sourceingress.WebhookSecretResolver = (*Resolver)(nil)
 
-func NewResolver(root string) (*Resolver, error) {
-	if root == "" || !filepath.IsAbs(root) || filepath.Clean(root) != root {
-		return nil, errors.New("webhook credential root is invalid")
+var ErrMaterialNotFound = errors.New("source credential material is absent")
+
+func NewResolver(purpose sourcecredential.Purpose, root string) (*Resolver, error) {
+	if sourcecredential.ValidatePurpose(purpose) != nil || root == "" ||
+		!filepath.IsAbs(root) || filepath.Clean(root) != root {
+		return nil, errors.New("source credential root is invalid")
 	}
 	evaluated, err := filepath.EvalSymlinks(root)
 	info, statErr := os.Lstat(root)
 	if err != nil || statErr != nil || evaluated != root || info == nil || !info.IsDir() ||
 		info.Mode()&os.ModeSymlink != 0 || !privateDirectory(info) {
-		return nil, errors.New("webhook credential root is unavailable")
+		return nil, errors.New("source credential root is unavailable")
 	}
-	return &Resolver{root: root}, nil
+	return &Resolver{purpose: purpose, root: root}, nil
+}
+
+func (resolver *Resolver) Resolve(
+	ctx context.Context,
+	scope devopsv1.ResourceScope,
+	reference devopsv1.ResourceID,
+) (sourcecredential.Material, error) {
+	if resolver == nil || resolver.root == "" ||
+		sourcecredential.ValidatePurpose(resolver.purpose) != nil {
+		return sourcecredential.Material{}, errors.New("source credential resolver is unavailable")
+	}
+	if ctx == nil {
+		return sourcecredential.Material{}, errors.New("source credential context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return sourcecredential.Material{}, err
+	}
+	directory, err := sourcecredential.DirectoryName(resolver.purpose, scope, reference)
+	if err != nil {
+		return sourcecredential.Material{}, err
+	}
+	credentialRoot := filepath.Join(resolver.root, directory)
+	info, err := os.Lstat(credentialRoot)
+	if errors.Is(err, os.ErrNotExist) {
+		return sourcecredential.Material{}, ErrMaterialNotFound
+	}
+	if err != nil || info == nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 ||
+		!privateDirectory(info) {
+		return sourcecredential.Material{}, errors.New("source credential directory is unsafe")
+	}
+	evaluated, err := filepath.EvalSymlinks(credentialRoot)
+	if err != nil || evaluated != credentialRoot {
+		return sourcecredential.Material{}, errors.New("source credential directory is unsafe")
+	}
+	materialPath := filepath.Join(credentialRoot, sourcecredential.MaterialFilename)
+	if _, statErr := os.Lstat(materialPath); errors.Is(statErr, os.ErrNotExist) {
+		return sourcecredential.Material{}, ErrMaterialNotFound
+	} else if statErr != nil {
+		return sourcecredential.Material{}, errors.New("source credential material is unavailable")
+	}
+	content, err := processconfig.ReadFile(
+		materialPath, sourcecredential.MaximumMaterialBytes, true,
+	)
+	if err != nil {
+		return sourcecredential.Material{}, errors.New("source credential material is unavailable")
+	}
+	defer clear(content)
+	material, err := sourcecredential.Decode(resolver.purpose, content)
+	if err != nil {
+		return sourcecredential.Material{}, errors.New("source credential material is invalid")
+	}
+	if err := ctx.Err(); err != nil {
+		material.Clear()
+		return sourcecredential.Material{}, err
+	}
+	return material, nil
 }
 
 func (resolver *Resolver) ResolveWebhookSecrets(
@@ -39,55 +99,17 @@ func (resolver *Resolver) ResolveWebhookSecrets(
 	scope devopsv1.ResourceScope,
 	reference devopsv1.ResourceID,
 ) (sourceingress.WebhookSecretSet, error) {
-	if resolver == nil || resolver.root == "" {
+	if resolver == nil || resolver.purpose != sourcecredential.PurposeWebhook {
 		return sourceingress.WebhookSecretSet{}, errors.New("webhook credential resolver is unavailable")
 	}
-	if ctx == nil {
-		return sourceingress.WebhookSecretSet{}, errors.New("webhook credential context is nil")
-	}
-	if err := ctx.Err(); err != nil {
-		return sourceingress.WebhookSecretSet{}, err
-	}
-	directory, err := sourcecredential.DirectoryName(
-		sourcecredential.PurposeWebhook, scope, reference,
-	)
-	if err != nil {
-		return sourceingress.WebhookSecretSet{}, err
-	}
-	credentialRoot := filepath.Join(resolver.root, directory)
-	info, err := os.Lstat(credentialRoot)
-	if errors.Is(err, os.ErrNotExist) {
+	material, err := resolver.Resolve(ctx, scope, reference)
+	if errors.Is(err, ErrMaterialNotFound) {
 		return sourceingress.WebhookSecretSet{}, sourceingress.ErrSecretNotFound
 	}
-	if err != nil || info == nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 ||
-		!privateDirectory(info) {
-		return sourceingress.WebhookSecretSet{}, errors.New("webhook credential directory is unsafe")
-	}
-	evaluated, err := filepath.EvalSymlinks(credentialRoot)
-	if err != nil || evaluated != credentialRoot {
-		return sourceingress.WebhookSecretSet{}, errors.New("webhook credential directory is unsafe")
-	}
-	materialPath := filepath.Join(credentialRoot, sourcecredential.MaterialFilename)
-	if _, statErr := os.Lstat(materialPath); errors.Is(statErr, os.ErrNotExist) {
-		return sourceingress.WebhookSecretSet{}, sourceingress.ErrSecretNotFound
-	} else if statErr != nil {
-		return sourceingress.WebhookSecretSet{}, errors.New("webhook credential material is unavailable")
-	}
-	content, err := processconfig.ReadFile(
-		materialPath, sourcecredential.MaximumMaterialBytes, true,
-	)
 	if err != nil {
-		return sourceingress.WebhookSecretSet{}, errors.New("webhook credential material is unavailable")
-	}
-	defer clear(content)
-	material, err := sourcecredential.Decode(sourcecredential.PurposeWebhook, content)
-	if err != nil {
-		return sourceingress.WebhookSecretSet{}, errors.New("webhook credential material is invalid")
+		return sourceingress.WebhookSecretSet{}, err
 	}
 	defer material.Clear()
-	if err := ctx.Err(); err != nil {
-		return sourceingress.WebhookSecretSet{}, err
-	}
 	secretSet, err := sourceingress.NewWebhookSecretSet(material.Current, material.Previous)
 	if err != nil {
 		return sourceingress.WebhookSecretSet{}, errors.New("webhook credential content is invalid")

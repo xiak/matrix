@@ -155,6 +155,7 @@ func stageInstallation(plan platformcommand.InstallPlan, entropy io.Reader) erro
 		}{
 			{path: layout.DevOpsAPI, role: "matrix_devops_api_login"},
 			{path: layout.DevOpsWorker, role: "matrix_devops_worker_login"},
+			{path: layout.DevOpsSourceObserver, role: "matrix_devops_source_observer_login"},
 		} {
 			if err := ensureRuntimeDSN(plan.Root, login.path, login.role, entropy); err != nil {
 				return err

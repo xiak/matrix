@@ -21,6 +21,7 @@ import (
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runadmission"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runcontrol"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/sourceingress"
+	"github.com/xiak/matrix/app/service/devops/sourcecredential"
 	"github.com/xiak/matrix/app/service/internal/processconfig"
 	"github.com/xiak/matrix/app/service/internal/processhttp"
 )
@@ -109,7 +110,9 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	secretResolver, err := sourcecredentialfile.NewResolver(config.webhookSecretRoot)
+	secretResolver, err := sourcecredentialfile.NewResolver(
+		sourcecredential.PurposeWebhook, config.webhookSecretRoot,
+	)
 	if err != nil {
 		return err
 	}

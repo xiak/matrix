@@ -16,7 +16,7 @@ import (
 )
 
 func TestInstalledCompilerReproducesAcceptedProductlessTopology(t *testing.T) {
-	if actual := ContractDigest(); actual != "sha256:30ce7581c502fc2147c176c794f05af3ea0780ab668068e1065da82e2cbc5773" {
+	if actual := ContractDigest(); actual != "sha256:443baaaba8c74331ea8f8dcf58bc66d96c64678f86b1e0cb1bc6b5ce387ae569" {
 		t.Fatalf("current topology contract digest drifted: %s", actual)
 	}
 	if actual := legacyProductlessImplementationDigest(); actual != legacyProductlessContractDigest {
@@ -97,7 +97,9 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	if !ok {
 		t.Fatal("compiled topology has no networks object")
 	}
-	expectedNetworks := map[string]bool{"control": true, "edge": false, "web": true}
+	expectedNetworks := map[string]bool{
+		"control": true, "edge": false, "source": false, "web": true,
+	}
 	actualNetworks := make([]string, 0, len(networks))
 	for name, raw := range networks {
 		network, valid := raw.(map[string]any)
@@ -113,7 +115,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 		actualNetworks = append(actualNetworks, name)
 	}
 	slices.Sort(actualNetworks)
-	if !slices.Equal(actualNetworks, []string{"control", "edge", "web"}) {
+	if !slices.Equal(actualNetworks, []string{"control", "edge", "source", "web"}) {
 		t.Fatalf("compiled networks = %v", actualNetworks)
 	}
 
@@ -123,10 +125,12 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	foundPostgresData := false
 	foundAPISIXRuntimeBoundary := false
 	foundDevOpsSourceSecrets := false
+	foundDevOpsSourceObserverBoundary := false
 	expectedEntrypoints := map[string]string{
 		"audit":                   "/matrix/bin/matrix-audit",
 		"devops-api":              "/matrix/bin/matrix-devops",
 		"devops-audit-dispatcher": "/matrix/bin/matrix-devops-audit-dispatcher",
+		"devops-source-observer":  "/matrix/bin/matrix-devops-source-observer",
 		"iam":                     "/matrix/bin/matrix-iam",
 		"iam-audit-dispatcher":    "/matrix/bin/matrix-iam-audit-dispatcher",
 		"matrix-ui":               "/matrix/bin/matrix-ui",
@@ -154,6 +158,14 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			"MATRIX_DEVOPS_AUDIT_CREDENTIAL_FILE", "MATRIX_DEVOPS_AUDIT_DATABASE_DSN_FILE",
 			"MATRIX_DEVOPS_AUDIT_ENDPOINT", "MATRIX_DEVOPS_AUDIT_LISTEN_ADDRESS",
 			"MATRIX_DEVOPS_AUDIT_WORKER_ID",
+		},
+		"devops-source-observer": {
+			"MATRIX_DEVOPS_SOURCE_OBSERVER_DATABASE_DSN_FILE",
+			"MATRIX_DEVOPS_SOURCE_OBSERVER_FETCH_ROOT",
+			"MATRIX_DEVOPS_SOURCE_OBSERVER_LISTEN_ADDRESS",
+			"MATRIX_DEVOPS_SOURCE_OBSERVER_REPORT_ROOT",
+			"MATRIX_DEVOPS_SOURCE_OBSERVER_WEBHOOK_ROOT",
+			"MATRIX_DEVOPS_SOURCE_OBSERVER_WORKER_ID",
 		},
 		"iam-audit-dispatcher": {
 			"MATRIX_IAM_AUDIT_CREDENTIAL_FILE", "MATRIX_IAM_AUDIT_DATABASE_DSN_FILE",
@@ -191,7 +203,8 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	}
 	expectedImageComponents := map[string]string{
 		"apisix": "apisix", "audit": "audit", "devops-api": "devops",
-		"devops-audit-dispatcher": "devops", "iam": "iam",
+		"devops-audit-dispatcher": "devops", "devops-source-observer": "devops",
+		"iam":                  "iam",
 		"iam-audit-dispatcher": "iam", "matrix-ui": "matrix-ui", "paas-api": "paas",
 		"paas-audit-dispatcher": "paas",
 		"paas-worker":           "paas", "platform-api": "platform",
@@ -234,8 +247,13 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			if !slices.Equal(actualServiceNetworks, []string{"control", "edge", "web"}) {
 				t.Fatalf("APISIX network boundary=%v", actualServiceNetworks)
 			}
-		} else if slices.Contains(actualServiceNetworks, "edge") {
-			t.Fatalf("service %q can join the northbound edge network", name)
+		} else if name == "devops-source-observer" {
+			if !slices.Equal(actualServiceNetworks, []string{"control", "source"}) {
+				t.Fatalf("DevOps source observer network boundary=%v", actualServiceNetworks)
+			}
+		} else if slices.Contains(actualServiceNetworks, "edge") ||
+			slices.Contains(actualServiceNetworks, "source") {
+			t.Fatalf("service %q can join an undeclared external network", name)
 		}
 		labels, ok := service["labels"].(map[string]any)
 		if !ok || labels["com.xiak.matrix.managed"] != "true" ||
@@ -414,14 +432,39 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 				}
 				foundAPISIXRuntimeBoundary = true
 			}
+			if name == "devops-source-observer" {
+				expected := map[string]string{
+					"/run/matrix/devops-source-observer-dsn": options.Root + "/secrets/database/devops-source-observer-dsn",
+					"/run/matrix/devops-source-webhooks":     options.Root + "/secrets/devops/source-webhooks",
+					"/run/matrix/devops-source-fetch":        options.Root + "/secrets/devops/source-fetch",
+					"/run/matrix/devops-source-report":       options.Root + "/secrets/devops/source-report",
+				}
+				if len(volumes) != len(expected) {
+					t.Fatalf("DevOps source observer mount count=%d", len(volumes))
+				}
+				for _, rawMount := range volumes {
+					mount := rawMount.(map[string]any)
+					target := mount["target"].(string)
+					if expected[target] != mount["source"] || mount["read_only"] != true {
+						t.Fatalf("DevOps source observer mount=%#v", mount)
+					}
+				}
+				dependencies := service["depends_on"].(map[string]any)
+				if len(dependencies) != 1 || dependencies["postgres"] == nil {
+					t.Fatalf("DevOps source observer dependencies=%#v", dependencies)
+				}
+				foundDevOpsSourceObserverBoundary = true
+			}
 		}
 	}
 	if portCount != 1 || !foundExecutorRoot || !foundDockerSocket || !foundPostgresData ||
-		!foundAPISIXRuntimeBoundary || !foundDevOpsSourceSecrets {
+		!foundAPISIXRuntimeBoundary || !foundDevOpsSourceSecrets ||
+		!foundDevOpsSourceObserverBoundary {
 		t.Fatalf(
-			"platform capability closure: ports=%d executor=%t socket=%t postgres-data=%t apisix=%t devops-source-secrets=%t",
+			"platform capability closure: ports=%d executor=%t socket=%t postgres-data=%t apisix=%t devops-source-secrets=%t source-observer=%t",
 			portCount, foundExecutorRoot, foundDockerSocket, foundPostgresData,
 			foundAPISIXRuntimeBoundary, foundDevOpsSourceSecrets,
+			foundDevOpsSourceObserverBoundary,
 		)
 	}
 	encoded := string(result.ComposeJSON)
@@ -457,6 +500,12 @@ func TestCompileOmitsUnselectedDevOpsProduct(t *testing.T) {
 	}
 	if _, found := document.Services["devops-audit-dispatcher"]; found {
 		t.Fatal("PaaS-only topology contains DevOps Audit dispatcher")
+	}
+	if _, found := document.Services["devops-source-observer"]; found {
+		t.Fatal("PaaS-only topology contains DevOps source observer")
+	}
+	if _, found := document.Networks["source"]; found {
+		t.Fatal("PaaS-only topology contains DevOps provider-egress network")
 	}
 	platform := document.Services["platform-api"]
 	if _, found := platform.Environment["MATRIX_PLATFORM_DEVOPS_ENDPOINT"]; found {

@@ -34,6 +34,7 @@ import (
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runcontrol"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runlifecycle"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/sourceingress"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/sourceobservation"
 	devopsmigration "github.com/xiak/matrix/app/service/devops/migration"
 	"github.com/xiak/matrix/app/service/devops/sourcecredential"
 )
@@ -58,19 +59,23 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 	defer admin.Close(context.Background())
 	var clean bool
 	if err := admin.QueryRow(ctx, `SELECT to_regnamespace('delivery') IS NULL AND NOT EXISTS (
-		SELECT 1 FROM pg_catalog.pg_roles WHERE rolname IN ('matrix_devops_api_login', 'matrix_devops_worker_login')
+		SELECT 1 FROM pg_catalog.pg_roles WHERE rolname IN (
+			'matrix_devops_api_login', 'matrix_devops_worker_login',
+			'matrix_devops_source_observer_login'
+		)
 	)`).Scan(&clean); err != nil || !clean {
 		t.Fatal("DevOps integration database is not clean")
 	}
 
 	apiDSN := runtimeDSN(t, adminDSN, "matrix_devops_api_login", "mxp1.devops-api-000000000000000000000000000000")
 	workerDSN := runtimeDSN(t, adminDSN, "matrix_devops_worker_login", "mxp1.devops-worker-0000000000000000000000000000")
+	sourceObserverDSN := runtimeDSN(t, adminDSN, "matrix_devops_source_observer_login", "mxp1.devops-source-observer-0000000000000000000")
 	for attempt := 1; attempt <= 2; attempt++ {
-		if err := devopsmigration.Apply(ctx, adminDSN, apiDSN, workerDSN); err != nil {
+		if err := devopsmigration.Apply(ctx, adminDSN, apiDSN, workerDSN, sourceObserverDSN); err != nil {
 			t.Fatalf("apply DevOps migration attempt %d: %v", attempt, err)
 		}
 	}
-	if err := devopsmigration.VerifyInstalled(ctx, adminDSN, apiDSN, workerDSN); err != nil {
+	if err := devopsmigration.VerifyInstalled(ctx, adminDSN, apiDSN, workerDSN, sourceObserverDSN); err != nil {
 		t.Fatalf("verify DevOps migration: %v", err)
 	}
 	pool, err := pgxpool.New(ctx, apiDSN)
@@ -210,26 +215,15 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		t.Fatalf("activate secondary Pipeline: %v", err)
 	}
 
-	if _, err := admin.Exec(ctx, `UPDATE delivery.source_connections
-		SET document = jsonb_set(
-			jsonb_set(document, '{status,health}', '"READY"'),
-			'{status,reason}', '"OBSERVED"'
-		)
-		WHERE tenant_id = 'tenant-one' AND id = $1`, connectionID); err != nil {
-		t.Fatalf("mark source connection fixture ready: %v", err)
-	}
-	if _, err := admin.Exec(ctx, `UPDATE delivery.repository_bindings
-		SET document = jsonb_set(
-			jsonb_set(document, '{status,health}', '"READY"'),
-			'{status,reason}', '"OBSERVED"'
-		)
-		WHERE tenant_id = 'tenant-one' AND id = $1`, bindingOne.ID); err != nil {
-		t.Fatalf("mark repository binding fixture ready: %v", err)
-	}
+	observedConnectionVersion := assertSourceObservationPersistenceAndFencing(
+		t, ctx, admin, sourceObserverDSN, pool, repository, usecase,
+		connectionID, []devopsv1.ResourceID{bindingOne.ID, bindingTwo.ID}, connectionSpec,
+	)
 	ingressConnection, found, err := repository.ReadSourceConnection(
 		ctx, devopsv1.ResourceScope{TenantID: "tenant-one"}, connectionID,
 	)
-	if err != nil || !found || ingressConnection.Metadata.ResourceVersion != 2 ||
+	if err != nil || !found ||
+		ingressConnection.Metadata.ResourceVersion != observedConnectionVersion ||
 		ingressConnection.Spec.WebhookSecretRef != rotated.WebhookSecretRef ||
 		ingressConnection.Status.Health != devopsv1.SourceConnectionReady {
 		t.Fatalf("read endpoint-bound SourceConnection=%#v found=%t err=%v", ingressConnection, found, err)
@@ -276,7 +270,9 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	secretResolver, err := sourcecredentialfile.NewResolver(secretRoot)
+	secretResolver, err := sourcecredentialfile.NewResolver(
+		sourcecredential.PurposeWebhook, secretRoot,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,6 +305,7 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 	for index := 2; index <= 15; index++ {
 		command := sourceAdmissionCommand(
 			connectionID,
+			observedConnectionVersion,
 			updatedBinding.Value.Spec.ExternalRepositoryID,
 			fmt.Sprintf("123e4567-e89b-42d3-a456-%012d", index),
 		)
@@ -330,6 +327,7 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 			<-startAdmissions
 			command := sourceAdmissionCommand(
 				connectionID,
+				observedConnectionVersion,
 				updatedBinding.Value.Spec.ExternalRepositoryID,
 				fmt.Sprintf("123e4567-e89b-42d3-a456-%012d", index),
 			)
@@ -696,10 +694,10 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		t.Fatalf("DevOps Audit worker readiness=%#v err=%v", workerReadiness, err)
 	}
 	snapshot, err := outbox.Snapshot(ctx)
-	if err != nil || snapshot.Pending != 75 || snapshot.Delivered != 0 {
+	if err != nil || snapshot.Pending != 83 || snapshot.Delivered != 0 {
 		t.Fatalf("initial Audit outbox snapshot=%#v err=%v", snapshot, err)
 	}
-	for index := 0; index < 75; index++ {
+	for index := 0; index < 83; index++ {
 		claim, found, err := outbox.Claim(ctx, "audit-worker-integration", 30*time.Second)
 		if err != nil || !found {
 			t.Fatalf("claim Audit event %d=%#v found=%t err=%v", index, claim, found, err)
@@ -727,7 +725,7 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		t.Fatalf("empty Audit claim=%#v found=%t err=%v", claim, found, err)
 	}
 	snapshot, err = outbox.Snapshot(ctx)
-	if err != nil || snapshot.Delivered != 75 || snapshot.Pending != 0 || snapshot.Leased != 0 ||
+	if err != nil || snapshot.Delivered != 83 || snapshot.Pending != 0 || snapshot.Leased != 0 ||
 		snapshot.Retry != 0 || snapshot.DeadLetter != 0 || snapshot.ExpiredLease != 0 {
 		t.Fatalf("delivered Audit outbox snapshot=%#v err=%v", snapshot, err)
 	}
@@ -768,10 +766,10 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 			t.Fatalf("stage legacy source contract fixture %d: %v", index, err)
 		}
 	}
-	if err := devopsmigration.Apply(ctx, adminDSN, apiDSN, workerDSN); err != nil {
+	if err := devopsmigration.Apply(ctx, adminDSN, apiDSN, workerDSN, sourceObserverDSN); err != nil {
 		t.Fatalf("reapply DevOps migration with durable admission data: %v", err)
 	}
-	if err := devopsmigration.VerifyInstalled(ctx, adminDSN, apiDSN, workerDSN); err != nil {
+	if err := devopsmigration.VerifyInstalled(ctx, adminDSN, apiDSN, workerDSN, sourceObserverDSN); err != nil {
 		t.Fatalf("verify reapplied DevOps migration with durable admission data: %v", err)
 	}
 	var migratedOrigin, connectionReason, bindingReason, revisionReason string
@@ -835,8 +833,8 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 	); err != nil {
 		t.Fatalf("read delivery evidence: %v", err)
 	}
-	if mutationCount != 20 || sourceEventCount != 16 || runCount != 34 || runTaskCount != 9 ||
-		operationCount != 75 || auditCount != 75 ||
+	if mutationCount != 23 || sourceEventCount != 16 || runCount != 34 || runTaskCount != 9 ||
+		operationCount != 83 || auditCount != 83 ||
 		bindingRevisionCount != 2 || pipelineRevisionCount != 3 {
 		t.Fatalf(
 			"evidence counts mutation=%d event=%d run=%d task=%d operation=%d audit=%d binding=%d pipeline=%d",
@@ -875,7 +873,7 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		WHERE tenant_id = 'tenant-one' AND id = $1`, connectionID); err != nil {
 		t.Fatalf("stage ambiguous legacy source contract: %v", err)
 	}
-	if err := devopsmigration.Apply(ctx, adminDSN, apiDSN, workerDSN); err == nil {
+	if err := devopsmigration.Apply(ctx, adminDSN, apiDSN, workerDSN, sourceObserverDSN); err == nil {
 		t.Fatal("ambiguous legacy source endpoint migration succeeded")
 	}
 	if _, err := admin.Exec(ctx, `UPDATE delivery.source_connections
@@ -888,6 +886,296 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		WHERE tenant_id = 'tenant-one' AND id = $1`, connectionID); err != nil {
 		t.Fatalf("restore exact source endpoint after negative gate: %v", err)
 	}
+}
+
+func assertSourceObservationPersistenceAndFencing(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	sourceObserverDSN string,
+	apiPool *pgxpool.Pool,
+	apiRepository *devopspostgres.ControlPlaneRepository,
+	configuration *pipelineconfiguration.Usecase,
+	connectionID devopsv1.ResourceID,
+	bindingIDs []devopsv1.ResourceID,
+	connectionSpec devopsv1.SourceConnectionSpec,
+) uint64 {
+	t.Helper()
+	apiReadiness, err := apiRepository.Readiness(ctx)
+	if err != nil || apiReadiness.State != devopsv1.ReadinessNotReady {
+		t.Fatalf("DevOps API admitted a missing source observer=%#v err=%v", apiReadiness, err)
+	}
+	sourcePool, err := pgxpool.New(ctx, sourceObserverDSN)
+	if err != nil {
+		t.Fatal("connect DevOps source observer pool")
+	}
+	defer sourcePool.Close()
+	repository, err := devopspostgres.NewSourceObservationRepository(sourcePool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceReadiness, err := repository.Readiness(ctx)
+	if err != nil || sourceReadiness.State != devopsv1.ReadinessNotReady {
+		t.Fatalf("source observer admitted a missing heartbeat=%#v err=%v", sourceReadiness, err)
+	}
+	assertDenied(t, func() error {
+		_, deniedErr := sourcePool.Exec(ctx, `SELECT count(*) FROM delivery.source_observation_tasks`)
+		return deniedErr
+	})
+	assertDenied(t, func() error {
+		_, deniedErr := sourcePool.Exec(ctx, `SELECT * FROM delivery.readiness()`)
+		return deniedErr
+	})
+	assertDenied(t, func() error {
+		_, deniedErr := apiPool.Exec(
+			ctx, `SELECT delivery.record_source_observer_heartbeat('forged-api')`,
+		)
+		return deniedErr
+	})
+	if _, err := repository.Heartbeat(ctx, "source-observer-integration"); err != nil {
+		t.Fatalf("record source observer heartbeat: %v", err)
+	}
+	sourceReadiness, err = repository.Readiness(ctx)
+	if err != nil || sourceReadiness.State != devopsv1.ReadinessReady {
+		t.Fatalf("source observer readiness=%#v err=%v", sourceReadiness, err)
+	}
+	apiReadiness, err = apiRepository.Readiness(ctx)
+	if err != nil || apiReadiness.State != devopsv1.ReadinessReady {
+		t.Fatalf("DevOps API source readiness=%#v err=%v", apiReadiness, err)
+	}
+
+	connectionLease, found, err := repository.Claim(
+		ctx, "source-observer-integration", sourceobservation.LeaseDuration,
+	)
+	if err != nil || !found || connectionLease.Kind != sourceobservation.WorkSourceConnection ||
+		connectionLease.ResourceID != connectionID {
+		t.Fatalf("claim source connection=%#v found=%t err=%v", connectionLease, found, err)
+	}
+	observedConnection, err := repository.CompleteSourceConnection(
+		ctx,
+		connectionLease,
+		domain.SourceConnectionHealthObservation{
+			Health: devopsv1.SourceConnectionReady,
+			Reason: devopsv1.SourceConnectionReasonObserved,
+		},
+	)
+	if err != nil || observedConnection.Status.Health != devopsv1.SourceConnectionReady {
+		t.Fatalf("complete source connection=%#v err=%v", observedConnection, err)
+	}
+
+	pendingBindings := make(map[devopsv1.ResourceID]bool, len(bindingIDs))
+	for _, bindingID := range bindingIDs {
+		pendingBindings[bindingID] = true
+	}
+	for range bindingIDs {
+		lease, found, err := repository.Claim(
+			ctx, "source-observer-integration", sourceobservation.LeaseDuration,
+		)
+		if err != nil || !found || lease.Kind != sourceobservation.WorkRepositoryBinding ||
+			!pendingBindings[lease.ResourceID] {
+			t.Fatalf("claim repository binding=%#v found=%t err=%v", lease, found, err)
+		}
+		observedBinding, err := repository.CompleteRepositoryBinding(
+			ctx,
+			lease,
+			domain.RepositoryBindingHealthObservation{
+				Health: devopsv1.RepositoryBindingReady,
+				Reason: devopsv1.RepositoryBindingReasonObserved,
+			},
+		)
+		if err != nil || observedBinding.Status.Health != devopsv1.RepositoryBindingReady {
+			t.Fatalf("complete repository binding=%#v err=%v", observedBinding, err)
+		}
+		delete(pendingBindings, lease.ResourceID)
+	}
+	if len(pendingBindings) != 0 {
+		t.Fatalf("unobserved repository bindings=%v", pendingBindings)
+	}
+
+	fairProjectID := devopsv1.ResourceID("project-source-fairness")
+	if _, err := configuration.CreateProject(ctx, pipelineconfiguration.CreateProjectCommand{
+		Authorization: authForTenant(
+			"tenant-two", iamv1.ActionDevOpsProjectCreate,
+			iamv1.ResourceDevOpsProject, fairProjectID,
+		),
+		Request: devopsv1.CreateDevOpsProjectRequest{
+			ID: fairProjectID, Name: "project-source-fairness",
+		},
+		IdempotencyKey: "create-project-source-fairness",
+	}); err != nil {
+		t.Fatalf("create source fairness project: %v", err)
+	}
+	fairConnectionID := devopsv1.ResourceID("connection-source-fairness")
+	if _, err := configuration.CreateSourceConnection(
+		ctx,
+		pipelineconfiguration.CreateSourceConnectionCommand{
+			Authorization: authForTenant(
+				"tenant-two", iamv1.ActionDevOpsSourceConnectionCreate,
+				iamv1.ResourceSourceConnection, fairConnectionID,
+			),
+			Request: devopsv1.CreateSourceConnectionRequest{
+				ID: fairConnectionID, Name: "connection-source-fairness",
+				Spec: connectionSpec,
+			},
+			IdempotencyKey: "create-connection-source-fairness",
+		},
+	); err != nil {
+		t.Fatalf("create source fairness connection: %v", err)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE delivery.source_observation_tasks
+		SET available_at = created_at
+		WHERE tenant_id = 'tenant-one'
+		  AND resource_kind = 'SOURCE_CONNECTION' AND resource_id = $1`, connectionID); err != nil {
+		t.Fatalf("make older tenant source task due: %v", err)
+	}
+	fairLease, found, err := repository.Claim(
+		ctx, "source-observer-integration", sourceobservation.LeaseDuration,
+	)
+	if err != nil || !found || fairLease.TenantID != "tenant-two" ||
+		fairLease.ResourceID != fairConnectionID {
+		t.Fatalf("tenant-fair source claim=%#v found=%t err=%v", fairLease, found, err)
+	}
+	if _, err := repository.CompleteSourceConnection(
+		ctx,
+		fairLease,
+		domain.SourceConnectionHealthObservation{
+			Health: devopsv1.SourceConnectionUnavailable,
+			Reason: devopsv1.SourceConnectionReasonSecretUnavailable,
+		},
+	); err != nil {
+		t.Fatalf("complete fair-tenant source observation: %v", err)
+	}
+
+	staleLease, found, err := repository.Claim(
+		ctx, "source-observer-integration", sourceobservation.LeaseDuration,
+	)
+	if err != nil || !found || staleLease.TenantID != "tenant-one" ||
+		staleLease.ResourceID != connectionID {
+		t.Fatalf("claim source fencing fixture=%#v found=%t err=%v", staleLease, found, err)
+	}
+	result, err := admin.Exec(ctx, `UPDATE delivery.source_observation_tasks
+		SET lease_owner = NULL, lease_expires_at = NULL
+		WHERE tenant_id = $1 AND resource_kind = $2 AND resource_id = $3
+		  AND fencing_token = $4`,
+		staleLease.TenantID, staleLease.Kind, staleLease.ResourceID, staleLease.FencingToken,
+	)
+	if err != nil || result.RowsAffected() != 1 {
+		t.Fatalf("release source fencing fixture rows=%d err=%v", result.RowsAffected(), err)
+	}
+	currentLease, found, err := repository.Claim(
+		ctx, "source-observer-integration", sourceobservation.LeaseDuration,
+	)
+	if err != nil || !found || currentLease.ResourceID != connectionID ||
+		currentLease.FencingToken <= staleLease.FencingToken {
+		t.Fatalf("reclaim source fencing fixture=%#v found=%t err=%v", currentLease, found, err)
+	}
+	equalObservation := domain.SourceConnectionHealthObservation{
+		Health: devopsv1.SourceConnectionReady,
+		Reason: devopsv1.SourceConnectionReasonObserved,
+	}
+	if _, err := repository.CompleteSourceConnection(
+		ctx, staleLease, equalObservation,
+	); !errors.Is(err, sourceobservation.ErrStaleLease) {
+		t.Fatalf("stale source fencing completion error=%v", err)
+	}
+	refreshedConnection, err := repository.CompleteSourceConnection(
+		ctx, currentLease, equalObservation,
+	)
+	if err != nil || refreshedConnection.Status.Health != devopsv1.SourceConnectionReady ||
+		refreshedConnection.Metadata.ResourceVersion != observedConnection.Metadata.ResourceVersion+1 {
+		t.Fatalf("equal source health refresh=%#v err=%v", refreshedConnection, err)
+	}
+
+	if _, err := admin.Exec(ctx, `UPDATE delivery.source_observation_tasks
+		SET available_at = created_at
+		WHERE tenant_id = 'tenant-two'
+		  AND resource_kind = 'SOURCE_CONNECTION' AND resource_id = $1`, fairConnectionID); err != nil {
+		t.Fatalf("make stale-version source fixture due: %v", err)
+	}
+	staleVersionLease, found, err := repository.Claim(
+		ctx, "source-observer-integration", sourceobservation.LeaseDuration,
+	)
+	if err != nil || !found || staleVersionLease.TenantID != "tenant-two" ||
+		staleVersionLease.ResourceID != fairConnectionID {
+		t.Fatalf("claim stale-version source fixture=%#v found=%t err=%v", staleVersionLease, found, err)
+	}
+	updatedFairSpec := connectionSpec
+	updatedFairSpec.FetchCredentialRef = "secret-fetch-fairness-v2"
+	if _, err := configuration.UpdateSourceConnection(
+		ctx,
+		pipelineconfiguration.UpdateSourceConnectionCommand{
+			Authorization: authForTenant(
+				"tenant-two", iamv1.ActionDevOpsSourceConnectionUpdate,
+				iamv1.ResourceSourceConnection, fairConnectionID,
+			),
+			SourceConnectionID:      fairConnectionID,
+			ExpectedResourceVersion: staleVersionLease.ResourceVersion,
+			Request: devopsv1.UpdateSourceConnectionRequest{
+				Spec: updatedFairSpec,
+			},
+			IdempotencyKey: "update-connection-source-fairness",
+		},
+	); err != nil {
+		t.Fatalf("update stale-version source fixture: %v", err)
+	}
+	if _, err := repository.CompleteSourceConnection(
+		ctx,
+		staleVersionLease,
+		domain.SourceConnectionHealthObservation{
+			Health: devopsv1.SourceConnectionUnavailable,
+			Reason: devopsv1.SourceConnectionReasonSecretUnavailable,
+		},
+	); !errors.Is(err, sourceobservation.ErrStaleLease) {
+		t.Fatalf("stale source resource-version completion error=%v", err)
+	}
+	currentVersionLease, found, err := repository.Claim(
+		ctx, "source-observer-integration", sourceobservation.LeaseDuration,
+	)
+	if err != nil || !found || currentVersionLease.TenantID != "tenant-two" ||
+		currentVersionLease.ResourceID != fairConnectionID ||
+		currentVersionLease.ResourceVersion != staleVersionLease.ResourceVersion+1 {
+		t.Fatalf("claim current source version=%#v found=%t err=%v", currentVersionLease, found, err)
+	}
+	if _, err := repository.CompleteSourceConnection(
+		ctx,
+		currentVersionLease,
+		domain.SourceConnectionHealthObservation{
+			Health: devopsv1.SourceConnectionUnavailable,
+			Reason: devopsv1.SourceConnectionReasonSecretUnavailable,
+		},
+	); err != nil {
+		t.Fatalf("complete current source version: %v", err)
+	}
+
+	var healthOperations, healthEvents, connectionEvents, bindingEvents, sanitizedEvents int
+	if err := admin.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM delivery.audit_operations
+		  WHERE operation_kind = 'SOURCE_HEALTH_OBSERVATION'),
+		count(*),
+		count(*) FILTER (
+			WHERE document->>'action' = 'devops.source-connection.health-transitioned'
+		),
+		count(*) FILTER (
+			WHERE document->>'action' = 'devops.repository-binding.health-transitioned'
+		),
+		count(*) FILTER (
+			WHERE document#>>'{actor,id}' = 'system-devops-source-observer'
+			  AND document::text NOT LIKE '%gitea.example.com%'
+			  AND document::text NOT LIKE '%secret-%'
+		)
+		FROM delivery.audit_outbox
+		WHERE operation_id LIKE 'source-observation-%'`).Scan(
+		&healthOperations, &healthEvents, &connectionEvents, &bindingEvents,
+		&sanitizedEvents,
+	); err != nil || healthOperations != 5 || healthEvents != 5 ||
+		connectionEvents != 3 || bindingEvents != 2 || sanitizedEvents != 5 {
+		t.Fatalf(
+			"source health Audit operations=%d events=%d connection=%d binding=%d sanitized=%d err=%v",
+			healthOperations, healthEvents, connectionEvents, bindingEvents,
+			sanitizedEvents, err,
+		)
+	}
+	return refreshedConnection.Metadata.ResourceVersion
 }
 
 func assertTerminalAuditFacts(t *testing.T, ctx context.Context, admin *pgx.Conn) {
@@ -1340,8 +1628,17 @@ func runtimeDSN(t *testing.T, adminDSN, role, password string) string {
 }
 
 func auth(action iamv1.Action, kind iamv1.ResourceKind, id devopsv1.ResourceID) port.Authorization {
+	return authForTenant("tenant-one", action, kind, id)
+}
+
+func authForTenant(
+	tenantID devopsv1.TenantID,
+	action iamv1.Action,
+	kind iamv1.ResourceKind,
+	id devopsv1.ResourceID,
+) port.Authorization {
 	return port.Authorization{
-		TenantID: "tenant-one", Subject: devopsv1.SubjectRef{Kind: devopsv1.SubjectUser, ID: "user-one"},
+		TenantID: tenantID, Subject: devopsv1.SubjectRef{Kind: devopsv1.SubjectUser, ID: "user-one"},
 		DecisionID: "decision-" + string(id), Action: action,
 		Resource:  iamv1.ResourceReference{Kind: kind, ID: string(id)},
 		RequestID: "request-integration", CorrelationID: "correlation-integration",
@@ -1361,6 +1658,7 @@ func draft(bindingID devopsv1.ResourceID) devopsv1.PipelineDraftSpec {
 
 func sourceAdmissionCommand(
 	connectionID devopsv1.ResourceID,
+	connectionVersion uint64,
 	externalRepositoryID devopsv1.ResourceID,
 	deliveryID string,
 ) runadmission.Command {
@@ -1368,7 +1666,7 @@ func sourceAdmissionCommand(
 		Change: domain.NormalizedChange{
 			Scope:                           devopsv1.ResourceScope{TenantID: "tenant-one"},
 			SourceConnectionID:              connectionID,
-			VerifiedSourceConnectionVersion: 2,
+			VerifiedSourceConnectionVersion: connectionVersion,
 			ExternalRepositoryID:            externalRepositoryID,
 			TrustedBaseBranch:               "release",
 			DeliveryID:                      deliveryID,

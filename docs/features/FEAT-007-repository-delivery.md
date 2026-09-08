@@ -5,9 +5,9 @@
   configuration transaction/persistence, shared authority, durable run
   admission, authenticated Gitea ingress, fenced run-lifecycle foundation,
   IAM-authorized run read/cancellation/manual replay, terminal Audit facts,
-  source-readiness contract, and installation-operator source credential
-  lifecycle complete;
-  source observer/executor/reporter effects pending
+  source-readiness contract, installation-operator source credential
+  lifecycle, and source-observer runtime complete;
+  source acquisition/executor/reporter effects pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -391,11 +391,26 @@ Status observations update `metadata.resourceVersion`, `metadata.updatedAt`,
 `status.observedAt`, health, and reason atomically without changing a binding's
 spec digest or immutable revision history. Equal observations refresh time;
 only health/reason transitions emit a normalized delivery Audit fact through
-the existing outbox. Provider text and credential-derived identity are absent
-from both status and Audit. The DevOps readiness endpoint fails when configured
-connections exist and the observer heartbeat is stale, so product discovery
-does not advertise a healthy control plane that can no longer refresh source
-authority.
+the existing outbox. The closed actions are
+`devops.source-connection.health-transitioned` and
+`devops.repository-binding.health-transitioned`; the system actor is
+`system-devops-source-observer`, and the request digest commits only the target
+kind, target ID, resulting health, reason, resource version, and observation
+time. Provider text and credential-derived identity are absent from both
+status and Audit.
+
+The observer writes its first database heartbeat before any claim, refreshes it
+after completing work, and writes at least once every 10 seconds while idle.
+Its own readiness requires
+the last heartbeat to be no older than 30 seconds. The DevOps API readiness
+endpoint applies that same 30-second limit whenever at least one
+SourceConnection exists; an installation with no configured connection remains
+ready before the observer's first heartbeat. Process startup writes the first
+heartbeat only after the observer database role, all three credential roots,
+and the fixed provider client have initialized. This liveness limit is separate
+from the two-minute per-resource admission freshness limit. Product discovery
+therefore does not advertise a healthy control plane that can no longer refresh
+source authority.
 
 The installation-owned CLI surface is exactly:
 
@@ -788,14 +803,24 @@ atomic; equal apply and repeated retirement are idempotent. The DevOps API's
 read-only webhook resolver consumes that replacement format, while the removed
 two-file resolver has no compatibility alias.
 
-The source observer process, reconciliation queue, health Audit facts, and its
-fetch/report runtime mounts remain to be implemented.
+The source observer is now a distinct runtime and database identity. Its
+tenant-fair queue uses database-time 30-second leases and monotonic fencing;
+configuration mutations schedule current resource versions, a connection
+transition reschedules its bindings, and equal observations refresh health
+without producing an Audit fact. The fixed Gitea `1.27.3` read adapter probes
+only version, current user, and the exact repository; it rejects redirects,
+ambiguous or oversized JSON, unsupported versions, identity/origin mismatch,
+and missing fetch/report permission into closed reasons. The process mounts
+only its DSN and the three read-only purpose roots, joins the internal control
+network plus one provider-egress network, and has no IAM, Audit, executor, or
+configuration-write capability. Its heartbeat gates both process readiness
+and DevOps API readiness once any SourceConnection exists.
 
 These slices do not complete Gate A. The source-readiness public contract,
 domain transitions, freshness rule, legacy data replacement, and operator
-credential lifecycle are complete; the observer runtime remains pending. Logs,
-concurrent cross-tenant fairness evidence, remaining runtime quotas,
-check-receipt Audit facts, and pagination also remain pending.
+credential lifecycle and observer runtime are complete. Source acquisition,
+normalized logs, remaining runtime quotas, check-receipt Audit facts, and
+pagination remain pending.
 
 Current verification evidence:
 
@@ -818,6 +843,17 @@ Current verification evidence:
   run completed 512,956 executions
 - Linux/amd64 CGO-disabled cross-build of the new contract and domain packages
 - deterministic OpenAPI generation-drift tests and `git diff --check`
+- fixed Gitea `1.27.3` observer tests proving three purpose-separated
+  credential reads, exact unauthenticated version and authenticated user/repo
+  probes, verified TLS transport with redirects disabled, bounded strict JSON,
+  exact repository identity/origin/default-branch checks, separate pull/push
+  permission, cancellation, and closed unavailable reasons; the observer,
+  resolver, command loop, use case, Audit contract, and topology suites pass
+  race and 20-run repetition
+- installation and topology tests proving the selected-only source-observer
+  login, four read-only mounts, exact process environment, provider-egress
+  network confinement, offline binary inclusion, heartbeat-gated API
+  readiness, and absence from PaaS-only installations
 - real PostgreSQL 18 double-apply and catalog integration tests for the IAM and
   Audit extensions, release-selected Platform/DevOps credential enrollment,
   equal replay, changed-credential rejection, and exact Audit facts
@@ -834,6 +870,12 @@ Current verification evidence:
   runtime identities, forced cross-tenant isolation, function-only API writes,
   a table-blind worker, immutable binding/revision history, sanitized Audit
   outbox correlation, and the four-schema platform migration boundary
+- real PostgreSQL 18 source-observer journey proving a table-blind role with
+  exactly four callable functions, heartbeat fail-closed readiness, immediate
+  scheduling, database-time claims, cross-tenant fairness over an older task,
+  monotonic fencing recovery, stale-fence and stale-resource-version rejection,
+  observer-only health writes, equal refresh without Audit, five deterministic
+  sanitized transition facts, double apply, and IAM/Audit/PaaS schema denial
 - real PostgreSQL 18 source-contract upgrade proving deterministic replacement
   of legacy single-origin documents and command snapshots, health-reason
   backfill across current and immutable resources, removal of temporary owner
@@ -879,8 +921,9 @@ Current verification evidence:
   create exactly five IAM-bound accepted facts, two manual replays create
   exactly two IAM-bound accepted facts, and nonterminal worker transitions
   create no completion fact; both replay generations have no task before a
-  worker claim. The fresh journey contains 20 mutations, 16 SourceEvents, 34
-  PipelineRuns, nine task intents, and 75 Audit operations/outbox facts
+  worker claim. The fresh journey contains 23 mutations, 16 SourceEvents, 34
+  PipelineRuns, nine task intents, and 83 Audit operations/outbox facts,
+  including five source-health transitions
 - fixed `10fea16` data-bearing upgrade preserving all 17 mutations, 16
   SourceEvents, 32 PipelineRuns, nine task intents, and 71 Audit
   operations/outbox facts while backfilling each original run's creation

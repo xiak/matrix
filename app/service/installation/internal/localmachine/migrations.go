@@ -75,6 +75,7 @@ func platformMigrationsFor(manifest release.Manifest) []migrationDefinition {
 					{layout.PostgresMigration, "/run/matrix/migration-dsn", "MATRIX_MIGRATION_DATABASE_DSN_FILE"},
 					{layout.DevOpsAPI, "/run/matrix/devops-api-dsn", "MATRIX_MIGRATION_DEVOPS_API_DSN_FILE"},
 					{layout.DevOpsWorker, "/run/matrix/devops-worker-dsn", "MATRIX_MIGRATION_DEVOPS_WORKER_DSN_FILE"},
+					{layout.DevOpsSourceObserver, "/run/matrix/devops-source-observer-dsn", "MATRIX_MIGRATION_DEVOPS_SOURCE_OBSERVER_DSN_FILE"},
 				},
 			})
 		}

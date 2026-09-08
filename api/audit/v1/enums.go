@@ -45,19 +45,21 @@ const (
 	ActionPaaSDeploymentStopped            Action = "paas.deployment.stopped"
 	ActionPaaSDeploymentRolledBack         Action = "paas.deployment.rolled-back"
 
-	ActionDevOpsProjectCreated                   Action = "devops.project.created"
-	ActionDevOpsSourceConnectionCreated          Action = "devops.source-connection.created"
-	ActionDevOpsSourceConnectionUpdated          Action = "devops.source-connection.updated"
-	ActionDevOpsRepositoryBindingCreated         Action = "devops.repository-binding.created"
-	ActionDevOpsRepositoryBindingUpdated         Action = "devops.repository-binding.updated"
-	ActionDevOpsPipelineCreated                  Action = "devops.pipeline.created"
-	ActionDevOpsPipelineDraftUpdated             Action = "devops.pipeline.draft-updated"
-	ActionDevOpsPipelineRevisionActivated        Action = "devops.pipeline-revision.activated"
-	ActionDevOpsSourceEventAdmitted              Action = "devops.source-event.admitted"
-	ActionDevOpsPipelineRunCreated               Action = "devops.pipeline-run.created"
-	ActionDevOpsPipelineRunReplayed              Action = "devops.pipeline-run.replayed"
-	ActionDevOpsPipelineRunCancellationRequested Action = "devops.pipeline-run.cancellation-requested"
-	ActionDevOpsPipelineRunCompleted             Action = "devops.pipeline-run.completed"
+	ActionDevOpsProjectCreated                      Action = "devops.project.created"
+	ActionDevOpsSourceConnectionCreated             Action = "devops.source-connection.created"
+	ActionDevOpsSourceConnectionUpdated             Action = "devops.source-connection.updated"
+	ActionDevOpsSourceConnectionHealthTransitioned  Action = "devops.source-connection.health-transitioned"
+	ActionDevOpsRepositoryBindingCreated            Action = "devops.repository-binding.created"
+	ActionDevOpsRepositoryBindingUpdated            Action = "devops.repository-binding.updated"
+	ActionDevOpsRepositoryBindingHealthTransitioned Action = "devops.repository-binding.health-transitioned"
+	ActionDevOpsPipelineCreated                     Action = "devops.pipeline.created"
+	ActionDevOpsPipelineDraftUpdated                Action = "devops.pipeline.draft-updated"
+	ActionDevOpsPipelineRevisionActivated           Action = "devops.pipeline-revision.activated"
+	ActionDevOpsSourceEventAdmitted                 Action = "devops.source-event.admitted"
+	ActionDevOpsPipelineRunCreated                  Action = "devops.pipeline-run.created"
+	ActionDevOpsPipelineRunReplayed                 Action = "devops.pipeline-run.replayed"
+	ActionDevOpsPipelineRunCancellationRequested    Action = "devops.pipeline-run.cancellation-requested"
+	ActionDevOpsPipelineRunCompleted                Action = "devops.pipeline-run.completed"
 
 	ActionAuditRecordsRead       Action = "audit.records.read"
 	ActionAuditIntegrityVerified Action = "audit.integrity.verified"
@@ -176,8 +178,10 @@ var allActions = []Action{
 	ActionDevOpsProjectCreated,
 	ActionDevOpsSourceConnectionCreated,
 	ActionDevOpsSourceConnectionUpdated,
+	ActionDevOpsSourceConnectionHealthTransitioned,
 	ActionDevOpsRepositoryBindingCreated,
 	ActionDevOpsRepositoryBindingUpdated,
+	ActionDevOpsRepositoryBindingHealthTransitioned,
 	ActionDevOpsPipelineCreated,
 	ActionDevOpsPipelineDraftUpdated,
 	ActionDevOpsPipelineRevisionActivated,
@@ -260,6 +264,10 @@ var actionContracts = map[Action]ActionContract{
 		Source: SourceDevOps, Target: TargetSourceConnection, Results: []Result{ResultSucceeded},
 		IAMDecisionRequired: true, OperationRequired: true,
 	},
+	ActionDevOpsSourceConnectionHealthTransitioned: {
+		Source: SourceDevOps, Target: TargetSourceConnection, Results: []Result{ResultSucceeded},
+		OperationRequired: true,
+	},
 	ActionDevOpsRepositoryBindingCreated: {
 		Source: SourceDevOps, Target: TargetRepositoryBinding, Results: []Result{ResultSucceeded},
 		IAMDecisionRequired: true, OperationRequired: true,
@@ -267,6 +275,10 @@ var actionContracts = map[Action]ActionContract{
 	ActionDevOpsRepositoryBindingUpdated: {
 		Source: SourceDevOps, Target: TargetRepositoryBinding, Results: []Result{ResultSucceeded},
 		IAMDecisionRequired: true, OperationRequired: true,
+	},
+	ActionDevOpsRepositoryBindingHealthTransitioned: {
+		Source: SourceDevOps, Target: TargetRepositoryBinding, Results: []Result{ResultSucceeded},
+		OperationRequired: true,
 	},
 	ActionDevOpsPipelineCreated: {
 		Source: SourceDevOps, Target: TargetPipeline, Results: []Result{ResultSucceeded},

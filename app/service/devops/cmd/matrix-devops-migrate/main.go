@@ -15,6 +15,7 @@ var dsnFileEnvironments = []string{
 	"MATRIX_MIGRATION_DATABASE_DSN_FILE",
 	"MATRIX_MIGRATION_DEVOPS_API_DSN_FILE",
 	"MATRIX_MIGRATION_DEVOPS_WORKER_DSN_FILE",
+	"MATRIX_MIGRATION_DEVOPS_SOURCE_OBSERVER_DSN_FILE",
 }
 
 func main() {
@@ -30,10 +31,10 @@ func run(ctx context.Context, arguments []string) error {
 	return migrationprocess.Run(ctx, arguments, migrationprocess.Configuration{
 		DSNFileEnvironments: dsnFileEnvironments,
 		Apply: func(ctx context.Context, values []string) error {
-			return devopsmigration.Apply(ctx, values[0], values[1], values[2])
+			return devopsmigration.Apply(ctx, values[0], values[1], values[2], values[3])
 		},
 		Verify: func(ctx context.Context, values []string) error {
-			return devopsmigration.VerifyInstalled(ctx, values[0], values[1], values[2])
+			return devopsmigration.VerifyInstalled(ctx, values[0], values[1], values[2], values[3])
 		},
 	})
 }

@@ -50,8 +50,8 @@ type contract struct {
 }
 
 var platformServiceNames = []string{
-	"apisix", "audit", "devops-api", "devops-audit-dispatcher", "iam",
-	"iam-audit-dispatcher", "matrix-ui",
+	"apisix", "audit", "devops-api", "devops-audit-dispatcher",
+	"devops-source-observer", "iam", "iam-audit-dispatcher", "matrix-ui",
 	"paas-api", "paas-audit-dispatcher", "paas-worker", "platform-api", "postgres",
 }
 
@@ -93,6 +93,7 @@ func contractDescription() contract {
 		Networks: map[string]networkConfig{
 			"control": {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-control")},
 			"edge":    {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-edge")},
+			"source":  {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-source")},
 			"web":     {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-web")},
 		},
 	}
@@ -129,6 +130,14 @@ func Compile(manifest release.Manifest, options Options) (Result, error) {
 			"edge":    {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-edge")},
 			"web":     {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-web")},
 		},
+	}
+	if manifest.IncludesProduct(release.ProductDevOps) {
+		document.Networks["source"] = networkConfig{
+			Internal: false,
+			Labels: ownershipLabels(
+				options.InstallationID, manifest.Release.ID, "network-source",
+			),
+		}
 	}
 	content, err := json.Marshal(document)
 	if err != nil {
@@ -352,6 +361,7 @@ func compileServices(
 	paasWorkerDSN := path.Join(root, layout.PaaSWorker)
 	devopsAPIDSN := path.Join(root, layout.DevOpsAPI)
 	devopsWorkerDSN := path.Join(root, layout.DevOpsWorker)
+	devopsSourceObserverDSN := path.Join(root, layout.DevOpsSourceObserver)
 	bootstrapIAM := path.Join(root, layout.IAMBootstrap)
 	auditIAMCredential := path.Join(root, layout.AuditIAMCredential)
 	iamAuditCredential := path.Join(root, layout.IAMAuditCredential)
@@ -373,6 +383,8 @@ func compileServices(
 	executorRoot := path.Join(root, layout.ExecutorRoot)
 	workloadSecretRoot := path.Join(root, layout.WorkloadSecretRoot)
 	devopsWebhookCredentialRoot := path.Join(root, layout.DevOpsWebhookCredentialRoot)
+	devopsFetchCredentialRoot := path.Join(root, layout.DevOpsFetchCredentialRoot)
+	devopsReportCredentialRoot := path.Join(root, layout.DevOpsReportCredentialRoot)
 	service := func(
 		name string,
 		component string,
@@ -617,8 +629,31 @@ func compileServices(
 			bind(devopsAuditCredential, "/run/matrix/devops-audit-credential", true),
 		}
 		devopsAudit.DependsOn = healthy("postgres", "audit")
+
+		devopsSourceObserver := service(
+			"devops-source-observer", "devops", images["devops"],
+			[]string{"control", "source"},
+			[]string{"/matrix/bin/matrix-devops-source-observer"},
+			"0.5", "384M", "http://127.0.0.1:8080/ready",
+		)
+		devopsSourceObserver.Environment = map[string]string{
+			"MATRIX_DEVOPS_SOURCE_OBSERVER_DATABASE_DSN_FILE": "/run/matrix/devops-source-observer-dsn",
+			"MATRIX_DEVOPS_SOURCE_OBSERVER_FETCH_ROOT":        "/run/matrix/devops-source-fetch",
+			"MATRIX_DEVOPS_SOURCE_OBSERVER_LISTEN_ADDRESS":    "0.0.0.0:8080",
+			"MATRIX_DEVOPS_SOURCE_OBSERVER_REPORT_ROOT":       "/run/matrix/devops-source-report",
+			"MATRIX_DEVOPS_SOURCE_OBSERVER_WEBHOOK_ROOT":      "/run/matrix/devops-source-webhooks",
+			"MATRIX_DEVOPS_SOURCE_OBSERVER_WORKER_ID":         "devops-source-observer-" + strings.TrimPrefix(options.InstallationID, "mxi-"),
+		}
+		devopsSourceObserver.Volumes = []mount{
+			bind(devopsSourceObserverDSN, "/run/matrix/devops-source-observer-dsn", true),
+			bind(devopsWebhookCredentialRoot, "/run/matrix/devops-source-webhooks", true),
+			bind(devopsFetchCredentialRoot, "/run/matrix/devops-source-fetch", true),
+			bind(devopsReportCredentialRoot, "/run/matrix/devops-source-report", true),
+		}
+		devopsSourceObserver.DependsOn = healthy("postgres")
 		services["devops-api"] = devopsAPI
 		services["devops-audit-dispatcher"] = devopsAudit
+		services["devops-source-observer"] = devopsSourceObserver
 	}
 	if profile == legacyProductlessProfile {
 		apisix.DependsOn = healthy("audit", "iam", "paas-api", "paas-ui")

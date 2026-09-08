@@ -8,7 +8,8 @@ BEGIN
         'matrix_devops_owner',
         'matrix_devops_migrator',
         'matrix_devops_api',
-        'matrix_devops_worker'
+        'matrix_devops_worker',
+        'matrix_devops_source_observer'
     ]
     LOOP
         IF NOT EXISTS (
@@ -45,7 +46,11 @@ DECLARE
 BEGIN
     FOREACH parent_name IN ARRAY ARRAY['matrix_devops_owner', 'matrix_devops_migrator']
     LOOP
-        FOREACH member_name IN ARRAY ARRAY['matrix_devops_api', 'matrix_devops_worker']
+        FOREACH member_name IN ARRAY ARRAY[
+            'matrix_devops_api',
+            'matrix_devops_worker',
+            'matrix_devops_source_observer'
+        ]
         LOOP
             IF pg_has_role(member_name, parent_name, 'MEMBER') THEN
                 EXECUTE format('REVOKE %I FROM %I', parent_name, member_name);

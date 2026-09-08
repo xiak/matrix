@@ -53,7 +53,8 @@ func TestPlatformMigrationIntegration(t *testing.T) {
 		                'matrix_iam_api_login', 'matrix_iam_worker_login',
 		                'matrix_audit_runtime_login',
 		                'matrix_paas_api_login', 'matrix_paas_worker_login',
-		                'matrix_devops_api_login', 'matrix_devops_worker_login'
+					'matrix_devops_api_login', 'matrix_devops_worker_login',
+					'matrix_devops_source_observer_login'
 		             )
 		        )`,
 	).Scan(&clean); err != nil || !clean {
@@ -67,6 +68,7 @@ func TestPlatformMigrationIntegration(t *testing.T) {
 	paasWorker := runtimeDSN(t, adminDSN, "matrix_paas_worker_login", "mxp1.paas-worker-0000000000000000000000000000000")
 	devopsAPI := runtimeDSN(t, adminDSN, "matrix_devops_api_login", "mxp1.devops-api-000000000000000000000000000000")
 	devopsWorker := runtimeDSN(t, adminDSN, "matrix_devops_worker_login", "mxp1.devops-worker-0000000000000000000000000000")
+	devopsSourceObserver := runtimeDSN(t, adminDSN, "matrix_devops_source_observer_login", "mxp1.devops-source-observer-0000000000000000000")
 
 	for attempt := 1; attempt <= 2; attempt++ {
 		if err := iammigration.Apply(ctx, adminDSN, iamAPI, iamWorker); err != nil {
@@ -78,7 +80,7 @@ func TestPlatformMigrationIntegration(t *testing.T) {
 		if err := paasmigration.Apply(ctx, adminDSN, paasAPI, paasWorker); err != nil {
 			t.Fatalf("apply PaaS migration attempt %d: %v", attempt, err)
 		}
-		if err := devopsmigration.Apply(ctx, adminDSN, devopsAPI, devopsWorker); err != nil {
+		if err := devopsmigration.Apply(ctx, adminDSN, devopsAPI, devopsWorker, devopsSourceObserver); err != nil {
 			t.Fatalf("apply DevOps migration attempt %d: %v", attempt, err)
 		}
 	}
@@ -91,7 +93,7 @@ func TestPlatformMigrationIntegration(t *testing.T) {
 	if err := paasmigration.VerifyInstalled(ctx, adminDSN, paasAPI, paasWorker); err != nil {
 		t.Fatalf("verify installed PaaS migration: %v", err)
 	}
-	if err := devopsmigration.VerifyInstalled(ctx, adminDSN, devopsAPI, devopsWorker); err != nil {
+	if err := devopsmigration.VerifyInstalled(ctx, adminDSN, devopsAPI, devopsWorker, devopsSourceObserver); err != nil {
 		t.Fatalf("verify installed DevOps migration: %v", err)
 	}
 	assertLegacyIAMReleaseServiceEnrollment(t, ctx, admin, adminDSN, iamAPI, iamWorker)
@@ -108,6 +110,7 @@ func TestPlatformMigrationIntegration(t *testing.T) {
 		{paasWorker, "paas", []string{"audit", "delivery", "iam"}},
 		{devopsAPI, "delivery", []string{"audit", "iam", "paas"}},
 		{devopsWorker, "delivery", []string{"audit", "iam", "paas"}},
+		{devopsSourceObserver, "delivery", []string{"audit", "iam", "paas"}},
 	} {
 		assertSchemaBoundary(t, ctx, runtime.dsn, runtime.allowed, runtime.denied)
 	}
