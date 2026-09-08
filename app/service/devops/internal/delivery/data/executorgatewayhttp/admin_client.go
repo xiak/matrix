@@ -44,7 +44,7 @@ func NewAdminClient(
 		MinVersion:   tls.VersionTLS13,
 		MaxVersion:   tls.VersionTLS13,
 		ServerName:   serverName,
-		RootCAs:      serverRoots,
+		RootCAs:      serverRoots.Clone(),
 		Certificates: []tls.Certificate{certificate},
 		NextProtos:   []string{"http/1.1"},
 	}

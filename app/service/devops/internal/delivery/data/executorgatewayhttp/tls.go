@@ -18,12 +18,13 @@ func NewAdminTLSConfig(
 		return nil, errors.New("executor admin TLS configuration is invalid")
 	}
 	return &tls.Config{
-		MinVersion:   tls.VersionTLS13,
-		MaxVersion:   tls.VersionTLS13,
-		Certificates: []tls.Certificate{serverCertificate},
-		ClientAuth:   tls.RequireAndVerifyClientCert,
-		ClientCAs:    clientRoots,
-		NextProtos:   []string{"http/1.1"},
+		MinVersion:             tls.VersionTLS13,
+		MaxVersion:             tls.VersionTLS13,
+		Certificates:           []tls.Certificate{serverCertificate},
+		ClientAuth:             tls.RequireAndVerifyClientCert,
+		ClientCAs:              clientRoots.Clone(),
+		NextProtos:             []string{"http/1.1"},
+		SessionTicketsDisabled: true,
 		VerifyConnection: func(state tls.ConnectionState) error {
 			return exactPeerIdentity(&state, expectedIdentity)
 		},
@@ -42,12 +43,13 @@ func NewRunnerTLSConfig(
 		return nil, errors.New("executor runner TLS configuration is invalid")
 	}
 	return &tls.Config{
-		MinVersion:   tls.VersionTLS13,
-		MaxVersion:   tls.VersionTLS13,
-		Certificates: []tls.Certificate{serverCertificate},
-		ClientAuth:   tls.RequireAndVerifyClientCert,
-		ClientCAs:    clientRoots,
-		NextProtos:   []string{"http/1.1"},
+		MinVersion:             tls.VersionTLS13,
+		MaxVersion:             tls.VersionTLS13,
+		Certificates:           []tls.Certificate{serverCertificate},
+		ClientAuth:             tls.RequireAndVerifyClientCert,
+		ClientCAs:              clientRoots.Clone(),
+		NextProtos:             []string{"http/1.1"},
+		SessionTicketsDisabled: true,
 		VerifyConnection: func(state tls.ConnectionState) error {
 			_, identityErr := runnerPeerIdentity(&state, namespace)
 			return identityErr

@@ -74,3 +74,13 @@ func runnerIDFromPeer(state *tls.ConnectionState, namespace *url.URL) (string, e
 	}
 	return runnerID(identity)
 }
+
+// RunnerID returns the opaque executor identity a runner must bind into its
+// normalized receipt for one canonical certificate SPIFFE identity.
+func RunnerID(identity string) (string, error) {
+	parsed, err := parseSPIFFEIdentity(identity)
+	if err != nil {
+		return "", err
+	}
+	return runnerID(parsed)
+}

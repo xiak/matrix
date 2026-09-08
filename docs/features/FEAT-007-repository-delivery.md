@@ -11,8 +11,9 @@
   fetch protocol, source-acquisition persistence, isolated source-fetcher
   process, fenced BuildExecutor contract/use case, and table-blind PostgreSQL
   execution persistence, versioned admin/runner transport contract, durable
-  executor-gateway spool, and TLS 1.3 mTLS admin/runner HTTP boundary complete;
-  physical gateway/runner process composition and reporter effects pending
+  executor-gateway spool, TLS 1.3 mTLS admin/runner HTTP boundary, and isolated
+  executor-gateway process complete; physical build-worker/runner and reporter
+  effects pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -971,9 +972,13 @@ different runner identity, and gives only the same runner an archive-free
 deadline and carries the durable cancellation bit. Restart, partial staging
 cleanup, canonical file modes/shapes, archive reinspection, and symlink/content
 tamper fail closed. The strict TLS 1.3 admin client and separate admin/runner
-mTLS HTTP handlers now drive this spool over real sockets. The physical gateway
-and runner process composition, independent runner journal, sandbox, and
-normalized log persistence remain pending; no repository code executes yet.
+mTLS HTTP handlers now drive this spool over real sockets. The independent
+gateway process loads canonical protected key/certificate inputs, rejects
+overlapping role trust roots, holds an OS-level exclusive spool lock, and
+couples two explicit bounded TLS listeners so either failure stops the whole
+process. The physical build worker and runner processes, independent runner
+journal, sandbox, and normalized log persistence remain pending; no repository
+code executes yet.
 
 Every fenced worker transition now submits the exact next PipelineRun document
 to the database boundary. A terminal transition atomically stores a distinct
@@ -1124,6 +1129,15 @@ Current verification evidence:
   archive-free same-runner recovery, terminal acknowledgement replay, changed
   completion conflict, and empty sanitized failures; the transport, spool, and
   public-contract suites pass race detection and 20-run repetition
+- executor-gateway process-composition tests proving canonical protected
+  server key/certificate and self-signed client-root loading, disjoint role
+  signing keys, explicit distinct IP listeners, OS-exclusive spool ownership
+  with release recovery, coupled shutdown, and a complete admin-submit through
+  runner-claim/completion receipt round trip over both real mTLS sockets; an
+  architecture gate excludes database, source-provider, IAM, Audit, PaaS,
+  Docker, process-exec, and Prow/Kubernetes authority from the gateway source,
+  while the fixed disconnected Go 1.26.8 Linux/amd64 suite proves the Linux
+  lock and gateway composition twenty times without module lookup
 - the shared source-archive reader proves the portable receipt independently,
   matches it to the private deterministic store, structurally inspects and
   hashes the archive before handoff, and verifies its length and digest again

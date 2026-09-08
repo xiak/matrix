@@ -517,6 +517,55 @@ func assertAllowedDependency(
 			imported,
 		)
 	}
+
+	if executorGatewaySource(source) && executorGatewayAuthority(imported) {
+		t.Errorf(
+			"%s: executor gateway boundary cannot import authority-bearing package %q",
+			source,
+			imported,
+		)
+	}
+}
+
+func executorGatewaySource(source string) bool {
+	if strings.HasSuffix(source, "_test.go") {
+		return false
+	}
+	return strings.HasPrefix(
+		source,
+		"app/service/devops/cmd/matrix-devops-executor-gateway/",
+	) || strings.HasPrefix(
+		source,
+		"app/service/devops/internal/delivery/data/executorgatewayhttp/",
+	) || strings.HasPrefix(
+		source,
+		"app/service/devops/internal/delivery/data/executorspoolfile/",
+	)
+}
+
+func executorGatewayAuthority(imported string) bool {
+	if imported == "os/exec" || strings.HasPrefix(imported, "github.com/jackc/pgx/") ||
+		strings.HasPrefix(imported, "github.com/docker/") ||
+		strings.HasPrefix(imported, "k8s.io/") {
+		return true
+	}
+	for _, forbidden := range []string{
+		modulePath + "app/service/paas/",
+		modulePath + "app/service/iam/",
+		modulePath + "app/service/audit/",
+		modulePath + "app/service/devops/internal/delivery/usecase/",
+		modulePath + "app/service/devops/internal/delivery/data/audithttp",
+		modulePath + "app/service/devops/internal/delivery/data/gitea",
+		modulePath + "app/service/devops/internal/delivery/data/iamhttp",
+		modulePath + "app/service/devops/internal/delivery/data/postgres",
+		modulePath + "app/service/devops/internal/delivery/data/sourcearchivefile",
+		modulePath + "app/service/devops/internal/delivery/data/sourcecredentialfile",
+	} {
+		if strings.HasPrefix(imported, forbidden) {
+			return true
+		}
+	}
+	return false
 }
 
 func isThirdPartyImport(imported string) bool {

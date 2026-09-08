@@ -412,11 +412,7 @@ func newRunnerHTTPClient(
 
 func testRunnerID(t *testing.T, identity string) string {
 	t.Helper()
-	parsed, err := parseSPIFFEIdentity(identity)
-	if err != nil {
-		t.Fatal(err)
-	}
-	value, err := runnerID(parsed)
+	value, err := RunnerID(identity)
 	if err != nil {
 		t.Fatal(err)
 	}

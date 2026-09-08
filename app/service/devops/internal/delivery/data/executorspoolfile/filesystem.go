@@ -23,6 +23,7 @@ import (
 const (
 	submissionName     = "submission.json"
 	archiveName        = "source.tar.gz"
+	ownershipLockName  = ".gateway.lock"
 	maximumRootEntries = 256
 	maximumStateFiles  = 512
 	stagingAttempts    = 16
@@ -51,17 +52,24 @@ func recoverTemporaryEntries(root *os.Root) error {
 	if err != nil {
 		return err
 	}
-	entries, readErr := directory.ReadDir(maximumRootEntries + 1)
+	entries, readErr := directory.ReadDir(maximumRootEntries + 2)
 	closeErr := directory.Close()
 	if readErr != nil && !errors.Is(readErr, io.EOF) {
 		return errors.Join(readErr, closeErr)
 	}
-	if closeErr != nil || len(entries) > maximumRootEntries {
+	if closeErr != nil || len(entries) > maximumRootEntries+1 {
 		return errors.Join(closeErr, ErrUnavailable)
 	}
 	removed := false
 	for _, entry := range entries {
 		name := entry.Name()
+		if name == ownershipLockName {
+			info, infoErr := entry.Info()
+			if infoErr != nil || !validOwnershipFile(info) {
+				return errors.Join(ErrUnavailable, infoErr)
+			}
+			continue
+		}
 		if validStagingName(name) {
 			if entry.Type()&os.ModeSymlink != 0 || !entry.IsDir() {
 				return ErrUnavailable
@@ -93,16 +101,23 @@ func listExecutionKeys(root *os.Root) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	entries, readErr := directory.ReadDir(maximumRootEntries + 1)
+	entries, readErr := directory.ReadDir(maximumRootEntries + 2)
 	closeErr := directory.Close()
 	if readErr != nil && !errors.Is(readErr, io.EOF) {
 		return nil, errors.Join(readErr, closeErr)
 	}
-	if closeErr != nil || len(entries) > maximumRootEntries {
+	if closeErr != nil || len(entries) > maximumRootEntries+1 {
 		return nil, errors.Join(closeErr, ErrUnavailable)
 	}
 	keys := make([]string, 0, len(entries))
 	for _, entry := range entries {
+		if entry.Name() == ownershipLockName {
+			info, infoErr := entry.Info()
+			if infoErr != nil || !validOwnershipFile(info) {
+				return nil, errors.Join(ErrUnavailable, infoErr)
+			}
+			continue
+		}
 		if !validExecutionKey(entry.Name()) || entry.Type()&os.ModeSymlink != 0 || !entry.IsDir() {
 			return nil, ErrUnavailable
 		}
@@ -112,6 +127,9 @@ func listExecutionKeys(root *os.Root) ([]string, error) {
 			return nil, errors.Join(ErrUnavailable, err)
 		}
 		keys = append(keys, entry.Name())
+	}
+	if len(keys) > maximumRootEntries {
+		return nil, ErrUnavailable
 	}
 	sort.Strings(keys)
 	return keys, nil
@@ -498,6 +516,11 @@ func samePath(left, right string) bool {
 
 func privateMode(actual os.FileMode, expected os.FileMode) bool {
 	return runtime.GOOS == "windows" || actual.Perm() == expected
+}
+
+func validOwnershipFile(info os.FileInfo) bool {
+	return info != nil && info.Mode()&os.ModeSymlink == 0 && info.Mode().IsRegular() &&
+		info.Size() == 0 && privateMode(info.Mode(), 0o600)
 }
 
 func syncDirectory(root *os.Root, name string) error {
