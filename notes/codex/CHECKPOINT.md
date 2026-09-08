@@ -6,7 +6,7 @@
 - Updated: 2026-09-08
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `83bde3c`
+- Current pushed implementation baseline: `3cd0607`
 
 ## Goal
 
@@ -36,11 +36,26 @@ architecture, FEAT, implementation, test, and release gates.
   architecture tests deny provider, runner, Docker, IAM, Audit, and PaaS
   authority. Its focused suites pass race/repetition and fixed disconnected
   Linux/amd64 tests with read-only source/module cache and lookup disabled.
+- Pushed `3cd0607` adds the runner's closed Docker Engine API `v1.46`
+  boundary over a protected root-owned Unix socket. Preflight fails before
+  claim unless Docker `29.x`, Linux/amd64, `runsc`, resource-limit support,
+  node capacity, installation-owned free storage, the pinned image ID/digest,
+  and a trusted negative-isolation probe all pass. Host-side inspection binds
+  the probe's image, command, environment, runtime, no-network/no-IPC,
+  read-only root, empty authority, resource limits, terminal state, and network
+  attachment; outcome ambiguity is cleaned by randomized controlled name. The
+  same adapter derives immutable `go test`/`go vet` container requests with
+  exact user, environment, read-only source mount, and bounded tmpfs, but does
+  not execute them yet. Unit, race, repetition, fixed disconnected Linux Unix-
+  socket, and real read-only Docker `29.6.2` evidence pass; the current Docker
+  Desktop host correctly fails closed because `runsc` is absent, which is not
+  gVisor-isolation evidence.
 - Full tests and vet, architecture tests, focused race and 20-run suites, and
   the same focused suites run twenty times in the fixed disconnected Go 1.26.8
   Linux/amd64 image with read-only source and no module lookup. The physical
-  dedicated runner process, sandbox, real cross-process journey, normalized
-  logs, reporter, UI, and offline release remain pending.
+  dedicated runner process, safe workspace expansion, sandbox execution, real
+  cross-process journey, normalized logs, reporter, UI, and offline release
+  remain pending.
 - The user-owned untracked `app/ui/paas/` tree remains untouched.
 
 ## Adoption boundary
@@ -55,8 +70,11 @@ architecture, FEAT, implementation, test, and release gates.
 
 Continue FEAT-007 with the smallest independently testable physical-execution
 slice behind the accepted BuildExecutor port: compose the dedicated runner
-process around the accepted gateway/client/journal boundary, without executing
-repository code until the sandbox gate and eligibility preflight are present.
+process around the accepted gateway/client/journal boundary. First safely
+expand the journal's already-verified archive into a private, content-bound,
+read-only source workspace without symlinks, special files, path traversal, or
+cross-execution reuse; then connect the closed step executor. Do not execute
+repository code merely because the request-shape and preflight gates exist.
 Keep runner authority away from
 PostgreSQL, source/report credentials, IAM, Audit, PaaS, and admin operations.
 Do not claim repository
