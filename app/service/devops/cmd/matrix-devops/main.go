@@ -15,7 +15,7 @@ import (
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/gitea"
 	iamhttp "github.com/xiak/matrix/app/service/devops/internal/delivery/data/iamhttp"
 	devopspostgres "github.com/xiak/matrix/app/service/devops/internal/delivery/data/postgres"
-	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/webhooksecretfile"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/sourcecredentialfile"
 	devopshttp "github.com/xiak/matrix/app/service/devops/internal/delivery/service/nethttp"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/pipelineconfiguration"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runadmission"
@@ -109,7 +109,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	secretResolver, err := webhooksecretfile.NewResolver(config.webhookSecretRoot)
+	secretResolver, err := sourcecredentialfile.NewResolver(config.webhookSecretRoot)
 	if err != nil {
 		return err
 	}

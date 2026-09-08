@@ -5,7 +5,8 @@
   configuration transaction/persistence, shared authority, durable run
   admission, authenticated Gitea ingress, fenced run-lifecycle foundation,
   IAM-authorized run read/cancellation/manual replay, terminal Audit facts,
-  and source-readiness/operator-credential design complete;
+  source-readiness contract, and installation-operator source credential
+  lifecycle complete;
   source observer/executor/reporter effects pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
@@ -775,13 +776,24 @@ single-origin connection documents and stored command results, adds reasons to
 current and immutable binding snapshots, and refuses a legacy multi-origin
 document instead of selecting an endpoint. Its narrowly scoped owner policies
 exist only inside the migration transaction and are removed before runtime.
-The source observer process, operator credential commands, reconciliation
-queue, health Audit facts, and purpose-separated runtime mounts remain to be
-implemented.
+The installation-operator slice now exposes only the exact `apply` and
+`retire-previous` commands under `mx devops source-credential`. It takes secret
+material only through a protected regular input file, holds the installation
+lock, authenticates the sealed journal, pinned trust root, committed signed
+release, and selected DevOps product before touching storage, and emits only
+closed non-secret result fields. The installer creates three purpose-separated
+roots only for a selected DevOps product. A strict canonical `material.json`
+envelope and one durable replacement make current/previous webhook rotation
+atomic; equal apply and repeated retirement are idempotent. The DevOps API's
+read-only webhook resolver consumes that replacement format, while the removed
+two-file resolver has no compatibility alias.
+
+The source observer process, reconciliation queue, health Audit facts, and its
+fetch/report runtime mounts remain to be implemented.
 
 These slices do not complete Gate A. The source-readiness public contract,
-domain transitions, freshness rule, and legacy data replacement are complete;
-the observer runtime and operator credential commands remain pending. Logs,
+domain transitions, freshness rule, legacy data replacement, and operator
+credential lifecycle are complete; the observer runtime remains pending. Logs,
 concurrent cross-tenant fairness evidence, remaining runtime quotas,
 check-receipt Audit facts, and pagination also remain pending.
 
@@ -791,6 +803,16 @@ Current verification evidence:
 - `go vet ./...`
 - `go test -race` and `go test -count=20` across the DevOps/Audit contracts,
   delivery domain, admission, run control, HTTP, and PostgreSQL adapter packages
+- installation-operator command, material-codec, read-only resolver, and local
+  filesystem journeys proving the exact no-alias CLI, no argv value, signed
+  DevOps selection, PaaS-only rejection, lifecycle-lock conflict, trust-root
+  tamper rejection, protected input enforcement, purpose-separated roots,
+  atomic webhook rotation, equal apply, repeated retirement, and closed output;
+  the focused suites pass race and 20-run repetition
+- the same credential suites pass in a disposable disconnected Debian Linux
+  container with the source and module cache mounted read-only, exercising
+  owner/mode and no-follow checks; Linux/amd64 CGO-disabled `go build ./...`
+  also passes
 - five-second native fuzz runs for draft/event digest framing and activation
   with untrusted repository-binding identifiers; the manual-replay identity
   run completed 512,956 executions

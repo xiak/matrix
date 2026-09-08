@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/xiak/matrix/app/service/installation/internal/cli"
+	"github.com/xiak/matrix/app/service/installation/internal/installedrelease"
 	"github.com/xiak/matrix/app/service/installation/internal/journal"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
@@ -578,7 +579,7 @@ func (backend *Backend) upgrade(
 		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_RELEASE_INVALID")
 	}
 	defer clear(trustBytes)
-	sourceBundle, err := authenticateJournalRelease(
+	sourceBundle, err := installedrelease.Authenticate(
 		session.Root(), state.CurrentReleaseID, state.CurrentReleaseDigest, trustBytes,
 	)
 	if err != nil {
@@ -708,13 +709,13 @@ func (backend *Backend) rollback(
 		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_RELEASE_INVALID")
 	}
 	defer clear(trustBytes)
-	currentBundle, err := authenticateJournalRelease(
+	currentBundle, err := installedrelease.Authenticate(
 		session.Root(), state.CurrentReleaseID, state.CurrentReleaseDigest, trustBytes,
 	)
 	if err != nil {
 		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_RELEASE_INVALID")
 	}
-	previousBundle, err := authenticateJournalRelease(
+	previousBundle, err := installedrelease.Authenticate(
 		session.Root(), state.PreviousRelease, state.PreviousReleaseDigest, trustBytes,
 	)
 	if err != nil {
@@ -825,7 +826,7 @@ func (backend *Backend) recover(
 		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_RELEASE_INVALID")
 	}
 	defer clear(trustBytes)
-	currentBundle, err := authenticateJournalRelease(
+	currentBundle, err := installedrelease.Authenticate(
 		session.Root(), state.CurrentReleaseID, state.CurrentReleaseDigest, trustBytes,
 	)
 	if err != nil {
@@ -845,7 +846,7 @@ func (backend *Backend) recover(
 		source.SchemaVersion == 0 {
 		return cli.Result{}, fault(cli.FaultVerification, "RECOVERY_SOURCE_INVALID")
 	}
-	targetBundle, err := authenticateJournalRelease(
+	targetBundle, err := installedrelease.Authenticate(
 		session.Root(), source.ReleaseID, source.ReleaseDigest, trustBytes,
 	)
 	if err != nil || targetBundle.Manifest.Database.SchemaVersion != source.SchemaVersion {
@@ -903,24 +904,6 @@ func (backend *Backend) recover(
 		},
 		nil,
 	)
-}
-
-func authenticateJournalRelease(
-	root string,
-	releaseID string,
-	digest string,
-	trustBytes []byte,
-) (release.VerifiedBundle, error) {
-	releaseRoot := filepath.Join(
-		root, filepath.FromSlash(layout.ReleaseDirectory(releaseID)),
-	)
-	bundle, err := release.VerifyInstalledDirectory(releaseRoot, trustBytes)
-	if err != nil || bundle.Manifest.Release.ID != releaseID ||
-		bundle.ManifestSHA256 != digest ||
-		topology.ValidateInstalledContract(bundle.Manifest) != nil {
-		return release.VerifiedBundle{}, errors.New("committed release authentication failed")
-	}
-	return bundle, nil
 }
 
 func (backend *Backend) driveReleaseChange(
@@ -1178,4 +1161,4 @@ func nextJournalTime(now time.Time, previous time.Time) time.Time {
 	return next
 }
 
-var _ cli.Backend = (*Backend)(nil)
+var _ cli.PlatformBackend = (*Backend)(nil)

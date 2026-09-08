@@ -35,12 +35,14 @@ const (
 	BackupSealKey                  = "secrets/authority/backup-seal-key"
 	InitialAdministratorPassword   = "secrets/operator/initial-admin-password"
 
-	PostgresData           = "data/postgres"
-	ExecutorRoot           = "runtime/executor"
-	WorkloadSecretRoot     = "secrets/workloads"
-	DevOpsSourceSecretRoot = "secrets/devops/source-webhooks"
-	BackupDirectory        = "backups"
-	SupportDirectory       = "support"
+	PostgresData                = "data/postgres"
+	ExecutorRoot                = "runtime/executor"
+	WorkloadSecretRoot          = "secrets/workloads"
+	DevOpsWebhookCredentialRoot = "secrets/devops/source-webhooks"
+	DevOpsFetchCredentialRoot   = "secrets/devops/source-fetch"
+	DevOpsReportCredentialRoot  = "secrets/devops/source-report"
+	BackupDirectory             = "backups"
+	SupportDirectory            = "support"
 )
 
 func ReleaseDirectory(releaseID string) string {

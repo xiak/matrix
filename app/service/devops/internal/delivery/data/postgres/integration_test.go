@@ -25,7 +25,7 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/gitea"
 	devopspostgres "github.com/xiak/matrix/app/service/devops/internal/delivery/data/postgres"
-	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/webhooksecretfile"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/sourcecredentialfile"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/domain"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/port"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/auditdispatch"
@@ -35,6 +35,7 @@ import (
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runlifecycle"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/sourceingress"
 	devopsmigration "github.com/xiak/matrix/app/service/devops/migration"
+	"github.com/xiak/matrix/app/service/devops/sourcecredential"
 )
 
 const integrationDSNEnvironment = "MATRIX_DEVOPS_POSTGRES_TEST_DSN"
@@ -246,7 +247,8 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	secretRoot := t.TempDir()
-	secretDirectory, err := webhooksecretfile.DirectoryName(
+	secretDirectory, err := sourcecredential.DirectoryName(
+		sourcecredential.PurposeWebhook,
 		devopsv1.ResourceScope{TenantID: "tenant-one"}, rotated.WebhookSecretRef,
 	)
 	if err != nil {
@@ -256,10 +258,25 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	webhookSecret := []byte("integration-webhook-secret-000000001")
-	if err := os.WriteFile(filepath.Join(secretRoot, secretDirectory, "current"), webhookSecret, 0o600); err != nil {
+	material, err := sourcecredential.NewMaterial(
+		sourcecredential.PurposeWebhook, webhookSecret, nil,
+	)
+	if err != nil {
 		t.Fatal(err)
 	}
-	secretResolver, err := webhooksecretfile.NewResolver(secretRoot)
+	materialBytes, err := sourcecredential.Encode(sourcecredential.PurposeWebhook, material)
+	material.Clear()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(materialBytes)
+	if err := os.WriteFile(
+		filepath.Join(secretRoot, secretDirectory, sourcecredential.MaterialFilename),
+		materialBytes, 0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	secretResolver, err := sourcecredentialfile.NewResolver(secretRoot)
 	if err != nil {
 		t.Fatal(err)
 	}

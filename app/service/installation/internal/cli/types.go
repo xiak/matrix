@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 
+	devopsv1 "github.com/xiak/matrix/api/devops/v1"
+	"github.com/xiak/matrix/app/service/devops/sourcecredential"
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
 )
 
@@ -37,8 +39,40 @@ type Result struct {
 	CorrelationID string `json:"correlationId,omitempty"`
 }
 
-type Backend interface {
+type PlatformBackend interface {
 	Run(context.Context, Request) (Result, error)
+}
+
+type SourceCredentialOperation string
+
+const (
+	SourceCredentialApply          SourceCredentialOperation = "APPLY"
+	SourceCredentialRetirePrevious SourceCredentialOperation = "RETIRE_PREVIOUS"
+)
+
+type SourceCredentialRequest struct {
+	Operation SourceCredentialOperation
+	Root      string
+	TenantID  string
+	Purpose   sourcecredential.Purpose
+	Reference string
+	FromFile  string
+}
+
+type SourceCredentialResult struct {
+	State     string                   `json:"state"`
+	Purpose   sourcecredential.Purpose `json:"purpose"`
+	TenantID  string                   `json:"tenant"`
+	Reference string                   `json:"reference"`
+}
+
+type SourceCredentialBackend interface {
+	RunSourceCredential(context.Context, SourceCredentialRequest) (SourceCredentialResult, error)
+}
+
+type Backends struct {
+	Platform         PlatformBackend
+	SourceCredential SourceCredentialBackend
 }
 
 type FaultClass string
@@ -100,6 +134,26 @@ func validateResult(result Result) error {
 		}
 	}
 	return errors.Join(problems...)
+}
+
+func validateSourceCredentialResult(
+	request SourceCredentialRequest,
+	result SourceCredentialResult,
+) error {
+	validState := request.Operation == SourceCredentialApply &&
+		(result.State == "APPLIED" || result.State == "UNCHANGED") ||
+		request.Operation == SourceCredentialRetirePrevious && result.State == "PREVIOUS_RETIRED"
+	if !validState || result.Purpose != request.Purpose ||
+		result.TenantID != request.TenantID || result.Reference != request.Reference {
+		return errors.New("source credential result state is invalid")
+	}
+	return errors.Join(
+		sourcecredential.ValidatePurpose(result.Purpose),
+		devopsv1.ValidateResourceScope(devopsv1.ResourceScope{
+			TenantID: devopsv1.TenantID(result.TenantID),
+		}),
+		devopsv1.ValidateID("sourceCredentialRef", result.Reference),
+	)
 }
 
 func validateFault(fault *Fault) error {

@@ -86,7 +86,10 @@ func stageInstallation(plan platformcommand.InstallPlan, entropy io.Reader) erro
 		}
 	}
 	if staged.Manifest.IncludesProduct(release.ProductDevOps) {
-		for _, directory := range []string{"secrets/devops", layout.DevOpsSourceSecretRoot} {
+		for _, directory := range []string{
+			"secrets/devops", layout.DevOpsWebhookCredentialRoot,
+			layout.DevOpsFetchCredentialRoot, layout.DevOpsReportCredentialRoot,
+		} {
 			if _, err := ensureManagedDirectory(plan.Root, filepath.FromSlash(directory)); err != nil {
 				return err
 			}

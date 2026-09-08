@@ -1,4 +1,4 @@
-package webhooksecretfile
+package sourcecredentialfile
 
 import (
 	"context"
@@ -10,24 +10,26 @@ import (
 
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/sourceingress"
+	"github.com/xiak/matrix/app/service/devops/sourcecredential"
 )
 
-func TestResolveCurrentAndPreviousWebhookSecrets(t *testing.T) {
+func TestResolveAtomicCurrentAndPreviousWebhookMaterial(t *testing.T) {
 	root := privateTempDir(t)
 	scope := devopsv1.ResourceScope{TenantID: "tenant:one"}
 	reference := devopsv1.ResourceID("secret:webhook.v1")
-	directory, err := DirectoryName(scope, reference)
+	directory, err := sourcecredential.DirectoryName(
+		sourcecredential.PurposeWebhook, scope, reference,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	secretDirectory := filepath.Join(root, directory)
-	if err := os.Mkdir(secretDirectory, 0o700); err != nil {
+	credentialDirectory := filepath.Join(root, directory)
+	if err := os.Mkdir(credentialDirectory, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	current := []byte("current-webhook-secret-000000000001")
 	previous := []byte("previous-webhook-secret-0000000001")
-	writePrivate(t, filepath.Join(secretDirectory, "current"), current)
-	writePrivate(t, filepath.Join(secretDirectory, "previous"), previous)
+	writeMaterial(t, credentialDirectory, current, previous)
 	resolver, err := NewResolver(root)
 	if err != nil {
 		t.Fatal(err)
@@ -42,12 +44,12 @@ func TestResolveCurrentAndPreviousWebhookSecrets(t *testing.T) {
 			t.Fatalf("%s rotation value was not resolved", name)
 		}
 	}
-	if directory == string(reference) || filepath.Base(secretDirectory) != directory || len(directory) != 64 {
-		t.Fatalf("secret directory identity=%q", directory)
+	if directory == string(reference) || filepath.Base(credentialDirectory) != directory || len(directory) != 64 {
+		t.Fatalf("credential directory identity=%q", directory)
 	}
 }
 
-func TestWebhookSecretFilesystemFailsClosed(t *testing.T) {
+func TestWebhookCredentialFilesystemFailsClosed(t *testing.T) {
 	root := privateTempDir(t)
 	resolver, err := NewResolver(root)
 	if err != nil {
@@ -55,34 +57,38 @@ func TestWebhookSecretFilesystemFailsClosed(t *testing.T) {
 	}
 	scope := devopsv1.ResourceScope{TenantID: "tenant-one"}
 	if _, err := resolver.ResolveWebhookSecrets(context.Background(), scope, "missing"); !errors.Is(err, sourceingress.ErrSecretNotFound) {
-		t.Fatalf("missing secret error=%v", err)
+		t.Fatalf("missing credential error=%v", err)
 	}
-	emptyDirectory, err := DirectoryName(scope, "missing-current")
+	emptyDirectory, err := sourcecredential.DirectoryName(
+		sourcecredential.PurposeWebhook, scope, "missing-material",
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Mkdir(filepath.Join(root, emptyDirectory), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := resolver.ResolveWebhookSecrets(context.Background(), scope, "missing-current"); !errors.Is(err, sourceingress.ErrSecretNotFound) {
-		t.Fatalf("missing current secret error=%v", err)
+	if _, err := resolver.ResolveWebhookSecrets(context.Background(), scope, "missing-material"); !errors.Is(err, sourceingress.ErrSecretNotFound) {
+		t.Fatalf("missing material error=%v", err)
 	}
 
-	directory, err := DirectoryName(scope, "invalid-content")
+	directory, err := sourcecredential.DirectoryName(
+		sourcecredential.PurposeWebhook, scope, "invalid-content",
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	secretDirectory := filepath.Join(root, directory)
-	if err := os.Mkdir(secretDirectory, 0o700); err != nil {
+	credentialDirectory := filepath.Join(root, directory)
+	if err := os.Mkdir(credentialDirectory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	writePrivate(t, filepath.Join(secretDirectory, "current"), []byte("short"))
+	writePrivate(t, filepath.Join(credentialDirectory, sourcecredential.MaterialFilename), []byte("invalid"))
 	if _, err := resolver.ResolveWebhookSecrets(context.Background(), scope, "invalid-content"); err == nil || errors.Is(err, sourceingress.ErrSecretNotFound) {
-		t.Fatalf("invalid secret content error=%v", err)
+		t.Fatalf("invalid credential content error=%v", err)
 	}
 }
 
-func TestWebhookSecretFilesystemRejectsLinks(t *testing.T) {
+func TestWebhookCredentialFilesystemRejectsLinks(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("unprivileged Windows symlink creation is not portable")
 	}
@@ -92,7 +98,7 @@ func TestWebhookSecretFilesystemRejectsLinks(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := NewResolver(filepath.Join(root, "linked")); err == nil {
-		t.Fatal("symlinked secret root was accepted")
+		t.Fatal("symlinked credential root was accepted")
 	}
 }
 
@@ -105,6 +111,23 @@ func privateTempDir(t *testing.T) string {
 		}
 	}
 	return root
+}
+
+func writeMaterial(t *testing.T, directory string, current, previous []byte) {
+	t.Helper()
+	material, err := sourcecredential.NewMaterial(
+		sourcecredential.PurposeWebhook, current, previous,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer material.Clear()
+	content, err := sourcecredential.Encode(sourcecredential.PurposeWebhook, material)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(content)
+	writePrivate(t, filepath.Join(directory, sourcecredential.MaterialFilename), content)
 }
 
 func writePrivate(t *testing.T, path string, value []byte) {

@@ -55,7 +55,8 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 	}
 	for _, optional := range []string{
 		layout.DevOpsIAMCredential, layout.DevOpsAuditCredential,
-		layout.DevOpsAPI, layout.DevOpsWorker, layout.DevOpsSourceSecretRoot,
+		layout.DevOpsAPI, layout.DevOpsWorker, layout.DevOpsWebhookCredentialRoot,
+		layout.DevOpsFetchCredentialRoot, layout.DevOpsReportCredentialRoot,
 	} {
 		if _, err := os.Lstat(filepath.Join(plan.Root, filepath.FromSlash(optional))); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("unselected DevOps secret %q exists or cannot be inspected: %v", optional, err)
@@ -270,10 +271,16 @@ func TestStageDevOpsProductCredentialsAreSelectedAndStable(t *testing.T) {
 		validateDatabaseDSN(string(workerDSN), "matrix_devops_worker_login") != nil {
 		t.Fatal("DevOps database identities are invalid")
 	}
-	secretRoot := filepath.Join(plan.Root, filepath.FromSlash(layout.DevOpsSourceSecretRoot))
-	if info, err := os.Lstat(secretRoot); err != nil || !info.IsDir() ||
-		(runtime.GOOS != "windows" && info.Mode().Perm() != 0o700) {
-		t.Fatalf("selected DevOps source-secret root is unsafe: %v / %#v", err, info)
+	for _, relative := range []string{
+		layout.DevOpsWebhookCredentialRoot,
+		layout.DevOpsFetchCredentialRoot,
+		layout.DevOpsReportCredentialRoot,
+	} {
+		credentialRoot := filepath.Join(plan.Root, filepath.FromSlash(relative))
+		if info, err := os.Lstat(credentialRoot); err != nil || !info.IsDir() ||
+			(runtime.GOOS != "windows" && info.Mode().Perm() != 0o700) {
+			t.Fatalf("selected DevOps credential root %q is unsafe: %v / %#v", relative, err, info)
+		}
 	}
 	before := map[string]string{
 		layout.DevOpsIAMCredential:   string(iamCredential),

@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+	"github.com/xiak/matrix/app/service/devops/sourcecredential"
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
 )
 
@@ -31,8 +32,15 @@ const (
 	formatJSON  outputFormat = "json"
 )
 
+type commandAction string
+
+const (
+	actionSourceCredentialApply          commandAction = "SOURCE_CREDENTIAL_APPLY"
+	actionSourceCredentialRetirePrevious commandAction = "SOURCE_CREDENTIAL_RETIRE_PREVIOUS"
+)
+
 type invocationError struct {
-	action lifecycle.Action
+	action commandAction
 	usage  bool
 	err    error
 }
@@ -48,12 +56,20 @@ type commandOptions struct {
 	supportOutput string
 }
 
-func NewCommand(streams Streams, backend Backend) (*cobra.Command, error) {
+type sourceCredentialOptions struct {
+	root      string
+	tenantID  string
+	purpose   string
+	reference string
+	fromFile  string
+}
+
+func NewCommand(streams Streams, backends Backends) (*cobra.Command, error) {
 	if err := validateStreams(streams); err != nil {
 		return nil, err
 	}
-	if backend == nil {
-		return nil, errors.New("platform CLI backend is required")
+	if backends.Platform == nil || backends.SourceCredential == nil {
+		return nil, errors.New("Matrix CLI backends are required")
 	}
 	format := string(formatHuman)
 	root := &cobra.Command{
@@ -70,6 +86,15 @@ func NewCommand(streams Streams, backend Backend) (*cobra.Command, error) {
 	root.SetOut(streams.Out)
 	root.SetErr(streams.ErrOut)
 	root.PersistentFlags().StringVar(&format, "format", string(formatHuman), "output format: human or json")
+	root.PersistentPreRunE = func(command *cobra.Command, _ []string) error {
+		if outputFormat(format) != formatHuman && outputFormat(format) != formatJSON {
+			return &invocationError{
+				action: actionForCommand(command), usage: true,
+				err: errors.New("output format must be human or json"),
+			}
+		}
+		return nil
+	}
 	root.SetFlagErrorFunc(func(command *cobra.Command, err error) error {
 		return &invocationError{action: actionForCommand(command), usage: true, err: err}
 	})
@@ -78,36 +103,28 @@ func NewCommand(streams Streams, backend Backend) (*cobra.Command, error) {
 		Use:   "platform",
 		Short: "Install and operate the private Matrix platform",
 		Args:  cobra.NoArgs,
-		PersistentPreRunE: func(command *cobra.Command, _ []string) error {
-			if outputFormat(format) != formatHuman && outputFormat(format) != formatJSON {
-				return &invocationError{
-					action: actionForCommand(command), usage: true,
-					err: errors.New("output format must be human or json"),
-				}
-			}
-			return nil
-		},
 		RunE: func(command *cobra.Command, _ []string) error {
 			return command.Help()
 		},
 	}
 	root.AddCommand(platform)
 	platform.AddCommand(
-		newPlatformCommand(streams.Out, backend, lifecycle.ActionInstall, &format),
-		newPlatformCommand(streams.Out, backend, lifecycle.ActionVerify, &format),
-		newPlatformCommand(streams.Out, backend, lifecycle.ActionStatus, &format),
-		newPlatformCommand(streams.Out, backend, lifecycle.ActionBackup, &format),
-		newPlatformCommand(streams.Out, backend, lifecycle.ActionUpgrade, &format),
-		newPlatformCommand(streams.Out, backend, lifecycle.ActionRollback, &format),
-		newPlatformCommand(streams.Out, backend, lifecycle.ActionRecover, &format),
-		newPlatformCommand(streams.Out, backend, lifecycle.ActionSupport, &format),
+		newPlatformCommand(streams.Out, backends.Platform, lifecycle.ActionInstall, &format),
+		newPlatformCommand(streams.Out, backends.Platform, lifecycle.ActionVerify, &format),
+		newPlatformCommand(streams.Out, backends.Platform, lifecycle.ActionStatus, &format),
+		newPlatformCommand(streams.Out, backends.Platform, lifecycle.ActionBackup, &format),
+		newPlatformCommand(streams.Out, backends.Platform, lifecycle.ActionUpgrade, &format),
+		newPlatformCommand(streams.Out, backends.Platform, lifecycle.ActionRollback, &format),
+		newPlatformCommand(streams.Out, backends.Platform, lifecycle.ActionRecover, &format),
+		newPlatformCommand(streams.Out, backends.Platform, lifecycle.ActionSupport, &format),
 	)
+	root.AddCommand(newDevOpsCommand(streams.Out, backends.SourceCredential, &format))
 	return root, nil
 }
 
 func newPlatformCommand(
 	out io.Writer,
-	backend Backend,
+	backend PlatformBackend,
 	action lifecycle.Action,
 	format *string,
 ) *cobra.Command {
@@ -119,7 +136,7 @@ func newPlatformCommand(
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
 			if err := validateCommandFlags(action, options); err != nil {
-				return &invocationError{action: action, usage: true, err: err}
+				return &invocationError{action: commandAction(action), usage: true, err: err}
 			}
 			request := Request{
 				Action: action, Root: options.root, Bundle: options.bundle, TrustKey: options.trustKey,
@@ -127,19 +144,147 @@ func newPlatformCommand(
 			}
 			result, err := backend.Run(command.Context(), request)
 			if err != nil {
-				return &invocationError{action: action, err: err}
+				return &invocationError{action: commandAction(action), err: err}
 			}
 			if err := validateResult(result); err != nil {
-				return &invocationError{action: action, err: err}
+				return &invocationError{action: commandAction(action), err: err}
 			}
 			if err := writeSuccess(out, outputFormat(*format), action, result); err != nil {
-				return &invocationError{action: action, err: err}
+				return &invocationError{action: commandAction(action), err: err}
 			}
 			return nil
 		},
 	}
 	bindCommandFlags(command.Flags(), action, options)
 	return command
+}
+
+func newDevOpsCommand(
+	out io.Writer,
+	backend SourceCredentialBackend,
+	format *string,
+) *cobra.Command {
+	devops := &cobra.Command{
+		Use:   "devops",
+		Short: "Operate Matrix DevOps products",
+		Args:  cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			return command.Help()
+		},
+	}
+	source := &cobra.Command{
+		Use:   "source-credential",
+		Short: "Manage installation-owned source credentials",
+		Args:  cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			return command.Help()
+		},
+	}
+	source.AddCommand(
+		newSourceCredentialOperationCommand(
+			out, backend, SourceCredentialApply, format,
+		),
+		newSourceCredentialOperationCommand(
+			out, backend, SourceCredentialRetirePrevious, format,
+		),
+	)
+	devops.AddCommand(source)
+	return devops
+}
+
+func newSourceCredentialOperationCommand(
+	out io.Writer,
+	backend SourceCredentialBackend,
+	operation SourceCredentialOperation,
+	format *string,
+) *cobra.Command {
+	options := &sourceCredentialOptions{}
+	name := "apply"
+	short := "Apply source credential material"
+	if operation == SourceCredentialRetirePrevious {
+		name = "retire-previous"
+		short = "Retire the previous webhook credential"
+	}
+	action := sourceCredentialAction(operation)
+	command := &cobra.Command{
+		Use:   name,
+		Short: short,
+		Args:  cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			if err := validateSourceCredentialFlags(operation, options); err != nil {
+				return &invocationError{action: action, usage: true, err: err}
+			}
+			request := SourceCredentialRequest{
+				Operation: operation,
+				Root:      options.root,
+				TenantID:  options.tenantID,
+				Purpose:   sourcecredential.Purpose(options.purpose),
+				Reference: options.reference,
+				FromFile:  options.fromFile,
+			}
+			result, err := backend.RunSourceCredential(command.Context(), request)
+			if err != nil {
+				return &invocationError{action: action, err: err}
+			}
+			if err := validateSourceCredentialResult(request, result); err != nil {
+				return &invocationError{action: action, err: err}
+			}
+			if err := writeSourceCredentialSuccess(
+				out, outputFormat(*format), action, result,
+			); err != nil {
+				return &invocationError{action: action, err: err}
+			}
+			return nil
+		},
+	}
+	flags := command.Flags()
+	flags.StringVar(&options.root, "root", "", "absolute Matrix installation root")
+	flags.StringVar(&options.tenantID, "tenant", "", "Matrix tenant identity")
+	flags.StringVar(&options.purpose, "purpose", "", "credential purpose: WEBHOOK, FETCH, or REPORT")
+	flags.StringVar(&options.reference, "reference", "", "opaque source credential reference")
+	if operation == SourceCredentialApply {
+		flags.StringVar(&options.fromFile, "from-file", "", "private source credential input file")
+	}
+	return command
+}
+
+func validateSourceCredentialFlags(
+	operation SourceCredentialOperation,
+	options *sourceCredentialOptions,
+) error {
+	if options == nil || strings.TrimSpace(options.root) == "" ||
+		strings.TrimSpace(options.tenantID) == "" ||
+		strings.TrimSpace(options.reference) == "" {
+		return errors.New("source credential identity is required")
+	}
+	purpose := sourcecredential.Purpose(options.purpose)
+	if sourcecredential.ValidatePurpose(purpose) != nil {
+		return errors.New("source credential purpose is invalid")
+	}
+	switch operation {
+	case SourceCredentialApply:
+		if strings.TrimSpace(options.fromFile) == "" {
+			return errors.New("source credential input file is required")
+		}
+	case SourceCredentialRetirePrevious:
+		if purpose != sourcecredential.PurposeWebhook || options.fromFile != "" {
+			return errors.New("only a webhook previous credential can be retired")
+		}
+	default:
+		return errors.New("source credential operation is invalid")
+	}
+	return nil
+}
+
+func sourceCredentialAction(operation SourceCredentialOperation) commandAction {
+	switch operation {
+	case SourceCredentialApply:
+		return actionSourceCredentialApply
+	case SourceCredentialRetirePrevious:
+		return actionSourceCredentialRetirePrevious
+	default:
+		return ""
+	}
 }
 
 func bindCommandFlags(flags *pflag.FlagSet, action lifecycle.Action, options *commandOptions) {
@@ -205,27 +350,35 @@ func commandDescription(action lifecycle.Action) string {
 	}
 }
 
-func actionForCommand(command *cobra.Command) lifecycle.Action {
+func actionForCommand(command *cobra.Command) commandAction {
 	if command == nil {
 		return ""
 	}
+	if command.Parent() != nil && command.Parent().Name() == "source-credential" {
+		switch command.Name() {
+		case "apply":
+			return actionSourceCredentialApply
+		case "retire-previous":
+			return actionSourceCredentialRetirePrevious
+		}
+	}
 	switch command.Name() {
 	case "install":
-		return lifecycle.ActionInstall
+		return commandAction(lifecycle.ActionInstall)
 	case "verify":
-		return lifecycle.ActionVerify
+		return commandAction(lifecycle.ActionVerify)
 	case "status":
-		return lifecycle.ActionStatus
+		return commandAction(lifecycle.ActionStatus)
 	case "backup":
-		return lifecycle.ActionBackup
+		return commandAction(lifecycle.ActionBackup)
 	case "upgrade":
-		return lifecycle.ActionUpgrade
+		return commandAction(lifecycle.ActionUpgrade)
 	case "rollback":
-		return lifecycle.ActionRollback
+		return commandAction(lifecycle.ActionRollback)
 	case "recover":
-		return lifecycle.ActionRecover
+		return commandAction(lifecycle.ActionRecover)
 	case "support":
-		return lifecycle.ActionSupport
+		return commandAction(lifecycle.ActionSupport)
 	default:
 		return ""
 	}
@@ -234,11 +387,11 @@ func actionForCommand(command *cobra.Command) lifecycle.Action {
 // Run is the process boundary used by cmd/mx. Subcommands return errors; this
 // boundary alone renders a normalized failure and selects the stable exit
 // class.
-func Run(ctx context.Context, arguments []string, streams Streams, backend Backend) int {
+func Run(ctx context.Context, arguments []string, streams Streams, backends Backends) int {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	command, err := NewCommand(streams, backend)
+	command, err := NewCommand(streams, backends)
 	if err != nil {
 		if streams.ErrOut != nil {
 			_, _ = io.WriteString(streams.ErrOut, "Matrix CLI initialization failed\n")
@@ -261,8 +414,8 @@ func Run(ctx context.Context, arguments []string, streams Streams, backend Backe
 	return exitCode(fault.Class)
 }
 
-func normalizeFailure(err error, ctx context.Context) (lifecycle.Action, *Fault) {
-	action := lifecycle.Action("")
+func normalizeFailure(err error, ctx context.Context) (commandAction, *Fault) {
+	action := commandAction("")
 	var invocation *invocationError
 	if !errors.As(err, &invocation) {
 		return action, mustFault(FaultInvalidArgument, "INVALID_COMMAND_INPUT")
@@ -309,19 +462,27 @@ func exitCode(class FaultClass) int {
 }
 
 type successEnvelope struct {
-	APIVersion string           `json:"apiVersion"`
-	Kind       string           `json:"kind"`
-	Action     lifecycle.Action `json:"action"`
-	Status     string           `json:"status"`
-	Result     Result           `json:"result"`
+	APIVersion string        `json:"apiVersion"`
+	Kind       string        `json:"kind"`
+	Action     commandAction `json:"action"`
+	Status     string        `json:"status"`
+	Result     Result        `json:"result"`
+}
+
+type sourceCredentialSuccessEnvelope struct {
+	APIVersion string                 `json:"apiVersion"`
+	Kind       string                 `json:"kind"`
+	Action     commandAction          `json:"action"`
+	Status     string                 `json:"status"`
+	Result     SourceCredentialResult `json:"result"`
 }
 
 type failureEnvelope struct {
-	APIVersion string           `json:"apiVersion"`
-	Kind       string           `json:"kind"`
-	Action     lifecycle.Action `json:"action,omitempty"`
-	Status     string           `json:"status"`
-	Error      failureBody      `json:"error"`
+	APIVersion string        `json:"apiVersion"`
+	Kind       string        `json:"kind"`
+	Action     commandAction `json:"action,omitempty"`
+	Status     string        `json:"status"`
+	Error      failureBody   `json:"error"`
 }
 
 type failureBody struct {
@@ -333,7 +494,7 @@ type failureBody struct {
 func writeSuccess(out io.Writer, format outputFormat, action lifecycle.Action, result Result) error {
 	if format == formatJSON {
 		return writeJSONLine(out, successEnvelope{
-			APIVersion: OutputAPIVersion, Kind: "PlatformCommandResult", Action: action,
+			APIVersion: OutputAPIVersion, Kind: "PlatformCommandResult", Action: commandAction(action),
 			Status: "SUCCEEDED", Result: result,
 		})
 	}
@@ -350,11 +511,34 @@ func writeSuccess(out io.Writer, format outputFormat, action lifecycle.Action, r
 	return err
 }
 
-func writeFailure(out io.Writer, format outputFormat, action lifecycle.Action, fault *Fault) error {
+func writeSourceCredentialSuccess(
+	out io.Writer,
+	format outputFormat,
+	action commandAction,
+	result SourceCredentialResult,
+) error {
+	if format == formatJSON {
+		return writeJSONLine(out, sourceCredentialSuccessEnvelope{
+			APIVersion: OutputAPIVersion, Kind: "SourceCredentialCommandResult",
+			Action: action, Status: "SUCCEEDED", Result: result,
+		})
+	}
+	_, err := fmt.Fprintf(
+		out, "%s SUCCEEDED state=%s purpose=%s tenant=%s reference=%s\n",
+		action, result.State, result.Purpose, result.TenantID, result.Reference,
+	)
+	return err
+}
+
+func writeFailure(out io.Writer, format outputFormat, action commandAction, fault *Fault) error {
 	message := faultMessage(fault.Class)
 	if format == formatJSON {
+		kind := "PlatformCommandFailure"
+		if action == actionSourceCredentialApply || action == actionSourceCredentialRetirePrevious {
+			kind = "SourceCredentialCommandFailure"
+		}
 		return writeJSONLine(out, failureEnvelope{
-			APIVersion: OutputAPIVersion, Kind: "PlatformCommandFailure", Action: action,
+			APIVersion: OutputAPIVersion, Kind: kind, Action: action,
 			Status: "FAILED", Error: failureBody{Class: fault.Class, Code: fault.Code, Message: message},
 		})
 	}
@@ -367,13 +551,13 @@ func faultMessage(class FaultClass) string {
 	case FaultInvalidArgument:
 		return "Command input is invalid"
 	case FaultPrecondition:
-		return "Platform preconditions are not satisfied"
+		return "Matrix preconditions are not satisfied"
 	case FaultConflict:
-		return "Platform state conflicts with this command"
+		return "Matrix state conflicts with this command"
 	case FaultVerification:
-		return "Platform verification failed"
+		return "Matrix verification failed"
 	case FaultUnavailable:
-		return "A required platform dependency is unavailable"
+		return "A required Matrix dependency is unavailable"
 	case FaultInterrupted:
 		return "Command was interrupted"
 	default:
