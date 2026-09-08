@@ -17,6 +17,7 @@ import (
 
 	devopsbuildv1 "github.com/xiak/matrix/api/adapter/devopsbuild/v1"
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/runnerlog"
 )
 
 var (
@@ -34,6 +35,7 @@ type Entry struct {
 	EffectID              string
 	CancellationRequested bool
 	Steps                 [2]StepProgress
+	LogProgress           runnerlog.Progress
 	Receipt               *devopsbuildv1.Receipt
 }
 
@@ -511,23 +513,28 @@ func (journal *Journal) MarkStepStarted(
 	})
 }
 
-// RecordStepConclusion seals normalized sandbox evidence before a later
-// terminal receipt can be accepted. A pending step may become CANCELLED only
-// when the durable assignment already carries cancellation.
+// RecordStepConclusion atomically seals the run-wide normalized-log cursor
+// with one sandbox conclusion before a later terminal receipt can be accepted.
+// A pending step may become CANCELLED only when the durable assignment already
+// carries cancellation, and cannot advance the cursor.
 func (journal *Journal) RecordStepConclusion(
 	ctx context.Context,
 	assignment devopsbuildv1.Assignment,
 	step devopsv1.VerificationStep,
 	conclusion devopsbuildv1.StepConclusion,
+	logProgress runnerlog.Progress,
 ) (Entry, error) {
 	index, found := requestStepIndex(assignment.Request, step)
 	want := stepPhaseFromConclusion(conclusion)
-	if !found || want == "" {
+	if !found || want == "" || runnerlog.Validate(logProgress) != nil {
 		return Entry{}, ErrInvalid
 	}
 	return journal.change(ctx, assignment, func(execution storedExecution) (stateRecord, bool, error) {
 		current := execution.state.Steps[index].Phase
 		if current == want {
+			if execution.state.LogProgress != logProgress {
+				return stateRecord{}, false, ErrConflict
+			}
 			return execution.state, false, nil
 		}
 		if execution.state.Phase != PhaseReceived &&
@@ -541,8 +548,15 @@ func (journal *Journal) RecordStepConclusion(
 		if current != StepPending && current != StepStarted {
 			return stateRecord{}, false, ErrConflict
 		}
+		if (current == StepPending && logProgress != execution.state.LogProgress) ||
+			(current == StepStarted && runnerlog.ValidateAdvance(
+				execution.state.LogProgress, logProgress,
+			) != nil) {
+			return stateRecord{}, false, ErrConflict
+		}
 		next := nextState(execution.state)
 		next.Steps[index].Phase = want
+		next.LogProgress = logProgress
 		if !validStepProgress(assignment.Request, next.Steps) {
 			return stateRecord{}, false, ErrConflict
 		}
@@ -689,6 +703,7 @@ func entryFrom(assignment devopsbuildv1.Assignment, state stateRecord) Entry {
 	entry := Entry{
 		Assignment: assignment, Phase: state.Phase, EffectID: state.EffectID,
 		CancellationRequested: state.CancellationRequested, Steps: state.Steps,
+		LogProgress: state.LogProgress,
 	}
 	if state.Receipt != nil {
 		receipt := *state.Receipt

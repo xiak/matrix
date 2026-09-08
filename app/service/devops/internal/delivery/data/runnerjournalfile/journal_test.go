@@ -15,6 +15,7 @@ import (
 
 	devopsbuildv1 "github.com/xiak/matrix/api/adapter/devopsbuild/v1"
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/runnerlog"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/sourcearchive"
 )
 
@@ -89,7 +90,7 @@ func TestJournalPersistsLifecycleAcrossRestart(t *testing.T) {
 	}
 	cancelled, err = restarted.RecordStepConclusion(
 		context.Background(), cancelled.Assignment, request.Steps[0],
-		devopsbuildv1.StepConclusionCancelled,
+		devopsbuildv1.StepConclusionCancelled, runnerlog.Progress{},
 	)
 	if err != nil || cancelled.Steps[0].Phase != StepCancelled ||
 		cancelled.Steps[1].Phase != StepPending {
@@ -173,12 +174,15 @@ func TestJournalPersistsOrderedStepProgressAcrossRestart(t *testing.T) {
 	if err != nil || replayed.Steps != started.Steps {
 		t.Fatalf("first step replay = %#v / %v", replayed, err)
 	}
+	firstLogProgress := runnerlog.Progress{
+		NativeBytes: 32, NormalizedBytes: 64, LastSequence: 1,
+	}
 	passed, err := journal.RecordStepConclusion(
 		context.Background(), started.Assignment, request.Steps[0],
-		devopsbuildv1.StepConclusionPassed,
+		devopsbuildv1.StepConclusionPassed, firstLogProgress,
 	)
 	if err != nil || passed.Steps[0].Phase != StepPassed ||
-		passed.Steps[1].Phase != StepPending {
+		passed.Steps[1].Phase != StepPending || passed.LogProgress != firstLogProgress {
 		t.Fatalf("first step passed = %#v / %v", passed, err)
 	}
 
@@ -190,7 +194,8 @@ func TestJournalPersistsOrderedStepProgressAcrossRestart(t *testing.T) {
 		t, request, devopsbuildv1.AssignmentObserve, 2, 3*time.Minute,
 	)
 	loaded := commitJournalAssignment(t, restarted, observe, nil)
-	if loaded.Assignment != observe || loaded.Steps != passed.Steps {
+	if loaded.Assignment != observe || loaded.Steps != passed.Steps ||
+		loaded.LogProgress != firstLogProgress {
 		t.Fatalf("recovered progress = %#v", loaded)
 	}
 	second, err := restarted.MarkStepStarted(
@@ -200,16 +205,36 @@ func TestJournalPersistsOrderedStepProgressAcrossRestart(t *testing.T) {
 	if err != nil || second.Steps[1].Phase != StepStarted {
 		t.Fatalf("second step started = %#v / %v", second, err)
 	}
+	if _, err := restarted.RecordStepConclusion(
+		context.Background(), second.Assignment, request.Steps[1],
+		devopsbuildv1.StepConclusionFailed, runnerlog.Progress{
+			NativeBytes: 31, NormalizedBytes: 63, LastSequence: 1,
+		},
+	); !errors.Is(err, ErrConflict) {
+		t.Fatalf("log progress rollback error = %v", err)
+	}
+	secondLogProgress := runnerlog.Progress{
+		NativeBytes: 64, NormalizedBytes: 128, LastSequence: 2,
+	}
 	failed, err := restarted.RecordStepConclusion(
 		context.Background(), second.Assignment, request.Steps[1],
-		devopsbuildv1.StepConclusionFailed,
+		devopsbuildv1.StepConclusionFailed, secondLogProgress,
 	)
-	if err != nil || failed.Steps[1].Phase != StepFailed {
+	if err != nil || failed.Steps[1].Phase != StepFailed ||
+		failed.LogProgress != secondLogProgress {
 		t.Fatalf("second step failed = %#v / %v", failed, err)
 	}
 	if _, err := restarted.RecordStepConclusion(
 		context.Background(), failed.Assignment, request.Steps[1],
-		devopsbuildv1.StepConclusionPassed,
+		devopsbuildv1.StepConclusionFailed, runnerlog.Progress{
+			NativeBytes: 65, NormalizedBytes: 129, LastSequence: 3,
+		},
+	); !errors.Is(err, ErrConflict) {
+		t.Fatalf("changed log replay error = %v", err)
+	}
+	if _, err := restarted.RecordStepConclusion(
+		context.Background(), failed.Assignment, request.Steps[1],
+		devopsbuildv1.StepConclusionPassed, secondLogProgress,
 	); !errors.Is(err, ErrConflict) {
 		t.Fatalf("changed step replay error = %v", err)
 	}
@@ -287,7 +312,7 @@ func TestJournalPersistsCanonicalStepStartWithoutRenewingItsClock(t *testing.T) 
 	}
 	passed, err := journal.RecordStepConclusion(
 		context.Background(), replayed.Assignment, request.Steps[0],
-		devopsbuildv1.StepConclusionPassed,
+		devopsbuildv1.StepConclusionPassed, runnerlog.Progress{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -371,9 +396,17 @@ func TestJournalRecoveryAdvancesFenceWithoutReplacingArchive(t *testing.T) {
 	if err := claim.Abort(); err != nil {
 		t.Fatalf("abort observe after cancellation: %v", err)
 	}
+	if _, err := journal.RecordStepConclusion(
+		context.Background(), cancelled.Assignment, request.Steps[0],
+		devopsbuildv1.StepConclusionCancelled, runnerlog.Progress{
+			NativeBytes: 1, NormalizedBytes: 10, LastSequence: 1,
+		},
+	); !errors.Is(err, ErrConflict) {
+		t.Fatalf("pending cancellation invented log progress: %v", err)
+	}
 	cancelled, err = journal.RecordStepConclusion(
 		context.Background(), cancelled.Assignment, request.Steps[0],
-		devopsbuildv1.StepConclusionCancelled,
+		devopsbuildv1.StepConclusionCancelled, runnerlog.Progress{},
 	)
 	if err != nil || cancelled.Phase != PhaseReceived ||
 		cancelled.Steps[0].Phase != StepCancelled {

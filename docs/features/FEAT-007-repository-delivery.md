@@ -715,6 +715,13 @@ assignments or token formats, URL user information, and Unix, drive, or UNC
 absolute paths are replaced in full by closed markers; native content is never
 partially retained beside a marker.
 
+The budget exposes only a validated cursor containing cumulative native and
+normalized byte counts plus the last emitted sequence. That cursor restores
+the next sequence and both 8 MiB run-wide limits after a runner restart;
+partial, inconsistent, backwards, or poisoned progress is rejected. The
+private journal commits this cursor atomically with a started step's conclusion
+and does not retain native output.
+
 The adapter creates a deterministic stopped container, revalidates every fixed
 field before start, fixes that exact container ID across each effect, starts it,
 streams its bounded multiplexed logs through the shared decoder, waits, and
@@ -1060,11 +1067,15 @@ publication, holds an OS-level exclusive directory lock, and persists strict
 `RECEIVED`, `EFFECT_STARTED`, `TERMINAL`, and `ACKNOWLEDGED` generations with
 request digests, recovery fences, cancellation, exact ordered `PENDING`,
 `STARTED`, `PASSED`, `FAILED`, or `CANCELLED` step progress, the canonical first
-start time of each invoked step, and normalized receipts. A step start and its
+start time of each invoked step, run-wide native/normalized log counts and last
+emitted sequence, and normalized receipts. A step start and its
 time are fsynced before its deterministic container side effect may be invoked;
 replay preserves that first time, so recovery cannot renew the fixed per-step
 clock. Step two cannot be authorized before durable step-one success or with a
-start time earlier than step one. The journal permits the same runner to
+start time earlier than step one. Log progress can advance only when a started
+step reaches one fixed conclusion, advances all three cursor values together,
+and must match on replay; pending cancellation cannot invent output. The
+journal permits the same runner to
 continue the next unstarted step after an archive-free increasing-fence
 recovery, while an already-started step must first be observed by the later
 runner orchestration. A cancellation before any sandbox effect durably cancels
@@ -1243,11 +1254,13 @@ Current verification evidence:
   reinspection, fsynced atomic publication, OS-exclusive directory ownership,
   abandoned-claim cleanup, strict effect/step/terminal/acknowledged transitions,
   lease renewal, durable cancellation before or during an effect, enforced
-  step order, idempotent step replay, archive-free increasing-fence recovery
-  that preserves completed progress, same-runner restart, and rejection of
+  step order, idempotent step replay, atomic monotonic log-cursor persistence,
+  archive-free increasing-fence recovery that preserves completed step and log
+  progress, same-runner restart, and rejection of
   changed conclusions, out-of-order steps, changed request, stale fence,
   duplicate execution, foreign identity/entry, unsafe mode, symlink, archive,
-  assignment, state, and recomputed request-digest or step-chain tampering. A
+  assignment, state, invalid/changed/backwards log cursors, and recomputed
+  request-digest, step-chain, or log-chain tampering. A
   real TLS 1.3 mTLS journey claims through the production client directly into
   the journal, persists the pre-effect marker, renewal, and both ordered step
   conclusions, submits the normalized receipt, acknowledges it locally, and
@@ -1286,6 +1299,7 @@ Current verification evidence:
   poisoned partial-log reuse. The run-shared output tests prove
   strict Docker multiplex framing, split/interleaved stream reconstruction,
   monotonic bounded chunks, independent native/normalized whole-run limits,
+  validated restart restoration without budget or sequence reset,
   complete closed-marker replacement for unsafe lines, poisoned reuse after
   malformed or oversized input, safe UTF-8 preservation, and fuzzed arbitrary
   native bytes. The package passes race detection and twenty-run repetition on

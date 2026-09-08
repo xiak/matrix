@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/runnerlog"
 )
 
 func TestLogBudgetDecodesSplitMultiplexedOutputIntoRunSequence(t *testing.T) {
@@ -28,6 +29,88 @@ func TestLogBudgetDecodesSplitMultiplexedOutputIntoRunSequence(t *testing.T) {
 	if err != nil || len(chunks) != 1 || chunks[0].Sequence != 2 ||
 		chunks[0].Content != "[stdout] done" {
 		t.Fatalf("second chunks = %#v, error = %v", chunks, err)
+	}
+}
+
+func TestLogBudgetRestoresRunWideCursorAcrossRestart(t *testing.T) {
+	budget := NewLogBudget()
+	firstContent := []byte("first\n")
+	firstChunks, err := budget.DecodeDockerStream(bytes.NewReader(dockerLogStream(
+		logFrame{stream: stdoutStream, content: firstContent},
+	)))
+	if err != nil || len(firstChunks) != 1 {
+		t.Fatalf("first chunks = %#v, error = %v", firstChunks, err)
+	}
+	first, err := budget.Progress()
+	if err != nil || first != (runnerlog.Progress{
+		NativeBytes: int64(len(firstContent)), NormalizedBytes: int64(len("[stdout] first\n")),
+		LastSequence: 1,
+	}) {
+		t.Fatalf("first progress = %#v, error = %v", first, err)
+	}
+
+	restarted, err := ResumeLogBudget(first)
+	if err != nil {
+		t.Fatalf("resume budget: %v", err)
+	}
+	secondContent := []byte("second\n")
+	secondChunks, err := restarted.DecodeDockerStream(bytes.NewReader(dockerLogStream(
+		logFrame{stream: stderrStream, content: secondContent},
+	)))
+	if err != nil || len(secondChunks) != 1 || secondChunks[0].Sequence != 2 {
+		t.Fatalf("second chunks = %#v, error = %v", secondChunks, err)
+	}
+	second, err := restarted.Progress()
+	if err != nil || second.NativeBytes != first.NativeBytes+int64(len(secondContent)) ||
+		second.NormalizedBytes != first.NormalizedBytes+int64(len("[stderr] second\n")) ||
+		second.LastSequence != 2 {
+		t.Fatalf("second progress = %#v, error = %v", second, err)
+	}
+}
+
+func TestLogBudgetRejectsInvalidOrExhaustedRestoredCursor(t *testing.T) {
+	if budget, err := ResumeLogBudget(runnerlog.Progress{NativeBytes: 1}); budget != nil || !errors.Is(err, ErrLogInvalid) {
+		t.Fatalf("invalid restored budget = %#v / %v", budget, err)
+	}
+
+	tests := []struct {
+		name     string
+		progress runnerlog.Progress
+	}{
+		{
+			name: "native",
+			progress: runnerlog.Progress{
+				NativeBytes:     devopsv1.FixedMaxLogBytes - 1,
+				NormalizedBytes: devopsv1.FixedMaxLogBytes - 100,
+				LastSequence:    1,
+			},
+		},
+		{
+			name: "normalized",
+			progress: runnerlog.Progress{
+				NativeBytes:     devopsv1.FixedMaxLogBytes - 100,
+				NormalizedBytes: devopsv1.FixedMaxLogBytes - 1,
+				LastSequence:    1,
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			budget, err := ResumeLogBudget(test.progress)
+			if err != nil {
+				t.Fatal(err)
+			}
+			chunks, err := budget.DecodeDockerStream(bytes.NewReader(dockerLogStream(
+				logFrame{stream: stdoutStream, content: []byte("xx\n")},
+			)))
+			if len(chunks) != 0 || !errors.Is(err, ErrLogLimit) {
+				t.Fatalf("chunks = %#v, error = %v", chunks, err)
+			}
+			if progress, err := budget.Progress(); progress != (runnerlog.Progress{}) ||
+				!errors.Is(err, ErrLogInvalid) {
+				t.Fatalf("poisoned progress = %#v / %v", progress, err)
+			}
+		})
 	}
 }
 
@@ -93,8 +176,12 @@ func TestLogBudgetRejectsMalformedOrOverBudgetNativeStreams(t *testing.T) {
 			}
 		})
 	}
-	budget := NewLogBudget()
-	budget.rawBytes = devopsv1.FixedMaxLogBytes - 1
+	budget, err := ResumeLogBudget(runnerlog.Progress{
+		NativeBytes: devopsv1.FixedMaxLogBytes - 1, NormalizedBytes: 1, LastSequence: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if chunks, err := budget.DecodeDockerStream(bytes.NewReader(dockerLogStream(
 		logFrame{stream: stdoutStream, content: []byte("xx")},
 	))); len(chunks) != 0 || !errors.Is(err, ErrLogLimit) {
@@ -116,11 +203,19 @@ func TestLogBudgetFailsClosedAfterPartialInvalidStream(t *testing.T) {
 	))); len(chunks) != 0 || !errors.Is(err, ErrLogInvalid) {
 		t.Fatalf("reused chunks = %#v, error = %v", chunks, err)
 	}
+	if progress, err := budget.Progress(); progress != (runnerlog.Progress{}) ||
+		!errors.Is(err, ErrLogInvalid) {
+		t.Fatalf("poisoned progress = %#v / %v", progress, err)
+	}
 }
 
 func TestLogBudgetBoundsNormalizedBytesAcrossSteps(t *testing.T) {
-	budget := NewLogBudget()
-	budget.normalizedBytes = devopsv1.FixedMaxLogBytes - 1
+	budget, err := ResumeLogBudget(runnerlog.Progress{
+		NativeBytes: 1, NormalizedBytes: devopsv1.FixedMaxLogBytes - 1, LastSequence: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if chunks, err := budget.DecodeDockerStream(bytes.NewReader(dockerLogStream(
 		logFrame{stream: stdoutStream, content: []byte("x\n")},
 	))); len(chunks) != 0 || !errors.Is(err, ErrLogLimit) {

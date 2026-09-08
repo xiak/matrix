@@ -12,6 +12,7 @@ import (
 	"time"
 
 	devopsbuildv1 "github.com/xiak/matrix/api/adapter/devopsbuild/v1"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/runnerlog"
 )
 
 func TestJournalRejectsEffectOutsideDurableCurrentLease(t *testing.T) {
@@ -143,6 +144,49 @@ func TestJournalDetectsPublishedTampering(t *testing.T) {
 		}
 		if _, err := New(root, journalRunnerID('a')); !errors.Is(err, ErrUnavailable) {
 			t.Fatalf("recomputed step rollback error = %v", err)
+		}
+	})
+
+	t.Run("log progress chain", func(t *testing.T) {
+		root, journal, assignment, _ := committedJournalFixture(t, 'b')
+		started, err := journal.MarkEffectStarted(
+			context.Background(), assignment,
+			assignment.Request.StartedAt.Add(time.Second),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := journal.MarkStepStarted(
+			context.Background(), started.Assignment,
+			assignment.Request.Steps[0],
+			assignment.Request.StartedAt.Add(2*time.Second),
+		); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(
+			journalExecutionPath(root, assignment.ExecutionID), stateFileName(3),
+		)
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		state, err := decodeState(assignment.Request, content)
+		if err != nil {
+			t.Fatal(err)
+		}
+		state.LogProgress = runnerlog.Progress{
+			NativeBytes: 1, NormalizedBytes: 10, LastSequence: 1,
+		}
+		sealState(&state)
+		content, err = json.Marshal(state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := New(root, journalRunnerID('b')); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("recomputed log progress outside conclusion error = %v", err)
 		}
 	})
 

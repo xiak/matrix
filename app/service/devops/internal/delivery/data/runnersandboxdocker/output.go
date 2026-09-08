@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/runnerlog"
 )
 
 const (
@@ -46,6 +47,42 @@ func NewLogBudget() *LogBudget {
 	return &LogBudget{}
 }
 
+// ResumeLogBudget restores only validated counters from the private runner
+// journal. Native output never crosses this boundary.
+func ResumeLogBudget(progress runnerlog.Progress) (*LogBudget, error) {
+	if runnerlog.Validate(progress) != nil {
+		return nil, ErrLogInvalid
+	}
+	return &LogBudget{
+		rawBytes:        progress.NativeBytes,
+		normalizedBytes: progress.NormalizedBytes,
+		sequence:        progress.LastSequence,
+	}, nil
+}
+
+// Progress returns a durable cursor only while every decoded stream remains
+// valid. A poisoned partial stream cannot become restart state.
+func (budget *LogBudget) Progress() (runnerlog.Progress, error) {
+	if budget == nil {
+		return runnerlog.Progress{}, ErrLogInvalid
+	}
+	budget.mutex.Lock()
+	defer budget.mutex.Unlock()
+	progress := budget.progress()
+	if budget.failed || runnerlog.Validate(progress) != nil {
+		return runnerlog.Progress{}, ErrLogInvalid
+	}
+	return progress, nil
+}
+
+func (budget *LogBudget) progress() runnerlog.Progress {
+	return runnerlog.Progress{
+		NativeBytes:     budget.rawBytes,
+		NormalizedBytes: budget.normalizedBytes,
+		LastSequence:    budget.sequence,
+	}
+}
+
 func (budget *LogBudget) invalidate() {
 	if budget == nil {
 		return
@@ -61,10 +98,7 @@ func (budget *LogBudget) DecodeDockerStream(source io.Reader) ([]LogChunk, error
 	}
 	budget.mutex.Lock()
 	defer budget.mutex.Unlock()
-	if budget.failed || budget.rawBytes < 0 || budget.normalizedBytes < 0 ||
-		budget.rawBytes > devopsv1.FixedMaxLogBytes ||
-		budget.normalizedBytes > devopsv1.FixedMaxLogBytes ||
-		budget.sequence > uint64(devopsv1.FixedMaxLogBytes) {
+	if budget.failed || runnerlog.Validate(budget.progress()) != nil {
 		return nil, ErrLogInvalid
 	}
 	decoder := logDecoder{budget: budget}

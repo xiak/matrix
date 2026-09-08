@@ -14,6 +14,7 @@ import (
 
 	devopsbuildv1 "github.com/xiak/matrix/api/adapter/devopsbuild/v1"
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/runnerlog"
 )
 
 type Phase string
@@ -54,6 +55,7 @@ type stateRecord struct {
 	EffectID              string                       `json:"effectId"`
 	CancellationRequested bool                         `json:"cancellationRequested"`
 	Steps                 [2]StepProgress              `json:"steps"`
+	LogProgress           runnerlog.Progress           `json:"logProgress"`
 	Receipt               *devopsbuildv1.Receipt       `json:"receipt"`
 	PreviousDigest        string                       `json:"previousDigest"`
 	ContentDigest         string                       `json:"contentDigest"`
@@ -72,7 +74,7 @@ func initialState(
 		return stateRecord{}, ErrInvalid
 	}
 	state := stateRecord{
-		SchemaVersion:  2,
+		SchemaVersion:  3,
 		Version:        1,
 		ExecutionID:    assignment.ExecutionID,
 		RequestDigest:  requestDigest,
@@ -146,7 +148,7 @@ func decodeState(
 func validateState(request devopsbuildv1.Request, value stateRecord) error {
 	executionID, err := devopsbuildv1.ExecutionID(request)
 	requestDigest, requestDigestErr := devopsbuildv1.DigestRequest(request)
-	if err != nil || value.SchemaVersion != 2 || value.Version == 0 ||
+	if err != nil || value.SchemaVersion != 3 || value.Version == 0 ||
 		value.Version > devopsv1.MaximumContractInteger || value.ExecutionID != executionID ||
 		requestDigestErr != nil || value.RequestDigest != requestDigest ||
 		devopsv1.ValidateDigest("runnerState.requestDigest", value.RequestDigest) != nil ||
@@ -156,7 +158,8 @@ func validateState(request devopsbuildv1.Request, value stateRecord) error {
 		!value.LeaseExpiresAt.After(request.StartedAt) ||
 		value.LeaseExpiresAt.After(request.DeadlineAt) ||
 		devopsv1.ValidateDigest("runnerState.contentDigest", value.ContentDigest) != nil ||
-		value.ContentDigest != digestState(value) {
+		value.ContentDigest != digestState(value) ||
+		runnerlog.Validate(value.LogProgress) != nil {
 		return ErrUnavailable
 	}
 	if !validStepProgress(request, value.Steps) {
@@ -166,6 +169,7 @@ func validateState(request devopsbuildv1.Request, value stateRecord) error {
 		if value.PreviousDigest != "" || value.Phase != PhaseReceived ||
 			value.Mode != devopsbuildv1.AssignmentExecute || value.FencingToken != 1 ||
 			value.CancellationRequested || value.Steps != initialStepProgress(request) ||
+			value.LogProgress != (runnerlog.Progress{}) ||
 			value.Receipt != nil {
 			return ErrUnavailable
 		}
@@ -221,6 +225,7 @@ func validateTransition(previous, next stateRecord) error {
 	if next.FencingToken > previous.FencingToken {
 		if next.Mode == devopsbuildv1.AssignmentExecute ||
 			next.Phase != previous.Phase || next.Steps != previous.Steps ||
+			next.LogProgress != previous.LogProgress ||
 			!equalReceipt(next.Receipt, previous.Receipt) ||
 			(previous.Phase != PhaseReceived && previous.Phase != PhaseEffectStarted) ||
 			!next.LeaseExpiresAt.After(previous.LeaseExpiresAt) ||
@@ -240,12 +245,16 @@ func validateTransition(previous, next stateRecord) error {
 				!equalReceipt(next.Receipt, previous.Receipt) ||
 				(previous.Phase != PhaseEffectStarted &&
 					(previous.Phase != PhaseReceived || !next.CancellationRequested)) ||
-				!validStepTransition(previous.Steps, next.Steps, next.CancellationRequested) {
+				!validStepTransition(
+					previous.Steps, next.Steps, next.CancellationRequested,
+					previous.LogProgress, next.LogProgress,
+				) {
 				return ErrUnavailable
 			}
 			return nil
 		}
-		if (next.Phase != PhaseReceived && next.Phase != PhaseEffectStarted) ||
+		if next.LogProgress != previous.LogProgress ||
+			(next.Phase != PhaseReceived && next.Phase != PhaseEffectStarted) ||
 			!equalReceipt(next.Receipt, previous.Receipt) ||
 			(next.LeaseExpiresAt.Equal(previous.LeaseExpiresAt) &&
 				next.CancellationRequested == previous.CancellationRequested) {
@@ -254,6 +263,7 @@ func validateTransition(previous, next stateRecord) error {
 		return nil
 	}
 	if !next.LeaseExpiresAt.Equal(previous.LeaseExpiresAt) ||
+		next.LogProgress != previous.LogProgress ||
 		next.CancellationRequested != previous.CancellationRequested {
 		return ErrUnavailable
 	}
@@ -279,7 +289,7 @@ func validateTransition(previous, next stateRecord) error {
 
 func digestState(value stateRecord) string {
 	digest := sha256.New()
-	writeStateString(digest, "matrix-devops-runner-journal-state-v2")
+	writeStateString(digest, "matrix-devops-runner-journal-state-v3")
 	writeStateUint64(digest, uint64(value.SchemaVersion))
 	writeStateUint64(digest, value.Version)
 	for _, field := range []string{
@@ -306,6 +316,9 @@ func digestState(value stateRecord) string {
 		writeStateString(digest, string(step.Phase))
 		writeStateString(digest, step.StartedAt.Format(time.RFC3339Nano))
 	}
+	writeStateUint64(digest, uint64(value.LogProgress.NativeBytes))
+	writeStateUint64(digest, uint64(value.LogProgress.NormalizedBytes))
+	writeStateUint64(digest, value.LogProgress.LastSequence)
 	if value.Receipt == nil {
 		writeStateString(digest, "")
 	} else {
@@ -407,6 +420,8 @@ func validStepTransition(
 	previous [2]StepProgress,
 	next [2]StepProgress,
 	cancellationRequested bool,
+	previousLog runnerlog.Progress,
+	nextLog runnerlog.Progress,
 ) bool {
 	changed := -1
 	for index := range previous {
@@ -430,14 +445,16 @@ func validStepTransition(
 	}
 	from, to := previous[changed].Phase, next[changed].Phase
 	if from == StepPending {
-		return (!cancellationRequested && to == StepStarted &&
-			!next[changed].StartedAt.IsZero()) ||
-			(cancellationRequested && to == StepCancelled &&
-				next[changed].StartedAt.IsZero())
+		return nextLog == previousLog &&
+			((!cancellationRequested && to == StepStarted &&
+				!next[changed].StartedAt.IsZero()) ||
+				(cancellationRequested && to == StepCancelled &&
+					next[changed].StartedAt.IsZero()))
 	}
 	return from == StepStarted &&
 		previous[changed].StartedAt == next[changed].StartedAt &&
-		(to == StepPassed || to == StepFailed || to == StepCancelled)
+		(to == StepPassed || to == StepFailed || to == StepCancelled) &&
+		runnerlog.ValidateAdvance(previousLog, nextLog) == nil
 }
 
 func requestStepIndex(

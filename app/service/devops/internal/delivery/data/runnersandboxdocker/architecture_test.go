@@ -12,7 +12,8 @@ import (
 
 func TestRunnerSandboxOwnsOnlyClosedLocalDockerAuthority(t *testing.T) {
 	allowedMatrix := map[string]bool{
-		"github.com/xiak/matrix/api/devops/v1": true,
+		"github.com/xiak/matrix/api/devops/v1":                                  true,
+		"github.com/xiak/matrix/app/service/devops/internal/delivery/runnerlog": true,
 	}
 	forbiddenStandard := map[string]bool{
 		"database/sql": true,

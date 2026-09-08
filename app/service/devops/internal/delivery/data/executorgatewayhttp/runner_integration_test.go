@@ -18,6 +18,7 @@ import (
 	devopsbuildv1 "github.com/xiak/matrix/api/adapter/devopsbuild/v1"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/executorspoolfile"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/runnerjournalfile"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/runnerlog"
 )
 
 func TestRunnerClientAndJournalCompleteDurableMTLSRoundTrip(t *testing.T) {
@@ -86,7 +87,7 @@ func TestRunnerClientAndJournalCompleteDurableMTLSRoundTrip(t *testing.T) {
 		}
 		progress, err = journal.RecordStepConclusion(
 			context.Background(), progress.Assignment, step,
-			devopsbuildv1.StepConclusionPassed,
+			devopsbuildv1.StepConclusionPassed, runnerlog.Progress{},
 		)
 		if err != nil {
 			t.Fatalf("durable step conclusion = %#v / %v", progress, err)
