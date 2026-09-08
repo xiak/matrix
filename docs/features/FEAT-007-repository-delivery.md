@@ -16,9 +16,10 @@
   publication, bounded native output normalization, closed sandbox container
   lifecycle, port-driven cross-step runner workflow, authenticated durable log
   relay, fenced tenant-leading normalized-log persistence, and IAM-authorized
-  audited public log reads, and physical runner process composition complete;
-  selected runner release topology, real isolated execution, and reporter
-  effects pending
+  audited public log reads, physical runner process composition, and selected
+  control-plane execution topology with installation-owned mTLS material
+  complete; standalone runner-node release/enrollment, real isolated
+  execution, and reporter effects pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -1176,8 +1177,19 @@ identity from protected mTLS material, takes OS-exclusive journal/workspace
 ownership, composes the production runner gateway/log client and closed Docker
 sandbox, requires a fresh bounded eligibility proof before every claim, and
 exposes only loopback readiness after its first proved cycle. The selected
-release topology and a real PostgreSQL-to-runner process journey remain
-pending, so no repository code executes yet.
+DevOps control-plane topology now includes the build worker and executor gateway
+only when the signed product inventory selects DevOps. Staging atomically owns
+a private durable spool and a canonical installation-bound PKI bundle with
+separate server, admin-client, and runner-client authorities, a fixed five-year
+validity, exact build-worker SPIFFE identity, and exact gateway DNS identity.
+Only derived gateway and build-worker material is mounted read-only; authority
+private keys never enter a runtime container. The gateway's admin listener
+stays on the internal control network, its health listener is loopback-only,
+and only the TLS 1.3 runner listener is published on fixed port `8444`.
+PaaS-only staging and topology contain none of these files, directories,
+processes, or ports. The standalone runner artifact, runner certificate
+enrollment, dedicated-node installation, and a real PostgreSQL-to-runner
+process journey remain pending, so no repository code executes yet.
 
 Every fenced worker transition now submits the exact next PipelineRun document
 to the database boundary. A terminal transition atomically stores a distinct
@@ -1259,9 +1271,10 @@ These slices do not complete Gate A. Source readiness, credential lifecycle,
 observation, acquisition through an installed isolated process, the fenced
 BuildExecutor boundary, and authenticated tenant-leading normalized-log
 persistence, public log reads, and physical runner process composition are
-complete. Selected runner-node release topology, real isolated execution,
-reporting, remaining runtime quotas, check-receipt Audit facts, and pagination
-for other collection resources remain pending.
+complete together with the selected DevOps control-plane release topology.
+Standalone runner-node release/enrollment, real isolated execution, reporting,
+remaining runtime quotas, check-receipt Audit facts, and pagination for other
+collection resources remain pending.
 
 Current verification evidence:
 
@@ -1442,8 +1455,19 @@ Current verification evidence:
   sandbox, and architecture packages pass race detection and twenty-run
   repetition on Windows and in the fixed disconnected Go 1.26.8 Linux/amd64
   image with read-only source and module cache; this is process-composition
-  evidence, not selected release, real repository execution, or gVisor
+  evidence, not standalone runner release, real repository execution, or gVisor
   isolation evidence
+- selected-product installation and topology tests proving journal-stable PKI
+  issuance time, three disjoint P-256 authorities, exact gateway and
+  build-worker identities, canonical write-once authority storage,
+  entropy-free replay and derived-file recovery, tamper rejection, private
+  spool ownership, read-only runtime certificate mounts, internal-only admin
+  authority, one fixed published mTLS runner port, no Docker authority in the
+  gateway/build worker, no authority-private-key mount, and complete absence
+  from PaaS-only staging and topology. The gateway process suite also proves
+  its loopback readiness server is coupled to both mutually authenticated TLS
+  listeners; full unit, topology, release-build, architecture, and vet gates
+  pass on the affected worktree
 - versioned normalized-log contract, gateway spool, and build-worker drain
   tests prove complete labeled-line grammar, 64 KiB chunks, run-leading byte and
   sequence cursors, exact two-step ordering, atomic spool publication and

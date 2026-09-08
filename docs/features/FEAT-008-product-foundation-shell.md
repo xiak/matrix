@@ -167,9 +167,10 @@ tenant-authority, offline, upgrade/rollback/recovery, and
 - Upgrade staging preserves that legacy bootstrap byte-for-byte for rollback
   and creates the installation-owned Platform credential once in its separate
   fixed secret path. A signed inventory containing `DEVOPS` additionally
-  creates DevOps IAM/Audit credentials and API/worker database identities;
-  inventories without it create none. Repeated staging consumes no entropy and
-  never rotates an equal credential.
+  creates DevOps IAM/Audit credentials, API/worker database identities, source
+  roots, private executor spool, and installation-bound purpose-separated mTLS
+  material; inventories without it create none. Repeated staging consumes no
+  entropy and never rotates an equal credential or certificate.
 - The IAM migration replaces the Platform-only expansion with a closed
   release-service enrollment accepting canonical `PLATFORM` followed by
   optional `DEVOPS`. Purpose determines the fixed principal; no environment
@@ -189,11 +190,15 @@ tenant-authority, offline, upgrade/rollback/recovery, and
   inventory. This release line keeps Application PaaS as its required first
   product and admits DevOps only in canonical second position. The fixed
   release assembler includes Application PaaS and DevOps,
-  builds the DevOps API/migrator/Audit-dispatch binaries into one independent
-  image, and the topology adds its two runtime processes, secret mounts,
-  database identities, gateway route, and readiness endpoint only when
-  `DEVOPS` is selected. Product discovery validates and projects independent
-  PaaS and DevOps readiness observations.
+  builds the DevOps API, migrator, Audit dispatcher, source fetcher, source
+  observer, build worker, and executor gateway binaries into one independent
+  control-plane image. The topology adds its six runtime processes, closed
+  secret/data mounts, database identities, gateway route, readiness endpoints,
+  and the fixed mTLS runner listener only when `DEVOPS` is selected. The
+  gateway's management listener remains internal and neither it nor the build
+  worker receives Docker authority; the dedicated runner remains a separately
+  installed node concern owned by FEAT-007. Product discovery validates and
+  projects independent PaaS and DevOps readiness observations.
 - Installed-release authentication admits only the signed canonical
   productless predecessor from source commit
   `c88a84f379afcf94431e2aca7332fe6ec3136dc7`, with its fixed Docker/Compose

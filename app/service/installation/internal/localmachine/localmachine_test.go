@@ -6,6 +6,8 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -29,6 +31,7 @@ import (
 	"github.com/xiak/matrix/app/service/installation/internal/releasetest"
 	"github.com/xiak/matrix/app/service/installation/release"
 	"github.com/xiak/matrix/app/service/installation/topology"
+	"github.com/xiak/matrix/app/service/internal/processmtls"
 )
 
 func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T) {
@@ -59,7 +62,8 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		layout.DevOpsSourceObserver,
 		layout.DevOpsWebhookCredentialRoot,
 		layout.DevOpsFetchCredentialRoot, layout.DevOpsReportCredentialRoot,
-		layout.DevOpsSourceArchiveRoot,
+		layout.DevOpsSourceArchiveRoot, layout.DevOpsExecutorSpoolRoot,
+		layout.DevOpsExecutorPKIRoot,
 	} {
 		if _, err := os.Lstat(filepath.Join(plan.Root, filepath.FromSlash(optional))); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("unselected DevOps secret %q exists or cannot be inspected: %v", optional, err)
@@ -289,12 +293,63 @@ func TestStageDevOpsProductCredentialsAreSelectedAndStable(t *testing.T) {
 		layout.DevOpsFetchCredentialRoot,
 		layout.DevOpsReportCredentialRoot,
 		layout.DevOpsSourceArchiveRoot,
+		layout.DevOpsExecutorSpoolRoot,
+		layout.DevOpsExecutorPKIRoot,
 	} {
 		credentialRoot := filepath.Join(plan.Root, filepath.FromSlash(relative))
 		if info, err := os.Lstat(credentialRoot); err != nil || !info.IsDir() ||
 			(runtime.GOOS != "windows" && info.Mode().Perm() != 0o700) {
 			t.Fatalf("selected DevOps credential root %q is unsafe: %v / %#v", relative, err, info)
 		}
+	}
+	bundleContent := readTestFile(t, plan.Root, layout.DevOpsExecutorPKIBundle)
+	bundle, err := decodeExecutorPKIBundle(bundleContent, plan.InstallationID)
+	clear(bundleContent)
+	if err != nil || bundle.IssuedAt != plan.CommandStartedAt.Truncate(time.Second) ||
+		bundle.NotBefore != bundle.IssuedAt.Add(-executorPKISkew) ||
+		bundle.NotAfter != bundle.IssuedAt.AddDate(executorPKILifetime, 0, 0) {
+		bundle.clear()
+		t.Fatalf("DevOps executor PKI bundle is invalid: %#v / %v", bundle, err)
+	}
+	bundle.clear()
+	clientIdentity := topology.DevOpsBuildWorkerIdentity(plan.InstallationID)
+	clientCredentials, err := processmtls.LoadClientCredentials(
+		filepath.Join(plan.Root, filepath.FromSlash(layout.DevOpsBuildWorkerClientCert)),
+		filepath.Join(plan.Root, filepath.FromSlash(layout.DevOpsBuildWorkerClientKey)),
+		filepath.Join(plan.Root, filepath.FromSlash(layout.DevOpsExecutorServerCA)),
+		clientIdentity,
+		plan.CommandStartedAt.Add(time.Minute),
+	)
+	if err != nil || clientCredentials.Certificate.Leaf == nil ||
+		len(clientCredentials.Certificate.Leaf.URIs) != 1 ||
+		clientCredentials.Certificate.Leaf.URIs[0].String() != clientIdentity {
+		t.Fatalf("DevOps build worker mTLS material is invalid: %#v / %v", clientCredentials.Certificate.Leaf, err)
+	}
+	serverCertificatePEM := readTestFile(t, plan.Root, layout.DevOpsExecutorServerCert)
+	serverKeyPEM := readTestFile(t, plan.Root, layout.DevOpsExecutorServerKey)
+	serverCertificate, err := tls.X509KeyPair(serverCertificatePEM, serverKeyPEM)
+	clear(serverKeyPEM)
+	serverBlocks, blockErr := canonicalExecutorCertificateBlocks(serverCertificatePEM)
+	clear(serverCertificatePEM)
+	if err != nil || blockErr != nil || len(serverBlocks) != 2 ||
+		len(serverCertificate.Certificate) != 2 {
+		t.Fatalf("DevOps executor server key pair is invalid: %v / %v", err, blockErr)
+	}
+	serverLeaf, err := x509.ParseCertificate(serverCertificate.Certificate[0])
+	serverRoot, rootErr := x509.ParseCertificate(serverCertificate.Certificate[1])
+	if err != nil || rootErr != nil {
+		t.Fatalf("DevOps executor server chain cannot be parsed: %v / %v", err, rootErr)
+	}
+	serverRoots := x509.NewCertPool()
+	serverRoots.AddCert(serverRoot)
+	_, verifyErr := serverLeaf.Verify(x509.VerifyOptions{
+		DNSName:     topology.DevOpsExecutorGatewayServerName,
+		Roots:       serverRoots,
+		CurrentTime: plan.CommandStartedAt.Add(time.Minute),
+		KeyUsages:   []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	})
+	if verifyErr != nil {
+		t.Fatalf("DevOps executor server chain is invalid: %v", verifyErr)
 	}
 	before := map[string]string{
 		layout.DevOpsIAMCredential:   string(iamCredential),
@@ -303,6 +358,18 @@ func TestStageDevOpsProductCredentialsAreSelectedAndStable(t *testing.T) {
 		layout.DevOpsWorker:          string(workerDSN),
 		layout.DevOpsSourceFetcher:   string(sourceFetcherDSN),
 		layout.DevOpsSourceObserver:  string(sourceObserverDSN),
+	}
+	for _, relative := range []string{
+		layout.DevOpsExecutorPKIBundle,
+		layout.DevOpsExecutorServerCA,
+		layout.DevOpsExecutorServerCert,
+		layout.DevOpsExecutorServerKey,
+		layout.DevOpsExecutorAdminCA,
+		layout.DevOpsExecutorRunnerCA,
+		layout.DevOpsBuildWorkerClientCert,
+		layout.DevOpsBuildWorkerClientKey,
+	} {
+		before[relative] = string(readTestFile(t, plan.Root, relative))
 	}
 	if err := stageInstallation(plan, failingEntropy{}); err != nil {
 		t.Fatalf("replay DevOps staging without entropy: %v", err)
@@ -314,6 +381,22 @@ func TestStageDevOpsProductCredentialsAreSelectedAndStable(t *testing.T) {
 			t.Fatalf("DevOps staging replay changed %s", path)
 		}
 		clear(actual)
+	}
+	serverCAPath := filepath.Join(
+		plan.Root,
+		filepath.FromSlash(layout.DevOpsExecutorServerCA),
+	)
+	if err := os.Remove(serverCAPath); err != nil {
+		t.Fatalf("remove derived executor server root: %v", err)
+	}
+	if err := stageInstallation(plan, failingEntropy{}); err != nil {
+		t.Fatalf("replay incomplete DevOps PKI staging without entropy: %v", err)
+	}
+	if restored := readTestFile(t, plan.Root, layout.DevOpsExecutorServerCA); string(restored) != before[layout.DevOpsExecutorServerCA] {
+		clear(restored)
+		t.Fatal("DevOps PKI staging did not restore the bundle-derived server root")
+	} else {
+		clear(restored)
 	}
 	compiled, err := topology.Compile(plan.Bundle.Manifest, topology.Options{
 		InstallationID: plan.InstallationID, Root: "/matrix-installation-root",
@@ -339,6 +422,8 @@ func TestStageDevOpsProductCredentialsAreSelectedAndStable(t *testing.T) {
 		!bytes.Contains(routes, []byte(`"devops-api:8080": 1`)) ||
 		!bytes.Contains(compose, []byte(`"devops-api"`)) ||
 		!bytes.Contains(compose, []byte(`"devops-audit-dispatcher"`)) ||
+		!bytes.Contains(compose, []byte(`"devops-build-worker"`)) ||
+		!bytes.Contains(compose, []byte(`"devops-executor-gateway"`)) ||
 		!bytes.Contains(compose, []byte(`"devops-source-fetcher"`)) ||
 		!bytes.Contains(compose, []byte(`"devops-source-observer"`)) ||
 		!bytes.Contains(compose, []byte(`"MATRIX_DEVOPS_WEBHOOK_SECRET_ROOT"`)) ||
@@ -346,9 +431,63 @@ func TestStageDevOpsProductCredentialsAreSelectedAndStable(t *testing.T) {
 		!bytes.Contains(compose, []byte(`"MATRIX_DEVOPS_SOURCE_FETCHER_ARCHIVE_ROOT"`)) ||
 		!bytes.Contains(compose, []byte(`/var/lib/matrix/source-archives`)) ||
 		!bytes.Contains(compose, []byte(`"MATRIX_DEVOPS_SOURCE_OBSERVER_FETCH_ROOT"`)) ||
-		!bytes.Contains(compose, []byte(`/run/matrix/devops-source-report`)) {
+		!bytes.Contains(compose, []byte(`/run/matrix/devops-source-report`)) ||
+		!bytes.Contains(compose, []byte(`127.0.0.1:8080`)) ||
+		!bytes.Contains(compose, []byte(`0.0.0.0:8444`)) ||
+		bytes.Contains(compose, []byte(`authority-bundle.json`)) ||
+		bytes.Contains(compose, []byte(`matrix-devops-runner`)) {
 		t.Fatal("selected DevOps product is absent from compiled installation configuration")
 	}
+}
+
+func TestStageDevOpsExecutorPKIFailsClosedOnTamperAndMissingIssuanceTime(t *testing.T) {
+	t.Run("authority bundle tamper", func(t *testing.T) {
+		plan := newDevOpsInstallPlan(t)
+		if err := stageInstallation(plan, rand.Reader); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(
+			plan.Root,
+			filepath.FromSlash(layout.DevOpsExecutorPKIBundle),
+		)
+		content := readTestFile(t, plan.Root, layout.DevOpsExecutorPKIBundle)
+		content = append(content, '\n')
+		if err := os.WriteFile(path, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		clear(content)
+		if err := stageInstallation(plan, failingEntropy{}); !errors.Is(err, platformcommand.ErrEffectVerification) {
+			t.Fatalf("tampered executor authority bundle error=%v", err)
+		}
+	})
+
+	t.Run("derived identity tamper", func(t *testing.T) {
+		plan := newDevOpsInstallPlan(t)
+		if err := stageInstallation(plan, rand.Reader); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(
+			plan.Root,
+			filepath.FromSlash(layout.DevOpsBuildWorkerClientCert),
+		)
+		content := readTestFile(t, plan.Root, layout.DevOpsBuildWorkerClientCert)
+		content[len(content)/2] ^= 1
+		if err := os.WriteFile(path, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		clear(content)
+		if err := stageInstallation(plan, failingEntropy{}); !errors.Is(err, platformcommand.ErrEffectConflict) {
+			t.Fatalf("tampered derived executor identity error=%v", err)
+		}
+	})
+
+	t.Run("missing issuance time", func(t *testing.T) {
+		plan := newDevOpsInstallPlan(t)
+		plan.CommandStartedAt = time.Time{}
+		if err := stageInstallation(plan, rand.Reader); !errors.Is(err, platformcommand.ErrEffectVerification) {
+			t.Fatalf("missing executor PKI issuance time error=%v", err)
+		}
+	})
 }
 
 func TestStageUpgradePreservesLegacyIAMBootstrapAndAddsPlatformCredential(t *testing.T) {
@@ -1650,8 +1789,9 @@ func newInstallPlanWithFixture(
 	}
 	return platformcommand.InstallPlan{
 		Root: root, InstallationID: "mxi-11111111111111111111111111111111",
-		CorrelationID: "cmd-11111111111111111111111111111111",
-		Listener:      "0.0.0.0", Port: 8080, Bundle: bundle,
+		CorrelationID:    "cmd-11111111111111111111111111111111",
+		CommandStartedAt: time.Date(2026, 9, 9, 4, 0, 0, 0, time.UTC),
+		Listener:         "0.0.0.0", Port: 8080, Bundle: bundle,
 		Trust: fixture.Trust, TrustBytes: trustBytes,
 	}
 }

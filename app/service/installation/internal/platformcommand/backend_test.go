@@ -211,7 +211,8 @@ func TestUpgradeBindsImmediatePredecessorAndBackupBeforePublishing(t *testing.T)
 	if effects.upgradePlan.Source.ReleaseID != fixtures[0].Manifest.Release.ID ||
 		effects.upgradePlan.Target.Bundle.Manifest.Release.ID != fixtures[1].Manifest.Release.ID ||
 		effects.upgradePlan.BackupID != result.BackupID ||
-		effects.upgradePlan.CreatedAt.IsZero() {
+		effects.upgradePlan.CreatedAt.IsZero() ||
+		effects.upgradePlan.Target.CommandStartedAt != effects.upgradePlan.CreatedAt {
 		t.Fatalf("upgrade plan = %#v", effects.upgradePlan)
 	}
 	state := readJournal(t, root)
@@ -910,7 +911,7 @@ func (effects *installEffects) ApplyInstallPhase(
 	}
 	effects.calls[phase]++
 	if plan.Root == "" || plan.InstallationID == "" || plan.Bundle.Manifest.Release.ID == "" ||
-		plan.CorrelationID == "" || plan.Trust.KeyID == "" ||
+		plan.CorrelationID == "" || plan.CommandStartedAt.IsZero() || plan.Trust.KeyID == "" ||
 		len(plan.TrustBytes) == 0 || plan.Port == 0 {
 		return errors.New("install plan is incomplete")
 	}
@@ -943,7 +944,8 @@ func (effects *installEffects) ApplyUpgradePhase(
 	if plan.Source.ReleaseID == "" || plan.Source.ReleaseDigest == "" ||
 		plan.Target.Bundle.Manifest.Release.ID == "" || plan.BackupID == "" ||
 		plan.CreatedAt.IsZero() || plan.Source.CorrelationID == "" ||
-		plan.Source.CorrelationID != plan.Target.CorrelationID {
+		plan.Source.CorrelationID != plan.Target.CorrelationID ||
+		plan.Target.CommandStartedAt != plan.CreatedAt {
 		return errors.New("upgrade plan is incomplete")
 	}
 	if phase == effects.upgradeFailPhase && effects.upgradeFailErr != nil &&

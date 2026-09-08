@@ -23,18 +23,20 @@ import (
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/executorgatewayhttp"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/executorspoolfile"
 	"github.com/xiak/matrix/app/service/internal/processconfig"
+	"github.com/xiak/matrix/app/service/internal/processhttp"
 )
 
 const (
-	spoolRootEnvironment       = "MATRIX_DEVOPS_EXECUTOR_GATEWAY_SPOOL_ROOT"
-	adminAddressEnvironment    = "MATRIX_DEVOPS_EXECUTOR_GATEWAY_ADMIN_LISTEN_ADDRESS"
-	runnerAddressEnvironment   = "MATRIX_DEVOPS_EXECUTOR_GATEWAY_RUNNER_LISTEN_ADDRESS"
-	serverCertEnvironment      = "MATRIX_DEVOPS_EXECUTOR_GATEWAY_SERVER_CERT_FILE"
-	serverKeyEnvironment       = "MATRIX_DEVOPS_EXECUTOR_GATEWAY_SERVER_KEY_FILE"
-	adminCAEnvironment         = "MATRIX_DEVOPS_EXECUTOR_GATEWAY_ADMIN_CLIENT_CA_FILE"
-	adminIdentityEnvironment   = "MATRIX_DEVOPS_EXECUTOR_GATEWAY_ADMIN_CLIENT_IDENTITY"
-	runnerCAEnvironment        = "MATRIX_DEVOPS_EXECUTOR_GATEWAY_RUNNER_CLIENT_CA_FILE"
-	runnerNamespaceEnvironment = "MATRIX_DEVOPS_EXECUTOR_GATEWAY_RUNNER_NAMESPACE"
+	spoolRootEnvironment        = "MATRIX_DEVOPS_EXECUTOR_GATEWAY_SPOOL_ROOT"
+	adminAddressEnvironment     = "MATRIX_DEVOPS_EXECUTOR_GATEWAY_ADMIN_LISTEN_ADDRESS"
+	runnerAddressEnvironment    = "MATRIX_DEVOPS_EXECUTOR_GATEWAY_RUNNER_LISTEN_ADDRESS"
+	readinessAddressEnvironment = "MATRIX_DEVOPS_EXECUTOR_GATEWAY_READINESS_LISTEN_ADDRESS"
+	serverCertEnvironment       = "MATRIX_DEVOPS_EXECUTOR_GATEWAY_SERVER_CERT_FILE"
+	serverKeyEnvironment        = "MATRIX_DEVOPS_EXECUTOR_GATEWAY_SERVER_KEY_FILE"
+	adminCAEnvironment          = "MATRIX_DEVOPS_EXECUTOR_GATEWAY_ADMIN_CLIENT_CA_FILE"
+	adminIdentityEnvironment    = "MATRIX_DEVOPS_EXECUTOR_GATEWAY_ADMIN_CLIENT_IDENTITY"
+	runnerCAEnvironment         = "MATRIX_DEVOPS_EXECUTOR_GATEWAY_RUNNER_CLIENT_CA_FILE"
+	runnerNamespaceEnvironment  = "MATRIX_DEVOPS_EXECUTOR_GATEWAY_RUNNER_NAMESPACE"
 
 	maximumCertificateBytes = 1024 * 1024
 	maximumPrivateKeyBytes  = 256 * 1024
@@ -43,15 +45,16 @@ const (
 )
 
 type configuration struct {
-	spoolRoot       string
-	adminAddress    string
-	runnerAddress   string
-	serverCertFile  string
-	serverKeyFile   string
-	adminCAFile     string
-	adminIdentity   string
-	runnerCAFile    string
-	runnerNamespace string
+	spoolRoot        string
+	adminAddress     string
+	runnerAddress    string
+	readinessAddress string
+	serverCertFile   string
+	serverKeyFile    string
+	adminCAFile      string
+	adminIdentity    string
+	runnerCAFile     string
+	runnerNamespace  string
 }
 
 type clientRoots struct {
@@ -133,31 +136,48 @@ func run(ctx context.Context) (runErr error) {
 		_ = adminListener.Close()
 		return errors.New("executor gateway runner listener cannot start")
 	}
-	return serveGatewayListeners(
+	readinessHandler, err := processhttp.NewReadinessHandler(
+		func(context.Context) error { return nil },
+	)
+	if err != nil {
+		_ = adminListener.Close()
+		_ = runnerListener.Close()
+		return err
+	}
+	return processhttp.ServeWithBackground(
 		ctx,
-		adminListener,
-		adminHandler,
-		adminTLS,
-		runnerListener,
-		runnerHandler,
-		runnerTLS,
+		config.readinessAddress,
+		readinessHandler,
+		func(gatewayContext context.Context) error {
+			return serveGatewayListeners(
+				gatewayContext,
+				adminListener,
+				adminHandler,
+				adminTLS,
+				runnerListener,
+				runnerHandler,
+				runnerTLS,
+			)
+		},
 	)
 }
 
 func loadConfiguration() (configuration, error) {
 	config := configuration{
-		spoolRoot:       os.Getenv(spoolRootEnvironment),
-		adminAddress:    os.Getenv(adminAddressEnvironment),
-		runnerAddress:   os.Getenv(runnerAddressEnvironment),
-		serverCertFile:  os.Getenv(serverCertEnvironment),
-		serverKeyFile:   os.Getenv(serverKeyEnvironment),
-		adminCAFile:     os.Getenv(adminCAEnvironment),
-		adminIdentity:   os.Getenv(adminIdentityEnvironment),
-		runnerCAFile:    os.Getenv(runnerCAEnvironment),
-		runnerNamespace: os.Getenv(runnerNamespaceEnvironment),
+		spoolRoot:        os.Getenv(spoolRootEnvironment),
+		adminAddress:     os.Getenv(adminAddressEnvironment),
+		runnerAddress:    os.Getenv(runnerAddressEnvironment),
+		readinessAddress: os.Getenv(readinessAddressEnvironment),
+		serverCertFile:   os.Getenv(serverCertEnvironment),
+		serverKeyFile:    os.Getenv(serverKeyEnvironment),
+		adminCAFile:      os.Getenv(adminCAEnvironment),
+		adminIdentity:    os.Getenv(adminIdentityEnvironment),
+		runnerCAFile:     os.Getenv(runnerCAEnvironment),
+		runnerNamespace:  os.Getenv(runnerNamespaceEnvironment),
 	}
 	if config.spoolRoot == "" || config.adminAddress == "" ||
-		config.runnerAddress == "" || config.serverCertFile == "" ||
+		config.runnerAddress == "" || config.readinessAddress == "" ||
+		config.serverCertFile == "" ||
 		config.serverKeyFile == "" || config.adminCAFile == "" ||
 		config.adminIdentity == "" || config.runnerCAFile == "" ||
 		config.runnerNamespace == "" {
@@ -165,10 +185,18 @@ func loadConfiguration() (configuration, error) {
 	}
 	if !validListenAddress(config.adminAddress) ||
 		!validListenAddress(config.runnerAddress) ||
-		config.adminAddress == config.runnerAddress {
+		!validReadinessAddress(config.readinessAddress) ||
+		config.adminAddress == config.runnerAddress ||
+		config.adminAddress == config.readinessAddress ||
+		config.runnerAddress == config.readinessAddress {
 		return configuration{}, errors.New("executor gateway listener configuration is invalid")
 	}
 	return config, nil
+}
+
+func validReadinessAddress(value string) bool {
+	host, _, err := net.SplitHostPort(value)
+	return err == nil && host == "127.0.0.1" && validListenAddress(value)
 }
 
 func validListenAddress(value string) bool {

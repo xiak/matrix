@@ -88,8 +88,10 @@ func stageInstallation(plan platformcommand.InstallPlan, entropy io.Reader) erro
 	if staged.Manifest.IncludesProduct(release.ProductDevOps) {
 		for _, directory := range []string{
 			"data/devops", layout.DevOpsSourceArchiveRoot,
+			layout.DevOpsExecutorSpoolRoot,
 			"secrets/devops", layout.DevOpsWebhookCredentialRoot,
 			layout.DevOpsFetchCredentialRoot, layout.DevOpsReportCredentialRoot,
+			layout.DevOpsExecutorPKIRoot,
 		} {
 			if _, err := ensureManagedDirectory(plan.Root, filepath.FromSlash(directory)); err != nil {
 				return err
@@ -106,6 +108,9 @@ func stageInstallation(plan platformcommand.InstallPlan, entropy io.Reader) erro
 			plan.Root, filepath.FromSlash(layout.DevOpsAuditCredential), credential,
 		); err != nil {
 			return errors.Join(platformcommand.ErrEffectConflict, err)
+		}
+		if err := ensureDevOpsExecutorPKI(plan, entropy); err != nil {
+			return err
 		}
 	}
 	if err := writeManagedOnce(

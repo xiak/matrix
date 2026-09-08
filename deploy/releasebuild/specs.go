@@ -22,6 +22,8 @@ var binarySpecifications = []binarySpecification{
 	{name: "matrix-health", packagePath: "./app/service/installation/cmd/matrix-health"},
 	{name: "matrix-devops", packagePath: "./app/service/devops/cmd/matrix-devops"},
 	{name: "matrix-devops-audit-dispatcher", packagePath: "./app/service/devops/cmd/matrix-devops-audit-dispatcher"},
+	{name: "matrix-devops-build-worker", packagePath: "./app/service/devops/cmd/matrix-devops-build-worker"},
+	{name: "matrix-devops-executor-gateway", packagePath: "./app/service/devops/cmd/matrix-devops-executor-gateway"},
 	{name: "matrix-devops-migrate", packagePath: "./app/service/devops/cmd/matrix-devops-migrate"},
 	{name: "matrix-devops-source-fetcher", packagePath: "./app/service/devops/cmd/matrix-devops-source-fetcher"},
 	{name: "matrix-devops-source-observer", packagePath: "./app/service/devops/cmd/matrix-devops-source-observer"},
@@ -57,7 +59,8 @@ var imageRecipes = []imageRecipe{
 	{
 		component: "devops", baseReference: "scratch",
 		binaries: []string{
-			"matrix-devops", "matrix-devops-audit-dispatcher", "matrix-devops-migrate",
+			"matrix-devops", "matrix-devops-audit-dispatcher", "matrix-devops-build-worker",
+			"matrix-devops-executor-gateway", "matrix-devops-migrate",
 			"matrix-devops-source-fetcher", "matrix-devops-source-observer", "matrix-health",
 		},
 	},

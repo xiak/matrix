@@ -42,14 +42,15 @@ var (
 // InstallPlan is authenticated input plus the installation-owned identity.
 // TrustBytes contains a public key document, never credential material.
 type InstallPlan struct {
-	Root           string
-	InstallationID string
-	CorrelationID  string
-	Listener       string
-	Port           uint16
-	Bundle         release.VerifiedBundle
-	Trust          release.TrustRoot
-	TrustBytes     []byte
+	Root             string
+	InstallationID   string
+	CorrelationID    string
+	CommandStartedAt time.Time
+	Listener         string
+	Port             uint16
+	Bundle           release.VerifiedBundle
+	Trust            release.TrustRoot
+	TrustBytes       []byte
 }
 
 // InstalledPlan is the sealed identity of the currently committed release.
@@ -527,8 +528,9 @@ func (backend *Backend) install(
 
 	plan := InstallPlan{
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
-		CorrelationID: commandID,
-		Listener:      defaultListener, Port: defaultPort, Bundle: verified,
+		CorrelationID:    commandID,
+		CommandStartedAt: started.Execution.StartedAt,
+		Listener:         defaultListener, Port: defaultPort, Bundle: verified,
 		Trust: trust, TrustBytes: append([]byte(nil), trustBytes...),
 	}
 	defer clear(plan.TrustBytes)
@@ -654,8 +656,9 @@ func (backend *Backend) upgrade(
 	}
 	targetPlan := InstallPlan{
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
-		CorrelationID: commandID,
-		Listener:      defaultListener, Port: defaultPort, Bundle: targetBundle,
+		CorrelationID:    commandID,
+		CommandStartedAt: started.Execution.StartedAt,
+		Listener:         defaultListener, Port: defaultPort, Bundle: targetBundle,
 		Trust: trust, TrustBytes: append([]byte(nil), trustBytes...),
 	}
 	defer clear(targetPlan.TrustBytes)

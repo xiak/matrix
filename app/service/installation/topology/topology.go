@@ -21,6 +21,12 @@ import (
 
 const ContractVersion = "matrix-platform-compose/v1"
 
+const (
+	DevOpsExecutorGatewayServerName = "devops-executor-gateway"
+	devOpsExecutorAdminPort         = uint16(8443)
+	devOpsExecutorRunnerPort        = uint16(8444)
+)
+
 const legacyProductlessContractDigest = "sha256:6f8e3bd951426da4033b3234f2b8fcebd053a9b809d98c8a3476962062a0cf2f"
 
 type compileProfile uint8
@@ -51,9 +57,20 @@ type contract struct {
 
 var platformServiceNames = []string{
 	"apisix", "audit", "devops-api", "devops-audit-dispatcher",
-	"devops-source-fetcher", "devops-source-observer", "iam",
+	"devops-build-worker", "devops-executor-gateway", "devops-source-fetcher",
+	"devops-source-observer", "iam",
 	"iam-audit-dispatcher", "matrix-ui",
 	"paas-api", "paas-audit-dispatcher", "paas-worker", "platform-api", "postgres",
+}
+
+func DevOpsBuildWorkerIdentity(installationID string) string {
+	return "spiffe://matrix.xiak.com/installations/" +
+		strings.TrimPrefix(installationID, "mxi-") + "/devops/build-worker"
+}
+
+func DevOpsRunnerNamespace(installationID string) string {
+	return "spiffe://matrix.xiak.com/installations/" +
+		strings.TrimPrefix(installationID, "mxi-") + "/devops/runners"
 }
 
 func ContractDigest() string {
@@ -118,6 +135,10 @@ func Compile(manifest release.Manifest, options Options) (Result, error) {
 	}
 	if err := validateOptions(options); err != nil {
 		return Result{}, err
+	}
+	if manifest.IncludesProduct(release.ProductDevOps) &&
+		options.Port == devOpsExecutorRunnerPort {
+		return Result{}, errors.New("platform listener port conflicts with the DevOps runner listener")
 	}
 	images := make(map[string]string, len(manifest.Images))
 	for _, image := range manifest.Images {
@@ -388,6 +409,14 @@ func compileServices(
 	devopsFetchCredentialRoot := path.Join(root, layout.DevOpsFetchCredentialRoot)
 	devopsReportCredentialRoot := path.Join(root, layout.DevOpsReportCredentialRoot)
 	devopsSourceArchiveRoot := path.Join(root, layout.DevOpsSourceArchiveRoot)
+	devopsExecutorSpoolRoot := path.Join(root, layout.DevOpsExecutorSpoolRoot)
+	devopsExecutorServerCA := path.Join(root, layout.DevOpsExecutorServerCA)
+	devopsExecutorServerCert := path.Join(root, layout.DevOpsExecutorServerCert)
+	devopsExecutorServerKey := path.Join(root, layout.DevOpsExecutorServerKey)
+	devopsExecutorAdminCA := path.Join(root, layout.DevOpsExecutorAdminCA)
+	devopsExecutorRunnerCA := path.Join(root, layout.DevOpsExecutorRunnerCA)
+	devopsBuildWorkerClientCert := path.Join(root, layout.DevOpsBuildWorkerClientCert)
+	devopsBuildWorkerClientKey := path.Join(root, layout.DevOpsBuildWorkerClientKey)
 	service := func(
 		name string,
 		component string,
@@ -633,6 +662,61 @@ func compileServices(
 		}
 		devopsAudit.DependsOn = healthy("postgres", "audit")
 
+		devopsExecutorGateway := service(
+			"devops-executor-gateway", "devops", images["devops"], []string{"control"},
+			[]string{"/matrix/bin/matrix-devops-executor-gateway"},
+			"1.0", "512M", "http://127.0.0.1:8080/ready",
+		)
+		devopsExecutorGateway.Environment = map[string]string{
+			"MATRIX_DEVOPS_EXECUTOR_GATEWAY_ADMIN_CLIENT_CA_FILE":     "/run/matrix/executor-admin-client-ca.crt",
+			"MATRIX_DEVOPS_EXECUTOR_GATEWAY_ADMIN_CLIENT_IDENTITY":    DevOpsBuildWorkerIdentity(options.InstallationID),
+			"MATRIX_DEVOPS_EXECUTOR_GATEWAY_ADMIN_LISTEN_ADDRESS":     fmt.Sprintf("0.0.0.0:%d", devOpsExecutorAdminPort),
+			"MATRIX_DEVOPS_EXECUTOR_GATEWAY_READINESS_LISTEN_ADDRESS": "127.0.0.1:8080",
+			"MATRIX_DEVOPS_EXECUTOR_GATEWAY_RUNNER_CLIENT_CA_FILE":    "/run/matrix/executor-runner-client-ca.crt",
+			"MATRIX_DEVOPS_EXECUTOR_GATEWAY_RUNNER_LISTEN_ADDRESS":    fmt.Sprintf("0.0.0.0:%d", devOpsExecutorRunnerPort),
+			"MATRIX_DEVOPS_EXECUTOR_GATEWAY_RUNNER_NAMESPACE":         DevOpsRunnerNamespace(options.InstallationID),
+			"MATRIX_DEVOPS_EXECUTOR_GATEWAY_SERVER_CERT_FILE":         "/run/matrix/executor-gateway-server.crt",
+			"MATRIX_DEVOPS_EXECUTOR_GATEWAY_SERVER_KEY_FILE":          "/run/matrix/executor-gateway-server.key",
+			"MATRIX_DEVOPS_EXECUTOR_GATEWAY_SPOOL_ROOT":               "/var/lib/matrix/executor-spool",
+		}
+		devopsExecutorGateway.Ports = []string{
+			net.JoinHostPort(options.Listener, fmt.Sprint(devOpsExecutorRunnerPort)) +
+				fmt.Sprintf(":%d/tcp", devOpsExecutorRunnerPort),
+		}
+		devopsExecutorGateway.Volumes = []mount{
+			bind(devopsExecutorSpoolRoot, "/var/lib/matrix/executor-spool", false),
+			bind(devopsExecutorServerCert, "/run/matrix/executor-gateway-server.crt", true),
+			bind(devopsExecutorServerKey, "/run/matrix/executor-gateway-server.key", true),
+			bind(devopsExecutorAdminCA, "/run/matrix/executor-admin-client-ca.crt", true),
+			bind(devopsExecutorRunnerCA, "/run/matrix/executor-runner-client-ca.crt", true),
+		}
+
+		devopsBuildWorker := service(
+			"devops-build-worker", "devops", images["devops"], []string{"control"},
+			[]string{"/matrix/bin/matrix-devops-build-worker"},
+			"1.0", "512M", "http://127.0.0.1:8080/ready",
+		)
+		devopsBuildWorker.Environment = map[string]string{
+			"MATRIX_DEVOPS_BUILD_WORKER_CLIENT_CERT_FILE":    "/run/matrix/build-worker.crt",
+			"MATRIX_DEVOPS_BUILD_WORKER_CLIENT_IDENTITY":     DevOpsBuildWorkerIdentity(options.InstallationID),
+			"MATRIX_DEVOPS_BUILD_WORKER_CLIENT_KEY_FILE":     "/run/matrix/build-worker.key",
+			"MATRIX_DEVOPS_BUILD_WORKER_DATABASE_DSN_FILE":   "/run/matrix/devops-worker-dsn",
+			"MATRIX_DEVOPS_BUILD_WORKER_GATEWAY_ORIGIN":      fmt.Sprintf("https://devops-executor-gateway:%d", devOpsExecutorAdminPort),
+			"MATRIX_DEVOPS_BUILD_WORKER_GATEWAY_SERVER_NAME": DevOpsExecutorGatewayServerName,
+			"MATRIX_DEVOPS_BUILD_WORKER_ID":                  "devops-build-worker-" + strings.TrimPrefix(options.InstallationID, "mxi-"),
+			"MATRIX_DEVOPS_BUILD_WORKER_LISTEN_ADDRESS":      "0.0.0.0:8080",
+			"MATRIX_DEVOPS_BUILD_WORKER_SERVER_CA_FILE":      "/run/matrix/executor-server-ca.crt",
+			"MATRIX_DEVOPS_BUILD_WORKER_SOURCE_ARCHIVE_ROOT": "/var/lib/matrix/source-archives",
+		}
+		devopsBuildWorker.Volumes = []mount{
+			bind(devopsWorkerDSN, "/run/matrix/devops-worker-dsn", true),
+			bind(devopsSourceArchiveRoot, "/var/lib/matrix/source-archives", true),
+			bind(devopsBuildWorkerClientCert, "/run/matrix/build-worker.crt", true),
+			bind(devopsBuildWorkerClientKey, "/run/matrix/build-worker.key", true),
+			bind(devopsExecutorServerCA, "/run/matrix/executor-server-ca.crt", true),
+		}
+		devopsBuildWorker.DependsOn = healthy("postgres", "devops-executor-gateway")
+
 		devopsSourceFetcher := service(
 			"devops-source-fetcher", "devops", images["devops"],
 			[]string{"control", "source"},
@@ -676,6 +760,8 @@ func compileServices(
 		devopsSourceObserver.DependsOn = healthy("postgres")
 		services["devops-api"] = devopsAPI
 		services["devops-audit-dispatcher"] = devopsAudit
+		services["devops-build-worker"] = devopsBuildWorker
+		services["devops-executor-gateway"] = devopsExecutorGateway
 		services["devops-source-fetcher"] = devopsSourceFetcher
 		services["devops-source-observer"] = devopsSourceObserver
 	}

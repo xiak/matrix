@@ -36,7 +36,7 @@ const (
 	processRunnerIdentity    = "spiffe://matrix.test/devops/runners/node-one"
 )
 
-func TestLoadConfigurationRequiresTwoClosedListeners(t *testing.T) {
+func TestLoadConfigurationRequiresRoleSeparatedTLSAndLoopbackReadinessListeners(t *testing.T) {
 	for _, name := range gatewayEnvironmentNames() {
 		t.Setenv(name, "")
 	}
@@ -49,6 +49,7 @@ func TestLoadConfigurationRequiresTwoClosedListeners(t *testing.T) {
 		root,
 		"127.0.0.1:8443",
 		"127.0.0.1:8444",
+		"127.0.0.1:8080",
 		filepath.Join(root, "server.crt"),
 		filepath.Join(root, "server.key"),
 		filepath.Join(root, "admin-ca.crt"),
@@ -57,6 +58,7 @@ func TestLoadConfigurationRequiresTwoClosedListeners(t *testing.T) {
 	config, err := loadConfiguration()
 	if err != nil || config.adminAddress != "127.0.0.1:8443" ||
 		config.runnerAddress != "127.0.0.1:8444" ||
+		config.readinessAddress != "127.0.0.1:8080" ||
 		config.adminIdentity != processAdminIdentity ||
 		config.runnerNamespace != processRunnerNamespace {
 		t.Fatalf("gateway configuration=%#v error=%v", config, err)
@@ -79,6 +81,11 @@ func TestLoadConfigurationRequiresTwoClosedListeners(t *testing.T) {
 	t.Setenv(runnerAddressEnvironment, "127.0.0.1:8443")
 	if _, err := loadConfiguration(); err == nil {
 		t.Fatal("one address was accepted for both gateway roles")
+	}
+	t.Setenv(runnerAddressEnvironment, "127.0.0.1:8444")
+	t.Setenv(readinessAddressEnvironment, "0.0.0.0:8080")
+	if _, err := loadConfiguration(); err == nil {
+		t.Fatal("non-loopback gateway readiness was accepted")
 	}
 }
 
@@ -133,8 +140,12 @@ func TestGatewayProcessComposesAdminAndRunnerBoundaries(t *testing.T) {
 	for runnerAddress == adminAddress {
 		runnerAddress = reserveProcessAddress(t)
 	}
+	readinessAddress := reserveProcessAddress(t)
+	for readinessAddress == adminAddress || readinessAddress == runnerAddress {
+		readinessAddress = reserveProcessAddress(t)
+	}
 	setGatewayEnvironment(
-		t, spoolRoot, adminAddress, runnerAddress,
+		t, spoolRoot, adminAddress, runnerAddress, readinessAddress,
 		certificatePath, keyPath, adminCAPath, runnerCAPath,
 	)
 
@@ -155,6 +166,7 @@ func TestGatewayProcessComposesAdminAndRunnerBoundaries(t *testing.T) {
 		t, pki.runnerCertificate, pki.serverRoots,
 	)
 	waitForGatewayRunnerListener(t, runResult, runnerClient, runnerAddress)
+	waitForGatewayReadiness(t, runResult, readinessAddress)
 
 	adminClient, err := executorgatewayhttp.NewAdminClient(
 		"https://"+adminAddress,
@@ -356,6 +368,7 @@ func gatewayEnvironmentNames() []string {
 		spoolRootEnvironment,
 		adminAddressEnvironment,
 		runnerAddressEnvironment,
+		readinessAddressEnvironment,
 		serverCertEnvironment,
 		serverKeyEnvironment,
 		adminCAEnvironment,
@@ -370,6 +383,7 @@ func setGatewayEnvironment(
 	spoolRoot string,
 	adminAddress string,
 	runnerAddress string,
+	readinessAddress string,
 	serverCertFile string,
 	serverKeyFile string,
 	adminCAFile string,
@@ -377,15 +391,16 @@ func setGatewayEnvironment(
 ) {
 	t.Helper()
 	values := map[string]string{
-		spoolRootEnvironment:       spoolRoot,
-		adminAddressEnvironment:    adminAddress,
-		runnerAddressEnvironment:   runnerAddress,
-		serverCertEnvironment:      serverCertFile,
-		serverKeyEnvironment:       serverKeyFile,
-		adminCAEnvironment:         adminCAFile,
-		adminIdentityEnvironment:   processAdminIdentity,
-		runnerCAEnvironment:        runnerCAFile,
-		runnerNamespaceEnvironment: processRunnerNamespace,
+		spoolRootEnvironment:        spoolRoot,
+		adminAddressEnvironment:     adminAddress,
+		runnerAddressEnvironment:    runnerAddress,
+		readinessAddressEnvironment: readinessAddress,
+		serverCertEnvironment:       serverCertFile,
+		serverKeyEnvironment:        serverKeyFile,
+		adminCAEnvironment:          adminCAFile,
+		adminIdentityEnvironment:    processAdminIdentity,
+		runnerCAEnvironment:         runnerCAFile,
+		runnerNamespaceEnvironment:  processRunnerNamespace,
 	}
 	for name, value := range values {
 		t.Setenv(name, value)
@@ -475,6 +490,39 @@ func waitForGatewayRunnerListener(
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("gateway runner listener did not become ready")
+}
+
+func waitForGatewayReadiness(
+	t *testing.T,
+	runResult <-chan error,
+	address string,
+) {
+	t.Helper()
+	transport := &http.Transport{
+		Proxy:       nil,
+		DialContext: (&net.Dialer{Timeout: time.Second}).DialContext,
+	}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, Timeout: time.Second}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		response, err := client.Get("http://" + address + "/ready")
+		if err == nil {
+			response.Body.Close()
+			if response.StatusCode != http.StatusOK ||
+				response.Header.Get("Cache-Control") != "no-store" {
+				t.Fatalf("gateway readiness status=%d headers=%v", response.StatusCode, response.Header)
+			}
+			return
+		}
+		select {
+		case runErr := <-runResult:
+			t.Fatalf("gateway stopped before readiness: %v", runErr)
+		default:
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("gateway readiness listener did not become ready")
 }
 
 func waitForProcessAssignment(
