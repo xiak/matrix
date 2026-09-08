@@ -194,6 +194,7 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
   const controlPlane = useControlPlane();
   const scene = controlPlane.scene;
   const searchInput = useRef<HTMLInputElement>(null);
+  const accountTrigger = useRef<HTMLButtonElement>(null);
   const sidebarOverlayOpen = useConsoleUiStore((state) => state.sidebarOverlayOpen);
   const workspaceOpen = useConsoleUiStore((state) => state.workspaceOpen);
   const openSidebar = useConsoleUiStore((state) => state.openSidebar);
@@ -205,6 +206,7 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
   const [regionId, setRegionId] = useState("all");
   const [productMenuOpen, setProductMenuOpen] = useState(false);
   const [noticesOpen, setNoticesOpen] = useState(false);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
@@ -225,23 +227,30 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
         event.preventDefault();
         setProductMenuOpen(false);
         setNoticesOpen(false);
+        setAccountMenuOpen(false);
         setSearchOpen(true);
         searchInput.current?.focus();
       }
       if (event.key === "Escape") {
+        if (accountMenuOpen) accountTrigger.current?.focus();
         closeSidebar();
         closeWorkspace();
         setProductMenuOpen(false);
         setNoticesOpen(false);
+        setAccountMenuOpen(false);
         setSearchOpen(false);
       }
     };
     window.addEventListener("keydown", shortcuts);
     return () => window.removeEventListener("keydown", shortcuts);
-  }, [closeSidebar, closeWorkspace]);
+  }, [accountMenuOpen, closeSidebar, closeWorkspace]);
 
   async function logout() {
-    if (await session.logout()) router.replace("/");
+    if (await session.logout()) {
+      router.replace("/");
+      return;
+    }
+    setAccountMenuOpen(false);
   }
 
   if (!scene) {
@@ -259,12 +268,18 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
   const workspaceVisible = Boolean(scene.workspace && workspaceOpen);
   const principal = session.current;
   const productResults = scene.search.filter((item) => item.category === "产品");
-  const globalOverlayOpen = productMenuOpen || noticesOpen || searchOpen;
+  const globalOverlayOpen = productMenuOpen || noticesOpen || accountMenuOpen || searchOpen;
   const ProductContextIcon = railIcons[scene.productIcon];
+  const principalName = principal?.loginName ?? "用户";
+  const principalId = principal?.session.principalId ?? "IAM session";
+  const tenantName = scene.scope?.organization.name ?? principal?.session.organizationId ?? "未指定租户";
+  const tenantId = scene.scope?.organization.id;
+  const accountType = principal?.loginName.includes("@") ? "IAM 子账号" : "主账号";
 
   function closeGlobalOverlays() {
     setProductMenuOpen(false);
     setNoticesOpen(false);
+    setAccountMenuOpen(false);
     setSearchOpen(false);
   }
 
@@ -319,6 +334,7 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
                     onClick={() => {
                       setProductMenuOpen((open) => !open);
                       setNoticesOpen(false);
+                      setAccountMenuOpen(false);
                       setSearchOpen(false);
                     }}
                     type="button"
@@ -360,6 +376,7 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
                     setSearchOpen(true);
                     setProductMenuOpen(false);
                     setNoticesOpen(false);
+                    setAccountMenuOpen(false);
                   }}
                   onKeyDown={handleSearchKeyDown}
                   placeholder="搜索产品、资源和页面"
@@ -388,7 +405,7 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
                 </div>
               ) : null}
               {scene.preview ? <span className={styles.previewChip}>MOCK 体验</span> : null}
-              {scene.preview ? <Link aria-label={`操作与任务，${scene.activeOperationCount} 个执行中`} className={styles.topbarIconButton} href="/console/operations/"><Activity aria-hidden="true" />{scene.activeOperationCount ? <span>{scene.activeOperationCount}</span> : null}</Link> : null}
+              {scene.preview ? <Link aria-label={`操作与任务，${scene.activeOperationCount} 个执行中`} className={`${styles.topbarIconButton} ${styles.operationShortcut}`} href="/console/operations/"><Activity aria-hidden="true" />{scene.activeOperationCount ? <span>{scene.activeOperationCount}</span> : null}</Link> : null}
               {scene.preview ? (
                 <div className={styles.noticeWrap}>
                   <button
@@ -398,6 +415,7 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
                     onClick={() => {
                       setNoticesOpen((open) => !open);
                       setProductMenuOpen(false);
+                      setAccountMenuOpen(false);
                       setSearchOpen(false);
                     }}
                     type="button"
@@ -418,7 +436,44 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
                   ) : null}
                 </div>
               ) : null}
-              <span className={styles.topbarAvatar} title={principal?.loginName ?? "用户"}>{principal?.loginName.slice(0, 1).toUpperCase() ?? "U"}</span>
+              <div className={styles.accountWrap}>
+                <button
+                  aria-expanded={accountMenuOpen}
+                  aria-haspopup="dialog"
+                  aria-label={`${accountMenuOpen ? "关闭" : "打开"}账号菜单，当前用户 ${principalName}`}
+                  className={styles.accountTrigger}
+                  onClick={() => {
+                    setAccountMenuOpen((open) => !open);
+                    setProductMenuOpen(false);
+                    setNoticesOpen(false);
+                    setSearchOpen(false);
+                  }}
+                  ref={accountTrigger}
+                  type="button"
+                >
+                  <span aria-hidden="true" className={styles.topbarAvatar}>{principalName.slice(0, 1).toUpperCase()}</span>
+                </button>
+                {accountMenuOpen ? (
+                  <section aria-label="账号菜单" className={styles.accountPanel} role="dialog">
+                    <header className={styles.accountPanelHeader}>
+                      <span aria-hidden="true" className={styles.accountPanelAvatar}>{principalName.slice(0, 1).toUpperCase()}</span>
+                      <div className={styles.accountIdentity}>
+                        <small>当前登录用户</small>
+                        <strong>{principalName}</strong>
+                        <span>{principalId}</span>
+                      </div>
+                    </header>
+                    <dl className={styles.accountMetadata}>
+                      <div><dt>当前租户</dt><dd><strong>{tenantName}</strong>{tenantId ? <span>{tenantId}</span> : null}</dd></div>
+                      <div><dt>账号类型</dt><dd>{accountType}</dd></div>
+                    </dl>
+                    <div className={styles.accountActions}>
+                      <Link href="/console/access/" onClick={closeGlobalOverlays}><ShieldCheck aria-hidden="true" /><span>账号与权限</span><ChevronRight aria-hidden="true" /></Link>
+                      <button aria-label="注销并撤销 IAM 会话" disabled={session.phase === "revoking"} onClick={() => void logout()} type="button"><LogOut aria-hidden="true" /><span>{session.phase === "revoking" ? "正在退出…" : "退出登录"}</span></button>
+                    </div>
+                  </section>
+                ) : null}
+              </div>
             </div>
           </Layout.Header>
 
@@ -459,11 +514,6 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
                 <div className={styles.contextCallout}>
                   <CircleGauge aria-hidden="true" />
                   <div><strong>{scene.preview ? "体验环境" : "本机部署"}</strong><span>{scene.preview ? "前端 MOCK · 不写入后端" : "PostgreSQL · 托管服务"}</span></div>
-                </div>
-                <div className={styles.userDock}>
-                  <div className={styles.avatar} aria-hidden="true">{principal?.loginName.slice(0, 1).toUpperCase() ?? "U"}</div>
-                  <div className={styles.userIdentity}><strong>{principal?.loginName ?? "用户"}</strong><span>{principal?.session.principalId ?? "IAM session"}</span></div>
-                  <button aria-label="注销并撤销 IAM 会话" className={styles.logoutButton} disabled={session.phase === "revoking"} onClick={() => void logout()} type="button"><LogOut aria-hidden="true" /></button>
                 </div>
               </Sider.ContextMenu>
               <Sider.ResizeHandle />

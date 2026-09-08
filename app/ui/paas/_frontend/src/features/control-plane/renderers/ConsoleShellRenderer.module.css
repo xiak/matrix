@@ -44,6 +44,7 @@
 .brand:focus-visible,
 .launcherButton:focus-visible,
 .topbarIconButton:focus-visible,
+.accountTrigger:focus-visible,
 .scopeControls label:focus-within,
 .globalSearch:focus-within {
   box-shadow: var(--xiak-shadow-focus);
@@ -88,7 +89,8 @@
 }
 
 .launcherWrap,
-.noticeWrap {
+.noticeWrap,
+.accountWrap {
   position: relative;
 }
 
@@ -125,7 +127,8 @@
 
 .productMenu,
 .searchPanel,
-.noticePanel {
+.noticePanel,
+.accountPanel {
   position: absolute;
   top: calc(100% + var(--xiak-spacing-default));
   z-index: var(--xiak-z-popover);
@@ -538,6 +541,180 @@
   font-weight: var(--xiak-font-weight-bold);
 }
 
+.accountTrigger {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border: var(--xiak-border-transparent);
+  border-radius: var(--xiak-radius-pill);
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+  outline: none;
+}
+
+.accountTrigger:hover,
+.accountTrigger[aria-expanded="true"] {
+  border-color: var(--xiak-color-border-global);
+  background: var(--xiak-color-bg-global-hover);
+}
+
+.accountPanel {
+  right: 0;
+  width: min(320px, calc(100vw - var(--xiak-spacing-roomy) * 2));
+}
+
+.accountPanelHeader {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--xiak-spacing-default);
+  align-items: center;
+  border-bottom: var(--xiak-border-subtle);
+  padding: var(--xiak-spacing-comfortable);
+}
+
+.accountPanelAvatar {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border-radius: var(--xiak-radius-pill);
+  background: var(--xiak-color-accent-primary);
+  color: var(--xiak-color-text-global);
+  font-size: var(--xiak-font-size-subtitle);
+  font-weight: var(--xiak-font-weight-bold);
+}
+
+.accountIdentity,
+.accountIdentity > span,
+.accountIdentity > strong {
+  min-width: 0;
+}
+
+.accountIdentity {
+  display: grid;
+  gap: var(--xiak-spacing-micro);
+}
+
+.accountIdentity small,
+.accountIdentity span {
+  overflow: hidden;
+  color: var(--xiak-color-text-subtle);
+  font-size: var(--xiak-font-size-caption);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accountIdentity strong {
+  overflow: hidden;
+  color: var(--xiak-color-text-strong);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accountMetadata {
+  display: grid;
+  gap: var(--xiak-spacing-default);
+  margin: 0;
+  border-bottom: var(--xiak-border-subtle);
+  padding: var(--xiak-spacing-default) var(--xiak-spacing-comfortable);
+}
+
+.accountMetadata > div {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: var(--xiak-spacing-default);
+  align-items: start;
+}
+
+.accountMetadata dt,
+.accountMetadata dd {
+  margin: 0;
+}
+
+.accountMetadata dt {
+  color: var(--xiak-color-text-subtle);
+  font-size: var(--xiak-font-size-caption);
+}
+
+.accountMetadata dd {
+  display: grid;
+  min-width: 0;
+  gap: var(--xiak-spacing-micro);
+  color: var(--xiak-color-text-base);
+  font-size: var(--xiak-font-size-small);
+}
+
+.accountMetadata dd strong,
+.accountMetadata dd span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accountMetadata dd span {
+  color: var(--xiak-color-text-subtle);
+  font-size: var(--xiak-font-size-caption);
+}
+
+.accountActions {
+  display: grid;
+  gap: var(--xiak-spacing-narrow);
+  padding: var(--xiak-spacing-tight);
+}
+
+.accountActions > a,
+.accountActions > button {
+  display: grid;
+  min-height: var(--xiak-control-height-default);
+  grid-template-columns: auto 1fr auto;
+  gap: var(--xiak-spacing-tight);
+  align-items: center;
+  border: 0;
+  border-radius: var(--xiak-radius-control);
+  padding: 0 var(--xiak-spacing-default);
+  background: transparent;
+  color: var(--xiak-color-text-base);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--xiak-font-size-small);
+  font-weight: var(--xiak-font-weight-medium);
+  outline: none;
+  text-align: left;
+}
+
+.accountActions > a:hover,
+.accountActions > a:focus-visible,
+.accountActions > button:hover,
+.accountActions > button:focus-visible {
+  background: var(--xiak-color-bg-panel-hover);
+}
+
+.accountActions > a > svg,
+.accountActions > button > svg {
+  width: 17px;
+  height: 17px;
+  color: var(--xiak-color-text-subtle);
+}
+
+.accountActions > a > svg:last-child {
+  width: 14px;
+  height: 14px;
+  justify-self: end;
+}
+
+.accountActions > button {
+  color: var(--xiak-color-danger-text);
+}
+
+.accountActions > button:disabled {
+  cursor: not-allowed;
+  opacity: var(--xiak-opacity-disabled);
+}
+
 .noticePanel {
   right: 0;
   width: min(440px, calc(100vw - var(--xiak-spacing-roomy) * 2));
@@ -765,7 +942,6 @@
 }
 
 .contextCloseButton,
-.logoutButton,
 .mobileMenuButton,
 .workspaceCloseButton {
   display: grid;
@@ -786,7 +962,6 @@
 }
 
 .contextCloseButton:hover,
-.logoutButton:hover,
 .mobileMenuButton:hover,
 .workspaceCloseButton:hover {
   background: var(--xiak-color-bg-control-hover);
@@ -794,14 +969,12 @@
 }
 
 .contextCloseButton:focus-visible,
-.logoutButton:focus-visible,
 .mobileMenuButton:focus-visible,
 .workspaceCloseButton:focus-visible {
   box-shadow: var(--xiak-shadow-focus);
 }
 
 .contextCloseButton svg,
-.logoutButton svg,
 .mobileMenuButton svg,
 .workspaceCloseButton svg {
   width: 17px;
@@ -920,51 +1093,6 @@
 .contextCallout span {
   color: var(--xiak-color-text-subtle);
   font-size: var(--xiak-font-size-caption);
-}
-
-.userDock {
-  display: grid;
-  min-height: 68px;
-  grid-template-columns: auto 1fr auto;
-  gap: var(--xiak-spacing-tight);
-  align-items: center;
-  border-top: var(--xiak-border-subtle);
-  padding: var(--xiak-spacing-default);
-  background: var(--xiak-color-bg-header);
-}
-
-.avatar {
-  display: grid;
-  width: 34px;
-  height: 34px;
-  place-items: center;
-  border-radius: var(--xiak-radius-pill);
-  background: var(--xiak-color-accent-haze);
-  color: var(--xiak-color-accent-text);
-  font-weight: var(--xiak-font-weight-bold);
-}
-
-.userIdentity {
-  display: grid;
-  min-width: 0;
-  gap: var(--xiak-spacing-micro);
-}
-
-.userIdentity strong,
-.userIdentity span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.userIdentity span {
-  color: var(--xiak-color-text-subtle);
-  font-size: var(--xiak-font-size-caption);
-}
-
-.logoutButton:disabled {
-  cursor: not-allowed;
-  opacity: var(--xiak-opacity-disabled);
 }
 
 .pageHeading,
@@ -1244,8 +1372,7 @@
   .brand > span:last-child,
   .launcherButton span,
   .launcherButton svg:last-child,
-  .previewChip,
-  .topbarAvatar {
+  .previewChip {
     display: none;
   }
 
@@ -1289,6 +1416,14 @@
     width: auto;
   }
 
+  .accountPanel {
+    position: fixed;
+    top: calc(var(--xiak-layout-header-height) + var(--xiak-spacing-tight));
+    right: var(--xiak-spacing-tight);
+    left: var(--xiak-spacing-tight);
+    width: auto;
+  }
+
   .searchPanelHeader small {
     display: none;
   }
@@ -1319,8 +1454,12 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .topbarIconButton:first-of-type {
+  .operationShortcut {
     display: none;
+  }
+
+  .globalSearch {
+    min-width: 88px;
   }
 
   .pageActions button span {

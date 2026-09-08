@@ -112,9 +112,11 @@ describe("ConsoleShellRenderer", () => {
   it("shows failed revocation without claiming logout or revealing the upstream error", async () => {
     const logout = vi.fn().mockRejectedValue(new Error("private upstream diagnostic"));
     const { user, view } = await renderConsole({ logout });
-    await user.click(await screen.findByRole("button", { name: "注销并撤销 IAM 会话" }));
+    await user.click(await screen.findByRole("button", { name: /打开账号菜单/ }));
+    await user.click(screen.getByRole("button", { name: "注销并撤销 IAM 会话" }));
 
     expect((await screen.findByRole("alert")).textContent).toContain("会话仍保留");
+    expect(screen.queryByRole("dialog", { name: "账号菜单" })).toBeNull();
     expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("控制面概览");
     expect(navigation.replace).not.toHaveBeenCalled();
     expect(view.container.textContent).not.toContain("private upstream diagnostic");
@@ -194,6 +196,25 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.getByRole("option", { name: /支付服务/ })).toBeTruthy();
     await user.keyboard("{Enter}");
     expect(navigation.push).toHaveBeenCalledWith("/console/observability/");
+  });
+
+  it("owns principal identity and logout in one global account menu", async () => {
+    const { user } = await renderConsole();
+    const account = await screen.findByRole("button", { name: "打开账号菜单，当前用户 admin" });
+
+    expect(screen.queryByRole("button", { name: "注销并撤销 IAM 会话" })).toBeNull();
+    await user.click(account);
+
+    const menu = screen.getByRole("dialog", { name: "账号菜单" });
+    expect(menu.textContent).toContain("admin");
+    expect(menu.textContent).toContain("principal-test");
+    expect(menu.textContent).toContain("organization-test");
+    expect(screen.getAllByRole("button", { name: "注销并撤销 IAM 会话" })).toHaveLength(1);
+    expect(screen.getByRole("link", { name: "账号与权限" })).toBeTruthy();
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "账号菜单" })).toBeNull();
+    expect(document.activeElement).toBe(account);
   });
 
   it("applies the persistent project scope to unified resources", async () => {

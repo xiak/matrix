@@ -319,6 +319,9 @@ The interaction contract includes:
   collections without hiding the active scope;
 - global running-Operation and notification indicators, with progress,
   severity, owner, and time visible before entering a detail page;
+- one global principal entry in the header; its account panel owns tenant and
+  principal identity, access settings, and logout, while product-local
+  navigation contains no duplicate account dock;
 - explicit loading, empty, unavailable, running, success, warning, and failed
   states; no spinner or success message substitutes for known progress;
 - `Escape` dismissal, visible focus, native selects, keyboard-resizable
@@ -441,7 +444,7 @@ and `git diff --check` gates must pass on the same committed worktree.
   public-component chain, twelve static routes, memory-only IAM sessions,
   deterministic Go embedding, strict CSP hashes, and a four-region shell.
   The console layout retains its provider across child-route navigation.
-  Source gates cover the light theme, 20 semantic contrast pairs, and 67
+  Source gates cover the light theme, 20 semantic contrast pairs, and 68
   frontend tests, including visible failed revocation, logout during failed
   or pending resource loads, keyboard workspace sizing, and native instance-ID
   validation. The installed `44fa1c7` candidate proves the light login page,
@@ -479,7 +482,9 @@ and `git diff --check` gates must pass on the same committed worktree.
   notification panel, project-scoped resource filtering, and the `390px`
   navigation drawer. A separate `360px` inspection proved the open drawer and
   resource workspace match the viewport width without page-level horizontal
-  overflow. The PaaS journey also activated a MOCK quota, submitted an
+  overflow. Principal identity and logout now live in one global header account
+  panel instead of being duplicated in product-local navigation. The PaaS
+  journey also activated a MOCK quota, submitted an
   installation, showed its pending Operation, and resolved it to a stable
   endpoint. Component tests cover requested-route return, search keyboard
   navigation, scope filtering, route projection, and a mutable in-memory
