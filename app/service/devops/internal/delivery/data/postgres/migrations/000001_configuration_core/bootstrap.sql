@@ -8,6 +8,7 @@ BEGIN
         'matrix_devops_owner',
         'matrix_devops_migrator',
         'matrix_devops_api',
+        'matrix_devops_source_fetcher',
         'matrix_devops_worker',
         'matrix_devops_source_observer'
     ]
@@ -48,6 +49,7 @@ BEGIN
     LOOP
         FOREACH member_name IN ARRAY ARRAY[
             'matrix_devops_api',
+            'matrix_devops_source_fetcher',
             'matrix_devops_worker',
             'matrix_devops_source_observer'
         ]

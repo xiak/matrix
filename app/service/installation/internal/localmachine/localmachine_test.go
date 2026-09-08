@@ -55,9 +55,11 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 	}
 	for _, optional := range []string{
 		layout.DevOpsIAMCredential, layout.DevOpsAuditCredential,
-		layout.DevOpsAPI, layout.DevOpsWorker, layout.DevOpsSourceObserver,
+		layout.DevOpsAPI, layout.DevOpsWorker, layout.DevOpsSourceFetcher,
+		layout.DevOpsSourceObserver,
 		layout.DevOpsWebhookCredentialRoot,
 		layout.DevOpsFetchCredentialRoot, layout.DevOpsReportCredentialRoot,
+		layout.DevOpsSourceArchiveRoot,
 	} {
 		if _, err := os.Lstat(filepath.Join(plan.Root, filepath.FromSlash(optional))); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("unselected DevOps secret %q exists or cannot be inspected: %v", optional, err)
@@ -266,12 +268,17 @@ func TestStageDevOpsProductCredentialsAreSelectedAndStable(t *testing.T) {
 	}
 	apiDSN := readTestFile(t, plan.Root, layout.DevOpsAPI)
 	workerDSN := readTestFile(t, plan.Root, layout.DevOpsWorker)
+	sourceFetcherDSN := readTestFile(t, plan.Root, layout.DevOpsSourceFetcher)
 	sourceObserverDSN := readTestFile(t, plan.Root, layout.DevOpsSourceObserver)
 	defer clear(apiDSN)
 	defer clear(workerDSN)
+	defer clear(sourceFetcherDSN)
 	defer clear(sourceObserverDSN)
 	if validateDatabaseDSN(string(apiDSN), "matrix_devops_api_login") != nil ||
 		validateDatabaseDSN(string(workerDSN), "matrix_devops_worker_login") != nil ||
+		validateDatabaseDSN(
+			string(sourceFetcherDSN), "matrix_devops_source_fetcher_login",
+		) != nil ||
 		validateDatabaseDSN(
 			string(sourceObserverDSN), "matrix_devops_source_observer_login",
 		) != nil {
@@ -281,6 +288,7 @@ func TestStageDevOpsProductCredentialsAreSelectedAndStable(t *testing.T) {
 		layout.DevOpsWebhookCredentialRoot,
 		layout.DevOpsFetchCredentialRoot,
 		layout.DevOpsReportCredentialRoot,
+		layout.DevOpsSourceArchiveRoot,
 	} {
 		credentialRoot := filepath.Join(plan.Root, filepath.FromSlash(relative))
 		if info, err := os.Lstat(credentialRoot); err != nil || !info.IsDir() ||
@@ -293,6 +301,7 @@ func TestStageDevOpsProductCredentialsAreSelectedAndStable(t *testing.T) {
 		layout.DevOpsAuditCredential: string(auditCredential),
 		layout.DevOpsAPI:             string(apiDSN),
 		layout.DevOpsWorker:          string(workerDSN),
+		layout.DevOpsSourceFetcher:   string(sourceFetcherDSN),
 		layout.DevOpsSourceObserver:  string(sourceObserverDSN),
 	}
 	if err := stageInstallation(plan, failingEntropy{}); err != nil {
@@ -330,9 +339,12 @@ func TestStageDevOpsProductCredentialsAreSelectedAndStable(t *testing.T) {
 		!bytes.Contains(routes, []byte(`"devops-api:8080": 1`)) ||
 		!bytes.Contains(compose, []byte(`"devops-api"`)) ||
 		!bytes.Contains(compose, []byte(`"devops-audit-dispatcher"`)) ||
+		!bytes.Contains(compose, []byte(`"devops-source-fetcher"`)) ||
 		!bytes.Contains(compose, []byte(`"devops-source-observer"`)) ||
 		!bytes.Contains(compose, []byte(`"MATRIX_DEVOPS_WEBHOOK_SECRET_ROOT"`)) ||
 		!bytes.Contains(compose, []byte(`/run/matrix/devops-source-secrets`)) ||
+		!bytes.Contains(compose, []byte(`"MATRIX_DEVOPS_SOURCE_FETCHER_ARCHIVE_ROOT"`)) ||
+		!bytes.Contains(compose, []byte(`/var/lib/matrix/source-archives`)) ||
 		!bytes.Contains(compose, []byte(`"MATRIX_DEVOPS_SOURCE_OBSERVER_FETCH_ROOT"`)) ||
 		!bytes.Contains(compose, []byte(`/run/matrix/devops-source-report`)) {
 		t.Fatal("selected DevOps product is absent from compiled installation configuration")
@@ -664,8 +676,10 @@ func TestProductlessMigrationProfileDoesNotRequireFuturePlatformCredential(t *te
 		devops[0].mounts[4].relative != layout.DevOpsIAMCredential ||
 		devops[3].component != "devops" ||
 		devops[3].entrypoint != "/matrix/bin/matrix-devops-migrate" ||
-		len(devops[3].mounts) != 4 ||
-		devops[3].mounts[3].relative != layout.DevOpsSourceObserver {
+		len(devops[3].mounts) != 5 ||
+		devops[3].mounts[2].relative != layout.DevOpsSourceFetcher ||
+		devops[3].mounts[3].relative != layout.DevOpsSourceObserver ||
+		devops[3].mounts[4].relative != layout.DevOpsWorker {
 		t.Fatalf("DevOps migration profile is incomplete: %#v", devops)
 	}
 }

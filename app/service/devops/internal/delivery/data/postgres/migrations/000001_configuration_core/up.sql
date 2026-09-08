@@ -3,7 +3,8 @@ SET LOCAL ROLE matrix_devops_owner;
 
 REVOKE ALL ON SCHEMA delivery FROM PUBLIC;
 GRANT USAGE ON SCHEMA delivery
-    TO matrix_devops_api, matrix_devops_worker, matrix_devops_source_observer;
+    TO matrix_devops_api, matrix_devops_source_fetcher,
+       matrix_devops_worker, matrix_devops_source_observer;
 
 CREATE OR REPLACE FUNCTION delivery.current_tenant_id()
 RETURNS text
@@ -811,6 +812,42 @@ CREATE INDEX IF NOT EXISTS pipeline_run_tasks_due_idx
         status, available_at, lease_expires_at, tenant_id, run_id
     );
 
+CREATE TABLE IF NOT EXISTS delivery.source_archives (
+    tenant_id text COLLATE "C" NOT NULL,
+    run_id text COLLATE "C" NOT NULL,
+    command_id text COLLATE "C" NOT NULL,
+    input_digest text COLLATE "C" NOT NULL,
+    archive_digest text COLLATE "C" NOT NULL,
+    archive_bytes bigint NOT NULL,
+    expanded_bytes bigint NOT NULL,
+    path_count bigint NOT NULL,
+    head_commit text COLLATE "C" NOT NULL,
+    trusted_base_commit text COLLATE "C" NOT NULL,
+    media_type text COLLATE "C" NOT NULL,
+    created_at timestamptz(6) NOT NULL,
+    PRIMARY KEY (tenant_id, run_id),
+    CONSTRAINT source_archives_command_uq UNIQUE (tenant_id, command_id),
+    CONSTRAINT source_archives_run_fk FOREIGN KEY (
+        tenant_id, run_id, input_digest
+    ) REFERENCES delivery.pipeline_runs (tenant_id, id, input_digest)
+        ON DELETE CASCADE,
+    CONSTRAINT source_archives_values_valid CHECK (
+        tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND run_id COLLATE "C" ~ '^pipeline-run-[0-9a-f]{48}$'
+        AND split_part(command_id, ':', 1) = run_id
+        AND command_id COLLATE "C"
+            ~ '^pipeline-run-[0-9a-f]{48}:fetch:([1-9]|[1-9][0-9]|100)$'
+        AND input_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND archive_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND archive_bytes BETWEEN 1 AND 67108864
+        AND expanded_bytes BETWEEN 0 AND 536870912
+        AND path_count BETWEEN 0 AND 20000
+        AND head_commit COLLATE "C" ~ '^([0-9a-f]{40}|[0-9a-f]{64})$'
+        AND trusted_base_commit COLLATE "C" ~ '^([0-9a-f]{40}|[0-9a-f]{64})$'
+        AND media_type = 'application/vnd.matrix.devops.source.v1+tar+gzip'
+    )
+);
+
 CREATE TABLE IF NOT EXISTS delivery.mutations (
     tenant_id text COLLATE "C" NOT NULL,
     id text COLLATE "C" NOT NULL,
@@ -1176,6 +1213,16 @@ CREATE TABLE IF NOT EXISTS delivery.source_observer_heartbeat (
     )
 );
 
+CREATE TABLE IF NOT EXISTS delivery.source_fetcher_heartbeat (
+    singleton boolean PRIMARY KEY DEFAULT true,
+    worker_id text COLLATE "C" NOT NULL,
+    observed_at timestamptz(6) NOT NULL,
+    CONSTRAINT source_fetcher_heartbeat_singleton CHECK (singleton),
+    CONSTRAINT source_fetcher_heartbeat_worker_valid CHECK (
+        worker_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    )
+);
+
 INSERT INTO delivery.source_observation_tasks (
     tenant_id, resource_kind, resource_id, resource_version, available_at,
     fencing_token, created_at, updated_at
@@ -1226,6 +1273,8 @@ ALTER TABLE delivery.pipeline_runs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE delivery.pipeline_runs FORCE ROW LEVEL SECURITY;
 ALTER TABLE delivery.pipeline_run_tasks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE delivery.pipeline_run_tasks FORCE ROW LEVEL SECURITY;
+ALTER TABLE delivery.source_archives ENABLE ROW LEVEL SECURITY;
+ALTER TABLE delivery.source_archives FORCE ROW LEVEL SECURITY;
 ALTER TABLE delivery.mutations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE delivery.mutations FORCE ROW LEVEL SECURITY;
 ALTER TABLE delivery.audit_operations ENABLE ROW LEVEL SECURITY;
@@ -1236,6 +1285,8 @@ ALTER TABLE delivery.source_observation_tasks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE delivery.source_observation_tasks FORCE ROW LEVEL SECURITY;
 ALTER TABLE delivery.source_observer_heartbeat ENABLE ROW LEVEL SECURITY;
 ALTER TABLE delivery.source_observer_heartbeat FORCE ROW LEVEL SECURITY;
+ALTER TABLE delivery.source_fetcher_heartbeat ENABLE ROW LEVEL SECURITY;
+ALTER TABLE delivery.source_fetcher_heartbeat FORCE ROW LEVEL SECURITY;
 
 DO $matrix_delivery_policy$
 DECLARE
@@ -1245,6 +1296,7 @@ BEGIN
         'projects', 'source_connections', 'repository_bindings',
         'repository_binding_revisions', 'pipelines', 'pipeline_revisions',
         'source_events', 'pipeline_runs', 'pipeline_run_tasks',
+        'source_archives',
         'mutations', 'audit_operations',
         'audit_outbox', 'source_observation_tasks'
     ]
@@ -1314,6 +1366,31 @@ BEGIN
     END IF;
 END
 $matrix_run_worker_owner_policy$;
+
+DO $matrix_source_fetcher_owner_policy$
+DECLARE
+    table_name text;
+BEGIN
+    FOREACH table_name IN ARRAY ARRAY[
+        'source_connections', 'repository_binding_revisions',
+        'pipeline_revisions', 'source_events', 'pipeline_runs',
+        'pipeline_run_tasks', 'source_archives', 'source_fetcher_heartbeat'
+    ]
+    LOOP
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_catalog.pg_policies
+             WHERE schemaname = 'delivery' AND tablename = table_name
+               AND policyname = 'owner_source_fetcher'
+        ) THEN
+            EXECUTE format(
+                'CREATE POLICY owner_source_fetcher ON delivery.%I '
+                'TO matrix_devops_owner USING (true) WITH CHECK (true)',
+                table_name
+            );
+        END IF;
+    END LOOP;
+END
+$matrix_source_fetcher_owner_policy$;
 
 DO $matrix_source_observer_owner_policy$
 DECLARE
@@ -3156,9 +3233,10 @@ REVOKE ALL ON FUNCTION delivery.commit_run_admission(jsonb, jsonb, jsonb)
 GRANT EXECUTE ON FUNCTION delivery.commit_run_admission(jsonb, jsonb, jsonb)
     TO matrix_devops_api;
 
-CREATE OR REPLACE FUNCTION delivery.claim_pipeline_run_task(
+CREATE OR REPLACE FUNCTION delivery.claim_pipeline_run_task_internal(
     requested_worker_id text,
-    requested_lease_seconds integer
+    requested_lease_seconds integer,
+    requested_stages text[]
 )
 RETURNS TABLE (
     tenant_id text,
@@ -3205,7 +3283,11 @@ BEGIN
        OR requested_worker_id COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR requested_lease_seconds IS NULL
-       OR requested_lease_seconds NOT BETWEEN 1 AND 300 THEN
+       OR requested_lease_seconds NOT BETWEEN 1 AND 300
+       OR requested_stages IS NULL
+       OR requested_stages NOT IN (
+            ARRAY['FETCH']::text[], ARRAY['VERIFY', 'REPORT']::text[]
+       ) THEN
         RAISE EXCEPTION USING
             ERRCODE = '22023',
             MESSAGE = 'PipelineRun task claim parameters are invalid';
@@ -3259,12 +3341,19 @@ BEGIN
        AND run.resource_version < 9007199254740991
        AND (
             (task.command_id IS NOT NULL
+                AND task.stage = ANY(requested_stages)
                 AND task.available_at <= transaction_timestamp()
                 AND task.fencing_token < 9007199254740991
                 AND (task.lease_owner IS NULL
                     OR task.lease_expires_at <= transaction_timestamp()))
             OR (task.command_id IS NULL
-                AND run.state IN ('QUEUED', 'FETCHING', 'VERIFYING', 'REPORTING'))
+                AND CASE run.state
+                    WHEN 'QUEUED' THEN 'FETCH'
+                    WHEN 'FETCHING' THEN 'FETCH'
+                    WHEN 'VERIFYING' THEN 'VERIFY'
+                    WHEN 'REPORTING' THEN 'REPORT'
+                    ELSE NULL
+                END = ANY(requested_stages))
        )
        AND (
             run.state <> 'QUEUED'
@@ -3435,10 +3524,123 @@ BEGIN
 END
 $function$;
 
+REVOKE ALL ON FUNCTION delivery.claim_pipeline_run_task_internal(
+    text, integer, text[]
+) FROM PUBLIC, matrix_devops_api, matrix_devops_source_fetcher,
+       matrix_devops_source_observer, matrix_devops_worker;
+
+CREATE OR REPLACE FUNCTION delivery.claim_pipeline_run_task(
+    requested_worker_id text,
+    requested_lease_seconds integer
+)
+RETURNS TABLE (
+    tenant_id text,
+    run_id text,
+    command_id text,
+    input_digest text,
+    stage text,
+    attempt bigint,
+    claim_mode text,
+    fencing_token bigint,
+    lease_expires_at timestamptz,
+    reconciliation_attempts bigint,
+    run_document jsonb
+)
+LANGUAGE sql
+VOLATILE
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+    SELECT *
+      FROM delivery.claim_pipeline_run_task_internal(
+        requested_worker_id,
+        requested_lease_seconds,
+        ARRAY['VERIFY', 'REPORT']::text[]
+      )
+$function$;
+
 REVOKE ALL ON FUNCTION delivery.claim_pipeline_run_task(text, integer)
-    FROM PUBLIC, matrix_devops_api;
+    FROM PUBLIC, matrix_devops_api, matrix_devops_source_fetcher,
+         matrix_devops_source_observer;
 GRANT EXECUTE ON FUNCTION delivery.claim_pipeline_run_task(text, integer)
     TO matrix_devops_worker;
+
+CREATE OR REPLACE FUNCTION delivery.claim_source_fetch_task(
+    requested_worker_id text,
+    requested_lease_seconds integer
+)
+RETURNS TABLE (
+    tenant_id text,
+    run_id text,
+    command_id text,
+    input_digest text,
+    stage text,
+    attempt bigint,
+    claim_mode text,
+    fencing_token bigint,
+    lease_expires_at timestamptz,
+    reconciliation_attempts bigint,
+    run_document jsonb,
+    connection_document jsonb,
+    binding_revision_document jsonb,
+    pipeline_revision_document jsonb,
+    source_event_document jsonb
+)
+LANGUAGE sql
+VOLATILE
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+    WITH claimed AS MATERIALIZED (
+        SELECT *
+          FROM delivery.claim_pipeline_run_task_internal(
+            requested_worker_id,
+            requested_lease_seconds,
+            ARRAY['FETCH']::text[]
+          )
+    )
+    SELECT claimed.tenant_id,
+           claimed.run_id,
+           claimed.command_id,
+           claimed.input_digest,
+           claimed.stage,
+           claimed.attempt,
+           claimed.claim_mode,
+           claimed.fencing_token,
+           claimed.lease_expires_at,
+           claimed.reconciliation_attempts,
+           claimed.run_document,
+           source.document,
+           binding_revision.document,
+           pipeline_revision.document,
+           source_event.document
+      FROM claimed
+      JOIN delivery.pipeline_runs AS run
+        ON run.tenant_id = claimed.tenant_id
+       AND run.id = claimed.run_id
+       AND run.input_digest = claimed.input_digest
+      JOIN delivery.repository_binding_revisions AS binding_revision
+        ON binding_revision.tenant_id = run.tenant_id
+       AND binding_revision.binding_id = run.repository_binding_id
+       AND binding_revision.content_digest = run.repository_binding_digest
+      JOIN delivery.source_connections AS source
+        ON source.tenant_id = binding_revision.tenant_id
+       AND source.id = binding_revision.source_connection_id
+      JOIN delivery.pipeline_revisions AS pipeline_revision
+        ON pipeline_revision.tenant_id = run.tenant_id
+       AND pipeline_revision.id = run.pipeline_revision_id
+       AND pipeline_revision.content_digest = run.pipeline_revision_digest
+      JOIN delivery.source_events AS source_event
+        ON source_event.tenant_id = run.tenant_id
+       AND source_event.id = run.source_event_id
+       AND source_event.content_digest = run.source_event_digest
+$function$;
+
+REVOKE ALL ON FUNCTION delivery.claim_source_fetch_task(text, integer)
+    FROM PUBLIC, matrix_devops_api, matrix_devops_source_observer,
+         matrix_devops_worker;
+GRANT EXECUTE ON FUNCTION delivery.claim_source_fetch_task(text, integer)
+    TO matrix_devops_source_fetcher;
 
 CREATE OR REPLACE FUNCTION delivery.renew_pipeline_run_task(
     requested_tenant_id text,
@@ -3490,6 +3692,14 @@ BEGIN
        AND task.lease_owner = requested_worker_id
        AND task.fencing_token = expected_fencing_token
        AND task.lease_expires_at > clock_timestamp()
+       AND (
+            task.stage <> 'FETCH'
+            OR pg_has_role(
+                session_user,
+                'matrix_devops_source_fetcher',
+                'MEMBER'
+            )
+       )
     RETURNING task.lease_expires_at INTO renewed_expires_at;
     IF renewed_expires_at IS NULL THEN
         RAISE EXCEPTION USING
@@ -3506,6 +3716,54 @@ REVOKE ALL ON FUNCTION delivery.renew_pipeline_run_task(
 GRANT EXECUTE ON FUNCTION delivery.renew_pipeline_run_task(
     text, text, text, text, bigint, integer
 ) TO matrix_devops_worker;
+
+CREATE OR REPLACE FUNCTION delivery.renew_source_fetch_task(
+    requested_tenant_id text,
+    requested_run_id text,
+    requested_command_id text,
+    requested_worker_id text,
+    expected_fencing_token bigint,
+    requested_lease_seconds integer
+)
+RETURNS timestamptz
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+          FROM delivery.pipeline_run_tasks AS task
+         WHERE task.tenant_id = requested_tenant_id
+           AND task.run_id = requested_run_id
+           AND task.command_id = requested_command_id
+           AND task.stage = 'FETCH'
+           AND task.status = 'INTENT'
+           AND task.lease_owner = requested_worker_id
+           AND task.fencing_token = expected_fencing_token
+    ) THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'MX412',
+            MESSAGE = 'source fetch task lease or fencing token is stale';
+    END IF;
+    RETURN delivery.renew_pipeline_run_task(
+        requested_tenant_id,
+        requested_run_id,
+        requested_command_id,
+        requested_worker_id,
+        expected_fencing_token,
+        requested_lease_seconds
+    );
+END
+$function$;
+
+REVOKE ALL ON FUNCTION delivery.renew_source_fetch_task(
+    text, text, text, text, bigint, integer
+) FROM PUBLIC, matrix_devops_api, matrix_devops_source_observer,
+       matrix_devops_worker;
+GRANT EXECUTE ON FUNCTION delivery.renew_source_fetch_task(
+    text, text, text, text, bigint, integer
+) TO matrix_devops_source_fetcher;
 
 DROP FUNCTION IF EXISTS delivery.advance_pipeline_run_task(
     text, text, text, text, bigint, text, text
@@ -3611,6 +3869,17 @@ BEGIN
             MESSAGE = 'PipelineRun task lease or fencing token is stale';
     END IF;
 
+    IF current_task_stage = 'FETCH'
+       AND NOT pg_has_role(
+            session_user,
+            'matrix_devops_source_fetcher',
+            'MEMBER'
+       ) THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '42501',
+            MESSAGE = 'FETCH completion requires the source fetcher boundary';
+    END IF;
+
     transition_allowed :=
         (current_state = 'FETCHING'
             AND requested_state IN ('VERIFYING', 'FAILED', 'CANCELLED'))
@@ -3651,6 +3920,19 @@ BEGIN
             AND current_cancellation_requested_at IS NULL)
        OR (requested_state = 'MANUAL_INTERVENTION'
             AND current_reconciliation_attempts < 10)
+       OR (current_state = 'FETCHING' AND requested_state = 'VERIFYING'
+            AND NOT EXISTS (
+                SELECT 1
+                  FROM delivery.source_archives AS archive
+                 WHERE archive.tenant_id = requested_tenant_id
+                   AND archive.run_id = requested_run_id
+                   AND archive.command_id = requested_command_id
+                   AND archive.input_digest = current_run_document->>'inputDigest'
+                   AND archive.head_commit =
+                        current_run_document#>>'{input,change,headCommit}'
+                   AND archive.trusted_base_commit =
+                        current_run_document#>>'{input,change,trustedBaseCommit}'
+            ))
        OR current_resource_version >= 9007199254740991 THEN
         RAISE EXCEPTION USING
             ERRCODE = '55000',
@@ -3822,6 +4104,181 @@ REVOKE ALL ON FUNCTION delivery.advance_pipeline_run_task(
 GRANT EXECUTE ON FUNCTION delivery.advance_pipeline_run_task(
     text, text, text, text, bigint, text, text, jsonb, jsonb
 ) TO matrix_devops_worker;
+
+CREATE OR REPLACE FUNCTION delivery.complete_source_fetch_task(
+    requested_tenant_id text,
+    requested_run_id text,
+    requested_command_id text,
+    requested_worker_id text,
+    expected_fencing_token bigint,
+    requested_state text,
+    requested_reason text,
+    submitted_receipt jsonb,
+    submitted_run_document jsonb,
+    submitted_audit_event jsonb
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    current_input_digest text;
+    current_run_document jsonb;
+    current_task_stage text;
+    current_task_status text;
+    current_lease_owner text;
+    current_lease_expires_at timestamptz(6);
+    current_fencing_token bigint;
+BEGIN
+    SELECT run.input_digest,
+           run.document,
+           task.stage,
+           task.status,
+           task.lease_owner,
+           task.lease_expires_at,
+           task.fencing_token
+      INTO current_input_digest,
+           current_run_document,
+           current_task_stage,
+           current_task_status,
+           current_lease_owner,
+           current_lease_expires_at,
+           current_fencing_token
+      FROM delivery.pipeline_runs AS run
+      JOIN delivery.pipeline_run_tasks AS task
+        ON task.tenant_id = run.tenant_id
+       AND task.run_id = run.id
+       AND task.command_id = requested_command_id
+     WHERE run.tenant_id = requested_tenant_id
+       AND run.id = requested_run_id
+     FOR UPDATE OF run, task;
+    IF NOT FOUND
+       OR current_task_stage <> 'FETCH'
+       OR current_task_status <> 'INTENT'
+       OR current_lease_owner IS DISTINCT FROM requested_worker_id
+       OR current_fencing_token <> expected_fencing_token
+       OR current_lease_expires_at IS NULL
+       OR current_lease_expires_at <= clock_timestamp() THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'MX412',
+            MESSAGE = 'source fetch task lease or fencing token is stale';
+    END IF;
+
+    IF requested_state = 'VERIFYING' THEN
+        IF requested_reason IS NOT NULL
+           OR jsonb_typeof(submitted_receipt) IS DISTINCT FROM 'object'
+           OR NOT (submitted_receipt ?& ARRAY[
+                'tenantId', 'runId', 'commandId', 'inputDigest',
+                'headCommit', 'trustedBaseCommit', 'mediaType',
+                'archiveDigest', 'archiveBytes', 'expandedBytes', 'pathCount'
+           ])
+           OR (submitted_receipt - ARRAY[
+                'tenantId', 'runId', 'commandId', 'inputDigest',
+                'headCommit', 'trustedBaseCommit', 'mediaType',
+                'archiveDigest', 'archiveBytes', 'expandedBytes', 'pathCount'
+           ]) <> '{}'::jsonb
+           OR EXISTS (
+                SELECT 1
+                  FROM unnest(ARRAY[
+                    'tenantId', 'runId', 'commandId', 'inputDigest',
+                    'headCommit', 'trustedBaseCommit', 'mediaType',
+                    'archiveDigest'
+                  ]) AS string_field(name)
+                 WHERE jsonb_typeof(submitted_receipt->string_field.name)
+                    IS DISTINCT FROM 'string'
+           )
+           OR EXISTS (
+                SELECT 1
+                  FROM unnest(ARRAY[
+                    'archiveBytes', 'expandedBytes', 'pathCount'
+                  ]) AS number_field(name)
+                 WHERE jsonb_typeof(submitted_receipt->number_field.name)
+                    IS DISTINCT FROM 'number'
+           )
+           OR submitted_receipt->>'tenantId' IS DISTINCT FROM requested_tenant_id
+           OR submitted_receipt->>'runId' IS DISTINCT FROM requested_run_id
+           OR submitted_receipt->>'commandId' IS DISTINCT FROM requested_command_id
+           OR submitted_receipt->>'inputDigest' IS DISTINCT FROM current_input_digest
+           OR submitted_receipt->>'headCommit' IS DISTINCT FROM
+                current_run_document#>>'{input,change,headCommit}'
+           OR submitted_receipt->>'trustedBaseCommit' IS DISTINCT FROM
+                current_run_document#>>'{input,change,trustedBaseCommit}'
+           OR submitted_receipt->>'mediaType' IS DISTINCT FROM
+                'application/vnd.matrix.devops.source.v1+tar+gzip'
+           OR COALESCE(submitted_receipt->>'archiveDigest', '') COLLATE "C"
+                !~ '^sha256:[0-9a-f]{64}$'
+           OR NOT (CASE
+                WHEN COALESCE(submitted_receipt->>'archiveBytes', '') COLLATE "C"
+                    ~ '^[1-9][0-9]*$'
+                THEN (submitted_receipt->>'archiveBytes')::numeric
+                    BETWEEN 1 AND 67108864
+                ELSE false
+           END)
+           OR NOT (CASE
+                WHEN COALESCE(submitted_receipt->>'expandedBytes', '') COLLATE "C"
+                    ~ '^[0-9]+$'
+                THEN (submitted_receipt->>'expandedBytes')::numeric
+                    BETWEEN 0 AND 536870912
+                ELSE false
+           END)
+           OR NOT (CASE
+                WHEN COALESCE(submitted_receipt->>'pathCount', '') COLLATE "C"
+                    ~ '^[0-9]+$'
+                THEN (submitted_receipt->>'pathCount')::numeric
+                    BETWEEN 0 AND 20000
+                ELSE false
+           END) THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '22023',
+                MESSAGE = 'source archive receipt is invalid';
+        END IF;
+
+        INSERT INTO delivery.source_archives (
+            tenant_id, run_id, command_id, input_digest,
+            archive_digest, archive_bytes, expanded_bytes, path_count,
+            head_commit, trusted_base_commit, media_type, created_at
+        ) VALUES (
+            requested_tenant_id,
+            requested_run_id,
+            requested_command_id,
+            current_input_digest,
+            submitted_receipt->>'archiveDigest',
+            (submitted_receipt->>'archiveBytes')::bigint,
+            (submitted_receipt->>'expandedBytes')::bigint,
+            (submitted_receipt->>'pathCount')::bigint,
+            submitted_receipt->>'headCommit',
+            submitted_receipt->>'trustedBaseCommit',
+            submitted_receipt->>'mediaType',
+            transaction_timestamp()
+        );
+    ELSIF submitted_receipt IS NOT NULL THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'terminal source fetch completion cannot store a receipt';
+    END IF;
+
+    RETURN delivery.advance_pipeline_run_task(
+        requested_tenant_id,
+        requested_run_id,
+        requested_command_id,
+        requested_worker_id,
+        expected_fencing_token,
+        requested_state,
+        requested_reason,
+        submitted_run_document,
+        submitted_audit_event
+    );
+END
+$function$;
+
+REVOKE ALL ON FUNCTION delivery.complete_source_fetch_task(
+    text, text, text, text, bigint, text, text, jsonb, jsonb, jsonb
+) FROM PUBLIC, matrix_devops_api, matrix_devops_source_observer,
+       matrix_devops_worker;
+GRANT EXECUTE ON FUNCTION delivery.complete_source_fetch_task(
+    text, text, text, text, bigint, text, text, jsonb, jsonb, jsonb
+) TO matrix_devops_source_fetcher;
 
 CREATE OR REPLACE FUNCTION delivery.mark_pipeline_run_report_uncertain(
     requested_tenant_id text,
@@ -4470,6 +4927,52 @@ DROP POLICY owner_source_contract_upgrade ON delivery.repository_bindings;
 DROP POLICY owner_source_contract_upgrade ON delivery.repository_binding_revisions;
 DROP POLICY owner_source_contract_upgrade ON delivery.mutations;
 
+CREATE OR REPLACE FUNCTION delivery.record_source_fetcher_heartbeat(
+    requested_worker_id text
+)
+RETURNS timestamptz
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_observed_at timestamptz(6);
+BEGIN
+    IF requested_worker_id IS NULL
+       OR requested_worker_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'source fetcher heartbeat identity is invalid';
+    END IF;
+
+    INSERT INTO delivery.source_fetcher_heartbeat (
+        singleton, worker_id, observed_at
+    ) VALUES (
+        true, requested_worker_id, transaction_timestamp()
+    )
+    ON CONFLICT (singleton) DO UPDATE
+       SET worker_id = CASE
+               WHEN excluded.observed_at >= source_fetcher_heartbeat.observed_at
+               THEN excluded.worker_id
+               ELSE source_fetcher_heartbeat.worker_id
+           END,
+           observed_at = greatest(
+               excluded.observed_at,
+               source_fetcher_heartbeat.observed_at
+           )
+    RETURNING observed_at INTO effective_observed_at;
+
+    RETURN effective_observed_at;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION delivery.record_source_fetcher_heartbeat(text)
+    FROM PUBLIC, matrix_devops_api, matrix_devops_source_observer,
+         matrix_devops_worker;
+GRANT EXECUTE ON FUNCTION delivery.record_source_fetcher_heartbeat(text)
+    TO matrix_devops_source_fetcher;
+
 CREATE OR REPLACE FUNCTION delivery.record_source_observer_heartbeat(
     requested_worker_id text
 )
@@ -5032,6 +5535,73 @@ GRANT EXECUTE ON FUNCTION delivery.complete_source_observation(
     text, text, text, bigint, text, bigint, jsonb, jsonb
 ) TO matrix_devops_source_observer;
 
+CREATE OR REPLACE FUNCTION delivery.source_fetcher_readiness()
+RETURNS TABLE (ready boolean, schema_version bigint, checked_at timestamptz)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+    SELECT
+        to_regclass('delivery.pipeline_runs') IS NOT NULL
+        AND to_regclass('delivery.pipeline_run_tasks') IS NOT NULL
+        AND to_regclass('delivery.source_archives') IS NOT NULL
+        AND to_regclass('delivery.source_fetcher_heartbeat') IS NOT NULL
+        AND to_regprocedure(
+            'delivery.record_source_fetcher_heartbeat(text)'
+        ) IS NOT NULL
+        AND to_regprocedure(
+            'delivery.claim_source_fetch_task(text,integer)'
+        ) IS NOT NULL
+        AND to_regprocedure(
+            'delivery.renew_source_fetch_task(text,text,text,text,bigint,integer)'
+        ) IS NOT NULL
+        AND to_regprocedure(
+            'delivery.complete_source_fetch_task(text,text,text,text,bigint,text,text,jsonb,jsonb,jsonb)'
+        ) IS NOT NULL
+        AND EXISTS (
+            SELECT 1
+              FROM delivery.source_fetcher_heartbeat AS heartbeat
+             WHERE heartbeat.singleton
+               AND heartbeat.observed_at <= transaction_timestamp()
+               AND heartbeat.observed_at
+                    >= transaction_timestamp() - interval '30 seconds'
+        )
+        AND NOT EXISTS (
+            SELECT 1
+              FROM delivery.pipeline_run_tasks AS task
+             WHERE task.stage = 'FETCH'
+               AND task.fencing_token >= 9007199254740991
+        )
+        AND NOT EXISTS (
+            SELECT 1
+              FROM delivery.source_archives AS archive
+              JOIN delivery.pipeline_runs AS run
+                ON run.tenant_id = archive.tenant_id
+               AND run.id = archive.run_id
+               AND run.input_digest = archive.input_digest
+              JOIN delivery.pipeline_run_tasks AS task
+                ON task.tenant_id = archive.tenant_id
+               AND task.run_id = archive.run_id
+               AND task.command_id = archive.command_id
+             WHERE task.stage <> 'FETCH'
+                OR task.status <> 'COMPLETED'
+                OR run.stage = 'FETCH'
+                OR archive.head_commit <>
+                    run.document#>>'{input,change,headCommit}'
+                OR archive.trusted_base_commit <>
+                    run.document#>>'{input,change,trustedBaseCommit}'
+        ),
+        1::bigint,
+        transaction_timestamp()
+$function$;
+
+REVOKE ALL ON FUNCTION delivery.source_fetcher_readiness()
+    FROM PUBLIC, matrix_devops_api, matrix_devops_source_observer,
+         matrix_devops_worker;
+GRANT EXECUTE ON FUNCTION delivery.source_fetcher_readiness()
+    TO matrix_devops_source_fetcher;
+
 CREATE OR REPLACE FUNCTION delivery.source_observer_readiness()
 RETURNS TABLE (ready boolean, schema_version bigint, checked_at timestamptz)
 LANGUAGE sql
@@ -5103,6 +5673,8 @@ AS $function$
         AND to_regclass('delivery.source_events') IS NOT NULL
         AND to_regclass('delivery.pipeline_runs') IS NOT NULL
         AND to_regclass('delivery.pipeline_run_tasks') IS NOT NULL
+        AND to_regclass('delivery.source_archives') IS NOT NULL
+        AND to_regclass('delivery.source_fetcher_heartbeat') IS NOT NULL
         AND to_regclass('delivery.audit_operations') IS NOT NULL
         AND to_regclass('delivery.source_observation_tasks') IS NOT NULL
         AND to_regclass('delivery.source_observer_heartbeat') IS NOT NULL
@@ -5126,6 +5698,18 @@ AS $function$
         ) IS NOT NULL
         AND to_regprocedure(
             'delivery.claim_pipeline_run_task(text,integer)'
+        ) IS NOT NULL
+        AND to_regprocedure(
+            'delivery.record_source_fetcher_heartbeat(text)'
+        ) IS NOT NULL
+        AND to_regprocedure(
+            'delivery.claim_source_fetch_task(text,integer)'
+        ) IS NOT NULL
+        AND to_regprocedure(
+            'delivery.renew_source_fetch_task(text,text,text,text,bigint,integer)'
+        ) IS NOT NULL
+        AND to_regprocedure(
+            'delivery.complete_source_fetch_task(text,text,text,text,bigint,text,text,jsonb,jsonb,jsonb)'
         ) IS NOT NULL
         AND to_regprocedure(
             'delivery.record_source_observer_heartbeat(text)'
@@ -5203,6 +5787,7 @@ AS $function$
                 OR outbox.attempts >= 100
                 OR outbox.fencing_token >= 9007199254740991
         )
+        AND (SELECT fetcher.ready FROM delivery.source_fetcher_readiness() AS fetcher)
         AND (
             NOT EXISTS (SELECT 1 FROM delivery.source_connections)
             OR EXISTS (
@@ -5219,7 +5804,8 @@ AS $function$
 $function$;
 
 REVOKE ALL ON FUNCTION delivery.readiness()
-    FROM PUBLIC, matrix_devops_worker, matrix_devops_source_observer;
+    FROM PUBLIC, matrix_devops_source_fetcher,
+         matrix_devops_worker, matrix_devops_source_observer;
 GRANT EXECUTE ON FUNCTION delivery.readiness() TO matrix_devops_api;
 
 CREATE OR REPLACE FUNCTION delivery.worker_readiness()
@@ -5310,7 +5896,8 @@ AS $function$
 $function$;
 
 REVOKE ALL ON FUNCTION delivery.worker_readiness()
-    FROM PUBLIC, matrix_devops_api, matrix_devops_source_observer;
+    FROM PUBLIC, matrix_devops_api, matrix_devops_source_fetcher,
+         matrix_devops_source_observer;
 GRANT EXECUTE ON FUNCTION delivery.worker_readiness() TO matrix_devops_worker;
 
 REVOKE ALL ON FUNCTION delivery.current_tenant_id() FROM PUBLIC;
@@ -5325,7 +5912,8 @@ GRANT EXECUTE ON FUNCTION delivery.commit_configuration_mutation(
 
 REVOKE ALL ON ALL TABLES IN SCHEMA delivery FROM PUBLIC;
 REVOKE ALL ON ALL TABLES IN SCHEMA delivery
-    FROM matrix_devops_api, matrix_devops_worker, matrix_devops_source_observer;
+    FROM matrix_devops_api, matrix_devops_source_fetcher,
+         matrix_devops_worker, matrix_devops_source_observer;
 GRANT SELECT ON delivery.projects TO matrix_devops_api;
 GRANT SELECT ON delivery.source_connections TO matrix_devops_api;
 GRANT SELECT ON delivery.repository_bindings TO matrix_devops_api;
@@ -5335,6 +5923,21 @@ GRANT SELECT ON delivery.pipeline_revisions TO matrix_devops_api;
 GRANT SELECT ON delivery.source_events TO matrix_devops_api;
 GRANT SELECT ON delivery.pipeline_runs TO matrix_devops_api;
 GRANT SELECT ON delivery.mutations TO matrix_devops_api;
+
+REVOKE ALL ON ALL FUNCTIONS IN SCHEMA delivery
+    FROM matrix_devops_source_fetcher;
+GRANT EXECUTE ON FUNCTION delivery.record_source_fetcher_heartbeat(text)
+    TO matrix_devops_source_fetcher;
+GRANT EXECUTE ON FUNCTION delivery.claim_source_fetch_task(text, integer)
+    TO matrix_devops_source_fetcher;
+GRANT EXECUTE ON FUNCTION delivery.renew_source_fetch_task(
+    text, text, text, text, bigint, integer
+) TO matrix_devops_source_fetcher;
+GRANT EXECUTE ON FUNCTION delivery.complete_source_fetch_task(
+    text, text, text, text, bigint, text, text, jsonb, jsonb, jsonb
+) TO matrix_devops_source_fetcher;
+GRANT EXECUTE ON FUNCTION delivery.source_fetcher_readiness()
+    TO matrix_devops_source_fetcher;
 
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA delivery
     FROM matrix_devops_source_observer;

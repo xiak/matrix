@@ -201,7 +201,7 @@ func (service *Service) complete(
 	result Result,
 	completion Completion,
 ) (Result, error) {
-	if err := validateCompletion(completion); err != nil {
+	if err := ValidateCompletion(completion); err != nil {
 		return result, err
 	}
 	updated, err := service.repository.Complete(ctx, completion)

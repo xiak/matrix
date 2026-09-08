@@ -8,8 +8,8 @@
   source-readiness contract, installation-operator source credential
   lifecycle, source-observer runtime, source-acquisition runtime design,
   fenced acquisition use case, deterministic archive store, and real Gitea
-  fetch protocol complete; source-acquisition persistence/process integration
-  plus executor/reporter effects pending
+  fetch protocol, source-acquisition persistence, and isolated source-fetcher
+  process complete; executor/reporter effects pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -833,9 +833,24 @@ private files, hashes and parses the complete archive, writes a canonical
 path-free receipt, fsyncs both, and atomically renames the command directory;
 equal publication is observed rather than overwritten. Lease-renewal loss or
 caller shutdown leaves the intent open, while exact provider, commit, deadline,
-and cancellation outcomes remain closed. The PostgreSQL receipt transaction
-and source-fetcher process are not connected yet, so no installed runtime can
-claim this effect.
+and cancellation outcomes remain closed. The tenant-leading, forced-RLS
+`source_archives` table stores only the canonical
+`application/vnd.matrix.devops.source.v1+tar+gzip` receipt. The table-blind
+source-fetcher role can call exactly five heartbeat/readiness/claim/renew/
+complete functions; it alone can claim `FETCH`, and the general worker remains
+limited to `VERIFY` and `REPORT`. Successful completion verifies the current
+lease and fence, inserts the exact receipt, completes the durable command, and
+advances `FETCHING -> VERIFYING` in one transaction. The generic transition
+cannot bypass a missing receipt, while terminal source failure or cancellation
+writes no receipt and keeps the existing atomic completion Audit fact.
+
+The independently built `matrix-devops-source-fetcher` process uses that
+distinct database login, resolves only fetch credentials, runs the fixed Gitea
+adapter and archive store, renews leases during the bounded effect, and emits a
+ten-second heartbeat even while fetching. Its selected-only installation
+topology mounts one read-only DSN, the read-only fetch-purpose root, and one
+private writable archive root; it joins only the internal control and
+source-egress networks and receives no other product or execution authority.
 
 Every fenced worker transition now submits the exact next PipelineRun document
 to the database boundary. A terminal transition atomically stores a distinct
@@ -913,11 +928,10 @@ network plus one provider-egress network, and has no IAM, Audit, executor, or
 configuration-write capability. Its heartbeat gates both process readiness
 and DevOps API readiness once any SourceConnection exists.
 
-These slices do not complete Gate A. The source-readiness public contract,
-domain transitions, freshness rule, legacy data replacement, and operator
-credential lifecycle and observer runtime are complete. Source acquisition,
-normalized logs, remaining runtime quotas, check-receipt Audit facts, and
-pagination remain pending.
+These slices do not complete Gate A. Source readiness, credential lifecycle,
+observation, and acquisition through an installed isolated process are
+complete. Executor execution, reporting, normalized logs, remaining runtime
+quotas, check-receipt Audit facts, and pagination remain pending.
 
 Current verification evidence:
 
@@ -969,10 +983,11 @@ Current verification evidence:
   `govulncheck v1.7.0` reports zero reachable symbol or imported-package
   vulnerabilities after `x/crypto v0.56.0`, with only its unused, unimported
   `openpgp` package reported at module level
-- installation and topology tests proving the selected-only source-observer
-  login, four read-only mounts, exact process environment, provider-egress
-  network confinement, offline binary inclusion, heartbeat-gated API
-  readiness, and absence from PaaS-only installations
+- installation and topology tests proving selected-only source-observer and
+  source-fetcher logins, four read-only observer mounts, the fetcher's two
+  read-only inputs and private writable archive root, exact process
+  environments, provider-egress confinement, offline binary inclusion,
+  heartbeat-gated API readiness, and absence from PaaS-only installations
 - real PostgreSQL 18 double-apply and catalog integration tests for the IAM and
   Audit extensions, release-selected Platform/DevOps credential enrollment,
   equal replay, changed-credential rejection, and exact Audit facts
@@ -995,6 +1010,14 @@ Current verification evidence:
   monotonic fencing recovery, stale-fence and stale-resource-version rejection,
   observer-only health writes, equal refresh without Audit, five deterministic
   sanitized transition facts, double apply, and IAM/Audit/PaaS schema denial
+- real PostgreSQL 18 source-acquisition journey proving the table-blind fetcher
+  has exactly five callable functions, heartbeat-gated fetcher/API readiness,
+  exclusive `FETCH` claims, exact immutable source/binding/revision/event
+  documents, database-time renewal and fencing recovery, strict receipt
+  validation, atomic archive/command/run advancement, missing-receipt bypass
+  rejection, receipt-free source failure/cancellation, double apply, and
+  IAM/Audit/PaaS schema denial; the four-product migration journey passes on a
+  separate fresh database
 - real PostgreSQL 18 source-contract upgrade proving deterministic replacement
   of legacy single-origin documents and command snapshots, health-reason
   backfill across current and immutable resources, removal of temporary owner
@@ -1035,13 +1058,13 @@ Current verification evidence:
   tenant ceiling, and API/worker table and function confinement
 - closed Audit/OpenAPI validation and a real PostgreSQL 18 authority journey
   accepting only valid PipelineRun completion outcome/reason pairs; the
-  delivery journey proves seven terminal transitions create exactly seven
+  delivery journey proves eight terminal transitions create exactly eight
   atomic deterministic completion facts, five public cancellation requests
   create exactly five IAM-bound accepted facts, two manual replays create
   exactly two IAM-bound accepted facts, and nonterminal worker transitions
   create no completion fact; both replay generations have no task before a
   worker claim. The fresh journey contains 23 mutations, 16 SourceEvents, 34
-  PipelineRuns, nine task intents, and 83 Audit operations/outbox facts,
+  PipelineRuns, ten task intents, and 84 Audit operations/outbox facts,
   including five source-health transitions
 - fixed `10fea16` data-bearing upgrade preserving all 17 mutations, 16
   SourceEvents, 32 PipelineRuns, nine task intents, and 71 Audit
@@ -1074,8 +1097,8 @@ Current verification evidence:
    lease/fence, reconciliation, quota, and sanitized failure/log behavior pass
    unit, race, fuzz, and repeated tests.
 3. Clean PostgreSQL applies the delivery schema twice and proves separate
-   migration/API/worker/source-observer roles, forced tenant isolation,
-   database-time leases, stale-fence and stale-resource rejection, API-only
+   migration/API/worker/source-fetcher/source-observer roles, forced tenant
+   isolation, database-time leases, stale-fence and stale-resource rejection, API-only
    configuration writes, observer-only health writes, and no cross-schema
    access.
 4. Architecture tests prove the delivery context owns its ports, depends only

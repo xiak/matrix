@@ -87,6 +87,7 @@ func stageInstallation(plan platformcommand.InstallPlan, entropy io.Reader) erro
 	}
 	if staged.Manifest.IncludesProduct(release.ProductDevOps) {
 		for _, directory := range []string{
+			"data/devops", layout.DevOpsSourceArchiveRoot,
 			"secrets/devops", layout.DevOpsWebhookCredentialRoot,
 			layout.DevOpsFetchCredentialRoot, layout.DevOpsReportCredentialRoot,
 		} {
@@ -154,8 +155,9 @@ func stageInstallation(plan platformcommand.InstallPlan, entropy io.Reader) erro
 			role string
 		}{
 			{path: layout.DevOpsAPI, role: "matrix_devops_api_login"},
-			{path: layout.DevOpsWorker, role: "matrix_devops_worker_login"},
+			{path: layout.DevOpsSourceFetcher, role: "matrix_devops_source_fetcher_login"},
 			{path: layout.DevOpsSourceObserver, role: "matrix_devops_source_observer_login"},
+			{path: layout.DevOpsWorker, role: "matrix_devops_worker_login"},
 		} {
 			if err := ensureRuntimeDSN(plan.Root, login.path, login.role, entropy); err != nil {
 				return err

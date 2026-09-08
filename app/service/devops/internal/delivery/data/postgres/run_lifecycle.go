@@ -155,41 +155,11 @@ func (repository *RunTaskRepository) Advance(
 		return devopsv1.PipelineRun{}, fmt.Errorf("begin PipelineRun task transition: %w", err)
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
-	var effectiveNow time.Time
-	if err := tx.QueryRow(
-		ctx,
-		`SELECT greatest(transaction_timestamp(), $1::timestamptz + interval '1 microsecond')`,
-		transition.Lease.Run.UpdatedAt,
-	).Scan(&effectiveNow); err != nil {
-		return devopsv1.PipelineRun{}, fmt.Errorf("read PipelineRun transition time: %w", err)
-	}
-	effectiveNow = effectiveNow.UTC()
-	expected, err := domain.AdvancePipelineRun(
-		transition.Lease.Run, transition.State, transition.Reason, effectiveNow,
+	_, runDocument, auditDocument, reason, err := prepareRunTransition(
+		ctx, tx, transition.Lease, transition.State, transition.Reason,
 	)
 	if err != nil {
-		return devopsv1.PipelineRun{}, fmt.Errorf("advance PipelineRun task: %w", runlifecycle.ErrInvalidTransition)
-	}
-	runDocument, err := json.Marshal(expected)
-	if err != nil {
-		return devopsv1.PipelineRun{}, fmt.Errorf("encode PipelineRun transition: %w", err)
-	}
-	var auditDocument any
-	if expected.Status.CompletedAt != nil {
-		event, eventErr := runaudit.NewTerminalEvent(
-			expected, transition.Lease.Intent.CommandID, runaudit.WorkerActorID,
-		)
-		if eventErr != nil {
-			return devopsv1.PipelineRun{}, fmt.Errorf("build PipelineRun terminal Audit fact: %w", eventErr)
-		}
-		auditDocument, err = json.Marshal(event)
-		if err != nil {
-			return devopsv1.PipelineRun{}, fmt.Errorf("encode PipelineRun terminal Audit fact: %w", err)
-		}
-	}
-	var reason any
-	if transition.Reason != "" {
-		reason = transition.Reason
+		return devopsv1.PipelineRun{}, err
 	}
 	var document []byte
 	err = tx.QueryRow(
@@ -216,6 +186,56 @@ func (repository *RunTaskRepository) Advance(
 		return devopsv1.PipelineRun{}, mapRunLifecycleError("commit PipelineRun task transition", err)
 	}
 	return updated, nil
+}
+
+func prepareRunTransition(
+	ctx context.Context,
+	tx pgx.Tx,
+	lease runlifecycle.Lease,
+	state devopsv1.PipelineRunState,
+	reason devopsv1.PipelineRunReason,
+) (devopsv1.PipelineRun, []byte, any, any, error) {
+	var effectiveNow time.Time
+	if err := tx.QueryRow(
+		ctx,
+		`SELECT greatest(transaction_timestamp(), $1::timestamptz + interval '1 microsecond')`,
+		lease.Run.UpdatedAt,
+	).Scan(&effectiveNow); err != nil {
+		return devopsv1.PipelineRun{}, nil, nil, nil,
+			fmt.Errorf("read PipelineRun transition time: %w", err)
+	}
+	expected, err := domain.AdvancePipelineRun(
+		lease.Run, state, reason, effectiveNow.UTC(),
+	)
+	if err != nil {
+		return devopsv1.PipelineRun{}, nil, nil, nil,
+			fmt.Errorf("advance PipelineRun task: %w", runlifecycle.ErrInvalidTransition)
+	}
+	runDocument, err := json.Marshal(expected)
+	if err != nil {
+		return devopsv1.PipelineRun{}, nil, nil, nil,
+			fmt.Errorf("encode PipelineRun transition: %w", err)
+	}
+	var auditDocument any
+	if expected.Status.CompletedAt != nil {
+		event, eventErr := runaudit.NewTerminalEvent(
+			expected, lease.Intent.CommandID, runaudit.WorkerActorID,
+		)
+		if eventErr != nil {
+			return devopsv1.PipelineRun{}, nil, nil, nil,
+				fmt.Errorf("build PipelineRun terminal Audit fact: %w", eventErr)
+		}
+		auditDocument, err = json.Marshal(event)
+		if err != nil {
+			return devopsv1.PipelineRun{}, nil, nil, nil,
+				fmt.Errorf("encode PipelineRun terminal Audit fact: %w", err)
+		}
+	}
+	var reasonValue any
+	if reason != "" {
+		reasonValue = reason
+	}
+	return expected, runDocument, auditDocument, reasonValue, nil
 }
 
 func (repository *RunTaskRepository) MarkReportUncertain(

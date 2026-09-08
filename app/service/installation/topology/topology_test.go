@@ -16,7 +16,7 @@ import (
 )
 
 func TestInstalledCompilerReproducesAcceptedProductlessTopology(t *testing.T) {
-	if actual := ContractDigest(); actual != "sha256:443baaaba8c74331ea8f8dcf58bc66d96c64678f86b1e0cb1bc6b5ce387ae569" {
+	if actual := ContractDigest(); actual != "sha256:82f197d7d63043943f23f70e2e808c5b371a1d9ff263ffe94efbf5d8799c9913" {
 		t.Fatalf("current topology contract digest drifted: %s", actual)
 	}
 	if actual := legacyProductlessImplementationDigest(); actual != legacyProductlessContractDigest {
@@ -125,11 +125,13 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	foundPostgresData := false
 	foundAPISIXRuntimeBoundary := false
 	foundDevOpsSourceSecrets := false
+	foundDevOpsSourceFetcherBoundary := false
 	foundDevOpsSourceObserverBoundary := false
 	expectedEntrypoints := map[string]string{
 		"audit":                   "/matrix/bin/matrix-audit",
 		"devops-api":              "/matrix/bin/matrix-devops",
 		"devops-audit-dispatcher": "/matrix/bin/matrix-devops-audit-dispatcher",
+		"devops-source-fetcher":   "/matrix/bin/matrix-devops-source-fetcher",
 		"devops-source-observer":  "/matrix/bin/matrix-devops-source-observer",
 		"iam":                     "/matrix/bin/matrix-iam",
 		"iam-audit-dispatcher":    "/matrix/bin/matrix-iam-audit-dispatcher",
@@ -158,6 +160,13 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			"MATRIX_DEVOPS_AUDIT_CREDENTIAL_FILE", "MATRIX_DEVOPS_AUDIT_DATABASE_DSN_FILE",
 			"MATRIX_DEVOPS_AUDIT_ENDPOINT", "MATRIX_DEVOPS_AUDIT_LISTEN_ADDRESS",
 			"MATRIX_DEVOPS_AUDIT_WORKER_ID",
+		},
+		"devops-source-fetcher": {
+			"MATRIX_DEVOPS_SOURCE_FETCHER_ARCHIVE_ROOT",
+			"MATRIX_DEVOPS_SOURCE_FETCHER_DATABASE_DSN_FILE",
+			"MATRIX_DEVOPS_SOURCE_FETCHER_FETCH_ROOT",
+			"MATRIX_DEVOPS_SOURCE_FETCHER_LISTEN_ADDRESS",
+			"MATRIX_DEVOPS_SOURCE_FETCHER_WORKER_ID",
 		},
 		"devops-source-observer": {
 			"MATRIX_DEVOPS_SOURCE_OBSERVER_DATABASE_DSN_FILE",
@@ -203,9 +212,10 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	}
 	expectedImageComponents := map[string]string{
 		"apisix": "apisix", "audit": "audit", "devops-api": "devops",
-		"devops-audit-dispatcher": "devops", "devops-source-observer": "devops",
-		"iam":                  "iam",
-		"iam-audit-dispatcher": "iam", "matrix-ui": "matrix-ui", "paas-api": "paas",
+		"devops-audit-dispatcher": "devops", "devops-source-fetcher": "devops",
+		"devops-source-observer": "devops",
+		"iam":                    "iam",
+		"iam-audit-dispatcher":   "iam", "matrix-ui": "matrix-ui", "paas-api": "paas",
 		"paas-audit-dispatcher": "paas",
 		"paas-worker":           "paas", "platform-api": "platform",
 	}
@@ -247,9 +257,9 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			if !slices.Equal(actualServiceNetworks, []string{"control", "edge", "web"}) {
 				t.Fatalf("APISIX network boundary=%v", actualServiceNetworks)
 			}
-		} else if name == "devops-source-observer" {
+		} else if name == "devops-source-fetcher" || name == "devops-source-observer" {
 			if !slices.Equal(actualServiceNetworks, []string{"control", "source"}) {
-				t.Fatalf("DevOps source observer network boundary=%v", actualServiceNetworks)
+				t.Fatalf("DevOps source service %q network boundary=%v", name, actualServiceNetworks)
 			}
 		} else if slices.Contains(actualServiceNetworks, "edge") ||
 			slices.Contains(actualServiceNetworks, "source") {
@@ -455,16 +465,49 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 				}
 				foundDevOpsSourceObserverBoundary = true
 			}
+			if name == "devops-source-fetcher" {
+				expected := map[string]struct {
+					source   string
+					readOnly bool
+				}{
+					"/run/matrix/devops-source-fetcher-dsn": {
+						options.Root + "/secrets/database/devops-source-fetcher-dsn", true,
+					},
+					"/run/matrix/devops-source-fetch": {
+						options.Root + "/secrets/devops/source-fetch", true,
+					},
+					"/var/lib/matrix/source-archives": {
+						options.Root + "/data/devops/source-archives", false,
+					},
+				}
+				if len(volumes) != len(expected) {
+					t.Fatalf("DevOps source fetcher mount count=%d", len(volumes))
+				}
+				for _, rawMount := range volumes {
+					mount := rawMount.(map[string]any)
+					target := mount["target"].(string)
+					want, found := expected[target]
+					readOnly, _ := mount["read_only"].(bool)
+					if !found || mount["source"] != want.source || readOnly != want.readOnly {
+						t.Fatalf("DevOps source fetcher mount=%#v", mount)
+					}
+				}
+				dependencies := service["depends_on"].(map[string]any)
+				if len(dependencies) != 1 || dependencies["postgres"] == nil {
+					t.Fatalf("DevOps source fetcher dependencies=%#v", dependencies)
+				}
+				foundDevOpsSourceFetcherBoundary = true
+			}
 		}
 	}
 	if portCount != 1 || !foundExecutorRoot || !foundDockerSocket || !foundPostgresData ||
 		!foundAPISIXRuntimeBoundary || !foundDevOpsSourceSecrets ||
-		!foundDevOpsSourceObserverBoundary {
+		!foundDevOpsSourceFetcherBoundary || !foundDevOpsSourceObserverBoundary {
 		t.Fatalf(
-			"platform capability closure: ports=%d executor=%t socket=%t postgres-data=%t apisix=%t devops-source-secrets=%t source-observer=%t",
+			"platform capability closure: ports=%d executor=%t socket=%t postgres-data=%t apisix=%t devops-source-secrets=%t source-fetcher=%t source-observer=%t",
 			portCount, foundExecutorRoot, foundDockerSocket, foundPostgresData,
 			foundAPISIXRuntimeBoundary, foundDevOpsSourceSecrets,
-			foundDevOpsSourceObserverBoundary,
+			foundDevOpsSourceFetcherBoundary, foundDevOpsSourceObserverBoundary,
 		)
 	}
 	encoded := string(result.ComposeJSON)
@@ -500,6 +543,9 @@ func TestCompileOmitsUnselectedDevOpsProduct(t *testing.T) {
 	}
 	if _, found := document.Services["devops-audit-dispatcher"]; found {
 		t.Fatal("PaaS-only topology contains DevOps Audit dispatcher")
+	}
+	if _, found := document.Services["devops-source-fetcher"]; found {
+		t.Fatal("PaaS-only topology contains DevOps source fetcher")
 	}
 	if _, found := document.Services["devops-source-observer"]; found {
 		t.Fatal("PaaS-only topology contains DevOps source observer")

@@ -33,6 +33,7 @@ import (
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runadmission"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runcontrol"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runlifecycle"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/sourceacquisition"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/sourceingress"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/sourceobservation"
 	devopsmigration "github.com/xiak/matrix/app/service/devops/migration"
@@ -61,6 +62,7 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 	if err := admin.QueryRow(ctx, `SELECT to_regnamespace('delivery') IS NULL AND NOT EXISTS (
 		SELECT 1 FROM pg_catalog.pg_roles WHERE rolname IN (
 			'matrix_devops_api_login', 'matrix_devops_worker_login',
+			'matrix_devops_source_fetcher_login',
 			'matrix_devops_source_observer_login'
 		)
 	)`).Scan(&clean); err != nil || !clean {
@@ -69,13 +71,14 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 
 	apiDSN := runtimeDSN(t, adminDSN, "matrix_devops_api_login", "mxp1.devops-api-000000000000000000000000000000")
 	workerDSN := runtimeDSN(t, adminDSN, "matrix_devops_worker_login", "mxp1.devops-worker-0000000000000000000000000000")
+	sourceFetcherDSN := runtimeDSN(t, adminDSN, "matrix_devops_source_fetcher_login", "mxp1.devops-source-fetcher-000000000000000000000")
 	sourceObserverDSN := runtimeDSN(t, adminDSN, "matrix_devops_source_observer_login", "mxp1.devops-source-observer-0000000000000000000")
 	for attempt := 1; attempt <= 2; attempt++ {
-		if err := devopsmigration.Apply(ctx, adminDSN, apiDSN, workerDSN, sourceObserverDSN); err != nil {
+		if err := devopsmigration.Apply(ctx, adminDSN, apiDSN, sourceFetcherDSN, sourceObserverDSN, workerDSN); err != nil {
 			t.Fatalf("apply DevOps migration attempt %d: %v", attempt, err)
 		}
 	}
-	if err := devopsmigration.VerifyInstalled(ctx, adminDSN, apiDSN, workerDSN, sourceObserverDSN); err != nil {
+	if err := devopsmigration.VerifyInstalled(ctx, adminDSN, apiDSN, sourceFetcherDSN, sourceObserverDSN, workerDSN); err != nil {
 		t.Fatalf("verify DevOps migration: %v", err)
 	}
 	pool, err := pgxpool.New(ctx, apiDSN)
@@ -87,6 +90,18 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	sourceFetcherPool, err := pgxpool.New(ctx, sourceFetcherDSN)
+	if err != nil {
+		t.Fatal("connect DevOps source fetcher pool")
+	}
+	defer sourceFetcherPool.Close()
+	sourceFetcher, err := devopspostgres.NewSourceAcquisitionRepository(sourceFetcherPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSourceFetcherAuthorityAndHeartbeat(
+		t, ctx, sourceFetcherPool, sourceFetcher, repository,
+	)
 	usecase, err := pipelineconfiguration.NewUsecase(repository, pipelineconfiguration.Config{MaxTransactionAttempts: 5})
 	if err != nil {
 		t.Fatal(err)
@@ -681,7 +696,9 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		_, err := pool.Exec(ctx, `SELECT count(*) FROM delivery.pipeline_run_tasks`)
 		return err
 	})
-	assertRunLifecyclePersistenceAndFencing(t, ctx, admin, workerPool, runController)
+	assertRunLifecyclePersistenceAndFencing(
+		t, ctx, admin, workerPool, sourceFetcher, runController,
+	)
 	assertTerminalAuditFacts(t, ctx, admin)
 	assertCancellationAuditFacts(t, ctx, admin)
 	assertReplayAuditFacts(t, ctx, admin)
@@ -694,10 +711,10 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		t.Fatalf("DevOps Audit worker readiness=%#v err=%v", workerReadiness, err)
 	}
 	snapshot, err := outbox.Snapshot(ctx)
-	if err != nil || snapshot.Pending != 83 || snapshot.Delivered != 0 {
+	if err != nil || snapshot.Pending != 84 || snapshot.Delivered != 0 {
 		t.Fatalf("initial Audit outbox snapshot=%#v err=%v", snapshot, err)
 	}
-	for index := 0; index < 83; index++ {
+	for index := 0; index < 84; index++ {
 		claim, found, err := outbox.Claim(ctx, "audit-worker-integration", 30*time.Second)
 		if err != nil || !found {
 			t.Fatalf("claim Audit event %d=%#v found=%t err=%v", index, claim, found, err)
@@ -725,7 +742,7 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		t.Fatalf("empty Audit claim=%#v found=%t err=%v", claim, found, err)
 	}
 	snapshot, err = outbox.Snapshot(ctx)
-	if err != nil || snapshot.Delivered != 83 || snapshot.Pending != 0 || snapshot.Leased != 0 ||
+	if err != nil || snapshot.Delivered != 84 || snapshot.Pending != 0 || snapshot.Leased != 0 ||
 		snapshot.Retry != 0 || snapshot.DeadLetter != 0 || snapshot.ExpiredLease != 0 {
 		t.Fatalf("delivered Audit outbox snapshot=%#v err=%v", snapshot, err)
 	}
@@ -766,10 +783,10 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 			t.Fatalf("stage legacy source contract fixture %d: %v", index, err)
 		}
 	}
-	if err := devopsmigration.Apply(ctx, adminDSN, apiDSN, workerDSN, sourceObserverDSN); err != nil {
+	if err := devopsmigration.Apply(ctx, adminDSN, apiDSN, sourceFetcherDSN, sourceObserverDSN, workerDSN); err != nil {
 		t.Fatalf("reapply DevOps migration with durable admission data: %v", err)
 	}
-	if err := devopsmigration.VerifyInstalled(ctx, adminDSN, apiDSN, workerDSN, sourceObserverDSN); err != nil {
+	if err := devopsmigration.VerifyInstalled(ctx, adminDSN, apiDSN, sourceFetcherDSN, sourceObserverDSN, workerDSN); err != nil {
 		t.Fatalf("verify reapplied DevOps migration with durable admission data: %v", err)
 	}
 	var migratedOrigin, connectionReason, bindingReason, revisionReason string
@@ -833,8 +850,8 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 	); err != nil {
 		t.Fatalf("read delivery evidence: %v", err)
 	}
-	if mutationCount != 23 || sourceEventCount != 16 || runCount != 34 || runTaskCount != 9 ||
-		operationCount != 83 || auditCount != 83 ||
+	if mutationCount != 23 || sourceEventCount != 16 || runCount != 34 || runTaskCount != 10 ||
+		operationCount != 84 || auditCount != 84 ||
 		bindingRevisionCount != 2 || pipelineRevisionCount != 3 {
 		t.Fatalf(
 			"evidence counts mutation=%d event=%d run=%d task=%d operation=%d audit=%d binding=%d pipeline=%d",
@@ -873,7 +890,7 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		WHERE tenant_id = 'tenant-one' AND id = $1`, connectionID); err != nil {
 		t.Fatalf("stage ambiguous legacy source contract: %v", err)
 	}
-	if err := devopsmigration.Apply(ctx, adminDSN, apiDSN, workerDSN, sourceObserverDSN); err == nil {
+	if err := devopsmigration.Apply(ctx, adminDSN, apiDSN, sourceFetcherDSN, sourceObserverDSN, workerDSN); err == nil {
 		t.Fatal("ambiguous legacy source endpoint migration succeeded")
 	}
 	if _, err := admin.Exec(ctx, `UPDATE delivery.source_connections
@@ -885,6 +902,62 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		)
 		WHERE tenant_id = 'tenant-one' AND id = $1`, connectionID); err != nil {
 		t.Fatalf("restore exact source endpoint after negative gate: %v", err)
+	}
+}
+
+func assertSourceFetcherAuthorityAndHeartbeat(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	sourceFetcher *devopspostgres.SourceAcquisitionRepository,
+	controlPlane *devopspostgres.ControlPlaneRepository,
+) {
+	t.Helper()
+	readiness, err := sourceFetcher.Readiness(ctx)
+	if err != nil || readiness.State != devopsv1.ReadinessNotReady {
+		t.Fatalf("source fetcher admitted a missing heartbeat=%#v err=%v", readiness, err)
+	}
+	apiReadiness, err := controlPlane.Readiness(ctx)
+	if err != nil || apiReadiness.State != devopsv1.ReadinessNotReady {
+		t.Fatalf("DevOps API admitted a missing source fetcher=%#v err=%v", apiReadiness, err)
+	}
+	for _, table := range []string{
+		"pipeline_runs", "pipeline_run_tasks", "source_archives",
+		"source_fetcher_heartbeat", "source_connections",
+	} {
+		table := table
+		assertDenied(t, func() error {
+			_, deniedErr := pool.Exec(ctx, `SELECT count(*) FROM delivery.`+table)
+			return deniedErr
+		})
+	}
+	assertDenied(t, func() error {
+		_, deniedErr := pool.Exec(
+			ctx, `SELECT * FROM delivery.claim_pipeline_run_task('forged-fetcher', 30)`,
+		)
+		return deniedErr
+	})
+	var callableFunctions int
+	if err := pool.QueryRow(ctx, `SELECT count(*)
+		  FROM pg_catalog.pg_proc AS procedure
+		  JOIN pg_catalog.pg_namespace AS namespace
+		    ON namespace.oid = procedure.pronamespace
+		 WHERE namespace.nspname = 'delivery'
+		   AND has_function_privilege(current_user, procedure.oid, 'EXECUTE')`).Scan(
+		&callableFunctions,
+	); err != nil || callableFunctions != 5 {
+		t.Fatalf("source fetcher callable function count=%d err=%v", callableFunctions, err)
+	}
+	if _, err := sourceFetcher.Heartbeat(ctx, "source-fetcher-integration"); err != nil {
+		t.Fatalf("record source fetcher heartbeat: %v", err)
+	}
+	readiness, err = sourceFetcher.Readiness(ctx)
+	if err != nil || readiness.State != devopsv1.ReadinessReady {
+		t.Fatalf("source fetcher readiness=%#v err=%v", readiness, err)
+	}
+	apiReadiness, err = controlPlane.Readiness(ctx)
+	if err != nil || apiReadiness.State != devopsv1.ReadinessReady {
+		t.Fatalf("DevOps API source-fetcher readiness=%#v err=%v", apiReadiness, err)
 	}
 }
 
@@ -1217,9 +1290,9 @@ func assertTerminalAuditFacts(t *testing.T, ctx context.Context, admin *pgx.Conn
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if count != 7 || counts[auditv1.OutcomeSucceeded] != 1 ||
+	if count != 8 || counts[auditv1.OutcomeSucceeded] != 1 ||
 		counts[auditv1.OutcomeCancelled] != 5 || counts[auditv1.OutcomeManualIntervention] != 1 ||
-		counts[auditv1.OutcomeFailed] != 0 || actorCounts["system-devops-run-worker"] != 5 ||
+		counts[auditv1.OutcomeFailed] != 1 || actorCounts["system-devops-run-worker"] != 6 ||
 		actorCounts["system-devops-run-control"] != 2 {
 		t.Fatalf("PipelineRun terminal Audit outcome counts=%#v actors=%#v total=%d", counts, actorCounts, count)
 	}
@@ -1337,6 +1410,7 @@ func assertRunLifecyclePersistenceAndFencing(
 	ctx context.Context,
 	admin *pgx.Conn,
 	workerPool *pgxpool.Pool,
+	sourceFetcher *devopspostgres.SourceAcquisitionRepository,
 	runController *runcontrol.Service,
 ) {
 	t.Helper()
@@ -1349,24 +1423,49 @@ func assertRunLifecyclePersistenceAndFencing(
 		t.Fatal(err)
 	}
 
-	first, found, err := queue.ClaimNext(ctx, "run-worker-first")
+	if lease, found, err := queue.ClaimNext(ctx, "run-worker-no-fetch"); err != nil || found {
+		t.Fatalf("general worker claimed FETCH=%#v found=%t err=%v", lease, found, err)
+	}
+	firstCommand, found, err := sourceFetcher.Claim(
+		ctx, "source-fetcher-first", sourceacquisition.LeaseDuration,
+	)
+	first := firstCommand.Lease
 	if err != nil || !found || first.Mode != runlifecycle.ClaimExecute ||
 		first.Run.Status.State != devopsv1.PipelineRunFetching ||
 		first.Intent.Stage != devopsv1.PipelineRunStageFetch || first.FencingToken != 1 {
 		t.Fatalf("first PipelineRun task claim=%#v found=%t err=%v", first, found, err)
 	}
-	renewedFirst, err := queue.Renew(ctx, first)
-	if err != nil || renewedFirst.LeaseExpiresAt.Before(first.LeaseExpiresAt) {
-		t.Fatalf("renew first PipelineRun task=%#v err=%v", renewedFirst, err)
+	_, err = admin.Exec(
+		ctx,
+		`SELECT delivery.advance_pipeline_run_task(
+		    $1, $2, $3, $4, $5, 'VERIFYING', NULL, '{}'::jsonb, NULL
+		)`,
+		first.TenantID,
+		first.Run.ID,
+		first.Intent.CommandID,
+		first.WorkerID,
+		int64(first.FencingToken),
+	)
+	assertPostgresCode(t, err, "55000")
+	renewedFirst, err := sourceFetcher.Renew(
+		ctx, first.Guard(), sourceacquisition.LeaseDuration,
+	)
+	if err != nil || renewedFirst.Before(first.LeaseExpiresAt) {
+		t.Fatalf("renew first PipelineRun task=%s err=%v", renewedFirst, err)
 	}
 	makeRunTaskDue(t, ctx, admin, first.Intent.CommandID)
-	recovered, found, err := queue.ClaimNext(ctx, "run-worker-recovered")
+	recoveredCommand, found, err := sourceFetcher.Claim(
+		ctx, "source-fetcher-recovered", sourceacquisition.LeaseDuration,
+	)
+	recovered := recoveredCommand.Lease
 	if err != nil || !found || recovered.Mode != runlifecycle.ClaimObserve ||
 		recovered.Run.ID != first.Run.ID || recovered.Intent != first.Intent ||
 		recovered.FencingToken != first.FencingToken+1 {
 		t.Fatalf("recovered PipelineRun task claim=%#v found=%t err=%v", recovered, found, err)
 	}
-	if _, err := queue.Renew(ctx, first); !errors.Is(err, runlifecycle.ErrStaleLease) {
+	if _, err := sourceFetcher.Renew(
+		ctx, first.Guard(), sourceacquisition.LeaseDuration,
+	); !errors.Is(err, runlifecycle.ErrStaleLease) {
 		t.Fatalf("stale PipelineRun task renewal error=%v", err)
 	}
 	_, err = queue.Advance(ctx, runlifecycle.Transition{
@@ -1375,8 +1474,10 @@ func assertRunLifecyclePersistenceAndFencing(
 	if !errors.Is(err, runlifecycle.ErrStaleLease) {
 		t.Fatalf("stale PipelineRun task fence error=%v", err)
 	}
-	if _, err := queue.Advance(ctx, runlifecycle.Transition{
-		Lease: recovered, State: devopsv1.PipelineRunVerifying,
+	if _, err := sourceFetcher.Complete(ctx, sourceacquisition.Completion{
+		Command: recoveredCommand,
+		State:   devopsv1.PipelineRunVerifying,
+		Receipt: sourceArchiveReceipt(recoveredCommand),
 	}); err != nil {
 		t.Fatalf("complete recovered fetch task: %v", err)
 	}
@@ -1402,12 +1503,12 @@ func assertRunLifecyclePersistenceAndFencing(
 		t.Fatalf("complete successful PipelineRun=%#v err=%v", succeeded, err)
 	}
 
-	fetch := claimExpectedRunStage(
-		t, ctx, queue, "", devopsv1.PipelineRunFetching,
-		devopsv1.PipelineRunStageFetch,
-	)
-	if _, err := queue.Advance(ctx, runlifecycle.Transition{
-		Lease: fetch, State: devopsv1.PipelineRunVerifying,
+	fetchCommand := claimExpectedSourceFetch(t, ctx, sourceFetcher, "")
+	fetch := fetchCommand.Lease
+	if _, err := sourceFetcher.Complete(ctx, sourceacquisition.Completion{
+		Command: fetchCommand,
+		State:   devopsv1.PipelineRunVerifying,
+		Receipt: sourceArchiveReceipt(fetchCommand),
 	}); err != nil {
 		t.Fatalf("advance reconciliation run to verify: %v", err)
 	}
@@ -1468,10 +1569,8 @@ func assertRunLifecyclePersistenceAndFencing(
 		t.Fatalf("complete manual-intervention PipelineRun=%#v err=%v", manual, err)
 	}
 
-	cancelledTask := claimExpectedRunStage(
-		t, ctx, queue, "", devopsv1.PipelineRunFetching,
-		devopsv1.PipelineRunStageFetch,
-	)
+	cancelledCommand := claimExpectedSourceFetch(t, ctx, sourceFetcher, "")
+	cancelledTask := cancelledCommand.Lease
 	pending, err := runController.Cancel(ctx, runcontrol.CancelCommand{
 		Authorization: auth(
 			iamv1.ActionDevOpsRunCancel, iamv1.ResourcePipelineRun, cancelledTask.Run.ID,
@@ -1484,35 +1583,58 @@ func assertRunLifecyclePersistenceAndFencing(
 		pending.Value.Status.State != devopsv1.PipelineRunFetching {
 		t.Fatalf("request active PipelineRun cancellation=%#v err=%v", pending, err)
 	}
-	if _, err := queue.Renew(ctx, cancelledTask); !errors.Is(err, runlifecycle.ErrStaleLease) {
+	if _, err := sourceFetcher.Renew(
+		ctx, cancelledTask.Guard(), sourceacquisition.LeaseDuration,
+	); !errors.Is(err, runlifecycle.ErrStaleLease) {
 		t.Fatalf("cancelled PipelineRun retained its old lease: %v", err)
 	}
-	staleCancellation := cancelledTask
-	staleCancellation.Run = pending.Value
-	if _, err := queue.Advance(ctx, runlifecycle.Transition{
-		Lease: staleCancellation, State: devopsv1.PipelineRunCancelled,
-		Reason: devopsv1.PipelineRunReasonCancelled,
+	staleCancellation := cancelledCommand
+	staleCancellation.Lease.Run = pending.Value
+	if _, err := sourceFetcher.Complete(ctx, sourceacquisition.Completion{
+		Command: staleCancellation,
+		State:   devopsv1.PipelineRunCancelled,
+		Reason:  devopsv1.PipelineRunReasonCancelled,
 	}); !errors.Is(err, runlifecycle.ErrStaleLease) {
 		t.Fatalf("cancelled PipelineRun accepted its old fence: %v", err)
 	}
-	recoveredCancellation := claimExpectedRunStage(
-		t, ctx, queue, cancelledTask.Run.ID, devopsv1.PipelineRunFetching,
-		devopsv1.PipelineRunStageFetch,
+	recoveredCancellationCommand := claimExpectedSourceFetch(
+		t, ctx, sourceFetcher, cancelledTask.Run.ID,
 	)
+	recoveredCancellation := recoveredCancellationCommand.Lease
 	if recoveredCancellation.Mode != runlifecycle.ClaimObserve ||
 		recoveredCancellation.Intent != cancelledTask.Intent ||
 		recoveredCancellation.Run.Status.CancellationRequestedAt == nil {
 		t.Fatalf("cancelled PipelineRun did not recover its exact intent: %#v", recoveredCancellation)
 	}
-	cancelled, err := queue.Advance(ctx, runlifecycle.Transition{
-		Lease: recoveredCancellation, State: devopsv1.PipelineRunCancelled,
-		Reason: devopsv1.PipelineRunReasonCancelled,
+	cancelled, err := sourceFetcher.Complete(ctx, sourceacquisition.Completion{
+		Command: recoveredCancellationCommand,
+		State:   devopsv1.PipelineRunCancelled,
+		Reason:  devopsv1.PipelineRunReasonCancelled,
 	})
 	if err != nil || cancelled.Status.CompletedAt == nil ||
 		cancelled.Status.Stage != devopsv1.PipelineRunStageFetch ||
 		cancelled.Status.CancellationRequestedAt == nil ||
 		!cancelled.Status.CancellationRequestedAt.Equal(*pending.Value.Status.CancellationRequestedAt) {
 		t.Fatalf("complete active PipelineRun cancellation=%#v err=%v", cancelled, err)
+	}
+
+	failureCommand := claimExpectedSourceFetch(t, ctx, sourceFetcher, "")
+	failed, err := sourceFetcher.Complete(ctx, sourceacquisition.Completion{
+		Command: failureCommand,
+		State:   devopsv1.PipelineRunFailed,
+		Reason:  devopsv1.PipelineRunReasonSourceUnavailable,
+	})
+	if err != nil || failed.Status.State != devopsv1.PipelineRunFailed ||
+		failed.Status.Reason != devopsv1.PipelineRunReasonSourceUnavailable {
+		t.Fatalf("complete failed source fetch=%#v err=%v", failed, err)
+	}
+	var failedReceiptCount int
+	if err := admin.QueryRow(
+		ctx,
+		`SELECT count(*) FROM delivery.source_archives WHERE run_id = $1`,
+		failureCommand.Lease.Run.ID,
+	).Scan(&failedReceiptCount); err != nil || failedReceiptCount != 0 {
+		t.Fatalf("failed source fetch receipt count=%d err=%v", failedReceiptCount, err)
 	}
 
 	type claimResult struct {
@@ -1526,8 +1648,12 @@ func assertRunLifecyclePersistenceAndFencing(
 		index := index
 		go func() {
 			<-startClaims
-			lease, found, err := queue.ClaimNext(ctx, fmt.Sprintf("run-worker-quota-%d", index))
-			claimResults <- claimResult{lease: lease, found: found, err: err}
+			command, found, err := sourceFetcher.Claim(
+				ctx,
+				fmt.Sprintf("source-fetcher-quota-%d", index),
+				sourceacquisition.LeaseDuration,
+			)
+			claimResults <- claimResult{lease: command.Lease, found: found, err: err}
 		}()
 	}
 	close(startClaims)
@@ -1557,20 +1683,37 @@ func assertRunLifecyclePersistenceAndFencing(
 			pending.Value.Status.CompletedAt != nil {
 			t.Fatalf("request quota PipelineRun cancellation=%#v err=%v", pending, err)
 		}
-		if _, err := queue.Renew(ctx, active); !errors.Is(err, runlifecycle.ErrStaleLease) {
+		if _, err := sourceFetcher.Renew(
+			ctx, active.Guard(), sourceacquisition.LeaseDuration,
+		); !errors.Is(err, runlifecycle.ErrStaleLease) {
 			t.Fatalf("quota PipelineRun retained its old lease: %v", err)
 		}
-		recovered = claimExpectedRunStage(
-			t, ctx, queue, active.Run.ID, devopsv1.PipelineRunFetching,
-			devopsv1.PipelineRunStageFetch,
-		)
-		if _, err := queue.Advance(ctx, runlifecycle.Transition{
-			Lease:  recovered,
-			State:  devopsv1.PipelineRunCancelled,
-			Reason: devopsv1.PipelineRunReasonCancelled,
+		recoveredCommand = claimExpectedSourceFetch(t, ctx, sourceFetcher, active.Run.ID)
+		recovered = recoveredCommand.Lease
+		if _, err := sourceFetcher.Complete(ctx, sourceacquisition.Completion{
+			Command: recoveredCommand,
+			State:   devopsv1.PipelineRunCancelled,
+			Reason:  devopsv1.PipelineRunReasonCancelled,
 		}); err != nil {
 			t.Fatalf("cancel quota test PipelineRun: %v", err)
 		}
+	}
+	var archiveCount, invalidArchiveCount int
+	if err := admin.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM delivery.source_archives),
+		(SELECT count(*)
+		   FROM delivery.source_archives AS archive
+		   JOIN delivery.pipeline_run_tasks AS task
+		     ON task.tenant_id = archive.tenant_id
+		    AND task.run_id = archive.run_id
+		    AND task.command_id = archive.command_id
+		  WHERE task.stage <> 'FETCH' OR task.status <> 'COMPLETED')`).Scan(
+		&archiveCount, &invalidArchiveCount,
+	); err != nil || archiveCount != 2 || invalidArchiveCount != 0 {
+		t.Fatalf(
+			"source archive receipts=%d invalid=%d err=%v",
+			archiveCount, invalidArchiveCount, err,
+		)
 	}
 }
 
@@ -1593,6 +1736,46 @@ func claimExpectedRunStage(
 		)
 	}
 	return lease
+}
+
+func claimExpectedSourceFetch(
+	t *testing.T,
+	ctx context.Context,
+	repository *devopspostgres.SourceAcquisitionRepository,
+	expectedRunID devopsv1.ResourceID,
+) sourceacquisition.Command {
+	t.Helper()
+	command, found, err := repository.Claim(
+		ctx, "source-fetcher-current", sourceacquisition.LeaseDuration,
+	)
+	if err != nil || !found ||
+		(expectedRunID != "" && command.Lease.Run.ID != expectedRunID) ||
+		command.Lease.Run.Status.State != devopsv1.PipelineRunFetching ||
+		command.Lease.Intent.Stage != devopsv1.PipelineRunStageFetch {
+		t.Fatalf(
+			"claim FETCH run=%s returned %#v found=%t err=%v",
+			expectedRunID, command, found, err,
+		)
+	}
+	return command
+}
+
+func sourceArchiveReceipt(
+	command sourceacquisition.Command,
+) *sourceacquisition.SourceArchiveReceipt {
+	return &sourceacquisition.SourceArchiveReceipt{
+		TenantID:          command.Lease.TenantID,
+		RunID:             command.Lease.Run.ID,
+		CommandID:         command.Lease.Intent.CommandID,
+		InputDigest:       command.Lease.Run.InputDigest,
+		HeadCommit:        command.Lease.Run.Input.Change.HeadCommit,
+		TrustedBaseCommit: command.Lease.Run.Input.Change.TrustedBaseCommit,
+		MediaType:         sourceacquisition.ArchiveMediaType,
+		ArchiveDigest:     "sha256:" + strings.Repeat("a", 64),
+		ArchiveBytes:      1024,
+		ExpandedBytes:     4096,
+		PathCount:         2,
+	}
 }
 
 func makeRunTaskDue(t *testing.T, ctx context.Context, admin *pgx.Conn, commandID string) {

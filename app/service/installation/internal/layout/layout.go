@@ -21,6 +21,7 @@ const (
 	PaaSWorker           = "secrets/database/paas-worker-dsn"
 	DevOpsAPI            = "secrets/database/devops-api-dsn"
 	DevOpsWorker         = "secrets/database/devops-worker-dsn"
+	DevOpsSourceFetcher  = "secrets/database/devops-source-fetcher-dsn"
 	DevOpsSourceObserver = "secrets/database/devops-source-observer-dsn"
 
 	IAMBootstrap                   = "secrets/authority/iam-bootstrap.json"
@@ -42,6 +43,7 @@ const (
 	DevOpsWebhookCredentialRoot = "secrets/devops/source-webhooks"
 	DevOpsFetchCredentialRoot   = "secrets/devops/source-fetch"
 	DevOpsReportCredentialRoot  = "secrets/devops/source-report"
+	DevOpsSourceArchiveRoot     = "data/devops/source-archives"
 	BackupDirectory             = "backups"
 	SupportDirectory            = "support"
 )

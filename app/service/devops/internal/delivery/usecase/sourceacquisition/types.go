@@ -194,7 +194,7 @@ func ValidateReceipt(command Command, value SourceArchiveReceipt) error {
 	return nil
 }
 
-func validateCompletion(value Completion) error {
+func ValidateCompletion(value Completion) error {
 	if err := ValidateCommand(value.Command); err != nil {
 		return err
 	}
