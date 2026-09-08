@@ -6,7 +6,7 @@
 - Updated: 2026-09-08
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `b796b51`
+- Current pushed implementation baseline: `32b8035`
 
 ## Goal
 
@@ -63,12 +63,24 @@ architecture, FEAT, implementation, test, and release gates.
   closed. Windows race/repetition and fixed disconnected Linux/amd64 suites
   pass, including the Linux handoff of only this source root to both immutable
   Docker step plans; no repository code executes yet.
+- Pushed `32b8035` adds the runner-owned, run-shared native-output boundary.
+  A strict Docker multiplex decoder reconstructs split stdout/stderr lines and
+  emits monotonic UTF-8 chunks while independently bounding native and
+  normalized bytes to 8 MiB, lines to 16 KiB, and chunks to 64 KiB. Unsafe
+  lines are replaced in full for invalid UTF-8, control/ANSI bytes, credential-
+  shaped assignments and token formats, URL user information, absolute Unix,
+  drive, or UNC paths, and overlong content. Malformed, truncated, empty, or
+  over-budget streams poison the shared budget so a partial parse cannot be
+  resumed. Full tests/vet, Windows race and twenty-run repetition, a 547,883-
+  execution fuzz campaign, and twenty runs in the fixed disconnected Go 1.26.8
+  Linux/amd64 image pass. This is parser/sanitizer evidence only: no container
+  response is wired to it and no normalized log is persisted yet.
 - Full tests and vet, architecture tests, focused race and 20-run suites, and
   the same focused suites run twenty times in the fixed disconnected Go 1.26.8
   Linux/amd64 image with read-only source and no module lookup. The physical
-  dedicated runner process, safe workspace expansion, sandbox execution, real
-  cross-process journey, normalized logs, reporter, UI, and offline release
-  remain pending.
+  dedicated runner process, sandbox lifecycle/cancellation, real response
+  hookup, normalized-log persistence, real cross-process journey, reporter,
+  UI, and offline release remain pending.
 - The user-owned untracked `app/ui/paas/` tree remains untouched.
 
 ## Adoption boundary
@@ -84,9 +96,10 @@ architecture, FEAT, implementation, test, and release gates.
 Continue FEAT-007 with the smallest independently testable physical-execution
 slice behind the accepted BuildExecutor port: add the Docker Engine lifecycle
 for the already-closed step plans with create/attach/start/wait/inspect/kill/
-delete recovery, fixed step/run deadlines, cancellation, bounded normalized
-output, and host-side postcondition checks; then compose the dedicated runner
-process around gateway client, journal, workspace, and sandbox. Do not claim
+delete recovery, fixed step/run deadlines, cancellation, feed the already-
+bounded normalized-output decoder, and verify host-side postconditions; then
+compose the dedicated runner process around gateway client, journal, workspace,
+and sandbox. Do not claim
 repository-code isolation until a dedicated `runsc` node passes the malicious-
 repository and real-runtime gates.
 Keep runner authority away from
