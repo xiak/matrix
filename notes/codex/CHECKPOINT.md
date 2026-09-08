@@ -6,7 +6,7 @@
 - Updated: 2026-09-08
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `bfe834b`
+- Current pushed implementation baseline: `e33e83b`
 
 ## Goal
 
@@ -27,8 +27,11 @@ architecture, FEAT, implementation, test, and release gates.
   Linux/amd64 CGO-disabled full build, a fresh PostgreSQL 18 build journey, and
   the four-product PostgreSQL migration journey pass. Receipt shape, binding,
   digest, stale-fence, renewal, missing-receipt bypass, and passed/failed paths
-  are exercised. The physical isolated runner, transport, sandbox, normalized
-  logs, and reporter remain pending.
+  are exercised. Pushed `e33e83b` also adds the shared read-only archive stream:
+  it re-proves the portable receipt and archive before handoff and detects
+  partial or changed consumption; focused tests pass in the fixed disconnected
+  Go 1.26.8 Linux/amd64 image. The physical isolated runner, transport,
+  sandbox, normalized logs, and reporter remain pending.
 - The user-owned untracked `app/ui/paas/` tree remains untouched.
 
 ## Adoption boundary
