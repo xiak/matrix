@@ -559,6 +559,60 @@ report. Native output, diagnostics, container identifiers, paths, and logs are
 not receipt fields; bounded normalized-log storage is a separate pending
 boundary.
 
+#### Executor control and runner transport
+
+The native adapter is split at the security boundary into three selected-only
+processes. `matrix-devops-build-worker` owns the table-blind PostgreSQL lease,
+the read-only source-archive mount, and an admin-client identity for one
+executor gateway. `matrix-devops-executor-gateway` owns a private durable
+execution spool and two mutually authenticated TLS listeners, but no
+PostgreSQL, IAM, Audit, source-provider, reporter, PaaS, Docker-socket, or
+source-archive authority. `matrix-devops-runner` lives only on an eligible
+dedicated runner node, initiates outbound connections to the runner listener,
+and owns the local Docker/runsc execution side effect. The build worker never
+receives the runner's Docker authority, and the runner never joins a Matrix
+product or database network.
+
+The gateway's admin listener accepts only the build-worker certificate and
+supports the three `BuildExecutor` operations: create-or-observe one
+deterministic execution with its bounded source stream, observe it, and request
+cancellation. The runner listener trusts a separate runner-client root and
+supports only oldest-eligible assignment claim, current-fence renewal with a
+cancellation flag, and current-fence terminal completion. It exposes no admin
+operation. Both listeners require TLS 1.3, an exact configured server identity,
+bounded headers and bodies, no proxy or redirect, and strict canonical
+versioned documents from `api/adapter/devopsbuild/v1`; bearer tokens, cookies,
+caller-selected URLs, native Docker data, paths, argv, and environment fields
+are absent.
+
+An admin create streams a length-framed canonical `BuildRequest` followed by
+exactly the declared archive bytes. The gateway revalidates the closed request,
+structurally inspects and hashes the archive, then fsyncs a private staging
+directory and atomically publishes the execution before acknowledging. Its
+identity is a framed SHA-256 over the command, immutable input, revision, and
+archive digests. Equal create observes the existing execution; changed use of
+the same command conflicts. `Execute`, `Observe`, and `Cancel` therefore survive
+gateway or build-worker restart without creating a second execution.
+
+The first runner assignment alone authorizes execution and receives the exact
+request and archive. It has a database-independent 30-second lease and a
+monotonic gateway fencing token. An expired assignment is never offered to a
+different runner for execution: only the same certificate-bound runner may
+recover it in `OBSERVE` or `CANCEL` mode from its private local journal;
+otherwise the gateway reports an unknown outcome until the fixed deadline or
+operator intervention. Renewal cannot extend the build deadline and carries
+only the cancellation bit. A terminal receipt must match the current runner,
+fence, request, fixed profile, step order, and digest before its atomic durable
+publication; native output is rejected. Acknowledgement loss is equal replay,
+while a changed terminal replay is a conflict.
+
+This adapts Prow's observe-before-create, state-specific timeout, bounded grace,
+and durable result-marker behavior. It deliberately replaces Pod identity,
+cluster/cache semantics, environment-carried job configuration, and storage
+sidecars with Matrix command identity, a private spool, mTLS roles, leases,
+fencing, and normalized receipts. No Prow package or object enters the
+protocol.
+
 Untrusted verification never runs on the Foundation/Application-PaaS host.
 The accepted profile requires a dedicated Linux/amd64 runner node with no
 tenant runtime or control-plane data, Docker `29.x`, and gVisor
