@@ -14,7 +14,6 @@ import {
   Activity,
   Boxes,
   ChartNoAxesCombined,
-  ChevronDown,
   ChevronRight,
   CircleGauge,
   Database,
@@ -64,6 +63,7 @@ import { ExperienceIconTile } from "./ExperienceIconTile";
 import headerToolStyles from "./HeaderTool.module.css";
 import { NotificationCenter } from "./NotificationCenter";
 import { ProductLauncher } from "./ProductLauncher";
+import { CompactScopeSwitcher, HeaderScopeControls } from "./ScopeSwitcher";
 import styles from "./ConsoleShellRenderer.module.css";
 
 const railIcons = {
@@ -195,6 +195,7 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
   const [projectId, setProjectId] = useState("all");
   const [regionId, setRegionId] = useState("all");
   const [productMenuOpen, setProductMenuOpen] = useState(false);
+  const [scopeOpen, setScopeOpen] = useState(false);
   const [noticesOpen, setNoticesOpen] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -216,6 +217,7 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
       if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === "k") {
         event.preventDefault();
         setProductMenuOpen(false);
+        setScopeOpen(false);
         setNoticesOpen(false);
         setAccountMenuOpen(false);
         setSearchOpen(true);
@@ -225,6 +227,7 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
         closeSidebar();
         closeWorkspace();
         setProductMenuOpen(false);
+        setScopeOpen(false);
         setNoticesOpen(false);
         setAccountMenuOpen(false);
         setSearchOpen(false);
@@ -257,7 +260,7 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
   const workspaceVisible = Boolean(scene.workspace && workspaceOpen);
   const principal = session.current;
   const productResults = scene.search.filter((item) => item.category === "产品");
-  const globalOverlayOpen = productMenuOpen || noticesOpen || accountMenuOpen || searchOpen;
+  const globalOverlayOpen = productMenuOpen || scopeOpen || noticesOpen || accountMenuOpen || searchOpen;
   const ProductContextIcon = railIcons[scene.productIcon];
   const principalName = principal?.loginName ?? "用户";
   const principalId = principal?.session.principalId ?? "IAM session";
@@ -267,6 +270,7 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
 
   function closeGlobalOverlays() {
     setProductMenuOpen(false);
+    setScopeOpen(false);
     setNoticesOpen(false);
     setAccountMenuOpen(false);
     setSearchOpen(false);
@@ -319,6 +323,7 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
                   onOpenChange={(open) => {
                     setProductMenuOpen(open);
                     if (!open) return;
+                    setScopeOpen(false);
                     setNoticesOpen(false);
                     setAccountMenuOpen(false);
                     setSearchOpen(false);
@@ -344,6 +349,7 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
                   onFocus={() => {
                     setSearchOpen(true);
                     setProductMenuOpen(false);
+                    setScopeOpen(false);
                     setNoticesOpen(false);
                     setAccountMenuOpen(false);
                   }}
@@ -367,11 +373,7 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
 
             <div className={styles.topbarTools}>
               {scene.preview && scene.scope ? (
-                <div aria-label="全局资源范围" className={styles.scopeControls}>
-                  <span className={styles.organizationScope}><ShieldCheck aria-hidden="true" /><span>{scene.scope.organization.name}</span></span>
-                  <label><span>项目</span><select aria-label="选择项目范围" onChange={(event) => setProjectId(event.target.value)} value={projectId}>{scene.scope.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select><ChevronDown aria-hidden="true" /></label>
-                  <label><span>区域</span><select aria-label="选择区域范围" onChange={(event) => setRegionId(event.target.value)} value={regionId}>{scene.scope.regions.map((region) => <option key={region.id} value={region.id}>{region.name}</option>)}</select><ChevronDown aria-hidden="true" /></label>
-                </div>
+                <HeaderScopeControls onProjectChange={setProjectId} onRegionChange={setRegionId} projectId={projectId} regionId={regionId} scope={scene.scope} />
               ) : null}
               {scene.preview ? <span className={styles.previewChip}>MOCK 体验</span> : null}
               {scene.preview ? <Link aria-label={`操作与任务，${scene.activeOperationCount} 个执行中`} className={`${headerToolStyles.iconButton} ${styles.operationShortcut}`} href="/console/operations/"><Activity aria-hidden="true" />{scene.activeOperationCount ? <span>{scene.activeOperationCount}</span> : null}</Link> : null}
@@ -383,6 +385,7 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
                     setNoticesOpen(open);
                     if (!open) return;
                     setProductMenuOpen(false);
+                    setScopeOpen(false);
                     setAccountMenuOpen(false);
                     setSearchOpen(false);
                   }}
@@ -401,6 +404,7 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
                   setAccountMenuOpen(open);
                   if (!open) return;
                   setProductMenuOpen(false);
+                  setScopeOpen(false);
                   setNoticesOpen(false);
                   setSearchOpen(false);
                 }}
@@ -468,6 +472,24 @@ function ConsoleShell({ accountRepository }: { accountRepository?: AccountReposi
                 </ContentPage.Header>
                 <ContentPage.Body>
                   <div className={styles.pageCanvas}>
+                    {scene.preview && scene.scope ? (
+                      <CompactScopeSwitcher
+                        onOpenChange={(open) => {
+                          setScopeOpen(open);
+                          if (!open) return;
+                          setProductMenuOpen(false);
+                          setNoticesOpen(false);
+                          setAccountMenuOpen(false);
+                          setSearchOpen(false);
+                        }}
+                        onProjectChange={setProjectId}
+                        onRegionChange={setRegionId}
+                        open={scopeOpen}
+                        projectId={projectId}
+                        regionId={regionId}
+                        scope={scene.scope}
+                      />
+                    ) : null}
                     <div className={styles.pageIntro}>{scene.description}</div>
                     {session.error ? <div className={styles.errorBanner} role="alert"><ShieldCheck aria-hidden="true" /><span>{session.error}</span></div> : null}
                     {controlPlane.error ? <div className={styles.errorBanner} role="alert"><ServerCog aria-hidden="true" /><span>{controlPlane.error}</span></div> : null}

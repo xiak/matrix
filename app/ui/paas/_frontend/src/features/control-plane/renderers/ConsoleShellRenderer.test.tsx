@@ -225,5 +225,12 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.getByRole("link", { name: "edge-worker-01" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "Matrix 开发库" })).toBeTruthy();
     expect(screen.queryByRole("link", { name: "订单主库" })).toBeNull();
+
+    const compactScope = screen.getByRole("button", { name: /打开资源范围，项目 平台研发 · 测试/ });
+    await user.click(compactScope);
+    expect((screen.getByRole("combobox", { name: "紧凑模式选择项目范围" }) as HTMLSelectElement).value).toBe("platform-dev");
+    await user.click(screen.getByRole("button", { name: "打开产品与服务" }));
+    expect(screen.queryByRole("dialog", { name: "资源范围" })).toBeNull();
+    expect(screen.getByRole("dialog", { name: "云产品入口" })).toBeTruthy();
   });
 });

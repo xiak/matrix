@@ -319,7 +319,10 @@ The interaction contract includes:
 - product, notification, and account header popovers focus their first action
   on open and restore the triggering control when `Escape` dismisses them;
 - persistent project and region scope that immediately filters resource
-  collections without hiding the active scope;
+  collections without hiding the active scope. Desktop keeps native selectors
+  in the global header; narrower canvases replace them with a visible account,
+  project, and region summary whose dialog focuses the first selector and
+  restores its trigger on explicit dismissal;
 - global running-Operation and notification indicators, with progress,
   severity, owner, and time visible before entering a detail page;
 - one global principal entry in the header; its account panel owns tenant and
@@ -453,7 +456,7 @@ and `git diff --check` gates must pass on the same committed worktree.
   public-component chain, twelve static routes, memory-only IAM sessions,
   deterministic Go embedding, strict CSP hashes, and a four-region shell.
   The console layout retains its provider across child-route navigation.
-  Source gates cover the light theme, 20 semantic contrast pairs, and 73
+  Source gates cover the light theme, 20 semantic contrast pairs, and 75
   frontend tests, including visible failed revocation, logout during failed
   or pending resource loads, keyboard workspace sizing, and native instance-ID
   validation. The installed `44fa1c7` candidate proves the light login page,
@@ -496,7 +499,12 @@ and `git diff --check` gates must pass on the same committed worktree.
   navigation drawer. A separate `360px` inspection proved the open drawer and
   resource workspace match the viewport width without page-level horizontal
   overflow. A follow-up compact-header audit found and replaced an unnamed
-  product trigger. Product discovery and notifications now use independently
+  product trigger, then found that global project and region scope disappeared
+  below `1120px`. The resulting `ScopeSwitcher` keeps desktop selectors and
+  adds a visible compact scope summary and focus-managed dialog; browser checks
+  at medium and narrower-than-`360px` widths proved synchronized scope changes,
+  immediate resource filtering, trigger focus return, and no page overflow.
+  Product discovery and notifications now use independently
   tested `ProductLauncher` and `NotificationCenter` composites over one shared
   header-popover surface; both keep explicit compact names, move focus into the
   panel, and restore it on `Escape`. Principal identity and logout live in one

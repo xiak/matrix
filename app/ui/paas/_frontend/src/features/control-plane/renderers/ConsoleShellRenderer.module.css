@@ -25,8 +25,7 @@
 .topbarStart,
 .topbarTools,
 .loadingPath,
-.legacyPath,
-.organizationScope {
+.legacyPath {
   display: flex;
   align-items: center;
 }
@@ -40,7 +39,6 @@
 }
 
 .brand:focus-visible,
-.scopeControls label:focus-within,
 .globalSearch:focus-within {
   box-shadow: var(--xiak-shadow-focus);
 }
@@ -255,78 +253,6 @@
   flex: none;
   justify-content: flex-end;
   gap: var(--xiak-spacing-tight);
-}
-
-.scopeControls {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: var(--xiak-spacing-narrow);
-}
-
-.organizationScope {
-  max-width: 136px;
-  min-height: 34px;
-  gap: var(--xiak-spacing-tight);
-  padding-inline: var(--xiak-spacing-tight);
-  color: var(--xiak-color-text-global-muted);
-  font-size: var(--xiak-font-size-caption);
-}
-
-.organizationScope svg {
-  width: 15px;
-  height: 15px;
-}
-
-.organizationScope span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.scopeControls label {
-  position: relative;
-  display: grid;
-  min-width: 116px;
-  height: 34px;
-  grid-template-columns: auto 1fr auto;
-  align-items: center;
-  border: var(--xiak-border-width) var(--xiak-border-style) var(--xiak-color-border-global);
-  border-radius: var(--xiak-radius-control);
-  background: var(--xiak-color-bg-global-hover);
-  color: var(--xiak-color-text-global-muted);
-  outline: none;
-}
-
-.scopeControls label > span {
-  padding-left: var(--xiak-spacing-tight);
-  font-size: var(--xiak-font-size-caption);
-}
-
-.scopeControls select {
-  min-width: 0;
-  height: 100%;
-  appearance: none;
-  border: 0;
-  padding: 0 var(--xiak-spacing-tight);
-  background: transparent;
-  color: var(--xiak-color-text-global);
-  font: inherit;
-  font-size: var(--xiak-font-size-caption);
-  font-weight: var(--xiak-font-weight-medium);
-  outline: none;
-}
-
-.scopeControls option {
-  background: var(--xiak-color-bg-panel);
-  color: var(--xiak-color-text-base);
-}
-
-.scopeControls label > svg {
-  width: 12px;
-  height: 12px;
-  margin-right: var(--xiak-spacing-tight);
-  pointer-events: none;
 }
 
 .previewChip {
@@ -829,25 +755,7 @@
   line-height: 1.6;
 }
 
-@container matrix-control-shell (max-width: 1380px) {
-  .organizationScope {
-    display: none;
-  }
-
-  .scopeControls label {
-    min-width: 104px;
-  }
-
-  .scopeControls label > span {
-    display: none;
-  }
-}
-
 @container matrix-control-shell (max-width: 1120px) {
-  .scopeControls {
-    display: none;
-  }
-
   .globalSearch {
     width: min(var(--xiak-layout-search-width), 44vw);
   }
