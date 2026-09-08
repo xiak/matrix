@@ -6,7 +6,7 @@
 - Updated: 2026-09-09
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `c8f0f16`
+- Current pushed implementation baseline: `f32ed05`
 
 ## Goal
 
@@ -28,9 +28,16 @@ architecture, FEAT, implementation, test, and release gates.
   remains under its distinct node-local root. Enrollment stores public records
   only and rejects foreign installs, changed requests, or self-consistent
   responses that introduce an unpinned authority.
+- Pushed `f32ed05` replaces the incorrect assumption that every Docker store
+  reloads the toolchain under its archive configuration digest. The runner now
+  creates containers only from one fixed Matrix-local tag and accepts the two
+  exact authenticated Docker 29 metadata profiles: source image ID plus local
+  RepoDigest for the containerd store, or archive configuration image ID with
+  no RepoDigest for the classic store. A checked-in integration gate passed in
+  separate network-none Docker `29.6.2` DinD instances for both stores.
 - Full repository tests and vet, focused Windows race detection and twenty
   repetitions, and twenty focused runs in the fixed disconnected Go 1.26.8
-  Linux/amd64 image with read-only source and module cache pass on `c8f0f16`.
+  Linux/amd64 image with read-only source and module cache pass on `f32ed05`.
   Production integration also stages the authentic pinned gVisor `.tar.zstd`
   and saves/re-inspects the authentic pinned toolchain OCI image through a full
   signed-release assembly.
