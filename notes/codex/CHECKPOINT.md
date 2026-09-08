@@ -6,7 +6,7 @@
 - Updated: 2026-09-09
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `502f7ac`
+- Current pushed implementation baseline: `1bfba7c`
 
 ## Goal
 
@@ -19,26 +19,28 @@ architecture, FEAT, implementation, test, and release gates.
 - FEAT-007 remains the authoritative owner and is `In progress`; read it and
   the directly owning code/tests before continuing. Earlier accepted slices are
   preserved in Git and summarized there rather than repeated here.
-- Pushed `502f7ac` closes normalized-log relay and tenant persistence over the
-  prior runner workflow. The runner publishes canonical labeled-line batches
-  under its mTLS identity and gateway fence; the private gateway spool stores
-  at most two ordered batches with exact replay; the build worker drains them
-  while its database lease remains active and persists them before completing
-  VERIFY.
-- PostgreSQL owns tenant-leading forced-RLS log batches and a table-blind
-  current-fence append function that independently proves execution, chunk, and
-  batch digests, ordering, normalization shape, equality/conflict, and the
-  fixed 14-day retention deadline. A failed or unproved drain retains the
-  command for fenced observation.
+- Pushed `1bfba7c` closes the public normalized-log read slice over the prior
+  durable runner-to-PostgreSQL relay. `GET /v1/runs/{runId}/logs` accepts only
+  one canonical optional cursor, authorizes `devops.log.read` against the exact
+  PipelineRun, and returns at most four retained normalized chunks in a bounded
+  `no-store` page. Executor identities, native counters, commands,
+  environments, paths, and integrity digests remain private.
+- PostgreSQL derives tenant and time, conceals foreign runs, reports retention
+  truncation, and atomically records one sanitized IAM-bound log-read Audit fact
+  through an API-only table-blind function. The IAM action no longer invents a
+  separate `PIPELINE_LOG` resource; Go, OpenAPI, and database catalogs bind it
+  to `PIPELINE_RUN`.
 - Evidence on that worktree: full `go test ./...`, full `go vet ./...`, focused
   Windows race detection with twenty repetitions, and twenty focused runs in
   the fixed disconnected Go 1.26.8 Linux/amd64 image with read-only source and
   module cache all pass. A clean fixed PostgreSQL 18.6 instance passes double
-  migration, catalog verification, current/stale fence, replay, tamper,
-  ordering, retention-deadline, and completion-closure checks.
-- This proves durable normalized-log persistence, not its public IAM/Audit read
-  surface, physical runner process, selected release topology, or real
-  repository execution.
+  migration, function privilege verification, four/two-chunk continuation,
+  empty reads, forced tenant concealment, expiry truncation, transactional
+  Audit, and independent resource/action/payload tamper checks; the combined
+  IAM/Audit authority journey also passes.
+- This proves durable normalized-log persistence and its public read boundary,
+  not the physical runner process, selected release topology, reporter effect,
+  or real repository execution under gVisor.
 
 ## Adoption boundary
 
@@ -50,11 +52,13 @@ architecture, FEAT, implementation, test, and release gates.
 
 ## Continuation
 
-Continue FEAT-007 with the tenant-derived public normalized-log read boundary:
-define bounded cursor/page contracts, authorize `devops.log.read` against the
-exact PipelineRun through IAM, commit one sanitized Audit fact, and expose only
-stored normalized chunks. Then compose the dedicated runner process and
-selected release topology around the pushed workflow.
+Continue FEAT-007 by composing the dedicated runner process around the pushed
+runner workflow and adding only the selected DevOps release topology. Preserve
+the existing mTLS runner-only authority, private journal/workspace roots,
+closed Docker/gVisor eligibility, fixed toolchain, bounded renewal, and
+restart-before-effect rules; add process/readiness and architecture gates
+before attempting the real repository journey. Reporter effects remain a
+separate subsequent slice.
 
 Do not claim repository-code isolation until a dedicated Linux/amd64 runner
 with the pinned offline toolchain and `runsc` passes the real no-egress,
