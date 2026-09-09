@@ -122,7 +122,7 @@ func preflightRelease(
 		return err
 	}
 	for _, image := range plan.Bundle.Manifest.Images {
-		present, err := inspectExactImage(ctx, runtimeBoundary, image.ImageID)
+		_, present, err := inspectInstalledReleaseImage(ctx, runtimeBoundary, image)
 		if err != nil {
 			return err
 		}

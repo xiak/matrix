@@ -28,7 +28,7 @@ func configureInstallation(
 		)
 	}
 	for _, image := range staged.Manifest.Images {
-		present, err := inspectExactImage(ctx, runtimeBoundary, image.ImageID)
+		_, present, err := inspectInstalledReleaseImage(ctx, runtimeBoundary, image)
 		if err != nil {
 			return err
 		}
@@ -67,7 +67,7 @@ func configureUpgrade(
 		return errors.Join(platformcommand.ErrEffectVerification, err)
 	}
 	for _, image := range target.Manifest.Images {
-		present, err := inspectExactImage(ctx, runtimeBoundary, image.ImageID)
+		_, present, err := inspectInstalledReleaseImage(ctx, runtimeBoundary, image)
 		if err != nil {
 			return err
 		}
@@ -220,8 +220,12 @@ func artifactCatalogConfig(manifest release.Manifest) ([]byte, error) {
 	entries := make([]apphostingv1.ArtifactCatalogEntry, 0)
 	for _, image := range manifest.Images {
 		if image.Purpose == release.ImageWorkload {
+			imageIDs := image.RuntimeImageIDs()
+			slices.Sort(imageIDs)
 			entries = append(entries, apphostingv1.ArtifactCatalogEntry{
-				ArtifactDigest: image.SourceDigest, ImageID: image.ImageID,
+				ArtifactDigest: image.SourceDigest,
+				LocalReference: image.RuntimeReference(),
+				ImageIDs:       imageIDs,
 			})
 		}
 	}

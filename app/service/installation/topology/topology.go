@@ -99,11 +99,16 @@ func contractDescription() contract {
 	}
 	images := make(map[string]string, len(release.RequiredImages(manifest.Products)))
 	for _, requirement := range release.RequiredImages(manifest.Products) {
-		images[requirement.Component] = "sha256:" + strings.Repeat("0", 64)
-		manifest.Images = append(manifest.Images, release.Image{
+		sourceDigest := "sha256:" + strings.Repeat("0", 64)
+		image := release.Image{
 			Component: requirement.Component, Purpose: requirement.Purpose,
-			SourceDigest: "sha256:" + strings.Repeat("0", 64),
-		})
+			ImageID: sourceDigest, SourceDigest: sourceDigest,
+			LocalReference: release.LocalImageReference(
+				requirement.Component, sourceDigest,
+			),
+		}
+		images[requirement.Component] = image.RuntimeReference()
+		manifest.Images = append(manifest.Images, image)
 	}
 	document := composeDocument{
 		Name:     "matrix-00000000000000000000000000000000",
@@ -119,7 +124,7 @@ func contractDescription() contract {
 		Version: ContractVersion,
 		Substitutions: []string{
 			"installationId", "installationRoot", "listenerAddress", "listenerPort",
-			"releaseId", "releaseBuildId", "sourceCommit", "signedImageIds",
+			"releaseId", "releaseBuildId", "sourceCommit", "signedImageReferences",
 			"verificationArtifactDigest",
 		},
 		Compose: document,
@@ -142,7 +147,7 @@ func Compile(manifest release.Manifest, options Options) (Result, error) {
 	}
 	images := make(map[string]string, len(manifest.Images))
 	for _, image := range manifest.Images {
-		images[image.Component] = image.ImageID
+		images[image.Component] = image.RuntimeReference()
 	}
 	document := composeDocument{
 		Name:     "matrix-" + strings.TrimPrefix(options.InstallationID, "mxi-"),

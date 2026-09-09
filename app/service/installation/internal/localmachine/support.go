@@ -45,17 +45,18 @@ type supportEvidence struct {
 }
 
 type supportComponent struct {
-	Name    string `json:"name"`
-	State   string `json:"state"`
-	ImageID string `json:"imageId"`
+	Name           string `json:"name"`
+	State          string `json:"state"`
+	ImageReference string `json:"imageReference"`
 }
 
 type supportImage struct {
-	Component    string               `json:"component"`
-	Purpose      release.ImagePurpose `json:"purpose"`
-	State        string               `json:"state"`
-	ImageID      string               `json:"imageId"`
-	SourceDigest string               `json:"sourceDigest"`
+	Component      string               `json:"component"`
+	Purpose        release.ImagePurpose `json:"purpose"`
+	State          string               `json:"state"`
+	LocalReference string               `json:"localReference"`
+	ImageIDs       []string             `json:"imageIds"`
+	SourceDigest   string               `json:"sourceDigest"`
 }
 
 func (effects *Effects) WriteSupportEvidence(
@@ -151,7 +152,7 @@ func collectSupportEvidence(
 	images := make([]supportImage, 0, len(installation.bundle.Manifest.Images))
 	allImagesPresent := true
 	for _, image := range installation.bundle.Manifest.Images {
-		present, err := inspectExactImage(ctx, runtimeBoundary, image.ImageID)
+		_, present, err := inspectInstalledReleaseImage(ctx, runtimeBoundary, image)
 		if err != nil {
 			return supportEvidence{}, err
 		}
@@ -162,7 +163,9 @@ func collectSupportEvidence(
 		}
 		images = append(images, supportImage{
 			Component: image.Component, Purpose: image.Purpose, State: state,
-			ImageID: image.ImageID, SourceDigest: image.SourceDigest,
+			LocalReference: image.RuntimeReference(),
+			ImageIDs:       image.RuntimeImageIDs(),
+			SourceDigest:   image.SourceDigest,
 		})
 	}
 	slices.SortFunc(images, func(left, right supportImage) int {
@@ -195,7 +198,7 @@ func collectSupportEvidence(
 			}
 		}
 		components = append(components, supportComponent{
-			Name: name, State: state, ImageID: expected.Image,
+			Name: name, State: state, ImageReference: expected.Image,
 		})
 	}
 	state := supportStateNotReady
@@ -264,7 +267,8 @@ func verifySupportEvidence(
 	allComponentsHealthy := true
 	for index, name := range componentNames {
 		component := evidence.Components[index]
-		if component.Name != name || component.ImageID != expectation.Services[name].Image ||
+		if component.Name != name ||
+			component.ImageReference != expectation.Services[name].Image ||
 			(component.State != supportStateHealthy && component.State != supportStateNotReady &&
 				component.State != supportStateAbsent) {
 			return errors.New("support component evidence is invalid")
@@ -277,7 +281,9 @@ func verifySupportEvidence(
 	for _, image := range plan.Bundle.Manifest.Images {
 		wantImages = append(wantImages, supportImage{
 			Component: image.Component, Purpose: image.Purpose,
-			ImageID: image.ImageID, SourceDigest: image.SourceDigest,
+			LocalReference: image.RuntimeReference(),
+			ImageIDs:       image.RuntimeImageIDs(),
+			SourceDigest:   image.SourceDigest,
 		})
 	}
 	slices.SortFunc(wantImages, func(left, right supportImage) int {
@@ -287,7 +293,9 @@ func verifySupportEvidence(
 	for index, want := range wantImages {
 		observed := evidence.Images[index]
 		if observed.Component != want.Component || observed.Purpose != want.Purpose ||
-			observed.ImageID != want.ImageID || observed.SourceDigest != want.SourceDigest ||
+			observed.LocalReference != want.LocalReference ||
+			!slices.Equal(observed.ImageIDs, want.ImageIDs) ||
+			observed.SourceDigest != want.SourceDigest ||
 			(observed.State != supportStateImagePresent && observed.State != supportStateAbsent) {
 			return errors.New("support image evidence is invalid")
 		}

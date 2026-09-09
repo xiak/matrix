@@ -16,7 +16,7 @@ import (
 )
 
 func TestInstalledCompilerReproducesAcceptedProductlessTopology(t *testing.T) {
-	if actual := ContractDigest(); actual != "sha256:e5db4722f738a46747f1f96a20f16d3188fc92ee0a3daf629ed92c5e822a46f1" {
+	if actual := ContractDigest(); actual != "sha256:1f40c17e44aae93f4a51436f020b2ccfad4402907e44019e3c3d2fd9b0ed4272" {
 		t.Fatalf("current topology contract digest drifted: %s", actual)
 	}
 	if actual := legacyProductlessImplementationDigest(); actual != legacyProductlessContractDigest {
@@ -248,6 +248,10 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 		"paas-audit-dispatcher": "paas",
 		"paas-worker":           "paas", "platform-api": "platform",
 	}
+	manifestImages := make(map[string]release.Image, len(manifest.Images))
+	for _, image := range manifest.Images {
+		manifestImages[image.Component] = image
+	}
 	for name, raw := range services {
 		service, ok := raw.(map[string]any)
 		if !ok || service["pull_policy"] != "never" {
@@ -259,7 +263,12 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			}
 		}
 		image, ok := service["image"].(string)
-		if !ok || !strings.HasPrefix(image, "sha256:") {
+		component := expectedImageComponents[name]
+		if name == "postgres" {
+			component = "postgres"
+		}
+		expectedImage, found := manifestImages[component]
+		if !ok || !found || image != expectedImage.RuntimeReference() {
 			t.Fatalf("service %q image is not immutable: %#v", name, service["image"])
 		}
 		if name == "apisix" {
@@ -792,14 +801,16 @@ func topologyManifest() release.Manifest {
 	sourceDigests := "abcdef012"
 	for index, requirement := range required {
 		archive := "images/" + requirement.Component + ".tar"
+		sourceDigest := digest(sourceDigests[index])
 		files = append(files, release.File{
 			Path: archive, MediaType: "application/vnd.docker.image.archive",
 			Size: 1024 + uint64(index), SHA256: digest(fileDigests[index]),
 		})
 		images = append(images, release.Image{
 			Component: requirement.Component, Purpose: requirement.Purpose, ArchivePath: archive,
-			ImageID: digest(imageDigests[index]), SourceDigest: digest(sourceDigests[index]),
-			OS: "linux", Architecture: "amd64", HealthContract: requirement.HealthContract,
+			ImageID: digest(imageDigests[index]), SourceDigest: sourceDigest,
+			LocalReference: release.LocalImageReference(requirement.Component, sourceDigest),
+			OS:             "linux", Architecture: "amd64", HealthContract: requirement.HealthContract,
 		})
 	}
 	slices.SortFunc(files, func(left, right release.File) int {

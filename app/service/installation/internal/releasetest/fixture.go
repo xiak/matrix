@@ -238,11 +238,15 @@ func manifest(products []release.Product) release.Manifest {
 			Path: archive, MediaType: "application/vnd.docker.image.archive",
 			Size: 1, SHA256: stableDigest("archive:" + requirement.Component),
 		})
+		sourceDigest := stableDigest("source:" + requirement.Component)
 		images = append(images, release.Image{
 			Component: requirement.Component, Purpose: requirement.Purpose, ArchivePath: archive,
 			ImageID:      stableDigest("image:" + requirement.Component),
-			SourceDigest: stableDigest("source:" + requirement.Component),
-			OS:           "linux", Architecture: "amd64", HealthContract: requirement.HealthContract,
+			SourceDigest: sourceDigest,
+			LocalReference: release.LocalImageReference(
+				requirement.Component, sourceDigest,
+			),
+			OS: "linux", Architecture: "amd64", HealthContract: requirement.HealthContract,
 		})
 	}
 	slices.SortFunc(files, func(left, right release.File) int {

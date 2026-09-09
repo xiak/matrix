@@ -155,7 +155,7 @@ func validateLegacyProductlessManifest(manifest Manifest) error {
 		validateDigest("topologyDigest", manifest.TopologyDigest),
 		validateFiles(manifest.Files),
 		validateImagesAgainst(
-			manifest.Images, manifest.Files, legacyProductlessRequiredImages(),
+			manifest.Images, manifest.Files, legacyProductlessRequiredImages(), false,
 		),
 	)
 	if manifest.MinimumFreeBytes < minimumFreeBytes || manifest.MinimumFreeBytes > maximumFreeBytes {
@@ -520,10 +520,15 @@ func validateRunnerPayloads(products []Product, files []File) error {
 }
 
 func validateImages(products []Product, images []Image, files []File) error {
-	return validateImagesAgainst(images, files, RequiredImages(products))
+	return validateImagesAgainst(images, files, RequiredImages(products), true)
 }
 
-func validateImagesAgainst(images []Image, files []File, required []ImageRequirement) error {
+func validateImagesAgainst(
+	images []Image,
+	files []File,
+	required []ImageRequirement,
+	requireLocalReference bool,
+) error {
 	if len(images) != len(required) {
 		return errors.New("release image inventory is incomplete")
 	}
@@ -533,12 +538,20 @@ func validateImagesAgainst(images []Image, files []File, required []ImageRequire
 	}
 	seenImageIDs := make(map[string]struct{}, len(images))
 	seenSourceDigests := make(map[string]struct{}, len(images))
+	seenLocalReferences := make(map[string]struct{}, len(images))
 	for index, image := range images {
 		requirement := required[index]
+		localReferenceValid := image.LocalReference == ""
+		if requireLocalReference {
+			localReferenceValid = image.LocalReference == LocalImageReference(
+				requirement.Component, image.SourceDigest,
+			)
+		}
 		if image.Component != requirement.Component || image.Purpose != requirement.Purpose ||
 			image.ArchivePath != "images/"+requirement.Component+".tar" ||
 			!digestPattern.MatchString(image.ImageID) ||
 			!digestPattern.MatchString(image.SourceDigest) ||
+			!localReferenceValid ||
 			image.OS != "linux" || image.Architecture != "amd64" ||
 			image.HealthContract != requirement.HealthContract {
 			return errors.New("release image declaration is invalid")
@@ -552,6 +565,12 @@ func validateImagesAgainst(images []Image, files []File, required []ImageRequire
 		}
 		if _, duplicate := seenSourceDigests[image.SourceDigest]; duplicate {
 			return errors.New("release image source identities are duplicated")
+		}
+		if image.LocalReference != "" {
+			if _, duplicate := seenLocalReferences[image.LocalReference]; duplicate {
+				return errors.New("release image local references are duplicated")
+			}
+			seenLocalReferences[image.LocalReference] = struct{}{}
 		}
 		seenImageIDs[image.ImageID] = struct{}{}
 		seenSourceDigests[image.SourceDigest] = struct{}{}

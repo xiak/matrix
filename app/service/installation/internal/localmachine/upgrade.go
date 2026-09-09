@@ -38,7 +38,7 @@ func startUpgrade(
 	target := plan.Target
 	target.Bundle = targetInstallation.bundle
 	for _, image := range target.Bundle.Manifest.Images {
-		present, inspectErr := inspectExactImage(ctx, runtimeBoundary, image.ImageID)
+		_, present, inspectErr := inspectInstalledReleaseImage(ctx, runtimeBoundary, image)
 		if inspectErr != nil {
 			return inspectErr
 		}
@@ -324,7 +324,7 @@ func compileUpgradeExpectation(
 			platformcommand.ErrEffectVerification, err,
 		)
 	}
-	expectation, err := decodePlatformExpectation(compiled.ComposeJSON)
+	expectation, err := decodePlatformExpectation(compiled.ComposeJSON, plan.Bundle.Manifest)
 	if err != nil || expectation.Name != compiled.ProjectName {
 		return platformComposeExpectation{}, errors.Join(
 			platformcommand.ErrEffectVerification,

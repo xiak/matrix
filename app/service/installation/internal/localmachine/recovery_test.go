@@ -245,7 +245,7 @@ func newRecoveryProbeInspector(
 	state.ContentDigest = "sha256:" + strings.Repeat("d", 64)
 	state.Services = []RecoveryProjectService{{
 		Name:     recoveryVerificationComponent,
-		Image:    recoveryVerificationImage(t, plan.Bundle.Manifest).ImageID,
+		Image:    recoveryVerificationImage(t, plan.Bundle.Manifest).RuntimeReference(),
 		Replicas: 1,
 	}}
 	return &recoveryProbeInspector{
@@ -378,9 +378,9 @@ func newRecoveryProbeRuntime(
 	networkName := state.ProjectName + "_default"
 	container := platformContainerInspection{
 		ID: "container-recovery-probe", Name: "/" + state.ProjectName + "-probe-1",
-		Image: image.ImageID,
+		Image: image.RuntimeImageIDs()[0],
 		Config: platformContainerConfig{
-			Labels: labels,
+			Labels: labels, Image: image.RuntimeReference(),
 			Env: []string{
 				"PATH=/usr/local/bin:/usr/bin:/bin",
 				"MATRIX_INSTALLATION_ID=" + plan.InstallationID,

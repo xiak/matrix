@@ -257,9 +257,9 @@ func runMigrationDefinitionsOnNetwork(
 			errors.New("migration network identity is invalid"),
 		)
 	}
-	images := make(map[string]string, len(installation.bundle.Manifest.Images))
+	images := make(map[string]release.Image, len(installation.bundle.Manifest.Images))
 	for _, image := range installation.bundle.Manifest.Images {
-		images[image.Component] = image.ImageID
+		images[image.Component] = image
 	}
 	for _, mode := range modes {
 		if mode != "apply" && mode != "verify" {
@@ -269,14 +269,14 @@ func runMigrationDefinitionsOnNetwork(
 			)
 		}
 		for _, migration := range migrations {
-			imageID, found := images[migration.component]
+			image, found := images[migration.component]
 			if !found {
 				return errors.Join(
 					platformcommand.ErrEffectVerification,
 					errors.New("migration image is absent from authenticated release"),
 				)
 			}
-			present, err := inspectExactImage(ctx, runtimeBoundary, imageID)
+			_, present, err := inspectInstalledReleaseImage(ctx, runtimeBoundary, image)
 			if err != nil {
 				return err
 			}
@@ -287,7 +287,8 @@ func runMigrationDefinitionsOnNetwork(
 				)
 			}
 			arguments, err := migrationArguments(
-				plan, installation.topology.ProjectName, networkID, imageID, migration, mode,
+				plan, installation.topology.ProjectName, networkID,
+				image.RuntimeReference(), migration, mode,
 			)
 			if err != nil {
 				return errors.Join(platformcommand.ErrEffectVerification, err)
@@ -357,7 +358,7 @@ func migrationArguments(
 	plan platformcommand.InstallPlan,
 	project string,
 	networkID string,
-	imageID string,
+	imageReference string,
 	migration migrationDefinition,
 	mode string,
 ) ([]string, error) {
@@ -398,6 +399,6 @@ func migrationArguments(
 			"--env", migrationInstallationIDEnvironment+"="+plan.InstallationID,
 		)
 	}
-	arguments = append(arguments, "--entrypoint", migration.entrypoint, imageID, mode)
+	arguments = append(arguments, "--entrypoint", migration.entrypoint, imageReference, mode)
 	return arguments, nil
 }

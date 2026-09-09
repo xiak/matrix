@@ -25,15 +25,31 @@ func TestArtifactCatalogCanonicalContractRejectsMeaningChanges(t *testing.T) {
 			value.Entries[1].ArtifactDigest = value.Entries[0].ArtifactDigest
 		},
 		"mutable image reference": func(value *ArtifactCatalog) {
-			value.Entries[0].ImageID = "matrix/smoke:latest"
+			value.Entries[0].LocalReference = "matrix.local/matrix/smoke:latest"
+		},
+		"foreign image reference": func(value *ArtifactCatalog) {
+			value.Entries[0].LocalReference = "registry.invalid/smoke@" + digestWith('1')
+		},
+		"reference digest mismatch": func(value *ArtifactCatalog) {
+			value.Entries[0].LocalReference = localReference("smoke-a", '2')
+		},
+		"missing image identities": func(value *ArtifactCatalog) {
+			value.Entries[0].ImageIDs = nil
+		},
+		"unsorted image identities": func(value *ArtifactCatalog) {
+			value.Entries[0].ImageIDs[0], value.Entries[0].ImageIDs[1] =
+				value.Entries[0].ImageIDs[1], value.Entries[0].ImageIDs[0]
+		},
+		"duplicate image identities": func(value *ArtifactCatalog) {
+			value.Entries[0].ImageIDs[1] = value.Entries[0].ImageIDs[0]
+		},
+		"mutable image identity": func(value *ArtifactCatalog) {
+			value.Entries[0].ImageIDs[0] = "matrix/smoke:latest"
 		},
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
-			candidate := ArtifactCatalog{
-				APIVersion: valid.APIVersion, Kind: valid.Kind,
-				Entries: append([]ArtifactCatalogEntry(nil), valid.Entries...),
-			}
+			candidate := artifactCatalogFixture()
 			mutate(&candidate)
 			if _, err := EncodeArtifactCatalog(candidate); err == nil {
 				t.Fatal("invalid artifact catalog must fail")
@@ -63,10 +79,21 @@ func artifactCatalogFixture() ArtifactCatalog {
 		APIVersion: ArtifactCatalogAPIVersion,
 		Kind:       ArtifactCatalogKind,
 		Entries: []ArtifactCatalogEntry{
-			{ArtifactDigest: digestWith('1'), ImageID: digestWith('a')},
-			{ArtifactDigest: digestWith('2'), ImageID: digestWith('b')},
+			{
+				ArtifactDigest: digestWith('1'), LocalReference: localReference("smoke-a", '1'),
+				ImageIDs: []string{digestWith('1'), digestWith('a')},
+			},
+			{
+				ArtifactDigest: digestWith('2'), LocalReference: localReference("smoke-b", '2'),
+				ImageIDs: []string{digestWith('2'), digestWith('b')},
+			},
 		},
 	}
+}
+
+func localReference(component string, digestByte byte) string {
+	return "matrix.local/matrix/" + component + ":sha256-" +
+		strings.Repeat(string(digestByte), 64)
 }
 
 func digestWith(value byte) string {

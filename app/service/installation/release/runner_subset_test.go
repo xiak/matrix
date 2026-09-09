@@ -126,9 +126,12 @@ func devOpsRunnerManifest(t *testing.T, payloads map[string][]byte) Manifest {
 		Path: "images/devops.tar", MediaType: mediaDockerArchive,
 		Size: 123, SHA256: digest('6'),
 	})
+	sourceDigest := digest('7')
 	manifest.Images = append(manifest.Images, Image{
 		Component: "devops", Purpose: ImagePlatform, ArchivePath: "images/devops.tar",
-		ImageID: digest('6'), SourceDigest: digest('7'), OS: "linux", Architecture: "amd64",
+		ImageID: digest('6'), SourceDigest: sourceDigest,
+		LocalReference: LocalImageReference("devops", sourceDigest),
+		OS:             "linux", Architecture: "amd64",
 		HealthContract: "devops-ready-v1",
 	})
 	for _, relative := range RunnerPayloadPaths() {

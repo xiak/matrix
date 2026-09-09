@@ -272,6 +272,9 @@ func buildImages(
 			Component: requirement.Component, Purpose: requirement.Purpose,
 			ArchivePath: "images/" + requirement.Component + ".tar",
 			ImageID:     loadIdentity.ID, SourceDigest: image.ID,
+			LocalReference: installationrelease.LocalImageReference(
+				requirement.Component, image.ID,
+			),
 			OS: loadIdentity.OS, Architecture: loadIdentity.Architecture,
 			HealthContract: requirement.HealthContract,
 		})
@@ -461,7 +464,10 @@ func placeholderPayloads(
 			Component: requirement.Component, Purpose: requirement.Purpose,
 			ArchivePath: archive, ImageID: placeholderDigest("image:" + requirement.Component),
 			SourceDigest: placeholderDigest("source:" + requirement.Component),
-			OS:           "linux", Architecture: "amd64", HealthContract: requirement.HealthContract,
+			LocalReference: installationrelease.LocalImageReference(
+				requirement.Component, placeholderDigest("source:"+requirement.Component),
+			),
+			OS: "linux", Architecture: "amd64", HealthContract: requirement.HealthContract,
 		})
 	}
 	slices.SortFunc(files, func(left, right installationrelease.File) int {

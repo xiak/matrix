@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	apphostingv1 "github.com/xiak/matrix/api/adapter/apphosting/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
 
@@ -205,7 +206,7 @@ func validateProjectState(state projectState) error {
 	seenServices := make(map[string]struct{}, len(state.Services))
 	for _, service := range state.Services {
 		if !serviceNamePattern.MatchString(service.Name) || service.Replicas == 0 ||
-			!localImageDigestPattern.MatchString(service.Image) {
+			apphostingv1.ValidateLocalImageReference(service.Image) != nil {
 			problems = append(problems, errors.New("project service declaration is invalid"))
 		}
 		if _, duplicate := seenServices[service.Name]; duplicate {

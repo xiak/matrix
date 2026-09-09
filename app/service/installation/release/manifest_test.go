@@ -181,6 +181,20 @@ func TestManifestRejectsUnsafeOrIncompleteInventory(t *testing.T) {
 		"source identity": func(value *Manifest) {
 			value.Images[0].SourceDigest = "apisix:latest"
 		},
+		"missing local reference": func(value *Manifest) {
+			value.Images[0].LocalReference = ""
+		},
+		"mutable local reference": func(value *Manifest) {
+			value.Images[0].LocalReference = "matrix.local/matrix/apisix:latest"
+		},
+		"mismatched local reference": func(value *Manifest) {
+			value.Images[0].LocalReference = LocalImageReference(
+				value.Images[0].Component, value.Images[1].SourceDigest,
+			)
+		},
+		"duplicate local reference": func(value *Manifest) {
+			value.Images[1].LocalReference = value.Images[0].LocalReference
+		},
 		"duplicate image identity": func(value *Manifest) {
 			value.Images[1].ImageID = value.Images[0].ImageID
 		},
@@ -328,14 +342,16 @@ func validManifest() Manifest {
 	sourceDigests := "ef012345"
 	for index, requirement := range required {
 		archive := "images/" + requirement.Component + ".tar"
+		sourceDigest := digest(sourceDigests[index])
 		files = append(files, File{
 			Path: archive, MediaType: mediaDockerArchive,
 			Size: 1024 + uint64(index), SHA256: digest(fileDigests[index]),
 		})
 		images = append(images, Image{
 			Component: requirement.Component, Purpose: requirement.Purpose, ArchivePath: archive,
-			ImageID: digest(imageDigests[index]), SourceDigest: digest(sourceDigests[index]),
-			OS: "linux", Architecture: "amd64", HealthContract: requirement.HealthContract,
+			ImageID: digest(imageDigests[index]), SourceDigest: sourceDigest,
+			LocalReference: LocalImageReference(requirement.Component, sourceDigest),
+			OS:             "linux", Architecture: "amd64", HealthContract: requirement.HealthContract,
 		})
 	}
 	slices.SortFunc(files, func(left, right File) int {

@@ -140,9 +140,38 @@ type Image struct {
 	ArchivePath    string       `json:"archivePath"`
 	ImageID        string       `json:"imageId"`
 	SourceDigest   string       `json:"sourceDigest"`
+	LocalReference string       `json:"localReference,omitempty"`
 	OS             string       `json:"os"`
 	Architecture   string       `json:"architecture"`
 	HealthContract string       `json:"healthContract"`
+}
+
+// LocalImageReference is the deterministic installation-owned Docker
+// reference for one authenticated release image. The signed source digest is
+// retained in the tag so two releases cannot silently reuse a mutable name.
+func LocalImageReference(component, sourceDigest string) string {
+	return "matrix.local/matrix/" + component + ":sha256-" +
+		strings.TrimPrefix(sourceDigest, "sha256:")
+}
+
+// RuntimeReference returns the provider reference used by Compose and direct
+// Docker effects. The image ID fallback exists only for the one accepted
+// productless predecessor contract.
+func (image Image) RuntimeReference() string {
+	if image.LocalReference != "" {
+		return image.LocalReference
+	}
+	return image.ImageID
+}
+
+// RuntimeImageIDs returns the exact content identities to which the runtime
+// reference may resolve. Docker's containerd and classic image stores restore
+// the same authenticated archive under different immutable IDs.
+func (image Image) RuntimeImageIDs() []string {
+	if image.LocalReference == "" || image.SourceDigest == image.ImageID {
+		return []string{image.ImageID}
+	}
+	return []string{image.SourceDigest, image.ImageID}
 }
 
 type ImagePurpose string

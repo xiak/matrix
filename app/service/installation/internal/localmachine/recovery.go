@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -29,8 +30,9 @@ DROP FUNCTION IF EXISTS iam.verify_platform_service(text,text,text,text);
 )
 
 type recoveryVerificationParticipant struct {
-	release release.ReleaseIdentity
-	imageID string
+	release        release.ReleaseIdentity
+	imageReference string
+	imageIDs       []string
 }
 
 type recoveryVerificationInventory struct {
@@ -85,7 +87,7 @@ func recoverBackup(
 	defer clear(current.TrustBytes)
 	defer clear(target.TrustBytes)
 	for _, image := range target.Bundle.Manifest.Images {
-		present, inspectErr := inspectExactImage(ctx, runtimeBoundary, image.ImageID)
+		_, present, inspectErr := inspectInstalledReleaseImage(ctx, runtimeBoundary, image)
 		if inspectErr != nil {
 			return inspectErr
 		}
@@ -303,28 +305,30 @@ func recoveryVerificationParticipants(
 	participants := make([]recoveryVerificationParticipant, 0, len(plans))
 	seen := make(map[string]struct{}, len(plans))
 	for _, plan := range plans {
-		imageID := ""
+		var participant *recoveryVerificationParticipant
 		for _, image := range plan.Bundle.Manifest.Images {
 			if image.Component != "verification" {
 				continue
 			}
-			if imageID != "" || image.ImageID == "" {
+			if participant != nil || image.RuntimeReference() == "" ||
+				len(image.RuntimeImageIDs()) == 0 {
 				return nil, errors.New("verification release image identity conflicts")
 			}
-			imageID = image.ImageID
+			participant = &recoveryVerificationParticipant{
+				release:        plan.Bundle.Manifest.Release,
+				imageReference: image.RuntimeReference(),
+				imageIDs:       image.RuntimeImageIDs(),
+			}
 		}
-		if imageID == "" {
+		if participant == nil {
 			return nil, errors.New("verification release image identity is absent")
 		}
-		key := plan.Bundle.Manifest.Release.ID + "\x00" + imageID
+		key := plan.Bundle.Manifest.Release.ID + "\x00" + participant.imageReference
 		if _, duplicate := seen[key]; duplicate {
 			continue
 		}
 		seen[key] = struct{}{}
-		participants = append(participants, recoveryVerificationParticipant{
-			release: plan.Bundle.Manifest.Release,
-			imageID: imageID,
-		})
+		participants = append(participants, *participant)
 	}
 	if len(participants) == 0 {
 		return nil, errors.New("verification recovery participant is absent")
@@ -366,7 +370,7 @@ func validateRecoveryVerificationState(
 		return errors.New("verification project state conflicts")
 	}
 	for _, participant := range participants {
-		if state.Services[0].Image == participant.imageID {
+		if state.Services[0].Image == participant.imageReference {
 			return nil
 		}
 	}
@@ -468,7 +472,7 @@ func validateRecoveryVerificationContainer(
 	requireReady bool,
 ) error {
 	labels := container.Config.Labels
-	if container.Image != state.Services[0].Image ||
+	if container.Config.Image != state.Services[0].Image ||
 		labels["com.docker.compose.project"] != state.ProjectName ||
 		labels["com.docker.compose.service"] != recoveryVerificationComponent ||
 		!strings.EqualFold(labels["com.docker.compose.oneoff"], "false") ||
@@ -553,7 +557,8 @@ func recoveryVerificationContainerParticipant(
 		return recoveryVerificationParticipant{}, false
 	}
 	for _, participant := range participants {
-		if participant.imageID == container.Image &&
+		if participant.imageReference == container.Config.Image &&
+			slices.Contains(participant.imageIDs, container.Image) &&
 			participant.release.ID == values["MATRIX_RELEASE_ID"] {
 			return participant, true
 		}

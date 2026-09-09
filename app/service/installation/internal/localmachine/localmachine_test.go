@@ -147,16 +147,26 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 	var expected []apphostingv1.ArtifactCatalogEntry
 	for _, image := range plan.Bundle.Manifest.Images {
 		if image.Purpose == release.ImageWorkload {
+			imageIDs := image.RuntimeImageIDs()
+			slices.Sort(imageIDs)
 			expected = append(expected, apphostingv1.ArtifactCatalogEntry{
 				ArtifactDigest: image.SourceDigest,
-				ImageID:        image.ImageID,
+				LocalReference: image.RuntimeReference(),
+				ImageIDs:       imageIDs,
 			})
 		}
 	}
 	slices.SortFunc(expected, func(left, right apphostingv1.ArtifactCatalogEntry) int {
 		return strings.Compare(left.ArtifactDigest, right.ArtifactDigest)
 	})
-	if !slices.Equal(catalog.Entries, expected) {
+	if !slices.EqualFunc(
+		catalog.Entries, expected,
+		func(left, right apphostingv1.ArtifactCatalogEntry) bool {
+			return left.ArtifactDigest == right.ArtifactDigest &&
+				left.LocalReference == right.LocalReference &&
+				slices.Equal(left.ImageIDs, right.ImageIDs)
+		},
+	) {
 		t.Fatalf("workload catalog = %#v, want %#v", catalog.Entries, expected)
 	}
 	apisix := readTestFile(t, plan.Root, layout.APISIXRoutes)
@@ -702,36 +712,74 @@ func TestPrepareReleaseRollbackRemovesOnlyCurrentAndRestoresPreviousConfiguratio
 }
 
 func TestLoadInstallImagesUsesAuthenticatedStdinAndExactIdentities(t *testing.T) {
+	for _, store := range []struct {
+		name            string
+		useSourceDigest bool
+	}{
+		{name: "classic-docker"},
+		{name: "containerd-image-store", useSourceDigest: true},
+	} {
+		t.Run(store.name, func(t *testing.T) {
+			plan := newInstallPlan(t)
+			if err := stageInstallation(plan, rand.Reader); err != nil {
+				t.Fatalf("stage installation: %v", err)
+			}
+			runtimeBoundary := newImageRuntimeForStore(
+				plan.Bundle.Manifest, false, store.useSourceDigest,
+			)
+			if err := loadInstallImages(context.Background(), runtimeBoundary, plan); err != nil {
+				t.Fatalf("load installation images: %v", err)
+			}
+			if len(runtimeBoundary.loads) != len(plan.Bundle.Manifest.Images) ||
+				len(runtimeBoundary.tags) != len(plan.Bundle.Manifest.Images) {
+				t.Fatalf(
+					"image load/tag counts = %d/%d, want %d/%d",
+					len(runtimeBoundary.loads), len(runtimeBoundary.tags),
+					len(plan.Bundle.Manifest.Images), len(plan.Bundle.Manifest.Images),
+				)
+			}
+			for _, image := range plan.Bundle.Manifest.Images {
+				actualID := image.ImageID
+				if store.useSourceDigest {
+					actualID = image.SourceDigest
+				}
+				if !runtimeBoundary.present[actualID] ||
+					runtimeBoundary.references[image.LocalReference] != actualID {
+					t.Fatalf("image %s was not published by exact loaded identity", image.Component)
+				}
+			}
+			for _, arguments := range runtimeBoundary.commands {
+				joined := strings.Join(arguments, " ")
+				if strings.Contains(joined, " pull") || strings.Contains(joined, " build") ||
+					strings.Contains(joined, " push") || strings.Contains(joined, " registry") {
+					t.Fatalf("offline image loader used forbidden provider command %q", joined)
+				}
+			}
+			loads, tags := len(runtimeBoundary.loads), len(runtimeBoundary.tags)
+			if err := loadInstallImages(context.Background(), runtimeBoundary, plan); err != nil {
+				t.Fatalf("replay image loading: %v", err)
+			}
+			if len(runtimeBoundary.loads) != loads || len(runtimeBoundary.tags) != tags {
+				t.Fatal("image-loading replay changed already verified images")
+			}
+		})
+	}
+}
+
+func TestLoadInstallImagesRejectsDriftedPublishedReference(t *testing.T) {
 	plan := newInstallPlan(t)
 	if err := stageInstallation(plan, rand.Reader); err != nil {
 		t.Fatalf("stage installation: %v", err)
 	}
 	runtimeBoundary := newImageRuntime(plan.Bundle.Manifest, false)
-	if err := loadInstallImages(context.Background(), runtimeBoundary, plan); err != nil {
-		t.Fatalf("load installation images: %v", err)
-	}
-	if len(runtimeBoundary.loads) != len(plan.Bundle.Manifest.Images) {
-		t.Fatalf("image load count = %d, want %d", len(runtimeBoundary.loads), len(plan.Bundle.Manifest.Images))
-	}
-	for _, image := range plan.Bundle.Manifest.Images {
-		if !runtimeBoundary.present[image.ImageID] {
-			t.Fatalf("image %s was not verified after load", image.Component)
-		}
-	}
-	for _, arguments := range runtimeBoundary.commands {
-		joined := strings.Join(arguments, " ")
-		if strings.Contains(joined, " pull") || strings.Contains(joined, " build") ||
-			strings.Contains(joined, " tag") || strings.Contains(joined, " push") ||
-			strings.Contains(joined, " registry") {
-			t.Fatalf("offline image loader used forbidden provider command %q", joined)
-		}
-	}
-	loads := len(runtimeBoundary.loads)
-	if err := loadInstallImages(context.Background(), runtimeBoundary, plan); err != nil {
-		t.Fatalf("replay image loading: %v", err)
-	}
-	if len(runtimeBoundary.loads) != loads {
-		t.Fatal("image-loading replay imported already verified images")
+	image := plan.Bundle.Manifest.Images[0]
+	driftedID := "sha256:" + strings.Repeat("0", 64)
+	runtimeBoundary.present[driftedID] = true
+	runtimeBoundary.references[image.LocalReference] = driftedID
+	err := loadInstallImages(context.Background(), runtimeBoundary, plan)
+	if !errors.Is(err, platformcommand.ErrEffectVerification) ||
+		len(runtimeBoundary.loads) != 0 || len(runtimeBoundary.tags) != 0 {
+		t.Fatalf("drifted image reference result = %v, loads/tags = %d/%d", err, len(runtimeBoundary.loads), len(runtimeBoundary.tags))
 	}
 }
 
@@ -748,26 +796,39 @@ func TestLoadInstallImagesKeepsStartedFailureOutcomeUnknown(t *testing.T) {
 	}
 }
 
+func TestLoadInstallImagesKeepsStartedTagFailureOutcomeUnknown(t *testing.T) {
+	plan := newInstallPlan(t)
+	if err := stageInstallation(plan, rand.Reader); err != nil {
+		t.Fatalf("stage installation: %v", err)
+	}
+	runtimeBoundary := newImageRuntime(plan.Bundle.Manifest, false)
+	runtimeBoundary.failTag = true
+	err := loadInstallImages(context.Background(), runtimeBoundary, plan)
+	if !errors.Is(err, platformcommand.ErrEffectOutcomeUnknown) {
+		t.Fatalf("started image tag failure = %v", err)
+	}
+}
+
 func TestIAMMigrationArgumentsBindInstallationWithoutCredentialValue(t *testing.T) {
 	plan := newInstallPlan(t)
 	if err := stageInstallation(plan, rand.Reader); err != nil {
 		t.Fatalf("stage IAM migration fixture: %v", err)
 	}
-	var imageID string
+	var imageReference string
 	for _, image := range plan.Bundle.Manifest.Images {
 		if image.Component == "iam" {
-			imageID = image.ImageID
+			imageReference = image.RuntimeReference()
 			break
 		}
 	}
-	if imageID == "" {
+	if imageReference == "" {
 		t.Fatal("IAM image identity is absent from fixture")
 	}
 	arguments, err := migrationArguments(
 		plan,
 		"matrix-test",
 		"network-test",
-		imageID,
+		imageReference,
 		platformMigrations[0],
 		"verify",
 	)
@@ -1646,11 +1707,54 @@ func configuredPlatformStartFixture(
 	if err != nil {
 		t.Fatalf("verify installation configuration: %v", err)
 	}
-	expectation, err := decodePlatformExpectation(installation.topology.ComposeJSON)
+	expectation, err := decodePlatformExpectation(
+		installation.topology.ComposeJSON, installation.bundle.Manifest,
+	)
 	if err != nil {
 		t.Fatalf("decode platform expectation: %v", err)
 	}
 	return plan, expectation
+}
+
+func TestDecodePlatformExpectationBindsEveryServiceToSignedImageIdentity(t *testing.T) {
+	plan := newInstallPlan(t)
+	compiled, err := topology.Compile(plan.Bundle.Manifest, topology.Options{
+		InstallationID: plan.InstallationID,
+		Root:           "/matrix-installation-root",
+		Listener:       plan.Listener,
+		Port:           plan.Port,
+	})
+	if err != nil {
+		t.Fatalf("compile platform expectation fixture: %v", err)
+	}
+	expectation, err := decodePlatformExpectation(compiled.ComposeJSON, plan.Bundle.Manifest)
+	if err != nil {
+		t.Fatalf("decode platform expectation: %v", err)
+	}
+	postgres, found := expectation.Services["postgres"]
+	if !found || len(postgres.ImageIDs) == 0 ||
+		postgres.Labels[release.BuiltImageLabelComponent] != "" {
+		t.Fatalf("upstream PostgreSQL image binding = %#v", postgres)
+	}
+	for name, service := range expectation.Services {
+		if service.Image == "" || len(service.ImageIDs) == 0 {
+			t.Fatalf("service %q has no signed runtime image binding", name)
+		}
+	}
+
+	var document map[string]any
+	if err := json.Unmarshal(compiled.ComposeJSON, &document); err != nil {
+		t.Fatalf("decode Compose fixture: %v", err)
+	}
+	services := document["services"].(map[string]any)
+	services["iam"].(map[string]any)["image"] = postgres.Image
+	drifted, err := json.Marshal(document)
+	if err != nil {
+		t.Fatalf("encode drifted Compose fixture: %v", err)
+	}
+	if _, err := decodePlatformExpectation(drifted, plan.Bundle.Manifest); err == nil {
+		t.Fatal("service-to-signed-image component drift was accepted")
+	}
 }
 
 func TestRejectProjectCollisionRequiresExactInstallationOwnership(t *testing.T) {
@@ -2014,20 +2118,39 @@ func (failingEntropy) Read([]byte) (int, error) {
 
 type imageRuntime struct {
 	present          map[string]bool
+	references       map[string]string
 	payloadToImageID map[string]string
 	commands         [][]string
 	loads            []string
+	tags             [][2]string
 	failLoad         bool
+	failTag          bool
 }
 
 func newImageRuntime(manifest release.Manifest, present bool) *imageRuntime {
+	return newImageRuntimeForStore(manifest, present, false)
+}
+
+func newImageRuntimeForStore(
+	manifest release.Manifest,
+	present bool,
+	useSourceDigest bool,
+) *imageRuntime {
 	result := &imageRuntime{
 		present:          make(map[string]bool, len(manifest.Images)),
+		references:       make(map[string]string, len(manifest.Images)),
 		payloadToImageID: make(map[string]string, len(manifest.Images)),
 	}
 	for _, image := range manifest.Images {
-		result.present[image.ImageID] = present
-		result.payloadToImageID["matrix-release-payload:"+image.ArchivePath] = image.ImageID
+		actualID := image.ImageID
+		if useSourceDigest && image.LocalReference != "" {
+			actualID = image.SourceDigest
+		}
+		result.present[actualID] = present
+		if present {
+			result.references[image.RuntimeReference()] = actualID
+		}
+		result.payloadToImageID["matrix-release-payload:"+image.ArchivePath] = actualID
 	}
 	return result
 }
@@ -2043,7 +2166,11 @@ func (runtimeBoundary *imageRuntime) Run(
 		if len(arguments) != 5 || input != nil {
 			return nil, false, errors.New("invalid image inspect command")
 		}
-		imageID := arguments[4]
+		reference := arguments[4]
+		imageID := reference
+		if resolved, found := runtimeBoundary.references[reference]; found {
+			imageID = resolved
+		}
 		if !runtimeBoundary.present[imageID] {
 			return nil, true, errors.New("image absent")
 		}
@@ -2066,6 +2193,18 @@ func (runtimeBoundary *imageRuntime) Run(
 		}
 		runtimeBoundary.present[imageID] = true
 		return nil, true, nil
+	case len(arguments) == 4 && arguments[0] == "image" && arguments[1] == "tag":
+		if input != nil || !runtimeBoundary.present[arguments[2]] {
+			return nil, false, errors.New("image tag source is absent")
+		}
+		runtimeBoundary.tags = append(
+			runtimeBoundary.tags, [2]string{arguments[2], arguments[3]},
+		)
+		if runtimeBoundary.failTag {
+			return nil, true, errors.New("image tag interrupted")
+		}
+		runtimeBoundary.references[arguments[3]] = arguments[2]
+		return nil, true, nil
 	default:
 		return nil, false, fmt.Errorf("unexpected Docker command: %q", strings.Join(arguments, " "))
 	}
@@ -2076,7 +2215,7 @@ type scriptedRuntime struct {
 }
 
 type migrationRuntime struct {
-	images         map[string]bool
+	images         map[string]string
 	project        string
 	installation   string
 	release        string
@@ -2087,7 +2226,7 @@ type migrationRuntime struct {
 
 type platformStartRuntime struct {
 	expectation               platformComposeExpectation
-	images                    map[string]bool
+	images                    map[string]string
 	started                   bool
 	resourceDriftService      string
 	userDriftService          string
@@ -2130,9 +2269,9 @@ func newPlatformStartRuntime(
 	plan platformcommand.InstallPlan,
 	expectation platformComposeExpectation,
 ) *platformStartRuntime {
-	images := make(map[string]bool, len(plan.Bundle.Manifest.Images))
+	images := make(map[string]string, len(plan.Bundle.Manifest.Images))
 	for _, image := range plan.Bundle.Manifest.Images {
-		images[image.ImageID] = true
+		images[image.RuntimeReference()] = image.RuntimeImageIDs()[0]
 	}
 	return &platformStartRuntime{
 		expectation: expectation, images: images,
@@ -2161,7 +2300,8 @@ func newPlatformCleanupRuntime(
 		labels["com.docker.compose.oneoff"] = "False"
 		runtimeBoundary.containers[identity] = platformContainerInspection{
 			ID: identity, Name: "/" + expectation.Name + "-" + serviceName + "-1",
-			Image: expected.Image, Config: platformContainerConfig{Labels: labels},
+			Image:  expected.ImageIDs[0],
+			Config: platformContainerConfig{Labels: labels, Image: expected.Image},
 		}
 	}
 	for logicalName, expected := range expectation.Networks {
@@ -2184,8 +2324,10 @@ func newPlatformCleanupRuntime(
 	slices.Sort(names)
 	selected := migrations[names[0]]
 	runtimeBoundary.containers[runtimeBoundary.migrationID] = platformContainerInspection{
-		ID: runtimeBoundary.migrationID, Name: "/" + names[0], Image: selected.imageID,
-		Config: platformContainerConfig{Labels: cloneTestLabels(selected.labels)},
+		ID: runtimeBoundary.migrationID, Name: "/" + names[0], Image: selected.imageIDs[0],
+		Config: platformContainerConfig{
+			Labels: cloneTestLabels(selected.labels), Image: selected.imageReference,
+		},
 	}
 	return runtimeBoundary
 }
@@ -2339,8 +2481,9 @@ func (runtimeBoundary *platformStartRuntime) Run(
 		return []byte("1048576\n"), true, nil
 	}
 	if len(arguments) == 5 && arguments[0] == "image" && arguments[1] == "inspect" {
-		imageID := arguments[4]
-		if !runtimeBoundary.images[imageID] {
+		reference := arguments[4]
+		imageID, found := runtimeBoundary.images[reference]
+		if !found {
 			return nil, true, errors.New("platform image is absent")
 		}
 		return []byte(imageID + "|linux|amd64\n"), true, nil
@@ -2585,7 +2728,7 @@ func (runtimeBoundary *platformStartRuntime) inspectContainer(
 		runtimeBoundary.composeCalls == 0 {
 		labels["com.docker.compose.config-hash"] = strings.Repeat("b", 64)
 	}
-	imageID := expected.Image
+	imageID := expected.ImageIDs[0]
 	mounts := make([]map[string]any, 0, len(expected.Volumes))
 	for _, mount := range expected.Volumes {
 		mounts = append(mounts, map[string]any{
@@ -2629,7 +2772,9 @@ func (runtimeBoundary *platformStartRuntime) inspectContainer(
 	}
 	content, err := json.Marshal(map[string]any{
 		"Id": identity, "Image": imageID,
-		"Config": map[string]any{"Labels": labels, "User": user},
+		"Config": map[string]any{
+			"Labels": labels, "Image": expected.Image, "User": user,
+		},
 		"State": map[string]any{
 			"Status": "running", "Running": true,
 			"Health": map[string]any{"Status": health},
@@ -2676,9 +2821,9 @@ func cloneTestLabels(source map[string]string) map[string]string {
 }
 
 func newMigrationRuntime(plan platformcommand.InstallPlan, project string) *migrationRuntime {
-	images := make(map[string]bool, len(plan.Bundle.Manifest.Images))
+	images := make(map[string]string, len(plan.Bundle.Manifest.Images))
 	for _, image := range plan.Bundle.Manifest.Images {
-		images[image.ImageID] = true
+		images[image.RuntimeReference()] = image.RuntimeImageIDs()[0]
 	}
 	return &migrationRuntime{
 		images: images, project: project, installation: plan.InstallationID,
@@ -2715,8 +2860,10 @@ func (runtimeBoundary *migrationRuntime) Run(
 			)), true, nil
 		}
 	case "image":
-		if len(arguments) == 5 && arguments[1] == "inspect" && runtimeBoundary.images[arguments[4]] {
-			return []byte(arguments[4] + "|linux|amd64\n"), true, nil
+		if len(arguments) == 5 && arguments[1] == "inspect" {
+			if imageID, found := runtimeBoundary.images[arguments[4]]; found {
+				return []byte(imageID + "|linux|amd64\n"), true, nil
+			}
 		}
 	case "run":
 		runtimeBoundary.runs = append(runtimeBoundary.runs, slices.Clone(arguments))
