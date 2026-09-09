@@ -6,7 +6,7 @@
 - Updated: 2026-09-09
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `11f49bc`
+- Current pushed implementation baseline: `bd602ba`
 
 ## Goal
 
@@ -17,25 +17,25 @@ architecture, FEAT, implementation, test, and release gates.
 ## Current milestone
 
 - FEAT-007 is the authoritative owner and remains `In progress`.
-- Pushed `11f49bc` adds the opt-in standalone execution-process recovery gate.
-  A clean PostgreSQL 18 database drives the actual build-worker, TLS 1.3 mTLS
-  gateway, outbound runner, Docker `29.6.2`, and pinned `runsc` from VERIFY to
-  REPORTING.
-- The gate kills the first worker after durable submission and the first runner
-  during the exact running sandbox effect. Replacement processes increase both
-  fences, observe before retry, finish both immutable steps, persist one receipt
-  and normalized logs, acknowledge the journal, and leave no business or probe
-  container. Role-specific process output contains no database password or key.
-- Real shutdown exposed and fixed premature runner-loop exit and a runsc-
-  sensitive ten-second probe cleanup edge. Shutdown now waits for the active
-  cycle, and preflight cleanup is bounded at thirty seconds.
-- The final real journey passed in 174.76 seconds. Full repository tests and
-  vet, affected Windows race and twenty-run suites, and affected offline Linux
-  suites pass. The earlier real archive-to-receipt isolation gate, dedicated-
-  node installer, fixed Gitea adapter, check reporter, authority journey, and
-  selected-product topology remain present.
-- This milestone is the PostgreSQL VERIFY execution/recovery subjourney, not the
-  signed source-to-provider Gate B journey and not product UI Gate C.
+- Pushed `bd602ba` adds an opt-in source-process recovery gate against a clean
+  PostgreSQL 18 database and the fixed Gitea `1.27.3` image. It starts the
+  actual source-observer and source-fetcher binaries, rejects a forged
+  signature, admits one valid pull-request event, preserves equal-replay
+  identity, and rejects changed-byte replay.
+- The first fetcher performs exactly one Gitea `upload-pack` and atomically
+  publishes the source archive, then is killed before PostgreSQL acknowledgement.
+  Its replacement claims fence two, observes the immutable archive without a
+  second provider fetch, stores one receipt, completes FETCH, and advances the
+  same run to `VERIFYING`. Archive, database, and process evidence contains no
+  credential or private path.
+- The source-fetcher process loop now cancels and waits for its active cycle on
+  graceful shutdown. The final real journey passed in 2.34 seconds. Full
+  repository tests and vet, affected Windows race and twenty-run suites, and
+  affected disconnected Go `1.26.8` Linux suites pass.
+- The earlier standalone VERIFY-to-REPORTING execution recovery and source-
+  archive isolation gates remain present. The two passing subjourneys are not
+  yet joined through the physical DevOps HTTP process, check reporter, provider
+  outcome, and Audit dispatcher; full Gate B and product UI Gate C remain open.
 
 ## Adoption boundary
 
@@ -47,12 +47,12 @@ architecture, FEAT, implementation, test, and release gates.
 
 ## Continuation
 
-Extend the passing VERIFY recovery gate in bounded slices: drive a real signed
-Gitea change through the standalone source fetcher, then add the physical check
-reporter plus correlated Audit/provider evidence. Complete malicious resource-
-abuse and oversized-log cases and remaining external-effect restarts with no
-duplicate provider outcome. Only after the complete Gate B passes begin formal
-Matrix UI integration from the accepted UX baseline.
+Join the passing source and execution recovery subjourneys through the physical
+DevOps HTTP process, check reporter, correlated provider outcome, and Audit
+dispatcher. Complete malicious repository/resource-abuse and oversized-log
+cases plus remaining external-effect restarts with no duplicate provider
+outcome. Only after the complete Gate B passes begin formal Matrix UI
+integration from the accepted UX baseline.
 
 Keep runner authority away from PostgreSQL, source/report credentials, IAM,
 Audit, PaaS, and executor-admin operations. Preserve pragmatic DDD,
