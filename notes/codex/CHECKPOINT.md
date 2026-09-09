@@ -6,7 +6,7 @@
 - Updated: 2026-09-09
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `4b63c1d`
+- Current pushed implementation baseline: `7152063`
 
 ## Goal
 
@@ -17,26 +17,31 @@ architecture, FEAT, implementation, test, and release gates.
 ## Current milestone
 
 - FEAT-007 is the authoritative owner and remains `In progress`.
-- Pushed `4b63c1d` completes the current signed control-plane installation
-  milestone. Release images now retain both archive-configuration and source
-  identities while running through deterministic signed local references, the
-  DevOps migration process admits its exact five isolated database identities,
-  and the executor gateway joins control plus edge so Docker can publish only
-  the runner listener on `8444`.
-- A signed release assembled from that commit completed a clean install on a
-  disposable systemd Linux/amd64 host with Docker Engine `29.6.2` and its
-  default containerd image store. All migrations and 16 services started;
-  install, verify, status, and protected support-evidence operations returned
-  `READY`; strict observation saw a healthy gateway with requested and active
-  `0.0.0.0:8444` bindings.
-- Full repository tests and vet pass on Windows. Affected topology,
-  installation, platform-command, and release-build packages pass race
-  detection and twenty-run repetition on Windows, plus twenty runs in the
-  fixed disconnected Go 1.26.8 Linux/amd64 image with read-only source and
-  module cache.
-- This is real control-plane lifecycle evidence, not the dedicated-host
-  systemd/nftables/Docker/runsc, malicious-repository, restart-fencing, or full
-  source-to-check Gate B evidence.
+- Pushed `7152063` completes the check-report control-plane slice. A dedicated
+  table-blind PostgreSQL identity and physical `matrix-devops-check-reporter`
+  process now own `REPORT` claims, provider reconciliation, normalized check
+  receipts, terminal PipelineRun transitions, heartbeat, and readiness. The
+  build worker no longer has report authority, and the replaced generic run
+  queue/transition implementation is absent from the tree.
+- The fixed Gitea `1.27.3` adapter creates one exact terminal commit status and
+  observes uncertain outcomes without another create. Its real fixture passed
+  source observation, immutable source fetch, status creation, and status
+  reconciliation. A real PostgreSQL 18 journey passed concurrent task claims,
+  monotonic fencing, exact six-function reporter authority, receipt tamper
+  rejection, terminal facts, and migration replay.
+- Selected-product installation now provisions a separate reporter DSN and
+  source-egress process with only the report credential root. The DevOps
+  scratch release image carries the fixed system CA bundle. A real PostgreSQL
+  authority-process journey started IAM, Audit, PaaS, DevOps, all dispatchers,
+  source fetcher, source observer, and check reporter and passed readiness
+  failure/recovery plus exact user and system Audit facts.
+- Full repository tests and vet pass with Go 1.26.3 on Windows. All affected
+  contract, reporter, Gitea, PostgreSQL, migration, installation, topology,
+  release-build, architecture, and authority-process packages pass race
+  detection and twenty-run repetition.
+- This is real control-plane and provider-protocol evidence, not the
+  dedicated-host systemd/nftables/Docker/runsc, malicious-repository,
+  restart-fencing, full source-to-check Gate B, or product UI Gate C evidence.
 
 ## Adoption boundary
 
@@ -50,10 +55,12 @@ architecture, FEAT, implementation, test, and release gates.
 
 Run the dedicated-host Gate B on a real Linux/amd64 machine with PID 1
 systemd, nftables, Docker `29.x`, the pinned offline toolchain, and pinned
-`runsc`. Prove no-egress isolation, resource containment, malicious-repository
-handling, restart recovery, readiness, and log sanitization through an actual
-repository execution. Then implement reporter effects and only after the
-boundary passes begin formal Matrix UI integration.
+`runsc`. Drive one real signed change through source fetch, isolated build,
+normalized logs, and the implemented check reporter; prove no-egress
+isolation, resource containment, malicious-repository handling, restart
+recovery, readiness, no duplicate provider outcome, and secret-safe evidence.
+Only after that boundary passes begin formal Matrix UI integration from the
+accepted UX baseline.
 
 Keep runner authority away from PostgreSQL, source/report credentials, IAM,
 Audit, PaaS, and executor-admin operations. Preserve pragmatic DDD,
