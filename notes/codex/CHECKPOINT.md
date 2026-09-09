@@ -6,7 +6,7 @@
 - Updated: 2026-09-10
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `c7af0ee`
+- Current pushed implementation baseline: `46a524b`
 
 ## Goal
 
@@ -17,21 +17,21 @@ architecture, FEAT, implementation, test, and release gates.
 ## Current milestone
 
 - FEAT-007 is the authoritative owner and remains `In progress`.
-- Pushed `c7af0ee` completes Gate B. The real Gitea source journey now uses the
-  physical IAM and Audit services and reuses the physical mTLS gateway,
-  build-worker, and runsc-runner recovery path; no in-memory IAM/Audit sink or
-  passing executor bridge remains.
-- The joined gate proves fenced recovery after source publication, gateway
-  submission, a running sandbox effect, provider-status creation, and a
-  committed Audit event whose response is lost. It retains one immutable run,
-  one provider outcome, one build/check receipt pair, exact physical Audit
-  records, and no residual business or probe container.
-- The joined journey passed in 45.78 seconds and the independent physical
-  executor journey in 43.35 seconds. Affected Linux package tests and vet plus
-  full Windows repository tests and vet passed on the same implementation.
-- FEAT-007 records that the disposable WSL, Docker, provider, database, cache,
-  download, and proxy resources were removed after the gate.
-- Gate C product UI and offline-release completion have not begun.
+- Pushed `c7af0ee` completes Gate B, including the physical IAM, Audit, Gitea,
+  fetcher, executor, reporter, and recovery journey.
+- Pushed `46a524b` begins Gate C with the public source-recheck command slice.
+  Bodyless, idempotent, strong-ETag-guarded connection and binding commands use
+  distinct administrator-only IAM actions and normalized Audit facts. They
+  schedule only the delivery-owned observation task and cannot submit or alter
+  health state.
+- Windows full repository tests, vet, generation, and architecture gates pass.
+  Clean PostgreSQL `18.6` journeys pass for DevOps double-apply, unchanged
+  resource snapshots, due scheduling, in-flight lease preservation,
+  observer-only state transition, and shared IAM/Audit action catalogs.
+- The disposable D-drive WSL and PostgreSQL resources and export archive were
+  removed after the gate. D-drive Go caches remain only while Gate C UI work is
+  active and must be removed when that work ends.
+- Gate C platform-shell UI and offline-release completion remain pending.
 
 ## Adoption boundary
 
@@ -43,9 +43,10 @@ architecture, FEAT, implementation, test, and release gates.
 
 ## Continuation
 
-Begin Gate C from FEAT-007's accepted product experience: integrate DevOps into
-the real platform shell and deliver the smallest independently testable UI
-slice without changing the Application PaaS product boundary. Keep UI authority
+Continue Gate C from FEAT-007's accepted product experience: integrate DevOps
+into the real platform shell and deliver the smallest independently testable UI
+slice without changing the Application PaaS product boundary. Use the guarded
+public recheck commands rather than synthesizing health state. Keep UI authority
 on the public DevOps and IAM contracts; do not expose provider-native payloads,
 credentials, executor internals, host paths, or unavailable Artifact/Delivery
 capabilities.
