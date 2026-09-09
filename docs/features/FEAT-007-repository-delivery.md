@@ -22,12 +22,14 @@
   CSR enrollment complete; dedicated-node installer implementation,
   controlled-host Linux integration, and authentic-material evidence complete;
   isolated check-report process, persistence, and fixed-Gitea adapter complete;
-  real Linux Docker/runsc source-archive-to-receipt integration and standalone
-  PostgreSQL VERIFY-to-REPORTING gateway/build-worker/runner crash recovery
-  complete; real Gitea observation, physical signed HTTP ingress, standalone
-  source-fetcher archive crash recovery, check-reporter status-acknowledgment
-  crash recovery, physical provider reporting, and DevOps Audit-dispatch
-  process delivery complete; the fully joined physical IAM/Audit services,
+  real Linux Docker/runsc source-archive-to-receipt integration, repository PID-
+  quota exhaustion and control-plane/credential probes, unsafe-log normalization,
+  whole-run oversized-log containment, and standalone PostgreSQL VERIFY-to-
+  REPORTING gateway/build-worker/runner crash recovery complete; real Gitea
+  observation, physical signed HTTP ingress, standalone source-fetcher archive
+  crash recovery, check-reporter status-acknowledgment crash recovery, physical
+  provider reporting, and DevOps Audit-dispatch process delivery complete; the
+  fully joined physical IAM/Audit services, cross-tenant/path-traversal/symlink
   adversarial cases, and full Gate B remain pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
@@ -1315,17 +1317,25 @@ and the pinned `runsc` now proves canonical source-archive execution through
 separate TLS 1.3 mTLS admin and runner listeners using the production clients,
 handlers, spool, journal, workspace, and runner workflow. Both fixed Go steps
 complete, normalized logs and the exact terminal receipt cross the authenticated
-boundaries, the journal is acknowledged, and no container remains. Repository-
-style negative probes also prove an empty sensitive environment, no Docker
-socket or privileged device, read-only source and root filesystems, no non-
-loopback interface, and failed reserved-address egress. A subsequent gate now
-extends this into standalone gateway/build-worker/runner processes backed by
-PostgreSQL and proves crash recovery. A separate gate also drives a real fixed
-Gitea connection through the source observer, physical DevOps webhook ingress,
-PostgreSQL, and standalone source-fetcher crash recovery. Joining those passing
-source and execution subjourneys through the physical provider-report effect,
-plus the resource-abuse and oversized-log suite, remains required for the
-complete Gate B.
+boundaries, the journal is acknowledged, and no container remains. A malicious
+source archive additionally proves an empty sensitive environment; no Docker,
+PostgreSQL, credential-file, or privileged-device access; read-only source and
+root filesystems; loopback-only networking; failed reserved/private/metadata
+egress; and actual process exhaustion below 384 attempts against the fixed 256-
+PID profile. The pinned runsc reports that exhaustion as `ENOMEM`, while native
+cgroups may report `EAGAIN`; either closed resource denial is accepted and an
+unrelated failure is not. Secret-shaped, absolute-path, ANSI, control-byte,
+invalid-UTF-8, and overlong native lines become their exact closed markers with
+no raw sentinel retained. A separate real step emits more than the fixed 8 MiB
+whole-run limit; `Follow` returns `ErrLogLimit` with no chunks or resumable
+progress, then cancellation, deletion, and observation prove it absent. A
+subsequent gate extends the successful execution into standalone gateway/build-
+worker/runner processes backed by PostgreSQL and proves crash recovery. Another
+gate drives a real fixed Gitea connection through the source observer, physical
+DevOps webhook ingress, PostgreSQL, and standalone source-fetcher crash recovery.
+Joining those passing source and execution subjourneys with physical IAM/Audit
+and the remaining cross-tenant/path-traversal/symlink attacks is still required
+for complete Gate B.
 
 Every fenced worker transition now submits the exact next PipelineRun document
 to the database boundary. A terminal transition atomically stores a distinct
@@ -1648,12 +1658,21 @@ Current verification evidence:
   runs the fixed `go test` and `go vet` steps; proves normalized logs, the exact
   terminal receipt, journal acknowledgement, and zero residual containers; and
   rejects sensitive environment exposure, writable source/root filesystems,
-  Docker socket and privileged-device access, non-loopback networking, and
-  reserved-address egress. The real Docker response also proved the exact
-  non-TTY multiplexed log media type, and the private cache tmpfs proved its
-  explicit UID/GID ownership. This gate alone does not exercise standalone
-  processes, signed Gitea ingress through PostgreSQL, restart recovery,
-  resource-abuse or oversized-log cases, or the provider report effect
+  Docker/control-plane sockets, credential files, privileged-device access,
+  non-loopback networking, and reserved/private/metadata egress. A malicious
+  repository starts child processes until the fixed 256-PID profile returns the
+  runsc `ENOMEM` resource denial, then emits secret-shaped, absolute-path, ANSI,
+  control-byte, invalid-UTF-8, and overlong lines whose raw values are absent and
+  exact closed markers are present in the authenticated log read. A separate
+  real production-sandbox step emits 129 64-KiB blocks, proves the fixed whole-
+  run log limit returns no partial chunks or progress, and is cancelled, deleted,
+  and observed absent. The real Docker response also proves the exact non-TTY
+  multiplexed log media type, and the private cache tmpfs proves its explicit
+  UID/GID ownership. The expanded journey passes in 48.04 seconds; affected
+  Linux vet plus full Windows repository tests and vet pass on the same worktree.
+  This gate alone still does not join standalone source/control-plane processes,
+  physical IAM/Audit, cross-tenant/path-traversal/symlink attacks, and the
+  provider-report effect in one journey
 - an opt-in standalone-process recovery journey on a clean PostgreSQL 18
   database and the same disposable Docker `29.6.2`/pinned-`runsc` node. It
   applies and verifies the migration twice, seeds one canonical source archive
@@ -1676,8 +1695,8 @@ Current verification evidence:
   vet, affected Windows race and twenty-run suites, and the affected offline
   Linux suites also pass. Its source input remains seeded; the physical source
   provider/Audit-dispatch journey is proved separately below, while fully
-  joining the physical IAM/Audit services, malicious resource/log cases, and
-  the rest of Gate B remain pending
+  joining the physical IAM/Audit services, the remaining cross-tenant/path-
+  traversal/symlink attacks, and the rest of Gate B remain pending
 - an opt-in real source-process recovery journey on a clean PostgreSQL 18
   database and the fixed Gitea `1.27.3` image. It applies and verifies the
   migration twice, provisions one private repository and purpose-separated

@@ -19,15 +19,22 @@ import (
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/runnersandboxdocker"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/runnerworkspacefile"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/port"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/runnerlog"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/sourcearchive"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runnerexecution"
 )
 
-const runnerDockerIntegrationEnvironment = "MATRIX_RUNNER_DOCKER_INTEGRATION"
+const (
+	runnerDockerIntegrationEnvironment = "MATRIX_RUNNER_DOCKER_INTEGRATION"
+	adversarialSecretSentinel          = "matrix-attack-secret-must-not-survive"
+	adversarialPathSentinel            = "/matrix/control-plane/private"
+)
 
 // TestRealDockerRunscRunnerCompletesMTLSExecution is the opt-in dedicated-host
 // gate from a canonical source archive, through both mTLS gateway roles, to the
-// production runner workflow and its real Docker/runsc side effect.
+// production runner workflow and its real Docker/runsc side effect. It also
+// drives an adversarial repository into the fixed PID and log-sanitization
+// boundaries, then proves a whole-run log overflow is contained and removed.
 func TestRealDockerRunscRunnerCompletesMTLSExecution(t *testing.T) {
 	if os.Getenv(runnerDockerIntegrationEnvironment) != "1" {
 		t.Skip("set MATRIX_RUNNER_DOCKER_INTEGRATION=1 on a dedicated Linux runner")
@@ -96,23 +103,99 @@ func TestRealDockerRunscRunnerCompletesMTLSExecution(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	request, archive := executableGatewayFixture(t)
-	type executeOutcome struct {
-		receipt devopsbuildv1.Receipt
-		err     error
-	}
 	ctx, cancel := context.WithTimeout(
 		context.Background(),
 		time.Duration(devopsv1.FixedRunTimeoutSeconds+30)*time.Second,
 	)
 	defer cancel()
+	request, archive := executableGatewayFixture(t)
+	receipt, logs := executeRealRunnerRequest(
+		t, ctx, spool, admin, runner, request, archive,
+	)
+	if !strings.Contains(logs, "example.invalid/matrixgateb") ||
+		strings.Contains(logs, journalRoot) || strings.Contains(logs, "/var/run/docker.sock") {
+		t.Fatalf(
+			"real normalized log evidence is invalid: receipt=%#v logs=%q",
+			receipt, logs,
+		)
+	}
+	wantReceipt := gatewayReceipt(
+		request, runnerGateway.RunnerID(), devopsbuildv1.ConclusionPassed,
+		devopsbuildv1.StepConclusionPassed, devopsbuildv1.StepConclusionPassed,
+	)
+	if receipt != wantReceipt {
+		t.Fatalf("real admin receipt=%#v logs=%q", receipt, logs)
+	}
+	assertRealRunnerContainersAbsent(t, ctx, workspaces, sandbox, request, archive)
+
+	adversarialRequest, adversarialArchive := adversarialGatewayFixture(t)
+	adversarialReceipt, adversarialLogs := executeRealRunnerRequest(
+		t, ctx, spool, admin, runner, adversarialRequest, adversarialArchive,
+	)
+	wantAdversarialReceipt := gatewayReceipt(
+		adversarialRequest, runnerGateway.RunnerID(), devopsbuildv1.ConclusionFailed,
+		devopsbuildv1.StepConclusionFailed, devopsbuildv1.StepConclusionNotRun,
+	)
+	if adversarialReceipt != wantAdversarialReceipt ||
+		!strings.Contains(adversarialLogs, "matrix-pid-limit-contained") {
+		t.Fatalf(
+			"real adversarial receipt=%#v logs=%q",
+			adversarialReceipt, adversarialLogs,
+		)
+	}
+	for _, marker := range []string{
+		"[matrix:secret-shaped]", "[matrix:absolute-path]",
+		"[matrix:ansi-escape]", "[matrix:control-bytes]",
+		"[matrix:invalid-utf8]", "[matrix:line-too-long]",
+	} {
+		if !strings.Contains(adversarialLogs, marker) {
+			t.Fatalf("real adversarial logs omitted %q: %q", marker, adversarialLogs)
+		}
+	}
+	for _, forbidden := range []string{
+		adversarialSecretSentinel, adversarialPathSentinel,
+		strings.Repeat("x", int(devopsv1.FixedMaxLogLineBytes)+1),
+	} {
+		if strings.Contains(adversarialLogs, forbidden) {
+			t.Fatalf("real adversarial logs retained unsafe content: %q", forbidden)
+		}
+	}
+	assertRealRunnerContainersAbsent(
+		t, ctx, workspaces, sandbox, adversarialRequest, adversarialArchive,
+	)
+	assertRealOversizedLogContained(t, ctx, workspaces, sandbox)
+
+	entries, err := journal.Entries(ctx)
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("real runner journal entries=%#v err=%v", entries, err)
+	}
+	for _, entry := range entries {
+		if entry.Phase != port.RunnerJournalAcknowledged {
+			t.Fatalf("real runner journal entry=%#v", entry)
+		}
+	}
+}
+
+func executeRealRunnerRequest(
+	t *testing.T,
+	ctx context.Context,
+	spool *executorspoolfile.Spool,
+	admin *AdminClient,
+	runner *runnerexecution.Service,
+	request devopsbuildv1.Request,
+	archive []byte,
+) (devopsbuildv1.Receipt, string) {
+	t.Helper()
+	type executeOutcome struct {
+		receipt devopsbuildv1.Receipt
+		err     error
+	}
 	executed := make(chan executeOutcome, 1)
 	go func() {
 		receipt, executeErr := admin.Execute(ctx, request, bytes.NewReader(archive))
 		executed <- executeOutcome{receipt: receipt, err: executeErr}
 	}()
 	waitForGatewayExecution(t, ctx, spool, request)
-
 	result, err := runner.WorkOnce(ctx)
 	if err != nil || !result.Claimed || !result.Acknowledged || result.Deferred {
 		t.Fatalf("real runner result=%#v err=%v", result, err)
@@ -121,13 +204,22 @@ func TestRealDockerRunscRunnerCompletesMTLSExecution(t *testing.T) {
 	if outcome.err != nil {
 		t.Fatalf("real admin execution: %v", outcome.err)
 	}
+	return outcome.receipt, readRealRunnerLogs(t, ctx, admin, request)
+}
 
+func readRealRunnerLogs(
+	t *testing.T,
+	ctx context.Context,
+	admin *AdminClient,
+	request devopsbuildv1.Request,
+) string {
+	t.Helper()
 	var normalized strings.Builder
 	afterSequence := uint64(0)
 	for batchIndex := 0; batchIndex < len(request.Steps); batchIndex++ {
-		batch, found, readErr := admin.ReadLogs(ctx, request, afterSequence)
-		if readErr != nil {
-			t.Fatalf("read real runner logs after %d: %v", afterSequence, readErr)
+		batch, found, err := admin.ReadLogs(ctx, request, afterSequence)
+		if err != nil {
+			t.Fatalf("read real runner logs after %d: %v", afterSequence, err)
 		}
 		if !found {
 			break
@@ -140,33 +232,117 @@ func TestRealDockerRunscRunnerCompletesMTLSExecution(t *testing.T) {
 		}
 		afterSequence = batch.Next.LastSequence
 	}
-	if _, found, readErr := admin.ReadLogs(ctx, request, afterSequence); readErr != nil || found {
-		t.Fatalf("real runner log tail found=%t err=%v", found, readErr)
+	if _, found, err := admin.ReadLogs(ctx, request, afterSequence); err != nil || found {
+		t.Fatalf("real runner log tail found=%t err=%v", found, err)
 	}
-	logs := normalized.String()
-	if !strings.Contains(logs, "example.invalid/matrixgateb") ||
-		strings.Contains(logs, journalRoot) || strings.Contains(logs, "/var/run/docker.sock") {
-		t.Fatalf(
-			"real normalized log evidence is invalid: receipt=%#v logs=%q",
-			outcome.receipt, logs,
-		)
+	return normalized.String()
+}
+
+func assertRealRunnerContainersAbsent(
+	t *testing.T,
+	ctx context.Context,
+	workspaces *runnerworkspacefile.Store,
+	sandbox *runnersandboxdocker.Sandbox,
+	request devopsbuildv1.Request,
+	archive []byte,
+) {
+	t.Helper()
+	executionID, err := devopsbuildv1.ExecutionID(request)
+	if err != nil {
+		t.Fatal(err)
 	}
-	wantReceipt := gatewayReceipt(
-		request, runnerGateway.RunnerID(), devopsbuildv1.ConclusionPassed,
-		devopsbuildv1.StepConclusionPassed, devopsbuildv1.StepConclusionPassed,
+	workspace, err := workspaces.Ensure(
+		ctx, executionID, request, io.NopCloser(bytes.NewReader(archive)),
 	)
-	if outcome.receipt != wantReceipt {
-		t.Fatalf("real admin receipt=%#v logs=%q", outcome.receipt, logs)
+	if err != nil {
+		t.Fatal(err)
 	}
-	entries, err := journal.Entries(ctx)
-	if err != nil || len(entries) != 1 || entries[0].Phase != port.RunnerJournalAcknowledged {
-		t.Fatalf("real runner journal entries=%#v err=%v", entries, err)
+	for _, step := range request.Steps {
+		state, observeErr := sandbox.Observe(ctx, realRunnerReference(executionID, workspace, step))
+		if observeErr != nil || state != port.RunnerSandboxAbsent {
+			t.Fatalf(
+				"real runner residual step=%d state=%q err=%v",
+				step.Ordinal, state, observeErr,
+			)
+		}
+	}
+}
+
+func assertRealOversizedLogContained(
+	t *testing.T,
+	ctx context.Context,
+	workspaces *runnerworkspacefile.Store,
+	sandbox *runnersandboxdocker.Sandbox,
+) {
+	t.Helper()
+	request, archive := oversizedLogGatewayFixture(t)
+	executionID, err := devopsbuildv1.ExecutionID(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace, err := workspaces.Ensure(
+		ctx, executionID, request, io.NopCloser(bytes.NewReader(archive)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := realRunnerReference(executionID, workspace, request.Steps[0])
+	if err := sandbox.Preflight(ctx); err != nil {
+		t.Fatalf("preflight real oversized-log sandbox: %v", err)
+	}
+	if err := sandbox.Create(ctx, reference); err != nil {
+		t.Fatalf("create real oversized-log sandbox: %v", err)
+	}
+	defer func() {
+		cleanupContext, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		state, observeErr := sandbox.Observe(cleanupContext, reference)
+		if observeErr == nil && (state == port.RunnerSandboxCreated ||
+			state == port.RunnerSandboxRunning) {
+			_, _ = sandbox.Cancel(cleanupContext, reference)
+		}
+		if deleteErr := sandbox.Delete(cleanupContext, reference); deleteErr != nil {
+			t.Errorf("clean real oversized-log sandbox: %v", deleteErr)
+		}
+	}()
+	if err := sandbox.Start(ctx, reference); err != nil {
+		t.Fatalf("start real oversized-log sandbox: %v", err)
+	}
+	result, err := sandbox.Follow(ctx, reference, runnerlog.Progress{})
+	if !errors.Is(err, runnersandboxdocker.ErrLogLimit) ||
+		result.State != "" || len(result.Chunks) != 0 ||
+		result.LogProgress != (runnerlog.Progress{}) {
+		t.Fatalf("real oversized-log result=%#v err=%v", result, err)
+	}
+	state, err := sandbox.Cancel(ctx, reference)
+	if err != nil || (state != port.RunnerSandboxCancelled &&
+		state != port.RunnerSandboxFailed) {
+		t.Fatalf("contain real oversized-log sandbox state=%q err=%v", state, err)
+	}
+	if err := sandbox.Delete(ctx, reference); err != nil {
+		t.Fatalf("delete real oversized-log sandbox: %v", err)
+	}
+	state, err = sandbox.Observe(ctx, reference)
+	if err != nil || state != port.RunnerSandboxAbsent {
+		t.Fatalf("real oversized-log residual state=%q err=%v", state, err)
+	}
+}
+
+func realRunnerReference(
+	executionID string,
+	workspace port.RunnerWorkspace,
+	step devopsv1.VerificationStep,
+) port.RunnerStepReference {
+	digest := strings.TrimPrefix(executionID, "sha256:")
+	return port.RunnerStepReference{
+		EffectID:   "matrix-build-" + digest[:48],
+		Step:       step,
+		SourceRoot: workspace.SourceRoot,
 	}
 }
 
 func executableGatewayFixture(t *testing.T) (devopsbuildv1.Request, []byte) {
 	t.Helper()
-	request, _ := gatewayExecutionFixture(t, 'd')
 	files := []sourcearchive.File{
 		integrationSourceFile("calc.go", `package matrixgateb
 
@@ -230,6 +406,178 @@ func TestIsolation(t *testing.T) {
 go 1.26.0
 `),
 	}
+	return gatewayFixtureWithFiles(t, 'd', files)
+}
+
+func adversarialGatewayFixture(t *testing.T) (devopsbuildv1.Request, []byte) {
+	t.Helper()
+	files := []sourcearchive.File{
+		integrationSourceFile("guard_test.go", `package matrixgatebadversarial
+
+import (
+	"errors"
+	"fmt"
+	"net"
+	"os"
+	"os/exec"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+)
+
+const attackSecret = "`+adversarialSecretSentinel+`"
+const attackPath = "`+adversarialPathSentinel+`"
+
+func TestAdversarialRepository(t *testing.T) {
+	for _, name := range []string{
+		"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
+		"AZURE_CLIENT_SECRET", "GOOGLE_APPLICATION_CREDENTIALS", "GITHUB_TOKEN",
+		"CI_JOB_TOKEN", "SSH_AUTH_SOCK", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+	} {
+		if os.Getenv(name) != "" {
+			t.Fatalf("sensitive environment is not empty: %s", name)
+		}
+	}
+	for _, name := range []string{
+		"/var/run/docker.sock", "/proc/1/root/var/run/docker.sock",
+		"/dev/kvm", "/dev/mem", "/dev/dri",
+	} {
+		if _, err := os.Stat(name); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("protected host input is reachable: %s", name)
+		}
+	}
+	for _, name := range []string{
+		"/run/secrets/kubernetes.io/serviceaccount/token",
+		"/root/.docker/config.json", "/etc/matrix/credentials",
+	} {
+		if content, err := os.ReadFile(name); err == nil || len(content) != 0 {
+			t.Fatalf("protected credential input is readable: %s", name)
+		}
+	}
+	if err := os.WriteFile("repository-write-probe", []byte("denied"), 0o600); err == nil {
+		t.Fatal("repository source is writable")
+	}
+	if err := os.WriteFile("/matrix-root-write-probe", []byte("denied"), 0o600); err == nil {
+		t.Fatal("container root is writable")
+	}
+	interfaces, err := net.Interfaces()
+	if err != nil || len(interfaces) > 1 {
+		t.Fatalf("unexpected network interface count=%d", len(interfaces))
+	}
+	for _, networkInterface := range interfaces {
+		if networkInterface.Flags&net.FlagLoopback == 0 {
+			t.Fatal("non-loopback network interface is present")
+		}
+	}
+	for _, target := range []string{
+		"192.0.2.1:443", "169.254.169.254:80", "10.0.0.1:443",
+	} {
+		connection, err := net.DialTimeout("tcp", target, 100*time.Millisecond)
+		if err == nil {
+			connection.Close()
+			t.Fatal("unapproved egress succeeded")
+		}
+	}
+	if connection, err := net.DialTimeout(
+		"unix", "/var/run/postgresql/.s.PGSQL.5432", 100*time.Millisecond,
+	); err == nil {
+		connection.Close()
+		t.Fatal("control-plane database socket is reachable")
+	}
+
+	const processAttempts = 384
+	children := make([]*exec.Cmd, 0, processAttempts)
+	var denied error
+	for attempt := 0; attempt < processAttempts; attempt++ {
+		child := exec.Command("sleep", "30")
+		if err := child.Start(); err != nil {
+			denied = err
+			break
+		}
+		children = append(children, child)
+	}
+	for _, child := range children {
+		_ = child.Process.Kill()
+	}
+	for _, child := range children {
+		_ = child.Wait()
+	}
+	// runsc helper tasks consume the same fixed PID budget, so the exact number
+	// of child processes is deliberately not a contract. Native cgroups report
+	// EAGAIN at the limit while runsc reports ENOMEM; both are closed resource
+	// denials. The attack must make progress and then hit one before all tries.
+	resourceDenied := errors.Is(denied, syscall.EAGAIN) ||
+		errors.Is(denied, syscall.ENOMEM)
+	if !resourceDenied || len(children) == 0 ||
+		len(children) >= processAttempts {
+		t.Fatalf(
+			"process containment count=%d eagain=%t enomem=%t",
+			len(children), errors.Is(denied, syscall.EAGAIN),
+			errors.Is(denied, syscall.ENOMEM),
+		)
+	}
+
+	fmt.Println("matrix-pid-limit-contained")
+	fmt.Println("TOKEN=" + attackSecret)
+	fmt.Println("attempted path " + attackPath)
+	fmt.Println("\x1b[31munsafe ANSI\x1b[0m")
+	if _, err := os.Stdout.Write([]byte("control\x00bytes\n")); err != nil {
+		t.Fatal("write control-byte probe")
+	}
+	if _, err := os.Stdout.Write([]byte{'i', 'n', 'v', 'a', 'l', 'i', 'd', 0xff, '\n'}); err != nil {
+		t.Fatal("write invalid UTF-8 probe")
+	}
+	fmt.Println(strings.Repeat("x", 16*1024+1))
+	t.Fatal("intentional adversarial verification failure")
+}
+`),
+		integrationSourceFile("go.mod", `module example.invalid/matrixgatebadversarial
+
+go 1.26.0
+`),
+	}
+	return gatewayFixtureWithFiles(t, 'e', files)
+}
+
+func oversizedLogGatewayFixture(t *testing.T) (devopsbuildv1.Request, []byte) {
+	t.Helper()
+	files := []sourcearchive.File{
+		integrationSourceFile("oversized_test.go", `package matrixgateboversized
+
+import (
+	"os"
+	"testing"
+)
+
+func TestWholeRunLogLimit(t *testing.T) {
+	block := make([]byte, 64*1024)
+	for index := range block {
+		block[index] = 'z'
+	}
+	for chunk := 0; chunk < 129; chunk++ {
+		if _, err := os.Stdout.Write(block); err != nil {
+			t.Fatal("write whole-run log probe")
+		}
+	}
+	t.Fatal("intentional whole-run log overflow")
+}
+`),
+		integrationSourceFile("go.mod", `module example.invalid/matrixgateboversized
+
+go 1.26.0
+`),
+	}
+	return gatewayFixtureWithFiles(t, 'f', files)
+}
+
+func gatewayFixtureWithFiles(
+	t *testing.T,
+	identity byte,
+	files []sourcearchive.File,
+) (devopsbuildv1.Request, []byte) {
+	t.Helper()
+	request, _ := gatewayExecutionFixture(t, identity)
 	var archive bytes.Buffer
 	content, err := sourcearchive.Write(context.Background(), &archive, files)
 	if err != nil {
