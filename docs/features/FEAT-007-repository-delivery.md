@@ -25,8 +25,9 @@
   real Linux Docker/runsc source-archive-to-receipt integration and standalone
   PostgreSQL VERIFY-to-REPORTING gateway/build-worker/runner crash recovery
   complete; real Gitea observation, physical signed HTTP ingress, and standalone
-  source-fetcher archive crash recovery complete; physical provider reporting
-  and full Gate B remain pending
+  source-fetcher archive crash recovery, physical provider reporting, and
+  DevOps Audit-dispatch process delivery complete; the fully joined physical
+  IAM/Audit services, adversarial cases, and full Gate B remain pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -1673,38 +1674,54 @@ Current verification evidence:
   10-second edge. The journey passes in 174.76 seconds; all repository tests and
   vet, affected Windows race and twenty-run suites, and the affected offline
   Linux suites also pass. Its source input remains seeded; the physical source
-  journey is proved separately below, while the check-report process,
-  correlated provider/Audit completion, malicious resource/log cases, and the
-  rest of Gate B remain pending
+  provider/Audit-dispatch journey is proved separately below, while fully
+  joining the physical IAM/Audit services, malicious resource/log cases, and
+  the rest of Gate B remain pending
 - an opt-in real source-process recovery journey on a clean PostgreSQL 18
   database and the fixed Gitea `1.27.3` image. It applies and verifies the
   migration twice, provisions one private repository and purpose-separated
   fetch/report tokens, writes only canonical private credential envelopes, and
-  starts the actual DevOps API, source-observer, source-fetcher, and check-
-  reporter binaries against an exact trusted TLS origin. The reporter provides
-  only its real database heartbeat in this subjourney so the API readiness
-  contract is closed; it receives no report task. The API proves its IAM
-  service-identity readiness call through a narrow HTTP test boundary, while
-  the separate authority-process gate owns the physical IAM process evidence.
-  The observer makes the connection and binding `READY`; the physical webhook
-  route rejects a forged signature, one valid signed pull-request event creates
-  one run and two correlated Audit outbox facts, equal replay retains that run,
-  and changed-byte replay conflicts. The gate locks only the receipt
-  relation, lets the first fetcher perform exactly one Gitea `upload-pack` and
-  atomically publish the archive, then kills it before PostgreSQL can
-  acknowledge the effect. The database still has an open fence-one FETCH and
-  no receipt; after bounded test-only lease expiry, a replacement process uses
-  fence two to inspect the existing archive, never recontacts Gitea, stores one
-  receipt, completes FETCH, and advances the unchanged run to `VERIFYING`.
-  The archive contains the exact head tree without Git metadata, while its
-  content, all selected database documents, and process output contain no
-  webhook/token/database credential or private path. The source-fetcher now
-  also waits for active-cycle cleanup on graceful shutdown. The physical HTTP
-  journey passes in 2.75 seconds; all repository tests and vet, affected
-  Windows race and twenty-run suites, and affected twenty-run disconnected Go
-  `1.26.8` Linux suites pass. This subjourney does not execute the
-  BuildExecutor, create the provider check, dispatch Audit, exercise a
-  malicious repository, or form the complete Gate B chain
+  starts the actual DevOps API, source-observer, two source-fetchers, check-
+  reporter, and DevOps Audit-dispatcher binaries against an exact trusted TLS
+  origin. The API proves its IAM service-identity readiness call through a
+  narrow HTTP test boundary, while the separate authority-process gate owns
+  physical IAM evidence. The observer makes the connection and binding
+  `READY`; the physical webhook rejects a forged signature, one valid signed
+  pull-request event creates one run and correlated Audit facts, equal replay
+  retains that run, and changed-byte replay conflicts. The gate locks only the
+  receipt relation, lets the first fetcher perform exactly one Gitea
+  `upload-pack` and atomically publish the archive, then kills it before
+  PostgreSQL can acknowledge the effect. The database still has an open fence-
+  one FETCH and no receipt; after bounded test-only lease expiry, a replacement
+  uses fence two to inspect the existing archive, never recontacts Gitea,
+  stores one receipt, completes FETCH, and advances the unchanged run to
+  `VERIFYING`.
+
+  The production VERIFY use case then reads that exact archive through its
+  table-blind worker repository and archive port. A deliberately narrow in-test
+  passing executor bridges the already separately proved physical isolated-
+  runner gate; it performs no external execution and therefore is not evidence
+  for runner isolation. Its normalized receipt advances the same immutable run
+  to `REPORTING`. The actual check-reporter process resolves only the report
+  credential, creates exactly one real Gitea `success` status with context
+  `matrix/{pipelineId}/{runId}`, persists the provider status/receipt, completes
+  REPORT at fence one, and records the run as `SUCCEEDED / COMPLETED`. The
+  actual DevOps Audit dispatcher then authenticates to a narrow validating
+  Audit HTTP boundary and delivers every accumulated outbox fact exactly once;
+  the source-admitted and run-created facts retain the webhook request
+  correlation, while the terminal fact targets and correlates the same run,
+  uses the system run-worker actor, and has no IAM decision. The separate
+  authority-process gate remains the evidence for the physical Audit service.
+
+  The archive contains the exact head tree without Git metadata. Its content,
+  all selected database documents including build/check receipts, and process
+  output contain no webhook, provider token, service/Audit/database credential,
+  or private path. The physical journey passes in 3.35 seconds under Go
+  `1.26.8` with module-network access disabled; Linux package vet and current
+  full-repository Windows tests and vet pass. This joined slice still does not
+  re-execute the physical BuildExecutor or physical IAM and Audit services in
+  the same journey, exercise a malicious repository or resource/oversized-log
+  cases, prove every remaining external-effect restart, or complete Gate B
 - selected-product installation and topology tests proving journal-stable PKI
   issuance time, three disjoint P-256 authorities, exact gateway and
   build-worker identities, canonical write-once authority storage,

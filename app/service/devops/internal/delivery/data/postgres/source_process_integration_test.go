@@ -23,19 +23,24 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
+	devopsbuildv1 "github.com/xiak/matrix/api/adapter/devopsbuild/v1"
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/gitea"
 	devopspostgres "github.com/xiak/matrix/app/service/devops/internal/delivery/data/postgres"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/sourcearchivefile"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/port"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/sourcearchive"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/buildexecution"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/checkreporting"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/pipelineconfiguration"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runcontrol"
 	devopsmigration "github.com/xiak/matrix/app/service/devops/migration"
@@ -47,6 +52,7 @@ const (
 	sourceProcessGiteaUpstreamEnvironment = "MATRIX_DEVOPS_SOURCE_PROCESS_TEST_GITEA_UPSTREAM"
 	sourceProcessGiteaEndpointEnvironment = "MATRIX_DEVOPS_SOURCE_PROCESS_TEST_GITEA_ENDPOINT"
 	sourceProcessAPIEnvironment           = "MATRIX_DEVOPS_SOURCE_PROCESS_API_BINARY"
+	sourceProcessAuditEnvironment         = "MATRIX_DEVOPS_SOURCE_PROCESS_AUDIT_DISPATCHER_BINARY"
 	sourceProcessReporterEnvironment      = "MATRIX_DEVOPS_SOURCE_PROCESS_REPORTER_BINARY"
 	sourceProcessObserverEnvironment      = "MATRIX_DEVOPS_SOURCE_PROCESS_OBSERVER_BINARY"
 	sourceProcessFetcherEnvironment       = "MATRIX_DEVOPS_SOURCE_PROCESS_FETCHER_BINARY"
@@ -60,14 +66,18 @@ const (
 	sourceProcessPipelineID      = devopsv1.ResourceID("pipeline-source-process")
 	sourceProcessDeliveryID      = "123e4567-e89b-42d3-a456-000000000702"
 	sourceProcessServiceSecret   = "mx1.SourceProcessDevOpsServiceCredential000000001"
+	sourceProcessAuditSecret     = "mx1.SourceProcessAuditCredential00000000000000001"
 )
 
 // TestSignedGiteaChangeRecoversThroughSourceFetcherProcess is the opt-in Gate B
 // source subjourney. A real Gitea change crosses the physical DevOps HTTP
 // process and becomes one signed admission and one archive. The first source-
 // fetcher is killed after publishing that archive but before PostgreSQL can
-// acknowledge it; a replacement must observe the immutable effect under a
-// larger fence without another provider fetch.
+// acknowledge it; a replacement observes the immutable effect under a larger
+// fence without another provider fetch. The same run then crosses the real
+// check-reporter and Audit-dispatcher process boundaries. An in-test passing
+// executor bridge deliberately does not replace the separate isolated runner
+// gate.
 func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 	adminDSN := os.Getenv(sourceProcessDSNEnvironment)
 	if adminDSN == "" {
@@ -77,6 +87,7 @@ func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 	defer cancel()
 
 	apiBinary := requiredExecutionProcessBinary(t, sourceProcessAPIEnvironment)
+	auditBinary := requiredExecutionProcessBinary(t, sourceProcessAuditEnvironment)
 	reporterBinary := requiredExecutionProcessBinary(t, sourceProcessReporterEnvironment)
 	observerBinary := requiredExecutionProcessBinary(t, sourceProcessObserverEnvironment)
 	fetcherBinary := requiredExecutionProcessBinary(t, sourceProcessFetcherEnvironment)
@@ -124,9 +135,10 @@ func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 	fetchRoot := makeExecutionProcessDirectory(t, temporary, "source-fetch", 0o700)
 	reportRoot := makeExecutionProcessDirectory(t, temporary, "source-report", 0o700)
 	archiveRoot := makeExecutionProcessDirectory(t, temporary, "source-archives", 0o700)
-	endpoint, provider, uploadPacks := newSourceProcessProvider(
+	endpoint, provider, providerCalls := newSourceProcessProvider(
 		t, upstream, providerEndpoint,
 	)
+	auditEndpoint, auditSink := newSourceProcessAudit(t, sourceProcessAuditSecret)
 	caPath := writeExecutionProcessFile(
 		t, temporary, "provider-ca.pem",
 		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: provider.Certificate().Raw}),
@@ -180,6 +192,9 @@ func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 	reporterDSNPath := writeExecutionProcessFile(
 		t, temporary, "source-reporter-dsn", []byte(reporterDSN), 0o600,
 	)
+	workerDSNPath := writeExecutionProcessFile(
+		t, temporary, "source-worker-dsn", []byte(workerDSN), 0o600,
+	)
 	observerDSNPath := writeExecutionProcessFile(
 		t, temporary, "source-observer-dsn", []byte(observerDSN), 0o600,
 	)
@@ -189,6 +204,10 @@ func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 	serviceCredentialPath := writeExecutionProcessFile(
 		t, temporary, "source-api-service-credential",
 		[]byte(sourceProcessServiceSecret), 0o600,
+	)
+	auditCredentialPath := writeExecutionProcessFile(
+		t, temporary, "source-audit-service-credential",
+		[]byte(sourceProcessAuditSecret), 0o600,
 	)
 	iam, iamCalls := newSourceProcessIAM(t, sourceProcessServiceSecret)
 	observerAddress := reserveExecutionProcessAddress(t)
@@ -202,15 +221,19 @@ func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 	apiAddress := reserveDistinctExecutionProcessAddress(
 		t, observerAddress, reporterAddress, firstFetcherAddress, secondFetcherAddress,
 	)
-	children := make([]*executionProcessChild, 0, 5)
+	auditAddress := reserveDistinctExecutionProcessAddress(
+		t, observerAddress, reporterAddress, firstFetcherAddress, secondFetcherAddress,
+		apiAddress,
+	)
+	children := make([]*executionProcessChild, 0, 6)
 	t.Cleanup(func() {
 		for index := len(children) - 1; index >= 0; index-- {
 			children[index].stop()
 		}
 		assertSourceProcessOutputSafe(t, children, []string{
 			sourceProcessWebhookSecret, fetchCredential.value, reportCredential.value,
-			sourceProcessServiceSecret, apiPassword, reporterPassword, fetcherPassword, observerPassword,
-			workerPassword, temporary,
+			sourceProcessServiceSecret, sourceProcessAuditSecret, apiPassword,
+			reporterPassword, fetcherPassword, observerPassword, workerPassword, temporary,
 		})
 	})
 	start := func(binary string, environment []string) *executionProcessChild {
@@ -304,8 +327,11 @@ func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 	)
 	run := readSourceProcessRun(t, ctx, admin)
 	waitSourceProcessArchive(t, ctx, archiveRoot, firstFetcher)
-	if uploadPacks.Load() != 1 {
-		t.Fatalf("source process provider upload-pack requests=%d want=1", uploadPacks.Load())
+	if providerCalls.uploadPacks.Load() != 1 {
+		t.Fatalf(
+			"source process provider upload-pack requests=%d want=1",
+			providerCalls.uploadPacks.Load(),
+		)
 	}
 	firstFetcher.crash(t)
 	if err := lock.Rollback(ctx); err != nil {
@@ -333,9 +359,48 @@ func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 	}
 	secondFetcher.stop()
 	observer.stop()
+	reporting := completeSourceProcessBuild(
+		t, ctx, workerDSN, archiveRoot, run.ID,
+	)
+	if reporting.Input != run.Input || reporting.InputDigest != run.InputDigest ||
+		reporting.Status.Stage != devopsv1.PipelineRunStageReport ||
+		reporting.Status.State != devopsv1.PipelineRunReporting {
+		t.Fatalf("source process reporting run=%#v", reporting)
+	}
+	terminal := waitSourceProcessSucceeded(t, ctx, runController, run.ID, reporter)
+	providerStatusID := assertSourceProcessProviderStatus(
+		t, upstream, repository, change, terminal,
+	)
+	if providerCalls.statusCreates.Load() != 1 {
+		t.Fatalf(
+			"source process provider status creates=%d want=1",
+			providerCalls.statusCreates.Load(),
+		)
+	}
+	expectedAudits := readSourceProcessPendingAudits(t, ctx, admin)
+	auditDispatcher := start(auditBinary, []string{
+		"MATRIX_DEVOPS_AUDIT_DATABASE_DSN_FILE=" + workerDSNPath,
+		"MATRIX_DEVOPS_AUDIT_ENDPOINT=" + auditEndpoint,
+		"MATRIX_DEVOPS_AUDIT_CREDENTIAL_FILE=" + auditCredentialPath,
+		"MATRIX_DEVOPS_AUDIT_WORKER_ID=source-audit-process",
+		"MATRIX_DEVOPS_AUDIT_LISTEN_ADDRESS=" + auditAddress,
+	})
+	waitExecutionProcessHTTPStatus(
+		t, ctx, auditDispatcher, "http://"+auditAddress+"/ready", http.StatusOK,
+	)
+	deliveredAudits := waitSourceProcessAuditDelivery(
+		t, ctx, admin, auditDispatcher, auditSink, expectedAudits,
+	)
+	auditDispatcher.stop()
+	assertSourceProcessRunAudits(t, deliveredAudits, run, correlationID)
 	assertSourceProcessEvidence(
-		t, ctx, admin, archiveRoot, run, repository, correlationID, uploadPacks.Load(),
-		[]string{sourceProcessWebhookSecret, fetchCredential.value, reportCredential.value},
+		t, ctx, admin, archiveRoot, run, terminal, repository, correlationID,
+		providerCalls.uploadPacks.Load(), providerCalls.statusCreates.Load(),
+		providerStatusID,
+		[]string{
+			sourceProcessWebhookSecret, fetchCredential.value, reportCredential.value,
+			sourceProcessServiceSecret, sourceProcessAuditSecret,
+		},
 	)
 }
 
@@ -353,6 +418,11 @@ type sourceProcessChange struct {
 
 type sourceProcessToken struct {
 	value string
+}
+
+type sourceProcessProviderCalls struct {
+	uploadPacks   atomic.Int64
+	statusCreates atomic.Int64
 }
 
 func newSourceProcessIAM(
@@ -515,11 +585,11 @@ func newSourceProcessProvider(
 	t *testing.T,
 	upstream *url.URL,
 	endpoint *url.URL,
-) (string, *httptest.Server, *atomic.Int64) {
+) (string, *httptest.Server, *sourceProcessProviderCalls) {
 	t.Helper()
 	proxy := httputil.NewSingleHostReverseProxy(upstream)
 	originalDirector := proxy.Director
-	uploadPacks := &atomic.Int64{}
+	calls := &sourceProcessProviderCalls{}
 	proxy.Director = func(request *http.Request) {
 		incomingHost := request.Host
 		originalDirector(request)
@@ -528,7 +598,10 @@ func newSourceProcessProvider(
 	}
 	handler := http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/git-upload-pack") {
-			uploadPacks.Add(1)
+			calls.uploadPacks.Add(1)
+		}
+		if request.Method == http.MethodPost && strings.Contains(request.URL.Path, "/statuses/") {
+			calls.statusCreates.Add(1)
 		}
 		proxy.ServeHTTP(response, request)
 	})
@@ -546,7 +619,105 @@ func newSourceProcessProvider(
 	if server.URL != endpoint.String() {
 		t.Fatalf("source process provider endpoint=%q want=%q", server.URL, endpoint)
 	}
-	return server.URL, server, uploadPacks
+	return server.URL, server, calls
+}
+
+type sourceProcessAuditSink struct {
+	mutex   sync.Mutex
+	events  []auditv1.Event
+	failure string
+}
+
+func newSourceProcessAudit(
+	t *testing.T,
+	credential string,
+) (string, *sourceProcessAuditSink) {
+	t.Helper()
+	sink := &sourceProcessAuditSink{}
+	handler := http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Authorization") != "Bearer "+credential ||
+			request.Header.Get("Matrix-Subject-Credential") != "" {
+			sink.recordFailure("Audit request used an invalid service identity")
+			response.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		response.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/ready" &&
+			request.URL.RawQuery == "":
+			_ = json.NewEncoder(response).Encode(auditv1.Readiness{
+				APIVersion:    auditv1.APIVersion,
+				Kind:          "Readiness",
+				State:         auditv1.ReadinessReady,
+				SchemaVersion: 1,
+				CheckedAt:     time.Now().UTC().Truncate(time.Microsecond),
+			})
+		case request.Method == http.MethodPost && request.URL.Path == "/v1/events" &&
+			request.URL.RawQuery == "" &&
+			strings.HasPrefix(request.Header.Get("Content-Type"), "application/json"):
+			var event auditv1.Event
+			if auditv1.DecodeRequest(request.Body, &event) != nil ||
+				auditv1.ValidateEventForSource(auditv1.SourceDevOps, event) != nil {
+				sink.recordFailure("Audit request contained an invalid DevOps event")
+				response.WriteHeader(http.StatusUnprocessableEntity)
+				return
+			}
+			sequence := sink.record(event)
+			response.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(response).Encode(sourceProcessIngestionResult(event, sequence))
+		default:
+			sink.recordFailure("Audit request used an unexpected route")
+			response.WriteHeader(http.StatusNotFound)
+		}
+	})
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	return server.URL, sink
+}
+
+func (sink *sourceProcessAuditSink) record(event auditv1.Event) uint64 {
+	sink.mutex.Lock()
+	defer sink.mutex.Unlock()
+	sink.events = append(sink.events, event)
+	return uint64(len(sink.events))
+}
+
+func (sink *sourceProcessAuditSink) recordFailure(value string) {
+	sink.mutex.Lock()
+	defer sink.mutex.Unlock()
+	if sink.failure == "" {
+		sink.failure = value
+	}
+}
+
+func (sink *sourceProcessAuditSink) snapshot() ([]auditv1.Event, string) {
+	sink.mutex.Lock()
+	defer sink.mutex.Unlock()
+	events := append([]auditv1.Event(nil), sink.events...)
+	return events, sink.failure
+}
+
+func sourceProcessIngestionResult(
+	event auditv1.Event,
+	sequence uint64,
+) auditv1.IngestionResult {
+	return auditv1.IngestionResult{
+		APIVersion: auditv1.APIVersion,
+		Kind:       "IngestionResult",
+		Outcome:    auditv1.IngestionAccepted,
+		Record: auditv1.AuditRecord{
+			APIVersion:    auditv1.APIVersion,
+			Kind:          "AuditRecord",
+			Source:        auditv1.SourceDevOps,
+			Sequence:      sequence,
+			Event:         event,
+			ContentDigest: "sha256:" + strings.Repeat("a", 64),
+			PreviousHash:  "sha256:" + strings.Repeat("b", 64),
+			RecordHash:    "sha256:" + strings.Repeat("c", 64),
+			IngestedAt:    time.Now().UTC().Truncate(time.Microsecond),
+			Retention:     auditv1.RetentionIndefinite,
+		},
+	}
 }
 
 func provisionSourceProcessRepository(
@@ -1080,20 +1251,387 @@ func waitSourceProcessVerifying(
 	}
 }
 
+// sourceProcessBuildBridge exercises the production VERIFY use case and its
+// PostgreSQL/archive boundaries while returning deterministic passing evidence.
+// Isolation, cancellation, and real runner execution remain owned by the
+// separate physical executor journey.
+type sourceProcessBuildBridge struct {
+	executions atomic.Int64
+}
+
+var _ port.BuildExecutor = (*sourceProcessBuildBridge)(nil)
+
+func (bridge *sourceProcessBuildBridge) Execute(
+	ctx context.Context,
+	request devopsbuildv1.Request,
+	archive io.Reader,
+) (devopsbuildv1.Receipt, error) {
+	if ctx == nil || archive == nil || ctx.Err() != nil {
+		return devopsbuildv1.Receipt{}, port.ErrBuildUnavailable
+	}
+	content, err := io.ReadAll(io.LimitReader(archive, request.SourceArchiveBytes+1))
+	if err != nil || int64(len(content)) != request.SourceArchiveBytes {
+		clear(content)
+		return devopsbuildv1.Receipt{}, port.ErrBuildUnavailable
+	}
+	clear(content)
+	bridge.executions.Add(1)
+	receipt := devopsbuildv1.Receipt{
+		TenantID:               request.TenantID,
+		RunID:                  request.RunID,
+		CommandID:              request.CommandID,
+		InputDigest:            request.InputDigest,
+		SourceArchiveDigest:    request.SourceArchiveDigest,
+		PipelineRevisionID:     request.PipelineRevisionID,
+		PipelineRevisionDigest: request.PipelineRevisionDigest,
+		ExecutorID:             "source-process-build-bridge",
+		ExecutorProfile:        request.ExecutorProfile,
+		ToolchainImageDigest:   request.ToolchainImageDigest,
+		Conclusion:             devopsbuildv1.ConclusionPassed,
+		Steps: [2]devopsbuildv1.StepReceipt{
+			{
+				Ordinal: request.Steps[0].Ordinal, Kind: request.Steps[0].Kind,
+				Conclusion: devopsbuildv1.StepConclusionPassed,
+			},
+			{
+				Ordinal: request.Steps[1].Ordinal, Kind: request.Steps[1].Kind,
+				Conclusion: devopsbuildv1.StepConclusionPassed,
+			},
+		},
+	}
+	receipt.ContentDigest = devopsbuildv1.DigestReceipt(receipt)
+	if err := devopsbuildv1.ValidateReceipt(request, receipt); err != nil {
+		return devopsbuildv1.Receipt{}, err
+	}
+	return receipt, nil
+}
+
+func (*sourceProcessBuildBridge) Observe(
+	context.Context,
+	devopsbuildv1.Request,
+) (devopsbuildv1.Receipt, bool, error) {
+	return devopsbuildv1.Receipt{}, false, port.ErrBuildUnavailable
+}
+
+func (*sourceProcessBuildBridge) Cancel(
+	context.Context,
+	devopsbuildv1.Request,
+) (devopsbuildv1.Receipt, bool, error) {
+	return devopsbuildv1.Receipt{}, false, port.ErrBuildUnavailable
+}
+
+type sourceProcessBuildLogs struct{}
+
+var _ port.BuildLogSource = sourceProcessBuildLogs{}
+
+func (sourceProcessBuildLogs) ReadLogs(
+	context.Context,
+	devopsbuildv1.Request,
+	uint64,
+) (devopsbuildv1.LogBatch, bool, error) {
+	return devopsbuildv1.LogBatch{}, false, nil
+}
+
+func completeSourceProcessBuild(
+	t *testing.T,
+	ctx context.Context,
+	workerDSN string,
+	archiveRoot string,
+	runID devopsv1.ResourceID,
+) devopsv1.PipelineRun {
+	t.Helper()
+	workerPool := openExecutionProcessPool(t, ctx, workerDSN)
+	defer workerPool.Close()
+	repository, err := devopspostgres.NewBuildExecutionRepository(workerPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archives, err := sourcearchivefile.New(archiveRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := &sourceProcessBuildBridge{}
+	service, err := buildexecution.NewService(
+		repository,
+		archives,
+		executor,
+		sourceProcessBuildLogs{},
+		buildexecution.Config{
+			WorkerID:      "source-process-build-bridge",
+			LeaseDuration: buildexecution.LeaseDuration,
+			Deadline:      buildexecution.ExecutionDeadline,
+			CancelGrace:   buildexecution.CancellationGrace,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Heartbeat(ctx); err != nil {
+		t.Fatalf("start source process build bridge heartbeat: %v", err)
+	}
+	result, err := service.BuildOnce(ctx)
+	if err != nil || !result.Claimed || result.CommandID != string(runID)+":verify:1" ||
+		result.Run.ID != runID || executor.executions.Load() != 1 {
+		t.Fatalf(
+			"source process build result=%#v executions=%d err=%v",
+			result, executor.executions.Load(), err,
+		)
+	}
+	return result.Run
+}
+
+func waitSourceProcessSucceeded(
+	t *testing.T,
+	ctx context.Context,
+	runs *runcontrol.Service,
+	runID devopsv1.ResourceID,
+	reporter *executionProcessChild,
+) devopsv1.PipelineRun {
+	t.Helper()
+	for {
+		if exited, err := reporter.poll(); exited {
+			t.Fatalf("check reporter exited before terminal status: %v output=%q", err, reporter.output())
+		}
+		run, err := runs.Get(ctx, runcontrol.GetQuery{
+			Authorization: authForTenant(
+				sourceProcessTenantID, iamv1.ActionDevOpsRunRead,
+				iamv1.ResourcePipelineRun, runID,
+			),
+			RunID: runID,
+		})
+		if err != nil {
+			t.Fatalf("read source process terminal run: %v", err)
+		}
+		if run.Status.State == devopsv1.PipelineRunSucceeded {
+			if run.Status.Stage != devopsv1.PipelineRunStageReport ||
+				run.Status.Reason != devopsv1.PipelineRunReasonCompleted ||
+				run.Status.CompletedAt == nil {
+				t.Fatalf("source process terminal run=%#v", run)
+			}
+			return run
+		}
+		if run.Status.State == devopsv1.PipelineRunFailed ||
+			run.Status.State == devopsv1.PipelineRunCancelled ||
+			run.Status.State == devopsv1.PipelineRunManualIntervention {
+			t.Fatalf("source process report terminated unexpectedly: %#v", run)
+		}
+		waitExecutionProcessPoll(t, ctx)
+	}
+}
+
+type sourceProcessProviderStatus struct {
+	ID          int64  `json:"id"`
+	Status      string `json:"status"`
+	TargetURL   string `json:"target_url"`
+	Description string `json:"description"`
+	Context     string `json:"context"`
+}
+
+func assertSourceProcessProviderStatus(
+	t *testing.T,
+	upstream *url.URL,
+	repository sourceProcessRepository,
+	change sourceProcessChange,
+	run devopsv1.PipelineRun,
+) uint64 {
+	t.Helper()
+	var statuses []sourceProcessProviderStatus
+	sourceProcessFixtureRequest(
+		t,
+		upstream,
+		http.MethodGet,
+		"/api/v1/repos/"+repository.FullName+"/statuses/"+change.HeadCommit+
+			"?limit=50&page=1&sort=leastindex",
+		nil,
+		http.StatusOK,
+		&statuses,
+	)
+	wantContext := "matrix/" + string(sourceProcessPipelineID) + "/" + string(run.ID)
+	if len(statuses) != 1 || statuses[0].ID < 1 ||
+		uint64(statuses[0].ID) > devopsv1.MaximumContractInteger ||
+		statuses[0].Status != string(checkreporting.CheckSuccess) ||
+		statuses[0].Description != checkreporting.PassedDescription ||
+		statuses[0].Context != wantContext || statuses[0].TargetURL != "" {
+		t.Fatalf("source process provider statuses=%#v", statuses)
+	}
+	return uint64(statuses[0].ID)
+}
+
+func readSourceProcessPendingAudits(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+) map[auditv1.EventID]auditv1.Event {
+	t.Helper()
+	rows, err := admin.Query(
+		ctx,
+		`SELECT status, attempts, document
+		   FROM delivery.audit_outbox
+		  WHERE tenant_id = $1
+		  ORDER BY event_id`,
+		sourceProcessTenantID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	events := make(map[auditv1.EventID]auditv1.Event)
+	for rows.Next() {
+		var status string
+		var attempts int
+		var document []byte
+		if err := rows.Scan(&status, &attempts, &document); err != nil {
+			t.Fatal(err)
+		}
+		var event auditv1.Event
+		if status != "PENDING" || attempts != 0 || json.Unmarshal(document, &event) != nil ||
+			auditv1.ValidateEventForSource(auditv1.SourceDevOps, event) != nil {
+			t.Fatalf("source process pending Audit status=%q attempts=%d document=%s", status, attempts, document)
+		}
+		if _, duplicate := events[event.EventID]; duplicate {
+			t.Fatalf("source process duplicate Audit event %q", event.EventID)
+		}
+		events[event.EventID] = event
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) < 3 {
+		t.Fatalf("source process pending Audit events=%d want at least 3", len(events))
+	}
+	return events
+}
+
+func waitSourceProcessAuditDelivery(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	dispatcher *executionProcessChild,
+	sink *sourceProcessAuditSink,
+	expected map[auditv1.EventID]auditv1.Event,
+) []auditv1.Event {
+	t.Helper()
+	for {
+		if exited, err := dispatcher.poll(); exited {
+			t.Fatalf("Audit dispatcher exited before delivery: %v output=%q", err, dispatcher.output())
+		}
+		events, failure := sink.snapshot()
+		if failure != "" {
+			t.Fatal(failure)
+		}
+		var total, delivered, attempts, deadLetters int64
+		err := admin.QueryRow(
+			ctx,
+			`SELECT count(*),
+			        count(*) FILTER (WHERE status = 'DELIVERED'),
+			        COALESCE(sum(attempts), 0),
+			        count(*) FILTER (WHERE status = 'DEAD_LETTER')
+			   FROM delivery.audit_outbox
+			  WHERE tenant_id = $1`,
+			sourceProcessTenantID,
+		).Scan(&total, &delivered, &attempts, &deadLetters)
+		if err != nil || total != int64(len(expected)) || deadLetters != 0 ||
+			attempts > int64(len(expected)) {
+			t.Fatalf(
+				"source process Audit total=%d delivered=%d attempts=%d dead=%d err=%v",
+				total, delivered, attempts, deadLetters, err,
+			)
+		}
+		if delivered == total && attempts == total && len(events) >= len(expected) {
+			if len(events) != len(expected) {
+				t.Fatalf("source process Audit calls=%d want=%d", len(events), len(expected))
+			}
+			seen := make(map[auditv1.EventID]struct{}, len(events))
+			for _, event := range events {
+				want, found := expected[event.EventID]
+				if !found || event != want {
+					t.Fatalf("source process delivered unexpected Audit event=%#v", event)
+				}
+				if _, duplicate := seen[event.EventID]; duplicate {
+					t.Fatalf("source process delivered duplicate Audit event %q", event.EventID)
+				}
+				seen[event.EventID] = struct{}{}
+			}
+			return events
+		}
+		waitExecutionProcessPoll(t, ctx)
+	}
+}
+
+func assertSourceProcessRunAudits(
+	t *testing.T,
+	events []auditv1.Event,
+	run devopsv1.PipelineRun,
+	correlationID string,
+) {
+	t.Helper()
+	counts := map[auditv1.Action]int{}
+	for _, event := range events {
+		if auditv1.ValidateEventForSource(auditv1.SourceDevOps, event) != nil {
+			t.Fatalf("source process delivered invalid Audit event=%#v", event)
+		}
+		switch event.Action {
+		case auditv1.ActionDevOpsSourceEventAdmitted:
+			counts[event.Action]++
+			if event.Target.ID != string(run.Input.SourceEventID) ||
+				event.RequestID != correlationID || event.CorrelationID != correlationID {
+				t.Fatalf("source process admitted Audit event=%#v", event)
+			}
+		case auditv1.ActionDevOpsPipelineRunCreated:
+			counts[event.Action]++
+			if event.Target.ID != string(run.ID) || event.RequestID != correlationID ||
+				event.CorrelationID != correlationID {
+				t.Fatalf("source process created Audit event=%#v", event)
+			}
+		case auditv1.ActionDevOpsPipelineRunCompleted:
+			counts[event.Action]++
+			if event.Target.ID != string(run.ID) ||
+				event.Actor != (auditv1.ActorReference{
+					Type: auditv1.ActorSystem, ID: "system-devops-run-worker",
+				}) || event.IAMDecisionID != "" ||
+				event.Result != auditv1.ResultSucceeded ||
+				event.Outcome != auditv1.OutcomeSucceeded ||
+				event.Reason != auditv1.ReasonCompleted ||
+				event.CorrelationID != string(run.ID) {
+				t.Fatalf("source process terminal Audit event=%#v", event)
+			}
+		}
+	}
+	if counts[auditv1.ActionDevOpsSourceEventAdmitted] != 1 ||
+		counts[auditv1.ActionDevOpsPipelineRunCreated] != 1 ||
+		counts[auditv1.ActionDevOpsPipelineRunCompleted] != 1 {
+		t.Fatalf("source process run Audit action counts=%#v", counts)
+	}
+}
+
 func assertSourceProcessEvidence(
 	t *testing.T,
 	ctx context.Context,
 	admin *pgx.Conn,
 	archiveRoot string,
 	run devopsv1.PipelineRun,
+	terminal devopsv1.PipelineRun,
 	repository sourceProcessRepository,
 	correlationID string,
 	uploadPacks int64,
+	statusCreates int64,
+	providerStatusID uint64,
 	secrets []string,
 ) {
 	t.Helper()
-	if uploadPacks != 1 {
-		t.Fatalf("source process provider upload-pack requests=%d want=1", uploadPacks)
+	if uploadPacks != 1 || statusCreates != 1 {
+		t.Fatalf(
+			"source process provider upload-packs=%d statuses=%d want=1/1",
+			uploadPacks, statusCreates,
+		)
+	}
+	if terminal.ID != run.ID || terminal.Input != run.Input ||
+		terminal.InputDigest != run.InputDigest ||
+		terminal.Status.State != devopsv1.PipelineRunSucceeded ||
+		terminal.Status.Stage != devopsv1.PipelineRunStageReport ||
+		terminal.Status.Reason != devopsv1.PipelineRunReasonCompleted ||
+		terminal.Status.CompletedAt == nil {
+		t.Fatalf("source process terminal evidence=%#v", terminal)
 	}
 	var status string
 	var owner *string
@@ -1161,7 +1699,72 @@ func assertSourceProcessEvidence(
 		t.Fatal("source process repository identity changed")
 	}
 
-	var sourceEvents, pipelineRuns, admittedFacts, createdFacts int
+	var verifyStatus, reportStatus string
+	var verifyOwner, reportOwner *string
+	var verifyFence, reportFence uint64
+	var buildDocument, checkDocument []byte
+	err = admin.QueryRow(
+		ctx,
+		`SELECT verify.status, verify.lease_owner, verify.fencing_token,
+		        report.status, report.lease_owner, report.fencing_token,
+		        build.document, check_receipt.document
+		   FROM delivery.pipeline_run_tasks AS verify
+		   JOIN delivery.pipeline_run_tasks AS report
+		     ON report.tenant_id = verify.tenant_id AND report.run_id = verify.run_id
+		    AND report.stage = 'REPORT'
+		   JOIN delivery.build_receipts AS build
+		     ON build.tenant_id = verify.tenant_id AND build.run_id = verify.run_id
+		   JOIN delivery.check_receipts AS check_receipt
+		     ON check_receipt.tenant_id = verify.tenant_id
+		    AND check_receipt.run_id = verify.run_id
+		  WHERE verify.tenant_id = $1 AND verify.run_id = $2
+		    AND verify.stage = 'VERIFY'`,
+		sourceProcessTenantID,
+		run.ID,
+	).Scan(
+		&verifyStatus, &verifyOwner, &verifyFence,
+		&reportStatus, &reportOwner, &reportFence,
+		&buildDocument, &checkDocument,
+	)
+	if err != nil || verifyStatus != "COMPLETED" || verifyOwner != nil || verifyFence != 1 ||
+		reportStatus != "COMPLETED" || reportOwner != nil || reportFence != 1 {
+		t.Fatalf(
+			"source process verify=%s/%v/%d report=%s/%v/%d err=%v",
+			verifyStatus, verifyOwner, verifyFence, reportStatus, reportOwner, reportFence, err,
+		)
+	}
+	var buildReceipt devopsbuildv1.Receipt
+	if json.Unmarshal(buildDocument, &buildReceipt) != nil ||
+		devopsbuildv1.ValidateReceiptShape(buildReceipt) != nil ||
+		buildReceipt.TenantID != sourceProcessTenantID || buildReceipt.RunID != run.ID ||
+		buildReceipt.CommandID != string(run.ID)+":verify:1" ||
+		buildReceipt.InputDigest != run.InputDigest ||
+		buildReceipt.SourceArchiveDigest != receipt.ArchiveDigest ||
+		buildReceipt.PipelineRevisionID != run.Input.PipelineRevisionID ||
+		buildReceipt.PipelineRevisionDigest != run.Input.PipelineRevisionDigest ||
+		buildReceipt.ExecutorID != "source-process-build-bridge" ||
+		buildReceipt.Conclusion != devopsbuildv1.ConclusionPassed {
+		t.Fatalf("source process build receipt=%s", buildDocument)
+	}
+	var checkReceipt checkreporting.Receipt
+	if json.Unmarshal(checkDocument, &checkReceipt) != nil ||
+		checkReceipt.TenantID != sourceProcessTenantID || checkReceipt.RunID != run.ID ||
+		checkReceipt.CommandID != string(run.ID)+":report:1" ||
+		checkReceipt.InputDigest != run.InputDigest || checkReceipt.AdapterID != gitea.AdapterID ||
+		checkReceipt.SourceConnectionID != sourceProcessConnectionID ||
+		checkReceipt.RepositoryBindingID != sourceProcessBindingID ||
+		checkReceipt.RepositoryBindingDigest != run.Input.RepositoryBindingDigest ||
+		checkReceipt.HeadCommit != run.Input.Change.HeadCommit ||
+		checkReceipt.PipelineRevisionID != run.Input.PipelineRevisionID ||
+		checkReceipt.PipelineRevisionDigest != run.Input.PipelineRevisionDigest ||
+		checkReceipt.BuildReceiptDigest != buildReceipt.ContentDigest ||
+		checkReceipt.ProviderStatusID != providerStatusID ||
+		devopsv1.ValidateDigest("checkReceipt.requestDigest", checkReceipt.RequestDigest) != nil ||
+		checkReceipt.ContentDigest != checkreporting.DigestReceipt(checkReceipt) {
+		t.Fatalf("source process check receipt=%s", checkDocument)
+	}
+
+	var sourceEvents, pipelineRuns, admittedFacts, createdFacts, completedFacts, terminalOperations int
 	err = admin.QueryRow(
 		ctx,
 		`SELECT
@@ -1169,20 +1772,33 @@ func assertSourceProcessEvidence(
 		   (SELECT count(*) FROM delivery.pipeline_runs WHERE tenant_id = $1),
 		   (SELECT count(*) FROM delivery.audit_outbox
 		     WHERE tenant_id = $1 AND document->>'action' = $2
-		       AND document->>'correlationId' = $4),
+		       AND document->>'correlationId' = $4 AND status = 'DELIVERED'),
 		   (SELECT count(*) FROM delivery.audit_outbox
 		     WHERE tenant_id = $1 AND document->>'action' = $3
-		       AND document->>'correlationId' = $4)`,
+		       AND document->>'correlationId' = $4 AND status = 'DELIVERED'),
+		   (SELECT count(*) FROM delivery.audit_outbox
+		     WHERE tenant_id = $1 AND document->>'action' = $5
+		       AND document->>'correlationId' = $6 AND status = 'DELIVERED'),
+		   (SELECT count(*) FROM delivery.audit_operations
+		     WHERE tenant_id = $1 AND operation_kind = 'PIPELINE_RUN_TERMINAL'
+		       AND target_id = $6)`,
 		sourceProcessTenantID,
 		auditv1.ActionDevOpsSourceEventAdmitted,
 		auditv1.ActionDevOpsPipelineRunCreated,
 		correlationID,
-	).Scan(&sourceEvents, &pipelineRuns, &admittedFacts, &createdFacts)
+		auditv1.ActionDevOpsPipelineRunCompleted,
+		run.ID,
+	).Scan(
+		&sourceEvents, &pipelineRuns, &admittedFacts, &createdFacts,
+		&completedFacts, &terminalOperations,
+	)
 	if err != nil || sourceEvents != 1 || pipelineRuns != 1 ||
-		admittedFacts != 1 || createdFacts != 1 {
+		admittedFacts != 1 || createdFacts != 1 || completedFacts != 1 ||
+		terminalOperations != 1 {
 		t.Fatalf(
-			"source process evidence events=%d runs=%d admitted=%d created=%d err=%v",
-			sourceEvents, pipelineRuns, admittedFacts, createdFacts, err,
+			"source process evidence events=%d runs=%d admitted=%d created=%d completed=%d terminal=%d err=%v",
+			sourceEvents, pipelineRuns, admittedFacts, createdFacts, completedFacts,
+			terminalOperations, err,
 		)
 	}
 	assertSourceProcessDatabaseSafe(t, ctx, admin, secrets)
@@ -1247,6 +1863,8 @@ func assertSourceProcessDatabaseSafe(
 		   UNION ALL SELECT document FROM delivery.pipeline_revisions
 		   UNION ALL SELECT document FROM delivery.source_events
 		   UNION ALL SELECT document FROM delivery.pipeline_runs
+		   UNION ALL SELECT document FROM delivery.build_receipts
+		   UNION ALL SELECT document FROM delivery.check_receipts
 		   UNION ALL SELECT document FROM delivery.mutations
 		   UNION ALL SELECT result_document FROM delivery.mutations
 		   UNION ALL SELECT document FROM delivery.audit_outbox
