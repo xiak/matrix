@@ -6,7 +6,7 @@
 - Updated: 2026-09-09
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `b0ff23f`
+- Current pushed implementation baseline: `3ccd8da`
 
 ## Goal
 
@@ -17,7 +17,7 @@ architecture, FEAT, implementation, test, and release gates.
 ## Current milestone
 
 - FEAT-007 is the authoritative owner and remains `In progress`.
-- Pushed `b0ff23f` expands the disposable Linux Docker `29.6.2` and pinned-
+- Pushed `3ccd8da` expands the disposable Linux Docker `29.6.2` and pinned-
   runsc execution gate. The normal canonical archive still crosses both TLS
   1.3 mTLS gateway roles, the durable spool, journal, workspace, production
   runner workflow, both fixed Go steps, authenticated normalized-log read, and
@@ -28,6 +28,13 @@ architecture, FEAT, implementation, test, and release gates.
   reserved/private/metadata egress, and actual fixed-PID exhaustion. Pinned
   runsc returned `ENOMEM` after 112-113 child starts; the test accepts only the
   runsc `ENOMEM` or native-cgroup `EAGAIN` resource denials before 384 attempts.
+- The same runner store publishes a different tenant's immutable decoy source
+  and gives its exact host path to the attacker. Direct read/list, `..` read/
+  write, and a writable-cache symlink escape fail while a control symlink to
+  the attacker's own source succeeds. The trusted side re-proves the unchanged
+  decoy and zero residual containers for both tenants. Combined with existing
+  real PostgreSQL tenant-concealed run/log reads, Gate B's malicious-repository
+  containment item is complete.
 - Secret-shaped, absolute-path, ANSI, control-byte, invalid-UTF-8, and overlong
   native lines become exact closed markers, with raw sentinels absent. A
   separate real sandbox writes 129 64-KiB blocks, hits the fixed 8 MiB whole-run
@@ -38,9 +45,8 @@ architecture, FEAT, implementation, test, and release gates.
   provider-report recovery evidence: one signed event and run, fetch and report
   fence-two recovery without duplicate provider effects, terminal Audit outbox
   delivery, and the unchanged run reaching `SUCCEEDED / COMPLETED`.
-- Gate B still lacks one joined physical IAM/Audit/executor journey, remaining
-  cross-tenant/path-traversal/symlink attacks, and the other unproved external-
-  effect restarts. UI Gate C has not begun.
+- Gate B still lacks one joined physical IAM/Audit/executor journey and the
+  other unproved external-effect restarts. UI Gate C has not begun.
 
 ## Adoption boundary
 
@@ -54,10 +60,9 @@ architecture, FEAT, implementation, test, and release gates.
 
 Join the existing physical IAM/Audit/executor evidence where that materially
 protects the end-to-end boundary, without duplicating their already proved
-isolated gates. Complete the cross-tenant/path-traversal/symlink attacks and
-remaining external-effect restarts with no duplicate provider outcome. Only
-after complete Gate B passes begin formal Matrix UI integration from the
-accepted UX baseline.
+isolated gates. Complete remaining external-effect restarts with no duplicate
+provider outcome. Only after complete Gate B passes begin formal Matrix UI
+integration from the accepted UX baseline.
 
 Keep runner authority away from PostgreSQL, source/report credentials, IAM,
 Audit, PaaS, and executor-admin operations. Preserve pragmatic DDD,
