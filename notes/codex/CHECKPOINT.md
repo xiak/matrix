@@ -6,7 +6,7 @@
 - Updated: 2026-09-09
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `006f11c`
+- Current pushed implementation baseline: `11f49bc`
 
 ## Goal
 
@@ -17,26 +17,25 @@ architecture, FEAT, implementation, test, and release gates.
 ## Current milestone
 
 - FEAT-007 is the authoritative owner and remains `In progress`.
-- Pushed `006f11c` adds the opt-in real Linux execution integration. On a
-  disposable systemd Linux/amd64 node, a canonical source archive crosses
-  separate TLS 1.3 mTLS admin and runner listeners through the production
-  gateway clients, handlers, spool, journal, workspace, and runner workflow,
-  then runs both fixed Go steps in Docker `29.6.2` with the pinned `runsc`.
-- The passing journey proves normalized logs, the exact terminal receipt,
-  acknowledged journal, and zero residual containers. Repository-style probes
-  prove no sensitive environment, Docker socket, privileged device, writable
-  source/root filesystem, non-loopback interface, or reserved-address egress.
-- The real runtime exposed and the implementation fixed two closed-profile
-  defects: Docker 29's exact non-TTY multiplexed log media type and explicit
-  UID/GID ownership of the private cache tmpfs for runner UID `65532`.
-- The real gate passed in 73.76 seconds. Full repository tests and vet, affected
-  Windows race and twenty-run suites, both affected Linux package suites, and
-  the existing Docker preflight pass.
-- The earlier physical check-reporter, fixed Gitea adapter, PostgreSQL
-  authority journey, dedicated-node installer, authentic runner material, and
-  selected-product topology remain present. This milestone proves a real
-  Docker/runsc sandbox side effect, not yet a full standalone-process or
-  source-to-provider Gate B journey, and not product UI Gate C.
+- Pushed `11f49bc` adds the opt-in standalone execution-process recovery gate.
+  A clean PostgreSQL 18 database drives the actual build-worker, TLS 1.3 mTLS
+  gateway, outbound runner, Docker `29.6.2`, and pinned `runsc` from VERIFY to
+  REPORTING.
+- The gate kills the first worker after durable submission and the first runner
+  during the exact running sandbox effect. Replacement processes increase both
+  fences, observe before retry, finish both immutable steps, persist one receipt
+  and normalized logs, acknowledge the journal, and leave no business or probe
+  container. Role-specific process output contains no database password or key.
+- Real shutdown exposed and fixed premature runner-loop exit and a runsc-
+  sensitive ten-second probe cleanup edge. Shutdown now waits for the active
+  cycle, and preflight cleanup is bounded at thirty seconds.
+- The final real journey passed in 174.76 seconds. Full repository tests and
+  vet, affected Windows race and twenty-run suites, and affected offline Linux
+  suites pass. The earlier real archive-to-receipt isolation gate, dedicated-
+  node installer, fixed Gitea adapter, check reporter, authority journey, and
+  selected-product topology remain present.
+- This milestone is the PostgreSQL VERIFY execution/recovery subjourney, not the
+  signed source-to-provider Gate B journey and not product UI Gate C.
 
 ## Adoption boundary
 
@@ -48,13 +47,12 @@ architecture, FEAT, implementation, test, and release gates.
 
 ## Continuation
 
-Complete the dedicated-host Gate B as one physical process journey: drive a
-real signed Gitea change through PostgreSQL, source fetch, standalone gateway,
-build worker and runner processes, isolated build, normalized logs, and the
-check reporter. Add restart recovery, resource-abuse and oversized-log cases,
-readiness/fencing, and no-duplicate provider-outcome evidence. Only after that
-boundary passes begin formal Matrix UI integration from the accepted UX
-baseline.
+Extend the passing VERIFY recovery gate in bounded slices: drive a real signed
+Gitea change through the standalone source fetcher, then add the physical check
+reporter plus correlated Audit/provider evidence. Complete malicious resource-
+abuse and oversized-log cases and remaining external-effect restarts with no
+duplicate provider outcome. Only after the complete Gate B passes begin formal
+Matrix UI integration from the accepted UX baseline.
 
 Keep runner authority away from PostgreSQL, source/report credentials, IAM,
 Audit, PaaS, and executor-admin operations. Preserve pragmatic DDD,
