@@ -571,6 +571,62 @@ not receipt fields. The runner owns native-output normalization before handoff;
 the separate normalized-log boundary persists that evidence before the build
 worker may commit the receipt.
 
+#### Check reporting runtime
+
+`matrix-devops-check-reporter` is the only process allowed to turn a stored
+build receipt into a provider-visible terminal check. It joins the internal
+control network and the source-egress network, mounts only the read-only
+`REPORT` credential root, and receives a table-blind worker DSN. It receives
+no webhook or fetch credential, source archive, executor identity, runner or
+Docker authority, IAM/Audit service credential, PaaS state, or authority to
+change tenant configuration. The build worker correspondingly retains no
+provider or report credential.
+
+The reporter claims only `REPORT` intents. One claim atomically returns the
+current SourceConnection, the immutable RepositoryBinding revision selected by
+the run, the immutable PipelineRevision, and the stored normalized build
+receipt. Validation binds their tenant, project, pipeline, source event,
+repository identity, head commit, content digests, reporter policy, and build
+conclusion before any provider call. The endpoint and adapter identity remain
+immutable; the current report-credential reference may rotate without
+changing the report command or placing a credential in persisted state.
+
+For Gitea `1.27.3`, `CHANGE_CHECK_V1` creates exactly one terminal commit
+status at
+`POST /api/v1/repos/{owner}/{repository}/statuses/{headCommit}`. The body is a
+closed JSON document: `context` is
+`matrix/{pipelineId}/{runId}`, `description` is one fixed passed or failed
+phrase, `state` is `success` or `failure`, and `target_url` is empty until the
+product has an accepted externally reachable run URL. The token appears only
+in the `Authorization` header. The adapter uses the exact configured HTTPS
+origin, verified roots, no proxy, no redirects, a five-second deadline, a
+64-KiB response ceiling, strict JSON, and exact response echo validation. It
+retains only a normalized positive provider status ID plus the command and
+body digest; provider URLs, users, text, headers, and native errors are never
+persisted, logged, audited, or returned northbound.
+
+The first fencing token may create the status once. An acknowledgement loss,
+timeout, malformed success response, connection loss after request dispatch,
+or server failure is an uncertain external effect: the same intent moves to
+`RECONCILING`, and no later fence may issue another POST. Recovery performs
+only a bounded newest-first read of statuses for the exact head commit and
+accepts one exact context/state/description/target match. An equal result
+reconstructs the same normalized receipt; a matching context with changed
+content is `REPORT_CONFLICT`; absence or provider unavailability is deferred
+for sixty seconds. Ten inconclusive observations produce
+`MANUAL_INTERVENTION / RECONCILIATION_EXHAUSTED` rather than a duplicate
+status. A definitive authentication, permission, repository, or commit
+rejection before an effect is `FAILED / REPORT_UNAVAILABLE`.
+
+`delivery.check_receipts` stores one canonical normalized receipt per run. A
+single fenced transaction verifies the current REPORT task and matching build
+receipt, inserts or equality-checks that receipt, completes the task, advances
+a passed build to `SUCCEEDED / COMPLETED` or a failed build to
+`FAILED / VERIFICATION_FAILED`, and emits the existing terminal PipelineRun
+Audit fact. No generic transition can produce either terminal outcome without
+the receipt. A reporter heartbeat and integrity-aware readiness function gate
+the process and DevOps product readiness whenever the product is selected.
+
 #### Executor control and runner transport
 
 The native adapter is split at the security boundary into three selected-only
