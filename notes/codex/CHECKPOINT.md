@@ -6,7 +6,7 @@
 - Updated: 2026-09-09
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `82df3e6`
+- Current pushed implementation baseline: `e9ad554`
 
 ## Goal
 
@@ -17,11 +17,11 @@ architecture, FEAT, implementation, test, and release gates.
 ## Current milestone
 
 - FEAT-007 is the authoritative owner and remains `In progress`.
-- Pushed `82df3e6` extends the opt-in source-process journey against a clean
+- Pushed `e9ad554` extends the opt-in source-process journey against a clean
   PostgreSQL 18 database and fixed Gitea `1.27.3`. It starts the actual DevOps
-  API, source-observer, two source-fetchers, check-reporter, and DevOps Audit-
-  dispatcher binaries. The API validates its IAM service identity through a
-  narrow HTTP test boundary.
+  API, source-observer, two source-fetchers, three successive check-reporter
+  processes, and DevOps Audit-dispatcher binary. The API validates its IAM
+  service identity through a narrow HTTP test boundary.
 - The physical DevOps webhook returns 401 for a forged signature, 204 for one
   valid pull-request event and its equal replay, and 409 for changed-byte
   replay. The valid HTTP request identity correlates the one source event, one
@@ -33,19 +33,25 @@ architecture, FEAT, implementation, test, and release gates.
   same run to `VERIFYING`. Archive, database, and process evidence contains no
   credential or private path.
 - A narrow in-test passing executor bridges the production VERIFY use case to
-  the separately proved isolated-executor gate. The actual check-reporter
-  creates exactly one Gitea success status and receipt, completes REPORT fence
-  one, and makes the unchanged run `SUCCEEDED / COMPLETED`.
+  the separately proved isolated-executor gate. After a bootstrap reporter
+  establishes readiness, the first recovery reporter claims REPORT fence one
+  and creates exactly one Gitea success status. It is killed after the provider
+  effect completes but before PostgreSQL can store the receipt. The database
+  retains an open fence-one REPORT intent and no receipt; after bounded lease
+  expiry, a replacement claims fence two, performs one provider read and no
+  second create, stores the sole receipt, and makes the unchanged run
+  `SUCCEEDED / COMPLETED`.
 - The actual DevOps Audit dispatcher authenticates to a narrow validating HTTP
   boundary and delivers every accumulated outbox fact once. Source admission
   and run creation retain the webhook request correlation; the terminal fact
   targets/correlates the same run and uses the system run-worker actor. The
   separate authority-process gate remains physical IAM/Audit-service evidence.
-- The joined process journey passed in 3.35 seconds under disconnected Go
+- The joined process journey passed in 3.42 seconds under disconnected Go
   `1.26.8`; Linux package vet and current full-repository Windows tests and vet
   pass. It still does not join the physical executor, IAM service, and Audit
   service in one journey or close malicious repository/resource abuse,
-  oversized logs, all external-effect restarts, full Gate B, or UI Gate C.
+  oversized logs, all other external-effect restarts, full Gate B, or UI Gate
+  C.
 
 ## Adoption boundary
 
