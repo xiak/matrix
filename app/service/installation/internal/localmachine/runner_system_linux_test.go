@@ -250,6 +250,26 @@ func TestLinuxRunnerSystemPreflightRejectsNonRootBeforeHostCommands(t *testing.T
 	}
 }
 
+func TestLinuxRunnerSystemPreflightRejectsUnsearchableServiceAncestorBeforeHostCommands(t *testing.T) {
+	for _, mode := range []os.FileMode{0o700, 0o750} {
+		t.Run(mode.String(), func(t *testing.T) {
+			system, host, plan, _, closeSocket := linuxRunnerSystemFixture(t, 1)
+			defer closeSocket()
+			if err := os.Chmod(path.Dir(plan.Root), mode); err != nil {
+				t.Fatal(err)
+			}
+			if err := system.Preflight(context.Background(), plan); !errors.Is(
+				err, runnernodecommand.ErrEffectConflict,
+			) {
+				t.Fatalf("unsearchable ancestor failure=%v, want conflict", err)
+			}
+			if len(host.calls) != 0 {
+				t.Fatalf("unsearchable ancestor reached host commands: %#v", host.calls)
+			}
+		})
+	}
+}
+
 func TestLinuxRunnerSystemPreflightRejectsSharedDockerConfiguration(t *testing.T) {
 	system, host, plan, paths, closeSocket := linuxRunnerSystemFixture(t, 1)
 	defer closeSocket()
@@ -283,6 +303,24 @@ func TestLinuxRunnerSystemStopsEverySlotWhenReadinessFails(t *testing.T) {
 	}
 	if !host.active[runnerFirewallUnit] {
 		t.Fatal("failed convergence removed the fail-closed firewall")
+	}
+}
+
+func TestLinuxRunnerSystemDisablesManagedFailedUnit(t *testing.T) {
+	system, host, _, paths, closeSocket := linuxRunnerSystemFixture(t, 1)
+	defer closeSocket()
+	unit := runnerSlotUnit(1)
+	if err := os.WriteFile(
+		path.Join(paths.SystemdRoot, unit), []byte(runnerManagedHeader+"[Unit]\n"), 0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	host.enabled[unit] = true
+	if err := system.deactivateRunnerUnits(context.Background(), "/usr/bin/systemctl"); err != nil {
+		t.Fatal(err)
+	}
+	if host.enabled[unit] || host.active[unit] {
+		t.Fatalf("failed managed unit remained enabled or active: %#v", host)
 	}
 }
 
@@ -535,7 +573,11 @@ func runnerHostTestRoot(t *testing.T) string {
 	if os.Geteuid() != 0 {
 		t.Skip("runner host integration requires root")
 	}
-	root := t.TempDir()
+	root, err := os.MkdirTemp(os.TempDir(), "matrix-runner-host-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
 	if err := os.Chmod(root, 0o755); err != nil {
 		t.Fatal(err)
 	}

@@ -203,7 +203,6 @@ func renderRunnerService(
 		account.Name != runnerAccountName(slot.Index) || account.UID == 0 || account.GID == 0 {
 		return nil, errors.New("runner service profile is invalid")
 	}
-	credentials := "%d"
 	values := [][2]string{
 		{"MATRIX_DEVOPS_RUNNER_JOURNAL_ROOT", slot.JournalRoot},
 		{"MATRIX_DEVOPS_RUNNER_WORKSPACE_ROOT", slot.WorkspaceRoot},
@@ -212,9 +211,6 @@ func renderRunnerService(
 		{"MATRIX_DEVOPS_RUNNER_LISTEN_ADDRESS", slot.Listen},
 		{"MATRIX_DEVOPS_RUNNER_GATEWAY_ORIGIN", plan.GatewayOrigin},
 		{"MATRIX_DEVOPS_RUNNER_GATEWAY_SERVER_NAME", plan.GatewayServerName},
-		{"MATRIX_DEVOPS_RUNNER_CLIENT_CERT_FILE", credentials + "/client.crt"},
-		{"MATRIX_DEVOPS_RUNNER_CLIENT_KEY_FILE", credentials + "/client.key"},
-		{"MATRIX_DEVOPS_RUNNER_SERVER_CA_FILE", credentials + "/server-ca.pem"},
 		{"MATRIX_DEVOPS_RUNNER_CLIENT_IDENTITY", slot.Identity},
 		{"MATRIX_DEVOPS_RUNNER_NAMESPACE", plan.RunnerNamespace},
 		{"ALL_PROXY", ""}, {"HTTP_PROXY", ""}, {"HTTPS_PROXY", ""}, {"NO_PROXY", ""},

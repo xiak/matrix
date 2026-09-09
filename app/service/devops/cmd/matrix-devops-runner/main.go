@@ -29,35 +29,34 @@ import (
 )
 
 const (
-	journalRootEnvironment     = "MATRIX_DEVOPS_RUNNER_JOURNAL_ROOT"
-	workspaceRootEnvironment   = "MATRIX_DEVOPS_RUNNER_WORKSPACE_ROOT"
-	storageRootEnvironment     = "MATRIX_DEVOPS_RUNNER_STORAGE_ROOT"
-	dockerSocketEnvironment    = "MATRIX_DEVOPS_RUNNER_DOCKER_SOCKET"
-	listenAddressEnvironment   = "MATRIX_DEVOPS_RUNNER_LISTEN_ADDRESS"
-	gatewayOriginEnvironment   = "MATRIX_DEVOPS_RUNNER_GATEWAY_ORIGIN"
-	gatewayNameEnvironment     = "MATRIX_DEVOPS_RUNNER_GATEWAY_SERVER_NAME"
-	clientCertEnvironment      = "MATRIX_DEVOPS_RUNNER_CLIENT_CERT_FILE"
-	clientKeyEnvironment       = "MATRIX_DEVOPS_RUNNER_CLIENT_KEY_FILE"
-	serverCAEnvironment        = "MATRIX_DEVOPS_RUNNER_SERVER_CA_FILE"
-	clientIdentityEnvironment  = "MATRIX_DEVOPS_RUNNER_CLIENT_IDENTITY"
-	runnerNamespaceEnvironment = "MATRIX_DEVOPS_RUNNER_NAMESPACE"
+	journalRootEnvironment          = "MATRIX_DEVOPS_RUNNER_JOURNAL_ROOT"
+	workspaceRootEnvironment        = "MATRIX_DEVOPS_RUNNER_WORKSPACE_ROOT"
+	storageRootEnvironment          = "MATRIX_DEVOPS_RUNNER_STORAGE_ROOT"
+	dockerSocketEnvironment         = "MATRIX_DEVOPS_RUNNER_DOCKER_SOCKET"
+	listenAddressEnvironment        = "MATRIX_DEVOPS_RUNNER_LISTEN_ADDRESS"
+	gatewayOriginEnvironment        = "MATRIX_DEVOPS_RUNNER_GATEWAY_ORIGIN"
+	gatewayNameEnvironment          = "MATRIX_DEVOPS_RUNNER_GATEWAY_SERVER_NAME"
+	clientIdentityEnvironment       = "MATRIX_DEVOPS_RUNNER_CLIENT_IDENTITY"
+	runnerNamespaceEnvironment      = "MATRIX_DEVOPS_RUNNER_NAMESPACE"
+	credentialsDirectoryEnvironment = "CREDENTIALS_DIRECTORY"
+	clientCertificateCredential     = "client.crt"
+	clientPrivateKeyCredential      = "client.key"
+	serverCACredential              = "server-ca.pem"
 
 	idlePollInterval = 10 * time.Second
 )
 
 type configuration struct {
-	journalRoot     string
-	workspaceRoot   string
-	storageRoot     string
-	dockerSocket    string
-	listenAddress   string
-	gatewayOrigin   string
-	gatewayName     string
-	clientCertFile  string
-	clientKeyFile   string
-	serverCAFile    string
-	clientIdentity  string
-	runnerNamespace string
+	journalRoot         string
+	workspaceRoot       string
+	storageRoot         string
+	dockerSocket        string
+	listenAddress       string
+	gatewayOrigin       string
+	gatewayName         string
+	credentialDirectory string
+	clientIdentity      string
+	runnerNamespace     string
 }
 
 type runnerOutcome struct {
@@ -87,10 +86,11 @@ func run(ctx context.Context) (runErr error) {
 	if err != nil {
 		return err
 	}
-	credentials, err := processmtls.LoadClientCredentials(
-		config.clientCertFile,
-		config.clientKeyFile,
-		config.serverCAFile,
+	credentials, err := processmtls.LoadSystemdClientCredentials(
+		config.credentialDirectory,
+		clientCertificateCredential,
+		clientPrivateKeyCredential,
+		serverCACredential,
 		config.clientIdentity,
 		time.Now(),
 	)
@@ -234,25 +234,26 @@ func (state *runnerReadiness) set(ready bool) {
 }
 
 func loadConfiguration() (configuration, error) {
+	credentialsDirectory := os.Getenv(credentialsDirectoryEnvironment)
+	if !validAbsolutePath(credentialsDirectory) {
+		return configuration{}, errors.New("DevOps runner credential directory is invalid")
+	}
 	config := configuration{
-		journalRoot:     os.Getenv(journalRootEnvironment),
-		workspaceRoot:   os.Getenv(workspaceRootEnvironment),
-		storageRoot:     os.Getenv(storageRootEnvironment),
-		dockerSocket:    os.Getenv(dockerSocketEnvironment),
-		listenAddress:   os.Getenv(listenAddressEnvironment),
-		gatewayOrigin:   os.Getenv(gatewayOriginEnvironment),
-		gatewayName:     os.Getenv(gatewayNameEnvironment),
-		clientCertFile:  os.Getenv(clientCertEnvironment),
-		clientKeyFile:   os.Getenv(clientKeyEnvironment),
-		serverCAFile:    os.Getenv(serverCAEnvironment),
-		clientIdentity:  os.Getenv(clientIdentityEnvironment),
-		runnerNamespace: os.Getenv(runnerNamespaceEnvironment),
+		journalRoot:         os.Getenv(journalRootEnvironment),
+		workspaceRoot:       os.Getenv(workspaceRootEnvironment),
+		storageRoot:         os.Getenv(storageRootEnvironment),
+		dockerSocket:        os.Getenv(dockerSocketEnvironment),
+		listenAddress:       os.Getenv(listenAddressEnvironment),
+		gatewayOrigin:       os.Getenv(gatewayOriginEnvironment),
+		gatewayName:         os.Getenv(gatewayNameEnvironment),
+		credentialDirectory: credentialsDirectory,
+		clientIdentity:      os.Getenv(clientIdentityEnvironment),
+		runnerNamespace:     os.Getenv(runnerNamespaceEnvironment),
 	}
 	for _, required := range []string{
 		config.journalRoot, config.workspaceRoot, config.storageRoot,
 		config.dockerSocket, config.listenAddress, config.gatewayOrigin,
-		config.gatewayName, config.clientCertFile, config.clientKeyFile,
-		config.serverCAFile, config.clientIdentity, config.runnerNamespace,
+		config.gatewayName, config.clientIdentity, config.runnerNamespace,
 	} {
 		if required == "" {
 			return configuration{}, errors.New("DevOps runner configuration is incomplete")
@@ -260,8 +261,7 @@ func loadConfiguration() (configuration, error) {
 	}
 	for _, candidate := range []string{
 		config.journalRoot, config.workspaceRoot, config.storageRoot,
-		config.dockerSocket, config.clientCertFile, config.clientKeyFile,
-		config.serverCAFile,
+		config.dockerSocket,
 	} {
 		if !validAbsolutePath(candidate) {
 			return configuration{}, errors.New("DevOps runner path configuration is invalid")
@@ -274,13 +274,15 @@ func loadConfiguration() (configuration, error) {
 		strictDescendant(config.workspaceRoot, config.journalRoot) {
 		return configuration{}, errors.New("DevOps runner storage roots are invalid")
 	}
-	for _, protected := range []string{
-		config.dockerSocket, config.clientCertFile, config.clientKeyFile,
-		config.serverCAFile,
-	} {
+	for _, protected := range []string{config.dockerSocket} {
 		if strictDescendant(config.storageRoot, protected) {
 			return configuration{}, errors.New("DevOps runner protected input overlaps writable storage")
 		}
+	}
+	if config.storageRoot == credentialsDirectory ||
+		strictDescendant(config.storageRoot, credentialsDirectory) ||
+		strictDescendant(credentialsDirectory, config.storageRoot) {
+		return configuration{}, errors.New("DevOps runner credential directory overlaps writable storage")
 	}
 	if !validLoopbackAddress(config.listenAddress) {
 		return configuration{}, errors.New("DevOps runner readiness listener is invalid")

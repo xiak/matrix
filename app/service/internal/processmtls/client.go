@@ -38,24 +38,58 @@ func LoadClientCredentials(
 	expectedSPIFFEIdentity string,
 	now time.Time,
 ) (ClientCredentials, error) {
-	if now.IsZero() || strictSPIFFEIdentity(expectedSPIFFEIdentity) == nil {
+	return loadClientCredentials(
+		func(path string, maximum int64, secret bool) ([]byte, error) {
+			return processconfig.ReadFile(path, maximum, secret)
+		},
+		certificatePath, privateKeyPath, serverRootsPath, expectedSPIFFEIdentity, now,
+	)
+}
+
+func LoadSystemdClientCredentials(
+	credentialDirectory string,
+	certificateName string,
+	privateKeyName string,
+	serverRootsName string,
+	expectedSPIFFEIdentity string,
+	now time.Time,
+) (ClientCredentials, error) {
+	return loadClientCredentials(
+		func(name string, maximum int64, secret bool) ([]byte, error) {
+			return processconfig.ReadSystemdCredential(
+				credentialDirectory, name, maximum, secret,
+			)
+		},
+		certificateName, privateKeyName, serverRootsName, expectedSPIFFEIdentity, now,
+	)
+}
+
+func loadClientCredentials(
+	read func(string, int64, bool) ([]byte, error),
+	certificateSource string,
+	privateKeySource string,
+	serverRootsSource string,
+	expectedSPIFFEIdentity string,
+	now time.Time,
+) (ClientCredentials, error) {
+	if read == nil || now.IsZero() || strictSPIFFEIdentity(expectedSPIFFEIdentity) == nil {
 		return ClientCredentials{}, ErrInvalidClientMaterial
 	}
-	certificatePEM, err := processconfig.ReadFile(
-		certificatePath, maximumCertificateBytes, false,
+	certificatePEM, err := read(
+		certificateSource, maximumCertificateBytes, false,
 	)
 	if err != nil {
 		return ClientCredentials{}, ErrInvalidClientMaterial
 	}
-	privateKeyPEM, err := processconfig.ReadFile(
-		privateKeyPath, maximumPrivateKeyBytes, true,
+	privateKeyPEM, err := read(
+		privateKeySource, maximumPrivateKeyBytes, true,
 	)
 	if err != nil {
 		return ClientCredentials{}, ErrInvalidClientMaterial
 	}
 	defer clear(privateKeyPEM)
-	serverRootsPEM, err := processconfig.ReadFile(
-		serverRootsPath, maximumCertificateBytes, false,
+	serverRootsPEM, err := read(
+		serverRootsSource, maximumCertificateBytes, false,
 	)
 	if err != nil {
 		return ClientCredentials{}, ErrInvalidClientMaterial

@@ -125,6 +125,36 @@ func TestLoadClientCredentialsRequiresProtectedPrivateKey(t *testing.T) {
 	}
 }
 
+func TestLoadSystemdClientCredentialsAcceptsReadOnlyCredentialMount(t *testing.T) {
+	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
+	certificatePEM, keyPEM, rootsPEM := clientMaterialFixture(t, now, clientIdentity, nil)
+	directory := filepath.Join(t.TempDir(), "credentials")
+	if err := os.Mkdir(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string][]byte{
+		"client.crt":    certificatePEM,
+		"client.key":    keyPEM,
+		"server-ca.pem": rootsPEM,
+	} {
+		path := filepath.Join(directory, name)
+		if err := os.WriteFile(path, content, 0o600); err != nil || os.Chmod(path, 0o440) != nil {
+			t.Fatalf("prepare systemd credential %s failed", name)
+		}
+	}
+	if err := os.Chmod(directory, 0o550); err != nil {
+		t.Fatal(err)
+	}
+	credentials, err := LoadSystemdClientCredentials(
+		directory, "client.crt", "client.key", "server-ca.pem", clientIdentity, now,
+	)
+	if err != nil || credentials.Certificate.Leaf == nil ||
+		credentials.Certificate.Leaf.URIs[0].String() != clientIdentity ||
+		credentials.ServerRoots == nil {
+		t.Fatalf("systemd credentials=%#v err=%v", credentials, err)
+	}
+}
+
 func writeClientMaterial(
 	t *testing.T,
 	certificate []byte,

@@ -37,9 +37,6 @@ Environment=MATRIX_DEVOPS_RUNNER_DOCKER_SOCKET=/var/run/docker.sock
 Environment=MATRIX_DEVOPS_RUNNER_LISTEN_ADDRESS=127.0.0.1:18081
 Environment=MATRIX_DEVOPS_RUNNER_GATEWAY_ORIGIN=https://192.0.2.10:8444
 Environment=MATRIX_DEVOPS_RUNNER_GATEWAY_SERVER_NAME=devops-executor-gateway
-Environment=MATRIX_DEVOPS_RUNNER_CLIENT_CERT_FILE=%d/client.crt
-Environment=MATRIX_DEVOPS_RUNNER_CLIENT_KEY_FILE=%d/client.key
-Environment=MATRIX_DEVOPS_RUNNER_SERVER_CA_FILE=%d/server-ca.pem
 Environment=MATRIX_DEVOPS_RUNNER_CLIENT_IDENTITY=spiffe://matrix.xiak.com/installations/11111111111111111111111111111111/devops/runners/nodes/runner-one/slots/1
 Environment=MATRIX_DEVOPS_RUNNER_NAMESPACE=spiffe://matrix.xiak.com/installations/11111111111111111111111111111111/devops/runners
 Environment=ALL_PROXY=
@@ -90,8 +87,9 @@ WantedBy=multi-user.target
 	if !bytes.Equal(content, []byte(want)) {
 		t.Fatalf("runner service changed:\n%s", content)
 	}
-	if bytes.Contains(content, []byte("/run/credentials/")) {
-		t.Fatal("runner service hard-coded a systemd credential directory")
+	if bytes.Contains(content, []byte("/run/credentials/")) || bytes.Contains(content, []byte("%d/")) ||
+		bytes.Contains(content, []byte("CREDENTIALS_DIRECTORY=")) {
+		t.Fatal("runner service bypassed the systemd-provided credential directory")
 	}
 }
 

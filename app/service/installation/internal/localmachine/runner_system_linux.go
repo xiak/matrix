@@ -246,6 +246,9 @@ func (system *linuxRunnerNodeSystem) validateHost(
 	if err := validateRunnerNodeRoot(plan.Root); err != nil {
 		return errors.Join(runnernodecommand.ErrEffectConflict, err)
 	}
+	if err := validateRunnerServiceAncestorChain(path.Dir(plan.Root)); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -390,7 +393,6 @@ func (system *linuxRunnerNodeSystem) deactivateRunnerUnits(ctx context.Context, 
 				return err
 			}
 		case 3, 4:
-			continue
 		default:
 			return runnernodecommand.ErrEffectUnavailable
 		}
@@ -1284,6 +1286,21 @@ func validateRunnerHostAncestorChain(target string) error {
 		writableWithoutSticky := info.Mode().Perm()&0o022 != 0 && info.Mode()&os.ModeSticky == 0
 		if !ok || stat.Uid != 0 || writableWithoutSticky {
 			return runnernodecommand.ErrEffectConflict
+		}
+		if current == "/" {
+			return nil
+		}
+	}
+}
+
+func validateRunnerServiceAncestorChain(target string) error {
+	if err := validateRunnerHostAncestorChain(target); err != nil {
+		return err
+	}
+	for current := target; ; current = path.Dir(current) {
+		info, err := os.Lstat(current)
+		if err != nil || !info.IsDir() || info.Mode().Perm()&0o001 == 0 {
+			return errors.Join(runnernodecommand.ErrEffectConflict, err)
 		}
 		if current == "/" {
 			return nil

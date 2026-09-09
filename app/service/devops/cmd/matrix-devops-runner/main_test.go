@@ -21,6 +21,7 @@ func TestLoadConfigurationAcceptsOnlySeparatedPrivateRunnerInputs(t *testing.T) 
 		config.journalRoot != values[journalRootEnvironment] ||
 		config.workspaceRoot != values[workspaceRootEnvironment] ||
 		config.listenAddress != "127.0.0.1:8080" ||
+		config.credentialDirectory != values[credentialsDirectoryEnvironment] ||
 		config.clientIdentity != "spiffe://matrix.test/devops/runners/node-one" {
 		t.Fatalf("runner configuration=%#v err=%v", config, err)
 	}
@@ -35,6 +36,9 @@ func TestLoadConfigurationRejectsMissingOverlappingAndRemoteInputs(t *testing.T)
 		{name: "missing", change: func(values map[string]string) {
 			values[gatewayOriginEnvironment] = ""
 		}},
+		{name: "missing credential directory", change: func(values map[string]string) {
+			values[credentialsDirectoryEnvironment] = ""
+		}},
 		{name: "relative root", change: func(values map[string]string) {
 			values[journalRootEnvironment] = "journal"
 		}},
@@ -48,7 +52,10 @@ func TestLoadConfigurationRejectsMissingOverlappingAndRemoteInputs(t *testing.T)
 			values[workspaceRootEnvironment] = filepath.Join(values[journalRootEnvironment], "workspace")
 		}},
 		{name: "credential in writable storage", change: func(values map[string]string) {
-			values[clientKeyEnvironment] = filepath.Join(values[storageRootEnvironment], "runner.key")
+			values[credentialsDirectoryEnvironment] = filepath.Join(values[storageRootEnvironment], "credentials")
+		}},
+		{name: "credential directory contains writable storage", change: func(values map[string]string) {
+			values[credentialsDirectoryEnvironment] = filepath.Dir(values[storageRootEnvironment])
 		}},
 		{name: "remote readiness", change: func(values map[string]string) {
 			values[listenAddressEnvironment] = "0.0.0.0:8080"
@@ -174,18 +181,16 @@ func runnerConfigurationFixture(t *testing.T) map[string]string {
 	root := t.TempDir()
 	storage := filepath.Join(root, "storage")
 	return map[string]string{
-		journalRootEnvironment:     filepath.Join(storage, "journal"),
-		workspaceRootEnvironment:   filepath.Join(storage, "workspaces"),
-		storageRootEnvironment:     storage,
-		dockerSocketEnvironment:    filepath.Join(root, "docker.sock"),
-		listenAddressEnvironment:   "127.0.0.1:8080",
-		gatewayOriginEnvironment:   "https://executor-gateway.matrix.test:8444",
-		gatewayNameEnvironment:     "executor-gateway.matrix.test",
-		clientCertEnvironment:      filepath.Join(root, "runner.crt"),
-		clientKeyEnvironment:       filepath.Join(root, "runner.key"),
-		serverCAEnvironment:        filepath.Join(root, "gateway-ca.crt"),
-		clientIdentityEnvironment:  "spiffe://matrix.test/devops/runners/node-one",
-		runnerNamespaceEnvironment: "spiffe://matrix.test/devops/runners",
+		journalRootEnvironment:          filepath.Join(storage, "journal"),
+		workspaceRootEnvironment:        filepath.Join(storage, "workspaces"),
+		storageRootEnvironment:          storage,
+		dockerSocketEnvironment:         filepath.Join(root, "docker.sock"),
+		listenAddressEnvironment:        "127.0.0.1:8080",
+		gatewayOriginEnvironment:        "https://executor-gateway.matrix.test:8444",
+		gatewayNameEnvironment:          "executor-gateway.matrix.test",
+		credentialsDirectoryEnvironment: filepath.Join(root, "credentials"),
+		clientIdentityEnvironment:       "spiffe://matrix.test/devops/runners/node-one",
+		runnerNamespaceEnvironment:      "spiffe://matrix.test/devops/runners",
 	}
 }
 
@@ -194,8 +199,8 @@ func setRunnerEnvironment(t *testing.T, values map[string]string) {
 	for _, key := range []string{
 		journalRootEnvironment, workspaceRootEnvironment, storageRootEnvironment,
 		dockerSocketEnvironment, listenAddressEnvironment, gatewayOriginEnvironment,
-		gatewayNameEnvironment, clientCertEnvironment, clientKeyEnvironment,
-		serverCAEnvironment, clientIdentityEnvironment, runnerNamespaceEnvironment,
+		gatewayNameEnvironment, clientIdentityEnvironment, runnerNamespaceEnvironment,
+		credentialsDirectoryEnvironment,
 	} {
 		t.Setenv(key, values[key])
 	}
