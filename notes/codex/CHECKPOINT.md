@@ -6,7 +6,7 @@
 - Updated: 2026-09-09
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `540d5d2`
+- Current pushed implementation baseline: `4b63c1d`
 
 ## Goal
 
@@ -17,29 +17,26 @@ architecture, FEAT, implementation, test, and release gates.
 ## Current milestone
 
 - FEAT-007 is the authoritative owner and remains `In progress`.
-- Pushed `540d5d2` completes the authenticated Linux/amd64 dedicated
-  runner-node installer slice. The closed `mx devops runner-node install`
-  workflow validates the signed release, pinned-authority enrollment, CSR
-  binding, exact payload inventory, and host preflight before publishing
-  root-owned runtime material.
-- The Linux adapter converges one isolated account and mutable root per slot,
-  exact Docker `29.x` and pinned `runsc` state, UID-bound gateway-only nftables
-  policy, the fixed offline toolchain image, systemd units, and loopback
-  readiness. Firewall activation precedes Docker and runner processes; failed
-  activation leaves runners stopped and disabled while retaining the
-  fail-closed firewall. Equal replay is stable and foreign or changed state is
-  rejected.
-- Full repository tests and vet pass on Windows. The affected installer,
-  runner-command, and CLI packages pass Windows race detection and twenty-run
-  repetition, and twenty runs in the fixed disconnected Go 1.26.8 Linux/amd64
-  image with read-only source and module cache. A separate disconnected Linux
-  integration installs and re-verifies the actual current runner binary, the
-  pinned official gVisor archive, and the real Docker-save toolchain archive.
-- This is controlled-host installation and authentic-material evidence, not a
-  real systemd/nftables/Docker/runsc host or repository-code execution gate.
-  The full disconnected Linux repository run still reaches the pre-existing
-  real-host/SSH probe in `app/adapter/infrastructure/localmachine`; do not claim
-  it as a full Linux repository pass.
+- Pushed `4b63c1d` completes the current signed control-plane installation
+  milestone. Release images now retain both archive-configuration and source
+  identities while running through deterministic signed local references, the
+  DevOps migration process admits its exact five isolated database identities,
+  and the executor gateway joins control plus edge so Docker can publish only
+  the runner listener on `8444`.
+- A signed release assembled from that commit completed a clean install on a
+  disposable systemd Linux/amd64 host with Docker Engine `29.6.2` and its
+  default containerd image store. All migrations and 16 services started;
+  install, verify, status, and protected support-evidence operations returned
+  `READY`; strict observation saw a healthy gateway with requested and active
+  `0.0.0.0:8444` bindings.
+- Full repository tests and vet pass on Windows. Affected topology,
+  installation, platform-command, and release-build packages pass race
+  detection and twenty-run repetition on Windows, plus twenty runs in the
+  fixed disconnected Go 1.26.8 Linux/amd64 image with read-only source and
+  module cache.
+- This is real control-plane lifecycle evidence, not the dedicated-host
+  systemd/nftables/Docker/runsc, malicious-repository, restart-fencing, or full
+  source-to-check Gate B evidence.
 
 ## Adoption boundary
 

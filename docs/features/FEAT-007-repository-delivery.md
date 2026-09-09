@@ -1555,13 +1555,24 @@ Current verification evidence:
   issuance time, three disjoint P-256 authorities, exact gateway and
   build-worker identities, canonical write-once authority storage,
   entropy-free replay and derived-file recovery, tamper rejection, private
-  spool ownership, read-only runtime certificate mounts, internal-only admin
-  authority, one fixed published mTLS runner port, no Docker authority in the
-  gateway/build worker, no authority-private-key mount, and complete absence
-  from PaaS-only staging and topology. The gateway process suite also proves
-  its loopback readiness server is coupled to both mutually authenticated TLS
-  listeners; full unit, topology, release-build, architecture, and vet gates
-  pass on the affected worktree
+  spool ownership, read-only runtime certificate mounts, control-network admin
+  authority, control-plus-edge gateway membership, one fixed published mTLS
+  runner port, no Docker authority in the gateway/build worker, no authority-
+  private-key mount, and complete absence from PaaS-only staging and topology.
+  The topology gate rejects every host-published service without a non-internal
+  network. The gateway process suite also proves its loopback readiness server
+  is coupled to both mutually authenticated TLS listeners. A signed release
+  assembled from `4b63c1d` completed a clean install on disposable systemd
+  Linux/amd64 with Docker Engine `29.6.2` and its default containerd image
+  store: all migrations and the 16-service startup completed; install, verify,
+  status, and protected support-evidence commands returned `READY`; and strict
+  provider observation proved both the requested and active `0.0.0.0:8444`
+  binding on the healthy control-plus-edge gateway. Full unit, topology,
+  release-build, architecture, vet, race, and twenty-run gates pass on Windows,
+  with the affected repeated suites also passing in the fixed disconnected Go
+  1.26.8 Linux/amd64 image using read-only source and module cache. This is real
+  control-plane installation evidence, not dedicated-runner or repository-code
+  execution evidence
 - versioned normalized-log contract, gateway spool, and build-worker drain
   tests prove complete labeled-line grammar, 64 KiB chunks, run-leading byte and
   sequence cursors, exact two-step ordering, atomic spool publication and
