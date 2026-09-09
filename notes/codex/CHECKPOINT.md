@@ -6,7 +6,7 @@
 - Updated: 2026-09-09
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `e9ad554`
+- Current pushed implementation baseline: `b0ff23f`
 
 ## Goal
 
@@ -17,41 +17,30 @@ architecture, FEAT, implementation, test, and release gates.
 ## Current milestone
 
 - FEAT-007 is the authoritative owner and remains `In progress`.
-- Pushed `e9ad554` extends the opt-in source-process journey against a clean
-  PostgreSQL 18 database and fixed Gitea `1.27.3`. It starts the actual DevOps
-  API, source-observer, two source-fetchers, three successive check-reporter
-  processes, and DevOps Audit-dispatcher binary. The API validates its IAM
-  service identity through a narrow HTTP test boundary.
-- The physical DevOps webhook returns 401 for a forged signature, 204 for one
-  valid pull-request event and its equal replay, and 409 for changed-byte
-  replay. The valid HTTP request identity correlates the one source event, one
-  run, and two Audit outbox facts.
-- The first fetcher performs exactly one Gitea `upload-pack` and atomically
-  publishes the source archive, then is killed before PostgreSQL acknowledgement.
-  Its replacement claims fence two, observes the immutable archive without a
-  second provider fetch, stores one receipt, completes FETCH, and advances the
-  same run to `VERIFYING`. Archive, database, and process evidence contains no
-  credential or private path.
-- A narrow in-test passing executor bridges the production VERIFY use case to
-  the separately proved isolated-executor gate. After a bootstrap reporter
-  establishes readiness, the first recovery reporter claims REPORT fence one
-  and creates exactly one Gitea success status. It is killed after the provider
-  effect completes but before PostgreSQL can store the receipt. The database
-  retains an open fence-one REPORT intent and no receipt; after bounded lease
-  expiry, a replacement claims fence two, performs one provider read and no
-  second create, stores the sole receipt, and makes the unchanged run
-  `SUCCEEDED / COMPLETED`.
-- The actual DevOps Audit dispatcher authenticates to a narrow validating HTTP
-  boundary and delivers every accumulated outbox fact once. Source admission
-  and run creation retain the webhook request correlation; the terminal fact
-  targets/correlates the same run and uses the system run-worker actor. The
-  separate authority-process gate remains physical IAM/Audit-service evidence.
-- The joined process journey passed in 3.42 seconds under disconnected Go
-  `1.26.8`; Linux package vet and current full-repository Windows tests and vet
-  pass. It still does not join the physical executor, IAM service, and Audit
-  service in one journey or close malicious repository/resource abuse,
-  oversized logs, all other external-effect restarts, full Gate B, or UI Gate
-  C.
+- Pushed `b0ff23f` expands the disposable Linux Docker `29.6.2` and pinned-
+  runsc execution gate. The normal canonical archive still crosses both TLS
+  1.3 mTLS gateway roles, the durable spool, journal, workspace, production
+  runner workflow, both fixed Go steps, authenticated normalized-log read, and
+  exact terminal receipt with no residual container.
+- A malicious source archive now proves credential/proxy environment removal,
+  denial of Docker/control-plane sockets, credential files and privileged
+  devices, read-only source/root filesystems, loopback-only networking, failed
+  reserved/private/metadata egress, and actual fixed-PID exhaustion. Pinned
+  runsc returned `ENOMEM` after 112-113 child starts; the test accepts only the
+  runsc `ENOMEM` or native-cgroup `EAGAIN` resource denials before 384 attempts.
+- Secret-shaped, absolute-path, ANSI, control-byte, invalid-UTF-8, and overlong
+  native lines become exact closed markers, with raw sentinels absent. A
+  separate real sandbox writes 129 64-KiB blocks, hits the fixed 8 MiB whole-run
+  limit with no returned chunks or progress, and is cancelled, deleted, and
+  observed absent. The expanded journey passed in 48.04 seconds; affected Linux
+  vet and full Windows repository tests and vet pass on the same worktree.
+- Earlier pushed `e9ad554` remains the real Gitea/PostgreSQL source-process and
+  provider-report recovery evidence: one signed event and run, fetch and report
+  fence-two recovery without duplicate provider effects, terminal Audit outbox
+  delivery, and the unchanged run reaching `SUCCEEDED / COMPLETED`.
+- Gate B still lacks one joined physical IAM/Audit/executor journey, remaining
+  cross-tenant/path-traversal/symlink attacks, and the other unproved external-
+  effect restarts. UI Gate C has not begun.
 
 ## Adoption boundary
 
@@ -65,10 +54,10 @@ architecture, FEAT, implementation, test, and release gates.
 
 Join the existing physical IAM/Audit/executor evidence where that materially
 protects the end-to-end boundary, without duplicating their already proved
-isolated gates. Complete malicious repository/resource-abuse and oversized-log
-cases plus remaining external-effect restarts with no duplicate provider
-outcome. Only after complete Gate B passes begin formal Matrix UI integration
-from the accepted UX baseline.
+isolated gates. Complete the cross-tenant/path-traversal/symlink attacks and
+remaining external-effect restarts with no duplicate provider outcome. Only
+after complete Gate B passes begin formal Matrix UI integration from the
+accepted UX baseline.
 
 Keep runner authority away from PostgreSQL, source/report credentials, IAM,
 Audit, PaaS, and executor-admin operations. Preserve pragmatic DDD,
