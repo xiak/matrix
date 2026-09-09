@@ -29,8 +29,8 @@
   observation, physical signed HTTP ingress, standalone source-fetcher archive
   crash recovery, check-reporter status-acknowledgment crash recovery, physical
   provider reporting, and DevOps Audit-dispatch process delivery complete; the
-  fully joined physical IAM/Audit services, cross-tenant/path-traversal/symlink
-  adversarial cases, and full Gate B remain pending
+  fully joined physical IAM/Audit/executor journey, remaining external-effect
+  restart cases, and full Gate B remain pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -1333,9 +1333,18 @@ subsequent gate extends the successful execution into standalone gateway/build-
 worker/runner processes backed by PostgreSQL and proves crash recovery. Another
 gate drives a real fixed Gitea connection through the source observer, physical
 DevOps webhook ingress, PostgreSQL, and standalone source-fetcher crash recovery.
-Joining those passing source and execution subjourneys with physical IAM/Audit
-and the remaining cross-tenant/path-traversal/symlink attacks is still required
-for complete Gate B.
+The same runner storage now publishes a second tenant's immutable decoy source
+workspace before the malicious execution. Even with its exact host path, the
+repository cannot read or list it directly, reach or change it with `..`
+traversal, or follow a writable-cache symlink into it. A control symlink from
+the same cache to the repository's own source remains readable, proving symlink
+support rather than treating blanket link failure as isolation evidence. The
+trusted runner side then re-reads the unchanged decoy and proves both tenants'
+step-container identities absent. Together with real PostgreSQL forced tenant
+concealment on public run/log reads, this completes the Gate B malicious-
+repository containment item. Joining the passing source and execution
+subjourneys with physical IAM/Audit/executor processes and closing the remaining
+external-effect restart cases is still required for complete Gate B.
 
 Every fenced worker transition now submits the exact next PipelineRun document
 to the database boundary. A terminal transition atomically stores a distinct
@@ -1666,13 +1675,20 @@ Current verification evidence:
   exact closed markers are present in the authenticated log read. A separate
   real production-sandbox step emits 129 64-KiB blocks, proves the fixed whole-
   run log limit returns no partial chunks or progress, and is cancelled, deleted,
-  and observed absent. The real Docker response also proves the exact non-TTY
-  multiplexed log media type, and the private cache tmpfs proves its explicit
-  UID/GID ownership. The expanded journey passes in 48.04 seconds; affected
-  Linux vet plus full Windows repository tests and vet pass on the same worktree.
-  This gate alone still does not join standalone source/control-plane processes,
-  physical IAM/Audit, cross-tenant/path-traversal/symlink attacks, and the
-  provider-report effect in one journey
+  and observed absent. Before that attack, the same runner store publishes a
+  different tenant's immutable decoy workspace and gives its exact host path to
+  the repository. Direct read/list, parent traversal read/write, and a writable-
+  cache symlink escape all fail; a control symlink to the attacker's own source
+  succeeds, the trusted side re-proves the decoy content, and both tenants have
+  zero residual step containers. The real Docker response also proves the exact
+  non-TTY multiplexed log media type, and the private cache tmpfs proves its
+  explicit UID/GID ownership. The expanded journey passes in 48.04 seconds;
+  affected Linux vet plus full Windows repository tests and vet pass on the same
+  worktree. Combined with the existing real PostgreSQL tenant-concealed public
+  run/log reads, this completes Gate B's malicious-repository containment item.
+  This gate alone still does not join those executor proofs to standalone source/
+  control-plane processes, physical IAM/Audit, and the provider-report effect in
+  one journey
 - an opt-in standalone-process recovery journey on a clean PostgreSQL 18
   database and the same disposable Docker `29.6.2`/pinned-`runsc` node. It
   applies and verifies the migration twice, seeds one canonical source archive
@@ -1695,8 +1711,8 @@ Current verification evidence:
   vet, affected Windows race and twenty-run suites, and the affected offline
   Linux suites also pass. Its source input remains seeded; the physical source
   provider/Audit-dispatch journey is proved separately below, while fully
-  joining the physical IAM/Audit services, the remaining cross-tenant/path-
-  traversal/symlink attacks, and the rest of Gate B remain pending
+  joining the physical IAM/Audit services and physical isolated executor, plus
+  the remaining external-effect restarts, remains pending for Gate B
 - an opt-in real source-process recovery journey on a clean PostgreSQL 18
   database and the fixed Gitea `1.27.3` image. It applies and verifies the
   migration twice, provisions one private repository and purpose-separated
@@ -1749,8 +1765,9 @@ Current verification evidence:
   `1.26.8` with module-network access disabled; Linux package vet and current
   full-repository Windows tests and vet pass. This joined slice still does not
   re-execute the physical BuildExecutor or physical IAM and Audit services in
-  the same journey, exercise a malicious repository or resource/oversized-log
-  cases, prove all other remaining external-effect restarts, or complete Gate B
+  the same journey; it relies on the separate real runner gate for malicious-
+  repository containment and still does not prove all remaining external-effect
+  restarts or complete Gate B
 - selected-product installation and topology tests proving journal-stable PKI
   issuance time, three disjoint P-256 authorities, exact gateway and
   build-worker identities, canonical write-once authority storage,

@@ -8,6 +8,8 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +30,7 @@ const (
 	runnerDockerIntegrationEnvironment = "MATRIX_RUNNER_DOCKER_INTEGRATION"
 	adversarialSecretSentinel          = "matrix-attack-secret-must-not-survive"
 	adversarialPathSentinel            = "/matrix/control-plane/private"
+	crossTenantSourceSentinel          = "matrix-foreign-tenant-source-must-not-survive"
 )
 
 // TestRealDockerRunscRunnerCompletesMTLSExecution is the opt-in dedicated-host
@@ -128,7 +131,12 @@ func TestRealDockerRunscRunnerCompletesMTLSExecution(t *testing.T) {
 	}
 	assertRealRunnerContainersAbsent(t, ctx, workspaces, sandbox, request, archive)
 
-	adversarialRequest, adversarialArchive := adversarialGatewayFixture(t)
+	foreignRequest, foreignArchive, foreignWorkspace := publishForeignTenantWorkspace(
+		t, ctx, workspaces,
+	)
+	adversarialRequest, adversarialArchive := adversarialGatewayFixture(
+		t, foreignWorkspace.SourceRoot,
+	)
 	adversarialReceipt, adversarialLogs := executeRealRunnerRequest(
 		t, ctx, spool, admin, runner, adversarialRequest, adversarialArchive,
 	)
@@ -137,7 +145,9 @@ func TestRealDockerRunscRunnerCompletesMTLSExecution(t *testing.T) {
 		devopsbuildv1.StepConclusionFailed, devopsbuildv1.StepConclusionNotRun,
 	)
 	if adversarialReceipt != wantAdversarialReceipt ||
-		!strings.Contains(adversarialLogs, "matrix-pid-limit-contained") {
+		!strings.Contains(adversarialLogs, "matrix-pid-limit-contained") ||
+		!strings.Contains(adversarialLogs, "matrix-cross-tenant-contained") ||
+		!strings.Contains(adversarialLogs, "matrix-traversal-symlink-contained") {
 		t.Fatalf(
 			"real adversarial receipt=%#v logs=%q",
 			adversarialReceipt, adversarialLogs,
@@ -154,6 +164,7 @@ func TestRealDockerRunscRunnerCompletesMTLSExecution(t *testing.T) {
 	}
 	for _, forbidden := range []string{
 		adversarialSecretSentinel, adversarialPathSentinel,
+		crossTenantSourceSentinel, foreignWorkspace.SourceRoot,
 		strings.Repeat("x", int(devopsv1.FixedMaxLogLineBytes)+1),
 	} {
 		if strings.Contains(adversarialLogs, forbidden) {
@@ -162,6 +173,10 @@ func TestRealDockerRunscRunnerCompletesMTLSExecution(t *testing.T) {
 	}
 	assertRealRunnerContainersAbsent(
 		t, ctx, workspaces, sandbox, adversarialRequest, adversarialArchive,
+	)
+	assertForeignTenantWorkspaceIntact(t, foreignWorkspace)
+	assertRealRunnerContainersAbsent(
+		t, ctx, workspaces, sandbox, foreignRequest, foreignArchive,
 	)
 	assertRealOversizedLogContained(t, ctx, workspaces, sandbox)
 
@@ -265,6 +280,44 @@ func assertRealRunnerContainersAbsent(
 				step.Ordinal, state, observeErr,
 			)
 		}
+	}
+}
+
+func publishForeignTenantWorkspace(
+	t *testing.T,
+	ctx context.Context,
+	workspaces *runnerworkspacefile.Store,
+) (devopsbuildv1.Request, []byte, port.RunnerWorkspace) {
+	t.Helper()
+	request, archive := gatewayFixtureWithFiles(t, 'a', []sourcearchive.File{
+		integrationSourceFile("foreign.txt", crossTenantSourceSentinel),
+		integrationSourceFile(
+			"go.mod", "module example.invalid/matrixforeign\n\ngo 1.26.0\n",
+		),
+	})
+	request.TenantID = "tenant-two"
+	executionID, err := devopsbuildv1.ExecutionID(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace, err := workspaces.Ensure(
+		ctx, executionID, request, io.NopCloser(bytes.NewReader(archive)),
+	)
+	if err != nil {
+		t.Fatalf("publish foreign tenant workspace: %v", err)
+	}
+	assertForeignTenantWorkspaceIntact(t, workspace)
+	return request, archive, workspace
+}
+
+func assertForeignTenantWorkspaceIntact(
+	t *testing.T,
+	workspace port.RunnerWorkspace,
+) {
+	t.Helper()
+	content, err := os.ReadFile(filepath.Join(workspace.SourceRoot, "foreign.txt"))
+	if err != nil || string(content) != crossTenantSourceSentinel {
+		t.Fatalf("foreign tenant workspace changed: bytes=%d err=%v", len(content), err)
 	}
 }
 
@@ -409,17 +462,25 @@ go 1.26.0
 	return gatewayFixtureWithFiles(t, 'd', files)
 }
 
-func adversarialGatewayFixture(t *testing.T) (devopsbuildv1.Request, []byte) {
+func adversarialGatewayFixture(
+	t *testing.T,
+	foreignSourceRoot string,
+) (devopsbuildv1.Request, []byte) {
 	t.Helper()
+	if !strings.HasPrefix(foreignSourceRoot, "/") {
+		t.Fatal("foreign source root is not absolute")
+	}
 	files := []sourcearchive.File{
 		integrationSourceFile("guard_test.go", `package matrixgatebadversarial
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -428,6 +489,7 @@ import (
 
 const attackSecret = "`+adversarialSecretSentinel+`"
 const attackPath = "`+adversarialPathSentinel+`"
+const foreignSource = `+strconv.Quote(foreignSourceRoot)+`
 
 func TestAdversarialRepository(t *testing.T) {
 	for _, name := range []string{
@@ -486,6 +548,36 @@ func TestAdversarialRepository(t *testing.T) {
 		t.Fatal("control-plane database socket is reachable")
 	}
 
+	foreignFile := filepath.Join(foreignSource, "foreign.txt")
+	if content, err := os.ReadFile(foreignFile); err == nil || len(content) != 0 {
+		t.Fatal("foreign tenant workspace is directly readable")
+	}
+	if entries, err := os.ReadDir(foreignSource); err == nil || len(entries) != 0 {
+		t.Fatal("foreign tenant workspace is listable")
+	}
+	traversal := "/workspace/src/../../" + strings.TrimPrefix(foreignFile, "/")
+	if content, err := os.ReadFile(traversal); err == nil || len(content) != 0 {
+		t.Fatal("parent traversal reached foreign tenant workspace")
+	}
+	if err := os.WriteFile(traversal, []byte("attacker"), 0o600); err == nil {
+		t.Fatal("parent traversal changed foreign tenant workspace")
+	}
+	controlLink := "/cache/own-source-link"
+	if err := os.Symlink("/workspace/src/guard_test.go", controlLink); err != nil {
+		t.Fatal("create control symlink")
+	}
+	if content, err := os.ReadFile(controlLink); err != nil ||
+		!bytes.Contains(content, []byte("TestAdversarialRepository")) {
+		t.Fatal("control symlink is not usable")
+	}
+	foreignLink := "/cache/foreign-source-link"
+	if err := os.Symlink(traversal, foreignLink); err != nil {
+		t.Fatal("create foreign symlink")
+	}
+	if content, err := os.ReadFile(foreignLink); err == nil || len(content) != 0 {
+		t.Fatal("symlink escaped into foreign tenant workspace")
+	}
+
 	const processAttempts = 384
 	children := make([]*exec.Cmd, 0, processAttempts)
 	var denied error
@@ -519,6 +611,8 @@ func TestAdversarialRepository(t *testing.T) {
 	}
 
 	fmt.Println("matrix-pid-limit-contained")
+	fmt.Println("matrix-cross-tenant-contained")
+	fmt.Println("matrix-traversal-symlink-contained")
 	fmt.Println("TOKEN=" + attackSecret)
 	fmt.Println("attempted path " + attackPath)
 	fmt.Println("\x1b[31munsafe ANSI\x1b[0m")
