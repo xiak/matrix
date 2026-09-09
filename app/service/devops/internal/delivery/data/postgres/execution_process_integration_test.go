@@ -121,11 +121,6 @@ func TestBuildWorkerGatewayAndRunnerProcessesRecoverExternalEffects(t *testing.T
 	temporary := t.TempDir()
 	chmodExact(t, temporary, 0o700)
 	archiveRoot := makeExecutionProcessDirectory(t, temporary, "source-archives", 0o700)
-	spoolRoot := makeExecutionProcessDirectory(t, temporary, "executor-spool", 0o700)
-	runnerStorage := makeExecutionProcessDirectory(t, temporary, "runner-storage", 0o700)
-	journalRoot := makeExecutionProcessDirectory(t, runnerStorage, "journal", 0o700)
-	workspaceRoot := makeExecutionProcessDirectory(t, runnerStorage, "workspaces", 0o700)
-	credentialRoot := makeExecutionProcessDirectory(t, temporary, "runner-credentials", 0o700)
 
 	apiPool := openExecutionProcessPool(t, ctx, apiDSN)
 	defer apiPool.Close()
@@ -152,6 +147,36 @@ func TestBuildWorkerGatewayAndRunnerProcessesRecoverExternalEffects(t *testing.T
 	run := seedExecutionProcessRun(
 		t, ctx, configuration, controlRepository, observerPool, fetcherPool, archiveRoot,
 	)
+	completed := recoverExecutionProcessRun(
+		t, ctx, admin, binaries, dockerSocket, workerDSN, archiveRoot,
+		temporary, runController, run,
+		[]string{apiPassword, reporterPassword, fetcherPassword, observerPassword, workerPassword},
+	)
+	if completed.Status.Reason != "" || completed.Status.CompletedAt != nil ||
+		completed.Status.Stage != devopsv1.PipelineRunStageReport {
+		t.Fatalf("recovered execution run=%#v", completed)
+	}
+}
+
+func recoverExecutionProcessRun(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	binaries executionProcessBinaries,
+	dockerSocket string,
+	workerDSN string,
+	archiveRoot string,
+	temporary string,
+	runController *runcontrol.Service,
+	run devopsv1.PipelineRun,
+	sensitive []string,
+) devopsv1.PipelineRun {
+	t.Helper()
+	spoolRoot := makeExecutionProcessDirectory(t, temporary, "executor-spool", 0o700)
+	runnerStorage := makeExecutionProcessDirectory(t, temporary, "runner-storage", 0o700)
+	journalRoot := makeExecutionProcessDirectory(t, runnerStorage, "journal", 0o700)
+	workspaceRoot := makeExecutionProcessDirectory(t, runnerStorage, "workspaces", 0o700)
+	credentialRoot := makeExecutionProcessDirectory(t, temporary, "runner-credentials", 0o700)
 
 	pki := newExecutionProcessPKI(t)
 	serverCertificatePath := writeExecutionProcessFile(
@@ -232,18 +257,11 @@ func TestBuildWorkerGatewayAndRunnerProcessesRecoverExternalEffects(t *testing.T
 			children[index].stop()
 		}
 		docker.removeExecutionProcessContainers(t)
-		assertExecutionProcessOutputSafe(
-			t,
-			children,
-			apiPassword,
-			reporterPassword,
-			fetcherPassword,
-			observerPassword,
-			workerPassword,
-			string(pki.serverKey),
-			string(pki.adminKey),
-			string(pki.runnerKey),
+		protected := append([]string(nil), sensitive...)
+		protected = append(
+			protected, string(pki.serverKey), string(pki.adminKey), string(pki.runnerKey),
 		)
+		assertExecutionProcessOutputSafe(t, children, protected...)
 	})
 	start := func(binary string, environment []string) *executionProcessChild {
 		child := startExecutionProcess(t, binary, environment)
@@ -286,15 +304,11 @@ func TestBuildWorkerGatewayAndRunnerProcessesRecoverExternalEffects(t *testing.T
 
 	secondRunner := start(binaries.runner, runnerEnvironment)
 	completed := waitExecutionProcessRunReporting(
-		t, ctx, runController, run.ID, gateway, secondWorker, secondRunner,
+		t, ctx, runController, run.Scope.TenantID, run.ID, gateway, secondWorker, secondRunner,
 	)
 	waitExecutionProcessHTTPStatus(
 		t, ctx, secondRunner, "http://"+runnerReadinessAddress+"/ready", http.StatusOK,
 	)
-	if completed.Status.Reason != "" || completed.Status.CompletedAt != nil ||
-		completed.Status.Stage != devopsv1.PipelineRunStageReport {
-		t.Fatalf("recovered execution run=%#v", completed)
-	}
 	if residual := docker.gateContainers(t); len(residual) != 0 {
 		t.Fatalf("recovered runner left containers: %#v", residual)
 	}
@@ -306,9 +320,10 @@ func TestBuildWorkerGatewayAndRunnerProcessesRecoverExternalEffects(t *testing.T
 	secondWorker.stop()
 	gateway.stop()
 	assertExecutionProcessEvidence(
-		t, ctx, admin, runController, spoolRoot, journalRoot,
+		t, ctx, admin, runController, run.Scope.TenantID, spoolRoot, journalRoot,
 		executionID, run.ID, firstWorkerFence,
 	)
+	return completed
 }
 
 type executionProcessBinaries struct {
@@ -1178,6 +1193,7 @@ func waitExecutionProcessRunReporting(
 	t *testing.T,
 	ctx context.Context,
 	controller *runcontrol.Service,
+	tenantID devopsv1.TenantID,
 	runID devopsv1.ResourceID,
 	children ...*executionProcessChild,
 ) devopsv1.PipelineRun {
@@ -1189,8 +1205,8 @@ func waitExecutionProcessRunReporting(
 			}
 		}
 		run, err := controller.Get(ctx, runcontrol.GetQuery{
-			Authorization: auth(
-				iamv1.ActionDevOpsRunRead, iamv1.ResourcePipelineRun, runID,
+			Authorization: authForTenant(
+				tenantID, iamv1.ActionDevOpsRunRead, iamv1.ResourcePipelineRun, runID,
 			),
 			RunID: runID,
 		})
@@ -1213,6 +1229,7 @@ func assertExecutionProcessEvidence(
 	ctx context.Context,
 	admin *pgx.Conn,
 	controller *runcontrol.Service,
+	tenantID devopsv1.TenantID,
 	spoolRoot string,
 	journalRoot string,
 	executionID string,
@@ -1293,8 +1310,8 @@ func assertExecutionProcessEvidence(
 	after := uint64(0)
 	for {
 		page, err := controller.Logs(ctx, runcontrol.LogQuery{
-			Authorization: auth(
-				iamv1.ActionDevOpsLogRead, iamv1.ResourcePipelineRun, runID,
+			Authorization: authForTenant(
+				tenantID, iamv1.ActionDevOpsLogRead, iamv1.ResourcePipelineRun, runID,
 			),
 			RunID: runID, AfterSequence: after,
 		})

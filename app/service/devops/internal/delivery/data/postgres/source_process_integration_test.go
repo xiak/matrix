@@ -34,28 +34,31 @@ import (
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
+	auditmigration "github.com/xiak/matrix/app/service/audit/migration"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/executorgatewayhttp"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/gitea"
 	devopspostgres "github.com/xiak/matrix/app/service/devops/internal/delivery/data/postgres"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/sourcearchivefile"
-	"github.com/xiak/matrix/app/service/devops/internal/delivery/port"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/sourcearchive"
-	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/buildexecution"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/checkreporting"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/pipelineconfiguration"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runcontrol"
 	devopsmigration "github.com/xiak/matrix/app/service/devops/migration"
 	"github.com/xiak/matrix/app/service/devops/sourcecredential"
+	iammigration "github.com/xiak/matrix/app/service/iam/migration"
 )
 
 const (
-	sourceProcessDSNEnvironment           = "MATRIX_DEVOPS_SOURCE_PROCESS_TEST_DSN"
-	sourceProcessGiteaUpstreamEnvironment = "MATRIX_DEVOPS_SOURCE_PROCESS_TEST_GITEA_UPSTREAM"
-	sourceProcessGiteaEndpointEnvironment = "MATRIX_DEVOPS_SOURCE_PROCESS_TEST_GITEA_ENDPOINT"
-	sourceProcessAPIEnvironment           = "MATRIX_DEVOPS_SOURCE_PROCESS_API_BINARY"
-	sourceProcessAuditEnvironment         = "MATRIX_DEVOPS_SOURCE_PROCESS_AUDIT_DISPATCHER_BINARY"
-	sourceProcessReporterEnvironment      = "MATRIX_DEVOPS_SOURCE_PROCESS_REPORTER_BINARY"
-	sourceProcessObserverEnvironment      = "MATRIX_DEVOPS_SOURCE_PROCESS_OBSERVER_BINARY"
-	sourceProcessFetcherEnvironment       = "MATRIX_DEVOPS_SOURCE_PROCESS_FETCHER_BINARY"
+	sourceProcessDSNEnvironment             = "MATRIX_DEVOPS_SOURCE_PROCESS_TEST_DSN"
+	sourceProcessGiteaUpstreamEnvironment   = "MATRIX_DEVOPS_SOURCE_PROCESS_TEST_GITEA_UPSTREAM"
+	sourceProcessGiteaEndpointEnvironment   = "MATRIX_DEVOPS_SOURCE_PROCESS_TEST_GITEA_ENDPOINT"
+	sourceProcessAPIEnvironment             = "MATRIX_DEVOPS_SOURCE_PROCESS_API_BINARY"
+	sourceProcessIAMEnvironment             = "MATRIX_DEVOPS_SOURCE_PROCESS_IAM_BINARY"
+	sourceProcessAuditAPIEnvironment        = "MATRIX_DEVOPS_SOURCE_PROCESS_AUDIT_API_BINARY"
+	sourceProcessAuditDispatcherEnvironment = "MATRIX_DEVOPS_SOURCE_PROCESS_AUDIT_DISPATCHER_BINARY"
+	sourceProcessReporterEnvironment        = "MATRIX_DEVOPS_SOURCE_PROCESS_REPORTER_BINARY"
+	sourceProcessObserverEnvironment        = "MATRIX_DEVOPS_SOURCE_PROCESS_OBSERVER_BINARY"
+	sourceProcessFetcherEnvironment         = "MATRIX_DEVOPS_SOURCE_PROCESS_FETCHER_BINARY"
 
 	sourceProcessFixtureUsername = "matrixobserver"
 	sourceProcessFixturePassword = "MatrixObserver-Test-2026!"
@@ -66,33 +69,52 @@ const (
 	sourceProcessPipelineID      = devopsv1.ResourceID("pipeline-source-process")
 	sourceProcessDeliveryID      = "123e4567-e89b-42d3-a456-000000000702"
 	sourceProcessServiceSecret   = "mx1.SourceProcessDevOpsServiceCredential000000001"
+	sourceProcessIAMSecret       = "mx1.SourceProcessIAMCredential00000000000000000001"
+	sourceProcessPlatformSecret  = "mx1.SourceProcessPlatformCredential00000000000001"
+	sourceProcessPaaSSecret      = "mx1.SourceProcessPaaSCredential00000000000000001"
 	sourceProcessAuditSecret     = "mx1.SourceProcessAuditCredential00000000000000001"
+	sourceProcessVerifierSecret  = "mx1.SourceProcessVerifierCredential00000000000001"
+	sourceProcessAdminPassword   = "Source-Process-Initial-Administrator-Password-73!"
+	sourceProcessInstallationID  = "installation-source-process"
 )
 
 // TestSignedGiteaChangeRecoversThroughSourceFetcherProcess is the opt-in Gate B
 // source subjourney. A real Gitea change crosses the physical DevOps HTTP
-// process and becomes one signed admission and one archive. The first source-
+// process, backed by the physical IAM authority, and becomes one signed
+// admission and one archive. The first source-
 // fetcher is killed after publishing that archive but before PostgreSQL can
 // acknowledge it; a replacement observes the immutable effect under a larger
-// fence without another provider fetch. The same run then crosses the real
-// check-reporter and Audit-dispatcher process boundaries. The first reporting
-// process is killed after Gitea commits its status but before PostgreSQL can
-// acknowledge the receipt; a replacement observes that status under a larger
-// fence without another provider create. An in-test passing executor bridge
-// deliberately does not replace the separate isolated runner gate.
+// fence without another provider fetch. The same run crosses the physical
+// mTLS gateway/build-worker/runsc runner and check-reporter boundaries, with
+// crash recovery after both sandbox submission and Gitea status creation.
+// Finally, the physical Audit service accepts one event before the first
+// dispatcher dies; a replacement replays it idempotently and drains the exact
+// immutable facts without another external outcome.
 func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 	adminDSN := os.Getenv(sourceProcessDSNEnvironment)
 	if adminDSN == "" {
 		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", sourceProcessDSNEnvironment)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
 	apiBinary := requiredExecutionProcessBinary(t, sourceProcessAPIEnvironment)
-	auditBinary := requiredExecutionProcessBinary(t, sourceProcessAuditEnvironment)
+	iamBinary := requiredExecutionProcessBinary(t, sourceProcessIAMEnvironment)
+	auditAPIBinary := requiredExecutionProcessBinary(t, sourceProcessAuditAPIEnvironment)
+	auditDispatcherBinary := requiredExecutionProcessBinary(
+		t, sourceProcessAuditDispatcherEnvironment,
+	)
 	reporterBinary := requiredExecutionProcessBinary(t, sourceProcessReporterEnvironment)
 	observerBinary := requiredExecutionProcessBinary(t, sourceProcessObserverEnvironment)
 	fetcherBinary := requiredExecutionProcessBinary(t, sourceProcessFetcherEnvironment)
+	dockerSocket := requiredExecutionProcessSocket(t)
+	executionBinaries := executionProcessBinaries{
+		gateway: requiredExecutionProcessBinary(t, executionProcessGatewayEnvironment),
+		buildWorker: requiredExecutionProcessBinary(
+			t, executionProcessBuildWorkerEnvironment,
+		),
+		runner: requiredExecutionProcessBinary(t, executionProcessRunnerEnvironment),
+	}
 	upstream := requireSourceProcessUpstream(t, os.Getenv(sourceProcessGiteaUpstreamEnvironment))
 	providerEndpoint := requireSourceProcessEndpoint(
 		t, os.Getenv(sourceProcessGiteaEndpointEnvironment),
@@ -106,24 +128,44 @@ func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 		t.Fatal("connect DevOps source process database")
 	}
 	defer admin.Close(context.Background())
-	assertCleanExecutionProcessDatabase(t, ctx, admin)
+	assertCleanSourceProcessDatabase(t, ctx, admin)
 
 	apiPassword := "mxp1.source-process-api-000000000000000000000000"
 	reporterPassword := "mxp1.source-process-reporter-0000000000000000000"
 	fetcherPassword := "mxp1.source-process-fetcher-00000000000000000000"
 	observerPassword := "mxp1.source-process-observer-0000000000000000000"
 	workerPassword := "mxp1.source-process-worker-000000000000000000000"
+	iamAPIPassword := "mxp1.source-process-iam-api-000000000000000000000"
+	iamWorkerPassword := "mxp1.source-process-iam-worker-00000000000000000"
+	auditRuntimePassword := "mxp1.source-process-audit-runtime-000000000000000"
 	apiDSN := runtimeDSN(t, adminDSN, "matrix_devops_api_login", apiPassword)
 	reporterDSN := runtimeDSN(t, adminDSN, "matrix_devops_check_reporter_login", reporterPassword)
 	fetcherDSN := runtimeDSN(t, adminDSN, "matrix_devops_source_fetcher_login", fetcherPassword)
 	observerDSN := runtimeDSN(t, adminDSN, "matrix_devops_source_observer_login", observerPassword)
 	workerDSN := runtimeDSN(t, adminDSN, "matrix_devops_worker_login", workerPassword)
+	iamAPIDSN := runtimeDSN(t, adminDSN, "matrix_iam_api_login", iamAPIPassword)
+	iamWorkerDSN := runtimeDSN(t, adminDSN, "matrix_iam_worker_login", iamWorkerPassword)
+	auditRuntimeDSN := runtimeDSN(
+		t, adminDSN, "matrix_audit_runtime_login", auditRuntimePassword,
+	)
 	for attempt := 1; attempt <= 2; attempt++ {
+		if err := iammigration.Apply(ctx, adminDSN, iamAPIDSN, iamWorkerDSN); err != nil {
+			t.Fatalf("apply source process IAM migration attempt %d: %v", attempt, err)
+		}
+		if err := auditmigration.Apply(ctx, adminDSN, auditRuntimeDSN); err != nil {
+			t.Fatalf("apply source process Audit migration attempt %d: %v", attempt, err)
+		}
 		if err := devopsmigration.Apply(
 			ctx, adminDSN, apiDSN, reporterDSN, fetcherDSN, observerDSN, workerDSN,
 		); err != nil {
 			t.Fatalf("apply source process migration attempt %d: %v", attempt, err)
 		}
+	}
+	if err := iammigration.VerifyInstalled(ctx, adminDSN, iamAPIDSN, iamWorkerDSN); err != nil {
+		t.Fatalf("verify source process IAM migration: %v", err)
+	}
+	if err := auditmigration.VerifyInstalled(ctx, adminDSN, auditRuntimeDSN); err != nil {
+		t.Fatalf("verify source process Audit migration: %v", err)
 	}
 	if err := devopsmigration.VerifyInstalled(
 		ctx, adminDSN, apiDSN, reporterDSN, fetcherDSN, observerDSN, workerDSN,
@@ -140,7 +182,6 @@ func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 	endpoint, provider, providerCalls := newSourceProcessProvider(
 		t, upstream, providerEndpoint,
 	)
-	auditEndpoint, auditSink := newSourceProcessAudit(t, sourceProcessAuditSecret)
 	caPath := writeExecutionProcessFile(
 		t, temporary, "provider-ca.pem",
 		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: provider.Certificate().Raw}),
@@ -203,48 +244,83 @@ func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 	fetcherDSNPath := writeExecutionProcessFile(
 		t, temporary, "source-fetcher-dsn", []byte(fetcherDSN), 0o600,
 	)
-	serviceCredentialPath := writeExecutionProcessFile(
+	devopsServiceCredentialPath := writeExecutionProcessFile(
 		t, temporary, "source-api-service-credential",
 		[]byte(sourceProcessServiceSecret), 0o600,
 	)
-	auditCredentialPath := writeExecutionProcessFile(
+	iamDSNPath := writeExecutionProcessFile(
+		t, temporary, "source-iam-dsn", []byte(iamAPIDSN), 0o600,
+	)
+	auditRuntimeDSNPath := writeExecutionProcessFile(
+		t, temporary, "source-audit-dsn", []byte(auditRuntimeDSN), 0o600,
+	)
+	auditServiceCredentialPath := writeExecutionProcessFile(
 		t, temporary, "source-audit-service-credential",
 		[]byte(sourceProcessAuditSecret), 0o600,
 	)
-	iam, iamCalls := newSourceProcessIAM(t, sourceProcessServiceSecret)
-	observerAddress := reserveExecutionProcessAddress(t)
-	bootstrapReporterAddress := reserveDistinctExecutionProcessAddress(t, observerAddress)
+	bootstrapBytes, err := iamv1.EncodeBootstrapDocument(sourceProcessBootstrap(t))
+	if err != nil {
+		t.Fatalf("encode source process IAM bootstrap: %v", err)
+	}
+	bootstrapPath := writeExecutionProcessFile(
+		t, temporary, "source-iam-bootstrap.json", bootstrapBytes, 0o600,
+	)
+	clear(bootstrapBytes)
+	cursorKeyPath := writeExecutionProcessFile(
+		t, temporary, "source-audit-cursor-key",
+		[]byte(hex.EncodeToString(bytes.Repeat([]byte{0x73}, 32))), 0o600,
+	)
+
+	iamAddress := reserveExecutionProcessAddress(t)
+	auditAPIAddress := reserveDistinctExecutionProcessAddress(t, iamAddress)
+	observerAddress := reserveDistinctExecutionProcessAddress(t, iamAddress, auditAPIAddress)
+	bootstrapReporterAddress := reserveDistinctExecutionProcessAddress(
+		t, iamAddress, auditAPIAddress, observerAddress,
+	)
 	firstFetcherAddress := reserveDistinctExecutionProcessAddress(
-		t, observerAddress, bootstrapReporterAddress,
+		t, iamAddress, auditAPIAddress, observerAddress, bootstrapReporterAddress,
 	)
 	secondFetcherAddress := reserveDistinctExecutionProcessAddress(
-		t, observerAddress, bootstrapReporterAddress, firstFetcherAddress,
+		t, iamAddress, auditAPIAddress, observerAddress, bootstrapReporterAddress,
+		firstFetcherAddress,
 	)
 	apiAddress := reserveDistinctExecutionProcessAddress(
-		t, observerAddress, bootstrapReporterAddress, firstFetcherAddress, secondFetcherAddress,
+		t, iamAddress, auditAPIAddress, observerAddress, bootstrapReporterAddress,
+		firstFetcherAddress, secondFetcherAddress,
 	)
 	firstRecoveryReporterAddress := reserveDistinctExecutionProcessAddress(
-		t, observerAddress, bootstrapReporterAddress, firstFetcherAddress,
+		t, iamAddress, auditAPIAddress, observerAddress, bootstrapReporterAddress, firstFetcherAddress,
 		secondFetcherAddress, apiAddress,
 	)
 	secondRecoveryReporterAddress := reserveDistinctExecutionProcessAddress(
-		t, observerAddress, bootstrapReporterAddress, firstFetcherAddress,
+		t, iamAddress, auditAPIAddress, observerAddress, bootstrapReporterAddress, firstFetcherAddress,
 		secondFetcherAddress, apiAddress, firstRecoveryReporterAddress,
 	)
-	auditAddress := reserveDistinctExecutionProcessAddress(
-		t, observerAddress, bootstrapReporterAddress, firstFetcherAddress,
+	firstAuditDispatcherAddress := reserveDistinctExecutionProcessAddress(
+		t, iamAddress, auditAPIAddress, observerAddress, bootstrapReporterAddress, firstFetcherAddress,
 		secondFetcherAddress, apiAddress, firstRecoveryReporterAddress,
 		secondRecoveryReporterAddress,
 	)
-	children := make([]*executionProcessChild, 0, 8)
+	secondAuditDispatcherAddress := reserveDistinctExecutionProcessAddress(
+		t, iamAddress, auditAPIAddress, observerAddress, bootstrapReporterAddress, firstFetcherAddress,
+		secondFetcherAddress, apiAddress, firstRecoveryReporterAddress,
+		secondRecoveryReporterAddress, firstAuditDispatcherAddress,
+	)
+	iamEndpoint := "http://" + iamAddress
+	auditEndpoint := "http://" + auditAPIAddress
+	auditProxy := newSourceProcessAuditProxy(t, auditEndpoint)
+	children := make([]*executionProcessChild, 0, 10)
 	t.Cleanup(func() {
 		for index := len(children) - 1; index >= 0; index-- {
 			children[index].stop()
 		}
 		assertSourceProcessOutputSafe(t, children, []string{
 			sourceProcessWebhookSecret, fetchCredential.value, reportCredential.value,
-			sourceProcessServiceSecret, sourceProcessAuditSecret, apiPassword,
-			reporterPassword, fetcherPassword, observerPassword, workerPassword, temporary,
+			sourceProcessServiceSecret, sourceProcessIAMSecret, sourceProcessPlatformSecret,
+			sourceProcessPaaSSecret, sourceProcessAuditSecret, sourceProcessVerifierSecret,
+			sourceProcessAdminPassword, apiPassword, reporterPassword, fetcherPassword,
+			observerPassword, workerPassword, iamAPIPassword, iamWorkerPassword,
+			auditRuntimePassword, temporary,
 		})
 	})
 	start := func(binary string, environment []string) *executionProcessChild {
@@ -252,6 +328,26 @@ func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 		children = append(children, child)
 		return child
 	}
+	iamProcess := start(iamBinary, []string{
+		"MATRIX_IAM_DATABASE_DSN_FILE=" + iamDSNPath,
+		"MATRIX_IAM_BOOTSTRAP_FILE=" + bootstrapPath,
+		"MATRIX_IAM_LISTEN_ADDRESS=" + iamAddress,
+	})
+	waitExecutionProcessHTTPStatus(t, ctx, iamProcess, iamEndpoint+"/ready", http.StatusOK)
+	enrollSourceProcessDevOpsService(
+		t, ctx, adminDSN, iamAPIDSN, iamWorkerDSN,
+	)
+	assertSourceProcessDevOpsIdentity(t, ctx, iamEndpoint, sourceProcessServiceSecret)
+	auditProcess := start(auditAPIBinary, []string{
+		"MATRIX_AUDIT_DATABASE_DSN_FILE=" + auditRuntimeDSNPath,
+		"MATRIX_AUDIT_IAM_ENDPOINT=" + iamEndpoint,
+		"MATRIX_AUDIT_SERVICE_CREDENTIAL_FILE=" + auditServiceCredentialPath,
+		"MATRIX_AUDIT_CURSOR_KEY_FILE=" + cursorKeyPath,
+		"MATRIX_AUDIT_LISTEN_ADDRESS=" + auditAPIAddress,
+	})
+	waitExecutionProcessHTTPStatus(
+		t, ctx, auditProcess, auditEndpoint+"/ready", http.StatusOK,
+	)
 	observerEnvironment := []string{
 		"MATRIX_DEVOPS_SOURCE_OBSERVER_DATABASE_DSN_FILE=" + observerDSNPath,
 		"MATRIX_DEVOPS_SOURCE_OBSERVER_WEBHOOK_ROOT=" + webhookRoot,
@@ -289,16 +385,13 @@ func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 	)
 	api := start(apiBinary, []string{
 		"MATRIX_DEVOPS_DATABASE_DSN_FILE=" + apiDSNPath,
-		"MATRIX_DEVOPS_IAM_ENDPOINT=" + iam.URL,
-		"MATRIX_DEVOPS_SERVICE_CREDENTIAL_FILE=" + serviceCredentialPath,
+		"MATRIX_DEVOPS_IAM_ENDPOINT=" + iamEndpoint,
+		"MATRIX_DEVOPS_SERVICE_CREDENTIAL_FILE=" + devopsServiceCredentialPath,
 		"MATRIX_DEVOPS_WEBHOOK_SECRET_ROOT=" + webhookRoot,
 		"MATRIX_DEVOPS_LISTEN_ADDRESS=" + apiAddress,
 	})
 	apiEndpoint := "http://" + apiAddress
 	waitExecutionProcessHTTPStatus(t, ctx, api, apiEndpoint+"/ready", http.StatusOK)
-	if iamCalls.Load() < 1 {
-		t.Fatal("physical DevOps process did not prove IAM readiness")
-	}
 
 	body := sourceProcessWebhookBody(t, endpoint, repository, change)
 	webhookEndpoint := apiEndpoint + "/v1/source-ingress/" + string(sourceProcessTenantID) +
@@ -369,8 +462,13 @@ func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 	secondFetcher.stop()
 	observer.stop()
 	bootstrapReporter.stop()
-	reporting := completeSourceProcessBuild(
-		t, ctx, workerDSN, archiveRoot, run.ID,
+	reporting := recoverExecutionProcessRun(
+		t, ctx, admin, executionBinaries, dockerSocket, workerDSN, archiveRoot,
+		temporary, runController, completed,
+		[]string{
+			sourceProcessWebhookSecret, fetchCredential.value, reportCredential.value,
+			sourceProcessServiceSecret, sourceProcessAuditSecret, workerPassword,
+		},
 	)
 	if reporting.Input != run.Input || reporting.InputDigest != run.InputDigest ||
 		reporting.Status.Stage != devopsv1.PipelineRunStageReport ||
@@ -435,20 +533,38 @@ func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 		)
 	}
 	expectedAudits := readSourceProcessPendingAudits(t, ctx, admin)
-	auditDispatcher := start(auditBinary, []string{
+	firstAuditDispatcher := start(auditDispatcherBinary, []string{
 		"MATRIX_DEVOPS_AUDIT_DATABASE_DSN_FILE=" + workerDSNPath,
-		"MATRIX_DEVOPS_AUDIT_ENDPOINT=" + auditEndpoint,
-		"MATRIX_DEVOPS_AUDIT_CREDENTIAL_FILE=" + auditCredentialPath,
-		"MATRIX_DEVOPS_AUDIT_WORKER_ID=source-audit-process",
-		"MATRIX_DEVOPS_AUDIT_LISTEN_ADDRESS=" + auditAddress,
+		"MATRIX_DEVOPS_AUDIT_ENDPOINT=" + auditProxy.server.URL,
+		"MATRIX_DEVOPS_AUDIT_CREDENTIAL_FILE=" + devopsServiceCredentialPath,
+		"MATRIX_DEVOPS_AUDIT_WORKER_ID=source-audit-process-first",
+		"MATRIX_DEVOPS_AUDIT_LISTEN_ADDRESS=" + firstAuditDispatcherAddress,
 	})
 	waitExecutionProcessHTTPStatus(
-		t, ctx, auditDispatcher, "http://"+auditAddress+"/ready", http.StatusOK,
+		t, ctx, firstAuditDispatcher,
+		"http://"+firstAuditDispatcherAddress+"/ready", http.StatusOK,
+	)
+	crashedAuditEvent := waitSourceProcessAuditCommit(
+		t, ctx, admin, firstAuditDispatcher, auditProxy, expectedAudits,
+	)
+	firstAuditDispatcher.crash(t)
+	expireSourceProcessAuditLease(t, ctx, admin, crashedAuditEvent)
+	secondAuditDispatcher := start(auditDispatcherBinary, []string{
+		"MATRIX_DEVOPS_AUDIT_DATABASE_DSN_FILE=" + workerDSNPath,
+		"MATRIX_DEVOPS_AUDIT_ENDPOINT=" + auditProxy.server.URL,
+		"MATRIX_DEVOPS_AUDIT_CREDENTIAL_FILE=" + devopsServiceCredentialPath,
+		"MATRIX_DEVOPS_AUDIT_WORKER_ID=source-audit-process-second",
+		"MATRIX_DEVOPS_AUDIT_LISTEN_ADDRESS=" + secondAuditDispatcherAddress,
+	})
+	waitExecutionProcessHTTPStatus(
+		t, ctx, secondAuditDispatcher,
+		"http://"+secondAuditDispatcherAddress+"/ready", http.StatusOK,
 	)
 	deliveredAudits := waitSourceProcessAuditDelivery(
-		t, ctx, admin, auditDispatcher, auditSink, expectedAudits,
+		t, ctx, admin, secondAuditDispatcher, auditProxy, expectedAudits,
+		crashedAuditEvent,
 	)
-	auditDispatcher.stop()
+	secondAuditDispatcher.stop()
 	assertSourceProcessRunAudits(t, deliveredAudits, run, correlationID)
 	assertSourceProcessEvidence(
 		t, ctx, admin, archiveRoot, run, terminal, repository, correlationID,
@@ -457,7 +573,10 @@ func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 		providerStatusID,
 		[]string{
 			sourceProcessWebhookSecret, fetchCredential.value, reportCredential.value,
-			sourceProcessServiceSecret, sourceProcessAuditSecret,
+			sourceProcessServiceSecret, sourceProcessIAMSecret,
+			sourceProcessPlatformSecret, sourceProcessPaaSSecret,
+			sourceProcessAuditSecret, sourceProcessVerifierSecret,
+			sourceProcessAdminPassword,
 		},
 	)
 }
@@ -484,41 +603,135 @@ type sourceProcessProviderCalls struct {
 	statusReads   atomic.Int64
 }
 
-func newSourceProcessIAM(
+func assertCleanSourceProcessDatabase(
 	t *testing.T,
-	serviceCredential string,
-) (*httptest.Server, *atomic.Int64) {
+	ctx context.Context,
+	admin *pgx.Conn,
+) {
 	t.Helper()
-	identity := iamv1.ServiceIdentity{
-		APIVersion: iamv1.APIVersion,
-		Kind:       "ServiceIdentity",
-		OrganizationID: iamv1.OrganizationID(
-			sourceProcessTenantID,
-		),
-		PrincipalID: "service-devops-source-process",
-		Purpose:     iamv1.ServiceDevOps,
+	assertCleanExecutionProcessDatabase(t, ctx, admin)
+	var clean bool
+	err := admin.QueryRow(ctx, `SELECT
+		to_regnamespace('iam') IS NULL
+		AND to_regnamespace('audit') IS NULL
+		AND NOT EXISTS (
+			SELECT 1 FROM pg_catalog.pg_roles WHERE rolname IN (
+				'matrix_iam_api_login', 'matrix_iam_worker_login',
+				'matrix_audit_runtime_login'
+			)
+		)`).Scan(&clean)
+	if err != nil || !clean {
+		t.Fatal("joined source process database is not clean")
 	}
-	if err := iamv1.ValidateServiceIdentity(identity); err != nil {
+}
+
+func sourceProcessSecret(t *testing.T, value string) iamv1.Secret {
+	t.Helper()
+	secret, err := iamv1.NewSecret(value)
+	if err != nil {
+		t.Fatal("create source process secret")
+	}
+	return secret
+}
+
+func sourceProcessBootstrap(t *testing.T) iamv1.BootstrapDocument {
+	t.Helper()
+	service := func(
+		purpose iamv1.ServicePurpose,
+		principalID iamv1.PrincipalID,
+		credential string,
+	) iamv1.BootstrapServiceCredential {
+		return iamv1.BootstrapServiceCredential{
+			Purpose: purpose, PrincipalID: principalID,
+			Credential: sourceProcessSecret(t, credential),
+		}
+	}
+	return iamv1.BootstrapDocument{
+		APIVersion: iamv1.APIVersion, Kind: "IAMBootstrap",
+		InstallationID: sourceProcessInstallationID,
+		Organization: iamv1.InitialOrganization{
+			ID:          iamv1.OrganizationID(sourceProcessTenantID),
+			DisplayName: "Source Process Organization",
+		},
+		Administrator: iamv1.InitialAdministrator{
+			ID: "principal-source-process-admin", LoginName: "source.admin",
+			DisplayName: "Source Process Administrator",
+			Password:    sourceProcessSecret(t, sourceProcessAdminPassword),
+		},
+		Services: []iamv1.BootstrapServiceCredential{
+			service(iamv1.ServiceIAM, "service-iam", sourceProcessIAMSecret),
+			service(iamv1.ServicePlatform, "service-platform", sourceProcessPlatformSecret),
+			service(iamv1.ServicePaaS, "service-paas", sourceProcessPaaSSecret),
+			service(iamv1.ServiceAudit, "service-audit", sourceProcessAuditSecret),
+			service(
+				iamv1.ServiceInstallationVerifier,
+				"service-verifier",
+				sourceProcessVerifierSecret,
+			),
+		},
+	}
+}
+
+func enrollSourceProcessDevOpsService(
+	t *testing.T,
+	ctx context.Context,
+	adminDSN string,
+	iamAPIDSN string,
+	iamWorkerDSN string,
+) {
+	t.Helper()
+	bindings := []iammigration.ReleaseServiceBinding{
+		{Purpose: iamv1.ServicePlatform, Credential: sourceProcessSecret(t, sourceProcessPlatformSecret)},
+		{Purpose: iamv1.ServiceDevOps, Credential: sourceProcessSecret(t, sourceProcessServiceSecret)},
+	}
+	for attempt := 1; attempt <= 2; attempt++ {
+		if err := iammigration.ApplyForInstallation(
+			ctx, adminDSN, iamAPIDSN, iamWorkerDSN,
+			sourceProcessInstallationID, bindings,
+		); err != nil {
+			t.Fatalf("enroll source process DevOps service attempt %d: %v", attempt, err)
+		}
+	}
+	if err := iammigration.VerifyInstalledForInstallation(
+		ctx, adminDSN, iamAPIDSN, iamWorkerDSN,
+		sourceProcessInstallationID, bindings,
+	); err != nil {
+		t.Fatalf("verify source process DevOps service: %v", err)
+	}
+}
+
+func assertSourceProcessDevOpsIdentity(
+	t *testing.T,
+	ctx context.Context,
+	iamEndpoint string,
+	credential string,
+) {
+	t.Helper()
+	request, err := http.NewRequestWithContext(
+		ctx, http.MethodGet, iamEndpoint+"/v1/service-identity", nil,
+	)
+	if err != nil {
 		t.Fatal(err)
 	}
-	calls := &atomic.Int64{}
-	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.Method != http.MethodGet || request.URL.Path != "/v1/service-identity" ||
-			request.URL.RawQuery != "" || request.Header.Get("Accept") != "application/json" ||
-			request.Header.Get("Authorization") != "Bearer "+serviceCredential ||
-			request.Header.Get("Matrix-Subject-Credential") != "" {
-			t.Errorf("physical DevOps process sent an invalid IAM readiness request")
-			http.Error(response, "unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		calls.Add(1)
-		response.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(response).Encode(identity); err != nil {
-			t.Errorf("encode source process IAM identity: %v", err)
-		}
-	}))
-	t.Cleanup(server.Close)
-	return server, calls
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("Authorization", "Bearer "+credential)
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	defer transport.CloseIdleConnections()
+	response, err := (&http.Client{Transport: transport, Timeout: 5 * time.Second}).Do(request)
+	if err != nil {
+		t.Fatalf("read physical IAM DevOps identity: %v", err)
+	}
+	defer response.Body.Close()
+	var identity iamv1.ServiceIdentity
+	if response.StatusCode != http.StatusOK ||
+		!strings.HasPrefix(response.Header.Get("Content-Type"), "application/json") ||
+		iamv1.DecodeRequest(response.Body, &identity) != nil ||
+		iamv1.ValidateServiceIdentity(identity) != nil ||
+		identity.OrganizationID != iamv1.OrganizationID(sourceProcessTenantID) ||
+		identity.PrincipalID != "service-devops" || identity.Purpose != iamv1.ServiceDevOps {
+		t.Fatalf("physical IAM DevOps identity status=%d identity=%#v", response.StatusCode, identity)
+	}
 }
 
 func postSourceProcessWebhook(
@@ -688,101 +901,140 @@ func newSourceProcessProvider(
 	return server.URL, server, calls
 }
 
-type sourceProcessAuditSink struct {
-	mutex   sync.Mutex
-	events  []auditv1.Event
-	failure string
+type sourceProcessAuditProxy struct {
+	server         *httptest.Server
+	upstream       string
+	client         *http.Client
+	firstCommitted chan auditv1.EventID
+	mutex          sync.Mutex
+	blocked        bool
+	posts          int
+	accepted       int
+	duplicates     int
+	failure        string
 }
 
-func newSourceProcessAudit(
+type sourceProcessAuditProxySnapshot struct {
+	posts      int
+	accepted   int
+	duplicates int
+	failure    string
+}
+
+func newSourceProcessAuditProxy(
 	t *testing.T,
-	credential string,
-) (string, *sourceProcessAuditSink) {
+	upstream string,
+) *sourceProcessAuditProxy {
 	t.Helper()
-	sink := &sourceProcessAuditSink{}
-	handler := http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.Header.Get("Authorization") != "Bearer "+credential ||
-			request.Header.Get("Matrix-Subject-Credential") != "" {
-			sink.recordFailure("Audit request used an invalid service identity")
-			response.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-		response.Header().Set("Content-Type", "application/json")
-		switch {
-		case request.Method == http.MethodGet && request.URL.Path == "/ready" &&
-			request.URL.RawQuery == "":
-			_ = json.NewEncoder(response).Encode(auditv1.Readiness{
-				APIVersion:    auditv1.APIVersion,
-				Kind:          "Readiness",
-				State:         auditv1.ReadinessReady,
-				SchemaVersion: 1,
-				CheckedAt:     time.Now().UTC().Truncate(time.Microsecond),
-			})
-		case request.Method == http.MethodPost && request.URL.Path == "/v1/events" &&
-			request.URL.RawQuery == "" &&
-			strings.HasPrefix(request.Header.Get("Content-Type"), "application/json"):
-			var event auditv1.Event
-			if auditv1.DecodeRequest(request.Body, &event) != nil ||
-				auditv1.ValidateEventForSource(auditv1.SourceDevOps, event) != nil {
-				sink.recordFailure("Audit request contained an invalid DevOps event")
-				response.WriteHeader(http.StatusUnprocessableEntity)
-				return
-			}
-			sequence := sink.record(event)
-			response.WriteHeader(http.StatusCreated)
-			_ = json.NewEncoder(response).Encode(sourceProcessIngestionResult(event, sequence))
-		default:
-			sink.recordFailure("Audit request used an unexpected route")
-			response.WriteHeader(http.StatusNotFound)
-		}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	proxy := &sourceProcessAuditProxy{
+		upstream: upstream,
+		client: &http.Client{
+			Transport: transport,
+		},
+		firstCommitted: make(chan auditv1.EventID, 1),
+	}
+	proxy.server = httptest.NewServer(http.HandlerFunc(proxy.serveHTTP))
+	t.Cleanup(func() {
+		proxy.server.Close()
+		transport.CloseIdleConnections()
 	})
-	server := httptest.NewServer(handler)
-	t.Cleanup(server.Close)
-	return server.URL, sink
+	return proxy
 }
 
-func (sink *sourceProcessAuditSink) record(event auditv1.Event) uint64 {
-	sink.mutex.Lock()
-	defer sink.mutex.Unlock()
-	sink.events = append(sink.events, event)
-	return uint64(len(sink.events))
+func (proxy *sourceProcessAuditProxy) serveHTTP(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	target := proxy.upstream + request.URL.RequestURI()
+	forward, err := http.NewRequestWithContext(
+		request.Context(), request.Method, target, request.Body,
+	)
+	if err != nil {
+		proxy.recordFailure("Audit recovery proxy could not create its upstream request")
+		http.Error(response, "unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	forward.Header = request.Header.Clone()
+	upstreamResponse, err := proxy.client.Do(forward)
+	if err != nil {
+		proxy.recordFailure("Audit recovery proxy could not reach the physical Audit service")
+		http.Error(response, "unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer upstreamResponse.Body.Close()
+	document, err := io.ReadAll(io.LimitReader(upstreamResponse.Body, 2*1024*1024+1))
+	if err != nil || len(document) > 2*1024*1024 {
+		proxy.recordFailure("Audit recovery proxy received an invalid upstream response")
+		http.Error(response, "unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer clear(document)
+
+	block := false
+	var eventID auditv1.EventID
+	if request.Method == http.MethodPost && request.URL.Path == "/v1/events" &&
+		request.URL.RawQuery == "" {
+		var result auditv1.IngestionResult
+		if auditv1.DecodeRequest(bytes.NewReader(document), &result) != nil ||
+			auditv1.ValidateIngestionResult(result) != nil ||
+			result.Record.Source != auditv1.SourceDevOps {
+			proxy.recordFailure("physical Audit returned an invalid ingestion receipt")
+		} else {
+			eventID = result.Record.Event.EventID
+			proxy.mutex.Lock()
+			proxy.posts++
+			switch {
+			case upstreamResponse.StatusCode == http.StatusCreated &&
+				result.Outcome == auditv1.IngestionAccepted:
+				proxy.accepted++
+				if !proxy.blocked {
+					proxy.blocked = true
+					block = true
+				}
+			case upstreamResponse.StatusCode == http.StatusOK &&
+				result.Outcome == auditv1.IngestionDuplicate:
+				proxy.duplicates++
+			default:
+				if proxy.failure == "" {
+					proxy.failure = "physical Audit returned an unexpected ingestion outcome"
+				}
+			}
+			proxy.mutex.Unlock()
+		}
+	}
+	if block {
+		select {
+		case proxy.firstCommitted <- eventID:
+		default:
+		}
+		<-request.Context().Done()
+		return
+	}
+	for name, values := range upstreamResponse.Header {
+		for _, value := range values {
+			response.Header().Add(name, value)
+		}
+	}
+	response.WriteHeader(upstreamResponse.StatusCode)
+	_, _ = response.Write(document)
 }
 
-func (sink *sourceProcessAuditSink) recordFailure(value string) {
-	sink.mutex.Lock()
-	defer sink.mutex.Unlock()
-	if sink.failure == "" {
-		sink.failure = value
+func (proxy *sourceProcessAuditProxy) recordFailure(value string) {
+	proxy.mutex.Lock()
+	defer proxy.mutex.Unlock()
+	if proxy.failure == "" {
+		proxy.failure = value
 	}
 }
 
-func (sink *sourceProcessAuditSink) snapshot() ([]auditv1.Event, string) {
-	sink.mutex.Lock()
-	defer sink.mutex.Unlock()
-	events := append([]auditv1.Event(nil), sink.events...)
-	return events, sink.failure
-}
-
-func sourceProcessIngestionResult(
-	event auditv1.Event,
-	sequence uint64,
-) auditv1.IngestionResult {
-	return auditv1.IngestionResult{
-		APIVersion: auditv1.APIVersion,
-		Kind:       "IngestionResult",
-		Outcome:    auditv1.IngestionAccepted,
-		Record: auditv1.AuditRecord{
-			APIVersion:    auditv1.APIVersion,
-			Kind:          "AuditRecord",
-			Source:        auditv1.SourceDevOps,
-			Sequence:      sequence,
-			Event:         event,
-			ContentDigest: "sha256:" + strings.Repeat("a", 64),
-			PreviousHash:  "sha256:" + strings.Repeat("b", 64),
-			RecordHash:    "sha256:" + strings.Repeat("c", 64),
-			IngestedAt:    time.Now().UTC().Truncate(time.Microsecond),
-			Retention:     auditv1.RetentionIndefinite,
-		},
+func (proxy *sourceProcessAuditProxy) snapshot() sourceProcessAuditProxySnapshot {
+	proxy.mutex.Lock()
+	defer proxy.mutex.Unlock()
+	return sourceProcessAuditProxySnapshot{
+		posts: proxy.posts, accepted: proxy.accepted,
+		duplicates: proxy.duplicates, failure: proxy.failure,
 	}
 }
 
@@ -830,6 +1082,52 @@ func provisionSourceProcessChange(
 ) sourceProcessChange {
 	t.Helper()
 	prefix := "/api/v1/repos/" + repository.FullName
+	for _, file := range []struct {
+		path    string
+		content string
+	}{
+		{
+			path: "calc.go",
+			content: `package processgate
+
+func Add(left, right int) int { return left + right }
+`,
+		},
+		{
+			path: "calc_test.go",
+			content: `package processgate
+
+import (
+	"testing"
+	"time"
+)
+
+func TestRestartBoundary(t *testing.T) {
+	time.Sleep(8 * time.Second)
+	if Add(19, 23) != 42 {
+		t.Fatal("unexpected sum")
+	}
+}
+`,
+		},
+		{
+			path: "go.mod",
+			content: `module example.invalid/matrixprocessgate
+
+go 1.26.0
+`,
+		},
+	} {
+		sourceProcessFixtureRequest(
+			t, upstream, http.MethodPost, prefix+"/contents/"+file.path,
+			map[string]any{
+				"branch":  "main",
+				"content": base64.StdEncoding.EncodeToString([]byte(file.content)),
+				"message": "add " + file.path + " fixture",
+			},
+			http.StatusCreated, nil,
+		)
+	}
 	var base struct {
 		Commit struct {
 			ID string `json:"id"`
@@ -1333,135 +1631,6 @@ func waitSourceProcessVerifying(
 	}
 }
 
-// sourceProcessBuildBridge exercises the production VERIFY use case and its
-// PostgreSQL/archive boundaries while returning deterministic passing evidence.
-// Isolation, cancellation, and real runner execution remain owned by the
-// separate physical executor journey.
-type sourceProcessBuildBridge struct {
-	executions atomic.Int64
-}
-
-var _ port.BuildExecutor = (*sourceProcessBuildBridge)(nil)
-
-func (bridge *sourceProcessBuildBridge) Execute(
-	ctx context.Context,
-	request devopsbuildv1.Request,
-	archive io.Reader,
-) (devopsbuildv1.Receipt, error) {
-	if ctx == nil || archive == nil || ctx.Err() != nil {
-		return devopsbuildv1.Receipt{}, port.ErrBuildUnavailable
-	}
-	content, err := io.ReadAll(io.LimitReader(archive, request.SourceArchiveBytes+1))
-	if err != nil || int64(len(content)) != request.SourceArchiveBytes {
-		clear(content)
-		return devopsbuildv1.Receipt{}, port.ErrBuildUnavailable
-	}
-	clear(content)
-	bridge.executions.Add(1)
-	receipt := devopsbuildv1.Receipt{
-		TenantID:               request.TenantID,
-		RunID:                  request.RunID,
-		CommandID:              request.CommandID,
-		InputDigest:            request.InputDigest,
-		SourceArchiveDigest:    request.SourceArchiveDigest,
-		PipelineRevisionID:     request.PipelineRevisionID,
-		PipelineRevisionDigest: request.PipelineRevisionDigest,
-		ExecutorID:             "source-process-build-bridge",
-		ExecutorProfile:        request.ExecutorProfile,
-		ToolchainImageDigest:   request.ToolchainImageDigest,
-		Conclusion:             devopsbuildv1.ConclusionPassed,
-		Steps: [2]devopsbuildv1.StepReceipt{
-			{
-				Ordinal: request.Steps[0].Ordinal, Kind: request.Steps[0].Kind,
-				Conclusion: devopsbuildv1.StepConclusionPassed,
-			},
-			{
-				Ordinal: request.Steps[1].Ordinal, Kind: request.Steps[1].Kind,
-				Conclusion: devopsbuildv1.StepConclusionPassed,
-			},
-		},
-	}
-	receipt.ContentDigest = devopsbuildv1.DigestReceipt(receipt)
-	if err := devopsbuildv1.ValidateReceipt(request, receipt); err != nil {
-		return devopsbuildv1.Receipt{}, err
-	}
-	return receipt, nil
-}
-
-func (*sourceProcessBuildBridge) Observe(
-	context.Context,
-	devopsbuildv1.Request,
-) (devopsbuildv1.Receipt, bool, error) {
-	return devopsbuildv1.Receipt{}, false, port.ErrBuildUnavailable
-}
-
-func (*sourceProcessBuildBridge) Cancel(
-	context.Context,
-	devopsbuildv1.Request,
-) (devopsbuildv1.Receipt, bool, error) {
-	return devopsbuildv1.Receipt{}, false, port.ErrBuildUnavailable
-}
-
-type sourceProcessBuildLogs struct{}
-
-var _ port.BuildLogSource = sourceProcessBuildLogs{}
-
-func (sourceProcessBuildLogs) ReadLogs(
-	context.Context,
-	devopsbuildv1.Request,
-	uint64,
-) (devopsbuildv1.LogBatch, bool, error) {
-	return devopsbuildv1.LogBatch{}, false, nil
-}
-
-func completeSourceProcessBuild(
-	t *testing.T,
-	ctx context.Context,
-	workerDSN string,
-	archiveRoot string,
-	runID devopsv1.ResourceID,
-) devopsv1.PipelineRun {
-	t.Helper()
-	workerPool := openExecutionProcessPool(t, ctx, workerDSN)
-	defer workerPool.Close()
-	repository, err := devopspostgres.NewBuildExecutionRepository(workerPool)
-	if err != nil {
-		t.Fatal(err)
-	}
-	archives, err := sourcearchivefile.New(archiveRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	executor := &sourceProcessBuildBridge{}
-	service, err := buildexecution.NewService(
-		repository,
-		archives,
-		executor,
-		sourceProcessBuildLogs{},
-		buildexecution.Config{
-			WorkerID:      "source-process-build-bridge",
-			LeaseDuration: buildexecution.LeaseDuration,
-			Deadline:      buildexecution.ExecutionDeadline,
-			CancelGrace:   buildexecution.CancellationGrace,
-		},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := service.Heartbeat(ctx); err != nil {
-		t.Fatalf("start source process build bridge heartbeat: %v", err)
-	}
-	result, err := service.BuildOnce(ctx)
-	if err != nil || !result.Claimed || result.CommandID != string(runID)+":verify:1" ||
-		result.Run.ID != runID || executor.executions.Load() != 1 {
-		t.Fatalf(
-			"source process build result=%#v executions=%d err=%v",
-			result, executor.executions.Load(), err,
-		)
-	}
-	return result.Run
-}
-
 func waitSourceProcessProviderStatusCreate(
 	t *testing.T,
 	ctx context.Context,
@@ -1670,44 +1839,140 @@ func readSourceProcessPendingAudits(
 	return events
 }
 
+func waitSourceProcessAuditCommit(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	dispatcher *executionProcessChild,
+	proxy *sourceProcessAuditProxy,
+	expected map[auditv1.EventID]auditv1.Event,
+) auditv1.EventID {
+	t.Helper()
+	for {
+		select {
+		case eventID := <-proxy.firstCommitted:
+			want, found := expected[eventID]
+			if !found {
+				t.Fatalf("physical Audit committed unexpected event %q", eventID)
+			}
+			snapshot := proxy.snapshot()
+			if snapshot.failure != "" || snapshot.posts != 1 ||
+				snapshot.accepted != 1 || snapshot.duplicates != 0 {
+				t.Fatalf("physical Audit first commit proxy=%#v", snapshot)
+			}
+			var status, owner string
+			var attempts int
+			var fence int64
+			var storedDocument []byte
+			err := admin.QueryRow(
+				ctx,
+				`SELECT outbox.status, outbox.lease_owner, outbox.attempts,
+				        outbox.fencing_token, record.event_document
+				   FROM delivery.audit_outbox AS outbox
+				   JOIN audit.records AS record
+				     ON record.tenant_id = outbox.tenant_id
+				    AND record.source = 'DEVOPS'
+				    AND record.event_id = outbox.event_id
+				  WHERE outbox.tenant_id = $1 AND outbox.event_id = $2`,
+				sourceProcessTenantID,
+				eventID,
+			).Scan(&status, &owner, &attempts, &fence, &storedDocument)
+			var stored auditv1.Event
+			if err != nil || status != "LEASED" ||
+				owner != "source-audit-process-first" || attempts != 1 || fence != 1 ||
+				json.Unmarshal(storedDocument, &stored) != nil || stored != want {
+				t.Fatalf(
+					"physical Audit unacknowledged commit event=%q status=%s owner=%s attempts=%d fence=%d stored=%#v err=%v",
+					eventID, status, owner, attempts, fence, stored, err,
+				)
+			}
+			return eventID
+		default:
+		}
+		if exited, err := dispatcher.poll(); exited {
+			t.Fatalf(
+				"first Audit dispatcher exited before physical commit: %v output=%q",
+				err, dispatcher.output(),
+			)
+		}
+		if failure := proxy.snapshot().failure; failure != "" {
+			t.Fatal(failure)
+		}
+		waitExecutionProcessPoll(t, ctx)
+	}
+}
+
+func expireSourceProcessAuditLease(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	eventID auditv1.EventID,
+) {
+	t.Helper()
+	result, err := admin.Exec(
+		ctx,
+		`UPDATE delivery.audit_outbox
+		    SET lease_expires_at = GREATEST(
+		            created_at + interval '1 microsecond',
+		            transaction_timestamp() - interval '1 microsecond'
+		        ),
+		        updated_at = transaction_timestamp()
+		  WHERE tenant_id = $1 AND event_id = $2 AND status = 'LEASED'
+		    AND lease_owner = 'source-audit-process-first'
+		    AND attempts = 1 AND fencing_token = 1`,
+		sourceProcessTenantID,
+		eventID,
+	)
+	if err != nil || result.RowsAffected() != 1 {
+		t.Fatalf("expire source process Audit lease rows=%d err=%v", result.RowsAffected(), err)
+	}
+}
+
 func waitSourceProcessAuditDelivery(
 	t *testing.T,
 	ctx context.Context,
 	admin *pgx.Conn,
 	dispatcher *executionProcessChild,
-	sink *sourceProcessAuditSink,
+	proxy *sourceProcessAuditProxy,
 	expected map[auditv1.EventID]auditv1.Event,
+	crashedEvent auditv1.EventID,
 ) []auditv1.Event {
 	t.Helper()
 	for {
 		if exited, err := dispatcher.poll(); exited {
 			t.Fatalf("Audit dispatcher exited before delivery: %v output=%q", err, dispatcher.output())
 		}
-		events, failure := sink.snapshot()
-		if failure != "" {
-			t.Fatal(failure)
+		snapshot := proxy.snapshot()
+		if snapshot.failure != "" {
+			t.Fatal(snapshot.failure)
 		}
-		var total, delivered, attempts, deadLetters int64
+		var total, delivered, attempts, deadLetters, leased int64
 		err := admin.QueryRow(
 			ctx,
 			`SELECT count(*),
 			        count(*) FILTER (WHERE status = 'DELIVERED'),
 			        COALESCE(sum(attempts), 0),
-			        count(*) FILTER (WHERE status = 'DEAD_LETTER')
+			        count(*) FILTER (WHERE status = 'DEAD_LETTER'),
+			        count(*) FILTER (WHERE status = 'LEASED')
 			   FROM delivery.audit_outbox
 			  WHERE tenant_id = $1`,
 			sourceProcessTenantID,
-		).Scan(&total, &delivered, &attempts, &deadLetters)
+		).Scan(&total, &delivered, &attempts, &deadLetters, &leased)
 		if err != nil || total != int64(len(expected)) || deadLetters != 0 ||
-			attempts > int64(len(expected)) {
+			attempts > int64(len(expected)+1) {
 			t.Fatalf(
-				"source process Audit total=%d delivered=%d attempts=%d dead=%d err=%v",
-				total, delivered, attempts, deadLetters, err,
+				"source process Audit total=%d delivered=%d attempts=%d dead=%d leased=%d err=%v",
+				total, delivered, attempts, deadLetters, leased, err,
 			)
 		}
-		if delivered == total && attempts == total && len(events) >= len(expected) {
+		if delivered == total && leased == 0 && attempts == total+1 {
+			if snapshot.posts != len(expected)+1 || snapshot.accepted != len(expected) ||
+				snapshot.duplicates != 1 {
+				t.Fatalf("source process Audit recovery proxy=%#v", snapshot)
+			}
+			events := readSourceProcessAuditRecords(t, ctx, admin)
 			if len(events) != len(expected) {
-				t.Fatalf("source process Audit calls=%d want=%d", len(events), len(expected))
+				t.Fatalf("physical Audit records=%d want=%d", len(events), len(expected))
 			}
 			seen := make(map[auditv1.EventID]struct{}, len(events))
 			for _, event := range events {
@@ -1720,10 +1985,62 @@ func waitSourceProcessAuditDelivery(
 				}
 				seen[event.EventID] = struct{}{}
 			}
+			var crashedAttempts int
+			var crashedFence int64
+			if err := admin.QueryRow(
+				ctx,
+				`SELECT attempts, fencing_token FROM delivery.audit_outbox
+				  WHERE tenant_id = $1 AND event_id = $2 AND status = 'DELIVERED'`,
+				sourceProcessTenantID,
+				crashedEvent,
+			).Scan(&crashedAttempts, &crashedFence); err != nil ||
+				crashedAttempts != 2 || crashedFence != 2 {
+				t.Fatalf(
+					"recovered Audit event=%q attempts=%d fence=%d err=%v",
+					crashedEvent, crashedAttempts, crashedFence, err,
+				)
+			}
 			return events
 		}
 		waitExecutionProcessPoll(t, ctx)
 	}
+}
+
+func readSourceProcessAuditRecords(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+) []auditv1.Event {
+	t.Helper()
+	rows, err := admin.Query(
+		ctx,
+		`SELECT event_document
+		   FROM audit.records
+		  WHERE tenant_id = $1 AND source = 'DEVOPS'
+		  ORDER BY sequence`,
+		sourceProcessTenantID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var events []auditv1.Event
+	for rows.Next() {
+		var document []byte
+		if err := rows.Scan(&document); err != nil {
+			t.Fatal(err)
+		}
+		var event auditv1.Event
+		if json.Unmarshal(document, &event) != nil ||
+			auditv1.ValidateEventForSource(auditv1.SourceDevOps, event) != nil {
+			t.Fatalf("physical Audit record=%s", document)
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return events
 }
 
 func assertSourceProcessRunAudits(
@@ -1856,7 +2173,9 @@ func assertSourceProcessEvidence(
 	}
 	defer clear(archive)
 	files := readSourceProcessArchive(t, archive)
-	if string(files["source.txt"]) != "source process recovery\n" || len(files) != 2 {
+	if string(files["source.txt"]) != "source process recovery\n" ||
+		string(files["go.mod"]) != "module example.invalid/matrixprocessgate\n\ngo 1.26.0\n" ||
+		len(files) != 5 {
 		t.Fatalf("source process archive paths=%v", sourceProcessMapKeys(files))
 	}
 	for name := range files {
@@ -1895,12 +2214,16 @@ func assertSourceProcessEvidence(
 		&reportStatus, &reportOwner, &reportFence,
 		&buildDocument, &checkDocument,
 	)
-	if err != nil || verifyStatus != "COMPLETED" || verifyOwner != nil || verifyFence != 1 ||
+	if err != nil || verifyStatus != "COMPLETED" || verifyOwner != nil || verifyFence != 2 ||
 		reportStatus != "COMPLETED" || reportOwner != nil || reportFence != 2 {
 		t.Fatalf(
 			"source process verify=%s/%v/%d report=%s/%v/%d err=%v",
 			verifyStatus, verifyOwner, verifyFence, reportStatus, reportOwner, reportFence, err,
 		)
+	}
+	runnerID, err := executorgatewayhttp.RunnerID(executionProcessRunnerIdentity)
+	if err != nil {
+		t.Fatal(err)
 	}
 	var buildReceipt devopsbuildv1.Receipt
 	if json.Unmarshal(buildDocument, &buildReceipt) != nil ||
@@ -1911,7 +2234,7 @@ func assertSourceProcessEvidence(
 		buildReceipt.SourceArchiveDigest != receipt.ArchiveDigest ||
 		buildReceipt.PipelineRevisionID != run.Input.PipelineRevisionID ||
 		buildReceipt.PipelineRevisionDigest != run.Input.PipelineRevisionDigest ||
-		buildReceipt.ExecutorID != "source-process-build-bridge" ||
+		buildReceipt.ExecutorID != runnerID ||
 		buildReceipt.Conclusion != devopsbuildv1.ConclusionPassed {
 		t.Fatalf("source process build receipt=%s", buildDocument)
 	}
