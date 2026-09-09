@@ -78,7 +78,9 @@ func TestStepPlansCloseEveryRepositoryControlledDockerField(t *testing.T) {
 				t.Fatalf("source mount = %#v", mounted)
 			}
 			if workTmpfsBytes+cacheTmpfsBytes != devopsv1.FixedWritableBytes ||
-				!equalTmpfs(request.HostConfig.Tmpfs) {
+				!equalTmpfs(request.HostConfig.Tmpfs) ||
+				request.HostConfig.Tmpfs["/cache"] !=
+					"rw,noexec,nosuid,nodev,size=1610612736,mode=0700,uid=65532,gid=65532" {
 				t.Fatalf("tmpfs = %#v", request.HostConfig.Tmpfs)
 			}
 			environment, ok := environmentMap(request.Env)

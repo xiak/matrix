@@ -14,7 +14,10 @@ import (
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/runnerlog"
 )
 
-const maximumLogTransportBytes = devopsv1.FixedMaxLogBytes * 9
+const (
+	maximumLogTransportBytes         = devopsv1.FixedMaxLogBytes * 9
+	dockerMultiplexedStreamMediaType = "application/vnd.docker.multiplexed-stream"
+)
 
 var (
 	ErrStepNotFound       = errors.New("runner sandbox step was not found")
@@ -377,7 +380,7 @@ func (client *Client) readStepLogs(
 	if err != nil {
 		return nil, err
 	}
-	request.Header.Set("Accept", "application/vnd.docker.raw-stream")
+	request.Header.Set("Accept", dockerMultiplexedStreamMediaType)
 	response, err := client.doEngineRequest(request, false)
 	if err != nil {
 		return nil, err
@@ -397,7 +400,7 @@ func (client *Client) readStepLogs(
 	}
 	if len(contentTypes) == 1 {
 		mediaType, _, mediaErr := mime.ParseMediaType(contentTypes[0])
-		if mediaErr != nil || mediaType != "application/vnd.docker.raw-stream" {
+		if mediaErr != nil || mediaType != dockerMultiplexedStreamMediaType {
 			_ = response.Body.Close()
 			return nil, ErrUnavailable
 		}

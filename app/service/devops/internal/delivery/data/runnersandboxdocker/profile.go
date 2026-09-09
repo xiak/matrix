@@ -359,7 +359,7 @@ func fixedContainerRequest(command []string, workingDirectory string) containerC
 			StorageOpt:      map[string]string{},
 			Sysctls:         map[string]string{},
 			Tmpfs: map[string]string{
-				"/cache": "rw,noexec,nosuid,nodev,size=" + strconv.FormatInt(cacheTmpfsBytes, 10) + ",mode=0700",
+				"/cache": "rw,noexec,nosuid,nodev,size=" + strconv.FormatInt(cacheTmpfsBytes, 10) + ",mode=0700,uid=65532,gid=65532",
 				"/tmp":   "rw,exec,nosuid,nodev,size=" + strconv.FormatInt(workTmpfsBytes, 10) + ",mode=1777",
 			},
 			Ulimits:     []ulimit{},

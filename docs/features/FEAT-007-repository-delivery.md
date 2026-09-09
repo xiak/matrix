@@ -22,7 +22,8 @@
   CSR enrollment complete; dedicated-node installer implementation,
   controlled-host Linux integration, and authentic-material evidence complete;
   isolated check-report process, persistence, and fixed-Gitea adapter complete;
-  real dedicated-host isolated execution and end-to-end reporter effect pending
+  real Linux Docker/runsc source-archive-to-receipt integration complete; full
+  dedicated-node and end-to-end PostgreSQL-to-provider Gate B remain pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -1294,10 +1295,20 @@ profiles before publication, activates the UID-bound gateway-only firewall
 before Docker or runner processes, loads and re-inspects one exact local
 toolchain image identity, and requires exact loopback readiness. Runner units
 are disabled before convergence and again after every failed activation, while
-the fail-closed firewall remains active. A real dedicated Linux host running
-systemd, nftables, Docker `29.x`, and the pinned `runsc`, plus the end-to-end
-PostgreSQL-to-runner process journey, remain pending, so no repository code
-executes yet.
+the fail-closed firewall remains active. A disposable WSL2 Linux/amd64 node
+running systemd, Docker `29.6.2`, the authenticated offline toolchain image,
+and the pinned `runsc` now proves canonical source-archive execution through
+separate TLS 1.3 mTLS admin and runner listeners using the production clients,
+handlers, spool, journal, workspace, and runner workflow. Both fixed Go steps
+complete, normalized logs and the exact terminal receipt cross the authenticated
+boundaries, the journal is acknowledged, and no container remains. Repository-
+style negative probes also prove an empty sensitive environment, no Docker
+socket or privileged device, read-only source and root filesystems, no non-
+loopback interface, and failed reserved-address egress. This is a real
+Docker/runsc sandbox integration, not yet the standalone gateway/build-worker/
+runner process journey, signed-Gitea-to-PostgreSQL lifecycle, restart recovery,
+resource-abuse and oversized-log suite, or provider-report effect required for
+the complete Gate B.
 
 Every fenced worker transition now submits the exact next PipelineRun document
 to the database boundary. A terminal transition atomically stores a distinct
@@ -1608,8 +1619,24 @@ Current verification evidence:
   module cache. A separate disconnected Linux integration installs the actual
   current runner binary, pinned official gVisor archive, and real Docker-save
   toolchain archive, then re-verifies the complete material inventory and
-  extracted binaries. This is installer and filesystem evidence; it is not a
-  real systemd/nftables/Docker/runsc host or repository-code execution gate
+  extracted binaries. This is installer and filesystem evidence; it is not by
+  itself a real systemd/nftables/Docker/runsc host or repository-code execution
+  gate
+- an opt-in real execution integration on a disposable WSL2 systemd
+  Linux/amd64 node with Docker `29.6.2`, the authenticated offline toolchain
+  image, and pinned `runsc`. It sends a canonical executable source archive
+  through separate TLS 1.3 mTLS admin and runner listeners using the production
+  clients, handlers, durable spool, journal, workspace, and runner workflow;
+  runs the fixed `go test` and `go vet` steps; proves normalized logs, the exact
+  terminal receipt, journal acknowledgement, and zero residual containers; and
+  rejects sensitive environment exposure, writable source/root filesystems,
+  Docker socket and privileged-device access, non-loopback networking, and
+  reserved-address egress. The real Docker response also proved the exact
+  non-TTY multiplexed log media type, and the private cache tmpfs proved its
+  explicit UID/GID ownership. This gate does not yet exercise standalone
+  gateway/build-worker/runner processes, signed Gitea ingress through
+  PostgreSQL, restart recovery, resource-abuse or oversized-log cases, or the
+  provider report effect, so the complete Gate B remains pending
 - selected-product installation and topology tests proving journal-stable PKI
   issuance time, three disjoint P-256 authorities, exact gateway and
   build-worker identities, canonical write-once authority storage,

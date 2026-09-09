@@ -385,6 +385,20 @@ func TestStepLogsFailClosedAndPoisonPartialBudget(t *testing.T) {
 	}
 }
 
+func TestStepLogsRequireDockerMultiplexedMediaType(t *testing.T) {
+	plan := testStepPlan(t)
+	engine := newStepEngine(t, plan)
+	engine.present = true
+	engine.state = StepPassed
+	engine.logMediaType = "application/vnd.docker.raw-stream"
+	result, err := testStepClient(t, engine).FollowStep(
+		context.Background(), plan, NewLogBudget(),
+	)
+	if result.State != "" || result.Chunks != nil || !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("result = %#v / %v", result, err)
+	}
+}
+
 func TestDeleteRejectsRunningContainerWithoutMutation(t *testing.T) {
 	plan := testStepPlan(t)
 	engine := newStepEngine(t, plan)
@@ -443,6 +457,7 @@ type stepEngine struct {
 	oomKilled          bool
 	oomOnExit          bool
 	logs               []byte
+	logMediaType       string
 	logContentLength   *int64
 	mutateInspection   func(*containerInspection)
 	failMethod         string
@@ -457,7 +472,8 @@ func newStepEngine(t *testing.T, plan ContainerPlan) *stepEngine {
 	t.Helper()
 	return &stepEngine{
 		t: t, plan: plan, id: strings.Repeat("a", 64), state: StepCreated,
-		logs: dockerLogStream(logFrame{stream: stdoutStream, content: []byte("ok\n")}),
+		logs:         dockerLogStream(logFrame{stream: stdoutStream, content: []byte("ok\n")}),
+		logMediaType: dockerMultiplexedStreamMediaType,
 	}
 }
 
@@ -542,7 +558,7 @@ func (engine *stepEngine) RoundTrip(request *http.Request) (*http.Response, erro
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header: http.Header{
-				"Content-Type": []string{"application/vnd.docker.raw-stream"},
+				"Content-Type": []string{engine.logMediaType},
 			},
 			Body: io.NopCloser(bytes.NewReader(engine.logs)), ContentLength: length,
 		}, nil
@@ -605,7 +621,7 @@ func (engine *stepEngine) assertRequest(request *http.Request) {
 	engine.t.Helper()
 	wantAccept := "application/json"
 	if strings.HasSuffix(request.URL.Path, "/logs") {
-		wantAccept = "application/vnd.docker.raw-stream"
+		wantAccept = dockerMultiplexedStreamMediaType
 	}
 	if request.URL.Scheme != "http" || request.URL.Host != "matrix-docker-engine" ||
 		request.Header.Get("Accept") != wantAccept ||
