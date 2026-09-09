@@ -16,7 +16,7 @@ import (
 )
 
 func TestInstalledCompilerReproducesAcceptedProductlessTopology(t *testing.T) {
-	if actual := ContractDigest(); actual != "sha256:1f40c17e44aae93f4a51436f020b2ccfad4402907e44019e3c3d2fd9b0ed4272" {
+	if actual := ContractDigest(); actual != "sha256:e725e8cb4d55d45ff2df9f909edce124a2c0b3551dbd13cf2287f0cc82b05aa5" {
 		t.Fatalf("current topology contract digest drifted: %s", actual)
 	}
 	if actual := legacyProductlessImplementationDigest(); actual != legacyProductlessContractDigest {
@@ -295,6 +295,10 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			if !slices.Equal(actualServiceNetworks, []string{"control", "edge", "web"}) {
 				t.Fatalf("APISIX network boundary=%v", actualServiceNetworks)
 			}
+		} else if name == "devops-executor-gateway" {
+			if !slices.Equal(actualServiceNetworks, []string{"control", "edge"}) {
+				t.Fatalf("DevOps executor gateway network boundary=%v", actualServiceNetworks)
+			}
 		} else if name == "devops-source-fetcher" || name == "devops-source-observer" {
 			if !slices.Equal(actualServiceNetworks, []string{"control", "source"}) {
 				t.Fatalf("DevOps source service %q network boundary=%v", name, actualServiceNetworks)
@@ -443,6 +447,17 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 		}
 		if ports, found := service["ports"].([]any); found {
 			portCount += len(ports)
+			joinsExternalNetwork := false
+			for _, network := range actualServiceNetworks {
+				internal, known := expectedNetworks[network]
+				joinsExternalNetwork = joinsExternalNetwork || known && !internal
+			}
+			if !joinsExternalNetwork {
+				t.Fatalf(
+					"service %q publishes a host port without an external network: %v",
+					name, actualServiceNetworks,
+				)
+			}
 			validAPISIX := name == "apisix" && len(ports) == 1 &&
 				ports[0] == "127.0.0.1:8443:9080/tcp"
 			validRunner := name == "devops-executor-gateway" && len(ports) == 1 &&

@@ -1207,9 +1207,10 @@ a private durable spool and a canonical installation-bound PKI bundle with
 separate server, admin-client, and runner-client authorities, a fixed five-year
 validity, exact build-worker SPIFFE identity, and exact gateway DNS identity.
 Only derived gateway and build-worker material is mounted read-only; authority
-private keys never enter a runtime container. The gateway's admin listener
-stays on the internal control network, its health listener is loopback-only,
-and only the TLS 1.3 runner listener is published on fixed port `8444`.
+private keys never enter a runtime container. The build worker reaches the
+gateway's unpublished admin listener over the internal control network, while
+the gateway also joins the edge network so Docker can publish only the TLS 1.3
+runner listener on fixed port `8444`; its health listener remains loopback-only.
 PaaS-only staging and topology contain none of these files, directories,
 processes, or ports. A DevOps-selected signed release now carries an exact
 standalone Linux/amd64 runner subset: `mx`, `matrix-devops-runner`, the pinned

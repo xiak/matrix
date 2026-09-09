@@ -668,7 +668,7 @@ func compileServices(
 		devopsAudit.DependsOn = healthy("postgres", "audit")
 
 		devopsExecutorGateway := service(
-			"devops-executor-gateway", "devops", images["devops"], []string{"control"},
+			"devops-executor-gateway", "devops", images["devops"], []string{"control", "edge"},
 			[]string{"/matrix/bin/matrix-devops-executor-gateway"},
 			"1.0", "512M", "http://127.0.0.1:8080/ready",
 		)
