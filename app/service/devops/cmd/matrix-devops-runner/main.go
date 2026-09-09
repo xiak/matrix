@@ -172,7 +172,9 @@ func runRunnerLoop(
 	}
 	defer idle.Stop()
 	outcomes := make(chan runnerOutcome, 1)
+	working := false
 	startWork := func() {
+		working = true
 		go func() {
 			result, err := workOnce(loopContext)
 			outcomes <- runnerOutcome{result: result, err: err}
@@ -183,10 +185,15 @@ func runRunnerLoop(
 		select {
 		case <-ctx.Done():
 			readiness.set(false)
+			cancel()
+			if working {
+				<-outcomes
+			}
 			return nil
 		case <-idle.C:
 			startWork()
 		case outcome := <-outcomes:
+			working = false
 			if outcome.err != nil || !validRunnerResult(outcome.result) {
 				readiness.set(false)
 				if ctx.Err() != nil {

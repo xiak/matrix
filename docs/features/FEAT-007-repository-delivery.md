@@ -22,8 +22,9 @@
   CSR enrollment complete; dedicated-node installer implementation,
   controlled-host Linux integration, and authentic-material evidence complete;
   isolated check-report process, persistence, and fixed-Gitea adapter complete;
-  real Linux Docker/runsc source-archive-to-receipt integration complete; full
-  dedicated-node and end-to-end PostgreSQL-to-provider Gate B remain pending
+  real Linux Docker/runsc source-archive-to-receipt integration and standalone
+  PostgreSQL VERIFY-to-REPORTING gateway/build-worker/runner crash recovery
+  complete; signed-Gitea-to-provider and full Gate B remain pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -819,7 +820,8 @@ credential variables. The host-side inspection independently checks the
 image, command, environment, `runsc`, network/IPC modes, read-only root,
 capability/security flags, resources, mounts, logging mode, terminal state,
 and network attachment before declaring the node eligible. Failure still
-forces bounded container deletion.
+forces bounded container deletion under a 30-second preflight-cleanup
+deadline.
 
 The runner workspace adapter consumes the journal's verified archive into a
 separate private root under an OS-exclusive, closed runner identity. It
@@ -898,10 +900,12 @@ requires equal sequence replay without duplication and conflict on changed
 content. A complete receipt is recorded locally before gateway completion and
 is acknowledged only after that completion succeeds.
 
-The outbound-only physical runner process now composes these ports. Its
-selected release packaging, independently credentialed node topology, and a
-real process journey remain subsequent slices, so no accepted release process
-yet invokes this workflow against repository code.
+The outbound-only physical runner process now composes these ports. Shutdown
+removes readiness, cancels the active cycle, and waits for that cycle to finish
+its bounded observation and cleanup before the process exits. Its selected
+release packaging, independently credentialed node topology, controlled-host
+installation, and a real standalone process journey are complete below; signed
+source ingress and provider reporting remain later Gate B slices.
 
 ### Egress, limits, storage, and retention
 
@@ -1304,11 +1308,11 @@ complete, normalized logs and the exact terminal receipt cross the authenticated
 boundaries, the journal is acknowledged, and no container remains. Repository-
 style negative probes also prove an empty sensitive environment, no Docker
 socket or privileged device, read-only source and root filesystems, no non-
-loopback interface, and failed reserved-address egress. This is a real
-Docker/runsc sandbox integration, not yet the standalone gateway/build-worker/
-runner process journey, signed-Gitea-to-PostgreSQL lifecycle, restart recovery,
-resource-abuse and oversized-log suite, or provider-report effect required for
-the complete Gate B.
+loopback interface, and failed reserved-address egress. A subsequent gate now
+extends this into standalone gateway/build-worker/runner processes backed by
+PostgreSQL and proves crash recovery. Signed-Gitea-to-PostgreSQL ingress, the
+resource-abuse and oversized-log suite, and the provider-report effect remain
+required for the complete Gate B.
 
 Every fenced worker transition now submits the exact next PipelineRun document
 to the database boundary. A terminal transition atomically stores a distinct
@@ -1507,8 +1511,9 @@ Current verification evidence:
   authority. The process-mTLS, command, build-execution, and admin-client suites
   pass race detection and twenty-run repetition on Windows and twenty runs in
   the fixed disconnected Go 1.26.8 Linux/amd64 image using read-only source and
-  module cache with module lookup disabled; real cross-process PostgreSQL
-  execution remains a Gate B item
+  module cache with module lookup disabled. The real process gate below now
+  proves cross-process PostgreSQL VERIFY execution; the complete source-to-
+  provider journey remains a Gate B item
 - closed runner-sandbox adapter tests proving deterministic exact `go test`
   and `go vet` requests, fixed image/API/runtime/user/environment, no network,
   read-only root and source, dropped capabilities, `no-new-privileges`, no
@@ -1633,10 +1638,32 @@ Current verification evidence:
   Docker socket and privileged-device access, non-loopback networking, and
   reserved-address egress. The real Docker response also proved the exact
   non-TTY multiplexed log media type, and the private cache tmpfs proved its
-  explicit UID/GID ownership. This gate does not yet exercise standalone
-  gateway/build-worker/runner processes, signed Gitea ingress through
-  PostgreSQL, restart recovery, resource-abuse or oversized-log cases, or the
-  provider report effect, so the complete Gate B remains pending
+  explicit UID/GID ownership. This gate alone does not exercise standalone
+  processes, signed Gitea ingress through PostgreSQL, restart recovery,
+  resource-abuse or oversized-log cases, or the provider report effect
+- an opt-in standalone-process recovery journey on a clean PostgreSQL 18
+  database and the same disposable Docker `29.6.2`/pinned-`runsc` node. It
+  applies and verifies the migration twice, seeds one canonical source archive
+  and VERIFY intent through isolated runtime roles, then starts the actual
+  executor-gateway, build-worker, and outbound runner binaries with distinct
+  TLS 1.3 mTLS authorities and role-specific environments. The gate kills the
+  first build worker after durable gateway submission, expires its database
+  lease, proves the replacement worker's increased fence, kills the first
+  runner while its exact labeled step container is running, and proves the
+  replacement runner observes that effect under an increased gateway fence
+  rather than creating a duplicate. Both immutable Go steps complete, exactly
+  one build receipt persists, the VERIFY task is completed, the run reaches
+  `REPORTING` without prematurely materializing a REPORT task, the spool is
+  terminal, the runner journal is acknowledged, normalized logs persist, and
+  no business container or isolation probe remains. Process output contains no
+  database password or private key. The real shutdown race exposed and fixed
+  two cleanup defects: the process now waits for its active cycle before exit,
+  and preflight deletion has a 30-second bound instead of the runsc-sensitive
+  10-second edge. The journey passes in 174.76 seconds; all repository tests and
+  vet, affected Windows race and twenty-run suites, and the affected offline
+  Linux suites also pass. Signed Gitea ingress, physical source fetch and check
+  report processes, correlated provider/Audit effects, malicious resource/log
+  cases, and the rest of Gate B remain pending
 - selected-product installation and topology tests proving journal-stable PKI
   issuance time, three disjoint P-256 authorities, exact gateway and
   build-worker identities, canonical write-once authority storage,

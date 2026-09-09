@@ -24,7 +24,7 @@ const (
 	maximumInfoBytes    = 1024 * 1024
 	maximumInspectBytes = 1024 * 1024
 	maximumWaitBytes    = 64 * 1024
-	cleanupTimeout      = 10 * time.Second
+	cleanupTimeout      = 30 * time.Second
 )
 
 type Client struct {

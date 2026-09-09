@@ -146,6 +146,57 @@ func TestRunnerLoopFailsClosedAndRemovesReadiness(t *testing.T) {
 	}
 }
 
+func TestRunnerLoopWaitsForActiveCycleCleanupBeforeShutdown(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	readiness := &runnerReadiness{}
+	started := make(chan struct{})
+	cleaning := make(chan struct{})
+	releaseCleanup := make(chan struct{})
+	result := make(chan error, 1)
+	go func() {
+		result <- runRunnerLoop(
+			ctx,
+			func(workContext context.Context) (runnerexecution.Result, error) {
+				close(started)
+				<-workContext.Done()
+				close(cleaning)
+				<-releaseCleanup
+				return runnerexecution.Result{}, workContext.Err()
+			},
+			readiness,
+			time.Hour,
+		)
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("runner cycle did not start")
+	}
+	cancel()
+	select {
+	case <-cleaning:
+	case <-time.After(time.Second):
+		t.Fatal("runner cycle did not begin cancellation cleanup")
+	}
+	select {
+	case err := <-result:
+		t.Fatalf("runner loop returned before cycle cleanup: %v", err)
+	default:
+	}
+	close(releaseCleanup)
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("runner loop shutdown error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runner loop did not stop after cycle cleanup")
+	}
+	if err := readiness.check(context.Background()); err == nil {
+		t.Fatal("stopped runner remained ready")
+	}
+}
+
 func TestRunnerResultValidationIsClosed(t *testing.T) {
 	valid := []runnerexecution.Result{
 		{},
