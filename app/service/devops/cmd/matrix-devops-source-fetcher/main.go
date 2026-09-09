@@ -159,7 +159,9 @@ func runAcquisitionLoop(
 	}
 	defer idle.Stop()
 	outcomes := make(chan fetchOutcome, 1)
+	working := false
 	startFetch := func() {
+		working = true
 		go func() {
 			result, err := fetchOnce(loopContext)
 			outcomes <- fetchOutcome{result: result, err: err}
@@ -169,6 +171,10 @@ func runAcquisitionLoop(
 	for {
 		select {
 		case <-ctx.Done():
+			cancel()
+			if working {
+				<-outcomes
+			}
 			return nil
 		case <-heartbeats.C:
 			if _, err := heartbeat(loopContext); err != nil {
@@ -180,6 +186,7 @@ func runAcquisitionLoop(
 		case <-idle.C:
 			startFetch()
 		case outcome := <-outcomes:
+			working = false
 			if outcome.err != nil {
 				if ctx.Err() != nil {
 					return nil

@@ -109,3 +109,53 @@ func TestAcquisitionLoopDrainsClaimedWorkAndFailsClosed(t *testing.T) {
 		t.Fatal("runAcquisitionLoop() accepted a nil acquisition boundary")
 	}
 }
+
+func TestAcquisitionLoopWaitsForActiveCycleCleanupBeforeShutdown(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	cleaning := make(chan struct{})
+	releaseCleanup := make(chan struct{})
+	result := make(chan error, 1)
+	go func() {
+		result <- runAcquisitionLoop(
+			ctx,
+			func(fetchContext context.Context) (sourceacquisition.Result, error) {
+				close(started)
+				<-fetchContext.Done()
+				close(cleaning)
+				<-releaseCleanup
+				return sourceacquisition.Result{}, fetchContext.Err()
+			},
+			func(context.Context) (time.Time, error) {
+				return time.Now().UTC().Truncate(time.Microsecond), nil
+			},
+			time.Hour,
+			time.Hour,
+		)
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("source acquisition cycle did not start")
+	}
+	cancel()
+	select {
+	case <-cleaning:
+	case <-time.After(time.Second):
+		t.Fatal("source acquisition cycle did not begin cancellation cleanup")
+	}
+	select {
+	case err := <-result:
+		t.Fatalf("source acquisition loop returned before cycle cleanup: %v", err)
+	default:
+	}
+	close(releaseCleanup)
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("source acquisition loop shutdown error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("source acquisition loop did not stop after cycle cleanup")
+	}
+}
