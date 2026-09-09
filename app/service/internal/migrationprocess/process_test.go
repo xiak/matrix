@@ -55,10 +55,11 @@ func TestRunAdmitsOnlyFixedActionsAndExactSecretFiles(t *testing.T) {
 	}
 }
 
-func TestConfigurationSupportsOnlyTheCurrentFiveIdentityMigrationBoundary(t *testing.T) {
+func TestConfigurationSupportsOnlyTheCurrentSixIdentityMigrationBoundary(t *testing.T) {
 	environments := []string{
 		"MATRIX_MIGRATION_DATABASE_DSN_FILE",
 		"MATRIX_MIGRATION_DEVOPS_API_DSN_FILE",
+		"MATRIX_MIGRATION_DEVOPS_CHECK_REPORTER_DSN_FILE",
 		"MATRIX_MIGRATION_DEVOPS_SOURCE_FETCHER_DSN_FILE",
 		"MATRIX_MIGRATION_DEVOPS_SOURCE_OBSERVER_DSN_FILE",
 		"MATRIX_MIGRATION_DEVOPS_WORKER_DSN_FILE",
@@ -69,7 +70,7 @@ func TestConfigurationSupportsOnlyTheCurrentFiveIdentityMigrationBoundary(t *tes
 		Verify:              func(context.Context, []string) error { return nil },
 	}
 	if err := validateConfiguration(configuration); err != nil {
-		t.Fatalf("current five-identity migration boundary: %v", err)
+		t.Fatalf("current six-identity migration boundary: %v", err)
 	}
 
 	tooWide := configuration
@@ -77,6 +78,6 @@ func TestConfigurationSupportsOnlyTheCurrentFiveIdentityMigrationBoundary(t *tes
 		slices.Clone(environments), "MATRIX_MIGRATION_Z_EXTRA_DSN_FILE",
 	)
 	if err := validateConfiguration(tooWide); err == nil {
-		t.Fatal("a sixth migration DSN file was accepted")
+		t.Fatal("a seventh migration DSN file was accepted")
 	}
 }

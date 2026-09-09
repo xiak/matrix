@@ -57,7 +57,7 @@ type contract struct {
 
 var platformServiceNames = []string{
 	"apisix", "audit", "devops-api", "devops-audit-dispatcher",
-	"devops-build-worker", "devops-executor-gateway", "devops-source-fetcher",
+	"devops-build-worker", "devops-check-reporter", "devops-executor-gateway", "devops-source-fetcher",
 	"devops-source-observer", "iam",
 	"iam-audit-dispatcher", "matrix-ui",
 	"paas-api", "paas-audit-dispatcher", "paas-worker", "platform-api", "postgres",
@@ -387,6 +387,7 @@ func compileServices(
 	paasAPIDSN := path.Join(root, layout.PaaSAPI)
 	paasWorkerDSN := path.Join(root, layout.PaaSWorker)
 	devopsAPIDSN := path.Join(root, layout.DevOpsAPI)
+	devopsCheckReporterDSN := path.Join(root, layout.DevOpsCheckReporter)
 	devopsWorkerDSN := path.Join(root, layout.DevOpsWorker)
 	devopsSourceFetcherDSN := path.Join(root, layout.DevOpsSourceFetcher)
 	devopsSourceObserverDSN := path.Join(root, layout.DevOpsSourceObserver)
@@ -722,6 +723,24 @@ func compileServices(
 		}
 		devopsBuildWorker.DependsOn = healthy("postgres", "devops-executor-gateway")
 
+		devopsCheckReporter := service(
+			"devops-check-reporter", "devops", images["devops"],
+			[]string{"control", "source"},
+			[]string{"/matrix/bin/matrix-devops-check-reporter"},
+			"0.5", "384M", "http://127.0.0.1:8080/ready",
+		)
+		devopsCheckReporter.Environment = map[string]string{
+			"MATRIX_DEVOPS_CHECK_REPORTER_DATABASE_DSN_FILE": "/run/matrix/devops-check-reporter-dsn",
+			"MATRIX_DEVOPS_CHECK_REPORTER_LISTEN_ADDRESS":    "0.0.0.0:8080",
+			"MATRIX_DEVOPS_CHECK_REPORTER_REPORT_ROOT":       "/run/matrix/devops-source-report",
+			"MATRIX_DEVOPS_CHECK_REPORTER_WORKER_ID":         "devops-check-reporter-" + strings.TrimPrefix(options.InstallationID, "mxi-"),
+		}
+		devopsCheckReporter.Volumes = []mount{
+			bind(devopsCheckReporterDSN, "/run/matrix/devops-check-reporter-dsn", true),
+			bind(devopsReportCredentialRoot, "/run/matrix/devops-source-report", true),
+		}
+		devopsCheckReporter.DependsOn = healthy("postgres")
+
 		devopsSourceFetcher := service(
 			"devops-source-fetcher", "devops", images["devops"],
 			[]string{"control", "source"},
@@ -766,6 +785,7 @@ func compileServices(
 		services["devops-api"] = devopsAPI
 		services["devops-audit-dispatcher"] = devopsAudit
 		services["devops-build-worker"] = devopsBuildWorker
+		services["devops-check-reporter"] = devopsCheckReporter
 		services["devops-executor-gateway"] = devopsExecutorGateway
 		services["devops-source-fetcher"] = devopsSourceFetcher
 		services["devops-source-observer"] = devopsSourceObserver

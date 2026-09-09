@@ -21,7 +21,8 @@
   complete; authenticated standalone runner-node release export and pinned-CA
   CSR enrollment complete; dedicated-node installer implementation,
   controlled-host Linux integration, and authentic-material evidence complete;
-  real dedicated-host isolated execution and reporter effects pending
+  isolated check-report process, persistence, and fixed-Gitea adapter complete;
+  real dedicated-host isolated execution and end-to-end reporter effect pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -169,9 +170,10 @@ object, credential, or deployment target.
    source snapshot and closed verification profile, but no source-provider,
    reporter, IAM, Audit, PaaS, host, executor-control, or future registry
    credential.
-6. The reporter sends one pending and one terminal check under a deterministic
-   report identity. Timeout or connection loss is observed before retry; equal
-   provider replay succeeds, while contradictory receipt enters reconciliation.
+6. The reporter sends exactly one terminal check under a deterministic report
+   identity. Timeout or connection loss is observed without another create;
+   equal provider state completes the run, while contradictory state fails as
+   a report conflict.
 7. A manual replay selects the exact SourceEvent and PipelineRevision of an
    existing run and creates a linked new run. It cannot resolve a branch again
    or substitute a definition, commit, provider, or policy.
@@ -576,7 +578,8 @@ worker may commit the receipt.
 `matrix-devops-check-reporter` is the only process allowed to turn a stored
 build receipt into a provider-visible terminal check. It joins the internal
 control network and the source-egress network, mounts only the read-only
-`REPORT` credential root, and receives a table-blind worker DSN. It receives
+`REPORT` credential root, and receives a dedicated table-blind check-reporter
+DSN. It receives
 no webhook or fetch credential, source archive, executor identity, runner or
 Docker authority, IAM/Audit service credential, PaaS state, or authority to
 change tenant configuration. The build worker correspondingly retains no
@@ -1659,27 +1662,33 @@ Current verification evidence:
   hashes the archive before handoff, and verifies its length and digest again
   across complete stream consumption; changed receipts, partial reads, and
   mutation after opening fail closed without exposing a host path
-- real PostgreSQL 18 BuildExecutor persistence journey proving heartbeat-
-  gated readiness, a table-blind worker, `VERIFY`-only build claims,
-  `REPORT`-only generic claims, database-created and takeover-stable 20-minute
-  execution windows, monotonic fencing and current-only lease renewal, strict
-  receipt shape/binding/digest validation, passed and failed receipts, atomic
-  `VERIFYING -> REPORTING`, missing-receipt bypass rejection, double apply,
-  and compatibility with the four-product migration boundary
-- the same pinned real Gitea gate creates a branch, commit, and pull request,
-  fetches only its trusted default-branch and pull-head refs through the
-  production pure-Go adapter, verifies both immutable commits, and reproduces
-  the exact head tree as a deterministic archive without `.git`; the
-  disposable container, repository, and token are removed after the gate
+- real PostgreSQL 18 execution/report persistence journey proving heartbeat-
+  gated readiness, separate table-blind build-worker and check-reporter roles,
+  `VERIFY`-only build claims, `REPORT`-only reporter claims, exactly six
+  reporter functions, one open task under concurrent claims, database-created
+  and takeover-stable execution windows, monotonic fencing and current-only
+  lease renewal, strict build/check receipt shape and digest binding, atomic
+  `VERIFYING -> REPORTING -> SUCCEEDED|FAILED`, missing-receipt bypass
+  rejection, double apply, and compatibility with the four-product migration
+  boundary
+- the same pinned real Gitea gate atomically creates a branch commit from the
+  trusted default branch and opens a pull request; the production pure-Go
+  adapter fetches only the default-branch and pull-head refs, verifies both
+  immutable commits, reproduces the exact head tree as a deterministic archive
+  without `.git`, creates one exact terminal commit status, and reads it back
+  for reconciliation without another create; the disposable container,
+  repository, token, and pulled fixture image are removed after the gate
 - full repository tests pass with the release-baseline Go `1.26.8` toolchain;
   `govulncheck v1.7.0` reports zero reachable symbol or imported-package
   vulnerabilities after `x/crypto v0.56.0`, with only its unused, unimported
   `openpgp` package reported at module level
-- installation and topology tests proving selected-only source-observer and
-  source-fetcher logins, four read-only observer mounts, the fetcher's two
-  read-only inputs and private writable archive root, exact process
-  environments, provider-egress confinement, offline binary inclusion,
-  heartbeat-gated API readiness, and absence from PaaS-only installations
+- installation and topology tests proving selected-only source-observer,
+  source-fetcher, and check-reporter logins, exact dedicated DSN mounts, four
+  read-only observer mounts, the fetcher's two read-only inputs and private
+  writable archive root, the reporter's single read-only credential root,
+  exact process environments, provider-egress confinement, scratch-image CA
+  roots, offline binary inclusion, heartbeat-gated API readiness, and absence
+  from PaaS-only installations
 - real PostgreSQL 18 double-apply and catalog integration tests for the IAM and
   Audit extensions, release-selected Platform/DevOps credential enrollment,
   equal replay, changed-credential rejection, and exact Audit facts
@@ -1689,9 +1698,11 @@ Current verification evidence:
 - strict DevOps HTTP, IAM HTTP, Audit HTTP, outbox-dispatch, product discovery,
   signed topology-selection, and release-assembly tests
 - real PostgreSQL 18 authority-process journey across IAM, Audit, PaaS,
-  DevOps, and their Audit dispatchers, including authorization denial,
-  idempotency conflict, immutable revision reads, readiness failure, and exact
-  Audit correlation
+  DevOps, their Audit dispatchers, and the source-fetcher, source-observer, and
+  check-reporter processes, including isolated runtime logins, real heartbeat-
+  gated readiness, authorization denial, idempotency conflict, immutable
+  revision reads, readiness failure/recovery, five user-authorized DevOps facts,
+  and two exact observer-owned source-health facts
 - real PostgreSQL 18 configuration journeys proving double apply, exact
   runtime identities, forced cross-tenant isolation, function-only API writes,
   a table-blind worker, immutable binding/revision history, sanitized Audit
@@ -1790,10 +1801,10 @@ Current verification evidence:
    lease/fence, reconciliation, quota, and sanitized failure/log behavior pass
    unit, race, fuzz, and repeated tests.
 3. Clean PostgreSQL applies the delivery schema twice and proves separate
-   migration/API/worker/source-fetcher/source-observer roles, forced tenant
-   isolation, database-time leases, stale-fence and stale-resource rejection, API-only
-   configuration writes, observer-only health writes, and no cross-schema
-   access.
+   migration/API/worker/source-fetcher/source-observer/check-reporter roles,
+   forced tenant isolation, database-time leases, stale-fence and stale-resource
+   rejection, API-only configuration writes, observer-only health writes,
+   reporter-only provider-result writes, and no cross-schema access.
 4. Architecture tests prove the delivery context owns its ports, depends only
    on public contracts, does not import Prow/provider implementations into the
    domain, and does not share the PaaS DeploymentExecutor.

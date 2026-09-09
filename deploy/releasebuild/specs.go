@@ -29,6 +29,7 @@ var binarySpecifications = []binarySpecification{
 	{name: "matrix-devops", packagePath: "./app/service/devops/cmd/matrix-devops"},
 	{name: "matrix-devops-audit-dispatcher", packagePath: "./app/service/devops/cmd/matrix-devops-audit-dispatcher"},
 	{name: "matrix-devops-build-worker", packagePath: "./app/service/devops/cmd/matrix-devops-build-worker"},
+	{name: "matrix-devops-check-reporter", packagePath: "./app/service/devops/cmd/matrix-devops-check-reporter"},
 	{name: "matrix-devops-executor-gateway", packagePath: "./app/service/devops/cmd/matrix-devops-executor-gateway"},
 	{name: "matrix-devops-migrate", packagePath: "./app/service/devops/cmd/matrix-devops-migrate"},
 	{name: "matrix-devops-runner", packagePath: "./app/service/devops/cmd/matrix-devops-runner"},
@@ -48,10 +49,11 @@ var binarySpecifications = []binarySpecification{
 }
 
 type imageRecipe struct {
-	component     string
-	baseReference string
-	binaries      []string
-	entrypoint    string
+	component       string
+	baseReference   string
+	binaries        []string
+	entrypoint      string
+	copySystemRoots bool
 }
 
 var imageRecipes = []imageRecipe{
@@ -67,9 +69,10 @@ var imageRecipes = []imageRecipe{
 		component: "devops", baseReference: "scratch",
 		binaries: []string{
 			"matrix-devops", "matrix-devops-audit-dispatcher", "matrix-devops-build-worker",
-			"matrix-devops-executor-gateway", "matrix-devops-migrate",
+			"matrix-devops-check-reporter", "matrix-devops-executor-gateway", "matrix-devops-migrate",
 			"matrix-devops-source-fetcher", "matrix-devops-source-observer", "matrix-health",
 		},
+		copySystemRoots: true,
 	},
 	{
 		component: "iam", baseReference: "scratch",

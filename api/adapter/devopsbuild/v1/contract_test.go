@@ -110,6 +110,40 @@ func TestReceiptBindsRequestAndClosedStepOutcomes(t *testing.T) {
 	}
 }
 
+func TestReceiptShapeCanBeVerifiedWithoutOriginalRequest(t *testing.T) {
+	request := requestFixture([]byte("canonical source archive"))
+	receipt := receiptFixture(
+		request, ConclusionFailed, StepConclusionPassed, StepConclusionFailed,
+	)
+	if err := ValidateReceiptShape(receipt); err != nil {
+		t.Fatalf("validate standalone build receipt: %v", err)
+	}
+
+	for name, mutate := range map[string]func(*Receipt){
+		"run": func(value *Receipt) {
+			value.RunID = "run-one"
+		},
+		"command": func(value *Receipt) {
+			value.CommandID = string(value.RunID) + ":fetch:1"
+		},
+		"revision": func(value *Receipt) {
+			value.PipelineRevisionID = "revision-one"
+		},
+		"profile": func(value *Receipt) {
+			value.ExecutorProfile = "HOST"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := receipt
+			mutate(&candidate)
+			candidate.ContentDigest = DigestReceipt(candidate)
+			if ValidateReceiptShape(candidate) == nil {
+				t.Fatal("invalid standalone build receipt was accepted")
+			}
+		})
+	}
+}
+
 func TestCanonicalDocumentsRejectUnknownNoncanonicalAndTrailingContent(t *testing.T) {
 	request := requestFixture([]byte("canonical source archive"))
 	submission, err := EncodeSubmission(request)

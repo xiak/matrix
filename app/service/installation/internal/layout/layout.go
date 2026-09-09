@@ -20,6 +20,7 @@ const (
 	PaaSAPI              = "secrets/database/paas-api-dsn"
 	PaaSWorker           = "secrets/database/paas-worker-dsn"
 	DevOpsAPI            = "secrets/database/devops-api-dsn"
+	DevOpsCheckReporter  = "secrets/database/devops-check-reporter-dsn"
 	DevOpsWorker         = "secrets/database/devops-worker-dsn"
 	DevOpsSourceFetcher  = "secrets/database/devops-source-fetcher-dsn"
 	DevOpsSourceObserver = "secrets/database/devops-source-observer-dsn"

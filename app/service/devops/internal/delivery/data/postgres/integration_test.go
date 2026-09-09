@@ -32,6 +32,7 @@ import (
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/sourcearchive"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/auditdispatch"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/buildexecution"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/checkreporting"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/pipelineconfiguration"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runadmission"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runcontrol"
@@ -64,7 +65,8 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 	var clean bool
 	if err := admin.QueryRow(ctx, `SELECT to_regnamespace('delivery') IS NULL AND NOT EXISTS (
 		SELECT 1 FROM pg_catalog.pg_roles WHERE rolname IN (
-			'matrix_devops_api_login', 'matrix_devops_worker_login',
+			'matrix_devops_api_login', 'matrix_devops_check_reporter_login',
+			'matrix_devops_worker_login',
 			'matrix_devops_source_fetcher_login',
 			'matrix_devops_source_observer_login'
 		)
@@ -73,15 +75,16 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 	}
 
 	apiDSN := runtimeDSN(t, adminDSN, "matrix_devops_api_login", "mxp1.devops-api-000000000000000000000000000000")
+	checkReporterDSN := runtimeDSN(t, adminDSN, "matrix_devops_check_reporter_login", "mxp1.devops-check-reporter-000000000000000000000")
 	workerDSN := runtimeDSN(t, adminDSN, "matrix_devops_worker_login", "mxp1.devops-worker-0000000000000000000000000000")
 	sourceFetcherDSN := runtimeDSN(t, adminDSN, "matrix_devops_source_fetcher_login", "mxp1.devops-source-fetcher-000000000000000000000")
 	sourceObserverDSN := runtimeDSN(t, adminDSN, "matrix_devops_source_observer_login", "mxp1.devops-source-observer-0000000000000000000")
 	for attempt := 1; attempt <= 2; attempt++ {
-		if err := devopsmigration.Apply(ctx, adminDSN, apiDSN, sourceFetcherDSN, sourceObserverDSN, workerDSN); err != nil {
+		if err := devopsmigration.Apply(ctx, adminDSN, apiDSN, checkReporterDSN, sourceFetcherDSN, sourceObserverDSN, workerDSN); err != nil {
 			t.Fatalf("apply DevOps migration attempt %d: %v", attempt, err)
 		}
 	}
-	if err := devopsmigration.VerifyInstalled(ctx, adminDSN, apiDSN, sourceFetcherDSN, sourceObserverDSN, workerDSN); err != nil {
+	if err := devopsmigration.VerifyInstalled(ctx, adminDSN, apiDSN, checkReporterDSN, sourceFetcherDSN, sourceObserverDSN, workerDSN); err != nil {
 		t.Fatalf("verify DevOps migration: %v", err)
 	}
 	pool, err := pgxpool.New(ctx, apiDSN)
@@ -102,6 +105,21 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	workerPool, err := pgxpool.New(ctx, workerDSN)
+	if err != nil {
+		t.Fatal("connect DevOps worker pool")
+	}
+	defer workerPool.Close()
+	checkReporterPool, err := pgxpool.New(ctx, checkReporterDSN)
+	if err != nil {
+		t.Fatal("connect DevOps check reporter pool")
+	}
+	defer checkReporterPool.Close()
+	checkRepository, err := devopspostgres.NewCheckReportingRepository(checkReporterPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCheckReporterAuthorityAndHeartbeat(t, ctx, checkReporterPool, checkRepository)
 	assertSourceFetcherAuthorityAndHeartbeat(
 		t, ctx, sourceFetcherPool, sourceFetcher, repository,
 	)
@@ -668,11 +686,6 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 	if err != nil || readiness.State != devopsv1.ReadinessReady {
 		t.Fatalf("DevOps API readiness=%#v err=%v", readiness, err)
 	}
-	workerPool, err := pgxpool.New(ctx, workerDSN)
-	if err != nil {
-		t.Fatal("connect DevOps worker pool")
-	}
-	defer workerPool.Close()
 	buildRepository, err := devopspostgres.NewBuildExecutionRepository(workerPool)
 	if err != nil {
 		t.Fatal(err)
@@ -705,7 +718,8 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		return err
 	})
 	assertRunLifecyclePersistenceAndFencing(
-		t, ctx, admin, pool, workerPool, sourceFetcher, buildRepository, runController,
+		t, ctx, admin, pool, workerPool, checkReporterPool, sourceFetcher, buildRepository,
+		checkRepository, runController,
 	)
 	assertTerminalAuditFacts(t, ctx, admin)
 	assertCancellationAuditFacts(t, ctx, admin)
@@ -791,10 +805,10 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 			t.Fatalf("stage legacy source contract fixture %d: %v", index, err)
 		}
 	}
-	if err := devopsmigration.Apply(ctx, adminDSN, apiDSN, sourceFetcherDSN, sourceObserverDSN, workerDSN); err != nil {
+	if err := devopsmigration.Apply(ctx, adminDSN, apiDSN, checkReporterDSN, sourceFetcherDSN, sourceObserverDSN, workerDSN); err != nil {
 		t.Fatalf("reapply DevOps migration with durable admission data: %v", err)
 	}
-	if err := devopsmigration.VerifyInstalled(ctx, adminDSN, apiDSN, sourceFetcherDSN, sourceObserverDSN, workerDSN); err != nil {
+	if err := devopsmigration.VerifyInstalled(ctx, adminDSN, apiDSN, checkReporterDSN, sourceFetcherDSN, sourceObserverDSN, workerDSN); err != nil {
 		t.Fatalf("verify reapplied DevOps migration with durable admission data: %v", err)
 	}
 	var migratedOrigin, connectionReason, bindingReason, revisionReason string
@@ -900,7 +914,7 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		WHERE tenant_id = 'tenant-one' AND id = $1`, connectionID); err != nil {
 		t.Fatalf("stage ambiguous legacy source contract: %v", err)
 	}
-	if err := devopsmigration.Apply(ctx, adminDSN, apiDSN, sourceFetcherDSN, sourceObserverDSN, workerDSN); err == nil {
+	if err := devopsmigration.Apply(ctx, adminDSN, apiDSN, checkReporterDSN, sourceFetcherDSN, sourceObserverDSN, workerDSN); err == nil {
 		t.Fatal("ambiguous legacy source endpoint migration succeeded")
 	}
 	if _, err := admin.Exec(ctx, `UPDATE delivery.source_connections
@@ -943,7 +957,7 @@ func assertSourceFetcherAuthorityAndHeartbeat(
 	}
 	assertDenied(t, func() error {
 		_, deniedErr := pool.Exec(
-			ctx, `SELECT * FROM delivery.claim_pipeline_run_task('forged-fetcher', 30)`,
+			ctx, `SELECT * FROM delivery.claim_check_report_task('forged-fetcher', 30)`,
 		)
 		return deniedErr
 	})
@@ -968,6 +982,72 @@ func assertSourceFetcherAuthorityAndHeartbeat(
 	apiReadiness, err = controlPlane.Readiness(ctx)
 	if err != nil || apiReadiness.State != devopsv1.ReadinessReady {
 		t.Fatalf("DevOps API source-fetcher readiness=%#v err=%v", apiReadiness, err)
+	}
+}
+
+func assertCheckReporterAuthorityAndHeartbeat(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	repository *devopspostgres.CheckReportingRepository,
+) {
+	t.Helper()
+	readiness, err := repository.Readiness(ctx)
+	if err != nil || readiness.State != devopsv1.ReadinessNotReady {
+		t.Fatalf("check reporter admitted a missing heartbeat=%#v err=%v", readiness, err)
+	}
+	for _, table := range []string{
+		"source_connections", "repository_binding_revisions", "pipeline_revisions",
+		"pipeline_runs", "pipeline_run_tasks", "build_receipts", "check_receipts",
+		"check_reporter_heartbeat", "audit_operations", "audit_outbox",
+	} {
+		table := table
+		assertDenied(t, func() error {
+			_, deniedErr := pool.Exec(ctx, `SELECT count(*) FROM delivery.`+table)
+			return deniedErr
+		})
+	}
+	assertDenied(t, func() error {
+		_, deniedErr := pool.Exec(ctx, `SELECT delivery.advance_pipeline_run_task(
+			'tenant-one', 'pipeline-run-000000000000000000000000000000000000000000000000',
+			'pipeline-run-000000000000000000000000000000000000000000000000:report:1',
+			'check-reporter-forged', 1, 'SUCCEEDED', 'COMPLETED', '{}'::jsonb, '{}'::jsonb
+		)`)
+		return deniedErr
+	})
+	_, err = pool.Exec(ctx, `SELECT * FROM delivery.claim_pipeline_run_task(
+		'generic-report-worker', 30
+	)`)
+	assertPostgresCode(t, err, "42883")
+	for _, query := range []string{
+		`SELECT * FROM delivery.claim_source_fetch_task('forged-reporter', 30)`,
+		`SELECT * FROM delivery.claim_build_task('forged-reporter', 30)`,
+		`SELECT * FROM delivery.claim_audit_event('forged-reporter', 30)`,
+		`SELECT * FROM delivery.worker_readiness()`,
+	} {
+		query := query
+		assertDenied(t, func() error {
+			_, deniedErr := pool.Exec(ctx, query)
+			return deniedErr
+		})
+	}
+	var callableFunctions int
+	if err := pool.QueryRow(ctx, `SELECT count(*)
+		  FROM pg_catalog.pg_proc AS procedure
+		  JOIN pg_catalog.pg_namespace AS namespace
+		    ON namespace.oid = procedure.pronamespace
+		 WHERE namespace.nspname = 'delivery'
+		   AND has_function_privilege(current_user, procedure.oid, 'EXECUTE')`).Scan(
+		&callableFunctions,
+	); err != nil || callableFunctions != 6 {
+		t.Fatalf("check reporter callable function count=%d err=%v", callableFunctions, err)
+	}
+	if _, err := repository.Heartbeat(ctx, "check-reporter-integration"); err != nil {
+		t.Fatalf("record check reporter heartbeat: %v", err)
+	}
+	readiness, err = repository.Readiness(ctx)
+	if err != nil || readiness.State != devopsv1.ReadinessReady {
+		t.Fatalf("check reporter readiness=%#v err=%v", readiness, err)
 	}
 }
 
@@ -1457,22 +1537,17 @@ func assertRunLifecyclePersistenceAndFencing(
 	admin *pgx.Conn,
 	apiPool *pgxpool.Pool,
 	workerPool *pgxpool.Pool,
+	checkReporterPool *pgxpool.Pool,
 	sourceFetcher *devopspostgres.SourceAcquisitionRepository,
 	buildRepository *devopspostgres.BuildExecutionRepository,
+	checkRepository *devopspostgres.CheckReportingRepository,
 	runController *runcontrol.Service,
 ) {
 	t.Helper()
-	repository, err := devopspostgres.NewRunTaskRepository(workerPool)
-	if err != nil {
-		t.Fatal(err)
-	}
-	queue, err := runlifecycle.NewQueue(repository, runlifecycle.Config{LeaseDuration: 30 * time.Second})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if lease, found, err := queue.ClaimNext(ctx, "run-worker-no-fetch"); err != nil || found {
-		t.Fatalf("general worker claimed FETCH=%#v found=%t err=%v", lease, found, err)
+	if command, found, err := checkRepository.Claim(
+		ctx, "check-reporter-no-fetch", checkreporting.LeaseDuration,
+	); err != nil || found {
+		t.Fatalf("check reporter claimed FETCH=%#v found=%t err=%v", command, found, err)
 	}
 	firstCommand, found, err := sourceFetcher.Claim(
 		ctx, "source-fetcher-first", sourceacquisition.LeaseDuration,
@@ -1516,12 +1591,6 @@ func assertRunLifecyclePersistenceAndFencing(
 	); !errors.Is(err, runlifecycle.ErrStaleLease) {
 		t.Fatalf("stale PipelineRun task renewal error=%v", err)
 	}
-	_, err = queue.Advance(ctx, runlifecycle.Transition{
-		Lease: first, State: devopsv1.PipelineRunVerifying,
-	})
-	if !errors.Is(err, runlifecycle.ErrStaleLease) {
-		t.Fatalf("stale PipelineRun task fence error=%v", err)
-	}
 	if _, err := sourceFetcher.Complete(ctx, sourceacquisition.Completion{
 		Command: recoveredCommand,
 		State:   devopsv1.PipelineRunVerifying,
@@ -1529,18 +1598,23 @@ func assertRunLifecyclePersistenceAndFencing(
 	}); err != nil {
 		t.Fatalf("complete recovered fetch task: %v", err)
 	}
-	if lease, found, err := queue.ClaimNext(ctx, "run-worker-no-verify"); err != nil || found {
-		t.Fatalf("general worker claimed VERIFY=%#v found=%t err=%v", lease, found, err)
+	if command, found, err := checkRepository.Claim(
+		ctx, "check-reporter-no-verify", checkreporting.LeaseDuration,
+	); err != nil || found {
+		t.Fatalf("check reporter claimed VERIFY=%#v found=%t err=%v", command, found, err)
 	}
 	firstBuild := claimExpectedBuild(
 		t, ctx, buildRepository, recovered.Run.ID, runlifecycle.ClaimExecute,
 	)
 	assertBuildReceiptTamperRejected(t, ctx, admin, workerPool, firstBuild)
-	if _, err := queue.Advance(ctx, runlifecycle.Transition{
-		Lease: firstBuild.Lease, State: devopsv1.PipelineRunReporting,
-	}); !errors.Is(err, runlifecycle.ErrInvalidTransition) {
-		t.Fatalf("VERIFY bypassed its build receipt: %v", err)
-	}
+	assertDenied(t, func() error {
+		_, deniedErr := workerPool.Exec(ctx, `SELECT delivery.advance_pipeline_run_task(
+			$1, $2, $3, $4, $5, 'REPORTING', NULL::text, '{}'::jsonb, NULL::jsonb
+		)`, firstBuild.Lease.TenantID, firstBuild.Lease.Run.ID,
+			firstBuild.Lease.Intent.CommandID, firstBuild.Lease.WorkerID,
+			int64(firstBuild.Lease.FencingToken))
+		return deniedErr
+	})
 	makeRunTaskDue(t, ctx, admin, firstBuild.Lease.Intent.CommandID)
 	recoveredBuild := claimExpectedBuild(
 		t, ctx, buildRepository, recovered.Run.ID, runlifecycle.ClaimObserve,
@@ -1594,14 +1668,27 @@ func assertRunLifecyclePersistenceAndFencing(
 	); !errors.Is(err, runlifecycle.ErrStaleLease) {
 		t.Fatalf("completed build accepted a log replay: %v", err)
 	}
-	report := claimExpectedRunStage(
-		t, ctx, queue, recovered.Run.ID, devopsv1.PipelineRunReporting,
-		devopsv1.PipelineRunStageReport,
+	report := claimExpectedCheckReport(
+		t, ctx, checkRepository, recovered.Run.ID, runlifecycle.ClaimExecute,
 	)
-	succeeded, err := queue.Advance(ctx, runlifecycle.Transition{
-		Lease:  report,
-		State:  devopsv1.PipelineRunSucceeded,
-		Reason: devopsv1.PipelineRunReasonCompleted,
+	assertCheckReceiptTamperRejected(t, ctx, admin, checkReporterPool, report)
+	reportReceipt, err := checkreporting.NewReceipt(report, 101)
+	if err != nil {
+		t.Fatalf("build check receipt: %v", err)
+	}
+	makeRunTaskDue(t, ctx, admin, report.Lease.Intent.CommandID)
+	recoveredReport := claimExpectedCheckReport(
+		t, ctx, checkRepository, recovered.Run.ID, runlifecycle.ClaimObserve,
+	)
+	if _, err := checkRepository.Complete(ctx, checkreporting.Completion{
+		Command: report, State: devopsv1.PipelineRunSucceeded,
+		Reason: devopsv1.PipelineRunReasonCompleted, Receipt: &reportReceipt,
+	}); !errors.Is(err, runlifecycle.ErrStaleLease) {
+		t.Fatalf("stale check report completion error=%v", err)
+	}
+	succeeded, err := checkRepository.Complete(ctx, checkreporting.Completion{
+		Command: recoveredReport, State: devopsv1.PipelineRunSucceeded,
+		Reason: devopsv1.PipelineRunReasonCompleted, Receipt: &reportReceipt,
 	})
 	if err != nil || succeeded.Status.CompletedAt == nil {
 		t.Fatalf("complete successful PipelineRun=%#v err=%v", succeeded, err)
@@ -1625,48 +1712,44 @@ func assertRunLifecyclePersistenceAndFencing(
 	}); err != nil {
 		t.Fatalf("advance reconciliation run to report: %v", err)
 	}
-	report = claimExpectedRunStage(
-		t, ctx, queue, fetch.Run.ID, devopsv1.PipelineRunReporting,
-		devopsv1.PipelineRunStageReport,
+	report = claimExpectedCheckReport(
+		t, ctx, checkRepository, fetch.Run.ID, runlifecycle.ClaimExecute,
 	)
-	reconciling, err := queue.MarkReportUncertain(ctx, runlifecycle.Reconciliation{
-		Lease: report, NextAttemptAt: databaseFuture(),
+	reconciling, err := checkRepository.MarkUncertain(ctx, runlifecycle.Reconciliation{
+		Lease: report.Lease, NextAttemptAt: databaseFuture(),
 	})
 	if err != nil || reconciling.Status.State != devopsv1.PipelineRunReconciling {
 		t.Fatalf("mark report uncertain=%#v err=%v", reconciling, err)
 	}
-	makeRunTaskDue(t, ctx, admin, report.Intent.CommandID)
-	observed := claimExpectedRunStage(
-		t, ctx, queue, fetch.Run.ID, devopsv1.PipelineRunReconciling,
-		devopsv1.PipelineRunStageReport,
+	makeRunTaskDue(t, ctx, admin, report.Lease.Intent.CommandID)
+	observed := claimExpectedCheckReport(
+		t, ctx, checkRepository, fetch.Run.ID, runlifecycle.ClaimObserve,
 	)
-	if observed.Mode != runlifecycle.ClaimObserve || observed.Intent.CommandID != report.Intent.CommandID {
+	if observed.Lease.Intent.CommandID != report.Lease.Intent.CommandID {
 		t.Fatalf("reconciliation replaced report intent: %#v", observed)
 	}
 	for expected := uint64(1); expected <= runlifecycle.MaximumReconciliationAttempts; expected++ {
-		attempts, err := queue.DeferReconciliation(ctx, runlifecycle.Reconciliation{
-			Lease: observed, NextAttemptAt: databaseFuture(),
+		attempts, err := checkRepository.Defer(ctx, runlifecycle.Reconciliation{
+			Lease: observed.Lease, NextAttemptAt: databaseFuture(),
 		})
 		if err != nil || attempts != expected {
 			t.Fatalf("defer reconciliation %d returned %d: %v", expected, attempts, err)
 		}
-		makeRunTaskDue(t, ctx, admin, report.Intent.CommandID)
-		observed = claimExpectedRunStage(
-			t, ctx, queue, fetch.Run.ID, devopsv1.PipelineRunReconciling,
-			devopsv1.PipelineRunStageReport,
+		makeRunTaskDue(t, ctx, admin, report.Lease.Intent.CommandID)
+		observed = claimExpectedCheckReport(
+			t, ctx, checkRepository, fetch.Run.ID, runlifecycle.ClaimObserve,
 		)
-		if observed.ReconciliationAttempts != expected {
-			t.Fatalf("reconciliation attempts=%d want=%d", observed.ReconciliationAttempts, expected)
+		if observed.Lease.ReconciliationAttempts != expected {
+			t.Fatalf("reconciliation attempts=%d want=%d", observed.Lease.ReconciliationAttempts, expected)
 		}
 	}
-	if _, err := queue.DeferReconciliation(ctx, runlifecycle.Reconciliation{
-		Lease: observed, NextAttemptAt: databaseFuture(),
+	if _, err := checkRepository.Defer(ctx, runlifecycle.Reconciliation{
+		Lease: observed.Lease, NextAttemptAt: databaseFuture(),
 	}); !errors.Is(err, runlifecycle.ErrReconciliationExhausted) {
 		t.Fatalf("exhausted reconciliation deferral error=%v", err)
 	}
-	manual, err := queue.Advance(ctx, runlifecycle.Transition{
-		Lease:  observed,
-		State:  devopsv1.PipelineRunManualIntervention,
+	manual, err := checkRepository.Complete(ctx, checkreporting.Completion{
+		Command: observed, State: devopsv1.PipelineRunManualIntervention,
 		Reason: devopsv1.PipelineRunReasonReconciliationExhausted,
 	})
 	if err != nil || manual.Status.CompletedAt == nil {
@@ -1819,27 +1902,62 @@ func assertRunLifecyclePersistenceAndFencing(
 			archiveCount, invalidArchiveCount, err,
 		)
 	}
-}
-
-func claimExpectedRunStage(
-	t *testing.T,
-	ctx context.Context,
-	queue *runlifecycle.Queue,
-	expectedRunID devopsv1.ResourceID,
-	expectedState devopsv1.PipelineRunState,
-	expectedStage devopsv1.PipelineRunStage,
-) runlifecycle.Lease {
-	t.Helper()
-	lease, found, err := queue.ClaimNext(ctx, "run-worker-current")
-	if err != nil || !found ||
-		(expectedRunID != "" && lease.Run.ID != expectedRunID) ||
-		lease.Run.Status.State != expectedState || lease.Intent.Stage != expectedStage {
+	var checkReceiptCount, invalidCheckReceiptCount int
+	if err := admin.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM delivery.check_receipts),
+		(SELECT count(*)
+		   FROM delivery.check_receipts AS receipt
+		   JOIN delivery.pipeline_runs AS run
+		     ON run.tenant_id = receipt.tenant_id
+		    AND run.id = receipt.run_id
+		   JOIN delivery.pipeline_run_tasks AS task
+		     ON task.tenant_id = receipt.tenant_id
+		    AND task.run_id = receipt.run_id
+		    AND task.command_id = receipt.command_id
+		  WHERE task.stage <> 'REPORT' OR task.status <> 'COMPLETED'
+		     OR run.state NOT IN ('SUCCEEDED', 'FAILED'))`).Scan(
+		&checkReceiptCount, &invalidCheckReceiptCount,
+	); err != nil || checkReceiptCount != 1 || invalidCheckReceiptCount != 0 {
 		t.Fatalf(
-			"claim %s/%s run=%s returned %#v found=%t err=%v",
-			expectedState, expectedStage, expectedRunID, lease, found, err,
+			"check receipts=%d invalid=%d err=%v",
+			checkReceiptCount, invalidCheckReceiptCount, err,
 		)
 	}
-	return lease
+	reporterReadiness, err := checkRepository.Readiness(ctx)
+	if err != nil || reporterReadiness.State != devopsv1.ReadinessReady {
+		t.Fatalf("check reporter post-journey readiness=%#v err=%v", reporterReadiness, err)
+	}
+}
+
+func claimExpectedCheckReport(
+	t *testing.T,
+	ctx context.Context,
+	repository *devopspostgres.CheckReportingRepository,
+	expectedRunID devopsv1.ResourceID,
+	expectedMode runlifecycle.ClaimMode,
+) checkreporting.Command {
+	t.Helper()
+	command, found, err := repository.Claim(
+		ctx, "check-reporter-current", checkreporting.LeaseDuration,
+	)
+	if err != nil || !found || command.Lease.Run.ID != expectedRunID ||
+		(command.Lease.Run.Status.State != devopsv1.PipelineRunReporting &&
+			command.Lease.Run.Status.State != devopsv1.PipelineRunReconciling) ||
+		command.Lease.Intent.Stage != devopsv1.PipelineRunStageReport ||
+		command.Lease.Mode != expectedMode ||
+		command.Connection.Metadata.ID != command.BindingRevision.Spec.SourceConnectionID ||
+		command.BindingRevision.Metadata.ID != command.Lease.Run.Input.RepositoryBindingID ||
+		command.BindingRevision.ContentDigest != command.Lease.Run.Input.RepositoryBindingDigest ||
+		command.Revision.ID != command.Lease.Run.Input.PipelineRevisionID ||
+		command.Revision.ContentDigest != command.Lease.Run.Input.PipelineRevisionDigest ||
+		command.BuildReceipt.RunID != command.Lease.Run.ID ||
+		command.BuildReceipt.InputDigest != command.Lease.Run.InputDigest {
+		t.Fatalf(
+			"claim REPORT run=%s returned %#v found=%t err=%v",
+			expectedRunID, command, found, err,
+		)
+	}
+	return command
 }
 
 func claimExpectedBuild(
@@ -1948,6 +2066,114 @@ func assertBuildReceiptTamperRejected(
 		command.Lease.Run.ID,
 	).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("rejected build receipts persisted count=%d err=%v", count, err)
+	}
+}
+
+func assertCheckReceiptTamperRejected(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	checkReporterPool *pgxpool.Pool,
+	command checkreporting.Command,
+) {
+	t.Helper()
+	receipt, err := checkreporting.NewReceipt(command, 101)
+	if err != nil {
+		t.Fatalf("build check receipt fixture: %v", err)
+	}
+	validDocument, err := json.Marshal(receipt)
+	if err != nil {
+		t.Fatalf("encode check receipt fixture: %v", err)
+	}
+	tests := []struct {
+		name        string
+		wantMessage string
+		mutate      func(map[string]any)
+	}{
+		{
+			name:        "unknown field",
+			wantMessage: "check receipt shape is invalid",
+			mutate: func(document map[string]any) {
+				document["providerResponse"] = "must-not-cross-boundary"
+			},
+		},
+		{
+			name:        "binding",
+			wantMessage: "check receipt authority is invalid",
+			mutate: func(document map[string]any) {
+				document["repositoryBindingDigest"] = "sha256:" + strings.Repeat("0", 64)
+			},
+		},
+		{
+			name:        "request digest",
+			wantMessage: "check request digest is invalid",
+			mutate: func(document map[string]any) {
+				document["requestDigest"] = "sha256:" + strings.Repeat("0", 64)
+			},
+		},
+		{
+			name:        "content digest",
+			wantMessage: "check receipt digest is invalid",
+			mutate: func(document map[string]any) {
+				document["contentDigest"] = "sha256:" + strings.Repeat("0", 64)
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run("database rejects check receipt "+test.name, func(t *testing.T) {
+			var document map[string]any
+			if err := json.Unmarshal(validDocument, &document); err != nil {
+				t.Fatalf("decode check receipt fixture: %v", err)
+			}
+			test.mutate(document)
+			submitted, err := json.Marshal(document)
+			if err != nil {
+				t.Fatalf("encode changed check receipt: %v", err)
+			}
+			_, err = checkReporterPool.Exec(
+				ctx,
+				`SELECT delivery.complete_check_report_task(
+				    $1, $2, $3, $4, $5, 'SUCCEEDED', 'COMPLETED',
+				    $6::jsonb, NULL::jsonb, NULL::jsonb
+				)`,
+				command.Lease.TenantID,
+				command.Lease.Run.ID,
+				command.Lease.Intent.CommandID,
+				command.Lease.WorkerID,
+				int64(command.Lease.FencingToken),
+				submitted,
+			)
+			var postgresError *pgconn.PgError
+			if !errors.As(err, &postgresError) || postgresError.Code != "22023" ||
+				postgresError.Message != test.wantMessage {
+				t.Fatalf("changed check receipt error=%v", err)
+			}
+		})
+	}
+	_, err = checkReporterPool.Exec(
+		ctx,
+		`SELECT delivery.complete_check_report_task(
+		    $1, $2, $3, $4, $5, 'SUCCEEDED', 'COMPLETED',
+		    NULL::jsonb, NULL::jsonb, NULL::jsonb
+		)`,
+		command.Lease.TenantID,
+		command.Lease.Run.ID,
+		command.Lease.Intent.CommandID,
+		command.Lease.WorkerID,
+		int64(command.Lease.FencingToken),
+	)
+	var postgresError *pgconn.PgError
+	if !errors.As(err, &postgresError) || postgresError.Code != "22023" ||
+		postgresError.Message != "check report completion receipt is invalid" {
+		t.Fatalf("receipt-free successful check completion error=%v", err)
+	}
+	var count int
+	if err := admin.QueryRow(
+		ctx,
+		`SELECT count(*) FROM delivery.check_receipts WHERE run_id = $1`,
+		command.Lease.Run.ID,
+	).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("rejected check receipts persisted count=%d err=%v", count, err)
 	}
 }
 

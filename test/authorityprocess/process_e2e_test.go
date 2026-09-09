@@ -33,14 +33,17 @@ import (
 const (
 	authorityProcessDSN = "MATRIX_AUTHORITY_PROCESS_POSTGRES_TEST_DSN"
 
-	iamAPILogin       = "matrix_authority_process_iam_api"
-	iamWorkerLogin    = "matrix_authority_process_iam_worker"
-	auditRuntimeLogin = "matrix_authority_process_audit_runtime"
-	paasAPILogin      = "matrix_authority_process_paas_api"
-	paasWorkerLogin   = "matrix_authority_process_paas_worker"
-	devopsAPILogin    = "matrix_authority_process_devops_api"
-	devopsWorkerLogin = "matrix_authority_process_devops_worker"
-	processDBPassword = "matrix-authority-process-test-only"
+	iamAPILogin               = "matrix_authority_process_iam_api"
+	iamWorkerLogin            = "matrix_authority_process_iam_worker"
+	auditRuntimeLogin         = "matrix_authority_process_audit_runtime"
+	paasAPILogin              = "matrix_authority_process_paas_api"
+	paasWorkerLogin           = "matrix_authority_process_paas_worker"
+	devopsAPILogin            = "matrix_authority_process_devops_api"
+	devopsCheckReporterLogin  = "matrix_authority_process_devops_check_reporter"
+	devopsSourceFetcherLogin  = "matrix_authority_process_devops_source_fetcher"
+	devopsSourceObserverLogin = "matrix_authority_process_devops_source_observer"
+	devopsWorkerLogin         = "matrix_authority_process_devops_worker"
+	processDBPassword         = "matrix-authority-process-test-only"
 
 	initialAdminPassword     = "Initial-Process-Admin-Password-49!"
 	changedAdminPassword     = "Changed-Process-Admin-Password-73!"
@@ -86,6 +89,17 @@ func TestIndependentIAMAuditPaaSAndDevOpsProcesses(t *testing.T) {
 	seedProcessExecutionProfile(t, ctx, adminConfig)
 
 	temporary := t.TempDir()
+	webhookSecretRoot := filepath.Join(temporary, "devops-webhook-secrets")
+	fetchCredentialRoot := filepath.Join(temporary, "devops-fetch-credentials")
+	reportCredentialRoot := filepath.Join(temporary, "devops-report-credentials")
+	sourceArchiveRoot := filepath.Join(temporary, "devops-source-archives")
+	for _, directory := range []string{
+		webhookSecretRoot, fetchCredentialRoot, reportCredentialRoot, sourceArchiveRoot,
+	} {
+		if err := os.Mkdir(directory, 0o700); err != nil {
+			t.Fatalf("create DevOps process directory: %v", err)
+		}
+	}
 	binaries := buildAuthorityBinaries(t, ctx, root, temporary)
 	bootstrap := processBootstrap(t)
 	bootstrapBytes, err := iamv1.EncodeBootstrapDocument(bootstrap)
@@ -138,6 +152,24 @@ func TestIndependentIAMAuditPaaSAndDevOpsProcesses(t *testing.T) {
 		"devops-dsn",
 		[]byte(runtimeDSN(adminConfig, devopsAPILogin, processDBPassword)),
 	)
+	devopsCheckReporterDSNPath := writeProtectedFile(
+		t,
+		temporary,
+		"devops-check-reporter-dsn",
+		[]byte(runtimeDSN(adminConfig, devopsCheckReporterLogin, processDBPassword)),
+	)
+	devopsSourceFetcherDSNPath := writeProtectedFile(
+		t,
+		temporary,
+		"devops-source-fetcher-dsn",
+		[]byte(runtimeDSN(adminConfig, devopsSourceFetcherLogin, processDBPassword)),
+	)
+	devopsSourceObserverDSNPath := writeProtectedFile(
+		t,
+		temporary,
+		"devops-source-observer-dsn",
+		[]byte(runtimeDSN(adminConfig, devopsSourceObserverLogin, processDBPassword)),
+	)
 	devopsWorkerDSNPath := writeProtectedFile(
 		t,
 		temporary,
@@ -185,6 +217,9 @@ func TestIndependentIAMAuditPaaSAndDevOpsProcesses(t *testing.T) {
 	auditAddress := freeAddress(t)
 	paasAddress := freeAddress(t)
 	devopsAddress := freeAddress(t)
+	devopsCheckReporterAddress := freeAddress(t)
+	devopsSourceFetcherAddress := freeAddress(t)
+	devopsSourceObserverAddress := freeAddress(t)
 	iamDispatcherAddress := freeAddress(t)
 	paasDispatcherAddress := freeAddress(t)
 	devopsDispatcherAddress := freeAddress(t)
@@ -235,7 +270,29 @@ func TestIndependentIAMAuditPaaSAndDevOpsProcesses(t *testing.T) {
 		"MATRIX_DEVOPS_DATABASE_DSN_FILE=" + devopsDSNPath,
 		"MATRIX_DEVOPS_IAM_ENDPOINT=" + iamEndpoint,
 		"MATRIX_DEVOPS_SERVICE_CREDENTIAL_FILE=" + devopsCredentialPath,
+		"MATRIX_DEVOPS_WEBHOOK_SECRET_ROOT=" + webhookSecretRoot,
 		"MATRIX_DEVOPS_LISTEN_ADDRESS=" + devopsAddress,
+	}
+	devopsCheckReporterEnvironment := []string{
+		"MATRIX_DEVOPS_CHECK_REPORTER_DATABASE_DSN_FILE=" + devopsCheckReporterDSNPath,
+		"MATRIX_DEVOPS_CHECK_REPORTER_REPORT_ROOT=" + reportCredentialRoot,
+		"MATRIX_DEVOPS_CHECK_REPORTER_WORKER_ID=devops-check-reporter-process",
+		"MATRIX_DEVOPS_CHECK_REPORTER_LISTEN_ADDRESS=" + devopsCheckReporterAddress,
+	}
+	devopsSourceFetcherEnvironment := []string{
+		"MATRIX_DEVOPS_SOURCE_FETCHER_DATABASE_DSN_FILE=" + devopsSourceFetcherDSNPath,
+		"MATRIX_DEVOPS_SOURCE_FETCHER_FETCH_ROOT=" + fetchCredentialRoot,
+		"MATRIX_DEVOPS_SOURCE_FETCHER_ARCHIVE_ROOT=" + sourceArchiveRoot,
+		"MATRIX_DEVOPS_SOURCE_FETCHER_WORKER_ID=devops-source-fetcher-process",
+		"MATRIX_DEVOPS_SOURCE_FETCHER_LISTEN_ADDRESS=" + devopsSourceFetcherAddress,
+	}
+	devopsSourceObserverEnvironment := []string{
+		"MATRIX_DEVOPS_SOURCE_OBSERVER_DATABASE_DSN_FILE=" + devopsSourceObserverDSNPath,
+		"MATRIX_DEVOPS_SOURCE_OBSERVER_WEBHOOK_ROOT=" + webhookSecretRoot,
+		"MATRIX_DEVOPS_SOURCE_OBSERVER_FETCH_ROOT=" + fetchCredentialRoot,
+		"MATRIX_DEVOPS_SOURCE_OBSERVER_REPORT_ROOT=" + reportCredentialRoot,
+		"MATRIX_DEVOPS_SOURCE_OBSERVER_WORKER_ID=devops-source-observer-process",
+		"MATRIX_DEVOPS_SOURCE_OBSERVER_LISTEN_ADDRESS=" + devopsSourceObserverAddress,
 	}
 	devopsDispatcherEnvironment := []string{
 		"MATRIX_DEVOPS_AUDIT_DATABASE_DSN_FILE=" + devopsWorkerDSNPath,
@@ -309,6 +366,12 @@ func TestIndependentIAMAuditPaaSAndDevOpsProcesses(t *testing.T) {
 		paasDispatcherEnvironment(paasCredentialPath, "paas-audit-worker-a"),
 	)
 	waitHTTPStatus(t, ctx, paasDispatcher, "http://"+paasDispatcherAddress+"/ready", http.StatusOK)
+	devopsSourceFetcher := start(binaries.devopsSourceFetcher, devopsSourceFetcherEnvironment)
+	waitHTTPStatus(t, ctx, devopsSourceFetcher, "http://"+devopsSourceFetcherAddress+"/ready", http.StatusOK)
+	devopsSourceObserver := start(binaries.devopsSourceObserver, devopsSourceObserverEnvironment)
+	waitHTTPStatus(t, ctx, devopsSourceObserver, "http://"+devopsSourceObserverAddress+"/ready", http.StatusOK)
+	devopsCheckReporter := start(binaries.devopsCheckReporter, devopsCheckReporterEnvironment)
+	waitHTTPStatus(t, ctx, devopsCheckReporter, "http://"+devopsCheckReporterAddress+"/ready", http.StatusOK)
 	devopsProcess := start(binaries.devops, devopsEnvironment)
 	waitHTTPStatus(t, ctx, devopsProcess, devopsEndpoint+"/ready", http.StatusOK)
 	devopsDispatcher := start(binaries.devopsDispatcher, devopsDispatcherEnvironment)
@@ -783,13 +846,16 @@ func TestIndependentIAMAuditPaaSAndDevOpsProcesses(t *testing.T) {
 }
 
 type binarySet struct {
-	iam              string
-	audit            string
-	dispatcher       string
-	paas             string
-	paasDispatcher   string
-	devops           string
-	devopsDispatcher string
+	iam                  string
+	audit                string
+	dispatcher           string
+	paas                 string
+	paasDispatcher       string
+	devops               string
+	devopsCheckReporter  string
+	devopsSourceFetcher  string
+	devopsSourceObserver string
+	devopsDispatcher     string
 }
 
 func buildAuthorityBinaries(
@@ -820,6 +886,18 @@ func buildAuthorityBinaries(
 		paas:           build("matrix-paas", "./app/service/paas/cmd/matrix-paas"),
 		paasDispatcher: build("matrix-paas-audit-dispatcher", "./app/service/paas/cmd/matrix-paas-audit-dispatcher"),
 		devops:         build("matrix-devops", "./app/service/devops/cmd/matrix-devops"),
+		devopsCheckReporter: build(
+			"matrix-devops-check-reporter",
+			"./app/service/devops/cmd/matrix-devops-check-reporter",
+		),
+		devopsSourceFetcher: build(
+			"matrix-devops-source-fetcher",
+			"./app/service/devops/cmd/matrix-devops-source-fetcher",
+		),
+		devopsSourceObserver: build(
+			"matrix-devops-source-observer",
+			"./app/service/devops/cmd/matrix-devops-source-observer",
+		),
 		devopsDispatcher: build(
 			"matrix-devops-audit-dispatcher",
 			"./app/service/devops/cmd/matrix-devops-audit-dispatcher",
@@ -2065,6 +2143,9 @@ func createProcessLogins(t *testing.T, ctx context.Context, admin *pgx.Conn) {
 		{paasAPILogin, "matrix_paas_api"},
 		{paasWorkerLogin, "matrix_paas_worker"},
 		{devopsAPILogin, "matrix_devops_api"},
+		{devopsCheckReporterLogin, "matrix_devops_check_reporter"},
+		{devopsSourceFetcherLogin, "matrix_devops_source_fetcher"},
+		{devopsSourceObserverLogin, "matrix_devops_source_observer"},
 		{devopsWorkerLogin, "matrix_devops_worker"},
 	} {
 		statement := fmt.Sprintf(`DO $matrix_process_role$
@@ -2253,6 +2334,9 @@ func assertCrossSchemaIsolation(
 		{auditRuntimeLogin, "SELECT * FROM paas.readiness()"},
 		{devopsAPILogin, "SELECT * FROM iam.bootstrap_status()"},
 		{devopsAPILogin, "SELECT * FROM audit.readiness()"},
+		{devopsCheckReporterLogin, "SELECT * FROM paas.readiness()"},
+		{devopsSourceFetcherLogin, "SELECT * FROM paas.readiness()"},
+		{devopsSourceObserverLogin, "SELECT * FROM paas.readiness()"},
 		{devopsWorkerLogin, "SELECT * FROM paas.readiness()"},
 		{paasAPILogin, "SELECT * FROM delivery.readiness()"},
 		{iamAPILogin, "SELECT * FROM delivery.readiness()"},

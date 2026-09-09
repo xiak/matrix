@@ -164,8 +164,7 @@ func ValidateReceipt(request Request, value Receipt) error {
 	var problems []error
 	problems = append(problems,
 		ValidateRequest(request),
-		devopsv1.ValidateID("buildReceipt.executorId", value.ExecutorID),
-		devopsv1.ValidateDigest("buildReceipt.contentDigest", value.ContentDigest),
+		ValidateReceiptShape(value),
 	)
 	if value.TenantID != request.TenantID || value.RunID != request.RunID ||
 		value.CommandID != request.CommandID || value.InputDigest != request.InputDigest ||
@@ -182,8 +181,51 @@ func ValidateReceipt(request Request, value Receipt) error {
 			break
 		}
 	}
-	if !validConclusions(value.Conclusion, value.Steps) {
-		problems = append(problems, errors.New("build receipt conclusion is invalid"))
+	if err := errors.Join(problems...); err != nil {
+		return errors.Join(ErrInvalidReceipt, err)
+	}
+	return nil
+}
+
+// ValidateReceiptShape verifies the self-contained evidence in a receipt
+// without requiring the original request. Later delivery stages use this to
+// reject a malformed or tampered receipt before binding it to their own
+// immutable PipelineRun command.
+func ValidateReceiptShape(value Receipt) error {
+	var problems []error
+	problems = append(problems,
+		devopsv1.ValidateID("buildReceipt.tenantId", string(value.TenantID)),
+		devopsv1.ValidatePipelineRunID("buildReceipt.runId", value.RunID),
+		devopsv1.ValidateID("buildReceipt.commandId", value.CommandID),
+		devopsv1.ValidateDigest("buildReceipt.inputDigest", value.InputDigest),
+		devopsv1.ValidateDigest("buildReceipt.sourceArchiveDigest", value.SourceArchiveDigest),
+		devopsv1.ValidateID("buildReceipt.pipelineRevisionId", string(value.PipelineRevisionID)),
+		devopsv1.ValidateDigest("buildReceipt.pipelineRevisionDigest", value.PipelineRevisionDigest),
+		devopsv1.ValidateID("buildReceipt.executorId", value.ExecutorID),
+		devopsv1.ValidateDigest("buildReceipt.toolchainImageDigest", value.ToolchainImageDigest),
+		devopsv1.ValidateDigest("buildReceipt.contentDigest", value.ContentDigest),
+	)
+	attemptText := strings.TrimPrefix(value.CommandID, string(value.RunID)+":verify:")
+	attempt, attemptErr := strconv.ParseUint(attemptText, 10, 64)
+	if attemptErr != nil || attempt < 1 || attempt > 100 ||
+		strconv.FormatUint(attempt, 10) != attemptText ||
+		value.CommandID != string(value.RunID)+":verify:"+attemptText {
+		problems = append(problems, errors.New("build receipt command identity is invalid"))
+	}
+	if !validLowerHexID(string(value.PipelineRevisionID), "pipeline-revision-", 48) {
+		problems = append(problems, errors.New("build receipt PipelineRevision identity is invalid"))
+	}
+	steps := fixedSteps()
+	for index, step := range value.Steps {
+		if step.Ordinal != steps[index].Ordinal || step.Kind != steps[index].Kind {
+			problems = append(problems, errors.New("build receipt step identity is invalid"))
+			break
+		}
+	}
+	if value.ExecutorProfile != devopsv1.ExecutorMatrixNativeIsolatedV1 ||
+		value.ToolchainImageDigest != devopsv1.Go126OfflineToolchainImageDigest ||
+		!validConclusions(value.Conclusion, value.Steps) {
+		problems = append(problems, errors.New("build receipt execution evidence is invalid"))
 	}
 	if value.ContentDigest != DigestReceipt(value) {
 		problems = append(problems, errors.New("build receipt digest is invalid"))

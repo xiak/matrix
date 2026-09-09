@@ -21,11 +21,12 @@ func Verify(ctx context.Context, executor postgresmigration.Executor) error {
 }
 
 func Apply(
-	ctx context.Context,
-	adminDSN, apiDSN, sourceFetcherDSN, sourceObserverDSN, workerDSN string,
+	ctx context.Context, adminDSN, apiDSN, checkReporterDSN, sourceFetcherDSN,
+	sourceObserverDSN, workerDSN string,
 ) error {
 	return postgresmigration.Apply(ctx, adminDSN, devopsmigrations.Source(), []postgresmigration.Login{
 		{Name: "matrix_devops_api_login", Group: "matrix_devops_api", DSN: apiDSN},
+		{Name: "matrix_devops_check_reporter_login", Group: "matrix_devops_check_reporter", DSN: checkReporterDSN},
 		{Name: "matrix_devops_source_fetcher_login", Group: "matrix_devops_source_fetcher", DSN: sourceFetcherDSN},
 		{Name: "matrix_devops_source_observer_login", Group: "matrix_devops_source_observer", DSN: sourceObserverDSN},
 		{Name: "matrix_devops_worker_login", Group: "matrix_devops_worker", DSN: workerDSN},
@@ -33,11 +34,12 @@ func Apply(
 }
 
 func VerifyInstalled(
-	ctx context.Context,
-	adminDSN, apiDSN, sourceFetcherDSN, sourceObserverDSN, workerDSN string,
+	ctx context.Context, adminDSN, apiDSN, checkReporterDSN, sourceFetcherDSN,
+	sourceObserverDSN, workerDSN string,
 ) error {
 	return postgresmigration.VerifyInstalled(ctx, adminDSN, devopsmigrations.Source(), []postgresmigration.Login{
 		{Name: "matrix_devops_api_login", Group: "matrix_devops_api", DSN: apiDSN},
+		{Name: "matrix_devops_check_reporter_login", Group: "matrix_devops_check_reporter", DSN: checkReporterDSN},
 		{Name: "matrix_devops_source_fetcher_login", Group: "matrix_devops_source_fetcher", DSN: sourceFetcherDSN},
 		{Name: "matrix_devops_source_observer_login", Group: "matrix_devops_source_observer", DSN: sourceObserverDSN},
 		{Name: "matrix_devops_worker_login", Group: "matrix_devops_worker", DSN: workerDSN},

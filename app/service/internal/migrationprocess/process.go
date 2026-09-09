@@ -14,7 +14,7 @@ import (
 
 const (
 	maximumMigrationDSN      = 16 * 1024
-	maximumMigrationDSNFiles = 5
+	maximumMigrationDSNFiles = 6
 )
 
 var environmentPattern = regexp.MustCompile(`^MATRIX_MIGRATION_[A-Z0-9_]+_DSN_FILE$`)

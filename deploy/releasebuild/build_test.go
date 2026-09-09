@@ -177,6 +177,15 @@ func TestAssembleProducesAuthenticatedCompleteRelease(t *testing.T) {
 			strings.Contains(dockerfile, "https://") || !strings.Contains(dockerfile, "COPY --chmod=0555") {
 			t.Fatalf("image %s escaped the fixed offline recipe", component)
 		}
+		rootCopy := "COPY --from=matrix-system-roots /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt\n"
+		if component == "devops" {
+			if !strings.HasPrefix(dockerfile, "FROM "+DockerBaseReference+" AS matrix-system-roots\nFROM scratch\n") ||
+				strings.Count(dockerfile, rootCopy) != 1 {
+				t.Fatal("DevOps image does not carry the fixed system root bundle")
+			}
+		} else if strings.Contains(dockerfile, "matrix-system-roots") || strings.Contains(dockerfile, rootCopy) {
+			t.Fatalf("image %s received an unowned system root bundle", component)
+		}
 	}
 	for _, image := range verified.Manifest.Images {
 		loadIdentity, found := effects.saved[image.SourceDigest]

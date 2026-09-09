@@ -16,7 +16,7 @@ import (
 )
 
 func TestInstalledCompilerReproducesAcceptedProductlessTopology(t *testing.T) {
-	if actual := ContractDigest(); actual != "sha256:e725e8cb4d55d45ff2df9f909edce124a2c0b3551dbd13cf2287f0cc82b05aa5" {
+	if actual := ContractDigest(); actual != "sha256:c619f193291737a176efccfd67f0619ef8aef93fef872f1e815d9bde70b43f35" {
 		t.Fatalf("current topology contract digest drifted: %s", actual)
 	}
 	if actual := legacyProductlessImplementationDigest(); actual != legacyProductlessContractDigest {
@@ -128,12 +128,14 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	foundDevOpsSourceFetcherBoundary := false
 	foundDevOpsSourceObserverBoundary := false
 	foundDevOpsBuildWorkerBoundary := false
+	foundDevOpsCheckReporterBoundary := false
 	foundDevOpsExecutorGatewayBoundary := false
 	expectedEntrypoints := map[string]string{
 		"audit":                   "/matrix/bin/matrix-audit",
 		"devops-api":              "/matrix/bin/matrix-devops",
 		"devops-audit-dispatcher": "/matrix/bin/matrix-devops-audit-dispatcher",
 		"devops-build-worker":     "/matrix/bin/matrix-devops-build-worker",
+		"devops-check-reporter":   "/matrix/bin/matrix-devops-check-reporter",
 		"devops-executor-gateway": "/matrix/bin/matrix-devops-executor-gateway",
 		"devops-source-fetcher":   "/matrix/bin/matrix-devops-source-fetcher",
 		"devops-source-observer":  "/matrix/bin/matrix-devops-source-observer",
@@ -176,6 +178,12 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			"MATRIX_DEVOPS_BUILD_WORKER_LISTEN_ADDRESS",
 			"MATRIX_DEVOPS_BUILD_WORKER_SERVER_CA_FILE",
 			"MATRIX_DEVOPS_BUILD_WORKER_SOURCE_ARCHIVE_ROOT",
+		},
+		"devops-check-reporter": {
+			"MATRIX_DEVOPS_CHECK_REPORTER_DATABASE_DSN_FILE",
+			"MATRIX_DEVOPS_CHECK_REPORTER_LISTEN_ADDRESS",
+			"MATRIX_DEVOPS_CHECK_REPORTER_REPORT_ROOT",
+			"MATRIX_DEVOPS_CHECK_REPORTER_WORKER_ID",
 		},
 		"devops-executor-gateway": {
 			"MATRIX_DEVOPS_EXECUTOR_GATEWAY_ADMIN_CLIENT_CA_FILE",
@@ -241,6 +249,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	expectedImageComponents := map[string]string{
 		"apisix": "apisix", "audit": "audit", "devops-api": "devops",
 		"devops-audit-dispatcher": "devops", "devops-build-worker": "devops",
+		"devops-check-reporter":   "devops",
 		"devops-executor-gateway": "devops", "devops-source-fetcher": "devops",
 		"devops-source-observer": "devops",
 		"iam":                    "iam",
@@ -299,7 +308,8 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			if !slices.Equal(actualServiceNetworks, []string{"control", "edge"}) {
 				t.Fatalf("DevOps executor gateway network boundary=%v", actualServiceNetworks)
 			}
-		} else if name == "devops-source-fetcher" || name == "devops-source-observer" {
+		} else if name == "devops-source-fetcher" || name == "devops-source-observer" ||
+			name == "devops-check-reporter" {
 			if !slices.Equal(actualServiceNetworks, []string{"control", "source"}) {
 				t.Fatalf("DevOps source service %q network boundary=%v", name, actualServiceNetworks)
 			}
@@ -619,6 +629,27 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 				}
 				foundDevOpsBuildWorkerBoundary = true
 			}
+			if name == "devops-check-reporter" {
+				expected := map[string]string{
+					"/run/matrix/devops-check-reporter-dsn": options.Root + "/secrets/database/devops-check-reporter-dsn",
+					"/run/matrix/devops-source-report":      options.Root + "/secrets/devops/source-report",
+				}
+				if len(volumes) != len(expected) {
+					t.Fatalf("DevOps check reporter mount count=%d", len(volumes))
+				}
+				for _, rawMount := range volumes {
+					mount := rawMount.(map[string]any)
+					target := mount["target"].(string)
+					if expected[target] != mount["source"] || mount["read_only"] != true {
+						t.Fatalf("DevOps check reporter mount=%#v", mount)
+					}
+				}
+				dependencies := service["depends_on"].(map[string]any)
+				if len(dependencies) != 1 || dependencies["postgres"] == nil {
+					t.Fatalf("DevOps check reporter dependencies=%#v", dependencies)
+				}
+				foundDevOpsCheckReporterBoundary = true
+			}
 			if name == "devops-executor-gateway" {
 				expected := map[string]struct {
 					source   string
@@ -662,13 +693,15 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	if portCount != 2 || !foundExecutorRoot || !foundDockerSocket || !foundPostgresData ||
 		!foundAPISIXRuntimeBoundary || !foundDevOpsSourceSecrets ||
 		!foundDevOpsSourceFetcherBoundary || !foundDevOpsSourceObserverBoundary ||
-		!foundDevOpsBuildWorkerBoundary || !foundDevOpsExecutorGatewayBoundary {
+		!foundDevOpsBuildWorkerBoundary || !foundDevOpsCheckReporterBoundary ||
+		!foundDevOpsExecutorGatewayBoundary {
 		t.Fatalf(
-			"platform capability closure: ports=%d executor=%t socket=%t postgres-data=%t apisix=%t devops-source-secrets=%t source-fetcher=%t source-observer=%t build-worker=%t executor-gateway=%t",
+			"platform capability closure: ports=%d executor=%t socket=%t postgres-data=%t apisix=%t devops-source-secrets=%t source-fetcher=%t source-observer=%t build-worker=%t check-reporter=%t executor-gateway=%t",
 			portCount, foundExecutorRoot, foundDockerSocket, foundPostgresData,
 			foundAPISIXRuntimeBoundary, foundDevOpsSourceSecrets,
 			foundDevOpsSourceFetcherBoundary, foundDevOpsSourceObserverBoundary,
-			foundDevOpsBuildWorkerBoundary, foundDevOpsExecutorGatewayBoundary,
+			foundDevOpsBuildWorkerBoundary, foundDevOpsCheckReporterBoundary,
+			foundDevOpsExecutorGatewayBoundary,
 		)
 	}
 	encoded := string(result.ComposeJSON)
@@ -707,6 +740,9 @@ func TestCompileOmitsUnselectedDevOpsProduct(t *testing.T) {
 	}
 	if _, found := document.Services["devops-build-worker"]; found {
 		t.Fatal("PaaS-only topology contains DevOps build worker")
+	}
+	if _, found := document.Services["devops-check-reporter"]; found {
+		t.Fatal("PaaS-only topology contains DevOps check reporter")
 	}
 	if _, found := document.Services["devops-executor-gateway"]; found {
 		t.Fatal("PaaS-only topology contains DevOps executor gateway")

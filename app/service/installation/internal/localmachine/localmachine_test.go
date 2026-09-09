@@ -58,7 +58,8 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 	}
 	for _, optional := range []string{
 		layout.DevOpsIAMCredential, layout.DevOpsAuditCredential,
-		layout.DevOpsAPI, layout.DevOpsWorker, layout.DevOpsSourceFetcher,
+		layout.DevOpsAPI, layout.DevOpsCheckReporter, layout.DevOpsWorker,
+		layout.DevOpsSourceFetcher,
 		layout.DevOpsSourceObserver,
 		layout.DevOpsWebhookCredentialRoot,
 		layout.DevOpsFetchCredentialRoot, layout.DevOpsReportCredentialRoot,
@@ -281,14 +282,19 @@ func TestStageDevOpsProductCredentialsAreSelectedAndStable(t *testing.T) {
 		t.Fatal("DevOps service credentials are absent or inconsistent")
 	}
 	apiDSN := readTestFile(t, plan.Root, layout.DevOpsAPI)
+	checkReporterDSN := readTestFile(t, plan.Root, layout.DevOpsCheckReporter)
 	workerDSN := readTestFile(t, plan.Root, layout.DevOpsWorker)
 	sourceFetcherDSN := readTestFile(t, plan.Root, layout.DevOpsSourceFetcher)
 	sourceObserverDSN := readTestFile(t, plan.Root, layout.DevOpsSourceObserver)
 	defer clear(apiDSN)
+	defer clear(checkReporterDSN)
 	defer clear(workerDSN)
 	defer clear(sourceFetcherDSN)
 	defer clear(sourceObserverDSN)
 	if validateDatabaseDSN(string(apiDSN), "matrix_devops_api_login") != nil ||
+		validateDatabaseDSN(
+			string(checkReporterDSN), "matrix_devops_check_reporter_login",
+		) != nil ||
 		validateDatabaseDSN(string(workerDSN), "matrix_devops_worker_login") != nil ||
 		validateDatabaseDSN(
 			string(sourceFetcherDSN), "matrix_devops_source_fetcher_login",
@@ -365,6 +371,7 @@ func TestStageDevOpsProductCredentialsAreSelectedAndStable(t *testing.T) {
 		layout.DevOpsIAMCredential:   string(iamCredential),
 		layout.DevOpsAuditCredential: string(auditCredential),
 		layout.DevOpsAPI:             string(apiDSN),
+		layout.DevOpsCheckReporter:   string(checkReporterDSN),
 		layout.DevOpsWorker:          string(workerDSN),
 		layout.DevOpsSourceFetcher:   string(sourceFetcherDSN),
 		layout.DevOpsSourceObserver:  string(sourceObserverDSN),
@@ -876,10 +883,11 @@ func TestProductlessMigrationProfileDoesNotRequireFuturePlatformCredential(t *te
 		devops[0].mounts[4].relative != layout.DevOpsIAMCredential ||
 		devops[3].component != "devops" ||
 		devops[3].entrypoint != "/matrix/bin/matrix-devops-migrate" ||
-		len(devops[3].mounts) != 5 ||
-		devops[3].mounts[2].relative != layout.DevOpsSourceFetcher ||
-		devops[3].mounts[3].relative != layout.DevOpsSourceObserver ||
-		devops[3].mounts[4].relative != layout.DevOpsWorker {
+		len(devops[3].mounts) != 6 ||
+		devops[3].mounts[2].relative != layout.DevOpsCheckReporter ||
+		devops[3].mounts[3].relative != layout.DevOpsSourceFetcher ||
+		devops[3].mounts[4].relative != layout.DevOpsSourceObserver ||
+		devops[3].mounts[5].relative != layout.DevOpsWorker {
 		t.Fatalf("DevOps migration profile is incomplete: %#v", devops)
 	}
 }

@@ -545,6 +545,14 @@ func assertAllowedDependency(
 		)
 	}
 
+	if checkReporterSource(source) && checkReporterAuthority(imported) {
+		t.Errorf(
+			"%s: check reporter boundary cannot import unrelated authority-bearing package %q",
+			source,
+			imported,
+		)
+	}
+
 	if runnerSource(source) && runnerAuthority(imported) {
 		t.Errorf(
 			"%s: runner boundary cannot import unrelated authority-bearing package %q",
@@ -576,6 +584,38 @@ func buildWorkerAuthority(imported string) bool {
 		modulePath + "app/service/devops/internal/delivery/data/iamhttp",
 		modulePath + "app/service/devops/internal/delivery/data/runnerjournalfile",
 		modulePath + "app/service/devops/internal/delivery/data/sourcecredentialfile",
+	} {
+		if strings.HasPrefix(imported, forbidden) {
+			return true
+		}
+	}
+	return false
+}
+
+func checkReporterSource(source string) bool {
+	return !strings.HasSuffix(source, "_test.go") && strings.HasPrefix(
+		source,
+		"app/service/devops/cmd/matrix-devops-check-reporter/",
+	)
+}
+
+func checkReporterAuthority(imported string) bool {
+	if imported == "os/exec" || strings.HasPrefix(imported, "github.com/docker/") ||
+		strings.HasPrefix(imported, "k8s.io/") {
+		return true
+	}
+	for _, forbidden := range []string{
+		modulePath + "app/service/paas/",
+		modulePath + "app/service/iam/",
+		modulePath + "app/service/audit/",
+		modulePath + "app/service/devops/internal/delivery/data/audithttp",
+		modulePath + "app/service/devops/internal/delivery/data/executorgatewayhttp",
+		modulePath + "app/service/devops/internal/delivery/data/executorspoolfile",
+		modulePath + "app/service/devops/internal/delivery/data/iamhttp",
+		modulePath + "app/service/devops/internal/delivery/data/runnerjournalfile",
+		modulePath + "app/service/devops/internal/delivery/data/runnersandboxdocker",
+		modulePath + "app/service/devops/internal/delivery/data/runnerworkspacefile",
+		modulePath + "app/service/devops/internal/delivery/data/sourcearchivefile",
 	} {
 		if strings.HasPrefix(imported, forbidden) {
 			return true

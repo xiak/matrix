@@ -3,7 +3,8 @@ SET LOCAL ROLE matrix_devops_owner;
 
 REVOKE ALL ON SCHEMA delivery FROM PUBLIC;
 GRANT USAGE ON SCHEMA delivery
-    TO matrix_devops_api, matrix_devops_source_fetcher,
+    TO matrix_devops_api, matrix_devops_check_reporter,
+       matrix_devops_source_fetcher,
        matrix_devops_worker, matrix_devops_source_observer;
 
 CREATE OR REPLACE FUNCTION delivery.current_tenant_id()
@@ -880,6 +881,9 @@ CREATE TABLE IF NOT EXISTS delivery.build_receipts (
     document jsonb NOT NULL,
     PRIMARY KEY (tenant_id, run_id),
     CONSTRAINT build_receipts_command_uq UNIQUE (tenant_id, command_id),
+    CONSTRAINT build_receipts_identity_uq UNIQUE (
+        tenant_id, run_id, content_digest
+    ),
     CONSTRAINT build_receipts_run_fk FOREIGN KEY (
         tenant_id, run_id, input_digest
     ) REFERENCES delivery.pipeline_runs (tenant_id, id, input_digest)
@@ -915,6 +919,85 @@ CREATE TABLE IF NOT EXISTS delivery.build_receipts (
         AND document->>'executorProfile' = executor_profile
         AND document->>'toolchainImageDigest' = toolchain_image_digest
         AND document->>'conclusion' = conclusion
+        AND document->>'contentDigest' = content_digest
+    )
+);
+
+CREATE TABLE IF NOT EXISTS delivery.check_receipts (
+    tenant_id text COLLATE "C" NOT NULL,
+    run_id text COLLATE "C" NOT NULL,
+    command_id text COLLATE "C" NOT NULL,
+    input_digest text COLLATE "C" NOT NULL,
+    adapter_id text COLLATE "C" NOT NULL,
+    source_connection_id text COLLATE "C" NOT NULL,
+    repository_binding_id text COLLATE "C" NOT NULL,
+    repository_binding_digest text COLLATE "C" NOT NULL,
+    head_commit text COLLATE "C" NOT NULL,
+    pipeline_revision_id text COLLATE "C" NOT NULL,
+    pipeline_revision_digest text COLLATE "C" NOT NULL,
+    build_receipt_digest text COLLATE "C" NOT NULL,
+    provider_status_id bigint NOT NULL,
+    request_digest text COLLATE "C" NOT NULL,
+    content_digest text COLLATE "C" NOT NULL,
+    created_at timestamptz(6) NOT NULL,
+    document jsonb NOT NULL,
+    PRIMARY KEY (tenant_id, run_id),
+    CONSTRAINT check_receipts_command_uq UNIQUE (tenant_id, command_id),
+    CONSTRAINT check_receipts_run_fk FOREIGN KEY (
+        tenant_id, run_id, input_digest
+    ) REFERENCES delivery.pipeline_runs (tenant_id, id, input_digest)
+        ON DELETE CASCADE,
+    CONSTRAINT check_receipts_connection_fk FOREIGN KEY (
+        tenant_id, source_connection_id
+    ) REFERENCES delivery.source_connections (tenant_id, id),
+    CONSTRAINT check_receipts_binding_revision_fk FOREIGN KEY (
+        tenant_id, repository_binding_id, repository_binding_digest
+    ) REFERENCES delivery.repository_binding_revisions (
+        tenant_id, binding_id, content_digest
+    ),
+    CONSTRAINT check_receipts_pipeline_revision_fk FOREIGN KEY (
+        tenant_id, pipeline_revision_id, pipeline_revision_digest
+    ) REFERENCES delivery.pipeline_revisions (tenant_id, id, content_digest),
+    CONSTRAINT check_receipts_build_receipt_fk FOREIGN KEY (
+        tenant_id, run_id, build_receipt_digest
+    ) REFERENCES delivery.build_receipts (tenant_id, run_id, content_digest),
+    CONSTRAINT check_receipts_values_valid CHECK (
+        tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND run_id COLLATE "C" ~ '^pipeline-run-[0-9a-f]{48}$'
+        AND command_id = run_id || ':report:' || split_part(command_id, ':', 3)
+        AND command_id COLLATE "C"
+            ~ '^pipeline-run-[0-9a-f]{48}:report:([1-9]|[1-9][0-9]|100)$'
+        AND input_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND adapter_id = 'source-adapter-gitea-v1'
+        AND source_connection_id COLLATE "C"
+            ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND repository_binding_id COLLATE "C"
+            ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND repository_binding_digest COLLATE "C"
+            ~ '^sha256:[0-9a-f]{64}$'
+        AND head_commit COLLATE "C" ~ '^[0-9a-f]{40}$'
+        AND pipeline_revision_id COLLATE "C"
+            ~ '^pipeline-revision-[0-9a-f]{48}$'
+        AND pipeline_revision_digest COLLATE "C"
+            ~ '^sha256:[0-9a-f]{64}$'
+        AND build_receipt_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND provider_status_id BETWEEN 1 AND 9007199254740991
+        AND request_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND content_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND document->>'tenantId' = tenant_id
+        AND document->>'runId' = run_id
+        AND document->>'commandId' = command_id
+        AND document->>'inputDigest' = input_digest
+        AND document->>'adapterId' = adapter_id
+        AND document->>'sourceConnectionId' = source_connection_id
+        AND document->>'repositoryBindingId' = repository_binding_id
+        AND document->>'repositoryBindingDigest' = repository_binding_digest
+        AND document->>'headCommit' = head_commit
+        AND document->>'pipelineRevisionId' = pipeline_revision_id
+        AND document->>'pipelineRevisionDigest' = pipeline_revision_digest
+        AND document->>'buildReceiptDigest' = build_receipt_digest
+        AND document->>'providerStatusId' = provider_status_id::text
+        AND document->>'requestDigest' = request_digest
         AND document->>'contentDigest' = content_digest
     )
 );
@@ -1389,6 +1472,16 @@ CREATE TABLE IF NOT EXISTS delivery.build_worker_heartbeat (
     )
 );
 
+CREATE TABLE IF NOT EXISTS delivery.check_reporter_heartbeat (
+    singleton boolean PRIMARY KEY DEFAULT true,
+    worker_id text COLLATE "C" NOT NULL,
+    observed_at timestamptz(6) NOT NULL,
+    CONSTRAINT check_reporter_heartbeat_singleton CHECK (singleton),
+    CONSTRAINT check_reporter_heartbeat_worker_valid CHECK (
+        worker_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    )
+);
+
 INSERT INTO delivery.source_observation_tasks (
     tenant_id, resource_kind, resource_id, resource_version, available_at,
     fencing_token, created_at, updated_at
@@ -1443,6 +1536,8 @@ ALTER TABLE delivery.source_archives ENABLE ROW LEVEL SECURITY;
 ALTER TABLE delivery.source_archives FORCE ROW LEVEL SECURITY;
 ALTER TABLE delivery.build_receipts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE delivery.build_receipts FORCE ROW LEVEL SECURITY;
+ALTER TABLE delivery.check_receipts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE delivery.check_receipts FORCE ROW LEVEL SECURITY;
 ALTER TABLE delivery.pipeline_run_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE delivery.pipeline_run_logs FORCE ROW LEVEL SECURITY;
 ALTER TABLE delivery.mutations ENABLE ROW LEVEL SECURITY;
@@ -1459,6 +1554,8 @@ ALTER TABLE delivery.source_fetcher_heartbeat ENABLE ROW LEVEL SECURITY;
 ALTER TABLE delivery.source_fetcher_heartbeat FORCE ROW LEVEL SECURITY;
 ALTER TABLE delivery.build_worker_heartbeat ENABLE ROW LEVEL SECURITY;
 ALTER TABLE delivery.build_worker_heartbeat FORCE ROW LEVEL SECURITY;
+ALTER TABLE delivery.check_reporter_heartbeat ENABLE ROW LEVEL SECURITY;
+ALTER TABLE delivery.check_reporter_heartbeat FORCE ROW LEVEL SECURITY;
 
 DO $matrix_delivery_policy$
 DECLARE
@@ -1468,7 +1565,8 @@ BEGIN
         'projects', 'source_connections', 'repository_bindings',
         'repository_binding_revisions', 'pipelines', 'pipeline_revisions',
         'source_events', 'pipeline_runs', 'pipeline_run_tasks',
-        'source_archives', 'build_receipts', 'pipeline_run_logs',
+        'source_archives', 'build_receipts', 'check_receipts',
+        'pipeline_run_logs',
         'mutations', 'audit_operations',
         'audit_outbox', 'source_observation_tasks'
     ]
@@ -1589,6 +1687,32 @@ BEGIN
     END LOOP;
 END
 $matrix_build_worker_owner_policy$;
+
+DO $matrix_check_reporter_owner_policy$
+DECLARE
+    table_name text;
+BEGIN
+    FOREACH table_name IN ARRAY ARRAY[
+        'source_connections', 'repository_binding_revisions',
+        'pipeline_revisions', 'pipeline_runs', 'pipeline_run_tasks',
+        'build_receipts', 'check_receipts', 'check_reporter_heartbeat',
+        'audit_operations', 'audit_outbox'
+    ]
+    LOOP
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_catalog.pg_policies
+             WHERE schemaname = 'delivery' AND tablename = table_name
+               AND policyname = 'owner_check_reporter'
+        ) THEN
+            EXECUTE format(
+                'CREATE POLICY owner_check_reporter ON delivery.%I '
+                'TO matrix_devops_owner USING (true) WITH CHECK (true)',
+                table_name
+            );
+        END IF;
+    END LOOP;
+END
+$matrix_check_reporter_owner_policy$;
 
 DO $matrix_source_observer_owner_policy$
 DECLARE
@@ -3665,15 +3789,6 @@ BEGIN
                 to_jsonb(effective_time_text),
                 false
             );
-            UPDATE delivery.pipeline_runs AS claimed_run
-               SET state = 'FETCHING',
-                   stage = 'FETCH',
-                   reason = NULL,
-                   resource_version = selected_resource_version + 1,
-                   updated_at = effective_now,
-                   document = effective_run_document
-             WHERE claimed_run.tenant_id = selected_tenant_id
-               AND claimed_run.id = selected_run_id;
         END IF;
 
         INSERT INTO delivery.pipeline_run_tasks (
@@ -3688,7 +3803,29 @@ BEGIN
             effective_lease_expires_at, effective_fencing_token,
             selected_reconciliation_attempts, effective_now,
             effective_now, effective_now
-        );
+        ) ON CONFLICT DO NOTHING;
+        IF NOT FOUND THEN
+            RETURN;
+        END IF;
+
+        IF selected_state = 'QUEUED' THEN
+            UPDATE delivery.pipeline_runs AS claimed_run
+               SET state = 'FETCHING',
+                   stage = 'FETCH',
+                   reason = NULL,
+                   resource_version = selected_resource_version + 1,
+                   updated_at = effective_now,
+                   document = effective_run_document
+             WHERE claimed_run.tenant_id = selected_tenant_id
+               AND claimed_run.id = selected_run_id
+               AND claimed_run.state = 'QUEUED'
+               AND claimed_run.resource_version = selected_resource_version;
+            IF NOT FOUND THEN
+                RAISE EXCEPTION USING
+                    ERRCODE = '55000',
+                    MESSAGE = 'PipelineRun changed during task claim';
+            END IF;
+        END IF;
     ELSE
         effective_stage := selected_task_stage;
         effective_attempt := selected_task_attempt;
@@ -3726,53 +3863,10 @@ $function$;
 REVOKE ALL ON FUNCTION delivery.claim_pipeline_run_task_internal(
     text, integer, text[]
 ) FROM PUBLIC, matrix_devops_api, matrix_devops_source_fetcher,
-       matrix_devops_source_observer, matrix_devops_worker;
+       matrix_devops_source_observer, matrix_devops_worker,
+       matrix_devops_check_reporter;
 
-CREATE OR REPLACE FUNCTION delivery.claim_pipeline_run_task(
-    requested_worker_id text,
-    requested_lease_seconds integer
-)
-RETURNS TABLE (
-    tenant_id text,
-    run_id text,
-    command_id text,
-    input_digest text,
-    stage text,
-    attempt bigint,
-    claim_mode text,
-    fencing_token bigint,
-    lease_expires_at timestamptz,
-    reconciliation_attempts bigint,
-    run_document jsonb
-)
-LANGUAGE sql
-VOLATILE
-SECURITY DEFINER
-SET search_path = pg_catalog, pg_temp
-AS $function$
-    SELECT claimed.tenant_id,
-           claimed.run_id,
-           claimed.command_id,
-           claimed.input_digest,
-           claimed.stage,
-           claimed.attempt,
-           claimed.claim_mode,
-           claimed.fencing_token,
-           claimed.lease_expires_at,
-           claimed.reconciliation_attempts,
-           claimed.run_document
-      FROM delivery.claim_pipeline_run_task_internal(
-        requested_worker_id,
-        requested_lease_seconds,
-        ARRAY['REPORT']::text[]
-      ) AS claimed
-$function$;
-
-REVOKE ALL ON FUNCTION delivery.claim_pipeline_run_task(text, integer)
-    FROM PUBLIC, matrix_devops_api, matrix_devops_source_fetcher,
-         matrix_devops_source_observer;
-GRANT EXECUTE ON FUNCTION delivery.claim_pipeline_run_task(text, integer)
-    TO matrix_devops_worker;
+DROP FUNCTION IF EXISTS delivery.claim_pipeline_run_task(text, integer);
 
 CREATE OR REPLACE FUNCTION delivery.claim_source_fetch_task(
     requested_worker_id text,
@@ -3964,6 +4058,122 @@ REVOKE ALL ON FUNCTION delivery.claim_build_task(text, integer)
 GRANT EXECUTE ON FUNCTION delivery.claim_build_task(text, integer)
     TO matrix_devops_worker;
 
+CREATE OR REPLACE FUNCTION delivery.claim_check_report_task(
+    requested_worker_id text,
+    requested_lease_seconds integer
+)
+RETURNS TABLE (
+    tenant_id text,
+    run_id text,
+    command_id text,
+    input_digest text,
+    stage text,
+    attempt bigint,
+    claim_mode text,
+    fencing_token bigint,
+    lease_expires_at timestamptz,
+    reconciliation_attempts bigint,
+    run_document jsonb,
+    connection_document jsonb,
+    binding_revision_document jsonb,
+    pipeline_revision_document jsonb,
+    build_receipt_document jsonb
+)
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    claimed record;
+    claimed_connection_document jsonb;
+    claimed_binding_document jsonb;
+    claimed_revision_document jsonb;
+    claimed_build_receipt_document jsonb;
+BEGIN
+    SELECT internal_claim.*
+      INTO claimed
+      FROM delivery.claim_pipeline_run_task_internal(
+            requested_worker_id,
+            requested_lease_seconds,
+            ARRAY['REPORT']::text[]
+      ) AS internal_claim;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+
+    SELECT source.document,
+           binding_revision.document,
+           revision.document,
+           receipt.document
+      INTO claimed_connection_document,
+           claimed_binding_document,
+           claimed_revision_document,
+           claimed_build_receipt_document
+      FROM delivery.pipeline_run_tasks AS task
+      JOIN delivery.pipeline_runs AS run
+        ON run.tenant_id = task.tenant_id
+       AND run.id = task.run_id
+       AND run.input_digest = task.input_digest
+      JOIN delivery.repository_binding_revisions AS binding_revision
+        ON binding_revision.tenant_id = run.tenant_id
+       AND binding_revision.binding_id = run.repository_binding_id
+       AND binding_revision.content_digest = run.repository_binding_digest
+      JOIN delivery.source_connections AS source
+        ON source.tenant_id = binding_revision.tenant_id
+       AND source.id = binding_revision.source_connection_id
+      JOIN delivery.pipeline_revisions AS revision
+        ON revision.tenant_id = run.tenant_id
+       AND revision.id = run.pipeline_revision_id
+       AND revision.content_digest = run.pipeline_revision_digest
+       AND revision.document#>>'{spec,reporterPolicy}' = 'CHANGE_CHECK_V1'
+      JOIN delivery.build_receipts AS receipt
+        ON receipt.tenant_id = run.tenant_id
+       AND receipt.run_id = run.id
+       AND receipt.input_digest = run.input_digest
+       AND receipt.pipeline_revision_id = run.pipeline_revision_id
+       AND receipt.pipeline_revision_digest = run.pipeline_revision_digest
+       AND receipt.conclusion IN ('PASSED', 'FAILED')
+     WHERE task.tenant_id = claimed.tenant_id
+       AND task.run_id = claimed.run_id
+       AND task.command_id = claimed.command_id
+       AND task.stage = 'REPORT'
+       AND task.attempt = claimed.attempt
+       AND task.status = 'INTENT'
+       AND task.lease_owner = requested_worker_id
+       AND task.fencing_token = claimed.fencing_token;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '55000',
+            MESSAGE = 'Claimed check report task inputs are unavailable';
+    END IF;
+
+    RETURN QUERY SELECT
+        claimed.tenant_id::text,
+        claimed.run_id::text,
+        claimed.command_id::text,
+        claimed.input_digest::text,
+        claimed.stage::text,
+        claimed.attempt::bigint,
+        claimed.claim_mode::text,
+        claimed.fencing_token::bigint,
+        claimed.lease_expires_at::timestamptz,
+        claimed.reconciliation_attempts::bigint,
+        claimed.run_document::jsonb,
+        claimed_connection_document,
+        claimed_binding_document,
+        claimed_revision_document,
+        claimed_build_receipt_document;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION delivery.claim_check_report_task(text, integer)
+    FROM PUBLIC, matrix_devops_api, matrix_devops_source_fetcher,
+         matrix_devops_source_observer, matrix_devops_worker,
+         matrix_devops_check_reporter;
+GRANT EXECUTE ON FUNCTION delivery.claim_check_report_task(text, integer)
+    TO matrix_devops_check_reporter;
+
 CREATE OR REPLACE FUNCTION delivery.renew_pipeline_run_task_internal(
     requested_tenant_id text,
     requested_run_id text,
@@ -4032,38 +4242,9 @@ REVOKE ALL ON FUNCTION delivery.renew_pipeline_run_task_internal(
 ) FROM PUBLIC, matrix_devops_api, matrix_devops_source_fetcher,
        matrix_devops_source_observer, matrix_devops_worker;
 
-CREATE OR REPLACE FUNCTION delivery.renew_pipeline_run_task(
-    requested_tenant_id text,
-    requested_run_id text,
-    requested_command_id text,
-    requested_worker_id text,
-    expected_fencing_token bigint,
-    requested_lease_seconds integer
-)
-RETURNS timestamptz
-LANGUAGE sql
-VOLATILE
-SECURITY DEFINER
-SET search_path = pg_catalog, pg_temp
-AS $function$
-    SELECT delivery.renew_pipeline_run_task_internal(
-        requested_tenant_id,
-        requested_run_id,
-        requested_command_id,
-        requested_worker_id,
-        expected_fencing_token,
-        requested_lease_seconds,
-        'REPORT'
-    )
-$function$;
-
-REVOKE ALL ON FUNCTION delivery.renew_pipeline_run_task(
+DROP FUNCTION IF EXISTS delivery.renew_pipeline_run_task(
     text, text, text, text, bigint, integer
-) FROM PUBLIC, matrix_devops_api, matrix_devops_source_fetcher,
-       matrix_devops_source_observer;
-GRANT EXECUTE ON FUNCTION delivery.renew_pipeline_run_task(
-    text, text, text, text, bigint, integer
-) TO matrix_devops_worker;
+);
 
 CREATE OR REPLACE FUNCTION delivery.renew_source_fetch_task(
     requested_tenant_id text,
@@ -5163,6 +5344,39 @@ BEGIN
                         current_run_document#>>'{input,pipelineRevisionDigest}'
                    AND receipt.conclusion IN ('PASSED', 'FAILED')
             ))
+       OR (current_state IN ('REPORTING', 'RECONCILING')
+            AND (
+                (requested_state = 'SUCCEEDED'
+                    AND requested_reason = 'COMPLETED')
+                OR (requested_state = 'FAILED'
+                    AND requested_reason = 'VERIFICATION_FAILED')
+            )
+            AND NOT EXISTS (
+                SELECT 1
+                  FROM delivery.check_receipts AS check_receipt
+                  JOIN delivery.build_receipts AS build_receipt
+                    ON build_receipt.tenant_id = check_receipt.tenant_id
+                   AND build_receipt.run_id = check_receipt.run_id
+                   AND build_receipt.content_digest =
+                        check_receipt.build_receipt_digest
+                 WHERE check_receipt.tenant_id = requested_tenant_id
+                   AND check_receipt.run_id = requested_run_id
+                   AND check_receipt.command_id = requested_command_id
+                   AND check_receipt.input_digest =
+                        current_run_document->>'inputDigest'
+                   AND check_receipt.head_commit =
+                        current_run_document#>>'{input,change,headCommit}'
+                   AND check_receipt.pipeline_revision_id =
+                        current_run_document#>>'{input,pipelineRevisionId}'
+                   AND check_receipt.pipeline_revision_digest =
+                        current_run_document#>>'{input,pipelineRevisionDigest}'
+                   AND (
+                        (requested_state = 'SUCCEEDED'
+                            AND build_receipt.conclusion = 'PASSED')
+                        OR (requested_state = 'FAILED'
+                            AND build_receipt.conclusion = 'FAILED')
+                   )
+            ))
        OR current_resource_version >= 9007199254740991 THEN
         RAISE EXCEPTION USING
             ERRCODE = '55000',
@@ -5330,10 +5544,8 @@ $function$;
 
 REVOKE ALL ON FUNCTION delivery.advance_pipeline_run_task(
     text, text, text, text, bigint, text, text, jsonb, jsonb
-) FROM PUBLIC, matrix_devops_api;
-GRANT EXECUTE ON FUNCTION delivery.advance_pipeline_run_task(
-    text, text, text, text, bigint, text, text, jsonb, jsonb
-) TO matrix_devops_worker;
+) FROM PUBLIC, matrix_devops_api, matrix_devops_source_fetcher,
+       matrix_devops_source_observer, matrix_devops_worker;
 
 CREATE OR REPLACE FUNCTION delivery.complete_build_task(
     requested_tenant_id text,
@@ -5627,6 +5839,410 @@ REVOKE ALL ON FUNCTION delivery.complete_build_task(
 GRANT EXECUTE ON FUNCTION delivery.complete_build_task(
     text, text, text, text, bigint, text, text, jsonb, jsonb, jsonb
 ) TO matrix_devops_worker;
+
+CREATE OR REPLACE FUNCTION delivery.complete_check_report_task(
+    requested_tenant_id text,
+    requested_run_id text,
+    requested_command_id text,
+    requested_worker_id text,
+    expected_fencing_token bigint,
+    requested_state text,
+    requested_reason text,
+    submitted_receipt jsonb,
+    submitted_run_document jsonb,
+    submitted_audit_event jsonb
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    current_input_digest text;
+    current_pipeline_id text;
+    current_head_commit text;
+    current_adapter_id text;
+    current_endpoint_origin text;
+    current_source_connection_id text;
+    current_repository_binding_id text;
+    current_repository_binding_digest text;
+    current_external_repository_id text;
+    current_repository_path text;
+    current_pipeline_revision_id text;
+    current_pipeline_revision_digest text;
+    current_build_receipt_digest text;
+    current_build_conclusion text;
+    current_task_stage text;
+    current_task_status text;
+    current_lease_owner text;
+    current_lease_expires_at timestamptz(6);
+    current_fencing_token bigint;
+    expected_context text;
+    expected_state text;
+    expected_description text;
+    expected_request_digest text;
+    expected_receipt_digest text;
+    receipt_required boolean;
+    stored_receipt integer;
+BEGIN
+    SELECT run.input_digest,
+           run.pipeline_id,
+           run.document#>>'{input,change,headCommit}',
+           source.adapter_id,
+           source.document#>>'{spec,endpointOrigin}',
+           source.id,
+           binding_revision.binding_id,
+           binding_revision.content_digest,
+           binding_revision.external_repository_id,
+           binding_revision.document#>>'{spec,repositoryPath}',
+           revision.id,
+           revision.content_digest,
+           build_receipt.content_digest,
+           build_receipt.conclusion,
+           task.stage,
+           task.status,
+           task.lease_owner,
+           task.lease_expires_at,
+           task.fencing_token
+      INTO current_input_digest,
+           current_pipeline_id,
+           current_head_commit,
+           current_adapter_id,
+           current_endpoint_origin,
+           current_source_connection_id,
+           current_repository_binding_id,
+           current_repository_binding_digest,
+           current_external_repository_id,
+           current_repository_path,
+           current_pipeline_revision_id,
+           current_pipeline_revision_digest,
+           current_build_receipt_digest,
+           current_build_conclusion,
+           current_task_stage,
+           current_task_status,
+           current_lease_owner,
+           current_lease_expires_at,
+           current_fencing_token
+      FROM delivery.pipeline_runs AS run
+      JOIN delivery.pipeline_run_tasks AS task
+        ON task.tenant_id = run.tenant_id
+       AND task.run_id = run.id
+       AND task.command_id = requested_command_id
+      JOIN delivery.repository_binding_revisions AS binding_revision
+        ON binding_revision.tenant_id = run.tenant_id
+       AND binding_revision.binding_id = run.repository_binding_id
+       AND binding_revision.content_digest = run.repository_binding_digest
+      JOIN delivery.source_connections AS source
+        ON source.tenant_id = binding_revision.tenant_id
+       AND source.id = binding_revision.source_connection_id
+      JOIN delivery.pipeline_revisions AS revision
+        ON revision.tenant_id = run.tenant_id
+       AND revision.id = run.pipeline_revision_id
+       AND revision.content_digest = run.pipeline_revision_digest
+       AND revision.document#>>'{spec,reporterPolicy}' = 'CHANGE_CHECK_V1'
+      JOIN delivery.build_receipts AS build_receipt
+        ON build_receipt.tenant_id = run.tenant_id
+       AND build_receipt.run_id = run.id
+       AND build_receipt.input_digest = run.input_digest
+       AND build_receipt.pipeline_revision_id = run.pipeline_revision_id
+       AND build_receipt.pipeline_revision_digest = run.pipeline_revision_digest
+       AND build_receipt.conclusion IN ('PASSED', 'FAILED')
+     WHERE run.tenant_id = requested_tenant_id
+       AND run.id = requested_run_id
+     FOR UPDATE OF run, task;
+    IF NOT FOUND
+       OR current_task_stage <> 'REPORT'
+       OR current_task_status <> 'INTENT'
+       OR current_lease_owner IS DISTINCT FROM requested_worker_id
+       OR current_fencing_token <> expected_fencing_token
+       OR current_lease_expires_at IS NULL
+       OR current_lease_expires_at <= clock_timestamp() THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'MX412',
+            MESSAGE = 'check report task lease or fencing token is stale';
+    END IF;
+
+    receipt_required :=
+        (requested_state = 'SUCCEEDED'
+            AND requested_reason = 'COMPLETED'
+            AND current_build_conclusion = 'PASSED')
+        OR (requested_state = 'FAILED'
+            AND requested_reason = 'VERIFICATION_FAILED'
+            AND current_build_conclusion = 'FAILED');
+    IF (requested_state = 'SUCCEEDED' AND current_build_conclusion <> 'PASSED')
+       OR (requested_state = 'FAILED'
+            AND requested_reason = 'VERIFICATION_FAILED'
+            AND current_build_conclusion <> 'FAILED')
+       OR (receipt_required AND submitted_receipt IS NULL)
+       OR (NOT receipt_required AND submitted_receipt IS NOT NULL) THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'check report completion receipt is invalid';
+    END IF;
+
+    IF submitted_receipt IS NOT NULL THEN
+        IF jsonb_typeof(submitted_receipt) IS DISTINCT FROM 'object'
+           OR NOT (submitted_receipt ?& ARRAY[
+                'tenantId', 'runId', 'commandId', 'inputDigest',
+                'adapterId', 'sourceConnectionId', 'repositoryBindingId',
+                'repositoryBindingDigest', 'headCommit',
+                'pipelineRevisionId', 'pipelineRevisionDigest',
+                'buildReceiptDigest', 'providerStatusId', 'requestDigest',
+                'contentDigest'
+           ])
+           OR (submitted_receipt - ARRAY[
+                'tenantId', 'runId', 'commandId', 'inputDigest',
+                'adapterId', 'sourceConnectionId', 'repositoryBindingId',
+                'repositoryBindingDigest', 'headCommit',
+                'pipelineRevisionId', 'pipelineRevisionDigest',
+                'buildReceiptDigest', 'providerStatusId', 'requestDigest',
+                'contentDigest'
+           ]) <> '{}'::jsonb
+           OR EXISTS (
+                SELECT 1
+                  FROM unnest(ARRAY[
+                    'tenantId', 'runId', 'commandId', 'inputDigest',
+                    'adapterId', 'sourceConnectionId', 'repositoryBindingId',
+                    'repositoryBindingDigest', 'headCommit',
+                    'pipelineRevisionId', 'pipelineRevisionDigest',
+                    'buildReceiptDigest', 'requestDigest', 'contentDigest'
+                  ]) AS string_field(name)
+                 WHERE jsonb_typeof(submitted_receipt->string_field.name)
+                    IS DISTINCT FROM 'string'
+           )
+           OR jsonb_typeof(submitted_receipt->'providerStatusId')
+                IS DISTINCT FROM 'number'
+           OR COALESCE(submitted_receipt->>'providerStatusId', '') COLLATE "C"
+                !~ '^[1-9][0-9]*$'
+           OR NOT pg_input_is_valid(
+                COALESCE(submitted_receipt->>'providerStatusId', ''), 'bigint'
+           ) THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '22023',
+                MESSAGE = 'check receipt shape is invalid';
+        END IF;
+        IF (submitted_receipt->>'providerStatusId')::bigint
+                NOT BETWEEN 1 AND 9007199254740991
+           OR submitted_receipt->>'tenantId' IS DISTINCT FROM requested_tenant_id
+           OR submitted_receipt->>'runId' IS DISTINCT FROM requested_run_id
+           OR submitted_receipt->>'commandId' IS DISTINCT FROM requested_command_id
+           OR submitted_receipt->>'inputDigest' IS DISTINCT FROM current_input_digest
+           OR submitted_receipt->>'adapterId' IS DISTINCT FROM current_adapter_id
+           OR current_adapter_id <> 'source-adapter-gitea-v1'
+           OR submitted_receipt->>'sourceConnectionId'
+                IS DISTINCT FROM current_source_connection_id
+           OR submitted_receipt->>'repositoryBindingId'
+                IS DISTINCT FROM current_repository_binding_id
+           OR submitted_receipt->>'repositoryBindingDigest'
+                IS DISTINCT FROM current_repository_binding_digest
+           OR submitted_receipt->>'headCommit' IS DISTINCT FROM current_head_commit
+           OR current_head_commit COLLATE "C" !~ '^[0-9a-f]{40}$'
+           OR submitted_receipt->>'pipelineRevisionId'
+                IS DISTINCT FROM current_pipeline_revision_id
+           OR submitted_receipt->>'pipelineRevisionDigest'
+                IS DISTINCT FROM current_pipeline_revision_digest
+           OR submitted_receipt->>'buildReceiptDigest'
+                IS DISTINCT FROM current_build_receipt_digest
+           OR COALESCE(submitted_receipt->>'requestDigest', '') COLLATE "C"
+                !~ '^sha256:[0-9a-f]{64}$'
+           OR COALESCE(submitted_receipt->>'contentDigest', '') COLLATE "C"
+                !~ '^sha256:[0-9a-f]{64}$' THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '22023',
+                MESSAGE = 'check receipt authority is invalid';
+        END IF;
+
+        expected_context := 'matrix/' || current_pipeline_id || '/'
+            || requested_run_id;
+        expected_state := CASE current_build_conclusion
+            WHEN 'PASSED' THEN 'success'
+            WHEN 'FAILED' THEN 'failure'
+            ELSE NULL
+        END;
+        expected_description := CASE current_build_conclusion
+            WHEN 'PASSED' THEN 'Matrix verification passed'
+            WHEN 'FAILED' THEN 'Matrix verification failed'
+            ELSE NULL
+        END;
+        expected_request_digest := 'sha256:' || encode(sha256(
+            int8send(octet_length(convert_to(
+                'matrix-devops-check-request-v1', 'UTF8'
+            ))::bigint)
+            || convert_to('matrix-devops-check-request-v1', 'UTF8')
+            || int8send(octet_length(convert_to(
+                requested_command_id, 'UTF8'
+            ))::bigint) || convert_to(requested_command_id, 'UTF8')
+            || int8send(octet_length(convert_to(
+                current_input_digest, 'UTF8'
+            ))::bigint) || convert_to(current_input_digest, 'UTF8')
+            || int8send(octet_length(convert_to(
+                current_adapter_id, 'UTF8'
+            ))::bigint) || convert_to(current_adapter_id, 'UTF8')
+            || int8send(octet_length(convert_to(
+                current_endpoint_origin, 'UTF8'
+            ))::bigint) || convert_to(current_endpoint_origin, 'UTF8')
+            || int8send(octet_length(convert_to(
+                current_repository_binding_id, 'UTF8'
+            ))::bigint) || convert_to(current_repository_binding_id, 'UTF8')
+            || int8send(octet_length(convert_to(
+                current_repository_binding_digest, 'UTF8'
+            ))::bigint) || convert_to(current_repository_binding_digest, 'UTF8')
+            || int8send(octet_length(convert_to(
+                current_external_repository_id, 'UTF8'
+            ))::bigint) || convert_to(current_external_repository_id, 'UTF8')
+            || int8send(octet_length(convert_to(
+                current_repository_path, 'UTF8'
+            ))::bigint) || convert_to(current_repository_path, 'UTF8')
+            || int8send(octet_length(convert_to(
+                current_head_commit, 'UTF8'
+            ))::bigint) || convert_to(current_head_commit, 'UTF8')
+            || int8send(octet_length(convert_to(
+                current_pipeline_id, 'UTF8'
+            ))::bigint) || convert_to(current_pipeline_id, 'UTF8')
+            || int8send(octet_length(convert_to(
+                current_pipeline_revision_id, 'UTF8'
+            ))::bigint) || convert_to(current_pipeline_revision_id, 'UTF8')
+            || int8send(octet_length(convert_to(
+                current_pipeline_revision_digest, 'UTF8'
+            ))::bigint) || convert_to(current_pipeline_revision_digest, 'UTF8')
+            || int8send(octet_length(convert_to(
+                current_build_receipt_digest, 'UTF8'
+            ))::bigint) || convert_to(current_build_receipt_digest, 'UTF8')
+            || int8send(octet_length(convert_to(
+                expected_context, 'UTF8'
+            ))::bigint) || convert_to(expected_context, 'UTF8')
+            || int8send(octet_length(convert_to(
+                expected_state, 'UTF8'
+            ))::bigint) || convert_to(expected_state, 'UTF8')
+            || int8send(octet_length(convert_to(
+                expected_description, 'UTF8'
+            ))::bigint) || convert_to(expected_description, 'UTF8')
+            || int8send(0::bigint)
+        ), 'hex');
+        IF submitted_receipt->>'requestDigest' IS DISTINCT FROM
+            expected_request_digest THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '22023',
+                MESSAGE = 'check request digest is invalid';
+        END IF;
+
+        expected_receipt_digest := 'sha256:' || encode(sha256(
+            int8send(octet_length(convert_to(
+                'matrix-devops-check-receipt-v1', 'UTF8'
+            ))::bigint)
+            || convert_to('matrix-devops-check-receipt-v1', 'UTF8')
+            || int8send(octet_length(convert_to(
+                requested_tenant_id, 'UTF8'
+            ))::bigint) || convert_to(requested_tenant_id, 'UTF8')
+            || int8send(octet_length(convert_to(
+                requested_run_id, 'UTF8'
+            ))::bigint) || convert_to(requested_run_id, 'UTF8')
+            || int8send(octet_length(convert_to(
+                requested_command_id, 'UTF8'
+            ))::bigint) || convert_to(requested_command_id, 'UTF8')
+            || int8send(octet_length(convert_to(
+                current_input_digest, 'UTF8'
+            ))::bigint) || convert_to(current_input_digest, 'UTF8')
+            || int8send(octet_length(convert_to(
+                current_adapter_id, 'UTF8'
+            ))::bigint) || convert_to(current_adapter_id, 'UTF8')
+            || int8send(octet_length(convert_to(
+                current_source_connection_id, 'UTF8'
+            ))::bigint) || convert_to(current_source_connection_id, 'UTF8')
+            || int8send(octet_length(convert_to(
+                current_repository_binding_id, 'UTF8'
+            ))::bigint) || convert_to(current_repository_binding_id, 'UTF8')
+            || int8send(octet_length(convert_to(
+                current_repository_binding_digest, 'UTF8'
+            ))::bigint) || convert_to(current_repository_binding_digest, 'UTF8')
+            || int8send(octet_length(convert_to(
+                current_head_commit, 'UTF8'
+            ))::bigint) || convert_to(current_head_commit, 'UTF8')
+            || int8send(octet_length(convert_to(
+                current_pipeline_revision_id, 'UTF8'
+            ))::bigint) || convert_to(current_pipeline_revision_id, 'UTF8')
+            || int8send(octet_length(convert_to(
+                current_pipeline_revision_digest, 'UTF8'
+            ))::bigint) || convert_to(current_pipeline_revision_digest, 'UTF8')
+            || int8send(octet_length(convert_to(
+                current_build_receipt_digest, 'UTF8'
+            ))::bigint) || convert_to(current_build_receipt_digest, 'UTF8')
+            || int8send(octet_length(convert_to(
+                submitted_receipt->>'providerStatusId', 'UTF8'
+            ))::bigint) || convert_to(
+                submitted_receipt->>'providerStatusId', 'UTF8'
+            )
+            || int8send(octet_length(convert_to(
+                expected_request_digest, 'UTF8'
+            ))::bigint) || convert_to(expected_request_digest, 'UTF8')
+        ), 'hex');
+        IF submitted_receipt->>'contentDigest' IS DISTINCT FROM
+            expected_receipt_digest THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '22023',
+                MESSAGE = 'check receipt digest is invalid';
+        END IF;
+
+        INSERT INTO delivery.check_receipts (
+            tenant_id, run_id, command_id, input_digest, adapter_id,
+            source_connection_id, repository_binding_id,
+            repository_binding_digest, head_commit, pipeline_revision_id,
+            pipeline_revision_digest, build_receipt_digest,
+            provider_status_id, request_digest, content_digest,
+            created_at, document
+        ) VALUES (
+            requested_tenant_id, requested_run_id, requested_command_id,
+            current_input_digest, current_adapter_id,
+            current_source_connection_id, current_repository_binding_id,
+            current_repository_binding_digest, current_head_commit,
+            current_pipeline_revision_id, current_pipeline_revision_digest,
+            current_build_receipt_digest,
+            (submitted_receipt->>'providerStatusId')::bigint,
+            expected_request_digest, expected_receipt_digest,
+            transaction_timestamp(), submitted_receipt
+        )
+        ON CONFLICT (tenant_id, run_id) DO UPDATE
+           SET document = check_receipts.document
+         WHERE check_receipts.document = excluded.document
+        RETURNING 1 INTO stored_receipt;
+        IF stored_receipt IS DISTINCT FROM 1 THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '55000',
+                MESSAGE = 'check receipt conflicts with stored evidence';
+        END IF;
+    ELSIF EXISTS (
+        SELECT 1
+          FROM delivery.check_receipts AS receipt
+         WHERE receipt.tenant_id = requested_tenant_id
+           AND receipt.run_id = requested_run_id
+    ) THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '55000',
+            MESSAGE = 'receipt-free completion conflicts with stored check evidence';
+    END IF;
+
+    RETURN delivery.advance_pipeline_run_task(
+        requested_tenant_id,
+        requested_run_id,
+        requested_command_id,
+        requested_worker_id,
+        expected_fencing_token,
+        requested_state,
+        requested_reason,
+        submitted_run_document,
+        submitted_audit_event
+    );
+END
+$function$;
+
+REVOKE ALL ON FUNCTION delivery.complete_check_report_task(
+    text, text, text, text, bigint, text, text, jsonb, jsonb, jsonb
+) FROM PUBLIC, matrix_devops_api, matrix_devops_source_fetcher,
+       matrix_devops_source_observer, matrix_devops_worker,
+       matrix_devops_check_reporter;
+GRANT EXECUTE ON FUNCTION delivery.complete_check_report_task(
+    text, text, text, text, bigint, text, text, jsonb, jsonb, jsonb
+) TO matrix_devops_check_reporter;
 
 CREATE OR REPLACE FUNCTION delivery.complete_source_fetch_task(
     requested_tenant_id text,
@@ -5952,10 +6568,12 @@ $function$;
 
 REVOKE ALL ON FUNCTION delivery.mark_pipeline_run_report_uncertain(
     text, text, text, text, bigint, timestamptz
-) FROM PUBLIC, matrix_devops_api;
+) FROM PUBLIC, matrix_devops_api, matrix_devops_worker,
+       matrix_devops_source_fetcher, matrix_devops_source_observer,
+       matrix_devops_check_reporter;
 GRANT EXECUTE ON FUNCTION delivery.mark_pipeline_run_report_uncertain(
     text, text, text, text, bigint, timestamptz
-) TO matrix_devops_worker;
+) TO matrix_devops_check_reporter;
 
 CREATE OR REPLACE FUNCTION delivery.defer_pipeline_run_reconciliation(
     requested_tenant_id text,
@@ -6045,10 +6663,12 @@ $function$;
 
 REVOKE ALL ON FUNCTION delivery.defer_pipeline_run_reconciliation(
     text, text, text, text, bigint, timestamptz
-) FROM PUBLIC, matrix_devops_api;
+) FROM PUBLIC, matrix_devops_api, matrix_devops_worker,
+       matrix_devops_source_fetcher, matrix_devops_source_observer,
+       matrix_devops_check_reporter;
 GRANT EXECUTE ON FUNCTION delivery.defer_pipeline_run_reconciliation(
     text, text, text, text, bigint, timestamptz
-) TO matrix_devops_worker;
+) TO matrix_devops_check_reporter;
 
 CREATE OR REPLACE FUNCTION delivery.claim_audit_event(
     requested_worker_id text,
@@ -6541,6 +7161,53 @@ REVOKE ALL ON FUNCTION delivery.record_build_worker_heartbeat(text)
          matrix_devops_source_observer;
 GRANT EXECUTE ON FUNCTION delivery.record_build_worker_heartbeat(text)
     TO matrix_devops_worker;
+
+CREATE OR REPLACE FUNCTION delivery.record_check_reporter_heartbeat(
+    requested_worker_id text
+)
+RETURNS timestamptz
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_observed_at timestamptz(6);
+BEGIN
+    IF requested_worker_id IS NULL
+       OR requested_worker_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'check reporter heartbeat identity is invalid';
+    END IF;
+
+    INSERT INTO delivery.check_reporter_heartbeat (
+        singleton, worker_id, observed_at
+    ) VALUES (
+        true, requested_worker_id, transaction_timestamp()
+    )
+    ON CONFLICT (singleton) DO UPDATE
+       SET worker_id = CASE
+               WHEN excluded.observed_at >= check_reporter_heartbeat.observed_at
+               THEN excluded.worker_id
+               ELSE check_reporter_heartbeat.worker_id
+           END,
+           observed_at = greatest(
+               excluded.observed_at,
+               check_reporter_heartbeat.observed_at
+           )
+    RETURNING observed_at INTO effective_observed_at;
+
+    RETURN effective_observed_at;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION delivery.record_check_reporter_heartbeat(text)
+    FROM PUBLIC, matrix_devops_api, matrix_devops_source_fetcher,
+         matrix_devops_source_observer, matrix_devops_worker,
+         matrix_devops_check_reporter;
+GRANT EXECUTE ON FUNCTION delivery.record_check_reporter_heartbeat(text)
+    TO matrix_devops_check_reporter;
 
 CREATE OR REPLACE FUNCTION delivery.record_source_observer_heartbeat(
     requested_worker_id text
@@ -7218,6 +7885,130 @@ REVOKE ALL ON FUNCTION delivery.build_worker_readiness()
 GRANT EXECUTE ON FUNCTION delivery.build_worker_readiness()
     TO matrix_devops_worker;
 
+CREATE OR REPLACE FUNCTION delivery.check_reporter_readiness()
+RETURNS TABLE (ready boolean, schema_version bigint, checked_at timestamptz)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+    SELECT
+        to_regclass('delivery.source_connections') IS NOT NULL
+        AND to_regclass('delivery.repository_binding_revisions') IS NOT NULL
+        AND to_regclass('delivery.pipeline_revisions') IS NOT NULL
+        AND to_regclass('delivery.pipeline_runs') IS NOT NULL
+        AND to_regclass('delivery.pipeline_run_tasks') IS NOT NULL
+        AND to_regclass('delivery.build_receipts') IS NOT NULL
+        AND to_regclass('delivery.check_receipts') IS NOT NULL
+        AND to_regclass('delivery.check_reporter_heartbeat') IS NOT NULL
+        AND to_regprocedure(
+            'delivery.record_check_reporter_heartbeat(text)'
+        ) IS NOT NULL
+        AND to_regprocedure(
+            'delivery.claim_check_report_task(text,integer)'
+        ) IS NOT NULL
+        AND to_regprocedure(
+            'delivery.complete_check_report_task(text,text,text,text,bigint,text,text,jsonb,jsonb,jsonb)'
+        ) IS NOT NULL
+        AND to_regprocedure(
+            'delivery.mark_pipeline_run_report_uncertain(text,text,text,text,bigint,timestamp with time zone)'
+        ) IS NOT NULL
+        AND to_regprocedure(
+            'delivery.defer_pipeline_run_reconciliation(text,text,text,text,bigint,timestamp with time zone)'
+        ) IS NOT NULL
+        AND EXISTS (
+            SELECT 1
+              FROM delivery.check_reporter_heartbeat AS heartbeat
+             WHERE heartbeat.singleton
+               AND heartbeat.observed_at <= transaction_timestamp()
+               AND heartbeat.observed_at
+                    >= transaction_timestamp() - interval '30 seconds'
+        )
+        AND NOT EXISTS (
+            SELECT 1
+              FROM delivery.pipeline_run_tasks AS task
+             WHERE task.stage = 'REPORT'
+               AND task.fencing_token >= 9007199254740991
+        )
+        AND NOT EXISTS (
+            SELECT 1
+              FROM delivery.check_receipts AS receipt
+              JOIN delivery.pipeline_runs AS run
+                ON run.tenant_id = receipt.tenant_id
+               AND run.id = receipt.run_id
+               AND run.input_digest = receipt.input_digest
+              JOIN delivery.pipeline_run_tasks AS task
+                ON task.tenant_id = receipt.tenant_id
+               AND task.run_id = receipt.run_id
+               AND task.command_id = receipt.command_id
+              JOIN delivery.build_receipts AS build_receipt
+                ON build_receipt.tenant_id = receipt.tenant_id
+               AND build_receipt.run_id = receipt.run_id
+               AND build_receipt.content_digest = receipt.build_receipt_digest
+              JOIN delivery.repository_binding_revisions AS binding_revision
+                ON binding_revision.tenant_id = receipt.tenant_id
+               AND binding_revision.binding_id = receipt.repository_binding_id
+               AND binding_revision.content_digest =
+                    receipt.repository_binding_digest
+              JOIN delivery.source_connections AS source
+                ON source.tenant_id = receipt.tenant_id
+               AND source.id = receipt.source_connection_id
+              JOIN delivery.pipeline_revisions AS revision
+                ON revision.tenant_id = receipt.tenant_id
+               AND revision.id = receipt.pipeline_revision_id
+               AND revision.content_digest = receipt.pipeline_revision_digest
+             WHERE task.stage <> 'REPORT'
+                OR task.status <> 'COMPLETED'
+                OR run.state NOT IN ('SUCCEEDED', 'FAILED')
+                OR receipt.head_commit <>
+                    run.document#>>'{input,change,headCommit}'
+                OR receipt.adapter_id <> source.adapter_id
+                OR binding_revision.source_connection_id <>
+                    receipt.source_connection_id
+                OR binding_revision.project_id <> run.project_id
+                OR revision.pipeline_id <> run.pipeline_id
+                OR revision.project_id <> run.project_id
+                OR revision.document#>>'{spec,reporterPolicy}' <>
+                    'CHANGE_CHECK_V1'
+                OR (run.state = 'SUCCEEDED'
+                    AND build_receipt.conclusion <> 'PASSED')
+                OR (run.state = 'FAILED'
+                    AND run.reason = 'VERIFICATION_FAILED'
+                    AND build_receipt.conclusion <> 'FAILED')
+        )
+        AND NOT EXISTS (
+            SELECT 1
+              FROM delivery.pipeline_runs AS run
+             WHERE (
+                    run.state = 'SUCCEEDED'
+                    OR (run.state = 'FAILED'
+                        AND run.reason = 'VERIFICATION_FAILED')
+               )
+               AND NOT EXISTS (
+                    SELECT 1
+                      FROM delivery.check_receipts AS receipt
+                     WHERE receipt.tenant_id = run.tenant_id
+                       AND receipt.run_id = run.id
+                       AND receipt.input_digest = run.input_digest
+                       AND receipt.head_commit =
+                            run.document#>>'{input,change,headCommit}'
+                       AND receipt.pipeline_revision_id =
+                            run.pipeline_revision_id
+                       AND receipt.pipeline_revision_digest =
+                            run.pipeline_revision_digest
+               )
+        ),
+        1::bigint,
+        transaction_timestamp()
+$function$;
+
+REVOKE ALL ON FUNCTION delivery.check_reporter_readiness()
+    FROM PUBLIC, matrix_devops_api, matrix_devops_source_fetcher,
+         matrix_devops_source_observer, matrix_devops_worker,
+         matrix_devops_check_reporter;
+GRANT EXECUTE ON FUNCTION delivery.check_reporter_readiness()
+    TO matrix_devops_check_reporter;
+
 CREATE OR REPLACE FUNCTION delivery.source_fetcher_readiness()
 RETURNS TABLE (ready boolean, schema_version bigint, checked_at timestamptz)
 LANGUAGE sql
@@ -7358,9 +8149,11 @@ AS $function$
         AND to_regclass('delivery.pipeline_run_tasks') IS NOT NULL
         AND to_regclass('delivery.source_archives') IS NOT NULL
         AND to_regclass('delivery.build_receipts') IS NOT NULL
+        AND to_regclass('delivery.check_receipts') IS NOT NULL
         AND to_regclass('delivery.pipeline_run_logs') IS NOT NULL
         AND to_regclass('delivery.source_fetcher_heartbeat') IS NOT NULL
         AND to_regclass('delivery.build_worker_heartbeat') IS NOT NULL
+        AND to_regclass('delivery.check_reporter_heartbeat') IS NOT NULL
         AND to_regclass('delivery.audit_operations') IS NOT NULL
         AND to_regclass('delivery.source_observation_tasks') IS NOT NULL
         AND to_regclass('delivery.source_observer_heartbeat') IS NOT NULL
@@ -7381,9 +8174,6 @@ AS $function$
         ) IS NOT NULL
         AND to_regprocedure(
             'delivery.commit_run_admission(jsonb,jsonb,jsonb)'
-        ) IS NOT NULL
-        AND to_regprocedure(
-            'delivery.claim_pipeline_run_task(text,integer)'
         ) IS NOT NULL
         AND to_regprocedure(
             'delivery.record_source_fetcher_heartbeat(text)'
@@ -7407,6 +8197,15 @@ AS $function$
             'delivery.complete_build_task(text,text,text,text,bigint,text,text,jsonb,jsonb,jsonb)'
         ) IS NOT NULL
         AND to_regprocedure(
+            'delivery.record_check_reporter_heartbeat(text)'
+        ) IS NOT NULL
+        AND to_regprocedure(
+            'delivery.claim_check_report_task(text,integer)'
+        ) IS NOT NULL
+        AND to_regprocedure(
+            'delivery.complete_check_report_task(text,text,text,text,bigint,text,text,jsonb,jsonb,jsonb)'
+        ) IS NOT NULL
+        AND to_regprocedure(
             'delivery.renew_source_fetch_task(text,text,text,text,bigint,integer)'
         ) IS NOT NULL
         AND to_regprocedure(
@@ -7420,9 +8219,6 @@ AS $function$
         ) IS NOT NULL
         AND to_regprocedure(
             'delivery.complete_source_observation(text,text,text,bigint,text,bigint,jsonb,jsonb)'
-        ) IS NOT NULL
-        AND to_regprocedure(
-            'delivery.renew_pipeline_run_task(text,text,text,text,bigint,integer)'
         ) IS NOT NULL
         AND to_regprocedure(
             'delivery.advance_pipeline_run_task(text,text,text,text,bigint,text,text,jsonb,jsonb)'
@@ -7502,6 +8298,7 @@ AS $function$
                 OR outbox.fencing_token >= 9007199254740991
         )
         AND (SELECT fetcher.ready FROM delivery.source_fetcher_readiness() AS fetcher)
+        AND (SELECT reporter.ready FROM delivery.check_reporter_readiness() AS reporter)
         AND (
             NOT EXISTS (SELECT 1 FROM delivery.source_connections)
             OR EXISTS (
@@ -7531,69 +8328,6 @@ SET search_path = pg_catalog, pg_temp
 AS $function$
     SELECT
         to_regclass('delivery.audit_outbox') IS NOT NULL
-        AND to_regclass('delivery.pipeline_run_tasks') IS NOT NULL
-        AND to_regprocedure('delivery.claim_pipeline_run_task(text,integer)') IS NOT NULL
-        AND to_regprocedure(
-            'delivery.renew_pipeline_run_task(text,text,text,text,bigint,integer)'
-        ) IS NOT NULL
-        AND to_regprocedure(
-            'delivery.advance_pipeline_run_task(text,text,text,text,bigint,text,text,jsonb,jsonb)'
-        ) IS NOT NULL
-        AND to_regprocedure(
-            'delivery.advance_pipeline_run_task(text,text,text,text,bigint,text,text)'
-        ) IS NULL
-        AND to_regprocedure(
-            'delivery.mark_pipeline_run_report_uncertain(text,text,text,text,bigint,timestamp with time zone)'
-        ) IS NOT NULL
-        AND to_regprocedure(
-            'delivery.defer_pipeline_run_reconciliation(text,text,text,text,bigint,timestamp with time zone)'
-        ) IS NOT NULL
-        AND NOT EXISTS (
-            SELECT 1
-              FROM delivery.pipeline_run_tasks AS task
-              JOIN delivery.pipeline_runs AS run
-                ON run.tenant_id = task.tenant_id AND run.id = task.run_id
-             WHERE task.fencing_token >= 9007199254740991
-                OR (task.status = 'INTENT' AND (
-                    run.state IN (
-                        'SUCCEEDED', 'FAILED', 'CANCELLED', 'MANUAL_INTERVENTION'
-                    )
-                    OR task.stage <> run.stage
-                ))
-        )
-        AND NOT EXISTS (
-            SELECT 1 FROM delivery.pipeline_runs AS run
-             WHERE run.state = 'RECONCILING'
-               AND NOT EXISTS (
-                    SELECT 1 FROM delivery.pipeline_run_tasks AS task
-                     WHERE task.tenant_id = run.tenant_id
-                       AND task.run_id = run.id
-                       AND task.stage = 'REPORT'
-                       AND task.status = 'INTENT'
-                )
-        )
-        AND NOT EXISTS (
-            SELECT 1 FROM delivery.pipeline_runs AS run
-             WHERE run.cancellation_requested_at IS NOT NULL
-               AND run.state NOT IN (
-                    'SUCCEEDED', 'FAILED', 'CANCELLED', 'MANUAL_INTERVENTION'
-               )
-               AND NOT EXISTS (
-                    SELECT 1 FROM delivery.pipeline_run_tasks AS task
-                     WHERE task.tenant_id = run.tenant_id
-                       AND task.run_id = run.id
-                       AND task.status = 'INTENT'
-               )
-        )
-        AND NOT EXISTS (
-            SELECT active.tenant_id
-              FROM delivery.pipeline_runs AS active
-             WHERE active.state IN (
-                'FETCHING', 'VERIFYING', 'REPORTING', 'RECONCILING'
-             )
-             GROUP BY active.tenant_id
-            HAVING count(*) > 2
-        )
         AND to_regprocedure('delivery.claim_audit_event(text,integer)') IS NOT NULL
         AND to_regprocedure(
             'delivery.complete_audit_event(text,text,text,bigint,text,timestamptz,text)'
@@ -7627,7 +8361,8 @@ GRANT EXECUTE ON FUNCTION delivery.commit_configuration_mutation(
 REVOKE ALL ON ALL TABLES IN SCHEMA delivery FROM PUBLIC;
 REVOKE ALL ON ALL TABLES IN SCHEMA delivery
     FROM matrix_devops_api, matrix_devops_source_fetcher,
-         matrix_devops_worker, matrix_devops_source_observer;
+         matrix_devops_worker, matrix_devops_source_observer,
+         matrix_devops_check_reporter;
 GRANT SELECT ON delivery.projects TO matrix_devops_api;
 GRANT SELECT ON delivery.source_connections TO matrix_devops_api;
 GRANT SELECT ON delivery.repository_bindings TO matrix_devops_api;
@@ -7652,6 +8387,24 @@ GRANT EXECUTE ON FUNCTION delivery.complete_source_fetch_task(
 ) TO matrix_devops_source_fetcher;
 GRANT EXECUTE ON FUNCTION delivery.source_fetcher_readiness()
     TO matrix_devops_source_fetcher;
+
+REVOKE ALL ON ALL FUNCTIONS IN SCHEMA delivery
+    FROM matrix_devops_check_reporter;
+GRANT EXECUTE ON FUNCTION delivery.record_check_reporter_heartbeat(text)
+    TO matrix_devops_check_reporter;
+GRANT EXECUTE ON FUNCTION delivery.claim_check_report_task(text, integer)
+    TO matrix_devops_check_reporter;
+GRANT EXECUTE ON FUNCTION delivery.complete_check_report_task(
+    text, text, text, text, bigint, text, text, jsonb, jsonb, jsonb
+) TO matrix_devops_check_reporter;
+GRANT EXECUTE ON FUNCTION delivery.mark_pipeline_run_report_uncertain(
+    text, text, text, text, bigint, timestamptz
+) TO matrix_devops_check_reporter;
+GRANT EXECUTE ON FUNCTION delivery.defer_pipeline_run_reconciliation(
+    text, text, text, text, bigint, timestamptz
+) TO matrix_devops_check_reporter;
+GRANT EXECUTE ON FUNCTION delivery.check_reporter_readiness()
+    TO matrix_devops_check_reporter;
 
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA delivery
     FROM matrix_devops_source_observer;

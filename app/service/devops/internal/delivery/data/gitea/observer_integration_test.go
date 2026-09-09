@@ -21,9 +21,11 @@ import (
 	"testing"
 	"time"
 
+	devopsbuildv1 "github.com/xiak/matrix/api/adapter/devopsbuild/v1"
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/domain"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/sourcearchive"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/checkreporting"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runlifecycle"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/sourceacquisition"
 	"github.com/xiak/matrix/app/service/devops/sourcecredential"
@@ -127,6 +129,48 @@ func TestRealGitea1273SourceFetcher(t *testing.T) {
 		if strings.Contains(strings.ToLower(name), ".git") {
 			t.Fatalf("real source archive leaked Git metadata path %q", name)
 		}
+	}
+}
+
+// TestRealGitea1273CheckReporter proves the production commit-status protocol
+// and its create-once/observe-only recovery rule against the pinned provider.
+func TestRealGitea1273CheckReporter(t *testing.T) {
+	upstream, endpointText, server := realProviderFixture(t)
+	repository := provisionRealRepository(t, upstream)
+	change := provisionRealChange(t, upstream, repository)
+	report := provisionRealToken(
+		t, upstream, "check-report", []string{"write:repository", "read:user"},
+	)
+	client := server.Client()
+	client.Timeout = checkreporting.ProviderDeadline
+	client.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return errors.New("provider redirects are not permitted")
+	}
+	reporter, err := newCheckReporter(
+		staticCredentialResolver{
+			purpose: sourcecredential.PurposeReport, value: report.value,
+		},
+		client,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := realCheckReportCommand(t, endpointText, repository, change)
+	receipt, err := reporter.Create(context.Background(), command)
+	if err != nil || checkreporting.ValidateReceipt(command, receipt) != nil {
+		t.Fatalf("real Gitea check creation receipt=%#v err=%v", receipt, err)
+	}
+
+	recovered := command
+	recovered.Lease.Mode = runlifecycle.ClaimObserve
+	recovered.Lease.FencingToken++
+	observed, found, err := reporter.Observe(context.Background(), recovered)
+	if err != nil || !found || observed != receipt ||
+		checkreporting.ValidateReceipt(recovered, observed) != nil {
+		t.Fatalf(
+			"real Gitea check observation receipt=%#v found=%t err=%v",
+			observed, found, err,
+		)
 	}
 }
 
@@ -242,19 +286,12 @@ func provisionRealChange(
 		t.Fatal("real Gitea base commit is invalid")
 	}
 	realFixtureRequest(
-		t, upstream, http.MethodPost, requestPrefix+"/branches",
-		map[string]any{
-			"new_branch_name": "feature/source-fetch",
-			"old_branch_name": "main",
-		},
-		http.StatusCreated, nil,
-	)
-	realFixtureRequest(
 		t, upstream, http.MethodPost, requestPrefix+"/contents/source.txt",
 		map[string]any{
-			"branch":  "feature/source-fetch",
-			"content": base64.StdEncoding.EncodeToString([]byte("source acquisition\n")),
-			"message": "add source fixture",
+			"branch":     "main",
+			"new_branch": "feature/source-fetch",
+			"content":    base64.StdEncoding.EncodeToString([]byte("source acquisition\n")),
+			"message":    "add source fixture",
 		},
 		http.StatusCreated, nil,
 	)
@@ -488,6 +525,76 @@ func realSourceCommand(
 		Connection: connection, BindingRevision: binding,
 		Revision: activation.Revision, Event: event,
 	}
+}
+
+func realCheckReportCommand(
+	t *testing.T,
+	endpoint string,
+	repository realRepository,
+	change realChange,
+) checkreporting.Command {
+	t.Helper()
+	source := realSourceCommand(t, endpoint, repository, change)
+	run := source.Lease.Run
+	var err error
+	for _, state := range []devopsv1.PipelineRunState{
+		devopsv1.PipelineRunVerifying,
+		devopsv1.PipelineRunReporting,
+	} {
+		run, err = domain.AdvancePipelineRun(
+			run, state, "", run.UpdatedAt.Add(time.Microsecond),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	steps := devopsv1.FixedVerificationSteps()
+	buildReceipt := devopsbuildv1.Receipt{
+		TenantID: run.Scope.TenantID, RunID: run.ID,
+		CommandID: runlifecycle.TaskCommandID(
+			run.ID, devopsv1.PipelineRunStageVerify, 1,
+		),
+		InputDigest:            run.InputDigest,
+		SourceArchiveDigest:    "sha256:" + strings.Repeat("6", 64),
+		PipelineRevisionID:     source.Revision.ID,
+		PipelineRevisionDigest: source.Revision.ContentDigest,
+		ExecutorID:             "executor-real-gitea",
+		ExecutorProfile:        devopsv1.ExecutorMatrixNativeIsolatedV1,
+		ToolchainImageDigest:   devopsv1.Go126OfflineToolchainImageDigest,
+		Conclusion:             devopsbuildv1.ConclusionPassed,
+		Steps: [2]devopsbuildv1.StepReceipt{
+			{
+				Ordinal: steps[0].Ordinal, Kind: steps[0].Kind,
+				Conclusion: devopsbuildv1.StepConclusionPassed,
+			},
+			{
+				Ordinal: steps[1].Ordinal, Kind: steps[1].Kind,
+				Conclusion: devopsbuildv1.StepConclusionPassed,
+			},
+		},
+	}
+	buildReceipt.ContentDigest = devopsbuildv1.DigestReceipt(buildReceipt)
+	intent := runlifecycle.TaskIntent{
+		RunID: run.ID, InputDigest: run.InputDigest,
+		Stage: devopsv1.PipelineRunStageReport, Attempt: 1,
+	}
+	intent.CommandID = runlifecycle.TaskCommandID(
+		intent.RunID, intent.Stage, intent.Attempt,
+	)
+	command := checkreporting.Command{
+		Lease: runlifecycle.Lease{
+			TenantID: run.Scope.TenantID, Run: run, Intent: intent,
+			Mode: runlifecycle.ClaimExecute, WorkerID: "check-reporter-real-gitea",
+			FencingToken:   1,
+			LeaseExpiresAt: run.UpdatedAt.Add(checkreporting.LeaseDuration),
+		},
+		Connection: source.Connection, BindingRevision: source.BindingRevision,
+		Revision: source.Revision, BuildReceipt: buildReceipt,
+	}
+	if err := checkreporting.ValidateCommand(command); err != nil {
+		t.Fatal(err)
+	}
+	return command
 }
 
 func readArchiveFiles(t *testing.T, document []byte) map[string][]byte {

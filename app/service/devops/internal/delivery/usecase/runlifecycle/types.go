@@ -4,7 +4,6 @@
 package runlifecycle
 
 import (
-	"context"
 	"errors"
 	"strconv"
 	"strings"
@@ -17,8 +16,6 @@ const (
 	MaximumReconciliationAttempts = uint64(10)
 	MaximumActiveRuns             = uint64(2)
 	maximumTaskAttempts           = uint64(100)
-	maximumLeaseDuration          = 5 * time.Minute
-	maximumDeferral               = 24 * time.Hour
 )
 
 var (
@@ -74,32 +71,9 @@ func (lease Lease) Guard() LeaseGuard {
 	}
 }
 
-type Transition struct {
-	Lease  Lease
-	State  devopsv1.PipelineRunState
-	Reason devopsv1.PipelineRunReason
-}
-
 type Reconciliation struct {
 	Lease         Lease
 	NextAttemptAt time.Time
-}
-
-type Repository interface {
-	Claim(context.Context, string, time.Duration) (Lease, bool, error)
-	Renew(context.Context, LeaseGuard, time.Duration) (time.Time, error)
-	Advance(context.Context, Transition) (devopsv1.PipelineRun, error)
-	MarkReportUncertain(context.Context, Reconciliation) (devopsv1.PipelineRun, error)
-	DeferReconciliation(context.Context, Reconciliation) (uint64, error)
-}
-
-type Config struct {
-	LeaseDuration time.Duration
-}
-
-type Queue struct {
-	repository Repository
-	config     Config
 }
 
 func TaskCommandID(

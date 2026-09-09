@@ -18,6 +18,7 @@ BEGIN
         VALUES
             ('matrix_devops_owner'), ('matrix_devops_migrator'),
             ('matrix_devops_api'), ('matrix_devops_worker'),
+            ('matrix_devops_check_reporter'),
             ('matrix_devops_source_fetcher'),
             ('matrix_devops_source_observer')
       ) AS required(name)
@@ -37,6 +38,8 @@ BEGIN
        OR pg_has_role('matrix_devops_api', 'matrix_devops_migrator', 'MEMBER')
        OR pg_has_role('matrix_devops_worker', 'matrix_devops_owner', 'MEMBER')
        OR pg_has_role('matrix_devops_worker', 'matrix_devops_migrator', 'MEMBER')
+       OR pg_has_role('matrix_devops_check_reporter', 'matrix_devops_owner', 'MEMBER')
+       OR pg_has_role('matrix_devops_check_reporter', 'matrix_devops_migrator', 'MEMBER')
        OR pg_has_role('matrix_devops_source_fetcher', 'matrix_devops_owner', 'MEMBER')
        OR pg_has_role('matrix_devops_source_fetcher', 'matrix_devops_migrator', 'MEMBER')
        OR pg_has_role('matrix_devops_source_observer', 'matrix_devops_owner', 'MEMBER')
@@ -49,6 +52,7 @@ BEGIN
           JOIN pg_catalog.pg_roles AS member_role ON member_role.oid = membership.member
          WHERE member_role.rolname IN (
             'matrix_devops_api', 'matrix_devops_worker',
+            'matrix_devops_check_reporter',
             'matrix_devops_source_fetcher',
             'matrix_devops_source_observer'
          )
@@ -64,11 +68,11 @@ BEGIN
             ('repository_binding_revisions'), ('pipelines'),
             ('pipeline_revisions'), ('source_events'), ('pipeline_runs'),
             ('pipeline_run_tasks'), ('source_archives'), ('build_receipts'),
-            ('pipeline_run_logs'),
+            ('check_receipts'), ('pipeline_run_logs'),
             ('mutations'), ('audit_operations'),
             ('audit_outbox'), ('source_observation_tasks'),
             ('source_fetcher_heartbeat'), ('source_observer_heartbeat'),
-            ('build_worker_heartbeat')
+            ('build_worker_heartbeat'), ('check_reporter_heartbeat')
       ) AS required(name)
      WHERE to_regclass('delivery.' || required.name) IS NULL;
     IF missing IS NOT NULL THEN
@@ -97,7 +101,7 @@ BEGIN
             ('repository_binding_revisions'), ('pipelines'),
             ('pipeline_revisions'), ('source_events'), ('pipeline_runs'),
             ('pipeline_run_tasks'), ('source_archives'), ('build_receipts'),
-            ('pipeline_run_logs'),
+            ('check_receipts'), ('pipeline_run_logs'),
             ('mutations'), ('audit_operations'),
             ('audit_outbox'), ('source_observation_tasks')
      ) AS required(table_name)
@@ -262,6 +266,30 @@ BEGIN
       INTO missing
       FROM (
         VALUES
+            ('source_connections'), ('repository_binding_revisions'),
+            ('pipeline_revisions'), ('pipeline_runs'),
+            ('pipeline_run_tasks'), ('build_receipts'), ('check_receipts'),
+            ('check_reporter_heartbeat'), ('audit_operations'), ('audit_outbox')
+      ) AS required(table_name)
+     WHERE NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_policies AS policy
+         WHERE policy.schemaname = 'delivery'
+           AND policy.tablename = required.table_name
+           AND policy.policyname = 'owner_check_reporter'
+           AND policy.permissive = 'PERMISSIVE'
+           AND policy.cmd = 'ALL'
+           AND policy.roles = ARRAY['matrix_devops_owner']::name[]
+           AND policy.qual = 'true'
+           AND policy.with_check = 'true'
+     );
+    IF missing IS NOT NULL THEN
+        RAISE EXCEPTION 'delivery check-reporter owner policies are missing or unsafe: %', missing;
+    END IF;
+
+    SELECT string_agg(required.table_name, ', ' ORDER BY required.table_name)
+      INTO missing
+      FROM (
+        VALUES
             ('source_connections'), ('repository_bindings'),
             ('source_observation_tasks'), ('source_observer_heartbeat'),
             ('audit_operations'), ('audit_outbox')
@@ -313,8 +341,15 @@ BEGIN
             ('pipeline_run_tasks_values_valid'),
             ('source_archives_command_uq'), ('source_archives_run_fk'),
             ('source_archives_values_valid'),
-            ('build_receipts_command_uq'), ('build_receipts_run_fk'),
+            ('build_receipts_command_uq'), ('build_receipts_identity_uq'),
+            ('build_receipts_run_fk'),
             ('build_receipts_revision_fk'), ('build_receipts_values_valid'),
+            ('check_receipts_command_uq'), ('check_receipts_run_fk'),
+            ('check_receipts_connection_fk'),
+            ('check_receipts_binding_revision_fk'),
+            ('check_receipts_pipeline_revision_fk'),
+            ('check_receipts_build_receipt_fk'),
+            ('check_receipts_values_valid'),
             ('pipeline_run_logs_command_step_uq'),
             ('pipeline_run_logs_run_fk'), ('pipeline_run_logs_task_fk'),
             ('pipeline_run_logs_values_valid'),
@@ -327,7 +362,9 @@ BEGIN
             ('build_worker_heartbeat_singleton'),
             ('build_worker_heartbeat_worker_valid'),
             ('source_observer_heartbeat_singleton'),
-            ('source_observer_heartbeat_worker_valid')
+            ('source_observer_heartbeat_worker_valid'),
+            ('check_reporter_heartbeat_singleton'),
+            ('check_reporter_heartbeat_worker_valid')
       ) AS required(name)
      WHERE NOT EXISTS (
         SELECT 1 FROM pg_catalog.pg_constraint
@@ -384,8 +421,6 @@ BEGIN
              'requested_source_run_id text, expected_resource_version bigint'),
             ('commit_pipeline_run_replay',
              'expected_resource_version bigint, submitted_run_document jsonb, submitted_operation jsonb, submitted_audit_event jsonb'),
-            ('claim_pipeline_run_task',
-             'requested_worker_id text, requested_lease_seconds integer'),
             ('claim_pipeline_run_task_internal',
              'requested_worker_id text, requested_lease_seconds integer, requested_stages text[]'),
             ('renew_pipeline_run_task_internal',
@@ -410,8 +445,12 @@ BEGIN
              'requested_run_id text, requested_after_sequence bigint, submitted_operation jsonb, submitted_audit_event jsonb'),
             ('complete_build_task',
              'requested_tenant_id text, requested_run_id text, requested_command_id text, requested_worker_id text, expected_fencing_token bigint, requested_state text, requested_reason text, submitted_receipt jsonb, submitted_run_document jsonb, submitted_audit_event jsonb'),
-            ('renew_pipeline_run_task',
-             'requested_tenant_id text, requested_run_id text, requested_command_id text, requested_worker_id text, expected_fencing_token bigint, requested_lease_seconds integer'),
+            ('record_check_reporter_heartbeat',
+             'requested_worker_id text'),
+            ('claim_check_report_task',
+             'requested_worker_id text, requested_lease_seconds integer'),
+            ('complete_check_report_task',
+             'requested_tenant_id text, requested_run_id text, requested_command_id text, requested_worker_id text, expected_fencing_token bigint, requested_state text, requested_reason text, submitted_receipt jsonb, submitted_run_document jsonb, submitted_audit_event jsonb'),
             ('advance_pipeline_run_task',
              'requested_tenant_id text, requested_run_id text, requested_command_id text, requested_worker_id text, expected_fencing_token bigint, requested_state text, requested_reason text, submitted_run_document jsonb, submitted_audit_event jsonb'),
             ('mark_pipeline_run_report_uncertain',
@@ -431,6 +470,7 @@ BEGIN
              'requested_tenant_id text, requested_resource_kind text, requested_resource_id text, expected_resource_version bigint, requested_worker_id text, expected_fencing_token bigint, submitted_resource jsonb, submitted_audit_event jsonb'),
             ('source_fetcher_readiness', ''),
             ('build_worker_readiness', ''),
+            ('check_reporter_readiness', ''),
             ('source_observer_readiness', ''),
             ('readiness', ''),
             ('worker_readiness', '')
@@ -455,13 +495,18 @@ BEGIN
         SELECT 1
           FROM unnest(ARRAY[
             'delivery.claim_pipeline_run_task_internal(text,integer,text[])',
-            'delivery.renew_pipeline_run_task_internal(text,text,text,text,bigint,integer,text)'
+            'delivery.renew_pipeline_run_task_internal(text,text,text,text,bigint,integer,text)',
+            'delivery.advance_pipeline_run_task(text,text,text,text,bigint,text,text,jsonb,jsonb)'
           ]) AS internal_function(identity)
          WHERE has_function_privilege(
                 'matrix_devops_api', internal_function.identity, 'EXECUTE'
             )
             OR has_function_privilege(
                 'matrix_devops_worker', internal_function.identity, 'EXECUTE'
+            )
+            OR has_function_privilege(
+                'matrix_devops_check_reporter', internal_function.identity,
+                'EXECUTE'
             )
             OR has_function_privilege(
                 'matrix_devops_source_fetcher', internal_function.identity, 'EXECUTE'
@@ -478,14 +523,23 @@ BEGIN
     ) IS NOT NULL THEN
         RAISE EXCEPTION 'legacy PipelineRun transition function bypasses terminal Audit';
     END IF;
+    IF to_regprocedure(
+        'delivery.claim_pipeline_run_task(text,integer)'
+    ) IS NOT NULL OR to_regprocedure(
+        'delivery.renew_pipeline_run_task(text,text,text,text,bigint,integer)'
+    ) IS NOT NULL THEN
+        RAISE EXCEPTION 'superseded generic REPORT worker boundary remains installed';
+    END IF;
 
     IF has_schema_privilege('matrix_devops_api', 'delivery', 'CREATE')
        OR has_schema_privilege('matrix_devops_source_fetcher', 'delivery', 'CREATE')
        OR has_schema_privilege('matrix_devops_worker', 'delivery', 'CREATE')
+       OR has_schema_privilege('matrix_devops_check_reporter', 'delivery', 'CREATE')
        OR has_schema_privilege('matrix_devops_source_observer', 'delivery', 'CREATE')
        OR NOT has_schema_privilege('matrix_devops_api', 'delivery', 'USAGE')
        OR NOT has_schema_privilege('matrix_devops_source_fetcher', 'delivery', 'USAGE')
        OR NOT has_schema_privilege('matrix_devops_worker', 'delivery', 'USAGE')
+       OR NOT has_schema_privilege('matrix_devops_check_reporter', 'delivery', 'USAGE')
        OR NOT has_schema_privilege('matrix_devops_source_observer', 'delivery', 'USAGE')
        OR NOT has_function_privilege(
             'matrix_devops_api',
@@ -546,14 +600,6 @@ BEGIN
        )
        OR has_function_privilege(
             'matrix_devops_worker', 'delivery.readiness()', 'EXECUTE'
-       )
-       OR NOT has_function_privilege(
-            'matrix_devops_worker',
-            'delivery.claim_pipeline_run_task(text,integer)', 'EXECUTE'
-       )
-       OR has_function_privilege(
-            'matrix_devops_api',
-            'delivery.claim_pipeline_run_task(text,integer)', 'EXECUTE'
        )
        OR NOT has_function_privilege(
             'matrix_devops_worker',
@@ -630,27 +676,47 @@ BEGIN
             'delivery.build_worker_readiness()', 'EXECUTE'
        )
        OR NOT has_function_privilege(
-            'matrix_devops_worker',
-            'delivery.renew_pipeline_run_task(text,text,text,text,bigint,integer)',
+            'matrix_devops_check_reporter',
+            'delivery.record_check_reporter_heartbeat(text)',
             'EXECUTE'
        )
        OR has_function_privilege(
             'matrix_devops_api',
-            'delivery.renew_pipeline_run_task(text,text,text,text,bigint,integer)',
+            'delivery.record_check_reporter_heartbeat(text)',
             'EXECUTE'
        )
        OR NOT has_function_privilege(
-            'matrix_devops_worker',
-            'delivery.advance_pipeline_run_task(text,text,text,text,bigint,text,text,jsonb,jsonb)',
+            'matrix_devops_check_reporter',
+            'delivery.claim_check_report_task(text,integer)',
             'EXECUTE'
        )
        OR has_function_privilege(
             'matrix_devops_api',
-            'delivery.advance_pipeline_run_task(text,text,text,text,bigint,text,text,jsonb,jsonb)',
+            'delivery.claim_check_report_task(text,integer)',
             'EXECUTE'
        )
        OR NOT has_function_privilege(
-            'matrix_devops_worker',
+            'matrix_devops_check_reporter',
+            'delivery.complete_check_report_task(text,text,text,text,bigint,text,text,jsonb,jsonb,jsonb)',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_devops_api',
+            'delivery.complete_check_report_task(text,text,text,text,bigint,text,text,jsonb,jsonb,jsonb)',
+            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_devops_check_reporter',
+            'delivery.check_reporter_readiness()',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_devops_api',
+            'delivery.check_reporter_readiness()',
+            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_devops_check_reporter',
             'delivery.mark_pipeline_run_report_uncertain(text,text,text,text,bigint,timestamp with time zone)',
             'EXECUTE'
        )
@@ -660,7 +726,7 @@ BEGIN
             'EXECUTE'
        )
        OR NOT has_function_privilege(
-            'matrix_devops_worker',
+            'matrix_devops_check_reporter',
             'delivery.defer_pipeline_run_reconciliation(text,text,text,text,bigint,timestamp with time zone)',
             'EXECUTE'
        )
@@ -784,6 +850,69 @@ BEGIN
           JOIN pg_catalog.pg_namespace AS namespace
             ON namespace.oid = function_info.pronamespace
          WHERE namespace.nspname = 'delivery'
+           AND has_function_privilege(
+                'matrix_devops_check_reporter', function_info.oid, 'EXECUTE'
+           )
+           AND function_info.oid NOT IN (
+                to_regprocedure(
+                    'delivery.record_check_reporter_heartbeat(text)'
+                ),
+                to_regprocedure(
+                    'delivery.claim_check_report_task(text,integer)'
+                ),
+                to_regprocedure(
+                    'delivery.complete_check_report_task(text,text,text,text,bigint,text,text,jsonb,jsonb,jsonb)'
+                ),
+                to_regprocedure(
+                    'delivery.mark_pipeline_run_report_uncertain(text,text,text,text,bigint,timestamp with time zone)'
+                ),
+                to_regprocedure(
+                    'delivery.defer_pipeline_run_reconciliation(text,text,text,text,bigint,timestamp with time zone)'
+                ),
+                to_regprocedure('delivery.check_reporter_readiness()')
+           )
+    ) THEN
+        RAISE EXCEPTION 'DevOps check reporter can execute an undeclared delivery function';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+          FROM pg_catalog.pg_proc AS function_info
+          JOIN pg_catalog.pg_namespace AS namespace
+            ON namespace.oid = function_info.pronamespace
+         WHERE namespace.nspname = 'delivery'
+           AND function_info.proname IN (
+                'record_check_reporter_heartbeat',
+                'claim_check_report_task',
+                'complete_check_report_task',
+                'mark_pipeline_run_report_uncertain',
+                'defer_pipeline_run_reconciliation',
+                'check_reporter_readiness'
+           )
+           AND (
+                has_function_privilege(
+                    'matrix_devops_api', function_info.oid, 'EXECUTE'
+                )
+                OR has_function_privilege(
+                    'matrix_devops_worker', function_info.oid, 'EXECUTE'
+                )
+                OR has_function_privilege(
+                    'matrix_devops_source_fetcher', function_info.oid, 'EXECUTE'
+                )
+                OR has_function_privilege(
+                    'matrix_devops_source_observer', function_info.oid, 'EXECUTE'
+                )
+           )
+    ) THEN
+        RAISE EXCEPTION 'another DevOps runtime can execute a check-reporter function';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+          FROM pg_catalog.pg_proc AS function_info
+          JOIN pg_catalog.pg_namespace AS namespace
+            ON namespace.oid = function_info.pronamespace
+         WHERE namespace.nspname = 'delivery'
            AND function_info.proname IN (
                 'record_build_worker_heartbeat',
                 'claim_build_task',
@@ -801,6 +930,9 @@ BEGIN
                 )
                 OR has_function_privilege(
                     'matrix_devops_source_observer', function_info.oid, 'EXECUTE'
+                )
+                OR has_function_privilege(
+                    'matrix_devops_check_reporter', function_info.oid, 'EXECUTE'
                 )
            )
     ) THEN
@@ -858,6 +990,9 @@ BEGIN
                 OR has_function_privilege(
                     'matrix_devops_source_observer', function_info.oid, 'EXECUTE'
                 )
+                OR has_function_privilege(
+                    'matrix_devops_check_reporter', function_info.oid, 'EXECUTE'
+                )
            )
     ) THEN
         RAISE EXCEPTION 'another DevOps runtime can execute a source-fetcher function';
@@ -867,10 +1002,11 @@ BEGIN
         'projects', 'source_connections', 'repository_bindings',
         'repository_binding_revisions', 'pipelines', 'pipeline_revisions',
         'source_events', 'pipeline_runs', 'pipeline_run_tasks',
-        'source_archives', 'build_receipts', 'pipeline_run_logs', 'mutations',
+        'source_archives', 'build_receipts', 'check_receipts',
+        'pipeline_run_logs', 'mutations',
         'audit_operations', 'audit_outbox', 'source_observation_tasks',
         'source_fetcher_heartbeat', 'source_observer_heartbeat',
-        'build_worker_heartbeat'
+        'build_worker_heartbeat', 'check_reporter_heartbeat'
     ]
     LOOP
         IF has_table_privilege(
@@ -885,15 +1021,19 @@ BEGIN
         ) OR has_table_privilege(
             'matrix_devops_source_observer', 'delivery.' || table_name,
             'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER'
+        ) OR has_table_privilege(
+            'matrix_devops_check_reporter', 'delivery.' || table_name,
+            'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER'
         ) THEN
             RAISE EXCEPTION 'unsafe direct table privilege on delivery.%', table_name;
         END IF;
         IF table_name NOT IN (
             'pipeline_run_tasks', 'audit_outbox', 'audit_operations',
-            'source_archives', 'build_receipts', 'pipeline_run_logs',
+            'source_archives', 'build_receipts', 'check_receipts',
+            'pipeline_run_logs',
             'source_observation_tasks',
             'source_fetcher_heartbeat', 'source_observer_heartbeat',
-            'build_worker_heartbeat'
+            'build_worker_heartbeat', 'check_reporter_heartbeat'
         )
            AND NOT has_table_privilege(
                 'matrix_devops_api', 'delivery.' || table_name, 'SELECT'
@@ -907,11 +1047,13 @@ BEGIN
        OR has_table_privilege('matrix_devops_api', 'delivery.source_observation_tasks', 'SELECT')
        OR has_table_privilege('matrix_devops_api', 'delivery.source_archives', 'SELECT')
        OR has_table_privilege('matrix_devops_api', 'delivery.build_receipts', 'SELECT')
+       OR has_table_privilege('matrix_devops_api', 'delivery.check_receipts', 'SELECT')
        OR has_table_privilege('matrix_devops_api', 'delivery.pipeline_run_logs', 'SELECT')
        OR has_table_privilege('matrix_devops_api', 'delivery.source_fetcher_heartbeat', 'SELECT')
        OR has_table_privilege('matrix_devops_api', 'delivery.build_worker_heartbeat', 'SELECT')
+       OR has_table_privilege('matrix_devops_api', 'delivery.check_reporter_heartbeat', 'SELECT')
        OR has_table_privilege('matrix_devops_api', 'delivery.source_observer_heartbeat', 'SELECT') THEN
-        RAISE EXCEPTION 'DevOps API can read internal Audit tables';
+        RAISE EXCEPTION 'DevOps API can read internal delivery tables';
     END IF;
 
     IF EXISTS (
@@ -951,6 +1093,9 @@ BEGIN
                 )
                 OR has_schema_privilege(
                     'matrix_devops_source_observer', namespace.oid, 'USAGE'
+                )
+                OR has_schema_privilege(
+                    'matrix_devops_check_reporter', namespace.oid, 'USAGE'
                 )
            )
     ) THEN

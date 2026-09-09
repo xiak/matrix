@@ -40,6 +40,11 @@ func encodeDockerfile(recipe imageRecipe, config Config) ([]byte, error) {
 		return nil, errors.New("release image recipe is invalid")
 	}
 	var document strings.Builder
+	if recipe.copySystemRoots {
+		document.WriteString("FROM ")
+		document.WriteString(DockerBaseReference)
+		document.WriteString(" AS matrix-system-roots\n")
+	}
 	document.WriteString("FROM ")
 	document.WriteString(recipe.baseReference)
 	document.WriteByte('\n')
@@ -58,6 +63,9 @@ func encodeDockerfile(recipe imageRecipe, config Config) ([]byte, error) {
 	document.WriteString("=\"")
 	document.WriteString(config.BuildID)
 	document.WriteString("\"\n")
+	if recipe.copySystemRoots {
+		document.WriteString("COPY --from=matrix-system-roots /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt\n")
+	}
 	for _, name := range recipe.binaries {
 		document.WriteString("COPY --chmod=0555 ")
 		document.WriteString(name)

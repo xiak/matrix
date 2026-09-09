@@ -160,6 +160,7 @@ func stageInstallation(plan platformcommand.InstallPlan, entropy io.Reader) erro
 			role string
 		}{
 			{path: layout.DevOpsAPI, role: "matrix_devops_api_login"},
+			{path: layout.DevOpsCheckReporter, role: "matrix_devops_check_reporter_login"},
 			{path: layout.DevOpsSourceFetcher, role: "matrix_devops_source_fetcher_login"},
 			{path: layout.DevOpsSourceObserver, role: "matrix_devops_source_observer_login"},
 			{path: layout.DevOpsWorker, role: "matrix_devops_worker_login"},

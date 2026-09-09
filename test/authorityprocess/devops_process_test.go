@@ -427,6 +427,42 @@ func assertDevOpsConfigurationAudit(t *testing.T, ctx context.Context, admin *pg
 			)
 		}
 	}
+	healthWant := []struct {
+		action auditv1.Action
+		target string
+	}{
+		{auditv1.ActionDevOpsSourceConnectionHealthTransitioned, string(devopsSourceConnectionID)},
+		{auditv1.ActionDevOpsRepositoryBindingHealthTransitioned, string(devopsRepositoryBindingID)},
+	}
+	for _, expected := range healthWant {
+		var count int
+		if err := admin.QueryRow(
+			ctx,
+			`SELECT count(*)
+			   FROM delivery.audit_outbox AS outbox
+			   JOIN audit.records AS record
+			     ON record.source = 'DEVOPS'
+			    AND record.event_id = outbox.event_id
+			  WHERE outbox.document->>'action' = $1
+			    AND outbox.document#>>'{target,id}' = $2
+			    AND outbox.document#>>'{actor,type}' = 'SYSTEM'
+			    AND outbox.document#>>'{actor,id}' = 'system-devops-source-observer'
+			    AND NOT outbox.document ? 'iamDecisionId'
+			    AND record.event_document = outbox.document`,
+			string(expected.action),
+			expected.target,
+		).Scan(&count); err != nil {
+			t.Fatalf("inspect DevOps source health Audit fact %s: %v", expected.action, err)
+		}
+		if count != 1 {
+			t.Fatalf(
+				"DevOps source health Audit fact action=%s target=%s count=%d",
+				expected.action,
+				expected.target,
+				count,
+			)
+		}
+	}
 	var outboxCount, recordCount int
 	if err := admin.QueryRow(
 		ctx,
@@ -436,12 +472,13 @@ func assertDevOpsConfigurationAudit(t *testing.T, ctx context.Context, admin *pg
 	).Scan(&outboxCount, &recordCount); err != nil {
 		t.Fatalf("count DevOps Audit process evidence: %v", err)
 	}
-	if outboxCount != len(want) || recordCount != len(want) {
+	wantCount := len(want) + len(healthWant)
+	if outboxCount != wantCount || recordCount != wantCount {
 		t.Fatalf(
 			"DevOps Audit process evidence outbox=%d records=%d want=%d",
 			outboxCount,
 			recordCount,
-			len(want),
+			wantCount,
 		)
 	}
 }
